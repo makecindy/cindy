@@ -57,7 +57,7 @@ function Fixture({ scenario }: { scenario: string }) {
   </main>;
 }
 
-void mountPage({ route: '/', host: () => {
+void mountPage({ route: '/', host: ctx => {
   const owner = getDataOwnerGeneration();
   commitProvidersSnapshot(beginProvidersRefresh(), { dataOwnerId: owner.dataOwnerId,
     ownerGeneration: owner.generation, providers: catalogs['device-a'], providerOrder: [] });
@@ -71,10 +71,17 @@ void mountPage({ route: '/', host: () => {
         calls.push({ host, channel, args });
         if (host !== 'device-b') throw new Error('Catalog must be read through B');
         let source = host;
+        let includeSharedGroupStatus = false;
         if (channel === 'maker:model-catalog:read') {
-          const request = args[0] as { op: string; agentDeviceId: string; channel: string };
+          const request = args[0] as { op: string; agentDeviceId: string; channel: string; args?: Array<{ includeSharedGroupStatus?: boolean }> };
           if (request.op === 'locations') return { locations };
           source = request.agentDeviceId; channel = request.channel;
+          includeSharedGroupStatus = request.args?.[0]?.includeSharedGroupStatus === true;
+        }
+        if (channel === 'maker:provider:list' && source === 'share:b-only' && ctx.case === 'shared-group-status') {
+          return { providers: catalogs[source].map(p => ({ ...p, groupSize: 2,
+            ...(includeSharedGroupStatus ? { groupStatus: ['available', 'cooling'] } : {}),
+          })) };
         }
         if (channel === 'maker:provider:list') return { providers: catalogs[source] ?? [] };
         if (channel === 'maker:get-capabilities') return capabilities(source);

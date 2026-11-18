@@ -165,7 +165,7 @@ export type RemoteAgentRequest =
   /** G releases only the exact allocation whose direct open failed; a later generation is untouched. */
   | { op: 'direct-release'; sessionId: string; generation: string }
   /** A direct guest asks O for its one-use group failover token after a machine-scoped failure. */
-  | { op: 'direct-switch'; sessionId: string }
+  | { op: 'direct-switch'; sessionId: string; generation?: string }
   /** Executor reports content-free metering to the group owner with an idempotency key. */
   | { op: 'direct-usage'; shareId: string; memberId: string; guestDeviceId: string;
       sessionId: string; generation: string; usageId: string; agentKind: RemoteAgentKind; samples: RemoteAgentUsageSample[] }
@@ -533,8 +533,10 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         || typeof v.generation !== 'string' || !ID.test(v.generation)) invalid();
       return { op: 'direct-release', sessionId: v.sessionId, generation: v.generation };
     case 'direct-switch':
-      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)) invalid();
-      return { op: 'direct-switch', sessionId: v.sessionId };
+      if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
+        || (v.generation !== undefined && (typeof v.generation !== 'string' || !ID.test(v.generation)))) invalid();
+      return { op: 'direct-switch', sessionId: v.sessionId,
+        ...(typeof v.generation === 'string' ? { generation: v.generation } : {}) };
     case 'direct-usage': {
       if (typeof v.sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(v.sessionId)
         || typeof v.generation !== 'string' || !ID.test(v.generation)
@@ -778,6 +780,19 @@ export function isRemoteAgentReadInvoke(channel: string, args: unknown[] | undef
   if (channel !== REMOTE_AGENT_CHANNEL) return false;
   const request = args?.[0];
   return !!request && typeof request === 'object' && (request as { op?: unknown }).op === 'poll';
+}
+
+/**
+ * 远程 Agent poll 是长轮询：没有新数据时被控端会刻意挂起至多 waitMs。返回这次调用
+ * 预期的挂起上限(非 poll 为 0)，只供诊断把它从「慢」的判定里扣除，不改超时与重试。
+ */
+export function remoteAgentInvokeHoldMs(channel: string, args: unknown[] | undefined): number {
+  if (!isRemoteAgentReadInvoke(channel, args)) return 0;
+  const waitMs = (args![0] as { waitMs?: unknown }).waitMs;
+  if (waitMs === undefined) return REMOTE_AGENT_READ_WAIT_MS;
+  return Number.isSafeInteger(waitMs) && (waitMs as number) >= 0
+    ? Math.min(waitMs as number, REMOTE_AGENT_READ_WAIT_MS)
+    : 0;
 }
 
 // ─── 控制端解析被控端回包(对端可能是不同版本，按最小合同防御)───────────────

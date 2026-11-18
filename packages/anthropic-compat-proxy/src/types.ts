@@ -17,6 +17,8 @@ import type { Transform } from "node:stream";
 
 import type { OutboundProxyResolver } from "./outbound-proxy.js";
 import type { OversizedBody } from './oversized-attachments.js';
+import type { ImageRouteInfo, InlineImagePreprocessor, RequestSizeResult, WireFormat } from './request-size-control.js';
+import type { RequestSizeError } from './request-size-errors.js';
 
 /** Capture request ownership synchronously; only overflow invokes the returned recovery. */
 export type OversizedRequestRecovery = (ctx: RequestTransformCtx) =>
@@ -35,6 +37,27 @@ export interface OversizedRequestCompactor {
     ctx: RequestTransformCtx,
     targetBytes: number,
   ): unknown | null | Promise<unknown | null>;
+}
+
+/** Request-size policy injected by the host. It runs before compatibility transforms. */
+export interface RequestSizeController {
+  enabled?: () => boolean;
+  format?: (ctx: RequestTransformCtx, body: unknown) => WireFormat | null;
+  route?: (ctx: RequestTransformCtx, body: unknown) => ImageRouteInfo;
+  preprocessor?: InlineImagePreprocessor;
+  retry?: (body: Buffer, error: RequestSizeError, ctx: RequestTransformCtx, signal: AbortSignal) => Promise<Buffer | null>;
+  control: (body: Buffer, format: WireFormat, policy: {
+    route: ImageRouteInfo;
+    signal: AbortSignal;
+    reason?: string;
+    context?: RequestTransformCtx;
+    singleImageMaxBytes?: number;
+    triggerBytes?: number;
+    targetBytes?: number;
+    triggerImages?: number;
+    targetImages?: number;
+    allowRemoval?: boolean;
+  }) => Promise<RequestSizeResult | null>;
 }
 
 /**
@@ -209,6 +232,21 @@ export interface ProxyLogger {
   isDebugEnabled?: () => boolean;
 }
 
+/** What the inbound admission check sees: the request line and its flattened headers. */
+export interface InboundAdmissionCtx {
+  method: string;
+  url: string;
+  /** Mutable: an admitted request may have its credential headers rewritten here. */
+  headers: Record<string, string>;
+}
+
+/** A local refusal of an inbound request. */
+export interface InboundRejection {
+  status: 401 | 403;
+  code: string;
+  message: string;
+}
+
 /**
  * createAnthropicCompatProxy 入参。
  */
@@ -226,6 +264,14 @@ export interface ProxyOptions {
    * 传空数组 [] = 显式禁用所有 transform,纯透传。
    */
   transformRequest?: RequestTransform[];
+  /**
+   * Optional inbound admission, checked first for every HTTP request and WebSocket
+   * upgrade: before oversized-request recovery, the request guard, routing and every
+   * transform. Return null to admit. A rejection is answered locally and nothing is sent
+   * upstream; a throw rejects with 401. The check may rewrite credential headers in
+   * `ctx.headers` before routing (the same object the proxy forwards). Not set = no check.
+   */
+  authorizeInbound?: (ctx: InboundAdmissionCtx) => InboundRejection | null;
   /** Host-owned, request-frozen enforcement before routing, including opaque/local-handler paths.
    * Throws fail closed. Ordinary requests return null and retain their zero-copy response path. */
   requestGuard?: (ctx: RequestTransformCtx) => {
@@ -310,6 +356,10 @@ export interface ProxyOptions {
    * check.
    */
   oversizedRequestCompactor?: OversizedRequestCompactor;
+  /** Deterministic image/history budget controller. Disabled with the host kill switch. */
+  requestSizeController?: RequestSizeController;
+  /** Optional one-shot retry for upstream image/request size errors after decoded 400 text. */
+  requestSizeRetry?: (body: Buffer, error: RequestSizeError, signal: AbortSignal) => Promise<Buffer | null>;
   /** Maximum bytes accepted for an oversized request before compaction. */
   oversizedRequestIngressBytes?: number;
   /**

@@ -1,10 +1,11 @@
 /**
  * 群聊输入框里的 @ 点名：纯文本解析，不依赖 React 与 IPC。
  *
- * 输入框是普通 textarea，点名以 `@名字 ` 的形式留在正文里。发送时以正文为准重新解析
- * （手打的 `@小满` 与从候选里选的效果一致）。选择候选时记下的 botId 用于消歧，
- * 成员离群后仍保留显式目标，由宿主拒绝失效目标。宿主按解析结果决定谁回答
- * （docs/product-rules/bot-group-chat.md §4.1）。
+ * 输入框是普通 textarea，点名以 `@名字 ` 的形式留在正文里。发送时以正文为准重新解析。
+ * 一个 @ 只指向一个身份：从候选里选的按记下的 botId；手打的名字先按完整显示名找，
+ * 没有人叫这个完整名字时才按短名（昵称／原名）找，仍对应多位成员就谁也不点名，
+ * 由输入框提示从列表选择。成员离群后仍保留显式目标，由宿主拒绝失效目标。
+ * 宿主按解析结果决定谁回答（docs/product-rules/bot-group-chat.md §4.1）。
  */
 import type { BotGroupMention } from './botGroupChat.js';
 
@@ -61,7 +62,20 @@ interface LabelEntry {
   label: string;
   all: boolean;
   allBots?: boolean;
+  /** Members whose full display name is this label. */
   botIds: string[];
+  /** Members this label is only a short name (nickname / undecorated name) of. */
+  aliasIds: string[];
+}
+
+/**
+ * Who an unpicked `@label` names: exactly one identity or nobody. A member whose full name
+ * is the label wins over members it is only a short name of (「@Cindy」 is the member named
+ * 「Cindy」, not 「Cindy (Chris)」); a label several members still share names none of them.
+ */
+function typedTargets(entry: LabelEntry): { botIds: string[]; ambiguous: boolean } {
+  const owners = entry.botIds.length ? entry.botIds : entry.aliasIds;
+  return owners.length > 1 ? { botIds: [], ambiguous: true } : { botIds: owners, ambiguous: false };
 }
 
 function buildLabelEntries(
@@ -73,18 +87,20 @@ function buildLabelEntries(
   const byLabel = new Map<string, LabelEntry>();
   for (const raw of allLabels) {
     const label = raw.trim();
-    if (label) byLabel.set(label, { label, all: true, botIds: [] });
+    if (label) byLabel.set(label, { label, all: true, botIds: [], aliasIds: [] });
   }
   for (const raw of allBotLabels) {
     const label = raw.trim();
-    if (label) byLabel.set(label, { label, all: false, allBots: true, botIds: [] });
+    if (label) byLabel.set(label, { label, all: false, allBots: true, botIds: [], aliasIds: [] });
   }
   for (const member of members) {
+    const name = member.name.trim();
     for (const raw of [member.name, member.nickname || member.displayName || '']) {
       const label = raw.trim();
       if (!label || byLabel.get(label)?.all || byLabel.get(label)?.allBots) continue;
-      const entry = byLabel.get(label) ?? { label, all: false, botIds: [] };
-      if (!entry.botIds.includes(member.botId)) entry.botIds.push(member.botId);
+      const entry = byLabel.get(label) ?? { label, all: false, botIds: [], aliasIds: [] };
+      const owners = label === name ? entry.botIds : entry.aliasIds;
+      if (!owners.includes(member.botId)) owners.push(member.botId);
       byLabel.set(label, entry);
     }
   }
@@ -92,7 +108,7 @@ function buildLabelEntries(
   // records intent, not membership: the host must reject unavailable targets.
   for (const mention of tracked) {
     const label = mention.label.trim();
-    if (label && !byLabel.has(label)) byLabel.set(label, { label, all: false, botIds: [] });
+    if (label && !byLabel.has(label)) byLabel.set(label, { label, all: false, botIds: [], aliasIds: [] });
   }
   // 最长优先：`@小满满` 不能先被 `@小满` 截走。
   return [...byLabel.values()].sort((a, b) => b.label.length - a.label.length);
@@ -126,18 +142,38 @@ function scanMentionTokens(text: string, entries: readonly LabelEntry[]): Mentio
   return tokens;
 }
 
+interface MentionInput {
+  members: readonly BotGroupMentionMember[];
+  allLabels: readonly string[];
+  allBotLabels?: readonly string[];
+  tracked?: readonly BotGroupTrackedMention[];
+}
+
+/**
+ * Typed `@name` tokens that several members share and no pick settles, in text order. They
+ * name nobody (see `resolveBotGroupMentions`); the composer asks to pick from the list.
+ */
+export function ambiguousBotGroupMentionLabels(text: string, input: MentionInput): string[] {
+  const tracked = input.tracked ?? [];
+  const entries = buildLabelEntries(input.members, input.allLabels, tracked, input.allBotLabels);
+  const labels: string[] = [];
+  for (const token of scanMentionTokens(text, entries)) {
+    if (token.entry.all || token.entry.allBots || !typedTargets(token.entry).ambiguous) continue;
+    if (tracked.some(mention => mention.start === token.start && mention.label.trim() === token.entry.label)) continue;
+    if (!labels.includes(token.entry.label)) labels.push(token.entry.label);
+  }
+  return labels;
+}
+
 /**
  * Resolve who a group message addresses. Mentions are re-derived from the text
  * at send time; a tracked pick also preserves a stale target for host validation.
+ * One `@` names one identity: a pick names what was picked, a typed name names its only
+ * owner, and a typed name several members share names nobody (never all of them).
  */
 export function resolveBotGroupMentions(
   text: string,
-  input: {
-    members: readonly BotGroupMentionMember[];
-    allLabels: readonly string[];
-    allBotLabels?: readonly string[];
-    tracked?: readonly BotGroupTrackedMention[];
-  },
+  input: MentionInput,
 ): BotGroupMention {
   const entries = buildLabelEntries(input.members, input.allLabels, input.tracked ?? [], input.allBotLabels);
   const botIds: string[] = [];
@@ -150,7 +186,7 @@ export function resolveBotGroupMentions(
       mention.start === token.start && mention.label.trim() === token.entry.label);
     if (token.entry.all && picked.length === 0) all = true;
     if (token.entry.allBots && picked.length === 0) allBots = true;
-    for (const botId of picked.length ? picked.map(mention => mention.botId) : token.entry.botIds) {
+    for (const botId of picked.length ? picked.map(mention => mention.botId) : typedTargets(token.entry).botIds) {
       if (!botIds.includes(botId)) botIds.push(botId);
     }
   }
@@ -186,13 +222,14 @@ export function splitBotGroupRelaySteps(
   if (/@\S/.test(text.slice(0, tokens[0]!.start))) return null;
   const steps: BotGroupRelayStep[] = [];
   for (const [index, token] of tokens.entries()) {
-    if (token.entry.all || token.entry.allBots || token.entry.botIds.length !== 1) return null;
+    const [botId] = token.entry.all || token.entry.allBots ? [] : typedTargets(token.entry).botIds;
+    if (!botId) return null;
     if (index > 0 && !STEP_BOUNDARY.test(text.slice(tokens[index - 1]!.end, token.start).replace(STEP_CONNECTOR, ''))) return null;
     // A connector only leads into the next step; the last step keeps its words.
     const span = text.slice(token.end, tokens[index + 1]?.start ?? text.length);
     const task = (index + 1 < tokens.length ? span.replace(STEP_CONNECTOR, '') : span).replace(STEP_EDGE, '');
     if (!task || /@\S/.test(task)) return null;
-    steps.push({ botId: token.entry.botIds[0]!, task });
+    steps.push({ botId, task });
   }
   return steps;
 }
@@ -283,7 +320,7 @@ export function splitBotGroupMentionSegments(
 ): BotGroupTextSegment[] {
   const entries = [...new Set(labels.map((label) => label.trim()).filter(Boolean))]
     .sort((a, b) => b.length - a.length)
-    .map((label) => ({ label, all: false, botIds: [] }));
+    .map((label) => ({ label, all: false, botIds: [], aliasIds: [] }));
   const segments: BotGroupTextSegment[] = [];
   let cursor = 0;
   for (const token of scanMentionTokens(text, entries)) {

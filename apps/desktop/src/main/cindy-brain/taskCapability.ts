@@ -1,5 +1,6 @@
 import { ghostPermissionItems, type InstalledGhost } from '../../shared/ghost.js';
 import type { GhostInstallConsentFacts } from '../../shared/ghostInstallConsent.js';
+import { declaredGhostHostToolGroups, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 
 /** One automatic attempt per owner/install identity. Only Host UI may retry. */
 export class PluginTaskApprovalGate {
@@ -38,6 +39,16 @@ export function hasPluginDelegationApproval(ghost: InstalledGhost | null | undef
 }
 
 export type PluginTaskCapability = 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions';
+
+export function pluginDeclaresCapability(manifest: InstalledGhost['manifest'], capability: PluginTaskCapability): boolean {
+  return capability === 'observe' || capability === 'companions'
+    ? manifest.agent?.[capability] === true : manifest.agent?.tasks === true;
+}
+
+export function hasPluginHostToolGroupApproval(ghost: InstalledGhost | null | undefined, group: GhostHostToolGroup): boolean {
+  return ghost?.enabled === true && ghost.approval.state === 'approved' &&
+    declaredGhostHostToolGroups(ghost.manifest).includes(group);
+}
 
 export function pluginCapabilityApproval(capability: PluginTaskCapability): (ghost: InstalledGhost | null | undefined) => boolean {
   return capability === 'companions' ? hasPluginCompanionsApproval : capability === 'observe' ? hasPluginObserveApproval
@@ -80,7 +91,7 @@ export async function ensurePluginTaskApproval(
   if (pluginCapabilityApproval(capability)(ghost)) return true;
   if (
     !ghost?.enabled ||
-    (capability === 'observe' || capability === 'companions' ? ghost.manifest.agent?.[capability] !== true : ghost.manifest.agent?.tasks !== true) ||
+    !pluginDeclaresCapability(ghost.manifest, capability) ||
     ghost.approval?.state !== 'approved' ||
     (capability === 'targets' && (!hasPluginTaskApproval(ghost) || ghost.manifest.agent?.targets !== true)) ||
     (capability === 'delegation' && (!hasPluginTargetApproval(ghost) || ghost.manifest.agent?.delegation !== true))

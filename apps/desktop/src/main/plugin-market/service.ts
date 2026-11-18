@@ -20,6 +20,7 @@ import {
 } from '@cindy/plugin-protocol';
 import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { readGhostReadmeFromDir } from '../cindy-brain/ghostReadme.js';
+import { isRetainedSeedMarketTarget } from '../cindy-brain/builtinSeedStoreInstall.js';
 import { app, dialog } from 'electron';
 
 import {
@@ -817,8 +818,8 @@ function serverRecordMatchesDelivery(
 /**
  * 内置种子覆盖了这个商店安装，而种子已撤或当前 Release 不比种子旧（种子与商店按版本
  * 取新，相同取商店）：已装字节虽与账本不符（装着的是种子），仍按原商店路由更新回商店包。
- * 只认播种台账里的根 namespace 已批准实例，且账本仍指向当前目录项；不改变其它
- * 来源冲突的判定，也不用于授权查找。
+ * 只认播种台账里的根实例，或注册表仍保留原企业市场来源、被种子写成 root receipt 的旧目录。
+ * 企业恢复还须在实际更新事务中核对可信种子与现存字节；这里仅选路，不用于授权查找。
  */
 function seededBuiltinYieldsToRelease(
   plugin: VisiblePluginSummary,
@@ -831,7 +832,8 @@ function seededBuiltinYieldsToRelease(
     (record.source === 'market' || record.source === 'legacy-adopted') &&
     record.ghostId === plugin.ghostId &&
     ghost.manifest.id === plugin.ghostId &&
-    (!hasDeliveryNamespace(ghost) || ghost.namespace === null) &&
+    ((!hasDeliveryNamespace(ghost) || ghost.namespace === null) ||
+      isRetainedSeedMarketTarget(ghost, record, getGhostManager())) &&
     ghost.approval.state === 'approved' &&
     serverRecordMatchesSummaryRoute(plugin, record) &&
     builtinSeedYieldsToStoreVersion(plugin.ghostId, plugin.currentRelease.version),
@@ -1380,13 +1382,23 @@ export class PluginMarketService {
             log.warn('plugin market installed count deduction skipped', { installedTargets: targets.length });
           } else {
             const deducted = new Set<string>();
-            for (let offset = 0; offset < targets.length; offset += 100) {
-              const result = await this.api.resolve(targets.slice(offset, offset + 100), query || undefined);
-              assertCurrent();
-              for (const row of result.results) if (row.status === 'available' && row.matchesQuery && !deducted.has(row.plugin.id)
-                && isInstalled(this.toItem(row.plugin, local))) {
-                deducted.add(row.plugin.id);
-                queryCounts[row.plugin.scope]--; queryCounts.all--;
+            const deduct = (plugin: VisiblePluginSummary) => {
+              if (!deducted.has(plugin.id) && isInstalled(this.toItem(plugin, local))) {
+                deducted.add(plugin.id);
+                queryCounts[plugin.scope]--; queryCounts.all--;
+              }
+            };
+            if (page.legacyQueryPlugins) {
+              // The legacy page already contains every query match across sources.
+              // Reuse it only for this request; resolving each batch would reread it.
+              const installedIds = new Set(targets.map(target => target.pluginId));
+              for (const plugin of page.legacyQueryPlugins) if (installedIds.has(plugin.id)
+                && (owner.mode === 'cloud' || plugin.scope === 'public')) deduct(plugin);
+            } else {
+              for (let offset = 0; offset < targets.length; offset += 100) {
+                const result = await this.api.resolve(targets.slice(offset, offset + 100), query || undefined);
+                assertCurrent();
+                for (const row of result.results) if (row.status === 'available' && row.matchesQuery) deduct(row.plugin);
               }
             }
             if (Object.values(queryCounts).some(value => value < 0)) throwIpcError('PLUGIN_LIST_CHANGED', 'Plugin query changed while counting installed matches');

@@ -86,7 +86,7 @@ describe('Responses tool history normalization', () => {
     expect(body.input[2]?.call_id).toBe('call_retry');
   });
 
-  it('drops excess results for a single call and leaves valid history untouched', () => {
+  it('combines excess results for a single call and leaves valid history untouched', () => {
     const duplicateOutput = {
       input: [
         { type: 'function_call', call_id: 'call_once', name: 'read', arguments: '{}' },
@@ -95,7 +95,7 @@ describe('Responses tool history normalization', () => {
       ],
     };
     expect(normalizeRepeatedResponseToolCallIds(duplicateOutput)?.input).toEqual(
-      duplicateOutput.input.slice(0, 2),
+      [duplicateOutput.input[0], { ...duplicateOutput.input[1], output: 'first\n\nduplicate' }],
     );
 
     const valid = {
@@ -105,6 +105,44 @@ describe('Responses tool history normalization', () => {
       ],
     };
     expect(normalizeRepeatedResponseToolCallIds(valid)).toBeNull();
+  });
+
+  // #10176, unit: notify and the final exec result share a call ID. The old
+  // single-output fixture only checked removal, so it missed lost final results.
+  it.each([false, true])('preserves progress and final media output in wire order (progress first: %s)', progressFirst => {
+    const call = { type: 'custom_tool_call', call_id: 'call_exec', name: 'exec', input: 'script' };
+    const progress = { type: 'custom_tool_call_output', call_id: call.call_id, output: 'Still working' };
+    const final = { ...progress, output: [{ type: 'input_image', image_url: 'https://example.test/result.png' }] };
+    const otherCall = { ...call, call_id: 'call_other' };
+    const otherResult = { ...progress, call_id: otherCall.call_id, output: 'Other result' };
+    const outputs = progressFirst ? [progress, final] : [final, progress];
+    const body = { input: [call, otherCall, outputs[0], otherResult, outputs[1]] };
+    const snapshot = structuredClone(body);
+    const normalized = normalizeRepeatedResponseToolCallIds(body);
+    expect(normalized?.input).toEqual([
+      call, otherCall,
+      { ...outputs[0], output: progressFirst
+        ? [{ type: 'input_text', text: progress.output }, ...final.output]
+        : [...final.output, { type: 'input_text', text: progress.output }] },
+      otherResult,
+    ]);
+    expect(body).toEqual(snapshot);
+    expect(normalizeRepeatedResponseToolCallIds(normalized!)).toBeNull();
+  });
+
+  it('does not discard malformed or pre-call output when merging would be unsafe', () => {
+    const call = { type: 'custom_tool_call', call_id: 'call_exec', name: 'exec', input: 'script' };
+    const output = { type: 'custom_tool_call_output', call_id: call.call_id, output: 'result' };
+    for (const input of [
+      [output, call, output],
+      [call, output, { ...output, type: 'function_call_output' }],
+      [call, output, { ...output, output: { unknown: 'result' } }],
+    ]) {
+      const body = { input };
+      const snapshot = structuredClone(body);
+      expect(normalizeRepeatedResponseToolCallIds(body)).toBeNull();
+      expect(body).toEqual(snapshot);
+    }
   });
 
   it('avoids colliding with an existing call ID when creating a duplicate suffix', () => {

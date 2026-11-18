@@ -68,7 +68,8 @@ vi.mock('@/platform/AdaptiveWindowContext', () => ({ PaneViewportProvider: ({ ch
   useAdaptiveWindow: () => ({ width: 669, height: 951, insets: { top: 88, bottom: 34, left: 0, right: 0 },
     regularWidth: true, reservedRegionsSupported: true, regions: [], barEdge: 'none' }) }));
 vi.mock('@/session/RecentMessageHistories', () => ({ MessageHistoryOverlay: ({ children }: any) => children }));
-vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: () => null }));
+vi.mock('@/session/SessionPaneDivider', () => ({ useSessionPaneDivider: () => ({ gesture: {}, edge: null, rowInset: 0 }),
+  PaneEdgeInsetProvider: ({ children }: any) => children, usePaneEdgeInset: () => 0 }));
 vi.mock('@/session/useSessionHeaderHeight', () => ({ useSessionHeaderHeight: () => 88 }));
 vi.mock('@/session/ResidentHomeList', () => ({ useSessionSidebarWidthPreference: () => ({ width: 386, setWidth() {} }),
   useSessionPaneLayout: () => ({ persistent: state.persistent, sidebarWidth: 386, detail: { x: 0, y: 0, width: 669 }, resizeBounds: null }) }));

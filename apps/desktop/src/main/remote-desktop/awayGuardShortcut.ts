@@ -16,6 +16,7 @@ const ID = 'away-guard';
 
 /** 只由支持离开遮罩的本机主实例安装；录制时让出按键，改绑立即生效。 */
 export function installAwayGuardShortcut(activate: () => Promise<void>): () => void {
+  if (process.env.XDT_DISABLE_GLOBAL_SHORTCUTS === '1') return () => {};
   const store = getAppShortcutStore();
   let registered: string | null = null;
   let starting = false;

@@ -38,7 +38,10 @@ describe('custom auxiliary chain does not hit the session agent', () => {
     const source = readFileSync(path.join(root, 'voice-input/index.ts'), 'utf8');
     expect(source).toContain('const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();');
     expect(source.match(/assertVoiceInputOwnerScopeCurrent\(ownerScopeKey, auxiliaryChainSnapshot\)/g)?.length).toBe(3);
-    expect(source).toContain('beforeDispatch: () => assertVoiceInputOwnerScopeCurrent(ownerScopeKey),');
+    // Cross-file dispatch boundary (server-channel-review): cancellation must not
+    // remove the managed refiner's owner fence. The handler lifecycle tests cover
+    // the delayed-flush behavior; this guard checks the final dispatch wiring.
+    expect(source).toMatch(/beforeDispatch:\s*\(\)\s*=>\s*\{\s*if\s*\(admission\.cancelled\)\s*throw new Error\('voice input cancelled'\);\s*assertVoiceInputOwnerScopeCurrent\(ownerScopeKey\);\s*\}/);
   });
 
   it('dictionary learning uses the same owner and chain dispatch guard', () => {

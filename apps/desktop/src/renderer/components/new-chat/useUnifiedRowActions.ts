@@ -77,6 +77,8 @@ export interface UnifiedRowActionsOptions {
    * 但副本已经不是正在跑的配置。缺省按关(与行配置合成一致)。
    */
   liveFast?: boolean | 'ultrafast' | undefined;
+  liveThinking?: boolean;
+  onThinkingChangeLive?: (enabled: boolean) => ActionResult;
   modelMemory?: ModelMemoryAccessors | undefined;
   /**
    * live 选中行改深度。返回值 = **这次写入真的落下去了没有**(`false` / 抛错 = 没落;
@@ -1006,7 +1008,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     );
   };
 
-  const resetToRecommended: UnifiedRowActions['resetToRecommended'] = (anchor, entry, config) => {
+  const resetConfiguration: UnifiedRowActions['resetToRecommended'] = (anchor, entry, config) => {
     if (interactionDisabled || anchor.kind === 'fav') return;
     const recommendedAgent = entry.recommended;
     const recommendedEngine = engineOfAgentKind(recommendedAgent);
@@ -1148,6 +1150,35 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         favoriteUid: null,
         onApplied: resetStoredConfig,
       });
+    }
+  };
+
+  const resetToRecommended: UnifiedRowActions['resetToRecommended'] = async (anchor, entry, config) => {
+    if (interactionDisabled || anchor.kind !== 'model') return;
+    const owner = getProviderModelMemoryOwner();
+    const resetThinking = config.agent === 'pi' && config.capability?.thinkingToggle === true;
+    const restoreLiveThinking = resetThinking && isLiveRow(entry, config) && options.liveThinking === false;
+    // Keep the existing write lock and owner-aware callback. Never clear a saved
+    // preference before the runtime accepts the restored switch.
+    if (restoreLiveThinking && (!options.onThinkingChangeLive ||
+      !await runLive(() => options.onThinkingChangeLive!(true)))) return false;
+    if (owner !== getProviderModelMemoryOwner()) return false;
+    if (!await runLive(() => resetConfiguration(anchor, entry, config))) {
+      // A later configuration write failed: restore the old switch as well.
+      if (restoreLiveThinking && owner === getProviderModelMemoryOwner())
+        await runLive(() => options.onThinkingChangeLive!(false));
+      return false;
+    }
+    if (owner === getProviderModelMemoryOwner()) {
+      // Like effort/Fast, clear both engine slots: switching back to the
+      // recommendation must not revive its previously saved thinking override.
+      for (const agent of new Set([config.agent, entry.recommended])) {
+        if (entry.capabilities[agent]?.thinkingToggle !== true) continue;
+        for (const model of entryWireIds(entry, agent)) {
+          if (modelMemory?.clearThinking) modelMemory.clearThinking(agent, anchor.providerId, model);
+          else modelMemory?.setThinking?.(agent, anchor.providerId, model, true);
+        }
+      }
     }
   };
 

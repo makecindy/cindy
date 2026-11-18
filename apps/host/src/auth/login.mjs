@@ -48,6 +48,25 @@ function pickMethod(providers, requested) {
   throw new Error(`choose a login method with --method=: ${social.join(', ')}`);
 }
 
+/**
+ * The exchange returns a LoginOutcome; only `ok` carries tokens. The other
+ * outcomes need an interactive step the CLI does not offer. The message names
+ * the step only, never the tickets or masked targets in the outcome.
+ */
+function unfinishedLoginMessage(outcome) {
+  switch (outcome?.status) {
+    case 'binding_required':
+      return `this account must bind ${outcome.bindType === 'email' ? 'an email address' : 'a phone number'} first; `
+        + 'sign in with the Cindy desktop app using the same method, finish binding there, then run cindy-host login again';
+    case 'select_account':
+      return 'this sign-in matches several Cindy accounts and cindy-host login cannot choose one yet';
+    case 'sso_verification_required':
+      return 'this sign-in needs an extra verification code, which cindy-host login does not support yet';
+    default:
+      return `authorization exchange returned an unsupported login outcome (${String(outcome?.status)})`;
+  }
+}
+
 /** Bind the loopback listener and resolve once it owns a real port. */
 function listenOnLoopback(server) {
   return new Promise((resolve, reject) => {
@@ -69,9 +88,11 @@ function listenOnLoopback(server) {
  *   openBrowser: (url: string) => Promise<void>,
  *   method?: string,
  *   onAuthorizeUrl?: (url: string) => void,
+ *   onSignedIn?: (accessToken: string) => Promise<void>,
  *   signal?: AbortSignal,
  *   now?: () => number,
  * }} deps
+ * `onSignedIn` gets the access token of this explicit sign-in (held in memory only), after the session is saved.
  * @returns {Promise<{authenticated: true, realm: 'cn' | 'global', method: string}>}
  */
 export async function runHostLogin(deps) {
@@ -85,8 +106,9 @@ export async function runHostLogin(deps) {
   if ('error' in authorization) throw new Error(`browser authorization failed: ${authorization.error}`);
 
   const pair = await deps.client.exchangeAuthorizationCode(authorization.code, verifier);
-  if (!pair?.refreshToken) throw new Error('authorization exchange returned no refresh token');
+  if (pair?.status !== 'ok') throw new Error(unfinishedLoginMessage(pair));
   deps.store.write(AUTH_SESSION_KEY, deps.deviceId ? serializeHostSession(deps.region, pair.refreshToken, deps.deviceId) : serializeAuthSessionRecord(deps.region, pair.refreshToken));
+  if (deps.onSignedIn && typeof pair.accessToken === 'string' && pair.accessToken) await deps.onSignedIn(pair.accessToken);
   return { authenticated: true, realm: deps.region, method: method.providerOrConnectionId ?? method.type };
 }
 

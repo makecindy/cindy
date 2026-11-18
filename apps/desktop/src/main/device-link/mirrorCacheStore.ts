@@ -53,6 +53,7 @@ import {
   CLEARED_ANY,
   type ClearCounter,
 } from './mirrorCacheBarrier';
+import { shortDeviceRef } from '@cindy/device-link';
 import { createLogger } from '../logger';
 
 const log = createLogger('device-link:mirror-cache');
@@ -249,6 +250,8 @@ const SESSION_FIELD_WHITELIST = [
   'orcaRole',
   'parentSessionId',
   'pinnedAt',
+  'snoozedUntil',
+  'snoozedAt',
   'preview',
   'userSendAt',
   'lastActivityAt',
@@ -821,7 +824,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     // 收尾的二次扫描兜住"扫完才冒出来"的文件。
     return withCacheLock(rootAtStart, async (lockHeld) => {
       if (!lockHeld) {
-        log.warn(`mirror cache: clearing ${id.slice(0, 8)} without cross-process lock`);
+        log.warn(`mirror cache: clearing ${shortDeviceRef(id)} without cross-process lock`);
       }
       const epochAll = purgeAllEpoch;
       const dir = path.join(rootAtStart, MESSAGES_DIR);
@@ -846,7 +849,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       try {
         await markClearPending(rootAtStart, deviceClearKey(id));
       } catch (err) {
-        log.error(`mirror cache: failed to mark clear pending for ${id.slice(0, 8)}`, err);
+        log.error(`mirror cache: failed to mark clear pending for ${shortDeviceRef(id)}`, err);
         throw new MirrorCachePurgeError(
           rootAtStart,
           [rootAtStart],
@@ -859,7 +862,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         await bumpClearCounters(rootAtStart, id);
       } catch (err) {
         barrierPersisted = false;
-        log.error(`mirror cache: failed to persist clear intent for ${id.slice(0, 8)}`, err);
+        log.error(`mirror cache: failed to persist clear intent for ${shortDeviceRef(id)}`, err);
         stuck.push(rootAtStart);
         stuckBarriers.push(deviceClearKey(id), CLEARED_ANY);
       }
@@ -939,7 +942,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       try {
         await bumpClearCounters(rootAtStart, id);
       } catch (err) {
-        log.error(`mirror cache: failed to persist clear barrier for ${id.slice(0, 8)}`, err);
+        log.error(`mirror cache: failed to persist clear barrier for ${shortDeviceRef(id)}`, err);
         if (barrierPersisted) {
           stuck.push(rootAtStart);
           stuckBarriers.push(deviceClearKey(id), CLEARED_ANY);
@@ -971,7 +974,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       }
       // 确认清完了才撤墓碑。撤不掉不致命(只是这台设备的缓存读继续被挡)。
       await clearPendingMark(rootAtStart, deviceClearKey(id)).catch((err: unknown) => {
-        log.warn(`mirror cache: failed to drop pending clear mark for ${id.slice(0, 8)}`, err);
+        log.warn(`mirror cache: failed to drop pending clear mark for ${shortDeviceRef(id)}`, err);
       });
     });
   }

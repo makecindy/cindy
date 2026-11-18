@@ -749,6 +749,27 @@ function installMacAgentActivityExtension(buildPath: string, platform: string, a
   }
 }
 
+/**
+ * macOS desktop widgets (subscription quota, daily usage). `build.mjs` skips every step
+ * without the macOS 14 SDK. The extension's entitlements (App Sandbox and its read-only
+ * data folder) are written per app id at install; release signing keeps them.
+ */
+function runDesktopWidgetsBuild(args: string[]): void {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, 'native/desktop-widgets/build.mjs'), ...args],
+    { stdio: 'inherit' },
+  );
+  if (result.error || result.status !== 0) throw new Error('macOS desktop widgets build failed');
+}
+
+function installMacDesktopWidgetsExtension(buildPath: string, platform: string, arch: string): void {
+  if (platform !== 'darwin' || process.platform !== 'darwin') return;
+  for (const appDir of fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'))) {
+    runDesktopWidgetsBuild(['extension', path.join(buildPath, appDir), arch]);
+  }
+}
+
 function targetPlatformKey(targetPlatform: string, targetArch: string): string {
   return `${targetPlatform}-${targetArch}`;
 }
@@ -1146,7 +1167,11 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         dest,
         arch,
         MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET,
-        [],
+        // Names Cindy in the system owner-verification prompt; identifier unchanged.
+        [
+          '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+          '-Xlinker', path.join(__dirname, 'native', 'remote-desktop', 'macos-input-Info.plist'),
+        ],
         'remote desktop input',
       );
     } finally {
@@ -2121,6 +2146,11 @@ const config: ForgeConfig = {
           path.join(__dirname, 'resources/tools/agent-island/cindy-agent-activity.node'),
           arch,
         ]);
+        runDesktopWidgetsBuild([
+          'addon',
+          path.join(__dirname, 'resources/tools/desktop-widgets/cindy-desktop-widgets.node'),
+          arch,
+        ]);
       }
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
@@ -2148,6 +2178,7 @@ const config: ForgeConfig = {
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
           installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
+          installMacDesktopWidgetsExtension(buildPath, opts.platform, opts.arch);
         }
       } finally {
         removeCindySourceMetadata();

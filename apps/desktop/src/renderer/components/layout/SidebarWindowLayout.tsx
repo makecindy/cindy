@@ -24,7 +24,7 @@
  * 来源路由到被控端。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelRight } from 'lucide-react';
 
@@ -36,6 +36,7 @@ import { onRequestRightSidebarVisibility } from '@/features/right-sidebar/lib/si
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
 import { mergeSidebarWindowBack } from '@/features/right-sidebar/lib/mergeSidebarWindowBack';
 import { closeTab, getBucket, importTabSnapshot } from '@/features/right-sidebar/store';
+import { getGlobalTabs, type PluginViewTabState } from '@/features/right-sidebar/globalTabs';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
@@ -78,7 +79,11 @@ export function SidebarWindowLayout() {
   }, []);
   const isMac = window.electronAPI?.platform === 'darwin';
   const [ctx, setCtx] = useState<SidebarWindowContext | null>(null);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [activeNamedView, setActiveNamedView] = useState(false);
+  const handleActiveTabChange = useCallback((id: string | null) => {
+    setActiveNamedView(getGlobalTabs().some(tab => tab.id === id &&
+      Boolean((tab.state as PluginViewTabState | null)?.resourceViewId)));
+  }, []);
   // 预热窗口初始隐藏；由 main 的 visibility push 驱动 Shell 内各子面板暂停/恢复。
   const [windowVisible, setWindowVisible] = useState(false);
   useDeviceLinkRemoteProjects(windowVisible, 'sidebar');
@@ -319,7 +324,7 @@ export function SidebarWindowLayout() {
         )}
       </div>
 
-      {/* 无任务且 Shell 没有承载页签时显示占位；全局页不依赖任务。
+      {/* 只有新增命名全局页免去无任务占位；旧 main/panel 页保持原行为。
           隐藏窗口仍由覆盖层阻隔交互，窗口不随主窗路由抖动自动关闭。 */}
       <div className="relative flex flex-1 flex-col overflow-hidden">
         <DetachedBotMenuOwnerContext.Provider value={sessionId && ctx?.botOwner
@@ -327,7 +332,7 @@ export function SidebarWindowLayout() {
               canonical: ctx.botOwner.canonical && !ctx.remoteHostId && !ctx.deviceLinkDeviceId }
           : null}>
           <RightSidebarShell
-            onActiveTabChange={setActiveTabId}
+            onActiveTabChange={handleActiveTabChange}
             sessionId={sessionId}
             workdir={ctx?.workdir ?? ''}
             remoteHostId={ctx?.remoteHostId ?? null}
@@ -337,7 +342,7 @@ export function SidebarWindowLayout() {
             isMac={isMac}
           />
         </DetachedBotMenuOwnerContext.Provider>
-        {(!windowVisible || (!sessionId && !activeTabId)) && (
+        {(!windowVisible || (!sessionId && !activeNamedView)) && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--panel-bg)]">
             <span className="text-13 text-[var(--text-tertiary)]">
               {t('rightSidebar.window.followPlaceholder')}

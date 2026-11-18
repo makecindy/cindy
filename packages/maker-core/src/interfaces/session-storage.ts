@@ -13,6 +13,8 @@ export interface SessionMeta {
   workDir: string;
   title: string;
   model: string;
+  /** Selected connection, stored with the task. null is an intentional default route. */
+  providerId?: string | null;
   workspaceKind?: WorkspaceKind;
   /** Product project membership, independent of the agent's execution directory. */
   projectDir?: string | null;

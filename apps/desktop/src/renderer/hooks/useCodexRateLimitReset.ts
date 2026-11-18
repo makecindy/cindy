@@ -58,7 +58,6 @@ export function useCodexRateLimitReset(
           || t('codexResets.expiryUnknown'),
       }) : t('codexResets.confirmBody', { account });
       const accepted = await confirm({
-        presentation: 'standard',
         title: t(retry ? 'codexResets.confirmRetryTitle' : 'codexResets.confirmTitle'),
         description: quota ? `${description}\n\n${quota}` : description,
         confirmText: t(retry ? 'codexResets.retryReset' : 'codexResets.consumeOnce'),

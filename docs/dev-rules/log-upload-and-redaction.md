@@ -3,6 +3,13 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改客户端日志采集／脱敏／上报链路，修改 `main/logger.ts` 的 main 日志行
 > 格式，或修改崩溃判定与待补传标记之前
+> **适用路径**：`apps/desktop/src/main/log-upload/**`、`apps/desktop/src/main/{logger,lifecycle}.ts`、
+> `apps/desktop/src/shared/{mainLogRecordFormat,logUpload,logRetention}.ts`、
+> `apps/desktop/src/renderer/components/log-support/**`、
+> `apps/desktop/src/renderer/hooks/useLogUploadSettings.ts`、
+> `apps/mobile/src/debug/{mobileDebugLog,mobileDebugRecord,diagnosticEvents}*`、
+> `config/log-upload.json.example`、`scripts/shared/log-upload-build-env.mjs`、
+> `scripts/__tests__/log-upload-build-env.test.mjs`
 
 本文管**日志怎么离开用户的机器**。日志模块本身的约定（统一 logger、不裸 `console.log`）见
 [`engineering-conventions.md`](engineering-conventions.md) §1；凭证不落盘见

@@ -1,6 +1,12 @@
+import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 import { getPluginToolUi } from '@cindy/plugin-protocol';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { mergePluginSnapshot, pluginCatalogMemory, pluginCatalogPartitionKey, pluginInstalledGrid, usePluginCatalogState } from './lib/pluginCatalogMemory';
+import { samePluginValue, PLUGIN_CATALOG_REFRESH_MS } from './lib/pluginBrowserCache';
+import { PluginRecommendationSlots } from './lib/PluginRecommendationSlots';
+import { PluginCatalogPanels } from './lib/PluginCatalogPanels';
+import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import {
   REMOTE_RESOURCE_CHANGED_CHANNEL,
   parseRemoteResourceChangedPayload,
@@ -25,14 +31,13 @@ import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 
 import type {
   PluginManagementReceipt,
-  PluginManagementSnapshot,
   PluginManagementProject,
   PluginManagementProjectState,
 } from '../../../shared/pluginManagement';
 import type { PluginMarketDetail, PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostPluginCard, MarketPluginCard } from './GhostPluginPage';
-import { PluginCatalogBrowser, emptyPluginBrowserCache, PLUGIN_PAGE_SIZE } from './PluginCatalogBrowser';
-import { PluginVirtualGrid, emptyPluginGridCache } from './PluginVirtualGrid';
+import { PluginCatalogBrowser, PLUGIN_PAGE_SIZE } from './PluginCatalogBrowser';
+import { PluginVirtualGrid } from './PluginVirtualGrid';
 import { usePluginListScrollRestoration } from './lib/usePluginListScrollRestoration';
 import { hasPluginCatalogPaging, parsePluginManagementMarketPage, parsePluginManagementRecommendations } from './remotePluginManagementClient';
 import type { PluginMarketQuery, PluginMarketPage } from '../../../shared/pluginMarket';
@@ -89,8 +94,9 @@ export function RemotePluginPage({
 }) {
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const [snapshot, setSnapshot] = useState<PluginManagementSnapshot | null>(null);
-  const [catalogRevision, setCatalogRevision] = useState(0);
+  const catalogOwnerKey = pluginCatalogPartitionKey(JSON.stringify([device.deviceId, getDataOwnerGeneration()]), i18n.language);
+  const catalogMemory = pluginCatalogMemory(catalogOwnerKey, device.deviceId);
+  const [snapshot, setSnapshot] = usePluginCatalogState(catalogMemory, 'remoteSnapshot');
   const [project, setProject] = useState<PluginManagementProject | null>(null);
   const projectRef = useRef(project);
   projectRef.current = project;
@@ -104,20 +110,21 @@ export function RemotePluginPage({
   const [selected, setSelected] = useState<string | null>(null);
   const ghost = snapshot?.ghosts.find((g) => installedGhostStoragePart(g) === selected);
   const [marketDetail, setMarketDetail] = useState<PluginMarketDetail | null>(null);
-  const [query, setQuery] = useState('');
-  const [catalogTab, setCatalogTab] = useState<'installed' | 'market'>('installed');
-  const [catalogPaging, setCatalogPaging] = useState(false);
-  const [todayPool, setTodayPool] = useState<PluginMarketItem[]>([]);
-  const [consumedToday, setConsumedToday] = useState<Set<string>>(() => new Set());
+  const [query, setQuery] = usePluginCatalogState(catalogMemory, 'query');
+  const [catalogTab, setCatalogTab] = usePluginCatalogState(catalogMemory, 'catalogTab');
+  const [catalogPaging, setCatalogPaging] = usePluginCatalogState(catalogMemory, 'catalogPaging');
+  const [todayPool, setTodayPool] = usePluginCatalogState(catalogMemory, 'todayPool');
+  const [consumedToday, setConsumedToday] = usePluginCatalogState(catalogMemory, 'consumedToday');
+  const [todayLoaded, setTodayLoaded] = usePluginCatalogState(catalogMemory, 'todayLoaded');
   const installingRecommendation = useRef<string | null>(null);
-  const [installedLimit, setInstalledLimit] = useState(PLUGIN_PAGE_SIZE);
-  const [marketTotal, setMarketTotal] = useState<number | null>(null);
-  const browserCache = useRef(emptyPluginBrowserCache());
+  const [installedLimit, setInstalledLimit] = usePluginCatalogState(catalogMemory, 'installedLimit');
+  const [marketTotal, setMarketTotal] = usePluginCatalogState(catalogMemory, 'marketTotal');
+  const browserCache = catalogMemory.browser;
   const installedSentinel = useRef<HTMLDivElement>(null);
   const marketFiltersHost = useRef<HTMLDivElement>(null);
   const secondaryTabs = useRef<HTMLDivElement>(null);
-  const installedGridCache = useMemo(emptyPluginGridCache, [device.deviceId, query]);
-  const [originFilter, setOriginFilter] = useState('all');
+  const installedGridCache = pluginInstalledGrid(catalogMemory, query);
+  const [originFilter, setOriginFilter] = usePluginCatalogState(catalogMemory, 'originFilter');
   const [status, setStatus] = useState<
     'readFailed' | 'unknown' | 'changed' | 'actionFailed' | null
   >(null);
@@ -127,7 +134,7 @@ export function RemotePluginPage({
   const [legacyDetail, setLegacyDetail] = useState<LegacyManagedPluginDetail | null>(null);
   const [legacyDetailStatus, setLegacyDetailStatus] = useState<'loading' | 'failed' | null>(null);
   const { listRef: catalogScroller, onListScroll, capture: captureCatalogScroll, requestRestore: restoreCatalogScroll } =
-    usePluginListScrollRestoration(!ghost && !marketDetail && !legacySelected);
+    usePluginListScrollRestoration(!ghost && !marketDetail && !legacySelected, catalogMemory.scroll);
   const [receipt, setReceipt] = useState<PluginManagementReceipt | null>(null);
   const scope = useRef({ owner: getDataOwnerGeneration(), alive: true, online });
   scope.current.online = online;
@@ -148,7 +155,9 @@ export function RemotePluginPage({
       invokePluginManagement(device.deviceId, action, input, instance),
     [device.deviceId],
   );
-  const refresh = useCallback(async () => {
+  const refreshAt = useRef(catalogMemory.snapshotAt);
+  const refresh = useCallback(async (force = true) => {
+    if (!force && catalogMemory.remoteSnapshot && Date.now() - catalogMemory.snapshotAt < PLUGIN_CATALOG_REFRESH_MS) return;
     const revision = ++readRevision.current;
     if (!writable()) return;
     try {
@@ -156,6 +165,8 @@ export function RemotePluginPage({
       if (!writable() || revision !== readRevision.current) return;
       setUnsupported(!supported);
       if (!supported) {
+        setTodayPool([]);
+        setTodayLoaded(true);
         const items = await readLegacyManagedPlugins(device.deviceId, i18n.language);
         if (writable() && revision === readRevision.current) {
           setLegacy(items);
@@ -168,29 +179,44 @@ export function RemotePluginPage({
       }
       const paging = await hasPluginCatalogPaging(device.deviceId);
       if (!writable() || revision !== readRevision.current) return;
+      if (!paging) {
+        // False is initially unknown. Only the completed capability probe may
+        // end the slots reserved for a newer Host's recommendations.
+        setTodayPool([]);
+        setTodayLoaded(true);
+      }
       const next = parsePluginManagementSnapshot(await invoke('snapshot', paging ? { read: 'installed' } : {}));
       if (writable() && revision === readRevision.current) {
-        setSnapshot(next);
-        setCatalogRevision(revision);
+        const previousMarket = catalogMemory.remoteSnapshot?.market;
+        setSnapshot(previous => {
+          const market = mergePluginSnapshot(previous?.market ?? null, next.market);
+          return previous?.market === market && samePluginValue(previous, { ...next, market }) ? previous : { ...next, market };
+        });
+        catalogMemory.snapshotAt = Date.now(); refreshAt.current = catalogMemory.snapshotAt;
         setCatalogPaging(paging);
         setLegacySelected(null);
         setLegacyDetail(null);
         setStatus(null);
+        await browserCache.current.refresh?.({ force: force && !samePluginValue(previousMarket, catalogMemory.remoteSnapshot?.market) });
       }
     } catch {
       if (writable() && revision === readRevision.current) setStatus('readFailed');
     }
-  }, [device.deviceId, i18n.language, invoke, writable]);
+  }, [device.deviceId, i18n.language, invoke, writable, catalogMemory, browserCache, setSnapshot, setCatalogPaging, setTodayPool, setTodayLoaded]);
+  usePluginMarketForegroundRefresh(() => { if (active) return refresh(false); }, refreshAt);
   useEffect(() => {
-    let active = true;
-    setConsumedToday(new Set());
-    if (!catalogPaging) { setTodayPool([]); return; }
+    if (!active || !online || !writable() || !catalogPaging) return;
+    let alive = true;
+    if (catalogMemory.todayLoaded && Date.now() - catalogMemory.recommendationsAt < PLUGIN_CATALOG_REFRESH_MS) return;
     void invoke('snapshot', { read: 'recommendations' }).then(value => {
-      if (active && writable()) setTodayPool(parsePluginManagementRecommendations(value));
-    }).catch(() => { if (active) setTodayPool([]); });
-    return () => { active = false; };
-  }, [catalogPaging, device.deviceId, invoke, writable]);
-  useEffect(() => { setInstalledLimit(PLUGIN_PAGE_SIZE); }, [query]);
+      if (alive && writable()) {
+        const items = parsePluginManagementRecommendations(value);
+        setTodayPool(previous => samePluginValue(previous, items) ? previous : items);
+        setTodayLoaded(true); catalogMemory.recommendationsAt = Date.now();
+      }
+    }).catch(() => { if (alive && writable()) setTodayLoaded(true); });
+    return () => { alive = false; };
+  }, [active, online, catalogPaging, device.deviceId, invoke, writable, catalogMemory, setTodayPool, setTodayLoaded]);
   useEffect(() => {
     const sentinel = installedSentinel.current;
     if (!sentinel || !catalogScroller.current || (!query.trim() && catalogTab !== 'installed')) return;
@@ -212,7 +238,9 @@ export function RemotePluginPage({
       return parsePluginManagementMarketPage(value);
     }
     // Explicit legacy Host path: its existing v1 snapshot cannot paginate over the wire.
-    const items = (snapshot?.market.items ?? []).filter(item =>
+    // Reconnect can refresh the retained browser before React commits this snapshot.
+    const market = catalogMemory.remoteSnapshot?.market;
+    const items = (market?.items ?? []).filter(item =>
       `${item.name} ${item.description ?? ''} ${item.ghostId} ${item.author ?? ''}`.toLocaleLowerCase().includes((input.query ?? '').toLocaleLowerCase())
       && (!input.excludeInstalled || (item.installState !== 'installed' && item.installState !== 'update-available')));
     const counts = { all: items.length, public: 0, organization: 0, personal: 0, custom: 0 };
@@ -228,11 +256,11 @@ export function RemotePluginPage({
     const sourceCounts = new Map<string, number>();
     for (const item of items) if (item.sourceMarketName)
       sourceCounts.set(item.sourceMarketName, (sourceCounts.get(item.sourceMarketName) ?? 0) + 1);
-    return { ...(snapshot?.market ?? { unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] }),
+    return { ...(market ?? { unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] }),
       items: selected, counts: input.cursor ? null : counts,
       customSourceCounts: [...sourceCounts].map(([name, count]) => ({ name, count })),
       nextCursor: offset + selected.length < filtered.length ? String(offset + selected.length) : null };
-  }, [catalogPaging, invoke, snapshot, writable]);
+  }, [catalogPaging, invoke, catalogMemory, writable]);
   const loadLegacyDetail = useCallback(
     async (plugin: LegacyManagedPlugin) => {
       const revision = ++detailRevision.current;
@@ -295,13 +323,18 @@ export function RemotePluginPage({
       setProjectPickerOpen(false);
     }
   }, [online, active]);
+  // A remount may have missed Host pushes while unsubscribed. Reuse the first
+  // activation refresh even when its retained snapshot is younger than the TTL.
+  const previousVisibility = useRef({ online: false, active: false });
   useEffect(() => {
+    const previous = previousVisibility.current;
+    previousVisibility.current = { online, active };
     if (!online) {
       ++readRevision.current;
       ++detailRevision.current;
       ++projectReadRevision.current;
       dialog.current?.abort();
-    } else if (active) void refresh();
+    } else if (active) void refresh(!previous.online || !previous.active);
   }, [online, active, refresh]);
   useEffect(
     () =>
@@ -352,7 +385,7 @@ export function RemotePluginPage({
                 name: consent.facts.name,
               }),
               description: `${device.name} · ${consent.facts.kind === 'install' ? t('settings.ghosts.installConsent.installMeta', { version: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) }) : t('settings.ghosts.installConsent.updateMeta', { from: consent.facts.previousVersion, to: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) })}`,
-              content: <>{consent.purpose === 'ui-capability' && <p className="text-13 text-[var(--text-secondary)]">{t(`mcpApps.pluginTrust.${consent.trust ?? 'unverified'}`)}</p>}<GhostInstallConsentContent facts={consent.facts} capabilityOnly={consent.purpose === 'ui-capability'} /></>,
+              content: <>{consent.purpose === 'ui-capability' && pluginSourceWarningKey(consent.installationSource) && <p className="text-13 text-[var(--warning-fg)]">{t(pluginSourceWarningKey(consent.installationSource)!)}</p>}<GhostInstallConsentContent facts={consent.facts} capabilityOnly={consent.purpose === 'ui-capability'} /></>,
               confirmText: t(
                 consent.purpose === 'ui-capability' ? 'newChat.pluginUi.enable' : consent.facts.kind === 'install'
                   ? 'settings.ghosts.installConsent.confirmInstall'
@@ -847,33 +880,35 @@ export function RemotePluginPage({
             <main ref={catalogScroller} onScroll={onListScroll} className="min-h-0 flex-1 overflow-y-auto">
               <PluginManagementPage>
                 {pageHeading}
-                {!query.trim() && todayPool.filter(item => {
+                {!query.trim() && (!todayLoaded || todayPool.filter(item => {
                   const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
                   return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
-                }).length >= 3 ? <section className="mb-6 min-w-0">
+                }).length >= 3) ? <section className="mb-6 min-w-0">
                   <h2 className="mb-4 text-20 font-medium text-[var(--text-primary)]">{t('settings.ghosts.page.todayRecommendations')}</h2>
-                  <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,220px),1fr))] gap-3">
+                  <PluginRecommendationSlots loading={!todayLoaded}>
                     {todayPool.filter(item => {
                       const latest = snapshot?.market.items.find(row => row.pluginId === item.pluginId) ?? item;
                       return !consumedToday.has(item.pluginId) && latest.installState !== 'installed' && latest.installState !== 'update-available';
                     }).slice(0, 3).map(item => <MarketPluginCard compact key={item.pluginId} item={item} busy={busy}
                       onSelect={() => void selectMarket(item)} onInstall={() => void install(item)} onIconLoadError={() => {}} />)}
-                  </div>
+                  </PluginRecommendationSlots>
                 </section> : null}
-                {!unsupported && !query.trim() ? <><div ref={secondaryTabs} className="h-0" /><div className="sticky top-0 z-10 mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] bg-[var(--surface)] py-3">
-                  <SegmentedControl role="tablist" value={catalogTab} onValueChange={value => {
+                {!unsupported && !query.trim() ? <><div ref={secondaryTabs} className="h-0" /><div className="sticky top-0 z-10 mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-default)] app-wallpaper-surface bg-[var(--surface)] py-3">
+                  <SegmentedControl role="tablist" height={38} optionHeight={32}
+                    optionClassName="plugin-management-tab min-w-[88px] px-4 text-13" value={catalogTab} onValueChange={value => {
                     setCatalogTab(value);
                     const root = catalogScroller.current, tabs = secondaryTabs.current;
                     if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
                       root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
                   }} aria-label={t('settings.ghosts.page.secondaryTabsAria')}
                     options={[
-                      { value: 'installed', label: `${t('settings.ghosts.page.installedSection')} ${snapshot?.ghosts.length ?? 0}` },
-                      { value: 'market', label: `${t('settings.ghosts.page.marketSection')}${marketTotal === null ? '' : ` ${marketTotal}`}` },
+                      { value: 'installed', label: <>{t('settings.ghosts.page.installedSection')} <span className="ml-1.5 inline-block min-w-[3ch] text-right tabular-nums">{snapshot?.ghosts.length ?? 0}</span></> },
+                      { value: 'market', label: <>{t('settings.ghosts.page.marketSection')} <span className="ml-1.5 inline-block min-w-[3ch] text-right tabular-nums">{marketTotal ?? '\u00a0'}</span></> },
                     ]} />
                   <div ref={marketFiltersHost} className="min-w-0" />
                 </div></> : null}
-                {unsupported || query.trim() || catalogTab === 'installed' ? <section>
+                <PluginCatalogPanels scrollRef={catalogScroller} query={query}>
+                <section hidden={!unsupported && !query.trim() && catalogTab !== 'installed'}>
                   <InstalledCatalogHeader
                     title={t('settings.ghosts.page.installedSection')}
                     count={
@@ -888,6 +923,7 @@ export function RemotePluginPage({
                   <div className="min-w-0">
                     {unsupported
                       ? <PluginVirtualGrid scrollRef={catalogScroller} cache={installedGridCache}
+                        active={unsupported || !!query.trim() || catalogTab === 'installed'}
                         count={Math.min(installedLimit, filteredLegacy.length)} renderItem={index => {
                           const item = filteredLegacy[index]!;
                           return (
@@ -911,6 +947,7 @@ export function RemotePluginPage({
                           />
                         ); }} />
                       : <PluginVirtualGrid scrollRef={catalogScroller} cache={installedGridCache}
+                          active={!!query.trim() || catalogTab === 'installed'}
                           count={!project || projectState?.projectId === project.id ? Math.min(installedLimit, filteredGhosts?.length ?? 0) : 0}
                           renderItem={index => {
                             const g = filteredGhosts![index]!;
@@ -961,20 +998,27 @@ export function RemotePluginPage({
                       {t('settings.ghosts.remote.empty')}
                     </p>
                   ) : null}
-                </section> : null}
+                </section>
                 {!unsupported ? <PluginCatalogBrowser cacheRef={browserCache}
                   filterHost={marketFiltersHost}
                   ownerKey={JSON.stringify([device.deviceId, scope.current.owner])}
-                  revision={JSON.stringify([catalogRevision, snapshot?.ghosts.map(ghost => [installedGhostStoragePart(ghost), ghost.manifest.version]), snapshot?.market.customSourceNames, i18n.language])}
+                  catalogKey={i18n.language}
+                  revision={JSON.stringify([snapshot?.market.items.map(item => [item.pluginId, item.installState, item.version]), snapshot?.market.customSourceNames])} installedItems={snapshot?.market.items}
                   query={query} scope={originFilter === 'public' || originFilter === 'organization' || originFilter === 'custom' ? originFilter : 'all'}
-                  onScope={setOriginFilter} showOrganization={true}
-                  visible={!!query.trim() || catalogTab === 'market'} scrollRef={catalogScroller}
-                  loadPage={readMarketPage} onCounts={counts => setMarketTotal(counts?.all ?? null)}
+                  onScope={value => {
+                    setOriginFilter(value);
+                    const root = catalogScroller.current, tabs = secondaryTabs.current;
+                    if (root && tabs && tabs.getBoundingClientRect().top < root.getBoundingClientRect().top)
+                      root.scrollTop += tabs.getBoundingClientRect().top - root.getBoundingClientRect().top;
+                  }} showOrganization={true}
+                  visible={active && (!!query.trim() || catalogTab === 'market')} scrollRef={catalogScroller}
+                  loadPage={readMarketPage} onCounts={counts => setMarketTotal(counts?.all ?? null)} renderRevision={busy}
                   renderItem={item => <MarketPluginCard key={item.pluginId} item={item} busy={busy}
                     onSelect={() => void selectMarket(item)}
                     onInstall={item.installState === 'installed' || item.installState === 'update-available' ? undefined : () => void install(item)}
                     onIconLoadError={() => {}} />}
                 /> : null}
+                </PluginCatalogPanels>
               </PluginManagementPage>
             </main>
           </PluginManagementLayout>

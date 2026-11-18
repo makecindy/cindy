@@ -4,6 +4,13 @@
 > **适用范围**：所有涉及区域分支的产品行为、身份命名、默认值、UI 标注与对外表述
 > **读取时机**：新增或修改区域分支逻辑、构建身份、端点选择、区域相关 UI 或对外
 > 文案之前
+> **适用路径**：`apps/desktop/src/shared/{brandRegion,regionCode}.ts`、`packages/maker-shared/src/brandIdentity.ts`、
+> `packages/maker-shared/src/{clientEndpoints,clientEndpointSchema}.ts`、`config/endpoint*.json`、
+> `scripts/shared/{client-endpoint-build-env.cjs,desktop-dev-region.mjs}`、
+> `apps/desktop/src/main/{clientEndpointsService,regionUserData}.ts`、
+> `apps/desktop/scripts/package-desktop.mjs`、`apps/mobile/app.config.js`、
+> `apps/mobile/src/config/clientEndpointStartup.ts`、`apps/mobile/scripts/lib/mobile-dev-region.mjs`、
+> `scripts/brand-terminology-guard.mjs`
 
 ## 1. 基本关系
 

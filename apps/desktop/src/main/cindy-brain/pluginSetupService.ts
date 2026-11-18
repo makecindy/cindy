@@ -3,7 +3,6 @@ import type { GhostOauthAccountManager } from './ghostOauthAccounts.js';
 import type { GhostConnectionManager } from './ghostConnections.js';
 import type { GhostKvStore } from './ghostKvStore.js';
 import { evaluateGhostSetupAssessment, type GhostSetupProbes } from './ghostSetupStatus.js';
-import { assessGhostHostSetupRequirements } from './ghostHostSetupRequirementsCore.js';
 import { appendReadyGhostOauthReauthSuggest, findGhostOauthReauthSuggest } from './ghostOauthScopeStaleness.js';
 
 export interface PluginSetupStores {
@@ -44,17 +43,14 @@ export function pluginOauthReauthSuggestion(oauth: PluginSetupStores['oauth'], s
 }
 
 export function assessPluginSetup(input: {
-  translate(key: string): string;
   manifest: GhostManifest;
   probes: GhostSetupProbes;
   revision: number;
-  clientConfigReady(configId: string): boolean;
   reauthSuggestion(): ReturnType<typeof pluginOauthReauthSuggestion>;
 }): GhostSetupAssessment {
   const assessment = evaluateGhostSetupAssessment(input.manifest, input.probes, {
     revision: input.revision,
     strict: true,
-    additionalGroups: assessGhostHostSetupRequirements(input.manifest, { clientConfigReady: input.clientConfigReady }, input.translate),
   });
   return assessment.state === 'ready'
     ? appendReadyGhostOauthReauthSuggest(assessment, input.reauthSuggestion())

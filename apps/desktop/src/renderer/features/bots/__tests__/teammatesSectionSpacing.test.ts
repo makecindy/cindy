@@ -136,8 +136,8 @@ describe('伙伴行的间距基线', () => {
     expect(source).toContain(
       '<div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">',
     );
-    // 头像行起点 = 列表容器 12px + 行内边距 10px。
-    expect(source).toContain('<div ref={avatarRowRef} className="flex flex-nowrap items-center gap-1 overflow-hidden py-1 pr-0 pl-[22px]">');
+    // 头像行的挂载、容量与 +N 由 teammatesSection.test.tsx 经过真实组件验证，
+    // 换行与对齐由 teammates-section 单页场景验证，不再匹配旧 JSX 字面量。
     // 段头动作是 20px 图标钮,与其它段头动作同尺寸。
     expect(source).toContain('<BotCreateMenu variant="header" />');
     // 加入群聊收进「+」菜单的「输入邀请链接…」(#6013),段头不再有单独的加群按钮。
@@ -154,10 +154,10 @@ describe('群聊与伙伴行同一套几何', () => {
   it('群行沿用对称的 10px 内边距、任务行高度、44px 头像位、14/12/11 字号', () => {
     expect(groupRow).toContain('gap-2.5 rounded-lg px-2.5 py-2 text-left');
     expect(groupRow).toContain('SIDEBAR_LIST_ROW_HEIGHT_CLASS,');
-    expect(groupRow).toContain('<span className="relative flex shrink-0"><BotGroupSidebarAvatar');
-    expect(groupRow).toContain('<span className="flex min-w-0 flex-1 flex-col gap-0.5">');
+    expect(groupRow).toContain('<span className="pointer-events-none relative flex shrink-0"><BotGroupSidebarAvatar');
+    expect(groupRow).toContain('<span className="pointer-events-none relative flex min-w-0 flex-1 flex-col gap-0.5">');
     expect(groupRow).toContain('min-w-0 truncate text-14 leading-5');
     expect(groupRow).toContain("'min-w-0 flex-1 truncate text-12 leading-4'");
-    expect(groupRow).toContain("'min-w-10 shrink-0 self-start whitespace-nowrap pt-0.5 text-right text-11 tabular-nums'");
+    expect(groupRow).toContain("'ml-auto min-w-10 shrink-0 whitespace-nowrap text-right text-11 leading-4 tabular-nums'");
   });
 });

@@ -82,7 +82,10 @@ describe('background tab creation', () => {
       getProfileState: () => profileState,
     });
 
-    await expect(tabs.openTab('https://example.com', { background: true })).rejects.toBe(cdpError);
+    // Unit regression: real tab ops must propagate the CDP failure without an
+    // HTTP fallback. A numeric public address keeps the navigation guard real
+    // without external DNS (fake-IP DNS can block example.com before CDP).
+    await expect(tabs.openTab('https://93.184.216.34', { background: true })).rejects.toBe(cdpError);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

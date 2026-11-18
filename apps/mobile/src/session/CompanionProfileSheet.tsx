@@ -583,14 +583,23 @@ function CompanionCreateSheetContent({ visible, onClose, onClosed, deviceId, dev
     onClose={() => setModelStage('closing-picker')} onClosed={() => setModelStage('form')}
     onSelect={route => { setModelValues({ followsDefault: false, modelChain: serializeModelRoutes([route]) }); return true; }} />;
   if (importing) return <CompanionImportSheet visible={visible} onClose={onClose} onClosed={onClosed} deviceId={deviceId} deviceName={deviceName} online={online} onCreated={onCreated} />;
-  if (Platform.OS === 'ios') return <>{modelPicker}<CompanionCreateNativeView models={models} modelMissing={modelMissing} onImport={data?.resource.actions?.some(action => action.id === 'open-agent-import') ? openImport : undefined} deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} locked={unconfirmed} visible={visible && !openingImport && modelStage === 'form'} onClose={close} onClosed={creationClosed} panel={data?.panels[0]} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} /></>;
   const panel = data?.panels[0];
   const notice = !online ? t('devices.companionProfile.offline', { deviceName }) : error || duplicate ? t(duplicate || nameTaken ? 'devices.companionProfile.nameTaken' : 'devices.companionProfile.createFailed') : null;
+  // A grey confirm button with no reason reads as a broken feature: name the two reasons the form
+  // itself cannot show (a host that cannot create a buddy, and an empty name or portrait). Offline,
+  // a duplicate name and an unconfirmed create already have their own notice; a missing model chain
+  // is explained by the model section above, and nothing is claimed before the host has answered.
+  const createHint = notice || modelMissing || loading || !data ? null
+    : !panel?.action || panel.action.disabled ? t('devices.companionProfile.createHostUnsupported')
+    : typeof values.name !== 'string' || !values.name.trim() || !values.avatarImageBase64 ? t('devices.companionProfile.createNeedsDetails')
+    : null;
+  if (Platform.OS === 'ios') return <>{modelPicker}<CompanionCreateNativeView models={models} modelMissing={modelMissing} hint={createHint ?? undefined} onImport={data?.resource.actions?.some(action => action.id === 'open-agent-import') ? openImport : undefined} deviceName={deviceName} nameTaken={nameTaken} duplicate={duplicate} locked={unconfirmed} visible={visible && !openingImport && modelStage === 'form'} onClose={close} onClosed={creationClosed} panel={panel} values={values} onChange={change} onSubmit={() => void submit()} onRetry={() => void reload()} online={online} busy={busy} loading={loading} error={error} dirty={dirty} /></>;
   // Same gate as iOS: a live, enabled host action, a name and a portrait.
   const blocked = busy || !online || !panel?.action || !!panel.action.disabled || typeof values.name !== 'string' || !values.name.trim() || !values.avatarImageBase64 || duplicate || modelMissing;
   return <>{modelPicker}<CompanionSheet visible={visible && !openingImport && modelStage === 'form'} onClose={close} onClosed={creationClosed} preventDismiss={dirty || busy} title={t('devices.companionProfile.create')}>
     <View style={styles.content}>
       {notice ? <Text accessibilityRole={online ? 'alert' : undefined} style={styles.note}>{notice}</Text> : null}
+      {createHint ? <Text style={styles.note} testID="companionCreate.hint">{createHint}</Text> : null}
       {loading ? <ActivityIndicator accessibilityLabel={t('devices.resources.loading')} color={colors.textSecondary} style={styles.spinner} /> : null}
       {panel ? <CompanionProfileForm panel={panel} values={values} onChange={change} disabled={busy || !online || unconfirmed} /> : null}
       {models}

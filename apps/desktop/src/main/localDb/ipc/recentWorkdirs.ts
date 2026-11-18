@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import { requireString } from '../../utils/ipcValidate.js';
 import { createLogger } from '../../logger.js';
 import { listRecentWorkdirs, removeRecentWorkdir } from './recentWorkdirsCore.js';
+import { emitProjectCatalogChanged } from '../../projectCatalogEvents.js';
 export * from './recentWorkdirsCore.js';
 const log = createLogger('recentWorkdirs');
 
@@ -19,6 +20,7 @@ export function registerRecentWorkdirsIpc(): void {
     // 否则模块级缓存只在 sessions:created 时重拉,删掉的项目会在别的窗口
     // 里残留可选。真删了才广播;no-op 不打扰。
     if (deleted) {
+      emitProjectCatalogChanged();
       for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed()) {
           w.webContents.send('local-db:recent-workdirs:changed', { path: normalized });

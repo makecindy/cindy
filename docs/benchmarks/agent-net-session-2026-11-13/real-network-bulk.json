@@ -1,0 +1,634 @@
+{
+  "generatedAt": "2026-11-15T14:47:20.478Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "totalBytes": 20971520,
+  "chunkBytes": 524288,
+  "concurrency": 4,
+  "results": [
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 1,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.003,
+      "dropped": 0,
+      "ms": 1536,
+      "failed": 0,
+      "taps": {
+        "count": 4,
+        "p50": 83,
+        "p90": 115,
+        "max": 115
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 1,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.003,
+      "dropped": 0,
+      "ms": 5973,
+      "failed": 0,
+      "taps": {
+        "count": 12,
+        "p50": 420,
+        "p90": 1769,
+        "max": 2276
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 2,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.003,
+      "dropped": 0,
+      "ms": 1436,
+      "failed": 0,
+      "taps": {
+        "count": 3,
+        "p50": 97,
+        "p90": 107,
+        "max": 107
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 2,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.003,
+      "dropped": 0,
+      "ms": 4138,
+      "failed": 0,
+      "taps": {
+        "count": 9,
+        "p50": 261,
+        "p90": 603,
+        "max": 603
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 3,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.003,
+      "dropped": 0,
+      "ms": 1378,
+      "failed": 0,
+      "taps": {
+        "count": 3,
+        "p50": 73,
+        "p90": 141,
+        "max": 141
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "v1",
+      "run": 3,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.004,
+      "dropped": 0,
+      "ms": 8099,
+      "failed": 0,
+      "taps": {
+        "count": 17,
+        "p50": 500,
+        "p90": 2266,
+        "max": 2529
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker",
+      "run": 1,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.043,
+      "dropped": 0,
+      "ms": 3403,
+      "failed": 0,
+      "taps": {
+        "count": 7,
+        "p50": 265,
+        "p90": 327,
+        "max": 327
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker",
+      "run": 1,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.073,
+      "dropped": 0,
+      "ms": 15516,
+      "failed": 0,
+      "taps": {
+        "count": 31,
+        "p50": 1485,
+        "p90": 2566,
+        "max": 2968
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker",
+      "run": 2,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.043,
+      "dropped": 0,
+      "ms": 3551,
+      "failed": 0,
+      "taps": {
+        "count": 8,
+        "p50": 309,
+        "p90": 315,
+        "max": 315
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker",
+      "run": 2,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.057,
+      "dropped": 0,
+      "ms": 20566,
+      "failed": 0,
+      "taps": {
+        "count": 41,
+        "p50": 1689,
+        "p90": 3168,
+        "max": 4676
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker",
+      "run": 3,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.042,
+      "dropped": 0,
+      "ms": 2828,
+      "failed": 0,
+      "taps": {
+        "count": 6,
+        "p50": 222,
+        "p90": 236,
+        "max": 236
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "worker",
+      "run": 3,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.06,
+      "dropped": 0,
+      "ms": 15802,
+      "failed": 0,
+      "taps": {
+        "count": 32,
+        "p50": 1521,
+        "p90": 2571,
+        "max": 3041
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.055,
+      "dropped": 0,
+      "ms": 3299,
+      "failed": 0,
+      "taps": {
+        "count": 7,
+        "p50": 247,
+        "p90": 288,
+        "max": 288
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 1,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.061,
+      "dropped": 0,
+      "ms": 17487,
+      "failed": 0,
+      "taps": {
+        "count": 35,
+        "p50": 1539,
+        "p90": 2561,
+        "max": 3024
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.056,
+      "dropped": 0,
+      "ms": 3166,
+      "failed": 0,
+      "taps": {
+        "count": 7,
+        "p50": 251,
+        "p90": 318,
+        "max": 318
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 2,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.056,
+      "dropped": 0,
+      "ms": 19674,
+      "failed": 0,
+      "taps": {
+        "count": 39,
+        "p50": 1553,
+        "p90": 2585,
+        "max": 3016
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 3,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.055,
+      "dropped": 0,
+      "ms": 3129,
+      "failed": 0,
+      "taps": {
+        "count": 7,
+        "p50": 250,
+        "p90": 319,
+        "max": 319
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "udp-relay",
+      "run": 3,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.07,
+      "dropped": 0,
+      "ms": 16026,
+      "failed": 0,
+      "taps": {
+        "count": 32,
+        "p50": 1551,
+        "p90": 3001,
+        "max": 3025
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 1,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.048,
+      "dropped": 0,
+      "ms": 3868,
+      "failed": 0,
+      "taps": {
+        "count": 8,
+        "p50": 25,
+        "p90": 29,
+        "max": 29
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 1,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.048,
+      "dropped": 0,
+      "ms": 6971,
+      "failed": 0,
+      "taps": {
+        "count": 14,
+        "p50": 22,
+        "p90": 27,
+        "max": 28
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 2,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.049,
+      "dropped": 0,
+      "ms": 2984,
+      "failed": 0,
+      "taps": {
+        "count": 6,
+        "p50": 29,
+        "p90": 36,
+        "max": 36
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 2,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.048,
+      "dropped": 0,
+      "ms": 7436,
+      "failed": 0,
+      "taps": {
+        "count": 15,
+        "p50": 22,
+        "p90": 26,
+        "max": 26
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 3,
+      "direction": "down",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.048,
+      "dropped": 0,
+      "ms": 7298,
+      "failed": 0,
+      "taps": {
+        "count": 15,
+        "p50": 23,
+        "p90": 29,
+        "max": 33
+      },
+      "tapsFailed": 0
+    },
+    {
+      "profile": {
+        "name": "real",
+        "rateBytesPerSec": 1000000000,
+        "oneWayDelayMs": 0,
+        "queueLimitBytes": 67108864
+      },
+      "mode": "session",
+      "run": 3,
+      "direction": "up",
+      "totalBytes": 20971520,
+      "chunkBytes": 524288,
+      "concurrency": 4,
+      "utilization": null,
+      "wireRatio": 1.048,
+      "dropped": 0,
+      "ms": 4524,
+      "failed": 0,
+      "taps": {
+        "count": 10,
+        "p50": 25,
+        "p90": 30,
+        "max": 30
+      },
+      "tapsFailed": 0
+    }
+  ]
+}

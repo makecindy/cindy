@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { darkColors, lightColors, motionDuration } from "@/theme/tokens";
@@ -120,17 +121,23 @@ describe("startup splash overlay", () => {
   it("generates a dedicated Android splash icon and the same light/night brand background", () => {
     const nodeRequire = createRequire(import.meta.url);
     const expoCli = nodeRequire.resolve("expo/bin/cli");
-    const introspected = JSON.parse(
-      execFileSync(
+    // The Expo CLI keeps its state in ~/.expo; give it a home of its own, not the test runner's.
+    const expoHome = mkdtempSync(join(tmpdir(), "cindy-expo-home-"));
+    let output: string;
+    try {
+      output = execFileSync(
         process.execPath,
         [expoCli, "config", "--type", "introspect", "--json"],
         {
           cwd: process.cwd(),
           encoding: "utf8",
-          env: { ...process.env, NODE_ENV: "development" },
+          env: { ...process.env, NODE_ENV: "development", HOME: expoHome, USERPROFILE: expoHome },
         },
-      ),
-    ) as {
+      );
+    } finally {
+      rmSync(expoHome, { recursive: true, force: true });
+    }
+    const introspected = JSON.parse(output) as {
       _internal: {
         modResults: {
           android: {

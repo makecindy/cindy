@@ -16,11 +16,12 @@ import { HumanDesktopInput } from '../remote-desktop/inputOwnership.js';
 import type { HandoffDriver } from './macDriver.js';
 import { qrContent } from './qrCode.js';
 import { isBrowserBundle } from './originPolicy.js';
-import { extractStep, type ExtractedStep } from './stepExtractor.js';
+import { applyFieldPlan, extractStep, IncompleteFormError, type ExtractedStep } from './stepExtractor.js';
 import type {
   ControlBinding,
   FoundQr,
   HandoffTarget,
+  HandoffFieldPlan,
   NativeActKind,
   NativeActResult,
   NativeAxSnapshot,
@@ -102,6 +103,7 @@ export interface HandoffSessionOptions {
   purpose: string;
   note?: string;
   requester?: string;
+  fields?: HandoffFieldPlan[];
   target: HandoffTargetSpec;
   completeWhen?: HandoffCompletionHints;
   timeoutMs: number;
@@ -215,6 +217,26 @@ const WINDOW_WATCH_MS = 2000;
 const FIELDS_GONE_READS = 3;
 const WINDOW_GONE_READS = 2;
 
+/** Which page a step is on: its window title and address (a page can keep its address and change its title). */
+const pageOf = (step: ExtractedStep): string => JSON.stringify([step.source.window ?? '', step.url ?? '']);
+
+/**
+ * A form the flow moved on to whose ordinary fields all have content already (a settings page after a
+ * passkey or a key was accepted): nothing there waits for the owner. The page the agent pointed at, and
+ * the form the owner is answering, are never judged this way: a field with content can still be replaced.
+ */
+const settledForm = (step: ExtractedStep, current: ExtractedStep | null): boolean =>
+  !!current && formFields(step) !== formFields(current) && !step.signIn && !step.deviceCode && step.shown.length > 0 &&
+  step.shown.every((control) => control.kind === 'text' && control.filled && control.contentType !== 'password' &&
+    control.contentType !== 'one-time-code');
+// Generated ids bind actions to the latest snapshot; they are not form identity. Navigation,
+// headings and field order can change without moving on from the form being answered.
+const formFields = (step: ExtractedStep): string => JSON.stringify(step.shown
+  .filter((control) => control.kind === 'text')
+  .map((control) => JSON.stringify([control.label, control.contentType]))
+  .sort());
+const askingNothing = (step: ExtractedStep): ExtractedStep => ({ ...step, shown: [] });
+
 /** What the owner would be asked, ignoring what they typed; the ids bind an open form to its fields. */
 const fieldShape = (step: ExtractedStep): string =>
   JSON.stringify(step.shown.map((control) => (control.kind === 'text'
@@ -257,6 +279,7 @@ export class InputHandoffSession {
   private target: HandoffTarget | null = null;
   private initial: HandoffTarget | null = null;
   private step: ExtractedStep | null = null;
+  private unreadablePage: IncompleteFormError['page'] | null = null;
   private stepNumber = 0;
   private submissions = 0;
   private finishingUntil: number | undefined;
@@ -278,6 +301,8 @@ export class InputHandoffSession {
   private qrChecking = false;
   /** A step of this request asked for a sign-in: the owner signs in on the window itself. */
   private signInMode = false;
+  private fieldPlanSurface: string | undefined;
+  private fieldPlanRetired = false;
   /** The owner has been asked something, so a screen with nothing to ask means they finished it. */
   private asked = false;
   /** The asked fields went away without an answer through the card: the owner did it on the window. */
@@ -363,6 +388,8 @@ export class InputHandoffSession {
       ...(picture ? { picture: true as const } : {}),
       ...(this.liveViewOffered() ? { liveView: true as const } : {}),
       ...(this.directSignInOffered() ? { directSignIn: true as const } : {}),
+      ...(this.directSignInOffered() && this.options.fields && !this.fieldPlanRetired
+        ? { preferRemoteForm: true as const } : {}),
       ...(!picture && !qr && this.phase === 'ready' && step?.deviceCode ? { deviceCode: { ...step.deviceCode } } : {}),
       ...(qr ? { qr } : {}),
     };
@@ -498,6 +525,10 @@ export class InputHandoffSession {
       // Neither its structure nor a picture of it can reach the owner.
       this.end('failed', 'failure', 'unreadable');
     } catch (error) {
+      if (error instanceof Error && error.message === 'Incomplete form' && await this.showPicture().catch(() => false)) {
+        this.publish('ready');
+        return;
+      }
       // A locked screen is not read at all: say so, rather than blame the window.
       this.end('failed', 'failure', error instanceof Error && error.message === 'locked' ? 'screen_locked' : 'unreadable');
     }
@@ -532,12 +563,13 @@ export class InputHandoffSession {
     if (outcome !== 'origin_changed') this.submissions++;
     if (ok) this.answeredOn = actor ?? this.answeredOn;
     try {
-      const next = await this.awaitSettled(before.signature, before.windows);
+      const settled = await this.awaitSettled(before.signature, before.windows);
       if (this.ended) return true;
-      if (next === 'ended') {
+      if (settled === 'ended') {
         this.end('succeeded', 'detected');
         return true;
       }
+      const next = settledForm(settled, current) ? askingNothing(settled) : settled;
       if (outcome !== 'origin_changed') this.stepNumber++;
       if (!ok) this.failure = outcome === 'origin_changed' ? 'origin_changed' : 'action_failed';
       if (outcome === 'origin_changed' && !actionable(next)) {
@@ -669,7 +701,7 @@ export class InputHandoffSession {
   }
 
   /** The owner types a password straight into this page: the agent's page reads pause there, as after a form. */
-  private guardSignInPage(step: ExtractedStep): void {
+  private guardSignInPage(step: Pick<ExtractedStep, 'signIn' | 'url'>): void {
     // Every direct sign-in field counts, not only a password: a one-time code or an account typed in the window is as readable.
     if (step.signIn && this.target) {
       this.guardedPage = { pid: this.target.pid, ...(step.url ? { url: step.url } : {}) };
@@ -725,6 +757,7 @@ export class InputHandoffSession {
 
   /** What the card says it shows: the page when it can be read, otherwise the window. */
   private source(): InputHandoffSource {
+    if (this.unreadablePage) return this.unreadablePage.source;
     if (this.step) return this.step.source;
     const app = this.target?.app ?? this.options.target.app ?? '';
     return this.target?.window.title ? { app, window: this.target.window.title } : { app };
@@ -1020,7 +1053,8 @@ export class InputHandoffSession {
       const secure = picture.field === 'password';
       result = await driver.pointer({ kind: 'type', ...base, value, submit: action.kind === 'submit', secure });
       if ('ok' in result && result.ok && secure && value && this.agentControlled) {
-        this.options.onSecretEntered?.({ pid: target.pid, ...(this.step?.url ? { url: this.step.url } : {}) });
+        const url = (this.unreadablePage ?? this.step)?.url;
+        this.options.onSecretEntered?.({ pid: target.pid, ...(url ? { url } : {}) });
       }
     }
     if ('error' in result && result.error === 'moved') return 'origin_changed';
@@ -1092,8 +1126,9 @@ export class InputHandoffSession {
     this.windowGoneReads = 0;
     if (window.minimized) return;
     if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
-    const step = await this.read().catch(() => null);
-    if (!step || step.pageMissing || !this.watching()) return;
+    const read = await this.read().catch(() => null);
+    if (!read || read.pageMissing || !this.watching()) return;
+    const step = settledForm(read, this.step) ? askingNothing(read) : read;
     // Answering on a picture because nothing could be read: now something can.
     if (this.picture) {
       if (actionable(step)) this.present(step, true);
@@ -1180,6 +1215,7 @@ export class InputHandoffSession {
   }
 
   private async useTarget(target: HandoffTarget): Promise<void> {
+    this.unreadablePage = null;
     if (this.target?.pid !== target.pid) {
       this.agentControlled = AUTOMATION_FLAGS.test(await this.options.driver.commandLine(target.pid));
     }
@@ -1213,8 +1249,16 @@ export class InputHandoffSession {
    */
   private async readFirstStep(restored: boolean): Promise<ExtractedStep | null> {
     const deadline = this.now() + (restored ? RESTORED_PAGE_WAIT_MS : BROWSER_PAGE_WAIT_MS);
+    /** The page the agent pointed at, once it read the same twice (drawn, not still loading). */
+    let shown: ExtractedStep | null = null;
+    let previous: ExtractedStep | null = null;
     for (;;) {
       const step = await this.read().catch(() => null);
+      // The wait is for that page to draw, not for the next one: a page that moved on meanwhile
+      // (a passkey accepted, a redirect) is the agent's to read again, not the owner's step.
+      if (restored && shown && step && !step.pageMissing && pageOf(step) !== pageOf(shown)) return shown;
+      if (restored && step && !step.pageMissing && readable(step) && step.signature === previous?.signature) shown = step;
+      previous = step;
       const waiting = restored ? !step || !actionable(step) : !!step?.pageMissing;
       if (!waiting || this.ended || this.now() >= deadline) return step;
       await this.sleep(350);
@@ -1233,7 +1277,33 @@ export class InputHandoffSession {
     const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
     if ('error' in raw) return null;
     this.target = { ...this.target, window: { index: raw.window.index, title: raw.window.title } };
-    const step = extractStep(raw as NativeAxSnapshot);
+    this.unreadablePage = null;
+    let step: ExtractedStep;
+    try {
+      step = extractStep(raw as NativeAxSnapshot);
+    } catch (error) {
+      if (error instanceof IncompleteFormError) {
+        this.unreadablePage = error.page;
+        this.guardSignInPage(error.page);
+      }
+      throw error;
+    }
+    if (this.options.fields && !this.fieldPlanRetired && step.shown.length) {
+      const surface = JSON.stringify([raw.pid, raw.window.title, step.url]);
+      this.fieldPlanSurface ??= surface;
+      if (surface === this.fieldPlanSurface && applyFieldPlan(step, this.options.fields)) {
+        // Keep the same logical fields through validation errors and repeated reads.
+      } else if (this.submissions === 0 && !this.directSignInOffered()) {
+        // Rejecting the plan must not discard the page's verified source or
+        // leave picture input unprotected while later AX reads are unavailable.
+        this.unreadablePage = { source: step.source, url: step.url, signIn: step.signIn };
+        this.guardSignInPage(this.unreadablePage);
+        throw new Error('Field plan no longer matches the screen');
+      } else {
+        // The owner can advance on the original window without submitting our form.
+        this.fieldPlanRetired = true;
+      }
+    }
     // A browser builds its page for accessibility only when asked, and the next read sees it.
     // Asked on every miss: another request on the same browser may have ended and taken it back.
     if (step.pageMissing && !this.ended) {
@@ -1262,16 +1332,19 @@ export class InputHandoffSession {
     void this.options.driver.exposePage?.(pid, false).catch(() => false);
   }
 
-  private async act(binding: ControlBinding, kind: NativeActKind, value?: string): Promise<boolean> {
+  private async act(binding: ControlBinding, kind: NativeActKind, value?: string, allowFocusAdvance = false): Promise<boolean> {
     // Checked before every fill and press: an ended request never touches the window again.
     if (this.ended || !this.target) return false;
-    const request = { pid: this.target.pid, window: this.target.window, ref: binding.ref, fp: binding.fp, kind, ...(value !== undefined ? { value } : {}) };
+    const request = { pid: this.target.pid, window: this.target.window, ref: binding.ref, fp: binding.fp, kind, ...(value !== undefined ? { value } : {}), ...(allowFocusAdvance ? { allowFocusAdvance: true } : {}) };
     let result: NativeActResult = await this.options.driver.act(request);
     if (!('ok' in result && result.ok) && 'error' in result && result.error === 'stale') {
       // The screen re-rendered; find the same element by identity and retry once.
       const fresh = await this.options.driver.snapshot(this.target.pid, this.target.window);
       if ('error' in fresh) return false;
-      const matches = fresh.nodes.filter((node) => node.fp === binding.fp);
+      const matches = binding.kind === 'text'
+        ? [...extractStep(fresh).bindings.values()].filter(candidate => candidate.kind === 'text' &&
+          candidate.identity === binding.identity && candidate.secure === (binding.nativeSecure ?? binding.secure))
+        : fresh.nodes.filter((node) => node.fp === binding.fp);
       if (matches.length !== 1 || this.ended) return false;
       result = await this.options.driver.act({ ...request, ref: matches[0].ref, window: { index: fresh.window.index, title: fresh.window.title } });
     }
@@ -1295,31 +1368,81 @@ export class InputHandoffSession {
     return extractStep(raw).source.origin === step.source.origin;
   }
 
+  /** Ignore scrolling and values; require the same complete field-to-target mapping. */
+  private async sameFields(step: ExtractedStep): Promise<boolean | 'origin_changed'> {
+    if (!this.target) return false;
+    const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
+    if ('error' in raw) return false;
+    type FieldTarget = { ref: string; identity: string; secure: boolean; nativeSecure?: boolean };
+    const fields = (candidate: ExtractedStep) => [...candidate.bindings.values()].flatMap<FieldTarget>(binding =>
+      binding.kind !== 'text' ? [] : (binding.segments ?? [binding]),
+    );
+    const identity = (field: FieldTarget) =>
+      JSON.stringify([field.identity, field.nativeSecure ?? field.secure]);
+    const expected = fields(step);
+    const current = extractStep(raw);
+    if (raw.window.title !== this.target.window.title || current.source.origin !== step.source.origin || current.url !== step.url) return 'origin_changed';
+    const actual = fields(current);
+    const byIdentity = new Map(actual.map(field => [identity(field), field]));
+    if (expected.length !== actual.length || byIdentity.size !== actual.length ||
+      new Set(expected.map(identity)).size !== expected.length || expected.some(field => !byIdentity.has(identity(field)))) return false;
+    // Rebind only after the entire form matches. In particular, a reused old
+    // index may now point at a different field with the same native fingerprint.
+    for (const field of expected) field.ref = byIdentity.get(identity(field))!.ref;
+    return true;
+  }
+
   private async perform(step: ExtractedStep, submission: InputHandoffSubmission): Promise<boolean | 'origin_changed'> {
     // Waiting for the desktop may outlast the request (cancelled, timed out, task closed): then nothing is typed.
     if (this.ended) return false;
     let lastText: (ControlBinding & { kind: 'text' }) | undefined;
+    let lastTextWasSplitCode = false;
     let secretEntered = false;
-    // Secrets are bound to the page the owner saw: re-check it before typing anything in this step.
-    const carriesSecret = step.controls.some((control) => {
-      const binding = step.bindings.get(control.id);
-      return binding?.kind === 'text' && binding.secure && typeof submission.values[control.id] === 'string';
-    });
-    if (carriesSecret && !(await this.sameSurface(step))) return 'origin_changed';
+    const initialCheck = await this.sameFields(step);
+    if (initialCheck !== true) return initialCheck;
+    // Reject a malformed split code before touching any field, including preceding account fields.
+    for (const [id, binding] of step.bindings) {
+      if (binding.kind !== 'text' || !binding.segments || !Object.hasOwn(submission.values, id)) continue;
+      const value = submission.values[id];
+      if (typeof value !== 'string' || Array.from(value).length !== binding.segments.reduce((sum, segment) => sum + segment.length, 0)) return false;
+    }
     for (const control of step.shown) {
       if (!Object.hasOwn(submission.values, control.id)) continue;
       const value = submission.values[control.id];
       const binding = step.bindings.get(control.id);
       if (binding?.kind !== 'text' || typeof value !== 'string') return false;
-      if (!(await this.act(binding, 'text', value))) return false;
+      const check = await this.sameFields(step);
+      if (check !== true) return check;
+      if (binding.segments) {
+        const characters = Array.from(value);
+        let offset = 0;
+        for (const segment of binding.segments) {
+          const check = await this.sameFields(step);
+          if (check !== true) return check;
+          if (!(await this.act({ ...segment, kind: 'text' }, 'text', characters.slice(offset, offset + segment.length).join(''), segment.length === 1))) return false;
+          offset += segment.length;
+        }
+      } else if (!(await this.act(binding, 'text', value))) return false;
       if (binding.secure && !secretEntered) {
         secretEntered = true;
         if (this.agentControlled && this.target) {
           this.options.onSecretEntered?.({ pid: this.target.pid, ...(step.url ? { url: step.url } : {}) });
         }
       }
-      lastText = binding;
+      lastText = binding.segments?.length ? { ...binding.segments[binding.segments.length - 1], kind: 'text' } : binding;
+      lastTextWasSplitCode = !!binding.segments?.length;
       await this.sleep(60);
+    }
+    // Some code widgets submit on their last character. Never press an old button on the next page.
+    if (this.options.fields && !(await this.sameSurface(step))) return true;
+    if (await this.sameFields(step) !== true) {
+      // Every value was delivered and the final code cell may have submitted.
+      // Let submit() retire the old plan and settle the next page normally,
+      // including another private field or a signed-in page with a reply box.
+      if (lastTextWasSplitCode) return true;
+      // Auto-submit may remove the form after its last value; never click its stale action.
+      const next = await this.read();
+      return !!next && !actionable(next) && !this.pageUnknown(next);
     }
     // The owner only typed; confirm with the page's own main button, as they would, else Return.
     const primary = step.controls.find((control) => control.kind === 'button' && control.primary);

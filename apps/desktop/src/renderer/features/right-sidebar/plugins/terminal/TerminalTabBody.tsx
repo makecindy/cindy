@@ -394,7 +394,11 @@ function ExitedOverlay({
   onRestart: () => void;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
-  const message = exit.signal
+  // node-pty reports an ordinary Unix exit as signal "0". Treat it as
+  // no signal so the actual exit code remains visible; only non-zero signals
+  // represent termination by signal.
+  const hasTerminationSignal = exit.signal !== null && exit.signal !== '0';
+  const message = hasTerminationSignal
     ? t('rightSidebar.terminal.processKilled', { signal: exit.signal })
     : t('rightSidebar.terminal.processExited', { code: exit.code ?? 0 });
   return (
@@ -432,7 +436,7 @@ function ErrorOverlay({
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
       <div className="pointer-events-auto flex max-w-[90%] flex-col items-center gap-2 rounded-xl border border-white/15 bg-black/80 px-4 py-3 text-sm text-white shadow-[shadow:var(--shadow-menu)] backdrop-blur">
-        <div className="flex items-center gap-2 text-red-300">
+        <div className="flex items-center gap-2 text-[var(--error-flat)]">
           <AlertTriangle size={14} />
           <span>{message}</span>
         </div>

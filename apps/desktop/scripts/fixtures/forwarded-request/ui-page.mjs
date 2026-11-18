@@ -26,6 +26,16 @@ export default {
       assert.ok(!text.includes('\\n\\n'));
       return;
     }
+    if (ui.case === 'quote') {
+      // Forwarded task messages in a companion conversation are collapsed letters.
+      // Exercise the real disclosure before checking the body and quoting it.
+      const letter = page.getByRole('button').filter({
+        hasText: await ui.t('chat.botTaskLetter.replied'),
+      });
+      assert.equal(await letter.getAttribute('aria-expanded'), 'false');
+      await letter.click();
+      assert.equal(await letter.getAttribute('aria-expanded'), 'true');
+    }
     if (['task', 'fork', 'rewind', 'quote'].includes(ui.case)) {
       const expand = page.getByRole('button', { name: await ui.t('chat.userMessage.expandLongMessage'), exact: true });
       if (await expand.count()) await expand.click();

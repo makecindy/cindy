@@ -131,9 +131,10 @@ describe("home chrome menus", () => {
 
   it("mirrors the desktop display menu: setting rows with current values and submenus", () => {
     const actions = build();
-    expect(actions.map((item) => item.id)).toEqual(["organize", "narrow", "appearance"]);
+    expect(actions.map((item) => item.id)).toEqual(["mode", "organize", "narrow", "appearance"]);
     expect(actions.every((item) => item.displayInline && !item.preferredElementSize)).toBe(true);
     expect(actions.flatMap((item) => item.subactions?.map((row) => row.id) ?? [])).toEqual([
+      "taskListMode",
       "group",
       "sort",
       "projectOrder",
@@ -263,6 +264,9 @@ describe("home chrome menus", () => {
       teammateFilter: "all",
       vendorFilter: "all",
     });
+    expect(homeDisplayActionPatch("taskListMode.inbox", displayState)).toEqual({ taskListMode: 'inbox' });
+    expect(homeDisplayActionPatch("taskListMode.tasks", displayState)).toEqual({ taskListMode: 'tasks' });
+    expect(homeDisplayActionPatch("taskListMode.invalid", displayState)).toBeNull();
     expect(homeDisplayActionPatch("view.text", displayState)).toEqual({ viewMode: "text" });
     expect(homeDisplayActionPatch("taskInfo.pr", displayState)).toEqual({ taskInfoFields: ["time", "pr"] });
     expect(homeDisplayActionPatch("taskInfo.time", displayState)).toEqual({ taskInfoFields: [] });

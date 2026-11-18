@@ -1,11 +1,13 @@
 import { getRandomBytes } from 'expo-crypto';
 import { sha256 } from '@noble/hashes/sha256';
+import { md5 } from '@noble/hashes/legacy';
 import { bytesToHex } from '@noble/hashes/utils';
 import { enrollmentPayload, type DeviceCertificate } from '@cindy/agent-net-protocol';
 import { PortableAgentNetClient, fromBase64Url, toBase64Url, utf8, type BinarySocket } from '@cindy/agent-net/portable';
 import { getSecureItem, setSecureItem } from '@/auth/secureStorage';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
 import { getOfficialAgentNetApiBaseUrl } from '@/config/env';
+import { getMobileAgentNetPreferences } from './agentNetPreferences';
 import { MobileAgentNetEngine, type NativeAgentNetOptions } from './agentNetNative';
 import { verifyMobileAgentNetCertificate, verifyMobileAgentNetDelegation } from './agentNetProtocol';
 import { completeSelfHostedAgentNetMembership } from './selfHostedRelay';
@@ -24,7 +26,7 @@ export interface PreparedMobileAgentNetIdentity {
   seed: string;
   context: string;
   legacySigning: boolean;
-  newTransportEngine(extraGuard: () => void): Promise<MobileAgentNetEngine>;
+  newTransportEngine(extraGuard: () => void, enhancedTransport: boolean): Promise<MobileAgentNetEngine>;
   newCryptoEngine(extraGuard: () => void): Promise<MobileAgentNetEngine>;
   dispose(): Promise<void>;
 }
@@ -130,11 +132,12 @@ function prepared(scope: string, base: string, signer: MobileAgentNetEngine, nat
   const existing = cached?.scope === scope && cached.api.base === base && cached.api.rootPublicKey === root ? cached.api : null;
   const api = existing ?? new PortableAgentNetClient(base, signer, certificate, root, {
     assertCurrent: guard, verifyCertificate: verifyMobileAgentNetCertificate, verifyDelegation: verifyMobileAgentNetDelegation,
-    sha256: value => toBase64Url(sha256(value)), createWebSocket: binarySocket, ownerPinnedHttp: privateHttp,
+    sha256: value => toBase64Url(sha256(value)), md5: value => md5(value), createWebSocket: binarySocket, ownerPinnedHttp: privateHttp,
+    relayUdpEnabled: () => getMobileAgentNetPreferences().enabled,
   });
   if (existing) existing.replaceCredentials(signer, certificate);
   return { scope, api, signer, seed: native.seed, context: native.context, legacySigning: native.legacySigning === true,
-    newTransportEngine(extraGuard) { return MobileAgentNetEngine.create({ ...native, udp: true }, () => { guard(); extraGuard(); }); },
+    newTransportEngine(extraGuard, enhancedTransport) { return MobileAgentNetEngine.create({ ...native, udp: true, enhancedTransport }, () => { guard(); extraGuard(); }); },
     newCryptoEngine(extraGuard) { return MobileAgentNetEngine.create({ ...native, udp: false }, () => { guard(); extraGuard(); }); },
     dispose: () => signer.destroy() };
 }

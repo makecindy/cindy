@@ -1,0 +1,718 @@
+{
+ "20MiB": {
+  "generatedAt": "2026-11-14T06:27:51.366Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "totalBytes": 20971520,
+  "chunkBytes": 524288,
+  "concurrency": 4,
+  "results": [
+   {
+    "profile": {
+     "name": "unshaped",
+     "rateBytesPerSec": 1000000000,
+     "oneWayDelayMs": 0,
+     "queueLimitBytes": 67108864
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": null,
+    "ms": 637,
+    "failed": 0,
+    "taps": {
+     "count": 2,
+     "p50": 75,
+     "p90": 75,
+     "max": 75
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "unshaped",
+     "rateBytesPerSec": 1000000000,
+     "oneWayDelayMs": 0,
+     "queueLimitBytes": 67108864
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": null,
+    "ms": 851,
+    "failed": 0,
+    "taps": {
+     "count": 2,
+     "p50": 105,
+     "p90": 105,
+     "max": 105
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "unshaped",
+     "rateBytesPerSec": 1000000000,
+     "oneWayDelayMs": 0,
+     "queueLimitBytes": 67108864
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": null,
+    "ms": 1115,
+    "failed": 0,
+    "taps": {
+     "count": 3,
+     "p50": 3,
+     "p90": 8,
+     "max": 8
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "unshaped",
+     "rateBytesPerSec": 1000000000,
+     "oneWayDelayMs": 0,
+     "queueLimitBytes": 67108864
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": null,
+    "ms": 1139,
+    "failed": 0,
+    "taps": {
+     "count": 3,
+     "p50": 2,
+     "p90": 10,
+     "max": 10
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "wide",
+     "rateBytesPerSec": 12500000,
+     "oneWayDelayMs": 8,
+     "queueLimitBytes": 512000
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.96,
+    "ms": 1753,
+    "failed": 0,
+    "taps": {
+     "count": 4,
+     "p50": 167,
+     "p90": 170,
+     "max": 170
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "wide",
+     "rateBytesPerSec": 12500000,
+     "oneWayDelayMs": 8,
+     "queueLimitBytes": 512000
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.96,
+    "ms": 1753,
+    "failed": 0,
+    "taps": {
+     "count": 4,
+     "p50": 167,
+     "p90": 195,
+     "max": 195
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "wide",
+     "rateBytesPerSec": 12500000,
+     "oneWayDelayMs": 8,
+     "queueLimitBytes": 512000
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.83,
+    "ms": 2026,
+    "failed": 0,
+    "taps": {
+     "count": 5,
+     "p50": 38,
+     "p90": 41,
+     "max": 41
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "wide",
+     "rateBytesPerSec": 12500000,
+     "oneWayDelayMs": 8,
+     "queueLimitBytes": 512000
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.83,
+    "ms": 2013,
+    "failed": 0,
+    "taps": {
+     "count": 5,
+     "p50": 37,
+     "p90": 41,
+     "max": 41
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "far",
+     "rateBytesPerSec": 6250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 640000
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.85,
+    "ms": 3948,
+    "failed": 0,
+    "taps": {
+     "count": 8,
+     "p50": 320,
+     "p90": 361,
+     "max": 361
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "far",
+     "rateBytesPerSec": 6250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 640000
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.84,
+    "ms": 3999,
+    "failed": 0,
+    "taps": {
+     "count": 8,
+     "p50": 351,
+     "p90": 387,
+     "max": 387
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "far",
+     "rateBytesPerSec": 6250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 640000
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.78,
+    "ms": 4279,
+    "failed": 0,
+    "taps": {
+     "count": 9,
+     "p50": 209,
+     "p90": 242,
+     "max": 242
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "far",
+     "rateBytesPerSec": 6250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 640000
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.65,
+    "ms": 5161,
+    "failed": 0,
+    "taps": {
+     "count": 11,
+     "p50": 207,
+     "p90": 252,
+     "max": 256
+    },
+    "tapsFailed": 0
+   }
+  ]
+ },
+ "8MiB": {
+  "generatedAt": "2026-11-14T06:29:31.610Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "totalBytes": 8388608,
+  "chunkBytes": 524288,
+  "concurrency": 4,
+  "results": [
+   {
+    "profile": {
+     "name": "fast",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.96,
+    "ms": 8731,
+    "failed": 0,
+    "taps": {
+     "count": 18,
+     "p50": 1911,
+     "p90": 2067,
+     "max": 2090
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.96,
+    "ms": 8740,
+    "failed": 0,
+    "taps": {
+     "count": 18,
+     "p50": 1946,
+     "p90": 2501,
+     "max": 2633
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.93,
+    "ms": 9056,
+    "failed": 0,
+    "taps": {
+     "count": 19,
+     "p50": 83,
+     "p90": 89,
+     "max": 90
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.91,
+    "ms": 9218,
+    "failed": 0,
+    "taps": {
+     "count": 19,
+     "p50": 84,
+     "p90": 87,
+     "max": 89
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast-jitter",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144,
+     "jitterMs": 30
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.95,
+    "ms": 8818,
+    "failed": 0,
+    "taps": {
+     "count": 18,
+     "p50": 1678,
+     "p90": 2100,
+     "max": 2114
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast-jitter",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144,
+     "jitterMs": 30
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.95,
+    "ms": 8797,
+    "failed": 0,
+    "taps": {
+     "count": 18,
+     "p50": 1735,
+     "p90": 2088,
+     "max": 2219
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast-jitter",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144,
+     "jitterMs": 30
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.48,
+    "ms": 17632,
+    "failed": 0,
+    "taps": {
+     "count": 36,
+     "p50": 161,
+     "p90": 184,
+     "max": 191
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast-jitter",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144,
+     "jitterMs": 30
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.75,
+    "ms": 11130,
+    "failed": 0,
+    "taps": {
+     "count": 23,
+     "p50": 172,
+     "p90": 183,
+     "max": 194
+    },
+    "tapsFailed": 0
+   }
+  ]
+ },
+ "4MiB": {
+  "generatedAt": "2026-11-14T06:30:56.813Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "totalBytes": 4194304,
+  "chunkBytes": 524288,
+  "concurrency": 4,
+  "results": [
+   {
+    "profile": {
+     "name": "slow",
+     "rateBytesPerSec": 250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 131072
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 4194304,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.86,
+    "ms": 19609,
+    "failed": 0,
+    "taps": {
+     "count": 39,
+     "p50": 4910,
+     "p90": 8260,
+     "max": 9266
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "slow",
+     "rateBytesPerSec": 250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 131072
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 4194304,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.86,
+    "ms": 19573,
+    "failed": 0,
+    "taps": {
+     "count": 39,
+     "p50": 4918,
+     "p90": 8253,
+     "max": 9265
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "slow",
+     "rateBytesPerSec": 250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 131072
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 4194304,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.91,
+    "ms": 18410,
+    "failed": 0,
+    "taps": {
+     "count": 37,
+     "p50": 212,
+     "p90": 215,
+     "max": 265
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "slow",
+     "rateBytesPerSec": 250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 131072
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 4194304,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.91,
+    "ms": 18434,
+    "failed": 0,
+    "taps": {
+     "count": 37,
+     "p50": 212,
+     "p90": 214,
+     "max": 280
+    },
+    "tapsFailed": 0
+   }
+  ]
+ },
+ "1MiB": {
+  "generatedAt": "2026-11-14T06:32:31.518Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "totalBytes": 1048576,
+  "chunkBytes": 524288,
+  "concurrency": 4,
+  "results": [
+   {
+    "profile": {
+     "name": "very-slow",
+     "rateBytesPerSec": 64000,
+     "oneWayDelayMs": 100,
+     "queueLimitBytes": 65536
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 1048576,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.76,
+    "ms": 21577,
+    "failed": 0,
+    "taps": {
+     "count": 43,
+     "p50": 10945,
+     "p90": 19056,
+     "max": 21076
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "very-slow",
+     "rateBytesPerSec": 64000,
+     "oneWayDelayMs": 100,
+     "queueLimitBytes": 65536
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 1048576,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.76,
+    "ms": 21507,
+    "failed": 0,
+    "taps": {
+     "count": 43,
+     "p50": 10847,
+     "p90": 18997,
+     "max": 21012
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "very-slow",
+     "rateBytesPerSec": 64000,
+     "oneWayDelayMs": 100,
+     "queueLimitBytes": 65536
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 1048576,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.85,
+    "ms": 19205,
+    "failed": 0,
+    "taps": {
+     "count": 39,
+     "p50": 441,
+     "p90": 474,
+     "max": 947
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "very-slow",
+     "rateBytesPerSec": 64000,
+     "oneWayDelayMs": 100,
+     "queueLimitBytes": 65536
+    },
+    "mode": "session",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 1048576,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.86,
+    "ms": 19046,
+    "failed": 0,
+    "taps": {
+     "count": 38,
+     "p50": 443,
+     "p90": 471,
+     "max": 951
+    },
+    "tapsFailed": 0
+   }
+  ]
+ }
+}

@@ -301,34 +301,35 @@ export function BotModelChainEditor({
         <div className="space-y-2 pt-2">
           {fallbackRows}
           {pendingRow}
-          <Button
-            variant="secondary"
-            size="md"
-            tone="quiet"
-            compact
-            type="button"
-            disabled={addDisabled}
-            onClick={add}
-          >
-            <Plus size={14} />
-            {t('bots.modelChain.add')}
-          </Button>
-          {onRestoreDefault ? (
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="secondary"
               size="md"
               tone="quiet"
               compact
               type="button"
-              disabled={disabled}
-              onClick={() => {
-                if (!disabled) onRestoreDefault();
-              }}
-              className="ml-2"
+              disabled={addDisabled}
+              onClick={add}
             >
-              {t('bots.model.restoreDefault')}
+              <Plus size={14} />
+              {t('bots.modelChain.add')}
             </Button>
-          ) : null}
+            {onRestoreDefault ? (
+              <Button
+                variant="secondary"
+                size="md"
+                tone="quiet"
+                compact
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  if (!disabled) onRestoreDefault();
+                }}
+              >
+                {t('bots.model.restoreDefault')}
+              </Button>
+            ) : null}
+          </div>
         </div>
       </div>}
     </div>

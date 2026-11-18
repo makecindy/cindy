@@ -21,6 +21,7 @@ import {
 } from "@cindy/maker-shared/ghost-card-form";
 import {
   AccessibilityInfo,
+  ActivityIndicator,
   Alert,
   Animated,
   AppState,
@@ -369,14 +370,15 @@ function CardControls({
   const [confirm, setConfirm] = useState<PluginPageConfirm>();
   const [previewIntent, setPreviewIntent] = useState<Extract<NativeIntent, { kind: 'preview' }>>();
   const dismissedPreviews = useRef(new Set<string>());
-  const [busy, setBusy] = useState(false),
+  const [busyAction, setBusyAction] = useState<string>(),
     [unknown, setUnknown] = useState(false),
     [answering, setAnswering] = useState(false);
+  const busy = busyAction !== undefined;
   const current = () =>
     lifetime.current.active && isMobileAuthOwnerCurrent(lifetime.current.owner);
   useEffect(() => {
     sending.current = false;
-    setBusy(false);
+    setBusyAction(undefined);
     setUnknown(false);
   }, [revision]);
   useEffect(() => {
@@ -469,7 +471,7 @@ function CardControls({
       isMobileAuthOwnerCurrent(token.owner);
     if (!passive) {
       sending.current = true;
-      setBusy(true);
+      setBusyAction(action.id);
     }
     try {
       if (!passive && action.submit && !(await changeQueue.current))
@@ -542,7 +544,7 @@ function CardControls({
         setDraft("");
         if (!action.submit) {
           sending.current = false;
-          setBusy(false);
+          setBusyAction(undefined);
         }
       }
       if (passive && valid()) setUnknown(false);
@@ -552,7 +554,7 @@ function CardControls({
       if (valid()) {
         setUnknown(true);
         if (!passive) {
-          setBusy(false);
+          setBusyAction(undefined);
           sending.current = false;
         }
       }
@@ -708,14 +710,14 @@ function CardControls({
         {settingsAction ? <Pressable
           accessibilityRole="button"
           accessibilityLabel={settingsAction.label}
-          accessibilityState={{ expanded: settingsOpen }}
+          accessibilityState={{ expanded: settingsOpen, busy: busyAction === settingsAction.id }}
           disabled={settingsAction.disabled || busy || unknown || status !== "online"}
           onPress={() => choose(settingsAction)}
           hitSlop={6}
           style={({ pressed }) => [styles.settingsButton, pressed && styles.pressed]}
         >
           {settingsOpen ? <View pointerEvents="none" style={styles.settingsButtonActive} /> : null}
-          <Settings size={iconSize.md} strokeWidth={iconStroke.regular} color={settingsOpen ? colors.textPrimary : colors.textTertiary} />
+          {busyAction === settingsAction.id ? <ActivityIndicator size="small" color={colors.textPrimary} /> : <Settings size={iconSize.md} strokeWidth={iconStroke.regular} color={settingsOpen ? colors.textPrimary : colors.textTertiary} />}
         </Pressable> : null}
         </View>
       ) : null}
@@ -837,7 +839,9 @@ function CardControls({
               <Text style={styles.label}>{action.toggle!.title}</Text>
               {action.toggle!.hint ? <Text style={styles.note}>{action.toggle!.hint}</Text> : null}
             </View>
+            {busyAction === action.id ? <ActivityIndicator size="small" color={colors.textPrimary} /> : null}
             <Switch
+              accessibilityState={{ busy: busyAction === action.id }}
               accessibilityLabel={action.toggle!.title}
               value={action.toggle!.on}
               disabled={action.disabled || busy || unknown || status !== "online"}
@@ -852,20 +856,24 @@ function CardControls({
             {modelChoices.map(action => {
               const selected = action.id === (modelPicker ? 'prset:model' : 'prset:modelTask');
               return <Pressable key={action.id} accessibilityRole="radio"
-                accessibilityLabel={action.label} accessibilityState={{ checked: selected }}
+                accessibilityLabel={action.label} accessibilityState={{ checked: selected, busy: busyAction === action.id }}
                 disabled={action.disabled || busy || unknown || status !== 'online'}
                 onPress={() => choose(action)}
                 style={({ pressed }) => [styles.modelChoice, selected && styles.modelChoiceSelected, pressed && styles.pressed]}>
-                <Text style={[styles.settingLabel, !selected && styles.quietLabel]}>{action.label}</Text>
+                <View style={styles.buttonContent}>
+                  {busyAction === action.id ? <ActivityIndicator size="small" color={colors.textPrimary} /> : null}
+                  <Text style={[styles.settingLabel, styles.buttonText, !selected && styles.quietLabel]}>{action.label}</Text>
+                </View>
               </Pressable>;
             })}
           </View>
           {modelPicker ? <Pressable accessibilityRole="button" accessibilityLabel={modelPicker.label}
+            accessibilityState={{ busy: busyAction === modelPicker.id }}
             disabled={modelPicker.disabled || busy || unknown || status !== 'online'}
             onPress={() => choose(modelPicker)}
             style={({ pressed }) => [styles.modelPicker, pressed && styles.pressed]}>
             <Text style={[styles.settingLabel, styles.headerContent]}>{modelPicker.label}</Text>
-            <ChevronDown size={iconSize.sm} strokeWidth={iconStroke.regular} color={colors.textSecondary} />
+            {busyAction === modelPicker.id ? <ActivityIndicator size="small" color={colors.textPrimary} /> : <ChevronDown size={iconSize.sm} strokeWidth={iconStroke.regular} color={colors.textSecondary} />}
           </Pressable> : null}
         </View> : null}
         </View> : null}
@@ -888,6 +896,7 @@ function CardControls({
               <Pressable
                 key={action.id}
                 accessibilityRole={action.url ? "link" : "button"}
+                accessibilityState={{ busy: busyAction === action.id }}
                 accessibilityLabel={sendNow && mail ? `${action.label}, ${mailCardStatus(mail, countdownNow)}` : host ? `${label}: ${action.label}` : action.label}
                 disabled={action.disabled || busy || uploading || unknown || status !== "online" || (readonly && !mail?.pendingSend && !action.id.startsWith('mail:continue:'))}
                 hitSlop={compact ? { top: spacing.xs, bottom: spacing.xs } : undefined}
@@ -899,7 +908,10 @@ function CardControls({
                     <View style={[styles.countdownFill, { width: `${(1 - mailSendRemainingFraction(mail, countdownNow)) * 100}%` }]} />
                   </View>
                 ) : null}
-                <Text style={[styles.label, compact && styles.compactLabel, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
+                <View style={styles.buttonContent}>
+                  {busyAction === action.id ? <ActivityIndicator size="small" color={primary ? colors.ctaText : colors.textPrimary} /> : null}
+                  <Text style={[styles.label, styles.buttonText, compact && styles.compactLabel, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
+                </View>
               </Pressable>
             );
           })}
@@ -1164,6 +1176,8 @@ const makeStyles = (c: ThemeColors) =>
     sendLabel: { color: c.ctaText },
     countdownFill: { height: "100%", backgroundColor: c.textPrimary, opacity: 0.14 },
     sendNowButton: { backgroundColor: c.surface, overflow: "hidden", borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+    buttonText: { flexShrink: 1 },
+    buttonContent: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
     button: {
       minHeight: 44,
       padding: spacing.md,

@@ -38,7 +38,7 @@ describe('DiffPanelShell — drawer accessibility contract', () => {
   it('floating preview uses default width and does not render the resize handle', () => {
     expect(source).toContain('const panelWidth = isFloating ? defaultWidth : width');
     expect(source).toMatch(
-      /style=\{\{\s*width:\s*`\$\{panelWidth\}px`,\s*maxWidth:\s*'90vw'\s*\}\}/,
+      /style=\{\{\s*width:\s*`\$\{panelWidth\}px`,\s*maxWidth:\s*isFloating \? 'calc\(100% - 24px\)' : '90vw'\s*\}\}/,
     );
   });
 

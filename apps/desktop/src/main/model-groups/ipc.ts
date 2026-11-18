@@ -27,7 +27,7 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { recordModelGroupDecision } from './decisionLog.js';
 import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
-import { bindModelGroupSession, clearModelGroupSessionBinding, readModelGroupSessionBinding } from './sessionBindings.js';
+import { bindModelGroupSession, readModelGroupSessionBinding } from './sessionBindings.js';
 import { readModelGroupsConfig, writeModelGroupsConfig } from './store.js';
 import { computeModelGroupSwitchOffer } from './switchOffer.js';
 
@@ -39,7 +39,8 @@ const QUOTA_WAIT_MS = MODEL_GROUP_REMOTE_WAIT_MS;
 /**
  * 额度总览里的订阅窗口：本机的按供应商连接 ID；别的电脑上的按那台的设备 id + 那台的连接 ID(modelGroupQuotaKey)，
  * 只给同一台电脑上的来源用。那台此刻读不到、只剩上次读数的(lastSeenAtMs)不算；与本机是同一个账号、
- * 总览里只列了本机那份的，别的电脑上的来源按读不到额度处理。分享来的来源总览里没有额度，同样按读不到。
+ * 总览里只列了本机那份的，别的电脑上的来源按读不到额度处理。分享来的来源按运行位置 `share:<id>` 取那个分享
+ * 开放给本账号的额度(分享者没开「允许查看剩余额度」或读不到时总览里没有它，按读不到处理)。
  */
 async function quotaWindows() {
   const overview = getQuotaOverviewService();
@@ -48,7 +49,9 @@ async function quotaWindows() {
   const byProvider = new Map<string, (ModelGroupTraceQuota & { scopedTo?: string | null })[]>();
   for (const source of build?.input.sources ?? []) {
     if (source.kind !== 'subscription' || (source.device && source.lastSeenAtMs != null)) continue;
-    byProvider.set(modelGroupQuotaKey(source.device?.id, source.providerId), source.windows.map((window) => ({
+    // 分享来源在总览里的 id 就是它的运行位置 `share:<shareId>`。
+    const location = source.shared ? source.id : source.device?.id;
+    byProvider.set(modelGroupQuotaKey(location, source.providerId), source.windows.map((window) => ({
       usedPercent: window.usedPercent,
       resetAtMs: window.resetsAtMs,
       windowMs: window.windowMinutes * 60_000,
@@ -60,6 +63,7 @@ async function quotaWindows() {
 
 const resolver = createModelGroupResolver({
   config: readModelGroupsConfig,
+  recordDecision: recordModelGroupDecision,
   views: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
   agents: getPluginModelPickerAgents,
   // 别的电脑上的引擎问那台的 maker:agent:status，与插件选路同一判断。
@@ -80,7 +84,6 @@ const resolver = createModelGroupResolver({
 
 const switchOfferDeps = {
   readBinding: readModelGroupSessionBinding,
-  clearBinding: clearModelGroupSessionBinding,
   readSession: getSessionRowSnapshot,
   isShared: isSessionSharedTaskActive,
   // 目标还没就绪时说不清这个任务有没有目标：按有处理，不提议。
@@ -117,16 +120,25 @@ export function registerModelGroupsIpc(): void {
     const selection = sanitizeModelGroupSelection(value.selection);
     if (!selection) throwIpcError('INVALID_PARAMS', 'model group selection is required');
     const context = value.context && typeof value.context === 'object' ? value.context as Record<string, unknown> : null;
+    const rawLocation = value.location && typeof value.location === 'object' ? value.location as Record<string, unknown> : null;
+    const locationId = rawLocation
+      ? rawLocation.agentDeviceId === null || rawLocation.agentDeviceId === undefined ? null : modelGroupAgentDeviceId(rawLocation.agentDeviceId)
+      : null;
+    if (rawLocation && rawLocation.agentDeviceId !== null && rawLocation.agentDeviceId !== undefined && !locationId) {
+      throwIpcError('INVALID_PARAMS', 'model group location is invalid');
+    }
     const request: ModelGroupResolveRequest = {
       selection,
       dryRun: value.dryRun === true,
       ...(context?.hasImages === true ? { context: { hasImages: true } } : {}),
+      ...(rawLocation ? { location: { agentDeviceId: locationId } } : {}),
     };
-    const scope = activeOwnerScopeKey();
-    const result = await resolver.resolve(request);
-    // 设置页的「试一下」不算一次真实选择；选路期间换了账号，这次选择不属于现在这个账号，不记。
-    if (!request.dryRun && scope === activeOwnerScopeKey()) recordModelGroupDecision(selection, result);
-    return result;
+    return resolver.resolve(request);
+  });
+  ipcMain.handle(MODEL_GROUPS_IPC.COMMIT, (event, decisionId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof decisionId !== 'string' || decisionId.length > 64) throwIpcError('INVALID_PARAMS', 'decisionId is required');
+    return resolver.commit(decisionId);
   });
   ipcMain.handle(MODEL_GROUPS_IPC.BIND_SESSION, (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);

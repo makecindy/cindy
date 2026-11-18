@@ -282,17 +282,17 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
             options={(view?.allowedCurrencies ?? []).map(currency => ({ value: currency, label: currency }))} />
         </div>}
         {([['input', 'input'], ['output', 'output'], ['cacheRead', 'cacheRead'], ['cacheCreate', 'cacheWrite']] as const).map(([field, label]) => (
-          <label key={field} className="flex min-h-[34px] items-center justify-between gap-4 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0">
+          <label key={field} className="flex min-h-[34px] flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-[var(--settings-theme-card-border)] py-2 last:border-b-0">
             <span className="shrink-0 text-13 text-[var(--text-secondary)]">{t('settings.providers.models.priceOverride.' + label)}</span>
-            <span className="inline-flex min-w-0 items-center gap-1 text-13 text-[var(--text-primary)]">
-              <span aria-hidden>{form.currency === 'CNY' ? '¥' : '$'}</span>
+            <span className="ml-auto inline-flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1 text-13 text-[var(--text-primary)]">
+              <span aria-hidden className="shrink-0">{form.currency === 'CNY' ? '¥' : '$'}</span>
               <input ref={field === 'input' ? primaryInputRef : undefined} {...pricingSetting.controlProps} data-model-price-input type="number" min="0" step="any" inputMode="decimal"
                 value={form[field]} placeholder="—" disabled={unavailable} readOnly={saving}
                 aria-label={t('settings.providers.models.priceOverride.' + label)}
                 onChange={(event) => setForm(current => ({ ...current, [field]: event.target.value }))}
-                style={{ width: Math.max(3, form[field].length + 1) + 'ch', maxWidth: '12ch' }}
-                className="h-8 min-w-0 rounded-full border border-transparent bg-transparent px-1 text-right text-13 tabular-nums text-[var(--text-primary)] outline-none hover:border-[var(--border-default)] focus:border-[var(--settings-input-border-focus)] focus:ring-2 focus:ring-[var(--focus-ring-soft)] placeholder:text-[var(--text-placeholder)] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
-              <span className="text-11 text-[var(--text-tertiary)]">{t('settings.providers.models.advanced.perMtok')}</span>
+                style={{ width: `calc(${Math.max(4, form[field].length + 1)}ch + var(--space-2) + 2px)`, maxWidth: '100%' }}
+                className="h-8 min-w-0 shrink-0 rounded-full border border-transparent bg-transparent px-1 text-right text-13 tabular-nums text-[var(--text-primary)] outline-none hover:border-[var(--border-default)] focus:border-[var(--settings-input-border-focus)] focus:ring-2 focus:ring-[var(--focus-ring-soft)] placeholder:text-[var(--text-placeholder)] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+              <span className="shrink-0 whitespace-nowrap text-11 text-[var(--text-tertiary)]">{t('settings.providers.models.advanced.perMtok')}</span>
             </span>
           </label>
         ))}

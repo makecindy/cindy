@@ -29,7 +29,7 @@ export type DesktopLoginAction =
   | { type: 'verify-binding'; contact: string; code: string };
 
 /** In-memory presentation metadata; never a persisted cooldown or retry budget. */
-export type DesktopLoginState = (AuthFlowState | { step: 'entry' }) & { retryAt?: number };
+export type DesktopLoginState = (AuthFlowState | { step: 'entry' }) & { retryAt?: number; httpStatus?: number };
 
 export type DesktopLoginActionResult =
   | { success: true; state: DesktopLoginState }
@@ -48,11 +48,14 @@ export type SettledDesktopLoginActionResult =
 export function loginPreparingErrorState(
   code = 'AUTH_SERVICE_UNAVAILABLE',
   retryAt?: number,
+  httpStatus?: number,
 ): Extract<DesktopLoginState, { step: 'error' }> {
   return {
     step: 'error',
     code,
     recoverTo: 'identifier',
+    ...(code === 'INVALID_RESPONSE' && Number.isInteger(httpStatus) && httpStatus! >= 400 && httpStatus! <= 599
+      ? { httpStatus } : {}),
     ...(code === 'RATE_LIMITED' && retryAt !== undefined ? { retryAt } : {}),
   };
 }

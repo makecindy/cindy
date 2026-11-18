@@ -67,6 +67,11 @@
 
 | 英文 | 语言 | 译法 | 什么场合 |
 | --- | --- | --- | --- |
+| **Active** | fr | actif | 默认 |
+| Active | fr | Actif | 标题或状态标签使用大写首字母。 |
+| Active | fr | active | 阴性名词使用 active / actives，阳性复数 actifs 已包含标准词干。 |
+| **Active** | de | Aktiv | 默认 |
+| Active | de | aktiv | 句中形容词使用小写，并按性、数、格变为 aktive / aktiven 等。 |
 | **Active** | zh-CN | 活跃 | 默认 |
 | Active | zh-CN | 生效中 | 计费语境（"no active subscription"→没有生效中的订阅），指订阅状态而非活跃度 |
 | **Active** | zh-TW | 活躍 | 默认 |
@@ -191,6 +196,8 @@
 | Quota | pt-PT | quota | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Quota** | pt-BR | Cota | 默认 |
 | Quota | pt-BR | cota | 句中使用小写首字母；标题仍可使用大写首字母。 |
+| **Running** | fr | en cours d'exécution | 默认 |
+| Running | fr | En cours d'exécution | 标题或状态标签使用大写首字母；句中仍使用小写首字母。 |
 | **Running** | zh-CN | 运行中 | 默认 |
 | Running | zh-CN | 正在运行 | 完整句子里作谓语时（"Agent 正在运行"），不是状态标签 |
 | **Running** | zh-TW | 執行中 | 默认 |
@@ -283,7 +290,7 @@
 - **Active** — 对话 / 设备状态用「活跃」（现状 21:7）。mobile/devices 同一屏上筛选 chip 写「活跃」、指标磁贴写「活动」。条件禁用：「活动」是 Activity 的正确译法，无条件禁会误伤「活动记录」这类。豁免 Windows Computer Use 提示：那里的 active desktop 指「当前接收输入、显示目标应用的 Windows 桌面」，是 OS 概念，中文既定说法为「当前活动桌面」，与产品的活跃度无关。
   - 豁免范围：`desktop:settings.computerUse.directControl.permissions.windowsHint`
 - **Agent** — 产品一级概念，五语统一保留英文原词。zh-CN 现状 44:5 已是主流；zh-TW 沿用同一裁决；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故四个目标语言一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 "Agent"→「代理」的 4 处和 "Subagent models" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 "SSH agent" / "probe agent"），是与产品 Agent 同形的另一个概念。
-  - 豁免范围：`desktop:settings.remote.`
+  - 豁免范围：`desktop:settings.remote.`、`desktop:ipcError.SSH_AGENT_UNAVAILABLE`
 - **Agent session** — Agent / 引擎的**运行时**会话（SDK Query 的生命周期），不是 session 条目说的那个产品条目。中文必须叫「Agent 会话」而不是「任务」——两者的区别是用户会不会因此做一个多余的动作：记忆、MCP、内置工具、LSP、权限开关这类设置都在「下一个 Agent 会话」生效，而同一条任务里 /clear、rewind、重启都会开新的 Agent 会话，说「新建任务才生效」会让用户白开一条任务、还割裂上下文。forbidden 规则只覆盖英文源字面写了 agent session 的 key（精确、无误报）；英文只写 session 的那批（`The Codex session state` / `Session is inactive` / `in-flight sessions`）**机器判不出来**——英语本身不区分这两个意思，同一句里两个所指并存也是合法的（`The historical agent session ... so a new session can't be started`：前半指运行时、后半指条目，已登记 exempt）。所以这批只能靠人读英文源判断，判据与全部踩坑记录见 docs/product-rules/task-and-conversation-naming.md §6.0.2。session 条目的 exempt 里另有三类同样叫 session 的东西：登录/绑定校验会话、SSH 远程与传输会话、操作系统桌面会话，以及 mobile 的语音连接会话——它们各自稳定、极少改动，故未单独立条目。
   - 豁免范围：`desktop:chat.userMessage.forkErrors.unsupportedHistory`
 - **Author** — 中文用「作者」（现状 9:4）。典型的同模块自相矛盾：issueTracker 同一个页面里，assignee.labelAuthor 写「提交者」、list.filterAuthor 写「提出者」、visibility.onlyAuthorCanChange 写「作者」——同一个字段三种叫法。条件禁用避免误伤 Committer / Reporter 等其它英文词的正确译法。
@@ -418,6 +425,10 @@ Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 a
 
 远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。
 
+### Cindy Friend
+
+Agent-Net App name supplied by the product request; preserve the brand in every locale.
+
 ### Cindy Make
 
 用户通过 /cindy-make 显式开启的本机定制流程。输入区承接准备与每轮完成选择；修改时使用普通输入框。完成后可继续修改、启动隔离测试或生成个人版，版本切换由原生客户端处理。Doctor 自身只检查。
@@ -485,6 +496,10 @@ Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一
 ### Crash
 
 应用异常终止。此前只出现在内部日志里, 随日志上报进入用户可见文案, 因此登记。ko 取音译「크래시」而非「충돌」——后者在韩语里更常指冲突/碰撞(如合并冲突), 会与 merge conflict 语境混读。proposed。
+
+### Custom MCP
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
 
 ### Database cleanup
 
@@ -569,6 +584,10 @@ GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 G
 ### Group chat
 
 伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。
+
+### Group Cindy
+
+每个服务器群自带的那位 Cindy 成员（docs/product-rules/bot-group-chat.md 第 9 节，2026-11-12）：谁 @ 它就在谁自己的电脑上替他做事，不属于任何人，也不是个人伙伴。名字各语言都叫 Cindy，群管理开关与说明里用这个称呼；不叫「群助手」「群伙伴」「默认伙伴」。先登记为 proposed，等 UI 走查后再定。
 
 ### Main Chat
 
@@ -694,6 +713,10 @@ issue #882：模型管理/新对话选择器的分类标签，对应网关的文
 
 issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。
 
+### Rerank
+
+模型分类 rerank，对查询的候选文档重新排序，不进入对话模型清单。
+
 ### Speech to Text
 
 issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。
@@ -704,7 +727,7 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 ### Model Group
 
-用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一条条「路线」（几个来源加一种选法，可选推理强度，英文 Route；2026-11-11 原「模式」并入路线）；这个词只在模型组语境下这样用，不约束网络路由等其它语境。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。
+用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。
 
 ### Model ID
 
@@ -798,6 +821,18 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 
 插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
 
+### Locally installed
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
+### Third-party source
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
+### Unknown source
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
 ### Audio
 
 模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
@@ -817,6 +852,10 @@ Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 
 ### Duration
 
 模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。
+
+### Privacy screen
+
+Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。
 
 ### Process
 
@@ -983,6 +1022,26 @@ Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 
 ### Speech speed
 
 伙伴语音设置的合成语速；按伙伴保存，通话朗读、消息朗读和试听共用。区别于播放器倍速和语音输入停顿时间。
+
+### Header
+
+任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。
+
+### Inbox
+
+按状态整理任务的列表模式，由任务栏右上角按钮切换；分区为待处理、进行中、稍后处理、已处理。
+
+### Pending
+
+收件箱模式的第一个分区：需要用户处理的任务（新结果、等待回复、未归档的普通任务）。
+
+### Processed
+
+任务列表底部已归档任务分区的名称，沿用归档生命周期。
+
+### Snoozed
+
+任务暂时收起，到期回到当前执行状态对应的分区，不停止 Agent。
 
 ### Tag
 

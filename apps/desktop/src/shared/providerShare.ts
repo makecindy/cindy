@@ -184,6 +184,8 @@ export interface ProviderUsageHistoryView {
 export interface ProviderShareOwnerState {
   /** 分享服务可用(已登录、设备互联已连上本区域服务)。 */
   ready: boolean;
+  /** 显式未请求用量；members 的 lastUsedAt/models 未读取，不能当成零用量。旧端缺省。 */
+  includeUsage?: false;
   shares: ProviderShareOwnedView[];
   /** 本机分享里、链接由同账号另一台电脑生成的申请：由那台弹审批窗，本机只在管理页与提示点显示。 */
   quietRequestIds?: string[];
@@ -225,7 +227,7 @@ export type ProviderShareCommand =
   | { action: 'get-run-limits' }
   | { action: 'reset-run-limits' }
   | { action: 'set-run-limits'; limits: Partial<RemoteAgentLimits> }
-  | { action: 'owned'; range: ProviderShareUsageRange }
+  | { action: 'owned'; range: ProviderShareUsageRange; includeUsage?: boolean }
   /** 设置页分区只读快照，不计算用量或延长快速拉取窗口。 */
   | { action: 'shared-provider-ids' }
   /** 这个供应商按使用方的用量(本机与我的其他电脑)。不依赖分享服务。 */

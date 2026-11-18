@@ -8,6 +8,7 @@
  * of flooding the card with raw stream events.
  */
 
+import { imText } from './imText';
 import { summarizeToolUseText } from '@cindy/maker-shared/message-presentation';
 import { tokenizeThinkingText } from '@cindy/maker-shared/thinking-text';
 import { readTokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
@@ -308,8 +309,8 @@ export function renderActivity(activity: TurnActivityState, now: number): string
   const rate = activity.tokenRate !== null ? ` · ${activity.tokenRate} tok/s` : '';
   const lines = [
     activity.totalSteps > 0
-      ? `⚙️ 工作中 · ${activity.totalSteps} 项 · ${elapsed}${rate}`
-      : `⚙️ 工作中 · ${elapsed}${rate}`,
+      ? imText('imBot.text.shared.activity.workingSteps', { count: activity.totalSteps, elapsed, rate })
+      : imText('imBot.text.shared.activity.working', { elapsed, rate }),
   ];
   const last = activity.recentSteps.length - 1;
   activity.recentSteps.forEach((step, index) => {
@@ -350,9 +351,12 @@ export function buildActivityRecord(
   const { history } = getInternalState(activity);
   const lines = history.map((step) => `✓ ${step.kind === 'thinking' ? '✦ ' : ''}${step.label}`);
   const earlier = activity.totalSteps - history.length;
-  if (earlier > 0) lines.unshift(`… 更早的 ${earlier} 项未列出`);
+  if (earlier > 0) lines.unshift(imText('imBot.text.shared.activity.earlierSteps', { count: earlier }));
   return {
-    title: `过程记录 · ${activity.totalSteps} 项 · ${formatElapsed(now - activity.startedAt)}`,
+    title: imText('imBot.text.shared.activity.recordTitle', {
+      count: activity.totalSteps,
+      elapsed: formatElapsed(now - activity.startedAt),
+    }),
     lines,
   };
 }

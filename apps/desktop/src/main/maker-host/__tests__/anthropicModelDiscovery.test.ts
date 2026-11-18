@@ -10,14 +10,18 @@
  * Claude 订阅凭证只在内置 Claude Code CLI 里,Cindy 不再直连 Anthropic `/v1/models`,
  * 因此这里没有 HTTP 通道:SDK 捕获路径也不得发出任何网络请求。
  */
-import os from 'node:os';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 
 // 规则 23:测试涉及路径一律用 os.tmpdir() 下的临时目录,收尾清理。
-const TEST_USER_DATA = path.join(os.tmpdir(), `cindy-anthropic-discovery-test-${process.pid}`);
+const { TEST_USER_DATA } = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return { TEST_USER_DATA: mkdtempSync(join(tmpdir(), 'cindy-anthropic-discovery-test-')) };
+});
 
 vi.mock('electron', () => ({
   app: {
@@ -52,6 +56,12 @@ import {
   setActiveCatalog,
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
+import {
+  onClaudeCliLoginStatusChange,
+  peekClaudeCliLoginStatus,
+  publishClaudeCliLoginStatus,
+  resetClaudeCliLoginStatusForTest,
+} from '../claude-native-cli-status.js';
 
 function anthropicIds(): string[] {
   const p = getActiveCatalog().providers.find((x) => x.id === 'anthropic');
@@ -515,6 +525,60 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     await waitForAnthropicDiscoveryIdleForTest();
     expect(anthropicIds()).toEqual(['claude-sonnet-4-5']);
     setAnthropicModelProbe(null);
+  });
+
+  // Standard / #11036 review: the existing status test checked display notifications,
+  // but not their model-discovery side effects. Ultra -> missing -> Ultra must
+  // update the public status without launching another model probe; a real tier,
+  // identity or logout change must still update the available model catalog.
+  it('keeps display-name changes out of model discovery while preserving login changes', async () => {
+    resetClaudeCliLoginStatusForTest();
+    const display = vi.fn();
+    const stopDisplay = onClaudeCliLoginStatusChange(display);
+    const stopModels = onClaudeCliLoginStatusChange(syncAnthropicModelsWithClaudeLogin, {
+      includeDisplayNameChanges: false,
+    });
+    let modelId = 'claude-opus-4-8';
+    const probe = vi.fn(async (onModels: (models: unknown[]) => void) => {
+      onModels([{ value: modelId }]);
+      return true;
+    });
+    setAnthropicModelProbe(probe);
+    const status = { loggedIn: true, email: 'a@example.test', subscriptionType: 'pro',
+      planTier: 'pro', authMethod: 'claude.ai', planDisplayName: 'Ultra' };
+    try {
+      publishClaudeCliLoginStatus(status);
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(anthropicIds()).toEqual(['claude-opus-4-8']);
+      for (const planDisplayName of [undefined, 'Ultra']) {
+        publishClaudeCliLoginStatus({ ...status, planDisplayName });
+        await waitForAnthropicDiscoveryIdleForTest();
+        expect(peekClaudeCliLoginStatus()?.planDisplayName).toBe(planDisplayName);
+        expect(anthropicIds()).toEqual(['claude-opus-4-8']);
+      }
+      expect(display).toHaveBeenCalledTimes(3);
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      const upgraded = { ...status, subscriptionType: 'max', planTier: 'max_20x' };
+      publishClaudeCliLoginStatus(upgraded);
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(probe).toHaveBeenCalledTimes(2);
+
+      modelId = 'claude-sonnet-4-5';
+      publishClaudeCliLoginStatus({ ...upgraded, email: 'b@example.test' });
+      await vi.waitFor(() => expect(anthropicIds()).toEqual(['claude-sonnet-4-5']));
+      expect(probe).toHaveBeenCalledTimes(3);
+
+      authState.loggedIn = false;
+      publishClaudeCliLoginStatus({ loggedIn: false });
+      await waitForAnthropicDiscoveryIdleForTest();
+      expect(anthropicIds()).toEqual([]);
+    } finally {
+      stopDisplay();
+      stopModels();
+      resetClaudeCliLoginStatusForTest();
+      setAnthropicModelProbe(null);
+    }
   });
 
   it('同一账号的重复登录态变化不清空清单', async () => {
