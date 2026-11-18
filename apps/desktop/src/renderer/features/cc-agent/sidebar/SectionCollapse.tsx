@@ -55,7 +55,7 @@ export function SectionCollapse({
     <div
       {...rest}
       className={cn(
-        'grid transition-[grid-template-rows] duration-[200ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
+        'grid transition-[grid-template-rows] duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))] motion-reduce:duration-0',
         collapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]',
         className,
       )}
@@ -65,7 +65,7 @@ export function SectionCollapse({
         data-sidebar-section-collapsed={collapsed ? 'true' : undefined}
         className={cn(
           'min-h-0 overflow-hidden',
-          'transition-[opacity,visibility] duration-[200ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
+          'transition-[opacity,visibility] duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move,cubic-bezier(0.4,0,0.2,1))] motion-reduce:duration-0',
           collapsed ? 'invisible opacity-0' : 'visible opacity-100',
           innerClassName,
         )}

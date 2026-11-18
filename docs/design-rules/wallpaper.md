@@ -222,36 +222,15 @@ mapping and display its equivalent visibility. The unchanged soft default is 37%
 Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;
 Reset removes that override and restores the theme-dependent default. Do not rewrite old
 preferences just because they were read or a theme changed.
-Remove the previous arrow, standalone portrait, gradient and paper
-options and assets. Retired saved selections normalize to None; unrelated theme
-and font preferences remain unchanged. All three scenes use the same cover fit,
-so do not expose a fit selector that cannot affect them.
+The earlier arrow, standalone portrait, gradient and paper options and their assets are
+removed; those saved selections normalize to None, leaving theme and font preferences
+unchanged. Built-in and custom wallpapers all share the same cover fit, so there is no
+fit selector.
 
-The scene-led Cindy wallpaper alternatives (2026-10-01) place the recognizable
-character and black cat in three distinct illustrated environments: a sunny
-window, a futuristic atelier and a floating garden above clouds. Preserve each
-landscape as one viewport-sized, cover-fitted canvas behind navigation, chat and
-tools. Do not confine the scene to chat, fade its edges into a separate backdrop,
-or reposition/scale it when sidebars open: that splits the app into disconnected
-pieces (user correction, 2026-10-01). Only window resizing changes the crop.
-These curated scenes use a lighter theme-derived
-veil than arbitrary photos, with a stronger Dark veil to preserve reading
-contrast. Validate real long messages, not only empty chat views.
-
-The three approved scenes also offer an explicit Static / Dynamic choice (2026-10-01).
-Static remains the default. Dynamic uses a silent, subtly moving loop with a fixed
-camera, preserving the same composition and full-window crop. Camera position,
-viewing angle and field of view must stay constant throughout the entire loop,
-including Dream Wander and Future Atelier (user correction, 2026-10-02). No pans,
-tilts, dolly movement, zooms or perspective drift; matching first and last frames
-alone is insufficient. Built-in static artwork
-uses 3584×2240 WebP. The three official scenes use bundled 640×400 previews and
-download the full WebP or 2304×1440 MP4 on demand (2026-10-15 decision), with no
-resolution switching on window resize. Only the previews enter the Renderer bundle.
-The motion approved on 2026-10-02 is preserved frame for frame at its original
-24fps. The 2304×1440 delivery is Real-ESRGAN anime-video super-resolution
-of the approved 1214×758 sources, not native 2K generation; do not regenerate,
-retime or reverse the accepted motion while preparing higher-resolution assets.
+Dynamic wallpapers (2026-10-01, applies to every built-in video): Static remains the
+default. Dynamic is a silent loop with a fixed camera that keeps the still's composition
+and full-window crop: no pans, tilts, dolly movement, zooms or perspective drift, and
+matching first and last frames alone is not enough (user correction, 2026-10-02).
 Download only selected, visible assets and request video only for active dynamic
 mode without reduced motion. Verify byte length and SHA-256 before placing assets
 in the existing client-wallpaper media scope. Valid cached content is reused across
@@ -270,28 +249,19 @@ For moving scenes, fade the message layer above the composer instead of painting
 static duplicate of the wallpaper over it. Check the loop seam and actual Light/Dark
 chat readability, including collapsed sidebars and resized windows.
 
-Environment motion must be clearly perceptible rather than concentrated on the
-character (user correction, 2026-10-01). Animate existing foliage, curtains and
-leaf shadows in the sunny scene; rain, plants and reflections in the atelier;
-clouds, grasses, vines and waterfalls in the floating garden. Keep architecture
-and the camera stationary. Prefer several slow, independent environmental rhythms
-with restrained character movement; verify foliage crops and loop transitions,
-including after the Light/Dark readability veil is applied.
-For the floating garden, keep the environmental amplitude restrained: tiny leaf
-and vine-tip movement, slow cloud-edge drift and fine downward water flow. Avoid
-large drifting petals, rolling cloud banks and whole flowerbeds sweeping across
-the view (user correction, 2026-10-01). Demonstrate motion in recordings of the real
-chat interface with messages, composer and pane chrome, not only isolated artwork.
-In the sunny window scene, keep the curtain close to its resting drape: small,
-slow folds rather than large billows across the window. Nearby leaves and light
-shadows should move gently without competing with messages (user correction,
-2026-10-01).
-The window scene needs infrequent, natural blinking and coherent whole-scene
-motion (user corrections, 2026-10-01). Judge hair, face, eyes, cat, curtains and
-foliage together at normal playback speed. Do not retime an isolated eye patch
-against a differently moving face or reverse hair motion to manufacture a loop.
-Keep the blink gentle and the environment moving at a steady pace: never speed
-up the entire frame to shorten a blink, which also accelerates curtains, hair and
-shadows (user correction, 2026-10-02). Avoid mid-blink reopening, alternating-frame
-holds and doubled eyelid outlines. Decoder frame counts alone do not establish natural
-motion; inspect the complete action and loop boundary before accepting an asset.
+#### Retired scenes (compatibility only)
+
+Window Companion, Future Atelier and Dream Wander left the picker on 2026-10-17 (see
+above); these rules only matter while a saved selection still uses one of them. They
+place the Cindy character and black cat in a sunny window, a futuristic atelier and a
+floating garden, each as one viewport-sized, cover-fitted canvas behind navigation, chat
+and tools that is never confined to chat, edge-faded or moved when sidebars open; only
+window resizing changes the crop (user correction, 2026-10-01). They use a lighter
+theme-derived veil than arbitrary photos, with a stronger Dark veil. Their stills are
+3584×2240 WebP and their videos 2304×1440, 24fps MP4 (Real-ESRGAN anime-video
+super-resolution of the approved 1214×758 sources, not native 2K generation), both
+downloaded on demand (2026-10-15 decision) with no resolution switching on window
+resize; only the bundled 640×400 previews enter the Renderer bundle. Do not regenerate,
+retime or reverse the accepted motion. Their art direction and motion acceptance notes
+(2026-10-01 / 10-02) are archived in
+[`design-decision-log.md`](./design-decision-log.md) (entry 「11-11 壁纸文档退役场景归档（D-12）」).
