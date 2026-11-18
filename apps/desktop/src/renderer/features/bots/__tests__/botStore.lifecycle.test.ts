@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+const startup = vi.hoisted(() => {
+  const list = vi.fn(async () => []);
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { localDb: { bots: { list } } } });
+  return { list };
+});
+
 import * as store from '../botStore';
 import * as owner from '@/contexts/dataOwnerGeneration';
 
@@ -120,6 +126,12 @@ describe('Bot lifecycle deletion during database hydration', () => {
 
 
 describe('Bot profile snapshot ownership', () => {
+  // #9706 / unit: importing the real store before LocalDbGate must not read a
+  // database that has not been published. Existing tests only loaded on demand.
+  it('defers module-import hydration to the ready-window consumer', () => {
+    expect(startup.list).not.toHaveBeenCalled();
+  });
+
   // Unit regression: profile/message/turn-stop events can arrive during one slow
   // list. Previous ownership tests allowed overlapping reads and missed the IPC
   // amplification. Keep one read and one successor, never publish the stale page.

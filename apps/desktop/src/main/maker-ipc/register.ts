@@ -170,9 +170,7 @@ import { providerGroupSwitchCause } from '../provider-group/failurePolicy.js';
 import { listProviderGroups, readProviderGroup } from '../provider-group/store.js';
 import { providerGroupReshare } from '../provider-group/reshareRuntime.js';
 import {
-  isOwnComputerModelUseEnabled,
   isRemoteProviderInvocationAllowed,
-  setOwnComputerModelUse,
   setRemoteProviderInvocationEnabled,
 } from '../maker-host/remote-provider-access-store.js';
 import { readProviderRunLocation, setProviderRunLocation } from '../maker-host/provider-run-location-store.js';
@@ -1684,7 +1682,7 @@ async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<bo
   if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) return false;
   try {
     const result = await prepareSharedProjectSkillLinks({ workingDir });
-    for (const warning of result.warnings) {
+    for (const warning of result.warningsToReport) {
       log.warn('shared project skill link warning', { workingDir, warning });
     }
     return result.changed;
@@ -7370,6 +7368,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       supportsScheduleModelSelection: true,
       supportsScheduleAgentDeviceSelection: true,
       // Older hosts keep only known columns and would report success while dropping the trigger.
+      supportsSchedulePrTrigger: true,
       supportsScheduleWebhookTrigger: true,
       // Remote schedule_create checks workingDir on this computer before insert.
       // Older peers accept maker:schedule:create without that check; callers must
@@ -7709,8 +7708,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isRemoteProviderInvocationAllowed(providerId),
     setRemoteProviderInvocationEnabled: (providerId, enabled) =>
       setRemoteProviderInvocationEnabled(providerId, enabled),
-    getOwnComputerModelUse: () => isOwnComputerModelUseEnabled(),
-    setOwnComputerModelUse: (enabled) => setOwnComputerModelUse(enabled),
     getProviderRunLocation: (providerId) => readProviderRunLocation(providerId),
     setProviderRunLocation: (providerId, location) => setProviderRunLocation(providerId, location),
     stageClearProviderDisableOverrides: (providerId) =>

@@ -1598,6 +1598,23 @@ describe('newSessionCreation pipeline', () => {
       phase: 'session-create-started',
     }]);
   });
+  it('keeps the first message while disconnected and resolves the target skill after linking', async () => {
+    const maker = Object.assign(makeMaker(), { listAgentSkills: vi.fn().mockResolvedValue({
+      success: true, skills: [{ kind: 'agent-skill', name: 'foo', runtimeCommandName: 'tools:foo' }],
+    }) });
+    const params = makeParams('s2', maker, { draft: { ...DRAFT, firstMessage: '/foo review',
+      selectedSkill: { name: 'foo', invocation: 'skill:foo', context: 'previous-pi-context' } } });
+    let connect!: () => void;
+    params.transport.openLink = () => new Promise<void>(resolve => { connect = resolve; });
+    startNewSessionCreation(params);
+    await flushPipeline();
+    expect(remoteSessionStore.getInputProjection('s2').pendingQueue[0]?.text).toBe('/foo review');
+    expect(maker.listAgentSkills).not.toHaveBeenCalled();
+    connect();
+    await flushPipeline();
+    expect(maker.input.enqueue).toHaveBeenCalledWith('s2', expect.objectContaining({ text: '/tools:foo review' }), expect.anything());
+  });
+
   it('hands the persisted first message to the outbox without issuing a competing enqueue', async () => {
     const maker = makeMaker();
     const params = makeParams('durable-first', maker, { firstMessageClientId: 'persisted-first-id', planModeArm: true });

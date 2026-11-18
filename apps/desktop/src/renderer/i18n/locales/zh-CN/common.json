@@ -432,7 +432,8 @@
       "loading": "正在读取模型范围…",
       "loadFailed": "未能读取模型范围，请重新打开此设置。",
       "saveFailed": "未能保存模型范围，请重试。",
-      "needsUpdate": "请更新供应商所在电脑的 Cindy 后再设置模型范围。"
+      "needsUpdate": "请更新供应商所在电脑的 Cindy 后再设置模型范围。",
+      "followsPool": "这条连接已并进「{{pool}}」，远程可用的模型跟随「{{pool}}」，请在那里修改。下方各成员的模型限制仍可在这里设置。"
     },
     "entry": {
       "label": "远程与分享",
@@ -4299,7 +4300,8 @@
           "description": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，Agent 在这台电脑上运行，使用这台电脑的登录和配额。",
           "descriptionGroup": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，由供应商组选一台电脑运行 Agent。",
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
-          "writeFailed": "远程调用设置未能保存，请重试"
+          "writeFailed": "远程调用设置未能保存，请重试",
+          "followsPool": "这条连接已并进「{{pool}}」，跟随它的「允许被远程调用」，请在「{{pool}}」里修改。"
         },
         "ownComputersCanUse": "我的其他电脑可用",
         "moreActionsAria": "更多操作",
@@ -6387,18 +6389,13 @@
         "allowInboundAria": "切换是否允许 {{name}} 控制本机",
         "peerControlOff": "对方未允许远程控制",
         "masterOffHint": "需先开启上方总开关",
-        "controllingThisMac": "已连接到 Cindy",
-        "useThisDeviceModels": "用本机模型",
-        "allowModelUseAria": "允许 {{name}} 用本机的模型"
+        "controllingThisMac": "已连接到 Cindy"
       },
       "toast": {
         "revoked": "已撤销该设备的访问权限",
         "revokeFailed": "撤销失败",
         "restored": "已恢复该设备的访问权限",
-        "restoreFailed": "恢复失败",
-        "modelUseRestored": "已允许这台电脑用本机的模型",
-        "modelUseRevoked": "这台电脑不能再用本机的模型",
-        "modelUseFailed": "「用本机模型」未能保存，请重试"
+        "restoreFailed": "恢复失败"
       },
       "sections": {
         "myDevices": "我的设备",
@@ -6898,11 +6895,6 @@
       "description": "同一飞书账号登录的设备可以互相发现；开启「允许控制」后，你的其他设备可以远程控制本机的 {{appName}}。",
       "allowControl": "允许同账号设备控制本机",
       "allowControlHint": "开启后，使用同一账号登录的其它设备无需逐次确认即可控制本机；本机会显示远程控制提示，可随时断开。",
-      "ownModelAccess": {
-        "title": "让我的其他电脑用本机模型",
-        "hint": "开启后，你的其他电脑可以用这台电脑上的模型供应商，Agent 在这台电脑上运行，用这台电脑的登录和配额。不会分享给别人。",
-        "writeFailed": "设置未能保存，请重试"
-      },
       "keepAwake": "保持电脑唤醒",
       "keepAwakeHint": "开启后本机不会进入休眠，后台的 Agent 与定时任务可持续运行（仍可关闭显示器 / 锁屏）。",
       "linkStatus": {
@@ -15777,7 +15769,7 @@
       "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
       "REMOTE_AGENT_RESUME_REJECTED": "运行模型的电脑无法恢复这个任务。请从任务列表新建任务，将需要继续的内容复制过去。原任务和排队消息会保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。是你自己的电脑时，在那台电脑的「远程连接」里打开「让我的其他电脑用本机模型」；别人分享给你的，请对方在「远程与分享」中调整。也可以换一个模型。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。是你自己的电脑时，在那台电脑上给这个供应商打开「允许被远程调用」；别人分享给你的，请对方在「远程与分享」中调整。也可以换一个模型。",
       "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
       "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
       "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
@@ -17107,6 +17099,18 @@
     "ultra": "极致"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "未接通 GitHub App 通知，仍会按计划检查。",
+      "label": "PR",
+      "url": "PR 链接",
+      "condition": "触发条件",
+      "any": "PR 有新动态",
+      "merged": "PR 已合并",
+      "review": "评审有新动态",
+      "ci": "CI 状态变化",
+      "timed": "同时定时检查",
+      "invalid": "请输入完整的 GitHub PR 链接。"
+    },
     "presentation": {
       "status": {
         "active": "已启用",

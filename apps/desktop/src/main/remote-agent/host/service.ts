@@ -53,8 +53,7 @@ import { readTurnUsageResetAt } from '../../goal-host/usageLimit.js';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
 import { bindHostedSessionProvider, hasHostedSessionModelAccess } from '../../maker-host/session-provider-store.js';
 import { hostedProviderOffersModel } from '../../maker-host/guest-provider-route-store.js';
-import { isOwnComputerModelUseEnabled, isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
-import { ownComputersMayUseProvider } from '../../maker-host/own-computer-provider-access.js';
+import { isRemoteProviderInvocationAllowed } from '../../maker-host/remote-provider-access-store.js';
 import { createGuestProviderRouteBinder, guestProviderModelIds, resolveGuestProviderId, resolveSharedProviderId } from './providerAccess';
 import { createRemoteAgentHost, type GroupRelayLoad, type HostedStartInput, type RemoteAgentHost, type RunUsageRecord } from './runHost';
 import { reshareKeyForGuest } from './groupRelay.js';
@@ -156,11 +155,9 @@ function guestAccessForTask(controller: string, sessionId?: string) {
     : providerShareGuestAccess(controller);
 }
 
-/** 这个控制端能否用本机的供应商：受邀者看「允许被远程调用」；自己的其他电脑见 {@link ownComputersMayUseProvider}。 */
-function providerOpenTo(controller: string, providerId: string): boolean {
-  return isProviderSharePeer(controller)
-    ? isRemoteProviderInvocationAllowed(providerId)
-    : ownComputersMayUseProvider(providerId);
+/** 这个控制端能否用本机的供应商：自己的其他电脑与受邀者都只看「允许被远程调用」。 */
+function providerOpenTo(_controller: string, providerId: string): boolean {
+  return isRemoteProviderInvocationAllowed(providerId);
 }
 
 /** 受邀者能用的供应商：分享的那一个，且本机仍开放「允许被远程调用」。 */
@@ -296,8 +293,7 @@ export function installRemoteAgentHost(options: {
   const isControllerAuthorized = (controller: string): boolean => {
     if (isProviderSharePeer(controller)) return providerShareGuestAccess(controller) !== null;
     const settings = readDeviceLinkSettings();
-    return settings.remoteControlEnabled && !settings.revokedControllers.includes(controller)
-      && !(settings.modelUseRevokedControllers ?? []).includes(controller);
+    return settings.remoteControlEnabled && !settings.revokedControllers.includes(controller);
   };
   // 同一份受邀者分配器同时提供匿名状态，沿用实际分配时记录的版本兼容情况。
   const groupRelay = createProviderGroupGuestRelay({
@@ -987,8 +983,6 @@ export function installRemoteAgentHost(options: {
     ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
       && hostedProviderOffersModel(hostSessionId, providerId, kind, model),
     isControllerAuthorized,
-    isControllerModelUseRevoked: (controller) => !isProviderSharePeer(controller)
-      && (readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(controller),
     controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
     providerAccess: {
       models: async (kind, providerId, controller, sessionId) => {
@@ -1035,7 +1029,7 @@ export function installRemoteAgentHost(options: {
       },
       isAllowed: (providerId, controller, model, sessionId) => {
         const access = isProviderSharePeer(controller) ? guestAccessForTask(controller, sessionId) : null;
-        return (isProviderSharePeer(controller) ? guestAllows(controller, providerId, sessionId) : ownComputersMayUseProvider(providerId))
+        return (isProviderSharePeer(controller) ? guestAllows(controller, providerId, sessionId) : isRemoteProviderInvocationAllowed(providerId))
           && shareTaskModelAllowed(controller, model ?? '', sessionId)
           && remoteModelAccess.allows(providerId, model ?? '', access?.memberId)
           && (assertMemberBudget(providerId, model ?? '', access?.memberId), true);
@@ -1632,7 +1626,6 @@ export function installRemoteAgentHost(options: {
     limitUsage: () => current.limitUsage(),
     turnRunningControllers: () => current.turnRunningControllers(),
     sharedGroupStatus: (providerId, guestController) => groupRelay.sharedStatus(providerId, guestController),
-    ownComputerModelUseEnabled: isOwnComputerModelUseEnabled,
   });
 }
 

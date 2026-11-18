@@ -136,8 +136,6 @@ import {
   clearControllerDisplayNames,
   getControllerDisplayName,
   setDispatchPresenceOfflineCheck,
-  revokeControllerModelUse,
-  notifyControllerModelUseRestored,
 } from './dispatch.desktop';
 import {
   clearControllerPlatforms,
@@ -654,7 +652,6 @@ function retriggerReopenForControlledDevices(): void {
 let appliedSettingsSnapshot: {
   remoteControlEnabled: boolean;
   revokedControllers: string[];
-  modelUseRevokedControllers: string[];
 } | null = null;
 /**
  * 「保持电脑唤醒」已应用基线。与被控授权不同:keepAwake 是**每个进程各自持有**一个
@@ -2181,20 +2178,6 @@ export async function restoreController(deviceId: string): Promise<void> {
   log.info(`access restored for controller ${shortDeviceRef(deviceId)}`);
 }
 
-/**
- * 被控端:单独开关某台同账号电脑的「用本机模型」(远程 Agent)。它跟着「控制本机」：控制本机开着时默认
- * 可用；关掉后结束它在本机的远程 Agent 任务并让它重读目录，其余远程控制不变。
- */
-export async function setControllerModelUse(deviceId: string, allowed: boolean): Promise<void> {
-  pollExternalSettingsChange();
-  await updateDeviceLinkSetting('modelUseRevokedControllers', (latest) => allowed
-    ? latest.filter((id) => id !== deviceId)
-    : latest.includes(deviceId) ? latest : [...latest, deviceId]);
-  if (allowed) notifyControllerModelUseRestored(deviceId);
-  else await revokeControllerModelUse(deviceId);
-  log.info(`model use ${allowed ? 'restored' : 'revoked'} for controller ${shortDeviceRef(deviceId)}`);
-}
-
 // ─── busy presence(被控端把「本机有 turn 在跑」上报,供控制端设备列表显示)──
 // 状态与 dedupe 逻辑在 ./busyReporter(纯逻辑、可单测);这里只持有定时器并驱动 client.sendPresence。
 
@@ -2223,8 +2206,8 @@ function refreshAppliedSettingsSnapshot(): void {
     appliedSettingsSnapshot = null;
     return;
   }
-  const { remoteControlEnabled, revokedControllers, modelUseRevokedControllers } = readDeviceLinkSettings();
-  appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers], modelUseRevokedControllers: [...modelUseRevokedControllers] };
+  const { remoteControlEnabled, revokedControllers } = readDeviceLinkSettings();
+  appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers] };
 }
 
 /**
@@ -2236,20 +2219,14 @@ function refreshAppliedSettingsSnapshot(): void {
 function pollExternalSettingsChange(): void {
   if (!client || !arbiter?.isOwner()) return;
   const prev = appliedSettingsSnapshot;
-  const { remoteControlEnabled, revokedControllers, modelUseRevokedControllers } = readDeviceLinkSettings();
-  appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers], modelUseRevokedControllers: [...modelUseRevokedControllers] };
+  const { remoteControlEnabled, revokedControllers } = readDeviceLinkSettings();
+  appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers] };
   // Apply the same permission boundary for an external settings write before
   // the link teardown below, so a lost close frame cannot leave old M
   // continuity entries inside the previous permission generation.
   syncRemoteControlAccessGeneration();
   if (!prev) return;
 
-  for (const id of modelUseRevokedControllers) {
-    if (!prev.modelUseRevokedControllers.includes(id)) void revokeControllerModelUse(id);
-  }
-  for (const id of prev.modelUseRevokedControllers) {
-    if (!modelUseRevokedControllers.includes(id)) notifyControllerModelUseRestored(id);
-  }
   if (prev.remoteControlEnabled !== remoteControlEnabled) {
     broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled });
     client.sendPresence({ remoteControlEnabled });

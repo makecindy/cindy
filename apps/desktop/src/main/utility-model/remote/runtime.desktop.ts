@@ -12,7 +12,7 @@ import { readModelDisableOverrides } from '../../maker-host/model-disable-store.
 import { isProviderModelRouteDisabled } from '../../maker-host/model-route-availability.js';
 import { getProviderRouteCredentialRevision, isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import {
-  isRemoteProviderOpenToOwnComputers, onRemoteProviderAccessChanged, remoteProviderAccessEpoch,
+  isRemoteProviderInvocationAllowed, onRemoteProviderAccessChanged, remoteProviderAccessEpoch,
 } from '../../maker-host/remote-provider-access-store.js';
 import { readProviderGroup } from '../../provider-group/store.js';
 import { hasOneshotProviderCredential } from '../oneshotProviderUsability.js';
@@ -39,15 +39,14 @@ export function installRemoteUtilityTextHost(execute: RemoteUtilityHostDeps['exe
     const settings = readDeviceLinkSettings();
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner
       || isProviderSharePeer(caller) || isSharedTaskPeer(caller)
-      || !settings.remoteControlEnabled || !isControllerAccessAllowed(caller)
-      || settings.modelUseRevokedControllers?.includes(caller)) return null;
+      || !settings.remoteControlEnabled || !isControllerAccessAllowed(caller)) return null;
     // A route is valid only while it is still offered everywhere it was offered before.
     let routeState: unknown = null;
     if (route) {
       const provider = getActiveCatalog().providers.find((item) => item.id === route.providerId);
       const model = provider?.models[route.agentKind]?.find((item) => item.id === route.model);
       if (!provider || !model || !provider.agents.includes(route.agentKind)
-        || !isRemoteProviderOpenToOwnComputers(provider.id) || readProviderGroup(provider.id)
+        || !isRemoteProviderInvocationAllowed(provider.id) || readProviderGroup(provider.id)
         || isProviderRouteMutationInProgress(provider.id)
         || isProviderModelRouteDisabled(provider.id, route.model)
         || !isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })
@@ -73,7 +72,7 @@ export function installRemoteUtilityTextHost(execute: RemoteUtilityHostDeps['exe
       return buildTextOneshotPinOptions({
         version: catalog.version,
         providers: catalog.providers.filter((provider) =>
-          isRemoteProviderOpenToOwnComputers(provider.id) && !readProviderGroup(provider.id)),
+          isRemoteProviderInvocationAllowed(provider.id) && !readProviderGroup(provider.id)),
       }, readModelDisableOverrides(), undefined, hasOneshotProviderCredential, 'auxiliary')
         .map(({ providerId, agentKind, modelId }) => ({ providerId, agentKind, model: modelId }));
     },

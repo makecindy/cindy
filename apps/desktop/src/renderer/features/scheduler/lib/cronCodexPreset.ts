@@ -390,3 +390,19 @@ export function summarizeConfig(c: CodexScheduleConfig, translate?: TFunction): 
 function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
+
+export function formatIntervalDuration(intervalMs: number, locale: string): string {
+  const units: ReadonlyArray<{ factor: number; unit: string }> = [
+    { factor: 24 * 60 * 60_000, unit: 'day' },
+    { factor: 60 * 60_000, unit: 'hour' },
+    { factor: 60_000, unit: 'minute' },
+    { factor: 1_000, unit: 'second' },
+    { factor: 1, unit: 'millisecond' },
+  ];
+  const selected = units.find(({ factor }) => intervalMs % factor === 0) ?? units[units.length - 1];
+  return new Intl.NumberFormat(locale, {
+    style: 'unit',
+    unit: selected.unit,
+    unitDisplay: 'long',
+  }).format(intervalMs / selected.factor);
+}
