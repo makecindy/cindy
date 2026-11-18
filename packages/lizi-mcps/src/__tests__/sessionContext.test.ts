@@ -133,6 +133,15 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       queuedMessageId: 'queued-1',
       position: 0,
     })),
+    holdWorkerQueuedMessage: vi.fn(async () => ({
+      ok: true as const,
+      workerId: 'worker-1',
+      queuedMessageId: 'queued-1',
+    })),
+    releaseOwnQueueHold: vi.fn(async (_params: { callerLeadSessionId: string }) => ({
+      ok: true as const,
+      released: true as const,
+    })),
     idleWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
     endTeam: vi.fn(async () => ({ ok: true as const })),
     archiveWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
@@ -189,8 +198,8 @@ describe('dynamic lizi MCP session context', () => {
     const first = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
     const second = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
 
-    // 18 个 team 工具 + 3 个只读诊断工具。
-    expect(first).toHaveLength(21);
+    // 20 个 team 工具 + 3 个只读诊断工具。
+    expect(first).toHaveLength(23);
     expect(first).toEqual(second);
     expect(first).toContain('create_worker');
     expect(first).toContain('create_workers');

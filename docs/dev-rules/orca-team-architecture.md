@@ -567,7 +567,11 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    区间含停点返回 `QUEUE_HAS_HELD`（整次零修改）；合并还会在同步替换回调里按最新条目
    再判一次，避免异步权限复核期间刚设的停点被合并删除。`move_queued_message` 拒绝把
    其它条目**跨过**停点（`QUEUE_HELD_BOUNDARY`，前后两侧各自区间内的排序仍可用），
-   停点条目自身可以移动。桌面队列行以消息气泡渲染（`PendingQueueBubble`），停点入口在行内队列菜单：
+   停点条目自身可以移动。Agent 侧与插话同地位：`hold_session_queued_message` /
+   `release_session_queue_hold`（cindy_helper，与 steer 共用 `authorizeSessionQueueReorder`，
+   只能挂在自己发的条目上）和 `hold_queued_message` / `release_queue_hold`（Orca，worker
+   队列里只能挂自己发给它的条目）。解除只作用于自己的队列：worker 队列上的停点是用户
+   按下的手，由用户自己抬。桌面队列行以消息气泡渲染（`PendingQueueBubble`），停点入口在行内队列菜单：
 「停在这里 / 恢复自动发送」，停点行显示常驻标签且不可上下移、不提供插话，它和它之后的气泡弱化；
 `clampReorderAcrossStop` 在发起侧把停点之前条目的重排目标钳在停点之前。转插话在 `isControlSteerBlocked`（预检与 provider 前复核共用）
    里读最新 `held`，而 `hold` 拒绝已在投递中的条目，两侧互斥封住「挂起条目被送进当前轮」。实现指针：

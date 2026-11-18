@@ -258,6 +258,11 @@ export type MoveWorkerQueuedMessageResult =
   | { ok: true; workerId: string | null; queuedMessageId: string; position: number }
   | WorkerQueuedMessageFailure;
 
+/** 把队列停点挂到一条排队消息上;workerId=null 表示 Lead 自己的队列。 */
+export type HoldWorkerQueuedMessageResult =
+  | { ok: true; workerId: string | null; queuedMessageId: string }
+  | WorkerQueuedMessageFailure;
+
 export type ListWorkerQueuedMessagesResult =
   | {
       ok: true;
@@ -480,6 +485,10 @@ export interface OrcaTeamServiceDeps {
   getWorkerQueuePaused(sessionId: string): boolean;
   /** 目标队列是否有用户停点(held):给排队回执说明「本条不会自动执行」。 */
   getWorkerQueueHeld(sessionId: string): boolean;
+  /** 把队列停点挂到指定条目(宿主侧同步操作)。 */
+  holdQueuedMessage(sessionId: string, clientId: string): void;
+  /** 清掉目标队列上的停点(宿主侧同步操作)。 */
+  releaseQueueHold(sessionId: string): void;
   sendAutoBridgeToLead(
     leadSessionId: string,
     message: string,
@@ -591,6 +600,14 @@ export interface OrcaTeamService {
     queuedMessageId: string;
     position: number;
   }): Promise<MoveWorkerQueuedMessageResult>;
+  holdWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }): Promise<HoldWorkerQueuedMessageResult>;
+  releaseOwnQueueHold(params: {
+    callerLeadSessionId: string;
+  }): Promise<{ ok: true; released: true } | WorkerQueuedMessageFailure>;
   captureWorkerText(sessionId: string, text: string, opts?: { isFinal?: boolean }): void;
   clearAutoBridgeState(sessionId: string): void;
   /**
@@ -693,6 +710,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     removeQueuedMessage: deps.removeQueuedMessage,
     steerQueuedMessage: deps.steerStoredQueuedMessage,
     moveQueuedMessage: deps.moveQueuedMessage,
+    holdQueuedMessage: deps.holdQueuedMessage,
+    releaseQueueHold: deps.releaseQueueHold,
   });
   /** Per-worker transition tails serialize dispatch reservations against implicit done acknowledgement. */
   const workerTransitionTails = new Map<string, Promise<void>>();
@@ -1984,6 +2003,47 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     };
   }
 
+  async function holdWorkerQueuedMessage(params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }): Promise<HoldWorkerQueuedMessageResult> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    const target = await resolveQueueTarget(params.callerLeadSessionId, params.workerRef);
+    if (!target.ok) return target;
+    const ownQueue = target.worker === null;
+    const controlled = await queueControl.hold({
+      beforeMutation: assertCurrent,
+      sessionId: target.sessionId,
+      queuedMessageId: params.queuedMessageId,
+      authorize: (entry) => authorizeOrcaQueueItem(entry, params.queuedMessageId, ownQueue),
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled, ownQueue);
+    deps.log.info('orca queue stop point set', {
+      targetSessionId: target.sessionId,
+      ownQueue,
+      queuedMessageId: params.queuedMessageId,
+    });
+    return {
+      ok: true,
+      workerId: target.worker?.id ?? null,
+      queuedMessageId: params.queuedMessageId,
+    };
+  }
+
+  /** 只能解自己的队列:worker 队列上的停点是用户按下去的手,由用户自己抬。 */
+  async function releaseOwnQueueHold(params: {
+    callerLeadSessionId: string;
+  }): Promise<{ ok: true; released: true } | WorkerQueuedMessageFailure> {
+    const assertCurrent = await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    const controlled = await queueControl.releaseHold({
+      beforeMutation: assertCurrent,
+      sessionId: params.callerLeadSessionId,
+    });
+    if (!controlled.ok) return mapWorkerQueueControlFailure(controlled, true);
+    return { ok: true, released: true };
+  }
+
   async function updateWorkerQueuedMessage(params: {
     callerLeadSessionId: string;
     workerRef: string;
@@ -2239,6 +2299,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     mergeWorkerQueuedMessages,
     steerWorkerQueuedMessage,
     moveWorkerQueuedMessage,
+    holdWorkerQueuedMessage,
+    releaseOwnQueueHold,
     captureWorkerText(sessionId, text, opts) {
       const state = autoBridge.get(sessionId);
       if (!state?.pending || text.length === 0) return;

@@ -434,6 +434,8 @@ import {
 } from './sessionControlService.js';
 import {
   createQueueReorderAdapter,
+  type SessionQueueControlResult,
+  type SessionQueueHoldReleaseResult,
   type SessionQueueMoveResult,
   type SessionQueueSteerResult,
 } from './sessionQueueControl.js';
@@ -1100,6 +1102,7 @@ import {
   type ListWorkerQueuedMessagesResult,
   type MergeWorkerQueuedMessagesResult,
   type MoveWorkerQueuedMessageResult,
+  type HoldWorkerQueuedMessageResult,
   type OrcaTeamService,
   type OrcaWorkerEffort,
   type SendToWorkerResult,
@@ -2777,6 +2780,21 @@ interface OrcaCollabService {
   }) => Promise<
     SessionQueueMoveResult | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
   >;
+  holdSessionQueuedMessage: (params: {
+    callerSessionId: string;
+    targetSessionId: string;
+    queuedMessageId: string;
+  }) => Promise<
+    | SessionQueueControlResult
+    | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
+  releaseSessionQueueHold: (params: {
+    callerSessionId: string;
+    targetSessionId: string;
+  }) => Promise<
+    | SessionQueueHoldReleaseResult
+    | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
+  >;
   steerSession: (params: {
     callerSessionId?: string;
     targetSessionId: string;
@@ -3070,6 +3088,14 @@ interface OrcaCollabService {
     queuedMessageId: string;
     position: number;
   }) => Promise<MoveWorkerQueuedMessageResult>;
+  holdWorkerQueuedMessage: (params: {
+    callerLeadSessionId: string;
+    workerRef?: string;
+    queuedMessageId: string;
+  }) => Promise<HoldWorkerQueuedMessageResult>;
+  releaseOwnQueueHold: (params: {
+    callerLeadSessionId: string;
+  }) => Promise<{ ok: true } | { ok: false; errorCode: string; message: string }>;
   updateWorkerQueuedMessage: (params: {
     callerLeadSessionId: string;
     workerRef: string;
@@ -16307,6 +16333,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getWorkerQueueHeld: (sessionId: string) =>
       inputCoordinator.getProjection(sessionId).pendingQueue.some((item) => item.held === true),
+    holdQueuedMessage: (sessionId: string, clientId: string) => {
+      inputCoordinator.hold(sessionId, clientId);
+    },
+    releaseQueueHold: (sessionId: string) => {
+      inputCoordinator.releaseHold(sessionId);
+    },
     ensureWorkerQueueRestored: async (sessionId: string) => {
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
       return inputCoordinator.isQueueRestored(sessionId);
@@ -18142,6 +18174,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     steerStoredQueuedMessage: steerStoredControlMessage,
     moveQueuedMessage: moveStoredControlMessage,
+    holdQueuedMessage: (sessionId: string, clientId: string) => {
+      inputCoordinator.hold(sessionId, clientId);
+    },
+    releaseQueueHold: (sessionId: string) => {
+      inputCoordinator.releaseHold(sessionId);
+    },
     createId,
   });
 
@@ -18194,6 +18232,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     cancelSessionQueuedMessage: (params) => sessionControlService.cancelQueuedMessage(params),
     steerSessionQueuedMessage: (params) => sessionControlService.steerQueuedMessage(params),
     moveSessionQueuedMessage: (params) => sessionControlService.moveQueuedMessage(params),
+    holdSessionQueuedMessage: (params) => sessionControlService.holdQueuedMessage(params),
+    releaseSessionQueueHold: (params) => sessionControlService.releaseQueueHold(params),
     steerSession: (params) => sessionControlService.steerSession(params),
     stopSessionTurn: (params) => sessionControlService.stopSessionTurn(params),
     getSessionRuntime: (params) => sessionControlService.getSessionRuntime(params),
@@ -18255,6 +18295,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     mergeWorkerQueuedMessages: (params) => orcaTeamService.mergeWorkerQueuedMessages(params),
     steerWorkerQueuedMessage: (params) => orcaTeamService.steerWorkerQueuedMessage(params),
     moveWorkerQueuedMessage: (params) => orcaTeamService.moveWorkerQueuedMessage(params),
+    holdWorkerQueuedMessage: (params) => orcaTeamService.holdWorkerQueuedMessage(params),
+    releaseOwnQueueHold: (params) => orcaTeamService.releaseOwnQueueHold(params),
     startTeam: ({ leadSessionId, workerPermissionMode }) => startOrcaTeamForCaller(leadSessionId, workerPermissionMode),
     createWorker: async (params) => {
       params = { ...params, useCreationPrefs: true };

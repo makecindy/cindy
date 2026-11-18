@@ -1426,6 +1426,12 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       },
       getWorkerQueuePaused: () => h.coordinator.isQueuePaused(sid),
       getWorkerQueueHeld: () => h.coordinator.getProjection(sid).pendingQueue.some((item) => item.held === true),
+      holdQueuedMessage: (sessionId, clientId) => {
+        h.coordinator.hold(sessionId, clientId);
+      },
+      releaseQueueHold: (sessionId) => {
+        h.coordinator.releaseHold(sessionId);
+      },
       sendAutoBridgeToLead: vi.fn(async () => ({ accepted: true })),
       getSessionQueueSnapshot: async () => ({
         pendingQueue: h.coordinator.getQueueControlSnapshot(sid).pendingQueue,
@@ -8511,6 +8517,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       }),
       getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
       steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(),
+      holdQueuedMessage: vi.fn(), releaseQueueHold: vi.fn(),
       createId: () => `unexpected-random-ID-${++allocatedIds}`,
     });
     const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };
@@ -8585,6 +8592,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       }),
       getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
       steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(),
+      holdQueuedMessage: vi.fn(), releaseQueueHold: vi.fn(),
       createId: () => `unexpected-random-ID-${++allocatedIds}`,
     });
     const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };

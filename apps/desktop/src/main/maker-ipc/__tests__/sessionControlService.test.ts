@@ -156,6 +156,8 @@ function setup(opts?: {
     removeQueuedMessage: vi.fn(() => true),
     steerStoredQueuedMessage: vi.fn(async () => ({ kind: 'steered' as const })),
     moveQueuedMessage: vi.fn(() => 0),
+    holdQueuedMessage: vi.fn(),
+    releaseQueueHold: vi.fn(),
     createId: vi.fn(() => 'steer-1'),
   };
   return { deps, live, service: createSessionControlService(deps) };

@@ -41,6 +41,10 @@ export type SessionQueueMoveResult =
   | { ok: true; queuedMessageId: string; position: number }
   | Exclude<SessionQueueControlResult, { ok: true }>;
 
+export type SessionQueueHoldReleaseResult =
+  | { ok: true; released: true }
+  | Exclude<SessionQueueControlResult, { ok: true }>;
+
 export interface SessionQueueControlDeps {
   getSnapshot(sessionId: string): Promise<SessionQueueControlSnapshot>;
   replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
@@ -51,6 +55,10 @@ export interface SessionQueueControlDeps {
    * or 'locked' while the user is editing it.
    */
   moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
+  /** 把停点移到这条消息上（至多一个，已有的停点被清掉）。 */
+  holdQueuedMessage(sessionId: string, clientId: string): void;
+  /** 清掉目标队列上的停点；队列没有停点时无操作。 */
+  releaseQueueHold(sessionId: string): void;
 }
 
 export type SessionQueueAuthorization = (
@@ -224,6 +232,32 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
         };
       }
       return { ok: true, queuedMessageId: params.queuedMessageId, position };
+    },
+
+    /** 把停点移到这条：前面的照常执行，到它为止不再自动发送。 */
+    async hold(params: BaseControlParams): Promise<SessionQueueControlResult> {
+      const resolved = await resolve(params);
+      if (!resolved.ok) return resolved;
+      await params.beforeMutation?.();
+      deps.holdQueuedMessage(params.sessionId, params.queuedMessageId);
+      // coordinator 对「刚好开始投递」的那一帧是静默拒绝的，回读确认，别让调用方
+      // 以为挂上了停点、实际队列还在往前跑。
+      const row = (await deps.getSnapshot(params.sessionId)).pendingQueue.find(
+        (candidate) => candidate.clientId === params.queuedMessageId,
+      );
+      if (!row) return classifyLostRace(params.sessionId, params.queuedMessageId);
+      if (row.held !== true) return consumingFailure(params.queuedMessageId);
+      return { ok: true, queuedMessageId: params.queuedMessageId };
+    },
+
+    /** 解掉停点；没有停点也算成功（幂等）。 */
+    async releaseHold(params: {
+      sessionId: string;
+      beforeMutation?: () => Promise<void>;
+    }): Promise<SessionQueueHoldReleaseResult> {
+      await params.beforeMutation?.();
+      deps.releaseQueueHold(params.sessionId);
+      return { ok: true, released: true };
     },
   };
 }

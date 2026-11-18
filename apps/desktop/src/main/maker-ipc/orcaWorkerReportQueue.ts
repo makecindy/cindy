@@ -120,6 +120,9 @@ export function createOrcaWorkerReportQueue(deps: OrcaWorkerReportQueueDeps): Or
     removeQueuedMessage: deps.removeQueuedMessage,
     steerQueuedMessage: async () => ({ kind: 'gone' }),
     moveQueuedMessage: () => null,
+    // Worker 回报队列不接停点；hold 会因回读不到 held 而判失败，不会静默成功。
+    holdQueuedMessage: () => undefined,
+    releaseQueueHold: () => undefined,
   });
   // 同一个 Worker 的写操作串行执行：并行撤回两条时，各自都会把对方当成「还有一条留着」。
   const mutationTails = new Map<string, Promise<unknown>>();

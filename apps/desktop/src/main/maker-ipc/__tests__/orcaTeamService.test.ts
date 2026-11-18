@@ -497,6 +497,8 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
     mergeQueuedMessages: vi.fn(() => true),
     steerStoredQueuedMessage: vi.fn(async () => ({ kind: 'steered' as const })),
     moveQueuedMessage: vi.fn(() => 0),
+    holdQueuedMessage: vi.fn(),
+    releaseQueueHold: vi.fn(),
     log: {
       warn: vi.fn(),
       info: vi.fn(),
@@ -4454,6 +4456,61 @@ describe('Orca worker queue stop point', () => {
     });
 
     expect(result).toMatchObject({ ok: true, wakeKind: 'queued', queueHeld: true });
+  });
+
+  it('lets the Lead set a stop point on its own dispatch and release its own queue', async () => {
+    let queue = [queuedItem('q-mine', leadOrigin)];
+    const holdQueuedMessage = vi.fn(() => {
+      queue = [{ ...queue[0]!, held: true }];
+    });
+    const releaseQueueHold = vi.fn();
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: queue,
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+        queueHeld: queue.some((entry) => entry.held === true),
+      })),
+      holdQueuedMessage,
+      releaseQueueHold,
+    });
+
+    await expect(
+      service.holdWorkerQueuedMessage({ callerLeadSessionId: 'lead-1', queuedMessageId: 'q-mine' }),
+    ).resolves.toEqual({ ok: true, workerId: null, queuedMessageId: 'q-mine' });
+    expect(holdQueuedMessage).toHaveBeenCalledWith('lead-1', 'q-mine');
+
+    await expect(service.releaseOwnQueueHold({ callerLeadSessionId: 'lead-1' }))
+      .resolves.toEqual({ ok: true, released: true });
+    expect(releaseQueueHold).toHaveBeenCalledWith('lead-1');
+  });
+
+  it('refuses a stop point on a worker row the Lead did not send', async () => {
+    const holdQueuedMessage = vi.fn();
+    const { service } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [queuedItem('q-user')],
+        steeringClientIds: [],
+        consumingClientIds: [],
+        isWorking: false,
+        willQueue: true,
+        queuePaused: false,
+        queueHeld: false,
+      })),
+      holdQueuedMessage,
+    });
+
+    await expect(
+      service.holdWorkerQueuedMessage({
+        callerLeadSessionId: 'lead-1',
+        workerRef: 'worker-1',
+        queuedMessageId: 'q-user',
+      }),
+    ).resolves.toMatchObject({ ok: false, errorCode: 'NOT_LEAD_MESSAGE' });
+    expect(holdQueuedMessage).not.toHaveBeenCalled();
   });
 });
 

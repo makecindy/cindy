@@ -45,6 +45,11 @@ function setup(opts?: { sessionId?: string | undefined }) {
       queuedMessageId,
       position: 0,
     })),
+    holdQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
+      ok: true as const,
+      queuedMessageId,
+    })),
+    releaseQueueHold: vi.fn(async () => ({ ok: true as const, released: true as const })),
     steerSession: vi.fn(async () => ({ ok: true as const, queuedMessageId: 'steer-1' })),
     stopSessionTurn: vi.fn(async () => ({
       ok: true as const,
