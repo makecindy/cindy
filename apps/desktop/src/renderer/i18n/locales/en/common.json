@@ -16496,7 +16496,10 @@
       "confirmArchive": {
         "title": "Archive session",
         "description": "Archive this session? It will be removed from the list.",
-        "dirtyWorktreeWarning": "This session's worktree has uncommitted changes; they will be saved as a git snapshot before archiving and can be restored from the session later.",
+        "dirtyWorktreeWarning": "Uncommitted changes will be saved before archiving. You can restore them from the task.",
+        "discardChanges": "Discard uncommitted changes",
+        "discardWarning": "Uncommitted changes and new files will be lost.",
+        "discardAndArchive": "Discard and archive",
         "scheduleWarning_one": "The linked automation {{names}} will keep running and restore this session.",
         "scheduleWarning_other": "The linked automations {{names}} will keep running and restore this session.",
         "scheduleWarningMany_one": "{{count}} of these sessions has linked automations that will restore it when they run.",

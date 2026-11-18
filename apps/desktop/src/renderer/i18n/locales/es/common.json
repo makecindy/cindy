@@ -16652,7 +16652,10 @@
       "confirmArchive": {
         "title": "Archivar sesión",
         "description": "¿Archivar esta sesión? Se quitará de la lista.",
-        "dirtyWorktreeWarning": "El worktree de esta sesión tiene cambios sin commit; se guardarán como una instantánea de git antes de archivarla y se podrán restaurar desde la sesión más adelante.",
+        "dirtyWorktreeWarning": "Los cambios sin confirmar se guardarán antes de archivar. Podrás restaurarlos desde la tarea.",
+        "discardChanges": "Descartar cambios sin confirmar",
+        "discardWarning": "Los cambios sin confirmar y los archivos nuevos se perderán.",
+        "discardAndArchive": "Descartar y archivar",
         "scheduleWarning_one": "La automatización vinculada {{names}} seguirá ejecutándose y restaurará esta sesión.",
         "scheduleWarning_other": "Las automatizaciones vinculadas {{names}} seguirán ejecutándose y restaurarán esta sesión.",
         "scheduleWarningMany_one": "{{count}} de estas sesiones tiene automatizaciones vinculadas que la restaurarán cuando se ejecuten.",

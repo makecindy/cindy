@@ -96,6 +96,7 @@ import {
 } from './contexts/SessionAttentionUrgencyContext';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useConfirmTaskArchive } from './hooks/useConfirmTaskArchive';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -110,6 +111,7 @@ import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import {
   countDirtyWorktreesForRemoval,
+  isDirtyWorktree,
   resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
@@ -326,7 +328,6 @@ import {
   type DeletedScheduleGeneratedSessionResult,
 } from '@/features/scheduler/hooks/useDeleteScheduleWithSessions';
 import {
-  archiveConfirmDescription,
   archiveScheduleWarningMany,
   loadActiveBoundScheduleNames,
 } from '@/features/scheduler/lib/archiveScheduleWarning';
@@ -996,6 +997,7 @@ function ExpandedView({
   );
   // 归档和批量菜单共用可等待的确认弹窗；删除保留受控 ConfirmDialog。
   const { confirm: confirmDialog } = useConfirmDialog();
+  const confirmTaskArchive = useConfirmTaskArchive();
   const handleScheduleDeleted = useCallback(
     async ({ disposition, affectedSessionIds }: DeletedScheduleGeneratedSessionResult) => {
       await refreshSessions();
@@ -3334,18 +3336,10 @@ function ExpandedView({
             // 同样要弹确认框,否则归档会静默回收可能带着未提交改动的 worktree
             // (greptile review)。'unknown' 时不摆 dirty 警告文案 —— 那会谎称有改动,
             // 走的是普通归档确认。
-            if (preflight !== 'clean' || scheduleNames.length > 0) {
-              const confirmed = await confirmDialog({
-                title: t('ccAgent.sidebar.confirmArchive.title'),
-                description: archiveConfirmDescription(t, {
-                  dirtyWorktree: preflight === 'dirty',
-                  scheduleNames,
-                }),
-                confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-                cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-              });
-              if (!confirmed || !isCurrent()) return false;
-            }
+            const confirmed = preflight === 'clean' && scheduleNames.length === 0
+              ? true
+              : await confirmTaskArchive(preflight, scheduleNames);
+            if (!confirmed || !isCurrent()) return false;
             // 重定向判定用 viewedSessionId:files 路由下归档「正在浏览的会话」也要
             // 跳离失效的文件视图(codex review;正常路由下两者恒等)。经 ref 读:它随
             // 路由切换而变,留在 deps 里会让本 handler 每次切换都重建、打穿整表 memo。
@@ -3354,7 +3348,7 @@ function ExpandedView({
             if (!(await closeOwnedSharedTask(sharedTaskId))) {
               return false;
             }
-            return true;
+            return confirmed;
           },
         });
         return;
@@ -3364,8 +3358,7 @@ function ExpandedView({
         // 不会变成静默放行。
         // P1 预检:worktree 有未提交更改时确认文案追加警告(查询失败降级为不提示)
         const dirtyWorktree =
-          (await resolveWorktreeRemovalPreflight(sessionId, session?.deviceLinkDeviceId)) ===
-          'dirty';
+          isDirtyWorktree(await resolveWorktreeRemovalPreflight(sessionId, session?.deviceLinkDeviceId));
         // Keep the existing confirm-state shape for the normal delete flow, then attach
         // the shared-task scope in a functional update so cancellation still leaves it open.
         setConfirm({ open: true, sessionId, action, dirtyWorktree });
@@ -3379,7 +3372,7 @@ function ExpandedView({
     [
       closeOwnedSharedTask,
       archiveBlockedByRunning,
-      confirmDialog,
+      confirmTaskArchive,
       markSessionsRead,
       runSessionAction,
       unarchiveSession,

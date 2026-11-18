@@ -16422,7 +16422,10 @@
       "confirmArchive": {
         "title": "归档任务",
         "description": "确定要归档这个任务吗？归档后将从列表中移除。",
-        "dirtyWorktreeWarning": "该任务的 worktree 有未提交的更改；归档前会自动保存为 git 快照，之后可在任务内一键恢复。",
+        "dirtyWorktreeWarning": "未提交的更改会在归档前保存，可在任务内恢复。",
+        "discardChanges": "丢弃未提交的更改",
+        "discardWarning": "未提交的更改和新文件将无法恢复。",
+        "discardAndArchive": "丢弃并归档",
         "scheduleWarning_one": "关联的自动化{{names}}仍会运行，并恢复此任务。",
         "scheduleWarning_other": "关联的自动化{{names}}仍会运行，并恢复此任务。",
         "scheduleWarningMany_one": "其中 {{count}} 个任务关联了自动化，后续运行时会恢复这些任务。",

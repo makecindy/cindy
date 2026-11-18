@@ -16652,7 +16652,10 @@
       "confirmArchive": {
         "title": "Arquivar sessão",
         "description": "Arquivar esta sessão? Ela será removida da lista.",
-        "dirtyWorktreeWarning": "O worktree desta sessão tem alterações sem commit; elas serão salvas como um snapshot do git antes do arquivamento e poderão ser restauradas pela sessão depois.",
+        "dirtyWorktreeWarning": "As alterações sem commit serão salvas antes de arquivar. Você pode restaurá-las na tarefa.",
+        "discardChanges": "Descartar alterações sem commit",
+        "discardWarning": "As alterações sem commit e os arquivos novos serão perdidos.",
+        "discardAndArchive": "Descartar e arquivar",
         "scheduleWarning_one": "A automação vinculada {{names}} continuará em execução e restaurará esta sessão.",
         "scheduleWarning_other": "As automações vinculadas {{names}} continuarão em execução e restaurarão esta sessão.",
         "scheduleWarningMany_one": "{{count}} destas sessões tem automações vinculadas que a restaurarão quando forem executadas.",

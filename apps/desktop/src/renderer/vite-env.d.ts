@@ -4687,7 +4687,7 @@ interface ElectronAPI {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
   // P1: 删除/归档确认预检
-  worktreeRemovalPreview: (sessionId: string) => Promise<{ hasWorktree: boolean; dirty: boolean }>;
+  worktreeRemovalPreview: (sessionId: string) => Promise<{ hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }>;
   // P1: worktree 回收后的可恢复状态 + 一键恢复
   worktreeRestoreStatus: (
     sessionId: string,

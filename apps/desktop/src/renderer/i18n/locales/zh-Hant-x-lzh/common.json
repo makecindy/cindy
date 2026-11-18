@@ -16422,7 +16422,10 @@
       "confirmArchive": {
         "title": "封存差事",
         "description": "確欲封存此差事乎？封存後將自錄中除去。",
-        "dirtyWorktreeWarning": "此差事之 worktree 有未提交之改動；封存前將自存為 git 快照，日後可於差事內一鍵復原。",
+        "dirtyWorktreeWarning": "未提交之改動，歸檔前先存之，日後可於任務中復原。",
+        "discardChanges": "棄未提交之改動",
+        "discardWarning": "未提交之改動及新檔，將不可復原。",
+        "discardAndArchive": "棄而歸檔",
         "scheduleWarning_one": "所關聯之自運{{names}}仍將運行，並復此差事。",
         "scheduleWarning_other": "所關聯之自運{{names}}仍將運行，並復此差事。",
         "scheduleWarningMany_one": "其中 {{count}} 個差事關聯自運，後續運行時將復此諸差事。",
