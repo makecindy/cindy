@@ -10,6 +10,11 @@ import { teammateFolderName } from '@cindy/maker-shared/teammate-project';
 
 import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
 import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
+import {
+  isLaterProcessThan,
+  readDesktopProcessIdentity,
+  type DesktopProcessIdentity,
+} from '../desktopProcessIdentity.js';
 import { copyTree, directoryIdentity, entry, inside, inspectTree } from './tree.js';
 
 const processToken = randomUUID();
@@ -33,6 +38,7 @@ interface Receipt {
   parentIdentity: string;
   sourceIdentity: string;
   processToken: string;
+  processIdentity?: DesktopProcessIdentity;
   pid: number;
   phase: Phase;
   targetIdentity?: string;
@@ -143,6 +149,12 @@ async function readJournal(
     typeof value.sourceIdentity !== 'string' ||
     typeof value.parentIdentity !== 'string' ||
     typeof value.processToken !== 'string' ||
+    (value.processIdentity !== undefined &&
+      (!value.processIdentity ||
+        !Number.isFinite(value.processIdentity.startedAtMs) ||
+        value.processIdentity.startedAtMs <= 0 ||
+        typeof value.processIdentity.executablePath !== 'string' ||
+        !path.isAbsolute(value.processIdentity.executablePath))) ||
     !Number.isSafeInteger(value.pid) ||
     value.pid <= 0 ||
     !phases.includes(value.phase) ||
@@ -159,6 +171,17 @@ function isAlive(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
+}
+
+async function requesterIsActive(receipt: Receipt): Promise<boolean> {
+  if (receipt.processToken === processToken) return true;
+  if (!isAlive(receipt.pid)) return false;
+  // A live PID can belong to another host after restart. Only an OS identity
+  // proving a later birth permits recovery; unknown/legacy evidence protects
+  // the possible original writer, including when probing is unavailable.
+  if (!receipt.processIdentity) return true;
+  const identity = await readDesktopProcessIdentity(receipt.pid);
+  return !identity || !isLaterProcessThan(receipt, identity);
 }
 
 async function validateTarget(ownerRoot: string, source: string, target: string): Promise<string> {
@@ -189,6 +212,7 @@ async function preflight(ownerRoot: string, botId: string, target: string, signa
     path.join(await fs.realpath(ownerRoot), 'bots', botSegment(botId))
   )
     throw new Error('BOT_HOME_IS_REDIRECTED');
+  if ((await entry(source))?.isSymbolicLink()) throw new Error('WORKSPACE_ALREADY_REDIRECTED');
   const sourceIdentity = await directoryIdentity(source);
   const destination = await validateTarget(ownerRoot, source, target);
   if (await entry(destination)) throw new Error('TARGET_EXISTS');
@@ -278,9 +302,11 @@ async function requestMove(
   const existing = await read(ownerRoot, botId);
   if (existing && !['failed', 'cancelled'].includes(existing.phase)) {
     if (path.resolve(target) === existing.target) return workspaceMoveStatus(ownerRoot, botId);
+    if (existing.phase === 'completed') throw new Error('WORKSPACE_ALREADY_REDIRECTED');
     throw new Error('MIGRATION_ALREADY_REGISTERED');
   }
   const planned = await preflight(ownerRoot, botId, target, signal);
+  const identity = await readDesktopProcessIdentity(process.pid);
   assertCurrent();
   if (existing) {
     // Retain previous copy/recovery paths when a failed attempt is replaced.
@@ -323,6 +349,7 @@ async function requestMove(
       sourceIdentity: planned.sourceIdentity,
       parentIdentity: planned.parentIdentity,
       processToken,
+      ...(identity ? { processIdentity: identity } : {}),
       pid: process.pid,
       phase: 'pending',
     },
@@ -554,7 +581,7 @@ export async function recoverWorkspaceMovesAtStartup(
             await cleanupBackup(ownerRoot, receipt);
           continue;
         }
-        if (receipt.processToken === processToken || isAlive(receipt.pid)) {
+        if (await requesterIsActive(receipt)) {
           if (receipt.phase !== 'pending') throw new Error('WORKSPACE_MOVE_IN_PROGRESS');
           continue;
         }

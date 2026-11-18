@@ -18,6 +18,7 @@ import {
   workspaceMoveStatus,
 } from '../service.js';
 import { copyTree, directoryIdentity, inspectTree } from '../tree.js';
+import * as processIdentity from '../../desktopProcessIdentity.js';
 
 let temporary: string;
 let owner: string;
@@ -27,6 +28,10 @@ const bot = 'bot-test';
 const current = () => {};
 
 beforeEach(async () => {
+  vi.spyOn(processIdentity, 'readDesktopProcessIdentity').mockResolvedValue({
+    startedAtMs: 1_700_000_000_000,
+    executablePath: process.execPath,
+  });
   temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-workspace-move-'));
   owner = path.join(temporary, 'profile', 'owners', 'test-owner');
   source = path.join(owner, 'bots', bot, 'workspace');
@@ -62,6 +67,63 @@ async function previousProcess(update: Record<string, unknown> = {}) {
 }
 
 describe('offline workspace relocation', () => {
+  // #10568 P2: kill(pid, 0) alone cannot distinguish a new Cindy/other process
+  // that reused the requester's PID. Unit: public request/startup/status APIs;
+  // the prior dead-PID tests never exercised a live replacement or failed probe.
+  it.each(['reused', 'same', 'unknown', 'legacy'] as const)(
+    'uses recorded OS birth identity before deciding a live requester PID is %s',
+    async (scenario) => {
+      await requestWorkspaceMove(owner, bot, target, current);
+      await previousProcess(
+        scenario === 'legacy'
+          ? { processIdentity: undefined }
+          : scenario === 'reused'
+            ? { pid: process.pid }
+            : {},
+      );
+      vi.mocked(process.kill).mockReturnValue(true);
+      vi.mocked(processIdentity.readDesktopProcessIdentity).mockResolvedValue(
+        scenario === 'unknown'
+          ? null
+          : {
+              startedAtMs: 1_700_000_000_000 + (scenario === 'same' ? 0 : 60_000),
+              executablePath: process.execPath,
+            },
+      );
+      await recoverWorkspaceMovesAtStartup(owner, true);
+      expect(await workspaceMoveStatus(owner, bot)).toMatchObject({
+        phase: scenario === 'reused' ? 'completed' : 'pending',
+        workspaceAvailable: true,
+      });
+      expect(await fs.readFile(path.join(source, 'script.js'), 'utf8')).toBe('original-script');
+      if (scenario === 'reused') expect(await fs.realpath(source)).toBe(await fs.realpath(target));
+      else await expect(fs.lstat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  // #10568: preflight must explain an existing redirect before touching either
+  // tree. Existing successful-move tests did not attempt a second relocation.
+  it('rejects a redirected workspace explicitly without changing either directory', async () => {
+    await requestWorkspaceMove(owner, bot, target, current);
+    await previousProcess();
+    await recoverWorkspaceMovesAtStartup(owner, true);
+    const nextTarget = path.join(path.dirname(target), 'second-move');
+    const before = await inspectTree(target);
+    const originalLink = await fs.readlink(source);
+    const journal = await receipt();
+    const beforeReceipt = await fs.readFile(journal.file, 'utf8');
+    await expect(previewWorkspaceMove(owner, bot, nextTarget)).rejects.toThrow(
+      'WORKSPACE_ALREADY_REDIRECTED',
+    );
+    await expect(requestWorkspaceMove(owner, bot, nextTarget, current)).rejects.toThrow(
+      'WORKSPACE_ALREADY_REDIRECTED',
+    );
+    expect(await fs.readlink(source)).toBe(originalLink);
+    expect((await inspectTree(target)).digest).toBe(before.digest);
+    expect(await fs.readFile(journal.file, 'utf8')).toBe(beforeReceipt);
+    await expect(fs.lstat(nextTarget)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   // #10568 follow-up: a restored filesystem must remain usable even when its
   // receipt cannot record the recovery, including on every subsequent startup.
   it('uses the restored original after target loss even when the failure receipt cannot be saved', async () => {
@@ -379,16 +441,28 @@ describe('offline workspace relocation', () => {
     });
     expect(await fs.readFile(path.join(target, 'script.js'), 'utf8')).toBe('partial-copy');
     expect(await fs.readFile(path.join(source, 'script.js'), 'utf8')).toBe('original-script');
-    const next = await requestWorkspaceMove(
-      owner,
-      bot,
-      path.join(path.dirname(target), 'new-target'),
-      current,
+    await expect(assertWorkspaceMoveReady(owner, bot)).resolves.toBeUndefined();
+    await fs.writeFile(path.join(source, 'after-failure.txt'), 'original-continues');
+    await recoverWorkspaceMovesAtStartup(owner, true);
+    expect((await workspaceMoveStatus(owner, bot)).phase).toBe('failed');
+    await expect(requestWorkspaceMove(owner, bot, target, current)).rejects.toThrow(
+      'TARGET_EXISTS',
     );
+    expect((await workspaceMoveStatus(owner, bot)).phase).toBe('failed');
+    const nextTarget = path.join(path.dirname(target), 'new-target');
+    const next = await requestWorkspaceMove(owner, bot, nextTarget, current);
+    expect(next).toMatchObject({ phase: 'pending', workspaceAvailable: true });
     const archived = JSON.parse(
       await fs.readFile(path.join(next.historyDirectory, `${original.id}.json`), 'utf8'),
     );
     expect(archived).toMatchObject({ target: original.target, phase: 'failed' });
+    await previousProcess();
+    await recoverWorkspaceMovesAtStartup(owner, true);
+    expect(await workspaceMoveStatus(owner, bot)).toMatchObject({ phase: 'completed' });
+    expect(await fs.readFile(path.join(source, 'after-failure.txt'), 'utf8')).toBe(
+      'original-continues',
+    );
+    expect(await fs.readFile(path.join(target, 'script.js'), 'utf8')).toBe('partial-copy');
   });
 
   it('rejects overlapping destinations, live startup readers, and changed authorization', async () => {

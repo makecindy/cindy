@@ -34,8 +34,11 @@ V2 的 `.git`、`.cindy/memory`（包括索引和 WAL）、`.agents/skills`、�
 Agent 工具或有时间上限的退出清理钩子内复制。
 
 Desktop 和 Node Host 都在打开该 owner 的数据库、放行其任务/记忆/调度服务之前处理请求。
-同一进程内的账号切换不执行新请求；登记进程仍存活时也不执行。已有 schema reader 使启动只能
-取得 reader 租约时不能迁移。启动顺序约束的是 Cindy 自己的服务，不是任意外部程序的文件锁。
+同一进程内的账号切换不执行新请求；登记进程仍存活时也不执行。
+登记时保存系统报告的进程启动身份，恢复时不只检查 PID 是否存在；PID 被新 Cindy 或其他进程复用、
+且新的系统启动时间明确晚于记录时，可以执行恢复。旧回执缺少身份、身份查询失败或结果不足以证明复用时，
+仍保守等待原登记进程退出，不以不同的应用随机令牌认定进程已死。
+已有 schema reader 使启动只能取得 reader 租约时不能迁移。启动顺序约束的是 Cindy 自己的服务，不是任意外部程序的文件锁。
 若此时原目录或已提交的链接仍可验证可用，保留请求并允许应用启动，`status.startupWarning`
 说明正在等待独占启动；不为等待迁移而冻结整个账号。
 共享正式数据的个人测试版本始终使用 reader 租约，因此只登记或查询迁移；应退出共享该数据的实例，
@@ -71,6 +74,8 @@ Desktop 和 Node Host 都在打开该 owner 的数据库、放行其任务/记�
 Agent 应先解释 `status` 的原因和保留位置，再按用户意图选择新的空目录。替换失败或取消的请求时，
 旧记录写入同账号的 `workspace-migrations/history/<伙伴 ID 摘要>/`，当前状态返回该目录，
 保留之前副本的可追溯位置。已重定向的 Home/workspace（包括已完成本次迁移的工作区）暂不支持再次迁移。
+工作区预检对此返回 `WORKSPACE_ALREADY_REDIRECTED`，保持原链接、内容、回执及新目标目录不变；
+Agent 的第一步发现摘要与工具说明都包含此限制，不应删除链接或绕过工具再搬一次。
 
 ## 验证边界
 
@@ -80,3 +85,24 @@ Agent 应先解释 `status` 的原因和保留位置，再按用户意图选择�
 
 Windows 实机仍需验证：跨盘文件与链接内容、文件链接权限、记忆数据库恢复、伙伴后续读写、
 定时脚本的原绝对路径、正常重启和异常中断。验证时只使用隔离伙伴和样本目录。
+
+### 可复核的隔离样本
+
+从仓库根目录运行以下命令；Node 必须匹配当前安装的 `better-sqlite3` ABI。
+样本只在 `os.tmpdir()` 下创建独立目录，结束时清理自己创建的样本，不启动客户端、登录或调用模型。
+
+```sh
+cd apps/host
+node --import tsx --import ./src/loaders/register-raw.mjs scripts/workspace-migration.e2e.mjs
+```
+
+2026-11-18 在 macOS、Node 26 / ABI 147 下执行通过。脚本使用真实子进程登记并退出，
+保留未 checkpoint 的 SQLite WAL；通过生产迁移入口搬迁后读取 WAL 数据，使用迁移前的
+脚本绝对路径及工作目录执行脚本，核对脚本写入在下一次恢复后仍存在。
+另一份隔离样本模拟切换中目标盘消失、回执原子替换持续报 `ENOSPC`，调用真实
+`openOwnerDatabase` 两次，验证原目录恢复、WAL 可读、原目录后续写入保留。
+成功输出一条 `MIGRATION_SAMPLE_RESULT`，其中以下字段均为 `true`：
+`realRequestProcessExited`、`originalAbsoluteScriptAndCwd`、`migratedWalReadable`、
+`missingTargetDuringCutover`、`originalRecovered`、`originalWalReadable`、
+`ownerDatabaseOpenedTwice`、`journalWritesStillFailing`、`originalLaterWritePreserved`。
+这是同盘隔离样本，不代表跨盘、完整客户端、调度器或真实伙伴 SDK 已通过验收，也不代表 Issue 全部范围已完成。
