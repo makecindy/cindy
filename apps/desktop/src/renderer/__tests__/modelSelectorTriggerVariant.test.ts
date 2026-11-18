@@ -1147,7 +1147,7 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
-  it('closes on composer resize and stays closed after an Agent confirmation settles', async () => {
+  it('closes on composer resize', async () => {
     const originalResizeObserver = globalThis.ResizeObserver;
     const composer = document.createElement('div');
     let width = 500;
@@ -1165,15 +1165,12 @@ describe('ModelSelector trigger variants', () => {
       disconnect() { if (this.observingComposer) notifyResize = undefined; }
     }
     Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: MockResizeObserver });
-    let resolveConfirmation!: (confirmed: boolean) => void;
-    const confirmBrowseSwitch = vi.fn(() => new Promise<boolean>((resolve) => { resolveConfirmation = resolve; }));
     try {
       render(React.createElement(ModelSelector, {
         remoteAgent: undefined,
         modelId: 'claude-opus-4-8', effort: 'high', vendorKey: 'cc',
         onModelChange: vi.fn(), onEffortChange: vi.fn(),
         composerRef: { current: composer },
-        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
       }));
       const trigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
       await act(async () => fireEvent.click(trigger));
@@ -1184,16 +1181,6 @@ describe('ModelSelector trigger variants', () => {
       act(() => notifyResize?.());
       expect(screen.queryByTestId('model-options-popover')).toBeNull();
 
-      await act(async () => fireEvent.click(trigger));
-      fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
-      await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
-      fireEvent.click(screen.getByTestId('mock-popover-dismiss'));
-      expect(screen.getByTestId('model-options-popover')).toBeTruthy();
-      width = 400;
-      act(() => notifyResize?.());
-      expect(screen.queryByTestId('model-options-popover')).toBeNull();
-      await act(async () => resolveConfirmation(false));
-      expect(screen.queryByTestId('model-options-popover')).toBeNull();
     } finally {
       Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
     }
@@ -3104,7 +3091,6 @@ describe('ModelSelector trigger variants', () => {
       },
     );
     const onDismiss = vi.fn();
-    const confirmBrowseSwitch = vi.fn(async () => true);
     let releaseFirstSwitch!: () => void;
     const firstSwitch = new Promise<void>((resolve) => {
       releaseFirstSwitch = resolve;
@@ -3143,16 +3129,13 @@ describe('ModelSelector trigger variants', () => {
           onProviderChange: vi.fn(),
           onDismiss,
           modelMemory,
-          agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch },
+          agentSwitch: { currentVendor: 'cc', onSwitch },
         }),
       );
 
       fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
       const row = await screen.findByRole('option', { name: /GPT-5\.5/ });
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
-      // 确认门收**本次目标引擎**(Chris 2026-08-19):调用方靠它判「已有指向该目标的意图」,
-      // 不传目标会让确认框在任何残留意图之后永久静默。
-      expect(confirmBrowseSwitch).toHaveBeenCalledWith('codex');
+      expect(onSwitch).not.toHaveBeenCalled(); // Browsing alone does not stage a switch.
       // 来源 mark 存在说明目标 Agent 仍走 provider sections，而不是退化成 flat。
       expect(row.textContent).toContain('Z');
       // 行尾与悬浮面板同读目标 Agent 的 per-(来源,模型) 记忆，不落模型默认 medium。
@@ -3166,11 +3149,8 @@ describe('ModelSelector trigger variants', () => {
       ).toBe('true');
       fireEvent.click(within(options).getByRole('option', { name: 'low' }));
       expect(setEffort).toHaveBeenCalledWith('codex', 'zeta-codex', 'gpt-5.5', 'low');
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
       await waitFor(() => expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex'));
       expect(onDismiss).not.toHaveBeenCalled();
-      // 配置点击同时选中目标模型；确认门仍只在 Agent 分段切换。
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
 
       fireEvent.click(
         within(screen.getByRole('group', { name: /GPT-5\.5/ })).getByRole('option', {
@@ -3197,67 +3177,9 @@ describe('ModelSelector trigger variants', () => {
           'true',
         ),
       );
-      // 返回当前引擎直接切分段，不重复确认。
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
     }
-  });
-
-  it('keeps the current Agent tab when pre-browse confirmation is canceled', async () => {
-    const confirmBrowseSwitch = vi.fn(async () => false);
-    render(
-      React.createElement(ModelSelectorContent, {
-        remoteAgent: undefined,
-        modelId: 'claude-opus-4-8',
-        effort: 'high',
-        onModelChange: vi.fn(),
-        onEffortChange: vi.fn(),
-        vendorKey: 'cc',
-        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
-    await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('tab', { name: /Codex/ }).getAttribute('aria-selected')).toBe('false');
-    expect(screen.queryByText('newChat.modelSelector.agentSwitch.hint')).toBeNull();
-  });
-
-  it('keeps the expanded model panel open while Agent browse confirmation is shown', async () => {
-    let resolveConfirmation!: (confirmed: boolean) => void;
-    const confirmBrowseSwitch = vi.fn(
-      () =>
-        new Promise<boolean>((resolve) => {
-          resolveConfirmation = resolve;
-        }),
-    );
-    render(
-      React.createElement(ModelSelector, {
-        remoteAgent: undefined,
-        modelId: 'claude-opus-4-8',
-        effort: 'high',
-        onModelChange: vi.fn(),
-        onEffortChange: vi.fn(),
-        vendorKey: 'cc',
-        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
-    fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
-    await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
-
-    // 模拟 AlertDialog 被 Popover 判成外部交互而发出的 close 请求；确认未结束时
-    // 面板仍留在原 Agent 页签，取消后也不发生关闭再打开的闪烁。
-    fireEvent.click(screen.getByTestId('mock-popover-dismiss'));
-    expect(screen.getByTestId('model-options-popover')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
-
-    await act(async () => resolveConfirmation(false));
-    await waitFor(() => expect(screen.getByTestId('model-options-popover')).toBeTruthy());
-    expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('shares inactive model presets across conversations while protecting an active model', () => {

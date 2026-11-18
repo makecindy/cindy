@@ -451,6 +451,8 @@
     },
     "manage": {
       "createLink": "Criar link de compartilhamento",
+      "exportRoster": "Exportar lista de membros",
+      "exportRosterFailed": "Não foi possível salvar a lista de membros.",
       "loading": "Carregando compartilhamento…",
       "notReady": "O compartilhamento não está disponível no momento. Verifique se você entrou e está online; uma nova tentativa será feita automaticamente.",
       "loadFailed": "Não foi possível carregar os detalhes do compartilhamento. Tente novamente em instantes.",
@@ -948,7 +950,7 @@
       "title": "Continuar em {{label}}?",
       "fallbackTitle": "Continuar em {{label}} com um resumo?",
       "fallbackDescription": "Não foi possível restaurar a conversa por completo. Um resumo pode omitir detalhes anteriores e resultados de ferramentas. Cancele para enviar no computador original.",
-      "description": "Para usar a cota de todas as contas de forma equilibrada, envie esta mensagem de {{label}} ({{quota}}). As últimas mensagens e um resumo serão transferidos; detalhes mais antigos podem ser perdidos.",
+      "description": "Para usar a cota de todas as contas de forma equilibrada, envie esta mensagem de {{label}} ({{quota}}). A conversa será transferida. As partes anteriores podem ser condensadas para caber no modelo.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
       "confirm": "Alternar só desta vez",
@@ -6870,6 +6872,10 @@
         "protocol": {
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
+        },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
         },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis. Desativado por padrão.",
@@ -14211,7 +14217,7 @@
         "effortEndFast": "Mais rápido",
         "effortEndSmart": "Mais inteligente",
         "railSameEngine": "Somente {{agent}}",
-        "crossEngineWarning": "Trocar de mecanismo reconstrói o contexto e pode causar perda de conteúdo",
+        "crossEngineWarning": "O mecanismo muda na próxima mensagem e dá continuidade à conversa. As partes anteriores podem ser condensadas.",
         "favoritesSyncFailed": "Não foi possível sincronizar os favoritos. Abra o seletor novamente para tentar outra vez; o computador remoto pode precisar de uma atualização.",
         "favoritesSyncFailedUnreachable": "Os favoritos ainda não foram sincronizados: aquele computador está inacessível. Reabra o seletor quando a conexão voltar.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14227,12 +14233,8 @@
         "ultrafast": "Ultrarrápido"
       },
       "discoveredCopy": {
-        "title": "Usar {{provider}} em “{{device}}”?",
-        "description": "{{unavailable}} Se continuar, ele será executado em “{{device}}”. Você pode voltar aqui quando quiser.",
         "unavailableHere": "{{provider}} neste computador não está disponível agora.",
-        "unavailableOn": "{{provider}} em “{{device}}” não está disponível agora.",
-        "confirm": "Usar",
-        "cancel": "Manter como está"
+        "unavailableOn": "{{provider}} em “{{device}}” não está disponível agora."
       }
     },
     "permissionSelector": {
@@ -14499,33 +14501,14 @@
       "credentialSwitchApplied": "A troca de provedor de modelo entrou em vigor.",
       "credentialSwitchFailed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",
       "modelSwitchContextGuard": {
-        "title": "A conversa atual não cabe neste modelo",
         "warnToast": "Esta conversa já usa {{used}} — cerca de {{pct}}% da capacidade de {{total}} do novo modelo",
-        "overflowDescription": "Esta conversa já usa {{used}}, mais do que o novo modelo comporta ({{total}}, cerca de {{pct}}%). Se você trocar, Cindy fará um breve resumo e continuará. O histórico da conversa será mantido, mas não será repassado integralmente.",
-        "overflowDescriptionRemote": "Esta tarefa remota já usa {{used}} / {{total}} do contexto do modelo menor (cerca de {{pct}}%), então Cindy não pode trocar com segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo.",
-        "confirmSwitch": "Trocar e continuar",
-        "cancelSwitch": "Manter este modelo"
+        "condensedToast": "As partes anteriores da conversa serão condensadas para caber no novo modelo. O histórico completo continua disponível.",
+        "overflowDescriptionRemote": "Esta tarefa remota já usa {{used}} / {{total}} do contexto do modelo menor (cerca de {{pct}}%), então Cindy não pode trocar com segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo."
       },
       "agentSwitch": {
         "engineNotReady": "Mecanismo alterado, mas o novo mecanismo não iniciou; haverá uma nova tentativa quando você enviar uma mensagem",
         "failed": "Falha ao trocar o mecanismo; troca não aplicada",
-        "deferred": "Troca agendada: mudará para {{agent}} · {{model}} quando sua próxima mensagem for enviada",
-        "confirmation": {
-          "title": "Trocar Agent?",
-          "description": "O novo mecanismo do Agent continua por meio de um resumo de transferência, portanto não é possível garantir que o raciocínio e outros conteúdos sejam transferidos perfeitamente; ao voltar, você ainda poderá continuar a sessão do mecanismo original. A troca também interrompe o cache de prompts uma vez e pode aumentar o uso de tokens.",
-          "confirm": "Trocar Agent",
-          "cancel": "Manter Agent atual",
-          "dontShowAgain": "Não me lembrar novamente"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Executar o Agent neste computador novamente?",
-        "titleOther": "Executar o Agent em “{{device}}”?",
-        "description": "O registro da conversa no outro computador não pode ser transferido, então ela continua a partir de um resumo de transferência. O raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
-        "descriptionNativeHistory": "O registro completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, ela continua a partir de um resumo de transferência, e o raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
-        "confirm": "Trocar de computador",
-        "cancel": "Manter como está",
-        "discoveredDescription": "{{reason}} {{description}}"
+        "deferred": "Troca agendada: mudará para {{agent}} · {{model}} quando sua próxima mensagem for enviada"
       }
     },
     "agentSelect": {
@@ -15659,6 +15642,11 @@
         "relocatedTaskComputer": "O Agent agora é executado no computador da tarefa",
         "relocatedElsewhere": "O Agent agora é executado em outro computador",
         "quotaRebalance": "a cota dele deve ser usada primeiro"
+      },
+      "handoffCoverage": {
+        "complete": "Conversa transferida na íntegra",
+        "condensed": "Partes anteriores condensadas",
+        "details": "Conteúdo transferido para continuar a conversa"
       },
       "contextRebuild": {
         "labelOverflow": "Contexto reorganizado, continuando",

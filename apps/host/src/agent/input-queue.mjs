@@ -159,9 +159,14 @@ export function createInputQueue(deps) {
     // Context recovery (context-recovery-assembly.ts): one rollover per runtime, so its memory of
     // continued inputs lasts as long as this owner's runtime; a new owner's runtime gets a new one.
     let rollover = null;
+    const applyPendingAgentSwitchAtDispatch = (id, signal, nextInputChars, assertPreparationCurrent) => deps.applyPendingAgentSwitch?.(id, {
+      signal, nextInputChars, assertPreparationCurrent,
+      prepareModelWindowSwitch: (taskId, target) => rollover?.prepareModelWindowSwitch(taskId, target) ?? 'unknown-context',
+    });
     const executor = createTurnExecutor({ ...deps, storedSessionOptions,
       assertCurrent, isCurrent,
       getRecoveryRollover: deps.createContextRecoveryRollover ? () => rollover : deps.getRecoveryRollover,
+      applyPendingAgentSwitch: applyPendingAgentSwitchAtDispatch,
       prepareUserMessage: attachments?.prepareUserMessage,
       isClearBoundaryCurrent: (id, boundary, generation) => coordinator.getClearBoundaryMs(id) === boundary
         && (generation === undefined || coordinator.isGenerationCurrent(id, generation)),
@@ -372,7 +377,29 @@ export function createInputQueue(deps) {
       /** A context recovery's replay was accepted (the recovery factory's onRebuilt). */
       noteContextRecoveryRebuilt: id => executor.noteRecoveryRebuilt(id),
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
-      preparePiSkillRuntime: (id, dir) => command(id, () => executor.preparePiSkillRuntime(id, dir)),
+      capturePiSkillPreparation(id) {
+        const state = stateFor(id);
+        const admission = state.admission;
+        return () => {
+          assertCurrent();
+          if (closing || state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
+        };
+      },
+      preparePiSkillRuntime: (id, dir, options = {}) => command(id, async (state, admission) => {
+        const check = () => {
+          options.assertPreparationCurrent?.();
+          assertCurrent();
+          if (state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
+        };
+        check();
+        if (options.applyPendingOwnerSelection) {
+          // This explicitly selected Skill send is already under the task's route lock.
+          await applyPendingAgentSwitchAtDispatch(id, undefined, options.nextInputChars, check);
+          check();
+        }
+        await executor.preparePiSkillRuntime(id, dir, check);
+        check();
+      }),
       restoreSession: (id, check) => command(id, async () => {
         await check(); assertCurrent();
         const session = await executor.restoreSession(id, storedSessionOptions(await deps.readSession(id)), check);

@@ -444,6 +444,8 @@
     },
     "manage": {
       "createLink": "生成分享链接",
+      "exportRoster": "导出名单",
+      "exportRosterFailed": "名单保存失败",
       "loading": "正在读取分享…",
       "notReady": "分享服务暂时不可用。确认已登录、网络正常后会自动重试。",
       "loadFailed": "分享信息没有加载出来，请稍后重试。",
@@ -923,7 +925,7 @@
       "title": "换到 {{label}} 继续？",
       "fallbackTitle": "用摘要换到 {{label}} 继续？",
       "fallbackDescription": "无法完整接续原来的对话。使用摘要继续可能遗漏早期细节和工具结果；取消则留在原电脑发送。",
-      "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几条消息和摘要，更早的细节可能记不全。",
+      "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会接续对话。较早的部分可能会压缩，以适应模型的容量。",
       "quota": "还剩 {{left}}%",
       "quotaReset": "还剩 {{left}}%，{{reset}}",
       "confirm": "仅这次换过去",
@@ -6760,6 +6762,10 @@
         "protocol": {
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
+        },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
         },
         "onlyEncrypted": "仅使用 Agent-Net",
         "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。",
@@ -14042,7 +14048,7 @@
         "effortEndFast": "更快",
         "effortEndSmart": "更智能",
         "railSameEngine": "仅 {{agent}}",
-        "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容",
+        "crossEngineWarning": "下一条消息将切换引擎并接续对话，较早的部分可能会压缩",
         "favoritesSyncFailed": "收藏未能同步。请重新打开模型选择器重试；远程电脑可能需要更新。",
         "favoritesSyncFailedUnreachable": "收藏暂时没有同步：那台电脑当前连不上。恢复连接后重新打开即可。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14058,12 +14064,8 @@
         "ultrafast": "超快"
       },
       "discoveredCopy": {
-        "title": "改用「{{device}}」上的 {{provider}}？",
-        "description": "{{unavailable}}确认后由「{{device}}」运行，之后随时可以在这里换回。",
         "unavailableHere": "这台电脑上的 {{provider}} 现在用不了。",
-        "unavailableOn": "「{{device}}」上的 {{provider}} 现在用不了。",
-        "confirm": "改用",
-        "cancel": "保持不变"
+        "unavailableOn": "「{{device}}」上的 {{provider}} 现在用不了。"
       }
     },
     "permissionSelector": {
@@ -14329,33 +14331,14 @@
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",
       "modelSwitchContextGuard": {
-        "title": "这个模型装不下当前对话",
         "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
-        "overflowDescription": "这段对话已经用了 {{used}}，超过新模型能放下的 {{total}}（约 {{pct}}%）。换过去后，Cindy 会先整理一份摘要再继续；对话记录还在，只是不会整段原样带给新模型。",
-        "overflowDescriptionRemote": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。",
-        "confirmSwitch": "切换并继续",
-        "cancelSwitch": "先不换"
+        "condensedToast": "为了适应新模型，较早的对话会压缩，完整的对话记录仍可查看。",
+        "overflowDescriptionRemote": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切换，但新引擎启动失败；发送消息时会自动重试",
         "failed": "引擎切换失败，未生效",
-        "deferred": "已登记切换：下一条消息发出时将切换到 {{agent}} · {{model}}",
-        "confirmation": {
-          "title": "切换 Agent？",
-          "description": "新 Agent 引擎会通过交接摘要续接，思考内容等不能保证完美继承；切回时仍可继续原引擎会话。切换还会让 prompt 缓存中断一次，可能增加 Token 消耗。",
-          "confirm": "切换 Agent",
-          "cancel": "保留当前 Agent",
-          "dontShowAgain": "下次不再提醒"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "改回这台电脑运行 Agent？",
-        "titleOther": "改到「{{device}}」上运行 Agent？",
-        "description": "原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
-        "descriptionNativeHistory": "完整对话记录会复制过去接着用；如果恢复不了，会改用交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
-        "confirm": "换电脑运行",
-        "cancel": "保持不变",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "已登记切换：下一条消息发出时将切换到 {{agent}} · {{model}}"
       }
     },
     "agentSelect": {
@@ -15490,6 +15473,11 @@
         "relocatedTaskComputer": "Agent 已改到任务所在的电脑上运行",
         "relocatedElsewhere": "Agent 已改到另一台电脑上运行",
         "quotaRebalance": "这个账号的配额更该先用"
+      },
+      "handoffCoverage": {
+        "complete": "已完整接续对话",
+        "condensed": "较早的对话已压缩",
+        "details": "用于接续对话的交接内容"
       },
       "contextRebuild": {
         "labelOverflow": "已整理上下文并继续",

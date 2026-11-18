@@ -6,7 +6,7 @@ import {
   TASK_MIGRATION_RECEIVE_TIMEOUT_MS,
 } from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
-import { isRemoteAgentReadInvoke, remoteAgentInvokeHoldMs } from './remoteAgent.js';
+import { REMOTE_AGENT_CHANNEL, isRemoteAgentReadInvoke, remoteAgentInvokeHoldMs } from './remoteAgent.js';
 import { FILE_PEER_CHANNEL, FILE_PEER_STREAM_RPC_MAX_TIMEOUT_MS } from './filePeer.js';
 import { REMOTE_UTILITY_TEXT_CHANNEL } from './remoteUtilityText.js';
 
@@ -21,6 +21,13 @@ export function isRemoteUtilityCancelInvoke(payload: InvokePayload | undefined):
  * sessions:list also serves initial loading and recovery probes, so it stays foreground.
  */
 const BACKGROUND_INVOKE_CHANNELS = new Set([
+  // Shared/device model pickers preload these together (including one capability
+  // read per engine). They must use the existing background cap rather than fill
+  // all ordinary slots and delay navigation or live model/context mutations.
+  'maker:provider:list',
+  'maker:get-capabilities',
+  'maker:list-available-agents',
+  'maker:agent:status',
   'git-context:pr-refs:list',
   'git-context:pr-status',
   'git-context:mr-status',
@@ -64,15 +71,30 @@ const INTERACTIVE_INVOKE_CHANNELS = new Set([
   'maker:agent-task:stop',
 ]);
 
-export function isInteractiveInvoke(channel: string): boolean {
-  return INTERACTIVE_INVOKE_CHANNELS.has(channel);
+export function isInteractiveInvoke(channel: string, args?: readonly unknown[]): boolean {
+  if (INTERACTIVE_INVOKE_CHANNELS.has(channel)) return true;
+  if (channel !== REMOTE_AGENT_CHANNEL) return false;
+  const request = args?.[0];
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
+  const { op, method, payload } = request as { op?: unknown; method?: unknown; payload?: unknown };
+  // Keep bulk HTTP replies, execution frames, uploads and polls out of the
+  // control allowance. Inspect only inline reply metadata, never decompress
+  // or resolve uploaded bodies here. Host validation/authorization is unchanged.
+  if (op === 'reply' && payload && typeof payload === 'object' && 'json' in payload) {
+    const reply = payload.json;
+    return !!reply && typeof reply === 'object' && 'type' in reply
+      && (reply.type === 'interaction' || reply.type === 'callback' || reply.type === 'error');
+  }
+  if (op === 'close') return true;
+  return op === 'call' && (method === 'send' || method === 'steer' || method === 'abort'
+    || method === 'requestGracefulStop' || method === 'stopBackgroundTask');
 }
 
 export type InvokePriority = 'interactive' | 'foreground' | 'background';
 
 /** A caller's background hint never demotes an interactive write. */
-export function resolveInvokePriority(channel: string, backgroundHint?: boolean): InvokePriority {
-  if (isInteractiveInvoke(channel)) return 'interactive';
+export function resolveInvokePriority(channel: string, backgroundHint?: boolean, args?: readonly unknown[]): InvokePriority {
+  if (isInteractiveInvoke(channel, args)) return 'interactive';
   return (backgroundHint ?? isBackgroundInvoke(channel)) ? 'background' : 'foreground';
 }
 

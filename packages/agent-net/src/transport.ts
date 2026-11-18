@@ -406,6 +406,11 @@ export async function createCoreTransport(options: TransportOptions): Promise<Tr
       endpoint.localAddressChanged();
       if (udp) gather();
     },
+    relayRoute() {
+      if (!relay || closed) return null;
+      // 和 linkFor 里发数据报的判断是同一个：UDP 通着就走 UDP，否则走中转 WebSocket。
+      return relayUdp?.up ? { via: 'udp', rttMs: relayUdp.rttMs } : { via: 'websocket', rttMs: null };
+    },
     async close() {
       closed = true; stun?.close();
       // 端点先关：各条连接的关闭包经直连、UDP 中转或 WebSocket 中转发出去，等它们交给系统后再关中转。

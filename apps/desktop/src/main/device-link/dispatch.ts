@@ -3429,7 +3429,7 @@ async function handleInvoke(
   const joiningExisting = !!(existingListing && existingListing.linkEpoch === invokeLinkEpoch);
 
   const controllerAdmission = remoteInvokeAdmissionState(src);
-  const interactive = (!!payload?.channel && isInteractiveInvoke(payload.channel)) || isRemoteUtilityCancelInvoke(payload);
+  const interactive = (!!payload?.channel && isInteractiveInvoke(payload.channel, payload.args)) || isRemoteUtilityCancelInvoke(payload);
   const fileBlock = !!payload && isFilePeerStreamTransfer(payload);
   const controllerAtLimit = (
     controllerAdmission.messages >= REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT
@@ -4069,7 +4069,7 @@ function enqueueRemoteInvokeResult(entry: QueuedRemoteInvokeResult): boolean {
   // Admission lets an interactive request run beyond the message limits; its reply
   // must have a slot too, or the controller times out on a write that already took
   // effect. Reserve exactly the admission headroom (bytes stay unrelaxed).
-  const interactive = !!entry.channel && isInteractiveInvoke(entry.channel);
+  const interactive = !!entry.channel && isInteractiveInvoke(entry.channel, entry.args);
   if (
     entry.bytes <= 0
     || controllerOutbox.messages

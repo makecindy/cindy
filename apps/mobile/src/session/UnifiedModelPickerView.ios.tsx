@@ -199,6 +199,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               subtitle={[
                 mobileAgentLabel(row.config.agent),
                 row.subtitle,
+                row.sourceUnavailableReason,
                 row.quotaLabel,
               ]
                 .filter(Boolean)
@@ -256,6 +257,11 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                   >
                     {row.subtitle}
                   </Text>
+                  {row.sourceUnavailableReason ? (
+                    <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+                      {row.sourceUnavailableReason}
+                    </Text>
+                  ) : null}
                   {row.quotaLabel ? (
                     <Text
                       modifiers={[
@@ -314,7 +320,17 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
     <ComposerNativeRow
       key={item.id}
       title={item.remote?.providerLabel ?? item.label}
-      subtitle={item.quota?.label}
+      subtitle={[item.quota?.label, item.sourceUnavailableReason].filter(Boolean).join(" · ")}
+      subtitleContent={item.sourceUnavailableReason ? (
+        <VStack alignment="leading" spacing={2}>
+          {item.quota?.label ? (
+            <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(colors.textSecondary)]}>{item.quota.label}</Text>
+          ) : null}
+          <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary)]}>
+            {item.sourceUnavailableReason}
+          </Text>
+        </VStack>
+      ) : undefined}
       testID={`${p.testID}.source.${item.id}`}
       selected={p.filter === item.id}
       selectionIcon={mark(Check)}
