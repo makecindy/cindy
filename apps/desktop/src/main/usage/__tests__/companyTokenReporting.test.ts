@@ -82,7 +82,7 @@ it.each([
     expect(readdirSync(dir)).toEqual([]);
   },
 );
-it('keeps the policy until its hourly recheck and ignores unchanged identity notifications', async () => {
+it('keeps the policy until its 12-hour recheck and ignores unchanged identity notifications', async () => {
   service.dispose();
   vi.useFakeTimers();
   try {
@@ -92,7 +92,7 @@ it('keeps the policy until its hourly recheck and ignores unchanged identity not
     await vi.advanceTimersByTimeAsync(0);
     const onAuthChange = ports.subscribe.mock.lastCall![0];
     onAuthChange();
-    await vi.advanceTimersByTimeAsync(59 * 60_000);
+    await vi.advanceTimersByTimeAsync(12 * 60 * 60_000 - 60_000);
     expect(ports.fetch).toHaveBeenCalledTimes(1);
     expect(startCompanyUsage()).toBeTypeOf('function');
     await vi.advanceTimersByTimeAsync(60_000);

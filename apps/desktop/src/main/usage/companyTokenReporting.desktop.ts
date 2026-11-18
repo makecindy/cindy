@@ -12,7 +12,7 @@ import { dailyUploadSlot, latestUploadableDay } from './enterpriseDailyUpload.js
 import { CompanyTokenQueue, projectUsage, type CompanyPolicy } from './companyTokenQueue.js';
 import { installCompanyUsageCapture, installExecutionReporting } from './companyTokenFacts.js';
 
-const POLICY_CHECK_INTERVAL_MS = 60 * 60_000;
+const POLICY_CHECK_INTERVAL_MS = 12 * 60 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
 function identity() {
