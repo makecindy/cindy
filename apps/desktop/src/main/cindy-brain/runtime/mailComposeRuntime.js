@@ -405,7 +405,7 @@ var cindyMail = (function () {
       return navigator.locks.request('mail-restore:' + key, () => withMailCompose(key, async function () {
         if (mailEdits.has(key)) return true;
         const records = await mailRecords(), record = records[key];
-        if (!record || record.callId !== callId || record.state !== 'draft' || record.unverifiedAdditions || uncertainMailRoute(records, key)) return false;
+        if (!record || record.callId !== callId || record.state !== 'draft' || record.unverifiedAdditions || uncertainMailRoute(records, key) || lostMailUploadRoute(records, key)) return false;
         const saved = await readMailCard(callId, sourceCallId);
         const card = saved?.ok && saved.draft;
         if (!card || card.key !== key || card.accountId !== record.account || card.draftId !== record.draftId) return false;
@@ -558,23 +558,31 @@ var cindyMail = (function () {
       if (created) {
         let durable;
         try { durable = presented?.ok && await readMailCard(message.callId, message.sourceCallId); } catch (_) { /* Keep previous routes. */ }
-        await mailRecords(records => {
-          if (mailEdits.get(key) !== created || records[key]?.callId !== message.callId) return;
-          if (durable?.ok && durable.draft?.key === key && durable.draft.accountId === account.accountId &&
-              durable.draft.draftId === readBack.draftId) {
-            for (const [id, expected] of retired) {
-              if (JSON.stringify(records[id]) !== expected) continue;
-              cancelMailSend(id);
-              clearTimeout(mailEdits.get(id)?.timer);
-              mailEdits.delete(id);
-              delete records[id];
+        try {
+          await mailRecords(records => {
+            const removed = [];
+            if (mailEdits.get(key) !== created || records[key]?.callId !== message.callId) return removed;
+            if (durable?.ok && durable.draft?.key === key && durable.draft.accountId === account.accountId &&
+                durable.draft.draftId === readBack.draftId) {
+              for (const [id, expected] of retired) {
+                if (JSON.stringify(records[id]) !== expected) continue;
+                removed.push([id, mailEdits.get(id)]);
+                delete records[id];
+              }
+            } else if (!presented?.ok) {
+              removed.push([key, created]);
+              delete records[key];
             }
-          } else if (!presented?.ok) {
-            clearTimeout(created.timer);
-            mailEdits.delete(key);
-            delete records[key];
-          }
-        });
+            return removed;
+          }, removed => {
+            for (const [id, edit] of removed) {
+              if (mailEdits.get(id) !== edit) continue;
+              cancelMailSend(id);
+              clearTimeout(edit?.timer);
+              mailEdits.delete(id);
+            }
+          });
+        } catch (_) { /* Retirement is cleanup: retain routes and private editors on failure. */ }
       }
       if (presented?.ok && created && !created.error && created.revision !== created.savedRevision)
         scheduleMailSave(key, message.callId, copy.failed);
@@ -668,6 +676,20 @@ var cindyMail = (function () {
       return own && Object.entries(records).find(([id, r]) => r.account === own.account && r.draftId === own.draftId &&
         r.state === 'pending' && (!mailEdits.get(id) || mailEdits.get(id).uncertain))?.[1];
     }
+    function lostMailUploadRoute(records, key) {
+      const own = records[key];
+      return own && Object.entries(records).find(([id, r]) => r.account === own.account && r.draftId === own.draftId &&
+        r.unverifiedAdditions && !mailEdits.get(id)?.additions?.length)?.[1];
+    }
+    async function blockLostMailUploads(records, key) {
+      const record = records[key];
+      const result = { ok: false, execution: 'unknown', message: '之前操作的结果尚未确认，请先检查邮箱，未再次发送。' };
+      // Seal only the observed editors, not durable draft states. The original
+      // upload flag keeps writes locked across restart and still permits delete.
+      markMailUncertain(records, record, result);
+      await publishMailOutcome(record, undefined, records, result.message);
+      return result;
+    }
     function finalizeMailRoutes(records, record) {
       for (const [key, route] of Object.entries(records)) {
         if (route.account !== record.account || route.draftId !== record.draftId) continue;
@@ -681,6 +703,7 @@ var cindyMail = (function () {
           clearTimeout(edit.timer);
           edit.timer = undefined;
           edit.sent = record.state === 'sent';
+          edit.uncertain = false;
           edit.sending = false;
           edit.deleting = record.state === 'deleted';
           edit.additions = [];
@@ -760,8 +783,10 @@ var cindyMail = (function () {
         const outcome = mailDraftOutcome(record);
         if (outcome) return outcome;
         if (Object.entries(records).some(([id, r]) => id !== key && r.account === record.account &&
-            r.draftId === record.draftId && r.unverifiedAdditions))
+            r.draftId === record.draftId && r.unverifiedAdditions)) {
+          if (lostMailUploadRoute(records, key)) return blockLostMailUploads(records, key);
           return { ok: false, execution: 'unknown', message: '之前操作的结果尚未确认，请先检查邮箱，未再次发送。' };
+        }
         var selected = await adapter.selectAccount(record.account);
         if (!selected.ok)
           return {
@@ -908,11 +933,14 @@ var cindyMail = (function () {
               try { saved = await readMailCard(record.callId, sourceCallId); } catch (_) { /* Recovery stays conservative. */ }
               const hostFields = saved?.ok && saved.draft?.key === key && saved.draft.accountId === record.account &&
                 saved.draft.draftId === record.draftId ? Object.fromEntries(saved.draft.fields.map(f => [f.name, f.value])) : undefined;
-              const [attempt, base, host] = await Promise.all([
-                fieldDigests(fields), fieldDigests(draftValues(edit.readBack)), fieldDigests(hostFields || {}),
+              const hostBase = hostFields && saved.draft.baseValues;
+              const priorProof = record.completedSaveHashes;
+              const [attempt, previous, base, host] = await Promise.all([
+                fieldDigests(fields), fieldDigests(draftValues(edit.readBack)), fieldDigests(hostBase || {}), fieldDigests(hostFields || {}),
               ]);
               record.completedSaveHashes = Object.fromEntries(Object.keys(attempt).map(name =>
-                [name, { base: base[name], attempt: attempt[name],
+                [name, { base: base[name] || priorProof?.[name]?.base || previous[name],
+                  previous: previous[name], attempt: attempt[name],
                   host: hostFields && edit.revision !== revision && comparable(name, hostFields[name]) === comparable(name, edit.fields[name])
                     ? attempt[name] : host[name] }]));
               if (edit.additions?.length) record.unverifiedAdditions = true;
@@ -1211,9 +1239,12 @@ var cindyMail = (function () {
         edit = mailEdits.get(key);
       }
       if (edit?.uncertain) {
-        const record = (await mailRecords())[key];
-        if (record?.callId === message.callId) await publishMailOutcomeCard(key, record);
-        return;
+        const records = await mailRecords(), record = records[key];
+        if (!(match[1] === 'delete' && record?.state === 'draft' && lostMailUploadRoute(records, key))) {
+          if (record?.callId === message.callId) await publishMailOutcomeCard(key,
+            record.state === 'draft' ? { ...record, state: 'pending' } : record);
+          return;
+        }
       }
       if (edit?.deleting && match[1] !== "delete") {
         const record = (await mailRecords())[key];
@@ -1292,6 +1323,10 @@ var cindyMail = (function () {
       const currentRoutes = await mailRecords();
       var record = currentRoutes[key];
       if (!record || record.callId !== message.callId) return;
+      if (match[1] !== 'delete' && lostMailUploadRoute(currentRoutes, key)) {
+        await blockLostMailUploads(currentRoutes, key);
+        return;
+      }
       if (uncertainMailRoute(currentRoutes, key)) {
         await publishMailOutcomeCard(key, { ...record, state: 'pending' });
         return;
@@ -1395,6 +1430,20 @@ var cindyMail = (function () {
             { ok: false, execution: 'not_executed', message: (await mailCopy()).unavailable };
         });
         if (inspected) return inspected;
+        records = await mailRecords();
+        candidates = Object.keys(records).filter(id => records[id].account === account && records[id].draftId === draftId);
+        key = candidates[0];
+      }
+      if (candidates.length && operation !== 'delete' && (operation === 'get' || readOnly === false) && lostMailUploadRoute(records, key)) {
+        const blocked = await withMailCompose(key, async function () {
+          const current = await mailRecords();
+          if (!lostMailUploadRoute(current, key)) return undefined;
+          const record = current[key];
+          const result = readOnly === false ? await blockLostMailUploads(current, key) : undefined;
+          return operation === 'get' ? await readMailDraft(record, sourceCallId) ||
+            { ok: false, execution: 'not_executed', message: (await mailCopy()).unavailable } : result;
+        });
+        if (blocked) return blocked;
         records = await mailRecords();
         candidates = Object.keys(records).filter(id => records[id].account === account && records[id].draftId === draftId);
         key = candidates[0];

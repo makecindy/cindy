@@ -2335,3 +2335,136 @@ for (const operation of ['update', 'send', 'delete']) for (const fanoutFailure o
   assert.equal((await f.tool('delete')).execution, 'unknown');
   assert.equal(f.writes.length, writes); assert.equal(f.deletes.length, deletes);
 });
+
+// Post-acceptance route retirement is cleanup, not permission to discard RAM
+// before KV commits. Exercise the public present and original card-action paths.
+for (const failure of ['read', 'write']) test(`accepted replacement survives route retirement failure: ${failure}`, async () => {
+  let oldKey, failRead = false, f;
+  f = fixture({ kvRead: () => {
+    if (failRead) { failRead = false; throw new Error('Synthetic retirement GET failure'); }
+  }, kvWrite: next => {
+    if (oldKey && !next.mailDraftCards[oldKey]) throw new Error('Synthetic retirement PUT failure');
+  }, hostRead: request => {
+    if (failure === 'read' && oldKey && request.callId === 'card-call' && f.cards.at(-1)?.draft?.key !== oldKey) failRead = true;
+  } });
+  await f.present(); oldKey = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Private unsaved original' });
+  assert.equal(await f.present(), true);
+  assert.ok(f.kv().mailDraftCards[oldKey]);
+  const replacement = f.cards.at(-1).draft.key;
+  assert.notEqual(replacement, oldKey);
+  await f.card('change', { ...f.values(), body: 'Recovered original' }, { actionId: `mail:change:${oldKey}` });
+  assert.equal(f.cards.at(-1).draft?.key, oldKey);
+  assert.equal(f.cards.at(-1).draft.fields.find(x => x.name === 'body').value, 'Recovered original');
+  assert.equal(f.writes.length, 0);
+});
+
+// A missing upload descriptor belongs to the logical draft, not just A's route.
+// B can inspect provider-only data, but cannot regain a writable editor (unit).
+for (const readOnly of [false, true]) test(`retained route inspects sibling lost uploads without unlocking: readonly=${readOnly}`, async () => {
+  let f;
+  f = fixture({ richText: true, allowCardRead: false, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body, bodyHtml: request.fields.bodyHtml });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present(); const a = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get'); const b = f.cards.at(-1).draft.key;
+  await f.card('change', { ...f.values(), subject: 'B private subject' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  await f.card('attach', f.values(), { actionId: `mail:attach:${a}`, mailAttachment: { path: 'synthetic-upload', filename: 'lost.txt', bytes: 3, sha256: 'a'.repeat(64) } });
+  assert.equal(f.kv().mailDraftCards[a].unverifiedAdditions, true);
+  assert.equal(f.kv().mailDraftCards[b].unverifiedAdditions, undefined);
+  const privateB = copy(f.cards.findLast(c => c.draft?.key === b).draft.fields);
+  f.restart(); const before = f.kv(), cards = f.cards.length;
+  const read = await f.tool('get', { readOnly });
+  assert.equal(read.ok, true); assert.equal(read.data.cardEdits, undefined);
+  assert.equal(read.data.readBack.editor.body, 'Saved B');
+  if (readOnly) assert.equal(f.cards.length, cards);
+  for (const card of f.cards.slice(cards)) assert.equal(card.sourceCallId, undefined);
+  assert.deepEqual(f.kv(), before);
+  await f.card('change', { ...f.values(), body: 'Too late' }, { callId: 'agent-call', actionId: `mail:change:${b}` });
+  await f.advance(10000);
+  assert.equal(f.cards.slice(cards).some(c => c.draft), false);
+  assert.equal(f.cards.at(-1).statusOnly.state, 'unconfirmed');
+  assert.deepEqual(f.cards.findLast(c => c.draft?.key === b).draft.fields, privateB);
+  assert.deepEqual(f.kv(), before);
+  assert.equal((await f.tool('send')).execution, 'unknown');
+  assert.equal((await f.tool('update')).execution, 'unknown');
+  assert.equal(f.writes.length, 1);
+  assert.equal((await f.tool('delete')).data?.deleted, true);
+  assert.equal(f.deletes.length, 1); assert.equal(f.writes.length, 1);
+});
+
+// Two executed failures must retain the durable Host anchor, not just the
+// immediately preceding mailbox version. Public recovery/send paths (unit).
+for (const operation of ['get', 'send']) for (const rollback of ['Original', 'Saved B', 'Saved C']) test(`consecutive completed failures retain the durable recovery anchor: ${operation}, ${rollback}`, async () => {
+  let f, drop = false;
+  f = fixture({ durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    if (!request.send) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present(); drop = true;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal((await f.tool('get')).ok, true);
+  await f.card('change', { ...f.values(), body: 'Saved C' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal(f.durableCards.at(-1).draft.fields.find(x => x.name === 'body').value, 'Original');
+  f.externalEdit({ body: rollback }); drop = false; f.restart();
+  const result = await f.tool(operation);
+  if (operation === 'get') assert.ok(result.data.conflicts.includes('body'));
+  else assert.equal(result.ok, false);
+  await f.advance(10000);
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.current().editor.body, rollback);
+  assert.ok(Object.keys((await f.resolve()).completedSaveHashes).length);
+});
+
+for (const operation of ['get', 'send']) test(`consecutive failures keep an earlier proof if the second Host lookup rejects: ${operation}`, async () => {
+  let f, drop = false, rejectHost = false;
+  f = fixture({ hostRead: () => { if (rejectHost) throw new Error('Synthetic second-failure Host read rejection'); }, durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    if (!request.send) {
+      f.externalEdit({ body: request.fields.body });
+      if (f.writes.length === 2) rejectHost = true;
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present(); drop = true;
+  await f.card('change', { ...f.values(), body: 'Saved B' });
+  await f.tool('update'); await f.tool('get');
+  await f.card('change', { ...f.values(), body: 'Saved C' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  rejectHost = false; drop = false; f.externalEdit({ body: 'Original' }); f.restart();
+  const result = await f.tool(operation);
+  if (operation === 'get') assert.ok(result.data.conflicts.includes('body'));
+  else assert.equal(result.ok, false);
+  await f.advance(10000);
+  assert.equal(f.writes.length, 2); assert.equal(f.current().editor.body, 'Original');
+});
+
+// Actual durable publication is a normal control: a second completed failure
+// may still recover and send the latest confirmed body after restart.
+test('consecutive failures recover when the Host retained the later edits', async () => {
+  let f;
+  f = fixture({ write: request => {
+    if (!request.send) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  for (const body of ['Saved B', 'Saved C']) {
+    await f.card('change', { ...f.values(), body });
+    assert.equal((await f.tool('update')).execution, 'executed');
+    assert.equal((await f.tool('get')).ok, true);
+  }
+  f.restart();
+  assert.equal((await f.tool('send')).ok, true);
+  assert.equal(f.writes.filter(x => x.send).length, 1);
+  assert.equal(f.writes.at(-1).fields.body, 'Saved C');
+});
