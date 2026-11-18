@@ -54,6 +54,8 @@ import {
   OneShotError,
   AgentNotAuthenticatedError,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
+  AgentStartupCleanupPendingError,
   TurnPermissionPolicyUnsupportedError,
   TurnDispatchRejectedError,
   type AgentSessionHandle,
@@ -3679,6 +3681,8 @@ assertRouteCurrent();
       const startup = {
         signal, threadDispatched: false, retriedResume,
         cleanup: undefined as (() => Promise<void>) | undefined,
+        threadCleanup: undefined as (() => Promise<boolean>) | undefined,
+        whenThreadReleased: undefined as (() => Promise<void>) | undefined,
         customContext: undefined as (() => Promise<void>) | undefined,
       };
       try {
@@ -3687,6 +3691,15 @@ assertRouteCurrent();
           startup.customContext = cleanup ?? undefined;
         }, startup);
       } catch (error) {
+        const retryCleanup = async (): Promise<void> => {
+          const released = await startup.threadCleanup?.();
+          if (startup.customContext) await startup.customContext();
+          else if (!released) await startup.whenThreadReleased?.();
+        };
+        let resourcesReleased = false;
+        let threadCleanupError: unknown;
+        try { resourcesReleased = await startup.threadCleanup?.() ?? false; }
+        catch (cleanupError) { threadCleanupError = cleanupError; }
         if (!startup.threadDispatched
           && (error instanceof CodexRouteSelectionChangedError || error instanceof CodexNativeInitializationStoppedError || signal.aborted)) {
           // No thread was submitted. Release this startup's lease and retire only
@@ -3696,7 +3709,13 @@ assertRouteCurrent();
           throw new AgentStartupStoppedError(signal.aborted ? signal.reason : error);
         }
         if (startup.customContext) {
-          await startup.customContext();
+          try { await startup.customContext(); }
+          catch (cleanupError) {
+            if (!startup.whenThreadReleased) throw cleanupError;
+            throw new AgentStartupCleanupPendingError(cleanupError instanceof Error ? cleanupError.message : 'Codex isolated startup cleanup remains unconfirmed', {
+              cause: error, whenStopped: startup.whenThreadReleased(), retryCleanup,
+            });
+          }
           if (!retriedResume && !signal.aborted && error instanceof LocalResumeTimeoutError) {
             // Strict cleanup above confirmed that the old writer has exited.
             retriedResume = true;
@@ -3707,6 +3726,12 @@ assertRouteCurrent();
           // onStartFailed hook releases the directory lease.
           if (!opts.remoteHostId) throw new AgentStartupStoppedError(error);
         }
+        if (threadCleanupError && startup.whenThreadReleased) {
+          throw new AgentStartupCleanupPendingError('Codex startup failed and task cleanup remains unconfirmed', {
+            cause: error, whenStopped: startup.whenThreadReleased(), retryCleanup,
+          });
+        }
+        if (resourcesReleased) throw new AgentStartupResourcesReleasedError(error);
         throw error;
       }
     }
@@ -3715,7 +3740,8 @@ assertRouteCurrent();
   private async startSessionInternal(
     opts: StartSessionOptions,
     registerFailedCustomContextStartupCleanup: (cleanup: (() => Promise<void>) | null) => void,
-    startup: { signal: AbortSignal; threadDispatched: boolean; retriedResume: boolean; cleanup?: () => Promise<void> },
+    startup: { signal: AbortSignal; threadDispatched: boolean; retriedResume: boolean; cleanup?: () => Promise<void>;
+      threadCleanup?: () => Promise<boolean>; whenThreadReleased?: () => Promise<void> },
   ): Promise<AgentSessionHandle> {
     // scope 带完整 s:<sessionId> 前缀 → host logger 落盘时提取 business sessionId,
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
@@ -5390,7 +5416,7 @@ assertRouteCurrent();
       const purpose = reviewMode ? 'Review' : accountSessionHost ? 'account' : 'custom context';
       const reason = `Cindy ${purpose} host is single-session`;
       await this.retireHostKey(currentHostKey, reason, {
-        failIfActive: false,
+        failIfActive: true,
         logPrefix: `codex ${purpose.toLowerCase()} host cleanup`,
         ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
         expectedGeneration: hostGeneration,
@@ -5409,6 +5435,7 @@ assertRouteCurrent();
         // retireHostKey may skip an already-replaced generation, or preserve a
         // shutdown error for retry. Only confirmed retirement of our captured
         // host may authorize releasing this startup's workdir guard.
+        if (host.activeSubscriptions > 0) throw new Error('Codex startup cleanup cannot retire a host with another active task');
         await host.retire('Codex isolated startup failed', { throwOnTransportError: true });
       });
     }
@@ -6152,7 +6179,9 @@ assertRouteCurrent();
         log.warn('registerCodexMcpThreadContext threw', { error: String(e) });
       }
     };
+    let registeredRootCodexThreadId: string | undefined;
     const unregisterCodexMcpContext = (threadId: string): void => {
+      if (registeredRootCodexThreadId === threadId) registeredRootCodexThreadId = undefined;
       textOnlyPolicyCleanups.get(threadId)?.();
       textOnlyPolicyCleanups.delete(threadId);
       // 与 register 对齐:remote thread 同样注册过 context,close 时同样注销。
@@ -6173,6 +6202,7 @@ assertRouteCurrent();
     const registerRootCodexMcpContext = (): void => {
       descendantMcpThreadIds.delete(threadId);
       registerCodexMcpContext(threadId, 'root');
+      registeredRootCodexThreadId = threadId;
     };
     const registerDescendantCodexMcpContext = (descendantThreadId: string): void => {
       if (descendantThreadId === threadId || descendantMcpThreadIds.has(descendantThreadId)) return;
@@ -6558,21 +6588,26 @@ assertRouteCurrent();
     };
     const retireCapturedHostAfterThreadCleanupFailure = async (
       reason: string,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
+      releaseHostBindingLeaseIfNeeded();
       if (!isCurrentHost()) {
         log.warn('thread cleanup failed after host replacement; skipping stale retire', {
           threadId,
           hostKey: currentHostKey,
           reason,
         });
-        return;
+        return false;
       }
+      if (this.hostActiveUseCount(currentHostKey, host) > 0) return false;
       await this.retireHostKey(currentHostKey, reason, {
-        failIfActive: false,
+        failIfActive: true,
         logPrefix: 'codex thread cleanup',
         ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
         expectedGeneration: hostGeneration,
+        throwOnShutdownFailure: true,
       });
+      await host.retire(reason, { throwOnTransportError: true });
+      return true;
     };
     const runThreadCleanupOrRetire = async (params: {
       cleanupThreadId: string;
@@ -6591,9 +6626,10 @@ assertRouteCurrent();
           error: error instanceof Error ? error.message : String(error),
           retireHostOnFailure: params.retireHostOnFailure ?? true,
         });
+        let exitConfirmed = false;
         if (params.retireHostOnFailure !== false) {
           try {
-            await retireCapturedHostAfterThreadCleanupFailure(params.reason);
+            exitConfirmed = await retireCapturedHostAfterThreadCleanupFailure(params.reason);
           } catch (retireError) {
             log.warn('Codex host retire after thread cleanup failure threw', {
               threadId: params.cleanupThreadId,
@@ -6603,7 +6639,7 @@ assertRouteCurrent();
           }
         }
         if (params.closeHandleOnFailure !== false) terminateHandleAfterThreadCleanupFailure(params.reason);
-        return false;
+        return params.closeHandleOnFailure === false && exitConfirmed;
       }
     };
     const releaseCurrentThreadSubscription = async (
@@ -6620,6 +6656,7 @@ assertRouteCurrent();
         closeHandleOnFailure: opts.closeHandleOnFailure,
       });
       if (subscription === currentSubscription) subscription = null;
+      if (!released && subscription === null) subscription = currentSubscription;
       return released;
     };
     const unsubscribeDetachedThread = async (
@@ -6745,6 +6782,24 @@ assertRouteCurrent();
      */
     // Local handle identity only; never serialized into native RPC params.
     const threadOwner = {};
+    startup.threadCleanup = async () => {
+      let released = false;
+      try {
+        if (subscription) {
+          await subscription.release();
+          subscription = null;
+          released = true;
+        }
+        return (await host.releaseUncommittedThreadOwner?.(threadOwner) ?? false) || released;
+      } finally {
+        if (registeredRootCodexThreadId) unregisterCodexMcpContext(registeredRootCodexThreadId);
+        unregisterDescendantCodexMcpContexts();
+        releaseHostBindingLeaseIfNeeded();
+        eventQueue.end();
+      }
+    };
+    let threadReleaseProof: Promise<void> | undefined;
+    startup.whenThreadReleased = () => threadReleaseProof ??= host.whenThreadOwnerReleased(threadOwner);
     function criticalThreadRpcOptions(): { timeoutMs: number; extendWhileProgress?: RequestProgressDeadline } {
       const linkActivity = hosted?.linkActivity;
       if (!linkActivity) return { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS };
@@ -7354,7 +7409,7 @@ assertRouteCurrent();
       const resp = await withMcpDiscoveryContext(() => {
           assertCurrentHost('thread/start dispatch');
           return host.request<ThreadStartResponse>(Method.ThreadStart, params, {
-            ...criticalThreadRpcOptions(),
+            ...criticalThreadRpcOptions(), threadOwner,
             beforeDispatch: () => {
               assertCurrentHost('thread/start write');
               startup.threadDispatched = true;
@@ -13795,7 +13850,12 @@ assertRouteCurrent();
     async function closeSessionHandle(
       opts: { retireHostOnCleanupFailure?: boolean } = {},
     ): Promise<void> {
-      if (closed) return;
+      if (closed) {
+        if (subscription && !await releaseCurrentThreadSubscription('retry failed task cleanup', {
+          retireHostOnFailure: false, closeHandleOnFailure: false,
+        })) throw new Error('Codex task cleanup remains unconfirmed');
+        return;
+      }
       closed = true;
       helperRecoveryAbort?.abort();
       finishManualCompact(new Error('Codex session closed during compaction'));
@@ -13835,10 +13895,12 @@ assertRouteCurrent();
       // thread 发 turn/start（assertCurrentHost 会抛，但那是在无人接收的
       // setTimeout 回调里，白留一次失败与一条误导日志）。
       try { discardOverloadRetry('session_closed'); } catch (e) { log.warn('cancel overload retry threw', { error: String(e) }); }
-      await releaseCurrentThreadSubscription('session close subscription release', {
+      const released = await releaseCurrentThreadSubscription('session close subscription release', {
         retireHostOnFailure: opts.retireHostOnCleanupFailure ?? true,
+        closeHandleOnFailure: false,
       });
       try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+      if (!released) throw new Error('Codex task cleanup remains unconfirmed');
     }
     // ── AgentSessionHandle ──────────────────────────────────────────────────
     const requestUserInterrupt = (turnId: string) => {

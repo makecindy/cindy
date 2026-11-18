@@ -131,10 +131,12 @@ for await (const line of createInterface({ input: process.stdin })) {
           .some(event => (event.data as { text?: string }).text === 'Done.')).toBe(true);
         expect(events.some(event => event.type === 'done')).toBe(true);
       } finally {
-        await stopWindowsFixtureTree(nativePid);
-        await handle?.close();
-        await agent.dispose();
-        await host.retire('helper readiness test cleanup');
+        try { await handle?.close(); }
+        finally {
+          await stopWindowsFixtureTree(nativePid);
+          await agent.dispose();
+          await host.retire('helper readiness test cleanup');
+        }
       }
     }
     expect(modelCalls).toBe(3);
@@ -264,12 +266,14 @@ it.skipIf(!binaryPath).each(['initialize', 'tools/list'] as const)(
       expect(docsInitializes).toBe(docsBeforePeer);
       expect((await peer.readMcpServerTools?.('cindy_docs'))?.state).toBe('connected');
     } finally {
-      await stopWindowsFixtureTree(nativePid);
-      for (const handle of handles) await handle.close();
-      await agent?.dispose();
-      await host?.retire('helper recovery fixture complete');
-      await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
-      await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      try { for (const handle of handles) await handle.close(); }
+      finally {
+        await stopWindowsFixtureTree(nativePid);
+        await agent?.dispose();
+        await host?.retire('helper recovery fixture complete');
+        await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
+        await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      }
     }
   }, 30_000,
 );

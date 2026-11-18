@@ -371,8 +371,14 @@ export class CodexNativeInitializationStoppedError extends Error {}
 interface ThreadResumeClaim {
   owner: object;
   previous?: ThreadResumeClaim;
-  rejected?: boolean;
-  cleanupRequested?: boolean;
+  phase: 'preparing' | 'pending' | 'ready' | 'active' | 'rejected' | 'uncertain';
+  release?: {
+    promise: Promise<void>;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+    state: 'waiting' | 'running' | 'done' | 'failed';
+    deadlineAt: number;
+  };
 }
 
 type ThreadResumeOwnership = (() => boolean) & { owner?: object };
@@ -397,6 +403,8 @@ export class AppServerHost {
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
   // Claims start before resume awaits transport startup, not at subscription.
   private readonly threadResumeOwners = new Map<string, ThreadResumeClaim>();
+  private readonly threadOwnerCleanupProofs = new Map<object, { promise: Promise<void>; resolve: () => void }>();
+  private readonly releasedThreadOwners = new WeakSet<object>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
   private readonly lineageRoots = new Map<string, string>();
   /**
@@ -970,35 +978,62 @@ export class AppServerHost {
     opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline; threadOwner?: object },
   ): Promise<R> {
     const threadId = method === Method.ThreadResume ? (params as { threadId?: unknown } | undefined)?.threadId : undefined;
-    if (typeof threadId !== 'string') return this.dispatchRequest<R>(method, params, opts);
+    if (typeof threadId !== 'string') {
+      const result = await this.dispatchRequest<R>(method, params, opts);
+      if (opts?.threadOwner && (method === Method.ThreadStart || method === Method.ThreadFork)) {
+        const createdId = (result as { thread?: { id?: unknown } })?.thread?.id;
+        if (typeof createdId === 'string') {
+          this.releasedThreadOwners.delete(opts.threadOwner);
+          this.threadResumeOwners.set(createdId, { owner: opts.threadOwner, phase: 'ready' });
+        }
+      }
+      return result;
+    }
     const previous = this.threadResumeOwners.get(threadId);
     const claim: ThreadResumeClaim = {
-      owner: opts?.threadOwner ?? (this.subscribers.has(threadId) ? previous?.owner : undefined) ?? {}, previous,
+      owner: opts?.threadOwner ?? (this.subscribers.has(threadId) ? previous?.owner : undefined) ?? {}, previous, phase: 'preparing',
     };
+    this.releasedThreadOwners.delete(claim.owner);
     this.threadResumeOwners.set(threadId, claim);
     let dispatched = false;
+    const beganAt = Date.now();
     try {
-      const result = await this.dispatchRequest<R>(method, params, { ...opts, beforeDispatch: () => {
+      // Never write a new resume behind an unconfirmed destructive cleanup.
+      if (previous?.phase === 'uncertain') throw new Error('Codex thread runtime is quarantined after an unconfirmed resume');
+      if (previous?.release?.state === 'running') await previous.release.promise;
+      if (previous?.release?.state === 'failed') {
+        await this.requestThreadRelease(threadId, previous);
+      }
+      if (this.threadResumeOwners.get(threadId) !== claim) throw new Error('Codex thread resume was superseded before dispatch');
+      const remaining = opts?.timeoutMs == null ? undefined : opts.timeoutMs - (Date.now() - beganAt);
+      if (remaining !== undefined && remaining <= 0) throw new Error('Codex thread cleanup consumed the resume timeout budget');
+      claim.phase = 'pending';
+      const result = await this.dispatchRequest<R>(method, params, { ...opts, ...(remaining === undefined ? {} : { timeoutMs: remaining }), beforeDispatch: () => {
         opts?.beforeDispatch?.();
         dispatched = true;
       } });
-      claim.previous = undefined; // Accepted ownership no longer needs rollback history.
+      claim.phase = 'ready'; // Subscription, not the native response, commits a takeover.
+      if (previous?.owner === claim.owner && previous.phase === 'active') {
+        claim.phase = 'active';
+        claim.previous = undefined;
+      }
+      this.settleThreadRelease(threadId);
       return result;
     } catch (error) {
       // A timeout/write failure cannot prove the native resume was rejected.
       if (!dispatched || error instanceof AppServerResponseError) {
-        claim.rejected = true;
-        if (this.threadResumeOwners.get(threadId) === claim) {
-          let restored = claim.previous;
-          while (restored?.rejected) restored = restored.previous;
-          if (restored) this.threadResumeOwners.set(threadId, restored);
-          else this.threadResumeOwners.delete(threadId);
-          // release/late cleanup may have arrived while this claim fenced it.
-          if (restored?.cleanupRequested && !this.subscribers.has(threadId)) {
-            await this.unsubscribeThread(threadId, this.captureThreadResumeOwnership(threadId));
+        claim.phase = 'rejected';
+        this.settleThreadRelease(threadId);
+      } else {
+        claim.phase = 'uncertain';
+        for (let prior = claim.previous; prior; prior = prior.previous) {
+          if (prior.release?.state === 'waiting') {
+            prior.release.state = 'failed';
+            prior.release.reject(new Error('Codex thread cleanup is unconfirmed while a replacement resume is uncertain'));
           }
         }
-      } else claim.previous = undefined; // Unconfirmed ownership stays fenced, without retaining older claims.
+        claim.previous = undefined;
+      }
       throw error;
     }
   }
@@ -1054,26 +1089,116 @@ export class AppServerHost {
 
   /** Release one thread's live runtime without archiving or deleting its history. */
   async unsubscribeThread(threadId: string, isCurrent?: ThreadResumeOwnership): Promise<void> {
-    const client = this.client;
-    if (!client) return;
+    if (!this.client) return;
     if (isCurrent?.() === false) {
       if (isCurrent.owner && !this.subscribers.has(threadId)) {
         for (let claim = this.threadResumeOwners.get(threadId); claim; claim = claim.previous) {
-          if (claim.owner === isCurrent.owner) claim.cleanupRequested = true;
+          if (claim.owner === isCurrent.owner && claim.phase !== 'rejected') return this.requestThreadRelease(threadId, claim);
         }
       }
       return;
     }
-    const owner = this.threadResumeOwners.get(threadId);
-    await client.request<ThreadUnsubscribeResponse>(
-      Method.ThreadUnsubscribe,
-      { threadId },
-      // No await between the claim check and client.request's synchronous write.
-      { timeoutMs: this.threadUnsubscribeTimeoutMs },
-    );
-    if (!this.subscribers.has(threadId) && this.threadResumeOwners.get(threadId) === owner) {
-      this.threadResumeOwners.delete(threadId);
+    const claim = this.threadResumeOwners.get(threadId);
+    if (claim) return this.requestThreadRelease(threadId, claim);
+    await this.client.request<ThreadUnsubscribeResponse>(Method.ThreadUnsubscribe, { threadId }, { timeoutMs: this.threadUnsubscribeTimeoutMs });
+  }
+
+  /** Abort unpublished startup resources; an active subscription has its own release handle. */
+  async releaseUncommittedThreadOwner(owner: object): Promise<boolean> {
+    const releases: Promise<void>[] = [];
+    let found = false;
+    for (const [threadId, current] of this.threadResumeOwners) {
+      for (let claim: ThreadResumeClaim | undefined = current; claim; claim = claim.previous) {
+        if (claim.owner !== owner || claim.phase === 'active' || claim.phase === 'rejected') continue;
+        found = true;
+        if (claim.phase === 'pending' || claim.phase === 'uncertain') throw new Error('Codex startup thread cleanup is unconfirmed');
+        if (claim.previous) {
+          claim.phase = 'rejected';
+          this.settleThreadRelease(threadId);
+          this.confirmThreadOwnerCleanup(owner);
+        } else releases.push(this.requestThreadRelease(threadId, claim));
+      }
     }
+    await Promise.all(releases);
+    return found;
+  }
+
+  whenThreadOwnerReleased(owner: object): Promise<void> {
+    if (this.releasedThreadOwners.has(owner)) return Promise.resolve();
+    const existing = this.threadOwnerCleanupProofs.get(owner);
+    if (existing) return existing.promise;
+    let resolve!: () => void;
+    const promise = new Promise<void>(yes => { resolve = yes; });
+    this.threadOwnerCleanupProofs.set(owner, { promise, resolve });
+    return promise;
+  }
+
+  private confirmThreadOwnerCleanup(owner: object): void {
+    this.releasedThreadOwners.add(owner);
+    this.threadOwnerCleanupProofs.get(owner)?.resolve();
+    this.threadOwnerCleanupProofs.delete(owner);
+  }
+
+  private requestThreadRelease(threadId: string, claim: ThreadResumeClaim): Promise<void> {
+    if (!claim.release || claim.release.state === 'failed') {
+      let resolve!: () => void;
+      let reject!: (error: unknown) => void;
+      const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+      // Callers still receive the rejection; this guards bookkeeping-only observers.
+      void promise.catch(() => {});
+      const deadlineAt = Date.now() + this.threadUnsubscribeTimeoutMs;
+      const release: NonNullable<ThreadResumeClaim['release']> = {
+        promise, state: 'waiting', deadlineAt,
+        resolve: () => { clearTimeout(timer); resolve(); },
+        reject: error => { clearTimeout(timer); reject(error); },
+      };
+      const timer = setTimeout(() => {
+        if (release.state !== 'waiting') return;
+        release.state = 'failed';
+        release.reject(new Error('Codex thread cleanup timed out waiting for replacement ownership'));
+      }, this.threadUnsubscribeTimeoutMs);
+      timer.unref?.();
+      claim.release = release;
+    }
+    this.settleThreadRelease(threadId);
+    return claim.release.promise;
+  }
+
+  private settleThreadRelease(threadId: string): void {
+    let current = this.threadResumeOwners.get(threadId);
+    while (current?.phase === 'rejected') current = current.previous;
+    if (!current) { this.threadResumeOwners.delete(threadId); return; }
+    this.threadResumeOwners.set(threadId, current);
+    if (current.phase === 'preparing' && current.previous?.release?.state === 'waiting') {
+      this.performThreadRelease(threadId, current.previous);
+    }
+    const release = current.release;
+    if (!release || release.state !== 'waiting' || this.subscribers.has(threadId)) return;
+    if (current.phase === 'preparing' || current.phase === 'pending' || current.phase === 'uncertain') {
+      if (current.phase === 'uncertain') {
+        release.state = 'failed';
+        release.reject(new Error('Codex thread cleanup is unconfirmed after an uncertain resume'));
+      }
+      return;
+    }
+    this.performThreadRelease(threadId, current);
+  }
+
+  private performThreadRelease(threadId: string, current: ThreadResumeClaim): void {
+    const release = current.release;
+    if (!release || release.state !== 'waiting' || this.subscribers.has(threadId)) return;
+    const client = this.client;
+    if (!client) { release.state = 'failed'; release.reject(new Error('Codex cleanup transport is unavailable')); return; }
+    const remaining = release.deadlineAt - Date.now();
+    if (remaining <= 0) { release.state = 'failed'; release.reject(new Error('Codex thread cleanup exhausted its deadline')); return; }
+    release.state = 'running';
+    // Claim check and native write are synchronous; no replacement can slip between them.
+    void client.request<ThreadUnsubscribeResponse>(Method.ThreadUnsubscribe, { threadId }, { timeoutMs: remaining }).then(() => {
+      release.state = 'done';
+      if (this.threadResumeOwners.get(threadId) === current && !this.subscribers.has(threadId)) this.threadResumeOwners.delete(threadId);
+      for (let claim: ThreadResumeClaim | undefined = current; claim; claim = claim.previous) this.confirmThreadOwnerCleanup(claim.owner);
+      release.resolve();
+    }, error => { release.state = 'failed'; release.reject(error); });
   }
 
   /** A late resume may clean up only while no newer resume or subscriber owns it. */
@@ -1113,6 +1238,7 @@ export class AppServerHost {
       const client = this.client;
       const shutdownPromise = Promise.resolve().then(async () => {
         await client?.close({ reason, throwOnTransportError: true });
+        for (const owner of this.threadOwnerCleanupProofs.keys()) this.confirmThreadOwnerCleanup(owner);
         if (this.client === client) this.client = null;
         // start() 的同步 transport 回调可能在 ensureStarted 赋值前触发关闭。
         this.startPromise = null;
@@ -1129,6 +1255,15 @@ export class AppServerHost {
       // MCP readiness belongs to the concrete app-server process.
       this.mcpToolAvailability.clear();
       this.subscribers.clear();
+      for (const current of this.threadResumeOwners.values()) {
+        for (let claim: ThreadResumeClaim | undefined = current; claim; claim = claim.previous) {
+          if (claim.release?.state === 'waiting') {
+            const release = claim.release;
+            // Retirement must confirm exit before it can confirm a pending release.
+            void shutdownPromise.then(() => { release.state = 'done'; release.resolve(); }, error => { release.state = 'failed'; release.reject(error); });
+          }
+        }
+      }
       this.threadResumeOwners.clear();
       this.lineageRoots.clear();
       this.pendingLineage.clear();
@@ -1264,7 +1399,15 @@ export class AppServerHost {
       this.logger.warn('overwriting thread subscription', { threadId });
     }
     if (this.client) this.writerCandidates.add(this.client);
-    this.threadResumeOwners.set(threadId, { owner: threadOwner ?? this.threadResumeOwners.get(threadId)?.owner ?? handlers });
+    const previous = this.threadResumeOwners.get(threadId);
+    if (threadOwner && previous && previous.owner !== threadOwner) throw new Error('Codex thread subscription was superseded');
+    const owner = threadOwner ?? previous?.owner ?? handlers;
+    this.releasedThreadOwners.delete(owner);
+    this.threadResumeOwners.set(threadId, { owner, phase: 'active' });
+    for (let claim = previous; claim; claim = claim.previous) {
+      if (claim.release?.state === 'waiting') { claim.release.state = 'done'; claim.release.resolve(); }
+      if (claim.owner !== owner) this.confirmThreadOwnerCleanup(claim.owner);
+    }
     const ownsResume = this.captureThreadResumeOwnership(threadId);
     this.subscribers.set(threadId, handlers);
     this.lineageRoots.set(threadId, threadId);

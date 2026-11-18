@@ -27,6 +27,8 @@ import {
   CodexResumePreparationBlockedError,
   AgentNotAuthenticatedError,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
+  AgentStartupCleanupPendingError,
   type AgentDeps,
   type AgentSessionHandle,
   type TurnPermissionPolicy,
@@ -11949,7 +11951,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(retireHostKey).toHaveBeenCalledWith(
       'local',
       'unused profile replacement release',
-      expect.objectContaining({ failIfActive: false }),
+      expect.objectContaining({ failIfActive: true }),
     );
     expect(host.subscribeThread).toHaveBeenCalledTimes(1);
   });
@@ -27221,7 +27223,7 @@ describe('CodexAgent rewind', () => {
     expect(retireHostKey).toHaveBeenCalledWith(
       'local',
       'thread/rollback subscription release',
-      expect.objectContaining({ failIfActive: false }),
+      expect.objectContaining({ failIfActive: true }),
     );
     expect(host.subscribeThread).toHaveBeenCalledTimes(1);
     await expect(
@@ -36506,13 +36508,17 @@ describe('CodexAgent custom provider context window override', () => {
       sessionId: 'failed-isolated-start', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo',
     }).catch((error) => error);
     expect(failure).toBeInstanceOf(Error);
-    expect(failure).toBe(MockCodexTransport.closeError);
+    if (method === Method.ThreadStart) {
+      expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+      expect(failure.message).toBe(MockCodexTransport.closeError?.message);
+    } else expect(failure).toBe(MockCodexTransport.closeError);
     expect(failure).not.toBeInstanceOf(AgentStartupStoppedError);
     expect((agent as unknown as { retiringHosts: Map<string, unknown> }).retiringHosts.size).toBe(1);
     MockCodexTransport.closeError = null;
     await agent.dispose();
     expect(createdTransports[0]?.closed).toBe(true);
     expect((agent as unknown as { retiringHosts: Map<string, unknown> }).retiringHosts.size).toBe(0);
+    if (method === Method.ThreadStart) await failure.whenStopped;
   });
 
   it('releases the failed account startup without interrupting another live host', async () => {
@@ -37423,6 +37429,58 @@ describe('expected helper normal and failure boundaries', () => {
 // Supplier triage 2026-11-18. Production Agent.send must restore its exact MCP
 // client, not just a fresh diagnostic catalog. #10499 had warnings only.
 // Unit tier: one failed native client + next send; no processes or real waits.
+describe('unpublished Codex runtime cleanup', () => {
+  // #11380: real Agent -> Host -> Client, not a synthetic abandoned claim.
+  // A location-index failure after native resume must clean only that task;
+  // failed cleanup retains Maker's guard until a later explicit startup cleans it.
+  it.each(['released', 'cleanup-failed'] as const)('recovers a post-resume startup failure with %s resources', async outcome => {
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    let failLocation = true;
+    MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse(Method.ThreadResume, { result: { thread: { id, path: '/history/fixture.jsonl' }, model: 'gpt-5.4' } });
+      if (outcome === 'cleanup-failed') transport.setMockResponse(Method.ThreadUnsubscribe,
+        { error: { code: -32000, message: 'fixture cleanup rejected' } });
+    };
+    const agent = new CodexAgent(createDeps({}, { recordCodexThreadLocation: async () => {
+      if (failLocation) throw new Error('fixture location write failed');
+    } }));
+    try {
+      const peer = await agent.startSession({ sessionId: 'healthy-cleanup-peer', model: 'gpt-5.4', workingDir: '/repo' });
+      const failure = await agent.startSession({ sessionId: 'unpublished-task', resumeSessionId: id,
+        model: 'gpt-5.4', workingDir: '/repo' }).catch(error => error);
+      expect(failure).toBeInstanceOf(outcome === 'released' ? AgentStartupResourcesReleasedError : AgentStartupCleanupPendingError);
+      const transport = createdTransports[0];
+      expect(transport.closed).toBe(false);
+      expect(transport.lines.map(line => JSON.parse(line)).filter(msg => msg.method === Method.ThreadUnsubscribe))
+        .toContainEqual(expect.objectContaining({ params: { threadId: id } }));
+      transport.setMockResponse(Method.ThreadUnsubscribe, { result: { status: 'unsubscribed' } });
+      failLocation = false;
+      const replacement = await agent.startSession({ sessionId: 'unpublished-task', resumeSessionId: id,
+        model: 'gpt-5.4', workingDir: '/repo' });
+      if (outcome === 'cleanup-failed') await failure.whenStopped;
+      expect(replacement.id).toBe(id);
+      expect(transport.closed).toBe(false);
+      await replacement.close();
+      await peer.close();
+    } finally { await agent.dispose(); }
+  });
+  it('reports a failed close and retries its thread without retiring a healthy peer', async () => {
+    const agent = new CodexAgent(createDeps());
+    try {
+      const peer = await agent.startSession({ sessionId: 'live-peer', model: 'gpt-5.4', workingDir: '/repo' });
+      const task = await agent.startSession({ sessionId: 'closing-task', model: 'gpt-5.4', workingDir: '/repo' });
+      const transport = createdTransports[0];
+      transport.setMockResponse(Method.ThreadUnsubscribe, { error: { code: -32000, message: 'fixture close rejected' } });
+      await expect(task.close()).rejects.toThrow('cleanup remains unconfirmed');
+      expect(transport.closed).toBe(false);
+      transport.setMockResponse(Method.ThreadUnsubscribe, { result: { status: 'unsubscribed' } });
+      await task.close();
+      expect(transport.closed).toBe(false);
+      await peer.close();
+    } finally { await agent.dispose(); }
+  });
+});
+
 describe('failed expected helper recovery', () => {
   const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   async function setup(state: string | null | (() => string | null), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
