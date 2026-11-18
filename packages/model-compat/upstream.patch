@@ -2408,7 +2408,7 @@
 
  export interface FunctionCallRepairSchema {
    name: string;
-@@ -48,50 +47,93 @@
+@@ -48,50 +47,101 @@
  }
 
  /** Caller supplies currentTurnWireToolCatalogBody BEFORE provider schema lowering. */
@@ -2418,6 +2418,23 @@
 +  renamedWireNames: ReadonlyMap<string, string>;
 +  /** `tool_choice` after the request's own lowering, so selectors match the forwarded body. */
 +  loweredToolChoice?: unknown;
++}
++
++/** Native repair has no lowered live request; retain loaded tool-search schemas and selectors. */
++export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairPlan {
++  if (!isObject(body)) return { renamedWireNames: new Map() };
++  const groups: unknown[][] = Array.isArray(body.tools) ? [body.tools] : [];
++  if (Array.isArray(body.input)) {
++    for (const entry of body.input) {
++      if (isObject(entry) && (entry.type === "additional_tools" || entry.type === "tool_search_output")
++        && Array.isArray(entry.tools)) groups.push(entry.tools);
++    }
++  }
++  const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] });
++  return {
++    renamedWireNames: derived.renamedWireNames,
++    loweredToolChoice: isObject(derived.body) ? derived.body.tool_choice : undefined,
++  };
 +}
 +
 +export function collectFunctionCallRepairSchemas(
@@ -2447,16 +2464,7 @@
 +  // The forwarded request owns both the wire names and the lowered selector. Rebuilding them from
 +  // a combined catalog would let replayed history change either, which the request itself never
 +  // did; only a caller without a plan falls back to the local view.
-+  let loweredChoice: unknown;
-+  let renamedWireNames: ReadonlyMap<string, string>;
-+  if (plan) {
-+    loweredChoice = plan.loweredToolChoice;
-+    renamedWireNames = plan.renamedWireNames;
-+  } else {
-+    const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: [...liveGroups, ...replayedGroups].flat(), input: [] });
-+    loweredChoice = isObject(derived.body) ? derived.body.tool_choice : undefined;
-+    renamedWireNames = derived.renamedWireNames;
-+  }
++  const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body);
    const choice = body.tool_choice;
 -  const loweredChoice = isObject(lowered) ? lowered.tool_choice : undefined;
 -  const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema } | null>();
@@ -2526,7 +2534,7 @@
      }
    }
    for (const [key, entry] of occupied) {
-@@ -108,13 +150,22 @@
+@@ -108,13 +158,22 @@
    return schemas;
  }
 
@@ -2551,7 +2559,7 @@
    if (!schema) return item;
    // An explicit namespace is an identity coordinate, not another spelling to guess at.
    if ("namespace" in item && (schema.namespace !== namespace || schema.name !== item.name)) return item;
-@@ -139,35 +190,40 @@
+@@ -139,35 +198,40 @@
  export function repairFunctionCalls(
    value: unknown,
    schemas: FunctionCallRepairSchemas,

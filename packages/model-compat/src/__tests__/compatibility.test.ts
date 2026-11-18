@@ -56,6 +56,24 @@ describe('request-owned Responses compatibility', () => {
     expect((sse ? parsed.response : parsed).output[0]).toMatchObject({ namespace: 'workspace', name: 'read', arguments: '{"line":12}' });
   });
 
+  // Native tool-search history is a real schema source even without live declarations.
+  // Keep its unqualified selector repair when sharing the native identity plan (#11199).
+  it.each(['application/json', 'text/event-stream'])('repairs native tools discovered only in search history (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const input = { input: [{ type: 'tool_search_output', tools: [{ type: 'namespace', name: 'workspace', tools: [
+      { type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } },
+    ] }] }], tool_choice: { type: 'function', name: 'read' } };
+    adapter.adaptRequest(input, 10088);
+    const output = { status: 'completed', output: [{ type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'history', arguments: '{"line":12.0}' }] };
+    const sse = contentType === 'text/event-stream';
+    const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+    const transform = adapter.createResponseTransform(10088, { contentType, contentEncoding: '' });
+    expect(transform).not.toBeNull();
+    const text = await responseText(transform!, wire);
+    const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+    expect((sse ? parsed.response : parsed).output[0]).toEqual({ ...output.output[0], arguments: '{"line":12}' });
+  });
+
   // #11199 native collision regression: public Codex transport, unit tier. The earlier native
   // case had no competing bare tool, so schema allocation and response lookup could diverge.
   it.each(['application/json', 'text/event-stream'])('repairs native collisions without borrowing the bare schema (%s)', async contentType => {

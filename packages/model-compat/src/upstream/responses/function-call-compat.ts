@@ -54,6 +54,23 @@ export interface FunctionCallRepairPlan {
   loweredToolChoice?: unknown;
 }
 
+/** Native repair has no lowered live request; retain loaded tool-search schemas and selectors. */
+export function deriveFunctionCallRepairPlan(body: unknown): FunctionCallRepairPlan {
+  if (!isObject(body)) return { renamedWireNames: new Map() };
+  const groups: unknown[][] = Array.isArray(body.tools) ? [body.tools] : [];
+  if (Array.isArray(body.input)) {
+    for (const entry of body.input) {
+      if (isObject(entry) && (entry.type === "additional_tools" || entry.type === "tool_search_output")
+        && Array.isArray(entry.tools)) groups.push(entry.tools);
+    }
+  }
+  const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: groups.flat(), input: [] });
+  return {
+    renamedWireNames: derived.renamedWireNames,
+    loweredToolChoice: isObject(derived.body) ? derived.body.tool_choice : undefined,
+  };
+}
+
 export function collectFunctionCallRepairSchemas(
   body: unknown,
   plan?: FunctionCallRepairPlan,
@@ -73,16 +90,7 @@ export function collectFunctionCallRepairSchemas(
   // The forwarded request owns both the wire names and the lowered selector. Rebuilding them from
   // a combined catalog would let replayed history change either, which the request itself never
   // did; only a caller without a plan falls back to the local view.
-  let loweredChoice: unknown;
-  let renamedWireNames: ReadonlyMap<string, string>;
-  if (plan) {
-    loweredChoice = plan.loweredToolChoice;
-    renamedWireNames = plan.renamedWireNames;
-  } else {
-    const derived = rewriteRoutedNamespaceToolsForUpstream({ ...body, tools: [...liveGroups, ...replayedGroups].flat(), input: [] });
-    loweredChoice = isObject(derived.body) ? derived.body.tool_choice : undefined;
-    renamedWireNames = derived.renamedWireNames;
-  }
+  const { loweredToolChoice: loweredChoice, renamedWireNames } = plan ?? deriveFunctionCallRepairPlan(body);
   const choice = body.tool_choice;
   const occupied = new Map<string, { kind: unknown; identity: FunctionCallRepairSchema; live: boolean } | null>();
   const register = (tool: unknown, namespace: string | undefined, live: boolean): void => {
