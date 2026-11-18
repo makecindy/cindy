@@ -515,7 +515,7 @@ it('keeps one usable encrypted connection after both endpoints dial at the same 
  * - 生产入口与可观察结果：AgentNetSocket 的 peerRule 与 restrictPeers，真实核心与 V2 中转。规则之外的本账号设备证书有效、
  *   在名册里，也拨不出去、拨不进来；放回规则后它等着的那次拨号马上连上、帧送达；再收紧时这一端马上断开、也不再拨。
  * - Bug／规则依据：Device Link 里删掉的设备要重新登录才能再连；官方 Agent-Net 不看那条删除记录，由 Desktop 与 Host 按设备列表拦
- *   （apps/desktop/src/main/device-link/agentNetMembership.ts，docs/dev-rules/protocol-compatibility/agent-net-device-removal.md）。
+ *   （packages/agent-net/src/membership.ts，docs/dev-rules/protocol-compatibility/agent-net-device-removal.md）。
  * - 现有覆盖缺口：只有中转撤销证书一种拦法，没有「名册里有、本机不认」；核心会记住拒过的握手，放开时不换准入版本就要等它过期。
  * - 最小失败输入：开着就不认对端（拨号被拒、对端拨进来挂着），放开后挂着的拨号连上、推送送达，再收紧时连接断开、拨号被拒。
  * - tier：integration，真实回环 WS 中转，不开 UDP。 */

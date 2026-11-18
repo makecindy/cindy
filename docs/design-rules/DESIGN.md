@@ -23,6 +23,7 @@
 | 悬停提示 | `components/ui/tooltip.tsx` 的 `Tip` | §14.6 |
 | 确认弹窗 | `useConfirmDialog`、`ConfirmDialog` | §4 Dialog & Modal |
 | 其他弹窗 | 暂无通用组件：Radix Dialog 加 `.modal-scrim` / `.modal-panel`，结构参考 `confirm-dialog.tsx` | §4 Dialog & Modal |
+| 第一次用到某个功能时的介绍 | `components/feature-intro/` 的 `FeatureIntroDialog` | [功能介绍](./feature-introduction.md) |
 | 分段切换 | `components/ui/segmented-control.tsx` 的 `SegmentedControl` | §4 Desktop segmented controls |
 | 开关、滑杆 | `Switch`、`Slider`、`EffortSlider` | §15.17、§15.18 |
 | 复选框 | `components/ui/checkbox.tsx` 的 `Checkbox` | §4 Desktop settings controls |
@@ -48,6 +49,7 @@
 | 登录、注册与回调页（§16） | [login-flow.md](./login-flow.md) |
 | 聊天正文的链接与可点性（§14.5） | [message-link-clickability.md](./message-link-clickability.md) |
 | 输入框工具栏的容器形变 | [container-transform.md](./container-transform.md) |
+| 功能介绍（第一次用到某个功能时的一页引导） | [feature-introduction.md](./feature-introduction.md) |
 | 应用壁纸 | [wallpaper.md](./wallpaper.md) |
 | macOS 菜单栏额度面板 | [macos-menu-bar-quota.md](./macos-menu-bar-quota.md) |
 | 附件预览 | [attachment-preview.md](./attachment-preview.md) |
@@ -598,6 +600,13 @@ differences from the general multi-step dialog rule:
 
 Other wizards keep the registered rule; this entry does not authorize removing step chips,
 centering commit actions or adding a × elsewhere.
+
+### Feature introduction (owner-requested, 2026-11-18)
+
+The one-page introduction shown the first time someone uses a feature, built like the get-started
+guide's cover and meant to be reused wherever a feature needs one. When to use it, when it appears,
+the page structure, how to make its scenes and how to add one: [feature-introduction.md](./feature-introduction.md).
+Its motion is registered in §14.4 (get-started guide entrance).
 
 ### Inputs & Forms
 
@@ -1545,8 +1554,9 @@ Only the two registered chart members inside Usage History may enlarge their non
   - **Step pages**: when a step is reached with Start / Next / Skip / Back, its blocks fade in and rise 6px one after another in reading order, so the page reads as content arriving rather than a hard cut. Bot Market detail values: `--motion-base` / `--motion-ease-out`, adjacent blocks **30ms** apart via `--rise-index`, the index clamped at 5.
   - **Cover**: a single choreography of about 1.3 seconds, played once when the cover mounts. The brand block, headline, sentence, three cards, the Start button and the line below it arrive in that order on the step-page values (`--motion-base` / `--motion-ease-out`), rising 8px, **45ms** apart, so everything is in place within about half a second — the owner found a slower arrival of the top block deliberate-looking (2026-11-11), and an earlier 0.3s version was over before it could be seen, so the arrival stays brisk and the scenes carry what is worth watching. Each card's scene plays once, starting 150ms after its card began to arrive: three task lines are drawn from the left 180ms apart and ticked off, the last one showing a ring for a moment before its tick replaces it; the provider marks pop in 100ms apart; the computer appears, three dots step toward the phone 70ms apart, the phone appears and the same task line is drawn on it. The Start button is clickable throughout.
   - **Parameters**: every element uses a duration and curve token — pop (`opacity` 0→1, `scale(0.6→1)`) and draw (`opacity` 0→1, `scaleX(0→1)` from the left edge) on `--motion-base` / `--motion-ease-out`, the ring's exit (`opacity` 1→0) on `--motion-fast` / `--motion-ease-in`. Only the start times are literals, passed per element as `--at`. No overshoot, no looping, no replay on rerender, data arrival, scroll or hover, and no exit animation. Motion sits on HTML wrappers, never on an SVG glyph. `transform` / `opacity` only. Like the Bot Market entry, this is an explicit exception to the rule that stagger is limited to the composer-container rows.
-  - **Degradation**: `.first-run-rise`, `.first-run-pop`, `.first-run-draw` and `.first-run-leave` are in the `prefers-reduced-motion` whitelist in `globals.css`; reduced motion lands on the final frame directly — every task ticked, every mark and both screens present, the ring absent.
-  - **Scope boundary**: this guide only. The cover scenes illustrate what the product does on the welcome page; they are not status signals and must not be reused for real task, provider or device state, which keep their registered responses. Implementation: `.first-run-*` in `globals.css`; start times in `FirstRunGuide.tsx`.
+  - **Degradation**: `.first-run-rise`, `.first-run-pop`, `.first-run-draw`, `.first-run-leave` and `.first-run-shift` are in the `prefers-reduced-motion` whitelist in `globals.css`; reduced motion lands on the final frame directly — every task ticked, every mark and both screens present, the ring absent.
+  - **Scope boundary**: this guide and feature introductions (owner request 2026-11-18, §4 "Feature introduction"), whose cover plays the same choreography. The cover scenes illustrate what the product does; they are not status signals and must not be reused for real task, provider or device state, which keep their registered responses. Implementation: `.first-run-*` in `globals.css`; start times in `FirstRunGuide.tsx` and each introduction's scenes.
+  - **Feature introduction scenes** may also use shift (`transform: translateY(var(--shift) → 0)` on `--motion-base` / `--motion-ease-out`, `.first-run-shift`): when a row leaves, the rows below move up into its place. The inbox introduction plays three: rows with a new result or waiting on you are drawn 180ms apart, each followed by its dot; the top row is ticked, leaves, and the rows below shift up one row; a task card gets a clock, three dots step on 90ms apart, and the card returns with a new-result dot. Reduced motion lands on the final frame (`.first-run-shift` is in the whitelist).
 - **Remote connection message packets(远程连接消息流动)** — the ninth sanctioned motion class (owner requests 2026-11-06: show messages moving while the owner works with a machine; 2026-11-07, after comets with bounce, a pipe of dots and hhh-style light points: no moving circles at all — a connected line is solid green and a line with messages becomes a green dashed line flowing in the message direction), **only** for the lines of the Desktop 远程连接 V2 topology (`TopologyFlow.tsx`):
   - **Definition**: when this computer and another device have actually exchanged business messages in the last few seconds, the line between them turns from solid green to a blue dashed line whose dashes flow toward where the messages go, so the owner can see which machine they are working with. The signal is real: device-link records, per link, when a business message (invoke / invoke-result / push, excluding ACKs, retransmits and direct-path negotiation) was last sent or received, and the page reads it every 2 seconds while visible; the line turns solid again within about 4–6 seconds after the last message (`FLOW_WINDOW_MS`). No traffic, no motion.
   - **Rhythm**: steady and linear — the dashes move at a constant 16px/s (`SPEED`) on every line, one dash-plus-gap every ~12px (`SPACING`, rounded to fill the line), with each gap fading in and out over the first and last 6px so the loop has no seam. Direction: toward the device for 发送中 and 收发中, toward this computer for 接收中; a relayed device's flow also runs on the hub-to-relay trunk. Phases are pinned to the document timeline so the 2-second refresh never jolts them. There are no light points, ripples, pulses, bounce or overshoot.

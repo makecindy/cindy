@@ -31,6 +31,7 @@ import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGro
 import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
+import { focusBotGroupComposer } from './botGroupTextInput';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import {
@@ -215,11 +216,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const processScroll = useProcessDisclosureScroll(scrollRef, contentRef, stickToBottomRef, STICK_TO_BOTTOM_PX);
   const { resumeFollow } = processScroll;
   const panelRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const panel = panelRef.current;
-    // The entrance is translated outside its clipped slot; focus must not scroll that ancestor.
-    (panel?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)') ?? panel?.querySelector<HTMLButtonElement>('header button'))?.focus({ preventScroll: true });
-  }, []);
+  useEffect(() => focusBotGroupComposer(panelRef.current), []);
   useEffect(() => {
     shareSelectionStore.exitIfNotSession(shareScope);
     return () => { if (shareSelectionStore.isActive(shareScope)) shareSelectionStore.exit(); };

@@ -6447,7 +6447,8 @@
           "defaultProjectTag": "預設",
           "defaultProjectFullAccessWarning": "預設專案「{{name}}」的權限是完全訪問：任何群裡 @ 機器人，都會以完全訪問在它裡面執行。",
           "sharedSettingsPointer": "專案、模型與權限由所有官方機器人共用。",
-          "sharedSettingsPointerAction": "去設定"
+          "sharedSettingsPointerAction": "去設定",
+          "workspacesCardDescriptionWithPlugins": "官方機器人和 IM 插件共用這一份。專案來自側邊欄，新增、改名或移除請在側邊欄操作；在 IM 裡用 /model 改，這裡也會跟著變。插件裡給群組或私訊單獨改過的模型和權限不受影響。"
         },
         "binding": {
           "copyLink": "複製連結",
@@ -6981,11 +6982,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "官方",
-        "personal": "個人"
+        "personal": "個人",
+        "plugins": "插件"
       },
       "tips": {
         "cindy": "由 Cindy 提供並維護。無需自行建立機器人或準備憑證，按引導連線後即可使用。",
-        "personal": "使用你自己的帳號或機器人，由你提供並管理所需憑證；每個渠道的帳號、權限和設定獨立儲存。"
+        "personal": "使用你自己的帳號或機器人，由你提供並管理所需憑證；每個渠道的帳號、權限和設定獨立儲存。",
+        "plugins": "由已安裝的插件提供的 IM 入口。登入和繫結在插件頁面完成；專案、模型與權限預設使用「專案與模型」裡的設定，也可以在插件裡給每個群組或私訊單獨修改。"
       },
       "defaults": {
         "title": "新對話配置",
@@ -7017,6 +7020,10 @@
         },
         "groupPermissionLabel": "群組新任務的權限模式",
         "groupPermissionDescription": "群組裡新建任務時統一使用的權限模式（@bot 開話題、/new、/ctr 都算），預設「自動審批」；上面那個權限模式只管私聊。群組上下文裡有成員可控制的內容，設成「完全存取」後將直接執行、不再逐項確認，請確認群組成員都可信。變更只影響之後新建的任務，已有任務在群組裡用 /permission 單獨切換。"
+      },
+      "plugins": {
+        "rowHint": "登入、繫結和每個群組、私訊的單獨設定都在插件頁面裡。",
+        "open": "打開插件"
       }
     },
     "shortcuts": {
@@ -16589,6 +16596,36 @@
         "priority": "優先級",
         "activity": "最近活動",
         "created": "建立時間"
+      },
+      "inbox": {
+        "thisEvening": "今晚",
+        "tomorrow": "明天",
+        "nextWeek": "下週",
+        "custom": "自訂…",
+        "wakeAt": "喚回日期與時間",
+        "timeZone": "本地時間（{{zone}}）",
+        "invalidTime": "請選擇未來一年內的日期與時間。",
+        "inbox": "待處理",
+        "working": "進行中",
+        "snoozed": "稍後處理",
+        "archived": "已處理",
+        "snooze": "稍後處理",
+        "complete": "完成",
+        "wake": "立即取回",
+        "restore": "恢復任務",
+        "process": "標記已處理（封存）",
+        "empty": "收件匣已清空",
+        "snoozeFailed": "無法儲存稍後處理時間，請檢查連線並確認任務所在電腦已更新。",
+        "hours": "{{count}} 小時後",
+        "hours_one": "{{count}} 小時後",
+        "hours_other": "{{count}} 小時後"
+      },
+      "taskListMode": {
+        "heading": "任務模式",
+        "tasks": "任務列表",
+        "inbox": "收件匣",
+        "enterInbox": "切換到收件匣模式",
+        "leaveInbox": "切換到任務列表模式"
       }
     },
     "rename": {
@@ -21305,6 +21342,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "關閉",
+    "taskInbox": {
+      "title": "認識收件匣",
+      "lead": "任務會依狀態自動分成待處理、進行中、稍後處理和已處理。最好的習慣是隨手清空收件匣：處理完按完成，不急的稍後處理。",
+      "pending": {
+        "title": "待處理",
+        "body": "任務跑完有了結果，或者在等你回答，都會出現在這裡。"
+      },
+      "done": {
+        "title": "完成",
+        "body": "處理好了按一下完成，任務移到已處理；之後有新進展會自動回來。"
+      },
+      "snooze": {
+        "title": "稍後處理",
+        "body": "現在顧不上就選個時間，時間到自動回到待處理。"
+      },
+      "start": "開始使用",
+      "note": "隨時可以用側邊欄頂部的按鈕切回任務列表。"
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "歡迎使用 Cindy",
@@ -21904,6 +21962,19 @@
       "network": "連線中斷，正在重試…",
       "timeout": "連線逾時，正在重試…",
       "server": "伺服器忙碌中，正在重試…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "放寬權限？",
+    "message": "允許「{{name}}」讓「{{conversation}}」在專案「{{project}}」裡使用「{{mode}}」？",
+    "detail": "這比 IM 專案設定（{{projectMode}}）更寬。允許後，這個插件在這個專案裡可以使用這一檔權限，只影響插件自己的任務；之後可以在插件裡改回跟隨 IM。",
+    "groupWarning": "群組裡的訊息其他成員也能發。權限越寬，需要你確認的操作越少，請確認群組裡的人都可信。",
+    "allow": "允許",
+    "cancel": "取消",
+    "modes": {
+      "ask": "預設權限",
+      "auto": "自動審核",
+      "bypassPermissions": "完全訪問"
     }
   }
 }

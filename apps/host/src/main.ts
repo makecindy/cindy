@@ -1698,7 +1698,7 @@ function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentN
     workerFile: () => (existsSync(layout.agentNetWorker) ? layout.agentNetWorker : null),
     coreModule: () => (core ??= readFile(layout.agentNetCore).then(bytes => WebAssembly.compile(bytes))
       .catch((error) => { core = null; throw error; })),
-    // Devices removed from the account in Device Link are refused on Agent-Net until they sign in again (agentNetMembership.ts).
+    // Devices removed from the account in Device Link are refused on Agent-Net until they sign in again (packages/agent-net/src/membership.ts).
     deviceLinkDeviceIds: async () => {
       const baseUrl = readAuthEndpoints(realm).deviceLinkApiBaseUrl;
       if (!baseUrl || !account.authenticated) return null;

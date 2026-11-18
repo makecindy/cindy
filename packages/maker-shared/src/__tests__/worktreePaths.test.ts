@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   collapseWorktreeDirForGrouping,
+  sessionTaskProjectIconDirectory,
   groupingWorktreeBaseRepo,
   isManagedWorktreeDirectoryName,
   managedWorktreeBaseRepo,
@@ -98,5 +99,21 @@ describe('worktreePaths', () => {
     expect(isManagedWorktreeDirectoryName('.worktrees')).toBe(false);
     expect(isManagedWorktreeDirectoryName('.CINDY-WORKTREES')).toBe(false);
     expect(isManagedWorktreeDirectoryName('.Xdt-Worktrees')).toBe(false);
+  });
+});
+
+// Unit: inbox icons must use the same project across both clients. Existing path
+// tests don't exercise session membership: a sibling worktree, dialogue cwd, or
+// companion lane can otherwise fetch the wrong project's icon.
+describe('inbox project icon identity', () => {
+  it.each([
+    [{ workingDir: '/repo/.cindy-worktrees/topic' }, '/repo'],
+    [{ workingDir: '/sibling-checkout', projectDir: '/repo' }, '/repo'],
+    [{ workingDir: '/dialogue/runtime', workspaceKind: 'dialogue' }, null],
+    [{ workingDir: '/lane', workspaceKind: 'dialogue', companion: { taskProjectDir: '/buddy' } }, '/buddy'],
+    [{ workingDir: 'C:/Repo/.CINDY-WORKTREES/topic' }, 'C:/Repo'],
+    [{ workingDir: null }, null],
+  ])('resolves displayed membership for %j', (session, directory) => {
+    expect(sessionTaskProjectIconDirectory(session)).toBe(directory);
   });
 });

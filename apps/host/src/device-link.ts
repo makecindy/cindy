@@ -5,9 +5,7 @@ import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } 
 import WebSocket from 'ws';
 import { DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
 import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
-import { AgentNetSessionLinks, agentNetSessionLane } from '../../desktop/src/main/device-link/agentNetSessionLinks.js';
-import { routeSessionPeers } from '../../desktop/src/main/device-link/agentNetSessionRouting.js';
-import type { PeerLinks } from '../../desktop/src/main/device-link/peerLinks.js';
+import { AgentNetSessionLinks, agentNetSessionLane, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import { createInboundDispatch } from '../../desktop/src/main/device-link/dispatch.js';
@@ -234,7 +232,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       connectedAt: node.connectedAt,
       connect: node.connect,
       agentNetPeer: node.agentNetPeer,
-      // 链路回复带上这台的请求去重记忆是哪一份，控制端断线后据此判断能不能用原请求号再发（agentNetSessionLinks.ts）。
+      // 链路回复带上这台的请求去重记忆是哪一份，控制端断线后据此判断能不能用原请求号再发（packages/agent-net/src/session/sessionLinks.ts）。
       invokeEpoch: (deviceId) => dispatch.remoteInvokeEpoch(deviceId),
       log,
     });
