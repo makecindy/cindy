@@ -346,10 +346,7 @@ import {
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
 import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.js';
 
-import {
-  applyWithVerifiedModelWindow,
-  nextDeferredModelWindowRetry,
-} from '../../shared/runtimeModelSwitchGate.js';
+import { applyWithVerifiedModelWindow } from '../../shared/runtimeModelSwitchGate.js';
 import type { DesktopCommandContext } from '../commands/index.js';
 import { getDesktopCommandRegistry } from '../commands/index.js';
 import {
@@ -1008,6 +1005,7 @@ import {
   resolveSessionReferences,
 } from './sessionReferenceResolver.js';
 import { registerAndroidAutomationHandlers } from './androidHandlers.js';
+import { createPendingSessionRuntimeControlSettlement } from './pendingSessionRuntimeControlSettlement.js';
 import { MAKER_INVOKE, MAKER_PUSH, MAKER_SEND } from './channels.js';
 import type { CollabDispatchOutcome } from './collabSendOutcome.js';
 import {
@@ -1468,7 +1466,6 @@ import {
 import { runSchedulerQueuedPreparation } from './schedulerQueuedPreparation.js';
 import {
   acceptSessionRuntimeMutation,
-  cancelPendingSessionRuntimeMutation,
   captureSessionRuntimeControlOwnerEpoch,
   getPendingSessionRuntimeMutation,
   applySessionRuntimeOverrideForStart,
@@ -16511,105 +16508,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }): boolean =>
     result.contextWindowConfirmationRequired !== undefined ||
     result.contextTokensForConfirmation !== undefined;
-  const settlingSessionRuntimeControls = new Set<string>();
-  const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): void => {
-    if (settlingSessionRuntimeControls.has(sessionId)) return;
-    const pending = getPendingSessionRuntimeMutation(sessionId);
-    if (!pending) return;
-    settlingSessionRuntimeControls.add(sessionId);
-    void (async () => {
-      try {
-        const settleSelection = {
-          effort: pending.profile.effort,
-          fastMode: pending.profile.fastMode,
-          ...(pending.thinking !== undefined ? { thinking: pending.thinking } : {}),
-        };
-        const settleOptions = {
-          source: pending.source,
-          expectedGeneration: pending.generation,
-          applyingPendingGeneration: pending.generation,
-          effortExplicit: pending.profile.effort !== null,
-          fastExplicit: true,
-          routeExplicit: isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation),
-        };
-        let result = await applySessionRuntimeSelection(
-          sessionId,
-          pending.profile.model,
-          pending.profile.providerId,
-          settleSelection,
-          settleOptions,
-        );
-        // 回合中登记的缩窗选择:用户当时已经点过目标模型。空闲结算时若仍要确认换窗,
-        // 带着核实窗口再 apply 一次,避免把选择取消掉。
-        const windowRetry = nextDeferredModelWindowRetry(
-          runtimeSelectionRequiresModelWindowConfirmation(result),
-          result.contextWindowConfirmationRequired,
-        );
-        if (windowRetry.action === 'retry') {
-          result = await applySessionRuntimeSelection(
-            sessionId,
-            pending.profile.model,
-            pending.profile.providerId,
-            { ...settleSelection, confirmedContextWindow: windowRetry.confirmedContextWindow },
-            settleOptions,
-          );
-          if (nextDeferredModelWindowRetry(
-            runtimeSelectionRequiresModelWindowConfirmation(result),
-            result.contextWindowConfirmationRequired,
-          ).action !== 'done') {
-            throw new Error('deferred model-window selection requires unsupported confirmation');
-          }
-        } else if (windowRetry.action === 'cancel') {
-          throw new Error('deferred model-window selection requires unsupported confirmation');
-        }
-        log.info('pending session runtime settled', {
-          sessionId,
-          reason,
-          generation: pending.generation,
-          superseded: result.superseded,
-        });
-      } catch (error) {
-        const cancelled = cancelPendingSessionRuntimeMutation(sessionId, pending.generation);
-        log.warn('pending session runtime settlement failed', {
-          sessionId,
-          reason,
-          cancelled,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        if (cancelled) {
-          await broadcastSessionRuntimeProjection(sessionId).catch((broadcastError) => {
-            log.debug('cancelled pending runtime projection broadcast failed', {
-              sessionId,
-              error:
-                broadcastError instanceof Error ? broadcastError.message : String(broadcastError),
-            });
-          });
-          const failureMessage =
-            error instanceof Error && error.message.includes('unsupported')
-              ? 'Deferred model switch was cancelled because safe context rebuild is unsupported. The previous model remains active.'
-              : 'Deferred model switch was cancelled because it could not be applied safely. The previous model remains active.';
-          const failureReason = 'runtime-selection-cancelled';
-          onTurnErrorEvent(sessionId, { message: failureMessage, reason: failureReason }, null);
-          const dbAgentKind = getSessionDbAgentKind(sessionId);
-          const agentSource = dbAgentKind ? dbToMakerAgentKind(dbAgentKind) : undefined;
-          broadcastToAllWindows(MAKER_PUSH.EVENT, {
-            sessionId,
-            event: {
-              type: 'error',
-              data: { message: failureMessage, reason: failureReason, isTerminal: true },
-              ...(agentSource ? { source: agentSource } : {}),
-            } satisfies AgentEvent,
-          });
-        }
-      } finally {
-        settlingSessionRuntimeControls.delete(sessionId);
-        const latest = getPendingSessionRuntimeMutation(sessionId);
-        if (latest && latest.generation !== pending.generation) {
-          settlePendingSessionRuntimeControl(sessionId, `${reason}:generation-advanced`);
-        }
-      }
-    })();
-  };
+  const settlePendingSessionRuntimeControl = createPendingSessionRuntimeControlSettlement({
+    applySessionRuntimeSelection: (...args) => applySessionRuntimeSelection(...args),
+    runtimeSelectionRequiresModelWindowConfirmation,
+    broadcastSessionRuntimeProjection, onTurnErrorEvent, getSessionDbAgentKind, broadcastToAllWindows, log,
+  });
   settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;
 
   const readSessionRuntimeProfiles = createReadSessionRuntimeProfiles({ maker, agentSwitchPending, log });
