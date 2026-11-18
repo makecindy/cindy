@@ -41,6 +41,7 @@ import type {
   MarketSourceSummary,
   PluginMarketDetail,
   PluginMarketInstallOptions,
+  PluginMarketInstallProgress,
   PluginMarketInstallResult,
   PluginMarketItem,
   PluginMarketLocalIconRequest,
@@ -128,6 +129,7 @@ import type { GhostInstallConsentInitiator } from '../../shared/ghostInstallCons
 import { isPluginMarketPassthroughErrorCode, PluginMarketApi, PluginMarketEndpointUnsupportedError } from './api.js';
 import { createOrganizationPrefixStore } from './organizationPrefixStore.js';
 import { downloadVerifiedPlugin } from './download.js';
+import { createPluginInstallProgress, type PluginInstallProgress } from './installProgress.js';
 import {
   commitCustomMarketPlugin,
   packCustomMarketPlugin,
@@ -645,6 +647,8 @@ export interface PluginMarketInstallContext {
   assertCurrent?: () => void;
   /** Owner/peer/cancellation only; remains valid after the package directory swap. */
   assertScope?: () => void;
+  /** Display-only progress for the surface that started this install. */
+  onProgress?: (progress: PluginMarketInstallProgress) => void;
 }
 
 /**
@@ -2145,6 +2149,30 @@ export class PluginMarketService {
     options: PluginMarketInstallOptions,
     context: PluginMarketInstallContext,
   ): Promise<PluginMarketInstallResult> {
+    if (!context.onProgress) return this.installReviewed(pluginId, options, context);
+    const progress = createPluginInstallProgress(pluginId, context.onProgress);
+    try {
+      const result = await this.installReviewed(
+        pluginId,
+        options,
+        { ...context, consent: { ...context.consent, prompt: progress.consentPrompt(context.consent.prompt) } },
+        progress,
+      );
+      progress.settle('completed');
+      return result;
+    } catch (error) {
+      // Declining the confirmation is the user's choice, not a failed update.
+      progress.settle(isIpcError(error) && error.code === 'MUTATION_CANCELLED' ? 'cancelled' : 'failed');
+      throw error;
+    }
+  }
+
+  private async installReviewed(
+    pluginId: string,
+    options: PluginMarketInstallOptions,
+    context: PluginMarketInstallContext,
+    progress?: PluginInstallProgress,
+  ): Promise<PluginMarketInstallResult> {
     const { assertCurrent, assertScope = assertCurrent } = context;
     assertCurrent?.();
     const customRef = parseCustomMarketPluginId(pluginId);
@@ -2162,6 +2190,7 @@ export class PluginMarketService {
         captureMarketOwner(),
         assertCurrent,
         assertScope,
+        progress,
       );
     }
     if (!isValidPluginResourceId(pluginId)) {
@@ -2217,6 +2246,7 @@ export class PluginMarketService {
           options.allowSourceReplacement === true
             ? 'user-requested-source-change'
             : 'preserve-existing-source',
+        ...(progress ? { progress } : {}),
       },
       owner,
       ledger,
@@ -2437,6 +2467,7 @@ export class PluginMarketService {
     owner = captureMarketOwner(),
     assertCurrent?: () => void,
     assertScope = assertCurrent,
+    progress?: PluginInstallProgress,
   ): Promise<PluginMarketInstallResult> {
     const automatic = consent.mode === 'automatic';
     if (options.expectedManifest === undefined) {
@@ -2549,6 +2580,7 @@ export class PluginMarketService {
                 packed.inspected.manifest,
                 packed.inspected.packageSha256,
               );
+        progress?.installing();
         const installResult = await commitCustomMarketPlugin(packed, {
           expectedGhostId: plugin.ghostId,
           expectedVersion: plugin.version,
@@ -2940,6 +2972,8 @@ export class PluginMarketService {
        * 避免用户未回答时卡住同插件卸载/更新。后台路径仍由调用方持锁。
        */
       acquireMutation?: boolean;
+      /** Display-only progress of a user-started install; background installs pass none. */
+      progress?: PluginInstallProgress;
     },
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
@@ -3024,6 +3058,7 @@ export class PluginMarketService {
       }
     }
 
+    options.progress?.expect(plugin.currentRelease.sizeBytes);
     const downloadServerRoot = getClientEndpoint('pluginApiBaseUrl').replace(/\/+$/, '');
     const download = await this.api.download(plugin.id, plugin.currentRelease.id);
     assertInstallIdentityCurrent();
@@ -3047,7 +3082,7 @@ export class PluginMarketService {
       `cindy-plugin-${plugin.id}-${crypto.randomUUID()}.cindy`,
     );
     try {
-      await downloadVerifiedPlugin(download.url, download, tempPath);
+      await downloadVerifiedPlugin(download.url, download, tempPath, options.progress?.callbacks);
       requireSameMarketOwner(owner);
       const inspected = await getGhostManager().inspect(tempPath, 'stored-release');
       if (!('rejection' in inspected)) {
@@ -3114,6 +3149,7 @@ export class PluginMarketService {
           owner,
           ledger,
         );
+      options.progress?.installing();
       const ghost = options.acquireMutation
         ? await this.withMutation(plugin.id, async () => {
             requireSameMarketOwner(owner);

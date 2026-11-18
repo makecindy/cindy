@@ -3,7 +3,7 @@ import { needsSubscriptionAccountHandoff, hasRestoredPooledCodexQuota } from '..
 import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { accountProviderId, readMergedProviderAccount, resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef } from '../subscription-accounts/placement.js';
 import { legacyCodexAccountCanRun } from '../subscription-accounts/legacyAccountAccess.js';
-import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
+import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot, schedulerFailureDetail, type SchedulerQueueBridge, type SchedulerQueuedPromptObserver, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
@@ -445,6 +445,7 @@ import {
   createSessionControlService,
   sessionQueueOriginForDispatcher,
 } from './sessionControlService.js';
+import { runSessionExecutionAction } from './sessionExecutionActions.js';
 import {
   createQueueReorderAdapter,
   type SessionQueueMoveResult,
@@ -2023,10 +2024,10 @@ onCodexAutoResetRestored(providerId => usageLimitAutoResume.resumeRestored(id =>
 // 和「最终仍失败」桥给 runner，让同一个 run 继续等待或正确失败。
 const pendingSchedulerAutoResumeRunBySession = new Map<
   string,
-  { runId: string; attemptToken: number; usageLimitToken?: number; retryClientId?: string }
+  { runId: string; attemptToken: number; usageLimitToken?: number; retryClientId?: string; error?: string }
 >();
 interface SchedulerRecoveryListener {
-  failed(): void;
+  failed(error?: string): void;
   quotaWait?: { start(): void; resume(): boolean };
 }
 const schedulerAutoResumeFailureListeners = new Map<string, Set<SchedulerRecoveryListener>>();
@@ -2035,8 +2036,10 @@ function schedulerAutoResumeRunKey(sessionId: string, runId: string): string {
   return JSON.stringify([sessionId, runId]);
 }
 
-function beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number): void {
-  pendingSchedulerAutoResumeRunBySession.set(sessionId, { runId, attemptToken });
+function beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number, error?: string): void {
+  pendingSchedulerAutoResumeRunBySession.set(sessionId, {
+    runId, attemptToken, error: error ? schedulerFailureDetail(error) : undefined,
+  });
 }
 
 function clearSchedulerAutoResumePending(
@@ -2072,7 +2075,7 @@ function notifySchedulerAutoResumeFailed(
   if (!listeners) return;
   for (const listener of listeners) {
     try {
-      listener.failed();
+      listener.failed(current.error);
     } catch {
       // Runner listener failures must not break chat recovery cleanup.
     }
@@ -2101,7 +2104,7 @@ export function isSchedulerAutoResumePending(sessionId: string, runId: string): 
 export function onSchedulerAutoResumeFailed(
   sessionId: string,
   runId: string,
-  listener: () => void,
+  listener: (error?: string) => void,
   quotaWait?: SchedulerRecoveryListener['quotaWait'],
 ): () => void {
   const key = schedulerAutoResumeRunKey(sessionId, runId);
@@ -2717,6 +2720,7 @@ type SendToSessionResult = SendToSessionInternalResult;
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
+  controlSession: ReturnType<typeof createSessionControlService>['controlSession'];
   listSessionQueue: (
     sessionId: string,
   ) => Promise<
@@ -2730,7 +2734,7 @@ interface OrcaCollabService {
     | { ok: false; errorCode: 'HOST_NOT_READY' | 'INTERNAL'; message: string }
   >;
   updateSessionQueuedMessage: (params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     message: string;
@@ -2744,13 +2748,14 @@ interface OrcaCollabService {
           | 'MESSAGE_CONSUMING'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
+          | 'UNSUPPORTED_CAPABILITY'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
       }
   >;
   cancelSessionQueuedMessage: (params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }) => Promise<
@@ -2763,20 +2768,21 @@ interface OrcaCollabService {
           | 'MESSAGE_CONSUMING'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
+          | 'UNSUPPORTED_CAPABILITY'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
       }
   >;
   steerSessionQueuedMessage: (params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
   }) => Promise<
     SessionQueueSteerResult | { ok: false; errorCode: 'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'; message: string }
   >;
   moveSessionQueuedMessage: (params: {
-    callerSessionId: string;
+    callerSessionId?: string;
     targetSessionId: string;
     queuedMessageId: string;
     position: number;
@@ -5364,7 +5370,7 @@ export type { SchedulerQueuedPromptRequest, SchedulerEnqueueResult } from './sch
 
 let schedulerQueueBridgeHolder: SchedulerQueueBridge | null = null;
 /** 排队心跳的 discard 监听(clientId → 通知 runner 收尾)。派发/丢弃后清条目。 */
-const schedulerQueuedPromptDiscardWatchers = new Map<string, () => void>();
+const schedulerQueuedPromptDiscardWatchers = new Map<string, SchedulerQueuedPromptObserver>();
 const schedulerQueuedPromptPreparations = new Map<string, {
   onPreparing: () => Promise<void>;
   onPreparationFailed?: (error: unknown) => void;
@@ -7329,6 +7335,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // v2 因果能力：同引擎 no-op 返回 revision，后续 SET_MODEL 在 session 锁内 CAS。
       // 新 desktop 控制端据此与只有基础切换能力的旧 host 做安全兼容门控。
       supportsSessionAgentSwitchCas: true,
+      supportsQueueHeadRetry: true,
       // 新控制端只有看到此位才允许给被控端 Orca Team 选择 Worker Full access。
       // 旧 desktop 缺省为 false，避免显式 bypassPermissions 被旧 handler 静默忽略。
       supportsOrcaWorkerPermissionMode: true,
@@ -13605,7 +13612,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     syncLanePermission: async (laneSessionId) => syncBotLanePermission(laneSessionId),
     hasPendingInteraction: (sessionId) => hasPendingAgentInteractionForSession(sessionId),
-    decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, opts)),
+    decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, { ...opts, source: 'group-planning' })),
     workDir: botGroupWorkDir,
     validateProjectDir: async (dir) => {
       try {
@@ -15610,7 +15617,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return queued;
   }
 
+  const workerInputs = new WeakSet<object>();
   const orcaInterAgentDispatcher: OrcaInterAgentDispatcher = createOrcaInterAgentDispatcher({
+    directWorkerRecovery: {
+      getInputAbortSignal: id => inputCoordinator.getInputAbortSignal(id),
+      rememberDirectWorkerInput: (runtime, generation, item, signal) => {
+        if (item.createOpts.orcaRole === 'worker') workerInputs.add(item.createOpts);
+        return inputCoordinator.rememberDirectWorkerInput(runtime, generation, item, signal);
+      },
+    },
     prepareRestoredReportAcceptance: prepareRestoredOrcaReportAcceptance,
     onDirectInputDispatched: sessionId => touchSessionActivityInDb(sessionId),
     readAutoReviewHistory: sessionId => readAutoReviewHistory(sessionId),
@@ -17550,6 +17565,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const sessionControlService = createSessionControlService({
+    runSessionAction: params => runSessionExecutionAction(params, {
+      coordinator: inputCoordinator, persist: awaitAgentInputQueueSnapshotPersistence,
+      interactions: {
+        pending: pendingInteractionResolvers,
+        resolve: (requestId, decision) => { resolvePendingInteraction(requestId, decision, true); },
+        resumeTimeout: requestId => {
+          const entry = pendingInteractionResolvers.get(requestId);
+          if (entry) schedulePendingPermissionTimeout(requestId, entry);
+        },
+      },
+      compact: async (id, instructions, beforeMutation, beforeDelivery) => {
+        const createOpts = await readSharedTaskTaskCreateOpts(id);
+        await beforeMutation();
+        if (createOpts.agentKind !== 'claude-code') return compactSessionFromHost(id, instructions, beforeMutation);
+        if (instructions !== undefined) throwIpcError('UNSUPPORTED_CAPABILITY', 'Claude compact control does not accept custom instructions');
+        return inputCoordinator.compact(id, createOpts, { beforeMutation: beforeDelivery });
+      },
+    }),
+    getPluginCaller: () => {
+      const plugin = getPluginHostToolCaller();
+      const source = hostPluginInputSource();
+      return plugin && source ? { source, assertCurrent: () => plugin.assertCurrent() } : undefined;
+    },
     sessionExists: async (sessionId) => (await maker.getSessionMeta(sessionId)) !== null,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
     getSessionActivitySnapshot: readCanonicalSessionActivity,
@@ -17759,6 +17797,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     replaceQueuedMessage: (sessionId, clientId, next, expected) =>
       (!expected || inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected))
       && inputCoordinator.replaceQueuedMessage(sessionId, clientId, next),
+    updateQueuedMessageText: (sessionId, expected, text, finalize) => {
+      if (!inputCoordinator.hasQueuedItemWhere(sessionId, item => item === expected)
+        || inputCoordinator.getQueueInspection(sessionId).some(entry => entry.queuedMessageId === expected.clientId && entry.consuming)) return false;
+      inputCoordinator.updateText(sessionId, expected.clientId, text, undefined, undefined, false, finalize);
+      return true;
+    },
     removeQueuedMessage: (sessionId, clientId, expected) => {
       if (!inputCoordinator.hasQueuedItemWhere(sessionId, (item) => item.clientId === clientId && (!expected || item === expected))) {
         return false;
@@ -17817,6 +17861,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     updateSessionQueuedMessage: (params) => sessionControlService.updateQueuedMessage(params),
+    controlSession: (params) => sessionControlService.controlSession(params),
     cancelSessionQueuedMessage: (params) => sessionControlService.cancelQueuedMessage(params),
     steerSessionQueuedMessage: (params) => sessionControlService.steerQueuedMessage(params),
     moveSessionQueuedMessage: (params) => sessionControlService.moveQueuedMessage(params),
@@ -18561,7 +18606,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!isQuotaScheduleCurrent(schedule, sessionId)) throwIpcError('PRECONDITION_FAILED', 'Schedule is no longer active for this task');
       }
       if (!scheduled) await scheduledModelScope.restore(sessionId);
-      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      const expectedSwitch = agentInputCoordinatorHolder?.takeRetrySwitchRevision(sessionId, options?.clientId);
+      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { signal: options?.signal, expectedRevision: expectedSwitch });
+      if (agentSwitchPending.get(sessionId)?.targetAgentDeviceId !== undefined) {
+        throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected computer is not ready; retry the send after recovery');
+      }
       if (!scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       // 桌面发送也是「消息真正发出去」的边界：回合中登记、随后被模型选择器取消的预算
       // 重建必须在这里补一次（调用方已持 send 锁）。
@@ -18659,7 +18708,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isAutoResumeAttemptCurrent: (sessionId, attemptToken) => inputCoordinator.isAutoResumeAttemptCurrent(sessionId, attemptToken),
       autoRetryLastError: (sessionId, attemptToken) => inputCoordinator.autoRetryLastError(sessionId, attemptToken),
     },
-    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, saveTurnStartedAtForDeferred,
+    interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
     beginSchedulerAutoResume,
     getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
     pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
@@ -18688,6 +18737,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!ownsQuotaRoute()) await reconcileBotModelRoute(sessionId, true);
       const [botInput] = await getDbClient()
         .drizzle.select({
+          orcaRole: sessions.orcaRole,
+          orcaRemoteLead: sessions.orcaRemoteLead,
           source: sessions.source,
           role: botSessionLinks.role,
           workingDir: sessions.workingDir,
@@ -18709,6 +18760,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('PRECONDITION_FAILED', SHADOWED_COMPANION_INPUT_MESSAGE);
       }
       if (args[2] && typeof args[2] === 'object') {
+        if (botInput?.orcaRole === 'worker' || parseOrcaRemoteLead(botInput?.orcaRemoteLead)) workerInputs.add(args[2]);
+        else workerInputs.delete(args[2]);
         const origin = (args[3] as { origin?: AgentInputQueuedMessage['origin'] } | undefined)?.origin;
         if (botInput?.source === 'bot' && botInput.agentDeviceId && !botInput.remoteHostId
           && ['canonical', 'thread'].includes(botInput.role ?? '')
@@ -19770,6 +19823,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // lookup is async; unknown/unsafe resets release the run but keep Retry.
         pendingSchedulerAutoResumeRunBySession.set(sessionId, {
           runId: item.origin.runId, attemptToken: 0, usageLimitToken: candidateToken,
+          error: signals.message ? schedulerFailureDetail(signals.message) : undefined,
         });
         for (const listener of schedulerAutoResumeFailureListeners.get(schedulerAutoResumeRunKey(sessionId, item.origin.runId)) ?? []) {
           listener.quotaWait?.start();
@@ -20190,7 +20244,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (watcher) {
         schedulerQueuedPromptDiscardWatchers.delete(item.clientId);
         try {
-          watcher();
+          watcher.onDiscarded();
         } catch (err) {
           log.warn('scheduler queued prompt discard watcher threw', {
             clientId: item.clientId,
@@ -20259,7 +20313,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 才是目标续跑轮 —— 绕过 coordinator 的 turn(silent-stop 自动续跑)不走这里,
       // 结构上不可能被误认。详见 uiContinuationSignal 的模块注释。
       publishUiTurnDispatching(sessionId, item.clientId);
-      await gitSnapshotCoordinator?.onTurnStart(sessionId, signal);
+      await prepareQueuedPromptSnapshot(gitSnapshotCoordinator, schedulerQueuedPromptDiscardWatchers, sessionId, item, signal);
     },
     onUndispatchedUserTurn: (sessionId, item, disposition) => {
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
@@ -21330,13 +21384,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 ...(stored ? { planMode: stored.planModeEnabled === true } : {}),
               },
             });
-            if (req.onDiscarded) schedulerQueuedPromptDiscardWatchers.set(clientId, req.onDiscarded);
-            if (req.onPreparing) schedulerQueuedPromptPreparations.set(clientId, {
-              onPreparing: req.onPreparing, onPreparationFailed: req.onPreparationFailed,
-            });
+            const onAccepted = schedulerQueueBridgeHolder!.trackPrompt(clientId, req);
             orcaInterAgentDispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
               clientId,
-              () => req.onAccepted({ permissionMode: continuation.createOpts.permissionMode, planMode: continuation.createOpts.planMode }),
+              () => onAccepted({ permissionMode: continuation.createOpts.permissionMode, planMode: continuation.createOpts.planMode }),
               req.onAcceptedRollback,
             );
             try {
@@ -21352,6 +21403,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               didEnqueue();
               return { clientId };
             } catch (error) {
+              schedulerQueueBridgeHolder!.releasePrompt(sid, clientId);
               schedulerQueuedPromptDiscardWatchers.delete(clientId);
               schedulerQueuedPromptPreparations.delete(clientId);
               orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(clientId);
@@ -21742,6 +21794,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     async (_e, sessionId: unknown, opts?: unknown) => {
       const sid = requireSessionId(sessionId);
       await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+      if (opts && typeof opts === 'object' && 'expectedQueueHeadClientId' in opts) {
+        const expected = requireClientId(opts.expectedQueueHeadClientId);
+        const revision = 'expectedSwitchRevision' in opts ? opts.expectedSwitchRevision : undefined;
+        if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision <= 0) {
+          throwIpcError('INVALID_PARAMS', 'expected switch revision required');
+        }
+        if (!agentSwitchPending.get(sid) || agentSwitchPending.revision?.(sid) !== revision) {
+          return inputCoordinator.getProjection(sid);
+        }
+        return inputCoordinator.retryLastError(sid, expected, revision);
+      }
       return inputCoordinator.retryLastError(sid);
     },
   );
@@ -23236,19 +23299,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (instructions !== undefined && typeof instructions !== 'string') {
         throwIpcError('INVALID_PARAMS', 'instructions must be a string when provided');
       }
-      return withSendToSessionLock(sessionId, async () => {
-        try {
-          const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
-          if (!sess?.capabilities.manualCompact?.supported) {
-            throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
-          }
-          return await sess.compactSession(instructions);
-        } finally {
-          await getOrResumeSessionForHistory.release(sessionId);
-        }
-      });
+      return compactSessionFromHost(sessionId, instructions);
     },
   );
+
+  async function compactSessionFromHost(sessionId: string, instructions?: string, beforeMutation?: () => Promise<void>) {
+    return withSendToSessionLock(sessionId, async () => {
+      try {
+        const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
+        if (!sess?.capabilities.manualCompact?.supported) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
+        }
+        await beforeMutation?.();
+        return await sess.compactSession(instructions);
+      } finally {
+        await getOrResumeSessionForHistory.release(sessionId);
+      }
+    });
+  }
 
   // History actions restore the persisted native session, without a model turn.
   // bootstrap's strict resume also prevents fresh-history/provider failover.

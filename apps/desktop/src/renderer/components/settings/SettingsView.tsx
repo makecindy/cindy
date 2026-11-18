@@ -77,7 +77,6 @@ const VoiceInputSection = lazy(() => import('./VoiceInputSection').then(module =
 const AppearanceSection = lazy(() => import('./AppearanceSection').then(module => ({ default: module.AppearanceSection })));
 const SubagentModelSection = lazy(() => import('./SubagentModelSection').then(module => ({ default: module.SubagentModelSection })));
 const AuxiliaryModelSection = lazy(() => import('./AuxiliaryModelSection').then(module => ({ default: module.AuxiliaryModelSection })));
-const VisionBridgeSection = lazy(() => import('./VisionBridgeSection').then(module => ({ default: module.VisionBridgeSection })));
 const ProvidersSection = lazy(() => import('./ProvidersSection').then(module => ({ default: module.ProvidersSection })));
 const ModelGroupsSection = lazy(() => import('./ModelGroupsSection').then(module => ({ default: module.ModelGroupsSection })));
 const McpServersSection = lazy(() => import('./McpServersSection').then(module => ({ default: module.McpServersSection })));
@@ -685,9 +684,6 @@ function SettingsViewContent() {
                     <AuxiliaryModelSection
                       key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
                     />
-                  </section>
-                  <section id={personalizationSettings.visionBridge.targetId} aria-label={t(personalizationSettings.visionBridge.titleKey)}>
-                    <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
                   </section>
                   {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
                   <section id={personalizationDetailsSettings.terminalShellCardLabel.targetId} aria-label={t(personalizationSettings.terminalShell.titleKey)}>

@@ -443,7 +443,7 @@ export interface GhostCindyNeeds {
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
  * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state', 'tool-execution'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
 
 /**
@@ -1040,6 +1040,8 @@ export interface GhostManifest {
    * 只影响宿主展示：「IM 机器人」设置页列出它并显示「项目与模型」；不授予任何能力。
    */
   imEntrance?: boolean;
+  /** Optional GitHub.com owner/repository for local plugin updates. */
+  githubRelease?: unknown;
   /** 仅 schemaVersion 2 存在的兼容声明。 */
   slots?: LegacyGhostSlot[];
   /**
@@ -1294,6 +1296,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'settingsHeight',
   'showTaskPreferences',
   'imEntrance',
+  'githubRelease',
   'slots',
   'card',
   'mail',
@@ -1367,6 +1370,15 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   iosSimulator: 'ios-simulator',
   liveScreen: 'live-screen',
 };
+
+/** Select only a supported GitHub.com repository; stored historical declarations remain opaque. */
+export function getGhostGithubReleaseRepository(manifest: { githubRelease?: unknown; settingsHtml?: unknown }): string | undefined {
+  const { githubRelease, settingsHtml } = manifest;
+  if (typeof settingsHtml !== 'string' || typeof githubRelease !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9_.-]{1,100}$/i.test(githubRelease) ||
+      /\/(?:\.|\.\.)$/.test(githubRelease)) return;
+  return githubRelease.toLowerCase();
+}
 
 type PreparedGhostManifest = {
   raw: Record<string, unknown>;
@@ -1870,6 +1882,9 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
   }
   // Older manifests could use this formerly unknown name. Preserve their snapshot.
+  if (raw.githubRelease !== undefined && !preserveHistoricalParameterSize && !getGhostGithubReleaseRepository(raw)) {
+    return { ok: false, reason: 'githubRelease requires settingsHtml and a GitHub owner/repository' };
+  }
   if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
     if (typeof raw.imEntrance !== 'boolean') return { ok: false, reason: 'imEntrance 必须是布尔值' };
     const imAgent = raw.agent as Record<string, unknown> | undefined;
@@ -4064,6 +4079,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
+      ...(raw.githubRelease !== undefined ? { githubRelease: raw.githubRelease } : {}),
       ...(raw.imEntrance !== undefined ? { imEntrance: raw.imEntrance as boolean } : {}),
       ...(prepared.schemaVersion === 2 ? { slots } : {}),
       ...(card !== undefined

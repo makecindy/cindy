@@ -74,18 +74,32 @@ describe('production path spans', () => {
   it.each([
     ['file://nas/share/x.pdf', 'C:\\proj', 0],
     ['file://nas/share/proj/../secret.svg', '\\\\nas\\share\\proj', 0],
+    // #11261 review: file://// keeps forward slashes; the Windows owner still treats these as SMB.
+    ['file:////nas/share/x.pdf', 'C:\\proj', 0],
+    ['file:///\\nas/share/x.pdf', 'C:\\proj', 0],
+    ['//nas\\share/x.pdf', 'C:/proj', 0],
+    ['file:////nas/share/proj/../secret.svg', '\\\\nas\\share\\proj', 0],
+    ['//NAS/share/proj/x.pdf', '\\\\nas\\share\\proj', 1],
+    ['\\\\nas/share/proj/x.pdf', '//nas/share/proj', 1],
+    ['//nas/share/proj2/x.pdf', '//nas/share/proj', 0],
+    ['//repo/x.pdf', '/repo', 1],
     ['C:\\x\\a.pdf', 'C:\\proj', 1],
     ['src/a.ts', '\\\\srv\\share\\proj', 1],
   ])('auto-verifies link %s in workdir %s %i time(s)', async (url, workdir, calls) => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     verifyPath.mockClear();
-    const root = createRoot(document.createElement('div'));
-    const SpanText = ({ children }: any) => React.createElement('span', null, children);
-    const context = { deviceId: 'd1', workdir, statPath: vi.fn(), onOpenPath: vi.fn() };
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const SpanText = ({ children, onPress }: any) => React.createElement('span', { onClick: onPress }, children);
+    const context = { deviceId: 'd1', workdir, statPath: vi.fn(async () => ({ kind: 'file' })), onOpenPath: vi.fn() };
     try {
       await act(async () => root.render(React.createElement(pathContext.Provider, { value: context },
         React.createElement(productionPath.LinkPathChipSpan, { url, display: 'x', styles: pathStyles, SpanText, baseStyle: {} }))));
       expect(verifyPath).toHaveBeenCalledTimes(calls);
+      expect(context.statPath).not.toHaveBeenCalled();
+      await act(async () => container.querySelector('span')!.click());
+      expect(context.statPath).toHaveBeenCalledTimes(1);
+      expect(context.onOpenPath).toHaveBeenCalledTimes(1);
     } finally { await act(async () => root.unmount()); }
   });
 });

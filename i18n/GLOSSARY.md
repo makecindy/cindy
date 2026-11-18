@@ -1027,6 +1027,22 @@ Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 
 
 任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。
 
+### Inbox
+
+按状态整理任务的列表模式，由任务栏右上角按钮切换；分区为待处理、进行中、稍后处理、已处理。
+
+### Pending
+
+收件箱模式的第一个分区：需要用户处理的任务（新结果、等待回复、未归档的普通任务）。
+
+### Processed
+
+任务列表底部已归档任务分区的名称，沿用归档生命周期。
+
+### Snoozed
+
+任务暂时收起，到期回到当前执行状态对应的分区，不停止 Agent。
+
 ### Tag
 
 任务列表的 Finder 式颜色标签；仅标识任务，不改变运行状态。用户已确认显示为重叠色球，整合现有任务菜单，当前不增加筛选入口。
@@ -1070,10 +1086,6 @@ Codex 模型的第三档速度；与推理深度 Ultra 独立。标准、快速�
 ### Use my browser logins
 
 设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。
-
-### Vision Bridge
-
-让纯文本模型获得看图能力的能力名:把图片交给外部多模态后端转成文字描述,再喂给文本模型。zh-CN 取「视觉桥」而非「视觉桥梁/图像转文字」——「桥」强调其桥接定位,且与英文 Vision Bridge 一一对应。设置页 visionBridge 分节、docs/vision-bridge-design.md、日志 note 使用。先登记为 proposed,待产品术语评审后固化。
 
 ### Voice dictionary
 

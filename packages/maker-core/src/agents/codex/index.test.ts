@@ -1689,7 +1689,8 @@ describe('CodexAgent oneShot Goal ownership', () => {
     MockCodexTransport.onCreate = transport => {
       transport.setMockResponse(Method.TurnStart, { result: { turn: { id: 'one-shot-turn' } } });
     };
-    const pending = agent.oneShot(prompt, { timeoutMs: 2_000 });
+    const onUsage = vi.fn();
+    const pending = agent.oneShot(prompt, { timeoutMs: 2_000, onUsage });
     void pending.catch(() => undefined);
     try {
       await vi.waitFor(() => expect(createdTransports[0]?.lines.some(line =>
@@ -1704,7 +1705,13 @@ describe('CodexAgent oneShot Goal ownership', () => {
       transport.emitMockLine({ method: 'item/completed', params: {
         threadId, turnId: 'one-shot-turn', item: { type: 'agentMessage', id: 'answer', text: 'Bounded result' },
       } });
+      transport.emitMockLine({ method: 'thread/tokenUsage/updated', params: { threadId, turnId: 'one-shot-turn',
+        tokenUsage: { total: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 105 },
+          last: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 105 } } } });
+      transport.emitMockLine({ method: 'turn/completed', params: { threadId, turn: { id: 'one-shot-turn', status: 'completed', items: [] } } });
       await expect(pending).resolves.toBe('Bounded result');
+      expect(onUsage).toHaveBeenCalledOnce();
+      expect(onUsage).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 80, cacheReadTokens: 20, outputTokens: 5 }));
       expect(transport.lines.map(line => JSON.parse(line)).filter(message =>
         message.method === Method.ThreadUnsubscribe)).toEqual([
         expect.objectContaining({ params: { threadId } }),
@@ -20712,12 +20719,19 @@ describe('CodexAgent MCP thread context hooks', () => {
       });
       const tool = { id: 'background-tool', type: 'mcpToolCall', server: 'test', tool: 'wait', arguments: {} };
       handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-2', item: tool });
-      now = 15_000;
+      now = 13_100; // Usage landed inside the 500ms refresh window; the tool may now stay silent.
       usage('turn-2', 2_000_000, 2_001_230);
-      expect(handle.getUsageSnapshot().tokenSpeed).toBeUndefined();
-      expect(handle.getUsageSnapshot().generationReliable).toBe(false);
+      expect(handle.getUsageSnapshot()).toMatchObject({
+        outputTokens: 1_200, generationDurationMs: 12_000, generationReliable: true,
+        tokenSpeed: { tokens: 1_200, totalOutputTokens: 2_001_200, average: 100, streaming: false },
+      });
+      await waitForExpectation(() => expect(events).toContainEqual(expect.objectContaining({
+        type: 'status', data: expect.objectContaining({
+          tokenSpeed: expect.objectContaining({ totalOutputTokens: 2_001_200, average: 100, streaming: false }),
+        }),
+      })));
       handlers.itemCompleted!({ threadId: 'start-thread-id', turnId: 'turn-2', item: tool });
-      now = 25_000;
+      now = 23_100;
       usage('turn-2', 377, 2_001_617);
       // The unpaired 2M tokens stay out. Nothing in this turn has streamed, so no speed is
       // measured yet and each response still counts over the model time it took.
@@ -20729,7 +20743,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-2', status: 'completed' } });
       await handle.send({ type: 'user', content: 'new user turn' });
       handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-3' } });
-      now = 35_000;
+      now = 33_100;
       usage('turn-3', 377, 2_002_004);
       expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7 });
     } finally {

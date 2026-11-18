@@ -1,6 +1,9 @@
+import type { ReactElement } from 'react';
 export interface NewTaskSelectionSheetProps {
   page: 'device' | 'workspace' | 'directory' | null;
   workspaceTitle?: string;
+  browseLabel?: string;
+  directoryInput?: ReactElement;
   /** Host capability loading for workspace choices; directory reads use loading. */
   workspaceLoading?: boolean;
   busy: boolean;

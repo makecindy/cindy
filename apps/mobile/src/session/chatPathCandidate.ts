@@ -355,17 +355,22 @@ export function resolveChatAbsPath(href: string, workdir: string): string {
 }
 
 /**
- * resolveChatAbsPath 得到的 `\\host\…`(含 `\\.\` / `\\?\`)且不在 workdir 内 → true。
+ * resolveChatAbsPath 得到的 UNC(含 Windows 文件拥有端的正斜杠、混合分隔符及设备前缀)且不在 workdir 内 → true。
  * 这类路径不得在渲染时自动 stat / 取件:被控 Windows 桌面会向消息内容点名的主机发起 SMB
  * 连接(可能送出 NTLM 凭据);只在用户显式点开时访问。workdir 本身在共享上时,其子路径照常。
  * 含 `..` 段的一律算 workdir 外:`\\nas\share\proj\..\secret.svg` 字面上以 workdir 开头,
  * 被控端规范化后却落在 workdir 之外(与 toWorkdirRel 拒绝 `..` 同一口径)。
  */
 export function isUncPathOutsideWorkdir(workdir: string, absPath: string): boolean {
-  if (!absPath.startsWith('\\\\')) return false;
-  if (absPath.split(/[\\/]/).includes('..')) return true;
+  // Use the file owner's path style, not the phone OS. Windows accepts both
+  // slash directions (including mixed UNC prefixes); POSIX // remains local.
+  const windowsWorkdir = WIN_ABS_RE.test(workdir) || /^[\\/]{2}/.test(workdir);
+  const candidate = windowsWorkdir ? absPath.replace(/\//g, '\\') : absPath;
+  if (!candidate.startsWith('\\\\')) return false;
+  if (candidate.split(/[\\/]/).includes('..')) return true;
   const base = workdir.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
-  return !(base.startsWith('\\\\') && absPath.toLowerCase().startsWith(`${base}\\`));
+  const normalized = candidate.replace(/\//g, '\\').toLowerCase();
+  return !(base.startsWith('\\\\') && normalized.startsWith(`${base}\\`));
 }
 
 /** 去掉路径里的 `.` 段(`/w/./a` → `/w/a`),避免同路径两形态。 */

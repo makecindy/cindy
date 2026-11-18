@@ -25,10 +25,10 @@ export const TASK_LIVE_SCREEN_LIMIT = 3;
 
 /**
  * What this computer still needs before it can show a device: the plugin that
- * provides it must be installed here, turned on, and new enough to draw
+ * provides it must be installed here, turned on, and able to draw
  * another computer's device in its own task page.
  */
-export type TaskLiveScreenNeed = 'install' | 'enable' | 'update';
+export type TaskLiveScreenNeed = 'install' | 'enable' | 'unsupported';
 
 /** One plugin's devices for the task, and whether this computer can show them. */
 export interface TaskLiveScreenEntry {
@@ -74,10 +74,10 @@ export function taskLiveScreenEntries(
         ghost,
         need: !ghost
           ? 'install'
-          : ghost.enabled === false
-            ? 'enable'
-            : ghost.manifest.taskView?.remote !== true
-              ? 'update'
+          : ghost.manifest.taskView?.remote !== true
+            ? 'unsupported'
+            : ghost.enabled === false
+              ? 'enable'
               : null,
       };
       entries.push(entry);
@@ -103,9 +103,8 @@ export function taskLiveScreenEntries(
 const canShowRemote = (ghost: InstalledGhost) => ghost.enabled && ghost.manifest.taskView?.remote === true;
 
 /**
- * The words for what this computer needs, and the one-click fix: install, turn on
- * or update the plugin right here (Main asks for permission as usual), then open
- * the device. Only what cannot be settled here opens the plugin's page.
+ * Install, turn on, or check for a compatible update here. Missing remote support
+ * is not evidence that an update exists. Main still asks for permission as usual.
  */
 function useEntrySetup(sessionId: string) {
   const { t } = useTranslation();
@@ -131,9 +130,17 @@ function useEntrySetup(sessionId: string) {
         return;
       }
       void run(
-        { ghostId: identity.ghostId, namespace: identity.namespace, update: entry.need === 'update' },
+        {
+          ghostId: identity.ghostId,
+          namespace: identity.namespace,
+          update: entry.need === 'unsupported',
+          requireRemoteTaskView: true,
+        },
         {
           isCurrent: () => shownSession.current === sessionId,
+          unavailableMessageKey: entry.need === 'unsupported'
+            ? 'remoteDesktop.liveScreenPlugin.unsupported.unavailable'
+            : undefined,
           onReady: (ghost) => {
             if (canShowRemote(ghost)) void openPluginTaskTab(sessionId, installedGhostStoragePart(ghost)).catch(() => {});
           },
@@ -188,7 +195,7 @@ function subscribeNotices(listener: () => void): () => void {
  * A device of this task appeared on its computer. With the plugin usable here,
  * its task page opens in the sidebar, as the plugin does for a task on this
  * computer; without it, an ask above the task's composer says what to install
- * (or turn on, or update) and does it there. Once per appearance: coming back
+ * (or turn on), or explains missing support and can check for an update. Once per appearance: coming back
  * to the task or closing the tab does not repeat it until the device goes away
  * and returns, or until the plugin becomes usable. An unread list says nothing
  * either way.
@@ -247,7 +254,7 @@ export function resetAutoOpenedTaskLiveScreens(): void {
  * 当前任务在同账号另一台电脑上、且那台电脑的插件为这个任务开着设备（例如模拟器）时，
  * 放在远程桌面入口旁的入口：每个提供设备的插件一个按钮。画面和操作都在该插件自己的
  * 任务页里（与任务在本机时同一个页面），所以这台电脑也要装着同一个插件：装好了，点按钮
- * 在右侧栏打开（或切到）它的任务页；没装、没开启或版本太旧，点按钮说明原因并带用户去处理。
+ * 在右侧栏打开（或切到）它的任务页；没装、没开启或不支持远程查看，说明原因并提供对应操作。
  *
  * 与 TaskRemoteDesktopButton 共用 28px 胶囊按钮与摆位（由 MainLayout 决定）。
  */

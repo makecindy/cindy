@@ -443,10 +443,10 @@ describe('MarkdownRenderer file://host targets in device sessions', () => {
     return render(<MarkdownRenderer workingDir="C:\proj" currentSessionId="s1" renderRichAnswers content={content} />);
   };
 
-  it('does not pre-check a file://host link or inline path, and stats the link on click', async () => {
+  it.each(['file://nas/share/report.pdf', 'file:////nas/share/report.pdf'])('does not pre-check shared link %s and stats it on click', async (href) => {
     const chatStat = vi.fn(async () => ({ verdict: 'unknown' }));
     (window as unknown as { electronAPI: unknown }).electronAPI = { fileBrowser: { chatStat } };
-    renderInDevice('[report](file://nas/share/report.pdf) `file://nas/share/a.png`');
+    renderInDevice('[report](' + href + ') `file://nas/share/a.png`');
     await act(async () => {});
     expect(chatStat).not.toHaveBeenCalled();
 
@@ -456,6 +456,8 @@ describe('MarkdownRenderer file://host targets in device sessions', () => {
 
   it.each([
     ['Markdown image', '![a](file://nas/share/a.png)', 'img', toLocalFileUrl(`${share}a.png`)],
+    ['slash-share image', '![a](file:////nas/share/a.png)', 'img', toLocalFileUrl(`${share}a.png`)],
+    ['slash-share video', richNode('video', 'file:////nas/share/clip.mp4'), '[data-testid="markdown-video"]', toLocalFileUrl(`${share}clip.mp4`)],
     ['cindy-ui video', richNode('video', 'file://nas/share/clip.mp4'), '[data-testid="markdown-video"]', toLocalFileUrl(`${share}clip.mp4`)],
     ['cindy-ui audio', richNode('audio', 'file://nas/share/a.mp3'), 'audio',
       toLocalFileUrl(`${share}a.mp3`).replace(/^xdt-file:/, 'xdt-audio:')],

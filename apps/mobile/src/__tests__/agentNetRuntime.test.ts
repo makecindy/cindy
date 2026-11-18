@@ -38,7 +38,7 @@ vi.mock('@/device-link/agentNetLan', () => ({ mobileAgentNetDiscovery: vi.fn() }
 vi.mock('@/device-link/agentNetProtocol', () => ({ verifyMobileAgentNetCertificate: fake.verifyCertificate, verifyMobileAgentNetDelegation: vi.fn() }));
 vi.mock('@/device-link/agentNetDirectoryCache', () => ({ readMobileAgentNetDirectory: fake.readDirectory, writeMobileAgentNetDirectory: vi.fn() }));
 vi.mock('@/device-link/agentNetMode', () => ({ verifyMobileAgentNetModeProof: vi.fn() }));
-vi.mock('@/device-link/agentNetSharing', () => ({ mobileAgentNetSharingMediaTarget: fake.target }));
+vi.mock('@/device-link/agentNetSharing', () => ({ mobileAgentNetSharingMediaTarget: fake.target, setMobileAgentNetPrivateSharingSupport: vi.fn() }));
 
 import { openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer, mobileAgentNetShouldProbeLegacyPeer } from '@/device-link/agentNetRuntime';
 import { uploadMobileAttachment } from '@/session/mobileAttachmentUpload';
@@ -173,7 +173,7 @@ it.each([false, true])('keeps forced V2 startup independent of UDP discovery (en
   const engine = { destroy: vi.fn() };
   const createEngine = vi.fn(async () => engine);
   fake.identity.mockResolvedValue({ api: { base: 'https://private.example.test',
-    identity: { deviceId: 'phone' }, certificate: { expiresAt: Date.now() + 48 * 60 * 60_000 } },
+    identity: { deviceId: 'phone' }, certificate: { networkId: 'private:test', expiresAt: Date.now() + 48 * 60 * 60_000 } },
     signer: {}, newTransportEngine: createEngine });
   let finishLookup!: (response: Response) => void;
   const fetch = vi.fn(() => new Promise<Response>(resolve => { finishLookup = resolve; }));

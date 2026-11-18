@@ -888,8 +888,9 @@ function InlineXdtAudioPlayer({ src }: { src: string }) {
 function markdownMediaOrigin(
   src: string | undefined,
   origin: RemoteMediaOrigin | undefined,
+  workingDir: string,
 ): RemoteMediaOrigin | undefined {
-  return src && isFileUrlHostHref(src) ? undefined : origin;
+  return src && isFileUrlHostHref(src, workingDir) ? undefined : origin;
 }
 
 /**
@@ -1350,7 +1351,7 @@ function useResolvedMarkdownTarget(
   const remoteAbsPath = useMemo(() => {
     if (isStreaming || target.kind !== 'local-candidate' || !remoteOrigin) return '';
     // file://host 指向另一台机器的共享:与本机渲染期解析一样不预检、不点亮,只在点击时 stat。
-    if (isFileUrlHostHref(target.href)) return '';
+    if (isFileUrlHostHref(target.href, workingDir)) return '';
     if (isHomePath(target.href)) return remoteHomePath?.absPath ?? '';
     return resolveLocalPath(target.href, workingDir) || '';
   }, [isStreaming, target, workingDir, remoteOrigin, remoteHomePath]);
@@ -1936,7 +1937,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           >
             {(localSrc) => {
               const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks);
-              const mediaOrigin = markdownMediaOrigin(localSrc, remoteMediaOrigin);
+              const mediaOrigin = markdownMediaOrigin(localSrc, remoteMediaOrigin, workingDir);
               if (isManagedMarkdownVideoUrl(normalized)) {
                 // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
                 // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
@@ -2182,7 +2183,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
           // images/documents/video and rejects MP3. Preserve the encoded path and
           // select the handler before wrapping the URL for a remote source device.
           const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
-          const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
+          const mediaOrigin = markdownMediaOrigin(localSrc, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined, props.workingDir);
           const src = rewriteToRemoteMediaOrigin(playable, mediaOrigin);
           // ChatVideoView 会按 sessionId 再改写一次;不改写的来源(file://host)不能让它补上。
           return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={mediaOrigin ? props.currentSessionId : undefined} />;

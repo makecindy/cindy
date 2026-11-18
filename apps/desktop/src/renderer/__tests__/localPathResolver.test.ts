@@ -258,6 +258,8 @@ describe('resolveLocalPath', () => {
   // escaped) keep the relative pre-UNC text instead of a \\.\ or \\?\ device path.
   it.each([
     ['file://nas/share/x.pdf', 'C:\\proj', '\\\\nas\\share\\x.pdf'],
+    ['file:////nas/share/x.pdf', 'C:/proj', '\\\\nas\\share\\x.pdf'],
+    ['file:////repo/x.pdf', '/repo', '//repo/x.pdf'],
     ['file://nas/share/a%20b%2520.pdf', '/home/u', '\\\\nas\\share\\a b%20.pdf'],
     ['file://a%2Fb/share/x.pdf', 'C:\\proj', '\\\\a%2Fb\\share\\x.pdf'],
     ['file://localhost/C:/x.png', 'C:\\proj', 'C:/x.png'],
@@ -442,19 +444,19 @@ describe('file URL decoding across renderer and main', () => {
   // Rendering must not contact a host named in message content (on Windows main
   // would stat \\nas\share, i.e. SMB + NTLM): render-time lookups and their
   // re-checks answer without IPC; an explicit open still asks main.
-  it('looks up a file://host link in main only on an explicit open', async () => {
+  it.each(['file://nas/share/x.pdf', 'file:////nas/share/x.pdf', 'file:///\\nas/share/x.pdf'])('looks up shared URL %s in main only on an explicit open', async (href) => {
     const resolvePath = vi.fn().mockResolvedValue({ status: 'none', candidates: [] });
     const resolvePathBatch = vi.fn().mockResolvedValue({});
     vi.stubGlobal('window', { electronAPI: { resolvePath, resolvePathBatch } });
-    const href = 'file://nas/share/x.pdf';
-    const none = { status: 'none', fallbackAbsPath: '\\\\nas\\share\\x.pdf' };
+    const absPath = resolveLocalPath(href, 'C:\\proj');
+    const none = { status: 'none', fallbackAbsPath: absPath };
 
     await expect(resolveLocalPathSmartCached(href, 'C:\\proj')).resolves.toEqual(none);
     await expect(revalidateNegativeLocalPathSmart(href, 'C:\\proj', Date.now())).resolves.toEqual(none);
     expect(resolvePathBatch).not.toHaveBeenCalled();
 
     await expect(resolveLocalPathSmart(href, 'C:\\proj', { refresh: true })).resolves.toEqual(none);
-    expect(resolvePath).toHaveBeenCalledWith({ href: '\\\\nas\\share\\x.pdf', workingDir: 'C:\\proj', refresh: true });
+    expect(resolvePath).toHaveBeenCalledWith({ href: absPath, workingDir: 'C:\\proj', refresh: true });
   });
 
   // F3: both IPC paths reach the production host decoder after file URL conversion.

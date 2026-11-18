@@ -5,8 +5,9 @@ import { AgentInputCoordinator, markManualSchedulerContinuation } from '../agent
 import { stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin } from '../makerSendTransaction.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
-import type { SchedulerQueuedPromptRequest } from '../register.js';
+import type { SchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
 import type { SavedUsageLimitWait } from '../usageLimitRecoveryStore.js';
+import { createSchedulerQueueBridge } from '../schedulerQueueBridge.js';
 
 // Execute the production IPC handler while injecting only its host services.
 // Shared by queue tests and the real scheduler-runner continuation regression.
@@ -104,14 +105,22 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   const sameItem = (item: AgentInputQueuedMessage) => item;
   const owner = {};
   const acceptedCallbacks = new Map<string, () => void | Promise<void>>();
-  const preparations = new Map<string, Pick<SchedulerQueuedPromptRequest, 'onPreparing' | 'onPreparationFailed'>>();
+  const preparations = new Map<string, SchedulerQueuedPreparation>();
+  const discardWatchers = new Map();
+  const schedulerBridge = createSchedulerQueueBridge({
+    coordinator, isSessionBusy: () => false, getSessionMeta: async () => null,
+    getSessionRowSnapshot: async () => null, createId: () => 'unused-scheduler-id',
+    preparations, discardWatchers, discardAcceptedCallback: id => { acceptedCallbacks.delete(id); },
+    enqueue: async () => { throw new Error('Manual Continue must enqueue through its IPC handler'); },
+  });
   const bindings = {
     inputCoordinator: coordinator,
     CONTINUE_AFTER_APP_EXIT_PROMPT,
     markManualSchedulerContinuation,
     resumeInterruptedScheduleRun,
     getSessionFsSnapshot: options.getSessionFsSnapshot ?? (async () => ({ planModeEnabled: false })),
-    schedulerQueuedPromptDiscardWatchers: new Map(),
+    schedulerQueueBridgeHolder: schedulerBridge,
+    schedulerQueuedPromptDiscardWatchers: discardWatchers,
     schedulerQueuedPromptPreparations: preparations,
     orcaInterAgentDispatcher: {
       registerQueuedOrcaInterAgentAcceptedCallback: (id: string, fn: () => void | Promise<void>) => acceptedCallbacks.set(id, fn),
@@ -156,5 +165,5 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   };
   const enqueue = new Function(...Object.keys(bindings), compiled)(...Object.values(bindings)) as
     (event: object, sid: string, item: AgentInputQueuedMessage, opts?: unknown) => Promise<AgentInputProjection>;
-  return { enqueue, acceptedCallbacks, preparations };
+  return { enqueue, acceptedCallbacks, preparations, schedulerBridge };
 }

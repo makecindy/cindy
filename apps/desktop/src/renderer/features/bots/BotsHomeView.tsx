@@ -1,3 +1,4 @@
+import { BotRosterLoadError } from './BotRosterLoadError';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { BotProfileSourceField } from './BotProfileSourceField';
@@ -33,6 +34,7 @@ import {
   setCanonicalBotSession,
   updateBotProfile,
   useBotProfiles,
+  useBotProfilesLoadState,
   getEffectiveBotModelChain,
   subscribeBotGlobalModel,
   type BotCapabilities,
@@ -809,6 +811,7 @@ export function BotsHomeView() {
   const { botId, sessionId } = useParams();
   const [searchParams] = useSearchParams();
   const bots = useBotProfiles();
+  const profileLoadState = useBotProfilesLoadState();
   const providerOnboarding = useProviderOnboarding({ dismissible: false });
   useProviders();
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
@@ -1055,6 +1058,12 @@ export function BotsHomeView() {
     needsProviderConnection,
     modelUnavailable,
   ]);
+
+  // Only an unknown roster needs full-page recovery; a refresh must not discard
+  // an already-open creation draft. Reading the roster also precedes onboarding.
+  if (!profilesLoaded && !selectedBot && !entryTarget && profileLoadState === 'error') {
+    return <main className="flex h-full items-center justify-center px-6" role="main"><BotRosterLoadError /></main>;
+  }
 
   if (needsProviderConnection && !settingsOpen) {
     return (

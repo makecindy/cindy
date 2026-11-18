@@ -4,7 +4,7 @@
  * @vitest-environment jsdom
  */
 
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const authState = vi.hoisted(() => ({
@@ -104,6 +104,28 @@ function renderSettings(settingsHeight?: number, measuredHeight?: number) {
 }
 
 describe('GhostSettingsWebview layout ownership', () => {
+  // A local install must show the checked version before sending an install request.
+  it('checks and installs a selected GitHub release from plugin settings', async () => {
+    const githubRelease = vi.fn()
+      .mockResolvedValueOnce({ status: 'available', release: { version: '0.2.15', assetId: 42 } })
+      .mockResolvedValueOnce({ status: 'updated', version: '0.2.15' });
+    vi.stubGlobal('electronAPI', { ghosts: { githubRelease } });
+    const ghost = {
+      enabled: false, dir: '/plugins/example', namespace: 'local', namespaceState: 'confirmed',
+      manifest: { id: 'example-plugin', name: 'Example', githubRelease: 'example/plugin', version: '0.2.14', settingsHtml: 'settings.html' },
+    } as InstalledGhost;
+    render(<GhostSettingsWebview ghost={ghost} appearance="plugin" />);
+    const check = screen.getByRole('button', { name: 'settings.ghosts.detail.githubRelease.check' });
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' })).toBeNull();
+    fireEvent.click(check);
+    const install = await screen.findByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' });
+    expect(githubRelease).toHaveBeenCalledWith('check', expect.any(String), undefined);
+    fireEvent.click(install);
+    await screen.findByText('settings.ghosts.detail.githubRelease.updated');
+    expect(githubRelease).toHaveBeenLastCalledWith('update', expect.any(String), 42);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' })).toBeNull();
+  });
+
   // Unit / UX-05: the theme/layout readiness barrier may exceed 300ms. Existing
   // opacity/height cases did not verify a readable wait inside that same space.
   it.each([true, false])('shows delayed loading only while a settings guest is still preparing: slow=%s', async slow => {

@@ -49,6 +49,10 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
 manifest 新增 `usage` 声明走原整体安装确认；已有该组批准调用新增组内读取不补批。
 beta 存量同意范围扩展及维护者确认要求见[平台契约的授权记录](protocol-compatibility/plugin-host-tools-platform.md#usage-组范围扩展的维护确认)。
+
+`get_session_quota` 沿用 `usage` 组的安装批准。目标任务从当前账号任务库解析，
+异机和分享额度沿现有通道判权。额度结果不含任务正文、设备标识或账号标识；
+无法确认归属或授权已经失效时不可用。
 实现与回归见 `subscription-accounts/runtime.ts` 及其测试、`hostToolSlot.test.ts`、
 `ghostInstallConsent.test.ts`；作者用法见随包 `plugin-host-tools.md`「读取订阅用量」。
 

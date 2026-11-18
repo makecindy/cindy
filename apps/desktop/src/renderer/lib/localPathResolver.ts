@@ -294,7 +294,13 @@ function fileUrlToPath(href: string): string {
  * @param cwd  session.workingDir, expected to be an absolute path
  */
 export function resolveLocalPath(href: string, cwd: string): string {
-  if (href.startsWith('file://')) return fileUrlToPath(href);
+  if (href.startsWith('file://')) {
+    const localPath = fileUrlToPath(href);
+    // Windows accepts slash-form UNC, but local media protocols reject the
+    // canonical backslash form. Preserve that refusal before an automatic load.
+    return /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(cwd) && /^[\\/]{2}/.test(localPath)
+      ? localPath.replace(/\//g, '\\') : localPath;
+  }
   href = normalizeWindowsDriveHref(href, cwd);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;
@@ -539,8 +545,11 @@ function settleSmartResult(
  * connection and offers NTLM credentials), so render-time lookups, remote
  * pre-checks and media loads skip it; only an explicit open asks for it.
  */
-export function isFileUrlHostHref(href: string): boolean {
-  return /^file:\/\/[^\\/]/.test(href) && /^[\\/]{2}/.test(fileUrlToPath(href));
+export function isFileUrlHostHref(href: string, workingDir = ''): boolean {
+  if (!href.startsWith('file://') || !/^[\\/]{2}/.test(fileUrlToPath(href))) return false;
+  // file:////host/share and mixed separators also name a share on Windows.
+  // Keep POSIX // paths local when the file owner has a POSIX workdir.
+  return /^file:\/\/[^\\/]/.test(href) || /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(workingDir);
 }
 
 async function runBatchForDir(
@@ -550,7 +559,7 @@ async function runBatchForDir(
 ): Promise<void> {
   const hrefs: string[] = [];
   for (const href of hrefMap.keys()) {
-    if (!isFileUrlHostHref(href)) {
+    if (!isFileUrlHostHref(href, workingDir)) {
       hrefs.push(href);
       continue;
     }
@@ -846,6 +855,6 @@ export function normalizeMarkdownImageSrc(
   // A file URL is decoded exactly once (file:///C:/x.png → C:/x.png,
   // file://host/share/a.png → \\host\share\a.png). A raw /C:/x.png path drops
   // its URL-only leading slash before the native Windows path goes onward.
-  const localPath = src.startsWith('file://') ? fileUrlToPath(src) : stripWindowsDriveUriSlash(src);
+  const localPath = src.startsWith('file://') ? resolveLocalPath(src, workingDir) : stripWindowsDriveUriSlash(src);
   return toLocalFileUrl(resolveLocalPath(localPath, workingDir));
 }

@@ -40,6 +40,19 @@ describe('partitionMessageAttachments', () => {
     expect(svgAttachmentForDisplay(inShare, '\\\\nas\\share\\proj')).toMatchObject({ kind: 'image' });
   });
 
+  // #11261 review, unit: the same production guard must prevent auto-thumbnail fetches for Windows slash variants.
+  // Existing backslash-only coverage missed file:////nas/share/x.svg; POSIX // paths retain their local meaning.
+  it.each([
+    ['file:////nas/share/x.svg', 'C:\\proj', 'file'],
+    ['//nas\\share/x.svg', 'C:/proj', 'file'],
+    ['//NAS/share/proj/x.svg', '\\\\nas\\share\\proj', 'image'],
+    ['//nas/share/proj/../secret.svg', '//nas/share/proj', 'file'],
+    ['//repo/x.svg', '/repo', 'image'],
+  ])('keeps SVG %s in %s as %s', (path, workdir, kind) => {
+    const attachment: NormalizedAttachment = { kind: 'file', name: 'x.svg', path, previewable: false };
+    expect(svgAttachmentForDisplay(attachment, workdir).kind).toBe(kind);
+  });
+
   it('separates images from files while preserving order within each presentation group', () => {
     const attachments: NormalizedAttachment[] = [
       { kind: 'file', name: 'brief.pdf', path: '/repo/brief.pdf', previewable: false },
