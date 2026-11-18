@@ -164,6 +164,12 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
 // rather than a mocked thread, protects the production boundary and shutdown/revocation behavior.
 it('runs encrypted RPC in isolated workers while the host retains its outbound network factory', async () => {
   const f = await network(false, undefined, true); serve(f.host);
+  // MagicLizi's topology needs the authenticated path before any link-open. Existing
+  // RPC assertions only exercised that path after opening the control link. Integration, real worker and relay.
+  const hostSocket = f.sockets.find((socket) => socket.deviceId === 'a-host');
+  if (!(hostSocket instanceof AgentNetWorkerSocket)) throw new Error('Expected the host transport in a worker');
+  await vi.waitFor(() => expect(hostSocket.peerRoutes()).toMatchObject([{ deviceId: 'b-controller', path: 'relay' }]));
+  expect(f.host.getPeerLinkSnapshots()).toEqual([]);
   await f.controller.openLink('a-host', openPayload);
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['worker-business-value'] })).toMatchObject({ ok: true, result: 'worker-business-value' });
   expect(f.sockets.every((socket) => socket instanceof AgentNetWorkerSocket)).toBe(true);
@@ -180,7 +186,11 @@ it('runs encrypted RPC in isolated workers while the host retains its outbound n
   await vi.waitFor(() => expect(f.notifications).toHaveLength(1));
   expect(f.httpCalls).toContain('POST ' + f.a.base + '/api/agent-net/notify');
   expect(f.notifications[0].ciphertext).not.toContain('private-body');
+  const routesChanged = vi.fn();
+  hostSocket.on('peer-routes-changed', routesChanged);
   await f.a.request('DELETE', '/devices/b-controller');
+  await vi.waitFor(() => expect(routesChanged).toHaveBeenCalled());
+  expect(hostSocket.peerRoutes()).toEqual([]);
   await vi.waitFor(() => expect(f.controller.getStatus()).not.toBe('online'));
 });
 

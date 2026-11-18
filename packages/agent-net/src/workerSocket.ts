@@ -83,6 +83,25 @@ export type AgentNetWorkerSocketOptions = AgentNetSocketOptions & {
   /** See AGENT_NET_NETWORK_CHANGE_PROBE_MS; only tests shorten it. */
   networkChangeProbeMs?: number;
 };
+
+interface PeerStatus {
+  available: boolean;
+  path: 'direct' | 'relay' | null;
+  rttMs: number | null;
+  dialing: boolean;
+}
+
+function peerRoute(status: PeerStatus | undefined): 'direct' | 'relay' | 'connecting' | null {
+  if (!status?.available) return null;
+  return status.path ?? (status.dialing ? 'connecting' : null);
+}
+
+function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: ReadonlyMap<string, PeerStatus>): boolean {
+  for (const [id, status] of next) if (peerRoute(status) !== peerRoute(previous.get(id))) return true;
+  for (const [id, status] of previous) if (!next.has(id) && peerRoute(status)) return true;
+  return false;
+}
+
 /** The encrypted transport/parser runs off Main; privileged outbound sockets retain the host's proxy policy. */
 /** `terminate()` 后 worker 最多再跑这么久（毫秒），把关闭包发出去；端点自己最多等 250 毫秒（agent-net-core 的 CLOSE_DRAIN_MS）。 */
 const TERMINATE_DRAIN_MS = 500;
@@ -96,7 +115,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   /** Every device's latest certificate seen in a directory on this socket, kept when it leaves (see `lastKnownCertificateFor`). */
   private lastCertificates = new Map<string, DeviceCertificate>();
   private delegations: Delegation[] = [];
-  private status = new Map<string, { available: boolean; path: 'direct' | 'relay' | null; rttMs: number | null }>();
+  private status = new Map<string, PeerStatus>();
   private queued = 0;
   private remoteQueued = 0;
   private closed = false;
@@ -230,6 +249,17 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     const status = this.status.get(this.sessions.device(id) ?? id);
     return status?.path ? { path: status.path, rttMs: status.rttMs } : null;
   }
+  /** Actual and in-progress transport routes to devices in this account's directory. */
+  peerRoutes(): Array<{ deviceId: string; path: 'direct' | 'relay' | 'connecting'; rttMs: number | null }> {
+    if (this.closed || this.closeTimer) return [];
+    const routes = [];
+    for (const [deviceId, status] of this.status) {
+      if (deviceId === this.deviceId || !this.directory.has(deviceId)) continue;
+      const path = peerRoute(status);
+      if (path) routes.push({ deviceId, path, rttMs: status.rttMs });
+    }
+    return routes;
+  }
   send(frame: string): void {
     this.options.assertCurrent?.();
     const bytes = Buffer.byteLength(frame);
@@ -275,8 +305,12 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       if (!message.cached) this.options.onDirectory?.(directory); return;
     }
     if (message.type === 'status') {
-      this.setRemoteQueued(message.queued); this.status = new Map(message.peers);
-      for (const id of message.known) this.known.add(id); return;
+      this.setRemoteQueued(message.queued);
+      const previous = this.status;
+      this.status = new Map(message.peers);
+      for (const id of message.known) this.known.add(id);
+      if (this.listenerCount('peer-routes-changed') && peerRoutesChanged(previous, this.status)) this.emit('peer-routes-changed');
+      return;
     }
     if (message.type === 'buffered') { this.setRemoteQueued(message.queued); return; }
     if (message.type === 'path') { this.logPath(message.id, message.path); this.options.onPathChanged?.(message.id, message.path); return; }

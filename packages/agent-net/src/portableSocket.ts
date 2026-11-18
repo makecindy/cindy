@@ -333,6 +333,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
   }
   /** `deviceId`: a device, or a session key (its session's connection). */
   pathTo(deviceId: string): 'direct' | 'relay' | null { return this.peers.get(this.sessionDevice(deviceId) ?? deviceId)?.channel.path?.() ?? null; }
+  isDialing(deviceId: string): boolean { return this.dialing.has(deviceId); }
   peerSnapshot(deviceId: string): { path: 'direct' | 'relay'; rttMs: number | null } | null {
     const channel = this.peers.get(this.sessionDevice(deviceId) ?? deviceId)?.channel, path = channel?.path?.();
     if (!channel || !path) return null;

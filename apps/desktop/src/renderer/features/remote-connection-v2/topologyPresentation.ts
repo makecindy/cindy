@@ -13,7 +13,7 @@ type T = (key: string, options?: Record<string, unknown>) => string;
 
 export type ProtocolKind = 'agent-net' | 'device-link';
 
-/** The negotiated link is authoritative; unknown or disconnected peers have no protocol. */
+/** Protocol of the actual path shown in the topology. */
 export function protocolKind(node: TopologyNode): ProtocolKind | null {
   if (!node.path || node.status === 'offline' || node.encrypted === undefined) return null;
   return node.encrypted ? 'agent-net' : 'device-link';
@@ -39,6 +39,7 @@ export function pathLabel(node: TopologyNode, relayName: string, t: T): string {
   if (node.attention === 'peer-control-off') return t('settings.remoteControl.myDevices.peerControlOff');
   if (node.path === 'direct') return t('settings.remoteControl.v2.path.direct');
   if (node.path === 'relay') return t('settings.remoteControl.v2.path.relay', { name: relayName });
+  if (node.status === 'connecting') return t('settings.devices.linkStatus.connecting');
   return t('settings.remoteControl.v2.path.unlinked');
 }
 
@@ -54,6 +55,7 @@ export type RowSubtitleTone = 'muted' | 'error' | 'live';
  */
 export function rowSubtitle(node: TopologyNode, t: T): { text: string; tone: RowSubtitleTone } {
   if (node.status === 'attention') return { text: pathLabel(node, '', t), tone: 'error' };
+  if (node.status === 'connecting') return { text: pathLabel(node, '', t), tone: 'muted' };
   if (node.status === 'offline') {
     return { text: t('settings.devices.lastSeen', { time: relativeTimeOf(node.lastSeenAt, t) }), tone: 'muted' };
   }
