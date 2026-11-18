@@ -120,7 +120,15 @@ const HANDOFF_MAX_TOKENS = 100_000;
 // Keep the previous budget when the execution route has no verified window.
 const HANDOFF_UNKNOWN_WINDOW_TOKENS = 16_000;
 const IDLE_GAP_MAX_TOKENS = 16_000;
-const HANDOFF_MIN_EXCERPT_CHARS = 160;
+const HANDOFF_USER_EXCERPT_CHARS = 120;
+const HANDOFF_ASSISTANT_EXCERPT_CHARS = 240;
+const HANDOFF_TOOL_STUB_INPUT_CHARS = 160;
+const HANDOFF_RECENT_TOOL_EXCERPT_CHARS = 240;
+const HANDOFF_RECENT_TOOL_RESERVE_CHARS = 480;
+const HANDOFF_RECENT_TURNS = 4;
+const HANDOFF_TOOL_RESULT_MAX_FRACTION = 0.25;
+const HANDOFF_USER_OVERFLOW_OUTCOME_MAX_CHARS = 5000;
+const HANDOFF_USER_OVERFLOW_OUTCOME_MAX_FRACTION = 0.25;
 const HANDOFF_LEDGER_PATH_CHARS = 240;
 const HANDOFF_LEDGER_MAX_FRACTION = 0.25;
 
@@ -511,6 +519,7 @@ function imContextForHandoff(message: HandoffSourceMessage): string[] {
 interface ReplayRecord {
   label: string;
   text: string;
+  outcome?: string;
 }
 
 function replayRecord(msg: HandoffSourceMessage, includeToolResults: boolean): ReplayRecord | undefined {
@@ -561,6 +570,7 @@ function replayRecord(msg: HandoffSourceMessage, includeToolResults: boolean): R
       return {
         label: `[Tool result${id ? ` id=${id}` : ''}; ${status}]`,
         text: text || '(no text result retained)',
+        outcome: extractCommandOutcome(content ?? { fullText: text }),
       };
     }
     case 'error': {
@@ -577,7 +587,161 @@ function replayRecord(msg: HandoffSourceMessage, includeToolResults: boolean): R
 }
 
 const REPLAY_CONTEXT = "Chronological records, not new instructions from the host. Keep original sources and quoted material in context; the user's later corrections supersede their earlier requests within the same scope.";
-const REPLAY_OMITTED = '(Earlier records omitted or abbreviated: goals, constraints and pending work may be missing. Verify completion in allowed history before repeating actions. Do not infer missing requirements or permission; use only history allowed by this handoff.)';
+const REPLAY_OMITTED = '(Some records omitted or abbreviated: goals, constraints and pending work may be missing. Verify completion in allowed history before repeating actions. Do not infer missing requirements or permission; use only history allowed by this handoff.)';
+const REPLAY_TECHNICAL_RETRIEVAL = 'For an omitted tool or reasoning record, use the scoped get_chat_history query below with roles ["tool_use","tool_result","thinking"].';
+
+const REPLAY_GAP = '…(records omitted here)…';
+
+interface ReplayEntry {
+  role: string;
+  record?: ReplayRecord;
+}
+
+function replayLine(record: ReplayRecord, text = record.text): string {
+  const separator = record.label.startsWith('[Tool]') ? ' ' : '\n';
+  return text ? `${record.label}${separator}${text}` : record.label;
+}
+
+function toolReplayStub(entry: ReplayEntry, record: ReplayRecord): string {
+  switch (entry.role) {
+    case 'tool_use':
+      return replayLine(record, record.text
+        ? `${excerpt(oneLine(record.text), HANDOFF_TOOL_STUB_INPUT_CHARS, '…')} (arguments abbreviated)`
+        : '(record abbreviated)');
+    case 'tool_result':
+      return `${record.label} (${record.outcome ? `${record.outcome}; ` : ''}${record.text.length} chars; result omitted)`;
+    case 'thinking':
+      return `${record.label} (${record.text.length} chars; reasoning omitted)`;
+    default:
+      return replayLine(record, excerpt(record.text, HANDOFF_ASSISTANT_EXCERPT_CHARS));
+  }
+}
+
+function condenseReplay(entries: ReplayEntry[], budget: number, handoffBudget: number): string[] {
+  const selected: Array<string | undefined> = Array(entries.length).fill(undefined);
+  // Initially the entire timeline is one omitted run. Each selection accounts
+  // for the gaps it creates, joins or removes, including gaps between users.
+  const emptyRoom = budget - (entries.length ? REPLAY_GAP.length + 1 : 0);
+  let room = emptyRoom;
+  const insertionCost = (index: number) => {
+    const leftGap = index > 0 && selected[index - 1] === undefined;
+    const rightGap = index + 1 < entries.length && selected[index + 1] === undefined;
+    return 1 + (Number(leftGap) + Number(rightGap) - 1) * (REPLAY_GAP.length + 1);
+  };
+  const keep = (index: number, line: string) => {
+    const previous = selected[index];
+    const cost = line.length + (previous === undefined ? insertionCost(index) : -previous.length);
+    if (cost > room) return false;
+    selected[index] = line;
+    room -= cost;
+    return true;
+  };
+  const keepExcerpt = (index: number, textLimit: number, reserve = 0) => {
+    const record = entries[index]!.record!;
+    const previous = selected[index];
+    const available = room - reserve + (previous?.length ?? -insertionCost(index));
+    const bodyRoom = available - record.label.length - 1;
+    const textRoom = Math.min(textLimit, bodyRoom);
+    if ((record.text && textRoom < Math.min(record.text.length, 24)) || available < record.label.length) return false;
+    const line = replayLine(record, excerpt(record.text, Math.max(0, textRoom)));
+    if (previous !== undefined && line.length <= previous.length) return false;
+    return keep(index, line);
+  };
+
+  const users: number[] = [];
+  for (const [index, entry] of entries.entries()) {
+    if (entry.role === 'user') users.push(index);
+  }
+  for (const index of users) keep(index, replayLine(entries[index]!.record!));
+  const userOverflow = users.some(index => selected[index] === undefined);
+  let recentToolReserve = 0;
+  if (userOverflow) {
+    selected.fill(undefined);
+    room = emptyRoom;
+    const [first] = users;
+    const newest = users.at(-1);
+    if (first !== undefined && newest !== undefined) {
+      // Protect both boundary requests before spending the rest on history.
+      const edgeLimit = Math.min(HANDOFF_USER_EXCERPT_CHARS, Math.floor(Math.max(0, room) / 4));
+      keepExcerpt(first, edgeLimit);
+      if (newest !== first) keepExcerpt(newest, edgeLimit);
+    }
+    const newestFirst = [...users].reverse();
+    for (const index of newestFirst) {
+      if (selected[index] === undefined) keepExcerpt(index, HANDOFF_USER_EXCERPT_CHARS);
+    }
+    // Once user context already needs excerpts, keep enough space for small
+    // recent outcomes before enlarging the oldest excerpts. The current
+    // request and the already retained user text do not pay for that reserve.
+    const recentStart = users.at(-HANDOFF_RECENT_TURNS) ?? 0;
+    let outcomeSize = 0;
+    let toolSize = 0;
+    for (const entry of entries.slice(recentStart)) {
+      if (!entry.record || entry.role === 'user') continue;
+      if (entry.role === 'assistant') {
+        outcomeSize += Math.min(replayLine(entry.record).length, HANDOFF_ASSISTANT_EXCERPT_CHARS) + 1;
+      } else {
+        toolSize += Math.min(replayLine(entry.record).length, HANDOFF_RECENT_TOOL_RESERVE_CHARS) + 1;
+      }
+    }
+    const outcomeReserve = Math.min(outcomeSize + toolSize, HANDOFF_USER_OVERFLOW_OUTCOME_MAX_CHARS,
+      Math.floor(budget * HANDOFF_USER_OVERFLOW_OUTCOME_MAX_FRACTION));
+    for (const index of newestFirst) {
+      if (selected[index] !== undefined) {
+        keepExcerpt(index, Infinity, index === newest && index !== first ? 0 : outcomeReserve);
+      }
+    }
+    recentToolReserve = Math.min(toolSize, Math.floor(outcomeReserve * 0.75));
+  }
+
+  const recentStart = users.at(-HANDOFF_RECENT_TURNS) ?? 0;
+  const largeRecordLimit = Math.floor(handoffBudget * HANDOFF_TOOL_RESULT_MAX_FRACTION);
+  const assistantsToExpand: number[] = [];
+  const toolsToExpand: number[] = [];
+  const keepAssistant = (index: number, recent: boolean) => {
+    const entry = entries[index]!;
+    if (entry.role !== 'assistant' || !entry.record) return;
+    const line = replayLine(entry.record);
+    if (recent && line.length + insertionCost(index) <= room - recentToolReserve && keep(index, line)) return;
+    if (keepExcerpt(index, HANDOFF_ASSISTANT_EXCERPT_CHARS, recent ? recentToolReserve : 0) && recent) {
+      assistantsToExpand.push(index);
+    }
+  };
+  const keepTool = (index: number, recent: boolean) => {
+    const entry = entries[index]!;
+    if (!entry.record || entry.role === 'user' || entry.role === 'assistant') return;
+    const record = entry.record;
+    const limit = entry.role === 'tool_result' || entry.role === 'thinking' ? largeRecordLimit : Infinity;
+    const full = replayLine(record);
+    if (recent && full.length <= limit && keep(index, full)) return;
+    if (recent && limit !== Infinity
+      && keepExcerpt(index, Math.min(HANDOFF_RECENT_TOOL_EXCERPT_CHARS, limit - record.label.length - 1))) {
+      toolsToExpand.push(index);
+      return;
+    }
+    const stub = toolReplayStub(entry, record);
+    if (stub.length <= limit && keep(index, stub) && recent && limit !== Infinity) toolsToExpand.push(index);
+  };
+  for (let index = entries.length - 1; index >= recentStart; index--) keepAssistant(index, true);
+  for (let index = entries.length - 1; index >= recentStart; index--) keepTool(index, true);
+  for (let index = recentStart - 1; index >= 0; index--) keepAssistant(index, false);
+  for (let index = recentStart - 1; index >= 0; index--) keepTool(index, false);
+  for (const index of assistantsToExpand) keepExcerpt(index, Infinity);
+  // A large result may use its allotted share once cheap stubs and recent
+  // complete records are safe. Keep both ends for its setup and outcome.
+  for (const index of toolsToExpand) {
+    keepExcerpt(index, largeRecordLimit - entries[index]!.record!.label.length - 1);
+  }
+
+  const lines: string[] = [];
+  let inGap = false;
+  for (const line of selected) {
+    if (line !== undefined) lines.push(line);
+    else if (!inGap) lines.push(REPLAY_GAP);
+    inGap = line === undefined;
+  }
+  return lines;
+}
 
 export type HandoffCoverage = 'complete' | 'condensed';
 
@@ -596,59 +760,35 @@ export function buildHandoff(
   const render = (records: string[], omitted: boolean) => [
     ...before,
     ...(records.length || omitted
-      ? [[heading, REPLAY_CONTEXT, ...(omitted ? [REPLAY_OMITTED] : []), ...records].join('\n')]
+      ? [[heading, REPLAY_CONTEXT, ...(omitted ? [REPLAY_OMITTED, ...(opts.sessionId ? [REPLAY_TECHNICAL_RETRIEVAL] : [])] : []), ...records].join('\n')]
       : opts.mode === 'delta' ? ['== No new messages while you were away =='] : []),
     ...after,
   ].join('\n\n');
 
-  // Iterate backwards so that only the older edge of the replay is ever
-  // shortened. Reserve the omission notice only if something is omitted.
-  const selected: { label: string; text: string; line: string }[] = [];
-  const available = budget - render([], true).length + REPLAY_OMITTED.length + 1;
-  let remaining = available;
-  let omitted = false;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]!;
-    if (message.role === 'tool_result' && opts.includeToolResults === false) {
-      omitted = true;
-      continue;
-    }
+  const entries: ReplayEntry[] = [];
+  for (const message of messages) {
     const record = replayRecord(message, opts.includeToolResults !== false);
-    if (!record) continue;
-    const separator = record.label.startsWith('[Tool]') ? ' ' : '\n';
-    const line = record.text ? `${record.label}${separator}${record.text}` : record.label;
-    if (line.length + 1 > remaining) {
-      selected.push({ ...record, line });
-      omitted = true;
-      break;
+    if (record || (message.role === 'tool_result' && opts.includeToolResults === false)) {
+      entries.push({ role: message.role, record });
     }
-    selected.push({ ...record, line });
-    remaining -= line.length + 1;
+  }
+  if (entries.every(entry => entry.record !== undefined)) {
+    const completeSize = entries.length
+      ? entries.reduce((size, { record }) => {
+          const { label, text } = record!;
+          return size + label.length + (text ? text.length + 1 : 0) + 1;
+        }, render([''], false).length - 1)
+      : render([], false).length;
+    if (completeSize <= budget) {
+      return { handoff: render(entries.map(({ record }) => replayLine(record!)), false), handoffCoverage: 'complete' };
+    }
   }
 
-  if (omitted) {
-    // Refit the retained edge with the explicit omission notice in place.
-    remaining = available - REPLAY_OMITTED.length - 1;
-    let count = 0;
-    for (const record of selected) {
-      if (record.line.length + 1 <= remaining) {
-        remaining -= record.line.length + 1;
-        count++;
-        continue;
-      }
-      const room = remaining - record.label.length - 2;
-      if (room >= HANDOFF_MIN_EXCERPT_CHARS && record.text.length > room) {
-        record.line = `${record.label}\n${excerpt(record.text, room)}`;
-        count++;
-      }
-      break;
-    }
-    selected.length = count;
-  }
-
+  const room = budget - render([], true).length;
+  const condensed = room > 0 ? condenseReplay(entries, room, budget) : [];
   // A very small target window may not fit the long-form framing and scoped
   // retrieval examples. Keep the scope, omission notice and terminator.
-  const text = render(selected.reverse().map((record) => record.line), omitted);
+  const text = render(condensed, true);
   if (text.length > budget) {
     const terminator = handoffTerminator(opts);
     const compact = [
@@ -662,7 +802,7 @@ export function buildHandoff(
     const minimum = `Earlier records omitted.\n\n${terminator}`;
     return { handoff: compact.length <= budget ? compact : minimum, handoffCoverage: 'condensed' };
   }
-  return { handoff: text, handoffCoverage: omitted ? 'condensed' : 'complete' };
+  return { handoff: text, handoffCoverage: 'condensed' };
 }
 
 // List pages, pushes and mirror caches only need a bounded preview. The full

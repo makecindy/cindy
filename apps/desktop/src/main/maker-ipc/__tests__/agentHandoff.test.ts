@@ -153,7 +153,7 @@ describe('buildHandoffText', () => {
     expect(handoff).toContain('Send the report once.');
     expect(handoff).toContain('Final constraint.');
     expect(handoff).toContain('Report sent successfully.');
-    expect(handoff).toContain('Earlier records omitted or abbreviated');
+    expect(handoff).toContain('Some records omitted or abbreviated');
     expect(handoff).toContain('Verify completion');
     expect(handoff).not.toContain(request);
     expect(handoff.length).toBeLessThanOrEqual(12_000);
@@ -163,9 +163,9 @@ describe('buildHandoffText', () => {
   it.each(['agent-switch', 'message-deletion'] as const)('marks missing requirements and preserves boundaries under budget pressure (%s)', (reason) => {
     const messages = Array.from({ length: 150 }, (_, i) => msg('user', `Request ${i}: ${'detail '.repeat(100)} end ${i}`));
     const text = buildHandoffText(messages, { ...opts, sessionId: 's-budget', reason });
-    expect(text).not.toContain('Request 0:');
+    expect(text).toContain('Request 0:');
     expect(text).toContain('Request 149:');
-    expect(text).toContain('Earlier records omitted or abbreviated');
+    expect(text).toContain('Some records omitted or abbreviated');
     expect(text).toContain('goals, constraints and pending work may be missing');
     expect(text).toContain('use only history allowed by this handoff');
     expect(text).toContain('"session_ids":["s-budget"]');
@@ -307,6 +307,66 @@ describe('buildHandoffText', () => {
     expect(result.handoff).toContain('Final check.');
     expect(result.handoffCoverage).toBe('condensed');
     expect(result.handoff).toMatch(/== End of (handoff|rebuild) note; the user's new message follows ==$/);
+  });
+
+  // 2026-11-11 handoff regression (7e35c9ff94 / d950013706), unit.
+  // A few large tool logs exceeded the original 16K handoff and consumed
+  // all history before the next request. Every request in this fixture fits.
+  it.each([undefined, 200_000])('keeps every user request and the newest tool result when logs fill the window (%s)', (targetContextWindow) => {
+    const messages: HandoffSourceMessage[] = [];
+    const users = Array.from({ length: 10 }, (_, index) =>
+      `Request ${index}: keep this exact condition. ${'需求 detail '.repeat(16)} Correction ${index}.`);
+    const latestResult = `Recent execution finished. ${'结果 details '.repeat(190)} All checks passed.`;
+    for (const [index, user] of users.entries()) {
+      const id = `read-${index}`;
+      messages.push(
+        msg('user', user),
+        { ...msg('tool_use', { toolName: 'Read', input: { file_path: `/f-${index}` } }), toolUseId: id },
+        { ...msg('tool_result', index === 9 ? latestResult
+          : { fullText: 'earlier output '.repeat(2500), exitCode: 1 }), toolUseId: id },
+        msg('assistant', `Reply ${index}: finished reviewing this file.`),
+      );
+    }
+    const { handoff, handoffCoverage } = buildHandoff(messages, {
+      ...opts, sessionId: 'history', targetContextWindow,
+    });
+    expect(handoffCoverage).toBe('condensed');
+    let last = -1;
+    for (const user of users) {
+      const index = handoff.indexOf(`[User]\n${user}`);
+      expect(index).toBeGreaterThan(last);
+      last = index;
+    }
+    expect(handoff).toContain(latestResult);
+    expect(handoff).toContain('exit 1; 37500 chars; result omitted');
+    expect(handoff).toContain('Some records omitted or abbreviated');
+    expect(handoff.length).toBeLessThanOrEqual(targetContextWindow ? 60_000 : 16_000);
+  });
+
+  // Unit: entering condensation must cap an individual recent tool result
+  // and reasoning block even when there is spare space for their full heads.
+  it('caps one huge result and one huge reasoning record without crowding out other history', () => {
+    const { handoff, handoffCoverage } = buildHandoff([
+      msg('user', 'Initial scope: stay read-only.'),
+      msg('assistant', 'I will verify first.'),
+      msg('user', 'Follow up with the exact status.'),
+      { ...msg('tool_result', `Huge start ${'x'.repeat(75_000)} huge end`), toolUseId: 'huge' },
+      msg('thinking', { text: `Thought start ${'y'.repeat(75_000)} thought end` }),
+      { ...msg('tool_result', 'Small but important outcome.'), toolUseId: 'small' },
+      msg('assistant', 'Final status: verified.'),
+    ], { ...opts, sessionId: 'history' });
+    expect(handoffCoverage).toBe('condensed');
+    for (const text of [
+      'Initial scope: stay read-only.', 'I will verify first.', 'Follow up with the exact status.',
+      'Huge start', 'huge end', 'Thought start', 'thought end',
+      'Small but important outcome.', 'Final status: verified.',
+    ]) expect(handoff).toContain(text);
+    const resultAt = handoff.indexOf('[Tool result id=huge;');
+    const thinkingAt = handoff.indexOf('[Prior reasoning record;');
+    const smallAt = handoff.indexOf('[Tool result id=small;');
+    expect(thinkingAt - resultAt - 1).toBeLessThanOrEqual(4000);
+    expect(smallAt - thinkingAt - 1).toBeLessThanOrEqual(4000);
+    expect(handoff.match(/…\(middle omitted\)…/g)).toHaveLength(2);
   });
 
   it('explicitly omitted tool outcomes are marked, while readable thinking is carried over', () => {
@@ -1084,15 +1144,16 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
     return out;
   }
 
-  it('预算只够最近工具时继续保留原文检索与结束标记', () => {
+  it('用户原文超预算时优先保留首末请求和检索指引', () => {
     const text = buildHandoffText(capOverflowHistory(), {
       fromLabel: 'Claude Code',
       toLabel: 'Codex',
       sessionId: 'sess-cap',
     });
     expect(text.length).toBeLessThanOrEqual(16_000);
-    expect(text).toContain('(id=x-44)');
-    expect(text).toContain('Earlier records omitted or abbreviated');
+    expect(text).toContain('[User]\nQ0');
+    expect(text).toContain('[User]\nQ24');
+    expect(text).toContain('Some records omitted or abbreviated');
     expect(text).toContain('"session_ids":["sess-cap"]');
     expect(text).toContain('"limit":10');
     expect(text).toContain('"limit":20');
@@ -1108,8 +1169,9 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       reason: 'message-deletion',
     });
     expect(text.length).toBeLessThanOrEqual(16_000);
-    expect(text).toContain('(id=x-44)');
-    expect(text).toContain('Earlier records omitted or abbreviated');
+    expect(text).toContain('[User]\nQ0');
+    expect(text).toContain('[User]\nQ24');
+    expect(text).toContain('Some records omitted or abbreviated');
     expect(text.trimEnd().endsWith("== End of rebuild note; the user's new message follows =="))
       .toBe(true);
   });
@@ -1160,7 +1222,7 @@ describe('buildHandoffText 超限收缩保住首尾', () => {
       sessionId: 'sess-tools',
     });
     expect(text.length).toBeLessThanOrEqual(16_000);
-    expect(text).toContain('Earlier records omitted or abbreviated');
+    expect(text).toContain('Some records omitted or abbreviated');
     expect(text).toContain('(id=tool-99)');
     expect(text).not.toContain('(id=tool-0)');
     expect(text).toContain('== Retrieving earlier verbatim history (use when needed) ==');
