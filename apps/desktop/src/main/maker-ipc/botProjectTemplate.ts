@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { GROUP_TEAMMATE_HANDOFF_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
+import { GROUP_REQUEST_GUIDANCE, GROUP_TEAMMATE_PROJECT_GUIDANCE } from './groupCollaborationSkillContent.js';
 
 export const TEAMMATE_TEMPLATE_VERSION = 7;
 /** What the project started from and which template files it still has untouched. */
@@ -110,7 +110,7 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
       '',
       '## In a group',
       '',
-      GROUP_TEAMMATE_HANDOFF_GUIDANCE,
+      GROUP_REQUEST_GUIDANCE,
       GROUP_TEAMMATE_PROJECT_GUIDANCE,
       '',
       '## Start a task',

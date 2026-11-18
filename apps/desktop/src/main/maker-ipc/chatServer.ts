@@ -4225,6 +4225,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       deps.log?.warn('Chat attachment preparation failed', { groupId: i.groupId, trace: createHash('sha256').update(i.clientId).digest('hex').slice(0, 16), ...chatErrorDiagnostic(prepared && !prepared.ok ? new Error(prepared.message) : error) });
       throw error;
     }
+    const independentSend = recovered
+      ? (recovered.body as { independentReplies?: boolean } | null)?.independentReplies === true
+      : !direct && !i.division && independentReplies;
     let result: { id: string };
     let posting = false;
     try {
@@ -4239,7 +4242,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const body = recovered?.body ?? {
         operationId: i.clientId, content: [ ...(quote ? [buildBotGroupQuoteCard(quote)] : []), ...(i.text ? [{ type: 'text', text: i.text }] : []),
           ...uploaded ], mentions, deferExecution: shouldPlan,
-          ...(!direct && !i.division && independentReplies ? { independentReplies: true } : {}),
+          ...(independentSend ? { independentReplies: true } : {}),
           ...(!direct && supportsMentionAudiences && botGroupMentionAudience(i.mentions) ? { mentionAudience: botGroupMentionAudience(i.mentions) } : {}), ...(!direct && groupDiscussionParity ? { mentionsAll: i.mentions.allBots === true, planningMode: i.division || proposed ? 'explicit' : 'auto' } : {}),
       };
       if (!recovered) sendJournal.save(journalKey, signature, { snapshot: s, plans, members, quote, mentions: i.mentions,
@@ -4261,7 +4264,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // The message exists: the send is answered now and its receipt answers any retry, so the
     // quote snapshot is no longer needed. Arrangement bookkeeping continues after the answer.
     postedQuotes.delete(quoteKey);
-    if (direct) { changed(i.groupId); return { ok: true as const, messageId: result.id }; }
+    if (direct || independentSend) { changed(i.groupId); return { ok: true as const, messageId: result.id }; }
     const roomId = i.groupId;
     const messageId = result.id;
     void (async () => {

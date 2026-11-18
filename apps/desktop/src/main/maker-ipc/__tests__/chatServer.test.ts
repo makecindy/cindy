@@ -3898,8 +3898,9 @@ describe('Chat Server result delivery and refresh', () => {
     describe('安排分工', () => {
       const sourceId = '50000000-0000-4000-8000-000000000031', planId = '80000000-0000-4000-8000-000000000031';
       const named = () => members().map(m => m.id === otherBot ? { ...m, name: 'Nova' } : m);
-      function divisionServer(open: object[] = []) {
+      function divisionServer(open: object[] = [], independentReplies = false) {
         singleSpeaker((route, method) => {
+          if (independentReplies && route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupSingleSpeaker: 1, independentReplies: 1 } } };
           if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: named(), messages: [], cursor: '1' } };
           if (route === `/conversations/${roomId}/messages` && method === 'POST') return { body: { id: sourceId } };
           if (route === `/conversations/${roomId}/plans` && method === 'POST') return { body: { id: planId, revision: 1 } };
@@ -3989,6 +3990,18 @@ describe('Chat Server result delivery and refresh', () => {
         expect(await service.sendMessage({ groupId: roomId, text: 'Another thing', clientId: 'after-division', mentions: { all: false, botIds: [] } }))
           .toMatchObject({ ok: false, errorCode: 'PLAN_OPEN' });
         expect(posts().filter(([route]) => route === `/conversations/${roomId}/messages`)).toHaveLength(1);
+      });
+
+      it('keeps an accepted division active when a separate independent message arrives', async () => {
+        divisionServer([], true);
+        let finish!: (value: unknown) => void;
+        deps.decidePlan = vi.fn(() => new Promise(resolve => { finish = resolve; })) as typeof deps.decidePlan;
+        await send('Make a draft');
+        expect(await service.sendMessage({ groupId: roomId, text: 'Another thing', clientId: 'independent-after-division',
+          mentions: { all: false, botIds: [] } })).toMatchObject({ ok: true });
+        finish({ needsPlan: true, steps: [{ botId: otherBot, task: 'draft' }] });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(posts().find(([route]) => route === `/conversations/${roomId}/plans`)?.[2]).toMatchObject({ sourceMessageId: sourceId });
       });
 
       it('asks the organizer when the steps are not written out', async () => {
