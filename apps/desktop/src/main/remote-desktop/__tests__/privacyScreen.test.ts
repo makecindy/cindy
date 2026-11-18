@@ -150,7 +150,9 @@ it('rejects Windows privacy activation when one monitor cannot exclude its mask'
     state.displays.push({ id: 2, bounds: { x: 1440, y: 0, width: 900, height: 1200 } });
     excludeMask.mockImplementation(handle => handle[0] === 1);
     const h = fixture();
-    await expect(h.masks.set(true, () => true)).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+    const preparing = h.masks.set(true, () => true);
+    expect(h.masks.active).toBe(true);
+    await expect(preparing).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
     expect(excludeMask).toHaveBeenCalledWith(Buffer.from([2]));
     expect(state.windows.every(window => window.destroyed)).toBe(true);
     expect(h.monitor.stop).toHaveBeenCalled();

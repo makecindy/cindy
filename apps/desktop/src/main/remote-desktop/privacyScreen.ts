@@ -171,8 +171,6 @@ export class PrivacyScreen {
       this.options.html?.() ?? privacyScreenHtml(t('privacyExit.status'), t('privacyExit.hint'));
     const nonActivating = this.options.nonActivating === true && process.platform === 'darwin';
     try {
-      const windowsShell = process.platform === 'win32' ? await loadWindowsTaskbarNative() : null;
-      if (!current() || generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       const displays = screen.getAllDisplays();
       for (const display of displays) {
         const window = new BrowserWindow({
@@ -258,6 +256,9 @@ export class PrivacyScreen {
           windowFailed();
         });
       }
+      // Register the first mask synchronously so display changes during preparation
+      // invalidate the lease, including while the Windows shell bridge loads.
+      const windowsShell = process.platform === 'win32' ? await loadWindowsTaskbarNative() : null;
       if (!current() || generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       const ids = this.windows.map((window) => Number(window.getMediaSourceId().split(':')[1]));
       if (!ids.length || ids.some((id) => !Number.isSafeInteger(id) || id <= 0))
