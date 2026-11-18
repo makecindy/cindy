@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { buildPage } from '../../ui-page/build.mjs';
+import { pageResponse } from '../../ui-page/run.mjs';
 
 // Batfree feedback / UI-e2e: real messages and table DOM must retain Chinese,
 // spaces, paragraph breaks, an empty cell and wrapped cell text through native
@@ -12,13 +15,27 @@ export default {
   entry: './fixture.tsx',
   viewport: { width: 640, height: 860 },
   real: 'AssistantMessage, MarkdownRenderer, native mouse selection, table TSV range copy, chat clipboard handlers, MessageActionBar and SelectionQuoteButton',
-  notCovered: 'Full application and virtualized/offscreen history. Existing table image-copy toolbar cannot rasterize under the isolated host CSP (base-uri/connect-src); it requires full-client acceptance. Clipboard permissions are scoped to this isolated test origin; no clipboard values are mocked.',
+  notCovered: 'Full application and virtualized/offscreen history. Existing image-copy toolbar is blocked by host CSP. Hidden Electron checks native range copy; replay with --engine chromium verifies the programmatic message button through a secure localhost origin and OS paste. No clipboard values are mocked.',
   stubs: {
     'src/renderer/components/chat/GhostToolCard': 'export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle"; export const GhostToolCard = () => null; export const MailCardEditor = () => null;',
   },
   cases: {
     default: { about: 'One complete message: Chinese, spaces, paragraph breaks and a two-row three-column table', data: { content } },
     'multiple-messages': { about: 'Drag from the previous message through the table into the following message', data: { content } },
+  },
+  async ready(page) {
+    if (!page.context().browser()) return;
+    // Chrome needs a secure context for Clipboard API. Reuse the exact built
+    // page/host at loopback; no product CSP or renderer source is changed.
+    const ctx = await page.evaluate(() => window.__uiPage.ctx);
+    const bundle = await buildPage(this);
+    await page.context().route('http://localhost:49157/**', async route => {
+      const url = new URL(route.request().url());
+      const response = pageResponse(`http://cindy-ui.test${url.pathname}${url.search}`, bundle, ctx);
+      if (response) await route.fulfill(response); else await route.abort();
+    });
+    await page.goto('http://localhost:49157/');
+    await page.waitForFunction(() => window.__uiPage?.ready);
   },
   async check(page, ui) {
     // Explicit permission for this test origin exercises real OS/browser writes,
@@ -81,9 +98,14 @@ export default {
     const draft = await page.locator('[data-quote-draft]').textContent();
     for (const text of [from, '项目甲 Alpha', '末行 Final', to]) assert.ok(draft.includes(text));
 
-    await tableMessage.hover();
-    await tableMessage.getByRole('button', { name: await ui.t('chat.messageActionBar.copy'), exact: true }).click();
-    assert.equal(await pasteClipboard(), content, 'Complete-message copy must actually paste the complete Markdown');
+    if (page.context().browser()) {
+      await tableMessage.hover();
+      await tableMessage.getByRole('button', { name: await ui.t('chat.messageActionBar.copy'), exact: true }).click();
+      assert.equal(await pasteClipboard(), content, 'Complete-message copy must actually paste the complete Markdown');
+      if (process.platform === 'darwin') {
+        assert.equal(execFileSync('pbpaste', { encoding: 'utf8' }), content, 'OS clipboard must contain the complete message');
+      }
+    }
     await ui.capture('copy-complete');
   },
 };
