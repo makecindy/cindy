@@ -2,13 +2,18 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件记录对应能力的增量协议与旧端降级。
 
+`usage` 增量注册 `get_session_quota({sessionId})`，复用已有安装批准、同账号订阅账户读取和收到的分享额度通道。
+宿主在当前账号任务库解析实际执行路线。响应仅投影额度和来源类别，时间统一为 Unix 毫秒；缺少明确归属或权限时返回
+`unavailable`。旧端不支持时不回退其它任务或电脑。沿用原 Device Link 通道、请求字段和分享授权；
+现有 `usage` 批准生效，不要求 `history` 或重新安装审批，详见本页的维护确认约定。
+
 现有 `usage` 组增量注册 `get_provider_usage_history` / `get_provider_group`，Agent/插件共用原 usage-history 与组 get 处理器，
 异机复用现有同账号 manage-share / manage-group；无新 action、channel、额度 DTO、缓存或服务端请求种类。
 不声明 `usage` 的旧插件权限不变，manifest 新增该组走既有安装确认；仅有 `settings` 不授予这些读取。
 已有 `usage` 批准的插件可调用新增组内读取，宿主升级不触发补批；安装确认说明（12语言）包含订阅配额、已记录用量与估算、供应商组配置/状态和可见成员/设备信息；
 后两类覆盖同账号已授权其它电脑。不新建权限组、版本化重批或额外授权记录。
 `list_model_providers` 与 `configure_model_provider` 的 `subscriptionAccounts/read` 仍要求原本机任务上下文，
-插件订阅额度只经 `get_subscription_usage` 的既有字段白名单投影，不返回登录邮箱、CLI 目录、内部账号指纹或凭证。
+插件本机逐账号订阅额度经 `get_subscription_usage` 的既有字段白名单投影，不返回登录邮箱、CLI 目录、内部账号指纹或凭证。
 历史视图包含成员/分享标识、日期、模型、token、估算费用及中转设备名；组视图包含设备/供应商显示名、可见 ownerName、
 运行与组配置，原本可见的 reshare 还含受邀者显示名/头像/批准状态，保留分享来源的匿名边界；具体字段见作者手册。
 插件返回的当前成员与配置快照 `providerName` 中，宿主生成的品牌加登录身份只保留品牌；不修改原组视图或 Agent/UI 名称。

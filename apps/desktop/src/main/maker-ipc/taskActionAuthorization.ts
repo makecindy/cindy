@@ -12,6 +12,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'send_to_session',
   'steer_session',
   'stop_session_turn',
+  'control_session',
   'set_session_runtime',
   'set_session_tool_catalog',
   'set_app_default_model',
@@ -191,8 +192,13 @@ export async function admitTaskAction(
   if (!call.sessionId) return denied();
   try {
     await scope.assertCurrent();
-  } catch {
-    return denied('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'HOST_NOT_READY') {
+      return { ok: false, errorCode: 'HOST_NOT_READY', message: 'The host is not ready to check this action yet.' };
+    }
+    return error instanceof TaskActionAuthorizationError && error.reason
+      ? { ok: false, errorCode: error.code, message: error.reason }
+      : denied('TASK_ACTION_AUTHORIZATION_EXPIRED');
   }
   let consumed = false;
   return {
@@ -294,7 +300,7 @@ export function captureTaskActionGuard(): (() => Promise<void>) | undefined {
 
 export class TaskActionAuthorizationError extends Error {
   readonly code = 'TASK_ACTION_AUTHORIZATION_EXPIRED';
-  constructor() {
+  constructor(readonly reason?: string) {
     super('TASK_ACTION_AUTHORIZATION_EXPIRED');
   }
 }

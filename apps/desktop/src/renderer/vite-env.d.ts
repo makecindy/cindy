@@ -1821,6 +1821,13 @@ interface ElectronAPI {
     >;
     onRemovalNoticeAvailable: (callback: () => void) => () => void;
     onUpdateConsentHoldsChanged: (callback: () => void) => () => void;
+    /** `ownerStamp` names the data owner that started the install (shared/dataOwnerPush.ts). */
+    onInstallProgress: (
+      callback: (
+        progress: import('../shared/pluginMarket').PluginMarketInstallProgress,
+        ownerStamp?: unknown,
+      ) => void,
+    ) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,
@@ -4687,7 +4694,7 @@ interface ElectronAPI {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').ListBranchesResp>;
   // P1: 删除/归档确认预检
-  worktreeRemovalPreview: (sessionId: string) => Promise<{ hasWorktree: boolean; dirty: boolean }>;
+  worktreeRemovalPreview: (sessionId: string) => Promise<{ hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }>;
   // P1: worktree 回收后的可恢复状态 + 一键恢复
   worktreeRestoreStatus: (
     sessionId: string,
@@ -6826,7 +6833,7 @@ interface ElectronAPI {
     // effort/mode 透传 string —— 合法值由 maker capabilities 决定, vite-env 不重复枚举
     setEffort: (sessionId: string, effort: string) => Promise<void>;
     /** 输入框开始打字时提前启动 Agent；尽力而为。 */
-    prewarmSession?: (sessionId: string, createOpts: unknown) => Promise<{ accepted: boolean }>;
+    prewarmSession?: (sessionId: string, createOpts: unknown) => Promise<{ accepted: boolean; piRuntimePrepared?: true }>;
     /** 新建页的未发送任务：清空输入时删除 / 第一次发送前转为普通任务（仅本机）。 */
     discardProvisionalSession?: (sessionId: string) => Promise<{ discarded: boolean; remaining?: boolean }>;
     commitProvisionalSession?: (sessionId: string) => Promise<{ committed: boolean }>;

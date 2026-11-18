@@ -86,12 +86,32 @@ describe('local application task takeover', () => {
       expect(typeof readText).toBe('function');
       const value = providers.compose(id, readText); pending.push(value); return value;
     };
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input');
+    const prepared = vi.fn();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input', undefined,
+      { onRuntimePreparation: prepared });
+    expect(prepared).not.toHaveBeenCalled();
     expect(pending).toEqual([undefined, undefined]);
     expect(readRoute).not.toHaveBeenCalled();
     expect(screen).not.toHaveBeenCalled();
     expect(session.send).toHaveBeenCalledOnce();
     expect(vi.mocked(session.send).mock.calls[0][1]?.[MODEL_REQUEST_CONTROL]).toBeUndefined();
+  });
+
+  // Welcome replay safety, unit: an awaited preparation remains observable even
+  // when its selection is removed in flight; the callback never reaches the provider.
+  it.each(['turn', 'prompt', 'context'] as const)('records %s preparation before awaiting it', async point => {
+    const { deps, session } = createDeps();
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    const observed = vi.fn(() => { finish(); });
+    if (point === 'turn') deps.prepareRuntimeTurn = () => pending.then(() => ({ options: {} }));
+    if (point === 'prompt') deps.prepareRuntimePrompt = () => pending;
+    if (point === 'context') deps.composeRuntimeContext = () => pending.then(() => 'Reference only');
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Welcome', undefined,
+      { toolsDisabled: true, onRuntimePreparation: observed });
+    expect(observed).toHaveBeenCalledOnce();
+    expect(session.send).toHaveBeenCalledOnce();
+    expect(vi.mocked(session.send).mock.calls[0][1]).not.toHaveProperty('onRuntimePreparation');
   });
 
   // Runtime context, unit: reference material reaches the normal message body,
@@ -5059,6 +5079,57 @@ describe('repeatable environment notes are sent only when they change', () => {
 });
 
 describe('Agent prewarm', () => {
+  it('rebuilds a retained failed Pi runtime before preparing a Skill', async () => {
+    const live = createSession({ agentKind: 'pi', getStatus: () => 'error' });
+    const { deps } = createDeps({
+      getSession: () => live,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved' }),
+      readSessionWorkingDirFromDb: async () => '/repo',
+    });
+    await createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+  // #11112 / unit: a switch can leave a live Pi for the same path on the old device.
+  it('only retries the catalog on the persisted execution device', async () => {
+    const retry = vi.fn();
+    const live = { ...createSession({ agentKind: 'pi', workDir: '/repo' }), agentDeviceId: 'device-a',
+      retryFailedRuntimeCapabilityCapture: retry };
+    const { deps } = createDeps({
+      getSession: () => live,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b' }),
+    });
+    const prepare = () => createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
+    await expect(prepare()).rejects.toThrow();
+    expect(retry).not.toHaveBeenCalled();
+    live.agentDeviceId = 'device-b';
+    await prepare();
+    expect(retry).toHaveBeenCalledOnce();
+  });
+  // #11112: Pi catalog preparation must use the existing task's lazy bootstrap,
+  // including Orca identity, without issuing a first user/Worker-ready message.
+  it.each(['lead', 'worker'] as const)('prepares an existing cold Pi %s from persisted settings', async role => {
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({
+        id: 'session-1', agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b', orcaRole: role,
+      }),
+      readSessionWorkingDirFromDb: async () => '/repo',
+      synthesizeOrcaVendorOptionsFromDb: async (_id, opts) => {
+        opts.vendorOptions = { orcaRole: role, orcaWorkflowId: 'team' };
+        return true;
+      },
+      readSessionExtraDirsFromDb: vi.fn(async () => { throw new Error('busy'); }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.preparePiSkillRuntime('session-1', '/repo', {});
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'saved', agentDeviceId: 'device-b', vendorOptions: { orcaRole: role, orcaWorkflowId: 'team' },
+    }));
+    expect(deps.readSessionExtraDirsFromDb).toHaveBeenCalledOnce();
+    await expect(transaction.preparePiSkillRuntime('session-1', '/other', {})).rejects.toThrow();
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+
   it('starts the runtime a first send would start, and the send then reuses it', async () => {
     let live: ReturnType<typeof createSession> | undefined;
     const { deps } = createDeps({

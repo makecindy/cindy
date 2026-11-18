@@ -142,6 +142,10 @@
     "message": "Cindy no puede leer este archivo adjunto. Selecciona el archivo original para seguir enviando este mensaje. Si cancelas, se conserva tu borrador.",
     "button": "Usar archivo original"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Este envío se canceló porque la tarea o la ventana cambiaron.",
+    "invalid": "Este envío ya no es válido para la sesión actual."
+  },
   "mailReader": {
     "showExternalImages": "Mostrar imágenes externas",
     "markReadFailed": "No se pudo sincronizar el estado de lectura. Verifica la autorización del buzón y vuelve a abrir este correo electrónico.",
@@ -1359,10 +1363,11 @@
         "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Activa el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
         "action": "Activar"
       },
-      "update": {
-        "title": "Actualiza el complemento «{{plugin}}»",
-        "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Actualiza el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
-        "action": "Actualizar"
+      "unsupported": {
+        "title": "El complemento «{{plugin}}» no admite la vista remota",
+        "body": "El complemento instalado no puede mostrar {{device}} desde otro ordenador. Busca una actualización compatible o usa el dispositivo en el ordenador que ejecuta esta sesión.",
+        "action": "Buscar actualización compatible",
+        "unavailable": "No hay una actualización compatible en el origen de este complemento. Usa el dispositivo en el ordenador que ejecuta esta sesión."
       }
     },
     "lockOnExitHintPrivacy": "Muestra la pantalla de privacidad al salir para que la IA siga trabajando; tocar la computadora la bloquea.",
@@ -8307,7 +8312,7 @@
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
         "hostTools_usage": "Leer el uso y el estado de los grupos de proveedores",
-        "hostTools_usageDetail": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de proveedores y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes.",
+        "hostTools_usageDetail": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de proveedores y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes. También lee la cuota de las tareas accesibles, incluso en otro ordenador autorizado de la misma cuenta o mediante un proveedor compartido que permite ver la cuota.",
         "hostTools_settings": "Ajustes de la aplicación",
         "hostTools_settingsDetail": "Usar las herramientas de Cindy para leer y cambiar la configuración. No se devuelven secretos y los datos privados los introduces tú.",
         "hostTools_scheduler": "Gestión de automatizaciones",
@@ -8831,6 +8836,10 @@
       "panelHost": {
         "close": "Cerrar panel"
       },
+      "installProgress": {
+        "awaitingConsent": "Esperando confirmación…",
+        "installFailed": "Error al instalar"
+      },
       "updateAll": {
         "title": "Actualizar todos · {{count}} complementos",
         "collapseDiff": "Contraer",
@@ -8841,6 +8850,7 @@
         "statusDone": "Actualizado",
         "statusSkipped": "Saltado",
         "statusFailed": "Error al actualizar",
+        "progressCount": "{{done}} de {{total}} actualizados",
         "background": "Continuar en segundo plano",
         "doneAction": "Listo",
         "doneToast": "Actualización por lotes finalizada: {{done}} actualizados, {{rest}} sin completar",
@@ -15222,6 +15232,9 @@
       "continueFailed_many": "No se pudieron reanudar {{count}} sesiones. Ábrelas para volver a intentarlo."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "La autorización para esta acción caducó. La próxima ejecución sigue programada.",
+      "actionExpired": "La autorización de la sesión para esta acción ha caducado. Consulta la última ejecución de la automatización.",
+      "actionRecovered": "La autorización para esta acción caducó. La misma automatización se ejecutó correctamente más tarde.",
       "text": "Error en la ejecución automática.",
       "precheck": "Los controles automáticos están bloqueados temporalmente.",
       "rateLimited": "Los controles automáticos están bloqueados temporalmente por un límite de frecuencia de solicitudes.",
@@ -16658,7 +16671,10 @@
       "confirmArchive": {
         "title": "Archivar sesión",
         "description": "¿Archivar esta sesión? Se quitará de la lista.",
-        "dirtyWorktreeWarning": "El worktree de esta sesión tiene cambios sin commit; se guardarán como una instantánea de git antes de archivarla y se podrán restaurar desde la sesión más adelante.",
+        "dirtyWorktreeWarning": "Los cambios sin confirmar se guardarán antes de archivar. Podrás restaurarlos desde la tarea.",
+        "discardChanges": "Descartar cambios sin confirmar",
+        "discardWarning": "Los cambios sin confirmar y los archivos nuevos se perderán.",
+        "discardAndArchive": "Descartar y archivar",
         "scheduleWarning_one": "La automatización vinculada {{names}} seguirá ejecutándose y restaurará esta sesión.",
         "scheduleWarning_other": "Las automatizaciones vinculadas {{names}} seguirán ejecutándose y restaurarán esta sesión.",
         "scheduleWarningMany_one": "{{count}} de estas sesiones tiene automatizaciones vinculadas que la restaurarán cuando se ejecuten.",

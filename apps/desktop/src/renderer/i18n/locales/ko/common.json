@@ -142,6 +142,10 @@
     "message": "Cindy가 이 첨부 파일을 읽을 수 없습니다. 원본 파일을 선택하면 이 메시지 전송을 계속합니다. 취소하면 초안이 유지됩니다.",
     "button": "원본 파일 사용"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "작업 또는 창이 변경되어 이 전송이 취소되었습니다.",
+    "invalid": "이 전송은 현재 세션에 유효하지 않습니다."
+  },
   "mailReader": {
     "showExternalImages": "외부 이미지 표시",
     "markReadFailed": "읽음 상태를 동기화하지 못했습니다. 메일함 인증을 확인하고 다시 여세요.",
@@ -1328,10 +1332,11 @@
         "body": "이 작업은 다른 컴퓨터에서 {{device}}을(를) 열어 두었습니다. 이 컴퓨터에서 “{{plugin}}” 플러그인을 켜면 오른쪽 사이드바에서 보고 조작할 수 있습니다.",
         "action": "켜기"
       },
-      "update": {
-        "title": "“{{plugin}}” 플러그인을 업데이트해야 합니다",
-        "body": "이 작업은 다른 컴퓨터에서 {{device}}을(를) 열어 두었습니다. 이 컴퓨터의 “{{plugin}}” 플러그인을 새 버전으로 업데이트하면 오른쪽 사이드바에서 보고 조작할 수 있습니다.",
-        "action": "업데이트"
+      "unsupported": {
+        "title": "“{{plugin}}”은 원격 보기를 지원하지 않습니다",
+        "body": "설치된 플러그인으로는 다른 컴퓨터의 {{device}}을(를) 표시할 수 없습니다. 호환되는 업데이트를 확인하거나 이 세션을 실행하는 컴퓨터에서 기기를 사용할 수 있습니다.",
+        "action": "호환 업데이트 확인",
+        "unavailable": "이 플러그인의 배포처에는 원격 보기를 지원하는 업데이트가 없습니다. 이 세션을 실행하는 컴퓨터에서 기기를 사용할 수 있습니다."
       }
     },
     "lockOnExitHintPrivacy": "종료하면 프라이버시 화면을 표시하여 AI가 계속 작업할 수 있습니다. 컴퓨터를 건드리면 잠깁니다.",
@@ -8192,7 +8197,7 @@
         "hostTools_handoff": "작업에 메시지 보내기",
         "hostTools_handoffDetail": "Cindy의 작업 도구로 기존 작업에 메시지를 보낼 수 있습니다. 현재 작업 정보가 필요한 작업은 대상 작업을 명시해야 합니다.",
         "hostTools_usage": "사용량 및 제공자 그룹 상태 읽기",
-        "hostTools_usageDetail": "현재 Cindy 계정에 연결된 이 컴퓨터의 Claude/Codex 계정 ID, 요금제, 할당량 기간과 업데이트 시간을 읽습니다. 이 컴퓨터와 같은 계정에서 허용된 다른 컴퓨터에 기록된 일별·모델별 사용량, 예상 비용, 제공자 그룹 설정과 상태, 볼 수 있는 구성원·기기의 ID, 이름과 아바타도 읽습니다. 구독 로그인 이메일, 계정 디렉터리, 내부 지문, 인증 정보나 파일은 읽을 수 없으며 계정이나 설정도 변경할 수 없습니다.",
+        "hostTools_usageDetail": "현재 Cindy 계정에 연결된 이 컴퓨터의 Claude/Codex 계정 ID, 요금제, 할당량 기간과 업데이트 시간을 읽습니다. 이 컴퓨터와 같은 계정에서 허용된 다른 컴퓨터에 기록된 일별·모델별 사용량, 예상 비용, 제공자 그룹 설정과 상태, 볼 수 있는 구성원·기기의 ID, 이름과 아바타도 읽습니다. 구독 로그인 이메일, 계정 디렉터리, 내부 지문, 인증 정보나 파일은 읽을 수 없으며 계정이나 설정도 변경할 수 없습니다. 접근할 수 있는 작업의 할당량도 읽습니다. 같은 계정에서 허용된 다른 컴퓨터와 할당량 보기가 허용된 공유 제공자가 포함됩니다.",
         "hostTools_settings": "앱 설정",
         "hostTools_settingsDetail": "Cindy의 설정 도구로 앱 설정을 읽고 변경할 수 있습니다. 비밀 값은 반환되지 않으며 민감한 정보는 직접 입력해야 합니다.",
         "hostTools_scheduler": "자동화 관리",
@@ -8716,6 +8721,10 @@
       "panelHost": {
         "close": "패널 닫기"
       },
+      "installProgress": {
+        "awaitingConsent": "확인 대기 중…",
+        "installFailed": "설치 실패"
+      },
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
         "collapseDiff": "접기",
@@ -8726,6 +8735,7 @@
         "statusDone": "업데이트됨",
         "statusSkipped": "건너뜀",
         "statusFailed": "업데이트 실패",
+        "progressCount": "{{total}}개 중 {{done}}개 업데이트됨",
         "background": "백그라운드에서 계속",
         "doneAction": "완료",
         "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료",
@@ -15056,6 +15066,9 @@
       "continueFailed_other": "세션 {{count}}개를 이어서 진행하지 못했습니다. 세션을 열어 다시 시도하세요."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "이 동작에 대한 세션 권한이 만료되었습니다. 다음 실행은 예정대로 진행됩니다.",
+      "actionExpired": "이 동작에 대한 세션 권한이 만료되었습니다. 자동화의 최근 실행 결과를 확인하세요.",
+      "actionRecovered": "이 동작의 권한이 만료되었습니다. 이후 같은 자동화가 성공적으로 실행되었습니다.",
       "text": "실패한 자동 실행이 있습니다.",
       "precheck": "자동 확인이 일시적으로 차단되었습니다.",
       "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
@@ -16428,7 +16441,10 @@
       "confirmArchive": {
         "title": "세션 보관",
         "description": "이 세션을 보관하시겠습니까? 보관 후 목록에서 사라집니다.",
-        "dirtyWorktreeWarning": "이 세션의 worktree에 커밋되지 않은 변경 사항이 있습니다. 보관 전에 git 스냅샷으로 자동 저장되며 나중에 세션에서 복원할 수 있습니다.",
+        "dirtyWorktreeWarning": "보관하기 전에 커밋하지 않은 변경 사항을 저장합니다. 나중에 작업에서 복원할 수 있습니다.",
+        "discardChanges": "커밋하지 않은 변경 사항 삭제",
+        "discardWarning": "커밋하지 않은 변경 사항과 새 파일은 복원할 수 없습니다.",
+        "discardAndArchive": "삭제하고 보관",
         "scheduleWarning_one": "연결된 자동화 {{names}}은(는) 계속 실행되며 이 세션을 복원합니다.",
         "scheduleWarning_other": "연결된 자동화 {{names}}은(는) 계속 실행되며 이 세션을 복원합니다.",
         "scheduleWarningMany_one": "{{count}}개 세션에 자동화가 연결되어 있으며, 다음 실행 시 해당 세션이 복원됩니다.",

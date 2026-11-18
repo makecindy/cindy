@@ -202,6 +202,8 @@ export interface MenubarStrings {
 }
 
 export interface MenubarView {
+  /** Optional for old helper fixtures; current presenters receive the shared design. */
+  presentation?: import('./quotaPanelDesign.js').QuotaPanelDesign;
   /** BCP 47 locale for dates and numbers. */
   locale: string;
   /** Symbol of the usage ledger currency: "$" on Global, "¥" in mainland China. */

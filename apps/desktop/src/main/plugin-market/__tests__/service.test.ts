@@ -7127,6 +7127,63 @@ describe('PluginMarketService install consent', () => {
     expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：PluginMarketService.install 的 onProgress；插件页据此显示
+  //   准备、下载、校验、等待确认、安装、完成／失败这些步骤。
+  // - Bug／规则依据：verified-downloads.md「下载进度与界面」登记的缺口——插件市场安装没有进度通道，
+  //   界面只能转圈然后突然结束。
+  // - 现有覆盖缺口：既有用例只断言安装结果，不关心中途向界面报告了什么。
+  // - 最小失败输入：一次带 onProgress 的首装；下载失败；用户在确认框里取消；监听方抛错。
+  // - tier：unit（沿用本文件的内存 harness，下载器已 mock）。
+  it.each([
+    {
+      name: 'reports every step of a confirmed install',
+      steps: ['preparing', 'downloading', 'verifying', 'verifying+consent', 'verifying', 'installing', 'completed'],
+    },
+    { name: 'ends as failed when the download fails', downloadFails: true, steps: ['preparing', 'failed'] },
+    {
+      name: 'ends as cancelled, not failed, when the user declines',
+      declined: true,
+      steps: ['preparing', 'downloading', 'verifying', 'verifying+consent', 'verifying', 'cancelled'],
+    },
+    { name: 'still installs when the progress listener throws', listenerThrows: true, steps: [] },
+  ] as Array<{ name: string; steps: string[]; downloadFails?: true; declined?: true; listenerThrows?: true }>)(
+    '$name',
+    async ({ steps, downloadFails, declined, listenerThrows }) => {
+      const item = summary();
+      const h = harness([item]);
+      runtime.install.mockResolvedValue({
+        manifest: manifest(), dir: path.join(os.tmpdir(), 'market-install'), enabled: true,
+      });
+      vi.mocked(downloadVerifiedPlugin).mockImplementationOnce(async (_url, expected, _target, progress) => {
+        if (downloadFails) throw new Error('Plugin download failed');
+        progress?.onProgress?.({ loaded: expected.sizeBytes / 2, total: expected.sizeBytes, percent: 50, speedBps: 0 });
+        progress?.onVerifying?.();
+      });
+      const seen: string[] = [];
+      let lastPercent: number | null = null;
+
+      const install = h.service.install(item.id, reviewedInstallOptions(item), {
+        consent: { prompt: async () => !declined, initiator: 'user' },
+        onProgress: (progress) => {
+          if (listenerThrows) throw new Error('renderer went away');
+          expect(progress.pluginId).toBe(item.id);
+          const step = `${progress.download.phase}${progress.awaitingConsent ? '+consent' : ''}`;
+          if (seen.at(-1) !== step) seen.push(step);
+          lastPercent = progress.download.percent;
+        },
+      });
+
+      if (downloadFails) await expect(install).rejects.toThrow('Plugin download failed');
+      else if (declined) await expect(install).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
+      else await expect(install).resolves.toMatchObject({ ghost: { manifest: { id: item.ghostId } } });
+      expect(seen).toEqual(steps);
+      // The package size is known up front, so the amount shown is exact from the first byte.
+      if (steps.at(-1) === 'completed') expect(lastPercent).toBe(100);
+      if (steps.at(-1) === 'cancelled') expect(lastPercent).toBe(50);
+    },
+  );
+
   it('does not hold the plugin mutation while waiting for install confirmation', async () => {
     const item = summary();
     const h = harness([item]);

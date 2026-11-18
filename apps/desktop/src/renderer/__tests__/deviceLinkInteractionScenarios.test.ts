@@ -511,6 +511,55 @@ describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
   });
 
+  // #11232: 旧端只读用例无法发现新版宿主的推送和快照被误分类；通过 unit 的真实 store 路由验证。
+  it('可远程确认的反馈在推送与重连后保留编辑，提交到宿主，离线期间关闭的卡片也能清理', async () => {
+    const s = openRemoteSession();
+    const request = {
+      kind: 'issue_confirm',
+      requestId: 'remote-feedback',
+      remoteConfirmSupported: true,
+      draft: { title: '原始标题', body: '说明', type: 'bug' },
+      env: { appVersion: '1', platform: 'darwin', arch: 'arm64', osVersion: '1' },
+      submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+    };
+    host.hostInteraction(s, request);
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.draft).toEqual(request.draft);
+    const edited = { title: '编辑后的标题', body: '补充说明', type: 'bug' as const, publicName: '匿名' };
+    saveIssueConfirmDraft(s, request.requestId, edited);
+    host.seedPending(s, request);
+    host.seedPending(s, { kind: 'rename_sessions_confirm', requestId: 'rename' });
+    host.hostInteraction(s, { kind: 'rename_sessions_confirm', requestId: 'rename' });
+    host.hostInteraction(s, request);
+    await flush();
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
+    expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation?.requestId).toBe('rename');
+    host.invoke.mockRejectedValueOnce(new Error('connection lost'));
+    makerChatStore.respondToIssueConfirm(s, { confirmed: false });
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
+    host.hostInteraction(s, request);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
+    remoteProjectsStore.clear();
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(false);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s } as Session]);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe(request.requestId);
+    expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
+    makerChatStore.respondToIssueConfirm(s, {
+      confirmed: true, ...edited, submissionIdentity: { kind: 'platform', login: 'cindy-issue' }, uiLanguage: 'zh-CN',
+    });
+    await flush();
+    expect(host.resolved[0]).toMatchObject({ requestId: request.requestId, decision: { confirmed: true, ...edited } });
+    expect(local.localResolveInteraction).not.toHaveBeenCalled();
+    host.seedPending(s, { ...request, requestId: 'snapshot-feedback' });
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe('snapshot-feedback');
+    host.clearPending(s);
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toBeNull();
+  });
+
   it('并发确认按到达顺序排队，关闭任一项都不会丢失其余确认', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, { kind: 'issue_confirm', requestId: 'opaque-a' });

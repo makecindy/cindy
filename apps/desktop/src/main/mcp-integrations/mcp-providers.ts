@@ -1,6 +1,12 @@
 import { createProjectToolCallbacks } from './projectToolCallbacks.js';
 import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js';
-import { readSubscriptionUsage } from '../subscription-accounts/runtime.js';
+import { readSubscriptionSessionAccount, readSubscriptionUsage } from '../subscription-accounts/runtime.js';
+import { resolveSubscriptionPoolProvider } from '../subscription-accounts/placement.js';
+import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../shared/subscriptionAccounts.js';
+import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
+import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { readSessionQuota } from './sessionQuota.js';
 import { createSessionToolCatalogExecutor } from '../maker-ipc/sessionToolCatalog.js';
 import { updateProjectInfo } from '../localDb/ipc/projectAliases.js';
 import { deviceName } from '../device-link/deviceName';
@@ -23,7 +29,8 @@ import { importThemePackageFromTask } from '../local-themes/agent.js';
 import { manageAppModels } from '../app-settings/models.js';
 import { runProviderReadRequest } from './providerReadTools.js';
 import { runProviderSharingRequest } from './providerSharingTools.js';
-import { executeProviderShareManagementCommand } from '../device-link/providerShareRuntime.js';
+import { executeProviderShareManagementCommand, readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
+import { findReceivedShare, providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
 import { createProviderGroupCommandDeps, executeProviderGroupCommand } from '../provider-group/ipc.js';
 import { invokeProviderManagement } from '../provider-group/managementClient.js';
 import { remoteInvoke } from '../device-link/index.js';
@@ -113,6 +120,7 @@ import {
   getTaskActionInputState,
   isActiveInputAccountScoped,
   getTaskActionSession,
+  resolveSessionRuntimeRoute,
   confirmTaskAction,
   requestMcpSetupForSession,
 } from '../maker-ipc/register.js';
@@ -146,6 +154,7 @@ import { createSharedTaskTools } from './sharedTaskTools.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
+  getSessionRowSnapshotStrict,
   patchSessionMetaInDb,
   renameSessionTitlesInDb,
   setSessionsStatusInDb,
@@ -740,11 +749,48 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           getSession: async id => getTaskActionSession(id),
           pluginCall: getPluginHostToolCaller, getGhost: findGhostForInstanceId,
         })(request, assertCurrent)) },
-      subscriptionUsage: { read: (context, providerId) => withAccountDataAccess(context.sessionId, async assertCurrent => {
-        const result = await readSubscriptionUsage(providerId);
-        await assertCurrent();
-        return result;
-      }) },
+      subscriptionUsage: {
+        read: (context, providerId) => withAccountDataAccess(context.sessionId, async assertCurrent => {
+          const result = await readSubscriptionUsage(providerId);
+          await assertCurrent();
+          return result;
+        }),
+        readSession: (context, sessionId) => withAccountDataAccess(context.sessionId, async assertCurrent => {
+          const preSend = captureTaskActionSyncGuard();
+          return readSessionQuota(sessionId, {
+            readRoute: async id => {
+              const row = await getSessionRowSnapshotStrict(id);
+              if (!row) return null;
+              const kind = dbToMakerAgentKind(row.agentKind);
+              const override = getSessionRuntimeControlSnapshot(id).effectiveOverride;
+              if (override && (override.agentKind !== kind
+                || (override.agentDeviceId ?? null) !== (row.agentDeviceId ?? null))) return null;
+              const { providerId, modelId } = resolveSessionRuntimeRoute(id, kind, row);
+              return {
+                providerId, modelId,
+                deviceId: row.agentDeviceId === getDeviceId() ? null : row.agentDeviceId ?? null,
+                remoteHostId: row.remoteHostId ?? null, nativeSessionId: row.sdkSessionId ?? null,
+              };
+            },
+            readLocal: query => readSubscriptionSessionAccount(query.providerId, query),
+            readRemote: async (deviceId, query) => {
+              const response = await deps.invokeRemote(deviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [query], { preSend });
+              return response.ok ? response.result : null;
+            },
+            readShare: async shareId => findReceivedShare(shareId)?.providerId === 'xd'
+              ? readReceivedProviderShareQuota(shareId).catch(() => null) : null,
+            shareAccessEpoch: providerShareAccessEpoch,
+            resolveSubscription: async (providerId, deviceId) => {
+              if (!deviceId) return resolveSubscriptionPoolProvider(providerId)?.kind ?? null;
+              const catalog = await readDeviceProviderCatalog(
+                (id, channel, args) => deps.invokeRemote(id, channel, args, { preSend }), deviceId,
+              ).catch(() => null);
+              const view = !catalog?.stale ? catalog?.views.find(provider => provider.id === providerId) : undefined;
+              return view?.subscriptionAccountPool ?? view?.subscriptionPool ?? null;
+            },
+          }, assertCurrent);
+        }),
+      },
       hostServices: createHostServiceToolExecutor(hostServiceCatalog, { pluginCall: getPluginHostToolCaller, getGhost: findGhostForInstanceId }),
       files: createFileToolExecutor(getGhostFsSlot, getPluginHostToolCaller),
       storage: createStorageToolExecutor(getGhostStorageService, getPluginHostToolCaller),
@@ -964,6 +1010,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           service.listSessionQueuedCounts(sessionIds)),
       },
       sessionControl: {
+        controlSession: wrap((service, params) => service.controlSession(params)),
         updateQueuedMessage: wrap((service, params) => service.updateSessionQueuedMessage(params)),
         cancelQueuedMessage: wrap((service, params) => service.cancelSessionQueuedMessage(params)),
         steerQueuedMessage: wrap((service, params) => service.steerSessionQueuedMessage(params)),

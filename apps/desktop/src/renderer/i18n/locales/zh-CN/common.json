@@ -142,6 +142,10 @@
     "message": "Cindy 无法读取这个附件。请选择原文件，确认后继续发送这条消息；取消会保留草稿。",
     "button": "使用原文件"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "因为任务或窗口发生变化，本次发送已取消。",
+    "invalid": "本次发送对当前任务已无效。"
+  },
   "mailReader": {
     "showExternalImages": "显示外部图片",
     "markReadFailed": "未能同步已读状态，请检查邮箱授权后重新打开。",
@@ -1328,10 +1332,11 @@
         "body": "这个任务在另一台电脑上开着 {{device}}。在这台电脑上开启「{{plugin}}」插件后，就能在右侧栏查看和操作它。",
         "action": "开启"
       },
-      "update": {
-        "title": "需要更新「{{plugin}}」插件",
-        "body": "这个任务在另一台电脑上开着 {{device}}。把这台电脑上的「{{plugin}}」插件更新到新版本后，就能在右侧栏查看和操作它。",
-        "action": "更新"
+      "unsupported": {
+        "title": "「{{plugin}}」暂不支持远程查看",
+        "body": "已安装的插件无法显示另一台电脑上的 {{device}}。可以检查兼容更新，或在运行此任务的电脑上使用设备。",
+        "action": "检查兼容更新",
+        "unavailable": "此插件的来源暂无支持远程查看的更新，可在运行此任务的电脑上使用设备"
       }
     },
     "lockOnExitHintPrivacy": "退出远程桌面后盖上隐私屏，AI 可以继续工作；有人碰电脑就会锁屏。",
@@ -8192,7 +8197,7 @@
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
         "hostTools_usage": "读取用量与供应商组状态",
-        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置",
+        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置。还可读取有权访问的任务的配额，包括同账号已授权电脑及允许查看配额的分享供应商。",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "通过 Cindy 的设置工具读取和修改应用配置；不返回密钥，不代替你完成保密输入。",
         "hostTools_scheduler": "自动化管理",
@@ -8716,6 +8721,10 @@
       "panelHost": {
         "close": "关闭面板"
       },
+      "installProgress": {
+        "awaitingConsent": "等待确认…",
+        "installFailed": "安装失败"
+      },
       "updateAll": {
         "title": "全部更新 · {{count}} 个插件",
         "collapseDiff": "收起",
@@ -8726,6 +8735,7 @@
         "statusDone": "已更新",
         "statusSkipped": "已跳过",
         "statusFailed": "更新失败",
+        "progressCount": "已更新 {{done}} / {{total}}",
         "background": "后台继续",
         "doneAction": "完成",
         "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成",
@@ -15056,6 +15066,9 @@
       "continueFailed_other": "有 {{count}} 个任务没能继续，可以打开任务后重试。"
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
+      "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
+      "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "此前有自动运行失败。",
       "precheck": "自动检查暂时受阻。",
       "rateLimited": "自动检查暂时受阻：请求限流。",
@@ -16428,7 +16441,10 @@
       "confirmArchive": {
         "title": "归档任务",
         "description": "确定要归档这个任务吗？归档后将从列表中移除。",
-        "dirtyWorktreeWarning": "该任务的 worktree 有未提交的更改；归档前会自动保存为 git 快照，之后可在任务内一键恢复。",
+        "dirtyWorktreeWarning": "未提交的更改会在归档前保存，可在任务内恢复。",
+        "discardChanges": "丢弃未提交的更改",
+        "discardWarning": "未提交的更改和新文件将无法恢复。",
+        "discardAndArchive": "丢弃并归档",
         "scheduleWarning_one": "关联的自动化{{names}}仍会运行，并恢复此任务。",
         "scheduleWarning_other": "关联的自动化{{names}}仍会运行，并恢复此任务。",
         "scheduleWarningMany_one": "其中 {{count}} 个任务关联了自动化，后续运行时会恢复这些任务。",

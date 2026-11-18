@@ -142,6 +142,10 @@
     "message": "Cindy ne peut pas lire cette pièce jointe. Sélectionnez le fichier d'origine pour poursuivre l'envoi de ce message. Si vous annulez, votre brouillon est conservé.",
     "button": "Utiliser le fichier d'origine"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Cet envoi a été annulé, car la tâche ou la fenêtre a changé.",
+    "invalid": "Cet envoi n'est plus valide pour la session en cours."
+  },
   "mailReader": {
     "showExternalImages": "Afficher les images externes",
     "markReadFailed": "Impossible de synchroniser l'état de lecture. Vérifiez l'autorisation de la boîte mail et rouvrez cet e-mail.",
@@ -1359,10 +1363,11 @@
         "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Activez le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
         "action": "Activer"
       },
-      "update": {
-        "title": "Mettre à jour le plugin « {{plugin}} »",
-        "body": "Cette tâche a {{device}} ouvert sur un autre ordinateur. Mettez à jour le plugin « {{plugin}} » sur cet ordinateur pour le voir et le contrôler dans la barre latérale droite.",
-        "action": "Mettre à jour"
+      "unsupported": {
+        "title": "Le plugin « {{plugin}} » ne prend pas en charge l’affichage à distance",
+        "body": "Le plugin installé ne peut pas afficher {{device}} depuis un autre ordinateur. Recherchez une mise à jour compatible ou utilisez l’appareil sur l’ordinateur qui exécute cette session.",
+        "action": "Vérifier les mises à jour",
+        "unavailable": "Aucune mise à jour compatible n’est disponible depuis la source de ce plugin. Utilisez l’appareil sur l’ordinateur qui exécute cette session."
       }
     },
     "lockOnExitHintPrivacy": "Affiche l'écran de confidentialité à la sortie pour que l'IA continue de travailler ; toucher l'ordinateur le verrouille.",
@@ -8307,7 +8312,7 @@
         "hostTools_handoff": "Messages aux tâches",
         "hostTools_handoffDetail": "Utiliser les outils de Cindy pour envoyer des messages aux tâches existantes. Une opération nécessitant le contexte de la tâche actuelle exige une cible explicite.",
         "hostTools_usage": "Lire l’utilisation et l’état des groupes de fournisseurs",
-        "hostTools_usageDetail": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes de fournisseurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages.",
+        "hostTools_usageDetail": "Lire les identifiants, offres, périodes de quota et dates de mise à jour des comptes Claude/Codex locaux connectés à votre compte Cindy. Lire l’utilisation enregistrée par jour et par modèle, les coûts estimés, la configuration et l’état des groupes de fournisseurs, ainsi que les identifiants, noms et avatars visibles des membres et appareils sur cet ordinateur ou d’autres ordinateurs autorisés du même compte. Ne permet pas de lire les adresses e-mail de connexion aux abonnements, les dossiers de comptes, les empreintes d’identité internes, les identifiants de connexion ou les fichiers, ni de modifier les comptes ou réglages. Lire aussi le quota des tâches accessibles, y compris sur un ordinateur autorisé du même compte ou via un fournisseur partagé qui autorise l’affichage du quota.",
         "hostTools_settings": "Paramètres de l’application",
         "hostTools_settingsDetail": "Utiliser les outils de Cindy pour lire et modifier la configuration. Aucun secret n’est renvoyé et les saisies confidentielles restent à votre charge.",
         "hostTools_scheduler": "Gestion des automatisations",
@@ -8831,6 +8836,10 @@
       "panelHost": {
         "close": "Fermer le panneau"
       },
+      "installProgress": {
+        "awaitingConsent": "En attente de confirmation…",
+        "installFailed": "Échec de l’installation"
+      },
       "updateAll": {
         "title": "Tout mettre à jour · {{count}} plugins",
         "collapseDiff": "Réduire",
@@ -8841,6 +8850,7 @@
         "statusDone": "Mis à jour",
         "statusSkipped": "Ignoré",
         "statusFailed": "Échec de la mise à jour",
+        "progressCount": "{{done}} sur {{total}} mis à jour",
         "background": "Continuer en arrière-plan",
         "doneAction": "Terminé",
         "doneToast": "Mise à jour groupée terminée : {{done}} mis à jour, {{rest}} non terminés",
@@ -15222,6 +15232,9 @@
       "continueFailed_many": "{{count}} sessions n'ont pas pu reprendre. Ouvrez-les pour réessayer."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "L’autorisation pour cette action a expiré. La prochaine exécution reste programmée.",
+      "actionExpired": "L’autorisation de la session pour cette action a expiré. Consultez la dernière exécution de l’automatisation.",
+      "actionRecovered": "L’autorisation pour cette action a expiré. La même automatisation a ensuite réussi.",
       "text": "Une exécution automatique a échoué.",
       "precheck": "Les vérifications automatiques sont temporairement bloquées.",
       "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
@@ -16658,7 +16671,10 @@
       "confirmArchive": {
         "title": "Archiver la session",
         "description": "Archiver cette session ? Elle sera retirée de la liste.",
-        "dirtyWorktreeWarning": "Le worktree de cette session contient des modifications non commitées ; elles seront enregistrées sous forme de snapshot git avant l'archivage et pourront être restaurées plus tard depuis la session.",
+        "dirtyWorktreeWarning": "Les modifications non validées seront enregistrées avant l’archivage. Vous pourrez les restaurer depuis la tâche.",
+        "discardChanges": "Ignorer les modifications non validées",
+        "discardWarning": "Les modifications non validées et les nouveaux fichiers seront perdus.",
+        "discardAndArchive": "Ignorer et archiver",
         "scheduleWarning_one": "L'automatisation liée {{names}} continuera de s'exécuter et restaurera cette session.",
         "scheduleWarning_other": "Les automatisations liées {{names}} continueront de s'exécuter et restaureront cette session.",
         "scheduleWarningMany_one": "{{count}} de ces sessions a des automatisations liées qui la restaureront lors de leur exécution.",
