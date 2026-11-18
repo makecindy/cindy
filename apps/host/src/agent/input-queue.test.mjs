@@ -78,7 +78,7 @@ import { getThinkingEnabledFromMemory } from '../../../desktop/src/main/maker-ho
 import { createHostMessageStore, createHostMessageRecovery } from '../message-store.ts';
 import { resolveSessionReferencesWithPorts } from '../../../desktop/src/main/maker-ipc/sessionReferenceResolverCore.ts';
 import { listErrorTailPendingRows } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
-import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
+import { sendToSessionLocks, withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
 import { AgentStartupStoppedError, Maker } from '@cindy/maker-core';
 import { createHostSessionMovePorts } from './session-move.ts';
 import { createEventHub } from '../events.mjs';
@@ -5595,6 +5595,37 @@ test('a plugin route refused after an account change leaves the new owner route 
   await assert.rejects(r.selection.applyPluginRoute(id, { agentKind: 'pi', model: 'big', providerId: 'prov-b' }, () => {}, () => {}));
   assert.equal(r.h.maker.getSession(id), null);
   assert.equal(getSessionProvider(id), 'new-account');
+  assert.equal(r.row(id).provider_id, 'prov-a');
+});
+
+// §3.2, integration: a queued route from the previous owner must reject before
+// it captures the new owner's same-id runtime as its own rollback target.
+test('a plugin route waiting for the task lock cannot retire the next owner’s instance', async t => {
+  const id = 'route-owner-changed-under-lock';
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  t.after(bindHostSessionRuntimeHooks(r.selection));
+  providePiWindows(r);
+  r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('pi')[0], id: provider }));
+  await r.createTask(id);
+  const old = await r.runTurn(id, 'initial', { contextTokens: 100, contextWindow: 200_000 });
+  const lock = await holdSendLock(id);
+  const held = sendToSessionLocks.get(id);
+  const update = assert.rejects(r.selection.applyPluginRoute(id, {
+    agentKind: 'pi', model: 'big', providerId: 'prov-b',
+  }, () => {}, () => {}));
+  let next;
+  try {
+    await settleUntil(() => sendToSessionLocks.get(id) !== held, 'the route is queued behind the task lock');
+    configureHostOwner({ userDataDir: path.join(r.db.root, 'profile'), ownerId: 'other-owner-under-lock' });
+    await r.h.maker.closeSession(id);
+    next = await r.h.maker.createSession({ ...old.options, providerId: 'next-owner' });
+    setSessionProvider(id, 'next-owner');
+  } finally {
+    await lock.release();
+    await update;
+  }
+  assert.equal(r.h.maker.getSession(id), next);
+  assert.equal(getSessionProvider(id), 'next-owner');
   assert.equal(r.row(id).provider_id, 'prov-a');
 });
 

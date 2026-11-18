@@ -528,9 +528,13 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   async function recoverRejectedRoute<T>(
     id: string,
     sameOwner: () => boolean,
+    assertTurnAdmission: () => void,
     run: (bindRehydrated: (session: Session) => void) => Promise<T>,
   ): Promise<T> {
     return withSendToSessionLock(id, async () => {
+      // If admission changed while waiting for the lock, the live instance can
+      // already belong to another owner. There is nothing from this call to undo.
+      assertTurnAdmission();
       const ownerMaker = maker();
       let instance = ownerMaker.getSession(id);
       const hadProvider = hasSessionProvider(id);
@@ -756,7 +760,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       const effective = profiles.pendingMutation?.profile ?? profiles.effective;
       const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
       const selectHarness = targetAgent !== effective.agentKind || !!effective.agentDeviceId;
-      await recoverRejectedRoute(id, sameOwner, async bindRehydrated => {
+      await recoverRejectedRoute(id, sameOwner, check, async bindRehydrated => {
         const applyPluginModel = createHandleSetModel(() => ({
           ...ports(), rehydrateColdPiRuntimeForWindowVerification: bindColdPiRehydration(bindRehydrated),
         }));
