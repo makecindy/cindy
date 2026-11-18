@@ -60,12 +60,7 @@ export const nodeProfileScanPorts: ProfileScanPorts = {
   selfPid: () => process.pid,
   isPidAlive: pid => {
     try { process.kill(pid, 0); return true; }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ESRCH') return false;
-      if (code === 'EPERM') return true;
-      throw error;
-    }
+    catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
   },
   readProcessIdentities: pids => readProcessIdentities(pids),
 };

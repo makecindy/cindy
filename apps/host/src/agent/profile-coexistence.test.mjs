@@ -73,6 +73,12 @@ test('a live desktop record blocks, a passive instance too, unless it is a Host 
   assert.ok(asked.length >= 1);
 });
 
+test('an out-of-range registered PID does not block the profile', async t => {
+  const p = profile(t);
+  p.write(2 ** 40);
+  assert.deepEqual(await createDesktopScanner(p.dir)(), []);
+});
+
 test('the same record asks the OS for its identity once; a changed record asks again', async t => {
   const child = await liveChild(t);
   const p = profile(t);
