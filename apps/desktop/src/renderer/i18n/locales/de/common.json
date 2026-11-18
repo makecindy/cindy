@@ -10796,6 +10796,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Freunde konnten nicht geladen werden",
+    "rosterReload": "Freunde neu laden",
     "avatarStatus": {
       "awaiting": "Benötigt deine Bestätigung",
       "error": "Erfordert Aufmerksamkeit",

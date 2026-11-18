@@ -1,3 +1,4 @@
+import { BotRosterLoadError } from './BotRosterLoadError';
 import { TeammateStatusDot, TeammateRowStatus, TeammateRunningPreview } from './TeammateStatusDot';
 import { aggregateTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
@@ -71,6 +72,8 @@ import {
   setBotHidden,
   setBotPinned,
   useBotProfiles,
+  useBotProfilesLoadState,
+  hasLoadedBotProfiles,
   useBotUnreadCounts,
   type BotProfile,
 } from './botStore';
@@ -174,6 +177,8 @@ export function TeammatesSection() {
     ...remoteBots.map((bot) => ({ deviceId: bot.deviceId, name: bot.deviceName })),
   ];
   const allBots = useBotProfiles();
+  const profileLoadState = useBotProfilesLoadState();
+  const profilesLoaded = hasLoadedBotProfiles();
   // A demoted local copy runs on its main computer now; it is listed there, not here.
   const bots = useMemo(() => withoutShadowedBots(allBots, cloud), [allBots, cloud]);
   const { groups } = useBotGroupList();
@@ -675,10 +680,13 @@ export function TeammatesSection() {
       {archiveError && <p role="alert" className="mb-2 px-2.5 text-12 text-[var(--error-fg)]">{archiveError}</p>}
 
       <div>
+        {profileLoadState === 'error' ? <BotRosterLoadError /> : null}
         {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 && visibleGroups.length === 0 ? (
-          <div className="px-3 py-3">
-            <BotCreateMenu label={t('bots.add')} />
-          </div>
+          profilesLoaded && profileLoadState === 'ready' ? (
+            <div className="px-3 py-3">
+              <BotCreateMenu label={t('bots.add')} />
+            </div>
+          ) : null
         ) : (
           <div className="flex flex-col gap-0.5">
             {displayedChats.map(entry => {

@@ -10878,6 +10878,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "No se pudieron cargar los amigos",
+    "rosterReload": "Volver a cargar amigos",
     "avatarStatus": {
       "awaiting": "Necesita tu confirmación",
       "error": "Necesita atención",

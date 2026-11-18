@@ -10753,6 +10753,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "仲間一覧を読み込めませんでした",
+    "rosterReload": "仲間を再読み込み",
     "avatarStatus": {
       "awaiting": "確認待ち",
       "error": "要確認",

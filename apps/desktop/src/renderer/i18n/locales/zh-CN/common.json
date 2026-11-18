@@ -10753,6 +10753,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "未能读取伙伴列表",
+    "rosterReload": "重新读取伙伴",
     "avatarStatus": {
       "awaiting": "待你确认",
       "error": "需要关注",

@@ -10753,6 +10753,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "未能讀取同伴名冊",
+    "rosterReload": "重讀同伴名冊",
     "avatarStatus": {
       "awaiting": "待君確認",
       "error": "須留意",

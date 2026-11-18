@@ -18,7 +18,7 @@ export default {
   stubs: {
     'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
-    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{});` },
+    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{}); export const useBotProfilesLoadState=()=>${data}.loadState||'ready'; export const hasLoadedBotProfiles=()=>!${data}.loadState||${data}.loadState==='ready';` },
     'src/renderer/features/bots/useRemoteBots': { partial: `export const useRemoteBots=()=>${data}.remoteBots;` },
     'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
@@ -28,6 +28,10 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'startup-read-error': {
+      about: 'A failed roster read offers explicit recovery instead of an empty-roster create invitation; presentation fixture only',
+      data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'error' },
+    },
     'pinned-sort': {
       about: 'Pinned display sorting changes task order and restores the manual order without changing view style',
       data: { showPinned: true, profiles: [], remoteBots: [], route: '/bots' },
@@ -225,6 +229,12 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'startup-read-error') {
+      const alert = page.getByRole('alert');
+      await alert.getByText(await ui.t('bots.rosterLoadFailed'), { exact: true }).waitFor();
+      assert.equal(await alert.getByRole('button', { name: await ui.t('bots.rosterReload'), exact: true }).count(), 1);
+      return;
+    }
     if (ui.case === 'pinned-sort') {
       const pinned = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true });
       const section = pinned.locator('xpath=../../..');

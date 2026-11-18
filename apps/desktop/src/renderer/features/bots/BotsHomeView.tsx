@@ -1,3 +1,4 @@
+import { BotRosterLoadError } from './BotRosterLoadError';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { BotProfileSourceField } from './BotProfileSourceField';
@@ -33,6 +34,7 @@ import {
   setCanonicalBotSession,
   updateBotProfile,
   useBotProfiles,
+  useBotProfilesLoadState,
   getEffectiveBotModelChain,
   subscribeBotGlobalModel,
   type BotCapabilities,
@@ -809,6 +811,7 @@ export function BotsHomeView() {
   const { botId, sessionId } = useParams();
   const [searchParams] = useSearchParams();
   const bots = useBotProfiles();
+  const profileLoadState = useBotProfilesLoadState();
   const providerOnboarding = useProviderOnboarding({ dismissible: false });
   useProviders();
   const { availableVendors, loaded: availableAgentsLoaded } = useAvailableAgents();
@@ -1064,6 +1067,9 @@ export function BotsHomeView() {
     );
   }
 
+  if (!selectedBot && !entryTarget && profileLoadState === 'error') {
+    return <main className="flex h-full items-center justify-center px-6" role="main"><BotRosterLoadError /></main>;
+  }
   if (!selectedBot && (!profilesLoaded || entryTarget)) return <main className="flex h-full items-center justify-center"><Spinner size={20} /></main>;
   if (!selectedBot) return <BotRosterView inline />;
 

@@ -10796,6 +10796,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Could not load buddies",
+    "rosterReload": "Reload buddies",
     "avatarStatus": {
       "awaiting": "Needs your confirmation",
       "error": "Needs attention",

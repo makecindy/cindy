@@ -44,6 +44,8 @@ const mocks = vi.hoisted(() => {
   listToolsets: vi.fn(),
   profiles: [] as BotProfile[],
   profilesLoaded: true,
+  profileLoadError: false,
+  refreshBotProfiles: vi.fn(),
   params: {} as { botId?: string },
   availableVendors: new Set(['cc', 'codex', 'pi']),
   defaultModelChain: [] as BotModelRoute[],
@@ -94,6 +96,8 @@ vi.mock('../botStore', () => ({
   setCanonicalBotSession: vi.fn(),
   useBotProfiles: () => mocks.profiles,
   hasLoadedBotProfiles: () => mocks.profilesLoaded,
+  useBotProfilesLoadState: () => mocks.profileLoadError ? 'error' : mocks.profilesLoaded ? 'ready' : 'pending',
+  refreshBotProfiles: mocks.refreshBotProfiles,
   canonicalBotSessionId: (bot: BotProfile) => bot.canonicalSessionId,
   getEffectiveBotModelChain: () => mocks.defaultModelChain,
   subscribeBotGlobalModel: (listener: () => void) => {
@@ -244,6 +248,8 @@ beforeEach(() => {
   mocks.initialSearch = '';
   mocks.profiles = [];
   mocks.profilesLoaded = true;
+  mocks.profileLoadError = false;
+  mocks.refreshBotProfiles.mockClear();
   mocks.params = {};
   mocks.projectRepository.mockReset().mockResolvedValue('ready');
   mocks.availableVendors = new Set(['cc', 'codex', 'pi']);
@@ -378,6 +384,24 @@ describe('Bot entry after deletion', () => {
     render(<BotsHomeView />);
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1?settings=1', { replace: true });
     expect(mocks.readSession).not.toHaveBeenCalled();
+  });
+
+  // #9978: a failed first read is neither an empty roster nor endless opening.
+  it('offers read recovery without navigating or creating after a failed first roster read', () => {
+    mocks.profilesLoaded = false;
+    mocks.profileLoadError = true;
+    const view = render(<BotsHomeView />);
+    expect(screen.getByRole('alert').textContent).toContain('bots.rosterLoadFailed');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledOnce();
+    mocks.profileLoadError = false;
+    mocks.profilesLoaded = true;
+    mocks.profiles = [bot()];
+    view.rerender(<BotsHomeView />);
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1', { replace: true });
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('only shows creation once the loaded roster is empty', () => {
