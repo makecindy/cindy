@@ -618,6 +618,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       if (!same && !deps.setModel) return fail('HOST_NOT_READY', 'Task model service is unavailable');
       // Dispatch waits for the runtime and project receipt to agree.
       updatingImProjects.add(task.taskId);
+      let stagedProject = false;
       try {
         if (!same && override.grant) await exclusive(async () => {
           await assertUnchanged();
@@ -627,6 +628,7 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           // Keep enough data on disk to check the project even if Cindy exits mid-update.
           if (data.imProject === undefined && data.imProjectTransition === undefined) {
             await save(row, { ...data, imProjectTransition: { project: request.imProject, previousPermission: task.permissionMode } });
+            stagedProject = true;
           }
         });
         const result = same ? { status: 'unchanged' } : await deps.setModel!(task.taskId, override.route,
@@ -634,6 +636,15 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         // Keep the previous grant when the runtime rejects the update.
         await recordProject();
         return { ...result, task: await exclusive(() => ownTask(pluginId, task.taskId)) };
+      } catch (error) {
+        if (stagedProject) await exclusive(async () => {
+          const current = await ownTask(pluginId, task.taskId);
+          if (current.permissionMode !== task.permissionMode) return;
+          const row = (await deps.store.get(task.taskId))!;
+          const { imProjectTransition, ...data } = JSON.parse(row.payload);
+          if (imProjectTransition?.project === request.imProject) await save(row, data);
+        }).catch(() => { /* Preserve the transition if recovery cannot verify the runtime. */ });
+        throw error;
       } finally {
         updatingImProjects.delete(task.taskId);
       }

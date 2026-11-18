@@ -158,7 +158,13 @@ it('preserves legacy dispatch when following an IM project fails before changing
   await expect(f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat',
     imOverride: { permissionMode: 'auto', permissionGrant: grant } })).rejects.toMatchObject({ code: 'TASK_BUSY' });
   await expect(f.service.assertDispatch('p', task.taskId)).resolves.toMatchObject({ permissionMode: 'bypassPermissions' });
-  Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto' });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).not.toHaveProperty('imProjectTransition');
+  f.deps.setModel = async () => {
+    Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto' });
+    throw new PluginTaskError('TASK_BUSY', 'Runtime changed before the update returned');
+  };
+  await expect(f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat',
+    imOverride: { permissionMode: 'auto', permissionGrant: grant } })).rejects.toMatchObject({ code: 'TASK_BUSY' });
   await expect(f.service.assertDispatch('p', task.taskId)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
 });
 
