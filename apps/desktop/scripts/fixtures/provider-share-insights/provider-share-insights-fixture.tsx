@@ -221,7 +221,10 @@ void mountPage({
                 providerId: 'xd',
                 providerLabel: 'Cindy AI',
                 createdAt: '2026-10-01T00:00:00Z',
-                members: [],
+                members: [{
+                  memberId: 'fixture-person', displayName: 'Alex', note: 'Team A', region: 'global', avatarUrl: null,
+                  status: 'active', joinedAt: '2026-10-02T00:00:00Z', lastUsedAt: null, runningTasks: 0, models: [],
+                }],
                 requests: [],
               },
             ],

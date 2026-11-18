@@ -45,6 +45,7 @@ import type {
   ProviderUsageHistoryView,
 } from '../../../shared/providerShare';
 import { ProviderShareLinkDialog } from './ProviderShareLinkDialog';
+import { downloadProviderShareRoster } from './providerShareRosterCsv';
 import { ProviderShareMemberNoteDialog } from './ProviderShareMemberNoteDialog';
 import { providerShareMemberName } from '../../../shared/providerShareMemberNote';
 import { pendingResharesFromOwned, sharesClaudeLoginEmail, type ProviderShareGate, type ProviderSharePendingRequest } from './providerShareFormat';
@@ -86,7 +87,10 @@ export function ProviderShareManagePage({
   const selfDeviceName = deviceId ? deviceName ?? devices?.find((device) => device.deviceId === deviceId)?.name ?? null
     : devices?.find((device) => device.isSelf)?.name ?? null;
   const [remoteGroup, setRemoteGroup] = useState<ProviderGroupConfig | null>(initialGroup ?? null);
-  const [state, setState] = useState<ProviderShareOwnerState | null>(null);
+  const [rosterRead, setRosterRead] = useState<{
+    state: ProviderShareOwnerState; owner: ReturnType<typeof getDataOwnerGeneration>; at: string; deviceId?: string;
+  } | null>(null);
+  const state = rosterRead?.state ?? null;
   const [noteMemberId, setNoteMemberId] = useState<string | null>(null);
   const [modelMemberId, setModelMemberId] = useState<string | null>(null);
   const modelTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -117,7 +121,7 @@ export function ProviderShareManagePage({
     remoteLoading.current = false;
     if (!isDataOwnerGenerationCurrent(owner)) return;
     if (owned.ok) {
-      setState(owned.value);
+      setRosterRead({ state: owned.value, owner, at: new Date().toISOString(), deviceId });
       setLoadFailed(false);
       setLoadErrorKey(null);
       publishProviderShareOwnerState(owned.value, deviceId ? { hostDeviceId: deviceId } : undefined);
@@ -195,7 +199,7 @@ export function ProviderShareManagePage({
   }, [loadHistory]);
 
   // 同一个供应商在这台电脑上只应有一条分享；稳妥起见合并同供应商的全部记录。
-  const { members, requests, reshares } = useMemo(() => {
+  const { shares, members, requests, reshares } = useMemo(() => {
     const shares = state?.ready ? state.shares.filter((share) => share.providerId === providerId) : [];
     const pending: ProviderSharePendingRequest[] = [];
     for (const share of shares) {
@@ -209,6 +213,7 @@ export function ProviderShareManagePage({
     }
     pending.sort((a, b) => Date.parse(a.request.createdAt) - Date.parse(b.request.createdAt));
     return {
+      shares,
       members: shares.flatMap((share) => share.members),
       requests: pending,
       // 转分享请求(provider-sharing.md §4.3)：成员想经自己的供应商组把这里分享的供应商转给别人用。
@@ -370,6 +375,16 @@ export function ProviderShareManagePage({
         <h2 className={`min-w-0 flex-1 ${SETTINGS_PAGE_TITLE_CLASS}`}>
           {t('providerGroup.page.title', { provider: providerName })}
         </h2>
+        {!deviceId && rosterRead && !rosterRead.deviceId && members.length > 0 && (
+          <Button variant="secondary" size="md" disabled={!ready || loadFailed}
+            onClick={() => {
+              if (isDataOwnerGenerationCurrent(rosterRead.owner)) {
+                downloadProviderShareRoster(shares, rosterRead.at);
+              }
+            }}>
+            {t('providerShare.manage.exportRoster')}
+          </Button>
+        )}
         <Button variant="cta" size="md" disabled={!canCreateLink} onClick={() => setLinkOpen(true)}>
           {t('providerShare.manage.createLink')}
         </Button>

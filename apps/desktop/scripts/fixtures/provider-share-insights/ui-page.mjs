@@ -61,6 +61,9 @@ export default {
   },
   async check(page, ui) {
     if (ui.case.startsWith('owner')) {
+      const exportRoster = page.getByRole('button', { name: await ui.t('providerShare.manage.exportRoster') });
+      if (ui.case === 'owner') await exportRoster.waitFor({ state: 'visible' });
+      else assert.equal(await exportRoster.count(), 0);
       // 2026-11-11: a duplicate account Fast card shrank into a line below the page title.
       // Render the real page with a subscription group (previous fixture had no provider).
       // UI tier: local account control stays in provider details; remote management keeps its account control.

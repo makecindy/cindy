@@ -440,6 +440,7 @@
     },
     "manage": {
       "createLink": "Create Share Link",
+      "exportRoster": "Export member list",
       "loading": "Loading sharing…",
       "notReady": "Sharing isn’t available right now. Make sure you’re signed in and online; it will retry automatically.",
       "loadFailed": "Couldn’t load sharing details. Try again in a moment.",

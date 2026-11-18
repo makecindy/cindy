@@ -312,6 +312,40 @@ function renderPage(
 }
 
 describe('ProviderShareManagePage', () => {
+  it('downloads the managed local provider’s names and private notes without exporting invitation details', async () => {
+    const original = command.getMockImplementation()!;
+    const snapshot = owned();
+    const member = snapshot.shares[0]!.members[0]!;
+    member.displayName = '=guest';
+    member.note = 'A,"B"\nC';
+    snapshot.shares[1]!.members.push({ ...member, memberId: 'other-provider-member' });
+    command.mockImplementation(async (cmd) => cmd.action === 'owned' ? snapshot : original(cmd));
+    let contents: Blob | undefined;
+    const originalUrl = window.URL;
+    class DownloadURL extends originalUrl {
+      static createObjectURL(blob: Blob) { contents = blob; return 'blob:test-roster'; }
+      static revokeObjectURL() {}
+    }
+    vi.stubGlobal('URL', DownloadURL);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'providerShare.manage.exportRoster' }));
+      expect(click).toHaveBeenCalledOnce();
+      const csv = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = reject;
+        reader.readAsText(contents!);
+      });
+      expect(csv).toContain('"share-1","mem-1","\'=guest","A,""B""\nC","active"');
+      expect(csv).not.toMatch(/other-provider-member|Wang Yi|4827/);
+    } finally {
+      click.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Verify the person's row opens a grant for that member, rather than editing the provider-wide policy.
   it('opens and saves the selected person’s model grant from their row menu', async () => {
     const respond = command.getMockImplementation()!;

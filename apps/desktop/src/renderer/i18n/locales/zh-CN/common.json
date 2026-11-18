@@ -439,6 +439,7 @@
     },
     "manage": {
       "createLink": "生成分享链接",
+      "exportRoster": "导出名单",
       "loading": "正在读取分享…",
       "notReady": "分享服务暂时不可用。确认已登录、网络正常后会自动重试。",
       "loadFailed": "分享信息没有加载出来，请稍后重试。",
