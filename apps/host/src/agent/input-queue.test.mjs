@@ -112,7 +112,6 @@ function assertOwnerChangedDisposal(disposal) {
 // recovery directories (working-directory.ts). Tests that open their own profile reconfigure it.
 // A test that opens its own profile signs its owner out afterwards; the next fixture signs this one in.
 const unitProfile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-input-queue-'));
-after(() => rmSync(unitProfile, { recursive: true, force: true }));
 const signInUnitOwner = () => configureHostOwner({ userDataDir: unitProfile, ownerId: 'input-queue-unit' });
 signInUnitOwner();
 // The send reads the task's rows (plan, goal, the turn's model) as on the desktop, where a database
@@ -131,7 +130,10 @@ const unitDatabase = await (async () => {
     if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile;
   }
 })();
-after(() => unitDatabase.dispose());
+after(async () => {
+  await unitDatabase.dispose();
+  rmSync(unitProfile, { recursive: true, force: true });
+});
 function ensureUnitOwner() {
   if (!getActiveAppSession().dataOwnerId) signInUnitOwner();
   if (!getCurrentDbClientSnapshot()) setCurrentDbClient(unitDatabase, 'input-queue-unit');
