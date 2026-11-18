@@ -27,6 +27,8 @@ import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { HELP_KNOWLEDGE } from '../../../desktop/src/main/maker-ipc/helpKnowledge.generated.js';
 import type { createHostConfirmations } from '../host-confirmations.js';
+import { parseTypedError } from '../typed-error.mjs';
+import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
 
 const PROJECT_WRITE_TOOLS = new Set(['create_project', 'update_project_info', 'rename_project', 'remove_project']);
 
@@ -121,7 +123,14 @@ export function createHostToolService(options: Options) {
         return result;
       },
       updateProjectInfo: async (input, authorization) => {
-        const result = await updateProjectInfo(input, authorization);
+        const result = await updateProjectInfo(input, authorization && {
+          ...authorization,
+          assertCurrent() {
+            authorization.assertCurrent?.();
+            const held = options.profileHold?.();
+            if (held) throwIpcError('PRECONDITION_FAILED', held);
+          },
+        });
         if (current()) options.onProjectsChanged?.(false);
         return result;
       },
@@ -137,6 +146,16 @@ export function createHostToolService(options: Options) {
       },
     },
   });
+  const updateProjectTool = projectTools.projectManagement!.updateInfo!;
+  projectTools.projectManagement!.updateInfo = async request => {
+    try {
+      return await updateProjectTool(request);
+    } catch (error) {
+      const refusal = parseTypedError(error);
+      if (refusal?.code !== 'PRECONDITION_FAILED' || !refusal.message.startsWith(HOST_PROFILE_IN_USE_BY_DESKTOP)) throw error;
+      return { ok: false, errorCode: refusal.code, message: refusal.message };
+    }
+  };
   // Node plugin installation and connection lifecycles are not connected yet.
   // Agent providers remain unchanged; plugins fail before setup.
   const supportsPluginServer = (server: string) => server !== 'cindy_computer';

@@ -507,8 +507,13 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     /** This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. */
     async setAgentNetEnabled(enabled: boolean) {
       assertCurrent();
+      refuseWhileHeld();
       if (!agentNet) throw new Error('Agent-Net is not available on this Host.');
-      await settings.writeDeviceLinkSetting('agentNetEnabled', enabled);
+      await settings.updateDeviceLinkSetting('agentNetEnabled', () => {
+        assertCurrent();
+        refuseWhileHeld();
+        return enabled;
+      });
       sync(); return this.state();
     },
     async revoke(deviceId: string) {

@@ -398,6 +398,40 @@ test('while a desktop uses the profile, a bridge-reported rejection also stops a
 
 // ---- With a production Codex runtime (createHostCodexRuntime) and its provider configuration ----
 import fsp from 'node:fs/promises';
+
+// §3.2 unit with isolated login files: getState already skips reconciliation when
+// held at entry. The file read in a running reconciliation must also fence writes.
+test('Codex reconciliation that loses profile access during the account read leaves the link and binding alone', async t => {
+  const { root, codexHome } = isolatedProfile(t, 'reconcile-race-owner');
+  const systemAuth = path.join(root, 'system-auth.json');
+  fs.writeFileSync(systemAuth, authJson('fixture-token'));
+  const readStarted = Promise.withResolvers();
+  const continueRead = Promise.withResolvers();
+  let held = false;
+  const read = fsp.readFile;
+  const mockedRead = t.mock.method(fsp, 'readFile', async (file, ...args) => {
+    if (file === systemAuth && !held) {
+      readStarted.resolve();
+      await continueRead.promise;
+    }
+    return read(file, ...args);
+  });
+  const systemLogin = createHostCodexSystemLogin({
+    codexHome, systemAuthPath: systemAuth, loginActive: () => false, isProfileHeld: () => held,
+  });
+  const auth = createCodexLocalCliAuth(null, undefined, codexHome, {
+    isCodexAccountLoginActive: () => false, isCodexAccountProvider: () => false,
+  }, undefined, { systemLogin, isProfileHeld: () => held });
+  const state = auth.getState();
+  await Promise.race([readStarted.promise, state]);
+  held = true;
+  continueRead.resolve();
+  await state;
+  mockedRead.mock.restore();
+  assert.deepEqual(fs.readdirSync(codexHome), []);
+  assert.equal(isNativeProviderAuthBound('openai'), false);
+});
+
 import { createHostProviderConfig } from './provider-config.ts';
 import { createHostModelAccess } from './model-access.ts';
 import { createHostCodexRuntime } from './codex-runtime.ts';

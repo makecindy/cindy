@@ -7,7 +7,7 @@ import { getTableColumns, getTableName } from 'drizzle-orm';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { sessions, botSessionLinks, botProfiles, projectAliases, recentWorkdirs } from '../../desktop/src/main/localDb/schema.ts';
 import { configureHostOwner } from './agent/claude-auth.mjs';
-import { getActiveDataOwnerPushStamp, commitVolatileAppSession } from '../../desktop/src/main/appSessionState.ts';
+import { getActiveDataOwnerPushStamp, commitVolatileAppSession, ownerScopedUserDataPath } from '../../desktop/src/main/appSessionState.ts';
 import { writeProjectsRootDirectory } from '../../desktop/src/main/projects-root-settings.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -16,6 +16,7 @@ import { createHostToolService } from './agent/host-tools.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 import { createHostServer } from './server.mjs';
 import { createHostService } from './service.mjs';
+import { createHostProjectInfoUpdate } from './project-info.ts';
 import { createWebAuth } from './web-auth.mjs';
 import { createEventHub } from './events.mjs';
 import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
@@ -343,6 +344,11 @@ test('Node AI tools create, inspect and edit the complete project profile in the
   let current = true;
   let held = null;
   const profileHold = () => held;
+  const snapshot = async () => {
+    const entries = await fs.readdir(profile, { recursive: true, withFileTypes: true });
+    const files = entries.filter(entry => entry.isFile()).map(entry => path.join(entry.parentPath, entry.name)).sort();
+    return Promise.all(files.map(async file => [path.relative(profile, file), await fs.readFile(file)]));
+  };
   const changes = [];
   const confirmations = createHostConfirmations({ current: () => current });
   const service = createHostToolService({ profileDir: profile, ownerId: 'projects-owner', current: () => current,
@@ -389,11 +395,6 @@ test('Node AI tools create, inspect and edit the complete project profile in the
   // a valid owner must get the service's refusal for each new project write. The original
   // case covered an owner change only. Use the actual profile and SQLite bytes to catch writes.
   await t.test('profile hold refuses project writes and still serves project reads', async () => {
-    const snapshot = async () => {
-      const entries = await fs.readdir(profile, { recursive: true, withFileTypes: true });
-      const files = entries.filter(entry => entry.isFile()).map(entry => path.join(entry.parentPath, entry.name)).sort();
-      return Promise.all(files.map(async file => [path.relative(profile, file), await fs.readFile(file)]));
-    };
     const before = await snapshot();
     const beforePushes = changes.length;
     held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
@@ -417,6 +418,65 @@ test('Node AI tools create, inspect and edit the complete project profile in the
     assert.ok(projects.projects.some(item => item.working_dir === created.working_dir));
     assert.equal((await call('get_project_info', { project_key: created.project_key })).project.name, 'Updated');
     held = null;
+  });
+  // §3.2 integration: the existing entry-held case has no native-confirmation await
+  // or project lock. A request admitted before either wait must leave every profile file intact.
+  const holdMessage = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+  await t.test('HTTP project settings recheck profile hold after native confirmation', async () => {
+    const before = await snapshot();
+    const beforePushes = changes.length;
+    const confirmation = Promise.withResolvers();
+    const entered = Promise.withResolvers();
+    const updateProjectInfo = createHostProjectInfoUpdate({
+      profileHold,
+      changed: catalogChanged => changes.push(catalogChanged),
+      platform: () => ({
+        status: () => ({ attached: true }),
+        call: async request => {
+          assert.equal(request.method, 'project.check');
+          entered.resolve();
+          return confirmation.promise;
+        },
+      }),
+    });
+    const invoke = createHostService({ profileHold, updateProjectInfo });
+    const pending = invoke('/api/project-info/desktop-set', { requestId: 'fixture', input: {
+      ...getActiveDataOwnerPushStamp(), projectKey: created.project_key,
+      field: 'profile', value: { name: 'Denied', directories: [{ path: first, access: 'write' }] },
+    } }, { caller: 'local-api:host' });
+    const rejected = assert.rejects(pending, { code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] ' + holdMessage });
+    await Promise.race([entered.promise, rejected]);
+    held = holdMessage;
+    confirmation.resolve(true);
+    try {
+      await rejected;
+    } finally {
+      held = null;
+    }
+    assert.deepEqual(await snapshot(), before);
+    assert.equal(changes.length, beforePushes);
+  });
+  await t.test('MCP project settings recheck profile hold inside the write lock', async t => {
+    const before = await snapshot();
+    const beforePushes = changes.length;
+    const open = fs.open;
+    const lock = ownerScopedUserDataPath('project-info-write.lock');
+    const mockedOpen = t.mock.method(fs, 'open', async (file, ...args) => {
+      const handle = await open(file, ...args);
+      if (file === lock && args[0] === 'wx') held = holdMessage;
+      return handle;
+    });
+    try {
+      const result = await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Denied' });
+      assert.equal(result.errorCode, 'PRECONDITION_FAILED');
+      assert.equal(result.data.hint, holdMessage);
+      assert.equal(held, holdMessage);
+    } finally {
+      mockedOpen.mock.restore();
+      held = null;
+    }
+    assert.deepEqual(await snapshot(), before);
+    assert.equal(changes.length, beforePushes);
   });
   current = false;
   const stale = await call('update_project_info', { project_key: created.project_key, field: 'name', value: 'Wrong owner' });

@@ -3,8 +3,8 @@ import './boot-env.js';
 // Second: keeps unreadable user settings files instead of deleting them.
 import './boot-settings.js';
 import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
-import type { ProjectInfoAuthorization } from '../../desktop/src/main/projectInfoAuthorization.js';
-import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
+import { readProjectIconImage, readProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
+import { createHostProjectInfoUpdate } from './project-info.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
 import { runLegacyPluginMigrationPreflight } from './plugins/legacy-approvals.js';
@@ -1691,28 +1691,11 @@ const serverDeps = {
   readProjectInfo,
   readProjectIconImage,
   resolveAutomaticProjectIcon,
-  updateProjectInfo: async (input: unknown, source: { desktopRequest?: string; legacyDesktop?: boolean } = {}) => {
-    const platform = platformClient;
-    let authorization: ProjectInfoAuthorization | undefined = { kind: 'host' };
-    if (source.desktopRequest) {
-      const requestId = source.desktopRequest;
-      authorization = { kind: 'renderer', async check(check) {
-        if (!platform || !platform.status().attached) throw Error('Desktop project window unavailable');
-        try {
-          const answer = await platform.call({ method: 'project.check', requestId, check });
-          if (answer !== true) throw Error('Project authorization unavailable');
-        } catch (error) {
-          if ((error as { code?: string }).code === 'MUTATION_CANCELLED') throw Error('[MUTATION_CANCELLED] Project action cancelled');
-          throw error;
-        }
-      } };
-    } else if (source.legacyDesktop) {
-      authorization = undefined;
-    }
-    const result = await updateProjectInfo(input, authorization);
-    eventHub.publish({ type: 'project_aliases_changed', catalogChanged: !!result.createdProjectKey });
-    return result;
-  },
+  updateProjectInfo: createHostProjectInfoUpdate({
+    platform: () => platformClient,
+    profileHold: () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null,
+    changed: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
+  }),
   listProjectAliases: async () => {
     const rows = await getDbClient().drizzle.select().from(projectAliasTable);
     return rows.map((row: Record<string, unknown>) => ({

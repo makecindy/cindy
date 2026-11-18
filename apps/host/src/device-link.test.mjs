@@ -15,6 +15,7 @@ import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy
 import { readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
 import { createHostService } from './service.mjs';
+import { createHostServer } from './server.mjs';
 import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.ts';
 import { createEventHub } from './events.mjs';
 import { configureHostOwner } from './agent/claude-auth.mjs';
@@ -487,4 +488,59 @@ test('routes project writes by their authenticated caller', async () => {
   assert.deepEqual(writes.pop(), [input, { legacyDesktop: true }]);
   await service('/api/project-info/desktop-set', envelope, local);
   assert.deepEqual(writes.pop(), [input, { desktopRequest: 'from-main' }]);
+});
+
+// §3.2 integration: the authenticated CLI control handler bypasses the service
+// gate, and its formerly pre-queue-only owner check missed a queued account change.
+test('Agent-Net control refuses profile hold and rechecks the owner inside the settings lock', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-agent-net-setting-'));
+  configureHostOwner({ userDataDir: profile, ownerId: 'first-owner' });
+  const file = path.join(profile, 'device-link-settings.json');
+  const initial = '{"agentNetEnabled":false,"remoteControlEnabled":false}';
+  fs.writeFileSync(file, initial);
+  const holdMessage = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+  let held = holdMessage;
+  const host = createHostDeviceLink({
+    profileDir: profile, version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    getToken: async () => null, canRegister: () => false, profileHold: () => held,
+    invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    agentNet: { base: () => null, subject: () => null, deviceId: () => null },
+  });
+  const server = createHostServer({ instanceId: 'fixture', token: 'fake-token',
+    remoteControl: action => host.setAgentNetEnabled(action === 'agent-net-on') });
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    await host.stop();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const control = action => fetch(`http://127.0.0.1:${server.address().port}/control/remote`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer fake-token', 'content-type': 'application/json' },
+    body: JSON.stringify({ instanceId: 'fixture', action }),
+  });
+  await t.test('both CLI commands refuse a held profile', async () => {
+    for (const action of ['agent-net-on', 'agent-net-off']) {
+      const response = await control(action);
+      assert.equal(response.status, 409);
+      assert.deepEqual(await response.json(), { error: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] ' + holdMessage });
+      assert.equal(fs.readFileSync(file, 'utf8'), initial);
+    }
+  });
+  held = null;
+  await t.test('queued switch does not write once the owner changes', async t => {
+    const before = fs.readFileSync(file, 'utf8');
+    const open = fs.openSync;
+    t.mock.method(fs, 'openSync', (target, ...args) => {
+      const fd = open(target, ...args);
+      if (target === file + '.lock' && args[0] === 'wx')
+        configureHostOwner({ userDataDir: profile, ownerId: 'next-owner' });
+      return fd;
+    });
+    await assert.rejects(host.setAgentNetEnabled(false), /Host account changed/);
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+    assert.equal(fs.existsSync(file + '.lock'), false);
+  });
 });

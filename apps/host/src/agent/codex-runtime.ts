@@ -248,6 +248,7 @@ export function createHostCodexRuntime(options: {
   const systemLogin = createHostCodexSystemLogin({
     codexHome: path.join(options.profileDir, 'codex-home'), systemAuthPath,
     loginActive: () => options.config.codexAccounts.isCodexAccountLoginActive('openai'),
+    isProfileHeld: options.isProfileHeld,
     // The desktop's onOAuthBindingClaimed: a claimed credential is an auth boundary for Pi.
     onBindingClaimed: () => { if (current()) options.mcp.invalidatePiEnvironment(); },
   });
