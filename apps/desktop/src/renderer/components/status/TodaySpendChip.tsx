@@ -81,6 +81,8 @@ import {
   selectRemoteCodexAccountUsage,
   useRemoteClaudeAccountUsage,
   useRemoteCodexAccountUsage,
+  useRemoteCodexRefreshState,
+  requestRemoteCodexLiveRefresh,
   useRemoteXaiRateLimit,
   useRemoteXaiSubscriptionUsage,
 } from '@/hooks/useRemoteDeviceUsage';
@@ -89,6 +91,7 @@ import {
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
 import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import {
@@ -1168,10 +1171,16 @@ export function TodaySpendChip({
   );
   // device-link 远程 codex / chatgpt-bridge:账号所在电脑的权威组合 payload 镜像,选槽 / 选桶
   // 与本机同口径在消费点执行(selectRemoteCodexAccountUsage)。
+  const remoteCodexDeviceId = isDeviceLinkRemote && usesCodexQuotaForm && !readsTaskAccountUsage ? accountDeviceId : null;
+  const liveRemoteCodex = Boolean(remoteCodexDeviceId && !isChatgptBridge && !isProviderShareAgentDeviceId(remoteCodexDeviceId));
   const remoteCodexAccountPayload = useRemoteCodexAccountUsage(
-    isDeviceLinkRemote && usesCodexQuotaForm && !readsTaskAccountUsage ? accountDeviceId : null,
+    remoteCodexDeviceId,
     providerId ?? 'openai',
+    // Native quota reads persist a snapshot on the host. Long-lived task chips
+    // share Settings updates and refresh on opening/recovery, without polling.
+    { live: liveRemoteCodex, poll: false },
   );
+  const remoteCodexRefresh = useRemoteCodexRefreshState(liveRemoteCodex ? remoteCodexDeviceId : null, providerId ?? 'openai');
   const taskAccountCodexPayload = React.useMemo(
     () =>
       readsTaskAccountUsage && usesCodexQuotaForm
@@ -1254,6 +1263,12 @@ export function TodaySpendChip({
   const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage, sessionTokens);
   const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
   const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
+  const refreshRemoteCodex = React.useCallback(() => {
+    if (liveRemoteCodex && remoteCodexDeviceId) requestRemoteCodexLiveRefresh(remoteCodexDeviceId, providerId ?? 'openai');
+  }, [liveRemoteCodex, remoteCodexDeviceId, providerId]);
+  React.useEffect(() => {
+    if (quotaPopoverOpen) refreshRemoteCodex();
+  }, [quotaPopoverOpen, refreshRemoteCodex]);
   const costDetails = useUsageCostDetails(sessionId, quotaPopoverOpen);
   // 浮层宿主：紧跟触发器之后（见 popover.tsx 的 portalContainer 注释）。portal 到 body
   // 末尾时，键盘焦点一旦进卡就再也 Tab 不回底栏（用户实测）。
@@ -2060,9 +2075,11 @@ export function TodaySpendChip({
           className="w-auto max-w-[calc(100vw-16px)] border-0 bg-transparent p-0 shadow-none"
         >
           <QuotaHoverCard
-            account={codexQuotaReadFailed ? {
+            account={codexQuotaReadFailed || remoteCodexRefresh.failed ? {
               ...account,
-              refreshFailure: { retry: refreshCodexRateLimits, retrying: codexQuotaRefreshing },
+              refreshFailure: liveRemoteCodex
+                ? { retry: refreshRemoteCodex, retrying: remoteCodexRefresh.refreshing }
+                : { retry: refreshCodexRateLimits, retrying: codexQuotaRefreshing },
             } : account}
             nowMs={windowLabelNowMs}
             sessionUsage={quotaCardSessionUsage}
