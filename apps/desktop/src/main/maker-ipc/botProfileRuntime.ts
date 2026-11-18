@@ -31,6 +31,7 @@ import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../shared/botI
 import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?raw';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { botLearningTracker } from './botLearningTracker.js';
+import { unlinkedTeammateProjectMemoryDir } from './botProjectMemory.js';
 import { createProjectMemoryReceipts } from './botProjectLearning.js';
 
 const log = createLogger('maker-ipc:bot-profile-runtime');
@@ -624,6 +625,8 @@ export async function hydrateBotProfileRuntime(
     && !path.resolve(opts.workingDir).startsWith(path.dirname(workspaceDir) + path.sep);
   const projectContext = !!workspaceDir && readBotProjectMode(config)
     && (ownerChat ? path.resolve(opts.workingDir) === workspaceDir : ownerGroupProjectLane);
+  // Only the teammate's own working directory discovers its skills and memory natively.
+  const nativeTeammateProject = projectContext && !ownerGroupProjectLane;
   const fullLane = ownerChat;
   // Bot Memory belongs to the Bot Home and is independent from Cindy's global
   // Maker Memory switch. The profile can still explicitly disable its own memory.
@@ -821,7 +824,7 @@ export async function hydrateBotProfileRuntime(
       const own = await deps.listOwnSkills({ botId: row.botId });
       // V2: the teammate's Skills live in its project and load natively, and it
       // works like an ordinary task, so the teammate core Skill is not mounted.
-      const learned = projectContext ? [] : own.skills;
+      const learned = nativeTeammateProject ? [] : own.skills;
       const core = own.baseline && fullLane && !projectContext ? own.baseline : null;
       ownSkills = [...(core ? [core.skill] : []), ...learned];
       ownSkillPluginRoots = [
@@ -829,8 +832,7 @@ export async function hydrateBotProfileRuntime(
         ...(learned.length > 0 ? [own.pluginRoot] : []),
       ];
     } catch {
-      ownSkills = [];
-      ownSkillPluginRoots = [];
+      if (!nativeTeammateProject) skillCatalogAvailable = false;
     }
   }
   let mcpCatalog: BotMcpCatalogItem[] = [];
@@ -1050,6 +1052,9 @@ export async function hydrateBotProfileRuntime(
     ...(projectContext ? { projectMode: true } : {}),
     ...(teammates.length > 0 ? { teammates } : {}),
     contextSections: [
+      ...(ownerGroupProjectLane && projectContext && opts.makerMemoryEnabled ? [
+        `Use the current project's memory tools for group project decisions. For this teammate's own preferences and reusable experience, read or update the Markdown records in ${JSON.stringify(unlinkedTeammateProjectMemoryDir(workspaceDir))} with file tools. Read its README.md before maintaining it.`,
+      ] : []),
       ...(projectMode && config.memory === false ? [
         `Memory is disabled for this Cindy task. Do not read, search, save or maintain memories in ${JSON.stringify(path.join(workspaceDir, '.cindy', 'memory'))}, even when project instructions describe a memory route. This runtime setting overrides the project's memory instructions.`,
       ] : []),
