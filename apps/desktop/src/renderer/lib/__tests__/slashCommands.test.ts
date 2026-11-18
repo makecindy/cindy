@@ -64,10 +64,10 @@ it('warns once per conflict while preserving command precedence across rebuilds'
   expect(warnings()).toHaveLength(2);
 });
 
-// Unit: the scan identity is agentKind + device + workingDir. Sessions on the
-// same directory previously each launched their own scan because sessionId
-// was mixed into the in-flight key.
-it('shares one in-flight skill scan across sessions on the same directory', async () => {
+// Unit: the in-flight request is scoped to one session. The main side
+// filters skills per session, so two sessions on the same directory must
+// not share one response.
+it('keeps the in-flight skill scan session-scoped', async () => {
   const listAgentSkills = vi.fn(async () => ({ success: true, skills: [skill({ name: 'shared' })] }));
   vi.stubGlobal('window', { electronAPI: { maker: {
     listDesktopCommands: vi.fn(async () => ({ success: true, commands: [] })),
@@ -78,7 +78,13 @@ it('shares one in-flight skill scan across sessions on the same directory', asyn
     loadAllCommands('claude-code', '/repo', { sessionId: 'session-a' }),
     loadAllCommands('claude-code', '/repo', { sessionId: 'session-b' }),
   ]);
-  expect(listAgentSkills).toHaveBeenCalledTimes(1);
+  expect(listAgentSkills).toHaveBeenCalledTimes(2);
+  // The same session still shares one in-flight scan.
+  await Promise.all([
+    loadAllCommands('claude-code', '/repo', { sessionId: 'session-a' }),
+    loadAllCommands('claude-code', '/repo', { sessionId: 'session-a' }),
+  ]);
+  expect(listAgentSkills).toHaveBeenCalledTimes(3);
 });
 
 describe('loadAllCommands Learn fallback', () => {

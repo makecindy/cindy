@@ -502,10 +502,14 @@ export async function loadAllCommands(
   };
   const skillP: Promise<SkillListResult> = shouldLoadSkills
     ? loadPendingSkills(
-        // Scan identity is agentKind + device + workingDir: concurrent
-        // sessions on the same directory share one in-flight scan. The
-        // session-specific filtering still happens per call on the main side.
-        opts ? JSON.stringify([agentKind, deviceId || null, workingDir || null]) : null,
+        // The in-flight request is scoped to one session: the main side
+        // applies session-specific filtering per call, so a request shared
+        // across sessions would hand one session another's filtered view.
+        // Cross-session reuse happens one layer down, where the unfiltered
+        // scan is cached per generation.
+        opts
+          ? JSON.stringify([agentKind, deviceId || null, workingDir || null, opts.sessionId || null])
+          : null,
         opts?.forceReload === true,
         () => deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [
