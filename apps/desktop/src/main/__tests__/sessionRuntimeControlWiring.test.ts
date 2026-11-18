@@ -16,6 +16,12 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const runtimePluginTaskBindingsSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/runtimePluginTaskBindings.ts'), 'utf8',
+).replace(/\r\n?/g, '\n');
+const runtimeWriterSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionControlRuntimeWriter.ts'), 'utf8',
+).replace(/\r\n?/g, '\n');
 const runtimeControlSettlementSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/pendingSessionRuntimeControlSettlement.ts'), 'utf8',
 ).replace(/\r\n?/g, '\n');
@@ -429,7 +435,8 @@ describe('session runtime control wiring', () => {
       'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
     );
     expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
-    expect(registerSource).toContain(
+    expect(registerSource).toContain('broadcastGhostMessageBlocked, revokeTrustedDesktopQueueOrigin, broadcastGhostMessageRewritten,');
+    expect(runtimePluginTaskBindingsSource).toContain(
       'onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item)',
     );
     const updateText = handlerBody(
@@ -1274,11 +1281,8 @@ describe('session runtime control wiring', () => {
   });
 
   it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
-    const setRuntime = handlerBody(
-      registerSource,
-      'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {',
-      'assertExternalInputAllowed: assertReviewExternalInputAllowed,',
-    );
+    expect(registerSource).toContain('setSessionRuntime: createSessionControlRuntimeWriter({');
+    const setRuntime = runtimeWriterSource;
     const setRuntimeGuard = setRuntime.indexOf(
       'if (runtimeSelectionRequiresModelWindowConfirmation(response))',
     );
@@ -1356,7 +1360,7 @@ describe('session runtime control wiring', () => {
     );
     expect(runtimeControlSettlementSource).toContain('effort: pending.profile.effort,');
     expect(registerWithRuntimeSelectionSource).toContain('effort: selected.effort, fastMode: selected.fastMode');
-    expect(registerWithRuntimeSelectionSource).toContain('effort: next.effort, fastMode: next.fastMode');
+    expect(runtimeWriterSource).toContain('effort: next.effort, fastMode: next.fastMode');
   });
 
   it('projects runtime state into shared session snapshots and patch notifications', () => {
@@ -1777,15 +1781,15 @@ describe('session runtime control wiring', () => {
   });
 
   it('composes later partial runtime changes on the accepted pending profile', () => {
-    expect(registerSource).toContain(
+    expect(runtimeWriterSource).toContain(
       'const routeExplicit = patch.model !== undefined || patch.providerId !== undefined;',
     );
-    expect(registerSource).toContain(
-      'const mergeBase = routeExplicit\n        ? (profiles.control.pending?.profile ?? profiles.effective)\n        : profiles.effective;',
+    expect(runtimeWriterSource).toContain(
+      'const mergeBase = routeExplicit\n      ? (profiles.control.pending?.profile ?? profiles.effective)\n      : profiles.effective;',
     );
-    expect(registerSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
-    expect(registerSource).toContain('routeExplicit,');
-    expect(registerSource).toContain('effectiveProfile: profiles.effective,');
+    expect(runtimeWriterSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
+    expect(runtimeWriterSource).toContain('routeExplicit,');
+    expect(runtimeWriterSource).toContain('effectiveProfile: profiles.effective,');
     const setModel = setModelSource();
     expect(setModel).toContain(
       'if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId))',
