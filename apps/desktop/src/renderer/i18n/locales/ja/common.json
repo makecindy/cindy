@@ -5418,8 +5418,19 @@
       "title": "メッセージ入力",
       "sendShortcut": {
         "label": "{{shortcut}}で送信",
-        "hint": "オンにすると{{shortcut}}でメッセージを送信します。オフにするとEnterで送信し、Shift+Enterで改行します。",
-        "ariaLabel": "{{shortcut}}でメッセージを送信"
+        "hint": "Enterで送信、Shift+Enterで改行します。",
+        "ariaLabel": "{{shortcut}}でメッセージを送信",
+        "hintModifierEnter": "{{shortcut}}で送信、Enterで改行します。"
+      },
+      "followUp": {
+        "label": "実行中の送信方法",
+        "hintQueue": "タスクの実行中は、送信ボタンと{{send}}でキューに追加します。",
+        "hintSteer": "タスクの実行中は、送信ボタンと{{send}}で実行中のタスクに割り込みます。",
+        "ariaLabel": "タスク実行中の送信方法",
+        "options": {
+          "queue": "キューに追加",
+          "steer": "割り込み"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -8254,6 +8265,8 @@
         "subscribeMessageDetail": "保存済みのユーザーメッセージと AI の返信を受信します。添付ファイルは別の読み取りと受け渡しで取得します。",
         "subscribeToolExecution": "ツール実行イベント",
         "subscribeToolExecutionDetail": "ツール名、入力、結果、エラーを受信します。実行は変更せず、監視のみ行います。",
+        "subscribeNativeRecovery": "ネイティブ復旧イベント",
+        "subscribeNativeRecoveryDetail": "再試行、コンテキストの圧縮、タスクの停止に関するエンジンの状態を受信します。",
         "subscribeTaskState": "タスク状態のイベント",
         "subscribeTaskStateDetail": "タスクの実行、待機、完了、アーカイブ、非表示の状態変更を受信します。",
         "subscribeActivity": "AI が思考中のタイミングと、あなたの操作を待っているタイミングを把握",
@@ -8469,6 +8482,24 @@
         "openInSidebar": "サイドバーで開く",
         "panelPageHosted": "プラグインページから開く · 離れると自動的に閉じます",
         "panelNone": "このプラグインにパネルはありません",
+        "githubRelease": {
+          "title": "プラグインの更新",
+          "installed": "インストール済み {{version}}",
+          "upstream": "配布元 {{version}}",
+          "prerelease": "プレリリース",
+          "check": "更新を確認",
+          "update": "ダウンロードしてインストール",
+          "connect": "GitHub にログイン",
+          "checking": "更新を確認しています…",
+          "updating": "ダウンロードしてインストールしています…",
+          "available": "新しいバージョンがあります。",
+          "current": "最新バージョンです。",
+          "updated": "プラグインを更新しました。",
+          "empty": "インストールできるリリースはありません。",
+          "sign-in": "更新を確認するには GitHub にログインしてください。",
+          "forbidden": "この GitHub アカウントには非公開リポジトリの読み取り権限がありません。",
+          "unavailable": "更新を確認またはインストールできませんでした。もう一度お試しください。"
+        },
         "customSlotTitle": "プラグインのカスタム設定エリア",
         "dangerTitle": "プラグインをアンインストール",
         "infoContents": "内容",
@@ -9819,6 +9850,41 @@
       },
       "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
       "tokensTooltip": "このセッションが{{range}}に使用したトークンのみを集計します。"
+    },
+    "auxiliary": {
+      "title": "補助モデルの使用量",
+      "label": "補助リクエスト",
+      "purpose": "用途",
+      "requests": "記録済みリクエスト",
+      "description": "合計トークンに含まれます。プロバイダーが返した使用量のみ記録し、未報告の使用量や過去のリクエストは推定しません。",
+      "sources": {
+        "title": "タイトル生成",
+        "task-summary": "タスクの要約",
+        "prompt-prediction": "入力候補",
+        "working-status": "作業状況",
+        "help": "ヘルプ",
+        "bot-creation": "コンパニオン作成",
+        "bot-opening": "コンパニオンの挨拶",
+        "group-planning": "グループの計画",
+        "ambient-reply": "返信の判断",
+        "auto-review": "自動レビュー",
+        "tool-loop-review": "ツールループの確認",
+        "memory-review": "メモリの確認",
+        "git-summary": "変更の要約",
+        "hook-generation": "自動化スクリプト",
+        "automation-verification": "インポートの検証",
+        "plugin-text": "プラグインのテキスト",
+        "voice-dialogue": "音声会話",
+        "voice-exit": "音声終了の判断",
+        "voice-refinement": "音声テキストの推敲",
+        "dictionary-learning": "辞書学習",
+        "embedding-query": "ベクトル検索",
+        "embedding-index": "ベクトル索引",
+        "web-search": "ウェブ検索",
+        "provider-probe": "接続テスト",
+        "vision-bridge": "ビジョンブリッジ",
+        "auxiliary": "その他の補助リクエスト"
+      }
     }
   },
   "usageDashboard": {
@@ -10760,6 +10826,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "仲間一覧を読み込めませんでした",
+    "rosterReload": "仲間を再読み込み",
     "avatarStatus": {
       "awaiting": "確認待ち",
       "error": "要確認",
@@ -13638,9 +13706,8 @@
     "sendButton": {
       "send": "メッセージを送信",
       "queue": "キューに追加",
-      "queueTooltip": "クリックでキューに追加。{{shortcut}} でタスクを中断せずに割り込み送信",
-      "queueTooltipSendMode": "クリックでキューに追加、{{shortcut}}でこのメッセージを送信",
-      "stop": "生成を停止"
+      "stop": "生成を停止",
+      "steer": "実行中のタスクに割り込む"
     },
     "pluginSetup": {
       "account": {
@@ -14531,6 +14598,13 @@
       "runningWithWorktree_one": "完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
+    },
+    "followUpHint": {
+      "queueDefault": "タスクの実行中に送信したメッセージは、デフォルトでキューに追加されます。",
+      "steerDefault": "タスクの実行中に送信したメッセージは、デフォルトで実行中のタスクに割り込みます。",
+      "switchToSteer": "デフォルトを割り込みにする",
+      "switchToQueue": "デフォルトをキューに追加にする",
+      "dismiss": "ヒントを閉じる"
     }
   },
   "onboarding": {
@@ -16596,6 +16670,36 @@
         "priority": "優先度",
         "activity": "最近のアクティビティ",
         "created": "作成日時"
+      },
+      "inbox": {
+        "thisEvening": "今夜",
+        "tomorrow": "明日",
+        "nextWeek": "来週",
+        "custom": "カスタム…",
+        "wakeAt": "再表示する日時",
+        "timeZone": "現地時間（{{zone}}）",
+        "invalidTime": "1年以内の未来の日時を選択してください。",
+        "inbox": "未処理",
+        "working": "実行中",
+        "snoozed": "後で処理",
+        "archived": "処理済み",
+        "snooze": "後で処理する",
+        "complete": "完了",
+        "wake": "今すぐ戻す",
+        "restore": "タスクを復元",
+        "process": "処理済みにする（アーカイブ）",
+        "empty": "受信トレイは空です",
+        "snoozeFailed": "後で処理する時刻を保存できませんでした。接続を確認し、タスクがあるコンピューターを更新してください。",
+        "hours": "{{count}} 時間後",
+        "hours_one": "{{count}} 時間後",
+        "hours_other": "{{count}} 時間後"
+      },
+      "taskListMode": {
+        "heading": "タスクモード",
+        "tasks": "タスク一覧",
+        "inbox": "受信トレイ",
+        "enterInbox": "受信トレイモードに切り替え",
+        "leaveInbox": "タスク一覧モードに切り替え"
       }
     },
     "rename": {
@@ -16888,6 +16992,7 @@
         "menuSave": "保存",
         "menuInsertTable": "表を挿入",
         "externalChangeBlocked": "ファイルが外部で変更されました。自動保存を停止しました。手動保存で上書きできます。",
+        "targetChanged": "ファイルの参照先が変わりました。下書きはエディターに残っています。下書きをコピーしてから、ファイルを開き直してください。",
         "tableMenu": {
           "addRowAbove": "上に行を追加",
           "addRowBelow": "下に行を追加",
@@ -19644,7 +19749,8 @@
           "expired": "期限切れ",
           "voided": "無効"
         }
-      }
+      },
+      "viewUsage": "使用量を見る"
     },
     "orders": {
       "title": "注文履歴",
@@ -21312,6 +21418,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "閉じる",
+    "taskInbox": {
+      "title": "受信トレイの使い方",
+      "lead": "タスクは状態に応じて「未処理」「実行中」「後で処理」「処理済み」に自動で分かれます。おすすめは受信トレイをこまめに空にすること。済んだら完了、今やらないものは後で処理にしましょう。",
+      "pending": {
+        "title": "未処理",
+        "body": "結果が出たタスクや、あなたの回答を待っているタスクがここに入ります。"
+      },
+      "done": {
+        "title": "完了",
+        "body": "対応が済んだら完了を 1 回押すと処理済みへ。新しい動きがあれば自動で戻ってきます。"
+      },
+      "snooze": {
+        "title": "後で処理",
+        "body": "今は手が回らないときは時刻を選ぶと、その時刻に未処理へ戻ります。"
+      },
+      "start": "使い始める",
+      "note": "サイドバー上部のボタンでいつでもタスク一覧に戻せます。"
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Cindy へようこそ",
@@ -21788,6 +21915,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "このリポジトリをこのコンピューターにダウンロードしますか？",
+    "credentialNotice": "非公開リポジトリの場合、Cindy はこのコンピューターでログイン中のアカウントを使用することがあります。",
+    "saveTo": "保存先",
+    "confirmImport": "インポートする",
+    "confirmSshTitle": "このプロジェクトに次の SSH ディレクトリへのアクセスを許可しますか？",
+    "sshHost": "SSH ホスト",
+    "readWriteAccess": "読み書き",
+    "readAccess": "読み取り専用",
+    "confirmAccess": "アクセスを許可",
     "autoLoading": "アイコンを検索中…",
     "autoNone": "プロジェクト名から生成した文字アイコンを使用します。",
     "autoSource": "取得元",
@@ -21827,7 +21963,42 @@
     "discard": "破棄",
     "colors": {
       "default": "標準色（テーマに合わせる）"
-    }
+    },
+    "directories": "プロジェクトのディレクトリ",
+    "directoriesHint": "このプロジェクトの全タスクに次のターンから適用されます。タスク固有の既存ディレクトリは保持されます。",
+    "removeDirectory": "ディレクトリを削除",
+    "directoryPath": "ディレクトリのフルパス",
+    "addDirectory": "ディレクトリを追加",
+    "browseDirectory": "ディレクトリを参照",
+    "mainDirectory": "メインディレクトリ",
+    "createTitle": "新規プロジェクト",
+    "createAction": "プロジェクトを作成",
+    "repository": "リポジトリURL",
+    "repositoryHint": "GitHub、GitLab、その他の Git リポジトリの HTTPS / SSH リンクに対応しています。",
+    "autoDirectory": "ディレクトリ未選択時は {{path}} に作成します。同名の場合は番号を付けます。",
+    "cloning": "リポジトリをクローン中…",
+    "invalidRepository": "有効なGitHub、GitLab、GitリポジトリのURLを入力してください。",
+    "createFailed": "作成できませんでした。書き込み権限、URL、このコンピュータのGitアクセス権を確認してください。クローン先は空の必要があります。",
+    "createNamePlaceholder": "プロジェクト名",
+    "createNameHint": "プロジェクトに名前を付けて始めましょう。",
+    "createFromRepository": "コードリポジトリから作成",
+    "createBlank": "空のプロジェクトに切り替え",
+    "source_blank": "空のプロジェクト",
+    "source_existing": "既存フォルダを開く",
+    "source_repository": "リポジトリからインポート",
+    "sourceHint_blank": "名前を入力するとフォルダが自動作成されます。",
+    "sourceHint_existing": "このコンピュータの既存フォルダを選択します。",
+    "sourceHint_repository": "リンクを貼り付けてこのコンピュータにダウンロードします。",
+    "source": "作成方法",
+    "sourceShort_blank": "新規",
+    "sourceShort_existing": "フォルダ",
+    "sourceShort_repository": "リポジトリ",
+    "automaticMain": "メイン · 自動作成",
+    "source_local": "ローカルフォルダ",
+    "sourceShort_local": "ローカルフォルダ",
+    "sourceHint_local": "名前を入力して作成するか、既存のフォルダを選択します。",
+    "chooseExistingFolder": "既存フォルダを選択",
+    "changeMainDirectory": "変更"
   },
   "taskManagement": {
     "scope": "このコンピューターの現在のアカウントにのみ適用されます。",

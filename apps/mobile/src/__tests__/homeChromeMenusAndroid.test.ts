@@ -93,10 +93,11 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     const actions = buildHomeDisplayPullDownActions(displayInput);
     const sections = buildPullDownMenuSections(actions);
     // 三段无标题分组 = iOS UIMenu 的三段分隔;每行是进入子菜单的设置项,标题下显示当前值。
-    expect(sections.map((section) => section.title)).toEqual([undefined, undefined, undefined]);
+    expect(sections.map((section) => section.title)).toEqual([undefined, undefined, undefined, undefined]);
     const rows = sections.flatMap((section) => section.rows);
     expect(rows).toEqual(actions.flatMap((group) => group.subactions ?? []));
     expect(rows.map((action) => [action.id, action.subtitle, !!action.subactions?.length])).toEqual([
+      ["taskListMode", "devices.list.menu.taskListMode.tasks", true],
       ["group", "devices.list.menu.groupProject", true],
       ["sort", "devices.list.menu.sortBy.priority", true],
       ["projectOrder", "devices.list.menu.projectOrder.custom", true],

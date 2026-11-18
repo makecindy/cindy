@@ -179,6 +179,8 @@ export const sessions = sqliteTable(
     planModeEnabled: integer('plan_mode_enabled', { mode: 'boolean' }).notNull().default(false),
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
+    snoozedUntil: integer('snoozed_until'), // unix ms; presentation only
+    snoozedAt: integer('snoozed_at'), // host time of the explicit snooze
     /**
      * 后台隐藏时刻（unix ms）。非 NULL = 插件以 `agent.hiddenTasks` 声明创建或切换为
      * 隐藏的后台任务：不进入任务列表、搜索、未结束提示与新任务通知；用户仍可在插件
@@ -1925,6 +1927,22 @@ export const dailySpend = sqliteTable(
     pk: primaryKey({ columns: [t.day, t.costCurrency] }),
   }),
 );
+
+/** Auxiliary requests are independent of task turns and retain their own attribution. */
+export const auxiliaryUsageReceipts = sqliteTable('auxiliary_usage_receipts', {
+  receiptId: text('receipt_id').primaryKey(),
+  providerId: text('provider_id').notNull(),
+  model: text('model').notNull(),
+  source: text('source').notNull(),
+  sessionId: text('session_id'),
+  transport: text('transport').notNull(),
+  day: text('day').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  cacheReadTokens: integer('cache_read_tokens'),
+  cacheCreateTokens: integer('cache_create_tokens'),
+}, t => ({ dayIndex: index('auxiliary_usage_receipts_day_idx').on(t.day) }));
 
 /** Immutable request receipts; insertion and aggregate increments share one transaction. */
 export const piUsageReceipts = sqliteTable('pi_usage_receipts', {

@@ -216,7 +216,7 @@ function migrateLegacyOneshotPins(): void {
       for (const [ghostId, pin] of Object.entries(legacy)) {
         if (pin === null) continue;
         const route = decodeCatalogModelPin(pin);
-        if (!route) {
+        if (!route || route.agentDeviceId) {
           dropped.push(ghostId);
           continue;
         }

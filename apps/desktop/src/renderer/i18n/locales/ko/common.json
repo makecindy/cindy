@@ -5418,8 +5418,19 @@
       "title": "메시지 입력",
       "sendShortcut": {
         "label": "{{shortcut}}로 보내기",
-        "hint": "켜면 {{shortcut}}로 메시지를 보냅니다. 끄면 Enter로 보내고 Shift+Enter로 줄을 바꿉니다.",
-        "ariaLabel": "{{shortcut}}로 메시지 보내기"
+        "hint": "Enter로 전송하고 Shift+Enter로 줄을 바꿉니다.",
+        "ariaLabel": "{{shortcut}}로 메시지 보내기",
+        "hintModifierEnter": "{{shortcut}}로 전송하고 Enter로 줄을 바꿉니다."
+      },
+      "followUp": {
+        "label": "실행 중 전송 방식",
+        "hintQueue": "작업 실행 중에는 전송 버튼과 {{send}}로 대기열에 추가합니다.",
+        "hintSteer": "작업 실행 중에는 전송 버튼과 {{send}}로 실행 중인 작업에 끼어듭니다.",
+        "ariaLabel": "작업 실행 중 전송 방식",
+        "options": {
+          "queue": "대기열에 추가",
+          "steer": "끼어들기"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -8254,6 +8265,8 @@
         "subscribeMessageDetail": "저장된 사용자 메시지와 AI 답변을 수신합니다. 첨부 파일은 별도의 읽기와 전달로 가져옵니다.",
         "subscribeToolExecution": "도구 실행 이벤트",
         "subscribeToolExecutionDetail": "도구 이름, 입력, 결과 및 오류를 수신합니다. 실행을 변경하지 않고 관찰만 합니다.",
+        "subscribeNativeRecovery": "네이티브 복구 이벤트",
+        "subscribeNativeRecoveryDetail": "재시도, 컨텍스트 압축 및 작업 중지에 대한 엔진 상태를 수신합니다.",
         "subscribeTaskState": "작업 상태 이벤트",
         "subscribeTaskStateDetail": "작업의 실행, 대기, 완료, 보관 및 숨김 상태 변경을 수신합니다.",
         "subscribeActivity": "AI가 언제 생각하고 언제 사용자를 기다리는지 수신",
@@ -8469,6 +8482,24 @@
         "openInSidebar": "사이드바에서 열기",
         "panelPageHosted": "플러그인 페이지에서 열림 · 벗어나면 자동으로 닫힘",
         "panelNone": "이 플러그인에는 패널이 없습니다",
+        "githubRelease": {
+          "title": "플러그인 업데이트",
+          "installed": "설치된 버전 {{version}}",
+          "upstream": "배포 버전 {{version}}",
+          "prerelease": "사전 릴리스",
+          "check": "업데이트 확인",
+          "update": "다운로드 및 설치",
+          "connect": "GitHub에 로그인",
+          "checking": "업데이트 확인 중…",
+          "updating": "다운로드 및 설치 중…",
+          "available": "새 버전이 있습니다.",
+          "current": "최신 버전입니다.",
+          "updated": "플러그인을 업데이트했습니다.",
+          "empty": "설치할 수 있는 릴리스가 없습니다.",
+          "sign-in": "업데이트를 확인하려면 GitHub에 로그인하세요.",
+          "forbidden": "현재 GitHub 계정에 비공개 저장소 읽기 권한이 없습니다.",
+          "unavailable": "업데이트를 확인하거나 설치하지 못했습니다. 다시 시도하세요."
+        },
         "customSlotTitle": "플러그인 사용자 정의 설정 영역",
         "dangerTitle": "플러그인 제거",
         "infoContents": "포함",
@@ -9819,6 +9850,41 @@
       },
       "providerTooltip": "세션에 현재 선택된 제공자입니다. 지정하지 않은 경우 비워 둡니다.",
       "tokensTooltip": "이 세션이 {{range}} 동안 사용한 토큰만 집계합니다."
+    },
+    "auxiliary": {
+      "title": "보조 모델 사용량",
+      "label": "보조 요청",
+      "purpose": "용도",
+      "requests": "기록된 요청",
+      "description": "총 토큰에 포함됩니다. 제공자가 반환한 사용량만 기록하며, 보고되지 않은 사용량과 과거 요청은 추정하지 않습니다.",
+      "sources": {
+        "title": "제목 생성",
+        "task-summary": "작업 요약",
+        "prompt-prediction": "입력 제안",
+        "working-status": "작업 상태",
+        "help": "도움말",
+        "bot-creation": "동료 만들기",
+        "bot-opening": "동료 인사말",
+        "group-planning": "그룹 계획",
+        "ambient-reply": "답장 판단",
+        "auto-review": "자동 검토",
+        "tool-loop-review": "도구 반복 검토",
+        "memory-review": "메모리 검토",
+        "git-summary": "변경 요약",
+        "hook-generation": "자동화 스크립트",
+        "automation-verification": "가져오기 검증",
+        "plugin-text": "플러그인 텍스트",
+        "voice-dialogue": "음성 대화",
+        "voice-exit": "음성 종료 판단",
+        "voice-refinement": "음성 텍스트 다듬기",
+        "dictionary-learning": "사전 학습",
+        "embedding-query": "벡터 검색",
+        "embedding-index": "벡터 색인",
+        "web-search": "웹 검색",
+        "provider-probe": "연결 테스트",
+        "vision-bridge": "비전 브리지",
+        "auxiliary": "기타 보조 요청"
+      }
     }
   },
   "usageDashboard": {
@@ -10760,6 +10826,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "동반자 목록을 불러오지 못했어요",
+    "rosterReload": "동반자 다시 불러오기",
     "avatarStatus": {
       "awaiting": "확인 대기",
       "error": "확인 필요",
@@ -13638,9 +13706,8 @@
     "sendButton": {
       "send": "메시지 전송",
       "queue": "대기열에 추가",
-      "queueTooltip": "클릭하면 대기열에 추가됩니다. {{shortcut}}을(를) 누르면 작업을 중단하지 않고 끼어듭니다",
-      "queueTooltipSendMode": "클릭하면 대기열에 추가하고, {{shortcut}}를 누르면 이 메시지를 보냅니다.",
-      "stop": "생성 중지"
+      "stop": "생성 중지",
+      "steer": "실행 중인 작업에 끼어들기"
     },
     "pluginSetup": {
       "account": {
@@ -14531,6 +14598,13 @@
       "runningWithWorktree_one": "완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningWithWorktree_other": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningWithWorktree_many": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다."
+    },
+    "followUpHint": {
+      "queueDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 대기열에 추가됩니다.",
+      "steerDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 실행 중인 작업에 끼어듭니다.",
+      "switchToSteer": "기본값을 끼어들기로",
+      "switchToQueue": "기본값을 대기열 추가로",
+      "dismiss": "안내 닫기"
     }
   },
   "onboarding": {
@@ -16596,6 +16670,36 @@
         "priority": "우선순위",
         "activity": "최근 활동",
         "created": "생성 시간"
+      },
+      "inbox": {
+        "thisEvening": "오늘 저녁",
+        "tomorrow": "내일",
+        "nextWeek": "다음 주",
+        "custom": "직접 설정…",
+        "wakeAt": "다시 표시할 날짜와 시간",
+        "timeZone": "현지 시간 ({{zone}})",
+        "invalidTime": "1년 이내의 미래 날짜와 시간을 선택하세요.",
+        "inbox": "처리 대기",
+        "working": "진행 중",
+        "snoozed": "나중에 처리",
+        "archived": "처리됨",
+        "snooze": "나중에 처리",
+        "complete": "완료",
+        "wake": "지금 다시 표시",
+        "restore": "작업 복원",
+        "process": "처리됨으로 표시(보관)",
+        "empty": "받은 편지함이 비었습니다",
+        "snoozeFailed": "나중에 처리할 시간을 저장하지 못했습니다. 연결을 확인하고 작업이 있는 컴퓨터를 업데이트하세요.",
+        "hours": "{{count}}시간 후",
+        "hours_one": "{{count}}시간 후",
+        "hours_other": "{{count}}시간 후"
+      },
+      "taskListMode": {
+        "heading": "작업 모드",
+        "tasks": "작업 목록",
+        "inbox": "받은 편지함",
+        "enterInbox": "받은 편지함 모드로 전환",
+        "leaveInbox": "작업 목록 모드로 전환"
       }
     },
     "rename": {
@@ -16888,6 +16992,7 @@
         "menuSave": "저장",
         "menuInsertTable": "표 삽입",
         "externalChangeBlocked": "파일이 외부에서 변경되어 자동 저장을 멈췄습니다. 수동 저장으로 덮어쓸 수 있습니다.",
+        "targetChanged": "파일이 가리키는 위치가 바뀌었습니다. 초안은 편집기에 남아 있습니다. 초안을 복사한 후 파일을 다시 여세요.",
         "tableMenu": {
           "addRowAbove": "위에 행 추가",
           "addRowBelow": "아래에 행 추가",
@@ -19644,7 +19749,8 @@
           "expired": "만료됨",
           "voided": "무효화됨"
         }
-      }
+      },
+      "viewUsage": "사용량 보기"
     },
     "orders": {
       "title": "주문 내역",
@@ -21312,6 +21418,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "닫기",
+    "taskInbox": {
+      "title": "받은 편지함 사용법",
+      "lead": "작업은 상태에 따라 처리 대기, 진행 중, 나중에 처리, 처리됨으로 자동 분류됩니다. 받은 편지함을 그때그때 비우는 습관을 가장 추천합니다. 끝난 작업은 완료, 지금 처리하지 않을 작업은 나중에 처리하세요.",
+      "pending": {
+        "title": "처리 대기",
+        "body": "결과가 나왔거나 답변을 기다리는 작업이 여기에 나타납니다."
+      },
+      "done": {
+        "title": "완료",
+        "body": "처리가 끝나면 완료를 한 번 누르면 처리됨으로 이동합니다. 새 소식이 있으면 자동으로 돌아옵니다."
+      },
+      "snooze": {
+        "title": "나중에 처리",
+        "body": "지금 처리할 수 없다면 시간을 고르세요. 그 시간에 처리 대기로 돌아옵니다."
+      },
+      "start": "시작하기",
+      "note": "사이드바 위쪽 버튼으로 언제든 작업 목록으로 돌아갈 수 있습니다."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Cindy에 오신 것을 환영합니다",
@@ -21788,6 +21915,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "이 저장소를 이 컴퓨터에 다운로드할까요?",
+    "credentialNotice": "비공개 저장소의 경우 Cindy가 이 컴퓨터에 로그인된 계정을 사용할 수 있습니다.",
+    "saveTo": "저장 위치",
+    "confirmImport": "가져오기 확인",
+    "confirmSshTitle": "이 프로젝트가 다음 SSH 디렉터리에 접근하도록 허용할까요?",
+    "sshHost": "SSH 호스트",
+    "readWriteAccess": "읽기 및 쓰기",
+    "readAccess": "읽기 전용",
+    "confirmAccess": "접근 허용",
     "autoLoading": "아이콘 찾는 중…",
     "autoNone": "프로젝트 이름으로 만든 문자 아이콘을 사용합니다.",
     "autoSource": "출처",
@@ -21827,7 +21963,42 @@
     "discard": "변경 취소",
     "colors": {
       "default": "기본 색상 (테마에 맞춤)"
-    }
+    },
+    "directories": "프로젝트 디렉터리",
+    "directoriesHint": "다음 턴부터 이 프로젝트의 모든 작업에 적용됩니다. 기존 작업별 디렉터리는 유지됩니다.",
+    "removeDirectory": "디렉터리 제거",
+    "directoryPath": "전체 디렉터리 경로",
+    "addDirectory": "디렉터리 추가",
+    "browseDirectory": "디렉터리 찾아보기",
+    "mainDirectory": "기본 디렉터리",
+    "createTitle": "새 프로젝트",
+    "createAction": "프로젝트 만들기",
+    "repository": "저장소 URL",
+    "repositoryHint": "GitHub, GitLab 및 다른 Git 저장소의 HTTPS / SSH 링크를 지원합니다.",
+    "autoDirectory": "디렉터리를 선택하지 않으면 {{path}}에 만듭니다. 이름이 겹치면 번호를 붙입니다.",
+    "cloning": "저장소 복제 중…",
+    "invalidRepository": "유효한 GitHub, GitLab 또는 Git 저장소 URL을 입력하세요.",
+    "createFailed": "프로젝트를 만들 수 없습니다. 디렉터리 쓰기 권한, 저장소 URL 및 이 컴퓨터의 Git 접근 권한을 확인하세요. 복제 대상은 비어 있어야 합니다.",
+    "createNamePlaceholder": "프로젝트 이름",
+    "createNameHint": "프로젝트 이름을 정하고 시작하세요.",
+    "createFromRepository": "코드 저장소에서 만들기",
+    "createBlank": "빈 프로젝트로 전환",
+    "source_blank": "빈 프로젝트 만들기",
+    "source_existing": "기존 폴더 열기",
+    "source_repository": "코드 저장소 가져오기",
+    "sourceHint_blank": "이름을 입력하면 폴더가 자동으로 생성됩니다.",
+    "sourceHint_existing": "이 컴퓨터의 기존 프로젝트 폴더를 선택하세요.",
+    "sourceHint_repository": "저장소 링크를 붙여 넣어 이 컴퓨터에 다운로드하세요.",
+    "source": "프로젝트 소스",
+    "sourceShort_blank": "새 프로젝트",
+    "sourceShort_existing": "폴더",
+    "sourceShort_repository": "저장소",
+    "automaticMain": "기본 · 자동 생성",
+    "source_local": "로컬 폴더",
+    "sourceShort_local": "로컬 폴더",
+    "sourceHint_local": "이름을 입력해 새로 만들거나 기존 폴더를 선택하세요.",
+    "chooseExistingFolder": "기존 폴더 선택",
+    "changeMainDirectory": "변경"
   },
   "taskManagement": {
     "scope": "이 컴퓨터의 현재 계정에만 적용됩니다.",

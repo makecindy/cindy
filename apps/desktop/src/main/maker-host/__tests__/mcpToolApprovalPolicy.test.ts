@@ -15,6 +15,59 @@ describe('desktop Claude read-only allowlist', () => {
     for (const toolName of ['status', 'list_tools']) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName })).toBe('auto-approve');
     for (const toolName of ['call_tool', undefined]) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName, toolParams: { name: 'send_message', args: { text: 'external' } } })).toBe('prompt-each-time');
   });
+  // PR #11126 security: clone/private credentials and directory expansion used to
+  // inherit trusted-server silence. Unit public policy; existing write cases did
+  // not cover project profiles, nested/stringified arguments or missing outer names.
+  it('reviews project access for every tool envelope while leaving metadata and reads alone', () => {
+    for (const [name, input] of [
+      ['create_project', { repository_url: 'https://gitlab.com/team/private', device: 'computer' }],
+      ['create_project', { working_dir: '/existing' }],
+      ['create_project', { name: 'Blank' }],
+      [
+        'update_project_info',
+        {
+          project_key: 'local:/repo',
+          field: 'profile',
+          value: { directories: [{ path: '/private', access: 'write' }] },
+        },
+      ],
+      [
+        'update_project_info',
+        { project_key: 'local:/repo', field: 'profile', value: { directories: [] } },
+      ],
+    ] as const) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_helper',
+          toolName: name,
+          toolParams: input,
+        }),
+      ).toBe('prompt-each-time');
+      for (const args of [input, JSON.stringify(input)])
+        for (const toolName of ['call_tool', undefined])
+          expect(
+            getDesktopMcpToolApprovalPolicy({
+              serverName: 'cindy_helper',
+              toolName,
+              toolParams: { name, args },
+            }),
+          ).toBe('prompt-each-time');
+    }
+    for (const [name, args] of [
+      ['get_project_info', { project_key: 'local:/repo' }],
+      [
+        'update_project_info',
+        { project_key: 'local:/repo', field: 'profile', value: { name: 'Updated', icon: null } },
+      ],
+    ] as const)
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy_helper',
+          toolName: 'call_tool',
+          toolParams: { name, args },
+        }),
+      ).toBe('auto-approve');
+  });
   // §21 unit: the shared files dispatcher contains both reads and destructive
   // operations. Trusted helper approval must never turn a write into a read.
   it('keeps file writes and deletions in per-call approval for direct and progressive calls', () => {
@@ -549,7 +602,6 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(policy('list_tools')).toBe('auto-approve');
     for (const name of [
       'list_projects',
-      'create_project',
       'rename_project',
       'remove_project',
       'search_skills',

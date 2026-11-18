@@ -783,6 +783,7 @@ const fanOutLayoutChanged = createIpcFanOut('layout:changed');
 // 意识仓库变化广播 (install/uninstall 后 main 推全量已装清单,多窗口热更新;
 // 见 main/cindy-brain/index.ts)。
 const fanOutRetirementOpen = createIpcFanOut('ghosts:retirement-open');
+const fanOutGithubPluginReleaseProgress = createIpcFanOut('ghosts:github-release:progress');
 const fanOutGhostsChanged = createIpcFanOut('ghosts:changed');
 const fanOutGhostWorkdirPrefsChanged = createIpcFanOut('ghosts:workdir-prefs-changed');
 const fanOutPluginPublisherProgress = createIpcFanOut('plugin-publisher:progress');
@@ -1572,6 +1573,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       config: Record<string, unknown> | null,
     ): Promise<{ config: Record<string, unknown> }> =>
       ipcRenderer.invoke('ghosts:errand-prefs:set', id, config),
+    githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number):
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
+      ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),
+    onGithubReleaseProgress: fanOutGithubPluginReleaseProgress,
     pickFile: (): Promise<{ canceled: true } | { filePath: string }> =>
       ipcRenderer.invoke('ghosts:pick-file'),
     inspect: (
@@ -3268,6 +3273,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         type: 'file' | 'directory';
         size: number;
         mtimeMs: number;
+        /** Directory link's canonical target, relative to the workdir. */
+        symlinkTarget?: string;
       }>
     > => ipcRenderer.invoke('maker:file-browser:list-dir', params),
     /** 项目级文件名扁平列表(ripgrep --files honor .gitignore);供 RSB 快速文件
@@ -3295,6 +3302,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
             size: number;
             mtimeMs: number;
             truncated: boolean;
+            resolvedPath?: string;
           };
         }
       | { ok: false; code: 'BINARY_FILE' | 'READ_FAILED'; message?: string }
@@ -3310,7 +3318,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workdir: string;
       relPath: string;
       content: string;
-    }): Promise<{ ok: true; size: number; mtimeMs: number } | { ok: false; message: string }> =>
+      expectedResolvedPath?: string;
+    }): Promise<{ ok: true; size: number; mtimeMs: number; resolvedPath?: string } | { ok: false; message: string }> =>
       ipcRenderer.invoke('maker:file-browser:write-file', params),
     createFile: (params: {
       remoteHostId?: string | null;
@@ -4175,6 +4184,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     showOpenDirectory: (params?: {
       defaultPath?: string;
       writableGrantScope?: string;
+      projectGrantScope?: string;
     }): Promise<{
       success: boolean;
       path: string | null;
@@ -7900,6 +7910,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       engineReady: boolean;
       deferred?: boolean;
       sameEngineRevision?: number;
+      pendingSwitchRevision?: number;
       sameEngineSuperseded?: boolean;
     }> =>
       options || thinking !== undefined
@@ -8376,7 +8387,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:images:retry', sessionId, imageId),
       retryLastError: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: { expectedClearBoundaryMs?: number | null; expectedQueueHeadClientId?: string; expectedSwitchRevision?: number },
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:retry-last-error', sessionId, opts),
       clearError: (

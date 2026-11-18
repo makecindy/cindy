@@ -958,25 +958,29 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     expect(plugins['superpowers@superpowers-dev']).toEqual({ enabled: false });
   });
 
-  it('preserves existing isolated config content when appending', async () => {
+  // #11025 unit: sync must parse BOM-prefixed source/destination while retaining
+  // the exact destination bytes for compare-before-rename (old fixtures had no BOM).
+  it.each(['', '\uFEFF'])('preserves existing isolated config content when appending (prefix=%j)', async prefix => {
     const { homeDir, codexHome, paths } = await setup();
     await writePluginCache(paths.sourceCacheDir, 'superpowers-dev', 'superpowers');
     await fs.writeFile(
       paths.sourceConfigFile,
-      '[plugins."superpowers@superpowers-dev"]\nenabled = true\n',
+      `${prefix}[plugins."superpowers@superpowers-dev"]\nenabled = true\n`,
       'utf8',
     );
     await fs.mkdir(codexHome, { recursive: true });
-    const existing = '[projects.\'D:\\workspace\\demo\']\ntrust_level = "trusted"\n';
+    const existing = `${prefix}[projects.'D:\\workspace\\demo']\ntrust_level = "trusted"\n`;
     await fs.writeFile(paths.configFile, existing, 'utf8');
 
-    await prepareCodexGlobalPluginsBridge(codexHome, { homeDir });
+    const result = await prepareCodexGlobalPluginsBridge(codexHome, { homeDir });
+    expect(result.warnings).toEqual([]);
+    expect(result.addedPluginEntries).toEqual(['superpowers@superpowers-dev']);
 
     const destText = await fs.readFile(paths.configFile, 'utf8');
     expect(destText.startsWith(existing)).toBe(true);
-    const parsed = parseToml(destText) as Record<string, unknown>;
+    const parsed = parseToml(destText.replace(/^\uFEFF/, '')) as Record<string, unknown>;
     expect(parsed['projects']).toBeDefined();
-    expect(pluginsTableOf(destText)['superpowers@superpowers-dev']).toEqual({ enabled: true });
+    expect((parsed['plugins'] as Record<string, unknown>)['superpowers@superpowers-dev']).toEqual({ enabled: true });
   });
 
   it('keeps a real (codex-managed) marketplace dir intact as an expected conflict', async () => {
@@ -1078,10 +1082,10 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     await expect(fs.lstat(paths.configFile)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('still links caches but skips entry sync when the user config is unparsable', async () => {
+  it.each(['[plugins."broken\n= oops', '\uFEFF[plugins."broken\n= oops', '\uFEFF\uFEFF[plugins]'])('still links caches but skips entry sync for malformed source TOML: %j', async broken => {
     const { homeDir, codexHome, paths } = await setup();
     await writePluginCache(paths.sourceCacheDir, 'superpowers-dev', 'superpowers');
-    await fs.writeFile(paths.sourceConfigFile, '[plugins."broken\n= oops', 'utf8');
+    await fs.writeFile(paths.sourceConfigFile, broken, 'utf8');
 
     const result = await prepareCodexGlobalPluginsBridge(codexHome, { homeDir });
 
@@ -1148,7 +1152,7 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     },
   );
 
-  it('never appends when the isolated config itself is unparsable', async () => {
+  it.each(['[plugins."half\n', '\uFEFF[plugins."half\n', '\uFEFF\uFEFF[plugins]'])('never appends when the isolated config itself is unparsable: %j', async broken => {
     const { homeDir, codexHome, paths } = await setup();
     await writePluginCache(paths.sourceCacheDir, 'superpowers-dev', 'superpowers');
     await fs.writeFile(
@@ -1157,7 +1161,6 @@ describe('prepareCodexGlobalPluginsBridge', () => {
       'utf8',
     );
     await fs.mkdir(codexHome, { recursive: true });
-    const broken = '[plugins."half\n';
     await fs.writeFile(paths.configFile, broken, 'utf8');
 
     const result = await prepareCodexGlobalPluginsBridge(codexHome, { homeDir });

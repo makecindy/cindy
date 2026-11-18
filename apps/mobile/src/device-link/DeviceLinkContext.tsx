@@ -256,6 +256,7 @@ export interface DeviceLinkContextValue {
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   /** 丢弃已结算的开链缓存并真正重开；并发重开仍按设备单飞。 */
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
+  recoverWaitingPeer(deviceId: string): Promise<boolean>;
   closeLink(deviceId: string): void;
   /** Acquire before background grace ends; always release on settlement/cancellation. Hard deadline enforced by lifecycle. */
   beginBackgroundTransition?(): () => void;
@@ -1229,6 +1230,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       // 耗尽时只复位该 peer，共享 WSS 和其它远端继续工作；恢复仍只使用所有
       // Desktop 版本都支持的 link-open，不增加 wire/capability 要求。
       peerFailurePolicy: 'isolate-peer',
+      backoffOfflineLinkOpen: true,
       // 手机弱网(切基站 / 弱 WiFi)下 TCP 半开假活远比桌面常见,收紧心跳把
       // 半开检测从默认 ~60s(20s×3 tick)压到 ~20s(10s×2 tick);检测到即
       // fail 全部 pending invoke,不让用户操作干等 30s 请求超时。仅手机端
@@ -2106,6 +2108,22 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     [sendOpenLinkOnce],
   );
 
+  const recoverWaitingPeer = useCallback(async (deviceId: string): Promise<boolean> => {
+    const client = clientRef.current;
+    if (!client || AppState.currentState !== 'active' || !canUsePeerData(client, deviceId)
+      || isScopedPeer(deviceId) || revokedDevicesStore.has(deviceId)
+      || presenceAvailableByDeviceRef.current.get(deviceId) !== true
+      || rehydrateSuppressedDeviceIds.has(deviceId)
+      || !hasOutboundPeerRecoveryIntent(client, deviceId)) return false;
+    if (unresponsiveDevicesStore.has(deviceId)) {
+      await rehydrateWithClient(client, deviceId);
+      return false;
+    }
+    // Join a pending handshake or replace the settled one. The outbox alone owns delivery.
+    await sendOpenLinkOnce(client, deviceId, false, true).request;
+    return true;
+  }, [hasOutboundPeerRecoveryIntent, rehydrateWithClient, sendOpenLinkOnce]);
+
   const closeLink = useCallback((deviceId: string) => {
     resetMobilePeer(deviceId);
     registryRef.current.untrackOpenLink(deviceId);
@@ -2241,6 +2259,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     getPresenceAvailability,
     readDeviceList,
     openLink,
+    recoverWaitingPeer,
     reopenLink,
     closeLink,
     invoke,
@@ -2262,6 +2281,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     invoke,
     lastPresenceSnapshot,
     openLink,
+    recoverWaitingPeer,
     reopenLink,
     presenceVersion,
     status,

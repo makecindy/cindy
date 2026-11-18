@@ -32,7 +32,7 @@ Pi 先 `cindy_mcp_list_tools({server:"cindy_helper",tool:"list_tools"})`，再�
 
 | 分类 / 工具 | 字段或操作 | 生效与恢复 |
 | --- | --- | --- |
-| `preferences` | 语言、明暗主题、主题家族、通知、发送快捷键、网页/本地链接打开方式、流式动效、消息导航、忽略目录显示、首页用量、输入建议 | 复用 Renderer 原 setter，保存并回读，立即生效；无整组 reset |
+| `preferences` | 语言、明暗主题、主题家族、通知、发送快捷键、运行中发送方式（排队/插话）、网页/本地链接打开方式、流式动效、消息导航、忽略目录显示、首页用量、输入建议 | 复用 Renderer 原 setter，保存并回读，立即生效；无整组 reset |
 | `appearance` | 界面/代码/终端字体与字号、窗口缩放、内置壁纸、遮罩/可见度/模糊/动效 | 原外观持久化与广播；reset 删除原覆盖；不返回自定义壁纸资产 URL |
 | `git-safety` | `mode`：关闭/已有 Git 项目/所有项目 | 下一轮；reset 跟随原默认 |
 | `goal-defaults` | 轮数、token 预算、无进展轮数 | 以后启动的目标；null 不限；reset 删除覆盖 |
