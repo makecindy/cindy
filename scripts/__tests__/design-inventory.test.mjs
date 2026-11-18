@@ -1023,6 +1023,7 @@ test('renderer 模块图入口双向核对: index.tsx 的参数→入口模块�
     regionScreenshot: './region-screenshot-entry',
     regionScreenshotEditor: './region-screenshot-entry',
     regionScreenshotPin: './region-screenshot-pin-entry',
+    quotaTray: './quota-tray-entry',
   });
   const covered = new Map(
     catalogSurfaces().flatMap((surface) =>

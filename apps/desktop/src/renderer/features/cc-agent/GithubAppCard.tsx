@@ -6,7 +6,8 @@ import { Spinner } from '@/components/ui/spinner';
 import type { GithubAppConnectionState, GithubConnectionState } from '../../../shared/githubSetup';
 
 /** Trusted account controls alongside the plugin's existing GitHub login card. */
-export function GithubAppCard({ account, accountBusy = false, children, alternative, automation = false, repositories }: {
+export function GithubAppCard({ account, accountBusy = false, children, alternative, automation = false, repositories, timedPrCheck }: {
+  timedPrCheck?: boolean;
   automation?: boolean;
   repositories?: string[];
   account?: GithubConnectionState;
@@ -75,7 +76,7 @@ export function GithubAppCard({ account, accountBusy = false, children, alternat
     : state?.login && (account?.status === 'missing' || account?.status === 'auth') ? 'incomplete'
     : undefined;
   if (!children && !failed && state?.available === false) return automation
-    ? <p className="text-12 text-[var(--text-secondary)]">{t('scheduler.editor.webhook.appUnavailable')}</p> : null;
+    ? <p className="text-12 text-[var(--text-secondary)]">{t('scheduler.editor.webhook.appUnavailable')} {timedPrCheck && t('scheduler.prTrigger.fallback')}</p> : null;
   const disabled = busy || checking;
   const unavailable = state?.unavailable?.filter(repo => !repositories || repositories.some(selected => selected.toLowerCase() === repo.toLowerCase()));
   return (
@@ -104,6 +105,8 @@ export function GithubAppCard({ account, accountBusy = false, children, alternat
       </p>
       {children && !checking && !failed && state?.login && (account?.status === 'missing' || account?.status === 'auth') && <p className="text-12 text-[var(--text-secondary)]">{t('ccAgent.gitContext.pr.setup.connection.eventsOnly')}</p>}
       {!checking && !awaitingBrowser && Boolean(unavailable?.length) && <p className="break-words text-12 text-[var(--text-secondary)]">{t(key + 'missing', { repositories: unavailable?.join(', ') })}</p>}
+      {timedPrCheck && !checking && !failed && (!state?.login || Boolean(unavailable?.length)) &&
+        <p className="text-12 text-[var(--text-secondary)]">{t('scheduler.prTrigger.fallback')}</p>}
       {checking && <p role="status" className="flex items-center gap-2 text-12 text-[var(--text-secondary)]">
         <Spinner size={14} />{t(state?.login ? key + 'syncing' : 'ccAgent.gitContext.pr.setup.account.checking')}
       </p>}

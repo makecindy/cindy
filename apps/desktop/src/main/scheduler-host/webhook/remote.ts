@@ -859,7 +859,10 @@ export class ScheduleWebhookRemote {
         if (!this.deps.onGithubPrs) throw new Error('GITHUB_RECEIVER_UNAVAILABLE');
         await this.enqueueGithub(async () => {
           if (!isCurrent()) return;
-          await this.deps.onGithubPrs!(urls, isCurrent, { reason: recover ? 'overflow' : 'event', notify });
+          const reviews = matchingGithubPrs(covered, delivery.events.filter(event => ['pull_request_review', 'pull_request_review_comment', 'pull_request_review_thread'].includes(event.event)));
+          const closed = matchingGithubPrs(covered, delivery.events.filter(event => event.event === 'pull_request' && event.action === 'closed'));
+          await this.deps.onGithubPrs!(urls, isCurrent, { reason: recover ? 'overflow' : 'event', notify,
+            ...(reviews.length ? { reviews } : {}), ...(closed.length ? { closed } : {}) });
           if (isCurrent()) this.githubBatchFailed = false;
         });
       }

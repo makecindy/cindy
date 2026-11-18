@@ -816,9 +816,10 @@ it('routes managed GitHub events to matching active follow-ups and acknowledges 
     expect(onGithubPrs.mock.calls[0]?.[0]).toEqual(['https://github.com/example/project/pull/12', 'https://github.com/example/project/pull/123']);
     onGithubPrs.mockClear();
     server.push({ batchId: 'github-batch', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
-      events: [{ deliveryId: 'g-1', event: 'pull_request_review', repository: 'example/project', number: 12, receivedAt: 1 }] });
+      events: [{ deliveryId: 'g-1', event: 'pull_request_review_comment', repository: 'example/project', number: 12, receivedAt: 1 }] });
     await vi.waitFor(() => expect(onGithubPrs).toHaveBeenCalledOnce());
     expect(onGithubPrs.mock.calls[0]?.[0]).toEqual(['https://github.com/example/project/pull/12']);
+    expect(onGithubPrs.mock.calls[0]?.[2].reviews).toEqual(['https://github.com/example/project/pull/12']);
     expect(onBatch).not.toHaveBeenCalled();
     expect(server.frames).not.toContainEqual({ type: 'ack', batchId: 'github-batch' });
     expect(server.github.repositories).toEqual(['example/project']);

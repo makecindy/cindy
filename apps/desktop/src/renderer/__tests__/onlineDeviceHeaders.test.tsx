@@ -50,9 +50,9 @@ vi.mock('@/components/sidebar/SortableList', () => ({
 vi.mock('../features/cc-agent/sidebar/sections/ProjectNode', () => ({
   ProjectNode: ({ project }: { project: ProjectNode }) => <span>{project.displayName}</span>,
 }));
-// Keep device grouping real; the header bridge is outside this rendering test.
-vi.mock('../features/cc-agent/sidebar/DeviceSectionHeader', () => ({
-  DeviceSectionHeader: ({ children }: { children: ReactNode }) => <>{children}</>,
+// Remote desktop probing is outside the project creation entry's unit scope.
+vi.mock('@/features/remote-desktop/useRemoteDesktopAvailability', () => ({
+  useRemoteDesktopAvailability: () => ({ available: true, checking: false, retryable: false }),
 }));
 vi.mock('../features/cc-agent/sidebar/sections/UnclassifiedSection', () => ({
   UnclassifiedSection: ({ sessions }: { sessions: Session[] }) => (
@@ -162,6 +162,24 @@ afterEach(() => {
 });
 
 describe('Online device headers without tasks', () => {
+  // Device-row creation must target that row, independent of the global scope.
+  // Existing folding tests did not exercise creation. Minimal unit input: two
+  // empty device sections; click each add button and verify target + fold state.
+  it('creates on the clicked device without collapsing its section', () => {
+    const onCreateProject = vi.fn();
+    render(<ProjectsSection {...props(true)} onCreateProject={onCreateProject} />);
+    for (const [name, target] of [
+      ['ccAgent.sidebar.deviceGroup.local', null],
+      ['Remote device', { deviceId: 'remote', deviceName: 'Remote device' }],
+    ] as const) {
+      const header = screen.getByText(name).closest('button')!;
+      const add = within(header.parentElement!).getByRole('button', { name: 'ccAgent.sidebar.newProject' });
+      fireEvent.click(add);
+      expect(onCreateProject).toHaveBeenLastCalledWith(target);
+      expect(header.getAttribute('aria-expanded')).toBe('true');
+    }
+    expect(onCreateProject).toHaveBeenCalledTimes(2);
+  });
   // #7237: unit regression through the real group headers. One unnamed host
   // was covered, but two ID-as-name hosts previously had indistinguishable labels.
   it('distinguishes unnamed device headers and folds only the selected device', () => {

@@ -6,7 +6,7 @@
  * model parameters and the production serializer are not mocked.
  */
 import { createServer } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -110,6 +110,10 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
     const agentHome = path.join(root, 'agent');
     const workingDir = path.join(root, 'work');
     mkdirSync(workingDir);
+    // #11108: production override -> real Pi -> paired, bounded wire IDs.
+    const fixture = path.join(workingDir, 'fixture.txt');
+    writeFileSync(fixture, 'fixture');
+    const longId = 'call_' + 'a'.repeat(2000);
     const requests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
     const server = createServer(async (req, res) => {
       const chunks: Buffer[] = [];
@@ -126,6 +130,17 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
         return;
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (customGateway && requests.length === 1) {
+        for (const choice of [
+          { index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0,
+            id: longId, type: 'function', function: { name: 'read', arguments: JSON.stringify({ path: fixture }) },
+          }] }, finish_reason: null },
+          { index: 0, delta: {}, finish_reason: 'tool_calls' },
+        ]) res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1,
+          model: body.model, choices: [choice] })}\n\n`);
+        res.end('data: [DONE]\n\n');
+        return;
+      }
       for (const choice of [
         { index: 0, delta: { role: 'assistant', content: 'fixture-ok' }, finish_reason: null },
         { index: 0, delta: {}, finish_reason: 'stop' },
@@ -139,7 +154,7 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
       const endpoint = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
       const official = 'https://generativelanguage.googleapis.com/v1beta/openai';
       const upstream = customGateway ? 'https://truefoundry.example.invalid/v1' : official;
-      const modelId = customGateway ? 'gemini-4-hydrogen' : 'gemini-3.8-flash';
+      const modelId = customGateway ? 'production-chat' : 'gemini-3.8-flash';
       const config = { id: 'google-fixture', name: 'Google', runtimes: { pi: {
         ...(!customGateway ? { catalogPresetId: 'google-gemini-api' } : {}),
         baseUrl: upstream, wireProtocol: 'openai-chat' as const,
@@ -157,7 +172,7 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
         // The persisted local override is sanitized and projected through the
         // production catalog path, not injected into Pi's generated models.json.
         const parsed = sanitizeModelCatalogOverrides({ patches: {
-          [`${encodeURIComponent(custom.id)}:${modelId}`]: { perAgent: { pi: { supportsStore: false } } },
+          [`${encodeURIComponent(custom.id)}:${modelId}`]: { perAgent: { pi: { supportsStore: false, maxToolCallIdLength: 64 } } },
         } });
         expect(parsed.invalid).toEqual([]);
         custom.models.pi = custom.models.pi!.map(model =>
@@ -179,7 +194,7 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
         resolvePiNativeProviders: async () => native,
       };
       handle = await new PiAgent(deps).startSession({ sessionId: `google-chat-${status}`, workingDir,
-        providerId: provider.id, model: modelId });
+        providerId: provider.id, model: modelId, permissionMode: 'bypassPermissions' });
       const runtimeDir = path.join(agentHome, 'run-tmp');
       const configHome = readdirSync(runtimeDir).map(name => path.join(runtimeDir, name))
         .find(dir => existsSync(path.join(dir, 'models.json')))!;
@@ -197,9 +212,14 @@ describe.skipIf(!existsSync(binary))('Google Chat launch through real Pi', () =>
       const elapsedMs = performance.now() - started;
       expect(requests.map(request => ({ url: request.url, hasStore: Object.hasOwn(request.body, 'store'),
         status: request.status })), JSON.stringify(events.filter(event => event.type === 'error' || event.type === 'done')))
-        .toEqual([{ url: '/v1beta/openai/chat/completions', hasStore: false, status }]);
+        .toEqual(Array.from({ length: customGateway ? 2 : 1 }, () => ({ url: '/v1beta/openai/chat/completions', hasStore: false, status })));
       expect(serialized.providers[provider.id].models[0].compat.supportsStore).toBe(false);
       if (customGateway) {
+        expect(serialized.providers[provider.id].models[0].compat.maxToolCallIdLength).toBe(64);
+        const messages = requests[1].body.messages as Array<{ role: string; tool_calls?: Array<{ id: string }>; tool_call_id?: string }>;
+        const callId = messages.flatMap(message => message.tool_calls ?? [])[0].id;
+        expect(callId.length).toBeLessThanOrEqual(64);
+        expect(messages.find(message => message.role === 'tool')?.tool_call_id).toBe(callId);
         expect(requests[0].body).toMatchObject({ model: modelId, reasoning_effort: 'xhigh' });
         expect(requests[0].body.tools).toEqual(expect.arrayContaining([
           expect.objectContaining({ type: 'function' }),

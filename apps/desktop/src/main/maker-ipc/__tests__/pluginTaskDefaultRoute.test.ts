@@ -13,6 +13,8 @@ describe('auxiliaryChainSessionCandidates', () => {
       'litellm-gpt-5.4-mini',
       encodeCatalogModelPin({ providerId: 'xd', agentKind: 'codex', model: 'deepseek/deepseek-v4-flash' }),
       'not-a-ref',
+      // Retained remote settings cannot become a local plugin task route.
+      'remote-cat:other:cat:xd:codex:remote-only',
     ];
     expect(auxiliaryChainSessionCandidates(refs)).toEqual([
       { agentKind: 'codex', providerId: 'xd', model: 'deepseek/deepseek-v4-flash' },

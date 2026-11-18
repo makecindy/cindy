@@ -104,6 +104,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
+    preparePiSkillRuntime: async (id, dir, route) => {
+      assert.equal(id, 'task'); assert.equal(dir, '/project');
+      if (route) assert.deepEqual(route, { model: 'pi-test' });
+    },
     createRuntimeSession: async () => { throw new Error('Not part of this transport test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
   });
@@ -125,6 +129,15 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  const prepared = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }] });
+  assert.deepEqual(prepared.result, { accepted: true, piRuntimePrepared: true }, JSON.stringify(prepared));
+  const switched = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: {} }] });
+  assert.deepEqual(switched.result, { accepted: true, piRuntimePrepared: true, pendingRouteApplied: true });
+  const unsupported = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { agentDeviceId: 'other' } }] });
+  assert.equal(unsupported.ok, false);
   const received = clients.map(() => []);
   clients.forEach((client, i) => client.onFrame(frame => { if (frame.kind === 'push') received[i].push(frame); }));
   duplicateNext = true;
@@ -280,4 +293,23 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   await host.setEnabled(false);
   assert.deepEqual(releasedApps, ['device:desktop', 'device:phone']);
   assert.deepEqual(releasedAuth, ['device:desktop', 'device:phone']);
+});
+
+// Unit: the authenticated transport determines who can ask Desktop Main for project
+// evidence. Persisted profile fields never select the privileged write adapter.
+test('routes project writes by their authenticated caller', async () => {
+  const writes = [];
+  const service = createHostService({ updateProjectInfo: (...args) => { writes.push(args); return {}; } });
+  const input = { create: true, projectKey: 'local:', repositoryUrl: 'https://gitlab.com/team/demo' };
+  const envelope = { requestId: 'from-main', input };
+  for (const caller of ['web:paired', 'device:phone']) {
+    assert.equal((await service('/api/project-info/desktop-set', envelope, { caller })).status, 403);
+    assert.equal((await service('/api/project-info/set', input, { caller })).status, 200);
+    assert.deepEqual(writes.pop(), [input, { legacyDesktop: false }]);
+  }
+  const local = { caller: 'local-api:host' };
+  await service('/api/project-info/set', input, local);
+  assert.deepEqual(writes.pop(), [input, { legacyDesktop: true }]);
+  await service('/api/project-info/desktop-set', envelope, local);
+  assert.deepEqual(writes.pop(), [input, { desktopRequest: 'from-main' }]);
 });

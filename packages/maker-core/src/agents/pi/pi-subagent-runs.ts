@@ -144,8 +144,6 @@ async function copyStagedRipgrep(
 export type PiSubagentRunState = 'queued' | 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface PiSubagentTaskStatus {
-  /** Private, provider-reported vision facts; never folded into assistant usage. */
-  visionUsage?: unknown[];
   childId: string;
   sessionId: string;
   agent: string;
@@ -868,59 +866,6 @@ export function isPiSubagentTerminal(state: PiSubagentRunState): boolean {
 /** Empty/settled roots do not need the cadence used for active approvals. */
 export const PI_SUBAGENT_ACTIVE_POLL_MS = 500;
 export const PI_SUBAGENT_IDLE_POLL_MS = 2_000;
-
-/** Stream only complete private receipts appended since the previous poll. */
-export async function readPiSubagentVisionUsage(
-  root: string,
-  runId: string,
-  offset: number,
-  observe: (payload: unknown) => void,
-): Promise<number> {
-  if (!RUN_DIR_RE.test(runId)) return offset;
-  const file = path.join(root, runId, 'vision-usage.jsonl');
-  let handle: Awaited<ReturnType<typeof fs.open>>;
-  try {
-    const entry = await fs.lstat(file);
-    if (entry.isSymbolicLink() || !entry.isFile()) return offset;
-    handle = await fs.open(file, 'r');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return offset;
-    throw error;
-  }
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) return offset;
-    let position = offset > stat.size ? 0 : offset;
-    let settled = position;
-    let pending = Buffer.alloc(0);
-    let oversized = false;
-    const buffer = Buffer.alloc(8192);
-    while (position < stat.size) {
-      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, stat.size - position), position);
-      if (!bytesRead) break;
-      let start = 0;
-      for (let i = 0; i < bytesRead; i++) {
-        if (buffer[i] !== 10) continue;
-        const part = buffer.subarray(start, i);
-        if (!oversized && pending.length + part.length <= 16 * 1024) {
-          const line = Buffer.concat([pending, part]).toString('utf8');
-          let payload: unknown;
-          try { payload = JSON.parse(line); } catch { /* Ignore incomplete/invalid facts. */ }
-          if (payload !== undefined) observe(payload);
-        }
-        pending = Buffer.alloc(0);
-        oversized = false;
-        settled = position + i + 1;
-        start = i + 1;
-      }
-      const tail = buffer.subarray(start, bytesRead);
-      if (!oversized && pending.length + tail.length <= 16 * 1024) pending = Buffer.concat([pending, tail]);
-      else { pending = Buffer.alloc(0); oversized = true; }
-      position += bytesRead;
-    }
-    return settled;
-  } finally { await handle.close(); }
-}
 
 /** Background polling consumes one bounded status at a time, not Promise.all(history). */
 export async function* scanPiSubagentRuns(
@@ -2445,6 +2390,7 @@ interface PiSubagentResumeLaunch {
     bridgeSource: Buffer;
     runnerSource: Buffer;
     cacheRulesJson?: Buffer;
+    settingsJson?: Buffer;
   };
 }
 
@@ -2897,6 +2843,30 @@ async function resumeClaimedPiSubagentRun(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
+  // Older snapshots may lack settings; new launches freeze only native shell keys.
+  let settingsJson = launch.runtimeSnapshot?.settingsJson;
+  if (settingsJson === undefined) {
+    const sourceSettingsFile = path.join(sourceConfigHome, 'settings.json');
+    try {
+      const [info, canonical] = await Promise.all([fs.lstat(sourceSettingsFile), fs.realpath(sourceSettingsFile)]);
+      if (info.isSymbolicLink() || !info.isFile() || info.size > MAX_STATUS_BYTES
+        || path.dirname(canonical) !== canonicalConfigHome) {
+        throw new Error('PI Subagent resume settings escaped their source run');
+      }
+      settingsJson = await fs.readFile(sourceSettingsFile);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  if (settingsJson && settingsJson.byteLength > MAX_STATUS_BYTES) {
+    throw new Error('PI Subagent resume settings escaped their source run');
+  }
+  const settings = settingsJson ? JSON.parse(settingsJson.toString('utf8')) : {};
+  const shellSettings: Record<string, string> = {};
+  for (const key of ['shellPath', 'shellCommandPrefix']) {
+    const value = settings && settings[key];
+    if (typeof value === 'string' && value.trim()) shellSettings[key] = value;
+  }
   const runId = randomUUID();
   const runDir = path.join(root, runId);
   const childConfigHome = path.join(runDir, 'pi-home');
@@ -2966,6 +2936,7 @@ async function resumeClaimedPiSubagentRun(
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    await fs.writeFile(path.join(childConfigHome, 'settings.json'), JSON.stringify(shellSettings) + '\n', { mode: 0o600, flag: 'wx' });
     if (cacheRules) await fs.writeFile(path.join(childConfigHome, 'pi-cache-compatibility.json'), cacheRules, { mode: 0o600, flag: 'wx' });
     await copyStagedRipgrep(
       sourceConfigHome,

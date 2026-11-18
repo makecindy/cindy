@@ -715,6 +715,7 @@ export function buildSessionScheduleIndex(
       }
       const candidate = activeFailures.has(run.id) ? {
         runId: run.id, firedAt, finishedAt: toMillis(run.finishedAt) || undefined, scheduleId: run.scheduleId,
+        ...(schedule?.status === 'active' ? nextFireAtField(schedule) : {}),
         failureKind: classifyScheduleFailure(run),
         errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
         missingPlugin: run.status === 'failed' ? scheduleRunMissingPlugin(run) : undefined,

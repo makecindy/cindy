@@ -212,11 +212,14 @@ function RemoteProviderAccessRow({
   remoteControlEnabled,
   pendingShareRequests,
   onManageShare,
+  poolName,
 }: {
   provider: ProviderView;
   remoteControlEnabled: boolean;
   pendingShareRequests: number;
   onManageShare: () => void;
+  /** Set for a connection merged into an account pool: its switch follows that pool and is changed there. */
+  poolName?: string;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -242,7 +245,9 @@ function RemoteProviderAccessRow({
           {t('settings.providers.detail.remoteAccess.label')}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-          {gate === 'remote-off' ? (
+          {poolName !== undefined && gate !== 'remote-off' ? (
+            t('settings.providers.detail.remoteAccess.followsPool', { pool: poolName })
+          ) : gate === 'remote-off' ? (
             <>
               {t('providerShare.entry.remoteControlOff')}{' '}
               <button data-setting-id={providersSettings.sharing.id}
@@ -271,7 +276,7 @@ function RemoteProviderAccessRow({
         />
         <Switch data-setting-id={providersSettings.sharing.id}
           checked={enabled}
-          disabled={busy || !remoteControlEnabled}
+          disabled={busy || !remoteControlEnabled || poolName !== undefined}
           aria-label={t('settings.providers.detail.remoteAccess.ariaLabel')}
           onCheckedChange={(next) => {
             const previous = enabled;
@@ -3708,6 +3713,7 @@ export function ProvidersSection() {
                         remoteControlEnabled={remoteControlEnabled}
                         pendingShareRequests={pendingShareCounts.get(effectiveSelected.id) ?? 0}
                         onManageShare={() => { setShareManageRemote(null); setShareManageProviderId(effectiveSelected.id); }}
+                        {...(effectiveSelected.subscriptionPoolAlias ? { poolName: providers.find(p => p.id === (effectiveSelected.subscriptionPoolTarget ?? 'openai'))?.name ?? 'OpenAI' } : {})}
                       />
                     )}
                   {!effectiveSelected.suspended && selectedBorrowedModels && (

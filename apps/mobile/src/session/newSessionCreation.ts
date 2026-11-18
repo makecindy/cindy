@@ -308,6 +308,7 @@ function synthesizeSession(params: NewSessionCreationParams, draftOverride?: New
       ...draft,
       attachments: params.attachments,
     }),
+    ...(params.precreatedWorktree ? { projectDir: params.precreatedWorktree.originalWorkingDir } : {}),
     pendingLocalCreation: true,
   };
 }
@@ -996,7 +997,7 @@ async function createSessionIdempotent(
   // 状态(UI 快照保持提交时语义)。precreated 分支在 persist started 后重验并
   // 重建(见下),其余路径直接使用本初值。
   let createOpts = {
-    ...buildRemoteCreateSessionOptions(effectiveDraft),
+    ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
     id: task.sessionId,
   };
 
@@ -1073,7 +1074,7 @@ async function createSessionIdempotent(
         if (patch) {
           effectiveDraft = { ...effectiveDraft, ...patch };
           createOpts = {
-            ...buildRemoteCreateSessionOptions(effectiveDraft),
+            ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
             id: task.sessionId,
           };
         }

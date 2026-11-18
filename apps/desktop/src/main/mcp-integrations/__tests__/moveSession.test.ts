@@ -17,7 +17,7 @@ const h = vi.hoisted(() => ({
   enterLock: vi.fn(),
   beforeCommit: vi.fn(),
 }));
-vi.mock('../../localDb/dialogueWorkspace.js', () => ({
+vi.mock('../../dialogue-workspace-settings.js', () => ({
   dialogueWorkspaceRootDir: () => h.dialogueRoot,
   dialogueWorkspaceRoots: () => [h.dialogueRoot],
 }));
@@ -315,3 +315,13 @@ describe('moveSession host', () => {
     expect(await run(null)).toMatchObject({ ok: true, workingDir: '/old' });
   });
 });
+
+// Project creation is not exercised by alias CRUD/task moves; avoid its platform adapters.
+vi.mock('../../projectCreation.js', () => ({ projectCreationRoot: async () => '/Projects', prepareNewProject: vi.fn() }));
+
+vi.mock('../../projectDirectoryStore.js', () => ({ readProjectDirectories: () => ({}) }));
+vi.mock('../../projectInfoCore.js', () => ({ readProjectIconImage: vi.fn(), updateProjectInfo: vi.fn() }));
+
+vi.mock('../../projectAutomaticIcon.desktop.js', () => ({ resolveAutomaticProjectIcon: vi.fn() }));
+
+vi.mock('../../projectIconStore.js', () => ({ readProjectIcons: () => ({}) }));
