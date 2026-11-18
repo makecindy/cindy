@@ -97,7 +97,7 @@ describe('Chat Server membership notices', () => {
     });
     const before = await service.getGroup(roomId);
     expect(before.ok && before.group.serverUnread).toEqual({ count: 1, mentioned: false });
-    expect(before.ok && before.group.lastMessage?.preview).toBe('Hello team');
+    expect(before.ok && before.group.lastMessage).toMatchObject({ messageId: messages[0]!.id, threadRootId: null, preview: 'Hello team' });
     expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'read', messageId: messages[0]!.id } })).toEqual({ ok: true });
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', { operationId: `read-main:${roomId}:${seq}`, readSeq: seq });
     const after = await service.getGroup(roomId);
@@ -154,7 +154,7 @@ describe('Chat Server membership notices', () => {
       content: [{ type: 'text', text: 'Latest topic reply' }] } as unknown as ReturnType<typeof joined>;
     messages = [joined(), { ...joined(), seq: '9007199254740994', deleted: true }, topic];
     const result = await service.getGroup(roomId);
-    expect(result.ok && result.group.lastMessage).toMatchObject({ preview: 'Latest topic reply', createdAt: Date.parse(topic.createdAt) });
+    expect(result.ok && result.group.lastMessage).toMatchObject({ messageId: topic.id, threadRootId: topic.threadRootId, preview: 'Latest topic reply', createdAt: Date.parse(topic.createdAt) });
   });
 
   it('keeps separate admissions for the same member after leaving and rejoining', async () => {

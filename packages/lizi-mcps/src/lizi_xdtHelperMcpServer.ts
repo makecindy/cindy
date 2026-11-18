@@ -1,5 +1,6 @@
 import { registerListAvailableModelsTool, type ListAvailableModelsDeps } from './xdt-helper/list_available_models.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
+import { registerSessionToolCatalogTools, type SessionToolCatalogCallbacks } from './xdt-helper/session_tool_catalog.js';
 import { registerTerminalTools, type TerminalToolCallbacks } from './xdt-helper/terminal.js';
 import { registerFileTools, type FileToolCallbacks } from './xdt-helper/files.js';
 import { registerStorageTools, type StorageToolCallbacks } from './xdt-helper/storage.js';
@@ -522,6 +523,7 @@ export interface XdtHelperMcpDeps {
   sessionQueue?: SessionQueueDeps;
   /** 本机 session 的统一控制面；host 注入后注册队列编辑/撤回、插话、停止与运行探针。 */
   sessionControl?: Omit<SessionControlDeps, 'getSessionContext'>;
+  sessionToolCatalog?: SessionToolCatalogCallbacks;
   /**
    * Session handoff 回调。host 注入后, send_to_session 工具注册到 handoff 类目(走
    * call_tool);不注入则工具不出现。此工具是 skill(如 maker-github-issue)做跨会话
@@ -853,6 +855,7 @@ export function createXdtHelperMcpServer(
   if (deps.providerReads) registerProviderReadTools(registry, deps.providerReads, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.providerSharing) registerProviderSharingTools(registry, deps.providerSharing, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.sessionToolCatalog) registerSessionToolCatalogTools(registry, deps.sessionToolCatalog, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.themePackages) registerThemePackageTool(registry, deps.themePackages, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appModels && !sessionCtx.remoteHostId) registerAppDefaultModelTools(registry, {

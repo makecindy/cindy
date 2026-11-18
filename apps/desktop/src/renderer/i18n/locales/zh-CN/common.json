@@ -6756,6 +6756,7 @@
           "latency": "延迟",
           "lastSeen": "最后在线",
           "controlling": "正在控制这台电脑",
+          "protocol": "连接方式",
           "rttNote": "最近测得",
           "manage": "管理设备…",
           "linkStatus": "与「{{name}}」",
@@ -6923,7 +6924,8 @@
         "replaced": "连接已被本设备上的另一个实例取代",
         "too-many-connections": "同账号连接数已达上限",
         "version-mismatch": "协议版本不一致，请升级应用",
-        "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy"
+        "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy",
+        "agent-net-relay-down": "连不上 Agent-Net 中转，正在重连；已直连的电脑照常可用，其他设备暂时连不上"
       },
       "refresh": "刷新",
       "empty": "暂无其它设备。在另一台电脑上用同一账号登录 {{appName}} 后，这里会显示该设备。",
@@ -11199,6 +11201,7 @@
       "unavailableTitle": "这个群聊已不可用",
       "unavailableDescription": "它可能已被删除。返回伙伴页可以打开其他群聊和伙伴。",
       "sidebar": {
+        "threadReply": "话题回复",
         "title": "群聊",
         "empty": "还没有消息",
         "preview": "{{name}}：{{text}}",
@@ -11531,6 +11534,7 @@
           "sharedReplyFrom": "贴回了 {{name}} 的话题回复",
           "sharedReply": "贴回了一条话题回复",
           "edited": "已编辑",
+          "replyNotFound": "未找到这条回复。",
           "sourceUnavailable": "原回复已删除，或你无权查看。",
           "viewThread": "查看话题",
           "viewInMain": "在群聊中查看",
@@ -16001,7 +16005,8 @@
         "replaced": "本机连接被另一处相同设备顶替，正在重新连接…",
         "too-many-connections": "同账号在线设备过多，连接被服务端拒绝",
         "version-mismatch": "与服务端协议版本不一致，请升级应用后重试",
-        "unstable": "本机连接反复断开又重连，远程操作可能一直超时；请检查网络，或重启 Cindy 后重试"
+        "unstable": "本机连接反复断开又重连，远程操作可能一直超时；请检查网络，或重启 Cindy 后重试",
+        "agent-net-relay-down": "本机连不上 Agent-Net 中转，正在重连；对方电脑不是直连时，远程操作会失败"
       }
     },
     "common": {
@@ -21584,6 +21589,7 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
+    "unreachable": "暂时连不上账号服务，无法确认登录状态。请检查网络后重试。",
     "openDirectory": "打开账号目录",
     "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",

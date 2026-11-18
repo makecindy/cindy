@@ -6799,6 +6799,7 @@
           "latency": "Latency",
           "lastSeen": "Last seen",
           "controlling": "Controlling this computer",
+          "protocol": "Connection",
           "rttNote": "last measured",
           "manage": "Manage device…",
           "linkStatus": "To {{name}}",
@@ -6966,7 +6967,8 @@
         "replaced": "Connection replaced by another instance of this device",
         "too-many-connections": "Connection limit reached for this account",
         "version-mismatch": "Protocol version mismatch — update the app",
-        "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists"
+        "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists",
+        "agent-net-relay-down": "Can't reach the Agent-Net relay, reconnecting. Computers connected directly still work; other devices can't connect for now"
       },
       "refresh": "Refresh",
       "empty": "No other devices yet. Sign in to {{appName}} with the same account on another computer and it will show up here.",
@@ -11244,6 +11246,7 @@
       "unavailableTitle": "This Group Chat Is No Longer Available",
       "unavailableDescription": "It may have been deleted. Go back to Buddies to open another group chat or buddy.",
       "sidebar": {
+        "threadReply": "Thread reply",
         "title": "Group Chats",
         "empty": "No messages yet",
         "preview": "{{name}}: {{text}}",
@@ -11576,6 +11579,7 @@
           "sharedReplyFrom": "Shared a thread reply from {{name}}",
           "sharedReply": "Shared a thread reply",
           "edited": "Edited",
+          "replyNotFound": "This reply could not be found.",
           "sourceUnavailable": "The original reply was deleted or isn’t available to you.",
           "viewThread": "View thread",
           "viewInMain": "View in main chat",
@@ -16075,7 +16079,8 @@
         "replaced": "This connection was replaced by another instance of the same device — reconnecting…",
         "too-many-connections": "Too many devices online for this account — the server refused the connection",
         "version-mismatch": "Protocol version doesn't match the server — update the app and retry",
-        "unstable": "This computer keeps losing and re-establishing its connection, so remote actions may keep timing out — check the network, or restart Cindy and retry"
+        "unstable": "This computer keeps losing and re-establishing its connection, so remote actions may keep timing out — check the network, or restart Cindy and retry",
+        "agent-net-relay-down": "This computer can't reach the Agent-Net relay and is reconnecting. Remote actions fail unless the other computer is connected directly"
       }
     },
     "common": {
@@ -21666,6 +21671,7 @@
     "removeTitle": "Remove {{name}}?",
     "removeDescription": "Cindy will stop assigning tasks to this account. Its CLI login and conversation history remain on this computer.",
     "failed": "Could not read or update this account. Check the CLI login and connection, then try again.",
+    "unreachable": "Couldn't reach the account service, so the sign-in status can't be confirmed. Check your network and try again.",
     "openDirectory": "Open account folder",
     "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",

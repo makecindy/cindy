@@ -708,6 +708,7 @@ import { registerProviderShareIpc } from './device-link/providerShareRuntime.js'
 import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
+import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
 import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
@@ -10794,6 +10795,9 @@ app.on('ready', async () => {
   setAgentNetSwitchRemoteHandler(agentNetSwitchRemoteHandler());
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerSubscriptionAccountsIpc();
+  // 0.1.137–0.1.139 拆坏的内置订阅供应商自动并回(subscription-account-pools.md「升级拆坏的自动并回」)。
+  // 这是写操作，归窗口进程；Host 客户端模式不补做(docs/host/personal-migration-release-table.md)。
+  if (!hostClientMode) startUpgradeSplitRepair();
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();

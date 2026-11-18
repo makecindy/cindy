@@ -15827,6 +15827,8 @@ function maybeAutoNameUnnamedSession(
  * 不能丢)。
  */
 type SendMessageOpts = {
+  /** Reuse the bubble already displayed during remote creation. */
+  firstMessageIdentity?: { clientId: string; createdAt: string };
   vendorOptions?: Record<string, unknown>;
   /** 本条消息正文前缀含「选中引用」编码块,渲染侧据此启用胶囊化解析。 */
   quotesEncoded?: boolean;
@@ -15986,10 +15988,12 @@ function sendMessage(
           opts,
           clearGenerationAtStart,
           remoteScopeAtStart,
+          undefined,
+          opts?.firstMessageIdentity,
         );
       }
       if (remoteScopeAtStart) {
-        const identity = {
+        const identity = opts?.firstMessageIdentity ?? {
           clientId: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
         };

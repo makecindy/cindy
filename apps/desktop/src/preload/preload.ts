@@ -54,7 +54,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { SELF_HOSTED_RELAY_IPC, type SelfHostedRelayApi } from '../shared/selfHostedRelay';
-import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
+import { DEVICE_LINK_PUSH, type DeviceLinkPeerLinksSnapshot } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
 import { PROVIDER_GROUP_IPC, type ProviderGroupCommand } from '../shared/providerGroup';
 import {
@@ -5239,7 +5239,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       linkStatus: 'stopped' | 'connecting' | 'online';
       directDataDeviceIds?: string[];
       connectionIssue: {
-        kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
+        kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable' | 'agent-net-relay-down';
         closeCode?: number;
         detail?: string;
         at: number;
@@ -5260,10 +5260,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }> =>
       ipcRenderer.invoke('device-link:set-device-control-enabled', { deviceId, enabled }),
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照(轮询 + onPeerLinksChanged) */
-    getPeerLinks: (): Promise<{
-      links: Array<{ deviceId: string; path: 'direct' | 'relay'; rttMs: number | null; open: boolean }>;
-      relayRttMs: number | null;
-    }> => ipcRenderer.invoke('device-link:get-peer-links'),
+    getPeerLinks: (): Promise<DeviceLinkPeerLinksSnapshot> => ipcRenderer.invoke('device-link:get-peer-links'),
     /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload 为全量快照 */
     onPeerLinksChanged: fanOutDeviceLinkPeerLinksChanged,
     listDevices: (): Promise<{

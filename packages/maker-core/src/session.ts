@@ -1948,6 +1948,12 @@ export class Session {
     return await this.handle.readMcpServerTools?.(serverName) ?? null;
   }
 
+  async callNativeToolCatalog(method: string, args: unknown[]): Promise<unknown> {
+    this.ensureActive();
+    if (!this.handle.callNativeToolCatalog) throw new Error('UNSUPPORTED_CAPABILITY');
+    return this.handle.callNativeToolCatalog(method, args);
+  }
+
   /**
    * 当前 session 生命周期状态 ('active' / 'aborting' / 'closed' / 'error')。
    * 这是内存里的 SDK 子进程视角, 不持久化。区分:

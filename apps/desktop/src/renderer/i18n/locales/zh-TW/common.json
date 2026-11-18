@@ -6756,6 +6756,7 @@
           "latency": "延遲",
           "lastSeen": "最後線上",
           "controlling": "正在控制這台電腦",
+          "protocol": "連線方式",
           "rttNote": "最近測得",
           "manage": "管理裝置…",
           "linkStatus": "與「{{name}}」",
@@ -6923,7 +6924,8 @@
         "replaced": "連線被另一處相同裝置頂替",
         "too-many-connections": "同帳號連線數已達上限",
         "version-mismatch": "通訊協定版本不一致，請更新應用程式",
-        "unstable": "連線反覆斷開又重連，請檢查網路；若持續如此，重啟 Cindy"
+        "unstable": "連線反覆斷開又重連，請檢查網路；若持續如此，重啟 Cindy",
+        "agent-net-relay-down": "連不上 Agent-Net 中轉，正在重新連線；已直連的電腦照常可用，其他裝置暫時連不上"
       },
       "refresh": "重新整理",
       "empty": "暫無其它裝置。在另一臺電腦上用同一帳號登入 {{appName}} 後，這裡會顯示該裝置。",
@@ -11199,6 +11201,7 @@
       "unavailableTitle": "這個群聊已無法使用",
       "unavailableDescription": "它可能已被刪除。返回夥伴頁可以開啟其他群聊和夥伴。",
       "sidebar": {
+        "threadReply": "話題回覆",
         "title": "群聊",
         "empty": "還沒有訊息",
         "preview": "{{name}}：{{text}}",
@@ -11531,6 +11534,7 @@
           "sharedReplyFrom": "貼回了 {{name}} 的話題回覆",
           "sharedReply": "貼回了一則話題回覆",
           "edited": "已編輯",
+          "replyNotFound": "找不到這則回覆。",
           "sourceUnavailable": "原回覆已刪除，或你無權查看。",
           "viewThread": "查看話題",
           "viewInMain": "在群聊中查看",
@@ -16001,7 +16005,8 @@
         "replaced": "本機連線被另一處相同裝置頂替，正在重新連線…",
         "too-many-connections": "同帳號線上裝置過多，連線被伺服器拒絕",
         "version-mismatch": "與伺服器協定版本不一致，請更新應用程式後重試",
-        "unstable": "本機連線反覆斷開又重連，遠端操作可能一直逾時；請檢查網路，或重新啟動 Cindy 後重試"
+        "unstable": "本機連線反覆斷開又重連，遠端操作可能一直逾時；請檢查網路，或重新啟動 Cindy 後重試",
+        "agent-net-relay-down": "本機連不上 Agent-Net 中轉，正在重新連線；對方電腦不是直連時，遠端操作會失敗"
       }
     },
     "common": {
@@ -21584,6 +21589,7 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
     "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
+    "unreachable": "暫時連不上帳號服務，無法確認登入狀態。請檢查網路後重試。",
     "openDirectory": "開啟帳號目錄",
     "openDirectoryFailed": "無法開啟帳號目錄，它可能已被移動或刪除。",
     "loginAgain": "重新登入",
