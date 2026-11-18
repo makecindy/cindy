@@ -86,7 +86,6 @@ const MOTION_LITERAL_DEBT: Record<string, number> = {
   'features/bots/BotGlancePopover.tsx': 1,
   'features/bots/TeammatesSection.tsx': 1,
   'features/cc-agent/CCAgentSidebarUpper.tsx': 2,
-  'features/cc-agent/sidebar/DeviceSectionHeader.tsx': 1,
   'features/cc-agent/sidebar/MainListScopeHeader.tsx': 1,
   'features/cc-agent/sidebar/RailNav.tsx': 2,
   'features/cc-agent/sidebar/SectionCollapse.tsx': 4,

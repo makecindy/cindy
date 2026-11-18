@@ -19,6 +19,7 @@ vi.mock('../botPronounContext', () => ({
   BotPronounProvider: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({ useDeviceLinkDeviceList: () => null }));
 vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: () => null }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => ({ demotedBotIds: [] as string[] }) }));
 vi.mock('../BotsHomeView', () => ({

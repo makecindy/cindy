@@ -108,6 +108,13 @@ Host 启动时没有主题包投影；renderer 按当前选择先同步应用配
 
 ### 辅助模型的直接调用
 
+辅助选择复用统一模型面板，但不显示 Agent 配置；仅列出已有直接调用支持的来源。
+本机 OpenAI 订阅与聊天使用同一账号池模型目录；每次轻量请求按所选供应商分配账号，
+复用现有 OAuth 读取及发送前校验，结束后释放占用，不启动 Agent、不绑定聊天上下文。
+Claude 订阅仍只供内置 Claude Code CLI 使用，不进入直接辅助调用。
+开发阶段曾保存的 `remote-cat:` 记录保留为不可用项，供用户移除或替换；文本、审核、
+语音及插件跟随辅助链时跳过该来源，绝不降级为同名本机来源。原生辅助执行及进程复用不在本次范围。
+
 辅助模型的自定义 HTTP 连接按实际文本调用能力准入，不继承聊天引擎因兼容模式产生的
 默认关闭状态。候选默认可见；连接模型配置中显式保存的 `defaultEnabled` 和用户显示
 override 仍然优先。供应商／模型停用、退役、付费准入和凭证检查继续生效。
@@ -137,6 +144,21 @@ override 仍然优先。供应商／模型停用、退役、付费准入和凭�
 回归：`compaction-settings-store.test.ts`、Codex `index.test.ts` 的 native compaction
 identity / canonical account history 场景，以及
 `provider-compatibility.integration.test.ts` 的原生开关往返与历史保留验证。
+
+### Codex 原生 TOML 的 UTF-8 BOM
+
+本机 Codex 配置读取（自定义上下文目录、插件桥接、上下文窗口、Browser companion 与
+历史归档定位）只容忍文件开头的**一个** UTF-8 BOM；profile TOML 使用同一解析规则。
+不 trim、不移除字符串中的 BOM，不把双 BOM 或其余损坏 TOML 当作空配置。
+各入口原有的抛错、告警或不可用语义不变。
+
+兼容只发生在解析内存副本，不为恢复启动而重写配置；插件追加仍保留原始文本（包括
+BOM、注释和用户值），并用原始快照参与现有原子写入的并发比对。
+随包原生 Codex `0.166.0` 已用隔离 home 实测接受单前导 BOM，因此启动仍读取原文件，
+不需要另存无 BOM 配置或迁移凭证。
+实现见 `maker-host/codex-config-toml.ts`；回归见 `codexCustomContextCatalog.test.ts`、
+`codexGlobalPlugins.test.ts` 与隔离 home／回环供应商的
+`codexContextSwitch.native.test.ts`（真实 `CodexAgent` 建会话、发送及冷恢复）。
 
 ## 3. 默认值演进与迁移
 

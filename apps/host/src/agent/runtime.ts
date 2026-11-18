@@ -1,3 +1,4 @@
+import { applyProjectDirectoriesForTurn } from '../../../desktop/src/main/projectDirectoryRuntime.js';
 import { createPiVisionUsageRecorder } from '../../../desktop/src/main/vision-bridge/piVisionUsage.js';
 import { createOneShotUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
@@ -843,6 +844,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     agents,
     storage: options.storage,
     lifecycleHooks: {
+      beforeTurn: applyProjectDirectoriesForTurn,
       prepareStartOptions: startOptions.prepareStartOptions,
       onBeforeStart: startOptions.onBeforeStart,
       onStartFailed: startOptions.onStartFailed,

@@ -1469,7 +1469,7 @@ describe('Shared create project picker', () => {
     // The single add entry grants write access only through the local Main picker;
     // legacy read-only directories retain their independent removal callback.
     expect(chatInputSource).toMatch(
-      /if \(onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null\)/,
+      /onWritableDirsChange\s*&&\s*writableGrantScope\s*&&\s*!remoteHostId\s*&&\s*deviceLinkDeviceId === null/,
     );
     const directoryAction = chatInputSource.slice(
       chatInputSource.indexOf("id: 'add-extra-dir'"),

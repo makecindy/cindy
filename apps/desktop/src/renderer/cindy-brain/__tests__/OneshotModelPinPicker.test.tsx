@@ -124,7 +124,7 @@ describe('OneshotModelPinPicker shared A adapter', () => {
     expect(picker['data-setting-id']).toBe('settings.auxiliaryModels.preferred.label');
     expect(screen.getByTestId('shared-picker')).toBeTruthy();
     expect(picker.unifiedPanel).toBeUndefined(); // shared default, no opt-in needed
-    expect(picker.configurationEnabled).toBe(true);
+    expect(picker.configurationEnabled).toBe(false);
     expect(picker.providersOverride?.every(p => Object.values(p.models).every(models => models?.every(m => m.efforts.length === 0 && !m.supportsFastMode)))).toBe(true);
     expect(picker.providersOverride?.map(p => p.id)).toEqual(['openrouter', 'anthropic']);
   });

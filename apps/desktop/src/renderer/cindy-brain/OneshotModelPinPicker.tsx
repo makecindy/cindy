@@ -154,8 +154,9 @@ export function OneshotModelPinPicker({
       if (option.id !== value) return (await onChange(option.id)) !== false;
       return true;
     }}
-    // Exact pins include a Harness. Keep its chooser; the projected catalog has no effort/Fast controls.
-    configurationEnabled
+    // This is a one-shot API route, not an Agent configuration.
+    configurationEnabled={false}
+    fastModeConfigurable={false}
     triggerVariant="field"
     popoverSide="bottom"
     dense={dense}
