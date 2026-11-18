@@ -7,7 +7,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TFunction } from 'i18next';
-import type { ProviderView } from '@cindy/model-providers';
+import { actualSourceIdForModel, isCodexGatewayWireModel, type ProviderView } from '@cindy/model-providers';
 import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 
 import {
@@ -118,11 +118,23 @@ export function sessionSubscriptionPoolProvider(
   remoteHostId?: string | null,
   provider?: ProviderView,
   probeImplicitCodex = false,
+  implicitRoute?: { modelId?: string | null; providers: ProviderView[]; catalogReady: boolean },
 ): SubscriptionProvider | null {
   if (remoteHostId) return null;
   // Old Codex tasks may retain a null display route after the executor bound an account.
   // This only enables a task-scoped query, not an OpenAI/default-account classification.
-  if (probeImplicitCodex && agent === 'codex' && providerId == null) return 'openai';
+  if (probeImplicitCodex && agent === 'codex' && providerId == null) {
+    // Match historicalCodexAccount: a recorded binding cannot override a model's
+    // gateway/bridge credentials or a connected non-OpenAI default source.
+    if (!implicitRoute?.catalogReady) return null;
+    const model = implicitRoute.modelId?.trim() ?? '';
+    if (isCodexGatewayWireModel(model) || model.startsWith('xai/') || model.startsWith('chatgpt/'))
+      return null;
+    const source = model
+      ? actualSourceIdForModel(implicitRoute.providers, null, model.replace(/\[1m\]$/, ''), 'codex')
+      : null;
+    return source && source !== 'openai' ? null : 'openai';
+  }
   const kind = provider && provider.id === providerId
     ? provider.subscriptionAccountPool ?? provider.subscriptionPool ?? providerId : providerId;
   if (kind === 'anthropic') return agent === 'cc' ? kind : null;

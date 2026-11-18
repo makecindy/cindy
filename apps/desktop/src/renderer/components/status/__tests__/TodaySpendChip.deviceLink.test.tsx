@@ -24,6 +24,7 @@ import type { ProviderView } from '@cindy/model-providers';
 
 type TestProvider = Pick<ProviderView, 'id' | 'openAiAccount' | 'subscriptionAccount'> & {
   name?: string;
+} & Partial<Pick<ProviderView, 'agents' | 'models' | 'routing' | 'connected' | 'suspended' | 'source'>> & {
   auth?: { native: string };
 };
 
@@ -31,6 +32,9 @@ const mocks = vi.hoisted(() => ({
   codexAuthInjection: null as string | null,
   localProviders: [] as TestProvider[],
   deviceProviders: [] as TestProvider[],
+  localProvidersLoading: false,
+  deviceProvidersLoading: false,
+  deviceProvidersError: null as string | null,
   remoteProviderIds: [] as Array<string | undefined>,
   localClaudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   localClaudeReadEnabled: [] as boolean[],
@@ -92,8 +96,14 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({ providers: mocks.localProviders }) }));
-vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: mocks.deviceProviders }) }));
+vi.mock('@/hooks/useProviders', () => ({ useProviders: () => ({
+  providers: mocks.localProviders.map(provider => ({ agents: [], routing: {}, models: {}, connected: false, ...provider })),
+  loading: mocks.localProvidersLoading, error: null,
+}) }));
+vi.mock('@/hooks/useDeviceProviders', () => ({ useDeviceProviders: () => ({
+  providers: mocks.deviceProviders.map(provider => ({ agents: [], routing: {}, models: {}, connected: false, ...provider })),
+  loading: mocks.deviceProvidersLoading, error: mocks.deviceProvidersError,
+}) }));
 
 vi.mock('@/hooks/useApiKey', () => ({
   useApiKey: () => ({ hasSavedKey: false, isReconciling: false }),
@@ -216,6 +226,9 @@ beforeEach(() => {
   mocks.codexAuthInjection = null;
   mocks.localProviders = [];
   mocks.deviceProviders = [];
+  mocks.localProvidersLoading = false;
+  mocks.deviceProvidersLoading = false;
+  mocks.deviceProvidersError = null;
   mocks.remoteProviderIds = [];
   mocks.localClaudeSnapshot = null;
   mocks.localClaudeReadEnabled = [];
@@ -725,7 +738,7 @@ describe('TodaySpendChip on a subscription account pool', () => {
     } });
     const { container } = render(
       <SessionSubscriptionAccountProvider
-        providerId={sessionSubscriptionPoolProvider('codex', null, null, undefined, true)}
+        providerId={sessionSubscriptionPoolProvider('codex', null, null, undefined, true, { modelId: 'gpt-6.1-sol', providers: [], catalogReady: true })}
         routeProviderId={null} deviceId={null} sessionId="legacy-null-10111" nativeSessionId="native-10111">
         <TodaySpendChip vendorKey="codex" providerId={null} modelId="gpt-6.1-sol" sessionId="legacy-null-10111" />
       </SessionSubscriptionAccountProvider>,
@@ -784,6 +797,53 @@ describe('TodaySpendChip on a subscription account pool', () => {
       expect(container.textContent).not.toContain('5h');
       expect(mocks.localCodexReadKinds.some(kind => kind === 'codex')).toBe(false);
     });
+
+  // #11192 review (unit): a stale OpenAI binding cannot override the same
+  // connected effective-source choice used by the executor. The controller's
+  // catalog must not decide a task running on another computer.
+  it.each([
+    { name: 'local custom', source: 'custom', deviceId: null, loading: false, error: null, shows: false },
+    { name: 'local gateway', source: 'xd', deviceId: null, loading: false, error: null, shows: false },
+    { name: 'remote custom', source: 'custom', deviceId: 'peer', loading: false, error: null, shows: false },
+    { name: 'remote OpenAI', source: 'openai', deviceId: 'peer', loading: false, error: null, shows: true },
+    { name: 'loading local catalog', source: 'openai', deviceId: null, loading: true, error: null, shows: false },
+    { name: 'loading remote catalog', source: 'openai', deviceId: 'peer', loading: true, error: null, shows: false },
+    { name: 'failed remote catalog', source: 'openai', deviceId: 'peer', loading: false, error: 'offline', shows: false },
+  ])('review10111: preserves the effective source for $name', async ({ source, deviceId, loading, error, shows }) => {
+    const provider = (id: string): TestProvider => ({ id, source: id === 'openai' || id === 'xd' ? 'builtin' : 'user',
+      connected: true, agents: ['codex'], routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } },
+      models: { codex: [{ id: 'custom-model', name: 'model', contextWindow: 200000, efforts: [], defaultEffort: null }] },
+    });
+    mocks.localProviders = [provider(deviceId ? (source === 'openai' ? 'custom' : 'openai') : source)];
+    mocks.deviceProviders = [provider(source)];
+    mocks.localProvidersLoading = !deviceId && loading;
+    mocks.deviceProvidersLoading = !!deviceId && loading;
+    mocks.deviceProvidersError = error;
+    const reply = { providerId: 'openai', state: 'bound', account: {
+      isDefault: false, number: 2, identity: 'bound@example.test', paused: false, status: 'ready',
+      usage: { codex: { credits: null, buckets: { codex: {
+        primary: { usedPercent: 30, windowMinutes: 300, resetsAt: null }, secondary: null,
+      } } } },
+    } };
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      openExternal: mocks.openExternal, deviceLink: { invoke: async () => reply, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+      subscriptionAccounts: { sessionAccount: async () => reply, onChanged: () => () => {} },
+    } });
+    const { container } = render(<SessionSubscriptionAccountProvider providerId="openai" routeProviderId={null}
+      deviceId={deviceId} sessionId={'source-' + source + deviceId + loading + error} nativeSessionId="source-native">
+      <TodaySpendChip vendorKey="codex" providerId={null} modelId="custom-model[1m]"
+        usageAccount={deviceId ? { kind: 'device', deviceId } : { kind: 'task' }} />
+    </SessionSubscriptionAccountProvider>);
+    await act(async () => {});
+    expect(container.textContent?.includes('5h 剩余 70%')).toBe(shows);
+    if (shows) {
+      fireEvent.mouseEnter(screen.getAllByRole('button')[0]);
+      act(() => vi.advanceTimersByTime(300));
+      expect(screen.getByTestId('quota-hover-card').textContent).toContain('bound@example.test');
+    } else {
+      expect(container.textContent).not.toContain('bound@example.test');
+    }
+  });
 
   // PR #9918 review (unit): a ChatGPT bridge consumes the pinned account's
   // model bucket. A depleted generic bucket must not replace that model's 70%.

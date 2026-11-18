@@ -43,11 +43,11 @@ it('uses pool metadata for independent sources, never another catalog entry or S
 // other engines, SSH, explicit custom routes and named-source consumers keep their boundaries.
 it('only probes old implicit Codex tasks when the task view explicitly opts in', () => {
   expect(sessionSubscriptionPoolProvider('codex', null)).toBeNull();
-  expect(sessionSubscriptionPoolProvider('codex', null, null, undefined, true)).toBe('openai');
-  expect(sessionSubscriptionPoolProvider('codex', null, 'ssh', undefined, true)).toBeNull();
-  expect(sessionSubscriptionPoolProvider('cc', null, null, undefined, true)).toBeNull();
-  expect(sessionSubscriptionPoolProvider('pi', null, null, undefined, true)).toBeNull();
-  expect(sessionSubscriptionPoolProvider('codex', 'custom', null, undefined, true)).toBeNull();
+  expect(sessionSubscriptionPoolProvider('codex', null, null, undefined, true, { providers: [], catalogReady: true })).toBe('openai');
+  expect(sessionSubscriptionPoolProvider('codex', null, 'ssh', undefined, true, { providers: [], catalogReady: true })).toBeNull();
+  expect(sessionSubscriptionPoolProvider('cc', null, null, undefined, true, { providers: [], catalogReady: true })).toBeNull();
+  expect(sessionSubscriptionPoolProvider('pi', null, null, undefined, true, { providers: [], catalogReady: true })).toBeNull();
+  expect(sessionSubscriptionPoolProvider('codex', 'custom', null, undefined, true, { providers: [], catalogReady: true })).toBeNull();
 });
 function ImplicitProbe({ deviceId = 'peer' }: { deviceId?: string }) {
   const implicit = useSessionSubscriptionAccount(null, deviceId, true);
@@ -128,4 +128,32 @@ it('updates the local implicit account after a pool change and unsubscribes on u
   expect(sessionAccount).toHaveBeenCalledTimes(2);
   unmount();
   expect(off).toHaveBeenCalledOnce();
+});
+
+// #11192 review (unit): do not spend a task-account query on a route whose
+// executor cannot consume the historical OAuth binding, including remote peers.
+it.each([
+  { modelId: 'codex/gpt-5.5', source: null, catalogReady: true },
+  { modelId: 'openai-codex/gpt-5.5', source: null, catalogReady: true },
+  { modelId: 'xai/grok-4.6', source: null, catalogReady: true },
+  { modelId: 'chatgpt/gpt-6', source: null, catalogReady: true },
+  { modelId: 'custom-model', source: 'custom', catalogReady: true },
+  { modelId: 'custom-model[1m]', source: 'custom', catalogReady: true },
+  { modelId: 'gpt-6', source: 'xd', catalogReady: true },
+  { modelId: 'gpt-6', source: null, catalogReady: false },
+])('review10111: skips implicit probes for $modelId/$source/ready=$catalogReady', async ({ modelId, source, catalogReady }) => {
+  const providers = source ? [{ id: source, source: 'user', connected: true, agents: ['codex'],
+    routing: { codex: { upstream: 'https://example.test', authStrategy: 'api-key-header' } },
+    models: { codex: [{ id: modelId.replace(/\[1m\]$/, ''), name: 'model', contextWindow: 200000,
+      efforts: [], defaultEffort: null }] } }] as unknown as ProviderView[] : [];
+  invoke.mockResolvedValue({ providerId: 'openai', state: 'bound', account: {
+    isDefault: false, number: 2, identity: 'wrong@example.test', paused: false, status: 'ready',
+  } });
+  const pool = sessionSubscriptionPoolProvider('codex', null, null, undefined, true,
+    { modelId, providers, catalogReady });
+  render(<SessionSubscriptionAccountProvider providerId={pool} routeProviderId={null}
+    deviceId="peer" sessionId={'excluded-' + modelId + catalogReady} nativeSessionId="excluded-native"><ImplicitProbe /></SessionSubscriptionAccountProvider>);
+  await act(async () => {});
+  expect(invoke).not.toHaveBeenCalled();
+  expect(screen.getByTestId('implicit-account').textContent).not.toContain('wrong@example.test');
 });

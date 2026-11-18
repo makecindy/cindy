@@ -156,6 +156,7 @@ import {
   sessionAccountCodexPayload,
   sessionAccountDisplay,
   useSessionSubscriptionAccount,
+  sessionSubscriptionPoolProvider,
 } from '../new-chat/SessionSubscriptionAccount';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
@@ -958,8 +959,8 @@ export function TodaySpendChip({
     isDefaultRouteClaudeSession &&
     observedClaudeRoute == null &&
     (gatewayKeyReconciling || (!hasGatewayKey && claudeOAuthConnected == null));
-  const { providers: localQuotaProviders } = useProviders();
-  const { providers: deviceQuotaProviders } = useDeviceProviders(accountDeviceId ?? undefined);
+  const { providers: localQuotaProviders, loading: localQuotaLoading, error: localQuotaError } = useProviders();
+  const { providers: deviceQuotaProviders, loading: deviceQuotaLoading, error: deviceQuotaError } = useDeviceProviders(accountDeviceId ?? undefined);
   const quotaProviders = isDeviceLinkRemote ? deviceQuotaProviders : localQuotaProviders;
   const selectedQuotaProvider = quotaProviders.find((provider) => provider.id === providerId);
   const isClaudeAccount =
@@ -1028,7 +1029,13 @@ export function TodaySpendChip({
   // Only an actual task binding establishes this fact; unknown/default reads do not.
   const implicitCodexAccount = useSessionSubscriptionAccount(null, accountDeviceId,
     !accountUnreadable && vendorKey === 'codex' && providerId == null &&
-    !remoteHostId && !isCodexXaiProvider && !isCodexGatewayBudgetModel);
+    !remoteHostId && !isCodexXaiProvider && !isCodexGatewayBudgetModel &&
+    sessionSubscriptionPoolProvider('codex', providerId, remoteHostId, undefined, true, {
+      modelId, providers: quotaProviders,
+      catalogReady: isDeviceLinkRemote
+        ? !deviceQuotaLoading && !deviceQuotaError
+        : !localQuotaLoading && !localQuotaError,
+    }) === 'openai');
   const hasImplicitCodexBinding = implicitCodexAccount?.state === 'bound';
   // 显式 OpenAI 订阅连接在执行端固定走该账号的 OAuth（独立账号有自己的 host）。
   // 全局 authInjection 仅作为未确认任务绑定的旧来源回退，不能因本机 Codex 断开或其它
