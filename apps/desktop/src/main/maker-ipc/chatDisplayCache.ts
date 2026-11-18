@@ -60,10 +60,19 @@ export function accessChatDisplayCache(input: unknown): unknown {
       for (const id of stringIds(revivedBotIds)) if (active.has(id) && !newlyRetired.includes(id)) retired.delete(id);
     }
     retiredBotIds = [...retired];
-    // A stale historical snapshot may also have an empty/older actor roster.
-    // Keep the accepted roster while still applying genuinely new removals.
+    // A stale historical snapshot may have an empty/older roster, but it may
+    // also contain new actors accepted before the last write receipt arrived.
     const current = retirementRevision === cloudHomes.revision || cloudHomes.value === null;
-    value = { ...(current ? incoming : cloudHomes.value), retiredBotIds };
+    if (current) value = { ...incoming, retiredBotIds };
+    else {
+      const actors = new Map<string, unknown>();
+      for (const source of [incoming, cloudHomes.value!]) {
+        for (const actor of Array.isArray(source.actors) ? source.actors : []) {
+          if (actor && typeof actor.externalId === 'string' && !retired.has(actor.externalId)) actors.set(actor.externalId, actor);
+        }
+      }
+      value = { ...cloudHomes.value, actors: [...actors.values()], retiredBotIds };
+    }
   }
   const raw = JSON.stringify(value);
   if (!raw || Buffer.byteLength(raw) > MAX_BYTES) throw new Error('CACHE_TOO_LARGE');

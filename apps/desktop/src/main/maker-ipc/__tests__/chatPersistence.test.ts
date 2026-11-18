@@ -180,3 +180,16 @@ it('persists the latest ordinary roster after empty-cache hydration', () => {
   expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }))
     .toMatchObject({ actors: [{ externalId: 'mia', name: 'Mia updated' }], retiredBotIds: [] });
 });
+
+// Deletion and the next authoritative roster can be sent before Main's first
+// receipt arrives. A stale fence must retain new identities without reviving old ones.
+it('keeps a newly accepted actor while the preceding deletion receipt is pending', () => {
+  const owner = state.owner;
+  const hydrated = accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }) as { retirementRevision: number };
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { actors: [], newlyRetiredBotIds: ['mia', 'ada'], retirementRevision: hydrated.retirementRevision } });
+  accessChatDisplayCache({ action: 'write', key: 'cloud-homes', owner,
+    value: { actors: [{ externalId: 'bob' }, { externalId: 'ada' }], newlyRetiredBotIds: [], retirementRevision: hydrated.retirementRevision } });
+  expect(accessChatDisplayCache({ action: 'read', key: 'cloud-homes', owner }))
+    .toMatchObject({ actors: [{ externalId: 'bob' }], retiredBotIds: ['mia', 'ada'] });
+});
