@@ -19285,7 +19285,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 尽力而为：立即返回，启动在后台进行；不支持、已在运行或启动失败都只是下一次发送照常冷启动。
   ipcMain.handle(
     MAKER_INVOKE.SESSION_PREWARM,
-    async (event, sessionId: unknown, createOpts?: unknown): Promise<{ accepted: boolean }> => {
+    async (event, sessionId: unknown, createOpts?: unknown): Promise<{ accepted: boolean; piRuntimePrepared?: true }> => {
       const sid = requireSessionId(sessionId);
       if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       if (getDeviceLinkInvokeContext()?.sharedTask) return { accepted: false };
@@ -19310,7 +19310,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await preparePiSkillRuntime(sid, workingDir, preferences);
           assertSessionCreationCurrent();
         }));
-        return { accepted: true };
+        return { accepted: true, piRuntimePrepared: true };
       }
       void agentPrewarmer.request(sid, createOpts);
       return { accepted: true };

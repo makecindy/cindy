@@ -37,7 +37,7 @@ function harness(agentKind = 'pi', remoteDeviceId?: string, runtimeOnly = false)
   let ready = false;
   let release!: () => void;
   const preparation = new Promise<void>(resolve => { release = () => { ready = true; resolve(); }; });
-  const create = vi.fn((..._args: any[]) => preparation.then(() => ({ accepted: true })));
+  const create = vi.fn((..._args: any[]) => preparation.then((): { accepted: boolean; piRuntimePrepared?: true } => ({ accepted: true, piRuntimePrepared: true })));
   const send = vi.fn(async (..._args: any[]) => false);
   const session = { id: 'cold', agentKind, model: 'saved-model', effort: 'high', permissionMode: 'ask',
     workingDir: '/project', status: 'active', source: 'user', orcaRole: null,
@@ -104,6 +104,28 @@ it('prepares on the controlled device for callers without a custom preparation c
   expect(h.create.mock.calls[0]).toEqual(['controlled-device', 'maker:session:prewarm', ['cold', expect.objectContaining({
     purpose: 'pi-skill-dispatch', workingDir: '/selected-project', model: 'saved-model',
   })]]);
+});
+
+it('keeps the draft when a legacy controlled Desktop only schedules prewarming', async () => {
+  const h = harness('pi', 'controlled-device');
+  h.create.mockResolvedValueOnce({ accepted: true });
+  await expect(h.handleSend('/demo', 'chosen-model', 'medium', 'ask')).rejects.toThrow();
+  expect(h.send).not.toHaveBeenCalled();
+});
+
+it.each(['failed', 'unknown'])('reconciles a transient %s catalog until the alias loads', async status => {
+  const h = harness();
+  const load = h.environment.loadAllCommands;
+  h.environment.loadAllCommands = async (...args: any[]) => {
+    args.find(arg => arg?.onPiRuntimeStatus)?.onPiRuntimeStatus(status);
+    return load(...args);
+  };
+  const sent = h.handleSend('/demo', 'chosen-model', 'medium', 'ask');
+  // Keep the first reload unavailable even though preparation can now complete.
+  await vi.waitFor(() => expect(h.create).toHaveBeenCalledOnce());
+  h.release();
+  await sent;
+  expect(h.send.mock.calls[0][0]).toBe('/skill:demo');
 });
 
 it.each(['literal', 'codex', 'claude-code'])('leaves %s input unchanged without starting Pi', async kind => {

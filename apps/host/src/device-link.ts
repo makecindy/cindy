@@ -116,7 +116,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       throw new Error('[INVALID_PARAMS] Session and working directory required');
     await deps.preparePiSkillRuntime(id, request.workingDir);
     assertCurrent();
-    return { accepted: true };
+    return { accepted: true, piRuntimePrepared: true };
   });
   if (deps.mcpApps) registry.register(MCP_APPS_INVOKE, async ([sessionId, input]) => {
     const source = getDeviceLinkInvokeContext();

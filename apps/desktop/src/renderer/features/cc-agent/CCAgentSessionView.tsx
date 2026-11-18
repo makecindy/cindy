@@ -3711,7 +3711,7 @@ function CCAgentSessionContent({
       const result = remoteDeviceId
         ? await window.electronAPI.deviceLink.invoke(remoteDeviceId, 'maker:session:prewarm', [sessionId, request])
         : await window.electronAPI.maker.prewarmSession?.(sessionId, request);
-      if (!(result as { accepted?: boolean } | undefined)?.accepted) throw new Error(t('richAnswer.sendFailed'));
+      if ((result as { piRuntimePrepared?: boolean } | undefined)?.piRuntimePrepared !== true) throw new Error(t('richAnswer.sendFailed'));
     } catch (error) {
       const detail = extractIpcError(error)?.message ?? (error instanceof Error ? error.message : String(error));
       toast.error(detail || t('richAnswer.sendFailed'));
@@ -3785,7 +3785,7 @@ function CCAgentSessionContent({
               skipAgentSkills: isRemoteSession,
               sessionId: session?.id,
               forceReload: true,
-              onPiRuntimeStatus: status => { runtimeCatalogSettled = status !== 'pending'; },
+              onPiRuntimeStatus: status => { runtimeCatalogSettled = status === 'loaded'; },
             },
             remoteDeviceId,
           ),

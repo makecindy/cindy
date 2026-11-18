@@ -128,7 +128,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
   const prepared = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
     args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }] });
-  assert.deepEqual(prepared.result, { accepted: true }, JSON.stringify(prepared));
+  assert.deepEqual(prepared.result, { accepted: true, piRuntimePrepared: true }, JSON.stringify(prepared));
   const received = clients.map(() => []);
   clients.forEach((client, i) => client.onFrame(frame => { if (frame.kind === 'push') received[i].push(frame); }));
   duplicateNext = true;
