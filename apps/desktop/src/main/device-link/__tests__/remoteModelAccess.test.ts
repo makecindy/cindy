@@ -25,7 +25,8 @@ afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force
 describe('remote model permissions', () => {
   // PR #11312 review (Greptile P1): an old connection merged into an account pool is hidden with its own
   // remote model range. A remote task still on the old id must use the pool's range, including share
-  // members' limits, neither blocked nor widened by the hidden one. Minimal input: pool allows A, old allows B.
+  // members' limits, neither blocked nor widened by the hidden one; stopping the old connection still applies.
+  // Minimal input: pool allows A, old allows B.
   it('reads a merged connection through its pool, including member limits', async () => {
     const store = make();
     const ok = () => {};
@@ -38,6 +39,12 @@ describe('remote model permissions', () => {
       expect(store.allows('old-openai', 'model-b')).toBe(false);
       expect(store.allows('old-openai', 'model-a', 'guest')).toBe(true);
       expect(store.read('old-openai').models).toEqual(['model-a']);
+      // Codex review: only the range follows the pool; stopping the old connection itself still blocks it.
+      setProviderDisabled('old-openai', true);
+      expect(store.allows('old-openai', 'model-a')).toBe(false);
+      expect(store.allowsDelegatedExecution('old-openai', 'model-a', 'guest')).toBe(false);
+      expect(store.allows('openai', 'model-a')).toBe(true);
+      setProviderDisabled('old-openai', false);
     } finally { setMergedProviderPoolResolver(null); }
     // Split back into its own provider, its own range applies again.
     expect(store.allows('old-openai', 'model-b')).toBe(true);
