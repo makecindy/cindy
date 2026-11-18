@@ -41,6 +41,7 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
     isMobile: false,
     status: 'direct',
     path: 'direct',
+    controlLinkOpen: true,
     rttMs: 3,
     flow: null,
     flowText: null,

@@ -16596,6 +16596,36 @@
         "priority": "優先度",
         "activity": "最近のアクティビティ",
         "created": "作成日時"
+      },
+      "inbox": {
+        "thisEvening": "今夜",
+        "tomorrow": "明日",
+        "nextWeek": "来週",
+        "custom": "カスタム…",
+        "wakeAt": "再表示する日時",
+        "timeZone": "現地時間（{{zone}}）",
+        "invalidTime": "1年以内の未来の日時を選択してください。",
+        "inbox": "未処理",
+        "working": "実行中",
+        "snoozed": "後で処理",
+        "archived": "処理済み",
+        "snooze": "後で処理する",
+        "complete": "完了",
+        "wake": "今すぐ戻す",
+        "restore": "タスクを復元",
+        "process": "処理済みにする（アーカイブ）",
+        "empty": "受信トレイは空です",
+        "snoozeFailed": "後で処理する時刻を保存できませんでした。接続を確認し、タスクがあるコンピューターを更新してください。",
+        "hours": "{{count}} 時間後",
+        "hours_one": "{{count}} 時間後",
+        "hours_other": "{{count}} 時間後"
+      },
+      "taskListMode": {
+        "heading": "タスクモード",
+        "tasks": "タスク一覧",
+        "inbox": "受信トレイ",
+        "enterInbox": "受信トレイモードに切り替え",
+        "leaveInbox": "タスク一覧モードに切り替え"
       }
     },
     "rename": {
@@ -16888,6 +16918,7 @@
         "menuSave": "保存",
         "menuInsertTable": "表を挿入",
         "externalChangeBlocked": "ファイルが外部で変更されました。自動保存を停止しました。手動保存で上書きできます。",
+        "targetChanged": "ファイルの参照先が変わりました。下書きはエディターに残っています。下書きをコピーしてから、ファイルを開き直してください。",
         "tableMenu": {
           "addRowAbove": "上に行を追加",
           "addRowBelow": "下に行を追加",
@@ -21310,6 +21341,27 @@
         "allow": "許可",
         "deny": "拒否"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "閉じる",
+    "taskInbox": {
+      "title": "受信トレイの使い方",
+      "lead": "タスクは状態に応じて「未処理」「実行中」「後で処理」「処理済み」に自動で分かれます。おすすめは受信トレイをこまめに空にすること。済んだら完了、今やらないものは後で処理にしましょう。",
+      "pending": {
+        "title": "未処理",
+        "body": "結果が出たタスクや、あなたの回答を待っているタスクがここに入ります。"
+      },
+      "done": {
+        "title": "完了",
+        "body": "対応が済んだら完了を 1 回押すと処理済みへ。新しい動きがあれば自動で戻ってきます。"
+      },
+      "snooze": {
+        "title": "後で処理",
+        "body": "今は手が回らないときは時刻を選ぶと、その時刻に未処理へ戻ります。"
+      },
+      "start": "使い始める",
+      "note": "サイドバー上部のボタンでいつでもタスク一覧に戻せます。"
     }
   },
   "firstRunGuide": {

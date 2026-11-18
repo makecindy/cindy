@@ -80,8 +80,8 @@ import {
   reshareKeyForGuest,
   type RelayRunFailure,
 } from './groupRelay';
-import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../../shared/providerGroup';
-import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../provider-group/failurePolicy';
+import { PROVIDER_GROUP_LOCAL_MEMBER_KEY, type ProviderGroupUsageLimit } from '../../../shared/providerGroup';
+import { decideProviderGroupFailure, providerGroupFailureSignals, providerGroupUnavailableError } from '../../provider-group/failurePolicy';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
@@ -368,7 +368,17 @@ export type GroupRelayPlan =
   | { kind: 'local'; load?: GroupRelayLoad }
   | ({ kind: 'member'; load?: GroupRelayLoad } & GroupRelayMember)
   /** 组里没有能接这个任务的电脑。 */
-  | { kind: 'unavailable' };
+  | { kind: 'unavailable'; full?: true; usageLimit?: ProviderGroupUsageLimit };
+
+function groupUnavailableAfterStartup(
+  plan: Extract<GroupRelayPlan, { kind: 'unavailable' }>,
+  failure: unknown,
+): Error {
+  const error = providerGroupUnavailableError(plan);
+  return failure instanceof Error && (failure.name === 'AgentStartupStoppedError' || failure.name === 'AgentNotAuthenticatedError')
+    ? new AgentStartupStoppedError(error)
+    : error;
+}
 
 export interface RemoteAgentGroupRelayDeps {
   bindFastPolicy?(input: { group: string; deviceId?: string | null; sessionId: string; relay?: string }): Promise<void>;
@@ -1821,6 +1831,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       reserve: true,
       reshareKey: reshareKeyForGuest(run.controller),
     }).catch(() => null);
+    if (next?.kind === 'unavailable' && (next.full || next.usageLimit) && !run.closing) {
+      append(run, { t: 'start-failed', error: remoteAgentErrorInfo(groupUnavailableAfterStartup(next, error)) });
+      await finishRun(run, 'start-failed', 'navigation', false);
+      return true;
+    }
     if (next?.kind !== 'member' || run.closing) {
       if (next && next.kind !== 'unavailable') next.load?.release();
       return false;
@@ -2549,6 +2564,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           reserved = next.load;
         } else if (next?.kind === 'local') {
           next.load?.release();
+        } else if (next?.kind === 'unavailable' && (next.full || next.usageLimit)) {
+          lastError = groupUnavailableAfterStartup(next, lastError);
         }
       }
     }
@@ -3658,7 +3675,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               reserve: true,
               reshareKey: reshareKeyForGuest(controller),
             });
-            if (plan?.kind === 'unavailable') fail('REMOTE_AGENT_UNAVAILABLE', 'no computer can run this task right now');
+            if (plan?.kind === 'unavailable') {
+              if (plan.full || plan.usageLimit) throw providerGroupUnavailableError(plan);
+              fail('REMOTE_AGENT_UNAVAILABLE', 'no computer can run this task right now');
+            }
             if (plan?.kind === 'member' || plan?.kind === 'local') reserved = plan.load;
             if (plan?.kind === 'member') {
               const { memberKey, agentDeviceId, providerId: memberProviderId, sameAccount } = plan;

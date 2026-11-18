@@ -16596,6 +16596,36 @@
         "priority": "우선순위",
         "activity": "최근 활동",
         "created": "생성 시간"
+      },
+      "inbox": {
+        "thisEvening": "오늘 저녁",
+        "tomorrow": "내일",
+        "nextWeek": "다음 주",
+        "custom": "직접 설정…",
+        "wakeAt": "다시 표시할 날짜와 시간",
+        "timeZone": "현지 시간 ({{zone}})",
+        "invalidTime": "1년 이내의 미래 날짜와 시간을 선택하세요.",
+        "inbox": "처리 대기",
+        "working": "진행 중",
+        "snoozed": "나중에 처리",
+        "archived": "처리됨",
+        "snooze": "나중에 처리",
+        "complete": "완료",
+        "wake": "지금 다시 표시",
+        "restore": "작업 복원",
+        "process": "처리됨으로 표시(보관)",
+        "empty": "받은 편지함이 비었습니다",
+        "snoozeFailed": "나중에 처리할 시간을 저장하지 못했습니다. 연결을 확인하고 작업이 있는 컴퓨터를 업데이트하세요.",
+        "hours": "{{count}}시간 후",
+        "hours_one": "{{count}}시간 후",
+        "hours_other": "{{count}}시간 후"
+      },
+      "taskListMode": {
+        "heading": "작업 모드",
+        "tasks": "작업 목록",
+        "inbox": "받은 편지함",
+        "enterInbox": "받은 편지함 모드로 전환",
+        "leaveInbox": "작업 목록 모드로 전환"
       }
     },
     "rename": {
@@ -16888,6 +16918,7 @@
         "menuSave": "저장",
         "menuInsertTable": "표 삽입",
         "externalChangeBlocked": "파일이 외부에서 변경되어 자동 저장을 멈췄습니다. 수동 저장으로 덮어쓸 수 있습니다.",
+        "targetChanged": "파일이 가리키는 위치가 바뀌었습니다. 초안은 편집기에 남아 있습니다. 초안을 복사한 후 파일을 다시 여세요.",
         "tableMenu": {
           "addRowAbove": "위에 행 추가",
           "addRowBelow": "아래에 행 추가",
@@ -21310,6 +21341,27 @@
         "allow": "허용",
         "deny": "거부"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "닫기",
+    "taskInbox": {
+      "title": "받은 편지함 사용법",
+      "lead": "작업은 상태에 따라 처리 대기, 진행 중, 나중에 처리, 처리됨으로 자동 분류됩니다. 받은 편지함을 그때그때 비우는 습관을 가장 추천합니다. 끝난 작업은 완료, 지금 처리하지 않을 작업은 나중에 처리하세요.",
+      "pending": {
+        "title": "처리 대기",
+        "body": "결과가 나왔거나 답변을 기다리는 작업이 여기에 나타납니다."
+      },
+      "done": {
+        "title": "완료",
+        "body": "처리가 끝나면 완료를 한 번 누르면 처리됨으로 이동합니다. 새 소식이 있으면 자동으로 돌아옵니다."
+      },
+      "snooze": {
+        "title": "나중에 처리",
+        "body": "지금 처리할 수 없다면 시간을 고르세요. 그 시간에 처리 대기로 돌아옵니다."
+      },
+      "start": "시작하기",
+      "note": "사이드바 위쪽 버튼으로 언제든 작업 목록으로 돌아갈 수 있습니다."
     }
   },
   "firstRunGuide": {

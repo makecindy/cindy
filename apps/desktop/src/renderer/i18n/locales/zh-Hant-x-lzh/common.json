@@ -16596,6 +16596,36 @@
         "priority": "緩急",
         "activity": "近動",
         "created": "立時"
+      },
+      "inbox": {
+        "thisEvening": "今夕",
+        "tomorrow": "明日",
+        "nextWeek": "下週",
+        "custom": "自定…",
+        "wakeAt": "喚回日期時辰",
+        "timeZone": "本地時辰（{{zone}}）",
+        "invalidTime": "請選擇來歲以內之未來日期時辰。",
+        "inbox": "待處理",
+        "working": "進行中",
+        "snoozed": "待後處理",
+        "archived": "已處理",
+        "snooze": "留待後辦",
+        "complete": "畢",
+        "wake": "即刻取回",
+        "restore": "恢復任務",
+        "process": "標記已處理（封存）",
+        "empty": "匣中已清",
+        "snoozeFailed": "無法儲存稍後處理時間，請檢查連線並確認任務所在電腦已更新。",
+        "hours": "{{count}} 小時後",
+        "hours_one": "{{count}} 小時後",
+        "hours_other": "{{count}} 小時後"
+      },
+      "taskListMode": {
+        "heading": "任務模式",
+        "tasks": "任務列表",
+        "inbox": "收件匣",
+        "enterInbox": "轉至收件匣之式",
+        "leaveInbox": "轉至任務列之式"
       }
     },
     "rename": {
@@ -16888,6 +16918,7 @@
         "menuSave": "存之",
         "menuInsertTable": "插表格",
         "externalChangeBlocked": "卷已為外部所改，自動儲存已暫停。確認後可親手存之以覆蓋。",
+        "targetChanged": "檔案指向已變更，目前的草稿仍保留在編輯器中。請先複製草稿，再重新開啟檔案",
         "tableMenu": {
           "addRowAbove": "上增一行",
           "addRowBelow": "下增一行",
@@ -21439,6 +21470,27 @@
         "allow": "允許",
         "deny": "拒絕"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "閉",
+    "taskInbox": {
+      "title": "識收件匣",
+      "lead": "任務依其狀自分為待處理、進行中、待後處理、已處理。善用之道，在常清其匣：事畢者點「畢」，未及者待後處理。",
+      "pending": {
+        "title": "待處理",
+        "body": "任務事竣有果，或待君答，則現於此。"
+      },
+      "done": {
+        "title": "畢",
+        "body": "事畢點「畢」，任務移入已處理；後有新進，自返其處。"
+      },
+      "snooze": {
+        "title": "待後處理",
+        "body": "今未暇則擇一時，時至自返待處理。"
+      },
+      "start": "始用",
+      "note": "可隨時以側欄頂端之鈕返任務列。"
     }
   },
   "firstRunGuide": {

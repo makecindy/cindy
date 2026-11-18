@@ -14,7 +14,8 @@ export async function runSessionExecutionAction(params: {
     isExecutionPaused(id: string): boolean;
     isQueuePaused(id: string): boolean;
     resume(id: string): unknown;
-    retryLastError(id: string, beforeMutation?: () => Promise<void>, beforeDelivery?: () => Promise<void>): Promise<unknown>;
+    retryLastError(id: string, expectedQueueHeadClientId?: string, expectedSwitchRevision?: number,
+      guards?: { beforeMutation: () => Promise<void>; beforeDelivery: () => Promise<void> }): Promise<unknown>;
   };
   persist(id: string): Promise<void>;
   compact(id: string, instructions: string | undefined, beforeMutation: () => Promise<void>, beforeDelivery: () => Promise<void>): Promise<unknown>;
@@ -58,7 +59,7 @@ export async function runSessionExecutionAction(params: {
       } else deps.interactions!.resumeTimeout(requestId);
     }
     if (!paused) coordinator.resume(id);
-  } else await coordinator.retryLastError(id, beforeMutation, beforeDelivery);
+  } else await coordinator.retryLastError(id, undefined, undefined, { beforeMutation, beforeDelivery });
   await deps.persist(id);
   await beforeMutation();
   return { ok: true as const, result: { executionPaused: coordinator.isExecutionPaused(id), queuePaused: coordinator.isQueuePaused(id) } };

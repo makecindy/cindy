@@ -96,7 +96,7 @@ CREATE TABLE sessions (
   context_window_runtime INTEGER,
   fast_mode INTEGER NOT NULL DEFAULT 0,
   cleared_at INTEGER,
-  pinned_at INTEGER,
+  pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
   user_send_at INTEGER,
   agent_kind TEXT NOT NULL DEFAULT 'cc',
   orca_role TEXT,
@@ -393,6 +393,8 @@ describe('db worker tx handlers', () => {
 
   // #10310, DB tier: ordinary terminal writes do not guard against fresh activity
   // or a concurrently enabled automation. Exercise both production transports.
+  // Inbox merge regression: archive must clear both snooze fields while maintenance
+  // preserves updated_at (#10953); prior fixtures had no snooze metadata.
   it.each([false, true])('rechecks idle eligibility in the archive transaction (inline=%s)', async useInlineWorker => {
     await withClient(async client => {
       await client.exec('ALTER TABLE sessions ADD COLUMN last_activity_at INTEGER');
@@ -403,7 +405,7 @@ describe('db worker tx handlers', () => {
       await client.exec('CREATE TABLE session_goals (session_id TEXT, status TEXT)');
       await client.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT)');
       await seedSession(client, 'idle', { status: 'active' });
-      await client.exec("UPDATE sessions SET updated_at = 123 WHERE id = 'idle'");
+      await client.exec("UPDATE sessions SET updated_at = 123, snoozed_until = 1000, snoozed_at = 90 WHERE id = 'idle'");
       await client.exec("UPDATE sessions SET last_activity_at = 100 WHERE id = 'idle'");
       const archive = () => client.tx('sessions.setTerminalStatus', { sessionId: 'idle', status: 'archived', idleArchiveCutoff: 200 });
       await client.exec("UPDATE sessions SET last_activity_at = 300 WHERE id = 'idle'");
@@ -417,8 +419,8 @@ describe('db worker tx handlers', () => {
       expect(await client.queryOne("SELECT status FROM sessions WHERE id = 'idle'")).toEqual({ status: 'active' });
       await client.exec("UPDATE sessions SET pinned_at = NULL WHERE id = 'idle'");
       await expect(archive()).resolves.toMatchObject({ sessionId: 'idle', status: 'archived' });
-      expect(await client.queryOne("SELECT updated_at AS updatedAt FROM sessions WHERE id = 'idle'"))
-        .toEqual({ updatedAt: 123 });
+      expect(await client.queryOne("SELECT updated_at AS updatedAt, snoozed_until AS snoozedUntil, snoozed_at AS snoozedAt FROM sessions WHERE id = 'idle'"))
+        .toEqual({ updatedAt: 123, snoozedUntil: null, snoozedAt: null });
       // A manual archive continues to use the existing flow, without idle guards.
       await seedSession(client, 'manual', { status: 'active', pinnedAt: 50 });
       await client.exec("UPDATE sessions SET updated_at = 123 WHERE id = 'manual'");

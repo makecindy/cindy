@@ -264,7 +264,7 @@ function createDb(): void {
       context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -908,7 +908,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
     expect(h.routeLock).toHaveBeenCalledTimes(routeLockHeld ? 0 : 1);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
-      sessionId: 'codex-local', patch: { status: 'active' },
+      sessionId: 'codex-local', patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
     }));
   });
 
@@ -1175,7 +1175,7 @@ describe('local-db:sessions:update handler wiring', () => {
       'local-db:sessions:patched',
       expect.objectContaining({
         sessionId: 'cc-local',
-        patch: { status: 'deleted' },
+        patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
       }),
     );
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
@@ -1363,7 +1363,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted.status).toBe('active');
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'active' },
+      patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
     });
     expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
   });
@@ -1381,7 +1381,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted.pinnedAt).toBeNull();
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'archived', pinnedAt: null, summary: null },
+      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
     });
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'codex-local' }),
@@ -1565,7 +1565,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'deleted' },
+      patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
     });
     // 不再出现携带请求值的回滚广播
     const statusPatches = h.tapWindowBroadcast.mock.calls
@@ -2266,4 +2266,27 @@ describe('terminal intent during session creation', () => {
     expect(failure).toBeUndefined();
   });
 
+});
+
+// DB tier: exercise both production write channels and their authoritative persisted/broadcast pair.
+describe('task snooze persistence', () => {
+  it.each([invokeUpdate, invokePatchMeta])('saves deferral without activity or lifecycle effects', async (invoke) => {
+    const snoozedUntil = new Date(Date.now() + 3600000).toISOString();
+    const updated = await invoke('codex-local', { snoozedUntil });
+    expect(updated).toMatchObject({ snoozedUntil, snoozedAt: expect.any(String), status: 'active', updatedAt: new Date(1).toISOString() });
+    expect(h.sqlite!.prepare('SELECT snoozed_until AS until, snoozed_at AS at FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ until: Date.parse(snoozedUntil), at: expect.any(Number) });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
+      sessionId: 'codex-local', patch: expect.objectContaining({ snoozedUntil, snoozedAt: expect.any(String) }),
+    }));
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
+    await expect(invoke('codex-local', { snoozedUntil: null })).resolves.toMatchObject({ snoozedUntil: null, snoozedAt: null });
+    await invoke('codex-local', { snoozedUntil });
+    await invoke('codex-local', { status: 'archived' });
+    await expect(invoke('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', snoozedUntil: null, snoozedAt: null });
+  });
+  it.each(['not-a-date', '2000-01-01T00:00:00.000Z', 123])('rejects invalid deferral %s without writing', async snoozedUntil => {
+    await expect(invokePatchMeta('codex-local', { snoozedUntil })).rejects.toThrow();
+    expect(h.sqlite!.prepare('SELECT snoozed_until AS until FROM sessions WHERE id = ?').get('codex-local')).toEqual({ until: null });
+  });
 });
