@@ -1659,10 +1659,17 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     const peerId = await this.#peerIdForTask(bindingEpoch, item.taskId);
     this.#assertSendEpochCurrent(bindingEpoch, signal);
     const mediaItems = parseOutboxMedia(item.mediaJson);
-    if (
-      (item.text || mediaItems.length > 0) &&
-      this.#now() - item.createdAt >= DELAYED_REPLY_NOTICE_AFTER_MS
-    ) {
+    const delayed = (item.text || mediaItems.length > 0) &&
+      this.#now() - item.createdAt >= DELAYED_REPLY_NOTICE_AFTER_MS;
+    const preparedMedia: Awaited<ReturnType<typeof readOutboundWechatFile>>[] = [];
+    if (delayed) {
+      // At most four 5 MB files. Validate and retain these bytes before promising
+      // delayed content, so a local permanent failure cannot leave only a notice.
+      for (const media of mediaItems) {
+        this.#assertSendEpochCurrent(bindingEpoch, signal);
+        preparedMedia.push(await readOutboundWechatFile(media.absPath));
+        this.#assertSendEpochCurrent(bindingEpoch, signal);
+      }
       const noticeId = createHash('sha256').update(JSON.stringify([
         'wechat-delayed-reply', bindingEpoch, item.taskId, item.kind, item.createdAt,
         item.contextToken, Math.floor(this.#now() / DELAYED_REPLY_NOTICE_AFTER_MS),
@@ -1715,9 +1722,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         signal,
       );
     }
-    for (const media of mediaItems) {
+    for (const [index, media] of mediaItems.entries()) {
       this.#assertSendEpochCurrent(bindingEpoch, signal);
-      const local = await readOutboundWechatFile(media.absPath);
+      const local = preparedMedia[index] ?? await readOutboundWechatFile(media.absPath);
       this.#assertSendEpochCurrent(bindingEpoch, signal);
       const uploaded = await transport.uploadMedia(
         {

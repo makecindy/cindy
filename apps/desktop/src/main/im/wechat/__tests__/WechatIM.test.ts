@@ -1044,10 +1044,16 @@ function restoredConnection(queued: () => number, policyDisabled = false) {
 // #10135: unit tier, real SQLite/store/worker and public outbox lifecycle. The
 // prior fake DB cases never exercised aged rows after context recovery. Transport
 // and secrets are synthetic; the historical attempt count is seeded, not traffic.
-it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-context', 'chunks', 'same-context-refresh', 'localized-time', 'classical-time'] as const)('labels recovered old output and preserves fresh long-task results: %s', async mode => {
+it.each(['text', 'notice-unknown', 'media', 'media-missing', 'media-empty', 'media-too-large', 'media-removed-after-notice', 'body-failed', 'body-failed-same-context', 'chunks', 'same-context-refresh', 'localized-time', 'classical-time'] as const)('labels recovered old output and preserves fresh long-task results: %s', async mode => {
   vi.useFakeTimers();
   const localizedTime = mode === 'localized-time' || mode === 'classical-time';
-  vi.stubEnv('TZ', localizedTime ? 'America/Los_Angeles' : 'Asia/Shanghai');
+  // Vitest worker threads cannot reliably change the process's timezone via TZ.
+  // Simulate host timezone discovery while retaining real Intl date formatting.
+  const timeZone = localizedTime ? 'America/Los_Angeles' : 'Asia/Shanghai';
+  const DateTimeFormat = Intl.DateTimeFormat;
+  const dateTimeFormatSpy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (locales, options) {
+    return new DateTimeFormat(locales, { ...options, timeZone: options?.timeZone ?? timeZone });
+  });
   if (mode === 'classical-time') setMainLocale('zh-Hans-x-lzh');
   const Database = (await import('better-sqlite3')).default;
   const { readFileSync } = await import('node:fs');
@@ -1063,7 +1069,9 @@ it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-con
   sql.exec(readFileSync(path.resolve(process.cwd(), 'drizzle/0082_daffy_calypso.sql'), 'utf8').replaceAll('--> statement-breakpoint', ''));
   const files = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
-  const tempDir = mode === 'media' ? await files.mkdtemp(path.join(tmpdir(), 'wechat-delayed-')) : null;
+  const isMedia = mode.startsWith('media');
+  const invalidMedia = mode === 'media-missing' || mode === 'media-empty' || mode === 'media-too-large';
+  const tempDir = isMedia ? await files.mkdtemp(path.join(tmpdir(), 'wechat-delayed-')) : null;
   const mediaPath = tempDir ? path.join(tempDir, 'example.txt') : null;
   if (mediaPath) await files.writeFile(mediaPath, 'synthetic file');
   const key = Buffer.alloc(32, 3);
@@ -1127,6 +1135,10 @@ it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-con
       receivedIds.add(input.clientId);
       visible.push({ ...input });
     }
+    if (mode === 'media-removed-after-notice' && input.contextToken === 'new-question-context') {
+      // The bytes validated before the notice must be the bytes subsequently sent.
+      await files.rm(mediaPath!);
+    }
     return { clientId: input.clientId };
   });
   const createIM = () => new WechatIM(deps({ host: host({ secretRead: name => name === 'wechat_data_key_v1' ? key.toString('base64') : name === 'wechat_credentials_epoch' ? JSON.stringify(credentials) : null }),
@@ -1149,10 +1161,22 @@ it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-con
     } else visible.length = 0; // A new question starts a new visible timeline.
     now += bodyFailureCase && !sameContextRefresh ? 4 * 24 * 60 * 60 * 1000 : 2000;
     oldBodyBlocked = false;
+    if (mode === 'media-missing') await files.rm(mediaPath!);
+    if (mode === 'media-empty') await files.writeFile(mediaPath!, '');
+    if (mode === 'media-too-large') await files.truncate(mediaPath!, 5 * 1024 * 1024 + 1);
     if (mode !== 'body-failed-same-context') {
       await store.refreshPendingOutboxContext({ bindingEpoch: 'epoch', peerId: 'owner', contextToken: sameContextRefresh ? 'old-context' : 'new-question-context', now });
     }
-    await vi.waitFor(() => expect(sql.prepare("SELECT status FROM wechat_outbox WHERE task_id='old'").pluck().get()).toBe('delivered'), { timeout: 4000 });
+    await vi.waitFor(() => expect(['delivered', 'failed_terminal']).toContain(sql.prepare("SELECT status FROM wechat_outbox WHERE task_id='old'").pluck().get()), { timeout: 4000 });
+    expect(sql.prepare("SELECT status FROM wechat_outbox WHERE task_id='old'").pluck().get()).toBe(invalidMedia ? 'failed_terminal' : 'delivered');
+    if (invalidMedia) {
+      expect(sends).toEqual([]); // No attribution for content that cannot be delivered.
+      expect(visible).toEqual([]);
+      expect(transport.uploadMedia).not.toHaveBeenCalled();
+      expect(transport.sendMedia).not.toHaveBeenCalled();
+      expect(sql.prepare("SELECT attempts,text FROM wechat_outbox WHERE id='old-out'").get()).toEqual({ attempts: 9757, text: '' });
+      return;
+    }
     if (mode === 'chunks') {
       await vi.waitFor(() => expect(sql.prepare("SELECT count(*) FROM wechat_outbox WHERE task_id='old' AND status='delivered'").pluck().get()).toBe(3));
       expect(visible.map(item => item.text)).toEqual([expect.stringContaining('old-question'), 'old-reply', 'old-reply-1', 'old-reply-2']);
@@ -1161,7 +1185,7 @@ it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-con
     }
     // Original payload/client IDs remain unchanged. Notice retries are stable
     // within one context and delivery window, including unknown send results.
-    expect(sends).toHaveLength(mode === 'notice-unknown' ? 3 : mode === 'media' ? 1 : mode === 'chunks' ? 4 : 2);
+    expect(sends).toHaveLength(mode === 'notice-unknown' ? 3 : isMedia ? 1 : mode === 'chunks' ? 4 : 2);
     if (sameContextRefresh) expect(visible).toHaveLength(2); // Same token must not renew the accepted notice.
     expect(sends[0]?.text).toContain(localizedTime ? '2026/11/06' : '2026/11/07');
     expect(sends[0]?.text).toContain(localizedTime ? '17:14:00' : '23:14:00');
@@ -1177,20 +1201,20 @@ it.each(['text', 'notice-unknown', 'media', 'body-failed', 'body-failed-same-con
       expect(visible[0]?.text).toContain('23:14:00');
       expect(visible[1]?.text).toBe('old-reply');
     }
-    if (mode === 'media') {
+    if (isMedia) {
       expect(order).toEqual(['text', 'upload', 'media']);
       expect(transport.sendMedia).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'old-media-client', contextToken: 'new-question-context' }), expect.any(AbortSignal));
     } else {
       expect(sends.find(item => item.clientId === 'old-client')).toMatchObject({ text: 'old-reply', contextToken: mode === 'body-failed-same-context' || sameContextRefresh ? 'old-context' : 'new-question-context', clientId: 'old-client' });
       if (mode === 'notice-unknown') expect(sends[0]).toEqual(sends[1]);
     }
-    expect(sql.prepare("SELECT attempts,text FROM wechat_outbox WHERE id='old-out'").get()).toEqual({ attempts: mode === 'notice-unknown' ? 9758 : 9757, text: mode === 'media' ? '' : 'old-reply' });
+    expect(sql.prepare("SELECT attempts,text FROM wechat_outbox WHERE id='old-out'").get()).toEqual({ attempts: mode === 'notice-unknown' ? 9758 : 9757, text: isMedia ? '' : 'old-reply' });
   } finally {
     await im.dispose();
     store.destroy();
     sql.close();
     if (tempDir) await files.rm(tempDir, { recursive: true, force: true });
-    vi.unstubAllEnvs();
+    dateTimeFormatSpy.mockRestore();
     vi.useRealTimers();
   }
 });
