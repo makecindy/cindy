@@ -1988,6 +1988,62 @@ describe('OrcaTeamService', () => {
     expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
   });
 
+  // A 轮派活的回执在途时用户又发了新消息（直连轮 B）：行已被 B 改回 running，
+  // A 的旧回执落地时不得按 A 保存的终态把 B 的 running 覆盖成 done，也不得写 latest_report。
+  it('does not let an in-flight dispatch report overwrite a newer direct turn', async () => {
+    let generation = 1;
+    const runtime = {
+      isTurnRunning: () => false,
+      getTurnGeneration: () => generation,
+      hasLiveBackgroundWork: async () => false,
+    };
+    const { deps, getWorker, service } = createDeps({ getLiveSession: () => runtime });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    // A 轮的 send_to_lead 回执在途（终态还没到）。
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    // A 轮终态：真实终态记在 A 的账上，随后在锁外等在途回执落地。
+    const terminal = service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '文本' });
+    await vi.waitFor(() => expect(getWorker().status).toBe('done'));
+    // 用户又发了一条：直连轮 B 开始，行改回 running（派活条目 A 仍在注册表里）。
+    generation = 2;
+    await service.handleWorkerTurnStarted('worker-session-1');
+    expect(getWorker().status).toBe('running');
+    // A 轮的回执这时才落地：行属于 B，A 的结论不得写进来。
+    await finish(true, { delivered: true, report: { state: 'ready', summary: 'A 轮的结论' } });
+    await terminal;
+    expect(getWorker().status).toBe('running');
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'ready' }));
+  });
+
+  // 派活轮的在途 progress 同样要复核轮次身份：换轮后行属于新轮，旧进度不得写进去。
+  it('does not let an in-flight dispatch progress overwrite a newer direct turn', async () => {
+    let generation = 1;
+    const runtime = {
+      isTurnRunning: () => false,
+      getTurnGeneration: () => generation,
+      hasLiveBackgroundWork: async () => false,
+    };
+    const { deps, getWorker, service } = createDeps({ getLiveSession: () => runtime });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    // progress 的归属查询卡住：A 轮的进度还在路上。
+    let releaseLink!: () => void;
+    const linkGate = new Promise<void>((resolve) => { releaseLink = resolve; });
+    const originalLink = deps.getWorkerLinkBySessionId;
+    let linkCalls = 0;
+    deps.getWorkerLinkBySessionId = async (sessionId: string) => {
+      linkCalls += 1;
+      if (linkCalls === 1) await linkGate;
+      return originalLink(sessionId);
+    };
+    const pending = service.recordWorkerReport('worker-session-1', { state: 'progress', summary: 'A 轮旧进度' });
+    // 用户又发了一条：直连轮 B 开始（行改回 running，派活条目 A 仍在）。
+    generation = 2;
+    await service.handleWorkerTurnStarted('worker-session-1');
+    releaseLink();
+    await pending;
+    expect(getWorker().latestReport).toBeNull();
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'progress' }));
+  });
   // 排队回报被改写/撤回/合并后，latest_report 投影必须失效（否则面板继续声称旧「等回复」）。
   it('invalidates the projected report when its queued message is rewritten', async () => {
     const { deps, getWorker, service } = createDeps();

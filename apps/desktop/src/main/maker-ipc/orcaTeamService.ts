@@ -2460,11 +2460,14 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         // 若新派活恰好装上了新的 identity，旧进度同样不得写进它。
         const current = autoBridge.get(sessionId);
         if (current !== captured) return;
-        if (!current) {
-          const live = deps.getLiveSession(sessionId);
-          if (live !== capturedLive) return;
-          if ((live?.getTurnGeneration?.() ?? undefined) !== capturedGeneration) return;
-        }
+        // 轮次身份复核：捕获到落地之间可能换了轮（直连轮不换派活条目，只把行改回 running）。
+        // 派活条目可能还在，但行已经属于新轮，迟到 progress 不得写进新轮的投影。
+        const live = deps.getLiveSession(sessionId);
+        const turnMovedOn = live !== capturedLive
+          || (live?.getTurnGeneration?.() ?? undefined) !== capturedGeneration;
+        // 直连轮：捕获时没有 live session、之后才出现的也算换轮。
+        // 派活轮：捕获时没有 live session 就无从比对，不据此丢进度。
+        if (turnMovedOn && (!current || capturedLive !== undefined)) return;
         // 终段回报已被 send_to_lead 接受入档后，迟到的 progress 是遥测：不得覆盖结论，
         // 否则终端回合会按 progress 跳过结算，把已判定的结论语义退化回 raw 状态。
         if (ledgerHasConclusion(current)) return;
@@ -2565,13 +2568,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             // 新一轮派活已认领该行时，旧回执只在旧 state 上记账结算，不再写 worker 行——
             // 否则迟到的旧回报会把新派活的 running 面板与 structuredReport 洗回旧结论。
             const supersedesRow = current !== undefined && current !== state;
+            // 捕获之后可能又开了新轮（直连轮不换派活条目，只把 worker 行改回 running）：
+            // 运行实例或轮次代号变了就说明行已属于新轮，旧回执同样只能留档，
+            // 不得按旧轮保存的终态把新轮的 running 覆盖掉。与直连轮回执同款复核。
+            const live = deps.getLiveSession(sessionId);
+            const newerTurnOwnsRow = runtime !== undefined
+              && (live !== runtime || (live?.getTurnGeneration?.() ?? undefined) !== generation);
             if (report && ownsState) {
               const isProgress = report.state === 'progress';
               state.structuredReport = report;
               // 投影随这份回执更新：入队的记下来源 id，直发的清空（队列改写不再能影响它）。
               state.latestReportQueuedId = receipt?.queuedMessageId;
               // 终态先到、回报后到：由回报侧补做映射，否则晚到的 waiting / blocked 会永久停在 done。
-            if (supersedesRow) {
+            if (supersedesRow || newerTurnOwnsRow) {
               // 新轮已接管面板：旧回报只留档，不落盘，也不反向改状态。
             } else if (state.terminalObserved && state.appliedReport !== report && !isProgress) {
                 // 用真实终态：晚到的 ready 不能把已判 error 的轮次洗成成功。
