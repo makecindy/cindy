@@ -2306,8 +2306,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       if (!link) return;
       await withWorkerTransition(link.workerId, async () => {
         const current = autoBridge.get(sessionId);
-        // 复核：过渡期间可能已有更新的回执改写投影（autoBridge 条目仍在时）。
-        if (current && current.latestReportQueuedId !== sourceId) return;
+        // 复核必须无条件：过渡期间更新的回执（含终局已清 AutoBridgeState 的直连轮）
+        // 可能已消费同一来源并写入更新的投影，旧队列改写不得再清它。
+        if ((current?.latestReportQueuedId ?? pendingReportSourceBySession.get(sessionId)) !== sourceId) return;
         if (current) {
           current.structuredReport = undefined;
           current.latestReportQueuedId = undefined;

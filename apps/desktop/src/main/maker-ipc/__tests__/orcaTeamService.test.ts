@@ -1924,6 +1924,42 @@ describe('OrcaTeamService', () => {
     expect(getWorker().latestReport).toBeNull();
   });
 
+  // 改写在 link await 上挂起期间，直连轮 progress 已消费同一来源并写入更新的投影：
+  // 无 AutoBridgeState 时复核不得短路，旧队列改写不得清掉这份新投影。
+  it('does not let a queued rewrite clear a direct progress report that landed mid-await', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-1',
+      report: { state: 'blocked', question: '选 A 还是 B' },
+    });
+    // 终局清理 autoBridge 条目后，来源 map 是唯一线索。
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '结果' });
+    service.clearAutoBridgeState('worker-session-1');
+
+    // 改写先过守卫、再挂在 link await 上；期间直连 progress 完成并消费来源。
+    let gateRewrite = false;
+    let releaseRewrite!: () => void;
+    const rewriteGate = new Promise<void>((resolve) => { releaseRewrite = resolve; });
+    const originalLink = deps.getWorkerLinkBySessionId;
+    deps.getWorkerLinkBySessionId = async (sessionId: string) => {
+      const link = await originalLink(sessionId);
+      if (gateRewrite) await rewriteGate;
+      return link;
+    };
+    gateRewrite = true;
+    const rewrite = service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    gateRewrite = false;
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '新进度' });
+    expect(getWorker().latestReport).toMatchObject({ state: 'progress' });
+
+    releaseRewrite();
+    await rewrite;
+    expect(getWorker().latestReport).toMatchObject({ state: 'progress' });
+  });
+
   // 迟到的旧派活回执只在旧 state 上记账，不得覆盖新一轮派活的面板。
   it('does not let a late old-dispatch receipt overwrite the new round panel', async () => {
     const { deps, getWorker, service } = createDeps();
