@@ -56,10 +56,14 @@ function reportBuffered() {
   setImmediate(() => { bufferedScheduled = false; if (socket) send({ type: 'buffered', queued: socket.bufferedAmount }); });
 }
 function snapshot() {
-  if (!socket) return;
-  send({ type: 'status', queued: socket.bufferedAmount, known: [...ids], peers: [...ids].map((id) => [id, {
-    available: socket!.supports(id), path: socket!.pathTo(id), rttMs: socket!.peerSnapshot(id)?.rttMs ?? null,
-  }]) });
+  const current = socket;
+  if (!current) return;
+  const known = [...ids];
+  const peers = known.map((id) => {
+    const route = current.peerSnapshot(id);
+    return [id, { available: current.supports(id), path: route?.path ?? null, rttMs: route?.rttMs ?? null, dialing: current.isDialing(id) }];
+  });
+  send({ type: 'status', queued: current.bufferedAmount, known, peers });
 }
 port.on('message', (message) => {
   if (message.type === 'http-result') {

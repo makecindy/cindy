@@ -26,6 +26,7 @@ import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/libra
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import { claudeProfileSessionStore } from './profile-session-store.js';
 import { claudeToolLifecycleHooks } from './tool-lifecycle-hooks.js';
+import { claudeNativeRecoveryHooks } from './native-recovery-hooks.js';
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -1338,6 +1339,16 @@ export class ClaudeCodeAgent extends BaseAgent {
         { signal: timeoutController.signal },
       );
 
+      try {
+      await opts?.onUsage?.({
+        model: resp.model ?? model,
+        inputTokens: resp.usage?.input_tokens,
+        outputTokens: resp.usage?.output_tokens,
+        cacheReadTokens: resp.usage?.cache_read_input_tokens ?? undefined,
+        cacheCreateTokens: resp.usage?.cache_creation_input_tokens ?? undefined,
+      });
+      } catch { log.warn('oneShot usage observer failed'); }
+
       const text = resp.content
         .filter((b): b is Anthropic.TextBlock => b.type === 'text')
         .map((b) => b.text)
@@ -2290,6 +2301,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         )
       : mergeClaudeHookSets(
           !hosted?.guest && !opts.remoteHostId ? claudeToolLifecycleHooks(this.deps.toolLifecycleControl, opts.sessionId) : undefined,
+          !opts.deviceHosted && !opts.remoteHostId ? claudeNativeRecoveryHooks(this.deps.nativeRecoveryObserver, opts.sessionId) : undefined,
           buildClaudeLocalToolGuardHooks(
             capabilityRouting,
             () => activeCapabilitySelectionText,

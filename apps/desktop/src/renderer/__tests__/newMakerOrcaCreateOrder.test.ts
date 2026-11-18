@@ -199,9 +199,11 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       )
       .replace(/\r\n/g, '\n');
 
+    // Ordinary and steer sends now share one catalog-resolution call; the
+    // second bounded retry belongs to the pending first-message handoff.
     expect(
       slashDispatchBranch.match(/piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS/g),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
   });
 
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {

@@ -144,6 +144,12 @@ export interface SessionLifecycleHooks {
 }
 
 export interface MakerDeps {
+  /** Capture the request owner before dispatch and retain it through final usage delivery. */
+  createOneShotUsageRecorder?: (agentKind: AgentKind, opts?: OneShotOptions) => {
+    onUsage: NonNullable<OneShotOptions['onUsage']>;
+    close(): void;
+  };
+
   agents: Partial<Record<AgentKind, BaseAgent>>;
   /**
    * 可选：在同账号另一台电脑上启动 Agent(CreateSessionOptions.agentDeviceId)。返回的句柄由
@@ -574,9 +580,11 @@ export class Maker {
   protected readonly visionBridge: import('./types/vision-bridge.js').VisionBridgeHook | undefined;
   private readonly toolLoopReviewer: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer | undefined;
   private readonly startDeviceAgentSession: MakerDeps['startDeviceAgentSession'];
+  private readonly createOneShotUsageRecorder: MakerDeps['createOneShotUsageRecorder'];
 
   constructor(deps: MakerDeps) {
     this.agents = deps.agents;
+    this.createOneShotUsageRecorder = deps.createOneShotUsageRecorder;
     this.storage = deps.storage;
     this.startDeviceAgentSession = deps.startDeviceAgentSession;
     this.visionBridge = deps.visionBridge;
@@ -1875,7 +1883,21 @@ export class Maker {
    * 决定 swallow (起标题) 还是上报 (skillReview)。
    */
   async oneShot(agentKind: AgentKind, prompt: string, opts?: OneShotOptions): Promise<string> {
-    return this.requireAgent(agentKind).oneShot(prompt, opts);
+    const recorder = this.createOneShotUsageRecorder?.(agentKind, opts);
+    try {
+      return await this.requireAgent(agentKind).oneShot(prompt, {
+        ...opts,
+        onUsage: async usage => {
+          // Accounting must not turn a paid response into a request failure/retry.
+          try { await recorder?.onUsage(usage); }
+          catch { this.logger.warn('oneShot usage could not be recorded'); }
+          try { await opts?.onUsage?.(usage); }
+          catch { this.logger.warn('oneShot usage observer failed'); }
+        },
+      });
+    } finally {
+      recorder?.close();
+    }
   }
 
   /**

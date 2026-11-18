@@ -1,3 +1,5 @@
+import { createAuxiliaryUsageRecorder } from '../usage/auxiliaryUsage.js';
+import { parseAuxiliaryTokens, usageTokenCount } from '../../shared/auxiliaryUsage.js';
 /**
  * embedding-host (Phase 1.1): 主进程内 embedding 能力层的启停 + 单例入口。
  *
@@ -60,6 +62,21 @@ export function startEmbeddingHost(deps: StartEmbeddingHostDeps): EmbeddingServi
     return _service;
   }
   const clientOpts: EmbeddingClientOptions = {
+    createUsageRecorder: ({ model, inputType }) => {
+      const record = createAuxiliaryUsageRecorder({ model, providerId: 'xd', transport: 'embeddings',
+        source: inputType === 'query' ? 'embedding-query' : 'embedding-index' });
+      return {
+        observe: async body => {
+          const parsed = body as { model?: unknown; usage?: { total_tokens?: unknown } } | null;
+          const tokens = parseAuxiliaryTokens(body, 'embeddings');
+          const inputTokens = tokens?.inputTokens ?? usageTokenCount(parsed?.usage?.total_tokens);
+          if (inputTokens !== undefined) await record({ inputTokens, outputTokens: 0 }, {
+            model: typeof parsed?.model === 'string' ? parsed.model : model,
+          });
+        },
+        close: record.close,
+      };
+    },
     baseUrl: deps.gatewayBaseUrl,
     getApiKey: deps.getApiKey,
     fetchImpl: deps.fetchImpl,

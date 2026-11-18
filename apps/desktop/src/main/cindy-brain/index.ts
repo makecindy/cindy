@@ -4,6 +4,7 @@ import { createRuntimePluginControl } from './runtimeControl.js';
 import { createRuntimeContextProviders } from './runtimeContext.js';
 import { createStaticPromptProvider } from './staticPrompt.js';
 import { readRuntimePluginSettings, warmRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
+import type { AgentDeps } from '@cindy/maker-core';
 import { createPluginToolLifecycle } from './toolLifecycleControl.js';
 import { createGhostExecutionPipe } from './executionPipe.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
@@ -2953,6 +2954,8 @@ export function getGhostSubscriptionGateway(): GhostSubscriptionGateway {
       listGhostsAsync: listGhostNotificationCandidates,
       findGhostForDelivery: findGhostNotificationTarget,
       isRunning: (id) => getGhostRuntime().stateOf(id) === 'running',
+      isRunningInstall: (ghost) => runtimeSingleton?.isRunningInstall(ghost) === true
+        && (getAppCapabilities().canUseCindyAccountServices || !ghostRequiresCindyAccount(ghost.manifest)),
       wake: async (ghost) => {
         const r = await getGhostRuntime().spawn(ghost);
         if (!r.ok) throw new Error(r.reason);
@@ -3301,6 +3304,18 @@ export function getGhostRuntimePluginControl(): ReturnType<typeof createRuntimeP
 }
 let ghostRuntimeControl: ReturnType<typeof createRuntimePluginControl> | undefined;
 export const ghostToolLifecycleControl = createPluginToolLifecycle({ readSettings: readRuntimePluginSettings, control: getGhostRuntimePluginControl });
+export const ghostNativeRecoveryObserver: NonNullable<AgentDeps['nativeRecoveryObserver']> = sessionId => {
+  if (!taskEventIndex.wantsNativeRecovery()) return undefined;
+  const owner = getGhostOwnerPushStamp();
+  if (!owner) return undefined;
+  return {
+    publish(engine, nativeEvent, metadata) {
+      if (!taskEventIndex.wantsNativeRecovery() || !isGhostOwnerStampCurrent(owner) || isAppSessionBoundaryPending()) return;
+      try { taskEventIndex.publishNativeRecovery({ sessionId, engine, nativeEvent, metadata }, owner, getGhostSubscriptionGateway); }
+      catch { log.warn('native recovery event delivery failed'); }
+    },
+  };
+};
 let ghostRuntimeContexts: ReturnType<typeof createRuntimeContextProviders> | undefined;
 function runtimeContextProviders() {
   return ghostRuntimeContexts ??= createRuntimeContextProviders(getGhostRuntimePluginControl());
@@ -6179,6 +6194,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           return { ok: false, reason: 'failed', message: 'ACCOUNT_CHANGED' };
         }
         const r = await requestUtilityText(getMaker(), prompt, {
+          source: 'plugin-text',
           maxTokens,
           timeoutMs: remainingMs,
           // 用户选的模型 / 身份卡声明走显式供应商路径(钉死,不回落);

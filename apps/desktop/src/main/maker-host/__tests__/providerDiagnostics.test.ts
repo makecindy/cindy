@@ -12,6 +12,26 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 const probeLog = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+const usageLog = vi.hoisted(() => ({
+  record: vi.fn(async (_tokens: unknown, _route: unknown) => {}),
+}));
+vi.mock('../../usage/auxiliaryUsage.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../usage/auxiliaryUsage.js')>();
+  const create = (attribution: Record<string, unknown> = {}) =>
+    Object.assign(
+      async (tokens: unknown, route: Record<string, unknown> = {}) =>
+        usageLog.record(tokens, { ...attribution, ...route }),
+      { close: () => {} },
+    );
+  return {
+    ...actual,
+    createAuxiliaryUsageRecorder: create,
+    withAuxiliaryUsage: async (
+      attribution: Record<string, unknown>,
+      run: (record: ReturnType<typeof create>) => Promise<unknown>,
+    ) => run(create(attribution)),
+  };
+});
 vi.mock('../logger-adapter', () => ({
   createMakerLogger: () => ({ ...probeLog, child: () => probeLog }),
 }));
@@ -40,6 +60,7 @@ afterEach(() => {
   setDiagnosticsKeyReader(() => null);
   __resetModelVisibilityMirrorForTest();
   probeLog.warn.mockClear();
+  usageLog.record.mockClear();
   setDiagnosticsOAuthTokenReader(() => null);
 });
 
@@ -450,6 +471,64 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
     );
     expect(probeLog.warn).toHaveBeenCalledTimes(1);
     expect(probeLog.warn.mock.calls[0][1]).toMatchObject({ code: 'UPSTREAM_UNREACHABLE', upstream: 'https://nope.example', status: undefined });
+  });
+
+  it('records trailing usage from a later network chunk and keeps the served model', async () => {
+    const frames = [
+      { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+      {
+        model: 'served-model',
+        choices: [],
+        usage: {
+          prompt_tokens: 100,
+          prompt_tokens_details: { cached_tokens: 40 },
+          completion_tokens: 2,
+        },
+      },
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encode = new TextEncoder();
+        for (const frame of frames)
+          controller.enqueue(encode.encode(`data: ${JSON.stringify(frame)}\n\n`));
+        controller.enqueue(encode.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    const result = await runProviderProbe(
+      {
+        agent: 'codex',
+        baseUrl: 'https://x.example',
+        modelId: 'requested-alias',
+        wireProtocol: 'openai-chat',
+        apiKey: 'fake',
+      },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }),
+    );
+    expect(result.ok).toBe(true);
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
+
+  it('keeps observed usage when a probe stream disconnects after its first payload', async () => {
+    let step = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const frames = [
+          { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+          { model: 'served-model', usage: { prompt_tokens: 100, completion_tokens: 2 } },
+        ];
+        if (step === frames.length) { controller.error(new Error('socket disconnected')); return; }
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frames[step++])}\n\n`));
+      },
+    });
+    await expect(runProviderProbe({ agent: 'codex', baseUrl: 'https://x.example', modelId: 'alias', wireProtocol: 'openai-chat', apiKey: 'fake' },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }))).rejects.toThrow('socket disconnected');
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 100, outputTokens: 2 }), expect.objectContaining({ model: 'served-model' }));
   });
 
   it('openai-chat 探测:200 text/event-stream → ok', async () => {
@@ -1248,6 +1327,39 @@ describe('automatic Pi protocol connection test', () => {
     { id: 'chat-test', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
   ]);
   const unsupported = () => new Response(JSON.stringify({ error: { code: 'unsupported_protocol', message: 'protocol not supported' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+
+  it('does not overcount cumulative prompt/cache snapshots in native probing', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      sse([
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: null }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 20 },
+            completion_tokens: 1,
+          },
+        },
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 40 },
+            completion_tokens: 2,
+          },
+        },
+      ]),
+    );
+    expect(await probeProviderProtocols(spec, false, fetcher)).toMatchObject({ ok: true });
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
 
   it('uses native streaming and stops on the first successful generation', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => chat());

@@ -5519,8 +5519,19 @@
       "title": "Entrada de mensaje",
       "sendShortcut": {
         "label": "Usar {{shortcut}} para enviar",
-        "hint": "Cuando está habilitado, {{shortcut}} envía mensajes. Cuando está deshabilitado, Enter envía mensajes y Shift+Enter inserta una nueva línea.",
-        "ariaLabel": "Usar {{shortcut}} para enviar mensajes"
+        "hint": "Enter envía. Shift+Enter inserta un salto de línea.",
+        "ariaLabel": "Usar {{shortcut}} para enviar mensajes",
+        "hintModifierEnter": "{{shortcut}} envía. Enter inserta un salto de línea."
+      },
+      "followUp": {
+        "label": "Envío mientras la tarea se ejecuta",
+        "hintQueue": "Mientras la tarea se ejecuta, el botón de enviar y {{send}} ponen el mensaje en cola.",
+        "hintSteer": "Mientras la tarea se ejecuta, el botón de enviar y {{send}} dan indicaciones a la tarea en curso.",
+        "ariaLabel": "Envío durante la ejecución de la tarea",
+        "options": {
+          "queue": "Poner en cola",
+          "steer": "Dar indicaciones"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -8369,6 +8380,8 @@
         "subscribeMessageDetail": "Recibe mensajes guardados del usuario y respuestas de la IA. Los adjuntos se leen y transfieren por separado.",
         "subscribeToolExecution": "Eventos de ejecución de herramientas",
         "subscribeToolExecutionDetail": "Recibe nombres, entradas, resultados y errores de herramientas. Observa sin cambiar la ejecución.",
+        "subscribeNativeRecovery": "Eventos nativos de recuperación",
+        "subscribeNativeRecoveryDetail": "Recibe el estado del motor durante los reintentos, la compactación del contexto y la detención de tareas.",
         "subscribeTaskState": "Eventos de estado de tareas",
         "subscribeTaskStateDetail": "Recibe cambios de ejecución, espera, finalización, archivo y ocultación de tareas.",
         "subscribeActivity": "Observa cuándo la IA está pensando y cuándo te está esperando",
@@ -9935,6 +9948,41 @@
       },
       "providerTooltip": "El proveedor seleccionado actualmente para la sesión; en blanco si no hay ninguno fijado.",
       "tokensTooltip": "Cuenta solo los tokens que esta sesión usó en {{range}}."
+    },
+    "auxiliary": {
+      "title": "Uso auxiliar",
+      "label": "Auxiliar",
+      "purpose": "Finalidad",
+      "requests": "Solicitudes registradas",
+      "description": "Incluido en el total de tokens. Solo se registra el uso devuelto por el proveedor; no se estima el uso no informado ni las solicitudes anteriores.",
+      "sources": {
+        "title": "Generación de títulos",
+        "task-summary": "Resúmenes de tareas",
+        "prompt-prediction": "Sugerencias de entrada",
+        "working-status": "Estado del trabajo",
+        "help": "Ayuda",
+        "bot-creation": "Creación de compañeros",
+        "bot-opening": "Saludos de compañeros",
+        "group-planning": "Planificación del grupo",
+        "ambient-reply": "Decisiones de respuesta",
+        "auto-review": "Revisión automática",
+        "tool-loop-review": "Revisión de bucles de herramientas",
+        "memory-review": "Revisión de memoria",
+        "git-summary": "Resúmenes de cambios",
+        "hook-generation": "Scripts de automatización",
+        "automation-verification": "Verificación de importación",
+        "plugin-text": "Texto de complementos",
+        "voice-dialogue": "Conversaciones de voz",
+        "voice-exit": "Decisiones de salida de voz",
+        "voice-refinement": "Mejora de texto de voz",
+        "dictionary-learning": "Aprendizaje del diccionario",
+        "embedding-query": "Búsqueda vectorial",
+        "embedding-index": "Indexación vectorial",
+        "web-search": "Búsqueda web",
+        "provider-probe": "Pruebas de conexión",
+        "vision-bridge": "Puente de visión",
+        "auxiliary": "Otras solicitudes auxiliares"
+      }
     }
   },
   "usageDashboard": {
@@ -13807,9 +13855,8 @@
     "sendButton": {
       "send": "Enviar mensaje",
       "queue": "Poner mensaje en cola",
-      "queueTooltip": "Haz clic para poner en cola; presiona {{shortcut}} para dar indicaciones sin interrumpir la tarea",
-      "queueTooltipSendMode": "Haz clic para poner en cola; presiona {{shortcut}} para enviar este mensaje",
-      "stop": "Detener generación"
+      "stop": "Detener generación",
+      "steer": "Dar indicaciones a la tarea en curso"
     },
     "pluginSetup": {
       "account": {
@@ -14713,6 +14760,13 @@
       "runningWithWorktree_one": "Espera a que termine para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias.",
       "runningWithWorktree_other": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias.",
       "runningWithWorktree_many": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias."
+    },
+    "followUpHint": {
+      "queueDefault": "Los mensajes enviados mientras la tarea se ejecuta se ponen en cola.",
+      "steerDefault": "Los mensajes enviados mientras la tarea se ejecuta dan indicaciones a la tarea en curso.",
+      "switchToSteer": "Dar indicaciones por defecto",
+      "switchToQueue": "Poner en cola por defecto",
+      "dismiss": "Cerrar sugerencia"
     }
   },
   "onboarding": {
@@ -17157,6 +17211,7 @@
         "menuSave": "Guardar",
         "menuInsertTable": "Insertar tabla",
         "externalChangeBlocked": "El archivo cambió en el disco. El guardado automático está en pausa; guarda manualmente para sobrescribirlo.",
+        "targetChanged": "El archivo ahora apunta a otra ubicación. Tu borrador sigue en el editor. Cópialo antes de volver a abrir el archivo.",
         "tableMenu": {
           "addRowAbove": "Agregar fila arriba",
           "addRowBelow": "Agregar fila abajo",
@@ -19936,7 +19991,8 @@
           "expired": "Caducado",
           "voided": "Anulado"
         }
-      }
+      },
+      "viewUsage": "Ver uso"
     },
     "orders": {
       "title": "Historial de pedidos",

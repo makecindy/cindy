@@ -212,7 +212,6 @@ import {
   planModeComposerDraftText,
   shouldPreservePlanModeComposerDraft,
 } from './planModeComposerCommand';
-import { resolveSoleSteerableQueuedMessage } from './pendingQueueRowPresentation';
 import { SendButton } from './SendButton';
 import { FolderPickerPopover, addRecentFolder, type FolderPickerOption } from './FolderPickerPopover';
 import { SlashCommandPalette } from './SlashCommandPalette';
@@ -339,6 +338,12 @@ import {
   resolveComposerEnterIntent,
   useComposerSendShortcutPreference,
 } from '@/hooks/useComposerSendShortcutPreference';
+import {
+  getComposerFollowUpBehavior,
+  useComposerFollowUpHintDismissed,
+  useComposerFollowUpPreference,
+} from '@/hooks/useComposerFollowUpPreference';
+import { ComposerFollowUpHint } from './ComposerFollowUpHint';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
@@ -1483,6 +1488,10 @@ export function ChatInput({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
+  const { preference: followUpBehavior, setPreference: setFollowUpBehavior } =
+    useComposerFollowUpPreference();
+  const { dismissed: followUpHintDismissed, dismiss: dismissFollowUpHint } =
+    useComposerFollowUpHintDismissed();
   // ── 推荐提示词 ────────────────────────────────────────────────────
   // 设置开关:通过 shared hook 订阅,与 TipsSection 同源,切换后立即生效。
   const { enabled: recommendationEnabled } = usePromptRecommendationPreference();
@@ -1620,6 +1629,11 @@ export function ChatInput({
   }, [onStop]);
   const showStopButtonRef = useRef(showStopButton);
   showStopButtonRef.current = showStopButton;
+  // Only surfaces that can steer a running turn (the task view) honor a steer default.
+  const runningDeliveryMode: MessageDeliveryMode = onQueueSteer ? followUpBehavior : 'queue';
+  // What a click or the configured submit command sends: the follow-up default
+  // while a turn runs, an ordinary send otherwise.
+  const defaultDeliveryMode: MessageDeliveryMode = showStopButton ? runningDeliveryMode : 'queue';
 
   // turnGen 继续作为 renderer 侧请求代次；跨 session / 新 turn 的真实归属由
   // promptRecommendationStore 的 sessionId + completion revision + requestSeq 保证。
@@ -1654,7 +1668,6 @@ export function ChatInput({
   const hasPredictionMessages = (messages?.length ?? 0) > 0;
   const queueEditingClientIdRef = useRef(queueEditingClientId);
   queueEditingClientIdRef.current = queueEditingClientId;
-  const steerSoleQueuedMessageRef = useRef<() => boolean>(() => false);
   const onQueueEditCancelRef = useRef(onQueueEditCancel);
   onQueueEditCancelRef.current = onQueueEditCancel;
   const queueEditCancelAllowedRef = useRef(true);
@@ -2065,6 +2078,9 @@ export function ChatInput({
   const hostSupportsOrcaRemoteWorkerAgentRelocation =
     hostCcCaps.capabilities?.supportsOrcaRemoteWorkerAgentRelocation === true ||
     hostCodexCaps.capabilities?.supportsOrcaRemoteWorkerAgentRelocation === true;
+  const hostSupportsQueueHeadRetry = !deviceLinkDeviceId
+    || hostCcCaps.capabilities?.supportsQueueHeadRetry === true
+    || hostCodexCaps.capabilities?.supportsQueueHeadRetry === true;
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
@@ -3036,6 +3052,7 @@ export function ChatInput({
         const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
           turnRunning: showStopButtonRef.current,
           platform: window.electronAPI?.platform,
+          followUpBehavior: getComposerFollowUpBehavior(),
         });
         if (enterIntent === 'native') return false;
         if (enterIntent === 'ignore') {
@@ -3763,6 +3780,7 @@ export function ChatInput({
       const enterIntent = resolveComposerEnterIntent(event, getComposerSendShortcutPreference(), {
         turnRunning: showStopButtonRef.current,
         platform,
+        followUpBehavior: getComposerFollowUpBehavior(),
       });
       const isModifiedEnter = hasComposerModifier(event, platform);
       if (
@@ -3774,7 +3792,6 @@ export function ChatInput({
         event.preventDefault();
         event.stopPropagation();
         if (panelBridgeRef.current?.captureKey(event)) return;
-        if (steerSoleQueuedMessageRef.current()) return;
         clearPressTimer();
         voiceShortcutPressRef.current = null;
         void voiceInputStopAndSendRef.current(enterIntent);
@@ -6674,25 +6691,6 @@ export function ChatInput({
     },
     [onQueueSteer],
   );
-  steerSoleQueuedMessageRef.current = () => {
-    // 可见推荐也是待发内容，和正文、附件、评论、语音稿一样保留原发送路径。
-    if (
-      !onQueueSteer ||
-      voiceBusyOnCurrentComposer ||
-      showRecommendationRef.current ||
-      !composerFullyEmptyRef.current()
-    ) {
-      return false;
-    }
-    const clientId = resolveSoleSteerableQueuedMessage(pendingQueue ?? [], {
-      editingClientId: queueEditingClientId,
-      steeringClientIds: steeringQueueClientIds,
-    });
-    if (!clientId) return false;
-    void handleQueueSteer(clientId);
-    return true;
-  };
-
   const queueEditActive = Boolean(queueEditingClientId && onQueueEditSubmit);
   const submitQueueEdit = useCallback(async () => {
     if (
@@ -6813,10 +6811,17 @@ export function ChatInput({
       voiceInput.isListening,
     ],
   );
+  // Entry points that send "like the Send button" (long-press release, submit
+  // commands, programmatic submit requests) follow the running-turn default;
+  // keyboard intents pass their own mode through voiceInputStopAndSendRef.
+  const handleDefaultSend = useCallback(
+    () => handleClickSend(defaultDeliveryMode),
+    [handleClickSend, defaultDeliveryMode],
+  );
   useEffect(() => {
     voiceInputStopAndSendRef.current = handleClickSend;
-    composerSubmitRequestSendRef.current = handleClickSend;
-  }, [handleClickSend]);
+    composerSubmitRequestSendRef.current = handleDefaultSend;
+  }, [handleClickSend, handleDefaultSend]);
 
   // 别处的一键动作 (截图「翻译」等) 已把草稿写好并请求发送: 等编辑器与附件同步到位,
   // 按普通发送键同一路径发一次; 发送中 / 语音占用时与键盘输入同锁, 稍后再试直到过期。
@@ -7482,6 +7487,7 @@ export function ChatInput({
          */
         agentDeviceId?: string | null;
         thinking?: boolean;
+        onSwitchStaged?: (revision: number) => void;
       },
     ): Promise<boolean> => {
       // ★ 返回值 = **本端请求的完整配置真的落到会话上了没有**(2026-08-17 review 确立
@@ -7688,6 +7694,7 @@ export function ChatInput({
         // 调用方的清理若按成功走,清掉的是**用户最新那次选择**对应的配置。
         if (ackAction === 'discard') return false;
         if (ackAction === 'apply-intent') {
+          if (result.pendingSwitchRevision !== undefined) overrides?.onSwitchStaged?.(result.pendingSwitchRevision);
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
           // 在下一条消息发送时刻执行;turn 运行中额外提示旧 turn 不受影响。
@@ -7987,7 +7994,7 @@ export function ChatInput({
   // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
   const relocationSourceAgent = sessionEngineFilter?.currentAgent;
   const confirmAgentRelocation = useCallback(
-    (target: UnifiedSelectionAgentDevice, targetAgent: string) => {
+    (target: UnifiedSelectionAgentDevice, targetAgent: string, retryLabel?: string) => {
       const description = t(relocationDescriptionKey({
         fromAgent: relocationSourceAgent,
         toAgent: targetAgent,
@@ -8002,7 +8009,7 @@ export function ChatInput({
         hasSwitchIntent:
           (target?.deviceId ?? null) === agentDeviceId ||
           (intentAgentDeviceId !== undefined && intentAgentDeviceId === (target?.deviceId ?? null)),
-        alwaysAsk: !!ask,
+        alwaysAsk: !!ask || retryLabel !== undefined,
         confirm: confirmDialog,
         copy: {
           title: target
@@ -8015,7 +8022,9 @@ export function ChatInput({
           description: reason
             ? t('newChat.chatInput.agentRelocation.discoveredDescription', { reason, description })
             : description,
-          confirmText: t('newChat.chatInput.agentRelocation.confirm'),
+          confirmText: retryLabel !== undefined
+            ? t('modelGroups.switchOffer.action', { model: retryLabel })
+            : t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
@@ -8051,12 +8060,25 @@ export function ChatInput({
         ? { readProviderGroup: () => readSessionProviderGroup(sessionId, deviceLinkDeviceId || undefined) }
         : {}),
       onRelocate: async (selection) => {
-        if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent))) return false;
-        return performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
+        const recovery = makerChatStore.getSnapshot(sessionId).inputRecovery;
+        const retryClientId = hostSupportsQueueHeadRetry && selection.retryQueuedSend && recovery?.kind === 'queue-head'
+          ? recovery.clientId : undefined;
+        const retryLabel = retryClientId === undefined ? undefined : selection.agentDevice?.name ?? selection.modelId;
+        if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent, retryLabel))
+          || currentSessionIdRef.current !== sessionId) return false;
+        let expectedSwitchRevision: number | undefined;
+        const selected = await performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
           ...(selection.effort ? { effort: selection.effort } : {}),
           fastMode: selection.fast,
           agentDeviceId: selection.agentDevice?.deviceId ?? null,
+          onSwitchStaged: (revision) => { expectedSwitchRevision = revision; },
         });
+        const latest = makerChatStore.getSnapshot(sessionId).inputRecovery;
+        if (selected && retryClientId !== undefined && expectedSwitchRevision !== undefined && currentSessionIdRef.current === sessionId
+          && latest?.kind === 'queue-head' && latest.clientId === retryClientId) {
+          await makerChatStore.retryLastError(sessionId, { expectedQueueHeadClientId: retryClientId, expectedSwitchRevision });
+        }
+        return selected;
       },
     };
   }, [
@@ -8072,6 +8094,7 @@ export function ChatInput({
     sessionOrcaRemoteWorker,
     hostSupportsOrcaAgentRelocation,
     hostSupportsOrcaRemoteWorkerAgentRelocation,
+    hostSupportsQueueHeadRetry,
     remoteAgentDevices,
     catalogHostDeviceId,
     effectiveAgentDeviceId,
@@ -8735,7 +8758,7 @@ export function ChatInput({
       if (action.type !== 'command') return false;
       switch (action.commandId) {
         case 'composer.submit':
-          void handleClickSend();
+          void handleDefaultSend();
           return true;
         case 'composer.toggleFastMode':
           void handleFastModeChange(!composerSelection.display.fastMode);
@@ -8774,7 +8797,7 @@ export function ChatInput({
     ownsHardwareComposerActions,
     effectiveSourceId,
     composerSelection.display.fastMode,
-    handleClickSend,
+    handleDefaultSend,
     handleEffortChange,
     handleFastModeChange,
     handleVoiceInputPlainStop,
@@ -9483,6 +9506,12 @@ export function ChatInput({
   }, [showPromptPreview]);
   // 可见推荐本身就是一次可发送输入：按钮点击时会先把它同步写入正文，再走现有发送链。
   const canSend = hasComposerPayload || showRecommendationOverlay;
+  const showFollowUpHint =
+    showStopButton &&
+    Boolean(onQueueSteer) &&
+    hasComposerPayload &&
+    !queueEditActive &&
+    !followUpHintDismissed;
   const makeNeedsNoModel = CINDY_MAKE_ENABLED && (noConnectedSource || selectedSourceDisconnected) && !!editor &&
     !hasPreparedOrPendingAttachments && classifyCindyMakeCommand(
       serializeEditorContent(editor).text, slashCommandsReady ? mergedCommands : null,
@@ -9612,7 +9641,7 @@ export function ChatInput({
           divs would overlap, and the later one in the DOM would hide the other.
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
-      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
+      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0 || showFollowUpHint) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
             <VoiceInputStatusNotice message={voiceInput.lastError} />
@@ -9621,6 +9650,13 @@ export function ChatInput({
           ) : null}
           {rejections.length > 0 && (
             <AttachmentRejectionStrip rejections={rejections} onDismiss={dismissRejection} />
+          )}
+          {showFollowUpHint && (
+            <ComposerFollowUpHint
+              behavior={runningDeliveryMode}
+              onSwitch={() => setFollowUpBehavior(runningDeliveryMode === 'steer' ? 'queue' : 'steer')}
+              onDismiss={dismissFollowUpHint}
+            />
           )}
         </div>
       )}
@@ -10478,7 +10514,7 @@ export function ChatInput({
                       onHoldChange={setVoiceButtonHolding}
                       emptyComposer={voiceHintEmpty}
                       onStop={handleVoiceInputPlainStop}
-                      onStopAndSend={handleClickSend}
+                      onStopAndSend={handleDefaultSend}
                       sendTargetRef={sendButtonRef}
                       canReleaseToSend={canReleaseVoiceToSend}
                       releaseToSendActive={voiceReleaseToSendActive}
@@ -10524,13 +10560,7 @@ export function ChatInput({
                             : voiceInput.isListening && !sendButtonDisabled
                               ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
                               : showStopButton
-                                ? composerSendShortcutPreference === 'modifier-enter'
-                                  ? t('newChat.sendButton.queueTooltipSendMode', {
-                                      shortcut: composerSendShortcutLabel,
-                                    })
-                                  : t('newChat.sendButton.queueTooltip', {
-                                      shortcut: steerShortcutLabel,
-                                    })
+                                ? `${t(`newChat.sendButton.${runningDeliveryMode}`)} · ${composerSendShortcutLabel}`
                                 : !sendButtonDisabled
                                   ? `${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`
                                   : selectedSourceDisconnected
@@ -10565,12 +10595,12 @@ export function ChatInput({
                                 : queueEditActive
                                 ? t('newChat.pendingQueue.editSaveAria')
                                 : showStopButton
-                                  ? t('newChat.sendButton.queue')
+                                  ? t(`newChat.sendButton.${runningDeliveryMode}`)
                                   : t('newChat.sendButton.send')
                             }
                             onClick={() => {
                               if (mainSlotIsVoice) onStartVoiceConversation?.();
-                              else void handleClickSend();
+                              else void handleDefaultSend();
                             }}
                           />
                         </span>
