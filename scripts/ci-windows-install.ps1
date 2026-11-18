@@ -37,7 +37,7 @@ function Get-InstallEvent([string]$line) {
         return @{ event = 'lifecycle'; package = $name; stage = $stage; status = $status }
     }
 
-    if ($line -notmatch '^\[WARN\] ') { return }
+    if ($line -notmatch '^\s*(?:\[WARN\]|WARN)\s+') { return }
     $result = if ($line -match 'Request took (\d+)ms:') {
         @{ event = 'slow-request'; durationMs = [long]$Matches[1] }
     } elseif ($line -match 'Will retry in (\d+) (second|minute)') {
