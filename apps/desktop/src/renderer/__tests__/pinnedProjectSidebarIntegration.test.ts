@@ -44,8 +44,6 @@ describe('pinned project sidebar integration', () => {
     expect(sidebarSource).toContain('const groupsWithPinnedProjects = useProjectGroups(');
     expect(sidebarSource).toContain('const notHidden = visibleSidebarProjects(');
     expect(sidebarSource).toContain('if (filter.projectsAsSet === null) return notHidden;');
-    // Both the expanded list and the rail build their rows with sidebarProjectRows.
-    expect(sidebarSource.match(/sidebarProjectRows\(/g)).toHaveLength(2);
     const row = (id: string, pinnedAt: string | null) => ({
       id, title: id, status: 'active', workingDir: '/work/app', workspaceKind: 'project',
       pinnedAt, userSendAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',

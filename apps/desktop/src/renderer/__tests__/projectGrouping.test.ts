@@ -1265,6 +1265,25 @@ describe('sidebar teammate filter only narrows teammate content', () => {
   it('still lets the last-activity filter drop projects with no recent task', () => {
     expect(sidebar(['patrol'], Date.parse('2027-01-01T00:00:00.000Z'))).toEqual({ projects: [], tasks: [] });
   });
+
+  // PR #11226 review (P2): hidden teammate tasks must not keep a project ahead in "recent activity" order.
+  it('orders projects by the tasks still visible after the teammate filter', () => {
+    const day = (d: number) => `2026-01-0${d}T00:00:00.000Z`;
+    const rows = [
+      s({ id: 'a-user', workingDir: '/work/a', updatedAt: day(1) }),
+      s({ id: 'a-cindy', workingDir: '/work/a', updatedAt: day(3) }),
+      s({ id: 'b-user', workingDir: '/work/b', updatedAt: day(2) }),
+    ];
+    const cindyIndex = new Map([[taskCreatorSessionKey('a-cindy'), new Set(['cindy'])]]);
+    const none = {
+      session: (session: Session) => matchesSidebarTeammateFilter(session, 'none', cindyIndex),
+      project: (project: ProjectNode) => sidebarTeammateProjectVisible(project, 'none', cindyIndex),
+    };
+    const order = (filter: typeof none | null) =>
+      sidebarProjectRows(groupSessions(rows).projects, 'all', filter).map((project) => project.workingDir);
+    expect(order(null)).toEqual(['/work/a', '/work/b']);
+    expect(order(none)).toEqual(['/work/b', '/work/a']);
+  });
 });
 
 /* ============================== device-link 远程项目 ============================== */

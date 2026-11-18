@@ -248,7 +248,9 @@ export interface SidebarTeammateFilter {
 /**
  * Project nodes and their rows after the vendor and teammate filters. The
  * teammate filter hides only teammate folders and teammate tasks; ordinary
- * projects stay exactly as without it.
+ * projects stay exactly as without it. Hidden teammate tasks also stop counting
+ * toward a project's recent activity, so "recent activity" order follows what
+ * is still visible (projects are grouped before this filter runs).
  */
 export function sidebarProjectRows(
   projects: readonly ProjectNode[],
@@ -257,7 +259,7 @@ export function sidebarProjectRows(
 ): ProjectNode[] {
   const vendorPredicate =
     vendor === 'all' ? null : (session: Session) => (session.agentKind ?? 'cc') === vendor;
-  return projects.flatMap((project) => {
+  const rows = projects.flatMap((project) => {
     if (teammateFilter && !teammateFilter.project(project)) return [];
     const matchingSessions = vendorPredicate ? project.sessions.filter(vendorPredicate) : project.sessions;
     if (
@@ -265,11 +267,24 @@ export function sidebarProjectRows(
       (!project.isPersistentLocal || (vendorPredicate && !persistentProjectMatchesVendor(project, vendor)))
     )
       return [];
-    const rows = matchingSessions.filter(
+    const visible = matchingSessions.filter(
       (session) => session.pinnedAt == null && (teammateFilter === null || teammateFilter.session(session)),
     );
-    return [withProjectSessions(project, rows)];
+    const node = withProjectSessions(project, visible);
+    if (!teammateFilter || project.sessions.length === 0) return [node];
+    const latestActivityAt = visibleLatestActivityAt(project.sessions.filter(teammateFilter.session));
+    return [latestActivityAt === project.latestActivityAt ? node : { ...node, latestActivityAt }];
   });
+  return teammateFilter ? rows.sort(compareProjectsByLatestSessionDesc) : rows;
+}
+
+/** Latest activity among the sessions a filter left visible; '' when none remain. */
+function visibleLatestActivityAt(sessions: readonly Session[]): string {
+  let latest: Session | null = null;
+  for (const session of sessions) {
+    if (latest === null || sortTimeMs(session) > sortTimeMs(latest)) latest = session;
+  }
+  return latest ? sortTimeIso(latest) : '';
 }
 
 export function persistentProjectMatchesVendor(
