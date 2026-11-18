@@ -14,6 +14,80 @@ async function responseText(transform: NodeJS.ReadWriteStream, text: string) {
 }
 
 describe('request-owned Responses compatibility', () => {
+  // #10085 / PR10091 remaining selector findings: real adapter JSON/SSE paths, unit tier.
+  // Prior cases never selected a collision by its original kind or repaired native namespaces.
+  it.each(['application/json', 'text/event-stream'])('keeps collision selectors on their original tool kind (%s)', async contentType => {
+    for (const childKind of ['custom', 'function']) {
+      for (const allowed of [false, true]) {
+        const bareKind = childKind === 'custom' ? 'function' : 'custom';
+        const selector = { type: childKind, name: 'workspace__read' };
+        const input = { tools: [
+          { type: bareKind, name: 'workspace__read', parameters: {} },
+          { type: 'namespace', name: 'workspace', tools: [{ type: childKind, name: 'read', parameters: {} }] },
+        ], tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector };
+        const adapter = createCodexResponsesCompatibilityAdapter();
+        const request = adapter.adaptRequest(input, 10085, undefined, true) as typeof input;
+        expect(request.tool_choice).toEqual(allowed
+          ? { type: 'allowed_tools', tools: [{ type: 'function', name: 'workspace__read_2' }] }
+          : { type: 'function', name: 'workspace__read_2' });
+        const output = { output: [{ type: 'function_call', id: 'fc_test', call_id: 'call_test', name: 'workspace__read_2', arguments: childKind === 'custom' ? '{"input":"child"}' : '{}' }] };
+        const sse = contentType === 'text/event-stream';
+        const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+        const text = await responseText(adapter.createResponseTransform(10085, { contentType, contentEncoding: '' })!, wire);
+        const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+        expect((sse ? parsed.response : parsed).output[0]).toMatchObject({
+          namespace: 'workspace', name: 'read', type: childKind === 'custom' ? 'custom_tool_call' : 'function_call',
+        });
+      }
+    }
+  });
+
+  it.each(['application/json', 'text/event-stream'])('repairs native namespace calls with an unqualified selector (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    const input = { tools: [{ type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } }] }], tool_choice: { type: 'function', name: 'read' } };
+    adapter.adaptRequest(input, 10086);
+    const output = { status: 'completed', output: [{ type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'native', arguments: '{"line":12.0}' }] };
+    const sse = contentType === 'text/event-stream';
+    const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+    const transform = adapter.createResponseTransform(10086, { contentType, contentEncoding: '' });
+    expect(transform).not.toBeNull();
+    const text = await responseText(transform!, wire);
+    const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+    expect((sse ? parsed.response : parsed).output[0]).toMatchObject({ namespace: 'workspace', name: 'read', arguments: '{"line":12}' });
+  });
+
+  it('repairs allocated function arguments in incremental SSE while retaining event identity', () => {
+    const parameters = { type: 'object', properties: { line: { type: 'integer' } } };
+    const prepared = prepareResponsesCompatibility({ tools: [
+      { type: 'function', name: 'workspace__read', parameters },
+      { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read', parameters }] },
+    ] }, { namespaceTools: 'functions', repairFunctionArguments: true });
+    const rewrite = prepared.createStreamRewrite();
+    try {
+      const events = [
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc_child', call_id: 'child', name: 'workspace__read_2', arguments: '' } },
+        { type: 'response.function_call_arguments.done', output_index: 0, item_id: 'fc_child', arguments: '{"line":12.0}' },
+        { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc_child', call_id: 'child', name: 'workspace__read_2', arguments: '{"line":12.0}' } },
+      ].flatMap(event => rewrite(`data: ${JSON.stringify(event)}`)).map(block => JSON.parse(block.slice(6)));
+      expect(events[1]).toMatchObject({ type: 'response.function_call_arguments.done', item_id: 'fc_child', arguments: '{"line":12}' });
+      expect(events[2].item).toMatchObject({ type: 'function_call', id: 'fc_child', call_id: 'child', namespace: 'workspace', name: 'read', arguments: '{"line":12}' });
+    } finally { rewrite.dispose?.(); }
+  });
+
+  it('does not authorize a custom child through a mismatched function selector after lowering', () => {
+    for (const allowed of [false, true]) {
+      const selector = { type: 'function', namespace: 'workspace', name: 'read' };
+      const prepared = prepareResponsesCompatibility({ tools: [
+        { type: 'function', name: 'workspace__read', parameters: {} },
+        { type: 'namespace', name: 'workspace', tools: [{ type: 'custom', name: 'read', description: 'Child' }] },
+      ], tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector }, {
+        namespaceTools: 'functions', customTools: 'functions',
+      });
+      const call = JSON.stringify({ output: [{ type: 'function_call', name: 'workspace__read_2', arguments: '{"input":"child"}', call_id: 'unapproved' }] });
+      expect(prepared.restoreJson(call)).toBe(call);
+    }
+  });
+
   it.each(['application/json', 'text/event-stream'])('restores namespace and Code Mode identities (%s)', async contentType => {
     const adapter = createCodexResponsesCompatibilityAdapter();
     const input = {
