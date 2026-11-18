@@ -1,7 +1,12 @@
 import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
 import { download } from '../downloader/service.js';
+import { createDownloadProgressReporter, type DownloadProgressReporter } from '../downloader/progressReporter.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { DownloadProgress } from '../../shared/downloadProgress.js';
+import { createIpcError } from '../../shared/ipc-errors.js';
 import { compareAppUpdateVersions, parseAppUpdateVersion } from '../updateVersionPolicy.js';
-import { type GithubPluginRelease, type GithubPluginReleaseCheck } from '../../shared/githubPluginRelease.js';
+import { type GithubPluginRelease, type GithubPluginReleaseCheck, type GithubPluginReleaseResult } from '../../shared/githubPluginRelease.js';
 
 const releaseApi = (repository: string) => 'https://api.github.com/repos/' + repository.split('/').map(encodeURIComponent).join('/') + '/releases';
 const MAX_PACKAGE_BYTES = PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES;
@@ -91,9 +96,11 @@ export async function downloadGithubPluginRelease(
   repository: string,
   release: GithubPluginRelease,
   destination: string,
+  callbacks?: DownloadProgressReporter['callbacks'],
 ): Promise<void> {
   const assetUrl = `${releaseApi(repository)}/assets/${release.assetId}`;
   await download({
+    ...callbacks,
     url: assetUrl,
     targetPath: destination,
     sha256: release.sha256,
@@ -117,4 +124,42 @@ export async function downloadGithubPluginRelease(
       return { response: await fetch(url, { ...init, redirect: 'manual', headers }) };
     },
   });
+}
+
+export async function installCheckedGithubPluginRelease(input: {
+  check: GithubPluginReleaseCheck;
+  expectedAssetId: number;
+  pending: Set<string>;
+  updateKey: string;
+  tempRoot: string;
+  isCurrentOwner: () => boolean;
+  download: (file: string, release: GithubPluginRelease, callbacks: DownloadProgressReporter['callbacks']) => Promise<void>;
+  install: (file: string, release: GithubPluginRelease) => Promise<string>;
+  emit: (progress: DownloadProgress) => void;
+}): Promise<GithubPluginReleaseResult> {
+  const { check, expectedAssetId, pending, updateKey, tempRoot, isCurrentOwner } = input;
+  if (check.status !== 'available' || check.release.assetId !== expectedAssetId) return check;
+  if (pending.has(updateKey)) throw createIpcError('PRECONDITION_FAILED', 'Plugin update is already in progress');
+  pending.add(updateKey);
+  let dir: string | undefined;
+  try {
+    dir = await mkdtemp(join(tempRoot, 'cindy-plugin-update-'));
+    if (!isCurrentOwner()) throw createIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
+    const file = join(dir, 'release.cindy');
+    const reporter = createDownloadProgressReporter({
+      total: check.release.size, initialPhase: 'queued', emit: input.emit,
+    });
+    input.emit(reporter.snapshot());
+    try {
+      await input.download(file, check.release, reporter.callbacks);
+    } catch {
+      return { status: 'unavailable' };
+    }
+    if (!isCurrentOwner()) throw createIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
+    reporter.setPhase('installing');
+    return { status: 'updated', version: await input.install(file, check.release) };
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
+    pending.delete(updateKey);
+  }
 }

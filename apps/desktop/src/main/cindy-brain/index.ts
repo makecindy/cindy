@@ -735,7 +735,8 @@ import { readModelDisableOverrides } from '../maker-host/model-disable-store.js'
 import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { getGhostGithubReleaseRepository } from '@cindy/plugin-protocol';
-import { checkGithubPluginRelease, downloadGithubPluginRelease } from './githubPluginRelease.js';
+import { GITHUB_PLUGIN_RELEASE_PROGRESS_CHANNEL } from '../../shared/githubPluginRelease.js';
+import { checkGithubPluginRelease, downloadGithubPluginRelease, installCheckedGithubPluginRelease } from './githubPluginRelease.js';
 import { compareAppUpdateVersions } from '../updateVersionPolicy.js';
 import { guardedOutboundFetch, outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
@@ -11115,7 +11116,8 @@ export function registerGhostIpc(): void {
     assertTrustedAppRendererEvent(event);
     const owner = captureGhostMutationOwner();
     const target = typeof instanceId === 'string'
-      ? findInstalledGhostByInstanceId(manager.list(), instanceId) : null;
+      ? manager.findInstalledInstance(instanceId) ?? findInstalledGhostByInstanceId(await manager.listAsync(), instanceId)
+      : null;
     const repository = target && getGhostGithubReleaseRepository(target.manifest);
     if (!target || !repository || target.namespace !== LOCAL_PLUGIN_NAMESPACE ||
         target.namespaceState !== 'confirmed') {
@@ -11134,38 +11136,33 @@ export function registerGhostIpc(): void {
     const token = await readLocalGithubToken();
     const result = await checkGithubPluginRelease(outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version);
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
-    if (action === 'check') return result;
-    if (result.status !== 'available' || !token || result.release.assetId !== expectedAssetId) return result;
-
+    if (action === 'check' || !token || typeof expectedAssetId !== 'number') return result;
     const instance = installedGhostStoragePart(target);
     const approval = ghostInstallApprovalToken(target.approval);
-    const updateKey = JSON.stringify([activeOwnerScopeKey(), instance]);
-    if (githubReleaseUpdates.has(updateKey)) throwIpcError('PRECONDITION_FAILED', 'Plugin update is already in progress');
-    githubReleaseUpdates.add(updateKey);
-    let dir: string | undefined;
-    try {
-      dir = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'cindy-plugin-update-'));
-      if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
-      const file = path.join(dir, 'release.cindy');
-      try {
-        await downloadGithubPluginRelease(outboundFetch as typeof fetch, token, repository, result.release, file);
-      } catch {
-        return { status: 'unavailable' };
-      }
-      const updated = await updateLocalFile(event.sender, owner, file, {
-        expectedPackageSha256: result.release.sha256,
-        expectedInstalledApproval: approval,
-        expectedInstalledInstanceId: instance,
-      }, {
-        pluginId: target.manifest.id,
-        version: result.release.version,
-        repository,
-      });
-      return { status: 'updated', version: updated.ghost.manifest.version };
-    } finally {
-      githubReleaseUpdates.delete(updateKey);
-      if (dir) await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
-    }
+    const ownerStamp = getGhostOwnerPushStamp();
+    return installCheckedGithubPluginRelease({
+      check: result,
+      expectedAssetId,
+      pending: githubReleaseUpdates,
+      updateKey: JSON.stringify([activeOwnerScopeKey(), instance]),
+      tempRoot: app.getPath('temp'),
+      isCurrentOwner: () => ghostOwnerScope.isStable(owner),
+      emit(progress) {
+        if (!event.sender.isDestroyed() && ghostOwnerScope.isStable(owner)) {
+          sendGhostContentsPush(event.sender, GITHUB_PLUGIN_RELEASE_PROGRESS_CHANNEL, { instanceId: instance, progress }, ownerStamp);
+        }
+      },
+      download: (file, release, callbacks) =>
+        downloadGithubPluginRelease(outboundFetch as typeof fetch, token, repository, release, file, callbacks),
+      async install(file, release) {
+        const updated = await updateLocalFile(event.sender, owner, file, {
+          expectedPackageSha256: release.sha256,
+          expectedInstalledApproval: approval,
+          expectedInstalledInstanceId: instance,
+        }, { pluginId: target.manifest.id, version: release.version, repository });
+        return updated.ghost.manifest.version;
+      },
+    });
   });
 
   // 设置页「装入意识…」第一步:系统文件选择框(按 .cindy 过滤),只选不装。

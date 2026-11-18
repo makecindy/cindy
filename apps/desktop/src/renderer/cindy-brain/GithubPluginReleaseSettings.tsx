@@ -1,6 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { DownloadMeter } from '@/components/ui/download-meter';
+import { initialDownloadProgress, type DownloadProgress } from '../../shared/downloadProgress';
 import { Button } from '@/components/ui/button';
+import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { extractIpcError } from '@/utils/ipcError';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import type { InstalledGhost } from '../../shared/ghost';
@@ -10,6 +13,12 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
   const { t } = useTranslation();
   const [result, setResult] = useState<GithubPluginReleaseResult>();
   const [busy, setBusy] = useState<'check' | 'update' | 'sign-in'>();
+  const [progress, setProgress] = useState<DownloadProgress>();
+  const instanceId = installedGhostStoragePart(ghost);
+  useEffect(() => window.electronAPI.ghosts.onGithubReleaseProgress?.((event, ownerStamp) => {
+    if (ownerStamp !== undefined && !isDataOwnerPushStampCurrent(ownerStamp)) return;
+    if (event.instanceId === instanceId) setProgress(event.progress);
+  }), [instanceId]);
   const [failed, setFailed] = useState(false);
   const release = result && 'release' in result ? result.release : undefined;
   const currentVersion = result?.status === 'updated' ? result.version : ghost.manifest.version;
@@ -17,9 +26,10 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
 
   async function run(action: 'check' | 'update' | 'sign-in') {
     setBusy(action);
+    if (action === 'update') setProgress(initialDownloadProgress('preparing'));
     setFailed(false);
     try {
-      const reply = await window.electronAPI.ghosts.githubRelease(action, installedGhostStoragePart(ghost), release?.assetId);
+      const reply = await window.electronAPI.ghosts.githubRelease(action, instanceId, release?.assetId);
       if (typeof reply !== 'boolean') setResult(reply);
       else if (!reply) setFailed(true);
     } catch (error) {
@@ -53,6 +63,11 @@ export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: Inst
           <Button variant="secondary" size="sm" disabled={!!busy} onClick={() => void run('sign-in')}>{t('settings.ghosts.detail.githubRelease.connect')}</Button>
         )}
       </div>
+      {busy === 'update' && progress && (
+        <div className="basis-full">
+          <DownloadMeter label={t('settings.ghosts.detail.githubRelease.title')} progress={progress} />
+        </div>
+      )}
     </section>
   );
 }

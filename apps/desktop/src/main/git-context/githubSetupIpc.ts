@@ -33,7 +33,9 @@ function readGithubPluginToken(): string | null {
 /** Host-only credential for actions the user invokes with their local GitHub sign-in. */
 export async function readLocalGithubToken(): Promise<string | null> {
   const owner = activeOwnerScopeKey();
-  const token = await getSharedGhCliTokenSource().readToken();
+  const source = getSharedGhCliTokenSource();
+  source.invalidate();
+  const token = await source.readToken();
   return owner === activeOwnerScopeKey() ? token ?? readGithubPluginToken() : null;
 }
 

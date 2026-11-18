@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { checkGithubPluginRelease, downloadGithubPluginRelease } from '../githubPluginRelease';
+import { checkGithubPluginRelease, downloadGithubPluginRelease, installCheckedGithubPluginRelease } from '../githubPluginRelease';
 
 const bytes = 'fixture plugin archive';
 const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -64,6 +64,37 @@ describe('GitHub plugin release', () => {
       expect(fetch).toHaveBeenCalledTimes(1);
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('installs only the checked asset and refuses concurrent or changed-owner updates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'github-plugin-install-test-'));
+    let current = true;
+    let finish: () => void = () => {};
+    const downloading = new Promise<void>((resolve) => { finish = resolve; });
+    const input = {
+      check: { status: 'available' as const, release: { assetId: 41, size: bytes.length, version: '0.2.12', sha256, prerelease: false } },
+      expectedAssetId: 41, pending: new Set<string>(), updateKey: 'owner/instance', tempRoot: root,
+      isCurrentOwner: () => current, download: vi.fn(() => downloading),
+      install: vi.fn(async () => '0.2.12'), emit: vi.fn(),
+    };
+    try {
+      await expect(installCheckedGithubPluginRelease({ ...input, expectedAssetId: 40 })).resolves.toEqual(input.check);
+      expect(input.download).not.toHaveBeenCalled();
+      const update = installCheckedGithubPluginRelease(input);
+      await expect(installCheckedGithubPluginRelease(input)).rejects.toThrow('already in progress');
+      await vi.waitFor(() => expect(input.download).toHaveBeenCalledOnce());
+      current = false;
+      finish();
+      await expect(update).rejects.toThrow('owner changed');
+      expect(input.install).not.toHaveBeenCalled();
+      current = true;
+      await expect(installCheckedGithubPluginRelease(input)).resolves.toEqual({ status: 'updated', version: '0.2.12' });
+      expect(input.install).toHaveBeenCalledOnce();
+      expect(input.emit).toHaveBeenCalledWith(expect.objectContaining({ phase: 'installing' }));
+    } finally {
+      finish();
+      await rm(root, { recursive: true, force: true });
     }
   });
 });
