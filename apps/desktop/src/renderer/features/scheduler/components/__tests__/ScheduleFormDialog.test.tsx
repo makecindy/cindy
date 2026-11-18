@@ -323,7 +323,7 @@ it('saves a single PR with optional timed checks and can remove the rule', async
   await waitFor(() => expect(form.onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ prTrigger: null }), true));
 });
 
-// #11309, unit/jsdom: an event-only PR automation created via the API can have recurring=false.
+// PR 11309, unit/jsdom: an event-only PR automation created via the API can have recurring=false.
 // Saving from the real editor must send a valid recurring schedule when timed checks are enabled.
 it('enables recurring timed checks for a saved event-only PR automation', async () => {
   const prTrigger = { url: 'https://github.com/example/project/pull/23', change: 'merged' as const };

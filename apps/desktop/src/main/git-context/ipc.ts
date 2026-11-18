@@ -183,7 +183,7 @@ const prFollowWatch = new PrFollowWatch({
   runNow: async (id, trigger, expectedSchedule) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger, expectedSchedule });
+    return scheduler.runNow(id, { trigger, expectedSchedule, deferToCaller: Boolean(expectedSchedule.prTrigger) });
   },
   log,
 });

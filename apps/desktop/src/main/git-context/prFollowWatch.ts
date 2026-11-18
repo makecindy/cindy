@@ -31,7 +31,7 @@ export interface PrFollowWatchDeps {
   autoRunAllowed(): boolean;
   /** The scheduler has a free concurrency slot right now. */
   hasCapacity(): boolean;
-  runNow(id: string, trigger: ScheduleRunTrigger, expected: Schedule): Promise<unknown>;
+  runNow(id: string, trigger: ScheduleRunTrigger, expected: Schedule): Promise<{ runId: string; deferred?: boolean } | null>;
   now?: () => number;
   log?: { info?: (msg: string, meta?: unknown) => void; warn?: (msg: string, meta?: unknown) => void };
 }
@@ -192,6 +192,12 @@ export class PrFollowWatch {
       this.deps.log?.info?.('pr follow watch: status changed, running schedule now', { scheduleId: schedule.id, url });
       void this.deps
         .runNow(schedule.id, { kind: 'watch', source: PR_WATCH_SOURCE, detail: url }, schedule)
+        .then(result => {
+          // The next cron tick only checks status. Keep the event after a runner defers its work.
+          if (schedule.prTrigger && result?.deferred && isCurrent() && this.generation === generation && !this.pending.has(schedule.id)) {
+            this.defer(schedule.id, url, changes, isCurrent, mergedAt);
+          }
+        })
         .catch((error) => {
           this.deps.log?.warn?.('pr follow watch runNow failed', {
             scheduleId: schedule.id,

@@ -970,6 +970,29 @@ describe('PR follow watch', () => {
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 
+  // PR 11309, unit: the bound runner can discover a busy session after admission.
+  // A successful status sample with the same signature would never wake the task again.
+  it.each([true, false])('retains a runner-deferred merge only while the trigger applies (active=%s)', async (active) => {
+    vi.useFakeTimers();
+    try {
+      const url = 'https://github.com/makecindy/cindy/pull/85';
+      let task = schedule('merge', url, { preRunHook: undefined, prTrigger: { url, change: 'merged' } });
+      const runNow = vi.fn(async () => ({ runId: 'merge-run', deferred: false }));
+      runNow.mockResolvedValueOnce({ runId: 'deferred-run', deferred: true });
+      const watch = new PrFollowWatch({
+        listActive: async () => [task], inflight: () => 0, hasCapacity: () => true, autoRunAllowed: () => true, runNow,
+      });
+      await watch.notifyChange(url, 'merged', () => true);
+      expect(runNow).toHaveBeenCalledOnce();
+      if (!active) task = schedule('merge', url, { preRunHook: undefined, prTrigger: null });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
+      if (active) expect(runNow).toHaveBeenLastCalledWith('merge', { kind: 'watch', source: 'pr-status', detail: url }, task);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
   // PR #9378 security review: a PR URL in an ordinary script is not event consent.
   // Unit: subscription discovery + real comment/status wakeups, including deferred work;
   // the previous script-only happy path did not distinguish consent from incidental URLs.
