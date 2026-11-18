@@ -8,7 +8,7 @@ import { createRoot } from 'react-dom/client';
 import ts from 'typescript';
 
 const rendererTree = ts.createSourceFile('renderer.tsx', readFileSync(join(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const pathFunctions = new Set(['ChatPathChipSpan', 'LinkPathChipSpan', 'clickableInlineStyle', 'underlineDecoration']);
+const pathFunctions = new Set(['useChatPathInteraction', 'ChatPathChipSpan', 'LinkPathChipSpan', 'clickableInlineStyle', 'underlineDecoration']);
 const spanTree = ts.createSourceFile('span.tsx', readFileSync(join(process.cwd(), 'src/session/ChatPathChipSpan.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const pathCode = [rendererTree, spanTree].flatMap((tree) => tree.statements.filter((node) => ts.isFunctionDeclaration(node) && node.name && pathFunctions.has(node.name.text)).map((node) => node.getText(tree).replace(/^export /, ''))).join('\n');
 const compiledPath = ts.transpileModule(pathCode, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;

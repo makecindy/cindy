@@ -281,9 +281,11 @@ import {
 import { ChatFilePathContext } from '@/session/chatFilePathContext';
 import { MailLinkSpan } from '@/session/MailLinkSpan';
 import { ChatPathChipSpan } from '@/session/ChatPathChipSpan';
+import { useMarkdownSessionLink } from '@/session/useMarkdownSessionLink';
+import { TableMessageDocument, TableDocumentListContext, TableDocumentRow, useTableDocumentList } from '@/session/TableMessageDocument';
+import { supportsTableMessageDocument } from '@/session/tableMessageHtml';
 import {
   useRemoteDeviceIdentity,
-  useRemoteSessionMessages,
 } from '@/session/remoteSessionStore';
 import {
   parseSourceSessionTarget,
@@ -299,10 +301,6 @@ import {
   sourceIdText,
   sourcePluginLabel,
 } from '@/session/messageSourceLabels';
-import {
-  mobileSessionMessageDisplayText,
-  sentSessionMessageChipLabel,
-} from '@/session/sessionMessageText';
 import { buildMobileMarkdownTableColumnWidths } from '@/session/messageTableLayout';
 import { buildPayloadHeaderLayout, buildPayloadModalSafeArea } from '@/session/payloadHeaderLayout';
 import { buildPayloadBodyLayout, type PayloadBodyLayout } from '@/session/payloadBodyLayout';
@@ -831,6 +829,7 @@ export function MessageRenderer({
   useEffect(() => () => richContent?.clear(), [richContent]);
   // Match LegendList's key: a new list must never inherit old visibility.
   const messageListVisibility = useMemo(() => new MessageListVisibility(), [scrollResetKey]);
+  const tableDocuments = useTableDocumentList(richContent);
   const historyPositioning = useMessageHistoryPositioning();
   const historyPositioningRef = useRef(historyPositioning);
   historyPositioningRef.current = historyPositioning;
@@ -2984,6 +2983,7 @@ export function MessageRenderer({
     <ProcessDisclosureViewport.Provider value={processViewport.inspect}>
     <RichContentContext.Provider value={richContent}>
     <MessageListVisibilityContext.Provider value={messageListVisibility}>
+    <TableDocumentListContext.Provider value={tableDocuments.context}>
     <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
     <MessageListRevealContext.Provider value={revealContextValue}>
     <MessageListKeepKeyboardContext.Provider value={keepInlineKeyboard}>
@@ -3008,6 +3008,8 @@ export function MessageRenderer({
         keyExtractor={(item) => item.key}
         renderItem={renderMessageItem}
         recycleItems={recycleItems}
+        alwaysRender={tableDocuments.alwaysRender}
+        viewabilityConfigCallbackPairs={Platform.OS === 'android' && !companion ? tableDocuments.viewability : undefined}
         estimatedItemSize={MOBILE_MESSAGE_ESTIMATED_ITEM_SIZE}
         drawDistance={MOBILE_MESSAGE_DRAW_DISTANCE}
         // initialScrollAtEnd / initialScrollIndex 的程序化滚动在特定
@@ -3143,6 +3145,7 @@ export function MessageRenderer({
     </MessageListKeepKeyboardContext.Provider>
     </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
+    </TableDocumentListContext.Provider>
     </MessageListVisibilityContext.Provider>
     </RichContentContext.Provider>
     </ProcessDisclosureViewport.Provider>
@@ -3378,7 +3381,9 @@ const RenderListItemView = memo(function RenderListItemView({
     <LegendListRowContext.Provider value>
     <MessageListItemViewableContext.Provider value={isViewable}>
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
+    <TableDocumentRow rowKey={item.key}>
       <RenderItemView actions={itemActions} focused={focused} item={item} />
+    </TableDocumentRow>
     </MessageHeavyContentVisibilityContext.Provider>
     </MessageListItemViewableContext.Provider>
     </LegendListRowContext.Provider>
@@ -4117,6 +4122,8 @@ function MessageBubble({
             renderText={(text, index) => (
               <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
                 <MarkdownBody
+                  androidTableSelection={actions.companion !== true && !shareSelectionActive}
+                  richStateKey={`${item.message.source.clientId ?? item.message.key}:text:${index}`}
                   codeCopyEnabled={!shareSelectionActive}
                   layout={contentLayout}
                   markdownImageCacheKey={item.message.key}
@@ -4133,6 +4140,7 @@ function MessageBubble({
           />
         ) : (
           <MarkdownBody
+            androidTableSelection={actions.companion !== true && !shareSelectionActive}
             codeCopyEnabled={!shareSelectionActive}
             renderRichAnswers={item.message.kind === 'assistant'}
             richStateKey={item.message.source.clientId ?? item.message.key}
@@ -6164,10 +6172,12 @@ function CompanionCardMarkdown({ text, actions, messageKey }: { text: string; ac
   );
 }
 
-// 消息正文统一走原生 markdown 渲染(流式与完成态同一条路径,完成时无"原生→WebView"的切换跳变)。
-// 文本选择 = 完成态消息的各块 Text 原生 selectable:长按文字就地弹系统选择手柄/Copy 菜单,
-// 不跳转界面;整条复制走操作条按钮。选择按块进行(原生 Text 能力边界,跨段选择做不到)。
+// Streaming and rich blocks retain the native renderer. Selectable ordinary
+// Android table messages promote once to one text document, keeping selection
+// across paragraphs/cells; iOS and companion bodies retain native selection.
 function MarkdownBodyBase({
+  androidTableSelection = false,
+  richStateKey,
   allowIosUITextView = true,
   codeCopyEnabled = true,
   boundTextRuns = false,
@@ -6176,11 +6186,16 @@ function MarkdownBodyBase({
   layout,
   onOpenPayload,
   onOpenSessionLink,
+  onTableMeasured,
   pinContentWidth = false,
-  selectable,
+  selectable: selectionAllowed,
   streaming,
   text,
 }: {
+  /** Explicit ordinary-task opt-in; group/companion/iOS carriers are unchanged. */
+  androidTableSelection?: boolean;
+  /** Local fixture measurement only; no document/host capability. */
+  onTableMeasured?: (height: number) => void;
   renderRichAnswers?: boolean;
   /** Shared room bodies cannot resolve task-local media from model-authored paths. */
   publicMediaOnly?: boolean;
@@ -6225,6 +6240,12 @@ function MarkdownBodyBase({
   // LegendList row state throws there, so only list rows use the recycling hook.
   const useRowState = useRowStateHook();
   const [contentWidth, setContentWidth] = useRowState(0);
+  const [nativeBodyHeight, setNativeBodyHeight] = useRowState(0);
+  const [tableReadyKey, setTableReadyKey] = useRowState<string | null>(null);
+  const [tableFailedRevision, setTableFailedRevision] = useRowState<string | null>(null);
+  const bodyInstance = useId();
+  const documentKey = richStateKey ?? markdownImageCacheKey ?? bodyInstance;
+  const documentRevision = JSON.stringify([documentKey, text]);
   const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
     if (!measuresSettledWidth) return;
     const nextWidth = Math.round(event.nativeEvent.layout.width);
@@ -6257,6 +6278,19 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
+  const tableCandidate = Platform.OS === 'android' && androidTableSelection && selectionAllowed === true && !streaming
+    && blocks.some(block => block.type === 'table') && supportsTableMessageDocument(blocks);
+  const tableFailed = tableFailedRevision === documentRevision;
+  const mountTableDocument = tableCandidate && !tableFailed && nativeBodyHeight > 0;
+  const showTableDocument = mountTableDocument && tableReadyKey === documentKey;
+  // The native bootstrap remains readable until the document is ready, with
+  // no selectable duplicate that could lose handles during this one promotion.
+  const selectable = selectionAllowed && !(tableCandidate && !tableFailed);
+  const tableReady = useCallback(() => setTableReadyKey(documentKey), [documentKey]);
+  const tableFailedToLoad = useCallback(() => {
+    setTableReadyKey(null);
+    setTableFailedRevision(documentRevision);
+  }, [documentRevision]);
   const hasNestedLists = blocks.some(block => block.type === 'list_item' && (block.depth ?? 0) > 0);
   // Paragraph layout needs UIKit on iOS. Expanded nested replies use bounded
   // native runs instead of reintroducing the giant UITextView that blanked.
@@ -6631,7 +6665,13 @@ function MarkdownBodyBase({
   return (
     <View
       collapsable={false}
-      onLayout={measuresSettledWidth ? handleSettledWidthLayout : undefined}
+      onLayout={measuresSettledWidth || androidTableSelection && Platform.OS === 'android' ? event => {
+        if (measuresSettledWidth) handleSettledWidthLayout(event);
+        if (!showTableDocument) {
+          const next = Math.ceil(event.nativeEvent.layout.height);
+          if (next > 0) setNativeBodyHeight(old => old === next ? old : next);
+        }
+      } : undefined}
       style={[
         styles.markdownBody,
         { maxWidth: '100%' },
@@ -6639,6 +6679,22 @@ function MarkdownBodyBase({
       ]}
       testID="message.markdownBody"
     >
+      {tableCandidate && tableFailed ? <ErrorNotice message={t('message.renderer.tableSelectionUnavailable')}
+        actions={<MessageListActionButton accessibilityLabel={t('message.renderer.retryPreview')}
+          onPress={() => setTableFailedRevision(null)}>
+          <Text style={styles.payloadOpenButtonText}>{t('message.renderer.retryPreview')}</Text>
+        </MessageListActionButton>} /> : null}
+      {mountTableDocument ? <View pointerEvents={showTableDocument ? 'auto' : 'none'}
+        accessibilityElementsHidden={!showTableDocument}
+        importantForAccessibility={showTableDocument ? 'auto' : 'no-hide-descendants'}
+        style={showTableDocument ? undefined : { position: 'absolute', top: 0, left: 0, right: 0, opacity: 0 }}>
+        <TableMessageDocument documentKey={documentKey} text={text} blocks={blocks} layout={layout}
+          initialHeight={nativeBodyHeight} selectable={selectionAllowed} streaming={streaming}
+          codeCopyEnabled={codeCopyEnabled} onOpenSessionLink={onOpenSessionLink}
+          onMeasured={onTableMeasured}
+          onReady={tableReady} onFailure={tableFailedToLoad} />
+      </View> : null}
+      {!showTableDocument ? (
       <View
         collapsable={false}
         style={pinSettledWidth ? { width: contentWidth, maxWidth: '100%' } : null}
@@ -6659,6 +6715,7 @@ function MarkdownBodyBase({
         ];
       })}
       </View>
+      ) : null}
     </View>
   );
 }
@@ -7044,34 +7101,17 @@ function MarkdownSessionLinkSpan({
   SpanText: typeof Text;
   styles: ReturnType<typeof makeStyles>;
 }) {
-  const messages = useRemoteSessionMessages(session.sessionId);
-  const explicit =
-    inline.text.trim() && inline.text.trim() !== inline.url ? inline.text.trim() : null;
-  const targetMessage = session.messageClientId
-    ? messages.find((message) =>
-          message.clientId === session.messageClientId || message.id === session.messageClientId
-      )
-    : null;
-  // 消息数组更新(流式 / 列表重渲)时,目标消息没变就不重算摘要。
-  const messageLabel = useMemo(() => {
-    const messageText = targetMessage ? mobileSessionMessageDisplayText(targetMessage) : null;
-    return messageText ? sentSessionMessageChipLabel(messageText) : '';
-  }, [targetMessage]);
-  const title = session.messageClientId
-    ? messageLabel || i18n.t('message.renderer.messageChipFallback')
-    : (explicit
-      ?? sessionLinkTitles?.[session.sessionId]
-      ?? i18n.t('message.renderer.sessionChipFallback'));
+  const link = useMarkdownSessionLink({ inline, session, sessionLinkTitles, onOpenSessionLink });
   // handler 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
   // (clickableInlineStyle 保证两者同源)。
-  const openSessionLink = onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined;
+  const openSessionLink = link.onPress;
   // 发给模型的上下文范围(条数 / 是否截断)不在气泡里展示:用户无从理解也无从操作。
   return (
     <SpanText
       onPress={openSessionLink}
       style={clickableInlineStyle(styles, openSessionLink, baseStyle, styles.sessionLinkChipText)}
     >
-      {`${session.messageClientId ? '❝' : '↳'} ${title}`}
+      {link.text}
     </SpanText>
   );
 }
@@ -10403,7 +10443,8 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
   const withVisibility = (content: ReactNode, visible: boolean) => (
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible && visible}>{content}</MessageHeavyContentVisibilityContext.Provider>
   );
-  const renderMedia = (node: RichNode, visible: boolean) => withVisibility(<RichAnswerMedia node={node} body={props} />, visible);
+  const nativeProps = { ...props, androidTableSelection: false };
+  const renderMedia = (node: RichNode, visible: boolean) => withVisibility(<RichAnswerMedia node={node} body={nativeProps} />, visible);
   const parts = useMemo(() => (props.renderRichAnswers ? splitRichAnswer(props.text) : []), [props.text, props.renderRichAnswers]);
   if (!parts.some((part) => part.kind === 'rich')) return <MarkdownBodyBase {...props} />;
   return (
@@ -10411,9 +10452,9 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
     ? (
           <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.streaming}
         stateKey={`${origin?.deviceId ?? ''}:${origin?.sessionId ?? ''}:${props.richStateKey ?? props.markdownImageCacheKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(text, id, visible) => withVisibility(<MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />, visible)} />
+        renderMarkdown={(text, id, visible) => withVisibility(<MarkdownBodyBase {...nativeProps} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />, visible)} />
         ) : (
-          <MarkdownBodyBase {...props} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />),
+          <MarkdownBodyBase {...nativeProps} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />),
       )}</View>
   );
 }

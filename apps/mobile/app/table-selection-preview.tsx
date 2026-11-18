@@ -9,6 +9,7 @@ import { Text, TextInput } from '@/components/AppText';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { buildTableSelectionFixtureHtml } from '@/debug/tableSelectionVisualFixture';
 import { TableSelectionListVisualFixture } from '@/debug/TableSelectionListVisualFixture';
+import { TableMessageVisualFixture } from '@/debug/TableMessageVisualFixture';
 import { interceptHtmlNavigation } from '@/session/htmlNavigationPolicy';
 import { commitSelectionMenuAction, selectionQuoteMenuLabel } from '@/session/selectionQuote';
 import { lineHeight, spacing, typeScale, useTheme } from '@/theme';
@@ -16,6 +17,7 @@ import { lineHeight, spacing, typeScale, useTheme } from '@/theme';
 export default function TableSelectionPreview() {
   const { mode } = useLocalSearchParams<{ mode?: string }>();
   if (!MOBILE_VISUAL_MOCK_ENABLED) return <Redirect href="/" />;
+  if (mode === 'component') return <TableMessageVisualFixture />;
   if (mode === 'list') return <TableSelectionListVisualFixture />;
   return <Experiment />;
 }

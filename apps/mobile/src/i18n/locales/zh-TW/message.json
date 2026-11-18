@@ -71,6 +71,7 @@
     "copyStateCopying": "複製中",
     "copyStateCopied": "已複製",
     "copyStateFailed": "複製失敗",
+    "tableSelectionUnavailable": "連續選字載入失敗，仍可閱讀與複製整則訊息。",
     "copyStateCopy": "複製",
     "copyCode": "複製程式碼",
     "copyTable": "複製表格",

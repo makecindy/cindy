@@ -8,11 +8,13 @@ import { Stack } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { WebView } from 'react-native-webview';
 import { MAX_FONT_SIZE_MULTIPLIER, Text } from '@/components/AppText';
-import { withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
-import { interceptHtmlNavigation } from '@/session/htmlNavigationPolicy';
-import { buildSelectableMarkdownHtml } from '@/session/selectableMarkdownHtml';
+import { RichContentContext } from '@/session/richContentContext';
+import { RichContentRuntime } from '@/session/richContentRuntime';
+import { TableDocumentListContext, TableDocumentRow, useTableDocumentList } from '@/session/TableMessageDocument';
+import { MarkdownBody } from '@/session/MessageRenderer';
+import { buildMessageContentLayout } from '@/session/messageContentLayout';
+import { getMobileMessageWebViewMetrics } from '@/session/mobileMessageWebViewMetrics';
 import { lineHeight, spacing, typeScale, useTheme } from '@/theme';
 import { TABLE_SELECTION_MARKDOWN } from './tableSelectionVisualFixture';
 
@@ -32,6 +34,9 @@ export function TableSelectionListVisualFixture() {
   const { colors } = useTheme();
   const { fontScale } = useWindowDimensions();
   const list = useRef<LegendListRef>(null);
+  const runtime = useMemo(() => new RichContentRuntime(), []);
+  useEffect(() => () => runtime.clear(), [runtime]);
+  const documents = useTableDocumentList(runtime);
   const stats = useRef<Stats>({ active: new Set(), mounts: 0, unmounts: 0, peak: 0, dom: new Map(), native: new Map() });
   const nativeScroll = useRef(0);
   const viewport = useRef(0);
@@ -52,17 +57,21 @@ export function TableSelectionListVisualFixture() {
       return top !== undefined && top + state.sizeAtIndex(item.index) > y;
     });
     const s = stats.current;
+    const webviews = getMobileMessageWebViewMetrics();
     setSnapshot(JSON.stringify({ fontScale, cssScale: Math.min(fontScale, MAX_FONT_SIZE_MULTIPLIER),
       viewport: viewport.current, scroll: Math.round(y),
       anchor: anchor?.key, offset: anchor ? Math.round((state.positionByKey(anchor.key) ?? 0) - y) : null,
-      active: s.active.size, mounts: s.mounts, unmounts: s.unmounts, peak: s.peak,
+      active: webviews.mountedByKind['table-body'], mounts: webviews.mounts, unmounts: webviews.unmounts,
+      reactRows: s.active.size,
       rows: [...s.active].sort().map(key => ({ key, dom: s.dom.get(key), native: s.native.get(key),
         row: Math.round(state.sizeAtIndex(Number(key.split('-')[1]))) })) }));
   };
   const renderItem = useCallback(({ item }: { item: Item }) => <ProbeRow item={item} track={track} />, [track]);
-  return <SafeAreaView style={[styles.fill, { backgroundColor: colors.surface }]}>
+  return <RichContentContext.Provider value={runtime}>
+    <TableDocumentListContext.Provider value={documents.context}>
+    <SafeAreaView style={[styles.fill, { backgroundColor: colors.surface }]}>
     <Stack.Screen options={{ headerShown: false }} />
-    <Text style={{ color: colors.textSecondary }}>Table selection · isolated list probe</Text>
+    <Text style={{ color: colors.textSecondary }}>Table body · real component list probe</Text>
     <View style={styles.controls}>
       {[
         ['记录', capture],
@@ -74,56 +83,33 @@ export function TableSelectionListVisualFixture() {
       </Pressable>)}
     </View>
     <Text testID="table-selection.list-metrics" numberOfLines={5}
-      style={{ height: 100, color: colors.textSecondary, fontSize: typeScale.caption }}>
+      style={{ height: 100, color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption }}>
       {snapshot}
     </Text>
     <View style={styles.fill} onLayout={e => { viewport.current = e.nativeEvent.layout.height; }}>
       <LegendList ref={list} data={items} renderItem={renderItem} keyExtractor={item => item.key}
+        alwaysRender={documents.alwaysRender} viewabilityConfigCallbackPairs={documents.viewability}
         recycleItems={false} estimatedItemSize={100} drawDistance={800}
         maintainVisibleContentPosition={{ data: false, size: true }}
-        onScroll={e => { nativeScroll.current = e.nativeEvent.contentOffset.y; }} scrollEventThrottle={16} />
+        onScroll={e => { nativeScroll.current = e.nativeEvent.contentOffset.y; runtime.onScroll(); }} scrollEventThrottle={16} />
     </View>
-  </SafeAreaView>;
+  </SafeAreaView></TableDocumentListContext.Provider></RichContentContext.Provider>;
 }
 
 const ProbeRow = memo(function ProbeRow({ item, track }: {
   item: Item; track: (key: string, mounted: boolean, height?: number, nativeHeight?: number) => void;
 }) {
   const { colors } = useTheme();
-  const { fontScale } = useWindowDimensions();
-  const cssScale = Math.min(fontScale, MAX_FONT_SIZE_MULTIPLIER);
-  const [height, setHeight] = useState(1);
-  const settled = useRef(false);
+  const { width } = useWindowDimensions();
+  const layout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
   useEffect(() => { track(item.key, true); return () => track(item.key, false); }, [item.key, track]);
-  const source = useMemo(() => {
-    settled.current = false;
-    const html = buildSelectableMarkdownHtml(item.markdown, { fontSize: typeScale.body * cssScale,
-      lineHeight: lineHeight.bodyRelaxed * cssScale, tableCellMinWidth: 160, borderColor: colors.border,
-      textColor: colors.textPrimary, mutedColor: colors.textSecondary, chipColor: colors.surfaceChip });
-    return { baseUrl: 'about:blank', html: withHtmlPreviewCsp(html.replace('</head>',
-      '<style>th,td{width:160px;max-width:160px}html,body{min-height:0;height:auto}</style></head>')
-      .replace('</body>', `<script>(()=>{let last=0;const report=()=>{
-        const h=Math.ceil(document.getElementById('xdt-content').getBoundingClientRect().height);
-        if(h!==last){last=h;window.ReactNativeWebView?.postMessage(JSON.stringify({kind:'probe-height',height:h,scale:${fontScale}}));}
-      };new ResizeObserver(report).observe(document.getElementById('xdt-content'));report();})();</script></body>`)) };
-  }, [item.markdown, colors, fontScale, cssScale]);
   return <View style={{ borderBottomWidth: 1, borderColor: colors.border }}
     onLayout={e => track(item.key, true, undefined, e.nativeEvent.layout.height)}>
     <Text style={{ color: colors.textSecondary }}>探针消息 {item.index + 1}</Text>
-    <WebView source={source} style={{ height, backgroundColor: colors.surface }} scrollEnabled={false}
-      incognito originWhitelist={['*']} allowFileAccess={false} setSupportMultipleWindows={false}
-      mediaCapturePermissionGrantType="deny"
-      onShouldStartLoadWithRequest={r => interceptHtmlNavigation(r, settled.current)}
-      onLoadEnd={() => { settled.current = true; }}
-      onMessage={e => {
-        if (e.nativeEvent.data.length > 128) return;
-        try {
-          const value = JSON.parse(e.nativeEvent.data);
-          if (value.kind !== 'probe-height' || value.scale !== fontScale
-            || !Number.isFinite(value.height) || value.height < 1 || value.height > 30000) return;
-          track(item.key, true, value.height); setHeight(value.height);
-        } catch { /* No host operation is available to the document. */ }
-      }} />
+    <TableDocumentRow rowKey={item.key}>
+      <MarkdownBody richStateKey={item.key} text={item.markdown} layout={layout}
+        androidTableSelection selectable onTableMeasured={height => track(item.key, true, height)} />
+    </TableDocumentRow>
   </View>;
 });
 

@@ -71,6 +71,7 @@
     "copyStateCopying": "Copying",
     "copyStateCopied": "Copied",
     "copyStateFailed": "Copy failed",
+    "tableSelectionUnavailable": "Continuous text selection couldn’t load. You can still read and copy the message.",
     "copyStateCopy": "Copy",
     "copyCode": "Copy Code",
     "copyTable": "Copy Table",

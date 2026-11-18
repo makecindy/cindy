@@ -71,6 +71,7 @@
     "copyStateCopying": "A copiar",
     "copyStateCopied": "Copiado",
     "copyStateFailed": "Falha ao copiar",
+    "tableSelectionUnavailable": "Não foi possível carregar a seleção contínua de texto. Pode continuar a ler e a copiar a mensagem.",
     "copyStateCopy": "Copiar",
     "copyCode": "Copiar código",
     "copyTable": "Copiar tabela",

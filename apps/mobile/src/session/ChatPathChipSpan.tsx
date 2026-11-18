@@ -38,6 +38,26 @@ export function ChatPathChipSpan({
   /** Explicit state hook; defaults to recycling state only inside a LegendList message row. */
   usePathState?: RowStateHook;
 }) {
+  const interaction = useChatPathInteraction({ candidate, streaming, explicitLink, usePathState: usePathStateOverride });
+  return (
+    <SpanText
+      onLongPress={interaction.onLongPress}
+      onPress={interaction.onPress}
+      style={interaction.lit ? chipStyle : plainStyle}
+      testID={interaction.lit ? 'message.markdownPathChip' : undefined}
+    >
+      {display}
+    </SpanText>
+  );
+}
+
+/** Shared execution path for native spans and the selectable table document. */
+export function useChatPathInteraction({ candidate, streaming, explicitLink = false, usePathState: usePathStateOverride }: {
+  candidate: ChatPathCandidate | null;
+  streaming?: boolean;
+  explicitLink?: boolean;
+  usePathState?: RowStateHook;
+}): { lit: boolean; onPress?: () => void; onLongPress?: () => void } {
   const rowStateHook = useRowStateHook();
   const usePathState = usePathStateOverride ?? rowStateHook;
   const ctx = useContext(ChatFilePathContext);
@@ -115,12 +135,12 @@ export function ChatPathChipSpan({
     : verdict !== undefined && verdict !== 'nonfile';
   const lit = !!ctx && !!candidate && !!target && (explicitLink || verdictAllowsLit);
   if (!lit) {
-    return <SpanText style={plainStyle}>{display}</SpanText>;
+    return { lit: false };
   }
   const kind: 'file' | 'directory' =
     verdict === 'directory' || (verdict !== 'file' && candidate.directoryShape) ? 'directory' : 'file';
   if (!canOpenChatPathChip(kind, target.relPath)) {
-    return <SpanText style={plainStyle}>{display}</SpanText>;
+    return { lit: false };
   }
   const activate = async (action: (value: ChatFilePathTarget) => void) => {
     let actionKind = kind;
@@ -146,14 +166,8 @@ export function ChatPathChipSpan({
       ...(actionKind === 'file' && candidate.line !== undefined ? { line: candidate.line } : {}),
     });
   };
-  return (
-    <SpanText
-      onLongPress={ctx.onLongPressPath ? () => { void activate(ctx.onLongPressPath!); } : undefined}
-      onPress={() => { void activate(ctx.onOpenPath); }}
-      style={chipStyle}
-      testID="message.markdownPathChip"
-    >
-      {display}
-    </SpanText>
-  );
+  return { lit: true,
+    onLongPress: ctx.onLongPressPath ? () => { void activate(ctx.onLongPressPath!); } : undefined,
+    onPress: () => { void activate(ctx.onOpenPath); },
+  };
 }

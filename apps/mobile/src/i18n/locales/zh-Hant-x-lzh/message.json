@@ -71,6 +71,7 @@
     "copyStateCopying": "方錄",
     "copyStateCopied": "已錄",
     "copyStateFailed": "錄之未成",
+    "tableSelectionUnavailable": "連續擇字未載，仍可閱覽並複製全文。",
     "copyStateCopy": "錄之",
     "copyCode": "錄程式碼",
     "copyTable": "錄表",

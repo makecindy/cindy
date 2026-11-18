@@ -11,6 +11,12 @@ import { ChatFilePathContext } from './chatFilePathContext';
 export function MailLinkSpan({ url, children, style, SpanText }: {
   url: string; children: string; style: StyleProp<TextStyle>; SpanText: typeof Text;
 }) {
+  const open = useOpenMailLink(url);
+  return <SpanText onPress={open} style={style}>{children}</SpanText>;
+}
+
+/** Preserve Host recognition and auth/scope checks for every chat link carrier. */
+export function useOpenMailLink(url: string): () => void {
   const context = useContext(ChatFilePathContext);
   const { invoke } = useDeviceLink();
   const router = useRouter();
@@ -38,5 +44,5 @@ export function MailLinkSpan({ url, children, style, SpanText }: {
       await Linking.openURL(url);
     } finally { busy.current = false; }
   };
-  return <SpanText onPress={() => { void open().catch(() => undefined); }} style={style}>{children}</SpanText>;
+  return () => { void open().catch(() => undefined); };
 }

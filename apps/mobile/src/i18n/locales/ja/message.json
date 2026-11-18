@@ -71,6 +71,7 @@
     "copyStateCopying": "コピー中",
     "copyStateCopied": "コピーしました",
     "copyStateFailed": "コピー失敗",
+    "tableSelectionUnavailable": "連続したテキスト選択を読み込めませんでした。メッセージの閲覧とコピーは引き続き可能です。",
     "copyStateCopy": "コピー",
     "copyCode": "コードをコピー",
     "copyTable": "表をコピー",
