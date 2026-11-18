@@ -69,7 +69,9 @@ export function CompanionXAssignment({
         )}
       </p>
       {unavailable && !bound ? unavailable : (
-        <Button data-setting-id={settingId} variant="secondary" size="sm" type="button"
+        <Button data-setting-id={settingId}
+          data-settings-search-action="Assign or unassign the official X account to this teammate"
+          variant="secondary" size="sm" type="button"
           loading={pending} disabled={pending} onClick={() => void change()}>
           {t(bound ? 'bots.channels.officialX.remove' : 'bots.channels.officialX.bind')}
         </Button>
