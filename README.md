@@ -136,7 +136,7 @@ their shared packages, organized as a pnpm monorepo.
 | `apps/desktop` | Electron desktop client |
 | `apps/mobile` | Expo / React Native mobile client |
 | `packages/*` | Shared client capabilities (auth, device-link, agent orchestration, model providers, …) |
-| `apps/*-bin` | Tool binaries shipped with the desktop app; none are committed — claude-code, codex, and ripgrep are downloaded per platform by `pnpm install`, and the Android platform-tools binaries are fetched (pinned version, sha256-verified) before Windows packaging |
+| `apps/*-bin` | Tool binaries shipped with the desktop app; none are committed — claude-code, codex, ripgrep, and pi are downloaded per platform by `pnpm install`, and the Android platform-tools binaries are fetched (pinned version, sha256-verified) before Windows packaging |
 
 **Not in this repo:** the backend service lives in a separate
 repository and is not part of this monorepo.
@@ -148,8 +148,8 @@ repository and is not part of this monorepo.
 
 ### Prerequisites
 
-- **Node.js** 22.x
-- **pnpm** 10.x (v11 is not yet supported)
+- **Node.js** >= 22.13 (see `engines.node` in `package.json`)
+- **pnpm** 11.x (`>=11.25 <12`, see `engines.pnpm` and `packageManager` in `package.json`)
 - **Git LFS**
 
 ### Getting started
