@@ -519,7 +519,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
       void loadBalance();
-      // 服务端的 paid tier 同时认有效订阅和未全额退款的成功充值订单；两类支付
+      // 服务端的 paid tier 认有效订阅、兑换过的礼品卡和未全额退款的成功充值订单；两类支付
       // 完成都必须重拉 `/models`，由服务端重算 tier 并收敛 AIGateway access group。
       if (checkout.state.kind === 'TOPUP' || checkout.state.kind === 'SUBSCRIPTION') {
         void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
@@ -1298,7 +1298,12 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
         open={giftCardDialog.open}
         initialCode={giftCardDialog.code}
         onClose={() => setGiftCardDialog({ open: false, code: null })}
-        onRedeemed={() => void loadBalance()}
+        onRedeemed={() => {
+          void loadBalance();
+          // 兑换礼品卡与充值等同进入 paid tier；重拉 `/models` 让服务端立即收敛
+          // AIGateway access group，模型选择器当场解锁付费模型。
+          void refreshXdModelsAfterEntitlementChange().catch(() => undefined);
+        }}
       />
 
       <BillingCheckoutDialog
