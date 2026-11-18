@@ -992,6 +992,7 @@ export interface PendingPlanReview {
  * 超时/会话清理由 main 兜底并广播 INTERACTION_DISMISSED 清卡。
  */
 export interface PendingIssueConfirm {
+  submitting?: boolean;
   requestId: string;
   draft: IssueConfirmDraft;
   /**
@@ -9246,6 +9247,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         ...s,
         pendingIssueConfirm: {
           requestId: request.requestId,
+          submitting: s.pendingIssueConfirm?.requestId === request.requestId && s.pendingIssueConfirm.submitting,
           draft,
           env,
           submissionIdentity,
@@ -17812,6 +17814,7 @@ function submitQuestionDecision(
   decision: Record<string, unknown>,
   onAccepted: () => void,
   targetDevice?: string,
+  onSettled?: () => void,
 ): void {
   const key = JSON.stringify([sessionId, requestId]);
   if (questionDecisionsInFlight.has(key)) return;
@@ -17869,6 +17872,7 @@ function submitQuestionDecision(
     } finally {
       if (timer) clearTimeout(timer);
       questionDecisionsInFlight.delete(key);
+      if (isCurrent()) onSettled?.();
     }
   })();
 }
@@ -18234,14 +18238,18 @@ function respondToIssueConfirm(
 ): void {
   if (!sessionId) return;
   const state = getOrCreateState(sessionId);
-  if (!state.pendingIssueConfirm) return;
+  if (!state.pendingIssueConfirm || state.pendingIssueConfirm.submitting) return;
 
   const { requestId } = state.pendingIssueConfirm;
   const device = getStickySessionDeviceId(sessionId) ?? remoteProjectsStore.getSessionDeviceId(sessionId);
   if (device) {
+    const setSubmitting = (submitting: boolean) => setState(sessionId, (current) =>
+      current.pendingIssueConfirm?.requestId === requestId
+        ? { ...current, pendingIssueConfirm: { ...current.pendingIssueConfirm, submitting } } : current);
+    setSubmitting(true);
     submitQuestionDecision(sessionId, requestId, { kind: 'issue_confirm', ...result }, () =>
       setState(sessionId, (current) => current.pendingIssueConfirm?.requestId === requestId
-        ? { ...current, pendingIssueConfirm: null } : current), device);
+        ? { ...current, pendingIssueConfirm: null } : current), device, () => setSubmitting(false));
     return;
   }
   bumpInteractionReconcileEpoch(sessionId);

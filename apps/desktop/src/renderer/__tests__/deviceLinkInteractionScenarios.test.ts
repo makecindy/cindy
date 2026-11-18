@@ -537,7 +537,11 @@ describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
     expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation?.requestId).toBe('rename');
     host.invoke.mockRejectedValueOnce(new Error('connection lost'));
     makerChatStore.respondToIssueConfirm(s, { confirmed: false });
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
+    host.hostInteraction(s, request);
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(true);
     await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.submitting).toBe(false);
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe(request.requestId);
     expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
     makerChatStore.respondToIssueConfirm(s, {
