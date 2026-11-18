@@ -2037,7 +2037,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 失败仅 warn,不影响本次 fire；下次 fire 会再尝试绑定。
     if (!isHeartbeat && schedule.persistentSession && this.scheduler) {
       try {
-        await this.scheduler.update(schedule.id, { targetSessionId: session.id });
+        await this.scheduler.updateFromCurrent(schedule.id, async (current) => {
+          // Session creation may yield to an edit. Check under the mutation lock
+          // so a late first run cannot restore a cleared/replaced binding.
+          return current.persistentSession && !current.targetSessionId
+            ? { targetSessionId: session.id }
+            : {};
+        });
       } catch (err) {
         this.deps.logger.warn?.('[runner] persistentSession bind failed (non-fatal)', err);
       }
@@ -2692,7 +2698,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // TS 控制流分析看不到,裸 let 会被收窄成 null/never。
     const waiterSlot: { current: TurnCompletionWaiter | null } = { current: null };
     let dispatched = false;
-    let persistedFailure: string | undefined;
+    let pendingRecoveryFailure: string | undefined;
     // ── 纯等待记账 + 派发取消标志 ──────────────────────────────────────────
     // 必须声明在 enqueuePrompt **之前**:队列此刻恰好空时 onAccepted 可能被同步调用,
     // 声明在后面会撞 TDZ。
@@ -3015,8 +3021,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
         failDispatch(err);
       },
       onPersistedFailure: (message, recovering) => {
-        persistedFailure = message;
-        if (!recovering) failDispatch(new Error(message));
+        if (recovering) {
+          pendingRecoveryFailure = message;
+        } else {
+          failDispatch(new Error(pendingRecoveryFailure === undefined
+            ? message : formatAutoResumeFailure(message)));
+        }
       },
       onDiscarded: () => {
         // 排队项未派发即被移除(用户删队列行 / stop 清队列 / pause-delete 撤项)
@@ -3043,7 +3053,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     const { clientId } = enqueueResult;
     const stopWaitingForRecovery = sq.onAutoResumeFailed?.(sessionId, ctx.runId, () => {
-      if (!dispatched) failDispatch(new Error(persistedFailure ?? 'scheduled task auto-resume failed'));
+      if (!dispatched) failDispatch(new Error(formatAutoResumeFailure(pendingRecoveryFailure)));
     });
     this.deps.logger.info?.('[runner] heartbeat prompt queued behind busy session', {
       scheduleId: schedule.id,
@@ -3131,7 +3141,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (!sq.isPromptTracked(sessionId, clientId)) {
         failDispatch(
           new Error(
-            persistedFailure ?? 'queued heartbeat prompt was dropped before dispatch (queue cleared or recovery abandoned)',
+            pendingRecoveryFailure !== undefined ? formatAutoResumeFailure(pendingRecoveryFailure)
+              : 'queued heartbeat prompt was dropped before dispatch (queue cleared or recovery abandoned)',
           ),
         );
         return;
@@ -4084,9 +4095,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       autoResumeFailureUnsub = this.deps.schedulerQueue?.onAutoResumeFailed?.(
         sessionId,
         options.origin.runId,
-        () => fail(new Error(lastTerminalError
-          ? `scheduled task auto-resume failed: ${lastTerminalError}`
-          : 'scheduled task auto-resume failed')),
+        () => fail(new Error(formatAutoResumeFailure(lastTerminalError))),
         {
           start: () => {
             if (settled || quotaWaiting) return;
@@ -4378,6 +4387,10 @@ function buildSchedulerSendContext(
     `sessionId=${sessionId}`,
     'action=send-user-prompt',
   ].join(' ');
+}
+
+function formatAutoResumeFailure(detail?: string): string {
+  return detail ? `scheduled task auto-resume failed: ${detail}` : 'scheduled task auto-resume failed';
 }
 
 function formatSchedulerSendError(context: string, reason: string): string {

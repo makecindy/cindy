@@ -48,6 +48,8 @@ export interface GhostRemoteCardSource {
   /** The host's version of this card; an action made on an older one is refused there. */
   revision: string;
   externalLinks: boolean;
+  /** A mail card whose computer accepts attachments uploaded from this one. */
+  mailUpload?: boolean;
 }
 
 export interface GhostLiveCard {
@@ -363,7 +365,7 @@ function readRemoteCard(deviceId: string, sessionId: string, callId: string): Pr
         sessionId,
         html: card.html,
         height: current?.status === 'ready' && current.html === card.html ? current.height : card.height,
-        remote: { deviceId, sessionId, revision: card.revision, externalLinks: card.externalLinks },
+        remote: { deviceId, sessionId, revision: card.revision, externalLinks: card.externalLinks, ...(card.mailUpload ? { mailUpload: true } : {}) },
       });
       bump();
       return;
@@ -422,12 +424,12 @@ function ensureRemoteSubscribed(): void {
  * Card of a task on another computer (idempotent, like ensureCard). Until it is read the tool row
  * stays hidden, as for a local card; a host that cannot provide it leaves the row as before.
  */
-export function ensureRemoteCard(deviceId: string, sessionId: string, callId: string): void {
+export function ensureRemoteCard(deviceId: string, sessionId: string, callId: string, options: { force?: boolean } = {}): void {
   if (!callId || !deviceId || !sessionId) return;
   const entry = byCallId.get(callId);
   if (remoteReads.has(`${deviceId}\n${callId}`) || entry?.status === 'ready') return;
   // A lookup made on this computer before the task's location was known does not count.
-  if (entry?.status === 'missing' && remoteAttempted.has(callId) && (remoteRetryAt.get(callId) ?? Infinity) > Date.now()) return;
+  if (!options.force && entry?.status === 'missing' && remoteAttempted.has(callId) && (remoteRetryAt.get(callId) ?? Infinity) > Date.now()) return;
   ensureSubscribed();
   ensureRemoteSubscribed();
   if (unsupportedRemoteHosts.has(deviceId)) {

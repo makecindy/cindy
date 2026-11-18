@@ -144,7 +144,7 @@ describe('classic swipe row lifecycle', () => {
     expect(runtime.listeners.size).toBe(0);
     expect(runtime.removed).toHaveBeenCalledTimes(2);
     expect(runtime.stopped.mock.calls.length).toBeGreaterThan(stoppedBefore);
-    expect(controls.registry.onRowClose).toHaveBeenCalledWith('row');
+    expect(controls.registry.onRowClose).toHaveBeenCalledWith(expect.stringMatching(/:row$/));
   });
 });
 

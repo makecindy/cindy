@@ -95,8 +95,10 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
   本人分享出去的供应商在设置页另列于「我分享的供应商」，那是管理分享的入口、不计入普通列表；选择器里它仍按同一
   来源只列一项，不因分享而多出一个入口。选择器按「运行于」决定代表项（用户明确改选的优先，其次是当前任务正在用的那一项），设置页始终
   显示本机那一行；当前任务正在用的那一项始终保留——只有任务正停在非「运行于」那台时会暂时与代表项同时出现。
-  本机新任务草稿选着的供应商「运行于」另一台时，草稿直接落到那台（与在面板里点那台的同一行相同，
-  `NewMakerDraftRoute.tsx`），输入框下方写明 Agent 在哪台运行。分享来的供应商按各自规则，不参与收起。
+  本机新任务草稿选着的供应商被用户改成「运行于」另一台时，草稿直接落到那台（与在面板里点那台的同一行相同，
+  `NewMakerDraftRoute.tsx`），输入框下方写明 Agent 在哪台运行。本机这一份暂时用不了时不代用别的电脑
+  （2026-11-18）：本机那一项照旧是代表项，另一台电脑上的同一供应商另列一项，选它先确认，取消什么都不改，
+  详见 [provider-sharing.md](provider-sharing.md) 的「同账号借用与「运行于」」。分享来的供应商按各自规则，不参与收起。
   设置页已连接但暂无可选模型的来源，选择器本来就列不出，这一差异保留。实现见 `subscriptionIdentity.ts` 的
   `listedSourceFolds`、`ModelSelector.tsx` 的 `runLocationFold`、`ProvidersSection.tsx` 与
   `UnifiedModelPickerSheet.tsx`；同一份数据下设置页与选择器列出相同来源由 ui:check 页面
@@ -278,7 +280,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 
 | 情形 | 行为 |
 |---|---|
-| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-6.1 Sol / Codex；Anthropic 订阅→Claude Opus 5.5 / Claude Code；Cindy AI→服务端下发的 Auto / Pi；之后保留 xAI 订阅→Grok / Pi 回退。深度沿用各模型目录默认值；来源、模型和引擎必须可用，不伪造 Auto，也不借旧 GLM 默认标记选固定型号 |
+| 新用户 | 本地新任务按完整组合落点：OpenAI 订阅→GPT-6.2 Sol / Codex；Anthropic 订阅→Claude Opus 5.5 / Claude Code；Cindy AI→服务端下发的 Auto / Pi；之后保留 xAI 订阅→Grok / Pi 回退。深度沿用各模型目录默认值；来源、模型和引擎必须可用，不伪造 Auto，也不借旧 GLM 默认标记选固定型号 |
 | 多来源 | 未自定义时按 OpenAI→Anthropic→Cindy AI→xAI 选择可用组合（CN / Global 一致）；独立订阅账号按认证身份识别，保留真实账号 ID。用户手动选择保持优先；来源仍在加载、账号没有可用目标、或零来源时不编造组合 |
 | 未自定义老用户 | 同新用户；自动下放不设置 `modelChosenByVendor`。仅由旧版 cc 不可用触发并持久化的非 cc Harness 仍属于系统回退，不算用户自定义 |
 | 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |

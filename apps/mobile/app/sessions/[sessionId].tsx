@@ -36,6 +36,7 @@ import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentM
 import { rememberRecentTask } from '@/session/recentTasks';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 import { floatingTopRow, keyboardControlRegion, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, type LayoutRect } from '@/platform/windowGeometry';
+import { sessionNavigationTitleMaxWidth } from '@/platform/chrome/navigationTitleWidth';
 import { useAdaptiveWindow, useAdaptiveWindowDimensions, PaneViewportProvider } from '@/platform/AdaptiveWindowContext';
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { useDoubleTap } from '@/session/useDoubleTap';
@@ -64,7 +65,7 @@ import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner 
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
 import { isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
-import { isInFlightDeviceLinkError, isSharedTaskPeer, resolveRemoteText } from '@cindy/device-link';
+import { isInFlightDeviceLinkError, isSharedTaskPeer, isScopedPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
   ArrowDown,
@@ -481,6 +482,7 @@ import {
   reconcileOptimisticUserMessages,
   type OptimisticUserMessage,
 } from '@/session/optimisticUserMessages';
+import { useWaitingComputerRecovery } from '@/session/useWaitingComputerRecovery';
 import { usePendingOutboxActions, usePendingSendActions } from '@/session/usePendingSendActions';
 import {
   acquireQueueEditLock,
@@ -1218,6 +1220,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     connectionIssue,
     getPresenceAvailability,
     getSubscriptionIdentity,
+    readDeviceList,
+    recoverWaitingPeer,
     invoke,
     openLink,
     reopenLink,
@@ -2438,10 +2442,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 待发气泡写「等…后发送」只看真正断开:只有系统确认手机没网才归因于网络(relay 连接中 /
   // 服务重连不算);电脑不可达或无响应归因于电脑;同步中、自动恢复中几秒就过去,不提示。
   const localNetworkStatus = useLocalNetworkStatus();
+  const waitingSend = outboxConnectionState.relayOnline && localNetworkStatus !== 'unavailable'
+    && !isDeviceAccessRevoked && !isScopedPeer(deviceId)
+    ? outboxItems.find(item => item.phase === 'uploading' && (targetAvailableForDispatch === false
+      || isDeviceUnresponsive || item.enqueueError?.includes('DEVICE_OFFLINE')))
+    : undefined;
   const outboxWaitingFor: MobilePendingSendWaitingFor | null = localNetworkStatus === 'unavailable'
     ? 'network'
     : outboxConnectionState.relayOnline
-      && (outboxConnectionState.targetAvailable === false || outboxConnectionState.deviceUnresponsive)
+      && (outboxConnectionState.targetAvailable === false || outboxConnectionState.deviceUnresponsive || waitingSend !== undefined)
       ? 'computer'
       : null;
   // 弱网普通断线也要有可见信号(消息流静默停更没有任何提示),经防闪延迟后显示
@@ -6917,6 +6926,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 直接按捕获的发送快照合并回 A 的草稿库，并保留 A 期间新输入的后续文字。
       restoreRecoverableItemsToDraft(sessionId, [capturedDraftRecoveryItem()]);
     };
+    // 消息被接收后收起输入框与软键盘(与下拉收起同口径),把屏幕让给对话。
+    // 只在输入框已因本次发送清空时调用:等待期间用户又打了字就不打断输入;
+    // 发送失败不收起,附件托盘与恢复的草稿留在原处供重试。
+    const collapseComposerAfterSend = () => {
+      setComposerVoiceHoldArmed(false);
+      composerInputRef.current?.blur();
+    };
     if (!independent && text && !useDurableOutbox
       && composerDocumentsEqual(composerDocumentRef.current, documentBeforeSend)) {
       applyComposerDocument(documentAfterOptimisticClear);
@@ -7031,6 +7047,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           }
           if (!independent && composerDocumentsEqual(composerDocumentRef.current, documentBeforeSend)) {
             applyComposerDocument(documentAfterOptimisticClear);
+            collapseComposerAfterSend();
           }
           rememberSentAttachmentPreviews(record.item.clientId, readyAttachments, (attachment) => {
             const slot = item.attachmentSlots.findIndex((a) => a?.id === attachment.id);
@@ -7454,6 +7471,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 取消归档属于任务本身,不属于页面:电脑已接收就要做,即使用户已离开这个页面。
       if (enqueueAccepted) void unarchiveSessionAfterSend(sessionId, deviceId, invoke);
       if (!sendScopeStillAlive()) return messageAccepted;
+      if (enqueueAccepted && !independent
+        && composerDocumentsEqual(composerDocumentRef.current, documentAfterOptimisticClear)) {
+        collapseComposerAfterSend();
+      }
       if (sessionAtSend.permissionMode === 'plan') {
         // 一次性语义(对齐桌面 PR#494 / 产品决策):计划模式只对本条消息生效,发送后
         // 自动恢复进入前的权限档;本条消息通常已按 plan 派发,切换只影响后续消息。
@@ -8420,7 +8441,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [applyComposerDocument, discardQueueEditTransientAttachments, pendingUploads.length,
     queueAvailabilityReason, queueBusy, setQueueEditLock, t]);
 
+  const reconnectWaitingComputer = useWaitingComputerRecovery(
+    deviceId, waitingSend?.clientId, readDeviceList, recoverWaitingPeer,
+  );
   const pendingSendActions = usePendingSendActions({
+    waitingComputerName: deviceName,
+    reconnectComputer: waitingSend ? reconnectWaitingComputer : undefined,
     beginQueueEdit, moveQueueItem, queueBusy, queueSelectedClientId,
     removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId,
     setQueueSelectedClientId, steerQueueItem,
@@ -10383,6 +10409,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         <SessionHeaderBar
               deviceId={deviceId}
               horizontalSystemHeader={horizontalSystemHeader}
+              statusRowReserve={sharedStatusRowTrailingReserve(adaptiveWindow, nativeHeaderHeight)}
               currentSession={currentSession}
               diffCount={diffCount}
               isDeviceAccessRevoked={isDeviceAccessRevoked}
@@ -11148,6 +11175,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                         ) : null}
                         {shouldShowFailedScheduleNotice({
                           latestFailedRun: scheduleFailure?.source === scheduleNoticeSource ? scheduleFailure.run : null,
+                          userSendAt: currentSession?.id === sessionId ? currentSession.userSendAt : undefined,
                           readOnly: false,
                           tailError: !!errorTailClientId || !!retryHiddenTailClientId,
                           interrupted: tailBannerState?.kind === 'interrupted',
@@ -11832,6 +11860,7 @@ type SessionHeaderIcon = typeof Folder;
 function SessionHeaderBar({
   deviceId,
   horizontalSystemHeader,
+  statusRowReserve,
   noticeOverride,
   currentSession,
   diffCount,
@@ -11862,6 +11891,8 @@ function SessionHeaderBar({
 }: {
   deviceId: string;
   horizontalSystemHeader: boolean;
+  /** Trailing width the native bar leaves to a shared status row (Duo portrait), see sharedStatusRowTrailingReserve. */
+  statusRowReserve: number;
   noticeOverride?: string;
   currentSession: RemoteSession | null;
   diffCount: number;
@@ -11973,13 +12004,11 @@ function SessionHeaderBar({
   const systemBack = useSystemNavigationBack();
   const headerWindow = useAdaptiveWindow();
   const headerInsets = headerWindow.insets;
-  // Budget the title together with both toolbars; UIKit cannot shrink a
-  // fixed-size React title's contents when the trailing glass capsule grows.
-  const nativeTitleMaxWidth = Math.max(0, Math.min(240,
-    headerWindow.width - headerInsets.left - headerInsets.right
-      - (spacing.lg + spacing.xs) * 2 - navigationChrome.target * ((onOpenSessionList ? 5 : 4) - (workerHeader ? 2 : 0))
-      - (onOpenSessionList ? spacing.sm : 0) - spacing.sm * 2,
-  ));
+  // Budget the title together with both toolbars and, on Duo portrait, the status area.
+  const nativeTitleMaxWidth = sessionNavigationTitleMaxWidth({
+    barWidth: headerWindow.width - headerInsets.left - headerInsets.right,
+    sessionList: !!onOpenSessionList, detailsOnly: workerHeader, statusRowReserve,
+  });
   const sessionListButton = onOpenSessionList ? (
     <HomeHeaderGlassButton accessibilityLabel={t('home.drawer.openA11y')}
       onPress={onOpenSessionList} testID="session.sessionListButton">

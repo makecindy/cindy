@@ -1,7 +1,12 @@
 import { parseRemoteMediaUrl } from '../../../shared/remoteMediaUrl';
 
-const MANAGED_MEDIA_SCHEME_RE = /^(?:cindy-media|xdt-video|cindy-remote-media):\/\//i;
+const MANAGED_MEDIA_SCHEME_RE = /^(?:cindy-media|xdt-image|xdt-video|cindy-remote-media):\/\//i;
 const VIDEO_EXTENSION_RE = /\.(?:mp4|webm|mov|m4v)(?:[?#]|$)/i;
+
+export function isManagedMarkdownMediaUrl(src: string | undefined): src is string {
+  if (!src) return false;
+  return MANAGED_MEDIA_SCHEME_RE.test(parseRemoteMediaUrl(src)?.origUrl ?? src);
+}
 
 /**
  * 解码后的「原始媒体 URL」：已编码的 `cindy-remote-media://m/<b64>/<b64>` 没有可见
@@ -10,7 +15,7 @@ const VIDEO_EXTENSION_RE = /\.(?:mp4|webm|mov|m4v)(?:[?#]|$)/i;
  */
 function managedVideoTarget(src: string): string | null {
   const target = parseRemoteMediaUrl(src)?.origUrl ?? src;
-  return MANAGED_MEDIA_SCHEME_RE.test(target) && VIDEO_EXTENSION_RE.test(target) ? target : null;
+  return isManagedMarkdownMediaUrl(target) && VIDEO_EXTENSION_RE.test(target) ? target : null;
 }
 
 /**

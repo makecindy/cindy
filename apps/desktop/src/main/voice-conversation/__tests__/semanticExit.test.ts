@@ -77,7 +77,8 @@ describe('ephemeral semantic voice exit', () => {
       disableReasoning: true,
       timeoutMs: 2_000,
     });
-    expect(opts).not.toHaveProperty('sessionId');
+    // Attribution is host-only; it does not load Agent/history context or enter the prompt.
+    expect(opts).toMatchObject({ source: 'voice-exit', sessionId: 'canonical' });
     expect(opts).not.toHaveProperty('systemPrompt');
     expect(opts.beforeDispatch).toBeTypeOf('function');
     expect(JSON.stringify(h.log.info.mock.calls)).not.toContain(request.text);

@@ -41,6 +41,7 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
     isMobile: false,
     status: 'direct',
     path: 'direct',
+    controlLinkOpen: true,
     rttMs: 3,
     flow: null,
     flowText: null,
@@ -211,5 +212,24 @@ describe('HubNodePopover', () => {
     expect(screen.getByText('连接已失效')).toBeTruthy();
     expect(screen.getByText('settings.devices.standbyHint')).toBeTruthy();
     expect(screen.queryAllByRole('button')).toHaveLength(0);
+  });
+
+  // 2026-11-18 用户要求这台电脑也写出它实际用的连接方式。原来本机卡片只有与中转的连接，没有连接方式。
+  // 最小失败输入:relayProtocol 为 Agent-Net / Device Link 且在线;连接中时主连接还没定，不能先写成 Device Link。tier: unit。
+  it('在线时单独一行写这台电脑用的连接方式，连接中不写', () => {
+    const { unmount } = render(<HubNodePopover model={{ ...model, relay: { ...model.relay, protocol: 'agent-net' } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.remoteControl.v2.popover.protocol')).toBeTruthy();
+    expect(screen.getByText('settings.remoteControl.v2.protocol.agentNet')).toBeTruthy();
+    expect(screen.getByText('settings.devices.linkStatus.online · 20 ms')).toBeTruthy();
+    unmount();
+
+    const legacy = render(<HubNodePopover model={{ ...model, relay: { ...model.relay, protocol: 'device-link' } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.remoteControl.v2.protocol.deviceLink')).toBeTruthy();
+    legacy.unmount();
+
+    render(<HubNodePopover model={{ ...model, relay: { ...model.relay, protocol: 'device-link' } }} linkStatus="connecting" issue={null} standby={false} />);
+    expect(screen.queryByText('settings.remoteControl.v2.popover.protocol')).toBeNull();
+    expect(screen.queryByText('settings.remoteControl.v2.protocol.deviceLink')).toBeNull();
+    expect(screen.getByText('settings.devices.linkStatus.connecting')).toBeTruthy();
   });
 });

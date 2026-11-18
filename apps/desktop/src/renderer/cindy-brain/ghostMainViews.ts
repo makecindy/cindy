@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
 
-import type { GhostMainViewIcon, GhostManifest, InstalledGhost } from '../../shared/ghost';
+import type { GhostManifest, InstalledGhost } from '../../shared/ghost';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
+import { mainViewIconName, type MainViewIconName } from './mainViewIcons';
 import { useInstalledGhosts } from './useInstalledGhosts';
 import {
   readMainViewSidebarVisible,
@@ -16,7 +17,7 @@ export interface GhostMainViewItem {
   /** Physical instance id used in /apps/:id. Root stays ghostId; new org installs use storage part. */
   instanceId: string;
   title: string;
-  icon: GhostMainViewIcon;
+  icon: MainViewIconName;
   manifest: GhostManifest;
   installedGhost: InstalledGhost;
 }
@@ -49,7 +50,7 @@ export function projectGhostMainViews(
         ghostId: manifest.id,
         instanceId: installedGhostStoragePart(installedGhost),
         title: manifest.mainView?.title ?? manifest.name,
-        icon: manifest.mainView?.icon ?? 'puzzle',
+        icon: mainViewIconName(manifest.mainView),
         manifest,
         installedGhost,
       };

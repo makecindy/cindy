@@ -136,6 +136,21 @@ override 仍然优先。供应商／模型停用、退役、付费准入和凭�
 identity / canonical account history 场景，以及
 `provider-compatibility.integration.test.ts` 的原生开关往返与历史保留验证。
 
+### Codex 原生 TOML 的 UTF-8 BOM
+
+本机 Codex 配置读取（自定义上下文目录、插件桥接、上下文窗口、Browser companion 与
+历史归档定位）只容忍文件开头的**一个** UTF-8 BOM；profile TOML 使用同一解析规则。
+不 trim、不移除字符串中的 BOM，不把双 BOM 或其余损坏 TOML 当作空配置。
+各入口原有的抛错、告警或不可用语义不变。
+
+兼容只发生在解析内存副本，不为恢复启动而重写配置；插件追加仍保留原始文本（包括
+BOM、注释和用户值），并用原始快照参与现有原子写入的并发比对。
+随包原生 Codex `0.166.0` 已用隔离 home 实测接受单前导 BOM，因此启动仍读取原文件，
+不需要另存无 BOM 配置或迁移凭证。
+实现见 `maker-host/codex-config-toml.ts`；回归见 `codexCustomContextCatalog.test.ts`、
+`codexGlobalPlugins.test.ts` 与隔离 home／回环供应商的
+`codexContextSwitch.native.test.ts`（真实 `CodexAgent` 建会话、发送及冷恢复）。
+
 ## 3. 默认值演进与迁移
 
 ### 模型上下文与压缩（2026-10-27）

@@ -13,6 +13,9 @@
   旧控制端照旧显示表单，无实时画面的设备也退回表单或截图）等。
   本机带路用只限受信本地窗口的 `INPUT_HANDOFF_LOCAL_RAISE_CHANNEL`，不进远程 allowlist（`device-link/ipc.ts` 拒绝）。
   旧控制端忽略不认识的字段，仍能看到本步的说明文字并交还／取消；新控制端只在字段存在时展示对应入口。
+  `preferRemoteForm`（2026-11-16）是可选展示偏好：远程端优先显示宿主已核实的逻辑表单，
+  本机仍优先原登录窗口；缺省或旧端忽略时沿用 `directSignIn` 的窗口入口，表单继续可用。
+  不改变授权、带值提交或中转协议；自建中转沿用不解析该快照的既有透传路径。
   `deviceCode` 在打开前必须经 `isInputHandoffDeviceCode` 复核（https、无账号密码、origin 与显示一致）。
 - **带值提交**只走插件授权 v3：`capabilities` 声明 `inputHandoff: true`，`start` 带 `inputHandoff: true`；
   每步按 (requestId, revision) 绑定，`validateInputHandoffSubmissionForStep` 复核控件与值上限。
@@ -67,3 +70,18 @@
     - 被控端每秒重发一次静止画面，新连接才能马上拿到第一帧：画布自上次采集后没有重画时，
       `requestFrame()` 不产生帧，所以先把画面原样重画一遍。2026-11-11 之前的被控端只在设备画面变化时
       才有第一帧，控制端为此把设备画面的连接等待放宽一分钟（时钟每分钟会变一次）。
+
+## 逻辑字段计划（2026-11-16）
+
+`request_input_handoff.fields` 是工具到执行宿主的可选增量参数，不改变 device-link 快照或
+加密提交协议。执行宿主将精确匹配的分段控件合成一个既有 `kind: text` 字段，旧手机和旧
+Desktop 仍提交该字段的一条字符串；原始控件映射只存在执行宿主内存。
+未传 `fields` 的调用保持原行为；旧执行宿主不支持该工具参数时由调用方按工具 schema 使用
+原来的窗口流程。自建中转仍透明传输原有消息，无新 channel、capability 或 payload 语义。
+
+## 单字符自动跳格
+
+本机 macOS helper 的 `act` 请求新增可选 `allowFocusAdvance`。仅宿主按已核验计划分发单字符
+验证码时传 true；helper 还检查非密码字段、只有一个 Unicode scalar 且前台仍为同一应用。
+旧 helper 忽略该字段，仍按原来的严格焦点检查返回失败，不会放开填写目标。此项不进入
+device-link wire，也不改变自建中转的 payload。

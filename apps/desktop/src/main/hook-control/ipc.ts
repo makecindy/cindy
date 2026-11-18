@@ -405,6 +405,7 @@ function persistUnsolicitedServerPrefs(channel: HookPrefsChannel, prefs: HookWor
 }
 
 function channelLiveBindingKey(channel: HookPrefsChannel): string | null {
+  if (!hookControlAvailable()) return null;
   const snap = ensureInstances().manager.snapshot();
   if (channel === 'slack') {
     if (snap.serverMultiTeam) {
@@ -547,6 +548,10 @@ const projectWorkspaceSync = createProjectWorkspaceSync({
     applyRetiredProjectNames();
     // 名称清单变了要让服务端知道: 在线时重发 hello(它以最新一帧为准); 不在线时
     // 下次建连的 hello 自带新清单, 不需要为此重建连接。
+    if (!hookControlAvailable()) {
+      if (changed) broadcastStatus({ ...disabledHookView(), workspaces: store.get().workspaces });
+      return;
+    }
     if (mappingChanged) manager.refreshHello();
     if (changed) broadcastStatus(manager.snapshot());
   },
@@ -963,8 +968,11 @@ export function readXCompanionSummary(): { available: boolean; visible: boolean;
 
 /** 注册 IPC 并按配置 + 登录态拉起连接。bootstrap 里调用一次。 */
 export function registerHookControlIpc(): void {
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, () => {
-    if (!hookControlAvailable()) return { hook: disabledHookView() };
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.GET, async () => {
+    if (!hookControlAvailable()) {
+      const { workspaces } = await readPluginImProjectCatalog();
+      return { hook: { ...disabledHookView(), workspaces } };
+    }
     const hook = ensureInstances().manager.snapshot();
     // 打开设置页时顺手与侧栏项目对齐; 有变化经状态广播推给页面。
     projectWorkspaceSync.schedule();
@@ -972,7 +980,7 @@ export function registerHookControlIpc(): void {
   });
   disposeProjectCatalogListener?.();
   disposeProjectCatalogListener = onProjectCatalogChanged(() => {
-    if (store && hookControlAvailable()) projectWorkspaceSync.schedule();
+    if (store) projectWorkspaceSync.schedule();
   });
 
   // 开关即绑定(设置页 toggle 直接调, 无确认弹窗): 开 = 连接 + 置自动绑定意图
@@ -1113,13 +1121,13 @@ export function registerHookControlIpc(): void {
 
   // 添加项目: 登记进侧栏的项目列表, 再按项目列表整理一次机器人可选的项目。
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.ADD_PROJECT, async (_e, payload) => {
-    requireHookControl();
-    const { manager: m } = ensureInstances();
+    const { manager: m, store: current } = ensureInstances();
     const directory = requireString(requireObject(payload).directory, 'directory');
     const registered = await registerImProjectDirectory(directory);
     if (!registered.ok) throwIpcError('INVALID_PARAMS', registered.message);
     await projectWorkspaceSync.run();
-    return { hook: m.snapshot() };
+    if (store !== current) throwIpcError('PERMISSION_DENIED', 'IM project owner changed');
+    return { hook: hookControlAvailable() ? m.snapshot() : { ...disabledHookView(), workspaces: current.get().workspaces } };
   });
 
   registerTrustedHookControlHandler(
@@ -1231,7 +1239,7 @@ export function registerHookControlIpc(): void {
   const writeSharedProjectPref = (payload: unknown): void => {
     const parsed = parseWorkspacePrefsWrite(payload);
     try {
-      adoptReadyChannels();
+      if (hookControlAvailable()) adoptReadyChannels();
       setSharedProjectPref(parsed.workspace, parsed.patch);
     } catch (err) {
       log.warn(
@@ -1240,14 +1248,15 @@ export function registerHookControlIpc(): void {
       throwIpcError('INTERNAL', 'failed to persist workspace prefs');
     }
     broadcastSharedPrefs();
-    syncSharedProjectPrefs();
+    if (hookControlAvailable()) syncSharedProjectPrefs();
   };
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SHARED_PREFS_GET, async () => {
-    requireHookControl();
-    ensureInstances();
     try {
-      if (adoptReadyChannels().length > 0) syncSharedProjectPrefs();
+      if (hookControlAvailable()) {
+        ensureInstances();
+        if (adoptReadyChannels().length > 0) syncSharedProjectPrefs();
+      }
       return { prefs: { prefs: listSharedProjectPrefs() } satisfies SharedProjectPrefsView };
     } catch (err) {
       log.warn(`shared project prefs read failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1256,8 +1265,7 @@ export function registerHookControlIpc(): void {
   });
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SHARED_PREFS_SET, async (_e, payload) => {
-    requireHookControl();
-    ensureInstances();
+    if (hookControlAvailable()) ensureInstances();
     writeSharedProjectPref(payload);
     return { prefs: { prefs: listSharedProjectPrefs() } satisfies SharedProjectPrefsView };
   });

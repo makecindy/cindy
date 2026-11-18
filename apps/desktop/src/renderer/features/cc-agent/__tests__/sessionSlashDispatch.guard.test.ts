@@ -43,7 +43,7 @@ function harness(agentKind = 'pi', remoteDeviceId?: string) {
     workingDir: '/project', status: 'active', source: 'user', orcaRole: null,
     extraDirs: ['/reference', 'cindy-library:/library'], writableDirs: ['/output'] };
   const environment: Record<string, any> = {
-    ...slash, session, sessionId: session.id, remoteDeviceId,
+    ...slash, session, sessionId: session.id, remoteDeviceId, catalogDeviceId: remoteDeviceId,
     dbToMakerAgentKind: (kind: string) => kind,
     buildCreateOptsForCurrentSession: (_id: string, model: string, effort: string, permissionMode: string, workingDir: string) =>
       ({ model, effort, permissionMode, workingDir }),

@@ -32,6 +32,8 @@ export interface State { schema: 1; networks: Record<string, NetworkRecord>; sha
 /** Reads return snapshots; a transaction commits its draft atomically or not at all. */
 export interface RelayStore {
   network(id: string): NetworkRecord | undefined;
+  /** The live record, read-only, for checks on the per-datagram path (no deep copy); see `Store.peekNetwork`. */
+  peekNetwork(id: string): Readonly<NetworkRecord> | undefined;
   networks(): NetworkRecord[];
   delegationRequests(): DelegationRequest[];
   primaryNetworkId(): string | undefined;
@@ -77,6 +79,12 @@ export class Store implements RelayStore {
     return new Store(filename, state);
   }
   network(id: string): NetworkRecord | undefined { return Object.hasOwn(this.state.networks, id) ? structuredClone(this.state.networks[id]) : undefined; }
+  /**
+   * The live record, not a copy: only for read-only checks on the per-datagram path, where `network`'s deep clone ran
+   * three times per forwarded packet. Safe because `transaction` never mutates the current state — it edits a clone and
+   * swaps it in — so a reference taken here is a consistent snapshot. Callers must not modify it.
+   */
+  peekNetwork(id: string): Readonly<NetworkRecord> | undefined { return Object.hasOwn(this.state.networks, id) ? this.state.networks[id] : undefined; }
   networks(): NetworkRecord[] { return Object.values(structuredClone(this.state.networks)); }
   delegationRequests(): DelegationRequest[] { return structuredClone(this.state.delegationRequests ?? []); }
   primaryNetworkId(): string | undefined { return this.state.primaryNetworkId; }
