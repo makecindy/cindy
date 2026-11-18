@@ -17,7 +17,10 @@ import {
   resolveRunningUsageMeta,
 } from '@/features/cc-agent/lib/runningTokenUsage';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({
+  t: (key: string, values?: { rate?: string; tokens?: string }) =>
+    [key, values?.rate ?? values?.tokens].filter(Boolean).join(' '),
+}) }));
 
 // Execute the actual status bar without loading the entire session view's IPC/store graph.
 const source = readFileSync(
@@ -89,6 +92,7 @@ const RunningStatusBar = new Function(
     elapsedMs: number;
     streaming: boolean;
     peak?: number;
+    totalOutputTokens?: number;
   };
 }>;
 
@@ -204,11 +208,12 @@ it('paused token speed hides the current rate but keeps average and peak', () =>
   // A tool call pauses generation: the cached live rate (fresh for 60s) must not
   // be shown as a current speed, while average and peak still describe the turn.
   rerender(
-    <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average }} />,
+    <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average, totalOutputTokens: 5_300 }} />,
   );
   expect(trigger()?.textContent).not.toContain('tokenRate');
   expect(currentRate()?.textContent).toContain('—');
-  expect(value('chat.runningStatus.averageRate')?.textContent).not.toContain('—');
+  expect(value('chat.runningStatus.averageRate')?.textContent).toContain('100');
+  expect(value('chat.runningStatus.outputTotal')?.textContent).toContain('5.3k');
   expect(value('chat.runningStatus.observedPeak')?.textContent).not.toContain('—');
 
   // Streaming resumes: the live reading is back.
