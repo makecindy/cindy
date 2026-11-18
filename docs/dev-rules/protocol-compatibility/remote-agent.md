@@ -455,7 +455,8 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   分享者电脑、受邀者电脑与手机各过一遍。手机经同账号新 channel `maker:provider-share:received-catalogs`(进同账号 allowlist)
   读取被控电脑收到的分享及其目录；旧版电脑回 `CHANNEL_NOT_ALLOWED`，手机按没有分享处理。跨区域(P3)经服务端开关开放，
   受邀者用第二条 relay 连接(`ProviderShareGuest` 认证)，见契约 §6。
-  共享推理代理的范围拒绝仍回 HTTP 403、`shared_provider_only` 与原 JSON 结构，只在确认会话／供应商范围不匹配的
+  共享推理代理的范围拒绝仍回 HTTP 403 与原 JSON 结构，既有 code 保持原样（`shared_provider_only`，
+  或 Pi 令牌不匹配的 `pi_provider_mismatch`）；只在确认会话／供应商范围不匹配的
   `error.message` 前追加 `[SHARED_PROVIDER_SCOPE_DENIED] `，不含模型或账号信息。新版接收方据此停止组内换机；
   旧的无标记文案也可能表示某成员失去模型，新版接收方不能据此停止恢复。旧接收方继续按原 403 处理；
   不新增 wire 字段、能力位或白名单，自建中转无需适配。
