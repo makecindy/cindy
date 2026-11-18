@@ -1,5 +1,6 @@
 import { resolveAutomaticProjectIcon } from '../projectAutomaticIcon.desktop.js';
 import { readSubscriptionUsage } from '../subscription-accounts/runtime.js';
+import { createSessionToolCatalogExecutor } from '../maker-ipc/sessionToolCatalog.js';
 import { parseProjectSymbol, parseProjectLetters } from '@cindy/maker-shared/project-alias-sync';
 import { readProjectInfo } from '../projectInfoCore.js';
 import { updateProjectInfo } from '../localDb/ipc/projectAliases.js';
@@ -730,6 +731,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      sessionToolCatalog: { call: (context, request) => withAccountDataAccess(context.sessionId, assertCurrent =>
+        createSessionToolCatalogExecutor({
+          getSession: async id => getTaskActionSession(id),
+          pluginCall: getPluginHostToolCaller, getGhost: findGhostForInstanceId,
+        })(request, assertCurrent)) },
       subscriptionUsage: { read: (context, providerId) => withAccountDataAccess(context.sessionId, async assertCurrent => {
         const result = await readSubscriptionUsage(providerId);
         await assertCurrent();
@@ -785,6 +791,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             ...(request.note ? { note: request.note } : {}),
             ...(ready.requester ? { requester: ready.requester } : {}),
             target: request.target,
+            ...(request.fields ? { fields: request.fields } : {}),
             ...(request.completeWhen ? { completeWhen: request.completeWhen } : {}),
             ...(request.timeoutMinutes ? { timeoutMinutes: request.timeoutMinutes } : {}),
           });
@@ -1600,6 +1607,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       endTeam: wrap((s, params) => s.endTeam(params)),
       archiveWorker: wrap((s, params) => s.archiveWorker(params)),
       updateWorker: wrap((s, params) => s.updateWorker(params)),
+      setWorkerRuntime: wrap((s, params) => s.setWorkerRuntime(params)),
       listAvailableModels: wrap((s, params) => s.listAvailableModels(params)),
       getWorkspaceInfo: wrap((s, params) => s.getWorkspaceInfo(params)),
       getWorkerStatus: wrap((s, params) => s.getWorkerStatus(params)),

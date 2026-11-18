@@ -22,6 +22,14 @@ export default {
     },
     fleet: { about: 'Same shape as a real account: 3 direct, 7 via relay, 15 folded offline; two links carrying messages', storage: V2_ON },
     many: { about: 'Twenty other devices: dense rows, split direct group, folded offline', storage: V2_ON },
+    'split-direct': {
+      about: 'Nine direct devices split in two; the relay group sits below the second direct group, so its label goes under the relay point, clear of this computer’s name',
+      storage: V2_ON,
+    },
+    'self-device-link': {
+      about: 'Agent-Net switch on, but this computer runs on Device Link this time: Device Link under its name, in its card and on every peer',
+      storage: V2_ON,
+    },
     empty: { about: 'Only this computer, master switch off', storage: V2_ON },
     'legacy-off': { about: 'Agent-Net off: no topology; 我的设备 and the relay route are unchanged' },
     'model-access-off': { about: '「让我的其他电脑用本机模型」 under the master switch, off by default; turning it on' },
@@ -170,7 +178,67 @@ export default {
       await page.getByRole('button', { name: new RegExp(`^${await ui.t('settings.remoteControl.sections.myDevices')}`) }).waitFor();
       return;
     }
-    await page.getByRole('button', { name: 'Studio Mac', exact: true }).waitFor();
+    // 这台电脑名字下面写它实际用的连接方式;读屏名字同样带上(用户要求 2026-11-18)。
+    const agentNet = await ui.t('settings.remoteControl.v2.protocol.agentNet');
+    const deviceLink = await ui.t('settings.remoteControl.v2.protocol.deviceLink');
+    const selfProtocol = ui.case === 'self-device-link' ? deviceLink : agentNet;
+    const hub = page.getByRole('button', { name: `Studio Mac · ${selfProtocol}`, exact: true });
+    await hub.waitFor();
+    // 2026-11-18 用户反馈:中转站的字写在圆点下面、朝中间排开,和这台电脑的名字、连接方式挤成一团。
+    // 中转站的字要整个落在这台电脑的字与细环之外,且不再重复这台电脑名字下面那个连接方式(读屏名字仍带上)。
+    const relayName = await ui.t('settings.remoteControl.v2.relay.official');
+    const relayRtt = await ui.t('settings.remoteControl.v2.ms', { value: ui.case === 'many' ? 22 : 25 });
+    if (ui.case !== 'empty') {
+      const relayDot = page.getByRole('img', { name: `${relayName} · ${selfProtocol} · ${relayRtt}`, exact: true });
+      await relayDot.waitFor();
+      assert.equal(await page.getByText(`${selfProtocol} · ${relayRtt}`, { exact: true }).count(), 0);
+      const hubBox = await hub.boundingBox();
+      const hubX = hubBox.x + hubBox.width / 2;
+      const below = async (text) => {
+        for (const el of await page.getByText(text, { exact: true }).all()) {
+          const box = await el.boundingBox();
+          // 连接方式那行的文字前面有 12px 图标,文字本身比圆盘中心偏右几像素。
+          if (box && box.y >= hubBox.y + hubBox.height && Math.abs(box.x + box.width / 2 - hubX) < 12) return box;
+        }
+        throw new Error(`no "${text}" under this computer in the topology`);
+      };
+      const dotBox = await relayDot.boundingBox();
+      const dotX = dotBox.x + dotBox.width / 2;
+      const labels = [];
+      for (const el of await page.getByText(relayName, { exact: true }).all()) {
+        const label = el.locator('..');
+        const box = await label.boundingBox();
+        if (box && Math.abs(box.x + box.width / 2 - dotX) < 80 && Math.abs(box.y + box.height / 2 - dotBox.y) < 80) {
+          labels.push({ box, lines: [await el.boundingBox(), await label.getByText(relayRtt, { exact: true }).boundingBox()] });
+        }
+      }
+      assert.equal(labels.length, 1, 'relay station label');
+      const [{ box: relayLabel, lines }] = labels;
+      const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+      // 细环按圆算:字的每一行离圆心最近的点都要在环外。
+      const ringY = hubBox.y + hubBox.height / 2;
+      const inRing = (a) => Math.hypot(Math.min(Math.max(hubX, a.x), a.x + a.width) - hubX, Math.min(Math.max(ringY, a.y), a.y + a.height) - ringY) < 36;
+      const blockers = [['name', await below('Studio Mac')], ['protocol', await below(selfProtocol)], ['relay point', dotBox]];
+      for (const line of lines) {
+        assert.ok(!inRing(line), 'relay label overlaps the ring');
+        for (const [what, box] of blockers) assert.ok(!overlaps(line, box), `relay label overlaps ${what}`);
+      }
+      // 只有中转站整个落在这台电脑的字下面时(split-direct),字才写到圆点下面。
+      if (ui.case === 'split-direct') assert.ok(relayLabel.y >= dotBox.y + dotBox.height, 'relay label under the relay point');
+      else assert.ok(relayLabel.y + relayLabel.height <= dotBox.y, 'relay label above the relay point');
+    }
+    const hubCardStatus = `${await ui.t('settings.devices.linkStatus.online')} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`;
+    if (ui.case === 'self-device-link') {
+      // 主连接跑在 Device Link 上:中间与所有对端都写 Device Link,哪里都没有 Agent-Net。
+      assert.equal(await page.getByText(agentNet, { exact: true }).count(), 0);
+      await hub.click();
+      const hubCard = page.getByRole('dialog');
+      await hubCard.getByText(deviceLink, { exact: true }).waitFor();
+      await hubCard.getByText(hubCardStatus, { exact: true }).waitFor();
+      await ui.capture('hub-card');
+      await page.keyboard.press('Escape');
+      return;
+    }
     if (ui.case === 'default' || ui.case === 'fleet') {
       // 默认截图是减弱动效(在用的线是略粗的绿色实线);这里放开动效,有消息的线变成流动的绿色虚线。
       // 隔半节虚线的时间再截一帧(flow-later),两帧的空隙应整体往消息方向挪了一点。
@@ -190,7 +258,7 @@ export default {
       // Fractional RTT samples must render as whole milliseconds in the topology and both cards.
       await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 3 }), { exact: true }).waitFor();
       await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 97 }), { exact: true }).waitFor();
-      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 25 }), { exact: true }).waitFor();
+      await page.getByText(relayRtt, { exact: true }).waitFor();
       // Mixed real routes: both protocols share the topology, independently of direct/relay grouping.
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.deviceLink'), { exact: true }).waitFor();
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).first().waitFor();
@@ -205,9 +273,10 @@ export default {
       await ui.capture('agent-net-card');
       await page.keyboard.press('Escape');
       // 这台电脑的卡只展示连接信息;本机设置直接使用同页上方的卡片。
-      await page.getByRole('button', { name: 'Studio Mac', exact: true }).click();
+      await hub.click();
       const hubCard = page.getByRole('dialog');
-      await hubCard.getByText(`${await ui.t('settings.devices.linkStatus.online')} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`, { exact: true }).waitFor();
+      await hubCard.getByText(agentNet, { exact: true }).waitFor();
+      await hubCard.getByText(hubCardStatus, { exact: true }).waitFor();
       await ui.capture('hub-card');
       await page.keyboard.press('Escape');
       // 要处理的设备:点开卡片,「状态」用红字写原因(没有单独的「需要处理」卡片)。

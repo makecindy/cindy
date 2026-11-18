@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ProviderView } from '../registry.js';
 import type { CatalogModel } from '../types.js';
-import { sameRunLocationProvider, duplicateSubscriptionProviders, sameSubscriptionAccounts, listedSourceFolds } from '../subscriptionIdentity.js';
+import { sameRunLocationProvider, duplicateSubscriptionProviders, sameSubscriptionAccounts, listedSourceFolds, effectiveRunLocation } from '../subscriptionIdentity.js';
 const model: CatalogModel = { id: 'sol', name: 'Sol', contextWindow: 200_000, efforts: ['high'], defaultEffort: 'high' };
 const source = (id: string, extra: Partial<ProviderView> = {}) => ({
   id, connected: true, agents: ['codex'], models: { codex: [model] },
@@ -99,6 +99,28 @@ describe('listedSourceFolds', () => {
     expect(hidden(listedSourceFolds({ base, others }))).toEqual(['rog:openai']);
     // The task still on this computer keeps its entry next to the chosen computer's.
     expect(hidden(listedSourceFolds({ base, others, honorRunLocation: true, current: { deviceId: null, providerId: 'openai' } }))).toEqual([]);
+  });
+  // 2026-11-18 user decision: never move work to another computer on the app's own initiative.
+  it('keeps this computer as the run location while its provider is momentarily unusable', () => {
+    expect(effectiveRunLocation({}, [{ deviceId: 'rog' }])).toBe('local');
+    expect(effectiveRunLocation({ runLocation: 'rog' }, [{ deviceId: 'rog' }])).toBe('rog');
+    expect(effectiveRunLocation({ runLocation: 'rog' }, [])).toBe('local');
+  });
+  it('lists another computer\'s copy of an unusable local provider and asks before using it', () => {
+    const base = [source('openai', { connected: false })];
+    const others = [{ deviceId: 'rog', providers: [source('openai')] }, { deviceId: 'mini', providers: [source('openai')] }];
+    const picker = listedSourceFolds({ base, others, honorRunLocation: true });
+    expect(hidden(picker)).toEqual(['mini:openai']);
+    expect([...picker.askBeforeUse]).toEqual([['rog\nopenai', 'openai']]);
+    // Still listed while the task is on this computer's broken entry; once on the other copy, no more asking.
+    const onLocal = listedSourceFolds({ base, others, honorRunLocation: true, current: { deviceId: null, providerId: 'openai' } });
+    expect([...onLocal.askBeforeUse.keys()]).toEqual(['rog\nopenai']);
+    expect(onLocal.hiddenBase.size).toBe(0);
+    expect(listedSourceFolds({ base, others, honorRunLocation: true, current: { deviceId: 'rog', providerId: 'openai' } })
+      .askBeforeUse.size).toBe(0);
+    // Settings keeps this computer's row; a usable local provider still folds without asking.
+    expect(hidden(listedSourceFolds({ base, others }))).toEqual(['mini:openai', 'rog:openai']);
+    expect(listedSourceFolds({ base: [source('openai')], others, honorRunLocation: true }).askBeforeUse.size).toBe(0);
   });
   it('never folds exempt base sources such as provider groups or own shares', () => {
     const others = [{ deviceId: 'rog', providers: [source('openai')] }];

@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
+    "nativeHooksUnsupported": "ツールフックはローカルの Claude Code と Pi のみ対応しています。",
     "title": "タスクのプラグイン",
     "description": "このタスクで使うプラグインを選択します。変更は次のメッセージから反映されます。",
     "unsupported": "リクエストごとの処理はローカルの Pi のみ対応しています。このタスクのエンジンでは利用できません。",
@@ -1365,7 +1366,7 @@
     "REMOTE_PROVIDER_UPDATING": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
     "REMOTE_PROVIDER_UNSUPPORTED": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "リモートタスクでは Claude サブスクリプションを使用できません。ゲートウェイまたは API キーのモデルを選択してください",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスが応答していません。リモートデバイスを確認して再試行してください。",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "対象デバイスから現在応答がありません。ネットワークが遅いか、デバイスが混み合っている可能性があります。Cindy が自動で確認を続けるので、接続が回復してから再試行してください。",
     "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 設定がディスク上で変更されました。再読み込みしてからもう一度お試しください。",
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 設定は保存されましたが、Cindy で再読み込みできませんでした。SSH 設定を再読み込みしてください。",
@@ -4301,7 +4302,6 @@
           "label": "実行するコンピュータ",
           "optionLocal": "このコンピュータ",
           "notSignedIn": "未ログイン",
-          "autoBorrowing": "このコンピュータは未ログインのため、新しいタスクは {{device}} で実行します。ログインは不要です。",
           "local": "新しいタスクはこのコンピュータで実行します。ログイン済みの別のコンピュータも選べます。",
           "pinned": "新しいタスクは {{device}} で、そのコンピュータのログインを使って実行します。実行中のタスクはそのままです。",
           "inline": "実行先",
@@ -5386,8 +5386,19 @@
       "title": "メッセージ入力",
       "sendShortcut": {
         "label": "{{shortcut}}で送信",
-        "hint": "オンにすると{{shortcut}}でメッセージを送信します。オフにするとEnterで送信し、Shift+Enterで改行します。",
-        "ariaLabel": "{{shortcut}}でメッセージを送信"
+        "hint": "Enterで送信、Shift+Enterで改行します。",
+        "ariaLabel": "{{shortcut}}でメッセージを送信",
+        "hintModifierEnter": "{{shortcut}}で送信、Enterで改行します。"
+      },
+      "followUp": {
+        "label": "実行中の送信方法",
+        "hintQueue": "タスクの実行中は、送信ボタンと{{send}}でキューに追加します。",
+        "hintSteer": "タスクの実行中は、送信ボタンと{{send}}で実行中のタスクに割り込みます。",
+        "ariaLabel": "タスク実行中の送信方法",
+        "options": {
+          "queue": "キューに追加",
+          "steer": "割り込み"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -6415,7 +6426,8 @@
           "defaultProjectTag": "既定",
           "defaultProjectFullAccessWarning": "既定のプロジェクト「{{name}}」の権限はフルアクセスです。どのグループから @ で呼ばれても、この中でフルアクセスで実行されます。",
           "sharedSettingsPointer": "プロジェクト・モデル・権限はすべての公式ボットで共通です。",
-          "sharedSettingsPointerAction": "設定を開く"
+          "sharedSettingsPointerAction": "設定を開く",
+          "workspacesCardDescriptionWithPlugins": "すべての公式ボットと IM プラグインで共通の設定です。プロジェクトはサイドバーのものと同じで、作成・名前変更・削除はサイドバーで行います。チャットで /model から変更した内容もここに反映されます。プラグインでチャットごとに変更したモデルと権限は影響を受けません。"
         },
         "binding": {
           "copyLink": "リンクをコピー",
@@ -6724,6 +6736,7 @@
           "latency": "遅延",
           "lastSeen": "最終オンライン",
           "controlling": "このコンピューターを操作中",
+          "protocol": "接続方式",
           "rttNote": "直近の計測",
           "manage": "デバイスを管理…",
           "linkStatus": "「{{name}}」との接続",
@@ -6891,7 +6904,8 @@
         "replaced": "同じデバイスの別の接続に置き換えられました",
         "too-many-connections": "このアカウントの同時接続数が上限に達しました",
         "version-mismatch": "プロトコルバージョンが一致しません。アプリを更新してください",
-        "unstable": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合は Cindy を再起動してください"
+        "unstable": "接続が切断と再接続を繰り返しています。ネットワークを確認し、続く場合は Cindy を再起動してください",
+        "agent-net-relay-down": "Agent-Net の中継に接続できません。再接続しています。直接接続しているパソコンは引き続き使えますが、ほかのデバイスはしばらく接続できません"
       },
       "refresh": "更新",
       "empty": "他のデバイスはまだありません。別のパソコンで同じアカウントで {{appName}} にログインすると、ここに表示されます。",
@@ -6947,11 +6961,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "公式",
-        "personal": "個人"
+        "personal": "個人",
+        "plugins": "プラグイン"
       },
       "tips": {
         "cindy": "Cindy が提供・管理します。自分でボットを作成したり認証情報を用意したりする必要はなく、案内に沿って接続するだけで利用できます。",
-        "personal": "自分のアカウントまたはボットを接続し、必要な認証情報を自分で管理します。アカウント、権限、設定はチャンネルごとに保存されます。"
+        "personal": "自分のアカウントまたはボットを接続し、必要な認証情報を自分で管理します。アカウント、権限、設定はチャンネルごとに保存されます。",
+        "plugins": "インストール済みのプラグインが提供する IM の入口です。ログインと連携はプラグインのページで行います。プロジェクト、モデル、権限は既定で「プロジェクトとモデル」の設定に従い、プラグインでチャットごとに変更することもできます。"
       },
       "defaults": {
         "title": "新規会話設定",
@@ -6983,6 +6999,10 @@
         },
         "groupPermissionLabel": "グループで新規タスクを作成するときの権限モード",
         "groupPermissionDescription": "グループで新規タスクを作成するときに共通で使う権限モード（@bot でトピックを開く場合、/new、/ctr のいずれも対象）。初期値は「自動承認」で、上の権限モードは個人チャット専用です。グループの文脈にはメンバーが操作できる内容が含まれるため、「フルアクセス」を選ぶと確認なしで直接実行されます。信頼できるグループでのみ選択してください。変更は以後に作成するタスクにのみ適用され、既存のタスクはグループ内で /permission を使って個別に切り替えます。"
+      },
+      "plugins": {
+        "rowHint": "ログイン、連携、チャットごとの設定はプラグインのページにあります。",
+        "open": "プラグインを開く"
       }
     },
     "shortcuts": {
@@ -8211,6 +8231,10 @@
         "subscribeTopics": "セッションの動きを把握(ターン・セッションイベント、メッセージ内容は含まない)",
         "subscribeMessage": "メッセージ内容のイベント",
         "subscribeMessageDetail": "保存済みのユーザーメッセージと AI の返信を受信します。添付ファイルは別の読み取りと受け渡しで取得します。",
+        "subscribeToolExecution": "ツール実行イベント",
+        "subscribeToolExecutionDetail": "ツール名、入力、結果、エラーを受信します。実行は変更せず、監視のみ行います。",
+        "subscribeNativeRecovery": "ネイティブ復旧イベント",
+        "subscribeNativeRecoveryDetail": "再試行、コンテキストの圧縮、タスクの停止に関するエンジンの状態を受信します。",
         "subscribeTaskState": "タスク状態のイベント",
         "subscribeTaskStateDetail": "タスクの実行、待機、完了、アーカイブ、非表示の状態変更を受信します。",
         "subscribeActivity": "AI が思考中のタイミングと、あなたの操作を待っているタイミングを把握",
@@ -8233,6 +8257,10 @@
         "subscribeStartTurnDetail": "タスクでこのプラグインを選んだ場合のみ、現在のメッセージを読み、接続済みモデル、推論強度、Fast を選べます。エラー時はタスクの設定に従い、操作を代わりに承認することはできません。",
         "subscribeModelRequest": "選択したタスクの各モデルリクエストを処理できます",
         "subscribeModelRequestDetail": "タスクでこのプラグインを選んだ場合のみ、モデルへのリクエストを読み、モデル、パラメーター、内容を調整できます。現在はローカルの Pi のみ対応し、エラー時はタスクの設定に従います。接続の認証情報は含まれません。",
+        "subscribeToolCall": "選択したタスクのツール呼び出しを処理できます",
+        "subscribeToolCallDetail": "エンジンが対応する範囲でツールの引数を読み取り、変更、拒否できます。代わりに操作を承認することはできません。",
+        "subscribeToolResult": "選択したタスクのツール結果を処理できます",
+        "subscribeToolResultDetail": "結果を読み取り、エンジンが対応する範囲でコンテキストの追加や結果の置換ができます。実行済みの操作は取り消せません。",
         "subscribeStartTask": "新しいタスクのモデルを選べます",
         "subscribeStartTaskDetail": "新しいタスクでこのプラグインのモデルを選ぶと、最初のメッセージを読んで、接続済みのモデルから 1 つ選びます。この処理は最初のメッセージを送る前に一度だけ実行されます。",
         "card": "メッセージカードを描画",
@@ -9772,6 +9800,41 @@
       },
       "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
       "tokensTooltip": "このセッションが{{range}}に使用したトークンのみを集計します。"
+    },
+    "auxiliary": {
+      "title": "補助モデルの使用量",
+      "label": "補助リクエスト",
+      "purpose": "用途",
+      "requests": "記録済みリクエスト",
+      "description": "合計トークンに含まれます。プロバイダーが返した使用量のみ記録し、未報告の使用量や過去のリクエストは推定しません。",
+      "sources": {
+        "title": "タイトル生成",
+        "task-summary": "タスクの要約",
+        "prompt-prediction": "入力候補",
+        "working-status": "作業状況",
+        "help": "ヘルプ",
+        "bot-creation": "コンパニオン作成",
+        "bot-opening": "コンパニオンの挨拶",
+        "group-planning": "グループの計画",
+        "ambient-reply": "返信の判断",
+        "auto-review": "自動レビュー",
+        "tool-loop-review": "ツールループの確認",
+        "memory-review": "メモリの確認",
+        "git-summary": "変更の要約",
+        "hook-generation": "自動化スクリプト",
+        "automation-verification": "インポートの検証",
+        "plugin-text": "プラグインのテキスト",
+        "voice-dialogue": "音声会話",
+        "voice-exit": "音声終了の判断",
+        "voice-refinement": "音声テキストの推敲",
+        "dictionary-learning": "辞書学習",
+        "embedding-query": "ベクトル検索",
+        "embedding-index": "ベクトル索引",
+        "web-search": "ウェブ検索",
+        "provider-probe": "接続テスト",
+        "vision-bridge": "ビジョンブリッジ",
+        "auxiliary": "その他の補助リクエスト"
+      }
     }
   },
   "usageDashboard": {
@@ -11161,6 +11224,7 @@
       "unavailableTitle": "このグループチャットは利用できません",
       "unavailableDescription": "削除された可能性があります。仲間のページに戻ると、ほかのグループチャットや仲間を開けます。",
       "sidebar": {
+        "threadReply": "スレッドへの返信",
         "title": "グループチャット",
         "empty": "メッセージはまだありません",
         "preview": "{{name}}: {{text}}",
@@ -11493,6 +11557,7 @@
           "sharedReplyFrom": "{{name}} のスレッド返信を共有しました",
           "sharedReply": "スレッドの返信を共有しました",
           "edited": "編集済み",
+          "replyNotFound": "この返信が見つかりませんでした。",
           "sourceUnavailable": "元の返信は削除されたか、表示する権限がありません。",
           "viewThread": "スレッドを見る",
           "viewInMain": "メインチャットで見る",
@@ -12510,6 +12575,7 @@
       "createOwnApp": "自分の App を作成 ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ {{count}} 件の添付ファイルを送信できませんでした：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（上限 {{limit}} MB を超過）",
     "unnamedAttachment": "名前のない添付ファイル",
     "text": {
       "discord": {
@@ -13448,9 +13514,17 @@
         "submitLabel": "回答を送信",
         "multiSelectHint": "（複数選択可）",
         "resolved": "✅ 選択: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "このカードは期限切れです",
         "textHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
-        "replyHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。\n{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。"
+        "replyHint": "質問者のみ回答できます。選択肢をタップし、複数の質問・複数選択の場合は選択後に送信してください。\n{{code}} の後に回答を入力してください。複数の質問には「{{code}} 2: 回答」で答え、最後に「{{code}} OK」で送信します。",
+        "nextLabel": "次の質問",
+        "stepHint": "質問者のみ回答できます。選択肢をタップするか、{{code}} の後に回答を入力してください。",
+        "stepSubmitHint": "質問者のみ回答できます。選んでから「{{action}}」をタップするか、{{code}} の後に回答を入力し、最後に「{{code}} OK」を送ってください。",
+        "stepTextHint": "質問者のみ回答できます。{{code}} の後に回答を入力してください。",
+        "unanswered": "⚠️ 未回答の質問があります：{{numbers}}。すべて回答してから送信してください。",
+        "unansweredSingle": "⚠️ まだ回答がありません。先に選択肢を選ぶか、回答を入力してください。",
+        "numberSeparator": "、"
       }
     }
   },
@@ -13580,9 +13654,8 @@
     "sendButton": {
       "send": "メッセージを送信",
       "queue": "キューに追加",
-      "queueTooltip": "クリックでキューに追加。{{shortcut}} でタスクを中断せずに割り込み送信",
-      "queueTooltipSendMode": "クリックでキューに追加、{{shortcut}}でこのメッセージを送信",
-      "stop": "生成を停止"
+      "stop": "生成を停止",
+      "steer": "実行中のタスクに割り込む"
     },
     "pluginSetup": {
       "account": {
@@ -13942,6 +14015,14 @@
         "standard": "標準",
         "fast": "高速",
         "ultrafast": "超高速"
+      },
+      "discoveredCopy": {
+        "title": "「{{device}}」の {{provider}} を使いますか？",
+        "description": "{{unavailable}}続けると「{{device}}」で実行します。ここからいつでも戻せます。",
+        "unavailableHere": "このパソコンの {{provider}} は現在使えません。",
+        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。",
+        "confirm": "使う",
+        "cancel": "このままにする"
       }
     },
     "permissionSelector": {
@@ -14232,7 +14313,8 @@
         "description": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
         "descriptionNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
         "confirm": "パソコンを切り替える",
-        "cancel": "このままにする"
+        "cancel": "このままにする",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {
@@ -14464,6 +14546,13 @@
       "runningWithWorktree_one": "完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
+    },
+    "followUpHint": {
+      "queueDefault": "タスクの実行中に送信したメッセージは、デフォルトでキューに追加されます。",
+      "steerDefault": "タスクの実行中に送信したメッセージは、デフォルトで実行中のタスクに割り込みます。",
+      "switchToSteer": "デフォルトを割り込みにする",
+      "switchToQueue": "デフォルトをキューに追加にする",
+      "dismiss": "ヒントを閉じる"
     }
   },
   "onboarding": {
@@ -14813,6 +14902,8 @@
       "failed": "画像を生成できませんでした。もう一度お試しください"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。",
+      "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
       "replyFailed": "返信を完了できませんでした",
       "retryTitle": "最後のメッセージを再送信",
@@ -15888,6 +15979,7 @@
       "saveFailed": "コンテキストウィンドウの段階を保存できませんでした"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "リモートからの応答を待っています…",
       "readingMemory": "記憶を読んでいます…",
       "savingMemory": "記憶を保存しています…",
       "deletingMemory": "記憶を削除しています…",
@@ -15937,7 +16029,8 @@
         "replaced": "同じデバイスの別の接続に置き換えられました。再接続しています…",
         "too-many-connections": "このアカウントの同時オンライン台数が多すぎるため、サーバーに接続を拒否されました",
         "version-mismatch": "サーバーとプロトコルバージョンが一致しません。アプリを更新してから再試行してください",
-        "unstable": "このパソコンの接続が切断と再接続を繰り返しているため、リモート操作がタイムアウトし続ける可能性があります。ネットワークを確認するか、Cindy を再起動して再試行してください"
+        "unstable": "このパソコンの接続が切断と再接続を繰り返しているため、リモート操作がタイムアウトし続ける可能性があります。ネットワークを確認するか、Cindy を再起動して再試行してください",
+        "agent-net-relay-down": "このパソコンは Agent-Net の中継に接続できず、再接続しています。相手のパソコンと直接接続していない場合、リモート操作は失敗します"
       }
     },
     "common": {
@@ -16158,7 +16251,8 @@
         "project": "プロジェクト",
         "flat": "フラット表示",
         "device": "デバイス",
-        "dialogue": "チャット"
+        "dialogue": "チャット",
+        "automation": "自動化"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイス別のグループ化を使用できません",
       "deviceGroup": {
@@ -16506,6 +16600,7 @@
       "groupSummary": {
         "project": "プロジェクト",
         "dialogue": "チャット",
+        "automation": "自動化",
         "device": "デバイス"
       },
       "taskStatusHeading": "セッションの状態",
@@ -16518,6 +16613,36 @@
         "priority": "優先度",
         "activity": "最近のアクティビティ",
         "created": "作成日時"
+      },
+      "inbox": {
+        "thisEvening": "今夜",
+        "tomorrow": "明日",
+        "nextWeek": "来週",
+        "custom": "カスタム…",
+        "wakeAt": "再表示する日時",
+        "timeZone": "現地時間（{{zone}}）",
+        "invalidTime": "1年以内の未来の日時を選択してください。",
+        "inbox": "未処理",
+        "working": "実行中",
+        "snoozed": "後で処理",
+        "archived": "処理済み",
+        "snooze": "後で処理する",
+        "complete": "完了",
+        "wake": "今すぐ戻す",
+        "restore": "タスクを復元",
+        "process": "処理済みにする（アーカイブ）",
+        "empty": "受信トレイは空です",
+        "snoozeFailed": "後で処理する時刻を保存できませんでした。接続を確認し、タスクがあるコンピューターを更新してください。",
+        "hours": "{{count}} 時間後",
+        "hours_one": "{{count}} 時間後",
+        "hours_other": "{{count}} 時間後"
+      },
+      "taskListMode": {
+        "heading": "タスクモード",
+        "tasks": "タスク一覧",
+        "inbox": "受信トレイ",
+        "enterInbox": "受信トレイモードに切り替え",
+        "leaveInbox": "タスク一覧モードに切り替え"
       }
     },
     "rename": {
@@ -16810,6 +16935,7 @@
         "menuSave": "保存",
         "menuInsertTable": "表を挿入",
         "externalChangeBlocked": "ファイルが外部で変更されました。自動保存を停止しました。手動保存で上書きできます。",
+        "targetChanged": "ファイルの参照先が変わりました。下書きはエディターに残っています。下書きをコピーしてから、ファイルを開き直してください。",
         "tableMenu": {
           "addRowAbove": "上に行を追加",
           "addRowBelow": "下に行を追加",
@@ -17202,7 +17328,9 @@
           "jira_read": "Jira の読み取り",
           "jira_comment": "Jira へのコメント",
           "sessions_dispatch": "セッションのディスパッチ",
-          "feishu_read": "Feishu メッセージの読み取り"
+          "feishu_read": "Feishu メッセージの読み取り",
+          "settings_read": "共有メンバーを読み取る",
+          "usage_read": "使用量とプロバイダーグループの状態を読み取る"
         },
         "project": "プロジェクトディレクトリ",
         "capabilitiesLabel": "許可する機能",
@@ -17214,7 +17342,9 @@
           "jira_read": "Jira 課題の照会・読み取り（キー指定 / JQL 検索）",
           "jira_comment": "Jira 課題へのコメント追加",
           "sessions_dispatch": "{{appName}} セッションの作成・再開とメッセージ送信",
-          "feishu_read": "最近アクティブなチャットの一覧取得、指定チャット（グループ/DM）の最新メッセージ取得"
+          "feishu_read": "最近アクティブなチャットの一覧取得、指定チャット（グループ/DM）の最新メッセージ取得",
+          "settings_read": "自分が共有したメンバーと利用可能なモデルを、このコンピューターまたは同じアカウントで許可された他のコンピューターから読み取る。変更は行わない",
+          "usage_read": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、プロバイダーグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。"
         },
         "capabilityWarn": {
           "ghostMissing": "「{{name}}」プラグインが必要ですが未インストールです——実行時にこの機能は失敗します",
@@ -19562,7 +19692,8 @@
           "expired": "期限切れ",
           "voided": "無効"
         }
-      }
+      },
+      "viewUsage": "使用量を見る"
     },
     "orders": {
       "title": "注文履歴",
@@ -21229,6 +21360,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "閉じる",
+    "taskInbox": {
+      "title": "受信トレイの使い方",
+      "lead": "タスクは状態に応じて「未処理」「実行中」「後で処理」「処理済み」に自動で分かれます。おすすめは受信トレイをこまめに空にすること。済んだら完了、今やらないものは後で処理にしましょう。",
+      "pending": {
+        "title": "未処理",
+        "body": "結果が出たタスクや、あなたの回答を待っているタスクがここに入ります。"
+      },
+      "done": {
+        "title": "完了",
+        "body": "対応が済んだら完了を 1 回押すと処理済みへ。新しい動きがあれば自動で戻ってきます。"
+      },
+      "snooze": {
+        "title": "後で処理",
+        "body": "今は手が回らないときは時刻を選ぶと、その時刻に未処理へ戻ります。"
+      },
+      "start": "使い始める",
+      "note": "サイドバー上部のボタンでいつでもタスク一覧に戻せます。"
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Cindy へようこそ",
@@ -21513,6 +21665,7 @@
     "removeTitle": "{{name}} を外しますか？",
     "removeDescription": "Cindy はこのアカウントにタスクを割り当てなくなります。CLI のログイン情報と会話履歴はこのコンピューターに残ります。",
     "failed": "アカウントの取得または更新ができませんでした。CLI のログインとネットワーク接続を確認して、もう一度お試しください。",
+    "unreachable": "アカウントサービスに接続できないため、ログイン状態を確認できません。ネットワークを確認して、もう一度お試しください。",
     "openDirectory": "アカウントフォルダーを開く",
     "openDirectoryFailed": "アカウントフォルダーを開けませんでした。移動または削除された可能性があります。",
     "loginAgain": "再ログイン",
@@ -21792,6 +21945,19 @@
       "network": "接続が切れました。再試行しています…",
       "timeout": "接続がタイムアウトしました。再試行しています…",
       "server": "サーバーが混雑しています。再試行しています…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "このチャットの権限を広げますか？",
+    "message": "「{{name}}」が、プロジェクト「{{project}}」の「{{conversation}}」で「{{mode}}」を使うことを許可しますか？",
+    "detail": "IM のプロジェクト設定（{{projectMode}}）より広い権限です。許可すると、このプラグインはこのプロジェクトでこの権限を使えるようになります（プラグイン自身のセッションのみ）。プラグインからいつでも IM の設定に戻せます。",
+    "groupWarning": "このグループでは他のメンバーもメッセージを送れます。権限が広いほど確認を求められる操作が減るため、グループの全員を信頼できるか確認してください。",
+    "allow": "許可",
+    "cancel": "キャンセル",
+    "modes": {
+      "ask": "デフォルト権限",
+      "auto": "自動レビュー",
+      "bypassPermissions": "フルアクセス"
     }
   }
 }

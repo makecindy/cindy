@@ -563,6 +563,8 @@ export interface GhostMainViewDecl {
   title?: string;
   /** 侧边栏使用的 Cindy 系统线性图标；缺省为 puzzle。 */
   icon?: GhostMainViewIcon;
+  /** Optional navigation symbol. Readers that do not know the name use icon. */
+  preferredIcon?: string;
   /** 主视图界面入口（安装目录内安全相对路径）。 */
   html: string;
   /**
@@ -740,9 +742,9 @@ export interface GhostCindyNeeds {
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
  * 两项在安装或更新确认中展示；整体批准后按当前声明订阅，旧元数据主题语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
-export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state'] as const;
+export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostTaskEventTopic = (typeof GHOST_TASK_EVENT_TOPICS)[number];
 export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subscribe'>): GhostTaskEventTopic[] {
   return GHOST_TASK_EVENT_TOPICS.filter(topic => manifest.subscribe?.topics?.includes(topic));
@@ -773,14 +775,14 @@ export type GhostMessageHook = (typeof GHOST_MESSAGE_HOOKS)[number];
  * - 插件只能收紧：`allow` 只表示"不反对"，不能替用户批准本来需要确认的事；
  * - 只问用户在该任务里选定的插件(任务的 preRunPlugin)，不是装了就管所有任务；
  * - 出错(没装/停用/超时/崩溃/熔断)怎么办由用户在任务里设置(onFailure)，插件不能自报；
- * - 旧控制节点沿用 receipt approvedControlPoints；任务运行时五点只依赖整包安装批准，
+ * - 旧控制节点沿用 receipt approvedControlPoints；任务运行时节点只依赖整包安装批准，
  *   并在任务里选择提供者，不额外批准节点。
  * 新增节点 = 在本目录加一项 + 在 Host 对应流程按任务配置调用 screenControlPoint。
  */
 export const GHOST_CONTROL_POINT_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
 export type GhostControlPointFailureAction = (typeof GHOST_CONTROL_POINT_FAILURE_ACTIONS)[number];
 
-export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform' | 'context' | 'memories';
+export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform' | 'context' | 'memories' | 'tool';
 
 export interface GhostControlPointSpec {
   /** 插件可返回的裁决(allow 恒可用)。route 只用于开新任务时选模型。 */
@@ -863,6 +865,16 @@ export const GHOST_CONTROL_POINTS = {
     actions: ['allow'], failureActions: ['allow', 'skip', 'block'], defaultOnFailure: 'block', timeoutMs: 8_000,
     permissionKey: 'system-prompt', labelKey: 'systemPrompt', detailKey: 'systemPromptDetail',
   },
+  'will-tool-call': {
+    actions: ['allow', 'block', 'tool'], failureActions: ['allow', 'block'],
+    defaultOnFailure: 'block', timeoutMs: 1_000, permissionKey: 'subscribe:hooks:tool-call',
+    labelKey: 'subscribeToolCall', detailKey: 'subscribeToolCallDetail',
+  },
+  'did-tool-result': {
+    actions: ['allow', 'block', 'tool'], failureActions: ['allow', 'block'],
+    defaultOnFailure: 'block', timeoutMs: 1_000, permissionKey: 'subscribe:hooks:tool-result',
+    labelKey: 'subscribeToolResult', detailKey: 'subscribeToolResultDetail',
+  },
 } as const satisfies Record<string, GhostControlPointSpec>;
 export type GhostControlPointId = keyof typeof GHOST_CONTROL_POINTS;
 export const GHOST_CONTROL_POINT_IDS = Object.keys(GHOST_CONTROL_POINTS) as GhostControlPointId[];
@@ -882,13 +894,14 @@ export function declaredGhostControlPoints(manifest: Pick<GhostManifest, 'subscr
   return manifest.systemPrompt?.length ? [...points, 'system-prompt'] : points;
 }
 
-/** 任务运行时五点随整包安装批准，不维护节点级批准记录。 */
+/** 任务运行时节点随整包安装批准，不维护节点级批准记录。 */
 export function isGhostRuntimeControlPoint(point: string): boolean {
   return point === 'will-start-turn' || point === 'will-model-request' || point === 'will-compose-context'
-    || point === 'will-search-memory' || point === 'system-prompt';
+    || point === 'will-search-memory' || point === 'system-prompt'
+    || point === 'will-tool-call' || point === 'did-tool-result';
 }
 
-/** 任务运行时五点只检查整包安装；旧控制节点保留原有名单语义。 */
+/** 任务运行时节点只检查整包安装；旧控制节点保留原有名单语义。 */
 export function ghostControlPointActive(
   ghost: Pick<InstalledGhost, 'enabled' | 'manifest' | 'approval' | 'approvedControlPoints'>,
   point: GhostControlPointId,
@@ -1827,6 +1840,11 @@ export interface GhostManifest {
   /** 本插件是否使用宿主默认配置卡；缺省/true 启用，false 隐藏且不读取该插件的卡片配置。 */
   showTaskPreferences?: boolean;
   /**
+   * 本插件是一个 IM 入口，使用 IM 共用的项目与模型（需同时声明 agent.tasks 与 agent.targets）。
+   * 只影响宿主展示：「IM 机器人」设置页列出它并显示「项目与模型」；不授予任何能力。
+   */
+  imEntrance?: boolean;
+  /**
    * 卡片能力；空对象表示基础卡片渲染。
    * externalLinks: true 时卡片内可声明 data-ghost-link,点击经宿主确认框后打开浏览器。
    */
@@ -2756,8 +2774,8 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       if (topics?.length) {
         for (const topic of declaredGhostTaskEventTopics(manifest)) items.push({
           key: `subscribe:topics:${topic}`, kind: 'subscribe',
-          labelKey: topic === 'message' ? 'subscribeMessage' : 'subscribeTaskState',
-          detailKey: topic === 'message' ? 'subscribeMessageDetail' : 'subscribeTaskStateDetail',
+          labelKey: topic === 'message' ? 'subscribeMessage' : topic === 'tool-execution' ? 'subscribeToolExecution' : topic === 'native-recovery' ? 'subscribeNativeRecovery' : 'subscribeTaskState',
+          detailKey: topic === 'message' ? 'subscribeMessageDetail' : topic === 'tool-execution' ? 'subscribeToolExecutionDetail' : topic === 'native-recovery' ? 'subscribeNativeRecoveryDetail' : 'subscribeTaskStateDetail',
         });
         // 旧 key 只在真订了 turn / session 时产出:纯 activity 插件不该在确认框里
         // 多出一行"旁听轮次与会话事件"——网关根本不给它投 turn / session,那行是凭空
@@ -3087,7 +3105,7 @@ export function diffInstalledGhostPermissionItems(
       cindy: installed.manifest.cindy ? { ...installed.manifest.cindy,
         models: declaredGhostCindyModelActions(installed.manifest).filter(action => installed.approvedCindyModelActions?.includes(action)),
       } : undefined,
-      // 仅旧控制节点沿用分项批准；任务运行时五点以已安装 manifest 为比较基线。
+      // 仅旧控制节点沿用分项批准；任务运行时节点以已安装 manifest 为比较基线。
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
     };
@@ -3612,6 +3630,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'settingsHtml',
   'settingsHeight',
   'showTaskPreferences',
+  'imEntrance',
   'slots',
   'card',
   'mail',
@@ -4830,7 +4849,8 @@ function validateGhostManifestInput(
       }
     }
     mainView = {
-      ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'open', 'side', 'multiple']),
+      ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'preferredIcon', 'open', 'side', 'multiple']),
+      ...(typeof raw.mainView.preferredIcon === 'string' ? { preferredIcon: raw.mainView.preferredIcon } : {}),
       ...(raw.mainView.title !== undefined ? { title: raw.mainView.title } : {}),
       ...(raw.mainView.icon !== undefined ? { icon: raw.mainView.icon as GhostMainViewIcon } : {}),
       ...(raw.mainView.open !== undefined
@@ -4883,6 +4903,14 @@ function validateGhostManifestInput(
   }
   if (raw.showTaskPreferences !== undefined && typeof raw.showTaskPreferences !== 'boolean') {
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
+  }
+  // Older manifests could use this formerly unknown name. Preserve their snapshot.
+  if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
+    if (typeof raw.imEntrance !== 'boolean') return { ok: false, reason: 'imEntrance 必须是布尔值' };
+    const imAgent = raw.agent as Record<string, unknown> | undefined;
+    if (raw.imEntrance && (imAgent?.tasks !== true || imAgent?.targets !== true)) {
+      return { ok: false, reason: 'imEntrance: true 需要同时声明 agent.tasks 与 agent.targets' };
+    }
   }
   if (raw.settingsHeight !== undefined) {
     if (raw.settingsHtml === undefined) {
@@ -6960,6 +6988,7 @@ function validateGhostManifestInput(
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
+      ...(raw.imEntrance !== undefined ? { imEntrance: raw.imEntrance as boolean } : {}),
       ...(tools !== undefined ? { tools } : {}),
       ...(raw.mail === true ? { mail: true as const } : {}),
       ...(mailReader ? { mailReader: { ...(raw.mailReader as Record<string, unknown>), ...mailReader } } : {}),
@@ -9104,6 +9133,8 @@ export type GhostActivityEventName =
 
 /** did- 旁听事件名，按声明并批准的 topic 分发。 */
 export type GhostDidEventName =
+  | 'did-tool-execution'
+  | 'did-native-recovery'
   | 'did-message-created'
   | 'did-task-state-changed'
   | 'did-turn-start'
@@ -9168,7 +9199,20 @@ export type GhostEventActivityData = GhostEventThinkingData | GhostEventInteract
 
 /** did- 旁听载荷；消息内容与任务状态使用各自的批准主题。 */
 export type GhostDidEventData =
-  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData;
+  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData | GhostToolExecutionData | GhostNativeRecoveryData;
+export interface GhostNativeRecoveryData {
+  sessionId: string;
+  engine: 'claude-code' | 'codex' | 'pi';
+  nativeEvent: string;
+  metadata: Readonly<Record<string, string | number | boolean>>;
+}
+export interface GhostToolExecutionData {
+  sessionId: string;
+  eventType: string;
+  source?: string;
+  payload: unknown;
+  truncated?: true;
+}
 export interface GhostTaskEventData {
   sessionId: string;
   messageId?: string;
@@ -9240,7 +9284,8 @@ export interface GhostMemorySearchPointData {
 }
 export interface GhostComposeContextPointData { sessionId: string; text: string }
 
-export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData | GhostMemorySearchPointData | GhostComposeContextPointData;
+export type GhostToolPointData = import('@cindy/maker-core/tool-lifecycle').ToolLifecycleEvent & { sessionId: string };
+export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData | GhostMemorySearchPointData | GhostComposeContextPointData | GhostToolPointData;
 
 /** 选择器里的一个插件模型(已按当前语言解析文案)。 */
 export interface GhostPickerModel {
@@ -9269,6 +9314,7 @@ export type GhostControlPointResult =
   | { action: 'route'; ghostId: string; ghostName: string; route: GhostModelRoute; reason: string };
 
 export type GhostRuntimeControlPointResult = GhostControlPointResult
+  | { action: 'tool'; ghostId: string; ghostName: string; tool: import('@cindy/maker-core/tool-lifecycle').ToolLifecycleVerdict }
   | { action: 'context'; ghostId: string; ghostName: string; blocks: GhostContextBlock[] }
   | { action: 'memories'; ghostId: string; ghostName: string; entries: GhostMemoryEntry[] }
   | { action: 'transform'; ghostId: string; ghostName: string; request: Record<string, unknown> };
@@ -9409,7 +9455,8 @@ export type GhostPipeEventPush =
 export interface GhostPipeEventVerdict {
   type: 'event-verdict';
   hookId: string;
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories' | 'tool';
+  tool?: import('@cindy/maker-core/tool-lifecycle').ToolLifecycleVerdict;
   blocks?: GhostContextBlock[];
   entries?: GhostMemoryEntry[];
   /** Provider request JSON body, only for will-model-request phase=payload. */

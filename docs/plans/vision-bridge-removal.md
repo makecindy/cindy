@@ -186,3 +186,17 @@ appendManagedImageReferences / pickVisionAgent / dismissVisionBridgeToast
 Windows 单测第 5 分片发现群聊失败提示测试仍要求旧视觉桥设置建议；已改为验证仍有效的“切换到支持图片的模型”恢复路径，并明确不再出现视觉桥建议。全语言反查另发现 Mobile 日文、韩文 details 漏清，已改为同一错误现有的 advice；无新增入口、文案方案或运行逻辑。补清已删除字段遗留的注释，保留共享能力与测试。相关 Renderer 两文件 19 项通过，i18n 与术语检查通过。
 
 Windows 数据库 job 的失败为既有迁移回放用例 `normalizes duplicate worker labels deterministically before enforcing uniqueness` 超过 60 秒，伴随 Vitest worker 的 `onTaskUpdate` 通信超时。本 PR 未改 schema、migration、数据库 runner 或该测试。本机从真实迁移生产入口定向复跑该用例，1 项通过（0.328 秒），25 项因名称过滤未执行；这不是完整迁移验收或 Windows 通过的证据。不改迁移、不抬高超时、不弱化断言，随修复推送触发新一轮 Windows CI，继续观察。
+
+
+### 主干冲突同步（2026-11-18，基于 3958ec711a8）
+
+主干新增视觉桥辅助用量记录后，与本 PR 已删除的实现及 Pi 装配发生冲突。合入该主干，保留其他主干改动；删除随视觉桥一起退役的新 `piVisionUsage`、Pi 私有收据通知／子运行 spool 读写、对应依赖及仅验证这些已移除行为的测试。通用辅助用量记录、历史账目的来源名称、原生图片输入、普通 Pi 子运行与账号清理边界保留。未修改 CI、超时、凭证处理、历史图片或用户数据。
+
+本轮验证：
+
+- maker-core、Desktop main／renderer、Host 完整类型检查通过。Host 默认 4 GiB 堆耗尽后，以 12 GiB 堆按同一完整范围重跑通过，未缩减项目配置。
+- Host 全量 522 项通过（65.401 秒）；Desktop Pi BYOM 13 项通过。
+- maker-core 全量单测：6946 通过、61 跳过、1 项超时（70.44 秒）。超时的是未改动的 `collects canonical credential targets without flagging ordinary symlinks`，原有 5 秒上限和断言均保留；单独重跑整个 `cindyBridgeSource.test.ts`，58 通过、1 跳过（3.81 秒），该用例 1.388 秒通过。这不将此前全量运行改记为全绿。
+- i18n、测试卫生、文档 15 项及相对主干的 diff 格式检查通过。自审确认本轮追加修改均服务于原移除范围，主干其他功能保留；合并带入的主干既有空白格式问题不另行清理。
+
+原先披露的真实付费模型图片、跨平台启动、手机混合版本实机及完整旧账号升级缺口保持不变；本轮未重新执行这些验收。新 head 的完整 CI 仍须独立确认，维护者放行要求保持。

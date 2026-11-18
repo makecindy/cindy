@@ -14,6 +14,7 @@ export default {
     local: { about: 'Local catalog still includes private sources without remote reads' },
     worker: { about: 'Worker uses B-only share; creation returns the actual share ID' },
     favorites: { about: 'B-only share favorites read and write B without any membership on A' },
+    'shared-group-status': { about: 'B-only share shows confirmed availability through B' },
   },
   async check(page, ui) {
     if (ui.case === 'worker') {
@@ -35,6 +36,19 @@ export default {
       assert.equal(await list.getByText('B Main Model', { exact: true }).count(), 0);
       assert.deepEqual(await page.evaluate(() => window.catalogAcceptance.calls), []);
       await ui.capture('local-private-models');
+      return;
+    }
+    if (ui.case === 'shared-group-status') {
+      await page.locator('[data-rail-item="remote:share:b-only:shared"]').click();
+      await list.getByText('Shared Model', { exact: true }).waitFor();
+      await page.getByRole('status').filter({ hasText: await ui.t('providerShare.received.groupStatus.summary', { ready: 1, total: 2 }) }).waitFor();
+      const calls = await page.evaluate(() => window.catalogAcceptance.calls);
+      assert.deepEqual(calls.filter(call => call.args[0]?.args?.[0]?.includeSharedGroupStatus), [{
+        host: 'device-b', channel: 'maker:model-catalog:read', args: [{
+          op: 'read', agentDeviceId: 'share:b-only', channel: 'maker:provider:list', args: [{ includeSharedGroupStatus: true }],
+        }],
+      }]);
+      await ui.capture('host-share-status');
       return;
     }
     if (ui.case === 'favorites') {

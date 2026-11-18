@@ -1,3 +1,4 @@
+import { createOneShotUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
 import { createHostClaudeSubagentModelAccess } from './subagent-model-access.js';
@@ -9,6 +10,7 @@ import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/
 import os from 'node:os';
 import path from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
 import { CodexAgent } from '@cindy/maker-core/agents/codex';
@@ -18,6 +20,7 @@ import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOp
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
+import { codexSharedAuthLinkUnavailableReason } from '../../../desktop/src/shared/codexAuthReason.js';
 import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
@@ -403,6 +406,12 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (invalidated) return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
       // Then the reconciliation with the system login, as readState does before reading auth.json.
       await systemLogin.reconcile();
+      // The desktop's codexSharedAuthLinkUnavailableReason: the system login is signed in but
+      // this runtime could not link to it, so the credential is unreachable, not absent.
+      const sharedLinkReason = codexSharedAuthLinkUnavailableReason({
+        linkUnavailable: systemLogin.sharedAuthLinkUnavailable(),
+        systemAuthPresent: !!systemAuthPath && existsSync(systemAuthPath),
+      });
       const recovery = readHostCodexRecoveryRequirement(codexHome, systemAuthPath);
       const local = await readCodexLocalAuthState(codexHome);
       // The desktop reads the token through getAccessToken, which reconciles again before its
@@ -414,15 +423,39 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         // The desktop's withCodexRecoveryRequirement.
         return recovery ? { ...scoped, recoveryRequiredReason: recovery.reason, credentialScope: recovery.credentialScope } : scoped;
       }
+      // The desktop's binding gate (auth-adapters.ts:1560-1567), narrowed to the one state where
+      // the two reasons would otherwise invert: the shared link just failed AND the profile still
+      // holds a readable OAuth file that is not bound to this owner. That is a binding problem —
+      // a credential left behind by another owner — so report it as one instead of blaming link
+      // privileges the user cannot fix by reconnecting. The desktop's own oauth-bearer branch
+      // returns before its binding gate, so this must sit after it; the default path below also
+      // needs it, because otherwise it would fall back to the generic gateway reason
+      // (codex-code-review P1).
+      if (opts?.credentialMode !== 'oauth-bearer' && sharedLinkReason
+        && local.authenticated && local.authSource === 'oauth' && !isNativeProviderAuthBound('openai')) {
+        return gatewayState.authenticated ? gatewayState : { authenticated: false, errorReason: 'oauth_not_bound' };
+      }
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') {
         // The desktop's codexRecoveryRequiredErrorState.
         if (recovery) return { authenticated: false, errorReason: recovery.reason, credentialScope: recovery.credentialScope };
         if (opts?.credentialMode === 'oauth-bearer') {
-          // As the desktop's oauth-bearer readState: the local file's own reason, else no_oauth.
+          // As the desktop's oauth-bearer readState: the local file's own reason, else the
+          // shared-link reason when the system login is signed in but unreachable, else no_oauth.
           const local = native ?? await readCodexLocalAuthState(codexHome);
-          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? 'no_oauth' };
+          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? sharedLinkReason ?? 'no_oauth' };
         }
-        return { authenticated: false, errorReason: native?.errorReason ?? 'oauth_not_bound' };
+        return { authenticated: false, errorReason: native?.errorReason ?? sharedLinkReason ?? 'oauth_not_bound' };
+      }
+      // As the desktop's default readState (auth-adapters.ts:1589-1590): with neither a gateway
+      // credential nor an OAuth login, say the signed-in system login is unreachable instead of
+      // "no gateway key" — the generic reason sends users to enter a key they never had. A valid
+      // gateway credential keeps winning, exactly as readClaudeApiKey() does on the desktop, so
+      // only the unauthenticated fallback changes. `getState()` with no arguments is the entry
+      // BaseAgent.getAuthState() uses, so this is the branch that decides what a failing implicit
+      // session reports (codex-code-review P1). A readable local file (the desktop's
+      // withCodexRecoveryRequirement path above) keeps its own outcome.
+      if (!gatewayState.authenticated && !local.authenticated && sharedLinkReason) {
+        return { ...local, errorReason: sharedLinkReason };
       }
       return gatewayState;
     },
@@ -789,6 +822,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     Object.entries(agents).map(([kind, instance]) => [kind, instance.capabilities]),
   );
   const maker = new Maker({
+    createOneShotUsageRecorder,
     agents,
     storage: options.storage,
     lifecycleHooks: {

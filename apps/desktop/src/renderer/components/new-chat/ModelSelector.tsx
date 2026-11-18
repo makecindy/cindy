@@ -66,6 +66,7 @@ import {
   withMenuLabels,
 } from '@/components/ui/menu-row';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { discoveredCopyReason } from './agentSwitchConfirmation';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { CindyMark } from '@/components/icons/CindyMark';
@@ -117,6 +118,7 @@ import {
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { readProviderShareGroupSize } from '@cindy/device-link';
+import { SharedProviderGroupStatus } from '@/features/provider-share/SharedProviderGroupStatus';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
@@ -665,7 +667,23 @@ export function resolveModelSelectorAgentIdentity(
 }
 
 /** 远程 Agent 草稿里一次行选中的落点电脑;null = Agent 在本机。 */
-export type UnifiedSelectionAgentDevice = { deviceId: string; name: string } | null;
+export type UnifiedSelectionAgentDevice = {
+  deviceId: string;
+  name: string;
+  /**
+   * Another computer's copy of a provider this computer has but cannot use right now. The app never
+   * moves work there by itself: the user is asked first (2026-11-18 user decision). Drafts and other
+   * direct selections are asked here in the picker; a running task's relocation is asked by the
+   * caller in its one relocation dialog. Shares, provider groups and providers only another
+   * computer has are listed in Settings like local ones and never carry this flag.
+   */
+  askBeforeUse?: {
+    /** The unusable provider's name on the task's computer. */
+    providerName: string;
+    /** The task's computer when it is not this one (a controlled computer); null = this computer. */
+    homeName: string | null;
+  };
+} | null;
 
 /** 「配置模型」打开设置 → 模型供应商时直接选中的一项;不传 = 只打开供应商页。 */
 export interface ProvidersNavigationTarget {
@@ -684,6 +702,8 @@ export interface RemoteAgentRelocation {
   fast: boolean | 'ultrafast';
   /** 这一行所属的电脑;null = 本机。 */
   agentDevice: UnifiedSelectionAgentDevice;
+  /** An explicit model selection, rather than an edit inside its options panel. */
+  retryQueuedSend: boolean;
 }
 
 /**
@@ -1827,10 +1847,21 @@ function ModelSelectorContentView({
     for (const id of folds.hiddenBase) hiddenLocal.add(id);
     for (const [otherDeviceId, ids] of folds.hiddenOther)
       for (const id of ids) hiddenRemote.add(remoteProviderEntryKey(otherDeviceId, id));
-    return { hiddenRemote, hiddenLocal };
+    // Entry key → names for the question asked before using that copy.
+    const askBeforeUse = new Map<string, NonNullable<NonNullable<UnifiedSelectionAgentDevice>['askBeforeUse']>>();
+    const homeName = taskDeviceId ? deviceDisplayName(taskDeviceId, remoteAgent?.homeDeviceName) : null;
+    for (const [key, baseProviderId] of folds.askBeforeUse) {
+      const split = key.indexOf('\n');
+      const baseProvider = taskProviders.find((provider) => provider.id === baseProviderId);
+      askBeforeUse.set(remoteProviderEntryKey(key.slice(0, split), key.slice(split + 1)), {
+        providerName: baseProvider ? providerDisplayName(baseProvider, t) : baseProviderId,
+        homeName,
+      });
+    }
+    return { hiddenRemote, hiddenLocal, askBeforeUse };
   }, [remoteAgent, deviceId, remoteProviders.providers, remoteAgentDevices, homeDeviceId, homeDeviceProviders.providers,
     localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
-    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups]);
+    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, t]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -3532,6 +3563,10 @@ function ModelSelectorContentView({
         remoteAgentGroups.find((group) => group.deviceId === remoteBrowse.deviceId)?.providerIds[0] ??
         null)
       : null;
+    const browsedShareGroupSize = remoteBrowse && isProviderShareAgentDeviceId(remoteBrowse.deviceId)
+      ? readProviderShareGroupSize(remoteAgentGroups.find((group) => group.deviceId === remoteBrowse.deviceId)
+        ?.providers.find((provider) => provider.id === remoteActiveProviderId))
+      : null;
     const remoteBrowseDevice: UnifiedSelectionAgentDevice = remoteBrowse
       ? {
           deviceId: remoteBrowse.deviceId,
@@ -3540,8 +3575,35 @@ function ModelSelectorContentView({
             remoteBrowse.deviceId,
         }
       : null;
+    // 本机这份用不了时另列出来的别处同一供应商：带上标记，用之前先问用户。
+    const askBeforeUseDevice = (device: UnifiedSelectionAgentDevice, providerId: string): UnifiedSelectionAgentDevice => {
+      const ask = device ? runLocationFold.askBeforeUse.get(remoteProviderEntryKey(device.deviceId, providerId)) : undefined;
+      return device && ask ? { ...device, askBeforeUse: ask } : device;
+    };
     // 选中直通带上这一行属于哪台电脑(仅远程 Agent 入口);落点不同由调用方连运行位置一起换。
-    const withAgentDevice = remoteAgent ? { agentDevice: remoteBrowseDevice } : {};
+    const withAgentDeviceFor = (providerId: string) =>
+      remoteAgent ? { agentDevice: askBeforeUseDevice(remoteBrowseDevice, providerId) } : {};
+    // 直通的选中要用别处那份时先问一句；不答或取消 = 不换，什么都不改。没有确认框可用时也不换。
+    const selectUnified = async (selection: Parameters<NonNullable<typeof onUnifiedSelect>>[0]) => {
+      const ask = selection.agentDevice?.askBeforeUse;
+      if (ask && selection.agentDevice) {
+        const device = selection.agentDevice.name;
+        const accepted = await confirmDialog?.confirm({
+          title: t('newChat.modelSelector.discoveredCopy.title', { device, provider: ask.providerName }),
+          description: t('newChat.modelSelector.discoveredCopy.description', {
+            unavailable: discoveredCopyReason(t, ask),
+            device,
+          }),
+          confirmText: t('newChat.modelSelector.discoveredCopy.confirm'),
+          cancelText: t('newChat.modelSelector.discoveredCopy.cancel'),
+        });
+        if (!accepted) return false;
+        // Answered: the caller only needs where to run.
+        const { askBeforeUse: _asked, ...agentDevice } = selection.agentDevice;
+        return onUnifiedSelect!({ ...selection, agentDevice });
+      }
+      return onUnifiedSelect!(selection);
+    };
     // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」;归组的任务在组那一项里显示为正在用的。
     const panelSelection = browsingSelectedCatalog
       ? { providerId: activeSourceId, modelId }
@@ -3571,8 +3633,8 @@ function ModelSelectorContentView({
       runLiveWrite(() =>
         relocate!(
           browsingBoundGroupEntry && row.providerId === boundEntry!.providerId && currentProviderId
-            ? { ...row, providerId: currentProviderId, agentDevice: currentAgentDevice }
-            : { ...row, agentDevice: remoteBrowseDevice },
+            ? { ...row, providerId: currentProviderId, agentDevice: currentAgentDevice, retryQueuedSend: dismiss }
+            : { ...row, agentDevice: askBeforeUseDevice(remoteBrowseDevice, row.providerId), retryQueuedSend: dismiss },
         ),
       ).then((applied) => {
         if (applied && dismiss) {
@@ -3593,10 +3655,10 @@ function ModelSelectorContentView({
       NonNullable<UnifiedModelPanelProps['remoteSources']>['onSelectDeviceFavorite']
     > = ({ deviceId: targetDeviceId, providerId, modelId: id, effort: rowEffort, config: rowConfig }) => {
       const rowEffortValue = rowEffort === '' ? undefined : rowEffort;
-      const agentDevice = {
+      const agentDevice = askBeforeUseDevice({
         deviceId: targetDeviceId,
         name: deviceDisplayName(targetDeviceId, undefined, remoteAgentDevices ?? []),
-      };
+      }, providerId);
       const dismissIfApplied = (applied: boolean) => {
         if (applied) {
           closeOptionsPanel();
@@ -3606,7 +3668,7 @@ function ModelSelectorContentView({
       };
       if (onUnifiedSelect) {
         return runLiveWrite(() =>
-          onUnifiedSelect({
+          selectUnified({
             providerId,
             modelId: id,
             ...(rowEffortValue ? { effort: rowEffortValue } : {}),
@@ -3630,6 +3692,7 @@ function ModelSelectorContentView({
             ...(rowEffortValue ? { effort: rowEffortValue } : {}),
             fast: rowConfig.fast,
             agentDevice,
+            retryQueuedSend: true,
           }),
         ).then(dismissIfApplied);
       }
@@ -3818,6 +3881,17 @@ function ModelSelectorContentView({
                     ready:
                       remoteBrowse === null ||
                       (remoteModelListStatus === 'ready' && remoteActiveProviderId !== null),
+                    ...(remoteBrowse && remoteActiveProviderId && browsedShareGroupSize !== null
+                      ? {
+                          status: <SharedProviderGroupStatus
+                            key={JSON.stringify([remoteBrowse.deviceId, remoteActiveProviderId])}
+                            deviceId={modelCatalogKey(remoteBrowse.deviceId, remoteAgent.catalogHostDeviceId) ?? remoteBrowse.deviceId}
+                            providerId={remoteActiveProviderId}
+                            initialSize={browsedShareGroupSize}
+                            compact
+                          />,
+                        }
+                      : {}),
                     ...(remoteBrowse && remoteModelListStatus === 'error'
                       ? {
                           failure: (
@@ -3877,7 +3951,7 @@ function ModelSelectorContentView({
               // 链路重解析一次(见 onUnifiedSelect 的说明)。
               if (onUnifiedSelect) {
                 return runLiveWrite(() =>
-                  onUnifiedSelect({
+                  selectUnified({
                     providerId,
                     modelId: id,
                     ...(rowEffortValue ? { effort: rowEffortValue } : {}),
@@ -3887,7 +3961,7 @@ function ModelSelectorContentView({
                     ...(rowConfig.resetToRecommended
                       ? { resetToRecommended: true as const }
                       : {}),
-                    ...withAgentDevice,
+                    ...withAgentDeviceFor(providerId),
                   }),
                 ).then((applied) => {
                   if (applied) {
@@ -3925,7 +3999,7 @@ function ModelSelectorContentView({
             onConfigure={(providerId, id, rowEffort, rowConfig) => {
               const nextEffort = rowEffort === '' ? undefined : rowEffort;
               if (onUnifiedSelect) {
-                return onUnifiedSelect({
+                return selectUnified({
                   providerId,
                   modelId: id,
                   ...(nextEffort ? { effort: nextEffort } : {}),
@@ -3933,7 +4007,7 @@ function ModelSelectorContentView({
                   fast: rowConfig.fast,
                   favoriteUid: rowConfig.favoriteUid,
                   ...(rowConfig.resetToRecommended ? { resetToRecommended: true as const } : {}),
-                  ...withAgentDevice,
+                  ...withAgentDeviceFor(providerId),
                 });
               }
               if (relocate) {
@@ -3973,7 +4047,7 @@ function ModelSelectorContentView({
                   engine: rowConfig.engine,
                   fast: rowConfig.fast,
                   favoriteUid: null,
-                  ...withAgentDevice,
+                  ...withAgentDeviceFor(providerId),
                 });
               }
               // 浏览别的电脑的目录时没有「正在用的那一行」,也就没有锚点可清。

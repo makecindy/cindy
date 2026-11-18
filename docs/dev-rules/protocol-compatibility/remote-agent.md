@@ -2,6 +2,17 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+分享组在 `open` 准入时选不出电脑，可在现有错误信封内返回
+`REMOTE_AGENT_GROUP_FULL` 或 `REMOTE_AGENT_GROUP_USAGE_LIMIT`。额度错误复用本地调度器的
+`resets_at: <unix ms>` 文本格式，控制端只在 Agent 未启动的错误边界恢复额度等待。旧端仍可将其展示为启动失败。
+只传组级结论和已知的恢复时间，作用域为本次任务。中继转发原有信封，自建中转无需改动。
+
+桌面端在换来源后续发原消息时，经现有 `maker:input:retry-last-error` 传
+`expectedQueueHeadClientId` 与本次切换回执的 `pendingSwitchRevision`（作为 `expectedSwitchRevision`）。
+任务所在电脑匹配恢复项及实际队首，并在发送锁内重新核对待应用的切换修订号。另一控制端改选后，
+原确认不会派发到改选目标。
+远控端仅向声明 `supportsQueueHeadRetry` 的任务电脑发送这个选项。旧端仍可手动重试。
+
 ## 托管请求的附件预算与保存（2026-11-17）
 
 `open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。

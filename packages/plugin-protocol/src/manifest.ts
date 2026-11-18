@@ -189,6 +189,8 @@ export interface GhostMainViewDecl {
   title?: string;
   /** 侧边栏使用的 Cindy 系统线性图标；缺省为 puzzle。 */
   icon?: GhostMainViewIcon;
+  /** Optional navigation symbol. Readers that do not know the name use icon. */
+  preferredIcon?: string;
   /** 主视图界面入口（安装目录内安全相对路径）。 */
   html: string;
   /** 左侧导航入口点击后的默认打开方式;缺省 page。 */
@@ -441,7 +443,7 @@ export interface GhostCindyNeeds {
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
  * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
 
 /**
@@ -456,7 +458,7 @@ export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
  * 在场,冷启动延迟不可接受),校验强制。
  */
 export const GHOST_SUBSCRIBE_HOOKS = ['will-user-message', 'will-assistant-message'] as const;
-export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number] | 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory';
+export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number] | 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory' | 'will-tool-call' | 'did-tool-result';
 
 /**
  * 订阅槽详单(与 slots 含 'subscribe' 成对;有槽无详单允许装入但零事件——
@@ -1033,6 +1035,11 @@ export interface GhostManifest {
   settingsHeight?: number;
   /** 本插件是否使用宿主默认配置卡；缺省/true 启用，false 隐藏且不读取该插件的卡片配置。 */
   showTaskPreferences?: boolean;
+  /**
+   * 本插件是一个 IM 入口，使用 IM 共用的项目与模型（需同时声明 agent.tasks 与 agent.targets）。
+   * 只影响宿主展示：「IM 机器人」设置页列出它并显示「项目与模型」；不授予任何能力。
+   */
+  imEntrance?: boolean;
   /** 仅 schemaVersion 2 存在的兼容声明。 */
   slots?: LegacyGhostSlot[];
   /**
@@ -1286,6 +1293,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'settingsHtml',
   'settingsHeight',
   'showTaskPreferences',
+  'imEntrance',
   'slots',
   'card',
   'mail',
@@ -1800,7 +1808,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       }
     }
     mainView = {
-      ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'open', 'side', 'multiple']),
+      ...unknownDeclarationFields(raw.mainView, ['html', 'title', 'icon', 'preferredIcon', 'open', 'side', 'multiple']),
+      ...(typeof raw.mainView.preferredIcon === 'string' ? { preferredIcon: raw.mainView.preferredIcon } : {}),
       ...(raw.mainView.title !== undefined ? { title: raw.mainView.title } : {}),
       ...(raw.mainView.icon !== undefined ? { icon: raw.mainView.icon as GhostMainViewIcon } : {}),
       ...(raw.mainView.open !== undefined
@@ -1859,6 +1868,14 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   }
   if (raw.showTaskPreferences !== undefined && typeof raw.showTaskPreferences !== 'boolean') {
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
+  }
+  // Older manifests could use this formerly unknown name. Preserve their snapshot.
+  if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
+    if (typeof raw.imEntrance !== 'boolean') return { ok: false, reason: 'imEntrance 必须是布尔值' };
+    const imAgent = raw.agent as Record<string, unknown> | undefined;
+    if (raw.imEntrance && (imAgent?.tasks !== true || imAgent?.targets !== true)) {
+      return { ok: false, reason: 'imEntrance: true 需要同时声明 agent.tasks 与 agent.targets' };
+    }
   }
   if (raw.settingsHeight !== undefined) {
     if (raw.settingsHtml === undefined) {
@@ -4047,6 +4064,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
+      ...(raw.imEntrance !== undefined ? { imEntrance: raw.imEntrance as boolean } : {}),
       ...(prepared.schemaVersion === 2 ? { slots } : {}),
       ...(card !== undefined
         || prepared.v3BaseCard
