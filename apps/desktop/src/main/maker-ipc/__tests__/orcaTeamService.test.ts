@@ -4328,6 +4328,46 @@ describe('OrcaTeamService direct-turn report outcomes', () => {
     );
   });
 
+  // 结论已被终态应用后，同轮迟到的 progress 仍只是遥测：结论不得退回进度态（Greptile P2）。
+  it('keeps an applied direct-turn conclusion when a late report_progress lands', async () => {
+    const { deps, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, { delivered: true, report: { state: 'dropped', summary: '无需回复' } });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '结果',
+    });
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '又动了' });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'dropped' }),
+    );
+  });
+
+  // 来源消息被改写后，旧结论不得被终态分支复活（Greptile P2）。
+  it('does not revive a rewritten direct-turn conclusion at the terminal', async () => {
+    const { deps, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, {
+      delivered: true,
+      queuedMessageId: 'q-direct-2',
+      report: { state: 'dropped', summary: '无需回复' },
+    });
+    // 排队来源被改写：投影失效，旧结论一并作废。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['q-direct-2']);
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '结果',
+    });
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalledWith(
+      'worker-1',
+      expect.anything(),
+      expect.objectContaining({ state: 'dropped' }),
+    );
+  });
+
   // 直连入队回报与派活同款登记排队来源：Lead 空闲后改写/撤回时能复核这份投影（Codex P2）。
   it('tracks the queued source of a direct-turn report for queue mutations', async () => {
     const { deps, service } = createDeps();
