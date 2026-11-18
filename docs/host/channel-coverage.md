@@ -940,7 +940,6 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `device-link:set-device-control-enabled` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:set-enabled` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:set-keep-awake` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
-| `device-link:set-model-use` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:topic-subscribe` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `device-link:topic-unsubscribe` | invoke | A（设备互联与远程执行） | 0 | `device-link/ipc.ts` |
 | `direct-link:host:event` | invoke | A（设备互联与远程执行） | 0 | `device-link/directLink.ts` |
@@ -1543,8 +1542,6 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `maker:orca:remote-worker:models` | invoke | A（Orca） | 0 | `maker-ipc/orcaRemoteWorkerHost.ts` |
 | `maker:orca:remote-worker:open` | invoke | A（Orca） | 0 | `maker-ipc/orcaRemoteWorkerHost.ts` |
 | `maker:orca:remote-worker:release` | invoke | A（Orca） | 0 | `maker-ipc/orcaRemoteWorkerHost.ts` |
-| `maker:own-computer-model-use:get` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/providerHandlers.ts` |
-| `maker:own-computer-model-use:set` | invoke | A（未登记前缀，处理函数没有用到窗口 API） | 0 | `maker-ipc/providerHandlers.ts` |
 | `maker:persist-turn-error-deferred` | invoke | A（任务、消息与输入队列） | 0 | `maker-ipc/register.ts` |
 | `maker:pi-packages:list` | invoke | A（插件、技能与 MCP） | 1 | `maker-ipc/register.ts` |
 | `maker:pi-packages:mutate` | invoke | A（插件、技能与 MCP） | 0 | `maker-ipc/register.ts` |

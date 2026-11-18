@@ -1369,7 +1369,7 @@ const ACCOUNT_SWITCH_PROBE_BUDGET_MS = 2_000;
 export async function readSubscriptionSessionAccount(
   provider: SubscriptionProvider,
   keys: { sessionId?: string; nativeSessionId?: string; model?: string; legacyProviderId?: string; routeProviderId?: string },
-  /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)，换号探测也认「让我的其他电脑用本机模型」。 */
+  /** ownComputer：远程读取来自自己的其他电脑(不是受邀者)。 */
   options: { remote?: boolean; ownComputer?: boolean } = {},
 ): Promise<SubscriptionSessionAccountView> {
   // Replacement admission is optional. Share a short budget with the original bound-account
@@ -2058,7 +2058,7 @@ export async function acquireSubscriptionAccount(
   control = false,
   options: {
     remote?: boolean;
-    /** 远程调用来自自己的其他电脑(不是受邀者)：旧版导入的 Codex 账号也认「让我的其他电脑用本机模型」。 */
+    /** 远程调用来自自己的其他电脑(不是受邀者)。 */
     ownComputer?: boolean;
     accountId?: string;
     resuming?: boolean;

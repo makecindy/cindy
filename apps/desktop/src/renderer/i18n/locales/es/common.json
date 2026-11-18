@@ -6513,18 +6513,13 @@
         "allowInboundAria": "Activar o desactivar el permiso de {{name}} para controlar este dispositivo",
         "peerControlOff": "El control remoto no está habilitado en ese dispositivo",
         "masterOffHint": "Primero activa el interruptor principal de arriba",
-        "controllingThisMac": "Conectado a Cindy",
-        "useThisDeviceModels": "Usar modelos de este dispositivo",
-        "allowModelUseAria": "Permitir que {{name}} use los modelos de esta computadora"
+        "controllingThisMac": "Conectado a Cindy"
       },
       "toast": {
         "revoked": "Acceso revocado para este dispositivo",
         "revokeFailed": "No se pudo revocar el acceso",
         "restored": "Acceso restaurado para este dispositivo",
-        "restoreFailed": "No se pudo restaurar el acceso",
-        "modelUseRestored": "Esa computadora vuelve a poder usar los modelos de esta",
-        "modelUseRevoked": "Esa computadora ya no puede usar los modelos de esta",
-        "modelUseFailed": "No se pudo guardar «Usar modelos de este dispositivo». Inténtalo de nuevo."
+        "restoreFailed": "No se pudo restaurar el acceso"
       },
       "sections": {
         "myDevices": "Mis dispositivos",
@@ -7028,11 +7023,6 @@
       "description": "Los dispositivos que hayan iniciado sesión con la misma cuenta de Feishu pueden detectarse entre sí. Al activar \"Permitir control\", tus otros dispositivos podrán controlar {{appName}} de forma remota en esta computadora.",
       "allowControl": "Permitir que los dispositivos de la misma cuenta controlen esta computadora",
       "allowControlHint": "Cuando está activado, otros dispositivos con la misma cuenta pueden controlar esta computadora sin aprobación por conexión. Se muestra un indicador visible mientras se controla y puedes desconectarla en cualquier momento.",
-      "ownModelAccess": {
-        "title": "Permitir que mis otras computadoras usen los modelos de esta",
-        "hint": "Cuando está activado, tus otras computadoras pueden usar los proveedores de esta computadora. El Agent se ejecuta aquí, con el inicio de sesión y la cuota de esta computadora. No se comparte nada con otras personas.",
-        "writeFailed": "No se pudo guardar este ajuste. Inténtalo de nuevo."
-      },
       "keepAwake": "Mantener la computadora activa",
       "keepAwakeHint": "Cuando está activado, esta computadora no entra en suspensión. Los Agents en segundo plano y las tareas programadas siguen ejecutándose. Puedes apagar la pantalla o bloquearla.",
       "linkStatus": {
@@ -15951,7 +15941,7 @@
       "REMOTE_AGENT_INVALID": "Se produjo un error al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue ocurriendo, actualiza Cindy en ambas computadoras.",
       "REMOTE_AGENT_RESUME_REJECTED": "El ordenador que ejecuta el modelo no puede reanudar esta sesión. Crea una nueva sesión desde la lista de sesiones y copia el contenido que necesites para continuar. La sesión original y los mensajes en cola se conservan.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo ha alcanzado el límite de participación de modelo establecido por su propietario. Elige otro modelo disponible para continuar.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha dado acceso a este proveedor o al modelo seleccionado. Si es tu propia computadora, activa «Permitir que mis otras computadoras usen los modelos de esta» en su conexión remota. Si alguien te lo compartió, pídele que ajuste el acceso en Remoto y compartido. También puedes elegir otro modelo.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha dado acceso a este proveedor o al modelo seleccionado. Si es tu propia computadora, activa «Permitir uso remoto» en ese proveedor. Si alguien te lo compartió, pídele que ajuste el acceso en Remoto y compartido. También puedes elegir otro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "La computadora que ejecuta el Agent no pudo iniciar una nueva sesión desde aquí. Inténtalo de nuevo o prueba con un mensaje diferente.",
       "REMOTE_AGENT_SHARE_PAUSED": "El propietario pausó este recurso compartido para ti, así que no puedes usar estos modelos hasta que lo reanude. Cambia a otro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Este recurso compartido ya no está disponible (el propietario lo eliminó o saliste). Cambia a otro modelo para continuar.",

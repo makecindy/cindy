@@ -22,7 +22,6 @@ const h = vi.hoisted(() => ({
   beforeWrite: undefined as (() => void) | undefined,
   access: { disabledModels: {}, disabledProviders: {} } as { disabledModels: Record<string, true>; disabledProviders: Record<string, true> },
   remoteAllowed: new Set<string>(),
-  ownComputers: false,
   remoteModels: null as string[] | null,
   placement: {} as Record<string, string>,
   created: {} as Record<string, import('../placement.js').CreatedSubscriptionProvider>,
@@ -104,7 +103,7 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({
 }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => h.remoteAllowed.has(id),
-  isRemoteProviderOpenToOwnComputers: (id: string) => h.remoteAllowed.has(id) || h.ownComputers,
+  remoteAccessProviderId: (id: string) => id,
 }));
 vi.mock('../../device-link/remoteModelAccess.js', () => ({
   remoteModelAccess: { allows: (_id: string, model: string) => !!model && (h.remoteModels === null || h.remoteModels.includes(model)) },
@@ -135,7 +134,6 @@ import {
   placeSubscriptionAccount,
   readMergedLegacyCodexAccountId,
   readOpenAiMergedLegacyAccountsIfReadable,
-  readSharedOpenAiLegacyAccountsIfReadable,
   restoreAutoMergedLegacyCodexAccounts,
 } from '../placement.js';
 import { findUpgradeSplitRepair, recordUpgradeSplitRepairStarted, settleUpgradeSplitRepairs, type UpgradeSplitRepairDeps } from '../upgradeSplitRepair.js';
@@ -178,7 +176,6 @@ beforeEach(() => {
   h.beforeWrite = undefined;
   h.access = { disabledModels: {}, disabledProviders: {} };
   h.remoteAllowed.clear();
-  h.ownComputers = false;
   h.remoteModels = null;
   h.placement = {};
   h.created = {};
@@ -240,9 +237,9 @@ describe('legacy Codex account upgrade', () => {
   // PR #10271, unit: moving a remote legacy task must not bypass the destination's own grants.
   it('checks the merged route model and remote grants independently of the old connection', () => {
     expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
-    h.ownComputers = true;
+    h.remoteAllowed.add('openai');
     expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(true);
-    expect(openAiRouteAllowsModel('gpt-model', { remote: true })).toBe(false);
+    expect(openAiRouteAllowsModel('gpt-model', { remote: true })).toBe(true);
     h.remoteModels = ['other-model'];
     expect(openAiRouteAllowsModel('gpt-model', { remote: true, ownComputer: true })).toBe(false);
     h.remoteModels = null;
@@ -268,14 +265,12 @@ describe('legacy Codex account upgrade', () => {
     expect(legacyCodexAccountCanRun('openai-a', undefined, { remote: false, newRoute: true })).toBe(true);
   });
 
-  // PR #10150 review: with 「让我的其他电脑用本机模型」 on, an imported account serves the owner's other
-  // computers, but a provider-share guest still needs the per-provider grant.
-  it('admits imported accounts for own computers through the own-computer switch, never for guests', () => {
-    h.ownComputers = true;
-    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(true);
-    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, newRoute: true })).toBe(false);
-    h.ownComputers = false;
+  // 2026-11-18 user decision: 「允许被远程调用」 is the only switch; own computers and guests read the same one.
+  it('admits imported accounts for own computers and guests by the same remote-use switch', () => {
     expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(false);
+    h.remoteAllowed.add('openai-a');
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, ownComputer: true, newRoute: true })).toBe(true);
+    expect(legacyCodexAccountCanRun('openai-a', 'gpt-model', { remote: true, newRoute: true })).toBe(true);
   });
 
   // PR #9900, standard: a provider switch alone must not bypass the imported
@@ -363,9 +358,6 @@ describe('legacy Codex account upgrade', () => {
     });
     expect(readMergedLegacyCodexAccountId('openai-a')).toBeUndefined();
     expect(readOpenAiMergedLegacyAccountsIfReadable()).toEqual({ 'openai-d': ids.d });
-    // A historical alias retained for old tasks must not reopen the restored independent account.
-    expect(readSharedOpenAiLegacyAccountsIfReadable(new Set(['openai']))).toEqual({ 'openai-d': ids.d });
-    expect(readSharedOpenAiLegacyAccountsIfReadable(new Set(['anthropic']))).toEqual({});
     expect(h.pools.openai!.accounts.map((account) => [account.id, account.paused])).toEqual([
       ['default', false], [ids.a, false], [ids.b, false], [ids.d, false],
     ]);

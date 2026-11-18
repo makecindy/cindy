@@ -287,8 +287,6 @@ void mountPage({
     },
     openRemoteDesktop: forbid('openRemoteDesktop'),
     maker: {
-      getOwnComputerModelUse: async () => ({ enabled: ctx.case === 'model-access-on' }),
-      setOwnComputerModelUse: async ({ enabled }: { enabled: boolean }) => ({ ok: true, enabled }),
     },
   },
   render: () => (
