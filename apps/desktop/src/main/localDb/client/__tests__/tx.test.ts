@@ -429,6 +429,31 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  // #11185: DB tier, both production transports. The old renderer snapshot missed
+  // activity arriving before deletion; this exercises the final transaction guard.
+  // Minimal input: an apparently empty task is pinned/sent/started before cleanup.
+  it.each([false, true])('preserves a late task used before cleanup commits (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'late');
+      const discard = () => client.tx('sessions.setTerminalStatus', {
+        sessionId: 'late', status: 'deleted', unusedOnly: true,
+      });
+      for (const field of ['pinned_at', 'user_send_at', 'active_turn_started_at']) {
+        await client.exec(`UPDATE sessions SET ${field} = 1 WHERE id = 'late'`);
+        await expect(discard()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+        expect(await client.queryOne("SELECT status FROM sessions WHERE id = 'late'"))
+          .toEqual({ status: 'active' });
+        await client.exec(`UPDATE sessions SET ${field} = NULL WHERE id = 'late'`);
+      }
+      await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('late-msg', 'late-msg', 'late', 'user', 'hello', 1)");
+      await expect(discard()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(await client.queryOne("SELECT content FROM messages WHERE id = 'late-msg'"))
+        .toEqual({ content: 'hello' });
+      await client.exec("DELETE FROM messages WHERE id = 'late-msg'");
+      await expect(discard()).resolves.toMatchObject({ status: 'deleted' });
+    }, { useInlineWorker });
+  });
+
   afterAll(() => {
     if (workerBundleDir) {
       fs.rmSync(workerBundleDir, { recursive: true, force: true });

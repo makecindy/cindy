@@ -3,6 +3,8 @@
 工具历史的显式 role、游标读取，以及自动化 Webhook / 插件 Node HTTP 的用法见
 [读取工具历史与接收 HTTP 事件](plugin-history-and-http.md)。
 
+运行中引擎的 MCP／active tools 原生入口见[原生工具目录](plugin-native-tool-catalog.md)。
+
 插件可直接调用普通任务中 Agent 使用的宿主工具。宿主复用相同的工具处理器、数据范围和业务约束；插件没有当前任务，不借用其它任务身份。此接口与仅管理本插件所建任务的 `cindy.tasks` 分别声明。
 
 ## 只跑脚本读取宿主状态
