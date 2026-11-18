@@ -52,6 +52,17 @@ function call(source: string, start: string): string {
 }
 
 describe('Host main.ts wiring', () => {
+  // 放行表第 33 项：两端必须共享同一个裁决、超时和熔断工厂。行为测试能证明单个输入的
+  // 结果相同，不能隔离“另一端改用独立工厂”的结构变化。
+  it('builds the desktop and Host plugin controls from the same factory', () => {
+    const desktop = read(path.join(desktopMain, 'cindy-brain/runtimePluginHost.desktop.ts'));
+    const host = read(path.join(hostSrc, 'plugins/runtime.ts'));
+    assert.match(desktop, /import \{ createRuntimePluginHost, [^\n]+ from '\.\/runtimePluginHostCore\.js'/);
+    assert.match(host, /import \{ createRuntimePluginHost, [^\n]+ from '\.\.\/\.\.\/\.\.\/desktop\/src\/main\/cindy-brain\/runtimePluginHostCore\.js'/);
+    assert.match(desktop, /return createRuntimePluginHost\(/);
+    assert.match(host, /const taskPlugins = createRuntimePluginHost\(/);
+  });
+
   // MCP 注册协议：platformTools 已并入 hostTools，最终交给引擎时不能再次展开。
   // Bug：main 合并冲突会重复注册同名服务；main 顶层会启动 Host，故在 guard 层保护组装边界。
   it('registers platform providers once through the shared Host tools list', () => {
