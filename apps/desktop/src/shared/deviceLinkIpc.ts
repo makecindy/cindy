@@ -221,11 +221,7 @@ export interface DeviceLinkPeerLinkView {
 /** GET_PEER_LINKS 返回与 PEER_LINKS_CHANGED 推送的全量快照 */
 export interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
+  relayProtocol?: 'agent-net' | 'device-link';
   /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
   relayRttMs: number | null;
-  /**
-   * 这台电脑的主连接实际装上的是不是 Agent-Net(端到端加密的 V2 传输);false 是 Device Link。
-   * 链路未起 / 已拆除时缺省;旧版主进程不提供。拓扑中间那台电脑的名字下面据此写连接方式。
-   */
-  selfEncrypted?: boolean;
 }

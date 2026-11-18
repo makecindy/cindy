@@ -79,6 +79,7 @@ export interface TopologyGroup {
 }
 
 export interface TopologyRelay {
+  protocol?: DeviceLinkPeerLinksSnapshot['relayProtocol'];
   name: string;
   selfHosted: boolean;
   rttMs: number | null;
@@ -98,8 +99,6 @@ export interface TopologyStats {
 
 export interface TopologyModel {
   self: { name: string; platform: string | null } | null;
-  /** 这台电脑的主连接是不是 Agent-Net(false 是 Device Link);主进程没给时缺省。显示规则见 selfProtocolKind。 */
-  selfEncrypted?: boolean;
   nodes: TopologyNode[];
   byId: Map<string, TopologyNode>;
   groups: TopologyGroup[];
@@ -112,9 +111,8 @@ export interface BuildTopologyInput {
   devices: readonly DeviceLinkDeviceView[];
   links: readonly DeviceLinkPeerLinkView[];
   relayRttMs: number | null;
-  /** 链路快照里这台电脑的主连接传输;缺省是不知道 */
-  selfEncrypted?: boolean;
   relayName: string;
+  relayProtocol?: DeviceLinkPeerLinksSnapshot['relayProtocol'];
   selfHosted: boolean;
   controlledBy: readonly string[];
   unresponsive: readonly string[];
@@ -267,12 +265,12 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
 
   return {
     self: self ? { name: self.selfName?.trim() || self.name, platform: self.platform } : null,
-    ...(input.selfEncrypted === undefined ? {} : { selfEncrypted: input.selfEncrypted }),
     nodes,
     byId,
     groups,
     relay: {
       name: input.relayName,
+      protocol: input.relayProtocol,
       selfHosted: input.selfHosted,
       rttMs: input.relayRttMs,
       flow: mergeFlows(nodes.filter((n) => n.status === 'relay').map((n) => n.flow)),

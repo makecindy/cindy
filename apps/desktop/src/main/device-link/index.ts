@@ -1980,9 +1980,10 @@ export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
       const encrypted = primaryUsesEncryptedTransport && client!.connectionFor(link.deviceId) === client;
       return core ? { ...link, ...core, encrypted } : { ...link, encrypted };
     }),
+    relayProtocol: client.getStatus() === 'online' && !agentNetRelayDown()
+      ? (primaryUsesEncryptedTransport ? 'agent-net' : 'device-link')
+      : undefined,
     relayRttMs: primaryUsesEncryptedTransport ? agentNetRelayRttMs() : client.getRelayRttMs(),
-    // 这台电脑的主连接实际装上的传输(不是偏好);拓扑只在连着中转时写出来。
-    selfEncrypted: primaryUsesEncryptedTransport,
   };
 }
 

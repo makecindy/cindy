@@ -39,8 +39,8 @@ import {
   pathLabel,
   platformLabel,
   protocolKind,
+  protocolKindLabel,
   protocolLabel,
-  protocolName,
   relativeTime,
   selfProtocolKind,
 } from './topologyPresentation';
@@ -377,7 +377,7 @@ export function HubNodePopover({
   const { t } = useTranslation();
   // 这台电脑用的连接方式单独一行，与拓扑里名字下面同一个图标 + 名称(用户要求 2026-11-18)。
   const kind = selfProtocolKind(model, linkStatus);
-  const protocol = kind ? protocolName(kind, t) : null;
+  const protocol = protocolKindLabel(kind, t);
   return (
     <div className="flex flex-col gap-3">
       <Heading

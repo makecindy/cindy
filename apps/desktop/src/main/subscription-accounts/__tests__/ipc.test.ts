@@ -29,6 +29,7 @@ const h = vi.hoisted(() => ({
   placementUnreadable: false,
   poolUnreadable: false,
   placementWriteFails: false,
+  warn: vi.fn(),
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -51,7 +52,9 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ dataOwnerId: h.owner }),
   ownerScopedUserDataPath: vi.fn(),
 }));
-vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: {} }));
+vi.mock('../../maker-host/logger-adapter.js', () => ({
+  desktopMakerLogger: { child: () => ({ warn: h.warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() }) },
+}));
 vi.mock('../../maker-host/override-settings-file.js', () => ({
   createOverrideSettingsFile: (options: { label: string }) => options.label === 'subscription-account-placement'
     ? {
@@ -112,6 +115,7 @@ import { accountDirectory, accountOwnerPrefix, migrateLegacyCodexAccounts, readB
   readProviderBoundAccountIds, writeAccountBindings } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
 import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
+import { AccountServiceUnreachableError } from '../accountServiceError.js';
 import { legacyCodexAccountCanRun, openAiRouteAllowsModel, setLegacyCodexAccountPaused } from '../legacyAccountAccess.js';
 import {
   normalizePlacementFile,
@@ -547,6 +551,22 @@ describe('subscription management boundary', () => {
     h.execute.mockRejectedValue(new Error('codex_provider_managed_auth'));
     const error = await invoke({ action: 'connect', target: 'default', providerId: 'openai', loginKey: 'login' }).catch(error => error);
     expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
+  });
+
+  // 2026-11-18 user report, unit: an unreachable account service reached the renderer as the
+  // generic "check the CLI login" error and left no cause in the log. Minimal input: the command
+  // rejects with the classified network failure, or with an unknown error carrying file text.
+  it('reports an unreachable account service as such and logs only a classified reason', async () => {
+    h.execute.mockRejectedValue(new AccountServiceUnreachableError('Codex account request failed'));
+    const error = await invoke({ action: 'login', providerId: 'openai', accountId: 'default', loginKey: 'offline' }).catch(error => error);
+    expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_ACCOUNT_UNREACHABLE');
+    expect(h.warn).toHaveBeenLastCalledWith('subscription account command failed',
+      { action: 'login', providerId: 'openai', reason: 'account_service_unreachable' });
+    h.execute.mockRejectedValue(new SyntaxError('Unexpected token in {"access_token":"fixture-secret"'));
+    await expect(invoke({ action: 'login', providerId: 'openai', accountId: 'default', loginKey: 'parse' }))
+      .rejects.toThrow('[SUBSCRIPTION_ACCOUNT_FAILED]');
+    expect(h.warn).toHaveBeenLastCalledWith('subscription account command failed',
+      { action: 'login', providerId: 'openai', reason: 'SyntaxError' });
   });
   it('admits the trusted owner and paired owner remote context, never an untrusted frame or shared-task guest', async () => {
     const command = { action: 'read', providerId: 'anthropic', taskId: 'task-one' };

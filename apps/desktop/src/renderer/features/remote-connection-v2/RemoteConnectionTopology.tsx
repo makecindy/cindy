@@ -40,8 +40,8 @@ import { ProtocolMark } from './ProtocolMark';
 import {
   formatRtt,
   protocolKind,
+  protocolKindLabel,
   protocolLabel,
-  protocolName,
   rowSubtitle,
   selfProtocolKind,
   type ProtocolKind,
@@ -290,7 +290,8 @@ export function RemoteConnectionTopology({
   const { m, hub } = layout;
   const selfName = model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer');
   const selfProtocol = selfProtocolKind(model, linkStatus);
-  const selfDescription = selfProtocol ? `${selfName} · ${protocolName(selfProtocol, t)}` : selfName;
+  const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
+  const selfDescription = selfProtocolLabel ? `${selfName} · ${selfProtocolLabel}` : selfName;
   // 悬停优先于打开的浮层:鼠标移到别的设备上时跟着它走。
   const focusId = hoverId ?? openId;
   const setCardOpen = (id: string) => (open: boolean) => setOpenId((cur) => (open ? id : cur === id ? null : cur));
@@ -340,6 +341,9 @@ export function RemoteConnectionTopology({
       if (model.relay.flow) {
         flowing.push({ id: `${group.id}:relay`, shape: toRelay.shape, flow: model.relay.flow });
       }
+      const relayProtocol = protocolKindLabel(model.relay.protocol, t);
+      const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
+      const relayDetail = [relayProtocol, relayRtt].filter(Boolean).join(' · ');
       const size = m.relayR * 2;
       // 中转站的名字和它的往返写在小圆点旁边:贴着圆点朝中间那一侧排开(扇出的线都在另一侧),
       // 中间来的那段线从下面上来就放上面,反之放下面,不和线打架。
@@ -350,7 +354,7 @@ export function RemoteConnectionTopology({
           <span
             className="rcv2-relay flex h-full w-full items-center justify-center rounded-full border"
             role="img"
-            aria-label={model.relay.name}
+            aria-label={[model.relay.name, relayDetail].filter(Boolean).join(' · ')}
           >
             <Radio size={14} strokeWidth={1.75} aria-hidden />
           </span>
@@ -369,14 +373,14 @@ export function RemoteConnectionTopology({
           aria-hidden
         >
           <span>{model.relay.name}</span>
-          {model.relay.rttMs !== null ? (
+          {relayDetail ? (
             <span
               className={cn(
                 'tabular-nums',
                 emphasis !== 'rest' && emphasis !== 'dim' && 'text-[var(--text-secondary)]',
               )}
             >
-              {formatRtt(model.relay.rttMs, t)}
+              {relayDetail}
             </span>
           ) : null}
         </div>,
@@ -569,7 +573,7 @@ export function RemoteConnectionTopology({
         </span>
       </div>
       {/* 这台电脑自己用的连接方式，与其它设备名字下面同一个图标 + 名称(用户要求 2026-11-18) */}
-      {selfProtocol ? (
+      {selfProtocol && selfProtocolLabel ? (
         <div
           className="pointer-events-none flex items-center justify-center"
           style={placed(hub.x, hub.y + m.ring + 14 + 18, 180, 16, animate)}
@@ -578,7 +582,7 @@ export function RemoteConnectionTopology({
           <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1.5">
             <ProtocolMark
               kind={selfProtocol}
-              label={protocolName(selfProtocol, t)}
+              label={selfProtocolLabel}
               className="text-12 leading-[1.3] text-[var(--text-tertiary)]"
             />
           </span>

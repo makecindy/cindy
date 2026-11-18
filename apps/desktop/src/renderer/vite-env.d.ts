@@ -177,10 +177,9 @@ interface DeviceLinkPeerLinkView {
 }
 interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
+  relayProtocol?: 'agent-net' | 'device-link';
   /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
   relayRttMs: number | null;
-  /** 这台电脑的主连接是不是 Agent-Net;false 是 Device Link,链路未起或旧版主进程缺省 */
-  selfEncrypted?: boolean;
 }
 
 /** .cshare 导入向导的预览数据(main 侧 SharePreview 的镜像)。 */

@@ -37,12 +37,12 @@ const DEFAULT_DEBOUNCE_MS = 250;
  * 视为同一拓扑。主连接换了传输时对端可能一个没变，也要马上推，中间那台电脑的连接方式才不会晚一拍。
  */
 export function peerLinksStructureKey(snapshot: DeviceLinkPeerLinksSnapshot): string {
-  const self = snapshot.selfEncrypted === undefined ? '-' : snapshot.selfEncrypted ? 'agent-net' : 'device-link';
+  const relayProtocol = snapshot.relayProtocol ?? '-';
   const links = snapshot.links
     .map((link) => `${link.deviceId}|${link.path}|${link.open ? 1 : 0}`)
     .sort()
     .join('\n');
-  return `${self}\n${links}`;
+  return `${relayProtocol}\n${links}`;
 }
 
 export function createPeerLinksPushScheduler(opts: {
