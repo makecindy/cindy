@@ -93,7 +93,8 @@ type ReportRound = (round: number, elapsedMs: number, result: StartupScanResult)
 /**
  * One scan of a profile for desktops that open its database. Returns their PIDs (empty: none).
  *
- * Process identities are asked once per record: a live PID's OS identity is kept with the record
+ * Runtime scans cache positive identities. An uncertain startup rereads both the registry and the OS.
+ * Between runtime scans, a live PID's OS identity is kept with the record
  * text (or the SingletonLock target and time) it was read for, and asked again only when that
  * changes. While a desktop runs, its record does not change, so a rescan starts no `ps`. An identity
  * the OS did not give is not kept (it is asked again; meanwhile the PID counts as live, as the scan
@@ -155,7 +156,7 @@ export function createDesktopScanner(profileDir: string, ports: ProfileScanPorts
     const identityFor = (pid: number, entry?: Registration) => entry ? identities.get(key(pid, entry)) ?? null : null;
     // Re-read after the OS query. A replacement record cannot inherit its predecessor's evidence.
     const blockers = await discover(identityFor);
-    for (const [pid, entry] of previous ?? []) {
+    for (const [pid, entry] of query) {
       if (!blockers.has(pid) && ports.isPidAlive(pid) &&
           recordedPidMayStillBeLive(entry.recordedAtMs, entry.rootDir, identityFor(pid, entry))) blockers.set(pid, entry);
     }
@@ -195,6 +196,10 @@ export function createDesktopScanner(profileDir: string, ports: ProfileScanPorts
         previous = blockers;
         await clock.sleep(delay);
         if (expired) return [];
+        if (clock.now() - start >= STARTUP_SCAN_BUDGET_MS) {
+          reportRound(round, Math.round(clock.now() - start), 'deadline');
+          return [...previous.keys()];
+        }
       }
     }
     try { return await Promise.race([check(report), deadline]); }

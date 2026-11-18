@@ -224,7 +224,7 @@ test('a desktop that opens the profile refuses the start: lease released, blocke
 
 // A slow OS lookup is distinguishable from a live desktop only at startup. Run the real
 // startup/lease path against changing profile records with an injected OS and clock.
-function uncertainDesktopStart(t, betweenRounds) {
+function uncertainDesktopStart(t, betweenRounds, duringLookup) {
   const profile = mkdtempSync(path.join(os.tmpdir(), 'host-startup-identity-'));
   t.after(() => rmSync(profile, { recursive: true, force: true }));
   const registry = path.join(profile, '.dev-instances');
@@ -237,10 +237,10 @@ function uncertainDesktopStart(t, betweenRounds) {
   let elapsed = 0, releases = 0;
   const clock = { now: () => elapsed, sleep: async ms => {
     waits.push(ms); elapsed += ms;
-    betweenRounds?.({ alive, identities, write, registry });
+    betweenRounds?.({ alive, identities, write, registry, advance: ms => { elapsed += ms; } });
   } };
   const ports = { ...nodeProfileScanPorts, selfPid: () => 99, isPidAlive: pid => alive.has(pid),
-    readProcessIdentities: async pids => { queries.push([...pids]); return new Map(identities); } };
+    readProcessIdentities: async pids => { queries.push([...pids]); duringLookup?.({ registry }); return new Map(identities); } };
   const h = setup({ resolveHostDataDir: () => profile, createDesktopScanner: dir => createDesktopScanner(dir, ports, clock),
     acquireHostRuntimeLease: () => ({ held: true, release() { releases++; } }),
     hostLog: { info: (_message, fields) => rounds.push(fields) } });
@@ -293,6 +293,22 @@ test('startup keeps a vanished record blocked until the OS proves PID reuse', as
   await assert.rejects(f.h.start('account-b'), /database opened/);
   assert.deepEqual(f.waits, [500, 1000]);
   assert.equal(f.h.opens.length, 1);
+});
+
+test('startup retains an unidentified PID if the record disappears during the first lookup', async t => {
+  const f = uncertainDesktopStart(t, undefined, ({ registry }) => rmSync(path.join(registry, '41.json'), { force: true }));
+  await assert.rejects(f.h.start('account-b'), { code: 'HOST_PROFILE_IN_USE_BY_DESKTOP' });
+  assert.equal(f.queries.length, 4);
+  assert.deepEqual(f.h.opens, []);
+  assert.equal(f.releases(), 1);
+});
+
+test('startup refuses without another lookup when a delayed wake exhausts the time budget', async t => {
+  const f = uncertainDesktopStart(t, ({ advance }) => advance(10_000));
+  await assert.rejects(f.h.start('account-b'), { code: 'HOST_PROFILE_IN_USE_BY_DESKTOP' });
+  assert.deepEqual(f.queries, [[41]]);
+  assert.deepEqual(f.rounds.map(r => r.result), ['unknown', 'deadline']);
+  assert.equal(f.releases(), 1);
 });
 
 /*
