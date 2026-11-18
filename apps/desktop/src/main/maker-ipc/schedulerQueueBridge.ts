@@ -13,7 +13,7 @@ export interface SchedulerQueuedPromptRequest {
   persistedContent: string;
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
   /** Runs under the send lock before the live session is captured or a user row is written. */
-  onPreparing?: () => Promise<void>;
+  onPreparing?: (signal?: AbortSignal) => Promise<void>;
   /** Reject the queued run if preparation fails before dispatch. */
   onPreparationFailed?: (error: unknown) => void;
   /** The row exists but preparation/send failed; recovering retains this run. */

@@ -30,6 +30,7 @@ vi.mock('original-fs', async () => {
 });
 
 import { AcceptedCallbackDispatchCancelled } from '../../maker-ipc/acceptedCallbackRunner.js';
+import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
 
 import { Session as RealSession } from '@cindy/maker-core';
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
@@ -470,6 +471,7 @@ function createRunnerHarness(
     })),
     isSessionAlive: vi.fn(() => true),
     closeSession: vi.fn(async () => undefined),
+    closeSessionIfCurrent: vi.fn(async () => undefined),
     on: vi.fn((listener: MakerEventListener) => {
       makerListeners.add(listener);
       return () => makerListeners.delete(listener);
@@ -2108,6 +2110,136 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(mocks.setSessionProvider).not.toHaveBeenCalled();
   });
 
+  // #11237 / unit: real fire/bridge/coordinator, minimum stale cindy_openai thread
+  // on the persisted DeepSeek route. Prior tests covered rejection, not recovery
+  // or cancellation during it. Vendor dispatch and run completion are observable.
+  it.each(['success', 'edited', 'user', 'stop', 'pause', 'disabled', 'busy', 'active', 'close-failed', 'drift'] as const)(
+    'recovers a queued stale Codex thread without replaying the input: %s', async outcome => {
+    mocks.getSessionProvider.mockReturnValue('deepseek');
+    const stale = createSessionHarness(async () => ({ accepted: true }));
+    const rebuilt = createSessionHarness(async () => ({ accepted: true }));
+    for (const [h, identity] of [[stale, 'cindy_openai'], [rebuilt, 'cindy_gateway']] as const) {
+      Object.assign(h.session, { agentKind: 'codex', model: 'deepseek/deepseek-v4-pro',
+        codexProxyActive: true, codexThreadModelProviderId: identity });
+    }
+    const accepted = createQueuedAcceptedCallbacks();
+    const preparations = new Map<string, SchedulerQueuedPreparation>();
+    const discarded = new Map<string, () => void>();
+    const dispatched: unknown[] = [];
+    let retired = false;
+    let precedingTurnRunning = true;
+    let releaseRoute!: () => void;
+    let routeEntered!: () => void;
+    const routeGate = new Promise<void>(resolve => { releaseRoute = resolve; });
+    const entered = new Promise<void>(resolve => { routeEntered = resolve; });
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (id, message, _opts, sendOpts) => {
+        const clientId = sendOpts.persistUserMessage!.clientId;
+        try {
+          await runSchedulerQueuedPreparation(clientId, preparations, () => discarded.delete(clientId), sendOpts.signal);
+          if (retired) {
+            h.replaceLiveSession(rebuilt.session);
+          }
+          await sendOpts.persistUserMessage!.onPersisted?.();
+          dispatched.push(sendOpts.origin);
+          const content = typeof message === 'string' ? message : message.content;
+          if (typeof content !== 'string') {
+            throw new Error('This queued-input fixture expects text');
+          }
+          await rebuilt.send({ type: 'user', content });
+          const result = { kind: 'session-dispatch', source: 'test', dispatched: true } as const;
+          await accepted.settle(id, sendOpts, result);
+          return result;
+        } catch (error) { await accepted.rollback(id, clientId); throw error; }
+      },
+      onAcceptedQueuedMessage: (id, item) => accepted.run(id, item),
+      onDiscardedQueuedMessage: (_id, item) => {
+        accepted.discard(item.clientId); discarded.get(item.clientId)?.();
+        discarded.delete(item.clientId); preparations.delete(item.clientId);
+      },
+      steerToAgent: async () => {}, abortSession: async () => {},
+      isTurnRunning: () => precedingTurnRunning, hasPendingInteraction: () => false,
+      getAgentKind: () => 'codex', getSdkSessionId: async () => 'sdk-1', emitProjection: () => {},
+    });
+    const bridge = createSchedulerQueueBridge({
+      coordinator, isSessionBusy: () => true, getSessionMeta: async () => ({ id: SESSION_ID }),
+      getSessionRowSnapshot: mocks.getSessionRowSnapshot, createId: () => 'stale-codex-input',
+      preparations, discardWatchers: discarded, discardAcceptedCallback: accepted.discard,
+      enqueue: async req => {
+        const createOpts = { agentKind: 'codex' as const, model: stale.session.model,
+          workingDir: '.', permissionMode: 'ask' as const, planMode: false, userPrompt: '',
+          makerMemoryEnabled: true, displayReasoning: 'summarized' as const };
+        accepted.register(req.clientId, () => req.onAccepted(createOpts), req.onAcceptedRollback);
+        const item: AgentInputQueuedMessage = { clientId: req.clientId, text: req.message,
+          persistedContent: req.persistedContent, origin: req.origin, createOpts,
+          model: createOpts.model, workingDir: '.', effort: '', permissionMode: 'ask',
+          chatMessage: { clientId: req.clientId, role: 'user', content: req.persistedContent,
+            createdAt: new Date().toISOString() } };
+        coordinator.enqueue(SESSION_ID, item);
+        if (outcome === 'edited') coordinator.updateText(SESSION_ID, req.clientId, 'Edited scheduled input');
+        if (outcome === 'user') coordinator.enqueue(SESSION_ID, { ...item,
+          clientId: 'user-after-schedule', text: 'Human input', origin: undefined,
+          chatMessage: { ...item.chatMessage, clientId: 'user-after-schedule', content: 'Human input' } });
+        precedingTurnRunning = false;
+        coordinator.onTurnEvent(SESSION_ID, 'done');
+      },
+    });
+    const h = createRunnerHarness(stale.session, bridge, { metaModel: stale.session.model,
+      checkModelRoute: async () => {
+        routeEntered(); await routeGate;
+        return outcome === 'disabled' ? { kind: 'reject', reason: 'explicit-source-disabled' } : { kind: 'pass' };
+      },
+    });
+    const close = vi.fn(async () => {
+      if (outcome === 'close-failed') throw new Error('close failed');
+      if (outcome === 'busy') return;
+      expect(rehydrateCloseSuppression.isSuppressed(SESSION_ID)).toBe(true);
+      coordinator.onSessionClosed(SESSION_ID, { preserveInputBoundary: true });
+      retired = true;
+      return 'closed' as const;
+    });
+    h.maker.closeSessionIfCurrent = close;
+    const ctx = createFireContext();
+    const fire = h.runner.fire(heartbeatSchedule({ agentKind: 'codex', model: stale.session.model,
+      providerId: 'deepseek' }), ctx);
+    void fire.catch(() => {});
+    await entered;
+    if (outcome === 'stop') coordinator.stop(SESSION_ID);
+    if (outcome === 'pause') ctx.abortController.abort();
+    if (outcome === 'drift') mocks.getSessionProvider.mockReturnValue('openai');
+    if (outcome === 'active') mocks.isSessionInTurn.mockReturnValue(true);
+    releaseRoute();
+    try {
+      if (['success', 'edited', 'user'].includes(outcome)) {
+        await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+        expect(close).toHaveBeenCalledExactlyOnceWith(stale.session, 'runtime-refresh', { onlyIfIdle: true });
+        expect(dispatched).toEqual([SCHEDULER_TURN_ORIGIN]);
+        rebuilt.emit({ type: 'done', data: {}, source: 'codex' });
+        await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
+        expect(rebuilt.send).toHaveBeenCalledOnce();
+        if (outcome === 'edited') expect(rebuilt.send.mock.calls[0]?.[0]).toMatchObject({ content: 'Edited scheduled input' });
+        if (outcome === 'user') {
+          expect(coordinator.hasQueuedItemWhere(SESSION_ID, item => item.clientId === 'user-after-schedule')).toBe(true);
+          coordinator.onTurnEvent(SESSION_ID, 'done');
+          await vi.waitFor(() => expect(rebuilt.send).toHaveBeenCalledTimes(2));
+          expect(rebuilt.send.mock.calls[1]?.[0]).toMatchObject({ content: 'Human input' });
+          expect(dispatched[1]).toBeUndefined();
+          expect(rebuilt.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
+        }
+      } else {
+        await expect(fire).rejects.toThrow();
+        expect(dispatched).toEqual([]);
+        expect(rebuilt.send).not.toHaveBeenCalled();
+        if (['stop', 'pause', 'disabled', 'drift', 'active'].includes(outcome)) expect(close).not.toHaveBeenCalled();
+      }
+      expect(stale.setModel).not.toHaveBeenCalled();
+      expect(stale.session.abort).not.toHaveBeenCalled();
+      expect(rehydrateCloseSuppression.isSuppressed(SESSION_ID)).toBe(false);
+    } finally {
+      ctx.abortController.abort(); coordinator.clearSession(SESSION_ID); await fire.catch(() => {});
+    }
+  });
+
   it('排队 Codex 的 thread/store 身份错配时在 vendor dispatch 前 fail-closed', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
@@ -2614,8 +2746,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     ctx.abortController.abort();
     await expect(firePromise).rejects.toThrow(/abort/i);
 
-    // coordinator 稍后仍调用了 onAccepted(晚到)→ 取消这次派发,但不 abort 会话。
-    await expect(queue.acceptRaw()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+    // Preparation already finished in this race; exercise the late accepted gate directly.
+    await expect(enqueueLast(queue).onAccepted()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
     expect((maker as unknown as { getSession: () => Session }).getSession).toBeDefined();
     expect(
       (harness.session as unknown as { abort: ReturnType<typeof vi.fn> }).abort,
@@ -3351,8 +3483,8 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
       );
       await settled;
 
-      // 迟到的 accept 通过取消信号回滚,但不得关闭用户会话
-      await expect(queue.acceptRaw()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+      // Preparation already finished; late accept must still roll back without aborting.
+      await expect(enqueueLast(queue).onAccepted()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
       expect(harness.session.abort).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -3381,8 +3513,8 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
       (maker.getSession as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
       // 必须是 AcceptedCallbackDispatchCancelled:普通 Error 会被 runAcceptedCallback
       // 当成副作用失败吞掉,turn 照样发出去(review #944 第十一轮 P1)。
-      await expect(queue.acceptRaw()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
-      await expect(queue.acceptRaw()).rejects.toThrow(/SEND_CANCELLED_BEFORE_DISPATCH/);
+      await expect(enqueueLast(queue).onAccepted()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+      await expect(enqueueLast(queue).onAccepted()).rejects.toThrow(/SEND_CANCELLED_BEFORE_DISPATCH/);
     } finally {
       vi.useRealTimers();
     }

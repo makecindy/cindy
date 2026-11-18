@@ -5366,7 +5366,7 @@ let schedulerQueueBridgeHolder: SchedulerQueueBridge | null = null;
 /** 排队心跳的 discard 监听(clientId → 通知 runner 收尾)。派发/丢弃后清条目。 */
 const schedulerQueuedPromptDiscardWatchers = new Map<string, () => void>();
 const schedulerQueuedPromptPreparations = new Map<string, {
-  onPreparing: () => Promise<void>;
+  onPreparing: (signal?: AbortSignal) => Promise<void>;
   onPreparationFailed?: (error: unknown) => void;
 }>();
 
@@ -18657,7 +18657,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const queuedClientId = (args[3] as { persistUserMessage?: { clientId?: string } } | undefined)
         ?.persistUserMessage?.clientId;
       await runSchedulerQueuedPreparation(queuedClientId, schedulerQueuedPromptPreparations,
-        () => { if (queuedClientId) schedulerQueuedPromptDiscardWatchers.delete(queuedClientId); });
+        () => { if (queuedClientId) schedulerQueuedPromptDiscardWatchers.delete(queuedClientId); },
+        (args[3] as { signal?: AbortSignal } | undefined)?.signal);
       return botInput?.remoteHostId ? sendToAgentAcceptedUnlocked(...args)
         : withCindyMakeProjectUse(app.getPath('userData'), botInput?.workingDir, () => sendToAgentAcceptedUnlocked(...args));
     });

@@ -95,6 +95,7 @@ import {
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
 import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
+import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
 import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallbackRunner.js';
 
@@ -255,7 +256,7 @@ export interface SchedulerQueueDeps {
     inheritTargetPlanMode?: boolean;
     origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
     /** Runs under the send lock before the queued Session is captured. */
-    onPreparing?: () => Promise<void>;
+    onPreparing?: (signal?: AbortSignal) => Promise<void>;
     onPreparationFailed?: (error: unknown) => void;
     onPersistedFailure?: (message: string, recovering: boolean) => void;
     onAccepted: (queuedPermissions?: {
@@ -2798,7 +2799,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
           ? `${UI_ACTION_TRIGGER_PREFIX}${schedule.prompt}`
           : schedule.prompt,
       origin,
-      onPreparing: async () => {
+      onPreparing: async (inputSignal) => {
+        const assertPreparing = () => {
+          throwIfFireAborted(ctx.signal, 'credential mode switch');
+          inputSignal?.throwIfAborted();
+          if (dispatchCancelled) throw new Error('queued heartbeat preparation aborted');
+        };
+        assertPreparing();
         this.assertQueuedModelSelection(this.deps.maker.getSession(sessionId), routingBaseline.resolvedSelection);
         if (schedule.targetSessionId && this.deps.prepareModelPreferences) {
           const override = hasScheduledModelOverride(schedule);
@@ -2815,6 +2822,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
         }
         const preparingLive = this.deps.maker.getSession(sessionId);
+        await this.prepareQueuedCodexThread(preparingLive, routingBaseline.providerId, assertPreparing);
+        assertPreparing();
         if ((preparingLive?.agentKind ?? routingBaseline.agentKind ?? schedule.agentKind) !== 'pi') return;
         preparedPiRoute = await this.prepareQueuedPiRouting(
           schedule, sessionId, preparingLive, routingBaseline,
@@ -3025,6 +3034,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         if (!recovering) failDispatch(new Error(message));
       },
       onDiscarded: () => {
+        dispatchCancelled = true;
         // 排队项未派发即被移除(用户删队列行 / stop 清队列 / pause-delete 撤项)
         // → run 按 aborted 收尾(引擎按 /abort/i 识别错误文案)。
         failDispatch(new Error('queued heartbeat prompt removed before dispatch (aborted)'));
@@ -3279,15 +3289,51 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
   }
 
-  /**
-   * 排队派发时刻的路由热同步:schedule 显式设置的 model / effort / 来源(供应商)
-   * 优先于绑定会话当前值(与直发路径 4.4.1/4.4.2 同语义);留空沿用会话当前值。
-   * 凭证形态需要关会话重建的组合(shouldCloseSessionForCredentialSwitch)无法在
-   * 派发时刻热切 —— dynamic custom Provider identity 跨界或 thread/store 已错配时必须在
-   * vendor dispatch 前失败；其它可保留当前路由的凭证切换才跳过本轮同步。
-   * setModel / setEffort 成功才落库 meta,失败保留旧值让下轮重试(与直发路径的
-   * 复用会话语义一致)。
-   */
+  /** Retire an idle stale thread before the normal queued-send transaction resumes it. */
+  private async prepareQueuedCodexThread(
+    live: ReturnType<Maker['getSession']>,
+    baselineProviderId: string | null,
+    assertPreparing: () => void,
+  ): Promise<void> {
+    if (!live || live.agentKind !== 'codex' || live.agentDeviceId || live.remoteHostId) return;
+    const providerId = getSessionProvider(live.id) ?? baselineProviderId;
+    const model = live.model;
+    if (!isCodexThreadModelProviderIdentityMismatch({
+      agentKind: live.agentKind, remoteHostId: live.remoteHostId,
+      currentProviderId: providerId, nextProviderId: providerId,
+      currentModel: model, nextModel: model,
+      currentCodexProxyActive: live.codexProxyActive,
+      currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
+      currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
+    })) return;
+
+    // Only repair the stale thread for its already registered route. The normal
+    // send transaction resumes it; target-route changes still face the accepted
+    // boundary checks below. Never retire a shared host or rewrite user settings.
+    if (this.deps.checkModelRoute) {
+      const verdict = await this.checkRouteFor(live.id, 'codex', model, providerId);
+      if (verdict.kind !== 'pass') {
+        throw new QueuedRouteDisabledError('Queued Codex current route is unavailable for thread recovery');
+      }
+    }
+    assertPreparing();
+    if (this.deps.maker.getSession(live.id) !== live || live.model !== model ||
+      (getSessionProvider(live.id) ?? baselineProviderId) !== providerId ||
+      this.runtime.isSessionInTurn(live.id)) {
+      throw new QueuedCodexThreadIdentityMismatchError('Queued Codex session changed before thread recovery');
+    }
+    // Preparation holds the ordinary send lock, before Session.send reserves a
+    // turn. The exact-instance idle close also rejects a concurrent native turn.
+    const closed = await withRehydrateCloseSuppressed(live.id, () =>
+      this.deps.maker.closeSessionIfCurrent(live, 'runtime-refresh', { onlyIfIdle: true }));
+    assertPreparing();
+    if (closed !== 'closed') {
+      throw new QueuedCodexThreadIdentityMismatchError(
+        `queued heartbeat Codex thread provider identity does not match the current session route (session "${live.id}")`,
+      );
+    }
+  }
+
   private async prepareQueuedPiRouting(
     schedule: Schedule,
     sessionId: string,
@@ -3336,6 +3382,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
     return { model, providerId };
   }
 
+  /**
+   * 排队派发时刻的路由热同步:schedule 显式设置的 model / effort / 来源(供应商)
+   * 优先于绑定会话当前值(与直发路径 4.4.1/4.4.2 同语义);留空沿用会话当前值。
+   * 凭证形态需要关会话重建的组合(shouldCloseSessionForCredentialSwitch)无法在
+   * 派发时刻热切 —— dynamic custom Provider identity 跨界或 thread/store 已错配时必须在
+   * vendor dispatch 前失败；其它可保留当前路由的凭证切换才跳过本轮同步。
+   * setModel / setEffort 成功才落库 meta,失败保留旧值让下轮重试(与直发路径的
+   * 复用会话语义一致)。
+   */
   private async applyQueuedHeartbeatRouting(
     schedule: Schedule,
     live: NonNullable<ReturnType<Maker['getSession']>>,
