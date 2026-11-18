@@ -428,7 +428,8 @@
       "loading": "方读模型范围…",
       "loadFailed": "不能读模型范围，请重启此设置。",
       "saveFailed": "不能存模型范围，请再试。",
-      "needsUpdate": "请先更新供方所在之机的 Cindy，而后设模型范围。"
+      "needsUpdate": "请先更新供方所在之机的 Cindy，而后设模型范围。",
+      "followsPool": "此连接已并入「{{pool}}」，远程可用之模随「{{pool}}」，请于彼处改之。下列各成员之模型限制仍可于此设之。"
     },
     "entry": {
       "label": "远程与分享",

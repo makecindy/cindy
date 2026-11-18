@@ -428,7 +428,8 @@
       "loading": "Modellzugriff wird geladen…",
       "loadFailed": "Der Modellzugriff konnte nicht geladen werden. Öffne diese Einstellungen erneut.",
       "saveFailed": "Der Modellzugriff konnte nicht gespeichert werden. Versuche es erneut.",
-      "needsUpdate": "Aktualisiere Cindy auf dem Computer des Anbieters, um den Modellzugriff zu verwalten."
+      "needsUpdate": "Aktualisiere Cindy auf dem Computer des Anbieters, um den Modellzugriff zu verwalten.",
+      "followsPool": "Diese Verbindung wurde in „{{pool}}“ zusammengeführt; die remote nutzbaren Modelle folgen „{{pool}}“. Ändere sie dort. Die Mitgliederlimits unten lassen sich weiterhin hier festlegen."
     },
     "entry": {
       "label": "Remote & Freigabe",

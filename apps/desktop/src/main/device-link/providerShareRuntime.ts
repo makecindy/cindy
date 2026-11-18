@@ -1032,6 +1032,9 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       const budgetModelIds = recommendationModelIds.filter(id => id === unifiedModelKeyId(id)
         || !recommendationModelIds.includes(unifiedModelKeyId(id)));
       if (command.action === 'set-model-access') {
+        // A connection merged into an account pool reads the pool's provider-wide range; only member grants stay here.
+        if (command.memberId === undefined && provider.subscriptionPoolAlias)
+          throwIpcError('PRECONDITION_FAILED', 'This provider follows its account pool; change the range there');
         if (command.memberBudget?.rules.length && !budgetAvailable) throwIpcError('PRECONDITION_FAILED', 'Member model limits are not available for this provider group');
         if (command.memberBudget) {
           const previous = remoteModelAccess.read(command.providerId, command.memberId).memberBudget;

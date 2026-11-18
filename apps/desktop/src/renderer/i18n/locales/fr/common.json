@@ -433,7 +433,8 @@
       "loading": "Chargement de l'accès aux modèles…",
       "loadFailed": "Impossible de charger l'accès aux modèles. Rouvrez ces paramètres.",
       "saveFailed": "Impossible d'enregistrer l'accès aux modèles. Réessayez.",
-      "needsUpdate": "Mettez à jour Cindy sur l'ordinateur du fournisseur pour gérer l'accès aux modèles."
+      "needsUpdate": "Mettez à jour Cindy sur l'ordinateur du fournisseur pour gérer l'accès aux modèles.",
+      "followsPool": "Cette connexion a été fusionnée dans « {{pool}} » : ses modèles à distance suivent « {{pool}} ». Modifiez-les là-bas. Les limites des membres ci-dessous restent réglables ici."
     },
     "entry": {
       "label": "Accès distant et partage",

@@ -433,7 +433,8 @@
       "loading": "Cargando acceso al modelo…",
       "loadFailed": "No se pudo cargar el acceso al modelo. Vuelve a abrir esta configuración.",
       "saveFailed": "No se pudo guardar el acceso al modelo. Inténtalo de nuevo.",
-      "needsUpdate": "Actualiza Cindy en la computadora del proveedor para administrar el acceso al modelo."
+      "needsUpdate": "Actualiza Cindy en la computadora del proveedor para administrar el acceso al modelo.",
+      "followsPool": "Esta conexión se fusionó con «{{pool}}», así que sus modelos remotos siguen a «{{pool}}». Cámbialos allí. Los límites de miembros de abajo se pueden seguir ajustando aquí."
     },
     "entry": {
       "label": "Remoto y compartido",

@@ -1015,6 +1015,16 @@ describe('remote model access management', () => {
       { id: 'audio', name: 'Audio' }, { id: 'embedding', name: 'embedding' },
     ] });
   });
+  // PR #11312 review (Codex P2): a merged connection reads its pool's provider-wide range, so a range saved on
+  // the old id would report success with no effect. Refuse it; member grants on the old share stay editable.
+  it('refuses a provider-wide range on a merged connection but keeps member grants', async () => {
+    listProviders.mockResolvedValue([{ id: 'anthropic', subscriptionPoolAlias: true, models: { 'claude-code': [{ id: 'small', name: 'Small' }] } }]);
+    await expect(executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', models: [] }))
+      .rejects.toThrow('PRECONDITION_FAILED');
+    expect(modelAccess.set).not.toHaveBeenCalled();
+    await executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', memberId: 'm1', models: ['small'] });
+    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], 'm1', expect.any(Function), undefined, expect.any(Function));
+  });
   it('refuses to modify a person who belongs to a different provider', async () => {
     host.snapshot.mockReturnValue([{ providerId: 'other', members: [{ memberId: 'm1' }] }]);
     await expect(executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', memberId: 'm1', models: [] })).rejects.toThrow('NOT_FOUND');

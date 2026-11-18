@@ -428,7 +428,8 @@
       "loading": "Loading model access…",
       "loadFailed": "Could not load model access. Reopen these settings.",
       "saveFailed": "Could not save model access. Try again.",
-      "needsUpdate": "Update Cindy on the provider’s computer to manage model access."
+      "needsUpdate": "Update Cindy on the provider’s computer to manage model access.",
+      "followsPool": "This connection was merged into “{{pool}}”, so its remote models follow “{{pool}}”. Change them there. Member limits below can still be set here."
     },
     "entry": {
       "label": "Remote & Sharing",

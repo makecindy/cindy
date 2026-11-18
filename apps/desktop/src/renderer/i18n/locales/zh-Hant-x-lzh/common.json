@@ -428,7 +428,8 @@
       "loading": "方讀模型範圍…",
       "loadFailed": "不能讀模型範圍，請重啟此設定。",
       "saveFailed": "不能存模型範圍，請再試。",
-      "needsUpdate": "請先更新供方所在之機的 Cindy，而後設模型範圍。"
+      "needsUpdate": "請先更新供方所在之機的 Cindy，而後設模型範圍。",
+      "followsPool": "此連線已併入「{{pool}}」，遠端可用之模隨「{{pool}}」，請於彼處改之。下列各成員之模型限制仍可於此設之。"
     },
     "entry": {
       "label": "遠端與分享",
