@@ -117,10 +117,14 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       if (persisted && userMessageId) im.acknowledgeIncoming(userMessageId);
     },
     handleTextInteraction: async (userId, request, interactionOptions) => {
-      // Only the configured owner can answer permissions, including member-originated turns.
-      const target = request.kind === 'permission' ? im.getOwnerUserId() : userId;
-      if (!target) return interactionOptions?.sharedPermission?.result
-        ?? Promise.resolve({ kind: 'permission', behavior: 'deny', reason: 'imessage_owner_not_connected' });
+      const audience = request.kind === 'ask_user_question' ? 'chat' : 'owner';
+      const target = audience === 'owner' ? im.getOwnerUserId() : userId;
+      if (!target) {
+        const reason = 'imessage_owner_not_connected';
+        if (request.kind === 'plan_review') return { kind: 'plan_review', behavior: 'deny', dismissed: true, reason };
+        if (request.kind === 'ask_user_question') return { kind: 'ask_user_question', answers: {}, dismissed: true };
+        return interactionOptions?.sharedPermission?.result ?? { kind: 'permission', behavior: 'deny', reason };
+      }
       const requestKey = JSON.stringify([userId, request.requestId]);
       const interaction = { cancelled: false };
       textInteractions.set(requestKey, interaction);
@@ -129,8 +133,7 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
           sendText: im.sendText.bind(im),
           requestTextReply: (chatId, prompt, parse, timeoutMs, shared) => {
             if (interaction.cancelled) return Promise.reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED'));
-            return im.requestTextReply(chatId, prompt, parse, timeoutMs, shared, requestKey,
-              request.kind === 'permission' ? 'owner' : 'chat');
+            return im.requestTextReply(chatId, prompt, parse, timeoutMs, shared, requestKey, audience);
           },
         }, target, request, interactionOptions);
       } finally {
