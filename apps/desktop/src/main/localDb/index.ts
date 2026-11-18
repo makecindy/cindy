@@ -228,10 +228,10 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   } catch (error) {
     releaseSchemaLeasesAfterFailure();
     const reason = error instanceof Error ? error.message : 'WORKSPACE_MOVE_RECOVERY_REQUIRED';
-    const blocked = reason === 'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP' || reason === 'WORKSPACE_MOVE_IN_PROGRESS';
+    const blocked = reason === 'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP' || reason === 'WORKSPACE_MOVE_IN_PROGRESS' || reason === 'MIGRATION_BUSY';
     const code = blocked ? 'DB_SCHEMA_LOCKED' : 'DB_INIT_FAILED';
     const message = blocked
-      ? localDbText(reason === 'WORKSPACE_MOVE_IN_PROGRESS' ? 'localDbFatal.schemaLease.writer-active' : 'localDbFatal.schemaLease.readers-active')
+      ? localDbText(reason === 'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP' ? 'localDbFatal.schemaLease.readers-active' : 'localDbFatal.schemaLease.writer-active')
       : `${localDbText('localDbFatal.initFailed.description')} (WORKSPACE_MOVE_RECOVERY_REQUIRED)`;
     log.error('workspace migration startup recovery blocked', { code });
     showFatalDialog(localDbText('localDbFatal.initFailed.title'), message, code);

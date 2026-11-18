@@ -62,6 +62,128 @@ async function previousProcess(update: Record<string, unknown> = {}) {
 }
 
 describe('offline workspace relocation', () => {
+  // #10568 follow-up: a restored filesystem must remain usable even when its
+  // receipt cannot record the recovery, including on every subsequent startup.
+  it('uses the restored original after target loss even when the failure receipt cannot be saved', async () => {
+    await requestWorkspaceMove(owner, bot, target, current);
+    const status = await workspaceMoveStatus(owner, bot);
+    await copyTree(source, target);
+    const targetIdentity = await directoryIdentity(target);
+    await fs.rename(source, status.backup!);
+    await fs.symlink(target, source, process.platform === 'win32' ? 'junction' : 'dir');
+    await fs.rename(target, `${target}-unmounted`);
+    await previousProcess({ phase: 'linked', targetIdentity });
+    const { file } = await receipt();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === file) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      return rename(from, to);
+    });
+    await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+    await expect(assertWorkspaceMoveReady(owner, bot)).resolves.toBeUndefined();
+    expect(await workspaceMoveStatus(owner, bot)).toMatchObject({
+      workspaceAvailable: true,
+      startupWarning: 'MIGRATION_RECEIPT_UPDATE_FAILED',
+    });
+    await fs.writeFile(path.join(source, 'after-recovery.txt'), 'original-is-live');
+    await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+    expect(await fs.readFile(path.join(source, 'after-recovery.txt'), 'utf8')).toBe(
+      'original-is-live',
+    );
+    expect(await fs.lstat(source).then((info) => info.isSymbolicLink())).toBe(false);
+    vi.restoreAllMocks();
+    await cancelWorkspaceMove(owner, bot, current);
+    expect((await workspaceMoveStatus(owner, bot)).phase).toBe('cancelled');
+  });
+
+  it.each([false, true])(
+    'does not block startup on completed-move cleanup metadata failure (disk unavailable=%s)',
+    async (unavailable) => {
+      await requestWorkspaceMove(owner, bot, target, current);
+      const status = await workspaceMoveStatus(owner, bot);
+      const digest = (await inspectTree(source)).digest;
+      await copyTree(source, target);
+      const targetIdentity = await directoryIdentity(target);
+      await fs.rename(source, status.backup!);
+      await fs.symlink(target, source, process.platform === 'win32' ? 'junction' : 'dir');
+      if (unavailable) {
+        await fs.writeFile(path.join(target, 'later.txt'), 'committed-new-data');
+        await fs.rename(target, `${target}-unmounted`);
+      }
+      await previousProcess({ phase: 'completed', targetIdentity, digest, backupRemaining: true });
+      const { file } = await receipt();
+      const rename = fs.rename.bind(fs);
+      vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+        if (String(to) === file) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+        return rename(from, to);
+      });
+      await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+      await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+      expect(await fs.lstat(source).then((info) => info.isSymbolicLink())).toBe(true);
+      if (unavailable) {
+        await expect(assertWorkspaceMoveReady(owner, bot)).rejects.toThrow(
+          'MOVED_WORKSPACE_UNAVAILABLE',
+        );
+        await fs.rename(`${target}-unmounted`, target);
+        await expect(assertWorkspaceMoveReady(owner, bot)).resolves.toBeUndefined();
+        expect(await fs.readFile(path.join(source, 'later.txt'), 'utf8')).toBe(
+          'committed-new-data',
+        );
+      } else {
+        await expect(assertWorkspaceMoveReady(owner, bot)).resolves.toBeUndefined();
+        expect(await fs.readFile(path.join(source, 'script.js'), 'utf8')).toBe('original-script');
+      }
+    },
+  );
+
+  it.each(['target-offline', 'copy-io-error'])(
+    'keeps the original usable across repeated startups after %s',
+    async (failure) => {
+      await requestWorkspaceMove(owner, bot, target, current);
+      await previousProcess();
+      if (failure === 'target-offline')
+        await fs.rename(path.dirname(target), `${path.dirname(target)}-unmounted`);
+      else {
+        const open = fs.open.bind(fs);
+        vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+          if (path.basename(String(args[0])) === 'script.js' && args[1] === 'wx')
+            throw Object.assign(new Error('EIO'), { code: 'EIO' });
+          return open(...args);
+        });
+      }
+      await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+      await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+      await expect(assertWorkspaceMoveReady(owner, bot)).resolves.toBeUndefined();
+      expect((await workspaceMoveStatus(owner, bot)).phase).toBe('failed');
+      await fs.writeFile(path.join(source, 'usable.txt'), 'original-data');
+      expect(await fs.readFile(path.join(source, 'usable.txt'), 'utf8')).toBe('original-data');
+    },
+  );
+
+  it('still refuses a live cutover or an unprovable original instead of admitting new writers', async () => {
+    await requestWorkspaceMove(owner, bot, target, current);
+    const initial = await workspaceMoveStatus(owner, bot);
+    await previousProcess({ phase: 'copying' });
+    vi.mocked(process.kill).mockReturnValue(true);
+    await expect(recoverWorkspaceMovesAtStartup(owner, true)).rejects.toThrow(
+      'WORKSPACE_MOVE_IN_PROGRESS',
+    );
+    vi.restoreAllMocks();
+    await fs.rename(source, initial.backup!);
+    await fs.rename(initial.backup!, `${initial.backup}-unknown`);
+    await previousProcess({ phase: 'switching' });
+    await expect(recoverWorkspaceMovesAtStartup(owner, true)).rejects.toThrow(
+      'ORIGINAL_WORKSPACE_UNAVAILABLE',
+    );
+    await expect(assertWorkspaceMoveReady(owner, bot)).rejects.toThrow(
+      'WORKSPACE_MOVE_RECOVERY_REQUIRED',
+    );
+    await expect(fs.lstat(source)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(`${initial.backup}-unknown`, 'script.js'), 'utf8')).toBe(
+      'original-script',
+    );
+  });
+
   it('preserves relative links within the tree and the referent of relative links outside it', async ({
     skip,
   }) => {
@@ -139,6 +261,8 @@ describe('offline workspace relocation', () => {
       'MOVED_WORKSPACE_UNAVAILABLE',
     );
     expect((await workspaceMoveStatus(owner, bot)).workspaceAvailable).toBe(false);
+    await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
+    await expect(recoverWorkspaceMovesAtStartup(owner, true)).resolves.toBeUndefined();
   });
 
   it('never overwrites a target created after the request and keeps the original usable', async () => {
@@ -279,9 +403,11 @@ describe('offline workspace relocation', () => {
     expect((await workspaceMoveStatus(owner, bot)).phase).toBe('none');
     await requestWorkspaceMove(owner, bot, target, current);
     await previousProcess();
-    await expect(recoverWorkspaceMovesAtStartup(owner, false)).rejects.toThrow(
-      'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP',
-    );
+    await expect(recoverWorkspaceMovesAtStartup(owner, false)).resolves.toBeUndefined();
+    expect(await workspaceMoveStatus(owner, bot)).toMatchObject({
+      startupWarning: 'MIGRATION_WAITING_FOR_EXCLUSIVE_STARTUP',
+      workspaceAvailable: true,
+    });
     expect((await workspaceMoveStatus(owner, bot)).phase).toBe('pending');
     await cancelWorkspaceMove(owner, bot, current);
     await recoverWorkspaceMovesAtStartup(owner, true);

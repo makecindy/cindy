@@ -13,6 +13,9 @@ import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import { copyTree, directoryIdentity, entry, inside, inspectTree } from './tree.js';
 
 const processToken = randomUUID();
+// Only a diagnostic for this startup, scoped to the exact owner and receipt.
+// Durable recovery still depends on filesystem identities, never this map.
+const startupWarnings = new Map<string, { id: string; code: string }>();
 type Phase =
   | 'pending'
   | 'copying'
@@ -85,19 +88,22 @@ async function save(
   const { journal } = locations(ownerRoot, receipt.botId);
   await fs.mkdir(path.dirname(journal), { recursive: true, mode: 0o700 });
   const temporary = `${journal}.${randomUUID()}.tmp`;
-  const handle = await fs.open(temporary, 'wx', 0o600);
   try {
-    await handle.writeFile(`${JSON.stringify(receipt)}\n`);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
+    const handle = await fs.open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(receipt)}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     assertCurrent?.();
     await fs.rename(temporary, journal);
     await syncDirectory(path.dirname(journal));
+    startupWarnings.delete(journal);
   } finally {
-    await fs.rm(temporary, { force: true });
+    // A partial receipt is disposable; cleanup must not hide the actual write
+    // error or turn a committed intent into a spurious failure.
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
   }
 }
 
@@ -215,7 +221,8 @@ export async function previewWorkspaceMove(
 
 export async function workspaceMoveStatus(ownerRoot: string, botId: string) {
   const receipt = await read(ownerRoot, botId);
-  const { source, backup } = locations(ownerRoot, botId, receipt ?? undefined);
+  const { source, backup, journal } = locations(ownerRoot, botId, receipt ?? undefined);
+  const warning = startupWarnings.get(journal);
   const workspaceAvailable =
     receipt?.phase === 'completed'
       ? await linkedTo(source, receipt.target).then(
@@ -231,6 +238,7 @@ export async function workspaceMoveStatus(ownerRoot: string, botId: string) {
     botId,
     source,
     workspaceAvailable,
+    startupWarning: warning?.id === receipt?.id ? warning?.code : undefined,
     phase: receipt?.phase ?? 'none',
     target: receipt?.target,
     error: receipt?.error,
@@ -330,8 +338,13 @@ export async function cancelWorkspaceMove(
 ) {
   return locked(ownerRoot, async () => {
     const receipt = await read(ownerRoot, botId);
-    if (receipt && !['pending', 'failed', 'cancelled'].includes(receipt.phase))
-      throw new Error('MIGRATION_CANNOT_CANCEL');
+    if (receipt && !['pending', 'failed', 'cancelled'].includes(receipt.phase)) {
+      const { source } = locations(ownerRoot, botId);
+      // The mutation lock excludes an active transfer. A stale intermediate
+      // receipt can be withdrawn once its original directory is proved live.
+      if (receipt.phase === 'completed' || !(await sameDirectory(source, receipt.sourceIdentity)))
+        throw new Error('MIGRATION_CANNOT_CANCEL');
+    }
     assertCurrent();
     if (receipt) await save(ownerRoot, { ...receipt, phase: 'cancelled' }, assertCurrent);
     return workspaceMoveStatus(ownerRoot, botId);
@@ -358,6 +371,20 @@ async function linkedTo(source: string, target: string): Promise<boolean> {
   const normalize = (value: string) =>
     process.platform === 'win32' ? path.toNamespacedPath(value).toLowerCase() : value;
   return normalize(pointed) === normalize(target);
+}
+
+/** An intact original or a proved committed link can admit this owner's startup
+ * even when recording the outcome failed. Never choose an old copy after commit.
+ */
+async function usableWorkspace(ownerRoot: string, receipt: Receipt): Promise<boolean> {
+  const { source } = locations(ownerRoot, receipt.botId, receipt);
+  if (receipt.phase !== 'completed' && (await sameDirectory(source, receipt.sourceIdentity)))
+    return true;
+  return (
+    ['switching', 'linked', 'completed'].includes(receipt.phase) &&
+    (await linkedTo(source, receipt.target)) &&
+    (await sameDirectory(receipt.target, receipt.targetIdentity))
+  );
 }
 
 /** A failed cutover restores the *original* directory; it never copies the staged data back over it. */
@@ -516,21 +543,48 @@ export async function recoverWorkspaceMovesAtStartup(
       if (!name.endsWith('.json')) continue;
       const receipt = await readJournal(ownerRoot, path.join(directory, name));
       if (!receipt || ['failed', 'cancelled'].includes(receipt.phase)) continue;
-      if (receipt.phase === 'completed') {
+      const journal = locations(ownerRoot, receipt.botId).journal;
+      try {
+        if (receipt.phase === 'completed') {
+          if (
+            exclusiveStartup &&
+            receipt.backupRemaining &&
+            receipt.error !== 'MOVED_BACKUP_RETAINED_FOR_REVIEW'
+          )
+            await cleanupBackup(ownerRoot, receipt);
+          continue;
+        }
+        if (receipt.processToken === processToken || isAlive(receipt.pid)) {
+          if (receipt.phase !== 'pending') throw new Error('WORKSPACE_MOVE_IN_PROGRESS');
+          continue;
+        }
+        if (!exclusiveStartup) {
+          if (!(await usableWorkspace(ownerRoot, receipt)))
+            throw new Error('WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP');
+          startupWarnings.set(journal, {
+            id: receipt.id,
+            code: 'MIGRATION_WAITING_FOR_EXCLUSIVE_STARTUP',
+          });
+          continue;
+        }
+        await execute(ownerRoot, receipt);
+      } catch (error) {
         if (
-          exclusiveStartup &&
-          receipt.backupRemaining &&
-          receipt.error !== 'MOVED_BACKUP_RETAINED_FOR_REVIEW'
+          error instanceof Error &&
+          [
+            'MIGRATION_BUSY',
+            'WORKSPACE_MOVE_IN_PROGRESS',
+            'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP',
+          ].includes(error.message)
         )
-          await cleanupBackup(ownerRoot, receipt);
-        continue;
+          throw error;
+        // Once committed, backup cleanup is maintenance and cannot block the
+        // account even if the target disk is currently offline. The affected
+        // buddy's guard still rejects an unavailable target, without mkdir.
+        if (receipt.phase !== 'completed' && !(await usableWorkspace(ownerRoot, receipt)))
+          throw error;
+        startupWarnings.set(journal, { id: receipt.id, code: 'MIGRATION_RECEIPT_UPDATE_FAILED' });
       }
-      if (receipt.processToken === processToken || isAlive(receipt.pid)) {
-        if (receipt.phase !== 'pending') throw new Error('WORKSPACE_MOVE_IN_PROGRESS');
-        continue;
-      }
-      if (!exclusiveStartup) throw new Error('WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP');
-      await execute(ownerRoot, receipt);
     }
   });
 }
@@ -539,14 +593,10 @@ export async function recoverWorkspaceMovesAtStartup(
 export async function assertWorkspaceMoveReady(ownerRoot: string, botId: string): Promise<void> {
   const receipt = await read(ownerRoot, botId);
   if (!receipt || receipt.phase === 'cancelled' || receipt.phase === 'pending') return;
-  const { source } = locations(ownerRoot, botId, receipt);
-  if (receipt.phase === 'completed') {
-    if (
-      !(await linkedTo(source, receipt.target)) ||
-      !(await sameDirectory(receipt.target, receipt.targetIdentity))
-    )
-      throw new Error('MOVED_WORKSPACE_UNAVAILABLE');
-  } else if (receipt.phase !== 'failed' || !(await sameDirectory(source, receipt.sourceIdentity))) {
-    throw new Error('WORKSPACE_MOVE_RECOVERY_REQUIRED');
-  }
+  if (await usableWorkspace(ownerRoot, receipt)) return;
+  throw new Error(
+    receipt.phase === 'completed'
+      ? 'MOVED_WORKSPACE_UNAVAILABLE'
+      : 'WORKSPACE_MOVE_RECOVERY_REQUIRED',
+  );
 }

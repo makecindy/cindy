@@ -135,6 +135,7 @@ export async function openOwnerDatabase(
     lease.lease.release();
     if (error instanceof OwnerDatabaseError) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    throw new OwnerDatabaseError('MIGRATE_FAILED', message);
+    const migrationBusy = ['MIGRATION_BUSY', 'WORKSPACE_MOVE_IN_PROGRESS', 'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP'].includes(message);
+    throw new OwnerDatabaseError(migrationBusy ? 'DB_SCHEMA_LOCKED' : 'MIGRATE_FAILED', message);
   }
 }
