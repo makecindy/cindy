@@ -97,6 +97,48 @@ function listResult(rows: number, changed = -1) {
 }
 
 describe('AgentNetSessionLinks', () => {
+  // Unit #11345: sharing uses the session adapter too. Earlier saturation tests
+  // reserved only control slots; 12 held metadata reads still blocked ordinary
+  // model/context calls. Exercise both actual admission and SessionPeer lanes
+  // with the existing scoped pair, without importing the renderer or real I/O.
+  it('keeps shared catalog preloads inside background capacity while model calls proceed', async () => {
+    const hostKey = providerShareHostPeer('share', 'host'), controllerKey = providerShareGuestPeer('share', 'member', 'controller');
+    const { links, controllerLanes } = pair({ hostKey, controllerKey });
+    const metadata = ['maker:provider:list', 'maker:get-capabilities', 'maker:list-available-agents', 'maker:agent:status'];
+    const held: Envelope[] = [], visible: string[] = [];
+    const pending: Promise<unknown>[] = [];
+    links.host.onFrame(env => {
+      if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      const channel = (env.payload as { channel: string }).channel;
+      if (metadata.includes(channel)) held.push(env);
+      else {
+        visible.push(((env.payload as { args: [{ method: string }] }).args[0]).method);
+        links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'visible' });
+      }
+    });
+    await links.controller.openLink(hostKey, openPayload);
+    controllerLanes.length = 0;
+    for (let n = 0; n < 12; n++) pending.push(links.controller.invoke(hostKey, { channel: metadata[n % metadata.length], args: [] }).catch(error => error));
+    const reads = ['setModel', 'getContextUsage'].map(method => links.controller.invoke(hostKey, {
+      channel: 'maker:remote-agent:v1', args: [{ op: 'call', method }],
+    }));
+    pending.push(...reads.map(request => request.catch(error => error)));
+    for (let n = 0; n < 20; n++) await Promise.resolve();
+    try {
+      expect(held).toHaveLength(4);
+      expect(visible).toEqual(['setModel', 'getContextUsage']);
+      expect(controllerLanes.slice(0, 4)).toEqual(['background', 'background', 'background', 'background']);
+      await expect(Promise.all(reads)).resolves.toEqual([{ ok: true, result: 'visible' }, { ok: true, result: 'visible' }]);
+    } finally {
+      links.controller.closeLink(hostKey, 'user');
+      for (const env of held) links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: null });
+      await Promise.allSettled(pending);
+      links.controller.stop(); links.host.stop();
+    }
+    expect(held).toHaveLength(4);
+  });
+
   // Unit #11345: the session route must execute the dispatch-only guard after
   // admission, never after a result. Twelve polls + one cancelled queued poll
   // cover the boundary without changing admission constants or real-time waits.

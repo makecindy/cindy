@@ -13,6 +13,13 @@ import { FILE_PEER_CHANNEL, FILE_PEER_STREAM_RPC_MAX_TIMEOUT_MS } from './filePe
  * sessions:list also serves initial loading and recovery probes, so it stays foreground.
  */
 const BACKGROUND_INVOKE_CHANNELS = new Set([
+  // Shared/device model pickers preload these together (including one capability
+  // read per engine). They must use the existing background cap rather than fill
+  // all ordinary slots and delay navigation or live model/context mutations.
+  'maker:provider:list',
+  'maker:get-capabilities',
+  'maker:list-available-agents',
+  'maker:agent:status',
   'git-context:pr-refs:list',
   'git-context:pr-status',
   'git-context:mr-status',

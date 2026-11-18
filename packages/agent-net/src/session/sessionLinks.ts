@@ -468,7 +468,9 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
           || (isFilePeerStreamTransfer(tagged) && (tagged.args?.[0] as { body?: unknown } | undefined)?.body !== undefined);
         // noResultCache：和 Device Link 一样不缓存这条的结果（MCP App 的 open／poll）。
         const transfer = scoped || fileBlock ? null : this.invokeResultCache.prepare(dst, tagged, options?.noResultCache);
-        const raw = await this.request(dst, transfer?.payload ?? tagged, timeout, options?.background || fileBlock);
+        // Pass the resolved policy too: an explicit false would otherwise undo
+        // a channel's default background lane after admission used its cap.
+        const raw = await this.request(dst, transfer?.payload ?? tagged, timeout, priority === 'background' || fileBlock);
         const result = transfer ? await transfer.decode(raw) : raw;
         if (transfer?.retryWithoutBase()) return { result, retry: 'remaining-budget' };
         if (!result.ok) return { result };
