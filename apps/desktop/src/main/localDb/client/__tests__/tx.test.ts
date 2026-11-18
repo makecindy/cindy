@@ -403,6 +403,7 @@ describe('db worker tx handlers', () => {
       await client.exec('CREATE TABLE session_goals (session_id TEXT, status TEXT)');
       await client.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT)');
       await seedSession(client, 'idle', { status: 'active' });
+      await client.exec("UPDATE sessions SET updated_at = 123 WHERE id = 'idle'");
       await client.exec("UPDATE sessions SET last_activity_at = 100 WHERE id = 'idle'");
       const archive = () => client.tx('sessions.setTerminalStatus', { sessionId: 'idle', status: 'archived', idleArchiveCutoff: 200 });
       await client.exec("UPDATE sessions SET last_activity_at = 300 WHERE id = 'idle'");
@@ -416,10 +417,40 @@ describe('db worker tx handlers', () => {
       expect(await client.queryOne("SELECT status FROM sessions WHERE id = 'idle'")).toEqual({ status: 'active' });
       await client.exec("UPDATE sessions SET pinned_at = NULL WHERE id = 'idle'");
       await expect(archive()).resolves.toMatchObject({ sessionId: 'idle', status: 'archived' });
+      expect(await client.queryOne("SELECT updated_at AS updatedAt FROM sessions WHERE id = 'idle'"))
+        .toEqual({ updatedAt: 123 });
       // A manual archive continues to use the existing flow, without idle guards.
       await seedSession(client, 'manual', { status: 'active', pinnedAt: 50 });
+      await client.exec("UPDATE sessions SET updated_at = 123 WHERE id = 'manual'");
       await expect(client.tx('sessions.setTerminalStatus', { sessionId: 'manual', status: 'archived' }))
         .resolves.toMatchObject({ sessionId: 'manual', status: 'archived' });
+      expect((await client.queryOne<{ updatedAt: number }>("SELECT updated_at AS updatedAt FROM sessions WHERE id = 'manual'"))!.updatedAt)
+        .toBeGreaterThan(123);
+    }, { useInlineWorker });
+  });
+
+  // #11185: DB tier, both production transports. The old renderer snapshot missed
+  // activity arriving before deletion; this exercises the final transaction guard.
+  // Minimal input: an apparently empty task is pinned/sent/started before cleanup.
+  it.each([false, true])('preserves a late task used before cleanup commits (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 'late');
+      const discard = () => client.tx('sessions.setTerminalStatus', {
+        sessionId: 'late', status: 'deleted', unusedOnly: true,
+      });
+      for (const field of ['pinned_at', 'user_send_at', 'active_turn_started_at']) {
+        await client.exec(`UPDATE sessions SET ${field} = 1 WHERE id = 'late'`);
+        await expect(discard()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+        expect(await client.queryOne("SELECT status FROM sessions WHERE id = 'late'"))
+          .toEqual({ status: 'active' });
+        await client.exec(`UPDATE sessions SET ${field} = NULL WHERE id = 'late'`);
+      }
+      await client.exec("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('late-msg', 'late-msg', 'late', 'user', 'hello', 1)");
+      await expect(discard()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(await client.queryOne("SELECT content FROM messages WHERE id = 'late-msg'"))
+        .toEqual({ content: 'hello' });
+      await client.exec("DELETE FROM messages WHERE id = 'late-msg'");
+      await expect(discard()).resolves.toMatchObject({ status: 'deleted' });
     }, { useInlineWorker });
   });
 

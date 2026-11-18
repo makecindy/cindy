@@ -3,6 +3,14 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件、
 > 测试目录或运行时生成物之前
+> **适用路径**：`apps/desktop/src/main/secrets/**`、
+> `apps/desktop/src/main/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/{devKeychain,safeStorage}*.ts`、
+> `apps/desktop/src/main/{userDataPath,regionUserData,legacyUserDataMigration}.ts`、
+> `apps/desktop/src/test/vitest/{user-data-dir-setup,testDirectoryTemplate}.ts`、
+> `apps/mobile/src/auth/secureStorage.ts`、`apps/mobile/src/**/*{C,c}redential*.ts`、
+> `packages/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/authManager.ts`、`apps/desktop/src/main/localProfile*Migration*.ts`、`apps/desktop/src/main/maker-host/codex-auth-*.ts`
 
 本文约束 Desktop、Mobile、共享 package、脚本和测试中的本地文件写入。数据库 migration
 另见 [`database-and-migrations.md`](database-and-migrations.md)，Renderer 与 IPC 边界另见
@@ -13,29 +21,18 @@
 
 ## 凭证不入仓
 
-### 本地模式首次云登录的凭证交接
+### 本地模式首次云登录：资产交接暂时回退
 
-`localProfileAssetsMigration.ts` 只接受 `localProfileDataMigration` 已持久提交的首个
-cloud owner，在账号切换隔离区内、旧插件运行已停止后交接；后续账号不能继承。
-自定义 Provider API key 与 headers 仅在目标数据库尚不存在或有真实本地库采用证明时复制。
-插件只带走原批准清单中 `network.secrets` 的用户填写静态凭证（含 `gh-cli` 的已存备用 PAT，
-不读取 CLI 登录）、无 `oauthSecret` 的
-`node.secretBindings` 手填凭证及对应 hint；普通网络密钥的 Host 已保存凭证引用密文随原键一并交接，
-引用仍由原解析器复核双方安装与来源凭证。来源凭证不在交接范围时引用保持不可用，不补授权。
-登录令牌、OAuth 账号及刷新令牌、
-动态连接授权、Library 绑定、目录授权均不在此交接范围。不得扩大为整个保险库复制。
+2026-11-17 回退 #10357 新增的资产交接：它将密钥与插件复制放入登录提交路径，
+复制或 Windows 实例检查失败会阻断已提交登录的后续完成及原生供应商绑定。
+登录继续沿用原数据库与原生供应商绑定流程；本地模式的自定义供应商密钥、请求头、
+插件及偏好暂不自动接续到首个云账号，这是回退恢复的已知限制。
 
-同机交接只复制现有 `safeStorage` 密文，不解密、不输出内容，不覆盖目标已有值，保留
-本地源文件。插件内容、原批准及技能快照、实例记录、市场账本与偏好作为同一采用单元；
-其中 `ghost-errand-prefs.json` 保留用户的模型、供应商、权限和工作目录配置；旧任务的
-`sessions` 映射仅在目标数据库已有真实本地库采用证明时保留。目标库尚不存在不算证明，
-因为后续旧版数据恢复可能先创建另一个数据库；没有证明时由插件按原有流程新建任务。
-目标已有插件状态（含任务配置）时不自动混合。首次复制写入持久计划后才发布，失败保留可恢复快照与
-首账号认领，成功后清理临时副本并记录完成，重启不得复活用户之后删除的凭证。
-已有插件安装事务未恢复、源不独占、链接或不稳定文件均阻止交接，不发布账号就绪。
-回退代码仍可读取原本地资料及已采用的原格式；无需、也不得改写历史数据库 migration。
-生产入口与回归见 `authManager.withCloudOwnerCommit`、
-`localProfileAssetsMigration.test.ts` 和 `authPostCommitStartup.test.ts`。
+回退只撤销代码，不清理源资料、已复制的目标资料、`.local-profile-assets-v1.json`
+或 `.local-profile-assets-*` 暂存目录，也不撤销原账号认领或修改历史数据库 migration。
+尚未完成的资产计划不再自动续跑；未来恢复交接时必须兼容这些记录，并保留用户后续修改。
+再次接入前须覆盖迁移失败后登录仍可完成、插件初始化不抢占待交接目标，以及重启后的恢复。
+登录回归入口为 `authPostCommitStartup.test.ts`。
 
 ### 通用存储要求
 
@@ -133,7 +130,10 @@ Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；
 Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此只做内置 CLI 的外壳：
 
 - 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
-  `claude auth status --json`。凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
+  `claude auth status --json`。JSON 缺少套餐显示名时，可在同一 binary、env、账号目录和剩余超时
+  预算内读取一次 `auth status --text`，仅在邮箱与组织匹配时补充 `planDisplayName`；文本不作为
+  登录或权限依据，失败仍保留 JSON 登录态，不读取原始 profile／凭证文件。
+  凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
   Cindy 不读取、不复制、不刷新它。默认账号的会话与登录检查不设 `CLAUDE_CONFIG_DIR`
   （dev 多实例的默认账号也一样），确保仍能看到终端已有登录。
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
@@ -346,6 +346,7 @@ relay 原有 60 秒主动续期节流保持不变。
 | 浏览器大结果补读 | MCP 工具会话内存中保留最近四份原始 JSON，每份最多 200 万字符；不落盘、不上传，关闭会话后释放。`readResult` 只能读当前会话生成的引用，沿用原页面实际 profile 的代输入读取限制；切换后端、stop 或读取受保护页面时清除。工具复用宿主现有生命周期与后端对象引用，在下一次访问及异步预检后核对，包括设置/其它任务切换、切走再切回和嵌入后端恢复；切换中的动作仍报告真实结果，但不缓存原文或保存试跑凭证。超过上限明确截断，不能声称完整原文已保存。 |
 | 自建中转服务（Desktop） | `owners/<owner-key>/device-link-relay/`：`config.json` 只存选择、本机中转设置与服务器部署记录（地址、中转 ID、主人公钥，不含秘密）；`secrets/<中转ID>.enc` 是本机在该中转上的设备凭证与 Ed25519 签名私钥（本机当主人时即主人密钥），经 safeStorage 加密，Linux 只有 basic_text 时拒绝保存；第 1 版的 `credential.enc` / `owner-credential.enc` 读到旧配置时删除；`host/` 是本机运行中转时的数据（`relay-state.json` 只存各设备凭证的 SHA-256 与档案，0600 原子写入；`media/` 为设备间中转的文件，创建 24 小时后清理）。全部按账号隔离，账号作用域未提交时不读写。见 `device-link/selfHostedRelayConfig.ts`、`packages/device-link-relay` 与 [方案](../self-hosted-relay-plan.md) |
 | 自动化任务 Webhook | `owners/<账号>/schedule-webhooks/`：`state.json` 存本机端口、排队事件所属的本机路由 ID、固定元数据和 24 小时投递回执，不含请求正文和密钥；`secrets/<路由 ID>.enc` 存开发版本机入口的 safeStorage 加密签名密钥；`remote-identities.json` 只存任务 ID 与本机触发路由 ID 的对应关系，不含云端 URL 或密钥，创建请求前落盘、云端删除确认后清除，离线关闭时保留以防重启复用旧地址。宿主创建时固定账号目录，队列、身份与密钥的读写及清理始终使用该目录，停止后的迟到操作不得改用新账号目录。均为 0600 原子写入；触发条件关闭或任务删除时清理本机队列与密钥，启动时补清孤儿文件。加密不可用时生成密钥明确报错，不回退明文；启动不访问钥匙串，首个事件才解密。见 `scheduler-host/webhook/index.ts` 与 `__tests__/host.test.ts` |
+| macOS 桌面小组件数据 | `~/Library/Application Support/<应用 bundle id>/Widgets/usage-widget-snapshot.json`，Desktop 主进程在桌面上放了 Cindy 小组件时写入，内容与手机组件读到的快照相同（订阅余量与每日用量，不含凭证），原子替换写入、权限 0600。桌面小组件扩展的沙盒只开放这一目录、只读（`native/desktop-widgets/build.mjs` 按 bundle id 生成路径与 entitlements）。退出登录后写成空状态，不再保留上一个账号的读数；App 卸载不会自动删除。见 `apps/desktop/src/main/quota-overview/desktopWidgets.ts` |
 | Mobile 登录凭证 | `expo-secure-store` 的 `cindy.mobile.auth.session.v1`（当前登录的 refresh token 与区域）和 `cindy.mobile.auth.accounts.v1`（已存账号的凭证）。iOS 钥匙串档位为「开机后首次解锁起可读写」（`AFTER_FIRST_UNLOCK`）：用户在锁屏通知或 Apple Watch 上点了按钮，App 要在后台续期登录才能把结果送到电脑，见[通知上的按钮](../product-rules/notification-actions.md)。两项必须同档——续期同时读写二者，只改一项会在锁屏时提前失败。已有条目在下一次写入时改档，不做单独迁移；其余钥匙串条目（设备 ID、设备身份、中转与 Agent 网络密钥等）保持「解锁时可读」。App 在锁屏状态下被系统从后台拉起时不读写、不清理任何凭证（`lockedLaunchGate.ts`）。锁屏时读不到这两项不算退出登录：续期报 `AUTH_STORAGE_LOCKED`，调用方按可重试失败处理，不清本机数据。见 `apps/mobile/src/auth/secureStorage.ts` |
 | 模型组 | `owners/<账号>/model-groups.json` 只存用户建的路线与模式（名字、引用的供应商连接 ID 与模型、选法、例外），全部删除即删文件；`owners/<账号>/model-group-decisions.json` 存最近 50 次选择（组名、模型、来源、推理强度、原因、当时的配额与时间），不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/store.ts`、`decisionLog.ts`。 |
 | 模型组任务记录 | `owners/<账号>/model-group-session-bindings.json` 按任务 id 记这个任务来自哪条路线或模式（组的 id）以及正在用的候选（引擎 + 供应商连接 ID + 模型），最多保留最新 2000 条；撞配额时据此提议换来源。不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/sessionBindings.ts`。 |

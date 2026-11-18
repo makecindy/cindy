@@ -5256,6 +5256,26 @@ describe('官方 bot ack 表情(msg.op)', () => {
     expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']);
   });
 
+  // 线上飞书每轮日志都有 `:ack` / `:processing-fallback` / `:final failed: UNSUPPORTED_PARAMETERS`:
+  // 飞书服务端也宣告 msg-op-v1(用于电脑排版的进度与终稿), 但表情由它自己打、不接桌面端的 react。
+  it('飞书任务不发表情操作 —— 只有官方 Telegram 服务端执行它们', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.setEmojiReactionsMode('minimal');
+
+    d.handleDispatch('conn-1', dispatch({
+      externalKey: 'feishu:dm:app:ou_user:g1',
+      source: { im: 'feishu', triggerMessageId: 'om_trigger' },
+    }), c.send);
+    await tick();
+
+    expect(c.last('task.ack')?.payload).toMatchObject({ result: 'accepted' });
+    expect(c.sent.filter((m) => m.type === 'msg.op'
+      && (m.payload as { action: { kind?: string } }).action.kind === 'react')).toEqual([]);
+  });
+
   it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });

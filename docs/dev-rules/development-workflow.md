@@ -2,7 +2,10 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：在 Cindy 内嵌的 worktree 会话里工作、准备提交或直推、做 code review，
-> 或决定开发中得到的知识该写到哪里、整理与迁移规则文档之前
+> 或决定开发中得到的知识该写到哪里、新增规则文档、整理与迁移规则文档之前
+> **适用路径**：`AGENTS.md`、`{apps,packages}/**/AGENTS.md`、`REVIEW.md`、`CONTRIBUTING*.md`、
+> `docs/dev-rules/**`、`docs/product-rules/**`、`docs/design-rules/**`、`scripts/rule-index.mjs`、
+> `scripts/check-dco.mjs`、`.githooks/**`、`.github/PULL_REQUEST_TEMPLATE.md`
 
 本文是仓库交付约定的正本，维护 worktree 会话契约、DCO、提交验证、直推 `main` 的
 额外门禁、review 严重度口径、项目知识归属与文档整理原则；根 [AGENTS.md](../../AGENTS.md)
@@ -198,7 +201,7 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 | 信息 | 维护位置 |
 | --- | --- |
 | 实现约束、固定输入、自动判定 | 代码、配置与测试；能机判的同时落到 lint、测试或契约脚本 |
-| 工程规则、环境与工具链的坑、排错结论 | `docs/dev-rules/` 对应专题；单模块的放嵌套 `AGENTS.md`；根 `AGENTS.md` 只留触发条件 |
+| 工程规则、环境与工具链的坑、排错结论 | `docs/dev-rules/` 对应专题；单模块的放嵌套 `AGENTS.md`；何时要读写在专题自己的开头（见下），不往根 `AGENTS.md` 登记 |
 | 产品行为裁决与理由 | `docs/product-rules/` 对应专题；跨专题的放 `core-product-principles.md` |
 | 视觉、交互裁决与理由 | `docs/design-rules/`；带日期的取舍记进 `design-decision-log.md` |
 | 已发生的回归、复现与验证证据 | 对应测试；任务体验类归 `docs/dev-rules/session-regressions.md`；大图和录屏挂到 issue 或 PR |
@@ -211,6 +214,31 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 
 本节回答「写到哪里」，不新增「每个 PR 都要写文档」的义务：是否需要回写仍按第 3 节「核对受影响
 的文档」「经验回写到已有依据」判断。
+
+### 规则文档声明何时要读
+
+一份规则在什么情况下必须先读，写在它自己开头的引用块里，不登记到别处：
+
+```markdown
+> **读取时机**：修改客户端自动更新链路之前
+> **适用路径**：`apps/desktop/src/main/updateService.ts`、`apps/desktop/cindy-updater/**`
+```
+
+- 「适用路径」写仓库相对路径通配（`**` 跨目录，`*` 不跨目录，`{a,b}` 多选一，目录要写
+  `/**`），覆盖这项功能在 Desktop、Mobile、共享 package 与 Host 的实际位置。只写「改到这里
+  多半需要这份规则」的路径；通配过宽会让每个改动都被提示，提示就没人看了。
+- 没有任何路径能判定的规则（原则、命名、流程）写 `> **适用路径**：按主题`。
+- 根条目里原有而正文没有的硬约束，写成 `> **要点**：…` 留在同一个引用块里。
+
+[规则索引](rule-index.md) 由 `pnpm rules:index` 从这些声明生成，不手改。动手前按要改的路径
+查索引或运行 `pnpm rules:for <路径…>`，提交前运行 `pnpm rules:changed`；自动审阅同样据此
+确定对照哪些规则（[REVIEW.md](../../REVIEW.md)）。`pnpm check:dev-docs` 核对：有读取时机的
+文档都声明了适用路径、每条路径仍匹配现存文件、索引是最新的。实现见
+[`scripts/rule-index.mjs`](../../scripts/rule-index.mjs)。
+
+起因（2026-11-17）：触发条件原先都登记在根 `AGENTS.md`，每个任务都要读完 58 条，条目多了
+反而被忽略——更新器那条一直在上下文里，#10938 仍未经确认就改了更新链路，靠独立审查才发现；
+按改动路径提示则不依赖记住全部条目。
 
 ## 5. 文档的信息与组织
 
@@ -226,4 +254,7 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 标注，不为迁就现状改写承诺。
 
 根 `AGENTS.md` 每个任务都会完整加载。一句话放进去要同时满足：影响大多数任务；在知道该读
-哪份专题之前就需要；链接不能替代。其余放对应正文，根文件只留触发条件与硬约束。
+哪份专题之前就需要；链接不能替代。其余放对应正文，根文件只留满足这三条的条目与硬约束。
+`pnpm check:dev-docs` 限制它的条目数和字节数：超出时把内容移进专题，不调高上限。
+（2026-11-17：它曾有 58 条「改 X 前先读 Y」、24 KB，多数只关系到很少的任务；Codex 只读入
+说明文件的前 32 KiB，继续增长会让排在后面的规则读不到。）

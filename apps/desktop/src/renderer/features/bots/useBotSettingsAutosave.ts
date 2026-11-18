@@ -54,6 +54,8 @@ export interface BotSettingsAutosaveController {
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
   hasPendingModelSelection: () => boolean;
+  /** Only after the user explicitly discards unsaved changes. Prevent unmount flush. */
+  discard: () => void;
   /** 挂到文本框上:输入法组合中的拼音不是已完成的编辑,上屏后再进入防抖。 */
   composition: {
     onCompositionStart: () => void;
@@ -168,5 +170,12 @@ export function useBotSettingsAutosave(
 
   const isDirty = useCallback(() => enabledRef.current && autosave.isDirty(), [autosave]);
 
-  return { status, errorKey, onEdit, flush, retry, isDirty, hasPendingModelSelection: autosave.hasPendingModelSelection, composition };
+  const discard = useCallback(() => {
+    autosave.discard();
+    payloadRef.current = baselineRef.current;
+    committablePayloadRef.current = baselineRef.current;
+    handleStatus('idle');
+  }, [autosave, baselineRef, handleStatus]);
+
+  return { status, errorKey, onEdit, flush, retry, isDirty, discard, hasPendingModelSelection: autosave.hasPendingModelSelection, composition };
 }

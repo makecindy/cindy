@@ -179,3 +179,18 @@ describe('collectHomePriorityContext', () => {
     expect(naturalPriorityRankForId('both', ctx)).toBe(LIVE_TASK_PRIORITY.running);
   });
 });
+
+describe('collectHomePriorityContext · automation groups', () => {
+  it('lifts a member run that is unread or waiting onto the group representative', () => {
+    const run = (id: string, extra: Partial<RemoteSessionListItem> = {}) => ({
+      session: { id }, pendingInteractionCount: 0, ...extra,
+    }) as unknown as RemoteSessionListItem;
+    const oldUnread = run('old', { liveActivity: { attention: true, phase: 'completed' } as never });
+    const latestRead = run('latest');
+    const group = { ...latestRead, automationGroup: { items: [latestRead, oldUnread] } } as unknown as RemoteSessionListItem;
+    const ctx = collectHomePriorityContext([group], new Set(), createViewedPriorityHoldState());
+    expect(ctx.unreadSessionIds.has('latest')).toBe(true);
+    const waitingGroup = { ...latestRead, automationGroup: { items: [latestRead, run('w', { pendingInteractionCount: 1 })] } } as unknown as RemoteSessionListItem;
+    expect(collectHomePriorityContext([waitingGroup], new Set(), createViewedPriorityHoldState()).waitingSessionIds.has('latest')).toBe(true);
+  });
+});

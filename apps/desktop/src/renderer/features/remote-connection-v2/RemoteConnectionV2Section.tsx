@@ -117,6 +117,7 @@ export function RemoteConnectionV2Section({
         devices: s.devices ?? [],
         links: peerLinks.links,
         relayRttMs: peerLinks.relayRttMs,
+        relayProtocol: peerLinks.relayProtocol,
         relayName,
         selfHosted: relay.state?.mode === 'self-hosted',
         controlledBy: s.controlledBy.map((c) => c.deviceId),

@@ -33,7 +33,17 @@ import {
 import { PlatformGlyph } from './PlatformGlyph';
 import type { TopologyModel, TopologyNode } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
-import { flowLabel, formatRtt, pathLabel, platformLabel, protocolKind, protocolLabel, relativeTime } from './topologyPresentation';
+import {
+  flowLabel,
+  formatRtt,
+  pathLabel,
+  platformLabel,
+  protocolKind,
+  protocolKindLabel,
+  protocolLabel,
+  relativeTime,
+  selfProtocolKind,
+} from './topologyPresentation';
 
 /** 卡片里的「路径」只写怎么连;要处理的原因写在「状态」里。 */
 function routeOf(node: TopologyNode): TopologyNode {
@@ -365,6 +375,9 @@ export function HubNodePopover({
   standby: boolean;
 }) {
   const { t } = useTranslation();
+  // 这台电脑用的连接方式单独一行，与拓扑里名字下面同一个图标 + 名称(用户要求 2026-11-18)。
+  const kind = selfProtocolKind(model, linkStatus);
+  const protocol = protocolKindLabel(kind, t);
   return (
     <div className="flex flex-col gap-3">
       <Heading
@@ -374,6 +387,11 @@ export function HubNodePopover({
         isMobile={false}
       />
       <div className="flex flex-col gap-1.5">
+        {kind && protocol ? (
+          <Row label={t('settings.remoteControl.v2.popover.protocol')} value={protocol}>
+            <ProtocolMark kind={kind} label={protocol} className="justify-end" />
+          </Row>
+        ) : null}
         <Row
           label={t('settings.remoteControl.v2.popover.linkStatus', { name: model.relay.name })}
           value={

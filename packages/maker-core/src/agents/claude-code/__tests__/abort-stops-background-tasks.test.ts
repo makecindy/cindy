@@ -460,6 +460,42 @@ function wrapInSession(handle: AgentSessionHandle): Session {
   });
 }
 
+// #11042, unit: feed real Claude adapter events through Session. Earlier tests
+// verified Stop/task snapshots, but never attempted automatic idle teardown.
+describe('background work survives automatic idle teardown', () => {
+  it.each(['local_bash', 'local_agent'] as const)('keeps %s alive until its result is delivered', async (taskType) => {
+    const { handle, stream, fakeQuery } = await startSessionWithStream(undefined, { autoCollect: false });
+    const session = wrapInSession(handle);
+    const controller = sdkMock.query.mock.calls.at(-1)?.[0].options.abortController as AbortController;
+    const seen: AgentEvent[] = [];
+    session.onEvent(event => seen.push(event));
+    try {
+      await session.send('run background work');
+      stream.emit(taskStarted('job', taskType));
+      stream.emit(turnResult('started'));
+      await waitFor(() => seen.some(event => event.type === 'done'), 'foreground result');
+      await expect(session.closeIfIdle()).resolves.toBe(false);
+      expect(fakeQuery.close).not.toHaveBeenCalled();
+      expect(controller.signal.aborted).toBe(false);
+      stream.emit(taskNotification('job', 'completed'));
+      await waitFor(() => session.listBackgroundTasks().length === 0, 'background completion');
+      if (taskType === 'local_agent') {
+        await expect(session.closeIfIdle()).resolves.toBe(false);
+        expect(session.countPendingWakeContinuations()).toBeGreaterThan(0);
+      }
+      stream.emit(assistantText('background result delivered'));
+      stream.emit(turnResult('complete'));
+      await waitFor(() => seen.filter(event => event.type === 'done').length === 2, 'result delivered');
+      await expect(session.closeIfIdle()).resolves.toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+      expect(session.getStatus()).toBe('closed');
+    } finally {
+      stream.end();
+      await session.close();
+    }
+  });
+});
+
 afterEach(async () => {
   asyncQueueMock.rejectNextDone = false;
   sdkMock.forkSession.mockReset();
@@ -705,6 +741,8 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     try {
       const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 
+      const cancelled = vi.fn();
+      handle.onTurnContinuationChange?.(cancelled);
       await handle.send({ type: 'user', content: 'spawn background work' });
       stream.emit(taskStarted('task-agent', 'local_agent'));
       await vi.advanceTimersByTimeAsync(0);
@@ -729,12 +767,48 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
           (event) => event.type === 'done' && event.turnContinuationId === undefined,
         )?.data,
       ).toMatchObject({ reason: 'turn_continuation_cancelled' });
+      // #10547: preserve the specific cause across the production callback.
+      expect(cancelled).toHaveBeenCalledWith(continuationId, 'cancelled', 'wake_contract_unfulfilled');
       expect(handle.beginTurnContinuationWait?.(continuationId)).toBeNull();
       expect(handle.isTurnRunning?.()).toBe(false);
       // 对账不是用户 Stop:不得触碰 stopTask / interrupt。
       expect(fakeQuery.stopTask).not.toHaveBeenCalled();
       expect(fakeQuery.interrupt).not.toHaveBeenCalled();
 
+      stream.end();
+      await handle.close().catch(() => undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains the cancellation cause until the queued parent boundary is acknowledged (#10547)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { handle, stream } = await startSessionWithStream(undefined, { autoCollect: false });
+      const changed = vi.fn();
+      handle.onTurnContinuationChange?.(changed);
+      await handle.send({ type: 'user', content: 'spawn background work' });
+      stream.emit(taskStarted('task-agent', 'local_agent'));
+      stream.emit(turnResult('waiting'));
+      stream.emit(taskNotification('task-agent', 'completed'));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(WAKE_CONTRACT_GRACE_MS);
+      const id = changed.mock.calls[0]?.[0] as number;
+      expect(id).toBeTypeOf('number');
+      expect(handle.beginTurnContinuationWait?.(id)).toBe('cancelled');
+      expect(handle.getTurnContinuationCancellationReason?.(id)).toBe('wake_contract_unfulfilled');
+      expect(handle.getTurnContinuationCancellationReason?.(id + 1)).toBeUndefined();
+      const iterator = handle.events()[Symbol.asyncIterator]();
+      for (;;) {
+        const item = await iterator.next();
+        if (item.done) throw new Error('missing parent boundary');
+        if (item.value.type === 'done' && item.value.turnContinuationId === id) break;
+      }
+      // Yielding to Session does not release accounting until its next read.
+      expect(handle.getTurnContinuationCancellationReason?.(id)).toBe('wake_contract_unfulfilled');
+      await iterator.next();
+      expect(handle.getTurnContinuationCancellationReason?.(id)).toBeUndefined();
       stream.end();
       await handle.close().catch(() => undefined);
     } finally {

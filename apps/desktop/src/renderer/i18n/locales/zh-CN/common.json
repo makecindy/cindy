@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",
+    "nativeHooksUnsupported": "工具钩子仅支持本机 Claude Code 和 Pi。",
     "title": "任务插件",
     "description": "为这个任务选择插件。修改从下一条消息起生效。",
     "unsupported": "每次请求前处理仅支持本机 Pi，当前任务的引擎不支持。",
@@ -1320,17 +1321,17 @@
       "install": {
         "title": "需要安装「{{plugin}}」插件",
         "body": "这个任务在另一台电脑上开着 {{device}}。在这台电脑上安装「{{plugin}}」插件后，就能在右侧栏查看和操作它。",
-        "action": "去安装"
+        "action": "安装"
       },
       "enable": {
         "title": "需要开启「{{plugin}}」插件",
         "body": "这个任务在另一台电脑上开着 {{device}}。在这台电脑上开启「{{plugin}}」插件后，就能在右侧栏查看和操作它。",
-        "action": "去开启"
+        "action": "开启"
       },
       "update": {
         "title": "需要更新「{{plugin}}」插件",
         "body": "这个任务在另一台电脑上开着 {{device}}。把这台电脑上的「{{plugin}}」插件更新到新版本后，就能在右侧栏查看和操作它。",
-        "action": "去更新"
+        "action": "更新"
       }
     },
     "lockOnExitHintPrivacy": "退出远程桌面后盖上隐私屏，AI 可以继续工作；有人碰电脑就会锁屏。",
@@ -1361,7 +1362,7 @@
     "REMOTE_PROVIDER_UPDATING": "供应商凭证正在更新，请稍后重试",
     "REMOTE_PROVIDER_UNSUPPORTED": "该供应商不支持 SSH 远程任务，请更换来源",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "远程任务不能使用 Claude 订阅，请选择网关或 API Key 模型",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目标设备长时间无响应，请检查远程设备后重试",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "暂时收不到目标设备的回应，可能是网络较慢或设备繁忙。Cindy 会自动持续检测，连接恢复后再试",
     "INTERNAL": "操作失败，请稍后重试。",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "SSH 配置已在磁盘上发生变化，请重新加载后再试。",
     "SSH_CONFIG_RELOAD_REQUIRED": "SSH 配置已保存，但 Cindy 刷新失败。请重新加载 SSH 配置。",
@@ -4302,7 +4303,6 @@
           "label": "在哪台电脑运行",
           "optionLocal": "这台电脑",
           "notSignedIn": "未登录",
-          "autoBorrowing": "这台电脑还没登录，新任务在 {{device}} 上运行，不用再登录。",
           "local": "新任务在这台电脑运行。也可以改选你另一台已登录的电脑。",
           "pinned": "新任务在 {{device}} 上运行，用那台电脑的登录。已在运行的任务不受影响。",
           "inline": "运行于",
@@ -5475,6 +5475,13 @@
       },
       "toggleAria": "切换提问导航条"
     },
+    "worktreeModelNaming": {
+      "cell": {
+        "label": "用模型给 worktree 取名",
+        "description": "新建任务的 worktree 会按第一条消息起一个英文短名（如 fix-login-timeout），文件夹和分支一眼就能看出用途。由辅助模型生成，取名失败时仍用随机名；只影响之后新建的 worktree。"
+      },
+      "toggleAria": "切换用模型给 worktree 取名"
+    },
     "promptRecommendation": {
       "label": "输入建议",
       "description": "回复后建议下一句，按 Tab 填入",
@@ -6440,7 +6447,8 @@
           "defaultProjectTag": "默认",
           "defaultProjectFullAccessWarning": "默认项目「{{name}}」的权限是完全访问：任何群里 @ 机器人，都会以完全访问在它里面执行。",
           "sharedSettingsPointer": "项目、模型与权限由所有官方机器人共用。",
-          "sharedSettingsPointerAction": "去设置"
+          "sharedSettingsPointerAction": "去设置",
+          "workspacesCardDescriptionWithPlugins": "官方机器人和 IM 插件共用这一份。项目来自侧栏，新建、改名或移除请在侧栏操作；在 IM 里用 /model 改，这里也会跟着变。插件里给群聊或私聊单独改过的模型和权限不受影响。"
         },
         "binding": {
           "copyLink": "复制链接",
@@ -6749,6 +6757,7 @@
           "latency": "延迟",
           "lastSeen": "最后在线",
           "controlling": "正在控制这台电脑",
+          "protocol": "连接方式",
           "rttNote": "最近测得",
           "manage": "管理设备…",
           "linkStatus": "与「{{name}}」",
@@ -6916,7 +6925,8 @@
         "replaced": "连接已被本设备上的另一个实例取代",
         "too-many-connections": "同账号连接数已达上限",
         "version-mismatch": "协议版本不一致，请升级应用",
-        "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy"
+        "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy",
+        "agent-net-relay-down": "连不上 Agent-Net 中转，正在重连；已直连的电脑照常可用，其他设备暂时连不上"
       },
       "refresh": "刷新",
       "empty": "暂无其它设备。在另一台电脑上用同一账号登录 {{appName}} 后，这里会显示该设备。",
@@ -6972,11 +6982,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "官方",
-        "personal": "个人"
+        "personal": "个人",
+        "plugins": "插件"
       },
       "tips": {
         "cindy": "由 Cindy 提供并维护。无需自行创建机器人或准备凭证，按引导连接后即可使用。",
-        "personal": "使用你自己的账号或机器人，由你提供并管理所需凭证；每个渠道的账号、权限和设置独立保存。"
+        "personal": "使用你自己的账号或机器人，由你提供并管理所需凭证；每个渠道的账号、权限和设置独立保存。",
+        "plugins": "由已安装的插件提供的 IM 入口。登录和绑定在插件页面完成；项目、模型与权限默认使用「项目与模型」里的设置，也可以在插件里给每个群聊或私聊单独修改。"
       },
       "defaults": {
         "title": "新对话配置",
@@ -7008,6 +7020,10 @@
         },
         "groupPermissionLabel": "群聊新建任务权限档",
         "groupPermissionDescription": "群里新建任务时统一使用的权限模式（@bot 开话题、/new、/ctr 都算），默认「自动审批」；上面那个权限模式只管私聊。群上下文里有成员可控的内容，设成「完全访问」后将直接执行、不再逐条确认，请确认群里的人都可信。改动只影响之后新建的任务，已有任务在群里用 /permission 单独切换。"
+      },
+      "plugins": {
+        "rowHint": "登录、绑定和每个群聊、私聊的单独设置都在插件页面里。",
+        "open": "打开插件"
       }
     },
     "shortcuts": {
@@ -8177,8 +8193,8 @@
         "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
-        "hostTools_usage": "读取订阅用量",
-        "hostTools_usageDetail": "读取当前 Cindy 账号在这台电脑上已连接的 Claude 和 Codex 账号标识、套餐、配额窗口及更新时间。不能读取邮箱、凭证、文件或其他电脑的数据，也不能修改账号",
+        "hostTools_usage": "读取用量与供应商组状态",
+        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "通过 Cindy 的设置工具读取和修改应用配置；不返回密钥，不代替你完成保密输入。",
         "hostTools_scheduler": "自动化管理",
@@ -8206,6 +8222,8 @@
         "hostTools_terminalDetail": "在这台电脑上以你的用户身份启动命令和交互终端，读取输出、输入和停止本插件的进程。命令可访问你的文件和应用。",
         "agentHiddenTasks": "可创建不显示在任务列表里的后台任务",
         "agentHiddenTasksDetail": "本插件创建的任务可以不出现在任务列表、搜索和通知里。你可以随时在插件详情的「后台任务」中查看、打开，或显示到任务列表；卸载插件时这些任务会恢复显示。",
+        "agentModelPreferences": "读取并修改你的模型收藏，读取你最近使用的模型",
+        "agentModelPreferencesDetail": "可读取这台电脑上的模型收藏和最近使用的模型（含推理强度与 Fast 设置），并添加、修改或移除收藏，改动会同步显示在 Cindy 的模型选择器里。在插件里选择的模型不会记入最近使用。不包含你其他电脑上或别人分享给你的模型，也不提供任何凭证。",
         "agentErrand": "可以新建任务、执行工作并读取结果",
         "agentErrandDetail": "创建的任务会出现在 Cindy 的任务列表中，可以查看过程并继续交流。",
         "agentSchedule": "可以请你新建自动化",
@@ -8234,6 +8252,8 @@
         "subscribeTopics": "旁听你的任务动态(每轮往来与任务事件，不含消息内容)",
         "subscribeMessage": "消息内容事件",
         "subscribeMessageDetail": "接收已保存的用户消息和 AI 回复；附件通过单独的读取与交接获取。",
+        "subscribeToolExecution": "工具执行过程",
+        "subscribeToolExecutionDetail": "接收工具名称、输入、结果与错误；只旁听，不改变执行。",
         "subscribeTaskState": "任务状态事件",
         "subscribeTaskStateDetail": "接收任务的运行、等待、完成、归档与隐藏状态变化。",
         "subscribeActivity": "旁听 AI 何时在思考、何时在等你",
@@ -8256,6 +8276,10 @@
         "subscribeStartTurnDetail": "仅在你为任务选择此插件时，读取本条消息并选择已连接的模型、推理强度及 Fast。出错按该任务的设置处理，不能替你批准操作。",
         "subscribeModelRequest": "可在选定任务中处理每次模型请求",
         "subscribeModelRequestDetail": "仅在你为任务选择此插件时，读取并处理发送给模型的请求内容，调整模型和参数。目前仅支持本机 Pi；出错按任务设置处理，不包含连接凭证。",
+        "subscribeToolCall": "可处理所选任务的工具调用",
+        "subscribeToolCallDetail": "可读取、修改或拒绝工具参数，实际支持随引擎而异；不能替你批准操作。",
+        "subscribeToolResult": "可处理所选任务的工具结果",
+        "subscribeToolResultDetail": "可读取结果，按引擎能力补充上下文或改写结果；不会撤销已执行的操作。",
         "subscribeStartTask": "可为新任务选模型",
         "subscribeStartTaskDetail": "新任务选了它提供的模型时，它会看第一条消息，从你已连接的模型里选一个。这个节点只在第一条消息发出前运行一次。",
         "card": "渲染消息卡片",
@@ -8368,6 +8392,7 @@
             "contentStyle": "修改消息间距和气泡样式"
           },
           "positions": {
+            "composer_header": "输入框上方",
             "composer_toolbar": "输入框工具栏",
             "session_header": "任务标题栏",
             "statusbar": "状态栏",
@@ -10827,7 +10852,12 @@
       "summary": "自我介绍",
       "summaryPlaceholder": "例如：一个热爱写网文的小说家，有点幽默，喜欢琢磨人物的小心思。",
       "avatarSelectionFailed": "头像未能读取，请选择 5 MB 以内的 PNG、JPEG 或 WebP 图片",
-      "personality": "性格与说话习惯"
+      "personality": "性格与说话习惯",
+      "sourceLength": "{{length}} / {{limit}} 个 UTF-16 单元（不计首尾空白）。",
+      "sourceExcess": "超出 {{excess}} 个单元，缩短后才能保存。",
+      "sourceTooLong": "资料过长，修改后才能保存。",
+      "sourceRecovery": "已保存的原文不变，完整草稿仍保留在此页。复制后，请先粘贴到安全的地方并核对内容完整，再缩短内容或放弃本次更改。",
+      "sourceCopy": "复制完整内容"
     },
     "nameLabel": "怎么称呼",
     "close": "关闭",
@@ -11178,6 +11208,7 @@
       "unavailableTitle": "这个群聊已不可用",
       "unavailableDescription": "它可能已被删除。返回伙伴页可以打开其他群聊和伙伴。",
       "sidebar": {
+        "threadReply": "话题回复",
         "title": "群聊",
         "empty": "还没有消息",
         "preview": "{{name}}：{{text}}",
@@ -11510,6 +11541,7 @@
           "sharedReplyFrom": "贴回了 {{name}} 的话题回复",
           "sharedReply": "贴回了一条话题回复",
           "edited": "已编辑",
+          "replyNotFound": "未找到这条回复。",
           "sourceUnavailable": "原回复已删除，或你无权查看。",
           "viewThread": "查看话题",
           "viewInMain": "在群聊中查看",
@@ -12527,6 +12559,7 @@
       "createOwnApp": "创建我的 App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ 有 {{count}} 个附件未能发送：{{names}}",
+    "outboundAttachmentOverLimit": "{{name}}（超过 {{limit}} MB 上限）",
     "unnamedAttachment": "未命名附件",
     "text": {
       "discord": {
@@ -12908,7 +12941,7 @@
           "reasoningDominated": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
           "generic": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
           "join": "{{usage}}{{guidance}}",
-          "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。"
+          "silentStopExhausted": "检测到空响应，自动续跑已暂停。"
         },
         "permission": {
           "autoReviewUnavailable": "自动审批没完成，请确认要不要允许这次操作。",
@@ -13465,9 +13498,17 @@
         "submitLabel": "提交答案",
         "multiSelectHint": "（可多选）",
         "resolved": "✅ 已选：{{option}}",
+        "resolvedLabeled": "✅ {{label}}：{{option}}",
         "expired": "卡片已过期",
         "textHint": "仅提问者可作答。回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。",
-        "replyHint": "仅提问者可作答。点击选项；多题或多选选好后提交。\n回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。"
+        "replyHint": "仅提问者可作答。点击选项；多题或多选选好后提交。\n回复 {{code}} 加答案；多题用“{{code}} 2：答案”，填好后回复 {{code}} OK 提交。",
+        "nextLabel": "下一题",
+        "stepHint": "仅提问者可作答。点击选项即可作答，也可回复 {{code}} 加文字答案。",
+        "stepSubmitHint": "仅提问者可作答。选好后点“{{action}}”；也可回复 {{code}} 加文字答案，再回复 {{code}} OK。",
+        "stepTextHint": "仅提问者可作答。回复 {{code}} 加你的答案。",
+        "unanswered": "⚠️ 第 {{numbers}} 题还没有作答，全部答完后再提交。",
+        "unansweredSingle": "⚠️ 还没有作答，请先选择或填写答案。",
+        "numberSeparator": "、"
       }
     }
   },
@@ -13659,12 +13700,6 @@
         "TARGET_UNAVAILABLE": "插件已停用、卸载或不可用，请检查插件状态后重试。",
         "ASSESSMENT_FAILED": "暂时无法刷新配置状态，请重试。",
         "TIMEOUT": "等待设置超时，请重试。"
-      },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI 模型服务",
-          "description": "使用插件声明的图片或视频能力前，需要先连接可用的模型服务"
-        }
       },
       "form": {
         "placeholder": "请输入{{label}}",
@@ -13965,6 +14000,14 @@
         "standard": "标准",
         "fast": "快速",
         "ultrafast": "超快"
+      },
+      "discoveredCopy": {
+        "title": "改用「{{device}}」上的 {{provider}}？",
+        "description": "{{unavailable}}确认后由「{{device}}」运行，之后随时可以在这里换回。",
+        "unavailableHere": "这台电脑上的 {{provider}} 现在用不了。",
+        "unavailableOn": "「{{device}}」上的 {{provider}} 现在用不了。",
+        "confirm": "改用",
+        "cancel": "保持不变"
       }
     },
     "permissionSelector": {
@@ -14255,7 +14298,8 @@
         "description": "原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
         "descriptionNativeHistory": "完整对话记录会复制过去接着用；如果恢复不了，会改用交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
         "confirm": "换电脑运行",
-        "cancel": "保持不变"
+        "cancel": "保持不变",
+        "discoveredDescription": "{{reason}}{{description}}"
       }
     },
     "agentSelect": {
@@ -14841,6 +14885,8 @@
       "failed": "图片生成失败，请重试"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "此任务已启用 cindy_helper，但目前不可用，任务结果可能无法回传。",
+      "codexHelperUnverified": "未能核实此任务的 cindy_helper 是否可用，任务结果可能无法回传。",
       "requestFormatError": "应用发送的请求格式有误，本次回复未能完成。",
       "replyFailed": "回复未完成",
       "retryTitle": "重新发送最后一条消息",
@@ -14963,6 +15009,7 @@
       "pluginDisabledUnnamed": "自动检查暂时受阻：需要的插件未启用，启用后自动恢复。",
       "installPlugin": "安装插件",
       "openPlugin": "查看插件",
+      "enablePlugin": "启用插件",
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {
@@ -15449,6 +15496,11 @@
       "openInSidebarFileBrowserOutsideWorkdir": "该文件不在当前任务工作目录内，无法在侧边栏文件浏览器中定位",
       "openInDefaultBrowser": "在浏览器中打开",
       "copyLink": "复制链接",
+      "addPrToHeader": "添加到顶栏",
+      "prAlreadyInHeader": "已在顶栏",
+      "prAddedToHeader": "已添加到顶栏，状态会跟着任务走",
+      "prAssociatedNotInHeader": "已关联，未在顶栏",
+      "prSavedNotInHeader": "已保存关联；顶栏前三条已满，可在任务顶栏的 PR 管理里固定它",
       "linkCopied": "链接已复制",
       "viewSourceFile": "查看源代码",
       "openInSidebarFailed": "在侧边栏浏览器中打开失败",
@@ -15621,6 +15673,16 @@
       "DEVICE_LINK_CONTROL_DISABLED": "已关闭对该设备的控制，消息未发送。",
       "DEVICE_LINK_MEDIA_TRANSFER_FAILED": "附件传输失败，消息未发送。请重试。",
       "MCP_APPROVAL_AUTO_BLOCKED": "这次工具调用被自动审批拦截，未收到你手动拒绝的记录。",
+      "MCP_APPROVAL_AUTO_BLOCKED_MISSING_EVIDENCE": "自动审批拦截了这次工具调用：缺少完整的操作信息。",
+      "MCP_APPROVAL_AUTO_BLOCKED_INSTRUCTIONS_CHANGED": "自动审批拦截了这次工具调用：你的指令已更改或尚未同步。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PERMISSIONS_CHANGED": "自动审批拦截了这次工具调用：目录权限已更改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_CHANGED": "自动审批拦截了这次工具调用：委派授权已更改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_AUTHORIZATION_INACTIVE": "自动审批拦截了这次工具调用：插件或任务的授权已失效。",
+      "MCP_APPROVAL_AUTO_BLOCKED_NO_USER_AUTHORIZATION": "自动审批拦截了这次工具调用：没有用户指令授权执行该操作。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_TOO_LARGE": "自动审批拦截了这次工具调用：工作计划超出支持的大小。",
+      "MCP_APPROVAL_AUTO_BLOCKED_PLAN_MISMATCH": "自动审批拦截了这次工具调用：执行的 Agent 与已登记的工作计划不符。",
+      "MCP_APPROVAL_AUTO_BLOCKED_WORKING_DIRECTORY_CHANGED": "自动审批拦截了这次工具调用：任务的工作目录已更改。",
+      "MCP_APPROVAL_AUTO_BLOCKED_DELEGATION_MISSING": "自动审批拦截了这次工具调用：委派任务的范围缺失或无效。",
       "MCP_APPROVAL_CONFIRMATION_TIMEOUT": "权限确认超时，未收到有效的确认结果。仅凭超时无法判断你是否点过按钮。",
       "MCP_APPROVAL_CONFIRMATION_UNAVAILABLE": "这次权限确认未完成，未收到你手动拒绝的记录。",
       "REMOTE_HOST_PROXY_FORWARD_UNAVAILABLE": "这个模型需要电脑端转发请求，当前远端连接还不能转发。请改用 Cindy AI，或在本机任务里使用这个模型。",
@@ -15900,6 +15962,7 @@
       "saveFailed": "保存上下文窗口档位失败"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "正在等待远端响应…",
       "readingMemory": "正在读取记忆…",
       "savingMemory": "正在保存记忆…",
       "deletingMemory": "正在删除记忆…",
@@ -15949,7 +16012,8 @@
         "replaced": "本机连接被另一处相同设备顶替，正在重新连接…",
         "too-many-connections": "同账号在线设备过多，连接被服务端拒绝",
         "version-mismatch": "与服务端协议版本不一致，请升级应用后重试",
-        "unstable": "本机连接反复断开又重连，远程操作可能一直超时；请检查网络，或重启 Cindy 后重试"
+        "unstable": "本机连接反复断开又重连，远程操作可能一直超时；请检查网络，或重启 Cindy 后重试",
+        "agent-net-relay-down": "本机连不上 Agent-Net 中转，正在重连；对方电脑不是直连时，远程操作会失败"
       }
     },
     "common": {
@@ -16170,7 +16234,8 @@
         "project": "项目",
         "flat": "平铺",
         "device": "设备",
-        "dialogue": "对话"
+        "dialogue": "对话",
+        "automation": "自动化"
       },
       "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
       "deviceGroup": {
@@ -16518,6 +16583,7 @@
       "groupSummary": {
         "project": "项目",
         "dialogue": "对话",
+        "automation": "自动化",
         "device": "设备"
       },
       "taskStatusHeading": "任务状态",
@@ -16740,6 +16806,7 @@
         "openInFileBrowser": "在文件浏览器查看",
         "showInFolder": "在文件夹中显示",
         "copyFilePath": "复制文件路径",
+        "copyFolderPath": "复制文件夹路径",
         "deleteFile": "删除文件"
       },
       "searchPanel": {
@@ -17213,7 +17280,9 @@
           "jira_read": "读取 Jira",
           "jira_comment": "评论 Jira",
           "sessions_dispatch": "派发任务",
-          "feishu_read": "读取飞书消息"
+          "feishu_read": "读取飞书消息",
+          "settings_read": "读取分享成员",
+          "usage_read": "读取用量与供应商组状态"
         },
         "project": "项目目录",
         "capabilitiesLabel": "允许调用的能力",
@@ -17225,7 +17294,9 @@
           "jira_read": "读取 Jira Issue（按 key 读取 / JQL 搜索）",
           "jira_comment": "向 Jira Issue 添加评论",
           "sessions_dispatch": "创建或唤醒 {{appName}} 任务并投递消息",
-          "feishu_read": "列出最近活跃的对话；拉取指定对话（群聊或单聊）的最近消息"
+          "feishu_read": "列出最近活跃的对话；拉取指定对话（群聊或单聊）的最近消息",
+          "settings_read": "读取自己分享的成员及模型范围，含同账号已授权电脑；不修改",
+          "usage_read": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置"
         },
         "capabilityWarn": {
           "ghostMissing": "依赖「{{name}}」插件，但该插件未安装——运行时此能力会失败",
@@ -18950,8 +19021,9 @@
       "steerFailed": "插话失败：{{message}}",
       "qrExpired": "二维码已过期，请重新开始",
       "registrationFailed": "创建失败，请稍后重试",
-      "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
+      "silentStopExhausted": "检测到空响应，自动续跑已暂停。",
       "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
+      "unexecutedToolMarkup": "模型把工具调用写成了文本，无法确认执行结果，本轮未完成。",
       "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。",
       "outputLimitReasoning": "思考已消耗本次输出的大部分预算，回复可能不完整。建议降低推理强度，或先压缩对话记录，再继续。",
       "outputLimitUsage": "本次模型请求已输出 {{outputTokens}} tokens，其中 {{reasoningTokens}} tokens 用于思考。",
@@ -19511,6 +19583,41 @@
       "notSupported": "当前账户暂不支持余额查询。",
       "unavailable": "暂时无法获取余额，请刷新后重试。"
     },
+    "giftCard": {
+      "action": "兑换礼品卡",
+      "title": "兑换礼品卡",
+      "inputLabel": "兑换码",
+      "inputHint": "输入 16 位兑换码，或粘贴礼品卡链接。",
+      "continue": "继续",
+      "confirmTitle": "领取这张礼品卡？",
+      "confirmAction": "确认领取",
+      "from": "来自 {{sender}}",
+      "cardLabel": "Cindy 礼品卡，{{amount}}",
+      "fields": {
+        "validity": "有效期",
+        "validityValue_other": "领取后 {{count}} 天",
+        "claimBy": "领取截止",
+        "destination": "存入"
+      },
+      "doneTitle": "{{amount}} 已到账",
+      "doneDescription": "已存入赠送余额，{{date}} 前有效。",
+      "doneDescriptionNoDate": "已存入赠送余额。",
+      "pendingTitle": "礼品卡已领取",
+      "pendingDescription": "{{amount}} 正在入账，稍后会出现在赠送余额中，无需再次领取。",
+      "alreadyYours": "你已经领取过这张礼品卡。",
+      "done": "完成",
+      "errors": {
+        "notFound": "兑换码无效，请检查后重试。",
+        "wrongRegionCn": "这张礼品卡属于 Cindy 中国大陆版，当前账号无法领取。",
+        "wrongRegionGlobal": "这张礼品卡属于 Cindy 国际版，当前账号无法领取。",
+        "alreadyClaimed": "这张礼品卡已被领取。",
+        "expired": "这张礼品卡已过领取期限。",
+        "voided": "这张礼品卡已作废。",
+        "rateLimited": "尝试次数过多，请稍后再试。",
+        "failed": "暂时无法兑换，请稍后重试。",
+        "personalRequired": "礼品卡仅限个人用户领取。"
+      }
+    },
     "usage": {
       "title": "余额用量",
       "observedAt": "余额更新于 {{date}}",
@@ -19526,6 +19633,7 @@
         "empty": "当前没有赠送记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
         "unnamed": "赠送余额",
+        "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原始金额",
         "used": "已用",
         "remaining": "剩余",
@@ -20876,7 +20984,7 @@
     "loadFailed": "应用加载失败。请检查连接后重新加载。",
     "updateRequired": "这台电脑暂不支持 MCP Apps，请更新电脑上的 Cindy 后再试。",
     "appName": "MCP App",
-    "cardTitle": "{{title}} · $t(mcpApps.appName)",
+    "cardTitle": "{{title}}",
     "messageSource": "由 $t(mcpApps.appName)「{{name}}」发送",
     "serverId": "MCP 服务器 ID：{{id}}",
     "exitFullscreen": "退出全屏",
@@ -20890,7 +20998,19 @@
     "pluginCspRejected": "页面申请了未声明的域名，已拒绝加载",
     "filesOnExecutionComputer": "文件内容请在执行电脑查看",
     "awaitingApproval": "等待你确认",
-    "pendingApprovals": "{{count}} 个待确认"
+    "pendingApprovals": "{{count}} 个待确认",
+    "source": {
+      "official": "Cindy 官方",
+      "organization": "组织 · {{namespace}}",
+      "market": "插件市场",
+      "third-party": "第三方来源",
+      "local": "本地安装",
+      "unknown": "来源未知"
+    },
+    "customMcp": "自定义 MCP",
+    "sourceLabel": "来源",
+    "signatureLabel": "签名",
+    "fullscreen": "全屏"
   },
   "richAnswer": {
     "invalidImageReference": "图片引用无效，无法显示。",
@@ -21476,6 +21596,7 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
+    "unreachable": "暂时连不上账号服务，无法确认登录状态。请检查网络后重试。",
     "openDirectory": "打开账号目录",
     "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
@@ -21755,6 +21876,19 @@
       "network": "连接中断，正在重试…",
       "timeout": "连接超时，正在重试…",
       "server": "服务器繁忙，正在重试…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "放宽权限？",
+    "message": "允许“{{name}}”让“{{conversation}}”在项目“{{project}}”里使用“{{mode}}”？",
+    "detail": "这比 IM 项目设置（{{projectMode}}）更宽。允许后，这个插件在这个项目里可以使用这一档权限，只影响插件自己的任务；之后可以在插件里改回跟随 IM。",
+    "groupWarning": "群里的消息其他成员也能发。权限越宽，需要你确认的操作越少，请确认群里的人都可信。",
+    "allow": "允许",
+    "cancel": "取消",
+    "modes": {
+      "ask": "默认权限",
+      "auto": "自动审批",
+      "bypassPermissions": "完全访问"
     }
   }
 }

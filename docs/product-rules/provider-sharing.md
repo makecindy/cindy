@@ -6,13 +6,26 @@
 > 客户端与服务端的工作拆分见 [`docs/provider-sharing-implementation-plan.md`](../provider-sharing-implementation-plan.md)。
 > 2026-10-27 新目标：跨账号分享经供应商组分配后，受邀者优先连接实际执行电脑，并以 30 分钟为
 > 离线授权上限；详见[受邀者与执行电脑直连](provider-sharing-direct-execution.md)。该目标未上线时仍按本文现行授权和中转规则运行。
-> 读取时机：新增或修改供应商分享、分享链接、分享申请与审批、分享管理页，或受邀者使用
-> 分享供应商的任何路径之前。
 > 分享出去的供应商建了[供应商组](provider-groups.md)时，§1 的运行位置、§7.2 管理页、§7.4 用量
 > 与 §9 安全不变量按该文调整：受邀者的任务按组分配与中转、运行中自动换电脑已实现（2026-10-10，P2b / P2c），
 > 按组的用量（§7.4）在 P3。§4.1 第 3 步的告知不论有没有组都已改用该文 §8 的说法（2026-10-10）。
 > 2026-10-15 用户要求：受邀者把分享来的供应商放进自己的供应商组再分享给第三人时，必须由原分享者逐人同意；原分享者
 > 删除对他的分享后，他与他分享的人都不再能用到它，见 §4.3、§9 第 8 条。
+> **读取时机**：新增或修改供应商分享、分享链接、分享申请与审批、分享管理页，或受邀者使用
+> 分享供应商的任何路径之前。
+> **适用路径**：`apps/desktop/src/renderer/features/provider-share/**`、
+> `apps/desktop/src/main/device-link/**/providerShare*`、`apps/desktop/src/shared/providerShare*`、
+> `apps/desktop/src/main/mcp-integrations/**/providerSharingTools*`、
+> `apps/desktop/src/main/remote-agent/controller/providerShareTaskLocation.ts`、
+> `apps/desktop/src/renderer/{state/providerShareFavorites.ts,__tests__/providerShareFavorites*}`、
+> `packages/device-link/src/**/providerShare*`、`packages/device-link-protocol/src/providerShare.ts`、
+> `packages/device-link-sharing/src/{providerShares,publicProviderPage}.ts`、
+> `apps/mobile/app/provider-share.tsx`、
+> `apps/mobile/src/**/{providerShare,remoteAgentCatalogsProviderShare}*`、
+> `apps/desktop/scripts/fixtures/{provider-share-insights,provider-share-sources}/**`、
+> `scripts/provider-share-direct-smoke.mjs`、
+> `apps/desktop/src/renderer/hooks/useProviderBorrow*`、`apps/desktop/src/renderer/components/settings/ProviderRunLocationRow*`、
+> `apps/desktop/src/main/device-link/**/remoteModelAccess*`
 
 ## 1. 定位
 
@@ -95,9 +108,23 @@
     本机供应商回到关闭，与 11-10 之前一样，组内要用它时在本机单独打开「允许被远程调用」。
 - **停用优先于远程授权**：本机「停用此供应商」保留凭证和共享设置，但同账号借用、分享与委派执行都不能绕过它。升级和共享迁移不修改本机停用选择；重新启用后仍按原远程授权判断。远程准入和后续请求在 `remoteModelAccess.ts` 共用此检查，已发出的请求不主动截断。订阅账号的暂停仍由账号分配与发送检查执行，不因共享开启而解除；首次配置账号池之前已启动的默认账号任务也须在下一次发送时检查暂停（`subscription-accounts/agent.ts`），不为此提前创建账号池或改写登录。
 - **同账号借用与「运行于」**：同一个供应商在本机与自己的其他电脑上都能用时，设置页与模型列表都只显示一项。
-  供应商详情标题下一行写「运行于 [电脑]」（与伙伴选设备同一交互，不另占一行），默认本机；本机用不了时默认
-  一台在线、已开放的电脑，整页按「能用」显示（不出现「未连接」、空的订阅账号区或置灰的模型，本机登录入口收进
-  「···」）。这时左栏计数与详情的模型区都读「运行于」那台电脑开放的模型，只读，开关到那台电脑改；刷新重新读取
+  供应商详情标题下一行写「运行于 [电脑]」（与伙伴选设备同一交互，不另占一行），默认本机，只有用户在这里改选
+  才换到另一台。**不自动换到别的电脑**（2026-11-18 用户裁决，取代此前「本机用不了时默认一台在线、已开放的
+  电脑」）：本机这一份暂时用不了（启动时还没读到登录、需要重新登录等）时运行位置仍是本机，本机恢复后照常用；
+  模型列表把另一台电脑上的同一供应商另列出来，用之前先问一句，不答或取消就不换。已建任务换过去在下一条消息
+  才生效，确认框不打断正在进行的回复，也不影响本机这一份恢复；这类确认每次都问，不受「不再提示」影响。
+  只有这种「发现」的情形才问：已加到这台电脑上的分享（不管分享者是自己的另一台电脑还是别人）、供应商组，
+  以及只有另一台电脑才有、已列在设置页的供应商，都按已添加的供应商直接用，不额外确认。「我分享的供应商」
+  只是管理分享的入口，不是这台电脑可用的来源，不在此列（实现见 `subscriptionIdentity.ts` 的 `askBeforeUse`、
+  `ModelSelector.tsx` 的 `selectUnified`、`ChatInput.tsx` 的 `confirmAgentRelocation`；手机端换电脑本来就每次确认）。
+  **远程模型可用性与本地账号管理分开显示**（2026-11-17 用户裁决，
+  取代此前借用时隐藏本地账号区、把本机登录入口收进「···」的口径；实现见 #10949、#10950）：
+  借用时仍保留本地订阅账号区并标注「这台电脑」，添加、管理和恢复入口与使用本机模型时一样可见。
+  本机没有已保存账号时，保留账号区标题与「添加订阅账号」入口，不伪造账号行，也不将空态视为远程模型不可用。
+  已保存账号断连时保留原行及原账号的重新登录入口；读取失败或暂时不可读时提供原位重试，不把读取失败当作账号删除。
+  本机登录状态和主操作按真实状态显示，登录中显示进度与取消，已连接显示断开；这些状态只说明「这台电脑」，
+  不把仍可用的远程模型置灰，也不自动改写运行位置、账号身份或分享权限。
+  这时左栏计数与详情的模型区都读「运行于」那台电脑开放的模型，只读，开关到那台电脑改；刷新重新读取
   那台电脑的目录，不调用本机 CLI。手动刷新失败时提示错误，并在提示中提供重新读取原电脑目录的入口，模型区因失败收起后仍可重试；
   切换账号后旧提示不再发起读取（2026-11-12 修复 0.1.133 回归：本机没登录时模型区读了本机的空目录、刷新必然失败；
   实现见 `ProviderRunLocationRow.tsx` 的 `BorrowedProviderModels`）。用户改选的位置按供应商记在本机（`provider-run-location-store.ts`，只存覆盖值，选回默认即删除）；

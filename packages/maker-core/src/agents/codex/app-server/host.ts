@@ -1837,6 +1837,10 @@ export class AppServerHost {
 
   // ── 诊断辅助 (测试 / 日志) ────────────────────────────────────────────────
 
+  async sampleResumeStack(): Promise<string[]> {
+    return await this.client?.sampleResumeStack() ?? [];
+  }
+
   /** 当前活跃 subscriber 数 — diagnostics, 不参与业务。 */
   get activeSubscriptions(): number {
     return this.subscribers.size;

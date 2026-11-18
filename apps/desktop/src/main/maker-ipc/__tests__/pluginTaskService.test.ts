@@ -12,6 +12,7 @@ import { PLUGIN_ATTACHMENT_MAX_BYTES } from '../../../shared/pluginAttachments.j
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import {
   createPluginTaskService,
+  pluginTaskMatchesImProject,
   isPluginTaskPermissionAllowed,
   PluginTaskError,
   assertPluginTaskResult,
@@ -25,6 +26,174 @@ import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSess
 import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
 import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
 import type { ProviderView } from '@cindy/model-providers';
+
+// User contract: plugin IM entrances share project settings. Existing route tests
+// lack project defaults, directory boundaries and permission changes on continuation.
+// Minimal cases: one create retry after a setting change; one existing task; one moved task.
+// Tier: unit, production task service with in-memory persistence.
+it('creates from shared IM settings and replays creation after those settings change', async () => {
+  const f = fixture();
+  const shared = { ...f.route, agentDeviceId: 'share:owner', effort: 'medium' };
+  f.deps.readPermissionMode = () => undefined;
+  f.deps.resolveImProject = vi.fn(async () => ({ route: shared, workingDir: '/project', permissionMode: 'bypassPermissions' as const,
+    assertCurrent: () => {}, matches: () => true }));
+  const request = { requestKey: 'im-create', title: 'Group', imProject: '/project' };
+  const task = await f.service.create('p', request);
+  expect(task.resolvedConfig).toEqual(shared);
+  expect(f.deps.createSession).toHaveBeenCalledWith('p', task.taskId, 'Group', shared, undefined,
+    shared, expect.any(Function), undefined, undefined, expect.objectContaining({ workingDir: '/project' }), 'bypassPermissions');
+  f.deps.resolveImProject = vi.fn(async () => { throw new Error('source offline'); });
+  expect(await f.service.create('p', request)).toEqual(task);
+  expect(f.deps.resolveImProject).not.toHaveBeenCalled();
+  await expect(f.service.create('p', { ...request, imProject: 'chat' })).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+});
+
+it('keeps chat, nested projects and Windows project directories separate', async () => {
+  const task = await fixture().create();
+  const projects = ['C:/work', 'C:/work/nested'];
+  expect(pluginTaskMatchesImProject({ ...task, workspaceKind: 'dialogue' }, undefined, projects)).toBe(true);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work' }, undefined, projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'c:\\WORK\\src' }, 'C:/work', projects)).toBe(true);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work/nested/src' }, 'C:/work', projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work-other' }, 'C:/work', projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work/../other' }, 'C:/work', projects)).toBe(false);
+  expect(pluginTaskMatchesImProject({ ...task, workingDir: 'C:/work' }, 'C:/work', [])).toBe(false);
+});
+
+it('follows project model and permission in the same task through both runtime write boundaries', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  const route = { ...f.route, effort: 'medium', agentDeviceId: 'share:owner' };
+  f.deps.resolveImProject = async () => ({ route, permissionMode: 'ask', assertCurrent: () => {}, matches: () => true });
+  f.deps.setModel = async (id, selected, assertCurrent, permissionMode) => {
+    await assertCurrent();
+    Object.assign(f.tasks.get(id)!, { resolvedConfig: selected, revision: 2 });
+    await assertCurrent(); // actual SessionControlService checks again before permission
+    Object.assign(f.tasks.get(id)!, { permissionMode, revision: 3 });
+    return { status: 'applied' };
+  };
+  const result = await f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat' });
+  expect(result.task).toMatchObject({ taskId: task.taskId, resolvedConfig: route, permissionMode: 'ask' });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload).imProject).toBe('chat');
+  f.deps.assertImProjectDispatch = () => { throw new PluginTaskError('PERMISSION_DENIED', 'project tightened'); };
+  await expect(f.service.send('p', { taskId: task.taskId, expectedRevision: 3, requestKey: 'new', text: 'hello' }))
+    .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  expect(f.deps.dispatch).not.toHaveBeenCalled();
+});
+
+it('does not move an existing task or override a project configuration changed during resolution', async () => {
+  const f = fixture();
+  const task = await f.create();
+  f.deps.setModel = vi.fn();
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'auto', assertCurrent: () => {}, matches: () => false });
+  const request = { taskId: task.taskId, expectedRevision: task.revision, imProject: '/other' };
+  await expect(f.service.followImProject('p', request)).rejects.toMatchObject({ code: 'PROJECT_MISMATCH' });
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'auto', matches: () => true,
+    assertCurrent: () => { throw new PluginTaskError('STALE_REVISION', 'settings changed'); } });
+  await expect(f.service.followImProject('p', request)).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  expect(f.deps.setModel).not.toHaveBeenCalled();
+  expect(await f.service.get('p', task.taskId)).toEqual(task);
+});
+
+// User decision 2026-11-18: one IM conversation in a plugin may keep its own model and permission on
+// top of the shared project; a permission looser than the project needs the user's allow in Cindy.
+// Existing cases only followed the project. Minimal inputs: own route + stricter permission; looser
+// without a grant, with another project's grant, then with this project's grant. Tier: unit.
+it("applies a conversation's own settings and loosens only with a grant for that project", async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  const own = { ...f.route, model: 'own-model', effort: 'low' };
+  f.deps.resolveImProject = async (_plugin, _project, route) => ({ route: route ?? f.route, permissionMode: 'auto', assertCurrent: () => {}, matches: () => true });
+  let revision = task.revision;
+  const setModel = vi.fn(async (id: string, selected: PluginTaskRoute, assertCurrent: () => Promise<void>, permissionMode?: string) => {
+    await assertCurrent();
+    Object.assign(f.tasks.get(id)!, { resolvedConfig: selected, ...(permissionMode ? { permissionMode } : {}), revision: ++revision });
+    return { status: 'applied' };
+  });
+  f.deps.setModel = setModel as PluginTaskServiceDeps['setModel'];
+  const follow = (imOverride: object) => f.service.followImProject('p',
+    { taskId: task.taskId, expectedRevision: revision, imProject: 'chat', imOverride });
+  await expect(follow({ route: own, permissionMode: 'ask' }))
+    .resolves.toMatchObject({ task: { resolvedConfig: own, permissionMode: 'ask' } });
+  const elsewhere = await f.service.recordImPermissionGrant('p', '/other', 'bypassPermissions');
+  for (const grant of [{}, { permissionGrant: elsewhere }])
+    await expect(follow({ permissionMode: 'bypassPermissions', ...grant })).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+  expect(setModel).toHaveBeenCalledOnce();
+  const grant = await f.service.recordImPermissionGrant('p', 'chat', 'bypassPermissions');
+  await expect(follow({ permissionMode: 'bypassPermissions', permissionGrant: grant }))
+    .resolves.toMatchObject({ task: { resolvedConfig: f.route, permissionMode: 'bypassPermissions' } });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ imProject: 'chat', imPermissionGrant: grant });
+  // Dispatch receives the user's grant; following the project again forgets it.
+  const granted = vi.fn();
+  f.deps.assertImProjectDispatch = (_plugin, _project, _task, mode) => granted(mode);
+  await f.service.send('p', { taskId: task.taskId, expectedRevision: revision, requestKey: 'loose', text: 'hi' });
+  expect(granted).toHaveBeenLastCalledWith('bypassPermissions');
+  // PR #11208 unit regression: TASK_BUSY must leave the previous grant usable.
+  const autoGrant = await f.service.recordImPermissionGrant('p', 'chat', 'auto');
+  const oldResolver = f.deps.resolveImProject;
+  f.deps.resolveImProject = async (...args) => ({ ...await oldResolver(...args), permissionMode: 'ask' });
+  setModel.mockRejectedValueOnce(new PluginTaskError('TASK_BUSY', 'Busy'));
+  await expect(follow({ permissionMode: 'auto', permissionGrant: autoGrant })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await f.service.assertDispatch('p', task.taskId);
+  expect(granted).toHaveBeenLastCalledWith('bypassPermissions');
+  f.deps.resolveImProject = oldResolver;
+  await follow({});
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload).imPermissionGrant).toBeUndefined();
+  expect(f.tasks.get(task.taskId)).toMatchObject({ resolvedConfig: f.route, permissionMode: 'auto' });
+});
+
+// PR #11208 unit regression: a legacy task without a project can still send after
+// a failed permission change. Previously the rejection left a project binding behind.
+it('preserves legacy dispatch when following an IM project fails before changing permissions', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'bypassPermissions' });
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'ask', assertCurrent: () => {}, matches: () => true });
+  f.deps.assertImProjectDispatch = () => { throw new PluginTaskError('PERMISSION_DENIED', 'Project has no grant'); };
+  f.deps.setModel = async () => { throw new PluginTaskError('TASK_BUSY', 'Busy'); };
+  const grant = await f.service.recordImPermissionGrant('p', 'chat', 'auto');
+  await expect(f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat',
+    imOverride: { permissionMode: 'auto', permissionGrant: grant } })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await expect(f.service.assertDispatch('p', task.taskId)).resolves.toMatchObject({ permissionMode: 'bypassPermissions' });
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).not.toHaveProperty('imProjectTransition');
+  f.deps.setModel = async () => {
+    Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto' });
+    throw new PluginTaskError('TASK_BUSY', 'Runtime changed before the update returned');
+  };
+  await expect(f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat',
+    imOverride: { permissionMode: 'auto', permissionGrant: grant } })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await expect(f.service.assertDispatch('p', task.taskId)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+});
+
+// Same decision for the first message of a conversation. Existing creation cases had no per-conversation
+// input. Minimal inputs: looser without a grant, then own route + granted permission, then a retry
+// after the conversation went back to following the project (same creation key). Tier: unit.
+it('creates with conversation settings, needs a grant to loosen and replays without a conflict', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  let defaultOffline = false;
+  f.deps.resolveImProject = async (_plugin, _project, route) => {
+    // PR #11208 unit regression: an offline default must not prevent explicit routing.
+    if (defaultOffline && !route) throw new Error('Default source offline');
+    return { route: route ?? f.route, workingDir: '/project', permissionMode: 'ask', assertCurrent: () => {}, matches: () => true };
+  };
+  const own = { ...f.route, model: 'own-model' };
+  const request = { requestKey: 'im-own', title: 'Group', imProject: '/project' };
+  await expect(f.service.create('p', { ...request, imOverride: { permissionMode: 'auto' } })).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+  expect(f.deps.createSession).not.toHaveBeenCalled();
+  const grant = await f.service.recordImPermissionGrant('p', '/project', 'auto');
+  defaultOffline = true;
+  f.deps.resolveImProjectPermission = async () => ({ permissionMode: 'ask', label: 'Project', assertCurrent: () => {}, matches: () => true });
+  await expect(f.service.imProjectPermission('p', '/project')).resolves.toMatchObject({ permissionMode: 'ask', label: 'Project' });
+  const task = await f.service.create('p', { ...request, imOverride: { route: own, permissionMode: 'auto', permissionGrant: grant } });
+  expect(f.deps.createSession).toHaveBeenLastCalledWith('p', task.taskId, 'Group', own, undefined, own, expect.any(Function),
+    undefined, undefined, expect.objectContaining({ workingDir: '/project' }), 'auto');
+  expect(JSON.parse(f.rows.get(task.taskId)!.payload)).toMatchObject({ imProject: '/project', imPermissionGrant: grant });
+  expect(await f.service.create('p', request)).toEqual(task);
+});
 
 // PR #9155 P1: a cold/offline remote read held the shared receipt queue, so
 // even another plugin's already running task could not stop. Existing lifecycle
@@ -451,6 +620,31 @@ it('keeps relay-free send receipts replayable and binds a relay to its request k
   expect(f.deps.dispatch).toHaveBeenCalledTimes(2);
 });
 
+// unit: plugin-agent-tasks.md「消息附件」(2026-11-17). A relayed photo may come without words, and
+// model-only references (group history) bind to the request key and reach dispatch separately.
+it('accepts an attachment-only relay through the public boundary and binds its context attachments', async () => {
+  const f = fixture(), task = await f.create();
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64');
+  const ghost = { enabled: true, taskCapabilityApproved: true, approval: { state: 'approved' },
+    manifest: { agent: { tasks: true } } } as InstalledGhost;
+  const send = (request: Record<string, unknown>) => handlePluginTaskRequest('p', {
+    type: 'tasks-request', kind: 'send', taskId: task.taskId, expectedRevision: task.revision, ...request,
+  } as never, { getGhost: () => ghost, isCurrent: () => true,
+    handler: (pluginId, value) => f.service.send(pluginId, value as never) });
+  // Words are still required when nothing of the message itself is attached.
+  expect(await send({ requestKey: 'empty', text: '', contextAttachments: [{ base64: png }] }))
+    .toMatchObject({ ok: false, error: { code: 'INVALID_REQUEST' } });
+  const first = await send({ requestKey: 'photo', text: '', attachments: [{ base64: png, name: 'photo.png' }],
+    contextAttachments: [{ base64: png, name: 'earlier.png' }] });
+  expect(first).toMatchObject({ ok: true });
+  expect(f.deps.dispatch).toHaveBeenCalledExactlyOnceWith('p', task.taskId, expect.any(String), '',
+    [expect.objectContaining({ name: 'photo.png', kind: 'image' })], undefined, undefined,
+    [expect.objectContaining({ name: 'earlier.png', kind: 'image' })]);
+  expect(await send({ requestKey: 'photo', text: '', attachments: [{ base64: png, name: 'photo.png' }] }))
+    .toMatchObject({ ok: false, error: { code: 'IDEMPOTENCY_CONFLICT' } });
+  expect(f.deps.dispatch).toHaveBeenCalledOnce();
+});
+
 // unit: a failed naming-metadata read must not leave an unsent receipt that
 // suppresses the retry. Inject the store failure after host bookkeeping starts.
 it('retries after a failed naming-metadata read without leaving an unsent receipt', async () => {
@@ -536,18 +730,20 @@ it.each(['INVALID_ATTACHMENTS', 'TASK_BUSY'] as const)('preserves %s across the 
   const pending: Promise<unknown>[] = [];
   try {
     if (code === 'TASK_BUSY') {
-      const large = Buffer.alloc(PLUGIN_ATTACHMENT_MAX_BYTES);
+      // Two held sends, each using the whole per-send budget across shown and context attachments.
+      const large = Buffer.alloc(PLUGIN_ATTACHMENT_MAX_BYTES / 2);
       png.copy(large);
       const attachments = [{ base64: large.toString('base64') }];
-      pending.push(withParsedPluginMessageAttachments(attachments, () => held));
-      pending.push(withParsedPluginMessageAttachments(attachments, () => held));
+      pending.push(withParsedPluginMessageAttachments(attachments, () => held, attachments));
+      pending.push(withParsedPluginMessageAttachments(attachments, () => held, attachments));
     }
     const ghost = { enabled: true, taskCapabilityApproved: true, approval: { state: 'approved' },
       manifest: { agent: { tasks: true } } } as InstalledGhost;
     const result = await handlePluginTaskRequest('p', {
       type: 'tasks-request', kind: 'send', taskId: task.taskId, requestKey: 'attachment-error',
       expectedRevision: task.revision, text: 'context',
-      attachments: [{ base64: (code === 'TASK_BUSY' ? png : Buffer.from('not an image')).toString('base64') }],
+      // Non-canonical base64 (padding bits set) cannot be decoded faithfully.
+      attachments: [{ base64: code === 'TASK_BUSY' ? png.toString('base64') : 'AB==' }],
     }, {
       getGhost: () => ghost, isCurrent: () => true,
       handler: (pluginId, request) => {
@@ -944,6 +1140,31 @@ describe('plugin ordinary task receipts', () => {
       status: 'completed',
       outputMessageId: 'output',
     });
+  });
+  // Side panel streaming (2026-11-17, capabilities().runPreview): getRun shows the run's own live
+  // streaming block. Entry: service.getRun; nothing covered preview before. Minimum inputs: the
+  // task now executing a different generation, an empty snapshot, an oversized block, and a run
+  // that already settled while a stale block lingers. Tier: unit (in-memory deps).
+  it('previews only the streaming text of the run\'s own live execution', async () => {
+    const f = fixture();
+    const run = await f.send();
+    await f.service.accept(run.taskId, { clientId: run.inputMessageId }, f.execution);
+    f.deps.inspect = async () => ({ execution: f.execution, pending: [] });
+    let live: { execution: typeof f.execution | null; text: string | null } = { execution: f.execution,
+      text: 'Answer citeturn1search1so far' };
+    f.deps.readLivePreview = () => live;
+    expect(await f.service.getRun('p', run.runId)).toMatchObject({ status: 'running', preview: { text: 'Answer so far' } });
+    live = { execution: f.execution, text: 'x'.repeat(40_000) };
+    expect((await f.service.getRun('p', run.runId)).preview?.text).toHaveLength(32_768);
+    for (const other of [{ execution: { ...f.execution, generation: 2 }, text: 'next input' }, { execution: f.execution, text: null }]) {
+      live = other;
+      expect((await f.service.getRun('p', run.runId)).preview).toBeUndefined();
+    }
+    live = { execution: f.execution, text: 'stale' };
+    await f.service.settle(run.taskId, f.execution, 'completed', 'output');
+    const settled = await f.service.getRun('p', run.runId);
+    expect([settled.status, settled.preview]).toEqual(['completed', undefined]);
+    expect(JSON.parse(f.rows.get(run.runId)!.payload).preview).toBeUndefined();
   });
   it('transfers only native recovery aliases to the new execution', async () => {
     const f = fixture();

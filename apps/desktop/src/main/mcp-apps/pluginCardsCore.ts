@@ -62,7 +62,7 @@ async function publishPluginAppResult(
   tool.title = config.plugin.title;
   tool._meta = {
     ...tool._meta,
-    'cindy/plugin': { name: config.plugin.title, trust: config.plugin.trust },
+    'cindy/plugin': { name: config.plugin.title, trust: config.plugin.trust, source: config.plugin.installationSource ?? { kind: 'unknown' } },
   };
   if (attachmentHashes.length || handoffFiles.length) {
     const attachments = [];
