@@ -17,11 +17,37 @@ export default {
     default: { about: 'New-task project picker displays the saved alias and selects the original directory' },
     move: { about: 'Move-task menu displays the same saved alias and selects the original directory' },
     'move-explicit-project': { about: 'Explicit membership is disabled even when execution uses a checkout' },
+    // #11034: real picker hook -> move menu. Existing scenes only supplied
+    // existing paths; a single exists:false row exposed a dead destination.
+    'move-missing': {
+      about: 'Missing directories are absent while valid recent projects remain selectable regardless of sidebar visibility',
+      data: { workdirs: [
+        { path: 'D:/work/cindy', exists: true, lastUsedAt: '' },
+        { path: 'D:/removed/cindy', exists: false, lastUsedAt: '' },
+        { path: 'D:/archive/cindy', lastUsedAt: '' },
+      ] },
+    },
+    'move-all-missing': {
+      about: 'Only missing projects produces the empty state without losing folder browsing',
+      data: { workdirs: [{ path: 'D:/removed/cindy', exists: false, lastUsedAt: '' }] },
+    },
   },
   async ready(page) { await page.getByTestId('open-picker').waitFor(); },
   async check(page, ui) {
     await page.getByTestId('open-picker').click();
+    if (ui.case === 'move-all-missing') {
+      await page.getByText(await ui.t('ccAgent.sidebar.sessionMenu.noProjects'), { exact: true }).waitFor();
+      assert.equal(await page.getByRole('menuitem', { name: /D:\/removed\/cindy/ }).count(), 0);
+      await ui.capture('project-menu');
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.sessionMenu.browseProjectFolder') }).click();
+      assert.equal(await page.getByTestId('selected-path').textContent(), 'browse');
+      return;
+    }
     await page.getByText('D:/work/cindy', { exact: true }).waitFor();
+    if (ui.case === 'move-missing') {
+      assert.equal(await page.getByRole('menuitem', { name: /D:\/removed\/cindy/ }).count(), 0);
+      assert.equal(await page.getByRole('menuitem', { name: /D:\/archive\/cindy/ }).getAttribute('aria-disabled'), null);
+    }
     if (!ui.case.startsWith('move')) {
       const project = page.getByRole('button').filter({ hasText: '项目新名称 · Cindy' });
       if (ui.case === 'automatic') {

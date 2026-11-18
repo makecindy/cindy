@@ -21,7 +21,8 @@ function PickerFixture() {
       <DropdownMenuContent align="start" className="w-80">
         <SessionProjectMoveSubmenu projectOptions={options}
           currentSession={{ projectDir: 'D:/work/cindy', workingDir: 'D:/tmp/checkout' }}
-          isDialogue={ctx.case !== 'move-explicit-project'} onSelectProject={setSelected} />
+          isDialogue={ctx.case !== 'move-explicit-project'} onSelectProject={setSelected}
+          onBrowseProject={ctx.case.includes('missing') ? () => setSelected('browse') : undefined} />
       </DropdownMenuContent>
     </DropdownMenu> : <FolderPickerPopover open={open} onOpenChange={setOpen} projectOptions={options}
       onSelect={path => setSelected(path)}>
@@ -35,7 +36,7 @@ mountPage({
   host: () => ({
     platform: 'win32',
     localDb: {
-      recentWorkdirs: { list: async () => [
+      recentWorkdirs: { list: async () => ctx.data.workdirs ?? [
         { path: 'D:/work/cindy', exists: true, lastUsedAt: '2026-10-29T00:00:00.000Z' },
         { path: 'D:/archive/cindy', exists: true, lastUsedAt: '2026-10-28T00:00:00.000Z' },
       ] },
