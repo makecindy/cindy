@@ -351,6 +351,37 @@ describe('indexed task content and state events', () => {
     expect(lookup).toHaveBeenCalledTimes(count);
   });
 
+  // Unit / native recovery: the generic indexed delivery tests perform live
+  // receipt reads. An approved, running subscriber gets the native metadata
+  // without a receipt read or cold start. A replaced sandbox gets no queued event.
+  it('delivers native recovery only to the exact running install without reading receipts', async () => {
+    const g = ghost('reader', { topics: ['native-recovery'] });
+    let exactInstallRunning = false;
+    const findGhostForDelivery = vi.fn(() => g);
+    const wake = vi.fn(async () => {});
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery, wake,
+      isRunningInstall: ghost => ghost === g && exactInstallRunning });
+    const index = new GhostTaskEventIndex();
+    const gateway = vi.fn(() => gw);
+    const data = { sessionId: 'task', engine: 'pi' as const, nativeEvent: 'agent_settled', metadata: { aborted: false } };
+    index.publishNativeRecovery(data, owner, gateway);
+    expect(gateway).not.toHaveBeenCalled();
+    index.replace([g], owner);
+    index.publishNativeRecovery(data, owner, gateway);
+    running.add('reader');
+    exactInstallRunning = true;
+    index.publishNativeRecovery(data, owner, gateway);
+    expect(sent).toEqual([]);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent.map(item => item.payload)).toMatchObject([{ name: 'did-native-recovery', data }]);
+    index.publishNativeRecovery(data, owner, gateway);
+    exactInstallRunning = false;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toHaveLength(1);
+    expect(findGhostForDelivery).not.toHaveBeenCalled();
+    expect(wake).not.toHaveBeenCalled();
+  });
+
   it.each(['disabled', 'revoked'] as const)('rechecks the live install after queueing when %s', async change => {
     const g = ghost('reader', { topics: ['tool-execution'] });
     let live = g;

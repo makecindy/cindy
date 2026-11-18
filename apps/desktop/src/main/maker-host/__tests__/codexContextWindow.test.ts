@@ -9,6 +9,23 @@ const sol = {
   effective_context_window_percent: 95,
 };
 describe('native Codex context facts', () => {
+  // #11025 unit: BOM-less-only fixtures missed a null context preview when
+  // native config/profile parsing failed. Preserve exact configured thresholds.
+  it.each(['config', 'profile'])('reads context overrides from BOM-prefixed %s TOML', async layer => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-bom-context-'));
+    try {
+      const overrides = 'model_context_window = 500000\nmodel_auto_compact_token_limit = 350000\n';
+      await fs.writeFile(path.join(home, 'models_cache.json'), JSON.stringify({ models: [{ ...sol, slug: 'fixture' }] }));
+      await fs.writeFile(path.join(home, 'config.toml'),
+        layer === 'config' ? `\uFEFF${overrides}` : '\uFEFFprofile = "selected"');
+      if (layer === 'profile') await fs.writeFile(path.join(home, 'selected.config.toml'), `\uFEFF${overrides}`);
+      await expect(readCodexContextWindowInfo({ codexHome: home, modelId: 'fixture' })).resolves.toMatchObject({
+        contextWindow: 500_000, usableContextWindow: 475_000, autoCompactTokenLimit: 350_000,
+      });
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
   // Unit: changing only the percentage must update the settings preview, not a running turn.
   // Previous coverage exercised window overrides only; use an isolated native catalog file.
   it('previews a model percentage without requiring a window override and preserves live facts', async () => {

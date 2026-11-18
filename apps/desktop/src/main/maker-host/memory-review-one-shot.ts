@@ -56,6 +56,7 @@ export function createMemoryReviewOneShot(
     if (!maker) return null;
     try {
       const result = await resolved.requestText(maker, prompt, {
+        source: 'memory-review',
         maxTokens: opts.maxTokens,
         timeoutMs: opts.timeoutMs,
         // review 要的是一段简短计划, provider 默认思考只会烧 token。

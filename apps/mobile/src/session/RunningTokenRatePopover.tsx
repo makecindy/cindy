@@ -41,6 +41,7 @@ export function RunningTokenRatePopover({
   sessionKey,
   startedAt,
   outputTokens,
+  totalOutputTokens = outputTokens,
   generationDurationMs,
   generationReliable,
   children,
@@ -52,6 +53,7 @@ export function RunningTokenRatePopover({
   sessionKey: string;
   startedAt: number | null;
   outputTokens: number;
+  totalOutputTokens?: number;
   generationDurationMs: number;
   generationReliable: boolean;
   children: ReactNode;
@@ -338,12 +340,12 @@ export function RunningTokenRatePopover({
               "outputTotal",
               t("session.screen.tokenCount", {
                 tokens:
-                  outputTokens >= 1000
-                    ? `${(outputTokens / 1000).toFixed(1)}k`
-                    : outputTokens,
+                  totalOutputTokens >= 1000
+                    ? `${(totalOutputTokens / 1000).toFixed(1)}k`
+                    : totalOutputTokens,
               }),
             ],
-            ["observedPeak", rateText(samples.length ? history.peak : null)],
+            ["observedPeak", rateText(samples.length || history.peak > 0 ? history.peak : null)],
           ].map(([key, value]) => (
             <View style={styles.metric} key={key}>
               <Text style={styles.label}>{t(`session.screen.${key}`)}</Text>

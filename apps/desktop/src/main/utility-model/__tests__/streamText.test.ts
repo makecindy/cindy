@@ -34,3 +34,14 @@ describe('call text streaming', () => {
     );
   });
 });
+
+it('retains observed usage when the paid stream fails, and always releases the reader', async () => {
+  const raw = 'data: {"usage":{"prompt_tokens":10,"completion_tokens":2}}\n\ndata: {"type":"response.failed"}\n\n';
+  const body = new Response(raw).body!;
+  const observe = vi.fn(async (_raw: string) => {});
+  await expect(readUtilityTextStream({ body, text: async () => '' }, vi.fn(), observe))
+    .rejects.toThrow('utility_stream_failed');
+  expect(observe).toHaveBeenCalledOnce();
+  expect(observe).toHaveBeenCalledWith(raw);
+  expect(body.locked).toBe(false);
+});

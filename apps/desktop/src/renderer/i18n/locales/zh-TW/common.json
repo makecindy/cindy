@@ -1866,7 +1866,6 @@
       "memory": "記憶",
       "subagentModels": "Subagent",
       "auxiliaryModels": "輔助模型",
-      "visionBridge": "視覺橋",
       "compaction": "上下文壓縮",
       "terminalShell": "預設終端 shell",
       "composer": "訊息輸入",
@@ -5352,8 +5351,19 @@
       "title": "訊息輸入",
       "sendShortcut": {
         "label": "使用 {{shortcut}} 傳送",
-        "hint": "開啟後按 {{shortcut}} 傳送訊息；關閉後按 Enter 傳送訊息，按 Shift+Enter 換行。",
-        "ariaLabel": "使用 {{shortcut}} 傳送訊息"
+        "hint": "按 Enter 傳送，Shift+Enter 換行。",
+        "ariaLabel": "使用 {{shortcut}} 傳送訊息",
+        "hintModifierEnter": "按 {{shortcut}} 傳送，Enter 換行。"
+      },
+      "followUp": {
+        "label": "執行中傳送方式",
+        "hintQueue": "任務執行時，傳送按鈕和 {{send}} 會排隊傳送。",
+        "hintSteer": "任務執行時，傳送按鈕和 {{send}} 會插話到當前任務。",
+        "ariaLabel": "任務執行中的傳送方式",
+        "options": {
+          "queue": "排隊",
+          "steer": "插話"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -5423,37 +5433,6 @@
     "compatMode": {
       "title": "小技巧",
       "description": "一些功能性開關，部分需要新建任務才會生效(具體見各 cell 說明)。"
-    },
-    "visionBridge": {
-      "title": "視覺橋",
-      "description": "讓純文字模型獲得看圖能力：用獨立的多模態模型把圖片轉成文字描述後再交給純文字模型。",
-      "enableLabel": "啟用視覺橋",
-      "enableHint": "關閉時所有模型行為與之前完全一致。開啟後，下方勾選的模型會把圖片經視覺後端轉成文字描述。啟用後，傳送給這些模型的圖片以及同訊息文字提示會傳送給你選擇的視覺後端。",
-      "enableAria": "切換視覺橋",
-      "toast": {
-        "saved": "視覺橋設定已儲存",
-        "saveFailed": "儲存視覺橋設定失敗"
-      },
-      "capability": {
-        "vision": "已知支援視覺",
-        "noVision": "已知純文字",
-        "unknown": "視覺能力未知"
-      },
-      "targetModels": {
-        "label": "走視覺橋的模型",
-        "hint": "純文字模型（如 DeepSeek）預設已勾選。也可以勾選支援視覺的模型——例如故意用更便宜的描述模型來節省 token。",
-        "empty": "暫無可用的模型。",
-        "toggleAria": "切換 {{model}} 的視覺橋"
-      },
-      "backends": {
-        "label": "視覺後端模型",
-        "hint": "選擇最多兩個把圖片轉文字的多模態模型。第二個（備用）可選。",
-        "primary": "主後端",
-        "fallback": "備用",
-        "unset": "未選擇",
-        "noBackup": "無備用",
-        "hintSecondary": "優先使用主後端。主後端失敗且設定了備用時切換到備用。兩者都失敗時圖片無法辨識，會以文字提示代替並提醒你。"
-      }
     },
     "chatEmbedding": {
       "cell": {
@@ -7825,6 +7804,18 @@
         "overviewTab": "總覽",
         "addPlugin": "新增插件",
         "addPluginAria": "插件新增選項",
+        "githubInstall": {
+          "label": "從 GitHub Release 安裝…",
+          "title": "從 GitHub Release 安裝",
+          "description": "貼上 GitHub 儲存庫或指定版本的 Release 連結。私人儲存庫需要以有存取權限的 GitHub 帳號登入。",
+          "url": "GitHub 位址",
+          "submit": "尋找插件",
+          "loading": "正在尋找並下載…",
+          "invalid": "請輸入 GitHub 儲存庫或 Release 標籤連結。",
+          "not-found": "找不到這個版本，請檢查連結和儲存庫權限。",
+          "ambiguous": "這個連結包含多個插件。請使用只含一個插件的 Release 連結，或直接從檔案安裝。",
+          "installedAlready": "這個插件已安裝。可以在該插件的設定中更新。"
+        },
         "installedSection": "已安裝",
         "installedExpand": "展開全部 {{count}} 個已安裝插件",
         "installedCollapse": "收起更多已安裝插件",
@@ -8254,6 +8245,8 @@
         "subscribeMessageDetail": "接收已儲存的使用者訊息與 AI 回覆；附件透過個別讀取與交接取得。",
         "subscribeToolExecution": "工具執行過程",
         "subscribeToolExecutionDetail": "接收工具名稱、輸入、結果與錯誤；僅旁聽，不改變執行。",
+        "subscribeNativeRecovery": "原生恢復事件",
+        "subscribeNativeRecoveryDetail": "接收重試、上下文壓縮與任務停止的引擎狀態。",
         "subscribeTaskState": "任務狀態事件",
         "subscribeTaskStateDetail": "接收任務的執行、等待、完成、封存與隱藏狀態變更。",
         "subscribeActivity": "旁聽 AI 何時在思考、何時在等你",
@@ -8469,6 +8462,24 @@
         "openInSidebar": "在側邊欄中開啟",
         "panelPageHosted": "從插件頁開啟 · 離開插件頁自動關閉",
         "panelNone": "這個插件不含面板",
+        "githubRelease": {
+          "title": "插件更新",
+          "installed": "目前版本 {{version}}",
+          "upstream": "上游版本 {{version}}",
+          "prerelease": "預發行",
+          "check": "檢查更新",
+          "update": "下載並安裝",
+          "connect": "登入 GitHub",
+          "checking": "正在檢查更新…",
+          "updating": "正在下載並安裝…",
+          "available": "有新版本可用。",
+          "current": "目前已是最新版本。",
+          "updated": "插件已更新。",
+          "empty": "暫無可安裝的版本。",
+          "sign-in": "請登入 GitHub 後檢查更新。",
+          "forbidden": "目前的 GitHub 登入無權讀取此私人儲存庫。",
+          "unavailable": "無法檢查或安裝更新，請重試。"
+        },
         "customSlotTitle": "插件自訂設定區",
         "dangerTitle": "解除安裝插件",
         "infoContents": "包含",
@@ -9819,6 +9830,41 @@
       },
       "providerTooltip": "取該任務目前選定的供應商；未指定時留空。",
       "tokensTooltip": "只統計該任務在{{range}}內產生的 token。"
+    },
+    "auxiliary": {
+      "title": "輔助模型用量",
+      "label": "輔助請求",
+      "purpose": "用途",
+      "requests": "已記錄請求",
+      "description": "已計入總 Token。僅記錄上游回傳的用量；未回傳用量的請求與歷史遺漏不估填。",
+      "sources": {
+        "title": "產生標題",
+        "task-summary": "任務摘要",
+        "prompt-prediction": "輸入建議",
+        "working-status": "工作狀態",
+        "help": "說明問答",
+        "bot-creation": "建立夥伴",
+        "bot-opening": "夥伴開場白",
+        "group-planning": "群組規劃",
+        "ambient-reply": "回覆判斷",
+        "auto-review": "自動審核",
+        "tool-loop-review": "工具循環複核",
+        "memory-review": "記憶複核",
+        "git-summary": "變更摘要",
+        "hook-generation": "自動化指令碼",
+        "automation-verification": "匯入驗證",
+        "plugin-text": "插件文字請求",
+        "voice-dialogue": "語音對話",
+        "voice-exit": "語音結束判斷",
+        "voice-refinement": "語音潤飾",
+        "dictionary-learning": "詞典學習",
+        "embedding-query": "向量檢索",
+        "embedding-index": "向量索引",
+        "web-search": "網頁搜尋",
+        "provider-probe": "連線測試",
+        "vision-bridge": "視覺橋",
+        "auxiliary": "其他輔助請求"
+      }
     }
   },
   "usageDashboard": {
@@ -10760,6 +10806,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "未能讀取夥伴列表",
+    "rosterReload": "重新讀取夥伴",
     "avatarStatus": {
       "awaiting": "待你確認",
       "error": "需要注意",
@@ -11327,7 +11375,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}無法回覆：夥伴所在裝置保留的遠端任務數已達上限。\n請夥伴的主人封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}無法回覆：遠端電腦保留的任務總數已達上限。\n請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}}無法回覆：目前模型不支援圖片。\n請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}無法回覆：目前模型不支援圖片。\n請切換至支援圖片的模型。",
           "MODEL_UNAVAILABLE": "{{name}}無法回覆：目前沒有可用模型。\n請在夥伴設定中選擇已連線的可用模型後重新傳送。",
           "AUTH_REQUIRED": "{{name}}無法回覆：模型連線需要重新驗證。\n請在設定中重新連線對應的模型來源後重新傳送。",
           "RATE_LIMITED": "{{name}}無法回覆：模型請求過於頻繁。\n請稍後重新傳送，或選擇其他可用模型。",
@@ -13638,9 +13686,8 @@
     "sendButton": {
       "send": "傳送訊息",
       "queue": "排隊傳送",
-      "queueTooltip": "點選排隊傳送；按 {{shortcut}} 插話，不打斷當前任務",
-      "queueTooltipSendMode": "點選可排隊；按 {{shortcut}} 傳送此訊息",
-      "stop": "停止生成"
+      "stop": "停止生成",
+      "steer": "插話到當前任務"
     },
     "pluginSetup": {
       "account": {
@@ -14531,6 +14578,13 @@
       "runningWithWorktree_one": "它結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
       "runningWithWorktree_other": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
       "runningWithWorktree_many": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。"
+    },
+    "followUpHint": {
+      "queueDefault": "任務執行中傳送的訊息預設排隊。",
+      "steerDefault": "任務執行中傳送的訊息預設插話到當前任務。",
+      "switchToSteer": "預設改為插話",
+      "switchToQueue": "預設改為排隊",
+      "dismiss": "關閉提示"
     }
   },
   "onboarding": {
@@ -14801,11 +14855,6 @@
       "title": "圖片已丟失",
       "unavailable": "圖片暫時無法顯示",
       "loading": "正在載入圖片…"
-    },
-    "visionBridge": {
-      "analyzing": "正在辨識圖片中…（{{count}} 張）",
-      "fallback": "視覺橋使用了備用視覺後端（主後端不可用），圖片辨識可能受影響",
-      "unavailable": "視覺橋目前不可用，圖片無法辨識，已以文字提示代替"
     },
     "newMessageIndicator": {
       "aria": "回到底部，檢視 {{count}} 則新訊息",
@@ -19675,7 +19724,8 @@
           "expired": "已過期",
           "voided": "已作廢"
         }
-      }
+      },
+      "viewUsage": "檢視用量"
     },
     "orders": {
       "title": "訂單記錄",
@@ -21302,7 +21352,6 @@
       "sessionRuntimeFallback": "任務模型自動降級",
       "subagentModels": "Subagent",
       "auxiliaryModels": "輔助模型",
-      "visionBridge": "視覺橋",
       "modelVisibility": "模型顯示與隱藏",
       "providerOrder": "供應商順序",
       "modelCatalogOverrides": "模型參數調整",
@@ -21840,6 +21889,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "將這個儲存庫下載到本機？",
+    "credentialNotice": "如果是私人儲存庫，Cindy 可能會使用本機已登入的帳號。",
+    "saveTo": "儲存到本機",
+    "confirmImport": "確認匯入",
+    "confirmSshTitle": "允許此專案存取下列 SSH 目錄？",
+    "sshHost": "SSH 主機",
+    "readWriteAccess": "可讀寫",
+    "readAccess": "唯讀",
+    "confirmAccess": "允許存取",
     "autoLoading": "正在辨識專案圖示…",
     "autoNone": "使用專案名稱產生的字母圖示。",
     "autoSource": "來源",
@@ -21879,7 +21937,42 @@
     "discard": "放棄修改",
     "colors": {
       "default": "預設色（跟隨主題）"
-    }
+    },
+    "directories": "專案目錄",
+    "directoriesHint": "從下一輪起套用至此專案的所有任務。既有任務個別加入的目錄會保留。",
+    "removeDirectory": "移除目錄",
+    "directoryPath": "完整目錄路徑",
+    "addDirectory": "加入目錄",
+    "browseDirectory": "瀏覽目錄",
+    "mainDirectory": "主目錄",
+    "createTitle": "新增專案",
+    "createAction": "建立專案",
+    "repository": "儲存庫連結",
+    "repositoryHint": "支援 GitHub、GitLab，以及其他 Git 儲存庫的 HTTPS / SSH 連結。",
+    "autoDirectory": "未選目錄時建立於 {{path}}，重名會自動編號。",
+    "cloning": "正在複製儲存庫…",
+    "invalidRepository": "請輸入有效的 GitHub、GitLab 或 Git 儲存庫網址。",
+    "createFailed": "建立失敗。請檢查目錄寫入權限、儲存庫網址與這台電腦的 Git 存取權限；複製目錄必須為空。",
+    "createNamePlaceholder": "專案名稱",
+    "createNameHint": "取個名字，就可以開始了。",
+    "createFromRepository": "從程式碼儲存庫建立",
+    "createBlank": "改為空白專案",
+    "source_blank": "建立空白專案",
+    "source_existing": "開啟現有資料夾",
+    "source_repository": "從程式碼儲存庫匯入",
+    "sourceHint_blank": "填寫名稱，自動建立專案目錄。",
+    "sourceHint_existing": "選擇這台電腦上現有的專案目錄。",
+    "sourceHint_repository": "貼上儲存庫連結，下載到這台電腦。",
+    "source": "專案來源",
+    "sourceShort_blank": "空白專案",
+    "sourceShort_existing": "現有資料夾",
+    "sourceShort_repository": "儲存庫匯入",
+    "automaticMain": "主目錄 · 自動建立",
+    "source_local": "本機資料夾",
+    "sourceShort_local": "本機資料夾",
+    "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
+    "chooseExistingFolder": "選擇現有資料夾",
+    "changeMainDirectory": "更改"
   },
   "taskManagement": {
     "scope": "僅套用於目前帳號在這台電腦上的任務。",

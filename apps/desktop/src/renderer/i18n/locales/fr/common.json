@@ -1934,7 +1934,6 @@
       "memory": "Mémoire",
       "subagentModels": "Sous-Agents",
       "auxiliaryModels": "Modèles auxiliaires",
-      "visionBridge": "Vision Bridge",
       "compaction": "Compaction du contexte",
       "terminalShell": "Shell du terminal par défaut",
       "composer": "Saisie des messages",
@@ -5472,37 +5471,6 @@
       "title": "Astuces",
       "description": "Options fonctionnelles. Certaines nécessitent une nouvelle session pour prendre effet (voir la description de chaque option)."
     },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Permettez aux modèles texte uniquement de lire des images en les faisant passer par un modèle multimodal distinct qui convertit les images en descriptions textuelles.",
-      "enableLabel": "Activer Vision Bridge",
-      "enableHint": "Désactivé, tous les modèles se comportent exactement comme avant. Activé, les modèles sélectionnés ci-dessous font passer leurs images par le backend de vision. Une fois activé, les images envoyées à ces modèles et le texte proche utilisé comme indication de focus sont envoyés au backend de vision choisi.",
-      "enableAria": "Activer ou désactiver Vision Bridge",
-      "toast": {
-        "saved": "Paramètres de Vision Bridge enregistrés",
-        "saveFailed": "Échec de l'enregistrement des paramètres de Vision Bridge"
-      },
-      "capability": {
-        "vision": "Compatible vision (connu)",
-        "noVision": "Texte uniquement (connu)",
-        "unknown": "Capacité de vision inconnue"
-      },
-      "targetModels": {
-        "label": "Modèles routés via Vision Bridge",
-        "hint": "Les modèles texte uniquement (par ex. DeepSeek) sont cochés par défaut. Vous pouvez aussi cocher des modèles compatibles vision, par exemple pour utiliser un modèle de description moins cher afin d'économiser des jetons.",
-        "empty": "Aucun modèle disponible.",
-        "toggleAria": "Activer ou désactiver Vision Bridge pour {{model}}"
-      },
-      "backends": {
-        "label": "Modèles du backend de vision",
-        "hint": "Choisissez jusqu'à deux modèles multimodaux qui convertissent les images en texte. Le second (secours) est facultatif.",
-        "primary": "Principal",
-        "fallback": "Secours",
-        "unset": "Aucune sélection",
-        "noBackup": "Aucun secours",
-        "hintSecondary": "Le backend principal est utilisé en premier. S'il échoue et qu'un secours est défini, le secours est utilisé. Si les deux échouent, l'image ne peut pas être décrite et est remplacée par un avis textuel."
-      }
-    },
     "terminalShell": {
       "title": "Shell du terminal par défaut",
       "description": "Utiliser ce shell à l'ouverture d'un nouvel onglet de terminal dans la barre latérale.",
@@ -5519,8 +5487,19 @@
       "title": "Saisie des messages",
       "sendShortcut": {
         "label": "Utiliser {{shortcut}} pour envoyer",
-        "hint": "Activé, {{shortcut}} envoie les messages. Désactivé, Enter envoie les messages et Shift+Enter insère un saut de ligne.",
-        "ariaLabel": "Utiliser {{shortcut}} pour envoyer les messages"
+        "hint": "Enter envoie le message. Shift+Enter insère un saut de ligne.",
+        "ariaLabel": "Utiliser {{shortcut}} pour envoyer les messages",
+        "hintModifierEnter": "{{shortcut}} envoie le message. Enter insère un saut de ligne."
+      },
+      "followUp": {
+        "label": "Envoi pendant l'exécution",
+        "hintQueue": "Pendant l'exécution de la tâche, le bouton d'envoi et {{send}} mettent le message en file d'attente.",
+        "hintSteer": "Pendant l'exécution de la tâche, le bouton d'envoi et {{send}} réorientent la tâche en cours.",
+        "ariaLabel": "Envoi pendant l'exécution de la tâche",
+        "options": {
+          "queue": "File d'attente",
+          "steer": "Réorienter"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -7935,6 +7914,18 @@
         "overviewTab": "Vue d'ensemble",
         "addPlugin": "Ajouter un plugin",
         "addPluginAria": "Options d'ajout de plugin",
+        "githubInstall": {
+          "label": "Installer depuis une release GitHub…",
+          "title": "Installer depuis une release GitHub",
+          "description": "Collez le lien d’un dépôt ou d’une release. Pour un dépôt privé, connectez-vous avec un compte GitHub autorisé.",
+          "url": "Adresse GitHub",
+          "submit": "Rechercher le plugin",
+          "loading": "Recherche et téléchargement…",
+          "invalid": "Saisissez une URL de dépôt GitHub ou de tag de release.",
+          "not-found": "Cette version est indisponible. Vérifiez le lien et votre accès au dépôt.",
+          "ambiguous": "Ce lien contient plusieurs plugins. Choisissez une release avec un seul paquet ou installez le fichier directement.",
+          "installedAlready": "Ce plugin est déjà installé. Vous pouvez le mettre à jour dans ses paramètres."
+        },
         "installedSection": "Installés",
         "installedExpand": "Afficher les {{count}} plugins installés",
         "installedCollapse": "Masquer les autres plugins installés",
@@ -8369,6 +8360,8 @@
         "subscribeMessageDetail": "Reçoit les messages enregistrés et les réponses de l’IA. Les pièces jointes passent par une lecture et un transfert distincts.",
         "subscribeToolExecution": "Événements d’exécution des outils",
         "subscribeToolExecutionDetail": "Reçoit les noms, entrées, résultats et erreurs des outils. Observe sans modifier l’exécution.",
+        "subscribeNativeRecovery": "Événements natifs de récupération",
+        "subscribeNativeRecoveryDetail": "Reçoit l’état du moteur lors des nouvelles tentatives, de la compaction du contexte et de l’arrêt des tâches.",
         "subscribeTaskState": "Événements d’état des tâches",
         "subscribeTaskStateDetail": "Reçoit les changements d’exécution, d’attente, de fin, d’archivage et de masquage des tâches.",
         "subscribeActivity": "Observe quand l'IA réfléchit et quand elle attend votre intervention",
@@ -8584,6 +8577,24 @@
         "openInSidebar": "Ouvrir dans la barre latérale",
         "panelPageHosted": "S'ouvre depuis la page Plugins · se ferme lorsque vous la quittez",
         "panelNone": "Ce plugin n'a pas de panneau",
+        "githubRelease": {
+          "title": "Mises à jour du plugin",
+          "installed": "Version installée {{version}}",
+          "upstream": "Version publiée {{version}}",
+          "prerelease": "Préversion",
+          "check": "Rechercher des mises à jour",
+          "update": "Télécharger et installer",
+          "connect": "Se connecter à GitHub",
+          "checking": "Recherche de mises à jour…",
+          "updating": "Téléchargement et installation…",
+          "available": "Une mise à jour est disponible.",
+          "current": "La version installée est à jour.",
+          "updated": "Plugin mis à jour.",
+          "empty": "Aucune version installable disponible.",
+          "sign-in": "Connectez-vous à GitHub pour rechercher des mises à jour.",
+          "forbidden": "Ce compte GitHub ne peut pas lire le dépôt privé.",
+          "unavailable": "Impossible de vérifier ou d’installer la mise à jour. Réessayez."
+        },
         "customSlotTitle": "Zone de paramètres personnalisés du plugin",
         "dangerTitle": "Désinstaller le plugin",
         "infoContents": "Contenu",
@@ -9935,6 +9946,41 @@
       },
       "providerTooltip": "Le fournisseur actuellement sélectionné pour la session ; vide si aucun n'est épinglé.",
       "tokensTooltip": "Ne compte que les jetons utilisés par cette session sur {{range}}."
+    },
+    "auxiliary": {
+      "title": "Utilisation auxiliaire",
+      "label": "Auxiliaire",
+      "purpose": "Usage",
+      "requests": "Requêtes enregistrées",
+      "description": "Inclus dans le total des tokens. Seule l’utilisation renvoyée par le fournisseur est enregistrée ; les données absentes et les requêtes passées ne sont pas estimées.",
+      "sources": {
+        "title": "Génération de titres",
+        "task-summary": "Résumés des tâches",
+        "prompt-prediction": "Suggestions de saisie",
+        "working-status": "État du travail",
+        "help": "Aide",
+        "bot-creation": "Création de compagnons",
+        "bot-opening": "Salutations des compagnons",
+        "group-planning": "Planification du groupe",
+        "ambient-reply": "Décisions de réponse",
+        "auto-review": "Revue automatique",
+        "tool-loop-review": "Revue des boucles d’outils",
+        "memory-review": "Revue de la mémoire",
+        "git-summary": "Résumés des modifications",
+        "hook-generation": "Scripts d’automatisation",
+        "automation-verification": "Vérification des imports",
+        "plugin-text": "Texte des extensions",
+        "voice-dialogue": "Conversations vocales",
+        "voice-exit": "Décisions de fin d’appel",
+        "voice-refinement": "Amélioration du texte vocal",
+        "dictionary-learning": "Apprentissage du dictionnaire",
+        "embedding-query": "Recherche vectorielle",
+        "embedding-index": "Indexation vectorielle",
+        "web-search": "Recherche web",
+        "provider-probe": "Tests de connexion",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Autres requêtes auxiliaires"
+      }
     }
   },
   "usageDashboard": {
@@ -10885,6 +10931,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Impossible de charger les amis",
+    "rosterReload": "Recharger les amis",
     "avatarStatus": {
       "awaiting": "Attend votre confirmation",
       "error": "Requiert votre attention",
@@ -11461,7 +11509,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} ne peut pas répondre : l'appareil de l’ami a atteint sa limite de sessions distantes.\nDemandez au propriétaire de l’ami d'archiver les sessions inutilisées, ou au propriétaire de l'ordinateur distant d'augmenter la limite dans Accès distant et partage.",
           "REMOTE_TOTAL_LIMIT": "{{name}} ne peut pas répondre : l'ordinateur distant a atteint sa limite totale de sessions distantes.\nDemandez au propriétaire de cet ordinateur de libérer les sessions inutilisées ou d'augmenter la limite dans Accès distant et partage.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} n'a pas pu répondre : le modèle actuel ne prend pas en charge les images.\nChoisissez un modèle compatible avec les images, ou activez et configurez Vision Bridge dans Paramètres → Personnalisation, puis renvoyez votre message.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} n'a pas pu répondre : le modèle actuel ne prend pas en charge les images.\nChoisissez un modèle compatible avec les images.",
           "MODEL_UNAVAILABLE": "{{name}} n'a pas pu répondre : aucun modèle n'est disponible.\nChoisissez un modèle connecté et disponible dans les paramètres de l’ami, puis renvoyez votre message.",
           "AUTH_REQUIRED": "{{name}} n'a pas pu répondre : la connexion au modèle nécessite une authentification.\nReconnectez le fournisseur de modèles dans les Paramètres, puis renvoyez votre message.",
           "RATE_LIMITED": "{{name}} n'a pas pu répondre : trop de requêtes au modèle.\nRenvoyez votre message plus tard, ou choisissez un autre modèle disponible.",
@@ -13807,9 +13855,8 @@
     "sendButton": {
       "send": "Envoyer le message",
       "queue": "Mettre le message en file d'attente",
-      "queueTooltip": "Cliquez pour mettre en file d'attente ; appuyez sur {{shortcut}} pour réorienter la tâche sans l'interrompre",
-      "queueTooltipSendMode": "Cliquez pour mettre en file d'attente ; appuyez sur {{shortcut}} pour envoyer ce message",
-      "stop": "Arrêter la génération"
+      "stop": "Arrêter la génération",
+      "steer": "Réorienter la tâche en cours"
     },
     "pluginSetup": {
       "account": {
@@ -14713,6 +14760,13 @@
       "runningWithWorktree_one": "Attendez sa fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_other": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_many": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences."
+    },
+    "followUpHint": {
+      "queueDefault": "Les messages envoyés pendant l'exécution de la tâche sont mis en file d'attente.",
+      "steerDefault": "Les messages envoyés pendant l'exécution de la tâche réorientent la tâche en cours.",
+      "switchToSteer": "Réorienter par défaut",
+      "switchToQueue": "File d'attente par défaut",
+      "dismiss": "Fermer l'astuce"
     }
   },
   "onboarding": {
@@ -14952,11 +15006,6 @@
       "title": "Image manquante",
       "unavailable": "Image indisponible",
       "loading": "Chargement de l'image…"
-    },
-    "visionBridge": {
-      "analyzing": "Analyse de {{count}} image(s)…",
-      "fallback": "Le pont de vision est passé à un backend de vision de secours (principal indisponible) ; la reconnaissance d'images peut être affectée",
-      "unavailable": "Le pont de vision est indisponible ; l'image n'a pas pu être décrite et a été remplacée par un avis textuel"
     },
     "newMessageIndicator": {
       "aria": "Revenir en bas, voir {{count}} nouveaux messages",
@@ -19937,7 +19986,8 @@
           "expired": "Expiré",
           "voided": "Annulé"
         }
-      }
+      },
+      "viewUsage": "Voir la consommation"
     },
     "orders": {
       "title": "Historique des commandes",
@@ -21589,7 +21639,6 @@
       "sessionRuntimeFallback": "Repli automatique du modèle des tâches",
       "subagentModels": "Sous-Agents",
       "auxiliaryModels": "Modèles auxiliaires",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Modèles affichés et masqués",
       "providerOrder": "Ordre des fournisseurs",
       "modelCatalogOverrides": "Paramètres de modèle modifiés",
@@ -22130,6 +22179,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "Télécharger ce dépôt sur cet ordinateur ?",
+    "credentialNotice": "Pour un dépôt privé, Cindy peut utiliser le compte connecté sur cet ordinateur.",
+    "saveTo": "Enregistrer dans",
+    "confirmImport": "Confirmer l’importation",
+    "confirmSshTitle": "Autoriser ce projet à accéder aux répertoires SSH suivants ?",
+    "sshHost": "Hôte SSH",
+    "readWriteAccess": "Lecture et écriture",
+    "readAccess": "Lecture seule",
+    "confirmAccess": "Autoriser l’accès",
     "autoLoading": "Recherche de l’icône…",
     "autoNone": "Les initiales du nom du projet sont utilisées.",
     "autoSource": "Source",
@@ -22169,7 +22227,42 @@
     "discard": "Abandonner",
     "colors": {
       "default": "Par défaut (selon le thème)"
-    }
+    },
+    "directories": "Dossiers du projet",
+    "directoriesHint": "S’applique à toutes les tâches de ce projet dès le prochain tour. Les dossiers propres à chaque tâche sont conservés.",
+    "removeDirectory": "Retirer le dossier",
+    "directoryPath": "Chemin complet du dossier",
+    "addDirectory": "Ajouter un dossier",
+    "browseDirectory": "Parcourir les dossiers",
+    "mainDirectory": "Dossier principal",
+    "createTitle": "Nouveau projet",
+    "createAction": "Créer le projet",
+    "repository": "URL du dépôt",
+    "repositoryHint": "Compatible avec GitHub, GitLab et les autres dépôts Git via HTTPS ou SSH.",
+    "autoDirectory": "Sans dossier choisi, création dans {{path}}. Un numéro est ajouté si le nom existe.",
+    "cloning": "Clonage du dépôt…",
+    "invalidRepository": "Saisissez une URL de dépôt GitHub, GitLab ou Git valide.",
+    "createFailed": "Impossible de créer le projet. Vérifiez les droits en écriture, l’URL et l’accès Git de cet ordinateur. Le dossier de clonage doit être vide.",
+    "createNamePlaceholder": "Nom du projet",
+    "createNameHint": "Donnez un nom à votre projet pour commencer.",
+    "createFromRepository": "Créer depuis un dépôt de code",
+    "createBlank": "Passer à un projet vide",
+    "source_blank": "Projet vide",
+    "source_existing": "Ouvrir un dossier existant",
+    "source_repository": "Importer un dépôt de code",
+    "sourceHint_blank": "Saisissez un nom. Le dossier sera créé automatiquement.",
+    "sourceHint_existing": "Choisissez un dossier de projet sur cet ordinateur.",
+    "sourceHint_repository": "Collez un lien de dépôt pour le télécharger sur cet ordinateur.",
+    "source": "Origine du projet",
+    "sourceShort_blank": "Nouveau",
+    "sourceShort_existing": "Dossier",
+    "sourceShort_repository": "Dépôt",
+    "automaticMain": "Principal · Automatique",
+    "source_local": "Dossier local",
+    "sourceShort_local": "Dossier local",
+    "sourceHint_local": "Saisissez un nom pour créer un dossier ou choisissez un dossier existant.",
+    "chooseExistingFolder": "Choisir un dossier existant",
+    "changeMainDirectory": "Modifier"
   },
   "taskManagement": {
     "scope": "Uniquement pour ce compte sur cet ordinateur.",
