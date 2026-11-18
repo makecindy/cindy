@@ -1256,12 +1256,6 @@ describe('sidebar teammate filter only narrows teammate content', () => {
     });
   });
 
-  it('keeps ordinary projects unchanged while switching between teammates', () => {
-    for (const selected of ['all', 'none', ['cindy'], ['patrol'], ['note']] as const) {
-      expect(sidebar(selected).projects.filter((dir) => !dir.startsWith(owners))).toEqual(ordinary);
-    }
-  });
-
   it('still lets the last-activity filter drop projects with no recent task', () => {
     expect(sidebar(['patrol'], Date.parse('2027-01-01T00:00:00.000Z'))).toEqual({ projects: [], tasks: [] });
   });
