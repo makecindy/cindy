@@ -73,6 +73,7 @@
     "copyStateFailed": "錄之未成",
     "copyStateCopy": "錄之",
     "copyCode": "錄程式碼",
+    "copyTable": "錄表",
     "thinkingHidden": "所思已隱",
     "thinkingDone": "思 {{duration}}",
     "thinkingActive": "方思 {{elapsed}}",

@@ -35,7 +35,7 @@ import { CompanionThreadSummary, type CompanionThreads } from './CompanionThread
 import { companionTurnContinuations } from './companionConversationPresentation';
 import { CompanionMessageActions } from './CompanionMessageActions';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
-import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
+import { MarkdownBlockCopyButton } from './MarkdownBlockCopyButton';
 import { BotGroupQuote } from './BotGroupQuote';
 import { companionReplyQuoteDisplay, companionReplyQuoteFor } from './companionReplyQuote';
 import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
@@ -248,6 +248,7 @@ import {
 import {
   groupMobileMarkdownSelectableBlocks,
   mobileMarkdownListMarkerText,
+  mobileMarkdownTableToTsv,
   mobileMarkdownManagedImagePreviewUrl,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageAltChipText,
@@ -6493,7 +6494,7 @@ function MarkdownBodyBase({
             />
           </View>
           {showCodeCopyButton ? (
-              <MarkdownCodeCopyButton text={block.text} />
+              <MarkdownBlockCopyButton text={block.text} />
             ) : null}
         </View>
       );
@@ -6563,53 +6564,57 @@ function MarkdownBodyBase({
         minWidth: layout.markdownTableCellMinWidth,
       });
       return (
-        <ScrollView
-          horizontal
-          key={block.key}
-          style={styles.markdownTableScroll}
-          testID="message.markdownTable"
-        >
-          <View style={styles.markdownTable}>
-            <View style={[styles.markdownTableRow, styles.markdownTableHeaderRow]}>
-              {columnWidths.map((columnWidth, index) => {
-                const cell = block.header[index] ?? [];
-                return (
-                  <MarkdownSelectableText
-                    adjustVerticalAlignment={false}
-                    allowIosUITextView={singleBlockAllowsIosUITextView}
-                    key={`${block.key}:th:${index}`}
-                    selectable={inlinesSelectable(cell)}
-                    style={[
-                      styles.markdownTableCell,
-                      { width: columnWidth },
-                      styles.markdownTableHeaderCell,
-                    ]}
-                  >
-                    {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), [styles.markdownTableCell, styles.markdownTableHeaderCell])}
-                  </MarkdownSelectableText>
-                );
-              })}
-            </View>
-            {block.rows.map((row) => (
-              <View key={row.key} style={styles.markdownTableRow}>
+        <View key={block.key} style={styles.markdownTableScroll}>
+          <ScrollView
+            horizontal
+            style={styles.markdownTableScroll}
+            testID="message.markdownTable"
+          >
+            <View style={styles.markdownTable}>
+              <View style={[styles.markdownTableRow, styles.markdownTableHeaderRow]}>
                 {columnWidths.map((columnWidth, index) => {
-                  const cell = row.cells[index] ?? [];
+                  const cell = block.header[index] ?? [];
                   return (
                     <MarkdownSelectableText
                       adjustVerticalAlignment={false}
                       allowIosUITextView={singleBlockAllowsIosUITextView}
-                      key={`${row.key}:td:${index}`}
+                      key={`${block.key}:th:${index}`}
                       selectable={inlinesSelectable(cell)}
-                      style={[styles.markdownTableCell, { width: columnWidth }]}
+                      style={[
+                        styles.markdownTableCell,
+                        { width: columnWidth },
+                        styles.markdownTableHeaderCell,
+                      ]}
                     >
-                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), styles.markdownTableCell)}
+                      {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), [styles.markdownTableCell, styles.markdownTableHeaderCell])}
                     </MarkdownSelectableText>
                   );
                 })}
               </View>
-            ))}
-          </View>
-        </ScrollView>
+              {block.rows.map((row) => (
+                <View key={row.key} style={styles.markdownTableRow}>
+                  {columnWidths.map((columnWidth, index) => {
+                    const cell = row.cells[index] ?? [];
+                    return (
+                      <MarkdownSelectableText
+                        adjustVerticalAlignment={false}
+                        allowIosUITextView={singleBlockAllowsIosUITextView}
+                        key={`${row.key}:td:${index}`}
+                        selectable={inlinesSelectable(cell)}
+                        style={[styles.markdownTableCell, { width: columnWidth }]}
+                      >
+                        {renderInlines(cell, singleBlockSpanFor(inlinesSelectable(cell)), styles.markdownTableCell)}
+                      </MarkdownSelectableText>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+          {codeCopyEnabled && !streaming ? (
+            <MarkdownBlockCopyButton kind="table" text={mobileMarkdownTableToTsv(block)} />
+          ) : null}
+        </View>
       );
     }
     return (
@@ -6622,7 +6627,7 @@ function MarkdownBodyBase({
         {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
       </MarkdownSelectableText>
     );
-  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
+  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, streaming, styles, t]);
   return (
     <View
       collapsable={false}

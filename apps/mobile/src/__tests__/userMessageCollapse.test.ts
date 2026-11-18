@@ -197,7 +197,7 @@ const UITextView = nativeText('ios-text-view');
 const ScrollView = (props: SurfaceProps) => React.createElement('div', { 'data-scroll': true }, props.children);
 const { BubbleHarness, MarkdownHarness } = executeRenderer<{ BubbleHarness: React.ComponentType<any>; MarkdownHarness: React.ComponentType<any> }>(
   String.raw`
-function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false, codeCopyEnabled = true }) {
+function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false, codeCopyEnabled = true, streaming = false }) {
   const styles = {};
   const onOpenPayload = undefined;
   const inlinesSelectable = () => true;
@@ -250,7 +250,7 @@ return { BubbleHarness, MarkdownHarness };
     HighlightedCodeText: ({ text }: { text: string }) => React.createElement('code', null, text),
     // Clipboard behavior has dedicated production-component tests; this stub only
     // exposes action presence for the layout and share-mode assertions.
-    MarkdownCodeCopyButton: ({ text }: { text: string }) => React.createElement('button', { 'data-testid': 'code-copy-stub' }, text),
+    MarkdownBlockCopyButton: ({ text }: { text: string }) => React.createElement('button', { 'data-testid': 'code-copy-stub' }, text),
     mayExceedVisualLineThreshold, resolveUserMessageCollapse,
     AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD, AUTOMATION_USER_MESSAGE_COLLAPSED_LINES,
     LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD, LONG_USER_MESSAGE_COLLAPSED_LINES,

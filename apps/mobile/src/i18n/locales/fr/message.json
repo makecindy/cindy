@@ -73,6 +73,7 @@
     "copyStateFailed": "Échec de la copie",
     "copyStateCopy": "Copier",
     "copyCode": "Copier le code",
+    "copyTable": "Copier le tableau",
     "thinkingHidden": "Réflexion masquée",
     "thinkingDone": "Réflexion pendant {{duration}}",
     "thinkingActive": "Réflexion {{elapsed}}",

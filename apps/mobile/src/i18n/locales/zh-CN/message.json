@@ -73,6 +73,7 @@
     "copyStateFailed": "复制失败",
     "copyStateCopy": "复制",
     "copyCode": "复制代码",
+    "copyTable": "复制表格",
     "thinkingHidden": "思考内容已隐藏",
     "thinkingDone": "已思考 {{duration}}",
     "thinkingActive": "思考中 {{elapsed}}",

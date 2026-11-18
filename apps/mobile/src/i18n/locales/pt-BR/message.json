@@ -73,6 +73,7 @@
     "copyStateFailed": "Falha ao copiar",
     "copyStateCopy": "Copiar",
     "copyCode": "Copiar código",
+    "copyTable": "Copiar tabela",
     "thinkingHidden": "Raciocínio oculto",
     "thinkingDone": "Raciocinou por {{duration}}",
     "thinkingActive": "Raciocinando há {{elapsed}}",
