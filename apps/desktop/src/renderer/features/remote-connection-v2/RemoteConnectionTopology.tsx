@@ -42,6 +42,8 @@ import {
   protocolKind,
   protocolKindLabel,
   protocolLabel,
+  relayRouteLabel,
+  relayTransportLabel,
   rowSubtitle,
   selfProtocolKind,
   type ProtocolKind,
@@ -71,15 +73,15 @@ const RELAY_LINE_H = 11 * 1.3;
 
 /**
  * 中转站的字从圆点中心朝中间最多伸多远。往中间那段 S 形线从字的高度穿过时(字写在上面而线从上面下来,
- * 或反过来),停在它的拐点之前;否则停在中间细环之前,细环按名字那一行的高度取实际宽度,
- * 名字整个在细环上方或下方时不受细环限制。
+ * 或反过来),停在它的拐点之前;否则停在中间细环之前，细环按离圆点最近的那行宽字(协议，没有时是名字)
+ * 的高度取实际宽度，整个在细环上方或下方时不受细环限制。最下面「UDP / WS · 往返」那行较短、居中，不算。
  */
-function relayReachTowardHub(m: TopologyLayout['m'], hub: Point, relay: Point, below: boolean, hasRtt: boolean): number {
+function relayReachTowardHub(m: TopologyLayout['m'], hub: Point, relay: Point, below: boolean, hasRouteLine: boolean): number {
   const dx = Math.abs(hub.x - relay.x);
   const edge = below ? relay.y + m.relayR + RELAY_LABEL_GAP : relay.y - m.relayR - RELAY_LABEL_GAP;
   if (below ? hub.y > edge : hub.y < edge) return Math.max(0, Math.floor((m.relayR + 3 + dx - m.ring) / 2 - 8));
-  // 写在上面时往返在下、名字在上;写在下面时名字紧贴圆点。
-  const nameEdge = below || !hasRtt ? edge : edge - RELAY_LINE_H;
+  // 写在上面时自上而下是名字、协议、「UDP / WS · 往返」;写在下面时名字紧贴圆点、往下是协议和走法、往返。
+  const nameEdge = below || !hasRouteLine ? edge : edge - RELAY_LINE_H;
   const dy = Math.abs(hub.y - nameEdge);
   const chord = dy < m.ring ? Math.sqrt(m.ring * m.ring - dy * dy) : 0;
   return Math.max(0, Math.floor(dx - chord - 4));
@@ -372,17 +374,21 @@ export function RemoteConnectionTopology({
       }
       const relayProtocol = protocolKindLabel(model.relay.protocol, t);
       const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
-      const relayDescription = [model.relay.name, relayProtocol, relayRtt].filter(Boolean).join(' · ');
+      // 最下面一行：经中转的数据走 UDP 还是 WS,紧跟那条路的往返，如「UDP · 25 ms」。
+      const relayPath = [relayTransportLabel(model.relay, t), relayRtt].filter(Boolean).join(' · ');
+      const relayDescription = [model.relay.name, relayRouteLabel(model.relay, t), relayRtt].filter(Boolean).join(' · ');
       const size = m.relayR * 2;
-      // 中转站的名字和往返写在小圆点正上方、居中(用户反馈 2026-11-18:原来写在圆点下面朝中间排开,
+      // 中转站的名字、连接方式和往返写在小圆点正上方、居中(用户反馈 2026-11-18:原来写在圆点下面朝中间排开,
       // 和这台电脑的名字、连接方式挤成一团)。这台电脑的字总在圆盘下面,所以只有中转站整个落在那些字
       // 下面(直连多到拆成两组时才会)才写到圆点下面;此时往中间那段线从上面下来,下面反而是空的。
       // 圆点上方:往中间那段线几乎是平的,扇出的线要离开圆点 RELAY_LABEL_OUTER 以外才拐上来。
       // 名字太长时贴着扇出那一侧的边界朝中间伸(relayReachTowardHub);还放不下就折成两行(葡语
       // 「Retransmissor Cindy」、自建中转的长名字),再长才截断(悬停圆点与两张卡片里有全名)。
-      // 连接方式不在这里重复:它就是这台电脑名字下面那一个(selfProtocolKind 读的同一个值)。
+      // 名字下面写协议，再下面写经中转的数据走 UDP 还是 WS 和那条路的往返(用户要求 2026-11-18:这台电脑名字下面的
+      // 「Agent-Net」看不出是在说中转，也分不出 Agent-Net 的 UDP、WS 和 Device Link)。协议和走法分两行：
+      // 中转点离中间近时(fleet)「Agent-Net · WS」写在一行放不下。
       const labelBelow = g.relay.y + m.relayR + RELAY_LABEL_GAP >= hub.y + m.ring + HUB_TEXT_BOTTOM + 4;
-      const towardHub = relayReachTowardHub(m, hub, g.relay, labelBelow, relayRtt !== null);
+      const towardHub = relayReachTowardHub(m, hub, g.relay, labelBelow, relayPath !== '');
       const leftRoom = group.side === -1 ? RELAY_LABEL_OUTER : towardHub;
       const rightRoom = group.side === -1 ? towardHub : RELAY_LABEL_OUTER;
       nodes.push(
@@ -411,14 +417,19 @@ export function RemoteConnectionTopology({
           aria-hidden
         >
           <span className="line-clamp-2 max-w-full break-words rounded bg-[var(--settings-theme-card-bg)] px-1">{model.relay.name}</span>
-          {relayRtt ? (
+          {model.relay.protocol && relayProtocol ? (
+            <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1">
+              <ProtocolMark kind={model.relay.protocol} label={relayProtocol} className="text-11 leading-[1.3] text-[var(--text-tertiary)]" />
+            </span>
+          ) : null}
+          {relayPath ? (
             <span
               className={cn(
                 'whitespace-nowrap rounded bg-[var(--settings-theme-card-bg)] px-1 tabular-nums',
                 emphasis !== 'rest' && emphasis !== 'dim' && 'text-[var(--text-secondary)]',
               )}
             >
-              {relayRtt}
+              {relayPath}
             </span>
           ) : null}
         </div>,

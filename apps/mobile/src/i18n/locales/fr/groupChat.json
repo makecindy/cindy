@@ -130,7 +130,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} n'a pas pu répondre : le modèle actuel ne prend pas en charge les images.",
         "advice": "Choisissez un modèle compatible avec les images.",
-        "details": "Choisissez un modèle compatible avec les images, ou activez et configurez Vision Bridge dans Paramètres → Personnalisation, puis renvoyez votre message."
+        "details": "Choisissez un modèle compatible avec les images."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} n'a pas pu répondre : aucun modèle n'est disponible.",

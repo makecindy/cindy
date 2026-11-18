@@ -7,6 +7,15 @@ vi.mock('../../usage/auxiliaryUsage.js', () => ({
   },
 }));
 const localReady = vi.hoisted(() => vi.fn(async () => {}));
+const acquireAccount = vi.hoisted(() => vi.fn(async (): Promise<import('../../subscription-accounts/runtime.js').SubscriptionAccountLease | null> => null));
+const poolMembership = vi.hoisted(() => ({ provider: 'pool-a' }));
+const projectedCatalog = vi.hoisted(() => vi.fn<() => import('@cindy/model-providers').Catalog | undefined>());
+vi.mock('../../subscription-accounts/placement.js', () => ({ accountProviderId: () => poolMembership.provider }));
+vi.mock('../../subscription-accounts/runtime.js', () => ({ acquireSubscriptionAccount: acquireAccount }));
+vi.mock('../../maker-host/createDesktopProviderService.js', async () => {
+  const { getActiveCatalog } = await import('../../maker-host/active-catalog.js');
+  return { getDesktopSelectableCatalog: () => projectedCatalog() ?? getActiveCatalog() };
+});
 vi.mock('../../local-model-runtime/preflight.js', () => ({ ensureManagedOllamaReadyForSession: localReady }));
 
 vi.mock('electron', () => ({
@@ -176,6 +185,9 @@ function makerMock(authenticated: boolean): Maker {
 describe('utility one-shot candidates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    acquireAccount.mockReset().mockResolvedValue(null);
+    projectedCatalog.mockReset();
+    poolMembership.provider = 'pool-a';
     fetchMock.mockReset();
     resetUtilityReasoningMemory();
     chainState.source = 'auto';
@@ -257,6 +269,18 @@ describe('utility one-shot candidates', () => {
     it.each(['auto', 'env'] as const)('does not use a %s auxiliary chain', (source) => {
       chainState.source = source;
       expect(createCustomAutoReviewFallback()).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(readCustomKey).not.toHaveBeenCalled();
+    });
+
+    // Unit regression: the former remote pin must never dispatch to a same-name
+    // local supplier. Both public consumers need coverage; local fixtures are ready.
+    it.each(['text', 'review'] as const)('does not reinterpret remote pins for %s', async consumer => {
+      chainState.refs = ['remote-cat:other:cat:review-a:codex:small'];
+      const result = consumer === 'text'
+        ? await requestUtilityText(makerMock(true), prompt)
+        : await createCustomAutoReviewFallback()!(prompt, options);
+      expect(result.ok).toBe(false);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(readCustomKey).not.toHaveBeenCalled();
     });
@@ -2836,6 +2860,71 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // Unit regression: the public text entry must reserve the selected pool's account,
+  // send only that account's credentials, and release it on every completion path.
+  // Existing tests cover legacy OAuth only, which cannot represent a created pool.
+  it.each(['success', 'http-error', 'revoked', 'auth-error', 'moved', 'timeout', 'cancel'] as const)(
+    'uses and releases the selected subscription pool account: %s', async (outcome) => {
+      projectedCatalog.mockReturnValue({ providers: [{
+        id: 'pool-a', name: 'My subscription', source: 'builtin', subscriptionPool: 'openai',
+        agents: ['codex'], auth: { method: 'oauth' },
+        routing: { codex: { upstream: 'https://chatgpt.example/api/v1', authStrategy: 'oauth-passthrough' } },
+        models: { codex: [{ id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: 272_000 }] },
+      }] } as never);
+      const lease = { account: { id: 'pool-account' }, assertDispatchable: vi.fn(),
+        observeFailure: vi.fn(), running: vi.fn(), release: vi.fn() };
+      const accountLease = lease as unknown as import('../../subscription-accounts/runtime.js').SubscriptionAccountLease;
+      if (outcome === 'timeout' || outcome === 'cancel') {
+        vi.useFakeTimers();
+        let finish!: (value: typeof accountLease) => void;
+        acquireAccount.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        const controller = new AbortController();
+        const pending = requestUtilityText(makerMock(false), 'garden title', {
+          providerId: 'pool-a', agentKind: 'codex', model: 'gpt-5.5',
+          timeoutMs: 12_000, signal: controller.signal,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        if (outcome === 'cancel') controller.abort();
+        else await vi.advanceTimersByTimeAsync(12_000);
+        await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+        finish(accountLease);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(lease.release).toHaveBeenCalledOnce();
+        expect(lease.running).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+        return;
+      }
+      acquireAccount.mockResolvedValue(accountLease);
+      readCodexDispatchAuth.mockImplementation(async (_provider, account) => {
+        expect(_provider).toBe('openai');
+        expect(account).toBe(lease.account);
+        if (outcome === 'auth-error') throw new Error('expired');
+        if (outcome === 'moved') poolMembership.provider = 'pool-b';
+        return { accessToken: 'fake-pool-token', accountId: 'pool-account', canDispatch: () => outcome !== 'revoked' };
+      });
+      fetchMock.mockResolvedValue(outcome === 'http-error'
+        ? { ok: false, status: 503, text: async () => 'unavailable' } as never
+        : { ok: true, text: async () => 'data: {"type":"response.output_text.delta","delta":"garden"}\ndata: [DONE]\n' } as never);
+      const maker = makerMock(false);
+      const result = await requestUtilityText(maker, 'garden title', {
+        providerId: 'pool-a', agentKind: 'codex', model: 'gpt-5.5',
+      });
+      expect(result.ok).toBe(outcome === 'success');
+      expect(acquireAccount).toHaveBeenCalledWith('pool-a', 'gpt-5.5', [], false, { resuming: false });
+      expect(lease.release).toHaveBeenCalledOnce();
+      if (outcome === 'http-error') {
+        expect(lease.observeFailure).toHaveBeenCalledWith({ errorStatus: 503 }, 'gpt-5.5', 'run');
+        expect(lease.observeFailure.mock.invocationCallOrder[0]).toBeLessThan(lease.release.mock.invocationCallOrder[0]!);
+      }
+      expect(readCodexCreds).not.toHaveBeenCalled();
+      expect(maker.oneShot).not.toHaveBeenCalled();
+      if (outcome === 'revoked' || outcome === 'auth-error' || outcome === 'moved') expect(fetchMock).not.toHaveBeenCalled();
+      else expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+        Authorization: 'Bearer fake-pool-token', 'chatgpt-account-id': 'pool-account',
+      });
+    },
+  );
+
   it('uses OpenAI Codex OAuth and strips the bridge model prefix on the selected route', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -3123,8 +3212,11 @@ describe('utility one-shot candidates', () => {
       }],
     } as never);
     let resolveAuth: ((auth: { accessToken: string; accountId: string }) => void) | undefined;
+    let authStarted!: () => void;
+    const started = new Promise<void>(resolve => { authStarted = resolve; });
     readCodexCreds.mockImplementationOnce(() => new Promise((resolve) => {
       resolveAuth = resolve;
+      authStarted();
     }));
     const controller = new AbortController();
 
@@ -3133,7 +3225,7 @@ describe('utility one-shot candidates', () => {
       DEDICATED_AUTO_REVIEW_CANDIDATES[1],
       { timeoutMs: 12_000, signal: controller.signal },
     );
-    await Promise.resolve();
+    await started;
     controller.abort();
     resolveAuth?.({ accessToken: 'late-token', accountId: 'late-account' });
 

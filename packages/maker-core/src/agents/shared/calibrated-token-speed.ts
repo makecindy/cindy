@@ -474,6 +474,11 @@ export class CalibratedTokenSpeedMeter {
     this.stopped = false;
   }
 
+  /** Cheap readiness check on the delta hot path, before building a status snapshot. */
+  get hasLiveRate(): boolean {
+    return this.started && !this.stopped && !this.paused && !this.invalid && this.tps > 0;
+  }
+
   snapshot(now = Date.now()): TokenSpeedSnapshot | undefined {
     if (!this.started || this.invalid) return undefined;
     const streaming = !this.stopped && !this.paused;

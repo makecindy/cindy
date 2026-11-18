@@ -32,6 +32,23 @@ export function selfProtocolKind(model: Pick<TopologyModel, 'relay'>, linkStatus
   return linkStatus === 'online' ? model.relay.protocol ?? null : null;
 }
 
+/** 经中转的数据走中转的 UDP 还是 WebSocket:「UDP」/「WS」;不知道时为 null。 */
+export function relayTransportLabel(relay: Pick<TopologyModel['relay'], 'transport'>, t: T): string | null {
+  if (!relay.transport) return null;
+  return t(relay.transport === 'udp' ? 'settings.remoteControl.v2.relayTransport.udp' : 'settings.remoteControl.v2.relayTransport.websocket');
+}
+
+/**
+ * 中转点上写的连接方式:协议加上经中转的数据走哪条路，如「Agent-Net · UDP」「Agent-Net · WS」「Device Link · WS」
+ * (用户要求 2026-11-18:看不出中转走的是 Agent-Net 的 UDP、WS 还是 Device Link)。没有协议时为 null。
+ */
+export function relayRouteLabel(relay: Pick<TopologyModel['relay'], 'protocol' | 'transport'>, t: T): string | null {
+  const protocol = protocolKindLabel(relay.protocol, t);
+  if (!protocol) return null;
+  const transport = relayTransportLabel(relay, t);
+  return transport ? `${protocol} · ${transport}` : protocol;
+}
+
 /** 一台设备「怎么连」的一句话:直连 / 经「X」中转 / 在线未建链 / 要处理原因 / 离线。 */
 export function pathLabel(node: TopologyNode, relayName: string, t: T): string {
   if (node.status === 'offline') return t('settings.remoteControl.v2.path.offline');

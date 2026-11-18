@@ -49,14 +49,14 @@ describe('model-catalog-override-store', () => {
     owner.current = 'owner-pi-store';
     const key = 'custom-connection:gemini-4-hydrogen';
     const file = writeOwnerFile({ version: 1, patches: {
-      [key]: { perAgent: { pi: { supportsStore: false } } },
+      [key]: { perAgent: { pi: { supportsStore: false, maxToolCallIdLength: 64 } } },
     } });
     expect(readModelCatalogOverrides().patches[key]?.perAgent?.pi?.supportsStore).toBe(false);
     await writeModelImageInputOverride([{ providerId: 'custom-connection', modelId: 'gemini-4-hydrogen', agent: 'pi' }], true, async () => {});
     owner.current = 'owner-pi-store-other';
     expect(readModelCatalogOverrides().patches).toEqual({});
     owner.current = 'owner-pi-store';
-    expect(readModelCatalogOverrides().patches[key]?.perAgent?.pi).toEqual({ supportsStore: false, supportsImageInput: true });
+    expect(readModelCatalogOverrides().patches[key]?.perAgent?.pi).toEqual({ supportsStore: false, maxToolCallIdLength: 64, supportsImageInput: true });
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).patches[key].perAgent.pi.supportsStore).toBe(false);
   });
 

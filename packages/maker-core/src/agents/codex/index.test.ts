@@ -20719,12 +20719,19 @@ describe('CodexAgent MCP thread context hooks', () => {
       });
       const tool = { id: 'background-tool', type: 'mcpToolCall', server: 'test', tool: 'wait', arguments: {} };
       handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-2', item: tool });
-      now = 15_000;
+      now = 13_100; // Usage landed inside the 500ms refresh window; the tool may now stay silent.
       usage('turn-2', 2_000_000, 2_001_230);
-      expect(handle.getUsageSnapshot().tokenSpeed).toBeUndefined();
-      expect(handle.getUsageSnapshot().generationReliable).toBe(false);
+      expect(handle.getUsageSnapshot()).toMatchObject({
+        outputTokens: 1_200, generationDurationMs: 12_000, generationReliable: true,
+        tokenSpeed: { tokens: 1_200, totalOutputTokens: 2_001_200, average: 100, streaming: false },
+      });
+      await waitForExpectation(() => expect(events).toContainEqual(expect.objectContaining({
+        type: 'status', data: expect.objectContaining({
+          tokenSpeed: expect.objectContaining({ totalOutputTokens: 2_001_200, average: 100, streaming: false }),
+        }),
+      })));
       handlers.itemCompleted!({ threadId: 'start-thread-id', turnId: 'turn-2', item: tool });
-      now = 25_000;
+      now = 23_100;
       usage('turn-2', 377, 2_001_617);
       // The unpaired 2M tokens stay out. Nothing in this turn has streamed, so no speed is
       // measured yet and each response still counts over the model time it took.
@@ -20736,7 +20743,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-2', status: 'completed' } });
       await handle.send({ type: 'user', content: 'new user turn' });
       handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-3' } });
-      now = 35_000;
+      now = 33_100;
       usage('turn-3', 377, 2_002_004);
       expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7 });
     } finally {
@@ -37117,6 +37124,18 @@ describe('Codex native manual compaction', () => {
     await handle.send({ type: 'user', content: 'continue' });
     expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
     await handle.close();
+  });
+
+  // Unit / engine capability: the native manual compact RPC has no
+  // instructions field. The existing empty-history test only covers no-op.
+  it('reports Codex compact instructions as unsupported before sending a native request', async () => {
+    const { handle, host } = await setup();
+    try {
+      await expect(handle.compactSession!('Keep decisions')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+      expect(host.request.mock.calls.some(([method]) => method === Method.ThreadCompactStart)).toBe(false);
+    } finally {
+      await handle.close();
+    }
   });
 
   it('reports an empty native compact as a no-op, not success', async () => {

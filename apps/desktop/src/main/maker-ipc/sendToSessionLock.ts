@@ -61,8 +61,10 @@ export async function waitForSendToSessionLock(
   sessionId: string,
   previous: Promise<unknown> | undefined,
   token?: symbol,
+  signal?: AbortSignal,
 ): Promise<void> {
   assertSessionNotRestarting(sessionId, token);
+  signal?.throwIfAborted();
   const waiters = lockWaiters.get(sessionId) ?? new Set<(error: Error) => void>();
   lockWaiters.set(sessionId, waiters);
   let rejectWait!: (error: Error) => void;
@@ -70,10 +72,14 @@ export async function waitForSendToSessionLock(
     rejectWait = reject;
   });
   waiters.add(rejectWait);
+  const onAbort = () => rejectWait(signal!.reason);
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
     await Promise.race([Promise.resolve(previous).catch(() => undefined), interrupted]);
+    signal?.throwIfAborted();
     assertSessionNotRestarting(sessionId, token);
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     waiters.delete(rejectWait);
     if (waiters.size === 0 && lockWaiters.get(sessionId) === waiters) lockWaiters.delete(sessionId);
   }
@@ -185,14 +191,18 @@ function installSendToSessionLockEntry(
  * modules but must remain one atomic route decision. `getStage` is sampled when
  * a watchdog fires, so callers can identify the current await without logging
  * task content. Keep the getter alive until release, including lease handoffs.
+ * `signal` cancels admission only. Once acquired, the caller must finish its
+ * operation/cleanup and release the lease; abort cannot safely unlock a live write.
  */
 /** Lease form plus the entry this acquisition actually installed. */
 async function acquireSendToSessionLockEntry(
   sessionId: string,
   restartToken?: symbol,
   getStage?: () => string | undefined,
+  signal?: AbortSignal,
 ): Promise<{ release: () => void; entry: Promise<unknown> }> {
   assertSessionNotRestarting(sessionId, restartToken);
+  signal?.throwIfAborted();
   const previous = sendToSessionLocks.get(sessionId);
   const waitPrevious = previous ? previous.catch(() => undefined) : Promise.resolve();
   let releaseGate!: () => void;
@@ -202,7 +212,7 @@ async function acquireSendToSessionLockEntry(
   const run = waitPrevious.then(() => gate);
   const entry = installSendToSessionLockEntry(sessionId, run, getStage);
   try {
-    await waitForSendToSessionLock(sessionId, previous, restartToken);
+    await waitForSendToSessionLock(sessionId, previous, restartToken, signal);
   } catch (error) {
     // Cancel this waiter, but its queue entry still waits for its predecessor.
     releaseGate();
@@ -223,9 +233,15 @@ export async function acquireSendToSessionLock(
   sessionId: string,
   restartToken?: symbol,
   getStage?: () => string | undefined,
+  signal?: AbortSignal,
 ): Promise<() => void> {
-  const { release } = await acquireSendToSessionLockEntry(sessionId, restartToken, getStage);
+  const { release } = await acquireSendToSessionLockEntry(sessionId, restartToken, getStage, signal);
   return release;
+}
+
+/** A recovery wait must not retain an outer, reentrant send fence. */
+export function isSendToSessionLockHeldByCurrentCall(sessionId: string): boolean {
+  return heldLockKeys.getStore()?.get(sessionId)?.active === true;
 }
 
 /** Serialize every local send / runtime release / route mutation for one session. */
@@ -233,7 +249,9 @@ export async function withSendToSessionLock<T>(
   sessionId: string,
   task: () => Promise<T>,
   getStage?: () => string | undefined,
+  signal?: AbortSignal,
 ): Promise<T> {
+  signal?.throwIfAborted();
   // 同异步链重入直接放行：同一条链是天然串行的，与自身不存在竞争；
   // 不放行则嵌套获取会等自己持有的条目结算，自锁到 bail。跨链互斥不变。
   // 归属只看「本链临界区是否仍在进行」：外层 finally / 条目结算（含 300s
@@ -248,7 +266,7 @@ export async function withSendToSessionLock<T>(
     assertSessionNotRestarting(sessionId);
     return task();
   }
-  const { release, entry } = await acquireSendToSessionLockEntry(sessionId, undefined, getStage);
+  const { release, entry } = await acquireSendToSessionLockEntry(sessionId, undefined, getStage, signal);
   const record: HeldLockRecord = { entry, active: true };
   // 条目结算（含 bail 强制结算）即视为不再持有：此时嵌套调用必须重新排队。
   void entry.then(() => {
@@ -259,6 +277,7 @@ export async function withSendToSessionLock<T>(
   const nextHeld = new Map(heldLockKeys.getStore() ?? []);
   nextHeld.set(sessionId, record);
   try {
+    signal?.throwIfAborted();
     return await heldLockKeys.run(nextHeld, task);
   } finally {
     record.active = false;

@@ -107,6 +107,7 @@ export function createSessionContextBudget(ports: SessionContextBudgetPorts) {
     providerId: string | null | undefined,
     modelId: string,
     sessionBudget?: number | null,
+    verification?: 'required',
   ): number | null {
     const source = ports.resolveContextProviderId(catalog, agent, providerId, modelId);
     const modelLimit = source ? readModelContextLimit(agent, source, modelId) : null;
@@ -130,7 +131,7 @@ export function createSessionContextBudget(ports: SessionContextBudgetPorts) {
       ? Math.min(requested, declaredMax) : requested;
     const budget = tighterBudget(clampedByCatalog, modelLimit);
     const verified = resolveVerifiedContextWindow(catalog, agent, source, modelId, budget);
-    if (verified !== null) return verified;
+    if (verified !== null || verification === 'required') return verified;
     // A saved budget configures the native runtime even if catalog capacity is
     // unknown. It is a working ceiling, not evidence of physical model capacity.
     return rows.length === 1 && rows[0]!.contextWindowVerified !== true && typeof budget === 'number' && Number.isFinite(budget) && budget > 0

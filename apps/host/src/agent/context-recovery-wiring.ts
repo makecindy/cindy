@@ -46,6 +46,8 @@ export function createHostContextRecoveryWiring(deps: {
       readSessionWritableDirsFromDb,
       resolveVerifiedWindow: (agentKind, modelId, providerId) =>
         deps.getGraph()?.contextRecovery.resolveVerifiedWindow(agentKind, modelId, providerId) ?? null,
+      resolveHandoffWindow: (sessionId, route) =>
+        deps.getGraph()?.contextRecovery.resolveHandoffWindow(sessionId, route) ?? null,
       ...(openKinds.has('oversized-history') ? { codexHistory: {
         readCodexThreadStorageReadOnly: (threadId: string) => codexHistory().readCodexThreadStorageReadOnly(threadId),
         classifyCodexHistoryOversized: (threadId: string, located?: { rolloutPath?: string }) =>

@@ -88,7 +88,8 @@ jobs:
           pnpm test:device-link
 
       # DS-7: candidate merge/head versus the event base; only mature colour
-      # consumers block. Geometry/adoption observations remain report-only.
+      # consumers block, and the same check also blocks off-scale corner radii
+      # (DESIGN.md §5 Guard). Other geometry/adoption observations remain report-only.
       - name: Check added design colours
         env:
           DESIGN_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
