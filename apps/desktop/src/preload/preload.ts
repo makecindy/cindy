@@ -2989,6 +2989,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setCompanion: (botId: string | null): Promise<{
       version: 1; workingDir: string | null; workingDirAvailable: boolean; companionBotId?: string;
     }> => ipcRenderer.invoke('wechatBot:set-companion', botId),
+    chooseSessionDirectory: (sessionId: string): Promise<boolean> =>
+      ipcRenderer.invoke('wechatBot:choose-session-directory', sessionId),
     chooseWorkingDirectory: (): Promise<{
       canceled: boolean;
       state: { version: 1; workingDir: string | null; workingDirAvailable: boolean; companionBotId?: string };

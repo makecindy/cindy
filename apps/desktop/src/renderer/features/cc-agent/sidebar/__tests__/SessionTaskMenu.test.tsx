@@ -23,6 +23,7 @@ const state = vi.hoisted(() => ({
   removeDevice: vi.fn(),
   writeClipboard: vi.fn(),
   setMuted: vi.fn(),
+  chooseSessionDirectory: vi.fn(),
   installed: [] as InstalledGhost[],
   listGhosts: vi.fn(),
   ghostsChanged: vi.fn(),
@@ -108,7 +109,7 @@ beforeEach(() => {
   state.setMuted.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: state.writeClipboard } });
   Object.assign(window, {
-    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke },
+    electronAPI: { wechatBot: { chooseSessionDirectory: state.chooseSessionDirectory }, sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke },
       ghosts: { listSync: state.listGhosts, onChanged: state.ghostsChanged,
         runtimePlugins: state.runtimePlugins, listControlPointCandidates: state.candidates } },
   });
@@ -124,6 +125,15 @@ it('hides runtime plugins when no installed plugin declares a runtime control', 
   expect(screen.queryByRole('menuitem', { name: 'taskPlugins' })).toBeNull();
   expect(labels()).toEqual(['pin', 'rename', 'muteNotifications', 'tags', 'copy', 'title',
     'moveToProject', 'export', 'openInNewWindow', 'archived', 'delete']);
+});
+
+it('changes the directory of the selected local WeChat task', async () => {
+  state.chooseSessionDirectory.mockResolvedValue(true);
+  render(<Harness target={{ ...session, source: 'wechat' }} />);
+  openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'changeWorkingDirectory' }));
+  expect(state.chooseSessionDirectory).toHaveBeenCalledWith(session.id);
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith('directoryChanged'));
 });
 
 it('shows runtime plugins for a declared static fragment without runtime hooks', () => {

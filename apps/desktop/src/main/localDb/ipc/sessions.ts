@@ -1725,6 +1725,7 @@ export async function updateSessionInDb(
     assertCurrent: () => void;
     /** Runs inside the existing route/worktree locks, including dialogue moves. */
     beforeUpdate: () => Promise<void>;
+    requireResumeTranscript?: boolean;
     /** Mutable running/IM preconditions must not reject an already committed move. */
     beforeWrite?: () => void | Promise<void>;
   },
@@ -1944,7 +1945,11 @@ export async function updateSessionInDb(
         sid,
         beforeMove.workingDir,
         p.workingDir,
-        ...(moveGuard ? [{ client: dbClient, assertCurrent: moveGuard.assertCurrent }] : []),
+        ...(moveGuard ? [{
+          client: dbClient,
+          assertCurrent: moveGuard.assertCurrent,
+          ...(moveGuard.requireResumeTranscript && { requireResumeTranscript: true }),
+        }] : []),
       );
       if (reloc.persistedSdkSessionId) {
         p.sdkSessionId = reloc.persistedSdkSessionId;

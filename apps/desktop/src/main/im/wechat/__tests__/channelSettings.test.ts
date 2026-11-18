@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  needsWechatDirectoryMigration,
   readWechatChannelSettings,
   resetWechatWorkingDir,
   resolveWechatWorkingDir,
@@ -23,6 +24,15 @@ afterEach(() => {
 });
 
 describe('personal WeChat channel settings', () => {
+  it('only migrates the old channel-managed directory on reconnect', () => {
+    const bot = 'outside:id';
+    const legacy = resolveWechatWorkingDir(bot, root);
+    expect(needsWechatDirectoryMigration(legacy, bot, root)).toBe(true);
+    expect(needsWechatDirectoryMigration(null, bot, root)).toBe(true);
+    expect(needsWechatDirectoryMigration(path.join(root, 'chosen', 'IM'), bot, root)).toBe(false);
+    expect(needsWechatDirectoryMigration(path.join(root, 'chosen', 'im-working-dir', path.basename(legacy)), bot, root)).toBe(false);
+  });
+
   // Teammate routing must survive changing/resetting the independent channel's directory.
   // Existing directory-only cases did not cover this new persisted override (unit tier).
   it('preserves teammate binding across directory changes and removes only the requested override', () => {

@@ -32,13 +32,13 @@ export interface UseWechatBotReturn {
   isUpdatingCompanion: boolean;
 }
 
-type WechatBotApi = Window['electronAPI']['wechatBot'];
+export type WechatSettingsApi = Omit<Window['electronAPI']['wechatBot'], 'chooseSessionDirectory'>;
 
 /**
  * `override` serves personal WeChat of another computer (a teammate's settings on a remote Desktop). Its
  * state is that computer's, so it neither reads nor writes the module caches of this window's own.
  */
-export function useWechatBot(override?: WechatBotApi): UseWechatBotReturn {
+export function useWechatBot(override?: WechatSettingsApi): UseWechatBotReturn {
   const { t } = useTranslation();
   // Resolved at use, as before: a window API object is not a render-stable identity.
   const api = () => override ?? window.electronAPI.wechatBot;

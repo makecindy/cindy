@@ -63,6 +63,14 @@ beforeEach(() => {
 });
 
 describe('relocateClaudeTranscriptsForSessionMove', () => {
+  it('refuses a history-preserving move when the current resume transcript is missing', async () => {
+    const client = { queryOne: async () => ({ sdkSessionId: DB_ID }), query: async () => [] };
+    h.relocate.mockResolvedValue({ copied: [], replaced: [], skipped: [], missing: [DB_ID], targetKeyInexact: false });
+    await expect(relocateClaudeTranscriptsForSessionMove('s1', '/old/dir', '/new/dir', {
+      client: client as unknown as DbClient, assertCurrent: () => undefined, requireResumeTranscript: true,
+    })).rejects.toThrow('RESUME_TRANSCRIPT_UNAVAILABLE');
+  });
+
   it('uses the captured database throughout a scoped move', async () => {
     const client = { queryOne: vi.fn(async () => ({ sdkSessionId: DB_ID })), query: vi.fn(async () => [{ sid: META_ID }]), exec: vi.fn(async () => ({ changes: 1 })) };
     setLiveCcSessionBridge({ resolveSdkSessionId: () => LIVE_ID, closeSession: vi.fn(async () => undefined) });

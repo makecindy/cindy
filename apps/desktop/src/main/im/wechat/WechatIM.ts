@@ -575,6 +575,12 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     return activePeerIdForSession(this.#activeTasks, sessionId);
   }
 
+  hasActiveTaskForSession(sessionId: string): boolean {
+    return [...this.#activeTasks.values()].some(
+      active => (active.routeSessionId ?? active.task.sessionId) === sessionId,
+    );
+  }
+
   async handleTextInteraction(
     userId: string,
     request: InteractionRequest,
