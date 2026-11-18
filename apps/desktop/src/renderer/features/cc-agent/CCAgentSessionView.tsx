@@ -6330,7 +6330,7 @@ function CCAgentSessionContent({
               pendingPermission ||
               (pendingAskUser && askUserViewerState !== 'minimized') ||
               pendingPluginSetup ||
-              pendingIssueConfirm ||
+              (pendingIssueConfirm && !remoteDeviceId) ||
               pendingRenameSessionsConfirm ||
               pendingGhostGrantConfirm) ? null : sessionBinding.attached && sessionId ? (
                 <TakeoverMask
