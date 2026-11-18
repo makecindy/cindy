@@ -11,6 +11,7 @@ import {
 import type { ApplySessionRuntimeSelection } from './sessionRuntimeSelectionApply.js';
 
 export interface PendingSessionRuntimeControlSettlementPorts {
+  canSettle?(sessionId: string, generation: number): boolean;
   applySessionRuntimeSelection: ApplySessionRuntimeSelection;
   runtimeSelectionRequiresModelWindowConfirmation(result: Awaited<ReturnType<ApplySessionRuntimeSelection>>): boolean;
   broadcastSessionRuntimeProjection(sessionId: string): Promise<void>;
@@ -22,16 +23,18 @@ export interface PendingSessionRuntimeControlSettlementPorts {
 
 /** Applies the accepted control once its turn is idle, as in registerMakerIpc. */
 export function createPendingSessionRuntimeControlSettlement({
-  applySessionRuntimeSelection, runtimeSelectionRequiresModelWindowConfirmation,
+  canSettle, applySessionRuntimeSelection, runtimeSelectionRequiresModelWindowConfirmation,
   broadcastSessionRuntimeProjection, onTurnErrorEvent, getSessionDbAgentKind, broadcastToAllWindows, log,
 }: PendingSessionRuntimeControlSettlementPorts) {
-  const settlingSessionRuntimeControls = new Set<string>();
-  const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): void => {
-    if (settlingSessionRuntimeControls.has(sessionId)) return;
+  const settlingSessionRuntimeControls = new Map<string, Promise<void> | undefined>();
+  const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): Promise<void> | undefined => {
+    if (settlingSessionRuntimeControls.has(sessionId)) return settlingSessionRuntimeControls.get(sessionId);
     const pending = getPendingSessionRuntimeMutation(sessionId);
     if (!pending) return;
-    settlingSessionRuntimeControls.add(sessionId);
-    void (async () => {
+    const allowed = () => canSettle?.(sessionId, pending.generation) !== false;
+    if (!allowed()) return;
+    settlingSessionRuntimeControls.set(sessionId, undefined);
+    const work = (async () => {
       try {
         const settleSelection = {
           effort: pending.profile.effort,
@@ -59,6 +62,7 @@ export function createPendingSessionRuntimeControlSettlement({
           runtimeSelectionRequiresModelWindowConfirmation(result),
           result.contextWindowConfirmationRequired,
         );
+        if (!allowed()) return;
         if (windowRetry.action === 'retry') {
           result = await applySessionRuntimeSelection(
             sessionId,
@@ -83,6 +87,7 @@ export function createPendingSessionRuntimeControlSettlement({
           superseded: result.superseded,
         });
       } catch (error) {
+        if (!allowed()) return;
         const cancelled = cancelPendingSessionRuntimeMutation(sessionId, pending.generation);
         log.warn('pending session runtime settlement failed', {
           sessionId,
@@ -98,6 +103,7 @@ export function createPendingSessionRuntimeControlSettlement({
                 broadcastError instanceof Error ? broadcastError.message : String(broadcastError),
             });
           });
+          if (!allowed()) return;
           const failureMessage =
             error instanceof Error && error.message.includes('unsupported')
               ? 'Deferred model switch was cancelled because safe context rebuild is unsupported. The previous model remains active.'
@@ -119,10 +125,15 @@ export function createPendingSessionRuntimeControlSettlement({
         settlingSessionRuntimeControls.delete(sessionId);
         const latest = getPendingSessionRuntimeMutation(sessionId);
         if (latest && latest.generation !== pending.generation) {
-          settlePendingSessionRuntimeControl(sessionId, `${reason}:generation-advanced`);
+          return settlePendingSessionRuntimeControl(sessionId, `${reason}:generation-advanced`);
         }
       }
     })();
+    // Desktop callers keep firing and forgetting. Handle a reporting-port failure
+    // here as well, so exposing completion to the Host cannot leak a rejected promise.
+    const completion = work.catch(error => { log.warn('runtime settlement delivery failed', { sessionId, error }); });
+    if (settlingSessionRuntimeControls.has(sessionId)) settlingSessionRuntimeControls.set(sessionId, completion);
+    return completion;
   };
   return settlePendingSessionRuntimeControl;
 }
