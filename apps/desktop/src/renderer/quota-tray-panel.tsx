@@ -110,7 +110,7 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
     {!view.gate && <>
       <section className="sources">{view.sources.filter(source => source.fill !== null).map((source, index) =>
         <button key={source.id} className="source" style={{ animationDelay: (index * 60) + 'ms' }} aria-label={source.accessibilityLabel} onClick={() => go('detail:' + source.id)}>
-          <b className="metric">{source.value ? <CountUp text={source.value} visible={!hidden} delay={index * 0.06}/> : source.valueLabel}<small>{source.valueUnit}</small></b>
+          <b className="metric">{source.value ? <CountUp text={source.value} locale={view.locale} visible={!hidden} delay={index * 0.06}/> : source.valueLabel}<small>{source.valueUnit}</small></b>
           <Tube fill={source.fill ?? 0} index={index} active={source.active} visible={!hidden} height={tubeHeight} emphasized={source.emphasized} level={source.level}/>
           <Logo svg={source.logoSvg}/><span>{source.name}</span><small data-level={source.whenLevel}>{source.when}</small>
         </button>)}</section>
@@ -136,7 +136,7 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
       </section>
       <button className="usage tile" onClick={() => go('usage')} aria-label={s.expandUsage}>
         <span><small>{s[view.settings.scope === 'all' ? 'monthScopeAll' : 'monthScopeLocal']}</small>
-          <b className="metric"><CountUp text={money(view, daily.reduce((sum, day) => sum + day.money.reduce((a, b) => a + b, 0), 0))} visible={!hidden} delay={0.2}/></b></span>
+          <b className="metric"><CountUp text={money(view, daily.reduce((sum, day) => sum + day.money.reduce((a, b) => a + b, 0), 0))} locale={view.locale} visible={!hidden} delay={0.2}/></b></span>
         <Chart daily={daily}/><span className="expand">{s.expand}<ArrowUpRight size={14}/></span>
       </button>
     </>}

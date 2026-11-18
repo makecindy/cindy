@@ -164,15 +164,48 @@ function fillCurve(x: number): number {
   return bezier(t, 1, 1);
 }
 
-const PLAIN_NUMBER = /^([^0-9]*)([0-9][0-9,]*(?:\.[0-9]+)?)([^0-9]*)$/;
+/** Text before the first digit, the digits with their separators, and text after the last digit. */
+const NUMBER_TEXT = /^(\D*)(\d(?:[^]*\d)?)(\D*)$/;
 const COUNT_SECONDS = 0.9;
 
 /**
- * A plain number ("53", "$31.17", "$20.0k") counts up from zero each time the card opens,
- * alongside the rising liquid (the Swift panel's CountUpText). The final text reserves the
- * width, so the count never shifts its neighbours; anything else shows as-is.
+ * Reads a displayed number with one locale's separators and returns how to write any value the
+ * same way, or null when that reading does not write the text back exactly. Without the check a
+ * German "31,17" read as en-US became 3117, and a count-up showed amounts orders of magnitude off.
  */
-export function CountUp({ text, visible, delay = 0 }: { text: string; visible: boolean; delay?: number }) {
+function readNumber(core: string, locale: string): ((value: number) => string) & { value: number } | null {
+  const parts = new Intl.NumberFormat(locale).formatToParts(12345.6);
+  const group = parts.find(part => part.type === 'group')?.value ?? ',';
+  const decimal = parts.find(part => part.type === 'decimal')?.value ?? '.';
+  const [whole, fraction = '', extra] = core.split(decimal);
+  if (extra !== undefined) return null;
+  const digits = whole.split(group).join('');
+  if (!/^\d+$/.test(digits) || !/^\d*$/.test(fraction)) return null;
+  const format = new Intl.NumberFormat(locale, {
+    minimumFractionDigits: fraction.length, maximumFractionDigits: fraction.length, useGrouping: whole.includes(group),
+  }).format;
+  const value = Number(digits + '.' + (fraction || '0'));
+  return format(value) === core ? Object.assign((n: number) => format(n), { value }) : null;
+}
+
+/**
+ * How to count a displayed amount ("53", "$31.17", "31,17 €", "¥28.0k") up from zero, or null to
+ * show it as-is. The card's own locale is tried first; abbreviated amounts are written in en-US.
+ */
+export function countUpFrames(text: string, locale: string): ((progress: number) => string) | null {
+  const match = NUMBER_TEXT.exec(text);
+  if (!match) return null;
+  const [, prefix, core, suffix] = match;
+  const read = readNumber(core, locale) ?? readNumber(core, 'en-US');
+  return read ? progress => prefix + read(read.value * progress) + suffix : null;
+}
+
+/**
+ * A plain number counts up from zero each time the card opens, alongside the rising liquid (the
+ * Swift panel's CountUpText). The final text reserves the width, so the count never shifts its
+ * neighbours; anything that is not a plain number in this locale shows as-is.
+ */
+export function CountUp({ text, locale, visible, delay = 0 }: { text: string; locale: string; visible: boolean; delay?: number }) {
   const live = useRef<HTMLSpanElement>(null);
   const counted = useRef(false);
   useEffect(() => {
@@ -180,14 +213,9 @@ export function CountUp({ text, visible, delay = 0 }: { text: string; visible: b
     if (!node) return;
     node.textContent = text;
     if (!visible) counted.current = false;
-    const match = PLAIN_NUMBER.exec(text);
-    if (!visible || counted.current || !match || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const render = countUpFrames(text, locale);
+    if (!visible || counted.current || !render || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     counted.current = true;
-    const [, prefix, number, suffix] = match;
-    const value = Number(number.replaceAll(',', ''));
-    const decimals = number.split('.')[1]?.length ?? 0;
-    const digits = { minimumFractionDigits: decimals, maximumFractionDigits: decimals, useGrouping: number.includes(',') };
-    const render = (progress: number) => prefix + (value * progress).toLocaleString('en-US', digits) + suffix;
     const start = performance.now() + delay * 1000;
     node.textContent = render(0);
     let frame = requestAnimationFrame(function tick(ms) {
@@ -196,6 +224,6 @@ export function CountUp({ text, visible, delay = 0 }: { text: string; visible: b
       if (progress < 1) frame = requestAnimationFrame(tick);
     });
     return () => cancelAnimationFrame(frame);
-  }, [text, visible, delay]);
+  }, [text, locale, visible, delay]);
   return <span className="count"><span>{text}</span><span ref={live} aria-hidden="true">{text}</span></span>;
 }
