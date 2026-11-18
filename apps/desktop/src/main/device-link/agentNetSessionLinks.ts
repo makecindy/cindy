@@ -20,7 +20,7 @@ import {
   type PushPayload, diagnosticChannel, invokeIntendedHoldMs, shortDeviceRef,
 } from '@cindy/device-link';
 import { SessionError, newSessionRequestId, type SessionHandle, type SessionHandlers, type SessionLane, type SessionRequest, type SessionResult } from '@cindy/agent-net';
-import { SESSION_INVOKE_OUTCOME_UNKNOWN, SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinkMergedMethod, type PeerLinkRoutedMethod, type PeerLinks } from './peerLinks.js';
+import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinkMergedMethod, type PeerLinkRoutedMethod, type PeerLinks } from './peerLinks.js';
 
 type PushOwnerStamp = NonNullable<PushPayload['ownerStamp']>;
 
@@ -733,7 +733,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
             : Object.keys(extra).length ? { extra } : {}) });
         if (attempt > 0 && outcome.ok) {
           const result = outcome.result as InvokeResultPayload;
-          if (result?.ok === false && result.error?.code === SESSION_INVOKE_OUTCOME_UNKNOWN) {
+          if (result?.ok === false && result.error?.code === 'INVOKE_TIMEOUT') {
             outcome = { ok: false, error: { code: 'INVOKE_TIMEOUT', message: result.error.message } };
           }
         }

@@ -543,7 +543,7 @@ import {
 } from '@cindy/device-link';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
-import { SESSION_INVOKE_OUTCOME_UNKNOWN, SESSION_INVOKE_REPLAY } from '../device-link/peerLinks';
+import { SESSION_INVOKE_REPLAY } from '../device-link/peerLinks';
 import { createGroupContinuityExecutor } from '../provider-group/continuityExecutor';
 import { deviceAccessGeneration, isControllerAccessAllowed, remoteControlAccessGeneration,
   syncRemoteControlAccessGeneration } from '../device-link/remoteControlAccess';
@@ -1153,7 +1153,7 @@ describe('被控端控制链路生命周期', () => {
     }
     await request(resume);
     expect(calls.invokeResult.at(-1)).toMatchObject({
-      requestId: 'original', payload: { ok: false, error: { code: SESSION_INVOKE_OUTCOME_UNKNOWN } },
+      requestId: 'original', payload: { ok: false, error: { code: 'INVOKE_TIMEOUT' } },
     });
     expect(handler).toHaveBeenCalledTimes(129);
   });

@@ -131,7 +131,7 @@ import type { app } from 'electron';
 import type { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
-import { SESSION_INVOKE_OUTCOME_UNKNOWN, SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinks } from './peerLinks.js';
+import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinks } from './peerLinks.js';
 import { isDeferredHistoryPush, deferredToolBoundary, buildHistoryWorkPatch, thinkingDeltaUpdatesWorkLine } from './historyViewPush';
 import { clearHistoryViewDeltas, withoutHistoryViewDeltaToken } from './historyViewDelta';
 import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
@@ -3409,7 +3409,7 @@ async function handleInvoke(
   if (payload?.[SESSION_INVOKE_REPLAY]) {
     // The original might already have run and its result have been evicted. Only a known invocation can resume.
     const result: InvokeResultPayload = { ok: false, error: {
-      code: SESSION_INVOKE_OUTCOME_UNKNOWN, message: 'The previous invocation may have executed; its result is no longer available',
+      code: 'INVOKE_TIMEOUT', message: 'The previous invocation may have executed; its result is no longer available',
     } };
     if (!await sendAuthorizedInvokeResultSafe(client, src, requestId, result, payload.channel, payload.args)) {
       throw new DeviceLinkError('BACKPRESSURE', 'resume outcome could not be queued');

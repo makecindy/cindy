@@ -10,7 +10,6 @@ import type { DeviceLinkClient, InvokePayload } from '@cindy/device-link';
 
 /** Local marker set by the session adapter. Device Link frames cannot supply it. */
 export const SESSION_INVOKE_REPLAY = Symbol('session invoke replay');
-export const SESSION_INVOKE_OUTCOME_UNKNOWN = 'SESSION_INVOKE_OUTCOME_UNKNOWN';
 export type PeerInvokePayload = InvokePayload & { [SESSION_INVOKE_REPLAY]?: true };
 
 /** 按对端、按方向选路的方法：会话层（AgentNetSessionLinks）都有一份。 */
