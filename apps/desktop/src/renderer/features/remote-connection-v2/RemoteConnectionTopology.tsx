@@ -410,11 +410,11 @@ export function RemoteConnectionTopology({
           }}
           aria-hidden
         >
-          <span className="line-clamp-2 max-w-full break-words">{model.relay.name}</span>
+          <span className="line-clamp-2 max-w-full break-words rounded bg-[var(--settings-theme-card-bg)] px-1">{model.relay.name}</span>
           {relayRtt ? (
             <span
               className={cn(
-                'whitespace-nowrap tabular-nums',
+                'whitespace-nowrap rounded bg-[var(--settings-theme-card-bg)] px-1 tabular-nums',
                 emphasis !== 'rest' && emphasis !== 'dim' && 'text-[var(--text-secondary)]',
               )}
             >

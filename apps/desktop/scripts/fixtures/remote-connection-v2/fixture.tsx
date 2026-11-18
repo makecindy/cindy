@@ -105,8 +105,8 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
       devices.push(device({ deviceId: `dir${i}`, name: `Desk ${i + 1}`, platform: i % 2 ? 'win32' : 'darwin' }));
       links.push(link(`dir${i}`, 'direct', 3 + i));
     }
-    devices.push(device({ deviceId: 'rel0', name: 'Office PC', platform: 'win32' }), device({ deviceId: 'rel1', name: 'Studio mini' }));
-    links.push(link('rel0', 'relay', 64), link('rel1', 'relay', 88));
+    devices.push(device({ deviceId: 'rel0', name: 'Office PC', platform: 'win32' }), device({ deviceId: 'idle', name: 'Studio mini' }), device({ deviceId: 'attention', name: 'Lab PC', remoteControlEnabled: false }));
+    links.push(link('rel0', 'relay', 64));
     return { devices, links, relayRttMs: 25 };
   }
   if (name === 'many') {
