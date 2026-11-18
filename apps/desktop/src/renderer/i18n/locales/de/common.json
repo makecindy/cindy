@@ -142,6 +142,10 @@
     "message": "Cindy kann diesen Anhang nicht lesen. Wähle die Originaldatei aus, um diese Nachricht weiter zu senden. Beim Abbrechen bleibt dein Entwurf erhalten.",
     "button": "Originaldatei verwenden"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Dieses Senden wurde abgebrochen, weil sich die Aufgabe oder das Fenster geändert hat.",
+    "invalid": "Dieses Senden ist für die aktuelle Sitzung nicht mehr gültig."
+  },
   "mailReader": {
     "showExternalImages": "Externe Bilder anzeigen",
     "markReadFailed": "Lesestatus konnte nicht synchronisiert werden. Prüfe die Postfachautorisierung und öffne diese E-Mail erneut.",
@@ -8229,7 +8233,7 @@
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
         "hostTools_usage": "Nutzung und Anbietergruppenstatus lesen",
-        "hostTools_usageDetail": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen.",
+        "hostTools_usageDetail": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen. Liest auch das Kontingent für zugängliche Aufgaben, einschließlich autorisierter Computer im selben Konto und Freigaben, bei denen die Kontingentanzeige erlaubt ist.",
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
@@ -8753,6 +8757,10 @@
       "panelHost": {
         "close": "Panel schließen"
       },
+      "installProgress": {
+        "awaitingConsent": "Warten auf Bestätigung…",
+        "installFailed": "Installation fehlgeschlagen"
+      },
       "updateAll": {
         "title": "Alle aktualisieren · {{count}} Plugins",
         "collapseDiff": "Einklappen",
@@ -8763,6 +8771,7 @@
         "statusDone": "Aktualisiert",
         "statusSkipped": "Übersprungen",
         "statusFailed": "Update fehlgeschlagen",
+        "progressCount": "{{done}} von {{total}} aktualisiert",
         "background": "Im Hintergrund fortsetzen",
         "doneAction": "Fertig",
         "doneToast": "Sammelupdate abgeschlossen: {{done}} aktualisiert, {{rest}} nicht abgeschlossen",
@@ -15078,6 +15087,9 @@
       "continueFailed_other": "{{count}} Sitzungen konnten nicht fortgesetzt werden. Öffne sie, um es erneut zu versuchen."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "Die Berechtigung für diese Aktion ist abgelaufen. Der nächste Lauf ist weiterhin geplant.",
+      "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
+      "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
       "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
       "precheck": "Automatische Prüfungen sind vorübergehend blockiert.",
       "rateLimited": "Automatische Prüfungen sind wegen eines Anfragelimits vorübergehend blockiert.",
@@ -16496,7 +16508,10 @@
       "confirmArchive": {
         "title": "Sitzung archivieren",
         "description": "Diese Sitzung archivieren? Sie wird aus der Liste entfernt.",
-        "dirtyWorktreeWarning": "Der Worktree dieser Sitzung enthält nicht committete Änderungen. Sie werden vor dem Archivieren als Git-Snapshot gespeichert und können später über die Sitzung wiederhergestellt werden.",
+        "dirtyWorktreeWarning": "Nicht committete Änderungen werden vor dem Archivieren gespeichert. Du kannst sie über die Aufgabe wiederherstellen.",
+        "discardChanges": "Nicht committete Änderungen verwerfen",
+        "discardWarning": "Nicht committete Änderungen und neue Dateien gehen verloren.",
+        "discardAndArchive": "Verwerfen und archivieren",
         "scheduleWarning_one": "Die verknüpfte Automatisierung {{names}} läuft weiter und stellt diese Sitzung wieder her.",
         "scheduleWarning_other": "Die verknüpften Automatisierungen {{names}} laufen weiter und stellen diese Sitzung wieder her.",
         "scheduleWarningMany_one": "{{count}} dieser Sitzungen hat verknüpfte Automatisierungen, die sie bei ihrer Ausführung wiederherstellen.",

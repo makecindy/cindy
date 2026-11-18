@@ -673,6 +673,7 @@ const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
 const fanOutPluginUpdateConsentHoldsChanged = createIpcFanOut(
   'plugin-market:update-consent-holds-changed',
 );
+const fanOutPluginInstallProgress = createIpcFanOut('plugin-market:install-progress');
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
@@ -1872,6 +1873,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     > => ipcRenderer.invoke('plugin-market:consume-removal-notice'),
     onRemovalNoticeAvailable: fanOutPluginRemovalNoticeAvailable,
     onUpdateConsentHoldsChanged: fanOutPluginUpdateConsentHoldsChanged,
+    /** Display-only progress of installs and updates started from this window. */
+    onInstallProgress: (
+      callback: (
+        progress: import('../shared/pluginMarket').PluginMarketInstallProgress,
+        ownerStamp?: unknown,
+      ) => void,
+    ): (() => void) =>
+      fanOutPluginInstallProgress((data, ownerStamp) =>
+        callback(data as import('../shared/pluginMarket').PluginMarketInstallProgress, ownerStamp),
+      ),
     listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
       ipcRenderer.invoke('plugin-market:list-sources'),
     pickLocalSource: (
@@ -5738,7 +5749,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   worktreeListBranches: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:list-branches', req),
   // P1: 删除/归档确认预检(有无 worktree、是否有未提交更改)
-  worktreeRemovalPreview: (sessionId: string): Promise<{ hasWorktree: boolean; dirty: boolean }> =>
+  worktreeRemovalPreview: (sessionId: string): Promise<{ hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }> =>
     ipcRenderer.invoke('worktree:removal-preview', sessionId),
   // P1: worktree 被回收后的可恢复状态 + 一键恢复(分支重建 + 快照 apply)
   worktreeRestoreStatus: (sessionId: string): Promise<unknown> =>
@@ -7953,7 +7964,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setEffort: (sessionId: string, effort: string): Promise<void> =>
       ipcRenderer.invoke('maker:set-effort', sessionId, effort),
     // 输入框开始打字时提前启动 Agent；尽力而为,main 决定是否真的启动。
-    prewarmSession: (sessionId: string, createOpts: unknown): Promise<{ accepted: boolean }> =>
+    prewarmSession: (sessionId: string, createOpts: unknown): Promise<{ accepted: boolean; piRuntimePrepared?: true }> =>
       ipcRenderer.invoke('maker:session:prewarm', sessionId, createOpts),
     // 新建页的未发送任务：清空输入时删除 / 第一次发送前转为普通任务（仅本机）。
     discardProvisionalSession: (sessionId: string): Promise<{ discarded: boolean; remaining?: boolean }> =>

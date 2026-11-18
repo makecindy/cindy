@@ -142,6 +142,10 @@
     "message": "Cindy cannot read this attachment. Select the original file to continue sending this message. Cancelling keeps your draft.",
     "button": "Use Original File"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "This send was cancelled because the task or window changed.",
+    "invalid": "This send is no longer valid for the current task."
+  },
   "mailReader": {
     "showExternalImages": "Show External Images",
     "markReadFailed": "Could not sync read status. Check mailbox authorization and reopen this email.",
@@ -8229,7 +8233,7 @@
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
         "hostTools_usage": "Read usage and provider group status",
-        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings.",
+        "hostTools_usageDetail": "Read IDs, plans, quota windows and update times for local Claude/Codex accounts connected to your Cindy account. Read recorded daily/model usage, cost estimates, provider group configuration and status, and visible member/device IDs, names and avatars on this computer or other authorized computers on the same account. Cannot read subscription login emails, account directories, identity fingerprints, credentials or files, or change accounts or settings. Read quota for a task you can access, including on an authorized computer on your account or through a share that allows quota viewing.",
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
@@ -8753,6 +8757,10 @@
       "panelHost": {
         "close": "Close panel"
       },
+      "installProgress": {
+        "awaitingConsent": "Waiting for confirmation…",
+        "installFailed": "Install failed"
+      },
       "updateAll": {
         "title": "Update all · {{count}} plugins",
         "collapseDiff": "Collapse",
@@ -8763,6 +8771,7 @@
         "statusDone": "Updated",
         "statusSkipped": "Skipped",
         "statusFailed": "Update failed",
+        "progressCount": "{{done}} of {{total}} updated",
         "background": "Continue in background",
         "doneAction": "Done",
         "doneToast": "Batch update finished: {{done}} updated, {{rest}} not completed",
@@ -15115,6 +15124,9 @@
       "continueFailed_other": "{{count}} sessions couldn't resume. Open them to try again."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "Authorization expired for this action. The next run is still scheduled.",
+      "actionExpired": "Task authorization expired for this action. Check the latest automation run.",
+      "actionRecovered": "Authorization expired for this action. A later run of the same automation succeeded.",
       "text": "An automatic run failed.",
       "precheck": "Automatic checks are temporarily blocked.",
       "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
@@ -16496,7 +16508,10 @@
       "confirmArchive": {
         "title": "Archive session",
         "description": "Archive this session? It will be removed from the list.",
-        "dirtyWorktreeWarning": "This session's worktree has uncommitted changes; they will be saved as a git snapshot before archiving and can be restored from the session later.",
+        "dirtyWorktreeWarning": "Uncommitted changes will be saved before archiving. You can restore them from the task.",
+        "discardChanges": "Discard uncommitted changes",
+        "discardWarning": "Uncommitted changes and new files will be lost.",
+        "discardAndArchive": "Discard and archive",
         "scheduleWarning_one": "The linked automation {{names}} will keep running and restore this session.",
         "scheduleWarning_other": "The linked automations {{names}} will keep running and restore this session.",
         "scheduleWarningMany_one": "{{count}} of these sessions has linked automations that will restore it when they run.",

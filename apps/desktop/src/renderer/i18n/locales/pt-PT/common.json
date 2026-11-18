@@ -142,6 +142,10 @@
     "message": "O Cindy não consegue ler este anexo. Selecione o ficheiro original para continuar a enviar esta mensagem. Se cancelar, o rascunho será mantido.",
     "button": "Usar ficheiro original"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Este envio foi cancelado porque a tarefa ou a janela mudou.",
+    "invalid": "Este envio já não é válido para a sessão atual."
+  },
   "mailReader": {
     "showExternalImages": "Mostrar imagens externas",
     "markReadFailed": "Não foi possível sincronizar o estado de leitura. Verifique a autorização da caixa de correio e volte a abrir este e-mail.",
@@ -8301,7 +8305,7 @@
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. As operações que precisam da tarefa atual exigem um destino explícito.",
         "hostTools_usage": "Ler a utilização e o estado dos grupos de fornecedores",
-        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições.",
+        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições. Também lê a quota de tarefas acessíveis, incluindo noutro computador autorizado da mesma conta ou num fornecedor partilhado que permita ver a quota.",
         "hostTools_settings": "Definições da aplicação",
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são devolvidos e os dados confidenciais são introduzidos por si.",
         "hostTools_scheduler": "Gestão de automatizações",
@@ -8825,6 +8829,10 @@
       "panelHost": {
         "close": "Fechar painel"
       },
+      "installProgress": {
+        "awaitingConsent": "A aguardar confirmação…",
+        "installFailed": "Falha na instalação"
+      },
       "updateAll": {
         "title": "Atualizar todos · {{count}} plugins",
         "collapseDiff": "Recolher",
@@ -8835,6 +8843,7 @@
         "statusDone": "Atualizado",
         "statusSkipped": "Ignorado",
         "statusFailed": "Falha na atualização",
+        "progressCount": "{{done}} de {{total}} atualizados",
         "background": "Continuar em segundo plano",
         "doneAction": "Concluído",
         "doneToast": "Atualização em lote concluída: {{done}} atualizados, {{rest}} por concluir",
@@ -15216,6 +15225,9 @@
       "continueFailed_many": "Não foi possível retomar {{count}} sessões. Abra-as para tentar novamente."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
+      "actionExpired": "A autorização da sessão para esta ação expirou. Consulte a execução mais recente da automatização.",
+      "actionRecovered": "A autorização para esta ação expirou. A mesma automatização foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de pedidos.",
@@ -16652,7 +16664,10 @@
       "confirmArchive": {
         "title": "Arquivar sessão",
         "description": "Arquivar esta sessão? Será removida da lista.",
-        "dirtyWorktreeWarning": "O worktree desta sessão tem alterações sem commit; serão guardadas como um snapshot git antes de arquivar e poderão ser restauradas a partir da sessão mais tarde.",
+        "dirtyWorktreeWarning": "As alterações sem commit serão guardadas antes de arquivar. Pode restaurá-las a partir da tarefa.",
+        "discardChanges": "Descartar alterações sem commit",
+        "discardWarning": "As alterações sem commit e os ficheiros novos serão perdidos.",
+        "discardAndArchive": "Descartar e arquivar",
         "scheduleWarning_one": "A automatização associada {{names}} continuará em execução e restaurará esta sessão.",
         "scheduleWarning_other": "As automatizações associadas {{names}} continuarão em execução e restaurarão esta sessão.",
         "scheduleWarningMany_one": "{{count}} destas sessões tem automatizações associadas que a restaurarão quando forem executadas.",

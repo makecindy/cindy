@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   selectFile: vi.fn(),
   canUseDeviceLink: true,
   diagnosticsInfo: vi.fn(),
+  loggers: {} as Record<string, { warn: ReturnType<typeof vi.fn> }>,
   quitHandlers: new Map<string, { fn: () => void; phase: string }>(),
   cache: {
     readMessages: vi.fn(async () => [] as Record<string, unknown>[]),
@@ -51,7 +52,16 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../../logger', () => ({
-  createLogger: (scope: string) => ({ warn: vi.fn(), error: vi.fn(), info: scope === 'device-link:ipc-diagnostics' ? h.diagnosticsInfo : vi.fn(), debug: vi.fn() }),
+  createLogger: (scope: string) => {
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: scope === 'device-link:ipc-diagnostics' ? h.diagnosticsInfo : vi.fn(),
+      debug: vi.fn(),
+    };
+    h.loggers[scope] = logger;
+    return logger;
+  },
 }));
 vi.mock('../../lifecycle', () => ({
   onQuit: (name: string, fn: () => void, phase: string) => {
@@ -192,9 +202,18 @@ import {
 import { setDeviceControlEnabled } from '../settings-store.desktop';
 
 const senderEvents = new EventEmitter();
-const FRAME = { detached: false };
+// sender 销毁后再读这些属性,Electron 会直接抛「对象已失效」——作用域守卫必须在
+// isDestroyed() 处停住,不能再碰 frame / window(#10906 review)。
+const destroyedAccess = (): never => { throw new Error('Object has been destroyed'); };
+const FRAME = {
+  get detached(): boolean { return h.senderDestroyed ? destroyedAccess() : false; },
+};
+const sender = Object.assign(senderEvents, { id: 42, isDestroyed: () => h.senderDestroyed, mainFrame: FRAME });
+Object.defineProperty(sender, 'mainFrame', {
+  get: () => (h.senderDestroyed ? destroyedAccess() : FRAME),
+});
 const EVENT = {
-  sender: Object.assign(senderEvents, { id: 42, isDestroyed: () => h.senderDestroyed, mainFrame: FRAME }),
+  sender,
   senderFrame: FRAME,
 } as unknown as Electron.IpcMainInvokeEvent;
 
@@ -343,12 +362,42 @@ describe('attachment access confirmation IPC', () => {
     });
     vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async () => { await readWithSourceFileAccessRecovery(source, read); return []; });
     h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
-    await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow('PERMISSION_DENIED');
+    // #10852: 作用域作废掐断在途传输时,根因是作用域失效 —— 守卫错误(带作废原因)
+    // 当主错误,中止类错误降级成 cause,便于事后分辨是谁作废的。
+    const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('PERMISSION_DENIED');
+    expect(((failure as Error).cause as Error | undefined)?.message).toContain('UPLOAD_CANCELLED');
     expect(read).toHaveBeenCalledTimes(2);
     expect(remoteInvoke).not.toHaveBeenCalled();
     expect(h.invalidations.size).toBe(0);
     expect(senderEvents.listenerCount('destroyed')).toBe(0);
     expect(senderEvents.listenerCount('did-start-navigation')).toBe(0);
+  });
+
+  // #10852: 传输超时是真实故障原因,不能再被兜底复查的权限错误顶替。
+  // 生产里账号边界推进会同时作废作用域并中止在途传输,而 invoke 不看中止信号,
+  // 仍会一路跑到 30 秒超时 —— 这时真实故障必须留在主错误上。
+  it('keeps the transport timeout primary when the scope expired during the transfer', async () => {
+    let aborted = false;
+    vi.mocked(remoteInvoke).mockImplementationOnce(async () => {
+      const { signal } = sourceFileAccessTransferOptions();
+      h.ownerGeneration++;                             // 传输期间账号边界推进 → 作用域复查也会失败
+      for (const cancel of h.invalidations) cancel();   // 作用域作废同时中止在途传输
+      aborted = signal?.aborted === true;
+      throw new DeviceLinkError('INVOKE_TIMEOUT', 'no invoke-result within 30000ms');
+    });
+    const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
+    expect(aborted).toBe(true);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('DEVICE_LINK_TIMEOUT');
+    expect((failure as Error).message).not.toContain('PERMISSION_DENIED');
+    expect(((failure as Error).cause as Error | undefined)?.message).toContain('PERMISSION_DENIED');
+    // 守卫命中哪一条要能从日志反推。
+    expect(h.loggers['device-link:ipc']?.warn).toHaveBeenCalledWith(
+      'device-link send scope is no longer current',
+      expect.objectContaining({ reason: 'aborted' }),
+    );
   });
 
   it.each(['cancel', 'wrong-file', 'owner-change', 'window-closed', 'page-changed'])('does not dispatch after %s', async outcome => {
@@ -361,6 +410,21 @@ describe('attachment access confirmation IPC', () => {
     });
     await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow();
     expect(read).toHaveBeenCalledOnce();
+    expect(remoteInvoke).not.toHaveBeenCalled();
+  });
+
+  // #10906 review:sender 销毁后不能再读 frame / window 属性。最小失败输入:销毁后
+  // `detached` / `mainFrame` 一读就抛 —— 守卫若继续读,一次窗口关闭会变成 Electron 的
+  // 「对象已失效」,既不是用户看得懂的原因,也跳过了新增的原因日志。
+  it('reports the destroyed sender without reading frame properties after destruction', async () => {
+    installReadFailure();
+    h.selectFile.mockImplementationOnce(async () => { h.senderDestroyed = true; return { canceled: false, filePaths: [source] }; });
+    const failure = await call(DEVICE_LINK_INVOKE.INVOKE, payload).catch((error: unknown) => error);
+    expect((failure as Error).message).not.toContain('Object has been destroyed');
+    expect(h.loggers['device-link:ipc']?.warn).toHaveBeenCalledWith(
+      'device-link send scope is no longer current',
+      expect.objectContaining({ reason: 'sender-destroyed' }),
+    );
     expect(remoteInvoke).not.toHaveBeenCalled();
   });
 

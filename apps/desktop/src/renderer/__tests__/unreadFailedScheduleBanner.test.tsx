@@ -76,15 +76,26 @@ afterEach(() => {
 });
 
 describe('historical failed schedule notice', () => {
-  it('exposes the recorded failure without marking or rerunning it', () => {
+  // PR #11319: the real banner's diagnose action must identify the failed run,
+  // including legacy records without a schedule ID. The old assertion only
+  // covered the error text. Minimal input is one failed run with an error;
+  // this remains a jsdom unit test with no external I/O.
+  it.each([undefined, 'schedule-1'])('exposes the recorded failure and run identity with schedule ID %s without marking or rerunning it', (scheduleId) => {
     const onDiagnose = vi.fn();
     render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
-      latestFailedRun={{ runId: 'failed', firedAt: 1, errorMsg: 'provider mismatch api_key=private-test-value' }}
+      latestFailedRun={{ runId: 'failed', scheduleId, firedAt: 1, errorMsg: 'provider mismatch api_key=private-test-value' }}
       onDiagnose={onDiagnose} />);
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.queryByText(/private-test-value/)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.diagnose'));
-    expect(onDiagnose).toHaveBeenCalledWith(expect.objectContaining({ details: 'provider mismatch api_key=private-test-value' }));
+    expect(onDiagnose).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      details: [
+        ...(scheduleId ? [`scheduleId: ${scheduleId}`] : []),
+        'runId: failed',
+        'firedAt: 1970-01-01T00:00:00.001Z',
+        'provider mismatch api_key=private-test-value',
+      ].join('\n'),
+    }));
     expect(markRunRead).not.toHaveBeenCalled();
   });
   it('distinguishes precheck failures while preserving the warning', () => {

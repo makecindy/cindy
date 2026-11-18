@@ -28,7 +28,7 @@
 | 开关、滑杆 | `Switch`、`Slider`、`EffortSlider` | §15.17、§15.18 |
 | 复选框 | `components/ui/checkbox.tsx` 的 `Checkbox` | §4 Desktop settings controls |
 | 加载中 | `components/ui/spinner.tsx` 的 `Spinner` | §14.4 |
-| 下载、安装进度 | `components/ui/download-meter.tsx` 的 `DownloadMeter` | §4 Download progress |
+| 下载、安装进度 | `components/ui/download-meter.tsx` 的 `DownloadMeter`；按钮大小的位置用同文件的 `DownloadRing` | §4 Download progress |
 | 错误与通知 | `ErrorNotice`；短通知用 `lib/toast.ts` | §4 Error notices、§4 Toast |
 | 展开收起 | `components/ui/collapse.tsx` 的 `Collapse` | §14.4 |
 | 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | §4 Desktop chat and operation authorization |
@@ -221,6 +221,7 @@ _Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4
 
 - **None in the core UI.** Cindy uses no gradients; visual separation comes from flat color blocks and single-pixel borders. This is a deliberate, almost philosophical design choice. (The login canvas is also flat by ruling — see §16.5.)
 - **Functional edge fades (owner decision, 2026-11-07).** A fade may show that content continues past an edge: the composer fade, the horizontal scroll ends of `RolePillDropdown` and the right-sidebar `TabBar`, and scroll-list and collapsed-body masks. It runs from the surface colour to transparent, or is a mask, and carries no colour of its own. Same-colour overlay layers (`linear-gradient(c, c)`) and the transparency checkerboard are not visual gradients. The WorkLouder device illustration keeps its knob highlight. An audio card without a cover keeps its gradient placeholder (owner decision, 2026-11-07). Apart from these and the registered exceptions below, everything else stays flat. `designEffectsDiscipline.test.ts` keeps this list closed.
+- **Windows tray quota card — same picture as the macOS menu bar panel (owner decision, 2026-11-18, PR #11277).** `styles/quota-tray.css` keeps the two gradients the Swift panel draws natively: the tube's glass well (`wellTop → wellBottom`, the pair `TubeView` fills with) and the card background that stands in for the macOS blur material (warm glows over one base tone). They belong to this card only; the liquid itself stays one flat tone. See [macOS 菜单栏额度面板](./macos-menu-bar-quota.md).
 - **Model-budget spectrum — registered identity exception (registered 2026-11-11, maintainer ruling A-04).** A deliberate 7-step rainbow, the only colored gradient in the working UI. It fills the **model-name text** (`background-clip: text`) of discount-routed (Codex gateway) models in the model selector; it is not a bar and not neutral. Light runs `#e11d48 → #0d9488`, Dark `#fb7185 → #2dd4bf`; both sets live in `MODEL_SPECTRUM_COLORS` (`packages/model-providers/src/modelSpectrum.ts`), are injected as `--model-spectrum-1 … 7` by `theme-service.ts` and composed into `--model-budget-gradient` in `globals.css`. Imported and user themes do not override them. The temporary enterprise Codex provider mark (`OpenAISpectrumMark`) shares the same seven colors; no other text, fill or surface may use them.
 - **GhostTool shimmer** — a neutral gray sweep (`rgba(160,160,160,0.16)` over transparent) across a running GhostTool card; carries no hue (§15.4).
 - **Computer Use cursor bloom** — the out-of-process agent cursor's brand-red bloom and its driver-required gradient (§15.7). It is not drawn by the renderer.
@@ -713,6 +714,17 @@ Desktop 上用户能看到的下载与安装进度（工具、运行时、模型
   提供，组件只负责显示。`role="progressbar"` 的 `aria-valuetext` 汇总状态与速度，供读屏读取。
 - 启动页、壁纸缩略图等已登记的品牌或特定界面若不能放入三行结构，保留原外形，但状态文字与数值
   仍取自同一份 `DownloadProgress` 和本组件导出的格式化函数。
+- **圆环形态（2026-11-18 用户裁决，插件更新）**：进度出现在按钮大小的位置、放不下三行时，用同文件
+  的 `DownloadRing`。圆环几何沿用 `ContextCapacityRing`（2.5px 线宽、圆头、从 12 点顺时针），
+  轨道 `--msg-tool-card-border`、填充 `--text-primary`；尺寸 16（列表行）、20（卡片）、24（详情头部）。
+  圆环旁只写步骤（`downloadProgress.phase.*`，有空间时重试写原因），**不画百分比、字节、速度或剩余
+  时间**——用户裁决「有圆圈表示就够了」；这些数值只进 `aria-valuetext`。下载完成后的校验、安装阶段
+  圆环保持满格，由文字说明；完成时换成对勾与 `--card-status-done` 文字，失败时填充改
+  `--remote-status-failed`、文字 `--error-flat`。失败原因与失败提示同一句话：详情页与「全部更新」弹窗直接显示，卡片写
+  「更新失败／安装失败」，原因放在悬停提示与读屏文本里。卡片上的失败状态旁用带 `Tip`「重试」的正方形图标
+  按钮（§4 Icon buttons），使失败状态不比原按钮宽；详情页与弹窗空间够，用文字按钮。同样不旋转、不循环。使用方：插件市场的手动
+  安装与更新——已装插件卡片与详情页、「全部更新」弹窗、市场卡片和市场详情页；首装完成写「已安装」，
+  更新写「已更新」。
 
 ### Dialog & Modal
 
@@ -1047,7 +1059,7 @@ Making something clickable never moves a layer between Step 1 and Step 2.
 - Don't add shadows outside the §6 registry (§6 Shadow Philosophy is the single list; floating layers use `shadow-[shadow:var(--shadow-menu)]`) — never ad-hoc shadows on in-page elements, no preset `shadow-sm` … `shadow-2xl`; the flat aesthetic is intentional. `designEffectsDiscipline.test.ts` enforces this
 - Don't use font weights above 600 in UI chrome — 700 only inside the exemption domains registered in the §3 registry (that table is the single source of truth; it currently covers markdown content, hljs theme ports, login / Splash brand canvas, third-party viewers under `vendor/`, and imperative third-party APIs). Don't re-enumerate the domains here — read §3. No 800+, no in-between values, anywhere
 - Don't add decorative illustrations — Cindy's working UI carries no mascots or artwork; brand imagery appears only on the explicitly enumerated sanctioned brand surfaces in §15.7 / §16; the only other artwork is the user-selected [application wallpaper](./wallpaper.md)
-- Don't introduce gradients — flat blocks and borders only; the registered exceptions are the session-loading wordmark sheen and functional edge fades (§2 Gradient System), the Computer Use cursor bloom (§15.7), the model-budget spectrum on discount-routed model names and the neutral GhostTool shimmer (§2 Gradient System, §15.4)
+- Don't introduce gradients — flat blocks and borders only; the registered exceptions are the session-loading wordmark sheen and functional edge fades (§2 Gradient System), the Computer Use cursor bloom (§15.7), the model-budget spectrum on discount-routed model names, the neutral GhostTool shimmer (§2 Gradient System, §15.4) and the Windows tray quota card's glass well and background (§2 Gradient System)
 - Don't hard-code a solid gray for neutral text or fake a text tier with element `opacity` — use the text tier tokens (§2); in the CINDY family they are translucent ink and stay correct on glass and wallpaper
 - Don't overcomplicate the layout — stick to the region structure in §5; no complex nested grids
 - Don't give containers or dividers a border heavier than 1px — containment is always the lightest possible touch. The rule covers containers (cards, panels, dialogs, list frames) and dividers, not control strokes (owner decision B-10, 2026-11-11): checkboxes use the shared `Checkbox` (§4 Desktop settings controls) instead of a hand-drawn box; hand-drawn radio dots, edit / focus frames, avatar and status-dot cut-out rings and spinners may use 1.5–2px; the EffortSlider thumb's 2.5px border is a registered exception (§15.18)

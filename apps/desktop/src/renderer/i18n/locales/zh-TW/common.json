@@ -142,6 +142,10 @@
     "message": "Cindy 無法讀取這個附件。請選擇原始檔案，確認後繼續傳送這則訊息；取消會保留草稿。",
     "button": "使用原始檔案"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "因為任務或視窗變更，本次傳送已取消。",
+    "invalid": "本次傳送對目前任務已失效。"
+  },
   "mailReader": {
     "showExternalImages": "顯示外部圖片",
     "markReadFailed": "未能同步已讀狀態，請檢查信箱授權後重新開啟。",
@@ -8186,7 +8190,7 @@
         "hostTools_handoff": "任務投遞",
         "hostTools_handoffDetail": "透過 Cindy 的任務工具向現有任務傳送訊息。需要目前任務情境的操作須明確指定任務。",
         "hostTools_usage": "讀取用量與供應商組狀態",
-        "hostTools_usageDetail": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、供應商組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定",
+        "hostTools_usageDetail": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、供應商組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定。還可讀取有權存取的任務配額，包括同帳號已授權的電腦及允許查看配額的分享供應商。",
         "hostTools_settings": "應用程式設定",
         "hostTools_settingsDetail": "透過 Cindy 的設定工具讀取及修改應用程式設定；不傳回金鑰，也不代你完成機密輸入。",
         "hostTools_scheduler": "自動化管理",
@@ -8710,6 +8714,10 @@
       "panelHost": {
         "close": "關閉面板"
       },
+      "installProgress": {
+        "awaitingConsent": "等待確認…",
+        "installFailed": "安裝失敗"
+      },
       "updateAll": {
         "title": "全部更新 · {{count}} 個插件",
         "collapseDiff": "收起",
@@ -8720,6 +8728,7 @@
         "statusDone": "已更新",
         "statusSkipped": "已跳過",
         "statusFailed": "更新失敗",
+        "progressCount": "已更新 {{done}} / {{total}}",
         "background": "在背景繼續",
         "doneAction": "完成",
         "doneToast": "批次更新完成：{{done}} 個已更新，{{rest}} 個未完成",
@@ -15049,6 +15058,9 @@
       "continueFailed_other": "有 {{count}} 個任務未能繼續，可以開啟任務後重試。"
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "這次操作的任務授權已失效。下一輪仍會按計畫執行。",
+      "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
+      "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
       "text": "先前有自動執行失敗。",
       "precheck": "自動檢查暫時受阻。",
       "rateLimited": "自動檢查暫時受阻：請求限流。",
@@ -16422,7 +16434,10 @@
       "confirmArchive": {
         "title": "歸檔任務",
         "description": "確定要歸檔這個任務嗎？歸檔後將從列表中移除。",
-        "dirtyWorktreeWarning": "該任務的 worktree 有未提交的更改；歸檔前會自動儲存為 git 快照，之後可在任務內一鍵恢復。",
+        "dirtyWorktreeWarning": "未提交的變更會在歸檔前儲存，可在任務中復原。",
+        "discardChanges": "捨棄未提交的變更",
+        "discardWarning": "未提交的變更和新檔案將無法復原。",
+        "discardAndArchive": "捨棄並歸檔",
         "scheduleWarning_one": "關聯的自動化{{names}}仍會執行，並恢復此任務。",
         "scheduleWarning_other": "關聯的自動化{{names}}仍會執行，並恢復此任務。",
         "scheduleWarningMany_one": "其中 {{count}} 個任務關聯了自動化，後續執行時會恢復這些任務。",

@@ -165,6 +165,24 @@ function createHarness(overrides = {}) {
   return { maker, events, persisted, queue };
 }
 
+// Unit: preparation of a cold remote Pi task must use the stored route and never create a user turn.
+test('remote Pi skill preparation uses the stored session without sending input', async () => {
+  const dir = os.tmpdir();
+  const h = createHarness({ readSession: async id => ({ id, agentKind: 'pi', model: 'stored-model',
+    status: 'active', workingDir: dir, sdkSessionId: 'pi-native' }) });
+  try {
+    await assert.rejects(h.queue.preparePiSkillRuntime('s', dir + '-other'), /unavailable|changed/);
+    assert.equal(h.maker.getSession('s'), null);
+    await h.queue.preparePiSkillRuntime('s', dir);
+    const live = h.maker.getSession('s');
+    assert.equal(live.options.resumeSessionId, 'pi-native');
+    await h.queue.preparePiSkillRuntime('s', dir);
+    assert.equal(h.maker.getSession('s'), live);
+    assert.deepEqual(live.sent, []);
+    assert.deepEqual(h.persisted, []);
+  } finally { await h.queue.dispose(); }
+});
+
 const waitFor = async (check) => {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     if (check()) return;

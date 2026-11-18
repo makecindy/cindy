@@ -1,5 +1,8 @@
 import { formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { describe, expect, it, vi } from 'vitest';
+import { createXdtHelperMcpServer } from '@cindy/mcps';
+import { handlePluginHostToolRequest } from '../../cindy-brain/hostToolSlot.js';
+import { authorizePluginHostToolCall, getPluginHostToolCaller } from '../../mcp-integrations/hostToolCaller.js';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -9,6 +12,7 @@ import {
   createSessionControlService,
   rebuildSessionQueueItem,
   sessionQueueOriginForDispatcher,
+  type SessionControlServiceDeps,
   type SessionSteerTurnIdentity,
 } from '../sessionControlService.js';
 
@@ -96,7 +100,7 @@ function setup(opts?: {
     });
   const deps = {
     getPluginCaller: vi.fn<() => { source: { pluginId: string }; assertCurrent(): void } | undefined>(() => undefined),
-    runSessionAction: vi.fn(async (_params: { beforeMutation: () => Promise<void> }) => ({ ok: true as const, result: { executionPaused: true } })),
+    runSessionAction: vi.fn<NonNullable<SessionControlServiceDeps['runSessionAction']>>(async () => ({ ok: true, result: { executionPaused: true } })),
     sessionExists: vi.fn(async () => opts?.exists ?? true),
     getLiveSession,
     getSessionActivitySnapshot: vi.fn(async () => activity),
@@ -208,6 +212,51 @@ describe('session control domain service', () => {
     deps.runSessionAction.mockRejectedValue(Object.assign(new Error('Native compact is unavailable'), { code: 'UNSUPPORTED_CAPABILITY' }));
     expect(await service.controlSession({ targetSessionId: 'target', action: 'compact' }))
       .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Native compact is unavailable' });
+  });
+
+  // Unit / #11043 compact contract: exercise the plugin gateway and real
+  // helper registry. Service-only tests did not cover the MCP result shape.
+  it.each([
+    ['compacted', { status: 'requested', tokensBefore: 200, estimatedTokensAfter: 100 }],
+    ['noop', { status: 'requested', noop: true }],
+    ['failed', null],
+  ] as const)('returns %s compact result to an approved plugin', async (outcome, result) => {
+    const { service, deps } = setup();
+    deps.getPluginCaller.mockImplementation(() => {
+      const caller = getPluginHostToolCaller();
+      return caller && { source: { pluginId: caller.caller.pluginId }, assertCurrent: caller.assertCurrent };
+    });
+    deps.runSessionAction.mockImplementationOnce(async ({ beforeMutation }) => {
+      await beforeMutation();
+      if (outcome === 'failed') {
+        throw Object.assign(new Error('Pi native context compaction failed'), { code: 'COMPACT_FAILED' });
+      }
+      return { ok: true, result };
+    });
+    const data = await handlePluginHostToolRequest('plugin', {
+      type: 'host-tool-request', server: 'cindy_helper', tool: 'control_session',
+      args: { session_id: 'pi-task', action: 'compact', instructions: 'Keep decisions' },
+    }, () => true, {
+      owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      getGhost: () => ({
+        enabled: true, dir: '/plugin', approval: { state: 'approved', revision: 'r1' },
+        manifest: { schemaVersion: 3, id: 'plugin', name: 'Plugin', version: '1.0.0',
+          kind: 'chip', entry: 'main.js', agent: { hostTools: ['control'] } },
+      }),
+      createRuntime: (_server, caller) => {
+        const server = createXdtHelperMcpServer({ sessionControl: service, authorizeCall: authorizePluginHostToolCall },
+          { agentKind: 'pi', workingDir: '', hostCaller: caller });
+        return { ...server.hostTools, close: () => server.close() };
+      },
+    });
+    expect(data.isError ?? false).toBe(outcome === 'failed');
+    const payload = data.content[0];
+    expect(JSON.parse(payload.type === 'text' ? payload.text : '{}')).toMatchObject(outcome === 'failed'
+      ? { ok: false, errorCode: 'COMPACT_FAILED' }
+      : { ok: true, action: 'compact', session_id: 'pi-task', result });
+    expect(deps.runSessionAction).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'pi-task', action: 'compact', instructions: 'Keep decisions',
+    }));
   });
 
   // UI parity: machine-generated rows are not editable, even with plugin control.

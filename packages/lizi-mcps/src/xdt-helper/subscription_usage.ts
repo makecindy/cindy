@@ -5,6 +5,7 @@ import { errorPayload, okPayload } from './_payload.js';
 
 export interface SubscriptionUsageCallbacks {
   read(context: LiziMcpSessionContext, providerId?: string): Promise<Record<string, unknown>>;
+  readSession?(context: LiziMcpSessionContext, sessionId: string): Promise<Record<string, unknown>>;
 }
 
 export const subscriptionUsageInputSchema = z.strictObject({ providerId: z.string().regex(/^[a-z0-9_-]{1,40}$/).optional() });
@@ -23,6 +24,21 @@ export function registerSubscriptionUsageTools(registry: XdtHelperToolRegistry, 
       if (context.remoteHostId || (!context.sessionId && !context.hostCaller))
         return errorPayload('CAPABILITY_NOT_AVAILABLE', '此用量接口只支持执行电脑上的本机任务或已获准插件。');
       try { return okPayload(await callbacks.read(context, providerId)); }
+      catch {
+        const failure = projectSubscriptionUsageError();
+        return errorPayload(failure.code, failure.message);
+      }
+    },
+  });
+  const readSession = callbacks.readSession;
+  if (readSession) registry.register({ name: 'get_session_quota', category: 'usage',
+    description: '只读查询指定任务实际执行来源的额度。支持本机、同账号已授权电脑和获准查看额度的分享供应商。没有可确认读数时返回 unavailable。插件需声明 usage。不返回任务内容、设备或账号标识。',
+    inputShape: { sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/) },
+    handler: async ({ sessionId }) => {
+      const context = current();
+      if (context.remoteHostId || (!context.sessionId && !context.hostCaller))
+        return errorPayload('CAPABILITY_NOT_AVAILABLE', '此额度接口需要当前用户的本机任务或已获准插件。');
+      try { return okPayload(await readSession(context, sessionId)); }
       catch {
         const failure = projectSubscriptionUsageError();
         return errorPayload(failure.code, failure.message);
