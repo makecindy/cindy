@@ -235,6 +235,8 @@ function resolveTurnFileRoots(
 interface TurnState {
   /** Stable identity used by the central interaction router for this turn. */
   turnId: string;
+  /** Direct Stop cancels this exact turn, independently of session disposal. */
+  stopRequested?: boolean;
   userId: string;
   /** thread = session 模型的会话维度键(slack thread root ts);feishu undefined。 */
   scopeKey?: string;
@@ -372,8 +374,8 @@ type DetachDrainOutcome = 'rewire' | 'cancelled';
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
-  /** Single-task disposal retires late replacements; channel detach does not. */
-  runtimeDisposalRequested?: boolean;
+  /** Both cancel this channel's turn; only runtime disposal retires late replacements. */
+  disposalIntent?: 'runtime' | 'observation';
   /** Maker session (in-process). */
   makerSession: MakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
@@ -2097,6 +2099,23 @@ export function createTurnRunner(
         if (index >= 0) state.queue.splice(index, 1);
         throw err;
       }
+      // Disposal already settled this turn as aborted. A late preparation result
+      // must not turn the explicit cancellation into another channel reply.
+      if ((state.disposalIntent || item.turn.stopRequested) && item.turn.terminalKind === 'aborted') {
+        if (err instanceof SessionCreationCleanupPendingError) {
+          log.warn('session cleanup pending after cancelled dispatch', {
+            source: 'session-cleanup',
+            sessionId: hashLogSessionId(rowId),
+            reason: 'SESSION_CLEANUP_PENDING',
+            error: sanitizeSendOutcomeError(err),
+          });
+        }
+        const index = state.queue.indexOf(item.turn);
+        if (index >= 0) state.queue.splice(index, 1);
+        await completeTurnCallbackAfterAck(item.turn);
+        settleTurnTerminal(item.turn);
+        return { kind: 'rejected', reason: 'aborted' };
+      }
       const turnPolicyFailureReason = classifyTurnPermissionPolicySendFailure(err, item, state);
       if (turnPolicyFailureReason) {
         await handleSendPreDispatchFailure(state, userId, {
@@ -2267,9 +2286,14 @@ export function createTurnRunner(
       if (!latest || latest.status === 'archived' || latest.status === 'deleted') {
         // Terminal cleanup may have run before startup published this instance.
         // Retire only this replacement, never a later runtime for the same id.
-        await maker.closeSessionIfCurrent(current);
-        if (sessionStates.get(sessionId) === state) {
-          forgetClosedSession(sessionId, 'session closed while rebuilding its runtime');
+        try {
+          await retirePreparedRuntime(maker, current);
+        } finally {
+          // Failed native exit keeps Maker's ownership barrier, but terminal IM
+          // state and observers must be removed even when no close event arrives.
+          if (sessionStates.get(sessionId) === state) {
+            forgetClosedSession(sessionId, 'session closed while rebuilding its runtime');
+          }
         }
         throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} closed while rebuilding its runtime`);
       }
@@ -2277,13 +2301,24 @@ export function createTurnRunner(
     // Disposal may finish during either await above. Do not install an observer
     // after its owner has cleaned up: it could observe a later wiring of this id.
     if (sessionStates.get(sessionId) !== state) {
-      if (state.runtimeDisposalRequested) await maker.closeSessionIfCurrent(current);
+      if (state.disposalIntent === 'runtime') await retirePreparedRuntime(maker, current);
       throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} detached while preparing its runtime`);
     }
     if (current === previous) return;
 
     rebindSessionOutput(state, current, userId);
     wireSessionToIpcExternal(current);
+  }
+
+  async function retirePreparedRuntime(maker: MakerInstance, session: MakerSession): Promise<void> {
+    try {
+      await maker.closeSessionIfCurrent(session);
+    } catch (cause) {
+      // Only a confirmed teardown boundary gets the cleanup category. Never
+      // remove Maker ownership while native exit is unconfirmed or start again.
+      throw cause instanceof SessionCreationCleanupPendingError
+        ? cause : new SessionCreationCleanupPendingError({ cause });
+    }
   }
 
   /**
@@ -4663,6 +4698,7 @@ export function createTurnRunner(
       // attached desktop-originated turn may make isTurnRunning() true while
       // queue stays empty; logout must not abort that desktop-owned work.
       const hasImTurnInFlight = state.queue.length > 0;
+      state.disposalIntent = 'observation';
       cleanupSessionState(state);
       settleDetachDrain(state, 'cancelled');
       if (hasImTurnInFlight) {
@@ -4775,6 +4811,7 @@ export function createTurnRunner(
       }
       const active = state.queue[0];
       if (!active || !matches(active)) return { stopped: removed.length > 0, droppedQueued: removed.length };
+      active.stopRequested = true;
       active.terminalKind = 'aborted';
       // 与桌面 Stop 同一套清理(撤续跑 / 取消恢复 / 暂停 Goal / 停输入队列并中止当前一轮)。
       await stopSessionTurnExplicitly(state.makerSession.id);
@@ -4787,7 +4824,10 @@ export function createTurnRunner(
     // 先清排队再 abort — abort 触发的 done/error 会走 maybeDispatchNextQueued,
     // 队列不清空的话下一条排队消息会在中止后立刻自动派发。
     clearPendingSends(state);
-    if (state.queue[0]) state.queue[0].terminalKind = 'aborted';
+    if (state.queue[0]) {
+      state.queue[0].stopRequested = true;
+      state.queue[0].terminalKind = 'aborted';
+    }
     // 与桌面 Stop 同一套清理(docs/dev-rules/im-turn-flow.md 不变量 9): 撤 silent-stop /
     // 中断续跑守卫(turn 若正挂在 silentStop 的决策窗里, abort 对早已收尾的 SDK turn 是
     // no-op, 不重置的话守卫照样自动续跑, 用户喊停后 agent 原地复活)、取消上下文溢出恢复、
@@ -4807,7 +4847,7 @@ export function createTurnRunner(
   async function disposeOneSession(sessionId: string): Promise<void> {
     const state = sessionStates.get(sessionId);
     if (!state) return;
-    state.runtimeDisposalRequested = true;
+    state.disposalIntent = 'runtime';
     sessionStates.delete(sessionId);
     cleanupSessionState(state);
     settleDetachDrain(state, 'cancelled');

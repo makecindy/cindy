@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Maker,
   Session,
+  SessionCreationCleanupPendingError,
   MAIN_OWNED_SEND_CONTEXT,
   TurnPermissionPolicyUnsupportedError,
 } from '@cindy/maker-core';
@@ -5474,7 +5475,10 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       }
     });
 
-    it.each(['archived', 'deleted', 'missing'] as const)('rejects a task made %s while rebuilding its runtime', async (status) => {
+    // #11381/4617476248: failed native teardown must not retain terminal IM state.
+    it.each([['archived', false], ['deleted', false], ['missing', false],
+      ['archived', true], ['deleted', true], ['missing', true]] as const)(
+      'rejects a task made %s while rebuilding its runtime (close failure=%s)', async (status, closeFails) => {
       const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup();
       previous.hasStartedClosing.mockReturnValue(true);
       const activeRow = {
@@ -5493,6 +5497,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       mocks.desktopSessionRows
         .mockReturnValueOnce([{ ...activeRow }])
         .mockReturnValueOnce(status === 'missing' ? [] : [{ ...activeRow, status }]);
+      if (closeFails) vi.mocked(replacement.session.close).mockRejectedValueOnce(new Error('PROMPT_SECRET /private/cleanup'));
       try {
         await runTurn();
         await flushMicrotasks();
@@ -5503,14 +5508,18 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         // replacement. The runner must retire that exact late runtime as well.
         expect(maker.closeSessionIfCurrent).toHaveBeenCalledWith(replacement.session);
         expect(replacement.session.close).toHaveBeenCalledOnce();
-        expect(maker.getSession()).toBeUndefined();
+        expect(maker.getSession()).toBe(closeFails ? replacement.session : undefined);
+        expect(localRunner.getMakerSessionById(SESSION_ID)).toBeNull();
+        expect(previous.listenerCount()).toBe(0);
         expect(replacement.listenerCount()).toBe(0);
         expect(mocks.logger.info).toHaveBeenCalledWith(
           expect.stringContaining('rebuilding closing runtime before send'),
         );
         expect(mocks.feishuIm.sendText.mock.calls.map((call) => String(call[1]))).toContain(
-          '❌ 启动 Agent 失败：SESSION_CLOSED',
+          `❌ 启动 Agent 失败：${closeFails ? 'SESSION_CLEANUP_PENDING' : 'SESSION_CLOSED'}`,
         );
+        if (closeFails) expectSafeSendOutcomeLog({ source: 'session-cleanup', reason: 'SESSION_CLEANUP_PENDING' });
+        expect(JSON.stringify(mocks.feishuIm.sendText.mock.calls)).not.toContain('PROMPT_SECRET');
       } finally {
         localRunner.disposeAllSessions();
       }
@@ -5529,6 +5538,9 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         expect(replacement.send).not.toHaveBeenCalled();
         expect(replacement.listenerCount()).toBe(0);
         expect(mocks.wireSessionToIpcExternal).not.toHaveBeenCalledWith(replacement.session);
+        // #11381/4617476259: explicit disposal is cancellation, no late failure reply.
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+        expect(onTurnComplete).toHaveBeenCalledOnce();
 
         onTurnComplete.mockClear();
         await runTurn();
@@ -5547,34 +5559,44 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
     // #11381/4616692726: project-switch disposal closes a runtime, whereas
     // dispose-all only drops this channel's observation. A late replacement
     // must not survive the single-task disposal with its old project config.
-    it('retires the late replacement after single-task disposal during rebuilding', async () => {
+    it.each([false, true])('retires the late replacement after single-task disposal during rebuilding (close failure=%s)', async (closeFails) => {
       const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup({
         onRebuild: async () => { await localRunner.disposeOneSession(SESSION_ID); },
       });
       previous.hasStartedClosing.mockReturnValue(true);
+      if (closeFails) vi.mocked(replacement.session.close).mockRejectedValueOnce(new Error('PROMPT_SECRET /private/cleanup'));
       try {
         await runTurn();
         expect(previous.session.close).toHaveBeenCalledOnce();
         expect(maker.closeSessionIfCurrent).toHaveBeenCalledWith(replacement.session);
         expect(replacement.session.close).toHaveBeenCalledOnce();
-        expect(maker.getSession()).toBeUndefined();
+        expect(maker.getSession()).toBe(closeFails ? replacement.session : undefined);
+        expect(localRunner.getMakerSessionById(SESSION_ID)).toBeNull();
         expect(replacement.send).not.toHaveBeenCalled();
         expect(replacement.listenerCount()).toBe(0);
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+        if (closeFails) expect(mocks.logger.warn).toHaveBeenCalledWith(
+          'session cleanup pending after cancelled dispatch',
+          expect.objectContaining({ source: 'session-cleanup', reason: 'SESSION_CLEANUP_PENDING' }),
+        );
       } finally {
         await localRunner.disposeAllSessions();
       }
     });
 
-    it('does not send after an explicit stop during runtime rebuilding', async () => {
+    // The same cancellation must win if preparation rejects after a direct Stop.
+    it.each([false, true])('does not send after an explicit stop during runtime rebuilding (preparation failure=%s)', async (preparationFails) => {
       const { previous, replacement, localRunner, runTurn } = createLivenessSetup({
         onRebuild: async () => {
           expect(await localRunner.stopActiveTurn({ botContextId: 'cli_test_bot', userId: 'ou_user' }))
             .toMatchObject({ stopped: true });
+          if (preparationFails) throw new SessionCreationCleanupPendingError({ cause: new Error('PROMPT_SECRET /private/stopped') });
         },
       });
       previous.hasStartedClosing.mockReturnValue(true);
       try {
         await runTurn();
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
         expect(previous.send).not.toHaveBeenCalled();
         expect(replacement.send).not.toHaveBeenCalled();
         expect(previous.abort).toHaveBeenCalledOnce();
