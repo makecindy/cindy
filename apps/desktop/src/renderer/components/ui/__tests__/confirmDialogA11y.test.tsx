@@ -13,6 +13,8 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfirmDialog } from '../confirm-dialog';
+import { ConfirmDialogProvider } from '../confirm-dialog-provider';
+import { useConfirmTaskArchive } from '@/features/cc-agent/hooks/useConfirmTaskArchive';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -155,5 +157,29 @@ describe('ConfirmDialog action layout', () => {
       ['稍后处理', '重新登录 ChatGPT', '打开 ChatGPT App'],
     );
     expect(document.activeElement).toBe(screen.getByRole('button', { name: '稍后处理' }));
+  });
+});
+
+// PR #11291 review: closing a background file tab must identify that task even
+// after selecting discard. The generic dialog tests above do not call the archive
+// hook with a target. Unit input: one named task, recoverable base text, dirty state.
+describe('archive target identity', () => {
+  it('keeps the target name in both states without the recovery promise on discard', () => {
+    function ArchiveButton() {
+      const confirm = useConfirmTaskArchive();
+      return <button onClick={() => { void confirm('dirty-discardable', [], {
+        title: 'Background task',
+        description: 'Background task can be restored from the archived view.',
+      }); }}>Open archive</button>;
+    }
+    render(<ConfirmDialogProvider><ArchiveButton /></ConfirmDialogProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open archive' }));
+    const title = 'ccAgent.sidebar.confirmArchive.title · Background task';
+    const dialog = screen.getByRole('alertdialog', { name: title });
+    const checkbox = within(dialog).getByRole('checkbox');
+    fireEvent.click(checkbox);
+    expect(screen.getByRole('alertdialog', { name: title })).toBe(dialog);
+    expect(dialog.textContent).not.toContain('can be restored');
+    expect(screen.getByRole('button', { name: 'ccAgent.sidebar.confirmArchive.discardAndArchive' })).toBeTruthy();
   });
 });

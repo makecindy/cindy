@@ -367,7 +367,10 @@ function WorkdirBrowseContent() {
       const confirmed = await confirmTaskArchive(
         preflight,
         scheduleNames,
-        t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
+        {
+          title: closingTitle,
+          description: t('ccAgent.workdirBrowse.archiveSession.description', { title: closingTitle }),
+        },
       );
       if (!confirmed) return;
 

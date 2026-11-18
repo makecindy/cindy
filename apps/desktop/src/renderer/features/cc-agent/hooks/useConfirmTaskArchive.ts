@@ -12,11 +12,13 @@ export function useConfirmTaskArchive() {
   return useCallback(async (
     preflight: WorktreeRemovalPreflight,
     scheduleNames: readonly string[],
-    baseDescription?: string,
+    target?: { title: string; description: string },
   ): Promise<boolean | 'discard'> => {
     const scheduleWarning = archiveScheduleWarning(t, scheduleNames);
     const options = {
-      title: t('ccAgent.sidebar.confirmArchive.title'),
+      title: target
+        ? `${t('ccAgent.sidebar.confirmArchive.title')} · ${target.title}`
+        : t('ccAgent.sidebar.confirmArchive.title'),
       confirmText: t('ccAgent.workdirBrowse.archiveSession.confirm'),
       cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
     };
@@ -26,7 +28,7 @@ export function useConfirmTaskArchive() {
     if (preflight !== 'dirty-discardable') {
       return confirm({
         ...options,
-        description: archiveConfirmDescription(t, { dirtyWorktree: Boolean(saveWarning), scheduleNames }, baseDescription),
+        description: archiveConfirmDescription(t, { dirtyWorktree: Boolean(saveWarning), scheduleNames }, target?.description),
       });
     }
 
