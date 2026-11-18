@@ -638,6 +638,8 @@ export interface BotGroupSummary {
    * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
    */
   singleSpeaker?: boolean;
+  /** Ordinary group messages start independent replies, including while a legacy plan is open. */
+  independentReplies?: boolean;
   /** A single-speaker group whose computer arranges 「安排分工」 (older computers answered it as a queue). */
   supportsDivision?: boolean;
   selfActorId?: string;
