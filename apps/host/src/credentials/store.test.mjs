@@ -147,9 +147,11 @@ test('native codec rejects an incomplete identity and does not replace a record 
 // empty profile must not even read path.txt; real credential reads and writes
 // must fail closed until an executable is installed in that dependency tree.
 test('native credentials resolve Electron only for encryption or decryption and report a missing binary', async t => {
-  const { host, electron } = createSourceElectronTree(tempProfile(t));
-  const { createCredentialStore } = await import(pathToFileURL(path.join(host, 'src/credentials/store.mjs')));
+  const tree = createSourceElectronTree(tempProfile(t));
+  const { createCredentialStore } = await import(pathToFileURL(path.join(tree.host, 'src/credentials/store.mjs')));
   const userDataDir = tempProfile(t);
+  // Node resolves the package directory through symlinks in the temporary path.
+  const electron = fs.realpathSync(tree.electron);
   const marker = path.join(electron, 'path.txt');
   const binary = path.join(electron, 'dist', 'nested', 'electron');
   fs.writeFileSync(marker, 'nested/electron\n');
