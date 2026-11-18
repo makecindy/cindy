@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -8,6 +9,16 @@ import {
   XcodeBuildManager,
   type XcodeBuildDependencies,
 } from '../index';
+
+/**
+ * CI 也在 Windows / Linux 上跑这份单测；被测代码用宿主的 path 模块拼路径，
+ * 所以夹具与绝对路径断言都必须由 path 生成，不能写死 POSIX 串。
+ */
+const WORKDIR = path.resolve('/repo');
+const BUILD_DIR = path.join('/build');
+const APP_PATH = path.join(BUILD_DIR, 'Recipes.app');
+const FLUTTER_BIN = path.join('/flutter', 'bin', 'flutter');
+const underWorkdir = (...parts: string[]) => path.join(WORKDIR, ...parts);
 
 /**
  * 测试价值
@@ -35,10 +46,10 @@ describe('xcode build', () => {
     });
     const directory = (name: string) => ({ name, isDirectory: () => true });
     const readdir = vi.fn(async (directoryPath: string) => {
-      if (directoryPath === '/repo') return [directory('apps')] as never;
-      if (directoryPath === '/repo/apps') return [directory('mobile')] as never;
-      if (directoryPath === '/repo/apps/mobile') return [directory('ios')] as never;
-      if (directoryPath === '/repo/apps/mobile/ios') {
+      if (directoryPath === WORKDIR) return [directory('apps')] as never;
+      if (directoryPath === underWorkdir('apps')) return [directory('mobile')] as never;
+      if (directoryPath === underWorkdir('apps', 'mobile')) return [directory('ios')] as never;
+      if (directoryPath === underWorkdir('apps', 'mobile', 'ios')) {
         return [directory('Recipes.xcworkspace'), directory('Recipes.xcodeproj')] as never;
       }
       return [] as never;
@@ -52,7 +63,7 @@ describe('xcode build', () => {
     });
 
     await expect(
-      manager.discover({ sessionId: 'session-1', workdir: '/repo' }),
+      manager.discover({ sessionId: 'session-1', workdir: WORKDIR }),
     ).resolves.toMatchObject({
       status: 'available',
       selectedContainerPath: 'apps/mobile/ios/Recipes.xcworkspace',
@@ -90,7 +101,7 @@ Available destinations for the "Recipes" scheme:
   it('builds and runs Debug on a simulator, then stops the app', async () => {
     const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
       if (args.includes('-showBuildSettings')) {
-        return { stdout: buildSettings('com.example.recipes', '/build/Recipes.app'), stderr: '' };
+        return { stdout: buildSettings('com.example.recipes', BUILD_DIR), stderr: '' };
       }
       if (args[0] === 'simctl' && args[1] === 'launch') {
         return { stdout: 'com.example.recipes: 42\n', stderr: '' };
@@ -106,7 +117,7 @@ Available destinations for the "Recipes" scheme:
     const state = await manager.start({
       sessionId: 'session-1',
       ownerId: 7,
-      workdir: '/repo',
+      workdir: WORKDIR,
       containerPath: 'ios/Recipes.xcworkspace',
       containerKind: 'workspace',
       scheme: 'Recipes',
@@ -118,7 +129,7 @@ Available destinations for the "Recipes" scheme:
 
     expect(state).toMatchObject({ status: 'running', phase: 'building' });
     await vi.waitFor(() => {
-      expect(manager.status('/repo', 7).state).toMatchObject({
+      expect(manager.status(WORKDIR, 7).state).toMatchObject({
         status: 'running',
         phase: 'launched',
       });
@@ -137,7 +148,7 @@ Available destinations for the "Recipes" scheme:
     );
     expect(execFile).toHaveBeenCalledWith(
       '/usr/bin/xcrun',
-      ['simctl', 'install', 'SIM-1', '/build/Recipes.app'],
+      ['simctl', 'install', 'SIM-1', APP_PATH],
       expect.any(Object),
     );
     expect(execFile).toHaveBeenCalledWith(
@@ -167,13 +178,13 @@ Available destinations for the "Recipes" scheme:
       ['simctl', 'terminate', 'SIM-1', 'com.example.recipes'],
       expect.any(Object),
     );
-    expect(manager.status('/repo', 7).state).toMatchObject({ status: 'cancelled' });
+    expect(manager.status(WORKDIR, 7).state).toMatchObject({ status: 'cancelled' });
   });
 
   it('installs, launches, and stops a physical-device Debug build through devicectl', async () => {
     const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
       if (args.includes('-showBuildSettings')) {
-        return { stdout: buildSettings('com.example.recipes', '/build/Recipes.app'), stderr: '' };
+        return { stdout: buildSettings('com.example.recipes', BUILD_DIR), stderr: '' };
       }
       if (args[0] === 'devicectl' && args[3] === 'launch') {
         return {
@@ -193,7 +204,7 @@ Available destinations for the "Recipes" scheme:
     const state = await manager.start({
       sessionId: 'session-1',
       ownerId: 7,
-      workdir: '/repo',
+      workdir: WORKDIR,
       containerPath: 'ios/Recipes.xcworkspace',
       containerKind: 'workspace',
       scheme: 'Recipes',
@@ -203,7 +214,7 @@ Available destinations for the "Recipes" scheme:
       destinationOsVersion: null,
     });
     await vi.waitFor(() => {
-      expect(manager.status('/repo', 7).state?.phase).toBe('launched');
+      expect(manager.status(WORKDIR, 7).state?.phase).toBe('launched');
     });
     expect(execFile).toHaveBeenCalledWith(
       '/usr/bin/xcrun',
@@ -214,7 +225,7 @@ Available destinations for the "Recipes" scheme:
         'app',
         '--device',
         'DEVICE-1',
-        '/build/Recipes.app',
+        APP_PATH,
       ],
       expect.any(Object),
     );
@@ -244,7 +255,7 @@ Available destinations for the "Recipes" scheme:
     // 此时再点「编译」必须能结束旧进程并重新 build/install/launch,而不是报冲突。
     const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
       if (args.includes('-showBuildSettings')) {
-        return { stdout: buildSettings('com.example.recipes', '/build/Recipes.app'), stderr: '' };
+        return { stdout: buildSettings('com.example.recipes', BUILD_DIR), stderr: '' };
       }
       if (args[0] === 'simctl' && args[1] === 'launch') {
         return { stdout: 'com.example.recipes: 42\n', stderr: '' };
@@ -262,7 +273,7 @@ Available destinations for the "Recipes" scheme:
     const request = {
       sessionId: 'session-1',
       ownerId: 7,
-      workdir: '/repo',
+      workdir: WORKDIR,
       containerPath: 'ios/Recipes.xcworkspace',
       containerKind: 'workspace' as const,
       scheme: 'Recipes',
@@ -274,14 +285,14 @@ Available destinations for the "Recipes" scheme:
 
     await manager.start(request);
     await vi.waitFor(() => {
-      expect(manager.status('/repo', 7).state?.phase).toBe('launched');
+      expect(manager.status(WORKDIR, 7).state?.phase).toBe('launched');
     });
     execFile.mockClear();
 
     const rebuilt = await manager.start(request);
     expect(rebuilt).toMatchObject({ buildId: 'build-2', status: 'running', phase: 'building' });
     await vi.waitFor(() => {
-      expect(manager.status('/repo', 7).state).toMatchObject({
+      expect(manager.status(WORKDIR, 7).state).toMatchObject({
         buildId: 'build-2',
         status: 'running',
         phase: 'launched',
@@ -299,15 +310,15 @@ Available destinations for the "Recipes" scheme:
     );
     expect(execFile).toHaveBeenCalledWith(
       '/usr/bin/xcrun',
-      ['simctl', 'install', 'SIM-1', '/build/Recipes.app'],
+      ['simctl', 'install', 'SIM-1', APP_PATH],
       expect.any(Object),
     );
   });
 
   it('uses the Debug app bundle reported by Xcode build settings', () => {
-    expect(parseXcodeAppBuildSettings(buildSettings('com.example.recipes', '/build/Recipes.app')))
+    expect(parseXcodeAppBuildSettings(buildSettings('com.example.recipes', BUILD_DIR)))
       .toEqual({
-        appPath: '/build/Recipes.app',
+        appPath: APP_PATH,
         bundleId: 'com.example.recipes',
         flutterRoot: null,
       });
@@ -319,7 +330,7 @@ Available destinations for the "Recipes" scheme:
         return {
           stdout: buildSettings(
             'com.example.recipes',
-            '/build/Recipes.app',
+            BUILD_DIR,
             '/flutter',
           ),
           stderr: '',
@@ -349,7 +360,7 @@ Available destinations for the "Recipes" scheme:
     const state = await manager.start({
       sessionId: 'session-1',
       ownerId: 7,
-      workdir: '/repo',
+      workdir: WORKDIR,
       containerPath: 'ios/Recipes.xcworkspace',
       containerKind: 'workspace',
       scheme: 'Recipes',
@@ -360,15 +371,15 @@ Available destinations for the "Recipes" scheme:
     });
     await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
     expect(spawn).toHaveBeenCalledWith(
-      '/flutter/bin/flutter',
+      FLUTTER_BIN,
       ['run', '--debug', '-d', 'DEVICE-1', '--device-timeout', '30'],
-      expect.objectContaining({ cwd: '/repo' }),
+      expect.objectContaining({ cwd: WORKDIR }),
     );
 
     child.stdout.emit('data', 'Xcode build done.\nSyncing files to device…\n');
     child.stdout.emit('data', 'Flutter run key commands.\n');
     await vi.waitFor(() => {
-      expect(manager.status('/repo', 7).state).toMatchObject({
+      expect(manager.status(WORKDIR, 7).state).toMatchObject({
         status: 'running',
         phase: 'launched',
         supportsHotReload: true,
@@ -379,11 +390,11 @@ Available destinations for the "Recipes" scheme:
     expect(child.stdin.write).toHaveBeenCalledWith('r\n');
     child.stdout.emit('data', 'Performing hot reload...\n');
     await vi.waitFor(() => {
-      expect(manager.status('/repo', 7).state?.phase).toBe('reloading');
+      expect(manager.status(WORKDIR, 7).state?.phase).toBe('reloading');
     });
     child.stdout.emit('data', 'Reloaded 1 of 10 libraries.\n');
     await vi.waitFor(() => {
-      expect(manager.status('/repo', 7).state?.phase).toBe('launched');
+      expect(manager.status(WORKDIR, 7).state?.phase).toBe('launched');
     });
 
     await manager.flutterAction(state.buildId, 7, 'restart');
@@ -391,17 +402,17 @@ Available destinations for the "Recipes" scheme:
 
     await manager.stop(state.buildId, 7);
     expect(child.kill).toHaveBeenCalledWith('SIGINT');
-    expect(manager.status('/repo', 7).state).toMatchObject({ status: 'cancelled' });
+    expect(manager.status(WORKDIR, 7).state).toMatchObject({ status: 'cancelled' });
   });
 });
 
-function buildSettings(bundleId: string, appPath: string, flutterRoot?: string): string {
+function buildSettings(bundleId: string, buildDir: string, flutterRoot?: string): string {
   return JSON.stringify([
     {
       target: 'Recipes',
       buildSettings: {
         WRAPPER_EXTENSION: 'app',
-        TARGET_BUILD_DIR: appPath.slice(0, -'/Recipes.app'.length),
+        TARGET_BUILD_DIR: buildDir,
         FULL_PRODUCT_NAME: 'Recipes.app',
         PRODUCT_BUNDLE_IDENTIFIER: bundleId,
         CONFIGURATION: 'Debug',
@@ -420,8 +431,8 @@ function managerDependencies(
     realpath: (async (value: string) => value) as XcodeBuildDependencies['realpath'],
     stat: async () => ({ isDirectory: () => true }) as never,
     readdir: (async (directoryPath: string) => {
-      if (directoryPath === '/repo') return [directory('ios')] as never;
-      if (directoryPath === '/repo/ios') {
+      if (directoryPath === WORKDIR) return [directory('ios')] as never;
+      if (directoryPath === underWorkdir('ios')) {
         return [directory('Recipes.xcworkspace')] as never;
       }
       return [] as never;
