@@ -656,13 +656,18 @@ export function useBrowserComment(
       if (modeRef.current === 'off') return;
       abortModePreservingDraftRef.current();
     };
+    const onNavigateInPage = (event: Electron.DidNavigateInPageEvent) => {
+      // Child-frame history changes do not replace the document owning the overlay.
+      if (!event.isMainFrame) return;
+      onNavigate();
+    };
     webview.addEventListener('ipc-message', onIpcMessage);
     webview.addEventListener('did-navigate', onNavigate);
-    webview.addEventListener('did-navigate-in-page', onNavigate);
+    webview.addEventListener('did-navigate-in-page', onNavigateInPage);
     return () => {
       webview.removeEventListener('ipc-message', onIpcMessage);
       webview.removeEventListener('did-navigate', onNavigate);
-      webview.removeEventListener('did-navigate-in-page', onNavigate);
+      webview.removeEventListener('did-navigate-in-page', onNavigateInPage);
       rejectCommandsForWebview(webview);
     };
   }, [

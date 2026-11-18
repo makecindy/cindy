@@ -11079,6 +11079,8 @@
     "autosave": {
       "saving": "Enregistrement…",
       "saved": "Enregistré",
+      "unconfirmed": "Enregistrement non confirmé",
+      "savedModel": "Enregistré · dès le prochain tour",
       "retry": "Enregistrer à nouveau"
     },
     "retry": "Réessayer",
@@ -11192,7 +11194,7 @@
       "discard": "Abandonner",
       "continueEditing": "Continuer l'édition"
     },
-    "profileSaveFailed": "Impossible d'enregistrer les paramètres de l’ami. Aucune modification n'a été appliquée.",
+    "profileSaveFailed": "Impossible d’enregistrer les paramètres de l’ami.",
     "profileSaveOffline": "Impossible de joindre l’ordinateur de l’ami. Rétablissez la connexion, puis enregistrez à nouveau.",
     "modelLabel": "Modèle",
     "modelUnavailable": "{{model}} (actuellement indisponible)",
@@ -17050,6 +17052,7 @@
         "summaryAria": "Voir le résumé de la PR #{{number}}",
         "unresolvedLabel": "Fils de revue non résolus",
         "checks": "Vérifications",
+        "following": "Suivi en cours",
         "checksTotal": "{{count}} au total",
         "failed": "En échec",
         "passed": "Réussies",
@@ -21690,6 +21693,24 @@
   },
   "featureIntro": {
     "close": "Fermer",
+    "project": {
+      "title": "Découvrir les projets",
+      "lead": "Confiez chaque travail suivi à un projet. Ses fichiers vivent dans un dossier de votre ordinateur et Cindy reprend à partir du dernier résultat, sans réexpliquer le contexte.",
+      "files": {
+        "title": "Des résultats à vous",
+        "body": "Cindy lit et modifie dans le dossier du projet. Les résultats restent sur votre ordinateur."
+      },
+      "context": {
+        "title": "Rien à réexpliquer",
+        "body": "Une nouvelle tâche du projet voit déjà ces fichiers et suit les consignes du projet."
+      },
+      "separate": {
+        "title": "Travaux bien séparés",
+        "body": "Chaque projet regroupe ses tâches : les travaux différents ne se mélangent pas."
+      },
+      "start": "Continuer vers le nouveau projet",
+      "note": "Il suffit de donner un nom. Un dossier existant ou un dépôt de code conviennent aussi."
+    },
     "taskInbox": {
       "title": "Découvrir la boîte de réception",
       "lead": "Les tâches se rangent d’elles-mêmes dans À traiter, En cours, Reportées et Traitées. La meilleure habitude : vider la boîte de réception au fil de l’eau. Cliquez sur Terminé quand une tâche est réglée, reportez ce qui peut attendre.",

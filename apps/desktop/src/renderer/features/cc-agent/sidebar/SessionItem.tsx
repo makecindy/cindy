@@ -1,6 +1,6 @@
 import { ResolvedProjectIcon } from './ResolvedProjectIcon';
 import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy/maker-shared/worktree-paths';
-import { SessionSnoozeAction } from './SessionSnoozeAction';
+import { SessionSnoozeAction, useSessionSnooze } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
@@ -374,6 +374,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
   // 非按住态恒为 null,不惊动 memo。
   const ordinalBadge = useSessionOrdinalBadge(session.id);
   const ordinalBadgeLabel = navigationOnly ? null : ordinalBadge;
+  const snoozeAction = useSessionSnooze(session);
   const canOpenTaskMenu = !navigationOnly || isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
@@ -883,6 +884,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       {inboxMode ? (
         canSnooze && (
           <SessionSnoozeAction
+            action={snoozeAction}
             session={session}
             isActive={isActive}
             onOpenChange={setSnoozeOpen}
@@ -1326,6 +1328,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
             />
           </DropdownMenuTrigger>
           <SessionTaskMenu key={`${session.deviceLinkDeviceId ?? ''}:${session.id}`}
+            snoozeAction={inboxMode && !navigationOnly ? snoozeAction : undefined}
             session={session} open={menuPos !== null} sideOffset={2} writeBlocked={remoteWritesBlocked}
             returnFocus={() => rowRef.current?.focus()}
             onRename={handleRenameSelect} onPin={handlePinSelect}
