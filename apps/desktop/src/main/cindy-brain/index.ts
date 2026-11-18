@@ -788,7 +788,7 @@ import {
 import { createCustomImageChannel, registerCustomImageChannels } from './customImageChannel.js';
 import { readByokCredential, readByokInferenceBase } from '../model-access/byokCredentials.js';
 import type { AgentKind } from '@cindy/model-providers';
-import { resolveCustomMediaConnection, isCustomVideoProvider, customMediaAgents as declaredCustomMediaAgents, customMediaGuideProtocol } from './customMediaConnection.js';
+import { resolveCustomMediaConnection, isCustomVideoProvider, customMediaAgents as declaredCustomMediaAgents, customMediaGuideProtocol, mediaGuideScope, mediaGuideTarget } from './customMediaConnection.js';
 import { videoConnectionRevision } from '../cindy-media/customVideoProtocol.js';
 import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
@@ -5929,9 +5929,13 @@ function resolveCustomVideoConnection(providerId: string, modelId: string, agent
 }
 
 configureProviderMediaRuntime({
+  guideTarget: target => mediaGuideTarget(getActiveCatalog().providers.find(provider => provider.id === target.providerId), target),
   guideProtocol: target => {
     const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
-    return customMediaGuideProtocol(provider, target.modelId, target.agent);
+    return customMediaGuideProtocol(provider, target.modelId, target.agent) ??
+      (provider?.imageModels?.some(model => model.id === target.modelId)
+        ? getImageChannelRegistry().resolve(target.providerId, target.modelId).imageProtocol
+        : target.providerId === 'xai' ? 'xai-videos' : undefined);
   },
   resolveHttpConnection: (providerId, modelId, capability, agent) => {
     const kind = capability.startsWith('image.') ? 'image' : 'video';
@@ -5956,13 +5960,7 @@ configureProviderMediaRuntime({
   },
   guideScope: target => {
     const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
-    const route = provider?.routing[target.agent];
-    const model = provider?.models[target.agent]?.find(model => model.id === target.modelId);
-    if (!provider || provider.source !== 'user' || provider.auth.native ||
-        !['apiKey', 'none'].includes(provider.auth.method) || !route || !model ||
-        !['image_generation', 'video_generation'].includes(model.mode ?? '')) return null;
-    return createHash('sha256').update(JSON.stringify([target, model.route?.baseUrl ?? route.upstream,
-      route.authStrategy, model.route?.wireProtocol ?? route.wireProtocol])).digest('hex');
+    return mediaGuideScope(provider, target);
   },
   resolveVideoConnection: (providerId, modelId, agent) => providerId === 'xai'
     ? resolveNativeVideoConnection(providerId, modelId)

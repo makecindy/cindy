@@ -379,6 +379,11 @@ describe('Cindy Core media invocation state and security boundary', () => {
       if (!protocol || protocol === 'gateway') throw new Error('Gateway Guide fixture must be explicit');
       return providerServerGuide(modelId, protocol);
     });
+    mocks.resolvedGuide.mockImplementation(async (target: { modelId: string }) => {
+      const model = mocks.providerModel();
+      const protocol = model?.imageProtocol ?? model?.videoProtocol ?? 'provider-images';
+      return { source: 'official', protocol, value: (await mocks.guide(target.modelId, protocol)).guide };
+    });
     mocks.outboundFetch.mockReset();
     mocks.release.mockClear();
     // Preserve the existing upstream/download response sequences while checking
@@ -789,6 +794,20 @@ describe('Cindy Core media invocation state and security boundary', () => {
     if (source === 'custom') expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith({ source: 'https://known.example.com', reasons: ['source'] });
     else expect(mocks.confirm).not.toHaveBeenCalled();
     expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
+  // Native adapter dispatch must select a saved Guide too, while retaining its
+  // managed executor instead of turning an adapter-input Guide into raw HTTP (unit).
+  it('uses a native image Guide override through the existing image adapter', async () => {
+    const { model, value } = setupGuideDriven();
+    const native = { ...model, providerId: 'gemini', guideDriven: false };
+    mocks.models.mockResolvedValue([native]);
+    mocks.providerModel.mockReturnValue(native);
+    mocks.resolvedGuide.mockResolvedValue({ source: 'custom', protocol: 'gemini', value });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: native.providerId, modelId: native.id, capability: 'image.generate' });
+    expect(prepared).toMatchObject({ ok: true, guide_source: 'custom', guide_revision: value.revision });
+    expect(mocks.resolvedGuide).toHaveBeenCalled();
+    expect(mocks.httpConnection).not.toHaveBeenCalled();
   });
 
   // Unit at production dispatch: a new model must use its Guide's real path,

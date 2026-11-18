@@ -921,7 +921,7 @@ async function materializeResults(
     let media: Awaited<ReturnType<typeof mediaBytes>>;
     try {
       // A local Guide describes the response; it cannot approve its own CDN.
-      const extractor = binding.executor === 'provider-http' && binding.guideSource === 'custom'
+      const extractor = 'guideSource' in binding && binding.guideSource === 'custom'
         ? { ...item.extractor, allowedUrlHosts: [] } : item.extractor;
       media = await mediaBytes(item.raw, extractor, scope);
     } catch (error) {
@@ -1255,6 +1255,7 @@ async function prepareInvocation(
   let protocol = 'gateway';
   let binding: MediaInvocationBinding = { providerId: model.providerId, executor: 'gateway' };
   let selectedGuide: ResolvedMediaInvocationGuide | undefined;
+  let nativeGuideTarget: { providerId: string; agent: AgentKind; modelId: string } | undefined;
   if (model.providerId !== 'xd') {
     const providerModel = resolveProviderMediaModel(
       model.providerId,
@@ -1301,9 +1302,11 @@ async function prepareInvocation(
           videoProtocol: resolved.protocol, sourceAgent: agent };
       }
     } else if (capability === 'image.generate' || capability === 'image.edit') {
+      nativeGuideTarget = { providerId: model.providerId, agent: sourceAgent ?? 'pi', modelId: resolvedModelId };
       protocol = providerModel.imageProtocol ?? 'provider-images';
       binding = { providerId: model.providerId, executor: 'provider-image' };
     } else if (providerModel.videoProtocol) {
+      nativeGuideTarget = { providerId: model.providerId, agent: sourceAgent ?? 'pi', modelId: resolvedModelId };
       const connection = await resolveProviderVideoConnection(model.providerId, resolvedModelId);
       assertAuthScope(scope);
       if (!connection) return failure('CONNECTION_UNAVAILABLE', '视频来源的接口或凭证未就绪');
@@ -1318,6 +1321,15 @@ async function prepareInvocation(
   }
   let resolvedGuide: ResolvedMediaInvocationGuide;
   try {
+    if (nativeGuideTarget) {
+      const resolved = await getMediaGuide(nativeGuideTarget, guideSource);
+      assertAuthScope(scope);
+      if (!resolved) return failure('GUIDE_NOT_AVAILABLE', '没有适用 Guide，请通过 manage_media_guide 补齐后重新 prepare', false,
+        { target: nativeGuideTarget, outcomeKnown: true, allowedActions: GUIDE_FALLBACK_ACTIONS });
+      selectedGuide = { modelId: resolvedModelId, guide: resolved.value };
+      if (binding.executor === 'provider-image' || binding.executor === 'provider-video')
+        binding = { ...binding, guideSource: resolved.source };
+    }
     resolvedGuide = selectedGuide ?? await fetchMediaInvocationGuide(resolvedModelId, protocol);
     assertAuthScope(scope);
   } catch (error) {
@@ -1393,7 +1405,7 @@ async function prepareInvocation(
     model_name: model.name ?? model.id,
     capability,
     guide_revision: preparedGuide.revision,
-    guide_source: binding.executor === 'provider-http' ? binding.guideSource : 'official',
+    guide_source: 'guideSource' in binding ? binding.guideSource ?? 'official' : 'official',
     ...('sourceAgent' in binding && binding.sourceAgent ? { source_agent: binding.sourceAgent } : {}),
     instructions: preparedGuide.instructions,
     input_schema: preparedGuide.inputSchema,
