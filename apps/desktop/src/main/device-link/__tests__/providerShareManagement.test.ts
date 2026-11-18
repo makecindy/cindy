@@ -41,7 +41,7 @@ vi.mock('electron', () => ({
     show() { this.emit('show'); }
   },
 }));
-const api = vi.hoisted(() => ({ createLink: vi.fn(), approve: vi.fn(), reject: vi.fn(), setMember: vi.fn() }));
+const api = vi.hoisted(() => ({ createLink: vi.fn(), approve: vi.fn(), reject: vi.fn(), setMember: vi.fn(), listOwned: vi.fn() }));
 const host = vi.hoisted(() => ({
   refresh: vi.fn(), snapshot: vi.fn(), quiet: vi.fn(), active: vi.fn(), decision: vi.fn(), member: vi.fn(),
   complete: vi.fn(), changed: vi.fn(),
@@ -254,6 +254,7 @@ describe('local roster export', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-roster-test-'));
     destination = path.join(dir, 'members.csv');
     host.complete.mockReturnValue([share, { ...share, providerId: 'other' }, { ...share, hostDeviceId: 'other' }]);
+    api.listOwned.mockImplementation(async () => host.complete());
     memberNotes.readStrict.mockResolvedValue({ [member.memberId]: 'A,"B"\nC' });
     nativeReplace.mockRejectedValue(new Error('synthetic native replacement failure'));
     registerProviderShareIpc();
@@ -288,7 +289,6 @@ describe('local roster export', () => {
     saveDialog.mockImplementationOnce(async () => {
       if (phase === 'dialog') trusted = false;
       if (phase === 'publish') {
-        memberNotes.readStrict.mockResolvedValueOnce({ [member.memberId]: 'A,"B"\nC' });
         memberNotes.readStrict.mockImplementationOnce(async () => {
           trusted = false;
           return {};
@@ -304,7 +304,85 @@ describe('local roster export', () => {
     expect(fileRename).not.toHaveBeenCalled();
     expect(nativeReplace).not.toHaveBeenCalled();
     if (phase === 'entry' || phase === 'notes') expect(saveDialog).not.toHaveBeenCalled();
-    if (phase === 'entry') expect(memberNotes.readStrict).not.toHaveBeenCalled();
+    if (phase === 'entry') {
+      expect(memberNotes.readStrict).not.toHaveBeenCalled();
+      expect(api.listOwned).not.toHaveBeenCalled();
+    }
+  });
+
+  // PR #11287 / unit: REST membership can change before the host poll notices.
+  // Keep its cached rows stale and exercise the registered export handler with
+  // fresh, incomplete and rejected authority reads, including late owner/frame
+  // changes. The prior cache-only fences could publish departed members.
+  it('uses the authoritative roster while the host cache still contains a departed member', async () => {
+    const freshMember = { ...member, memberId: 'fresh-member-id' };
+    api.listOwned.mockResolvedValue([{ ...share, members: [freshMember] }]);
+    saveDialog.mockResolvedValueOnce({ canceled: false, filePath: destination });
+    await save();
+    const csv = fs.readFileSync(destination, 'utf8');
+    expect(csv).toContain('"fresh-member-id"');
+    expect(csv).not.toContain('"fixture-member-full-id"');
+    expect(api.listOwned).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves the destination when an authoritative member departure occurs in the dialog', async () => {
+    fs.writeFileSync(destination, 'original');
+    saveDialog.mockImplementationOnce(async () => {
+      api.listOwned.mockResolvedValue([]);
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+    expect(api.listOwned).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['prepare', 'rejected'], ['prepare', 'partial'], ['prepare', 'unavailable'],
+    ['publish', 'rejected'], ['publish', 'partial'], ['publish', 'unavailable'],
+  ] as const)('preserves the destination when the authoritative read is %s/%s', async (phase, failure) => {
+    fs.writeFileSync(destination, 'original');
+    const failRead = () => {
+      if (failure === 'rejected') api.listOwned.mockRejectedValueOnce(new Error('synthetic private service error'));
+      else api.listOwned.mockResolvedValueOnce(Object.assign([share], failure === 'partial'
+        ? { authorityIncomplete: true } : { unavailableShareIds: [share.shareId] }));
+    };
+    if (phase === 'prepare') failRead();
+    saveDialog.mockImplementationOnce(async () => {
+      if (phase === 'publish') failRead();
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] The current member roster is unavailable',
+    });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+    if (phase === 'prepare') expect(saveDialog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['prepare', 'owner'], ['prepare', 'sender'], ['publish', 'owner'], ['publish', 'sender'],
+  ] as const)('rejects the authoritative read after %s/%s changes', async (phase, boundary) => {
+    fs.writeFileSync(destination, 'original');
+    const lateRead = () => api.listOwned.mockImplementationOnce(async () => {
+      if (boundary === 'owner') state.owner = 'owner-b';
+      else vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => {
+        throwIpcError('PERMISSION_DENIED', 'Synthetic untrusted renderer');
+      });
+      return [share];
+    });
+    if (phase === 'prepare') lateRead();
+    saveDialog.mockImplementationOnce(async () => {
+      if (phase === 'publish') lateRead();
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({ code: boundary === 'owner' ? 'PRECONDITION_FAILED' : 'PERMISSION_DENIED' });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+    if (phase === 'prepare') expect(saveDialog).not.toHaveBeenCalled();
   });
 
   it.each(['new', 'existing', 'EPERM', 'EEXIST'])('saves the authorized snapshot at the chosen location (%s)', async mode => {
@@ -359,6 +437,7 @@ describe('local roster export', () => {
     saveDialog.mockResolvedValueOnce({ canceled: true, filePath: destination });
     await save();
     expect(fs.readdirSync(dir)).toEqual([]);
+    expect(api.listOwned).toHaveBeenCalledOnce();
   });
 
   it.each(['owner', 'roster'] as const)('preserves an existing file when the %s changes in the dialog', async change => {

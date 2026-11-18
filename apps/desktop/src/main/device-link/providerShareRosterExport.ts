@@ -11,7 +11,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
-import { getProviderShareHostCompleteSnapshot } from './providerShareHost.js';
+import { providerShareApi } from './providerShareApi.js';
 import { providerShareMemberNotes } from './providerShareMemberNotes.js';
 
 function cell(value: string): string {
@@ -23,8 +23,14 @@ async function readRoster(providerId: string, capturedAt: string, assertCaller: 
   assertCaller();
   const notes = await providerShareMemberNotes.readStrict();
   assertCaller();
+  const snapshot = await providerShareApi.listOwned()
+    .catch(() => throwIpcError('PRECONDITION_FAILED', 'The current member roster is unavailable'));
+  assertCaller();
+  if (snapshot.authorityIncomplete || snapshot.unavailableShareIds?.length) {
+    throwIpcError('PRECONDITION_FAILED', 'The current member roster is unavailable');
+  }
   const deviceId = getDeviceId();
-  const shares = getProviderShareHostCompleteSnapshot()?.filter(
+  const shares = snapshot.filter(
     share => share.providerId === providerId && share.hostDeviceId === deviceId && share.members.length > 0,
   );
   if (!shares?.length) throwIpcError('PRECONDITION_FAILED', 'The local member roster is unavailable');
@@ -68,7 +74,6 @@ export async function exportProviderShareRoster(event: IpcMainInvokeEvent, rawPr
     filters: [{ name: 'CSV', extensions: ['csv'] }],
   }).catch(() => throwIpcError('INTERNAL', 'Could not open the save dialog'));
   if (picked.canceled || !picked.filePath) return;
-  await assertCurrent();
   assertCaller();
 
   // Only a complete, still-authorized export may replace the user-selected file.
