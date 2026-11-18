@@ -488,7 +488,8 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 | 提交 | 改了什么 | 影响谁 | 依据 |
 |---|---|---|---|
-| feat(desktop): expose optional settlement permission at credential commit boundaries | 凭据服务在终态、定时器、关闭、Pi 事务和回滚、非 Pi 写库与完成通知前检查同步许可。运行时控制工厂返回完成信号 | Host 在桌面占用期间延后结算。桌面沿用原调用点，不传许可，也没有新增等待 | 桌面五条路径在改前和改后的调用次数、顺序及微任务时点相同。主干 Pi 事务见 `b7cb47b56c`，详见下节 |
+| feat(desktop): expose optional settlement permission at credential commit boundaries | 凭据服务在终态、定时器、关闭、Pi 事务和回滚、非 Pi 写库与完成通知前检查同步许可。运行时控制工厂把各代结算的原始 Promise 交给可选观察端口 | Host 在桌面占用期间延后结算。桌面沿用原调用点，不传许可，也没有新增等待 | 桌面五条路径在改前和改后的调用次数、顺序及微任务时点相同。主干 Pi 事务见 `b7cb47b56c`，详见下节 |
+| fix(desktop): preserve unhandled settlement errors across generations | 运行时控制工厂沿用原来的 void 入口，递归结算下一代后，当前代的上报异常仍会冒出 | 只有 Host 观察并等待每一代。桌面无观察端口，上报抛错时沿用原有进程日志 | 独立进程测试在端口加入前与修订后核对正常调用顺序，以及历史、广播上报失败时每次恰好一条 fatal 进程日志 |
 | fix(desktop): settle a paused automatic retry without a banner | 共用续跑回调在选择备用路线之前、之后都检查暂停，仍有效的尝试遇到暂停会把中断写进历史 | 只有后台服务在生产中设置执行暂停 | 主干 `8bcdaae10b`，见下节 |
 | fix(desktop): land a pending model switch to a model without effort levels | 待切到一个没有推理档位的模型时，切换照常落定（原来卡在档位空值上） | 普通桌面用户 | 桌面缺陷修复，审核方已审；累计行对照里单独跳过这个提交 |
 | feat(desktop): add an owner-commit gate to the Skill projection boundary, allowed by default | 边界模块新增 `configureProjectionBoundaryOwnerCommit`；判定为否时 owner 提交在取锁、写任何文件之前拒绝 | 不影响桌面：默认允许、桌面不注入、守护钉住桌面入口不做注入 | 第 25 行 25b，审核方定 (a)：Host 常驻进程注入拒绝 |
@@ -532,7 +533,9 @@ rc9 在发布提交 `ce58e49a47` 上的 27 项 CI 全部通过。Windows 的独�
 
 主干的 `pendingCredentialSwitch.ts` 会在终态、关闭和十秒定时器里落定凭据，其中 Pi 事务来自 `b7cb47b56c`。后台服务可能在异步查目录时遇到桌面占用。原实现会写任务路线、清待办并通知客户端；同值更新也会触碰共享库。
 
-共用服务增加可选的同步结算许可。后台服务在最后一次写入前复核，取得许可后在同一轮同步更新 SQLite 和内存来源；解闸重新核对账号、路线和待办代次。过期选择不回滚，保留桌面刚写的路线。Pi 沿用 `apply-failed`，非 Pi 只记日志。运行时结算的完成信号让后台服务按凭据、运行时控制、其他任务唤醒的顺序收尾。桌面没有传许可，也没有新增等待；新增桌面测试将五种路径的调用、顺序和微任务时点与修改前逐项对照。
+共用服务增加可选的同步结算许可。后台服务在最后一次写入前复核，取得许可后在同一轮同步更新 SQLite 和内存来源；解闸重新核对账号、路线和待办代次。过期选择不回滚，保留桌面刚写的路线。Pi 沿用 `apply-failed`，非 Pi 只记日志。后台服务通过可选端口取得每一代运行时结算的原始 Promise，在自己一侧处理拒绝并等待各代完成。没有占用且账号仍有效时，终态在结算尝试结束后通知重启服务与其他任务，即使待办仍在或结算出错也照常通知。解闸时逐个处理任务，一个任务出错不会挡住后续任务。
+
+桌面沿用 void 入口。桌面调用的五条凭据路径已逐项对照调用顺序与微任务时点。运行时控制的历史或广播上报抛错时，每次经原来的进程监听记录一条 fatal 日志，代次前进也如此。
 
 ## 六、M2 可接（状态已在 Host 上具备，只差通道）
 
