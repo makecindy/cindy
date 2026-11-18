@@ -10,13 +10,14 @@ const ports = vi.hoisted(() => ({
   getPath: vi.fn(),
   getAuthState: vi.fn(),
   token: vi.fn(),
+  subscribe: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: { getPath: ports.getPath }, net: { fetch: ports.fetch } }));
 vi.mock('../../authManager.js', () => ({
   getActiveAuthRealm: () => 'cn',
   getAuthState: ports.getAuthState,
   getAccessToken: ports.token,
-  onAuthStateChange: () => () => undefined,
+  onAuthStateChange: ports.subscribe,
 }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpointForRealm: () => 'https://tenant.invalid',
@@ -58,6 +59,7 @@ beforeEach(() => {
   ports.getPath.mockReturnValue(dir);
   ports.getAuthState.mockReturnValue(state);
   ports.token.mockReturnValue('test');
+  ports.subscribe.mockReturnValue(() => undefined);
   service = createCompanyTokenReporting();
 });
 afterEach(() => {
@@ -80,6 +82,28 @@ it.each([
     expect(readdirSync(dir)).toEqual([]);
   },
 );
+it('keeps the policy until its hourly recheck and ignores unchanged identity notifications', async () => {
+  service.dispose();
+  vi.useFakeTimers();
+  try {
+    ports.fetch.mockResolvedValueOnce(Response.json(me(true))).mockResolvedValueOnce(Response.json(me(false)));
+    service = createCompanyTokenReporting();
+    service.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    const onAuthChange = ports.subscribe.mock.lastCall![0];
+    onAuthChange();
+    await vi.advanceTimersByTimeAsync(59 * 60_000);
+    expect(ports.fetch).toHaveBeenCalledTimes(1);
+    expect(startCompanyUsage()).toBeTypeOf('function');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(ports.fetch).toHaveBeenCalledTimes(2);
+    expect(startCompanyUsage()).toBeUndefined();
+  } finally {
+    service.dispose();
+    vi.useRealTimers();
+  }
+});
+
 it('uses only the account endpoint until the company enables reporting; stops and purges immediately on opt-out', async () => {
   let enabled = false;
   ports.fetch.mockImplementation(async (url: string) => {

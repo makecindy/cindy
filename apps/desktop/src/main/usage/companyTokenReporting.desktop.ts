@@ -12,6 +12,9 @@ import { dailyUploadSlot, latestUploadableDay } from './enterpriseDailyUpload.js
 import { CompanyTokenQueue, projectUsage, type CompanyPolicy } from './companyTokenQueue.js';
 import { installCompanyUsageCapture, installExecutionReporting } from './companyTokenFacts.js';
 
+const POLICY_CHECK_INTERVAL_MS = 60 * 60_000;
+const REQUEST_TIMEOUT_MS = 10_000;
+
 function identity() {
   const state = auth.getAuthState();
   const user = state.user;
@@ -57,7 +60,7 @@ async function request(id: Identity, route: string, method = 'GET', body?: objec
     method,
     redirect: 'error',
     cache: 'no-store',
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: {
       Authorization: 'Bearer ' + id.token,
       ...(body && { 'Content-Type': 'application/json' }),
@@ -116,6 +119,7 @@ export function createCompanyTokenReporting() {
         purge();
         return;
       }
+      timer.refresh();
       const me = meResponseSchema.parse(await (await request(who, '/api/me')).json());
       if (!current(who) || invalidation !== version) return;
       const rule = me.membership.companyTokenReporting;
@@ -144,7 +148,7 @@ export function createCompanyTokenReporting() {
         memberRevision: rule.memberRevision,
         participating: rule.participating && !localOff,
         models: new Set(rule.models),
-        until: Date.now() + 6 * 60_000,
+        until: Date.now() + POLICY_CHECK_INTERVAL_MS + REQUEST_TIMEOUT_MS,
       };
       policyLoaded = true;
       if (!policy.participating) {
@@ -334,7 +338,7 @@ export function createCompanyTokenReporting() {
       };
     },
   });
-  const onOwner = () => {
+  const onOwner = (force: boolean) => {
     const id = identity();
     if ((id?.owner ?? null) !== activeOwner || (id?.generation ?? -1) !== activeGeneration) {
       invalidation++;
@@ -342,16 +346,18 @@ export function createCompanyTokenReporting() {
       activeOwner = id?.owner ?? null;
       activeGeneration = id?.generation ?? -1;
       policy = null;
+    } else if (!force) {
+      return;
     }
     void refresh();
   };
-  const unsubscribe = auth.onAuthStateChange(onOwner);
   const timer = setInterval(() => {
     if (identity()) void refresh();
-  }, 5 * 60_000);
+  }, POLICY_CHECK_INTERVAL_MS);
   timer.unref();
+  const unsubscribe = auth.onAuthStateChange(() => onOwner(false));
   return {
-    refresh: onOwner,
+    refresh: () => onOwner(true),
     dispose() {
       clearInterval(timer);
       unsubscribe();
