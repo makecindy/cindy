@@ -63,13 +63,14 @@ import { createHostRuntimePluginSettings, createHostTaskRuntimePlugins } from '.
 import { createRuntimePluginHost } from '../../../desktop/src/main/cindy-brain/runtimePluginHostCore.ts';
 import { writeRuntimePluginSettings } from '../../../desktop/src/main/maker-host/runtime-plugin-settings.ts';
 import { installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.ts';
+import { forgetSessionLastLiveUsage } from '../../../desktop/src/main/maker-ipc/sessionLastLiveUsage.ts';
 import { withCrossProcessLock } from '../../../desktop/src/main/device-link/crossProcessLock.ts';
 import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.ts';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.js';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
-import { getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
+import { getSessionProvider, setSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { watchCredentialGrantRevocation } from '../../../desktop/src/main/remote-agent/executor/credentialGrants.ts';
 import { withSessionPermissionChange } from '../../../desktop/src/main/maker-ipc/sessionPermissionChange.ts';
 import { createUserInputEnqueue } from './user-input.ts';
@@ -5572,6 +5573,72 @@ for (const onFailure of ['allow', 'block']) {
     assert.equal(r.h.maker.getSession(id).options.providerId, 'prov-a');
   });
 }
+
+// §3.2, integration: account commits clear the outgoing route and may
+// immediately hydrate another owner's task with the same id. Only the old
+// runtime may be retired when its outstanding Pi operation settles.
+test('a plugin route refused after an account change leaves the new owner route alone', async t => {
+  const id = 'route-owner-changed';
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  t.after(bindHostSessionRuntimeHooks(r.selection));
+  providePiWindows(r);
+  r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('pi')[0], id: provider }));
+  await r.createTask(id);
+  const live = await r.runTurn(id, 'initial', { contextTokens: 100, contextWindow: 200_000 });
+  const setModel = live.setModel.bind(live);
+  live.setModel = async (...args) => {
+    await setModel(...args);
+    configureHostOwner({ userDataDir: path.join(r.db.root, 'profile'), ownerId: 'other-route-owner' });
+    assert.equal(getSessionProvider(id), null, 'the committed boundary already cleared the outgoing cache');
+    setSessionProvider(id, 'new-account');
+  };
+  await assert.rejects(r.selection.applyPluginRoute(id, { agentKind: 'pi', model: 'big', providerId: 'prov-b' }, () => {}, () => {}));
+  assert.equal(r.h.maker.getSession(id), null);
+  assert.equal(getSessionProvider(id), 'new-account');
+  assert.equal(r.row(id).provider_id, 'prov-a');
+});
+
+// §3.2, integration: the same Pi acknowledgement race can affect the runtime
+// that the shared window check creates. There is no instance at write admission.
+test('a cold plugin route retires the Pi instance that window verification opened', async t => {
+  let taskPlugins;
+  const id = 'cold-hook-rejected';
+  const r = await modelChangeRuntime(t, { agent: 'pi', queue: { getTaskRuntimePlugins: () => taskPlugins } });
+  providePiWindows(r);
+  r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('pi')[0], id: provider }));
+  await r.createTask(id);
+  await r.runTurn(id, 'initial', { contextTokens: 100, contextWindow: 200_000 });
+  await settle();
+  await r.h.maker.closeSession(id);
+  forgetSessionLastLiveUsage(id);
+  let rejectedInstance;
+  const create = r.h.maker.createSession.bind(r.h.maker);
+  r.h.maker.createSession = async opts => {
+    const live = await create(opts);
+    if (!rejectedInstance) {
+      rejectedInstance = live;
+      const setModel = live.setModel.bind(live);
+      live.setModel = async (...args) => {
+        await setModel(...args);
+        r.h.queue.holdForDesktop(HELD);
+      };
+    }
+    return live;
+  };
+  const { taskPlugins: hooks, pluginId } = attachRuntimeHookFixture(r, ['will-start-turn'], () => ({
+    action: 'route', route: { agentKind: 'pi', providerId: 'prov-b', model: 'big' },
+  }));
+  taskPlugins = hooks;
+  await writeRuntimePluginSettings(id, { 'will-start-turn': [{ pluginId, onFailure: 'allow' }] });
+  await enqueue(r.h, id, { clientId: 'cold', text: 'cold' });
+  assert.equal(r.h.queue.isHeldForDesktop(), true, 'Pi changed before the hold');
+  assert.ok(rejectedInstance);
+  assert.notEqual(r.h.maker.getSession(id), rejectedInstance);
+  assert.equal(rejectedInstance.sent.length, 0);
+  assert.equal(r.h.maker.getSession(id).options.providerId, 'prov-a');
+  assert.equal(getSessionProvider(id), 'prov-a');
+  assert.equal(r.row(id).provider_id, 'prov-a');
+});
 
 // §3.2, integration. Without a hold, a route returned by an approved plugin
 // must take effect on the normal dispatch. The rejection tests only exercise a late refusal.

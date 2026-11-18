@@ -1,4 +1,4 @@
-import type { AgentKind, Maker, Session } from '@cindy/maker-core';
+import type { AgentKind, Effort, Maker, Session } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import {
   applyPendingAgentSwitchIfIdle,
@@ -116,7 +116,6 @@ import { closeRejectedRuntimeAndRestoreControlStores } from '../../../desktop/sr
 import { createSessionControlRuntimeWriter } from '../../../desktop/src/main/maker-ipc/sessionControlRuntimeWriter.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.js';
 import type { GhostModelRoute } from '../../../desktop/src/shared/ghost.js';
-import type { Effort } from '@cindy/maker-core';
 import { explicitPorts } from './explicit-ports.ts';
 
 /** What the Host's runtime selection reads from the rest of the Host (main.ts binds it). */
@@ -198,7 +197,7 @@ export interface HostRuntimeStartPorts {
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
   readSessionWritableDirsFromDb(sessionId: string): Promise<string[]>;
   ensureRemoteReadyForSessionStart(params: { createOpts?: unknown }): Promise<unknown>;
-  bootstrapSession(opts: object, assertAccess?: () => void, nativeHistoryResume?: boolean): Promise<unknown>;
+  bootstrapSession(opts: object, assertAccess?: () => void, nativeHistoryResume?: boolean): Promise<{ session: Session }>;
   broadcastSessionCreated(sessionId: string): void;
 }
 
@@ -338,7 +337,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const isSessionInTurn = (sessionId: string) => maker().getSession(sessionId)?.isTurnRunning?.() === true;
   // register.ts's binding (createColdPiRehydrationBinding), with the Host's runtime start functions
   // (the ones its send transaction uses) in place of the desktop's.
-  const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationBinding(explicitPorts<Parameters<typeof createColdPiRehydrationBinding>[0]>({
+  const bindColdPiRehydration = (onRehydrated?: (session: Session) => void) => createColdPiRehydrationBinding(explicitPorts<Parameters<typeof createColdPiRehydrationBinding>[0]>({
     maker: { getSession: sessionId => maker().getSession(sessionId) },
     buildCreateOptsWithStderr: opts => deps.inputQueue.startPorts().buildCreateOptsWithStderr(opts),
     checkWorkDirExists: (sessionId, workingDir, agentKind, remoteHostId) =>
@@ -346,8 +345,15 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     synthesizeOrcaVendorOptionsFromDb: (sessionId, opts) =>
       deps.inputQueue.startPorts().synthesizeOrcaVendorOptionsFromDb(sessionId, opts),
     readSessionExtraDirsFromDb: sessionId => deps.inputQueue.startPorts().readSessionExtraDirsFromDb(sessionId),
-    bootstrapSession: opts => deps.inputQueue.startPorts().bootstrapSession(opts),
+    bootstrapSession: opts => {
+      const work = deps.inputQueue.startPorts().bootstrapSession(opts);
+      return onRehydrated ? work.then(result => {
+        onRehydrated(result.session);
+        return result;
+      }) : work;
+    },
   }));
+  const rehydrateColdPiRuntimeForWindowVerification = bindColdPiRehydration();
 
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = explicitPorts<MakerSessionAgentSwitchHandlerDeps>({
     // Ports for moving a task to or between other computers (release table, B5): the Host refuses a
@@ -519,19 +525,30 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   // The plugin route guard checks again after Pi has acknowledged a live change.
   // A rejected selection at that point has changed the runtime but not the task row.
   // Restore the snapshot while this selection still holds the task's send lock.
-  async function recoverRejectedRoute<T>(id: string, sameOwner: () => boolean, run: () => Promise<T>): Promise<T> {
+  async function recoverRejectedRoute<T>(
+    id: string,
+    sameOwner: () => boolean,
+    run: (bindRehydrated: (session: Session) => void) => Promise<T>,
+  ): Promise<T> {
     return withSendToSessionLock(id, async () => {
       const ownerMaker = maker();
-      const instance = ownerMaker.getSession(id);
+      let instance = ownerMaker.getSession(id);
       const hadProvider = hasSessionProvider(id);
       const provider = getSessionProvider(id);
       const effort = getSessionEffort(id);
       const fastMode = getSessionFastMode(id);
       const pendingCredential = pendingCredentialSwitchService.get(id);
       const generation = getSessionRuntimeControlSnapshot(id).generation;
-      const originalModel = instance?.model;
+      let originalModel = instance?.model;
       try {
-        return await run();
+        return await run(session => {
+          // Window verification can create an instance within this same mutation.
+          // Capture its exact identity at bootstrap, before the engine accepts a route.
+          if (!instance) {
+            instance = session;
+            originalModel = session.model;
+          }
+        });
       } catch (error) {
         if (!(error instanceof HostRouteAdmissionError)) throw error;
         const ownsInstance = () => !!instance && ownerMaker.getSession(id) === instance;
@@ -544,8 +561,10 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
           try {
             await closeRejectedRuntimeAndRestoreControlStores({
               closeRuntime: async () => {
-                if (instance && ownsInstance()) await withRehydrateCloseSuppressed(id, async () => {
-                  await ownerMaker.closeSessionIfCurrent(instance, 'runtime-refresh');
+                const rejected = instance;
+                if (!rejected || !ownsInstance()) return;
+                await withRehydrateCloseSuppressed(id, async () => {
+                  await ownerMaker.closeSessionIfCurrent(rejected, 'runtime-refresh');
                 });
               },
               restoreControlStores() {
@@ -737,19 +756,22 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       const effective = profiles.pendingMutation?.profile ?? profiles.effective;
       const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
       const selectHarness = targetAgent !== effective.agentKind || !!effective.agentDeviceId;
-      const write = createSessionControlRuntimeWriter(explicitPorts<Parameters<typeof createSessionControlRuntimeWriter>[0]>({
-        agentSwitchPending: pendingSwitches, agentSwitchDeps, assertModelRouteUsable, getDesktopProviderService: providerService,
-        reconcileBotModelRoute: { acceptTaskChoice: async () => {} }, updateScheduledPreference, readSessionRuntimeProfiles,
-        readUsableAgentDeviceProviders, shouldApplyExclusiveProviderRerouteLive,
-        applySessionRuntimeSelection: async (sessionId, model, provider, selection, options) => {
-          const result = await applySessionRuntimeSelection(sessionId, model, provider, selection, { ...options, assertSelectionCurrent: check });
-          if (result.superseded && !sameOwner()) throw new HostRouteAdmissionError('Host account changed during plugin route selection');
-          return result;
-        },
-        runtimeSelectionRequiresModelWindowConfirmation: result =>
-          result.contextWindowConfirmationRequired !== undefined || result.contextTokensForConfirmation !== undefined,
-      }));
-      await recoverRejectedRoute(id, sameOwner, async () => {
+      await recoverRejectedRoute(id, sameOwner, async bindRehydrated => {
+        const applyPluginModel = createHandleSetModel(() => ({
+          ...ports(), rehydrateColdPiRuntimeForWindowVerification: bindColdPiRehydration(bindRehydrated),
+        }));
+        const write = createSessionControlRuntimeWriter(explicitPorts<Parameters<typeof createSessionControlRuntimeWriter>[0]>({
+          agentSwitchPending: pendingSwitches, agentSwitchDeps, assertModelRouteUsable, getDesktopProviderService: providerService,
+          reconcileBotModelRoute: { acceptTaskChoice: async () => {} }, updateScheduledPreference, readSessionRuntimeProfiles,
+          readUsableAgentDeviceProviders, shouldApplyExclusiveProviderRerouteLive,
+          applySessionRuntimeSelection: async (sessionId, model, provider, selection, options) => {
+            const result = await applyPluginModel(sessionId, model, provider, undefined, selection, { ...options, assertSelectionCurrent: check });
+            if (result.superseded && !sameOwner()) throw new HostRouteAdmissionError('Host account changed during plugin route selection');
+            return result;
+          },
+          runtimeSelectionRequiresModelWindowConfirmation: result =>
+            result.contextWindowConfirmationRequired !== undefined || result.contextTokensForConfirmation !== undefined,
+        }));
         const result = await write({ targetSessionId: id, expectedGeneration: generation,
           beforeMutation: async () => check(),
           patch: { ...(selectHarness ? { harness: targetAgent, agentDeviceId: null } : {}),
