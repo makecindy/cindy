@@ -1665,6 +1665,7 @@ function ExpandedView({
   );
 
   /* ---- Grouping & collapse ---- */
+  const { mode: taskListMode } = useTaskListMode();
   const pinnedSourceSessions = taskListMode === 'inbox' ? statusIndependentSidebarSessions : sidebarSessions;
   const allGroups = useProjectGroups(
     pinnedSourceSessions,

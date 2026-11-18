@@ -18,7 +18,12 @@ import { TaskInbox } from '../TaskInbox';
 afterEach(cleanup);
 it('commits explicit moves before another restore while the pointer stays in the list', () => {
   const task = (id: string, status = 'active') => ({ id, title: id, status }) as Session;
-  const props = { priorityContext: {}, sessions: [task('a'), task('b')] } as Parameters<typeof TaskInbox>[0];
+  const props: Parameters<typeof TaskInbox>[0] = {
+    priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
+    sessions: [task('a'), task('b')], runningSessionIds: new Set(), attachedSessionIds: new Set(),
+    notifications: new Set(), onSessionClick: () => {}, onAction: () => {},
+    onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
+  };
   const view = render(<TaskInbox {...props} />);
   fireEvent.pointerEnter(view.container.firstChild!);
   view.rerender(<TaskInbox {...props} sessions={[task('a', 'archived'), task('b')]} />);
