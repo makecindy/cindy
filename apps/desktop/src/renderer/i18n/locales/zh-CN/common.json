@@ -7836,6 +7836,18 @@
         "overviewTab": "概览",
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
+        "githubInstall": {
+          "label": "从 GitHub Release 安装…",
+          "title": "从 GitHub Release 安装",
+          "description": "粘贴 GitHub 仓库或指定版本的 Release 链接。私有仓库需要用有访问权限的 GitHub 账号登录。",
+          "url": "GitHub 地址",
+          "submit": "查找插件",
+          "loading": "正在查找并下载…",
+          "invalid": "请输入 GitHub 仓库或 Release 标签链接。",
+          "not-found": "找不到此版本，请检查链接和仓库权限。",
+          "ambiguous": "这个链接包含多个插件。请使用只含一个插件的 Release 链接，或直接从文件安装。",
+          "installedAlready": "这个插件已安装。可以在该插件的设置里更新。"
+        },
         "installedSection": "已安装",
         "installedExpand": "展开全部 {{count}} 个已安装插件",
         "installedCollapse": "收起更多已安装插件",
