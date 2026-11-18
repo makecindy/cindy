@@ -61,6 +61,32 @@ it('durably revokes only create ownership while retaining plans, run results and
   } finally { sqlite.close(); }
 });
 
+// User decision 2026-11-18: a looser IM-conversation permission the user allowed in Cindy must not
+// survive an uninstall/reinstall. The revoke query above only covered task ownership. Minimal input:
+// one grant per plugin, uninstall one plugin, then use its grant. Tier: unit with in-memory SQLite.
+it('uninstall revokes IM permission grants in SQLite so they can no longer loosen a conversation', async () => {
+  const sqlite=new Database(':memory:');
+  try {
+    sqlite.exec(`CREATE TABLE plugin_task_requests(id TEXT PRIMARY KEY, plugin_id TEXT,
+      operation TEXT, target_id TEXT, request_key TEXT, fingerprint TEXT, payload TEXT,
+      revision INTEGER, created_at INTEGER)`);
+    const store=createPluginTaskStore({drizzle:drizzle(sqlite)} as unknown as DbClient);
+    const route={agentKind:'codex' as const,providerId:'test',model:'test',effort:'high',fastMode:false};
+    const unused=async():Promise<never>=>{throw Error('unexpected task operation');};
+    const service=createPluginTaskService({store,assertCurrent(){},assertAuthorized(){},readSession:async()=>null,
+      readModelPreference:()=>route,readPermissionMode:()=>undefined,readLiveSession:()=>undefined,resolveRoute:unused,
+      createSession:unused,dispatch:unused,inspect:unused,cancel:unused,
+      resolveImProject:async()=>({route,permissionMode:'ask',workingDir:'/project',assertCurrent(){},matches:()=>true}),
+    });
+    const grant=await service.recordImPermissionGrant('p','/project','bypassPermissions');
+    const other=await service.recordImPermissionGrant('q','/project','bypassPermissions');
+    await store.revokePlugin('p');
+    await expect(service.create('p',{requestKey:'k',title:'Group',imProject:'/project',
+      imOverride:{permissionMode:'bypassPermissions',permissionGrant:grant}})).rejects.toMatchObject({code:'CONFIRMATION_REQUIRED'});
+    expect(JSON.parse((await store.find('q','imPermission','/project',other))!.payload)).toEqual({permissionMode:'bypassPermissions'});
+  } finally { sqlite.close(); }
+});
+
 it('pages by creation time and ID without losing later records with smaller UUIDs', async () => {
   const sqlite = new Database(':memory:');
   try {

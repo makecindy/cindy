@@ -36,10 +36,16 @@ describe('plugin task pipe', () => {
     let current = ghost;
     const page = createGhostPageBridge({ ping: async () => ({ ok: true, id: 'p' }),
       send: payload => handlePluginTaskRequest('p', payload, { getGhost: () => current, handler, isCurrent: () => true }) });
+    // 2026-11-18: per-conversation settings and the loosening dialog sit behind the same consent.
     const requests = [
       { type: 'tasks-request', kind: 'imProjects' },
       { type: 'tasks-request', kind: 'create', requestKey: 'project', title: 'Group', imProject: 'chat' },
       { type: 'tasks-request', kind: 'followImProject', taskId: 'owned', expectedRevision: 1, imProject: '/project' },
+      { type: 'tasks-request', kind: 'imProjectConfig', imProject: 'chat' },
+      { type: 'tasks-request', kind: 'confirmImPermission', imProject: 'chat', permissionMode: 'bypassPermissions',
+        conversation: { label: 'Group', kind: 'group' } },
+      { type: 'tasks-request', kind: 'followImProject', taskId: 'owned', expectedRevision: 1, imProject: 'chat',
+        imOverride: { permissionMode: 'ask', permissionGrant: 'grant-1' } },
     ];
     for (const request of requests) {
       const { type: _type, kind, ...args } = request;
@@ -48,7 +54,14 @@ describe('plugin task pipe', () => {
       current = approved;
       await expect(page.api.tasks[kind]!(args)).resolves.toEqual({ accepted: true });
     }
-    expect(handler).toHaveBeenCalledTimes(3);
+    expect(handler).toHaveBeenCalledTimes(6);
+    // A conversation override is only meaningful inside a shared project and carries no other authority.
+    for (const imOverride of [{ permissionMode: 'plan' }, { workingDir: '/elsewhere' }, { permissionGrant: '../grant' },
+      { route: { ...requests[0], model: 'x' } }])
+      expect(validPluginTaskRequest({ ...requests[5], imOverride })).toBe(false);
+    expect(validPluginTaskRequest({ ...requests[1], imProject: undefined, imOverride: { permissionMode: 'ask' } })).toBe(false);
+    for (const conversation of [{ label: 'Group', kind: 'channel' }, { label: 'Gro\nup', kind: 'group' }, { label: 'Group' }])
+      expect(validPluginTaskRequest({ ...requests[4], conversation })).toBe(false);
     for (const field of [{ permissionMode: 'bypassPermissions' }, { isolatedWorkspace: true }, { callId: 'call' }])
       expect(validPluginTaskRequest({ ...requests[1], ...field })).toBe(false);
   });

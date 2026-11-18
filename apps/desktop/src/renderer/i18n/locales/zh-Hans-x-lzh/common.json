@@ -6447,7 +6447,8 @@
           "defaultProjectTag": "常例",
           "defaultProjectFullAccessWarning": "常例案「{{name}}」之权限为完全访问：任一群中 @ 机器人，皆将以完全访问之权于其中运行，慎之。",
           "sharedSettingsPointer": "案、模型与权限，诸官方机器人共用。",
-          "sharedSettingsPointerAction": "往设之"
+          "sharedSettingsPointerAction": "往设之",
+          "workspacesCardDescriptionWithPlugins": "诸官方机器人与 IM 法器共用此一份。案出于侧栏，立案、更名、除案皆于侧栏行之；于 IM 中以 /model 更之，此处亦随之而变。法器中逐群逐私语另设之模型与权柄，不受其扰。"
         },
         "binding": {
           "copyLink": "录链接",
@@ -6981,11 +6982,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "官设",
-        "personal": "私"
+        "personal": "私",
+        "plugins": "法器"
       },
       "tips": {
         "cindy": "由 Cindy 所供并维护。无须自建机器人或备凭证，依引导连接即可用。",
-        "personal": "用君自家之名籍或机器人，所需凭证由君自供自理；各渠道之名籍、权柄与设置各自保存。"
+        "personal": "用君自家之名籍或机器人，所需凭证由君自供自理；各渠道之名籍、权柄与设置各自保存。",
+        "plugins": "已装法器所供之 IM 入口。登入与绑定于法器页中为之；案、模型与权柄默随「案与模型」之设，亦可于法器中逐群逐私语另设。"
       },
       "defaults": {
         "title": "新言谈配置",
@@ -7017,6 +7020,10 @@
         },
         "groupPermissionLabel": "群议新差事之权柄档",
         "groupPermissionDescription": "群组中新开差事时统一所用之权柄档（@bot 开话题、/new、/ctr 皆属之），常例为「自审」；上方之权柄档唯管私聊。群组上下文中有成员可控之内容，设为「完全访问」后将径行运行、不复逐项确认，请确保群组成员皆可信。变更仅及此后新开之差事，既有差事请于群组中以 /permission 另行切换。"
+      },
+      "plugins": {
+        "rowHint": "登入、绑定与各群各私语之设，皆在法器页中。",
+        "open": "启法器"
       }
     },
     "shortcuts": {
@@ -21869,6 +21876,19 @@
       "network": "连接中断，方再试…",
       "timeout": "连接超时，方再试…",
       "server": "服务器繁忙，方再试…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "宽其权柄乎？",
+    "message": "许「{{name}}」使「{{conversation}}」于案「{{project}}」中用「{{mode}}」乎？",
+    "detail": "此较 IM 案之设（{{projectMode}}）为宽。许之，则此法器于此案中可用此档权柄，唯及法器自家之差事；后可于法器中复随 IM。",
+    "groupWarning": "群中他人亦可发言。权柄愈宽，需君确认之事愈少，务请确知群中皆可信之人。",
+    "allow": "许",
+    "cancel": "罢",
+    "modes": {
+      "ask": "预设权柄",
+      "auto": "自审",
+      "bypassPermissions": "完全访问"
     }
   }
 }
