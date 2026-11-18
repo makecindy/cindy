@@ -745,6 +745,7 @@ import { getDesktopHostTerminalService } from '../terminal/terminalService.deskt
 import { handlePluginHostToolRequest } from './hostToolSlot.js';
 import { withPluginSchedulerApproval } from './pluginSchedulerApproval.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
+import { openGithubSignIn, readLocalGithubToken } from '../git-context/githubSetupIpc.js';
 import { bindingStore } from '../im/binding.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
@@ -11130,7 +11131,6 @@ export function registerGhostIpc(): void {
         !Number.isSafeInteger(expectedAssetId) || expectedAssetId <= 0)) {
       throwIpcError('INVALID_PARAMS', 'Select a checked GitHub release first');
     }
-    const { openGithubSignIn, readLocalGithubToken } = await import('../git-context/githubSetupIpc.js');
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
     if (action === 'sign-in') return openGithubSignIn();
     const token = await readLocalGithubToken();
