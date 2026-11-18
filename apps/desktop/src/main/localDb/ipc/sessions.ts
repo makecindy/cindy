@@ -3,6 +3,7 @@ import { commitProvisionalSession as commitSessionDraft, discardProvisionalSessi
 import { createUserSession, withWorktreeMutation } from './createUserSession.js';
 import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
+import { scheduleNativeHistoryBackupCleanup } from '../../remote-agent/controller/nativeHistoryBackup.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
 import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
@@ -489,6 +490,9 @@ export function broadcastSessionPatched(
   ownerScope?: OwnerScope,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  if (patch.status === 'deleted' || 'sdkSessionId' in patch || 'clearedAt' in patch || 'agentDeviceId' in patch) {
+    scheduleNativeHistoryBackupCleanup(sessionId, patch.status === 'deleted');
+  }
   pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();

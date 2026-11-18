@@ -33,6 +33,7 @@ import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { createNativeHistoryTransfer, NATIVE_HISTORY_CHECKPOINT } from '../nativeHistoryTransfer';
 import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
@@ -281,6 +282,68 @@ function createHost(
 }
 
 describe('remote agent round trip', () => {
+  // Production Host/Controller in the existing loopback tier. A run and
+  // checkpoint ID from the first peer cannot authorize a live read on the
+  // second peer, and rejecting the first peer's stale checkpoint leaves the
+  // second peer able to run and export.
+  it('scopes a completed native history checkpoint to its peer and run', async () => {
+    const transfer = createNativeHistoryTransfer(path.join(root, 'native-staging'), {
+      locate: async (_kind, file) => ({ file }),
+      restore: async () => { throw new Error('unexpected import'); },
+    });
+    const host = createRemoteAgentHost({
+      nativeHistory: transfer,
+      runsRoot: hostRoot, isAgentAvailable: () => true, isControllerAuthorized: () => true,
+      captureOwner: () => 'account', isOwnerCurrent: () => true,
+      startHosted: async input => {
+        const events = queue();
+        const file = path.join(root, `${input.hostSessionId}.jsonl`);
+        return { ...fakeHostedAgent(input), id: file, events: () => events, close: async () => { events.end(); },
+          async send() {
+            const text = 'completed reply';
+            fs.writeFileSync(file, '{"type":"session"}\n' + JSON.stringify({ type: 'message',
+              message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text }] } }) + '\n');
+            events.push({ type: 'text', source: 'pi', data: { text } });
+            events.push({ type: 'done', source: 'pi', data: { type: 'pi/agent_settled', status: 'completed', result: text } });
+          },
+        };
+      },
+    });
+    const open = (peer: string) => startRemoteAgentSession('pi', {
+      sessionId: 'task', workingDir: project, model: 'fixture',
+    }, { ...makeDeps(host, peer), nativeHistoryBackup: true });
+    const completed = async (handle: AgentSessionHandle) => {
+      const next = (async () => {
+        for await (const event of handle.events()) {
+          if (event.type === 'done') return (event.data as Record<string, { runId: string; token: string }>)[NATIVE_HISTORY_CHECKPOINT];
+        }
+        throw new Error('No terminal event');
+      })();
+      await handle.send({ type: 'user', content: 'work' });
+      return next;
+    };
+    const read = (peer: string, checkpoint: { runId: string; token: string }) => host.handle(peer, {
+      op: 'native-history', sessionId: 'task',
+      command: { action: 'checkpoint-export', runId: checkpoint.runId, checkpoint: checkpoint.token },
+    });
+    const handles: AgentSessionHandle[] = [];
+    try {
+      const first = await open('first');
+      handles.push(first);
+      const second = await open('second');
+      handles.push(second);
+      const firstCheckpoint = await completed(first);
+      expect(await read('first', firstCheckpoint)).toMatchObject({ offset: 0, manifest: { kind: 'pi' } });
+      await expect(read('second', firstCheckpoint)).rejects.toThrow('REMOTE_AGENT_NOT_FOUND');
+      await completed(first);
+      await expect(read('first', firstCheckpoint)).rejects.toThrow('REMOTE_AGENT_BUSY');
+      expect(await read('second', await completed(second))).toMatchObject({ offset: 0, manifest: { kind: 'pi' } });
+    } finally {
+      await Promise.all(handles.map(handle => handle.close()));
+      host.dispose();
+    }
+  });
+
   // Unit: groupRelay covers the host reply. The controller must restore the typed
   // quota cause from either admission rejection or the asynchronous startup stream.
   it.each(['admission', 'startup stream'])('restores the group quota reset from %s', async boundary => {

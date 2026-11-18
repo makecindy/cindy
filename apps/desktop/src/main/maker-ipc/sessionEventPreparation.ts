@@ -1,4 +1,5 @@
 import { parseOutputLimitDetails } from '@cindy/maker-shared';
+import { NATIVE_HISTORY_CHECKPOINT } from '../remote-agent/nativeHistoryTransfer.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
@@ -296,6 +297,11 @@ export function prepareSessionEvent(
     }
   }
   const broadcastEvent = deps.redactEventForRenderer(attributedEvent);
+  if (event.type === 'done' && broadcastEvent.data && typeof broadcastEvent.data === 'object'
+    && NATIVE_HISTORY_CHECKPOINT in broadcastEvent.data) {
+    const { [NATIVE_HISTORY_CHECKPOINT]: _checkpoint, ...data } = broadcastEvent.data as Record<string, unknown>;
+    broadcastEvent.data = data;
+  }
   if (event.type === 'interaction_dismissed') {
     const data = event.data as { requestId?: unknown; reason?: unknown; withdrawalReason?: unknown };
     if (typeof data.requestId === 'string') {

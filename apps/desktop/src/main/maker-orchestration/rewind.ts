@@ -27,6 +27,7 @@ import { and, asc, desc, eq, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../localDb/client/current';
+import { scheduleNativeHistoryBackupCleanup } from '../remote-agent/controller/nativeHistoryBackup.js';
 import { assertTaskActionCurrent, runTaskActionRewindBoundary } from '../maker-ipc/taskActionAuthorization.js';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
@@ -1077,6 +1078,7 @@ export async function commitRewindAtMessage(
   // Remote controllers can hold cached history even after SQLite committed.
   // Keep the initiating renderer's reload and edit-and-resend on their existing paths.
   const [firstRewoundClientId] = rewoundClientIds;
+  if (isDataOwnerBroadcastScopeCurrent(ownerScope)) scheduleNativeHistoryBackupCleanup(sessionId);
   if (!opts?.requireLatestUser && firstRewoundClientId && isDataOwnerBroadcastScopeCurrent(ownerScope)) {
     const payload: MessageDeletedPayload = {
       sessionId,
