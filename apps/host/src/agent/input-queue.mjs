@@ -18,6 +18,7 @@ import { createLogger } from '../../../desktop/src/main/logger.ts';
 import { isSessionErrorSuppressed } from '../../../desktop/src/main/maker-ipc/sessionErrorSuppression.ts';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.ts';
 
+const settlementLog = createLogger('host-turn-settlement');
 const attachmentLog = createLogger('host-attachments');
 const log = createLogger('host-auto-resume');
 
@@ -107,6 +108,7 @@ function composeInput(item, stored) {
 export function createInputQueue(deps) {
   // Coexistence plan A: null, or the refusal a new send gets while a desktop uses this profile.
   let profileHold = null;
+  let ownerStopping = false;
   let runtime = createRuntime();
 
   function createRuntime() {
@@ -149,6 +151,17 @@ export function createInputQueue(deps) {
         parts: materialized.materializedParts, cleanupAfterDurable: materialized.cleanupAfterAcceptance,
       });
       return { item: materialized.item, ownerId };
+    }
+    async function settleAndWake(id) {
+      if (closing) return;
+      // The rebuilt queue has not served a send yet. Bind its history writer to
+      // the current owner before delivering a cancellation from the old hold.
+      assertCurrent();
+      const settled = await deps.onSessionSettled?.(id);
+      if (settled !== false && !closing && !profileHold) coordinator.onExternalTurnSettled(id);
+    }
+    function retryTurnSettlement(id) {
+      void settleAndWake(id).catch(error => settlementLog.warn('turn settlement failed', { id, error: errorText(error) }));
     }
     /** A new send while the profile is held: refused, typed, before anything is written. */
     function refuseWhileHeld() {
@@ -273,9 +286,7 @@ export function createInputQueue(deps) {
       onTerminal: (id, type, error, meta, direct, handedOver) => {
         if (direct || handedOver) coordinator.wakeSession(id, 'host-turn-settled');
         else coordinator.onTurnEvent(id, type, error, undefined, meta);
-        deps.onSessionSettled?.(id);
-        // A stopping owner's turn is interrupted. Its credential waiters must stay queued.
-        if (!closing) coordinator.onExternalTurnSettled(id);
+        retryTurnSettlement(id);
       },
     });
     // The coordinator's ports (coordinator-deps.ts, every optional port written out).
@@ -598,7 +609,8 @@ export function createInputQueue(deps) {
        * executor writes no turn end for it). Only `closing` is set; dispose() still stops and drains.
        */
       beginStop() { closing = true; },
-      canSettleTurnControls: () => !closing && profileHold === null,
+      settleAndWake, retryTurnSettlement,
+      canSettleTurnControls: () => !ownerStopping && !closing && profileHold === null,
       async dispose() {
         closing = true;
         // No runtime is released while this owner's runtime drains and stops.
@@ -636,7 +648,19 @@ export function createInputQueue(deps) {
   }
   const api = Object.fromEntries(Object.keys(runtime).map(name => [name, (...args) => runtime[name](...args)]));
   // The owner's runtime ends: a hold belonged to it (the next owner's start scans the profile again).
-  api.dispose = async () => { try { await runtime.dispose(); } finally { profileHold = null; runtime = createRuntime(); } };
+  api.beginStop = () => { ownerStopping = true; runtime.beginStop(); };
+  api.dispose = async () => {
+    api.beginStop();
+    try {
+      if (releasing) await releasing;
+      await runtime.dispose();
+    } finally {
+      deps.disposeTurnSettlements?.();
+      profileHold = null;
+      runtime = createRuntime();
+      ownerStopping = false;
+    }
+  };
   /**
    * Coexistence plan A: a desktop that opens this profile's database is running. New sends are
    * refused with `[PRECONDITION_FAILED] <message>`; nothing queued starts and no automatic
@@ -646,7 +670,10 @@ export function createInputQueue(deps) {
   api.holdForDesktop = message => {
     const first = profileHold === null;
     profileHold = { message };
-    if (first) runtime.holdKnownTasks();
+    if (first) {
+      runtime.holdKnownTasks();
+      deps.holdTurnSettlements?.();
+    }
   };
   api.isHeldForDesktop = () => profileHold !== null;
   /**
@@ -657,14 +684,21 @@ export function createInputQueue(deps) {
    */
   let releasing = null;
   async function release() {
-    if (runtime.hasRunningTurns()) return false;
+    if (ownerStopping || runtime.hasRunningTurns()) return false;
     // The hold ends between the two runtimes: no read of the new one is held by mistake. When the
     // old one cannot be disposed, the new one stays held and the next clean scan tries again.
     const released = profileHold;
     let disposed = false;
     try { await runtime.dispose(); disposed = true; }
     // A desktop that came back meanwhile replaced the hold: that one stays.
-    finally { if (disposed && profileHold === released) profileHold = null; runtime = createRuntime(); }
+    finally {
+      if (disposed && !ownerStopping && profileHold === released) profileHold = null;
+      runtime = createRuntime();
+      if (ownerStopping) runtime.beginStop();
+    }
+    if (profileHold === null) {
+      for (const id of deps.deferredTurnSettlements?.() ?? []) await runtime.settleAndWake(id);
+    }
     return profileHold === null;
   }
   api.releaseDesktopHold = () => {

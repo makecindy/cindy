@@ -5543,6 +5543,239 @@ for (const kind of ['runtime', 'credential']) {
   }
 }
 
+function settlementCheckpoint(label) {
+  let reached = false;
+  return { enter: () => { reached = true; }, wait: () => settleUntil(() => reached, label) };
+}
+
+// §3.2, db. Replace an accepted credential choice while its revalidation is
+// suspended. A late result cannot write the old choice or delete the replacement.
+test('profile hold settlement: an older generation cannot commit over a replacement during release', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'held-credential-generation';
+  r.views.current = ['prov-a', 'prov-b', 'prov-c'].map(provider => ({ ...switchViews('claude-code')[0], id: provider }));
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'first', text: 'job' });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-b' });
+  const live = r.h.maker.getSession(id);
+  r.h.queue.holdForDesktop(HELD);
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await settleUntil(() => !r.h.queue.isTurnRunning(id), 'held turn ended');
+  const writes = observeRouteUpdates(r, id);
+  const read = settlementCheckpoint('read reached');
+  const resume = Promise.withResolvers();
+  let catalogReads = 0;
+  r.views.beforeList = () => {
+    if (++catalogReads !== 2) return; // suspend the final persistence lookup
+    delete r.views.beforeList;
+    read.enter();
+    return resume.promise;
+  };
+  const release = r.h.queue.releaseDesktopHold();
+  try {
+    await read.wait();
+    await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-c' });
+  } finally { resume.resolve(); }
+  assert.equal(await release, true);
+  assert.deepEqual(writes(), []);
+  assert.equal(r.selection.hasPendingCredentialSwitch(id), true);
+  t.mock.timers.tick(10_000);
+  await settleUntil(() => !r.selection.hasPendingCredentialSwitch(id), 'the current generation settled');
+  assert.deepEqual(writes(), [{ model: 'small', provider_id: 'prov-c' }]);
+  assert.deepEqual(r.h.events.filter(e => e.channel === 'maker:session-credential-switch-applied').map(e => e.payload.providerId), ['prov-c']);
+});
+
+// §3.2, db. A new scheduled turn can acquire a rebuilt runtime while the
+// credential write is awaiting its catalog. Keep the choice until its actual end.
+test('profile hold settlement: a new running turn delays the released credential switch', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'running-on-release';
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'first', text: 'job' });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  const old = r.h.maker.getSession(id);
+  await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-a' });
+  r.h.queue.holdForDesktop(HELD);
+  old.emit({ type: 'done', data: {}, sessionTurnGeneration: old.generation, sessionInstanceId: old.instanceId });
+  await settleUntil(() => !r.h.queue.isTurnRunning(id), 'first turn ended');
+  const writes = observeRouteUpdates(r, id);
+  const lookup = settlementCheckpoint('lookup reached');
+  const finish = Promise.withResolvers();
+  let reads = 0;
+  r.views.beforeList = () => {
+    if (++reads !== 2) return;
+    delete r.views.beforeList;
+    lookup.enter();
+    return finish.promise;
+  };
+  const release = r.h.queue.releaseDesktopHold();
+  let scheduled;
+  try {
+    await lookup.wait();
+    scheduled = await r.h.maker.createSession(old.options);
+    await r.h.queue.beginHostTurn(id);
+  } finally { finish.resolve(); }
+  assert.equal(await release, true);
+  assert.equal(r.selection.hasPendingCredentialSwitch(id), true);
+  assert.deepEqual(writes(), []);
+  scheduled.emit({ type: 'done', data: {}, sessionTurnGeneration: scheduled.generation, sessionInstanceId: scheduled.instanceId });
+  await settleUntil(() => !r.selection.hasPendingCredentialSwitch(id), 'scheduled turn released its pending switch');
+  assert.deepEqual(writes(), [{ model: 'small', provider_id: 'prov-a' }]);
+});
+
+// §3.2, db. beginStop can overlap the last close of the old runtime. Rebuilding
+// that runtime must not give its successor permission to settle the former owner.
+test('profile hold settlement: beginStop during rebuild keeps the pending route untouched', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'stop-during-rebuild';
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'work', text: 'job' });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-a' });
+  const live = r.h.maker.getSession(id);
+  r.h.queue.holdForDesktop(HELD);
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await settleUntil(() => !r.h.queue.isTurnRunning(id), 'held turn ended');
+  const writes = observeRouteUpdates(r, id);
+  const closing = settlementCheckpoint('closing reached');
+  const resume = Promise.withResolvers();
+  const close = r.h.maker.closeSession;
+  r.h.maker.closeSession = async (...args) => { closing.enter(); await resume.promise; return close(...args); };
+  const release = r.h.queue.releaseDesktopHold();
+  try {
+    await closing.wait();
+    r.h.queue.beginStop();
+  } finally { resume.resolve(); }
+  assert.equal(await release, false);
+  t.mock.timers.tick(10_000);
+  await settle();
+  assert.deepEqual(writes(), []);
+  assert.equal(r.h.events.filter(e => e.channel === 'maker:session-credential-switch-applied').length, 0);
+});
+
+// §3.2, db. Both accepted choices are present when the desktop edits the route.
+// Completion of the credential check precedes the runtime cancellation on the client.
+test('profile hold settlement: resolves stale credentials before delivering runtime cancellation', async t => {
+  const id = 'both-held-choices';
+  const { r, resume } = await acceptedPiFallback(t, id);
+  const live = await resume();
+  await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-a' });
+  r.h.queue.holdForDesktop(HELD);
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await settleUntil(() => !r.h.queue.isTurnRunning(id), 'held turn ended');
+  r.db.db.prepare("UPDATE sessions SET provider_id = 'desktop-route' WHERE id = ?").run(id);
+  const updates = observeRouteUpdates(r, id);
+  assert.equal(await r.h.queue.releaseDesktopHold(), true);
+  assert.deepEqual(updates(), []);
+  const order = r.h.events.flatMap(event => {
+    if (event.channel === 'maker:session-credential-switch-failed' && event.payload.sessionId === id) return ['credentials'];
+    if (event.sessionId === id && event.data?.reason === 'runtime-selection-cancelled') return ['runtime'];
+    return [];
+  });
+  assert.deepEqual(order, ['credentials', 'runtime']);
+});
+
+// §3.2, db. An external waiter may acquire its runtime only after the blocking
+// task's deferred choice has actually finished, even when catalog I/O is pending.
+test('turn settlement: other credential waiters start after the pending source reaches clients', async t => {
+  const r = await modelChangeRuntime(t);
+  for (const id of ['blocking-source', 'waiting-source']) await r.createTask(id);
+  r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('claude-code')[0], id: provider }));
+  await enqueue(r.h, 'blocking-source', { clientId: 'work', text: 'job' });
+  const live = r.h.maker.getSession('blocking-source');
+  const create = r.h.maker.createSession;
+  let attempts = 0;
+  let appliedAtStart = false;
+  r.h.maker.createSession = async options => {
+    if (options.id === 'waiting-source') {
+      if (++attempts === 1) throw new CredentialModeSwitchBusyError(['blocking-source']);
+      appliedAtStart = r.h.events.some(e => e.channel === 'maker:session-credential-switch-applied' && e.payload.sessionId === 'blocking-source');
+    }
+    return create(options);
+  };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  await r.h.queue.enqueue('waiting-source', { clientId: 'wait', text: 'wait' });
+  await settleUntil(() => r.h.queue.projection('waiting-source').credentialSwitchWait?.clientId === 'wait', 'waiter registered');
+  await r.selection.registerPendingCredentialSwitch('blocking-source', { model: 'small', providerId: 'prov-b' });
+  const entered = settlementCheckpoint('entered reached');
+  const resume = Promise.withResolvers();
+  r.views.beforeList = () => {
+    delete r.views.beforeList;
+    entered.enter();
+    return resume.promise;
+  };
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  try {
+    await entered.wait();
+    await settle();
+    assert.equal(attempts, 1);
+  } finally { resume.resolve(); }
+  await settleUntil(() => r.h.maker.getSession('waiting-source')?.sent.length > 0, 'waiter dispatched');
+  assert.equal(appliedAtStart, true);
+});
+
+// §3.2, db. The runtime settlement factory is asynchronous. Hold its real Pi
+// catalog lookup and check the runtime chosen when another task first dispatches.
+test('turn settlement: other tasks wait until the deferred runtime control finishes', async t => {
+  const id = 'blocking-fallback';
+  const { r, resume } = await acceptedPiFallback(t, id);
+  const live = await resume();
+  const waiter = 'waiting-fallback';
+  await r.createTask(waiter);
+  const create = r.h.maker.createSession;
+  let attempts = 0;
+  let routeAtDispatch;
+  r.h.maker.createSession = async options => {
+    if (options.id === waiter) {
+      if (++attempts === 1) throw new CredentialModeSwitchBusyError([id]);
+      routeAtDispatch = getSessionRuntimeControlSnapshot(id).effectiveOverride?.providerId;
+    }
+    return create(options);
+  };
+  await r.h.queue.enqueue(waiter, { clientId: 'waiting', text: 'waiting' });
+  await settleUntil(() => r.h.queue.projection(waiter).credentialSwitchWait?.clientId === 'waiting', 'waiter registered');
+  const lookup = settlementCheckpoint('lookup reached');
+  const finish = Promise.withResolvers();
+  r.views.beforeList = () => { delete r.views.beforeList; lookup.enter(); return finish.promise; };
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  try {
+    await lookup.wait();
+    await settle();
+    assert.equal(attempts, 1);
+  } finally { finish.resolve(); }
+  await settleUntil(() => r.h.maker.getSession(waiter)?.sent.length > 0, 'other task dispatched');
+  assert.equal(routeAtDispatch, 'prov-b');
+});
+
+// §3.2, db. When a desktop has replaced the Pi route, writing the previous
+// route would destroy its edit. Observe the existing client failure and all SQL writes.
+test('profile hold settlement: aborts a stale Pi credential choice without restoring the former route', async t => {
+  const id = 'held-pi-credential-stale';
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  providePiWindows(r);
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'work', text: 'job' });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  const live = r.h.maker.getSession(id);
+  await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-a' });
+  const updates = observeRouteUpdates(r, id);
+  r.h.queue.holdForDesktop(HELD);
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await settleUntil(() => !r.h.queue.isTurnRunning(id), 'held turn ended');
+  r.db.db.prepare("UPDATE sessions SET provider_id = 'desktop-provider' WHERE id = ?").run(id);
+  assert.equal(await r.h.queue.releaseDesktopHold(), true);
+  assert.equal(r.selection.hasPendingCredentialSwitch(id), false);
+  assert.deepEqual(updates(), [{ model: 'big', provider_id: 'desktop-provider' }]);
+  assert.deepEqual(r.h.events.filter(e => e.channel?.startsWith('maker:session-credential-switch-')).map(e => [e.channel, e.payload]),
+    [['maker:session-credential-switch-failed', { sessionId: id, reason: 'apply-failed' }]]);
+});
+
 // §3.2, tier db. The retry and Maker's close notification can arrive without a
 // turn-end callback. Neither may apply a same-route rebuild while the desktop owns
 // the profile. Count UPDATEs as well as pushes, since the stored values match.
@@ -5579,7 +5812,7 @@ for (const source of ['retry timer', 'session close']) {
 }
 
 // §3.2 coexistence rule, tier db. A hold may arrive after settlement started. The last
-// provider catalog read is asynchronous, after the in-memory provider changed but before
+// provider catalog read inside persistence follows route revalidation and precedes
 // SQLite's UPDATE. Hold at that boundary and observe both the actual write and the client.
 test('profile hold: a credential switch already inside persistence cannot write or notify', { timeout: 20_000 }, async t => {
   const r = await modelChangeRuntime(t);
@@ -5591,25 +5824,29 @@ test('profile hold: a credential switch already inside persistence cannot write 
   t.mock.timers.enable({ apis: ['setTimeout'] });
   t.after(() => t.mock.timers.reset());
   await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-b' });
-  const entered = Promise.withResolvers();
+  const entered = settlementCheckpoint('entered reached');
   const resume = Promise.withResolvers();
+  let reads = 0;
   r.views.beforeList = async () => {
-    if (getSessionProvider(id) !== 'prov-b') return;
-    entered.resolve();
+    if (++reads !== 2) return; // first: route revalidation; second: persistence's final catalog lookup
+    entered.enter();
     await resume.promise;
   };
   live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
   try {
-    await entered.promise;
+    await entered.wait();
     assert.equal(r.row(id).provider_id, 'prov-a');
     r.h.queue.holdForDesktop(HELD);
     const routeWrites = observeRouteUpdates(r, id);
     resume.resolve();
     await settle();
+    const client = await readHostSession(getDbClient().drizzle, id);
     assert.deepEqual({
+      memory: getSessionProvider(id), database: r.row(id).provider_id, client: client.providerId,
+      pushedRoutes: r.h.events.filter(e => e.type === 'session_changed' && e.sessionId === id && e.patch?.providerId === 'prov-b').length,
       updates: routeWrites(), pending: r.selection.hasPendingCredentialSwitch(id),
       applied: r.h.events.filter(e => e.channel === 'maker:session-credential-switch-applied').map(e => e.payload.sessionId),
-    }, { updates: [], pending: true, applied: [] });
+    }, { memory: 'prov-a', database: 'prov-a', client: 'prov-a', pushedRoutes: 0, updates: [], pending: true, applied: [] });
   } finally {
     resume.resolve();
   }

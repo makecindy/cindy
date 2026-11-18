@@ -41,7 +41,6 @@ import {
   clearPendingCredentialSwitchWith,
   getPendingCredentialSwitchTargetWith,
   registerPendingCredentialSwitchWith,
-  settlePendingCredentialSwitchWith,
   wakeSessionInputAfterCredentialSwitchWith,
   type PendingCredentialSwitchAccessPorts,
 } from '../../../desktop/src/main/maker-ipc/pendingCredentialSwitchAccess.ts';
@@ -107,6 +106,7 @@ import { createSessionRuntimeFallbackSettingsFile } from '../../../desktop/src/m
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { createPendingSessionRuntimeControlSettlement } from '../../../desktop/src/main/maker-ipc/pendingSessionRuntimeControlSettlement.ts';
 import { publishAgentEvent } from './turn-executor.mjs';
+import { createHostTurnSettlement } from './turn-settlement.ts';
 import { explicitPorts } from './explicit-ports.ts';
 
 /** What the Host's runtime selection reads from the rest of the Host (main.ts binds it). */
@@ -142,6 +142,7 @@ export interface HostRuntimeSelectionDeps {
     recordRuntimeControlError(sessionId: string, data: { message: string; reason: string }): void;
     isTurnRunning(sessionId: string): boolean;
     canSettleTurnControls(): boolean;
+    retryTurnSettlement(sessionId: string): void;
     wakeSession: AgentInputCoordinator['wakeSession'];
     refreshQueuedRoute: AgentInputCoordinator['refreshQueuedRoute'];
     cancelUsageLimitWait(sessionId: string): void;
@@ -163,7 +164,7 @@ export interface HostRuntimeSelectionDeps {
  */
 export const HOST_RUNTIME_SELECTION_QUEUE_MEMBERS = [
   'contextRecoveryRollover', 'sessionDbAgentKind', 'isTurnRunning', 'wakeSession', 'refreshQueuedRoute',
-  'cancelUsageLimitWait', 'discardWorkingDirectoryRecovery', 'startPorts', 'recordRuntimeControlError', 'canSettleTurnControls',
+  'cancelUsageLimitWait', 'discardWorkingDirectoryRecovery', 'startPorts', 'recordRuntimeControlError', 'canSettleTurnControls', 'retryTurnSettlement',
 ] as const satisfies readonly (keyof HostRuntimeSelectionDeps['inputQueue'])[];
 type UnlistedQueueMembers = Exclude<keyof HostRuntimeSelectionDeps['inputQueue'], typeof HOST_RUNTIME_SELECTION_QUEUE_MEMBERS[number]>;
 const everyQueueMemberListed: [UnlistedQueueMembers] extends [never] ? true : never = true;
@@ -202,6 +203,13 @@ type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope>
 export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const maker = () => deps.getMaker();
   const pendingSwitches = createPendingAgentSwitchRegistry();
+  const settlement: ReturnType<typeof createHostTurnSettlement> = createHostTurnSettlement({
+    open: () => deps.inputQueue.canSettleTurnControls(),
+    busy: id => deps.inputQueue.isTurnRunning(id) || maker().getSession(id)?.isTurnRunning() === true,
+    retry: id => deps.inputQueue.retryTurnSettlement(id),
+    credentials: () => pendingCredentialSwitchService,
+    applyControl: id => settleRuntimeControl(id, 'host-turn-settled'),
+  });
   // As sessionSpendBroadcaster.ts and localDb/ipc/sessions.ts bind them: the same broadcast tap.
   const captureOwnerScope = (): OwnerScope => broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
   const isOwnerScopeCurrent = (scope: OwnerScope) =>
@@ -233,7 +241,11 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     pinExclusiveSessionProvider: (agent, model, providerId) =>
       pinExclusiveSessionProviderWithProviders(() => deps.listProviderViews(), agent, model, providerId),
   }));
-  const { broadcastSessionRuntimeProjection, projectScheduledPreferences } = createSessionRuntimeProjection(explicitPorts<Parameters<typeof createSessionRuntimeProjection>[0]>({ broadcastSessionPatched }));
+  const { broadcastSessionRuntimeProjection: publishProjection, projectScheduledPreferences } = createSessionRuntimeProjection(explicitPorts<Parameters<typeof createSessionRuntimeProjection>[0]>({ broadcastSessionPatched }));
+  const broadcastSessionRuntimeProjection: typeof publishProjection = (id, baseline) => {
+    settlement.observeControl(id);
+    return publishProjection(id, baseline);
+  };
   // The task read projector (register.ts setSessionRuntimeProjector), which bindHostSessionRuntimeHooks
   // installs: every task read shows what the task runs on, an accepted runtime override included.
   const sessionRuntimeProjector = createSessionRuntimeProjector(explicitPorts<Parameters<typeof createSessionRuntimeProjector>[0]>({
@@ -278,6 +290,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   // its Pi transaction is read at call time (createApplyPiPendingSelection below).
   let applyPiPendingSelection: ReturnType<typeof createApplyPiPendingSelection> | null = null;
   const pendingCredentialSwitchService = createPendingCredentialSwitchService(explicitPorts<Parameters<typeof createPendingCredentialSwitchService>[0]>({
+    settlementPermit: settlement.permit,
     maker: pendingSwitchMaker,
     isSessionInTurn: sessionId => isSessionInTurn(sessionId),
     applyPiPendingSelection: (sessionId, target, resolved, isCurrent) => {
@@ -286,10 +299,15 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     },
     // The desktop broadcasts these to its windows; the Host sends them on its event stream.
     broadcastToAllWindows: (channel, payload) => deps.publish({ type: 'plugin_push', channel, payload }),
-    inputCoordinator: coordinatorWake,
+    inputCoordinator: {
+      wakeSession(id, reason) {
+        coordinatorWake.wakeSession(id, reason);
+        settlement.credentialApplied(id);
+      },
+    },
     resolveLenientSessionRoute: (agent, model, providerId, opts) =>
       resolveLenientSessionRouteWithProviders(() => deps.listProviderViews(), agent, model, providerId, opts),
-    getSessionDbAgentKind: sessionId => deps.inputQueue.sessionDbAgentKind(sessionId),
+    getSessionDbAgentKind: sessionId => deps.inputQueue.sessionDbAgentKind(sessionId) ?? settlement.deferredDbKind(sessionId),
     getDesktopProviderService: providerService,
     resolveConfiguredContextWindow: deps.resolveConfiguredContextWindow,
     agentInputCoordinatorHolder: coordinatorRoute,
@@ -480,11 +498,17 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   });
   const handleSetModel = createHandleSetModel(ports);
   const settleRuntimeControl = createPendingSessionRuntimeControlSettlement(explicitPorts<Parameters<typeof createPendingSessionRuntimeControlSettlement>[0]>({
-    applySessionRuntimeSelection,
+    canSettle: settlement.allowedControl,
+    applySessionRuntimeSelection: (id, model, provider, selection, options) => {
+      const generation = options.applyingPendingGeneration!;
+      const check = () => settlement.assertControl(id, generation);
+      check();
+      return applySessionRuntimeSelection(id, model, provider, selection, { ...options, assertSelectionCurrent: check });
+    },
     runtimeSelectionRequiresModelWindowConfirmation: result =>
       result.contextWindowConfirmationRequired !== undefined || result.contextTokensForConfirmation !== undefined,
     broadcastSessionRuntimeProjection,
-    getSessionDbAgentKind: id => deps.inputQueue.sessionDbAgentKind(id),
+    getSessionDbAgentKind: id => deps.inputQueue.sessionDbAgentKind(id) ?? settlement.deferredDbKind(id),
     onTurnErrorEvent: (id, error) => deps.inputQueue.recordRuntimeControlError(id, error),
     broadcastToAllWindows: (_channel, { sessionId, event }) => publishAgentEvent({ publish: deps.publish }, sessionId, event, {}),
     log: deps.log,
@@ -676,13 +700,10 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     },
     /** The session settings write with the budget hook (persistSessionFieldsWith): /sessions/update's budget. */
     persistSessionFields,
-    /** A task's turn settled (the desktop's settlePendingCredentialSwitch): a pending switch lands now. */
-    onTurnSettled(sessionId: string) {
-      if (!deps.inputQueue.canSettleTurnControls()) return;
-      settlePendingCredentialSwitchWith(
-        explicitPorts<Parameters<typeof settlePendingCredentialSwitchWith>[0]>({ pendingCredentialSwitchHolder: pendingCredentialSwitchService, log: deps.log }), sessionId, 'host-turn-settled');
-      settleRuntimeControl(sessionId, 'host-turn-settled');
-    },
+    onTurnSettled: settlement.settle,
+    disposeTurnSettlements: settlement.dispose,
+    holdTurnSettlements: settlement.hold,
+    deferredTurnSettlements: settlement.pendingIds,
     /**
      * register.ts registerPendingCredentialSwitchForSession: a credential switch that waits for the task's
      * turn to end. The Agent, system, IM card and scheduled model changes register through it on the
@@ -762,7 +783,7 @@ export function bindHostSessionRuntimeHooks(selection: {
  */
 export function hostRuntimeSelectionQueueHooks(
   getSelection: () => Pick<HostRuntimeSelection,
-    'applyPendingAgentSwitch' | 'hasPendingCredentialSwitch' | 'onTurnSettled' | 'persistAgentPlanModeChange'
+    'applyPendingAgentSwitch' | 'hasPendingCredentialSwitch' | 'onTurnSettled' | 'deferredTurnSettlements' | 'holdTurnSettlements' | 'disposeTurnSettlements' | 'persistAgentPlanModeChange'
     | 'maybeApplySessionRuntimeFallback' | 'pendingSessionRuntimeFallbackRebuilds' | 'admitLocalRoute'>,
   ports: { isSessionRestarting(sessionId: string): boolean; afterTurnSettled?(sessionId: string): void },
 ) {
@@ -774,9 +795,13 @@ export function hostRuntimeSelectionQueueHooks(
       isSessionRestarting: (sessionId: string) => ports.isSessionRestarting(sessionId),
     })),
     hasPendingCredentialSwitchEntry: (sessionId: string) => getSelection().hasPendingCredentialSwitch(sessionId),
-    onSessionSettled: (sessionId: string) => {
-      getSelection().onTurnSettled(sessionId);
-      ports.afterTurnSettled?.(sessionId);
+    disposeTurnSettlements: () => getSelection().disposeTurnSettlements(),
+    holdTurnSettlements: () => getSelection().holdTurnSettlements(),
+    deferredTurnSettlements: () => getSelection().deferredTurnSettlements(),
+    onSessionSettled: async (sessionId: string) => {
+      const settled = await getSelection().onTurnSettled(sessionId);
+      if (settled) ports.afterTurnSettled?.(sessionId);
+      return settled;
     },
     persistAgentPlanModeChange: (...args: Parameters<HostRuntimeSelection['persistAgentPlanModeChange']>) =>
       getSelection().persistAgentPlanModeChange(...args),
