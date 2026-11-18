@@ -54,7 +54,10 @@ export default {
     await ui.capture('cross-table-selection');
     const pasted = await copyAndPaste();
     assert.equal(pasted, selected, 'Actual clipboard paste must match the complete selected range');
-    assert.ok(!pasted.includes('复制'), 'Message controls must not leak into multi-message text');
+    // The fixture itself says “复制后仍须完整保留”; detect control-only labels.
+    for (const label of ['从这里开启新任务', '分享这条消息']) {
+      assert.ok(!pasted.includes(label), `Message control must not leak: ${label}`);
+    }
 
     // Whole table by native range, then the existing whole-table copy control.
     const cells = await select('名称', '末行 Final');
