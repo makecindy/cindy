@@ -53,6 +53,18 @@ export default {
     if (!await page.locator('.open-app').isVisible() || await page.locator('progress').count()) {
       throw new Error('Hidden tray did not prewarm its overview');
     }
+    // A window reloaded while hidden never paints, so image decoding never settles there; the
+    // card must still report itself ready, or hovering cannot open it.
+    await page.evaluate(() => {
+      window.__decode = HTMLImageElement.prototype.decode;
+      HTMLImageElement.prototype.decode = () => new Promise(() => {});
+      delete document.documentElement.dataset.quotaPainted;
+      window.dispatchEvent(new Event('fixture-tray-show'));
+      window.dispatchEvent(new Event('fixture-tray-hide'));
+    });
+    await page.locator('html[data-quota-painted=true]').waitFor({ timeout: 3000 })
+      .catch(() => { throw new Error('Card never became ready while images could not decode'); });
+    await page.evaluate(() => { HTMLImageElement.prototype.decode = window.__decode; });
     const selected = page.locator('.tabs button[aria-pressed=true]');
     await page.evaluate(() => window.dispatchEvent(new Event('fixture-toggle-unread')));
     await page.locator('.tabs button:nth-child(2)[aria-pressed=true]').waitFor();

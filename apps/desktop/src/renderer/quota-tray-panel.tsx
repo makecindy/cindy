@@ -12,6 +12,12 @@ import './styles/quota-tray.css';
 declare global { interface Window { quotaTray: QuotaTrayBridge } }
 type Tab = 'tabUnread' | 'tabOngoing' | 'tabUsage';
 const tabs: Tab[] = ['tabUnread', 'tabOngoing', 'tabUsage'];
+/**
+ * Longest the hidden card waits for fonts and images before it reports itself ready. A window
+ * reloaded while hidden never paints, so `image.decode()` never settles there; waiting on it
+ * unbounded left the card unable to open on hover (main shows it only after `painted`).
+ */
+const PREWARM_WAIT_MS = 1000;
 /** Page slides last as long as the Swift panel's `Motion.page`. */
 const PAGE_SLIDE_MS = 500;
 let lastTab: Exclude<Tab, 'tabUnread'> | undefined;
@@ -62,7 +68,8 @@ function Card({ view, now, hidden }: { view: MenubarView; now: number; hidden: b
     let cancelled = false;
     // Prewarm the real card, including font metrics, before revealing the window.
     const images = [...document.images].map(image => image.decode().catch(() => {}));
-    void Promise.all([document.fonts.ready, ...images]).then(() => {
+    const assets = Promise.all([document.fonts.ready, ...images]);
+    void Promise.race([assets, new Promise(resolve => setTimeout(resolve, PREWARM_WAIT_MS))]).then(() => {
       if (cancelled) return;
       // Hidden Electron windows pause animation frames. Measure decoded assets
       // synchronously and send the final bounds before presentation readiness.
