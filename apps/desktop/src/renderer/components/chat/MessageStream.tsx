@@ -5658,6 +5658,7 @@ export function MessageStream({
     };
     content.addEventListener('click', onDisclosureClick, true);
     content.addEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
+    let lastPinHeight = -1;
     const ro = new ResizeObserver(() => {
       // 还原中:内容高度因异步渲染 settle 时,持续按锚点纠偏(直到用户手动滚动接管)。
       if (restoringRef.current) {
@@ -5684,9 +5685,16 @@ export function MessageStream({
       }
       disclosureAnchorRef.current = null;
       if (isNearBottomRef.current) {
+        // 纯宽度变化的交付(窗口横拉、分享选中态的 padding 过渡)不会移动尾部:
+        // 只有内容高度真变了才 pin,避免逐帧重启 pin 循环。
+        const container = scrollRef.current;
+        if (container && container.scrollHeight === lastPinHeight) return;
+        if (container) lastPinHeight = container.scrollHeight;
         pinToBottom();
         return;
       }
+      // 离底期间内容可能收缩后再长回旧高度;失效基线,避免回底后的尾部跟随被误跳。
+      lastPinHeight = -1;
       compensateMessageHeight();
       refreshHiddenChildViewportAnchor();
     });

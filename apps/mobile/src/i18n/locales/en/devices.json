@@ -426,7 +426,33 @@
       "filterTeammatesHeading": "Buddies",
       "filterAnySource": "All",
       "filterHideAllTeammates": "Hide all",
-      "filterSelectedTeammates": "{{count}} selected"
+      "filterSelectedTeammates": "{{count}} selected",
+      "inbox": {
+        "inbox": "Pending",
+        "working": "Working",
+        "snoozed": "Snoozed",
+        "archived": "Processed",
+        "snooze": "Snooze task",
+        "complete": "Done",
+        "wake": "Bring back now",
+        "restore": "Restore task",
+        "process": "Mark processed (archive)",
+        "empty": "Inbox is clear",
+        "snoozeFailed": "Could not save the snooze time. Check the connection and update the computer hosting this task.",
+        "hours": "In {{count}} hours",
+        "hours_one": "In {{count}} hour",
+        "hours_other": "In {{count}} hours",
+        "thisEvening": "This evening",
+        "tomorrow": "Tomorrow",
+        "nextWeek": "Next week",
+        "custom": "Custom…",
+        "invalidTime": "Choose a future date and time within one year."
+      },
+      "taskListMode": {
+        "heading": "Task mode",
+        "tasks": "Task list",
+        "inbox": "Inbox"
+      }
     },
     "search": {
       "placeholder": "Search titles or content…",

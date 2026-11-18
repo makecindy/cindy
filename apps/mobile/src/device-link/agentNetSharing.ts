@@ -5,7 +5,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { DeviceLinkClient, parseSharedTaskPeer, type DeviceLinkClientOptions, type RoutedDeviceLinkClient, type SharedTaskApi } from '@cindy/device-link';
 import { AgentNetSharingClient, AgentNetSharingTransport, AgentNetSocket, NativeTransport, PortableAgentNetClient,
   encodeAgentNetSharingInvitation, parseAgentNetSharingInvitation, syncAgentNetSharingOrigins, toBase64Url, utf8,
-  type AgentNetSharingInvitation, type BinarySocket, type SharingRequestOptions } from '@cindy/agent-net/portable';
+  type AgentNetSharingInvitation, type BinarySocket, type SessionConfig, type SessionHandle, type SharingRequestOptions } from '@cindy/agent-net/portable';
 import { agentNetMediaBinding, agentNetSharingSubject, sharingOriginValid, type SharingOrigin, type Delegation } from '@cindy/agent-net-protocol';
 import type { ApiFetchOptions } from '@/api/client';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
@@ -44,6 +44,26 @@ const routeKey = (r: Pick<Route, 'kind' | 'resourceId'>) => r.kind + ':' + r.res
 const originKey = (r: Pick<Route, 'server' | 'networkId' | 'rootPublicKey'>) => JSON.stringify([r.server, r.networkId, r.rootPublicKey]);
 export function mobileAgentNetSharingEnabled(): boolean {
   const p = getMobileAgentNetPreferences(); return p.ready && p.enabled && MobileAgentNetEngine.available();
+}
+/** Sessions on each shared task's own connection; one-way, this phone only calls (agentNetRuntime.useMobileAgentNetSessions). */
+let sharingSessions: SessionConfig | null = null;
+export function useMobileAgentNetSharingSessions(config: SessionConfig | null): void {
+  sharingSessions = config;
+  if (config) for (const live of current?.live.values() ?? []) live.socket?.useSessions(config);
+}
+/** The connection of the shared task this scoped peer names, once it is open. Only that registered connection carries its session. */
+function sharingSocket(peer: string): AgentNetSocket | null {
+  const task = parseSharedTaskPeer(peer), state = current;
+  if (!task || !state || !mobileAgentNetSharingEnabled()) return null;
+  try { state.guard(); } catch { return null; }
+  const route = state.book.routes.find(r => r.kind === 'shared-task' && r.resourceId === task.sharedTaskId && !r.retired);
+  return route ? state.live.get(routeKey(route))?.socket ?? null : null;
+}
+export function mobileAgentNetSharingSession(peer: string): SessionHandle | null { return sharingSocket(peer)?.session(peer) ?? null; }
+/** This shared task has its own Agent-Net connection open (its session may still be on the way). */
+export function mobileAgentNetSharingReachable(peer: string): boolean { return !!sharingSocket(peer); }
+export function connectMobileAgentNetSharingSession(peer: string): Promise<boolean> {
+  return sharingSocket(peer)?.connectSession(peer) ?? Promise.resolve(false);
 }
 function valid(route: Route): boolean {
   try {
@@ -266,12 +286,13 @@ function install(state: State, route: Route): void {
     getToken: async () => { state.guard(); return 'agent-net-scoped-native'; },
     createWebSocket: async () => {
       const live = await liveFor(state, route), guard = () => { state.guard(); live.signer.assertCurrent(); };
-      const engine = await MobileAgentNetEngine.create({ ...live.native, udp: true }, guard);
+      const engine = await MobileAgentNetEngine.create({ ...live.native, udp: true, enhancedTransport: true }, guard);
       try {
         const socket = await AgentNetSocket.openWithBindings({ client: live.api, scoped: true, assertCurrent: guard,
           userId: getMobileAuthOwner().accountId, bindings: { verifyCertificate: verifyMobileAgentNetCertificate,
             verifyDelegation: verifyMobileAgentNetDelegation, createTransport: opts => NativeTransport.create(engine, opts) } });
         guard(); live.socket = socket;
+        if (sharingSessions) socket.useSessions(sharingSessions);
         let timer: ReturnType<typeof setTimeout> | undefined, ended = false;
         const schedule = (retry = false) => { if (ended) return;
           timer = setTimeout(() => { void renew(); }, retry ? 5000 : Math.max(1000, live.api.delegation!.expiresAt - Date.now() - 60_000)); };

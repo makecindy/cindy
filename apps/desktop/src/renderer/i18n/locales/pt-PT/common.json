@@ -5519,8 +5519,19 @@
       "title": "Introdução de mensagens",
       "sendShortcut": {
         "label": "Usar {{shortcut}} para enviar",
-        "hint": "Quando ativado, {{shortcut}} envia mensagens. Quando desativado, Enter envia mensagens e Shift+Enter insere uma nova linha.",
-        "ariaLabel": "Usar {{shortcut}} para enviar mensagens"
+        "hint": "Enter envia. Shift+Enter insere uma nova linha.",
+        "ariaLabel": "Usar {{shortcut}} para enviar mensagens",
+        "hintModifierEnter": "{{shortcut}} envia. Enter insere uma nova linha."
+      },
+      "followUp": {
+        "label": "Envio durante a execução",
+        "hintQueue": "Enquanto a tarefa decorre, o botão de enviar e {{send}} colocam a mensagem em fila.",
+        "hintSteer": "Enquanto a tarefa decorre, o botão de enviar e {{send}} orientam a tarefa em curso.",
+        "ariaLabel": "Envio enquanto a tarefa decorre",
+        "options": {
+          "queue": "Colocar em fila",
+          "steer": "Orientar"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -6554,7 +6565,8 @@
           "defaultProjectFullAccessWarning": "O projeto predefinido «{{name}}» tem Acesso total: uma @mention de qualquer grupo é executada nele com acesso total.",
           "sharedSettingsPointer": "Os projetos, modelos e permissões são partilhados por todos os bots oficiais.",
           "sharedSettingsPointerAction": "Abrir definições",
-          "workspacesBoundCount_many": "{{count}} projetos"
+          "workspacesBoundCount_many": "{{count}} projetos",
+          "workspacesCardDescriptionWithPlugins": "Partilhado por todos os bots oficiais e plugins de mensagens. Os projetos vêm da barra lateral: crie, mude o nome ou remova aí. As alterações feitas com /model numa conversa também aparecem aqui. Os modelos e permissões alterados para uma única conversa num plugin não são afetados."
         },
         "binding": {
           "copyLink": "Copiar ligação",
@@ -6866,6 +6878,7 @@
           "latency": "Latência",
           "lastSeen": "Visto pela última vez",
           "controlling": "A controlar este computador",
+          "protocol": "Ligação",
           "rttNote": "última medição",
           "manage": "Gerir dispositivo…",
           "linkStatus": "Com {{name}}",
@@ -7090,11 +7103,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "Oficial",
-        "personal": "Pessoal"
+        "personal": "Pessoal",
+        "plugins": "Plugins"
       },
       "tips": {
         "cindy": "Fornecido e mantido pelo Cindy. Não precisa de criar um bot nem de fornecer credenciais — siga os passos de ligação para começar.",
-        "personal": "Utilize a sua própria conta ou bot e gira as credenciais necessárias. Cada canal mantém a sua própria conta, permissões e definições."
+        "personal": "Utilize a sua própria conta ou bot e gira as credenciais necessárias. Cada canal mantém a sua própria conta, permissões e definições.",
+        "plugins": "Entradas de mensagens disponibilizadas por plugins instalados. O início de sessão e a associação fazem-se na página do plugin. Projetos, modelos e permissões seguem “Projetos e modelos” por predefinição e podem ser alterados por conversa no plugin."
       },
       "defaults": {
         "title": "Configuração de novas conversas",
@@ -7126,6 +7141,10 @@
         },
         "groupPermissionLabel": "Modo de permissões para novas tarefas de grupo",
         "groupPermissionDescription": "Modo de permissões utilizado para todas as tarefas criadas numa conversa de grupo — a abertura de um tópico com @bot, /new e /ctr utilizam-no; o modo de permissões acima aplica-se apenas a mensagens diretas. A predefinição é Aprovação automática. O contexto do grupo pode conter conteúdo controlado pelos membros — escolher Acesso total executa ações sem confirmação a cada passo, pelo que só deve escolhê-lo para grupos em que confia. As alterações aplicam-se às tarefas criadas posteriormente; altere uma tarefa existente com /permission no grupo."
+      },
+      "plugins": {
+        "rowHint": "O início de sessão, a associação e as definições de cada conversa estão na página do plugin.",
+        "open": "Abrir plugin"
       }
     },
     "shortcuts": {
@@ -8361,6 +8380,8 @@
         "subscribeMessageDetail": "Recebe mensagens guardadas do utilizador e respostas da IA. Os anexos são lidos e transferidos separadamente.",
         "subscribeToolExecution": "Eventos de execução de ferramentas",
         "subscribeToolExecutionDetail": "Recebe nomes, entradas, resultados e erros das ferramentas. Observa sem alterar a execução.",
+        "subscribeNativeRecovery": "Eventos nativos de recuperação",
+        "subscribeNativeRecoveryDetail": "Recebe o estado do motor durante novas tentativas, a compactação do contexto e a interrupção de tarefas.",
         "subscribeTaskState": "Eventos de estado de tarefas",
         "subscribeTaskStateDetail": "Recebe alterações de execução, espera, conclusão, arquivo e ocultação de tarefas.",
         "subscribeActivity": "Observa quando a IA está a pensar e quando está à sua espera",
@@ -8576,6 +8597,24 @@
         "openInSidebar": "Abrir na barra lateral",
         "panelPageHosted": "Abre a partir da página do plugin · fecha ao sair",
         "panelNone": "Este plugin não tem painel",
+        "githubRelease": {
+          "title": "Atualizações do plugin",
+          "installed": "Instalada {{version}}",
+          "upstream": "Publicada {{version}}",
+          "prerelease": "Pré-lançamento",
+          "check": "Procurar atualizações",
+          "update": "Transferir e instalar",
+          "connect": "Iniciar sessão no GitHub",
+          "checking": "A procurar atualizações…",
+          "updating": "A transferir e instalar…",
+          "available": "Está disponível uma atualização.",
+          "current": "A versão instalada está atualizada.",
+          "updated": "Plugin atualizado.",
+          "empty": "Nenhuma versão disponível para instalar.",
+          "sign-in": "Inicie sessão no GitHub para procurar atualizações.",
+          "forbidden": "Esta conta do GitHub não tem acesso de leitura ao repositório privado.",
+          "unavailable": "Não foi possível verificar ou instalar a atualização. Tente novamente."
+        },
         "customSlotTitle": "Área de definições personalizadas do plugin",
         "dangerTitle": "Desinstalar plugin",
         "infoContents": "Contém",
@@ -9931,6 +9970,41 @@
       },
       "providerTooltip": "O fornecedor atualmente selecionado para a sessão; em branco quando nenhum está fixado.",
       "tokensTooltip": "Conta apenas os tokens utilizados por esta sessão em {{range}}."
+    },
+    "auxiliary": {
+      "title": "Utilização auxiliar",
+      "label": "Auxiliar",
+      "purpose": "Finalidade",
+      "requests": "Pedidos registados",
+      "description": "Incluída no total de tokens. Só é registada a utilização devolvida pelo fornecedor; dados em falta e pedidos anteriores não são estimados.",
+      "sources": {
+        "title": "Geração de títulos",
+        "task-summary": "Resumos de tarefas",
+        "prompt-prediction": "Sugestões de entrada",
+        "working-status": "Estado do trabalho",
+        "help": "Ajuda",
+        "bot-creation": "Criação de companheiros",
+        "bot-opening": "Saudações de companheiros",
+        "group-planning": "Planeamento do grupo",
+        "ambient-reply": "Decisões de resposta",
+        "auto-review": "Revisão automática",
+        "tool-loop-review": "Revisão de ciclos de ferramentas",
+        "memory-review": "Revisão da memória",
+        "git-summary": "Resumos de alterações",
+        "hook-generation": "Scripts de automatização",
+        "automation-verification": "Verificação de importação",
+        "plugin-text": "Texto de plugins",
+        "voice-dialogue": "Conversas de voz",
+        "voice-exit": "Decisões de fim de chamada",
+        "voice-refinement": "Revisão do texto de voz",
+        "dictionary-learning": "Aprendizagem do dicionário",
+        "embedding-query": "Pesquisa vetorial",
+        "embedding-index": "Indexação vetorial",
+        "web-search": "Pesquisa na Web",
+        "provider-probe": "Testes de ligação",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Outros pedidos auxiliares"
+      }
     }
   },
   "usageDashboard": {
@@ -11336,6 +11410,7 @@
       "unavailableTitle": "Esta conversa de grupo já não está disponível",
       "unavailableDescription": "Pode ter sido eliminada. Volte a Amigos para abrir outra conversa de grupo ou outro amigo.",
       "sidebar": {
+        "threadReply": "Resposta no tópico",
         "title": "Conversas de grupo",
         "empty": "Ainda não há mensagens",
         "preview": "{{name}}: {{text}}",
@@ -11672,6 +11747,7 @@
           "sharedReplyFrom": "Partilhou uma resposta de um tópico de {{name}}",
           "sharedReply": "Partilhou uma resposta de um tópico",
           "edited": "Editado",
+          "replyNotFound": "Não foi possível encontrar esta resposta.",
           "sourceUnavailable": "A resposta original foi eliminada ou não está disponível para si.",
           "viewThread": "Ver tópico",
           "viewInMain": "Ver na conversa principal",
@@ -13801,9 +13877,8 @@
     "sendButton": {
       "send": "Enviar mensagem",
       "queue": "Colocar mensagem em fila",
-      "queueTooltip": "Clique para colocar em fila; prima {{shortcut}} para orientar sem interromper a tarefa",
-      "queueTooltipSendMode": "Clique para colocar em fila; prima {{shortcut}} para enviar esta mensagem",
-      "stop": "Parar geração"
+      "stop": "Parar geração",
+      "steer": "Orientar a tarefa em curso"
     },
     "pluginSetup": {
       "account": {
@@ -14707,6 +14782,13 @@
       "runningWithWorktree_one": "Espere terminar para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências.",
       "runningWithWorktree_other": "Espere todas terminarem para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências.",
       "runningWithWorktree_many": "Espere todas terminarem para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências."
+    },
+    "followUpHint": {
+      "queueDefault": "As mensagens enviadas enquanto a tarefa decorre ficam em fila.",
+      "steerDefault": "As mensagens enviadas enquanto a tarefa decorre orientam a tarefa em curso.",
+      "switchToSteer": "Orientar por predefinição",
+      "switchToQueue": "Colocar em fila por predefinição",
+      "dismiss": "Fechar sugestão"
     }
   },
   "onboarding": {
@@ -16826,6 +16908,37 @@
         "priority": "Prioridade",
         "activity": "Atividade recente",
         "created": "Hora de criação"
+      },
+      "inbox": {
+        "thisEvening": "Esta tarde",
+        "tomorrow": "Amanhã",
+        "nextWeek": "Na próxima semana",
+        "custom": "Personalizar…",
+        "wakeAt": "Data e hora de regresso",
+        "timeZone": "Hora local ({{zone}})",
+        "invalidTime": "Escolhe uma data e hora futuras dentro de um ano.",
+        "inbox": "Pendentes",
+        "working": "Em curso",
+        "snoozed": "Adiadas",
+        "archived": "Tratadas",
+        "snooze": "Adiar tarefa",
+        "complete": "Concluído",
+        "wake": "Mostrar agora",
+        "restore": "Restaurar tarefa",
+        "process": "Marcar como tratada (arquivar)",
+        "empty": "A caixa de entrada está vazia",
+        "snoozeFailed": "Não foi possível guardar a hora. Verifique a ligação e atualize o computador onde está a tarefa.",
+        "hours": "Daqui a {{count}} horas",
+        "hours_one": "Daqui a {{count}} hora",
+        "hours_many": "Daqui a {{count}} horas",
+        "hours_other": "Daqui a {{count}} horas"
+      },
+      "taskListMode": {
+        "heading": "Modo de tarefas",
+        "tasks": "Lista de tarefas",
+        "inbox": "Caixa de entrada",
+        "enterInbox": "Mudar para o modo caixa de entrada",
+        "leaveInbox": "Mudar para o modo lista de tarefas"
       }
     },
     "rename": {
@@ -17120,6 +17233,7 @@
         "menuSave": "Guardar",
         "menuInsertTable": "Inserir tabela",
         "externalChangeBlocked": "O ficheiro foi alterado no disco. A gravação automática foi suspensa; guarde manualmente para substituir.",
+        "targetChanged": "O ficheiro aponta agora para outra localização. O rascunho continua no editor. Copie-o antes de voltar a abrir o ficheiro.",
         "tableMenu": {
           "addRowAbove": "Adicionar linha acima",
           "addRowBelow": "Adicionar linha abaixo",
@@ -19899,7 +20013,8 @@
           "expired": "Expirado",
           "voided": "Anulado"
         }
-      }
+      },
+      "viewUsage": "Ver utilização"
     },
     "orders": {
       "title": "Histórico de encomendas",
@@ -21593,6 +21708,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Fechar",
+    "taskInbox": {
+      "title": "Conheça a caixa de entrada",
+      "lead": "As tarefas organizam-se sozinhas em Pendentes, Em curso, Adiadas e Tratadas. O melhor hábito é manter a caixa de entrada vazia: clique em Concluído quando terminar uma tarefa e adie o que pode esperar.",
+      "pending": {
+        "title": "Pendentes",
+        "body": "As tarefas aparecem aqui quando têm um resultado ou aguardam a sua resposta."
+      },
+      "done": {
+        "title": "Concluído",
+        "body": "Resolveu? Um clique em Concluído move-a para Tratadas. Volta sozinha se houver novidades."
+      },
+      "snooze": {
+        "title": "Adiadas",
+        "body": "Sem tempo agora? Escolha uma hora e ela volta para Pendentes."
+      },
+      "start": "Começar",
+      "note": "Volte à lista de tarefas a qualquer momento com o botão no topo da barra lateral."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Bem-vindo ao Cindy",
@@ -21877,6 +22013,7 @@
     "removeTitle": "Remover {{name}}?",
     "removeDescription": "O Cindy deixará de atribuir tarefas a esta conta. A sessão da CLI e o histórico de conversas permanecem neste computador.",
     "failed": "Não foi possível ler ou atualizar a conta. Verifique a sessão da CLI e a ligação à rede e tente novamente.",
+    "unreachable": "Não foi possível contactar o serviço da conta, por isso não é possível confirmar a sessão. Verifique a ligação à rede e tente novamente.",
     "openDirectory": "Abrir pasta da conta",
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Pode ter sido movida ou eliminada.",
     "loginAgain": "Iniciar sessão novamente",
@@ -22158,6 +22295,19 @@
       "network": "Ligação perdida, a tentar novamente…",
       "timeout": "Tempo de ligação esgotado, a tentar novamente…",
       "server": "Servidor ocupado, a tentar novamente…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Alargar as permissões desta conversa?",
+    "message": "Permitir que “{{name}}” utilize “{{mode}}” em “{{conversation}}” no projeto “{{project}}”?",
+    "detail": "Isto é mais amplo do que a definição do projeto de mensagens ({{projectMode}}). Se permitir, este plugin poderá utilizar este nível de permissão neste projeto, apenas nas suas próprias sessões. Pode voltar a seguir a definição de mensagens no plugin a qualquer momento.",
+    "groupWarning": "Outros membros também podem enviar mensagens neste grupo. Quanto mais ampla for a permissão, menos ações lhe pedem confirmação; confirme que confia em todos no grupo.",
+    "allow": "Permitir",
+    "cancel": "Cancelar",
+    "modes": {
+      "ask": "Permissões predefinidas",
+      "auto": "Revisão automática",
+      "bypassPermissions": "Acesso total"
     }
   }
 }

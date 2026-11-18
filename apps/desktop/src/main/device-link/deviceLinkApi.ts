@@ -145,7 +145,7 @@ function officialDeviceLinkApiFetch<T>(
 }
 
 /**
- * The official Device Link device list alone, for Agent-Net's check of removed devices (agentNetMembership.ts reads it in
+ * The official Device Link device list alone, for Agent-Net's check of removed devices (packages/agent-net/src/membership.ts reads it in
  * the background while Agent-Net is on). Behind the same throttle as every other read of `/devices`: not sent inside a
  * 429 window, and a 429 it gets is recorded for the others.
  */
@@ -236,7 +236,7 @@ async function deviceLinkApiFetch<T>(
         assertCurrent();
       }
       // Refuse it on Agent-Net here right away as well, without waiting for the next read of the Device Link device list
-      // (agentNetMembership.ts); the account and selection are still the ones that removed it (assertCurrent).
+      // (packages/agent-net/src/membership.ts); the account and selection are still the ones that removed it (assertCurrent).
       if (opts.method === 'DELETE' && deletion?.deleted === true && deletion.deviceId === target) runtime.agentNetNoteDeviceRemoved(target);
       return result;
     }

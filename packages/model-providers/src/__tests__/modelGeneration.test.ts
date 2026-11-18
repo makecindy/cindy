@@ -36,18 +36,19 @@ describe('new model generation defaults', () => {
     }
   });
 
-  // Unit: the official-endpoint GPT-6.2 Sol record keeps the 272K working default that future
-  // IDs inherit. Without its own capacity, a verified 272K window becomes a hard ceiling and an
+  // Unit: official-endpoint Sol / Terra / Luna records keep the 272K working default that future
+  // IDs inherit. Without their own capacity, a verified 272K window becomes a hard ceiling and an
   // explicit 500K task budget is clamped (review on #11172). buildUserProvider is the entry.
-  it('keeps the public capacity beside the 272K working default for GPT-6.2 Sol on the official API', () => {
-    const runtime = { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses' as const, models: discovered('gpt-6.2-sol') };
-    const provider = buildUserProvider({ id: 'openai-api', name: 'OpenAI API', runtimes: { codex: runtime, pi: runtime } },
-      { modelRegistry: BUNDLED_CATALOG.modelRegistry });
-    for (const agent of ['codex', 'pi'] as const) {
-      expect(provider.models[agent]![0]).toMatchObject({ id: 'gpt-6.2-sol', contextWindow: 272000,
-        contextWindowMax: 1050000, contextWindowVerified: true });
-    }
-  });
+  it.each(['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna'])(
+    'keeps the public capacity beside the 272K working default for %s on the official API', id => {
+      const runtime = { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses' as const, models: discovered(id) };
+      const provider = buildUserProvider({ id: 'openai-api', name: 'OpenAI API', runtimes: { codex: runtime, pi: runtime } },
+        { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      for (const agent of ['codex', 'pi'] as const) {
+        expect(provider.models[agent]![0]).toMatchObject({ id, contextWindow: 272000,
+          contextWindowMax: 1050000, contextWindowVerified: true });
+      }
+    });
 
   it('uses a target maximum-only report before inherited working windows without verifying it', () => {
     const provider = build([

@@ -328,6 +328,22 @@ PROJECT_MISMATCH 表示换了项目或任务被移动，应新建任务并保留
 不能改投插件默认模型。权限收紧与项目移除会在派发时再检查，插件不能绕过。项目属于插件宿主电脑，
 远程模型来源不把项目搬到另一台电脑。
 
+IM 入口插件在 ghost.json 顶层声明 `imEntrance: true`，「设置 → IM 机器人」会列出它，并在用户没开官方
+机器人时也显示「项目与模型」，让用户能改这份共用配置。声明只影响展示，不授予能力。
+
+**按群聊/私聊单独设置**：`capabilities().imProjectOverrides === true` 时，插件可以让某个群聊或私聊
+不跟随项目的模型与权限，目录始终跟随项目。`imProjectConfig({imProject})` 返回此刻「跟随 IM」的
+`{imProject, route, permissionMode}`，用来在页面上显示。`create` 和 `followImProject` 可带
+`imOverride: {route?, permissionMode?, permissionGrant?}`，省略的字段跟随项目；route 用统一选择器
+（`cindy.pickModel`）返回的整份 route，原样保存与回传。权限与项目一样或更严时直接生效；比项目更宽时
+先在用户点选后调用 `confirmImPermission({imProject, permissionMode, conversation:{label, kind:'group'|'direct'}})`，
+Host 弹出 Cindy 自己的确认框（页面画不出、点不到）；允许后返回 `{granted:true, grant}`，把 `grant`
+与该群聊/私聊的覆盖一起保存并放进 `imOverride.permissionGrant`；拒绝返回 `{granted:false}`。不更宽时直接
+返回 `{granted:true}`。授权只对本插件、本项目有效，卸载后失效，更新插件保留；没有有效授权时
+`create` / `followImProject` 返回 `CONFIRMATION_REQUIRED`，提示用户在插件页重新确认，不要自动改用别的权限。
+改回跟随项目时去掉 `imOverride` 即可。创建键不含覆盖，改了覆盖后重试同一键返回原任务，再用
+`followImProject` 应用新覆盖。在消息到来时（后台）不要调用 `confirmImPermission`，它只用于用户正在操作的页面。
+
 **远程模型执行**：`capabilities().remoteRoutes === true` 时，
 `create` 和 `setModel` 的完整 route 可带 `agentDeviceId`（同账号其他电脑或 `share:<shareId>`）。
 省略表示插件运行电脑；它选择 Agent 执行来源，任务记录、文件、权限和结果仍归插件运行电脑。

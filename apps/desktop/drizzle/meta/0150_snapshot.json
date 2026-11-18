@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "df308144-d945-46b7-af01-558aa8d0d0bf",
+  "id": "1610a85c-5ef6-48ee-97f4-57557f37c384",
   "prevId": "37b05c44-2de8-4e4e-aa5f-21d3ed8bfc4c",
   "tables": {
     "account_usage_snapshots": {
@@ -1999,13 +1999,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'{}'"
-        },
-        "stdio": {
-          "name": "stdio",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "sort_order": {
           "name": "sort_order",
@@ -5943,6 +5936,20 @@
         },
         "pinned_at": {
           "name": "pinned_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "snoozed_until": {
+          "name": "snoozed_until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "snoozed_at": {
+          "name": "snoozed_at",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,

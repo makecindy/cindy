@@ -19,13 +19,13 @@ import { acceptTransportStatement } from './agentNetTransportStatement.js';
 import { deviceName } from './deviceName.js';
 import { authorizeAgentNetSharingRequest, prepareAgentNetSharingPrimary } from './agentNetSharingPolicy.js';
 import { createLogger } from '../logger';
-import { AgentNetMembership } from './agentNetMembership.js';
+import { AgentNetMembership } from '@cindy/agent-net';
 import { isMobilePlatform } from './controllerPlatform.js';
 import { readAgentNetDirectoryCache, writeAgentNetDirectoryCache } from './agentNetDirectoryCache.js';
 
 /** Relay connection lifecycle, keepalive and per-peer route changes (local log only). */
 const agentNetLog = createLogger('agent-net');
-let current: AgentNetAppSocket | null = null;
+let current: AgentNetWorkerSocket | null = null;
 /**
  * 上一条主连接（关掉以后、新的连上之前）。只用来回答「这台设备是不是本账号的 Agent-Net 设备」：重连期间 current 为空，
  * 原来一律答「不是旧版设备」，只走 Device Link 的设备（没开 Agent-Net 的手机、旧版电脑）在中转连接好好的时候也连不上。
@@ -49,7 +49,7 @@ let listedPhones: { scope: string; ids: readonly string[] } | null = null;
 function noteListedPhones(scope: string, devices: readonly DeviceLinkListedDevice[]): void {
   listedPhones = { scope, ids: devices.filter((device) => isMobilePlatform(device.platform)).map((device) => device.deviceId) };
 }
-/** 官方 Agent-Net 上不认 Device Link 已删除的设备（agentNetMembership.ts）；按账号与网络（membershipScope）各算各的。 */
+/** 官方 Agent-Net 上不认 Device Link 已删除的设备（packages/agent-net/src/membership.ts）；按账号与网络（membershipScope）各算各的。 */
 const membership = new AgentNetMembership({
   readDeviceLinkDeviceIds: async () => {
     const scope = membershipScope;
@@ -92,7 +92,7 @@ export function agentNetListedPhones(): readonly string[] {
 }
 const relayListeners = new Set<() => void>();
 const pathListeners = new Set<() => void>();
-/** 和对端的 Agent-Net 连接建好、断开或换了路径（直连 ↔ 中转）：远程连接拓扑页据此马上刷新（index.ts peerLinksPush）。 */
+/** Agent-Net 握手和路径状态变化，供远程连接拓扑刷新。 */
 export function onAgentNetPathChange(listener: () => void): () => void {
   pathListeners.add(listener);
   return () => { pathListeners.delete(listener); };
@@ -125,7 +125,7 @@ function relayChanged(): void {
 export function agentNetNetworkChanged(): void { current?.networkChanged?.(); }
 /** 本机在官方 Device Link 里删掉了这台设备：Agent-Net 上马上不认它。 */
 export function agentNetNoteDeviceRemoved(deviceId: string): void { currentMembership()?.noteRemoved(deviceId); }
-/** 官方 Agent-Net 上认不认这台设备：Device Link 里删掉了、还没重新登录的不认（agentNetMembership.ts）；自建中转上都认。 */
+/** 官方 Agent-Net 上认不认这台设备：Device Link 里删掉了、还没重新登录的不认（packages/agent-net/src/membership.ts）；自建中转上都认。 */
 export function agentNetDeviceAccepted(deviceId: string): boolean {
   const rule = currentMembership()?.rule();
   return !rule || (!rule.refused.includes(deviceId) && (rule.allowed === null || rule.allowed.includes(deviceId)));
@@ -366,6 +366,9 @@ export async function createAgentNetOrLegacySocket<T>(
 export function agentNetShouldUseLegacyPeer(id: string): boolean { return (current ?? previousSocket)?.knowsPeer(id) === false; }
 export function agentNetShouldProbeLegacyPeer(id: string): boolean { return !!current?.knowsPeer(id) && !current.supports(id); }
 export function agentNetPeerSnapshot(id: string) { return current?.peerSnapshot(id) ?? null; }
+export function agentNetPeerRoutes() {
+  return current?.peerRoutes().filter(({ deviceId }) => !isScopedPeer(deviceId) && agentNetDeviceAccepted(deviceId)) ?? [];
+}
 export function currentAgentNetScopedTarget(peer: string) { return current?.scopedPeerTarget(peer) ?? null; }
 export function agentNetMediaTarget(peer: string) {
   if (!current?.knowsPeer(peer)) return null;
@@ -551,11 +554,11 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   // 每次和对端换上一条连接都会报一次路径（之前的连接带着它的会话一起关了），断开时报 null。
   const connectedAt = new Map<string, number>();
   const notifyCovered = new Set<string>();
-  let socket: AgentNetAppSocket;
+  let socket: AgentNetWorkerSocket;
   try { socket = await AgentNetWorkerSocket.open({ workerFile, assertCurrent: assertOwner, client: api, module, log: agentNetLog, userId: api.certificate.subject, cachedDirectory, directoryExpiresAt, stunServers, relayUdpServer,
     ...(members ? { peerRule: members.rule() } : {}),
     scoped: true, onDelegationRequests: requests => approver.update(requests),
-    onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); pathChanged(); },
+    onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); },
     onDirectory(directory) {
       assertOwner();
       liveMembers()?.noteDirectory(directory.map((view) => ({ deviceId: view.certificate.deviceId, online: view.online })));
@@ -575,6 +578,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   notifyCoverage.set(socket, notifyCovered);
   const previous = current; current = socket; previous?.close();
   socket.on('relay', () => { if (current === socket) relayChanged(); });
+  socket.on('peer-routes-changed', () => { if (current === socket) pathChanged(); });
   relayChanged();
   // 打开期间结论可能又变了（列表读完、本机刚删了设备）：以现在的为准。
   const live = liveMembers();

@@ -1,4 +1,4 @@
-import { canStagePeerMedia } from "./peerFileRegistry";
+import { canStagePeerMedia, peerStreamTransport } from "./peerFileRegistry";
 import {
   createFileReadQueue,
   createPeerTransferCooldown,
@@ -56,6 +56,8 @@ let swept = false;
 const origin = "https://cindy-file-peer.invalid";
 /** Active transfers refresh route information once per interval. */
 const PROGRESS_SAMPLE_MS = FILE_PEER_PROGRESS_SAMPLE_MS;
+/** Blocks of one ticket in flight on the Agent-Net session (as the Desktop's STREAM_READS_IN_FLIGHT: the data channel's 1 MiB window). */
+const STREAM_READS_IN_FLIGHT = 4;
 /**
  * Route/diagnostics probe budget, independent of the generic 15s command timeout: a stalled
  * runtime.stats() voids one sample only and never blocks later sampling ticks.
@@ -112,6 +114,11 @@ export function PeerFileTransport() {
       { handle: ReturnType<File["open"]>; size: number; offset: number; onProgress?: (loaded: number, total: number) => void }
     >(),
   );
+  /**
+   * File connections on the Agent-Net session (docs/dev-rules/protocol-compatibility/agent-net-file-stream.md): local id → its
+   * computer and the computer's connection id. No WebRTC for them; `command` serves their actions here (streamCommand).
+   */
+  const streams = useRef(new Map<string, { device: string; remote: string }>());
   const epoch = useRef(0);
   const cooldown = useRef(createPeerTransferCooldown());
   const cacheOwner = JSON.stringify([getActiveMobileSessionRealm(), auth.user?.id]);
@@ -128,7 +135,96 @@ export function PeerFileTransport() {
       `window.filePeerMessage(${JSON.stringify(message)});true;`,
     );
   }
+  /** A block from the Agent-Net session into its sink, with the same checks as the WebView runtime's `write` below. */
+  function writeSink(id: unknown, offset: unknown, base64: unknown): boolean {
+    const sink = typeof id === "string" ? sinks.current.get(id) : undefined;
+    if (!sink || offset !== sink.offset || typeof base64 !== "string"
+      || base64.length > Math.ceil(FILE_PEER_WRITE_BATCH_BYTES / 3) * 4) return false;
+    const binary = atob(base64),
+      bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    if (bytes.length > FILE_PEER_WRITE_BATCH_BYTES || sink.offset + bytes.length > sink.size) return false;
+    sink.handle.writeBytesSync(bytes);
+    sink.offset += bytes.length;
+    try { sink.onProgress?.(sink.offset, sink.size); } catch { /* Observer only. */ }
+    for (const operation of pending.current.values()) operation.refresh?.();
+    return true;
+  }
+  /**
+   * As the Desktop's streamCommand (apps/desktop/src/main/device-link/filePeer.ts): a session connection's actions go on the
+   * invoke channel. `invoke` is the data channel RPC as a `stream-rpc` (attachment blocks and range opens included);
+   * `receive` pulls the ticket's blocks with `stream-read`; `close` and `stats` stay here.
+   */
+  function streamCommand(stream: { device: string; remote: string }, action: string, args: unknown[]): Promise<unknown> {
+    if (action === "close") { streams.current.delete(String(args[0])); return Promise.resolve(undefined); }
+    if (action === "stats") return Promise.resolve(undefined);
+    if (action === "invoke") {
+      const [, payload, timeoutMs] = args as [string, string, number | undefined];
+      return link.invoke<unknown>(stream.device, FILE_PEER_CHANNEL, [{ action: "stream-rpc", connection: stream.remote, payload,
+        ...(timeoutMs ? { timeoutMs } : {}) }]).then((result) => {
+        if (typeof result !== "string") throw new Error("FILE_PEER_UNAVAILABLE");
+        return result;
+      });
+    }
+    if (action === "receive") return streamReceive(stream, args as [string, string, number, string]);
+    return Promise.reject(new Error("FILE_PEER_UNAVAILABLE"));
+  }
+  /**
+   * STREAM_READS_IN_FLIGHT blocks at a time, written in order through writeSink; the last read (0 bytes at the end) lets the
+   * computer close the source. Tracked like the WebView's receive: progress refreshes its timeout, rejectReceive cancels it.
+   */
+  function streamReceive(stream: { device: string; remote: string }, [id, ticket, size, sink]: [string, string, number, string]) {
+    return new Promise<void>((resolve, reject) => {
+      const key = randomUUID();
+      let done = false;
+      const fail = (error: Error) => {
+        if (done) return;
+        done = true; clearTimeout(entry.timer); pending.current.delete(key); reject(error);
+      };
+      const entry = {
+        resolve: () => undefined, reject: fail, action: "receive", connection: id as unknown,
+        timer: setTimeout(() => fail(new Error("FILE_PEER_TIMEOUT")), FILE_PEER_RECEIVE_TIMEOUT_MS),
+        refresh: () => {
+          clearTimeout(entry.timer);
+          entry.timer = setTimeout(() => fail(new Error("FILE_PEER_TIMEOUT")), FILE_PEER_RECEIVE_TIMEOUT_MS);
+        },
+      };
+      pending.current.set(key, entry);
+      const read = (offset: number, maxBytes: number) => link.invoke<unknown>(stream.device, FILE_PEER_CHANNEL,
+        [{ action: "stream-read", connection: stream.remote, ticket, offset, maxBytes }]).then((result) => {
+        if (typeof result !== "string") throw new Error("FILE_PEER_BLOCK");
+        return result;
+      });
+      void (async () => {
+        const queue: Array<{ offset: number; bytes: number; data: Promise<string> }> = [];
+        let next = 0, queuedEnd = false;
+        const fill = () => {
+          while (queue.length < STREAM_READS_IN_FLIGHT && !queuedEnd && !done) {
+            const bytes = Math.min(FILE_PEER_WRITE_BATCH_BYTES, size - next);
+            const data = read(next, Math.max(1, bytes));
+            data.catch(() => undefined); // awaited below in order; a later block's failure must not surface unhandled
+            queue.push({ offset: next, bytes, data });
+            next += bytes;
+            if (bytes === 0) queuedEnd = true;
+          }
+        };
+        fill();
+        while (queue.length) {
+          const block = queue.shift()!;
+          const base64 = await block.data;
+          if (done) return;
+          if (block.bytes === 0) { if (base64 !== "") throw new Error("FILE_PEER_BLOCK"); break; }
+          if (!writeSink(sink, block.offset, base64) || sinks.current.get(sink)?.offset !== block.offset + block.bytes)
+            throw new Error("FILE_PEER_BLOCK");
+          fill();
+        }
+        if (done) return;
+        done = true; clearTimeout(entry.timer); pending.current.delete(key); resolve();
+      })().catch((error) => fail(error instanceof Error ? error : new Error("FILE_PEER_BLOCK")));
+    });
+  }
   async function command(action: string, args: unknown[], timeoutMs?: number) {
+    const stream = typeof args[0] === "string" ? streams.current.get(args[0]) : undefined;
+    if (stream) return streamCommand(stream, action, args);
     return new Promise<unknown>((resolve, reject) => {
       const id = randomUUID();
       let timer = setTimeout(
@@ -234,6 +330,7 @@ export function PeerFileTransport() {
       const old = connection;
       connection = null;
       if (old) {
+        if (!current()) streams.current.delete(old.id);
         if (current()) void command("close", [old.id]).catch(() => {});
         // Backgrounding must release the host too, while the existing WSS is alive.
         if (notify && epoch.current === generation && liveView.current === viewKey)
@@ -353,6 +450,17 @@ export function PeerFileTransport() {
             return null;
           }
           if (range && caps.rangeReads !== true) return null;
+          if ((caps as { streamTransport?: unknown }).streamTransport === true && peerStreamTransport(device)) {
+            // Both on Agent-Net: the bytes go on the session, no WebRTC and no TURN (as between two Desktops).
+            step = "stream-open";
+            const opened = (await invoke({ action: "stream-open",
+              ...(caps.sessionBound === true ? { sessionBound: true } : {}) })) as { connection?: unknown } | null;
+            if (!opened || typeof opened.connection !== "string" || !/^[a-f0-9-]{36}$/.test(opened.connection))
+              throw new Error("FILE_PEER_ANSWER");
+            remote = opened.connection;
+            streams.current.set(id, { device, remote });
+            if (!current() || signal?.aborted) throw new Error("FILE_PEER_CANCELLED");
+          } else {
           step = "ice-config";
           const servers = await resolveDesktopIceServers(
             () =>
@@ -396,6 +504,7 @@ export function PeerFileTransport() {
           step = "answer";
           await command("answer", [id, answer.sdp]);
           if (!current() || signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+          }
           connection = {
             id,
             remote,
@@ -410,6 +519,7 @@ export function PeerFileTransport() {
           mobileDebugLog("debug", "files", "direct transfer connected", {
             trace,
             ms: Date.now() - startedAt,
+            transport: streams.current.has(id) ? "agent-net-session" : "webrtc",
           });
         }
         void command('stats', [id]).then((raw) => {
@@ -804,6 +914,7 @@ export function PeerFileTransport() {
         } catch {}
       }
       sinks.current.clear();
+      streams.current.clear();
       view.current?.injectJavaScript(
         "if (typeof runtime !== 'undefined') runtime.dispose();true;",
       );

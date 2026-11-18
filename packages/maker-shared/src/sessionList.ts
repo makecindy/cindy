@@ -26,6 +26,8 @@ export function compareSessionListStrings(left: string, right: string): number {
 }
 
 export interface RemoteSessionListSessionLike extends SessionInterruptionState {
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
   tags?: import('./taskTags').TaskTag[];
   _count?: { messages?: number } | null;
   agentKind: 'cc' | 'codex' | string;
@@ -141,6 +143,8 @@ export interface RemoteSessionScheduleInfo {
   nextFireAt?: number;
   /** 同一会话的所有已知 schedule 绑定都已 paused / expired 时为 true；缺失按 false。 */
   allSchedulesStopped?: boolean;
+  /** An active PR follow-up currently targets this task, including between runs. */
+  hasActiveFollowUp?: boolean;
   unreadRunIds: string[];
   hasUnreadFailedRun?: boolean;
   latestFailedRun?: FailedScheduleRunSnapshot;
@@ -710,7 +714,7 @@ export function buildSessionScheduleIndex(
         unreadRunIds.push(run.id);
       }
       const candidate = activeFailures.has(run.id) ? {
-        runId: run.id, firedAt, scheduleId: run.scheduleId,
+        runId: run.id, firedAt, finishedAt: toMillis(run.finishedAt) || undefined, scheduleId: run.scheduleId,
         failureKind: classifyScheduleFailure(run),
         errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
         missingPlugin: run.status === 'failed' ? scheduleRunMissingPlugin(run) : undefined,
@@ -740,7 +744,11 @@ export function buildSessionScheduleIndex(
       const status = schedulesById.get(scheduleId)?.status;
       return status === 'paused' || status === 'expired';
     });
-    index.set(sessionId, { ...info, allSchedulesStopped });
+    const hasActiveFollowUp = Array.from(scheduleIds).some((scheduleId) => {
+      const schedule = schedulesById.get(scheduleId);
+      return schedule?.status === 'active' && schedule.targetSessionId === sessionId;
+    });
+    index.set(sessionId, { ...info, allSchedulesStopped, hasActiveFollowUp });
   }
   return index;
 }
@@ -1040,6 +1048,7 @@ function mergeScheduleInfo(group: readonly RemoteSessionListItem[]): RemoteSessi
   const unreadRunIds = Array.from(new Set(group.flatMap((item) => item.scheduleInfo?.unreadRunIds ?? [])));
   return {
     ...base,
+    hasActiveFollowUp: group.some((item) => item.scheduleInfo?.hasActiveFollowUp === true),
     allSchedulesStopped: group.every((item) => item.scheduleInfo?.allSchedulesStopped === true),
     unreadRunIds,
     unreadCount: unreadRunIds.length,

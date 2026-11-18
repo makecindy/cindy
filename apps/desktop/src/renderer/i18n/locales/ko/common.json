@@ -5418,8 +5418,19 @@
       "title": "메시지 입력",
       "sendShortcut": {
         "label": "{{shortcut}}로 보내기",
-        "hint": "켜면 {{shortcut}}로 메시지를 보냅니다. 끄면 Enter로 보내고 Shift+Enter로 줄을 바꿉니다.",
-        "ariaLabel": "{{shortcut}}로 메시지 보내기"
+        "hint": "Enter로 전송하고 Shift+Enter로 줄을 바꿉니다.",
+        "ariaLabel": "{{shortcut}}로 메시지 보내기",
+        "hintModifierEnter": "{{shortcut}}로 전송하고 Enter로 줄을 바꿉니다."
+      },
+      "followUp": {
+        "label": "실행 중 전송 방식",
+        "hintQueue": "작업 실행 중에는 전송 버튼과 {{send}}로 대기열에 추가합니다.",
+        "hintSteer": "작업 실행 중에는 전송 버튼과 {{send}}로 실행 중인 작업에 끼어듭니다.",
+        "ariaLabel": "작업 실행 중 전송 방식",
+        "options": {
+          "queue": "대기열에 추가",
+          "steer": "끼어들기"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -6447,7 +6458,8 @@
           "defaultProjectTag": "기본",
           "defaultProjectFullAccessWarning": "기본 프로젝트 ‘{{name}}’의 권한이 전체 액세스입니다. 어느 그룹에서 @로 불러도 이 안에서 전체 액세스로 실행됩니다.",
           "sharedSettingsPointer": "프로젝트, 모델, 권한은 모든 공식 봇이 함께 씁니다.",
-          "sharedSettingsPointerAction": "설정 열기"
+          "sharedSettingsPointerAction": "설정 열기",
+          "workspacesCardDescriptionWithPlugins": "모든 공식 봇과 IM 플러그인이 함께 쓰는 설정입니다. 프로젝트는 사이드바와 같으며 생성·이름 변경·제거는 사이드바에서 합니다. 채팅에서 /model로 바꾼 내용도 여기에 반영됩니다. 플러그인에서 채팅별로 바꾼 모델과 권한은 영향을 받지 않습니다."
         },
         "binding": {
           "copyLink": "링크 복사",
@@ -6756,6 +6768,7 @@
           "latency": "지연",
           "lastSeen": "마지막 접속",
           "controlling": "이 컴퓨터를 제어 중",
+          "protocol": "연결 방식",
           "rttNote": "최근 측정",
           "manage": "기기 관리…",
           "linkStatus": "「{{name}}」 연결",
@@ -6980,11 +6993,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "공식",
-        "personal": "개인"
+        "personal": "개인",
+        "plugins": "플러그인"
       },
       "tips": {
         "cindy": "Cindy가 제공하고 관리합니다. 봇을 직접 만들거나 인증 정보를 준비할 필요 없이 안내에 따라 연결하면 바로 사용할 수 있습니다.",
-        "personal": "본인의 계정이나 봇을 연결하고 필요한 인증 정보를 직접 관리합니다. 계정, 권한 및 설정은 채널별로 저장됩니다."
+        "personal": "본인의 계정이나 봇을 연결하고 필요한 인증 정보를 직접 관리합니다. 계정, 권한 및 설정은 채널별로 저장됩니다.",
+        "plugins": "설치된 플러그인이 제공하는 IM 입구입니다. 로그인과 연결은 플러그인 페이지에서 합니다. 프로젝트, 모델, 권한은 기본적으로 '프로젝트 및 모델' 설정을 따르며, 플러그인에서 채팅별로 바꿀 수도 있습니다."
       },
       "defaults": {
         "title": "새 대화 설정",
@@ -7016,6 +7031,10 @@
         },
         "groupPermissionLabel": "그룹에서 새 작업을 만들 때의 권한 모드",
         "groupPermissionDescription": "그룹 채팅에서 새 작업을 만들 때 공통으로 사용하는 권한 모드입니다(@bot으로 스레드 열기, /new, /ctr 모두 해당). 기본값은 자동 승인이며, 위의 권한 모드는 개인 채팅에만 적용됩니다. 그룹 컨텍스트에는 멤버가 조작할 수 있는 내용이 포함되므로 전체 액세스를 선택하면 확인 없이 바로 실행됩니다. 신뢰할 수 있는 그룹에서만 선택하세요. 변경은 이후에 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 개별 전환합니다."
+      },
+      "plugins": {
+        "rowHint": "로그인, 연결, 채팅별 설정은 플러그인 페이지에 있습니다.",
+        "open": "플러그인 열기"
       }
     },
     "shortcuts": {
@@ -8246,6 +8265,8 @@
         "subscribeMessageDetail": "저장된 사용자 메시지와 AI 답변을 수신합니다. 첨부 파일은 별도의 읽기와 전달로 가져옵니다.",
         "subscribeToolExecution": "도구 실행 이벤트",
         "subscribeToolExecutionDetail": "도구 이름, 입력, 결과 및 오류를 수신합니다. 실행을 변경하지 않고 관찰만 합니다.",
+        "subscribeNativeRecovery": "네이티브 복구 이벤트",
+        "subscribeNativeRecoveryDetail": "재시도, 컨텍스트 압축 및 작업 중지에 대한 엔진 상태를 수신합니다.",
         "subscribeTaskState": "작업 상태 이벤트",
         "subscribeTaskStateDetail": "작업의 실행, 대기, 완료, 보관 및 숨김 상태 변경을 수신합니다.",
         "subscribeActivity": "AI가 언제 생각하고 언제 사용자를 기다리는지 수신",
@@ -8461,6 +8482,24 @@
         "openInSidebar": "사이드바에서 열기",
         "panelPageHosted": "플러그인 페이지에서 열림 · 벗어나면 자동으로 닫힘",
         "panelNone": "이 플러그인에는 패널이 없습니다",
+        "githubRelease": {
+          "title": "플러그인 업데이트",
+          "installed": "설치된 버전 {{version}}",
+          "upstream": "배포 버전 {{version}}",
+          "prerelease": "사전 릴리스",
+          "check": "업데이트 확인",
+          "update": "다운로드 및 설치",
+          "connect": "GitHub에 로그인",
+          "checking": "업데이트 확인 중…",
+          "updating": "다운로드 및 설치 중…",
+          "available": "새 버전이 있습니다.",
+          "current": "최신 버전입니다.",
+          "updated": "플러그인을 업데이트했습니다.",
+          "empty": "설치할 수 있는 릴리스가 없습니다.",
+          "sign-in": "업데이트를 확인하려면 GitHub에 로그인하세요.",
+          "forbidden": "현재 GitHub 계정에 비공개 저장소 읽기 권한이 없습니다.",
+          "unavailable": "업데이트를 확인하거나 설치하지 못했습니다. 다시 시도하세요."
+        },
         "customSlotTitle": "플러그인 사용자 정의 설정 영역",
         "dangerTitle": "플러그인 제거",
         "infoContents": "포함",
@@ -9815,6 +9854,41 @@
       },
       "providerTooltip": "세션에 현재 선택된 제공자입니다. 지정하지 않은 경우 비워 둡니다.",
       "tokensTooltip": "이 세션이 {{range}} 동안 사용한 토큰만 집계합니다."
+    },
+    "auxiliary": {
+      "title": "보조 모델 사용량",
+      "label": "보조 요청",
+      "purpose": "용도",
+      "requests": "기록된 요청",
+      "description": "총 토큰에 포함됩니다. 제공자가 반환한 사용량만 기록하며, 보고되지 않은 사용량과 과거 요청은 추정하지 않습니다.",
+      "sources": {
+        "title": "제목 생성",
+        "task-summary": "작업 요약",
+        "prompt-prediction": "입력 제안",
+        "working-status": "작업 상태",
+        "help": "도움말",
+        "bot-creation": "동료 만들기",
+        "bot-opening": "동료 인사말",
+        "group-planning": "그룹 계획",
+        "ambient-reply": "답장 판단",
+        "auto-review": "자동 검토",
+        "tool-loop-review": "도구 반복 검토",
+        "memory-review": "메모리 검토",
+        "git-summary": "변경 요약",
+        "hook-generation": "자동화 스크립트",
+        "automation-verification": "가져오기 검증",
+        "plugin-text": "플러그인 텍스트",
+        "voice-dialogue": "음성 대화",
+        "voice-exit": "음성 종료 판단",
+        "voice-refinement": "음성 텍스트 다듬기",
+        "dictionary-learning": "사전 학습",
+        "embedding-query": "벡터 검색",
+        "embedding-index": "벡터 색인",
+        "web-search": "웹 검색",
+        "provider-probe": "연결 테스트",
+        "vision-bridge": "비전 브리지",
+        "auxiliary": "기타 보조 요청"
+      }
     }
   },
   "usageDashboard": {
@@ -11204,6 +11278,7 @@
       "unavailableTitle": "이 그룹 채팅을 더 이상 사용할 수 없습니다",
       "unavailableDescription": "삭제되었을 수 있습니다. 동반자 페이지로 돌아가 다른 그룹 채팅이나 동반자를 열어 보세요.",
       "sidebar": {
+        "threadReply": "스레드 답장",
         "title": "그룹 채팅",
         "empty": "아직 메시지가 없습니다",
         "preview": "{{name}}: {{text}}",
@@ -11536,6 +11611,7 @@
           "sharedReplyFrom": "{{name}}의 스레드 답글을 공유했습니다",
           "sharedReply": "스레드 답글을 공유했습니다",
           "edited": "수정됨",
+          "replyNotFound": "이 답글을 찾을 수 없습니다.",
           "sourceUnavailable": "원래 답글이 삭제되었거나 볼 권한이 없습니다.",
           "viewThread": "스레드 보기",
           "viewInMain": "메인 채팅에서 보기",
@@ -13632,9 +13708,8 @@
     "sendButton": {
       "send": "메시지 전송",
       "queue": "대기열에 추가",
-      "queueTooltip": "클릭하면 대기열에 추가됩니다. {{shortcut}}을(를) 누르면 작업을 중단하지 않고 끼어듭니다",
-      "queueTooltipSendMode": "클릭하면 대기열에 추가하고, {{shortcut}}를 누르면 이 메시지를 보냅니다.",
-      "stop": "생성 중지"
+      "stop": "생성 중지",
+      "steer": "실행 중인 작업에 끼어들기"
     },
     "pluginSetup": {
       "account": {
@@ -14525,6 +14600,13 @@
       "runningWithWorktree_one": "완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningWithWorktree_other": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningWithWorktree_many": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다."
+    },
+    "followUpHint": {
+      "queueDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 대기열에 추가됩니다.",
+      "steerDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 실행 중인 작업에 끼어듭니다.",
+      "switchToSteer": "기본값을 끼어들기로",
+      "switchToQueue": "기본값을 대기열 추가로",
+      "dismiss": "안내 닫기"
     }
   },
   "onboarding": {
@@ -16590,6 +16672,36 @@
         "priority": "우선순위",
         "activity": "최근 활동",
         "created": "생성 시간"
+      },
+      "inbox": {
+        "thisEvening": "오늘 저녁",
+        "tomorrow": "내일",
+        "nextWeek": "다음 주",
+        "custom": "직접 설정…",
+        "wakeAt": "다시 표시할 날짜와 시간",
+        "timeZone": "현지 시간 ({{zone}})",
+        "invalidTime": "1년 이내의 미래 날짜와 시간을 선택하세요.",
+        "inbox": "처리 대기",
+        "working": "진행 중",
+        "snoozed": "나중에 처리",
+        "archived": "처리됨",
+        "snooze": "나중에 처리",
+        "complete": "완료",
+        "wake": "지금 다시 표시",
+        "restore": "작업 복원",
+        "process": "처리됨으로 표시(보관)",
+        "empty": "받은 편지함이 비었습니다",
+        "snoozeFailed": "나중에 처리할 시간을 저장하지 못했습니다. 연결을 확인하고 작업이 있는 컴퓨터를 업데이트하세요.",
+        "hours": "{{count}}시간 후",
+        "hours_one": "{{count}}시간 후",
+        "hours_other": "{{count}}시간 후"
+      },
+      "taskListMode": {
+        "heading": "작업 모드",
+        "tasks": "작업 목록",
+        "inbox": "받은 편지함",
+        "enterInbox": "받은 편지함 모드로 전환",
+        "leaveInbox": "작업 목록 모드로 전환"
       }
     },
     "rename": {
@@ -16882,6 +16994,7 @@
         "menuSave": "저장",
         "menuInsertTable": "표 삽입",
         "externalChangeBlocked": "파일이 외부에서 변경되어 자동 저장을 멈췄습니다. 수동 저장으로 덮어쓸 수 있습니다.",
+        "targetChanged": "파일이 가리키는 위치가 바뀌었습니다. 초안은 편집기에 남아 있습니다. 초안을 복사한 후 파일을 다시 여세요.",
         "tableMenu": {
           "addRowAbove": "위에 행 추가",
           "addRowBelow": "아래에 행 추가",
@@ -19638,7 +19751,8 @@
           "expired": "만료됨",
           "voided": "무효화됨"
         }
-      }
+      },
+      "viewUsage": "사용량 보기"
     },
     "orders": {
       "title": "주문 내역",
@@ -21306,6 +21420,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "닫기",
+    "taskInbox": {
+      "title": "받은 편지함 사용법",
+      "lead": "작업은 상태에 따라 처리 대기, 진행 중, 나중에 처리, 처리됨으로 자동 분류됩니다. 받은 편지함을 그때그때 비우는 습관을 가장 추천합니다. 끝난 작업은 완료, 지금 처리하지 않을 작업은 나중에 처리하세요.",
+      "pending": {
+        "title": "처리 대기",
+        "body": "결과가 나왔거나 답변을 기다리는 작업이 여기에 나타납니다."
+      },
+      "done": {
+        "title": "완료",
+        "body": "처리가 끝나면 완료를 한 번 누르면 처리됨으로 이동합니다. 새 소식이 있으면 자동으로 돌아옵니다."
+      },
+      "snooze": {
+        "title": "나중에 처리",
+        "body": "지금 처리할 수 없다면 시간을 고르세요. 그 시간에 처리 대기로 돌아옵니다."
+      },
+      "start": "시작하기",
+      "note": "사이드바 위쪽 버튼으로 언제든 작업 목록으로 돌아갈 수 있습니다."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Cindy에 오신 것을 환영합니다",
@@ -21590,6 +21725,7 @@
     "removeTitle": "{{name}} 계정을 제거할까요?",
     "removeDescription": "Cindy가 이 계정에 작업을 배정하지 않습니다. CLI 로그인과 대화 기록은 이 컴퓨터에 유지됩니다.",
     "failed": "계정을 읽거나 업데이트하지 못했습니다. CLI 로그인과 네트워크 연결을 확인한 후 다시 시도하세요.",
+    "unreachable": "계정 서비스에 연결할 수 없어 로그인 상태를 확인하지 못했습니다. 네트워크를 확인한 후 다시 시도하세요.",
     "openDirectory": "계정 폴더 열기",
     "openDirectoryFailed": "계정 폴더를 열 수 없습니다. 이동되었거나 삭제되었을 수 있습니다.",
     "loginAgain": "다시 로그인",
@@ -21869,6 +22005,19 @@
       "network": "연결이 끊겨 다시 시도하는 중…",
       "timeout": "연결 시간이 초과되어 다시 시도하는 중…",
       "server": "서버가 혼잡해 다시 시도하는 중…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "이 채팅의 권한을 넓힐까요?",
+    "message": "'{{name}}'이(가) 프로젝트 '{{project}}'의 '{{conversation}}'에서 '{{mode}}'을(를) 사용하도록 허용할까요?",
+    "detail": "IM 프로젝트 설정({{projectMode}})보다 넓은 권한입니다. 허용하면 이 플러그인이 이 프로젝트에서 이 권한을 쓸 수 있으며, 플러그인 자신의 세션에만 적용됩니다. 플러그인에서 언제든지 IM 설정을 따르도록 되돌릴 수 있습니다.",
+    "groupWarning": "이 그룹에서는 다른 멤버도 메시지를 보낼 수 있습니다. 권한이 넓을수록 확인을 요청하는 작업이 줄어드니 그룹의 모든 사람을 신뢰할 수 있는지 확인하세요.",
+    "allow": "허용",
+    "cancel": "취소",
+    "modes": {
+      "ask": "기본 권한",
+      "auto": "자동 리뷰",
+      "bypassPermissions": "전체 접근"
     }
   }
 }

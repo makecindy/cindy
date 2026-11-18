@@ -5461,8 +5461,19 @@
       "title": "Message input",
       "sendShortcut": {
         "label": "Use {{shortcut}} to send",
-        "hint": "When enabled, {{shortcut}} sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.",
-        "ariaLabel": "Use {{shortcut}} to send messages"
+        "hint": "Enter sends. Shift+Enter inserts a new line.",
+        "ariaLabel": "Use {{shortcut}} to send messages",
+        "hintModifierEnter": "{{shortcut}} sends. Enter inserts a new line."
+      },
+      "followUp": {
+        "label": "While a task is running",
+        "hintQueue": "While a task runs, the Send button and {{send}} queue the message.",
+        "hintSteer": "While a task runs, the Send button and {{send}} steer the running task.",
+        "ariaLabel": "Message delivery while a task is running",
+        "options": {
+          "queue": "Queue",
+          "steer": "Steer"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -6490,7 +6501,8 @@
           "defaultProjectTag": "Default",
           "defaultProjectFullAccessWarning": "The default project “{{name}}” has Full access: an @mention from any group runs with full access inside it.",
           "sharedSettingsPointer": "Projects, models and permissions are shared by all official bots.",
-          "sharedSettingsPointerAction": "Open settings"
+          "sharedSettingsPointerAction": "Open settings",
+          "workspacesCardDescriptionWithPlugins": "Shared by every official bot and IM plugin. Projects come from your sidebar — create, rename, or remove them there. Changes made with /model in a chat show up here too. Models and permissions changed for a single chat in a plugin are not affected."
         },
         "binding": {
           "copyLink": "Copy link",
@@ -6799,6 +6811,7 @@
           "latency": "Latency",
           "lastSeen": "Last seen",
           "controlling": "Controlling this computer",
+          "protocol": "Connection",
           "rttNote": "last measured",
           "manage": "Manage device…",
           "linkStatus": "To {{name}}",
@@ -7023,11 +7036,13 @@
       "beta": "Beta",
       "groups": {
         "cindy": "Official",
-        "personal": "Personal"
+        "personal": "Personal",
+        "plugins": "Plugins"
       },
       "tips": {
         "cindy": "Provided and maintained by Cindy. No need to create a bot or supply credentials—follow the connection steps to get started.",
-        "personal": "Use your own account or bot and manage the required credentials yourself. Each channel keeps its own account, permissions, and settings."
+        "personal": "Use your own account or bot and manage the required credentials yourself. Each channel keeps its own account, permissions, and settings.",
+        "plugins": "IM entrances provided by installed plugins. Sign in and link accounts on the plugin's page. Projects, models and permissions follow Projects and models by default, and can be changed per chat in the plugin."
       },
       "defaults": {
         "title": "New Conversation Configuration",
@@ -7059,6 +7074,10 @@
         },
         "groupPermissionLabel": "Permission mode for new group tasks",
         "groupPermissionDescription": "Permission mode used for every task created in a group chat — @bot opening a topic, /new, and /ctr all use it; the permission mode above applies to direct messages only. Defaults to Auto approval. Group context can contain member-controlled content — choosing Full access executes actions without per-step confirmation, so only pick it for groups you trust. Changes apply to tasks created afterwards; switch an existing task with /permission in the group."
+      },
+      "plugins": {
+        "rowHint": "Sign-in, linking and per-chat settings are on the plugin's page.",
+        "open": "Open plugin"
       }
     },
     "shortcuts": {
@@ -8289,6 +8308,8 @@
         "subscribeMessageDetail": "Receives saved user messages and AI replies. Attachments use separate reading and handoff.",
         "subscribeToolExecution": "Tool execution events",
         "subscribeToolExecutionDetail": "Receives tool names, inputs, results and errors. Observes without changing execution.",
+        "subscribeNativeRecovery": "Native recovery events",
+        "subscribeNativeRecoveryDetail": "Receives engine status for retries, context compaction, and task stops.",
         "subscribeTaskState": "Task state events",
         "subscribeTaskStateDetail": "Receives changes to running, waiting, completion, archive and hidden task states.",
         "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",
@@ -8504,6 +8525,24 @@
         "openInSidebar": "Open in the sidebar",
         "panelPageHosted": "Opens from the Plugin page · closes when you leave",
         "panelNone": "This plugin has no panel",
+        "githubRelease": {
+          "title": "Plugin updates",
+          "installed": "Installed {{version}}",
+          "upstream": "Upstream {{version}}",
+          "prerelease": "Pre-release",
+          "check": "Check for updates",
+          "update": "Download and install",
+          "connect": "Sign in to GitHub",
+          "checking": "Checking for updates…",
+          "updating": "Downloading and installing…",
+          "available": "An update is available.",
+          "current": "The installed version is up to date.",
+          "updated": "Plugin updated.",
+          "empty": "No installable release is available.",
+          "sign-in": "Sign in to GitHub to check for updates.",
+          "forbidden": "This GitHub sign-in cannot read the private repository.",
+          "unavailable": "Couldn't check or install the update. Try again."
+        },
         "customSlotTitle": "Plugin custom settings area",
         "dangerTitle": "Uninstall plugin",
         "infoContents": "Contains",
@@ -9858,6 +9897,41 @@
       },
       "providerTooltip": "The provider currently selected for the session; blank when none is pinned.",
       "tokensTooltip": "Counts only the tokens this session used in {{range}}."
+    },
+    "auxiliary": {
+      "title": "Auxiliary usage",
+      "label": "Auxiliary",
+      "purpose": "Purpose",
+      "requests": "Recorded requests",
+      "description": "Included in total tokens. Only usage returned by the provider is recorded; unreported usage and past requests are not estimated.",
+      "sources": {
+        "title": "Title generation",
+        "task-summary": "Task summaries",
+        "prompt-prediction": "Input suggestions",
+        "working-status": "Working status",
+        "help": "Help",
+        "bot-creation": "Companion creation",
+        "bot-opening": "Companion greetings",
+        "group-planning": "Group planning",
+        "ambient-reply": "Reply decisions",
+        "auto-review": "Auto-review",
+        "tool-loop-review": "Tool loop review",
+        "memory-review": "Memory review",
+        "git-summary": "Change summaries",
+        "hook-generation": "Automation scripts",
+        "automation-verification": "Import verification",
+        "plugin-text": "Plugin text",
+        "voice-dialogue": "Voice conversations",
+        "voice-exit": "Voice exit decisions",
+        "voice-refinement": "Voice refinement",
+        "dictionary-learning": "Dictionary learning",
+        "embedding-query": "Vector search",
+        "embedding-index": "Vector indexing",
+        "web-search": "Web search",
+        "provider-probe": "Connection tests",
+        "vision-bridge": "Vision Bridge",
+        "auxiliary": "Other auxiliary requests"
+      }
     }
   },
   "usageDashboard": {
@@ -11249,6 +11323,7 @@
       "unavailableTitle": "This Group Chat Is No Longer Available",
       "unavailableDescription": "It may have been deleted. Go back to Buddies to open another group chat or buddy.",
       "sidebar": {
+        "threadReply": "Thread reply",
         "title": "Group Chats",
         "empty": "No messages yet",
         "preview": "{{name}}: {{text}}",
@@ -11581,6 +11656,7 @@
           "sharedReplyFrom": "Shared a thread reply from {{name}}",
           "sharedReply": "Shared a thread reply",
           "edited": "Edited",
+          "replyNotFound": "This reply could not be found.",
           "sourceUnavailable": "The original reply was deleted or isn’t available to you.",
           "viewThread": "View thread",
           "viewInMain": "View in main chat",
@@ -13686,9 +13762,8 @@
     "sendButton": {
       "send": "Send message",
       "queue": "Queue message",
-      "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
-      "queueTooltipSendMode": "Click to queue; press {{shortcut}} to send this message",
-      "stop": "Stop generating"
+      "stop": "Stop generating",
+      "steer": "Steer running task"
     },
     "pluginSetup": {
       "account": {
@@ -14585,6 +14660,13 @@
       "runningWithWorktree_one": "Wait for it to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
       "runningWithWorktree_other": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
       "runningWithWorktree_many": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other."
+    },
+    "followUpHint": {
+      "queueDefault": "Messages sent while a task is running are queued.",
+      "steerDefault": "Messages sent while a task is running steer the current task.",
+      "switchToSteer": "Steer by default",
+      "switchToQueue": "Queue by default",
+      "dismiss": "Dismiss tip"
     }
   },
   "onboarding": {
@@ -16664,6 +16746,36 @@
         "priority": "Priority",
         "activity": "Recent Activity",
         "created": "Creation Time"
+      },
+      "inbox": {
+        "thisEvening": "This evening",
+        "tomorrow": "Tomorrow",
+        "nextWeek": "Next week",
+        "custom": "Custom…",
+        "wakeAt": "Wake-up date and time",
+        "timeZone": "Local time ({{zone}})",
+        "invalidTime": "Choose a future date and time within one year.",
+        "inbox": "Pending",
+        "working": "Working",
+        "snoozed": "Snoozed",
+        "archived": "Processed",
+        "snooze": "Snooze task",
+        "complete": "Done",
+        "wake": "Bring back now",
+        "restore": "Restore task",
+        "process": "Mark processed (archive)",
+        "empty": "Inbox is clear",
+        "snoozeFailed": "Could not save the snooze time. Check the connection and update the computer hosting this task.",
+        "hours": "In {{count}} hours",
+        "hours_one": "In {{count}} hour",
+        "hours_other": "In {{count}} hours"
+      },
+      "taskListMode": {
+        "heading": "Task mode",
+        "tasks": "Task list",
+        "inbox": "Inbox",
+        "enterInbox": "Switch to Inbox mode",
+        "leaveInbox": "Switch to task list mode"
       }
     },
     "rename": {
@@ -16956,6 +17068,7 @@
         "menuSave": "Save",
         "menuInsertTable": "Insert table",
         "externalChangeBlocked": "The file changed on disk. Autosave paused; save manually to overwrite.",
+        "targetChanged": "The file now points to a different location. Your draft is still in the editor. Copy it before reopening the file.",
         "tableMenu": {
           "addRowAbove": "Add row above",
           "addRowBelow": "Add row below",
@@ -19715,7 +19828,8 @@
           "expired": "Expired",
           "voided": "Voided"
         }
-      }
+      },
+      "viewUsage": "View usage"
     },
     "orders": {
       "title": "Order history",
@@ -21388,6 +21502,27 @@
       }
     }
   },
+  "featureIntro": {
+    "close": "Close",
+    "taskInbox": {
+      "title": "Meet the Inbox",
+      "lead": "Tasks sort themselves into Pending, Working, Snoozed and Processed. The best habit is to keep your inbox clear: click Done when a task is handled, and snooze what can wait.",
+      "pending": {
+        "title": "Pending",
+        "body": "Tasks show up here when they finish with a result or are waiting for your answer."
+      },
+      "done": {
+        "title": "Done",
+        "body": "Handled it? Click Done once and it moves to Processed. It comes back by itself if there’s news."
+      },
+      "snooze": {
+        "title": "Snoozed",
+        "body": "Can’t get to it now? Pick a time and it returns to Pending then."
+      },
+      "start": "Get started",
+      "note": "Switch back to the task list anytime with the button at the top of the sidebar."
+    }
+  },
   "firstRunGuide": {
     "title": {
       "new": "Welcome to Cindy",
@@ -21672,6 +21807,7 @@
     "removeTitle": "Remove {{name}}?",
     "removeDescription": "Cindy will stop assigning tasks to this account. Its CLI login and conversation history remain on this computer.",
     "failed": "Could not read or update this account. Check the CLI login and connection, then try again.",
+    "unreachable": "Couldn't reach the account service, so the sign-in status can't be confirmed. Check your network and try again.",
     "openDirectory": "Open account folder",
     "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
@@ -21952,6 +22088,19 @@
       "network": "Connection lost, retrying…",
       "timeout": "Connection timed out, retrying…",
       "server": "Server busy, retrying…"
+    }
+  },
+  "pluginImPermission": {
+    "title": "Loosen permissions for this chat?",
+    "message": "Allow “{{name}}” to use “{{mode}}” for “{{conversation}}” in the project “{{project}}”?",
+    "detail": "This is looser than the IM project setting ({{projectMode}}). If you allow it, this plugin can use this permission level in this project, for its own sessions only. You can switch back to following IM in the plugin at any time.",
+    "groupWarning": "Other members can also send messages in this group. The looser the permission, the fewer actions ask for your confirmation, so make sure you trust everyone in the group.",
+    "allow": "Allow",
+    "cancel": "Cancel",
+    "modes": {
+      "ask": "Default permissions",
+      "auto": "Auto-review",
+      "bypassPermissions": "Full access"
     }
   }
 }

@@ -7,7 +7,11 @@
 只有建连消息走会话，文件字节仍走 WebRTC，还要从服务端取 TURN 设置。现在文件字节也走会话，不再起 WebRTC。
 
 - **协商**：被控端在 `device-link:file-peer` 的 `caps` 回答里多带 `streamTransport: true`。控制端只有在对方带了这一项、而且和
-  对方有会话（同账号、两边都开着 Agent-Net）时才用；否则（手机、旧版 Desktop、没开 Agent-Net、跨账号）照旧 WebRTC。
+  对方有会话（同账号、两边都开着 Agent-Net）时才用；否则（旧版 Desktop、旧版手机、没开 Agent-Net、跨账号）照旧 WebRTC。
+  手机 2026-11-18 起同样用（`apps/mobile/src/device-link/peerFileTransport.tsx`）：会话连接的动作不进 WebView 里的 WebRTC 运行时，
+  在 RN 里经同一个调用通道发；块按顺序写进同一个文件句柄、同一套检查，会话断开时收掉（`resetMobilePeer`）。回归
+  `apps/mobile/src/__tests__/peerFileLifecycle.test.tsx`「downloads over the Agent-Net session when the computer offers stream transport」
+  （去掉会话分支时会取 ICE、发 offer）。真机还没测。
   旧版被控端不会收到下面三个新动作。
 - **三个新动作**（同一通道，`packages/device-link/src/filePeer.ts` 解析与限值）：
   - `stream-open`：建一条不经 WebRTC 的文件连接，回 `{ connection }`；和 `offer` 一样占四条连接的名额、带 `sessionBound`。
@@ -62,7 +66,7 @@ Agent-Net session and frees their slots」与「carries the next download on a r
 
 ## 无链路推送也走会话
 
-允许被控请求、插件同步、语音词典快照这三个不需要控制链路的同账号推送，有会话时走会话（`agentNetSessionRouting.ts` 的 `sendPush`），
+允许被控请求、插件同步、语音词典快照这三个不需要控制链路的同账号推送，有会话时走会话（`packages/agent-net/src/session/sessionRouting.ts` 的 `sendPush`），
 否则照旧 Device Link 的无链路推送。同时会话上收推送和 Device Link 一样：只在本机开着的控制链路上收，只有这三个通道例外
 （`isUnlinkedPushChannel`）。原来会话上什么推送都收，同账号的一台电脑没建链也能往这台的业务里推任意通道。
 回归：`agentNetSessionLinks.test.ts`「takes pushes only on a control link except the unlinked ones」。

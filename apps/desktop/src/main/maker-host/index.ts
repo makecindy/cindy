@@ -1,3 +1,5 @@
+import { createPiVisionUsageRecorder } from '../vision-bridge/piVisionUsage.js';
+import { createOneShotUsageRecorder } from '../usage/auxiliaryUsage.js';
 import { attachmentPreservation, attachmentStorageRoots } from './oversized-attachment-recovery.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
 import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpawnConfigCore.js';
@@ -107,7 +109,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { makerStartupGate } from './startup-gate.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.desktop.js';
 import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
-import { ghostToolLifecycleControl } from '../cindy-brain/index.js';
+import { ghostNativeRecoveryObserver, ghostToolLifecycleControl } from '../cindy-brain/index.js';
 import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 import { getActiveInteractionRoute, requestHostInteraction } from '../maker-ipc/interactionRouter.js';
 import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
@@ -423,6 +425,7 @@ import {
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
+import { followReferenceModelPricingAfterProviderChange } from '../usage/referenceModelPricing.js';
 import {
   DESKTOP_CAPABILITY_ROUTING_POLICY,
 } from './capability-routing.js';
@@ -494,11 +497,11 @@ export const reviewAutoPermissionAction: AutoReviewDelegate = createAutoPermissi
   logger: desktopMakerLogger,
   managesRetries: true,
   resolveRequestTimeoutMs: () => AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS,
-  requestText: (_request, prompt, { signal }) => requestAutoReviewText(prompt, signal),
+  requestText: (request, prompt, { signal }) => requestAutoReviewText(prompt, signal, request.sessionId),
 });
 /** 工具循环疑似命中时走共享辅助模型链复核;Claude Code 与 Pi/Codex 共用。 */
 const reviewToolLoop = createToolLoopReviewer({
-  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, opts),
+  requestText: (prompt, opts) => requestUtilityText(getMaker(), prompt, { ...opts, source: 'tool-loop-review' }),
 });
 
 reviewAutoPermissionAction.prepareRequest = async request => {
@@ -533,6 +536,9 @@ export function refreshSelectableModelsAndBroadcast(payload: Record<string, unkn
     }
   }
   tapWindowBroadcast(MAKER_PUSH.PROVIDER_CHANGED, payload);
+  // Reference prices are keyed by each account provider's current models; keep them in
+  // step with the list the renderer was just told to re-read.
+  followReferenceModelPricingAfterProviderChange();
 }
 
 /**
@@ -1478,6 +1484,7 @@ export function getMaker(): Maker {
     const claudeAgent = new ClaudeCodeAgent({
       resolveLocalMcpDuplicateChoices,
       toolLifecycleControl: ghostToolLifecycleControl,
+      nativeRecoveryObserver: ghostNativeRecoveryObserver,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -1789,6 +1796,7 @@ export function getMaker(): Maker {
       getDisabledRuntimePluginIds: (workingDir) => getPluginRegistry().getDisabledRuntimePluginIds(workingDir),
     });
     const codexAgent = new CodexAgent({
+      nativeRecoveryObserver: ghostNativeRecoveryObserver,
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
       getManagedSkills: listCindyManagedSkills,
@@ -2243,6 +2251,7 @@ export function getMaker(): Maker {
     const pendingPiPackageRuntimeSnapshots: PiPackageRuntimeInvalidationSnapshot[] = [];
     const buildPiAgentForDesktop = () => buildPiAgent({
       toolLifecycleControl: ghostToolLifecycleControl,
+      nativeRecoveryObserver: ghostNativeRecoveryObserver,
       logger: desktopMakerLogger,
       turnChangeCapture: {
         beforeKnownFileWrite: captureKnownFileBefore,
@@ -2304,6 +2313,7 @@ export function getMaker(): Maker {
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
+      createPiVisionUsageRecorder,
       resolvePiVisionBridgeEnv: (model, sessionId) =>
         buildPiVisionBridgeEnv(
           {
@@ -2613,6 +2623,7 @@ export function getMaker(): Maker {
     });
 
     _maker = new Maker({
+      createOneShotUsageRecorder,
       agents: makerAgents,
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,

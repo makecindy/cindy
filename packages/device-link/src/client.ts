@@ -381,6 +381,8 @@ export interface DeviceLinkClientOptions {
    * 由 host 重开 link 后最多重试一次。写请求和长执行请求不走这条路径。
    */
   peerResetReadRetry?: boolean;
+  /** Foreground mobile screens also open links automatically while a peer is offline. */
+  backoffOfflineLinkOpen?: boolean;
   /**
    * invoke 结果传输编码（gzip 与内容标签，见 invokeTransfer.ts）。控制端提供
    * gunzipBase64 才声明可解 gzip；被控端提供 gzipBase64 / contentTag 才编码。
@@ -1693,7 +1695,10 @@ export class DeviceLinkClient {
 
   /** Fresh, current authority says the peer accepts outbound control again. */
   noteRemoteControlEnabled(deviceId: string): void {
-    if (!isScopedPeer(deviceId)) this.remoteControlDisabled.delete(deviceId);
+    if (isScopedPeer(deviceId)) return;
+    this.remoteControlDisabled.delete(deviceId);
+    // A fresh roster can recover the phone even if it missed the online push.
+    if (this.opts.backoffOfflineLinkOpen) this.peerOfflineGate.markReachable(deviceId);
   }
 
   /** Fresh, current authority says the peer refuses outbound control. */
@@ -2037,10 +2042,21 @@ export class DeviceLinkClient {
     return true;
   }
 
+  private admitPeerRequest(dst: string): void {
+    if (this.peerOfflineGate.isGated(dst)) {
+      // 已有直连说明对端可达，离线判断作废；否则窗口内与 relay 回绝同码同文、不触网。
+      if (this.directPaths.has(dst)) this.peerOfflineGate.markReachable(dst);
+      else if (this.peerOfflineGate.admit(dst) === 'blocked') {
+        throw new DeviceLinkError('DEVICE_OFFLINE', 'target device offline');
+      }
+    }
+  }
+
   /** 控制端:向目标设备发起 link-open,等待 link-accept */
   async openLink(dst: string, payload: unknown, timeoutMs?: number): Promise<LinkAcceptPayload> {
     // 主动开链 = 控制意图续新:清除出站关闭标记,后续 transport-timeout 恢复照常。
     this.getPeerTransport(dst).outboundExplicitlyClosed = false;
+    if (this.opts.backoffOfflineLinkOpen) this.admitPeerRequest(dst);
     const linkPayload = this.addLocalCapabilities(dst, payload);
     const id = createRequestId();
     const attestation = this.opts.transportAttestation?.(dst, id);
@@ -2150,13 +2166,7 @@ export class DeviceLinkClient {
     if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) {
       throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
     }
-    if (this.peerOfflineGate.isGated(dst)) {
-      // 已有直连说明对端可达，离线判断作废；否则窗口内与 relay 回绝同码同文、不触网。
-      if (this.directPaths.has(dst)) this.peerOfflineGate.markReachable(dst);
-      else if (this.peerOfflineGate.admit(dst) === 'blocked') {
-        throw new DeviceLinkError('DEVICE_OFFLINE', 'target device offline');
-      }
-    }
+    this.admitPeerRequest(dst);
     const requestId = createRequestId();
     const queuedAt = this.monotonicNow();
     // 调度槽的上限，也是增量失败后重发可用的总预算。
@@ -3510,6 +3520,12 @@ export class DeviceLinkClient {
           if (env.kind === 'invoke-result' && env.src) this.logRecoveryStage(env.src, 'first-response-received');
           p.resolve(env);
           return true;
+        }
+        // A result whose request already settled here (usually timed out): the host
+        // finished after this side stopped waiting. Logged so the two sides line up.
+        if (!p && env.kind === 'invoke-result') {
+          this.log.debug(`device-link late invoke-result src=${shortDeviceRef(env.src)}`
+            + ` request=${typeof env.id === 'string' ? env.id.slice(0, 8) : 'none'}`);
         }
         return this.emitFrame(env);
       }

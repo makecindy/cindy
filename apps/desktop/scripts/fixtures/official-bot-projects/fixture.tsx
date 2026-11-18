@@ -2,6 +2,8 @@
 import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
 
 import { HookConnectionsSection } from '../../../src/renderer/components/settings/HookConnectionsSection';
+import { ImPluginEntrancesCard } from '../../../src/renderer/components/settings/ImPluginEntrances';
+import type { InstalledGhost } from '../../../src/shared/ghost';
 import { SettingsSearchNavigationContext } from '../../../src/renderer/components/settings/SettingsSearchNavigation';
 import { getDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import {
@@ -101,7 +103,17 @@ interface Scenario {
   prefs?: HookWorkspacePrefs[];
   loadFails?: boolean;
   expand?: 'slack' | 'telegram' | 'feishu' | 'x';
+  /** An enabled IM entrance plugin (manifest imEntrance) is installed. */
+  plugin?: boolean;
 }
+
+// Only the fields the IM bots page reads; the plugin itself is not loaded.
+const IM_PLUGIN = {
+  enabled: true,
+  dir: '/fixture/brain/cindy-wechat-groups',
+  manifest: { schemaVersion: 3, id: 'cindy-wechat-groups', name: '微信群里的 Cindy', version: '0.2.14', entry: 'main.js',
+    imEntrance: true, agent: { tasks: true, targets: true } },
+} as unknown as InstalledGhost;
 
 const SCENARIOS: Record<string, Scenario> = {
   'all-bots': { slack: true, telegram: true, feishu: true, x: true, projects: PROJECTS, defaultProject: 'orbit-garden', prefs: PREFS },
@@ -112,6 +124,7 @@ const SCENARIOS: Record<string, Scenario> = {
   'many-projects': { slack: true, telegram: true, feishu: true, projects: MANY_PROJECTS, defaultProject: '官网与文档', prefs: PREFS },
   'load-failed': { telegram: true, feishu: true, projects: PROJECTS, defaultProject: 'orbit-garden', loadFails: true },
   'card-expanded': { telegram: true, feishu: true, projects: PROJECTS, defaultProject: 'orbit-garden', prefs: PREFS, expand: 'telegram' },
+  'plugin-only': { projects: PROJECTS, prefs: PREFS, plugin: true },
 };
 
 function hookView(scenario: Scenario, defaultProject: string | null): SlackHookView {
@@ -168,6 +181,10 @@ void mountPage({
       customizedKeys: [],
     };
     return {
+      ghosts: {
+        listSync: () => ({ ghosts: scenario.plugin ? [IM_PLUGIN] : [] }),
+        onChanged: subscription('ghosts'),
+      },
       hookControl: {
         get: async () => ({ hook: hookView(scenario, defaultProject) }),
         onStatusChanged: subscription('hook-status'),
@@ -216,7 +233,12 @@ void mountPage({
   },
   render: (ctx) => {
     const scenario = SCENARIOS[String(ctx.data.kind)] ?? SCENARIOS['all-bots']!;
-    const section = <HookConnectionsSection />;
+    const section = scenario.plugin ? (
+      <div className="flex flex-col gap-6">
+        <ImPluginEntrancesCard plugins={[IM_PLUGIN]} />
+        <HookConnectionsSection />
+      </div>
+    ) : <HookConnectionsSection />;
     return (
       <div className="min-h-screen bg-[var(--surface)] p-4 text-[var(--text-primary)]">
         {scenario.expand ? (
@@ -240,4 +262,6 @@ void mountPage({
       </div>
     );
   },
+  // The plugin card opens the plugin page through the router.
+  route: '/settings',
 });

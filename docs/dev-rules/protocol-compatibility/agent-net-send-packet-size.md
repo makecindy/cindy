@@ -27,6 +27,6 @@ Device Link 的一半。
   - 不需要发布顺序，也不需要协商。`sim/tests/secure.rs` 的 `peers_with_different_send_sizes_interoperate`（谁发起都试，
     丢包时满长度分片靠校验包在对端算回来）和 `sim/tests/migration.rs` 的 `switching_networks_works_between_different_send_sizes`
     （换网时的路径验证）守着；把收包检查、分片检查、校验恢复、握手回复、路径验证或分片切法中任一处改成按另一个上限算都会失败。
-- **还没跟上的**：手机原生库 `packages/agent-net-native/src/engine.rs` 仍按 1400 发（行为和以前一样，互通不受影响），
-  随手机端接入会话层时一起改，并重编原生库。
+- **手机原生库（2026-11-18）**：`packages/agent-net-native/src/engine.rs` 和 Desktop 一样收 1400、发 1309，窗口 8192、
+  发送缓冲上限 24 MiB（实际按拥塞窗口放大）。随新安装包生效；旧安装包照旧按 1400 发，互通不受影响。
 - **代价**：同样的数据多约 7% 的包（1309 字节时；1317 字节时约 6%），每个包的加密、发包等固定成本随之多约 7%。

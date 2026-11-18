@@ -25,6 +25,7 @@ interface CachedText {
   size: number;
   mtimeMs: number;
   truncated: boolean;
+  resolvedPath?: string;
   /** 估算的字节占用 (utf-16 char × 2), 用来做总字节上限 evict。 */
   byteSize: number;
 }
@@ -57,6 +58,7 @@ export function getCachedFileContent(
     size: hit.size,
     mtimeMs: hit.mtimeMs,
     truncated: hit.truncated,
+    resolvedPath: hit.resolvedPath,
   };
 }
 
@@ -69,6 +71,7 @@ export function setCachedFileContent(
     size: number;
     mtimeMs: number;
     truncated: boolean;
+    resolvedPath?: string;
   },
 ): void {
   const key = makeKey(workdir, data.relPath);
@@ -86,6 +89,7 @@ export function setCachedFileContent(
     size: data.size,
     mtimeMs: data.mtimeMs,
     truncated: data.truncated,
+    resolvedPath: data.resolvedPath,
     byteSize,
   };
   cache.set(key, entry);
@@ -96,10 +100,14 @@ export function setCachedFileContent(
 /** chokidar 'change'/'unlink' 时主动 evict。Key 不存在则 no-op。 */
 export function invalidateCachedFile(workdir: string, relPath: string): void {
   const key = makeKey(workdir, relPath);
-  const prev = cache.get(key);
-  if (!prev) return;
-  totalBytes -= prev.byteSize;
-  cache.delete(key);
+  // Watch events do not distinguish directories. Evict descendants too, with
+  // a path-separator boundary so "alias" cannot evict "alias-other".
+  for (const [candidate, entry] of cache) {
+    if (candidate === key || candidate.startsWith(`${key}/`)) {
+      totalBytes -= entry.byteSize;
+      cache.delete(candidate);
+    }
+  }
 }
 
 /** workdir 整体下线时 (用户切到别的 project) — 一次性清掉该 workdir 全部 entry。 */

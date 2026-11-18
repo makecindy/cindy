@@ -366,7 +366,8 @@ import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.desktop.js';
 import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.desktop.js';
 import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.desktop.js';
-import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
+import { fetchRemoteMediaImageBytes, openRemoteMediaForSave } from './device-link/remoteMediaProtocol';
+import { saveMediaStream } from './mediaSaveStream';
 import * as imageCacheStore from './imageCacheStore.desktop';
 import { readCachedImage } from './cindy-media/readCachedImage';
 import {
@@ -707,6 +708,7 @@ import { registerProviderShareIpc } from './device-link/providerShareRuntime.js'
 import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
+import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
 import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
@@ -9174,6 +9176,10 @@ const registerIpcHandlers = () => {
         }
       },
       fetchRemoteMediaImage: (url) => fetchRemoteMediaImageBytes(url),
+      saveRemoteMedia: (source, destination) => saveMediaStream(source, destination, {
+        fetchHttp: (url, signal) => net.fetch(url, { signal }),
+        fetchRemote: (url, signal) => openRemoteMediaForSave(url, signal),
+      }),
       getTempDir: () => {
         fs.mkdirSync(remoteImagesTmpDir, { recursive: true });
         return remoteImagesTmpDir;
@@ -10771,6 +10777,9 @@ app.on('ready', async () => {
   setAgentNetSwitchRemoteHandler(agentNetSwitchRemoteHandler());
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerSubscriptionAccountsIpc();
+  // 0.1.137–0.1.139 拆坏的内置订阅供应商自动并回(subscription-account-pools.md「升级拆坏的自动并回」)。
+  // 这是写操作，归窗口进程；Host 客户端模式不补做(docs/host/personal-migration-release-table.md)。
+  if (!hostClientMode) startUpgradeSplitRepair();
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();
