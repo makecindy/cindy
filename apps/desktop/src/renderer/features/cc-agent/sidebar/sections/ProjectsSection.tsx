@@ -1572,6 +1572,7 @@ export function SessionGroupNode({
   const showRunning = collapsed && lamp?.running;
   const collapsedStatus = collapsed ? lamp?.dotTone : undefined;
   const { canToggleIdle } = view;
+  const hasHeaderActions = canToggleIdle || Boolean(onCreateDialogue);
   return (
     <div className="relative flex w-full select-none flex-col" data-no-drag>
       {/* 段头:与 ProjectNode Header 同款规格(h-8 药丸 hover / pl-3 pr-2 /
@@ -1630,8 +1631,8 @@ export function SessionGroupNode({
             className="shrink-0 text-[var(--cmd-palette-item-meta)] opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100"
           />
         </div>
-        {(canToggleIdle || onCreateDialogue || collapsedStatus) && (
-          <SidebarGroupHeaderActions status={collapsedStatus} menuOpen={menuPos !== null}>
+        {(hasHeaderActions || collapsedStatus) && (
+          <SidebarGroupHeaderActions status={collapsedStatus} menuOpen={menuPos !== null} hasActions={hasHeaderActions}>
             {canToggleIdle && (
               <SessionCollapseToggle
                 showAll={!collapsed && showAll}

@@ -49,7 +49,9 @@ function GroupsPreview() {
   const automation: Session = { ...projects[1].sessions[0], source: 'scheduler', title: '每周用量报告' };
   return <aside className="bg-sidebar text-foreground min-h-screen space-y-3 p-3" data-ui-page-subject>
     <section aria-label="Automation fixture">
-      <SessionGroupNode {...shared} sessions={[automation]} groupTitle={t('ccAgent.layout.automations')} groupIcon={<Timer size={15} aria-hidden />} />
+      <SessionGroupNode {...shared} sessions={[automation]} groupTitle={t('ccAgent.layout.automations')} groupIcon={<Timer size={15} aria-hidden />}
+        collapsed={!!ctx.data.collapsedAutomation}
+        lamp={ctx.data.collapsedAutomation ? { running: false, dotTone: 'error' } : undefined} />
     </section>
     <section aria-label="Dialogue fixture">
       <SessionGroupNode {...shared} sessions={projects[0].sessions} onCreateDialogue={noop} />

@@ -15,10 +15,26 @@ export default {
     'filtered-projects':{data:{avatarData,inactive:true,filtered:true},about:'Filtered project results show all matches and omit the inactivity toggle (#11233)'},
     'idle-groups':{data:{avatarData,inactive:true,groups:true},about:'Even small automation and dialogue groups offer independent idle folding (#11282)'},
     'idle-recent-groups':{data:{avatarData,idleOptIn:true,groups:true},about:'Groups with only recent tasks omit idle actions (#11282)'},
+    'collapsed-automation-status':{data:{groups:true,collapsedAutomation:true},about:'An actionless automation header keeps its status point on hover (#11252)'},
     'idle-disabled':{data:{avatarData,inactive:true,idleDisabled:true},about:'Thirty-minute-old tasks stay visible by default (#11282)'},
   },
   async ready(page){await page.locator('[data-project-source] img, [data-project-working-dir="local:/Projects/Cindy"] .lucide-folder-open, [aria-label="Automation fixture"]').first().waitFor();},
   async check(page,ui){
+    if (ui.case === 'collapsed-automation-status') {
+      // The expanded fixtures cannot cover this regression: the status point
+      // appears on a collapsed group with no create or idle action.
+      const group = page.getByRole('region', { name: 'Automation fixture' });
+      const header = group.getByRole('button', { expanded: false });
+      const status = header.locator('[data-sidebar-right-status="error"]');
+      await status.waitFor();
+      assert.equal(await status.evaluate(element => element.checkVisibility({ opacityProperty: true })), true);
+      await header.hover();
+      assert.equal(await status.evaluate(async element => {
+        await Promise.all(element.parentElement.getAnimations().map(animation => animation.finished));
+        return element.checkVisibility({ opacityProperty: true });
+      }), true, 'Hover must keep the status point visible when no actions replace it');
+      return;
+    }
     if (ui.case === 'idle-recent-groups') {
       const expand = await ui.t('ccAgent.sidebar.expandAllSessions');
       const fold = await ui.t('ccAgent.sidebar.collapseInactiveSessions');
