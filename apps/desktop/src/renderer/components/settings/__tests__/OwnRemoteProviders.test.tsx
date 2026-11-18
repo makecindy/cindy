@@ -46,6 +46,8 @@ vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({
 }));
 vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
   useRemoteCodexAccountUsage: () => null,
+  useRemoteCodexRefreshState: () => ({ failed: false, refreshing: false }),
+  requestRemoteCodexLiveRefresh: vi.fn(),
   useRemoteCodexRateLimits: () => null,
   useRemoteXaiSubscriptionUsage: () => null,
   selectRemoteCodexAccountUsage: () => null,
