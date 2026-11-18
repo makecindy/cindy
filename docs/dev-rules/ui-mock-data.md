@@ -2,6 +2,11 @@
 
 > **读取时机**：要在 Desktop 或 Mobile 上检查界面、截图、做 UI 回归，又不想登录真实
 > 账号或碰真实数据时；新增或修改模拟任务、`--mock` 启动参数时。
+> **适用路径**：`packages/maker-shared/src/uiMock*.ts`、
+> `apps/desktop/src/main/localDb/uiMockSeed.ts`、
+> `apps/desktop/src/main/companion-cloud/uiMock.ts`、
+> `apps/desktop/src/main/maker-ipc/botGroupUiMock.ts`、
+> `apps/mobile/src/debug/visualMock.ts`、`apps/mobile/src/debug/*VisualFixture.ts`
 
 Desktop 与 Mobile 共用一套模拟数据：展示项目、不同状态的回归任务和它们的消息。开发版
 加 `--mock` 启动后直接进入主界面：不登录 Cindy 账号，任务与消息来自模拟数据，不读写正式
@@ -170,3 +175,5 @@ Mobile 只对 `UI_MOCK_SHOWCASE_PROJECTS` 中的展示项目启用这套文件�
   `apps/mobile/scripts/export-realdata-visual-snapshot.mjs`，它导出的是敏感数据，按脚本
   里的限制使用。
 - PR 截图来自模拟数据时要写明，不能当作真实账号、真实 Agent 行为已验证的证据。
+
+空响应暂停回归场景 `ui-mock-silent-stop`（「空响应续跑暂停」）由两端共用，包含预算、频控、任务保护及两种派发失败的历史错误和尾部错误。主提示应保持中性，展开详情可见实际原因；点击诊断仅检查预填内容，不发送消息。

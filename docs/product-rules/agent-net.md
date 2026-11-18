@@ -3,7 +3,12 @@
 > 产品裁决：2026-10-30（用户确认）。本文是产品规则，功能分阶段实施；当前接入范围与验证结果见
 > [`../agent-net-plan.md`](../agent-net-plan.md)，交互稿见
 > [`../design-previews/agent-net/index.html`](../design-previews/agent-net/index.html)。
-> 读取时机：新增或修改 agent-net 的节点模型、能力清单、加密、中继选择、网络分享或拓扑界面之前。
+> **读取时机**：新增或修改 agent-net 的传输核心、节点模型、能力清单、加密、中继选择、网络分享或拓扑界面之前。
+> **适用路径**：`packages/agent-net*/**`、`packages/device-link-relay/src/agentNet.ts`、
+> `packages/device-link/src/agentNetSwitch.ts`、`apps/desktop/src/main/device-link/**/agentNet*`、
+> `apps/desktop/src/renderer/features/remote-connection-v2/**`、`apps/mobile/modules/cindy-agent-net/**`、
+> `apps/mobile/src/**/{agentNet,AgentNet}*`、`prototypes/agent-net-spike/**`、
+> `scripts/check-agent-net-native.mjs`、`.github/workflows/agent-net-native.yml`
 
 ## 定位
 
@@ -26,8 +31,22 @@
 
 - agent-net 是设备互联的 V2，和现有 device-link（V1）并存一段时间，用户在 Cindy 里自己切换。
 - **按设备切换。** 打开 V2 的设备遇到没开 V2 或还是旧版的对端时，对它自动继续走 V1，只更新一端不能让任何功能失效。
+- **两台打开 V2 的新版 Desktop 之间走会话层**（2026-11-16 用户确认）：两端都支持时，业务不再装成 device-link 的帧，
+  走 V2 自己的会话层（[方案](../agent-net-session-plan.md) 第 10.1 节），小请求不再排在大数据后面。它跟着 V2 开关，没有单独的开关。
+  同账号的两台之间连在线状态也走会话，线上不再有 device-link 的帧；老版本对端照旧收到 device-link 的在线状态帧（最多晚 1.5 秒）。
+  同日起跨账号（供应商分享含供应商组、共享任务）的受邀者与分享资源的电脑之间也走会话层，授权与分享帧完全一样：只认分享授权给的那个资源
+  与成员，受邀者只能调用、分享资源一端只能回应。2026-11-17 起 Node Host 也能加入 V2（`cindy-host remote agent-net-on`，同样默认关），
+  和打开 V2 的 Desktop 之间走会话层；它只加入本账号的官方网络，跨账号分享与自建中转在 Host 上照旧走 device-link。
+  手机和旧版本照旧走 device-link 的帧。
+- **关掉 V2 的设备照样能走 V1**（2026-11-17 用户选择「放宽校验」）：加入过 V2 的设备经 V1 连接时，要用自己的 V2 证书签一句
+  「我现在开着／没开 V2」，开着 V2 的同账号设备验过才放行，防止有人冒充「它关了」把加密通信骗到 V1 上。证书只在 V2 开着时续期，
+  关掉超过有效期（14 天）后原来签不出，连 V1 都被拒收（v0.1.133 起就有）。现在过期但没被撤销的证书照样签、照样被认，**只限「没开」
+  这一句**；「开着」仍要有效证书，被撤销、在 Device Link 里被删的设备照样拒收。两台都更新后生效。
 - **服务端单独部署。** V2 有自己的服务（中继、查公网地址、设备证书），不借现有 device-link 中转，现有中转保持不变。
   UDP 被封时走 V2 服务的 443，不再把数据报夹带在 V1 中转的 push 里（第 7 步的夹带只留在原型里做对照）。
+  打不通直连时，经中继转发的数据报也优先走中继的 UDP 端口，443 只在 UDP 不通时兜底：传输核心本身就是可靠 UDP，
+  叠在 TCP 上一个包慢了后面都要等（2026-11-14 用户确认「本质是我们本身就要 UDP，即使中转」，
+  协议见[记录](../dev-rules/protocol-compatibility/agent-net-udp-relay.md)）。
 - **自建中转也分开。** V2 中继是单独的程序，一键部署时和现有自建中转内核一起装，共用 Nginx 和证书，现有内核不变。
 - **准入分两道门。** 传输核心只提供通用机制：不知道对方公钥就发不出合格的握手请求（检查只要一次哈希），
   忙时要求证明来源地址、按地址和总量限流，挡住伪造请求消耗 CPU。认不认这张票由上层决定：
@@ -55,6 +74,10 @@
 
 私有网络的配对关系持久至撤销，沿用 V1 的使用方式，不要求主人电脑定期在线续签。
 客户端缓存名册仍只信任最初接收后的 14 天，读缓存不续期；撤销后晚到的数据报不会切断健康设备的中转连接。
+官方网络上删设备：每台电脑按本账号的 Device Link 设备列表不认它、也不列出它（[协议记录](../dev-rules/protocol-compatibility/agent-net-device-removal.md)）。
+主干 2026-11-17 起删除时还会在 Device Link 接受后撤销它的 Agent-Net 身份。两者都保留（2026-11-17 用户定：同事的撤销要有效，
+列表规则也不能出错）：官方撤销之后那台设备重新登录回不到 Agent-Net，但必须照常用 Device Link——它被 Agent-Net 拒绝时这次运行按
+「Agent-Net 关着」走 Device Link 并签「没开」，认得它的电脑用它最后的证书只认这一句（「仅使用 Agent-Net」时不退回）。
 完整范围、复跑命令与未通过项见 [`Desktop 接线记录`](../../prototypes/agent-net-spike/results/2026-11-07-desktop-runtime/README.md)。
 后续手机/分享接线及部署交接状态见 [`2026-11-08 验证记录`](../agent-net-delivery-verification.md)。
 

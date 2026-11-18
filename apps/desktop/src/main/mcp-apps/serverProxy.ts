@@ -160,6 +160,7 @@ function createAppServerProxy(
     const current = readAppServer(config.id);
     if (!current || appServerRevision(current) !== liveRevision)
       throw new Error('MCP_APP_SERVER_CHANGED');
+    return current;
   };
   // Bridge factories are created eagerly, but unused proxies must not retain a Host slot.
   const registerOnUse = () => {
@@ -246,7 +247,7 @@ function createAppServerProxy(
       (candidate) => candidate.name === request.params.name,
     );
     extra.signal.throwIfAborted();
-    assertCurrent();
+    const currentConfig = assertCurrent();
     if (!tool || !toolVisibleTo(tool, 'model')) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
     if (request.params.task) {
       const client = await currentClient(extra.signal);
@@ -266,6 +267,10 @@ function createAppServerProxy(
     if (uri && sessionId) {
       const cardTool = { ...tool, _meta: { ...tool._meta } };
       delete cardTool._meta['cindy/plugin'];
+      delete cardTool._meta['cindy/custom-mcp'];
+      // Reuse the existing configuration check; no extra lookup for a card title.
+      if (typeof currentConfig.name === 'string' && currentConfig.name.trim())
+        cardTool._meta['cindy/custom-mcp'] = { name: currentConfig.name };
       // Vault and UI persistence failure must not change a tool's actual outcome.
       try {
         record = {

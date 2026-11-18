@@ -4,6 +4,7 @@
  * 显式清除(explicit)可清任何 kind,并把 intent 随 IPC 桥接给 main。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sharedTaskHostPeer } from '@cindy/device-link';
 
 import {
   addSessionAttention,
@@ -21,6 +22,8 @@ import {
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   applyRemoteSessionActivity,
+  getRemoteSessionActivity,
+  removeRemoteSessionActivityForDevice,
   removeRemoteSessionActivityEntry,
 } from '@/features/device-link/remoteSessionActivityStore';
 
@@ -187,6 +190,53 @@ describe('clearSystemSessionAttention 的远程路由', () => {
       'notification:clear-session-attention',
       ['rs1', 'passive'],
     );
+  });
+
+  // Unit regression: shared guests cannot clear the host's notification. Existing
+  // receipt tests only used same-account devices, missing this rejected invoke.
+  it('consumes shared completion locally after display and fresh sync, without clearing the host', () => {
+    const peer = sharedTaskHostPeer('shared-task', 'host-device');
+    const id = 'shared-session';
+    remoteProjectsStore.setDeviceSessions(peer, 'Host', [{ id } as never]);
+    const completed = { sessionId: id, phase: 'completed', attention: true, compactDetail: 'Done', completionToken: 'turn-1' };
+    try {
+      applyRemoteSessionActivity(peer, completed);
+      clearSystemSessionAttention(id);
+      expect(getRemoteSessionActivity(id, peer)?.attention).toBe(true);
+      setRemoteReceiptDisplayReady(id, true);
+      noteRemoteSessionSyncCompleted(id, noteRemoteSessionSyncStarted(id));
+      expect(getRemoteSessionActivity(id, peer)?.attention ?? false).toBe(false);
+      expect(deviceLinkInvokeMock).not.toHaveBeenCalled();
+      // Replayed host unread must not restore an already consumed green dot.
+      applyRemoteSessionActivity(peer, completed);
+      expect(getRemoteSessionActivity(id, peer)?.attention ?? false).toBe(false);
+      applyRemoteSessionActivity(peer, { ...completed, completionNotification: 'silent', compactDetail: 'Final summary' });
+      expect(getRemoteSessionActivity(id, peer)?.attention ?? false).toBe(false);
+      applyRemoteSessionActivity(peer, { ...completed, completionToken: 'turn-2' });
+      expect(getRemoteSessionActivity(id, peer)?.attention).toBe(true);
+      clearSystemSessionAttention(id);
+      noteRemoteSessionSyncCompleted(id, noteRemoteSessionSyncStarted(id));
+      // Older hosts have no token: an intervening running phase still starts
+      // a new unread completion even when its visible summary is identical.
+      applyRemoteSessionActivity(peer, { ...completed, completionToken: undefined, phase: 'running' });
+      clearSystemSessionAttention(id);
+      noteRemoteSessionSyncCompleted(id, noteRemoteSessionSyncStarted(id));
+      expect(getRemoteSessionActivity(id, peer)?.phase).toBe('running');
+      applyRemoteSessionActivity(peer, { ...completed, completionToken: undefined });
+      expect(getRemoteSessionActivity(id, peer)?.attention).toBe(true);
+      for (const phase of ['needs-interaction', 'error']) {
+        applyRemoteSessionActivity(peer, { ...completed, phase });
+        clearSystemSessionAttention(id);
+        noteRemoteSessionSyncCompleted(id, noteRemoteSessionSyncStarted(id));
+        expect(getRemoteSessionActivity(id, peer)).toMatchObject({ phase, attention: true });
+      }
+      expect(deviceLinkInvokeMock).not.toHaveBeenCalled();
+    } finally {
+      clearSystemSessionAttention(id, 'explicit');
+      setRemoteReceiptDisplayReady(id, false);
+      remoteProjectsStore.setDeviceSessions(peer, 'Host', []);
+      removeRemoteSessionActivityForDevice(peer);
+    }
   });
 
   it('explicit receipts release on display-ready without waiting for a fresh sync', () => {

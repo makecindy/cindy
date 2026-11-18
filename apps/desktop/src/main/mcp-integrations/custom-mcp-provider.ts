@@ -83,9 +83,15 @@ export class CustomMcpProvider implements McpProvider {
 
   appServerConfig(): AppServerConfig {
     if (this.config.transport === 'stdio') {
-      return { id: this.config.id, url: '', transport: 'stdio', stdio: this.config.stdio };
+      return {
+        id: this.config.id,
+        name: this.displayName,
+        url: '',
+        transport: 'stdio',
+        stdio: this.config.stdio,
+      };
     }
-    return { id: this.config.id, url: this.config.url, transport: this.config.transport, headers: this.buildHeaders() };
+    return { id: this.config.id, name: this.displayName, url: this.config.url, transport: this.config.transport, headers: this.buildHeaders() };
   }
 
   /** 合成 Claude 端使用的 headers(用户 headers + 可选 Bearer)。 */

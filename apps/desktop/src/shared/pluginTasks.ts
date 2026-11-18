@@ -40,6 +40,7 @@ export interface PluginTaskView {
   revision: number;
   resolvedConfig: PluginTaskRoute;
   workingDir?: string;
+  workspaceKind?: 'project' | 'dialogue';
   permissionMode?: string;
   /** Independent Plan Mode; the stored permission remains available after it ends. */
   planModeEnabled?: boolean;
@@ -77,7 +78,14 @@ export interface PluginTaskRun {
   completedAt?: number;
   error?: string;
   usage: { status: 'unavailable'; reason: string };
+  /**
+   * getRun only (capabilities().runPreview): the assistant text block currently streaming in this
+   * run's live execution. Partial, may reset after a tool call, never the final output; never stored.
+   */
+  preview?: { text: string };
 }
+/** UTF-16 chars kept from the start of a streaming preview. */
+export const PLUGIN_TASK_RUN_PREVIEW_MAX_CHARS = 32_768;
 export interface PluginTeamPlan {
   concurrency: number | null;
   /** Plugin-authored scope, authenticated by Host registration; never user-authored intent. */
@@ -94,7 +102,8 @@ export function isPluginTeamPlanWithinBudget(plan: unknown): boolean {
   } catch { return false; }
 }
 export type PluginTaskRequest = (
-  | { type: 'tasks-request'; kind: 'capabilities' | 'models' }
+  | { type: 'tasks-request'; kind: 'capabilities' | 'models' | 'imProjects' }
+  | { type: 'tasks-request'; kind: 'followImProject'; taskId: string; expectedRevision: number; imProject: string }
   | { type: 'tasks-request'; kind: 'setModel'; taskId: string; expectedRevision: number; route: PluginTaskRoute | 'plugin-default' }
   | {
       type: 'tasks-request';
@@ -105,6 +114,8 @@ export type PluginTaskRequest = (
       title?: string;
       /** Opt in to Host naming after the first accepted message; omit title. */
       autoTitle?: boolean;
+      /** Shared IM project: chat or a directory returned by imProjects. Requires agent.targets. */
+      imProject?: string;
       route?: PluginTaskRoute;
       /** New task only; the plugin's Host card ceiling applies only when enabled. */
       permissionMode?: PluginTaskPermissionMode;
@@ -131,7 +142,10 @@ export type PluginTaskRequest = (
       text: string;
       /** Supplementary material, collapsed in the conversation but sent to the Agent. */
       context?: string;
+      /** The message's own images, audio/video or files; shown with it. `text` may be '' when present. */
       attachments?: PluginMessageAttachment[];
+      /** Model-only references (for example group history); never shown or saved with the message. */
+      contextAttachments?: PluginMessageAttachment[];
       /** Optional Host-issued parent invocation; correlation only, not execution authority. */
       invocationId?: string;
       /** Optional IM relay context (capabilities().messageRelay); rendered as an IM card. */

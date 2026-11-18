@@ -25,6 +25,7 @@ import {
   collectProjectInstructionFiles,
 } from '../controller/projectFiles';
 import { managedAliasSources, shadowAliases, startRemoteAgentSession } from '../controller/startRemote';
+import { RemoteAgentPoller, RemoteAgentRunClient } from '../controller/runClient';
 import { EXEC_SERVER_NOT_FOUND_CODE } from '../host/execServerShortcut';
 import { createRemoteAgentHost, mirrorSegments, type HostedStartInput } from '../host/runHost';
 import { createProviderShareMemberPurger, hostedStartOptions } from '../host/service';
@@ -75,8 +76,16 @@ describe('reapproved member cleanup admission', () => {
     let joinedAt = 'g1';
     const snapshot = () => [{ shareId: 's', members: [{ memberId: 'm', joinedAt }] }];
     const forkHosted = vi.fn(async () => ({ newSdkSessionId: 'native-child', uuidMap: new Map() }));
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>(resolve => { releaseStart = resolve; });
+    let startEntered!: () => void;
+    const starting = new Promise<void>(resolve => { startEntered = resolve; });
     const makeHost = () => createRemoteAgentHost({
-      isAgentAvailable: () => true, startHosted: async (input) => idleHandle(input), forkHosted,
+      isAgentAvailable: () => true, startHosted: async (input) => {
+        startEntered();
+        await startGate;
+        return idleHandle(input);
+      }, forkHosted,
       isControllerAuthorized: () => usage.memberGenerationReady(identity, joinedAt), controllerTrust: () => 'guest',
       providerAccess: { resolve: async () => 'shared', isAllowed: () => true },
       bindGuestProviderRoute: async () => ({ routeToken: 'route-token', modelIds: ['claude-opus'], release() {} }),
@@ -87,16 +96,30 @@ describe('reapproved member cleanup admission', () => {
     let current = makeHost();
     const fork = { op: 'fork', sourceSessionId: 'task-1', newSessionId: 'task-2', agentKind: 'claude-code',
       sourceSdkSessionId: 'sdk-1', model: 'claude-opus', upToMessageId: 'message-1' };
+    const firstHost = current;
+    const runId = randomUUID();
+    const client = new RemoteAgentRunClient(runId,
+      new RemoteAgentPoller(async args => firstHost.handle(controller, args[0])), {
+        onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+        onRequest: async () => ({ type: 'callback', value: undefined }),
+      }, randomUUID);
     try {
-      const runId = randomUUID();
-      await current.handle(controller, { op: 'open', runId, agentKind: 'claude-code', payload: { json: {
+      const opened = client.open('claude-code', {
         sessionId: 'task-1', virtualWorkspace: true, options: { model: 'claude-opus' },
         workspace: { workingDir: '/guest/project', platform: 'darwin', shell: 'zsh' },
         projectFiles: [], ancestorFiles: [], personal: { files: [] }, mcpServers: [],
-      } } });
-      await vi.waitFor(() => expect(fs.readFileSync(path.join(root, 'remote-agent', 'guest-sessions.json'), 'utf8')).toContain('sdk-1'));
+      });
+      await starting;
+      const index = path.join(root, 'remote-agent', 'guest-sessions.json');
+      // Open acceptance precedes native-session registration. Hold startup so
+      // this regression waits for the production started handshake, not a
+      // one-second filesystem deadline that can expire under Windows CI load.
+      expect(fs.readFileSync(index, 'utf8')).not.toContain('sdk-1');
+      releaseStart();
+      await opened;
+      expect(fs.readFileSync(index, 'utf8')).toContain('sdk-1');
       await expect(current.handle(controller, fork)).resolves.toMatchObject({ newSdkSessionId: 'native-child' });
-      await current.handle(controller, { op: 'close', runId, mode: 'close', reason: 'navigation' });
+      await client.close('close', 'navigation');
       current.dispose();
       usage = createProviderShareUsageStore(ledger);
       joinedAt = 'g2';
@@ -110,7 +133,7 @@ describe('reapproved member cleanup admission', () => {
       expect(usage.memberGenerationReady(identity, joinedAt)).toBe(true);
       await expect(current.handle(controller, fork)).rejects.toThrow('REMOTE_AGENT_INVALID');
       expect(forkHosted).toHaveBeenCalledTimes(1);
-    } finally { current.dispose(); }
+    } finally { releaseStart(); client.abandon('test-cleanup'); current.dispose(); }
   });
 
   it('waits for legacy relay forgets and preserves directory cleanup receipts after an index deletion failure', async () => {

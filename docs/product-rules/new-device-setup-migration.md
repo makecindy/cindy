@@ -1,8 +1,13 @@
 # 新电脑设置：迁移助理
 
-> **读取时机**：修改「迁移助理」（从其他电脑迁移）的入口、迁移范围、`maker:setup-snapshot` 协议、
-> 计划与应用规则、一次性配置清单，或新增一类可迁移的设置前。
-> 跨电脑通道见 [`../dev-rules/remote-and-mobile-adaptation.md`](../dev-rules/remote-and-mobile-adaptation.md)，
+> **读取时机**：修改「迁移助理」（从其他电脑迁移）的入口、迁移范围、`maker:setup-snapshot` /
+> `maker:setup-transfer` 协议、计划与应用规则、一次性配置清单，或新增一类可迁移的设置前。
+> **适用路径**：`apps/desktop/src/main/setup-migration/**`、
+> `apps/desktop/src/renderer/features/setup-migration/**`、
+> `apps/desktop/src/renderer/components/settings/SetupMigrationSection.tsx`、
+> `apps/desktop/src/shared/setupMigration.ts`、`packages/device-link/src/**/{setupSnapshot,setupTransfer}*`、
+> `apps/desktop/src/main/remote-ssh/**/setupMigrationSsh*`、`apps/desktop/scripts/fixtures/setup-migration/**`
+> **相关规则**：跨电脑通道见 [`../dev-rules/remote-and-mobile-adaptation.md`](../dev-rules/remote-and-mobile-adaptation.md)，
 > 凭证边界见 [`../dev-rules/credentials-and-local-storage.md`](../dev-rules/credentials-and-local-storage.md)，
 > 插件安装确认见 [`../dev-rules/plugin-security-and-authoring.md`](../dev-rules/plugin-security-and-authoring.md) §3.1。
 

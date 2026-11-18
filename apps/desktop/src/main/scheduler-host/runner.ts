@@ -47,7 +47,7 @@ import {
 
 import { randomUUID } from 'node:crypto';
 
-import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent, safeTurnContinuationCancellationReason } from '@cindy/maker-core';
 import { formatSourceRef } from '@cindy/maker-shared/message-source';
 import {
   restoreAutoReviewUserIntent,
@@ -2037,7 +2037,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 失败仅 warn,不影响本次 fire；下次 fire 会再尝试绑定。
     if (!isHeartbeat && schedule.persistentSession && this.scheduler) {
       try {
-        await this.scheduler.update(schedule.id, { targetSessionId: session.id });
+        await this.scheduler.updateFromCurrent(schedule.id, async (current) => {
+          // Session creation may yield to an edit. Check under the mutation lock
+          // so a late first run cannot restore a cleared/replaced binding.
+          return current.persistentSession && !current.targetSessionId
+            ? { targetSessionId: session.id }
+            : {};
+        });
       } catch (err) {
         this.deps.logger.warn?.('[runner] persistentSession bind failed (non-fatal)', err);
       }
@@ -3802,6 +3808,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       let currentSession: Session | null = null;
       let settled = false;
       let quotaWaiting = false;
+      // Keep only this run's extracted terminal detail, including across Maker's
+      // same-id Session replacement. Recovery failure must not erase its cause.
+      let lastTerminalError: string | undefined;
       const clearInterruptedDoneTimer = (): void => {
         if (interruptedDoneTimer) {
           clearTimeout(interruptedDoneTimer);
@@ -3848,6 +3857,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
         settled = true;
         cleanup();
         reject(err);
+      };
+
+      const failContinuation = (continuationId: number | undefined, rawReason: unknown): void => {
+        if (settled) return;
+        // Rebuild diagnostic fields from fixed codes/numbers. Never stringify a
+        // provider error or arbitrary callback data into logs or run history.
+        const reason = safeTurnContinuationCancellationReason(rawReason) ?? 'unknown';
+        const id = typeof continuationId === 'number' && Number.isSafeInteger(continuationId) && continuationId > 0
+          ? continuationId : 'unknown';
+        this.deps.logger.warn?.('[runner] turn continuation cancelled', {
+          sessionId, continuationId: id, reason,
+        });
+        fail(new Error(`Scheduled turn continuation was cancelled (reason: ${reason}, continuationId: ${id})`));
       };
 
       const onSessionStatus = (
@@ -3962,7 +3984,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (continuationState === 'cancelled') {
             // Provider already observed an explicit stop/teardown. Session
             // gets a separate ordered boundary; this run did not complete.
-            fail(new Error('Scheduled turn continuation was cancelled'));
+            failContinuation(continuationId, continuationId === undefined
+              ? undefined : owner.getTurnContinuationCancellationReason?.(continuationId));
             return;
           }
           if (continuationState === 'awaiting' || continuationState === 'active') {
@@ -3970,7 +3993,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             // turn —— 不定格，等待续 turn 自己的 done。
             pendingContinuationUnsub?.();
             pendingContinuationUnsub = owner.onTurnContinuationChange?.(
-              (changedContinuationId, state) => {
+              (changedContinuationId, state, reason) => {
                 if (
                   state !== 'cancelled' ||
                   (continuationId !== undefined && changedContinuationId !== continuationId)
@@ -3979,7 +4002,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
                 }
                 pendingContinuationUnsub?.();
                 pendingContinuationUnsub = undefined;
-                fail(new Error('Scheduled turn continuation was cancelled'));
+                failContinuation(changedContinuationId, reason);
               },
             );
             this.deps.logger.info?.(
@@ -4022,6 +4045,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           finish();
         } else if (isTerminalAgentErrorEvent(ev)) {
           const error = extractErr(ev.data);
+          lastTerminalError = error;
           ignorePairedInterruptedDone = true;
           clearInterruptedDoneTimer();
           interruptedDoneTimer = setTimeout(() => {
@@ -4066,7 +4090,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       autoResumeFailureUnsub = this.deps.schedulerQueue?.onAutoResumeFailed?.(
         sessionId,
         options.origin.runId,
-        () => fail(new Error('scheduled task auto-resume failed')),
+        () => fail(new Error(lastTerminalError
+          ? `scheduled task auto-resume failed: ${lastTerminalError}`
+          : 'scheduled task auto-resume failed')),
         {
           start: () => {
             if (settled || quotaWaiting) return;

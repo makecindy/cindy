@@ -32,6 +32,9 @@ import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.js';
 import os from 'node:os';
 import path from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import WebSocket from 'ws';
+import { createHostWebSocketAgent, hostOutbound } from './outbound.mjs';
 import { getDefaultVoiceInputSettings } from '../../desktop/src/shared/voiceInputData.ts';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../desktop/src/shared/appearanceSettings.ts';
 import { createDefaultLayout } from '../../desktop/src/shared/layoutTree.ts';
@@ -164,7 +167,7 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 
 const command = process.argv[2];
 if (command === '--help' || command === '-h') {
-  console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>]|stop]');
+  console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]|stop]');
 } else if (command === 'open') {
   try {
     await openHostBrowser(resolveHostDataDir());
@@ -207,7 +210,8 @@ if (command === '--help' || command === '-h') {
  } else if (command === 'remote') {
   try {
     const action = process.argv[3] ?? 'status';
-    if (!['status', 'enable', 'disable', 'revoke'].includes(action)) throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>]');
+    if (!['status', 'enable', 'disable', 'revoke', 'agent-net-on', 'agent-net-off'].includes(action))
+      throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]');
     console.log(JSON.stringify(await requestHostRemote(resolveHostDataDir(), action, process.argv[4]), null, 2));
   } catch (error) {
     console.error(`cindy-host remote failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -630,7 +634,6 @@ async function ensureRuntime(ownerId: string): Promise<void> {
         },
       }),
       openExternal: async url => { await openSystemBrowser(url); },
-      modelAccessReady: () => Boolean(currentGateway()?.credential),
     },
     getSession: id => agentGraph?.maker.getSession(id),
     requestFileConfirmation: (id, payload) => fileConfirmation.request(id, payload),
@@ -1658,9 +1661,59 @@ const server = createHostServer({ ...serverDeps, service, platformClient: () => 
     if (action === 'status') return deviceLink.state();
     if (action === 'enable' || action === 'disable') return deviceLink.setEnabled(action === 'enable');
     if (action === 'revoke') return deviceLink.revoke(body.deviceId ?? '');
+    // This Host's 「Agent-Net (Beta)」 setting; off by default (docs/agent-net-session-plan.md 阶段 5).
+    if (action === 'agent-net-on' || action === 'agent-net-off') return deviceLink.setAgentNetEnabled(action === 'agent-net-on');
     throw new Error('Unknown remote control command');
   },
 });
+
+/**
+ * Agent-Net for this Host (docs/agent-net-session-plan.md 阶段 5), wired like the Desktop: the account token only enrolls
+ * this device on the region's official Agent-Net service; the identity's keys stay in this Host's credential store.
+ * Off until the Host's 「Agent-Net (Beta)」 setting is turned on.
+ */
+function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentNet'] {
+  const realm = account.realm === 'cn' ? 'cn' : 'global';
+  const base = readAuthEndpoints(realm).agentNetApiBaseUrl ?? null;
+  if (!base) return undefined;
+  let store: Promise<Awaited<ReturnType<typeof createCredentialStore>>> | null = null;
+  // A store that could not open (keyring still locked) is tried again on the next use, not remembered as failed.
+  const credentials = () => (store ??= createCredentialStore({ userDataDir: resolveHostDataDir(),
+    keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined }).catch((error: unknown) => { store = null; throw error; }));
+  let core: Promise<WebAssembly.Module> | null = null;
+  return {
+    base: () => base,
+    subject: () => accountUser?.id ?? null,
+    deviceId: () => currentDeviceId,
+    deviceName: () => process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`,
+    readSecret: async key => (await credentials()).read(key),
+    writeSecret: async (key, value) => { (await credentials()).write(key, value); },
+    enroll: (url, body) => serverApi('/api/agent-net/enroll', { baseUrl: url, method: 'POST', body, timeoutMs: 10_000, cache: 'no-store',
+      logLabel: '/api/agent-net/enroll', redactErrorDetails: true, allowedRedactedErrorCodes: ['DEVICE_REENROLLMENT_REQUIRES_APPROVAL'] }),
+    fetch: (input, init) => hostOutbound.outboundFetch(input, init),
+    createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createHostWebSocketAgent(url) }),
+    workerFile: () => (existsSync(layout.agentNetWorker) ? layout.agentNetWorker : null),
+    coreModule: () => (core ??= readFile(layout.agentNetCore).then(bytes => WebAssembly.compile(bytes))
+      .catch((error) => { core = null; throw error; })),
+    // Devices removed from the account in Device Link are refused on Agent-Net until they sign in again (agentNetMembership.ts).
+    deviceLinkDeviceIds: async () => {
+      const baseUrl = readAuthEndpoints(realm).deviceLinkApiBaseUrl;
+      if (!baseUrl || !account.authenticated) return null;
+      const listed = await serverApi<{ devices?: Array<{ deviceId?: unknown }> }>('/api/device-link/devices', {
+        baseUrl, timeoutMs: 10_000, cache: 'no-store', redactErrorDetails: true });
+      return Array.isArray(listed?.devices)
+        ? listed.devices.map(device => device?.deviceId).filter((id): id is string => typeof id === 'string') : null;
+    },
+    // 名册缓存（公开证书）：官方 Agent-Net 服务出故障时重启也能起来，和 Desktop 一样（agentNetDirectoryCache.ts）。按服务与账号各一份。
+    directoryCacheFile: () => {
+      const subject = accountUser?.id;
+      if (!subject) return null;
+      const scope = createHash('sha256').update(JSON.stringify([base, subject])).digest('hex').slice(0, 32);
+      return path.join(resolveHostDataDir(), 'agent-net', scope, 'directory.json');
+    },
+    log: createLogger('agent-net'),
+  };
+}
 
 function startDeviceLink(): void {
   if (deviceLink) return;
@@ -1674,6 +1727,7 @@ function startDeviceLink(): void {
     getToken: async () => currentSessionToken,
     refreshToken: async () => { await refreshAuthSession(); },
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
+    agentNet: hostAgentNetPorts(),
     invoke: service, subscribe: eventHub.subscribe,
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();

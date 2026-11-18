@@ -1,6 +1,6 @@
 import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
 import { Select } from '@/components/ui/select';
-import { sameRunLocationProvider, duplicateSubscriptionProviders, subscriptionModelsCoveredBy } from '@cindy/model-providers';
+import { duplicateSubscriptionProviders, listedSourceFolds } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { providersSettings } from './ProvidersSection.settings-search';
 import {
@@ -712,7 +712,7 @@ function DetailHeader({
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
-  // Borrowing another computer's sign-in: this computer's own accounts and "not connected" do not apply.
+  // Model execution can be remote while account management still belongs to this computer.
   const borrowing = useProviderBorrow(provider).borrowed !== null;
   const canRename = !!provider && provider.id !== 'xd' && !isOrganizationManagedProvider(provider);
   const resolvedDelete =
@@ -874,7 +874,12 @@ function DetailHeader({
               data-testid="provider-detail-actions"
               className="flex shrink-0 items-center gap-2.5"
             >
-              {borrowing ? null : status?.kind === 'connected' ? (
+              {borrowing && (status || primaryAction) && (
+                <span className="text-12 text-[var(--text-secondary)]">
+                  {t('settings.providers.detail.runLocation.optionLocal')}
+                </span>
+              )}
+              {status?.kind === 'connected' ? (
                 <ConnectedPill />
               ) : status?.kind === 'reconnect-required' ? (
                 <ReconnectRequiredPill />
@@ -883,7 +888,7 @@ function DetailHeader({
                   {status.label}
                 </span>
               ) : null}
-              {primaryAction && !borrowing && <PillButton {...primaryAction} />}
+              {primaryAction && <PillButton {...primaryAction} />}
             </div>
             {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
               整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
@@ -915,11 +920,6 @@ function DetailHeader({
                     <DropdownMenuItem onClick={editAction.onClick} disabled={editAction.disabled}>
                       <Pencil size={18} className="mr-2.5" />
                       {editAction.label}
-                    </DropdownMenuItem>
-                  )}
-                  {borrowing && primaryAction && (
-                    <DropdownMenuItem onClick={primaryAction.onClick} disabled={primaryAction.disabled}>
-                      {t('settings.providers.detail.runLocation.signInHere')}
                     </DropdownMenuItem>
                   )}
                   {menuItems}
@@ -962,12 +962,13 @@ function DetailHeader({
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
         {/* Pooled subscription accounts show the provider card in the default account's row. */}
-        {subscriptionPool && subscriptionKind && !borrowing && (
+        {subscriptionPool && subscriptionKind && (
           <SubscriptionAccountsSection
             key={subscriptionPool}
             providerId={subscriptionPool}
             kind={subscriptionKind}
             providerName={provider?.name}
+            locationLabel={borrowing ? t('settings.providers.detail.runLocation.optionLocal') : undefined}
             defaultUsage={usageCard}
             dashboard={dashboard ?? undefined}
             expectAccounts={provider?.connected === true}
@@ -2467,6 +2468,8 @@ function ListRow({
   const title = providerDisplayName(provider, t);
   return (
     <div
+      // Listed-source identity shared with the model picker rail (`local:<providerId>`).
+      data-listed-source={`local:${provider.id}`}
       className={cn(
         'relative flex w-full items-center rounded-lg text-left transition-colors',
         selected
@@ -2848,14 +2851,22 @@ export function ProvidersSection() {
     [orderedVisibleProviders, pendingProviderOrderIds],
   );
   const sharedLocalProviders = listProviders.filter(provider => ownedShares.get(null)?.has(provider.id));
-  const localDuplicates = duplicateSubscriptionProviders(listProviders.filter(provider =>
-    !ownedShares.get(null)?.has(provider.id) && providerGroups.ready && !providerGroups.groups[provider.id]));
-  const ordinaryLocalProviders = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id) && !localDuplicates.has(provider.id));
+  const localBase = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id));
+  const localExempt = (providerId: string) => !providerGroups.ready || !!providerGroups.groups[providerId];
+  // Which equal account connection a folded row opens (its account list lives on the root row).
+  const localDuplicates = duplicateSubscriptionProviders(localBase.filter(provider => !localExempt(provider.id)));
   const sharedRemoteProviders = ownRemoteProviders.filter(entry => ownedShares.get(entry.deviceId)?.has(entry.provider.id));
-  // The same provider on another computer folds into this computer's listed entry (run location lives there).
-  const foldsIntoLocal = (remote: ProviderView) => !remote.suspended && ordinaryLocalProviders.some(local => !local.suspended && !providerGroups.groups[local.id] && sameRunLocationProvider(local, remote) && subscriptionModelsCoveredBy(remote, local));
-  const ordinaryRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id)
-    && (entry.group || !foldsIntoLocal(entry.provider)));
+  const unsharedRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id));
+  // Same rule as both model pickers: an equal source is listed once; this computer's entry represents it.
+  const listedFolds = listedSourceFolds({
+    base: localBase,
+    baseExempt: localExempt,
+    others: [...new Set(unsharedRemoteProviders.map(entry => entry.deviceId))].map(deviceId => ({
+      deviceId, providers: unsharedRemoteProviders.filter(entry => entry.deviceId === deviceId).map(entry => entry.provider),
+    })),
+  });
+  const ordinaryLocalProviders = localBase.filter(provider => !listedFolds.hiddenBase.has(provider.id));
+  const ordinaryRemoteProviders = unsharedRemoteProviders.filter(entry => !listedFolds.hiddenOther.get(entry.deviceId)?.has(entry.provider.id));
 
   useEffect(() => {
     if (pendingProviderOrder && pendingProviderOrder.dataOwnerId !== dataOwnerId) {

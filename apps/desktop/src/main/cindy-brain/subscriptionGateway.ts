@@ -25,6 +25,8 @@ import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-contin
 import { eq } from 'drizzle-orm';
 import { parseGhostModelRoute, parseGhostContextBlocks, parseGhostMemoryEntries, type GhostContextBlock, type GhostMemoryEntry } from '@cindy/plugin-protocol';
 import { isRuntimePluginPoint } from '../../shared/pluginRuntime.js';
+import { parseToolLifecycleVerdict } from '../../shared/pluginToolLifecycle.js';
+import type { ToolLifecycleVerdict } from '@cindy/maker-core/tool-lifecycle';
 
 import {
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,
@@ -66,7 +68,8 @@ const BLOCK_REASON_MAX_CHARS = 200;
 
 /** 单意识裁决(askOne 归一化产物;null = 本轮失败已计熔断)。 */
 type HookVerdict = {
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories' | 'tool';
+  tool?: ToolLifecycleVerdict;
   blocks?: GhostContextBlock[];
   entries?: GhostMemoryEntry[];
   route?: GhostModelRoute;
@@ -151,8 +154,8 @@ export interface GhostSubscriptionGatewayDeps {
   isRunning(ghostId: string): boolean;
   /** 按需拉起电子脑(幂等;失败 reject)。 */
   wake(ghost: InstalledGhost): Promise<void>;
-  /** 管子下行投递(electronSandboxAdapter.sendToGhostLogic;失败抛/返 false)。 */
-  sendToGhost(ghostId: string, payload: GhostPipeEventPush): void;
+  /** 管子下行投递(失败抛/返 false)。Optional install is checked in this synchronous stage; never retain it. */
+  sendToGhost(ghostId: string, payload: GhostPipeEventPush, synchronousInstall?: InstalledGhost): void;
   now(): number;
   /** 钩子熔断回调(通知 renderer + 日志;每意识只触发一次)。 */
   onHookFused?(ghost: InstalledGhost, ownerStamp?: unknown): void;
@@ -324,12 +327,12 @@ export class GhostSubscriptionGateway {
       ts: this.deps.now(),
       data,
     };
-    if (topic === 'message' || topic === 'task-state') this.contentRecipients.set(evt, ghost);
+    if (topic === 'message' || topic === 'task-state' || topic === 'tool-execution') this.contentRecipients.set(evt, ghost);
 
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
-    if (this.deps.isRunning(ghostId) && e.buffer.length === 0 && !e.waking) {
-      if (this.sendOne(ghostId, e, evt, ownerScope)) return;
+    if (topic !== 'tool-execution' && this.deps.isRunning(ghostId) && e.buffer.length === 0 && !e.waking) {
+      if (this.sendOne(ghostId, e, evt, ownerScope, ghost)) return;
     }
     this.buffer(ghost, e, evt, ownerScope);
   }
@@ -341,21 +344,27 @@ export class GhostSubscriptionGateway {
     e: SubEntry,
     evt: GhostPipeEventPush,
     ownerScope = e.ownerScope,
+    synchronousInstall?: InstalledGhost,
   ): boolean {
     if (!this.ownerScopeUsable(ownerScope)) {
       this.invalidateOwner(ghostId, e);
       return false;
     }
     const recipient = this.contentRecipients.get(evt);
+    // Immediate sends reuse publishTo's check. flush never supplies that fact:
+    // after any asynchronous boundary the queued recipient must be checked again.
+    const live = synchronousInstall ?? (recipient
+      ? this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient
+      : undefined);
     if (recipient && 'topic' in evt) {
-      const live = this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient;
       // A queue belongs to the exact approved install. Drop stale events instead of retrying into an update.
       if (!live?.enabled || ghostInstallApprovalToken(live.approval) !== ghostInstallApprovalToken(recipient.approval)
         || !live.manifest.subscribe?.topics?.includes(evt.topic) || !ghostTaskEventApproved(live, evt.topic)) return true;
     }
     const payload = e.pendingDropped > 0 ? { ...evt, dropped: e.pendingDropped } : evt;
     try {
-      this.deps.sendToGhost(ghostId, payload);
+      if (live) this.deps.sendToGhost(ghostId, payload, live);
+      else this.deps.sendToGhost(ghostId, payload);
       e.pendingDropped = 0;
       return true;
     } catch {
@@ -374,19 +383,20 @@ export class GhostSubscriptionGateway {
       e.pendingDropped += 1;
     }
     e.buffer.push(evt);
-    this.kickWake(ghost, e, ownerScope);
+    this.kickWake(ghost, e, ownerScope, 'topic' in evt && evt.topic === 'tool-execution');
   }
 
   /** 事件到达即按需拉起(去重:唤醒在途不重复 spawn),醒后顺序补投。 */
-  private kickWake(ghost: InstalledGhost, e: SubEntry, ownerScope: unknown): void {
+  private kickWake(ghost: InstalledGhost, e: SubEntry, ownerScope: unknown, deferRunning = false): void {
     if (e.waking) return;
     if (!this.ownerScopeUsable(ownerScope)) {
       this.invalidateOwner(installedGhostStoragePart(ghost), e);
       return;
     }
     e.waking = true;
-    void this.deps
-      .wake(ghost)
+    const ready = deferRunning && this.deps.isRunning(installedGhostStoragePart(ghost))
+      ? Promise.resolve() : this.deps.wake(ghost);
+    void ready
       .then(() => {
         if (this.entries.get(installedGhostStoragePart(ghost)) !== e) return;
         if (!this.ownerScopeUsable(ownerScope)) {
@@ -620,6 +630,7 @@ export class GhostSubscriptionGateway {
     }
     const ghostId = installedGhostStoragePart(ghost);
     const e = this.entry(ghostId);
+    if (e.pointFused && (point === 'will-tool-call' || point === 'did-tool-result')) return { action: 'allow' };
     const controlApproval = ghostInstallApprovalToken(ghost.approval);
     const currentTarget = () => {
       const current = findTarget();
@@ -651,6 +662,9 @@ export class GhostSubscriptionGateway {
         route: point === 'will-start-task' ? legacyRoute : verdict.route,
         reason: (verdict.reason ?? '').slice(0, BLOCK_REASON_MAX_CHARS),
       });
+    }
+    if ((point === 'will-tool-call' || point === 'did-tool-result') && verdict.action === 'tool' && verdict.tool) {
+      return checked({ action: 'tool', ghostId, ghostName: ghost.manifest.name, tool: verdict.tool });
     }
     if (point === 'will-model-request' && verdict.action === 'transform' && verdict.request
       && 'phase' in data && data.phase === 'payload') {
@@ -731,6 +745,8 @@ export class GhostSubscriptionGateway {
         // 不复用消息钩子的"已降级为只旁听"通知：节点熔断后仍按用户的出错处理执行。
         this.deps.log?.warn('ghost control points fused; failures follow user policy', { ghostId });
       }
+      // Native tool hooks fall back to the engine on deadline; no synthetic denial.
+      if (!deliverFailure && (point === 'will-tool-call' || point === 'did-tool-result')) return { action: 'allow' };
       return null;
     }
     e.pointFails = 0;
@@ -867,7 +883,7 @@ export class GhostSubscriptionGateway {
     if (p.type !== 'event-verdict' || typeof p.hookId !== 'string') return;
     const pending = this.pendingHooks.get(p.hookId);
     if (!pending || pending.ghostId !== ghostId) return;
-    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route' && p.action !== 'transform' && p.action !== 'context' && p.action !== 'memories') return;
+    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route' && p.action !== 'transform' && p.action !== 'context' && p.action !== 'memories' && p.action !== 'tool') return;
     const route = p.action === 'route' ? parseGhostModelRoute(p.route) : undefined;
     let request: Record<string, unknown> | undefined;
     if (p.action === 'transform' && p.request && typeof p.request === 'object' && !Array.isArray(p.request)) {
@@ -885,6 +901,7 @@ export class GhostSubscriptionGateway {
       ...(typeof p.height === 'number' ? { height: p.height } : {}),
       ...(route ? { route } : {}),
       ...(request ? { request } : {}),
+      ...(p.action === 'tool' ? { tool: parseToolLifecycleVerdict(p.tool) } : {}),
       ...(p.action === 'context' ? { blocks: parseGhostContextBlocks(p.blocks) } : {}),
       ...(p.action === 'memories' ? { entries: parseGhostMemoryEntries(p.entries) } : {}),
     });

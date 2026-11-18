@@ -5,8 +5,53 @@ import type { InstalledGhost } from '../../../shared/ghost.js';
 import { buildPluginMessage } from '../../../shared/pluginMessage.js';
 import { parseUserContent } from '../../../renderer/lib/imageRef.js';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
+import { createGhostPageBridge } from '../../../shared/ghostPageBridge.js';
+import { ensurePluginTaskApproval } from '../taskCapability.js';
 
 describe('plugin task pipe', () => {
+  // PR #10988: new project-only callers had no route into the existing target consent UI.
+  // The prior grant tests started already approved. One real project request, unit tier.
+  it.each(['allow', 'deny', 'owner-change'] as const)('requests first-use project consent and handles %s', async decision => {
+    const pending = { ...ghost, manifest: { ...ghost.manifest, agent: { tasks: true, targets: true } }, targetCapabilityApproved: undefined } as InstalledGhost;
+    let active = true;
+    const handler = vi.fn(async () => ({ projects: [{ id: 'chat', label: 'Chat' }] }));
+    const confirm = vi.fn(async () => { if (decision === 'owner-change') active = false; return decision !== 'deny'; });
+    const approve = vi.fn(async () => { pending.targetCapabilityApproved = true; return true; });
+    const result = await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'imProjects' }, {
+      getGhost: () => pending, handler, isCurrent: () => active,
+      ensureTargetsAuthorized: () => ensurePluginTaskApproval('p', {
+        getGhost: () => pending, isCurrent: () => active, confirm, approve,
+      }, 'targets'),
+    });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(result).toMatchObject(decision === 'allow' ? { ok: true } : { ok: false, error: { code: 'PERMISSION_DENIED' } });
+    expect(handler).toHaveBeenCalledTimes(decision === 'allow' ? 1 : 0);
+    expect(approve).toHaveBeenCalledTimes(decision === 'allow' ? 1 : 0);
+  });
+  // Shared project metadata and directory access must not expand an old tasks-only grant.
+  // Existing cases only covered own-task routes. Real page API and pipe; one project request. Unit.
+  it('gates shared IM projects on existing target consent and rejects competing overrides', async () => {
+    const handler = vi.fn(async () => ({ accepted: true }));
+    const approved = { ...ghost, manifest: { ...ghost.manifest, agent: { tasks: true, targets: true } }, targetCapabilityApproved: true } as InstalledGhost;
+    let current = ghost;
+    const page = createGhostPageBridge({ ping: async () => ({ ok: true, id: 'p' }),
+      send: payload => handlePluginTaskRequest('p', payload, { getGhost: () => current, handler, isCurrent: () => true }) });
+    const requests = [
+      { type: 'tasks-request', kind: 'imProjects' },
+      { type: 'tasks-request', kind: 'create', requestKey: 'project', title: 'Group', imProject: 'chat' },
+      { type: 'tasks-request', kind: 'followImProject', taskId: 'owned', expectedRevision: 1, imProject: '/project' },
+    ];
+    for (const request of requests) {
+      const { type: _type, kind, ...args } = request;
+      current = ghost;
+      await expect(page.api.tasks[kind]!(args)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+      current = approved;
+      await expect(page.api.tasks[kind]!(args)).resolves.toEqual({ accepted: true });
+    }
+    expect(handler).toHaveBeenCalledTimes(3);
+    for (const field of [{ permissionMode: 'bypassPermissions' }, { isolatedWorkspace: true }, { callId: 'call' }])
+      expect(validPluginTaskRequest({ ...requests[1], ...field })).toBe(false);
+  });
   // User regression: the Host picker returned a valid remote selection that tasks.create/setModel
   // rejected. Exercise the actual pipe, including its capability discovery; existing cases only
   // passed local routes. Minimum input: the same route on a paired computer or share. Tier: unit.
@@ -25,7 +70,8 @@ describe('plugin task pipe', () => {
       }
     }
     expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps))
-      .toMatchObject({ ok: true, data: { remoteRoutes: true } });
+      // runPreview is the feature flag plugins check before reading getRun().preview (2026-11-17).
+      .toMatchObject({ ok: true, data: { remoteRoutes: true, runPreview: true } });
   });
   it('round-trips collapsed context with screenshots while model history retains the full material', () => {
     const message = buildPluginMessage('Look here', 'Window text and pointer coordinates', 'Attached context');

@@ -4,6 +4,7 @@ import type { ChatMessage as Message } from '@/lib/makerChatStore';
 import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
 
 const STATUS_KEYS = new Map<string, string>([
+  ['waiting for remote response', 'ccAgent.agentStatus.waitingRemoteResponse'],
   ['thinking', 'ccAgent.agentStatus.thinking'],
   ['generating', 'ccAgent.agentStatus.generating'],
   ['editing files', 'ccAgent.agentStatus.editingFiles'],
@@ -31,6 +32,7 @@ const TURN_START_NAME_PATTERNS = [
   /^(.+), leave it to me$/i,
   /^Working on it, (.+)$/i,
 ];
+const ISSUE_TIP_PATTERN = /^(.+),试试 \/issue 给我们提反馈或建议$/;
 
 function normalizeStaticStatus(status: string): string {
   return status
@@ -38,6 +40,54 @@ function normalizeStaticStatus(status: string): string {
     .replace(/(?:\.{3}|…)$/, '')
     .trim()
     .toLowerCase();
+}
+
+/** A queued location switch applies to preparation; a live turn keeps its current location. */
+export function statusAgentLocation(
+  current: string | null | undefined,
+  pending: string | null | undefined,
+  isRunning: boolean,
+): string | null {
+  return !isRunning && pending !== undefined ? pending : current ?? null;
+}
+
+/** Only replace the initial generic status; never hide real work or interaction states. */
+export function remoteResponsePendingStatus(
+  status: string,
+  agentDeviceId: string | null | undefined,
+  isRunning: boolean,
+  messages: readonly Message[],
+): string {
+  if (!agentDeviceId || !isRunning) return status;
+  const normalized = normalizeStaticStatus(status);
+  if (!['thinking', 'working', 'running', 'generating', 'just wait', ''].includes(normalized)
+    && !ISSUE_TIP_PATTERN.test(status.trim())
+    && !TURN_START_NAME_PATTERNS.some(pattern => pattern.test(status.trim()))) return status;
+  return hasTurnResponse(messages) ? status : 'Waiting for remote response';
+}
+
+/** Transcript order also works when a fast response arrives before the view sees running. */
+export function hasTurnResponse(messages: readonly Message[], inputClientId?: string): boolean {
+  // A local send can precede its transcript echo. Until that input boundary is
+  // present, activity in the old transcript cannot settle the new preparation.
+  let inputSeen = !inputClientId;
+  let response = false;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.parentToolUseId && isSubagentParentToolUseId(message.parentToolUseId)) continue;
+    if (message.role === 'user' && message.clientId === inputClientId) inputSeen = true;
+    // Steers belong to the existing turn, so they must not restart its preparation label.
+    if (message.role === 'user' && message.delivery !== 'steer' && !message.isSyntheticTrigger) break;
+    // Use transcript boundaries rather than comparing clocks on two computers.
+    if (message.systemCardType) continue;
+    if (message.role === 'tool_use' || message.role === 'tool_result'
+      || message.role === 'thinking'
+      || (message.role === 'assistant' && message.content.trim())) {
+      response = true;
+      if (inputSeen) return true;
+    }
+  }
+  return inputSeen && response;
 }
 
 /** Plain composer copy uses the same runtime status as the task status bar.
@@ -110,7 +160,7 @@ export function localizeAgentStatus(status: string, t: TFunction): string {
   if (staticKey) return t(staticKey);
 
   const trimmedStatus = status.trim();
-  const issueTip = trimmedStatus.match(/^(.+),试试 \/issue 给我们提反馈或建议$/);
+  const issueTip = trimmedStatus.match(ISSUE_TIP_PATTERN);
   if (issueTip) {
     return t('ccAgent.agentStatus.issueTip', { name: issueTip[1] });
   }

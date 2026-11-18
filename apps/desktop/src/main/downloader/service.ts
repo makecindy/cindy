@@ -99,7 +99,14 @@ export type {
   DownloadErrorCode,
   RetryConfig,
   TimeoutConfig,
+  DownloadTimeoutReason,
   Logger,
   DownloadRequest,
 } from './types';
 export { DownloadError } from './types';
+export {
+  createDownloadProgressReporter,
+  retryReasonOf,
+  type DownloadProgressReporter,
+  type DownloadProgressReporterOptions,
+} from './progressReporter';

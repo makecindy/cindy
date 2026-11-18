@@ -3,6 +3,12 @@
 > 权威入口：先读本页，再按问题打开专题。Server 为独立仓库，文档不代表已部署。
 > 心动部署的 AI Gateway（模型路由与计费服务端）源码在内部仓库 `xindong/ai-gateway` 与
 > `xindong/litellm`（2026-10-28 确认）；排查网关行为先查这两处。
+> **读取时机**：首次理解模型配置架构，新增模型／供应商，更新模型窗口／价格／推理档位／默认值／本地推荐，
+> 或排查目录下发与显示错误之前
+> **适用路径**：`packages/model-providers/**`、`tools/model-catalog/**`、
+> `apps/desktop/src/main/maker-host/**/model-catalog-override-store*`、
+> `apps/desktop/src/main/maker-host/{active-catalog,subscriptionPoolCatalog,provider-model-auto-refresh}.ts`、
+> `apps/desktop/src/main/maker-host/model-discovery/**`
 
 ## 本地模型说明的客户端译文
 

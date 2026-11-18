@@ -1,5 +1,12 @@
 # 远程连接与手机版适配
 
+> **读取时机**：新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，
+> 或修改 device-link 的重试／超时／断链恢复逻辑之前；功能不在下列路径内时同样适用
+> **适用路径**：`packages/{device-link,remote-file-service,maker-remote-ssh}/**`、
+> `apps/desktop/src/main/device-link/**`、`apps/mobile/src/device-link/**`、
+> `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
+> `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
+
 ## 弱网下的备用截图与视频恢复（2026-11-15）
 
 备用截图仍走原有远程桌面请求，发送端将 JPEG 压到 64 KiB 以内；base64 与回复包装
@@ -322,6 +329,194 @@ presence `online=false` 且没有保留的直连）后，控制端对该同账�
 ③ `client.test.ts`「DEVICE_OFFLINE 之后本地回绝同一对端的调用」验证窗口内不写帧、其它对端照常、
 探测只放行一笔、presence 上线立即触网；`TaskMigrationDialog.test.tsx` 验证读取退避与上线恢复。
 只改控制端本地行为，不改 wire 协议，旧版对端与自建中转无需同步。
+### Agent-Net 上单个对端的确认超时
+
+2026-11-14：开启 Agent-Net 后，Desktop 控制端对一台对端可靠重试耗尽时，仍按旧规则重建整条连接，而这条连接是整个
+Agent-Net 节点（独立线程、核心端点、中继上行和所有对端的加密连接）。慢线路上，对端对请求的确认排在它自己回传的大结果
+后面，30 秒没回来就触发；重建后对端还拿着旧连接，按「同时拨号只留首选拨号方」的规则拒收新连接，要等旧连接约 30 秒后
+超时，其间请求名额被旧请求占满（基线：每秒 64 KB 的线路上回传 1 MiB，5 轮卡死 3 轮，3 分钟内不恢复，见
+[`会话层基线`](../benchmarks/agent-net-session-2026-11-13/README.md)）。
+
+- Device Link 新增本地选项 `reliablePeerTransport`，Desktop 只在主连接实际走 Agent-Net 时为真。重试耗尽时，这条消息
+  首发后对端一直有帧送到、最近 10 秒内仍有，就继续等确认，不复位、不重发（上限 120 秒）；否则只复位这一个对端（与 Mobile
+  的 `isolate-peer` 相同），由下一次请求经既有 link-open 重建、按原 seq 重放，不拆连接。所有对端同时静默的连接级判定照旧。
+  旧中转连接与跨账号连接不传这个选项，行为不变；Node Host 和 Desktop 一样，只在主连接实际走 Agent-Net 时为真。
+- Agent-Net 选连接（`packages/agent-net/src/portableSocket.ts`，Desktop 与手机共用）：对端只在没有到本机的连接时才拨号；
+  本机已有连接建立超过 10 秒仍收到它的新拨号，说明对端换了端点，立即换用新连接，不再等旧连接超时。10 秒内的同时拨号
+  仍只留首选拨号方那一条。
+
+故障半径三问：① 证据是单个对端：它的确认超时，并看它自己是否仍在送达；② 只作用于这一个对端的链路或这一条加密连接，
+不拆节点，其它对端和中继上行不受影响；对端仍在送达时什么也不做，安静时只复位它；换用新连接时旧连接里没送达的数据由
+Device Link 按原 seq 重放，重放沿用原有预算；③ `packages/device-link/src/__tests__/client.test.ts` 用两台出站对端（一台持续
+送达、一台静默）验证只复位静默的那台、共享连接不拆、送达那台的请求在原链路完成；
+`packages/agent-net/src/__tests__/portableSocket.test.ts` 验证旧连接超过窗口后对端再拨入立即换用，同时拨号仍只留一条。
+两条用例去掉修复时都失败。不改 wire 值，新旧版本任意组合兼容：只更新一端时，更新的一端不再拆节点、更快认新连接，另一端
+行为不变。中继只转发数据报，自建中转与官方中转都无需改动。
+
+### 中继转发的数据报走 UDP
+
+2026-11-14：打不通直连时，Agent-Net 数据报原来只能经中继的 443 WebSocket 转发，可靠 UDP 叠在 TCP 上，一个包慢了后面
+都要等。现在中继在原有 UDP 端口上也转发，WebSocket 仍负责认证、名册与在线状态；协议与新旧互通见
+[协议记录](protocol-compatibility/agent-net-udp-relay.md)。设备侧 `packages/agent-net/src/relayUdp.ts`，中继侧
+`packages/agent-net-relay/src/server.ts`。
+
+故障半径三问：① 证据是这条中继会话自己的 UDP 登记有没有被确认：一次登记 4 秒没确认就算不通，与其它会话、其它对端
+无关；② 只切换这条会话上数据报走哪条路：设备不再经 UDP 发，下一次登记告诉中继「收不到」，中继对这台设备退回
+WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢的数据报由传输核心重发；登记一直不通时每秒一次、
+10 秒后每 5 秒一次，每次几十字节；设备的 UDP 上行也断了、发不出「收不到」时，中继 30 秒没收到登记自行退回；
+③ `packages/agent-net/src/__tests__/relayUdp.test.ts` 验证确认中断 4 秒内退回 WebSocket 并告诉中继、恢复后切回，
+`packages/agent-net-relay/src/__tests__/relay.integration.test.ts` 用真实中继套接字验证报「收不到」后改走 WebSocket；
+两条用例去掉修复时都失败。
+
+### Agent-Net 关闭时告诉直连的对端
+
+2026-11-16：两台电脑反方向验收时，Windows 那台正常退出，打洞直连的 macOS 测试机 过了 30.0 秒才判断它离线，期间的建链还选了已经断掉的会话。
+端点关闭时本来就给每条连接发关闭包，但发完立刻关了套接字：UDP 发送是异步的，套接字一关，还没发出的包全被取消
+（Windows、macOS 上发完立刻关都是 0/50）。经中转连接时中转会通知对端，所以之前没碰到。现在端点等这些发送交给系统后再关套接字
+（最多 250 毫秒，`packages/agent-net-core/wasm/node.mts` 的 `CLOSE_DRAIN_MS`），`transport.ts` 先关端点再关中转，
+`portableSocket.ts` 等端点关完才报告关闭，worker 线程之后才被结束。修复后同一场景里 macOS 测试机 4 毫秒就判断断开。
+同日关掉「Agent-Net (Beta)」时又碰到同一个问题的另一条路：设置一变，worker 的下一条消息被拒，`workerSocket.ts` 直接结束线程（code=1006）。
+现在 `terminate()`（这一处，以及 Device Link 判定连接坏了时）马上停止把 worker 的消息交给 Main、马上报告关闭，
+但先让 worker 正常关闭、把关闭包发出去，它报告关完再结束线程，最多 500 毫秒。worker 发来的地址不对这类协议错误照旧立即结束。
+
+故障半径三问：① 证据是本端自己正常关闭（退出、换账号、重建节点），不是对网络状态的猜测；② 只影响关闭的这一刻：关闭包的内容和数量
+不变，不新增重试；等待期间端点不再收发，核心出错导致的关闭照旧立即关；端点端口是随机的，等待中的旧套接字挡不住新端点；
+③ `packages/agent-net/src/__tests__/socket.integration.test.ts` 的 `tells a directly connected peer right away when the transport closes`
+用两端经 127.0.0.1 直连验证一端关闭后另一端 2 秒内收到关闭，`tells a directly connected peer right away when its worker socket is terminated`
+用真实 worker 验证直连后关掉中转、再结束一端的 worker 连接，另一端 2 秒内看不到这条路径；两条去掉对应修复时都失败。不改 wire，新旧版本任意组合兼容：更新了的一端退出时
+对端马上知道，另一端不用改；中继不涉及。
+
+### Agent-Net 会话层上的控制链路（跟着「Agent-Net (Beta)」开关）
+
+2026-11-14：两台都启用会话层的同账号 Desktop 之间，建链、调用、结果与推送改走 Agent-Net 自己的会话
+（[方案](../agent-net-session-plan.md) 第 10.1 节、[协议记录](protocol-compatibility/agent-net-session.md)），不经 Device Link。
+2026-11-16 起没有单独的开关（用户确认）：`apps/desktop/src/main/device-link/index.ts` 一直包着这一层，会话只在 Agent-Net 的主连接上，
+所以「Agent-Net (Beta)」关着（默认）时没有会话，每个调用原样交给 Device Link，行为不变；打开以后两台都宣告了会话能力的同账号 Desktop 走会话。
+调用方超时后，被控端不再执行还没交给业务的这条请求（取消先到，或请求比时限晚到，见[协议记录](protocol-compatibility/agent-net-session.md)「超时」）。
+接口翻译在 `agentNetSessionLinks.ts`，按对端选路在 `agentNetSessionRouting.ts`。一个对端只走一条路：本机控制对端时，会话可用、
+Device Link 上这个对端的链路没就绪、不等恢复、没有待发消息，建链和所有调用（包括不需要建链的列表、探测）都走会话，直到关链或会话断掉；
+Device Link 上有活着的链路时照旧走 Device Link，那上面已确认的请求要等它重建后补回结果。对端控制本机时跟着对端选的路，结果按请求来的那条路回去。
+2026-11-15 两台电脑隔离验收时发现并修正：只按「在途请求」挡会话时几乎从不走会话；列表与探测先经 Device Link 发出时，
+对端把结果放进本机已经没有的旧可靠链路，59 秒后超时、再引发重开。包这一层后，原客户端返回它自己的方法（`connectionFor`、
+`crossAccountConnection`）改为返回这一层，入口里「`connectionFor(peer) === client`」这类身份比较仍然成立。
+和对端的连接刚建好（或换了一条）时，双方的会话宣告还要一来一回：这段时间里 Device Link 上又没有这个对端的链路状态，
+建链和调用先等会话，最多到连接建好后 250 毫秒 + 4 个往返（往返未知时 1.5 秒，上限也是 1.5 秒），会话一到就放行；
+到时还没有（对端没启用会话）就走 Device Link，之后不再等。不等的话这一次会落到 Device Link 并一直用到那条链路断开。
+连接建好的时刻取自 Agent-Net 主连接的路径通知（`agentNetRuntime.ts`）。
+还没有连接时（2026-11-17 真机发现，同账号所有开着 Agent-Net 的设备都有）：
+- 对方此刻在 Agent-Net 目录里在线（本机刚启动，或连接刚断）：先拨它（`PortableSocket.connectSession`），会话一到就放行，最多 1.5 秒，不等拨号结束；
+  到时还没好就走 Device Link，它的帧搭同一次拨号，连不上的对端不比原来晚失败。拨不了（对方刚下线）立即放行。真机：刚启动时 Desktop 22 毫秒就向
+  Host 建链、连接 0.3 秒后才好，修复后启动时的建链和调用等 134～217 毫秒后全走会话。
+- 对方不在 Agent-Net 上在线：不等，交给 Device Link，离线失败照旧立即返回。它正在重启时先连上 Device Link 中转、晚 0.7 秒才上 Agent-Net，
+  控制端这段时间里的重试经中转探测，拿到它签名的「开着 Agent-Net」回答后，Device Link 原本在主连接上重开（会话出现前的 Device Link 帧，之后不换路）；
+  现在这一步经 `RoutedDeviceLinkClient` 的可选钩子 `openOnPrimary` 交给 `AgentNetSessionLinks.openAttested`：等它的会话最多 3 秒，到了在会话上开，
+  连上了却没有会话的旧版、等不到的照旧在主连接上开。关了 Agent-Net 的对端回答「没开」，不走这一步。真机：Host 重启时控制端每 200 毫秒重试一次，
+  Host 回来后主连接上的 Device Link 链路 0 条、会话链路 145 条。
+- 本机关着 Agent-Net、对方不是 Agent-Net 设备：和原来一样同步选路，不多一次异步。
+已知代价：对方刚断开、目录还没更新的那一下，第一次调用可能多等最多 1.5 秒才报离线（真机见过一次 1.5 秒，原来立即报）。
+
+**开着 Agent-Net 时和 Device Link 对齐（2026-11-17 排查后补齐）。** 下面这些原来开着 Agent-Net 反而比只用 Device Link 差，Agent-Net 关着时都不变：
+- **手机推送**：主连接是 Agent-Net 时只推给在 Agent-Net 上登记了推送的设备。现在 Agent-Net 送不到的手机经 Device Link 中转连接补发
+  （`notifyFallback.ts`，同一台手机不收两份；「仅使用 Agent-Net」时不补发）。
+- **在线状态**：中转连接收到的在线状态原来在 Device Link 包里就被吞了，没开 Agent-Net 的手机、旧版电脑的在线与「允许被控」不实时更新。
+  现在两条连接合并，任一条在线即在线（`RoutedDeviceLinkClient.onPresenceChanged`）。
+- **改设备名**：官方中转上设备也在 Agent-Net 目录里时先在 Agent-Net 上改（列表合并时那边的名字优先）。
+- **删设备**：各台电脑按本账号 Device Link 设备列表不认、不列出被删的设备，本机删完马上不认，别处（手机、网页、旧版）删的最晚
+  5 分钟内不认（`agentNetMembership.ts`，[协议记录](protocol-compatibility/agent-net-device-removal.md)）。主干 2026-11-17 起官方网络上删除时
+  还会在 Device Link 接受删除后撤销它的 Agent-Net 身份（`deviceLinkApi.ts`）；官方撤销之后那台设备重新登录也回不到 Agent-Net
+  （`DEVICE_REENROLLMENT_REQUIRES_APPROVAL`），Device Link 照常恢复。
+- **共享任务重启后的推送**：会话上的建链原来总报同一个流标识，主人电脑重启后来源代次不前进；现在每个会话一个标识。
+- **断开时的离线事件**：会话断开时先清链路状态，按对端取的代次落回 Device Link 的，可能把离线事件当过期丢掉；现在最近一次链路在会话上时
+  代次一直以会话为准（`AgentNetSessionLinks.ownsGeneration`）。
+- **Agent-Net 重连期间**：主连接没了时，原来一律答「不是旧版设备」，只走 Device Link 的设备在中转好好的时候也连不上；现在沿用上一条连接记下的
+  目录（`agentNetRuntime.ts` 的 `previousSocket`）。故障半径：证据只是 Agent-Net 主连接断了；只影响「这台设备走不走中转连接」的判断，
+  新连接连上后立即用新目录；不改中转连接本身。
+- **会话断后重开落到 Device Link**（2026-11-17 review）：会话上那条「断了待恢复」「被本机关过」原来一直留着，这个对端永远「待恢复」，
+  每次调用和订阅都先再建一次链、接受后的补订阅又触发重建；断开发不到 Device Link 那条链路上；用户关过一次以后 Device Link 上的链路断了
+  也不自动重建。现在本机在 Device Link 上建链时这两项作废，控制方向的恢复与关链状态只看出站（`AgentNetSessionLinks.knowsOutbound`），
+  对端经会话控制本机、本机经 Device Link 控制对端时由 Device Link 自己报。按对端取连接在最近一次链路在会话上时一直给这一层，
+  离线事件按会话的代次与同一条连接的代次比；跨账号连接断开、重连时按原客户端找承载它的分享连接（分路层给的是视图，和原连接比不相等）。
+- **在线状态合并时连接掉线**：一条连接离线后它说过的不再算数：它决定的设备改用另一条连接最近一次的说法，只有中转连接认得的设备
+  （手机、旧版电脑）显示离线；只有主连接认得的设备照旧不发（主连接自己的状态已经说明）。原来掉线那条的「在线」一直占着，另一条之后的更新全被挡住。
+- **下层逐对端可靠时等入站链路确认**：确认计时器到时对端仍在送数据，原来直接返回、再没有计时器，这个对端一直停在等确认；现在再等一轮，
+  总共不超过 120 秒，安静下来就只复位它自己。
+- **Node Host 的 Agent-Net 掉线**：原来连中转连接上的手机、旧版电脑与跨账号对端一起下线；现在和 Desktop 一样只下线主连接承载的。
+  同时开两次 Agent-Net 连接时（连接中途重启），慢的那次不再替换掉快的那次正在用的连接；凭证库一次打不开（钥匙串还锁着）下次再试，不再一直记着失败。
+- **第二轮对齐（2026-11-17 rebase 后逐项对比 Device Link）**：
+  - 手机推送：上一条还在逐台发时来的下一条排队按序发（`portableSocket.ts` 的 `NOTIFY_QUEUE_LIMIT`），原来报 BACKPRESSURE、没人重发；
+    补发的手机名单加上账号设备列表里的手机（`agentNetListedPhones`），在后台、重连后还没上线过的手机也收得到。
+  - 建链被拒：对方 presence 说关了远程控制时当场报 `REMOTE_DISABLED`；等建链时对方关链（撤权报 `ACCESS_REVOKED`）当场结束，和 Device Link 一样，
+    原来要等满建链超时。
+  - 积压读数：worker 的通道还有积压时每 `SESSION_BACKLOG_REPORT_MS`（50 毫秒）再报一次直到清空；原来只在本机发消息时更新，推送因「队列满」被拦下以后
+    读数一直是满的，对方的任务文字停住。核心发送缓冲里的字节仍不算进去（慢线路上交互回复可能排在约 1 MiB 推送后面），记在待办。
+  - `noResultCache` 传到会话上的结果缓存（MCP App 的 open／poll）。
+  - 换网：Desktop 的网络监听同时告诉 Agent-Net（`agentNetNetworkChanged`）；原来只有 Device Link 的探测，它在 Agent-Net 连接里由本机回答、到不了中转。
+  - 唤醒、换网后取不到中转信息时沿用这个服务上次的 UDP 地址；服务明确回答没有 UDP 时清掉。
+  - 连接断了、目录里对方还在线：拨号一端自己按退避重拨（`portableSocket.ts` 的 `REDIAL_FIRST_MS`）；原来只等下一次调用或目录更新，这期间对方显示离线。
+  - Node Host 回复「支持后台链路」、连接前等读本机身份（最多 2 秒）改成只在开着 Agent-Net 时生效，关着时和主干一样。
+  - 主干的部分目录（只读到一条腿时并回上次完整目录）也按 Device Link 设备列表过滤；Agent-Net 后台读设备列表走主干的共享限流账（`officialDeviceListFetch`）。
+- **第三轮（2026-11-17 补齐兼容与恢复能力）**：断线续传（在途的写在重开的链路上用原请求号找结果；代次改变或双端未协商结果恢复则不发，记录已淘汰则报告可能已执行）；
+  会话回来时自动重开断在上一条会话上的控制链路（`reopenLink` → `transportTimeoutReopen`）；中转断开超过 10 秒时连接问题 `agent-net-relay-down`
+  （设置页即使状态是已连接也显示）；关链、大请求的先后；积压读数含核心缓冲；词典同步走会话。协议见
+  [会话层记录](protocol-compatibility/agent-net-session.md)。故障半径（断线续传）：① 证据是这个对端的会话断了、请求已写出；② 只等这条请求自己的时限，
+  只在本机还在控制、链路在新会话上重开、对方去重记忆没变时再发一次，重开走原有循环（退避、去重、每次尝试前复查授权），不碰其它对端与 Device Link；
+  ③ `agentNetSessionLinks.test.ts`「sends a write that was in flight when the session broke again」与「does not send a write again once the re-opened
+  link says the peer no longer remembers it」，`deviceLinkDispatch.test.ts`「keeps the invoke memory marker across a disconnect」。
+- **第四轮（2026-11-18 桌面与 Host 收尾）**：会话请求与建链的诊断日志；拓扑页随 Agent-Net 路径（`onAgentNetPathChange`）
+  与中转连接变化马上刷新，中转往返时间取中转连接的 ping（`AgentNetWorkerSocket.relayRttMs`）；Node Host 的名册缓存（`directoryCacheFile`，
+  与 Desktop 共用 `agentNetDirectoryCache.ts`）；Host 兼容连接的连接问题（`RoutedDeviceLinkClient.onLegacyConnectionIssue`）：401 刷新令牌、
+  状态里显示 `agentNet.compatibilityIssue`。Host 主线路断开时，MCP 应用视图和 OAuth 调用者也按线路归属清理，保留兼容线路上的调用者；
+  关闭远程控制仍清理两条线路。见 `apps/host/src/device-link.test.mjs` 的双线路回归。跨账号断线续传（会话断时有请求在等就请业务重开，故障半径同上一轮：只等请求自己的时限、
+  对方去重记忆变了就不再发、走原有重开循环）。回归：`agentNetNode.test.ts`「starts from the device list it saved last time」、
+  `routedClient.test.ts`「reports a problem of the compatibility connection on its own」、`agentNetSessionLinks.test.ts`「sends a guest write again
+  on the re-dialed share connection」与「fails calls in flight」里的日志断言、`workerSocket.test.ts` 的中转往返。
+  故障半径（重拨与换网探测）：① 证据分别是「这一台的连接关了、目录里它在线」与「系统报告换了网络」；② 重拨只拨这一台，对方离线、被拦、本机关闭时不拨，
+  失败加倍到 30 秒，连接活过 30 秒才重新从 1 秒算；换网时每条中转连接只 ping 一次，15 秒（和 Device Link 的换网探测同一预算）没回才换，探测期间照常收发；
+  不动 Device Link 连接；③ `packages/agent-net/src/__tests__/portableSocket.test.ts`「dials a device of the account again when its connection drops」、
+  `workerSocket.test.ts`「replaces a relay connection that does not answer right after a network change」。
+回归：`packages/device-link/src/__tests__/routedClient.test.ts`「marks a legacy-only phone offline when its connection drops」（兼容连接掉线时，已由该连接报告在线的设备会显示离线，主连接的设备正常），
+`apps/desktop/src/main/device-link/__tests__/notifyFallback.test.ts`，`agentNetSessionLinks.test.ts`「reports a new stream per session and keeps
+the session generation for its offline event」与「hands the control direction back to Device Link once a re-open lands there」，
+`packages/device-link/src/__tests__/client.test.ts`「Agent-Net 下层可靠：等入站链路确认时对端仍在送数据就再等，安静后复位这个对端」。
+
+故障半径三问：① 证据是这一个对端的会话：它的连接断了、对端重建了节点、授权变了，或对端关了链；不等于中继离线，
+也不影响走 Device Link 的其它对端；② 只作废这个对端的会话链路：按 Device Link 的离线事件（同一连接代次与链路代次）通知业务，
+由业务按原有恢复路径重开；在途调用里没写出去的报 `LINK_NOT_OPEN`（可重开再发），写出去以后丢了的，幂等读报 `PEER_RESET`
+（重开后重读一次），其余报 `DEVICE_OFFLINE`（不重试，避免重复执行）；不重建主连接、不清其它对端的状态，会话层自己不重发；
+③ `apps/desktop/src/main/device-link/__tests__/agentNetSessionLinks.test.ts` 用两个真实会话验证断开时读与写各自的错误码与离线事件、
+Device Link 链路等恢复时不改走会话、空闲时建链前的调用也走会话、结果按来路回去、身份比较仍成立、刚连上时等会话且只在宽限期内等、
+还没连接时先拨在线的对端（不在线的不拨、拨不了的不等满）、对方签名开着 Agent-Net 时的重开等它的会话（没有会话层的旧版不等满）；去掉对应处理时失败。
+`packages/device-link/src/__tests__/routedClient.test.ts`「lets the host re-open a peer that prefers the main connection on its own channel」验证钩子接手与退回主连接，
+不提供钩子时原有用例不变。新旧版本、没打开 Agent-Net 的电脑与手机不宣告会话能力，照旧走 Device Link；跨账号见下。
+Node Host 打开 Agent-Net 后用同一套会话层与选路（`apps/host/src/device-link.ts`，身份与节点在 Electron 无关的
+`apps/desktop/src/main/device-link/agentNetNode.ts`）。它加入过 Agent-Net 以后，同账号的电脑认得它、要求旧版链路带它签的
+传输方式声明，所以 Host 关着 Agent-Net 时也用存下的身份签「现在没开」（和 Desktop 一样）；从没加入过的 Host 不签，对端也不要求。
+证书只在开着时续期，关着超过有效期后 Desktop 与 Host 仍用自己的私钥签「没开」，对端只对这一句接受过期但仍在签名名册里（没被撤销）、
+也没在 Device Link 里删掉的证书（`agentNetTransportStatement.ts`，2026-11-17 用户选「放宽校验」；原来两周后连 Device Link 都被拒收）。
+回归：`agentNetNode.test.ts`「signs relay links with its stored identity while Agent-Net is off」与「still says "off" after its certificate expired
+while off」（过期后仍签「没开」；对端不收过期证书的「开着」、删掉的设备、别的请求或接收方、别的网络根）。
+超时不再执行：`packages/agent-net/src/__tests__/sessionLanes.test.ts` 用假时钟验证断网后请求比取消先到、会话第一条请求取消先到两种情况都不交给业务，
+去掉晚到判断、取消的记录或发送任一项时失败；只作用于这一条已经超时的请求，不关会话、不影响其它请求。
+
+**跨账号（2026-11-16，方案第三步）。** 供应商分享（含供应商组的执行电脑）与共享任务的受邀者也走会话：会话开在委托里的连接上
+（受邀者凭证的连接，或本机分享资源所在的那条连接），键是 Device Link 分享帧解出来的同一个逻辑对端，由委托决定、不由消息决定；
+会话是单向的（受邀者只能建链、调用、关闭，分享资源一端只能接受、回结果、推送、关闭），对方越界的消息不交给业务，本端越界的调用报
+`FORBIDDEN`；每条消息收发前都复核委托仍有效、仍是同一资源与成员。会话只认这个资源在 Device Link 那边登记的那条连接
+（`agentNetSharing.ts` 的 `installRoute`，和路由客户端的 `acceptsScopedEvent` 同一条规则：停用、已退出、登记被收回的资源没有会话；本机还没登记的
+只认主连接，执行电脑和拥有者是从受邀者第一次建链才知道这个分享、再登记的），线上编码和 Device Link 给跨账号的一样：
+不用结果缓存、列表与历史增量、推送压缩。资源专用连接只开委托里的会话（`delegatedOnly`），同账号控制不会经它进来。
+按对端取连接（`connectionFor`）拿到的是那条分享连接，状态、代次、等上线都看它，只有链路状态换成会话上的；离线事件带它的代次。
+受邀者的分享连接用到时才拨，所以第一次建链前先连上对方电脑（`connectSession`，最多 8 秒，Device Link 那条路本来也要等这次拨号），
+连上后会话没到再等上面的宽限期；对方是旧版（连上了不宣告会话）、连不上，到时都照旧走 Device Link。
+同样跟着「Agent-Net (Beta)」开关：资源专用连接打开时开关开着才启用会话（开关一变，分享连接整批重建）。
+故障半径同上：只影响这一个受邀者成员与这一个资源的会话；撤销、暂停、移出成员时连接被关，会话随之作废，业务收到离线事件后按原路径处理。
+回归：`packages/agent-net/src/__tests__/socket.integration.test.ts`「carries %s requests with host-signed member scope」在真实核心、中转与分享授权上
+验证两种资源的会话键、建链、调用、推送、反向调用被拒、同账号设备在资源连接上没有会话、撤销后两端会话都没了；
+`sessionLanes.test.ts`「keeps a session inside a delegation one-way」验证两个方向各自越界的消息不交给业务；
+`agentNetSessionLinks.test.ts`「carries a guest link to a shared provider」验证第一次建链先连上再等会话、线上不压缩、按对端取到的连接与离线代次；
+`agentNetSharing.test.ts`「lets a cross-account session through only where the routed client accepts that resource」验证停用、已退出、
+登记被收回的资源没有会话，没登记的只认主连接，去掉任一处登记时失败。2026-11-16 两个账号的两台电脑隔离验收共享任务：受邀者第一次建链等了 91 毫秒拿到会话，
+打开、读历史、发消息、回复实时推回都走会话；主人移出成员的同一秒两端会话作废。
 
 ### 共享连接静默与请求隔离
 
@@ -540,6 +735,39 @@ Desktop 收到 `powerMonitor` 的 `suspend` 即调用 `suspendConnectionsForSyst
 自建中转无需修改，`device-link-relay` interop 通过)；③ 不碰对端链路、不影响其他设备，睡眠被取消或
 缺少唤醒事件时由清醒时间兜底恢复，不会把本机永久留在离线。验证：`client.test.ts`
 「suspendConnectionsForSystemSleep …」。
+
+### 唤醒后远程设备列表的恢复（Desktop，2026-11-17）
+
+现场：MacBook 合盖睡眠一夜，唤醒后 Mac Studio 的请求 1–3 秒成功、手机正常，界面却 40 多分钟显示
+「远程设备已离线」，打开任务只有缓存，协同面板「找不到这条任务」。当时走兼容连接的同账号设备，其在线
+状态不会交给 host(见下文「在线状态的来源」)，界面判定它可控主要靠一次设备目录读取；唤醒时这次读取失败，
+main 退回有界的过期快照，数据通道还没就绪的设备在快照里是 `online:false`，界面据此把它移出合格集，
+而所有恢复途径都只看合格集、设备一直在线不会再来上线通知，周期对账又受「5 分钟内有键鼠操作」限制。
+
+`useDeviceLinkRemoteProjects` 的恢复约定：
+- 过期目录不降级当前合格的设备、目录读取失败后的有界重读(5s 起翻倍封顶 60s，让过 429 期限，终态失败
+  与权威作废后停读)沿用 #9360(#9342)的实现；恢复入口与重读计时器只复用在途的那一次目录读取，不叠加请求。
+- 「可达」的正面证据——`PEER_LINK_REOPENED`、该设备数据通道就绪、重复的上线通知、在线 presence——对
+  合格但分片未确认在线的设备补一次首拉(复用在途任务)；对已被移出合格集但仍留分片的设备重读目录
+  (同一设备至少间隔 30 秒)，不凭证据伪造在线。
+- 恢复巡检只对合格、可读、未熔断、分片未确认在线的设备按设备退避(10s→120s)跑完整首拉，不看用户是否
+  在操作；没有待恢复设备时计时器停止，首拉未能确认在线或窗口重新可见时再起。周期 anti-entropy 只管
+  已确认在线的设备，两条路径不重复拉同一台。
+- 远程 Lead 的同机 worker 在协同面板读取前钉到 Lead 的设备(`OrcaWorkerPanel`)，不回落本机。
+- 历史视图读取失败上报 `source:'failed'` 诊断(只带错误码)，两端日志都能看出读取是否发出及失败原因。
+
+故障半径：① 故障在单台设备的界面列表状态，链路与中转正常；② 恢复只作用于该设备(重读目录 / 重跑
+该设备首拉)，不重连中转、不碰其它设备；③ `deviceLinkRemoteRecovery.test.tsx`「wake-from-sleep
+recovery」覆盖过期目录、离线报告后的目录补读、无用户操作的首拉补齐，并断言健康设备请求数不变。
+不改 wire 协议与中转行为，自建中转无需同步修改。
+
+在线状态的来源(`RoutedDeviceLinkClient.onPresenceChanged`)：同账号设备的 presence 只取承载它的那条
+连接——走兼容连接的设备用兼容连接上的 presence，主连接对它的看法(如新协议连接重建时对尚未建立通道的
+设备报的离线)不作数，反之亦然；共享任务 / 供应商分享等范围化 peer 仍只看主连接，兼容连接未运行时
+行为不变。此前兼容连接上的真实 presence 被整体丢弃，host 对这类设备只能靠目录读取判断在线，这正是
+上面目录读取一失败就卡住的前提。Desktop 与 Mobile 共用该入口；每条连接内部的离线闸门本来就按各自
+presence 运作，这里只修正交给 host 的那份。回归：`routedClient.test.ts`「reports each peer's presence
+from the connection that carries it」；`device-link-relay` interop 通过，中转无需改动。
 
 ## 远程 Agent 的拉取与恢复(`maker:remote-agent:v1`)
 

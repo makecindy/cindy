@@ -912,7 +912,7 @@ describe('turnRunner 渠道任务后台结果回传', () => {
       h.emit({ type: 'done', data: { silentStop: true }, turnOrigin: origin('exhausted') });
       settle(h.session.id, 'exhausted');
       await vi.waitFor(() => expect(delivered()).toHaveLength(3));
-      expect(delivered()[2]).toContain(slackUi.agent.runtimeError('模型连续多次返回空响应，自动续跑已暂停。'));
+      expect(delivered()[2]).toContain(slackUi.agent.runtimeError('检测到空响应，自动续跑已暂停。'));
     } finally {
       setSilencedRunProbe(null);
       await runner.disposeAllSessions();

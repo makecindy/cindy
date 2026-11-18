@@ -2,7 +2,13 @@
 
 > **读取时机**：修改开始引导的出现条件、步骤与顺序、各步骤复用的能力、旧版数据迁移与引导的衔接，
 > 或新增一类「首次使用时该带进来」的内容前。
-> 迁移助理的范围与安全边界见 [`new-device-setup-migration.md`](new-device-setup-migration.md)，
+> **适用路径**：`apps/desktop/src/renderer/features/first-run-guide/**`、
+> `apps/desktop/src/renderer/components/settings/FirstRunGuideSection.tsx`、
+> `apps/desktop/scripts/fixtures/first-run-guide/**`、
+> `apps/desktop/src/main/setup-migration/{service.ts,__tests__/service.test.ts}`、
+> `apps/desktop/src/renderer/features/setup-migration/SetupMigrationHost.tsx`、
+> `apps/desktop/src/main/**/legacyUserDataMigration*`
+> **相关规则**：迁移助理的范围与安全边界见 [`new-device-setup-migration.md`](new-device-setup-migration.md)，
 > 区域规则见 [`region-and-editions.md`](region-and-editions.md)。
 
 ## 1. 用户心智

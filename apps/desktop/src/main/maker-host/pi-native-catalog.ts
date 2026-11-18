@@ -552,6 +552,12 @@ export function buildPiNativeProvidersFromConfigs(
           isOfficialGoogleChatEndpoint(modelBaseUrl ?? rt.baseUrl)) {
           spec.compat = { ...spec.compat, supportsStore: false };
         }
+        // A user-confirmed connection/model capability is more precise than an
+        // endpoint heuristic (#11023). Never infer a gateway's downstream API
+        // from its name or a Gemini model ID; absent overrides retain Pi defaults.
+        if (modelApi === 'openai-completions' && resolved?.supportsStore !== undefined) {
+          spec.compat = { ...spec.compat, supportsStore: resolved.supportsStore };
+        }
         return managedOllama && shouldApplyQwen38Overlay(m.id)
           ? applyQwen38NativeOverlay(spec)
           : spec;

@@ -119,7 +119,7 @@ describe('Claude Code translator — command lifecycle', () => {
       expect(events[0].data).toMatchObject({ isRunning: true });
       expect(events[1].data).toEqual({ text: 'Reading.', isFinal: false });
       expect(events[2].data).toMatchObject({ toolUseId: 'tool-1', toolName: 'Read', input: { file_path: 'a.txt' } });
-      expect(events[3].data).toEqual({ toolUseId: 'tool-1', fullText: 'contents' });
+      expect(events[3].data).toEqual({ toolUseId: 'tool-1', fullText: 'contents', isError: false });
       expect(events[4].data).toMatchObject({ status: 'Done', isRunning: false });
       expect(events[5].data).toMatchObject({ result: 'Reading.', usage: { input_tokens: 10, output_tokens: 2 } });
       expect(ctx.onTurnEnd).toHaveBeenCalledTimes(1);

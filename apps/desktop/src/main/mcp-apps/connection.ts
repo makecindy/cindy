@@ -35,10 +35,12 @@ export function localMcpEnvironment(overrides: Record<string, string>, platform 
 
 export interface AppServerConfig {
   id: string;
+  /** User-configured display name; never upstream serverInfo or transport identity. */
+  name?: string;
   url: string;
   transport: 'http' | 'sse' | 'in-process' | 'stdio';
   stdio?: StdioMcpConfig;
-  plugin?: { ghostId?: string; namespace?: string | null; instance: string; revision: string; packageSha256: string; directory: string; title: string; trust: string; domains: string[]; assertCurrent(sessionId?: string): void; createTransport(): Transport };
+  plugin?: { ghostId?: string; namespace?: string | null; instance: string; revision: string; packageSha256: string; directory: string; title: string; trust: string; installationSource?: import('@cindy/maker-shared/mcp-apps').PluginInstallationSource; domains: string[]; assertCurrent(sessionId?: string): void; createTransport(): Transport };
   headers?: Record<string, string>;
 }
 
