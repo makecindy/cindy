@@ -45,6 +45,7 @@ import { resolveProjectAliasForSessions, type ProjectAliasesByDevice } from '@ci
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { normalizeWorkingDirForGrouping } from '../../../../shared/workingDir';
 import { sessionTaskProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import {
   deviceLinkProjectKey,
   normalizeProjectKey,
@@ -262,6 +263,14 @@ export function sidebarProjectRows(
   const rows = projects.flatMap((project) => {
     if (teammateFilter && !teammateFilter.project(project)) return [];
     const matchingSessions = vendorPredicate ? project.sessions.filter(vendorPredicate) : project.sessions;
+    // A teammate's registered folder with no task of its own is not an empty project row
+    // (cindy-bots-runtime.md §3); the collapsed rail would otherwise list it.
+    if (
+      teammateFilter &&
+      isTeammateProjectPath(project.workingDir) &&
+      !matchingSessions.some(teammateFilter.session)
+    )
+      return [];
     if (
       matchingSessions.length === 0 &&
       (!project.isPersistentLocal || (vendorPredicate && !persistentProjectMatchesVendor(project, vendor)))

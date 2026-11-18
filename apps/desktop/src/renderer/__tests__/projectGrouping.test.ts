@@ -1278,6 +1278,24 @@ describe('sidebar teammate filter only narrows teammate content', () => {
     expect(order(null)).toEqual(['/work/a', '/work/b']);
     expect(order(none)).toEqual(['/work/b', '/work/a']);
   });
+
+  // PR #11226 review (P2): the collapsed rail lists these rows directly, so a chosen teammate whose
+  // registered folder has no task yet must not show up as an empty project (cindy-bots-runtime.md §3).
+  it('drops a chosen teammate folder that has no task, but keeps empty ordinary projects', () => {
+    const FRESH = `${owners}/fresh/workspace`;
+    const freshIndex = new Map([[taskCreatorProjectKey('fresh'), new Set(['fresh'])]]);
+    const input = sidebarGroupingInput(
+      [],
+      [...persistent, { workingDir: FRESH, lastUsedAt: '2026-01-01T00:00:00.000Z', knownAgentKinds: [] }],
+      null,
+      sessionActivityMs,
+    );
+    const rows = sidebarProjectRows(groupSessions([], input).projects, 'all', {
+      session: (session: Session) => matchesSidebarTeammateFilter(session, ['fresh'], freshIndex),
+      project: (project: ProjectNode) => sidebarTeammateProjectVisible(project, ['fresh'], freshIndex),
+    });
+    expect(rows.map((project) => project.workingDir)).toEqual(['/work/empty']);
+  });
 });
 
 /* ============================== device-link 远程项目 ============================== */
