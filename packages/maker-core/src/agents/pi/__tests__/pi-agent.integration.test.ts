@@ -3153,6 +3153,36 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  // #9705, integration: settings passthrough alone did not prove that Cindy's
+  // replacement tool consumed the configuration. Use a real Pi/bridge/shell.
+  it.skipIf(process.platform === 'win32')('executes bash with the saved shell path and command prefix', { timeout: 60_000 }, async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-shell-settings-'));
+    const home = path.join(root, 'agent');
+    mkdirSync(home);
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({
+      shellPath: '/bin/sh', shellCommandPrefix: 'export CINDY_SHELL_PREFIX=prefix_applied',
+    }));
+    const deps = buildDeps();
+    deps.resolvePiAgentHome = () => home;
+    try {
+      scriptedResponses.length = 0;
+      scriptedResponses.push(
+        anthropicToolUseBody('bash', { command: 'printf "PREFIX=%s EXEC_SHELL=%s" "$CINDY_SHELL_PREFIX" "$0"' }),
+        anthropicStreamBody('shell settings finished'),
+      );
+      const before = seenRequests.length;
+      const result = await runPermissionTurn({ sessionId: 'shell-settings', workingDir: root,
+        permissionMode: 'bypassPermissions', resolverBehavior: 'deny', deps });
+      const followUp = seenRequests.slice(before).map(request => request.body).join('\n');
+      expect(followUp).toContain('PREFIX=prefix_applied');
+      expect(followUp).toContain('EXEC_SHELL=/bin/sh');
+      expect(result.finalText).toContain('shell settings finished');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      scriptedResponses.length = 0;
+    }
+  });
+
   it(
     'explicit bash timeout returns Pi native timeout error and continues the turn',
     { timeout: 60_000 },

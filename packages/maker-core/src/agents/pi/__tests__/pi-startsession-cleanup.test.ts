@@ -1242,7 +1242,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       if (!options?.latestPerTask) yield first;
       yield latest;
     });
-    const observe = vi.fn(async () => {});
+    const observe = vi.fn(async (_value: unknown) => {});
     const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close() {} }) })).startSession(opts());
     const updates: unknown[] = [];
     void (async () => {

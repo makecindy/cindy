@@ -483,6 +483,34 @@ function loadReviewSearchHelpers(
   return context as ReviewSearchHelpers;
 }
 
+// #9705, unit: execute the generated settings snapshot and bash factory call.
+// Existing timeout/environment tests never supplied native shell settings.
+it.each([
+  [{ shellPath: '/fixture/custom shell', shellCommandPrefix: ' export PROBE=ok\n' }, '/fixture/custom shell', ' export PROBE=ok\n'],
+  [{ shellPath: '  ', shellCommandPrefix: 12 }, undefined, undefined],
+  [{}, undefined, undefined],
+  [null, undefined, undefined],
+])('passes native shell configuration to the replacement bash factory: %j', (settings, shellPath, commandPrefix) => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const snapshotStart = source.indexOf('const initialNativeSettings =');
+  const snapshotEnd = source.indexOf("pi.registerCommand('cindy-native-provider-refresh'", snapshotStart);
+  const bashStart = source.indexOf('const bashTool = createBashTool(process.cwd(), {');
+  const bashEnd = source.indexOf('var bashParameters = bashTool.parameters;', bashStart);
+  const factory = vi.fn(() => ({}));
+  const getSettings = vi.fn(() => { throw new Error('Action methods cannot be called during extension loading'); });
+  runInNewContext(source.slice(snapshotStart, snapshotEnd) + source.slice(bashStart, bashEnd), {
+    pi: { getSettings }, process: { env: { PI_CODING_AGENT_DIR: '/fixture' }, cwd: () => '/work' },
+    path: { join: () => '/fixture/settings.json' }, readFileSync: () => JSON.stringify(settings),
+    createBashTool: factory, bashPackageHome: '/isolated',
+    isolatedBashEnvironment: (env: unknown) => env,
+  });
+  expect(getSettings).not.toHaveBeenCalled();
+  expect(factory).toHaveBeenCalledWith('/work', expect.objectContaining({ exposeSessionEnvironment: false }));
+  const options = (factory.mock.calls as unknown as Array<[string, Record<string, unknown>]>)[0][1];
+  expect(options.shellPath).toBe(shellPath);
+  expect(options.commandPrefix).toBe(commandPrefix);
+});
+
 function loadBashTimeoutHelpers(): {
   resolveCindyBashTimeout: (params: unknown) => number;
   applyCindyBashTimeoutParams: (params: unknown) => Record<string, unknown>;
