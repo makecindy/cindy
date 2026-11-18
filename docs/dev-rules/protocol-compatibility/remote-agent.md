@@ -10,7 +10,7 @@
 桌面端在换来源后续发原消息时，经现有 `maker:input:retry-last-error` 传
 `expectedQueueHeadClientId` 与本次切换回执的 `pendingSwitchRevision`（作为 `expectedSwitchRevision`）。
 任务所在电脑匹配恢复项及实际队首，并在发送锁内重新核对待应用的切换修订号。另一控制端改选后，
-原确认不会派发到改选目标。
+原点选对应的重试不会派发到改选目标。
 远控端仅向声明 `supportsQueueHeadRetry` 的任务电脑发送这个选项。旧端仍可手动重试。
 
 ## 托管请求的附件预算与保存（2026-11-17）
@@ -355,8 +355,9 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
   发送时才在那台失败、且之后每次发送都重试的意图；本机窗口拿到 `REMOTE_AGENT_DEVICE_UNREACHABLE` /
   `REMOTE_AGENT_MODEL_UNAVAILABLE`，device-link 控制端降级为 `PRECONDITION_FAILED`。Mobile 与桌面同一套
   模型列表：A 自己的供应商之外，另列其他同账号电脑已开放远程调用的供应商(Mobile 直接经 device-link 读那台的
-  `maker:provider:list`，不新增 A 侧 channel)；同一台电脑内换模型不带位置，换到另一台电脑先二次确认、再带
-  `agentDeviceId`(null = A)。共享任务访客不能换电脑。
+  `maker:provider:list`，不新增 A 侧 channel)；同一台电脑内换模型不带位置。按 2026-11-18 用户裁决，
+  桌面与手机点选另一台电脑的模型即带 `agentDeviceId`(null = A)登记切换意图，下一条消息发送时生效。
+  共享任务访客不能换电脑。
   桌面远程控制 A 上的已建任务(2026-10-09)与手机同口径：A 投影的任务带 `agentDeviceId` 字段(含 null)才开放，
   控制端经任务所在的 A 读取第三台电脑的 `maker:provider:list`，A 自己的目录照远程控制列全部供应商，换位置同样
   带 `agentDeviceId`(null = A)，换后档位记在控制端为那台电脑单独记的一份(改回 A 时写 A 的镜像)。

@@ -326,9 +326,6 @@ describe('ChatInput 的入口门控与调用路由', () => {
     const start = source.indexOf('const sessionEngineFilter = useMemo(');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf('}, [', start));
-    // 取消确认 = false(现状,不变)。**有意变更**(Chris 2026-08-20):确认只认任务真实引擎,
-    // 挂着的意图不算已经确认过 —— Claude 任务点了 Pi 收藏再点另一条,仍要弹框。
-    expect(body).toContain('if (!(await confirmAgentBrowseSwitch(targetAgent))) return false;');
     expect(body).toContain('runtimeAgent: runtimeAgentKind ?? undefined,');
     // 真实结果原样交出去;绝不再出现 fire-and-forget + 提前 true。
     expect(body).toContain('const applied = await performAgentSwitchRef.current(');
@@ -388,7 +385,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
 
   /**
    * Chris 2026-08-19「面板原地刷新」+ 2026-08-20「改思维闪关菜单」:
-   * disabled 不得参与 popover 开关。`(open && !disabled) || keepOpen` 只保住确认框那条路,
+   * disabled 不得参与 popover 开关。`(open && !disabled) || keepOpen` 只保住跨引擎事务在途的场景,
    * 改思维走 performAgentSwitch 时 keepOpen 是 false,选单照关。
    */
   it('ModelSelector 的保命锁不被 disabled 压穿(两个 popover 分支同一表达式)', () => {
@@ -396,20 +393,15 @@ describe('ChatInput 的入口门控与调用路由', () => {
       resolve(process.cwd(), 'src/renderer/components/new-chat/ModelSelector.tsx'),
       'utf8',
     ).replace(/\r\n/g, '\n');
-    const matches = selectorSource.match(/open=\{open \|\| keepOpenForAgentConfirmation\}/g) ?? [];
+    const matches = selectorSource.match(/open=\{open \|\| keepOpenForAgentSwitch\}/g) ?? [];
     expect(matches).toHaveLength(2);
-    expect(selectorSource).not.toContain('(open || keepOpenForAgentConfirmation) && !disabled');
-    expect(selectorSource).not.toContain('(open && !disabled) || keepOpenForAgentConfirmation');
+    expect(selectorSource).not.toContain('(open || keepOpenForAgentSwitch) && !disabled');
+    expect(selectorSource).not.toContain('(open && !disabled) || keepOpenForAgentSwitch');
     // 配置切引擎保持展开；选中模型行成功后收起。disabled 仍不得参与开关。
     expect(selectorSource).toContain('setOpenWithoutAutoRefresh(configuring || applied === false)');
     expect(selectorSource).toContain(
       "onProviderChange(args.providerId, args.wireModelId, args.effort ?? '', args.config.fast)",
     );
-  });
-
-  it('换引擎确认:回原引擎或点已确认的意图目标不再弹,换第三家仍要问', () => {
-    expect(source).toContain('runtimeAgentKind === targetAgent');
-    expect(source).toContain('agentSwitchIntent?.target === targetAgent');
   });
 
   it('会话传入历史收藏 uid，由统一面板校验完整配置后显示选中态', () => {

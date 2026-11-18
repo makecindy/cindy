@@ -34,7 +34,7 @@ import {
   resolveMemoryScopeKey,
   snapshotManagedSkillGrants,
 } from '@cindy/maker-core';
-import { parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
+import { isProviderSharePeer, parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { createLogger } from '../../logger.js';
 import { findReceivedShare, parseProviderShareAgentDeviceId, providerShareAccessEpoch,
   onProviderShareReceivedChanged } from '../../device-link/providerShareGuest.js';
@@ -515,6 +515,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const handle = await startRemoteAgentSession(input.agentKind, opts, {
       startupSignal: attempt.signal,
       assertStartupCurrent: requireCurrent,
+      nativeHistoryBackup: !shared && !isProviderSharePeer(target) && !opts[LOCAL_AGENT_CLIENT],
       reconnectAuthorization: (isCurrent, options) => reconnectAuthorization?.(isCurrent, options) ?? Promise.resolve(),
       onTaskGrantRenewable: (renewable) => { grantRenewable = renewable; },
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,

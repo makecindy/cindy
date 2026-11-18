@@ -948,7 +948,7 @@
       "title": "¿Continuar en {{label}}?",
       "fallbackTitle": "¿Continuar en {{label}} con un resumen?",
       "fallbackDescription": "La conversación original no se pudo restaurar por completo. Un resumen puede omitir detalles anteriores y resultados de herramientas. Cancela para enviarlo desde la computadora original.",
-      "description": "Para usar la cuota de cada cuenta de manera uniforme, envía este mensaje desde {{label}} ({{quota}}). Se conservan los últimos mensajes y un resumen; es posible que se pierdan detalles más antiguos.",
+      "description": "Para usar la cuota de cada cuenta de manera uniforme, envía este mensaje desde {{label}} ({{quota}}). La conversación se transfiere. Es posible que se condensen las partes anteriores para ajustarse al modelo.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
       "confirm": "Cambiar solo esta vez",
@@ -14208,7 +14208,7 @@
         "effortEndFast": "Más rápido",
         "effortEndSmart": "Más inteligente",
         "railSameEngine": "Solo {{agent}}",
-        "crossEngineWarning": "Cambiar de motor reconstruye el contexto y puede provocar pérdida de contenido",
+        "crossEngineWarning": "El motor cambiará con el próximo mensaje y retomará la conversación. Es posible que se condensen las partes anteriores.",
         "favoritesSyncFailed": "No se pudieron sincronizar los favoritos. Vuelve a abrir el selector para intentarlo de nuevo; es posible que la computadora remota necesite una actualización.",
         "favoritesSyncFailedUnreachable": "Los favoritos aún no se han sincronizado: no se puede acceder a esa computadora. Vuelve a abrir el selector cuando se restablezca la conexión.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14224,12 +14224,8 @@
         "ultrafast": "Ultrarrápido"
       },
       "discoveredCopy": {
-        "title": "¿Usar {{provider}} en “{{device}}”?",
-        "description": "{{unavailable}} Si continúas, se ejecutará en “{{device}}”. Puedes volver aquí cuando quieras.",
         "unavailableHere": "{{provider}} en esta computadora no está disponible ahora.",
-        "unavailableOn": "{{provider}} en “{{device}}” no está disponible ahora.",
-        "confirm": "Usar",
-        "cancel": "Dejar como está"
+        "unavailableOn": "{{provider}} en “{{device}}” no está disponible ahora."
       }
     },
     "permissionSelector": {
@@ -14496,33 +14492,14 @@
       "credentialSwitchApplied": "El cambio de proveedor de modelo ya está en vigor.",
       "credentialSwitchFailed": "No se pudo cambiar el proveedor de modelos. Vuelve a elegir el modelo.",
       "modelSwitchContextGuard": {
-        "title": "La conversación actual no cabe en este modelo",
         "warnToast": "Esta conversación ya usa {{used}}: aproximadamente el {{pct}}% de la capacidad de {{total}} del nuevo modelo",
-        "overflowDescription": "Esta conversación ya utiliza {{used}}, más de lo que el nuevo modelo puede contener ({{total}}, aproximadamente {{pct}}%). Si cambias, Cindy hará un breve resumen y continuará. Tu historial de conversación se conserva; simplemente no se transmitirá todo palabra por palabra.",
-        "overflowDescriptionRemote": "Esta tarea remota ya utiliza {{used}} / {{total}} del contexto del modelo más pequeño (aproximadamente {{pct}}%), por lo que Cindy no puede cambiar de forma segura. Mantén el modelo actual o inicia una nueva tarea antes de elegir este modelo.",
-        "confirmSwitch": "Cambiar y continuar",
-        "cancelSwitch": "Mantener este modelo"
+        "condensedToast": "Las partes anteriores de la conversación se condensarán para ajustarse al nuevo modelo. El historial completo seguirá disponible.",
+        "overflowDescriptionRemote": "Esta tarea remota ya utiliza {{used}} / {{total}} del contexto del modelo más pequeño (aproximadamente {{pct}}%), por lo que Cindy no puede cambiar de forma segura. Mantén el modelo actual o inicia una nueva tarea antes de elegir este modelo."
       },
       "agentSwitch": {
         "engineNotReady": "Se cambió el motor, pero el nuevo motor no pudo iniciarse; se reintentará cuando envíes un mensaje",
         "failed": "Falló el cambio de motor; no se aplicó",
-        "deferred": "Cambio programado: se cambiará a {{agent}} · {{model}} cuando envíes tu próximo mensaje",
-        "confirmation": {
-          "title": "¿Cambiar de Agent?",
-          "description": "El nuevo motor de Agent continúa mediante un resumen de transferencia, por lo que no se puede garantizar que el razonamiento y otros contenidos se transfieran perfectamente; si vuelves al motor anterior, podrás continuar su sesión original. El cambio también interrumpe una vez la caché de prompts y puede aumentar el uso de tokens.",
-          "confirm": "Cambiar de Agent",
-          "cancel": "Mantener el Agent actual",
-          "dontShowAgain": "No volver a recordármelo"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "¿Volver a ejecutar el Agent en esta computadora?",
-        "titleOther": "¿Ejecutar el Agent en “{{device}}”?",
-        "description": "El registro de conversación en la otra computadora no se puede mover, por lo que continúa desde un resumen de transferencia. Es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envíes el siguiente mensaje.",
-        "descriptionNativeHistory": "El registro completo de la conversación se copia y continúa desde donde estaba. Si no se puede restaurar, continúa desde un resumen de transferencia y es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envíes el siguiente mensaje.",
-        "confirm": "Cambiar de computadora",
-        "cancel": "Dejar como está",
-        "discoveredDescription": "{{reason}} {{description}}"
+        "deferred": "Cambio programado: se cambiará a {{agent}} · {{model}} cuando envíes tu próximo mensaje"
       }
     },
     "agentSelect": {
@@ -15656,6 +15633,11 @@
         "relocatedTaskComputer": "Agent ahora se ejecuta en la computadora de la tarea",
         "relocatedElsewhere": "Agent ahora se ejecuta en otra computadora",
         "quotaRebalance": "su cuota debe usarse primero"
+      },
+      "handoffCoverage": {
+        "complete": "Conversación transferida íntegramente",
+        "condensed": "Partes anteriores condensadas",
+        "details": "Contenido transferido para continuar la conversación"
       },
       "contextRebuild": {
         "labelOverflow": "Contexto reorganizado, continuando",

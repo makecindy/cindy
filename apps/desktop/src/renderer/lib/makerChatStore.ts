@@ -20221,13 +20221,10 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: { ...(sessionImport as Record<string, unknown>) },
       };
     }
-    // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。
-    const contextRebuild =
-      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
-        ? (m.agentMeta as { contextRebuild?: unknown }).contextRebuild
-        : undefined;
+    // 同一引擎换干净原生会话：展开查看发给新窗口的交接内容。
+    const contextRebuild = m.role === 'assistant' ? m.agentMeta?.contextRebuild : undefined;
     if (contextRebuild && typeof contextRebuild === 'object') {
-      const c = contextRebuild as Record<string, unknown>;
+      const c = contextRebuild;
       return {
         clientId: m.clientId,
         role: 'assistant' as const,
@@ -20237,6 +20234,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: {
           reason: typeof c.reason === 'string' ? c.reason : 'context-overflow',
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
+          ...(c.handoffCoverage === 'complete' || c.handoffCoverage === 'condensed'
+            ? { handoffCoverage: c.handoffCoverage } : {}),
         },
       };
     }
@@ -20261,6 +20260,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           fromModel: typeof c.fromModel === 'string' ? c.fromModel : null,
           toModel: typeof c.toModel === 'string' ? c.toModel : null,
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
+          ...(c.handoffCoverage === 'complete' || c.handoffCoverage === 'condensed'
+            ? { handoffCoverage: c.handoffCoverage } : {}),
           resumed: c.resumed === true,
           ...(c.nativeHistory === 'restored' || c.nativeHistory === 'fallback'
             ? { nativeHistory: c.nativeHistory } : {}),

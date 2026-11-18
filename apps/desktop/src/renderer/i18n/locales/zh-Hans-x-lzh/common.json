@@ -923,7 +923,7 @@
       "title": "易至 {{label}} 续行乎？",
       "fallbackTitle": "以摘要易至 {{label}} 续行乎？",
       "fallbackDescription": "原言谈不能全然接续。以摘要续行，或遗早先细节与工具结果；罢则留原机遣之。",
-      "description": "为均用各名籍之限额，宜将此讯易至 {{label}} 遣之（{{quota}}）。易后携近数轮言谈与摘要，更早之细节或记不全。",
+      "description": "为均用各名籍之限额，宜将此讯易至 {{label}} 遣之（{{quota}}）。易后可续言谈。较早之言或经压缩，以合模型之容量。",
       "quota": "尚余 {{left}}%",
       "quotaReset": "尚余 {{left}}%，{{reset}}",
       "confirm": "惟此次换之",
@@ -14038,7 +14038,7 @@
         "effortEndFast": "更疾",
         "effortEndSmart": "更慧",
         "railSameEngine": "仅 {{agent}}",
-        "crossEngineWarning": "切换引擎将重建上下文，或失内容",
+        "crossEngineWarning": "下一讯将易引擎而续言谈，较早之言或经压缩",
         "favoritesSyncFailed": "珍藏未能同步。请重开再试；被控之机或须更新。",
         "favoritesSyncFailedUnreachable": "珍藏暂未同步：彼机今连不上。连接复后重开即可。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14055,12 +14055,8 @@
         "ultrafast": "极疾"
       },
       "discoveredCopy": {
-        "title": "改用「{{device}}」之 {{provider}} 乎？",
-        "description": "{{unavailable}}允之，则由「{{device}}」运行，后可随时于此复归。",
         "unavailableHere": "此机之 {{provider}} 今不可用。",
-        "unavailableOn": "「{{device}}」之 {{provider}} 今不可用。",
-        "confirm": "改用",
-        "cancel": "一仍其旧"
+        "unavailableOn": "「{{device}}」之 {{provider}} 今不可用。"
       }
     },
     "permissionSelector": {
@@ -14326,33 +14322,14 @@
       "credentialSwitchApplied": "模型所出已易，即行生效。",
       "credentialSwitchFailed": "模型来源切换未成，请重择。",
       "modelSwitchContextGuard": {
-        "title": "此模型容不下今之言谈",
         "warnToast": "此段言谈已用 {{used}}，换过去约占新模型容量（{{total}}）之 {{pct}}%",
-        "overflowDescription": "此段言谈已用 {{used}}，逾新模型所能容之 {{total}}（约 {{pct}}%）。换过去后，Cindy 将先撰摘要再续；言谈录仍在，唯不整段原样交予新模型。",
-        "overflowDescriptionRemote": "今远程差事之上下文已用 {{used}} / {{total}}（约 {{pct}}%），不能安然切换至此小窗口模型。请留今之模型，或新开差事后再择。",
-        "confirmSwitch": "切换而续",
-        "cancelSwitch": "暂不换"
+        "condensedToast": "为合新模型之容量，较早之言将压缩，言谈全录仍可阅。",
+        "overflowDescriptionRemote": "今远程差事之上下文已用 {{used}} / {{total}}（约 {{pct}}%），不能安然切换至此小窗口模型。请留今之模型，或新开差事后再择。"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切换，然新引擎启动未成；遣讯时将自再试",
         "failed": "引擎切换未成，未生效",
-        "deferred": "已登记切换：下则讯遣出时，将切换至 {{agent}} · {{model}}",
-        "confirmation": {
-          "title": "易 Agent 乎？",
-          "description": "新 Agent 引擎将经交接摘要续接，思考内容等不保其完美承续；切回时仍可续原引擎之会话。切换亦将令 prompt 缓存中断一次，或增 Token 之耗。",
-          "confirm": "易 Agent",
-          "cancel": "留今之 Agent",
-          "dontShowAgain": "后不复提醒"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "改回此机运行 Agent？",
-        "titleOther": "改于「{{device}}」运行 Agent？",
-        "description": "原机之言谈录不能携来，将撰为交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
-        "descriptionNativeHistory": "全本言谈录将抄录而往以续；若不能复原，则改撰交接摘要以续，思考内容等不保其完美承续。下则讯遣出时生效。",
-        "confirm": "换机运行",
-        "cancel": "一仍其旧",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "已登记切换：下则讯遣出时，将切换至 {{agent}} · {{model}}"
       }
     },
     "agentSelect": {
@@ -15478,6 +15455,11 @@
         "relocatedTaskComputer": "Agent 已移至差事所在之机运行",
         "relocatedElsewhere": "Agent 已移至他机运行",
         "quotaRebalance": "此名籍之限额宜先用"
+      },
+      "handoffCoverage": {
+        "complete": "言谈已全续",
+        "condensed": "较早之言已压缩",
+        "details": "续接言谈所用之内容"
       },
       "contextRebuild": {
         "labelOverflow": "已理上下文而续",

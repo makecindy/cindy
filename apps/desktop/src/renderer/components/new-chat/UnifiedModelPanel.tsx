@@ -365,6 +365,7 @@ export interface UnifiedModelPanelProps {
       config: UnifiedSelectedRow;
     }) => void | boolean | Promise<void | boolean>;
     labelOf: (deviceId: string, providerId: string) => string;
+    homeUnavailableReasonOf?: (deviceId: string, providerId: string) => string | undefined;
     /** 正在浏览的远程供应商;null = 正在浏览本机目录。 */
     active: { deviceId: string; providerId: string } | null;
     /** 列表数据是否已经是 `active` 那台电脑的目录。 */
@@ -1327,6 +1328,7 @@ export function UnifiedModelPanel({
             ? t('newChat.modelSelector.unified.remoteFavoriteUnavailable', { source: label })
             : label
         }
+        sourceNotice={remoteSources?.homeUnavailableReasonOf?.(rowDeviceId, row.entry.providerId)}
         selected={false}
         active={false}
         isFavoriteRow
@@ -1509,7 +1511,7 @@ export function UnifiedModelPanel({
               <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
             </>
           )}
-          {/* 只在已登记跨 Harness 切换时提示有损;浏览「全部」或同 Harness 换模型不提示。 */}
+          {/* 只在已登记跨 Harness 切换时提示如何接续;浏览「全部」或同 Harness 换模型不提示。 */}
           {sessionEngineFilter?.pendingTarget && (
             <div
               role="note"
@@ -1526,7 +1528,7 @@ export function UnifiedModelPanel({
               )}
             >
               <TriangleAlert size={12} className="shrink-0" />
-              <span className="truncate">
+              <span className="min-w-0 break-words">
                 {t('newChat.modelSelector.unified.crossEngineWarning')}
               </span>
             </div>
@@ -1627,6 +1629,9 @@ export function UnifiedModelPanel({
                       {...(showsSourceRow
                         ? { sourceLabel: aggregateSourceLabel(row.entry.providerId) }
                         : {})}
+                      sourceNotice={remoteActiveDeviceId
+                        ? remoteSources?.homeUnavailableReasonOf?.(remoteActiveDeviceId, row.entry.providerId)
+                        : undefined}
                       selected={isSelectedRow(row.anchor, row.entry)}
                       active={sameAnchor(flyAnchor, row.anchor)}
                       isFavoriteRow={!!starredFavorite}
