@@ -1534,12 +1534,13 @@ describe('pooled Codex model discovery', () => {
 // the native CLI transport is the only replacement, so no real credit is consumed.
 describe('pooled Codex resets', () => {
   // Unit regression: a completed reset on the original connection must bypass
-  // the warm pool quota and publish the new value before observers read again.
+  // the warm quota and notify observers, including the implicit default slot.
   it.each([
-    ['openai', 'default'],
-    ['openai-old', 'second'],
-  ])('publishes fresh pool quota after resetting %s', async (scope, accountId) => {
-    h.pools.openai = {
+    { scope: 'openai', accountId: 'default', configured: true },
+    { scope: 'openai-old', accountId: 'second', configured: true },
+    { scope: 'openai', accountId: 'default', configured: false },
+  ])('publishes fresh quota after resetting $scope (configured pool: $configured)', async ({ scope, accountId, configured }) => {
+    if (configured) h.pools.openai = {
       strategy: 'least',
       accounts: [account('default'), account('second')],
       legacyCodexAccounts: { 'openai-old': 'second' },
@@ -1561,7 +1562,8 @@ describe('pooled Codex resets', () => {
     const weeklyUsage = (view: Awaited<ReturnType<typeof readSubscriptionPool>>) =>
       Object.fromEntries(view.accounts.map(entry =>
         [entry.id, entry.usage?.codex?.buckets.codex.secondary?.usedPercent]));
-    expect(weeklyUsage(await readSubscriptionPool('openai'))).toEqual({ default: 100, second: 100 });
+    const initialUsage = configured ? { default: 100, second: 100 } : { default: 100 };
+    expect(weeklyUsage(await readSubscriptionPool('openai'))).toEqual(initialUsage);
     const updates: Promise<Awaited<ReturnType<typeof readSubscriptionPool>>>[] = [];
     const unsubscribe = onSubscriptionAccountsChanged((provider, resetAccountId) => {
       if (provider === 'openai' && resetAccountId === accountId) updates.push(readSubscriptionPool('openai'));
@@ -1569,11 +1571,8 @@ describe('pooled Codex resets', () => {
     try {
       redeemed = true;
       await refreshCodexSubscriptionAccountAfterReset(scope);
-      expect((await Promise.all(updates)).map(weeklyUsage)).toEqual([{
-        default: accountId === 'default' ? 0 : 100,
-        second: accountId === 'second' ? 0 : 100,
-      }]);
-      expect(h.usage.mock.calls).toHaveLength(3);
+      expect((await Promise.all(updates)).map(weeklyUsage)).toEqual([{ ...initialUsage, [accountId]: 0 }]);
+      expect(h.usage.mock.calls).toHaveLength(configured ? 3 : 2);
     } finally {
       unsubscribe();
     }

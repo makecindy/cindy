@@ -415,9 +415,9 @@ export async function refreshCodexSubscriptionAccountAfterReset(scope = 'openai'
 
   const resolveAccountId = () => scope === 'openai' ? 'default' : readLegacyCodexAccountId(scope);
   const id = resolveAccountId();
-  if (!id || !readPool('openai')?.accounts.some(account => account.id === id)) return;
-
+  if (!id) return;
   const state = currentRuntime();
+  if (!accountStillPresent(state, 'openai', id)) return;
   const directory = directoryFor('openai', id);
   await refreshCodexPoolQuotaAfterReset(state, id, () => {
     if (!accountStillPresent(state, 'openai', id) || resolveAccountId() !== id
