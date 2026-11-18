@@ -1,3 +1,4 @@
+import { FileInput, FolderMinus, Pin, PinOff } from 'lucide-react';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   isExplicitProjectRepositoryAddress,
@@ -55,6 +56,7 @@ import {
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { ProjectIcon, useAutomaticProjectIcon } from './ProjectIcon';
+import { ProjectIntro, useProjectIntro } from './ProjectIntro';
 export function projectHostKey(project: ProjectNode): string {
   if (!project.deviceLinkDeviceId) return project.projectKey;
   const hosts = new Set(project.sessions.map((session) => session.remoteHostId ?? null));
@@ -67,17 +69,26 @@ export function projectHostKey(project: ProjectNode): string {
 
 export function ProjectSettingsDialog({
   project,
+  isPinned = false,
+  onTogglePin,
+  onImport,
+  onRemove,
   onClose,
   create = false,
   onCreated,
 }: {
   project: ProjectNode;
+  isPinned?: boolean;
+  onTogglePin?: (project: ProjectNode, currentlyPinned: boolean) => void;
+  onImport?: (project: ProjectNode) => void;
+  onRemove?: (project: ProjectNode) => void;
   create?: boolean;
   onCreated?(path: string): void;
   onClose(): void;
 }) {
   const { t } = useTranslation();
   const label = (key: string) => t(`projectSettings.${key}`);
+  const [intro, closeIntro] = useProjectIntro(create);
   const colorLabel = (color: ProjectIconColor) =>
     color === 'default' ? label('colors.default') : t(`taskTags.${color}`);
   const chooseColor = (color: ProjectIconColor) => {
@@ -190,7 +201,7 @@ export function ProjectSettingsDialog({
   const [busy, setBusy] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [discard, setDiscard] = useState(false);
+  const [discard, setDiscard] = useState<(() => void) | null>(null);
   const [copied, setCopied] = useState(false);
   const lock = useRef(false);
   const file = useRef<HTMLInputElement>(null);
@@ -202,6 +213,15 @@ export function ProjectSettingsDialog({
       name.trim() !== initial.name ||
       icon !== initial.icon ||
       JSON.stringify(directories) !== JSON.stringify(initialDirectories));
+  const leave = (action?: () => void) => {
+    if (busy || imageBusy) return;
+    const finish = () => {
+      onClose();
+      if (isDataOwnerGenerationCurrent(owner)) action?.();
+    };
+    if (dirty) setDiscard(() => finish);
+    else finish();
+  };
   const close = () => {
     if (busy || imageBusy) return;
     if (stage === 'icon') {
@@ -209,8 +229,7 @@ export function ProjectSettingsDialog({
       setError(null);
       return;
     }
-    if (dirty) setDiscard(true);
-    else onClose();
+    leave();
   };
   const save = async () => {
     if (
@@ -367,6 +386,8 @@ export function ProjectSettingsDialog({
   const symbols = PROJECT_SYMBOLS.filter((item) =>
     `${item.name} ${item.keywords}`.toLowerCase().includes(query.toLowerCase().trim()),
   );
+  // The first new project on this computer starts with the introduction; the form follows it.
+  if (intro) return <ProjectIntro open onClose={closeIntro} />;
   return (
     <>
       <Dialog.Root
@@ -418,8 +439,8 @@ export function ProjectSettingsDialog({
                 <div className="flex flex-col gap-4 py-4">
                   <p className="text-15 text-[var(--text-primary)]">{label('discardHint')}</p>
                   <div className="flex justify-end gap-2">
-                    <Button onClick={() => setDiscard(false)}>{label('keepEditing')}</Button>
-                    <Button variant="cta" onClick={onClose}>
+                    <Button onClick={() => setDiscard(null)}>{label('keepEditing')}</Button>
+                    <Button variant="cta" onClick={discard}>
                       {label('discard')}
                     </Button>
                   </div>
@@ -599,6 +620,26 @@ export function ProjectSettingsDialog({
                       }
                     />
                   </div>
+                {onTogglePin && (
+                  <div className="flex flex-col items-start gap-1 border-t border-[var(--border-default)] pt-3">
+                    <Button variant="secondary" tone="quiet" disabled={busy} onClick={() => leave(() => onTogglePin(project, isPinned))}>
+                      {isPinned ? <PinOff size={15} /> : <Pin size={15} />}
+                      {t(isPinned ? 'ccAgent.sidebar.projectAction.unpin' : 'ccAgent.sidebar.projectAction.pin')}
+                    </Button>
+                    {project.scope === 'local' && onImport && (
+                      <Button variant="secondary" tone="quiet" disabled={busy} onClick={() => leave(() => onImport(project))}>
+                        <FileInput size={15} />
+                        {t('settings.sessionImport.projectMenu')}
+                      </Button>
+                    )}
+                    {project.scope === 'local' && onRemove && (
+                      <Button variant="secondary" tone="quiet" disabled={busy} onClick={() => leave(() => onRemove(project))}>
+                        <FolderMinus size={15} />
+                        {t('ccAgent.sidebar.projectAction.removeFromSidebar')}
+                      </Button>
+                    )}
+                  </div>
+                )}
                 </div>
               ) : (
                 <div className="flex min-h-[436px] flex-col gap-4">

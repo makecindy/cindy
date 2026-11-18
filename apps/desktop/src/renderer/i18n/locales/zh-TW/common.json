@@ -3442,7 +3442,7 @@
         "end": "以上是從 {{source}} 匯入的記錄",
         "endHandoff": "以上是從 {{source}} 匯入的記錄，接下來由 {{harness}} 接著做"
       },
-      "projectMenu": "匯入此專案在其他工具裡的任務…"
+      "projectMenu": "匯入任務…"
     },
     "connections": {
       "codex": {
@@ -4074,6 +4074,7 @@
         "refreshSpeechAdded": "已更新模型，補充了 1 個語音參考型號",
         "refreshNoNew": "模型列表已是最新，無新增",
         "refreshFailed": "模型列表重新整理失敗，請稍後再試",
+        "refreshReconnect": "模型列表重新整理失敗。重新連線此供應商後再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
         "disableModel": "停用此模型",
         "paymentRequired": "付費",
@@ -16455,6 +16456,7 @@
         "empty": "此自動化沒有可歸檔的任務"
       },
       "archiveAll": {
+        "projectTitle": "封存「{{name}}」下的所有任務？",
         "title": "歸檔全部任務",
         "confirm": "歸檔全部",
         "cancel": "取消",
@@ -16599,18 +16601,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」專案選單",
+        "previewFailed": "無法讀取這個專案的任務。請重試。",
+        "remotePreviewFailed": "無法讀取遠端專案的任務。請檢查連線，並確認遠端電腦上的 Cindy 已更新。",
         "rename": "重新命名專案",
         "pin": "置頂專案",
         "unpin": "取消置頂專案",
-        "removeFromSidebar": "從側欄移除專案",
-        "removeFromSidebarConfirmTitle": "移除「{{name}}」？",
-        "removeFromSidebarConfirmDescription": "這會從側欄移除該專案。電腦上的檔案不會被刪除。現有任務會移到「對話」分組，仍可正常使用。",
+        "removeFromSidebar": "從 Cindy 移除專案…",
+        "removeFromSidebarConfirmTitle": "從 Cindy 移除「{{name}}」？",
+        "removeFromSidebarConfirmDescription": "未封存的 {{count}} 個任務仍可在「對話」中使用。",
         "removeFromSidebarConfirmAction": "移除專案",
-        "removeFromSidebarFailed": "無法從側欄移除專案，請重試",
-        "showFiles": "檢視檔案",
-        "archivedAll": "全部歸檔",
-        "unarchiveAll": "全部取消歸檔",
-        "openInExplorer": "在檔案管理器中開啟",
+        "removeFromSidebarFailed": "移除專案失敗，請重試。",
+        "archiveOnRemove": "同時封存任務（{{count}} 個）",
+        "keepSkippedOnRemove": "{{skip}}的任務會保留在「對話」中。",
+        "removedArchived": "{{count}} 個任務將移至「已封存」。",
+        "removeAndArchive": "移除專案並封存任務",
+        "removeKeepFiles": "專案的釘選、自訂名稱和圖示會清除。電腦上的檔案和資料夾會保留。",
+        "showFiles": "在側邊欄檢視任務檔案",
+        "archivedAll": "封存所有任務",
+        "unarchiveAll": "還原所有任務",
+        "openInFinder": "在 Finder 中開啟專案資料夾",
+        "openInExplorer": "在檔案總管中開啟專案資料夾",
+        "openInFileManager": "在檔案管理員中開啟專案資料夾",
         "newInDirectory": "在此目錄新建任務",
         "copyDeepLink": "複製專案連結",
         "search": "在專案內搜尋任務"
@@ -16815,6 +16827,7 @@
         "summaryAria": "查看 PR #{{number}} 摘要",
         "unresolvedLabel": "未解決的 review 評論",
         "checks": "檢查",
+        "following": "跟進中",
         "checksTotal": "共 {{count}} 項",
         "failed": "失敗",
         "passed": "通過",
@@ -21404,6 +21417,24 @@
   },
   "featureIntro": {
     "close": "關閉",
+    "project": {
+      "title": "認識專案",
+      "lead": "把一件要持續做的事交給一個專案。檔案都放在你電腦上的一個資料夾裡，Cindy 每次接著上次的成果做，不用重新交代背景。",
+      "files": {
+        "title": "成果都是你的檔案",
+        "body": "Cindy 直接在專案資料夾裡讀寫。做出來的東西留在你的電腦上，隨時可以打開、帶走。"
+      },
+      "context": {
+        "title": "不用重新交代",
+        "body": "在專案裡新開任務，Cindy 一開始就看得到這些檔案，也會沿用這個專案裡記下的要求。"
+      },
+      "separate": {
+        "title": "幾件事各歸各",
+        "body": "每個專案的任務單獨排在一起，不同的事互不干擾，隔多久回來都能接著做。"
+      },
+      "start": "繼續新增專案",
+      "note": "取個名字就能新增；已有的資料夾或程式碼儲存庫也可以直接用。"
+    },
     "taskInbox": {
       "title": "認識收件匣",
       "lead": "任務會依狀態自動分成待處理、進行中、稍後處理和已處理。最好的習慣是隨手清空收件匣：處理完按完成，不急的稍後處理。",

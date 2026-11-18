@@ -281,7 +281,16 @@ import {
   readInputDeliveryClientIds,
 } from '@cindy/device-link';
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
-import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
+import {
+  applyScheduledModelSelection,
+  createScheduledModelScope,
+  createScheduledModelSelectionResolver,
+  reconcileScheduledModelRouteBeforeBaseline,
+  type ScheduledModelSelection,
+  ScheduledModelSelectionBusyError,
+  type ScheduledModelSelectionLease,
+  writeScheduledModelBaselineIfProfileCurrent,
+} from './scheduledModelSelection';
 import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
 import { createTurnModelAttribution } from './turnModelAttribution.js';
@@ -749,7 +758,7 @@ import { createDesktopGroupProjectCheckouts } from './groupProjectCheckout.deskt
 import { markGroupCindyTask } from './groupCollaborationSkill.js';
 import { listPrRefs } from '../git-context/prRefsStore.js';
 import { gitExec } from '../worktree/gitExec.js';
-import { BOT_GROUP_CLIENT_ID_PREFIX, botGroupLiveTaskStateOfPhase } from '../../shared/botGroupChat.js';
+import { BOT_GROUP_CLIENT_ID_PREFIX, botGroupLiveTaskStateOfPhase, isBotGroupInTaskClientId } from '../../shared/botGroupChat.js';
 import { syncBotLanePermission, syncBotLinkedLanePermissions } from './botPermissionSync.js';
 import { ensureBotGroupLaneSession } from '../localDb/ipc/bots.js';
 import { restartBotRuntime } from './botRuntimeRestart.js';
@@ -11862,17 +11871,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const scheduledModelScope = createScheduledModelScope({
     createId,
     ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
-    prepareBaseline: async (sessionId) => {
-      await reconcileBotModelRoute(sessionId, true);
-      // Reconciliation applies idle companion choices through the normal switch
-      // path. A deferred or failed switch must not become a stale new baseline.
-      if (agentSwitchPending.get(sessionId) || getPendingSessionRuntimeMutation(sessionId)) {
-        if (!isSessionIdleForRouteApply(sessionId)) {
-          throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the saved companion route');
-        }
-        throwIpcError('HARNESS_SWITCH_NOT_READY', 'Saved companion route did not become ready');
-      }
-    },
+    prepareBaseline: (sessionId) => reconcileScheduledModelRouteBeforeBaseline({
+      reconcile: () => reconcileBotModelRoute(sessionId, true),
+      hasPendingRoute: () => !!agentSwitchPending.get(sessionId) || !!getPendingSessionRuntimeMutation(sessionId),
+      hasPendingSwitch: () => !!agentSwitchPending.get(sessionId),
+      isIdle: () => isSessionIdleForRouteApply(sessionId),
+      applyPendingSwitch: async () => {
+        const stagedIntent = agentSwitchPending.get(sessionId);
+        await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true });
+        return settleSystemRouteSwitchIntent({
+          stagedIntent,
+          remainingIntent: agentSwitchPending.get(sessionId),
+          sessionIdle: isSessionIdleForRouteApply(sessionId),
+        });
+      },
+    }),
     read: async (sessionId) => {
       const [row] = await getDbClient().drizzle.select({
         agentKind: sessions.agentKind, model: sessions.model, providerId: sessions.providerId,
@@ -13399,7 +13412,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // This private dispatcher owns Bot/group inputs and their host continuations.
     // Keep the host marker separate from message params so handoff payloads
     // cannot supply it. External cross-task delivery uses the default false.
-    return sendToSessionInternal({ ...params, onAccepted: () => params.onAccepted?.() }, true);
+    // Visible group tasks also accept private user turns. Queue group requests even when idle
+    // so their terminal carries the exact input ID the group execution is waiting for.
+    return sendToSessionInternal({ ...params, forceQueue: isBotGroupInTaskClientId(params.clientId),
+      onAccepted: () => params.onAccepted?.() }, true);
   };
 
   setBotInvitationWelcomeDispatch(input => dispatchBotSessionMessage({ ...input, invitationWelcome: true }));

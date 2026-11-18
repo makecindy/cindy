@@ -17,6 +17,10 @@ import * as botBoundary from '../../desktop/src/main/device-link/remoteBotSessio
 import * as sharedTasks from '../../desktop/src/main/device-link/sharedTaskDispatch.js';
 import { admitSharedTaskFsWatchTopics } from '../../desktop/src/main/device-link/sharedTaskFileAccess.js';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.js';
+import { PROJECT_ARCHIVE_CHANNEL } from '../../desktop/src/shared/projectArchive.js';
+import { runProjectArchive } from '../../desktop/src/main/localDb/projectArchive.js';
+import { getDbClient } from '../../desktop/src/main/localDb/client/current.js';
+import { withSendToSessionLock } from '../../desktop/src/main/maker-ipc/sendToSessionLock.js';
 import { TASK_TAG_CHANNEL } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from '../../desktop/src/main/localDb/ipc/botRemoteSessionAccess.js';
 import { createInteractionProjection, projectInteractionDismissedForRemote } from '../../desktop/src/main/cindy-brain/interactionProjection.js';
@@ -45,6 +49,8 @@ export interface HostDeviceLinkPorts {
   refreshToken?(): Promise<void>;
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
   releaseAuthCaller?(caller: string): void;
+  isBusyForProjectArchive(sessionId: string): boolean;
+  onProjectTaskStatus(sessionId: string, status: 'active' | 'archived'): void;
   preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   subscribe(listener: (event: any) => void): () => void;
@@ -106,6 +112,21 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       return contract.map ? contract.map(result) : result;
     });
   }
+  registry.register(PROJECT_ARCHIVE_CHANNEL, ([input]) => runProjectArchive(input, true, {
+    withLock: withSendToSessionLock,
+    busy: deps.isBusyForProjectArchive,
+    write: async (sessionId, status, beforeWrite, projectGuard) => {
+      const client = getDbClient();
+      beforeWrite();
+      if (status === 'archived') {
+        await client.tx('sessions.setTerminalStatus', { sessionId, status, projectGuard });
+      } else {
+        await client.tx('sessions.setStatus', { sessionIds: [sessionId], status, projectGuard });
+      }
+      assertCurrent();
+      deps.onProjectTaskStatus(sessionId, status);
+    },
+  }));
   registry.register(MAKER_INVOKE.SET_MODEL, async ([sessionId, model, wireProviderId, revision, wireSelection]) => {
     const { providerId, selection } = normalizeDeviceLinkSetModelWireArgs(true,
       deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1),

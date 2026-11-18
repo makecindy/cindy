@@ -6256,6 +6256,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     sessions: {
       list: listLocalDbSessions,
+      projectArchive: (request: import('../shared/projectArchive').ProjectArchiveRequest) =>
+        ipcRenderer.invoke('local-db:sessions:project-archive', request),
       create: (body?: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:create', body),
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get', id),

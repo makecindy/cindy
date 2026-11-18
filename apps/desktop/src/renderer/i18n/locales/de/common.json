@@ -3483,7 +3483,7 @@
         "end": "Alles darüber wurde aus {{source}} importiert",
         "endHandoff": "Alles darüber wurde aus {{source}} importiert. {{harness}} setzt hier fort."
       },
-      "projectMenu": "Sitzungen dieses Projekts aus anderen Werkzeugen importieren…"
+      "projectMenu": "Aufgaben importieren…"
     },
     "connections": {
       "codex": {
@@ -4116,6 +4116,7 @@
         "refreshSpeechAdded": "Modelle aktualisiert; 1 empfohlenes Sprachmodell hinzugefügt",
         "refreshNoNew": "Modellliste ist aktuell – nichts Neues",
         "refreshFailed": "Modellliste konnte nicht aktualisiert werden – versuche es später erneut",
+        "refreshReconnect": "Die Modellliste konnte nicht aktualisiert werden. Verbinde diesen Anbieter erneut und versuche es noch einmal.",
         "refreshFetchDisabled": "Abruf des Remote-Modellkatalogs ist deaktiviert – Aktualisierung übersprungen",
         "disableModel": "Dieses Modell deaktivieren",
         "paymentRequired": "Kostenpflichtig",
@@ -16529,6 +16530,7 @@
         "empty": "Diese Automatisierung hat keine Sitzungen zum Archivieren."
       },
       "archiveAll": {
+        "projectTitle": "Alle Aufgaben in „{{name}}“ archivieren?",
         "title": "Alle Sitzungen archivieren",
         "confirm": "Alle archivieren",
         "cancel": "Abbrechen",
@@ -16673,18 +16675,28 @@
         }
       },
       "projectAction": {
+        "menu": "Projektmenü für {{name}}",
+        "previewFailed": "Die Aufgaben dieses Projekts konnten nicht geladen werden. Versuche es erneut.",
+        "remotePreviewFailed": "Die Aufgaben des Remote-Projekts konnten nicht geladen werden. Prüfe die Verbindung und die Cindy-Version auf dem anderen Computer.",
         "rename": "Projekt umbenennen",
         "pin": "Projekt anheften",
         "unpin": "Projekt lösen",
-        "removeFromSidebar": "Projekt aus Seitenleiste entfernen",
-        "removeFromSidebarConfirmTitle": "{{name}} entfernen?",
-        "removeFromSidebarConfirmDescription": "Dadurch wird das Projekt aus der Seitenleiste entfernt. Dateien auf deinem Computer werden nicht gelöscht. Bestehende Sitzungen werden in den Bereich „Chat“ verschoben und bleiben verfügbar.",
+        "removeFromSidebar": "Projekt aus Cindy entfernen…",
+        "removeFromSidebarConfirmTitle": "{{name}} aus Cindy entfernen?",
+        "removeFromSidebarConfirmDescription": "Aktive Aufgaben: {{count}}. Sie bleiben unter Unterhaltungen verfügbar.",
         "removeFromSidebarConfirmAction": "Projekt entfernen",
-        "removeFromSidebarFailed": "Projekt konnte nicht aus der Seitenleiste entfernt werden – versuche es erneut.",
-        "showFiles": "Dateien anzeigen",
-        "archivedAll": "Alle archivieren",
-        "unarchiveAll": "Alle wiederherstellen",
-        "openInExplorer": "Im Dateimanager öffnen",
+        "removeFromSidebarFailed": "Projekt konnte nicht entfernt werden.",
+        "archiveOnRemove": "Aufgaben auch archivieren ({{count}})",
+        "keepSkippedOnRemove": "Diese Aufgaben bleiben in den Unterhaltungen ({{skip}}).",
+        "removedArchived": "Aufgaben, die ins Archiv verschoben werden: {{count}}.",
+        "removeAndArchive": "Projekt entfernen und Aufgaben archivieren",
+        "removeKeepFiles": "Anheftung, eigener Name und Symbol werden entfernt. Dateien und Ordner bleiben erhalten.",
+        "showFiles": "Aufgabendateien in der Seitenleiste anzeigen",
+        "archivedAll": "Alle Aufgaben archivieren",
+        "unarchiveAll": "Alle Aufgaben wiederherstellen",
+        "openInFinder": "Projektordner im Finder öffnen",
+        "openInExplorer": "Projektordner im Explorer öffnen",
+        "openInFileManager": "Projektordner im Dateimanager öffnen",
         "newInDirectory": "Neue Sitzung in diesem Verzeichnis",
         "copyDeepLink": "Projektlink kopieren",
         "search": "Sitzungen in diesem Projekt durchsuchen"
@@ -16889,6 +16901,7 @@
         "summaryAria": "Zusammenfassung von PR #{{number}} anzeigen",
         "unresolvedLabel": "Ungelöste Review-Threads",
         "checks": "Prüfungen",
+        "following": "Wird verfolgt",
         "checksTotal": "Insgesamt {{count}}",
         "failed": "Fehlgeschlagen",
         "passed": "Bestanden",
@@ -21486,6 +21499,24 @@
   },
   "featureIntro": {
     "close": "Schließen",
+    "project": {
+      "title": "So funktionieren Projekte",
+      "lead": "Gib jeder längeren Arbeit ein Projekt. Die Dateien liegen in einem Ordner auf deinem Computer, und Cindy macht jedes Mal beim letzten Stand weiter, ohne neue Erklärung.",
+      "files": {
+        "title": "Deine Ergebnisse",
+        "body": "Cindy arbeitet direkt im Projektordner. Was entsteht, bleibt auf deinem Computer."
+      },
+      "context": {
+        "title": "Nichts neu erklären",
+        "body": "Neue Aufgaben im Projekt sehen diese Dateien sofort und kennen dessen Vorgaben."
+      },
+      "separate": {
+        "title": "Sauber getrennt",
+        "body": "Jedes Projekt bündelt seine Aufgaben, verschiedene Arbeiten vermischen sich nicht."
+      },
+      "start": "Weiter zum neuen Projekt",
+      "note": "Ein Name genügt. Ein vorhandener Ordner oder ein Code-Repository geht auch."
+    },
     "taskInbox": {
       "title": "Der Posteingang",
       "lead": "Aufgaben ordnen sich selbst in Offen, In Arbeit, Zurückgestellt und Erledigt ein. Am besten hältst du den Posteingang leer: Klicke auf Erledigt, wenn eine Aufgabe fertig ist, und stelle zurück, was warten kann.",

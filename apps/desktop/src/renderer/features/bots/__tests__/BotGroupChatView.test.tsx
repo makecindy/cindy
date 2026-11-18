@@ -3747,69 +3747,6 @@ describe('BotGroupChatView', () => {
       expect(screen.getAllByTestId('pending-interaction').map((node) => node.textContent)).toEqual(['plan-xiaoman']);
     });
 
-    it('sends a message tagged 安排分工 with division: true and clears the tag', async () => {
-      renderView();
-      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
-        button: 0,
-        ctrlKey: false,
-      });
-      fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ }));
-      expect(screen.getByTestId('bot-group-division-tag').textContent).toContain('bots.groupChat.composer.divisionTag');
-      expect(input.getAttribute('placeholder')).toBe('bots.groupChat.composer.placeholderDivision');
-
-      fireEvent.change(input, { target: { value: '做一个官网介绍页' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
-      expect(mocks.sendBotGroupMessage.mock.calls[0]![0]).toMatchObject({
-        groupId: 'g1',
-        text: '做一个官网介绍页',
-        division: true,
-      });
-      expect(screen.queryByTestId('bot-group-division-tag')).toBeNull();
-
-      // Without the tag the flag is not sent at all.
-      fireEvent.change(input, { target: { value: '谢谢' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(2));
-      expect(mocks.sendBotGroupMessage.mock.calls[1]![0]).not.toHaveProperty('division');
-    });
-
-    it('puts the draft and its tag back when main refuses a second plan', async () => {
-      mocks.sendBotGroupMessage.mockResolvedValue({ ok: false, errorCode: 'PLAN_OPEN', message: '' });
-      renderView();
-      const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
-        button: 0,
-        ctrlKey: false,
-      });
-      fireEvent.click(await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ }));
-      fireEvent.change(input, { target: { value: '再排一次' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.errors.planOpen'));
-      expect(input.value).toBe('再排一次');
-      expect(screen.getByTestId('bot-group-division-tag')).toBeTruthy();
-    });
-
-    it('disables 安排分工 with a reason while a plan is under way', async () => {
-      const running = plan({
-        status: 'running',
-        currentStep: 0,
-        steps: [{ ...plan().steps[0]!, status: 'running' }, plan().steps[1]!],
-      });
-      mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(running) });
-      renderView();
-      const input = await screen.findByRole('textbox');
-      expect(input.getAttribute('placeholder')).toBe('bots.groupChat.composer.placeholderPlanRunning:咪咪');
-      fireEvent.pointerDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), {
-        button: 0,
-        ctrlKey: false,
-      });
-      const item = await screen.findByRole('menuitem', { name: /^bots\.groupChat\.composer\.division/ });
-      expect(item.getAttribute('aria-disabled')).toBe('true');
-      expect(item.textContent).toContain('bots.groupChat.composer.divisionBusy');
-    });
-
     it('re-reads the timeline on a plan change', async () => {
       renderView();
       await screen.findByText('周六 8:10 有票');
@@ -3819,7 +3756,7 @@ describe('BotGroupChatView', () => {
   });
 
   describe('附件', () => {
-    it('offers 添加文件、图片或视频… above 安排分工 and puts the picked files in the tray', async () => {
+    it('offers 添加文件、图片或视频… without a division command and puts the picked files in the tray', async () => {
       renderView();
       await screen.findByRole('textbox');
       const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -3833,7 +3770,6 @@ describe('BotGroupChatView', () => {
         const items = await screen.findAllByRole('menuitem');
         expect(items.map((item) => item.textContent)).toEqual([
           'extraDirs.addFiles',
-          expect.stringContaining('bots.groupChat.composer.division'),
         ]);
         fireEvent.click(items[0]!);
         expect(click).toHaveBeenCalledTimes(1);
