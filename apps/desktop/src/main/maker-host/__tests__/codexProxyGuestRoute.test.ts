@@ -61,7 +61,10 @@ describe('Codex proxy guard for shared-provider guests', () => {
   // Unit: follow the real guest guard's HTTP refusal into the common group
   // policy. Earlier tests asserted only 403, missing the automatic relocation.
   it('keeps a rejected request outside the shared provider out of group failover', async () => {
-    const guard = createCodexGuestRoutingGuard('shared-a', 'env-key');
+    const guard = createCodexGuestRoutingGuard('shared-a', 'env-key', 'guest-session');
+    // The registered guest session now belongs to another provider. This is
+    // explicit scope evidence, unlike a missing model in the shared catalog.
+    setSessionProvider('guest-session', 'other-b');
     const decision = await guard({ model: 'other-model' }, ctx('/responses', { 'thread-id': 'guest-thread' }));
     let status = 0;
     let body = '';
@@ -72,6 +75,7 @@ describe('Codex proxy guard for shared-provider guests', () => {
     const error = JSON.parse(body).error;
     expect(status).toBe(403);
     expect(error.code).toBe('shared_provider_only');
+    expect(error.message).toContain('[SHARED_PROVIDER_SCOPE_DENIED]');
     expect(body).not.toContain('other-model');
     expect(body).not.toContain('other-b');
     expect(decideProviderGroupFailure({ errorStatus: status, message: error.message }, 'run'))
@@ -185,7 +189,15 @@ describe('Codex proxy guard for shared-provider guests', () => {
     allowed = true;
     expect(await request()).toBeUndefined();
     pooledModels = [];
-    expect(await statusOf(request())).toBe(403);
+    const unavailable = await request();
+    let status = 0;
+    let body = '';
+    await unavailable!.localHandler!({ res: {
+      writeHead: (value: number) => { status = value; }, end: (value: string) => { body = value; },
+    } } as never);
+    expect(status).toBe(403);
+    expect(decideProviderGroupFailure({ errorStatus: status, message: JSON.parse(body).error.message }, 'run'))
+      .toEqual({ action: 'switch', cause: 'failed', connection: null, cool: false });
   });
 
   it('refuses a model the shared provider does not offer, even from the guest session', async () => {

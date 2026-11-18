@@ -67,6 +67,7 @@ import {
 } from '../provider-route';
 import { bindHostedSessionProvider, clearAllSessionProviders, getSessionProvider } from '../session-provider-store';
 import { registerPiProxySession } from '../pi-proxy-session-auth';
+import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 const SHARED_UPSTREAM = 'https://shared.example/api/anthropic';
 const OTHER_UPSTREAM = 'https://other.example/api/anthropic';
@@ -81,6 +82,23 @@ async function statusOf(decision: RoutingDecision | null): Promise<number | unde
   const res = { headersSent: false, writeHead: (code: number) => { status = code; return res; }, end: () => res };
   await decision.localHandler({ res } as never);
   return status;
+}
+
+// Unit / provider-groups §6.1: an explicit proxy scope refusal must remain
+// distinguishable from a member losing a model, including Claude and Pi.
+// Existing tests checked only HTTP status, missing the recovery consequence.
+async function expectScopeRefusal(decision: RoutingDecision | null): Promise<void> {
+  let status = 0;
+  let body = '';
+  await decision!.localHandler!({ res: {
+    writeHead: (value: number) => { status = value; }, end: (value: string) => { body = value; },
+  } } as never);
+  const error = JSON.parse(body).error;
+  expect(status).toBe(403);
+  expect(error.code).toBe('shared_provider_only');
+  expect(error.message).toContain('[SHARED_PROVIDER_SCOPE_DENIED]');
+  expect(decideProviderGroupFailure({ errorStatus: status, message: error.message }, 'run'))
+    .toEqual({ action: 'stay', why: 'policy' });
 }
 
 function installProviders(): void {
@@ -232,7 +250,7 @@ describe('Claude proxy routing for shared-provider guests', () => {
   it('refuses a body-less request unless the shared provider is the default gateway', async () => {
     const { token } = registerGuestProviderRoute('guest-session', 'shared-a');
     const decision = await Promise.resolve(transform(undefined, ctxWith({ [GUEST_ROUTE_HEADER]: token })));
-    expect(await statusOf(decision)).toBe(403);
+    await expectScopeRefusal(decision);
   });
 
   it('refuses a guest Pi request whose token belongs to another provider', async () => {
@@ -246,7 +264,7 @@ describe('Claude proxy routing for shared-provider guests', () => {
         'x-cindy-pi-session-token': 'child-token',
         'x-cindy-pi-provider-id': 'other-b',
       })));
-      expect(await statusOf(foreign)).toBe(403);
+      await expectScopeRefusal(foreign);
       const gateway = await Promise.resolve(transform({ model: 'other-model' }, ctxWith({
         'x-cindy-pi-session-id': 'pi-guest',
         'x-cindy-pi-session-token': 'root-token',

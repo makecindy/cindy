@@ -20,6 +20,7 @@ import { AgentNotAuthenticatedError, SESSION_CLOSED_MID_TURN_MESSAGE } from '@ci
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
+import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 import { classifyTurnOverload, classifyTurnUsageLimit } from '../goal-host/usageLimit.js';
 import { isContextOverflowErrorData, isOversizedHistoryErrorData } from '../maker-ipc/contextOverflowRollover.js';
@@ -203,8 +204,6 @@ const STAY_CODEX_ERRORS: ReadonlyMap<string, ProviderGroupStayReason> = new Map(
 
 /** 用户在权限确认里拒绝了、取消了：换到哪台都一样。 */
 const USER_DECISION_TEXT = /\b(?:permission denied by (?:the )?user|user (?:denied|rejected|declined) (?:the )?(?:permission|request|tool))\b/i;
-/** Shared proxies use this non-secret refusal across Harnesses; it is not a member's failed login or connection. */
-const SHARED_PROVIDER_SCOPE_DENIAL = /\bThis request is outside the provider shared with you\./i;
 /** 工具本身执行出错、任务所在电脑上的工作目录不在了(文件和命令都在任务所在电脑，换 Agent 所在电脑也一样)。 */
 const TOOL_FAILURE_TEXT = /\btool (?:execution|call) failed\b|\bworking directory is missing\b/i;
 const AUTH_TEXT = /\b(?:authentication[_ ](?:failed|error)|invalid[_ -]?(?:x-)?api[_ -]?key|unauthorized|not (?:logged in|authenticated)|login (?:has )?expired|oauth token (?:has )?expired|token (?:has been )?revoked)\b/i;
@@ -290,7 +289,7 @@ export function decideProviderGroupFailure(
   if (signals.sdkError === 'max_output_tokens') return { action: 'stay', why: 'context' };
   if (signals.toolLoop) return { action: 'stay', why: 'tool-loop' };
   if (USER_DECISION_TEXT.test(message)) return { action: 'stay', why: 'user' };
-  if (SHARED_PROVIDER_SCOPE_DENIAL.test(message)) return { action: 'stay', why: 'policy' };
+  if (message.includes(SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE)) return { action: 'stay', why: 'policy' };
   if (TOOL_FAILURE_TEXT.test(message)) return { action: 'stay', why: 'local' };
   if (isContextOverflowErrorData(signals) || isOversizedHistoryErrorData(signals)) return { action: 'stay', why: 'context' };
   const codexStay = signals.codexErrorInfo ? STAY_CODEX_ERRORS.get(signals.codexErrorInfo) : undefined;

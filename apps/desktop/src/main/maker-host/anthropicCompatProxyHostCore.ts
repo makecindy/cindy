@@ -65,6 +65,7 @@ import {
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
 import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider, hasHostedSessionModelAccess } from './session-provider-store.js';
+import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import {
   GUEST_ROUTE_HEADER,
   guestProviderOffersModel,
@@ -713,7 +714,7 @@ function createModelRoutingTransform(): RoutingTransform {
     // 供应商分享受邀者的 Pi 会话：令牌只为分享的供应商签发，这里按登记再复核一次(含子代理令牌)。
     const piGuest = piSessionId ? guestProviderRouteForSession(piSessionId) : null;
     if (piGuest && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
-      return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+      return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
     }
     // Pi's native ChatGPT transport sends zstd JSON. The generic proxy keeps
     // those bytes opaque; the native handler decodes and checks the live grant
@@ -1165,12 +1166,12 @@ function createModelRoutingTransform(): RoutingTransform {
         return refuseGuestProviderRoute(401, 'invalid_guest_route', 'Invalid or expired shared-provider session.');
       }
       if (hasInternalPiHeader) {
-        return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+        return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
       }
       if (!isPlainObject(body)) {
         return guest.providerId === 'xd'
           ? route(body, ctx, guest)
-          : refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+          : refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
       }
       const wireModel = typeof body.model === 'string' ? body.model : '';
       if (!await guestProviderOffersModel(guest.providerId, 'claude-code', wireModel, guest.sessionId)) {

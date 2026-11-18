@@ -1757,12 +1757,27 @@ describe('onTurnError — one decision for every failure (failurePolicy)', () =>
   it('returns an explicit shared-provider scope refusal without relocating or continuing', async () => {
     const h = harness();
     h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
-    const signals = { message: 'unexpected status 403 Forbidden: This request is outside the provider shared with you.', errorStatus: 403 };
+    const signals = { message: 'unexpected status 403 Forbidden: [SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.', errorStatus: 403 };
     await h.service.onTurnError('s1', signals, 7);
     expect(h.deps.switchAgentLocation).not.toHaveBeenCalled();
     expect(h.deps.continueSession).not.toHaveBeenCalled();
     expect(h.deps.fallback).toHaveBeenCalledTimes(1);
     expect(h.bindings.get('s1')?.memberKey).toBe('local');
+    expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
+  });
+
+  // Unit, §6.1 / review 4614256549: a disappearing model used the same old
+  // 403 sentence as a scope denial. A healthy spare must still receive the task.
+  it('continues on a healthy member after an ambiguous legacy model refusal', async () => {
+    const h = harness();
+    h.bindings.set('s1', { providerId: 'anthropic', memberKey: 'local', at: 1 });
+    await h.service.onTurnError('s1', {
+      message: 'unexpected status 403 Forbidden: This request is outside the provider shared with you.', errorStatus: 403,
+    }, 7);
+    expect(h.bindings.get('s1')?.memberKey).toBe(MINI.key);
+    expect(h.deps.switchAgentLocation).toHaveBeenCalledTimes(1);
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(1);
+    expect(h.deps.fallback).not.toHaveBeenCalled();
     expect(h.router.coolingUntil('anthropic', 'local')).toBeNull();
   });
 
