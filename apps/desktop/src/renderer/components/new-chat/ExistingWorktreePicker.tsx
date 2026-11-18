@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,6 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Tip } from '@/components/ui/tooltip';
 import { workingDirEquals } from '../../../shared/workingDir';
 import type { WorktreeMeta } from '@/lib/worktree.types';
 
@@ -25,6 +27,7 @@ export function ExistingWorktreePicker({
   onSelect: (value: WorktreeMeta | null) => void;
 }) {
   const { t } = useTranslation();
+  const chooseLabel = t('newChat.worktree.choose');
   const [items, setItems] = useState<WorktreeMeta[]>([]);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -72,14 +75,18 @@ export function ExistingWorktreePicker({
       }}
     >
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          disabled={disabled}
-          aria-label={t('newChat.worktree.choose')}
-          className="inline-flex h-full w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-sidebar-item-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-        >
-          <ChevronDown size={12} aria-hidden />
-        </button>
+        <Tip text={chooseLabel}>
+          <Button
+            variant="secondary"
+            tone="quiet"
+            size="sm"
+            disabled={disabled}
+            aria-label={chooseLabel}
+            className="w-7 self-center px-0"
+          >
+            <ChevronDown size={12} aria-hidden />
+          </Button>
+        </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-32px)]">
         <DropdownMenuItem

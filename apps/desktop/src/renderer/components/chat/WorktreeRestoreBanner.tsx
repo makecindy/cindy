@@ -189,7 +189,8 @@ export function WorktreeRestoreBanner({
           clearOwnAttentionFor(target);
           clearWorktreeRestoreBannerDismissal(target);
         }
-        void refreshWorktreeForSession(target);
+        // Main publishes the restored registration's owner to WorktreeContext.
+        if (!window.electronAPI.onWorktreeChanged) void refreshWorktreeForSession(target);
       } else {
         toast.error(
           t('chat.worktreeRestoreBanner.failed', {

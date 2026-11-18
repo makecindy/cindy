@@ -63,6 +63,7 @@ import {
 } from './worktree/recycleMaintenance';
 import { requestWorktreeRecycle } from './worktree/managedRecycle';
 import {
+  broadcastWorktreeChanged,
   getSessionRowSnapshot,
   patchSessionMetaInDb,
   recycleSessionWorktreeForStatusChange,
@@ -10602,7 +10603,7 @@ app.on('ready', async () => {
           getClaudeSessionBackgroundActivity(session.id),
       })),
     );
-  });
+  }, broadcastWorktreeChanged);
   // session-git-pr-context: git-context:* channel(分支查询/HEAD 监听/PR 引用/PR 状态)
   registerGitContextIpc();
   registerGitReviewIpc({

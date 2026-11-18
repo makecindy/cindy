@@ -4453,6 +4453,7 @@ export function NewMakerDraftRoute() {
       // 改动；若异步块稍后再读 live ref，会把旧 workingDir 与新 baseRepo 拼成一次
       // 混合目标创建。这里与 selectedWorkingDir 同步快照，保证整笔创建目标一致。
       const selectedWorktree = { ...wtRef.current };
+      const workingDir = selectedWorktree.existingWorktree?.path ?? selectedWorkingDir;
       // worktree 是用户对本次 project session 的明确选择。探测、分支偏好或远端
       // recovery 能力尚未就绪时保留输入并提示；绝不能把勾选静默降级成普通 session。
       // Checkbox APPLY 是双向门：无论 ON→OFF 还是 OFF→ON，创建都必须等
@@ -4634,7 +4635,7 @@ export function NewMakerDraftRoute() {
                 commandName: leadingSlashInvocation(message)?.name ?? builtInSkillIntent.commandName,
               }
             : undefined;
-          if (!(await resolveBuiltInSkillForDirectory(selectedWorktree.existingWorktree?.path ?? selectedWorkingDir))) return;
+          if (!(await resolveBuiltInSkillForDirectory(workingDir))) return;
 
           // device-link 远程项目:在被控端走校验过的 maker:create-session 建会话(写被控 DB,
           // allowlist 内、非裸写),首条消息经 setPending 交给 SessionView 发送(与本地
@@ -5102,10 +5103,9 @@ export function NewMakerDraftRoute() {
           // 跨 Agent 工作区检测 + 迁移：必须在 createSession 之前完成，
           // agent 启动时看到的工作区已是迁移后的状态。fail-soft：检测错误只 warn，不阻塞 send。
           try {
-            const wd = effectiveWorkingDir;
-            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi') {
+            if (workingDir && !isRemoteProjectDraft && persistedAgentKind !== 'pi') {
               const r = await crossAgentConvertService.detect(
-                wd,
+                workingDir,
                 persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
               );
               if (r.items.length > 0) {
@@ -5134,7 +5134,6 @@ export function NewMakerDraftRoute() {
             emitAutoTitlePreview(sessionId, optimisticTitle);
             optimisticTitleSessionId = sessionId;
           }
-          const workingDir = selectedWorktree.existingWorktree?.path ?? selectedWorkingDir;
           const wt = selectedWorktree;
           // 生效条件 = 勾选 && baseRepo 已就绪。上面的发送门已阻止不完整状态；
           // 这里保留完整条件作创建副作用前的防御，且始终不改写勾选记忆。

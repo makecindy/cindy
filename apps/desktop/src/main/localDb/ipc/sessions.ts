@@ -579,7 +579,12 @@ function broadcastRecentWorkdirsChanged(path: string, ownerScope: OwnerScope): v
  */
 export function broadcastWorktreeChanged(sessionId: string): void {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('worktree:changed', { sessionId });
+    if (w.isDestroyed()) continue;
+    try {
+      w.webContents.send('worktree:changed', { sessionId });
+    } catch {
+      // A closing window must not prevent the other windows from refreshing.
+    }
   }
 }
 

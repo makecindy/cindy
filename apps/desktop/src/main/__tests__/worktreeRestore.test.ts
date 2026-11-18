@@ -698,7 +698,9 @@ describe('worktree restore', () => {
   // the registered owner. Existing tests only exercised borrowing via working_dir.
   // Sending and manual recovery must apply the owner's snapshot without creating
   // another registry entry that would prevent the shared directory from recycling.
-  it.each(['send', 'manual recovery'])('uses the registered owner for a borrower during %s', async (entry) => {
+  // Manual recovery also publishes that owner to the UI so the borrower regains
+  // its badge and open-folder action through the shared registry.
+  it.each(['send', 'manual recovery', 'manual recovery with failed notification'])('uses the registered owner for a borrower during %s', async (entry) => {
     fsSync.mkdirSync(wtPath, { recursive: true });
     const owner = { sessionId: 'owner', path: wtPath };
     storeGetMock.mockImplementation((sessionId: string) => sessionId === 'owner' ? owner : null);
@@ -723,9 +725,14 @@ describe('worktree restore', () => {
       await expect(mod.getWorktreeRestoreStatus('borrower')).resolves.toEqual({
         state: 'present', worktreePath: wtPath, hasSnapshot: true,
       });
-      await expect(mod.restoreWorktreeForSession('borrower')).resolves.toEqual({
+      const notifyChanged = vi.fn();
+      if (entry === 'manual recovery with failed notification') {
+        notifyChanged.mockImplementation(() => { throw new Error('window closed'); });
+      }
+      await expect(mod.restoreWorktreeForSession('borrower', notifyChanged)).resolves.toEqual({
         ok: true, snapshotApplied: true,
       });
+      expect(notifyChanged).toHaveBeenCalledExactlyOnceWith('owner');
     }
 
     expect(gitExecMock.mock.calls.map(argsOf)).toContainEqual(['stash', 'apply', SHA]);

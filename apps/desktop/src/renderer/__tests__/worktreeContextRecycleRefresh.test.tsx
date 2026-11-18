@@ -70,9 +70,10 @@ function ActiveProbe() {
   return <span data-testid="active">{info?.path ?? ''}</span>;
 }
 
-// Unit: a borrower resolves a durable reference only against the live owner
-// registry. This closes the display gap left by owner-only context tests.
-it('shows a borrower badge through its live owner and removes it after owner recycling', async () => {
+// PR #11152, unit: the borrower stores the owner path without its own registry row.
+// Recycling removes its badge; an owner notification after restore brings back the
+// badge and folder action. Owner-only tests cannot catch the borrowed-path gap.
+it('refreshes the borrower badge and folder action when its owner recycles and restores the worktree', async () => {
   const owner = { sessionId: 'owner', name: 'login', baseRepo: '/repo', path: '/repo/.cindy-worktrees/login',
     branch: 'cindy/login', sourceBranch: 'main', createdAt: '2026-11-17' };
   mocks.worktreeListAll.mockResolvedValue([owner]);
@@ -82,6 +83,14 @@ it('shows a borrower badge through its live owner and removes it after owner rec
   mocks.worktreeGetForSession.mockResolvedValue(null);
   await act(async () => emitWorktreeChanged('owner'));
   await waitFor(() => expect(view.getByTestId('sidebar-borrower').getAttribute('data-path')).toBe(''));
+  expect(view.getByTestId('sidebar-borrower').querySelector('button')).toBeNull();
+
+  mocks.worktreeGetForSession.mockResolvedValue(owner);
+  await act(async () => emitWorktreeChanged('owner'));
+  await waitFor(() => expect(view.getByTestId('sidebar-borrower').getAttribute('data-path')).toBe(owner.path));
+  expect(view.getByTestId('sidebar-borrower').querySelector('button')).not.toBeNull();
+  expect(mocks.worktreeGetForSession.mock.calls).toEqual([['owner'], ['owner']]);
+  expect(mocks.worktreeListAll).toHaveBeenCalledTimes(1);
 });
 
 function SidebarProbe({

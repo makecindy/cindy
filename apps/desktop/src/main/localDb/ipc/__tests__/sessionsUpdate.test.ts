@@ -197,6 +197,7 @@ vi.mock('../../../maker-host/session-context-budget-store.js', async (importOrig
 import {
   applyAgentSwitchToSessionRow,
   broadcastSessionPatched,
+  broadcastWorktreeChanged,
   deleteBotProfileAndDetachSessionsInDb,
   patchSessionMetaInDb,
   restoreArchivedSessionForSend,
@@ -652,6 +653,22 @@ describe('local-db:sessions:update handler wiring', () => {
       sessionId: 's-projection',
       patch: { contextTokens: 0, contextWindow: 272_000 },
     });
+  });
+
+  // PR #11152, unit: a window closing during the restore notification must not
+  // leave the next window's worktree cache stale. Session patch tests use a
+  // different broadcaster, so cover one throwing sender followed by a live one.
+  it('delivers worktree changes to remaining windows when one window closes', () => {
+    const closedWindowSend = vi.fn(() => { throw new Error('window closed'); });
+    const healthyWindowSend = vi.fn();
+    h.windows = [
+      { isDestroyed: vi.fn(() => false), webContents: { send: closedWindowSend } },
+      { isDestroyed: vi.fn(() => false), webContents: { send: healthyWindowSend } },
+    ];
+
+    expect(() => broadcastWorktreeChanged('owner')).not.toThrow();
+    expect(healthyWindowSend).toHaveBeenCalledExactlyOnceWith('worktree:changed', { sessionId: 'owner' });
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
   });
 
   it('rejects new SSH writable roots because the picker is not on the remote filesystem', async () => {

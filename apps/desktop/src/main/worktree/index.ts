@@ -60,6 +60,7 @@ export * from './types';
 export function registerWorktreeIpc(
   ipcMain: IpcMain = ipcMainType,
   listActivity: () => Promise<CheckoutActivity[]> = async () => [],
+  notifyChangedAfterRestore?: (ownerSessionId: string) => void,
 ): void {
   ipcMain.handle(
     'worktree:checkout',
@@ -207,6 +208,6 @@ export function registerWorktreeIpc(
     if (typeof sessionId !== 'string' || !sessionId) {
       return { ok: false, message: 'invalid sessionId' };
     }
-    return restoreWorktreeForSession(sessionId);
+    return restoreWorktreeForSession(sessionId, notifyChangedAfterRestore);
   });
 }

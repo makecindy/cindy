@@ -647,13 +647,26 @@ function restoreOwnedWorktreeForSession(
   return tracked;
 }
 
-export function restoreWorktreeForSession(sessionId: string): Promise<WorktreeRestoreResult> {
+export function restoreWorktreeForSession(
+  sessionId: string,
+  notifyChanged?: (ownerSessionId: string) => void,
+): Promise<WorktreeRestoreResult> {
   const existing = restoreRequestsInFlight.get(sessionId);
   if (existing) return existing;
-  const request = readWorktreeRestoreTarget(sessionId).then((target) => target
-    ? restoreOwnedWorktreeForSession(target.ownerSessionId, target.worktreePath, target.requester)
-    : { ok: false, reason: 'no-worktree' as const },
-  ).finally(() => { restoreRequestsInFlight.delete(sessionId); });
+  const owner = getCurrentDbClientSnapshot();
+  const request = readWorktreeRestoreTarget(sessionId).then(async (target) => {
+    if (!target) return { ok: false, reason: 'no-worktree' as const };
+    const result = await restoreOwnedWorktreeForSession(target.ownerSessionId, target.worktreePath, target.requester);
+    // The registry is keyed by the owner, including when a borrower requests restoration.
+    if (result.ok && notifyChanged && owner && getCurrentDbClientSnapshot() === owner) {
+      try {
+        notifyChanged(target.ownerSessionId);
+      } catch {
+        log.warn('[restore] worktree change notification failed');
+      }
+    }
+    return result;
+  }).finally(() => { restoreRequestsInFlight.delete(sessionId); });
   restoreRequestsInFlight.set(sessionId, request);
   return request;
 }
