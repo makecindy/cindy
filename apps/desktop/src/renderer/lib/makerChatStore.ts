@@ -17811,6 +17811,7 @@ function submitQuestionDecision(
   requestId: string,
   decision: Record<string, unknown>,
   onAccepted: () => void,
+  targetDevice?: string,
 ): void {
   const key = JSON.stringify([sessionId, requestId]);
   if (questionDecisionsInFlight.has(key)) return;
@@ -17828,7 +17829,7 @@ function submitQuestionDecision(
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const receipt = await Promise.race([
-        makerApiFor(sessionId).resolveInteraction(requestId, decision),
+        (targetDevice ? makerApiForDevice(targetDevice) : makerApiFor(sessionId)).resolveInteraction(requestId, decision),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error('Interaction receipt timeout')), 15_000);
         }),
@@ -17842,6 +17843,7 @@ function submitQuestionDecision(
       const state = sessions.get(sessionId);
       // A winning dismissal from another window/Stop remains authoritative.
       if (state?.pendingAskUser?.requestId !== requestId &&
+        state?.pendingIssueConfirm?.requestId !== requestId &&
         state?.pendingPlanReview?.requestId !== requestId) return;
       log.warn('Question decision receipt unavailable', error);
       // A rejection may mean either an ended request or paused execution.
@@ -17861,6 +17863,7 @@ function submitQuestionDecision(
       if (!isCurrent()) return;
       const current = sessions.get(sessionId);
       if (current?.pendingAskUser?.requestId !== requestId &&
+        current?.pendingIssueConfirm?.requestId !== requestId &&
         current?.pendingPlanReview?.requestId !== requestId) return;
       toast.warning(i18n.t('newChat.permissionPrompt.submissionFailed'));
     } finally {
@@ -18234,6 +18237,13 @@ function respondToIssueConfirm(
   if (!state.pendingIssueConfirm) return;
 
   const { requestId } = state.pendingIssueConfirm;
+  const device = getStickySessionDeviceId(sessionId) ?? remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (device) {
+    submitQuestionDecision(sessionId, requestId, { kind: 'issue_confirm', ...result }, () =>
+      setState(sessionId, (current) => current.pendingIssueConfirm?.requestId === requestId
+        ? { ...current, pendingIssueConfirm: null } : current), device);
+    return;
+  }
   bumpInteractionReconcileEpoch(sessionId);
 
   // 先清 UI,再回包(同 respondToPermission 的时序)。

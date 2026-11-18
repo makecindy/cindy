@@ -535,6 +535,11 @@ describe('device-link Desktop-only 确认 — 控制端只读投影', () => {
     await makerChatStore.reconcilePendingInteractions(s);
     expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
     expect(makerChatStore.getSnapshot(s).pendingRemoteDesktopConfirmation?.requestId).toBe('rename');
+    host.invoke.mockRejectedValueOnce(new Error('connection lost'));
+    makerChatStore.respondToIssueConfirm(s, { confirmed: false });
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe(request.requestId);
+    expect(getIssueConfirmDraft(s, request.requestId)).toEqual(edited);
     makerChatStore.respondToIssueConfirm(s, {
       confirmed: true, ...edited, submissionIdentity: { kind: 'platform', login: 'cindy-issue' }, uiLanguage: 'zh-CN',
     });
