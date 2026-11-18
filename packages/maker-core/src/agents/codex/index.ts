@@ -48,6 +48,7 @@ import { CODEX_ACCOUNT_RATE_LIMITS_TIMEOUT_MS, readAccountRateLimitsWithRefresh 
 import {
   BaseAgent,
   LOCAL_AGENT_CLIENT,
+  AUTO_REVIEW_SOURCE_CONTENT,
   INHERITED_CAPABILITY_SELECTION,
   PINNED_SKILL_INVOCATION,
   CodexResumePreparationBlockedError,
@@ -6988,6 +6989,7 @@ assertRouteCurrent();
     const toTurnInput = async (
       content: UserMessage['content'],
       pinnedSkill?: PinnedSkillInvocation,
+      sourceContent?: UserMessage['content'],
     ): Promise<UserInput[]> => {
       if (reviewMode) {
         if (pinnedSkill) {
@@ -7005,7 +7007,9 @@ assertRouteCurrent();
         return toAppServerInput(content, opts.workingDir);
       }
 
-      const slash = parseLeadingSlashToken(content.trim());
+      const slash = parseLeadingSlashToken(
+        (pinnedSkill && typeof sourceContent === 'string' ? sourceContent : content).trim(),
+      );
       if (pinnedSkill) {
         const normalizedSlashName = slash?.name.toLowerCase();
         const normalizedSkillName = pinnedSkill.name.toLowerCase();
@@ -7021,7 +7025,13 @@ assertRouteCurrent();
           name: pinnedSkill.name,
           path: pinnedSkill.path,
         }];
-        const prompt = slash.rest.trim();
+        // Authenticate the command from Host-owned source text, but assemble the
+        // prompt from the wire text. Notes can precede the command and library
+        // mappings can follow it; neither may disappear when using a pinned Skill.
+        const wireSlash = parseLeadingSlashToken(content.trim());
+        const prompt = (wireSlash?.name.toLowerCase() === normalizedSlashName
+          ? wireSlash.rest
+          : content).trim();
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       }
@@ -13933,6 +13943,7 @@ assertRouteCurrent();
           turnInput = await toTurnInput(
             withLibraryNativeReadContext(message.content, mutableLibraryRoot, mutableExtraDirs),
             sendOpts?.[PINNED_SKILL_INVOCATION],
+            sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT],
           );
         } catch (e) {
           isTurnStartPending = false;
