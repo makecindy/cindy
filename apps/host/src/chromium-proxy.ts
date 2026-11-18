@@ -21,13 +21,12 @@
  */
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 import { createMakerLogger } from '../../desktop/src/main/maker-host/logger-adapter.ts';
-import { hostRuntimeLayout } from './runtime-layout.mjs';
+import { hostRuntimeLayout, resolveSourceElectronBinary } from './runtime-layout.mjs';
 
 const log = createMakerLogger('outbound-proxy');
 
@@ -100,12 +99,8 @@ function defaultAssets(): { binary: string; script: string } | null {
   if (layout.packaged) {
     return layout.electronBinary && layout.proxyWorker ? { binary: layout.electronBinary, script: layout.proxyWorker } : null;
   }
-  try {
-    const binary = createRequire(new URL('../../desktop/package.json', import.meta.url))('electron') as string;
-    return { binary, script: fileURLToPath(new URL('./chromium-proxy-worker.cjs', import.meta.url)) };
-  } catch {
-    return null;
-  }
+  const binary = resolveSourceElectronBinary();
+  return binary ? { binary, script: fileURLToPath(new URL('./chromium-proxy-worker.cjs', import.meta.url)) } : null;
 }
 
 interface Pending { resolve: (value: string) => void; reject: (error: Error) => void }

@@ -4,6 +4,7 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import test from 'node:test';
+import ts from 'typescript';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createMediaTransfer, AttachmentIntegrityError } from '../../desktop/src/main/device-link/mediaTransfer.js';
@@ -16,20 +17,41 @@ function sourceFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) return sourceFiles(full);
-    return /\.(mjs|ts)$/.test(entry.name) && !entry.name.endsWith('.test.mjs') ? [full] : [];
+    return /\.(?:[cm]?ts|tsx|jsx?|mjs)$/.test(entry.name) ? [full] : [];
   });
 }
 
-test('host sources never import Electron', () => {
+// Source Host must never execute the npm entry: even require('electron') via
+// an aliased createRequire can synchronously install the missing runtime.
+// The .cjs workers, unlike the Node Host, run inside Electron.
+test('host sources never import or execute the Electron package entry', () => {
   const offenders = [];
   for (const file of sourceFiles(srcDir)) {
     const text = fs.readFileSync(file, 'utf8');
-    for (const match of text.matchAll(/from\s+['"]([^'"]+)['"]|import\s+['"]([^'"]+)['"]/g)) {
-      const spec = match[1] ?? match[2];
-      if (spec === 'electron' || spec.startsWith('electron/')) {
-        offenders.push(`${path.relative(srcDir, file)} -> ${spec}`);
+    if (!/['"`]electron(?:\/|['"`])/.test(text)) continue;
+    const tree = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
+    const resolvesPath = node => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && node.expression.name.text === 'resolve';
+    function visit(node) {
+      // Match literal entry loads regardless of the local name of require.
+      // require.resolve only finds the file, and does not execute it.
+      const declaration = ts.isImportDeclaration(node) || ts.isExportDeclaration(node);
+      let spec;
+      if (declaration) spec = node.moduleSpecifier;
+      else if (ts.isExternalModuleReference(node)) spec = node.expression;
+      else if (ts.isCallExpression(node) && (!ts.isPropertyAccessExpression(node.expression)
+          || /^(?:require|_load)$/.test(node.expression.name.text))) {
+        spec = node.arguments[0];
+        if (spec && resolvesPath(spec)) spec = spec.arguments[0];
       }
+      if (spec && ts.isStringLiteralLike(spec) && (/^electron(?:\/(?:index(?:\.js)?)?)?$/.test(spec.text)
+          || declaration && spec.text.startsWith('electron/'))) {
+        const line = tree.getLineAndCharacterOfPosition(spec.getStart(tree)).line + 1;
+        offenders.push(`${path.relative(srcDir, file)}:${line} -> ${spec.text}`);
+      }
+      ts.forEachChild(node, visit);
     }
+    visit(tree);
   }
   assert.deepEqual(offenders, [], `host must not depend on Electron:\n${offenders.join('\n')}`);
 });

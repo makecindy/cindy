@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +13,20 @@ const root = release
 /** The edition a release was built for (scripts/build.mjs --region); null when running from source. */
 export function hostReleaseRegion() {
   return release?.region ?? null;
+}
+
+// Electron's npm entry can synchronously run its installer. Read the installed
+// package's marker directly so source commands never start a download.
+export function resolveSourceElectronBinary() {
+  try {
+    const manifest = createRequire(new URL('../../desktop/package.json', import.meta.url)).resolve('electron/package.json');
+    const directory = path.dirname(manifest);
+    const dist = path.join(directory, 'dist');
+    const binary = path.resolve(dist, fs.readFileSync(path.join(directory, 'path.txt'), 'utf8').trim());
+    return binary.startsWith(dist + path.sep) && fs.statSync(binary).isFile() ? binary : null;
+  } catch {
+    return null;
+  }
 }
 
 export function hostRuntimeLayout() {

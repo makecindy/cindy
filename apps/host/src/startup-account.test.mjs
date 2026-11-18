@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import ts from 'typescript';
 import { mapMembershipToAuthUser } from '../../desktop/src/shared/authUser.ts';
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
@@ -23,7 +23,10 @@ import { classifyHostStartFailure, HostAccountMismatchError, HostSignInRequiredE
 import { projectHostAuthState } from './auth-state.ts';
 import { createHostServer } from './server.mjs';
 import { once } from 'node:events';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+import { pathToFileURL } from 'node:url';
+import { createSourceElectronTree } from './test-support/source-electron-tree.mjs';
+import { lifoCleanup } from './test-support/cleanup.mjs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -482,6 +485,102 @@ function isolatedServeEnv(root, bin, set) {
   for (const [key, value] of Object.entries(set)) put(key, value);
   return env;
 }
+
+// Integration: unlike tests with injected binaries, run the default source
+// workers against the installed JS package with no dist executable.
+test('source proxy and power workers report unavailable without an Electron binary', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-workers-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { host, electron } = createSourceElectronTree(root);
+  const { createChromiumProxyHelper } = await import(pathToFileURL(path.join(host, 'src/chromium-proxy.ts')));
+  const { preparePowerWorker } = await import(pathToFileURL(path.join(host, 'src/platform/assets.mjs')));
+  const proxy = createChromiumProxyHelper({ profileDir: root });
+  try {
+    await proxy.warmUp();
+    assert.equal(proxy.state(), 'unavailable');
+    await assert.rejects(preparePowerWorker(), { message: 'PLATFORM_MONITOR_UNAVAILABLE' });
+    assert.equal(existsSync(path.join(electron, 'entry-ran')), false);
+  } finally { await proxy.close(); }
+});
+
+// Source serve e2e: an empty native vault used to run Electron's npm installer
+// synchronously after publishing the endpoint. Start the real CLI, time the
+// first client request, and observe all child-process launches up to refresh.
+test('source serve keeps health responsive and refreshes an empty native profile without child processes', {
+  skip: !['darwin', 'win32'].includes(process.platform) && 'Linux uses Secret Service instead of Electron',
+  timeout: 120_000,
+}, async t => {
+  t = lifoCleanup(t);
+  const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-no-electron-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { host, electron } = createSourceElectronTree(root);
+  const profile = path.join(root, 'profile');
+  const launches = path.join(root, 'child-launches');
+  writeFileSync(launches, '');
+  const env = isolatedServeEnv(root, path.join(root, 'bin'), {
+    CINDY_HOST_DATA_DIR: profile, CINDY_HOST_PORT: '0', XDT_DEVICE_ID_OVERRIDE: 'synthetic-host',
+    HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost',
+  });
+  const preload = path.join(host, 'monitor.mjs');
+  // Initialize tsx's compiler before observing the application, even with a
+  // cold cache. Block and record attempts before they can start any process.
+  writeFileSync(path.join(host, 'warm.ts'), 'export const n: number = 1;');
+  writeFileSync(preload, `
+    import './warm.ts';
+    import cp from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { appendFileSync } from 'node:fs';
+    function unexpected(command) {
+      appendFileSync(${JSON.stringify(launches)}, String(command?.file ?? command) + '\\n');
+      throw new Error('unexpected child process');
+    }
+    cp.ChildProcess.prototype.spawn = unexpected;
+    cp.spawnSync = cp.execSync = cp.execFileSync = unexpected;
+    syncBuiltinESMExports();
+  `);
+  const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs',
+    '--import', './monitor.mjs', 'src/main.ts', 'serve'], { cwd: host, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const exited = once(child, 'exit');
+  let stderr = '';
+  child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+  });
+  const lines = createInterface({ input: child.stdout });
+  const baseUrl = await new Promise((resolve, reject) => {
+    lines.on('line', line => {
+      const match = /^cindy-host listening on (http:\/\/127\.0\.0\.1:\d+)$/.exec(line);
+      if (match) resolve(match[1]);
+    });
+    exited.then(() => reject(new Error('serve exited before listening: ' + stderr)), reject);
+  });
+  const headers = { authorization: 'Bearer ' + readFileSync(path.join(profile, 'host-api-token'), 'utf8').trim() };
+  const start = performance.now();
+  const deadline = AbortSignal.timeout(1000);
+  const health = await fetch(baseUrl + '/health', { headers, signal: deadline }).catch(error => {
+    if (deadline.aborted) assert.fail('First /health response exceeded its 1000 ms deadline');
+    throw error;
+  });
+  assert.equal(health.status, 200);
+  await health.json();
+  const elapsed = performance.now() - start;
+  assert.ok(elapsed < 1000, `/health took ${elapsed} ms`);
+  t.diagnostic(`First /health response including its body: ${Math.ceil(elapsed)} ms`);
+  const refresh = await fetch(baseUrl + '/api/auth/refresh', { method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json' }, body: '{}' });
+  assert.equal(readFileSync(launches, 'utf8'), '');
+  assert.equal(existsSync(path.join(electron, 'entry-ran')), false);
+  assert.equal(refresh.status, 200);
+  assert.equal((await refresh.json()).ok, false);
+  // The missing-session callback completes asynchronously after the response.
+  const teardown = AbortSignal.timeout(5000);
+  while (true) {
+    const { runtime } = await (await fetch(baseUrl + '/health', { headers, signal: teardown })).json();
+    if (runtime.detail?.startsWith('Sign-in expired')) break;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+});
 
 /*
  * Test value (reviewer 2026-11-18): the serve child of the next test cannot reach real data from any terminal.
