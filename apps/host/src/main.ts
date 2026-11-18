@@ -137,7 +137,11 @@ import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
-import { createHostSessionUpdate } from './agent/session-update.ts';
+import { createHostSessionUpdate, type HostModelSelectionApply } from './agent/session-update.ts';
+import { readDeviceLinkModelSelectionOrigin, getDeviceLinkInvokeContext } from '../../desktop/src/main/device-link/invoke-context.js';
+import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
+import { withRehydrateCloseSuppressed } from '../../desktop/src/main/maker-host/rehydrateCloseSuppression.js';
+import { assertHostTaskExecutionSupported } from './agent/send-preflight.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
@@ -854,7 +858,7 @@ const readSessionForRun = async (sessionId: string) => {
   if (!row || row.status !== 'active') throw new Error('session is not active');
   const [botLink] = await db.drizzle.select({ botId: botSessionLinks.botId })
     .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
-  const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
+  const agentKind: 'claude-code' | 'codex' | 'pi' = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
   return {
     id: row.id,
     status: row.status, source: row.source, botId: botLink?.botId ?? null,
@@ -869,13 +873,14 @@ const readSessionForRun = async (sessionId: string) => {
     fastMode: row.fastMode, planModeEnabled: row.planModeEnabled,
   };
 };
-/** Web client cross-engine switches: registered as an intent, applied on next enqueue. */
+/** Runtime choices applied at dispatch (Device Link) or on enqueue (legacy web engine switches). */
 const pendingAgentSwitches = new Map<string, {
   targetAgentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   providerId: string | null;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
+  deviceLinkOwner?: { assertCurrent(): void };
 }>();
 
 function projectAgentSwitchIntent(intent: {
@@ -895,18 +900,54 @@ function projectAgentSwitchIntent(intent: {
   };
 }
 
-async function applyPendingAgentSwitch(sessionId: string): Promise<void> {
+function stageAgentSwitch(sessionId: string, intent: NonNullable<ReturnType<typeof pendingAgentSwitches.get>>) {
+  pendingAgentSwitches.set(sessionId, intent);
+  eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: projectAgentSwitchIntent(intent) } });
+}
+
+function captureModelSelectionOwner() {
+  const owner = captureDataOwnerBroadcastScope();
+  const epoch = getCurrentDbClientSnapshot()?.clientEpoch;
+  return {
+    assertCurrent() {
+      if (epoch === undefined || !isDataOwnerBroadcastScopeCurrent(owner) || getCurrentDbClientSnapshot()?.clientEpoch !== epoch) {
+        throwIpcError('PRECONDITION_FAILED', 'Host account changed; runtime selection was not changed');
+      }
+    },
+  };
+}
+
+async function applyPendingAgentSwitch(sessionId: string, prepare?: Pick<HostModelSelectionApply, 'prepareModelWindowSwitch' | 'signal'>): Promise<void> {
   const intent = pendingAgentSwitches.get(sessionId);
-  if (!intent) return;
-  await serverDeps.updateSession(sessionId, {
-    agentKind: intent.targetAgentKind,
+  if (!intent || Boolean(intent.deviceLinkOwner) !== Boolean(prepare)) return;
+  const assertCurrent = () => {
+    intent.deviceLinkOwner?.assertCurrent();
+    prepare?.signal?.throwIfAborted();
+  };
+  assertCurrent();
+  const patch = {
     model: intent.model,
     providerId: intent.providerId,
     ...(intent.effort ? { effort: intent.effort } : {}),
     ...(intent.fastMode !== undefined ? { fastMode: intent.fastMode } : {}),
-  });
-  pendingAgentSwitches.delete(sessionId);
-  eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: null } });
+  };
+  if (intent.deviceLinkOwner && prepare) {
+    const before = await readSessionForRun(sessionId);
+    assertHostTaskExecutionSupported(before);
+    if (before.agentKind !== intent.targetAgentKind) {
+      throwIpcError('PRECONDITION_FAILED', 'the task Harness changed; select the model again');
+    }
+    await updateSession(sessionId, patch, {
+      assertCurrent, signal: prepare.signal,
+      prepareModelWindowSwitch: prepare.prepareModelWindowSwitch,
+    });
+  } else {
+    await serverDeps.updateSession(sessionId, { agentKind: intent.targetAgentKind, ...patch });
+  }
+  if (pendingAgentSwitches.get(sessionId) === intent) {
+    pendingAgentSwitches.delete(sessionId);
+    eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: null } });
+  }
 }
 const interactionBroker = createInteractionBroker({ hub: eventHub });
 const fileConfirmation = new GhostGrantConfirmBridge({
@@ -966,7 +1007,19 @@ const contextRecovery = createHostContextRecoveryWiring({
   pendingHandoff,
   log: createLogger('context-recovery'),
 });
+const updateSession = createHostSessionUpdate({
+  getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
+  closeRejectedPiRuntime: (sessionId, expected) => withRehydrateCloseSuppressed(sessionId, async () => {
+    const maker = agentGraph?.maker;
+    const live = maker?.getSession(sessionId);
+    if (live && live === expected) await maker?.closeSessionIfCurrent(live, 'runtime-refresh');
+  }),
+  readSessionForRun,
+  publish: event => eventHub.publish(event),
+  modelWindow: () => agentGraph?.modelWindow ?? null,
+});
 const inputQueue = createInputQueue({
+  applyPendingAgentSwitch,
   getOwner: getCurrentDbClientSnapshot,
   pendingHandoff,
   ...contextRecovery,
@@ -1311,18 +1364,26 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: lockSessionRoute(createHostSessionUpdate({
-    getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
-    readSessionForRun,
-    publish: event => eventHub.publish(event),
-    modelWindow: () => agentGraph?.modelWindow ?? null,
-  })),
-  /**
-   * Cross-engine switch: record the intent and let the next enqueue apply it.
-   * Mirrors the desktop contract (`deferred: true`) so the renderer can show
-   * the target engine optimistically without reporting "未生效".
-   */
-  switchSessionAgent: async (
+  updateSession: lockSessionRoute(async (sessionId: string, patch: Record<string, unknown>) => {
+    if (getDeviceLinkInvokeContext()?.channel !== 'maker:set-model' ||
+        readDeviceLinkModelSelectionOrigin() !== 'owner') return updateSession(sessionId, patch);
+    const deviceLinkOwner = captureModelSelectionOwner();
+    const before = await readSessionForRun(sessionId);
+    assertHostTaskExecutionSupported(before);
+    deviceLinkOwner.assertCurrent();
+    if (typeof patch.model !== 'string' || !patch.model.trim()) throwIpcError('INVALID_PARAMS', 'model is required');
+    const targetAgentKind = before.agentKind;
+    stageAgentSwitch(sessionId, {
+      targetAgentKind,
+      model: patch.model,
+      providerId: Object.hasOwn(patch, 'providerId') ? patch.providerId as string | null : before.providerId,
+      ...(typeof patch.effort === 'string' ? { effort: patch.effort } : {}),
+      ...(patch.fastMode === true || patch.fastMode === false || patch.fastMode === 'ultrafast' ? { fastMode: patch.fastMode } : {}),
+      deviceLinkOwner,
+    });
+    return { deferred: true, superseded: false, pendingUntilSend: true };
+  }),
+  switchSessionAgent: lockSessionRoute(async (
     sessionId: string,
     targetAgentKind: string,
     model: string,
@@ -1330,23 +1391,31 @@ const serverDeps = {
     effort?: string,
     fastMode?: boolean | 'ultrafast',
   ) => {
-    const rows = await getDbClient().drizzle.select({ id: sessionTable.id }).from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    if (!rows[0]) throw new Error('session not found');
-    if (!model) throw new Error('model is required');
+    const origin = readDeviceLinkModelSelectionOrigin();
+    if (origin === 'scoped') throwIpcError('PRECONDITION_FAILED', 'remote agent switching requires an owner controller');
+    const deviceLinkOwner = origin === 'owner' ? captureModelSelectionOwner() : undefined;
+    if (deviceLinkOwner) {
+      const row = await readSessionForRun(sessionId);
+      assertHostTaskExecutionSupported(row);
+      if (row.agentKind !== targetAgentKind) {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Host does not yet support switching Harness over Device Link');
+      }
+      deviceLinkOwner.assertCurrent();
+    } else {
+      const [row] = await getDbClient().drizzle.select({ id: sessionTable.id }).from(sessionTable)
+        .where(eq(sessionTable.id, sessionId)).limit(1);
+      if (!row) throw new Error('session not found');
+    }
+    if (!model) throwIpcError('INVALID_PARAMS', 'model is required');
     const intent = {
       targetAgentKind: targetAgentKind === 'codex' ? 'codex' : targetAgentKind === 'pi' ? 'pi' : 'claude-code',
       model,
       providerId: providerId ?? null,
       ...(typeof effort === 'string' && effort ? { effort } : {}),
       ...(fastMode === true || fastMode === false || fastMode === 'ultrafast' ? { fastMode } : {}),
+      ...(deviceLinkOwner ? { deviceLinkOwner } : {}),
     } as const;
-    pendingAgentSwitches.set(sessionId, intent);
-    eventHub.publish({
-      type: 'session_changed',
-      sessionId,
-      patch: { agentSwitchIntent: projectAgentSwitchIntent(intent) },
-    });
+    stageAgentSwitch(sessionId, intent);
     return {
       switched: false,
       agentKind: intent.targetAgentKind,
@@ -1354,7 +1423,7 @@ const serverDeps = {
       engineReady: true,
       deferred: true,
     };
-  },
+  }),
   getSessionAgentSwitchIntent: (sessionId: string) => (
     projectAgentSwitchIntent(pendingAgentSwitches.get(sessionId))
   ),
@@ -1543,6 +1612,7 @@ const serverDeps = {
       supportsSessionAgentSwitch: true,
       supportsModelWindowSwitchGuard: true,
       supportsSessionAgentSwitchCas: true,
+      supportsRemoteModelWindowRebuild: kind === 'claude-code' || kind === 'pi',
       supportsOrcaWorkerPermissionMode: false,
       supportsOrcaWorkerUpdate: false,
     };
@@ -1625,6 +1695,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     // Client-owned OS sessions are released by its authenticated socket teardown.
     platformClient?.close();
     await attempt(() => inputQueue.dispose());
+    pendingAgentSwitches.clear();
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
     // Stop watching this profile's Pi packages once Maker no longer runs Pi.
     agentGraph?.piPackages.close();

@@ -30,7 +30,7 @@ function visit(node: ts.Node) {
 visit(source);
 
 function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDeviceId: string | null = null,
-  windowState: { agent?: string; used?: number; current?: number; target?: number; hostGuard?: boolean; relocation?: boolean; relocateTo?: string | null } = {}) {
+  windowState: { agent?: string; used?: number; current?: number; target?: number; hostGuard?: boolean; relocation?: boolean; relocateTo?: string | null; ownerRebuild?: boolean } = {}) {
   const selection = { model: 'new-model', providerId: 'provider', effort: 'high', fastMode: true };
   const write = vi.fn(async (_intent: unknown) => true);
   const setModel = vi.fn(async () => true);
@@ -61,6 +61,9 @@ function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDevice
       : resolveAgentLocationPick,
     intentChangesAgentLocation: () => false,
     shouldBlockLegacyRemoteModelWindowSwitch, showRemoteModelWindowUnsupported: vi.fn(),
+    hostSupportsRemoteModelWindowRebuild: windowState.ownerRebuild === true,
+    modelSelectionUsesWindowIntent: windowState.ownerRebuild === true,
+    showTransientNotice: vi.fn(), t: (key: string) => key,
     writeSessionAgentSwitchIntent: write, setComposerModel: setModel, runControlAction,
     setModelSheetOpen: vi.fn(), setModelSheetAgentKind: vi.fn(),
   };
@@ -70,7 +73,7 @@ function setup(orcaRole: 'lead' | 'worker' | null, supported = true, agentDevice
     const orcaAgentLocationLocked = ${locationLockGate};
     const orcaRemoteAgentDeviceId = ${remoteCatalogGate};
     const loadComposerAgentCapabilities = ${callbacks.get('loadComposerAgentCapabilities')};
-    const canStageOrcaModelSelection = ${callbacks.get('canStageOrcaModelSelection')};
+    const canStageModelWindowSelection = ${callbacks.get('canStageModelWindowSelection')};
     return {${names.map(name => `${name}: ${callbacks.get(name)}`).join(',')}, loadComposerAgentCapabilities,
       catalogs: (${callbacks.get('modelSheetRemoteCatalogs')})()};`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -115,7 +118,7 @@ describe('Orca model-only selection', () => {
     expect(h.write).not.toHaveBeenCalled();
     expect(h.bindings.maker.getCapabilities).not.toHaveBeenCalled();
   });
-  it.each(['claude-code', 'codex', 'pi'])('guards all pickers before staging a pressured %s shrink', async agent => {
+  it.each(['claude-code', 'pi'])('guards all pickers before staging a pressured %s shrink', async agent => {
     for (const role of ['lead', 'worker'] as const) {
       for (const hostGuard of [true, false]) {
         for (const used of [180000, 240000]) {
@@ -168,10 +171,25 @@ describe('Orca model-only selection', () => {
   });
 
   it('uses the chosen remote catalog window instead of the host catalog', async () => {
-    const h = setup('worker', true, 'current', { used: 240000, current: 1000000, target: 200000 });
-    expect(await h.handlers.selectUnifiedComposerModel(picks[1][1], { deviceId: 'current' })).toBe(false);
+    const agent = 'claude-code';
+    const h = setup('worker', true, 'current', { agent, used: 240000, current: 1000000, target: 200000 });
+    expect(await h.handlers.selectUnifiedComposerModel({ ...picks[1][1], agent }, { deviceId: 'current' })).toBe(false);
     expect(h.write).not.toHaveBeenCalled();
     expect(h.bindings.showRemoteModelWindowUnsupported).toHaveBeenCalledWith(200000);
+  });
+
+  // 2026-11-18 owner Device Link decision. The picker guard used to block a known 240k/200k
+  // shrink. The existing legacy cases lack the new capability. This guard-tier case runs the
+  // same production select callback and observes the notice and the exact intent sent to the host.
+  it('stages a pressured ordinary owner selection with a notice and without a window number', async () => {
+    const agent = 'claude-code';
+    const h = setup(null, true, null, { agent, used: 240000, current: 1000000, ownerRebuild: true });
+    expect(await h.handlers.selectUnifiedComposerModel({ ...picks[1][1], agent })).toBe(true);
+    expect(h.write).toHaveBeenCalledExactlyOnceWith({
+      targetAgentKind: agent, model: 'new-model', providerId: 'provider', effort: 'high', fastMode: true,
+    });
+    expect(h.bindings.showTransientNotice).toHaveBeenCalledExactlyOnceWith('models.contextWindowSwitch.condensedToast');
+    expect(h.setModel).not.toHaveBeenCalled();
   });
 
   it('does not apply the same-Agent window guard to cross-Agent picks or pending effort/Fast edits', async () => {

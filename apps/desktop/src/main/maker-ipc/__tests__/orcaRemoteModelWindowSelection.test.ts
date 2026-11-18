@@ -6,7 +6,7 @@ import { resolveVerifiedContextWindow } from '../../../shared/sessionContextWind
 import { createContextOverflowRollover } from '../contextOverflowRollover';
 import { applyPendingAgentSwitchIfIdle, createPendingAgentSwitchRegistry, projectPendingAgentSwitchIntent,
   type MakerSessionAgentSwitchHandlerDeps, type PendingAgentSwitchIntent } from '../sessionAgentSwitchHandler';
-import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
+import { readDeviceLinkModelSelectionOrigin, runDeviceLinkInvokeContext } from '../../device-link/invoke-context';
 import type { createSharedTaskPendingSelectionGuard } from '../sharedTaskSetting';
 
 // Run the production remote-selection adapter, send boundary and window rollover
@@ -67,6 +67,7 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
     dbToMakerAgentKind: () => agentKind, isSessionInTurn: () => false,
     assertAgentDeviceRouteUsable: vi.fn(async () => {}), readUsableAgentDeviceProviders: readProviders,
     resolveVerifiedContextWindow, contextOverflowRolloverHolder: rollover,
+    readDeviceLinkModelSelectionOrigin, isProviderShareAgentDeviceId: () => false,
     agentSwitchDeps: { onPendingSwitchChanged: vi.fn() }, projectPendingAgentSwitchIntent,
     wakeSessionInputAfterCredentialSwitch: vi.fn(), persistSessionFields: persist,
     updateScheduledPreference: vi.fn(async () => {}),
@@ -102,6 +103,27 @@ function setup(agent: 'cc' | 'codex' | 'pi' = 'codex', role: string | null = 'wo
 }
 
 describe('Orca remote-Agent window protection at send', () => {
+  // 2026-11-18 owner Device Link decision. The production pending apply and rollover must
+  // accept a pressured 240k/200k owner intent without a numeric receipt, but still reject
+  // unverified windows before closing. This guard-tier fixture substitutes device and DB IO.
+  it('uses the owner intent, rechecks the executor window and rebuilds only on send', async () => {
+    const h = setup('cc', 'lead', true);
+    h.state.tokens = 240_000;
+    await runDeviceLinkInvokeContext({ controllerDeviceId: 'controller', channel: 'maker:switch-session-agent' }, () => h.stage());
+    expect(h.pending.get('s1')).toMatchObject({ deviceLinkModelSelectionOrigin: 'owner' });
+    expect(projectPendingAgentSwitchIntent(h.pending.get('s1')!)).not.toHaveProperty('deviceLinkModelSelectionOrigin');
+    expect(h.rebuild).not.toHaveBeenCalled();
+    h.state.verified = false;
+    await expect(h.send()).rejects.toThrow('target context window could not be verified');
+    expect(h.persist).not.toHaveBeenCalled();
+    expect(h.rebuild).not.toHaveBeenCalled();
+    h.state.verified = true;
+    await h.send();
+    expect(h.rebuild).toHaveBeenCalledOnce();
+    expect(h.persist).toHaveBeenCalledOnce();
+    expect(h.pending.get('s1')).toBeUndefined();
+  });
+
   const cases = (['cc', 'pi'] as const).flatMap(agent => ['lead', 'worker'].flatMap(role =>
     [false, true].map(cold => ({ agent, role, cold }))));
   it.each(cases)('rechecks pressure for $agent $role cold=$cold and retains an unconfirmed intent', async ({ agent, role, cold }) => {

@@ -71,7 +71,7 @@ function visit(node: ts.Node) {
     terminalGuard = node.getText(source);
   }
   if (ts.isPropertyAssignment(node)) {
-    if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('runtimeStatus.orcaRole')) {
+    if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('localWindowRebuild')) {
       confirmationChecks.push(node.initializer.getText(source));
     }
     if (node.name.getText(source) === 'selectSameAgentModel') applySelectionAdapter = node.initializer.getText(source);
@@ -100,7 +100,11 @@ const orcaIdentities = [
 
 function compile(expression: string, bindings: Record<string, unknown>) {
   const js = ts.transpileModule(`return ${expression};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const context = { getSessionRowSnapshotStrict: async () => null, ...bindings };
+  const context = {
+    readDeviceLinkModelSelectionOrigin: () => undefined,
+    isProviderShareAgentDeviceId: () => false,
+    getSessionRowSnapshotStrict: async () => null, ...bindings,
+  };
   return new Function(...Object.keys(context), js)(...Object.values(context));
 }
 
@@ -623,7 +627,8 @@ describe('Orca model-only picker intent admission', () => {
         agentSwitchDeps: { onPendingSwitchChanged: changed },
         projectPendingAgentSwitchIntent: (intent: unknown) => intent,
         wakeSessionInputAfterCredentialSwitch: vi.fn(),
-        isDeviceLinkInvoke: () => true, markRemoteSettingPersistedInsideHandler: vi.fn(), applyLive,
+        isDeviceLinkInvoke: () => true, readDeviceLinkModelSelectionOrigin: () => undefined,
+        markRemoteSettingPersistedInsideHandler: vi.fn(), applyLive,
       };
       const compiled = ts.transpileModule(`return async () => { ${branch}; return applyLive(); };`,
         { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -686,19 +691,17 @@ describe('Orca model-only picker intent admission', () => {
     }
   });
 
-  it.each([undefined, 400000, 200000])('authorizes Orca local/final Pi rebuild only for the checked window: %s', confirmed => {
+  it.each([undefined, 400000, 200000])('authorizes Orca local/final Pi rebuild only with a checked window or owner intent: %s', confirmed => {
     expect(confirmationChecks).toHaveLength(2);
     for (const expression of confirmationChecks) {
-      const check = new Function('runtimeStatus', 'internalOptions', 'isDeviceLinkInvoke',
-        'confirmedContextWindow', 'targetContextWindow', 'finalPiWindow', 'parseOrcaRemoteLead', `return ${expression};`);
-      for (const identity of orcaIdentities) {
-        for (const remote of [false, true]) {
-          expect(check(identity, { source: 'user', applyingUserSelectionOnSend: true },
-            () => remote, confirmed, 200000, 200000, parseOrcaRemoteLead)).toBe(!remote && confirmed === 200000);
-        }
-      }
-      expect(check({ orcaRole: null }, { source: 'user', applyingUserSelectionOnSend: true },
-        () => false, confirmed, 200000, 200000, parseOrcaRemoteLead)).toBe(true);
+      const check = new Function('internalOptions', 'isDeviceLinkInvoke',
+        'confirmedContextWindow', 'targetContextWindow', 'finalPiWindow',
+        'modelSelectionOrigin', 'ownerWindowRebuild', 'localWindowRebuild', `return ${expression};`);
+      const applying = { source: 'user', applyingUserSelectionOnSend: true };
+      expect(check(applying, () => false, confirmed, 200000, 200000, undefined, false, false)).toBe(confirmed === 200000);
+      expect(check(applying, () => true, confirmed, 200000, 200000, 'owner', true, false)).toBe(true);
+      expect(check(applying, () => false, confirmed, 200000, 200000, 'scoped', false, false)).toBe(false);
+      expect(check(applying, () => false, confirmed, 200000, 200000, undefined, false, true)).toBe(true);
     }
   });
 

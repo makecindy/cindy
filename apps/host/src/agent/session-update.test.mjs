@@ -16,6 +16,9 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { createContextOverflowRollover } from '../../../desktop/src/main/maker-ipc/contextOverflowRollover.ts';
+import { commitContextRebuildWithPorts } from '../../../desktop/src/main/localDb/contextRebuildPersistence.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { configureHostOwner } from './claude-auth.mjs';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
@@ -59,6 +62,7 @@ async function fixture(t) {
   const budgets = new Map();
   const update = createHostSessionUpdate({
     getLiveSession: id => live.get(id),
+    closeRejectedPiRuntime: async (id, expected) => { if (live.get(id) === expected) live.delete(id); },
     readSessionForRun: async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0],
     publish: event => events.push(event),
     modelWindow: () => ({
@@ -69,23 +73,41 @@ async function fixture(t) {
       readSessionBudget: async id => budgets.get(id) ?? null,
     }),
   });
-  const task = async (id, { agentKind = 'claude-code', model = 'big', contextTokens = 0 } = {}) => {
+  const task = async (id, { agentKind = 'claude-code', model = 'big', contextTokens = 0, sdkSessionId } = {}) => {
     await storage.create({ id, title: 'Window fixture', agentKind, model, workDir: root, providerId: 'prov-a' });
-    await database.drizzle.update(sessions).set({ contextTokens }).where(eq(sessions.id, id));
+    await database.drizzle.update(sessions).set({ contextTokens, ...(sdkSessionId ? { sdkSessionId } : {}) }).where(eq(sessions.id, id));
     setSessionProvider(id, 'prov-a');
     t.after(() => clearSessionProvider(id));
   };
-  const runtime = (id, { model = 'big', inTurn = false, usage, agentKind = 'claude-code' } = {}) => {
+  const runtime = (id, { model = 'big', inTurn = false, usage, agentKind = 'claude-code', finalPiWindow } = {}) => {
     const session = { id, agentKind, model, setModelCalls: [],
       isTurnRunning: () => inTurn,
       getUsageSnapshot: () => usage,
-      async setModel(next, options) { session.setModelCalls.push([next, options]); session.model = next; },
+      ...(agentKind === 'pi' ? { previewModelSwitch: async () => ({ action: 'hot', windowVerified: false }) } : {}),
+      async setModel(next, options) {
+        session.setModelCalls.push([next, options]); session.model = next;
+        if (finalPiWindow !== undefined) usage = { ...usage, contextWindow: finalPiWindow };
+      },
       async setEffort() {} };
     live.set(id, session);
     return session;
   };
   const row = async id => (await database.drizzle.select().from(sessions).where(eq(sessions.id, id)))[0];
-  return { update, task, runtime, row, events, budgets };
+  const handoffs = new Map();
+  const rollover = createContextOverflowRollover({
+    getSessionRow: row, getLiveSession: id => live.get(id),
+    drainPersistQueue: async () => {},
+    closeSession: async id => { live.delete(id); },
+    listMessages: async () => [{ role: 'user', content: 'Preserve the previous request.', clientId: 'source', createdAt: 1 }],
+    findLatestRebuildMeta: async () => null,
+    commitRebuild: (id, handoff, meta) => commitContextRebuildWithPorts({
+      now: Date.now, createId: randomUUID, tx: (name, args) => database.tx(name, args),
+    }, id, handoff, meta),
+    setPendingHandoff: (id, handoff) => handoffs.set(id, handoff),
+    withCloseSuppressed: (_id, run) => run(),
+    log: { warn() {}, info() {}, debug() {} },
+  });
+  return { update, task, runtime, row, events, budgets, handoffs, live, rollover };
 }
 
 // Each cell: the task's usage and the change it asks for. `refused`: the Host's verdict.
@@ -180,4 +202,35 @@ test('model change: a task that does not exist is "session not found", as before
   const orphan = f.runtime('window-orphan');
   await assert.rejects(f.update('window-orphan', { model: 'small' }), { message: 'session not found' });
   assert.deepEqual(orphan.setModelCalls, []);
+});
+
+// 2026-11-18 owner Device Link decision. The old service-level tests reject 95k/100k;
+// at the scheduled application boundary, the real recovery transaction must move the route and
+// native binding together. Use the existing migrated SQLite fixture and real rollover (DB tier).
+test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and keeps an unverifiable Pi route', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  const apply = { prepareModelWindowSwitch: f.rollover.prepareModelWindowSwitch, assertCurrent() {} };
+  const cases = [
+    { id: 'owner-claude', agentKind: 'claude-code', model: 'small', expectedModel: 'small' },
+    // The target catalog is larger than the source. The final native Pi window is smaller.
+    { id: 'owner-pi', agentKind: 'pi', model: 'huge', finalPiWindow: 100_000, expectedModel: 'huge' },
+    { id: 'owner-pi-unverified', agentKind: 'pi', model: 'small', finalPiWindow: 0, expectedModel: 'big' },
+  ];
+  for (const { id, agentKind, model, finalPiWindow, expectedModel } of cases) {
+    await f.task(id, { agentKind, contextTokens: 95_000, sdkSessionId: `native-${id}` });
+    f.runtime(id, { agentKind, finalPiWindow, usage: { contextTokens: 95_000, contextWindow: 200_000 } });
+    const result = f.update(id, { model }, apply);
+    if (finalPiWindow === 0) {
+      await assert.rejects(result, { code: 'PRECONDITION_FAILED' });
+      assert.equal((await f.row(id)).sdkSessionId, `native-${id}`);
+      assert.equal(f.handoffs.has(id), false);
+    } else {
+      await result;
+      assert.equal((await f.row(id)).sdkSessionId, null);
+      assert.equal((await f.row(id)).contextTokens, 0);
+      assert.match(f.handoffs.get(id), /Preserve the previous request/);
+    }
+    assert.equal((await f.row(id)).model, expectedModel);
+    assert.equal(f.live.has(id), false);
+  }
 });

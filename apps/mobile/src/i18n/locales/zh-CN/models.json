@@ -46,6 +46,7 @@
     }
   },
   "contextWindowSwitch": {
+    "condensedToast": "为了适应新模型，较早的对话会压缩，完整的对话记录仍可查看。",
     "remoteTitle": "当前远程任务无法安全切换模型",
     "remoteDescription": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。",
     "cancel": "保留当前模型"

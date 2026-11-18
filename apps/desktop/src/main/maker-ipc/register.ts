@@ -1548,6 +1548,7 @@ import {
   isMobileControllerInvoke,
   readDeviceLinkInvokeSourceDevice,
   runOutsideDeviceLinkInvokeContext,
+  readDeviceLinkModelSelectionOrigin,
 } from '../device-link/invoke-context.js';
 import { beginRemoteSendTrace } from '../device-link/remoteSendTrace.js';
 import { stampSharedTaskInput } from './sharedTaskInput.js';
@@ -7338,6 +7339,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // v2 因果能力：同引擎 no-op 返回 revision，后续 SET_MODEL 在 session 锁内 CAS。
       // 新 desktop 控制端据此与只有基础切换能力的旧 host 做安全兼容门控。
       supportsSessionAgentSwitchCas: true,
+      supportsRemoteModelWindowRebuild: true,
       supportsQueueHeadRetry: true,
       // 新控制端只有看到此位才允许给被控端 Orca Team 选择 Worker Full access。
       // 旧 desktop 缺省为 false，避免显式 bypassPermissions 被旧 handler 静默忽略。
@@ -11525,6 +11527,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(intent.confirmedContextWindow ? { confirmedContextWindow: intent.confirmedContextWindow } : {}),
       }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
         runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
+        deviceLinkModelSelectionOrigin: intent.deviceLinkModelSelectionOrigin,
         assertSelectionCurrent, beforeMutation, pendingSelectionAccess });
       if (result.contextWindowConfirmationRequired !== undefined) {
         throwIpcError('PRECONDITION_FAILED', 'Model context window changed or was unknown; select the model again to confirm');
@@ -22482,6 +22485,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       effort: string | null;
       fastMode: boolean | 'ultrafast';
       agentDeviceId: string | null;
+      model: string | null;
+      sdkSessionId: string | null;
     };
     assertRuntimeOwnerCurrent(): void;
     assertSharedTaskCurrent: { admit(): void };
@@ -22528,7 +22533,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         previousIntent.targetAgentKind === agentKind && previousIntent.providerId === targetProviderId &&
         (previousIntent.targetAgentDeviceId === undefined || previousIntent.targetAgentDeviceId === runtimeStatus.agentDeviceId)
           ? previousIntent.confirmedContextWindow : undefined);
+      const deviceLinkModelSelectionOrigin = readDeviceLinkModelSelectionOrigin();
       const intent = {
+        ...(deviceLinkModelSelectionOrigin ? { deviceLinkModelSelectionOrigin } : {}),
         ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
         ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
         sameAgentSelection: true,
@@ -22547,9 +22554,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return response;
     }
     if (supersededByOwnerBoundary()) return { deferred: false, superseded: true };
+    const ownerWindowRebuild = internalOptions.deviceLinkModelSelectionOrigin === 'owner' &&
+      !isProviderShareAgentDeviceId(runtimeStatus.agentDeviceId) &&
+      (runtimeStatus.model !== model || currentProviderId !== targetProviderId);
     const orcaSelectionOnSend = !!runtimeStatus.orcaRole && internalOptions.source === 'user' &&
       internalOptions.applyingUserSelectionOnSend === true;
-    if (orcaSelectionOnSend && runtimeStatus.agentDeviceId) {
+    const verifyWindowOnSend = orcaSelectionOnSend || ownerWindowRebuild;
+    if ((orcaSelectionOnSend || (ownerWindowRebuild && agentKind !== 'codex')) && runtimeStatus.agentDeviceId) {
       // Selection-time metadata may be absent or stale after a queued turn. Read
       // the execution computer again; an acknowledgement is not window metadata.
       const providers = await readUsableAgentDeviceProviders(
@@ -22560,6 +22571,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       targetContextWindow = resolveVerifiedContextWindow({ providers }, agentKind, targetProviderId, model) ?? undefined;
     }
     let live = maker.getSession(sessionId);
+    if (ownerWindowRebuild && agentKind !== 'codex') {
+      if (runtimeStatus.sdkSessionId && (!targetContextWindow || agentKind === 'pi')) {
+        throwIpcError('PRECONDITION_FAILED', agentKind === 'pi'
+          ? 'Pi final context window on the execution computer could not be verified; runtime selection was not changed'
+          : 'target context window could not be verified; runtime selection was not changed');
+      }
+    }
     if (live && isSessionInTurn(sessionId)) {
       // 自动跟随(渠道默认 / 回退)在回合中不改；用户的选择由发送边界在回合外落地。
       if (internalOptions.source !== 'user') return { deferred: false, superseded: true };
@@ -22569,16 +22587,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 成摘要、关掉当前会话，下一次发送按新模型重新开始。Orca 发送前重读目标窗口，
     // 只有本机确认的具体窗口仍匹配时才允许重建，冷恢复也经过同一保护。
     let rebuiltForWindow = false;
-    if (orcaSelectionOnSend && targetContextWindow && !contextOverflowRolloverHolder) {
+    if (verifyWindowOnSend && targetContextWindow && !contextOverflowRolloverHolder) {
       throwIpcError('PRECONDITION_FAILED', 'model window switch protection is unavailable; runtime selection was not changed');
     }
-    if ((live || orcaSelectionOnSend) && targetContextWindow && contextOverflowRolloverHolder) {
+    if ((live || verifyWindowOnSend) && targetContextWindow && contextOverflowRolloverHolder) {
       const prepared = await contextOverflowRolloverHolder.prepareModelWindowSwitch(sessionId, {
         contextWindow: targetContextWindow,
         recheckTargetPressure: true,
-        confirmedTargetPressure: orcaSelectionOnSend
-          ? input.confirmedContextWindow === targetContextWindow
-          : internalOptions.applyingUserSelectionOnSend === true,
+        confirmedTargetPressure: ownerWindowRebuild ||
+          (!internalOptions.deviceLinkModelSelectionOrigin && (
+            orcaSelectionOnSend ? input.confirmedContextWindow === targetContextWindow
+              : internalOptions.applyingUserSelectionOnSend === true
+          )),
         assertCanCommit: () => {
           assertRuntimeOwnerCurrent();
           assertSharedTaskCurrent.admit();
@@ -22590,16 +22610,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (prepared === 'confirmation-required') {
         return { deferred: false, superseded: false, contextWindowConfirmationRequired: targetContextWindow };
       }
-      if (orcaSelectionOnSend && prepared !== 'not-needed' && prepared !== 'rebuilt') {
+      if (verifyWindowOnSend && prepared !== 'not-needed' && prepared !== 'rebuilt') {
         throwIpcError('PRECONDITION_FAILED', 'model window switch could not be verified; runtime selection was not changed');
       }
-      if (orcaSelectionOnSend) {
+      if (verifyWindowOnSend) {
         if (supersededByOwnerBoundary()) return { deferred: false, superseded: true };
         assertRuntimeOwnerCurrent();
       }
       rebuiltForWindow = prepared === 'rebuilt';
       // Cold Pi verification can attach a runtime; use that handle for setModel.
-      if (orcaSelectionOnSend && !rebuiltForWindow) live = maker.getSession(sessionId);
+      if (verifyWindowOnSend && !rebuiltForWindow) live = maker.getSession(sessionId);
     }
     if (live && !rebuiltForWindow) {
       // 那台的 Agent 认为需要换进程(跨来源等)时关掉本次连接，下一次发送按新路由重新启动
