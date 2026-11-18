@@ -5,9 +5,39 @@ export default {
   real:'ProjectNode, SessionEntryList, SessionItem and ProjectSettingsDialog',
   notCovered:'Full application shell, persisted project settings and device link transport. Example project names and tasks.',
   stubs:{'src/renderer/contexts/AuthContext':{partial:'export const useAuth = () => ({dataOwnerId: "fixture", isAuthenticated: false});'}},
-  cases:{flat:{data:{avatarData,flat:'list'},about:'Project icons beside source labels on task cards'},compact:{data:{avatarData,flat:'text'},about:'Project icons beside source labels on compact task rows'},default:{data:{avatarData},about:'Sidebar folders preserve expand/collapse semantics regardless of saved project icon'}},
+  cases:{
+    flat:{data:{avatarData,flat:'list'},about:'Project icons beside source labels on task cards'},
+    compact:{data:{avatarData,flat:'text'},about:'Project icons beside source labels on compact task rows'},
+    default:{data:{avatarData},about:'Sidebar folders preserve expand/collapse semantics regardless of saved project icon'},
+    'idle-projects':{data:{avatarData,inactive:true},about:'Idle tasks fold independently under each project header (#11233)'},
+    'idle-flat':{data:{avatarData,inactive:true,flat:'text'},about:'Idle tasks fold in a flat sidebar and can be shown again (#11233)'},
+  },
   async ready(page){await page.locator('[data-project-source] img, [data-project-working-dir="local:/Projects/Cindy"] .lucide-folder-open').first().waitFor();},
   async check(page,ui){
+    if(ui.case === 'idle-projects') {
+      const project=page.locator('[data-project-working-dir="local:/Projects/Cindy"]');
+      const other=page.locator('[data-project-working-dir="local:/Projects/移动客户端"]');
+      const hidden=page.locator('[data-session-id="demo-0-1"]');
+      if(await hidden.count()) throw new Error('Idle task must start folded');
+      await ui.capture('inactive-folded');
+      await project.getByRole('button',{name:await ui.t('ccAgent.sidebar.expandAllSessions'),exact:true}).click();
+      await hidden.waitFor();
+      if(await other.locator('[data-session-id="demo-1-0"]').count()) throw new Error('Project controls must stay independent');
+      await ui.capture('project-expanded');
+      await project.getByRole('button',{name:await ui.t('ccAgent.sidebar.collapseInactiveSessions'),exact:true}).first().click();
+      if(await hidden.count()) throw new Error('Idle task must fold again');
+      return;
+    }
+    if(ui.case === 'idle-flat') {
+      if(await page.locator('[data-session-id="demo-0-1"]').count()) throw new Error('Idle flat task must start folded');
+      await ui.capture('inactive-folded');
+      await page.getByRole('button',{name:await ui.t('ccAgent.sidebar.showAllSessions',{count:6}),exact:true}).click();
+      await page.locator('[data-session-id="demo-0-1"]').waitFor();
+      await ui.capture('flat-expanded');
+      await page.getByRole('button',{name:await ui.t('ccAgent.sidebar.collapseInactiveSessions'),exact:true}).click();
+      if(await page.locator('[data-session-id="demo-0-1"]').count()) throw new Error('Idle flat task must fold again');
+      return;
+    }
     if(ui.case !== 'default') {
       await page.locator('[data-project-source] img').first().waitFor();
       await page.locator('[data-project-source] [data-project-monogram]').first().waitFor();

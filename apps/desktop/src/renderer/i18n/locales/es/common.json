@@ -16617,6 +16617,8 @@
         "awaitingPluginSetup": "Esperando la configuración del complemento",
         "awaitingInputHandoff": "Esperando entrada manual"
       },
+      "expandAllSessions": "Expandir todas las tareas",
+      "collapseInactiveSessions": "Contraer tareas inactivas",
       "showAllSessions": "Mostrar todas ({{count}})",
       "allSessions": "Todas las sesiones",
       "scopeLocalSessions": "Local",

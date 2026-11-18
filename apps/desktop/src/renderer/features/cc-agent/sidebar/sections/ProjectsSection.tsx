@@ -75,7 +75,9 @@ import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
 import { ProjectNode } from './ProjectNode';
 import { UnclassifiedSection } from './UnclassifiedSection';
-import { getSessionListCollapseView } from '../../lib/sessionListCollapse';
+import { getSidebarSessionCollapseView } from '../../lib/sessionListCollapse';
+import { sessionActivityMs } from '../../lib/dateSessionGrouping';
+import { useSidebarActivityNow } from '../SidebarActivityClock';
 import {
   getProjectCollapseLimit,
   getProjectSessionCollapseLimit,
@@ -175,7 +177,9 @@ export function holdSidebarViewedPriority(
 }
 
 /** 顶层条目折叠的「显示全部 N 项」页脚(单段路径与设备分组的每段共用同一份样式)。 */
-function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () => void }) {
+function ShowAllEntriesButton({ count, onClick, showAll = false }: {
+  count: number; onClick: () => void; showAll?: boolean;
+}) {
   const { t } = useTranslation();
   return (
     <button
@@ -187,7 +191,9 @@ function ShowAllEntriesButton({ count, onClick }: { count: number; onClick: () =
       )}
       onClick={onClick}
     >
-      {t('ccAgent.sidebar.showAllSessions', { count })}
+      {showAll
+        ? t('ccAgent.sidebar.collapseInactiveSessions')
+        : t('ccAgent.sidebar.showAllSessions', { count })}
     </button>
   );
 }
@@ -337,6 +343,7 @@ export function ProjectsSection({
   isCreateDialogueDisabled = false,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
+  const nowMs = useSidebarActivityNow();
   const remoteDevices = useRemoteDevices();
   // 分组索引会排除断线设备；已有缓存条目的段头仍需读取设备名，并跟随改名更新。
   const cachedDeviceNames = useMemo(
@@ -476,10 +483,8 @@ export function ProjectsSection({
   // toggleDisabled 用 allKnownProjects（不是过滤后的 projects），避免 filter 收窄到 0 时
   // 即便没真正可折叠的目标，也保留视觉一致——但禁用按钮以避免无意义点击。
   const projectNodesToggleDisabled = allKnownProjects.length === 0;
-  // 折叠上限始终生效(用户定稿):任何筛选(最近活跃 / 状态 / 项目 / Vendor)、任何排序
-  // (含「时间」)下,每项目都最多显示 N 条 + 「显示全部」。折叠是纯显示上限,与筛选正交;
-  // 文字搜索是独立面板、不在本段内联过滤,故无需为它禁用。
-  const disableSessionCollapse = false;
+  // 显式筛选应展示全部命中；分组与排序偏好本身不禁用闲置折叠。
+  const disableSessionCollapse = filter.isSessionContentFiltered;
 
   // 优先级排序的运行时上下文。三个集合都在本地链路之上并入 device-link 远程
   // 活动镜像(2026-08-13 review P1:此前只喂本地 maker/attention,远程行自己的
@@ -665,9 +670,7 @@ export function ProjectsSection({
     scheduleSessionIndex,
   });
 
-  // 顶层条目折叠:最多显示 N 条,超出收起 + 「显示全部 N 项」。与会话同一套
-  // 规则(getSessionListCollapseView):始终保留"有需关注会话"的条目、以及包含当前会话的
-  // 条目;任何排序/筛选下都生效。
+  // 普通任务按闲置时间折叠；项目等容器仍保留原有数量上限和可展开的标题。
   const entrySessions = getMainListEntrySessions;
   // 折叠视图共用一份参数:非设备分组 = 全列表一份;设备分组 = 每段各一份(见
   // deviceSections)。豁免口径 = attention ∪ running(priorityContext,含远程
@@ -685,16 +688,23 @@ export function ProjectsSection({
   }, [priorityContext]);
   const collapseEntries = useCallback(
     (entries: readonly MainListEntry[], showAll: boolean) =>
-      getSessionListCollapseView({
+      getSidebarSessionCollapseView({
         entries,
         minVisibleCount: getProjectCollapseLimit(),
         showAll,
-        disableCollapse: false,
+        disableCollapse: disableSessionCollapse,
         isFiltering: false,
+        nowMs,
+        isContainerEntry: (entry) => entry.kind !== 'session' && entry.kind !== 'automation-group',
+        getActivityMs: (entry) => entrySessions(entry).reduce(
+          (latest, session) => Math.max(latest, sessionActivityMs(session)), 0,
+        ),
         isActiveEntry: (entry) => entrySessions(entry).some((s) => s.id === viewedIdForSort),
-        hasAttentionEntry: (entry) => entrySessions(entry).some((s) => lampFoldExemptIds.has(s.id)),
+        hasAttentionEntry: (entry) =>
+          entrySessions(entry).some((s) => lampFoldExemptIds.has(s.id)) ||
+          entrySessions(entry).some((s) => !!s.pinnedAt),
       }),
-    [viewedIdForSort, entrySessions, lampFoldExemptIds],
+    [viewedIdForSort, entrySessions, lampFoldExemptIds, nowMs, disableSessionCollapse],
   );
   const {
     visibleEntries: visibleMixedEntries,
@@ -1376,6 +1386,17 @@ export function ProjectsSection({
                                   }
                                 />
                               )}
+                              {expandedDeviceSections.has(key) && (
+                                <ShowAllEntriesButton
+                                  count={sectionView.totalCount}
+                                  showAll
+                                  onClick={() => setExpandedDeviceSections((prev) => {
+                                    const next = new Set(prev);
+                                    next.delete(key);
+                                    return next;
+                                  })}
+                                />
+                              )}
                             </>
                           );
                         })()}
@@ -1399,6 +1420,13 @@ export function ProjectsSection({
           {/* 全局「显示全部」只属于未按设备分组的单段路径;设备分组下折叠与 footer 都在段内。 */}
           {!deviceGroupingActive && projectsOverflow && (
             <ShowAllEntriesButton count={projectsTotal} onClick={() => setShowAllProjects(true)} />
+          )}
+          {!deviceGroupingActive && showAllProjects && (
+            <ShowAllEntriesButton
+              count={projectsTotal}
+              showAll
+              onClick={() => setShowAllProjects(false)}
+            />
           )}
         </div>
       ) : null}

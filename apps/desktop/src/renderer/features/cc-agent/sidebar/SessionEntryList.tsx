@@ -13,7 +13,8 @@ import {
   getEntryActivityMs,
   groupAutomationSidebarEntries,
 } from '../lib/automationSidebarGrouping';
-import { getSessionListCollapseView } from '../lib/sessionListCollapse';
+import { getSidebarSessionCollapseView } from '../lib/sessionListCollapse';
+import { useSidebarActivityNow } from './SidebarActivityClock';
 import { AutomationSessionGroupItem } from './AutomationSessionGroupItem';
 import { SessionItem } from './SessionItem';
 import type { SessionClickHandler } from './SessionItem';
@@ -60,10 +61,13 @@ export interface SessionEntryListProps {
    * 仅时间排序视图会注入;项目分组下不传(项目名已由 ProjectNode 表头承载)。
    */
   sourceLabelMap?: ReadonlyMap<string, string>;
-  /** 启用「最多显示 N 条 + 显示全部」折叠(保留需关注 / 当前会话)。不传则全量渲染。 */
+  /** 启用闲置折叠（保留需关注、运行中、置顶与当前会话）。不传则全量渲染。 */
   collapsible?: boolean;
-  /** collapsible 时的显示上限(由调用方按场景给:对话段 / 项目内会话各自不同)。 */
+  /** 历史调用兼容；普通任务按闲置时间收起，不再保留前 N 条。 */
   collapseLimit?: number;
+  /** Project headers share the list's expand-all mode. */
+  showAll?: boolean;
+  onShowAllChange?: (showAll: boolean) => void;
   /** collapsible 时临时禁用(如按内容搜索/筛选中,应展开全部命中)。 */
   disableCollapse?: boolean;
   /**
@@ -201,13 +205,18 @@ export function SessionEntryList({
   scheduleSessionIndex,
   collapsible = false,
   collapseLimit,
+  showAll: controlledShowAll,
+  onShowAllChange,
   disableCollapse = false,
   sectionCollapsed = false,
   foldExemptSessionIds,
   ...props
 }: SessionEntryListProps) {
   const { t } = useTranslation();
-  const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
+  const [localShowAll, setLocalShowAll] = useCollapsibleShowAll(sectionCollapsed);
+  const showAll = controlledShowAll ?? localShowAll;
+  const setShowAll = onShowAllChange ?? setLocalShowAll;
+  const nowMs = useSidebarActivityNow();
   const entries = useMemo(
     () => groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
     [notifications, scheduleSessionIndex, sessions],
@@ -224,23 +233,24 @@ export function SessionEntryList({
     );
   }
 
-  // 对话段与项目内会话共用这套折叠:默认前 N 条 + 永远保留 24h 内活动 /
+  // 对话段与项目内会话按闲置时间折叠，不再无条件保留前 N 条；保留
   // 需关注 / 运行中 / 当前打开的会话;超出收起,底部「显示全部 N 个」一次展开。
   // running 豁免与上层聚合灯同口径(Greptile P1):项目行/设备段头的呼吸灯为
   // running 会话点亮,该会话就不能折进「显示全部」——灯亮进去必须找得到行。
   // foldExemptSessionIds 供父层追加口径(如展开态并入 device-link 远程镜像)。
-  const { visibleEntries, isOverflowing, totalCount } = getSessionListCollapseView({
+  const { visibleEntries, isOverflowing, totalCount } = getSidebarSessionCollapseView({
     entries,
     minVisibleCount: collapseLimit,
     showAll,
     disableCollapse,
     isFiltering: false,
-    nowMs: Date.now(),
+    nowMs,
     getActivityMs: getEntryActivityMs,
     isActiveEntry: (entry) => entryIsActive(entry, props.activeSessionId),
     hasAttentionEntry: (entry) =>
       entryHasAttention(entry, notifications) ||
       entryHasAttention(entry, props.runningSessionIds) ||
+      (entry.kind === 'session' ? !!entry.session.pinnedAt : entry.group.sessions.some((s) => !!s.pinnedAt)) ||
       (foldExemptSessionIds != null && entryHasAttention(entry, foldExemptSessionIds)),
   });
 
@@ -252,7 +262,7 @@ export function SessionEntryList({
         foldExemptSessionIds={foldExemptSessionIds}
         {...props}
       />
-      {isOverflowing && (
+      {(isOverflowing || (showAll && controlledShowAll === undefined)) && (
         <button
           type="button"
           className={cn(
@@ -260,9 +270,11 @@ export function SessionEntryList({
             'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-sidebar-item-hover hover:text-foreground',
             'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
           )}
-          onClick={() => setShowAll(true)}
+          onClick={() => setShowAll(!showAll)}
         >
-          {t('ccAgent.sidebar.showAllSessions', { count: totalCount })}
+          {showAll
+            ? t('ccAgent.sidebar.collapseInactiveSessions')
+            : t('ccAgent.sidebar.showAllSessions', { count: totalCount })}
         </button>
       )}
     </>

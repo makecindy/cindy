@@ -19,7 +19,8 @@ const projects = examples.map(([name, icon, tasks], i) => ({
   scope: 'local' as const, remoteHostId: null, deviceLinkDeviceId: null, deviceLinkDeviceName: null,
   deviceLinkConnectionStatus: null, segments: 1, latestActivityAt: '',
   sessions: tasks.map((title, j) => ({id:`demo-${i}-${j}`, title, status:'active', source:'manual',
-    createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(), agentKind:'codex',
+    createdAt:new Date().toISOString(),
+    updatedAt:new Date(Date.now() - (ctx.data.inactive && (i > 0 || j > 0) ? 31 * 60_000 : 0)).toISOString(), agentKind:'codex',
     pinnedAt:null, sdkSessionId:null, remoteHostId:null, deviceLinkDeviceId:null, workspaceKind:'project',
     workingDir:`/Projects/${name}`, _count:{messages:5}} as Session)),
 }));
@@ -27,7 +28,7 @@ const sessions = projects.flatMap(p => p.sessions);
 function Preview() {
   const [collapsed, setCollapsed] = useState(new Set(projects.slice(3).map(p=>p.projectKey)));
   if (ctx.data.flat) return <aside className="bg-sidebar text-foreground min-h-screen p-3" data-ui-page-subject>
-    <SessionEntryList sessions={sessions} sessionVariant={ctx.data.flat === 'list' ? 'list' : 'text'}
+    <SessionEntryList sessions={sessions} collapsible={!!ctx.data.inactive} sessionVariant={ctx.data.flat === 'list' ? 'list' : 'text'}
       sourceLabelMap={new Map(projects.flatMap(project => project.sessions.map(session => [session.id, project.displayName] as const)))}
       activeSessionId="demo-0-0" runningSessionIds={new Set()} attachedSessionIds={new Set()} notifications={new Set()}
       scheduleSessionIndex={new Map()} onSessionClick={noop} onAction={noop} onRename={noop} onTogglePin={noop} onScheduleAction={noop} />

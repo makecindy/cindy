@@ -16387,6 +16387,8 @@
         "awaitingPluginSetup": "플러그인 설정 대기 중",
         "awaitingInputHandoff": "대리 입력 대기 중"
       },
+      "expandAllSessions": "모든 작업 펼치기",
+      "collapseInactiveSessions": "비활성 작업 접기",
       "showAllSessions": "{{count}}개 모두 표시",
       "allSessions": "모든 세션",
       "scopeLocalSessions": "이 기기의 세션",

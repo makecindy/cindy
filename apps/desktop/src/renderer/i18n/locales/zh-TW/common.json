@@ -16387,6 +16387,8 @@
         "awaitingPluginSetup": "等待插件設定",
         "awaitingInputHandoff": "等待代輸入"
       },
+      "expandAllSessions": "展開全部任務",
+      "collapseInactiveSessions": "摺疊不活躍任務",
       "showAllSessions": "顯示全部 {{count}} 項",
       "allSessions": "全部任務",
       "scopeLocalSessions": "本機任務",

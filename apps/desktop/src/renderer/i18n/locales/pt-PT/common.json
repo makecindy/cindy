@@ -16617,6 +16617,8 @@
         "awaitingPluginSetup": "A aguardar a configuração do plugin",
         "awaitingInputHandoff": "A aguardar introdução manual"
       },
+      "expandAllSessions": "Expandir todas as tarefas",
+      "collapseInactiveSessions": "Recolher tarefas inativas",
       "showAllSessions": "Mostrar todas as {{count}}",
       "allSessions": "Todas as sessões",
       "scopeLocalSessions": "Locais",

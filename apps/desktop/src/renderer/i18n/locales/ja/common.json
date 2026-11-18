@@ -16387,6 +16387,8 @@
         "awaitingPluginSetup": "プラグイン設定待ち",
         "awaitingInputHandoff": "代理入力待ち"
       },
+      "expandAllSessions": "すべてのタスクを展開",
+      "collapseInactiveSessions": "非アクティブなタスクを折りたたむ",
       "showAllSessions": "{{count}} 件をすべて表示",
       "allSessions": "すべてのセッション",
       "scopeLocalSessions": "このデバイスのセッション",

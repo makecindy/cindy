@@ -47,6 +47,8 @@ import { buildProjectDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList } from '../SessionEntryList';
+import { SessionCollapseToggle } from '../SessionCollapseToggle';
+import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import type { SessionClickHandler } from '../SessionItem';
 import type { ProjectNode as ProjectNodeData } from '../../lib/projectGrouping';
 import type {
@@ -165,6 +167,7 @@ export const ProjectNode = memo(function ProjectNode({
   onBrowseFiles,
   onArchiveAll,
 }: ProjectNodeProps) {
+  const [showAll, setShowAll] = useCollapsibleShowAll(isCollapsed || parentSectionCollapsed);
   return (
     // 两个 data 属性各自服务不同消费者:
     //   - data-project-working-dir : Sortable drop-target 识别 (历史: ProjectsSection 手写拖拽热区,
@@ -177,6 +180,11 @@ export const ProjectNode = memo(function ProjectNode({
       className={cn('relative flex flex-col w-full select-none')}
     >
       <ProjectHeader
+        showAll={showAll}
+        onShowAllChange={(value) => {
+          if (isCollapsed) onToggle(project.projectKey);
+          setShowAll(value);
+        }}
         project={project}
         statusFilter={statusFilter}
         isCollapsed={isCollapsed}
@@ -202,6 +210,8 @@ export const ProjectNode = memo(function ProjectNode({
         {/* 组间留白由外层树的 4px gap 承担，组内任务保持 2px 间隔。 */}
         <div className="flex flex-col gap-0.5 pt-0.5">
           <SessionEntryList
+            showAll={showAll}
+            onShowAllChange={setShowAll}
             sessions={displaySessions ?? project.sessions}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
@@ -245,9 +255,14 @@ type ProjectHeaderProps = Pick<
   | 'onOpenInExplorer'
   | 'onBrowseFiles'
   | 'onArchiveAll'
->;
+> & {
+  showAll: boolean;
+  onShowAllChange: (showAll: boolean) => void;
+};
 
 const ProjectHeader = memo(function ProjectHeader({
+  showAll,
+  onShowAllChange,
   lamp,
   project,
   statusFilter,
@@ -464,6 +479,9 @@ const ProjectHeader = memo(function ProjectHeader({
             />
           )}
         </div>
+        {!isEditingName && project.sessions.length > 0 && (
+          <SessionCollapseToggle showAll={showAll} onChange={onShowAllChange} />
+        )}
         {/* 右侧状态槽几何与 SessionItem 同一份:ml-auto + h-6 + 16px 指示器入流,
             hover 时 invisible spacer 把槽撑成按钮宽。绿/红点因此与任务行同大小、
             同右边缘(pr-2 + size-4 槽 + size-2 圆点)。 */}
