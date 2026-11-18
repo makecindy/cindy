@@ -78,7 +78,9 @@ export function localizeAgentError(
   const subscriptionGuidance = localizeSubscriptionAccountError(message, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
   if (isRemoteCompactEncryptedContentError(message, reason)) return i18n.t('session.tail.remoteCompactEncryptedContent');
+  if (reason === 'unexecuted-tool-markup') return i18n.t('session.tail.unexecutedToolMarkup');
   if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
+  if (reason === 'silent-stop-exhausted') return i18n.t('session.tail.silentStopExhausted');
   if (reason === 'output-limit') {
     const details = parseOutputLimitDetails(outputLimit);
     const guidance = i18n.t(details && isReasoningDominatedOutputLimit(details)
@@ -105,7 +107,7 @@ export function autoReviewUnavailableGuidanceCode(sessionSource: unknown): strin
 
 /** Unknown provider messages stay in diagnostic details, never in the localized summary. */
 export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: unknown): string {
-  if (isRemoteAgentResumeRejectedError(message)) return 'session.remoteError.REMOTE_AGENT_RESUME_REJECTED';
+  if (isRemoteAgentResumeRejectedError(message)) return 'session.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE';
   if (message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
   const limitReason = /\[REMOTE_AGENT_BUSY\] \[(DEVICE_LIMIT|TOTAL_LIMIT)\]/.exec(message)?.[1];
   if (limitReason) return `session.remoteError.REMOTE_AGENT_${limitReason}`;
@@ -125,7 +127,7 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
  * Unknown codes return null so the caller keeps its own fallback instead of "reply failed".
  */
 export function remoteActionErrorI18nKey(message: string): string | null {
-  if (isRemoteAgentResumeRejectedError(message)) return 'session.remoteError.REMOTE_AGENT_RESUME_REJECTED';
+  if (isRemoteAgentResumeRejectedError(message)) return 'session.remoteError.REMOTE_AGENT_RESUME_UNAVAILABLE';
   if (message.includes('[REMOTE_AGENT_MEMBER_BUDGET_PAUSED]')) return 'session.remoteError.REMOTE_AGENT_MEMBER_BUDGET_PAUSED';
   const code = parseAgentErrorCode(message)?.code;
   const key = code ? `session.remoteError.${code}` : null;

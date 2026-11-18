@@ -1,3 +1,6 @@
+import { ProjectIcon } from '@/features/cc-agent/sidebar/ProjectIcon';
+import { useProjectInfo } from '@/features/cc-agent/hooks/useProjectInfo';
+import { resolveProjectIcon } from '@cindy/maker-shared/project-alias-sync';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 import {
@@ -39,6 +42,16 @@ export interface FolderPickerOption {
     deviceId: string;
     deviceName: string;
   };
+}
+
+function PickerProjectIcon({ project }: { project: FolderPickerOption }) {
+  const deviceId = project.remoteDevice?.deviceId ?? null;
+  const info = useProjectInfo(deviceId);
+  // The path belongs to the selected computer; UI option keys can also contain device IDs.
+  const projectKey = `local:${project.path}`;
+  return <ProjectIcon value={resolveProjectIcon(info, projectKey)} projectKey={projectKey}
+    projectName={project.name} deviceId={deviceId}
+    automaticEnabled={(info?.settingsVersion ?? 0) >= 4} size={24} />;
 }
 
 /**
@@ -159,6 +172,7 @@ interface FolderPickerPopoverProps {
    * 上层按当前可用的 SSH / device-link 目标决定是否传入,这里不做判断。
    */
   onAddRemoteProject?: (deviceId?: string) => void;
+  onCreateProject?: () => void;
   side?: 'top' | 'right' | 'bottom' | 'left';
   align?: 'start' | 'center' | 'end';
   sideOffset?: number;
@@ -176,6 +190,7 @@ export function FolderPickerPopover({
   deviceScope,
   onRemoveRemoteProject,
   onAddRemoteProject,
+  onCreateProject,
   side,
   align = 'end',
   sideOffset = 4,
@@ -316,13 +331,9 @@ export function FolderPickerPopover({
             'outline-none',
           )}
         >
-          <Folder
-            size={20}
-            className={cn(
-              'shrink-0 text-[var(--folder-item-icon)]',
-              project.missing && 'opacity-50',
-            )}
-          />
+          <span aria-hidden="true" className={cn('shrink-0', project.missing && 'opacity-50')}>
+            <PickerProjectIcon project={project} />
+          </span>
           <div className="flex min-w-0 flex-1 flex-col items-start">
             <span
               className={cn(
@@ -377,6 +388,11 @@ export function FolderPickerPopover({
   };
 
   const handleChooseDifferent = async () => {
+    if (onCreateProject) {
+      onOpenChange(false);
+      onCreateProject();
+      return;
+    }
     // 远程设备语境下绝不能开本机原生目录对话框:选出来的是**控制端**路径,而草稿里的
     // deviceId 仍指向对端 —— 发送时要么被被控端 path guard 拒掉,要么(路径恰好在对端也存在)
     // 在一个毫不相关的远程目录里把会话建起来。改为打开设备域的远程浏览器,并带上当前设备。
@@ -649,9 +665,11 @@ export function FolderPickerPopover({
           <FolderPlus size={20} className="shrink-0 text-[var(--folder-item-icon)]" />
           {/* CJK label 视觉重心比 icon 偏高,nudge 1px 居中。与 chip 上 "对话" 同样处理。 */}
           <span className="relative top-px text-sm font-medium text-[var(--folder-item-name)]">
-            {isProjectPicker
-              ? t('newChat.folderPicker.browseProjectFolder')
-              : t('newChat.folderPicker.browseFolder')}
+            {onCreateProject
+              ? t('projectSettings.createTitle')
+              : isProjectPicker
+                ? t('newChat.folderPicker.browseProjectFolder')
+                : t('newChat.folderPicker.browseFolder')}
           </span>
         </button>
 

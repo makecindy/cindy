@@ -44,7 +44,7 @@ fn config() -> Config {
 }
 
 fn scenario(up: LinkProfile, down: LinkProfile, moves: Vec<Move>, upload_bytes: u64, download_bytes: u64, attack: Attack) -> Scenario {
-    Scenario { seed: 1, config: config(), up, down, moves, upload_bytes, download_bytes, attack, time_limit_us: 600_000_000 }
+    Scenario { seed: 1, config: config(), up, down, moves, upload_bytes, download_bytes, attack, time_limit_us: 600_000_000, server_send_packet_size: None }
 }
 
 /// 验证通过前发往每个地址的字节都不超过从那里收到的三倍，攻击者的地址也一样。
@@ -104,6 +104,24 @@ fn switching_networks_keeps_the_connection() {
                 assert!(rate >= 7.5, "{label}: {rate:.1} Mbit/s on the new path");
             }
         }
+    }
+}
+
+/// 两端发包上限不同（新旧版本混用，见 `Config::send_packet_size`）时换网照常：验证新路径的包和回复都按各自的上限发，
+/// 发得短的一端换网前后都不超过自己的上限，发得长的一端照样发满 1400 字节、被对端收下。
+#[test]
+fn switching_networks_works_between_different_send_sizes() {
+    for (client_send, server_send) in [(1400, 1317), (1317, 1400)] {
+        let step = Move { at_us: 1_500_000, outage_us: 0, up: cellular(), down: cellular(), noticed: false, same_route: false };
+        let mut case = scenario(wifi(), wifi(), vec![step], 10_000_000, 10_000_000, Attack::None);
+        case.config.send_packet_size = client_send;
+        case.server_send_packet_size = Some(server_send);
+        let report = run_moves(&case);
+        let label = format!("client {client_send}, server {server_send}");
+        assert!(report.finished, "{label}: {}", describe(&report));
+        let (server, _) = report.server.expect("server");
+        assert_eq!((server.migrations, server.path_failures), (1, 0), "{label}: {}", describe(&report));
+        assert_eq!(report.largest_packet, [client_send, server_send], "{label}");
     }
 }
 

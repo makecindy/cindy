@@ -21,7 +21,7 @@
  * the Projects view, this component unmounts, watcher closes.
  */
 
-import { openHtmlFileByPreference } from '@/components/chat/useOpenWithMenu';
+import { openHtmlFileByPreference } from '@/components/chat/messageLinkActions';
 import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -693,7 +693,7 @@ export function WorkdirBrowseSidebar({
       <div className="flex items-center justify-between pt-2 pb-1 pl-6 pr-3">
         {mode === 'search' ? (
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">{t('ccAgent.workdirBrowse.searchPanel.headingSearch')}</span>
+            <span className="text-sm font-medium text-foreground">{t('ccAgent.workdirBrowse.searchPanel.headingSearch')}</span>
             <span className="min-w-0 truncate text-11 text-sidebar-muted">
               {displayName}
             </span>

@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · 代 {{person}}"
+  },
   "progress": {
     "stop": "止",
     "stopMine": "止我所發",
@@ -124,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}不能作覆：今之模型不支援圖。",
         "advice": "請易以支援圖之模型。",
-        "details": "請易以支援圖之模型，或於「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後再遣。"
+        "details": "請易以支援圖之模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}不能作覆：今無可用之模型。",
@@ -295,6 +298,8 @@
       "loading": "方讀群之設定…",
       "unavailable": "群之設定讀取未成，請再試"
     },
+    "allowMemberInvites": "許諸成員邀友",
+    "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
     "allowMentionAllBots": "許 @諸同僚",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
     "notifications": {
@@ -313,6 +318,7 @@
     "memberLimit": "一群議須同伴 2–6 位",
     "memberUnavailable": "有同伴今不可用，易一位再試",
     "mentionUnavailable": "所點名之成員已不可用，請重擇後再遣",
+    "mentionAmbiguous": "名「{{name}}」者非一，請於 @ 列中擇之",
     "notFound": "此群議已不存",
     "hostNotReady": "Cindy 尚在籌備，請稍後再試",
     "planOpen": "方分職事，畢或止後方可另派",
@@ -577,6 +583,11 @@
     "transferHint": "彼為群主，君將為群執事。",
     "removeTitle": "將 {{name}} 移出此群乎？",
     "removeHint": "該成員將不能再觀或遣訊；其同伴亦將退出。",
+    "removeOwn": "移出群聊",
+    "removeOwnScope": "惟此群受之，夥伴仍存於君之帳號。",
+    "removeOwnHint": "{{name}} 將不復收「{{group}}」之訊息。舊訊仍存，他群與私聊不受影響。",
+    "removeOwnActiveHint": "移出將止其於此群之請求。另啟之任務仍行。",
+    "stopAndRemove": "停止並移出",
     "confirm": "善",
     "inviteTitle": "邀入群議",
     "reusableLink": "長久有效 · 可供多人屢用",

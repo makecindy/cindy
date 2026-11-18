@@ -14,7 +14,7 @@ import { createLiziMcpProviders } from '../../../../packages/lizi-mcps/src/index
 
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.ts';
 import { createBetterSqliteDatabase } from '../../../desktop/src/main/localDb/betterSqliteFactory.ts';
-import { LOGGER } from './runtime.mjs';
+import { LOGGER } from './runtime.ts';
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
 
 const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true, pi: true });
@@ -46,9 +46,9 @@ const sqliteFactory = (filePath) => {
 };
 
 /**
- * @param {{ userDataDir: string, ownerId: string }} options
+ * @param {{ userDataDir: string, ownerId: string, getMaker?: () => import('@cindy/maker-core').Maker | null }} options
  */
-export function createHostMemoryManager({ userDataDir, ownerId }) {
+export function createHostMemoryManager({ userDataDir, ownerId, getMaker }) {
   const scope = getActiveAppSession();
   if (scope.dataOwnerId !== ownerId || isAppSessionBoundaryPending()) throw new Error('Memory owner is not ready');
   return createMakerMemoryManagerForHost({
@@ -64,10 +64,15 @@ export function createHostMemoryManager({ userDataDir, ownerId }) {
     sqliteFactory,
     logger: LOGGER.child('maker-memory'),
     reviewAgent: 'claude-code',
+    ...(getMaker ? { reviewAgentOneShot: (agentKind, prompt, options) => {
+      const maker = getMaker();
+      if (!maker) throw new Error('Memory review agent is not ready');
+      return maker.oneShot(agentKind, prompt, { ...options, source: 'memory-review' });
+    } } : {}),
   });
 }
 
-/** The cindy_memory MCP server for Claude turns; Codex needs the desktop bridge (TODO). */
+/** The cindy_memory MCP server; Codex reaches it through the Host MCP bridge (mcp-runtime codexDeps), checked by codex-runtime.e2e.mjs. */
 export function createHostMemoryMcpProviders(manager) {
   return createLiziMcpProviders({
     enabled: ['cindy_memory'],

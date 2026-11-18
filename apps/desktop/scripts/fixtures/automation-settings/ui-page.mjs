@@ -25,6 +25,7 @@ export default {
     'browser-selection': { about: 'A changed extension source requires selection, not a plugin update' },
     'my-browser-disconnected': { about: 'Disconnected extension is not presented as missing or requiring reinstall' },
     'my-browser-probe-failed': { about: 'Probe failure does not show the extension store instruction' },
+    'my-browser-no-chrome': { about: 'Without Chrome or Edge, My browser asks for Chrome before the plugin and extension steps' },
     'my-browser': {
       about: 'My browser selected while login copying is on; the login copy switch stays hidden',
     },
@@ -65,6 +66,11 @@ export default {
     if (ui.case === 'my-browser-disconnected') {
       await page.getByText(await ui.t('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle'), { exact: true }).waitFor();
       assert.ok(await page.getByRole('button', { name: await ui.t('settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore') }).isVisible());
+    }
+    if (ui.case === 'my-browser-no-chrome') {
+      await page.getByText(await ui.t('settings.computerUse.browserBackend.userBrowserSetup.installBrowserTitle'), { exact: true }).waitFor();
+      assert.ok(await page.getByRole('button', { name: await ui.t('settings.computerUse.browser.download') }).isVisible());
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.computerUse.browserBackend.userBrowserSetup.openExtensionStore') }).count(), 0);
     }
     if (ui.case === 'my-browser-probe-failed') {
       await page.getByRole('alert').waitFor();

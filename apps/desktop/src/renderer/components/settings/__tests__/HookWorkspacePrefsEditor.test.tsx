@@ -3,167 +3,37 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderPrefsView, SlackHookView } from '../../../../shared/hookControlIpc';
+import type { HookWorkspacePrefs, SharedProjectPrefsView } from '../../../../shared/hookControlIpc';
 import { IM_DEFAULT_SETTINGS } from '../../../../shared/imDefaultSettings';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, vars?: { provider?: string }) =>
-      vars?.provider ? `${key}:${vars.provider}` : key,
-  }),
+  useTranslation: () => ({ t: (key: string) => key }),
 }));
 
 import { useHookWorkspacePrefs } from '../HookWorkspacePrefsEditor';
 
-const BASE_HOOK: SlackHookView = {
-  enabled: true,
-  lifecycleAnnouncement: false,
-  url: 'wss://im.example.test',
-  workspaces: { cindy: '/repos/cindy' },
-  status: 'connected',
-  lastError: null,
-  binding: null,
-  bindings: [],
-  pendingBind: null,
-  serverMultiTeam: false,
-  telegram: {
-    enabled: false,
-    url: 'wss://telegram-hook.example.test',
-    status: 'disabled',
-    lastError: null,
-    available: true,
-    capabilityPending: false,
-    defaultWorkspace: null,
-    binding: null,
-  },
-  x: {
-    enabled: false,
-    url: '',
-    status: 'disabled',
-    lastError: null,
-    available: false,
-    capabilityPending: false,
-    defaultWorkspace: null,
-    binding: null,
-  },
-  feishu: {
-    enabled: false,
-    url: '',
-    status: 'disabled',
-    lastError: null,
-    available: false,
-    capabilityPending: false,
-    defaultWorkspace: null,
-    binding: null,
-  },
-};
+function row(workspace: string, patch: Partial<HookWorkspacePrefs> = {}): HookWorkspacePrefs {
+  return { workspace, model: null, effort: null, agentKind: null, permissionMode: null, ...patch };
+}
 
-const TELEGRAM_CONFIRMED: SlackHookView = {
-  ...BASE_HOOK,
-  telegram: {
-    enabled: true,
-    url: 'wss://telegram-hook.example.test',
-    status: 'connected',
-    lastError: null,
-    available: true,
-    capabilityPending: false,
-    defaultWorkspace: null,
-    binding: {
-      provider: 'telegram',
-      state: 'confirmed',
-      attemptId: null,
-      bindingId: 'binding-1',
-      principalId: 'user-1',
-      principalName: 'Cindy User',
-      scopeId: 'bot-1',
-      scopeName: 'cindy_example_bot',
-      connectUrl: null,
-      bindCode: null,
-      expiresAt: null,
-      reason: null,
-      remediationUrl: 'https://t.me/cindy_example_bot',
-      actions: ['revoke'],
-    },
-  },
-};
-
-const X_CONFIRMED: SlackHookView = {
-  ...BASE_HOOK,
-  x: {
-    enabled: true,
-    url: 'wss://x-hook.example.test',
-    status: 'connected',
-    lastError: null,
-    available: true,
-    capabilityPending: false,
-    defaultWorkspace: null,
-    binding: {
-      provider: 'x',
-      state: 'confirmed',
-      attemptId: null,
-      bindingId: 'x-binding-1',
-      principalId: 'x-user-1',
-      principalName: '@dash',
-      scopeId: 'bot-x',
-      scopeName: 'CindyBot',
-      connectUrl: null,
-      bindCode: null,
-      expiresAt: null,
-      reason: null,
-      remediationUrl: 'https://x.com/CindyBot',
-      actions: ['revoke'],
-    },
-  },
-};
-
-const TELEGRAM_REBOUND: SlackHookView = {
-  ...TELEGRAM_CONFIRMED,
-  telegram: {
-    ...TELEGRAM_CONFIRMED.telegram,
-    binding: {
-      ...TELEGRAM_CONFIRMED.telegram.binding!,
-      bindingId: 'binding-2',
-      principalId: 'user-2',
-      principalName: 'Another Cindy User',
-    },
-  },
-};
-
-describe('useHookWorkspacePrefs provider isolation', () => {
-  const getProviderWorkspacePrefs = vi.fn<
-    (provider: 'telegram' | 'x' | 'feishu') => Promise<{ prefs: ProviderPrefsView }>
-  >(async () => ({
-    prefs: {
-      provider: 'telegram' as const,
-      bindingId: 'binding-1',
-      scopeId: null,
-      bound: true,
-      prefs: [],
-    },
-  }));
-  const getWorkspacePrefs = vi.fn(async () => ({
-    prefs: { bound: true, prefs: [] as Array<{
-      workspace: string;
-      model: string | null;
-      effort: string | null;
-      agentKind: string | null;
-      permissionMode: string | null;
-    }> },
+// 规则: 所有官方机器人(飞书 / Telegram / Slack / X)共用一套项目配置, 设置页只读写这一份。
+// 这里通过真实的 hook 入口验证它与 main 的往来: 读哪一份、来源写到哪个键、迟到回执不回滚。
+describe('useHookWorkspacePrefs 读写所有官方机器人共用的那一份', () => {
+  const getSharedProjectPrefs = vi.fn(async (): Promise<{ prefs: SharedProjectPrefsView }> => ({
+    prefs: { prefs: [] },
   }));
 
   beforeEach(() => {
     vi.clearAllMocks();
+    getSharedProjectPrefs.mockResolvedValue({ prefs: { prefs: [] } });
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       hookControl: {
-        getProviderWorkspacePrefs,
-        getWorkspacePrefs,
-        onProviderPrefsChanged: vi.fn(() => () => {}),
-        onPrefsChanged: vi.fn(() => () => {}),
-        setProviderWorkspacePrefs: vi.fn(),
-        setWorkspacePrefs: vi.fn(),
+        getSharedProjectPrefs,
+        setSharedProjectPrefs: vi.fn(),
+        onSharedProjectPrefsChanged: vi.fn(() => () => {}),
         getWorkspaceProviderSources: vi.fn(async () => ({ entries: [] })),
         setWorkspaceProviderSource: vi.fn(async () => ({ entries: [] })),
         onWorkspaceProviderSourcesChanged: vi.fn(() => () => {}),
@@ -174,23 +44,10 @@ describe('useHookWorkspacePrefs provider isolation', () => {
     };
   });
 
-  it.each(['slack', 'telegram', 'x'] as const)('%s inherits the default provider and execution location as one route', async (channel) => {
-    vi.mocked(window.electronAPI.maker.imDefaultSettingsGet).mockResolvedValue({
-      ...IM_DEFAULT_SETTINGS,
-      agentKind: 'codex',
-      agents: { ...IM_DEFAULT_SETTINGS.agents, codex: {
-        providerId: 'owner-provider', agentDeviceId: 'share:owner', model: 'owner-model', effort: 'high',
-      } },
-      defaults: IM_DEFAULT_SETTINGS, isCustomized: true, customizedKeys: [],
-    });
-    const hook = channel === 'telegram' ? TELEGRAM_CONFIRMED : channel === 'x' ? X_CONFIRMED : BASE_HOOK;
-    const { result } = renderHook(() => useHookWorkspacePrefs(hook, channel));
-    await waitFor(() => expect(result.current.agentDeviceFor('inherited')).toBe('share:owner'));
-    expect(result.current.providerSourceFor('inherited')).toBe('owner-provider');
-    expect(window.electronAPI.maker.imDefaultSettingsGet).toHaveBeenCalledWith(channel === 'slack' ? 'slack' : undefined);
-  });
-
-  it('keeps explicit local sources local and inherits the defaults of an explicitly selected engine', async () => {
+  // 现有覆盖缺口: 旧用例按渠道各读各的来源; 共用之后某个渠道残留的来源条目不得再影响显示,
+  // 否则设置页显示的来源与实际派发用的(共用那份)不一致。最小失败输入: 同名项目同时有
+  // 渠道残留条目与共用条目。tier: unit(jsdom)。
+  it('来源只认共用那份的条目; 没有显式来源时整组继承所选引擎的默认来源与执行位置', async () => {
     vi.mocked(window.electronAPI.maker.imDefaultSettingsGet).mockResolvedValue({
       ...IM_DEFAULT_SETTINGS,
       agents: { ...IM_DEFAULT_SETTINGS.agents,
@@ -199,318 +56,86 @@ describe('useHookWorkspacePrefs provider isolation', () => {
       },
       defaults: IM_DEFAULT_SETTINGS, isCustomized: true, customizedKeys: [],
     });
-    getWorkspacePrefs.mockResolvedValueOnce({ prefs: { bound: true, prefs: [
-      { workspace: 'codex', agentKind: 'codex', model: null, effort: null, permissionMode: null },
-    ] } });
+    getSharedProjectPrefs.mockResolvedValue({ prefs: { prefs: [row('codex', { agentKind: 'codex' })] } });
     vi.mocked(window.electronAPI.hookControl.getWorkspaceProviderSources).mockResolvedValue({ entries: [
-      { channel: 'slack', teamId: null, workspace: 'local', providerId: 'local-provider' },
+      { channel: 'shared', teamId: null, workspace: 'local', providerId: 'local-provider' },
+      { channel: 'slack', teamId: null, workspace: 'inherited', providerId: 'stale-slack-provider' },
     ] });
-    const { result } = renderHook(() => useHookWorkspacePrefs(BASE_HOOK, 'slack'));
+
+    const { result } = renderHook(() => useHookWorkspacePrefs());
     await waitFor(() => expect(result.current.agentDeviceFor('codex')).toBe('share:codex'));
     expect(result.current.providerSourceFor('codex')).toBe('codex-owner');
     expect(result.current.agentDeviceFor('inherited')).toBe('share:claude');
+    expect(result.current.providerSourceFor('inherited')).toBe('claude-owner');
     expect(result.current.agentDeviceFor('local')).toBeNull();
     expect(result.current.providerSourceFor('local')).toBe('local-provider');
+    // 默认值与派发侧同源: 读 global 那份。
+    expect(window.electronAPI.maker.imDefaultSettingsGet).toHaveBeenCalledWith(undefined);
+    expect(result.current.editable).toBe(true);
   });
 
-  it('Telegram 未连接时不发起 provider prefs 请求，绑定确认后沿 ready 边沿首次拉取', async () => {
-    const { result, rerender } = renderHook(({ hook }) => useHookWorkspacePrefs(hook, 'telegram'), {
-      initialProps: { hook: BASE_HOOK },
+  // 现有覆盖缺口: 模型与来源是两个持久面, 写入必须落到同一个作用域(共用那份), 且先偏好后来源。
+  // 最小失败输入: 一次同时带来源的模型选择。tier: unit(jsdom)。
+  it('选模型时偏好与来源都写到共用那份, 来源在偏好写成功之后才落', async () => {
+    const order: string[] = [];
+    vi.mocked(window.electronAPI.hookControl.setSharedProjectPrefs).mockImplementation(async () => {
+      order.push('prefs');
+      return { prefs: { prefs: [row('cindy', { model: 'new-model' })] } };
+    });
+    vi.mocked(window.electronAPI.hookControl.setWorkspaceProviderSource).mockImplementation(async () => {
+      order.push('source');
+      return { entries: [{ channel: 'shared', teamId: null, workspace: 'cindy', providerId: 'p1' }] };
     });
 
-    // Telegram disabled/unbound: 不发起无意义的 provider prefs IPC(issue #279)——
-    // 否则会以 HOOK_NOT_CONNECTED 失败并在 Main 侧打出误导性的 Slack ERROR。
-    // 用 effect 侧信号(imDefaultSettingsGet 在挂载 effect 内无条件调用)确认 effect
-    // 已 flush 再做否定断言 —— editable 首帧即为 false, 直接 waitFor 它会在 effect
-    // 跑之前 resolve, 捕捉不到「挂载即发 IPC」的回归(issue #279 review)。
-    await waitFor(() =>
-      expect(window.electronAPI.maker.imDefaultSettingsGet).toHaveBeenCalled(),
-    );
-    expect(getProviderWorkspacePrefs).not.toHaveBeenCalled();
-    expect(getWorkspacePrefs).not.toHaveBeenCalled();
-    expect(result.current.editable).toBe(false);
-
-    rerender({ hook: TELEGRAM_CONFIRMED });
-    await waitFor(() => expect(getProviderWorkspacePrefs).toHaveBeenCalledTimes(1));
-    expect(getWorkspacePrefs).not.toHaveBeenCalled();
+    const { result } = renderHook(() => useHookWorkspacePrefs());
     await waitFor(() => expect(result.current.editable).toBe(true));
-    expect(result.current.hint).toBeNull();
+    await act(async () => {
+      await result.current.applyPatch('cindy', { model: 'new-model' }, 'p1', null);
+    });
+
+    expect(order).toEqual(['prefs', 'source']);
+    expect(window.electronAPI.hookControl.setSharedProjectPrefs).toHaveBeenCalledWith('cindy', { model: 'new-model' });
+    expect(window.electronAPI.hookControl.setWorkspaceProviderSource).toHaveBeenCalledWith({
+      channel: 'shared', teamId: null, workspace: 'cindy', providerId: 'p1', agentDeviceId: null,
+    });
+    expect(result.current.prefsFor('cindy').model).toBe('new-model');
+    expect(result.current.providerSourceFor('cindy')).toBe('p1');
   });
 
-  it('Slack 已连接时挂载即拉取偏好，不触碰 Telegram 通道', async () => {
-    renderHook(() => useHookWorkspacePrefs(BASE_HOOK, 'slack'));
-    await waitFor(() => expect(getWorkspacePrefs).toHaveBeenCalledTimes(1));
-    expect(getProviderWorkspacePrefs).not.toHaveBeenCalled();
-  });
-
-  it.each(['confirmed', 'pending', 'failed'] as const)('keeps store Feishu defaults editable while the latest authorization is %s', async (state) => {
-    const first = { ...TELEGRAM_CONFIRMED.telegram.binding!, provider: 'feishu' as const, scopeId: 'cli_store' };
-    const second = { ...first, bindingId: 'binding-2', principalId: 'ou_second' };
-    const hook: SlackHookView = { ...BASE_HOOK, feishu: {
-      ...TELEGRAM_CONFIRMED.telegram,
-      bindings: [first, second], multiBindAvailable: true,
-      binding: { ...second, state, bindingId: state === 'confirmed' ? second.bindingId : null },
-    } };
-    const prefs = [{ workspace: 'cindy', model: 'shared-model', effort: null, agentKind: null, permissionMode: null }];
-    getProviderWorkspacePrefs.mockResolvedValueOnce({ prefs: {
-      provider: 'feishu', bindingId: first.bindingId, scopeId: null, bound: true, prefs,
-    } });
-    let push!: (view: ProviderPrefsView) => void;
-    vi.mocked(window.electronAPI.hookControl.onProviderPrefsChanged).mockImplementation((listener) => {
+  // 时序: 在 IM 里用 /model 改的值经推送先到, 之后才回来的旧写入回执不得把界面滚回去。
+  // 最小失败输入: 写入在途时到达一次推送。tier: unit(jsdom)。
+  it('较晚返回的写入回执不会覆盖较新的推送', async () => {
+    const stale = { prefs: { prefs: [row('cindy', { model: 'stale-model' })] } };
+    let resolveMutation!: (value: typeof stale) => void;
+    const mutationResponse = new Promise<typeof stale>((resolve) => {
+      resolveMutation = resolve;
+    });
+    let push!: (view: SharedProjectPrefsView) => void;
+    vi.mocked(window.electronAPI.hookControl.setSharedProjectPrefs).mockReturnValue(mutationResponse);
+    vi.mocked(window.electronAPI.hookControl.onSharedProjectPrefsChanged).mockImplementation((listener) => {
       push = listener;
       return () => {};
     });
-    const { result } = renderHook(() => useHookWorkspacePrefs(hook, 'feishu'));
-    await waitFor(() => expect(result.current.editable).toBe(true));
-    expect(getProviderWorkspacePrefs).toHaveBeenCalledWith('feishu');
-    expect(result.current.prefsFor('cindy').model).toBe('shared-model');
-    act(() => push({ provider: 'feishu', bindingId: second.bindingId, scopeId: null, bound: true,
-      prefs: [{ ...prefs[0], model: 'second-only-model' }] }));
-    expect(result.current.prefsFor('cindy').model).toBe('shared-model');
-  });
 
-  it('Slack 开关开着但 hook 掉线时仍拉取本机偏好，可编辑', async () => {
-    getWorkspacePrefs.mockResolvedValue({
-      prefs: {
-        bound: true,
-        prefs: [
-          {
-            workspace: 'cindy',
-            model: 'claude-opus-4-8',
-            effort: null,
-            agentKind: 'claude-code',
-            permissionMode: null,
-          },
-        ] as Array<{
-          workspace: string;
-          model: string | null;
-          effort: string | null;
-          agentKind: string | null;
-          permissionMode: string | null;
-        }>,
-      },
-    });
-    const { result } = renderHook(() =>
-      useHookWorkspacePrefs({ ...BASE_HOOK, status: 'error', lastError: 'offline' }, 'slack'),
-    );
-    await waitFor(() => expect(getWorkspacePrefs).toHaveBeenCalledTimes(1));
+    const { result } = renderHook(() => useHookWorkspacePrefs());
     await waitFor(() => expect(result.current.editable).toBe(true));
-    expect(result.current.prefsFor('cindy').model).toBe('claude-opus-4-8');
-    expect(result.current.hint).toBe('settings.tina.prefs.offlineLocal:settings.tina.prefs.providerSlack');
-  });
 
-  it('离线时仍按缓存的 Slack multi-team 绑定写入 teamId', async () => {
-    getWorkspacePrefs.mockResolvedValue({ prefs: { bound: true, prefs: [] } });
-    vi.mocked(window.electronAPI.hookControl.setWorkspacePrefs).mockResolvedValue({
-      prefs: { bound: true, prefs: [] },
-    });
-    const { result } = renderHook(() =>
-      useHookWorkspacePrefs(
-        {
-          ...BASE_HOOK,
-          status: 'error',
-          lastError: 'offline',
-          serverMultiTeam: false,
-          bindings: [
-            {
-              teamId: 'T1',
-              teamName: 'acme',
-              slackUserId: 'U1',
-              slackUserName: 'dash',
-              displaced: false,
-            },
-          ],
-        },
-        'slack',
-      ),
-    );
-    await waitFor(() => expect(result.current.editable).toBe(true));
-    expect(result.current.selectedTeamId).toBe('T1');
     act(() => {
-      result.current.applyPatch('cindy', { model: 'claude-opus-4-8' });
+      void result.current.applyPatch('cindy', { model: 'stale-model' });
     });
     await waitFor(() =>
-      expect(window.electronAPI.hookControl.setWorkspacePrefs).toHaveBeenCalledWith(
-        'cindy',
-        { model: 'claude-opus-4-8' },
-        'T1',
-      ),
+      expect(window.electronAPI.hookControl.setSharedProjectPrefs).toHaveBeenCalledOnce(),
     );
-  });
-
-  it('Telegram 换绑时立即隔离旧偏好，直到新 binding 的快照返回', async () => {
-    let resolveBinding2!: (value: {
-      prefs: {
-        provider: 'telegram';
-        bindingId: string;
-        scopeId: null;
-        bound: boolean;
-        prefs: [];
-      };
-    }) => void;
-    const binding2Response = new Promise<{
-      prefs: {
-        provider: 'telegram';
-        bindingId: string;
-        scopeId: null;
-        bound: boolean;
-        prefs: [];
-      };
-    }>((resolve) => {
-      resolveBinding2 = resolve;
-    });
-    getProviderWorkspacePrefs
-      .mockResolvedValueOnce({
-        prefs: {
-          provider: 'telegram',
-          bindingId: 'binding-1',
-          scopeId: null,
-          bound: true,
-          prefs: [],
-        },
-      })
-      .mockReturnValueOnce(binding2Response);
-
-    const { result, rerender } = renderHook(({ hook }) => useHookWorkspacePrefs(hook, 'telegram'), {
-      initialProps: { hook: TELEGRAM_CONFIRMED },
-    });
-    await waitFor(() => expect(result.current.editable).toBe(true));
-
-    rerender({ hook: TELEGRAM_REBOUND });
-    expect(result.current.editable).toBe(false);
-    await waitFor(() => expect(getProviderWorkspacePrefs).toHaveBeenCalledTimes(2));
-
-    resolveBinding2({
-      prefs: {
-        provider: 'telegram',
-        bindingId: 'binding-2',
-        scopeId: null,
-        bound: true,
-        prefs: [],
-      },
-    });
-    await waitFor(() => expect(result.current.editable).toBe(true));
-  });
-
-  it('较晚返回的写入响应不会覆盖较新的 provider 推送', async () => {
-    const staleResponse = {
-      prefs: {
-        provider: 'telegram' as const,
-        bindingId: 'binding-1',
-        scopeId: null,
-        bound: true,
-        prefs: [
-          {
-            workspace: 'cindy',
-            model: 'stale-model',
-            effort: null,
-            agentKind: null,
-            permissionMode: null,
-          },
-        ],
-      },
-    };
-    let resolveMutation!: (value: typeof staleResponse) => void;
-    const mutationResponse = new Promise<typeof staleResponse>((resolve) => {
-      resolveMutation = resolve;
-    });
-    let pushProviderPrefs!: (view: typeof staleResponse.prefs) => void;
-    vi.mocked(window.electronAPI.hookControl.setProviderWorkspacePrefs).mockReturnValue(
-      mutationResponse,
-    );
-    vi.mocked(window.electronAPI.hookControl.onProviderPrefsChanged).mockImplementation(
-      (listener) => {
-        pushProviderPrefs = listener;
-        return () => {};
-      },
-    );
-
-    const { result } = renderHook(() => useHookWorkspacePrefs(TELEGRAM_CONFIRMED, 'telegram'));
-    await waitFor(() => expect(result.current.editable).toBe(true));
-
     act(() => {
-      result.current.applyPatch('cindy', { model: 'stale-model' });
-    });
-    await waitFor(() =>
-      expect(window.electronAPI.hookControl.setProviderWorkspacePrefs).toHaveBeenCalledOnce(),
-    );
-
-    act(() => {
-      pushProviderPrefs({
-        ...staleResponse.prefs,
-        prefs: [
-          {
-            workspace: 'cindy',
-            model: 'pushed-model',
-            effort: null,
-            agentKind: null,
-            permissionMode: null,
-          },
-        ],
-      });
+      push({ prefs: [row('cindy', { model: 'pushed-model' })] });
     });
     expect(result.current.prefsFor('cindy').model).toBe('pushed-model');
 
     await act(async () => {
-      resolveMutation(staleResponse);
+      resolveMutation(stale);
       await mutationResponse;
     });
     expect(result.current.prefsFor('cindy').model).toBe('pushed-model');
     expect(result.current.pendingWs).toBeNull();
-  });
-
-  it('X 绑定确认后按 provider=x 拉取偏好，跨 provider 或跨 binding 的推送不落进 X', async () => {
-    getProviderWorkspacePrefs.mockResolvedValue({
-      prefs: { provider: 'x', bindingId: 'x-binding-1', scopeId: null, bound: true, prefs: [] },
-    });
-    let pushProviderPrefs!: (view: ProviderPrefsView) => void;
-    vi.mocked(window.electronAPI.hookControl.onProviderPrefsChanged).mockImplementation(
-      (listener) => {
-        pushProviderPrefs = listener;
-        return () => {};
-      },
-    );
-
-    const { result } = renderHook(() => useHookWorkspacePrefs(X_CONFIRMED, 'x'));
-    await waitFor(() => expect(getProviderWorkspacePrefs).toHaveBeenCalledWith('x'));
-    await waitFor(() => expect(result.current.editable).toBe(true));
-    expect(getWorkspacePrefs).not.toHaveBeenCalled();
-
-    const entry = (model: string) => [
-      { workspace: 'cindy', model, effort: null, agentKind: null, permissionMode: null },
-    ];
-    // 同 bindingId 但 provider=telegram: 订阅层按 provider 过滤, 不得写进 X 线。
-    act(() => {
-      pushProviderPrefs({
-        provider: 'telegram',
-        bindingId: 'x-binding-1',
-        scopeId: null,
-        bound: true,
-        prefs: entry('telegram-model'),
-      });
-    });
-    expect(result.current.prefsFor('cindy').model).toBeNull();
-    // provider=x 但 bindingId 不匹配: applyIncoming 按 binding 围栏丢弃。
-    act(() => {
-      pushProviderPrefs({
-        provider: 'x',
-        bindingId: 'x-binding-2',
-        scopeId: null,
-        bound: true,
-        prefs: entry('other-binding-model'),
-      });
-    });
-    expect(result.current.prefsFor('cindy').model).toBeNull();
-    // 完全匹配的 X 推送正常生效。
-    act(() => {
-      pushProviderPrefs({
-        provider: 'x',
-        bindingId: 'x-binding-1',
-        scopeId: null,
-        bound: true,
-        prefs: entry('x-model'),
-      });
-    });
-    expect(result.current.prefsFor('cindy').model).toBe('x-model');
   });
 });

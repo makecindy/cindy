@@ -29,6 +29,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 const mocks = vi.hoisted(() => ({
+  realStore: false,
   navigate: vi.fn(),
   observeSession: vi.fn(),
   profiles: [] as unknown[],
@@ -77,11 +78,16 @@ vi.mock('react-router-dom', async importOriginal => ({
     ? `/bots/remote/${mocks.params.deviceId}/${mocks.params.botId}`
     : mocks.params.botId ? `/bots/${mocks.params.botId}` : '/bots', search: '', hash: '' }),
 }));
-vi.mock('../botStore', () => ({
-  getBotProfiles: () => mocks.profiles,
-  useBotProfiles: () => mocks.profiles,
+vi.mock('../botStore', async importOriginal => {
+  const actual = await importOriginal<typeof import('../botStore')>();
+  return ({
+  ...actual,
+  getBotProfiles: () => mocks.realStore ? actual.getBotProfiles() : mocks.profiles,
+  useBotProfiles: () => mocks.realStore ? actual.useBotProfiles() : mocks.profiles,
+  useBotProfilesLoadState: () => mocks.realStore ? actual.useBotProfilesLoadState() : 'ready',
+  hasLoadedBotProfiles: () => mocks.realStore ? actual.hasLoadedBotProfiles() : true,
   useBotUnreadCounts: () => mocks.unread,
-  refreshBotProfiles: mocks.refreshBotProfiles,
+  refreshBotProfiles: () => mocks.realStore ? actual.refreshBotProfiles() : mocks.refreshBotProfiles(),
   setBotHidden: mocks.setBotHidden,
   setBotPinned: mocks.setBotPinned,
   duplicateBotProfile: mocks.duplicateBotProfile,
@@ -89,7 +95,8 @@ vi.mock('../botStore', () => ({
     sessions?: Array<{ id: string; role?: string; kind?: string }>;
   }) =>
     bot.sessions?.find((session) => session.role === 'canonical' || session.kind === 'chat')?.id,
-}));
+});
+});
 vi.mock('../BotDeleteDialog', () => ({
   BotDeleteDialog: ({ bot }: { bot: { name: string } | null }) =>
     bot ? <div data-testid="bot-delete-dialog">{bot.name}</div> : null,
@@ -98,7 +105,7 @@ vi.mock('../BotDeleteDialog', () => ({
 import { TeammatesSection } from '../TeammatesSection';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
-import { readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed, writeTeammatesViewMode } from '../teammatesSectionPrefs';
+import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed, writeTeammatesViewMode } from '../teammatesSectionPrefs';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 interface BotFixture {
@@ -136,6 +143,7 @@ async function renderSidebar() {
 }
 
 beforeEach(() => {
+  mocks.realStore = false;
   messageListeners = [];
   window.localStorage.clear();
   resetBotReadStateForTests();
@@ -484,6 +492,43 @@ describe('teammate host labels', () => {
 describe('TeammatesSection header', () => {
   const header = () => screen.getByRole('button', { name: 'bots.title' });
 
+  // Unit: the opt-in restores read avatars without changing fold or expanded style.
+  // Existing attention-only tests lack this override; one read and one unread bot
+  // distinguish all-avatars from the default, including remount and disabling it again.
+  it.each(['list', 'icons'] as const)('toggles collapsed avatars independently of %s mode and remembers the choice', async mode => {
+    mocks.profiles = [bot({ id: 'idle', name: 'Idle' }), bot({ id: 'unread', name: 'Unread' })];
+    mocks.unread = { unread: 1 };
+    writeTeammatesViewMode('fixture-owner', mode);
+    writeTeammatesSectionCollapsed('fixture-owner', true);
+    await renderSidebar();
+    expect(screen.queryByRole('button', { name: 'Idle' })).toBeNull();
+    expect(screen.queryByText('Idle')).toBeNull();
+    const toggleAvatars = (checked: boolean) => {
+      fireEvent.keyDown(screen.getByRole('button', { name: 'ccAgent.sidebar.viewStyle' }), { key: 'Enter' });
+      const option = screen.getByRole('menuitemcheckbox', { name: 'bots.list.showCollapsedTeammateAvatars' });
+      expect(option.getAttribute('aria-checked')).toBe(String(checked));
+      fireEvent.click(option);
+    };
+    toggleAvatars(false);
+    expect(header().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Idle' })).toBeTruthy();
+    expect(readCollapsedTeammateAvatars('fixture-owner')).toBe(true);
+    expect(readTeammatesViewMode('fixture-owner')).toBe(mode);
+    cleanup();
+    await renderSidebar();
+    expect(screen.getByRole('button', { name: 'Idle' })).toBeTruthy();
+    fireEvent.click(header());
+    expect(header().getAttribute('aria-expanded')).toBe('true');
+    expect(mode === 'list' ? screen.getByText('Idle') : screen.getByRole('button', { name: 'Idle' })).toBeTruthy();
+    fireEvent.click(header());
+    toggleAvatars(true);
+    expect(header().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('button', { name: 'Idle' })).toBeNull();
+    expect(screen.queryByText('Idle')).toBeNull();
+    expect(mode === 'list' ? screen.getByText('Unread') : screen.getByRole('button', { name: /^Unread ·/ })).toBeTruthy();
+    expect(readCollapsedTeammateAvatars('fixture-owner')).toBe(false);
+  });
+
   // New collapse contract: ordinary chats disappear, unread and pending feedback survive
   // beyond the five-row preview, then disappear when resolved (real component, unit tier).
   it('collapses fully while retaining unread and pending feedback across remounts', async () => {
@@ -547,7 +592,7 @@ describe('TeammatesSection header', () => {
     expect(reader()).not.toBeNull();
   });
 
-  it('keeps the icon row on one line and folds the rest into +N', async () => {
+  it.each([false, true])('folds avatar overflow into +N and opens the full list (collapsed avatars: %s)', async collapsedAvatars => {
     const original = globalThis.ResizeObserver;
     // 5 slots: 4 avatars + the +N chip (40px target, 4px gap).
     globalThis.ResizeObserver = class {
@@ -560,7 +605,12 @@ describe('TeammatesSection header', () => {
       mocks.profiles = Array.from({ length: 6 }, (_, index) => bot({ id: `bot-${index}`, name: `Mate ${index}` }));
       mocks.unread = { 'bot-5': 1 };
       mocks.params = { botId: 'bot-4' };
-      writeTeammatesViewMode('fixture-owner', 'icons');
+      if (collapsedAvatars) {
+        writeCollapsedTeammateAvatars('fixture-owner', true);
+        writeTeammatesSectionCollapsed('fixture-owner', true);
+      } else {
+        writeTeammatesViewMode('fixture-owner', 'icons');
+      }
       await renderSidebar();
       const avatars = screen.getAllByRole('button', { name: /^Mate \d$/ });
       expect(avatars).toHaveLength(4);
@@ -569,6 +619,8 @@ describe('TeammatesSection header', () => {
       const more = screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' });
       fireEvent.click(more);
       expect(header().getAttribute('aria-expanded')).toBe('true');
+      expect(readTeammatesViewMode('fixture-owner')).toBe('list');
+      expect(screen.getByText('Mate 5')).toBeTruthy();
     } finally {
       globalThis.ResizeObserver = original;
     }
@@ -1021,7 +1073,9 @@ describe('TeammatesSection rows', () => {
     expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
   });
 
-  it('refreshes a sealed reply when the turn stops and still accepts late tool rows', () => {
+  // Unit regression: final-seal and message events previously used independent
+  // refresh paths. The displayed final preview must update once for their burst.
+  it('coalesces a turn stop with its final message and still accepts late tool rows', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const old = bot({ id: 'bot-1', name: 'PR steward', lastMessagePreview: 'Old reply' });
     mocks.profiles = [old];
@@ -1030,8 +1084,14 @@ describe('TeammatesSection rows', () => {
     mocks.refreshBotProfiles.mockImplementation(() => {
       mocks.profiles = [{ ...old, lastMessagePreview: 'Sealed reply' }];
     });
+    mocks.refreshBotProfiles.mockClear();
     mocks.running = new Map();
     view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat', message: { role: 'assistant' } });
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
     view.rerender(<><UnreadSync /><TeammatesSection /></>);
     expect(screen.getByText('Sealed reply')).toBeTruthy();
 
@@ -1126,5 +1186,45 @@ describe('cloud companions in the roster', () => {
     expect(screen.queryByText('Local preview')).toBeNull();
     expect(screen.queryByTestId('cindy-device-row')).toBeNull();
     expect(screen.getByText('Laptop preview')).toBeTruthy();
+  });
+});
+
+// #9978 / unit: mount the production sidebar with its real store. Existing row
+// fixtures replaced the store and could not distinguish a failed read from empty.
+describe('startup roster read failures', () => {
+  it.each(['list', 'icons', 'collapsed'] as const)('keeps failed startup distinct from empty and recovers through the visible retry (%s)', async mode => {
+    mocks.realStore = true;
+    writeTeammatesViewMode('fixture-owner', mode === 'icons' ? 'icons' : 'list');
+    writeTeammatesSectionCollapsed('fixture-owner', mode === 'collapsed');
+    const store = await vi.importActual<typeof import('../botStore')>('../botStore');
+    setDataOwnerGeneration(`startup-failed-${mode}`);
+    const list = vi.fn().mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] DbClient not ready'))
+      .mockResolvedValue([bot({ id: 'existing', name: 'Existing buddy' })]);
+    window.electronAPI.localDb!.bots = { list } as never;
+    await store.ensureBotProfilesLoaded();
+    const view = await renderSidebar();
+    expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
+    await waitFor(() => expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']));
+    expect(screen.queryByRole('alert')).toBeNull();
+    if (mode === 'collapsed') fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
+    if (mode === 'icons') expect(screen.getByRole('button', { name: 'Existing buddy' })).toBeTruthy();
+    else expect(view.container.textContent).toContain('Existing buddy');
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for a successful empty snapshot before offering empty-roster creation', async () => {
+    mocks.realStore = true;
+    const store = await vi.importActual<typeof import('../botStore')>('../botStore');
+    setDataOwnerGeneration('startup-empty');
+    let finish!: (rows: unknown[]) => void;
+    const list = vi.fn(() => new Promise<unknown[]>(resolve => { finish = resolve; }));
+    window.electronAPI.localDb!.bots = { list } as never;
+    const pending = store.ensureBotProfilesLoaded();
+    await renderSidebar();
+    expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+    await act(async () => { finish([]); await pending; });
+    expect(screen.getByRole('button', { name: 'bots.add' })).toBeTruthy();
+    expect(list).toHaveBeenCalledOnce();
   });
 });

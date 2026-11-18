@@ -65,6 +65,10 @@ describe('remoteConversationSearchRequest', () => {
     expect(filterResultsByWorkingDirs(page, ['/repo']).results.map(item => item.session.id)).toEqual(['legacy']);
     expect(remoteIndexedSearchIgnoredWorkingDirs(response([page.results[0]!]), ['/project'])).toBe(false);
     expect(page.results[0]?.session.workingDir).toBe('/tmp/checkout');
+    const buddy = response([result('group', 1, { taskProjectDir: '/buddy', projectDir: '/group-repo', workingDir: '/group-repo' })]);
+    expect(filterResultsByWorkingDirs(buddy, ['/buddy']).results).toHaveLength(1);
+    expect(filterResultsByWorkingDirs(buddy, ['/group-repo']).results).toHaveLength(0);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(buddy, ['/buddy'])).toBe(false);
   });
   afterEach(() => { feature.enabled = false; });
 

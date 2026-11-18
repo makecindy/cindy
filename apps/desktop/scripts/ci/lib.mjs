@@ -53,6 +53,8 @@ export const SCRIPTS_DIR = path.resolve(__dirname, '..');
 const APP_EXTENSION_ENTITLEMENTS_PATH = path.resolve(
   __dirname, '../../native/agent-island/live-activity/extension.entitlements',
 );
+/** Desktop widget extension (native/desktop-widgets); its entitlements are generated at install. */
+const DESKTOP_WIDGETS_EXTENSION = 'CindyDesktopWidgets.appex';
 export const DESKTOP_ROOT = path.resolve(SCRIPTS_DIR, '..');
 export const PROJECT_ROOT = path.resolve(DESKTOP_ROOT, '../..');
 export const RELEASE_DIR = path.join(DESKTOP_ROOT, 'release');
@@ -860,12 +862,20 @@ export function signMacAppWithIdentity(
   console.log('    Signing frameworks...');
   exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
 
-  // 4. Contents/PlugIns/ 下的 app extension(如 macOS 实时活动的 WidgetKit 扩展)。必须在主 app 之前
+  // 4. Contents/PlugIns/ 下的 app extension(macOS 实时活动、桌面小组件的 WidgetKit 扩展)。必须在主 app 之前
   //    单独签,且带 App Sandbox entitlements:扩展没有沙盒无法加载;主 app 用 --deep 统一签会丢掉它。
+  //    桌面小组件的 entitlements 含按 app id 生成的只读数据目录,由 native/desktop-widgets/build.mjs
+  //    安装时写进临时签名,这里原样保留。
   const plugInsDir = path.join(appPath, 'Contents', 'PlugIns');
   if (fs.existsSync(plugInsDir)) {
     console.log('    Signing app extensions in Contents/PlugIns/...');
-    exec(`find "${plugInsDir}" -maxdepth 1 -name "*.appex" -exec ${signBase} --entitlements "${APP_EXTENSION_ENTITLEMENTS_PATH}" "{}" \\;`);
+    for (const name of fs.readdirSync(plugInsDir).filter((entry) => entry.endsWith('.appex'))) {
+      const appex = path.join(plugInsDir, name);
+      const entitlements = name === DESKTOP_WIDGETS_EXTENSION
+        ? '--preserve-metadata=entitlements'
+        : `--entitlements "${APP_EXTENSION_ENTITLEMENTS_PATH}"`;
+      exec(`${signBase} ${entitlements} "${appex}"`);
+    }
   }
 
   // 5. 主 app bundle

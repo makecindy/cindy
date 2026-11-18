@@ -39,6 +39,7 @@ import {
 } from './policy.js';
 import {
   RELAY_PROGRESS_STAGES,
+  RELAY_PROGRESS_TEXT_MAX_CHARS,
   RELAY_TIMING,
   relayRequestTimeout,
   validateRelayRequest,
@@ -198,6 +199,8 @@ interface RelayItem {
     stage: string;
     attempt: number;
     receivedChars?: number;
+    /** Partial answer so far (side panel streaming); replaced on every progress report. */
+    text?: string;
     startedAt: number;
     updatedAt: number;
   };
@@ -1134,6 +1137,7 @@ export class BrowserExtensionBridge {
       stage?: unknown;
       attempt?: unknown;
       receivedChars?: unknown;
+      text?: unknown;
     };
     if (!item.result && (RELAY_PROGRESS_STAGES as readonly unknown[]).includes(p.stage)) {
       const previous = item.progress;
@@ -1146,6 +1150,10 @@ export class BrowserExtensionBridge {
         attempt,
         ...(Number.isSafeInteger(p.receivedChars) && (p.receivedChars as number) >= 0
           ? { receivedChars: p.receivedChars as number }
+          : {}),
+        // Old extensions ignore the extra field; oversized text is dropped and the stage still lands.
+        ...(typeof p.text === 'string' && p.text.length <= RELAY_PROGRESS_TEXT_MAX_CHARS
+          ? { text: p.text }
           : {}),
         startedAt: previous.startedAt || item.created,
         updatedAt:

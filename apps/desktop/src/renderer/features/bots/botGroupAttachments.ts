@@ -22,7 +22,7 @@ export function botGroupThreadDraftKey(groupId: string, rootId: string): string 
 }
 
 /**
- * The group composer is a plain textarea, so its draft text is stored in the shared draft
+ * The group composer sends plain text even when long pastes are collapsed. Draft text is stored in the shared draft
  * store as one paragraph per line — a document the store understands (draft presence, owner
  * scoping) and that reads back to exactly the same text.
  */

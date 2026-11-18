@@ -14,7 +14,7 @@ import { createScheduledModelScope, type ScheduledModelSelection } from '../sche
 
 // Execute the actual picker admission branches (local and agent-device), with
 // everything after admission represented by applyLive. No Electron bootstrap.
-const source = ts.createSourceFile('register.ts', readFileSync(new URL('../register.ts', import.meta.url), 'utf8'),
+let source = ts.createSourceFile('register.ts', readFileSync(new URL('../register.ts', import.meta.url), 'utf8'),
   ts.ScriptTarget.Latest, true);
 const branches: string[] = [];
 const confirmationChecks: string[] = [];
@@ -85,6 +85,11 @@ function visit(node: ts.Node) {
   }
   ts.forEachChild(node, visit);
 }
+visit(source);
+// handleSetModel moved verbatim into sessionRuntimeSelectionApply.ts. Walking it after register.ts
+// collects its branches in the order they had there (everything else stays before its old place).
+source = ts.createSourceFile('sessionRuntimeSelectionApply.ts',
+  readFileSync(new URL('../sessionRuntimeSelectionApply.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
 visit(source);
 const remoteLead = { leadDeviceId: 'lead-device', leadSessionId: 'lead-session', workerLabel: 'worker' };
 const orcaIdentities = [
@@ -230,16 +235,22 @@ describe('complete selection commit boundaries', () => {
   // Unit #10271: after the first fire migrates the task to account B, the saved
   // alias still pins account A. Exercise two real lease acquisitions and prove
   // the second fire never reapplies the alias, locally or on the same remote host.
-  it.each([null, 'executor'] as const)('retains an already migrated task on the next fire (%s)', async device => {
-    const saved = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old',
+  it.each([
+    [null, 'openai', 'openai-old'], ['executor', 'openai', 'openai-old'],
+    [null, 'openai-sub-target', 'openai-old'], ['executor', 'openai-sub-target', 'openai-old'],
+    [null, 'openai-sub-target', 'openai-sub-original'], ['executor', 'openai-sub-target', 'openai-sub-original'],
+  ] as const)('retains an already migrated task on the next fire (%s, %s, %s)', async (device, target, original) => {
+    const saved = { agentKind: 'codex', model: 'gpt-5', providerId: original,
       effort: 'high', fastMode: false, agentDeviceId: device } as ScheduledModelSelection;
     let row = { ...saved };
     const applied: string[] = [];
     const resolveExecution = compile(scheduledExecutionSelection, {
       getSessionRowSnapshotStrict: async () => row, dbToMakerAgentKind: (kind: string) => kind,
-      isProviderShareAgentDeviceId: () => false, readLegacyCodexAccountId: () => 'account-a',
+      isProviderShareAgentDeviceId: () => false, readMergedProviderAccount: () => 'account-a',
+      resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }), accountProviderId: () => target,
       legacyCodexAccountCanRun: () => true, findCatalogModel, isModelSelectableForNewRoute,
-      readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: true,
+      readDeviceProviderViews: async () => [{ id: original, subscriptionPoolAlias: true,
+        ...(target === 'openai' ? {} : { subscriptionPoolTarget: target }),
         models: { codex: [{ id: 'gpt-5', mode: 'chat' }] } }], remoteBackgroundInvoke: vi.fn(),
     });
     const applyProfile = async (_id: string, choice: ScheduledModelSelection) => {
@@ -263,31 +274,37 @@ describe('complete selection commit boundaries', () => {
       applyScheduledProfile: applyProfile,
       prepareUnhealthySessionForSend: async () => {
         if (applied.length !== 1) return false;
-        row = { ...row, providerId: 'openai' }; return true;
+        row = { ...row, providerId: target }; return true;
       },
     });
     for (let fire = 0; fire < 2; fire++) {
       const lease = await adapter('scheduled-repeat', undefined, saved);
-      try { expect(lease.selection.providerId).toBe('openai'); }
+      try { expect(lease.selection.providerId).toBe(target); }
       finally { lease.release(); }
     }
-    expect(applied).toEqual(['openai-old', 'openai']);
+    expect(applied).toEqual([original, target]);
     await scope.restore('scheduled-repeat');
     expect(baseline).toBeNull();
-    expect(row).toMatchObject({ ...saved, providerId: 'openai' });
-    expect(applied).toEqual(['openai-old', 'openai', 'openai']);
-    expect(saved.providerId).toBe('openai-old');
+    expect(row).toMatchObject({ ...saved, providerId: target });
+    expect(applied).toEqual([original, target, target]);
+    expect(saved.providerId).toBe(original);
   });
 
-  it.each(['local-model-disabled', 'remote-model-revoked', 'remote-not-alias'] as const)(
+  // 2026-11-13 (subscription-account-pools.md 合并与拿出由用户决定): a connection restored to its own
+  // account is an ordinary provider again, so the saved choice runs there instead of on OpenAI.
+  it.each(['local-model-disabled', 'local-restored', 'local-wrong-target', 'remote-model-revoked', 'remote-not-alias', 'remote-wrong-target', 'remote-missing-target'] as const)(
     'retains original admission when a saved alias cannot follow the migrated task (%s)', async mode => {
-      const device = mode === 'local-model-disabled' ? null : 'executor';
+      const device = mode.startsWith('local-') ? null : 'executor';
       const selection = { agentKind: 'codex', model: 'gpt-5', providerId: 'openai-old', agentDeviceId: device };
       const resolve = compile(scheduledExecutionSelection, {
-        getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai' }),
+        getSessionRowSnapshotStrict: async () => ({ ...selection, providerId: 'openai-sub-target' }),
         dbToMakerAgentKind: (kind: string) => kind, isProviderShareAgentDeviceId: () => false,
-        readLegacyCodexAccountId: () => 'account-a', legacyCodexAccountCanRun: () => false,
+        readMergedProviderAccount: () => (mode === 'local-restored' ? undefined : 'account-a'),
+        resolveSubscriptionPoolProviderRef: () => ({ kind: 'openai' }),
+        accountProviderId: () => mode === 'local-wrong-target' ? 'different-target' : 'openai-sub-target',
+        legacyCodexAccountCanRun: () => mode !== 'local-model-disabled',
         readDeviceProviderViews: async () => [{ id: 'openai-old', subscriptionPoolAlias: mode !== 'remote-not-alias',
+          subscriptionPoolTarget: mode === 'remote-missing-target' ? undefined : mode === 'remote-wrong-target' ? 'different-target' : 'openai-sub-target',
           models: { codex: mode === 'remote-model-revoked' ? [] : [{ id: 'gpt-5', mode: 'chat' }] } }],
         remoteBackgroundInvoke: vi.fn(), findCatalogModel, isModelSelectableForNewRoute,
       });
@@ -597,7 +614,7 @@ describe('Orca model-only picker intent admission', () => {
         internalOptions, runtimeStatus, sessionId: 's1', model: 'new',
         targetProviderId: 'provider', effectiveProviderId: 'provider', currentProviderId: 'old-provider',
         agentKind: 'codex', dbToMakerAgentKind: (kind: string) => kind,
-        targetEffort: 'high', targetFastMode: true, targetContextWindow: undefined,
+        targetEffort: 'high', targetFastMode: true, targetContextWindow: onOtherDevice ? 200000 : undefined as number | undefined,
         confirmedContextWindow: 200000 as number | undefined,
         atomicSelection: { effort: 'high', fastMode: true },
         assertRuntimeOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
@@ -620,13 +637,26 @@ describe('Orca model-only picker intent admission', () => {
       expect(bindings.markRemoteSettingPersistedInsideHandler).toHaveBeenCalledOnce();
       expect(applyLive).not.toHaveBeenCalled();
       expect(runtimeStatus.model).toBe('old');
-      if (!onOtherDevice) {
+      {
+        // PR #11071: remote restaging lost an already confirmed small window.
+        // The existing unit matrix only checked receipt inheritance locally.
         expect(pending.get('s1').confirmedContextWindow).toBe(200000);
         // Axis-only restaging retains this route's receipt; a different route
         // must not inherit acknowledgement from the previous selection.
         bindings.confirmedContextWindow = undefined;
+        bindings.targetContextWindow = undefined;
         await run();
         expect(pending.get('s1').confirmedContextWindow).toBe(200000);
+        const confirmedIntent = pending.get('s1');
+        for (const changedTarget of [
+          { providerId: 'another-provider' }, { targetAgentKind: 'pi' },
+          ...(onOtherDevice ? [{ targetAgentDeviceId: 'another-device' }] : []),
+        ]) {
+          pending.set('s1', { ...confirmedIntent, ...changedTarget });
+          await run();
+          expect(pending.get('s1')).not.toHaveProperty('confirmedContextWindow');
+        }
+        pending.set('s1', confirmedIntent);
         bindings.model = 'another-model';
         await run();
         expect(pending.get('s1')).not.toHaveProperty('confirmedContextWindow');
@@ -652,7 +682,7 @@ describe('Orca model-only picker intent admission', () => {
       expect(pending.has('s1')).toBe(false);
       await applyPendingAgentSwitchIfIdle(deps, 's1');
       expect(applyLive).toHaveBeenCalledTimes(1);
-      expect(changed).toHaveBeenCalledTimes(onOtherDevice ? 1 : 3);
+      expect(changed).toHaveBeenCalledTimes(onOtherDevice ? 6 : 5);
     }
   });
 

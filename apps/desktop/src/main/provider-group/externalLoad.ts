@@ -6,7 +6,7 @@
  *   乱序到达的旧报告丢弃，不会盖掉新的。
  * - 临时占用：刚选中、还没来得及报告的任务先记一会儿，同时开的几个任务不会全落到同一台。
  *
- * 只用于分摊负载(并发上限不因满载拒绝消息)，不落盘；重启后等各电脑重新报告。
+ * 用于分摊负载与组成员硬上限，不落盘；重启后等各电脑重新报告。
  */
 import type { ProviderGroupRemoteLease } from '../../shared/providerGroup.js';
 
@@ -27,6 +27,8 @@ export interface ProviderGroupLoadHandle {
 export interface ProviderGroupExternalLoad {
   /** 这台组内电脑上经本组运行、但不在本机任务表里的任务数。 */
   running(providerId: string, memberKey: string): number;
+  /** 尚未报告实际运行状态的预选；不能被池里其他账号的运行总数抵消。 */
+  pending(providerId: string, memberKey: string): number;
   /** 刚给某台电脑的某个任务选了组内电脑。 */
   recordPick(controller: string, sessionId: string, providerId: string, memberKey: string): void;
   /** 某台电脑的整份报告；返回 false = 比已有的旧，被丢弃。 */
@@ -55,7 +57,7 @@ interface Provisional {
 export function createProviderGroupExternalLoad(deps: { now(): number }): ProviderGroupExternalLoad {
   const leases = new Map<string, LeaseSet>();
   const provisional = new Map<string, Provisional>();
-  const relays = new Set<{ providerId: string; memberKey: string; running: boolean }>();
+  const relays = new Set<{ providerId: string; memberKey: string; running: boolean; pending: boolean }>();
   const provisionalKey = (controller: string, sessionId: string) => `${controller}\u0000${sessionId}`;
 
   function liveLeases(controller: string): LeaseSet | null {
@@ -75,37 +77,48 @@ export function createProviderGroupExternalLoad(deps: { now(): number }): Provid
     }
   }
 
+  function load(providerId: string, memberKey: string) {
+    const now = deps.now();
+    sweepProvisional(now);
+    let count = 0;
+    let pending = 0;
+    const reported = new Set<string>();
+    for (const controller of leases.keys()) {
+      const set = liveLeases(controller);
+      if (!set) continue;
+      for (const lease of set.entries) {
+        reported.add(provisionalKey(controller, lease.sessionId));
+        if (lease.providerId === providerId && lease.memberKey === memberKey) count++;
+      }
+    }
+    for (const [key, entry] of provisional) {
+      // 已经报告过的任务以报告为准，不重复计数。
+      if (reported.has(key)) continue;
+      if (entry.providerId === providerId && entry.memberKey === memberKey) {
+        count++;
+        pending++;
+      }
+    }
+    for (const relay of relays) {
+      if (relay.running && relay.providerId === providerId && relay.memberKey === memberKey) count++;
+      if (relay.pending && relay.providerId === providerId && relay.memberKey === memberKey) pending++;
+    }
+    return { count, pending };
+  }
+
   return {
-    running(providerId, memberKey) {
-      const now = deps.now();
-      sweepProvisional(now);
-      let count = 0;
-      const reported = new Set<string>();
-      for (const controller of leases.keys()) {
-        const set = liveLeases(controller);
-        if (!set) continue;
-        for (const lease of set.entries) {
-          reported.add(provisionalKey(controller, lease.sessionId));
-          if (lease.providerId === providerId && lease.memberKey === memberKey) count++;
-        }
-      }
-      for (const [key, entry] of provisional) {
-        // 已经报告过的任务以报告为准，不重复计数。
-        if (reported.has(key)) continue;
-        if (entry.providerId === providerId && entry.memberKey === memberKey) count++;
-      }
-      for (const relay of relays) {
-        if (relay.running && relay.providerId === providerId && relay.memberKey === memberKey) count++;
-      }
-      return count;
-    },
+    running: (providerId, memberKey) => load(providerId, memberKey).count,
+    pending: (providerId, memberKey) => load(providerId, memberKey).pending,
 
     trackRelay(providerId, memberKey) {
       // 刚交过去、还没报运行状态的先按在运行算(同时来的几个受邀者任务不会全落到同一台)。
-      const entry = { providerId, memberKey, running: true };
+      const entry = { providerId, memberKey, running: true, pending: true };
       relays.add(entry);
       return {
         setRunning(running) {
+          // First execution-state report replaces the initial reservation;
+          // later busy/idle transitions must not become fresh pre-selections.
+          entry.pending = false;
           entry.running = running;
         },
         release() {

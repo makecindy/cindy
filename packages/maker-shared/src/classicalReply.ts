@@ -3,9 +3,7 @@
  * editions today; Japanese 古文 / Korean 한문 editions can add their own family later),
  * shaped by the output style the user picked next to the language.
  *
- * The classical editions always answer that way. The modern Chinese editions offer the
- * same styles as an optional register: the interface stays modern and only the replies
- * turn classical, so a user can ask for 文言 without reading a 文言 interface.
+ * Only classical interface editions offer these styles.
  *
  * The choice belongs to the client the user is typing on, the same way the UI language
  * does: Desktop keeps it locally and Mobile sends it with each turn. Only a known style
@@ -45,16 +43,8 @@ export type ClassicalReplyStyleId = (typeof CLASSICAL_REPLY_STYLES)[ClassicalFam
 
 export const DEFAULT_CLASSICAL_REPLY_STYLE: ClassicalReplyStyleId = 'prose';
 
-/**
- * Interface editions whose replies may take a classical style. The classical editions
- * always offer it; the modern Chinese editions offer it optionally, keeping a modern
- * interface while replies follow the chosen register.
- */
-export const REPLY_STYLE_FAMILY_BY_LOCALE = {
-  ...CLASSICAL_FAMILY_BY_LOCALE,
-  'zh-CN': 'lzh',
-  'zh-TW': 'lzh',
-} as const satisfies Partial<Record<string, ClassicalFamily>>;
+/** Only classical interface editions may activate a literary reply style. */
+export const REPLY_STYLE_FAMILY_BY_LOCALE = CLASSICAL_FAMILY_BY_LOCALE;
 
 export function classicalFamilyOf(locale: string | null | undefined): ClassicalFamily | null {
   if (typeof locale !== 'string') return null;
@@ -73,17 +63,15 @@ export function replyStyleFamilyOf(locale: string | null | undefined): Classical
 
 /**
  * Style used while the user has not chosen one. A classical interface is itself the
- * choice, so it answers in that register; a modern interface stays ordinary until the
- * user asks for a literary style.
+ * choice, so it answers in that register; other interfaces use ordinary replies.
  */
 export function defaultClassicalReplyStyleFor(locale: string | null | undefined): ClassicalReplyStyleId {
   return classicalFamilyOf(locale) ? DEFAULT_CLASSICAL_REPLY_STYLE : 'plain';
 }
 
 /**
- * The classical interface and the modern Chinese interfaces keep separate style
- * choices: picking 唐诗 for a classical interface does not turn a modern interface's
- * replies literary, and each context starts from defaultClassicalReplyStyleFor.
+ * Retain the two storage contexts for compatibility. Only the classical context
+ * can activate a style; old modern choices remain stored but have no effect.
  */
 export type ClassicalReplyStyleContext = 'classical' | 'modern';
 

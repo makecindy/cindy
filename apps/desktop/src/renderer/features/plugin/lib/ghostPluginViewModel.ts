@@ -52,6 +52,7 @@ export interface GhostPluginListItem {
   retirement?: InstalledGhost['retirement'];
   oauthAuthorizationExpired?: boolean;
   trust?: GhostTrustInfo;
+  installationSource?: InstalledGhost['installationSource'];
   iconDataUrl?: string;
 }
 
@@ -331,6 +332,7 @@ export function toGhostPluginListItem(
     mainViewTitle: manifest.mainView ? (manifest.mainView.title ?? manifest.name) : null,
     retirement: ghost.retirement,
     oauthAuthorizationExpired: ghost.oauthAuthorizationExpired !== undefined,
+    installationSource: ghost.installationSource,
     trust: ghost.trust ?? {
       level: 'unverified',
       publisherSigned: false,

@@ -2,6 +2,43 @@
 
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
+分享组在 `open` 准入时选不出电脑，可在现有错误信封内返回
+`REMOTE_AGENT_GROUP_FULL` 或 `REMOTE_AGENT_GROUP_USAGE_LIMIT`。额度错误复用本地调度器的
+`resets_at: <unix ms>` 文本格式，控制端只在 Agent 未启动的错误边界恢复额度等待。旧端仍可将其展示为启动失败。
+只传组级结论和已知的恢复时间，作用域为本次任务。中继转发原有信封，自建中转无需改动。
+
+桌面端在换来源后续发原消息时，经现有 `maker:input:retry-last-error` 传
+`expectedQueueHeadClientId` 与本次切换回执的 `pendingSwitchRevision`（作为 `expectedSwitchRevision`）。
+任务所在电脑匹配恢复项及实际队首，并在发送锁内重新核对待应用的切换修订号。另一控制端改选后，
+原确认不会派发到改选目标。
+远控端仅向声明 `supportsQueueHeadRetry` 的任务电脑发送这个选项。旧端仍可手动重试。
+
+## 托管请求的附件预算与保存（2026-11-17）
+
+`open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。
+模型运行端只在此字段与 `virtualWorkspace` 同时存在、且不是 `hostToolsOnly` 时绑定保存通道。
+托管任务无本机数据库行时，仍按原 HTTP / 完整 WebSocket 重发预算缩减；原生历史不改写。
+本机任务继续使用现有媒体入库、引用补偿和任务删除生命周期；纯文本不启动保存通道。
+
+保存复用 `maker:remote-agent:v1` 的反向 HTTP，内部路径 `/cindy/attachment-preservation`：
+`begin` → `find`（SHA-256 与按字节识别的 MIME）→ 必要时 `chunk` / `prepare` → `commit`，最后 `abort` 清理批次。
+查找与保存共用类型判据：声明为二进制的 PDF／媒体，以及错误声明为媒体的普通文件，也能复用原路径。
+`prepare` 仍传原声明，接收端独立校验完整字节；查找仍检查任务引用、普通文件与内容摘要，不以 MIME 提示授予访问。
+块最多 512 KiB，严格按偏移顺序接收；每个运行最多四个在途批次，空闲 60 秒清理。
+请求不接受目标任务 ID 或文件路径，接收方固定使用打开时的任务与账号。
+只传需要移出的附件，已有同任务引用且文件摘要一致时不再传字节；尚未提交的引用不会交给上游。
+批次沿用既有恢复锁、磁盘额度和引用补偿；取消、账号切换、任务删除或缩减失败不发布新引用。
+返回路径经原 ExecutorWorkspace 投影，工具仍在任务电脑读取。投影不增加文件访问授权。
+
+- 旧控制端不声明：新运行端保持原压缩路径。新控制端对旧运行端：未知可选字段被忽略。
+  任务端与执行端均需支持；供应商组经旧业务中转端解码转发时也可能丢弃能力声明，安全降级。
+  能力缺失或保存失败不会丢弃附件，仍可能显式超限。
+- 官方及自建中转仅透传已有加密业务载荷，无新 relay kind、接口、签名或帧语义，无需服务端更新。
+- 故障半径：证据限于本次预算超限／批次失败；只取消本任务批次，不重建 peer 或共享连接，不重放写入。
+  提交已成功但回执丢失时可能保留可复用文件与引用，下一次按摘要查找，仍由任务生命周期清理。
+- 回归入口：`oversized-attachment-recovery.test.ts` 验证无运行端 DB 的三种请求格式、去重及回滚；
+  `roundtrip.test.ts` 经真实打开、宿主反向 HTTP 与文件工具验证分块保存、路径可读和关闭释放。
+
 Cindy 托管 Skill（2026-11-03）：内置 Skill 与插件带的 Skill 以任务所在电脑为准，用远程供应商与本机体验一致。
 `open.personal` 追加可选数组 `managedSkills: [{ command, dir }]`：任务所在电脑按本机任务同一来源列出托管 Skill，
 用本机停用偏好与伙伴授权过滤（`resolveAllowedManagedSkills`），本机停用的个人 Skill 也不再同步。伙伴授权只对隔离运行的伙伴（`isolatedBotProfile`）生效，与本机引擎一致：V2 伙伴在自己项目里的对话按普通任务带全部启用的托管 Skill，个人 Skill 同样按停用过滤。文件随
@@ -517,3 +554,16 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
     第二期加上「等名额」的排队后，连回不再因为名额被直接拒绝，这种情况会少很多。
     回归见 `remote-agent/__tests__/connectionPool.test.ts`、`execServerProjection.e2e.test.ts`(中继忙闲)，以及真实 Claude Code / Codex / Pi 的
     `claudeHosted` / `codexHosted` / `piHosted.e2e.test.ts`(共用 `poolHarness.ts`)。
+
+## 项目文件记忆（2026-11-13）
+
+`RemoteAgentWireStartOptions.makerMemoryProjectDir?: string` 是任务电脑的普通 Markdown 目录定位，
+发送端对项目内存储发送定位和空 `makerMemoryIndexSnapshot`，不发送完整索引。
+`wire.ts` 两侧共用字符串编解码，host 按已有 `projectText` 路径投影后透传；
+三个 Harness 通过共享 `loadMemoryContext` 按需读文件，不打开运行电脑的记忆库。
+文件访问仍经既有执行器及授权目录，不增加服务器、数据库、MCP 服务或新的 relay 消息。
+
+旧发送端不带该字段，保持原有快照行为；旧执行端丢弃该字段，仍可经原有工具查询任务电脑的记忆，
+但不会获得新的文件优先提示。此兼容退化不丢记录；只有两端均升级才具备新提示行为。
+共享任务的虚拟路径映射复用 runHost 对所有字符串选项的投影。实机跨电脑/跨账号验证须单独记录，
+本次只验证编解码和现有宿主回归，不能据此宣称全矩阵实测。

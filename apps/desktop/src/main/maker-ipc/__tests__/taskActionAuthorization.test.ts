@@ -75,6 +75,42 @@ const input = (): AgentInputQueuedMessage => ({
 });
 
 describe('Host task action authorization', () => {
+  // PR #11126: automatic calls without a live runtime decision must not use
+  // project creation or a profile envelope to bypass exact-call admission.
+  it('admits project access once and refuses effects without a valid decision', async () => {
+    const changes = [
+      { ...call('create_project'), args: { repository_url: 'https://gitlab.com/team/private' } },
+      {
+        ...call('update_project_info'),
+        args: { field: 'profile', value: { directories: [{ path: '/private', access: 'write' }] } },
+      },
+    ];
+    for (const request of changes) {
+      const effects = vi.fn(async () => 'saved');
+      const unattended = fixture();
+      expect(await withToolCallAuthority(unattended.authorize, request, effects)).toMatchObject({
+        isError: true,
+      });
+      expect(effects).not.toHaveBeenCalled();
+      const user = fixture(true);
+      const decision = await user.authorize(request);
+      expect(user.confirm).toHaveBeenCalledWith('companion', request.tool, request.args);
+      if (!decision.ok || !decision.run) throw new Error('missing project admission');
+      await expect(decision.run(effects)).resolves.toBe('saved');
+      await expect(decision.run(effects)).rejects.toThrow('AUTHORIZATION_EXPIRED');
+      expect(effects).toHaveBeenCalledTimes(1);
+    }
+  });
+  // Unit: Guide inspection cannot submit or save; save uses the same exact-call
+  // admission and revocation checks as every other model configuration write.
+  it('keeps Guide reads/validation read-only and admits saves through the task gate', async () => {
+    const h = fixture();
+    for (const action of ['get', 'validate']) expect(await withToolCallAuthority(h.authorize,
+      { ...call('manage_media_guide'), args: { change: { action } } }, async () => 'read')).toBe('read');
+    const write = vi.fn();
+    expect(await withToolCallAuthority(h.authorize, { ...call('manage_media_guide'), args: { change: { action: 'save' } } }, write)).toMatchObject({ isError: true });
+    expect(write).not.toHaveBeenCalled();
+  });
   it('permits observation and notification, but rejects every alternate task-write entrance before effects', async () => {
     const h = fixture();
     const queue: string[] = [];
@@ -689,7 +725,7 @@ describe('Desktop owner input task actions', () => {
         updateWorkerQueuedMessage: unused, cancelWorkerQueuedMessage: unused,
         mergeWorkerQueuedMessages: unused, steerWorkerQueuedMessage: unused,
         moveWorkerQueuedMessage: unused, idleWorker: unused, endTeam: unused,
-        archiveWorker: unused, updateWorker: unused, listAvailableModels: unused,
+        archiveWorker: unused, updateWorker: unused, setWorkerRuntime: unused, listAvailableModels: unused,
         getWorkspaceInfo: unused,
         getWorkerStatus: unused, readWorker: unused,
       },

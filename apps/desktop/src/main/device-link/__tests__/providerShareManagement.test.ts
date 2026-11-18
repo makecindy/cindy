@@ -34,14 +34,17 @@ vi.mock('electron', () => ({
 const api = vi.hoisted(() => ({ createLink: vi.fn(), approve: vi.fn(), reject: vi.fn(), setMember: vi.fn() }));
 const host = vi.hoisted(() => ({
   refresh: vi.fn(), snapshot: vi.fn(), quiet: vi.fn(), active: vi.fn(), decision: vi.fn(), member: vi.fn(),
+  complete: vi.fn(), changed: vi.fn(),
 }));
+const accessMigration = vi.hoisted(() => ({ ids: vi.fn(), keep: vi.fn() }));
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
-const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
+const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberQuery: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
   enqueueDirectCleanup: vi.fn(), listPendingDirectCleanup: vi.fn(), acknowledgeDirectCleanup: vi.fn(),
   actual: null as ReturnType<typeof import('../providerShareUsageStore').createProviderShareUsageStore> | null }));
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
+const reshareList = vi.hoisted(() => vi.fn());
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 const modelAccess = vi.hoisted(() => ({ subscribe: () => () => undefined, read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
@@ -59,13 +62,15 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => state.boundaryPending,
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.owner, ownerGeneration: 1 }),
 }));
-vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
+vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device', getAuthState: () => ({ isAuthenticated: true }) }));
 vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
-vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true, onRemoteProviderAccessChanged: () => () => undefined }));
+vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true,
+  onRemoteProviderAccessChanged: () => () => undefined,
+  sharedProviderIdsForRevert: accessMigration.ids, keepSharedProvidersOpen: accessMigration.keep }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: remember }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
@@ -82,20 +87,36 @@ vi.mock('../../usage/providerPartyUsageStore.js', () => ({
 }));
 vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../providerShareUsageStore.js')>(),
-  getProviderShareUsageStore: () => usageStores.actual ?? ({ history: usageStores.memberHistory, memberTokenSnapshot: usageStores.memberTokenSnapshot,
+  getProviderShareUsageStore: () => usageStores.actual ?? ({ query: usageStores.memberQuery, history: usageStores.memberHistory, memberTokenSnapshot: usageStores.memberTokenSnapshot,
     enqueueDirectCleanup: usageStores.enqueueDirectCleanup,
     listPendingDirectCleanup: usageStores.listPendingDirectCleanup,
     acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
 vi.mock('../settings-store.desktop.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
-vi.mock('../providerShareApi.js', () => ({
-  providerShareApi: api,
-  fetchIdentityCard: identityCard,
-  sha256Hex: (value: string) => value,
-  providerShareLinkFor: () => 'https://cindy.app/s#test-link',
-  providerShareOwnerKey: () => state.owner,
+vi.mock('../agentNetRuntime.js', () => ({
+  agentNetSelectionKey: () => 'test-legacy', isAgentNetActive: () => false, agentNetAllowsLegacy: () => true,
 }));
+vi.mock('../agentNetSharing.js', () => ({ selectedAgentNetSharingRoute: () => null }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://share.example.test' }));
+vi.mock('../../serverApiClient.desktop.js', () => ({
+  serverApiFetch(resource: string, options: { baseUrl(): string; body: unknown }) {
+    options.baseUrl();
+    if (resource === '/api/me/identity-card') return identityCard();
+    if (resource === '/api/device-link/provider-shares/links') return api.createLink(options.body);
+    throw new Error('Unexpected provider share request: ' + resource);
+  },
+}));
+vi.mock('../providerShareApi.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../providerShareApi.js')>();
+  return {
+    ...actual,
+    // Keep creation and its permission checks real. Only substitute the HTTP boundary.
+    providerShareApi: { ...api, createLink: actual.providerShareApi.createLink },
+    providerShareLinkFor: () => 'https://cindy.app/s#test-link',
+    providerShareOwnerKey: () => state.owner,
+  };
+});
 vi.mock('../dispatch.desktop.js', () => ({
   notifyProviderShareCatalogChanged: fastPolicy.publish,
   getControllerDisplayName: vi.fn(), providerShareActiveControllers: vi.fn(),
@@ -103,16 +124,19 @@ vi.mock('../dispatch.desktop.js', () => ({
 }));
 vi.mock('../providerShareReshare.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../providerShareReshare.js')>(),
+  listProviderShareReshares: reshareList,
   pruneProviderShareReshares: vi.fn(async () => undefined),
 }));
 vi.mock('../providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(), stopProviderShareHost: vi.fn(),
-  getProviderShareHostLoadedSnapshot: () => null, getProviderShareHostCompleteSnapshot: () => null, onProviderShareHostChanged: () => () => {},
+  getProviderShareHostLoadedSnapshot: () => null, getProviderShareHostCompleteSnapshot: host.complete,
+  onProviderShareHostChanged: host.changed,
   refreshProviderShareHost: host.refresh, getProviderShareHostSnapshot: host.snapshot,
   clearProviderShareRequestQuiet: vi.fn(),
   providerShareAccessRevision: vi.fn(), providerShareGuestAccess: vi.fn(), ownedProviderShareGuestAccess: vi.fn(),
   providerShareGuestDenial: vi.fn(), ensureProviderSharePeerKnown: vi.fn(),
   quietProviderShareRequests: host.quiet, markProviderShareHostActive: host.active,
+  getProviderShareQuietRequestIds: () => [], getProviderShareWatchedRequests: () => [],
   applyLocalRequestDecision: host.decision, applyLocalMemberChange: host.member,
   providerShareMemberMatcher: (member: { shareId: string; memberId: string }) => (controller: string) => {
     try {
@@ -144,7 +168,7 @@ import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
 import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
-import { revokeProviderShareControllers } from '../dispatch.desktop';
+import { providerShareActiveControllers, revalidateRemoteModelAccess, revokeProviderShareControllers } from '../dispatch.desktop';
 import {
   clearAllProviderShareCatalogs,
   getCachedProviderShareCatalogs,
@@ -153,6 +177,7 @@ import {
 
 const createLink: ProviderShareManagementCommand = { action: 'create-link', providerId: 'anthropic' };
 const LINK_ID = 'a'.repeat(64);
+const issuedLink = { invitation: 'Q'.repeat(43), shareId: 'share-id', expiresAt: '2026-11-18T10:00:00Z' };
 const mutations: ProviderShareManagementCommand[] = [
   { action: 'approve', requestId: 'r1' },
   { action: 'reject', requestId: 'r1' },
@@ -185,12 +210,17 @@ beforeEach(() => {
   received.ready = true;
   clearAllProviderShareCatalogs();
   identityCard.mockResolvedValue({ card: 'test-identity-card' });
-  api.createLink.mockResolvedValue({ invitation: 'test-invitation', linkId: LINK_ID });
+  api.createLink.mockResolvedValue({ ...issuedLink, linkId: LINK_ID });
   api.approve.mockResolvedValue({ ok: true });
   api.reject.mockResolvedValue({ ok: true });
   api.setMember.mockResolvedValue({ status: 'removed' });
   host.refresh.mockResolvedValue(undefined);
+  host.complete.mockReturnValue(null);
+  host.changed.mockReturnValue(() => undefined);
   memberNotes.read.mockReturnValue({});
+  reshareList.mockReturnValue([]);
+  usageStores.memberQuery.mockReturnValue([]);
+  vi.mocked(providerShareActiveControllers).mockReturnValue([]);
   memberNotes.set.mockResolvedValue(undefined);
   modelAccess.read.mockReturnValue({ models: null, providerModels: null });
   modelAccess.set.mockImplementation(async (_provider, _models, _member, assertCurrent) => { assertCurrent(); });
@@ -212,6 +242,39 @@ beforeEach(() => {
 });
 
 afterEach(() => { setBroadcastTapListener(null); stopProviderShareRuntime(); });
+
+// #10398 review / unit: content deduplication must not strand the one-time access
+// migration. Existing startup tests always had an incomplete snapshot. Exercise
+// the actual runtime subscription across unavailable local input and a failed write.
+it('retries unfinished access migration on unchanged refreshes and stops after success', async () => {
+  stopProviderShareRuntime();
+  const refreshed = new Set<() => void>();
+  host.changed.mockImplementation((listener, options) => {
+    if (options?.refreshed) refreshed.add(listener);
+    return () => refreshed.delete(listener);
+  });
+  const refresh = () => { for (const listener of refreshed) listener(); };
+  startProviderShareRuntime(vi.fn());
+  expect(accessMigration.keep).not.toHaveBeenCalled();
+  host.complete.mockReturnValue([{ providerId: 'openai' }]);
+  accessMigration.ids.mockReturnValue(null); // Legacy account pool cannot be read yet.
+  refresh();
+  expect(accessMigration.keep).not.toHaveBeenCalled();
+  const ids = new Set(['openai', 'legacy-account']);
+  accessMigration.ids.mockReturnValue(ids);
+  accessMigration.keep.mockRejectedValueOnce(new Error('synthetic unavailable'));
+  refresh(); refresh();
+  expect(accessMigration.keep).toHaveBeenCalledExactlyOnceWith(ids);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  accessMigration.keep.mockResolvedValue(undefined);
+  refresh();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  refresh(); refresh();
+  expect(accessMigration.keep).toHaveBeenCalledTimes(2);
+  expect(accessMigration.ids).toHaveBeenCalledTimes(3);
+  stopProviderShareRuntime();
+  expect(refreshed.size).toBe(0);
+});
 
 // #9437 / unit: real share entry points must not show the first hidden data host.
 // Earlier management coverage always returned no BrowserWindows. The shared
@@ -669,6 +732,37 @@ describe('shared provider classification', () => {
   });
 });
 
+// Unit / owner management: owned must support background reads without usage or
+// renewing the fast-poll window. Existing classification coverage only exercises
+// shared-provider-ids. Minimal failure input is one share and includeUsage:false.
+describe('owned without usage', () => {
+  it.each(['local', 'same-account'] as const)('echoes the read scope without usage or polling (%s)', async entry => {
+    const command = parseProviderShareCommand({ action: 'owned', range: 'all', includeUsage: false });
+    expect(command).toEqual({ action: 'owned', range: 'all', includeUsage: false });
+    const result = entry === 'local' ? await (async () => {
+      const handle = vi.spyOn(ipcMain, 'handle');
+      try {
+        registerProviderShareIpc();
+        return await handle.mock.calls.find(([channel]) => channel === PROVIDER_SHARE_IPC.COMMAND)![1]({} as Electron.IpcMainInvokeEvent, command);
+      } finally { handle.mockRestore(); }
+    })() : await executeProviderShareManagementCommand(command as ProviderShareManagementCommand);
+    expect(result).toMatchObject({ ready: true, includeUsage: false, shares: [{ members: [{ memberId: 'm1' }] }] });
+    expect(usageStores.memberQuery).not.toHaveBeenCalled();
+    expect(usageStores.priceOverrides).not.toHaveBeenCalled();
+    expect(usageStores.pricing).not.toHaveBeenCalled();
+    expect(host.active).not.toHaveBeenCalled();
+  });
+  it('keeps the legacy owned read and polling when no scope is requested', async () => {
+    expect(parseProviderShareCommand({ action: 'owned', range: 'all' })).toEqual({ action: 'owned', range: 'all' });
+    await expect(executeProviderShareManagementCommand({ action: 'owned', range: 'all' })).resolves.toMatchObject({ ready: true });
+    expect(usageStores.memberQuery).toHaveBeenCalledTimes(1);
+    expect(host.active).toHaveBeenCalledExactlyOnceWith(60_000);
+  });
+  it.each(['false', null, 0])('rejects malformed includeUsage %j', includeUsage => {
+    expect(() => parseProviderShareCommand({ action: 'owned', range: 'all', includeUsage })).toThrow('INVALID_PARAMS');
+  });
+});
+
 describe('provider share usage history wire budget', () => {
   it('caps the global row count even when the newest day alone has more rows', () => {
     const trimmed = trimProviderUsageHistory(historyWithRows(Array.from({ length: 5_001 }, (_, index) => historyRow(index))));
@@ -767,6 +861,28 @@ describe('member note management', () => {
 });
 
 describe('same-account share management during account transitions', () => {
+  // Unit, plugin host-tools invocation lifetime: the UI tests covered owner
+  // changes, but not a plugin disabled while refreshing before its member write.
+  it('rechecks the calling installation after refresh and before changing a member', async () => {
+    let installed = true;
+    host.refresh.mockImplementationOnce(async () => { installed = false; });
+    await expect(executeProviderShareManagementCommand({ action: 'set-member', memberId: 'm1', status: 'pause' }, () => {
+      if (!installed) throw new Error('PERMISSION_DENIED');
+    })).rejects.toThrow('PERMISSION_DENIED');
+    expect(api.setMember).not.toHaveBeenCalled();
+    expect(host.member).not.toHaveBeenCalled();
+  });
+  // A committed pause must finish owner-local revocation even if its plugin
+  // stops while REST is in flight. Pre-write revocation is covered above.
+  it('applies a committed pause before refusing a result to the stopped caller', async () => {
+    let installed = true;
+    api.setMember.mockImplementationOnce(async () => { installed = false; return { status: 'paused' }; });
+    await expect(executeProviderShareManagementCommand({ action: 'set-member', memberId: 'm1', status: 'pause' }, () => {
+      if (!installed) throw new Error('PERMISSION_DENIED');
+    })).rejects.toThrow('PERMISSION_DENIED');
+    expect(host.member).toHaveBeenCalledExactlyOnceWith('m1', 'paused');
+    expect(host.refresh).toHaveBeenLastCalledWith('member');
+  });
   it.each([
     createLink, ...mutations,
     { action: 'get-run-limits' },
@@ -797,8 +913,11 @@ describe('same-account share management during account transitions', () => {
 
   it.each(['provider lookup', 'identity card', 'link response'])('stops link creation when teardown begins during %s', async (stage) => {
     if (stage === 'provider lookup') listProviders.mockImplementationOnce(async () => { state.boundaryPending = true; return []; });
-    if (stage === 'identity card') identityCard.mockImplementationOnce(async () => { state.boundaryPending = true; return {}; });
-    if (stage === 'link response') api.createLink.mockImplementationOnce(async () => { state.boundaryPending = true; return {}; });
+    if (stage === 'identity card') identityCard.mockImplementationOnce(async () => { state.boundaryPending = true; return { card: 'test-identity-card' }; });
+    if (stage === 'link response') api.createLink.mockImplementationOnce(async () => {
+      state.boundaryPending = true;
+      return { ...issuedLink, linkId: LINK_ID };
+    });
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(identityCard).toHaveBeenCalledTimes(stage === 'provider lookup' ? 0 : 1);
     expect(api.createLink).toHaveBeenCalledTimes(stage === 'link response' ? 1 : 0);
@@ -820,7 +939,10 @@ describe('same-account share management during account transitions', () => {
   });
 
   it('also discards a link response after a committed account switch', async () => {
-    api.createLink.mockImplementationOnce(async () => { state.owner = 'owner-b'; return {}; });
+    api.createLink.mockImplementationOnce(async () => {
+      state.owner = 'owner-b';
+      return { ...issuedLink, linkId: LINK_ID };
+    });
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(host.quiet).not.toHaveBeenCalled();
     expect(remember).not.toHaveBeenCalled();
@@ -850,12 +972,12 @@ describe('same-account share management during account transitions', () => {
     listProviders.mockResolvedValue([{ id: 'xd', name: 'Cindy AI · Example Studio', connected: true, agents: ['codex'] }]);
     await executeProviderShareManagementCommand({ action: 'create-link', providerId: 'xd' });
     expect(api.createLink).toHaveBeenCalledExactlyOnceWith({
-      providerId: 'xd', providerLabel: 'Cindy AI', deviceName: 'Cindy', identityCard: { card: 'test-identity-card' },
+      providerId: 'xd', providerLabel: 'Cindy AI', deviceName: 'Cindy', identityCard: 'test-identity-card',
     });
   });
 
   it('rejects an old server before exposing or registering a remote link', async () => {
-    api.createLink.mockResolvedValueOnce({ invitation: 'test-invitation' });
+    api.createLink.mockResolvedValueOnce(issuedLink);
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
     expect(host.quiet).not.toHaveBeenCalled();
     expect(host.active).not.toHaveBeenCalled();
@@ -863,7 +985,7 @@ describe('same-account share management during account transitions', () => {
   });
 
   it('still creates local share links with an old server', async () => {
-    api.createLink.mockResolvedValueOnce({ invitation: 'test-invitation' });
+    api.createLink.mockResolvedValueOnce(issuedLink);
     const handle = vi.spyOn(ipcMain, 'handle');
     try {
       registerProviderShareIpc();
@@ -892,10 +1014,20 @@ describe('remote model access management', () => {
     ] } }]);
     host.snapshot.mockReturnValue([{ providerId: 'anthropic', requests: [], members: [{ memberId: 'm1' }] }]);
   });
+  it('finishes persisted model revocation before refusing the stopped caller result', async () => {
+    let installed = true;
+    modelAccess.set.mockImplementationOnce(async (_provider, _models, _member, before, _budget, after) => {
+      before(); installed = false; after?.();
+    });
+    await expect(executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', memberId: 'm1', models: [] }, () => {
+      if (!installed) throw new Error('PERMISSION_DENIED');
+    })).rejects.toThrow('PERMISSION_DENIED');
+    expect(revalidateRemoteModelAccess).toHaveBeenCalledTimes(1);
+  });
   it.each([undefined, 'm1'])('saves remote model permissions in the managed owner scope: member=%s', async (memberId) => {
     const command = parseProviderShareCommand({ action: 'set-model-access', providerId: 'anthropic', memberId, models: ['small'] }) as ProviderShareManagementCommand;
     const result = await executeProviderShareManagementCommand(command);
-    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function), undefined);
+    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], memberId, expect.any(Function), undefined, expect.any(Function));
     expect(result).toMatchObject({ version: 1, availableModels: [{ id: 'small', name: 'Small' }, { id: 'large', name: 'Large' }] });
     expect(api.setMember).not.toHaveBeenCalled();
   });

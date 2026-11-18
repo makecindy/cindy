@@ -1,3 +1,4 @@
+import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 /**
  * 插件安装／更新确认框（docs/dev-rules/plugin-security-and-authoring.md §3.1）。
  *
@@ -186,6 +187,7 @@ export function GhostInstallConsentHost() {
 
   useEffect(() => {
     const aborts = new Map<string, AbortController>();
+    let disconnect: (() => void) | undefined;
     const unsubscribeDismissed = window.electronAPI.ghosts.onInstallConsentDismissed(
       (payload) => {
         if (payload && typeof payload.requestId === 'string') {
@@ -199,6 +201,11 @@ export function GhostInstallConsentHost() {
         const request = payload;
         const abort = new AbortController();
         aborts.set(request.requestId, abort);
+        if (window.electronAPI.hostConnection?.client === 'browser') {
+          disconnect ??= window.electronAPI.hostConnection.onStateChanged(state => {
+            if (state.status !== 'connected') for (const pendingAbort of aborts.values()) pendingAbort.abort();
+          });
+        }
         void (async () => {
           let confirmed = false;
           try {
@@ -227,8 +234,8 @@ export function GhostInstallConsentHost() {
                         source,
                       }),
                 content: <>
-                  {(!request.trust || request.trust === 'unverified') && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
-                    <p className="mb-3 text-13 font-medium text-[var(--confirm-title)]">{t('mcpApps.pluginTrust.unverified')}</p>}
+                  {pluginSourceWarningKey(request.installationSource) && (facts.kind === 'install' ? facts.permissions : facts.added).some(item => item.key === 'ui:pages') &&
+                    <p className="mb-3 text-13 font-medium text-[var(--warning-fg)]">{t(pluginSourceWarningKey(request.installationSource)!)}</p>}
                   {request.target && <div className="mb-3 space-y-2 text-13 leading-5 text-[var(--confirm-desc)]">
                     <p>{t('settings.ghosts.installConsent.targetIdentity', { name: request.target.namespace === 'local' ? t('settings.ghosts.installConsent.localTarget') : request.target.namespace || t('settings.ghosts.installConsent.personalTarget') })}</p>
                     {request.target.organizationIdentityUnavailable && <p>{t('settings.ghosts.installConsent.localOidcUnavailable')}</p>}
@@ -250,8 +257,10 @@ export function GhostInstallConsentHost() {
               },
               abort.signal,
             );
+            confirmed = confirmed && !abort.signal.aborted;
           } finally {
             aborts.delete(request.requestId);
+            if (!aborts.size) { disconnect?.(); disconnect = undefined; }
             try {
               await window.electronAPI.ghosts.resolveInstallConsent(request.requestId, confirmed);
             } catch {
@@ -264,6 +273,8 @@ export function GhostInstallConsentHost() {
     return () => {
       unsubscribeRequest();
       unsubscribeDismissed();
+      disconnect?.();
+      disconnect = undefined;
       for (const abort of aborts.values()) abort.abort();
       aborts.clear();
     };

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import sharp from 'sharp';
 
 const data = 'window.__uiPage.ctx.data';
 const profiles = ['Cindy', 'Writer', 'Researcher', 'Designer', 'Translator', 'Reviewer'].map((name, index) => ({
@@ -12,12 +13,12 @@ export default {
   name: 'teammates-section',
   entry: './teammates-fixture.tsx',
   viewport: { width: 800, height: 600 },
-  real: 'TeammatesSection rows, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
-  notCovered: 'Roster loading, cloud/device connections, create/delete menus and message delivery',
+  real: 'TeammatesSection rows, PinnedSection display sorting and menu, single/multi-column SortableJS drag controls, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
+  notCovered: 'Roster loading, cloud/device connections, create/delete menus, message delivery, pinned drag persistence and collapsed RailNav',
   stubs: {
     'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
-    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{});` },
+    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{}); export const useBotProfilesLoadState=()=>${data}.loadState||'ready'; export const hasLoadedBotProfiles=()=>!${data}.loadState||${data}.loadState==='ready';` },
     'src/renderer/features/bots/useRemoteBots': { partial: `export const useRemoteBots=()=>${data}.remoteBots;` },
     'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
@@ -27,13 +28,38 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    ...Object.fromEntries(['text', 'list', 'card', 'card-columns'].map(mode => [`pinned-sort-drag-${mode}`, {
+      about: 'Recent-activity pins cannot be reordered; switching back restores the manual order and enables dragging',
+      storage: { 'sidebar.cardMode': mode === 'card-columns' ? 'card' : mode },
+      data: { showPinned: true, profiles: [], remoteBots: [], route: '/bots', sidebarWidth: mode === 'card-columns' ? 440 : mode === 'card' ? 240 : 260 },
+    }])),
+    'startup-read-error': {
+      about: 'A failed roster read offers explicit recovery instead of an empty-roster create invitation; presentation fixture only',
+      data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'error' },
+    },
+    'pinned-sort': {
+      about: 'Pinned display sorting changes task order and restores the manual order without changing view style',
+      data: { showPinned: true, profiles: [], remoteBots: [], route: '/bots' },
+    },
     'collapse-attention': {
-      about: 'Independent icon/list choice; collapsed sections keep unread and pending feedback only',
+      about: 'Independent icon/list choice; collapsed avatars opt-in preserves the default attention-only behavior',
       data: { showPinned: true, profiles: [
         { ...profiles[0], lastMessageAt: Date.now() - 180000, name: '日程助手', avatar: 'cindy://avatar/preset/cindy', lastMessagePreview: '今天的安排已同步' },
         { ...profiles[1], lastMessageAt: Date.now() - 120000, name: '写作伙伴', avatar: 'cindy://avatar/preset/dash', lastMessageRole: 'assistant', lastMessagePreview: '周报已整理好，请查看' },
         { ...profiles[2], lastMessageAt: Date.now() - 60000, name: '研究伙伴', avatar: 'cindy://avatar/preset/lizi', lastMessagePreview: '请选择接下来要研究的方向' },
       ], unread: { 'mate-2': 1 }, activities: [['chat-2', { sessionId: 'chat-2', phase: 'needs-interaction' }]], remoteBots: [], route: '/bots' },
+    },
+    'group-avatar-hover': {
+      about: 'Two-to-five-member artwork retains transparent gaps through hover, selection and compact mode',
+      data: { profiles: [], remoteBots: [], route: '/bots', groups: [2, 3, 4, 5].map(count => ({
+        id: `cutout-${count}`, name: count === 4 ? 'Agent群聊' : `Group ${count}`, replyMode: 'all', speakingMode: 'auto',
+        members: ['cindy', 'dash', 'lizi', '', 'dash'].slice(0, count).map((preset, index) => ({
+          botId: `member-${index}`, name: preset || '用户', avatar: preset ? `cindy://avatar/preset/${preset}` : '', avatarColor: 'violet', status: 'active',
+        })),
+        speakingBotIds: [], organizerBotId: 'member-0', projectDir: null,
+        lastMessage: { authorKind: 'user', isSelf: false, authorName: 'Alex', preview: '看看这份设计的效果', createdAt: Date.now() - 60_000 },
+        planningBotId: null, openPlan: null, createdAt: count, updatedAt: count,
+      })) },
     },
     'remote-running-snapshot': {
       about: 'Standalone remote running snapshot keeps the processing subtitle without an expanded orange dot',
@@ -208,6 +234,76 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case.startsWith('pinned-sort-drag-')) {
+      const subject = page.locator('[data-pinned-reorder-count]');
+      if (ui.case === 'pinned-sort-drag-card') assert.equal(await subject.locator('[data-card-id]').count(), 0, 'single-column cards use SortableList');
+      if (ui.case === 'pinned-sort-drag-card-columns') assert.equal(await subject.locator('[data-col]').count(), 3, 'wide cards use three sortable columns');
+      const row = id => subject.locator(`[data-sortable-id="${id}"], [data-card-id="${id}"]`);
+      const order = () => subject.locator('[data-sortable-id], [data-card-id]').evaluateAll(rows => rows
+        .map((row, index) => ({ id: row.getAttribute('data-sortable-id') ?? row.getAttribute('data-card-id'), rank: Number(row.getAttribute('data-sidebar-row-order') ?? index) }))
+        .sort((a, b) => a.rank - b.rank).map(row => row.id));
+      const chooseSort = async key => {
+        await subject.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true }).hover();
+        await subject.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+        await page.getByRole('menuitem', { name: await ui.t(key), exact: true }).click();
+      };
+      await chooseSort('ccAgent.sidebar.filterSortBy.activity');
+      await row('pinned-2').dragTo(row('pinned-0'));
+      assert.deepEqual(await order(), ['pinned-2', 'pinned-1', 'pinned-0']);
+      assert.equal(await subject.getAttribute('data-pinned-reorder-count'), '0');
+      await ui.capture('recent-drag-ignored');
+      await chooseSort('ccAgent.sidebar.filterSortBy.manual');
+      assert.deepEqual(await order(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await row('pinned-0').dragTo(row('pinned-2'));
+      assert.notEqual(await subject.getAttribute('data-pinned-reorder-count'), '0', 'manual mode still permits dragging');
+      assert.notDeepEqual(await order(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await ui.capture('manual-drag-enabled');
+      return;
+    }
+    if (ui.case === 'startup-read-error') {
+      const alert = page.getByRole('alert');
+      await alert.getByText(await ui.t('bots.rosterLoadFailed'), { exact: true }).waitFor();
+      const retry = alert.getByRole('button', { name: await ui.t('bots.rosterReload'), exact: true });
+      await retry.waitFor({ state: 'visible' });
+      const section = page.locator('[data-sidebar-section="teammates"]');
+      const header = section.getByRole('button', { name: await ui.t('bots.title'), exact: true });
+      const changeView = async (key) => {
+        await header.hover();
+        await section.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+        await page.getByRole('menuitem', { name: await ui.t(key), exact: true }).click();
+      };
+      await changeView('bots.list.viewIcons');
+      await retry.waitFor({ state: 'visible' });
+      await ui.capture('icons-error');
+      await header.click();
+      await retry.waitFor({ state: 'visible' });
+      await changeView('ccAgent.sidebar.viewStyleListWide');
+      await retry.waitFor({ state: 'visible' });
+      return;
+    }
+    if (ui.case === 'pinned-sort') {
+      const pinned = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true });
+      const section = pinned.locator('xpath=../../..');
+      const openMenu = async () => {
+        await pinned.hover();
+        await section.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+      };
+      const titles = () => page.locator('[data-sortable-id]')
+        .evaluateAll(rows => rows.map(row => row.getAttribute('data-sortable-id')));
+      assert.deepEqual(await titles(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await openMenu();
+      await ui.capture('sorting-menu');
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterSortBy.activity'), exact: true }).click();
+      assert.deepEqual(await titles(), ['pinned-2', 'pinned-1', 'pinned-0']);
+      assert.equal(await page.evaluate(() => localStorage.getItem('cc-agent.sidebar.pinnedSortBy')), 'recency');
+      await ui.capture('recent-first');
+      await openMenu();
+      await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.filterSortBy.manual'), exact: true }).click();
+      assert.deepEqual(await titles(), ['pinned-0', 'pinned-1', 'pinned-2']);
+      await ui.capture('manual-restored');
+      await openMenu();
+      return;
+    }
     const showIcons = async () => {
       const section = page.locator('[data-sidebar-section="teammates"]');
       await section.getByRole('button', { name: await ui.t('bots.title'), exact: true }).hover();
@@ -225,11 +321,128 @@ export default {
       assert.equal(await page.getByText('写作伙伴', { exact: true }).count(), 1);
       assert.equal(await page.getByText('研究伙伴', { exact: true }).count(), 1);
       await ui.capture('collapsed-list');
+      const openDisplayMenu = async () => {
+        await header.hover();
+        await page.locator('[data-sidebar-section="teammates"]').getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+      };
+      await openDisplayMenu();
+      const avatarsOption = page.getByRole('menuitemcheckbox', { name: await ui.t('bots.list.showCollapsedTeammateAvatars'), exact: true });
+      assert.equal(await avatarsOption.getAttribute('aria-checked'), 'false');
+      await ui.capture('collapsed-avatars-menu-off');
+      await avatarsOption.click();
+      assert.equal(await header.getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.getByRole('button', { name: '日程助手', exact: true }).count(), 1);
+      await page.getByText('写作伙伴', { exact: true }).waitFor({ state: 'hidden' });
+      await ui.capture('collapsed-all-avatars');
+      await openDisplayMenu();
+      assert.equal(await avatarsOption.getAttribute('aria-checked'), 'true');
+      await ui.capture('collapsed-avatars-menu-on');
+      await avatarsOption.click();
+      assert.equal(await page.getByRole('button', { name: '日程助手', exact: true }).count(), 0);
+      await page.getByText('写作伙伴', { exact: true }).waitFor({ state: 'visible' });
+      assert.equal(await page.getByText('写作伙伴', { exact: true }).count(), 1);
       await showIcons();
       assert.equal(await header.getAttribute('aria-expanded'), 'false');
       await ui.capture('collapsed-icons');
       await header.click();
       await ui.capture('expanded-icons');
+      // Leave the published final capture on the new option and its avatar strip.
+      await header.click();
+      await openDisplayMenu();
+      await avatarsOption.click();
+      await openDisplayMenu();
+      return;
+    }
+    if (ui.case === 'group-avatar-hover') {
+      // Regression from the reported hover screenshots: translucent hover paint was
+      // reused as a separating border. jsdom's member-order tests cannot see pixels.
+      // UI tier: real rows, minimum 2 overlapping avatars, sample the foreground rim
+      // against the real row backdrop, including during its color transition.
+      await page.locator('[data-bot-group-id] img').first().waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-bot-group-id] img')].every(image => image.complete && image.naturalWidth > 0));
+      const assertGap = async (row, backdrop = row) => {
+        const front = row.locator(':scope > span').first().locator(':scope > span > span').last();
+        const [bounds, rim] = await Promise.all([backdrop.boundingBox(), front.boundingBox()]);
+        assert.ok(bounds && rim);
+        const { data, info } = await sharp(await page.screenshot({ scale: 'css' })).raw().toBuffer({ resolveWithObject: true });
+        const pixel = (x, y) => {
+          const offset = (Math.floor(y) * info.width + Math.floor(x)) * info.channels;
+          return Array.from(data.subarray(offset, offset + 3));
+        };
+        const gap = pixel(rim.x + 1, rim.y + rim.height / 2);
+        const background = pixel(bounds.x + 4, rim.y + rim.height / 2);
+        assert.ok(gap.every((value, channel) => Math.abs(value - background[channel]) <= 2), `transparent gap must expose row backdrop: ${gap} vs ${background}`);
+      };
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      for (const count of [4, 2, 3, 5]) {
+        const row = page.locator(`[data-bot-group-id="cutout-${count}"]`);
+        await page.mouse.move(700, 500);
+        const geometry = await row.locator('img').evaluateAll(nodes => nodes.map(node => {
+          const { x, y, width, height } = node.getBoundingClientRect(); return { x, y, width, height };
+        }));
+        if (count === 4) await ui.capture('four-idle', { locator: row });
+        if (count === 4) await row.evaluate(node => {
+          node.addEventListener('transitionrun', () => {
+            for (const animation of node.getAnimations()) {
+              animation.pause();
+              animation.currentTime = Number(animation.effect.getComputedTiming().duration) / 2;
+            }
+          }, { once: true });
+        });
+        await row.hover();
+        if (count === 4) {
+          await page.waitForFunction(() => document.querySelector('[data-bot-group-id="cutout-4"]')?.getAnimations().some(animation => animation.playState === 'paused'), null, { timeout: 2000 });
+          await ui.capture('four-hover-midway', { locator: row });
+          await assertGap(row);
+          await row.evaluate(node => node.getAnimations().forEach(animation => animation.finish()));
+        }
+        await ui.capture(`hover-${count}`, { locator: row });
+        await assertGap(row);
+        await row.evaluate(async node => { await Promise.all(node.getAnimations().map(animation => animation.finished)); });
+        await assertGap(row);
+        assert.deepEqual(await row.locator('img').evaluateAll(nodes => nodes.map(node => {
+          const { x, y, width, height } = node.getBoundingClientRect(); return { x, y, width, height };
+        })), geometry, 'hover must keep every portrait in place');
+        await row.click();
+        await row.evaluate(async node => { await Promise.all(node.getAnimations().map(animation => animation.finished)); });
+        await assertGap(row);
+        if (count === 4) await ui.capture('four-selected', { locator: row });
+      }
+      await showIcons();
+      await page.locator('[data-bot-group-id]').first().waitFor({ state: 'hidden' });
+      const section = page.locator('[data-sidebar-section="teammates"]');
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-sidebar-section="teammates"] img')].every(image => image.complete && image.naturalWidth > 0));
+      // The compact two-member layout has its own dimensions. Screenshots and
+      // expanded checks alone miss a misplaced compact cutout or enlarged portrait.
+      // Reuse the real-row pixel assertion for each composition in this UI tier.
+      for (const [count, diameter] of [[2, 26], [3, 17.6], [4, 15.8], [5, 14]]) {
+        const name = count === 4 ? 'Agent群聊' : `Group ${count}`;
+        const button = section.getByRole('button', { name, exact: true });
+        const frame = button.locator(':scope > span > span').first();
+        const portraits = frame.locator(':scope > span > span[aria-hidden]');
+        const geometry = () => portraits.evaluateAll(nodes => nodes.map(node => {
+          const { x, y, width, height } = node.getBoundingClientRect(); return { x, y, width, height };
+        }));
+        await page.mouse.move(700, 500);
+        const bounds = await frame.boundingBox();
+        assert.ok(bounds && bounds.width === 36 && bounds.height === 36, 'compact composition stays in its 36px frame');
+        const idle = await geometry();
+        assert.equal(idle.length, count, 'compact composition retains every member');
+        for (const portrait of idle) {
+          assert.ok(Math.abs(portrait.width - diameter) < 0.05 && Math.abs(portrait.height - diameter) < 0.05, `compact ${count}-member portraits retain their approved size`);
+          assert.ok(portrait.x >= bounds.x && portrait.y >= bounds.y && portrait.x + portrait.width <= bounds.x + bounds.width && portrait.y + portrait.height <= bounds.y + bounds.height, 'compact portraits fit inside their frame');
+        }
+        await assertGap(button, section);
+        await button.hover();
+        await assertGap(button, section);
+        assert.deepEqual(await geometry(), idle, 'compact hover must keep every portrait in place');
+        await button.click();
+        await button.locator('[data-teammate-selected]').waitFor();
+        assert.equal(await button.getAttribute('aria-current'), 'page');
+        await assertGap(button, section);
+        assert.deepEqual(await geometry(), idle, 'compact selection must keep every portrait in place');
+      }
+      await ui.capture('compact');
       return;
     }
     // Time and status coexist in the existing trailing column, without overlap.

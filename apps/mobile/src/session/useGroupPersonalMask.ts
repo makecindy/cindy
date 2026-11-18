@@ -14,7 +14,7 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
   const key = `${api.owner}:${deviceId}:${groupId}`;
   const active = useRef(key); active.current = key;
   const mounted = useRef(true), busy = useRef(false), pending = useRef(false), version = useRef(0), authority = useRef(0);
-  const deps = useRef({ act, enabled }); deps.current = { act, enabled };
+  const deps = useRef({ act, enabled, change }); deps.current = { act, enabled, change };
   const queue = useRef(Promise.resolve()), failed = useRef(new Map<string, () => Promise<void>>());
   const operations = useRef(new Map<string, () => Promise<void>>());
   const [data, setData] = useState<{ key: string; state: ChatMaskState | null; mentions: ChatMaskMention[] }>({ key, state: null, mentions: [] });
@@ -69,14 +69,22 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
     setError(false); setSaving(false); setConnectionLost(false);
     if (!enabled) { stateRef.current = null; setData({ key, state: null, mentions: [] }); }
   }, [key, enabled]);
+  // What the last read was started for. Opening the screen reads once; afterwards only a
+  // change of the group itself asks again (plus the interval and a return to the foreground).
+  const readFor = useRef<{ reload: typeof reload; change: unknown } | null>(null);
   useEffect(() => {
-    if (!enabled || !focused) return;
+    if (!enabled || !focused) { readFor.current = null; return; }
+    readFor.current = { reload, change: deps.current.change };
     void reload();
     const timer = setInterval(() => void reload(), 15000);
     const subscription = AppState.addEventListener('change', value => { if (value === 'active') void reload(); });
     return () => { clearInterval(timer); subscription.remove(); };
   }, [enabled, focused, reload]);
-  useEffect(() => { if (focused) void reload(); }, [change, focused, reload]);
+  useEffect(() => {
+    if (!focused || (readFor.current?.reload === reload && readFor.current.change === change)) return;
+    readFor.current = { reload, change };
+    void reload();
+  }, [change, focused, reload]);
   const run = useCallback((retryKey: string, work: (valid: () => boolean) => Promise<void>) => {
     const generation = authority.current;
     const valid = () => current() && generation === authority.current;

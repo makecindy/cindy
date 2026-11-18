@@ -94,3 +94,17 @@ it('keeps a valid folder usable when the optional Windows drive retry fails', as
   expect(picker.error).toBeNull();
   expect(picker.loading).toBe(false);
 });
+
+it('opens directories directly and resolves a typed path on the selected host', async () => {
+  const target = maker(vi.fn().mockImplementation(async (path: string) => result(path === '~' ? '/projects' : path)));
+  await act(async () => root.render(<Probe source={target} />));
+  await act(async () => { picker.openDirectoryPicker(); await flush(); });
+  expect(picker.page).toBe('directory');
+  expect(sheet).toHaveBeenLastCalledWith(false);
+  await act(async () => { await picker.load('/projects/typed'); });
+  expect(target.fs.listDir).toHaveBeenLastCalledWith('/projects/typed');
+  act(() => picker.choose(picker.path));
+  expect(choose).toHaveBeenCalledWith('/projects/typed');
+  act(() => picker.closed());
+  expect(sheet).toHaveBeenLastCalledWith(true);
+});

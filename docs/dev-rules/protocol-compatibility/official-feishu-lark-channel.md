@@ -13,6 +13,13 @@
   `pending` 仍要求 `connectUrl`（飞书为网页授权地址），关联码只是网页授权不可用时的兜底。
 - `query.request` 新增可选 `recipient = { scopeId, principalId }`：多个组织共用的服务（官方飞书）发出的查询
   代表哪个应用的哪个账号；带上时两项都须是非空字符串。其它服务不发，旧桌面端忽略。
+- `query.response` 的 `agents[].models[]` 新增可选 `provider`（`string | null`，2026-11-17）：提供该模型的
+  供应商展示名，飞书 `/model` 选择卡写成「供应商 / 模型」，用来区分不同供应商的同名模型。只用于展示：
+  选中后回传的仍只有模型 id。桌面端取未指定来源时默认会走的那一家
+  （`effectiveSourceIdForModel(providers, null, model, agent)`），解析不出时不带这个键。旧桌面端不发，
+  服务端只显示模型名、同名的继续按 `group` 加后缀；旧服务端的校验不拒绝未知字段，新桌面端先发不受影响。
+  其它 IM 服务不读这个字段。实现见 `apps/desktop/src/main/hook-control/modelProviderName.ts`，回归见同目录
+  `__tests__/queryResponder.test.ts` 与协议包的 `protocol-v2.test.ts`。
 - 客户端端点清单新增 `feishuHookWsUrl`（`wss:`），登记为跨区域端点：服务只在海外部署一套，
   两份区域清单都指向 `cindy.app`。服务部署并核验后，在两份正式清单同时填写并发布该字段；
   缺省或清空后，重启读取新清单会停止连接；未开启的用户不显示入口，已开启的用户保留卡片并提示

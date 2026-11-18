@@ -331,6 +331,7 @@
       "renameDevice": "Renommer {{label}}",
       "project": "Projet {{title}}",
       "dialogue": "Conversation",
+      "automation": "Automatisations",
       "openAutomationLatest": "Ouvrir la dernière session de l'automatisation {{title}}",
       "automationTask": "Automatisation {{title}}",
       "openConversation": "Ouvrir la session {{title}}",
@@ -356,7 +357,9 @@
     },
     "menu": {
       "groupDialogue": "Conversation",
+      "groupAutomation": "Automatisation",
       "dialogueFolder": "Conversation",
+      "automationFolder": "Automatisations",
       "search": "Rechercher",
       "settings": "Paramètres",
       "remoteSettings": "Paramètres de connexion à distance",
@@ -426,7 +429,34 @@
       "filterTeammatesHeading": "Amis",
       "filterAnySource": "Toutes les sources",
       "filterHideAllTeammates": "Tout masquer",
-      "filterSelectedTeammates": "{{count}} sélectionné(s)"
+      "filterSelectedTeammates": "{{count}} sélectionné(s)",
+      "inbox": {
+        "inbox": "À traiter",
+        "working": "En cours",
+        "snoozed": "Reportées",
+        "archived": "Traitées",
+        "snooze": "Reporter la tâche",
+        "complete": "Terminé",
+        "wake": "Réafficher maintenant",
+        "restore": "Restaurer la tâche",
+        "process": "Marquer comme traitée (archiver)",
+        "empty": "La boîte de réception est vide",
+        "snoozeFailed": "Impossible de conserver l’heure du report. Vérifiez la connexion et mettez à jour l’ordinateur hébergeant cette tâche.",
+        "hours": "Dans {{count}} heures",
+        "hours_one": "Dans {{count}} heure",
+        "hours_many": "Dans {{count}} heures",
+        "hours_other": "Dans {{count}} heures",
+        "thisEvening": "Ce soir",
+        "tomorrow": "Demain",
+        "nextWeek": "La semaine prochaine",
+        "custom": "Personnaliser…",
+        "invalidTime": "Choisissez une date et une heure futures dans l’année à venir."
+      },
+      "taskListMode": {
+        "heading": "Mode des tâches",
+        "tasks": "Liste des tâches",
+        "inbox": "Boîte de réception"
+      }
     },
     "search": {
       "placeholder": "Rechercher dans les titres ou le contenu…",
@@ -745,6 +775,8 @@
     "memoryDeleteFailed": "Impossible de supprimer la mémoire",
     "create": "Nouvel ami",
     "createFailed": "La création n'est pas encore confirmée. Réessayez pour vérifier.",
+    "createHostUnsupported": "Cet ordinateur ne peut pas créer d'ami pour le moment. Mettez à jour Cindy sur cet ordinateur ou créez-le depuis celui-ci.",
+    "createNeedsDetails": "Saisissez un nom et choisissez un portrait pour créer un ami.",
     "title": "Ami",
     "profile": "Profil et personnalité",
     "memory": "Mémoire",

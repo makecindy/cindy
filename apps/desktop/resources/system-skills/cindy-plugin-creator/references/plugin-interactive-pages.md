@@ -1,7 +1,7 @@
 ## 4.23 交互页面 MCP Apps（mcpApps.ui）
 
 需要独立页面、输入框/任务栏入口、消息展示或宿主草稿操作时，继续使用同一个 MCP Apps 资源，
-并阅读[插件界面扩展](plugin-host-ui.md)。该增量尚未发布，不能按本章历史版本下限判断支持。
+并阅读[插件界面扩展](plugin-host-ui.md)。
 
 交互页面让一次工具结果变成可操作的页面。AI 根据用户意图打开页面；之后用户填写表单、
 查询数据或点击按钮，由页面脚本调用插件工具完成，不必每次等 AI 再说一句。页面使用
@@ -332,6 +332,10 @@ done.addEventListener('click', async () => {
 // 加入页面现有 teardown 清理：state.dispose()；不要覆盖其它清理逻辑。
 ```
 
+官方 `App` 没有可叠加的 teardown 注册接口；如果页面要自己设置 `app.onteardown`，请在创建
+`createViewState`（或 React hook）之前设置。辅助模块随后会在该处理器上叠加页面状态写出，
+之后再赋值会替换这层写出逻辑。
+
 `set(value | updater)` 返回 void，更新本地状态且失败不回滚屏幕；使用完整不可变对象。
 同值不重发。`-32602` 只提示一次固定错误，不打印状态；暂时错误或断线也不自动重试。
 同一失败值重复 set/flush 不重试，下一次真实变化才再保存。
@@ -428,3 +432,12 @@ JS 可用 `// @ts-check` 和 `/// <reference path="./types/cindy-ext-apps.d.ts" 
 | 文件交接、暂存、预览、确认 | [文件导入说明](examples/interactive-pages/README.md#文件导入) |
 | 文件、下载、进度及其他 SDK 方法 | [files 能力全集](examples/interactive-pages/files/) |
 | 字段限制、方法能力与常见错误 | [按需参考](examples/interactive-pages/REFERENCE.md) |
+
+### 宿主标题和全屏按钮
+
+标题与来源由宿主负责；作者不能通过页面名改变安装来源标签。
+资源的 `hostFullscreenButton?: boolean` 缺省 true，设为 false 只隐藏宿主全屏按钮，
+不限制页面自己的 `requestDisplayMode`。自定义 MCP 对应资源 `_meta["cindy/host-fullscreen-button"]`。
+旧宿主忽略该字段；依赖隐藏行为时先核验实际发布版本再设置 `minCindyVersion`。
+页签/全屏按 `{width,height}` 给固定可用区域，页面须保留内部滚动；
+对话/弹层/折叠区按 `{width,maxHeight}` 自动内容高度。布局与入口细则见 [插件界面扩展](plugin-host-ui.md)。

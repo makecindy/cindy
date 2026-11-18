@@ -7,14 +7,16 @@
  *   3. 本机 CLI 检测命中且渠道未连接时,左栏出现建议行,点击直达向导授权步。
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { remoteProviderDisableKey } from '@cindy/model-providers';
 import type { CustomProviderConfig, ModelRegistry, ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../shared/ipc-errors';
 import { toast } from '@/lib/toast';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 
 const {
@@ -38,8 +40,11 @@ const {
     ownerGeneration: 1,
     order: ['anthropic', 'xd', 'custom'],
     customConnected: true,
+    disabledProviders: {} as Record<string, true>,
     mediaReady: false,
     customOverride: null as ProviderView | null,
+    /** The run location the user chose for Anthropic on this computer's provider page. */
+    anthropicRunLocation: undefined as string | undefined,
     loading: false,
     error: null as { reason: 'storage-quota' } | null,
   },
@@ -99,6 +104,7 @@ vi.mock('@/hooks/useProviders', () => ({
           ],
         },
         connected: false,
+        ...(providerSnapshotState.anthropicRunLocation ? { runLocation: providerSnapshotState.anthropicRunLocation } : {}),
       } satisfies ProviderView,
       {
         id: 'xd',
@@ -141,6 +147,7 @@ vi.mock('@/hooks/useProviders', () => ({
     return {
       providers:
         providerSnapshotState.dataOwnerId === authState.dataOwnerId && !providerSnapshotState.loading ? [...byId.values()] : [],
+      disabledProviders: providerSnapshotState.disabledProviders,
       providerOrder:
         providerSnapshotState.dataOwnerId === authState.dataOwnerId
           ? providerSnapshotState.order
@@ -157,6 +164,7 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
+  useOptionalDataOwnerGeneration: () => 0,
   useAuth: () => ({
     mode: 'cloud',
     dataOwnerId: authState.dataOwnerId,
@@ -235,12 +243,16 @@ type ScanResult = { detections: unknown[] };
 let scanResult: ScanResult;
 
 beforeEach(() => {
+  localStorage.clear();
+  setDataOwnerGeneration('owner-1');
   authState.dataOwnerId = 'owner-1';
   providerSnapshotState.dataOwnerId = 'owner-1';
   providerSnapshotState.ownerGeneration = 1;
   providerSnapshotState.customConnected = true;
+  providerSnapshotState.disabledProviders = {};
   providerSnapshotState.mediaReady = false;
   providerSnapshotState.customOverride = null;
+  providerSnapshotState.anthropicRunLocation = undefined;
   providerSnapshotState.loading = false;
   providerSnapshotState.error = null;
   providerSnapshotState.order = ['anthropic', 'xd', 'custom'];
@@ -257,6 +269,8 @@ beforeEach(() => {
       onChanged: vi.fn(() => () => undefined),
     },
     maker: {
+      // Providers a subscription account may move to (2026-11-13); none here.
+      listProviders: vi.fn(async () => ({ providers: [] })),
       scanLocalCli: vi.fn(async () => scanResult),
       refreshBuiltinProviderModels: refreshBuiltinModelsSpy,
       requestProviderModelsAutoRefresh: requestAutoRefreshSpy,
@@ -272,6 +286,46 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // Reuse receiver-side disable, retaining the settings row for re-enabling.
+  it('disables an extra remote provider and re-enables it from the same action menu after reopening', async () => {
+    ownDevicesState.devices = [{ deviceId: 'peer', name: 'Other computer', platform: 'darwin' }];
+    ownDevicesState.catalogs = new Map([['peer', { providers: [{
+      id: 'extra-gpt3', name: 'GPT3', source: 'user', agents: ['codex'],
+      auth: { method: 'apiKey' }, routing: {}, connected: true, remoteInvocationEnabled: true,
+      models: { codex: [{ id: 'gpt-test', name: 'GPT test', contextWindow: 1000, efforts: [], defaultEffort: null }] },
+    } satisfies ProviderView], loading: false, error: null }]]);
+    const disable = vi.fn<typeof window.electronAPI.maker.setModelDisable>(async input => {
+      if (input.kind === 'provider' && input.remoteDeviceId) {
+        const key = remoteProviderDisableKey(input.remoteDeviceId, input.providerId);
+        providerSnapshotState.disabledProviders = input.disabled ? { [key]: true } : {};
+      }
+      return { ok: true as const };
+    });
+    window.electronAPI.maker.setModelDisable = disable;
+    const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.remote.rowLabel' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    await act(async () => { fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.menu.disableProvider' })); });
+    expect(disable).toHaveBeenLastCalledWith({ kind: 'provider', remoteDeviceId: 'peer', providerId: 'extra-gpt3', disabled: true });
+    view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    expect(await screen.findByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
+    expect(screen.queryByText('GPT test')).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.providers.remote.rowLabel' })).toBeTruthy();
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect((ownDevicesState.catalogs.get('peer') as { providers: ProviderView[] }).providers[0]?.remoteInvocationEnabled).toBe(true);
+    view.unmount();
+    const reopened = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.remote.rowLabel' }));
+    expect(await screen.findByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    await act(async () => { fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.menu.enableProvider' })); });
+    expect(disable).toHaveBeenLastCalledWith({ kind: 'provider', remoteDeviceId: 'peer', providerId: 'extra-gpt3', disabled: false });
+    reopened.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByText('settings.providers.detail.suspendedBanner')).toBeNull());
+    expect(await screen.findByText('GPT test')).toBeTruthy();
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+
   // Unit: an opaque enterprise UUID has no inferred brand. The settings rail
   // must still render the host-supplied artwork instead of a name initial.
   it('renders explicit organization artwork in the provider list', async () => {
@@ -803,11 +857,13 @@ describe('ProvidersSection — 双栏管理', () => {
   // - Bug／规则依据：PR #9740(0.1.133)把另一台电脑的供应商合进本机条目后，模型区仍读本机空目录、
   //   刷新走本机 CLI 必然失败；provider-sharing.md「同账号借用与运行于」要求整页按能用显示。
   // - 现有覆盖缺口：本文件只覆盖本机目录；借用状态此前没有任何设置页用例。
-  // - 最小失败输入：本机 Anthropic 未连接 + 一台在线电脑提供已连接、开放远程调用的 Anthropic。
+  // - 最小失败输入：本机 Anthropic 未连接 + 一台在线电脑提供已连接、开放远程调用的 Anthropic，
+  //   用户把「运行于」改成那台(2026-11-18 起不再自动换过去，见 provider-sharing.md)。
   // - tier：unit(jsdom，内存 fake)。
   // 失败分支：真实目录预取吞掉请求异常时仍提示失败，模型区卸载后提示中的重试仍指向原电脑。
   it.each(['success', 'prefetch-error'])(
     '本机没登录、借用另一台电脑时，模型清单与刷新都按那台电脑（%s）', async (outcome) => {
+    providerSnapshotState.anthropicRunLocation = 'starforce';
     ownDevicesState.devices = [{ deviceId: 'starforce', name: 'Starforce', platform: 'darwin' }];
     ownDevicesState.catalogs = new Map([['starforce', {
       providers: [{

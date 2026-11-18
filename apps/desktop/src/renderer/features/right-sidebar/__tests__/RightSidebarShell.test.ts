@@ -905,13 +905,13 @@ describe('RightSidebarShell empty state', () => {
     const ui = await import('@/cindy-brain/PluginUiView');
     const resource = vi.spyOn(ui, 'PluginUiView').mockImplementation(() => createElement('div', { 'data-testid': 'resource-task-body' }));
     try {
-      const { ghostHostUiApprovalTokens } = await import('../../../../shared/ghost');
+
       const ghost = { enabled: true, dir: '/fixture/planner', uiCapabilityApproved: true,
         approval: { state: 'approved', revision: 'one' }, manifest: { id: 'planner', name: 'Planner', mcpApps: {
           ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
           host: { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board', scope: 'task' }] },
-        } }, approvedHostUi: [] as string[] };
-      ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest as never);
+        } } };
+
       installedGhostsMock.list = [ghost];
       tabsIpc.list.mockResolvedValueOnce({ tabs: [{ id: 'resource', kind: 'plugin-task', state: { instanceId: 'planner', resourceViewId: 'board' } }], activeTabId: 'resource' });
       const props = { sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, deviceLinkDeviceId: null as string | null, isMac: true };

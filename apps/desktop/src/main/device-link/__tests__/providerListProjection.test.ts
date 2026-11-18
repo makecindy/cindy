@@ -51,6 +51,24 @@ const projectForCurrentController = (result: unknown) =>
     modelVisibilityOverrides?: Record<string, boolean>;
   };
 
+// #10405, unit: folding must name the actual merged destination without disclosing
+// a destination that the peer cannot use. Old coverage only tested built-in OpenAI.
+it.each(['allowed', 'disabled', 'missing-model', 'guest'] as const)('projects a named pool target only when permitted (%s)', mode => {
+  const models = { codex: [{ id: 'model-a', name: 'A', efforts: [], contextWindow: 1000 }] };
+  const result = { providers: [
+    { id: 'target', name: 'Target', agents: ['codex'], models: mode === 'missing-model' ? { codex: [] } : models,
+      remoteInvocationEnabled: mode !== 'disabled' },
+    { id: 'original', name: 'Original', agents: ['codex'], models, remoteInvocationEnabled: true,
+      subscriptionPoolAlias: true, subscriptionPoolTarget: 'target' },
+  ] };
+  const projected = __testing.projectInvokeResultForTunnel('maker:provider:list', result, false, [], mode !== 'guest') as {
+    providers: Record<string, unknown>[];
+  };
+  const original = projected.providers.find(provider => provider.id === 'original');
+  expect(original?.subscriptionPoolTarget).toBe(mode === 'allowed' ? 'target' : undefined);
+  if (mode !== 'guest') expect(original?.subscriptionPoolAlias).toBe(mode === 'allowed' ? true : undefined);
+});
+
 // Upgrade 2026-11-11, standard: folding the local list must not remove an old remote grant.
 it.each([false, true])('retains the old remote source unless the complete pool is offered (%s)', offered => {
   const projected = project({ providers: [
@@ -95,6 +113,8 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'explicit-off', persistentSession: false },
       { ...fields, id: 'expired', status: 'expired' },
       { ...fields, id: 'unbound', targetSessionId: undefined },
+      // The pre-run command never crosses the tunnel.
+      { ...fields, id: 'pr', preRunHook: { command: "node gate.mjs 'https://github.com/o/r/pull/9'" } },
     ];
     const projected = __testing.projectInvokeResultForTunnel(
       'maker:schedule:list', full, false, [null, { sessionBindings: true }],
@@ -104,7 +124,9 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'second', recurring: false },
       { ...fields, id: 'persistent', persistentSession: true },
       { ...fields, id: 'explicit-off' },
+      { ...fields, id: 'pr' },
     ]);
+    expect(JSON.stringify(projected)).not.toContain('gate.mjs');
     expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);
     expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1024);
   });

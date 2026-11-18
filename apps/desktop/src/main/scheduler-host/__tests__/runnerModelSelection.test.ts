@@ -94,9 +94,11 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner.desktop';
+import { __testing as projectAutomation } from '../project-automation-loader';
+import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../localDb/mapper';
 import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
-import type { Scheduler } from '@cindy/maker-scheduler';
+import { Scheduler, type ScheduleStorage } from '@cindy/maker-scheduler';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -344,6 +346,75 @@ describe('MakerScheduleRunner model selection', () => {
     mocks.isSessionInTurn.mockReturnValue(false);
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
     mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: false });
+  });
+
+  // #11134 / unit: project update + persisted row -> actual runner.fire. Existing
+  // fresh/heartbeat tests start with correct bindings and miss a retained Codex
+  // target after switching a persistent project automation to fresh Claude runs.
+  it('starts a fresh Claude task after a persisted project binding is cleared', async () => {
+    const h = createSessionHarness();
+    const harness = createRunnerHarness(h, { agentKind: 'codex', model: 'gpt-5.5', workDir: '/work' });
+    const previous = baseSchedule({ source: 'project', projectConfigId: 'daily',
+      agentKind: 'codex', model: 'gpt-5.5', persistentSession: true, targetSessionId: 'old-codex-task' });
+    const patch = projectAutomation.scheduleConfigToUpdateInput({ id: 'daily', name: 'Daily',
+      prompt: 'Check', cronExpr: '0 9 * * *', agentKind: 'claude-code',
+      model: 'claude-opus-5-5', providerId: 'anthropic', persistentSession: false }, '/work');
+    let row = scheduleCreateToRow(previous) as Parameters<typeof scheduleToCamel>[0];
+    const scheduler = new Scheduler({ runner: harness.runner, storage: {
+      get: async () => scheduleToCamel(row),
+      update: async (_id: string, update: Partial<Schedule>) => {
+        row = { ...row, ...schedulePatchToRow(update) };
+        return scheduleToCamel(row);
+      },
+    } as unknown as ScheduleStorage });
+    const saved = await scheduler.update(previous.id, patch);
+    await fireToCompletion(harness, h, saved);
+    expect(harness.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'claude-code', model: 'claude-opus-5-5', providerId: 'anthropic',
+      title: '[Schedule] Daily',
+    }));
+    expect(harness.createSession.mock.calls[0][0].id).not.toBe('old-codex-task');
+    expect(harness.closeSession).toHaveBeenCalled();
+  });
+
+  // #11134 review / unit: the first persistent fire holds an old snapshot while
+  // createSession yields to an edit. Existing tests edit before fire and cannot
+  // catch the late binding overwriting fresh mode or a newer explicit target.
+  it.each([
+    { persistentSession: false, targetSessionId: undefined, expectedTarget: undefined },
+    { persistentSession: true, targetSessionId: 'newer-task', expectedTarget: 'newer-task' },
+    { persistentSession: true, targetSessionId: undefined, expectedTarget: 'scheduler-session' },
+  ])('preserves the latest binding choice during first creation: %j', async (edit) => {
+    const h = createSessionHarness();
+    const harness = createRunnerHarness(h);
+    const previous = baseSchedule({ source: 'project', projectConfigId: 'daily',
+      persistentSession: true, model: 'claude-opus-5-5', providerId: 'anthropic' });
+    let row = scheduleCreateToRow(previous) as Parameters<typeof scheduleToCamel>[0];
+    const scheduler = new Scheduler({ runner: harness.runner, storage: {
+      get: async () => scheduleToCamel(row),
+      update: async (_id: string, update: Partial<Schedule>) => {
+        row = { ...row, ...schedulePatchToRow(update) };
+        return scheduleToCamel(row);
+      },
+    } as unknown as ScheduleStorage });
+    harness.runner.attachScheduler(scheduler);
+    harness.createSession.mockImplementationOnce(async () => {
+      await scheduler.update(previous.id, {
+        persistentSession: edit.persistentSession, targetSessionId: edit.targetSessionId,
+      });
+      return h.session;
+    });
+    await fireToCompletion(harness, h, previous);
+    const saved = (await scheduler.get(previous.id))!;
+    expect(saved.persistentSession).toBe(edit.persistentSession);
+    expect(saved.targetSessionId).toBe(edit.expectedTarget);
+    if (!edit.persistentSession) {
+      h.send.mockClear();
+      harness.createSession.mockClear();
+      await fireToCompletion(harness, h, saved);
+      expect(harness.createSession.mock.calls[0][0].id).not.toBe(h.session.id);
+      expect(harness.closeSession).toHaveBeenCalled();
+    }
   });
 
   // Unit regression: a bound task runs on another computer, but an explicit
@@ -719,10 +790,18 @@ describe('MakerScheduleRunner model selection', () => {
           }),
         }),
       });
-      const update = vi.fn(async () => undefined);
-      harness.runner.attachScheduler({ update, isRunSilenced: () => false } as unknown as Scheduler);
       const schedule = baseSchedule({ agentKind: 'codex', modelAgentKind: 'pi', model: 'shared-model',
         targetSessionId: h.session.id, persistentSession: true, effort: 'ultra', fastMode: true });
+      let row = scheduleCreateToRow(schedule) as Parameters<typeof scheduleToCamel>[0];
+      const scheduler = new Scheduler({ runner: harness.runner, storage: {
+        get: async () => scheduleToCamel(row),
+        update: async (_id: string, patch: Partial<Schedule>) => {
+          row = { ...row, ...schedulePatchToRow(patch) };
+          return scheduleToCamel(row);
+        },
+      } as unknown as ScheduleStorage });
+      const update = vi.spyOn(scheduler, 'update');
+      harness.runner.attachScheduler(scheduler);
       const saved = structuredClone(schedule);
       const opts = await fireToCompletion(harness, h, schedule);
       expect(opts).toMatchObject({ agentKind: 'pi', model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: false });
@@ -736,7 +815,7 @@ describe('MakerScheduleRunner model selection', () => {
       expect(release).toHaveBeenCalledTimes(1);
       if (status !== 'active') {
         expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: undefined });
-        expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: h.session.id });
+        expect((await scheduler.get(schedule.id))?.targetSessionId).toBe(h.session.id);
         expect(harness.createSession.mock.calls[0][0].id).not.toBe(schedule.targetSessionId);
       }
     });
@@ -1179,6 +1258,49 @@ describe('MakerScheduleRunner model selection', () => {
 
       expect(opts.model).toBe('claude-opus-4-7');
       expect(h.setModel).not.toHaveBeenCalled();
+    });
+
+    // 2026-11-16 regression, unit: a bound drift check saved as Claude Code + a Claude
+    // subscription model without modelAgentKind fired after its task had moved to Codex.
+    // The model-only override kept Codex and was refused with 403. Minimal input: legacy
+    // schedule (agentKind=claude-code, model set) and a task whose current Harness is
+    // Codex. Same-Harness tasks keep the follow-task override path.
+    it.each([
+      { current: 'codex' as const, switches: true },
+      { current: 'claude-code' as const, switches: false },
+    ])('legacy model-only override on a $current task (switches=$switches)', async ({ current, switches }) => {
+      const h = createSessionHarness();
+      Object.assign(h.session, { agentKind: current, model: current === 'codex' ? 'gpt-6.1-sol' : 'claude-opus-5-5' });
+      const switchHarness = vi.fn(async () => ({ engineReady: true }));
+      const acquirePendingAgentSwitch = vi.fn(async (
+        _id: string, _signal?: AbortSignal, selection?: Parameters<typeof applyScheduledModelSelection>[0],
+      ) => selection ? {
+        release: vi.fn(),
+        selection: await applyScheduledModelSelection(selection, {
+          getTarget: async () => ({ agentKind: current, status: 'active' }),
+          isBusy: () => false,
+          resolveSelection: async (choice) => choice,
+          switchHarness,
+          applyModel: async () => {},
+        }),
+      } : vi.fn());
+      const harness = createRunnerHarness(h, {
+        agentKind: current, model: h.session.model, workDir: '/work', sdkSessionId: 'sdk-1',
+      }, { acquirePendingAgentSwitch });
+      const opts = await fireToCompletion(harness, h, baseSchedule({
+        targetSessionId: h.session.id, agentKind: 'claude-code',
+        model: 'claude-sonnet-5-5', providerId: 'anthropic',
+      })) as { agentKind?: string; model: string };
+      expect(opts).toMatchObject({ agentKind: 'claude-code', model: 'claude-sonnet-5-5' });
+      if (switches) {
+        expect(acquirePendingAgentSwitch.mock.calls[0][2]).toMatchObject({
+          agentKind: 'claude-code', model: 'claude-sonnet-5-5', providerId: 'anthropic',
+        });
+        expect(switchHarness).toHaveBeenCalledOnce();
+      } else {
+        expect(acquirePendingAgentSwitch.mock.calls[0][2]).toBeUndefined();
+        expect(switchHarness).not.toHaveBeenCalled();
+      }
     });
 
     it('复用 Codex 的 context Host 身份变化时先关闭旧 handle，再 cold resume', async () => {

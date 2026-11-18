@@ -34,6 +34,7 @@ const createCallbacks = createGhostProductionCallbacks<Record<keyof typeof callb
     'readLocalGhostUpdateSource', 'updateLocalGhostPackageLocked', 'rejectUnauthorizedTokenBroker',
     'assertGhostRelocationIdle', 'findGhostForInstanceId',
   ],
+  variables: ['updateLocalFile'],
   callbacks: Object.fromEntries(Object.entries(callbackChannels).map(([name, channel]) =>
     [name, ['ipcMain.handle', channel] as const],
   )),

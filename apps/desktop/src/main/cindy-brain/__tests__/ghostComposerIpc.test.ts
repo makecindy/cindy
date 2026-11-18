@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IpcMainInvokeEvent } from 'electron';
 import type { InstalledGhost } from '../../../shared/ghost';
 import {
+  composerIconRef,
   createGhostComposerListHandler,
   MAX_REMOTE_COMPOSER_CATALOG_BYTES,
 } from '../ghostComposerIpc';
@@ -146,6 +147,36 @@ describe('remote composer catalog boundary', () => {
     expect(() => createGhostComposerListHandler({ list: () => [large], disabledIds: () => [] })(event))
       .toThrow('Plugin catalog metadata exceeds the response size limit');
   });
+
+  it('tags icons for controllers that ask and omits the ones they already hold', () => {
+    const held = { ...ghost('held'), iconDataUrl: 'data:image/png;base64,AA==' };
+    const fresh = { ...ghost('fresh'), iconDataUrl: 'data:image/png;base64,BB==' };
+    const handler = createGhostComposerListHandler({ list: () => [held, fresh], disabledIds: () => [] });
+    mocks.context.mockReturnValue({ channel: 'ghosts:composer-list' });
+    // Old controllers send no options and keep receiving icons inline, untagged.
+    expect(handler(event, '').map((entry) => [entry.iconDataUrl, entry.iconRef])).toEqual([
+      [held.iconDataUrl, undefined],
+      [fresh.iconDataUrl, undefined],
+    ]);
+    const heldRef = composerIconRef(held.iconDataUrl);
+    const remote = handler(event, '', { iconRefs: 1, knownIcons: [heldRef] });
+    expect(remote.map((entry) => [entry.iconDataUrl, entry.iconRef])).toEqual([
+      [undefined, heldRef],
+      [fresh.iconDataUrl, composerIconRef(fresh.iconDataUrl)],
+    ]);
+    expect(ghostComposerListSchema.safeParse(remote).success).toBe(true);
+  });
+
+  it.each([null, 'x', { iconRefs: 2 }, { iconRefs: 1, knownIcons: ['short'] }])(
+    'rejects malformed catalog options from a controller',
+    (options) => {
+      mocks.context.mockReturnValue({ channel: 'ghosts:composer-list' });
+      const list = vi.fn(() => []);
+      const handler = createGhostComposerListHandler({ list, disabledIds: () => [] });
+      expect(() => handler(event, '', options)).toThrow();
+      expect(list).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([null, {}, 42, 'bad\0path', 'x'.repeat(32_769)])(
     'rejects invalid directory arguments',

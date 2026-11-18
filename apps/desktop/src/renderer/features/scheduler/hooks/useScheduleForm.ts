@@ -29,7 +29,6 @@ import {
 } from '../lib/scheduleFormLogic';
 import type { ScheduleFormState, RunMode, RememberedBinding } from '../lib/scheduleFormLogic';
 import { parseWebhookFormatText, webhookSourceFormFields, validGithubRepositories } from '../lib/scheduleFormLogic';
-import { DEFAULT_SCHEDULE_WEBHOOK_PRESET } from '@cindy/maker-scheduler/webhook-formats';
 
 // 类型与 effort 白名单已迁入 lib/scheduleFormLogic(纯函数层,node 环境可测);
 // 原处 re-export 保持既有 import 路径不变(ScheduleChips / projectAutomationConfig 等)。
@@ -51,7 +50,7 @@ const DEFAULT_FORM: ScheduleFormState = {
   manual: false,
   webhookEnabled: false,
   webhookEvents: '',
-  webhookPreset: DEFAULT_SCHEDULE_WEBHOOK_PRESET,
+  webhookPreset: 'github-app',
   webhookSigned: true,
   webhookFormat: '',
   agentKind: 'claude-code',

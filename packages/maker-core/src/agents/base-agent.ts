@@ -136,6 +136,8 @@ export type McpToolApprovalPolicy =
 /** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
 export interface PiMcpServerRef {
   name: string;
+  /** Optional human-readable name used by Pi MCP discovery; `name` remains the stable id. */
+  displayName?: string;
   url: string;
   remote?: {
     /** HTTP header 名 → Pi 父进程 env var 名；描述符里绝不放 header 真值。 */
@@ -618,7 +620,7 @@ export function projectPiManagedCommandFailure(value: unknown): import('./pi/man
     phase: data.phase as import('./pi/managed-command.js').PiManagedCommandFailure['phase'],
     packagesUpdated: data.packagesUpdated,
     recovery: data.recovery as import('./pi/managed-command.js').PiManagedCommandFailure['recovery'],
-    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish'].includes(data.hostStage)
+    ...(typeof data.hostStage === 'string' && ['release-lookup', 'asset-validation', 'prepare', 'download', 'extract', 'version-verification', 'publish', 'unsupported'].includes(data.hostStage)
       ? { hostStage: data.hostStage as import('./pi/managed-command.js').PiBinaryUpdateFailureStage } : {}),
   };
 }
@@ -952,17 +954,6 @@ export interface AgentDeps {
    */
   capabilityAdditions?: AgentCapabilityAdditions;
 
-  /**
-   * Pi-only:视觉桥后端 env（层 C）。host 解析视觉桥配置（主/fallback 视觉后端 →
-   * OpenAI 兼容端点 + model + key）后返回键值对，PiAgent 注入 pi 子进程 spawnEnv，
-   * cindy-bridge 的 vision 工具读取。缺省 = 不注入（视觉桥工具不可用，零干扰）。
-   * model 参数供 host 按 session 模型判定是否命中视觉桥目标模型——未命中返回 null，
-   * 保证非目标/已有视觉能力的 Pi 模型不注册 vision 工具、不改变工具面（零干扰）。
-   * sessionId 供需要上游会话头的后端（OpenCode Go）确定性派生头值：spawn env 必须
-   * 同 session 重建逐字节稳定（pi-harness §4.10），不得用随机值。
-   * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
-   */
-  resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native
@@ -1364,6 +1355,8 @@ export interface AgentDeps {
    * 缺省 / no-op → 行为与改动前一致。
    */
   prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
+  /** null/absent preserves native policy; sampled at session start/resume. */
+  getCodexServerCompactionPreference?: () => boolean | null;
   recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
   /** readOnly locates existing storage without invoking resume recovery or copying history. */
   resolveCodexThreadStorage?: (threadId: string, options?: { readOnly?: boolean }) => Promise<{ historyHome: string; sqliteHome: string; rolloutPath?: string } | undefined>;
@@ -1467,6 +1460,10 @@ export interface AgentDeps {
    * Codex 不消费此字段。
    */
   claudeHooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+
+  /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
+  toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
+  nativeRecoveryObserver?: import('./shared/native-recovery-observer.js').NativeRecoveryObserver;
 
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
@@ -1612,7 +1609,21 @@ export interface RemoteClaudeRoute {
   env: Record<string, string>;
 }
 
+export interface OneShotUsage {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+}
+
 export interface OneShotOptions {
+  /** Accounting attribution only; never sent as prompt content. */
+  source?: string;
+  sessionId?: string;
+  providerId?: string;
+  onUsage?: (usage: OneShotUsage) => void | Promise<void>;
+
   /** 输出 token 上限。默认 100 (起标题用); skillReview 这种大 prompt 应传 4096。 */
   maxTokens?: number;
   /**
@@ -2114,6 +2125,8 @@ export interface StartSessionOptions {
    * can observe different memory generations.
    */
   makerMemoryIndexSnapshot?: string;
+  /** Project-local Markdown memory on the task's computer; load on demand, never as an index snapshot. */
+  makerMemoryProjectDir?: string;
   /**
    * 设备托管：任务所在电脑在打开任务时按真实工作目录生成的插件花名册段。插件工具经隧道
    * 回到那台电脑，花名册也必须来自那台；Agent 所在电脑不读自己的已装插件。
@@ -2412,6 +2425,30 @@ export interface BackgroundTaskSnapshot {
  */
 export type TurnContinuationState = 'awaiting' | 'active' | 'cancelled';
 
+/** Fixed diagnostic codes only; never carry SDK errors, prompts or task output. */
+export type TurnContinuationCancellationReason =
+  | 'all_wake_tasks_stopped'
+  | 'bridge_aborted'
+  | 'graceful_stop'
+  | 'user_stop'
+  | 'wake_contract_unfulfilled';
+
+/** Runtime projection for adapters/consumers whose TypeScript contract may be older. */
+export function safeTurnContinuationCancellationReason(
+  reason: unknown,
+): TurnContinuationCancellationReason | undefined {
+  switch (reason) {
+    case 'all_wake_tasks_stopped':
+    case 'bridge_aborted':
+    case 'graceful_stop':
+    case 'user_stop':
+    case 'wake_contract_unfulfilled':
+      return reason;
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Why a session handle is being torn down.
  *
@@ -2483,7 +2520,7 @@ export type AgentMcpServerToolsState =
 export interface AgentMcpServerToolsReport {
   state: AgentMcpServerToolsState;
   /** Raw MCP tool names as the server declared them, not harness-qualified names. */
-  tools: Array<{ name: string; description?: string }>;
+  tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
 }
 
 export interface AgentSessionHandle {
@@ -2496,6 +2533,8 @@ export interface AgentSessionHandle {
    * the engine has no per-session MCP status entry.
    */
   readMcpServerTools?(serverName: string): Promise<AgentMcpServerToolsReport | null>;
+  /** On-demand public harness tool-catalog calls; unsupported methods must fail explicitly. */
+  callNativeToolCatalog?(method: string, args: unknown[]): Promise<unknown>;
   /** Native session identity safe for resume; may retain an unaccepted fork's source. */
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */
@@ -2604,6 +2643,16 @@ export interface AgentSessionHandle {
   hasPendingHostOperation?(): boolean;
 
   /**
+   * Conservative probe for provider-owned work that can outlive a product turn
+   * but is not represented by listBackgroundTasks (for example Codex native
+   * child agents, yielded exec cells and background terminals). Idle runtime
+   * reclamation calls it before closing; true means busy *or unknown*, so a
+   * failed or unsupported probe keeps the runtime. Not for UI hydration.
+   * Agents whose background work is fully covered by listBackgroundTasks omit it.
+   */
+  hasLiveBackgroundWork?(): Promise<boolean>;
+
+  /**
    * Resolve the provider claim attached atomically to a specific `done` event.
    * Returns null when that event has no matching continuation boundary.
    */
@@ -2615,8 +2664,11 @@ export interface AgentSessionHandle {
    * wake task does not necessarily produce another provider `done`.
    */
   onTurnContinuationChange?(
-    listener: (continuationId: number, state: TurnContinuationState) => void,
+    listener: (continuationId: number, state: TurnContinuationState, reason?: TurnContinuationCancellationReason) => void,
   ): () => void;
+
+  /** Cause of a retained cancelled claim, including one whose done is still queued. */
+  getTurnContinuationCancellationReason?(continuationId: number): TurnContinuationCancellationReason | undefined;
 
   /** 关闭会话，清理子进程 */
   close(opts?: AgentSessionTeardownOptions): Promise<void>;
@@ -2737,11 +2789,12 @@ export interface AgentSessionHandle {
 
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。
+   * remote 只由宿主提供目标 SSH 主机已验证的项目子集；不把旧控制端路径当远端授权。
    */
-  setExtraDirs?(dirs: string[], libraryRoot?: string | null): Promise<void>;
+  setExtraDirs?(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void>;
 
   /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
-  setWritableDirs?(dirs: string[]): Promise<void>;
+  setWritableDirs?(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void>;
 
   /**
    * 运行时合并 vendorOptions(浅合并到内部闭包)。

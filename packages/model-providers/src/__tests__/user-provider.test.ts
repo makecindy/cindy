@@ -1087,6 +1087,26 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(p.routing.pi?.wireProtocol).toBe("openai-chat");
   });
 
+  // Unit: media declarations must retain real connection candidates without a
+  // protocol opt-in; otherwise identical IDs silently borrow the first key.
+  it("retains all declared media connections and exposes ambiguous ownership", () => {
+    const p = buildUserProvider({ id: 'media-relay', name: 'Relay', runtimes: {
+      codex: { baseUrl: 'https://one.example/api', models: [{ id: 'new-image', name: 'Image', mode: 'image_generation', modalities: { input: ['text'], output: ['image'] } }] },
+      pi: { baseUrl: 'https://two.example/api', models: [{ id: 'new-image', name: 'Image', mode: 'image_generation', modalities: { input: ['text'], output: ['image'] } }] },
+    } });
+    expect(p.imageModels).toHaveLength(1);
+    expect(p.imageModels?.[0]?.sourceAgents).toEqual(['codex', 'pi']);
+    expect(p.imageModels?.[0]?.sourceAgent).toBeUndefined();
+  });
+  it('preserves existing non-image/video ownership when IDs repeat across runtimes', () => {
+    const p = buildUserProvider({ id: 'relay-audio', name: 'Relay', runtimes: {
+      codex: { baseUrl: 'https://one.example', models: [{ id: 'speech', name: 'Speech', mode: 'audio_speech' }] },
+      pi: { baseUrl: 'https://two.example', models: [{ id: 'speech', name: 'Speech', mode: 'audio_speech' }] },
+    } });
+    expect(p.audioModels?.[0]?.sourceAgent).toBe('codex');
+    expect(p.audioModels?.[0]?.sourceAgents).toBeUndefined();
+  });
+
   it("projects image generation independently from image input", () => {
     const p = buildUserProvider({
       id: "images",

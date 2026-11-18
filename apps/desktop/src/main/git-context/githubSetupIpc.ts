@@ -3,7 +3,7 @@ import { createGithubStar } from './githubStar.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { configureManagedGhRoot } from './ghBinary.js';
+import { configureManagedGhRoot, exposeInstalledManagedGh } from './ghBinary.js';
 import { createGithubSetup } from './githubSetup.js';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
 import { githubConnection } from './githubConnection.js';
@@ -26,6 +26,19 @@ const cindyGithubRootInstance = () => pluginInstallStoragePart(
   pluginNewInstallRelId(createPluginLogicalIdentity(null, 'cindy-github')),
 );
 
+function readGithubPluginToken(): string | null {
+  return readGhostSecret(cindyGithubRootInstance(), 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat');
+}
+
+/** Host-only credential for actions the user invokes with their local GitHub sign-in. */
+export async function readLocalGithubToken(): Promise<string | null> {
+  const owner = activeOwnerScopeKey();
+  const source = getSharedGhCliTokenSource();
+  source.invalidate();
+  const token = await source.readToken();
+  return owner === activeOwnerScopeKey() ? token ?? readGithubPluginToken() : null;
+}
+
 /**
  * This computer's effective GitHub sign-in for the active owner: gh first, then the fallback token the
  * requested plugin would actually use (`fallback`: its installed instance and declared secret key; the
@@ -37,7 +50,6 @@ export async function readGithubConnection(
   const owner = activeOwnerScopeKey();
   const source = getSharedGhCliTokenSource();
   source.invalidate();
-  const rootInstance = cindyGithubRootInstance();
   const result = await githubConnection({
     readGh: () => source.readToken(),
     readFallback: () =>
@@ -45,7 +57,7 @@ export async function readGithubConnection(
         ? null
         : fallback
           ? readGhostSecret(fallback.instanceId, fallback.key)
-          : readGhostSecret(rootInstance, 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat'),
+          : readGithubPluginToken(),
     fetch: outboundFetch,
   });
   return owner === activeOwnerScopeKey() ? result : { status: 'missing' };
@@ -82,6 +94,8 @@ export function onGithubConnectionChanged(listener: () => void): () => void {
 export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
   const root = path.join(app.getPath('userData'), 'managed-tools');
   configureManagedGhRoot(root);
+  // A gh installed by onboarding in an earlier launch; a missing one stays missing.
+  void exposeInstalledManagedGh().catch(() => undefined);
   const changed = () => {
     getSharedGhCliTokenSource().invalidate();
     invalidateStatuses();
@@ -117,7 +131,7 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
     if (action === 'status') return host.githubStatus();
     if (action === 'disconnect') { await host.disconnectGithub(); return host.githubStatus(); }
     const owner = activeOwnerScopeKey();
-    const url = action === 'connect' ? await host.connectGithub() : (await host.githubStatus()).installUrl;
+    const url = action === 'connect' ? await host.connectGithub() : await host.installGithub();
     if (owner !== activeOwnerScopeKey()) throwIpcError('INVALID_PARAMS', 'Account changed');
     if (typeof url !== 'string') throwIpcError('INVALID_PARAMS', 'GitHub connection unavailable');
     const parsed = new URL(url);

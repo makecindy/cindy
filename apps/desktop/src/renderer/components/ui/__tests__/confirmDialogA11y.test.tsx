@@ -9,10 +9,12 @@
  * 2. confirmIcon 是纯装饰:必须 aria-hidden,且按钮的可访问名称仍等于
  *    confirmText —— 图标不得混进读屏输出或破坏按名称查询。
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfirmDialog } from '../confirm-dialog';
+import { ConfirmDialogProvider } from '../confirm-dialog-provider';
+import { useConfirmTaskArchive } from '@/features/cc-agent/hooks/useConfirmTaskArchive';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -99,15 +101,44 @@ describe('ConfirmDialog confirmIcon', () => {
 });
 
 describe('ConfirmDialog action layout', () => {
-  it.each([false, true])('preserves cancel focus with cancelFirst=%s', (cancelFirst) => {
-    render(<ConfirmDialog presentation="standard" cancelFirst={cancelFirst} open onOpenChange={() => {}}
+  it('places Cancel first and keeps it focused on open', () => {
+    render(<ConfirmDialog open onOpenChange={() => {}}
       title="Confirm" description="Description" confirmText="Confirm action" cancelText="Keep" />);
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(
-      cancelFirst ? ['Keep', 'Confirm action'] : ['Confirm action', 'Keep'],
+      ['Keep', 'Confirm action'],
     );
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Keep' }));
   });
-  it('keeps action labels on one line without allowing buttons to shrink', () => {
+  it('uses the same two actions and announces the loss when discard is checked', () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog open onOpenChange={() => {}} title="归档任务"
+        description="归档前会保存更改。" confirmText="归档" cancelText="取消"
+        dontShowAgainLabel="丢弃未提交的更改"
+        checkedOverrides={{
+          description: '未提交的更改和新文件将无法恢复。',
+          confirmText: '丢弃并归档',
+          confirmVariant: 'destructive',
+        }}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    const dialog = screen.getByRole('alertdialog', { description: '归档前会保存更改。' });
+    const checkbox = within(dialog).getByRole('checkbox', { name: '丢弃未提交的更改' });
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    expect(within(dialog).getAllByRole('button').map((button) => button.textContent)).toEqual(
+      ['取消', '归档'],
+    );
+    fireEvent.click(checkbox);
+    expect(screen.getByRole('alertdialog', { description: '未提交的更改和新文件将无法恢复。' })).toBe(dialog);
+    const actions = within(dialog).getAllByRole('button');
+    expect(actions.map((button) => button.textContent)).toEqual(['取消', '丢弃并归档']);
+    fireEvent.click(actions[1]);
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith({ dontShowAgain: true });
+  });
+
+  it('orders three actions Cancel, tertiary, primary in a widened dialog', () => {
     render(
       <ConfirmDialog
         open
@@ -121,15 +152,34 @@ describe('ConfirmDialog action layout', () => {
       />,
     );
 
-    const dialog = screen.getByRole('alertdialog');
-    expect(dialog.style.maxWidth).toBe('520px');
-    expect(
-      screen.getByRole('button', { name: '打开 ChatGPT App' }).parentElement?.className,
-    ).toContain('flex-wrap');
-    for (const label of ['打开 ChatGPT App', '重新登录 ChatGPT', '稍后处理']) {
-      const button = screen.getByRole('button', { name: label });
-      expect(button.className).toContain('whitespace-nowrap');
-      expect(button.className).toContain('shrink-0');
+    expect(screen.getByRole('alertdialog').style.maxWidth).toBe('520px');
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(
+      ['稍后处理', '重新登录 ChatGPT', '打开 ChatGPT App'],
+    );
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '稍后处理' }));
+  });
+});
+
+// PR #11291 review: closing a background file tab must identify that task even
+// after selecting discard. The generic dialog tests above do not call the archive
+// hook with a target. Unit input: one named task, recoverable base text, dirty state.
+describe('archive target identity', () => {
+  it('keeps the target name in both states without the recovery promise on discard', () => {
+    function ArchiveButton() {
+      const confirm = useConfirmTaskArchive();
+      return <button onClick={() => { void confirm('dirty-discardable', [], {
+        title: 'Background task',
+        description: 'Background task can be restored from the archived view.',
+      }); }}>Open archive</button>;
     }
+    render(<ConfirmDialogProvider><ArchiveButton /></ConfirmDialogProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Open archive' }));
+    const title = 'ccAgent.sidebar.confirmArchive.title · Background task';
+    const dialog = screen.getByRole('alertdialog', { name: title });
+    const checkbox = within(dialog).getByRole('checkbox');
+    fireEvent.click(checkbox);
+    expect(screen.getByRole('alertdialog', { name: title })).toBe(dialog);
+    expect(dialog.textContent).not.toContain('can be restored');
+    expect(screen.getByRole('button', { name: 'ccAgent.sidebar.confirmArchive.discardAndArchive' })).toBeTruthy();
   });
 });

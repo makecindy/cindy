@@ -74,7 +74,6 @@
     "cancel": "Keep as is"
   },
   "unified": {
-    "accountUnassigned": "Account not assigned",
     "accountCount_one": "{{count}} account",
     "accountCount_other": "{{count}} accounts",
     "accountFallback": "Account {{index}}",

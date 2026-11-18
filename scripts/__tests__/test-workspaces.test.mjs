@@ -308,6 +308,12 @@ test("parseWorkspacePatterns reads pnpm-workspace.yaml package globs", () => {
 		parseWorkspacePatterns('packages:\n  - "apps/*"\n  - "packages/*"\n'),
 		["apps/*", "packages/*"],
 	);
+	// pnpm 11 keeps architecture/build settings in this same YAML file. Their
+	// sequences are not workspace selectors and must never enter the test plan.
+	assert.deepEqual(
+		parseWorkspacePatterns('minimumReleaseAgeExclude:\n  - linux\npackages:\n  - "apps/*"\n  - "packages/*"\nnodeLinker: hoisted\nsupportedArchitectures:\n  os:\n    - win32\n  cpu:\n    - x64\n'),
+		["apps/*", "packages/*"],
+	);
 });
 
 test("root unit and all scripts run runner self-tests before workspace sweep", () => {
@@ -490,6 +496,7 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	assert.deepEqual(desktop.tiers.e2e.include, [
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
 		"src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts",
+		"src/main/remote-agent/__tests__/execServerProjection.e2e.test.ts",
 		"src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts",
 		"src/main/remote-agent/__tests__/startupProbe.e2e.test.ts",
 	]);

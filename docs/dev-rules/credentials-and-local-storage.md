@@ -3,6 +3,14 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件、
 > 测试目录或运行时生成物之前
+> **适用路径**：`apps/desktop/src/main/secrets/**`、
+> `apps/desktop/src/main/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/{devKeychain,safeStorage}*.ts`、
+> `apps/desktop/src/main/{userDataPath,regionUserData,legacyUserDataMigration}.ts`、
+> `apps/desktop/src/test/vitest/{user-data-dir-setup,testDirectoryTemplate}.ts`、
+> `apps/mobile/src/auth/secureStorage.ts`、`apps/mobile/src/**/*{C,c}redential*.ts`、
+> `packages/**/*{C,c}redential*.ts`、
+> `apps/desktop/src/main/authManager.ts`、`apps/desktop/src/main/localProfile*Migration*.ts`、`apps/desktop/src/main/maker-host/codex-auth-*.ts`
 
 本文约束 Desktop、Mobile、共享 package、脚本和测试中的本地文件写入。数据库 migration
 另见 [`database-and-migrations.md`](database-and-migrations.md)，Renderer 与 IPC 边界另见
@@ -12,6 +20,21 @@
 > 存量数据。存量凭证或用户数据迁移必须单独设计兼容、回滚和验证方案。
 
 ## 凭证不入仓
+
+### 本地模式首次云登录：资产交接暂时回退
+
+2026-11-17 回退 #10357 新增的资产交接：它将密钥与插件复制放入登录提交路径，
+复制或 Windows 实例检查失败会阻断已提交登录的后续完成及原生供应商绑定。
+登录继续沿用原数据库与原生供应商绑定流程；本地模式的自定义供应商密钥、请求头、
+插件及偏好暂不自动接续到首个云账号，这是回退恢复的已知限制。
+
+回退只撤销代码，不清理源资料、已复制的目标资料、`.local-profile-assets-v1.json`
+或 `.local-profile-assets-*` 暂存目录，也不撤销原账号认领或修改历史数据库 migration。
+尚未完成的资产计划不再自动续跑；未来恢复交接时必须兼容这些记录，并保留用户后续修改。
+再次接入前须覆盖迁移失败后登录仍可完成、插件初始化不抢占待交接目标，以及重启后的恢复。
+登录回归入口为 `authPostCommitStartup.test.ts`。
+
+### 通用存储要求
 
 - 用户凭证、OAuth 授权、API key、访问令牌、刷新令牌、私钥和 Agent 授权文件不得以
   复制、链接、fixture、日志或生成物等形式进入仓库工作区或任何可能被 Git 跟踪的路径。
@@ -85,8 +108,21 @@ Codex 共享登录使用文件软链接，不创建硬链接。Windows 无文件
 判断时展开父目录别名，不能仅比较路径字符串，也不能将不同名字的硬链接视为
 同一目录项；同一目录项直接复用，不执行迁移、快照覆盖或失效时的文件删除。
 
+Windows 的共享链接替换需要先删除本实例的目标。对同一目标目录项的 `relink`
+在进程内串行至恢复和临时文件清理结束，目录别名共用队列，不同 home 互不等待。
+队列完成后释放；POSIX 仍直接原子覆盖。这不提供跨进程锁，也不阻止原生 Codex
+刷新凭证；目标已被外部重建时仍按现有恢复规则保留，不能覆盖其新一代字节。
+
 实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
 `codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。
+
+Windows 的无覆盖发布子进程保留每次 15 秒的超时。子进程结束后若源目录项已消失、
+目标仍是开始时记录的目录项，则接受已提交结果；否则仅在确认超时、源目录项的
+身份／大小／修改时间未变且目标确实不存在时重试一次。读取状态失败不等于不存在，
+目标存在或来源变化时不重试；第二次超时返回脱敏的 `ETIMEDOUT`，不泄漏子进程命令、
+路径或环境。重试仍用原子无覆盖的 `File.Move`，不使用硬链接或覆盖重命名。
+实现与回归见 `maker-host/codex-auth-file-move.ts`、`codexAuthFileMove.test.ts` 和
+`scripts/check-windows-codex-auth-move.mjs`。
 
 ## Claude 订阅只经 Claude Code 自己的登录
 
@@ -94,12 +130,17 @@ Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；
 Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此只做内置 CLI 的外壳：
 
 - 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
-  `claude auth status --json`。凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
+  `claude auth status --json`。JSON 缺少套餐显示名时，可在同一 binary、env、账号目录和剩余超时
+  预算内读取一次 `auth status --text`，仅在邮箱与组织匹配时补充 `planDisplayName`；文本不作为
+  登录或权限依据，失败仍保留 JSON 登录态，不读取原始 profile／凭证文件。
+  凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
   Cindy 不读取、不复制、不刷新它。默认账号的会话与登录检查不设 `CLAUDE_CONFIG_DIR`
   （dev 多实例的默认账号也一样），确保仍能看到终端已有登录。
   2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
   使用官方多账号方式：只在该账号的 CLI 子进程设置 `CLAUDE_CONFIG_DIR=~/.claude-cindy-<owner摘要>-<随机id>`，
   登录、状态、用量、任务及分叉始终使用同一目录。目录不含邮箱，不接受外部传入路径。
+  2026-11-13 裁决的 Claude 单独供应商同样如此（账号放在哪个供应商记在 `subscription-account-placement.json`，不含凭证）：账号并入、移动或拿出只改它属于哪个供应商，目录与官方登录不动；
+  不复用 09-24 已停用的旧 Claude 连接及其 Cindy 自存凭证。
   Cindy 从不设置 `CLAUDE_SECURESTORAGE_CONFIG_DIR`，并在启动与每次调起 CLI 时剥掉继承值：
   CLI 用它（优先于 `CLAUDE_CONFIG_DIR`）决定读哪条钥匙串登录，空值会退回默认登录。
   SSH 远端的配置目录仍由远端 cc-manager 自己管理，不在此列。
@@ -291,6 +332,11 @@ relay 原有 60 秒主动续期节流保持不变。
 
 ## 路径与生命周期
 
+闲置任务自动归档：当前账号本机的 `owners/<owner-key>/task-management.json` 保存显式偏好与
+恢复任务的时间戳（仅任务 ID 和时间，不含消息／草稿）。复用原子 override 设置存储与 owner
+代次隔离；读取损坏文件时不自动归档，不覆盖原文件。恢复默认保留恢复时间，过期记录在下次
+写入时按最长 365 天保留期淘汰。设置不向其他电脑同步，普通归档内容处理不变。
+
 | 数据性质                            | 正确位置                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 引擎二进制后台下载缓存 | `userData/agent-binary-downloads/<vendor>/<归档 SHA-256>/`，只有归档、续传碎片和绑定来源/平台/版本/哈希的就绪记录，不含凭证。每种引擎保留一个候选，切换候选时回收旧候选，超过 7 天的碎片在后续检查时重建。下载与消费共用跨进程缓存锁；启动前复验哈希，复制交给原安装器后回收缓存，解压后的中间包与旧版本仍由原安装器清理。回退旧客户端时这些缓存不会被识别成已安装引擎。见 `agent-binaries/download-cache.ts` |
@@ -300,6 +346,7 @@ relay 原有 60 秒主动续期节流保持不变。
 | 浏览器大结果补读 | MCP 工具会话内存中保留最近四份原始 JSON，每份最多 200 万字符；不落盘、不上传，关闭会话后释放。`readResult` 只能读当前会话生成的引用，沿用原页面实际 profile 的代输入读取限制；切换后端、stop 或读取受保护页面时清除。工具复用宿主现有生命周期与后端对象引用，在下一次访问及异步预检后核对，包括设置/其它任务切换、切走再切回和嵌入后端恢复；切换中的动作仍报告真实结果，但不缓存原文或保存试跑凭证。超过上限明确截断，不能声称完整原文已保存。 |
 | 自建中转服务（Desktop） | `owners/<owner-key>/device-link-relay/`：`config.json` 只存选择、本机中转设置与服务器部署记录（地址、中转 ID、主人公钥，不含秘密）；`secrets/<中转ID>.enc` 是本机在该中转上的设备凭证与 Ed25519 签名私钥（本机当主人时即主人密钥），经 safeStorage 加密，Linux 只有 basic_text 时拒绝保存；第 1 版的 `credential.enc` / `owner-credential.enc` 读到旧配置时删除；`host/` 是本机运行中转时的数据（`relay-state.json` 只存各设备凭证的 SHA-256 与档案，0600 原子写入；`media/` 为设备间中转的文件，创建 24 小时后清理）。全部按账号隔离，账号作用域未提交时不读写。见 `device-link/selfHostedRelayConfig.ts`、`packages/device-link-relay` 与 [方案](../self-hosted-relay-plan.md) |
 | 自动化任务 Webhook | `owners/<账号>/schedule-webhooks/`：`state.json` 存本机端口、排队事件所属的本机路由 ID、固定元数据和 24 小时投递回执，不含请求正文和密钥；`secrets/<路由 ID>.enc` 存开发版本机入口的 safeStorage 加密签名密钥；`remote-identities.json` 只存任务 ID 与本机触发路由 ID 的对应关系，不含云端 URL 或密钥，创建请求前落盘、云端删除确认后清除，离线关闭时保留以防重启复用旧地址。宿主创建时固定账号目录，队列、身份与密钥的读写及清理始终使用该目录，停止后的迟到操作不得改用新账号目录。均为 0600 原子写入；触发条件关闭或任务删除时清理本机队列与密钥，启动时补清孤儿文件。加密不可用时生成密钥明确报错，不回退明文；启动不访问钥匙串，首个事件才解密。见 `scheduler-host/webhook/index.ts` 与 `__tests__/host.test.ts` |
+| macOS 桌面小组件数据 | `~/Library/Application Support/<应用 bundle id>/Widgets/usage-widget-snapshot.json`，Desktop 主进程在桌面上放了 Cindy 小组件时写入，内容与手机组件读到的快照相同（订阅余量与每日用量，不含凭证），原子替换写入、权限 0600。桌面小组件扩展的沙盒只开放这一目录、只读（`native/desktop-widgets/build.mjs` 按 bundle id 生成路径与 entitlements）。退出登录后写成空状态，不再保留上一个账号的读数；App 卸载不会自动删除。见 `apps/desktop/src/main/quota-overview/desktopWidgets.ts` |
 | Mobile 登录凭证 | `expo-secure-store` 的 `cindy.mobile.auth.session.v1`（当前登录的 refresh token 与区域）和 `cindy.mobile.auth.accounts.v1`（已存账号的凭证）。iOS 钥匙串档位为「开机后首次解锁起可读写」（`AFTER_FIRST_UNLOCK`）：用户在锁屏通知或 Apple Watch 上点了按钮，App 要在后台续期登录才能把结果送到电脑，见[通知上的按钮](../product-rules/notification-actions.md)。两项必须同档——续期同时读写二者，只改一项会在锁屏时提前失败。已有条目在下一次写入时改档，不做单独迁移；其余钥匙串条目（设备 ID、设备身份、中转与 Agent 网络密钥等）保持「解锁时可读」。App 在锁屏状态下被系统从后台拉起时不读写、不清理任何凭证（`lockedLaunchGate.ts`）。锁屏时读不到这两项不算退出登录：续期报 `AUTH_STORAGE_LOCKED`，调用方按可重试失败处理，不清本机数据。见 `apps/mobile/src/auth/secureStorage.ts` |
 | 模型组 | `owners/<账号>/model-groups.json` 只存用户建的路线与模式（名字、引用的供应商连接 ID 与模型、选法、例外），全部删除即删文件；`owners/<账号>/model-group-decisions.json` 存最近 50 次选择（组名、模型、来源、推理强度、原因、当时的配额与时间），不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/store.ts`、`decisionLog.ts`。 |
 | 模型组任务记录 | `owners/<账号>/model-group-session-bindings.json` 按任务 id 记这个任务来自哪条路线或模式（组的 id）以及正在用的候选（引擎 + 供应商连接 ID + 模型），最多保留最新 2000 条；撞配额时据此提议换来源。不含消息、任务标题、账号或凭证，原子写入，损坏按空读取，登录前不读写。见 `main/model-groups/sessionBindings.ts`。 |
@@ -315,7 +362,7 @@ relay 原有 60 秒主动续期节流保持不变。
 | 跨 profile 的 Cindy 内置 Skill 副本 | `app.getPath('appData')/Cindy/shared-system-skills`，只保存随应用发布、可由 bundle 重建的官方 Skill；Global、China、dev 与 isolated profile 共用稳定物理路径，更新和共享发现链接必须持有下述互斥锁                                                                                                                                                                                                              |
 | 跨 profile 的共享 Skill 文件互斥    | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称                                                                                                                                                                                             |
 | 旧跨 profile 的 worktree 借用租约   | `app.getPath('appData')/Cindy/shared-worktree-runtime-leases`，内置模拟器下线后不再创建共享租约；回收器仍读取旧证据并重试已有 `.release` 回执。普通 Agent 的当前 profile 租约（`userData/worktree-runtime-leases`）照常创建与释放；持有它的主进程每 5 分钟刷新一次修改时间作为心跳（租约带 `heartbeatMs`）。租约只在显式释放后，或下列条件同时满足时不再保护：持有进程与记录的子进程都已不在（进程已退出，或该进程号已被启动更晚的进程复用：租约带持有进程自己的系统身份 `processIdentity` 时比对系统记录的启动时间，不受事后校时影响，旧租约与子进程比对租约最后修改时间；租约只由写入进程自己持有、不会被接管，因此不按进程名豁免；身份查询失败按仍在处理）；并且租约写于本次开机之前（留 10 分钟时钟余量），或最后一次心跳距今超过 1 小时（无心跳的旧客户端租约为 24 小时）。当前进程持有的租约、兼容的存活实例的租约始终保护。`.dev-instances` 里不支持租约协议的旧实例登记，在进程身份证明进程号被复用时不再一票否决；身份查询失败时，开机前登记的也按复用处理，POSIX 的 SingletonLock 仍要先核对进程身份。见 `worktree/runtimeLeases.ts` |
-| worktree 回收记录与恢复内容 | `userData/worktree-recycle/<资源 id>.json` 与 `history/`，记录删除意图、Git 快照引用与重试状态。归档／删除时只把已跟踪改动和未被 `.gitignore` 排除的新文件存进 Git 快照（`refs/cindy/worktree-recovery/...`；被 `assume-unchanged`／`skip-worktree` 隐藏的已跟踪改动也会存入，只在临时索引里清除标记，稀疏检出中不在盘上的文件除外），被忽略的依赖、构建产物、缓存，以及 worktree 内未跟踪的嵌套 Git 仓库（`git clone`／`git init` 产生）不保存，恢复后需重装、重建或重新克隆。快照对象写进基础仓库的本地对象库：普通 push 不会带上，`push --mirror` 或整体复制 `.git` 会；恢复内容经 Git 的换行与符号链接转换（与 `git checkout` 一致），不保证逐字节相同。快照引用在恢复成功、被新快照取代时立即删除；任务删除后只在启动对账时删除（常规回收路径不读任务库），归档任务的快照保留；对象由仓库自身 gc 回收。删除前对整棵树做最后一次核对，核对通过后才写入 `phase=removing` 与删除起点；此后不再重拍快照。续删只删除同时满足两点的文件：修改与创建时间都不晚于删除起点；路径在快照里，或在开始删除时记下的可丢弃路径（被忽略的文件、嵌套仓库）之下。可丢弃目录内部不再逐个检查时间：其中的内容本来就不保存，删除开始后新写入的同样不保存，也避免遍历依赖目录。可丢弃路径超过 2000 条时只按时间判断。保留原时间戳替换进已保存路径的内容无法识别。其余情况暂停删除。新客户端不再生成加密归档 `*.tar.gz.enc`；旧客户端记录里的归档照旧用于恢复；续删旧客户端的 `removing` 记录前要先验证归档能解密且完整，验证失败时保留目录，新客户端为仍完整的目录重拍快照后也会放弃旧归档；没有任何记录引用、超过 2 小时的归档在启动时删除，有记录读不出时整次跳过。旧客户端因失败暂停的请求（目录被替换、路径不受管等安全原因除外）升级后自动重试一次。见 `worktree/managedRecycle.ts`、`restoreRecovery.ts`、`recycleJournal.ts` 与 `recycleMaintenance.ts` |
+| worktree 回收记录与恢复内容 | `userData/worktree-recycle/<资源 id>.json` 与 `history/`，记录删除意图、Git 快照引用与重试状态。归档／删除时只把已跟踪改动和未被 `.gitignore` 排除的新文件存进 Git 快照（`refs/cindy/worktree-recovery/...`；被 `assume-unchanged`／`skip-worktree` 隐藏的已跟踪改动也会存入，只在临时索引里清除标记，稀疏检出中不在盘上的文件除外），被忽略的依赖、构建产物、缓存，以及 worktree 内未跟踪的嵌套 Git 仓库（`git clone`／`git init` 产生）不保存，恢复后需重装、重建或重新克隆。快照对象写进基础仓库的本地对象库：普通 push 不会带上，`push --mirror` 或整体复制 `.git` 会；恢复内容经 Git 的换行与符号链接转换（与 `git checkout` 一致），不保证逐字节相同。快照引用在恢复成功、被新快照取代时立即删除；任务删除后只在启动对账时删除（常规回收路径不读任务库），归档任务默认保留快照；用户明确选择丢弃时，只有归档时确认的检出内容与回收时相符，且目录回收成功后，才会释放快照引用。本次选择和待清理的引用都记入回收记录；对象由仓库自身 gc 回收。删除前对整棵树做最后一次核对，核对通过后才写入 `phase=removing` 与删除起点；此后不再重拍快照。续删只删除同时满足两点的文件：修改与创建时间都不晚于删除起点；路径在快照里，或在开始删除时记下的可丢弃路径（被忽略的文件、嵌套仓库）之下。可丢弃目录内部不再逐个检查时间：其中的内容本来就不保存，删除开始后新写入的同样不保存，也避免遍历依赖目录。可丢弃路径超过 2000 条时只按时间判断。保留原时间戳替换进已保存路径的内容无法识别。其余情况暂停删除。新客户端不再生成加密归档 `*.tar.gz.enc`；旧客户端记录里的归档照旧用于恢复；续删旧客户端的 `removing` 记录前要先验证归档能解密且完整，验证失败时保留目录，新客户端为仍完整的目录重拍快照后也会放弃旧归档；没有任何记录引用、超过 2 小时的归档在启动时删除，有记录读不出时整次跳过。旧客户端因失败暂停的请求（目录被替换、路径不受管等安全原因除外）升级后自动重试一次。见 `worktree/managedRecycle.ts`、`restoreRecovery.ts`、`recycleJournal.ts` 与 `recycleMaintenance.ts` |
 | 旧版 worktree 回收器兼容锁          | 不再创建新的跨 profile Git 锁；保留旧回执对 `<commonGitDir>/worktrees/<id>/locked` 及更早 `.worktree-keep` 的清理。仅当最后一个共享借用结束且自建文件身份和内容仍匹配时删除，不覆盖用户锁；失败沿用 `.release` 重试。支持精确的 `bigint:dev:ino:birthtimeNs` 身份；旧数字编号为 0 或超过安全整数范围时无法证明归属，保留锁但仍释放已结束的租约，避免 Windows 编号精度丢失误删用户替换文件 |
 | 跨 profile 的 worktree 回收日志位置 | `app.getPath('appData')/Cindy/shared-worktree-recycle-journals`，仍按日志目录哈希发布原 profile 日志位置，兼容可能同时运行的旧客户端；新客户端不再读取其他 profile 的日志来借用工程。不复制恢复状态、不代替 owner 执行恢复                                                                                                                                                                                      |
 | 供应商分享：分享者电脑上的受邀者用量 | `userData/remote-agent/provider-share-usage.json`，按（日期、分享、成员、Agent、供应商、模型）聚合 token 与轮次，行内 `byMember` 按组内电脑的键再分（2026-10-11 加；行键与合计不变，旧版本照常累计并原样写回，合计多出各台之和的部分算没区分电脑），原子替换写入，保留 400 天；只含服务端生成的分享与成员 id，不含昵称、对话或凭证。成员删除后保留（管理页不再显示），同一人重新加入时接续 |
@@ -342,7 +389,7 @@ relay 原有 60 秒主动续期节流保持不变。
 | 语音输入声纹识别模型 | `userData/voice-models/<哈希前缀>-<文件名>.onnx`，按内容哈希从区域 CDN 下载并在可见前校验 SHA-256；不含个人数据，本机所有账号共用。新版本模型下载完成后删除旧版本文件 |
 | Mobile 语音输入声纹（生物特征） | SecureStore（iOS 钥匙串 / Android Keystore）键 `xdt.voiceSpeakerProfile.v1.<账号 key 的 SHA-256 前 32 位>`，内容同 Desktop：声纹向量、录入时间与模型哈希；开关与灵敏度 override 在 AsyncStorage `cindy.mobile.voice-speaker-filter.v1.<账号 key>`。只在本机，不同步、不上传、不进日志；退出登录时随该账号的其他本机数据一起删除（模型文件保留）。删除前写 AsyncStorage `cindy.mobile.voice-speaker-filter.cleanup.v1.<账号 key>` 重试标记，不含声纹；失败时保留标记，启动、回到前台及该账号下次读写前重试，全部删除成功后才移除。标记落盘也失败时保留进程内重试，无法保证进程终止后的恢复；不因声纹删除失败阻止退出凭证清除。朗读音频只在内存中处理 |
 | Mobile 语音输入声纹识别模型 | `cacheDirectory/voice-models/`，与 Desktop 同一组按内容哈希下载、校验 SHA-256 后才可见的文件；放缓存目录以免进入 iCloud / Android 备份。系统清理缓存后，下次语音输入发现缺失会在后台重新下载，本次不过滤 |
-| Mobile iOS 键盘停靠高度 | AsyncStorage `cindy.mobile.keyboard-docked-height.v2`（设备级，不分账号）：`{ 窗口宽度: 键盘高度 }` 两个整数，只在 iOS 正常停靠键盘、且不在转屏后 1 秒内时更新（取最高），供系统发来异常键盘坐标时沿用（见 `docs/dev-rules/mobile-development.md`「iOS 键盘坐标异常」）。不含用户内容，退出登录不清除。见 `apps/mobile/src/session/keyboardOverlap.ts` |
+| Mobile iOS 键盘停靠高度 | AsyncStorage `cindy.mobile.keyboard-docked-height.v2`（设备级，不分账号）：`{ 窗口宽度: [键盘高度, …] }`，每个宽度保留最近 6 次停稳的高度（整数，由旧到新；旧版本存的是单个历史最高值，读入时当作最旧的一条），只在 iOS 正常停靠键盘、且不在转屏后 1 秒内时更新，供系统发来异常键盘坐标时沿用其中最高值（见 `docs/dev-rules/mobile-development.md`「iOS 键盘坐标异常」）。不含用户内容，退出登录不清除。见 `apps/mobile/src/session/keyboardOverlap.ts` |
 | 新电脑设置：上次迁移记录 | `userData/owners/<账号>/setup-migration-state.json`，只记上次迁移来源电脑的名称、完成时间、一次性清单（类别、显示名称、插件实例键或供应商 / MCP id、完成标记）与是否已关闭首次建议；不含密钥、令牌、凭证或设置值。复用设置文件跨进程锁与原子替换，账号切换按目录隔离，用户「关闭清单」后清空。快照只带「是否已配置」的布尔提示。用户勾选「密钥」且原电脑的人允许后，API Key / PAT 以一次性加密传来，在 Main 内存中解开后写入各自原有的 safeStorage 存储，不落其他文件（`docs/product-rules/new-device-setup-migration.md`） |
 | iOS 桌面小组件数据 | App Group `group.<bundle id>`（与 expo-sharing 共用）里的 `usage-widget-snapshot.json`：每台电脑最近一次的余量与用量快照（已按电脑上「隐藏个人信息」打码，含账号名或邮箱前缀、余量、近 30 天用量与模型名）、「自动」所选电脑 id 与电脑名列表；不含凭证。同一 App Group 的 UserDefaults 键 `usageWidgetPins` 只记组件选中的电脑 id 与时间，超过 2 天的丢弃。App 在前台时整份原子替换写入；切换或退出账号时删除快照文件。见 `apps/mobile/modules/cindy-usage-widgets` 与 `plugins/usage-widgets` |
 | Android 桌面小组件数据 | 应用私有 `noBackupFilesDir/usage-widget-snapshot.json`（不进 Android 自动备份），内容与 iOS 的 App Group 文件相同（已打码的余量与用量快照、「自动」所选电脑 id 与电脑名列表，不含凭证）；SharedPreferences `cindy-usage-widgets` 里 `computer.<组件 id>` 记组件选中的电脑，`usageWidgetPins` 记固定电脑 id 与时间（超过 2 天丢弃），删除组件时清理。切换或退出账号时删除快照文件，并清掉所有 `computer.` / `pinned.` / `hidden.` 与 `usageWidgetPins`（它们含上一个账号的电脑 id 与账号名），再重绘组件。见 `apps/mobile/modules/cindy-usage-widgets/android` |
@@ -468,3 +515,16 @@ Claude 的插件技能不受 `skillOverrides` 控制，因此每个本地 Query 
 
 升级清理只删除可确认由 Cindy 创建的旧软链接，不删除目标内容、不覆盖用户同名
 技能、不修改 Git ignore。旧版本 Cindy 实例仍可能重建旧链接，这是迁移的已知边界。
+
+### 项目图标
+
+`owners/<账号>/project-icons.json` 保存项目身份到 Emoji、`symbol:<名称>`、`text:<缩写>`
+或规范 `cindy-media://blobs/<hash>.png` 地址的显式覆盖，最大 1MiB。
+使用既有 override settings 跨进程锁与原子替换；损坏文件保留且拒绝覆盖。
+名称继续使用现有项目别名表；组合编辑额外使用账号内的 `project-info-write.lock` 串行化，
+别名事务失败补偿旧图标。恢复默认删除项目键，不在项目目录写文件。
+
+用户图片通过统一媒体入库助手写入总仓，挂 `integration-cache` / `project-icon:<projectKey>` 引用，
+`isCache: false` 防止有效用户图片按缓存淘汰。替换／恢复默认成功后释放旧引用，未引用字节交给既有回收器。
+图片不在设置 JSON 内存 base64、不持久化控制端路径；读取只接受当前账号中已登记的项目身份。
+实现：`main/projectIconStore.ts`、`projectInfoCore.ts`、`projectIconMedia.ts`。

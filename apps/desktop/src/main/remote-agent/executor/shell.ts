@@ -204,6 +204,14 @@ export function runOnce(script: string, opts: RunOptions): Promise<RunResult> {
         reject(error);
         return;
       }
+      // Cancellation can arrive during asynchronous filesystem preparation,
+      // before a child exists and before its abort listener is installed.
+      if (opts.signal?.aborted) {
+        try { await file.cleanup(); }
+        catch (error) { reject(error); return; }
+        resolve({ output: Buffer.alloc(0), exitCode: null, timedOut: false, aborted: true });
+        return;
+      }
       let child: ChildProcess;
       try {
         child = spawn(shell.file, shell.args, {

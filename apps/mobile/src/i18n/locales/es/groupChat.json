@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · por {{person}}"
+  },
   "progress": {
     "stop": "Detener",
     "stopMine": "Detener las mías",
@@ -127,7 +130,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} no pudo responder: el modelo actual no admite imágenes.",
         "advice": "Elige un modelo compatible con imágenes.",
-        "details": "Elige un modelo compatible con imágenes, o activa y configura Vision Bridge en Configuración → Personalización, y luego vuelve a enviar tu mensaje."
+        "details": "Elige un modelo compatible con imágenes."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} no pudo responder: no hay ningún modelo disponible.",
@@ -301,6 +304,8 @@
       "loading": "Cargando configuración…",
       "unavailable": "No se pudo cargar la configuración del grupo. Inténtalo de nuevo."
     },
+    "allowMemberInvites": "Permitir que todos inviten amigos",
+    "allowMemberInvitesHint": "Al activarlo, todos los miembros del grupo pueden invitar amigos. Solo el dueño del grupo y los administradores pueden cambiarlo.",
     "allowMentionAllBots": "Permitir @todos los amigos",
     "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los amigos podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti.",
     "notifications": {
@@ -319,6 +324,7 @@
     "memberLimit": "Un chat grupal necesita de 2 a 6 amigos de equipo",
     "memberUnavailable": "Uno de estos amigos de equipo no está disponible. Elige otro y vuelve a intentarlo.",
     "mentionUnavailable": "Un miembro mencionado ya no está disponible. Elige a quién mencionar antes de volver a enviar.",
+    "mentionAmbiguous": "Hay más de un miembro llamado «{{name}}». Elige a quién te refieres en la lista de @.",
     "notFound": "Este chat grupal ya no existe",
     "hostNotReady": "Cindy todavía se está preparando. Inténtalo de nuevo en un momento.",
     "planOpen": "Hay una división del trabajo en curso. Finalízala o detenla antes de iniciar otra.",
@@ -585,6 +591,11 @@
     "transferHint": "Pasará a ser el propietario y tú serás administrador.",
     "removeTitle": "¿Quitar a {{name}} de este grupo?",
     "removeHint": "Perderá el acceso a los mensajes. Sus amigos también saldrán del grupo.",
+    "removeOwn": "Quitar del grupo",
+    "removeOwnScope": "Esto solo afecta a este grupo. Tu compañero permanece en tu cuenta.",
+    "removeOwnHint": "{{name}} dejará de recibir mensajes de «{{group}}». Se conserva el historial; los otros grupos y chats privados no se ven afectados.",
+    "removeOwnActiveHint": "Se detendrán sus solicitudes activas en este grupo. Las tareas iniciadas de forma independiente seguirán ejecutándose.",
+    "stopAndRemove": "Detener y quitar",
     "confirm": "Confirmar",
     "inviteTitle": "Invitar al grupo",
     "reusableLink": "Sin vencimiento · Reutilizable por varias personas",

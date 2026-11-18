@@ -275,6 +275,37 @@ describe('attachment access confirmation IPC', () => {
     expect(discard).not.toHaveBeenCalled();
   });
 
+  // Regression: HashRouter task switches fired did-start-navigation while a send
+  // was pending. Existing tests only covered document replacement, so ordinary
+  // navigation cancelled uploads and masked transport errors as permission errors.
+  // Unit tier: invoke the registered IPC with a same-document event during media
+  // preparation / remote dispatch; observe delivery or the original timeout.
+  it.each(['preparing', 'dispatched'] as const)(
+    'preserves a remote send across a task switch while %s', async phase => {
+      const switchTask = () => senderEvents.emit(
+        'did-start-navigation', {}, 'file:///app/index.html#/cc-agent/another', true, true,
+      );
+      if (phase === 'preparing') {
+        vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async (_channel, args) => {
+          switchTask();
+          sourceFileAccessTransferOptions().assertCurrent?.();
+          return args;
+        });
+        vi.mocked(remoteInvoke).mockResolvedValueOnce({ ok: true, result: 'accepted' });
+        await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).resolves.toBe('accepted');
+      } else {
+        vi.mocked(remoteInvoke).mockImplementationOnce(async () => {
+          switchTask();
+          throw new DeviceLinkError('INVOKE_TIMEOUT', 'uncertain');
+        });
+        await expect(call(DEVICE_LINK_INVOKE.INVOKE, payload)).rejects.toThrow('[DEVICE_LINK_TIMEOUT] uncertain');
+      }
+      expect(remoteInvoke).toHaveBeenCalledOnce();
+      expect(h.invalidations.size).toBe(0);
+      expect(senderEvents.listenerCount('did-start-navigation')).toBe(0);
+    },
+  );
+
   it.each([false, true])('queue content edits recover only in the foreground (background=%s)', async background => {
     const read = installReadFailure();
     h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });

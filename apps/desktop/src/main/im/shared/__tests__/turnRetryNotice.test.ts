@@ -21,7 +21,23 @@ import {
 beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
 
+// #10854: the stable legacy reason includes non-budget failures, so IM must not
+// turn a first empty response plus failed dispatch into repeated empty responses.
+it.each([undefined, 'budget', 'rate-limit', 'session-breaker', 'dispatch-not-accepted', 'dispatch-error'])(
+  'uses neutral silent-stop IM copy for cause %s', silentStopFailureCause => {
+    expect(terminalErrorText({ reason: 'silent-stop-exhausted', silentStopFailureCause }))
+      .toBe('检测到空响应，自动续跑已暂停。');
+  },
+);
+
 describe('turnRetryNotice', () => {
+  // #10385, unit: both channel styles must expose recovery, never the provider's raw details.
+  it.each(['telegram', 'wechat'])('localizes missing review models for %s without widening permissions', (channel) => {
+    const text = turnRetryNotice({ message: '[AUTO_REVIEW_NO_AVAILABLE_MODEL] PRIVATE_EXCEPTION' }, { channel });
+    expect(text).toContain('模型供应商');
+    expect(text).toContain('辅助模型');
+    expect(text).not.toMatch(/PRIVATE_EXCEPTION|完全访问/);
+  });
   it('终态 429 外层重投 → 渠道侧限流进度', () => {
     expect(
       turnRetryNotice({
