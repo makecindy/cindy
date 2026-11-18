@@ -501,6 +501,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     let restartedHistory = false;
     const handle = await startRemoteAgentSession(input.agentKind, opts, {
       startupSignal: attempt.signal,
+      assertStartupCurrent: requireCurrent,
       reconnectAuthorization: (isCurrent, options) => reconnectAuthorization?.(isCurrent, options) ?? Promise.resolve(),
       onTaskGrantRenewable: (renewable) => { grantRenewable = renewable; },
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,
