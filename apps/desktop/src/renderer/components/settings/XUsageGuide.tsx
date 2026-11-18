@@ -28,10 +28,10 @@
  * 一加 variant 就把本组件想消掉的「两处文案漂移」风险请了回来。
  *
  * 两条落在文案里、代码里看不出来的约定(由 xUsageGuideCopy 测试守着):
- *   - **bot handle `@askmycindy` 写在五份 locale 的 usageBody 和 withdrawBody 里。** 不走 binding:
- *     这一节在用户还没绑定时就要显示, 那时候没有 scopeName 可取。硬编码是安全的 ——
+ *   - **bot handle `@askmycindy` 写在五份 locale 的 usageBody、usageBodyOnDevice 和 withdrawBody 里。**
+ *     不走 binding:这一节在用户还没绑定时就要显示, 那时候没有 scopeName 可取。硬编码是安全的 ——
  *     cn 与 global 两份 endpoint manifest 的 xHookWsUrl 指向同一个 x-hook 服务, 也就是
- *     同一个 bot。改 handle 时所有语言的两处说明都要改。
+ *     同一个 bot。改 handle 时所有语言的三处说明都要改。
  *   - **`/删除` 只在 zh-CN 和 zh-TW 里提,命令本身不翻译。** 服务端不接受 `/刪除`。
  *     非中文说明只展示通用的 `@askmycindy /delete`,不额外介绍中文命令词。
  */
