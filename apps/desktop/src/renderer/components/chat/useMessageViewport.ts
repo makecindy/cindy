@@ -92,9 +92,13 @@ export function useMessageViewport(options: Options) {
       flushSync(() => reconcileRef.current());
     });
   }, []);
+  // Callers move the viewport first and may run inside a rendering callback
+  // (animateFocusScroll's tick): reconcile synchronously so the destination
+  // commits before the current frame paints and same-paint corrections can
+  // read the mounted heights.
   const syncViewport = useCallback(() => {
-    if (needsReconcileRef.current()) scheduleViewportReconcile();
-  }, [scheduleViewportReconcile]);
+    if (needsReconcileRef.current()) flushSync(() => reconcileRef.current());
+  }, []);
   useEffect(() => () => {
     if (frame.current) cancelAnimationFrame(frame.current);
   }, []);
@@ -215,17 +219,18 @@ export function useMessageViewport(options: Options) {
     const root = options.scrollRef.current;
     const items = options.itemsRef.current;
     if (!root || !items) return;
-    // A scroll event runs before paint. Deferring mounting to another rAF can
-    // expose empty placeholders when a wheel/scrollbar jump exceeds overscan,
-    // so every path flushes through the shared rAF scheduler below.
-    const reconcileBeforePaint = syncViewport;
+    // A scroll event dispatches before this frame's rAF callbacks: a rAF
+    // requested here reconciles before that frame paints, coalescing bursts
+    // of scroll and resize signals into one commit.
     const stopObservingWrites = observeProgrammaticScroll(root, () => {
       // The owner's scroll coordinator must see the new position before our
       // DOM replacement triggers its height/MutationObserver compensation.
+      // Its state updates batch normally; only the reconcile commits now.
       latest.current.onProgrammaticScroll?.();
-      scheduleViewportReconcile();
+      if (needsReconcileRef.current()) flushSync(() => reconcileRef.current());
     });
     const schedule = scheduleViewportReconcile;
+    const onScroll = () => scheduleViewportReconcile();
     const retainInteraction = (event: Event) => {
       const row = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-render-item-key]') : null;
       if (row && items.contains(row) && row.dataset.renderItemKey) {
@@ -325,7 +330,7 @@ export function useMessageViewport(options: Options) {
     const mutationObserver = new MutationObserver(invalidate);
     mutations.current = mutationObserver;
     mutationObserver.observe(items, { subtree: true, childList: true, characterData: true, attributes: true, attributeOldValue: true });
-    root.addEventListener('scroll', reconcileBeforePaint, { passive: true });
+    root.addEventListener('scroll', onScroll, { passive: true });
     root.addEventListener('pointerdown', retainInteraction, true);
     root.addEventListener('focusin', retainInteraction);
     root.addEventListener('keydown', retainInteraction, true);
@@ -344,7 +349,7 @@ export function useMessageViewport(options: Options) {
       mutationObserver.disconnect();
       mutations.current = null;
       measurement.current = null;
-      root.removeEventListener('scroll', reconcileBeforePaint);
+      root.removeEventListener('scroll', onScroll);
       root.removeEventListener('pointerdown', retainInteraction, true);
       root.removeEventListener('focusin', retainInteraction);
       root.removeEventListener('keydown', retainInteraction, true);
@@ -354,7 +359,7 @@ export function useMessageViewport(options: Options) {
       document.removeEventListener('focusout', settleTextAccess);
       document.removeEventListener('selectionchange', updateTextAccess);
     };
-  }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, syncViewport, scheduleViewportReconcile, geometry]);
+  }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, scheduleViewportReconcile, geometry]);
 
   return {
     getViewportTopRow,

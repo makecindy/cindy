@@ -14,6 +14,9 @@ let sequence: number;
 let viewportHeight: number;
 let headerHeight: number;
 let scrollWrites: number[];
+let viewportRenders: number;
+// jsdom does not clamp scrollTop like a browser; mocked scrollTop lives here.
+const tops = new WeakMap<HTMLElement, number>();
 let rowMeasurements: number;
 let parentRenders: number;
 let notifyResize: () => void;
@@ -43,6 +46,7 @@ function Fixture({ disabled = false, restore = false, restoreOffset, onProgramma
       initialAnchor: restore ? '40' : undefined,
       initialHeights: restore ? Object.fromEntries(entries.map(entry => [entry.key, 180])) : undefined,
     }}>{viewport => {
+      viewportRenders++;
       syncViewport = () => apiRef.current!.syncViewport();
       reconcileViewport = () => apiRef.current!.reconcileViewport();
       getViewportTopRow = () => apiRef.current!.getViewportTopRow();
@@ -69,7 +73,7 @@ const scroller = () => host.querySelector<HTMLElement>('[data-scroll]')!;
 const row = (key: number) => host.querySelector<HTMLElement>(`[data-render-item-key="${key}"]`)!;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  frames = new Map(); sequence = 0; viewportHeight = 600; headerHeight = 0; scrollWrites = []; rowMeasurements = 0; parentRenders = 0;
+  frames = new Map(); sequence = 0; viewportHeight = 600; headerHeight = 0; scrollWrites = []; rowMeasurements = 0; parentRenders = 0; viewportRenders = 0;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++sequence, callback); return sequence; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
   vi.stubGlobal('ResizeObserver', class {
@@ -93,8 +97,6 @@ beforeEach(() => {
     return Array.from(this.querySelectorAll<HTMLElement>('[data-render-item-key]'))
       .reduce((sum, row) => sum + (Number.parseFloat(row.style.height) || 180), headerHeight);
   });
-  // jsdom does not clamp scrollTop like a browser.
-  const tops = new WeakMap<HTMLElement, number>();
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(function (this: HTMLElement) { return tops.get(this) || 0; });
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(function (this: HTMLElement, value: number) {
     scrollWrites.push(value);
@@ -450,8 +452,9 @@ describe('message viewport content virtualization', () => {
   it('mounts rows reached by a large scroll and remembers heights when they leave', async () => {
     await act(async () => root.render(<Fixture />));
     await act(async () => { scroller().dispatchEvent(new WheelEvent('wheel', { bubbles: true })); scroller().scrollTop = 0; scroller().dispatchEvent(new Event('scroll')); });
-    // The destination must be mounted by the pending frame callback, before
-    // paint. Otherwise fast wheel/scrollbar input can paint placeholders.
+    // The destination must be mounted by this frame's rAF callbacks, which run
+    // before this frame paints. Otherwise fast wheel/scrollbar input can paint
+    // a viewport of placeholders.
     await flushFrames();
     expect(row(0).querySelector('button')).not.toBeNull();
     expect(scroller().scrollTop).toBe(0);
@@ -479,29 +482,31 @@ describe('message viewport content virtualization', () => {
     expect(row(10).querySelector('button')).not.toBeNull();
     expect(row(10).getBoundingClientRect().top).toBe(0);
   });
-  it('coalesces a burst of scroll, write, resize and sync signals into one window commit', async () => {
+  it('coalesces a burst of scroll and resize signals into one window commit', async () => {
     await act(async () => root.render(<Fixture restore />));
     await flushFrames();
-    let commits = 0;
-    const commitObserver = new MutationObserver(() => { commits += 1; });
-    commitObserver.observe(scroller(), { childList: true, subtree: true });
+    const rendersBefore = viewportRenders;
     await act(async () => {
-      scroller().scrollTop = 1800;
-      await new Promise<void>(resolve => queueMicrotask(resolve));
-      syncViewport();
+      // Move between scroll events without a programmatic write (tops mocks
+      // the native position), the way several scroll events can arrive before
+      // one frame renders.
+      tops.set(scroller(), 3600);
+      scroller().dispatchEvent(new Event('scroll'));
+      tops.set(scroller(), 0);
+      scroller().dispatchEvent(new Event('scroll'));
+      tops.set(scroller(), 1800);
       scroller().dispatchEvent(new Event('scroll'));
       viewportHeight = 1600;
       notifyResize();
     });
     await flushFrames();
-    commitObserver.disconnect();
-    // A streaming pin emits several of these signals per frame; the burst
-    // must settle in a single reconcile commit, not one forced commit each.
-    expect(commits).toBe(1);
+    // Scroll dispatches before this frame's rAF callbacks, so the burst must
+    // settle in a single window render before paint, not one forced commit per event.
+    expect(viewportRenders - rendersBefore).toBe(1);
     expect(row(10).querySelector('button')).not.toBeNull();
     expect(row(48).querySelector('button')).toBeNull();
   });
-  it('mounts a direct animation-frame write before paint, without a scroll event', async () => {
+  it('mounts a direct animation-frame write at its microtask checkpoint without a scroll event', async () => {
     await act(async () => root.render(<Fixture restore />));
     await flushFrames();
     expect(row(10).querySelector('button')).toBeNull();
@@ -511,12 +516,7 @@ describe('message viewport content virtualization', () => {
       frames.clear();
       pending.forEach(callback => callback(16));
       await new Promise<void>(resolve => queueMicrotask(resolve));
-      // No scroll event has been delivered. The write schedules the window
-      // commit in the next frame's callback, which still runs before paint.
-      const scheduled = [...frames.values()];
-      frames.clear();
-      scheduled.forEach(callback => callback(32));
-      await new Promise<void>(resolve => queueMicrotask(resolve));
+      // No scroll event or next animation frame has been delivered.
       expect(row(10).querySelector('button')).not.toBeNull();
       expect(row(10).getBoundingClientRect().top).toBe(0);
     });
@@ -539,10 +539,9 @@ describe('message viewport content virtualization', () => {
     await act(async () => {
       scroller().scrollTop = 0;
       await new Promise<void>(resolve => queueMicrotask(resolve));
+      expect(scroller().scrollTop).toBe(0);
+      expect(row(0).querySelector('button')).not.toBeNull();
     });
-    await flushFrames();
-    expect(scroller().scrollTop).toBe(0);
-    expect(row(0).querySelector('button')).not.toBeNull();
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
   it('updates the owner before DOM observers can compensate toward a stale reading position', async () => {
@@ -561,10 +560,6 @@ describe('message viewport content virtualization', () => {
         scroller().scrollTop = 1800;
         await new Promise<void>(resolve => queueMicrotask(resolve));
       });
-      // The compensator reverts unknown DOM replacements to its saved reading
-      // point. The write updated that point at its microtask; the replacement
-      // itself commits in the pending frame, before paint.
-      await flushFrames();
       expect(observeScroll).toHaveBeenCalled();
       expect(scroller().scrollTop).toBe(1800);
       expect(row(10).querySelector('button')).not.toBeNull();
