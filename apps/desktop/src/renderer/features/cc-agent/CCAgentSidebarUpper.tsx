@@ -466,12 +466,7 @@ export function CCAgentSidebarUpper() {
     remoteProjectsStore.subscribe,
     remoteProjectsStore.getMergedRemoteSessions,
   );
-  const remoteProjectSessions = useMemo(
-    () => CINDY_MAKE_ENABLED
-      ? remoteProjectSessionsRaw
-      : remoteProjectSessionsRaw.filter((session) => !isCindyMakeSource(session.source)),
-    [remoteProjectSessionsRaw],
-  );
+  const remoteProjectSessions = useRemoteProjectSessions();
   const remoteDevices = useRemoteDevices();
   const selectedMachineId = useEffectiveSelectedMachineId();
   const projectAliasMembers = useMemo(

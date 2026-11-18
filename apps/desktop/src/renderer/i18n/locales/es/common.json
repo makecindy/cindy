@@ -21925,6 +21925,7 @@
     "removeTitle": "¿Quitar {{name}}?",
     "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en esta computadora.",
     "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
+    "unreachable": "No se pudo conectar con el servicio de la cuenta, así que no se puede confirmar el inicio de sesión. Comprueba la red e inténtalo de nuevo.",
     "openDirectory": "Abrir carpeta de la cuenta",
     "openDirectoryFailed": "No se pudo abrir la carpeta de la cuenta. Puede que se haya movido o eliminado.",
     "loginAgain": "Iniciar sesión nuevamente",
