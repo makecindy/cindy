@@ -7,6 +7,7 @@
 
 import { BrowserWindow } from 'electron';
 import { notifyUsagePricingChanged } from './pricingChanges.js';
+import { createLogger } from '../logger.js';
 import type { AgentKind, Catalog } from '@cindy/model-providers';
 
 import {
@@ -29,6 +30,8 @@ export type { ModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
 export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pricing-changed';
+
+const log = createLogger('referenceModelPricing');
 
 /**
  * Catalog 刷新只重建非 XD 参考价；registryPricingCatalog 本身也会过滤 XD route。
@@ -104,8 +107,11 @@ function publishReferenceModelPricing(pricing: ModelPricingCatalog, table: strin
   lastBroadcastTable = table;
   notifyUsagePricingChanged();
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
+    if (win.isDestroyed()) continue;
+    try {
       win.webContents.send(REFERENCE_MODEL_PRICING_CHANGED_CHANNEL, pricing);
+    } catch {
+      // Window teardown may race the broadcast; other windows still receive it.
     }
   }
 }
@@ -127,10 +133,18 @@ export function followReferenceModelPricingAfterProviderChange(): void {
   followUpScheduled = true;
   setImmediate(() => {
     followUpScheduled = false;
-    const pricing = getDisplayReferenceModelPricing();
-    const table = JSON.stringify(pricing);
-    if (table === lastBroadcastTable) return;
-    publishReferenceModelPricing(pricing, table);
+    // Nothing awaits this callback: an escaping error would be an uncaughtException, which
+    // shuts the app down. A missed price update is retried by the next provider change.
+    try {
+      const pricing = getDisplayReferenceModelPricing();
+      const table = JSON.stringify(pricing);
+      if (table === lastBroadcastTable) return;
+      publishReferenceModelPricing(pricing, table);
+    } catch (error) {
+      log.warn('reference price follow-up failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   });
 }
 

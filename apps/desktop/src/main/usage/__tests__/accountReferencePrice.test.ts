@@ -243,3 +243,35 @@ it('quotes models added by an account\'s own discovery, once per burst and only 
     windows.mockRestore();
   }
 });
+
+// Unit: the follow-up runs in setImmediate, where an escaping error becomes an
+// uncaughtException and the main process shuts down (review on #11203). A closing window
+// or a failing account read must cost one price update, not the app.
+it('keeps a failing window or account read inside the deferred follow-up', async () => {
+  const received: unknown[] = [];
+  const windows = vi.spyOn(BrowserWindow, 'getAllWindows').mockReturnValue([
+    { isDestroyed: () => false, webContents: { send: () => { throw new Error('Object has been destroyed'); } } },
+    { isDestroyed: () => false, webContents: { send: (_channel: string, pricing: unknown) => received.push(pricing) } },
+  ] as never);
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  const account = accountCatalog.providers.find(provider => provider.id === 'openai-account')!;
+  const before = account.models.codex!;
+  try {
+    broadcastReferenceModelPricing();
+    expect(received).toHaveLength(1);
+
+    account.models.codex = [...before, { ...before[0]!, id: 'gpt-5.6-sol', name: 'Sol' }];
+    followReferenceModelPricingAfterProviderChange();
+    await tick();
+    expect(received).toHaveLength(2);
+
+    setReferencePricingDisplayProviders(() => { throw new Error('pool unreadable'); });
+    followReferenceModelPricingAfterProviderChange();
+    await tick();
+    expect(received).toHaveLength(2);
+  } finally {
+    account.models.codex = before;
+    setReferencePricingDisplayProviders(null);
+    windows.mockRestore();
+  }
+});
