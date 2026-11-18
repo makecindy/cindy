@@ -1044,7 +1044,7 @@ function restoredConnection(queued: () => number, policyDisabled = false) {
 // #10135: unit tier, real SQLite/store/worker and public outbox lifecycle. The
 // prior fake DB cases never exercised aged rows after context recovery. Transport
 // and secrets are synthetic; the historical attempt count is seeded, not traffic.
-it.each(['text', 'notice-unknown', 'media', 'media-missing', 'media-empty', 'media-too-large', 'media-removed-after-notice', 'body-failed', 'body-failed-same-context', 'chunks', 'same-context-refresh', 'localized-time', 'classical-time'] as const)('labels recovered old output and preserves fresh long-task results: %s', async mode => {
+it.each(['text', 'notice-unknown', 'media', 'media-missing', 'media-empty', 'media-too-large', 'media-mixed-missing', 'media-later-missing', 'media-removed-after-notice', 'body-failed', 'body-failed-same-context', 'chunks', 'same-context-refresh', 'localized-time', 'classical-time'] as const)('labels recovered old output and preserves fresh long-task results: %s', async mode => {
   vi.useFakeTimers();
   const localizedTime = mode === 'localized-time' || mode === 'classical-time';
   // Vitest worker threads cannot reliably change the process's timezone via TZ.
@@ -1070,7 +1070,7 @@ it.each(['text', 'notice-unknown', 'media', 'media-missing', 'media-empty', 'med
   const files = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const isMedia = mode.startsWith('media');
-  const invalidMedia = mode === 'media-missing' || mode === 'media-empty' || mode === 'media-too-large';
+  const invalidMedia = mode === 'media-missing' || mode === 'media-empty' || mode === 'media-too-large' || mode === 'media-mixed-missing' || mode === 'media-later-missing';
   const tempDir = isMedia ? await files.mkdtemp(path.join(tmpdir(), 'wechat-delayed-')) : null;
   const mediaPath = tempDir ? path.join(tempDir, 'example.txt') : null;
   if (mediaPath) await files.writeFile(mediaPath, 'synthetic file');
@@ -1103,7 +1103,7 @@ it.each(['text', 'notice-unknown', 'media', 'media-missing', 'media-empty', 'med
         FROM wechat_outbox WHERE id='old-out'`).run(`old-out-${index}`, `old-client-${index}`, index, `old-reply-${index}`);
     }
   }
-  if (mediaPath) sql.prepare("UPDATE wechat_outbox SET text='', media_json=? WHERE task_id='old'").run(JSON.stringify([{ absPath: mediaPath, clientId: 'old-media-client' }]));
+  if (mediaPath) sql.prepare("UPDATE wechat_outbox SET text=?, media_json=? WHERE task_id='old'").run(mode === 'media-mixed-missing' ? 'old-reply' : '', JSON.stringify([{ absPath: mediaPath, clientId: 'old-media-client' }]));
   const credentials = { bindingEpoch: 'epoch', botToken: 'synthetic-token', ilinkBotId: 'wechat-bot', userId: 'owner', baseUrl: 'https://example.invalid', boundAt: oldAt };
   const transport = blockingLiveTransport();
   const sends: Array<Parameters<WechatTransport['sendMessage']>[0]> = [];
@@ -1161,7 +1161,13 @@ it.each(['text', 'notice-unknown', 'media', 'media-missing', 'media-empty', 'med
     } else visible.length = 0; // A new question starts a new visible timeline.
     now += bodyFailureCase && !sameContextRefresh ? 4 * 24 * 60 * 60 * 1000 : 2000;
     oldBodyBlocked = false;
-    if (mode === 'media-missing') await files.rm(mediaPath!);
+    if (mode === 'media-missing' || mode === 'media-mixed-missing') await files.rm(mediaPath!);
+    if (mode === 'media-later-missing') {
+      sql.prepare("UPDATE wechat_outbox SET media_json=? WHERE id='old-out'").run(JSON.stringify([
+        { absPath: mediaPath, clientId: 'old-media-client' },
+        { absPath: path.join(tempDir!, 'missing.txt'), clientId: 'missing-media-client' },
+      ]));
+    }
     if (mode === 'media-empty') await files.writeFile(mediaPath!, '');
     if (mode === 'media-too-large') await files.truncate(mediaPath!, 5 * 1024 * 1024 + 1);
     if (mode !== 'body-failed-same-context') {
@@ -1170,11 +1176,22 @@ it.each(['text', 'notice-unknown', 'media', 'media-missing', 'media-empty', 'med
     await vi.waitFor(() => expect(['delivered', 'failed_terminal']).toContain(sql.prepare("SELECT status FROM wechat_outbox WHERE task_id='old'").pluck().get()), { timeout: 4000 });
     expect(sql.prepare("SELECT status FROM wechat_outbox WHERE task_id='old'").pluck().get()).toBe(invalidMedia ? 'failed_terminal' : 'delivered');
     if (invalidMedia) {
-      expect(sends).toEqual([]); // No attribution for content that cannot be delivered.
-      expect(visible).toEqual([]);
-      expect(transport.uploadMedia).not.toHaveBeenCalled();
-      expect(transport.sendMedia).not.toHaveBeenCalled();
-      expect(sql.prepare("SELECT attempts,text FROM wechat_outbox WHERE id='old-out'").get()).toEqual({ attempts: 9757, text: '' });
+      if (mode === 'media-mixed-missing') {
+        expect(sends.map(item => item.text)).toEqual([expect.stringContaining('old-question'), 'old-reply']);
+        expect(sends[1]?.clientId).toBe('old-client');
+      } else if (mode === 'media-later-missing') {
+        expect(sends.map(item => item.text)).toEqual([expect.stringContaining('old-question')]);
+        expect(order).toEqual(['text', 'upload', 'media']);
+        expect(transport.sendMedia).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'old-media-client' }), expect.any(AbortSignal));
+      } else {
+        expect(sends).toEqual([]); // No attribution for content that cannot be delivered.
+        expect(visible).toEqual([]);
+      }
+      if (mode !== 'media-later-missing') {
+        expect(transport.uploadMedia).not.toHaveBeenCalled();
+        expect(transport.sendMedia).not.toHaveBeenCalled();
+      }
+      expect(sql.prepare("SELECT attempts,text FROM wechat_outbox WHERE id='old-out'").get()).toEqual({ attempts: 9757, text: mode === 'media-mixed-missing' ? 'old-reply' : '' });
       return;
     }
     if (mode === 'chunks') {

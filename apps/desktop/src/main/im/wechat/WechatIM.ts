@@ -1661,15 +1661,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     const mediaItems = parseOutboxMedia(item.mediaJson);
     const delayed = (item.text || mediaItems.length > 0) &&
       this.#now() - item.createdAt >= DELAYED_REPLY_NOTICE_AFTER_MS;
-    const preparedMedia: Awaited<ReturnType<typeof readOutboundWechatFile>>[] = [];
-    if (delayed) {
-      // At most four 5 MB files. Validate and retain these bytes before promising
-      // delayed content, so a local permanent failure cannot leave only a notice.
-      for (const media of mediaItems) {
-        this.#assertSendEpochCurrent(bindingEpoch, signal);
-        preparedMedia.push(await readOutboundWechatFile(media.absPath));
-        this.#assertSendEpochCurrent(bindingEpoch, signal);
-      }
+    const sendDelayedNotice = async (): Promise<void> => {
+      if (!delayed) return;
       const noticeId = createHash('sha256').update(JSON.stringify([
         'wechat-delayed-reply', bindingEpoch, item.taskId, item.kind, item.createdAt,
         item.contextToken, Math.floor(this.#now() / DELAYED_REPLY_NOTICE_AFTER_MS),
@@ -1710,8 +1703,10 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         // still retry; later batches/restarts reuse the same receiver dedup key.
         sentNotices.add(noticeId);
       }
-    }
+    };
     if (item.text) {
+      await sendDelayedNotice();
+      this.#assertSendEpochCurrent(bindingEpoch, signal);
       await transport.sendMessage(
         {
           peerId,
@@ -1722,9 +1717,13 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         signal,
       );
     }
-    for (const [index, media] of mediaItems.entries()) {
+    for (const media of mediaItems) {
       this.#assertSendEpochCurrent(bindingEpoch, signal);
-      const local = preparedMedia[index] ?? await readOutboundWechatFile(media.absPath);
+      // Keep the existing partial-delivery order: text and valid media before a
+      // later bad file still send, but a bad first file cannot leave only a notice.
+      const local = await readOutboundWechatFile(media.absPath);
+      this.#assertSendEpochCurrent(bindingEpoch, signal);
+      await sendDelayedNotice();
       this.#assertSendEpochCurrent(bindingEpoch, signal);
       const uploaded = await transport.uploadMedia(
         {
