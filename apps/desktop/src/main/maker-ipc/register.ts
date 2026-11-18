@@ -18484,7 +18484,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!isQuotaScheduleCurrent(schedule, sessionId)) throwIpcError('PRECONDITION_FAILED', 'Schedule is no longer active for this task');
       }
       if (!scheduled) await scheduledModelScope.restore(sessionId);
-      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { signal: options?.signal });
+      if (agentSwitchPending.get(sessionId)?.targetAgentDeviceId !== undefined) {
+        throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected computer is not ready; retry the send after recovery');
+      }
       if (!scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       // 桌面发送也是「消息真正发出去」的边界：回合中登记、随后被模型选择器取消的预算
       // 重建必须在这里补一次（调用方已持 send 锁）。

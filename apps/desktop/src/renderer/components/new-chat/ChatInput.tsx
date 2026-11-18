@@ -7971,7 +7971,7 @@ export function ChatInput({
   // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
   const relocationSourceAgent = sessionEngineFilter?.currentAgent;
   const confirmAgentRelocation = useCallback(
-    (target: UnifiedSelectionAgentDevice, targetAgent: string) => {
+    (target: UnifiedSelectionAgentDevice, targetAgent: string, retryLabel?: string) => {
       const description = t(relocationDescriptionKey({
         fromAgent: relocationSourceAgent,
         toAgent: targetAgent,
@@ -7986,7 +7986,7 @@ export function ChatInput({
         hasSwitchIntent:
           (target?.deviceId ?? null) === agentDeviceId ||
           (intentAgentDeviceId !== undefined && intentAgentDeviceId === (target?.deviceId ?? null)),
-        alwaysAsk: !!ask,
+        alwaysAsk: !!ask || retryLabel !== undefined,
         confirm: confirmDialog,
         copy: {
           title: target
@@ -7999,7 +7999,9 @@ export function ChatInput({
           description: reason
             ? t('newChat.chatInput.agentRelocation.discoveredDescription', { reason, description })
             : description,
-          confirmText: t('newChat.chatInput.agentRelocation.confirm'),
+          confirmText: retryLabel !== undefined
+            ? t('modelGroups.switchOffer.action', { model: retryLabel })
+            : t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
@@ -8035,12 +8037,22 @@ export function ChatInput({
         ? { readProviderGroup: () => readSessionProviderGroup(sessionId, deviceLinkDeviceId || undefined) }
         : {}),
       onRelocate: async (selection) => {
-        if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent))) return false;
-        return performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
+        const recovery = makerChatStore.getSnapshot(sessionId).inputRecovery;
+        const retryClientId = recovery?.kind === 'queue-head' ? recovery.clientId : undefined;
+        const retryLabel = retryClientId === undefined ? undefined : selection.agentDevice?.name ?? selection.modelId;
+        if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent, retryLabel))
+          || currentSessionIdRef.current !== sessionId) return false;
+        const selected = await performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
           ...(selection.effort ? { effort: selection.effort } : {}),
           fastMode: selection.fast,
           agentDeviceId: selection.agentDevice?.deviceId ?? null,
         });
+        const latest = makerChatStore.getSnapshot(sessionId).inputRecovery;
+        if (selected && retryClientId !== undefined && currentSessionIdRef.current === sessionId
+          && latest?.kind === 'queue-head' && latest.clientId === retryClientId) {
+          await makerChatStore.retryLastError(sessionId);
+        }
+        return selected;
       },
     };
   }, [

@@ -80,8 +80,8 @@ import {
   reshareKeyForGuest,
   type RelayRunFailure,
 } from './groupRelay';
-import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../../shared/providerGroup';
-import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../provider-group/failurePolicy';
+import { PROVIDER_GROUP_LOCAL_MEMBER_KEY, type ProviderGroupUsageLimit } from '../../../shared/providerGroup';
+import { decideProviderGroupFailure, providerGroupFailureSignals, providerGroupUnavailableError } from '../../provider-group/failurePolicy';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
@@ -368,7 +368,7 @@ export type GroupRelayPlan =
   | { kind: 'local'; load?: GroupRelayLoad }
   | ({ kind: 'member'; load?: GroupRelayLoad } & GroupRelayMember)
   /** 组里没有能接这个任务的电脑。 */
-  | { kind: 'unavailable' };
+  | { kind: 'unavailable'; full?: true; usageLimit?: ProviderGroupUsageLimit };
 
 export interface RemoteAgentGroupRelayDeps {
   bindFastPolicy?(input: { group: string; deviceId?: string | null; sessionId: string; relay?: string }): Promise<void>;
@@ -2549,6 +2549,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           reserved = next.load;
         } else if (next?.kind === 'local') {
           next.load?.release();
+        } else if (next?.kind === 'unavailable' && (next.full || next.usageLimit)) {
+          lastError = providerGroupUnavailableError(next);
         }
       }
     }
@@ -3658,7 +3660,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               reserve: true,
               reshareKey: reshareKeyForGuest(controller),
             });
-            if (plan?.kind === 'unavailable') fail('REMOTE_AGENT_UNAVAILABLE', 'no computer can run this task right now');
+            if (plan?.kind === 'unavailable') {
+              if (plan.full || plan.usageLimit) throw providerGroupUnavailableError(plan);
+              fail('REMOTE_AGENT_UNAVAILABLE', 'no computer can run this task right now');
+            }
             if (plan?.kind === 'member' || plan?.kind === 'local') reserved = plan.load;
             if (plan?.kind === 'member') {
               const { memberKey, agentDeviceId, providerId: memberProviderId, sameAccount } = plan;

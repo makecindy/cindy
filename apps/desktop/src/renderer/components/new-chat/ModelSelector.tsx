@@ -118,6 +118,7 @@ import {
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { readProviderShareGroupSize } from '@cindy/device-link';
+import { SharedProviderGroupStatus } from '@/features/provider-share/SharedProviderGroupStatus';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
@@ -3561,6 +3562,10 @@ function ModelSelectorContentView({
         remoteAgentGroups.find((group) => group.deviceId === remoteBrowse.deviceId)?.providerIds[0] ??
         null)
       : null;
+    const browsedShareGroupSize = remoteBrowse && isProviderShareAgentDeviceId(remoteBrowse.deviceId)
+      ? readProviderShareGroupSize(remoteAgentGroups.find((group) => group.deviceId === remoteBrowse.deviceId)
+        ?.providers.find((provider) => provider.id === remoteActiveProviderId))
+      : null;
     const remoteBrowseDevice: UnifiedSelectionAgentDevice = remoteBrowse
       ? {
           deviceId: remoteBrowse.deviceId,
@@ -3874,6 +3879,17 @@ function ModelSelectorContentView({
                     ready:
                       remoteBrowse === null ||
                       (remoteModelListStatus === 'ready' && remoteActiveProviderId !== null),
+                    ...(remoteBrowse && remoteActiveProviderId && browsedShareGroupSize !== null
+                      ? {
+                          status: <SharedProviderGroupStatus
+                            key={JSON.stringify([remoteBrowse.deviceId, remoteActiveProviderId])}
+                            deviceId={modelCatalogKey(remoteBrowse.deviceId, remoteAgent.catalogHostDeviceId) ?? remoteBrowse.deviceId}
+                            providerId={remoteActiveProviderId}
+                            initialSize={browsedShareGroupSize}
+                            compact
+                          />,
+                        }
+                      : {}),
                     ...(remoteBrowse && remoteModelListStatus === 'error'
                       ? {
                           failure: (
