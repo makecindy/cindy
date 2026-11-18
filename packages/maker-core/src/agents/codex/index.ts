@@ -8046,7 +8046,8 @@ assertRouteCurrent();
               onLateResolve: async () => {
                 // A new handle may already own this thread after cancellation.
                 // A late recovery must not unsubscribe that replacement.
-                if (!ownsResume()) return;
+                if (host.hasThreadSubscription(threadId)) return;
+                // Host defers cleanup across pending claims and restores it if they are rejected.
                 await runThreadCleanupOrRetire({
                   cleanupThreadId: threadId, reason: 'late context settings refresh',
                   cleanup: () => host.unsubscribeThread(threadId, ownsResume), retireHostOnFailure: false,

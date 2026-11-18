@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
 import type { CodexSessionMcpConfigInput, CodexSubagentRoutingProfile } from '../../base-agent.js';
-import { AppServerClient, type OversizedNotification, type RequestProgressDeadline } from './client.js';
+import { AppServerClient, AppServerResponseError, type OversizedNotification, type RequestProgressDeadline } from './client.js';
 import { CODEX_EXTERNAL_AUTH_REFRESH, CodexExternalAuthSession, assertCodexEphemeralAuth, type CodexExternalAuth } from './external-auth.js';
 import type { Transport } from './transport.js';
 import {
@@ -368,6 +368,15 @@ interface BufferedNotification {
 /** All native attempts have exited before this error is exposed to a task startup. */
 export class CodexNativeInitializationStoppedError extends Error {}
 
+interface ThreadResumeClaim {
+  owner: object;
+  previous?: ThreadResumeClaim;
+  rejected?: boolean;
+  cleanupRequested?: boolean;
+}
+
+type ThreadResumeOwnership = (() => boolean) & { owner?: object };
+
 export class AppServerHost {
   private readonly externalAuth: CodexExternalAuthSession | undefined;
   private readonly connectionId = randomUUID();
@@ -387,7 +396,7 @@ export class AppServerHost {
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
   // Claims start before resume awaits transport startup, not at subscription.
-  private readonly threadResumeOwners = new Map<string, object>();
+  private readonly threadResumeOwners = new Map<string, ThreadResumeClaim>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
   private readonly lineageRoots = new Map<string, string>();
   /**
@@ -960,15 +969,44 @@ export class AppServerHost {
     params?: unknown,
     opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline; threadOwner?: object },
   ): Promise<R> {
-    if (method === Method.ThreadResume) {
-      const threadId = (params as { threadId?: unknown } | undefined)?.threadId;
-      if (typeof threadId === 'string') {
-        // A handle keeps its claim across in-place resumes. A replacement
-        // supplies a different owner before awaiting transport or subscribing.
-        const subscribedOwner = this.subscribers.has(threadId) ? this.threadResumeOwners.get(threadId) : undefined;
-        this.threadResumeOwners.set(threadId, opts?.threadOwner ?? subscribedOwner ?? {});
-      }
+    const threadId = method === Method.ThreadResume ? (params as { threadId?: unknown } | undefined)?.threadId : undefined;
+    if (typeof threadId !== 'string') return this.dispatchRequest<R>(method, params, opts);
+    const previous = this.threadResumeOwners.get(threadId);
+    const claim: ThreadResumeClaim = {
+      owner: opts?.threadOwner ?? (this.subscribers.has(threadId) ? previous?.owner : undefined) ?? {}, previous,
+    };
+    this.threadResumeOwners.set(threadId, claim);
+    let dispatched = false;
+    try {
+      const result = await this.dispatchRequest<R>(method, params, { ...opts, beforeDispatch: () => {
+        opts?.beforeDispatch?.();
+        dispatched = true;
+      } });
+      claim.previous = undefined; // Accepted ownership no longer needs rollback history.
+      return result;
+    } catch (error) {
+      // A timeout/write failure cannot prove the native resume was rejected.
+      if (!dispatched || error instanceof AppServerResponseError) {
+        claim.rejected = true;
+        if (this.threadResumeOwners.get(threadId) === claim) {
+          let restored = claim.previous;
+          while (restored?.rejected) restored = restored.previous;
+          if (restored) this.threadResumeOwners.set(threadId, restored);
+          else this.threadResumeOwners.delete(threadId);
+          // release/late cleanup may have arrived while this claim fenced it.
+          if (restored?.cleanupRequested && !this.subscribers.has(threadId)) {
+            await this.unsubscribeThread(threadId, this.captureThreadResumeOwnership(threadId));
+          }
+        }
+      } else claim.previous = undefined; // Unconfirmed ownership stays fenced, without retaining older claims.
+      throw error;
     }
+  }
+
+  private async dispatchRequest<R>(
+    method: string, params?: unknown,
+    opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline },
+  ): Promise<R> {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
     // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它
     // 上界, 否则「关键 RPC 加超时」在启动路径上形同虚设 (greptile R6 P1)。
@@ -1015,9 +1053,17 @@ export class AppServerHost {
   }
 
   /** Release one thread's live runtime without archiving or deleting its history. */
-  async unsubscribeThread(threadId: string, isCurrent?: () => boolean): Promise<void> {
+  async unsubscribeThread(threadId: string, isCurrent?: ThreadResumeOwnership): Promise<void> {
     const client = this.client;
-    if (!client || isCurrent?.() === false) return;
+    if (!client) return;
+    if (isCurrent?.() === false) {
+      if (isCurrent.owner && !this.subscribers.has(threadId)) {
+        for (let claim = this.threadResumeOwners.get(threadId); claim; claim = claim.previous) {
+          if (claim.owner === isCurrent.owner) claim.cleanupRequested = true;
+        }
+      }
+      return;
+    }
     const owner = this.threadResumeOwners.get(threadId);
     await client.request<ThreadUnsubscribeResponse>(
       Method.ThreadUnsubscribe,
@@ -1031,9 +1077,10 @@ export class AppServerHost {
   }
 
   /** A late resume may clean up only while no newer resume or subscriber owns it. */
-  captureThreadResumeOwnership(threadId: string): () => boolean {
-    const owner = this.threadResumeOwners.get(threadId);
-    return () => owner !== undefined && this.threadResumeOwners.get(threadId) === owner && !this.hasThreadSubscription(threadId);
+  captureThreadResumeOwnership(threadId: string): ThreadResumeOwnership {
+    const owner = this.threadResumeOwners.get(threadId)?.owner;
+    return Object.assign(() => owner !== undefined && this.threadResumeOwners.get(threadId)?.owner === owner
+      && !this.hasThreadSubscription(threadId), { owner });
   }
 
   async selectModelProvider(modelProvider: string | undefined): Promise<void> {
@@ -1217,7 +1264,7 @@ export class AppServerHost {
       this.logger.warn('overwriting thread subscription', { threadId });
     }
     if (this.client) this.writerCandidates.add(this.client);
-    this.threadResumeOwners.set(threadId, threadOwner ?? this.threadResumeOwners.get(threadId) ?? handlers);
+    this.threadResumeOwners.set(threadId, { owner: threadOwner ?? this.threadResumeOwners.get(threadId)?.owner ?? handlers });
     const ownsResume = this.captureThreadResumeOwnership(threadId);
     this.subscribers.set(threadId, handlers);
     this.lineageRoots.set(threadId, threadId);

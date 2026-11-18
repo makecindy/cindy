@@ -223,6 +223,88 @@ describe('AppServerHost isolated account lifecycle', () => {
 });
 
 describe('AppServerHost assistant text delta routing', () => {
+  // #11380: a rejected replacement must not strand the previous runtime.
+  // Unit tier, real Host/RPC; earlier matrices omitted replacement rejection,
+  // release during the request, and out-of-order rejections of multiple claims.
+  it.each(['live', 'released', 'late-cleanup', 'newer', 'rejected-newer', 'newer-first', 'same-owner-newer'] as const)(
+    'settles a rejected replacement with %s ownership', async phase => {
+      const transport = new NotificationTransport();
+      const host = new AppServerHost({ createTransport: () => transport, logger,
+        clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+      try {
+        const oldOwner = {};
+        await host.request('thread/resume', { threadId: 'rejected-replacement' }, { threadOwner: oldOwner });
+        const oldSubscription = phase === 'late-cleanup' ? null : host.subscribeThread('rejected-replacement', {}, oldOwner);
+        const oldClaim = host.captureThreadResumeOwnership('rejected-replacement');
+        const requests: unknown[] = [];
+        const write = transport.writeLine.bind(transport);
+        vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+          const msg = JSON.parse(line);
+          if (msg.method === 'thread/resume') { requests.push(msg.id); return; }
+          return write(line);
+        });
+        const replacementOwner = {};
+        const replacement = host.request('thread/resume', { threadId: 'rejected-replacement' }, { threadOwner: replacementOwner });
+        const rejected = expect(replacement).rejects.toThrow('fixture replacement rejected');
+        await vi.waitFor(() => expect(requests).toHaveLength(1));
+        if (phase === 'released') await oldSubscription!.release();
+        if (phase === 'late-cleanup') await host.unsubscribeThread('rejected-replacement', oldClaim);
+        const hasNewer = phase === 'newer' || phase === 'rejected-newer' || phase === 'newer-first' || phase === 'same-owner-newer';
+        const newer = hasNewer ? host.request('thread/resume', { threadId: 'rejected-replacement' },
+          { threadOwner: phase === 'same-owner-newer' ? replacementOwner : {} }) : null;
+        const newerResult = newer?.catch(error => error);
+        if (newer) await vi.waitFor(() => expect(requests).toHaveLength(2));
+        if (phase === 'newer-first') {
+          transport.emit({ id: requests[1], error: { code: -32000, message: 'newer replacement rejected' } });
+          await newerResult;
+        }
+        transport.emit({ id: requests[0], error: { code: -32000, message: 'fixture replacement rejected' } });
+        await rejected;
+        if (newer && phase !== 'newer-first') {
+          transport.emit(phase === 'rejected-newer'
+            ? { id: requests[1], error: { code: -32000, message: 'newer replacement rejected' } }
+            : { id: requests[1], result: {} });
+          await newerResult;
+        }
+        await oldSubscription?.release();
+        const adopted = phase === 'newer' || phase === 'same-owner-newer';
+        expect(transport.lines.map(line => JSON.parse(line)).filter(msg => msg.method === 'thread/unsubscribe'))
+          .toHaveLength(adopted ? 0 : 1);
+        await host.request('turn/start', { threadId: 'healthy-peer', input: [] });
+      } finally { await host.shutdown(); }
+    });
+  it.each(['timeout', 'not-dispatched'] as const)('uses dispatch proof rather than treating %s as native rejection', async phase => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    try {
+      const oldOwner = {};
+      await host.request('thread/resume', { threadId: 'uncertain-replacement' }, { threadOwner: oldOwner });
+      const subscription = host.subscribeThread('uncertain-replacement', {}, oldOwner);
+      let markWritten!: () => void;
+      const written = new Promise<void>(resolve => { markWritten = resolve; });
+      const write = transport.writeLine.bind(transport);
+      vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+        if (JSON.parse(line).method === 'thread/resume') { markWritten(); return; }
+        return write(line);
+      });
+      if (phase === 'timeout') vi.useFakeTimers();
+      const replacement = host.request('thread/resume', { threadId: 'uncertain-replacement' }, {
+        threadOwner: {}, timeoutMs: 50,
+        beforeDispatch: () => { if (phase === 'not-dispatched') throw new Error('fixture dispatch cancelled'); },
+      });
+      const rejected = expect(replacement).rejects.toThrow(phase === 'timeout' ? /timed out/ : 'fixture dispatch cancelled');
+      if (phase === 'timeout') {
+        await written;
+        await subscription.release();
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      await rejected;
+      await subscription.release();
+      expect(transport.lines.map(line => JSON.parse(line)).filter(msg => msg.method === 'thread/unsubscribe'))
+        .toHaveLength(phase === 'timeout' ? 0 : 1);
+    } finally { await host.shutdown(); vi.useRealTimers(); }
+  });
   // #11380 follow-up: request generations must not revoke a live handle's
   // subscription. Unit tier, real Host/RPC: same-owner resume (including a
   // rejected resume and daemon subscribe-before-resume) must still unsubscribe
