@@ -11,7 +11,7 @@
 
 可达组件、样式来源与 Token / 裸颜色 / 裸圆角统计不入库：需要时运行 `pnpm design:inventory:report`，输出到 `tmp/design-inventory-report.md`；要看某次提交时的数字，在该提交上重跑。
 
-登记 surface 数：59。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。
+登记 surface 数：60。平台包含 Desktop 与 Mobile；静态入口发现不表示已迁移或已实机验证。
 
 | ID | 平台 | 标题 | 生产入口 |
 | --- | --- | --- | --- |
@@ -43,6 +43,7 @@
 | `desktop.skillhub.local` | desktop | SkillHub 本地技能 | hash `/skillhub/local` 及统一详情 `/skillhub/detail`（旧详情链接重定向） |
 | `desktop.skillhub.market` | desktop | SkillHub 市场 | hash `/skillhub/market`（SkillhubMarketListView） |
 | `desktop.window.computer-permission-guide` | desktop | 电脑使用权限引导 | `?view=computer-permission-guide` → ComputerPermissionGuideWindow；backdrop 同文件 |
+| `desktop.window.quota-tray` | desktop | Windows 托盘额度卡片 | `?quotaTray=1` → renderer/quota-tray-entry.tsx（不走 router.tsx） |
 | `desktop.window.recording-preview` | desktop | 录屏独立回放窗口 | `?recordingPreview=1` → renderer/recording-preview-entry.tsx（不走 router.tsx） |
 | `desktop.window.region-screenshot` | desktop | 全局截图浮层 | `?regionScreenshot=1` → renderer/region-screenshot-entry.tsx（不走 router.tsx） |
 | `desktop.window.region-screenshot-editor` | desktop | 截图独立编辑窗口 | `?regionScreenshotEditor=1` → renderer/region-screenshot-entry.tsx（不走 router.tsx） |
@@ -185,11 +186,11 @@ Mobile 静态图跟随本地 import/reexport 与平台 TSX；根布局仅登记�
 
 DS-8（#4268 已合并；以下为 2026-09-10 接管证据）：Desktop 的 522/541 注册项、11 内置主题静态覆盖与通用排版/间距/圆角/尺寸/动效已通过 DTCG→Terrazzo 2.7.1 接入原消费者；19 项暂留及维护方法见 [Token README](../../packages/design-tokens/README.md)。默认/内置冻结、用户主题兼容、全量单测与两模式代表样本已验证，可撤销源改风格演练已恢复。这是数值来源接管，不把下面任一完整 surface 自动升级为 migrated；图表命中、Permission、G2、69 图公开与平台待项仍按原责任跟进。实机审核以当前 Cindy 测试版为准，截图在桌面唯一主计划的 `附件/DS-8/`，不入 Git。
 
-DS-9（2026-09-11，本地候选）：用户已决定桌面授权三项，聊天与授权呈现统一使用既有数值链及薄封装。工程/运行证据与未验证范围见 [DS-9 索引](../design-evidence/2026-09-11/ds9-desktop-core.md)。本轮 Codex 负责影响核对与修复，kirozeng 做视觉验收；长期 surface owner 不据此永久改派。没有把静态引用或组件样本等同整页 migrated。
+DS-9（2026-09-11 决定，09-12 随 #4300 合并）：用户已决定桌面授权三项，聊天与授权呈现统一使用既有数值链及薄封装。工程/运行证据与未验证范围见 [DS-9 索引](../design-evidence/2026-09-11/ds9-desktop-core.md)。长期 surface owner 不据此永久改派。没有把静态引用或组件样本等同整页 migrated。
 
-生成器不得改本表。首轮（DS-2a）：全部 `legacy`；暂无归属写 `unassigned`。`protected` 与迁移状态正交。
+生成器不得改本表。首轮（DS-2a）：全部 `legacy`；暂无归属写 `unassigned`。`protected` 与迁移状态正交。下一动作写「待定」的行尚未排期（过期的复查日期与临时负责人安排已按 2026-11-11 维护者裁决 E-19 清除）。
 
-Mobile 已由 DS-7 纳入同一台账（2026-09-10 静态入口发现），保留 legacy；数值接管留待 Mobile 独立阶段。发现维护由 Codex 执行、kirozeng 协调；长期页面负责人待认领，2026-09-17 复查，不以 unassigned 表示无人跟进。
+Mobile 已由 DS-7 纳入同一台账（2026-09-10 静态入口发现），保留 legacy；数值接管留待 Mobile 独立阶段。
 
 另册 / 排除（不进必做迁移清单）：
 
@@ -200,65 +201,66 @@ Mobile 已由 DS-7 纳入同一台账（2026-09-10 静态入口发现），保�
 
 | ID | owner | 迁移状态 | protected | 目标道路 | 下一动作 |
 | ------------------------------------------ | ------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `desktop.auth.add-account` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §16 登录链路 | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.auth.legacy-migration` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §16 登录链路（消费 --login-callback-* 品牌豁免族 component token） | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.auth.login` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §16 登录链路 | 既有登录品牌保护；本批无全局按钮/主题变更 | 真实隔离窗口走过登录→本地模式；没有验证 Apple/Google/企业账号登录；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.bots` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 当前 #4283 伙伴设置与聊天路径；操作集合由原业务决定 | 核标准/伙伴精简消息与授权相邻回归；实际远程伙伴/跨账号联调留 kirozeng 安排，Codex 复测，不以样本标整页完成；2026-09-17 或 DS-10 开工前复查；#6768（2026-10-22）区分朗读候选可见性与已保存选择，保留当前隐藏选择的展示和调用，其余隐藏候选不展示；不改变停用/账号准入，双主题五语言单页证据随 PR 提供 |
-| `desktop.chat.files` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 文件页聊天 rail 继承本批呈现；文件扫描与 watcher 不变 | 核真实文件路由与窄栏；整页不标迁移，文件新鲜度/焦点继续用既有回归保护；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.chat.new-draft` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §15.15 创建页内容位 | 保持既有 ChatInput 与新建布局，本批改动在后续消息与授权 | 真实本地新建入口正常；完整聊天与授权分别验收，不把创建页标 migrated；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.chat.orca-workflow` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 复用 CCAgentSessionView 的聊天组件，Orca 编排不变 | 共用呈现与紧凑宽度有受控验证；实际多 Agent 调度未发起，kirozeng 安排实测、Codex 复测；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.chat.scheduled` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 调度列表自身无本批样式变更；生成任务使用标准聊天 | 核列表路由及生成任务对标准聊天的消费；未触发真实计划执行，kirozeng 安排实测、Codex 复测；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.chat.session` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | pilot | DESIGN §10 status/diff/消息卡语义族；§5 workflow-status-cell / system-category-square | chatChrome / activityRowChrome、原消息组件与 Diff Worker | 真实本地路由 + 固定历史与受控流式；09-11 用户整体视觉验收通过，尚未合并；DS-10 接成熟保护样本；不改消息与媒体业务；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.dev.maker-experimental` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.issues.guide` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.native.app-menu` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.native.system-notification` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.native.tray` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.overlay.confirm` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.overlay.find-in-page` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.overlay.interaction-portal` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.overlay.permission-prompt` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | pilot | DESIGN §4 桌面授权决定；§5 键帽与按钮规则；权限业务和旧主题覆盖保护 | DS-9 已按 09-11 桌面三项决定接标准 Button，保留 perm/chat-input 局部 alias | 普通/窄栏/长规则/提交/失败/快捷键/主题按 DS-9 证据验证；09-11 用户整体视觉验收通过，尚未合并；模式选择与账号/插件授权分别保留；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.overlay.route-error` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.overlay.splash` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §16 登录链路 | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.overlay.toast` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.plugins.app-main` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.plugins.installed` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
+| `desktop.auth.add-account` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §16 登录链路 | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.auth.legacy-migration` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §16 登录链路（消费 --login-callback-* 品牌豁免族 component token） | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.auth.login` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §16 登录链路 | 既有登录品牌保护；本批无全局按钮/主题变更 | 真实隔离窗口走过登录→本地模式；没有验证 Apple/Google/企业账号登录 |
+| `desktop.bots` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 当前 #4283 伙伴设置与聊天路径；操作集合由原业务决定 | 核标准/伙伴精简消息与授权相邻回归；实际远程伙伴/跨账号联调待定，不以样本标整页完成；#6768（2026-10-22）区分朗读候选可见性与已保存选择，保留当前隐藏选择的展示和调用，其余隐藏候选不展示；不改变停用/账号准入，双主题五语言单页证据随 PR 提供 |
+| `desktop.chat.files` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 文件页聊天 rail 继承本批呈现；文件扫描与 watcher 不变 | 核真实文件路由与窄栏；整页不标迁移，文件新鲜度/焦点继续用既有回归保护 |
+| `desktop.chat.new-draft` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §15.15 创建页内容位 | 保持既有 ChatInput 与新建布局，本批改动在后续消息与授权 | 真实本地新建入口正常；完整聊天与授权分别验收，不把创建页标 migrated |
+| `desktop.chat.orca-workflow` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 复用 CCAgentSessionView 的聊天组件，Orca 编排不变 | 共用呈现与紧凑宽度有受控验证；实际多 Agent 调度未发起，实测待定 |
+| `desktop.chat.scheduled` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | 调度列表自身无本批样式变更；生成任务使用标准聊天 | 核列表路由及生成任务对标准聊天的消费；未触发真实计划执行，实测待定 |
+| `desktop.chat.session` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | pilot | DESIGN §10 status/diff/消息卡语义族；§5 workflow-status-cell / system-category-square | chatChrome / activityRowChrome、原消息组件与 Diff Worker | 真实本地路由 + 固定历史与受控流式；09-11 用户整体视觉验收通过，DS-9 已于 09-12 合并；DS-10 接成熟保护样本；不改消息与媒体业务 |
+| `desktop.dev.maker-experimental` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.issues.guide` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.native.app-menu` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.native.system-notification` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.native.tray` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.overlay.confirm` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.overlay.find-in-page` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.overlay.interaction-portal` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.overlay.permission-prompt` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | pilot | DESIGN §4 桌面授权决定；§5 键帽与按钮规则；权限业务和旧主题覆盖保护 | DS-9 已按 09-11 桌面三项决定接标准 Button，保留 perm/chat-input 局部 alias | 普通/窄栏/长规则/提交/失败/快捷键/主题按 DS-9 证据验证；09-11 用户整体视觉验收通过，DS-9 已于 09-12 合并；模式选择与账号/插件授权分别保留 |
+| `desktop.overlay.route-error` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.overlay.splash` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §16 登录链路 | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.overlay.toast` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.plugins.app-main` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.plugins.installed` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
 | `desktop.settings` | kirozeng（DS-6 与用量图表跟进） | pilot | DESIGN.md §10 语义豁免色族消费者；外部主题导入保护 token（资源用量类别色在独立窗）；DESIGN.md §5 登记成员 `usage-heatmap-day` / `usage-token-bar` | DS-4 / DS-4b 已落地；DS-6 两张表单与指定普通确认已随 #4135 合入，用户测试版手动审核通过；DS-8 数值同源 | DS-6 工程与真实测试版审核已交付，G2/公开附件/平台待项按证据复查；focus、ivory/elevated 见治理 §10。旧 alias 与 slot 按作用域生效，禁止仅因同值删除局部配色；DS-6/8/9 按实际消费者分批核对跨 surface alias，confirm-dialog 归 DS-6；用量图表形状与密度已随 #4064 恢复；DS-11 补 36px 任意日期入口，与图表共用 day 筛选（最终视觉验收另记）；09-08 蓝色热力图描边、多色柱图七日强调与微弹裁决见 [组件规范](./usage-history-charts.md)，此前移除的日期入口由 DS-11 用户授权重新补足；图表优化 #4076 已合入；DS-11 等价日期输入已实施，平台与用户验收仍须独立记录，不提前标记 migrated；DS-6 SC/G2/公开附件/平台待项见 [本批证据](../design-evidence/2026-09-08/ds6-forms.md)，不把局部通过当完整设置页 migrated；#6768（2026-10-22）补普通厂商空目录/发现失败时的通用型号手填回退，语音分组说明保持原位置；新增回归与双主题五语言单页证据随 PR 提供 |
-| `desktop.shell.main-layout` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §15 CINDY 皮肤族（侧栏 vibrancy / 选中 pill）；外部主题导入保护 token；DESIGN.md §5 登记成员 `workflow-status-cell`（background-tasks 面板详情） | 保持布局树与主题；聊天区域继承本批共用呈现 | 真实本地主窗口、侧栏与聊天可用；其它皮肤/平台待用户实看；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.skillhub.local` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | SkillhubDiffPanel 继承 DiffView 排版，文件比较和发布逻辑不变 | 同一 DiffView 的真实 Worker/长行/大字号验证；Skill Hub 真实网络长反馈未联调；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.skillhub.market` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | SkillhubDiffPanel 复用 DiffView，列表/网络逻辑不变 | 真实 Diff 组件验证不等于市场流程完成；真实远端联调按 DS-10 平台清单继续安排；2026-09-17 或 DS-10 开工前复查 |
-| `desktop.window.computer-permission-guide` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
+| `desktop.shell.main-layout` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §15 CINDY 皮肤族（侧栏 vibrancy / 选中 pill）；外部主题导入保护 token；DESIGN.md §5 登记成员 `workflow-status-cell`（background-tasks 面板详情） | 保持布局树与主题；聊天区域继承本批共用呈现 | 真实本地主窗口、侧栏与聊天可用；其它皮肤/平台待用户实看 |
+| `desktop.skillhub.local` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | SkillhubDiffPanel 继承 DiffView 排版，文件比较和发布逻辑不变 | 同一 DiffView 的真实 Worker/长行/大字号验证；Skill Hub 真实网络长反馈未联调 |
+| `desktop.skillhub.market` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | SkillhubDiffPanel 复用 DiffView，列表/网络逻辑不变 | 真实 Diff 组件验证不等于市场流程完成；真实远端联调按 DS-10 平台清单继续安排 |
+| `desktop.window.computer-permission-guide` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.window.quota-tray` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.recording-preview` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.region-screenshot` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.region-screenshot-editor` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.region-screenshot-pin` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `desktop.window.remote-desktop` | unassigned | legacy | — | 查现有标准组件与治理 §12 当前路线；按人工下一动作接管 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `desktop.window.resource-usage` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | 外部主题导入保护 token（进程类别色） | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.window.review-artifact-confirm` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.window.session-drag-preview` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.window.sidebar` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §15 CINDY 皮肤族 | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.window.voice-dictionary-toast` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `desktop.window.voice-overlay` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；kirozeng 安排所需环境，Codex 核对，2026-09-17 或 DS-10 开工前复查 |
-| `mobile.account-deletion` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
-| `mobile.auth` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `desktop.window.resource-usage` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | 外部主题导入保护 token（进程类别色） | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.window.review-artifact-confirm` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.window.session-drag-preview` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.window.sidebar` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | DESIGN.md §15 CINDY 皮肤族 | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.window.voice-dictionary-toast` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `desktop.window.voice-overlay` | Codex（DS-9 影响核对）/ kirozeng（验收协调） | legacy | — | DS-9 保留现有专属表面；未改全局 Button/主题源，按共享依赖核影响 | 本批未直接改该入口；无真实实例的独立/原生/账号/插件场景保留原合同，未作完整运行验收；下一步待定 |
+| `mobile.account-deletion` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.auth` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
 | `mobile.chat.incoming-share` | Chris / Codex（PR #6582） | legacy | — | iOS 外部分享目标选择新入口；沿用 Mobile 主题与 Typography，未声明整体设计系统迁移 | 2026-10-20 系统模拟器实测；发布前补充真机与专用目标发送验收 |
-| `mobile.chat.new` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
-| `mobile.chat.session` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.chat.new` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.chat.session` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
 | `mobile.chat.sharing` | unassigned | legacy | — | DS-7 发现入口，Mobile 独立阶段接管；未迁移 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `mobile.companions.cloud` | unassigned | legacy | — | DS-7 发现入口，Mobile 独立阶段接管；未迁移 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `mobile.companions.direct` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.companions.direct` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
 | `mobile.companions.groups` | unassigned | legacy | — | DS-7 发现入口，Mobile 独立阶段接管；未迁移 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `mobile.device-management` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
-| `mobile.devices` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
-| `mobile.files` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
-| `mobile.home` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.device-management` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.devices` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.files` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.home` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
 | `mobile.mail` | unassigned | legacy | — | DS-7 发现入口，Mobile 独立阶段接管；未迁移 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `mobile.overlay.connection-startup` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.overlay.connection-startup` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
 | `mobile.plugins` | unassigned | legacy | — | DS-7 发现入口，Mobile 独立阶段接管；未迁移 | 保持现状；发现问题记下一动作，本张不修视觉 |
 | `mobile.relay-join` | unassigned | legacy | — | DS-7 发现入口，Mobile 独立阶段接管；未迁移 | 保持现状；发现问题记下一动作，本张不修视觉 |
-| `mobile.remote-desktop` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
-| `mobile.resources` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
-| `mobile.settings` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 2026-09-17 复查入口变化和页面 owner；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.remote-desktop` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.resources` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
+| `mobile.settings` | kirozeng 协调 / Codex 发现维护；页面 owner 待认领 | legacy | — | DS-7 已发现入口；Mobile 独立阶段接管，未迁移 | 待定；动态内容、平台实际呈现留 Mobile 独立阶段验证 |
 
 ### Usage History category colors (2026-09-09)
 

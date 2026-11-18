@@ -77,6 +77,9 @@
     "back": "Volver"
   },
   "failedScheduleNotice": {
+    "actionScheduled": "La autorización para esta acción caducó. La próxima ejecución sigue programada.",
+    "actionExpired": "La autorización de la sesión para esta acción ha caducado. Consulta la última ejecución de la automatización.",
+    "actionRecovered": "La autorización para esta acción caducó. La misma automatización se ejecutó correctamente más tarde.",
     "text": "Error en la ejecución automática.",
     "precheck": "Los controles automáticos están bloqueados temporalmente.",
     "rateLimited": "Los controles automáticos están bloqueados temporalmente por un límite de frecuencia de solicitudes.",
@@ -871,7 +874,7 @@
   },
   "providerGroupRebalance": {
     "title": "¿Continuar en {{label}}?",
-    "body": "Para usar la cuota de cada cuenta de manera uniforme, envía este mensaje desde {{label}} ({{quota}}). Los últimos mensajes y un resumen se conservan; es posible que se pierdan detalles más antiguos.",
+    "body": "Para usar la cuota de cada cuenta de manera uniforme, envía este mensaje desde {{label}} ({{quota}}). Se trasladará contexto de esta conversación. Es posible que se condensen los mensajes anteriores, y el historial completo seguirá disponible.",
     "quota": "{{left}}% restante",
     "quotaReset": "{{left}}% restante · se reinicia en {{reset}}",
     "confirm": "Cambiar",

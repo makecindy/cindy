@@ -34,10 +34,12 @@ import {
   resolveMemoryScopeKey,
   snapshotManagedSkillGrants,
 } from '@cindy/maker-core';
-import { parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
+import { isProviderSharePeer, parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { createLogger } from '../../logger.js';
 import { findReceivedShare, parseProviderShareAgentDeviceId, providerShareAccessEpoch,
   onProviderShareReceivedChanged } from '../../device-link/providerShareGuest.js';
+import { getRemoteLinkCloseEpoch, onRemoteLinkClosed } from '../../device-link/index.js';
+import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
 import { credentialGrantFor } from '../executor/credentialGrants';
 import type { ExecutorCaptureHooks } from '../executor/executor';
 import type { PdfTextExtractor } from '../executor/files';
@@ -55,7 +57,7 @@ import {
 } from './projectFiles';
 import type { LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, RemoteAgentRemoteError, remoteAgentInvoker } from './runClient';
-import { decideProviderGroupFailure } from '../../provider-group/failurePolicy.js';
+import { decideProviderGroupFailure, ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy.js';
 import { registerPendingRemoteStart, startRemoteAgentSession, type PreparedRemoteMcp } from './startRemote';
 import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, sharedTaskLeaseDeadline,
   trackLiveSharedTaskTarget, rememberSharedTaskAuthorization, forgetSharedTaskAuthorization,
@@ -65,7 +67,7 @@ export interface DeviceAgentServiceDeps {
   attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
   attachmentStorageRoots?(sessionId: string): Record<string, string>;
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
-  remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
+  remoteInvoke(deviceId: string, channel: string, args: unknown[], options?: { beforeDispatch?: () => void }): Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
   /** Re-open the authenticated share link after a successful lease renewal. */
   renewSharedProviderLink?(peer: string): Promise<unknown>;
   rgPath(): string;
@@ -243,8 +245,11 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const initialShareId = parseProviderShareAgentDeviceId(input.deviceId);
     const initialAccessEpoch = initialShareId && findReceivedShare(initialShareId)?.status === 'active'
       ? providerShareAccessEpoch(initialShareId) : undefined;
+    let assertOwnerLinkCurrent: (() => void) | undefined;
+    let startupOwnerPeer: string | undefined;
     const requireCurrent = () => {
       attempt.signal.throwIfAborted();
+      assertOwnerLinkCurrent?.();
       if (initialShareId && initialAccessEpoch !== undefined && (findReceivedShare(initialShareId)?.status !== 'active'
         || providerShareAccessEpoch(initialShareId) !== initialAccessEpoch)) {
         throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared provider permission changed during startup');
@@ -363,12 +368,28 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         const pinned = await lookupShareAvailability(shareId, sessionId);
         requireCurrent();
         cloudAllocation = !!pinned || (findReceivedShare(shareId)?.hostDeviceOnline ?? findReceivedShare(shareId)?.hostOnline) === false;
-        try {
-          const owner = findReceivedShare(shareId);
-          if (owner?.hostDeviceId && (owner.hostDeviceOnline ?? owner.hostOnline)) {
-            await deps.renewSharedProviderLink?.(providerShareHostPeer(shareId, owner.hostDeviceId));
+        const owner = findReceivedShare(shareId);
+        if (!cloudAllocation && owner?.hostDeviceId && (owner.hostDeviceOnline ?? owner.hostOnline)) {
+          const ownerPeer = providerShareHostPeer(shareId, owner.hostDeviceId);
+          const closeEpoch = getRemoteLinkCloseEpoch(ownerPeer);
+          startupOwnerPeer = ownerPeer;
+          assertOwnerLinkCurrent = () => {
+            if (getRemoteLinkCloseEpoch(ownerPeer) !== closeEpoch) {
+              throw new Error('[LINK_NOT_OPEN] shared owner link closed during startup');
+            }
+          };
+          try { await deps.renewSharedProviderLink?.(ownerPeer); }
+          catch (error) {
+            requireCurrent();
+            // No allocate/open has been sent: a failed owner handshake can use
+            // the existing server-authorized standby route without replaying a write.
+            // Explicit close/denial must not be mistaken for a transport outage.
+            if (!isTemporaryProviderMetadataFailure(error) || owner.standbyOnline === undefined) throw error;
+            cloudAllocation = true;
           }
           requireCurrent();
+        }
+        try {
           const allocationStartedAt = Date.now();
           const allocationStartedMonotonic = performance.now();
           const availability = cloudAllocation;
@@ -483,8 +504,18 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const collect = { skipCredentials: shared };
     let cancelPreparedHandle: (() => void) | undefined;
     let restartedHistory = false;
+    // The executor can stall before confirming startup. Feed changes into the
+    // existing attempt cancellation so close/release/local cleanup do not wait for it.
+    const recheckStartup = () => {
+      try { requireCurrent(); }
+      catch (error) { attempt.abort(error instanceof Error ? error : new Error(String(error))); }
+    };
+    const offStartupPermission = initialShareId ? onProviderShareReceivedChanged(recheckStartup) : undefined;
+    const offStartupLink = startupOwnerPeer ? onRemoteLinkClosed(startupOwnerPeer, recheckStartup) : undefined;
     const handle = await startRemoteAgentSession(input.agentKind, opts, {
       startupSignal: attempt.signal,
+      assertStartupCurrent: requireCurrent,
+      nativeHistoryBackup: !shared && !isProviderSharePeer(target) && !opts[LOCAL_AGENT_CLIENT],
       reconnectAuthorization: (isCurrent, options) => reconnectAuthorization?.(isCurrent, options) ?? Promise.resolve(),
       onTaskGrantRenewable: (renewable) => { grantRenewable = renewable; },
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,
@@ -592,6 +623,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         info: (message, fields) => log.info(message, fields),
         warn: (message, fields) => log.warn(message, fields),
       },
+    }).finally(() => {
+      offStartupPermission?.();
+      offStartupLink?.();
     }).then(handle => {
       // Keep cancellation attached until the service finishes its optional early renewal.
       cancelPreparedHandle = () => { void handle.close({ reason: 'account-boundary' }).catch(() => undefined); };
@@ -1037,7 +1071,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       // M proved that it never started a process or has stopped it, and
       // startRemote has finished G's local cleanup. Preserve that evidence as
       // a local class so Maker releases this attempt's guards before reopening.
-      if (confirmedStoppedStartup(error)) {
+      if (confirmedStoppedStartup(error) || error instanceof ProviderGroupUsageLimitError) {
         throw new AgentStartupStoppedError(error);
       }
       throw error;

@@ -5,7 +5,7 @@
  *   - 别人分享来的电脑、不在线的电脑不去读，直接说明；
  *   - 不是订阅类的供应商说明没有额度；一直读不到时不永远停在「正在读取」。
  */
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -71,6 +71,7 @@ vi.mock('@/components/status/QuotaHoverCard', async () => ({
 }));
 
 import { GroupMemberQuota, groupMemberQuotaTarget, type GroupMemberQuotaTarget } from '../GroupMemberQuota';
+import { useGroupMemberAccounts } from '../GroupMemberAccounts';
 
 const claude = (id: string) => ({ id, name: 'Anthropic', source: 'builtin', connected: true, auth: { method: 'oauth', native: 'claude' } });
 const apiKey = (id: string) => ({ id, name: 'OpenRouter', source: 'user', connected: true, auth: { method: 'api-key' } });
@@ -145,6 +146,88 @@ afterEach(() => {
 });
 
 describe('GroupMemberQuota', () => {
+  // Unit, #11329: real account-list hook. Existing account push tests used
+  // immediately resolved RPCs and missed one new read per notification while
+  // the first was pending. One slow peer must not delay another peer's view.
+  it('coalesces account change bursts and polling behind the pending account RPC', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    const finishes: Array<(value: unknown) => void> = [];
+    mocks.remoteInvoke.mockImplementation((device: string) => device === 'mini'
+      ? new Promise(resolve => { finishes.push(resolve); })
+      : Promise.resolve(pool([poolAccount('healthy')])));
+    const slow = renderHook(() => useGroupMemberAccounts('anthropic', 'mini', true));
+    const healthy = renderHook(() => useGroupMemberAccounts('anthropic', 'pc', true));
+    await act(async () => {
+      for (let index = 0; index < 3; index++) mocks.remotePush.forEach(listener => listener({
+        deviceId: 'mini', channel: 'subscription-accounts:changed', payload: { providerId: 'anthropic' },
+      }));
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    const slowCalls = () => mocks.remoteInvoke.mock.calls.filter(([device]) => device === 'mini').length;
+    expect(slowCalls()).toBe(1);
+    expect(healthy.result.current.accounts?.[0].account.id).toBe('healthy');
+    await act(async () => finishes[0](pool([poolAccount('obsolete')])));
+    expect(slowCalls()).toBe(2);
+    expect(slow.result.current.accounts).toBeNull();
+    await act(async () => finishes[1](pool([poolAccount('current')])));
+    expect(slow.result.current.accounts?.[0].account.id).toBe('current');
+    expect(slowCalls()).toBe(2);
+  });
+
+  // Unit, #11329: a queued refresh belongs to its current observer. Stopping
+  // observation must prevent late reads from launching more RPCs or publishing.
+  it.each(['unmount', 'hidden', 'owner', 'target'] as const)('discards queued account refresh after %s', async boundary => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    const finishes: Array<(value: unknown) => void> = [];
+    mocks.remoteInvoke.mockImplementation((device: string) => device === 'mini'
+      ? new Promise(resolve => { finishes.push(resolve); })
+      : Promise.resolve(pool([poolAccount('other')])));
+    const view = renderHook(({ device }) => useGroupMemberAccounts('anthropic', device, true),
+      { initialProps: { device: 'mini' } });
+    act(() => mocks.remotePush.forEach(listener => listener({
+      deviceId: 'mini', channel: 'subscription-accounts:changed', payload: { providerId: 'anthropic' },
+    })));
+    if (boundary === 'unmount') view.unmount();
+    if (boundary === 'hidden') {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+    }
+    if (boundary === 'owner') act(() => { setDataOwnerGeneration('other-owner'); view.rerender({ device: 'mini' }); });
+    if (boundary === 'target') view.rerender({ device: 'pc' });
+    await act(async () => finishes[0](pool([poolAccount('old')])));
+    expect(mocks.remoteInvoke.mock.calls.filter(([device]) => device === 'mini')).toHaveLength(boundary === 'owner' ? 2 : 1);
+    if (boundary === 'owner') {
+      expect(view.result.current.accounts).toBeNull();
+      await act(async () => finishes[1](pool([poolAccount('new-owner')])));
+      expect(view.result.current.accounts?.[0].account.id).toBe('new-owner');
+    }
+    if (boundary === 'target') expect(view.result.current.accounts?.[0].account.id).toBe('other');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  });
+
+  // Unit, #11329: reconnect replaces the effect, but not the original RPC.
+  // Several same-peer recovery edges must join it and request one fresh result.
+  it('keeps the account RPC shared across reconnect effects and refreshes once after it settles', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    const finishes: Array<(value: unknown) => void> = [];
+    mocks.remoteInvoke.mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
+    const view = renderHook(() => useGroupMemberAccounts('anthropic', 'mini', true));
+    act(() => mocks.status.forEach(listener => listener({ status: 'connecting' })));
+    act(() => mocks.status.forEach(listener => listener({ status: 'online' })));
+    act(() => mocks.presence.forEach(listener => listener({ deviceId: 'mini', online: false } as DeviceLinkPresenceSnapshot)));
+    act(() => mocks.presence.forEach(listener => listener({ deviceId: 'mini', online: true } as DeviceLinkPresenceSnapshot)));
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(1);
+    await act(async () => finishes[0](pool([poolAccount('old')])));
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(2);
+    expect(view.result.current.accounts).toBeNull();
+    await act(async () => finishes[1](pool([poolAccount('fresh')])));
+    expect(view.result.current.accounts?.[0].account.id).toBe('fresh');
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(2);
+  });
+
   // Unit r4422287440 / §10: the old group tests replaced the card hook, so
   // they missed its pending Kimi identity being destroyed by a new offline poll.
   // r4480725246 adds the OpenCode Go source introduced in the synced parent.

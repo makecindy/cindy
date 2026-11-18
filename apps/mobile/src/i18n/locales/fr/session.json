@@ -77,6 +77,9 @@
     "back": "Retour"
   },
   "failedScheduleNotice": {
+    "actionScheduled": "L’autorisation pour cette action a expiré. La prochaine exécution reste programmée.",
+    "actionExpired": "L’autorisation de la session pour cette action a expiré. Consultez la dernière exécution de l’automatisation.",
+    "actionRecovered": "L’autorisation pour cette action a expiré. La même automatisation a ensuite réussi.",
     "text": "Une exécution automatique a échoué.",
     "precheck": "Les vérifications automatiques sont temporairement bloquées.",
     "rateLimited": "Les vérifications automatiques sont temporairement bloquées par une limite de débit des requêtes.",
@@ -871,7 +874,7 @@
   },
   "providerGroupRebalance": {
     "title": "Continuer sur {{label}} ?",
-    "body": "Pour consommer le quota de chaque compte de façon équilibrée, envoyez ce message depuis {{label}} ({{quota}}). Les derniers messages et un résumé sont repris ; des détails plus anciens peuvent être perdus.",
+    "body": "Pour consommer le quota de chaque compte de façon équilibrée, envoyez ce message depuis {{label}} ({{quota}}). Le contexte de cette conversation sera repris. Les messages anciens pourront être condensés et l’historique complet restera disponible.",
     "quota": "{{left}} % restant",
     "quotaReset": "{{left}} % restant · réinitialisation dans {{reset}}",
     "confirm": "Changer",

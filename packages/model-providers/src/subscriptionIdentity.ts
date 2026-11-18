@@ -100,24 +100,29 @@ export interface ListedSourceFolds {
   hiddenBase: Set<string>;
   /** deviceId → hidden provider ids on that computer. */
   hiddenOther: Map<string, Set<string>>;
+  /**
+   * Another computer's copy of a provider the base computer has but cannot use right now
+   * (`deviceId\nproviderId` → base provider id). Pickers list it, and ask before using it:
+   * the app never moves work to another computer on its own.
+   */
+  askBeforeUse: Map<string, string>;
 }
 
 /** Run location value for "this computer's own entry". */
 export const RUN_LOCATION_LOCAL = 'local';
 
 /**
- * Where a provider available on several own computers runs: the user's pinned choice when that
- * computer still offers it, otherwise this computer if usable, otherwise the first offering computer.
+ * Where a provider available on several own computers runs: the computer the user chose while it
+ * still offers the provider, otherwise this computer. Never another computer on the app's own
+ * initiative: a momentary disconnect must not move work elsewhere (2026-11-18 user decision).
  */
 export function effectiveRunLocation(
-  provider: { connected?: boolean; suspended?: boolean; runLocation?: string },
+  provider: { runLocation?: string },
   candidates: readonly { deviceId: string }[],
 ): string {
   const pinned = provider.runLocation;
-  if (pinned === RUN_LOCATION_LOCAL) return RUN_LOCATION_LOCAL;
-  if (pinned && candidates.some((candidate) => candidate.deviceId === pinned)) return pinned;
-  if (provider.connected && !provider.suspended) return RUN_LOCATION_LOCAL;
-  return candidates[0]?.deviceId ?? RUN_LOCATION_LOCAL;
+  if (pinned && pinned !== RUN_LOCATION_LOCAL && candidates.some((candidate) => candidate.deviceId === pinned)) return pinned;
+  return RUN_LOCATION_LOCAL;
 }
 
 /**
@@ -132,6 +137,7 @@ export function listedSourceFolds(input: ListedSourcesInput): ListedSourceFolds 
   const { base, baseExempt = () => false, others = [], current = null, honorRunLocation = false } = input;
   const hiddenBase = new Set<string>();
   const hiddenOther = new Map<string, Set<string>>();
+  const askBeforeUse = new Map<string, string>();
   const otherHidden = (deviceId: string, providerId: string) => hiddenOther.get(deviceId)?.has(providerId) ?? false;
   const hide = (ref: ListedSourceRef) => {
     if (ref.deviceId === null) { hiddenBase.add(ref.providerId); return; }
@@ -178,6 +184,13 @@ export function listedSourceFolds(input: ListedSourcesInput): ListedSourceFolds 
         ?? (isCurrent({ deviceId: null, providerId: provider.id }) || !honorRunLocation ? RUN_LOCATION_LOCAL
           : effectiveRunLocation(provider as ProviderView & { runLocation?: string }, candidates));
     const preferred = candidates.find(candidate => candidate.deviceId === location);
+    // This computer has the provider but cannot use it now: pickers keep the other computers' copies
+    // listed and ask before using one, instead of quietly standing them in for this computer's entry.
+    // This computer's entry stays listed too, even while the task still uses it, so it can recover.
+    if (!preferred && honorRunLocation && !provider.connected) {
+      for (const candidate of candidates) askBeforeUse.set(`${candidate.deviceId}\n${candidate.provider.id}`, provider.id);
+      continue;
+    }
     const representative = preferred?.provider ?? provider;
     // The entry the task uses never disappears, even while it is not the chosen location.
     for (const candidate of candidates) {
@@ -209,5 +222,9 @@ export function listedSourceFolds(input: ListedSourcesInput): ListedSourceFolds 
       } else if (!isCurrent(ref)) hide(ref);
     }
   }
-  return { hiddenBase, hiddenOther };
+  for (const key of askBeforeUse.keys()) {
+    const [deviceId, providerId] = [key.slice(0, key.indexOf('\n')), key.slice(key.indexOf('\n') + 1)];
+    if (otherHidden(deviceId, providerId)) askBeforeUse.delete(key);
+  }
+  return { hiddenBase, hiddenOther, askBeforeUse };
 }

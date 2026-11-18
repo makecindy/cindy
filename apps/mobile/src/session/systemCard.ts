@@ -1,6 +1,6 @@
 import { formatLocalizedDuration, formatLocalizedSeconds } from './sessionDurationFormat';
 import type { MobileSlashCommand } from '@/device-link/mobileMakerTransport';
-import type { InputProjection, RemoteSession } from '@/session/types';
+import type { InputProjection, MobileHandoffCoverage, RemoteSession } from '@/session/types';
 import {
   DEFAULT_LOCAL_SYSTEM_COMMANDS,
   buildSystemCardData,
@@ -40,7 +40,17 @@ export type MobileSystemCardType =
   // 代输入结束留痕(隐藏续接行派生)。
   | 'input-handoff'
   | 'mcp-app';
-export type MobileSystemCardPresentation = SystemCardPresentation;
+export type MobileSystemCardPresentation = SystemCardPresentation & { handoffNotice?: string };
+
+const handoffCoverageKeys = {
+  complete: 'message.renderer.handoffCoverageComplete',
+  condensed: 'message.renderer.handoffCoverageCondensed',
+} as const satisfies Record<MobileHandoffCoverage, string>;
+
+export function handoffCoverageKey(data?: Record<string, unknown>) {
+  const coverage = data?.handoffCoverage;
+  return coverage === 'complete' || coverage === 'condensed' ? handoffCoverageKeys[coverage] : undefined;
+}
 
 /** goal 达成记录文案(对齐桌面 GoalCompleteCard 的 goal.complete.record)。 */
 function formatGoalCompleteCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
@@ -176,8 +186,9 @@ function formatCompactCard(data: Record<string, unknown> | undefined): SystemCar
   return { title: parts.join(' · '), rows: [] };
 }
 
-function formatContextRebuildCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
+function formatContextRebuildCard(data: Record<string, unknown> | undefined): MobileSystemCardPresentation {
   const handoff = typeof data?.handoff === 'string' ? data.handoff : '';
+  const coverageKey = handoffCoverageKey(data);
   const titleKey = data?.reason === 'pi-prompt-timeout'
     ? 'labelTimeout'
     : data?.reason === 'codex-history-strip' ? 'labelStrip' : 'labelOverflow';
@@ -185,8 +196,9 @@ function formatContextRebuildCard(data: Record<string, unknown> | undefined): Sy
   const englishSource = handoff.trimEnd().endsWith("; the user's new message follows ==");
   return {
     title: i18n.t(`message.systemCard.contextRebuild.${titleKey}`),
+    ...(coverageKey ? { handoffNotice: i18n.t(coverageKey) } : {}),
     ...(handoff.trim() ? {
-      subtitle: i18n.t(englishSource
+      subtitle: i18n.t(coverageKey ? 'message.renderer.handoffContentTitle' : englishSource
         ? 'message.systemCard.contextRebuild.handoffTitleEnglishSource'
         : 'message.systemCard.contextRebuild.handoffTitle'),
       body: handoff,
@@ -256,8 +268,9 @@ function formatAgentSwitchCard(data: Record<string, unknown> | undefined): Syste
   const to = mobileAgentLabelFromUnknown(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const rows = toModel ? [{ label: i18n.t('message.systemCard.modelLabel'), value: toModel }] : [];
-  // Phase 2:resumed = 目标引擎续接了自己的停泊原生会话(增量交接)。
-  if (data?.nativeHistory === 'fallback') rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.renderer.sessionFallbackPill') });
+  const coverageKey = handoffCoverageKey(data);
+  if (coverageKey) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t(coverageKey) });
+  else if (data?.nativeHistory === 'fallback') rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.renderer.sessionFallbackPill') });
   else if (data?.resumed === true) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.systemCard.sessionResumed') });
   return {
     title: formatAgentSwitchLocationLabel(data, (key, options) => i18n.t(key, options))

@@ -77,6 +77,9 @@
     "back": "返回"
   },
   "failedScheduleNotice": {
+    "actionScheduled": "這次操作的任務授權已失效。下一輪仍會按計畫執行。",
+    "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
+    "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
     "text": "先前有自動執行失敗。",
     "precheck": "自動檢查暫時受阻。",
     "rateLimited": "自動檢查暫時受阻：請求頻率受限。",
@@ -866,7 +869,7 @@
   },
   "providerGroupRebalance": {
     "title": "換到 {{label}} 繼續？",
-    "body": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會帶上最近幾輪對話和摘要，更早的細節可能記不全。",
+    "body": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。切換時會帶上這段對話的上下文，較早的內容可能會壓縮，原記錄仍保留。",
     "quota": "還剩 {{left}}%",
     "quotaReset": "還剩 {{left}}%，{{reset}}後重置",
     "confirm": "換過去",

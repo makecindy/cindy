@@ -275,6 +275,7 @@ describe('ProvidersSection — 深链定位', () => {
     ['SUBSCRIPTION_CODEX_PROVIDER_AUTH', 'subscriptionAccounts.providerManagedAuth'],
     ['SUBSCRIPTION_LOGIN_CANCELLED', null],
     ['SUBSCRIPTION_ACCOUNT_FAILED', 'subscriptionAccounts.failed'],
+    ['SUBSCRIPTION_ACCOUNT_UNREACHABLE', 'subscriptionAccounts.unreachable'],
   ] as const)('preserves pooled header reconnect feedback for %s', async (code, expectedMessage) => {
     providersState.providers = [makeProvider('openai', { name: 'OpenAI', connected: true, agents: ['codex'] })];
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
@@ -292,6 +293,24 @@ describe('ProvidersSection — 深链定位', () => {
     expect((loginButton as HTMLButtonElement).disabled).toBe(false);
     if (expectedMessage) expect(toastError).toHaveBeenCalledExactlyOnceWith(expectedMessage);
     else expect(toastError).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-18 user report, unit: every account read timed out on a bad DNS answer, and the header
+  // turned "Not connected" with a sign-in button, so a valid login looked lost. Previous header
+  // cases only used ready or empty pools. Minimal input: the only account is unavailable.
+  it('offers a re-read, not sign-in, when the pool accounts cannot be read', async () => {
+    providersState.providers = [makeProvider('openai', { name: 'OpenAI', connected: true, agents: ['codex'] })];
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
+    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'least',
+      accounts: [{ id: 'default', identity: 'member@example.test', status: 'unavailable',
+        paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }] });
+    renderAt('?tab=providers&connect=openai');
+    const retry = await screen.findByRole('button', { name: 'subscriptionAccounts.signIn.retry' });
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.login' })).toBeNull();
+    const reads = command.mock.calls.length;
+    fireEvent.click(retry);
+    await waitFor(() => expect(command.mock.calls.length).toBeGreaterThan(reads));
+    expect(command.mock.calls.slice(reads).every(([input]) => input.action === 'read')).toBe(true);
   });
 
   it('does not rediscover a deleted local Codex provider into the settings list', async () => {

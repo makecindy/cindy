@@ -55,6 +55,7 @@
     "./image-annotation": "./src/imageAnnotation.ts",
     "./interaction": "./src/interaction.ts",
     "./internal-citation": "./src/internalCitation.ts",
+    "./task-snooze-options": "./src/taskSnoozeOptions.ts",
     "./live-task-priority": "./src/liveTaskPriority.ts",
     "./math-markdown": "./src/mathMarkdown.ts",
     "./mention-ref": "./src/mentionRef.ts",

@@ -3,6 +3,7 @@ import { commitProvisionalSession as commitSessionDraft, discardProvisionalSessi
 import { createUserSession, withWorktreeMutation } from './createUserSession.js';
 import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
+import { scheduleNativeHistoryBackupCleanup } from '../../remote-agent/controller/nativeHistoryBackup.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
 import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
@@ -156,7 +157,7 @@ import { isCompanionShadowed } from '../../companion-cloud/homes.js';
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
 const log = createLogger('sessions');
-const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
+const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt', 'snoozedUntil', 'discardWorktreeChanges']);
 const initialSessionListLogged = new Set<string>();
 const SLOW_SESSION_LIST_MS = 250;
 
@@ -192,7 +193,7 @@ function compactTerminalSessionToolResults(
   });
 }
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
-type SessionWorktreeRecycle = (sessionId: string, resources?: readonly string[]) => Promise<void>;
+type SessionWorktreeRecycle = (sessionId: string, resources?: readonly string[], discardChanges?: true) => Promise<void>;
 export interface SessionRecycleScope {
   ownerScope: OwnerScope;
   mediaDb: DbClient['drizzle'];
@@ -265,6 +266,8 @@ async function withStatusWriteLock<T>(
   alreadyLocked = false,
   beforeWrite?: () => void,
   requireNoWorktree = false,
+  recycleAfterWrite = false,
+  discardWorktreeChanges?: true,
 ): Promise<T> {
   const write = async () => {
     const resources = status === undefined ? [] : await readSessionWorktreeResources(db, sessionId);
@@ -272,10 +275,30 @@ async function withStatusWriteLock<T>(
     const physicalResources = await Promise.all(resources.map(physicalWorktreeKey));
     const mutate = async () => {
       beforeWrite?.();
-      if (status === 'archived' || status === 'deleted')
+      let discardOnTransition = false;
+      if (discardWorktreeChanges) {
+        const [current] = await db.select({ status: sessions.status })
+          .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+        // A retried archive must not extend an earlier discard to newly written files.
+        discardOnTransition = current?.status === 'active';
+        beforeWrite?.();
+      }
+      if (!recycleAfterWrite && (status === 'archived' || status === 'deleted')
+        && (!discardWorktreeChanges || discardOnTransition))
         await requestWorktreeRecycle(sessionId, resources);
       beforeWrite?.();
       const result = await task();
+      if (recycleAfterWrite) await requestWorktreeRecycle(sessionId, resources);
+      if (discardOnTransition) {
+        // The ordinary request is already durable. A failed or interrupted opt-in
+        // leaves the successful archive on the recoverable path.
+        try {
+          beforeWrite?.();
+          await requestWorktreeRecycle(sessionId, resources, true);
+        } catch (error) {
+          log.warn('could not mark archived worktree changes for discard', { sessionId, error });
+        }
+      }
       for (const resource of physicalResources) notifyWorktreeRecycleOpportunity(resource);
       return result;
     };
@@ -320,10 +343,12 @@ async function finalizeSharedTaskClosure(
 async function requestWorktreeRecycle(
   sessionId: string,
   resources: readonly string[] = [],
+  discardChanges?: true,
 ): Promise<void> {
   const recycle = sessionWorktreeRecycle;
   if (!recycle) throw new Error('worktree recycle implementation is not wired');
-  await recycle(sessionId, resources);
+  if (discardChanges) await recycle(sessionId, resources, true);
+  else await recycle(sessionId, resources);
 }
 
 /** Persist a terminal cleanup intent using references from the same DB snapshot. */
@@ -395,10 +420,12 @@ async function setTerminalSessionStatus(
   sessionId: string,
   status: 'archived' | 'deleted',
   idleArchiveCutoff?: number,
+  unusedOnly?: boolean,
 ): Promise<SessionsSetTerminalStatusResult['deletedSideChats']> {
   try {
     const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status,
-      ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}) });
+      ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}),
+      ...(unusedOnly ? { unusedOnly: true } : {}) });
     return result.deletedSideChats;
   } catch (error) {
     const code = (error as { code?: string }).code;
@@ -485,6 +512,9 @@ export function broadcastSessionPatched(
   ownerScope?: OwnerScope,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  if (patch.status === 'deleted' || 'sdkSessionId' in patch || 'clearedAt' in patch || 'agentDeviceId' in patch) {
+    scheduleNativeHistoryBackupCleanup(sessionId, patch.status === 'deleted');
+  }
   pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
@@ -1588,7 +1618,7 @@ export function registerSessionIpc(
         workspaceKind: updated.workspaceKind,
       });
       if (isOwnerScopeCurrent(ownerScope)) {
-        broadcastSessionPatched(sid, { status: 'active' }, ownerScope);
+        broadcastSessionPatched(sid, { status: 'active', snoozedUntil: null, snoozedAt: null }, ownerScope);
       }
       scheduleWorktreeRecycleForStatusChange(sid, 'active');
       notifyGhostSessionStatusChange(sid, 'active', updated.workingDir);
@@ -1612,6 +1642,10 @@ export function registerSessionIpc(
   // sdkSessionId/orcaRole/clearedAt…),故意不进 allowlist;这个 handler 只放行白名单内的
   // 用户可编辑元数据,是「写库必须经业务 handler、不开裸写」原则下的窄能力(规则 9/13)。
   // 仅被隧道(远程操作)调到 —— 本机操作走 sessions:update + renderer 乐观更新。
+  ipcMain.handle('local-db:sessions:discard-unused', async (_e, id: unknown) => {
+    return patchSessionMetaInDb(requireString(id, 'id'), { status: 'deleted' }, { unusedOnly: true });
+  });
+
   ipcMain.handle('local-db:sessions:patch-meta', async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
     const p = requireObject(patch, 'patch');
@@ -1678,9 +1712,17 @@ async function cancelValidatedCreation(
   cancel();
 }
 
+function validateDiscardWorktreeChanges(value: unknown, status: unknown): true | undefined {
+  if (value === undefined) return undefined;
+  if (value !== true || status !== 'archived') {
+    throwIpcError('INVALID_PARAMS', 'discardWorktreeChanges requires status archived');
+  }
+  return true;
+}
+
 export async function updateSessionInDb(
   sid: string,
-  p: Record<string, unknown>,
+  { discardWorktreeChanges: discardRequested, ...p }: Record<string, unknown>,
   opts: RegisterSessionIpcOpts = registeredSessionIpcOpts,
   moveGuard?: {
     /** Identity only: also used after commit and inside transcript relocation. */
@@ -1692,6 +1734,11 @@ export async function updateSessionInDb(
   },
 ): Promise<ReturnType<typeof sessionToCamel>> {
   moveGuard?.assertCurrent();
+  validateSnoozeTime(p.snoozedUntil);
+  const discardWorktreeChanges = validateDiscardWorktreeChanges(discardRequested, p.status);
+  if (discardWorktreeChanges && p.workingDir !== undefined) {
+    throwIpcError('INVALID_PARAMS', 'cannot change workingDir when discarding worktree changes');
+  }
   const ownerScope = captureOwnerScope();
   if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
     throwIpcError(
@@ -1862,6 +1909,7 @@ export async function updateSessionInDb(
       'writableDirs',
       'pinnedAt',
       'notificationsMuted',
+      'snoozedUntil',
       'workingDir',
       'workspaceKind',
       'title',
@@ -1964,6 +2012,12 @@ export async function updateSessionInDb(
         }
       },
       p.workingDir !== undefined,
+      discardWorktreeChanges ? () => {
+        if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+      } : undefined,
+      false,
+      false,
+      discardWorktreeChanges,
     );
     moveGuard?.assertCurrent();
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
@@ -2059,10 +2113,13 @@ export async function updateSessionInDb(
       titleChanged ||
       statusChanged ||
       p.pinnedAt !== undefined ||
-      p.notificationsMuted !== undefined
+      p.notificationsMuted !== undefined ||
+      p.snoozedUntil !== undefined
     ) {
       if (isOwnerScopeCurrent(ownerScope)) {
-        broadcastSessionPatched(sid, broadcastPatch, ownerScope);
+        broadcastSessionPatched(sid, { ...broadcastPatch,
+          ...(p.snoozedUntil !== undefined || p.status !== undefined ? { snoozedUntil: updated.snoozedUntil, snoozedAt: updated.snoozedAt } : {}),
+        }, ownerScope);
       }
     }
     // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
@@ -2154,15 +2211,20 @@ export async function restoreArchivedSessionForSend(
 
 export async function patchSessionMetaInDb(
   sessionId: string,
-  patch: {
+  rawPatch: {
     status?: 'active' | 'archived' | 'deleted';
+    discardWorktreeChanges?: true;
     title?: string;
     pinnedAt?: string | null;
+    snoozedUntil?: string | null;
   },
-  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number } = {},
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
-  for (const k of Object.keys(patch)) {
+  const { discardWorktreeChanges: discardRequested, ...patch } = rawPatch;
+  const discardWorktreeChanges = validateDiscardWorktreeChanges(discardRequested, patch.status);
+  validateSnoozeTime(patch.snoozedUntil);
+  for (const k of Object.keys(rawPatch)) {
     if (!REMOTE_EDITABLE_META.has(k)) {
       throwIpcError('INVALID_PARAMS', `field not allowed in patch-meta: ${k}`);
     }
@@ -2179,32 +2241,40 @@ export async function patchSessionMetaInDb(
     throwIpcError('INVALID_PARAMS', 'title must be a string');
   }
 
+  const beforeWrite = () => {
+    if ((options.unusedOnly || discardWorktreeChanges) && (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted))
+      throwIpcError('PRECONDITION_FAILED', 'Session cleanup aborted');
+    options.beforeWrite?.();
+  };
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
   let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
-  await cancelValidatedCreation(dbClient, sessionId, patch.status, () => {
+  // Guarded cleanup must not cancel a task before its unused check commits.
+  if (options.unusedOnly && (patch.status !== 'deleted' || typeof dbClient.tx !== 'function'))
+    throwIpcError('PRECONDITION_FAILED', 'Atomic unused cleanup unavailable');
+  if (!options.unusedOnly) await cancelValidatedCreation(dbClient, sessionId, patch.status, () => {
     if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) {
       throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
     }
-    options.beforeWrite?.();
+    beforeWrite();
   });
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
-    options.beforeWrite?.();
+    beforeWrite();
     const terminal = patch.status === 'archived' || patch.status === 'deleted';
     if (terminal) {
       if (typeof dbClient.tx === 'function') {
         const { status: _status, ...nonTerminalPatch } = setObj;
         await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
-        options.beforeWrite?.();
-        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', options.idleArchiveCutoff);
+        beforeWrite();
+        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', options.idleArchiveCutoff, options.unusedOnly);
       } else {
         const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
         try {
-          options.beforeWrite?.();
+          beforeWrite();
           await writeSessionPatch(db, sessionId, setObj, patch.status);
         } catch (error) {
           await rollbackSharedTaskClosure(dbClient, prepared);
@@ -2219,7 +2289,7 @@ export async function patchSessionMetaInDb(
       const assertRestoreCurrent = () => {
         if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted)
           throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
-        options.beforeWrite?.();
+        beforeWrite();
       };
       await noteSessionsRestoring([sessionId], db);
       const { status: _status, ...nonStatusPatch } = setObj;
@@ -2232,7 +2302,7 @@ export async function patchSessionMetaInDb(
       if (options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
       await writeSessionPatch(db, sessionId, setObj, patch.status, () => {
         if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
-        options.beforeWrite?.();
+        beforeWrite();
       });
     }
     const row = await selectSessionWithCount(db, sessionId);
@@ -2247,7 +2317,7 @@ export async function patchSessionMetaInDb(
       await closeSharedTaskForTask(sessionId, dbClient);
     }
     return sessionToCamel(row);
-  }, options.routeLockHeld, options.beforeWrite, options.idleArchiveCutoff !== undefined);
+  }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges);
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
   }
@@ -2272,10 +2342,12 @@ export async function patchSessionMetaInDb(
   //   - sessionsStore.onPatched → patchLocal,即时反映到 sidebar(删/归档移出 active 桶、改名/置顶刷新);
   //   - CCAgentSessionView.onPatched → 合并进 serverSession。
   // 经 tap 转发:订阅了该被控端 `sessions` topic 的控制端也即时收到这条 patched(push 驱动镜像)。
+  const snoozePatch = patch.snoozedUntil !== undefined || patch.status !== undefined
+    ? { snoozedUntil: updated.snoozedUntil, snoozedAt: updated.snoozedAt } : {};
   const broadcastPatch =
     patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch;
   if (isOwnerScopeCurrent(ownerScope)) {
-    broadcastSessionPatched(sessionId, broadcastPatch, ownerScope);
+    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch }, ownerScope);
   }
   if (patch.pinnedAt !== undefined && updated.pinnedAt != null) {
     void import('../../sessionTaskSummary.js').then((m) =>
@@ -2481,7 +2553,7 @@ export async function setSessionsStatusInDb(
       workingDir: item.workingDir,
       workspaceKind: item.workspaceKind,
     });
-    broadcastSessionPatched(item.sessionId, { status: item.status }, ownerScope);
+    broadcastSessionPatched(item.sessionId, { status: item.status, snoozedUntil: null, snoozedAt: null }, ownerScope);
     scheduleWorktreeRecycleForStatusChange(item.sessionId, item.status, {
       ownerScope,
       mediaDb: dbClient.drizzle,
@@ -3058,5 +3130,14 @@ export async function setSessionSourceInDb(
       `[localDb] setSessionSourceInDb failed for ${sessionId}:`,
       err instanceof Error ? err.message : String(err),
     );
+  }
+}
+
+/** Deferral is a bounded timestamp, never a command or task lifecycle transition. */
+function validateSnoozeTime(value: unknown): void {
+  if (value === undefined || value === null) return;
+  const ms = typeof value === 'string' ? Date.parse(value) : NaN;
+  if (!Number.isFinite(ms) || ms <= Date.now() || ms > Date.now() + 366 * 86_400_000) {
+    throwIpcError('INVALID_PARAMS', 'snoozedUntil must be a future ISO timestamp within one year');
   }
 }

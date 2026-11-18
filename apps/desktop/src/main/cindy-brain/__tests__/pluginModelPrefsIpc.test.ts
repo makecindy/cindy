@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+import { createAuxiliaryModelChainResolver } from '../../utility-model/resolveAuxiliaryModelChainCore.js';
+import { encodeCatalogModelPin } from '../../../shared/catalogModelPin.js';
 
 type SyncHandler = (event: { returnValue?: unknown }, ...args: unknown[]) => void;
 
@@ -27,8 +29,7 @@ describe('ghosts:errand-prefs (plugin model & tasks)', () => {
     let refs = ['cat:xai:codex:grok-4.6'];
     const deps = {
       readPluginTaskConfig,
-      getEffectiveAuxiliaryModelChain: () => ({ refs }),
-      formatAuxiliaryModelRefLabel: (ref: string) => (ref.endsWith('grok-4.6') ? 'Grok 4.6' : 'GPT-5.5'),
+      getEffectiveAuxiliaryModelLabel: () => refs[0].endsWith('grok-4.6') ? 'Grok 4.6' : 'GPT-5.5',
     };
     expect(read(deps, 'writer')).toEqual({
       config: { permissionMode: 'auto' },
@@ -44,10 +45,22 @@ describe('ghosts:errand-prefs (plugin model & tasks)', () => {
     const readPluginTaskConfig = vi.fn();
     expect(read({
       readPluginTaskConfig,
-      getEffectiveAuxiliaryModelChain: () => ({ refs: [] }),
-      formatAuxiliaryModelRefLabel: vi.fn(),
+      getEffectiveAuxiliaryModelLabel: () => null,
     }, 42)).toEqual({ config: {}, auxiliaryModelLabel: null });
     expect(readPluginTaskConfig).not.toHaveBeenCalled();
+  });
+
+  // Unit regression for PR #11146: the real preference callback and resolver
+  // must not advertise a remote pin that plugin execution skips. Old tests only
+  // covered local chain heads. Mixed and remote-only chains have different results.
+  it('labels the first local candidate and clears the label for a remote-only chain', () => {
+    const remote = encodeCatalogModelPin({ providerId: 'openai', agentKind: 'codex', model: 'remote-model', agentDeviceId: 'offline-device' });
+    let models = [remote, 'cat:xd:codex:local-model'];
+    const resolver = createAuxiliaryModelChainResolver({ readAuxiliaryModelSettings: () => ({ models }) });
+    const deps = { readPluginTaskConfig: () => ({}), getEffectiveAuxiliaryModelLabel: resolver.getEffectiveAuxiliaryModelLabel };
+    expect(read(deps, 'writer')).toMatchObject({ auxiliaryModelLabel: 'local-model · Cindy AI' });
+    models = [remote];
+    expect(read(deps, 'writer')).toMatchObject({ auxiliaryModelLabel: null });
   });
 
   it('no longer registers the per-ability cindy-prefs channels', () => {

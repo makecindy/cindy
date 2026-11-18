@@ -10,7 +10,6 @@ import {
 import {
   getPendingQueueRowPresentation,
   resolvePendingQueueEditSubmission,
-  resolveSoleSteerableQueuedMessage,
 } from '@/components/new-chat/pendingQueueRowPresentation';
 import type { QueuedMessage } from '@/lib/makerChatStore';
 
@@ -328,53 +327,10 @@ describe('getPendingQueueRowPresentation', () => {
   });
 });
 
-describe('resolveSoleSteerableQueuedMessage', () => {
-  const idle = { editingClientId: null, steeringClientIds: [] as string[] };
-
-  it('targets the only queued row so the composer shortcut can steer it', () => {
-    expect(resolveSoleSteerableQueuedMessage([queuedMessage()], idle)).toBe('client-1');
-  });
-
-  it('never targets a hidden answered question reply, but still targets a supplement', () => {
-    const answered = queuedMessage({ clientId: 'question-reply:answered:request-1:digest' });
-    expect(getPendingQueueRowPresentation(answered)).toMatchObject({ canEdit: false, canSteer: false });
-    expect(resolveSoleSteerableQueuedMessage([answered], idle)).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage([queuedMessage({ clientId: 'question-reply:request-2:digest' })], idle),
-    ).toBe('question-reply:request-2:digest');
-  });
-
-  it('declines when the target is ambiguous or the row cannot steer right now', () => {
-    expect(
-      resolveSoleSteerableQueuedMessage(
-        [queuedMessage(), queuedMessage({ clientId: 'client-2' })],
-        idle,
-      ),
-    ).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage([queuedMessage({ isPendingEnqueue: true })], idle),
-    ).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage(
-        [queuedMessage({ sourcePlugin: { pluginId: 'ghost-github' } })],
-        idle,
-      ),
-    ).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage([queuedMessage()], {
-        editingClientId: 'client-1',
-        steeringClientIds: [],
-      }),
-    ).toBeNull();
-    expect(
-      resolveSoleSteerableQueuedMessage([queuedMessage()], {
-        editingClientId: null,
-        steeringClientIds: ['client-1'],
-      }),
-    ).toBeNull();
-  });
+it('keeps answered question replies non-editable and non-steerable', () => {
+  const answered = queuedMessage({ clientId: 'question-reply:answered:request-1:digest' });
+  expect(getPendingQueueRowPresentation(answered)).toMatchObject({ canEdit: false, canSteer: false });
 });
-
 
 // Unit regression: pending task input must show the same paragraphs as delivered
 // history, while its send payload and an ordinary user's draft stay literal.

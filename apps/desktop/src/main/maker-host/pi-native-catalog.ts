@@ -118,6 +118,14 @@ function isOfficialGoogleChatEndpoint(baseUrl: string): boolean {
   }
 }
 
+function isOfficialOpenAIChatEndpoint(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.origin === 'https://api.openai.com' && /^\/v1\/?$/.test(url.pathname)
+      && !url.search && !url.hash;
+  } catch { return false; }
+}
+
 export function resolvePiBundledModelById(
   catalog: PiBundledModelCatalog | undefined,
   modelId: string,
@@ -557,6 +565,17 @@ export function buildPiNativeProvidersFromConfigs(
         // from its name or a Gemini model ID; absent overrides retain Pi defaults.
         if (modelApi === 'openai-completions' && resolved?.supportsStore !== undefined) {
           spec.compat = { ...spec.compat, supportsStore: resolved.supportsStore };
+        }
+        // Declare the wire constraint on the actual official endpoint, never on
+        // a GPT-looking alias or a saved preset pointing at an unrelated relay.
+        if (modelApi === 'openai-completions') {
+          if (!explicitRoute?.requestPath && !rt.requestPath &&
+            isOfficialOpenAIChatEndpoint(modelBaseUrl ?? rt.baseUrl)) {
+            spec.compat = { ...spec.compat, maxToolCallIdLength: 64 };
+          }
+          if (resolved?.maxToolCallIdLength !== undefined) {
+            spec.compat = { ...spec.compat, maxToolCallIdLength: resolved.maxToolCallIdLength };
+          }
         }
         return managedOllama && shouldApplyQwen38Overlay(m.id)
           ? applyQwen38NativeOverlay(spec)

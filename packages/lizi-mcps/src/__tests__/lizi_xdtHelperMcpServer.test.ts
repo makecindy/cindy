@@ -7,6 +7,32 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit: native catalog discovery/mutation through the real host-tool registry.
+// Existing runtime controls lack native method argument and stdio boundaries.
+it('exposes native catalogs on demand and rejects process MCP configuration', async () => {
+  const call = vi.fn(async () => ({ ok: true as const, engine: 'pi', result: ['read'] }));
+  const server = createXdtHelperMcpServer({ sessionToolCatalog: { call } }, {
+    agentKind: 'pi', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'catalog', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(call).not.toHaveBeenCalled();
+    expect(server.hostTools.describe('get_session_tool_catalog')).toMatchObject({ category: 'control' });
+    expect(parsePayload(await server.hostTools.call('get_session_tool_catalog', { method: 'getActiveTools' })))
+      .toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+    for (const config of [{ url: 'http://localhost/mcp', command: 'node' }, { url: 'file:///fixture/server' }]) {
+      expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
+        session_id: 'target', method: 'registerMcpServer', args: ['external', config],
+      }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    }
+    expect(call).not.toHaveBeenCalled();
+    expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
+      session_id: 'target', method: 'setActiveTools', args: [['read']],
+    }))).toMatchObject({ ok: true, engine: 'pi', result: ['read'] });
+    expect(call).toHaveBeenCalledWith(expect.objectContaining({ hostCaller: expect.objectContaining({ pluginId: 'catalog' }) }),
+      { sessionId: 'target', method: 'setActiveTools', args: [['read']] });
+  } finally { await server.close(); }
+});
+
 // Unit / #10794 permission boundary: the real registry must not expose the raw
 // account view or provider directory to a plugin without a task. The original
 // plugin read case allowed both. Minimal input is subscriptionAccounts/read.
@@ -180,6 +206,22 @@ it('exposes read-only subscription usage to the common validated tool registry',
     const failed = await server.hostTools.call('get_subscription_usage', {});
     expect(parsePayload(failed)).toMatchObject({ errorCode: 'SUBSCRIPTION_USAGE_UNAVAILABLE' });
     expect(JSON.stringify(failed)).not.toContain('secret host path');
+  } finally { await server.close(); }
+});
+
+// #11274: only the target task ID is accepted and the existing usage group admits the read.
+it('exposes session quota without accepting caller-supplied routing', async () => {
+  const readSession = vi.fn(async () => ({ status: 'unavailable' }));
+  const hostCaller = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+  const server = createXdtHelperMcpServer({ subscriptionUsage: { read: vi.fn(), readSession } },
+    { agentKind: 'codex', workingDir: '', hostCaller });
+  try {
+    expect(server.hostTools.describe('get_session_quota')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_session_quota', { sessionId: 'target' })))
+      .toMatchObject({ ok: true, status: 'unavailable' });
+    expect(parsePayload(await server.hostTools.call('get_session_quota', { sessionId: 'target', deviceId: 'other' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(readSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hostCaller }), 'target');
   } finally { await server.close(); }
 });
 
@@ -521,6 +563,12 @@ describe("cindy_helper MCP server", () => {
       expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task' }), {
         purpose: 'Sign in to continue', target: { app: 'Google Chrome' },
       });
+      // The public tool must preserve a logical field plan through every harness.
+      const fields = [{ label: 'Code', contentType: 'one-time-code', targets: [{ label: 'Code 0', length: 1 }, { label: 'Code 1', length: 1 }] }];
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Enter code', target: {}, fields,
+      } }))).toMatchObject({ ok: true, status: 'pending' });
+      expect(start).toHaveBeenLastCalledWith(expect.anything(), { purpose: 'Enter code', target: {}, fields });
       expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
         purpose: 'Scan the simulator sign-in code', image: 'shots/qr.png',
       } }))).toMatchObject({ ok: true, request_id: 'handoff-image', status: 'pending' });
@@ -552,7 +600,7 @@ describe("cindy_helper MCP server", () => {
       } }))).toMatchObject({ errorCode: 'TARGET_IS_CINDY' });
       expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'next-task', sessionInstanceId: 'instance-2' }),
         { purpose: 'Sign in', target: { app: 'Cindy' } });
-      expect(start).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(3);
       expect(startImage).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   });

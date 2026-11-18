@@ -2,6 +2,7 @@ import { withSharedSessionResumeRecovery, type SharedSessionResumeRecoveryDeps }
 import { createAgentHandoffPendingRegistry } from '../agentHandoff.js';
 import { ROUTINE_TRIGGER_DATA_LEAD } from '../../../shared/botAutonomy.js';
 import {
+  AgentStartupStoppedError,
   CodexResumePreparationBlockedError,
   PI_CACHE_RECOVERY_EXPECTATION,
   MODEL_REQUEST_CONTROL,
@@ -51,6 +52,7 @@ import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext.
 import { createTaskRuntimePlugins } from '../runtimePlugins.js';
 import * as mcpApps from '../../mcp-apps/runtime.js';
 import { createWireNoteMemory } from '../wireNoteMemory';
+import { createScheduledQuotaDispatchGuard, isQuotaScheduleCurrent } from '../automaticContinueEligibility';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -84,12 +86,32 @@ describe('local application task takeover', () => {
       expect(typeof readText).toBe('function');
       const value = providers.compose(id, readText); pending.push(value); return value;
     };
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input');
+    const prepared = vi.fn();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input', undefined,
+      { onRuntimePreparation: prepared });
+    expect(prepared).not.toHaveBeenCalled();
     expect(pending).toEqual([undefined, undefined]);
     expect(readRoute).not.toHaveBeenCalled();
     expect(screen).not.toHaveBeenCalled();
     expect(session.send).toHaveBeenCalledOnce();
     expect(vi.mocked(session.send).mock.calls[0][1]?.[MODEL_REQUEST_CONTROL]).toBeUndefined();
+  });
+
+  // Welcome replay safety, unit: an awaited preparation remains observable even
+  // when its selection is removed in flight; the callback never reaches the provider.
+  it.each(['turn', 'prompt', 'context'] as const)('records %s preparation before awaiting it', async point => {
+    const { deps, session } = createDeps();
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    const observed = vi.fn(() => { finish(); });
+    if (point === 'turn') deps.prepareRuntimeTurn = () => pending.then(() => ({ options: {} }));
+    if (point === 'prompt') deps.prepareRuntimePrompt = () => pending;
+    if (point === 'context') deps.composeRuntimeContext = () => pending.then(() => 'Reference only');
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Welcome', undefined,
+      { toolsDisabled: true, onRuntimePreparation: observed });
+    expect(observed).toHaveBeenCalledOnce();
+    expect(session.send).toHaveBeenCalledOnce();
+    expect(vi.mocked(session.send).mock.calls[0][1]).not.toHaveProperty('onRuntimePreparation');
   });
 
   // Runtime context, unit: reference material reaches the normal message body,
@@ -454,6 +476,43 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
 // Production entry: sendToAgentAccepted; minimal input: one turn with an async
 // startup write that completes, rejects, or is invalidated. Unit: injected I/O.
 describe('launcher pre-provider persistence', () => {
+  // Unit: real send transaction + quota guard. A restored run has no live runner
+  // to stop it when its schedule is revoked during remote preparation.
+  it.each(['active', 'unbound', 'rebound', 'paused', 'deleted', 'takeover'] as const)('checks restored quota ownership after preparation: %s', async phase => {
+    const origin = { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'old-run' } as const;
+    let current = true;
+    let status = 'active';
+    let targetSessionId: string | null = 'session-1';
+    const succeeds = phase === 'active' || phase === 'unbound';
+    const { deps, session } = createDeps({
+      assertQuotaContinuation: createScheduledQuotaDispatchGuard({
+        origin: () => current ? origin : undefined,
+        isScheduleActive: async (_scheduleId, sessionId) => {
+          if (phase === 'takeover') current = false;
+          return isQuotaScheduleCurrent({ status, targetSessionId }, sessionId);
+        },
+        reject: () => { throw new Error('quota continuation cancelled'); },
+      }),
+    });
+    const dispatched = vi.fn();
+    vi.mocked(session.send).mockImplementation(async (_message, opts) => {
+      await opts?.beforeProviderStart?.();
+      await opts?.onAccepted?.();
+      // Match Session.send: acceptance and vision can yield after startup.
+      await Promise.resolve();
+      status = ['takeover', 'rebound', 'unbound'].includes(phase) ? 'active' : phase;
+      targetSessionId = phase === 'rebound' ? 'another-task' : phase === 'unbound' ? null : 'session-1';
+      await opts?.resolveAutoReviewUserIntent?.();
+      dispatched();
+      return { accepted: true };
+    });
+    const sending = createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Continue', undefined, {
+      persistUserMessage: { clientId: 'quota-retry', content: 'Continue' },
+    });
+    if (succeeds) await sending;
+    else await expect(sending).rejects.toThrow('quota continuation cancelled');
+    expect(dispatched).toHaveBeenCalledTimes(succeeds ? 1 : 0);
+  });
   it.each(['ready', 'write-failed', 'cancelled', 'app-revoked'] as const)(
     'waits for the launcher fence and prevents dispatch when %s', async (phase) => {
       const controller = new AbortController();
@@ -601,6 +660,31 @@ describe('MCP App message authorization', () => {
 });
 
 describe('maker SEND transaction', () => {
+  // #10559: a quota-looking message alone cannot authorize transparent replay.
+  // Unit: the real bootstrap boundary must retain proof that startup stopped.
+  it.each(['stopped-quota', 'opaque-quota', 'stopped-other'] as const)(
+    'preserves the startup admission proof for %s', async mode => {
+      const quota = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=9000000');
+      const cause = mode === 'stopped-other' ? new Error('permission denied') : quota;
+      const error = mode === 'opaque-quota' ? cause : new AgentStartupStoppedError(cause);
+      const { deps, session } = createDeps({ getSession: () => undefined,
+        bootstrapSession: vi.fn(async opts => {
+          expect(opts.preserveStartupStoppedError).toBe(true);
+          throw error;
+        }),
+      });
+      const result = await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'original', {
+        id: 'session-1', agentKind: 'claude-code', workingDir: 'C:\\repo', model: 'claude-opus-5-5',
+      });
+      expect(result).toMatchObject({ accepted: false, outcome: {
+        kind: 'host-send', code: 'LAZY_CREATE_FAILED', message: cause.message,
+      } });
+      if (mode === 'stopped-quota') expect(result.outcome).toHaveProperty('startupAdmission', 'subscription-account-limited');
+      else expect(result.outcome).not.toHaveProperty('startupAdmission');
+      expect(session.send).not.toHaveBeenCalled();
+      expect(deps.createDbMessage).not.toHaveBeenCalled();
+    },
+  );
   it.each([false, true])('records the actual model only at dispatch (scheduled=%s)', async (scheduled) => {
     const applyPendingAgentSwitch = vi.fn(async () => {});
     const onModelDispatched = vi.fn();
@@ -618,7 +702,7 @@ describe('maker SEND transaction', () => {
       },
     });
     expect(applyPendingAgentSwitch).toHaveBeenCalledWith('session-1',
-      { clientId: 'model-input', ...(scheduled ? { scheduled: true } : {}) });
+      { clientId: 'model-input', nextInputChars: 'continue'.length, ...(scheduled ? { scheduled: true } : {}) });
     expect(onModelDispatched).toHaveBeenCalledExactlyOnceWith('session-1', 'model-input');
   });
 
@@ -2523,7 +2607,7 @@ describe('maker SEND transaction', () => {
     });
 
     expect(failedSession.send).not.toHaveBeenCalled();
-    expect(deps.bootstrapSession).toHaveBeenCalledWith(createOpts);
+    expect(deps.bootstrapSession).toHaveBeenCalledWith({ ...createOpts, preserveStartupStoppedError: true });
     expect(recoveredSession.send).toHaveBeenCalled();
   });
 
@@ -2733,8 +2817,10 @@ describe('maker SEND transaction', () => {
     });
 
     expect(deps.checkWorkDirExists).toHaveBeenCalledWith('lazy-session', 'D:\\lazy', 'claude-code', undefined);
-    expect(deps.synthesizeOrcaVendorOptionsFromDb).toHaveBeenCalledWith('lazy-session', createOpts);
-    expect(deps.bootstrapSession).toHaveBeenCalledWith(createOpts);
+    expect(deps.synthesizeOrcaVendorOptionsFromDb).toHaveBeenCalledWith('lazy-session', { ...createOpts, preserveStartupStoppedError: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith({ ...createOpts, preserveStartupStoppedError: true });
+    expect(vi.mocked(deps.bootstrapSession).mock.calls[0]![0])
+      .toBe(vi.mocked(deps.synthesizeOrcaVendorOptionsFromDb).mock.calls[0]![1]);
     expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('lazy-session', undefined);
     expect(deps.broadcastSessionCreated).toHaveBeenCalledWith('lazy-session');
     expect(lazySession.send).toHaveBeenCalled();
@@ -4993,6 +5079,57 @@ describe('repeatable environment notes are sent only when they change', () => {
 });
 
 describe('Agent prewarm', () => {
+  it('rebuilds a retained failed Pi runtime before preparing a Skill', async () => {
+    const live = createSession({ agentKind: 'pi', getStatus: () => 'error' });
+    const { deps } = createDeps({
+      getSession: () => live,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved' }),
+      readSessionWorkingDirFromDb: async () => '/repo',
+    });
+    await createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+  // #11112 / unit: a switch can leave a live Pi for the same path on the old device.
+  it('only retries the catalog on the persisted execution device', async () => {
+    const retry = vi.fn();
+    const live = { ...createSession({ agentKind: 'pi', workDir: '/repo' }), agentDeviceId: 'device-a',
+      retryFailedRuntimeCapabilityCapture: retry };
+    const { deps } = createDeps({
+      getSession: () => live,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b' }),
+    });
+    const prepare = () => createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
+    await expect(prepare()).rejects.toThrow();
+    expect(retry).not.toHaveBeenCalled();
+    live.agentDeviceId = 'device-b';
+    await prepare();
+    expect(retry).toHaveBeenCalledOnce();
+  });
+  // #11112: Pi catalog preparation must use the existing task's lazy bootstrap,
+  // including Orca identity, without issuing a first user/Worker-ready message.
+  it.each(['lead', 'worker'] as const)('prepares an existing cold Pi %s from persisted settings', async role => {
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({
+        id: 'session-1', agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b', orcaRole: role,
+      }),
+      readSessionWorkingDirFromDb: async () => '/repo',
+      synthesizeOrcaVendorOptionsFromDb: async (_id, opts) => {
+        opts.vendorOptions = { orcaRole: role, orcaWorkflowId: 'team' };
+        return true;
+      },
+      readSessionExtraDirsFromDb: vi.fn(async () => { throw new Error('busy'); }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.preparePiSkillRuntime('session-1', '/repo', {});
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'saved', agentDeviceId: 'device-b', vendorOptions: { orcaRole: role, orcaWorkflowId: 'team' },
+    }));
+    expect(deps.readSessionExtraDirsFromDb).toHaveBeenCalledOnce();
+    await expect(transaction.preparePiSkillRuntime('session-1', '/other', {})).rejects.toThrow();
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+
   it('starts the runtime a first send would start, and the send then reuses it', async () => {
     let live: ReturnType<typeof createSession> | undefined;
     const { deps } = createDeps({

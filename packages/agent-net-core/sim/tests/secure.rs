@@ -616,6 +616,30 @@ fn responses_never_outgrow_requests() {
     assert_eq!(responder.poll_transmit(1_000, &mut buffer), None, "a forged packet unlocked sending");
 }
 
+/// 两端的发包上限不同也要互通：收包上限 `max_packet_size` 两端一致，各自按 `send_packet_size` 发。2026-11-16 起 Desktop 发得比 1400 短
+/// （经 VPN 时 1400 字节的包会被拆片，见 `Config::send_packet_size`），旧版和别的端仍发 1400。谁发起都一样：握手回复不长过请求、
+/// 也不长过回复方自己的上限；丢包后的校验恢复和两个方向的大数据都要完整（收到的包被拒收时 `SecurePeer` 直接报错）。
+#[test]
+fn peers_with_different_send_sizes_interoperate() {
+    use agent_net_sim::{LinkProfile, Workload};
+    let old = Config::default();
+    let new = Config { send_packet_size: 1317, ..Config::default() };
+    // 往返 120 毫秒、默认 128 个分片的窗口：速度卡在窗口上，会发校验包，丢掉的满长度分片要靠它在对端算回来。
+    let link = LinkProfile { bits_per_second: 20_000_000, delay_us: 60_000, loss: 0.02, queue_us: 50_000, ..LinkProfile::default() };
+    let workload = Workload { a_to_b_bytes: 2 << 20, b_to_a_bytes: 2 << 20, ..Workload::default() };
+    for (initiator, responder, new_side) in [(new.clone(), old.clone(), 0), (old, new, 1)] {
+        for seed in 1..=4 {
+            let (a, b) = SecurePeer::<AesGcm>::pair_configs(initiator.clone(), responder.clone(), seed, true, 0);
+            let outcome = run(a, b, link.clone(), link.clone(), &workload, seed);
+            assert!(outcome.finished && outcome.violation.is_none(), "new side {new_side}, seed {seed}: {:?} {:?}", outcome.violation, outcome.final_states);
+            assert!(outcome.largest_packet[new_side] <= 1317, "new side sent {} bytes", outcome.largest_packet[new_side]);
+            assert_eq!(outcome.largest_packet[1 - new_side], 1400, "old side should still send full-size packets");
+            let recovered = outcome.final_stats[new_side].as_ref().map_or(0, |stats| stats.recovered_segments);
+            assert!(recovered > 0, "new side {new_side}, seed {seed}: no full-size segment was recovered from parity");
+        }
+    }
+}
+
 /// 前向保密：握手一结束两端的一次性私钥就被销毁；事后拿到两端的长期私钥和完整抓包，也解不开录下的数据。
 /// 第一条消息只受长期密钥保护，偷到响应方私钥的人能看出发起方是谁，这是 IK 模式的已知性质。
 #[test]

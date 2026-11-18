@@ -15,6 +15,8 @@ import {
 } from '@cindy/maker-shared/mcp-app-controller';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { CONTENT_HEADER_HEIGHT_PX } from '@/components/layout/ContentHeader';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
 import { createLogger } from '@/lib/logger';
 import { Spinner } from '@/components/ui/spinner';
@@ -532,9 +534,13 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       open
       className={
         mode === 'fullscreen'
-          ? 'fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit backdrop:bg-transparent'
+          ? 'mcp-app-fullscreen fixed inset-4 z-50 m-0 flex h-auto max-h-none w-auto max-w-none flex-col rounded-xl border border-border bg-[var(--surface-elevated)] p-0 text-inherit'
           : chrome === 'panel' ? `static m-0 flex w-full min-h-0 max-w-none flex-col border-0 bg-transparent p-0 text-inherit ${fixed ? 'h-full flex-1' : ''}` : `static mx-0 my-3 w-full max-w-none overflow-hidden rounded-xl bg-transparent p-0 text-inherit ${border ? 'border border-border' : 'border-0'}`
       }
+      // The modal's top layer still shares the macOS window controls and drag geometry.
+      style={mode === 'fullscreen' && window.electronAPI?.platform === 'darwin'
+        ? { marginTop: CONTENT_HEADER_HEIGHT_PX }
+        : undefined}
       role={mode === 'fullscreen' ? 'dialog' : 'region'}
       aria-modal={mode === 'fullscreen' ? true : undefined}
       aria-label={appTitle}
@@ -550,6 +556,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           {error && error !== 'mcpApps.filesOnExecutionComputer' && <Button variant="secondary" size="sm" onClick={() => setAttempt(value => value + 1)}>{t('mcpApps.retry')}</Button>}
           {!error && (mode === 'fullscreen' || revealed && canFullscreen) && <Button variant="secondary" tone="quiet" size="sm" className={mode === 'fullscreen' ? undefined : 'h-7 w-7 p-0'}
             data-exit-fullscreen={mode === 'fullscreen' ? true : undefined}
+            style={mode === 'fullscreen' ? WINDOW_NO_DRAG_STYLE : undefined}
             aria-label={t(mode === 'fullscreen' ? 'mcpApps.exitFullscreen' : 'mcpApps.fullscreen')}
             title={t(mode === 'fullscreen' ? 'mcpApps.exitFullscreen' : 'mcpApps.fullscreen')}
             onClick={() => mode === 'fullscreen' ? exitFullscreen() : void controllerRef.current?.displayMode('fullscreen').catch(() => {})}>

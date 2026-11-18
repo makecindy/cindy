@@ -298,6 +298,7 @@ export interface RemoteAgentCaps {
   /** Preserves external-application tools and runtime storage across every relay. */
   localApplication?: boolean;
   nativeHistoryTransfer?: boolean;
+  nativeHistoryBackup?: boolean;
   /** Executor accepts bounded same-account group-owner delegation for a shared guest. */
   directGuestExecution?: boolean;
   /** Same-account M supports an explicit bounded group routing context. */
@@ -836,6 +837,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.localApplication === true ? { localApplication: true } : {}),
     ...(v.nativeFork === true ? { nativeFork: true } : {}),
     ...(v.nativeHistoryTransfer === true ? { nativeHistoryTransfer: true } : {}),
+    ...(v.nativeHistoryBackup === true ? { nativeHistoryBackup: true } : {}),
     ...(v.imageRecovery === true ? { imageRecovery: true } : {}),
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),

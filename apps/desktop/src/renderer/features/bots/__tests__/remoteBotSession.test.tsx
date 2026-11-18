@@ -98,6 +98,64 @@ beforeEach(() => {
   window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
 });
 afterEach(cleanup);
+// #9629, unit tier: the real route component must follow a confirmed remote
+// home despite a cached former row (or no row), without adopting a pinned task.
+// Existing offline tests keep the same home; they did not cover home changes.
+it.each([true, false])('follows the current remote home with a former roster row: %s', async listed => {
+  h.listed = listed;
+  h.online = false;
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'next-home' }] };
+  render(<RemoteBotSessionView />);
+  expect(h.navigate).toHaveBeenLastCalledWith({
+    to: '/bots/remote/next-home/writer?keep=1', state: { searchJump: { messageClientId: 'reply' } }, replace: true,
+  });
+  expect(h.cloudView).not.toHaveBeenCalled();
+  expect(h.view).not.toHaveBeenCalled();
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+
+it.each(['disabled', 'unknown', 'same', 'local-pending'] as const)('does not guess a different remote home when %s', condition => {
+  h.online = false;
+  const home = condition === 'unknown' ? null : condition === 'same' ? 'home' : condition === 'local-pending' ? 'desk' : 'next-home';
+  h.cloud = { enabled: condition !== 'disabled', selfDeviceId: 'desk', humanActorId: 'human',
+    demotedBotIds: condition === 'local-pending' ? ['writer'] : [], actors: [
+      { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: home }] };
+  render(<RemoteBotSessionView />);
+  expect(h.navigate).not.toHaveBeenCalled();
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+
+it('disposes a former-home lookup when the confirmed home changes while it is in flight', async () => {
+  let finish!: (value: unknown) => void;
+  h.invoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const view = render(<RemoteBotSessionView />);
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'next-home' }] };
+  view.rerender(<RemoteBotSessionView />);
+  expect(h.navigate).toHaveBeenLastCalledWith(expect.objectContaining({ to: '/bots/remote/next-home/writer?keep=1' }));
+  await act(async () => finish({
+    ref: { collectionId: 'teammates', kind: 'bot', id: 'writer' }, display: { title: 'Writer' },
+    links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'old-canonical' } }],
+  }));
+  expect(h.pin).not.toHaveBeenCalled();
+  expect(h.merge).not.toHaveBeenCalled();
+  expect(h.view).not.toHaveBeenCalled();
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+});
+
+it('keeps a pinned task on its original computer after its companion moves', async () => {
+  h.requestedSessionId = 'old-canonical';
+  h.online = false;
+  h.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: [], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'next-home' }] };
+  render(<RemoteBotSessionView />);
+  expect(h.navigate).toHaveBeenLastCalledWith({ to: '/cc-agent/old-canonical?keep=1&device=home',
+    state: { searchJump: { messageClientId: 'reply' } }, replace: true });
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+
 // #10112, unit tier: the former-home route must show the local failure rather
 // than spin forever; automatic recovery follows the completed home projection.
 it.each([true, false])('keeps rejected local source editing open until recovery (demoted: %s)', async demoted => {
@@ -202,10 +260,10 @@ it('keeps the open chat through a brief drop, then shows the cloud conversation 
   }
   expect(await screen.findByText('cloud-offline-view')).toBeTruthy();
   expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ botId: 'writer', deviceId: 'home', name: 'Writer', deviceName: 'Home' }));
-  // Another computer as the cloud home keeps the existing offline behaviour.
+  // A confirmed different home leaves the former computer's chat altogether.
   h.cloud = { ...h.cloud, actors: [{ ...h.cloud.actors[0]!, homeDeviceId: 'elsewhere' }] };
   rerender(<RemoteBotSessionView />);
-  await waitFor(() => expect(h.view).toHaveBeenLastCalledWith(expect.objectContaining({ readOnly: true })));
+  expect(h.navigate).toHaveBeenLastCalledWith(expect.objectContaining({ to: '/bots/remote/elsewhere/writer?keep=1' }));
 });
 
 it('calls a main computer that is not listed offline, and "control off" only when it reports remote control off', async () => {

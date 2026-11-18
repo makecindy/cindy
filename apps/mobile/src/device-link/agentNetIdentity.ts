@@ -7,6 +7,7 @@ import { PortableAgentNetClient, fromBase64Url, toBase64Url, utf8, type BinarySo
 import { getSecureItem, setSecureItem } from '@/auth/secureStorage';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
 import { getOfficialAgentNetApiBaseUrl } from '@/config/env';
+import { getMobileAgentNetPreferences } from './agentNetPreferences';
 import { MobileAgentNetEngine, type NativeAgentNetOptions } from './agentNetNative';
 import { verifyMobileAgentNetCertificate, verifyMobileAgentNetDelegation } from './agentNetProtocol';
 import { completeSelfHostedAgentNetMembership } from './selfHostedRelay';
@@ -25,7 +26,7 @@ export interface PreparedMobileAgentNetIdentity {
   seed: string;
   context: string;
   legacySigning: boolean;
-  newTransportEngine(extraGuard: () => void): Promise<MobileAgentNetEngine>;
+  newTransportEngine(extraGuard: () => void, enhancedTransport: boolean): Promise<MobileAgentNetEngine>;
   newCryptoEngine(extraGuard: () => void): Promise<MobileAgentNetEngine>;
   dispose(): Promise<void>;
 }
@@ -132,10 +133,11 @@ function prepared(scope: string, base: string, signer: MobileAgentNetEngine, nat
   const api = existing ?? new PortableAgentNetClient(base, signer, certificate, root, {
     assertCurrent: guard, verifyCertificate: verifyMobileAgentNetCertificate, verifyDelegation: verifyMobileAgentNetDelegation,
     sha256: value => toBase64Url(sha256(value)), md5: value => md5(value), createWebSocket: binarySocket, ownerPinnedHttp: privateHttp,
+    relayUdpEnabled: () => getMobileAgentNetPreferences().enabled,
   });
   if (existing) existing.replaceCredentials(signer, certificate);
   return { scope, api, signer, seed: native.seed, context: native.context, legacySigning: native.legacySigning === true,
-    newTransportEngine(extraGuard) { return MobileAgentNetEngine.create({ ...native, udp: true }, () => { guard(); extraGuard(); }); },
+    newTransportEngine(extraGuard, enhancedTransport) { return MobileAgentNetEngine.create({ ...native, udp: true, enhancedTransport }, () => { guard(); extraGuard(); }); },
     newCryptoEngine(extraGuard) { return MobileAgentNetEngine.create({ ...native, udp: false }, () => { guard(); extraGuard(); }); },
     dispose: () => signer.destroy() };
 }

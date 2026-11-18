@@ -7,6 +7,7 @@ import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { Button } from '@/components/ui/button';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { renderProviderErrorExplanation } from './ProviderErrorExplanation';
 import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { isCodexGatewayWireModel, isOpenAiSubscriptionProvider } from '@cindy/model-providers';
@@ -821,7 +822,7 @@ export function ErrorBanner({
           ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
           : (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
             ? t('chat.errorBanner.readableHistoryRecoveryDescription')
-            : undefined
+            : renderProviderErrorExplanation(error, displayError, t)
       }
       details={canShowErrorDetails ? error : undefined}
       onDiagnose={

@@ -67,7 +67,8 @@ export function encodeCatalogPin(providerId: string, agentKind: AgentKind, model
 export function decodeCatalogPin(
   raw: string,
 ): { providerId: string; agentKind: AgentKind; model: string } | null {
-  return decodeCatalogModelPin(raw);
+  const route = decodeCatalogModelPin(raw);
+  return route?.agentDeviceId ? null : route;
 }
 
 /**

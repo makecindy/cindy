@@ -33,6 +33,11 @@ describe('computeListContinuation', () => {
       expect(computeListContinuation('1、中文项')).toEqual({ action: 'continue', insert: '2、' });
     });
 
+    it('顿号前的长数字串是正文,不接续', () => {
+      expect(computeListContinuation('324325、123423、235233')).toBeNull();
+      expect(computeListContinuation('324325、')).toBeNull();
+    });
+
     it('保留缩进', () => {
       expect(computeListContinuation('  2. nested')).toEqual({ action: 'continue', insert: '  3. ' });
     });

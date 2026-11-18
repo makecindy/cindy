@@ -6214,6 +6214,26 @@ describe('Agent API connection configuration', () => {
   });
 });
 
+// Orca review 2026-11-18: a merged connection follows its pool's switch, so a write to its own hidden key
+// from a page opened before the merge must fail visibly instead of reporting success with no effect.
+describe('remote provider access writes', () => {
+  it('refuses a merged connection and accepts the pool', async () => {
+    const harness = new IpcHarness();
+    const setRemoteProviderInvocationEnabled = vi.fn();
+    const deps = makeDeps({
+      listProviders: async () => [catalogView('openai', {}), { ...catalogView('old-openai', {}), subscriptionPoolAlias: true }],
+      getRemoteProviderInvocationEnabled: () => false,
+      setRemoteProviderInvocationEnabled,
+    });
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, { providerId: 'old-openai', enabled: false }))
+      .rejects.toThrow('PRECONDITION_FAILED');
+    expect(setRemoteProviderInvocationEnabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, { providerId: 'openai', enabled: true });
+    expect(setRemoteProviderInvocationEnabled).toHaveBeenCalledExactlyOnceWith('openai', true);
+  });
+});
+
 describe('receiving-client remote provider disable', () => {
   it('reuses provider overrides with a device-scoped key and never changes host sharing', async () => {
     const harness = new IpcHarness();
