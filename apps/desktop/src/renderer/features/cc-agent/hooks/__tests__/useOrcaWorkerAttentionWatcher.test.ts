@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { OrcaWorkerStatus } from '../../../../shared/orca-worker-status';
+import type { OrcaWorkerStatus } from '../../../../../shared/orca-worker-status';
 
 vi.mock('../workerProjectionStore', () => ({
   getWorkerProjectionSnapshot: () => ({ workers: [] }),
