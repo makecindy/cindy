@@ -15739,6 +15739,7 @@
       "saveFailed": "上下文視窗檔位存之未成"
     },
     "agentStatus": {
+      "preparingSend": "方備遣…",
       "readingMemory": "方讀記憶…",
       "savingMemory": "方存記憶…",
       "deletingMemory": "方刪記憶…",

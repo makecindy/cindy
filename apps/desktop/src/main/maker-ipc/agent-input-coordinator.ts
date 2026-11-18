@@ -4710,6 +4710,7 @@ export class AgentInputCoordinator {
       sessionId,
       pendingQueue,
       turnInProgress: this.isDispatchBoundaryBusy(sessionId, state),
+      sendPreparationPending: state.activeTurn?.item != null && state.activeTurn.dispatchLifecycle !== 'dispatched',
       // Modern projections always carry the explicit null token for a session
       // that has never been cleared.  Only an older controlled Desktop can
       // omit the field at the wire boundary; keeping null here lets a remote
@@ -5450,6 +5451,7 @@ export class AgentInputCoordinator {
           // cancel this preparation even though persistence/hooks already ran.
           active.dispatchLifecycle = 'awaiting-dispatch-hooks';
           active.vendorTurnGeneration = null;
+          this.emit(sessionId);
         },
         ...(head.autoResume && typeof head.autoResumeInfo?.sessionTotal === 'number'
           ? { turnAttemptToken: head.autoResumeInfo.sessionTotal }

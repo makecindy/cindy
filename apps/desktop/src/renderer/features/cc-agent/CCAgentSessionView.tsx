@@ -1873,6 +1873,7 @@ function CCAgentSessionContent({
     agentStatus,
     isStreaming,
     isAgentBusy,
+    sendPreparationPending,
     sendMessage,
     compactSession,
     steerMessage,
@@ -2522,7 +2523,10 @@ function CCAgentSessionContent({
         })
       : t('chat.systemCard.autoResumePending.label')
     : null;
-  const composerStatus = runningWorkflow
+  const preparingSend = sendPreparationPending && !agentStatus.isRunning && !isStreaming;
+  const composerStatus = preparingSend
+    ? t('ccAgent.agentStatus.preparingSend')
+    : runningWorkflow
     ? runningWorkflow.total > 0
       ? t('ccAgent.agentStatus.waitingWorkflowProgress', runningWorkflow)
       : t('ccAgent.agentStatus.waitingWorkflow')
@@ -5665,7 +5669,7 @@ function CCAgentSessionContent({
 
   const composerRuntimeVisible =
     !pendingPlanReview &&
-    (agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null);
+    (preparingSend || agentStatus.isRunning || backgroundTasksActive || runningWorkflow !== null);
 
   const content = (
     // Layout: single scroll container (full height) + sticky input overlay at bottom.
@@ -5934,6 +5938,7 @@ function CCAgentSessionContent({
                   key={sessionId}
                   sessionKey={sessionId ?? null}
                   status={composerStatus}
+                  preparing={preparingSend}
                   reconnectStatus={reconnectStatus}
                   tokenUsage={agentStatus.tokenUsage}
                   outputTokens={agentStatus.outputTokens ?? 0}
@@ -6743,6 +6748,7 @@ const STATUS_BAR_FADE_MS = 400;
 const CONTROLLED_BANNER_MAX_WIDTH = 420;
 
 function RunningStatusBar({
+  preparing = false,
   status,
   reconnectStatus = null,
   tokenUsage,
@@ -6766,6 +6772,8 @@ function RunningStatusBar({
   className,
 }: {
   status: string;
+  /** No model usage exists yet while the host prepares an undispatched input. */
+  preparing?: boolean;
   /** Same pending row / continuation owner as the message stream; overrides stale agent status. */
   reconnectStatus?: string | null;
   tokenUsage: number;
@@ -6874,6 +6882,7 @@ function RunningStatusBar({
   // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
   const displayStatus =
     reconnectStatus ??
+    (preparing ? status : undefined) ??
     workflowStatus ??
     (backgroundTasksRunning
       ? backgroundBashOnlyCount > 0
@@ -7068,7 +7077,7 @@ function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
-        {(!suppressContent && (!isHidden || ratePanelPinned)) && (
+        {(!preparing && !suppressContent && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
             className="flex min-w-0 items-center gap-[6px]"

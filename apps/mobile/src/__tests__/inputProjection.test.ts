@@ -728,3 +728,10 @@ describe('normalizeInputProjection usageLimitWait', () => {
       .toBeNull();
   });
 });
+
+// #10021: preserve the host's pre-dispatch wait for the visible Stop control.
+// Unit: the previous normalizer dropped it; malformed/old hosts retain fallback.
+it.each([true, false, undefined, 'true'])('normalizes send preparation without trusting malformed flags: %s', (value) => {
+  expect(normalizeInputProjection({ sessionId: 'welcome', sendPreparationPending: value }).sendPreparationPending)
+    .toBe(value === true);
+});

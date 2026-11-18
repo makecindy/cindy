@@ -96,6 +96,7 @@ interface UseCCAgentChatReturn {
    * 队列后不能继续算忙,否则当前任务已经停止,按钮却会卡在 Stop 状态。
    */
   isAgentBusy: boolean;
+  sendPreparationPending: boolean;
   /** F-QUEUE-1: 当前排队未派发的消息数（含正在 streaming 的那条不计入）。 */
   pendingQueueLength: number;
   /** F-QUEUE-DEFER: 队列里"还没进消息流"的全部消息(头→尾,head=最先派发)。 */
@@ -800,6 +801,7 @@ export function useCCAgentChat(
   // 换成不可用的 Send，用户就失去取消这次插话的入口。
   const hasPendingSteer = lightState.steeringQueueClientIds.length > 0;
   const isAgentBusy =
+    lightState.sendPreparationPending ||
     lightState.isStreaming ||
     lightState.agentStatus.isRunning ||
     hasPendingSteer ||
@@ -870,6 +872,7 @@ export function useCCAgentChat(
     agentStatus: lightState.agentStatus,
     isStreaming: lightState.isStreaming,
     isAgentBusy,
+    sendPreparationPending: lightState.sendPreparationPending,
     pendingQueueLength,
     pendingQueue: lightState.pendingQueue,
     steeringQueueClientIds: lightState.steeringQueueClientIds,

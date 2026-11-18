@@ -15739,6 +15739,7 @@
       "saveFailed": "コンテキストウィンドウの段階を保存できませんでした"
     },
     "agentStatus": {
+      "preparingSend": "送信を準備中…",
       "readingMemory": "記憶を読んでいます…",
       "savingMemory": "記憶を保存しています…",
       "deletingMemory": "記憶を削除しています…",

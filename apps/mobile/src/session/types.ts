@@ -295,6 +295,8 @@ export interface InputProjection {
   queueInteractionLocks: string[];
   queueEditLocks: string[];
   queueAbortPending: boolean;
+  /** Older hosts omit the preparation phase; keep their existing running fallback. */
+  sendPreparationPending?: boolean;
   error: string | null;
   /** Stable error reason for live projections; older controlled hosts may omit it. */
   errorReason?: string | null;

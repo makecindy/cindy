@@ -516,6 +516,8 @@ export interface AgentInputProjection {
   sessionId: string;
   /** Host still owns a turn/dispatch/interaction boundary. Older hosts may omit it. */
   turnInProgress?: boolean;
+  /** A queued input is still being prepared, including a proven-undispatched retry. */
+  sendPreparationPending?: boolean;
   pendingQueue: AgentInputQueuedMessage[];
   /**
    * 被控端最近一次 `/clear` 的权威毫秒 token。只在会话至少 clear 过一次时出现；

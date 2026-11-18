@@ -15813,6 +15813,7 @@
       "saveFailed": "Die Kontextfensterstufe konnte nicht gespeichert werden"
     },
     "agentStatus": {
+      "preparingSend": "Senden wird vorbereitet…",
       "readingMemory": "Erinnerungen werden gelesen…",
       "savingMemory": "Erinnerungen werden gespeichert…",
       "deletingMemory": "Erinnerungen werden gelöscht…",

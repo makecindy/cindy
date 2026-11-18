@@ -113,6 +113,7 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   queueInteractionLocks: [],
   queueEditLocks: [],
   queueAbortPending: false,
+  sendPreparationPending: false,
   queueExpanded: false,
   fastMode: false,
   planModeEnabled: false,

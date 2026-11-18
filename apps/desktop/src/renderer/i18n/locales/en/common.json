@@ -15813,6 +15813,7 @@
       "saveFailed": "Failed to save the context window tier"
     },
     "agentStatus": {
+      "preparingSend": "Preparing to send…",
       "readingMemory": "Reading memory…",
       "savingMemory": "Saving memory…",
       "deletingMemory": "Deleting memory…",

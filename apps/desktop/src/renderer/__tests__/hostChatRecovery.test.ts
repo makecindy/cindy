@@ -150,3 +150,31 @@ it('恢复的 turn 拿到新时钟，失败不会被当作重复告警', async (
   expect(turnStartedAt).toBe(recovered.agentStatus.startedAt);
   expect(turnStartedAt).toBeGreaterThan(previousStartedAt!);
 });
+
+// #10021: a hidden welcome can own a pre-dispatch wait without a queue row or
+// provider status. The real projection ingress must update the light subscription
+// and clear it on settlement/close; older hosts omit the optional flag (unit).
+it('keeps send preparation visible until settled and clears it on close or legacy snapshots', async () => {
+  await load();
+  listeners.projection({ ...projection(), sendPreparationPending: true });
+  expect(makerChatStore.getLightSnapshot(id).sendPreparationPending).toBe(true);
+  expect(makerChatStore.getSnapshot(id).agentStatus.isRunning).toBe(false);
+  listeners.projection({ ...projection(), sendPreparationPending: false });
+  expect(makerChatStore.getLightSnapshot(id).sendPreparationPending).toBe(false);
+  listeners.projection({ ...projection(), sendPreparationPending: true });
+  listeners.status({ sessionId: id, status: 'closed' });
+  expect(makerChatStore.getLightSnapshot(id).sendPreparationPending).toBe(false);
+  listeners.projection({ ...projection(), sendPreparationPending: true });
+  listeners.projection(projection());
+  expect(makerChatStore.getLightSnapshot(id).sendPreparationPending).toBe(false);
+});
+
+it('rehydrates a preparation wait without claiming that the model is generating', async () => {
+  await load();
+  getProjection.mockResolvedValue({ ...projection(), turnInProgress: true, sendPreparationPending: true });
+  await makerChatStore.reconcileHostConnection(() => true);
+  const state = makerChatStore.getLightSnapshot(id);
+  expect(state.sendPreparationPending).toBe(true);
+  expect(state.isStreaming).toBe(false);
+  expect(state.agentStatus.isRunning).toBe(false);
+});

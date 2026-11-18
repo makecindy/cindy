@@ -15964,6 +15964,7 @@
       "saveFailed": "Échec de l'enregistrement du palier de fenêtre de contexte"
     },
     "agentStatus": {
+      "preparingSend": "Préparation de l'envoi…",
       "readingMemory": "Lecture de la mémoire…",
       "savingMemory": "Enregistrement de la mémoire…",
       "deletingMemory": "Suppression de la mémoire…",

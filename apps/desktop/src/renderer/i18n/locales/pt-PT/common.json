@@ -15964,6 +15964,7 @@
       "saveFailed": "Falha ao guardar o escalão da janela de contexto"
     },
     "agentStatus": {
+      "preparingSend": "A preparar o envio…",
       "readingMemory": "A ler a memória…",
       "savingMemory": "A guardar memória…",
       "deletingMemory": "A eliminar memória…",
