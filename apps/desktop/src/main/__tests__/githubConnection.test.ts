@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { githubConnection } from '../git-context/githubConnection';
+import { connectGithubSignInResult, githubConnection } from '../git-context/githubConnection';
 
 describe('GitHub account verification', () => {
   it('verifies the selected credential without returning secrets or unrelated user data', async () => {
@@ -38,6 +38,21 @@ describe('GitHub account verification', () => {
     ).toEqual({ status: 'missing' });
     expect(fetcher).not.toHaveBeenCalled();
   });
+  it('silently rechecks network failures and prompts only when the credential is rejected', async () => {
+    const readConnection = vi.fn<Parameters<typeof connectGithubSignInResult>[2]['readConnection']>();
+    const openSignIn = vi.fn(() => true);
+    const connect = () => connectGithubSignInResult('github', false, { readConnection, openSignIn });
+    readConnection.mockResolvedValueOnce({ status: 'network' }).mockResolvedValueOnce({ status: 'connected', login: 'octo', source: 'gh-cli' });
+    expect(await connect()).toMatchObject({ ok: true });
+    readConnection.mockResolvedValue({ status: 'network' });
+    expect(await connect()).toMatchObject({ connection: 'network', signInOpened: false });
+    readConnection.mockResolvedValueOnce({ status: 'forbidden' });
+    expect(await connect()).toMatchObject({ connection: 'forbidden', signInOpened: false });
+    expect(openSignIn).not.toHaveBeenCalled();
+    readConnection.mockResolvedValueOnce({ status: 'auth' });
+    expect(await connect()).toMatchObject({ signInOpened: true });
+  });
+
   it.each([
     [401, 'auth'],
     [403, 'forbidden'],
