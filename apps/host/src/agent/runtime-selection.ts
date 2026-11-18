@@ -209,6 +209,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     retry: id => deps.inputQueue.retryTurnSettlement(id),
     credentials: () => pendingCredentialSwitchService,
     applyControl: id => settleRuntimeControl(id, 'host-turn-settled'),
+    onControlError: (sessionId, error) => deps.log.warn('runtime settlement delivery failed', { sessionId, error }),
   });
   // As sessionSpendBroadcaster.ts and localDb/ipc/sessions.ts bind them: the same broadcast tap.
   const captureOwnerScope = (): OwnerScope => broadcastTap.captureDataOwnerBroadcastScope?.() ?? null;
@@ -499,6 +500,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   const handleSetModel = createHandleSetModel(ports);
   const settleRuntimeControl = createPendingSessionRuntimeControlSettlement(explicitPorts<Parameters<typeof createPendingSessionRuntimeControlSettlement>[0]>({
     canSettle: settlement.allowedControl,
+    onSettlementWork: settlement.onControlWork,
     applySessionRuntimeSelection: (id, model, provider, selection, options) => {
       const generation = options.applyingPendingGeneration!;
       const check = () => settlement.assertControl(id, generation);
@@ -796,13 +798,10 @@ export function hostRuntimeSelectionQueueHooks(
     })),
     hasPendingCredentialSwitchEntry: (sessionId: string) => getSelection().hasPendingCredentialSwitch(sessionId),
     disposeTurnSettlements: () => getSelection().disposeTurnSettlements(),
-    holdTurnSettlements: () => getSelection().holdTurnSettlements(),
+    holdTurnSettlements: (tasks: Iterable<string>) => getSelection().holdTurnSettlements(tasks),
     deferredTurnSettlements: () => getSelection().deferredTurnSettlements(),
-    onSessionSettled: async (sessionId: string) => {
-      const settled = await getSelection().onTurnSettled(sessionId);
-      if (settled) ports.afterTurnSettled?.(sessionId);
-      return settled;
-    },
+    onSessionSettled: (sessionId: string) => getSelection().onTurnSettled(sessionId),
+    afterTurnSettled: ports.afterTurnSettled,
     persistAgentPlanModeChange: (...args: Parameters<HostRuntimeSelection['persistAgentPlanModeChange']>) =>
       getSelection().persistAgentPlanModeChange(...args),
     // The interrupted-turn auto-resume's route change and its rebuild leases (auto-resume.ts).

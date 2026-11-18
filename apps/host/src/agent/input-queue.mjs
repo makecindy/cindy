@@ -152,16 +152,23 @@ export function createInputQueue(deps) {
       });
       return { item: materialized.item, ownerId };
     }
-    async function settleAndWake(id) {
+    async function settleAndWake(id, terminal = false) {
       if (closing) return;
       // The rebuilt queue has not served a send yet. Bind its history writer to
       // the current owner before delivering a cancellation from the old hold.
       assertCurrent();
-      const settled = await deps.onSessionSettled?.(id);
-      if (settled !== false && !closing && !profileHold) coordinator.onExternalTurnSettled(id);
+      let settled = false;
+      try {
+        settled = (await deps.onSessionSettled?.(id)) !== false;
+      } finally {
+        if ((terminal || settled) && !closing && !profileHold && isCurrent()) {
+          try { deps.afterTurnSettled?.(id); }
+          finally { coordinator.onExternalTurnSettled(id); }
+        }
+      }
     }
-    function retryTurnSettlement(id) {
-      void settleAndWake(id).catch(error => settlementLog.warn('turn settlement failed', { id, error: errorText(error) }));
+    function retryTurnSettlement(id, terminal = false) {
+      void settleAndWake(id, terminal).catch(error => settlementLog.warn('turn settlement failed', { id, error: errorText(error) }));
     }
     /** A new send while the profile is held: refused, typed, before anything is written. */
     function refuseWhileHeld() {
@@ -286,7 +293,7 @@ export function createInputQueue(deps) {
       onTerminal: (id, type, error, meta, direct, handedOver) => {
         if (direct || handedOver) coordinator.wakeSession(id, 'host-turn-settled');
         else coordinator.onTurnEvent(id, type, error, undefined, meta);
-        retryTurnSettlement(id);
+        retryTurnSettlement(id, true);
       },
     });
     // The coordinator's ports (coordinator-deps.ts, every optional port written out).
@@ -595,7 +602,10 @@ export function createInputQueue(deps) {
       /** Starts releasing idle runtimes once this owner's agent runtime is ready (main.ts). */
       startIdleRelease: () => { if (!closing) idleRelease?.start(); },
       /** Hold every task this runtime knows (the profile hold started; later tasks are held as they are read). */
-      holdKnownTasks() { for (const id of states.keys()) holdTaskForProfile(coordinator, id); },
+      holdKnownTasks() {
+        for (const id of states.keys()) holdTaskForProfile(coordinator, id);
+        deps.holdTurnSettlements?.(states.keys());
+      },
       /**
        * Whether a turn of this runtime is still running, a context recovery included (its replay is
        * part of the turn that overflowed): the hold is not released before they end.
@@ -670,10 +680,7 @@ export function createInputQueue(deps) {
   api.holdForDesktop = message => {
     const first = profileHold === null;
     profileHold = { message };
-    if (first) {
-      runtime.holdKnownTasks();
-      deps.holdTurnSettlements?.();
-    }
+    if (first) runtime.holdKnownTasks();
   };
   api.isHeldForDesktop = () => profileHold !== null;
   /**
@@ -697,7 +704,10 @@ export function createInputQueue(deps) {
       if (ownerStopping) runtime.beginStop();
     }
     if (profileHold === null) {
-      for (const id of deps.deferredTurnSettlements?.() ?? []) await runtime.settleAndWake(id);
+      for (const id of deps.deferredTurnSettlements?.() ?? []) {
+        try { await runtime.settleAndWake(id); }
+        catch (error) { settlementLog.warn('task settlement failed after profile release', { id, error: errorText(error) }); }
+      }
     }
     return profileHold === null;
   }

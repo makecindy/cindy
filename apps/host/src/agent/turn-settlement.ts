@@ -17,11 +17,15 @@ function readRoute(id: string) {
   }).from(sessions).where(eq(sessions.id, id)).get();
 }
 
+function captureOwner() {
+  return { db: getCurrentDbClientSnapshot(), account: getActiveAppSession().generation };
+}
+type Owner = ReturnType<typeof captureOwner>;
 function capture(id: string) {
-  return { db: getCurrentDbClientSnapshot(), account: getActiveAppSession().generation, route: readRoute(id) };
+  return { ...captureOwner(), route: readRoute(id) };
 }
 type Acceptance = ReturnType<typeof capture>;
-const sameOwner = (accepted: Acceptance | undefined) => !!accepted?.db &&
+const sameOwner = (accepted: Owner | undefined) => !!accepted?.db &&
   accepted.db === getCurrentDbClientSnapshot() && accepted.account === getActiveAppSession().generation;
 function sameRoute(id: string, accepted: Acceptance | undefined) {
   const then = accepted?.route;
@@ -31,6 +35,8 @@ function sameRoute(id: string, accepted: Acceptance | undefined) {
 }
 
 interface Deferred {
+  owner: Owner;
+  unobservedGeneration?: number;
   credential?: PendingCredentialSwitch;
   runtime?: number;
   staleRuntime?: boolean;
@@ -41,13 +47,15 @@ export function createHostTurnSettlement(ports: {
   busy(id: string): boolean;
   retry(id: string): void;
   credentials(): PendingCredentialSwitchService;
-  applyControl(id: string): Promise<void> | undefined;
+  applyControl(id: string): void;
+  onControlError(id: string, error: unknown): void;
 }) {
   const credentialAcceptance = new WeakMap<PendingCredentialSwitch, Acceptance>();
   const controls = new Map<string, { generation: number; accepted: Acceptance }>();
   const deferred = new Map<string, Deferred>();
   const active = new Map<string, { admission?: Deferred; work: Promise<boolean> }>();
-  const applyingControl = new Map<string, Acceptance>();
+  const applyingControl = new Map<string, { owner: Owner; work: Promise<void>[] }>();
+  let holdOwner: Owner | undefined;
   const waitingForCredentials = new Set<string>();
   const retryScheduled = new Set<string>();
 
@@ -60,10 +68,18 @@ export function createHostTurnSettlement(ports: {
     });
   }
 
+  function defer(id: string) {
+    const pending = getPendingSessionRuntimeMutation(id);
+    deferred.set(id, {
+      owner: deferred.get(id)?.owner ?? holdOwner ?? captureOwner(),
+      unobservedGeneration: pending && pending.generation !== controls.get(id)?.generation ? pending.generation : undefined,
+    });
+  }
+
   const permit: CredentialSettlementPermit = {
     registered(id, target) {
       credentialAcceptance.set(target, capture(id));
-      if (!ports.open()) deferred.set(id, {});
+      if (!ports.open()) defer(id);
     },
     allows(id, target) {
       if (!ports.open()) return false;
@@ -80,24 +96,28 @@ export function createHostTurnSettlement(ports: {
     const pending = getPendingSessionRuntimeMutation(id);
     if (!pending) { controls.delete(id); return; }
     if (controls.get(id)?.generation === pending.generation) return;
+    // A projection arriving after a hold cannot vouch for the earlier acceptance.
+    if (!ports.open()) { defer(id); return; }
+    if (deferred.get(id)?.unobservedGeneration === pending.generation) return;
     controls.set(id, { generation: pending.generation, accepted: capture(id) });
-    if (!ports.open()) deferred.set(id, {});
   }
-  function hold() {
+  function hold(knownTasks: Iterable<string>) {
+    holdOwner = captureOwner();
     // Revoke any in-flight admission before either the timer or a late DB read resumes.
-    for (const id of new Set([...deferred.keys(), ...active.keys(), ...controls.keys()])) deferred.set(id, {});
-    for (const [id] of ports.credentials().entries()) deferred.set(id, {});
+    const ids = new Set([...deferred.keys(), ...active.keys(), ...controls.keys()]);
+    for (const id of knownTasks) if (getPendingSessionRuntimeMutation(id)) ids.add(id);
+    for (const [id] of ports.credentials().entries()) ids.add(id);
+    for (const id of ids) defer(id);
   }
   const allowedControl = (id: string, generation: number) =>
-    ports.open() && sameOwner(applyingControl.get(id)) && (!deferred.has(id) || (!ports.busy(id) && deferred.get(id)?.runtime === generation));
+    ports.open() && sameOwner(applyingControl.get(id)?.owner) && (!deferred.has(id) || (!ports.busy(id) && deferred.get(id)?.runtime === generation));
 
   async function run(id: string): Promise<boolean> {
-    if (!ports.open()) { deferred.set(id, {}); return false; }
+    if (!ports.open()) { defer(id); return false; }
     const admission = deferred.get(id);
-    const owner = getCurrentDbClientSnapshot();
-    const account = getActiveAppSession().generation;
+    const ownerAtStart = captureOwner();
     const current = () => ports.open() && admission === deferred.get(id) && !ports.busy(id) &&
-      owner === getCurrentDbClientSnapshot() && account === getActiveAppSession().generation;
+      ownerAtStart.db === getCurrentDbClientSnapshot() && ownerAtStart.account === getActiveAppSession().generation;
     if (!current()) return false;
     const service = ports.credentials();
     const previous = service.waitForIdle(id);
@@ -120,17 +140,29 @@ export function createHostTurnSettlement(ports: {
     waitingForCredentials.delete(id);
     const control = getPendingSessionRuntimeMutation(id);
     if (control) {
-      const saved = controls.get(id);
-      if (!saved || !sameOwner(saved.accepted)) {
+      // The producer can yield between accepting a mutation and publishing it.
+      // With uninterrupted ownership the terminal can complete its registration.
+      let saved = controls.get(id);
+      if ((admission && !sameOwner(admission.owner)) || (saved && !sameOwner(saved.accepted))) {
         cancelPendingSessionRuntimeMutation(id, control.generation);
       } else {
+        if (!admission && saved?.generation !== control.generation) {
+          observeControl(id);
+          saved = controls.get(id);
+        }
         if (admission) {
           admission.runtime = control.generation;
-          admission.staleRuntime = saved.generation !== control.generation || !sameRoute(id, saved.accepted);
+          admission.staleRuntime = saved?.generation !== control.generation || !sameRoute(id, saved.accepted);
         }
-        applyingControl.set(id, saved.accepted);
-        try { await ports.applyControl(id); }
-        finally { applyingControl.delete(id); }
+        const work: Promise<void>[] = [];
+        applyingControl.set(id, { owner: saved?.accepted ?? ownerAtStart, work });
+        try {
+          ports.applyControl(id);
+          // A finally can start the next generation before this one completes.
+          for (const generation of work) await generation;
+        } finally { applyingControl.delete(id); }
+        const latest = getPendingSessionRuntimeMutation(id);
+        if (current() && latest && latest.generation !== control.generation) return run(id);
       }
     }
     if (!current() || getPendingSessionRuntimeMutation(id)) return false;
@@ -153,6 +185,10 @@ export function createHostTurnSettlement(ports: {
   }
   return {
     permit, hold, observeControl, settle, allowedControl,
+    onControlWork(id: string, generation: Promise<void>) {
+      const handled = generation.catch(error => ports.onControlError(id, error));
+      applyingControl.get(id)?.work.push(handled);
+    },
     pendingIds: () => [...deferred.keys()],
     deferredDbKind(id: string) {
       // The rebuilt executor has no live history yet. The credential write must
@@ -165,6 +201,7 @@ export function createHostTurnSettlement(ports: {
       if (waitingForCredentials.has(id)) retryIfIdle(id);
     },
     dispose() {
+      holdOwner = undefined;
       for (const [id] of ports.credentials().entries()) ports.credentials().clear(id);
       deferred.clear();
       controls.clear();

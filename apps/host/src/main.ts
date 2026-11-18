@@ -399,7 +399,7 @@ function startProfileCoexistence(dataDir: string, scan: () => Promise<number[]>)
           runtime.coexistence = { state: 'clear', desktops: [] };
           hostLog.info('the desktop left this profile; sends are accepted again');
         }
-      }, (error: unknown) => hostLog.warn('releasing the profile hold failed; trying again on the next scan', {
+      }, (error: unknown) => hostLog.warn('releasing the profile hold failed', {
         error: error instanceof Error ? error.message : String(error),
       }));
     },

@@ -5153,8 +5153,8 @@ function runtimeCancellations(r, id) {
   return { history: persisted.length, surfaced: surfaced.length };
 }
 
-async function interruptedFallbackTask(t, id, agent) {
-  const r = await modelChangeRuntime(t, { agent, queue: { hasAssistantProgressAfter: async () => true } });
+async function interruptedFallbackTask(t, id, agent, queue = {}) {
+  const r = await modelChangeRuntime(t, { agent, queue: { hasAssistantProgressAfter: async () => true, ...queue } });
   if (agent === 'pi') providePiWindows(r);
   const twoProviders = ['prov-a', 'prov-b'].map(id => ({ ...switchViews(agent)[0], id }));
   r.views.current = twoProviders;
@@ -5263,8 +5263,8 @@ function holdEnginePermissionAck(live) {
   return { started: started.promise, release: ack.resolve };
 }
 
-async function acceptedPiFallback(t, id) {
-  const { r, interrupt, resumed, advanceUntil } = await interruptedFallbackTask(t, id, 'pi');
+async function acceptedPiFallback(t, id, queue = {}) {
+  const { r, interrupt, resumed, advanceUntil } = await interruptedFallbackTask(t, id, 'pi', queue);
   const first = r.h.maker.getSession(id);
   await interrupt(first);
   const live = await resumed(first, 2);
@@ -5541,6 +5541,146 @@ for (const kind of ['runtime', 'credential']) {
       }
     });
   }
+}
+
+// §3.2, db. Use the runtime selection's actual acceptance write, then deliver
+// the engine terminal before the producer's next awaited metadata read can
+// publish its projection (sessionRuntimeSelectionApply.ts). Observe the stored
+// fallback, both cancellation deliveries and the projection seen by the client.
+for (const held of [false, true]) {
+  test(`unobserved runtime control: a terminal before projection ${held ? 'cancels on release and refreshes the client' : 'settles the accepted route'}`, async t => {
+    const id = held ? 'unobserved-held' : 'unobserved-open';
+    const r = await modelChangeRuntime(t);
+    r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('claude-code')[0], id: provider }));
+    await r.createTask(id);
+    await enqueue(r.h, id, { clientId: 'work', text: 'first' });
+    const live = r.h.maker.getSession(id);
+    acceptSessionRuntimeMutation({ sessionId: id, source: 'fallback', profile: FALLBACK_ROUTE, deferred: true });
+    if (held) r.h.queue.holdForDesktop(HELD);
+    live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+    await settleUntil(() => !r.h.queue.isTurnRunning(id), 'turn ended before projection');
+    if (held) {
+      assert.equal(getSessionRuntimeControlSnapshot(id).pending?.profile.providerId, 'prov-b');
+      assert.equal(await r.h.queue.releaseDesktopHold(), true);
+    }
+    await settleUntil(() => !getSessionRuntimeControlSnapshot(id).pending, 'control was resolved');
+    await settle();
+    const control = getSessionRuntimeControlSnapshot(id);
+    assert.equal(control.effectiveOverride?.providerId ?? null, held ? null : 'prov-b');
+    assert.deepEqual(runtimeCancellations(r, id), held ? { history: 1, surfaced: 1 } : { history: 0, surfaced: 0 });
+    assert.ok(r.h.events.some(e => e.type === 'session_changed' && e.sessionId === id && e.patch?.runtimePending === null),
+      'the client sees that there is no pending selection');
+  });
+}
+
+// §3.2, db. The missing receipt cannot justify delivering the old account's
+// cancellation to the account that now owns the rebuilt queue.
+test('unobserved runtime control: a new account receives no cancellation from the previous hold', async t => {
+  const id = 'unobserved-other-account';
+  const r = await modelChangeRuntime(t);
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'work', text: 'first' });
+  const live = r.h.maker.getSession(id);
+  acceptSessionRuntimeMutation({ sessionId: id, source: 'fallback', profile: FALLBACK_ROUTE, deferred: true });
+  r.h.queue.holdForDesktop(HELD);
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await settleUntil(() => !r.h.queue.isTurnRunning(id), 'old turn ended');
+  const profile = path.join(r.db.root, 'profile');
+  configureHostOwner({ userDataDir: profile, ownerId: null });
+  configureHostOwner({ userDataDir: profile, ownerId: 'replacement-owner' });
+  assert.ok(getSessionRuntimeControlSnapshot(id).pending, 'the old choice still awaits release');
+  assert.equal(await r.h.queue.releaseDesktopHold(), true);
+  assert.equal(getSessionRuntimeControlSnapshot(id).pending, null);
+  assert.deepEqual(runtimeCancellations(r, id), { history: 0, surfaced: 0 });
+});
+
+// §3.2, db. A failing history delivery can start a newer generation in the
+// desktop factory's finally. The Host must handle the first rejection and
+// wait for the second catalog lookup before notifying the restart service.
+test('turn settlement handles a rejected delivery and waits for its successor generation', async t => {
+  const id = 'delivery-successor';
+  const notified = [];
+  const { r, resume } = await acceptedPiFallback(t, id, {
+    afterTurnSettled: task => notified.push(getSessionRuntimeControlSnapshot(task).effectiveOverride?.providerId),
+  });
+  const live = await resume();
+  const profile = getSessionRuntimeControlSnapshot(id).pending.profile;
+  const providers = r.views.current;
+  r.views.current = providers.filter(view => view.id !== 'prov-b');
+  const lookup = settlementCheckpoint('successor catalog read');
+  const finish = Promise.withResolvers();
+  const record = r.h.queue.recordRuntimeControlError;
+  r.h.queue.recordRuntimeControlError = (task, error) => {
+    record(task, error);
+    r.h.queue.recordRuntimeControlError = record;
+    r.views.current = providers;
+    acceptSessionRuntimeMutation({ sessionId: task, source: 'fallback', profile, deferred: true });
+    r.views.beforeList = () => {
+      delete r.views.beforeList;
+      lookup.enter();
+      return finish.promise;
+    };
+    throw new Error('history delivery failed after a newer selection');
+  };
+  notified.length = 0;
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  try {
+    await lookup.wait();
+    await settle();
+    assert.deepEqual(notified, []);
+  } finally { finish.resolve(); }
+  await settleUntil(() => notified.length > 0, 'restart notified after both generations');
+  assert.deepEqual(notified, ['prov-b']);
+});
+
+// §3.2, db. The first released task fails to settle. The second has only a
+// runtime control, so its route has to land during this release, without a timer.
+test('profile release continues to a runtime-only task after another task throws', async t => {
+  const id = 'release-second';
+  const first = 'release-first';
+  const { r, resume } = await acceptedPiFallback(t, id);
+  const live = await resume();
+  await r.createTask(first);
+  await enqueue(r.h, first, { clientId: 'work', text: 'first' });
+  const other = r.h.maker.getSession(first);
+  acceptSessionRuntimeMutation({ sessionId: first, source: 'fallback', profile: { ...FALLBACK_ROUTE, agentKind: 'pi' }, deferred: true });
+  r.h.queue.holdForDesktop(HELD);
+  for (const session of [live, other]) {
+    session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+  }
+  await settleUntil(() => !r.h.queue.isTurnRunning(id) && !r.h.queue.isTurnRunning(first), 'both held turns ended');
+  const pending = r.selection.deferredTurnSettlements;
+  assert.deepEqual(pending().sort(), [first, id]);
+  r.selection.deferredTurnSettlements = () => pending().sort();
+  const settleTask = r.selection.onTurnSettled;
+  const visited = [];
+  r.selection.onTurnSettled = task => {
+    visited.push(task);
+    if (task === first) throw new Error('first task history unavailable');
+    return settleTask(task);
+  };
+  assert.equal(await r.h.queue.releaseDesktopHold(), true);
+  assert.deepEqual(visited, [first, id]);
+  assert.equal(getSessionRuntimeControlSnapshot(id).effectiveOverride?.providerId, 'prov-b');
+});
+
+// §3.2, unit. A device or gateway restart may still be pending when a
+// terminal arrives. Observe the restart hook and a different task's admitted
+// input through the actual queue, with the ten-second retry clock frozen.
+for (const outcome of ['deferred', 'failed']) {
+  test(`unheld terminal notifies restart and external credential waiters after ${outcome} settlement`, async t => {
+    const notifications = [];
+    const hooks = hostRuntimeSelectionQueueHooks(() => ({
+      onTurnSettled: async () => {
+        if (outcome === 'failed') throw new Error('settlement unavailable');
+        return false;
+      },
+    }), { isSessionRestarting: () => false, afterTurnSettled: id => notifications.push(id) });
+    const h = await waitForOtherTasksCredentials(t, { onSessionSettled: hooks.onSessionSettled, afterTurnSettled: hooks.afterTurnSettled });
+    await finishCredentialBlocker(h);
+    assert.deepEqual(notifications, ['blocker']);
+    assert.deepEqual(h.maker.getSession('waiter')?.sent, ['needs the switch']);
+  });
 }
 
 function settlementCheckpoint(label) {
@@ -7286,8 +7426,8 @@ test('silent stop: the caller leaving during the decision does not stop the cont
  * - Minimal failing input: A runs, B's start reports A busy, A's turn ends.
  * - Tier: unit (queue harness, fake runtimes; mocked setTimeout so the fallback timer never fires).
  */
-async function waitForOtherTasksCredentials(t) {
-  const h = createHarness();
+async function waitForOtherTasksCredentials(t, queue = {}) {
+  const h = createHarness(queue);
   t.after(async () => { t.mock.timers.reset(); await h.queue.dispose(); });
   await enqueue(h, 'blocker', { clientId: 'a1', text: 'long job' });
   const create = h.maker.createSession;
