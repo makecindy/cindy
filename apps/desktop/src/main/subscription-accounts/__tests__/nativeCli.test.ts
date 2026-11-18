@@ -2,7 +2,7 @@
  * Protects profile separation, bounded subprocess lifetime and sanitized errors, without real credentials.
  */
 import { EventEmitter } from 'node:events';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,6 +13,9 @@ const h = vi.hoisted(() => ({
   errorMessage: 'fixture-secret-must-not-leak',
   hold: false,
   accountResult: undefined as unknown,
+  authStore: 'ephemeral',
+  modelRefresh: false,
+  renew: undefined as (() => Promise<void>) | undefined,
   oldAuthenticated: false,
   oldReason: 'oauth_expired',
   oldLogin: vi.fn<(...args: unknown[]) => Promise<{ ok: boolean; reason?: string }>>(async () => ({ ok: true })),
@@ -25,6 +28,7 @@ vi.mock('@cindy/maker-core', () => ({
     OPENAI_API_KEY: 'fixture-key',
     CODEX_API_KEY: 'fixture-key',
     CODEX_HOME: '/wrong-profile',
+    openai_base_url: 'https://gateway.invalid',
   }),
 }));
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
@@ -46,6 +50,7 @@ import {
   readNativeCodexTokens,
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
+  withCodexModelDiscovery,
 } from '../nativeCli.js';
 import { isAccountServiceUnreachable } from '../accountServiceError.js';
 import { refreshClaudeCliLoginStatus, runClaudeCliLogin } from '../../maker-host/claude-native-cli.desktop.js';
@@ -130,6 +135,9 @@ beforeEach(() => {
   h.errorMessage = 'fixture-secret-must-not-leak';
   h.hold = false;
   h.accountResult = undefined;
+  h.authStore = 'ephemeral';
+  h.modelRefresh = false;
+  h.renew = undefined;
   h.oldAuthenticated = false;
   h.oldReason = 'oauth_expired';
   h.oldLogin.mockReset().mockResolvedValue({ ok: true });
@@ -147,7 +155,15 @@ beforeEach(() => {
     child.stdin.write.mockImplementation((line: string) => {
       const request = JSON.parse(line);
       if (!request.id || h.hold) return;
-      queueMicrotask(() =>
+      queueMicrotask(async () => {
+        if (request.method === 'account/read' && h.renew) await h.renew();
+        if (request.method === 'model/list' && h.modelRefresh) {
+          child.stdout.emit('data', Buffer.from(JSON.stringify({ id: 2,
+            method: 'account/chatgptAuthTokens/refresh',
+            params: { reason: 'unauthorized', previousAccountId: 'fixture-account' },
+          }) + '\n'));
+          return;
+        }
         child.stdout.emit(
           'data',
           Buffer.from(
@@ -155,10 +171,13 @@ beforeEach(() => {
               request.id === 1
                 ? { id: 1, result: {} }
                 : h.error
-                  ? { id: 2, error: { message: h.errorMessage } }
+                  ? { id: request.id, error: { message: h.errorMessage } }
                   : {
-                      id: 2,
-                      result: h.accountResult ?? {
+                      id: request.id,
+                      result: request.method === 'config/read'
+                        ? { config: { cli_auth_credentials_store: h.authStore } }
+                        : request.method === 'account/login/start' ? { type: 'chatgptAuthTokens' }
+                        : h.accountResult ?? {
                         account: {
                           type: 'chatgpt',
                           email: options.env.CODEX_HOME + '@example.test',
@@ -168,8 +187,8 @@ beforeEach(() => {
                     },
             ) + '\n',
           ),
-        ),
-      );
+        );
+      });
     });
     children.push(child);
     if (args[0] === 'login' && !h.hold) queueMicrotask(() => child.emit('close', 0));
@@ -199,6 +218,106 @@ describe('Claude profile renewal', () => {
   });
 });
 describe('official Codex profiles', () => {
+  // External-auth's reverse RPC is also needed when discovery encounters an expired
+  // access token. Renewal may replace auth.json, but must never adopt another account.
+  it.each([false, true])('handles discovery renewal without adopting a replaced account (replaced=%s)', async replaced => {
+    const native = await mkdtemp(path.join(tmpdir(), 'cindy-model-renew-'));
+    const authPath = path.join(native, 'auth.json');
+    const auth = (accessToken: string, accountId = 'fixture-account') => JSON.stringify({
+      tokens: { access_token: accessToken, account_id: accountId },
+    });
+    let isolated = '';
+    try {
+      await writeFile(authPath, auth('fixture-token-old'));
+      h.modelRefresh = true;
+      h.accountResult = { data: [{ id: 'gpt-6.2' }] };
+      h.renew = () => writeFile(authPath, auth('fixture-token-renewed', replaced ? 'other-account' : undefined));
+      const pending = withCodexModelDiscovery(native, () => true, async (request, cacheDirectory, canPublish) => {
+        isolated = cacheDirectory;
+        const result = await request({ cursor: null });
+        expect(canPublish()).toBe(true);
+        return result;
+      });
+      if (replaced) await expect(pending).rejects.toThrow('authentication is unavailable or has changed');
+      else await expect(pending).resolves.toEqual({ data: [{ id: 'gpt-6.2' }] });
+      const response = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line))
+        .find(message => message.id === 2 && message.result);
+      expect(response?.result).toEqual(replaced ? undefined : {
+        accessToken: 'fixture-token-renewed', chatgptAccountId: 'fixture-account',
+      });
+      expect(h.spawn.mock.calls[1][2].env.CODEX_HOME).toBe(native);
+      expect(h.spawn.mock.calls[1][1]).toEqual(['app-server', '-c', 'model_provider="openai"',
+        '-c', 'chatgpt_base_url="https://chatgpt.com/backend-api/"']);
+      await expect(access(isolated)).rejects.toThrow();
+    } finally { await rm(native, { recursive: true, force: true }); }
+  });
+
+  // Magpie regression, unit: the real discovery entry must isolate config/cache and use
+  // only the selected account's in-memory tokens. Existing cases exercised account RPCs
+  // in native homes, never a home with model_catalog_json or a non-OpenAI provider.
+  it('discovers official models in an empty temporary home and leaves the native profile intact', async () => {
+    const native = await mkdtemp(path.join(tmpdir(), 'cindy-magpie-fixture-'));
+    const config = 'model_provider="magpie"\nmodel_catalog_json="mixed.json"\n';
+    const auth = JSON.stringify({ tokens: { access_token: 'fixture-token', account_id: 'fixture-account' } });
+    let isolated = '';
+    try {
+      await writeFile(path.join(native, 'config.toml'), config);
+      await writeFile(path.join(native, 'auth.json'), auth);
+      await writeFile(path.join(native, 'models_cache.json'), '{"models":[{"slug":"grok-4.7"}]}');
+      h.accountResult = { data: [{ id: 'gpt-6.2' }] };
+      const result = await withCodexModelDiscovery(native, () => true, async (request, cacheDirectory, canPublish) => {
+        isolated = cacheDirectory;
+        expect(isolated).not.toBe(native);
+        await expect(access(path.join(isolated, 'config.toml'))).rejects.toThrow();
+        await expect(access(path.join(isolated, 'auth.json'))).rejects.toThrow();
+        await expect(access(path.join(isolated, 'models_cache.json'))).rejects.toThrow();
+        const page = await request({ cursor: null, limit: 100 });
+        expect(canPublish()).toBe(true);
+        return page;
+      });
+      expect(result).toEqual({ data: [{ id: 'gpt-6.2' }] });
+      expect(h.spawn.mock.calls[0][2]).toMatchObject({ cwd: isolated, env: { CODEX_HOME: isolated } });
+      expect(h.spawn.mock.calls[0][1]).toEqual(['app-server',
+        '-c', 'model_provider="openai"', '-c', 'chatgpt_base_url="https://chatgpt.com/backend-api/"',
+        '-c', 'cli_auth_credentials_store="ephemeral"']);
+      const requests = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line));
+      expect(requests.map(request => request.method)).toEqual([
+        'initialize', 'initialized', 'config/read', 'account/login/start', 'model/list',
+      ]);
+      expect(requests[3].params).toEqual({ type: 'chatgptAuthTokens', accessToken: 'fixture-token', chatgptAccountId: 'fixture-account' });
+      expect(children[0].kill).toHaveBeenCalledWith('SIGKILL');
+      await expect(access(isolated)).rejects.toThrow();
+      expect(await readFile(path.join(native, 'config.toml'), 'utf8')).toBe(config);
+      expect(await readFile(path.join(native, 'auth.json'), 'utf8')).toBe(auth);
+    } finally { await rm(native, { recursive: true, force: true }); }
+  });
+
+  // Credentials-and-local-storage: config verification and source proofs must run
+  // before secrets or model requests are dispatched. Also prove cleanup on rejection.
+  it.each(['file-store', 'switched-account', 'rpc-error'])(
+    'fails closed and cleans isolated discovery after %s', async failure => {
+      const native = await mkdtemp(path.join(tmpdir(), 'cindy-model-failure-'));
+      let isolated = '';
+      let current = true;
+      try {
+        await writeFile(path.join(native, 'auth.json'), JSON.stringify({
+          tokens: { access_token: 'fixture-token', account_id: 'fixture-account' },
+        }));
+        if (failure === 'file-store') h.authStore = 'file';
+        if (failure === 'rpc-error') h.error = true;
+        await expect(withCodexModelDiscovery(native, () => current, async (request, cacheDirectory) => {
+          isolated = cacheDirectory;
+          if (failure === 'switched-account') current = false;
+          return request({ cursor: null });
+        })).rejects.toThrow();
+        const requests = children[0].stdin.write.mock.calls.map(([line]) => JSON.parse(line));
+        expect(requests.some(request => request.method === 'account/login/start')).toBe(false);
+        expect(requests.some(request => request.method === 'model/list')).toBe(false);
+        await expect(access(isolated)).rejects.toThrow();
+      } finally { await rm(native, { recursive: true, force: true }); }
+    },
+  );
+
   // #10110 review, unit: legacy auth has no plan. Keep the plan returned by the
   // selected profile's quota RPC; the old test fixtures only read account/read.
   it('preserves the selected profile plan alongside its sanitized Codex quota', async () => {

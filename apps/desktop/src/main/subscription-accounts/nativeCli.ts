@@ -1,8 +1,8 @@
 /** Official CLI login/control APIs only. No Claude credential access. */
 import { spawn } from 'node:child_process';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { open } from 'node:fs/promises';
+import { mkdtemp, open, rm } from 'node:fs/promises';
 import { statSync, type Stats } from 'node:fs';
 import { cleanProcessEnv, type AuthState } from '@cindy/maker-core';
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
@@ -168,11 +168,17 @@ function codexCredits(raw: unknown) {
 const codexRefreshes = new Map<string, Promise<unknown>>();
 
 /** Codex's existing external-auth bridge. Never used for Claude or returned through IPC. */
-export async function readNativeCodexTokens(directory: string, refresh = false) {
+export async function readNativeCodexTokens(
+  directory: string,
+  refresh = false,
+  official = false,
+  canDispatch?: () => boolean,
+) {
   if (refresh) {
     let pending = codexRefreshes.get(directory);
     if (!pending) {
-      pending = codexAccountRpc(directory, 'account/read', { refreshToken: true });
+      pending = codexAccountRpc(directory, 'account/read', { refreshToken: true }, canDispatch,
+        official ? { official: true } : undefined);
       codexRefreshes.set(directory, pending);
     }
     try {
@@ -219,36 +225,95 @@ export async function readNativeCodexTokens(directory: string, refresh = false) 
   }
 }
 
-/** Short-lived app-server control connection: no thread or model request is made. */
+/** Discover subscription models without loading the native CLI's gateway config or cache.
+ * Only access tokens cross the in-memory external-auth bridge; auth.json is never copied.
+ */
+export async function withCodexModelDiscovery<T>(
+  directory: string,
+  isCurrent: () => boolean,
+  discover: (request: (params: unknown) => Promise<unknown>, cacheDirectory: string, canPublish: () => boolean) => Promise<T>,
+): Promise<T> {
+  let tokens = await readNativeCodexTokens(directory);
+  const accountId = tokens.chatgptAccountId;
+  const isolated = await mkdtemp(path.join(tmpdir(), 'cindy-codex-models-'));
+  const canDispatch = () => isCurrent() && tokens.canDispatch();
+  try {
+    if (!canDispatch()) throw new Error('Codex account changed before dispatch');
+    return await discover(
+      params => codexAccountRpc(isolated, 'model/list', params, canDispatch, {
+        externalAuth: {
+          accessToken: tokens.accessToken,
+          chatgptAccountId: accountId,
+          refresh: async previousAccountId => {
+            if (previousAccountId !== accountId || !canDispatch()) throw new Error();
+            const refreshed = await readNativeCodexTokens(directory, true, true, canDispatch);
+            if (!isCurrent() || !refreshed.canDispatch() || refreshed.chatgptAccountId !== accountId
+              || refreshed.accessToken === tokens.accessToken) throw new Error();
+            tokens = refreshed;
+            return { accessToken: tokens.accessToken, chatgptAccountId: accountId };
+          },
+        },
+      }),
+      isolated,
+      canDispatch,
+    );
+  } finally {
+    await rm(isolated, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+/** Short-lived app-server control connection: no thread or inference request is made. */
 export function codexAccountRpc(
   directory: string,
   method: string,
   params: unknown,
   canDispatch?: () => boolean | Promise<boolean>,
+  options?: {
+    official?: boolean;
+    externalAuth?: {
+      accessToken: string;
+      chatgptAccountId: string;
+      refresh: (previousAccountId: unknown) => Promise<{ accessToken: string; chatgptAccountId: string }>;
+    };
+  },
 ): Promise<unknown> {
   const binary = getReadyBinaryPath('codex');
   if (!binary) return Promise.reject(new Error('Codex CLI unavailable'));
+  const externalAuth = options?.externalAuth;
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, ['app-server'], {
-      cwd: homedir(),
+    const child = spawn(binary, ['app-server', ...(externalAuth || options?.official ? [
+      '-c', 'model_provider="openai"',
+      '-c', 'chatgpt_base_url="https://chatgpt.com/backend-api/"',
+    ] : []), ...(externalAuth ? [
+      '-c', 'cli_auth_credentials_store="ephemeral"',
+    ] : [])], {
+      cwd: externalAuth ? directory : homedir(),
       env: codexProfileEnv(directory),
       stdio: ['pipe', 'pipe', 'ignore'],
       windowsHide: true,
     });
     let settled = false;
+    let closed = false;
     let buffer = '';
     const finish = (error?: Error, result?: unknown) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.kill();
-      if (error) reject(error);
-      else resolve(result);
+      const complete = () => { if (error) reject(error); else resolve(result); };
+      // The discovery owner removes its temporary home on completion. Wait for
+      // the process to exit first, including on Windows where open files block rm.
+      if (externalAuth && !closed) {
+        child.once('close', complete);
+        child.kill('SIGKILL');
+      } else {
+        child.kill();
+        complete();
+      }
     };
     // A stalled read is almost always the CLI waiting on its account service (startup refreshes).
     const timer = setTimeout(() => finish(new AccountServiceUnreachableError('Codex account read timed out')), 15_000);
     const send = (message: unknown) => child.stdin.write(JSON.stringify(message) + '\n');
-    const dispatch = async () => {
+    const dispatch = async (message = { id: 2, method, params }) => {
       try {
         if (canDispatch) {
           const allowed = canDispatch();
@@ -257,14 +322,14 @@ export function codexAccountRpc(
             return finish(new Error('Codex account changed before dispatch'));
         }
         // An asynchronous credential/source check can outlive this control connection.
-        if (!settled) send({ id: 2, method, params });
+        if (!settled) send(message);
       } catch {
         finish(new Error('Codex account changed before dispatch'));
       }
     };
     child.stdin.on('error', () => finish(new Error('Codex account connection closed')));
     child.on('error', () => finish(new Error('Codex CLI unavailable')));
-    child.on('close', () => finish(new Error('Codex account connection closed')));
+    child.on('close', () => { closed = true; finish(new Error('Codex account connection closed')); });
     child.stdout.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8');
       if (buffer.length > 1_048_576) return finish(new Error('Codex account response too large'));
@@ -272,10 +337,35 @@ export function codexAccountRpc(
       while ((newline = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        let message: { id?: number; error?: unknown; result?: unknown };
+        let message: { id?: number | string; method?: string; params?: unknown; error?: unknown; result?: unknown };
         try {
           message = JSON.parse(line);
         } catch {
+          continue;
+        }
+        if (externalAuth && message.id !== undefined && message.method === 'account/chatgptAuthTokens/refresh') {
+          const requestId = message.id;
+          const request = message.params as { reason?: unknown; previousAccountId?: unknown } | null;
+          void (async () => {
+            try {
+              if (request?.reason !== 'unauthorized' || settled) throw new Error();
+              const tokens = await externalAuth.refresh(request.previousAccountId);
+              // Refresh awaits the source CLI; a timeout/account change must prevent a late token write.
+              if (settled) return;
+              if (canDispatch) {
+                const allowed = canDispatch();
+                if (!(typeof allowed === 'boolean' ? allowed : await allowed)) throw new Error();
+              }
+              if (!settled) send({ id: requestId, result: tokens });
+            } catch {
+              finish(new Error('Codex account authentication is unavailable or has changed'));
+            }
+          })();
+          continue;
+        }
+        if (message.method) {
+          if (!settled && message.id !== undefined)
+            send({ id: message.id, error: { code: -32601, message: 'Unsupported account request' } });
           continue;
         }
         if (message.error) return finish(codexRequestError(message.error));
@@ -283,6 +373,18 @@ export function codexAccountRpc(
           send({ method: 'initialized', params: {} });
           // Startup may await configuration/auth refresh. A reset must still use
           // the exact credential observed before spawning this control connection.
+          void dispatch(externalAuth
+            ? { id: 3, method: 'config/read', params: { includeLayers: false } }
+            : undefined);
+        } else if (externalAuth && message.id === 3) {
+          if ((message.result as { config?: { cli_auth_credentials_store?: unknown } })?.config?.cli_auth_credentials_store !== 'ephemeral')
+            return finish(new Error('Codex isolated authentication is unavailable'));
+          void dispatch({ id: 4, method: 'account/login/start', params: {
+            type: 'chatgptAuthTokens', accessToken: externalAuth.accessToken, chatgptAccountId: externalAuth.chatgptAccountId,
+          } });
+        } else if (externalAuth && message.id === 4) {
+          if ((message.result as { type?: unknown })?.type !== 'chatgptAuthTokens')
+            return finish(new Error('Codex isolated authentication is unavailable'));
           void dispatch();
         } else if (message.id === 2) finish(undefined, message.result);
       }

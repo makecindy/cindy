@@ -91,6 +91,7 @@ import {
   readLegacyCodexProviderAccount,
   loginLegacyCodexProviderAccount,
   codexAccountRpc,
+  withCodexModelDiscovery,
 } from './nativeCli.js';
 import { AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
@@ -1119,45 +1120,47 @@ export async function refreshSubscriptionPoolCodexModels(
       && directoryFor('openai', id) === directory;
     const flight = (async () => {
       try {
-        const models: CodexModelListItem[] = [];
-        const cursors = new Set<string>();
-        let pages = 0;
-        let cursor: string | null = null;
-        do {
-          if (!isCurrent()) return;
-          if (pages >= CODEX_MODEL_MAX_PAGES) throw new Error('Codex model page budget exceeded');
-          const page = await codexAccountRpc(directory, 'model/list', { cursor, limit: 100, includeHidden: false }, isCurrent) as {
-            data: CodexModelListItem[]; nextCursor?: string | null;
-          };
-          if (!Array.isArray(page?.data)) throw new Error('Invalid Codex model list');
-          pages += 1;
-          if (models.length + page.data.length > CODEX_MODEL_MAX_ITEMS) throw new Error('Codex model item budget exceeded');
-          models.push(...page.data);
-          const next: string | null = typeof page.nextCursor === 'string' && page.nextCursor ? page.nextCursor : null;
-          if (next && cursors.has(next)) throw new Error('Repeated Codex model cursor');
-          if (next) cursors.add(next);
-          cursor = next;
-        } while (cursor !== null);
-        // model/list owns membership/tiers; only this same profile's cache can
-        // supply windows and image inputs that the live protocol does not report.
-        const cached = await readFile(path.join(directory, 'models_cache.json'), 'utf8')
-          .then(raw => new Map(mapCodexModelsToCatalog(JSON.parse(raw)).map(model => [model.id, model])))
-          .catch(() => new Map<string, CatalogModel>());
-        if (!isCurrent()) return;
-        state.codexModels.set(id, { auth, models: mapCodexAppServerModelsToCatalog(models).map(model => {
-          const known = cached.get(model.id);
-          if (!known) return model;
-          return { ...model,
-            ...(known.contextWindowVerified ? { contextWindow: known.contextWindow, contextWindowVerified: true,
-              contextWindowMax: known.contextWindowMax } : {}),
-            ...(known.supportsImageInput !== undefined ? { supportsImageInput: known.supportsImageInput } : {}),
-            discoveredMetadata: {
-              ...model.discoveredMetadata,
-              ...(known.contextWindowVerified ? { contextWindow: known.contextWindow } : {}),
+        await withCodexModelDiscovery(directory, isCurrent, async (request, cacheDirectory, canPublish) => {
+          const models: CodexModelListItem[] = [];
+          const cursors = new Set<string>();
+          let pages = 0;
+          let cursor: string | null = null;
+          do {
+            if (!canPublish()) return;
+            if (pages >= CODEX_MODEL_MAX_PAGES) throw new Error('Codex model page budget exceeded');
+            const page = await request({ cursor, limit: 100, includeHidden: false }) as {
+              data: CodexModelListItem[]; nextCursor?: string | null;
+            };
+            if (!Array.isArray(page?.data)) throw new Error('Invalid Codex model list');
+            pages += 1;
+            if (models.length + page.data.length > CODEX_MODEL_MAX_ITEMS) throw new Error('Codex model item budget exceeded');
+            models.push(...page.data);
+            const next: string | null = typeof page.nextCursor === 'string' && page.nextCursor ? page.nextCursor : null;
+            if (next && cursors.has(next)) throw new Error('Repeated Codex model cursor');
+            if (next) cursors.add(next);
+            cursor = next;
+          } while (cursor !== null);
+          // model/list owns membership/tiers; only the isolated discovery cache can
+          // supply windows and image inputs that the live protocol does not report.
+          const cached = await readFile(path.join(cacheDirectory, 'models_cache.json'), 'utf8')
+            .then(raw => new Map(mapCodexModelsToCatalog(JSON.parse(raw)).map(model => [model.id, model])))
+            .catch(() => new Map<string, CatalogModel>());
+          if (!canPublish()) return;
+          state.codexModels.set(id, { auth, models: mapCodexAppServerModelsToCatalog(models).map(model => {
+            const known = cached.get(model.id);
+            if (!known) return model;
+            return { ...model,
+              ...(known.contextWindowVerified ? { contextWindow: known.contextWindow, contextWindowVerified: true,
+                contextWindowMax: known.contextWindowMax } : {}),
               ...(known.supportsImageInput !== undefined ? { supportsImageInput: known.supportsImageInput } : {}),
-            },
-          };
-        }) });
+              discoveredMetadata: {
+                ...model.discoveredMetadata,
+                ...(known.contextWindowVerified ? { contextWindow: known.contextWindow } : {}),
+                ...(known.supportsImageInput !== undefined ? { supportsImageInput: known.supportsImageInput } : {}),
+              },
+            };
+          }) });
+        });
       } catch (error) {
         // Failure is retryable evidence, not an authoritative empty list. Only
         // this same login may retain its last complete list while recovery runs.

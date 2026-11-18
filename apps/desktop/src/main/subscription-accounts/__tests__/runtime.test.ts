@@ -136,6 +136,9 @@ vi.mock('../../maker-host/nativeProviderAuthBinding.js', () => ({
 vi.mock('../nativeCli.js', () => ({
   readNativeAccount: h.read,
   codexAccountRpc: h.rpc,
+  withCodexModelDiscovery: (directory: string, isCurrent: () => boolean,
+    discover: (request: (params: unknown) => Promise<unknown>, cacheDirectory: string, canPublish: () => boolean) => Promise<unknown>) =>
+    discover(params => h.rpc(directory, 'model/list', params, isCurrent), `isolated/${directory}`, isCurrent),
   readNativeCodexTokens: h.tokens,
   readNativeAccountUsage: h.usage,
   loginNativeAccount: h.login,
@@ -1369,7 +1372,7 @@ describe('pooled Codex model discovery', () => {
     });
     h.modelCacheRead.mockImplementation(async (file: string) => JSON.stringify({ models: [{
       slug: 'healthy-model', visibility: 'list', supported_in_api: true,
-      context_window: file.includes('second') ? 600_000 : 100_000,
+      context_window: file.startsWith('isolated') && file.includes('second') ? 600_000 : 100_000,
       input_modalities: ['text', 'image'],
     }, { slug: 'cache-only-model', visibility: 'list', supported_in_api: true }] }));
     await refreshSubscriptionPool('openai');
