@@ -16552,6 +16552,7 @@
         "pausedSuffix": "(en pausa)"
       },
       "automationGroup": {
+        "unreadRunCount": "Ejecuciones sin leer: {{count}}",
         "runCount": "{{count}} ejecuciones",
         "attentionCount": "Pendientes: {{count}}",
         "hiddenCount": "{{count}} ocultas",

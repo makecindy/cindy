@@ -11,7 +11,7 @@
  * 动画计时器会让 publish 较频繁,这点很关键)。
  */
 
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 
 import type { AgentIslandSessionActivity } from '../../shared/agentIsland';
 
@@ -111,6 +111,24 @@ function subscribe(cb: () => void): () => void {
 export function useAgentIslandActivity(sessionId: string): AgentIslandSessionActivity | null {
   const getSnapshot = useCallback(() => activityMap.get(sessionId) ?? null, [sessionId]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/** Group-local phases: unrelated sessions and detail-only updates do not redraw the header. */
+export function useAgentIslandSessionsPhaseMap(
+  sessionIds: readonly string[],
+): ReadonlyMap<string, AgentIslandSessionActivity['phase']> {
+  const getSnapshot = () =>
+    JSON.stringify(
+      sessionIds.flatMap((id) => {
+        const phase = activityMap.get(id)?.phase;
+        return phase ? [[id, phase]] : [];
+      }),
+    );
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return useMemo(
+    () => new Map<string, AgentIslandSessionActivity['phase']>(JSON.parse(snapshot)),
+    [snapshot],
+  );
 }
 
 /**

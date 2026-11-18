@@ -16322,6 +16322,7 @@
         "pausedSuffix": "（已暫歇）"
       },
       "automationGroup": {
+        "unreadRunCount": "未閱者 {{count}} 次",
         "runCount": "{{count}} 次運行",
         "attentionCount": "{{count}} 待處置",
         "hiddenCount": "{{count}} 已收",
