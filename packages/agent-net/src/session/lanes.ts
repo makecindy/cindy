@@ -46,6 +46,20 @@ const encoder = new TextEncoder(), decoder = new TextDecoder();
  * `b`: size-moved requests delivered; `o`: this is a size-moved request.
  */
 interface Frame { m: unknown; c: SessionMessageClass; p?: [number, number, number]; r?: number; b?: number; o?: 1 }
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isFrame(value: unknown, lane: SessionLane): value is Frame {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { c, p, r, b, o } = value as Record<string, unknown>;
+  return (c === 'control' || c === 'request' || c === 'result' || c === 'push')
+    && (p === undefined || (Array.isArray(p) && p.length === SESSION_LANES.length && p.every(isCount)))
+    && (r === undefined || isCount(r))
+    && (b === undefined || isCount(b))
+    && (o === undefined || (o === 1 && c === 'request' && lane === 'background'));
+}
 /** See the module comment. */
 export interface SessionSendOptions { unordered?: boolean; afterEarlier?: boolean }
 
@@ -117,10 +131,10 @@ export class SessionLanes {
       if (length > MAX_SESSION_MESSAGE_BYTES) { this.fail(new Error('AGENT_NET_SESSION_FRAME_TOO_LARGE')); return; }
       if (state.length < 4 + length) break;
       const body = take(state, 4 + length).subarray(4);
-      let frame: Frame;
-      try { frame = JSON.parse(decoder.decode(body)) as Frame; }
+      let frame: unknown;
+      try { frame = JSON.parse(decoder.decode(body)); }
       catch { this.fail(new Error('AGENT_NET_SESSION_FRAME_INVALID')); return; }
-      if (!frame || typeof frame !== 'object' || !['control', 'request', 'result', 'push'].includes(frame.c)) {
+      if (!isFrame(frame, lane)) {
         this.fail(new Error('AGENT_NET_SESSION_FRAME_INVALID')); return;
       }
       state.queue.push({ frame, bytes: length });

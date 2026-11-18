@@ -543,6 +543,7 @@ import {
 } from '@cindy/device-link';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
+import { SESSION_INVOKE_OUTCOME_UNKNOWN, SESSION_INVOKE_REPLAY } from '../device-link/peerLinks';
 import { createGroupContinuityExecutor } from '../provider-group/continuityExecutor';
 import { deviceAccessGeneration, isControllerAccessAllowed, remoteControlAccessGeneration,
   syncRemoteControlAccessGeneration } from '../device-link/remoteControlAccess';
@@ -1127,6 +1128,34 @@ describe('被控端控制链路生命周期', () => {
     expect(afterClose).not.toBe(before);
     dropAllControllers(client, 'toggle-off');
     expect(remoteInvokeEpoch('ctrl-epoch')).not.toBe(afterClose);
+  });
+
+  // A bounded reply cache may evict the original write during an ordinary network interruption.
+  it('responds to a replay after cache eviction without running the accepted write again', async () => {
+    remoteControlEnabled = true;
+    const handler = vi.fn(() => ({ accepted: true }));
+    registry.register('maker:send', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const observedClient = client as { sendInvokeResult: (...args: [string, string, unknown]) => void };
+    const send = observedClient.sendInvokeResult;
+    let onResult: () => void;
+    observedClient.sendInvokeResult = (...args) => { send(...args); onResult(); };
+    const request = (frame: Envelope) => new Promise<void>((resolve) => { onResult = resolve; feed(frame); });
+    const payload = { channel: 'maker:send', args: ['s1', 'hello'] };
+    const original: Envelope = { v: 1, kind: 'invoke', id: 'original', src: 'ctrl-a', payload };
+    await request(original);
+    const resume = { ...original, payload: { ...payload, [SESSION_INVOKE_REPLAY]: true } };
+    await request(resume);
+    expect(handler).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 128; index++) {
+      await request({ ...original, src: 'ctrl-b', id: 'other-' + index });
+    }
+    await request(resume);
+    expect(calls.invokeResult.at(-1)).toMatchObject({
+      requestId: 'original', payload: { ok: false, error: { code: SESSION_INVOKE_OUTCOME_UNKNOWN } },
+    });
+    expect(handler).toHaveBeenCalledTimes(129);
   });
 
   it('link-close clears remembered routing and queued pushes', () => {

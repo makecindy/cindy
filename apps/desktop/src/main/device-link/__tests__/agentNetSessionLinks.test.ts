@@ -23,6 +23,7 @@ import { DeviceLinkError, providerShareGuestPeer, providerShareHostPeer, type De
 import { desktopTransferCodec } from '../transferCodec';
 import { AgentNetSessionLinks, agentNetSessionLane, type AgentNetSessionLinksOptions } from '../agentNetSessionLinks';
 import { routeSessionPeers } from '../agentNetSessionRouting';
+import { SESSION_INVOKE_REPLAY } from '../peerLinks';
 
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 const openPayload = { controllerName: 'test', protocolVersion: 1, appVersion: 'test' };
@@ -186,10 +187,13 @@ describe('AgentNetSessionLinks', () => {
     const { links, sessions, connect } = pair({ reopenLink: (id) => { void controller?.openLink(id, openPayload); }, hostInvokeEpoch: () => 'run-1' });
     controller = links.controller;
     const seen: string[] = [];
+    const replay: Array<true | undefined> = [];
     links.host.onFrame((env) => {
       if (env.kind === 'link-open') links.host.sendLinkAccept(env.src!, env.id!, { appVersion: 'host', allowlistHash: 'hash' });
-      // 被控端按请求号去重（dispatch）：第一次在跑、断线前没回；同一个请求号再来时回那一次的结果。
-      if (env.kind === 'invoke' && seen.push(env.id!) === 2) links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'sent once' });
+      if (env.kind !== 'invoke') return;
+      const payload = env.payload as { [SESSION_INVOKE_REPLAY]?: true };
+      replay.push(payload[SESSION_INVOKE_REPLAY]);
+      if (seen.push(env.id!) === 2) links.host.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'sent once' });
     });
     await links.controller.openLink('a-host', openPayload);
     const write = links.controller.invoke('a-host', { channel: 'maker:send-message', args: ['s1', 'hello'] }, 5_000);
@@ -199,6 +203,7 @@ describe('AgentNetSessionLinks', () => {
     connect();
     await expect(write).resolves.toEqual({ ok: true, result: 'sent once' });
     expect(seen).toEqual([seen[0], seen[0]]);
+    expect(replay).toEqual([undefined, true]);
     expect(links.controller.getPeerLinkGeneration('a-host')).toBe(2);
   });
 
@@ -389,7 +394,7 @@ describe('AgentNetSessionLinks', () => {
   // 2026-11-17 排查：① 会话上什么推送都收，同账号的一台电脑没建链也能往业务里推任意通道（Device Link 只收链路上的和三个无链路通道）；
   // ② 允许被控请求等无链路推送仍走 Device Link；③ 远程桌面续租心跳排在普通通道里，和任务列表、历史页抢。
   it('takes pushes only on a control link except the unlinked ones, sends those on the session, and renews remote desktop on control', async () => {
-    const { links, controllerLanes } = pair();
+    const { links, sessions, controllerLanes } = pair();
     answerOnSession(links.host);
     const received: string[] = [];
     links.controller.onFrame((env) => { if (env.kind === 'push') received.push((env.payload as { channel: string }).channel); });
@@ -397,6 +402,8 @@ describe('AgentNetSessionLinks', () => {
     links.host.onFrame((env) => { if (env.kind === 'push') hostPushes.push((env.payload as { channel: string }).channel); });
     // No control link yet: an ordinary push is dropped, the consent request is not.
     links.host.sendPush('b-controller', 'maker:event', { text: 'x' });
+    // The outer topic and the wrapped topic must describe the same push.
+    sessions.host!.push('device-link:remote-control-consent', { channel: 'device-link:voice:dictionary:sync-state', payload: { v: 1 } });
     links.host.sendPush('b-controller', 'device-link:remote-control-consent', { op: 'request' });
     // 自己电脑之间的词典同步也不需要链路（2026-11-17 审查：原来成了连接上的 Device Link 帧）。
     links.host.sendPush('b-controller', 'device-link:voice:dictionary:sync-state', { v: 1 });

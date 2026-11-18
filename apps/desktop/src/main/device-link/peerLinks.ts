@@ -6,7 +6,12 @@
  * 要先在这里归组、在选路层写上怎么走，业务才用得到。Device Link 客户端本身也满足这个类型（Agent-Net 关着时它就是全部）。
  * 消息形状（Envelope、InvokePayload 等）是两条路共用的业务协议，会话层原样承载。
  */
-import type { DeviceLinkClient } from '@cindy/device-link';
+import type { DeviceLinkClient, InvokePayload } from '@cindy/device-link';
+
+/** Local marker set by the session adapter. Device Link frames cannot supply it. */
+export const SESSION_INVOKE_REPLAY = Symbol('session invoke replay');
+export const SESSION_INVOKE_OUTCOME_UNKNOWN = 'SESSION_INVOKE_OUTCOME_UNKNOWN';
+export type PeerInvokePayload = InvokePayload & { [SESSION_INVOKE_REPLAY]?: true };
 
 /** 按对端、按方向选路的方法：会话层（AgentNetSessionLinks）都有一份。 */
 export const PEER_LINK_ROUTED_METHODS = ['openLink', 'closeLink', 'invoke', 'isLinkReady', 'needsLinkRecovery',

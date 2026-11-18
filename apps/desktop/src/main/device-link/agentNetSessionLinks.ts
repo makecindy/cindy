@@ -20,7 +20,7 @@ import {
   type PushPayload, diagnosticChannel, invokeIntendedHoldMs, shortDeviceRef,
 } from '@cindy/device-link';
 import { SessionError, newSessionRequestId, type SessionHandle, type SessionHandlers, type SessionLane, type SessionRequest, type SessionResult } from '@cindy/agent-net';
-import type { PeerLinkMergedMethod, PeerLinkRoutedMethod, PeerLinks } from './peerLinks.js';
+import { SESSION_INVOKE_OUTCOME_UNKNOWN, SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinkMergedMethod, type PeerLinkRoutedMethod, type PeerLinks } from './peerLinks.js';
 
 type PushOwnerStamp = NonNullable<PushPayload['ownerStamp']>;
 
@@ -131,7 +131,7 @@ interface PeerState {
   outboundClosed: boolean;
   inbound: boolean;
   /** 对端控制本机时最近一次 link-open 的 id 与它声明的能力。 */
-  offer: { id: string; capabilities: string[] } | null;
+  offer: { id: string; capabilities: string[]; resumeOnly: boolean } | null;
   pushDictionary: number | undefined;
   githubRead: boolean;
   pendingInvokes: number;
@@ -395,8 +395,9 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
       peer.generation += 1;
       peer.linkOnSession = true;
       peer.githubRead = Array.isArray(accept.capabilities) && accept.capabilities.includes(DEVICE_LINK_CAPABILITY_GITHUB_READ_V1);
-      const epoch = (accept as unknown as { agentNetInvokeEpoch?: unknown }).agentNetInvokeEpoch;
-      peer.hostInvokeEpoch = typeof epoch === 'string' && epoch.length <= 128 ? epoch : null;
+      const resume = accepted as { agentNetInvokeEpoch?: unknown; agentNetResumeOnly?: unknown } | null;
+      const epoch = resume?.agentNetInvokeEpoch;
+      peer.hostInvokeEpoch = resume?.agentNetResumeOnly === true && typeof epoch === 'string' && epoch.length <= 128 ? epoch : null;
       this.options.log.info(`agent-net session control link open peer=${shortDeviceRef(dst)} generation=${peer.generation}`);
       this.notifyReopen(dst);
       peer.receivedAt = performance.now();
@@ -507,7 +508,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     const peer = this.peer(dst);
     const offer = peer.offer?.id === requestId ? peer.offer : null;
     const epoch = this.options.invokeEpoch?.(dst) ?? null;
-    session.accept(requestId, epoch ? { ...payload, agentNetInvokeEpoch: epoch } : payload);
+    session.accept(requestId, epoch && offer?.resumeOnly ? { ...payload, agentNetInvokeEpoch: epoch, agentNetResumeOnly: true } : payload);
     peer.generation += 1;
     peer.linkOnSession = true;
     peer.inbound = true;
@@ -596,7 +597,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     const peer = this.peer(src);
     const capabilities = isRecord(payload) && Array.isArray(payload.capabilities)
       ? payload.capabilities.filter((value): value is string => typeof value === 'string') : [];
-    peer.offer = { id, capabilities };
+    peer.offer = { id, capabilities, resumeOnly: isRecord(payload) && payload.agentNetResumeOnly === true };
     peer.receivedAt = performance.now();
     return this.emit({ v: PROTOCOL_VERSION, kind: 'link-open', id, src, dst: this.options.selfDeviceId() ?? undefined, payload } as Envelope);
   }
@@ -606,7 +607,9 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     peer.requests.add(request.id);
     if (peer.requests.size > MAX_TRACKED_REQUESTS) peer.requests.delete(peer.requests.values().next().value!);
     peer.receivedAt = performance.now();
-    const payload: InvokePayload = { ...(request.extra ?? {}), channel: request.channel, args: request.args } as InvokePayload;
+    const { agentNetResumeOnly: resumeOnly, ...extra } = request.extra ?? {};
+    const payload: PeerInvokePayload = { ...extra, channel: request.channel, args: request.args };
+    if (resumeOnly === true) payload[SESSION_INVOKE_REPLAY] = true;
     // 跨账号的结果和 Device Link 一样不按控制端的传输声明编码。
     if (!isScopedPeer(src)) this.inboundTransfer.record(src, request.id, payload);
     return this.emit({ v: PROTOCOL_VERSION, kind: 'invoke', id: request.id, src, dst: this.options.selfDeviceId() ?? undefined, payload } as Envelope);
@@ -615,12 +618,13 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   private receivePush(src: string, channel: string, raw: unknown): void | Promise<void> {
     // 和 Device Link 一样：推送只在本机开着的控制链路上收，少数不需要链路的同账号请求与同步除外（isUnlinkedPushChannel）。
     // 2026-11-17 排查：会话上原来什么推送都收，同账号的一台电脑没建链也能往这台的业务里推任意通道。
+    let push: PushPayload = isRecord(raw) && typeof raw.channel === 'string' ? raw as unknown as PushPayload : { channel, payload: raw };
+    if (push.channel !== channel) return;
     const owner = this.peers.get(src)?.outbound;
-    if (owner !== 'open' && owner !== 'opening' && !isSessionUnlinkedPushChannel(channel)) {
+    if (owner !== 'open' && owner !== 'opening' && !isSessionUnlinkedPushChannel(push.channel)) {
       this.options.log.debug(`agent-net session dropped a push without a control link src=${shortDeviceRef(src)}`);
       return;
     }
-    let push: PushPayload = isRecord(raw) && typeof raw.channel === 'string' ? raw as unknown as PushPayload : { channel, payload: raw };
     if (isEncodedPushPayload(push)) {
       const decoded = decodePushTransfer(push, this.options.transferCodec);
       if (!decoded.ok) {
@@ -698,7 +702,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   /**
    * 一次请求。写出去以后会话断了（连接断、换网、对方重建节点）：和 Device Link 断线重连后按原序号续传一样，等这个对端的控制链路
    * 在新会话上重开（reopenLink 请业务重开），用原请求号再发一次。对方按请求号去重（Desktop dispatch 记着的结果、或还在跑的那次），
-   * 不会再执行一遍，结果照样回到这里。等不到（时限内没重开、改在 Device Link 上开了、被关了）才和原来一样报「可能已执行」。
+   * 只找回已记住的结果；等不到重开或结果无法确认时报告「可能已执行」，不再启动该写操作。
    * 幂等读照旧报 PEER_RESET 让业务重读；文件块不在这里续（文件直传随会话收掉）。跨账号同样续：分享连接不会自己回来，会话断时就请业务重开
    * （broken）。
    */
@@ -725,7 +729,14 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
         outcome = await session.request(channel, args ?? [], { id, timeoutMs: Math.max(1, Math.round(deadline - performance.now())), background,
           // 幂等读不排在之前因为太大改走后台通道的请求后面；写照原来的先后（lanes.ts）。
           unordered: isPeerResetRetryableInvoke(channel, args),
-          ...(lane ? { lane } : {}), ...(Object.keys(extra).length ? { extra } : {}) });
+          ...(lane ? { lane } : {}), ...(attempt > 0 ? { extra: { ...extra, agentNetResumeOnly: true } }
+            : Object.keys(extra).length ? { extra } : {}) });
+        if (attempt > 0 && outcome.ok) {
+          const result = outcome.result as InvokeResultPayload;
+          if (result?.ok === false && result.error?.code === SESSION_INVOKE_OUTCOME_UNKNOWN) {
+            outcome = { ok: false, error: { code: 'INVOKE_TIMEOUT', message: result.error.message } };
+          }
+        }
         if (outcome.ok || outcome.error.code !== 'DEVICE_OFFLINE' || !continuable) break;
         const next = await this.awaitReopened(dst, generation, deadline);
         if (!next) break;
@@ -828,7 +839,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
   private withLocalCapabilities(dst: string, payload: unknown): unknown {
     if (!isRecord(payload) || (!('controllerName' in payload) && !('protocolVersion' in payload))) return payload;
     const deflate = this.options.transferCodec?.inflateRawBase64 && !isScopedPeer(dst) && !this.pushDeflateRejected.has(dst) ? pushDeflateCapabilities() : [];
-    return { ...payload, capabilities: mergeCapabilities(payload.capabilities, deflate) };
+    return { ...payload, agentNetResumeOnly: true, capabilities: mergeCapabilities(payload.capabilities, deflate) };
   }
 
   private releaseInboundPeer(dst: string): void {

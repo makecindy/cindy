@@ -82,6 +82,19 @@ it('holds a link close until the pushes and requests sent before it are delivere
   expect(delivered).toEqual(['last-push', 'subscribe', 'close']);
 });
 
+// Wire validation keeps malformed dependency metadata inside this session's error handler.
+it.each([{ p: [0] }, { r: -1 }, { b: 1.5 }, { o: 2 }])('refuses invalid lane dependencies: %j', (dependency) => {
+  const deliver = vi.fn(), onError = vi.fn();
+  const receiver = new SessionLanes({ write() {}, deliver, onError });
+  const json = new TextEncoder().encode(JSON.stringify({ c: 'request', m: 'sample', ...dependency }));
+  const bytes = new Uint8Array(4 + json.length);
+  new DataView(bytes.buffer).setUint32(0, json.length);
+  bytes.set(json, 4);
+  receiver.receive('normal', bytes);
+  expect(onError).toHaveBeenCalledWith(new Error('AGENT_NET_SESSION_FRAME_INVALID'));
+  expect(deliver).not.toHaveBeenCalled();
+});
+
 it('delivers every message in order whatever the chunk boundaries', () => {
   for (const sizes of [[1], [5, 64, 3], [1 << 20]]) {
     const { sender, delivered, arrive } = pair();
