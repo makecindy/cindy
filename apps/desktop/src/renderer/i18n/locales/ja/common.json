@@ -7836,6 +7836,18 @@
         "overviewTab": "概要",
         "addPlugin": "プラグインを追加",
         "addPluginAria": "プラグイン追加オプション",
+        "githubInstall": {
+          "label": "GitHub Release からインストール…",
+          "title": "GitHub Release からインストール",
+          "description": "リポジトリまたは Release の URL を貼り付けてください。非公開リポジトリにはアクセス権のある GitHub アカウントが必要です。",
+          "url": "GitHub URL",
+          "submit": "プラグインを探す",
+          "loading": "検索してダウンロード中…",
+          "invalid": "GitHub のリポジトリまたは Release タグの URL を入力してください。",
+          "not-found": "このバージョンを利用できません。URL とアクセス権を確認してください。",
+          "ambiguous": "複数のプラグインがあります。パッケージが一つの Release を指定するか、ファイルからインストールしてください。",
+          "installedAlready": "このプラグインはインストール済みです。設定から更新できます。"
+        },
         "installedSection": "インストール済み",
         "installedExpand": "インストール済みプラグイン {{count}} 件をすべて表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",

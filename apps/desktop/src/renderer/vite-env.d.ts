@@ -1459,6 +1459,8 @@ interface ElectronAPI {
     githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number) =>
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean>;
     onGithubReleaseProgress: (callback: (event: import('../shared/githubPluginRelease').GithubPluginReleaseProgress, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
+    installGithubRelease: (action: 'install' | 'sign-in', url?: string, requestId?: string) =>
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseInstallResult | boolean>;
     pickFile: () => Promise<{ canceled: true } | { filePath: string }>;
     /** 只验不装:读出清单、签名信任等级与 icon data URL,供安装编排使用。 */
     inspect: (

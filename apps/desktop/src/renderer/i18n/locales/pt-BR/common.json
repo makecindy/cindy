@@ -7946,6 +7946,18 @@
         "overviewTab": "Visão geral",
         "addPlugin": "Adicionar plugin",
         "addPluginAria": "Opções de adição de plugin",
+        "githubInstall": {
+          "label": "Instalar de uma release do GitHub…",
+          "title": "Instalar de uma release do GitHub",
+          "description": "Cole o link de um repositório ou de uma release. Para um repositório privado, entre com uma conta GitHub que tenha acesso.",
+          "url": "Endereço do GitHub",
+          "submit": "Buscar plugin",
+          "loading": "Buscando e baixando…",
+          "invalid": "Insira a URL de um repositório ou de uma tag de release do GitHub.",
+          "not-found": "Esta versão está indisponível. Verifique o link e o acesso ao repositório.",
+          "ambiguous": "Este link contém vários plugins. Escolha uma release com um único pacote ou instale o arquivo diretamente.",
+          "installedAlready": "Este plugin já está instalado. Atualize-o nas configurações dele."
+        },
         "installedSection": "Instalados",
         "installedExpand": "Mostrar todos os {{count}} plugins instalados",
         "installedCollapse": "Ocultar plugins instalados adicionais",
