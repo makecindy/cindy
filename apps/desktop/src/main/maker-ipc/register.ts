@@ -944,8 +944,8 @@ import {
 } from '../usage/modelPriceOverrideStore.js';
 import { ClaudeOutputLagTimingGuard, type ModelUsageCumulative } from '../usage/modelUsageDelta.js';
 
-import { type RegionalMoney } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
+import { readSessionModelForUsage, unpricedSubscriptionValueMarker } from './turnUsageSessionDefaults.js';
 import {
   listPiRuntimePaletteCommands,
   mergePiPackageCommands,
@@ -4236,24 +4236,6 @@ const lastReportedCostUsdBySession = new Map<string, number>();
 const lastReportedModelUsageBySession = new Map<string, Map<string, ModelUsageCumulative>>();
 
 /**
- * Codex done 事件不带 model id。done 时读取 sessions.model 会被用户中途切模型污染,
- * 所以正常路径在 turn start(status:isRunning true) 时立刻点查并缓存本轮 promise;
- * 这里只作为缺失 start 事件时的兜底。
- */
-async function readSessionModelForUsage(sessionId: string): Promise<string> {
-  try {
-    const row = await getDbClient()
-      .drizzle.select({ model: sessions.model })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .get();
-    return row?.model || 'unknown';
-  } catch {
-    return 'unknown';
-  }
-}
-
-/**
  * 本轮实际模型快照。key=sessionId, value=turn start 时启动的 model 读取 promise。
  * 只在第一次 isRunning:true 时写入,避免后续 progress status 在用户切模型后覆盖本轮归因。
  */
@@ -4261,20 +4243,6 @@ const turnModelPromiseBySession = new Map<string, Promise<string>>();
 /** Billing identity and Pi tariff captured at product-turn start. */
 const turnUsageContextBySession = new Map<string, TurnUsageContext>();
 
-/**
- * Zero-value marker for a future subscription turn that was deliberately not
- * priceable. daily_model_usage has no money-kind column, so approximate=true
- * distinguishes this from legacy zero rows that history may still estimate.
- */
-function unpricedSubscriptionValueMarker(): RegionalMoney {
-  return {
-    amount: 0,
-    currency: currentLedgerCurrency(),
-    approximate: true,
-    kind: 'value-estimate',
-    estimateReasons: ['subscription-value', 'reference-price'],
-  };
-}
 /**
  * claude/codex 失败 turn 的记账交接: is_error 收尾时 terminal error 事件先到,
  * 边界块在 error 上就 consume 掉本轮 assistant persistId;配对的 done 稍后才进
