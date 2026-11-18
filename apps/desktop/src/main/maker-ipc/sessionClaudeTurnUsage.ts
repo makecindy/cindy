@@ -1,6 +1,7 @@
 // The desktop's sessionClaudeTurnUsage: its core (sessionClaudeTurnUsageCore.ts, shared with the Node Host), with the desktop
 // functions it imported before bound to its ports (turnUsagePorts.ts), each resolved when called.
-// Bound before the core's code runs; this module's imports are the ones sessionClaudeTurnUsage.ts had.
+// The core calls no port while its module loads (export * evaluates it before the binding below runs);
+// each port is resolved when it is called. This module's imports are the ones sessionClaudeTurnUsage.ts had.
 import './turnUsageContext.js';
 import '../usage/referenceModelPricing.js';
 import '../usage/usageHistory.js';
