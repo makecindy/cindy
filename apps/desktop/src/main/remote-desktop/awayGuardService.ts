@@ -287,12 +287,27 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   // One answer per cover: a failed or cancelled check is not turned into a prompt loop.
   let ownerPromptAnswered = false;
   let ownerPromptGeneration = 0;
+  // The masks are at the lowered level for the system prompt and were not raised since.
+  let ownerPromptLowered = false;
+  // A start still waiting for the helper's `ready`; the display can be released first.
+  let ownerPromptStart: AbortController | null = null;
+  const raiseOwnerPrompt = () => {
+    if (!ownerPromptLowered) return;
+    ownerPromptLowered = false;
+    masks.lowerForSystemPrompt(false);
+  };
   const disarmOwnerPrompt = () => {
     ownerPromptGeneration++;
     const prompt = ownerPrompt;
+    const start = ownerPromptStart;
     ownerPrompt = null;
+    ownerPromptStart = null;
+    // A start still in flight has already lowered the masks and may yet put the system
+    // prompt on screen: raise the level and cancel the helper now, rather than waiting
+    // for its `ready` (the cover would otherwise stay below the Dock and menu bar).
+    raiseOwnerPrompt();
+    start?.abort();
     if (!prompt) return;
-    masks.lowerForSystemPrompt(false);
     void prompt.stop();
   };
   const armOwnerPrompt = () => {
@@ -310,13 +325,17 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     ownerPromptBusy = true;
     const generation = ++ownerPromptGeneration;
     // The prompt sits above the masks; the lowered level still covers the Dock and menu bar.
+    ownerPromptLowered = true;
     masks.lowerForSystemPrompt(true);
+    const start = new AbortController();
+    ownerPromptStart = start;
     void watchOwnerPrompt(
       (answer) => {
         if (generation !== ownerPromptGeneration) return;
         ownerPrompt = null;
+        ownerPromptStart = null;
         ownerPromptGeneration++;
-        masks.lowerForSystemPrompt(false);
+        raiseOwnerPrompt();
         // One answer per cover: a failed or cancelled check must not become a prompt loop.
         ownerPromptAnswered = answer !== 'verified';
         if (answer !== 'verified') return;
@@ -324,16 +343,23 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
         controller?.ownerPresent();
       },
       t('awayGuard.verifyReason'),
+      undefined,
+      start.signal,
     )
       .then((prompt) => {
+        if (ownerPromptStart === start) ownerPromptStart = null;
         if (generation === ownerPromptGeneration) ownerPrompt = prompt;
         else void prompt.stop();
       })
       .catch(() => {
+        if (ownerPromptStart === start) ownerPromptStart = null;
+        // A cancelled start is not an answer: once the cover holds the display again it
+        // may arm a fresh prompt (unlike a helper that cannot start at all).
+        if (generation !== ownerPromptGeneration) return;
         // No prompt is possible here (no Touch ID, locked session, unusable helper):
         // keep the cover guarded instead of retrying on every tick.
         ownerPromptAnswered = true;
-        if (generation === ownerPromptGeneration) masks.lowerForSystemPrompt(false);
+        raiseOwnerPrompt();
       })
       .finally(() => {
         ownerPromptBusy = false;

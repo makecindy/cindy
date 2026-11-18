@@ -24,7 +24,10 @@ export async function watchOwnerPrompt(
     spawn: (binary: string, args: string[]): ChildProcessWithoutNullStreams =>
       spawn(binary, args, { stdio: 'pipe', windowsHide: true }),
   },
+  /** The cover no longer holds the display while the helper is still starting. */
+  signal?: AbortSignal,
 ): Promise<OwnerPrompt> {
+  if (signal?.aborted) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
   const child = runtime.spawn(await runtime.resolveBinary(), ['--owner-prompt', reason]);
   const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
   let buffer = '';
@@ -49,6 +52,16 @@ export async function watchOwnerPrompt(
   };
   child.stderr.resume();
   child.stdin.on('error', () => {});
+  // A prompt cancelled before it came up must not flash on screen afterwards.
+  const onAbort = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    child.kill();
+    settle?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
+    settle = undefined;
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
   child.on('error', () => settle?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE')));
   child.on('close', () => {
     // A prompt that ends on its own leaves the cover in charge: no answer arrived.
@@ -79,9 +92,11 @@ export async function watchOwnerPrompt(
   try {
     await ready;
   } catch (error) {
-    child.kill();
+    // An abort already killed the helper; only a helper that never came up is killed here.
+    if (!done) child.kill();
     throw error;
   }
+  signal?.removeEventListener('abort', onAbort);
   return {
     stop: () => {
       if (done) return closed;

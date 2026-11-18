@@ -1125,7 +1125,7 @@
   },
   "awayGuard": {
     "status": "Cindy arbeitet",
-    "hint": "Eine beliebige Taste sperrt; entsperre dann mit Fingerabdruck oder Passwort. Legst du den Finger auf Touch ID, bist du sofort zurück.",
+    "hint": "Eine beliebige Taste sperrt; entsperre dann mit Fingerabdruck oder Passwort. Solange die Systemabfrage zu sehen ist, bist du mit einem Finger auf Touch ID sofort zurück.",
     "lockFailed": {
       "status": "Cindy konnte diesen Mac nicht sperren",
       "hint": "Berühre den Computer, um das Sperren erneut zu versuchen. Klappt es weiterhin nicht, bestätige dich mit Touch ID oder deinem Passwort, um den Sichtschutz zu entfernen. Du kannst auch den Deckel schließen oder die Ein/Aus-Taste drücken.",
@@ -2485,10 +2485,10 @@
       "macRestartNote": "Starte unter macOS die App neu, damit die Änderungen wirksam werden.",
       "awayGuard": {
         "label": "Sichtschutz statt Sperren verwenden",
-        "hint": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort, oder leg den Finger auf Touch ID und bist sofort zurück. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
+        "hint": "Wenn die KI den Bildschirm braucht, schaltet dieser Computer den Bildschirm nicht aus und sperrt sich nicht. Ein Sichtschutz verdeckt ihn, und die KI arbeitet dahinter weiter. Ein Tastendruck oder Klick sperrt ihn sofort; entsperre ihn mit Touch ID oder deinem Passwort, oder leg bei sichtbarer Systemabfrage den Finger auf Touch ID und bist sofort zurück. Ohne laufende Aufgaben geht der Bildschirm wie gewohnt aus und sperrt sich. Auch nach dem Ende einer Fernsteuerung schützt der Sichtschutz diesen Computer.",
         "permission": "Erlaube Cindy unter Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen, damit der Bildschirm sofort gesperrt wird, wenn jemand diesen Mac berührt. Bis dahin geht der Bildschirm wie gewohnt in den Ruhezustand und wird gesperrt.",
         "preview": "Jetzt ausprobieren",
-        "previewStarting": "Lass Maus und Tastatur los. In 3 Sekunden erscheint der Sichtschutz; leg den Finger auf Touch ID, um zurückzukommen, oder drücke eine beliebige Taste zum Sperren.",
+        "previewStarting": "Lass Maus und Tastatur los. In 3 Sekunden erscheint der Sichtschutz; leg den Finger auf Touch ID, um zurückzukommen (solange die Systemabfrage zu sehen ist), oder drücke eine beliebige Taste zum Sperren.",
         "previewUnavailable": "Der Sichtschutz konnte nicht angezeigt werden. Starte Cindy neu und versuche es erneut.",
         "delay": {
           "30": "30 s",

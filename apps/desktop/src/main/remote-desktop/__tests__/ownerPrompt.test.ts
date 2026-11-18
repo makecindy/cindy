@@ -31,8 +31,13 @@ function fixture() {
     spawn: () => child as unknown as ChildProcessWithoutNullStreams,
   };
   const line = (text: string) => child.stdout.emit('data', Buffer.from(text));
-  const start = () =>
-    watchOwnerPrompt((answer) => answers.push(answer), 'remove the privacy screen', runtime);
+  const start = (signal?: AbortSignal) =>
+    watchOwnerPrompt(
+      (answer) => answers.push(answer),
+      'remove the privacy screen',
+      runtime,
+      signal,
+    );
   return { child, answers, line, start };
 }
 
@@ -98,4 +103,18 @@ it('takes the prompt down through the helper and waits for the process to end', 
   await stopping;
   expect(closed).toBe(true);
   expect(f.answers).toEqual([]);
+});
+
+it('cancels a start that is still waiting for the helper, without an answer', async () => {
+  const f = fixture();
+  const cancel = new AbortController();
+  const starting = f.start(cancel.signal);
+  await Promise.resolve();
+  // The cover released the display before the prompt came up: kill it at once rather
+  // than let it stay on screen and flash the Touch ID sheet seconds later.
+  cancel.abort();
+  await expect(starting).rejects.toThrow('DESKTOP_PRIVACY_UNAVAILABLE');
+  expect(f.child.kill).toHaveBeenCalledOnce();
+  expect(f.answers).toEqual([]);
+  f.child.emit('close');
 });

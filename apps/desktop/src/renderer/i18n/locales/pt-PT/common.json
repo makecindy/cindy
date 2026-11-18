@@ -1142,7 +1142,7 @@
   },
   "awayGuard": {
     "status": "O Cindy está a trabalhar",
-    "hint": "Qualquer tecla bloqueia; desbloqueie com a impressão digital ou a palavra-passe. Pouse o dedo no Touch ID e volta de imediato.",
+    "hint": "Qualquer tecla bloqueia; desbloqueie com a impressão digital ou a palavra-passe. Com o aviso do sistema no ecrã, pouse o dedo no Touch ID e volta de imediato.",
     "lockFailed": {
       "status": "O Cindy não conseguiu bloquear este Mac",
       "hint": "Toque no computador para tentar bloquear novamente. Se continuar sem bloquear, confirme com Touch ID ou a sua palavra-passe para retirar o ecrã. Também pode fechar a tampa ou premir o botão de energia.",
@@ -2523,10 +2523,10 @@
       "macRestartNote": "No macOS, reinicie a aplicação para aplicar as alterações.",
       "awayGuard": {
         "label": "Utilizar ecrã de privacidade em vez de bloquear",
-        "hint": "Quando a IA precisa do ecrã, este computador não o desliga nem se bloqueia. Um ecrã de privacidade cobre-o e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia de imediato; desbloqueie com Touch ID ou a sua palavra-passe, ou pouse o dedo no Touch ID para voltar de imediato. Sem tarefas em curso, o ecrã apaga-se e bloqueia como habitualmente. No fim de um controlo remoto, o ecrã de privacidade também protege este computador.",
+        "hint": "Quando a IA precisa do ecrã, este computador não o desliga nem se bloqueia. Um ecrã de privacidade cobre-o e a IA continua a trabalhar por trás. Premir uma tecla ou clicar bloqueia de imediato; desbloqueie com Touch ID ou a sua palavra-passe, ou, com o aviso do sistema no ecrã, pouse o dedo no Touch ID para voltar de imediato. Sem tarefas em curso, o ecrã apaga-se e bloqueia como habitualmente. No fim de um controlo remoto, o ecrã de privacidade também protege este computador.",
         "permission": "Permita o Cindy em Definições do Sistema > Privacidade e segurança > Acessibilidade para que possa bloquear o ecrã assim que alguém tocar neste Mac. Até lá, o ecrã desliga-se e bloqueia como habitualmente.",
         "preview": "Experimentar agora",
-        "previewStarting": "Solte o rato e o teclado. Em 3 segundos aparece o ecrã de privacidade; pouse o dedo no Touch ID para voltar ou prima qualquer tecla para bloquear.",
+        "previewStarting": "Solte o rato e o teclado. Em 3 segundos aparece o ecrã de privacidade; pouse o dedo no Touch ID para voltar (com o aviso do sistema no ecrã) ou prima qualquer tecla para bloquear.",
         "previewUnavailable": "Não foi possível mostrar o ecrã de privacidade. Reinicie o Cindy e tente novamente.",
         "delay": {
           "30": "30 s",

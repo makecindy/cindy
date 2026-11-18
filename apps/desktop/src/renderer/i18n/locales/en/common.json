@@ -1125,7 +1125,7 @@
   },
   "awayGuard": {
     "status": "Cindy is working",
-    "hint": "Press any key to lock, then unlock with your fingerprint or password; rest a finger on Touch ID to come straight back.",
+    "hint": "Press any key to lock, then unlock with your fingerprint or password; when the system prompt is up, rest a finger on Touch ID to come straight back.",
     "lockFailed": {
       "status": "Cindy couldn't lock this Mac",
       "hint": "Touch the computer to try locking again. If it still can’t lock, verify with Touch ID or your password to remove the cover. You can also close the lid or press the power button to lock.",
@@ -2485,10 +2485,10 @@
       "macRestartNote": "On macOS, restart the app for changes to take effect.",
       "awayGuard": {
         "label": "Use privacy screen instead of locking",
-        "hint": "When AI needs the screen, this computer won't turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password, or rest a finger on Touch ID to come straight back. With no tasks running, the display sleeps and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
+        "hint": "When AI needs the screen, this computer won't turn off its display or lock. A privacy screen covers it and AI keeps working behind it. Pressing a key or clicking locks it right away; unlock with Touch ID or your password, or when the system prompt is up, rest a finger on Touch ID to come straight back. With no tasks running, the display sleeps and locks as usual. After a remote session ends, the privacy screen protects this computer too.",
         "permission": "Allow Cindy in System Settings > Privacy & Security > Accessibility so it can lock the screen as soon as someone touches this Mac. Until then, the screen sleeps and locks as usual.",
         "preview": "Try it now",
-        "previewStarting": "Let go of the mouse and keyboard. In 3 seconds the privacy screen appears; rest a finger on Touch ID to come back, or press any key to lock.",
+        "previewStarting": "Let go of the mouse and keyboard. In 3 seconds the privacy screen appears; rest a finger on Touch ID to come back (while the system prompt is up), or press any key to lock.",
         "previewUnavailable": "Couldn't show the privacy screen. Restart Cindy and try again.",
         "delay": {
           "30": "30 sec",
