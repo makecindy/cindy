@@ -8,6 +8,7 @@
 
 import type { MakerMemoryManager } from '@cindy/maker-core';
 import type { MemoryMcpDeps, SessionSearchFn } from '@cindy/mcps';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { searchSessionsWithBotScopeCore } from '../../../desktop/src/main/maker-host/sessionSearchCore.ts';
 import { resolveHelperSurface } from '../../../desktop/src/main/mcp-integrations/helperSurface.ts';
@@ -17,6 +18,7 @@ import { getPluginHostToolCaller } from '../../../desktop/src/main/mcp-integrati
 import { explicitPorts } from './explicit-ports.ts';
 import { LOGGER } from './runtime.ts';
 import { HOST_PROFILE_IN_USE_BY_DESKTOP } from './profile-coexistence.js';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 
 export interface HostMemoryMcpPortInput {
   /** host-tools.ts readsAccountHistory: the cindy_helper history decision for this task. */
@@ -24,6 +26,7 @@ export interface HostMemoryMcpPortInput {
   /** This computer's device id for the task links in the results ('' while unknown). */
   deviceId(): string;
   searchProviders?: MemoryMcpDeps['searchProviders'];
+  profileHold?(): string | null;
 }
 
 /**
@@ -81,14 +84,29 @@ export async function hostAccountDataAccess<T>(sessionId: string | undefined, op
 }
 
 export function hostMemoryMcpPorts(manager: MakerMemoryManager, input: HostMemoryMcpPortInput): Omit<MemoryMcpDeps, 'workdir'> {
+  // The account-access port receives a callback, not a tool name. The shared
+  // withStore path requests the manager inside this scope; metadata and history
+  // calls do not. The provider's availability check runs outside the scope.
+  const memoryCall = new AsyncLocalStorage<{ admitted: boolean }>();
   return explicitPorts<Omit<MemoryMcpDeps, 'workdir'>>({
-    getManager: () => manager,
+    getManager: () => {
+      const admission = memoryCall.getStore();
+      if (admission && !admission.admitted) {
+        const held = input.profileHold?.();
+        if (held) throwIpcError('PRECONDITION_FAILED', held);
+        admission.admitted = true;
+      }
+      return manager;
+    },
     // As the desktop binds it (mcp-providers.ts:684). session_search keeps its own checks inside, as
     // the desktop's does.
     withAccountDataAccess: (sessionId, operation) => hostAccountDataAccess(sessionId, async assertCurrent => {
-      const result = await operation(assertCurrent);
-      // withStore classifies application errors as INTERNAL. Restore the Host's
-      // typed refusal at this boundary without changing the shared memory tools.
+      const result = await memoryCall.run({ admitted: false }, () => operation(assertCurrent));
+      // packages/lizi-mcps/src/memory/_shared.ts withStore uses
+      // memory/errors.ts classifyMemoryError, then buildJsonResult encodes
+      // {ok:false, code:"INTERNAL", message} as the first text block. The
+      // [CODE] prefix comes from createIpcError in apps/desktop/src/shared/ipc-errors.ts.
+      // Keep this mapping in sync if either format changes.
       if (!result || typeof result !== 'object' || !('isError' in result) || result.isError !== true
         || !('content' in result) || !Array.isArray(result.content)) return result;
       const block = result.content[0];

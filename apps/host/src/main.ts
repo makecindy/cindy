@@ -1032,10 +1032,11 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const piBinary = harnessBinaryPaths.pi;
   if (claudeBinary || codexBinary || piBinary) {
     const gateway = modelAccess!.gateway;
+    const memoryProfileHold = () => inputQueue.isHeldForDesktop() ? profileInUseMessage() : null;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
     let memoryReview: ReturnType<ReturnType<typeof createHostAgentGraph>['autoReview']['memoryReview']> | undefined;
-    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId, review: {
+    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId, profileHold: memoryProfileHold, review: {
       isOneShotRouteDisabled: agent => memoryReview?.isOneShotRouteDisabled(agent) ?? Promise.resolve(true),
       reviewOneShot: (...args) => memoryReview?.reviewOneShot(...args) ?? Promise.resolve(null),
     } });
@@ -1103,11 +1104,10 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       // Vision-bridge notices, which the desktop sends its windows; the client maps them to
       // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
       publishVisionBridgeNotice: notice => eventHub.publish(notice),
-      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory, { readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories }), pluginGateway.provider]),
+      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory, { readsAccountHistory: hostTools.readsAccountHistory, deviceId: () => currentDeviceId ?? '', searchProviders: taskPlugins.searchGhostRuntimeMemories, profileHold: memoryProfileHold }), pluginGateway.provider]),
       userDataDir: dataDir,
     });
-    memoryReview = agentGraph.autoReview.memoryReview(() =>
-      inputQueue.isHeldForDesktop() ? profileInUseMessage() : null);
+    memoryReview = agentGraph.autoReview.memoryReview(memoryProfileHold);
     // The desktop's Auto-review authorization context (review-context.ts).
     agentGraph.autoReview.setContextResolver(createHostReviewContextResolver({
       acceptedInput: (id: string) => inputQueue.acceptedInputProvenance(id),

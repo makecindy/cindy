@@ -79,7 +79,7 @@ test('memory retained by an old task cannot reopen storage across an account bou
  * model once no auxiliary chain is injected. The owner database is open and current, as in main.ts,
  * with the calling task 'task-memory' in it: every memory call checks its caller against it.
  */
-async function hostMemoryFixture(t, ownerId, makeReview) {
+async function hostMemoryFixture(t, ownerId, makeReview, profileHold) {
   // The database lives in the fixture's profile: close it before the profile is removed.
   t = lifoCleanup(t);
   // Real path: a teammate project is recognised from its absolute path, which macOS tmp links hide.
@@ -101,7 +101,7 @@ async function hostMemoryFixture(t, ownerId, makeReview) {
   t.after(async () => { clearCurrentDbClient(); await database.dispose(); });
   opened.db.exec(`INSERT INTO sessions(id,source,status,created_at,updated_at) VALUES ('task-memory','desktop','active',1,1);`);
 
-  const manager = createHostMemoryManager({ userDataDir: root, ownerId, review: makeReview?.(root) });
+  const manager = createHostMemoryManager({ userDataDir: root, ownerId, review: makeReview?.(root), profileHold });
   t.after(() => manager.dispose());
   const oneShots = [];
   attachAgentsToMakerMemory(manager, { 'claude-code': { oneShot: async prompt => { oneShots.push(prompt); return 'merge nothing'; } } });
@@ -111,6 +111,7 @@ async function hostMemoryFixture(t, ownerId, makeReview) {
   const provider = createHostMemoryMcpProviders(manager, {
     readsAccountHistory: async sessionId => { helperDecisions.push(sessionId); hooks.duringHistoryDecision(); return false; },
     deviceId: () => 'host-device',
+    profileHold,
   }).find(p => p.name === 'cindy_memory');
   const connect = async (workingDir, sessionId = 'task-memory') => {
     const { instance } = provider.toClaudeSdkConfig({ sessionId, agentKind: 'claude-code', workingDir });
@@ -118,12 +119,76 @@ async function hostMemoryFixture(t, ownerId, makeReview) {
     const [a, b] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(a), instance.connect(b)]);
     t.after(async () => { await client.close(); await instance.close(); });
-    return (name, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } });
+    return Object.assign((name, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } }), {
+      listTools: () => client.callTool({ name: 'list_tools', arguments: {} }),
+    });
   };
-  return { root, db: opened.db, drizzle: opened.drizzle, database, ownerId, oneShots, connect, helperDecisions, hooks };
+  return { root, db: opened.db, drizzle: opened.drizzle, database, ownerId, oneShots, connect, helperDecisions, hooks, manager };
 }
 
 const NOTE = { type: 'project', name: 'release-notes', title: 'Release notes', description: 'Where the release notes live', body: 'docs/release.md' };
+
+// §3.2 integration: a live MCP caller can still reach memory after Host input
+// is paused. All store calls must be refused before opening even a cold scope.
+// Use the real owner files and FTS and both MCP entry points.
+test('profile hold refuses memory store tools and preserves the existing files', async t => {
+  const message = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+  let held = null;
+  const f = await hostMemoryFixture(t, 'memory-hold-owner', () => ({
+    isOneShotRouteDisabled: async () => false,
+    reviewOneShot: async () => 'Keep the note',
+  }), () => held);
+  const call = await f.connect(f.root);
+  const body = result => JSON.parse(result.content[0].text);
+  const seed = await call('memory_write', NOTE);
+  assert.equal(body(seed).ok, true);
+  const filename = body(seed).data.filename;
+  const scope = path.join(f.root, 'owners', dataOwnerStorageKey(f.ownerId), 'maker-memory');
+  const snapshot = () => fs.readdirSync(scope, { recursive: true, withFileTypes: true })
+    .map(entry => path.join(entry.parentPath, entry.name)).sort()
+    .map(file => [file, fs.statSync(file).isDirectory() ? null : fs.readFileSync(file)]);
+  const before = snapshot();
+  const cases = [
+    ['memory_list', {}],
+    ['memory_read', { filename }],
+    ['memory_search', { query: 'release' }],
+    ['memory_review', {}],
+    ['memory_write', { ...NOTE, name: 'second-note' }],
+    ['memory_consolidate', { sources: ['project_second-note.md'], target: { ...NOTE, name: 'merged-note' } }],
+    ['memory_delete', { filename }],
+  ];
+  held = message;
+  for (const [tool, args] of cases) {
+    const result = await call(tool, args);
+    assert.equal(result.isError, true, tool);
+    assert.deepEqual(body(result), { ok: false, code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] ' + message }, tool);
+  }
+  const cold = await f.connect(path.join(f.root, 'cold-task'));
+  assert.equal(body(await cold('memory_list')).code, 'PRECONDITION_FAILED');
+  assert.equal(body(await call.listTools()).ok, true);
+  assert.equal(body(await call('session_search', { query: 'release' })).ok, true);
+  assert.deepEqual(snapshot(), before);
+  held = null;
+  for (const [tool, args] of cases) {
+    const result = await call(tool, args);
+    assert.equal(body(result).ok, true, JSON.stringify({ tool, result }));
+  }
+});
+
+// §3.2 integration: engines open memory for prompt injection and Pi compaction
+// writes a digest straight through the manager, outside MCP.
+test('profile hold fences engine store initialization and Pi digest writes', async t => {
+  let held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: The desktop window is using this profile.';
+  const f = await hostMemoryFixture(t, 'memory-engine-hold-owner', undefined, () => held);
+  const workdir = path.join(f.root, 'engine-task');
+  const note = { ...NOTE, type: 'digest' };
+  await assert.rejects(f.manager.getStore(workdir), { code: 'PRECONDITION_FAILED' });
+  await assert.rejects(f.manager.write(workdir, note), { code: 'PRECONDITION_FAILED' });
+  assert.equal(fs.existsSync(path.join(f.root, 'owners', dataOwnerStorageKey(f.ownerId), 'maker-memory')), false);
+  held = null;
+  const written = await f.manager.write(workdir, note);
+  assert.equal((await (await f.manager.getStore(workdir)).read(written.filename)).body, NOTE.body);
+});
 
 // §3.2 integration: real MCP, manager, dispatch and temporary SQLite. A stored
 // memory under a chosen auxiliary chain produces the selected request and one

@@ -13,6 +13,7 @@ import { attachAgentsToMakerMemory, createMakerMemoryManagerForHost } from '@cin
 import { createLiziMcpProviders } from '../../../../packages/lizi-mcps/src/index.ts';
 
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { hostMemoryManagerPorts } from './memory-manager-ports.ts';
 import { hostMemoryMcpPorts } from './memory-mcp-ports.ts';
 
@@ -39,18 +40,29 @@ export function readMemorySettings(ownerRoot) {
 
 /**
  * The port bag is written out in memory-manager-ports.ts, where `explicitPorts` is type-checked.
- * @param {Pick<import('./memory-manager-ports.ts').HostMemoryManagerPortInput, 'userDataDir' | 'ownerId' | 'review'>} options
+ * @param {Pick<import('./memory-manager-ports.ts').HostMemoryManagerPortInput, 'userDataDir' | 'ownerId' | 'review'> & {profileHold?: () => string | null}} options
  */
-export function createHostMemoryManager({ userDataDir, ownerId, review }) {
+export function createHostMemoryManager({ userDataDir, ownerId, review, profileHold }) {
   const scope = getActiveAppSession();
   if (scope.dataOwnerId !== ownerId || isAppSessionBoundaryPending()) throw new Error('Memory owner is not ready');
-  return createMakerMemoryManagerForHost(hostMemoryManagerPorts({
+  const manager = createMakerMemoryManagerForHost(hostMemoryManagerPorts({
     userDataDir,
     ownerId,
     generation: scope.generation,
     review,
     readEnabled: (ownerRoot) => readMemorySettings(ownerRoot).maker,
   }));
+  // Engine prompt injection can initialize a store and Pi compaction calls
+  // manager.write(), which also opens its store here without going through MCP.
+  if (profileHold) {
+    const getStore = manager.getStore.bind(manager);
+    manager.getStore = async (...args) => {
+      const held = profileHold();
+      if (held) throwIpcError('PRECONDITION_FAILED', held);
+      return getStore(...args);
+    };
+  }
+  return manager;
 }
 
 /**
