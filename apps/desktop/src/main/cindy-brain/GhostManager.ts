@@ -329,6 +329,8 @@ export interface GhostManagerOptions {
    * commit 时也能使排队中的旧 mutation 失效；测试可只依赖动态 content/state root。
    */
   getOwnerContextKey?: () => string;
+  /** 受管根重检窗口用的时钟；测试注入固定时间，避免断言依赖真实耗时。 */
+  now?: () => number;
   /** 装/卸成功后通知(index.ts 用它广播 ghosts:changed 到所有窗口)。 */
   onChanged?: (ghosts: InstalledGhost[]) => void;
   /** 当前宿主语言；插件未提供时由 shared 契约固定回退英文。 */
@@ -861,7 +863,7 @@ export class GhostManager {
     );
     const contentRoot = this.resolveContentRoot();
     const stateRoot = this.resolveStateRoot();
-    this.assertDisjointPhysicalRoots(contentRoot, stateRoot);
+    this.assertDisjointRoots(contentRoot, stateRoot);
     this.ownerContextKey = this.currentOwnerContextKey();
     this.recoverInterruptedMutationsSync();
   }
@@ -884,11 +886,18 @@ export class GhostManager {
    * 无法解析时才重新判定。过期的物理根只会 fail closed(目标不存在而读取失败),不会把
    * 根外的路径判成根内。
    */
-  private resolvePhysicalRoots(): { contentRoot: string; stateRoot: string } {
+  private resolvePhysicalRoots(force = false): { contentRoot: string; stateRoot: string } {
     const key = this.managedRootInputKey();
-    const now = Date.now();
+    const now = this.options.now?.() ?? Date.now();
     const cached = this.physicalRoots;
-    if (cached && cached.key === key && now - cached.checkedAt < MANAGED_ROOT_RECHECK_MS) {
+    if (
+      !force &&
+      cached &&
+      cached.key === key &&
+      now - cached.checkedAt < MANAGED_ROOT_RECHECK_MS &&
+      this.isStillRealDir(cached.contentRoot) &&
+      this.isStillRealDir(cached.stateRoot)
+    ) {
       return cached;
     }
     const contentRoot = this.assertManagedRootPath(
@@ -906,6 +915,18 @@ export class GhostManager {
         );
     this.physicalRoots = { key, checkedAt: now, contentRoot, stateRoot };
     return this.physicalRoots;
+  }
+
+  /**
+   * 命中也要确认缓存的物理根仍是普通目录：根在窗口内被换成本机软链/junction 时，
+   * 子目录判定会静默穿透祖先链接。写入事务另用 force 重解析，不受窗口保护。
+   */
+  private isStillRealDir(root: string): boolean {
+    try {
+      return classifyGhostDirEntrySync(root) === 'directory';
+    } catch {
+      return false;
+    }
   }
 
   private managedRootInputKey(): string {
@@ -1441,9 +1462,9 @@ export class GhostManager {
     return this.activeMutationContext?.stateRoot ?? this.resolveStateRoot();
   }
 
-  /** 入参必须是已经 realpath 过的物理根(调用方一律传 resolveContentRoot/StateRoot 结果);
-   * 重复解析同一对根会把每次实例核对又变成两次 lstat + realpath。 */
-  private assertDisjointPhysicalRoots(physicalContentRoot: string, physicalStateRoot: string): void {
+  private assertDisjointRoots(contentRoot: string, stateRoot: string): void {
+    const physicalContentRoot = this.assertManagedRootPath(contentRoot, 'ghost content root');
+    const physicalStateRoot = this.assertManagedRootPath(stateRoot, 'ghost approval state root');
     if (
       isPathInsideDir(physicalContentRoot, physicalStateRoot) ||
       isPathInsideDir(physicalStateRoot, physicalContentRoot)
@@ -1496,7 +1517,7 @@ export class GhostManager {
     if (this.activeMutationContext) return;
     const next = this.currentOwnerContextKey();
     if (next === this.ownerContextKey) return;
-    this.assertDisjointPhysicalRoots(this.resolveContentRoot(), this.resolveStateRoot());
+    this.assertDisjointRoots(this.resolveContentRoot(), this.resolveStateRoot());
     this.ownerContextKey = next;
     this.notificationIndex.dispose();
     this.instanceRegistryService.clear();
@@ -2341,9 +2362,10 @@ export class GhostManager {
       ) {
         throw new Error('ghost owner context changed while mutation was queued');
       }
-      const contentRoot = this.resolveContentRoot();
-      const stateRoot = this.resolveStateRoot();
-      this.assertDisjointPhysicalRoots(contentRoot, stateRoot);
+      // 写事务必须在队列让位后重新核验物理根：窗口内的根替换（例如把根换成指向
+      // 根外的 junction）会让递归删除落到根外，不能沿用读路径的缓存结果。
+      const { contentRoot, stateRoot } = this.resolvePhysicalRoots(true);
+      this.assertDisjointRoots(contentRoot, stateRoot);
       this.activeMutationContext = {
         ownerContextKey: currentOwnerContextKey,
         contentRoot,
