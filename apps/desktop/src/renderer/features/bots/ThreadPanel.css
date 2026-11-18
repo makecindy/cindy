@@ -25,3 +25,11 @@
   overflow-wrap: normal;
   word-break: normal;
 }
+
+/* 行内 code 在 thread 表格里必须跟随单元格语义，不被 markdown 正文的
+   overflow-wrap:anywhere 覆盖，否则日期/ID/域名会被拆成单字符，
+   而这些表格本来就靠外层横滚承载宽列。 */
+.thread-panel :is(th, td) code {
+  overflow-wrap: normal;
+  word-break: normal;
+}
