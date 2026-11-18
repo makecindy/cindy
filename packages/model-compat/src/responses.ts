@@ -99,13 +99,18 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
   const displacement = displacedKinds.size > 0
     ? { bareCustomNames, displacedKinds }
     : undefined;
+  // Native requests retain their declarations, but schema indexing still needs a collision-safe
+  // identity plan. Share that plan with JSON/SSE lookup instead of discarding its allocated names.
+  const repairNamespace = policy.repairFunctionArguments && policy.namespaceTools !== 'functions'
+    ? rewriteRoutedNamespaceToolsForUpstream(body)
+    : namespace;
   const schemas = policy.repairFunctionArguments
-    ? collectFunctionCallRepairSchemas(body, policy.namespaceTools === 'functions' ? {
-        renamedWireNames: namespace.renamedWireNames,
-        loweredToolChoice: namespace.body && typeof namespace.body === 'object'
-          ? (namespace.body as { tool_choice?: unknown }).tool_choice
+    ? collectFunctionCallRepairSchemas(body, {
+        renamedWireNames: repairNamespace.renamedWireNames,
+        loweredToolChoice: repairNamespace.body && typeof repairNamespace.body === 'object'
+          ? (repairNamespace.body as { tool_choice?: unknown }).tool_choice
           : undefined,
-      } : undefined)
+      })
     : new Map();
   const declared = collectDeclaredWireToolNames(body);
   const scrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(body, new Set([...custom.names, ...custom.repairNames]), new Set(schemas.keys()));
@@ -123,7 +128,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
       if (policy.contentChannelReasoning) next = rewriteReasoningSummaryInJsonString(next);
       next = restoreRoutedCustomCallsInJson(next, custom.names, custom.repairNames, declared, displacement);
       next = restoreRoutedToolSearchCallsInJson(next, search.names);
-      next = repairFunctionCallsInJson(next, schemas, namespace.renamedWireNames);
+      next = repairFunctionCallsInJson(next, schemas, repairNamespace.renamedWireNames);
       return policy.backfillResponseFields ? backfillResponsesFieldsJson(next) : next;
     },
     createStreamRewrite() {
@@ -133,7 +138,7 @@ export function prepareResponsesCompatibility(body: unknown, policy: ResponsesCo
         payloadRewriteAsBlockRewrite(restoreNamespace),
         createRoutedCustomToolRestoreBlockRewrite(custom.names, budget, custom.repairNames, declared, displacement),
         createRoutedToolSearchRestoreBlockRewrite(search.names, budget),
-        createResponsesFunctionToolRepairBlockRewrite(schemas, budget, namespace.renamedWireNames),
+        createResponsesFunctionToolRepairBlockRewrite(schemas, budget, repairNamespace.renamedWireNames),
       ];
       // Transport/id reconstruction precedes tool completion; all stages share one budget.
       const before: SseBlockRewrite[] = [];

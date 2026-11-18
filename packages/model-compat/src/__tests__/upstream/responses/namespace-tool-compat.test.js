@@ -583,6 +583,34 @@ describe("dotted namespace restoration uses the declaration collision boundary",
         expect([...rewritten.aliases.keys()].sort()).toEqual(["workspace.read", "workspace__read_3"]);
     });
 
+    // #11199 provider-limit regression (unit): real rewrite/restore, with history and selectors.
+    // Earlier short-name collisions never reached the provider's 64-character rejection boundary.
+    test.each([62, 63, 64])("bounds collision names at %i characters and skips reserved candidates", length => {
+        const namespace = "workspace";
+        const name = "r".repeat(length - namespace.length - 2);
+        const preferred = `${namespace}__${name}`;
+        const reserved = length === 64
+            ? Array.from({ length: 8 }, (_, index) => `${preferred.slice(0, 62)}_${index + 2}`)
+            : [`${preferred.slice(0, 62)}_2`];
+        const rewritten = rewriteRoutedNamespaceToolsForUpstream({
+            tools: [
+                { type: "function", name: preferred, parameters: {} },
+                ...reserved.map(name => ({ type: "function", name, parameters: {} })),
+                { type: "namespace", name: namespace, tools: [{ type: "function", name, parameters: {} }] },
+            ],
+            tool_choice: { type: "function", namespace, name },
+            input: [{ type: "function_call", namespace, name, arguments: "{}", call_id: "long" }],
+        });
+        const allocated = rewritten.body.tools.at(-1).name;
+        expect(allocated.length).toBeLessThanOrEqual(64);
+        expect(new Set(rewritten.body.tools.map(tool => tool.name)).size).toBe(reserved.length + 2);
+        expect(allocated).toBe(length === 64 ? `${preferred.slice(0, 61)}_10` : `${preferred.slice(0, 62)}_3`);
+        expect(rewritten.body.tool_choice).toEqual({ type: "function", name: allocated });
+        expect(rewritten.body.input[0]).toMatchObject({ name: allocated, call_id: "long" });
+        expect(restoreRoutedNamespaceCalls({ type: "function_call", name: allocated, arguments: "{}" }, rewritten.aliases).value)
+            .toEqual({ type: "function_call", namespace, name, arguments: "{}" });
+    });
+
     test("rewrites a selector to the disambiguated wire name", () => {
         const rewritten = rewriteRoutedNamespaceToolsForUpstream({
             tools: [

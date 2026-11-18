@@ -2050,7 +2050,7 @@
 +export type * from "./types/provider";
 --- a/src/responses/namespace-tool-compat.ts
 +++ b/src/responses/namespace-tool-compat.ts
-@@ -102,10 +102,59 @@
+@@ -102,10 +102,62 @@
    bareWireNames: Set<string>;
    identities: Map<string, string>;
    selectors: Map<string, string | null>;
@@ -2073,6 +2073,7 @@
 + * is malformed rather than merely unlucky, and the request keeps failing closed.
 + */
 +const MAX_WIRE_NAME_SUFFIX = 64;
++const MAX_WIRE_NAME_LENGTH = 64;
 +
 +/**
 + * Pick a wire name for a namespace child whose flattened form a bare declaration already claims.
@@ -2092,7 +2093,9 @@
 +  preferred: string,
 +): string {
 +  for (let suffix = 2; suffix <= MAX_WIRE_NAME_SUFFIX; suffix += 1) {
-+    const candidate = `${preferred}_${suffix}`;
++    const ending = `_${suffix}`;
++    // Keep provider-valid names valid after disambiguation, including multi-digit suffixes.
++    const candidate = `${preferred.slice(0, MAX_WIRE_NAME_LENGTH - ending.length)}${ending}`;
 +    if (!wireOwners.has(candidate)) return candidate;
 +  }
 +  throw new NamespaceToolCollisionError(
@@ -2110,7 +2113,7 @@
 
  function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
    const aliases = new Map<string, RoutedNamespaceToolIdentity>();
-@@ -113,6 +162,8 @@
+@@ -113,6 +165,8 @@
    const identities = new Map<string, string>();
    const selectors = new Map<string, string | null>();
    const wireOwners = new Map<string, string>();
@@ -2119,7 +2122,7 @@
 
    for (const group of groups) {
      for (const tool of group) {
-@@ -127,6 +178,10 @@
+@@ -127,6 +181,10 @@
      }
    }
 
@@ -2130,7 +2133,7 @@
    for (const group of groups) {
      for (const tool of group) {
        const parsed = parseNamespaceGroup(tool);
-@@ -134,29 +189,61 @@
+@@ -134,29 +192,61 @@
        for (const child of parsed.children) {
          const childName = child.name as string;
          const identity = loweredIdentity(parsed.namespace, childName);
@@ -2211,7 +2214,7 @@
  }
 
  /**
-@@ -344,11 +431,24 @@
+@@ -344,11 +434,24 @@
  export function rewriteRoutedNamespaceToolsForUpstream(
    body: unknown,
    convertedCustomToolNames?: ReadonlySet<string>,
@@ -2237,7 +2240,7 @@
    const groups = collectResponsesToolGroups(body);
    const plan = buildRewritePlan(groups);
 
-@@ -368,8 +468,71 @@
+@@ -368,8 +471,71 @@
      if (inputChanged) input = rewrittenInput;
    }
 
@@ -2311,7 +2314,7 @@
    const ambiguousDotted = collectAmbiguousDottedAliases(groups);
    // Authorize canonical identities first, then add only unambiguous spellings.
    // Selection cannot hide a collision elsewhere in the original declaration set.
-@@ -379,11 +542,6 @@
+@@ -379,11 +545,6 @@
        && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
        && !aliases.has(dotted)) aliases.set(dotted, identity);
    }
@@ -2323,7 +2326,7 @@
    return {
      body: {
        ...body,
-@@ -392,6 +550,8 @@
+@@ -392,6 +553,8 @@
        ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
      },
      aliases,

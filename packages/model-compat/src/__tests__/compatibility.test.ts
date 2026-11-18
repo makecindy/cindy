@@ -56,6 +56,41 @@ describe('request-owned Responses compatibility', () => {
     expect((sse ? parsed.response : parsed).output[0]).toMatchObject({ namespace: 'workspace', name: 'read', arguments: '{"line":12}' });
   });
 
+  // #11199 native collision regression: public Codex transport, unit tier. The earlier native
+  // case had no competing bare tool, so schema allocation and response lookup could diverge.
+  it.each(['application/json', 'text/event-stream'])('repairs native collisions without borrowing the bare schema (%s)', async contentType => {
+    for (const choice of [undefined, { type: 'function', name: 'read' },
+      { type: 'function', namespace: 'workspace', name: 'read' },
+      { type: 'allowed_tools', tools: [{ type: 'function', namespace: 'workspace', name: 'read' }] },
+      { type: 'function', name: 'workspace__read' }]) {
+      const input = { tools: [
+        { type: 'function', name: 'workspace__read', parameters: { type: 'object', properties: { line: { type: 'number' } } } },
+        { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } }] },
+      ], ...(choice ? { tool_choice: choice } : {}) };
+      const adapter = createCodexResponsesCompatibilityAdapter();
+      expect(adapter.adaptRequest(input, 10087)).toBeNull();
+      const child = { type: 'function_call', namespace: 'workspace', name: 'read', id: 'fc_child', call_id: 'child', arguments: '{"line":12.0}' };
+      const bare = { type: 'function_call', name: 'workspace__read', id: 'fc_bare', call_id: 'bare', arguments: '{"line":12.0}' };
+      const output = { status: 'completed', output: [child, bare] };
+      const sse = contentType === 'text/event-stream';
+      const events = [
+        { type: 'response.output_item.added', output_index: 0, item: { ...child, arguments: '' } },
+        { type: 'response.function_call_arguments.done', output_index: 0, item_id: 'fc_child', arguments: child.arguments },
+        { type: 'response.output_item.done', output_index: 0, item: child },
+        { type: 'response.completed', response: output },
+      ];
+      const wire = sse ? events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') : JSON.stringify(output);
+      const text = await responseText(adapter.createResponseTransform(10087, { contentType, contentEncoding: '' })!, wire);
+      const parsed = sse ? text.trim().split('\n\n').map(block => JSON.parse(block.slice(6))) : [];
+      const expectedArguments = choice?.name === 'workspace__read' ? child.arguments : '{"line":12}';
+      expect((sse ? parsed.at(-1).response : JSON.parse(text)).output).toEqual([{ ...child, arguments: expectedArguments }, bare]);
+      if (sse) {
+        expect(parsed[1].arguments).toBe(expectedArguments);
+        expect(parsed[2].item).toEqual({ ...child, arguments: expectedArguments });
+      }
+    }
+  });
+
   it('repairs allocated function arguments in incremental SSE while retaining event identity', () => {
     const parameters = { type: 'object', properties: { line: { type: 'integer' } } };
     const prepared = prepareResponsesCompatibility({ tools: [

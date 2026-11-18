@@ -121,6 +121,7 @@ export class NamespaceToolCollisionError extends Error {}
  * is malformed rather than merely unlucky, and the request keeps failing closed.
  */
 const MAX_WIRE_NAME_SUFFIX = 64;
+const MAX_WIRE_NAME_LENGTH = 64;
 
 /**
  * Pick a wire name for a namespace child whose flattened form a bare declaration already claims.
@@ -140,7 +141,9 @@ function allocateLoweredWireName(
   preferred: string,
 ): string {
   for (let suffix = 2; suffix <= MAX_WIRE_NAME_SUFFIX; suffix += 1) {
-    const candidate = `${preferred}_${suffix}`;
+    const ending = `_${suffix}`;
+    // Keep provider-valid names valid after disambiguation, including multi-digit suffixes.
+    const candidate = `${preferred.slice(0, MAX_WIRE_NAME_LENGTH - ending.length)}${ending}`;
     if (!wireOwners.has(candidate)) return candidate;
   }
   throw new NamespaceToolCollisionError(
