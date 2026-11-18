@@ -63,6 +63,15 @@ interface DeviceShard {
 }
 
 const EMPTY_SCHEDULE_BINDINGS: readonly ScheduleBinding[] = Object.freeze([]);
+/** Display-only until the creating host returns. Never feed these rows to the mirror cache. */
+type CreationPreview = {
+  row: Session;
+  message: import('@/lib/makerChatStore').ChatMessage;
+  handedOff?: boolean;
+  dispatching?: boolean;
+  editAfterFailure?: () => void;
+};
+const creationPreviews = new Map<string, CreationPreview>();
 const shards = new Map<string, DeviceShard>();
 let mergedScheduleIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
 function recomputeScheduleIndex(): void {
@@ -500,7 +509,7 @@ function recompute(): void {
     mergedSnapshot = flat;
   }
   const nextVisible = CINDY_MAKE_ENABLED
-    ? mergedSnapshot
+    ? [...mergedSnapshot]
     : mergedSnapshot.filter((session) => !isCindyMakeSource(session.source));
   // Share only the UI projection. Authoritative rows must keep their new content
   // identities so captureSessionRead still rejects details predating a snapshot.
@@ -508,6 +517,12 @@ function recompute(): void {
   // whitelist that could leave a newly added sidebar field stale. Same-id tasks
   // on different computers are distinct; only the last visible set is retained.
   const visibleKey = (session: Session) => JSON.stringify([session.deviceLinkDeviceId, session.id]);
+  for (const preview of creationPreviews.values()) {
+    if (!nextVisible.some(row => row.id === preview.row.id && row.deviceLinkDeviceId === preview.row.deviceLinkDeviceId)) {
+      nextVisible.push(preview.row);
+      sessionTitleIndex.set(preview.row.id, preview.row.title);
+    }
+  }
   const previousVisible = new Map(visibleMergedSnapshot.map((session) => [visibleKey(session), session]));
   const sharedVisible = nextVisible.map((session) => {
     const previous = previousVisible.get(visibleKey(session));
@@ -692,6 +707,19 @@ function markAllUnreachable(target: UnreachableStatus, matchesDevice?: (deviceId
 }
 
 const actions = {
+  setCreationPreview(preview: CreationPreview): void {
+    const previous = creationPreviews.get(preview.row.id);
+    creationPreviews.set(preview.row.id, preview);
+    // Attachment copies and delivery state only change the open task.
+    if (previous?.row === preview.row) subs.forEach(fn => fn());
+    else recompute();
+  },
+  getCreationPreview(sessionId?: string): CreationPreview | undefined {
+    return sessionId ? creationPreviews.get(sessionId) : undefined;
+  },
+  clearCreationPreview(sessionId: string): void {
+    if (creationPreviews.delete(sessionId)) recompute();
+  },
   /** The synchronizer owns initialization; late completion cannot settle a newer run. */
   beginInitialDiscovery(): () => void {
     const generation = ++initialDiscoveryGeneration;
@@ -812,7 +840,7 @@ const actions = {
     if (existing) {
       const kept = new Set(nextSessions.map((session) => session.id));
       for (const session of existing.sessions) {
-        if (!kept.has(session.id)) dropSessionOverlays(session.id);
+        if (!kept.has(session.id) && !creationPreviews.has(session.id)) dropSessionOverlays(session.id);
       }
     }
     const loadedStatuses = new Set(existing?.loadedStatuses ?? []);
@@ -976,7 +1004,13 @@ const actions = {
     if (deleted) clearCachedMessages(deviceId, sessionId);
     // 浏览栈等旁路状态只看得到 sessionId:删除通知必须发在下面所有早退之前,会话不在
     // 当前分片时也要能收到(同一行的消息缓存清理已出于同样理由前置)。
-    if (deleted) emitRemoved(sessionId);
+    if (deleted) {
+      if (creationPreviews.get(sessionId)?.row.deviceLinkDeviceId === deviceId) {
+        dropSessionOverlays(sessionId);
+        actions.clearCreationPreview(sessionId);
+      }
+      emitRemoved(sessionId);
+    }
     // 状态迁移叠加层:删除一律让位。active / archived 推送不带 updatedAt,可能是写库前
     // 迟到的旧推送,不动叠加层,交给写库后的列表按内容确认(见 pendingStatuses)。
     if (deleted && pendingStatuses.get(sessionId)?.token.deviceId === deviceId) {
@@ -1076,6 +1110,13 @@ const actions = {
     // **自增**该设备 epoch(不 delete,见 snapshotEpoch 注释的 ABA):在途 refreshRemoteDeviceSessions
     // 的 epoch 立即失效,且下次 bootstrap 拿到更高 epoch,不会与断连前在途的 epoch 撞值。即使尚未建
     // shard(首拉未完成就被移除)也要 bump,否则在途首拉 await 回来仍能通过 isLatestSnapshotEpoch 加回。
+    let removedPreview = false;
+    for (const preview of creationPreviews.values()) {
+      if (preview.row.deviceLinkDeviceId !== deviceId) continue;
+      dropSessionOverlays(preview.row.id);
+      creationPreviews.delete(preview.row.id);
+      removedPreview = true;
+    }
     invalidateDeviceSnapshotEpochs(deviceId);
     // 标题叠加层随分片一起丢弃:撤销授权 / 关闭控制后该设备的会话已不在视图里,
     // 留着会在下次重新接入时把边界前的旧预览顶回一个仍是系统占位的会话上。
@@ -1090,7 +1131,7 @@ const actions = {
     const bootstrapStateCleared = setBootstrapState(deviceId, 'idle');
     const archivedLoadingCleared = setSessionStatusLoading(deviceId, 'archived', false);
     const archivedFailureCleared = setSessionStatusFailed(deviceId, 'archived', false);
-    if (shardDeleted) recompute();
+    if (shardDeleted || removedPreview) recompute();
     else if (bootstrapStateCleared || archivedLoadingCleared || archivedFailureCleared) {
       subs.forEach((fn) => fn());
     }
@@ -1122,6 +1163,8 @@ const actions = {
     for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
     // 登出 / device-link stopped 是明确的生命周期边界:叠加层是本次会话期的临时
     // 显示态,跨过边界后不该复活(也避免长期留存用户输入的文本)。
+    const previewsChanged = creationPreviews.size > 0;
+    creationPreviews.clear();
     pendingTitlePreview.clear();
     landedSystemTitles.clear();
     synthesizedPreviewSessions.clear();
@@ -1137,7 +1180,8 @@ const actions = {
     if (bootstrapFailedDeviceIds.size > 0) bootstrapFailedDeviceIds = new Set();
     if (archivedFailedDeviceIds.size > 0) archivedFailedDeviceIds = new Set();
     if (shards.size === 0) {
-      if (bootstrapStateChanged || initialDiscoveryChanged) subs.forEach((fn) => fn());
+      if (previewsChanged) recompute();
+      else if (bootstrapStateChanged || initialDiscoveryChanged) subs.forEach(fn => fn());
       return;
     }
     shards.clear();

@@ -21586,6 +21586,7 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不复派差事予此账号。CLI 登录与言谈录仍存于此机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
+    "unreachable": "暂时连不上账号服务，无法确认登录状态。请检查网络后重试。",
     "openDirectory": "启账号目录",
     "openDirectoryFailed": "账号目录未能启，或已移或已删。",
     "loginAgain": "重登",

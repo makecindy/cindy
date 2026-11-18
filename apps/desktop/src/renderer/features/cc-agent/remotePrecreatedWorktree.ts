@@ -366,7 +366,7 @@ export function parseRemoteDiscardPrecreatedAck(value: unknown): {
   };
 }
 
-function isExplicitRemoteNotFoundError(error: unknown): boolean {
+export function isExplicitRemoteNotFoundError(error: unknown): boolean {
   if (isRecord(error)) {
     const code = error.code;
     if (typeof code === 'string' && code.trim().toUpperCase() === 'NOT_FOUND') {

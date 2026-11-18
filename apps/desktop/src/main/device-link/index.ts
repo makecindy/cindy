@@ -1980,6 +1980,9 @@ export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
       const encrypted = primaryUsesEncryptedTransport && client!.connectionFor(link.deviceId) === client;
       return core ? { ...link, ...core, encrypted } : { ...link, encrypted };
     }),
+    relayProtocol: client.getStatus() === 'online' && !agentNetRelayDown()
+      ? (primaryUsesEncryptedTransport ? 'agent-net' : 'device-link')
+      : undefined,
     relayRttMs: primaryUsesEncryptedTransport ? agentNetRelayRttMs() : client.getRelayRttMs(),
   };
 }
