@@ -1142,10 +1142,10 @@
   },
   "awayGuard": {
     "status": "Cindy travaille",
-    "hint": "Une touche verrouille ; déverrouillez avec votre empreinte ou votre mot de passe. Tant que l'invite du système est affichée, posez le doigt sur Touch ID pour revenir directement.",
+    "hint": "Une touche verrouille ; déverrouillez avec votre empreinte ou votre mot de passe. Tant que l'invite du système est affichée, posez le doigt sur {{biometry}} pour revenir directement.",
     "lockFailed": {
       "status": "Cindy n'a pas pu verrouiller ce Mac",
-      "hint": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Touch ID ou votre mot de passe pour retirer l'écran. Vous pouvez aussi fermer le capot ou appuyer sur le bouton d'alimentation.",
+      "hint": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec {{biometry}} ou votre mot de passe pour retirer l'écran. Vous pouvez aussi fermer le capot ou appuyer sur le bouton d'alimentation.",
       "hintWindows": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Windows Hello ou votre code PIN pour retirer l'écran. Vous pouvez aussi appuyer sur la touche du logo Windows + L."
     },
     "hintWindows": "Appuyez sur une touche pour verrouiller ; déverrouillez avec Windows Hello ou votre mot de passe",
@@ -2523,10 +2523,10 @@
       "macRestartNote": "Sous macOS, redémarrez l'application pour appliquer les modifications.",
       "awayGuard": {
         "label": "Utiliser l'écran de confidentialité au lieu du verrouillage",
-        "hint": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec Touch ID ou votre mot de passe, ou, tant que l'invite du système est affichée, posez le doigt sur Touch ID pour revenir directement. Sans tâche en cours d'exécution, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
+        "hint": "Quand l'IA a besoin de l'écran, cet ordinateur ne l'éteint pas et ne se verrouille pas. Un écran de confidentialité le masque et l'IA continue de travailler derrière. Une touche ou un clic le verrouille aussitôt ; déverrouillez avec {{biometry}} ou votre mot de passe, ou, tant que l'invite du système est affichée, posez le doigt sur {{biometry}} pour revenir directement. Sans tâche en cours d'exécution, l'écran s'éteint et se verrouille comme d'habitude. À la fin d'une prise en main à distance, l'écran de confidentialité protège aussi cet ordinateur.",
         "permission": "Autorisez Cindy dans Réglages Système > Confidentialité et sécurité > Accessibilité pour qu'elle verrouille l'écran dès que quelqu'un touche ce Mac. En attendant, l'écran se met en veille et se verrouille comme d'habitude.",
         "preview": "Essayer maintenant",
-        "previewStarting": "Lâchez la souris et le clavier. Dans 3 secondes, l'écran de confidentialité apparaît ; posez le doigt sur Touch ID pour revenir (tant que l'invite du système est affichée), ou appuyez sur une touche pour verrouiller.",
+        "previewStarting": "Lâchez la souris et le clavier. Dans 3 secondes, l'écran de confidentialité apparaît ; posez le doigt sur {{biometry}} pour revenir (tant que l'invite du système est affichée), ou appuyez sur une touche pour verrouiller.",
         "previewUnavailable": "Impossible d'afficher l'écran de confidentialité. Redémarrez Cindy et réessayez.",
         "delay": {
           "30": "30 s",

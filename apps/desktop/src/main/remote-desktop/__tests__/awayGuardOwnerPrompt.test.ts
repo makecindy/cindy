@@ -50,6 +50,7 @@ vi.mock('../inputHost', () => ({
   readDesktopInputPermission: async () => 'granted',
   requestDesktopInputPermission: async () => 'granted',
   resolveDesktopInputBinary: async () => '/helper',
+  readDesktopBiometry: async () => 'touchid',
 }));
 vi.mock('../privacyInput', () => ({
   watchPrivacyInput: vi.fn(),

@@ -13,6 +13,7 @@ import {
   lockDesktopScreen,
   readDesktopLockState,
   readDesktopInputPermission,
+  readDesktopBiometry,
   requestDesktopInputPermission,
 } from './inputHost';
 import { watchAwayGuardInput, type AwayGuardInputMonitor } from './privacyInput';
@@ -30,6 +31,7 @@ import {
   type AwayGuardDelaySeconds,
   type AwayGuardPreviewResult,
   type AwayGuardState,
+  biometryLabel,
 } from '../../shared/awayGuard';
 
 const log = createLogger('remote-desktop:away-guard');
@@ -40,6 +42,22 @@ const DEFAULT_AWAY_MS = 10 * 60_000;
 const DISPLAY_SLEEP_REFRESH_MS = 60_000;
 /** Time for the system lock screen to fade in above the masks before they are removed. */
 const LOCK_SCREEN_SETTLE_MS = 1500;
+
+/**
+ * Copy names the owner's biometry the way Apple does (Touch ID / Face ID / Optic ID).
+ * Read once per run; until then the wording stays on today's Touch ID.
+ */
+let biometryName = 'Touch ID';
+let biometryAsked = false;
+const loadBiometryName = () => {
+  if (biometryAsked) return;
+  biometryAsked = true;
+  void readDesktopBiometry().then((type) => {
+    biometryName = biometryLabel(type);
+  });
+};
+/** Main's i18n only fills `{{appName}}`, so the hardware name is filled here. */
+const withBiometry = (text: string) => text.replace('{{biometry}}', biometryName);
 
 export interface AwayGuardServiceDeps {
   /** Publish cover IDs to the shared remote-capture exclusion filter. */
@@ -170,6 +188,8 @@ export async function coverDesktopLockFailure(): Promise<void> {
 
 export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   if (controller || hostPolicy) return;
+  // Name the owner's biometry the way Apple does, once, off the startup path.
+  loadBiometryName();
   if (process.platform === 'linux') {
     // Hyprland's compositor draws and guards the cover (index.ts startLinuxAwayCover);
     // only the policy lives here. "Follow system" has no readable system time there.
@@ -414,7 +434,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     void masks
       .replacePage(privacyScreenHtml(
         t('awayGuard.lockFailed.status'),
-        t(process.platform === 'win32' ? 'awayGuard.lockFailed.hintWindows' : 'awayGuard.lockFailed.hint'),
+        withBiometry(t(process.platform === 'win32' ? 'awayGuard.lockFailed.hintWindows' : 'awayGuard.lockFailed.hint')),
       ))
       .catch(() => {});
     void verifyOwnerOrRetry();
@@ -472,7 +492,7 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
     {
       html: () => privacyScreenHtml(
         t('awayGuard.status'),
-        t(process.platform === 'win32' ? 'awayGuard.hintWindows' : 'awayGuard.hint'),
+        withBiometry(t(process.platform === 'win32' ? 'awayGuard.hintWindows' : 'awayGuard.hint')),
       ),
       nonActivating: true,
       // No new UI or native permission: the held mask already catches local clicks.
@@ -582,7 +602,13 @@ interface AwayGuardSettings {
 
 export async function readAwayGuardState(settings: AwayGuardSettings): Promise<AwayGuardState> {
   if (!privacyScreenAvailable())
-    return { available: false, enabled: false, delaySeconds: null, permission: 'unknown' };
+    return {
+      available: false,
+      enabled: false,
+      delaySeconds: null,
+      permission: 'unknown',
+      biometry: 'none',
+    };
   const status = await readDesktopInputPermission();
   return {
     available: true,
@@ -595,6 +621,7 @@ export async function readAwayGuardState(settings: AwayGuardSettings): Promise<A
         : status === 'missing'
           ? 'missing'
           : 'unknown',
+    biometry: await readDesktopBiometry(),
   };
 }
 

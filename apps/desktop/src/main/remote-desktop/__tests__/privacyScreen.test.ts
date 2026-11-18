@@ -25,6 +25,7 @@ vi.mock('../inputHost', () => ({
   lockDesktopScreen: away.lock,
   // The owner has not answered the system verification yet.
   verifyDesktopOwner: () => new Promise(() => {}),
+  readDesktopBiometry: async () => 'touchid',
 }));
 vi.mock('../privacyInput', () => ({
   watchPrivacyInput: vi.fn(),

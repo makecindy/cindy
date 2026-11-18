@@ -10,6 +10,7 @@ import type {
   RemoteDesktopDisplayMode,
 } from '@cindy/device-link';
 import { createLogger } from '../logger';
+import type { DesktopBiometry } from '../../shared/awayGuard';
 import { HumanDesktopInput } from './inputOwnership';
 import { resolveLinuxInputBinary, isX11Desktop, x11InputGeometry } from './linuxInput';
 import { readLinuxUnlockState } from './linuxCredentials';
@@ -156,6 +157,29 @@ async function resolveBinary(): Promise<string> {
 }
 
 export { resolveBinary as resolveDesktopInputBinary };
+
+let biometry: DesktopBiometry | null = null;
+/**
+ * Which biometry this Mac offers, named the way Apple does (Touch ID / Face ID / Optic
+ * ID). Only `LAContext.biometryType` comes back; nothing about the owner is read. Cached
+ * for the process, and asked again after a failed read.
+ */
+export async function readDesktopBiometry(): Promise<DesktopBiometry> {
+  if (process.platform !== 'darwin') return 'none';
+  if (biometry) return biometry;
+  try {
+    const { stdout } = await exec(await resolveBinary(), ['--biometry'], {
+      timeout: 5000,
+      maxBuffer: 1024,
+    });
+    const word = stdout.trim();
+    if (word === 'touchid' || word === 'faceid' || word === 'opticid' || word === 'none')
+      biometry = word;
+  } catch {
+    /* Unreadable: keep today's wording and ask again next time. */
+  }
+  return biometry ?? 'none';
+}
 
 /** Probe the actual input process, never CuaDriver's or Electron's AX grant. */
 export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'unavailable'> {

@@ -1122,6 +1122,23 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--owner-prom
   RunLoop.main.run()
   exit(0)
 }
+// `--biometry`: which biometry this Mac offers, so the copy names it the way Apple does
+// (Touch ID / Face ID / Optic ID; `LAContext.biometryType`). Fixed words only.
+if CommandLine.arguments == [CommandLine.arguments[0], "--biometry"] {
+  guard inputCaller.code() != nil else { print("unavailable"); exit(2) }
+  let context = LAContext()
+  var problem: NSError?
+  guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &problem) else {
+    print("none"); exit(0)
+  }
+  switch context.biometryType {
+  case .touchID: print("touchid")
+  case .faceID: print("faceid")
+  case .opticID: print("opticid")
+  default: print("none")
+  }
+  exit(0)
+}
 if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--lock-screen" {
   if let failure = lockOwnedSession(requireCaller: true) {
     print("lock-failed \(failure.rawValue)"); exit(2)
