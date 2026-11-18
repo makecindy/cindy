@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { Transform, type TransformCallback } from 'node:stream';
 import { TextDecoder } from 'node:util';
 
+import { shortenResponsesItemId } from './proxy/transform.js';
 import { ChatBridgeToolContext, type ChatBridgeToolSpec } from './tool-context.js';
 import type { ResponsesRequest } from './types.js';
 
@@ -102,7 +103,9 @@ function normalizeToolItemId(item: Record<string, unknown>): Record<string, unkn
   const from = id.startsWith(prefixes[0]) ? prefixes[0]
     : LEGACY_TOOL_ITEM_ID_PREFIXES.find(prefix => id.startsWith(prefix));
   if (from === undefined) return item;
-  return { ...item, id: prefixes[1] + id.slice(from.length) };
+  // Prefix repair can grow a valid 64-character msg_ output into a 65-character ctco_ id.
+  // Apply the existing stable wire limit after rewriting, including SSE item references.
+  return { ...item, id: shortenResponsesItemId(prefixes[1] + id.slice(from.length)) };
 }
 
 /**

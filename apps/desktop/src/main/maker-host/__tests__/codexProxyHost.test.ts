@@ -6597,6 +6597,9 @@ describe('codex proxy host', () => {
       input: [
         { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
         { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
+        // #11371 P2: native-custom compact must not expand a valid 64-char msg_ result to 65.
+        { type: 'custom_tool_call', id: `msg_${'x'.repeat(60)}`, name: 'exec', call_id: 'call_large', input: 'text(2)' },
+        { type: 'custom_tool_call_output', id: `msg_${'x'.repeat(60)}`, call_id: 'call_large', output: '2' },
       ],
     };
     let current: unknown = original;
@@ -6605,8 +6608,11 @@ describe('codex proxy host', () => {
     }
     expect(current).toMatchObject({ input: [
       { ...original.input[0], id: 'ctc_legacy' }, original.input[1],
+      { ...original.input[2], id: `ctc_${'x'.repeat(60)}` },
+      { ...original.input[3], id: expect.stringMatching(/^ctco_[a-f0-9]{59}$/) },
     ] });
     expect(original.input[0].id).toBe('fc_legacy');
+    expect(original.input[3].id).toBe(`msg_${'x'.repeat(60)}`);
     expect(config.transformResponse({ reqId: 8001, responseHeaders: { 'content-type': 'application/json' } })).toBeNull();
   });
 
