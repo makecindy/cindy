@@ -1910,6 +1910,10 @@ export class Session {
     return this.handle.getUsageSnapshot();
   }
 
+  retryFailedRuntimeCapabilityCapture(): void {
+    this.handle.retryFailedRuntimeCapabilityCapture?.();
+  }
+
   /** Return the current per-session Pi runtime capability snapshot, if exposed. */
   getRuntimeCapabilities(): PiRuntimeCapabilityManifest | undefined {
     return this.handle.getRuntimeCapabilities?.();

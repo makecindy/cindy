@@ -261,6 +261,7 @@ export interface MakerSendTransactionSession {
   workDir: string;
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
+  retryFailedRuntimeCapabilityCapture?(): void;
   getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
@@ -1104,6 +1105,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         if (live.agentKind !== 'pi' || live.workDir !== workingDir) {
           throwIpcError('PRECONDITION_FAILED', 'Running session no longer matches the selected project');
         }
+        live.retryFailedRuntimeCapabilityCapture?.();
         return;
       }
       const co = deps.buildCreateOptsWithStderr({ ...opts, ...preferences, id: sessionId });
