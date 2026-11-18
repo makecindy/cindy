@@ -35,7 +35,12 @@ export function createHostSessionUpdate(deps: {
     readSessionBudget(sessionId: string): Promise<number | null>;
   } | null;
 }) {
-  return async (sessionId: string, patch: Record<string, unknown>, apply?: HostModelSelectionApply) => {
+  return async (
+    sessionId: string,
+    patch: Record<string, unknown>,
+    apply?: HostModelSelectionApply,
+    assertCurrent = apply?.assertCurrent,
+  ) => {
     const allowed: Record<string, true> = {
       title: true, status: true, pinnedAt: true, notificationsMuted: true, model: true,
       effort: true, permissionMode: true, fastMode: true, planModeEnabled: true,
@@ -71,7 +76,7 @@ export function createHostSessionUpdate(deps: {
             window.resolveRouteWindow(agentKind, modelId, providerId, budget, apply ? 'required' : undefined),
         } : {}),
       });
-      apply?.assertCurrent();
+      assertCurrent?.();
       const legacyGate = assessRuntimeModelSwitchGate(windowInput);
       if (apply && before.sdkSessionId && windowInput.runtimeRouteChanged && windowInput.agentKind !== 'codex') {
         if (before.remoteHostId) throwIpcError('PRECONDITION_FAILED', MODEL_WINDOW_REBUILD_UNSUPPORTED);
@@ -134,7 +139,7 @@ export function createHostSessionUpdate(deps: {
     }
     const stored = live && patch.model === undefined && Object.hasOwn(patch, 'providerId')
       ? await deps.readSessionForRun(sessionId) : null;
-    apply?.assertCurrent();
+    assertCurrent?.();
     if (!routeRebuilt && !liveModelApplied) await applyLiveSessionSettings(live, patch, stored);
     const update: Record<string, unknown> = { updatedAt: Date.now() };
     if (typeof patch.title === 'string') update.title = patch.title;
@@ -152,7 +157,7 @@ export function createHostSessionUpdate(deps: {
     // Context recovery committed the entire replacement route in context.rebuild.
     if (!routeRebuilt) {
       try {
-        apply?.assertCurrent();
+        assertCurrent?.();
         await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
       } catch (error) {
         if (liveModelApplied && live) await deps.closeRejectedPiRuntime?.(sessionId, live);

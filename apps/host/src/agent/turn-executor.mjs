@@ -309,8 +309,9 @@ export function createTurnExecutor(deps) {
     readSessionExtraDirsFromDb: deps.readSessionExtraDirs ?? (async () => []),
     readSessionWritableDirsFromDb: deps.readSessionWritableDirs ?? (async () => []),
     withRehydrateCloseSuppressed,
-    bootstrapSession: async opts => {
-      const turn = turns.get(opts.id);
+    bootstrapSession: async (opts, assertStartupCurrent) => {
+      const previous = turns.get(opts.id);
+      const turn = previous?.running ? previous : undefined;
       turn?.check();
       const preparing = (async () => {
         const stored = await readExecutionSession(opts.id);
@@ -322,15 +323,19 @@ export function createTurnExecutor(deps) {
           readPersistedWritableDirs: deps.readSessionWritableDirs ?? (async () => []),
           persistExistingSession: async () => { throw new Error('Host must not rewrite directory grants at startup'); },
         });
+        deps.assertCurrent();
+        assertStartupCurrent?.();
         turn?.check();
         const session = await deps.getMaker().createSession({ ...opts,
           resumeSessionId: opts.resumeSessionId ?? (opts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined),
         }, turn?.sendOpts.signal);
+        deps.assertCurrent();
         turn?.check();
         rememberLiveSessionSettings(session, opts);
         setSessionProvider(opts.id, opts.providerId ?? null);
         wireNotes.reset(opts.id);
-        bindTurnSession(opts.id, session);
+        if (turn) bindTurnSession(opts.id, session);
+        else listen(opts.id, session);
         return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
       })();
       if (turn) turn.preparing = preparing;
@@ -357,6 +362,7 @@ export function createTurnExecutor(deps) {
       const turn = turns.get(id);
       // The shared reconciler refreshes execution settings before bootstrap;
       // recovery also needs the current task directory and native identity.
+      if (!turn?.running || !turn.createOpts) return deps.storedSessionOptions(stored);
       return { ...turn.createOpts, workingDir: stored.workingDir,
         resumeSessionId: turn.createOpts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined };
     },
@@ -668,6 +674,14 @@ export function createTurnExecutor(deps) {
     steer,
     readExecutionSession,
     readAutoReviewHistory,
+    async preparePiSkillRuntime(id, dir, assertStartupCurrent) {
+      const row = await readExecutionSession(id);
+      assertStartupCurrent();
+      if (row.source === 'review' || makerKind(row.agentKind) !== 'pi' || row.workingDir !== dir)
+        throw new Error('[PRECONDITION_FAILED] Pi session is unavailable');
+      await transaction.preparePiSkillRuntime(id, dir, {}, assertStartupCurrent);
+      deps.assertCurrent();
+    },
     async restoreSession(id, options, assertCurrent) {
       deps.assertCurrent(); await assertCurrent();
       await readExecutionSession(id);

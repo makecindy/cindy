@@ -137,6 +137,7 @@ import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
+import { listPiRuntimePaletteCommands, mergePiPackageCommands, shouldListPiPackageCommands } from '../../desktop/src/shared/piPackages.js';
 import { createHostSessionUpdate, type HostModelSelectionApply } from './agent/session-update.ts';
 import { readDeviceLinkModelSelectionOrigin, getDeviceLinkInvokeContext } from '../../desktop/src/main/device-link/invoke-context.js';
 import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.js';
@@ -917,12 +918,27 @@ function captureModelSelectionOwner() {
   };
 }
 
-async function applyPendingAgentSwitch(sessionId: string, prepare?: Pick<HostModelSelectionApply, 'prepareModelWindowSwitch' | 'signal' | 'nextInputChars'>): Promise<void> {
+// Enqueue takes the route lock here. The send and explicit Pi Skill preparation
+// paths already hold that same lock and call the unlocked application.
+const applyPendingAgentSwitch = lockSessionRoute((sessionId: string) => applyPendingAgentSwitchUnlocked(sessionId));
+async function applyPendingAgentSwitchUnlocked(
+  sessionId: string,
+  prepare?: Pick<HostModelSelectionApply, 'prepareModelWindowSwitch' | 'signal' | 'nextInputChars'> & {
+    assertPreparationCurrent?(): void;
+  },
+  assertLegacyPreparationCurrent?: () => void,
+): Promise<void> {
   const intent = pendingAgentSwitches.get(sessionId);
   if (!intent || Boolean(intent.deviceLinkOwner) !== Boolean(prepare)) return;
+  const assertIntentCurrent = () => {
+    if (pendingAgentSwitches.get(sessionId) !== intent) throw new Error('The selected route changed; retry the send');
+  };
   const assertCurrent = () => {
     intent.deviceLinkOwner?.assertCurrent();
     prepare?.signal?.throwIfAborted();
+    prepare?.assertPreparationCurrent?.();
+    assertLegacyPreparationCurrent?.();
+    assertIntentCurrent();
   };
   assertCurrent();
   const patch = {
@@ -937,17 +953,16 @@ async function applyPendingAgentSwitch(sessionId: string, prepare?: Pick<HostMod
     if (before.agentKind !== intent.targetAgentKind) {
       throwIpcError('PRECONDITION_FAILED', 'the task Harness changed; select the model again');
     }
-    await updateSession(sessionId, patch, {
+    await updateHostSession(sessionId, patch, {
       assertCurrent, signal: prepare.signal, nextInputChars: prepare.nextInputChars,
       prepareModelWindowSwitch: prepare.prepareModelWindowSwitch,
     });
   } else {
-    await serverDeps.updateSession(sessionId, { agentKind: intent.targetAgentKind, ...patch });
+    await updateHostSession(sessionId, { agentKind: intent.targetAgentKind, ...patch }, undefined, assertCurrent);
   }
-  if (pendingAgentSwitches.get(sessionId) === intent) {
-    pendingAgentSwitches.delete(sessionId);
-    eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: null } });
-  }
+  assertIntentCurrent();
+  pendingAgentSwitches.delete(sessionId);
+  eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: null } });
 }
 const interactionBroker = createInteractionBroker({ hub: eventHub });
 const fileConfirmation = new GhostGrantConfirmBridge({
@@ -1007,7 +1022,7 @@ const contextRecovery = createHostContextRecoveryWiring({
   pendingHandoff,
   log: createLogger('context-recovery'),
 });
-const updateSession = createHostSessionUpdate({
+const updateHostSession = createHostSessionUpdate({
   getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
   closeRejectedPiRuntime: (sessionId, expected) => withRehydrateCloseSuppressed(sessionId, async () => {
     const maker = agentGraph?.maker;
@@ -1019,7 +1034,7 @@ const updateSession = createHostSessionUpdate({
   modelWindow: () => agentGraph?.modelWindow ?? null,
 });
 const inputQueue = createInputQueue({
-  applyPendingAgentSwitch,
+  applyPendingAgentSwitch: applyPendingAgentSwitchUnlocked,
   getOwner: getCurrentDbClientSnapshot,
   pendingHandoff,
   ...contextRecovery,
@@ -1366,7 +1381,7 @@ const serverDeps = {
   },
   updateSession: lockSessionRoute(async (sessionId: string, patch: Record<string, unknown>) => {
     if (getDeviceLinkInvokeContext()?.channel !== 'maker:set-model' ||
-        readDeviceLinkModelSelectionOrigin() !== 'owner') return updateSession(sessionId, patch);
+        readDeviceLinkModelSelectionOrigin() !== 'owner') return updateHostSession(sessionId, patch);
     const deviceLinkOwner = captureModelSelectionOwner();
     const before = await readSessionForRun(sessionId);
     assertHostTaskExecutionSupported(before);
@@ -1383,6 +1398,9 @@ const serverDeps = {
     });
     return { deferred: true, superseded: false, pendingUntilSend: true };
   }),
+  /**
+   * Register a switch under the route lock for enqueue or the dispatch boundary.
+   */
   switchSessionAgent: lockSessionRoute(async (
     sessionId: string,
     targetAgentKind: string,
@@ -1562,14 +1580,22 @@ const serverDeps = {
     },
   },
   interactions,
-  agentCommands: async (input: { agentKind?: string }) => {
+  agentCommands: async (input: { agentKind?: string; sessionId?: string }) => {
     const rawKind = String(input.agentKind ?? '');
     const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const agent = agentGraph?.instances?.[kind];
     if (!agent) return { success: false, error: `Agent '${kind}' is not registered` };
-    return { success: true, commands: agent.listAgentCommands() };
+    const builtins = agent.listAgentCommands();
+    if (kind !== 'pi' || !input.sessionId) return { success: true, commands: builtins };
+    const meta = await sessionStorage?.get(input.sessionId);
+    if (!meta) throw new Error('session not found');
+    if (!shouldListPiPackageCommands(kind, true, meta)) return { success: true, commands: builtins };
+    const manifest = agentGraph?.maker.getSessionRuntimeCapabilities(input.sessionId);
+    const extra = manifest?.status === 'loaded'
+      ? listPiRuntimePaletteCommands(manifest.commands, manifest.authorizedSlashCommandNames ?? manifest.managedPackageCommandNames) : [];
+    return { success: true, commands: mergePiPackageCommands(kind, builtins, extra), runtimeStatus: manifest?.status ?? 'pending' };
   },
-  agentSkills: async (input: { agentKind?: string; workingDir?: string; sessionId?: string }) => {
+  agentSkills: async (input: { agentKind?: string; workingDir?: string; sessionId?: string; forceReload?: boolean }) => {
     const rawKind = String(input.agentKind ?? '');
     const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const agent = agentGraph?.instances?.[kind];
@@ -1578,7 +1604,9 @@ const serverDeps = {
     if (input.sessionId && !stored) throw new Error('session not found');
     const workingDir = stored?.workDir || input.workingDir || undefined;
     if (workingDir && !path.isAbsolute(workingDir)) throw new Error('workingDir must be absolute');
-    const result = await agent.listAgentSkills({ workingDir });
+    const result = kind === 'pi' && agentGraph
+      ? await agentGraph.maker.listAgentSkills(kind, { workingDir, sessionId: input.sessionId, forceReload: input.forceReload === true })
+      : await agent.listAgentSkills({ workingDir });
     return { success: true, skills: result.skills ?? [] };
   },
   capabilities: async (agentKind: string) => {
@@ -1810,6 +1838,39 @@ function startDeviceLink(): void {
   if (deviceLink) return;
   const endpoint = readAuthEndpoints(account.realm === 'cn' ? 'cn' : 'global').deviceLinkApiBaseUrl;
   if (!endpoint) throw new Error('The endpoint manifest does not contain a Device Link relay');
+  const preparePiSkillRuntime = lockSessionRoute(async (
+    id: string, dir: string, route: { model: string; nextInputChars?: number } | undefined, assertPreparationCurrent: () => void,
+  ) => {
+    assertPreparationCurrent();
+    if (route) {
+      const owner = activeOwnerScopeKey();
+      const checkOwner = () => {
+        assertPreparationCurrent();
+        if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('Host account changed');
+      };
+      const row = await readSessionForRun(id);
+      checkOwner();
+      const intent = pendingAgentSwitches.get(id);
+      const maker = agentGraph?.maker;
+      const live = maker?.getSession(id);
+      if (!maker || row.source === 'review' || row.workingDir !== dir || row.remoteHostId || row.agentDeviceId || row.orcaRole
+        || intent?.targetAgentKind !== 'pi' || intent.model !== route.model || live?.isTurnRunning()) {
+        throw new Error('[PRECONDITION_FAILED] The selected Pi route is not ready');
+      }
+      if (intent.deviceLinkOwner) {
+        await inputQueue.preparePiSkillRuntime(id, dir, {
+          applyPendingOwnerSelection: true, nextInputChars: route.nextInputChars, assertPreparationCurrent,
+        });
+        checkOwner();
+        return;
+      }
+      await applyPendingAgentSwitchUnlocked(id, undefined, checkOwner);
+      checkOwner();
+      if (live && live.agentKind !== 'pi') await maker.closeSessionIfCurrent(live, 'runtime-refresh');
+      checkOwner();
+    }
+    await inputQueue.preparePiSkillRuntime(id, dir, { assertPreparationCurrent });
+  });
   deviceLink = createHostDeviceLink({
     profileDir, version: layout.version,
     mcpApps: pluginGateway ?? undefined,
@@ -1820,6 +1881,7 @@ function startDeviceLink(): void {
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     agentNet: hostAgentNetPorts(),
     invoke: service, subscribe: eventHub.subscribe,
+    preparePiSkillRuntime: (id, dir, route) => preparePiSkillRuntime(id, dir, route, inputQueue.capturePiSkillPreparation(id)),
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();
       const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);

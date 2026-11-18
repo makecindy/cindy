@@ -109,6 +109,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
+    preparePiSkillRuntime: async (id, dir, route) => {
+      assert.equal(id, 'task'); assert.equal(dir, '/project');
+      if (route) assert.deepEqual(route, { model: 'pi-test', nextInputChars: 45_000 });
+    },
     createRuntimeSession: async () => { throw new Error('Not part of this transport test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
   });
@@ -131,10 +135,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
   // 2026-11-18: exercise the real Host registry over the existing integration relay.
-  // A positive controller window on either registered picker channel must fail before staging.
+  // A positive controller window on either picker channel or Skill preparation must fail before applying it.
   const numericSelections = [
     { channel: 'maker:set-model', args: ['task', 'small', null, null, { effort: null, fastMode: false, confirmedContextWindow: 100 }] },
     { channel: 'maker:switch-session-agent', args: ['task', 'claude-code', 'small', null, null, false, { confirmedContextWindow: 100 }] },
+    { channel: 'maker:session:prewarm', args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: {}, confirmedContextWindow: 100 }] },
   ];
   for (const selection of numericSelections) {
     const rejected = await clients[0].invoke('host', selection);
@@ -146,6 +151,15 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.deepEqual(stage.result, { deferred: true });
   assert.deepEqual(modelChoices, [{ id: 'task', patch: { model: 'small' }, origin: 'owner' }]);
 
+  const prepared = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }] });
+  assert.deepEqual(prepared.result, { accepted: true, piRuntimePrepared: true }, JSON.stringify(prepared));
+  const switched = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { nextInputChars: 45_000 } }] });
+  assert.deepEqual(switched.result, { accepted: true, piRuntimePrepared: true, pendingRouteApplied: true });
+  const unsupported = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { agentDeviceId: 'other' } }] });
+  assert.equal(unsupported.ok, false);
   const received = clients.map(() => []);
   clients.forEach((client, i) => client.onFrame(frame => { if (frame.kind === 'push') received[i].push(frame); }));
   duplicateNext = true;

@@ -7964,7 +7964,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setEffort: (sessionId: string, effort: string): Promise<void> =>
       ipcRenderer.invoke('maker:set-effort', sessionId, effort),
     // 输入框开始打字时提前启动 Agent；尽力而为,main 决定是否真的启动。
-    prewarmSession: (sessionId: string, createOpts: unknown): Promise<{ accepted: boolean }> =>
+    prewarmSession: (sessionId: string, createOpts: unknown): Promise<{ accepted: boolean; piRuntimePrepared?: true }> =>
       ipcRenderer.invoke('maker:session:prewarm', sessionId, createOpts),
     // 新建页的未发送任务：清空输入时删除 / 第一次发送前转为普通任务（仅本机）。
     discardProvisionalSession: (sessionId: string): Promise<{ discarded: boolean; remaining?: boolean }> =>

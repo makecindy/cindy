@@ -253,6 +253,7 @@ function extractIpcUserMessageText(message: IpcUserMessage): string {
 }
 
 export interface MakerSendTransactionSession {
+  readonly agentDeviceId?: string | null;
   readonly stablePermissionModeState?: Session['stablePermissionModeState'];
   readonly stablePlanModeState?: Session['stablePlanModeState'];
   hostStartupPreferences?: CreateOpts['hostStartupPreferences'];
@@ -263,6 +264,7 @@ export interface MakerSendTransactionSession {
   workDir: string;
   remoteHostId: string | null;
   /** Error sessions stay registered while their underlying handle cleanup is retried. */
+  retryFailedRuntimeCapabilityCapture?(): void;
   getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
   /** Codex host-owned evidence: a provider turn crossed acceptance on this runtime. */
   codexThreadMayHaveRollout?: boolean;
@@ -339,7 +341,7 @@ export interface MakerSendTransactionDeps {
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
   readSessionWritableDirsFromDb?(sessionId: string): Promise<string[]>;
   withRehydrateCloseSuppressed<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
-  bootstrapSession(opts: CreateOpts): Promise<{
+  bootstrapSession(opts: CreateOpts, assertStartupCurrent?: () => void): Promise<{
     session: MakerSendTransactionSession;
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
@@ -533,6 +535,10 @@ export interface MakerSendTransaction {
    * task row. Returns false when a runtime already exists or startup failed;
    * the next send then follows its normal path.
    */
+  preparePiSkillRuntime(
+    sessionId: string, workingDir: string, preferences: Pick<CreateOpts, 'userPrompt' | 'makerMemoryEnabled'>,
+    assertStartupCurrent?: () => void,
+  ): Promise<void>;
   prewarmSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
   /**
    * Main-side senders that reach an idle live session without this transaction (Orca
@@ -1010,6 +1016,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   async function lazyCreateSession(
     sessionId: string,
     createOpts: CreateOpts,
+    assertStartupCurrent?: () => void,
   ): Promise<ResolveSessionResult> {
     const okLazy = await ensureWorkDirWithDbFallback(sessionId, createOpts, {
       preferDbWorkingDir: true,
@@ -1027,13 +1034,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     }
     await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
     await loadExtraDirsIfNeeded(sessionId, createOpts, 'lazy-create');
+    assertStartupCurrent?.();
     try {
       createOpts.preserveStartupStoppedError = true;
       const {
         session: lazySess,
         didInjectOrcaInstructions,
         didInjectProjectContext,
-      } = await deps.bootstrapSession(createOpts);
+      } = await (assertStartupCurrent ? deps.bootstrapSession(createOpts, assertStartupCurrent) : deps.bootstrapSession(createOpts));
       await deps.markOrcaRoleIfNeeded(lazySess.id, createOpts.orcaRole);
       deps.broadcastSessionCreated(lazySess.id);
       deps.log.info('send: lazy create-session', {
@@ -1047,6 +1055,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       });
       return { kind: 'session', session: lazySess };
     } catch (startupError) {
+      assertStartupCurrent?.();
       // Preserve the old error shape for other failures. Only an explicitly
       // stopped bootstrap proves this input never reached native execution.
       const err = startupError instanceof AgentStartupStoppedError ? startupError.cause : startupError;
@@ -1097,6 +1106,28 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   return {
+    async preparePiSkillRuntime(sessionId, workingDir, preferences, assertStartupCurrent) {
+      const opts = await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
+      assertStartupCurrent?.();
+      if (opts.agentKind !== 'pi' || opts.workingDir !== workingDir) {
+        throwIpcError('PRECONDITION_FAILED', 'Session engine or working directory changed');
+      }
+      const live = deps.getSession(sessionId);
+      if (live && live.getStatus?.() !== 'error') {
+        if (live.agentKind !== 'pi' || live.workDir !== workingDir ||
+            (live.agentDeviceId ?? null) !== (opts.agentDeviceId ?? null)) {
+          throwIpcError('PRECONDITION_FAILED', 'Running session no longer matches the selected project');
+        }
+        live.retryFailedRuntimeCapabilityCapture?.();
+        return;
+      }
+      const co = deps.buildCreateOptsWithStderr({ ...opts, ...preferences, id: sessionId });
+      const result = await lazyCreateSession(sessionId, co, assertStartupCurrent);
+      if (result.kind === 'failure') {
+        const outcome = result.result.outcome;
+        throwIpcError('PRECONDITION_FAILED', outcome?.kind === 'host-send' ? outcome.message : 'Pi startup failed');
+      }
+    },
     async prewarmSession(sessionId, createOpts) {
       if (deps.getSession(sessionId)) return false;
       const lazy = await lazyCreateSession(sessionId, createOpts);

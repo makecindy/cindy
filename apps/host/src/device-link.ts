@@ -45,6 +45,7 @@ export interface HostDeviceLinkPorts {
   refreshToken?(): Promise<void>;
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
   releaseAuthCaller?(caller: string): void;
+  preparePiSkillRuntime(id: string, workingDir: string, route?: { model: string; nextInputChars?: number }): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   subscribe(listener: (event: any) => void): () => void;
   // Cloud revocation is required before narrowing a persisted standby grant.
@@ -144,6 +145,32 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, ([sessionId]) =>
     call('/api/sessions/agent-switch-intent', { sessionId }));
   registry.register('maker:create-session', ([input]) => deps.createRuntimeSession(input));
+  registry.register('maker:session:prewarm', async ([id, input]) => {
+    assertCurrent();
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') throw new Error('[PRECONDITION_FAILED] Task owner required');
+    const request = input as { purpose?: string; workingDir?: string; pendingPiRoute?: unknown; model?: unknown } | null;
+    if (request?.purpose !== 'pi-skill-dispatch') return { accepted: false };
+    if (typeof id !== 'string' || !id || typeof request.workingDir !== 'string' || !request.workingDir)
+      throw new Error('[INVALID_PARAMS] Session and working directory required');
+    const pending = request.pendingPiRoute;
+    if ('confirmedContextWindow' in request || (pending && typeof pending === 'object' && 'confirmedContextWindow' in pending)) {
+      throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
+    }
+    if (pending !== undefined && (!pending || typeof pending !== 'object' || Array.isArray(pending)
+      || ('agentDeviceId' in pending && pending.agentDeviceId != null)
+      || typeof request.model !== 'string' || !request.model)) throw new Error('[INVALID_PARAMS] Unsupported Pi route');
+    const nextInputChars = pending && typeof pending === 'object' && 'nextInputChars' in pending
+      ? pending.nextInputChars : undefined;
+    if (nextInputChars !== undefined && (typeof nextInputChars !== 'number' || !Number.isSafeInteger(nextInputChars) || nextInputChars < 0)) {
+      throw new Error('[INVALID_PARAMS] Invalid next input size');
+    }
+    const route = pending !== undefined
+      ? { model: request.model as string, ...(nextInputChars !== undefined ? { nextInputChars } : {}) }
+      : undefined;
+    await deps.preparePiSkillRuntime(id, request.workingDir, route);
+    assertCurrent();
+    return { accepted: true, piRuntimePrepared: true, ...(route ? { pendingRouteApplied: true } : {}) };
+  });
   if (deps.mcpApps) registry.register(MCP_APPS_INVOKE, async ([sessionId, input]) => {
     const source = getDeviceLinkInvokeContext();
     if (!source || source.sharedTask) throw new Error('[PRECONDITION_FAILED] MCP_APP_OWNER_ONLY');

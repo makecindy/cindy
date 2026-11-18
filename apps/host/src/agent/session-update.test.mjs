@@ -31,6 +31,7 @@ import { estimateHandoffTokens } from '../../../desktop/src/main/maker-ipc/agent
 import { setSessionProvider, getSessionProvider, clearSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { planUserRuntimeModelSwitch } from '../../../desktop/src/shared/runtimeModelSwitchGate.ts';
 import { createHostSessionUpdate } from './session-update.ts';
+import { createInputQueue } from './input-queue.mjs';
 import { MODEL_WINDOW_REBUILD_UNSUPPORTED } from './model-window-gate.ts';
 
 // Route windows of the fixture catalog; a model it does not know has no verified window.
@@ -113,6 +114,36 @@ async function fixture(t) {
   });
   return { update, task, runtime, row, events, budgets, handoffs, history, listMessages, live, rollover };
 }
+
+// #11352 / DB tier: prewarm must use the same window gate as dispatch before opening Pi.
+// Existing dispatch coverage misses this entry. A single display-only window must leave
+// both the saved model and the native binding intact and prevent a preparation receipt.
+test('remote Pi skill preparation refuses an owner route with an unverified window', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  const id = 'pi-prewarm-unverified';
+  const sdkSessionId = 'pi-native-before-prewarm';
+  await f.task(id, { agentKind: 'pi', contextTokens: 95_000, sdkSessionId });
+  const saved = await f.row(id);
+  const live = f.runtime(id, { agentKind: 'pi', usage: { contextWindow: 200_000, contextTokens: 95_000 } });
+  live.workDir = saved.workingDir;
+  live.abort = async () => {};
+  const queue = createInputQueue({
+    getMaker: () => ({ getSession: () => live }),
+    hub: { publish() {} },
+    readSession: f.row,
+    applyPendingAgentSwitch: (sessionId, prepare) => f.update(sessionId, { model: 'display-only' }, {
+      ...prepare, assertCurrent() {},
+    }),
+  });
+  try {
+    await assert.rejects(queue.preparePiSkillRuntime(id, saved.workingDir, { applyPendingOwnerSelection: true }),
+      /target context window or current usage could not be verified/);
+    const after = await f.row(id);
+    assert.equal(after.model, saved.model);
+    assert.equal(after.sdkSessionId, sdkSessionId);
+    assert.deepEqual(live.setModelCalls, []);
+  } finally { await queue.dispose(); }
+});
 
 // Each cell: the task's usage and the change it asks for. `refused`: the Host's verdict.
 const CELLS = [
