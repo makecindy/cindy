@@ -8,6 +8,7 @@ export interface HeaderProjectMenu {
 
 // The header owns the trigger, while the sidebar owns the project catalogue and actions.
 let request: HeaderProjectMenu | null = null;
+let settingsProject: ProjectNode | null = null;
 const listeners = new Set<() => void>();
 function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -21,4 +22,13 @@ export function setHeaderProjectMenu(next: HeaderProjectMenu | null) {
 }
 export function useHeaderProjectMenu() {
   return useSyncExternalStore(subscribe, () => request);
+}
+
+// Keep the settings owner mounted after the header dropdown closes.
+export function setProjectSettings(next: ProjectNode | null) {
+  settingsProject = next;
+  for (const listener of listeners) listener();
+}
+export function useProjectSettings() {
+  return useSyncExternalStore(subscribe, () => settingsProject);
 }

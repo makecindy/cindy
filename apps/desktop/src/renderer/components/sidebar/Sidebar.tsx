@@ -1,4 +1,4 @@
-import { useHeaderProjectMenu } from '@/state/headerProjectMenu';
+import { useHeaderProjectMenu, useProjectSettings } from '@/state/headerProjectMenu';
 /**
  * Sidebar Shell（纯外壳层）
  * ---------------------------------------------------------------------------
@@ -120,8 +120,9 @@ export function Sidebar({
   // hidden snapshot 与 Project filter，不能退回跨窗口共享存储的无 owner 读改写。
   // 主窗口保持原有常驻挂载语义，避免改变切换与缓存体验。
   const headerProjectMenu = useHeaderProjectMenu();
+  const projectSettings = useProjectSettings();
   const shouldMountFeatureContent =
-    forceMountFeatureContent || !!headerProjectMenu || !isSecondaryWindow() || !isCollapsed || isPeek;
+    forceMountFeatureContent || !!headerProjectMenu || !!projectSettings || !isSecondaryWindow() || !isCollapsed || isPeek;
 
   // 离开 peek 的交换帧必须禁用宽度过渡:peekClosing → idle(收起)时,aside 带着
   // 上一帧的 width=展开宽 回流为流内 width=0,若 transition-[width] 还挂着,这次

@@ -1,6 +1,6 @@
 import { projectKeyForDeepLink } from '../../../shared/projectKeys';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
-import { useHeaderProjectMenu } from '@/state/headerProjectMenu';
+import { useHeaderProjectMenu, useProjectSettings, setProjectSettings } from '@/state/headerProjectMenu';
 import { HeaderProjectDropdown } from './sidebar/HeaderProjectDropdown';
 import { useTaskListMode } from '@/hooks/useTaskListMode';
 import {
@@ -3658,7 +3658,9 @@ function ExpandedView({
         : handleAutomationScheduleAction(group, action),
     [archiveSessionGroup, handleAutomationScheduleAction, scheduleSessionIndex],
   );
-  const [settingsProject, setSettingsProject] = useState<ProjectNode | null>(null);
+  const settingsProject = useProjectSettings();
+  const setSettingsProject = setProjectSettings;
+  useEffect(() => () => setProjectSettings(null), []);
   const headerMenu = useHeaderProjectMenu();
   const headerProject = headerMenu && (
     projectUniverse.projects.find(project => project.projectKey === headerMenu.project.projectKey)
