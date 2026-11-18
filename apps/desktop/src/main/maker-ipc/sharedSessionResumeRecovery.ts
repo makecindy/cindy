@@ -1,11 +1,11 @@
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import type { commitContextRebuild } from '../localDb/ipc/messages.js';
 import type { sessions } from '../localDb/schema.js';
-import { buildHandoffText, type HandoffSourceMessage } from './agentHandoff.js';
+import { buildHandoff, type HandoffSourceMessage } from './agentHandoff.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type RecoveryRow = Pick<typeof sessions.$inferSelect,
-  'sdkSessionId' | 'status' | 'agentKind' | 'agentDeviceId' | 'providerId' | 'model' | 'clearedAt'>;
+  'sdkSessionId' | 'status' | 'agentKind' | 'agentDeviceId' | 'providerId' | 'model' | 'clearedAt'> & { contextWindow?: number | null };
 
 export interface SharedSessionResumeRecoveryDeps {
   assertCurrent(): void;
@@ -48,11 +48,12 @@ export async function withSharedSessionResumeRecovery<T>(
       row.model !== options.model || !row.model) throw error;
     const history = await deps.listMessages(sessionId);
     assertCurrent();
-    const handoff = buildHandoffText(history, {
+    const { handoff, handoffCoverage } = buildHandoff(history, {
+      targetContextWindow: options.contextWindowBudget ?? row.contextWindow,
       fromLabel: options.agentKind, toLabel: options.agentKind, sessionId, reason: 'native-session-recovery',
     });
     await deps.commit(sessionId, handoff, {
-      reason: 'native-session-recovery', sourceUserClientId: null,
+      reason: 'native-session-recovery', handoffCoverage, sourceUserClientId: null,
       sourceAgentKind: kind, sourceModel: row.model, sourceProviderId: row.providerId,
       expectedClearedAt: row.clearedAt,
       expectedSdkSessionId: resumeId,

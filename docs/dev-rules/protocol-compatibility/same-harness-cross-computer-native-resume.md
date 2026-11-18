@@ -13,13 +13,25 @@ Pi 只改写副本首行的 session ID 与 cwd，使其指向接收端工作目�
 `_cindyRequireNativeResume`：适配器等待 CLI 的初始化握手并拒绝静默新建，恢复失败交回宿主切换事务。
 该标记覆盖手动、配额均衡与启动失败换电脑；普通 Claude 无效会话自愈保持原语义。启动迁移无法保存原子回退所需的边界时，先还原源位置与 ID，再返回失败，不打开副本。
 这些命令不加入只读／断链自动重放名单。恢复失败回落已有的原子 resume fallback，不把切账号或清空历史当普通失败。
-失败目标的关闭仅作尽力清理，断链错误不能阻止配额探测还原源路由或手动切换提交原子摘要回退；清理等待后仍须复核账号与历史代次，取消与改选继续阻止迟到提交。
+失败目标的关闭仅作尽力清理，断链错误不能阻止配额探测还原源路由或手动切换提交原子对话重放；清理等待后仍须复核账号与历史代次，取消与改选继续阻止迟到提交。
 配额探测成功后，正式路由写入若失败，同样关闭目标并还原源位置/原生 ID，再向调用方报错，不保留无边界记录的半切换状态。
-边界消息增加可选 `nativeHistory: restored | fallback`，桌面与手机在 fallback 时显示「已用摘要接续」；旧客户端忽略新增字段，
-仍能读取原有 handoff/resumed。无服务端、数据库 schema、环境变量或 Mobile 原生配置变化。
-回归：`relocateNativeHistory.test.ts`、`nativeHistoryTransfer.test.ts`、`nativeHistoryStorage.test.ts`、`sessionAgentSwitchHandler.test.ts`、device-link `remoteAgent.test.ts`。
-配额均衡的同账号提议复用既有 `kind: auto`，桌面与手机不弹常规换电脑确认。实际需要摘要时，宿主通过既有 permission
-确认卡（`hostOwnedConfirmation: native_history_fallback`）询问，支持同账号远控回答；取消、超时保留原电脑与原生记录。
-配额探测因目标此刻接不了而失败（供应商组失败判定为 `unavailable`：连不上、`REMOTE_AGENT_BUSY` 任务数已满、不提供这个模型等）时不发确认卡，
-还原源路由后原样报错，由配额均衡留在原电脑发送并退避；只有目标能接、原生记录恢复不了才询问。无协议变化。
-旧客户端已支持 auto 和通用 permission 卡；共享来源仍沿用原来的 ask/记住偏好，不自动扩大授权。
+边界消息保留可选 `nativeHistory: restored | fallback`。2026-11-18 用户裁决：配额均衡的同账号提议
+继续复用 `kind: auto`；恢复原生记录失败后，宿主先还原源路由，再用重放内容自动接续，取消原有
+`native_history_fallback` 确认卡。确认探测判定为 `unavailable`（离线、任务数已满、不提供模型等）时，
+还原源路由后原样报错，配额均衡留在原电脑发送并退避。共享来源继续用原有询问及偏好。
+
+跨 Harness 的全量／增量接续、换电脑回落及共享来源，用同一构造器按时序重放可读的用户、助手、工具和思考记录。
+重建同一 Harness 也使用同一预算。已核实窗口按 30% 计，最多 100,000 token，按每 UTF-16 单元约一个
+token 保守计；找不到目标窗口时沿用 16,000 的保守上限。空闲重建最多 16,000，仍以新消息为新话题。
+满窗后若宿主即将重送一条已知文本，预算另扣这条输入，为系统内容和输出预留 35% 窗口。
+超限从较早记录开始省略或截取，明确标记。原生图片字节、思考签名、密文和已遮盖的思考不随文本重放。
+重放由宿主生成，保留工作台账、按权限检索原文的指引与结束标记。
+
+`agent_switch` 和 `context_rebuild` 增加可选 `handoffCoverage: complete | condensed`。前者表示预算内
+带齐可重放文本，后者表示较早记录有省略或缩短。原生接续可不填。数据库标记的 `content.handoff` 保有
+发送全文，重启后仍按既有消费位恢复 pending。新分隔条在普通列表、推送和镜像缓存中最多带 2,048 字符、JSON 编码 6 KiB 的预览，
+旧端忽略 coverage 字段并照常读 `handoff`／`resumed`。沿用既有消息投影和 Agent send 通道，relay 传输协议、
+数据库 schema 与 Mobile 原生配置均无变化。
+
+回归：`relocateNativeHistory.test.ts`、`nativeHistoryTransfer.test.ts`、`nativeHistoryStorage.test.ts`、
+`sessionAgentSwitchHandler.test.ts`、`agentHandoff.test.ts`、device-link `remoteAgent.test.ts`。

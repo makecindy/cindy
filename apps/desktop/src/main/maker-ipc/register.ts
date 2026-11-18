@@ -258,6 +258,7 @@ import type {
 } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
+  getModel,
   isModelSelectableForNewRoute,
   buildUserProvider,
   mergeDiscoveredRuntimeModels,
@@ -1219,7 +1220,7 @@ import {
 } from './sessionRuntimeHarnessSelection.js';
 import {
   COMPANION_SESSION_IDS_LIMIT,
-  buildHandoffText,
+  buildHandoff,
   extractAgentIslandPromptText,
   extractPlainText,
   prependNoteToWireUserMessage,
@@ -3520,11 +3521,6 @@ const orcaWorkerPermissionConfirmBridge = new OrcaWorkerPermissionConfirmBridge(
   logger: log,
 });
 
-const taskActionConfirmBridge = new OrcaWorkerPermissionConfirmBridge({
-  broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
-  logger: log,
-});
-
 export async function confirmTaskAction(
   sessionId: string, tool: string, args: unknown, context?: TaskActionConfirmation,
 ): Promise<boolean> {
@@ -3840,7 +3836,6 @@ function getPendingInteractionsForSession(sessionId: string): PendingInteraction
     ...mcpSetupBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
     ...issueConfirmBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
     ...renameSessionsConfirmBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
-    ...taskActionConfirmBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
     ...orcaWorkerPermissionConfirmBridge
       .pendingSnapshots(sessionId)
       .map(({ request }) => ({ request })),
@@ -4156,7 +4151,6 @@ function inputHandoffNoteDelivered(sessionId: string): void {
 function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
   mcpSetupBridge.cleanupForSession(sessionId);
   cleanupPendingAgentInteractionsForSession(sessionId, reason);
-  taskActionConfirmBridge.cleanupForSession(sessionId, reason === 'session_closed' ? 'session_closed' : 'session_aborted');
   // Desktop-only 确认只跟随真实会话终止/中止清理。权威 NO_ACTIVE_TURN 的
   // turn-idle reconcile 只处理 Agent-owned 僵尸，不能取消仍有效的 Host 工具等待。
   issueConfirmBridge.cleanupForSession(
@@ -8749,8 +8743,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     agent: AgentKind,
     model: string,
     providerId: string | null,
-  ): Promise<void> {
-    await readUsableAgentDeviceProviders(deviceId, agent, model, providerId);
+  ): Promise<number | null> {
+    const providers = await readUsableAgentDeviceProviders(deviceId, agent, model, providerId);
+    const selected = providerId ?? effectiveSourceIdForModel(providers, null, model, agent);
+    const provider = providers.find((view) => view.id === selected);
+    return provider ? getModel(provider, model, agent)?.contextWindow ?? null : null;
+  }
+
+  function resolveLocalHandoffWindow(sessionId: string, agent: AgentKind, model: string, providerId: string | null) {
+    return resolveConfiguredContextWindow(getActiveCatalog(), agent, providerId, model,
+      readSessionContextWindowBudget(sessionId));
   }
 
   async function readUsableAgentDeviceProviders(
@@ -9271,7 +9273,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 const [row] = await getDbClient().drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1);
                 return row;
               },
-              listMessages: id => listMessagesForAgentHandoff(id, 400),
+              listMessages: id => listMessagesForAgentHandoff(id, null, undefined, 'replay'),
               commit: commitContextRebuild,
               setPending: (id, handoff, generation) => agentHandoffPending.set(id, handoff, generation),
               publish: id => broadcastSessionPatched(id, { sdkSessionId: null, contextTokens: 0 }),
@@ -9568,18 +9570,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           (row.sdkSessionId !== null && row.sdkSessionId !== session.sdkSessionId)
         )
           return;
-        const history = await listMessagesForAgentHandoff(sessionId, 400);
+        const history = await listMessagesForAgentHandoff(sessionId, null, undefined, 'replay');
         assertLocalAppOwner();
         const generation = agentHandoffPending.readGeneration(sessionId);
         const label = session.agentKind;
-        const handoff = buildHandoffText(history, {
+        const { handoff, handoffCoverage } = buildHandoff(history, {
           fromLabel: label,
           toLabel: label,
           sessionId,
+          targetContextWindow: row.contextWindow,
           reason: 'native-session-recovery',
         });
         await commitContextRebuild(sessionId, handoff, {
           reason: 'native-session-recovery',
+          handoffCoverage,
           sourceUserClientId: null,
           sourceAgentKind: makerToDbAgentKind(session.agentKind),
           sourceModel: row.model ?? null,
@@ -11425,14 +11429,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
     readOwnerGeneration: () => getActiveAppSession().generation,
-    confirmNativeHistoryFallback: async (sessionId, targetDeviceId) => {
-      const label = describeAgentDevice(targetDeviceId) ?? t('sharedTask.otherDevice');
-      const result = await taskActionConfirmBridge.request(sessionId, {
-        title: t('providerGroup.rebalance.fallbackTitle').replace('{{label}}', () => label),
-        description: t('providerGroup.rebalance.fallbackDescription'),
-        action: { toolName: 'session_history_fallback', input: { computer: label }, confirmation: 'native_history_fallback' },
-      });
-      return result.confirmed;
+    resolveHandoffWindow: async ({ sessionId, agent, model, providerId, agentDeviceId }) => {
+      if (!agentDeviceId) return resolveLocalHandoffWindow(sessionId, agent, model, providerId);
+      try {
+        const route = await readRemoteProviderRoute({ agentDeviceId, agentKind: agent, model, providerId });
+        return route.model.contextWindow ?? null;
+      } catch {
+        // A history budget probe never owns route availability or a retry.
+        return null;
+      }
+    },
+    listCompanionSessionIds: async (sessionId) => {
+      const row = await readContextRecoverySession(sessionId);
+      if (row?.botRole !== 'canonical') return undefined;
+      try {
+        return await listBotRecallSessionIds(sessionId, COMPANION_SESSION_IDS_LIMIT);
+      } catch {
+        return { sessionIds: [], chatsTruncated: false };
+      }
     },
     peekPendingHandoff: sessionId => agentHandoffPending.peek(sessionId),
     relocateNativeHistory: createNativeHistoryRelocator(app.getPath('userData'), remoteBackgroundInvoke),
@@ -11455,7 +11469,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId, 'agent-switch'),
     listMessagesForHandoff: (sessionId, after) =>
-      listMessagesForAgentHandoff(sessionId, 400, after),
+      listMessagesForAgentHandoff(sessionId, null, after, 'replay'),
     findParkedEngineSession: (sessionId, targetDbKind, fromAgentDeviceId) =>
       findParkedEngineSession(sessionId, targetDbKind, fromAgentDeviceId),
     applyAgentSwitchToDb: createAgentSwitchDbApply(applyAgentSwitchToSessionRow, resolveConfiguredContextWindow),
@@ -11696,14 +11710,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerMakerMessageDeleteHandler(makerSessionRegistry, {
     getSessionRow: async (sessionId) => {
       const [row] = await getDbClient()
-        .drizzle.select({ status: sessions.status, agentKind: sessions.agentKind })
+        .drizzle.select({
+          status: sessions.status, agentKind: sessions.agentKind, contextWindow: sessions.contextWindow,
+          model: sessions.model, providerId: sessions.providerId, agentDeviceId: sessions.agentDeviceId,
+        })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
-      return row ?? null;
+      if (!row) return null;
+      const configured = !row.agentDeviceId && row.model
+        ? resolveLocalHandoffWindow(sessionId, dbToMakerAgentKind(row.agentKind), row.model, row.providerId)
+        : null;
+      return { ...row, contextWindow: configured && row.contextWindow
+        ? Math.min(configured, row.contextWindow) : configured ?? row.contextWindow };
     },
     getMessage: getMessageDeletionTarget,
-    listMessagesForContext: (sessionId) => listMessagesForAgentHandoff(sessionId, 400),
+    listMessagesForContext: (sessionId) => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     hasBackgroundActivity: getClaudeSessionBackgroundActivity,
     closeSession: (sessionId) => maker.closeSession(sessionId),
@@ -18802,12 +18824,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isDataOwnerBroadcastScopeCurrent: (...args) => isDataOwnerBroadcastScopeCurrent(...args),
     }, threadId),
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
+    resolveHandoffWindow: (sessionId, agent, model, providerId) =>
+      resolveLocalHandoffWindow(sessionId, dbToMakerAgentKind(agent), model, providerId),
     resolveVerifiedWindow: (agentKind, modelId, providerId) => {
       const catalog = getActiveCatalog();
       const makerAgentKind = dbToMakerAgentKind(agentKind);
       return resolveConfiguredContextWindow(catalog, makerAgentKind, providerId, modelId);
     },
     listMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, 400),
+    listReplayMessages: (sessionId) => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
     // 伙伴自有会话(当前 + 恢复前旧对话整体优先,后台任务补足),写进回忆指引限定 history 工具范围。
     listCompanionSessionIds: (sessionId) => listBotRecallSessionIds(sessionId, COMPANION_SESSION_IDS_LIMIT),
     findLatestUser: findLatestUserMessageForRebuild,
@@ -22317,10 +22342,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       if (issueConfirmBridge.resolve(requestId, decision)) return { accepted: true };
       if (renameSessionsConfirmBridge.resolve(requestId, decision)) return { accepted: true };
-      if (!sharedTask && taskActionConfirmBridge.resolveFromIpc(requestId, decision, {
-        isDeviceLink: isDeviceLinkInvoke(),
-        assertTrustedSender: () => assertTrustedAppRendererEvent(event),
-      })) return { accepted: true };
       if (
         orcaWorkerPermissionConfirmBridge.resolveFromIpc(requestId, decision, {
           isDeviceLink: isDeviceLinkInvoke(),

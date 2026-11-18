@@ -8,7 +8,7 @@
  * 有效历史作为 wire-only 前缀注入到全新原生会话，显示/落库仍只有用户新消息。
  */
 
-import { buildHandoffText, type HandoffSourceMessage } from './agentHandoff.js';
+import { buildHandoff, type HandoffCoverage, type HandoffSourceMessage } from './agentHandoff.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import type {
@@ -24,6 +24,7 @@ interface ContextSourceMessage extends HandoffSourceMessage {
 interface MessageDeleteSessionRow {
   status: string;
   agentKind: string;
+  contextWindow?: number | null;
 }
 
 /**
@@ -56,6 +57,7 @@ export interface MessageDeleteHandlerDeps {
     clientIds: string[],
     handoff: string,
     subagentTurnWindow?: SubagentTurnDeletionWindow,
+    handoffCoverage?: HandoffCoverage,
   ): Promise<MessageDeleteCommittedPayload>;
   /** 见 sessionAgentSwitchHandler 同名字段:带代次写,防 /clear 竞态。 */
   setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
@@ -133,10 +135,11 @@ export async function performMessageDeletion(
     const deletedClientIds = new Set(target.deletedClientIds);
     const remaining = source.filter((message) => !deletedClientIds.has(message.clientId));
     const label = engineLabel(sessionRow.agentKind);
-    const handoff = buildHandoffText(remaining, {
+    const { handoff, handoffCoverage } = buildHandoff(remaining, {
       fromLabel: label,
       toLabel: label,
       sessionId,
+      targetContextWindow: sessionRow.contextWindow,
       reason: 'message-deletion',
     });
 
@@ -145,6 +148,7 @@ export async function performMessageDeletion(
       target.deletedClientIds,
       handoff,
       target.subagentTurnWindow,
+      handoffCoverage,
     );
     deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
     await deps.onCommitted(committed, clientId);

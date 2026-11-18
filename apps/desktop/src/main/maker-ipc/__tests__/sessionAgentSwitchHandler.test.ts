@@ -42,7 +42,6 @@ function makeDeps(overrides: Partial<MakerSessionAgentSwitchHandlerDeps> = {}): 
 } {
   const calls: string[] = [];
   const deps: MakerSessionAgentSwitchHandlerDeps = {
-    confirmNativeHistoryFallback: vi.fn(async () => true),
     getSessionRow: vi.fn(async () => makeRow()),
     getLiveSession: vi.fn(() => ({ isTurnRunning: () => false })),
     closeSession: vi.fn(async () => {
@@ -139,47 +138,46 @@ it('rejects an unavailable same-device connection before closing or changing the
   expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
 });
 
-it('keeps the source connection when same-device quota balancing summary is declined', async () => {
+it('automatically replays history when same-device quota balancing changes connections', async () => {
   const row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' });
-  const { deps } = makeDeps({
-    getSessionRow: vi.fn(async () => row),
-    confirmNativeHistoryFallback: vi.fn(async () => false),
-  });
-  await expect(performSessionAgentSwitch(deps, {
+  const { deps } = makeDeps({ getSessionRow: vi.fn(async () => row) });
+  await performSessionAgentSwitch(deps, {
     ...validParams, agentDeviceId: 'mini', providerId: 'openai-sub-bbbbbbbb', applyNow: true,
     providerGroupRelocation: true, providerGroupSwitchReason: 'quota-rebalance',
-  })).rejects.toThrow('NATIVE_HISTORY_FALLBACK_DECLINED');
-  expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledWith('s1', 'mini');
-  expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
-  expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
-  expect(deps.setSessionProvider).not.toHaveBeenCalled();
-  expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
+  });
+  expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
+    handoffCoverage: 'complete',
+    toProviderId: 'openai-sub-bbbbbbbb',
+  }));
 });
 
+
 describe('same-harness native relocation', () => {
-  // Quota balancing is now automatic only while native context survives. Exercise the
-  // real switch entry: refusal after a failed resume must restore the original route.
-  it.each(['missing', 'rejected', 'silent'] as const)('asks before summary fallback after %s native history and preserves the source on refusal', async failure => {
+  // Unit: native failure must restore the source before committing a fresh
+  // target and publish the same replay to DB and the next send.
+  it.each(['missing', 'rejected', 'silent'] as const)('automatically replays after %s native history', async failure => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: null });
     const original = { ...row };
     const { deps } = makeDeps({
       getSessionRow: vi.fn(async () => ({ ...row })),
       relocateNativeHistory: vi.fn(async () => failure === 'missing' ? null : 'transferred'),
       closeSession: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error('DEVICE_LINK_NOT_CONNECTED')),
-      applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => {
+        if (patch.agentDeviceId === 'mini' && patch.sdkSessionId === null) {
+          expect(row).toMatchObject({ sdkSessionId: original.sdkSessionId, agentDeviceId: original.agentDeviceId });
+        }
+        row = { ...row, ...patch, providerId: patch.providerId ?? null };
+      }),
       getLiveSession: () => ({ isTurnRunning: () => false, sdkSessionId: failure === 'silent' ? 'fresh' : row.sdkSessionId ?? undefined }),
       bootstrapSwitchedSession: vi.fn(async () => { if (failure === 'rejected') throw new Error('cannot resume'); }),
-      confirmNativeHistoryFallback: vi.fn(async () => {
-        expect(row).toMatchObject({ sdkSessionId: original.sdkSessionId, agentDeviceId: original.agentDeviceId, providerId: original.providerId });
-        return false;
-      }),
     });
-    await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
-      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' })).rejects.toThrow('NATIVE_HISTORY_FALLBACK_DECLINED');
-    expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledOnce();
-    expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
-    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
-    expect(row.sdkSessionId).toBe('source-native');
+    await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
+      applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' });
+    expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({
+      nativeHistory: 'fallback', handoffCoverage: 'complete', handoff: expect.stringContaining('你好'),
+    }));
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
+    expect(row).toMatchObject({ sdkSessionId: null, agentDeviceId: 'mini' });
   });
 
   // A target that cannot take the task (full, unreachable, model not offered) is not a
@@ -206,13 +204,12 @@ describe('same-harness native relocation', () => {
     await expect(performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
       applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' })).rejects.toThrow(message);
     expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
-    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
     expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
     expect(deps.setPendingHandoff).not.toHaveBeenCalled();
     expect(row).toEqual(original);
   });
 
-  it.each([false, true])('publishes an automatic native switch without asking, or a confirmed summary (%s)', async resumeFails => {
+  it.each([false, true])('publishes an automatic native switch or replay fallback (%s)', async resumeFails => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native' });
     const { deps } = makeDeps({
       getSessionRow: vi.fn(async () => ({ ...row })),
@@ -223,7 +220,6 @@ describe('same-harness native relocation', () => {
     });
     await performSessionAgentSwitch(deps, { ...validParams, targetAgentKind: 'claude-code', agentDeviceId: 'mini',
       applyNow: true, skipBootstrap: true, providerGroupSwitchReason: 'quota-rebalance' });
-    expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledTimes(resumeFails ? 1 : 0);
     expect(deps.bootstrapSwitchedSession).toHaveBeenCalledOnce();
     expect(deps.insertBoundaryMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ nativeHistory: resumeFails ? 'fallback' : 'restored' }));
     expect(row.agentDeviceId).toBe('mini');
@@ -243,7 +239,6 @@ describe('same-harness native relocation', () => {
       applyNow: true, providerGroupSwitchReason: 'quota-rebalance', signal: controller.signal })).rejects.toThrow();
     expect(row.sdkSessionId).toBe('source-native');
     expect(row.agentDeviceId).toBeNull();
-    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
   });
 
   it.each(['closed', 'close-rejected', 'account-changed', 'history-cleared'] as const)('rolls back a successful quota probe when the final route write fails (%s)', async state => {
@@ -277,7 +272,6 @@ describe('same-harness native relocation', () => {
     expect(live).toBe(false);
     expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
     expect(deps.setPendingHandoff).not.toHaveBeenCalled();
-    expect(deps.confirmNativeHistoryFallback).not.toHaveBeenCalled();
     if (state === 'account-changed' || state === 'history-cleared') {
       expect(deps.applyAgentSwitchToDb).toHaveBeenCalledTimes(2);
       expect(deps.setSessionProvider).toHaveBeenCalledTimes(1);
