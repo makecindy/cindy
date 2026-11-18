@@ -491,6 +491,7 @@ export function buildUserProvider(
     );
     if (rt.imageApi === "openai-images") routing[agent]!.imageApi = rt.imageApi;
     if (isProviderVideoApi(rt.videoApi)) routing[agent]!.videoApi = rt.videoApi;
+    if (rt.catalogPresetId) routing[agent]!.catalogPresetId = rt.catalogPresetId;
     const followsPreset =
       presetRuntime &&
       withoutTrailingSlashes(resolvedBaseUrl) ===

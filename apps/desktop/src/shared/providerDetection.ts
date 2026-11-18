@@ -6,6 +6,8 @@ export interface DetectionCatalog {
   models?: DiscoveredModel[];
   code?: ProviderErrorCode;
   status?: number;
+  gatewayKind?: 'magpie';
+  catalogComplete?: boolean;
 }
 export interface DeploymentDetectionResult {
   candidates: DeploymentProvider[];
