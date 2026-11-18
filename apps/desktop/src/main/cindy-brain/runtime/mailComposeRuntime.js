@@ -1105,12 +1105,20 @@ var cindyMail = (function () {
           if (!result.ok) edit.error = result;
           if (result.ok) edit.additions = [];
         }
-        const terminalRoutes = await mailRecords(records => {
-          storeMailRecord(records, key, record);
-          if (result.ok) finalizeMailRoutes(records, record);
-          else if (record.state === 'pending') markMailUncertain(records, record, result);
-          return records;
-        });
+        let terminalRoutes = records;
+        try {
+          terminalRoutes = await mailRecords(records => {
+            storeMailRecord(records, key, record);
+            if (result.ok) finalizeMailRoutes(records, record);
+            else if (record.state === 'pending') markMailUncertain(records, record, result);
+            return records;
+          });
+        } catch (error) {
+          // The primary pending write preceded the destructive request. Even if
+          // its final read/fan-out fails, seal existing editors from that snapshot.
+          if (record.state !== 'pending') throw error;
+          markMailUncertain(terminalRoutes, record, result);
+        }
         if (result.ok || record.state === 'pending') await publishMailOutcome(record, sourceCallId, terminalRoutes, result.message);
         else await mailStatus(record.callId, result.message || copy.failed,
           "", false, sourceCallId, record.state === "draft" ? "error" : "unconfirmed");

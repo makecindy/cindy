@@ -2282,11 +2282,13 @@ test('recovery preserves typing while field digests are in flight', async () => 
 });
 
 // Unknown is shared by all routes but never shares their private field values.
-for (const operation of ['update', 'send', 'delete']) for (const fanoutFailure of operation === 'send' ? [false, true] : [false]) test(`unknown ${operation} disables retained editors but still permits mailbox inspection: fanoutFailure=${fanoutFailure}`, async () => {
-  let f, unknown = false, reopened = false;
+for (const operation of ['update', 'send', 'delete']) for (const fanoutFailure of operation === 'send' ? [false, true] : operation === 'delete' ? [false, 'read', 'write'] : [false]) test(`unknown ${operation} disables retained editors but still permits mailbox inspection: fanoutFailure=${fanoutFailure}`, async () => {
+  let f, unknown = false, reopened = false, deleteOutcome = false;
   f = fixture({ allowCardRead: false, publish: card => !(fanoutFailure && !reopened && card.callId === 'agent-call' && card.statusOnly?.state === 'unconfirmed'), kvWrite: next => {
-    if (fanoutFailure && unknown && Object.values(next.mailDraftCards || {}).every(r => r.state === 'pending')) throw new Error('Synthetic unknown fan-out persistence failure');
-  }, remove: () => ({ ok: false, execution: 'unknown', message: 'Uncertain delete' }), write: request => {
+    if (fanoutFailure && fanoutFailure !== 'read' && unknown && Object.values(next.mailDraftCards || {}).every(r => r.state === 'pending')) throw new Error('Synthetic unknown fan-out persistence failure');
+  }, kvRead: () => {
+    if (fanoutFailure === 'read' && deleteOutcome) { deleteOutcome = false; throw new Error('Synthetic unknown-delete final GET failure'); }
+  }, remove: () => { deleteOutcome = true; return { ok: false, execution: 'unknown', message: 'Uncertain delete' }; }, write: request => {
     if (f.writes.length === 1) {
       f.externalEdit({ body: request.fields.body });
       return { ok: false, execution: 'executed', message: 'Verification failed' };
