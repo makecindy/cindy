@@ -136,6 +136,12 @@ void mountPage({
         },
       ],
     };
+    if (ctx.case.startsWith('official-plan-name')) {
+      view.accounts[0] = {
+        ...view.accounts[0], plan: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
+        usage: usage({ ...defaultSnapshot, subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' }),
+      };
+    }
     if (ctx.case.startsWith('codex-no-usage')) view.accounts[1].usage = undefined;
     if (ctx.case === 'expiry-past')
       view.accounts[1].loginExpiresAt = new Date(now - 86_400_000).toISOString();

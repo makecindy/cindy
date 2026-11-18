@@ -3,6 +3,7 @@ import './boot-env.js';
 // Second: keeps unreadable user settings files instead of deleting them.
 import './boot-settings.js';
 import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
+import type { ProjectInfoAuthorization } from '../../desktop/src/main/projectInfoAuthorization.js';
 import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
@@ -32,6 +33,9 @@ import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.js';
 import os from 'node:os';
 import path from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import WebSocket from 'ws';
+import { createHostWebSocketAgent, hostOutbound } from './outbound.mjs';
 import { getDefaultVoiceInputSettings } from '../../desktop/src/shared/voiceInputData.ts';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../desktop/src/shared/appearanceSettings.ts';
 import { createDefaultLayout } from '../../desktop/src/shared/layoutTree.ts';
@@ -46,6 +50,7 @@ import { openSystemBrowser, openHostBrowser } from './browser-open.mjs';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.js';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
 import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
+import { waitForRetainedDbClient } from '../../desktop/src/main/localDb/client/pendingOperations.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { touchUserSendRow } from '../../desktop/src/main/localDb/sessionQueries.ts';
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
@@ -164,7 +169,7 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 
 const command = process.argv[2];
 if (command === '--help' || command === '-h') {
-  console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>]|stop]');
+  console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]|stop]');
 } else if (command === 'open') {
   try {
     await openHostBrowser(resolveHostDataDir());
@@ -207,7 +212,8 @@ if (command === '--help' || command === '-h') {
  } else if (command === 'remote') {
   try {
     const action = process.argv[3] ?? 'status';
-    if (!['status', 'enable', 'disable', 'revoke'].includes(action)) throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>]');
+    if (!['status', 'enable', 'disable', 'revoke', 'agent-net-on', 'agent-net-off'].includes(action))
+      throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]');
     console.log(JSON.stringify(await requestHostRemote(resolveHostDataDir(), action, process.argv[4]), null, 2));
   } catch (error) {
     console.error(`cindy-host remote failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -542,7 +548,11 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   setCurrentDbClient(client, ownerId);
   activeOwner = ownerId;
   await reconcileDeletedTaskViewState(client, () => activeOwner === ownerId);
-  closeStorage = async () => { clearCurrentDbClient(client); await client.dispose(); };
+  closeStorage = async () => {
+    clearCurrentDbClient(client);
+    await waitForRetainedDbClient(client);
+    await client.dispose();
+  };
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();
   // Desktop runs this repair once the account DB is ready (bootstrap-electron.ts):
@@ -600,6 +610,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
   hostTools = createHostToolService({ profileDir: dataDir, ownerId,
+    deviceId: () => currentDeviceId ?? 'local',
+    onProjectsChanged: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
     current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null,
     files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
@@ -630,7 +642,6 @@ async function ensureRuntime(ownerId: string): Promise<void> {
         },
       }),
       openExternal: async url => { await openSystemBrowser(url); },
-      modelAccessReady: () => Boolean(currentGateway()?.credential),
     },
     getSession: id => agentGraph?.maker.getSession(id),
     requestFileConfirmation: (id, payload) => fileConfirmation.request(id, payload),
@@ -717,7 +728,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     const gateway = modelAccess!.gateway;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
-    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId });
+    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId, getMaker: () => agentGraph?.maker ?? null });
     // Flip the flag before the agents are built: their runtimeConfig snapshots it
     // at construction, and native-agent syncoff needs the agents that do not exist yet.
     if (makerMemory.isEnabled()) await makerMemory.enable({ skipAgentSync: true });
@@ -769,9 +780,6 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       makerMemory,
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
-      // Vision-bridge notices, which the desktop sends its windows; the client maps them to
-      // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
-      publishVisionBridgeNotice: notice => eventHub.publish(notice),
       mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
       userDataDir: dataDir,
     });
@@ -1240,9 +1248,26 @@ const serverDeps = {
   readProjectInfo,
   readProjectIconImage,
   resolveAutomaticProjectIcon,
-  updateProjectInfo: async (input: unknown) => {
-    const result = await updateProjectInfo(input);
-    eventHub.publish({ type: 'project_aliases_changed' });
+  updateProjectInfo: async (input: unknown, source: { desktopRequest?: string; legacyDesktop?: boolean } = {}) => {
+    const platform = platformClient;
+    let authorization: ProjectInfoAuthorization | undefined = { kind: 'host' };
+    if (source.desktopRequest) {
+      const requestId = source.desktopRequest;
+      authorization = { kind: 'renderer', async check(check) {
+        if (!platform || !platform.status().attached) throw Error('Desktop project window unavailable');
+        try {
+          const answer = await platform.call({ method: 'project.check', requestId, check });
+          if (answer !== true) throw Error('Project authorization unavailable');
+        } catch (error) {
+          if ((error as { code?: string }).code === 'MUTATION_CANCELLED') throw Error('[MUTATION_CANCELLED] Project action cancelled');
+          throw error;
+        }
+      } };
+    } else if (source.legacyDesktop) {
+      authorization = undefined;
+    }
+    const result = await updateProjectInfo(input, authorization);
+    eventHub.publish({ type: 'project_aliases_changed', catalogChanged: !!result.createdProjectKey });
     return result;
   },
   listProjectAliases: async () => {
@@ -1603,8 +1628,6 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
     // Stop watching this profile's Pi packages once Maker no longer runs Pi.
     agentGraph?.piPackages.close();
-    // As the desktop's teardown: the process-wide vision-bridge controller and key reader go.
-    await attempt(() => agentGraph?.visionBridge.close());
     await attempt(() => codexRuntime?.close());
     await attempt(() => claudeProxy?.close());
     await attempt(() => mcpRuntime?.close());
@@ -1658,9 +1681,59 @@ const server = createHostServer({ ...serverDeps, service, platformClient: () => 
     if (action === 'status') return deviceLink.state();
     if (action === 'enable' || action === 'disable') return deviceLink.setEnabled(action === 'enable');
     if (action === 'revoke') return deviceLink.revoke(body.deviceId ?? '');
+    // This Host's 「Agent-Net (Beta)」 setting; off by default (docs/agent-net-session-plan.md 阶段 5).
+    if (action === 'agent-net-on' || action === 'agent-net-off') return deviceLink.setAgentNetEnabled(action === 'agent-net-on');
     throw new Error('Unknown remote control command');
   },
 });
+
+/**
+ * Agent-Net for this Host (docs/agent-net-session-plan.md 阶段 5), wired like the Desktop: the account token only enrolls
+ * this device on the region's official Agent-Net service; the identity's keys stay in this Host's credential store.
+ * Off until the Host's 「Agent-Net (Beta)」 setting is turned on.
+ */
+function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentNet'] {
+  const realm = account.realm === 'cn' ? 'cn' : 'global';
+  const base = readAuthEndpoints(realm).agentNetApiBaseUrl ?? null;
+  if (!base) return undefined;
+  let store: Promise<Awaited<ReturnType<typeof createCredentialStore>>> | null = null;
+  // A store that could not open (keyring still locked) is tried again on the next use, not remembered as failed.
+  const credentials = () => (store ??= createCredentialStore({ userDataDir: resolveHostDataDir(),
+    keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined }).catch((error: unknown) => { store = null; throw error; }));
+  let core: Promise<WebAssembly.Module> | null = null;
+  return {
+    base: () => base,
+    subject: () => accountUser?.id ?? null,
+    deviceId: () => currentDeviceId,
+    deviceName: () => process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`,
+    readSecret: async key => (await credentials()).read(key),
+    writeSecret: async (key, value) => { (await credentials()).write(key, value); },
+    enroll: (url, body) => serverApi('/api/agent-net/enroll', { baseUrl: url, method: 'POST', body, timeoutMs: 10_000, cache: 'no-store',
+      logLabel: '/api/agent-net/enroll', redactErrorDetails: true, allowedRedactedErrorCodes: ['DEVICE_REENROLLMENT_REQUIRES_APPROVAL'] }),
+    fetch: (input, init) => hostOutbound.outboundFetch(input, init),
+    createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createHostWebSocketAgent(url) }),
+    workerFile: () => (existsSync(layout.agentNetWorker) ? layout.agentNetWorker : null),
+    coreModule: () => (core ??= readFile(layout.agentNetCore).then(bytes => WebAssembly.compile(bytes))
+      .catch((error) => { core = null; throw error; })),
+    // Devices removed from the account in Device Link are refused on Agent-Net until they sign in again (packages/agent-net/src/membership.ts).
+    deviceLinkDeviceIds: async () => {
+      const baseUrl = readAuthEndpoints(realm).deviceLinkApiBaseUrl;
+      if (!baseUrl || !account.authenticated) return null;
+      const listed = await serverApi<{ devices?: Array<{ deviceId?: unknown }> }>('/api/device-link/devices', {
+        baseUrl, timeoutMs: 10_000, cache: 'no-store', redactErrorDetails: true });
+      return Array.isArray(listed?.devices)
+        ? listed.devices.map(device => device?.deviceId).filter((id): id is string => typeof id === 'string') : null;
+    },
+    // 名册缓存（公开证书）：官方 Agent-Net 服务出故障时重启也能起来，和 Desktop 一样（agentNetDirectoryCache.ts）。按服务与账号各一份。
+    directoryCacheFile: () => {
+      const subject = accountUser?.id;
+      if (!subject) return null;
+      const scope = createHash('sha256').update(JSON.stringify([base, subject])).digest('hex').slice(0, 32);
+      return path.join(resolveHostDataDir(), 'agent-net', scope, 'directory.json');
+    },
+    log: createLogger('agent-net'),
+  };
+}
 
 function startDeviceLink(): void {
   if (deviceLink) return;
@@ -1674,6 +1747,7 @@ function startDeviceLink(): void {
     getToken: async () => currentSessionToken,
     refreshToken: async () => { await refreshAuthSession(); },
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
+    agentNet: hostAgentNetPorts(),
     invoke: service, subscribe: eventHub.subscribe,
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();

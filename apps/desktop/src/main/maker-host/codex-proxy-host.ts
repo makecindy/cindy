@@ -25,7 +25,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeUnsupportedCodexWebSearch, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -78,7 +78,6 @@ import {
   type RoutingTransform,
   type RecoveryRule,
 } from '@cindy/anthropic-compat-proxy';
-import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
   chainResponseTransforms,
   createResponsesNullArrayRepairTransform,
@@ -139,6 +138,7 @@ import {
   xaiModelInputStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { createCodexBedrockSearchCompatibilityRule } from './codex-bedrock-search-compat.js';
 import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { getLogDir } from '../logger.js';
 import { createCodexImageModelRewrite } from './codex-image-model-rewrite.js';
@@ -357,6 +357,7 @@ const CODEX_BODY_RECOVERY_RULES = [
   duplicateResponsesToolCallRecoveryRule,
   xaiModelInputRecoveryRule,
   vllmResponsesCompatibilityRule,
+  createCodexBedrockSearchCompatibilityRule(),
 ] as const;
 
 /** Only fall back for the exact dialect mismatches the outgoing normalizer can repair. */
@@ -2935,7 +2936,11 @@ function createCustomProviderReasoningTransform(
       || !isPlainObject(body) || typeof body.model !== 'string') return null;
     const route = customProviderRouteSnapshot(path.routeId, frozenRoutes);
     if (!route?.responseModels.includes(body.model)) return null;
-    const next = reconcileResponsesReasoningEffort(body, route.responseEffortsByModel[body.model] ?? []);
+    const routing = route.responseRoutingByModel[body.model];
+    const supported = routing && (routing.wireProtocol ?? 'openai-responses') === 'openai-responses'
+      ? normalizeUnsupportedCodexWebSearch(body, { harness: 'codex', protocol: 'openai-responses',
+          upstreamBase: ctx.upstreamBase ?? routing.upstream, model: body.model }) : body;
+    const next = reconcileResponsesReasoningEffort(supported, route.responseEffortsByModel[body.model] ?? []);
     return next === body ? null : next;
   };
 }
@@ -3346,7 +3351,7 @@ function createTransformRequestChain(
   frozenAuthInjection?: CodexProxyAuthInjection,
   execAdapter = createCodexResponsesCompatibilityAdapter(),
   pricing: XaiRequestPricing = new Map(),
-  /** 供应商分享受邀者的 proxy：不走视觉桥(视觉后端是本机用户自己的其它供应商)。 */
+  /** 是否是供应商分享受邀者的 proxy，沿用分享来源隔离与请求转换规则。 */
   guest = false,
 ): RequestTransform[] {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
@@ -3449,11 +3454,7 @@ function createTransformRequestChain(
       enabled: () => true,
       strip: stripResponsesReasoningContentFromBody,
     }),
-    // 视觉桥透明替换（层 A，Responses 格式）：controller 未注入时短路透传，零干扰；
-    // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
-    // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
-    ...(guest ? [] : [buildVisionBridgeProxyTransform(log)]),
-    // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
+
     // This covers native-custom routes and tool-less /responses/compact without changing call_id.
     normalizeResponsesToolItemIds,
     createActiveStripTransform({
@@ -3666,7 +3667,7 @@ async function createCodexProxyHandle(
         scoped.onRequestSettled = transform.onRequestSettled;
         return scoped;
       },
-    ).concat((body, ctx) => {
+    ).concat(Object.assign((body: unknown, ctx: RequestTransformCtx) => {
       // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
       // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
       if (crossProviderRequests.has(ctx.headers)) return null;
@@ -3680,7 +3681,7 @@ async function createCodexProxyHandle(
         );
       }
       return reconciled;
-    }),
+    }, { errorMode: 'reject-request' as const })),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);

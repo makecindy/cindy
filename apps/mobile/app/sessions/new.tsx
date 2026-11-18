@@ -1,3 +1,5 @@
+import { useRemoteProjectAliases as useProjectInfoSnapshots } from '@/session/remoteProjectAliases';
+import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
 import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
 import { playHaptic } from '@/platform/haptics';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
@@ -598,6 +600,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const maker = useMobileMakerTransport(selectedDeviceId);
   const sessions = useRemoteSessions();
   const projectAliases = useRemoteProjectAliases([selectedDeviceId]);
+  const projectInfo = useProjectInfoSnapshots().get(selectedDeviceId);
   const recentWorkspaces = useMemo(
     () => buildRecentWorkspaceOptions(
       sessions.filter((session) => session.deviceLinkDeviceId === selectedDeviceId),
@@ -722,6 +725,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 被控端落目标消息并自动开跑第一轮,成功后跳转会话页。
   const [goalBusy, setGoalBusy] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const createProjectPending = useRef(false);
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
   const workspacePickerHostRef = useRef<ViewInstance>(null);
   const workspacePickerAnchorRef = useRef<ViewInstance>(null);
@@ -4264,6 +4269,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // 缓存文件永久留在本地)。
       composerAnnotationsRef.current?.forgetAllAttachments();
       handedOff = true;
+      // 首条消息已交接:收起输入框与软键盘(与任务页发送同口径),进入任务页时不带着键盘。
+      setComposerVoiceHoldArmed(false);
+      firstMessageInputRef.current?.blur();
       router.replace({
         pathname: '/sessions/[sessionId]',
         params: { sessionId, deviceId: deviceIdSnapshot, deviceName: selectedDeviceName },
@@ -5724,15 +5732,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               )}
               <View style={styles.workspaceDivider} />
               <Pressable
-                accessibilityLabel={t('session.new.chooseOtherFolder')}
+                accessibilityLabel={t('settings.projectInfo.createTitle')}
                 accessibilityRole="button"
                 disabled={creating}
-                onPress={openProjectBrowse}
+                onPress={() => { setWorkspacePickerOpen(false); if ((projectInfo?.settingsVersion ?? 0) >= 6) setCreateProjectOpen(true); else openProjectBrowse(); }}
                 style={({ pressed }) => [styles.workspaceOptionRow, pressed && styles.pressed]}
                 testID="newSession.workspaceBrowseOption"
               >
                 <FolderPlus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-                <Text style={styles.workspaceOptionText} numberOfLines={1}>{t('session.new.chooseOtherFolder')}</Text>
+                <Text style={styles.workspaceOptionText} numberOfLines={1}>{t('settings.projectInfo.createTitle')}</Text>
               </Pressable>
               </ScrollView>
             </View>
@@ -5924,6 +5932,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       </ContextSheet>
       <OrcaWorkerDirectoryPicker picker={collabForm.directoryPicker}
         deviceId={collabForm.form.executionDeviceId} workingDir={collabForm.form.remoteDir} mode={collabForm.form.remoteDirMode} />
+      {createProjectOpen && selectedDeviceId && (
+        <ProjectSettingsSheet create deviceId={selectedDeviceId} projectKey="local:"
+          title="" directory="" visible onClose={() => setCreateProjectOpen(false)}
+          onCreated={selectRecentProject} />
+      )}
       {nativeSelectionSheet ? (
         <NewTaskSelectionSheet
         page={browseOpen ? 'directory' : devicePickerOpen ? 'device' : workspacePickerOpen ? 'workspace' : null}
@@ -5946,7 +5959,14 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               (device) => device.deviceId === id); if (option && !deviceSelectorDisabled) selectDevice(option); }}
         onDialogue={selectDialogueWorkspace}
         onProject={selectRecentProject}
-        onBrowse={openProjectBrowse}
+        browseLabel={t('settings.projectInfo.createTitle')}
+        onBrowse={() => { if ((projectInfo?.settingsVersion ?? 0) >= 6) { createProjectPending.current = true; setWorkspacePickerOpen(false); } else openProjectBrowse(); }}
+        onClosed={() => {
+          if (createProjectPending.current) {
+            createProjectPending.current = false;
+            setCreateProjectOpen(true);
+          }
+        }}
         onEnter={(path) => void loadBrowsePath(path)}
         onChoose={chooseWorkingDir}
         onShowHidden={setShowHiddenDirectories}

@@ -668,6 +668,9 @@ importers:
 
   apps/host:
     dependencies:
+      '@cindy/agent-net':
+        specifier: workspace:*
+        version: link:../../packages/agent-net
       '@cindy/anthropic-compat-proxy':
         specifier: workspace:*
         version: link:../../packages/anthropic-compat-proxy

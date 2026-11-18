@@ -1,6 +1,38 @@
 # 插件调用宿主工具 cindy.host.call
 
+工具历史的显式 role、游标读取，以及自动化 Webhook / 插件 Node HTTP 的用法见
+[读取工具历史与接收 HTTP 事件](plugin-history-and-http.md)。
+
+运行中引擎的 MCP／active tools 原生入口见[原生工具目录](plugin-native-tool-catalog.md)。
+
 插件可直接调用普通任务中 Agent 使用的宿主工具。宿主复用相同的工具处理器、数据范围和业务约束；插件没有当前任务，不借用其它任务身份。此接口与仅管理本插件所建任务的 `cindy.tasks` 分别声明。
+
+## 只跑脚本读取宿主状态
+
+定时任务选择只跑脚本时，沿原 `scriptConfig.capabilities` 分别声明 `settings.read` 或 `usage.read`。
+这是定时脚本已有的能力白名单，不替代插件的 `agent.hostTools` 声明。
+脚本通过原 `cindy-script/1` JSONL 的 `call` 帧调用以下方法，参数与同名宿主工具一致：
+
+| 能力声明 | 方法 | 允许的参数 |
+| --- | --- | --- |
+| `settings.read` | `settings.list_provider_share_members` | `providerId?`、`device?` |
+| `settings.read` | `settings.get_provider_share_model_access` | `providerId`、`memberId`、`device?` |
+| `usage.read` | `usage.get_subscription_usage` | `providerId?`，只读执行电脑 |
+| `usage.read` | `usage.get_provider_usage_history` | `providerId`、`device?` |
+| `usage.read` | `usage.get_provider_group` | `providerId`、`device?` |
+
+先调用免授权的 `host.capabilities` 查询方法及 `available`，再处理原 `call_result` 帧。
+成功帧的 `result` 是同一宿主处理器的业务结果，不额外套 MCP `content`，不重新聚合或估算。
+两种读取声明均不允许成员暂停／恢复、模型修改、账号登录、配置或其它相邻写操作；
+原始供应商目录与 `subscriptionAccounts/read` 不在脚本白名单内。
+伪造调用方身份参数被拒绝。没有服务装配时返回 `UNSUPPORTED_CAPABILITY`；旧 Host 没有方法时
+返回 `METHOD_NOT_FOUND`。异机失败不退回本机，也不自动改用模型执行。
+
+读取不启动 Agent，不消耗模型 token；原读取自身的本地、CLI 或网络成本仍存在。
+额度沿用下文 `get_subscription_usage` 的本机白名单投影，保留已知 `plan.type` / `plan.tier` 套餐字段；
+用量和组状态保留原完整性标记与可见的成员／设备信息，组自动名称沿原投影去订阅身份。
+不返回订阅登录邮箱、账号目录、内部身份指纹或凭证；账号切换和异机旧端行为沿同一宿主处理器。
+额度分配、费用、停止线、到线暂停、定时恢复、看板和提醒由插件决定，宿主不增加这些策略。
 
 ## 声明与批准
 
@@ -14,7 +46,7 @@
 | `control` | `cindy_helper` | 任务运行与管理 |
 | `handoff` | `cindy_helper` | 工具目录中归属此组的协作能力 |
 | `settings` | `cindy_helper` | 应用设置与运行配置 |
-| `usage` | `cindy_helper` | 当前 Cindy 账号在执行电脑上的订阅用量，只读 |
+| `usage` | `cindy_helper` | 本机订阅配额、已记录用量与供应商组状态；后两者可指定同账号已授权电脑，只读 |
 | `scheduler` | `cindy_scheduler` | 定时任务管理 |
 | `terminal` | `cindy_helper` | 宿主管理的命令、交互终端与后台作业 |
 | `files` | `cindy_helper` | 授权目录的文件操作与监听；调用 `file_request` |
@@ -120,7 +152,70 @@ Node Host 的插件 computer 调用与未装配的 scheduler、SSH 和文档服�
 获准 browser 组的插件都消费相同后端。无需注册新的服务中心，不能从插件代码替用户激活自己。
 停用、卸载、换版和来源变化撤销旧桥接，已有配对和用户选择按原实例保存，多个实现不静默混用。
 
+## 供应商用量与组状态
+
+声明 `agent.hostTools:["usage"]` 的插件与 Agent 调用同一宿主只读处理器，不需要当前任务或伪造 sessionId。
+不声明 `usage` 的旧插件权限不变；manifest 新增 `usage` 声明走既有整体安装确认。
+已声明且获整体安装批准的 `usage` 插件可调用该组内的读取，宿主新增组内工具不触发补批、分项批准或逐次确认。
+`usage` 安装说明覆盖本机订阅配额、已记录的按日/型号用量与估算费用、供应商组配置/状态和
+可见成员/设备标识、名称与头像；后两类读取含同账号已授权的其它电脑，不代表跨账号读取。
+仅声明 `settings` 不允许调用下面两个读取。订阅额度使用已有的 `get_subscription_usage`，字段与本机范围见下文「读取订阅用量」。
+
+```js
+await cindy.host.call('cindy_helper', 'get_provider_usage_history', {
+  providerId: selectedProviderId, device: 'local'
+});
+await cindy.host.call('cindy_helper', 'get_provider_group', {
+  providerId: selectedProviderId, device: selectedComputerId
+});
+```
+
+沿原工具返回 MCP 结果；文本 JSON 中的 `ok` 是工具回执，其余数据保持原接口形态。
+`list_model_providers` 和 `configure_model_provider` 的 `subscriptionAccounts/read` 仍要求目标电脑的本机任务上下文，
+不对无 Session 的插件开放；`usage` 不授予账号管理、登录、文件读取或设置权限。
+不返回订阅登录邮箱、CLI 配置目录、内部账号指纹、API key、OAuth token、授权请求头、登录文件内容或私钥。
+
+`get_provider_usage_history({providerId,device?})` 原样返回已有 usage-history：`providerId/todayKey/coverageStart/self/relays/members`。
+日期取供应商所在电脑的本地日，每行含模型、turns、inputTokens、outputTokens、cacheCreateTokens、cacheReadTokens 及原估算 amount；
+成员项包含 shareId/memberId，中转项包含 deviceId/deviceName，后者可为空。会暴露原 owner 可见的使用日期、型号和成员/设备信息，
+不含任务正文或平台凭证。`coverageStart` 非空表示裁剪，边界日也可能不完整；为空只表示未发现回包裁剪，不证明源账本完整。
+当天仍累积，缺失不当零。原查询仍可能估价并使用已有价格来源；没有模型 token 消费不等于没有 API/进程成本。
+筛选、合并、费用与停止线由插件计算。
+
+`get_provider_group({providerId,device?})` 返回原 ProviderGroupView，包括组配置、成员/设备标识、设备与供应商显示名、
+可见 ownerName、appVersion、state、running、并发/暂停配置、冷却及已知 quota。插件返回中的当前 `members[].providerName`
+和 `config.members[].providerName` 快照，若为宿主生成的 `Claude · 登录身份` 或 `OpenAI · 登录身份`，只保留品牌；
+不修改原视图、普通名称或 Agent/UI 的显示。原本可见的 reshare 还可能包含受邀成员的
+memberId/displayName/avatarUrl 和批准状态。分享来的电脑仍沿原匿名与额度可见性边界；缺 quota 是未知，不是零。
+两个读取的 device 默认本机，异机只经既有同账号授权管理通道，旧端不支持就明确报错，不退回本机数据。
+不新增页面轮询、跨电脑额度协议或宿主聚合；额度分配、暂停/恢复策略、看板与提醒属于插件，不能保证严格零超用。
+
 ## 定时任务与应用设置
+
+`settings` 组也提供供应商分享成员工具。先用 `list_provider_share_members({providerId?,device?})`
+查询精确的 `providerId` 与 `memberId`；只返回自己分享的成员 id、名字和状态，不包含分享给我的供应商。
+`device` 默认本机，另一台电脑必须属于同账号并已授权远控；沿用现有 Device Link 管理入口，旧端明确不支持。
+名单复用原 `owned` 的 `includeUsage:false` 读取，不计算历史用量或激活管理页快速轮询；缺少明确回执的旧电脑返回
+`UNSUPPORTED_CAPABILITY`，不会反复退回完整读取。暂停/恢复仅需 memberId，模型范围需要 providerId 与 memberId。
+
+```js
+await cindy.host.call('cindy_helper', 'set_provider_share_member_status', {
+  memberId: selectedMemberId, status: 'pause' // 或 resume
+});
+const access = await cindy.host.call('cindy_helper', 'get_provider_share_model_access', {
+  providerId: 'anthropic', memberId: selectedMemberId
+});
+// 从 access 的工具结果读取准确型号 id，再提交完整名单。
+await cindy.host.call('cindy_helper', 'set_provider_share_model_access', {
+  providerId: 'anthropic', memberId: selectedMemberId, models: selectedModelIds
+});
+```
+
+关闭分享会立即打断该成员在跑的任务，成功回执不等全部关停完成；恢复只允许后续消息，不自动续跑。
+模型名单 `null` 跟随供应商范围，`[]` 禁止所有模型；不改成员预算等其它设置。调用超时或失败可能已产生
+副作用，先查询，不自动重发。插件不借用任务身份，也不新增逐次审批或分项补批；受邀者不能通过该入口
+获得分享者的管理权限。未装配供应商分享服务的 Host 不提供这些工具。
+共享任务中的 Agent 按任务权限可管理主人的分享成员。
 
 ### 读取订阅用量
 

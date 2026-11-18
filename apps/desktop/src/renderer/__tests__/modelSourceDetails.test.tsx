@@ -173,7 +173,8 @@ describe('model source second line', () => {
     act(() => changed?.({ providerId: 'anthropic' }));
     expect(view.container.textContent).toContain('b@example.test · Max');
     await act(async () => {});
-    expect(view.container.textContent).toContain('subscriptionAccounts.unassigned');
+    // No assignable account: the picker names no account; sending assigns one.
+    expect(view.container.textContent).toBe('Claude');
     expect(view.container.textContent).not.toMatch(/Pro|Max|%|@/);
     view.unmount();
     expect(unsubscribe).toHaveBeenCalledOnce();
@@ -217,7 +218,7 @@ describe('model source second line', () => {
       );
       await act(async () => {});
       if (state === 'signed-out' || state === 'unavailable')
-        expect(view.container.textContent).toBe('Claude · subscriptionAccounts.unassigned');
+        expect(view.container.textContent).toBe('Claude');
       else {
         expect(view.container.textContent).toBe('Claude');
         expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('34');
@@ -242,7 +243,7 @@ describe('model source second line', () => {
     );
     await act(async () => { changed({ providerId: 'anthropic' }); });
     await act(async () => { finish({ providerId: 'anthropic', configured: false, strategy: 'round', accounts: [] }); });
-    expect(view.container.textContent).toBe('Claude · subscriptionAccounts.unassigned');
+    expect(view.container.textContent).toBe('Claude');
     expect(command).toHaveBeenCalledTimes(2);
   });
 
@@ -328,7 +329,8 @@ describe('model source second line', () => {
     reads.ownerGeneration = 1;
     setDataOwnerGeneration(null, 1);
     view.rerender(menu());
-    expect(view.container.textContent).toBe('Claude · subscriptionAccounts.unassigned');
+    // While the new owner's read is pending, only the provider is named.
+    expect(view.container.textContent).toBe('Claude');
     command.mockResolvedValue(pool('after@example.test'));
     await act(async () => { finish?.(pool('after@example.test')); });
     expect(view.container.textContent).toContain('after@example.test · Max');
@@ -675,11 +677,11 @@ describe('model source for an existing task on a subscription account pool', () 
       usage: { claude: { sevenDay: { utilization: 20, resetsAt: now / 1000 + 86400 } } },
     },
   };
-  function mount(deviceId: string | null, reply: () => Promise<unknown>, readable = true) {
+  const unconfigured = { providerId: 'anthropic', configured: false, accounts: [] };
+  function mount(deviceId: string | null, reply: () => Promise<unknown>, readable = true, pool: unknown = unconfigured) {
     const taskId = `account-display-task-${++taskSequence}`;
     const sessionAccount = vi.fn(reply);
-    const unconfigured = { providerId: 'anthropic', configured: false, accounts: [] };
-    const command = vi.fn(async () => unconfigured);
+    const command = vi.fn(async () => pool);
     const invoke = vi.fn(async (_device: string, channel: string, args: { action?: string }[]) => {
       if (channel !== 'maker:subscription-accounts') throw new Error('TEMPORARILY_BUSY');
       return args[0]?.action === 'session' ? reply() : unconfigured;
@@ -716,6 +718,23 @@ describe('model source for an existing task on a subscription account pool', () 
     const query = { action: 'session', providerId: 'anthropic', sessionId: taskId, nativeSessionId: 'sdk-1' };
     if (deviceId) expect(invoke).toHaveBeenCalledWith(deviceId, 'maker:subscription-accounts', [query]);
     else expect(sessionAccount).toHaveBeenCalledWith(query);
+  });
+
+  // 2026-11-16 user feedback (unit): opening the picker in a task that has not sent a message
+  // showed "account not assigned", as if the picker assigned accounts. The account is assigned
+  // when the message is sent; until then the picker shows the same pool preview as a new task.
+  it('shows a task that has not run the same pool preview as a new task', async () => {
+    const member = (id: string, used: number) => ({ id, identity: `${id}@example.test`, plan: 'max', paused: false,
+      status: 'ready', running: 0, limit: 4, weight: 1, directory: '',
+      usage: { claude: { sevenDay: { utilization: used, resetsAt: now / 1000 + 86400 } } } });
+    const pool = { providerId: 'anthropic', configured: true, strategy: 'round', accounts: [member('b', 20), member('c', 60)] };
+    const { view } = mount(null, async () => ({ providerId: 'anthropic', state: 'unassigned' }), true, pool);
+    await act(async () => {});
+    expect(view.container.textContent).toBe('Claude');
+    const title = view.container.querySelector('[data-model-source-details]')?.getAttribute('title') ?? '';
+    expect(title).toContain('b@example.test');
+    expect(title).toContain('c@example.test');
+    expect(title).not.toContain('a@example.test');
   });
 
   // An unreadable directory must not inherit the active task's private account.

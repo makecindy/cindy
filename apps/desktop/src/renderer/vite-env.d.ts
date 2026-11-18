@@ -140,7 +140,7 @@ interface DeviceLinkDeviceView {
 
 /** 设备互联:relay 连接问题(镜像 @cindy/device-link 的 DeviceLinkConnectionIssue) */
 interface DeviceLinkConnectionIssuePayload {
-  kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
+  kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable' | 'agent-net-relay-down';
   closeCode?: number;
   detail?: string;
   at: number;
@@ -177,6 +177,8 @@ interface DeviceLinkPeerLinkView {
 }
 interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
+  agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
+  relayProtocol?: 'agent-net' | 'device-link';
   /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
   relayRttMs: number | null;
 }
@@ -336,8 +338,6 @@ type AuxiliaryModelSettingsPatch =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsPatch;
 type AuxiliaryModelSettingsState =
   import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsState;
-type VisionBridgeSettingsPatch = import('../shared/visionBridgeSettings').VisionBridgeSettingsPatch;
-type VisionBridgeSettingsState = import('../shared/visionBridgeSettings').VisionBridgeSettingsState;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -431,6 +431,8 @@ interface ComputerDriverUpdateProgress {
   phase: 'downloading' | 'installing' | 'done';
   downloadedBytes: number | null;
   totalBytes: number | null;
+  /** Standard progress (speed, time left) for the shared DownloadMeter. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── CCD Progress ── */
@@ -452,6 +454,8 @@ interface BinaryDownloadProgressPayload {
   reset?: boolean;
   /** 失败/调试文案使用，标识当前推进度的 vendor。 */
   vendor?: 'claude' | 'codex' | 'pi';
+  /** Standard display progress (phase, retry reason, speed, time left); `progress` stays the bar. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── App Update Progress ── */
@@ -465,6 +469,8 @@ interface AppUpdateProgressPayload {
   failed?: boolean;
   /** DownloadError code (e.g. 'NETWORK', 'CHECKSUM', 'HTTP_4XX'). */
   error?: string;
+  /** Standard display progress (phase, retry reason, speed, time left). */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── Auth types ── */
@@ -767,7 +773,7 @@ interface CCAgentStreamEvent {
     | 'thinking'
     | 'compact_boundary';
   data: unknown;
-  source?: 'claude-code' | 'codex' | 'pi' | 'vision-bridge';
+  source?: 'claude-code' | 'codex' | 'pi';
   /**
    * agent-meta: SDK 元信息（按 session.agentKind 解析）。当事件来自一条 SDK
    * message（assistant / tool_use / thinking final / done 等）时由 main 透传过来。
@@ -1448,6 +1454,11 @@ interface ElectronAPI {
       config: Record<string, unknown> | null,
     ) => Promise<{ config: Record<string, unknown> }>;
     /** 系统文件选择框(.cindy 过滤),只选不装;取消返回 { canceled: true }。 */
+    githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number) =>
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean>;
+    onGithubReleaseProgress: (callback: (event: import('../shared/githubPluginRelease').GithubPluginReleaseProgress, ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
+    installGithubRelease: (action: 'install' | 'sign-in', url?: string, requestId?: string) =>
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseInstallResult | boolean>;
     pickFile: () => Promise<{ canceled: true } | { filePath: string }>;
     /** 只验不装:读出清单、签名信任等级与 icon data URL,供安装编排使用。 */
     inspect: (
@@ -1577,13 +1588,16 @@ interface ElectronAPI {
     getCard: (callId: string) => Promise<{
       card: { callId: string; ghostId: string; html: string; height: number; v: number } | null;
     }>;
-    /** A card of a task on another computer, sanitized again on this one. Null: no card, an
-     *  older host or a card kind shown only on its own computer; failed: the read itself failed. */
+    /** A card of a task on another computer, sanitized again on this one (mail cards are rebuilt
+     *  here from their data). Null: no card, an older host or a legacy mail card; failed: the read
+     *  itself failed. */
     getRemoteCard: (deviceId: string, sessionId: string, callId: string) => Promise<{
-      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean } | null;
+      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean; mailUpload?: boolean } | null;
       unsupported?: true;
       failed?: true;
     }>;
+    /** Pick a file here and upload it for a remote task's mail card. attachment null: cancelled. */
+    uploadRemoteMailAttachment: (deviceId: string) => Promise<{ ok: boolean; attachment: { url: string; name: string } | null }>;
     /** 权威实测高回填:GhostToolCard 量出内容真实高度后写回卡片库,历史
      *  回放据此零动画首帧贴合(行不存在主机静默跳过)。 */
     reportCardHeight: (callId: string, height: number) => Promise<{ ok: true }>;
@@ -2836,6 +2850,7 @@ interface ElectronAPI {
         type: 'file' | 'directory';
         size: number;
         mtimeMs: number;
+        symlinkTarget?: string;
       }>
     >;
     /** 项目级文件名扁平列表(ripgrep --files honor .gitignore);失败返回空数组
@@ -2863,6 +2878,7 @@ interface ElectronAPI {
             size: number;
             mtimeMs: number;
             truncated: boolean;
+            resolvedPath?: string;
           };
         }
       /** OVERSIZE = 远程文本超传输上限(device-link 帧限预判),stat 供"文件过大"占位卡。 */
@@ -2878,7 +2894,8 @@ interface ElectronAPI {
       workdir: string;
       relPath: string;
       content: string;
-    }) => Promise<{ ok: true; size: number; mtimeMs: number } | { ok: false; message: string }>;
+      expectedResolvedPath?: string;
+    }) => Promise<{ ok: true; size: number; mtimeMs: number; resolvedPath?: string } | { ok: false; message: string }>;
     createFile: (params: {
       remoteHostId?: string | null;
       workdir: string;
@@ -3258,6 +3275,7 @@ interface ElectronAPI {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
@@ -3283,6 +3301,7 @@ interface ElectronAPI {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
+    | { type: 'gift-card'; code: string }
     | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
@@ -4044,6 +4063,8 @@ interface ElectronAPI {
           | 'done'
           | 'failed';
         name: string;
+        /** Standard progress while downloading (shared/downloadProgress.ts). */
+        download?: import('../shared/downloadProgress').DownloadProgress;
         version?: string;
         absolutePath?: string;
         errorCode?: string;
@@ -4363,7 +4384,9 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }>;
     listDevices: () => Promise<{ devices: DeviceLinkDeviceView[]; stale?: boolean;
-      displayBudget?: { remainingMs: number } }>;
+      /** Only one hybrid discovery leg answered: absence is not an authoritative removal. */
+      partial?: boolean;
+      displayBudget?: { remainingMs: number }; retryAtMs?: number }>;
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
     getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
     /** 对端链路拓扑变化,payload 为全量快照 */
@@ -4655,6 +4678,8 @@ interface ElectronAPI {
   worktreeSuggestName: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
+  /** Opt-in model-written name for a new task's worktree; `name: null` keeps the generated one. */
+  worktreeGenerateName: (req: { taskText: string }) => Promise<{ name: string | null }>;
   worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
@@ -5170,6 +5195,7 @@ interface ElectronAPI {
           pinnedAt?: string | null;
           /** 任务级「消息免打扰」：不发系统通知 / 灵动岛 / 手机推送 / IM 消息。 */
           notificationsMuted?: boolean;
+    snoozedUntil?: string | null;
           status?: import('@/lib/ccAgent.types').SessionStatus;
           orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
           /** 附加只读引用目录覆盖列表 (绝对路径)。 */
@@ -5397,7 +5423,7 @@ interface ElectronAPI {
       autoIcon: (input: { projectKey: string }) => Promise<unknown>;
       iconImage: (input: { projectKey: string }) => Promise<string | null>;
       snapshot: () => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
-      updateInfo: (input: {projectKey: string; field: 'name' | 'icon' | 'profile'; value: string | null | {name?: string; icon?: string | null}; dataOwnerId: string | null; ownerGeneration: number}) => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
+      updateInfo: (input: {projectKey: string; create?: boolean; repositoryUrl?: string; field: 'name' | 'icon' | 'profile'; value: string | null | {name?: string; icon?: string | null; directories?: readonly import('@cindy/maker-shared/project-alias-sync').ProjectDirectory[]}; dataOwnerId: string | null; ownerGeneration: number}) => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
       set: (input: {
         projectKey: string;
@@ -5719,7 +5745,11 @@ interface ElectronAPI {
   // ── Dialog（v0.6 新增） ────────────────────────────────────────────────────
   dialog: {
     /** 打开系统目录选择对话框，返回用户选中的目录路径（取消时 path=null）。 */
-    showOpenDirectory: (params?: { defaultPath?: string; writableGrantScope?: string }) => Promise<{
+    showOpenDirectory: (params?: {
+      defaultPath?: string;
+      writableGrantScope?: string;
+      projectGrantScope?: string;
+    }) => Promise<{
       success: boolean;
       path: string | null;
     }>;
@@ -6627,7 +6657,7 @@ interface ElectronAPI {
       retryImageDelivery: (sessionId: string, imageId: string) => Promise<void>;
       retryLastError: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: { expectedClearBoundaryMs?: number | null; expectedQueueHeadClientId?: string; expectedSwitchRevision?: number },
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       clearError: (
         sessionId: string,
@@ -6779,6 +6809,7 @@ interface ElectronAPI {
       engineReady: boolean;
       deferred?: boolean;
       sameEngineRevision?: number;
+      pendingSwitchRevision?: number;
       sameEngineSuperseded?: boolean;
     }>;
     /**
@@ -6921,13 +6952,6 @@ interface ElectronAPI {
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
     ) => Promise<AuxiliaryModelSettingsState>;
-
-    /** 视觉桥设置（目标模型勾选 + 视觉后端主/备选）。 */
-    visionBridgeSettingsGet: () => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsSet: (
-      patch: VisionBridgeSettingsPatch,
-    ) => Promise<VisionBridgeSettingsState>;
-    visionBridgeSettingsReset: () => Promise<VisionBridgeSettingsState>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;

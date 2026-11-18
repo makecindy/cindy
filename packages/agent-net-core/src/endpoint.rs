@@ -322,6 +322,11 @@ impl<C: Crypto, A: PathAddress> Endpoint<C, A> {
         self.connections.values().filter_map(|slot| slot.connection.next_wake()).min()
     }
 
+    /// 有没有连接的计时器现在不能晚一个 `granularity_us` 的周期，见 [`Connection::needs_fine_timer`](crate::Connection::needs_fine_timer)。
+    pub fn needs_fine_timer(&self, granularity_us: u64) -> bool {
+        self.connections.values().any(|slot| slot.connection.needs_fine_timer(granularity_us))
+    }
+
     /// 处理到期的计时器。
     pub fn tick(&mut self, now_us: u64) {
         for slot in self.connections.values_mut() {

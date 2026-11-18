@@ -44,6 +44,7 @@ export interface MakerMemoryHostContext {
   projectMemoryDir?(scopeKey: string, ownerRoot: string): string | null;
   isOneShotRouteDisabled?(agent: AgentKind): Promise<boolean>;
   reviewOneShot?: MakerMemoryManagerDeps['reviewOneShot'];
+  reviewAgentOneShot?: MakerMemoryManagerDeps['reviewAgentOneShot'];
   reviewAgent?: AgentKind;
 }
 
@@ -96,6 +97,7 @@ export function createMakerMemoryManagerForHost(ctx: MakerMemoryHostContext): Ma
     ...(ctx.reviewAgent ? { reviewAgent: ctx.reviewAgent } : {}),
     ...(ctx.isOneShotRouteDisabled ? { isOneShotRouteDisabled: ctx.isOneShotRouteDisabled } : {}),
     ...(ctx.reviewOneShot ? { reviewOneShot: ctx.reviewOneShot } : {}),
+    ...(ctx.reviewAgentOneShot ? { reviewAgentOneShot: ctx.reviewAgentOneShot } : {}),
   });
   return manager;
 }

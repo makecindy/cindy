@@ -5,6 +5,11 @@ vi.mock('../../maker-host/codex-account-auth.desktop.js', () => ({ codexAccountS
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+const poolState = vi.hoisted(() => ({ models: null as null | [], connected: false }));
+vi.mock('../../subscription-accounts/runtime.js', () => ({
+  readSubscriptionPoolCodexModels: () => poolState.models,
+  hasConnectedSubscriptionPool: () => poolState.connected,
+}));
 import type { Provider } from '@cindy/model-providers';
 
 vi.mock('../../maker-host/auth-adapters.js', () => ({ readClaudeApiKey: vi.fn() }));
@@ -36,6 +41,8 @@ function provider(over: Partial<Provider> & { id: string }): Provider {
 }
 
 beforeEach(() => {
+  poolState.models = null;
+  poolState.connected = false;
   vi.mocked(readClaudeApiKey).mockReset();
   vi.mocked(hasChatgptOneshotReadiness).mockReset();
   vi.mocked(readCachedGenericOAuthAccessToken).mockReset();
@@ -45,6 +52,16 @@ beforeEach(() => {
 });
 
 describe('hasOneshotProviderCredential · 内置四家', () => {
+  // Unit regression: a connected pool must not depend on the legacy default CLI file.
+  it('uses pool connection state instead of an unrelated default login', () => {
+    const p = provider({ id: 'pool-a', subscriptionPool: 'openai', auth: { method: 'oauth' } });
+    poolState.models = [];
+    poolState.connected = true;
+    expect(hasOneshotProviderCredential(p, 'codex')).toBe(true);
+    poolState.connected = false;
+    vi.mocked(hasChatgptOneshotReadiness).mockReturnValue(true);
+    expect(hasOneshotProviderCredential(p, 'codex')).toBe(false);
+  });
   it('xd:key 与端点都要在', () => {
     vi.mocked(readClaudeApiKey).mockReturnValue('k');
     vi.mocked(effectiveXdGatewayBaseUrl).mockReturnValue('https://gw.example.com');

@@ -749,6 +749,27 @@ function installMacAgentActivityExtension(buildPath: string, platform: string, a
   }
 }
 
+/**
+ * macOS desktop widgets (subscription quota, daily usage). `build.mjs` skips every step
+ * without the macOS 14 SDK. The extension's entitlements (App Sandbox and its read-only
+ * data folder) are written per app id at install; release signing keeps them.
+ */
+function runDesktopWidgetsBuild(args: string[]): void {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, 'native/desktop-widgets/build.mjs'), ...args],
+    { stdio: 'inherit' },
+  );
+  if (result.error || result.status !== 0) throw new Error('macOS desktop widgets build failed');
+}
+
+function installMacDesktopWidgetsExtension(buildPath: string, platform: string, arch: string): void {
+  if (platform !== 'darwin' || process.platform !== 'darwin') return;
+  for (const appDir of fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'))) {
+    runDesktopWidgetsBuild(['extension', path.join(buildPath, appDir), arch]);
+  }
+}
+
 function targetPlatformKey(targetPlatform: string, targetArch: string): string {
   return `${targetPlatform}-${targetArch}`;
 }
@@ -2109,6 +2130,12 @@ const config: ForgeConfig = {
         );
         if (desktopBlurBuild.error || desktopBlurBuild.status !== 0)
           throw new Error('Native desktop blur build failed');
+        const loginItemBuild = spawnSync(process.execPath, [
+          path.join(__dirname, 'native/login-item/build.mjs'),
+          path.join(__dirname, 'resources/tools/login-item/cindy-login-item.node'), arch,
+        ], { stdio: 'inherit' });
+        if (loginItemBuild.error || loginItemBuild.status !== 0)
+          throw new Error('Native login item build failed');
         const trackpadBuild = spawnSync(
           process.execPath,
           [
@@ -2123,6 +2150,11 @@ const config: ForgeConfig = {
         runAgentActivityBuild([
           'addon',
           path.join(__dirname, 'resources/tools/agent-island/cindy-agent-activity.node'),
+          arch,
+        ]);
+        runDesktopWidgetsBuild([
+          'addon',
+          path.join(__dirname, 'resources/tools/desktop-widgets/cindy-desktop-widgets.node'),
           arch,
         ]);
       }
@@ -2152,6 +2184,7 @@ const config: ForgeConfig = {
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
           installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
+          installMacDesktopWidgetsExtension(buildPath, opts.platform, opts.arch);
         }
       } finally {
         removeCindySourceMetadata();

@@ -37,6 +37,13 @@ const adviseAndRecordVoiceInputDictionaryLearningMock = vi.hoisted(() => vi.fn()
 vi.mock('../voice-input/index.js', () => ({
   adviseAndRecordVoiceInputDictionaryLearning: adviseAndRecordVoiceInputDictionaryLearningMock,
 }));
+// Admission of file blocks only: a test may hold the file peer's answer open; every other test reaches the real one.
+const filePeerOverride = vi.hoisted(() => ({ request: null as null | ((...args: unknown[]) => Promise<unknown>) }));
+vi.mock('../device-link/filePeer', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../device-link/filePeer')>();
+  return { ...actual, requestFilePeer: (...args: Parameters<typeof actual.requestFilePeer>) =>
+    (filePeerOverride.request ? filePeerOverride.request(...args) : actual.requestFilePeer(...args)) as ReturnType<typeof actual.requestFilePeer> };
+});
 
 import {
   markRemoteSettingPersistedInsideHandler,
@@ -519,6 +526,7 @@ import {
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
   pushSessionActivityToController,
+  remoteInvokeEpoch,
 } from '../device-link/dispatch.desktop';
 import {
   applyControllerDisplayNameDirectorySnapshot,
@@ -535,6 +543,7 @@ import {
 } from '@cindy/device-link';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
+import { SESSION_INVOKE_REPLAY } from '@cindy/agent-net';
 import { createGroupContinuityExecutor } from '../provider-group/continuityExecutor';
 import { deviceAccessGeneration, isControllerAccessAllowed, remoteControlAccessGeneration,
   syncRemoteControlAccessGeneration } from '../device-link/remoteControlAccess';
@@ -1104,6 +1113,51 @@ describe('被控端控制链路生命周期', () => {
     )).toBe(false);
   });
 
+  // 2026-11-17：Agent-Net 会话断了以后，控制端在重开的链路上比对这个标记再决定能不能用原请求号再发（agentNetSessionLinks.ts）。
+  // 普通断开（对方离线）时这里还记得它的请求，标记不变；永久关链、整体清空以后不记得了，标记必须变，否则再发会重复执行。
+  it('keeps the invoke memory marker across a disconnect and changes it once the memory is cleared', () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-epoch', SUB, ['session:s1'], 'E'));
+    const before = remoteInvokeEpoch('ctrl-epoch');
+    handleControllerOffline('ctrl-epoch');
+    expect(remoteInvokeEpoch('ctrl-epoch')).toBe(before);
+    feed({ v: 1, kind: 'link-close', src: 'ctrl-epoch', payload: { reason: 'user' } });
+    const afterClose = remoteInvokeEpoch('ctrl-epoch');
+    expect(afterClose).not.toBe(before);
+    dropAllControllers(client, 'toggle-off');
+    expect(remoteInvokeEpoch('ctrl-epoch')).not.toBe(afterClose);
+  });
+
+  // A bounded reply cache may evict the original write during an ordinary network interruption.
+  it('responds to a replay after cache eviction without running the accepted write again', async () => {
+    remoteControlEnabled = true;
+    const handler = vi.fn(() => ({ accepted: true }));
+    registry.register('maker:send', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const observedClient = client as { sendInvokeResult: (...args: [string, string, unknown]) => void };
+    const send = observedClient.sendInvokeResult;
+    let onResult: () => void;
+    observedClient.sendInvokeResult = (...args) => { send(...args); onResult(); };
+    const request = (frame: Envelope) => new Promise<void>((resolve) => { onResult = resolve; feed(frame); });
+    const payload = { channel: 'maker:send', args: ['s1', 'hello'] };
+    const original: Envelope = { v: 1, kind: 'invoke', id: 'original', src: 'ctrl-a', payload };
+    await request(original);
+    const resume = { ...original, payload: { ...payload, [SESSION_INVOKE_REPLAY]: true } };
+    await request(resume);
+    expect(handler).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 128; index++) {
+      await request({ ...original, src: 'ctrl-b', id: 'other-' + index });
+    }
+    await request(resume);
+    expect(calls.invokeResult.at(-1)).toMatchObject({
+      requestId: 'original', payload: { ok: false, error: { code: 'INVOKE_TIMEOUT' } },
+    });
+    expect(handler).toHaveBeenCalledTimes(129);
+  });
+
   it('link-close clears remembered routing and queued pushes', () => {
     remoteControlEnabled = true;
     const { client, feed } = makeFakeClient();
@@ -1427,6 +1481,29 @@ describe('被控端控制链路生命周期', () => {
     } });
     await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({ dst: 'ctrl-a', requestId: 'list-late', payload: busy }));
     resolveList?.([]);
+  });
+
+  // 2026-11-17 review：经 Agent-Net 会话上传附件时一次在途 3 块、每块 1 MiB（base64 约 1.4 MB），第三块单独就超过每个控制端
+  // 4 MiB 的在途字节，整个上传因 BACKPRESSURE 失败。文件块另有一份字节额度；普通请求的字节上限不变。
+  it('会话上的文件块整窗在途时都被执行，不因每个控制端的字节上限被打回', async () => {
+    remoteControlEnabled = true;
+    const held: Array<() => void> = [];
+    filePeerOverride.request = () => new Promise((resolve) => { held.push(() => resolve('{"ok":true,"result":{}}')); });
+    try {
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      const body = 'A'.repeat(Math.ceil((1024 * 1024) / 3) * 4); // one 1 MiB block as base64
+      for (let index = 0; index < 3; index += 1) {
+        feed({ v: 1, kind: 'invoke', id: `block-${index}`, src: 'ctrl-a', payload: { channel: 'device-link:file-peer',
+          args: [{ action: 'stream-rpc', connection: '00000000-0000-4000-8000-000000000000', payload: `{"offset":${index}}`, body }] } });
+      }
+      await vi.waitFor(() => expect(held).toHaveLength(3));
+      expect(calls.invokeResult.filter((call) => (call.payload as { ok?: boolean }).ok === false)).toEqual([]);
+      for (const release of held) release();
+      await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(3));
+    } finally {
+      filePeerOverride.request = null;
+    }
   });
 
   it('sessions:list fresh 请求不并入已有 listing 单飞', async () => {

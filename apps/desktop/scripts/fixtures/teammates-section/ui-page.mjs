@@ -18,7 +18,7 @@ export default {
   stubs: {
     'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
-    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{});` },
+    'src/renderer/features/bots/botStore': { partial: `export const useBotProfiles=()=>${data}.profiles; export const useBotUnreadCounts=()=>(${data}.unread||{}); export const useBotProfilesLoadState=()=>${data}.loadState||'ready'; export const hasLoadedBotProfiles=()=>!${data}.loadState||${data}.loadState==='ready';` },
     'src/renderer/features/bots/useRemoteBots': { partial: `export const useRemoteBots=()=>${data}.remoteBots;` },
     'src/renderer/features/bots/companionCloudStore': { partial: 'const snapshot={enabled:false,actors:[],demotedBotIds:[]}; export const useCompanionCloud=()=>snapshot;' },
     'src/renderer/features/bots/botGroupStore': { partial: `export const useBotGroupList=()=>({groups:${data}.groups||[],loaded:true});` },
@@ -28,12 +28,16 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'startup-read-error': {
+      about: 'A failed roster read offers explicit recovery instead of an empty-roster create invitation; presentation fixture only',
+      data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'error' },
+    },
     'pinned-sort': {
       about: 'Pinned display sorting changes task order and restores the manual order without changing view style',
       data: { showPinned: true, profiles: [], remoteBots: [], route: '/bots' },
     },
     'collapse-attention': {
-      about: 'Independent icon/list choice; collapsed sections keep unread and pending feedback only',
+      about: 'Independent icon/list choice; collapsed avatars opt-in preserves the default attention-only behavior',
       data: { showPinned: true, profiles: [
         { ...profiles[0], lastMessageAt: Date.now() - 180000, name: '日程助手', avatar: 'cindy://avatar/preset/cindy', lastMessagePreview: '今天的安排已同步' },
         { ...profiles[1], lastMessageAt: Date.now() - 120000, name: '写作伙伴', avatar: 'cindy://avatar/preset/dash', lastMessageRole: 'assistant', lastMessagePreview: '周报已整理好，请查看' },
@@ -225,6 +229,27 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'startup-read-error') {
+      const alert = page.getByRole('alert');
+      await alert.getByText(await ui.t('bots.rosterLoadFailed'), { exact: true }).waitFor();
+      const retry = alert.getByRole('button', { name: await ui.t('bots.rosterReload'), exact: true });
+      await retry.waitFor({ state: 'visible' });
+      const section = page.locator('[data-sidebar-section="teammates"]');
+      const header = section.getByRole('button', { name: await ui.t('bots.title'), exact: true });
+      const changeView = async (key) => {
+        await header.hover();
+        await section.getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+        await page.getByRole('menuitem', { name: await ui.t(key), exact: true }).click();
+      };
+      await changeView('bots.list.viewIcons');
+      await retry.waitFor({ state: 'visible' });
+      await ui.capture('icons-error');
+      await header.click();
+      await retry.waitFor({ state: 'visible' });
+      await changeView('ccAgent.sidebar.viewStyleListWide');
+      await retry.waitFor({ state: 'visible' });
+      return;
+    }
     if (ui.case === 'pinned-sort') {
       const pinned = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.pinned'), exact: true });
       const section = pinned.locator('xpath=../../..');
@@ -265,11 +290,36 @@ export default {
       assert.equal(await page.getByText('写作伙伴', { exact: true }).count(), 1);
       assert.equal(await page.getByText('研究伙伴', { exact: true }).count(), 1);
       await ui.capture('collapsed-list');
+      const openDisplayMenu = async () => {
+        await header.hover();
+        await page.locator('[data-sidebar-section="teammates"]').getByRole('button', { name: await ui.t('ccAgent.sidebar.viewStyle'), exact: true }).click();
+      };
+      await openDisplayMenu();
+      const avatarsOption = page.getByRole('menuitemcheckbox', { name: await ui.t('bots.list.showCollapsedTeammateAvatars'), exact: true });
+      assert.equal(await avatarsOption.getAttribute('aria-checked'), 'false');
+      await ui.capture('collapsed-avatars-menu-off');
+      await avatarsOption.click();
+      assert.equal(await header.getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.getByRole('button', { name: '日程助手', exact: true }).count(), 1);
+      await page.getByText('写作伙伴', { exact: true }).waitFor({ state: 'hidden' });
+      await ui.capture('collapsed-all-avatars');
+      await openDisplayMenu();
+      assert.equal(await avatarsOption.getAttribute('aria-checked'), 'true');
+      await ui.capture('collapsed-avatars-menu-on');
+      await avatarsOption.click();
+      assert.equal(await page.getByRole('button', { name: '日程助手', exact: true }).count(), 0);
+      await page.getByText('写作伙伴', { exact: true }).waitFor({ state: 'visible' });
+      assert.equal(await page.getByText('写作伙伴', { exact: true }).count(), 1);
       await showIcons();
       assert.equal(await header.getAttribute('aria-expanded'), 'false');
       await ui.capture('collapsed-icons');
       await header.click();
       await ui.capture('expanded-icons');
+      // Leave the published final capture on the new option and its avatar strip.
+      await header.click();
+      await openDisplayMenu();
+      await avatarsOption.click();
+      await openDisplayMenu();
       return;
     }
     if (ui.case === 'group-avatar-hover') {

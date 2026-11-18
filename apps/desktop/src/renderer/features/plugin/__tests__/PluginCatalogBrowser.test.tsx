@@ -107,7 +107,10 @@ it('keeps loaded cards and offset visible while refreshing installation or foreg
   const { cache, view } = fixture(load);
   const mounted = render(view());
   await screen.findByText('Tool 0');
-  act(() => intersections.forEach(callback => callback()));
+  // Cards can commit before the continuation observer subscribes. Trigger the
+  // same viewport event only after the real subscription is ready (#10917 CI).
+  await waitFor(() => expect(intersections.size).toBe(1));
+  await act(async () => intersections.forEach(callback => callback()));
   await waitFor(() => expect(cache.current.last).toBe(1));
   cache.current.grid.offset = 640;
   const pages = cache.current.pages;
@@ -607,6 +610,9 @@ it('renders short filtered pages contiguously after an empty page with a continu
   const { cache, view } = fixture(load);
   render(view());
   await waitFor(() => expect(cache.current.metadata).not.toBeNull());
+  // Metadata is published before React commits the continuation observer.
+  // Deliver the viewport event only after that real subscription is installed.
+  await waitFor(() => expect(intersections.size).toBeGreaterThan(0));
   act(() => intersections.forEach(callback => callback()));
   await screen.findByText('Tool 10');
   expect(screen.getByText('Tool 11')).toBeTruthy();

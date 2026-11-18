@@ -72,6 +72,12 @@ describe('schedule check blocked by an unavailable plugin', () => {
     const deps = { skillsRoot, findInstalled: () => null, lookupMarket: async () => null };
     expect(await diagnoseScheduleHookPlugin(command('_ns__xd__present--pr'), deps)).toBeUndefined();
     expect(await diagnoseScheduleHookPlugin('node /elsewhere/check.mjs', deps)).toBeUndefined();
-    expect(formatPreRunHookFailure(blocked)).toBe('pre-run hook failed with exit code 1');
+    // Without a plugin diagnosis the script's own first stderr line is the cause the
+    // user needs (a PR check reported "gh not found" yet the task showed only exit 1).
+    expect(formatPreRunHookFailure({
+      ...blocked,
+      stderr: '\n[gate] snapshot failed; stderr=[gh] binary not found on PATH.\n  at main\n',
+    })).toBe('pre-run hook failed with exit code 1: [gate] snapshot failed; stderr=[gh] binary not found on PATH.');
+    expect(formatPreRunHookFailure({ ...blocked, stderr: ' \n' })).toBe('pre-run hook failed with exit code 1');
   });
 });

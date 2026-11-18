@@ -8,7 +8,6 @@ import { extractIpcError } from '@/utils/ipcError';
 import type {
   CuratedOllamaModel,
   LocalInstalledModel,
-  LocalModelPullPhase,
   LocalModelPullProgress,
   LocalRecommendReason,
   LocalRuntimeStatus,
@@ -20,8 +19,9 @@ import {
   isHfMlxPullName,
   normalizeOllamaPullName,
   ollamaModelRefsEqual,
+  pullDownloadProgress,
 } from '../../../shared/localModelRuntime';
-import { DownloadMeter } from './DownloadMeter';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { LocalPackagingTag } from './LocalPackagingTag';
 import {
@@ -41,21 +41,12 @@ function formatModelSize(bytes?: number): string {
 
 function PullMeter({ pull }: { pull: LocalModelPullProgress }) {
   const { t } = useTranslation();
-  const pullPhase = (pull.phase ?? 'starting') as LocalModelPullPhase;
   const errorKind = pull.phase === 'error' ? classifyOllamaPullError(pull.error, pull.name) : null;
   return (
     <DownloadMeter
-      progress={{
-        label: errorKind
-          ? t(`settings.providers.local.pullError.${errorKind}`)
-          : t(`settings.providers.local.pullPhase.${pullPhase}`),
-        percent: pull.percent,
-        completed: pull.completed,
-        total: pull.total,
-        bytesPerSecond: pull.bytesPerSecond,
-        error: pull.phase === 'error',
-        paused: pull.phase === 'paused',
-      }}
+      label={pull.name}
+      progress={pullDownloadProgress(pull)}
+      error={errorKind ? t(`settings.providers.local.pullError.${errorKind}`) : null}
     />
   );
 }

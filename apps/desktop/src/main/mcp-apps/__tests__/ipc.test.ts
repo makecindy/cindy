@@ -411,7 +411,7 @@ describe('MCP App persistence and IPC wiring', () => {
     state.updateResult = [state.row!];
     await state.deps!.writeCard('task', 'card', full);
     expect(state.broadcast.mock.calls[0]![1].content).toEqual({
-      mcpAppHistory: { version: 1, title: 'form', text: 'Saved result' },
+      mcpAppHistory: { version: 1, customMcp: true, title: 'form', text: 'Saved result' },
     });
     expect(await state.deps!.readCard('task', 'card')).toEqual(full);
     expect(JSON.parse(state.row!.content as string)).toEqual({ mcpApp: full });

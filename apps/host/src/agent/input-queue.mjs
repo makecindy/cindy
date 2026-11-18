@@ -5,7 +5,7 @@ import { createTurnExecutor } from './turn-executor.mjs';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
-import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
+import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
 import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
 import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
@@ -226,7 +226,8 @@ export function createInputQueue(deps) {
       },
       // Desktop register.ts (AgentInputCoordinator hooks): after the user row is durable
       // and before vendor dispatch, open the turn change record, then the Git baseline.
-      beforeDispatchUserTurn: executor.beforeDispatchUserTurn,
+      beforeDispatchUserTurn: (id, item, signal) => executor.beforeDispatchUserTurn(id, item, signal,
+        snapshot => prepareQueuedPromptSnapshot(snapshot, scheduleDiscardWatchers, id, item, signal)),
       // A durable turn that never reached the vendor: drop the record, then the baseline.
       onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
       onPersistedSendRejected: (id, message, item, recovering) =>
@@ -242,7 +243,7 @@ export function createInputQueue(deps) {
         schedulePreparations.delete(item.clientId);
         const discarded = scheduleDiscardWatchers.get(item.clientId);
         scheduleDiscardWatchers.delete(item.clientId);
-        discarded?.();
+        discarded?.onDiscarded();
       },
     });
     const scheduleBridge = createSchedulerQueueBridge({
@@ -350,6 +351,10 @@ export function createInputQueue(deps) {
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
         isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },
+        hasPendingInput: id => {
+          if (closing) throw new Error('session is closed');
+          assertCurrent(); return scheduleBridge.hasPendingInput(id);
+        },
         enqueuePrompt: req => command(req.sessionId, async (_state, admission) => {
           // The bridge reads metadata and the stored row before enqueue. Keep
           // the original command generation across every one of those reads.

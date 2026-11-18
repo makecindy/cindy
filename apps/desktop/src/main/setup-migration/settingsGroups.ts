@@ -28,7 +28,6 @@ import { subagentModelPortableSettings } from '../maker-host/subagent-model-sett
 import { updateChannelPortableSettings } from '../updateChannelStore.js';
 import { modelPriceOverridePortableSettings } from '../usage/modelPriceOverrideStore.js';
 import { auxiliaryModelPortableSettings } from '../utility-model/auxiliary-model-settings-store.js';
-import { visionBridgePortableSettings } from '../vision-bridge/vision-bridge-settings-store.js';
 import { windowBehaviorPortableSettings } from '../window-behavior-settings-store.js';
 
 export interface SetupSettingsGroup {
@@ -54,7 +53,6 @@ export const SETUP_SETTINGS_GROUPS: readonly SetupSettingsGroup[] = [
   { id: 'sessionRuntimeFallback', settings: sessionRuntimeFallbackPortableSettings },
   { id: 'subagentModels', settings: subagentModelPortableSettings },
   { id: 'auxiliaryModels', settings: auxiliaryModelPortableSettings },
-  { id: 'visionBridge', settings: visionBridgePortableSettings },
   { id: 'modelVisibility', settings: modelDisablePortableSettings },
   { id: 'providerOrder', settings: providerOrderPortableSettings },
   { id: 'modelCatalogOverrides', settings: modelCatalogOverridePortableSettings },

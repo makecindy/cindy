@@ -52,7 +52,10 @@ it.skipIf(!binary).each(['same-provider', 'different-provider', 'thread-budget',
     await fs.writeFile(path.join(home, 'models_cache.json'), JSON.stringify({ models: Object.keys(windows)
       .map(slug => ({ ...nativeCodexFallbackModel(slug.replace(/^codex\//, ''), 'You are a test assistant.'),
         max_context_window: 1_000_000 })) }));
-    await fs.writeFile(path.join(home, 'config.toml'), [
+    // #11025 native regression: the real startup consumer must accept the same
+    // untouched BOM config as Cindy's catalog reader, then complete a message.
+    // Other modes retain BOM-less coverage; all homes/providers are isolated.
+    await fs.writeFile(path.join(home, 'config.toml'), (mode === 'same-provider' ? '\uFEFF' : '') + [
       'model_provider="fixture"', 'cli_auth_credentials_store="ephemeral"',
       // Custom API providers do not necessarily consult the discovery cache.
       'model_catalog_json="models_cache.json"',

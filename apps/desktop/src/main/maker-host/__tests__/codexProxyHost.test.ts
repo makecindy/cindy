@@ -151,8 +151,6 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
     stripNonCanonicalResponsesItemIdsFromBody: () => null,
     shortenOversizedResponsesItemIdsFromBody: () => null,
     stripNonAnthropicFields: mockState.stripNonAnthropicFields,
-    // 视觉桥 transform：默认短路（controller 未注入 → shouldBridge 恒 false → null 透传）。
-    createVisionBridgeTransform: () => (() => null),
     createInstructionsRegistry: () => {
       const map = new Map<string, string>();
       return {
@@ -3550,7 +3548,7 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), DeepSeek V4.1 replay 兼容, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields, 子代理身份观察]
+        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), DeepSeek V4.1 replay 兼容, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields, 子代理身份观察]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
@@ -3558,7 +3556,7 @@ describe('codex proxy host', () => {
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
-          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function),
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -3572,6 +3570,8 @@ describe('codex proxy host', () => {
           // #7906: 只去重工具 ID，不许在同一次透明重试里叠洗其它 strip。
           expect.objectContaining({ id: 'duplicate_responses_tool_call', allowExtraRules: false }),
           expect.objectContaining({ id: 'xai_model_input' }),
+          // A Responses gateway that routes Claude to Bedrock rejects hosted search; only that rejection is retried once.
+          expect.objectContaining({ id: 'bedrock_unsupported_web_search', applyOnUnmatchedRetry: false, allowExtraRules: false }),
         ]),
       }),
     );
@@ -5612,6 +5612,54 @@ describe('codex proxy host', () => {
     host.clearCodexProxyAuthInjection();
     host.setCodexProxyGatewayKeyReader(() => null);
     clearSessionProvider('session-gateway-passthrough');
+  });
+
+  it.each([false, true])('removes unsupported search on the effective MiMo Pro Responses route (frozen=%s)', async frozen => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders, getActiveCatalog } = await import('../active-catalog.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const provider = buildUserProvider({ id: 'mimo-fixture', name: 'MiMo fixture', runtimes: {
+      codex: { baseUrl: 'https://api.xiaomimimo.com/v1', wireProtocol: 'openai-chat', supportsImageGeneration: true,
+        models: [{ id: 'mimo-v2.6-pro', name: 'MiMo Pro' }] },
+    } });
+    // Runtime config remains Chat, but the active catalog selects the native Responses
+    // interface (the safe provider projection observed in the failing local session).
+    provider.models.codex![0] = { ...provider.models.codex![0]!, api: 'openai-responses',
+      route: { baseUrl: 'https://api.xiaomimimo.com/v1', wireProtocol: 'openai-responses' } };
+    setCustomProviders([provider]);
+    setCustomProviderKeyReader(() => 'fixture-key');
+    const routes = deriveCodexCustomProviderRoutes(getActiveCatalog()).filter(route => route.providerId === provider.id);
+    expect(routes).toHaveLength(1);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({ url: 'http://127.0.0.1:43210', dispose: vi.fn(async () => undefined) });
+    if (frozen) await host.ensureCodexCustomContextProxyReady('mimo-frozen', 'env-key', routes);
+    else await host.ensureCodexProxyReady();
+    host.registerComposed('mimo-search-session', 'mimo-search-thread', '');
+    setSessionProvider('mimo-search-session', 'mimo-fixture');
+    try {
+      const proxy = mockState.createAnthropicCompatProxy.mock.calls[0][0];
+      const body = { model: 'mimo-v2.6-pro', input: [{ role: 'user', content: 'hello' }],
+        tools: [{ type: 'web_search' }, { type: 'function', name: 'read_file' }] };
+      const ctx = { method: 'POST', url: frozen ? `/_cindy/custom-provider/${routes[0]!.routeId}/responses` : '/responses',
+        headers: { 'thread-id': 'mimo-search-thread' } };
+      const decision = await proxy.routingTransform(body, ctx);
+      expect(decision).not.toHaveProperty('localHandler');
+      expect(decision.upstreamOverride).toContain('api.xiaomimimo.com');
+      let current: unknown = body;
+      for (const transform of proxy.transformRequest) {
+        current = transform(current, { ...ctx, upstreamBase: decision.upstreamOverride }) ?? current;
+      }
+      expect(current).toMatchObject({ input: body.input, tools: [{ type: 'function', name: 'read_file' }] });
+      expect(body.tools).toHaveLength(2);
+    } finally {
+      clearSessionProvider('mimo-search-session');
+      host.unregister('mimo-search-session');
+      if (frozen) await host.releaseCodexCustomContextProxy('mimo-frozen');
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
   });
 
   it('normalizes xAI Codex Responses body before forwarding requests', async () => {
@@ -8631,7 +8679,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(32); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(31); // ordinary transforms + dump + frozen custom-provider effort
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

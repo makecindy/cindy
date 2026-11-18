@@ -276,6 +276,10 @@ let ghostModelPickerProvider: ((id: string, options: unknown, current: () => boo
 export function setGhostModelPickerProvider(provider: NonNullable<typeof ghostModelPickerProvider>): void {
   ghostModelPickerProvider = provider;
 }
+let ghostModelPreferencesProvider: import('./ghostPageHandler.js').GhostModelPreferencesProvider | null = null;
+export function setGhostModelPreferencesProvider(provider: import('./ghostPageHandler.js').GhostModelPreferencesProvider): void {
+  ghostModelPreferencesProvider = provider;
+}
 export function setGhostAgentModelsProvider(
   provider: (ghostId: string, agentDeviceId?: string) => Promise<GhostAgentModelsResult>,
 ): void {
@@ -530,6 +534,7 @@ function registerGhostProtocol(
     get ghostAppContextProvider() { return ghostAppContextProvider; },
     get ghostModelPickerProvider() { return ghostModelPickerProvider; },
     get ghostAgentModelsProvider() { return ghostAgentModelsProvider; },
+    get ghostModelPreferencesProvider() { return ghostModelPreferencesProvider; },
     get ghostMediaModelsProvider() { return ghostMediaModelsProvider; },
     get ghostModelsHandler() { return ghostModelsHandler; },
     get ghostSecretsHandler() { return ghostSecretsHandler; },

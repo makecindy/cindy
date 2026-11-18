@@ -1,6 +1,8 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
+import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
+import { assertToolLifecycleBudget } from '../shared/tool-lifecycle.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -192,6 +194,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_TASK_SYSTEM_PROMPT_FILE',
   'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
+  'CINDY_PI_TOOL_LIFECYCLE',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
@@ -4508,6 +4511,48 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+// Chat gateways can carry Gemini thought signatures inside tool IDs, then route
+// the same history to a backend with a 64-character limit. Change only the wire
+// projection: Gemini still needs those signatures, and Responses has its own
+// native serializer. Reserve short IDs so hashing cannot alias an existing call.
+// This Cindy compat opt-in declares a wire constraint, not a model family.
+// Deployment names cannot identify Gemini; unknown routes keep their native IDs.
+function boundedChatToolIds(payload, model) {
+  if (model?.api !== 'openai-completions' || model.compat?.maxToolCallIdLength !== 64
+      || !Array.isArray(payload?.messages)) return payload;
+  const ids = new Set<string>();
+  for (const message of payload.messages) {
+    if (typeof message?.tool_call_id === 'string') ids.add(message.tool_call_id);
+    if (Array.isArray(message?.tool_calls)) for (const call of message.tool_calls) {
+      if (typeof call?.id === 'string') ids.add(call.id);
+    }
+  }
+  const mapped = new Map<string, string>();
+  const reserved = new Set([...ids].filter(id => id.length <= 64));
+  for (const id of ids) {
+    if (id.length <= 64) continue;
+    let salt = 0;
+    let candidate;
+    do {
+      candidate = 'call_' + createHash('sha256').update(salt ? id + ':' + salt : id).digest('hex').slice(0, 48);
+      salt++;
+    } while (reserved.has(candidate));
+    reserved.add(candidate);
+    mapped.set(id, candidate);
+  }
+  if (!mapped.size) return payload;
+  return { ...payload, messages: payload.messages.map(message => {
+    if (!message || typeof message !== 'object') return message;
+    let next = message;
+    if (mapped.has(message.tool_call_id)) next = { ...next, tool_call_id: mapped.get(message.tool_call_id) };
+    if (Array.isArray(message.tool_calls) && message.tool_calls.some(call => mapped.has(call?.id))) {
+      next = { ...next, tool_calls: message.tool_calls.map(call => mapped.has(call?.id)
+        ? { ...call, id: mapped.get(call.id) } : call) };
+    }
+    return next;
+  }) };
+}
+
 async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions', 'openai-codex-responses'].includes(model.api)) return undefined;
@@ -4537,6 +4582,8 @@ async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
 ${PI_CACHE_RECOVERY_SOURCE}
 
 ${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
+
+${PI_NATIVE_TOOL_CATALOG_SOURCE}
 
 // ─── 设备托管：执行器操作 ───────────────────────────────────────────
 async function cindyHostedCall(op: string, body: unknown, signal?: AbortSignal): Promise<any> {
@@ -4756,29 +4803,33 @@ export default async function cindyBridge(piApi: any) {
     handler: async (args: string, ctx: any) => {
       const nonce = args.trim();
       if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return;
-      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | undefined;
+      let code: 'INVALID_PAYLOAD' | 'APPLY_FAILED' | 'UNSUPPORTED_CAPABILITY' | undefined;
       let mutationStarted = false;
       let runtimeSettings;
       try {
         const raw = await ctx.ui.input('cindy:provider-refresh', JSON.stringify({ nonce }));
         let inspect = false;
-        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect'; }
+        let toolRequest;
+        try { const request = JSON.parse(raw); inspect = request?.nonce === nonce && request?.operation === 'inspect';
+          if (request?.nonce === nonce && request?.operation === 'tool-catalog') toolRequest = request.toolRequest; }
         catch { /* The normal snapshot parser rejects invalid JSON. */ }
-        const snapshot = inspect ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
-        if (!inspect && !snapshot) {
+        const snapshot = inspect || toolRequest ? undefined : parseCindyProviderRefreshSnapshot(raw, nonce);
+        if (toolRequest && typeof toolRequest.method === 'string' && Array.isArray(toolRequest.args)) {
+          runtimeSettings = await callCindyNativeToolCatalog(pi, toolRequest.method, toolRequest.args);
+        } else if (!inspect && !snapshot) {
           code = 'INVALID_PAYLOAD';
         } else if (snapshot) {
           mutationStarted = true;
           await nativeProviderAdapters.refresh(snapshot, ctx, SECRET_ENV_NAMES);
         }
-        if (!code) {
+        if (!code && !toolRequest) {
           // getSettings returns a copy. Never reach into Pi's private session or
           // pretend a settings.json rewrite changed the live SettingsManager.
           const settings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
           runtimeSettings = { version: piCodingAgent.VERSION, compaction: settings.compaction ?? {} };
         }
-      } catch {
-        code = mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
+      } catch (error) {
+        code = error?.message === 'UNSUPPORTED_CAPABILITY' ? 'UNSUPPORTED_CAPABILITY' : mutationStarted ? 'APPLY_FAILED' : 'INVALID_PAYLOAD';
       }
       // RPC prompt swallows extension command exceptions. The host must see an
       // explicit, nonce-bound receipt before accepting a refreshed catalog.
@@ -4801,6 +4852,7 @@ export default async function cindyBridge(piApi: any) {
         model: model.id, request: next });
       next = response.request ?? next;
     }
+    next = boundedChatToolIds(next, model);
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.
     const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
@@ -5140,6 +5192,41 @@ export default async function cindyBridge(piApi: any) {
   // 设备托管：文件、命令与搜索工具改用任务所在电脑上的执行器(替换上面的本机注册)。
   registerCindyHostedTools(pi, bashTool, applyCindyBashTimeoutParams);
 
+  // Native plugin hooks run before Cindy permissions, so transformed parameters
+  // enter the same permission/capture path. With no selected plugin no RPC runs.
+  const toolLifecyclePoints = (process.env.CINDY_PI_TOOL_LIFECYCLE ?? '').split(',');
+  const assertToolHookBudget = ${assertToolLifecycleBudget.toString()};
+  const pluginToolLifecycle = async (event: any, ctx: any, phase: 'call' | 'result') => {
+    const data = { phase, toolName: event.toolName, toolCallId: event.toolCallId,
+      input: event.input ?? {}, ...(phase === 'result' ? { result: { content: event.content, details: event.details, isError: event.isError }, isError: event.isError } : {}) };
+    assertToolHookBudget(data);
+    const serialized = JSON.stringify(data);
+    const frameBudget = ${MAX_JSONL_BUFFER_CHARS - 4096};
+    if (serialized.length > frameBudget / 2 && JSON.stringify(serialized).length > frameBudget) throw new Error('Tool hook exceeds the transport frame budget');
+    const raw = await ctx.ui.input('cindy:tool-lifecycle', serialized, { timeout: 2_000 });
+    const result = typeof raw === 'string' ? JSON.parse(raw) : null;
+    if (!result || result.error) throw new Error('Tool hook failed');
+    return result;
+  };
+  if ((toolLifecyclePoints.includes('call') || toolLifecyclePoints.includes('result')) && !guestToolGate && !currentPermissionState().reviewOnly) {
+    const pluginToolCall = async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'call');
+      if (result.decision === 'deny') return { block: true, reason: result.reason ?? 'Plugin denied tool call' };
+      if (result.input) {
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.defineProperties(event.input, Object.getOwnPropertyDescriptors(result.input));
+      }
+    };
+    if (toolLifecyclePoints.includes('call')) pi.on('tool_call', pluginToolCall);
+    if (toolLifecyclePoints.includes('result')) pi.on('tool_result', async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'result');
+      if (result.decision === 'deny') {
+        ctx.abort();
+        throw new Error(result.reason ?? 'Plugin blocked tool result');
+      }
+      return result.result;
+    });
+  }
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
     if (guestToolGate && guestToolGate.blocks(event.toolName)) {
@@ -5393,351 +5480,6 @@ export default async function cindyBridge(piApi: any) {
       // Best-effort capture; tool results must never fail because observability did.
     }
   });
-
-  // ── 视觉桥工具（层 C）─────────────────────────────────────────────────────
-  // 从 host 注入的 CINDY_PI_VISION_BRIDGE env 读主/fallback 视觉后端，提供
-  // vision（glance 式描述）与 vision-locate（ground 式坐标定位）两个工具。
-  // 自包含：只依赖 fetch / node:fs / process.env，不 import 任何 Cindy 模块。
-  const VISION_DEFAULT_PROMPT =
-    'Describe this image accurately and factually. Do NOT guess or fabricate details. ' +
-    'Report visible text verbatim. If the image contains UI elements, list their labels and state.';
-  // /v1/messages 强制要求 max_tokens。思考模型先写 thinking 块，1024 常被吃光，
-  // 正文为空，视觉桥误判图片不可用（#4580）。4096 留给思考加一段描述，同时保持有界。
-  // 对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS。
-  const VISION_ANTHROPIC_MAX_TOKENS = 4096;
-  const VISION_LOCATE_PROMPT_PREFIX =
-    'Locate the target below and return its bounding box as "x1,y1,x2,y2" ' +
-    '(pixel coordinates, top-left origin). If the target is not present, return NOT_FOUND. Target: ';
-
-  interface PiVisionBackendSpec {
-    baseUrl: string;
-    requestPath: string;
-    model: string;
-    authorization: string | null;
-    /** 路由指定额外头（host 侧已滤客户端凭证头），请求时合并，勿丢。 */
-    headers: Record<string, string>;
-    wireProtocol: 'anthropic-messages' | 'openai-responses' | 'openai-chat';
-  }
-  interface PiVisionBridgeEnvPayload {
-    enabled: boolean;
-    primary: PiVisionBackendSpec | null;
-    fallback: PiVisionBackendSpec | null;
-  }
-
-  function readPiVisionBridge(): PiVisionBridgeEnvPayload | null {
-    const rawEnv = process.env.CINDY_PI_VISION_BRIDGE;
-    if (!rawEnv) return null;
-    try {
-      const parsed = JSON.parse(rawEnv);
-      return parsed && typeof parsed === 'object' ? (parsed as PiVisionBridgeEnvPayload) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /** 图片魔数识别：非真实图片字节直接拒绝，阻断把任意本地文件当图外传。 */
-  /** 手动超时 signal（AbortSignal.timeout 缺失时的降级）。timer 不 hold 事件循环。 */
-  function createVisionTimeoutSignal(ms: number): AbortSignal {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ms);
-    timer.unref?.();
-    return controller.signal;
-  }
-
-  function sniffImageMime(buf: Buffer): string | null {
-    if (buf.length < 12) return null;
-    // PNG: 89 50 4E 47
-    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
-    // JPEG: FF D8 FF
-    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
-    // GIF: 47 49 46 38
-    if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'image/gif';
-    // WebP: RIFF .... WEBP
-    if (
-      buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
-      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
-    ) return 'image/webp';
-    return null;
-  }
-
-  // Anthropic 视觉响应的正文。thinking / redacted_thinking 不是图片描述；
-  // 只有思考、没有 text 时返回空串，调用方按空描述失败（#4580）。
-  function anthropicVisionText(blocks: unknown): string {
-    if (!Array.isArray(blocks)) return '';
-    return blocks
-      .map((block) => {
-        if (!block || typeof block !== 'object') return '';
-        const b = block as { type?: unknown; text?: unknown };
-        if (b.type === 'thinking' || b.type === 'redacted_thinking') return '';
-        return typeof b.text === 'string' ? b.text : '';
-      })
-      .join('');
-  }
-
-  async function callPiVision(
-    spec: PiVisionBackendSpec,
-    imagePath: string,
-    prompt: string,
-  ): Promise<string> {
-    // 读文件失败 / 超大 / 非图片：包成泛化错误，不把路径/URL 泄漏给模型侧。
-    // 先 stat 前置拒超大文件，避免 readFileSync 整文件进内存（阻塞 Pi bridge 事件循环）。
-    const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
-    try {
-      const st = statSync(imagePath);
-      if (st.size > MAX_IMAGE_BYTES) {
-        throw new Error('vision: image file too large');
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message === 'vision: image file too large') throw err;
-      throw new Error('vision: unable to read the image file');
-    }
-    let raw: Buffer;
-    try {
-      raw = readFileSync(imagePath);
-    } catch {
-      throw new Error('vision: unable to read the image file');
-    }
-    // TOCTOU 复查：stat 后文件可能被替换/增大。
-    if (raw.length > MAX_IMAGE_BYTES) {
-      throw new Error('vision: image file too large');
-    }
-    // 安全：只允许真实图片字节（魔数校验），防止模型把任意本地文件（.env / 密钥 /
-    // 文档）base64 后外发到第三方视觉端点。非图片直接拒绝。
-    const mime = sniffImageMime(raw);
-    if (!mime) {
-      throw new Error('vision: not a supported image file (magic-byte check failed)');
-    }
-    const base64 = raw.toString('base64');
-    const url = spec.baseUrl + (spec.requestPath.startsWith('/') ? spec.requestPath : '/' + spec.requestPath);
-    // 合并路由指定额外头（anthropic-version / x-api-key / 自定义 provider 头），
-    // 缺失会被后端拒（P1）。authorization 后置覆盖,保证显式凭证头优先。
-    const headers: Record<string, string> = { 'content-type': 'application/json', ...spec.headers };
-    if (spec.authorization) headers.authorization = spec.authorization;
-    const dataUrl = 'data:' + mime + ';base64,' + base64;
-    // 按 wire 协议构造请求体（对齐 host 侧 vision-channel 的 buildVisionRequestBody）。
-    const wire = spec.wireProtocol;
-    if (wire !== 'anthropic-messages' && wire !== 'openai-responses' && wire !== 'openai-chat') {
-      throw new Error('vision: wire protocol is not configured');
-    }
-    const body = wire === 'openai-responses'
-      ? {
-          model: spec.model,
-          input: [
-            {
-              role: 'user',
-              content: [
-                { type: 'input_text', text: prompt },
-                { type: 'input_image', image_url: dataUrl },
-              ],
-            },
-          ],
-        }
-      : wire === 'anthropic-messages'
-        ? {
-            model: spec.model,
-            // /v1/messages 强制要求 max_tokens。过小会被 thinking 块吃光（#4580）。
-            max_tokens: VISION_ANTHROPIC_MAX_TOKENS,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: prompt },
-                  { type: 'image', source: { type: 'base64', media_type: mime, data: base64 } },
-                ],
-              },
-            ],
-          }
-        : {
-            model: spec.model,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: prompt },
-                  { type: 'image_url', image_url: { url: dataUrl } },
-                ],
-              },
-            ],
-          };
-    // 安全：视觉请求携带 authorization 头与图片内容，禁止跟随 30x 重定向
-    // （重定向会把凭证/图片发往非预期端点；30x 按 !res.ok 处理）。
-    let res: Response;
-    try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        redirect: 'error',
-        // 超时中止：后端 hang 不一直占用工具调用。AbortSignal.timeout 需 bun 支持；
-        // 老版本缺失时降级为手动 AbortController（不崩工具）。
-        signal: typeof AbortSignal.timeout === 'function'
-          ? AbortSignal.timeout(30000)
-          : createVisionTimeoutSignal(30000),
-      });
-    } catch {
-      // 网络失败包成泛化错误，不带 URL/网络细节。
-      throw new Error('vision: vision backend request failed');
-    }
-    if (!res.ok) throw new Error('vision HTTP ' + res.status);
-    let json: unknown;
-    try {
-      json = await res.json();
-    } catch {
-      throw new Error('vision: vision backend returned an invalid response');
-    }
-    const MAX_DESC = 32 * 1024;
-    const trimDesc = (s: string): string =>
-      s.length > MAX_DESC ? s.slice(0, MAX_DESC) + '…[truncated]' : s;
-    // 按 wire 协议抽描述文本（对齐 host 侧 extractVisionContent）。
-    let content: unknown = null;
-    if (wire === 'anthropic-messages') {
-      const blocks = (json as { content?: unknown })?.content;
-      content = anthropicVisionText(blocks);
-    } else if (wire === 'openai-responses') {
-      const output = (json as { output?: unknown })?.output;
-      if (Array.isArray(output)) {
-        content = output
-          .map((item) => {
-            if (!item || typeof item !== 'object') return '';
-            const it = item as { type?: unknown; content?: unknown; text?: unknown };
-            if (it.type === 'output_text' && typeof it.text === 'string') return it.text;
-            if (Array.isArray(it.content)) {
-              return it.content
-                .map((b) => (b && typeof b === 'object' ? (b as { text?: unknown }).text : ''))
-                .filter((t): t is string => typeof t === 'string')
-                .join('');
-            }
-            return '';
-          })
-          .join('');
-      }
-    } else {
-      const choices = (json as { choices?: unknown })?.choices;
-      if (Array.isArray(choices) && choices.length > 0) {
-        const first = choices[0] as { message?: { content?: unknown } };
-        content = first?.message?.content ?? null;
-      }
-    }
-    if (typeof content === 'string' && content.trim().length > 0) return trimDesc(content.trim());
-    if (Array.isArray(content)) {
-      const parts = content
-        .map((part) => {
-          const t = (part as { text?: unknown })?.text;
-          return typeof t === 'string' ? t : '';
-        })
-        .join('');
-      if (parts.trim().length > 0) return trimDesc(parts.trim());
-    }
-    throw new Error('vision empty description');
-  }
-
-  async function describePiVisionWithFallback(imagePath: string, prompt: string): Promise<string> {
-    const cfg = readPiVisionBridge();
-    if (!cfg || !cfg.enabled || !cfg.primary) throw new Error('vision bridge not configured');
-    // host 可关联日志：仅含 backendRole/model/errorClass（脱敏），不含 image path、base64、
-    // Authorization 或请求体。走 stderr，host 侧 Pi 子进程日志收集可消费。
-    const errClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
-    try {
-      return await callPiVision(cfg.primary, imagePath, prompt);
-    } catch (primaryErr) {
-      console.error('[cindy-bridge] vision bridge pi primary backend failed', {
-        backendRole: 'primary',
-        model: cfg.primary.model,
-        errorClass: errClass(primaryErr),
-      });
-      // fallback 与 primary 的 (baseUrl, requestPath, model, authorization, headers)
-      // 完全相同才算重复；同 baseUrl/model 但不同 requestPath、不同凭证（网关 key）或
-      // 不同路由头（如不同 anthropic-beta 的 anthropic 兼容路由）是独立后端，应允许
-      // （防止误杀）。headers 是 Record，按 JSON 序列化比较——两个 spec 都由 host 侧
-      // 同源序列化而来，键序一致，可直接 stringify 比较。
-      const sameBackend =
-        cfg.fallback &&
-        cfg.fallback.baseUrl === cfg.primary.baseUrl &&
-        cfg.fallback.requestPath === cfg.primary.requestPath &&
-        cfg.fallback.model === cfg.primary.model &&
-        cfg.fallback.authorization === cfg.primary.authorization &&
-        JSON.stringify(cfg.fallback.headers ?? {}) === JSON.stringify(cfg.primary.headers ?? {});
-      if (cfg.fallback && !sameBackend) {
-        try {
-          const text = await callPiVision(cfg.fallback, imagePath, prompt);
-          console.error('[cindy-bridge] vision bridge pi used fallback backend', {
-            backendRole: 'fallback',
-            model: cfg.fallback.model,
-          });
-          return text;
-        } catch (fallbackErr) {
-          console.error('[cindy-bridge] vision bridge pi fallback backend failed', {
-            backendRole: 'fallback',
-            model: cfg.fallback.model,
-            errorClass: errClass(fallbackErr),
-          });
-          throw fallbackErr;
-        }
-      }
-      throw primaryErr;
-    }
-  }
-
-  // 视觉桥工具只在「已启用且可解析 primary 后端」时注册：未启用时完全不暴露给 Pi 模型
-  // （零干扰契约），而不是注册了执行时报 "vision bridge not configured"。
-  const piVisionCfg = readPiVisionBridge();
-  if (piVisionCfg && piVisionCfg.enabled && piVisionCfg.primary) {
-  pi.registerTool({
-    name: 'vision',
-    label: 'vision',
-    description:
-      'Describe an image at a local path using an external multimodal model. ' +
-      'Use this to read screenshots, UI mockups, diagrams, or any image referenced by the user ' +
-      'or produced by tools. Pass an optional query (-q) to focus on a specific aspect.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Absolute path to the image file.' },
-        query: { type: 'string', description: 'Optional focus question about the image.' },
-      },
-      required: ['path'],
-    },
-    async execute(_toolCallId: string, params: unknown) {
-      const input = params as { path?: string; query?: string };
-      if (typeof input.path !== 'string' || input.path.length === 0) {
-        throw new Error('vision: path is required');
-      }
-      const prompt = typeof input.query === 'string' && input.query.trim().length > 0
-        ? input.query.trim()
-        : VISION_DEFAULT_PROMPT;
-      const text = await describePiVisionWithFallback(input.path, prompt);
-      return { content: [{ type: 'text', text }] };
-    },
-  });
-
-  pi.registerTool({
-    name: 'vision-locate',
-    label: 'vision-locate',
-    description:
-      'Locate a target element in an image and return its pixel bounding box as "x1,y1,x2,y2" ' +
-      '(top-left origin). Use this before cropping or acting on a specific UI element.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Absolute path to the image file.' },
-        target: { type: 'string', description: 'What to locate (e.g. "the send button").' },
-      },
-      required: ['path', 'target'],
-    },
-    async execute(_toolCallId: string, params: unknown) {
-      const input = params as { path?: string; target?: string };
-      if (typeof input.path !== 'string' || input.path.length === 0) {
-        throw new Error('vision-locate: path is required');
-      }
-      if (typeof input.target !== 'string' || input.target.trim().length === 0) {
-        throw new Error('vision-locate: target is required');
-      }
-      const prompt = VISION_LOCATE_PROMPT_PREFIX + input.target.trim();
-      const text = await describePiVisionWithFallback(input.path, prompt);
-      return { content: [{ type: 'text', text }] };
-    },
-  });
-  }
 
   // ── MCP 桥 ────────────────────────────────────────────────────────────────
   const raw = process.env.CINDY_PI_MCP_BRIDGE;

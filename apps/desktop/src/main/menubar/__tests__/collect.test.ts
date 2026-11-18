@@ -77,7 +77,7 @@ describe('source mapping', () => {
     const source = claudeSource(
       provider({ id: 'anthropic' }),
       {
-        subscriptionType: 'max',
+        subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
         fiveHour: { utilization: 10, resetsAt: nowSec + 3600 },
         sevenDay: { utilization: 30, resetsAt: nowSec + 86_400 },
         scoped: [{ modelDisplayName: 'Fable', utilization: 50, resetsAt: nowSec + 86_400 }],
@@ -85,6 +85,7 @@ describe('source mapping', () => {
       NOW,
     );
     expect(source.account).toBeNull();
+    expect(source.plan).toBe('Ultra');
     expect(source.windows.map((w) => [w.kind, w.label ?? null, w.usedPercent])).toEqual([
       ['session', null, 10],
       ['week', null, 30],
@@ -152,6 +153,15 @@ describe('collectMenubarInputs', () => {
       ...overrides,
     };
   }
+
+  it('includes auxiliary task tokens without charging them at the conversation model rate', async () => {
+    const input = usage([task('mixed')]);
+    input.taskDaily![0].tokens = 10100;
+    input.taskDaily![0].auxiliaryTokens = 10000;
+    const collected = await collectMenubarInputs(deps({ readUsage: async () => input }));
+    expect(collected.tasks[0].tokensToday).toBe(10100);
+    expect(collected.tasks[0].valueToday).toBeCloseTo(0.1);
+  });
 
   it('keeps the other sources when one reader fails', async () => {
     const errors: string[] = [];
@@ -280,7 +290,8 @@ describe('collectMenubarInputs', () => {
   it.each(['local', 'remote'])('keeps Claude pool plans and per-model windows attached to their account on %s', async location => {
     const claudePool: SubscriptionPoolView = {
       ...pool, providerId: 'anthropic', accounts: pool.accounts.map((account, index) => ({
-        ...account, plan: index ? 'max' : undefined, planTier: index ? 'max_20x' : undefined, usage: { claude: {
+        ...account, plan: index ? 'pro' : undefined, planTier: index ? 'pro' : undefined,
+        planDisplayName: index ? 'Ultra' : undefined, usage: { claude: {
           updatedAt: NOW, subscriptionType: 'pro',
           fiveHour: { utilization: index ? 25 : 80, resetsAt: nowSec + 3600 },
           sevenDay: { utilization: index ? 35 : 90, resetsAt: nowSec + 86_400 },
@@ -299,7 +310,7 @@ describe('collectMenubarInputs', () => {
     expect(collected.sources).toMatchObject([
       { id: `${prefix}anthropic`, account: 'default@example.com', plan: 'Pro',
         windows: [{ usedPercent: 80 }, { usedPercent: 90 }, { label: 'Sonnet', usedPercent: 95 }] },
-      { id: `${prefix}anthropic:account:extra`, account: 'extra@example.com', plan: 'Max 20×',
+      { id: `${prefix}anthropic:account:extra`, account: 'extra@example.com', plan: 'Ultra',
         windows: [{ usedPercent: 25 }, { usedPercent: 35 }, { label: 'Sonnet', usedPercent: 40 }] },
     ]);
   });
@@ -681,4 +692,16 @@ it('labels usage with catalog display names and folds route variants together', 
   const series = usageScope(payload, days, [], names).modelSeries!;
   expect(series.models.map((m) => m.name)).toEqual(['Opus 5.5', 'GPT-6 Astra', 'mystery-1']);
   expect(series.tokens[0]).toEqual([200, 100, 100, 0]);
+});
+
+it('includes auxiliary tokens in widget totals without inventing a Claude harness', () => {
+  const money = { amount: 0, currency: 'USD', approximate: false, kind: 'actual-cost' } as const;
+  const payload = { modelDaily: [{ day: '2026-11-17', agentKind: 'auxiliary', model: 'helper',
+    tokens: 1100, money, apiMoney: money, subscriptionEstimateMoney: money }] } as UsageHistoryPayload;
+  const scope = usageScope(payload, ['2026-11-17'], []);
+  expect(scope.daily[0].tokens).toEqual([0, 0, 0, 1100]);
+  expect(scope.daily[0].tokens.reduce((a, b) => a + b, 0)).toBe(1100);
+  expect(scope.models['30']).toEqual([]);
+  expect(scope.modelSeries?.models).toEqual([{ name: 'helper', harness: 'auxiliary' }]);
+  expect(scope.modelSeries?.tokens).toEqual([[1100, 0]]);
 });

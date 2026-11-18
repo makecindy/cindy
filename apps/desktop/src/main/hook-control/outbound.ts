@@ -42,6 +42,14 @@ const MAX_OUT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_OUT_ATTACHMENTS = 8;
 const MAX_OUT_TOTAL_BYTES = 30 * 1024 * 1024;
 const MAX_X_IMAGES = 4;
+/** 超过单图上限时值得尝试压缩的格式(静态图; GIF 可能是动图, 压了会丢动画)。 */
+const SHRINKABLE_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+/**
+ * 压缩输入的体量上限: 更大的图不整读进内存去压, 直接按超限处理。回复里按本机路径引用的图片先经
+ * 任务图片导入(上限更小, 见 TASK_IMAGE_MAX_BYTES), 能走到这里的不会超过那个上限; 这个上限约束的是
+ * 已在媒体仓里的图和工具结果旁路带来的图。
+ */
+const MAX_SHRINK_INPUT_BYTES = 48 * 1024 * 1024;
 
 /**
  * hook 派发 turn 时附在用户消息末尾的渠道说明(session-runner 消费)。
@@ -198,6 +206,18 @@ export interface OutboundDeps {
   relayVideo?: (absPath: string, mimeType: string) => Promise<string>;
   /** 附件未全部发出时附加在正文末尾的提示; 省略 = 英文默认提示。 */
   formatIncompleteNotice?: (skippedNames: string[]) => string;
+  /**
+   * 超过单图上限的静态图片先在本机压到上限以内再发(缩小边长、转 WebP); 返回 null = 压不到上限以内。
+   * 省略 = 不压缩, 超限的图片直接跳过并提示。只影响发给渠道的副本, 不改本机原图。
+   */
+  shrinkImage?: (bytes: Buffer, mimeType: string, maxBytes: number) => Promise<{ buffer: Buffer; mime: string } | null>;
+  /**
+   * 没能导入的本机图片是否因为超过导入上限: 返回上限(MiB), 不是这个原因返回 undefined。提示里据此
+   * 写明上限。由能读本机文件的调用方提供; 收集器自己不读没导入的本机路径(它可能属于另一台电脑)。
+   */
+  localImageOverLimitMiB?: (absPath: string) => number | undefined;
+  /** 因超过大小上限没发出的附件在提示里的写法(点名并说明上限); 省略 = 英文默认写法。 */
+  formatOverLimitName?: (name: string, limitMiB: number) => string;
   /** realpath 校验(生产: fs.promises.realpath; 测试注入)。 */
   realpath?: (absPath: string) => Promise<string>;
   /** 读文件字节(生产: fs.promises.readFile)。 */
@@ -253,6 +273,57 @@ function defaultIncompleteNotice(skippedNames: string[]): string {
 // only; this does not grant the local importer access to that path.
 function isLocalImage(url: string): boolean {
   return Boolean(localTaskImagePath(url)) || path.win32.isAbsolute(url);
+}
+
+const RELATIVE_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+
+/** 既不是网址 / 协议地址、也不是绝对路径的图片目标: 模型按工作目录写的相对路径(如 evidence/a.png)。 */
+function isRelativeImageTarget(url: string): boolean {
+  if (!url || url.includes('\0') || /^[a-z][a-z0-9+.-]*:/i.test(url) || /^(\/\/|[#?])/.test(url)) return false;
+  if (path.isAbsolute(url) || path.win32.isAbsolute(url)) return false;
+  return RELATIVE_IMAGE_EXTENSIONS.has(path.extname(url.split(/[?#]/)[0]!).toLowerCase());
+}
+
+/**
+ * 相对路径的本机图片引用按工作目录补成绝对路径, 返回「原目标 → 绝对路径」。之后与绝对路径的图片走同一条
+ * 导入与发送流程。只认落在 roots 内(解析符号链接后仍在内)、确实存在的常见图片文件; 找不到的原样留在
+ * 正文里, 不猜测别的位置。实踩(2026-11-17): 回复里写 `![加载态](evidence/loading-68.png)`, 图片没发出,
+ * 这段引用原样进了飞书卡片, 整张卡被平台拒绝, 这一轮的答案没送达。
+ */
+export async function resolveRelativeImageRefs(
+  text: string,
+  roots: readonly string[],
+  io: { realpath?: (p: string) => Promise<string>; isFile?: (p: string) => Promise<boolean> } = {},
+): Promise<Map<string, string>> {
+  const resolved = new Map<string, string>();
+  const bases = roots.map((root) => root.trim()).filter((root) => root.length > 0);
+  if (bases.length === 0 || !text.includes('![')) return resolved;
+  const realpath = io.realpath ?? ((p: string) => fsp.realpath(p));
+  const isFile = io.isFile ?? (async (p: string) => (await fsp.stat(p)).isFile());
+  for (const ref of taskImageReferences(text)) {
+    if (resolved.has(ref.url) || !isRelativeImageTarget(ref.url)) continue;
+    const bare = ref.url.split(/[?#]/)[0]!;
+    const candidates = [bare];
+    try {
+      const decoded = decodeURIComponent(bare);
+      if (decoded !== bare && !decoded.includes('\0')) candidates.push(decoded);
+    } catch { /* 不是合法的百分号编码: 只按原样找 */ }
+    search: for (const base of bases) {
+      for (const candidate of candidates) {
+        const absPath = path.resolve(base, candidate);
+        if (!isPathWithin(base, absPath)) continue;
+        try {
+          const [baseReal, targetReal] = await Promise.all([realpath(path.resolve(base)), realpath(absPath)]);
+          if (!isPathWithin(baseReal, targetReal) || !(await isFile(targetReal))) continue;
+        } catch {
+          continue;
+        }
+        resolved.set(ref.url, absPath);
+        break search;
+      }
+    }
+  }
+  return resolved;
 }
 
 /** 文本里是否存在任何托管媒体出站引用(快速前置判断, 避免无谓的收集开销)。 */
@@ -321,6 +392,7 @@ export async function collectOutboundAttachments(
   const skip = (name: string): void => {
     skippedNames.push(name);
   };
+  const overLimitName = deps.formatOverLimitName ?? ((name: string, limitMiB: number) => `${name} (over ${limitMiB} MB)`);
 
   const isAllowedFilePath = async (absPath: string): Promise<boolean> => {
     const roots =
@@ -382,12 +454,31 @@ export async function collectOutboundAttachments(
       );
       return false;
     }
+    let sentMimeType = mimeType;
+    let sentFileName = path.basename(absPath);
+    if (
+      bytes.length > maxBytes && bytes.length <= MAX_SHRINK_INPUT_BYTES
+      && deps.shrinkImage && SHRINKABLE_IMAGE_MIMES.has(mimeType)
+    ) {
+      // 图片超过上限: 先压一份能发出去的副本。压不下来或压缩出错都按原来的超限处理, 不影响正文。
+      const original = bytes.length;
+      const smaller = await deps.shrinkImage(bytes, mimeType, maxBytes).catch(() => null);
+      if (smaller && smaller.buffer.length > 0 && smaller.buffer.length <= maxBytes) {
+        bytes = smaller.buffer;
+        sentMimeType = smaller.mime;
+        const ext = Object.entries(MIME_BY_EXT).find(([, mime]) => mime === smaller.mime)?.[0];
+        if (ext && path.extname(sentFileName).toLowerCase() !== ext) sentFileName = `${path.parse(sentFileName).name}${ext}`;
+        deps.log.warn(`outbound image compressed to fit the limit (${absPath}: ${original} -> ${bytes.length} bytes)`);
+      }
+    }
     if (
       bytes.length === 0 ||
       bytes.length > maxBytes ||
       totalBytes + bytes.length > MAX_OUT_TOTAL_BYTES
     ) {
-      skip(name);
+      // 超过大小上限的在提示里写明上限: 只说「未能发送」用户不知道该压缩还是该重试。
+      const limitBytes = bytes.length > maxBytes ? maxBytes : MAX_OUT_TOTAL_BYTES;
+      skip(bytes.length === 0 ? name : overLimitName(name || path.basename(absPath), Math.floor(limitBytes / (1024 * 1024))));
       deps.log.warn(`outbound attachment skipped by size (${absPath}: ${bytes.length} bytes)`);
       return false;
     }
@@ -396,8 +487,8 @@ export async function collectOutboundAttachments(
     items.push({
       absPath,
       name,
-      mimeType,
-      attachment: { name: path.basename(absPath), mimeType, dataBase64: bytes.toString('base64') },
+      mimeType: sentMimeType,
+      attachment: { name: sentFileName, mimeType: sentMimeType, dataBase64: bytes.toString('base64') },
     });
     return true;
   };
@@ -418,7 +509,10 @@ export async function collectOutboundAttachments(
     visitedImageUrls.add(ref.url);
     // Local images must already have been imported by the task-scoped adapter.
     if (isLocalImage(ref.url)) {
-      skip(attachmentDisplayName(ref.alt, localTaskImagePath(ref.url) ?? ref.url));
+      const localPath = localTaskImagePath(ref.url);
+      const name = attachmentDisplayName(ref.alt, localPath ?? ref.url);
+      const limitMiB = localPath ? deps.localImageOverLimitMiB?.(localPath) : undefined;
+      skip(limitMiB === undefined ? name : overLimitName(name, limitMiB));
       continue;
     }
     try {
