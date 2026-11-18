@@ -466,6 +466,8 @@ export interface AgentInputCoordinatorDeps {
     /** 绑定本次错误 recovery 的令牌；`armUsageLimitWait` 只认这个令牌。 */
     candidateToken: number,
   ) => void;
+  /** Host-verified remote companion Schedule; ordinary bot wakes never qualify. */
+  isScheduledQuotaInput?: (item: AgentInputQueuedMessage) => boolean;
   /**
    * **纯判定**：这条将交给 `onUsageLimitedTurnError` 的错误会不会先由供应商组试着换电脑
    * (docs/product-rules/provider-groups.md §6.1)。返回换电脑的原因时，这次错误照常成为当前状态
@@ -1370,6 +1372,9 @@ export class AgentInputCoordinator {
    */
   private readonly restoredQueueSessions = new Set<string>();
   private readonly restoredUsageLimitRecoveries = new WeakSet<object>();
+  /** Provenance survives a quota restore without reviving the expired FireContext. */
+  private readonly quotaScheduleOrigins = new WeakMap<object, NonNullable<AgentInputQueuedMessage['origin']>>();
+  private readonly scheduledQuotaRetryItems = new WeakSet<object>();
   /** The quota classification belongs to the recovery, and survives runtime/token replacement. */
   private readonly accountLimitRecoveries = new WeakSet<object>();
   /** Only this saved continuation can cross a restore pause; the ordinary queue stays paused. */
@@ -1507,6 +1512,26 @@ export class AgentInputCoordinator {
       if (item?.clientId !== context.clientId) return false;
     }
     return this.inputHasOwnerAuthor(item, true);
+  }
+
+  /** Host-owned quota input only; a scheduler-looking message is not a recovery lease. */
+  scheduledQuotaOrigin(sessionId: string, clientId?: string): AgentInputQueuedMessage['origin'] {
+    const state = this.states.get(sessionId);
+    if (!state || this.isExecutionPaused(sessionId)) return undefined;
+    let recovery = state.recovery;
+    if (clientId) {
+      if (state.activeTurn?.item?.clientId !== clientId) return undefined;
+      const pending = this.pendingAutoResumeRecoveries.get(clientId);
+      if (!pending) return this.scheduledQuotaRetryItems.has(state.activeTurn.item)
+        ? this.quotaScheduleOrigins.get(state.activeTurn.item) : undefined;
+      if (pending.stateRef !== state || pending.recoveryOwner !== 'quota-reset') return undefined;
+      recovery = pending.recovery;
+    } else if (!isUsageLimitCandidateCurrent(state)) return undefined;
+    const item = recovery?.kind === 'active-turn' ? recovery.item
+      : recovery?.kind === 'queue-head' ? state.pendingQueue.find(item => item.clientId === recovery.clientId) : undefined;
+    if (!item || item.sharedTaskAuthor) return undefined;
+    const origin = item.origin ?? this.quotaScheduleOrigins.get(item);
+    return origin?.kind === 'scheduler' && origin.runId ? origin : undefined;
   }
 
   private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean,
@@ -3753,6 +3778,7 @@ export class AgentInputCoordinator {
     const previousToolLoop = state.toolLoop;
     const previousOutputLimit = state.outputLimit;
     const previousStickyError = state.stickyError;
+    const quotaOrigin = usageWait?.recoveryOwner === 'quota-reset' ? this.scheduledQuotaOrigin(sessionId) : undefined;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
     if (retryItem && groupRecovery) retryItem = { ...retryItem, text: groupRecoveryText };
     if (
@@ -3781,6 +3807,10 @@ export class AgentInputCoordinator {
       // Keep the original user input/receipt and user-turn accounting. Only the
       // recovery activity metadata travels with its first durable user row.
       state.pendingQueue[0].autoResumeInfo = automaticResumeInfo;
+      if (quotaOrigin) {
+        this.quotaScheduleOrigins.set(state.pendingQueue[0], quotaOrigin);
+        this.scheduledQuotaRetryItems.add(state.pendingQueue[0]);
+      }
       if (usageWait && state.queuePausedByRestore) this.restoredUsageLimitRetryItems.add(state.pendingQueue[0]);
     }
     if (recovery.kind === 'active-turn') {
@@ -3819,6 +3849,7 @@ export class AgentInputCoordinator {
           attemptToken,
         });
       }
+      if (quotaOrigin) this.quotaScheduleOrigins.set(item, quotaOrigin);
       // Manual retry is a user takeover. The old scheduler waiter settles as
       // failed; its FireContext must not be inherited by the user's new turn.
       if (!automatic && isSchedulerOriginItem(item)) item.origin = undefined;
@@ -6113,13 +6144,14 @@ export class AgentInputCoordinator {
         result.reason === 'cancelled-before-dispatch';
       const startupAdmission = !item.orcaReportDelivery && result.kind === 'host-send'
         && result.startupAdmission === 'subscription-account-limited';
+      const scheduledQuotaAdmission = startupAdmission && this.deps.isScheduledQuotaInput?.(item) === true;
       if (!cancelledByUserBoundary && !startupAdmission) this.notifyRejectedUserTurn(sessionId, item);
       if (!cancelledByUserBoundary) this.recoverOrcaReportPreparation(sessionId, latest, item, result);
       // This receipt comes only from a proven-stopped bootstrap, before the
       // user row or native turn exists. Keep the original queue item/authorization.
       // Bot membership, route changes and retry limits remain owned by the host.
       if (!latest.queueAbortPending && !latest.autoResumePending
-        && startupAdmission) {
+        && startupAdmission && !scheduledQuotaAdmission) {
         const signals = { reason: BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON };
         if (this.isResumableTurnErrorCandidate(sessionId, message, signals, item)) {
           const takeover = this.notifyResumableTurnError(sessionId, item, message, signals, false);
@@ -6134,6 +6166,11 @@ export class AgentInputCoordinator {
       if (!cancelledByUserBoundary && startupAdmission
         && latest.autoResumePending?.reason !== BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON) {
         this.notifyRejectedUserTurn(sessionId, item);
+      }
+      // The stopped bootstrap has no native turn to emit a quota terminal.
+      // Keep the same queue-head recovery and use the existing reset-time owner.
+      if (!latest.queueAbortPending && scheduledQuotaAdmission) {
+        this.notifyUsageLimitedTurnError(sessionId, item, message, { usageLimit: true }, true);
       }
       this.emit(sessionId);
       return;
@@ -7534,11 +7571,12 @@ export class AgentInputCoordinator {
     item: AgentInputQueuedMessage,
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+    beforeDispatch = signals?.providerGroupUsageLimit !== undefined,
   ): void {
     const state = this.states.get(sessionId);
     // The synchronous switch hint only controls error presentation. Recovery
     // eligibility belongs to the service, including reconnect-only groups.
-    if (!state || !this.willNotifyUsageLimitedTurnError(state, item, signals?.providerGroupUsageLimit !== undefined)) return;
+    if (!state || !this.willNotifyUsageLimitedTurnError(state, item, beforeDispatch)) return;
     const token = ++this.usageLimitWaitSeq;
     state.usageLimitWait = {
       resumeAt: null, token, recovery: state.recovery!,
@@ -7567,7 +7605,7 @@ export class AgentInputCoordinator {
     state.providerGroupSwitchHold = null;
     // Scheduled quota waits belong to the runner; do not hide their error behind
     // a provider-group takeover that this scheduled path does not start.
-    if (isSchedulerOriginItem(item)) return;
+    if (isSchedulerOriginItem(item) || this.quotaScheduleOrigins.has(item)) return;
     if (!this.willNotifyUsageLimitedTurnError(state, item)) return;
     const cause = this.getProviderGroupSwitchCandidate(sessionId, item, message, signals, true);
     if (!cause) return;
@@ -7587,7 +7625,7 @@ export class AgentInputCoordinator {
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
     consumeBudget = false,
   ): AutoResumeAgentSwitchCause | null {
-    if (!this.deps.onUsageLimitedTurnError || isSchedulerOriginItem(item)) return null;
+    if (!this.deps.onUsageLimitedTurnError || isSchedulerOriginItem(item) || this.quotaScheduleOrigins.has(item)) return null;
     try {
       const cause = this.deps.providerGroupSwitchCandidate?.(sessionId, { ...(signals ?? {}), message }, item) ?? null;
       if (!cause) return null;
@@ -7772,7 +7810,8 @@ export class AgentInputCoordinator {
     const item = recovery.kind === 'active-turn' ? recovery.item
       : state.pendingQueue.find(item => item.clientId === recovery.clientId);
     return item && !item.sharedTaskAuthor
-      ? { kind: state.recovery.kind, item: sanitizeQueuedMessageForPersistence(item), error: state.error } : null;
+      ? { kind: state.recovery.kind, item: sanitizeQueuedMessageForPersistence({ ...item,
+        origin: item.origin ?? this.quotaScheduleOrigins.get(item) }), error: state.error } : null;
   }
 
   /** Rehydrate only an untouched task. The expired scheduler FireContext is never replayed. */
@@ -7787,7 +7826,10 @@ export class AgentInputCoordinator {
     const item = { ...sanitizeQueuedMessageForPersistence(queued ?? snapshot.item) };
     // Restore task input, never the expired scheduler run. Do this once for both
     // recovery shapes, including a matching queue item already restored in memory.
-    if (isSchedulerOriginItem(item)) item.origin = undefined;
+    if (isSchedulerOriginItem(item)) {
+      this.quotaScheduleOrigins.set(item, item.origin!);
+      item.origin = undefined;
+    }
     if (snapshot.kind === 'queue-head') {
       if (queued) state.pendingQueue[state.pendingQueue.indexOf(queued)] = item;
       else state.pendingQueue.unshift(item);
