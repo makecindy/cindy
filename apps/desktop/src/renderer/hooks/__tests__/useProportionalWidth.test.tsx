@@ -2,7 +2,7 @@
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useProportionalWidth } from '../useProportionalWidth';
+import { TASK_MESSAGE_MAX_WIDTH, useProportionalWidth } from '../useProportionalWidth';
 
 const BREAKPOINTS = [560, 600, 700] as const;
 
@@ -50,7 +50,7 @@ describe('useProportionalWidth resize hot path', () => {
     let latestCompact = false;
 
     function Harness() {
-      const width = useProportionalWidth(914, { responsiveBreakpoints: BREAKPOINTS });
+      const width = useProportionalWidth(TASK_MESSAGE_MAX_WIDTH, { responsiveBreakpoints: BREAKPOINTS });
       renders += 1;
       latestBand = width.inputWidthBand;
       latestCompact = width.isCompact;
@@ -65,6 +65,20 @@ describe('useProportionalWidth resize hot path', () => {
     expect(container.style.getPropertyValue('--cindy-input-half-width')).toBe('452px');
     expect(latestBand).toBe(3);
     expect(latestCompact).toBe(false);
+
+    // Feedback #12: a large task pane stayed 914px wide. Existing coverage
+    // exercised only shrinking. Unit tier, real hook: the 1600px input must
+    // expand both message and composer without another session render.
+    measuredWidth = 1600;
+    act(() => {
+      notifyResize?.(
+        [{ contentRect: { width: measuredWidth } } as ResizeObserverEntry],
+        {} as ResizeObserver,
+      );
+    });
+    expect(container.style.getPropertyValue('--cindy-message-width')).toBe('1200px');
+    expect(container.style.getPropertyValue('--cindy-input-width')).toBe('1220px');
+    expect(renders).toBe(initialRenderCount);
 
     measuredWidth = 900;
     act(() => {

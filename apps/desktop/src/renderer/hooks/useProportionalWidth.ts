@@ -1,5 +1,8 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
+/** Shared work column for new and running tasks; prose keeps its own reading width. */
+export const TASK_MESSAGE_MAX_WIDTH = 1200;
+
 /**
  * 主区域内容宽度 hook
  *
@@ -9,7 +12,8 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  *
  * maxWidth 为内容封顶宽（首参）：容器再宽,内容列也不超过它,超出部分靠 mx-auto
  * 居中留白。不传时回落到 MAX_MESSAGE_WIDTH(1200) 的历史默认。新建对话页与进行中
- * 对话页传同一个值(914),保证发送首条消息时输入框宽度不跳变,同时左右留出呼吸空间。
+ * 对话页共用 TASK_MESSAGE_MAX_WIDTH,保证发送首条消息时输入框宽度不跳变。
+ * 大屏给表格、代码与过程更多空间；普通回复的连续正文另由 ChatBubble 限制阅读行宽。
  *
  * - 消息流侧 (50px)：MessageStream 是 overflow-y-auto 的原生滚动容器,占满
  *   全宽 containerWidth，内部 contentRef `mx-auto` + `maxWidth=messageWidth`
@@ -46,7 +50,6 @@ const COMPACT_MESSAGE_PAD = 20;
 // 之前 padding 就先收紧,过渡顺序自然(padding 收紧 → 必要时 toolbar dense
 // → 必要时 toolbar compact)。
 const AUTO_COMPACT_THRESHOLD = 700;
-const DEFAULT_INPUT_PAD = Math.max(0, DEFAULT_MESSAGE_PAD - INPUT_OUTSET / 2);
 
 export interface UseProportionalWidthOptions {
   /** 紧凑模式 (workdir-browse rail / 主会话右栏打开等窄容器场景),两侧 padding 由 50→20。 */
