@@ -16918,6 +16918,7 @@
         "menuSave": "保存",
         "menuInsertTable": "插入表格",
         "externalChangeBlocked": "文件已被外部修改，已暂停自动保存。确认后可手动保存覆盖。",
+        "targetChanged": "文件指向已变化，当前草稿仍保留在编辑器中。请先复制草稿，再重新打开文件",
         "tableMenu": {
           "addRowAbove": "在上方新增行",
           "addRowBelow": "在下方新增行",

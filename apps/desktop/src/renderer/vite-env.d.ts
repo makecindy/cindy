@@ -2846,6 +2846,7 @@ interface ElectronAPI {
         type: 'file' | 'directory';
         size: number;
         mtimeMs: number;
+        symlinkTarget?: string;
       }>
     >;
     /** 项目级文件名扁平列表(ripgrep --files honor .gitignore);失败返回空数组
@@ -2873,6 +2874,7 @@ interface ElectronAPI {
             size: number;
             mtimeMs: number;
             truncated: boolean;
+            resolvedPath?: string;
           };
         }
       /** OVERSIZE = 远程文本超传输上限(device-link 帧限预判),stat 供"文件过大"占位卡。 */
@@ -2888,7 +2890,8 @@ interface ElectronAPI {
       workdir: string;
       relPath: string;
       content: string;
-    }) => Promise<{ ok: true; size: number; mtimeMs: number } | { ok: false; message: string }>;
+      expectedResolvedPath?: string;
+    }) => Promise<{ ok: true; size: number; mtimeMs: number; resolvedPath?: string } | { ok: false; message: string }>;
     createFile: (params: {
       remoteHostId?: string | null;
       workdir: string;

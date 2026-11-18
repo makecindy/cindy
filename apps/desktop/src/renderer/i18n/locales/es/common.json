@@ -17157,6 +17157,7 @@
         "menuSave": "Guardar",
         "menuInsertTable": "Insertar tabla",
         "externalChangeBlocked": "El archivo cambió en el disco. El guardado automático está en pausa; guarda manualmente para sobrescribirlo.",
+        "targetChanged": "El archivo ahora apunta a otra ubicación. Tu borrador sigue en el editor. Cópialo antes de volver a abrir el archivo.",
         "tableMenu": {
           "addRowAbove": "Agregar fila arriba",
           "addRowBelow": "Agregar fila abajo",

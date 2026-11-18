@@ -16992,6 +16992,7 @@
         "menuSave": "Save",
         "menuInsertTable": "Insert table",
         "externalChangeBlocked": "The file changed on disk. Autosave paused; save manually to overwrite.",
+        "targetChanged": "The file now points to a different location. Your draft is still in the editor. Copy it before reopening the file.",
         "tableMenu": {
           "addRowAbove": "Add row above",
           "addRowBelow": "Add row below",

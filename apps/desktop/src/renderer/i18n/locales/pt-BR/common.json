@@ -17157,6 +17157,7 @@
         "menuSave": "Salvar",
         "menuInsertTable": "Inserir tabela",
         "externalChangeBlocked": "O arquivo foi alterado no disco. O salvamento automático foi pausado; salve manualmente para sobrescrever.",
+        "targetChanged": "O arquivo agora aponta para outro local. Seu rascunho continua no editor. Copie-o antes de reabrir o arquivo.",
         "tableMenu": {
           "addRowAbove": "Adicionar linha acima",
           "addRowBelow": "Adicionar linha abaixo",
