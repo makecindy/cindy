@@ -94,7 +94,11 @@ export function useDraftHeaderWrapMotion(
         from = read();
       });
     });
+    // The button row can change without the brand row changing: a project, device or
+    // branch chip appears, widens or shrinks while the row stays on one line. Observe it
+    // too, so the FLIP start is the position the owner actually sees before the wrap.
     observer.observe(row);
+    observer.observe(chips);
     return () => {
       observer.disconnect();
       for (const animation of animations) animation.cancel();
