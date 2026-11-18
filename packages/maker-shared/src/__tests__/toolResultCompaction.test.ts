@@ -45,8 +45,41 @@ describe('tool result compaction marker', () => {
 });
 
 
+// #8876 review (P2): a file-only persist summary carries no card id, so reading
+// diagnostics only from card summaries dropped them once the result was archived.
 // CU-008: preserve observed uncertainty without retaining private payloads or guessing from prose.
 describe('tool result diagnostics', () => {
+  it('reads diagnostics from a truncated summary that only declares files', () => {
+    const summary = {
+      ok: true,
+      _xdt_model_files: [{ url: 'xdt-file:///out/report.pdf' }],
+      truncated: true,
+      diagnostics: { ok: true, afterSnapshotOk: false, afterSnapshotErrorCode: 'ACT_INVALID_REQUEST' },
+      preview: 'x',
+    };
+    expect(extractToolResultDiagnostics(JSON.stringify(summary)))
+      .toEqual({ ok: true, afterSnapshotOk: false, afterSnapshotErrorCode: 'ACT_INVALID_REQUEST' });
+  });
+
+  // #8876 review (P1): an upstream result may set `truncated` and its own file arrays.
+  // Only our persist summary carries a string `preview`; before this guard the archive
+  // replaced such a result with `{ok:false}`, losing its error code.
+  it('keeps an upstream truncated result out of the persist-summary branch', () => {
+    expect(extractToolResultDiagnostics(JSON.stringify({
+      ok: false, errorCode: 'PATH_NOT_ALLOWED', truncated: true, _xdt_model_files: [],
+    }))).toEqual({ ok: false, errorCode: 'PATH_NOT_ALLOWED' });
+    expect(extractToolResultDiagnostics(JSON.stringify({
+      ok: false, errorCode: 'STALE_SNAPSHOT', truncated: true, xdt_media_produced: [],
+      diagnostics: { ok: true },
+    }))).toEqual({ ok: false, errorCode: 'STALE_SNAPSHOT' });
+  });
+
+  it('preserves the wrapped error flag on a persist summary', () => {
+    expect(extractToolResultDiagnostics(JSON.stringify(
+      '<tool_use_error>{"ok":false,"truncated":true,"preview":"","_xdt_model_files":[]}</tool_use_error>',
+    ))).toEqual({ ok: false, isError: true });
+  });
+
   it('keeps verification and observation separate from an unknown action', () => {
     expect(extractToolResultDiagnostics(JSON.stringify({
       tool: 'click', ok: false, outcome: { status: 'unknown' },

@@ -701,9 +701,19 @@ function isContentOutputDescriptor(descriptor: ToolUseDescriptor): boolean {
 export function isContentToolFailureLike(
   tool: Pick<MessageRenderNormalizedMessage, 'body' | 'secondaryBody'>,
 ): boolean {
-  if (isToolErrorLike(tool, false)) return true;
-  const secondary = tool.secondaryBody?.trim();
+  return isMessageFailureLike(tool.secondaryBody ?? '');
+}
+
+/**
+ * 同一判据的纯文本入口:只给一段结果正文(`message` 字段、字符串型 tool_result)时使用。
+ * 落库摘要要按同一口径否决文件声明,而它得能注入 DB 的 inline worker(`Function.prototype
+ * .toString()` 复用 `compactToolCardResult`),所以本函数只能引用同样被注入的 `isErrorRecord`,
+ * 不要在这里碰模块作用域的其他状态。
+ */
+export function isMessageFailureLike(message: string): boolean {
+  const secondary = message.trim();
   if (!secondary) return false;
+  if (isErrorRecord(secondary)) return true;
   if (secondary.includes('<tool_use_error>')) return true;
   const firstLine = secondary.split('\n', 1)[0].trim();
   // 字符类是全角冒号 U+FF1A + 半角冒号 U+003A 并列;别把全角的归一化成半角,
@@ -846,7 +856,8 @@ function readNonEmptyStringValue(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function isErrorRecord(value: string): boolean {
+/** 结构化错误记录。自包含,原因见 `isMessageFailureLike`。 */
+export function isErrorRecord(value: string): boolean {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
