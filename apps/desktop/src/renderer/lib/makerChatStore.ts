@@ -10,6 +10,7 @@ import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import {
   asyncQuestionNeedsSupplement, asyncQuestionReplyDisplayText, formatAsyncQuestionReplyDisplay,
   formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+  remoteInteractionHandling,
 } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
 import { findErrorTailMessage } from './errorTailMessage';
@@ -9050,7 +9051,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       (ingress.remoteDeviceId || remoteSnapshotDeviceId) &&
       (kind === 'issue_confirm' ||
         kind === 'rename_sessions_confirm' ||
-        kind === 'ghost_grant_confirm')
+        kind === 'ghost_grant_confirm') &&
+      remoteInteractionHandling({ request }) === 'desktop-only'
     ) {
       setState(sessionId, (s) => {
         const confirmation: PendingRemoteDesktopConfirmation = {
@@ -9061,7 +9063,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         if (!current) {
           return {
             ...s,
-            pendingIssueConfirm: null,
+            pendingIssueConfirm: s.pendingIssueConfirm?.requestId === request.requestId ? null : s.pendingIssueConfirm,
             pendingRenameSessionsConfirm: null,
             pendingGhostGrantConfirm: null,
             pendingRemoteDesktopConfirmation: confirmation,
@@ -9250,8 +9252,6 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           githubUserIdentity,
           suggestedPublicName,
         },
-        pendingRemoteDesktopConfirmation: null,
-        pendingRemoteDesktopConfirmationQueue: [],
       }));
       return;
     }
@@ -11275,6 +11275,7 @@ function reconcilePendingInteractions(
       const authoritativeQuestionIds = new Set<string>();
       const authoritativePlanIds = new Set<string>();
       const authoritativeRemoteDesktopConfirmationIds = new Set<string>();
+      const authoritativeIssueConfirmIds = new Set<string>();
       const authoritativeInputHandoffIds = new Set<string>();
       for (const item of list) {
         const request = item?.request;
@@ -11304,7 +11305,11 @@ function reconcilePendingInteractions(
           typeof request.requestId === 'string' &&
           request.requestId.length > 0
         ) {
-          authoritativeRemoteDesktopConfirmationIds.add(request.requestId);
+          if (request.kind === 'issue_confirm' && remoteInteractionHandling({ request }) === 'resolvable') {
+            authoritativeIssueConfirmIds.add(request.requestId);
+          } else {
+            authoritativeRemoteDesktopConfirmationIds.add(request.requestId);
+          }
         }
       }
       if (!isCurrentInteractionReconcile()) return 0;
@@ -11363,6 +11368,9 @@ function reconcilePendingInteractions(
           authoritativePluginSetupIds.has(state.pluginSetupCommandInFlight.requestId)
             ? state.pluginSetupCommandInFlight
             : null;
+        const nextIssueConfirm = (stickyDeviceAtStart || interactionOriginAtStart) &&
+          state.pendingIssueConfirm && !authoritativeIssueConfirmIds.has(state.pendingIssueConfirm.requestId)
+          ? null : state.pendingIssueConfirm;
         const nextRemoteDesktopConfirmation =
           stickyDeviceAtStart || interactionOriginAtStart
             ? state.pendingRemoteDesktopConfirmation &&
@@ -11400,6 +11408,7 @@ function reconcilePendingInteractions(
           nextPlanReview === state.pendingPlanReview &&
           nextPermission === state.pendingPermission &&
           nextInputHandoff === state.pendingInputHandoff &&
+          nextIssueConfirm === state.pendingIssueConfirm &&
           nextCommand === state.pluginSetupCommandInFlight &&
           promotedRemoteDesktopConfirmation === state.pendingRemoteDesktopConfirmation &&
           !remoteQueueChanged
@@ -11419,6 +11428,7 @@ function reconcilePendingInteractions(
           pendingPermission: nextPermission,
           pendingAppPermissions: appPermissions,
           pendingInputHandoff: nextInputHandoff,
+          pendingIssueConfirm: nextIssueConfirm,
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
