@@ -16444,7 +16444,10 @@
       "confirmArchive": {
         "title": "歸檔任務",
         "description": "確定要歸檔這個任務嗎？歸檔後將從列表中移除。",
-        "dirtyWorktreeWarning": "該任務的 worktree 有未提交的更改；歸檔前會自動儲存為 git 快照，之後可在任務內一鍵恢復。",
+        "dirtyWorktreeWarning": "未提交的變更會在歸檔前儲存，可在任務中復原。",
+        "discardChanges": "捨棄未提交的變更",
+        "discardWarning": "未提交的變更和新檔案將無法復原。",
+        "discardAndArchive": "捨棄並歸檔",
         "scheduleWarning_one": "關聯的自動化{{names}}仍會執行，並恢復此任務。",
         "scheduleWarning_other": "關聯的自動化{{names}}仍會執行，並恢復此任務。",
         "scheduleWarningMany_one": "其中 {{count}} 個任務關聯了自動化，後續執行時會恢復這些任務。",

@@ -16674,7 +16674,10 @@
       "confirmArchive": {
         "title": "Archiver la session",
         "description": "Archiver cette session ? Elle sera retirée de la liste.",
-        "dirtyWorktreeWarning": "Le worktree de cette session contient des modifications non commitées ; elles seront enregistrées sous forme de snapshot git avant l'archivage et pourront être restaurées plus tard depuis la session.",
+        "dirtyWorktreeWarning": "Les modifications non validées seront enregistrées avant l’archivage. Vous pourrez les restaurer depuis la tâche.",
+        "discardChanges": "Ignorer les modifications non validées",
+        "discardWarning": "Les modifications non validées et les nouveaux fichiers seront perdus.",
+        "discardAndArchive": "Ignorer et archiver",
         "scheduleWarning_one": "L'automatisation liée {{names}} continuera de s'exécuter et restaurera cette session.",
         "scheduleWarning_other": "Les automatisations liées {{names}} continueront de s'exécuter et restaureront cette session.",
         "scheduleWarningMany_one": "{{count}} de ces sessions a des automatisations liées qui la restaureront lors de leur exécution.",

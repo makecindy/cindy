@@ -9,7 +9,7 @@
  * 2. confirmIcon 是纯装饰:必须 aria-hidden,且按钮的可访问名称仍等于
  *    confirmText —— 图标不得混进读屏输出或破坏按名称查询。
  */
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfirmDialog } from '../confirm-dialog';
@@ -107,6 +107,35 @@ describe('ConfirmDialog action layout', () => {
     );
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Keep' }));
   });
+  it('uses the same two actions and announces the loss when discard is checked', () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog open onOpenChange={() => {}} title="归档任务"
+        description="归档前会保存更改。" confirmText="归档" cancelText="取消"
+        dontShowAgainLabel="丢弃未提交的更改"
+        checkedOverrides={{
+          description: '未提交的更改和新文件将无法恢复。',
+          confirmText: '丢弃并归档',
+          confirmVariant: 'destructive',
+        }}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    const dialog = screen.getByRole('alertdialog', { description: '归档前会保存更改。' });
+    const checkbox = within(dialog).getByRole('checkbox', { name: '丢弃未提交的更改' });
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    expect(within(dialog).getAllByRole('button').map((button) => button.textContent)).toEqual(
+      ['取消', '归档'],
+    );
+    fireEvent.click(checkbox);
+    expect(screen.getByRole('alertdialog', { description: '未提交的更改和新文件将无法恢复。' })).toBe(dialog);
+    const actions = within(dialog).getAllByRole('button');
+    expect(actions.map((button) => button.textContent)).toEqual(['取消', '丢弃并归档']);
+    fireEvent.click(actions[1]);
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith({ dontShowAgain: true });
+  });
+
   it('orders three actions Cancel, tertiary, primary in a widened dialog', () => {
     render(
       <ConfirmDialog

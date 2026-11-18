@@ -16444,7 +16444,10 @@
       "confirmArchive": {
         "title": "セッションをアーカイブ",
         "description": "このセッションをアーカイブしますか？アーカイブ後はリストから消えます。",
-        "dirtyWorktreeWarning": "このセッションの worktree には未コミットの変更があります。アーカイブ前に git スナップショットとして自動保存され、後でセッションから復元できます。",
+        "dirtyWorktreeWarning": "未コミットの変更はアーカイブ前に保存されます。タスクから復元できます。",
+        "discardChanges": "未コミットの変更を破棄",
+        "discardWarning": "未コミットの変更と新しいファイルは復元できなくなります。",
+        "discardAndArchive": "破棄してアーカイブ",
         "scheduleWarning_one": "関連する自動化{{names}}は引き続き実行され、その際にこのセッションを復元します。",
         "scheduleWarning_other": "関連する自動化{{names}}は引き続き実行され、その際にこのセッションを復元します。",
         "scheduleWarningMany_one": "{{count}} 件のセッションに自動化が紐づいており、次回実行時にセッションが復元されます。",
