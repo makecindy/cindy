@@ -6,8 +6,9 @@
  * 事件从两条连接汇总;官方线路下专用连接不启动,全部调用落回基类,行为不变。
  *
  * 已验证的 V2 分享按资源安装独立连接,优先于兼容线路,撤下后也不回落。
- * 各条连接的故障互不牵连:状态、连接问题与 presence 只反映主连接;host 要看承载某个 peer 的
- * 连接时用 `connectionFor` / `crossAccountConnection`。
+ * 各条连接的故障互不牵连:状态与连接问题只反映主连接;presence 在兼容连接运行时合并两条连接
+ * (任一条报在线即在线,见 onPresenceChanged);host 要看承载某个 peer 的连接时用 `connectionFor` /
+ * `crossAccountConnection`。
  */
 import {
   DeviceLinkClient,
@@ -28,6 +29,7 @@ import {
   type LinkAcceptPayload,
   type LinkClosePayload,
   type PresenceSetPayload,
+  type PresenceSnapshot,
   type PushOwnerStamp,
   type Envelope,
 } from './protocol.js';
@@ -60,6 +62,13 @@ export interface LegacyPeerConnectionOptions {
   primaryCapability?: string;
   /** The host verifies the attestation in the base client before this classifier runs. */
   prefersPrimary?(payload: unknown): boolean;
+  /**
+   * After a probe found that the peer prefers the main connection, how to re-open it there. Absent: the main connection's own
+   * link-open, as before. A host with its own channel to that peer (Agent-Net sessions) may open it there, and calls
+   * `primary` otherwise.
+   */
+  openOnPrimary?(peer: string, payload: unknown, timeoutMs: number | undefined,
+    primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload>;
   options: DeviceLinkClientOptions;
 }
 
@@ -174,6 +183,23 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
 
   override connectionFor(peer: string): DeviceLinkClient {
     return this.routed(peer) ?? this;
+  }
+
+  /**
+   * The compatibility connection while it runs (the newer transport is the main connection and older connections are
+   * allowed); null otherwise. For what only it reaches, such as phones that never registered on the newer transport.
+   */
+  legacyConnection(): DeviceLinkClient | null {
+    return this.legacyRunning ? this.legacy : null;
+  }
+
+  /**
+   * The compatibility connection's own connection problems (a rejected token there, for example); the main connection's go to
+   * onConnectionIssue. A host without a separate cross-account connection watches this, or a token rejected on the
+   * compatibility connection is never refreshed and the devices only it reaches stay away (2026-11-17: Node Host).
+   */
+  onLegacyConnectionIssue(cb: (issue: DeviceLinkConnectionIssue | null) => void): () => void {
+    return this.legacy?.onConnectionIssue(cb) ?? (() => undefined);
   }
 
   override crossAccountConnection(): DeviceLinkClient {
@@ -314,6 +340,58 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     }));
   }
 
+  /**
+   * While the compatibility connection runs, presence of this account's devices comes from both connections: a device counts
+   * as online when either reports it so. Older peers and phones without the newer transport appear only there, and a device
+   * whose newer transport is off or still starting is online there first. Each update from the connection that decides is
+   * passed on (control and busy changes still arrive); an update from the other one only when it changes which decides.
+   * Without the compatibility connection every update is the main connection's, passed on as before.
+   *
+   * When a connection leaves online, what it said no longer counts (2026-11-17 review: a stale "online" from a dropped
+   * connection kept deciding and hid every later update from the other one). Devices it decided are shown from the other
+   * connection's last word; a device only the compatibility connection knew is shown offline, since nothing else would say
+   * so. A device only the main connection knew gets nothing, as before: the main connection's own status covers it.
+   * Stopping the client emits nothing.
+   */
+  override onPresenceChanged(cb: (snap: PresenceSnapshot) => void): () => void {
+    type Entry = { primary?: PresenceSnapshot; legacy?: PresenceSnapshot; shown?: 'primary' | 'legacy' };
+    const seen = new Map<string, Entry>();
+    const decide = (entry: Entry) => (entry.primary?.online !== true && this.legacyRunning && entry.legacy?.online === true ? 'legacy'
+      : entry.primary ? 'primary' : 'legacy');
+    const update = (source: 'primary' | 'legacy', snap: PresenceSnapshot) => {
+      if (isScopedPeer(snap.deviceId)) { if (source === 'primary') cb(snap); return; }
+      const entry = seen.get(snap.deviceId) ?? {};
+      entry[source] = snap;
+      seen.set(snap.deviceId, entry);
+      const decides = decide(entry);
+      if (decides !== source && entry.shown === decides) return;
+      entry.shown = decides;
+      cb(decides === 'primary' ? entry.primary! : entry.legacy!);
+    };
+    const forget = (source: 'primary' | 'legacy') => {
+      for (const [deviceId, entry] of [...seen]) {
+        const lost = entry[source];
+        if (!lost) continue;
+        delete entry[source];
+        const other = source === 'primary' ? entry.legacy : entry.primary;
+        if (!other) {
+          seen.delete(deviceId);
+          if (this.started && source === 'legacy' && entry.shown === 'legacy' && lost.online)
+            cb({ ...lost, online: false, busy: false, remoteControlEnabled: false });
+          continue;
+        }
+        if (entry.shown !== source) continue;
+        entry.shown = decide(entry);
+        if (this.started) cb(entry.shown === 'primary' ? entry.primary! : entry.legacy!);
+      }
+    };
+    const offPrimary = super.onPresenceChanged((snap) => update('primary', snap));
+    const offLegacy = this.legacy?.onPresenceChanged((snap) => { if (this.legacyRunning) update('legacy', snap); });
+    const offPrimaryStatus = super.onStatusChange((status) => { if (status !== 'online') forget('primary'); });
+    const offLegacyStatus = this.legacy?.onStatusChange((status) => { if (status !== 'online') forget('legacy'); });
+    return () => { offPrimary(); offLegacy?.(); offPrimaryStatus(); offLegacyStatus?.(); };
+  }
+
   override onPeerStreamAccepted(cb: (peer: string, streamId: string) => void): () => void {
     return this.both(super.onPeerStreamAccepted((peer, streamId) => { if (this.acceptsScopedEvent(this, peer)) cb(peer, streamId); }),
       connection => connection.onPeerStreamAccepted((peer, streamId) => { if (this.acceptsScopedEvent(connection, peer)) cb(peer, streamId); }));
@@ -393,7 +471,8 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
       return this.legacy.openLink(dst, payload, timeoutMs).then((accepted) => {
         if (this.legacyOptions?.prefersPrimary?.(accepted) ?? (this.legacyOptions?.primaryCapability && accepted.capabilities?.includes(this.legacyOptions.primaryCapability))) {
           this.legacyRoutes.delete(dst); this.legacyPrefersPrimary.add(dst);
-          return super.openLink(dst, payload, timeoutMs);
+          const primary = () => super.openLink(dst, payload, timeoutMs);
+          return this.legacyOptions?.openOnPrimary ? this.legacyOptions.openOnPrimary(dst, payload, timeoutMs, primary) : primary();
         }
         this.legacyPrefersPrimary.delete(dst); this.legacyRoutes.add(dst); return accepted;
       });

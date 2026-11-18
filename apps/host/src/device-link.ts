@@ -3,7 +3,11 @@
 import os from 'node:os';
 import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } from '../../desktop/src/main/plugin-oauth/runtime.js';
 import WebSocket from 'ws';
-import { DeviceLinkClient } from '@cindy/device-link';
+import { DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DeviceLinkClient, RoutedDeviceLinkClient, type DeviceLinkClientOptions, type LinkAcceptPayload } from '@cindy/device-link';
+import { createAgentNetNode, type AgentNetNodePorts } from '../../desktop/src/main/device-link/agentNetNode.js';
+import { AgentNetSessionLinks, agentNetSessionLane } from '../../desktop/src/main/device-link/agentNetSessionLinks.js';
+import { routeSessionPeers } from '../../desktop/src/main/device-link/agentNetSessionRouting.js';
+import type { PeerLinks } from '../../desktop/src/main/device-link/peerLinks.js';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import { createInboundDispatch } from '../../desktop/src/main/device-link/dispatch.js';
@@ -31,6 +35,8 @@ import { MCP_APPS_INVOKE } from '../../desktop/src/shared/mcpApps.js';
 import { getDeviceLinkInvokeContext } from '../../desktop/src/main/device-link/invoke-context.js';
 
 type ServiceResult = { status: number; body: any };
+/** How long a connection waits for this Host's stored Agent-Net identity (the signed transport statement) at most. */
+const TRANSPORT_STATEMENT_WAIT_MS = 2_000;
 export interface HostDeviceLinkPorts {
   profileDir: string;
   version: string;
@@ -50,6 +56,12 @@ export interface HostDeviceLinkPorts {
     invoke(caller: string, sessionId: string, input: unknown): Promise<unknown>;
     releaseCaller(caller: string): Promise<void>;
   };
+  /**
+   * Agent-Net (docs/agent-net-session-plan.md 阶段 5): this Host's identity and node on the account's official network.
+   * Its 「Agent-Net (Beta)」 setting lives in the same settings file as the Desktop's and is off by default; while it is off
+   * nothing here changes the Device Link client's behaviour.
+   */
+  agentNet?: Omit<AgentNetNodePorts, 'enabled' | 'current'>;
 }
 
 export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
@@ -113,9 +125,14 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   };
   const tags = { executeTaskTags: (request: TaskTagRequest) =>
     call('/api/task-tags/execute', { request }) };
+  /** This Host runs on Agent-Net right now (set once the node exists, below). */
+  let agentNetActive = (): boolean => false;
   const dispatch = createInboundDispatch({
-    // Platform capabilities are added only when their backing services are wired.
-    sameAccountCapabilities: () => [],
+    // Platform capabilities are added only when their backing services are wired. Background links need none: this
+    // dispatch already keeps a link that declares no subscriptions out of the controlled state. Without it a desktop
+    // closes every background link it opens here (backgroundLink.ts) and opens the next one for its next read; on
+    // Agent-Net that is a session link reopened per read. Only while Agent-Net is on: off, the Host answers as before.
+    sameAccountCapabilities: () => (agentNetActive() ? [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] : []),
     app: { getVersion: () => deps.version },
     ...tags, TASK_TAG_CHANNEL, ...settings, ...access,
     readDeviceLinkSettings: () => ({ ...settings.readDeviceLinkSettings(), remoteControlEnabled: current() && settings.readDeviceLinkSettings().remoteControlEnabled }),
@@ -133,7 +150,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     return checkRemoteWorkingDir(dir);
   });
   const lookup = createDnsFallbackLookup({ log });
-  const client = new DeviceLinkClient({
+  const relayOptions: DeviceLinkClientOptions = {
     getWsUrl: deps.getWsUrl,
     getToken: async () => {
       if (!current() || !deps.canRegister()) return null;
@@ -150,12 +167,93 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     createWebSocket: deps.createWebSocket ?? (async (url, headers) => new WebSocket(url, {
       headers, agent: await createHostWebSocketAgent(url), lookup,
     } as WebSocket.ClientOptions)),
-  });
+  };
+  const agentNet = deps.agentNet ? createAgentNetNode({ ...deps.agentNet, current,
+    enabled: () => current() && settings.readDeviceLinkSettings().agentNetEnabled === true }) : null;
+  if (agentNet) agentNetActive = () => agentNet.active();
+  /** The main connection is this Host's Agent-Net node right now (set by `agentNetClient`). */
+  let primaryEncrypted = () => false;
+  /** The compatibility connection's last problem (Agent-Net on): its 401 refreshes the token as the main connection's does. */
+  let compatibilityIssue: string | null = null;
+  const compatibility: { watch: ((cb: (value: { kind: string } | null) => void) => () => void) | null } = { watch: null };
+  const client: PeerLinks = agentNet ? agentNetClient(agentNet) : new DeviceLinkClient(relayOptions);
+  /**
+   * The same assembly as the Desktop (apps/desktop/src/main/device-link/index.ts): while Agent-Net is on, the main
+   * connection is this Host's Agent-Net node and devices that are not on Agent-Net keep reaching it over the Device Link
+   * relay (the legacy route, with the same signed statement of this Host's Agent-Net mode); devices that also run the
+   * session layer reach it on sessions. While it is off, the main connection is the relay exactly as before.
+   */
+  function agentNetClient(node: NonNullable<typeof agentNet>): PeerLinks {
+    let encrypted = false;
+    primaryEncrypted = () => encrypted;
+    const routed = new RoutedDeviceLinkClient({ ...relayOptions,
+      reliablePeerTransport: () => encrypted,
+      // Off, the main connection is the relay: once this Host has joined Agent-Net its peers know it and accept a relay
+      // link only with its signed statement that it is off (the Desktop signs on or off alike), so it signs here too.
+      transportAttestation: node.transportAttestation,
+      verifyTransportAttestation: (peer, requestId, proof) => encrypted || node.verifyTransportAttestation(peer, requestId, proof),
+      getToken: async () => {
+        // Bounded: a credential store that hangs (a keyring prompting nobody) must not hold the relay connection; the
+        // statement it reads is for peers that know this Host from Agent-Net, a later connection still signs it.
+        await Promise.race([node.prepareTransportStatement(), new Promise<void>((resolve) => {
+          setTimeout(resolve, TRANSPORT_STATEMENT_WAIT_MS).unref?.();
+        })]);
+        return node.active() ? (current() && deps.canRegister() ? 'agent-net-local-node' : null) : relayOptions.getToken();
+      },
+      createWebSocket: async (url, headers) => {
+        encrypted = false;
+        const socket = await node.openSocket(deps.agentNet!.subject() ?? '');
+        if (socket) { encrypted = true; return socket as unknown as WebSocket; }
+        return relayOptions.createWebSocket!(url, headers);
+      },
+    }, undefined, {
+      active: () => node.active(),
+      useForPeer: node.shouldUseLegacyPeer,
+      probeForPeer: node.shouldProbeLegacyPeer,
+      primaryCapability: 'agent-net-node-v2',
+      prefersPrimary: node.prefersPrimary,
+      openOnPrimary: (peer: string, payload: unknown, timeoutMs: number | undefined,
+        primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload> => sessionLinks.openAttested(peer, payload, timeoutMs, primary),
+      options: { ...relayOptions, transportCapabilities: () => (node.active() ? ['agent-net-node-v2'] : []),
+        transportAttestation: node.transportAttestation, verifyTransportAttestation: node.verifyTransportAttestation,
+        // Its own rejection decides its refresh (`issue` is the main connection's, which runs on the node with no token).
+        getToken: async () => {
+          if (!current() || !deps.canRegister()) return null;
+          if (compatibilityIssue === 'auth-failed') await deps.refreshToken?.();
+          return current() && deps.canRegister() ? deps.getToken() : null;
+        } },
+    });
+    compatibility.watch = (cb) => routed.onLegacyConnectionIssue(cb);
+    let facade: PeerLinks | null = null;
+    const sessionLinks = new AgentNetSessionLinks({
+      session: node.session,
+      connectionEpoch: (peer): number => (facade ?? routed).connectionFor(peer).getConnectionEpoch(),
+      selfDeviceId: () => routed.getSelfDeviceId(),
+      transferCodec: desktopTransferCodec,
+      path: (peer) => node.route(peer).path,
+      rttMs: (peer) => node.route(peer).rttMs,
+      connectedAt: node.connectedAt,
+      connect: node.connect,
+      agentNetPeer: node.agentNetPeer,
+      // 链路回复带上这台的请求去重记忆是哪一份，控制端断线后据此判断能不能用原请求号再发（agentNetSessionLinks.ts）。
+      invokeEpoch: (deviceId) => dispatch.remoteInvokeEpoch(deviceId),
+      log,
+    });
+    node.useSessions({ laneFor: agentNetSessionLane, handlers: (peer) => sessionLinks.handlers(peer) });
+    facade = routeSessionPeers(routed, sessionLinks, log);
+    return facade;
+  }
+  // Turning Agent-Net on or off reconnects the main connection: it is opened on the node or on the relay accordingly.
+  let agentNetWasActive = agentNet?.active() ?? false;
   const unbind = dispatch.wireInboundDispatch(client);
   const offStatus = client.onStatusChange(status => {
     if (status !== 'online') {
       releaseAppsInBackground();
-      dispatch.deactivateAllControllers('relay-disconnected');
+      // Like the Desktop: while Agent-Net is on, controllers carried by another connection (phones and older Desktops on the
+      // Device Link relay, cross-account peers on their own) are outside the main connection's fault; 2026-11-17 review: an
+      // Agent-Net drop logged every phone out of this Host. Off, every controller as before.
+      dispatch.deactivateAllControllers('relay-disconnected', 'all',
+        agentNet?.active() ? (id) => client.connectionFor(id) !== client : undefined);
       clearControllerPlatforms();
     } else {
       dispatch.flushMakerEventBatchesOnReconnect();
@@ -165,8 +263,23 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
   let authRecovery: Promise<void> | null = null;
   const offIssue = client.onConnectionIssue(value => {
     issue = value?.kind ?? null;
+    // "Removed" from the Agent-Net node is Agent-Net refusing this Host's identity (revoked there), not Device Link's answer: run on
+    // the Device Link relay, which decides by itself (as the Desktop, index.ts).
+    if (value?.kind === 'device-removed' && agentNet && primaryEncrypted()) {
+      agentNet.noteIdentityRefused('relay closed 4410');
+      setTimeout(() => { client.stop(); client.start(); }, 0);
+    }
     if (value?.kind === 'auth-failed' && current() && deps.refreshToken && !authRecovery) {
       authRecovery = deps.refreshToken().catch(() => { issue = 'auth-failed'; }).finally(() => { authRecovery = null; });
+    }
+  });
+  // Agent-Net on: the compatibility connection (phones and older Desktops) reports its own problems; a 401 there refreshes the
+  // token too, and `cindy-host remote status` shows it (2026-11-17: neither happened, phones stayed away without a reason).
+  const offCompatibilityIssue = compatibility.watch?.((value) => {
+    compatibilityIssue = value?.kind ?? null;
+    if (value) log.warn(`compatibility connection issue: ${value.kind}`);
+    if (value?.kind === 'auth-failed' && current() && deps.refreshToken && !authRecovery) {
+      authRecovery = deps.refreshToken().catch(() => undefined).finally(() => { authRecovery = null; });
     }
   });
   const offPresence = client.onPresenceChanged(value => {
@@ -226,7 +339,15 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     if (!value.remoteControlEnabled || !deps.canRegister()) {
       dispatch.dropAllControllers(client, 'toggle-off'); client.stop();
       releaseAppsInBackground();
-    } else client.start();
+    } else {
+      client.start();
+      const agentNetActive = agentNet?.active() ?? false;
+      if (agentNetActive !== agentNetWasActive) {
+        agentNetWasActive = agentNetActive;
+        if (!agentNetActive) agentNet?.close();
+        client.restartConnection('agent-net-switch');
+      }
+    }
   };
   const offSettings = settings.onDeviceLinkSettingChanged(sync);
   // External local edits share the same settings file, just as desktop does.
@@ -237,11 +358,20 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       && settings.readDeviceLinkSettings().remoteControlEnabled && !settings.readDeviceLinkSettings().revokedControllers.includes(peer),
     state: () => ({ enabled: settings.readDeviceLinkSettings().remoteControlEnabled,
       status: client.getStatus(), issue: deps.canRegister() ? issue : 'host-login-required',
-      controllers: dispatch.getActiveControllers() }),
+      controllers: dispatch.getActiveControllers(),
+      ...(agentNet ? { agentNet: { enabled: settings.readDeviceLinkSettings().agentNetEnabled === true, active: agentNet.active(),
+        ...(agentNet.active() && compatibilityIssue ? { compatibilityIssue } : {}) } } : {}) }),
     async setEnabled(enabled: boolean) {
       assertCurrent();
       if (enabled && !deps.canRegister()) throw new Error('Sign in with cindy-host login to register an independent Host device.');
       await settings.writeDeviceLinkSetting('remoteControlEnabled', enabled);
+      sync(); return this.state();
+    },
+    /** This Host's 「Agent-Net (Beta)」 setting (off by default); the main connection follows it right away. */
+    async setAgentNetEnabled(enabled: boolean) {
+      assertCurrent();
+      if (!agentNet) throw new Error('Agent-Net is not available on this Host.');
+      await settings.writeDeviceLinkSetting('agentNetEnabled', enabled);
       sync(); return this.state();
     },
     async revoke(deviceId: string) {
@@ -254,8 +384,8 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     async stop() {
       if (closed) return;
       closed = true; invalidatePluginOauth();
-      clearInterval(poll); offSettings(); offEvents(); offPresence(); offIssue(); offStatus(); unbind();
-      dispatch.dropAllControllers(client, 'shutdown'); client.stop(); registry.clear(); clearControllerPlatforms();
+      clearInterval(poll); offSettings(); offEvents(); offPresence(); offIssue(); offCompatibilityIssue?.(); offStatus(); unbind();
+      dispatch.dropAllControllers(client, 'shutdown'); client.stop(); agentNet?.close(); registry.clear(); clearControllerPlatforms();
       await releaseApps();
       // Admission is closed before waiting; no handler may write after storage closes.
       await Promise.allSettled([...pending, dispatch.drainInboundExecutions()]);

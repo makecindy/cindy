@@ -6966,7 +6966,8 @@
         "replaced": "Verbindung durch eine andere Instanz dieses Geräts ersetzt",
         "too-many-connections": "Verbindungslimit für dieses Konto erreicht",
         "version-mismatch": "Protokollversion stimmt nicht überein — bitte App aktualisieren",
-        "unstable": "Verbindung bricht ständig ab und wird wiederhergestellt — prüfe das Netzwerk oder starte Cindy neu, falls das Problem weiterhin besteht"
+        "unstable": "Verbindung bricht ständig ab und wird wiederhergestellt — prüfe das Netzwerk oder starte Cindy neu, falls das Problem weiterhin besteht",
+        "agent-net-relay-down": "Agent-Net-Relay nicht erreichbar, Verbindung wird wiederhergestellt. Direkt verbundene Computer funktionieren weiter; andere Geräte können sich vorerst nicht verbinden"
       },
       "refresh": "Aktualisieren",
       "empty": "Noch keine weiteren Geräte. Melde dich auf einem anderen Computer mit demselben Konto bei {{appName}} an, damit er hier angezeigt wird.",
@@ -16048,7 +16049,8 @@
         "replaced": "Diese Verbindung wurde durch eine andere Instanz desselben Geräts ersetzt — Verbindung wird wiederhergestellt…",
         "too-many-connections": "Zu viele Geräte für dieses Konto online — der Server hat die Verbindung abgelehnt",
         "version-mismatch": "Die Protokollversion stimmt nicht mit dem Server überein — aktualisiere die App und versuch es erneut",
-        "unstable": "Dieser Computer verliert ständig die Verbindung und stellt sie wieder her. Remoteaktionen können deshalb wiederholt das Zeitlimit überschreiten — prüfe das Netzwerk oder starte Cindy neu und versuch es erneut"
+        "unstable": "Dieser Computer verliert ständig die Verbindung und stellt sie wieder her. Remoteaktionen können deshalb wiederholt das Zeitlimit überschreiten — prüfe das Netzwerk oder starte Cindy neu und versuch es erneut",
+        "agent-net-relay-down": "Dieser Computer erreicht das Agent-Net-Relay nicht und verbindet sich neu. Remoteaktionen schlagen fehl, wenn der andere Computer nicht direkt verbunden ist"
       }
     },
     "common": {
