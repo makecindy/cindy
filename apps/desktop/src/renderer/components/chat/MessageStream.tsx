@@ -5693,6 +5693,8 @@ export function MessageStream({
         pinToBottom();
         return;
       }
+      // 离底期间内容可能收缩后再长回旧高度;失效基线,避免回底后的尾部跟随被误跳。
+      lastPinHeight = -1;
       compensateMessageHeight();
       refreshHiddenChildViewportAnchor();
     });
