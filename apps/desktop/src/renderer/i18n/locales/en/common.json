@@ -16824,7 +16824,8 @@
         "compactResumeFirst": "Send a message to resume this session before compacting its context.",
         "compactNothing": "Nothing to compact yet",
         "sessionBranches": "Session branches",
-        "copySessionLink": "Copy session link"
+        "copySessionLink": "Copy session link",
+        "deliveryReceipt": "This delivery"
       },
       "sessionBranches": {
         "title": "Session branches",
@@ -22524,6 +22525,50 @@
       "ask": "Default permissions",
       "auto": "Auto-review",
       "bypassPermissions": "Full access"
+    }
+  },
+  "deliveryReceipt": {
+    "title": "This delivery",
+    "loading": "Reading this delivery…",
+    "loadFailed": "Couldn't read this delivery",
+    "copied": "Receipt link copied",
+    "copyFailed": "Couldn't copy the receipt link",
+    "copyLink": "Copy receipt link",
+    "close": "Close",
+    "status": "Status",
+    "workingDir": "Working directory",
+    "branch": "Branch",
+    "changes": "What changed",
+    "verification": "Commands that ran",
+    "outputs": "What was produced",
+    "pullRequest": "Pull request",
+    "ci": "CI",
+    "ciNone": "No pull request",
+    "unknown": "Unknown",
+    "more": "{{count}} more",
+    "conversationOnly": "This task only has the conversation. Nothing was changed or produced.",
+    "phaseValue": {
+      "running": "Running",
+      "waiting-permission": "Waiting for your approval",
+      "waiting-answer": "Waiting for your answer",
+      "errored": "Hit an error",
+      "usage-limit": "Usage limit reached",
+      "finished": "This turn ended",
+      "idle": "Idle"
+    },
+    "ciValue": {
+      "unknown": "Unknown",
+      "none": "Not run",
+      "passed": "Passed",
+      "failed": "Failed",
+      "pending": "Still running"
+    },
+    "next": "Next",
+    "nextValue": {
+      "waiting-answer": "Waiting for your answer",
+      "waiting-approval": "Waiting for your approval",
+      "waiting-merge": "Waiting to merge",
+      "none": "Nothing else is waiting"
     }
   }
 }

@@ -2,6 +2,8 @@ import { useRightSidebarMaximizeEscape } from './useRightSidebarMaximizeEscape';
 import { toast } from '@/lib/toast';
 import { openSettingsNavigation } from '@/lib/settingsNavigation';
 import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
+import { DeliveryReceiptHost } from '@/features/cc-agent/sidebar/DeliveryReceiptHost';
+import { requestOpenDeliveryReceipt } from '@/features/cc-agent/sidebar/deliveryReceiptRequest';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
@@ -764,7 +766,7 @@ export function MainLayout() {
   const handleDeepLinkPayload = useCallback(
     (
       payload:
-        | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string; openDeliveryReceipt?: true }
         | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
@@ -839,6 +841,7 @@ export function MainLayout() {
       }
       if (payload.type === 'session') {
         navigateToSession(payload.id, payload.messageClientId, payload.islandEntryId, payload.deviceId);
+        if (payload.openDeliveryReceipt) requestOpenDeliveryReceipt(payload.id);
         return;
       }
       if (payload.type === 'project') {
@@ -1781,6 +1784,7 @@ export function MainLayout() {
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
       <FirstRunGuide />
+      <DeliveryReceiptHost />
       <ScheduleSessionIndexOwner />
       {!isSecondaryWindow() && <PerformanceTrace statusContainer={performanceTraceStatusHost} />}
       <div
