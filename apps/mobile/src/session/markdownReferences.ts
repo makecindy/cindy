@@ -117,7 +117,7 @@ export function nextMarkdownReference(
   while ((match = exec(opening))) {
     const image = match[0][0] === '!';
     const label = bracket(input, match.index + (image ? 1 : 0), true);
-    if (!label || input[label.end] === '(' || !label.text.trim()) continue;
+    if (!label || input[label.end] === '(') continue;
     const explicit = input[label.end] === '[' ? bracket(input, label.end) : null;
     const name = explicit?.text || label.text;
     const url = definitions.get(normalizeMarkdownReference(name));

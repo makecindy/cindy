@@ -2442,3 +2442,11 @@ describe('reference definition boundaries', () => {
     }
   });
 });
+
+it('resolves full reference images with empty alt text like the inline control (#9440)', () => {
+  const url = 'https://example.com/a.png';
+  const reference = '![][p]\n\n[p]: ' + url;
+  expect(collectMobileMarkdownImages('![](' + url + ')')).toEqual([{ type: 'image', alt: '', url }]);
+  expect(inlines(reference)).toEqual([{ type: 'image', alt: '', url }]);
+  expect(collectMobileMarkdownImages(reference)).toEqual([{ type: 'image', alt: '', url }]);
+});
