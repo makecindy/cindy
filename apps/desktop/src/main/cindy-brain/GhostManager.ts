@@ -417,6 +417,13 @@ const TRANSIENT_RENAME_ERROR_CODES: ReadonlySet<string> = new Set(['EPERM', 'EBU
  * 等待发生在安装 loading 态、互斥锁内,仍保持有界、只认瞬时码;测试可通过 `renameRetry` 覆盖。
  */
 export const DEFAULT_RENAME_RETRY_DELAYS_MS: readonly number[] = [250, 500, 1000, 2000, 3000, 3000];
+/**
+ * 受管根的物理身份(realpath)缓存窗口。每次取用都要 lstat + realpath,而实例核对、路径
+ * 拼接、批准 receipt 读取几乎每个动作都会走到这里;一次用户操作足够多次复用,1s 又足以
+ * 让目录被搬走/重定向后自行恢复。
+ */
+const MANAGED_ROOT_RECHECK_MS = 1000;
+
 /** 重试耗尽后附在 io 拒绝原因上的用户提示,否则用户看到的仍是裸 `EPERM`。 */
 export const RENAME_RETRY_EXHAUSTED_HINT = '文件可能被安全软件或其它程序占用,请稍后重试';
 
@@ -854,34 +861,65 @@ export class GhostManager {
     );
     const contentRoot = this.resolveContentRoot();
     const stateRoot = this.resolveStateRoot();
-    this.assertDisjointRoots(contentRoot, stateRoot);
+    this.assertDisjointPhysicalRoots(contentRoot, stateRoot);
     this.ownerContextKey = this.currentOwnerContextKey();
     this.recoverInterruptedMutationsSync();
   }
 
   private resolveContentRoot(): string {
-    // 返回 realpath:state/content root 可以位于 symlinked 祖先之下(重定位的
-    // Home/AppData),而 bounded 读取的 containWithin 必须是 realpath 产物,
-    // 否则合法文件会被判在根外而把已批准插件当成 invalid。
-    return this.assertManagedRootPath(
-      path.resolve(this.options.getRootDir()),
-      'ghost content root',
-    );
+    return this.resolvePhysicalRoots().contentRoot;
   }
 
   private resolveStateRoot(): string {
-    if (this.options.getStateDir) {
-      return this.assertManagedRootPath(
-        path.resolve(this.options.getStateDir()),
-        'ghost approval state root',
-      );
-    }
-    const root = this.resolveContentRoot();
-    return this.assertManagedRootPath(
-      path.join(path.dirname(root), `${path.basename(root)}-install-state`),
-      'ghost approval state root',
-    );
+    return this.resolvePhysicalRoots().stateRoot;
   }
+
+  /**
+   * 返回 realpath:state/content root 可以位于 symlinked 祖先之下(重定位的
+   * Home/AppData),而 bounded 读取的 containWithin 必须是 realpath 产物,
+   * 否则合法文件会被判在根外而把已批准插件当成 invalid。
+   *
+   * 解析成本是每次一个 lstat + realpath,而每次内容/状态路径取用都会经过这里,所以按
+   * 「逻辑根 + owner key」缓存物理身份:逻辑输入不变就复用,跨过重检窗口或被换成软链/
+   * 无法解析时才重新判定。过期的物理根只会 fail closed(目标不存在而读取失败),不会把
+   * 根外的路径判成根内。
+   */
+  private resolvePhysicalRoots(): { contentRoot: string; stateRoot: string } {
+    const key = this.managedRootInputKey();
+    const now = Date.now();
+    const cached = this.physicalRoots;
+    if (cached && cached.key === key && now - cached.checkedAt < MANAGED_ROOT_RECHECK_MS) {
+      return cached;
+    }
+    const contentRoot = this.assertManagedRootPath(
+      path.resolve(this.options.getRootDir()),
+      'ghost content root',
+    );
+    const stateRoot = this.options.getStateDir
+      ? this.assertManagedRootPath(
+          path.resolve(this.options.getStateDir()),
+          'ghost approval state root',
+        )
+      : this.assertManagedRootPath(
+          path.join(path.dirname(contentRoot), `${path.basename(contentRoot)}-install-state`),
+          'ghost approval state root',
+        );
+    this.physicalRoots = { key, checkedAt: now, contentRoot, stateRoot };
+    return this.physicalRoots;
+  }
+
+  private managedRootInputKey(): string {
+    const rootDir = path.resolve(this.options.getRootDir());
+    const stateDir = this.options.getStateDir ? path.resolve(this.options.getStateDir()) : '';
+    return `${this.options.getOwnerContextKey?.() ?? ''}\u0000${rootDir}\u0000${stateDir}`;
+  }
+
+  private physicalRoots: {
+    key: string;
+    checkedAt: number;
+    contentRoot: string;
+    stateRoot: string;
+  } | null = null;
 
   private contentRootDir(): string {
     return this.activeMutationContext?.contentRoot ?? this.resolveContentRoot();
@@ -1403,9 +1441,9 @@ export class GhostManager {
     return this.activeMutationContext?.stateRoot ?? this.resolveStateRoot();
   }
 
-  private assertDisjointRoots(contentRoot: string, stateRoot: string): void {
-    const physicalContentRoot = this.assertManagedRootPath(contentRoot, 'ghost content root');
-    const physicalStateRoot = this.assertManagedRootPath(stateRoot, 'ghost approval state root');
+  /** 入参必须是已经 realpath 过的物理根(调用方一律传 resolveContentRoot/StateRoot 结果);
+   * 重复解析同一对根会把每次实例核对又变成两次 lstat + realpath。 */
+  private assertDisjointPhysicalRoots(physicalContentRoot: string, physicalStateRoot: string): void {
     if (
       isPathInsideDir(physicalContentRoot, physicalStateRoot) ||
       isPathInsideDir(physicalStateRoot, physicalContentRoot)
@@ -1458,7 +1496,7 @@ export class GhostManager {
     if (this.activeMutationContext) return;
     const next = this.currentOwnerContextKey();
     if (next === this.ownerContextKey) return;
-    this.assertDisjointRoots(this.resolveContentRoot(), this.resolveStateRoot());
+    this.assertDisjointPhysicalRoots(this.resolveContentRoot(), this.resolveStateRoot());
     this.ownerContextKey = next;
     this.notificationIndex.dispose();
     this.instanceRegistryService.clear();
@@ -2305,7 +2343,7 @@ export class GhostManager {
       }
       const contentRoot = this.resolveContentRoot();
       const stateRoot = this.resolveStateRoot();
-      this.assertDisjointRoots(contentRoot, stateRoot);
+      this.assertDisjointPhysicalRoots(contentRoot, stateRoot);
       this.activeMutationContext = {
         ownerContextKey: currentOwnerContextKey,
         contentRoot,

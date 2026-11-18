@@ -1304,6 +1304,34 @@ describe('GhostManager · owner 受管根路径', () => {
         }),
     ).toThrow(/ghost content root is not a real directory/);
   });
+
+  // Unit: 受管根的物理身份每次取用都要 lstat + realpath,而实例核对、路径拼接、批准
+  // receipt 读取都会经过它;同一轮用户操作里重复解析同一对根就是实测里 25% 的主线程开销。
+  it('同一轮操作只解析一次受管根,逻辑根一换就重新解析', async () => {
+    await manager.install(await makeCindy('root-memo.cindy', goodManifest('root-memo')));
+
+    const nativeRealpath = fs.realpathSync.native as unknown as (target: string) => string;
+    const spy = vi.spyOn(fs.realpathSync as unknown as { native: typeof nativeRealpath }, 'native');
+    try {
+      const before = spy.mock.calls.length;
+      for (let index = 0; index < 5; index += 1) {
+        expect(manager.list().map((ghost) => ghost.manifest.id)).toEqual(['root-memo']);
+      }
+      // 5 轮 list 只解析一次内容根(+ 一次派生状态根),而不是每轮每次访问都重算。
+      expect(spy.mock.calls.length - before).toBeLessThanOrEqual(2);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // 逻辑根换位置:即使还在重检窗口内,也必须立刻按新根解析,否则会把还在的插件读没。
+    const movedRoot = path.join(workDir, 'ghosts-moved');
+    fs.renameSync(rootDir, movedRoot);
+    if (fs.existsSync(`${rootDir}-install-state`)) {
+      fs.renameSync(`${rootDir}-install-state`, `${movedRoot}-install-state`);
+    }
+    rootDir = movedRoot;
+    expect(manager.list().map((ghost) => ghost.manifest.id)).toEqual(['root-memo']);
+  });
 });
 
 describe('GhostManager · 迁移崩溃安全(in-progress 状态机)与隔离命名空间', () => {
