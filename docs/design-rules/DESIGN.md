@@ -794,16 +794,20 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 
 ### Desktop task content width (2026-11-18)
 
-普通任务以聊天面板的实际可用宽度适配，不根据整窗断点或侧栏开关猜测空间。
-新建页与进行中任务共用同一内容列：pane≤1200px 时保留成熟的 914px 上限，pane 从1200到1600px
-时将上限连续扩大到1120px，之后封顶。纯文字、标题、列表、引用、表格、代码与过程一起展开，
-不另造窄正文列；输入框和状态区沿同一中心轴、每侧向外10px。这样1440px笔记本展开260px侧栏后
-仍保留原行宽，大pane的纯文字也最多增加22.5%空间，正文和代码不会突然出现两个右边界。
-表格保留块内横向滚动、普通代码保留自动折行。窄面板继续沿用现有 50px / compact 20px
-消息边距，不新增宽屏开关或拖宽手柄；右侧面板和分栏仍由现有布局引擎分配空间。
-结构化答案卡片保持自己的布局；用户通过外观自定义的阅读宽度继续优先约束整条回复（包括表格和代码）。
-伙伴私聊与群聊继续使用 914px 内容列及原气泡宽度。实现见 `useProportionalWidth.ts`、
-`CCAgentSessionView.tsx`，纯文字/混合内容同窗口前后对照及分割线回归见 `scripts/fixtures/task-content-width/`。
+普通任务以聊天 pane 的实际可用宽度适配，借鉴 Telegram Desktop 将 pane 布局与单条消息
+阅读宽度分开的做法：消息工作列锚在 pane 起始边，输入区使用扣除边距后的可用宽度。
+保留 Cindy 现有 914px 消息上限；正文、表格、代码、头像与过程共用内容列，不因内容类型突然
+跨出另一条右边界。大屏剩余空间位于阅读列右侧，不通过无限加长正文来消除留白。
+输入区左侧比消息列向外10px，保留原有内边距层级；窄 pane 继续沿用50px / compact20px
+消息边距。新建页与进行中任务使用相同输入宽度计算，不新增宽屏开关或拖宽手柄。
+右侧面板和分栏由现有布局引擎分配空间，宽度基于实测 pane，不读取屏幕物理分辨率。
+伙伴私聊、群聊及嵌入 rail 保留原居中列和输入宽度。用户外观设置的阅读宽度继续约束回复。
+
+参考仅用于布局关系，不复制 Telegram 的430px气泡、样式或配置项。其固定版本
+[消息几何](https://github.com/telegramdesktop/tdesktop/blob/9918118a04f4e7f26649516980f789e89161179d/Telegram/SourceFiles/history/view/history_view_message.cpp#L6570-L6636)
+与[输入区宽度](https://github.com/telegramdesktop/tdesktop/blob/9918118a04f4e7f26649516980f789e89161179d/Telegram/SourceFiles/history/history_widget.cpp#L7773-L7818)
+分别控制消息阅读宽度和 pane 输入行。实现见 `useProportionalWidth.ts`、`CCAgentSessionView.tsx`；
+纯文字/混合内容同窗口前后对照及分割线回归见 `scripts/fixtures/task-content-width/`。
 
 ### Desktop chat threads
 
