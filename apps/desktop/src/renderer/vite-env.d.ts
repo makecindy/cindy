@@ -5068,6 +5068,7 @@ interface ElectronAPI {
 
   // ── chat-data-localization (M-FE2) — local SQLite IPC bridge ──
   localDb: {
+    onRuntimeCorruption?: (callback: (stamp: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
     /** Open / migrate the per-user db file. Failure → fatal dialog + ready:false. */
     ensureReady: (userId: string) => Promise<
       | { ready: true }

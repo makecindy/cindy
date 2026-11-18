@@ -157,6 +157,51 @@ describe('lifecycle DbClient manager', () => {
     });
     expect(createWorkerClient).toHaveBeenCalledTimes(1);
   });
+  it('recreates a corrupt client only on readiness retry and ignores retired callbacks', async () => {
+    const clients = [makeClient('a'), makeClient('retry'), makeClient('b')];
+    const callbacks: Array<() => void> = [];
+    const report = vi.fn();
+    let index = 0;
+    const manager = createLifecycleDbClientManager({
+      getCurrentDbPath: () => 'synthetic.db',
+      createWorkerClient: vi.fn(async (options) => {
+        callbacks.push(() => options.onCorruption?.(Object.assign(new Error('corrupt'), { code: 'SQLITE_CORRUPT' })));
+        return clients[index++];
+      }),
+      createInprocClient: vi.fn(), setCurrentDbClient: vi.fn(), clearCurrentDbClient: vi.fn(), log: makeLog(),
+    });
+    await manager.ensure('owner-a', { onCorruption: report });
+    callbacks[0]();
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ code: 'SQLITE_CORRUPT' }));
+    const currentGenerationReport = vi.fn();
+    await manager.ensure('owner-a', { onCorruption: currentGenerationReport });
+    report.mockClear();
+    callbacks[0]();
+    expect(report).not.toHaveBeenCalled();
+    expect(currentGenerationReport).toHaveBeenCalledOnce();
+    Object.defineProperty(clients[0], 'corruptionError', { value: new Error('corrupt') });
+    await manager.ensure('owner-a', {});
+    expect(clients[0].dispose).toHaveBeenCalledOnce();
+    report.mockClear();
+    callbacks[0]();
+    expect(report).not.toHaveBeenCalled();
+    await manager.ensure('owner-b', {});
+    callbacks[1]();
+    expect(report).not.toHaveBeenCalled();
+    await manager.dispose('test-end');
+  });
+  it('never retries a corrupt worker through the inproc fallback', async () => {
+    const worker = makeClient('corrupt');
+    worker.query.mockRejectedValue(Object.assign(new Error('corrupt'), { code: 'SQLITE_CORRUPT' }));
+    const fallback = vi.fn();
+    const manager = createLifecycleDbClientManager({ getCurrentDbPath: () => 'synthetic.db',
+      createWorkerClient: vi.fn(async () => worker), createInprocClient: fallback,
+      setCurrentDbClient: vi.fn(), clearCurrentDbClient: vi.fn(), log: makeLog() });
+    await expect(manager.ensure('owner-a', {})).rejects.toMatchObject({ code: 'SQLITE_CORRUPT' });
+    expect(fallback).not.toHaveBeenCalled();
+    expect(worker.dispose).toHaveBeenCalledOnce();
+  });
+
 });
 
 function makeClient(label: string): DbClient & {

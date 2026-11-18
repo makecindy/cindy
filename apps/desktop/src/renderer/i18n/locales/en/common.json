@@ -1435,6 +1435,10 @@
     "details": "Error details"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Local database damaged",
+      "description": "Database corruption was detected. Access has stopped to protect your data. You can try reopening local data. If that fails, copy the technical details and contact support. Do not overwrite or delete database files."
+    },
     "schemaLease": {
       "title": "Local data cannot be opened yet",
       "retry": "Reopen Local Data",

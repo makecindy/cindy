@@ -1,4 +1,5 @@
 import type { CreateDbClientOptions, DbClient } from './DbClient.js';
+import { isSqliteCorruption } from './sqliteCorruption.js';
 import { waitForRetainedDbClient } from './pendingOperations.js';
 
 export type LifecycleDbClientMode =
@@ -22,7 +23,7 @@ export interface LifecycleDbClientLog {
 export interface LifecycleDbClientManagerDeps {
   getCurrentDbPath(): string | null;
   createWorkerClient(opts: CreateDbClientOptions): Promise<DbClient>;
-  createInprocClient(): Promise<DbClient>;
+  createInprocClient(options?: Pick<CreateDbClientOptions, 'onCorruption'>): Promise<DbClient>;
   setCurrentDbClient(client: DbClient, userId: string): void;
   clearCurrentDbClient(client?: DbClient): void;
   log: LifecycleDbClientLog;
@@ -41,6 +42,7 @@ export function createLifecycleDbClientManager(
 ): LifecycleDbClientManager {
   let lifecycleDbClient: DbClient | null = null;
   let lifecycleDbClientUserId: string | null = null;
+  let notifyCurrentCorruption: CreateDbClientOptions['onCorruption'];
   let lifecycleDbClientMode: Extract<
     LifecycleDbClientMode,
     'worker' | 'inproc-fallback'
@@ -51,6 +53,7 @@ export function createLifecycleDbClientManager(
     if (!client) return;
     lifecycleDbClient = null;
     lifecycleDbClientUserId = null;
+    notifyCurrentCorruption = undefined;
     lifecycleDbClientMode = null;
     deps.clearCurrentDbClient(client);
     try {
@@ -75,7 +78,13 @@ export function createLifecycleDbClientManager(
       return { mode: 'skipped', shouldReleaseMainDb: false };
     }
 
+    if (lifecycleDbClient?.corruptionError && lifecycleDbClientUserId === userId) {
+      await dispose('retry-after-corruption');
+    }
     if (lifecycleDbClient && lifecycleDbClientUserId === userId) {
+      // The live connection may survive a same-owner generation change. Use
+      // the latest readiness callback, not the stamp from its initial creation.
+      notifyCurrentCorruption = workerOptions.onCorruption;
       return {
         mode: 'unchanged',
         shouldReleaseMainDb: lifecycleDbClientMode === 'worker',
@@ -91,6 +100,11 @@ export function createLifecycleDbClientManager(
         ...workerOptions,
         userId,
         dbPath,
+        onCorruption: (error) => {
+          if (lifecycleDbClient === workerClient && lifecycleDbClientUserId === userId) {
+            notifyCurrentCorruption?.(error);
+          }
+        },
       });
       const rows = await workerClient.query<{ c: number }>(
         'SELECT count(*) as c FROM sqlite_master',
@@ -99,6 +113,7 @@ export function createLifecycleDbClientManager(
       const tableCount = rows[0]?.c ?? 0;
       lifecycleDbClient = workerClient;
       lifecycleDbClientUserId = userId;
+      notifyCurrentCorruption = workerOptions.onCorruption;
       lifecycleDbClientMode = 'worker';
       deps.setCurrentDbClient(workerClient, userId);
       deps.log.info(`[DbClient] smoke OK, table count = ${tableCount}`, {
@@ -123,18 +138,27 @@ export function createLifecycleDbClientManager(
           });
         }
       }
-      return activateInprocFallback(userId, dbPath);
+      // Corruption is a database failure, not a missing worker bundle. Never
+      // bypass containment by opening a second native connection to that file.
+      if (isSqliteCorruption(err)) throw err;
+      return activateInprocFallback(userId, dbPath, workerOptions.onCorruption);
     }
   }
 
   async function activateInprocFallback(
     userId: string,
     dbPath: string,
+    onCorruption?: (error: Error) => void,
   ): Promise<LifecycleDbClientEnsureResult> {
     try {
-      const fallbackClient = await deps.createInprocClient();
+      const fallbackClient = await deps.createInprocClient({ onCorruption: (error) => {
+        if (lifecycleDbClient === fallbackClient && lifecycleDbClientUserId === userId) {
+          notifyCurrentCorruption?.(error);
+        }
+      } });
       lifecycleDbClient = fallbackClient;
       lifecycleDbClientUserId = userId;
+      notifyCurrentCorruption = onCorruption;
       lifecycleDbClientMode = 'inproc-fallback';
       deps.setCurrentDbClient(fallbackClient, userId);
       deps.log.warn('[DbClient] inproc fallback active after worker takeover failed', {

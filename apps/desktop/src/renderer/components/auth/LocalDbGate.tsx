@@ -1,3 +1,4 @@
+import { isDataOwnerPushStamp } from '../../../shared/dataOwnerPush';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -60,7 +61,15 @@ export function LocalDbGate() {
 
   useEffect(() => {
     let cancelled = false;
+    let runtimeCorrupted = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribeCorruption = window.electronAPI.localDb.onRuntimeCorruption?.((stamp) => {
+      if (cancelled || !isDataOwnerPushStamp(stamp) || stamp.dataOwnerId !== dataOwnerId
+        || stamp.ownerGeneration !== dataOwnerGeneration) return;
+      runtimeCorrupted = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+      setDecision({ phase: 'fatal', code: 'DB_RUNTIME_CORRUPT' });
+    });
     const ownerId = dataOwnerId;
     const ownerChanged = previousOwnerRef.current?.id !== ownerId
       || previousOwnerRef.current?.generation !== dataOwnerGeneration;
@@ -74,6 +83,7 @@ export function LocalDbGate() {
     if (!ownerId) {
       return () => {
         cancelled = true;
+        unsubscribeCorruption?.();
       };
     }
 
@@ -82,7 +92,7 @@ export function LocalDbGate() {
      try {
       // ensureReady（按 userId 切换 db；失败 main 已弹对话框）
       const ready = await window.electronAPI.localDb.ensureReady(ownerId);
-      if (cancelled) return;
+      if (cancelled || runtimeCorrupted) return;
       if (!ready.ready) {
         log.error('ensureReady failed', ready.error);
         setDecision({ phase: 'fatal', code: ready.error.code, message: ready.error.message });
@@ -97,7 +107,7 @@ export function LocalDbGate() {
 
       try {
         const maintenanceResult = await window.electronAPI.localDb.maintenance.getLastResult();
-        if (cancelled) return;
+        if (cancelled || runtimeCorrupted) return;
         if (
           maintenanceResult &&
           !shownDbSlimmingResultIds.has(maintenanceResult.id)
@@ -120,7 +130,7 @@ export function LocalDbGate() {
       } catch (error) {
         log.warn('database slimming result read failed (non-fatal)', error);
       }
-      if (cancelled) return;
+      if (cancelled || runtimeCorrupted) return;
 
       // Signal main "user logged in + localDb is open" so account integrations can
       // come online after provider discovery. Gated and idempotent in main — re-mounts
@@ -136,7 +146,7 @@ export function LocalDbGate() {
        // ensureReady IPC reject（典型：DbClient 未就绪）不能让 async 异常静默
        // 冒泡、decision 永远停在 'checking' → 永久黑屏。但一次挫折也不能直接
        // fatal(见 MAX_DECISION_RETRIES 注释):先有限重试,耗尽才 fatal。
-       if (cancelled) return;
+       if (cancelled || runtimeCorrupted) return;
        if (retryCountRef.current < MAX_DECISION_RETRIES) {
          retryCountRef.current += 1;
          log.warn(
@@ -153,6 +163,7 @@ export function LocalDbGate() {
 
     return () => {
       cancelled = true;
+      unsubscribeCorruption?.();
       if (retryTimer !== undefined) clearTimeout(retryTimer);
     };
     // 依赖 user.id——切账号 blank;同账号 refresh 不因对象引用变化卸载 Outlet。

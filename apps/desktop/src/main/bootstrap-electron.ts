@@ -559,7 +559,7 @@ import {
   freezeSessionActiveTurnMarkers,
 } from './localDb/sessionActiveTurn';
 import { configureMigrationRuntime } from './localDb/migrationRuntime';
-import { configureLocalDbHostUi } from './localDb/hostUi';
+import { configureLocalDbHostUi, localDbHostUi } from './localDb/hostUi';
 import { configureUiText } from './uiText';
 import { runPendingDbSlimmingAtStartup } from './localDb/dbSlimmingStartup';
 import { shouldShowNativeFatalDialog } from './localDb/fatalDialogPolicy';
@@ -2137,14 +2137,21 @@ let rendererBootGuard: RendererBootGuard | null = null;
 const lifecycleDbClientManager = createLifecycleDbClientManager({
   getCurrentDbPath: localDbGetCurrentDbPath,
   createWorkerClient: createDbClient,
-  createInprocClient: () => createInprocDbClient(),
+  createInprocClient: (options) => createInprocDbClient(options),
   setCurrentDbClient,
   clearCurrentDbClient,
   log: dbClientLog,
 });
 
 async function ensureLifecycleDbClient(userId: string) {
+  const ownerStamp = getActiveDataOwnerPushStamp();
   return lifecycleDbClientManager.ensure(userId, {
+    onCorruption: () => {
+      const current = getActiveDataOwnerPushStamp();
+      if (ownerStamp.dataOwnerId !== userId || current.dataOwnerId !== userId
+        || current.ownerGeneration !== ownerStamp.ownerGeneration) return;
+      localDbHostUi().broadcast('local-db:runtime-corruption', ownerStamp);
+    },
     drizzleDir: getDrizzleDir(),
     sqliteVecExtPath: resolveSqliteVecExtPath(),
     nativeBinding: resolveBetterSqliteNativeBinding() ?? undefined,

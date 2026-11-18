@@ -1422,6 +1422,10 @@
     "details": "謬誤詳情"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "本機資料庫損毀",
+      "description": "偵測到本機資料庫損毀，已停止存取以保護資料。可重新開啟本機資料；若仍失敗，請複製技術詳細資料並聯絡支援人員。請勿覆寫或刪除資料庫檔案。"
+    },
     "schemaLease": {
       "title": "此機資料暫不能啟",
       "retry": "重啟此機資料",

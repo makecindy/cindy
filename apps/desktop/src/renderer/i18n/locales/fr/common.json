@@ -1453,6 +1453,10 @@
     "details": "Détails de l'erreur"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "Base de données locale endommagée",
+      "description": "Une corruption de la base de données a été détectée. L’accès a été interrompu pour protéger vos données. Vous pouvez essayer de rouvrir les données locales. En cas d’échec, copiez les détails techniques et contactez l’assistance. N’écrasez et ne supprimez pas les fichiers de la base de données."
+    },
     "schemaLease": {
       "title": "Impossible d'ouvrir les données locales pour le moment",
       "retry": "Rouvrir les données locales",
