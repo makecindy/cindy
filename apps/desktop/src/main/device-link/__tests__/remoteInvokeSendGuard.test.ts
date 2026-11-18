@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { DeviceLinkError, FILE_PEER_CHANNEL, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
+import { DeviceLinkError, FILE_PEER_CHANNEL, ProviderShareScopeChangedError, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
+import { ServerApiError } from '../../serverApiClient';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
 import { isTemporaryProviderMetadataFailure } from '../providerMetadataContinuity';
 import { isShareAvailabilityRead, projectShareAvailabilityRead } from '../providerShareAvailabilityModels';
@@ -24,7 +25,7 @@ type PeerInvoke = (peer: string, channel: string, args: unknown[]) => Promise<un
 function loadAdapters(overrides: Record<string, unknown>) {
   const epochs = overrides.openLinkCloseEpochs as Map<string, number> ?? new Map<string, number>();
   const dependencies = {
-    DeviceLinkError, FILE_PEER_CHANNEL, ensureInvokeLinkReady, invokeWithClosedLinkRecovery,
+    DeviceLinkError, ServerApiError, FILE_PEER_CHANNEL, ensureInvokeLinkReady, invokeWithClosedLinkRecovery,
     parseProviderSharePeer,
     activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false,
     getRemoteLinkCloseEpoch: (id: string) => epochs.get(id) ?? 0,
@@ -103,7 +104,7 @@ it.each(['direct success', 'denied', 'unsupported standby', 'other channel', 'li
   'preserves the direct outcome without manufacturing a catalog (%s)', async mode => {
     const result = mode === 'direct success' ? { ok: true, result: { providers: [] } }
       : { ok: false, error: { code: mode === 'denied' ? 'FORBIDDEN' : 'DEVICE_OFFLINE', message: 'unavailable' } };
-    const read = vi.fn(async () => { throw new Error('standby unavailable'); });
+    const read = vi.fn(async () => { throw new ServerApiError('NETWORK_ERROR', 0, 'standby unavailable'); });
     const remoteBackgroundInvoke = loadBackgroundInvoke({
       getReceivedShares: () => [{ ...receivedShare, standbyOnline: mode === 'unsupported standby' ? undefined : true }],
       readShareAvailabilityCatalog: read, client: { invoke: vi.fn(async () => result) },
@@ -116,16 +117,54 @@ it.each(['direct success', 'denied', 'unsupported standby', 'other channel', 'li
   },
 );
 
-it.each(['account', 'permission', 'closed', 'cancelled', 'disabled'])(
+// PR #10895 review: unlike the existing transport-failure case, a terminal HTTPS
+// catalog failure must reach the caller and only a real denial retires the share.
+// Unit, production remoteBackgroundInvoke: minimal input is an unreachable owner
+// followed by a rejected catalog, including the offline-owner shortcut.
+it.each(['result', 'throw', 'offline'])(
+  'preserves terminal standby errors and retires only denied access (%s)', async mode => {
+    for (const [failure, denied] of [
+      [new ServerApiError('UNAUTHORIZED', 401, 'unauthorized'), true],
+      [new ServerApiError('HTTP_403', 403, 'forbidden'), true],
+      [Object.assign(new Error('[PERMISSION_DENIED] Provider share request rejected'), { code: 'PERMISSION_DENIED' }), true],
+      [new ServerApiError('NOT_FOUND', 404, 'no standby policy'), false],
+      [new ProviderShareScopeChangedError(), false],
+      [new Error('Invalid shared catalog'), false],
+    ] as const) {
+      const note = vi.fn();
+      const read = vi.fn(async () => { throw failure; });
+      const invoke = vi.fn(async () => {
+        if (mode === 'throw') throw new DeviceLinkError('DEVICE_OFFLINE', 'unreachable');
+        return { ok: false, error: { code: 'DEVICE_OFFLINE', message: 'unreachable' } };
+      });
+      const remoteBackgroundInvoke = loadBackgroundInvoke({
+        getReceivedShares: () => [{ ...receivedShare, hostOnline: mode !== 'offline' }],
+        readShareAvailabilityCatalog: read, noteProviderShareAccessFailure: note, client: { invoke },
+      });
+      await expect(remoteBackgroundInvoke(sharePeer, 'maker:provider:list', [])).rejects.toBe(failure);
+      expect(read).toHaveBeenCalledExactlyOnceWith('share');
+      expect(note.mock.calls).toEqual(denied ? [['share']] : []);
+      expect(invoke).toHaveBeenCalledTimes(mode === 'offline' ? 0 : 1);
+    }
+  },
+);
+
+it.each(['account', 'late denial', 'permission', 'closed', 'cancelled', 'disabled'])(
   'rejects a late standby catalog after %s changes', async change => {
     let changed = false;
     let release!: () => void;
     const waiting = new Promise<void>(resolve => { release = resolve; });
-    const read = vi.fn(async () => { await waiting; return standbyCatalog; });
+    const read = vi.fn(async () => {
+      await waiting;
+      if (change === 'late denial') throw new ServerApiError('HTTP_403', 403, 'forbidden');
+      return standbyCatalog;
+    });
+    const note = vi.fn();
     const remoteBackgroundInvoke = loadBackgroundInvoke({
       getReceivedShares: () => [receivedShare], readShareAvailabilityCatalog: read,
       client: { invoke: vi.fn(async () => { throw new DeviceLinkError('DEVICE_OFFLINE', 'unreachable'); }) },
-      activeOwnerScopeKey: () => changed && change === 'account' ? 'other' : 'owner',
+      activeOwnerScopeKey: () => changed && (change === 'account' || change === 'late denial') ? 'other' : 'owner',
+      noteProviderShareAccessFailure: note,
       providerShareAccessEpoch: () => Number(changed && change === 'permission'),
       getRemoteLinkCloseEpoch: () => Number(changed && change === 'closed'),
       assertRemoteControlTargetEnabled: () => { if (changed && change === 'disabled') throw new Error('disabled'); },
@@ -137,6 +176,7 @@ it.each(['account', 'permission', 'closed', 'cancelled', 'disabled'])(
     changed = true;
     release();
     expect(await pending).toBeInstanceOf(Error);
+    expect(note).not.toHaveBeenCalled();
   },
 );
 

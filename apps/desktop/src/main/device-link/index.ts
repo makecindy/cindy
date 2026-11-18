@@ -2530,9 +2530,16 @@ export async function remoteBackgroundInvoke(
     verify();
     let result: Awaited<ReturnType<typeof readShareAvailabilityCatalog>>;
     try { result = await readShareAvailabilityCatalog(share.shareId); }
-    catch {
+    catch (error) {
       verify();
-      return null;
+      if (isTemporaryProviderMetadataFailure(error)) return null;
+      // HTTP denials and the cross-region IPC denial retire this share only after
+      // revalidating its scope. Missing policies and scope changes are not revocations.
+      if ((error instanceof ServerApiError && (error.statusCode === 401 || error.statusCode === 403))
+        || (error instanceof Error && 'code' in error && error.code === 'PERMISSION_DENIED')) {
+        noteProviderShareAccessFailure(share.shareId);
+      }
+      throw error;
     }
     verify();
     return { ok: true, result: projectShareAvailabilityRead(result, channel, args) };
