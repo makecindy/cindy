@@ -32,12 +32,17 @@ export interface PeerLinksPushScheduler {
 
 const DEFAULT_DEBOUNCE_MS = 250;
 
-/** 不含 rttMs 的结构 key：同一组 (deviceId, path, open) 视为同一拓扑。 */
+/**
+ * 不含 rttMs 的结构 key：同一组 (deviceId, path, open) 且本机主连接的传输(Agent-Net / Device Link)不变，
+ * 视为同一拓扑。主连接换了传输时对端可能一个没变，也要马上推，中间那台电脑的连接方式才不会晚一拍。
+ */
 export function peerLinksStructureKey(snapshot: DeviceLinkPeerLinksSnapshot): string {
-  return snapshot.links
+  const relayProtocol = snapshot.relayProtocol ?? '-';
+  const links = snapshot.links
     .map((link) => `${link.deviceId}|${link.path}|${link.open ? 1 : 0}`)
     .sort()
     .join('\n');
+  return `${relayProtocol}\n${links}`;
 }
 
 export function createPeerLinksPushScheduler(opts: {

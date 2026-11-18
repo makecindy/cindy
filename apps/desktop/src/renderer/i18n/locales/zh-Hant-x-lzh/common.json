@@ -6756,6 +6756,7 @@
           "latency": "延遲",
           "lastSeen": "末見",
           "controlling": "方操控此機",
+          "protocol": "連線之法",
           "rttNote": "近測",
           "manage": "理裝置…",
           "linkStatus": "與「{{name}}」",
