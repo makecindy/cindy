@@ -146,6 +146,26 @@ it.each([true, false])('waits for late Pi capture and preserves input on exhaust
   else expect(h.send).not.toHaveBeenCalled();
 });
 
+it.each([true, false])('admits an archived Skill send before activating the task (allowed=%s)', async allowed => {
+  const h = harness();
+  const env = h.environment;
+  env.session.status = 'archived';
+  env.vendorAuthGate.checkAndConfirm = vi.fn(async () => ({ proceed: allowed }));
+  let persisted = false;
+  env.sessionService = { setStatus: vi.fn(async () => { await Promise.resolve(); persisted = true; }) };
+  env.patchLocalSession = env.setServerSession = env.emitRefresh = vi.fn();
+  h.create.mockImplementation(async () => {
+    expect(persisted).toBe(true);
+    h.release();
+    return { accepted: true, piRuntimePrepared: true };
+  });
+  await h.handleSend('/demo', 'chosen-model', 'medium', 'ask');
+  expect(env.sessionService.setStatus).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  expect(h.create).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  if (allowed) expect(h.send.mock.calls[0][0]).toBe('/skill:demo');
+  else expect(h.send).not.toHaveBeenCalled();
+});
+
 it.each(['literal', 'codex', 'claude-code'])('leaves %s input unchanged without starting Pi', async kind => {
   const h = harness(kind === 'literal' ? 'pi' : kind);
   await h.handleSend('/demo hello', 'chosen-model', 'medium', 'ask', [], [], { literalText: kind === 'literal' });

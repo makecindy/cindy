@@ -3993,9 +3993,14 @@ function CCAgentSessionContent({
                   piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
                   workingDirOverride: newDir,
                   builtInSkillIntent: pending.builtInSkillIntent,
-                  preparePiRuntime: () => preparePiRuntimeForDispatch(
-                    newDir, pending.model, pending.effort, pending.permissionMode,
-                  ),
+                  preparePiRuntime: async () => {
+                    if (sessionId && session?.status === 'archived') {
+                      await sessionService.setStatus(sessionId, 'active', remoteDeviceId
+                        ? { kind: 'device-link', deviceId: remoteDeviceId } : { kind: 'local' });
+                      emitRefresh();
+                    }
+                    await preparePiRuntimeForDispatch(newDir, pending.model, pending.effort, pending.permissionMode);
+                  },
                 },
               );
           if (slashDispatch.handled) {
@@ -4105,6 +4110,7 @@ function CCAgentSessionContent({
       preparePiRuntimeForDispatch,
       refreshServerSession,
       remoteDeviceId,
+      session?.status,
       session?.agentKind,
       session?.orcaRole,
       sessionId,
@@ -4283,64 +4289,81 @@ function CCAgentSessionContent({
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
-      const slashDispatch = opts?.literalText || opts?.builtInSkillIntent
-        ? { handled: false, accepted: false, message }
-        : await maybeDispatchDesktopSlashCommand(message, files, {
-            // Command ownership is resolved here after loading the catalog;
-            // the composer's delivery preference applies only to model input.
-            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-            preparePiRuntime: () => preparePiRuntimeForDispatch(session?.workingDir, model, effort, permissionMode),
-          });
-      if (slashDispatch.handled) {
-        if (slashDispatch.accepted) {
-          // Desktop commands can wait in Main long enough for draft hydration to
-          // restore the click-time command. Re-consume only that snapshot after
-          // acceptance; the callback preserves anything typed in the meantime.
-          opts?.onDeferredAccepted?.();
-          if (sessionId) {
-            requestFollowLatest(sessionId, readSendFollowCancelGeneration(sessionId));
-            void dispatchDeferredUiAssignment(sessionId, undefined, {
-              waitForLeadHistory: false,
-            }).catch((err) => {
-              log.error('recover deferred Worker assignment after slash command failed', err);
-              toast.error(t('newChat.collaboration.assignmentFailed'));
+      // Pure Desktop commands do not activate an archived task. Defer only a
+      // runtime-dependent Skill until the ordinary send gates have admitted it.
+      const needsActiveSession = Symbol('archived Pi skill preparation');
+      const dispatchSlash = async (deferPreparation: boolean) => {
+        const slashDispatch = opts?.literalText || opts?.builtInSkillIntent
+          ? { handled: false, accepted: false, message }
+          : await maybeDispatchDesktopSlashCommand(message, files, {
+              // Command ownership is resolved here after loading the catalog;
+              // the composer's delivery preference applies only to model input.
+              piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+              preparePiRuntime: () => {
+                if (deferPreparation) throw needsActiveSession;
+                return preparePiRuntimeForDispatch(session?.workingDir, model, effort, permissionMode);
+              },
             });
+        if (slashDispatch.handled) {
+          if (slashDispatch.accepted) {
+            // Desktop commands can wait in Main long enough for draft hydration to
+            // restore the click-time command. Re-consume only that snapshot after
+            // acceptance; the callback preserves anything typed in the meantime.
+            opts?.onDeferredAccepted?.();
+            if (sessionId) {
+              requestFollowLatest(sessionId, readSendFollowCancelGeneration(sessionId));
+              void dispatchDeferredUiAssignment(sessionId, undefined, {
+                waitForLeadHistory: false,
+              }).catch((err) => {
+                log.error('recover deferred Worker assignment after slash command failed', err);
+                toast.error(t('newChat.collaboration.assignmentFailed'));
+              });
+            }
           }
+          return { accepted: slashDispatch.accepted };
         }
-        return slashDispatch.accepted;
-      }
-      message = slashDispatch.message;
-      if (message !== originalMessage && opts) {
-        opts = {
-          ...opts,
-          ...(opts.agentReferences
-            ? {
-                agentReferences: rebaseInlineRangesAfterSlashCommandRewrite(
-                  opts.agentReferences,
-                  originalMessage,
-                  message,
-                ),
-              }
-            : {}),
-          ...(opts.pastedTextRanges
-            ? {
-                pastedTextRanges: rebaseInlineRangesAfterSlashCommandRewrite(
-                  opts.pastedTextRanges,
-                  originalMessage,
-                  message,
-                ),
-              }
-            : {}),
-          ...(opts.slashCommandRanges !== undefined
-            ? {
-                slashCommandRanges: rebaseInlineRangesAfterSlashCommandRewrite(
-                  opts.slashCommandRanges,
-                  originalMessage,
-                  message,
-                ),
-              }
-            : {}),
-        };
+        message = slashDispatch.message;
+        if (message !== originalMessage && opts) {
+          opts = {
+            ...opts,
+            ...(opts.agentReferences
+              ? {
+                  agentReferences: rebaseInlineRangesAfterSlashCommandRewrite(
+                    opts.agentReferences,
+                    originalMessage,
+                    message,
+                  ),
+                }
+              : {}),
+            ...(opts.pastedTextRanges
+              ? {
+                  pastedTextRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                    opts.pastedTextRanges,
+                    originalMessage,
+                    message,
+                  ),
+                }
+              : {}),
+            ...(opts.slashCommandRanges !== undefined
+              ? {
+                  slashCommandRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                    opts.slashCommandRanges,
+                    originalMessage,
+                    message,
+                  ),
+                }
+              : {}),
+          };
+        }
+        return null;
+      };
+      let deferredSkill = false;
+      try {
+        const dispatched = await dispatchSlash(session?.status === 'archived');
+        if (dispatched) return dispatched.accepted;
+      } catch (err) {
+        if (err !== needsActiveSession) throw err;
+        deferredSkill = true;
       }
 
       // ① 本机会话维持既有 readiness gate。device-link 已建任务不把视图生命周期内
@@ -4440,9 +4463,14 @@ function CCAgentSessionContent({
       //         —— patchLocal 是 hook 实例级 state 不跨实例，sidebar filter='active'
       //         的列表里压根没这条 archived session，emitPatch 也无效，必须 refresh。
       if (sessionId && session?.status === 'archived') {
+        if (deferredSkill) {
+          await sessionService.setStatus(sessionId, 'active', remoteDeviceId
+            ? { kind: 'device-link', deviceId: remoteDeviceId } : { kind: 'local' });
+          emitRefresh();
+        }
         setServerSession((prev) => (prev ? { ...prev, status: 'active' } : prev));
         patchLocalSession(sessionId, { status: 'active' });
-        sessionService
+        if (!deferredSkill) sessionService
           .setStatus(sessionId, 'active')
           .then(() => emitRefresh())
           .catch((err) => {
@@ -4451,6 +4479,10 @@ function CCAgentSessionContent({
           });
       }
 
+      if (deferredSkill) {
+        const dispatched = await dispatchSlash(false);
+        if (dispatched) return dispatched.accepted;
+      }
       if (opts?.builtInSkillIntent) {
         const finalDispatch = await maybeDispatchDesktopSlashCommand(message, files, {
           builtInSkillIntent: opts.builtInSkillIntent,
