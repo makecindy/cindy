@@ -2044,6 +2044,28 @@ describe('OrcaTeamService', () => {
     expect(getWorker().latestReport).toBeNull();
     expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'progress' }));
   });
+  // 终态先到、回执后落时，投影写进了 worker 行，来源也必须一起登记：
+  // 终态收尾会清掉派活条目，来源丢了就再也没法在队列内容被改写时作废这份投影。
+  it('keeps the queued report source after the terminal observed the turn', async () => {
+    // 稳定的运行实例：终态收尾会清掉派活条目，来源只剩独立登记这一份。
+    const runtime = { isTurnRunning: () => false, getTurnGeneration: () => 1, hasLiveBackgroundWork: async () => false };
+    const { deps, getWorker, service } = createDeps({ getLiveSession: () => runtime });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    // 终态先到：这一轮已被终态观察到，回执还在路上。
+    // 终态临界区里的广播发生在 terminalObserved 置位之后，用它做同步点。
+    const broadcastsBefore = vi.mocked(deps.broadcastOrcaWorkerChanged).mock.calls.length;
+    const terminal = service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '文本' });
+    await vi.waitFor(() => expect(vi.mocked(deps.broadcastOrcaWorkerChanged).mock.calls.length).toBeGreaterThan(broadcastsBefore));
+    // 回执这时落地：走终态已观察分支，投影写进 worker 行。
+    await finish(true, { delivered: true, queuedMessageId: 'queued-1', report: { state: 'dropped', summary: '没做' } });
+    await terminal;
+    // 回执落地后，投影在 worker 行上。
+    expect(getWorker().latestReport?.state).toBe('dropped');
+    // 终态收尾清掉了派活条目；队列内容随后被改写时，仍要能作废这份投影。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    expect(getWorker().latestReport).toBeNull();
+  });
   // 排队回报被改写/撤回/合并后，latest_report 投影必须失效（否则面板继续声称旧「等回复」）。
   it('invalidates the projected report when its queued message is rewritten', async () => {
     const { deps, getWorker, service } = createDeps();

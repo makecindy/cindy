@@ -750,6 +750,15 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   // autoBridge 条目；这里独立记录「面板上的 latest_report 来自哪条排队消息」，
   // 保证改写检测覆盖整个可编辑期间（命中后删除）。
   const pendingReportSourceBySession = new Map<string, string>();
+
+  /**
+   * 投影写进 worker 行时同步登记来源（没排队来源就是直发/插话回报，清掉旧来源）。
+   * 终态收尾会清掉派活条目，来源只存在这里；丢了就再也没法在队列内容被改写时作废这份投影。
+   */
+  function recordPendingReportSource(sessionId: string, queuedMessageId: string | undefined): void {
+    if (queuedMessageId) pendingReportSourceBySession.set(sessionId, queuedMessageId);
+    else pendingReportSourceBySession.delete(sessionId);
+  }
   const autoBridge = new Map<string, AutoBridgeState>();
   // 直连轮（无派活）的账本：与派活轮共用 WorkerTurnLedger 的字段与结算规则。
   // 回报与真实终态谁后到谁补全，按 turnGeneration 归属；保证 error 终态不被 ready 预写洗掉、
@@ -2513,8 +2522,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             const status = sameTurn ? entry!.terminalStatus : undefined;
             if (entry && !sameTurn) directTurnOutcomes.delete(sessionId);
             // 入队来源与投影同登记，队列改写/撤回才能复核这份投影（与派活路径同款）。
-            if (receipt?.queuedMessageId) pendingReportSourceBySession.set(sessionId, receipt.queuedMessageId);
-            else pendingReportSourceBySession.delete(sessionId);
+            recordPendingReportSource(sessionId, receipt?.queuedMessageId);
             // 入账而不是覆盖：同一轮里先到的真实终态不能被后来的结论挤掉。
             const ledger: WorkerTurnLedger & { turnGeneration?: number } = {
               ...(sameTurn ? entry : undefined),
@@ -2585,16 +2593,15 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             } else if (state.terminalObserved && state.appliedReport !== report && !isProgress) {
                 // 用真实终态：晚到的 ready 不能把已判 error 的轮次洗成成功。
                 await applyWorkerReportState(state, report, state.terminalStatus ?? 'done');
+                // 投影已经写进 worker 行：来源必须同时登记，否则终态收尾清掉派活条目后，
+                // 队列内容再被改写时就找不到这份投影的来源，没法作废它。
+                recordPendingReportSource(sessionId, receipt?.queuedMessageId);
               } else if (!state.terminalObserved) {
                 // 终态还没到：至少把最新回报落盘，面板与通知不读旧问题。
                 await deps.setWorkerLatestReport(state.workerId, report);
                 // 记录来源以便终态后改写仍能命中；直发/插话回报无 queued id，
                 // 同时清掉上一轮残留来源，避免改写旧消息误清这份新回报。
-                if (receipt?.queuedMessageId) {
-                  pendingReportSourceBySession.set(sessionId, receipt.queuedMessageId);
-                } else {
-                  pendingReportSourceBySession.delete(sessionId);
-                }
+                recordPendingReportSource(sessionId, receipt?.queuedMessageId);
               }
             }
             if (accepted && settlesReport && ownsState) settlePendingReport(state);
