@@ -59,6 +59,12 @@ export default {
       console.log('TASK_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, ...m }));
     };
     await verify();
+    const process = page.locator('[data-scroll-disclosure-header][aria-expanded="false"]').first();
+    if (await process.count()) {
+      await process.click();
+      await ui.capture('expanded-process');
+      await page.locator('[data-scroll-disclosure-header][aria-expanded="true"]').first().click();
+    }
     if (ui.case === 'width-panel') {
       const divider = page.getByTestId('layout-divider');
       for (const edge of ['left', 'right']) {
