@@ -162,6 +162,8 @@ import { startProviderShareGuest } from '../providerShareGuest';
 import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
 import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
+import { throwIpcError } from '../../utils/ipcValidate';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
 import { providerShareActiveControllers, revalidateRemoteModelAccess, revokeProviderShareControllers } from '../dispatch.desktop';
 import {
@@ -241,6 +243,7 @@ afterEach(() => { setBroadcastTapListener(null); stopProviderShareRuntime(); });
 // PR #11287: cover the actual local IPC and the bytes committed after native confirmation.
 describe('local roster export', () => {
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
+  const event = { sender: {} } as Electron.IpcMainInvokeEvent;
   const capturedAt = '2026-10-16T08:00:00.000Z';
   const member = { memberId: 'fixture-member-full-id', displayName: '=guest', status: 'active' };
   const share = { providerId: 'anthropic', hostDeviceId: 'host-device', shareId: 'share-1', members: [member] };
@@ -264,8 +267,45 @@ describe('local roster export', () => {
   function save(expectedOwner = stamp, providerId = 'anthropic') {
     const calls = vi.mocked(ipcMain.handle).mock.calls;
     const handler = calls.find(([channel]) => channel === PROVIDER_SHARE_IPC.EXPORT_ROSTER)![1];
-    return handler({ sender: {} } as Electron.IpcMainInvokeEvent, providerId, expectedOwner);
+    return handler(event, providerId, expectedOwner);
   }
+
+  // Electron security §8 / unit: the registered handler must reject before any
+  // save side effect and recheck its sender after awaited reads/dialogs. Existing
+  // owner-change cases cannot catch removal or late placement of this guard.
+  it.each(['entry', 'notes', 'dialog', 'publish'] as const)('preserves the destination when sender trust fails at %s', async phase => {
+    fs.writeFileSync(destination, 'original');
+    let trusted = phase !== 'entry';
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => {
+      if (!trusted) throwIpcError('PERMISSION_DENIED', 'Synthetic untrusted renderer');
+    });
+    if (phase === 'notes') {
+      memberNotes.readStrict.mockImplementationOnce(async () => {
+        trusted = false;
+        return {};
+      });
+    }
+    saveDialog.mockImplementationOnce(async () => {
+      if (phase === 'dialog') trusted = false;
+      if (phase === 'publish') {
+        memberNotes.readStrict.mockResolvedValueOnce({ [member.memberId]: 'A,"B"\nC' });
+        memberNotes.readStrict.mockImplementationOnce(async () => {
+          trusted = false;
+          return {};
+        });
+      }
+      return { canceled: false, filePath: destination };
+    });
+
+    await expect(save()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledWith(event);
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+    expect(nativeReplace).not.toHaveBeenCalled();
+    if (phase === 'entry' || phase === 'notes') expect(saveDialog).not.toHaveBeenCalled();
+    if (phase === 'entry') expect(memberNotes.readStrict).not.toHaveBeenCalled();
+  });
 
   it.each(['new', 'existing', 'EPERM', 'EEXIST'])('saves the authorized snapshot at the chosen location (%s)', async mode => {
     if (mode !== 'new') fs.writeFileSync(destination, 'original');
