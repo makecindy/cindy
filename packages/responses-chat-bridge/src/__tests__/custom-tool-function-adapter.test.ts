@@ -32,6 +32,30 @@ function execRequest() {
 }
 
 describe("legacy Responses tool item ids", () => {
+  // #9645: saved msg_ tool items must replay without changing history or invocation pairing.
+  // Unit: the public wire normalizer lacked this prefix; ordinary message/reference IDs stay opaque.
+  it("repairs message-prefixed tool history while preserving payloads and call_id pairing", () => {
+    const body = { input: [
+      { type: "custom_tool_call", id: "msg_custom", call_id: "call_custom", name: "exec", input: "msg_literal" },
+      { type: "custom_tool_call_output", id: "msg_result", call_id: "call_custom", output: [{ type: "input_text", text: "msg_literal" }] },
+      { type: "function_call", id: "msg_function", call_id: "call_function", name: "read_file", arguments: "{}" },
+      { type: "function_call_output", id: "msg_function_result", call_id: "call_function", output: "ok" },
+      { type: "message", id: "msg_message", content: "unchanged" },
+      { type: "item_reference", id: "msg_reference" },
+      { type: "compaction", id: "msg_compaction", encrypted_content: "unchanged" },
+    ] };
+    const original = structuredClone(body);
+    const repaired = normalizeResponsesToolItemIds(body)!;
+    const items = repaired.input as typeof body.input;
+    expect(items).toEqual(original.input.map((item, index) => ({
+      ...item,
+      id: ["ctc_custom", "ctco_result", "fc_function", "fco_function_result"][index] ?? item.id,
+    })));
+    expect(items[1]!.output).toBe(body.input[1]!.output);
+    expect(body).toEqual(original);
+    expect(normalizeResponsesToolItemIds(repaired)).toBeNull();
+  });
+
   it("repairs tool-less compact history without changing invocation ids, payloads or opaque items", () => {
     const body = { model: "gpt-6", input: [
       { type: "custom_tool_call", id: "fc_old", call_id: "fc_invocation", name: "exec", input: "fc_literal" },
@@ -93,11 +117,12 @@ describe("Responses custom-tool function adapter", () => {
     vi.useRealTimers();
   });
 
-  it.each([false, true])("keeps response ids consistent across parallel calls and final output (SSE=%s)", async (sse) => {
+  it.each([false, true].flatMap(sse => ["fc", "msg", "call"].map(prefix => ({ sse, prefix }))))(
+    "keeps $prefix response ids consistent across parallel calls and final output (SSE=$sse)", async ({ sse, prefix }) => {
     const adapter = createResponsesCustomToolFunctionAdapter(["exec"]);
     adapter.adaptRequest(execRequest(), 1);
     const calls = ["a", "b"].map(key => ({
-      type: "function_call", id: `fc_${key}`, call_id: `call_${key}`, name: "exec",
+      type: "function_call", id: `${prefix}_${key}`, call_id: `call_${key}`, name: "exec",
       arguments: JSON.stringify({ input: `text("你好 ${key}")` }),
     }));
     const unrelated = { type: "function_call", id: "fc_other", call_id: "call_other", name: "read_file", arguments: "{}" };

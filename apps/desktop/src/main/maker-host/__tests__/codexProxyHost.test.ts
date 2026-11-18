@@ -3818,12 +3818,15 @@ describe('codex proxy host', () => {
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
   });
 
-  it.each(['shared', 'custom-context', 'control-plane'] as const)(
-    'repairs legacy IDs after a WebSocket rejection on the %s proxy, preserving sibling connections', async (proxyKind) => {
+  // #9645: extend the real loopback recovery path beyond fc_ to saved msg_ tool IDs.
+  // The upstream rejects the original ID; HTTP replay/compact must repair it without touching peers.
+  it.each((['shared', 'custom-context', 'control-plane'] as const).flatMap(proxyKind =>
+    ['fc', 'msg'].map(prefix => ({ proxyKind, prefix })),
+  ))('repairs $prefix IDs after a WebSocket rejection on the $proxyKind proxy, preserving sibling connections', async ({ proxyKind, prefix }) => {
     const host = await freshCodexProxyHost();
-    const errorMessage = "Invalid 'input[285].id': 'fc_legacy'. Expected an ID that begins with 'ctc'.";
+    const errorMessage = `Invalid 'input[285].id': '${prefix}_legacy'. Expected an ID that begins with 'ctc'.`;
     const legacy = { model: 'gpt-6', input: [
-      { type: 'custom_tool_call', id: 'fc_legacy', name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
+      { type: 'custom_tool_call', id: `${prefix}_legacy`, name: 'exec', call_id: 'call_legacy', input: 'text(1)' },
       { type: 'custom_tool_call_output', id: 'ctco_result', call_id: 'call_legacy', output: '1' },
     ] };
     const httpBodies: Array<{ input: typeof legacy.input }> = [];
@@ -4214,6 +4217,13 @@ describe('codex proxy host', () => {
   });
 
   it.each([
+    ...['fc', 'fco', 'ctc', 'ctco'].map((prefix): [string, string | null] => [
+      `Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with '${prefix}'.`, 'tool_item_id',
+    ]),
+    [JSON.stringify({ error: { message: 'Invalid "input[169].id": "msg_history". Expected an ID that begins with "ctc".' } }), 'tool_item_id'],
+    ["Invalid 'input[169].call_id': 'msg_history'. Expected an ID that begins with 'ctc'.", null],
+    ["Invalid 'input[169].id': 'msg_history'. Expected an ID that begins with 'msg'.", 'responses_item_id_prefix'],
+    ["Invalid 'input[169].id': 'MSG_history'. Expected an ID that begins with 'ctc'.", null],
     ["Invalid 'input[2].id': 'ctc_old'. Expected an ID that begins with 'fc'.", 'tool_item_id'],
     [JSON.stringify({ error: { message: "Invalid \"input[2].id\": \"fco_old\". Expected an ID that begins with \"ctco\"." } }), 'tool_item_id'],
     ["Invalid 'input[2].call_id': 'fc_old'. Expected an ID that begins with 'ctc'.", null],
