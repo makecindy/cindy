@@ -79,7 +79,6 @@ import { currentSelfHostedRelayFrameAuth } from './selfHostedRelayFrameAuth';
 import {
   getActiveSelfHostedRelay,
   getSelfHostedRelayRouteGeneration,
-  isAgentNetOnlyRoute,
   waitForSelfHostedRelayRoute,
 } from './selfHostedRelayRouting';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
@@ -1281,15 +1280,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       transportAttestation: mobileAgentNetTransportProof,
       verifyTransportAttestation: verifyMobileAgentNetTransportProof,
     };
-    // Agent-Net sessions only for a phone that may use Agent-Net (its switch is on, or the route is Agent-Net only). This client
-    // is rebuilt whenever that changes (the preference generation and the relay route are this effect's dependencies); with
-    // Agent-Net off the client is the routed Device Link client exactly as before, with no session layer in between.
-    const preferences = getMobileAgentNetPreferences();
-    const agentNetPossible = preferences.ready && (preferences.enabled || isAgentNetOnlyRoute(getActiveSelfHostedRelay()));
+    // V2-only routes keep their existing connection when the switch is off.
+    // Session routing is enabled only by the explicit preference.
+    const agentNetEnabled = agentNetPreferences.ready && agentNetPreferences.enabled;
     const routed: RoutedDeviceLinkClient = new RoutedDeviceLinkClient({
       ...legacyOptions,
       // As the Desktop: on this phone's Agent-Net connection a peer that is still delivering is not reset for a slow confirmation.
-      ...(agentNetPossible ? { reliablePeerTransport: () => primaryEncrypted } : {}),
+      ...(agentNetEnabled ? { reliablePeerTransport: () => primaryEncrypted } : {}),
       transportAllowed: () => scopeCurrent() && (primaryEncrypted || mobileAgentNetAllowsLegacy()),
       directRuntimeEnabled: () => !primaryEncrypted && mobileAgentNetAllowsLegacy(),
       frameAuth: () => primaryEncrypted ? null : currentSelfHostedRelayFrameAuth(),
@@ -1337,7 +1334,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       primaryCapability: 'agent-net-node-v2',
       prefersPrimary: mobileAgentNetPrefersPrimary,
       // The computer said on the relay that it runs Agent-Net: its session is about to arrive, open there (AgentNetSessionLinks.openAttested).
-      ...(agentNetPossible ? { openOnPrimary: (peer: string, payload: unknown, timeoutMs: number | undefined,
+      ...(agentNetEnabled ? { openOnPrimary: (peer: string, payload: unknown, timeoutMs: number | undefined,
         primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload> => sessionLinks!.openAttested(peer, payload, timeoutMs, primary) } : {}),
       options: legacyOptions,
     });
@@ -1346,7 +1343,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     // frames; with Agent-Net off or an older computer every call goes to the routed client unchanged. The phone only controls.
     let facade: PeerLinks | null = null;
     let recoverPeerOnNewSession: ((deviceId: string) => void) | null = null;
-    const sessionLinks: AgentNetSessionLinks | null = !agentNetPossible ? null : new AgentNetSessionLinks({
+    const sessionLinks: AgentNetSessionLinks | null = !agentNetEnabled ? null : new AgentNetSessionLinks({
       session: mobileAgentNetSession,
       connectionEpoch: (deviceId): number => (facade ?? routed).connectionFor(deviceId).getConnectionEpoch(),
       connect: connectMobileAgentNetSessionPeer,
@@ -1407,7 +1404,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       const replaceOldPath = networkPathChanged;
       networkPathChanged = false;
       // Agent-Net connections send from the new address now and gather candidates again (the Desktop's network watcher does the same).
-      if (urgent || replaceOldPath) notifyMobileAgentNetNetworkChanged();
+      if (agentNetEnabled && (urgent || replaceOldPath)) notifyMobileAgentNetNetworkChanged();
       // Only this phone's established connection used the lost route. Keep
       // handshakes and congestion backoff on their existing recovery path.
       if (replaceOldPath && client.getStatus() === 'online') {
@@ -2054,6 +2051,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       offCrossAccountIssue();
       offIssue();
       client.stop();
+      useMobileAgentNetSessions(null);
       setMobileAgentNetDeviceListReader(null);
       offFileStreams();
       if (routedRef.current === routed) routedRef.current = null;

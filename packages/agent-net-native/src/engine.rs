@@ -52,6 +52,7 @@ fn number(command: &Value, key: &str) -> Result<u32, &'static str> {
 pub struct NativeEngine {
     crypto: NativeCrypto,
     device_id: String,
+    enhanced_transport: bool,
     endpoint: Endpoint<NativeCrypto, Address>,
     admitted: Rc<RefCell<BTreeMap<[u8; 32], u32>>>,
     /// Relay link ↔ the device's tag in relay UDP packets, from the admitted peers' relay device ids.
@@ -71,12 +72,12 @@ pub struct NativeEngine {
 }
 
 impl NativeEngine {
-    pub(crate) fn new(crypto: NativeCrypto, device_id: String, udp_enabled: bool) -> Result<Self, &'static str> {
+    pub(crate) fn new(crypto: NativeCrypto, device_id: String, udp_enabled: bool, enhanced_transport: bool) -> Result<Self, &'static str> {
         let mut endpoint = Endpoint::new(|| u32::from_le_bytes(NativeCrypto::random()));
         let admitted = Rc::new(RefCell::new(BTreeMap::<[u8; 32], u32>::new()));
         let roster = admitted.clone();
         let listener_crypto = crypto.clone();
-        endpoint.listen(PROLOGUE, Self::config(), &[], move || listener_crypto.clone(),
+        endpoint.listen(PROLOGUE, Self::config(enhanced_transport), &[], move || listener_crypto.clone(),
             move |incoming: &Incoming<NativeCrypto>, from| {
                 let roster = roster.borrow();
                 let Some(link) = roster.get(incoming.remote_static()) else { return false; };
@@ -87,11 +88,12 @@ impl NativeEngine {
             socket.set_nonblocking(true).map_err(|_| "UDP_SETUP_FAILED")?;
             Some(socket)
         } else { None };
-        Ok(Self { crypto, device_id, endpoint, admitted, relay_tags: BTreeMap::new(), relay_links: BTreeMap::new(), relay_udp: None,
+        Ok(Self { crypto, device_id, enhanced_transport, endpoint, admitted, relay_tags: BTreeMap::new(), relay_links: BTreeMap::new(), relay_udp: None,
             stun: None, local_streams: BTreeMap::new(), udp, clock: Instant::now(), now: 0,
             streams: BTreeMap::new(), finishing: BTreeMap::new(), poisoned: false, media: Default::default(), media_http: None })
     }
-    fn config() -> Config {
+    fn config(enhanced_transport: bool) -> Config {
+        if !enhanced_transport { return Config { max_packet_size: MAX_PACKET_SIZE, ..Config::default() }; }
         Config { max_packet_size: MAX_PACKET_SIZE, send_packet_size: SEND_PACKET_SIZE, send_window: SEND_WINDOW, recv_window: SEND_WINDOW,
             send_buffer_bytes: SEND_BUFFER_BYTES, ..Config::for_policy(RecoveryPolicy::Auto) }
     }
@@ -114,7 +116,7 @@ impl NativeEngine {
         match text(command, "op")? {
             "identity" => Ok(json!({"deviceId":self.device_id,"signingKey":encoded(self.crypto.signing_public()),
                 "transportKey":encoded(&self.crypto.static_public()),"udpPort":self.udp.as_ref().and_then(|s| s.local_addr().ok()).map(|a|a.port()),
-                "features":FEATURES})),
+                "features":if self.enhanced_transport { FEATURES.as_slice() } else { &[] }})),
             "sign" => {
                 let value = text(command, "text")?;
                 if value.len() > 65_536 { return Err("SIGNING_INPUT_TOO_LARGE"); }
@@ -136,7 +138,7 @@ impl NativeEngine {
                 let link = admitted.get(&remote).ok_or("PEER_NOT_ADMITTED")?;
                 if matches!(to, Address::Link(actual) if actual != *link) { return Err("PEER_ADDRESS_MISMATCH"); }
                 drop(admitted);
-                let id = self.endpoint.connect(self.now, self.crypto.clone(), Self::config(), PROLOGUE,
+                let id = self.endpoint.connect(self.now, self.crypto.clone(), Self::config(self.enhanced_transport), PROLOGUE,
                     &remote, &[], to).map_err(|_| "CONNECT_FAILED")?;
                 Ok(json!(id))
             },
@@ -159,8 +161,10 @@ impl NativeEngine {
                 let id = number(command, "id")?;
                 let connection = self.endpoint.connection_mut(id).ok_or("CONNECTION_CLOSED")?;
                 let stream = connection.open_stream(priority).ok_or("STREAM_LIMIT")?;
-                let reported = self.local_streams.entry(id).or_default();
-                if reported.len() < MAX_REPORTED_STREAMS { reported.insert(stream); }
+                if self.enhanced_transport {
+                    let reported = self.local_streams.entry(id).or_default();
+                    if reported.len() < MAX_REPORTED_STREAMS { reported.insert(stream); }
+                }
                 Ok(json!(stream))
             },
             "write" => {

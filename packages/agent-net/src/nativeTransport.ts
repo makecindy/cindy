@@ -73,6 +73,7 @@ export class NativeTransport implements Transport {
     private readonly identity: NativeIdentity,
     addresses: string[],
     private readonly readAddresses: (() => Promise<string[]>) | null,
+    readonly enhanced: boolean,
   ) {
     this.id = keyHex(identity.transportKey);
     this.dial = identity.udpPort ? { udp: { address: '0.0.0.0', port: identity.udpPort } } : {};
@@ -86,13 +87,13 @@ export class NativeTransport implements Transport {
       void this.call({ op: 'datagram', from: { link }, data: toBase64Url(bytes) }).catch(() => undefined);
     });
   }
-  static async create(engine: NativeEnginePort, options: TransportOptions, addresses: NativeAddresses = []): Promise<NativeTransport> {
+  static async create(engine: NativeEnginePort, options: TransportOptions, addresses: NativeAddresses = [], enhanced = true): Promise<NativeTransport> {
     if (!options.admittedPeers) throw new Error('NATIVE_PEER_LIST_REQUIRED');
     try {
       const identity = await engine.command<NativeIdentity>({ op: 'identity' });
       const read = typeof addresses === 'function' ? addresses : null;
       const initial = typeof addresses === 'function' ? await addresses().catch((): string[] => []) : addresses;
-      const transport = new NativeTransport(engine, options, identity, initial, read);
+      const transport = new NativeTransport(engine, options, identity, initial, enhanced ? read : null, enhanced);
       await transport.synchronizeAdmission();
       await transport.startStun();
       transport.schedule();
@@ -115,8 +116,10 @@ export class NativeTransport implements Transport {
   private computeCandidates(): Address[] {
     const port = this.identity.udpPort;
     if (!port) return [];
+    const local = this.localAddresses.filter(address => address.length <= 128).map(address => ({ address, port }));
+    if (!this.enhanced) return local.slice(0, MAX_CANDIDATES);
     const seen = new Set<string>();
-    return [...this.localAddresses.filter(address => address.length <= 128).map(address => ({ address, port })), ...this.mapped]
+    return [...local, ...this.mapped]
       .filter(candidate => { const key = `${candidate.address}:${candidate.port}`; if (seen.has(key)) return false; seen.add(key); return true; })
       .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address))).slice(0, MAX_CANDIDATES);
   }
@@ -157,7 +160,7 @@ export class NativeTransport implements Transport {
       if (!/^[a-f0-9]{64}$/.test(peer.id) || !this.options.admit(peer.id)) throw new Error('INVALID_NATIVE_PEER');
       const key = Uint8Array.from(peer.id.match(/../g)!, part => parseInt(part, 16));
       // `relayId` tags the peer in relay UDP packets; builds without relay UDP ignore it.
-      return { key: toBase64Url(key), link: this.linkFor(peer.relayId), relayId: peer.relayId };
+      return { key: toBase64Url(key), link: this.linkFor(peer.relayId), ...(this.enhanced ? { relayId: peer.relayId } : {}) };
     }).sort((a, b) => a.link - b.link);
     const serialized = JSON.stringify(entries);
     if (serialized === this.lastAdmission) return;
@@ -183,7 +186,7 @@ export class NativeTransport implements Transport {
    * local addresses are read again for the candidates.
    */
   networkChanged(): void {
-    if (this.closed) return;
+    if (this.closed || !this.enhanced) return;
     void this.call({ op: 'migrate' }).catch(() => undefined);
     if (!this.readAddresses || this.refreshingAddresses) return;
     this.refreshingAddresses = true;
@@ -265,6 +268,7 @@ export class NativeTransport implements Transport {
     this.waiting.clear();
     for (const channel of [...this.channels.values()]) channel.close({ drain: false });
     this.channels.clear();
+    if (!this.enhanced) { await this.engine.destroy(); return; }
     // As the Desktop driver closes its endpoint first: each connection's close packets go out (direct, or relay UDP) before
     // the engine is destroyed, so the peer stops at once instead of declaring this side dead about 30 s later.
     try {
@@ -336,7 +340,7 @@ class NativeChannel implements PeerChannel {
 
   /** See CoreChannel.declareSessions (transport.ts): once per connection, on the control stream older nodes read only for candidates. */
   declareSessions(features: readonly string[] = []): void {
-    if (this.sessionsDeclared || this.events.closed) return;
+    if (!this.owner.enhanced || this.sessionsDeclared || this.events.closed) return;
     this.sessionsDeclared = true;
     this.control.push(utf8(`${JSON.stringify({ session: [AGENT_NET_SESSION_V1, ...features] })}\n`));
   }
@@ -380,9 +384,9 @@ class NativeChannel implements PeerChannel {
     if (this.disposed) return;
     if (this.closeDeadline && now() >= this.closeDeadline) { this.dispose(); return; }
     const before = this.bufferedAmount;
-    const order = [this.control, ...(this.lanes ? [this.lanes.control, this.lanes.normal] : []), this.data, ...(this.lanes ? [this.lanes.background] : [])];
+    const order = this.owner.enhanced ? [this.control, ...(this.lanes ? [this.lanes.control, this.lanes.normal] : []), this.data, ...(this.lanes ? [this.lanes.background] : [])] : [this.data];
     for (const outgoing of order) { if (this.disposed) return; await this.flushStream(outgoing); }
-    if (before > DRAIN_LOW_WATER_BYTES && this.bufferedAmount <= DRAIN_LOW_WATER_BYTES) for (const handler of this.drainHandlers) handler();
+    if (this.owner.enhanced && before > DRAIN_LOW_WATER_BYTES && this.bufferedAmount <= DRAIN_LOW_WATER_BYTES) for (const handler of this.drainHandlers) handler();
     if (this.closeDeadline && !this.finished && order.every(outgoing => !outgoing.items.length)) {
       this.finished = true;
       // As CoreChannel.close: every stream this side opened ends, so the peer sees this side leave.
@@ -425,7 +429,7 @@ class NativeChannel implements PeerChannel {
       let data = fromBase64Url(chunk.data);
       if (stream.kind === null && data.length) { stream.kind = data[0]; data = data.subarray(1); }
       if (stream.kind === DATA) { if (data.length) this.events.data(data); continue; }
-      const lane = stream.kind === null ? undefined : LANE_BY_KIND.get(stream.kind);
+      const lane = !this.owner.enhanced || stream.kind === null ? undefined : LANE_BY_KIND.get(stream.kind);
       if (lane) { if (data.length) this.sessionData(lane, data); if (this.disposed) return; continue; }
       if (stream.kind === CONTROL) {
         stream.text += decodeUtf8(data);
@@ -454,16 +458,17 @@ class NativeChannel implements PeerChannel {
     let value: { candidates?: unknown; session?: unknown };
     // Ignore malformed control lines, never business frames.
     try { value = JSON.parse(line); } catch { return; }
-    if (Array.isArray(value.session) && value.session.includes(AGENT_NET_SESSION_V1) && !this.sessionCapable) {
+    if (this.owner.enhanced && Array.isArray(value?.session) && value.session.includes(AGENT_NET_SESSION_V1) && !this.sessionCapable) {
       this.sessionCapable = true;
       this.peerSessionFeatures = value.session
         .filter((feature): feature is string => typeof feature === 'string' && feature !== AGENT_NET_SESSION_V1 && feature.length <= 64).slice(0, 16);
       for (const handler of this.sessionCapableHandlers.splice(0)) handler();
     }
-    if (Array.isArray(value.candidates)) {
-      this.candidates = value.candidates.filter((a: Address) => a && typeof a.address === 'string' && a.address.length <= 128
-        && Number.isInteger(a.port) && a.port > 0 && a.port <= 65535)
-        .sort((a: Address, b: Address) => Number(isPrivate(a.address)) - Number(isPrivate(b.address))).slice(0, 16);
+    if (Array.isArray(value?.candidates)) {
+      const candidates = value.candidates.filter((a: Address) => a && typeof a.address === 'string' && a.address.length <= 128
+        && Number.isInteger(a.port) && a.port > 0 && a.port <= 65535);
+      if (this.owner.enhanced) candidates.sort((a: Address, b: Address) => Number(isPrivate(a.address)) - Number(isPrivate(b.address)));
+      this.candidates = candidates.slice(0, MAX_CANDIDATES);
       this.candidateCursor = 0; this.nextProbe = 0;
     }
   }

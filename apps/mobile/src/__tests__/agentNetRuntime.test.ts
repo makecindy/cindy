@@ -12,7 +12,7 @@ import { createPrivateNetwork, generateIdentity, verifyCertificate } from '../..
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 
-const fake = vi.hoisted(() => ({ target: vi.fn(), open: vi.fn(), identity: vi.fn(), enabled: false,
+const fake = vi.hoisted(() => ({ target: vi.fn(), open: vi.fn(), identity: vi.fn(), enabled: false, agentNetOnly: false,
   createTransport: vi.fn(), verifyCertificate: vi.fn(), readDirectory: vi.fn() }));
 vi.mock('@cindy/agent-net/portable', async original => ({ ...await original<typeof import('@cindy/agent-net/portable')>(),
   AgentNetSocket: { openWithBindings: fake.open }, NativeTransport: { create: fake.createTransport } }));
@@ -22,8 +22,8 @@ vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.exampl
   getOfficialDeviceLinkApiBaseUrl: () => 'https://relay.example.test', getOfficialAgentNetApiBaseUrl: () => 'https://agent-net.example.test' }));
 vi.mock('@/device-link/agentNetNative', () => ({ MobileAgentNetEngine: { available: () => true } }));
 vi.mock('@/device-link/agentNetIdentity', () => ({ ensureMobileAgentNetIdentity: fake.identity, clearMobileAgentNetIdentity: vi.fn(), currentMobileAgentNetIdentity: () => null }));
-vi.mock('@/device-link/selfHostedRelayRouting', () => ({ getActiveSelfHostedRelay: () => null,
-  getSelfHostedRelayRouteGeneration: () => 0, isAgentNetOnlyRoute: () => false,
+vi.mock('@/device-link/selfHostedRelayRouting', () => ({ getActiveSelfHostedRelay: () => fake.agentNetOnly ? { signing: { agentNet: { certificate: {} } } } : null,
+  getSelfHostedRelayRouteGeneration: () => 0, isAgentNetOnlyRoute: () => fake.agentNetOnly,
   subscribeSelfHostedRelayRoute: () => () => {}, deviceLinkMediaApiBaseUrl: () => 'https://relay.example.test' }));
 vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ ready: true, enabled: fake.enabled, onlyEncrypted: false, generation: 0 }),
   mobileAgentNetRequiresEncryption: () => false, subscribeMobileAgentNetPreferences: () => () => {} }));
@@ -40,7 +40,7 @@ vi.mock('@/device-link/agentNetSharing', () => ({ mobileAgentNetSharingMediaTarg
 import { openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer, mobileAgentNetShouldProbeLegacyPeer } from '@/device-link/agentNetRuntime';
 import { uploadMobileAttachment } from '@/session/mobileAttachmentUpload';
 beforeEach(() => {
-  fake.target.mockReset(); fake.open.mockReset(); fake.identity.mockReset(); fake.enabled = false;
+  fake.target.mockReset(); fake.open.mockReset(); fake.identity.mockReset(); fake.enabled = false; fake.agentNetOnly = false;
   fake.readDirectory.mockReset().mockResolvedValue(null);
   fake.createTransport.mockReset(); fake.verifyCertificate.mockReset().mockImplementation(verifyCertificate);
   setMobileAuthOwner('unit-media-owner');
@@ -107,7 +107,10 @@ it('opens a legacy link with no cached directory while the V2 relay is offline, 
     signer: {}, newTransportEngine: async () => ({ destroy: vi.fn() }) });
   const connect = vi.fn();
   fake.createTransport.mockResolvedValue({ id: 'phone', dial: {}, connect, close: async () => undefined });
-  const socket = await openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null });
+  // No live DNS or HTTP in the offline unit fixture.
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })));
+  const socket = await openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null })
+    .finally(() => vi.unstubAllGlobals());
   expect(socket).not.toBeNull();
   await expect(socket!.dial('unknown')).rejects.toThrow('UNAUTHORIZED_PEER');
   expect(connect).not.toHaveBeenCalled();
@@ -150,4 +153,29 @@ it('fences the original account while the selected media module loads asynchrono
   await importing; setMobileAuthOwner('other-owner'); release();
   expect(await outcome).toMatchObject({ message: 'AGENT_NET_OWNER_CHANGED' });
   expect(upload).not.toHaveBeenCalled(); expect(legacy).not.toHaveBeenCalled();
+});
+
+// Protocol opt-in: a V2-only self-hosted route predates the preference toggle
+// and must still connect with the toggle off, without discovering new UDP paths.
+// The ordinary legacy fallback test never opens a V2-only route. Unit: one
+// forced route, switch off, with the native engine and relay I/O stubbed.
+it('keeps the existing V2-only connection without opting into new transports when the switch is off', async () => {
+  fake.agentNetOnly = true;
+  const socket = new EventEmitter() as any;
+  socket.close = () => socket.emit('close', 1000);
+  fake.open.mockResolvedValue(socket);
+  const createEngine = vi.fn(async () => ({ destroy: vi.fn() }));
+  fake.identity.mockResolvedValue({ api: { base: 'https://private.example.test',
+    identity: { deviceId: 'phone' }, certificate: { expiresAt: Date.now() + 48 * 60 * 60_000 } },
+    signer: {}, newTransportEngine: createEngine });
+  const fetch = vi.fn(async () => new Response('{}'));
+  vi.stubGlobal('fetch', fetch);
+  try {
+    await expect(openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null })).resolves.toBe(socket);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(createEngine).toHaveBeenCalledWith(expect.any(Function), false);
+  } finally {
+    socket.close();
+    vi.unstubAllGlobals();
+  }
 });

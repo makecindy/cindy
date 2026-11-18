@@ -286,7 +286,7 @@ function install(state: State, route: Route): void {
     getToken: async () => { state.guard(); return 'agent-net-scoped-native'; },
     createWebSocket: async () => {
       const live = await liveFor(state, route), guard = () => { state.guard(); live.signer.assertCurrent(); };
-      const engine = await MobileAgentNetEngine.create({ ...live.native, udp: true }, guard);
+      const engine = await MobileAgentNetEngine.create({ ...live.native, udp: true, enhancedTransport: true }, guard);
       try {
         const socket = await AgentNetSocket.openWithBindings({ client: live.api, scoped: true, assertCurrent: guard,
           userId: getMobileAuthOwner().accountId, bindings: { verifyCertificate: verifyMobileAgentNetCertificate,

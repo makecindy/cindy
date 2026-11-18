@@ -209,10 +209,11 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
   // alongside the relay information below (at most 3 s, as the Desktop).
   const listing = official && !membership.hasDeviceList()
     ? Promise.race([membership.prime(), new Promise<void>(resolve => { setTimeout(resolve, 3_000); })]) : null;
-  const udpServer = await relayUdpServer(identity.api.base, guard); guard();
+  const udpServer = preferences.enabled ? await relayUdpServer(identity.api.base, guard) : null;
+  guard();
   if (listing) { await listing; guard(); }
   if (official) membership.noteDirectory(cachedDirectory.map(view => ({ deviceId: view.certificate.deviceId, online: false })));
-  const engine = await identity.newTransportEngine(guard);
+  const engine = await identity.newTransportEngine(guard, preferences.enabled);
   try {
     const socket = await AgentNetSocket.openWithBindings({
       client: identity.api, assertCurrent: guard, userId: owner.accountId,
@@ -232,7 +233,7 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
         verifyDelegation: verifyMobileAgentNetDelegation,
         notify: (recipient, payload, signal) => sendMobileAgentNetNotification(identity, recipient, payload, signal, guard),
         createTransport: transport => NativeTransport.create(engine, { ...transport,
-          ...(udpServer ? { stunServers: [udpServer], relayUdpServer: udpServer } : {}) }, addresses),
+          ...(udpServer ? { stunServers: [udpServer], relayUdpServer: udpServer } : {}) }, addresses, preferences.enabled),
         createDiscovery: discovery => mobileAgentNetDiscovery(discovery, identity.signer, guard,
           () => currentMobileAgentNetIdentity()?.signer ?? identity.signer),
       },
@@ -242,7 +243,7 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
     previous?.socket.close();
     peerConnectedAt.clear();
     if (official) socket.restrictPeers(membership.rule());
-    if (sessionConfig) socket.useSessions(sessionConfig);
+    if (preferences.enabled && sessionConfig) socket.useSessions(sessionConfig);
     let renewal: ReturnType<typeof setTimeout> | undefined, renewing = false;
     const schedule = (retry = false) => {
       if (renewal) clearTimeout(renewal);

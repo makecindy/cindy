@@ -67,7 +67,7 @@
   同步之前官方中继不给凭据，客户端照旧走 WebSocket。官方中继的 UDP 若经独立的负载均衡（`stunHost`），
   同一设备的 UDP 包必须落到持有它 WebSocket 会话的那台中继实例上，否则登记查不到会话、一直走 WebSocket；
   地址凭证的中继进程密钥每个实例各自生成，所以一台设备的登记也必须一直落到同一实例。
-- **未覆盖**：Mobile 的原生传输与 `portableClient` 尚未带请求头、不处理这些包，仍走 WebSocket；要和原生库一起冷更。
+- **手机**：显式开启 Agent-Net 且支持 UDP 转发的原生库可以使用中转 UDP。存量原生包仍走 WebSocket。
 - **包长**：上行、下行在核心的包外分别加 41、25 字节（`UDP_RELAY_UP_OVERHEAD`、`UDP_RELAY_DOWN_OVERHEAD`；第 1 版上行是 33）。
   Desktop 按这个余量把核心的发包上限算成 `1350 - 41` = 1309 字节，经中转的 UDP 载荷不超过 1350，隧道里不再被拆片；
   见 [Agent-Net 发包上限与收包上限分开](agent-net-send-packet-size.md)。
@@ -86,6 +86,6 @@ UDP port as well」（访客经 UDP 越权被断开）；`packages/agent-net/src
 **手机（2026-11-18）。** 原生库在 `packages/agent-net-native/src/udp_paths.rs` 实现同一套登记、确认、上下行与退回（时间与 `relayUdp.ts`
 一致，中转地址在单独的线程里解析、不卡住收发），上行包也带防重放计数器、超过 1350 字节的照旧走 WebSocket。凭据由
 `PortableAgentNetClient` 和 Node 客户端一样只在 TLS（或本机）上要，`agentNetRuntime.ts` 读中转的 `/api/agent-net/info` 拿 UDP 地址
-（同一中转 10 分钟内只读一次，读不到沿用上次的）。旧安装包的原生库没有这项，照旧全走 WebSocket。中转协议没变，不递增 `RELAY_VERSION`。
+（成功读取后，同一中转 10 分钟内复用结果，读不到沿用上次的）。旧安装包的原生库没有这项，照旧全走 WebSocket。中转协议没变，不递增 `RELAY_VERSION`。
 回归：`native.integration.test.ts`「carries sessions on the real native engine, relays them over UDP, ...」（1 MB 结果经 WebSocket 的不到
 256 KB；不下发凭据时失败）。

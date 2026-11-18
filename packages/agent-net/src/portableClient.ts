@@ -51,6 +51,7 @@ export interface BinarySocket {
   close(): void;
 }
 export interface PortableClientOptions {
+  relayUdpEnabled?(): boolean;
   assertCurrent(): void;
   sha256(data: Uint8Array): string;
   /** MD5 digest bytes. With it the client offers direct media transfer (Content-MD5 binds each stored chunk). */
@@ -314,7 +315,7 @@ export class PortableAgentNetClient implements SocketClient {
   async connect(): Promise<SocketUplink> {
     const path = this.path('/ws'), header = await this.header('GET', path);
     this.options.assertCurrent();
-    const url = this.base.replace(/^http/, 'ws') + path, askUdp = udpCredentialsAllowed(url);
+    const url = this.base.replace(/^http/, 'ws') + path, askUdp = this.options.relayUdpEnabled?.() === true && udpCredentialsAllowed(url);
     const ws = this.options.createWebSocket(url, { authorization: header, ...(askUdp ? { [UDP_RELAY_HEADER]: UDP_RELAY_VERSION } : {}) });
     ws.binaryType = 'arraybuffer';
     return PortableUplink.open(ws, this, askUdp);

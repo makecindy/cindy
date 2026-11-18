@@ -434,7 +434,7 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
   hello(host);
   for (const build of ['current', 'older'] as const) {
     const peer = new NativePeer();
-    await peer.call({ seed, context, deviceId: member.deviceId }, 'create');
+    await peer.call({ seed, context, deviceId: member.deviceId, enhancedTransport: build === 'current' }, 'create');
     const newOps: string[] = [];
     // An installed binary from before this change: no `features`, and the operations it lacks fail as unknown.
     const port: NativeEnginePort = build === 'current' ? { command: value => peer.call(value), destroy: () => peer.destroy() } : {
@@ -448,7 +448,7 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
       }, destroy: () => peer.destroy() };
     const api = new PortableAgentNetClient(relay.url, { identity: member, random: () => peer.call({ op: 'random' }),
       sign: text => peer.call({ op: 'sign', text }) }, certificate, bootstrap.rootPublicKey, {
-      assertCurrent() {}, verifyCertificate, verifyDelegation,
+      assertCurrent() {}, verifyCertificate, verifyDelegation, relayUdpEnabled: () => true,
       sha256: data => createHash('sha256').update(data).digest('base64url'),
       createWebSocket: (url, headers) => new WebSocket(url, { headers }) as unknown as BinarySocket,
     });

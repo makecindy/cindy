@@ -458,6 +458,7 @@ Agent-Net，没有改动。真机复验（同一个 XD 账号的两台电脑与 
   `packages/agent-net/src/session/`（连同删设备规则 `membership.ts`），Desktop、Node Host 与手机共用；手机的原生连接补上会话通道，
   同账号与共享任务（受邀者）都走会话，文件字节也走会话；原生库换成和 Desktop 一样的发包上限、窗口与发送缓冲，补上中转 UDP、
   STUN 与按流积压；换网时通知 Agent-Net；只认 Device Link 设备列表里的设备。旧安装包的原生库配新 JS 照样走会话，只是没有中转 UDP 与 STUN。
+  上述能力仅随手机的 Agent-Net 开关启用。开关关闭时，只支持 Agent-Net 的自建中转仍沿用原有连接。
   真实原生库的集成测试与手机单元测试通过；iOS、Android 的原生包这台电脑编不了，真机（前后台、锁屏、换网、耗电）都还没测。
 迁完之前，旧版对端与没开 Agent-Net 的设备一律走 Device Link 的帧。
 
