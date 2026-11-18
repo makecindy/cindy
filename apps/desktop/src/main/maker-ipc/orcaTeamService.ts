@@ -684,10 +684,8 @@ interface WorkerTurnLedger {
   structuredReport?: OrcaStructuredWorkerReport;
   /** 已按六态映射过的那份回报（引用比较）；同轮后续新结论仍要逐条映射。 */
   appliedReport?: OrcaStructuredWorkerReport;
-  /** 本轮真实终态；晚到回报按它映射，避免覆盖 error。 */
+  /** 本轮真实终态；晚到回报按它映射，避免覆盖 error。 有值即代表终态已观测。 */
   terminalStatus?: 'done' | 'error';
-  /** 真实终态是否已观测。 */
-  terminalObserved?: boolean;
 }
 
 /** 结论已入账（且非 progress）：同轮迟到的 progress 只能当遥测，不得覆盖结论。 */
@@ -2776,12 +2774,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               const entry = directTurnOutcomes.get(params.sessionId);
               if (entry && entry.turnGeneration === capture.turnGeneration) {
                 entry.terminalStatus = params.status;
-                entry.terminalObserved = true;
               } else {
                 directTurnOutcomes.set(params.sessionId, {
                   turnGeneration: capture.turnGeneration,
                   terminalStatus: params.status,
-                  terminalObserved: true,
                 });
               }
             }
@@ -2811,7 +2807,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           // 结构化回报的六态映射只在一处做（applyWorkerReportState）；已映射过的
           // （终态先到、回报后到时由回报侧补映射）不再覆盖。无结构化回报时保持旧路径。
           if (state) state.terminalStatus = params.status;
-          const structured = state && state.appliedReport !== state.structuredReport && state.structuredReport?.state !== 'progress'
+          const structured = state && state.structuredReport && !ledgerConclusionMapped(state, state.structuredReport)
+            && state.structuredReport.state !== 'progress'
             ? state.structuredReport
             : undefined;
           if (state && structured) {
@@ -2832,12 +2829,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
                 const entry = directTurnOutcomes.get(params.sessionId);
                 if (entry && entry.turnGeneration === capture.turnGeneration) {
                   entry.terminalStatus = params.status;
-                  entry.terminalObserved = true;
                 } else {
                   directTurnOutcomes.set(params.sessionId, {
                     turnGeneration: capture.turnGeneration,
                     terminalStatus: params.status,
-                    terminalObserved: true,
                   });
                 }
               }
