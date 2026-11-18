@@ -141,6 +141,7 @@ import {
   listPiSubagentRunDirectoryIds,
   listPiSubagentRuns,
   scanPiSubagentRuns,
+  readPiSubagentVisionUsage,
   PI_SUBAGENT_ACTIVE_POLL_MS,
   PI_SUBAGENT_IDLE_POLL_MS,
   piSubagentRunRoot,
@@ -4620,25 +4621,36 @@ export class PiAgent extends BaseAgent {
         if (key.startsWith(prefix)) piSubagentApprovalDecisions.delete(key);
       }
     };
-    const observePiSubagentVision = (status: PiSubagentRunStatus): void => {
-      // Durable children can finish between polls. Their private receipts survive in
-      // status, independently of approvals and assistant/main-model usage.
+    const visionUsageOffsets = new Map<string, number>();
+    const observePiSubagentVision = async (status: PiSubagentRunStatus): Promise<void> => {
+      // Durable children can finish between polls. Their private spool survives
+      // independently of approvals and assistant/main-model usage.
       if (visionUsage && status.runtimeOwnerId === subagentRuntimeOwnerId && status.parentSessionId === sid) {
+        const observe = (payload: unknown): void => {
+          if (!payload || typeof payload !== 'object') return;
+          const id = (payload as { requestId?: unknown }).requestId;
+          if (typeof id !== 'string' || observedVisionRequests.has(id)) return;
+          observedVisionRequests.add(id);
+          void visionUsage?.observe(payload).catch(() => {
+            this.deps.logger.warn('pi child vision usage could not be recorded');
+          });
+        };
+        // Accept embedded facts from runners spawned before the spool change.
         for (const task of status.tasks) {
           for (const payload of Array.isArray(task.visionUsage) ? task.visionUsage : []) {
-            if (!payload || typeof payload !== 'object') continue;
-            const id = (payload as { requestId?: unknown }).requestId;
-            if (typeof id !== 'string' || observedVisionRequests.has(id)) continue;
-            observedVisionRequests.add(id);
-            void visionUsage?.observe(payload).catch(() => {
-              this.deps.logger.warn('pi child vision usage could not be recorded');
-            });
+            observe(payload);
           }
+        }
+        try {
+          const offset = await readPiSubagentVisionUsage(subagentRunRoot, status.runId,
+            visionUsageOffsets.get(status.runId) ?? 0, observe);
+          visionUsageOffsets.set(status.runId, offset);
+        } catch {
+          this.deps.logger.warn('pi child vision usage could not be read');
         }
       }
     };
     const emitPiSubagentStatus = (status: PiSubagentRunStatus): void => {
-      observePiSubagentVision(status);
       const taskId = status.taskId;
       const projectedStatus = status.state === 'queued' ? 'running' : status.state;
       if (isPiSubagentTerminal(status.state)) clearPiSubagentApprovalState(status.runId);
@@ -5237,7 +5249,7 @@ export class PiAgent extends BaseAgent {
           onRead: visionUsage ? observePiSubagentVision : undefined,
         })) {
           if (closed) break;
-          observePiSubagentVision(status);
+          await observePiSubagentVision(status);
           seenRunIds.add(status.runId);
           const previous = piSubagentStatuses.get(status.taskId);
           if (previous && (previous.startedAt > status.startedAt
@@ -5615,7 +5627,7 @@ export class PiAgent extends BaseAgent {
               let readable = 0;
               const activeStatuses: PiSubagentRunStatus[] = [];
               for await (const status of scanPiSubagentRuns(subagentRunRoot)) {
-                observePiSubagentVision(status);
+                await observePiSubagentVision(status);
                 readable++;
                 if (!isPiSubagentTerminal(status.state)) activeStatuses.push(status);
               }
@@ -8644,7 +8656,7 @@ export class PiAgent extends BaseAgent {
           await stopDetachedSubagentRunsForAccountBoundary();
           if (visionUsage) {
             try {
-              for await (const status of scanPiSubagentRuns(subagentRunRoot)) observePiSubagentVision(status);
+              for await (const status of scanPiSubagentRuns(subagentRunRoot)) await observePiSubagentVision(status);
             } catch { /* Preserve teardown if the optional durable usage read fails. */ }
             finally { visionBoundaryDrained = true; closeVisionUsageIfStopped(); }
           }

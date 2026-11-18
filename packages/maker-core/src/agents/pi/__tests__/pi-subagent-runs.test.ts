@@ -14,6 +14,7 @@ import {
   listPiSubagentRunDiagnostics,
   listPiSubagentRuns,
   scanPiSubagentRuns,
+  readPiSubagentVisionUsage,
   acquirePiSubagentLaunchFence,
   clearStalePiSubagentLaunchFence,
   piSubagentLaunchFenceArtifact,
@@ -210,6 +211,30 @@ afterEach(async () => {
 });
 
 describe('PI durable subagent run store', () => {
+  it('reads a vision spool larger than the status limit incrementally without hiding results', async () => {
+    const root = await makeRoot();
+    const run = status('123e4567-e89b-42d3-a456-4266141740ab', { state: 'completed' });
+    await writeStatus(root, run);
+    const file = path.join(root, run.runId, 'vision-usage.jsonl');
+    const packet = (i: number) => JSON.stringify({ requestId: `${i.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111`, backendRole: 'primary', model: 'm'.repeat(200), usage: { prompt_tokens: i } });
+    const lines = Array.from({ length: 10_000 }, (_, i) => packet(i) + '\n').join('');
+    expect(Buffer.byteLength(lines)).toBeGreaterThan(2 * 1024 * 1024);
+    const tail = packet(10_000);
+    await writeFile(file, lines + tail.slice(0, 20));
+    let count = 0;
+    const offset = await readPiSubagentVisionUsage(root, run.runId, 0, () => { count++; });
+    expect(count).toBe(10_000);
+    expect(offset).toBe(Buffer.byteLength(lines));
+    expect(await readPiSubagentVisionUsage(root, run.runId, offset, () => { count++; })).toBe(offset);
+    expect(count).toBe(10_000);
+    await appendFile(file, tail.slice(20) + '\n' + 'x'.repeat(20_000) + '\n' + packet(10_001) + '\n');
+    const received: unknown[] = [];
+    const end = await readPiSubagentVisionUsage(root, run.runId, offset, value => received.push(value));
+    expect(received).toEqual([JSON.parse(tail), JSON.parse(packet(10_001))]);
+    expect(end).toBe(Buffer.byteLength(await readFile(file)));
+    expect((await listPiSubagentRuns(root)).map(value => value.runId)).toEqual([run.runId]);
+    await expect(readPiSubagentVisionUsage(root, '../outside', 0, () => { throw new Error('unsafe'); })).resolves.toBe(0);
+  });
   it('selects only the newest generation of a logical task before delivering historical payloads', async () => {
     const root = await makeRoot();
     const older = status('123e4567-e89b-42d3-a456-4266141740ab', {
@@ -222,7 +247,7 @@ describe('PI durable subagent run store', () => {
     await writeStatus(root, newer);
     const discovered = [];
     const observed: string[] = [];
-    for await (const run of scanPiSubagentRuns(root, { latestPerTask: true, onRead: run => observed.push(run.runId) })) discovered.push(run);
+    for await (const run of scanPiSubagentRuns(root, { latestPerTask: true, onRead: run => { observed.push(run.runId); } })) discovered.push(run);
     expect(discovered.map((run) => run.runId)).toEqual([newer.runId]);
     expect(observed.sort()).toEqual([older.runId, newer.runId].sort());
   });

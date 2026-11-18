@@ -869,10 +869,63 @@ export function isPiSubagentTerminal(state: PiSubagentRunState): boolean {
 export const PI_SUBAGENT_ACTIVE_POLL_MS = 500;
 export const PI_SUBAGENT_IDLE_POLL_MS = 2_000;
 
+/** Stream only complete private receipts appended since the previous poll. */
+export async function readPiSubagentVisionUsage(
+  root: string,
+  runId: string,
+  offset: number,
+  observe: (payload: unknown) => void,
+): Promise<number> {
+  if (!RUN_DIR_RE.test(runId)) return offset;
+  const file = path.join(root, runId, 'vision-usage.jsonl');
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    const entry = await fs.lstat(file);
+    if (entry.isSymbolicLink() || !entry.isFile()) return offset;
+    handle = await fs.open(file, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return offset;
+    throw error;
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) return offset;
+    let position = offset > stat.size ? 0 : offset;
+    let settled = position;
+    let pending = Buffer.alloc(0);
+    let oversized = false;
+    const buffer = Buffer.alloc(8192);
+    while (position < stat.size) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, stat.size - position), position);
+      if (!bytesRead) break;
+      let start = 0;
+      for (let i = 0; i < bytesRead; i++) {
+        if (buffer[i] !== 10) continue;
+        const part = buffer.subarray(start, i);
+        if (!oversized && pending.length + part.length <= 16 * 1024) {
+          const line = Buffer.concat([pending, part]).toString('utf8');
+          let payload: unknown;
+          try { payload = JSON.parse(line); } catch { /* Ignore incomplete/invalid facts. */ }
+          if (payload !== undefined) observe(payload);
+        }
+        pending = Buffer.alloc(0);
+        oversized = false;
+        settled = position + i + 1;
+        start = i + 1;
+      }
+      const tail = buffer.subarray(start, bytesRead);
+      if (!oversized && pending.length + tail.length <= 16 * 1024) pending = Buffer.concat([pending, tail]);
+      else { pending = Buffer.alloc(0); oversized = true; }
+      position += bytesRead;
+    }
+    return settled;
+  } finally { await handle.close(); }
+}
+
 /** Background polling consumes one bounded status at a time, not Promise.all(history). */
 export async function* scanPiSubagentRuns(
   root: string,
-  options: { latestPerTask?: boolean; onRead?: (status: PiSubagentRunStatus) => void } = {},
+  options: { latestPerTask?: boolean; onRead?: (status: PiSubagentRunStatus) => void | Promise<void> } = {},
 ): AsyncGenerator<PiSubagentRunStatus> {
   if (options.latestPerTask) {
     // Directory order is not generation order. Select using small identities
@@ -909,7 +962,7 @@ export async function* scanPiSubagentRuns(
     } catch { continue; }
     if (status && !await isPiSubagentRunStaleAsync(status, Date.now())) {
       // Accounting can observe all generations without exposing old results or approvals.
-      options.onRead?.(status);
+      await options.onRead?.(status);
       yield status;
     }
   }

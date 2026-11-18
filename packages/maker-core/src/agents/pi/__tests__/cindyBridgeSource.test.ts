@@ -3031,21 +3031,23 @@ describe('private Pi vision metering', () => {
     expect(await bridge(fetcher).describePiVisionWithFallback('/image.png', 'describe', () => { throw new Error('observer unavailable'); })).toBe('description');
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
-  it('retains a fast durable child receipt in status without leaking it to transcript or approvals', () => {
+  it('spools durable child receipts without growing status, transcript or approval payloads', () => {
     const ast = ts.createSourceFile('runner.js', CINDY_SUBAGENT_RUNNER_SOURCE, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
     let fn: ts.Node | undefined;
     const visit = (node: ts.Node) => { if (ts.isFunctionDeclaration(node) && node.name?.text === 'handleLine') fn = node; ts.forEachChild(node, visit); };
     visit(ast); expect(fn).toBeDefined();
-    const task = { visionUsage: [] as unknown[], pendingApprovals: [] };
+    const task = { pendingApprovals: [] };
+    const spool = vi.fn();
     const append = vi.fn(); const scheduleStatus = vi.fn();
     const handleLine = runInNewContext(fn!.getText(ast) + ';handleLine;', { task, state: {},
       childEnv: { CINDY_PI_VISION_BRIDGE: JSON.stringify({ usageToken: 'runtime-token' }) },
       cacheInputTracker: { observe() {} }, safeAppendTranscript: append, scheduleStatus,
+      fs: { appendFileSync: spool }, path, config: { runDir: '/private-run' },
     }) as (line: string) => void;
     const payload = { requestId: '11111111-1111-4111-8111-111111111111', backendRole: 'primary', usage: { prompt_tokens: 10 } };
     handleLine(JSON.stringify({ type: 'extension_ui_request', method: 'notify', message: 'cindy:pi-vision-usage:runtime-token:' + JSON.stringify(payload) }));
     handleLine(JSON.stringify({ type: 'extension_ui_request', method: 'notify', message: 'cindy:pi-vision-usage:wrong-token:' + JSON.stringify(payload) }));
-    expect(JSON.parse(JSON.stringify(task.visionUsage))).toEqual([payload]);
-    expect(task.pendingApprovals).toEqual([]); expect(append).not.toHaveBeenCalled(); expect(scheduleStatus).toHaveBeenCalledOnce();
+    expect(spool).toHaveBeenCalledExactlyOnceWith(path.join('/private-run', 'vision-usage.jsonl'), JSON.stringify(payload) + '\n', { encoding: 'utf8', mode: 0o600 });
+    expect(task).toEqual({ pendingApprovals: [] }); expect(append).not.toHaveBeenCalled(); expect(scheduleStatus).not.toHaveBeenCalled();
   });
 });

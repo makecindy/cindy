@@ -1237,8 +1237,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     let visible = false;
     vi.spyOn(piSubagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* (_root, options) {
       if (!visible) return;
-      options?.onRead?.(first);
-      options?.onRead?.(latest);
+      await options?.onRead?.(first);
+      await options?.onRead?.(latest);
       if (!options?.latestPerTask) yield first;
       yield latest;
     });
@@ -1253,8 +1253,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     visible = true;
     try {
       await pollUntil(() => expect(observe).toHaveBeenCalledTimes(2));
+      await pollUntil(() => expect(JSON.stringify(updates)).toContain(latest.title));
       expect(JSON.stringify(updates)).not.toContain(first.title);
-      expect(JSON.stringify(updates)).toContain(latest.title);
     }
     finally { await closeWithoutPolls(handle.close()); }
     expect(observe.mock.calls.map(([value]) => (value as { requestId: string }).requestId).sort()).toEqual(['first', 'latest']);
@@ -1270,7 +1270,10 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await closeWithoutPolls(handle.close({ reason: 'navigation' }));
     expect(close).not.toHaveBeenCalled();
     const receipt = { requestId: '11111111-1111-4111-8111-111111111111', backendRole: 'primary', usage: { prompt_tokens: 100, completion_tokens: 2 } };
-    list.mockResolvedValue([{ ...run, state: 'completed', endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed', pendingApproval: undefined, visionUsage: [receipt] })) }]);
+    const runDir = path.join(piSubagentRuns.piSubagentRunRoot(agentHome, opts().sessionId), run.runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, 'vision-usage.jsonl'), JSON.stringify(receipt) + '\n');
+    list.mockResolvedValue([{ ...run, state: 'completed', endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed', pendingApproval: undefined })) }]);
     await pollUntil(() => expect(close).toHaveBeenCalledOnce());
     expect(observe).toHaveBeenCalledExactlyOnceWith(receipt);
   });

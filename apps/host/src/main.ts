@@ -46,6 +46,7 @@ import { openSystemBrowser, openHostBrowser } from './browser-open.mjs';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.js';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
 import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
+import { waitForRetainedDbClient } from '../../desktop/src/main/localDb/client/pendingOperations.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { touchUserSendRow } from '../../desktop/src/main/localDb/sessionQueries.ts';
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
@@ -542,7 +543,11 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   setCurrentDbClient(client, ownerId);
   activeOwner = ownerId;
   await reconcileDeletedTaskViewState(client, () => activeOwner === ownerId);
-  closeStorage = async () => { clearCurrentDbClient(client); await client.dispose(); };
+  closeStorage = async () => {
+    clearCurrentDbClient(client);
+    await waitForRetainedDbClient(client);
+    await client.dispose();
+  };
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();
   // Desktop runs this repair once the account DB is ready (bootstrap-electron.ts):

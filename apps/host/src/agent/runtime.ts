@@ -769,6 +769,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           registerAgentProcess(pid, kind, role, sessionId),
         ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
+        createPiVisionUsageRecorder,
         // As the desktop (pi-host.ts): the cloud-file startup hint and the extension dialog strings.
         formatPiStartupCloudFileHint: (file) => t('logic.errors.piStartupCloudFile').replace('{{path}}', () => file),
         getPiExtensionUiStrings: () => ({
@@ -790,7 +791,6 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           },
         }),
         // Only for Pi models the vision bridge targets (layer C), as on the desktop.
-        createPiVisionUsageRecorder,
         resolvePiVisionBridgeEnv: visionBridge.resolvePiVisionBridgeEnv,
       })
     : null;
