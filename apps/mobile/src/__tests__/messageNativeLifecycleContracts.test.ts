@@ -318,11 +318,13 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     const selectableTextSource = readFileSync(resolve(process.cwd(), 'src/session/MarkdownSelectableText.tsx'), 'utf8');
     expect(selectableTextSource).toContain("from 'react-native-uitextview'");
     expect(selectableTextSource).toContain('function MarkdownSelectableText({');
-    expect(selectableTextSource).toContain("if (selectable && allowIosUITextView && Platform.OS === 'ios') {");
+    // #10103: native paragraph layout also covers non-selectable streaming text;
+    // selection itself remains controlled by selectable and the completed state.
+    expect(selectableTextSource).toContain("if ((selectable || paragraphLayout) && allowIosUITextView && Platform.OS === 'ios') {");
     expect(selectableTextSource).toContain('uiTextView');
     expect(selectableTextSource).toContain('function MarkdownSelectableSpan(');
     expect(source).toContain('const SpanText = ctx.SpanText ?? MessageBodyText;');
-    expect(markdownBodySource).toContain('blockSelectable && allowIosUITextView && Platform.OS === \'ios\'');
+    expect(markdownBodySource).toContain('(blockSelectable || paragraphLayout) && (allowIosUITextView || paragraphLayout) && Platform.OS === \'ios\'');
 
     // 气泡不抢占正文的原生选字或表格、代码块横向滚动手势。
     expect(bubbleSource).not.toContain('<Pressable');

@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
 import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
@@ -28,6 +29,7 @@ import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
+import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -110,18 +112,24 @@ function botTaskDispatchSlice(): string {
     '\n  setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);',
   );
   const groupDispatch = slice(
-    '({ targetSessionId, message, persistedContent, autoReviewUserText, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>',
+    '({ targetSessionId, message, persistedContent, autoReviewUserText, origin, clientId, attachments, toolsDisabled, resumeWithStoredPermissionMode, assertDispatchCurrent, onQueued, onAccepted }) =>',
     ',\n    prepareAttachments:',
     registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
   );
+  const pluginSource = slice('function hostPluginInputSource()', '  const sessionControlService = createSessionControlService(');
+  const sendToSession = slice('sendToSession: async (params) => {', ',\n    enableOrca: enableOrcaInternal,')
+    .replace('sendToSession:', 'const sendToSession =');
   return ts.transpileModule(
     `${sendWithBaseline}
 ${sendToSessionInternal}
 ${dispatchBotSessionMessage}
+${pluginSource}
+${sendToSession};
 // Host-originated input to a teammate task (cloud room, group delivery) resumes with its stored mode.
 const delegationDispatch = (params) => dispatchBotSessionMessage({ ...params, resumeWithStoredPermissionMode: true });
 const groupDispatch = ${groupDispatch};
-return { delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal };`,
+return { delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal, sendToSession,
+enqueueGroupMessage: ${slice('async function enqueueSendToSessionMessage(params: {', '\n  async function buildSessionControlInputItem(')} };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
   ).outputText;
 }
@@ -132,7 +140,9 @@ const loadBotTaskDispatch = new Function(
   'scope',
   `with (scope) { return (function () { ${botTaskDispatchSlice()} })(); }`,
 ) as (scope: object) => {
+  enqueueGroupMessage: (input: Record<string, unknown>) => Promise<void>;
   sendToSessionInternal: (input: Record<string, unknown>) => ReturnType<GhostAgentTurnRunnerDeps['send']>;
+  sendToSession: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   groupDispatch: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   dispatchBotSessionMessage: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   delegationDispatch: (
@@ -179,6 +189,12 @@ function botTaskDispatchHarness(
     limit: async () => [],
   };
   const stubs: Record<string, unknown> = {
+    getPluginHostToolCaller: () => undefined,
+    sanitizeSourceName,
+    getInstalledGhostName: () => 'Dashboard',
+    captureDataOwnerBroadcastScope: () => ({}),
+    isDataOwnerBroadcastScopeCurrent: () => true,
+    classifySessionMessagePurpose: async () => ({}),
     touchSessionActivityInDb,
     assertCindyMakeSessionAvailable: noop,
     readSessionSource: asyncNoop,
@@ -246,6 +262,7 @@ function botTaskDispatchHarness(
     commitAgentIslandUserPrompt: noop,
     rollbackAgentIslandUserPrompt: noop,
     createDbMessage: asyncNoop,
+    persistUserTurnMessage: asyncNoop,
     runAcceptedCallback: async (callback?: () => unknown) => {
       await callback?.();
     },
@@ -281,6 +298,24 @@ function botTaskDispatchHarness(
   });
   return { ...loadBotTaskDispatch(scope), scope: stubs, bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
 }
+
+// Unit/guard: execute the same service closure as Agent tools. A plugin has no task to
+// impersonate; its approved input carries one Host source for both saved labels and model notes.
+it('stamps plugin Host input without a dispatcher task and preserves target permissions', async () => {
+  const enqueue = vi.fn(async (_input: Record<string, unknown>) => undefined);
+  const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: true } }, {}, {
+    getPluginHostToolCaller: () => ({ caller: { kind: 'plugin', pluginId: 'dashboard' } }),
+    inputCoordinator: { ensureQueueRestored: async () => {}, shouldQueueNewTurn: () => true },
+    enqueueSendToSessionMessage: enqueue,
+  });
+  expect(await h.sendToSession({ targetSessionId: 'child', message: 'Continue the report' })).toMatchObject({ ok: true, wakeKind: 'queued' });
+  const queued = enqueue.mock.calls[0]?.[0] as unknown as { sourcePlugin: { pluginId: string }; dispatcherSessionId?: string; dbRow: { permissionMode: string }; autoReviewUserText: unknown };
+  expect(queued.sourcePlugin).toEqual({ pluginId: 'dashboard', name: 'Dashboard' });
+  expect(queued.dispatcherSessionId).toBeUndefined();
+  expect(queued.dbRow.permissionMode).toBe('ask');
+  expect(buildMessageSourceNote(messageSourceSenderFromMeta({ sourcePlugin: queued.sourcePlugin }))).toContain('dashboard');
+  expect(h.bootstrapped).toEqual([]);
+});
 
 // #9489 review: the runner admitted remote tasks but omitted the cold-resume
 // policy. Existing tests supplied that policy themselves, hiding the escalation.
@@ -413,7 +448,7 @@ describe('external handoff to hidden group lanes', () => {
       live ? { child: { id: 'child', agentKind: 'codex' } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
         botSessionLinks: links,
-        syncBotLanePermission: sync, createDbMessage: persist,
+        syncBotLanePermission: sync, persistUserTurnMessage: persist,
       });
     return { ...h, sync, persist, accepted };
   }
@@ -513,7 +548,7 @@ describe('companion internal delivery after automation', () => {
       path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active', hasRecyclableProjectResourceDrift: () => false } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
         isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
-        createDbMessage: async () => { shadowed = true; },
+        persistUserTurnMessage: async () => { shadowed = true; },
       });
     expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Late cloud input' }))
       .toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'shadowed' });
@@ -659,7 +694,57 @@ describe('idle forwarded request authorization', () => {
   });
 });
 
+// #10631 review, integration tier: stop can win during asynchronous input building.
+// Execute the real group adapter and both enqueue paths; late onAccepted is too late.
+describe('group dispatch cancellation during preparation', () => {
+  it.each([false, true])('never enqueues a stopped execution (attachments=%s)', async attachments => {
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const preparing = new Promise<void>(resolve => { started = resolve; });
+    const enqueue = vi.fn();
+    let current = true;
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'ask', planModeEnabled: false } }, {}, {
+      path,
+      inputCoordinator: { shouldQueueNewTurn: () => false, ensureQueueRestored: async () => {}, enqueue },
+      buildSessionControlInputItem: async (input: Record<string, unknown>) => {
+        started(); await gate; return { ...input, createOpts: {} };
+      },
+      orcaInterAgentDispatcher: { registerQueuedOrcaInterAgentAcceptedCallback: vi.fn() },
+    });
+    h.scope.enqueueSendToSessionMessage = h.enqueueGroupMessage;
+    const dispatch = h.groupDispatch({ targetSessionId: 'child', clientId: 'bot-group:stopped',
+      message: 'Cancelled group request', persistedContent: 'Cancelled group request',
+      assertDispatchCurrent: () => { if (!current) throw new Error('STALE_EXECUTOR'); },
+      onAccepted: vi.fn(),
+      ...(attachments ? { attachments: [{ id: 'file', name: 'note.txt', path: '/fixture/note.txt', category: 'document', size: 1 }] } : {}),
+    }).catch(error => ({ ok: false, message: String(error) }));
+    await preparing;
+    current = false; release();
+    expect(await dispatch).toMatchObject({ ok: false });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(h.sentTo).toEqual([]);
+  });
+});
+
 describe('stored-mode Host dispatch keeps the persisted permission and Plan', () => {
+  // PR #10271 / Greptile, guard: sendToSessionInternal kept the old provider snapshot after
+  // account recovery changed the persisted source. Execute the real dispatch closure: a legacy
+  // source becomes OpenAI, lazy bootstrap must use it without changing this entry's permission policy.
+  it.each([true, false])('uses the recovered source for lazy bootstrap (stored permission=%s)', async storedMode => {
+    const row = { permissionMode: 'ask', planModeEnabled: false, providerId: 'openai-old' };
+    const readRecovered = vi.fn(async () => ({ ...row, status: 'active', title: 'child', userSendAt: null, sdkSessionId: null }));
+    const h = botTaskDispatchHarness({ child: row }, {}, {
+      prepareUnhealthySessionForSend: vi.fn(async () => { row.providerId = 'openai'; return true; }),
+      getSessionRowSnapshotStrict: readRecovered,
+    });
+    const result = await h.sendToSessionInternal({ targetSessionId: 'child', message: 'Continue',
+      clientId: 'recovered-source', resumeWithStoredPermissionMode: storedMode });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(h.bootstrapped).toEqual([expect.objectContaining({ providerId: 'openai',
+      resumeSessionId: undefined, permissionMode: storedMode ? 'ask' : 'bypassPermissions' })]);
+    expect(readRecovered).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['auto', false, 'auto'],
     ['ask', false, 'ask'],
@@ -765,5 +850,46 @@ describe('queued cold start keeps the persisted Plan', () => {
     };
     await reconcile('child', co);
     expect(co).toMatchObject({ permissionMode: 'auto', planMode: planModeEnabled });
+  });
+});
+
+// #10692, guard-tier wiring: the real shared send preparation must pass the same
+// read-only canonical history resolver as startup and retain the durable rebuild.
+// Runtime tests cover allocation; this protects ordinary/retry/lazy Host consumers
+// from silently omitting the injected resolver in register.ts's large closure.
+describe('unbound Codex pre-send history wiring', () => {
+  it('resolves history through the host and completes the original recovery before cancelling the usage wait', async () => {
+    const start = registerSource.indexOf('export async function prepareUnhealthySessionForSend(');
+    const end = registerSource.indexOf('let runtimePluginBudgetClearer:', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const body = ts.transpileModule(registerSource.slice(start, end).replace('export ', ''), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const order: string[] = [];
+    const assertCurrent = vi.fn();
+    const history = vi.fn(async () => ({ historyHome: 'original-home' }));
+    const rebuild = vi.fn(async (_id: string, check: () => void) => { check(); order.push('durable-handoff'); });
+    const cancelUsageLimitWait = vi.fn(() => { order.push('cancel-wait'); });
+    const failover = vi.fn();
+    const prepare = vi.fn(async (id: string, deps: {
+      resolveCodexHistoryHome(thread: string): Promise<string | undefined>;
+      rebuild(id: string, check: () => void): Promise<void>;
+    }) => {
+      expect(await deps.resolveCodexHistoryHome('legacy-thread')).toBe('original-home');
+      await deps.rebuild(id, assertCurrent);
+      return true;
+    });
+    const ports = { subscriptionAccountRecoveryDeps: { rebuild },
+      readCodexThreadStorageReadOnly: history,
+      prepareSubscriptionAccountForSend: prepare, prepareSubscriptionAccountFailover: failover,
+      agentInputCoordinatorHolder: { cancelUsageLimitWait }, contextOverflowRolloverHolder: undefined };
+    const run = new Function(...Object.keys(ports), `${body}; return prepareUnhealthySessionForSend;`)(...Object.values(ports));
+    expect(await run('old-task')).toBe(true);
+    expect(history).toHaveBeenCalledExactlyOnceWith('legacy-thread');
+    expect(rebuild).toHaveBeenCalledExactlyOnceWith('old-task', assertCurrent);
+    expect(cancelUsageLimitWait).toHaveBeenCalledExactlyOnceWith('old-task');
+    expect(order).toEqual(['durable-handoff', 'cancel-wait']);
+    expect(failover).not.toHaveBeenCalled();
   });
 });

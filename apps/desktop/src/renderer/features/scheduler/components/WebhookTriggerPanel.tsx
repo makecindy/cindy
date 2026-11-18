@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import type { Schedule } from '@cindy/maker-scheduler';
 import {
   DEFAULT_SCHEDULE_WEBHOOK_PRESET,
@@ -15,6 +16,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { WebhookAccountManager } from './WebhookAccountManager';
 import { webhookEventOptions } from '../lib/webhookEventOptions';
+import appI18n from 'i18next';
 
 type WebhookStatus = Awaited<ReturnType<typeof window.electronAPI.maker.schedule.webhookStatus>>;
 
@@ -77,6 +79,7 @@ function statusHint(status: NonNullable<WebhookStatus>): string | null {
   if (status.problem === 'suspended') return 'scheduler.webhook.suspended';
   if (status.problem === 'quota') return 'scheduler.webhook.quotaExhausted';
   if (status.problem === 'limit') return 'scheduler.webhook.endpointLimit';
+  if (status.problem === 'unsupported') return 'scheduler.webhook.unsupportedFormat';
   if (status.problem === 'failed') return 'scheduler.webhook.urlUnavailable';
   if (!status.url) return 'scheduler.webhook.preparing';
   if (!status.connected) return 'scheduler.webhook.offline';
@@ -90,7 +93,7 @@ const errorCode = (error: unknown): string =>
  * 任务详情里的接收地址与密钥。生成的密钥明文只留在这个组件的内存里，切换任务即消失；
  * 粘贴的密钥保存后立即清空输入框，不回显。
  */
-export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
+export function WebhookTriggerPanel({ schedule, connectionSetupVisible = true }: { schedule: Schedule; connectionSetupVisible?: boolean }) {
   const { t } = useTranslation();
   const confirmDialog = useOptionalConfirmDialog();
   const [status, setStatus] = useState<WebhookStatus>(null);
@@ -109,7 +112,8 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
   const source = schedule.webhookTrigger?.source;
   const preset = scheduleWebhookPreset(source?.preset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET);
   const senderName =
-    source?.preset === 'custom' || !preset ? t('scheduler.webhook.genericSender') : preset.label;
+    source?.preset === 'custom' || !preset ? t('scheduler.webhook.genericSender') : preset.id === 'github'
+      ? t('scheduler.editor.webhook.manualConnectionTitle') : preset.label;
   const secretField = preset?.secretField ?? 'Secret';
 
   useEffect(() => {
@@ -221,7 +225,7 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
   const receivedText = status
     ? status.lastReceivedAt
       ? t('scheduler.webhook.lastReceived', {
-          time: new Date(status.lastReceivedAt).toLocaleString(),
+          time: new Date(status.lastReceivedAt).toLocaleString(appI18n.language),
         })
       : t(
           !hint && status.connected && !needsSecret && schedule.status === 'active'
@@ -232,7 +236,7 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
   const summary = hint
     ? t(hint, {
         limit: status?.quotaLimit,
-        time: status?.quotaResetAt ? new Date(status.quotaResetAt).toLocaleString() : '',
+        time: status?.quotaResetAt ? new Date(status.quotaResetAt).toLocaleString(appI18n.language) : '',
       })
     : needsSecret
       ? t(
@@ -255,13 +259,14 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
   );
 
   if (source?.preset === 'github-app') {
-    const state = !status ? 'common.loading'
+    const state = !status ? 'ccAgent.common.loading'
       : schedule.status !== 'active' ? 'scheduler.editor.webhook.githubAppPaused'
       : status.receiver === 'signed-out' ? 'scheduler.webhook.signedOut'
       : status.connected ? 'scheduler.webhook.waitingEvent' : 'scheduler.editor.webhook.githubAppHint';
     return <section className="mt-4 space-y-2 border-y border-[var(--border-default)] py-4 text-12 leading-relaxed text-[var(--text-secondary)]">
-      <h3 className="text-13 font-medium text-[var(--text-primary)]">GitHub App</h3>
+      <h3 className="text-13 font-medium text-[var(--text-primary)]">{t('scheduler.editor.webhook.cindyConnectionTitle')}</h3>
       <p role="status">{t(state)}</p>
+      {connectionSetupVisible && status && !status.connected && status.receiver !== 'signed-out' && schedule.status === 'active' && <GithubAppCard automation repositories={source.repositories} />}
       <p className="break-words">{source.repositories.join(', ')}</p>
       <p>{schedule.webhookTrigger?.events?.map(event => eventLabels.get(event) ?? event).join(', ')
         || t('scheduler.editor.webhook.eventPicker.all')}</p>
@@ -274,8 +279,10 @@ export function WebhookTriggerPanel({ schedule }: { schedule: Schedule }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-1">
           <h3 className="text-13 font-medium text-[var(--text-primary)]">
-            {t('scheduler.cell.tagWebhook')}{' '}
-            <span className="font-normal text-[var(--text-secondary)]">· {senderName}</span>
+            {preset?.id === 'github' ? senderName : <>
+              {t('scheduler.cell.tagWebhook')}{' '}
+              <span className="font-normal text-[var(--text-secondary)]">· {senderName}</span>
+            </>}
           </h3>
           {summary && <p role="status">{summary}</p>}
           {status && status.ignored > 0 && (

@@ -3,15 +3,17 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shared/ghost';
+import { type InstalledGhost } from '../../../../shared/ghost';
 import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 import type { UnifiedCommand } from '@/lib/slashCommands';
-import type { ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
+import { getProviderModelThinking, setProviderModelThinking } from '@/state/providerModelMemory';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
 import { ChatInput } from '../ChatInput';
+import { SessionSubscriptionAccountProvider } from '../SessionSubscriptionAccount';
 import * as providerMemory from '@/state/providerModelMemory';
 import * as draftMemory from '@/state/newMakerDraft';
 import { getEffortChangeCoordinator } from '../effortChangeQueue';
@@ -28,6 +30,8 @@ import {
 const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor: null as Editor | null, listening: false, stop: vi.fn().mockResolvedValue(undefined),
   cancel: vi.fn().mockResolvedValue(undefined),
   setModel: vi.fn(), selectModel: undefined as undefined | ((id: string) => Promise<void | boolean>), selectEffort: undefined as string | null | undefined, remoteProviders: [] as ProviderView[],
+  setThinkingEnabled: vi.fn(), selectThinking: undefined as undefined | ((enabled: boolean) => void | boolean | Promise<void | boolean>), thinkingValue: undefined as boolean | undefined,
+  switchSessionAgent: vi.fn(),
   localProviders: [] as ProviderView[],
   remoteStatus: 'ready' as 'ready' | 'loading' | 'error',
   sshCatalogHosts: [] as (string | null)[],
@@ -37,6 +41,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   ghosts: [] as InstalledGhost[],
   showPluginChoices: false,
   providerCall: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ updates: [] })),
+  subscriptionAccounts: undefined as undefined | { sessionAccount: ReturnType<typeof vi.fn>; onChanged: () => () => void },
 }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
@@ -63,10 +68,12 @@ vi.mock('@/components/sidebar/SortableList', () => ({
     </div>
   ),
 }));
-vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort, sshCodex }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null; sshCodex?: typeof h.sshCodex }) => {
+vi.mock('../ModelSelector', async (original) => ({ ...await original<typeof import('../ModelSelector')>(), ModelSelector: ({ modelId, onModelChange, disabled, effort, sshCodex, onThinkingChange, thinkingEnabled }: { modelId: string; onModelChange: typeof h.selectModel; disabled?: boolean; effort?: string | null; sshCodex?: typeof h.sshCodex; onThinkingChange?: typeof h.selectThinking; thinkingEnabled?: boolean }) => {
   h.sshCodex = sshCodex;
   h.selectModel = onModelChange;
   h.selectEffort = effort;
+  h.selectThinking = onThinkingChange;
+  h.thinkingValue = thinkingEnabled;
   return <button data-testid="model-selector" disabled={disabled}>{modelId}</button>;
 } }));
 vi.mock('@/hooks/useSshCodexProviders', () => ({ useSshCodexProviders: (hostId?: string | null) => {
@@ -106,6 +113,9 @@ const noOp = () => {};
 // External host services are inert; the editor, composer state, and send dispatch run unchanged.
 const api: typeof window.electronAPI = new Proxy({} as typeof window.electronAPI, { get: (_obj, key) => {
   if (key === 'setModel') return h.setModel;
+  if (key === 'setThinkingEnabled') return h.setThinkingEnabled;
+  if (key === 'switchSessionAgent') return h.switchSessionAgent;
+  if (key === 'subscriptionAccounts' && h.subscriptionAccounts) return h.subscriptionAccounts;
   if (key === 'mcpApps') return h.providerCall;
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
@@ -123,13 +133,75 @@ const attachments: ComponentProps<typeof ChatInput>['attachmentState'] = {
   removeFile: noOp, updateFile: noOp, discardFiles: noOp, clearFiles: noOp, restoreFiles: (files) => [...files],
 };
 beforeEach(() => { h.platform = 'darwin'; h.listening = false; h.processing = null; h.stop.mockClear(); h.cancel.mockClear(); h.selectEffort = undefined; window.electronAPI = api; vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} }); });
-afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); h.ghosts = []; h.showPluginChoices = false; h.providerCall.mockReset(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); clearDraft('queue-shortcut'); clearPromptRecommendationSession('queue-shortcut'); h.remoteProviders = []; h.localProviders = []; h.remoteStatus = 'ready'; h.sshCatalogHosts = []; h.sshCodex = undefined; h.setModel.mockReset(); h.confirm.mockReset(); h.ghosts = []; h.showPluginChoices = false; h.providerCall.mockReset(); h.subscriptionAccounts = undefined; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const props = {
   sessionId: 'loading-test', initialWorkingDir: '/workspace', runtimeAgentKind: 'codex' as const,
   vendorKey: 'codex' as const, deviceLinkDeviceId: 'test-host', attachmentState: attachments,
   hideRuntimeControls: true, showFolderPicker: false, disableAutofocus: true,
 };
+
+afterEach(() => {
+  h.setThinkingEnabled.mockReset();
+  h.switchSessionAgent.mockReset();
+  h.selectThinking = undefined;
+  makerChatStore.clearAgentSwitchIntent('thinking-write-test');
+});
+
+// #10434, unit: the picker-only failure fixture used a successful-write-first
+// callback. Exercise the real composer's callback with a rejected Pi host write.
+it('confirms a thinking preference only after the real session write succeeds', async () => {
+  h.localProviders = [{ ...buildUserProvider({ id: 'mimo-thinking-test', name: 'MiMo', runtimes: { pi: {
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat',
+    models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }],
+  } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }), connected: true }];
+  setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true);
+  let reject!: (error: Error) => void;
+  h.setThinkingEnabled.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+  const view = render(<ChatInput {...props} sessionId="thinking-write-test" deviceLinkDeviceId={null}
+    runtimeAgentKind="pi" vendorKey="pi" hideRuntimeControls={false}
+    initialModel="mimo-v2.6-pro" initialProviderId="mimo-thinking-test" onSend={vi.fn()} />);
+  await waitFor(() => expect(h.selectThinking).toBeTypeOf('function'));
+  let failed!: Promise<void | boolean>;
+  await act(async () => { failed = Promise.resolve(h.selectThinking!(false)); });
+  expect(h.setThinkingEnabled).toHaveBeenCalledWith('thinking-write-test', false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(true);
+  await act(async () => {
+    const checked = expect(failed).rejects.toThrow('host rejected thinking');
+    reject(new Error('host rejected thinking'));
+    await checked;
+  });
+  expect(h.thinkingValue).toBe(true);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(true);
+  h.setThinkingEnabled.mockResolvedValueOnce(undefined);
+  await act(async () => { await h.selectThinking!(false); });
+  expect(h.thinkingValue).toBe(false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
+  // A staged route changes only that intent; rejection must not fall through
+  // to the old runtime or confirm a new global preference.
+  await act(async () => {
+    makerChatStore.noteAgentSwitchIntent('thinking-write-test', 'pi', {
+      model: 'mimo-v2.6-pro', providerId: 'mimo-thinking-test',
+    });
+  });
+  h.switchSessionAgent.mockRejectedValueOnce(new Error('intent rejected thinking'));
+  // #10445 review, unit: a rejected staged write must report failure to the
+  // real picker's reset transaction, not just leave memory unchanged locally.
+  await act(async () => { expect(await h.selectThinking!(true)).toBe(false); });
+  expect(h.switchSessionAgent).toHaveBeenCalled();
+  expect(h.setThinkingEnabled).toHaveBeenCalledTimes(2);
+  expect(h.thinkingValue).toBe(false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
+  view.rerender(<ChatInput {...props} sessionId="thinking-write-test" deviceLinkDeviceId={null}
+    runtimeAgentKind="pi" vendorKey="pi" hideRuntimeControls={false} settingsLocked
+    initialModel="mimo-v2.6-pro" initialProviderId="mimo-thinking-test" onSend={vi.fn()} />);
+  h.switchSessionAgent.mockClear();
+  await act(async () => { expect(await h.selectThinking!(true)).toBe(false); });
+  expect(h.switchSessionAgent).not.toHaveBeenCalled();
+  expect(h.thinkingValue).toBe(false);
+  expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
+  await act(async () => { setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true); });
+});
 
 // New completion contract through the real editor/selection entry. The panel is
 // replaced only to select a returned candidate. Existing parser/bridge tests do
@@ -145,7 +217,7 @@ it.each([['@', ''], ['/', ''], ['@', 'suffix'], ['/', 'suffix']] as const)('inse
         ui: { resources: [], tools: { lookup: { visibility: ['app'] } } },
         host: { contributions: [{ id: 'lookup', title: 'Reference', position: 'composer.completion', tool: 'lookup', trigger }] },
       } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); h.ghosts = [ghost];
+  h.ghosts = [ghost];
   h.providerCall.mockResolvedValue({ structuredContent: { items: [{ id: 'one', label: 'Reference', insertText: '<b>plain</b>' }] } });
   render(<PluginUiProvider><ChatInput {...props} sessionId={`completion-${trigger}`} deviceLinkDeviceId={null} onSend={vi.fn()} /></PluginUiProvider>);
   await act(async () => { h.editor!.commands.setContent(`<p>${trigger}ab${suffix}</p>`); h.editor!.commands.setTextSelection(4); });
@@ -216,6 +288,47 @@ it.each([false, undefined])('keeps disconnected ordinary sessions blocked withou
   expect((send as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(send);
   expect(onSend).not.toHaveBeenCalled();
+});
+
+// 2026-11-14 regression (subscription-account-pools.md 旧版直接加入账号池的账号也拆开 / 任务跟着账号走), unit:
+// splitting the old pool left the built-in OpenAI with only a signed-out default login, so the real
+// composer disabled Send for old tasks bound to a split-out account. Goes through the task-account
+// read and its reply parser; the helper table in sourceSwitch.test.ts covers every other guard.
+// Minimal input: built-in source disconnected with no models, task account ready in its own provider.
+it.each([
+  ['ready', false],
+  ['signed-out', true],
+] as const)('lets an old built-in task follow its split-out %s account', async (status, blocked) => {
+  const model = 'gpt-6';
+  h.localProviders = [
+    { ...sshNativeCodexProvider([]), connected: false },
+    { ...sshNativeCodexProvider([sshModel(model)]), id: 'openai-sub-1a2b3c4d' },
+  ];
+  const sessionAccount = vi.fn(async () => ({ providerId: 'openai', state: 'bound', account: {
+    isDefault: false, number: 1, paused: false, status, ownerProviderId: 'openai-sub-1a2b3c4d',
+  } }));
+  h.subscriptionAccounts = { sessionAccount, onChanged: () => noOp };
+  const onSend = vi.fn().mockResolvedValue(true);
+  const route = { agentKind: 'codex' as const, model, providerId: 'openai', effort: null, fastMode: false };
+  render(
+    <SessionSubscriptionAccountProvider providerId="openai" deviceId={null} sessionId={`split-${status}`} nativeSessionId="native-old">
+      <ChatInput {...props} sessionId={`split-${status}`} deviceLinkDeviceId={null} initialModel={model}
+        initialProviderId="openai" runtimeEffective={route} onSend={onSend} />
+    </SessionSubscriptionAccountProvider>,
+  );
+  await act(async () => { h.editor!.commands.setContent('<p>Continue on my account</p>'); });
+  await waitFor(() => expect(sessionAccount).toHaveBeenCalled());
+  const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
+  await waitFor(() => expect(send.disabled).toBe(blocked));
+  await act(async () => { fireEvent.click(send); });
+  if (blocked) {
+    expect(onSend).not.toHaveBeenCalled();
+    return;
+  }
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  // Sending keeps the task's own source; main resumes it on the bound account.
+  expect(onSend.mock.calls[0][6]).toMatchObject({ providerId: 'openai' });
+  expect(h.confirm).not.toHaveBeenCalled();
 });
 
 it('does not use baseline recovery to bypass a pending selection source check', async () => {
@@ -389,7 +502,6 @@ it.each(queueShortcuts)('sends the visible recommendation ahead of a queued mess
 
 function QueueEditHarness({
   onCancel,
-  onRemove,
   onSubmit = async () => true,
   onStartVoiceConversation,
 }: {
@@ -442,8 +554,11 @@ it('sends a remote-only Codex model when the controller has no connected provide
   h.remoteProviders = [sshNativeCodexProvider([sshModel('remote-only')])];
   const onSend = vi.fn().mockResolvedValue(true);
   const view = render(<ChatInput {...props} sessionId="ssh-send" deviceLinkDeviceId={null} remoteHostId="builder"
-    initialModel="remote-only" initialProviderId="openai" initialEffort="low" onSend={onSend} />);
-  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+    initialModel="remote-only" initialProviderId="openai" initialEffort="low" placeholder="Message" onSend={onSend} />);
+  // Unit, Windows real-device regression: the composer was a nameless Group,
+  // so UIA could not write it. Use the real editable's accessible role/name in
+  // this existing send test; native ValuePattern is verified on the device.
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy());
   await act(async () => { h.editor!.commands.setContent('<p>Hello remote</p>'); });
   const send = screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement;
   expect(send.disabled).toBe(false);
@@ -451,6 +566,29 @@ it('sends a remote-only Codex model when the controller has no connected provide
   await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
   expect(onSend.mock.calls[0][1]).toBe('remote-only');
   expect(onSend.mock.calls[0][6]).toEqual(expect.objectContaining({ providerId: 'openai' }));
+});
+
+// #10084, unit through real ChatInput: a new task routed by a model group or plugin picks its own
+// model at send time, so the draft model having no connected source must not grey out Send or
+// stop Enter. Without a router the same draft stays blocked. The send callback rechecks the kept model.
+it.each([
+  ['model group', true, { modelGroups: { config: { routes: [] }, active: { type: 'route', id: 'r1' }, onSelect: noOp, onManage: noOp } }],
+  ['plugin model', true, { pluginModels: { models: [], active: { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' }, onSelect: noOp } }],
+  ['no router', false, {}],
+] as const)('new task with %s and a draft model without a connected source can send: %s', async (_name, sends, router) => {
+  const onSend = vi.fn().mockResolvedValue(true);
+  const view = render(<ChatInput {...props} sessionId={undefined} deviceLinkDeviceId={null}
+    initialModel="draft-only" initialEffort="low" onSend={onSend}
+    {...(router as Partial<ComponentProps<typeof ChatInput>>)} />);
+  await waitFor(() => expect(view.container.querySelector('[contenteditable]')).not.toBeNull());
+  await act(async () => { h.editor!.commands.setContent('<p>Route me</p>'); });
+  expect((screen.getByRole('button', { name: 'newChat.sendButton.send' }) as HTMLButtonElement).disabled).toBe(!sends);
+  await act(async () => {
+    fireEvent.keyDown(view.container.querySelector('[contenteditable]')!, { key: 'Enter', code: 'Enter' });
+  });
+  if (!sends) return expect(onSend).not.toHaveBeenCalled();
+  await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  expect(h.confirm).not.toHaveBeenCalled();
 });
 
 // 回归：投影 effort 为 null（目录误判/不可调档）时选择器回落会话已持久化档位，
@@ -728,24 +866,17 @@ it.each([320, 480, 800])('preserves the model slot across hydration (width=%s)',
   const view = render(<ChatInput {...inputProps} />);
   const slot = view.container.querySelector('[data-session-model-slot]') as HTMLElement;
   expect(slot).not.toBeNull();
-  const geometry = slot.className;
+  const sendButton = screen.getByRole('button', { name: 'newChat.sendButton.send' });
   expect(slot.textContent).toBe('');
   expect(slot.querySelector('button, [tabindex]')).toBeNull();
   expect(screen.queryByTestId('model-selector')).toBeNull();
   view.rerender(<ChatInput {...inputProps} initialModel="gpt-6-astra" />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBe(slot);
-  if (narrowToolbar) {
-    expect(slot.className).toBe(geometry);
-  } else {
-    // Loaded wide toolbars must not inherit the loading placeholder's width.
-    expect(slot.classList.contains('w-[148px]')).toBe(false);
-    expect(slot.classList.contains('h-[30px]')).toBe(true);
-    expect(slot.classList.contains('min-w-0')).toBe(true);
-  }
+  expect(screen.getByRole('button', { name: 'newChat.sendButton.send' })).toBe(sendButton);
   expect(slot.contains(screen.getByTestId('model-selector'))).toBe(true);
   view.rerender(<ChatInput {...inputProps} />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBe(slot);
-  expect(slot.className).toBe(geometry);
+  expect(screen.getByRole('button', { name: 'newChat.sendButton.send' })).toBe(sendButton);
   expect(slot.textContent).toBe('');
   view.rerender(<ChatInput {...inputProps} hideRuntimeControls />);
   expect(view.container.querySelector('[data-session-model-slot]')).toBeNull();

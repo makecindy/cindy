@@ -27,7 +27,8 @@ export default {
   stubs: {
     // Rich component bodies read account context, but sign-in is not under test.
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
-    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice input is not covered by this fixture"); };',
+    // The group voice hook resolves its URL on render; capture is not exercised.
+    'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return ""; }',
     // The file preview pulls in pdf.js' and draw.io's workers through Vite's ?url, which the single-page builder does not implement; no group case opens a file.
     'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
   },
@@ -35,8 +36,18 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Account sign-in, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state/topic-preview cases and is otherwise an empty frame',
   cases: {
+    'topic-preview': { about: 'Sidebar source label and independent group/reply targets, exact reply highlight and repeat navigation',
+      viewport: { width: 1000, height: 700 }, data: { ...base, name: 'Cindy 讨论', bubbles: true, topicPreview: true } },
+    'reply-composer': {
+      about: 'Real thread reply composer with microphone and editable draft at narrow width',
+      viewport: { width: 420, height: 600 },
+      data: { ...base, sidebar: false, replyComposer: true },
+    },
+    'public-cindy': { about: 'Public Cindy work remains visible to a peer without private process or stop access',
+      data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, workState: 'unknown', canStop: false } },
+
     'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
     'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
     'plan-read-missing': { about: '#9398: a confirmed missing plan has a neutral visible fallback', data: { ...base, sidebar: false, messages: 1, planRead: 'missing' } },
@@ -69,7 +80,10 @@ export default {
     'work-unknown': { about: 'Remote work with no readable task: generic activity, no invented thinking', data: { ...base, messages: 2, workState: 'unknown' } },
     'work-remote': { about: 'Authenticated remote target projection, scenario data (not a live device-link run)', data: { ...base, messages: 2, workState: 'testing', workRemote: true } },
     'work-parallel': { about: 'Two concurrent execution rows, separate task entries and one group stop', data: { ...base, messages: 2, workState: 'testing', workParallel: true } },
+    'work-requesters': { about: 'Cindy progress keeps each requester visible', data: { ...base, members: [{ botId: 'a', name: 'Cindy' }, { botId: 'b', name: 'Cindy' }], messages: 3, workState: 'testing', workParallel: true, workReadonly: true, workRequesterNames: ['nana', 'chris'] } },
+    'work-chronology': { about: 'Concurrent work follows request time; another requester remains read-only', data: { ...base, messages: 3, workState: 'testing', workParallel: true, workReadonly: true } },
     'work-parallel-stopping': { about: 'Last execution is stopping while the first still runs: the group stop control remains available', data: { ...base, messages: 2, workState: 'testing', workParallel: true, workLastStopping: true } },
+    'planning-foreign': { about: 'My local arrangement decision remains cancellable when its organizer belongs to someone else', data: { ...base, messages: 2, sidebar: false, planningForeign: true } },
     'body-answer': {
       about: '#6550: component body is readable; literal punctuation and surrounding Markdown are retained',
       viewport: { width: 720, height: 700 },
@@ -95,6 +109,10 @@ export default {
     'no-sidebar': { about: 'Collapsed sidebar layout', data: { ...base, sidebar: false } },
     bubbles: {
       about: 'Teammate bubbles: quote, corner reaction, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
+      data: { ...base, bubbles: true },
+    },
+    'reaction-colors': {
+      about: 'Color emoji retain full opacity in the reaction picker and badges in both themes',
       data: { ...base, bubbles: true },
     },
     arrangement: {
@@ -135,6 +153,9 @@ export default {
       about: 'Server read state: unread thread entries (with @you), the in-chat 话题 hint above the composer and its list of this group\'s Threads',
       data: { ...base, bubbles: true, threadUnread: true },
     },
+    'thread-work': { about: 'Concurrent topic work stays in its own thread', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true } },
+    'thread-work-no-stop': { about: 'Source topic retains public progress without unauthorized stop controls', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true, canStop: false } },
+    'thread-work-overflow': { about: 'Long topic work scrolls while reply composer stays visible', viewport: { width: 1280, height: 600 }, data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true, threadWorkTall: true } },
     'thread-follow': {
       about: 'The Thread panel\'s 关注 switch, off by default; switched on it reads 已关注',
       data: { ...base, bubbles: true, threadUnread: true, threadPanel: true },
@@ -181,6 +202,84 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'topic-preview') {
+      const row = page.locator('[data-bot-group-id="fixture-group"]');
+      const topic = row.getByRole('button', { name: new RegExp(await ui.t('bots.groupChat.server.thread.viewThread')) });
+      const group = row.getByRole('button', { name: 'Cindy 讨论', exact: true });
+      assert.equal(await row.locator('button button').count(), 0, 'independent native buttons');
+      const originalHeight = await row.evaluate(el => el.getBoundingClientRect().height);
+      const hitArea = await topic.evaluate(el => {
+        const bounds = el.getBoundingClientRect();
+        const title = el.closest('[data-bot-group-id]').querySelector('[title="Cindy 讨论"]').getBoundingClientRect();
+        return { height: bounds.height, separate: bounds.top >= title.bottom,
+          sourceFits: el.firstElementChild.getBoundingClientRect().right <= bounds.right };
+      });
+      assert.ok(hitArea.height >= 24 && hitArea.separate && hitArea.sourceFits, 'source fits; the reply target is at least 24px and does not overlap the group title');
+      await topic.click();
+      const reply = page.locator('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]');
+      await reply.waitFor();
+      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      await ui.capture('reply-located');
+      await reply.evaluate(el => el.classList.remove('ring-2'));
+      await topic.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      await group.click();
+      await reply.waitFor({ state: 'detached' });
+      assert.equal(await row.evaluate(el => el.getBoundingClientRect().height), originalHeight, 'row geometry stays stable');
+      await ui.capture('main-chat');
+      return;
+    }
+    if (definition.data.planningForeign) {
+      await page.getByTestId('bot-group-speaking').waitFor();
+      const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true });
+      await stop.waitFor();
+      assert.equal(await stop.isEnabled(), true, 'My local planning stays cancellable with a foreign organizer');
+      await ui.capture('planning');
+      return;
+    }
+    if (ui.case === 'reaction-colors') {
+      const row = page.locator('[data-bot-group-message-id="a2"]');
+      await row.hover();
+      await row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true }).click();
+      const picker = page.getByRole('dialog', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      await picker.waitFor();
+      await ui.capture('reaction-picker');
+      // Visual regression: translucent text ink also fades native color emoji.
+      // jsdom cannot paint color fonts; sample the actual computed ink alpha in Electron.
+      // Old code fails with tertiary alpha in the picker and primary alpha in badges.
+      const inkAlpha = element => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d');
+        context.fillStyle = getComputedStyle(element).color;
+        context.fillRect(0, 0, 1, 1);
+        return context.getImageData(0, 0, 1, 1).data[3];
+      };
+      const choice = picker.getByRole('button', { name: '👍', exact: true });
+      const glyph = choice.locator('span');
+      // Use the button itself in the pre-fix comparison, before the emoji span existed.
+      assert.equal(await ((await glyph.count()) ? glyph : choice).evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
+      await choice.hover();
+      await choice.focus();
+      assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');
+      await page.keyboard.press('Escape');
+      const badge = row.locator('[data-reaction-corner] button > span').first();
+      assert.equal(await badge.evaluate(inkAlpha), 255, 'reaction badges preserve emoji colors');
+      return;
+    }
+
+    if (ui.case === 'public-cindy') {
+      await page.getByTestId('bot-group-work').waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), 1);
+      assert.ok((await page.getByTestId('bot-group-work').innerText()).includes('Cindy'));
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true }).count(), 0);
+      await ui.capture('public-work');
+      return;
+    }
+
     if (definition.data.planRead) {
       const missing = page.getByText(await ui.t('bots.groupChat.plan.missing'), { exact: true });
       const organizer = page.getByText(await ui.t('bots.groupChat.organizer'), { exact: true });
@@ -375,6 +474,13 @@ export default {
         assert.ok(!(await strip.innerText()).includes(elapsed), 'unknown start time must not display elapsed time');
         const timeline = page.getByTestId('bot-group-timeline');
         await timeline.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).last().waitFor();
+      }
+      if (ui.case === 'work-chronology') {
+        const rows = page.getByTestId('bot-group-work');
+        assert.equal(await rows.count(), 2);
+        assert.equal(await rows.nth(1).getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0);
+        const order = await page.getByTestId('bot-group-timeline').evaluate(el => [...el.querySelectorAll('[data-testid="bot-group-work"], [data-bot-group-message-id]')].map(row => row.getAttribute('data-bot-group-message-id') ?? 'work'));
+        assert.ok(order.indexOf('work') < order.lastIndexOf('m2'), 'earlier live work precedes later messages');
       }
       if (ui.case === 'work-parallel-stopping') {
         const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
@@ -573,6 +679,13 @@ export default {
       return;
     }
     const input = page.locator('textarea');
+    if (ui.case === 'reply-composer') {
+      assert.equal(await page.locator('button[aria-pressed="false"]').count(), 1, 'microphone entry is visible');
+      await input.fill('A reply draft ready for dictation');
+      assert.equal(await input.inputValue(), 'A reply draft ready for dictation');
+      await ui.capture('reply-draft');
+      return;
+    }
     const chip = page.locator('[data-controlled-banner-chip]');
     const collapsedDot = page.locator('[data-controlled-banner="collapsed"]');
     const scroller = page.getByTestId('bot-group-timeline');
@@ -641,6 +754,52 @@ export default {
       // A queue waiting for 继续 takes a new request: the composer does not offer to revise the last answer.
       const placeholder = await input.getAttribute('placeholder');
       assert.ok(ui.case === 'arrangement' ? placeholder.includes('正在说') : !placeholder.includes('改改'), placeholder);
+      return;
+    }
+    if (['thread-work', 'thread-work-overflow', 'thread-work-no-stop'].includes(ui.case)) {
+      assert.equal(await page.getByTestId('bot-group-work').count(), 0, 'topic work must not appear in main');
+      const mainStop = page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true });
+      if (ui.case === 'thread-work-no-stop') assert.equal(await mainStop.count(), 0);
+      else await mainStop.waitFor();
+      await page.locator('[data-thread-preview="a1"]').first().click();
+      await page.getByTestId('bot-group-work').first().waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), ui.case === 'thread-work-overflow' ? 19 : 1, 'only the selected topic work');
+      if (ui.case === 'thread-work-no-stop') {
+        assert.equal(await page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0, 'topic respects group stop capability');
+      }
+      if (ui.case === 'thread-work') {
+        const order = await page.locator('aside.thread-panel').evaluate(panel => {
+          const first = panel.querySelector('[data-bot-group-message-id="r1"]');
+          const second = panel.querySelector('[data-bot-group-message-id="r2"]');
+          const work = panel.querySelector('[data-testid="bot-group-work"]');
+          return !!first && !!second && !!work && !!(first.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING)
+            && !!(work.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+        });
+        assert.ok(order, 'topic work retains its original timestamp between replies');
+        const stop = page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
+        await stop.click();
+        assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'mine');
+        assert.equal(await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopAll') }).count(), 0);
+      }
+      if (ui.case === 'thread-work-overflow') {
+        const panel = page.locator('aside.thread-panel');
+        const composer = panel.locator('textarea');
+        const geometry = await composer.evaluate(element => {
+          const panel = element.closest('aside');
+          const work = panel.querySelector('[data-testid="bot-group-work"]');
+          let scroller = work.parentElement;
+          while (scroller && getComputedStyle(scroller).overflowY !== 'auto') scroller = scroller.parentElement;
+          const bounds = panel.getBoundingClientRect(), input = element.getBoundingClientRect();
+          return { visible: input.top >= bounds.top && input.bottom <= bounds.bottom,
+            scrollable: !!scroller && scroller.scrollHeight > scroller.clientHeight };
+        });
+        assert.ok(geometry.visible, 'reply composer stays inside the fixed panel');
+        assert.ok(geometry.scrollable, 'long work has a reachable scroll range');
+        await panel.getByTestId('bot-group-work').last().scrollIntoViewIfNeeded();
+        await composer.fill('回复仍可输入');
+        assert.equal(await composer.inputValue(), '回复仍可输入');
+      }
+      await ui.capture('topic-work');
       return;
     }
     if (ui.case === 'thread-unread') {
@@ -825,11 +984,16 @@ export default {
         await action();
         assert.ok((await bottomGap()) < 1, `${step} keeps the thread pinned to the bottom`);
       }
-      const before = await scroller.evaluate((el) => {
-        el.scrollTop = 180;
-        el.dispatchEvent(new Event('scroll', { bubbles: true }));
-        return el.scrollTop;
+      // Use the reader's upward wheel gesture. A synthetic scroll after a
+      // banner resize can legitimately remain in automatic-follow mode.
+      const top = await scroller.evaluate((el) => el.scrollTop);
+      await scroller.hover();
+      await page.mouse.wheel(0, 180 - top);
+      await page.waitForFunction(() => {
+        const el = document.querySelector('[data-testid="bot-group-timeline"]');
+        return el && Math.abs(el.scrollTop - 180) < 1;
       });
+      const before = await scroller.evaluate((el) => el.scrollTop);
       for (const [step, action] of [
         ['connection', () => connect()],
         ['collapse', collapse],

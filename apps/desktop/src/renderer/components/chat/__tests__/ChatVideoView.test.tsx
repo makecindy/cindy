@@ -2,6 +2,7 @@
 // Tier 1: the production message player must expose inline transport controls,
 // recover from a failed source patch, and stop when its message leaves view.
 // Markdown renderer tests mock this component, so they cannot catch these bugs.
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -14,6 +15,7 @@ vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 let visibility: IntersectionObserverCallback;
 let observe: ReturnType<typeof vi.fn>;
 let pause: ReturnType<typeof vi.spyOn>;
+let load: ReturnType<typeof vi.spyOn>;
 const showModalDescriptor = Object.getOwnPropertyDescriptor(
   HTMLDialogElement.prototype,
   'showModal',
@@ -32,6 +34,8 @@ beforeEach(() => {
     },
   );
   pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  // jsdom 未实现 load();改成空实现,同时让用例能断言「源被摘掉后跑了加载算法」。
+  load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
 });
 afterEach(() => {
   cleanup();
@@ -277,4 +281,79 @@ it('saves the inline media through the host without opening the viewer', async (
   fireEvent.click(view.getByRole('button', { name: 'chat.media.saveAs' }));
   await vi.waitFor(() => expect(saveMediaAs).toHaveBeenCalledWith({ url: props.src }));
   expect(view.container.querySelectorAll('video')).toHaveLength(1);
+});
+
+// Regression #10062: a local video's audio kept playing on Windows after its
+// preview closed, so only the system mixer could stop it. Pausing is not
+// releasing — the element kept its source, and the pipeline outlived the DOM
+// node. Tier 1, minimum input: open one local video preview, click Close.
+it('releases the video source when the preview closes', () => {
+  const view = render(<VideoLightbox {...props} onClose={vi.fn()} />, {
+    wrapper: Tooltip.Provider,
+  });
+  const video = document.querySelector('video')!;
+  fireEvent.click(view.getByRole('button', { name: 'chat.lightbox.close' }));
+  expect(pause.mock.contexts).toContain(video);
+  expect(video.getAttribute('src')).toBeNull();
+  expect(load).toHaveBeenCalledOnce();
+});
+// Same defect, second exit path: a collection preview swaps or closes by
+// unmounting this component, which never runs its own close handler. Tier 1,
+// minimum input: one mounted preview, then unmount.
+it('releases the video source when a collection preview swaps it out', () => {
+  const view = render(<VideoLightbox {...props} onClose={vi.fn()} />, {
+    wrapper: Tooltip.Provider,
+  });
+  const video = document.querySelector('video')!;
+  view.unmount();
+  expect(video.getAttribute('src')).toBeNull();
+  expect(load).toHaveBeenCalledOnce();
+});
+// Releasing runs the load algorithm, which resets currentTime; the close
+// handler still owes the caller the position it closed at. Tier 1, minimum
+// input: play to 42s, close, let the fade timer fire.
+it('keeps the resume position when the source is released', () => {
+  vi.useFakeTimers();
+  try {
+    const onClose = vi.fn();
+    const view = render(<VideoLightbox {...props} onClose={onClose} />, {
+      wrapper: Tooltip.Provider,
+    });
+    const video = document.querySelector('video')!;
+    const played = { current: 42 };
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: () => played.current,
+      set: (value: number) => {
+        played.current = value;
+      },
+    });
+    // The spec resets the clock during the load algorithm a release triggers.
+    load.mockImplementation(() => {
+      played.current = 0;
+    });
+    fireEvent.click(view.getByRole('button', { name: 'chat.lightbox.close' }));
+    vi.advanceTimersByTime(200);
+    expect(onClose).toHaveBeenCalledWith(42);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Effect replay (StrictMode in dev, Fast Refresh in the app) runs the release
+// cleanup on the same DOM node without a remount. React does not write the
+// unchanged JSX src back, so the preview used to render an empty player.
+// Tier 1, minimum input: mount one preview under StrictMode.
+it('restores the source when React replays the release effect', () => {
+  const view = render(
+    <StrictMode>
+      <VideoLightbox {...props} onClose={vi.fn()} />
+    </StrictMode>,
+  );
+  const video = document.querySelector('video')!;
+  // The replay really ran the release, and the source came back with it.
+  expect(load).toHaveBeenCalledOnce();
+  expect(video.getAttribute('src')).toBe(props.src);
+  view.unmount();
+  expect(video.getAttribute('src')).toBeNull();
 });

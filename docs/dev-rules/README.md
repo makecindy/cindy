@@ -10,6 +10,7 @@
 | 主题 | 正文 |
 | --- | --- |
 | Desktop、Mobile、maker-core 模块内的触发条件 | [Desktop](../../apps/desktop/AGENTS.md)、[Mobile](../../apps/mobile/AGENTS.md)、[maker-core](../../packages/maker-core/AGENTS.md) 的嵌套 AGENTS.md；专题正文不在模块内重复 |
+| 改哪些文件要读哪些规则（由各规则文档开头的声明生成） | [规则索引](rule-index.md) |
 | 目录职责、按用户行为定位公共入口与测试、开发环境 | [仓库地图](repo-map.md)、[环境准备](environment-setup.md) |
 | 已发生过的任务体验回归、测试入口与运行命令 | [任务回归台账](session-regressions.md) |
 | Desktop 启动、重启与验证 | [桌面开发](desktop-development.md) |
@@ -29,7 +30,7 @@
 | 插件花名册、ghost 发现链、可见性与作者契约 | [渐进式发现](../ghost-progressive-discovery.md) |
 | 插件持久 Library、binding、迁移、回收站与面板投影 | [插件 Library](plugin-library-storage.md) |
 | 客户端自动更新 | [更新器与 owner 确认](cindy-updater.md) |
-| 日志、IPC 错误、main 业务、测试价值与性能预算、客户端读取／扫描、跨平台与 i18n、登记点与合并冲突 | [工程约定](engineering-conventions.md) |
+| 日志、IPC 错误、main 业务、测试价值与性能预算、客户端读取／扫描、变化通知后的刷新与界面写入、跨平台与 i18n、登记点与合并冲突 | [工程约定](engineering-conventions.md) |
 | 日志采集、脱敏、上报、行格式与崩溃标记 | [日志上报](log-upload-and-redaction.md) |
 | 本地协议包、插件分发来源、device-link、relay、wire protocol 与 allowlist | [协议兼容](protocol-compatibility.md) |
 | 服务器请求、订阅、同步、轮询与重试的调用方式、共享压力及缺陷审查 | [服务器通道调用审查](server-channel-review.md) |

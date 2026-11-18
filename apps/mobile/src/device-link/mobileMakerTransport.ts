@@ -1030,7 +1030,7 @@ export interface MobileOrcaCreateWorkerResult {
 }
 
 export type SessionMetaPatch = Partial<
-  Pick<RemoteSession, "status" | "title" | "pinnedAt">
+  Pick<RemoteSession, "status" | "title" | "pinnedAt" | "snoozedUntil">
 >;
 
 export const MOBILE_MAKER_CHANNELS = MOBILE_REMOTE_INVOKE_CHANNELS;

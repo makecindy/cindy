@@ -21,7 +21,7 @@
     "annotationSaveFailed": "Não foi possível guardar a anotação",
     "replacementPending": "O carregamento da última alteração a esta imagem ainda não terminou. Aguarde que termine, ou tente novamente ou remova-a acima do campo de introdução, e volte a editar.",
     "tryAgain": "Tente novamente.",
-    "sendToChat": "Enviar para a Conversa",
+    "sendToChat": "Enviar para a conversa",
     "save": "Guardar",
     "fileNotFound": "Ficheiro não encontrado",
     "pathNotReadable": "Não é possível ler este caminho",
@@ -33,7 +33,7 @@
     "mediaFetchCancelled": "Obtenção de conteúdo multimédia remoto cancelada",
     "fileMenu": {
       "openBrowser": "Abrir explorador de ficheiros",
-      "sendToSession": "Enviar para a Sessão",
+      "sendToSession": "Enviar para a sessão",
       "copyPath": "Copiar caminho",
       "quickPreview": "Pré-visualização rápida",
       "revealInBrowser": "Mostrar no explorador de ficheiros",

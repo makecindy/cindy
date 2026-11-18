@@ -26,11 +26,76 @@ export const REMOTE_VIEWER = {
   CHANNEL_REPLY: 'remote-desktop-viewer:channel-reply',
 } as const;
 
+/**
+ * A device screen shown inside an app window (a sidebar tab) rather than in its
+ * own viewer window. Main owns the target and lease exactly as for a viewer
+ * window; these channels only carry what a device screen needs.
+ */
+export const LIVE_SCREEN_EMBED = {
+  OPEN: 'live-screen-embed:open',
+  REQUEST: 'live-screen-embed:request',
+  ICE: 'live-screen-embed:ice',
+  CLOSE: 'live-screen-embed:close',
+  CHANNEL_REPLY: 'live-screen-embed:channel-reply',
+  ACTIVE: 'live-screen-embed:active',
+  CHANNEL_REQUEST: 'live-screen-embed:channel-request',
+} as const;
+export const LIVE_SCREEN_EMBED_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Preload bridge of the embedded device screen; `embedId` names one mounted panel. */
+export interface LiveScreenEmbedBridge {
+  /** Binds a new connection to this panel; any earlier one of the same id ends. */
+  open(embedId: string, target: RemoteViewerTarget): Promise<RemoteViewerState>;
+  request(
+    embedId: string,
+    generation: number,
+    request: RemoteDesktopRequest,
+    mediaAttempt?: string,
+  ): Promise<unknown>;
+  ice(embedId: string, generation: number, mediaAttempt: string): Promise<DesktopIceServer[]>;
+  close(embedId: string): Promise<void>;
+  channelReply(
+    embedId: string,
+    generation: number,
+    id: string,
+    outcome: RemoteViewerChannelOutcome,
+  ): Promise<void>;
+  /** Main ended the connection (account change, this computer locked or went to sleep). */
+  onActive(listener: (payload: { embedId: string; state: RemoteViewerState }) => void): () => void;
+  onChannelRequest(
+    listener: (payload: { embedId: string } & RemoteViewerChannelRequest) => void,
+  ): () => void;
+}
+
 export interface RemoteViewerTarget {
   deviceId: string;
   name: string;
   /** 代输入 live view: only the window this waiting request is about (the host picks it). */
   handoff?: string;
+  /**
+   * A plugin live screen (such as a simulator) from that computer's `screens`
+   * list: only that device's picture, with input going to the plugin. `name`
+   * is the listed name, shown until the host's lease confirms it.
+   */
+  screen?: RemoteViewerScreen;
+}
+export interface RemoteViewerScreen {
+  plugin: string;
+  pluginIdentity?: string;
+  id: string;
+  name?: string;
+}
+/** Two targets open the same viewer window only when they show the same thing. */
+export function sameViewerScope(
+  a: Pick<RemoteViewerTarget, 'deviceId' | 'handoff' | 'screen'> | null | undefined,
+  b: Pick<RemoteViewerTarget, 'deviceId' | 'handoff' | 'screen'>,
+): boolean {
+  return (
+    a?.deviceId === b.deviceId &&
+    a.handoff === b.handoff &&
+    a.screen?.plugin === b.screen?.plugin &&
+    a.screen?.pluginIdentity === b.screen?.pluginIdentity &&
+    a.screen?.id === b.screen?.id
+  );
 }
 export interface RemoteViewerState {
   target: RemoteViewerTarget | null;

@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
 import { eq } from 'drizzle-orm';
 
@@ -30,14 +31,17 @@ import {
   findSchedulerUsageLimitWait,
   getSessionLastUserActionAt,
   hasQueuedSchedulerPrompt,
+  hasPendingSchedulerTargetInput,
   isSchedulerAutoResumePending,
   isSchedulerPromptTracked,
+  releaseQueuedSchedulerPrompt,
   isSchedulerTargetSessionBusy,
   onSchedulerAutoResumeFailed,
   removeQueuedSchedulerPrompt,
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage } from './storage.desktop';
 import { MakerScheduleRunner } from './runner.desktop';
+import { captureScheduledOwnerGuard } from '../maker-ipc/scheduledSessionBootstrap.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { ScriptScheduleRunner } from './script-runner.desktop';
@@ -46,6 +50,10 @@ import { DesktopNotifier } from './notifier.desktop';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
 import { withTeammateHomeGuard } from './teammateHomeGuard.js';
+import { withQuietRunArchive } from './quietRunArchive.js';
+import { archiveQuietScheduledTarget, readScheduledTargetStatus } from './quietRunArchive.desktop.js';
+import { createLogger } from '../logger';
+import type { ScheduleRunner } from '@cindy/maker-scheduler';
 import { ownTeammateProjectState } from './ownTeammateProject.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { startScheduleWebhooks, stopScheduleWebhooks } from './webhook/runtime.js';
@@ -56,6 +64,8 @@ export interface StartSchedulerDeps extends SchedulerHostStartDeps {
   getMainWindow: () => BrowserWindow | null;
   feishuIm: FeishuIM;
 }
+
+const quietRunLog = createLogger('scheduler-host');
 
 const desktop = createSchedulerHost<StartSchedulerDeps>({
   createStorage: getDb => new DrizzleScheduleStorage(getDb),
@@ -118,10 +128,12 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
         getLastUserActionAt: getSessionLastUserActionAt,
         ensureQueueRestored: ensureSchedulerQueueRestored,
         isSessionBusy: isSchedulerTargetSessionBusy,
+        hasPendingInput: hasPendingSchedulerTargetInput,
         hasQueuedPrompt: hasQueuedSchedulerPrompt,
         enqueuePrompt: enqueueSchedulerPrompt,
         removeQueuedPrompt: removeQueuedSchedulerPrompt,
         isPromptTracked: isSchedulerPromptTracked,
+        releasePrompt: releaseQueuedSchedulerPrompt,
         isAutoResumePending: isSchedulerAutoResumePending,
         onAutoResumeFailed: onSchedulerAutoResumeFailed,
         cancelAutoResume: cancelSchedulerAutoResume,
@@ -139,8 +151,18 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     return { notifier, promptRunner, scriptRunner };
   },
   // A teammate's project automations run only on its main computer (handed away: skipped here).
-  wrapRunner: runner => withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
-  isOwnTeammateProject: async workingDir => (await ownTeammateProjectState(workingDir)) !== null,
+  captureFireContext: captureScheduledOwnerGuard,
+  // Quiet rounds return an archived target to archived (archive-pauses-automations.md).
+  wrapRunner: (runner): ScheduleRunner => withQuietRunArchive(
+    withTeammateHomeGuard(runner, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState),
+    {
+      targetStatus: readScheduledTargetStatus,
+      isRunSilenced: (runId): boolean => getSchedulerIfInitialized()?.isRunSilenced(runId) ?? false,
+      archiveIfUntouched: archiveQuietScheduledTarget,
+      warn: (message, meta) => quietRunLog.warn(message, meta),
+    },
+  ),
+  getTeammateProjectState: ownTeammateProjectState,
   isPassive: () => !app.isPackaged && process.env.XDT_SCHEDULER_PASSIVE === '1',
   dialogueWorkspaceRoots: () => dialogueWorkspaceRoots(),
   onStarted(scheduler, deps, passive) {

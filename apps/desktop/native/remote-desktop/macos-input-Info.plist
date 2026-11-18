@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Linked into cindy-macos-desktop-input (__TEXT,__info_plist) so the system's owner
+  verification prompt names Cindy instead of the executable
+  (docs/product-rules/privacy-screen.md). CFBundleIdentifier must stay equal to the
+  helper's existing code-signing identifier: changing it would change the identity that
+  Accessibility permission is granted to.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>cindy-macos-desktop-input</string>
+  <key>CFBundleName</key>
+  <string>Cindy</string>
+  <key>CFBundleDisplayName</key>
+  <string>Cindy</string>
+</dict>
+</plist>

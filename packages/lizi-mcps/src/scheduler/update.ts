@@ -41,6 +41,10 @@ export function registerScheduleUpdateTool(
         .describe('相对间隔毫秒。设置后优先于 cronExpr。省略 = 不修改（真 partial：只改 prompt / cronExpr 不会动它）；传 null = 清空，调度回到 cronExpr 壁钟槽位语义。'),
       timezone: z.string().min(1).optional(),
       recurring: z.boolean().optional(),
+      manual: z
+        .boolean()
+        .optional()
+        .describe('true=停止按时间触发并清空 nextFireAt，保留 cronExpr / intervalMs，仍可立即运行；已有 webhookTrigger 时仅由事件触发。false=按保存的 cronExpr / intervalMs 恢复定时；省略=不修改。适用于 agent 和 script。本机可与其它字段一起改；跨电脑请勿同时传 cronExpr、manual、notify（会与旧手机全量表单混淆），可单独修改 manual。'),
       agentKind: z.enum(AGENT_KIND).optional(),
       modelAgentKind: z.enum(AGENT_KIND).nullable().optional().describe('显式模型选择的引擎；null 清除覆盖'),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；省略不修改'),
@@ -147,6 +151,17 @@ export function registerScheduleUpdateTool(
     handler: async ({ id, bindToCurrentSession, device, ...patch }) => {
       const expected = deps.getApprovedScheduleGuard?.();
       if (!isLocalDevice(device)) {
+        // The target's legacy Mobile normalizers identify full forms by these
+        // three fields, clearing omitted interval/model settings. Keep MCP
+        // patches unambiguous even on old targets; never read/copy stale fields
+        // or split one requested write into multiple partially applied writes.
+        if (patch.cronExpr !== undefined && patch.manual !== undefined && patch.notify !== undefined) {
+          return buildJsonResult({
+            ok: false,
+            code: 'INVALID_PARAMS',
+            message: 'invalid request: 跨电脑更新不能同时传 cronExpr、manual、notify；目标电脑可能将其视为旧手机全量表单并清除未传的间隔或模型设置。请单独修改 manual，其它字段另行更新。',
+          }, true);
+        }
         // 对方电脑的 IPC 入口自己做校验与 hook 路径稳定化;这里只拦跨 JSON 边界
         // 表达不了、或只对本机有意义的写法,明确报错而不是写出与意图不符的任务。
         // 绑定任务 id 只在那台电脑上有效：带本设备前缀的去掉前缀，指向别的电脑的拒绝。

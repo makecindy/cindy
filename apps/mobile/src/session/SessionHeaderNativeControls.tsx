@@ -11,6 +11,7 @@ export interface SessionHeaderNativeTitleProps {
   onTitleDoubleTap?: () => void;
   tags?: import('@cindy/maker-shared').TaskTag[];
   title: string;
+  projectIcon?: import('react').ReactNode;
   pinned: boolean;
   syncing: boolean;
   syncingImmediately: boolean;
@@ -30,7 +31,7 @@ export interface SessionHeaderNativeActionsProps {
   desktopLabel: string;
   filesLabel: string;
   moreLabel: string;
-  files: SessionActionStripAction | undefined;
+  files: Pick<SessionActionStripAction, 'disabled' | 'disabledReason'> | undefined;
   onDetails(): void;
   onDesktop(): void;
   onAction(id: SessionActionStripAction["id"]): void;

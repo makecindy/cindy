@@ -37,6 +37,13 @@ const adviseAndRecordVoiceInputDictionaryLearningMock = vi.hoisted(() => vi.fn()
 vi.mock('../voice-input/index.js', () => ({
   adviseAndRecordVoiceInputDictionaryLearning: adviseAndRecordVoiceInputDictionaryLearningMock,
 }));
+// Admission of file blocks only: a test may hold the file peer's answer open; every other test reaches the real one.
+const filePeerOverride = vi.hoisted(() => ({ request: null as null | ((...args: unknown[]) => Promise<unknown>) }));
+vi.mock('../device-link/filePeer', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../device-link/filePeer')>();
+  return { ...actual, requestFilePeer: (...args: Parameters<typeof actual.requestFilePeer>) =>
+    (filePeerOverride.request ? filePeerOverride.request(...args) : actual.requestFilePeer(...args)) as ReturnType<typeof actual.requestFilePeer> };
+});
 
 import {
   markRemoteSettingPersistedInsideHandler,
@@ -519,6 +526,7 @@ import {
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
   pushSessionActivityToController,
+  remoteInvokeEpoch,
 } from '../device-link/dispatch.desktop';
 import {
   applyControllerDisplayNameDirectorySnapshot,
@@ -535,6 +543,7 @@ import {
 } from '@cindy/device-link';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
+import { SESSION_INVOKE_REPLAY } from '@cindy/agent-net';
 import { createGroupContinuityExecutor } from '../provider-group/continuityExecutor';
 import { deviceAccessGeneration, isControllerAccessAllowed, remoteControlAccessGeneration,
   syncRemoteControlAccessGeneration } from '../device-link/remoteControlAccess';
@@ -557,6 +566,7 @@ function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'on
       frameHandler = cb;
       return () => {};
     },
+    onInboundPeerReleased: () => () => {},
     sendLinkAccept: (dst: string, requestId: string) => calls.linkAccept.push({ dst, requestId }),
     closeLink: (dst: string, reason: string) => calls.closed.push({ dst, reason }),
     sendPush: (dst: string, channel: string, payload: unknown) => {
@@ -920,6 +930,88 @@ describe('被控端控制链路生命周期', () => {
     expect(denied).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: false }] } });
   });
 
+  // 2026-11-12：「让我的其他电脑用本机模型」默认关闭；只有用户在「远程连接」里打开后，自己的电脑才看到
+  // 没单独打开的供应商，「用本机模型」被关掉的那台仍看不到。
+  it('own computers see providers not opened one by one only after the 远程连接 switch is on', async () => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    registry.register('maker:provider:list', () => ({
+      providers: [{ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: false }],
+    }));
+    for (const src of ['ctrl-borrow', 'ctrl-no-models']) {
+      feed({ v: 1, kind: 'link-open', id: `open-${src}`, src, payload: { controllerName: src, protocolVersion: 1, appVersion: '2.0.0' } });
+    }
+    modelUseRevokedControllers = ['ctrl-no-models'];
+    let ownComputers = false;
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), ownComputerModelUseEnabled: () => ownComputers });
+    try {
+      expect(await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+      ownComputers = true;
+      expect(await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: true }] } });
+      expect(await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+      // PR #10150 review: a provider with a group keeps its own switch, so group member selection is not bypassed;
+      // a provider opened by the switch still reports its running count, which other groups use as its load.
+      registry.register('maker:provider:list', () => ({
+        providers: [
+          { id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: false },
+          { id: 'openai', name: 'OpenAI', remoteInvocationEnabled: false },
+        ],
+      }));
+      setProviderGroupRemoteHandler({
+        handle: vi.fn(),
+        decorateProviderList: (result) => ({ ...(result as object), providers: (result as { providers: Record<string, unknown>[] }).providers
+          .map((provider) => ({
+            ...provider,
+            ...(provider.id === 'anthropic' ? { group: { strategy: 'least', members: [] } } : {}),
+            ...(provider.remoteInvocationEnabled === true ? { runningTurns: 2 } : {}),
+          })) }),
+        sharedGroupSize: () => null,
+      });
+      const listed = await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] }) as { result: { providers: Record<string, unknown>[] } };
+      expect(listed.result.providers).toEqual([
+        expect.not.objectContaining({ runningTurns: expect.anything() }),
+        expect.objectContaining({ id: 'openai', remoteInvocationEnabled: true, runningTurns: 2 }),
+      ]);
+      expect(listed.result.providers[0]).toMatchObject({ id: 'anthropic', remoteInvocationEnabled: false });
+      // PR #10150 review: a computer whose 「用本机模型」 is off stays refused for a grouped provider opened one by one.
+      registry.register('maker:provider:list', () => ({
+        providers: [{ id: 'anthropic', name: 'Anthropic', remoteInvocationEnabled: true }],
+      }));
+      ownComputers = false;
+      expect(await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] }))
+        .toMatchObject({ ok: true, result: { providers: [{ id: 'anthropic', remoteInvocationEnabled: false }] } });
+    } finally { setRemoteAgentHandler(null); setProviderGroupRemoteHandler(null); }
+  });
+
+  // PR #10150 review: the pool alias was folded against the pool's original (closed) mark, so with the
+  // switch on a same-account computer saw the open pool and the folded old connection as two entries.
+  it.each(['openai', 'openai-sub-target'])('folds the old Codex connection into %s after the own-computer switch opens it', async target => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    registry.register('maker:provider:list', () => ({
+      providers: [
+        { id: target, name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: false },
+        { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: false, subscriptionPoolAlias: true,
+          ...(target === 'openai' ? {} : { subscriptionPoolTarget: target }) },
+      ],
+    }));
+    feed({ v: 1, kind: 'link-open', id: 'open-ctrl-alias', src: 'ctrl-alias', payload: { controllerName: 'ctrl-alias', protocolVersion: 1, appVersion: '2.0.0' } });
+    let ownComputers = false;
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), ownComputerModelUseEnabled: () => ownComputers });
+    const alias = async () => ((await runInvoke('ctrl-alias', { channel: 'maker:provider:list', args: [] })) as {
+      result: { providers: Record<string, unknown>[] } }).result.providers.find((provider) => provider.id === 'old-openai');
+    try {
+      expect((await alias())?.subscriptionPoolAlias).toBeUndefined();
+      expect((await alias())?.subscriptionPoolTarget).toBeUndefined();
+      ownComputers = true;
+      expect(await alias()).toMatchObject({ subscriptionPoolAlias: true,
+        ...(target === 'openai' ? {} : { subscriptionPoolTarget: target }) });
+    } finally { setRemoteAgentHandler(null); }
+  });
+
   it('link-open capability controls whether provider projection includes new logo kinds', async () => {
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
@@ -1019,6 +1111,51 @@ describe('被控端控制链路生命周期', () => {
       'ctrl-malformed-cap',
       'provider-logo-kinds-v2',
     )).toBe(false);
+  });
+
+  // 2026-11-17：Agent-Net 会话断了以后，控制端在重开的链路上比对这个标记再决定能不能用原请求号再发（agentNetSessionLinks.ts）。
+  // 普通断开（对方离线）时这里还记得它的请求，标记不变；永久关链、整体清空以后不记得了，标记必须变，否则再发会重复执行。
+  it('keeps the invoke memory marker across a disconnect and changes it once the memory is cleared', () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-epoch', SUB, ['session:s1'], 'E'));
+    const before = remoteInvokeEpoch('ctrl-epoch');
+    handleControllerOffline('ctrl-epoch');
+    expect(remoteInvokeEpoch('ctrl-epoch')).toBe(before);
+    feed({ v: 1, kind: 'link-close', src: 'ctrl-epoch', payload: { reason: 'user' } });
+    const afterClose = remoteInvokeEpoch('ctrl-epoch');
+    expect(afterClose).not.toBe(before);
+    dropAllControllers(client, 'toggle-off');
+    expect(remoteInvokeEpoch('ctrl-epoch')).not.toBe(afterClose);
+  });
+
+  // A bounded reply cache may evict the original write during an ordinary network interruption.
+  it('responds to a replay after cache eviction without running the accepted write again', async () => {
+    remoteControlEnabled = true;
+    const handler = vi.fn(() => ({ accepted: true }));
+    registry.register('maker:send', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const observedClient = client as { sendInvokeResult: (...args: [string, string, unknown]) => void };
+    const send = observedClient.sendInvokeResult;
+    let onResult: () => void;
+    observedClient.sendInvokeResult = (...args) => { send(...args); onResult(); };
+    const request = (frame: Envelope) => new Promise<void>((resolve) => { onResult = resolve; feed(frame); });
+    const payload = { channel: 'maker:send', args: ['s1', 'hello'] };
+    const original: Envelope = { v: 1, kind: 'invoke', id: 'original', src: 'ctrl-a', payload };
+    await request(original);
+    const resume = { ...original, payload: { ...payload, [SESSION_INVOKE_REPLAY]: true } };
+    await request(resume);
+    expect(handler).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 128; index++) {
+      await request({ ...original, src: 'ctrl-b', id: 'other-' + index });
+    }
+    await request(resume);
+    expect(calls.invokeResult.at(-1)).toMatchObject({
+      requestId: 'original', payload: { ok: false, error: { code: 'INVOKE_TIMEOUT' } },
+    });
+    expect(handler).toHaveBeenCalledTimes(129);
   });
 
   it('link-close clears remembered routing and queued pushes', () => {
@@ -1344,6 +1481,29 @@ describe('被控端控制链路生命周期', () => {
     } });
     await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({ dst: 'ctrl-a', requestId: 'list-late', payload: busy }));
     resolveList?.([]);
+  });
+
+  // 2026-11-17 review：经 Agent-Net 会话上传附件时一次在途 3 块、每块 1 MiB（base64 约 1.4 MB），第三块单独就超过每个控制端
+  // 4 MiB 的在途字节，整个上传因 BACKPRESSURE 失败。文件块另有一份字节额度；普通请求的字节上限不变。
+  it('会话上的文件块整窗在途时都被执行，不因每个控制端的字节上限被打回', async () => {
+    remoteControlEnabled = true;
+    const held: Array<() => void> = [];
+    filePeerOverride.request = () => new Promise((resolve) => { held.push(() => resolve('{"ok":true,"result":{}}')); });
+    try {
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      const body = 'A'.repeat(Math.ceil((1024 * 1024) / 3) * 4); // one 1 MiB block as base64
+      for (let index = 0; index < 3; index += 1) {
+        feed({ v: 1, kind: 'invoke', id: `block-${index}`, src: 'ctrl-a', payload: { channel: 'device-link:file-peer',
+          args: [{ action: 'stream-rpc', connection: '00000000-0000-4000-8000-000000000000', payload: `{"offset":${index}}`, body }] } });
+      }
+      await vi.waitFor(() => expect(held).toHaveLength(3));
+      expect(calls.invokeResult.filter((call) => (call.payload as { ok?: boolean }).ok === false)).toEqual([]);
+      for (const release of held) release();
+      await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(3));
+    } finally {
+      filePeerOverride.request = null;
+    }
   });
 
   it('sessions:list fresh 请求不并入已有 listing 单飞', async () => {

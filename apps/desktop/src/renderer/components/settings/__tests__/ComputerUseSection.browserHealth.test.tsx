@@ -621,4 +621,27 @@ describe('ComputerUseSection browser backend health loading', () => {
     expect(screen.getByText('settings.computerUse.browserBackend.userBrowserSetup.connectExtensionTitle')).toBeTruthy();
     expect(screen.queryByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle')).toBeNull();
   });
+
+  // 2026-11-16: without Chrome / Edge there is nowhere to add the extension, so My browser asks
+  // for Chrome first instead of sending the user to an extension store that cannot open.
+  it('asks for Chrome first when no browser for My browser is installed', async () => {
+    const openExtensionStore = vi.fn().mockResolvedValue({ ok: true });
+    Object.assign(window.electronAPI.browserBackend, { openExtensionStore });
+    api.getBackendState.mockResolvedValue({ active: 'user-browser' });
+    api.getBackendHealth.mockResolvedValue({
+      active: 'user-browser',
+      status: 'error',
+      reason: 'browser-missing',
+      canRecover: false,
+    });
+
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(
+      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.installBrowserTitle'),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.computerUse.browser.download' }));
+
+    expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://www.google.com/chrome/');
+    expect(openExtensionStore).not.toHaveBeenCalled();
+  });
 });

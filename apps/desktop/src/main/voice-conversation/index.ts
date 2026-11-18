@@ -8,7 +8,7 @@ import {
   type VoiceConversationPreference,
 } from '../../shared/voiceConversation.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
+import { readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
 import { getProviderSecretStore, readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -27,7 +27,7 @@ import type {
 } from '../../shared/voiceConversation.js';
 import { VoiceConversationService } from './service.js';
 import { SpeechError } from './speechError.js';
-import { resolveSpeechConnection, speechModels, type SpeechCatalogDeps } from './models.js';
+import { resolveSpeechConnection, resolveSpeechConnectionForRequest, speechModels, type SpeechCatalogDeps } from './models.js';
 import {
   companionVoicePreference,
   updateCompanionVoicePreference,
@@ -122,6 +122,7 @@ export function registerVoiceConversationIpc(deps: {
       visibilityOverride: getModelVisibilityOverride,
       readKey: readCustomProviderKey,
       readOAuthToken: (providerId, oauth) => readCachedGenericOAuthAccessToken(storedCustomProviderId(providerId), oauth),
+      readOAuthTokenForRequest: (providerId, oauth) => readGenericOAuthAccessToken(storedCustomProviderId(providerId), oauth),
       gatewayConnection: () => ({
         baseUrl: effectiveXdGatewayBaseUrl(),
         apiKey: getProviderSecretStore().get('xd') ?? '',
@@ -140,6 +141,7 @@ export function registerVoiceConversationIpc(deps: {
     },
     models: () => speechModels(catalogDeps()),
     connection: (selection) => resolveSpeechConnection(catalogDeps(), selection),
+    prepareConnection: (selection) => resolveSpeechConnectionForRequest(catalogDeps(), selection),
     fetch: outboundFetch,
     hasReplyHook: hasEnabledGhostAssistantHook,
     classifyExit: classifyVoiceExit,

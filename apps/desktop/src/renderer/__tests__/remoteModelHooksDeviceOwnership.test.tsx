@@ -57,7 +57,8 @@ describe('remote model hook device ownership', () => {
       }
       return capabilities(`local:${agentKind}`);
     });
-    setElectronApi({ maker: { getCapabilities } });
+    const listAvailableAgents = async () => ['claude-code', 'codex', 'pi'];
+    setElectronApi({ maker: { getCapabilities, listAvailableAgents } });
     const mod = await import('@/hooks/useAgentCapabilities');
     await mod.preloadAllCapabilities();
 
@@ -101,7 +102,8 @@ describe('remote model hook device ownership', () => {
       }
       return Promise.resolve(capabilities(`local:${agentKind}`));
     });
-    setElectronApi({ maker: { getCapabilities } });
+    const listAvailableAgents = async () => ['claude-code', 'codex', 'pi'];
+    setElectronApi({ maker: { getCapabilities, listAvailableAgents } });
     const mod = await import('@/hooks/useAgentCapabilities');
 
     const frames: Array<ReturnType<typeof mod.useAgentCapabilities>> = [];
@@ -149,7 +151,8 @@ describe('remote model hook device ownership', () => {
       }
       return Promise.resolve(capabilities(`refresh:${agentKind}`));
     });
-    setElectronApi({ maker: { getCapabilities } });
+    const listAvailableAgents = async () => ['claude-code', 'codex', 'pi'];
+    setElectronApi({ maker: { getCapabilities, listAvailableAgents } });
     const mod = await import('@/hooks/useAgentCapabilities');
 
     const frames: Array<ReturnType<typeof mod.useAgentCapabilities>> = [];

@@ -833,7 +833,17 @@ export interface TurnStartedNotification {
 
 export interface TurnDiffUpdatedNotification {
   method: 'turn/diff/updated';
-  params: { threadId: string; turnId: string; diff: string; [k: string]: unknown };
+  params: {
+    threadId: string;
+    turnId: string;
+    diff: string;
+    /**
+     * Cindy 本地字段, app-server 不会发送: 这次累计 diff 超过单行上限, 已由 AppServerHost
+     * 丢弃正文, `diff` 为空串, 只表示「该线程本轮 diff 未知」。
+     */
+    cindyOmitted?: 'oversized';
+    [k: string]: unknown;
+  };
 }
 
 /**
@@ -1228,6 +1238,12 @@ export type ServerNotification =
   | WarningNotification
   | ErrorNotification;
 
+/** v2 ThreadBackgroundTerminalsListResponse — only the field idle reclamation reads. */
+export interface ThreadBackgroundTerminalsListResponse {
+  data: Array<{ itemId: string; processId: string }>;
+  nextCursor: string | null;
+}
+
 // ── 方法名常量 (避免 string typo) ────────────────────────────────────────────
 
 export const Method = {
@@ -1243,6 +1259,8 @@ export const Method = {
   ThreadCompactStart: 'thread/compact/start',
   ThreadTurnsList: 'thread/turns/list',
   ThreadUnsubscribe: 'thread/unsubscribe',
+  /** EXPERIMENTAL (experimentalApi is always on). Lists unified-exec processes still alive for a thread. */
+  ThreadBackgroundTerminalsList: 'thread/backgroundTerminals/list',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',
   TurnSteer: 'turn/steer',

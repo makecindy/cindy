@@ -6,6 +6,7 @@ import { ToastContainer } from '../../../src/renderer/components/ui/toast';
 import { QuotaHoverCard } from '../../../src/renderer/components/status/QuotaHoverCard';
 import { buildClaudeUsageCard } from '../../../src/renderer/components/status/usageCardModel';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../src/shared/claudeSubscriptionUsage';
+import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type {
   SubscriptionAccountCommand,
   SubscriptionAccountUsage,
@@ -43,7 +44,7 @@ const claude = (
           },
         ],
 });
-// The default account's card comes from the provider (ProvidersSection); added accounts carry their own.
+// Every account carries its own quota, including the login in the official CLI directory.
 const defaultSnapshot = claude(2, 92, 16, [3.6, 76]);
 const usage = (snapshot: ClaudeSubscriptionUsageSnapshot): SubscriptionAccountUsage => ({
   claude: snapshot,
@@ -63,7 +64,7 @@ const codex = (primary: number, secondary: number): SubscriptionAccountUsage => 
   },
 });
 
-/** Mirrors ProvidersSection: the provider card sits in the default row, the usage page in the header. */
+/** Mirrors ProvidersSection: the old provider card is only an unavailable-endpoint fallback. */
 function Section({ codexPool, signedOut }: { codexPool: boolean; signedOut: boolean }) {
   const { t } = useTranslation();
   if (codexPool) return <SubscriptionAccountsSection providerId="openai" />;
@@ -87,7 +88,7 @@ function Section({ codexPool, signedOut }: { codexPool: boolean; signedOut: bool
 
 void mountPage({
   host: (ctx) => {
-    const isCodex = ctx.case === 'codex' || ctx.case === 'narrow-weight' || ctx.case.startsWith('provider-auth');
+    const isCodex = ctx.case.startsWith('codex') || ctx.case === 'narrow-weight' || ctx.case.startsWith('provider-auth');
     let view: SubscriptionPoolView = {
       providerId: isCodex ? 'openai' : 'anthropic',
       configured: true,
@@ -97,18 +98,21 @@ void mountPage({
           id: 'default',
           identity: 'alex@example.com',
           plan: isCodex ? 'pro' : 'max',
+          ...(isCodex ? { planType: 'pro' } : { planTier: 'max_20x' }),
           directory: isCodex ? '/Users/alex/.codex' : '/Users/alex/.claude',
           status: 'ready',
           running: 2,
           limit: 10,
           weight: 1,
           paused: false,
-          ...(isCodex ? { usage: codex(18, 41) } : { loginExpiresAt: new Date(now + 18 * 86_400_000).toISOString() }),
+          usage: isCodex ? codex(18, 41) : usage({ ...defaultSnapshot, planTier: 'max_20x' }),
+          ...(!isCodex ? { loginExpiresAt: new Date(now + 18 * 86_400_000).toISOString() } : {}),
         },
         {
           id: 'second',
           identity: 'long.work.account@research.example.com',
           plan: isCodex ? 'plus' : 'max',
+          ...(isCodex ? { planType: 'plus' } : { planTier: 'max_5x' }),
           directory: '/Users/alex/.claude-cindy-opaque-id',
           status: 'ready',
           running: 0,
@@ -132,6 +136,13 @@ void mountPage({
         },
       ],
     };
+    if (ctx.case.startsWith('official-plan-name')) {
+      view.accounts[0] = {
+        ...view.accounts[0], plan: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
+        usage: usage({ ...defaultSnapshot, subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' }),
+      };
+    }
+    if (ctx.case.startsWith('codex-no-usage')) view.accounts[1].usage = undefined;
     if (ctx.case === 'expiry-past')
       view.accounts[1].loginExpiresAt = new Date(now - 86_400_000).toISOString();
     // Nothing signed in yet: the host lists only the unbound CLI default slot.
@@ -154,10 +165,23 @@ void mountPage({
       };
     return {
       openPath: async () => ({ success: true }),
+      // Providers an account may move to; none of the same kind in these cases.
+      maker: { listProviders: async () => ({ providers: [] }), usage: {
+        getCodexRateLimits: async (providerId = 'openai'): Promise<MobileCodexRateLimitsResult> => ({
+          providerId, account: { email: 'ac***@example.com', accountId: '…account', planType: 'pro' },
+          rateLimits: {}, rateLimitsByLimitId: null, resetOffer: null,
+          rateLimitResetCredits: { availableCount: 1, credits: [{ status: 'available', resetType: 'codexRateLimits',
+            grantedAt: 1, expiresAt: hours(24 * 30), title: null, description: null }] },
+          autoUse: { accountKey: providerId, settings: { enabled: providerId === 'openai',
+            lowQuota: true, minimumDays: 3, expiring: true, expiryMinutes: 60 }, customized: false, lastUsedAt: null },
+        }),
+      } },
       subscriptionAccounts: {
         onChanged: subscription('subscriptionAccounts'),
         command: async (command: SubscriptionAccountCommand) => {
           if (ctx.case === 'error') throw new Error('Fixture read failure');
+          // The first read never lands, so the placeholder stays for the capture.
+          if (ctx.case === 'loading' && command.action === 'read') return new Promise<never>(() => {});
           if (ctx.case === 'provider-auth-preview' && command.action === 'preview')
             return {
               ...view,
@@ -200,7 +224,7 @@ void mountPage({
   render: (ctx) => (
     <main
       className="mx-auto w-full max-w-[680px] min-w-0"
-      style={ctx.case === 'narrow' || ctx.case === 'narrow-weight' || ctx.case === 'expiry-narrow' ? { maxWidth: 320 } : undefined}
+      style={ctx.case === 'narrow' || ctx.case === 'narrow-weight' || ctx.case.endsWith('-narrow') ? { maxWidth: 320 } : undefined}
     >
       {ctx.case === 'provider-auth-preview' ? (
         <SubscriptionSignInChoices
@@ -211,7 +235,7 @@ void mountPage({
         />
       ) : (
         <Section
-          codexPool={ctx.case === 'codex' || ctx.case === 'narrow-weight' || ctx.case === 'provider-auth'}
+          codexPool={ctx.case.startsWith('codex') || ctx.case === 'narrow-weight' || ctx.case === 'provider-auth'}
           signedOut={ctx.case === 'empty'}
         />
       )}

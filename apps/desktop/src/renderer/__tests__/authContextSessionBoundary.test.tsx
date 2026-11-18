@@ -374,7 +374,7 @@ describe('AuthContext session cache boundaries', () => {
       const recoveryEpochBeforeFailure = view.result.current.dataOwnerRecoveryEpoch;
 
       await act(async () => {
-        await expect(view.result.current[action]()).rejects.toThrow(`${action} failed`);
+        await expect(view.result.current[action]!()).rejects.toThrow(`${action} failed`);
       });
 
       expect(view.result.current.dataOwnerId).toBe(expectedOwner);
@@ -681,7 +681,7 @@ describe('AuthContext session cache boundaries', () => {
     await waitFor(() => expect(view.result.current.dataOwnerId).toBeNull());
 
     await act(async () => {
-      await view.result.current.enterLocalMode();
+      await view.result.current.enterLocalMode!();
     });
     expect(view.result.current.dataOwnerId).toBe('local-v1');
 
@@ -882,7 +882,7 @@ describe('AuthContext session cache boundaries', () => {
     expect(cloudUid).not.toBe('');
 
     await act(async () => {
-      await view.result.current.enterLocalMode();
+      await view.result.current.enterLocalMode!();
     });
     // 本地模式是另一个分区:云端身份存的东西一条都不该露出来。
     expect(listModelFavorites()).toHaveLength(0);

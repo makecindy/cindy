@@ -47,6 +47,7 @@ import {
   Info,
   LayoutList,
   SlidersHorizontal,
+  Timer,
   Wallet,
   Users,
   type LucideIcon,
@@ -403,6 +404,7 @@ export function SidebarFilterPopover({
     lastActivity,
     groupBy,
     groupDialogue,
+    groupAutomation,
     groupDevice,
     sortBy,
     projectOrder,
@@ -415,6 +417,7 @@ export function SidebarFilterPopover({
     setLastActivity,
     setGroupBy,
     setGroupDialogue,
+    setGroupAutomation,
     setGroupDevice,
     setSortBy,
     setProjectOrder: setViewerProjectOrder,
@@ -433,6 +436,7 @@ export function SidebarFilterPopover({
     [
       groupBy === 'project' ? t('ccAgent.sidebar.groupSummary.project') : null,
       groupDialogue ? t('ccAgent.sidebar.groupSummary.dialogue') : null,
+      groupAutomation ? t('ccAgent.sidebar.groupSummary.automation') : null,
       hasRemoteDevices && groupDevice ? t('ccAgent.sidebar.groupSummary.device') : null,
     ]
       .filter(Boolean)
@@ -653,6 +657,12 @@ export function SidebarFilterPopover({
                   checked={groupDialogue}
                   onToggle={() => setGroupDialogue(!groupDialogue)}
                   Icon={MessageSquare}
+                />
+                <CheckMenuItem
+                  label={t('ccAgent.sidebar.filterGroupBy.automation')}
+                  checked={groupAutomation}
+                  onToggle={() => setGroupAutomation(!groupAutomation)}
+                  Icon={Timer}
                 />
                 {hasRemoteDevices && (
                   <CheckMenuItem

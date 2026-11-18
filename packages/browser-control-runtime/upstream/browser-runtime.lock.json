@@ -55,6 +55,10 @@
       "desc": "pass chipName into decorateOpenClawProfile instead of the disk key"
     },
     {
+      "file": "extension/src/browser/chrome.ts",
+      "desc": "contain Chrome spawn errors in bootstrap and launch, revalidate automatic executables and rediscover once after ENOENT"
+    },
+    {
       "file": "extension/src/browser/config.ts",
       "desc": "preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access"
     },
@@ -73,6 +77,10 @@
     {
       "file": "extension/src/browser/pw-session.ts",
       "desc": "export a non-blocking quarantine so the popup-overflow path can mark a target unusable without awaiting close() (a hung page must not keep the interaction pending)"
+    },
+    {
+      "file": "extension/src/browser/pw-session.ts",
+      "desc": "bound the per-tab target-id probe: Target.attachToTarget can go unanswered for a tab mid-redirect, and every page lookup probes every tab, so one silent tab stalled read, snapshot and act on all tabs"
     },
     {
       "file": "extension/src/browser/pw-tools-core.interactions.ts",
@@ -128,7 +136,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "fb0bc9516bb715e79dc6abeadd2a03792170992c4ddf7b4dec03ac47ad76a614",
+  "contentHash": "cc9e212a67fa75a3d5fc8de5a5146c4bd46fd9670a9b6518f643f94a56421a39",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

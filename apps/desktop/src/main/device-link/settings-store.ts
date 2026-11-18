@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createLogger } from '../logger';
+import { isPreservingUnreadableSettingsFilesByDefault } from '../maker-host/override-settings-file.js';
 
 
 export interface DeviceLinkSettings {
@@ -154,23 +155,53 @@ function normalizeDeviceNameMap(raw: unknown): Record<string, string> {
 let cached: DeviceLinkSettings | null = null;
 /** 缓存对应的文件 mtimeMs;文件不存在时为 null。mtime 变化 → 缓存失效重载(跨实例写入可见)。 */
 let cachedMtimeMs: number | null = null;
+/**
+ * Writes require a readable baseline after a filesystem failure or when the Host preserves
+ * malformed JSON. Both cases use fail-closed defaults while the file is unreadable.
+ */
+let cachedUnreadable = false;
+const READ_RETRY_DELAY_MS = 1_000;
+let retryReadAt = 0;
 
 function statMtimeMs(file: string): number | null {
   try {
     return fs.statSync(file).mtimeMs;
-  } catch {
-    return null; // 文件不存在
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
 }
 
-function readDeviceLinkSettings(): DeviceLinkSettings {
+function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
+  if (!forceRead && retryReadAt !== 0 && performance.now() < retryReadAt) return { ...DEFAULTS };
   const file = settingsFilePath();
-  const mtimeMs = statMtimeMs(file);
-  if (cached && mtimeMs === cachedMtimeMs) return cached;
+  let mtimeMs: number | null;
+  let contents: string | undefined;
   try {
-    if (mtimeMs !== null) {
-      cached = normalize(JSON.parse(fs.readFileSync(file, 'utf-8')));
+    mtimeMs = statMtimeMs(file);
+    if (!forceRead && cached && mtimeMs === cachedMtimeMs) return cached;
+    if (mtimeMs !== null) contents = fs.readFileSync(file, 'utf-8');
+  } catch (error) {
+    // An I/O error does not tell us whether the file is valid. Keep it intact, drop the
+    // old grant, and let the next eligible read retry even if the mtime hasn't changed.
+    const now = performance.now();
+    if (now >= retryReadAt) {
+      log.warn('device-link-settings.json read failed → falling back to defaults', {
+        error: error instanceof Error ? error.message : String(error),
+        path: file,
+      });
+      retryReadAt = now + READ_RETRY_DELAY_MS;
+    }
+    cached = null;
+    cachedUnreadable = true;
+    return { ...DEFAULTS };
+  }
+  retryReadAt = 0;
+  try {
+    if (contents !== undefined) {
+      cached = normalize(JSON.parse(contents));
       cachedMtimeMs = mtimeMs;
+      cachedUnreadable = false;
       return cached;
     }
   } catch (err) {
@@ -178,10 +209,17 @@ function readDeviceLinkSettings(): DeviceLinkSettings {
       error: err instanceof Error ? err.message : String(err),
       path: file,
     });
+    if (isPreservingUnreadableSettingsFilesByDefault()) {
+      cached = { ...DEFAULTS };
+      cachedMtimeMs = mtimeMs;
+      cachedUnreadable = true;
+      return cached;
+    }
     try { fs.unlinkSync(file); } catch { /* no-op */ }
   }
   cached = { ...DEFAULTS };
   cachedMtimeMs = null;
+  cachedUnreadable = false;
   return cached;
 }
 
@@ -274,9 +312,8 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
   tag: string,
 ): DeviceLinkSettings[K] {
   // 强制丢缓存取盘上最新基线(mtime 粒度粗时缓存可能骗过 read)
-  cached = null;
-  cachedMtimeMs = null;
-  const current = readDeviceLinkSettings();
+  const current = readDeviceLinkSettings(true);
+  if (cachedUnreadable) throw new Error('device-link settings file is unreadable; refusing to overwrite it');
   const nextValue = updater(current[key]);
   const next = { ...current, [key]: nextValue };
   const tmp = `${file}.${process.pid}.${tag}.tmp`;

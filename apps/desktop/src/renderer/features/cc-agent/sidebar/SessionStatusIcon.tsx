@@ -17,6 +17,7 @@
  *
  */
 
+import type { ReactNode } from 'react';
 import { Archive, Pencil, RadioTower, UsersRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -89,6 +90,8 @@ function AgentDeviceVendorIcon({
 }
 
 export interface SessionStatusIconProps {
+  /** Inbox rows use project identity while retaining draft/attention badges. */
+  identityIcon?: ReactNode;
   session: Session;
   isRunning: boolean;
   /** /ctr 接管中:图标切 RadioTower。 */
@@ -116,6 +119,7 @@ export interface SessionStatusIconProps {
 }
 
 export function SessionStatusIcon({
+  identityIcon,
   session,
   isRunning: isAgentRunning,
   isAttached,
@@ -167,8 +171,8 @@ export function SessionStatusIcon({
     : t('ccAgent.sidebar.hasPausedQueue');
 
   return (
-    <span className="relative shrink-0 inline-flex items-center justify-center size-3" aria-hidden>
-      {isArchived ? (
+    <span className={cn("relative shrink-0 inline-flex items-center justify-center", identityIcon ? "size-[18px]" : "size-3")} aria-hidden>
+      {identityIcon ?? (isArchived ? (
         <Archive
           size={size ?? 12}
           strokeWidth={1.75}
@@ -227,7 +231,7 @@ export function SessionStatusIcon({
           running={isRunning}
           colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
         />
-      )}
+      ))}
       {showAttentionDot && hasAttentionDot && (
         <AttentionDot size={6} tone={attentionTone} className="absolute -top-0.5 -right-0.5" />
       )}

@@ -13,6 +13,7 @@
  */
 
 import type { PeerAgentNetReply, PeerAgentNetRequest } from '../../../shared/selfHostedRelay';
+import { isCindyApp } from '@cindy/maker-shared/device-list';
 import type { TopologyNode } from './topologyModel';
 
 export type RemoteSwitchTarget = 'agent-net' | 'device-link';
@@ -39,10 +40,11 @@ export type RemoteSwitchBlock = 'mobile' | 'peer-control-off' | 'control-off';
 
 /** 这台设备能不能在这里切换；不能时给出原因。离线、未建链和连接方式未知时不显示切换区。 */
 export function remoteSwitchAvailability(node: TopologyNode): { visible: false } | { visible: true; block: RemoteSwitchBlock | null } {
-  if (node.status === 'offline' || node.status === 'unlinked') return { visible: false };
+  if (!isCindyApp(node.app)) return { visible: false };
+  if (node.status === 'offline' || node.status === 'unlinked' || node.status === 'connecting') return { visible: false };
   // 对方没开被控时通常也没建链(不知道它用哪种方式)，仍要说明为什么不能在这里切。
   if (node.attention === 'peer-control-off' || (!node.isMobile && !node.remoteControlEnabled)) return { visible: true, block: 'peer-control-off' };
-  if (node.encrypted === undefined) return { visible: false };
+  if (!node.controlLinkOpen || node.encrypted === undefined) return { visible: false };
   if (node.isMobile) return { visible: true, block: 'mobile' };
   if (!node.controlEnabled) return { visible: true, block: 'control-off' };
   return { visible: true, block: null };

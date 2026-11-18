@@ -69,6 +69,7 @@ import {
   isMobileAuthOwnerCurrent,
 } from "@/auth/authOwnerGeneration";
 import { PluginOriginalSettings } from "./PluginOriginalSettings";
+import { PluginTaskSettings } from "./PluginTaskSettings";
 import { PluginReadmePage } from "./PluginReadmePage";
 import { usePluginManagement } from "./usePluginManagement";
 import { PluginManagementMenu } from "./PluginManagementMenu";
@@ -947,6 +948,29 @@ function PluginDirectory() {
     }
   };
   const noticeOwner = getMobileAuthOwner();
+  const originalSettingsContent = selected && originalSettings && managed ? (
+    <PluginOriginalSettings
+      key={JSON.stringify([selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
+      identity={{
+        deviceId: selected.row.host.deviceId,
+        instanceId: managed.instanceKey,
+        expectedInstalledApproval: pluginApprovalToken(managed),
+      }}
+      active={focused && online && detailOpen && !managementPending}
+      onNotice={(notice) => {
+        if (
+          renderedGeneration === detailGeneration.current &&
+          liveSelection.current.key === selected.row.key &&
+          liveSelection.current.focused &&
+          isMobileAuthOwnerCurrent(noticeOwner)
+        )
+          showSettingsNotice(notice);
+      }}
+    />
+  ) : undefined;
+  const taskSettingsAvailable = model?.taskPreferences && managed?.approval.state === "approved" &&
+    managed.enabled && enabled && online && focused && detailOpen && !busy &&
+    managementAvailable && !detailLoading && !detailFailed;
   const detailView =
     selected && model ? (
       <PluginDetailView
@@ -974,30 +998,17 @@ function PluginDirectory() {
             : undefined
         }
         settingsContent={
-          originalSettings && managed ? (
-            <PluginOriginalSettings
-              key={JSON.stringify([
-                selected.row.host.deviceId,
-                managed.instanceKey,
-                pluginApprovalToken(managed),
-                connectionEpoch,
-              ])}
-              identity={{
-                deviceId: selected.row.host.deviceId,
-                instanceId: managed.instanceKey,
-                expectedInstalledApproval: pluginApprovalToken(managed),
-              }}
-              active={focused && online && detailOpen && !managementPending}
-              onNotice={(notice) => {
-                if (
-                  renderedGeneration === detailGeneration.current &&
-                  liveSelection.current.key === selected.row.key &&
-                  liveSelection.current.focused &&
-                  isMobileAuthOwnerCurrent(noticeOwner)
-                )
-                  showSettingsNotice(notice);
-              }}
-            />
+          originalSettingsContent || (taskSettingsAvailable && managed) ? (
+            <View style={{ gap: spacing.lg }}>
+              {taskSettingsAvailable && managed ? (
+                <PluginTaskSettings
+                  key={JSON.stringify(["tasks", selected.row.host.deviceId, managed.instanceKey, pluginApprovalToken(managed), connectionEpoch])}
+                  deviceId={selected.row.host.deviceId}
+                  pluginId={managed.instanceKey}
+                />
+              ) : null}
+              {originalSettingsContent}
+            </View>
           ) : undefined
         }
         settingsOpen={settingsOpen}

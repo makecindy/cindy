@@ -21,7 +21,8 @@ function OwnerPluginUiEnablePrompt({ deviceId, deviceName, sessionId, online, ac
   const { t } = useTranslation();
   const { state, controller } = usePluginManagement(deviceId, online, active, sessionId ?? 'new-task', true);
   const plugin = state?.snapshot?.ghosts.find((item) => pluginNeedsUiApproval(item) && !item.uiPromptSuppressed);
-  const notice = pluginUiApprovalNotice(plugin, state, controller, t, true);
+  const consent = state?.uiConsent?.item;
+  const notice = pluginUiApprovalNotice(plugin ?? consent, state, controller, t, true);
   if (!active || !state || !controller) return null;
   return <>
     {notice ? <PluginNotice {...notice} compact /> : null}

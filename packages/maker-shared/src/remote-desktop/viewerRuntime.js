@@ -209,8 +209,16 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!keyboardEnabled || !control || composing) return;
     const text = keyboardInput.value.replace(keyboardSentinel, "");
     if (text) {
-      for (let i = 0; i < text.length; i += 4096)
-        queue({ kind: "text", text: text.slice(i, i + 4096) });
+      // Text packets have a UTF-16 budget; never split a surrogate pair.
+      let chunk = "";
+      for (const character of text) {
+        if (chunk.length + character.length > 4096) {
+          queue({ kind: "text", text: chunk });
+          chunk = "";
+        }
+        chunk += character;
+      }
+      if (chunk) queue({ kind: "text", text: chunk });
       flush();
     }
     resetKeyboard();

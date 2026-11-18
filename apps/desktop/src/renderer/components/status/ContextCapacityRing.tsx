@@ -5,6 +5,7 @@ import { useCodexContextWindow } from '@/hooks/useCodexContextWindow';
 import { getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { ContextWindowBudgetChip } from './ContextWindowBudgetChip';
+import appI18n from 'i18next';
 
 /** Format a token count with K/M suffix: 200000 → "200K", 1000000 → "1M". */
 export function formatTokenCount(n: number): string {
@@ -220,9 +221,9 @@ export function ContextCapacityRing({
             <p className="mt-1 leading-relaxed">
               {codexContext
                 ? t('settings.providers.models.advanced.codexContextValues', {
-                    total: codexContext.contextWindow.toLocaleString(),
-                    usable: codexContext.usableContextWindow.toLocaleString(),
-                    compact: codexContext.autoCompactTokenLimit.toLocaleString(),
+                    total: codexContext.contextWindow.toLocaleString(appI18n.language),
+                    usable: codexContext.usableContextWindow.toLocaleString(appI18n.language),
+                    compact: codexContext.autoCompactTokenLimit.toLocaleString(appI18n.language),
                   })
                 : t('settings.providers.models.advanced.codexContextUnknown')}
             </p>

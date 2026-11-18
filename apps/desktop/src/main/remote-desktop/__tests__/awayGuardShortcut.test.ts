@@ -56,6 +56,15 @@ afterEach(() => {
   state.combo = { code: 'KeyL', ctrl: true, shift: true, alt: false, meta: false };
 });
 describe('away shortcut', () => {
+  // main 新增的全局快捷键禁用开关也必须覆盖本 PR 的入口（unit）。
+  it('does not install the away shortcut when global shortcuts are disabled', () => {
+    vi.stubEnv('XDT_DISABLE_GLOBAL_SHORTCUTS', '1');
+    try {
+      dispose = installAwayGuardShortcut(async () => {});
+      expect(state.register).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('activates through the registered shortcut and ignores repeats while starting', async () => {
     state.register.mockReturnValue(true);
     let finish = () => {};

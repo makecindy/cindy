@@ -6,7 +6,8 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
-import { DownloadMeter } from '@/components/settings/DownloadMeter';
+import { DownloadMeter } from '@/components/ui/download-meter';
+import { initialDownloadProgress } from '../../../shared/downloadProgress';
 import type { GithubSetupState } from '../../../shared/githubSetup';
 
 const isRunning = (phase: GithubSetupState['phase']) =>
@@ -166,8 +167,11 @@ export function GithubSetupDialog({
           <Dialog.Description className="text-13 leading-relaxed text-[var(--confirm-desc)]">
             {description}
           </Dialog.Description>
-          {stage === 'downloading' && (
-            <DownloadMeter progress={{ label: 'GitHub CLI', percent: state.percent }} />
+          {(stage === 'downloading' || (stage === 'installing' && state.download)) && (
+            <DownloadMeter
+              label="GitHub CLI"
+              progress={state.download ?? initialDownloadProgress('downloading')}
+            />
           )}
           {readyToAuthorize && (
             <div className="flex flex-col gap-3">
