@@ -46,9 +46,12 @@ vi.mock('../modelPriceOverrideStore.js', () => ({
 
 import { accountReferencePriceQuote } from '../accountReferencePrice.js';
 import { BrowserWindow } from 'electron';
+import type { CatalogModel } from '@cindy/model-providers';
+import { projectSubscriptionPoolCatalog } from '../../maker-host/subscriptionPoolCatalog.js';
 import {
   broadcastReferenceModelPricing, followReferenceModelPricingAfterProviderChange,
   getReferenceModelPricing, getCodexProviderSubscriptionValuePrice, REFERENCE_MODEL_PRICING_CHANGED_CHANNEL,
+  setReferencePricingDisplayProviders,
 } from '../referenceModelPricing.js';
 
 describe('independent subscription account reference prices', () => {
@@ -183,11 +186,12 @@ it('resolves the reference catalog for a historical day with route tariffs', () 
   }
 });
 
-// Unit: an independent ChatGPT account page showed no price tier for models that account
-// discovery added after the catalog load (GPT-6.2 Sol / Astra, 2026-11-18). Account quotes are
-// keyed by the provider's models at broadcast time, so a provider change must be followed by
-// one more broadcast. Entry: the main-side broadcast the renderer subscribes to.
-it('follows account discovery with one broadcast per burst and none when prices are unchanged', async () => {
+// Unit: an independent ChatGPT account page showed no price tier for the models its own
+// account discovery added (GPT-6.2 Sol / Astra, 2026-11-18). Those models are not in the active
+// catalog: projectSubscriptionPoolCatalog adds them for the lists the renderer shows, and the
+// broadcast must quote that same membership. Entry: the main-side broadcast the renderer
+// subscribes to, through the real pool projection.
+it('quotes models added by an account\'s own discovery, once per burst and only when prices change', async () => {
   const sent: Array<Record<string, Record<string, unknown>>> = [];
   const windows = vi.spyOn(BrowserWindow, 'getAllWindows').mockReturnValue([{
     isDestroyed: () => false,
@@ -196,12 +200,26 @@ it('follows account discovery with one broadcast per burst and none when prices 
     } },
   } as never]);
   const tick = () => new Promise(resolve => setImmediate(resolve));
-  const account = accountCatalog.providers.find(provider => provider.id === 'openai-account')!;
-  const before = account.models.codex!;
+  const known = accountCatalog.providers.find(provider => provider.id === 'openai-account')!.models.codex![0]!;
+  let discovered: CatalogModel[] = [];
+  setReferencePricingDisplayProviders(() => projectSubscriptionPoolCatalog(accountCatalog, {
+    readPool: () => ({ legacyCodexAccounts: { 'openai-account': 'pool-account' }, accounts: [{ id: 'pool-account' }] }) as never,
+    codexAccountState: () => ({ authenticated: true }),
+    readSubscriptionPoolCodexModels: providerId => providerId === 'openai-account' ? discovered : null,
+    getActiveCatalogWithCodexModels: models => ({ ...accountCatalog, providers: [{
+      ...accountCatalog.providers[0]!, id: 'openai', models: { codex: [...models] },
+    }] }),
+    readSubscriptionPoolClaudeModels: () => null,
+    getActiveCatalogWithClaudeModels: () => accountCatalog,
+    readMergedProviderAccount: () => undefined,
+    accountProviderId: () => 'openai-account',
+    readProviderBoundAccountIds: () => new Set<string>(),
+  }, true).providers);
   const key = modelPricingKey('gpt-5.6-sol', 'codex');
   try {
     broadcastReferenceModelPricing();
     expect(sent).toHaveLength(1);
+    expect(sent[0]['openai-account'][modelPricingKey(known.id, 'codex')]).toBeDefined();
     expect(sent[0]['openai-account'][key]).toBeUndefined();
 
     // Provider changed, prices did not: nothing is sent.
@@ -209,8 +227,9 @@ it('follows account discovery with one broadcast per burst and none when prices 
     await tick();
     expect(sent).toHaveLength(1);
 
-    // Discovery adds a model; a burst of provider changes yields a single broadcast.
-    account.models.codex = [...before, { ...before[0], id: 'gpt-5.6-sol', name: 'Sol' }];
+    // The account discovers a model the active catalog does not list for it.
+    discovered = [{ ...known, id: 'gpt-5.6-sol', name: 'Sol' }];
+    expect(getReferenceModelPricing()['openai-account'][key]).toBeUndefined();
     for (let i = 0; i < 5; i++) followReferenceModelPricingAfterProviderChange();
     expect(sent).toHaveLength(1);
     await tick();
@@ -220,7 +239,7 @@ it('follows account discovery with one broadcast per burst and none when prices 
     await tick();
     expect(sent).toHaveLength(2);
   } finally {
-    account.models.codex = before;
+    setReferencePricingDisplayProviders(null);
     windows.mockRestore();
   }
 });
