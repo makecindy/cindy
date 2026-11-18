@@ -2711,8 +2711,7 @@ describe('AgentInputCoordinator send transaction', () => {
   it('keeps reply provenance on consumed inputs, excluding queued work and clearing at the boundary', async () => {
     const h = createHarness();
     const sid = 'task-result-attribution';
-    const send = h.sendToAgent.getMockImplementation()!;
-    h.sendToAgent.mockImplementationOnce(async (...args) => {
+    h.sendToAgent.mockImplementationOnce(async () => {
       h.setRunning(true);
       return sendSuccess();
     });
@@ -5571,7 +5570,8 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(latestProjection(h.projections).recovery).toMatchObject({ clientId: 'q-head' });
 
-    h.sendToAgent.mockImplementationOnce(async () => {
+    const send = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementationOnce(async (...args) => {
       expect(h.coordinator.takeRetrySwitchRevision(sid, 'previous-head')).toBeUndefined();
       expect(h.coordinator.takeRetrySwitchRevision(sid, 'q-head')).toBe(2);
       expect(h.coordinator.takeRetrySwitchRevision(sid, 'q-head')).toBeUndefined();
