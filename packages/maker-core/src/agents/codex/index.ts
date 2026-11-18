@@ -15405,7 +15405,10 @@ assertRouteCurrent();
 
       compactSession(instructions?: string): Promise<ManualCompactResult> {
         if (closed) return Promise.reject(new Error('Codex session is closed'));
-        if (instructions?.trim()) return Promise.reject(new Error('Codex native compaction does not support custom instructions'));
+        if (instructions?.trim()) {
+          return Promise.reject(Object.assign(new Error('Codex native compaction does not support custom instructions'),
+            { code: 'UNSUPPORTED_CAPABILITY' }));
+        }
         if (handle.isTurnRunning?.() || isTurnStartPending || inFlightStarts.size > 0) {
           return Promise.reject(new Error('Cannot compact while a Codex turn is active'));
         }

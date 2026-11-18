@@ -2773,7 +2773,7 @@ export interface AgentSessionHandle {
    * 上报 —— pi 为 compaction_start/end → compact_boundary)。仅
    * Capabilities.manualCompact 支持的 agent(pi)实现;不支持的 agent 不实现。
    */
-  compactSession?(instructions?: string): Promise<ManualCompactResult>;
+  compactSession?(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult>;
 
   /** 读取 / 切换同一 SDK session 内的原生分支树。 */
   getSessionTree?(): Promise<SessionTreeSnapshot>;

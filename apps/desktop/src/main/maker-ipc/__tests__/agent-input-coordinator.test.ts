@@ -1104,8 +1104,22 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(deps.interactions.resumeTimeout).not.toHaveBeenCalled();
   });
 
-  it('uses only the delivery grant after a control retry has already been accepted', async () => {
+  // Unit / shared Pi retry: distinguish an idle task from an admitted recovery.
+  it('does not enqueue or dispatch a Pi control retry without recoverable input', async () => {
+    const h = createHarness(), sid = 'pi-control-retry-noop';
+    h.setAgentKind('pi');
+    const result = await runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    await flush();
+    expect(result).toEqual({ ok: true, result: { executionPaused: false, queuePaused: false } });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('uses only the delivery grant after a Pi control retry has already been accepted', async () => {
     const h = createHarness(), sid = 'retry-admitted-then-plan';
+    h.setAgentKind('pi');
     h.coordinator.enqueue(sid, makeItem('original', 'original')); await flush();
     h.setRunning(false); h.coordinator.onTurnEvent(sid, 'error', 'failed'); await flush();
     h.setHasAssistantProgressAfter(async () => false); h.setRunning(true);

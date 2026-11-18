@@ -17598,7 +17598,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       compact: async (id, instructions, beforeMutation, beforeDelivery) => {
         const createOpts = await readSharedTaskTaskCreateOpts(id);
         await beforeMutation();
-        if (createOpts.agentKind !== 'claude-code') return compactSessionFromHost(id, instructions, beforeMutation);
+        if (createOpts.agentKind !== 'claude-code') {
+          return compactSessionFromHost(id, instructions, beforeMutation, beforeDelivery);
+        }
         if (instructions !== undefined) throwIpcError('UNSUPPORTED_CAPABILITY', 'Claude compact control does not accept custom instructions');
         return inputCoordinator.compact(id, createOpts, { beforeMutation: beforeDelivery });
       },
@@ -23344,7 +23346,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
-  async function compactSessionFromHost(sessionId: string, instructions?: string, beforeMutation?: () => Promise<void>) {
+  async function compactSessionFromHost(
+    sessionId: string,
+    instructions?: string,
+    beforeMutation?: () => Promise<void>,
+    beforeDelivery?: () => Promise<void>,
+  ) {
     return withSendToSessionLock(sessionId, async () => {
       try {
         const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
@@ -23352,7 +23359,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
         }
         await beforeMutation?.();
-        return await sess.compactSession(instructions);
+        return await sess.compactSession(instructions, sess.agentKind === 'pi' ? beforeDelivery : undefined);
       } finally {
         await getOrResumeSessionForHistory.release(sessionId);
       }
