@@ -41,7 +41,8 @@ import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
 import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
-import { scheduleBotRemoteResourceChangedForFollowedSession } from './botRemoteResourceInvalidation.js';
+import { onBotRemoteResourceChanged, scheduleBotRemoteResourceChangedForFollowedSession } from './botRemoteResourceInvalidation.js';
+import { onBotReadStateChanged } from './botReadStateStore.js';
 import { assertBotTaskCoordination } from './botTaskCoordination.js';
 import type { BotTaskCoordination } from '../../shared/botTaskCoordination.js';
 import { openSession, setSessionOpeningModelAdmission } from '../localDb/sessionOpening.js';
@@ -294,6 +295,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } f
 import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
 import { createBotReadStateIpc, createBotWindowAccess } from './botReadStateLocalIpc.js';
+import { createBotReadStateStorage } from './botReadStateStorage.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
 import { createBotGroupOutboxIpc } from './botGroupOutboxIpc.js';
 import {
@@ -13977,13 +13979,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       catch { log.warn('Bot window state notification could not be delivered'); }
     }
   };
-  ipcMain.handle(MAKER_INVOKE.BOT_READ_STATE, createBotReadStateIpc({
-    assertTrustedSender: botWindowAccess.assertSender,
+  let invalidatePluginCompanions: () => void = () => {};
+  const botReadStateStorage = createBotReadStateStorage({
     currentOwner: getActiveAppSession,
     boundaryPending: isAppSessionBoundaryPending,
     ownerRoot: () => ownerScopedUserDataPath('bot-read-state'),
-    publish: event => publishBotWindowState(MAKER_PUSH.BOT_READ_STATE_CHANGED, event),
-  }));
+    publish: (event, identity) => {
+      publishBotWindowState(MAKER_PUSH.BOT_READ_STATE_CHANGED, event);
+      if (identity.kind === 'bot' || identity.kind === 'remote-bot') invalidatePluginCompanions();
+    },
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_READ_STATE, createBotReadStateIpc(botWindowAccess.assertSender, botReadStateStorage));
   const outboxIpc = createBotGroupOutboxIpc({
     assertCommandSender: botWindowAccess.assertSender, assertSendSender: assertTrustedAppRendererEvent,
     command: commandBotGroupOutbox, send: sendCoordinatedBotGroupMessage,
@@ -14993,7 +14999,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   // cindy.companions: changes reach watching plugins as content-free notices (island activity, companion
   // homes, pushes from the computers companions run on); subscribed on first use, once the island service exists.
-  let invalidatePluginCompanions: () => void = () => {};
   let companionChangesSubscribed = false;
   const subscribeCompanionChanges = () => {
     const island = getAgentIslandService();
@@ -15009,6 +15014,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   let companionDevices: { at: number; value: Promise<Array<{ deviceId: string; name: string; online: boolean; reachable: boolean }> | null> } | null = null;
   const companionHost = createPluginCompanionHost({
+    readPosition: async (identity) => {
+      const { dataOwnerId, generation } = getActiveAppSession();
+      if (!dataOwnerId) return null;
+      try {
+        return await botReadStateStorage.readPosition({ dataOwnerId, generation }, identity);
+      } catch {
+        return null; // An unavailable position must not invalidate the whole roster.
+      }
+    },
     pending: getPendingInteractionsForSession,
     openSession: (id, deviceId) => openMainWindowSession(id, { focus: 'if-active', ...(deviceId ? { deviceId } : {}) }),
     flushMessages: drainPersistQueue,
@@ -15077,6 +15091,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   });
   invalidatePluginCompanions = () => companionHub?.invalidate();
+  onBotRemoteResourceChanged(invalidatePluginCompanions);
+  onBotReadStateChanged(keys => {
+    if (keys.some(key => !key.startsWith('group:') && !key.startsWith('thread:'))) invalidatePluginCompanions();
+  });
   let pluginTargetReviewReady = false;
   setPluginTargetAdapter({
     prepareInvocation: preparePluginInvocation,
