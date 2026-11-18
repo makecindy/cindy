@@ -17,6 +17,7 @@ import {
   type PluginSuggestionRequest,
 } from '@/features/cc-agent/pendingPluginSuggestion';
 import { GhostPluginPage } from '../GhostPluginPage';
+import { __resetPluginInstallProgressForTest } from '../lib/pluginInstallProgress';
 import { pluginCatalogMemory, pluginCatalogOwnerKey, resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
@@ -158,6 +159,8 @@ beforeEach(() => {
       onRecentUsageChanged: () => () => {},
     },
     pluginMarket: {
+      // Market installs bracket a progress ring; these navigation cases push no steps.
+      onInstallProgress: () => () => undefined,
       recommendations: async () => [],
       query: async (input: { query?: string; cursor?: string | null }) => {
         const snapshot = await window.electronAPI.pluginMarket.snapshot();
@@ -185,6 +188,8 @@ it('opens a shared package before the selected remote plugin catalogue', async (
 });
 
 afterEach(() => {
+  // Install progress is window-level; an install a case leaves running must not leak into the next.
+  act(() => __resetPluginInstallProgressForTest());
   vi.useRealTimers();
   cleanup();
   clearDraft(NEW_MAKER_DRAFT_KEY);
@@ -259,7 +264,9 @@ describe('market action feedback', () => {
     expect(install).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('keeps explicit installation loading across detail and install with compact=%s', async compact => {
+  // The ring replaces the install button from the click through detail and install; after a
+  // failure it stays with the reason and the button returns as a retry.
+  it.each([false, true])('keeps install progress across detail and install and offers a retry with compact=%s', async compact => {
     let finishDetail!: (value: PluginMarketDetail) => void;
     let failInstall!: (error: Error) => void;
     loadDetail.mockImplementationOnce(() => new Promise(resolve => { finishDetail = resolve; }));
@@ -269,17 +276,21 @@ describe('market action feedback', () => {
     const { body, card } = await openCard(compact);
     const action = card.getByRole('button', { name: 'settings.ghosts.page.installAria' });
     fireEvent.click(action);
-    expect(action.getAttribute('aria-busy')).toBe('true');
+    const ring = () => card.getByRole('progressbar', { name: 'settings.ghosts.page.installAria' });
+    expect(ring().textContent).toBe('downloadProgress.phase.preparing');
+    expect(action.getAttribute('aria-hidden')).toBe('true');
     expect(card.queryByRole('status')).toBeNull();
     expect(install).not.toHaveBeenCalled();
     await act(async () => { finishDetail(detail); });
     expect(install).toHaveBeenCalledTimes(1);
-    expect(action.getAttribute('aria-busy')).toBe('true');
+    expect(ring().textContent).toBe('downloadProgress.phase.preparing');
     fireEvent.click(body);
     fireEvent.click(action);
     expect(loadDetail).toHaveBeenCalledTimes(1);
     await act(async () => { failInstall(new Error('Installation failed')); });
-    expect(action.getAttribute('aria-busy')).not.toBe('true');
+    expect(ring().textContent).toBe('settings.ghosts.installProgress.installFailed');
+    expect(action.getAttribute('aria-hidden')).toBeNull();
+    expect(action.textContent).toBe('commonUi.retry');
     expect((action as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -1147,6 +1158,11 @@ describe('plugin page return navigation', () => {
       }));
       expect(screen.getByRole('main')).toBe(marketPage);
       expect(screen.getByRole('heading', { level: 1, name: detail.name })).toBeTruthy();
+      // "Updated" holds the button's place briefly (timing covered in pluginInstallProgress.test).
+      expect(screen.getByRole('progressbar', { name: detail.name }).textContent).toBe(
+        'settings.ghosts.updateAll.statusDone',
+      );
+      act(() => __resetPluginInstallProgressForTest());
       expect((screen.getByRole('button', {
         name: 'settings.ghosts.market.installed',
       }) as HTMLButtonElement).disabled).toBe(true);

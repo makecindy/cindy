@@ -8806,6 +8806,10 @@
       "panelHost": {
         "close": "Fermer le panneau"
       },
+      "installProgress": {
+        "awaitingConsent": "En attente de confirmation…",
+        "installFailed": "Échec de l’installation"
+      },
       "updateAll": {
         "title": "Tout mettre à jour · {{count}} plugins",
         "collapseDiff": "Réduire",
@@ -8816,6 +8820,7 @@
         "statusDone": "Mis à jour",
         "statusSkipped": "Ignoré",
         "statusFailed": "Échec de la mise à jour",
+        "progressCount": "{{done}} sur {{total}} mis à jour",
         "background": "Continuer en arrière-plan",
         "doneAction": "Terminé",
         "doneToast": "Mise à jour groupée terminée : {{done}} mis à jour, {{rest}} non terminés",

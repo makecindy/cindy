@@ -1817,6 +1817,9 @@ interface ElectronAPI {
     >;
     onRemovalNoticeAvailable: (callback: () => void) => () => void;
     onUpdateConsentHoldsChanged: (callback: () => void) => () => void;
+    onInstallProgress: (
+      callback: (progress: import('../shared/pluginMarket').PluginMarketInstallProgress) => void,
+    ) => () => void;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
     pickLocalSource: (
       defaultPath?: string,

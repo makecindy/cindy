@@ -8691,6 +8691,10 @@
       "panelHost": {
         "close": "패널 닫기"
       },
+      "installProgress": {
+        "awaitingConsent": "확인 대기 중…",
+        "installFailed": "설치 실패"
+      },
       "updateAll": {
         "title": "모두 업데이트 · {{count}}개",
         "collapseDiff": "접기",
@@ -8701,6 +8705,7 @@
         "statusDone": "업데이트됨",
         "statusSkipped": "건너뜀",
         "statusFailed": "업데이트 실패",
+        "progressCount": "{{total}}개 중 {{done}}개 업데이트됨",
         "background": "백그라운드에서 계속",
         "doneAction": "완료",
         "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료",

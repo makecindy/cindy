@@ -39,6 +39,8 @@ const log = createLogger('plugin-market-ipc');
 let registered = false;
 const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
 const UPDATE_CONSENT_HOLDS_CHANGED_CHANNEL = 'plugin-market:update-consent-holds-changed';
+/** Local display push for the window running an install; not on the device-link allowlist. */
+const INSTALL_PROGRESS_CHANNEL = 'plugin-market:install-progress';
 const localIconRequestGate = new LocalIconRequestGate();
 const localShareWindows = new Set<number>();
 
@@ -302,6 +304,9 @@ export function registerPluginMarketIpc(): void {
             consent: {
               prompt: createWindowGhostInstallConsentPrompt(event.sender),
               initiator: 'user',
+            },
+            onProgress: (progress) => {
+              if (!event.sender.isDestroyed()) event.sender.send(INSTALL_PROGRESS_CHANNEL, progress);
             },
           },
         );

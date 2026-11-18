@@ -8677,6 +8677,10 @@
       "panelHost": {
         "close": "闔面板"
       },
+      "installProgress": {
+        "awaitingConsent": "候確認…",
+        "installFailed": "裝之未成"
+      },
       "updateAll": {
         "title": "盡更新 · 法器 {{count}} 件",
         "collapseDiff": "收",
@@ -8687,6 +8691,7 @@
         "statusDone": "已更新",
         "statusSkipped": "已略",
         "statusFailed": "更新未成",
+        "progressCount": "已更新 {{done}} / {{total}}",
         "background": "背後續行",
         "doneAction": "畢",
         "doneToast": "批次更新畢：已更新 {{done}} 件，未竟 {{rest}} 件",

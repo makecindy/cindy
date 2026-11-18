@@ -8691,6 +8691,10 @@
       "panelHost": {
         "close": "关闭面板"
       },
+      "installProgress": {
+        "awaitingConsent": "等待确认…",
+        "installFailed": "安装失败"
+      },
       "updateAll": {
         "title": "全部更新 · {{count}} 个插件",
         "collapseDiff": "收起",
@@ -8701,6 +8705,7 @@
         "statusDone": "已更新",
         "statusSkipped": "已跳过",
         "statusFailed": "更新失败",
+        "progressCount": "已更新 {{done}} / {{total}}",
         "background": "后台继续",
         "doneAction": "完成",
         "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成",

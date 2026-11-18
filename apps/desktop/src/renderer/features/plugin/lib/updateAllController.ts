@@ -21,6 +21,12 @@ import { deliveryNamespaceFields } from '../../../../shared/pluginIdentity';
 import { pluginMarketErrorKey } from './pluginMarketErrorKey';
 import { findInstalledGhostForMarketItem } from './pluginMarketPresentation';
 import {
+  beginPluginInstallProgress,
+  endPluginInstallProgress,
+  failPluginInstallProgress,
+  succeedPluginInstallProgress,
+} from './pluginInstallProgress';
+import {
   batchSummary,
   buildUpdateAllRows,
   isBatchFinished,
@@ -144,6 +150,7 @@ async function runQueue(generation: number): Promise<void> {
       const next = state.rows?.find((row) => row.status === 'pending');
       if (!next) break;
       patchRow(generation, next.pluginId, { status: 'installing' });
+      beginPluginInstallProgress(next.pluginId);
       try {
         const detail = await window.electronAPI.pluginMarket.detail(next.pluginId);
         if (generation !== batchGeneration) return;
@@ -183,6 +190,7 @@ async function runQueue(generation: number): Promise<void> {
           return;
         }
         patchRow(generation, next.pluginId, { status: 'done' });
+        succeedPluginInstallProgress(next.pluginId);
       } catch (error) {
         if (generation !== batchGeneration) return;
         if (!batchOwnerCurrent()) {
@@ -194,10 +202,13 @@ async function runQueue(generation: number): Promise<void> {
           patchRow(generation, next.pluginId, { status: 'skipped' });
           continue;
         }
+        failPluginInstallProgress(next.pluginId);
         patchRow(generation, next.pluginId, {
           status: 'failed',
           errorText: i18n.t(pluginMarketErrorKey(error)),
         });
+      } finally {
+        endPluginInstallProgress(next.pluginId);
       }
     }
   } finally {
