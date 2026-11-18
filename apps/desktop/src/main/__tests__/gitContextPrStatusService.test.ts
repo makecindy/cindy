@@ -832,7 +832,7 @@ describe('PR follow watch', () => {
     await look(20);
     expect(runNow).not.toHaveBeenCalled();
     await look(30, 'b2');
-    expect(runNow.mock.calls).toEqual([[expect.objectContaining({ id: 'follow-85' }), { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }]]);
+    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }, expect.objectContaining({ id: 'follow-85' })]]);
     await look(40, 'c3');
     expect(runNow).toHaveBeenCalledTimes(1);
     inflight.mockReturnValue(1);
@@ -884,6 +884,66 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
   });
 
+  it('runs the selected merge condition for event-only automations, independent of an incidental hook URL', async () => {
+    const target = 'https://github.com/makecindy/cindy/pull/85';
+    const other = 'https://github.com/makecindy/cindy/pull/8';
+    const tasks = [schedule('merged', other, { manual: true, prTrigger: { url: target, change: 'merged' } }),
+      schedule('disabled', target, { prTrigger: null })];
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true });
+    expect(followedGithubPrs(tasks)).toEqual([target]);
+    await watch.notify(other);
+    await watch.notify(target);
+    watch.observe(Q, { ok: true, status: 'open' } as never);
+    watch.observe(Q, { ok: true, status: 'closed' } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).not.toHaveBeenCalled();
+    watch.observe(Q, { ok: true, status: 'merged' } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(runNow).toHaveBeenCalledWith('merged', expect.objectContaining({ detail: target }), tasks[0]);
+  });
+
+  // #11309: a failed timed check can advance lastFiredAt without handling the merge.
+  it('recovers an unseen merge after a failed check, and skips a previously processed merge after restart', async () => {
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    const task = schedule('merge', url, { createdAt: 1, lastFiredAt: 30, prTrigger: { url, change: 'merged' } });
+    const runNow = vi.fn(async () => null);
+    const hasSuccessfulPrRunSince = vi.fn(async () => false);
+    const watch = new PrFollowWatch({ listActive: async () => [task], inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true, hasSuccessfulPrRunSince, runNow });
+    const merged = { ok: true, status: 'merged', metadata: { merged_at: new Date(20).toISOString() } } as never;
+    watch.observe(Q, { ok: false, reason: 'fetch-failed' } as never);
+    watch.observe(Q, merged);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(hasSuccessfulPrRunSince).toHaveBeenCalledWith('merge', 20);
+    watch.reset();
+    hasSuccessfulPrRunSince.mockResolvedValue(true);
+    watch.observe(Q, merged);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters CI, review and recovery wakeups for ordinary tasks with no gate', async () => {
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    const tasks = (['ci', 'review', 'merged', 'any'] as const).map(change =>
+      schedule(change, url, { manual: true, preRunHook: undefined, prTrigger: { url, change } }));
+    const runNow = vi.fn(async (_id: string) => null);
+    const watch = new PrFollowWatch({ listActive: async () => tasks, runNow, inflight: () => 0,
+      autoRunAllowed: () => true, hasCapacity: () => true });
+    await watch.notifyChange(url, 'reconcile', () => true);
+    expect(runNow).not.toHaveBeenCalled();
+    const open = { ok: true, status: 'open', checks: { total: 1, pending: 1 } };
+    watch.observe(Q, open as never);
+    watch.observe(Q, { ...open, checks: { total: 1, passed: 1 } } as never);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(runNow.mock.calls.map(([id]) => id)).toEqual(['ci', 'any']);
+    await watch.notifyChange(url, 'review', () => true);
+    expect(runNow.mock.calls.map(([id]) => id)).toEqual(['ci', 'any', 'review']);
+  });
+
   // Review (Codex P2 on #9022): a passive instance shares data with another one that owns automatic runs.
   it('never starts runs on a passive scheduler instance', async () => {
     const { look, runNow, autoRunAllowed } = setup();
@@ -916,7 +976,7 @@ describe('PR follow watch', () => {
     vi.useFakeTimers();
     let busy = true;
     const url = 'https://github.com/example/project/pull/85';
-    const runNow = vi.fn(async (_schedule: { id: string }) => null);
+    const runNow = vi.fn<(id: string) => Promise<null>>(async () => null);
     const watch = new PrFollowWatch({
       listActive: async () => ['first', 'busy', 'paused', 'explicit-app'].map(id => schedule(id, url, {
         status: id === 'paused' ? 'paused' : 'active',
@@ -927,12 +987,35 @@ describe('PR follow watch', () => {
     });
     try {
       await watch.notify(url);
-      expect(runNow.mock.calls.map(([task]) => task.id)).toEqual(['first']);
+      expect(runNow.mock.calls.map(call => call[0])).toEqual(['first']);
       busy = false;
       await vi.advanceTimersByTimeAsync(5000);
-      expect(runNow.mock.calls.map(([task]) => task.id)).toEqual(['first', 'busy']);
+      expect(runNow.mock.calls.map(call => call[0])).toEqual(['first', 'busy']);
       await vi.advanceTimersByTimeAsync(120_000);
       expect(runNow).toHaveBeenCalledTimes(2);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  // PR 11309, unit: the bound runner can discover a busy session after admission.
+  // A successful status sample with the same signature would never wake the task again.
+  it.each([true, false])('retains a runner-deferred merge only while the trigger applies (active=%s)', async (active) => {
+    vi.useFakeTimers();
+    try {
+      const url = 'https://github.com/makecindy/cindy/pull/85';
+      let task = schedule('merge', url, { preRunHook: undefined, prTrigger: { url, change: 'merged' } });
+      const runNow = vi.fn(async () => ({ runId: 'merge-run', deferred: false }));
+      runNow.mockResolvedValueOnce({ runId: 'deferred-run', deferred: true });
+      const watch = new PrFollowWatch({
+        listActive: async () => [task], inflight: () => 0, hasCapacity: () => true, autoRunAllowed: () => true, runNow,
+      });
+      await watch.notifyChange(url, 'merged', () => true);
+      expect(runNow).toHaveBeenCalledOnce();
+      if (!active) task = schedule('merge', url, { preRunHook: undefined, prTrigger: null });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
+      if (active) expect(runNow).toHaveBeenLastCalledWith('merge', { kind: 'watch', source: 'pr-status', detail: url }, task);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(active ? 2 : 1);
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 

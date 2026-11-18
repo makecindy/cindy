@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './pr-trigger.js';
 export * from './routines.js';
 export { RoutineEventAdmission } from './routine-event-admission.js';
 export * from './webhook-queue.js';

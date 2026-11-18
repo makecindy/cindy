@@ -2390,6 +2390,7 @@ interface PiSubagentResumeLaunch {
     bridgeSource: Buffer;
     runnerSource: Buffer;
     cacheRulesJson?: Buffer;
+    settingsJson?: Buffer;
   };
 }
 
@@ -2842,6 +2843,30 @@ async function resumeClaimedPiSubagentRun(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
+  // Older snapshots may lack settings; new launches freeze only native shell keys.
+  let settingsJson = launch.runtimeSnapshot?.settingsJson;
+  if (settingsJson === undefined) {
+    const sourceSettingsFile = path.join(sourceConfigHome, 'settings.json');
+    try {
+      const [info, canonical] = await Promise.all([fs.lstat(sourceSettingsFile), fs.realpath(sourceSettingsFile)]);
+      if (info.isSymbolicLink() || !info.isFile() || info.size > MAX_STATUS_BYTES
+        || path.dirname(canonical) !== canonicalConfigHome) {
+        throw new Error('PI Subagent resume settings escaped their source run');
+      }
+      settingsJson = await fs.readFile(sourceSettingsFile);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  if (settingsJson && settingsJson.byteLength > MAX_STATUS_BYTES) {
+    throw new Error('PI Subagent resume settings escaped their source run');
+  }
+  const settings = settingsJson ? JSON.parse(settingsJson.toString('utf8')) : {};
+  const shellSettings: Record<string, string> = {};
+  for (const key of ['shellPath', 'shellCommandPrefix']) {
+    const value = settings && settings[key];
+    if (typeof value === 'string' && value.trim()) shellSettings[key] = value;
+  }
   const runId = randomUUID();
   const runDir = path.join(root, runId);
   const childConfigHome = path.join(runDir, 'pi-home');
@@ -2911,6 +2936,7 @@ async function resumeClaimedPiSubagentRun(
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    await fs.writeFile(path.join(childConfigHome, 'settings.json'), JSON.stringify(shellSettings) + '\n', { mode: 0o600, flag: 'wx' });
     if (cacheRules) await fs.writeFile(path.join(childConfigHome, 'pi-cache-compatibility.json'), cacheRules, { mode: 0o600, flag: 'wx' });
     await copyStagedRipgrep(
       sourceConfigHome,
