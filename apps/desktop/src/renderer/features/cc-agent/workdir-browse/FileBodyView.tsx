@@ -799,8 +799,10 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     if (!Number.isFinite(line) || line <= 0) return;
     const key = `${relPath}|${line}|${jumpLineNonce ?? 0}`;
     if (lastLineJumpKeyRef.current === key) return;
-    lastLineJumpKeyRef.current = key;
     const raf = requestAnimationFrame(() => {
+      // 去重 key 只在真正滚过之后才记：这一帧可能被切 tab / 收起侧栏取消掉，
+      // 提前占住 key 会让用户回来时同一条锚点被当成重复而永久跳过。
+      lastLineJumpKeyRef.current = key;
       editorRef.current?.scrollToLine(line);
       onJumpLineConsumed?.();
     });
