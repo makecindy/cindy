@@ -2796,7 +2796,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return run.delivery;
   }
   /** Reads one message by ID; a message the reader can no longer see resolves to undefined. */
-  async function readMessage(roomId: string, messageId: string, work = false): Promise<Message | undefined> {
+  async function readMessage(roomId: string, messageId: string, work = false, initialSnapshot?: Promise<Snapshot>): Promise<Message | undefined> {
     try {
       const message = await (work ? workApi : api)<Message>(`/conversations/${roomId}/messages/${id.parse(messageId)}`);
       return message?.id === messageId && Array.isArray(message.content) ? message : undefined;
@@ -2806,7 +2806,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // snapshot already contains the source. Do not substitute cached history, scan
       // other rooms, or treat an authorization failure as endpoint compatibility.
       if (error instanceof ChatResponseError && error.status === 400 && error.message === 'INVALID_INPUT') {
-        const snapshot = await (work ? workApi : api)<Snapshot>(`/conversations/${id.parse(roomId)}/snapshot`);
+        // Share only a caller's initial authenticated read; work discovery must still
+        // enter workApi rather than reuse another request's admission.
+        const snapshot = initialSnapshot && !work ? await initialSnapshot
+          : await (work ? workApi : api)<Snapshot>(`/conversations/${id.parse(roomId)}/snapshot`);
         const source = snapshot?.room?.id === roomId && Array.isArray(snapshot.messages)
           ? snapshot.messages.find(message => message.id === messageId && Array.isArray(message.content)) : undefined;
         if (source) return source;
@@ -2871,7 +2874,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const run: Running = { execution, sessionId: '', clientId: botGroupAssistantClientId(execution.id, execution.epoch), accepted: false,
       started: Date.now(), lane, inTask: true, assistant: true };
     running.set(execution.id, run);
-    resolveLane(run);
     const live = () => current() && running.get(execution.id) === run;
     try {
       z.object({ access_mode: z.enum(['owner', 'chat', 'tools']), access_revision: z.number().int().positive() }).parse(execution);
@@ -2879,9 +2881,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (execution.requester_id !== selfId) throw new Error('MEMBER_UNAVAILABLE');
       if (!ordinaryExecution(execution) || execution.plan_id || execution.mask_owner_id || execution.mask_kind) throw new Error('INVALID_EXECUTION_TRIGGER');
       const roomId = execution.conversation_id;
-      const sourceRead = readMessage(roomId, execution.source_message_id);
+      // These promises belong only to this execution's initial context. Subsequent
+      // execution/room authority checks keep their independent fresh reads.
+      const snapshotRead = readSnapshot(roomId);
+      const sourceRead = readMessage(roomId, execution.source_message_id, false, snapshotRead);
       sourceRead.catch(() => undefined);
-      const s = await readSnapshot(roomId);
+      resolveLane(run, sourceRead);
+      const s = await snapshotRead;
       if (!isGroupRoom(s.room)) throw new Error('INVALID_EXECUTION_TRIGGER');
       subscribe(roomId, s.cursor);
       const source = await sourceRead;
@@ -3455,17 +3461,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * (bot-group-chat.md §3). A companion takes one turn at a time per conversation, while its turns in
    * different conversations run side by side, each in its own lane.
    */
-  async function executionLane(execution: Execution, work = false): Promise<string> {
+  async function executionLane(execution: Execution, work = false, initialSource?: Promise<Message | undefined>): Promise<string> {
     const room = execution.conversation_id;
     if (execution.plan_id) return `${room}:plan:${execution.plan_id}`;
     if (!ordinaryExecution(execution)) return `${room}:main`;
-    const source = await readMessage(room, execution.source_message_id, work);
+    const source = await (initialSource && !work ? initialSource : readMessage(room, execution.source_message_id, work));
     return source?.threadRootId ? `${room}:thread:${source.threadRootId}` : `${room}:main`;
   }
   /** Reads a turn's conversation once at a time; a failed read is tried again on the next claim pass. */
-  function resolveLane(run: Running) {
+  function resolveLane(run: Running, initialSource?: Promise<Message | undefined>) {
     if (run.lane || run.laneLookup) return;
-    run.laneLookup = executionLane(run.execution).then(value => { run.lane = value; }, () => undefined)
+    run.laneLookup = executionLane(run.execution, false, initialSource).then(value => { run.lane = value; }, () => undefined)
       .finally(() => { run.laneLookup = undefined; });
   }
   const runsOf = (botId: string) => [...running.values()].filter(run => run.execution.bot_id === botId);
