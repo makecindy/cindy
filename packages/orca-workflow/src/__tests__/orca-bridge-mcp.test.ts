@@ -657,7 +657,7 @@ describe('orca_worker_bridge MCP helpers', () => {
   });
 
   // 2026-11-10 Super-agent 机制吸收：Worker 回报带六态结构化字段时，Host 拿到的回执必须
-  // 原样带上它（否则 Main 侧无法区分无操作/等人工/待验收），而 blocked 缺问题时不能发出。
+  // 原样带上它（否则 Main 侧无法区分无操作/等人工/完成有结论），而 blocked 缺问题时不能发出。
   // 生产入口：工具 handler + 注入的 captureLocalWorkerReport 回执；unit tier 同本文件其余用例。
   it('forwards a structured report into the host receipt', async () => {
     const lead = makeSession('lead-1');

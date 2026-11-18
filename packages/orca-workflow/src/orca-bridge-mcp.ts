@@ -232,7 +232,7 @@ export interface OrcaWorkerReportReceipt {
 /**
  * Worker 结构化回报的六态。
  * progress 只是内部进度(不结算、不打扰);waiting 是本轮干净结束;
- * ready 完成待验收;blocked / failed 等人工;dropped 无需处理。
+ * ready 完成有结论;blocked / failed 等人工;dropped 无需处理。
  */
 export const ORCA_WORKER_REPORT_STATES = [
   'progress',
