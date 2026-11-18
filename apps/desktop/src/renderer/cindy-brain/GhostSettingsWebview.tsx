@@ -11,6 +11,7 @@ import type { RemotePluginSettingsDirectory } from '../../shared/remotePluginSet
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { GHOST_SCHEME, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
+import { GithubPluginReleaseSettings } from './GithubPluginReleaseSettings';
 import {
   installedGhostLogicalIdentity,
   installedGhostStoragePart,
@@ -470,6 +471,10 @@ export function GhostSettingsWebview({
           </p>
         </div>
       )}
+      {!remoteDeviceId && ghost.namespace === 'local' && ghost.namespaceState === 'confirmed' &&
+        manifest.githubRelease && (
+          <GithubPluginReleaseSettings key={`${ownerKey}:${installedGhostStoragePart(ghost)}`} ghost={ghost} />
+        )}
       {ghost.enabled && <Fragment key={`account:${ownerKey}`}>{account}</Fragment>}
       {ghost.enabled && account ? (
         <details key={`methods:${ownerKey}`} className="group">

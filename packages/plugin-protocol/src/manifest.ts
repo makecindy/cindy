@@ -1040,6 +1040,8 @@ export interface GhostManifest {
    * 只影响宿主展示：「IM 机器人」设置页列出它并显示「项目与模型」；不授予任何能力。
    */
   imEntrance?: boolean;
+  /** Optional GitHub.com owner/repository for local plugin updates. */
+  githubRelease?: string;
   /** 仅 schemaVersion 2 存在的兼容声明。 */
   slots?: LegacyGhostSlot[];
   /**
@@ -1294,6 +1296,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'settingsHeight',
   'showTaskPreferences',
   'imEntrance',
+  'githubRelease',
   'slots',
   'card',
   'mail',
@@ -1870,6 +1873,11 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
   }
   // Older manifests could use this formerly unknown name. Preserve their snapshot.
+  if (raw.githubRelease !== undefined && (raw.settingsHtml === undefined || typeof raw.githubRelease !== 'string' ||
+      !/^[a-z0-9](?:[a-z0-9-]{0,38})\/[a-z0-9_.-]{1,100}$/i.test(raw.githubRelease) ||
+      /\/(?:\.|\.\.)$/.test(raw.githubRelease))) {
+    return { ok: false, reason: 'githubRelease requires settingsHtml and a GitHub owner/repository' };
+  }
   if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
     if (typeof raw.imEntrance !== 'boolean') return { ok: false, reason: 'imEntrance 必须是布尔值' };
     const imAgent = raw.agent as Record<string, unknown> | undefined;
@@ -4064,6 +4072,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
+      ...(typeof raw.githubRelease === 'string' ? { githubRelease: raw.githubRelease.toLowerCase() } : {}),
       ...(raw.imEntrance !== undefined ? { imEntrance: raw.imEntrance as boolean } : {}),
       ...(prepared.schemaVersion === 2 ? { slots } : {}),
       ...(card !== undefined

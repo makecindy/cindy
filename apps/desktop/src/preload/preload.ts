@@ -1572,6 +1572,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       config: Record<string, unknown> | null,
     ): Promise<{ config: Record<string, unknown> }> =>
       ipcRenderer.invoke('ghosts:errand-prefs:set', id, config),
+    githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number):
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
+      ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),
     pickFile: (): Promise<{ canceled: true } | { filePath: string }> =>
       ipcRenderer.invoke('ghosts:pick-file'),
     inspect: (

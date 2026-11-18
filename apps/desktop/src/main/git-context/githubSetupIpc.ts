@@ -26,6 +26,17 @@ const cindyGithubRootInstance = () => pluginInstallStoragePart(
   pluginNewInstallRelId(createPluginLogicalIdentity(null, 'cindy-github')),
 );
 
+function readGithubPluginToken(): string | null {
+  return readGhostSecret(cindyGithubRootInstance(), 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat');
+}
+
+/** Host-only credential for actions the user invokes with their local GitHub sign-in. */
+export async function readLocalGithubToken(): Promise<string | null> {
+  const owner = activeOwnerScopeKey();
+  const token = await getSharedGhCliTokenSource().readToken();
+  return owner === activeOwnerScopeKey() ? token ?? readGithubPluginToken() : null;
+}
+
 /**
  * This computer's effective GitHub sign-in for the active owner: gh first, then the fallback token the
  * requested plugin would actually use (`fallback`: its installed instance and declared secret key; the
@@ -37,7 +48,6 @@ export async function readGithubConnection(
   const owner = activeOwnerScopeKey();
   const source = getSharedGhCliTokenSource();
   source.invalidate();
-  const rootInstance = cindyGithubRootInstance();
   const result = await githubConnection({
     readGh: () => source.readToken(),
     readFallback: () =>
@@ -45,7 +55,7 @@ export async function readGithubConnection(
         ? null
         : fallback
           ? readGhostSecret(fallback.instanceId, fallback.key)
-          : readGhostSecret(rootInstance, 'github_pat') ?? readGhostSecret('cindy-github', 'github_pat'),
+          : readGithubPluginToken(),
     fetch: outboundFetch,
   });
   return owner === activeOwnerScopeKey() ? result : { status: 'missing' };
