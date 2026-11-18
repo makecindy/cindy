@@ -562,6 +562,25 @@ describe('ResourceUsageWindowController', () => {
     expect(windows[0]?.show).toHaveBeenCalledOnce();
   });
 
+  // Unit regression: reloading a visible Windows tray used the ordinary hide
+  // animation, leaving the layer transparent when the custom show restored it.
+  it('uses the surface hide policy when restoring a visible window after reload', () => {
+    const win = fakeWindow(1);
+    const nativeWin = win as unknown as BrowserWindow;
+    const hideWindow = vi.fn((window: BrowserWindow) => window.hide());
+    const controller = new ResourceUsageWindowController({
+      createWindow: () => nativeWin, isOpenSender: () => true, hideWindow,
+    });
+    controller.open(win.webContents);
+    markPrewarmed(controller, win);
+    win.emitWebContents('did-start-loading');
+    expect(hideWindow).toHaveBeenCalledWith(nativeWin);
+    expect(win.isVisible()).toBe(false);
+    markPrewarmed(controller, win);
+    expect(win.isVisible()).toBe(true);
+    controller.dispose();
+  });
+
   it('replaces a failed renderer while preserving a pending open', () => {
     const { controller, windows, mainSender } = makeHarness();
     controller.open(mainSender);
