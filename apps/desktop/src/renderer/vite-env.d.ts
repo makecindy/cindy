@@ -5423,7 +5423,7 @@ interface ElectronAPI {
       autoIcon: (input: { projectKey: string }) => Promise<unknown>;
       iconImage: (input: { projectKey: string }) => Promise<string | null>;
       snapshot: () => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
-      updateInfo: (input: {projectKey: string; field: 'name' | 'icon' | 'profile'; value: string | null | {name?: string; icon?: string | null}; dataOwnerId: string | null; ownerGeneration: number}) => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
+      updateInfo: (input: {projectKey: string; create?: boolean; repositoryUrl?: string; field: 'name' | 'icon' | 'profile'; value: string | null | {name?: string; icon?: string | null; directories?: readonly import('@cindy/maker-shared/project-alias-sync').ProjectDirectory[]}; dataOwnerId: string | null; ownerGeneration: number}) => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
       set: (input: {
         projectKey: string;
@@ -5745,7 +5745,11 @@ interface ElectronAPI {
   // ── Dialog（v0.6 新增） ────────────────────────────────────────────────────
   dialog: {
     /** 打开系统目录选择对话框，返回用户选中的目录路径（取消时 path=null）。 */
-    showOpenDirectory: (params?: { defaultPath?: string; writableGrantScope?: string }) => Promise<{
+    showOpenDirectory: (params?: {
+      defaultPath?: string;
+      writableGrantScope?: string;
+      projectGrantScope?: string;
+    }) => Promise<{
       success: boolean;
       path: string | null;
     }>;

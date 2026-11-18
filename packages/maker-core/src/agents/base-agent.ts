@@ -2805,11 +2805,12 @@ export interface AgentSessionHandle {
 
   /**
    * 运行时增删 extraDirs(覆盖式)。Claude 与 Codex 都更新 closure，在下一 turn 生效。
+   * remote 只由宿主提供目标 SSH 主机已验证的项目子集；不把旧控制端路径当远端授权。
    */
-  setExtraDirs?(dirs: string[], libraryRoot?: string | null): Promise<void>;
+  setExtraDirs?(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void>;
 
   /** 运行时增删附加可读写目录(覆盖式)，下一 turn 生效。 */
-  setWritableDirs?(dirs: string[]): Promise<void>;
+  setWritableDirs?(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void>;
 
   /**
    * 运行时合并 vendorOptions(浅合并到内部闭包)。

@@ -92,6 +92,8 @@ export interface SessionStartFailureContext {
 }
 
 export interface SessionLifecycleHooks {
+  /** Host-owned per-turn settings, refreshed only after a turn has reserved the session. */
+  beforeTurn?: (session: Session) => Promise<void>;
   /**
    * Agent 启动前补齐 start options。该步骤属于正确启动的前置条件，失败会阻断创建。
    * 允许直接修改 options；Maker 会把同一个对象传给 agent 和成功钩子。
@@ -1222,6 +1224,7 @@ export class Maker {
       workDir: startOpts.workingDir,
       handle,
       hostStartupPreferences: opts.hostStartupPreferences,
+      beforeTurn: this.lifecycleHooks.beforeTurn,
       capabilities: capabilitiesForSession(
         meta.agentKind,
         agent?.capabilities ?? applicationHandleCapabilities(handle),
