@@ -1,6 +1,6 @@
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
-import { createPersonalBuildMonitor, personalMonitorEnvironment } from './personalBuildMonitor.js';
+import { createPersonalBuildMonitor, createPersonalRendererProbe, personalMonitorEnvironment } from './personalBuildMonitor.js';
 import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
 import { observeDesktopStartupResult } from './devStartupStatus.js';
 import { getClaudeSessionBackgroundActivity } from './maker-host/claude-session-background-activity';
@@ -3696,6 +3696,7 @@ function isPathAllowed(filePath: string): boolean {
 // BrowserWindow，[0] 拿到它再 .focus() 等于啥也没干，用户视觉上以为
 // "双击启动不了"。
 let mainWindowRef: BrowserWindow | null = null;
+const personalLoadFailures = new WeakMap<BrowserWindow, number>();
 let mainWindowMaximizeRecoveryController: MainWindowMaximizeRecoveryController | null = null;
 // 端点清单阻断门:ready 流程走到正常 createWindow() 前置 true。在此之前
 // second-instance / activate 一律不许建窗——阻断循环(错误框重试)期间用户
@@ -4990,6 +4991,11 @@ const createWindow = () => {
     }
   });
   let devLoadRetries = 0;
+  if (personalMonitorEnvironment) {
+    mainWindow.webContents.on('did-start-navigation', (event) => {
+      if (event.isMainFrame && !event.isSameDocument) personalLoadFailures.delete(mainWindow);
+    });
+  }
   mainWindow.webContents.on(
     'did-fail-load',
     (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -5006,6 +5012,8 @@ const createWindow = () => {
         setTimeout(() => {
           if (!mainWindow.isDestroyed()) void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
         }, delayMs);
+      } else if (personalMonitorEnvironment) {
+        personalLoadFailures.set(mainWindow, errorCode);
       }
     },
   );
@@ -7162,6 +7170,8 @@ const registerIpcHandlers = () => {
       // Packaged apps and ordinary dev launches retain their existing lifecycle.
       if (process.platform === 'darwin' && !app.isPackaged && personalMonitorEnvironment) {
         let personalReady = false;
+        const interactive = createPersonalRendererProbe(() => mainWindowRef, personalMonitorEnvironment.assetDigest
+          ? path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`) : undefined);
         const stopObserving = observeDesktopStartupResult((ready) => { personalReady = ready; });
         const tick = createPersonalBuildMonitor({
           directory: personalMonitorEnvironment.directory,
@@ -7169,6 +7179,9 @@ const registerIpcHandlers = () => {
           pid: process.pid, now: Date.now,
           ready: () => personalReady && !!mainWindowRef && !mainWindowRef.isDestroyed()
             && !mainWindowRef.webContents.isDestroyed() && !mainWindowRef.webContents.isCrashed(),
+          assetDigest: personalMonitorEnvironment.assetDigest,
+          interactive,
+          interfaceFailure: () => mainWindowRef ? personalLoadFailures.get(mainWindowRef) : undefined,
           remoteReady: () => getDeviceLinkStatus() === 'online',
           idle: () => powerMonitor.getSystemIdleTime() >= 120,
           busy: () => hasUpdateRelaunchBusyActivity({

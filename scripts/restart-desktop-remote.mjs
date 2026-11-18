@@ -1187,6 +1187,7 @@ function devEnvEntries(env) {
     ['CINDY_PERSONAL_MONITOR_DIR', env.CINDY_PERSONAL_MONITOR_DIR],
     ['CINDY_PERSONAL_GENERATION', env.CINDY_PERSONAL_GENERATION],
     ['CINDY_PERSONAL_FIXED_APP', env.CINDY_PERSONAL_FIXED_APP],
+    ['CINDY_PERSONAL_ASSET_DIGEST', env.CINDY_PERSONAL_ASSET_DIGEST],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
     // IPC 通道调用计数报告（ipcChannelUsage.ts，仅源码运行）：Host 通道覆盖排行用。
@@ -1827,7 +1828,10 @@ async function main() {
 
   if (killOnly) return;
 
-  if (!preserveRunning) clearDesktopDevCaches(rootDir);
+  if (process.env.CINDY_PERSONAL_ASSET_DIGEST && process.env.CINDY_PERSONAL_MONITOR_DIR && process.env.CINDY_PERSONAL_GENERATION) {
+    const { verifyInterface } = await import('./personal-build/interface-assets.mjs');
+    verifyInterface(rootDir, process.env.CINDY_PERSONAL_ASSET_DIGEST);
+  } else if (!preserveRunning) clearDesktopDevCaches(rootDir);
 
   let startupStatusPath = null;
   if (waitReady) {

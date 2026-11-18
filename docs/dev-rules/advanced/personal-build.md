@@ -1019,7 +1019,13 @@ node scripts/personal-build.mjs manual-check --config FILE --report BUILD_REPORT
 本地例外的策略及清单不得混入通用分发，下一轮不得沿用不同迁移树的批准。
 
 `automatic/activation-events.jsonl` 保留迁移和启动阶段及原始失败。启动前失败只有在
-未尝试数据库升级时才能沿用安全恢复；尝试过迁移即保持 blocked。
+未尝试数据库升级时才能沿用安全恢复；迁移完成后，若首次启动未就绪且失败进程及其启动器已经退出，可重试同一候选一次。
+重试前只读核对备份收据、数据库文件身份、迁移历史和 SQLite 完整性，记录
+`retrying-startup`。第二次失败、迁移不完整或观察期健康检查失败均保持 blocked。
+
+使用签名运行时的个人版在旧窗口运行期间构建主进程、预加载脚本和界面。隔离启动后记录
+`.vite` 的内容摘要。切换前和新进程启动前再次校验摘要，Forge 直接读取本地产物。
+隔离验收和正式观察期都要求当代进程打开预期本地页面、React 挂载并有实际内容。
 `reconcile-running --config FILE --app REPAIRED_CHECKOUT --expected-pid PID --out NEW_RECEIPT`
 只处理原失败 checkout 中启动策略及批准记录的修复：其它代码/数据实现变化拒绝。
 它持有监督锁，以只读连接核对账号库、真实进程身份和至少两分钟连续心跳后备份并更新

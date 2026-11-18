@@ -456,6 +456,8 @@ const isDev =
   process.env.NODE_ENV !== 'production' &&
   !process.argv.includes('make') &&
   !process.argv.includes('package');
+const usePrebuiltPersonalInterface = isDev && /^[a-f0-9]{64}$/.test(process.env.CINDY_PERSONAL_ASSET_DIGEST ?? '') &&
+  !!process.env.CINDY_PERSONAL_GENERATION && !!process.env.CINDY_PERSONAL_MONITOR_DIR;
 const isWin = process.platform === 'win32';
 
 /**
@@ -2196,7 +2198,7 @@ const config: ForgeConfig = {
     // chat-data-localization F1：自动 unpack 任何 *.node 原生模块（better-sqlite3）
     // 使其在 packaged 应用中可以被 require()——asar 会阻止原生模块的 dlopen 调用。
     new PersonalNativeLaunchPlugin({}),
-    new VitePlugin({
+    ...(usePrebuiltPersonalInterface ? [] : [new VitePlugin({
       // Dev keeps all watcher targets in one process. Build them serially at
       // startup so the initial graph does not multiply the same high baseline;
       // packaged builds retain Forge's normal concurrency.
@@ -2418,7 +2420,7 @@ const config: ForgeConfig = {
           config: 'vite.renderer.config.ts',
         },
       ],
-    }),
+    })]),
     // FusesPlugin conflicts with VitePlugin on `start` command — only load for package/make
     ...(isDev
       ? []
