@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { PeerRule } from '@cindy/agent-net';
 import { AgentNetMembership, MEMBERSHIP_PERIODIC_MS, MEMBERSHIP_READ_MIN_INTERVAL_MS, MEMBERSHIP_RECHECK_INTERVAL_MS,
-  MEMBERSHIP_RETRY_FIRST_MS } from '../agentNetMembership.js';
+  MEMBERSHIP_RETRY_FIRST_MS } from '@cindy/agent-net';
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(1_000_000); });
 afterEach(() => { vi.useRealTimers(); });

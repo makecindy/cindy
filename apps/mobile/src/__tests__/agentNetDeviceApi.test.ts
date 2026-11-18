@@ -10,13 +10,13 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { DeviceView } from '@cindy/device-link';
 
 const fake = vi.hoisted(() => ({ owner: 'owner-a', encryptedOnly: false, relayMode: 'official' as 'official' | 'mixed' | 'v2-only',
-  directory: vi.fn(), mutation: vi.fn(), legacy: vi.fn(), cache: vi.fn() }));
+  directory: vi.fn(), mutation: vi.fn(), legacy: vi.fn(), cache: vi.fn(), noteList: vi.fn() }));
 vi.mock('@/api/client', () => ({ ApiError: class extends Error {
   constructor(readonly code: string, readonly status: number, message: string) { super(message); }
 } }));
 vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://devices.example.test' }));
 vi.mock('@/auth/authOwnerGeneration', () => ({ getMobileAuthOwner: () => fake.owner, isMobileAuthOwnerCurrent: (owner: string) => owner === fake.owner }));
-vi.mock('@/device-link/agentNetRuntime', () => ({ isMobileAgentNetActive: () => true }));
+vi.mock('@/device-link/agentNetRuntime', () => ({ isMobileAgentNetActive: () => true, noteMobileAgentNetDeviceList: fake.noteList }));
 vi.mock('@/device-link/agentNetIdentity', () => ({ ensureMobileAgentNetIdentity: async () => ({ api: { directory: fake.directory, request: fake.mutation } }) }));
 vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ generation: 0 }),
   mobileAgentNetRequiresEncryption: () => fake.encryptedOnly || fake.relayMode === 'v2-only' }));
@@ -40,12 +40,14 @@ beforeEach(() => {
   fake.cache.mockResolvedValue(undefined); fake.mutation.mockResolvedValue({ name: 'Renamed' });
 });
 
-it('merges V1-only devices with V2 presence and preserves an online legacy route', async () => {
+// The displayed V2-only row cannot act as official membership after deletion in V1.
+it('merges V1-only devices with V2 presence and reads membership from the unmerged official list', async () => {
   expect(await request()).toMatchObject({ handled: true, value: { devices: [
     { deviceId: 'old', online: true }, { deviceId: 'shared', name: 'shared', online: true },
     { deviceId: 'new', name: 'V2 new', remoteControlEnabled: false },
   ] } });
   expect(fake.legacy).toHaveBeenCalledTimes(1);
+  expect(fake.noteList).toHaveBeenCalledExactlyOnceWith(['old', 'shared'], expect.any(Number));
 });
 
 // App metadata must reach the shared mobile controllable-device predicate.

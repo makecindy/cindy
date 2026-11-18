@@ -160,7 +160,7 @@ export async function readCurrentDeviceDirectory(
     return { devices: devices.map(device => projectAgentNetDevice(device, api.certificate.deviceId)) };
   };
   // A device removed in Device Link stays in the official Agent-Net directory: it is not part of this account until it
-  // signs in again there (agentNetMembership.ts), so it is not listed from there either. Everyone on a self-hosted relay.
+  // signs in again there (packages/agent-net/src/membership.ts), so it is not listed from there either. Everyone on a self-hosted relay.
   // Also the rows a partial directory takes from the remembered complete one: a device deleted on another computer since
   // would come back there for up to 30 minutes.
   const withoutRefused = <T extends { devices: DeviceView[] }>(value: T): T =>

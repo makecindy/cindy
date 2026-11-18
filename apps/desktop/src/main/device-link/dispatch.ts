@@ -131,7 +131,7 @@ import type { app } from 'electron';
 import type { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
-import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinks } from './peerLinks.js';
+import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinks } from '@cindy/agent-net';
 import { isDeferredHistoryPush, deferredToolBoundary, buildHistoryWorkPatch, thinkingDeltaUpdatesWorkLine } from './historyViewPush';
 import { clearHistoryViewDeltas, withoutHistoryViewDeltaToken } from './historyViewDelta';
 import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
@@ -1405,7 +1405,7 @@ const remoteInvokeInstance = `${Date.now().toString(36)}${Math.random().toString
 let remoteInvokeClearGeneration = 0;
 /**
  * 这台对这个控制端的请求去重记忆是哪一份：进程重启、整体清空（登出、关远程控制）、对它的清空（永久关链、撤权）都会变。Agent-Net
- * 会话的链路回复带上它（agentNetSessionLinks.ts），控制端断线后用原请求号再发之前比一下：变了就说明这里已经不记得那次请求，
+ * 会话的链路回复带上它（packages/agent-net/src/session/sessionLinks.ts），控制端断线后用原请求号再发之前比一下：变了就说明这里已经不记得那次请求，
  * 再发可能重复执行，不再发（和原来一样报「可能已执行」）。Device Link 的链路回复不带。
  */
 function remoteInvokeEpoch(deviceId: string): string {

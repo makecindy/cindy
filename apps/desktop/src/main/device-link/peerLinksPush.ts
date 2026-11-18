@@ -11,7 +11,7 @@
  * 的 5 秒轮询补上；用户主动断链同理。
  */
 
-import type { PeerLinks } from './peerLinks.js';
+import type { PeerLinks } from '@cindy/agent-net';
 
 import type { DeviceLinkPeerLinksSnapshot } from '../../shared/deviceLinkIpc';
 

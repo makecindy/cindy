@@ -23,7 +23,10 @@ import os from 'node:os';
 import { StunClient } from './stun.js';
 import { RelayUdpPath } from './relayUdp.js';
 import { UDP_RELAY_UP_OVERHEAD } from '@cindy/agent-net-relay/client';
-import { ChannelEvents, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RosterEntry, type Transport, type TransportOptions } from './types.js';
+import {
+  AGENT_NET_SESSION_V1, ChannelEvents, MAX_CHANNEL_PENDING_BYTES, MAX_EARLY_SESSION_BYTES, SESSION_LANE_KINDS,
+  SESSION_LANE_PRIORITY as SESSION_PRIORITY, type PeerChannel, type RosterEntry, type SessionLaneName, type Transport, type TransportOptions,
+} from './types.js';
 
 const PROLOGUE = 'cindy/agent-net/device-link/2';
 /**
@@ -46,15 +49,8 @@ const PROBES_PER_ROUND = 4;
 const MAX_CANDIDATES = 16;
 const DATA = 0x44;
 const CONTROL = 0x43;
-/** Session lane streams (session/lanes.ts). Opened only after the peer declared support: older nodes close the connection
- * on a stream type they do not know. */
-const SESSION_LANE_KINDS = { control: 0x30, normal: 0x31, background: 0x32 } as const;
-const SESSION_PRIORITY = { control: 'interactive', normal: 'normal', background: 'background' } as const;
-type SessionLaneName = keyof typeof SESSION_LANE_KINDS;
 const SESSION_LANE_BY_KIND = new Map<number, SessionLaneName>(Object.entries(SESSION_LANE_KINDS).map(([lane, kind]) => [kind, lane as SessionLaneName]));
-export const AGENT_NET_SESSION_V1 = 'agent-net-session-v1';
-/** Session bytes that may arrive before this side attached its session; beyond it the connection is closed. */
-const MAX_EARLY_SESSION_BYTES = 16 * 1024 * 1024;
+export { AGENT_NET_SESSION_V1 };
 
 /** 名册里怎么连上一台设备：UDP 地址、中转上的设备号，有哪个用哪个。 */
 export interface CoreDial {

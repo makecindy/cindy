@@ -17,6 +17,7 @@ import { approveJoin, createDelegation, createJoinRequest, createPrivateNetwork,
 import { AgentNetClient, submitJoin, uploadEncryptedMedia, openEncryptedMedia, sealNotification } from '@cindy/agent-net-relay/client';
 import { notificationKeyPayload, delegationPayload } from '@cindy/agent-net-protocol';
 import { DeviceLinkClient, providerShareHostPeer, sharedTaskHostPeer, type InvokePayload } from '@cindy/device-link';
+import { PROTOCOL_VERSION } from '@cindy/device-link-protocol';
 import { AgentNetSocket } from '../socket.js';
 import { AgentNetSocket as PortableSocket } from '../portableSocket.js';
 import { NativeTransport, type NativeEnginePort } from '../nativeTransport.js';
@@ -389,3 +390,97 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
   await hostApi.request('DELETE', '/devices/' + member.deviceId);
   await until(async () => { await new Promise(resolve => setTimeout(resolve, 10)); return controller.getStatus() !== 'online'; });
 }, 20_000);
+
+/** 测试价值
+ * - 生产入口与可观察结果：手机用的 PortableSocket.useSessions + NativeTransport，真实编译的原生库（C 接口）、真实 V2 中转与
+ *   Node 节点（电脑一端）。会话上建链、调用、拿回 1 MB 结果；中转转发的数据报经 UDP 收发；STUN 查到的地址成为候选。
+ *   旧安装包里的原生库（没有 features、不认新操作）配新 JS 时，会话照样可用，也不去调新操作。
+ * - Bug／规则依据：docs/agent-net-session-plan.md 第 10 节阶段 4（手机接入会话层与原生接口）、第 8 节中转 UDP；
+ *   docs/dev-rules/mobile-development.md 冷更边界：热更的 JS 必须能在旧原生包上运行。
+ * - 现有覆盖缺口：原生通道没有会话通道，手机只走 Device Link 帧；原生库没有中转 UDP 和 STUN，现有用例都不覆盖。
+ * - 最小失败输入：一次建链、一次请求、一个 1 MB 结果；去掉原生的会话通道（不宣告、不开流）时会话一直不出现，
+ *   去掉中转 UDP 时 1 MB 全经 WebSocket 回来。
+ * - tier：integration，真实回环中转与 UDP，不开局域网发现。 */
+it.skipIf(!library)('carries sessions on the real native engine, relays them over UDP, and keeps working on an older native build', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-native-'));
+  cleanups.push(async () => {
+    if (path.dirname(path.resolve(directory)) !== path.resolve(tmpdir())
+      || !path.basename(directory).startsWith('cindy-agent-net-native-')) throw new Error('UNSAFE_TEST_DIRECTORY');
+    await rm(directory, { recursive: true, force: true });
+  });
+  // The phone has the lower id, so it is the side that dials (PortableSocket.dialRoster), as when it opens a computer.
+  const owner = generateIdentity('b-node-host');
+  const { root, bootstrap } = createPrivateNetwork('native session fixture', owner);
+  const relay = await startAgentNetRelay({ dataDir: directory, bootstrap, udpPort: 0 });
+  cleanups.push(() => relay.close());
+  const udpServer = '127.0.0.1:' + relay.udpAddress!.port, userId = bootstrap.ownerCertificate.subject;
+  const hostApi = new AgentNetClient(relay.url, owner, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
+  const seed = Buffer.alloc(32, 52).toString('base64url'), context = 'unit-native-session';
+  const member = identityFromSeed(context, seed, 'a-native-phone');
+  const code = await hostApi.request<{ joinCode: string }>('POST', '/join-codes');
+  const join = createJoinRequest(member, bootstrap.networkId, code.joinCode, 'Native phone', 'unit-public-pairing-fixture');
+  await submitJoin(relay.url, join);
+  const certificate = approveJoin(root, join, 'unit-public-pairing-fixture', bootstrap.ownerCertificate.subject);
+  await hostApi.request('POST', '/join-requests/' + join.requestId + '/approve', { certificate });
+  const hello = (socket: { send(text: string): void; deviceId: string }) => socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello',
+    payload: { deviceName: socket.deviceId, platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
+  const host = await AgentNetSocket.open({ client: hostApi, userId, udp: false, lanDiscovery: false });
+  cleanups.push(() => host.close());
+  const large = 'native-session-result-'.repeat(48_000);
+  host.useSessions({ laneFor: () => 'normal', handlers: () => ({
+    onOpen: (id) => { host.session(member.deviceId)!.accept(id, { appVersion: 'host' }); },
+    onRequest: (request) => { host.session(member.deviceId)!.respond(request.id, { ok: true, result: request.channel === 'test:large' ? large : request.args[0] }); },
+  }) });
+  hello(host);
+  for (const build of ['current', 'older'] as const) {
+    const peer = new NativePeer();
+    await peer.call({ seed, context, deviceId: member.deviceId, enhancedTransport: build === 'current' }, 'create');
+    const newOps: string[] = [];
+    // An installed binary from before this change: no `features`, and the operations it lacks fail as unknown.
+    const port: NativeEnginePort = build === 'current' ? { command: value => peer.call(value), destroy: () => peer.destroy() } : {
+      async command(value) {
+        if (value.op === 'stun' || value.op === 'relayUdp') { newOps.push(value.op); throw new Error('UNKNOWN_NATIVE_OPERATION'); }
+        const result = await peer.call(value);
+        if (value.op === 'identity') { const { features: _features, ...older } = result; return older; }
+        if (value.op === 'poll') { const { mapped: _mapped, relayUdp: _relayUdp, ...older } = result;
+          return { ...older, connections: older.connections.map(({ buffered: _buffered, ...connection }: Record<string, unknown>) => connection) }; }
+        return result;
+      }, destroy: () => peer.destroy() };
+    const api = new PortableAgentNetClient(relay.url, { identity: member, random: () => peer.call({ op: 'random' }),
+      sign: text => peer.call({ op: 'sign', text }) }, certificate, bootstrap.rootPublicKey, {
+      assertCurrent() {}, verifyCertificate, verifyDelegation, relayUdpEnabled: () => true,
+      sha256: data => createHash('sha256').update(data).digest('base64url'),
+      createWebSocket: (url, headers) => new WebSocket(url, { headers }) as unknown as BinarySocket,
+    });
+    let transport: NativeTransport | undefined, relayedOverWebSocket = 0;
+    const phone = await PortableSocket.openWithBindings({ client: api, userId, lanDiscovery: false,
+      bindings: { verifyCertificate, verifyDelegation, createTransport: async options => {
+        const uplink = options.relay!.uplink;
+        transport = await NativeTransport.create(port, { ...options, stunServers: [udpServer], relayUdpServer: udpServer,
+          relay: { ...options.relay!, uplink: { ...uplink, onDatagram: receive => uplink.onDatagram((id, bytes) => {
+            relayedOverWebSocket += bytes.length; receive(id, bytes);
+          }) } } });
+        return transport;
+      } } });
+    phone.useSessions({ laneFor: () => 'normal', handlers: () => ({}) });
+    hello(phone);
+    if (build === 'current') {
+      // The relay's STUN answered on the engine's own port, and relayed datagrams switched to UDP once it acknowledged.
+      await until(async () => transport!.candidates().some(candidate => candidate.address === '127.0.0.1'));
+      await until(async () => transport!.relayOverUdp);
+    }
+    await until(async () => phone.supports(owner.deviceId));
+    expect(await phone.connectSession(owner.deviceId)).toBe(true);
+    await until(async () => !!phone.session(owner.deviceId) && !!host.session(member.deviceId));
+    const session = phone.session(owner.deviceId)!;
+    await expect(session.open({ controllerName: 'phone' }, 5_000)).resolves.toEqual({ appVersion: 'host' });
+    await expect(session.request('test:echo', [build], { timeoutMs: 5_000 })).resolves.toEqual({ ok: true, result: build });
+    const before = relayedOverWebSocket;
+    await expect(session.request('test:large', [], { timeoutMs: 15_000 })).resolves.toEqual({ ok: true, result: large });
+    if (build === 'current') expect(relayedOverWebSocket - before).toBeLessThan(256 * 1024);
+    else { expect(newOps).toEqual([]); expect(relayedOverWebSocket - before).toBeGreaterThan(large.length / 2); }
+    // The next build reconnects as the same phone right away: its new connection replaces this one on the host, which may
+    // not have noticed this close yet (relayed close packets race the relay WebSocket's own close).
+    phone.close();
+  }
+}, 30_000);

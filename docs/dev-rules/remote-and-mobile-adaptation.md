@@ -409,7 +409,7 @@ WebSocket；不关 WebSocket、不复位对端、不清队列，切换期间丢�
 2026-11-16 起没有单独的开关（用户确认）：`apps/desktop/src/main/device-link/index.ts` 一直包着这一层，会话只在 Agent-Net 的主连接上，
 所以「Agent-Net (Beta)」关着（默认）时没有会话，每个调用原样交给 Device Link，行为不变；打开以后两台都宣告了会话能力的同账号 Desktop 走会话。
 调用方超时后，被控端不再执行还没交给业务的这条请求（取消先到，或请求比时限晚到，见[协议记录](protocol-compatibility/agent-net-session.md)「超时」）。
-接口翻译在 `agentNetSessionLinks.ts`，按对端选路在 `agentNetSessionRouting.ts`。一个对端只走一条路：本机控制对端时，会话可用、
+接口翻译在 `packages/agent-net/src/session/sessionLinks.ts`，按对端选路在 `packages/agent-net/src/session/sessionRouting.ts`。一个对端只走一条路：本机控制对端时，会话可用、
 Device Link 上这个对端的链路没就绪、不等恢复、没有待发消息，建链和所有调用（包括不需要建链的列表、探测）都走会话，直到关链或会话断掉；
 Device Link 上有活着的链路时照旧走 Device Link，那上面已确认的请求要等它重建后补回结果。对端控制本机时跟着对端选的路，结果按请求来的那条路回去。
 2026-11-15 两台电脑隔离验收时发现并修正：只按「在途请求」挡会话时几乎从不走会话；列表与探测先经 Device Link 发出时，
@@ -438,7 +438,7 @@ Device Link 上有活着的链路时照旧走 Device Link，那上面已确认�
   现在两条连接合并，任一条在线即在线（`RoutedDeviceLinkClient.onPresenceChanged`）。
 - **改设备名**：官方中转上设备也在 Agent-Net 目录里时先在 Agent-Net 上改（列表合并时那边的名字优先）。
 - **删设备**：各台电脑按本账号 Device Link 设备列表不认、不列出被删的设备，本机删完马上不认，别处（手机、网页、旧版）删的最晚
-  5 分钟内不认（`agentNetMembership.ts`，[协议记录](protocol-compatibility/agent-net-device-removal.md)）。主干 2026-11-17 起官方网络上删除时
+  5 分钟内不认（`packages/agent-net/src/membership.ts`，[协议记录](protocol-compatibility/agent-net-device-removal.md)）。主干 2026-11-17 起官方网络上删除时
   还会在 Device Link 接受删除后撤销它的 Agent-Net 身份（`deviceLinkApi.ts`）；官方撤销之后那台设备重新登录也回不到 Agent-Net
   （`DEVICE_REENROLLMENT_REQUIRES_APPROVAL`），Device Link 照常恢复。
 - **共享任务重启后的推送**：会话上的建链原来总报同一个流标识，主人电脑重启后来源代次不前进；现在每个会话一个标识。
@@ -503,7 +503,7 @@ the session generation for its offline event」与「hands the control direction
 Device Link 链路等恢复时不改走会话、空闲时建链前的调用也走会话、结果按来路回去、身份比较仍成立、刚连上时等会话且只在宽限期内等、
 还没连接时先拨在线的对端（不在线的不拨、拨不了的不等满）、对方签名开着 Agent-Net 时的重开等它的会话（没有会话层的旧版不等满）；去掉对应处理时失败。
 `packages/device-link/src/__tests__/routedClient.test.ts`「lets the host re-open a peer that prefers the main connection on its own channel」验证钩子接手与退回主连接，
-不提供钩子时原有用例不变。新旧版本、没打开 Agent-Net 的电脑与手机不宣告会话能力，照旧走 Device Link；跨账号见下。
+不提供钩子时原有用例不变。新旧版本、没打开 Agent-Net 的电脑不宣告会话能力，照旧走 Device Link；手机见下文「手机」，跨账号见下。
 Node Host 打开 Agent-Net 后用同一套会话层与选路（`apps/host/src/device-link.ts`，身份与节点在 Electron 无关的
 `apps/desktop/src/main/device-link/agentNetNode.ts`）。它加入过 Agent-Net 以后，同账号的电脑认得它、要求旧版链路带它签的
 传输方式声明，所以 Host 关着 Agent-Net 时也用存下的身份签「现在没开」（和 Desktop 一样）；从没加入过的 Host 不签，对端也不要求。
@@ -533,6 +533,14 @@ while off」（过期后仍签「没开」；对端不收过期证书的「开�
 `agentNetSharing.test.ts`「lets a cross-account session through only where the routed client accepts that resource」验证停用、已退出、
 登记被收回的资源没有会话，没登记的只认主连接，去掉任一处登记时失败。2026-11-16 两个账号的两台电脑隔离验收共享任务：受邀者第一次建链等了 91 毫秒拿到会话，
 打开、读历史、发消息、回复实时推回都走会话；主人移出成员的同一秒两端会话作废。
+
+**手机（2026-11-18）。** 手机在 `apps/mobile/src/device-link/DeviceLinkContext.tsx` 用同一套会话层与选路，但只在这台手机能用
+Agent-Net 时（开关开着，或路由只走 Agent-Net）：这时业务拿到的是 `routeSessionPeers` 的 `PeerLinks`，原来的 `RoutedDeviceLinkClient`
+留作 `routed`。没开 Agent-Net 时业务直接拿 `routed`，不经会话层，和原来一样；开关一变客户端整个重建（偏好代次在 effect 依赖里）。按身份比连接的地方（各连接的代次、补回未完成回复、
+按连接列对端、跨账号与分享连接的上线）用 `routed`，因为对会话上的跨账号对端选路层给的是那条分享连接的视图。分享连接绑在 `routed` 上。
+会话断了又回来（`reopenLink`）时，按 Device Link 单个对端传输重置的同一流程恢复这个对端。故障半径三问：① 会话断开不是这台电脑离线
+的证据，只作废这个对端的建链缓存与订阅确认；② 只排这一个对端的恢复，不重连共享连接，不动别的对端与在线状态；③ 一个对端的会话
+出错不关别的对端的会话，也不关主连接与分享连接。
 
 ### 共享连接静默与请求隔离
 
