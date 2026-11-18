@@ -597,7 +597,7 @@ export interface ImTurnRunner {
   attachSessionOutput(
     session: MakerSession,
     userId: string,
-    route?: { attached: boolean; scopeKey?: string },
+    route?: { attached: boolean; scopeKey?: string; companionChannel?: boolean },
     source?: ChannelTurnSource,
   ): void;
   /**
@@ -3467,6 +3467,14 @@ export function createTurnRunner(
         return;
       }
       if (silenced && !t.streamingHandlePromise) return;
+      if (!errMsg && output.kind === 'chunked-text' && t.origin?.kind === 'scheduler') {
+        const notification = adapter.scheduledNotificationText?.(t.buffer);
+        if (notification === null) return;
+        if (notification !== undefined) {
+          t.buffer = notification;
+          t.header = null;
+        }
+      }
       // Component images become Markdown only after projection. Collect from the
       // outbound copy so the text channel cannot strip an uncollected image.
       const projectedBody = composeOutboundBody(t.buffer, true);
@@ -4779,6 +4787,10 @@ export function createTurnRunner(
       if (existing) {
         existing.relayedTurn = isRelayedChannelTurnSource(source);
         const userChanged = existing.userId !== userId;
+        if (route?.companionChannel) {
+          existing.botLane = 'channel';
+          existing.preserveSessionConfig = true;
+        }
         if (route?.attached) {
           existing.attached = true;
           existing.preserveSessionConfig = true;
@@ -4792,7 +4804,7 @@ export function createTurnRunner(
       ensureMakerCloseSubscription(getMaker());
       const state: SessionState = {
         makerSession: session,
-        preserveSessionConfig: route?.attached === true,
+        preserveSessionConfig: route?.attached === true || route?.companionChannel === true,
         userId,
         scopeKey: route?.scopeKey,
         workingDir: session.workDir,
@@ -4803,7 +4815,7 @@ export function createTurnRunner(
         detachDrainPromise: null,
         resolveDetachDrain: null,
         attached: route?.attached === true,
-        botLane: null,
+        botLane: route?.companionChannel ? 'channel' : null,
         scheduledTranspond: null,
         pendingTranspondTokenRate: null,
         pendingTranspondFinals: 0,

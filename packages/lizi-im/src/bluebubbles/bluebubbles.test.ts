@@ -1039,6 +1039,36 @@ describe('BlueBubbles local ingress', () => {
     expect(f.send).not.toHaveBeenCalled();
   });
 
+  // Tier 1: the same Apple account can produce both manual input and bot echoes.
+  it('recovers mapped manual input while correlating machine sends only in their chat', async () => {
+    const f = await fixture(null, undefined, true);
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    await f.im.sendText(f.chat.guid, 'machine');
+    f.message('outbound', { isFromMe: true, handle: undefined });
+    f.message('manual', { isFromMe: true, handle: undefined });
+    f.message('elsewhere', { isFromMe: true, handle: undefined, chats: [f.otherChat] });
+    await f.im.reconcile();
+    expect(f.received.map(e => [e.messageId, e.speaker?.id])).toEqual([['manual',config.ownerAddress]]);
+    await f.im.dispose(); await f.im.init();
+    expect(f.received).toHaveLength(1);
+  });
+
+  // Tier 1: a verified webhook can arrive before a failing POST returns.
+  it('retains a matching outgoing receipt after a late transport failure', async () => {
+    const f = await fixture();
+    f.send.mockImplementationOnce(async (_chat, _body, id) => {
+      f.message('echo', { isFromMe: true });
+      await fetch(f.url(), { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'new-message', data: { guid: 'echo', tempGuid: id } }) });
+      await f.im.reconcile();
+      throw new Error('response lost');
+    });
+    await expect(f.im.sendText(f.chat.guid, 'one send')).resolves.toEqual({messageId:'echo'});
+    expect(f.received).toHaveLength(0);
+    expect(f.im.health().uncertainSends).toBe(0);
+  });
+
   it('drops own echoes, unrelated chats, reactions and bad callback tokens', async () => {
     const f = await fixture();
     f.message('own', { isFromMe: true });

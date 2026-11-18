@@ -913,7 +913,10 @@ export async function hydrateBotProfileRuntime(
   // 可在桌面/后台轮次由 feishuTransportRouting.ts 查询 canonical 归属, 经伙伴可用连接
   // 通知已绑定主人; 伙伴连接不可用则拒绝发送, 不回落个人 bot, 也不授予轮次内 API 权限。
   const boundImChannels: readonly BotImChannel[] =
-    fullLane ? (deps.listBotImChannels?.({ botId: row.botId }) ?? []) : [];
+    fullLane ? (deps.listBotImChannels?.({ botId: row.botId }) ?? [])
+      // A scheduler may open this persisted lane before the chat provides vendor options.
+      // Mount the server only. Calls still require a current inbound chat scope.
+      : row.role === 'channel' && row.routeKey?.startsWith('im:imessage:') ? ['imessage'] : [];
   if (boundImChannels.length > 0) {
     opts.vendorOptions = { ...(opts.vendorOptions ?? {}), [BOT_IM_CHANNELS_VENDOR_KEY]: [...boundImChannels] };
   }

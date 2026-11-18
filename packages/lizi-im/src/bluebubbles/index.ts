@@ -17,6 +17,8 @@ export interface BlueBubblesConfig {
   listenHost: string;
   listenPort: number;
   groupAliases?: string[];
+  /** Explicit per-chat iMessage identity for manual messages from the local Apple account. */
+  selfAccountAddresses?: Record<string, string>;
 }
 
 export function parseBlueBubblesConfig(raw: unknown): BlueBubblesConfig {
@@ -31,7 +33,17 @@ export function parseBlueBubblesConfig(raw: unknown): BlueBubblesConfig {
     || r.chatGuids.some(guid => typeof guid !== 'string' || !/^(?:iMessage|any);[-+];[^\r\n]{1,480}$/.test(guid))) {
     throw new Error('BLUEBUBBLES_INVALID_CONFIG');
   }
+  let selfAccountAddresses: Record<string, string> | undefined;
+  if (r.selfAccountAddresses !== undefined) {
+    if (!r.selfAccountAddresses || typeof r.selfAccountAddresses !== 'object' || Array.isArray(r.selfAccountAddresses)) throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+    selfAccountAddresses = {};
+    for (const [chat, address] of Object.entries(r.selfAccountAddresses)) {
+      if (!r.chatGuids.includes(chat) || typeof address !== 'string' || !address.trim() || address.length > 320) throw new Error('BLUEBUBBLES_INVALID_CONFIG');
+      selfAccountAddresses[chat] = address.trim().toLowerCase();
+    }
+  }
   return { serverUrl: blueBubblesOrigin(r.serverUrl), ownerAddress: r.ownerAddress.trim().toLowerCase(),
+    ...(selfAccountAddresses && { selfAccountAddresses }),
     groupAliases: (r.groupAliases as string[] | undefined) ?? ['Cindy'],
     chatGuids: [...new Set(r.chatGuids as string[])], listenHost: r.listenHost, listenPort: r.listenPort as number };
 }
@@ -114,6 +126,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.retryAt.delete(guid);
     }
   }
+  get connectedOrigin(): string | undefined { return this.api?.origin; }
   get botContextId(): string { return this.options.contextId?.() || (this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''); }
   getOwnerUserId(): string | null {
     return [...this.chats.values()].find(chat => /^(?:iMessage|any);-;/.test(chat.guid) && (chat.participants?.length ?? 0) === 1
@@ -257,10 +270,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       const listener = await this.options.receiver(config.listenHost, config.listenPort).add(token, peers, async body => {
         this.assertLive(generation);
         if (!body || typeof body !== 'object') return;
-        const event = body as { type?: unknown; data?: { guid?: unknown } };
+        const event = body as { type?: unknown; data?: { guid?: unknown; tempGuid?: unknown; error?: unknown } };
         if (event.type !== 'new-message' || typeof event.data?.guid !== 'string'
           || !/^[A-Za-z0-9_-]{1,256}$/.test(event.data.guid)) return;
-        this.receipts!.receive(event.data.guid, this.now());
+        if (this.receipts!.receive(event.data.guid, this.now(), event.data.tempGuid, event.data.error)) {
+          this.retryAt.delete(event.data.guid);
+        }
         this.lastWebhookAt = this.now();
         void this.pump(generation).catch(error => this.fail(generation, error));
       });
@@ -388,7 +403,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         previousPage = fingerprint;
         for (const message of messages) {
           if (typeof message.guid !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(message.guid)) throw new Error('BLUEBUBBLES_INVALID_MESSAGE');
-          if (!message.isFromMe && message.dateCreated >= receipts.activatedAtFor(chat)) receipts.receive(message.guid, before);
+          if ((!message.isFromMe || config.selfAccountAddresses?.[chat] || receipts.isOutgoing(chat, message.guid, message.tempGuid)) && message.dateCreated >= receipts.activatedAtFor(chat)) receipts.receive(message.guid, before);
         }
         if (messages.length < 100) break;
       }
@@ -515,8 +530,22 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           this.assertLive(generation);
           preparing = false;
           const chat = message.chats?.find(item => config.chatGuids.includes(item.guid));
-          const sender = message.handle?.address?.toLowerCase();
-          if (message.guid !== guid || message.isFromMe || !chat || !sender || message.handle?.service !== 'iMessage'
+          const selfAddress = chat && message.isFromMe ? config.selfAccountAddresses?.[chat.guid] : undefined;
+          const hint = receipts.echoHintFor(guid);
+          const tempGuid = message.tempGuid ?? hint?.id;
+          const echo = chat && message.isFromMe && receipts.isOutgoing(chat.guid, message.guid, tempGuid);
+          if (echo && message.guid === guid && !hint?.failed && (!message.error || message.error === '0')) {
+            receipts.confirmEcho(chat.guid, guid, tempGuid);
+          }
+          // A callback may precede the send response and omit tempGuid. It cannot
+          // establish a human sender while an unconfirmed send exists in this chat.
+          if (selfAddress && !echo && chat && receipts.hasUnconfirmedSend(chat.guid) && !message.tempGuid) {
+            this.retryAt.set(guid, this.now() + 30_000);
+            continue;
+          }
+          const sender = message.handle?.address?.toLowerCase() || selfAddress;
+          const service = message.handle?.service ?? (!message.handle && selfAddress ? 'iMessage' : undefined);
+          if (message.guid !== guid || echo || (message.isFromMe && (!selfAddress || sender !== selfAddress)) || !chat || !sender || service !== 'iMessage'
             || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAtFor(chat.guid)
             || (message.associatedMessageType !== undefined && message.associatedMessageType >= 2000)) {
             receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); this.retryAt.delete(guid); continue;
@@ -526,7 +555,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           }
           event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
             contextId: this.botContextId, messageId: guid, text: message.text ?? '', attachments: [], unsupported: [],
-            speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress },
+            speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress && (!message.isFromMe || chat.guid === this.getOwnerUserId()) },
             interactionSource: { chatName: chat.displayName, senderName: sender },
             ...(this.isGroup(chat.guid) ? { ambient: !this.isGroupInvocation(message.text ?? ''),
               invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
@@ -772,6 +801,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       return { messageId: result.guid };
     } catch {
+      const confirmed = receipts.confirmedSend(id);
+      if (confirmed && this.live(generation)) return { messageId: confirmed };
       if (!sent) receipts.outgoing(id, { chatId, state: 'unknown' });
       throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
     } finally {
