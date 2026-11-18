@@ -282,15 +282,16 @@ function createHost(
 
 describe('remote agent round trip', () => {
   // Unit: groupRelay covers the host reply. The controller must restore the typed
-  // quota cause from an IPC-rejected open so Maker can release startup and wait.
-  it('restores the group quota reset from a rejected remote open', async () => {
-    const host = createHost();
+  // quota cause from either admission rejection or the asynchronous startup stream.
+  it.each(['admission', 'startup stream'])('restores the group quota reset from %s', async boundary => {
+    const message = '[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached: the available accounts for this model have reached their usage limit; resets_at: 1794978600000';
+    const host = createHost(undefined, undefined, async () => { throw new AgentStartupStoppedError(new Error(message)); });
     const invoke = makeDeps(host).invoke;
     const start = createDeviceAgentStarter({
       remoteInvoke: async (_deviceId, _channel, args) => {
-        if ((args[0] as { op: string }).op === 'open') return { ok: false, error: { code: 'IPC_ERROR',
-          message: '[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached: the available accounts for this model have reached their usage limit; resets_at: 1794978600000',
-        } };
+        if (boundary === 'admission' && (args[0] as { op: string }).op === 'open') {
+          return { ok: false, error: { code: 'IPC_ERROR', message } };
+        }
         return { ok: true, result: await invoke(args) };
       },
       rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: async () => null, makerMemory: () => undefined,
@@ -303,7 +304,7 @@ describe('remote agent round trip', () => {
       expect(failure).toBeInstanceOf(AgentStartupStoppedError);
       expect(failure.cause).toBeInstanceOf(ProviderGroupUsageLimitError);
       expect(failure.cause.limit).toEqual({ resetAtMs: 1794978600000 });
-      expect(hostInputs).toHaveLength(0);
+      expect(hostInputs).toHaveLength(boundary === 'admission' ? 0 : 1);
     } finally { host.dispose(); }
   });
 

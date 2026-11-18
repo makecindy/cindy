@@ -2063,6 +2063,9 @@ export function ChatInput({
   const hostSupportsOrcaRemoteWorkerAgentRelocation =
     hostCcCaps.capabilities?.supportsOrcaRemoteWorkerAgentRelocation === true ||
     hostCodexCaps.capabilities?.supportsOrcaRemoteWorkerAgentRelocation === true;
+  const hostSupportsQueueHeadRetry = !deviceLinkDeviceId
+    || hostCcCaps.capabilities?.supportsQueueHeadRetry === true
+    || hostCodexCaps.capabilities?.supportsQueueHeadRetry === true;
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
@@ -8038,7 +8041,8 @@ export function ChatInput({
         : {}),
       onRelocate: async (selection) => {
         const recovery = makerChatStore.getSnapshot(sessionId).inputRecovery;
-        const retryClientId = recovery?.kind === 'queue-head' ? recovery.clientId : undefined;
+        const retryClientId = hostSupportsQueueHeadRetry && selection.retryQueuedSend && recovery?.kind === 'queue-head'
+          ? recovery.clientId : undefined;
         const retryLabel = retryClientId === undefined ? undefined : selection.agentDevice?.name ?? selection.modelId;
         if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent, retryLabel))
           || currentSessionIdRef.current !== sessionId) return false;
@@ -8050,7 +8054,7 @@ export function ChatInput({
         const latest = makerChatStore.getSnapshot(sessionId).inputRecovery;
         if (selected && retryClientId !== undefined && currentSessionIdRef.current === sessionId
           && latest?.kind === 'queue-head' && latest.clientId === retryClientId) {
-          await makerChatStore.retryLastError(sessionId);
+          await makerChatStore.retryLastError(sessionId, retryClientId);
         }
         return selected;
       },
@@ -8068,6 +8072,7 @@ export function ChatInput({
     sessionOrcaRemoteWorker,
     hostSupportsOrcaAgentRelocation,
     hostSupportsOrcaRemoteWorkerAgentRelocation,
+    hostSupportsQueueHeadRetry,
     remoteAgentDevices,
     catalogHostDeviceId,
     effectiveAgentDeviceId,

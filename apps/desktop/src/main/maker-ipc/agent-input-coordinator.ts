@@ -3508,8 +3508,8 @@ export class AgentInputCoordinator {
   }
 
   /** 用户点「重试 / 继续任务」。行为见 performRetryLastError。 */
-  async retryLastError(sessionId: string): Promise<AgentInputProjection> {
-    const { projection } = await this.performRetryLastError(sessionId);
+  async retryLastError(sessionId: string, expectedQueueHeadClientId?: string): Promise<AgentInputProjection> {
+    const { projection } = await this.performRetryLastError(sessionId, { expectedQueueHeadClientId });
     return projection;
   }
 
@@ -3550,6 +3550,7 @@ export class AgentInputCoordinator {
     opts?: {
       auto?: boolean;
       attemptToken?: number;
+      expectedQueueHeadClientId?: string;
       /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
       usageLimitWait?: { token: number; info: AutoResumeInfo; recoveryOwner: 'quota-reset' | 'provider-group' };
     },
@@ -3557,6 +3558,11 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const recovery = state.recovery;
     if (!recovery) return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+    const expectedHead = opts?.expectedQueueHeadClientId;
+    if (expectedHead !== undefined && (recovery.kind !== 'queue-head'
+      || recovery.clientId !== expectedHead || state.pendingQueue[0]?.clientId !== expectedHead)) {
+      return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+    }
     const usageWait = opts?.usageLimitWait;
     // 等待计划在每个 await 之后都要复核：用户可能在读库期间发了消息 / 收下错误 / 取消等待。
     const usageWaitSuperseded = (): boolean =>

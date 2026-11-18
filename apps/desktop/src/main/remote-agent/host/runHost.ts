@@ -370,6 +370,16 @@ export type GroupRelayPlan =
   /** 组里没有能接这个任务的电脑。 */
   | { kind: 'unavailable'; full?: true; usageLimit?: ProviderGroupUsageLimit };
 
+function groupUnavailableAfterStartup(
+  plan: Extract<GroupRelayPlan, { kind: 'unavailable' }>,
+  failure: unknown,
+): Error {
+  const error = providerGroupUnavailableError(plan);
+  return failure instanceof Error && (failure.name === 'AgentStartupStoppedError' || failure.name === 'AgentNotAuthenticatedError')
+    ? new AgentStartupStoppedError(error)
+    : error;
+}
+
 export interface RemoteAgentGroupRelayDeps {
   bindFastPolicy?(input: { group: string; deviceId?: string | null; sessionId: string; relay?: string }): Promise<void>;
   /**
@@ -1821,6 +1831,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       reserve: true,
       reshareKey: reshareKeyForGuest(run.controller),
     }).catch(() => null);
+    if (next?.kind === 'unavailable' && (next.full || next.usageLimit) && !run.closing) {
+      append(run, { t: 'start-failed', error: remoteAgentErrorInfo(groupUnavailableAfterStartup(next, error)) });
+      await finishRun(run, 'start-failed', 'navigation', false);
+      return true;
+    }
     if (next?.kind !== 'member' || run.closing) {
       if (next && next.kind !== 'unavailable') next.load?.release();
       return false;
@@ -2550,7 +2565,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         } else if (next?.kind === 'local') {
           next.load?.release();
         } else if (next?.kind === 'unavailable' && (next.full || next.usageLimit)) {
-          lastError = providerGroupUnavailableError(next);
+          lastError = groupUnavailableAfterStartup(next, lastError);
         }
       }
     }

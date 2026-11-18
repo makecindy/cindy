@@ -61,7 +61,7 @@ import {
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
-import { RemoteAgentPoller, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
+import { RemoteAgentPoller, RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
 import { isSharedTaskAuthorizationDenied } from './poller';
 
 export interface PreparedRemoteMcp {
@@ -825,7 +825,10 @@ async function prepareAndStartRemoteAgentSession(
           });
         });
       } else client.abandon('start-failed');
-      if (!remoteStarted && error instanceof Error && 'code' in error && error.code === 'IPC_ERROR') {
+      if (!remoteStarted && (
+        (error instanceof Error && 'code' in error && error.code === 'IPC_ERROR')
+        || (error instanceof RemoteAgentRemoteError && error.phase === 'start' && error.info.name === 'AgentStartupStoppedError')
+      )) {
         const quota = readRemoteProviderGroupUsageLimit(error);
         if (quota) throw quota;
       }

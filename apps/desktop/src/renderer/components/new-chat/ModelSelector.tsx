@@ -702,6 +702,8 @@ export interface RemoteAgentRelocation {
   fast: boolean | 'ultrafast';
   /** 这一行所属的电脑;null = 本机。 */
   agentDevice: UnifiedSelectionAgentDevice;
+  /** An explicit model selection, rather than an edit inside its options panel. */
+  retryQueuedSend: boolean;
 }
 
 /**
@@ -3632,8 +3634,8 @@ function ModelSelectorContentView({
       runLiveWrite(() =>
         relocate!(
           browsingBoundGroupEntry && row.providerId === boundEntry!.providerId && currentProviderId
-            ? { ...row, providerId: currentProviderId, agentDevice: currentAgentDevice }
-            : { ...row, agentDevice: askBeforeUseDevice(remoteBrowseDevice, row.providerId) },
+            ? { ...row, providerId: currentProviderId, agentDevice: currentAgentDevice, retryQueuedSend: dismiss }
+            : { ...row, agentDevice: askBeforeUseDevice(remoteBrowseDevice, row.providerId), retryQueuedSend: dismiss },
         ),
       ).then((applied) => {
         if (applied && dismiss) {
@@ -3691,6 +3693,7 @@ function ModelSelectorContentView({
             ...(rowEffortValue ? { effort: rowEffortValue } : {}),
             fast: rowConfig.fast,
             agentDevice,
+            retryQueuedSend: true,
           }),
         ).then(dismissIfApplied);
       }

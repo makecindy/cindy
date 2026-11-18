@@ -17218,7 +17218,7 @@ function clearError(sessionId: string): void {
   });
 }
 
-function retryLastError(sessionId: string): Promise<void> {
+function retryLastError(sessionId: string, expectedQueueHeadClientId?: string): Promise<void> {
   if (!sessionId) return Promise.resolve();
   disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
@@ -17263,8 +17263,11 @@ function retryLastError(sessionId: string): Promise<void> {
     markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
   }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  const retryOpts = expectedQueueHeadClientId === undefined
+    ? boundaryOpts
+    : { ...boundaryOpts, expectedQueueHeadClientId };
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
-    boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
+    retryOpts ? input.retryLastError(sessionId, retryOpts) : input.retryLastError(sessionId),
   ).then(
     ({ projection }) => {
       // 一次性意图的兜底清理：正常路径下 applyInputProjection 已凭意图认领

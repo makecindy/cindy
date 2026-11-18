@@ -5564,7 +5564,13 @@ describe('AgentInputCoordinator send transaction', () => {
       clientId: 'q-head',
     });
 
-    await h.coordinator.retryLastError(sid);
+    // The device picker can still hold the ID of a previously withdrawn head.
+    await h.coordinator.retryLastError(sid, 'previous-head');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).recovery).toMatchObject({ clientId: 'q-head' });
+
+    await h.coordinator.retryLastError(sid, 'q-head');
     await flush();
 
     // 队首消息从未送达 agent,续跑语义不成立 —— 必须原样重发。

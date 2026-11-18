@@ -7329,6 +7329,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // v2 因果能力：同引擎 no-op 返回 revision，后续 SET_MODEL 在 session 锁内 CAS。
       // 新 desktop 控制端据此与只有基础切换能力的旧 host 做安全兼容门控。
       supportsSessionAgentSwitchCas: true,
+      supportsQueueHeadRetry: true,
       // 新控制端只有看到此位才允许给被控端 Orca Team 选择 Worker Full access。
       // 旧 desktop 缺省为 false，避免显式 bypassPermissions 被旧 handler 静默忽略。
       supportsOrcaWorkerPermissionMode: true,
@@ -21668,7 +21669,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     async (_e, sessionId: unknown, opts?: unknown) => {
       const sid = requireSessionId(sessionId);
       await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
-      return inputCoordinator.retryLastError(sid);
+      const expected = opts && typeof opts === 'object' && 'expectedQueueHeadClientId' in opts
+        ? requireClientId(opts.expectedQueueHeadClientId)
+        : undefined;
+      return inputCoordinator.retryLastError(sid, expected);
     },
   );
 
