@@ -240,12 +240,15 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 - **Codex 启动清单批量探测（2026-10-29）**：B 在单条 exec-server 连接启动时，把首个插件清单所在
   目录及其祖先的三种清单检查提前发送（最多 64 层／192 条）。全部仍是旧协议支持的普通
   `fs/getMetadata`，使用独立字符串 ID，保留原 params/sandbox，经 A 的原路径映射和原生执行器；
-  不添加 wire 字段、方法、IPC、权限或能力协商。只有原生 NotFound 可在本次启动复用，已有文件、
-  权限错误、未知目标和不同 sandbox 回落原查询。启动结束或写入／进程启动即停止复用，连接关闭清理；
+  不添加 wire 字段、方法、IPC、权限或能力协商。只有原生 NotFound 可缓存并供本次启动的后续查询复用；
+  已在等待同 URI、同 params/sandbox 查询的原请求直接消费该次原生成功或错误回包，避免重复 RPC。
+  成功元数据与非 NotFound 错误不缓存，后续已有文件／权限错误查询、未知目标和不同 sandbox 仍走原查询。
+  启动结束或写入／进程启动即停止复用，连接关闭清理；
   迟到内部回复仅在本连接消费，不重放写操作、不重置 peer/relay、不影响其它任务。
   新 B 配旧 A 可直接使用；旧 B 保持串行。供应商组与自建中转只转发既有不透明 ws 数据及有界
   poll/push 批次，不解析内部 JSON-RPC ID，因此无需中转、服务端或 Mobile 同步修改，
-  帧大小、鉴权、签名、ACK 和恢复策略不变。回归为 `execServerStartupBatch.test.ts`、
+  帧大小、鉴权、签名、ACK 和恢复策略不变。见[批处理实现](../../../apps/desktop/src/main/remote-agent/host/execServerStartupBatch.ts)，
+  回归为 [execServerStartupBatch.test.ts](../../../apps/desktop/src/main/remote-agent/__tests__/execServerStartupBatch.test.ts)、
   `startupProbe.e2e.test.ts`、`mirror.test.ts`、`groupRelay.test.ts` 与 `hostLifecycle.test.ts`；
   真实跨系统及线上分享运行端尚未验收，性能数据与复跑命令见远程适配文档。
 - **影子目录与配置同步**：`open` 载荷除项目说明文件(含 `.claude/CLAUDE.md`、`.claude/rules`、
