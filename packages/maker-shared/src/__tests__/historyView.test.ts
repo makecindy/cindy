@@ -47,6 +47,24 @@ describe('history reading projection', () => {
     const rewritten = rows.map((r) => r.id === '2' ? { ...r, content: body('xdt_card_ix') } : r);
     expect(visibleIds(projectHistoryView(rewritten, false, true))).not.toContain('2');
   });
+  // Unit regression: two 16-character bodies that collide under a single 32-bit
+  // FNV-1a (`<tool_use_error>` vs `xdt-file:///Al乇坋`) shared the same stamp here,
+  // so the cache used to keep the tool error's "not visible" bit and fold the newly
+  // delivered file result back into deferred work.
+  it('separates colliding bodies that share an outline stamp', () => {
+    const stamp = '16:same-tail';
+    const call = { ...row(1, 'tool_use', { toolName: 'Bash', toolUseId: 't', input: { command: 'ls' } }), historyContentStamp: stamp };
+    const bodies = ['<tool_use_error>', 'xdt-file:///Al乇坋'];
+    const visibleIds = (items: ReturnType<typeof projectHistoryView>) => items
+      .flatMap((item) => item.type === 'messages' ? item.messages : []).map((message) => message.id);
+    for (const [index, body] of bodies.entries()) {
+      const rows = [row(0, 'user', 'Work'), call,
+        { ...row(2, 'tool_result', body), toolUseId: 't', historyContentStamp: stamp }];
+      const visible = visibleIds(projectHistoryView(rows, false, true)).includes('2');
+      // Only the media URI is a delivered result; the tool error stays an activity.
+      expect({ index, visible }).toEqual({ index, visible: index === 1 });
+    }
+  });
   // Tier: behavior. A teammate's reply lists the tasks it started from these receipts; folded into
   // deferred work they never reached the chat (2026-11-10).
   it('keeps a send_to_session receipt available outside deferred work', () => {

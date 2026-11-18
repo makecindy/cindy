@@ -93,16 +93,30 @@ function computeRowFacts(row: HistoryMessageSource): RowFacts {
   return NO_FACTS;
 }
 
+/**
+ * Body identity for the row-fact cache. Two independent 32-bit FNV-1a runs over
+ * the serialized body — one forward, one backward — because a single 32-bit
+ * digest is forgeable: `<tool_use_error>` and `xdt-file:///Al乇坋` collide, and
+ * the key decides whether a result stays visible. The outline stamp is mixed in
+ * too, so a forged pair must also keep the length and the last 96 bytes.
+ * shortcut: hashing is linear in the body, so a multi-MB outline body costs about
+ * what recomputing the facts costs; upgrade only if such bodies dominate.
+ */
 function contentDigest(content: unknown): string {
   const text = typeof content === 'string' ? content : JSON.stringify(content) ?? '';
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
-  return `${text.length}:${hash >>> 0}`;
+  let forward = 2166136261;
+  let backward = 3245307887;
+  const last = text.length - 1;
+  for (let index = 0; index <= last; index += 1) {
+    forward = Math.imul(forward ^ text.charCodeAt(index), 16777619);
+    backward = Math.imul(backward ^ text.charCodeAt(last - index), 604107029);
+  }
+  return `${text.length}:${forward >>> 0}:${backward >>> 0}`;
 }
 
 function factsFor(row: HistoryMessageSource): RowFacts {
   if (row.role !== 'tool_use' && row.role !== 'tool_result') return NO_FACTS;
-  const key = `${row.id}\u0000${row.role}\u0000${contentDigest(row.content)}`;
+  const key = `${row.id}\u0000${row.role}\u0000${row.historyContentStamp ?? ''}\u0000${contentDigest(row.content)}`;
   const hit = rowFacts.get(key);
   if (hit) return hit;
   const facts = computeRowFacts(row);
