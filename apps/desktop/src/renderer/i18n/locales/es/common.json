@@ -6132,7 +6132,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Modelo alternativo automático para tareas",
-        "description": "Tras varios fallos de conexión o capacidad, prueba otra fuente conectada para el mismo modelo y, después, un modelo recomendado explícitamente para el Agent actual. Nunca cambia de Agent ni modifica tu selección guardada. Desactivado de forma predeterminada."
+        "description": "Si hay un fallo, el grupo prueba otros modelos disponibles del grupo. Al cambiar de agente se transfiere la tarea y se guarda la nueva selección. Las demás tareas prueban otra fuente o un modelo recomendado del mismo agente tras fallos repetidos. Desactivado de forma predeterminada."
       },
       "toggleAria": "Activar o desactivar el modelo alternativo automático para tareas",
       "toast": {

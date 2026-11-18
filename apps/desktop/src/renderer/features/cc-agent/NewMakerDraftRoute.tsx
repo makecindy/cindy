@@ -3,7 +3,7 @@ import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
 import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
 import { askPluginModelRoute, usePluginModels, writePluginModelRouteNote } from './pluginModelRoute';
-import { bindModelGroupSession, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
+import { bindModelGroupSession, commitModelGroupDecision, modelGroupLocationNameFrom, resolveModelGroup, useModelGroups, writeModelGroupRouteNote } from '../model-groups/modelGroupsClient';
 import { findModelGroupRoute, type ModelGroupSelection } from '../../../shared/modelGroups';
 import type { GhostModelRoute, GhostPickerModel } from '../../../shared/ghost';
 import { deviceDisplayName } from '@/lib/deviceName';
@@ -4619,11 +4619,18 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           }
           const submittedEffort = routedTo ? (routedTo.effort ?? '') as Effort : sendBaseRoute.submittedEffort;
           const effectiveFastMode = routedTo ? false : sendBaseRoute.effectiveFastMode;
+          // The first dispatch can fail before sendMessage resolves. Bind the selected local route
+          // before dispatch, while committing the selection history only after acceptance.
+          const bindLocalGroupBeforeSend = modelGroupAtSend && modelGroupRoute?.outcome === 'routed' &&
+            !modelGroupRoute.route.agentDeviceId && pluginRoute?.outcome !== 'routed';
+          const prepareModelGroup = (sessionId: string) => bindLocalGroupBeforeSend
+            ? bindModelGroupSession(sessionId, modelGroupAtSend!, modelGroupRoute.route) : undefined;
           const writePluginRouteNote = (sessionId: string) => {
             writePluginModelRouteNote(sessionId, pluginRoute);
             writeModelGroupRouteNote(sessionId, modelGroupRoute, keptModelNameForGroupNote(sendBaseRoute.persistedAgentKind, sendBaseRoute.providerId, sendBaseRoute.model), t, i18n.resolvedLanguage ?? i18n.language, modelGroupLocationName);
             // 撞配额时据此提议换到同一条路线里的下一个来源(model-groups.md §6.1)。
-            if (modelGroupAtSend && pluginRoute?.outcome !== 'routed') bindModelGroupSession(sessionId, modelGroupAtSend, modelGroupRoute);
+            if (bindLocalGroupBeforeSend) commitModelGroupDecision(modelGroupRoute);
+            else if (modelGroupAtSend && pluginRoute?.outcome !== 'routed') void bindModelGroupSession(sessionId, modelGroupAtSend, modelGroupRoute);
           };
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
           // 本地草稿 effectiveDeviceLinkDeviceId 为 undefined → 仍走控制端本机就绪检查(行为不变)。
@@ -5426,6 +5433,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                     dispatchedMessage,
                   );
                 };
+                if (bindLocalGroupBeforeSend) {
+                  await prepareModelGroup(newSession.id);
+                  if (!isCurrentDataOwner()) return;
+                }
                 const accepted = await makerChatStore.sendMessage(
                   newSession.id,
                   dispatchedMessage,
@@ -5619,6 +5630,10 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             // 斜杠命令必须走 SessionView 的完整分派(SSH skipAgentSkills、远端 /review
             // 拒绝、Pi runtime 重试)。识别窗口与 maybeDispatchDesktopSlashCommand 相同:
             // 列首 /cmd,以及 Pi 的空白前缀 /cmd;草稿路由只交接,不复制分派逻辑。
+            if (bindLocalGroupBeforeSend) {
+              await prepareModelGroup(newSession.id);
+              if (!isCurrentDataOwner()) return;
+            }
             const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
             const leading =
               !slashMatch && capabilityAgentKind === 'pi'

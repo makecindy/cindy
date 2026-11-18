@@ -6132,7 +6132,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Modèle de secours automatique pour les tâches",
-        "description": "Après des échecs répétés de connexion ou de capacité, essaie une autre source connectée pour le même modèle, puis un modèle explicitement recommandé pour l'Agent actuel. Ne change jamais d'Agent et ne modifie pas votre sélection enregistrée. Désactivé par défaut."
+        "description": "En cas d’échec, un groupe essaie ses autres modèles disponibles. Un changement d’agent transfère la tâche et enregistre le nouveau choix. Après plusieurs échecs, les autres tâches essaient une autre source ou un modèle recommandé du même agent. Désactivé par défaut."
       },
       "toggleAria": "Activer/désactiver le modèle de secours automatique pour les tâches",
       "toast": {

@@ -62,6 +62,7 @@ export interface SessionRuntimeFallbackPorts<RuntimeSession extends { agentKind:
   }>;
   readModelGroupFallbackCandidate?(sessionId: string, current: SessionRuntimeProfile, visited: readonly string[], accountUnavailable: boolean, generation: number): Promise<{
     candidate: SessionRuntimeProfile | null;
+    bindCommittedRoute?(profile: SessionRuntimeProfile): void;
   } | null>;
   readSessionAgentDeviceId(sessionId: string): Promise<string | null | undefined>;
   readSessionRuntimeFallbackSettings(): { enabled: boolean };
@@ -194,10 +195,20 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
         }
         return recorded;
       };
-      const advanceConfiguredBotRoute = async (
+      const advanceConfiguredRoute = async (
         failed: SessionRuntimeProfile,
       ): Promise<boolean> => {
-        if (!await recordFailedCandidate(failed) || !botFallback.isBot) return false;
+        if (!await recordFailedCandidate(failed) || !isCurrent()) return false;
+        if (group) {
+          const latest = await readSessionRuntimeProfiles(sessionId);
+          if (!latest || latest.control.pending || latest.control.generation !== profiles.control.generation ||
+              !canApplyAutomaticRuntimeSelection(sessionId, latest.control.generation)) return false;
+          const next = await readModelGroupFallbackCandidate?.(sessionId, currentForFallback,
+            latest.control.visitedRoutes, accountUnavailable, latest.control.generation);
+          candidate = next?.candidate ?? null;
+          return candidate !== null;
+        }
+        if (!botFallback.isBot) return false;
         const next = await readBotFallbackCandidate(sessionId, currentForFallback);
         candidate = next.candidate;
         return candidate !== null;
@@ -257,6 +268,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
                 applyNow: true,
               });
               if (switched.switched) {
+                group?.bindCommittedRoute?.(selected);
                 acceptSessionRuntimeMutation({
                   sessionId,
                   source: 'fallback',
@@ -269,7 +281,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             });
             if (!result) return { session: runtimeSession, outcome: 'superseded' };
             if (!result.switched) {
-              if (await advanceConfiguredBotRoute(selected)) continue;
+              if (await advanceConfiguredRoute(selected)) continue;
               return { session: runtimeSession, outcome: 'exhausted' };
             }
             // The route transaction has already committed, including a new
@@ -277,7 +289,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             // candidates using the pre-switch profile/generation captured above.
             if (!result.engineReady) return { session: runtimeSession, outcome: 'failed' };
           } catch (error) {
-            if (await advanceConfiguredBotRoute(selected)) continue;
+            if (await advanceConfiguredRoute(selected)) continue;
             throw error;
           }
           log.info('automatic Bot runtime fallback switched harness', {
@@ -299,7 +311,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
             !runtimeSession.remoteHostId ||
             !isRemoteModelSwitchRouteChangeError(error)
           ) {
-            if (await advanceConfiguredBotRoute(selected)) continue;
+            if (await advanceConfiguredRoute(selected)) continue;
             throw error;
           }
           // SSH Claude daemons freeze endpoint/credential env at spawn. The old
@@ -318,7 +330,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           try {
             result = await applyCandidate();
           } catch (retryError) {
-            if (await advanceConfiguredBotRoute(selected)) continue;
+            if (await advanceConfiguredRoute(selected)) continue;
             throw retryError;
           }
         }

@@ -31,7 +31,7 @@ function harness() {
   const failed = vi.fn(() => true);
   const readSessionAgentDeviceId = vi.fn<(sessionId: string) => Promise<string | null>>(async () => null);
   const query = { from: () => query, where: () => query, limit: async () => [{ status: 'active' }] };
-  const groupCandidate = vi.fn(async (): Promise<{ candidate: typeof candidate } | null> => null);
+  const groupCandidate = vi.fn(async (): Promise<{ candidate: typeof candidate; bindCommittedRoute?: (profile: typeof candidate) => void } | null> => null);
   const deps = {
     agentSwitchPending: pending,
     sessionRuntimeGenerationMatches: (_id: string, expected?: number) => expected === undefined || expected === generation,
@@ -92,6 +92,20 @@ describe('automatic runtime selection respects the user send boundary', () => {
     expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'switched' });
     expect(h.switchAgent).toHaveBeenCalledTimes(crossHarness ? 1 : 0);
     expect(h.apply).toHaveBeenCalledTimes(crossHarness ? 0 : 1);
+  });
+
+  // Unit: the ordered group must continue when B fails before the switch commits.
+  it('tries C after a rejected B and binds only the committed harness', async () => {
+    const h = harness();
+    const bindCommittedRoute = vi.fn();
+    const third = { ...h.candidate, model: 'third' };
+    h.readCandidate.mockResolvedValue({ isBot: false, candidate: null });
+    h.groupCandidate.mockResolvedValueOnce({ candidate: h.candidate, bindCommittedRoute })
+      .mockResolvedValueOnce({ candidate: third, bindCommittedRoute });
+    h.switchAgent.mockResolvedValueOnce({ switched: false, engineReady: false });
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'switched' });
+    expect(h.failed).toHaveBeenCalledWith('session', 0, h.candidate);
+    expect(bindCommittedRoute.mock.calls).toEqual([[third]]);
   });
 
   it('stops after a committed harness switch whose engine failed to start', async () => {

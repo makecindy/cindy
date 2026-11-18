@@ -10,8 +10,12 @@ import {
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
-import { isQuotaExhaustedErrorMessage } from '../../shared/providerErrors.js';
 import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
+
+// A model's rate window can be exhausted while other models on this connection still work.
+function isProviderBalanceError(message: string): boolean {
+  return /insufficient[_ -](?:balance|credits?|funds)|credit balance (?:is )?too low|402 payment required|余额不足|欠费/i.test(message);
+}
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
 
@@ -31,6 +35,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     | 'takeDeferredError' | 'surfaceSuppressedError' | 'flushSuppressedError' | 'beginAttempt' | 'schedule'
     | 'finalizeSuppressedError' | 'abandonUnconfirmedPersistedResume' | 'surfaceSuppressedErrorForRetry'
   >;
+  resumeQuotaWait?(sessionId: string, item: AgentInputQueuedMessage, signals: InterruptedTurnErrorSignals): void;
   botFallbackInputs: { has(createOpts: object): boolean };
   modelGroupInputs?: { has(createOpts: object): boolean };
   workerInputs?: { has(createOpts: object): boolean };
@@ -68,7 +73,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  * surface or flush the held error when no attempt runs. Shared by the desktop and the Node Host.
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
-  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs,
+  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, resumeQuotaWait, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
@@ -193,16 +198,19 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   requireRouteChange,
                   isCurrent,
                   ...(modelGroupInput && (signals.errorStatus === 402 || signals.sdkError === 'billing_error' ||
-                    isAccountUsageLimitError(signals) || isQuotaExhaustedErrorMessage(signals.message ?? ''))
+                    isProviderBalanceError(signals.message ?? ''))
                     ? [true] as const : []),
                 );
               fallbackRebuildSession = fallback.session;
               if (!isCurrent()) return;
               if (!canResumeAfterRuntimeFallback(requireRouteChange, fallback, sameRouteRetryable)) {
                 interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
-                autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
+                const released = autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, {
                   surfaceBanner: true,
                 });
+                if (released && modelGroupInput && fallback.outcome === 'exhausted' && isAccountUsageLimitError(signals)) {
+                  resumeQuotaWait?.(sessionId, item, signals);
+                }
                 return;
               }
               // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery

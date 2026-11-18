@@ -1401,7 +1401,11 @@ import {
   setSessionEffort,
   setSessionFastMode,
 } from '../maker-host/session-effort-store.js';
-import { readModelGroupSessionBinding } from '../model-groups/sessionBindings.js';
+import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
+import { readModelGroupRecoveryOffer } from '../model-groups/desktopResolver.js';
+import { modelGroupRouteFor } from '../model-groups/routeFor.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
+import { bindModelGroupSession, readModelGroupSessionBinding } from '../model-groups/sessionBindings.js';
 import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
 import {
   getModelVisibilityMirrorSnapshot,
@@ -17599,6 +17603,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const resolvePendingRuntimeAxisPatch = createResolvePendingRuntimeAxisPatch({ getDesktopProviderService, log });
 
+  function activeModelGroupBinding(sessionId: string, row: {
+    agentKind?: string | null; model?: string | null; providerId?: string | null;
+  }) {
+    const binding = readModelGroupSessionBinding(sessionId);
+    if (!binding || !row.providerId || !row.model ||
+        (row.agentKind !== 'cc' && row.agentKind !== 'codex' && row.agentKind !== 'pi')) return null;
+    if (binding.pickedKey !== modelGroupCandidateKey({ agentKind: row.agentKind, model: row.model, providerId: row.providerId })) return null;
+    return modelGroupRouteFor(readModelGroupsConfig(), binding.selection, Date.now()).outcome === 'missing' ? null : binding;
+  }
+
   // Assembled before the runtime selection and the other helpers below; each is read when a fallback runs.
   const maybeApplySessionRuntimeFallback = createSessionRuntimeFallback<Session>({
     maker,
@@ -17606,10 +17620,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     canApplyAutomaticRuntimeSelection: (sessionId, generation) => canApplyAutomaticRuntimeSelection(sessionId, generation),
     readBotFallbackCandidate: (sessionId, current) => readBotFallbackCandidate(sessionId, current),
     readModelGroupFallbackCandidate: async (sessionId, current, visited, accountUnavailable, generation) => {
-      if (!readModelGroupSessionBinding(sessionId)) return null;
-      const { readModelGroupRecoveryOffer } = await import('../model-groups/ipc.js');
+      const row = await getSessionRowSnapshot(sessionId);
+      const binding = row && activeModelGroupBinding(sessionId, row);
+      if (!binding || !current.providerId || current.agentDeviceId) return null;
       const excluded = new Set(visited.map(key => key.replace(/^claude-code\u0000/, 'cc\u0000')));
-      if (!current.providerId || current.agentDeviceId) return { candidate: null };
+
       const offer = await readModelGroupRecoveryOffer(sessionId, { visited: excluded, accountUnavailable,
         recordUnavailable: (candidate) => recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
           ...current, agentKind: dbToMakerAgentKind(candidate.agentKind), providerId: candidate.providerId, model: candidate.model,
@@ -17619,7 +17634,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!offer || (dbToMakerAgentKind(offer.agentKind) === current.agentKind &&
         offer.providerId === current.providerId && offer.model === current.model)) return { candidate: null };
       return { candidate: { agentKind: dbToMakerAgentKind(offer.agentKind), model: offer.model,
-        providerId: offer.providerId, agentDeviceId: null, effort: null, fastMode: false } };
+        providerId: offer.providerId, agentDeviceId: null, effort: null, fastMode: false },
+        bindCommittedRoute: profile => {
+          if (profile.providerId) bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({
+            agentKind: makerToDbAgentKind(profile.agentKind), model: profile.model, providerId: profile.providerId,
+          }));
+        } };
     },
     readSessionAgentDeviceId: (sessionId) => readSessionAgentDeviceId(sessionId),
     readSessionRuntimeFallbackSettings, getDesktopProviderService, pendingSessionRuntimeFallbackRebuilds,
@@ -18793,6 +18813,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isAutoResumeAttemptCurrent: (sessionId, attemptToken) => inputCoordinator.isAutoResumeAttemptCurrent(sessionId, attemptToken),
       autoRetryLastError: (sessionId, attemptToken) => inputCoordinator.autoRetryLastError(sessionId, attemptToken),
     },
+    resumeQuotaWait: (sessionId, item, signals) => inputCoordinator.resumeModelGroupQuotaWait(sessionId, item, signals),
     interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, modelGroupInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred,
     beginSchedulerAutoResume,
     getStableSessionForTurnBoundary: (sessionId) => getStableSessionForTurnBoundary(sessionId),
@@ -18822,6 +18843,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!ownsQuotaRoute()) await reconcileBotModelRoute(sessionId, true);
       const [botInput] = await getDbClient()
         .drizzle.select({
+          agentKind: sessions.agentKind, providerId: sessions.providerId, model: sessions.model,
           orcaRole: sessions.orcaRole,
           orcaRemoteLead: sessions.orcaRemoteLead,
           source: sessions.source,
@@ -18854,7 +18876,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           scheduledQuotaInputs.add(args[2]);
         } else scheduledQuotaInputs.delete(args[2]);
         const groupFallback = botInput?.source === 'desktop' && !botInput.remoteHostId && !botInput.agentDeviceId &&
-          !botInput.orcaRole && readSessionRuntimeFallbackSettings().enabled && !!readModelGroupSessionBinding(sessionId);
+          !botInput.orcaRole && readSessionRuntimeFallbackSettings().enabled && !!activeModelGroupBinding(sessionId, botInput) && !isSessionSharedTaskActive(sessionId);
         if (groupFallback) modelGroupInputs.add(args[2]);
         else modelGroupInputs.delete(args[2]);
         if (botInput?.source === 'bot' && ['canonical', 'delegation', 'group', 'channel', 'thread', 'routine'].includes(botInput.role ?? '')) {
