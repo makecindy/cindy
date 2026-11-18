@@ -4,6 +4,7 @@ import { parseAgentMetaRecord, patchMessageAgentMetaWithResultRow, findVisibleTo
 import type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
 export type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
 import { writeMessageRow } from '../messageWrite.js';
+import { scheduleNativeHistoryBackupCleanup } from '../../remote-agent/controller/nativeHistoryBackup.js';
 /**
  * chat-data-localization F5：Messages IPC handlers（C7）。
  *
@@ -1241,6 +1242,7 @@ export function broadcastMessageDeleted(
   scheduleBotRemoteResourceChangedForSession(payload.sessionId, ownerScope?.ownerScopeKey);
   const ownerStamp = ownerStampForBroadcast(ownerScope);
   if (ownerStamp === null) return;
+  scheduleNativeHistoryBackupCleanup(payload.sessionId);
   if (ownerScope !== undefined && ownerScope !== null) {
     broadcastTap.tapWindowBroadcast('local-db:messages:deleted', payload, ownerStamp);
   } else if (ownerStamp === undefined) {

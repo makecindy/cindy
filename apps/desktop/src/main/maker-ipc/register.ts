@@ -115,6 +115,8 @@ import { readDeviceProviderViews, readRemoteProviderRoute } from '../remote-agen
 import { checkDeviceRoute } from '../remote-agent/controller/deviceRouteCheck.js';
 import { cancelPendingRemoteStart } from '../remote-agent/controller/startRemote.js';
 import { createNativeHistoryRelocator } from '../remote-agent/controller/relocateNativeHistory.js';
+import { scheduleNativeHistoryBackup } from '../remote-agent/controller/nativeHistoryBackup.js';
+import { remoteAgentInvoker } from '../remote-agent/controller/runClient.js';
 import { forgetCredentialGrants } from '../remote-agent/executor/credentialGrants.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { withSharedSessionResumeRecovery } from './sharedSessionResumeRecovery.js';
@@ -6233,6 +6235,13 @@ const settlePluginTaskTerminal: NonNullable<SessionEventDependencies['onPluginTa
 const sessionEventDependencies: SessionEventDependencies = {
   onPluginTaskTerminal: settlePluginTaskTerminal,
   onSuccessfulProductTurn: finishProductTurn,
+  saveRemoteNativeHistory: (sessionId, data, anchor, persisted) =>
+    scheduleNativeHistoryBackup(sessionId, data, anchor, persisted, (device, task, assertCurrent) => {
+      const invoke = remoteAgentInvoker(device, (target, channel, args) => remoteBackgroundInvoke(target, channel, args, {
+        preSend: assertCurrent,
+      }));
+      return command => invoke([{ op: 'native-history', sessionId: task, command }]);
+    }),
   onUnsuccessfulProductTurn: interruptProductTurn,
   deferUnsuccessfulProductTurn: (owner) => deferredProductTurnFailureGate.defer(owner),
   get botCompactRuntimeRefreshCoordinator() { return botCompactRuntimeRefreshCoordinator; },

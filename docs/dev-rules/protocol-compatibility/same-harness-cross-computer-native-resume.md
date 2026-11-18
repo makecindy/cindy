@@ -23,3 +23,45 @@ Pi 只改写副本首行的 session ID 与 cwd，使其指向接收端工作目�
 配额探测因目标此刻接不了而失败（供应商组失败判定为 `unavailable`：连不上、`REMOTE_AGENT_BUSY` 任务数已满、不提供这个模型等）时不发确认卡，
 还原源路由后原样报错，由配额均衡留在原电脑发送并退避；只有目标能接、原生记录恢复不了才询问。无协议变化。
 旧客户端已支持 auto 和通用 permission 卡；共享来源仍沿用原来的 ask/记住偏好，不自动扩大授权。
+
+## 原生记录随任务备份（2026-11-18 用户裁决）
+
+Pi 任务在同账号另一台电脑执行时，任务所在电脑在成功轮次落库后后台拉取完结快照。只有 owner
+被控端声明 `nativeHistoryBackup: true`，主端在原有 open 载荷回传 `acceptsNativeHistoryBackup: true`，
+被控端才在成功 `pi/agent_settled` 对应的 done 上附一次会话内检查点。缺任一能力位就沿用原行为。
+任务的 `share:<id>`、分享 peer、经分享转发的 run、外部应用和 SSH 工作区都不参与。检查点只在两台
+电脑的 Agent 通道交付，任务宿主消费后去掉它再广播。
+
+`native-history` 增量命令 `checkpoint-export {runId, checkpoint, prefix?: {bytes, sha256}}` 只接受
+当前 owner 控制端本身、指定任务和仍静止的该 run。被控端自己从绑定的 Pi session id 定位会话文件，
+检查文件仍未变化、以完整记录收尾，而且末条原生消息对应本次成功的模型回复。正在执行下一轮或改过
+模型、回退、压缩、撤权、关闭的 run 拒绝取快照。普通 export/import 仍要求关闭写入中的会话。
+检查点回复包含旧字段 `id, manifest` 和 `offset`。被控端复算源前缀 SHA-256，匹配才跳过该前缀，
+否则从 0 开始。增量 read/release 携带 `backup: true`，使用隔离的临时句柄，不能凭它读取其他导出
+或还原到任何指定路径。read 通过可选 `limit` 限制单段长度。
+任务宿主仅发布字节数和整份 SHA-256 均通过、且持久会话 id、执行电脑、清空／回退／删除代次和
+完成消息锚点仍匹配的备份。原电脑链路不可达时，备份作为原生迁移的来源，仍走原有目标校验；如果新一轮
+已经推进历史水位，或者校验、目标原生恢复失败，沿用现有交接。
+
+目录是 `userData/owners/<账号键>/native-history-backups`，私有目录／文件在 POSIX 创建为
+0700／0600。备份按字节保留原生**对话与工具记录**，包括用户已经交给 Agent 的正文；只打开绑定
+会话文件，禁止读取、复制登录状态、订阅／供应商密钥、私钥、授权文件、钥匙串以及 Harness 配置／认证
+文件。删除任务、清空、回退／删除消息、切换原生 id 或引擎会使原备份失效，宿主在变更后清理，
+并在同账号启动和下次写入时清除作废或崩溃残留。保留期 7 天，每个任务一份、每份至多 16 MiB，
+每个账号至多 8 份，超限优先回收最旧备份。发布使用同目录临时文件和原子替换。
+
+每台任务宿主一次只拉一份，最多待处理 16 个任务，同任务只保留最新尝试，失败只等待下一次成功
+轮次。稳定前缀命中时只传新增字节和一次 export/release；每次只拉一段，128 KiB 原文每段间隔至少
+250 ms，速率上界约 512 KiB/s 原文或 683 KiB/s Base64，另有帧头和加密开销。首次或前缀失效的
+整份传输受同一上限约束，搭乘现有后台调用的链路，轮次完成、发送和下一轮不等待它。实际生产中转
+可用容量未测量。多个任务宿主的限速独立，被控端仍共享既有 16 个临时传输名额和每段字节上限。
+故障只影响当前任务的备份请求，切换时只换该任务的历史来源，沿用原有设备／中转
+连接、重试与复位策略；回归覆盖两个控制端共享被控端时互不授权或失效。
+中转路由只透传已签名的既有 `maker:remote-agent:v1` 业务载荷，不解析快照字段，不需升级自建中转。
+没有新 relay kind、allowlist、Mobile 配置或数据库 schema 变更。
+回归见 `nativeHistoryBackup.test.ts`、`nativeHistoryTransfer.test.ts`、`nativeHistoryStorage.test.ts`、
+`relocateNativeHistory.test.ts` 和 `roundtrip.test.ts` 的双控制端用例。
+
+Claude Code 和 Codex 保持按需迁移。隔离探测中 Claude CLI 在 result 后仍会追加记录。Codex 0.166.0
+的成功小样本在通知时已有 rollout 和线程状态行，上游仍允许先交付终态、再刷新普通 rollout。
+因此两者的终态事件均不作为全量自动备份的落盘屏障。[Codex 0.166.0 完成轮次的写盘顺序](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/core/src/tasks/mod.rs#L854-L882)
