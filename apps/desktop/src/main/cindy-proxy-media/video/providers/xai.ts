@@ -18,6 +18,7 @@ import type {
 } from '../types.js';
 import { sniffMediaMime } from '../../../cindy-media/sniffMediaMime.js';
 import { isXaiVideo15, validateCustomVideoBody } from '../../../cindy-media/customVideoProtocol.js';
+import { GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE } from '../../../../shared/ghost.js';
 
 const XAI_API_BASE = 'https://api.x.ai/v1';
 export const XAI_VIDEO_CATALOG_MODEL_ID = 'xai/grok-imagine-video';
@@ -325,7 +326,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
   const expectedSecondsByAlias = Object.fromEntries(aliases.map((alias) => [alias, 180]));
   const capabilities: VideoProviderCapabilities = {
     ...BASE_CAPABILITIES,
-    ...(aliases.some(isXaiVideo15) ? { maxImagesByRefMode: { first_and_last_frame: 2, reference_image: 14 } } : {}),
+    ...(aliases.some(isXaiVideo15) ? { maxImagesByRefMode: GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE } : {}),
     modelAliases: aliases.map((alias) => ({
       alias,
       internalModel: upstreamByAlias.get(alias)!,
@@ -404,7 +405,7 @@ export function createXaiVideoProvider(opts: CreateXaiVideoProviderOptions): Vid
       duration: req.duration,
       resolution: req.resolution,
     };
-    if (images.length > (isXaiVideo15(alias) ? req.refMode === 'reference_image' ? 14 : 2 : 1) ||
+    if (images.length > (isXaiVideo15(alias) ? GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE[req.refMode ?? 'first_and_last_frame'] : 1) ||
         (req.refMode === 'reference_image' && !isXaiVideo15(alias)))
       throw new Error('当前 xAI 型号不支持这组参考图或首尾帧');
     if (req.refMode === 'reference_image' && images.length) {

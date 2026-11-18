@@ -679,6 +679,40 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['missing-task', 'wrong-task', 'status', 'media'] as const)('recovers a native video after a custom Guide %s error without another paid submission', async failure => {
+    const original = recoveryVideoOperation(
+      [failure === 'missing-task' ? 'absent' : failure === 'wrong-task' ? 'wrongId' : 'job'],
+      [failure === 'status' ? 'wrong' : 'phase'], [failure === 'media' ? 'wrong' : 'movie']);
+    const op = { ...original, request: { ...original.request, path: '/videos/generations' } };
+    const { value, connection } = setupGuideDriven(op);
+    const model = { id: 'xai/grok-imagine-video-1.5', name: 'Video', providerId: 'xai', mode: 'video_generation',
+      videoProtocol: 'xai-videos', modalities: { input: ['text', 'image'], output: ['video'] } };
+    mocks.models.mockResolvedValue([model]);
+    mocks.providerModel.mockReturnValue(model);
+    mocks.videoConnection.mockReturnValue(connection);
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: 'original-task', wrongId: 'incorrect-task' }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    if (failure === 'status' || failure === 'media') {
+      mocks.outboundFetch.mockResolvedValueOnce(Response.json({ phase: 'ready', movie: MP4.toString('base64') }));
+      await callCindyMedia({ action: 'poll', invocationId: String(first.invocation_id) });
+    }
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-native', operations: [recoveryVideoOperation()] } });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate', sourceInvocationId: String(first.invocation_id) });
+    expect(next).toMatchObject({ ok: true, status: 'pending', next_action: 'poll' });
+    expect(await callCindyMedia({ action: 'request', invocationId: String(next.invocation_id), body: { prompt: 'cat' } }))
+      .toMatchObject({ ok: false, errorCode: 'INVOCATION_ALREADY_USED' });
+    if (failure === 'missing-task' || failure === 'wrong-task')
+      mocks.outboundFetch.mockResolvedValueOnce(Response.json({ phase: 'ready', movie: MP4.toString('base64') }));
+    expect(await callCindyMedia({ action: 'poll', invocationId: String(next.invocation_id) })).toMatchObject({ ok: true });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
+    expect(mocks.outboundFetch.mock.calls[1]![0]).toBe(`${connection.baseUrl}/jobs/original-task`);
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    mocks.videoConnection.mockReturnValue({ ...connection, revision: 'changed' });
+    expect(await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate', sourceInvocationId: String(first.invocation_id) }))
+      .toMatchObject({ ok: false, errorCode: 'RECOVERY_TARGET_MISMATCH' });
+  });
+
   // prepare/request/poll entry, unit: #4577333353 requires a saved poll/result
   // AND a repaired task ID. Existing cases repaired either the ID or the result fields.
   it.each([

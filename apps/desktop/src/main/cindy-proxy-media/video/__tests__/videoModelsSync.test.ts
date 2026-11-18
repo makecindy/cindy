@@ -42,6 +42,7 @@ function buildFullRegistry(): VideoProviderRegistry {
   const registry = buildXdRegistry();
   registry.register(
     createXaiVideoProvider({
+      modelAliases: BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')?.videoModels?.map((model) => model.id),
       hasOAuthLogin: () => true,
       getAccessToken: async () => 'test-token',
       getCredentialGeneration: () => 1,

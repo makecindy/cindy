@@ -55,6 +55,18 @@ describe('xAI video provider · capabilities', () => {
     await expect(provider.submit({ ...request, resolution: '1080p' }, alias)).rejects.toThrow('720p');
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
+
+  it('advertises and submits only the reference images accepted by the legacy entry', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(async () => Response.json({ request_id: 'refs-task' }));
+    const alias = 'xai/grok-imagine-video-1.5';
+    const provider = makeProvider({ fetchImplementation, modelAliases: [alias] });
+    const images = Array.from({ length: 9 }, () => 'data:image/png;base64,AAAA');
+    expect(provider.capabilities.maxImagesByRefMode).toEqual({ first_and_last_frame: 2, reference_image: 9 });
+    await provider.submit({ prompt: 'move', duration: 6, resolution: '720p', refMode: 'reference_image', images }, alias);
+    expect(JSON.parse(fetchImplementation.mock.calls[0]![1]!.body as string).reference_images).toHaveLength(9);
+    await expect(provider.submit({ prompt: 'move', duration: 6, resolution: '720p', refMode: 'reference_image', images: [...images, images[0]!] }, alias)).rejects.toThrow();
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
   const provider = makeProvider({ fetchImplementation: vi.fn() as unknown as typeof fetch });
 
   it('exposes the catalog alias and the API-supported common value ranges', () => {

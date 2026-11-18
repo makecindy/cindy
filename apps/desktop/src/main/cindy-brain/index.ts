@@ -5935,7 +5935,7 @@ configureProviderMediaRuntime({
     if (provider && isCustomMediaGuideProvider(provider)) return customMediaGuideProtocol(provider, target.modelId, target.agent);
     return customMediaGuideProtocol(provider, target.modelId, target.agent) ??
       (provider?.imageModels?.some(model => model.id === target.modelId)
-        ? getImageChannelRegistry().resolve(target.providerId, target.modelId).imageProtocol
+        ? getImageChannelRegistry().protocolForProvider(target.providerId)
         : target.providerId === 'xai' ? 'xai-videos' : undefined);
   },
   resolveHttpConnection: (providerId, modelId, capability, agent) => {

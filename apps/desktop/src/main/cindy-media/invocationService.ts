@@ -218,6 +218,10 @@ function isClientVideoInvocation(invocation: StoredMediaInvocation): boolean {
   return invocation.guide.binding.executor === 'provider-video';
 }
 
+function usesProviderReceipt(invocation: StoredMediaInvocation): boolean {
+  return invocation.guide.binding.executor === 'provider-http' || isClientVideoInvocation(invocation);
+}
+
 async function resolveInvocationConnection(invocation: StoredMediaInvocation): Promise<MediaConnection> {
   const binding = invocation.guide.binding;
   if (binding.executor !== 'provider-video' && binding.executor !== 'provider-http') return resolveConnection(binding.providerId);
@@ -1443,7 +1447,9 @@ async function preparePaidReceipt(guide: PreparedMediaInvocationGuide, sourceId:
   const targetBinding = guide.binding;
   const sourceBinding = source.guide.binding;
   if (source.modelId !== guide.modelId || source.capability !== guide.capability ||
-      sourceBinding.executor !== 'provider-http' || targetBinding.executor !== 'provider-http' ||
+      (sourceBinding.executor !== 'provider-http' && sourceBinding.executor !== 'provider-video') ||
+      (targetBinding.executor !== 'provider-http' && targetBinding.executor !== 'provider-video') ||
+      sourceBinding.executor !== targetBinding.executor ||
       sourceBinding.providerId !== targetBinding.providerId || sourceBinding.sourceAgent !== targetBinding.sourceAgent ||
       sourceBinding.connectionRevision !== targetBinding.connectionRevision) {
     throw new MediaInvocationError('RECOVERY_TARGET_MISMATCH', '复用回执必须保持原 provider、模型、能力和实际连接；请恢复原连接后重新 prepare');
@@ -1503,7 +1509,7 @@ async function submitInvocation(
     invocation.guide.response.mode === 'sync' &&
     invocation.responseJson
   ) {
-    if (invocation.guide.binding.executor === 'provider-http') {
+    if (usesProviderReceipt(invocation)) {
       const connection = await resolveInvocationConnection(invocation);
       scope.assertSourceCurrent = connection.assertCurrent;
       assertAuthScope(scope, invocation.owner);
@@ -1663,7 +1669,7 @@ async function submitInvocation(
           db,
         );
       }
-      const responseJson = invocation.guide.binding.executor === 'provider-http'
+      const responseJson = usesProviderReceipt(invocation)
         ? serializeMediaInvocationReceipt({ submission: response }) : undefined;
       const taskId = valuesAtPath(response, invocation.guide.response.taskIdPath).find(
         (value): value is string => typeof value === 'string' && value.length > 0,
@@ -1905,7 +1911,7 @@ async function pollInvocation(
         // been ingested. Completion replaces it atomically with managed URLs.
         return materializeAsyncInvocation(invocation, response, scope, db);
       }
-      const responseJson = invocation.guide.binding.executor === 'provider-http'
+      const responseJson = usesProviderReceipt(invocation)
         ? serializeMediaInvocationReceipt({ submission: receipt.submission, result: response }) : JSON.stringify(response);
       const persisted = await transitionMediaInvocation(
         {
@@ -1950,7 +1956,7 @@ async function pollInvocation(
         invocation_id: invocation.id,
       });
     }
-    const responseJson = invocation.guide.binding.executor === 'provider-http'
+    const responseJson = usesProviderReceipt(invocation)
       ? serializeMediaInvocationReceipt({ submission: receipt.submission, poll: response }) : undefined;
     if (guide.failureValues.includes(status)) {
       await transitionMediaInvocation(
