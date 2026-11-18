@@ -4199,12 +4199,13 @@ function CCAgentSessionContent({
       invalidateHistoryRecoveryNavigation();
       const deliveryMode = opts?.deliveryMode ?? 'queue';
       const originalMessage = message;
+      // Local navigation is a UI action, independent of model-input delivery.
       const navigationRequestVersion =
-        !opts?.literalText && deliveryMode !== 'steer' && matchNavigationCommandName(message)
+        !opts?.literalText && matchNavigationCommandName(message)
           ? ++sessionNavigationVersionRef.current
           : null;
       if (
-        !opts?.literalText && deliveryMode !== 'steer' &&
+        !opts?.literalText &&
         (await tryHandleNavigationCommand(message, {
           navigate,
           t,

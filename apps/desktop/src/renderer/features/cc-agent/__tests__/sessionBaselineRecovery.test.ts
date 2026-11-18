@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useVendorAuthGate } from '../../../hooks/useVendorAuthGate';
 import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
+import { matchNavigationCommandName, tryHandleNavigationCommand } from '../../../lib/navigationCommands';
 
 const { revalidate, confirm, navigate } = vi.hoisted(() => ({
   revalidate: vi.fn(), confirm: vi.fn(async () => false), navigate: vi.fn(),
@@ -148,6 +149,8 @@ function setup(options: {
     PI_RUNTIME_SKILL_RETRY_DELAYS_MS, leadingSlashInvocation,
     reconcilePiRuntimeCommandForDispatch, reconcilePiRuntimeCommandForDispatchWithRetry,
     rewriteAgentSkillInvocationForDispatch, dispatchCommand,
+    matchNavigationCommandName, tryHandleNavigationCommand, navigate,
+    sessionNavigationVersionRef: { current: 0 }, canNavigateSession: true, navigationMode: 'route',
   };
   Object.assign(environment, { getHelpCommandsSnapshot: runInNewContext(catalogCode, environment) });
   Object.assign(environment, { maybeDispatchDesktopSlashCommand: runInNewContext(slashCode, environment) });
@@ -177,6 +180,25 @@ it.each(['codex', 'claude-code', 'pi'] as const)(
     expect(storeSend).not.toHaveBeenCalled();
   },
 );
+
+// PR #10998 / discussion 4609117751: execute the real send callback and navigation
+// handler. The /help test only covered broadcast commands, not renderer-owned
+// navigation. Minimal unit input: a valid /jump-session with the steer default;
+// it must change the route without sending to the model or the no-op registry entry.
+it.each(['queue', 'steer'] as const)('navigates /jump-session independently of %s delivery', async (deliveryMode) => {
+  const get = vi.fn(async () => ({ id: 'jump-target', status: 'active', source: 'user' }));
+  vi.stubGlobal('electronAPI', { localDb: { sessions: { get } } });
+  const { send, storeSend, dispatchCommand } = setup({
+    proceed: true,
+    slashCatalog: Promise.resolve([{ kind: 'desktop', name: 'jump-session', description: '' }]),
+  });
+  await expect(send('/jump-session jump-target', 'model', '', 'ask', undefined, undefined, { deliveryMode }))
+    .resolves.toBeUndefined();
+  expect(get).toHaveBeenCalledExactlyOnceWith('jump-target');
+  expect(navigate).toHaveBeenCalledExactlyOnceWith('/cc-agent/jump-target');
+  expect(storeSend).not.toHaveBeenCalled();
+  expect(dispatchCommand).not.toHaveBeenCalled();
+});
 
 it.each(['queue', 'steer'] as const)(
   'checks vendor readiness at the appropriate boundary for %s sends', async (deliveryMode) => {
