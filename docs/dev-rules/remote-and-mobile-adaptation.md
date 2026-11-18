@@ -7,6 +7,22 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 远程慢请求的两端诊断（2026-11-18）
+
+`maker:create-session` 在被控端要等 Agent 真正起来才回结果。Codex 的 `thread/start` 会先等
+一次上游预热请求，实测两次各约 40 秒，同机当天 Codex 建会话中位数 8 秒、14 次超过 30 秒、
+最长 71 秒；控制端等待预算已放宽到 2 分钟（见协议契约表 `INVOKE_TIMEOUT_OVERRIDES_MS`）。
+当时两端日志对不上：被控端结果被丢弃时不留记录，控制端也不记晚到的结果。
+
+被控端对超过慢阈值的请求追加记录结果去向：`slow result handed off`（已交给链路或离线队列，
+带 `accepted`）或 `slow result dropped reason=link-reset`（执行期间链路被重置，结果按既有语义
+丢弃）。控制端对已结束等待后才到的结果记录 `late invoke-result`。Codex 的 `thread/start ok`
+带上 `elapsedMs`，把上游预热与 app-server 启动分开。
+
+故障半径：① 只追加 debug／info 日志，不改变结果发送、丢弃、重试或断链恢复；② 日志只含
+截短的请求 id 与设备引用，不含参数或结果内容；③ 慢阈值沿用既有 `slow execution`，不新增高频
+日志。自建中转只转发原消息，不需升级。验证入口：Device Link `invokePolicy.test.ts`。
+
 ## 弱网下的备用截图与视频恢复（2026-11-15）
 
 备用截图仍走原有远程桌面请求，发送端将 JPEG 压到 64 KiB 以内；base64 与回复包装

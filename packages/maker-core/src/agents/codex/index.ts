@@ -7297,6 +7297,9 @@ assertRouteCurrent();
       };
       acquireHostBindingLeaseIfNeeded();
       assertCurrentHost('thread/start');
+      // Codex answers thread/start only after its own startup work, including an
+      // upstream warm-up request; keep the wait visible apart from host start-up.
+      const threadStartBeganAt = Date.now();
       const resp = await withMcpDiscoveryContext(() => {
           assertCurrentHost('thread/start dispatch');
           return host.request<ThreadStartResponse>(Method.ThreadStart, params, {
@@ -7333,6 +7336,7 @@ assertRouteCurrent();
       threadMayHaveRollout = false;
       log.info('thread/start ok', {
         threadId,
+        elapsedMs: Date.now() - threadStartBeganAt,
         model: resp.model,
         modelProvider: codexThreadModelProviderId ?? null,
         serviceTier: serviceTierState.value ?? null,
