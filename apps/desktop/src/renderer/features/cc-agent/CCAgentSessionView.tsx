@@ -2415,7 +2415,8 @@ function CCAgentSessionContent({
   const providers = catalogDeviceId ? deviceProviders : localProviders;
   const taskAccountProviderId = usageAccount.kind === 'unreadable' ? null
     : sessionSubscriptionPoolProvider(normalizeDbAgentKind(displayAgentKind), usageChipProviderId,
-        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId));
+        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId),
+        !agentSwitchIntent && session?.providerId == null);
   const canSwitchToClaudeSubscription = useMemo(() => {
     if (
       remoteDeviceId ||

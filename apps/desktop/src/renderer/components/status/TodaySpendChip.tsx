@@ -1134,6 +1134,9 @@ export function TodaySpendChip({
         ? providerId
         : null,
       accountDeviceId,
+      // Null is readable only for a confirmed Codex OAuth form and this exact task/device
+      // context. Gateway, custom, SSH and unreadable sources never opt into the probe.
+      !accountUnreadable && vendorKey === 'codex' && isCodexOauth && !remoteHostId && providerId == null,
     ),
     t,
   );
