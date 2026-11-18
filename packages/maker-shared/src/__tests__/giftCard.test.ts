@@ -52,7 +52,9 @@ const card = {
 
 describe('gift card server responses', () => {
   it('keeps only the fields the redeem surfaces render', () => {
-    expect(projectGiftCardPreview({ card: { ...card, claimedByMembershipId: 'member-1' } })).toEqual({ card });
+    // 旧服务端不下发 destination：它发出的卡都是后台发放，进赠送余额。
+    expect(projectGiftCardPreview({ card: { ...card, claimedByMembershipId: 'member-1' } }))
+      .toEqual({ card: { ...card, destination: 'PROMOTIONAL' } });
     const redeemed = projectGiftCardRedemption({
       card: { ...card, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-16T12:00:00.000Z' },
       credit: { state: 'PENDING', amount: '20.000000000', expiresAt: null, grantId: 'grant-1' },
@@ -72,10 +74,30 @@ describe('gift card server responses', () => {
       { card: { ...card, senderName: '' } },
       { card: { ...card, validityDays: 0 } },
       { card: { ...card, claimDeadline: 'tomorrow' } },
+      // 后台发放的卡必须带齐领取截止与有效天数，否则说不清条款。
+      { card: { ...card, destination: 'PROMOTIONAL', claimDeadline: null } },
+      { card: { ...card, destination: 'PROMOTIONAL', validityDays: null } },
+      // 声称是用户买的卡却没有说明到账去向：不能按赠送余额的条款展示。
+      { card: { ...card, source: 'PURCHASE' } },
+      { card: { ...card, destination: 'GIFT' } },
     ]) {
       expect(() => projectGiftCardPreview(broken)).toThrow();
     }
     expect(() => projectGiftCardRedemption({ card, credit: { state: 'DONE', amount: '20', expiresAt: null } })).toThrow();
+  });
+
+  // 用户买的卡进充值余额、永久有效：没有领取截止，也没有有效天数。
+  it('accepts a purchased card without a claim deadline or validity days', () => {
+    const purchased = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+    };
+    expect(projectGiftCardPreview({ card: purchased }).card).toMatchObject({
+      destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+    });
+    expect(projectGiftCardRedemption({
+      card: { ...purchased, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z' },
+      credit: { state: 'APPLIED', amount: '20', expiresAt: null },
+    }).credit).toEqual({ state: 'APPLIED', amount: '20', expiresAt: null });
   });
 
   it('tells a card state the server reported apart from an outage', () => {

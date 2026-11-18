@@ -19959,7 +19959,8 @@
         "validityValue_many": "{{count}} de dias após a utilização",
         "validityValue_other": "{{count}} dias após a utilização",
         "claimBy": "Utilizar até",
-        "destination": "Adicionado a"
+        "destination": "Adicionado a",
+        "validityPermanent": "Não expira"
       },
       "doneTitle": "{{amount}} adicionados",
       "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
@@ -19978,7 +19979,9 @@
         "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
         "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde.",
         "personalRequired": "Os cartões de oferta só podem ser utilizados com uma conta pessoal."
-      }
+      },
+      "doneDescriptionPurchased": "Adicionado ao seu Saldo de carregamentos. Não expira.",
+      "pendingDescriptionPurchased": "{{amount}} está a ser adicionado e vai aparecer dentro de instantes no seu Saldo de carregamentos. Não precisa de o utilizar novamente."
     },
     "usage": {
       "title": "Utilização do saldo",
@@ -20023,7 +20026,10 @@
         "noPayment": "Sem pagamento necessário",
         "page": "Página {{page}}",
         "previous": "Página anterior",
-        "next": "Página seguinte"
+        "next": "Página seguinte",
+        "giftCard_one": "Cartão de oferta × {{count}}",
+        "giftCard_many": "Cartões de oferta × {{count}}",
+        "giftCard_other": "Cartões de oferta × {{count}}"
       },
       "count": "{{count}} encomendas",
       "orderId": "N.º {{id}}",
@@ -20250,6 +20256,100 @@
         "MONTH": "Inclui {{amount}} por mês",
         "YEAR": "Inclui {{amount}} por ano",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Comprar cartão de oferta",
+      "title": "Comprar cartão de oferta",
+      "subtitle": "Ofereça-o ou fique com ele. Ao utilizá-lo, o valor vai para o seu Saldo de carregamentos e nunca expira.",
+      "previewLabel": "O que a pessoa vai receber",
+      "sameCards_one": "{{count}} cartão com o seu próprio código",
+      "sameCards_many": "{{count}} cartões com o mesmo design, valor e mensagem, cada um com o seu próprio código",
+      "sameCards_other": "{{count}} cartões com o mesmo design, valor e mensagem, cada um com o seu próprio código",
+      "fields": {
+        "face": "Design",
+        "amount": "Valor",
+        "quantity": "Quantidade",
+        "sender": "De",
+        "senderHint": "Aparece como «De {{sender}}»",
+        "senderPlaceholder": "O seu nome",
+        "message": "Mensagem (opcional)",
+        "messagePlaceholder": "Uma nota para a pessoa",
+        "paymentMethod": "Método de pagamento"
+      },
+      "decrease": "Menos um cartão",
+      "increase": "Mais um cartão",
+      "quantityHint": "Até {{limit}} cartões a cada {{hours}} horas · ainda pode comprar {{remaining}}",
+      "quantityLimitReached": "Já comprou o máximo de {{limit}} cartões em {{hours}} horas. Tente novamente mais tarde.",
+      "orderAmountCap": "Até {{amount}} por encomenda",
+      "totalDetail_one": "{{count}} cartão × {{amount}}",
+      "totalDetail_many": "{{count}} cartões × {{amount}}",
+      "totalDetail_other": "{{count}} cartões × {{amount}}",
+      "pay": "Continuar para o pagamento",
+      "cancel": "Cancelar",
+      "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
+      "checkoutSubtitle_one": "Cartão de oferta {{amount}} × {{count}} · emitido assim que o pagamento for concluído",
+      "checkoutSubtitle_many": "Cartões de oferta {{amount}} × {{count}} · emitidos assim que o pagamento for concluído",
+      "checkoutSubtitle_other": "Cartões de oferta {{amount}} × {{count}} · emitidos assim que o pagamento for concluído",
+      "faces": {
+        "cindy": "Cindy · Vermelho da marca",
+        "cat": "Gato preto · Noite",
+        "bell": "Sino · Festivo",
+        "leap": "Salto · Marfim"
+      },
+      "errors": {
+        "limitReached": "Atingiu o limite de compra de cartões de oferta. Tente novamente mais tarde.",
+        "amountTooLarge": "Esta encomenda ultrapassa o limite de pagamento por encomenda. Escolha menos cartões e tente novamente."
+      },
+      "done": {
+        "title_one": "O seu cartão de oferta está pronto",
+        "title_many": "Os seus {{count}} cartões de oferta estão prontos",
+        "title_other": "Os seus {{count}} cartões de oferta estão prontos",
+        "pendingTitle": "Cartão de oferta pago",
+        "loading": "A obter os cartões desta encomenda…",
+        "description": "Envie uma ligação de resgate a alguém: ao abri-la, a pessoa pode utilizá-lo de imediato. Também pode ficar com um.",
+        "missing": "O pagamento foi concluído. Os seus cartões vão aparecer em Os meus cartões de oferta dentro de instantes.",
+        "cardTitle": "Cartão {{index}} · {{amount}}",
+        "cardMeta": "Termina em {{tail}} · {{status}}",
+        "linkHint": "A ligação de resgate é o próprio cartão: quem a abrir primeiro fica com ele. Envie-a apenas a quem o vai oferecer.",
+        "viewAll": "Ver os meus cartões de oferta",
+        "finish": "Concluído"
+      },
+      "list": {
+        "title": "Os meus cartões de oferta",
+        "description": "Envie uma ligação de resgate a alguém: ao abri-la, a pessoa pode utilizá-lo de imediato. Os cartões que não ofereceu nunca expiram e pode utilizá-los. Ao utilizá-los, o valor vai para o seu Saldo de carregamentos.",
+        "count_one": "{{count}} cartão",
+        "count_many": "{{count}} cartões",
+        "count_other": "{{count}} cartões",
+        "loadMore": "Carregar mais",
+        "loadFailed": "Não foi possível carregar os seus cartões de oferta",
+        "retry": "Recarregar",
+        "status": {
+          "unclaimed": "Por utilizar",
+          "claimedBy": "Utilizado por {{name}}",
+          "claimed": "Utilizado",
+          "redeemedByYou": "Utilizado por si",
+          "refunded": "Reembolsado"
+        },
+        "meta": {
+          "purchased": "Comprado a {{date}} · termina em {{tail}}",
+          "claimed": "Utilizado a {{date}} · termina em {{tail}}",
+          "redeemed": "Utilizado a {{date}} · termina em {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copiar ligação de resgate",
+        "copied": "Copiado",
+        "more": "Mais ações",
+        "copyCode": "Copiar código",
+        "redeemSelf": "Utilizar eu"
+      },
+      "toasts": {
+        "linkCopied": "Ligação de resgate copiada",
+        "codeCopied": "Código copiado",
+        "copyFailed": "Não foi possível copiar. Tente novamente.",
+        "unavailable": "Este cartão já foi utilizado ou reembolsado",
+        "revealFailed": "Não foi possível obter o código. Tente novamente mais tarde."
       }
     }
   },

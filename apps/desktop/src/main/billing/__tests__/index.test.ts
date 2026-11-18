@@ -127,9 +127,25 @@ describe('billing IPC', () => {
     const { call, fetch } = harness();
     await expect(call('billing:list-payment-history', { limit: 10, cursor: 'previous_page' }))
       .resolves.toEqual({ records: [], nextCursor: null });
-    expect(fetch).toHaveBeenCalledWith('/api/billing/payment-history?limit=10&cursor=previous_page', {
-      baseUrl: expect.any(Function), timeoutMs: 20_000, redactErrorDetails: true,
-    });
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/billing/payment-history?limit=10&cursor=previous_page&includeGiftCards=true',
+      {
+        baseUrl: expect.any(Function), timeoutMs: 20_000, redactErrorDetails: true,
+        expectedErrors: [{ status: 400 }],
+      },
+    );
+  });
+
+  // 新版桌面端先于服务端上线时，旧服务端不认识 includeGiftCards（400）：订单记录不能因此打不开。
+  it('falls back to the plain history request when the server does not know gift cards yet', async () => {
+    const { call, fetch } = harness();
+    fetch.mockRejectedValueOnce(new ServerApiError('INVALID_PARAMS', 400, 'redacted'));
+    await expect(call('billing:list-payment-history', { limit: 10 }))
+      .resolves.toEqual({ records: [], nextCursor: null });
+    expect(fetch.mock.calls.map(([path]) => path)).toEqual([
+      '/api/billing/payment-history?limit=10&includeGiftCards=true',
+      '/api/billing/payment-history?limit=10',
+    ]);
   });
 
   it.each([
@@ -701,6 +717,7 @@ describe('gift card IPC', () => {
     faceCode: 'cindy',
     senderName: 'Cindy Team',
     message: null,
+    destination: 'PROMOTIONAL',
     claimDeadline: '2026-12-31T16:00:00.000Z',
     validityDays: 90,
     claimedAt: null,
@@ -780,5 +797,91 @@ describe('gift card IPC', () => {
     await expect(call(BILLING_INVOKE.REDEEM_GIFT_CARD, { code: 'G0123456789ABCDE' }, { id: 2 }))
       .rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('gift card purchase IPC', () => {
+  const request = {
+    offerCode: 'gift_card_100',
+    quantity: 2,
+    faceCode: 'cat',
+    senderName: '  小鱼 ',
+    message: '   ',
+    purchaseOptionId: 'listing_alipay',
+  };
+
+  it('creates the order at the fixed endpoint with trimmed text and the idempotency header', async () => {
+    const { call, fetch } = harness();
+    fetch.mockResolvedValueOnce({
+      orderId: 'order_9', productCode: 'gift_card', offerCode: 'gift_card_100', amount: '200',
+      currency: 'cny', status: 'PENDING', paymentAction: null, productKind: 'GIFT_CARD', quantity: 2,
+      createdAt: '2026-11-19T08:00:00.000Z', updatedAt: '2026-11-19T08:00:00.000Z',
+    });
+
+    await expect(call(BILLING_INVOKE.CREATE_GIFT_CARD_ORDER, {
+      request, idempotencyKey: 'desktop:gift-card:12345678',
+    })).resolves.toMatchObject({ orderId: 'order_9', productKind: 'GIFT_CARD', quantity: 2 });
+
+    expect(fetch).toHaveBeenCalledWith('/api/billing/gift-card/orders', expect.objectContaining({
+      method: 'POST',
+      body: { ...request, senderName: '小鱼', message: null },
+      headers: { 'Idempotency-Key': 'desktop:gift-card:12345678' },
+      allowedRedactedErrorCodes: expect.arrayContaining(['GIFT_CARD_PURCHASE_LIMIT_REACHED']),
+    }));
+  });
+
+  it.each([
+    { ...request, quantity: 0 },
+    { ...request, quantity: 1.5 },
+    { ...request, faceCode: '../face' },
+    { ...request, senderName: '   ' },
+    { ...request, membershipId: 'someone-else' },
+  ])('rejects an order the server should never see: %j', async (bad) => {
+    const { call, fetch } = harness();
+    await expect(call(BILLING_INVOKE.CREATE_GIFT_CARD_ORDER, {
+      request: bad, idempotencyKey: 'desktop:gift-card:12345678',
+    })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // 购买上限是明确的业务结果，要让界面说清楚，而不是当成「请求失败」。
+  it('reports the purchase limit as its own error code', async () => {
+    const { call, fetch } = harness();
+    fetch.mockRejectedValueOnce(new ServerApiError('GIFT_CARD_PURCHASE_LIMIT_REACHED', 409, 'redacted'));
+    await expect(call(BILLING_INVOKE.CREATE_GIFT_CARD_ORDER, {
+      request, idempotencyKey: 'desktop:gift-card:12345678',
+    })).rejects.toMatchObject({ code: 'GIFT_CARD_PURCHASE_LIMIT_REACHED' });
+  });
+
+  // 兑换码只放在链接的 fragment 里，分享站收不到；分享站地址不可信时不拼链接，只给兑换码。
+  it('builds the claim link on the configured share site with the code in the fragment', async () => {
+    const { fetch } = harness();
+    const sender = { mainFrame: {} };
+    const reveal = (shareBaseUrl: string) => createBillingHandlers({
+      getMainWindow: () => ({ isDestroyed: () => false, webContents: sender }) as never,
+      requirePersonalAccount: () => undefined,
+      getBaseUrl: () => 'https://model-access.example',
+      getShareBaseUrl: () => shareBaseUrl,
+      fetch,
+    })[BILLING_INVOKE.REVEAL_PURCHASED_GIFT_CARD]!(
+      { sender, senderFrame: sender.mainFrame } as never,
+      { cardId: 'card_1', faceCode: 'cat' },
+    );
+
+    fetch.mockResolvedValueOnce({ code: 'C0123456789ABCDE' });
+    await expect(reveal('https://share.example.test/')).resolves.toEqual({
+      code: 'C012-3456-789A-BCDE',
+      claimUrl: 'https://share.example.test/gift?face=cat#C012-3456-789A-BCDE',
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/gift-cards/purchased/card_1/code',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    fetch.mockResolvedValueOnce({ code: 'C0123456789ABCDE' });
+    await expect(reveal('http://share.example.test')).resolves.toEqual({
+      code: 'C012-3456-789A-BCDE',
+      claimUrl: null,
+    });
   });
 });

@@ -25,6 +25,7 @@ const card: BillingGiftCard = {
   faceCode: 'cindy',
   senderName: 'Cindy Team',
   message: 'Enjoy',
+  destination: 'PROMOTIONAL',
   claimDeadline: '2026-12-31T16:00:00.000Z',
   validityDays: 90,
   claimedAt: null,
@@ -82,6 +83,29 @@ describe('GiftCardRedeemDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
     click('billing.giftCard.done');
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  // 用户自己买的卡进充值余额、永久有效：不能照搬后台卡「有效 N 天 / 领取截止 / 赠送余额」的条款。
+  it('states top-up balance and no expiry for a card someone bought', async () => {
+    const purchased: BillingGiftCard = {
+      ...card, destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+    };
+    api.previewGiftCard.mockResolvedValue({ ok: true, card: purchased });
+    api.redeemGiftCard.mockResolvedValue({
+      ok: true,
+      card: { ...purchased, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T12:00:00.000Z' },
+      credit: { state: 'APPLIED', amount: '20', expiresAt: null },
+    });
+    open(CODE);
+
+    await screen.findByText('billing.giftCard.confirmTitle');
+    expect(screen.getByText('billing.balance.purchased')).toBeTruthy();
+    expect(screen.getByText('billing.giftCard.fields.validityPermanent')).toBeTruthy();
+    expect(screen.queryByText('billing.giftCard.fields.claimBy')).toBeNull();
+    expect(screen.queryByText('billing.balance.promotional')).toBeNull();
+
+    click('billing.giftCard.confirmAction');
+    await screen.findByText('billing.giftCard.doneDescriptionPurchased');
   });
 
   it('goes straight to confirmation for a code handed over by an app link', async () => {

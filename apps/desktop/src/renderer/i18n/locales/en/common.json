@@ -19774,7 +19774,8 @@
         "validityValue_one": "{{count}} day after redeeming",
         "validityValue_other": "{{count}} days after redeeming",
         "claimBy": "Redeem by",
-        "destination": "Added to"
+        "destination": "Added to",
+        "validityPermanent": "Never expires"
       },
       "doneTitle": "{{amount}} added",
       "doneDescription": "Added to your Promotional Balance. Valid until {{date}}.",
@@ -19793,7 +19794,9 @@
         "rateLimited": "Too many attempts. Try again later.",
         "failed": "Couldn't redeem the gift card. Try again later.",
         "personalRequired": "Gift cards can only be redeemed by personal accounts."
-      }
+      },
+      "doneDescriptionPurchased": "Added to your Top-up Balance. It never expires.",
+      "pendingDescriptionPurchased": "{{amount}} is being added and will appear in your Top-up Balance shortly. You do not need to redeem it again."
     },
     "usage": {
       "title": "Balance Usage",
@@ -19838,7 +19841,9 @@
         "noPayment": "No Payment Required",
         "page": "Page {{page}}",
         "previous": "Previous Page",
-        "next": "Next Page"
+        "next": "Next Page",
+        "giftCard_one": "Gift card × {{count}}",
+        "giftCard_other": "Gift cards × {{count}}"
       },
       "count": "{{count}} orders",
       "orderId": "NO. {{id}}",
@@ -20065,6 +20070,95 @@
         "MONTH": "Includes {{amount}} each month",
         "YEAR": "Includes {{amount}} each year",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Buy Gift Card",
+      "title": "Buy Gift Card",
+      "subtitle": "Give it to a friend or keep it for yourself. Redeemed cards go to your Top-up Balance and never expire.",
+      "previewLabel": "What they’ll receive",
+      "sameCards_one": "{{count}} card with its own redeem code",
+      "sameCards_other": "{{count}} cards with the same design, amount and message, each with its own redeem code",
+      "fields": {
+        "face": "Design",
+        "amount": "Amount",
+        "quantity": "Quantity",
+        "sender": "From",
+        "senderHint": "Shown as “From {{sender}}”",
+        "senderPlaceholder": "Your name",
+        "message": "Message (optional)",
+        "messagePlaceholder": "Add a note for them",
+        "paymentMethod": "Payment method"
+      },
+      "decrease": "One fewer card",
+      "increase": "One more card",
+      "quantityHint": "Up to {{limit}} cards every {{hours}} hours · {{remaining}} left now",
+      "quantityLimitReached": "You’ve bought the maximum of {{limit}} cards in {{hours}} hours. Try again later.",
+      "orderAmountCap": "Up to {{amount}} per order",
+      "totalDetail_one": "{{count}} card × {{amount}}",
+      "totalDetail_other": "{{count}} cards × {{amount}}",
+      "pay": "Continue to Payment",
+      "cancel": "Cancel",
+      "loadFailed": "Couldn’t load the gift card purchase limits. Try again later.",
+      "checkoutSubtitle_one": "Gift card {{amount}} × {{count}} · Issued as soon as payment succeeds",
+      "checkoutSubtitle_other": "Gift cards {{amount}} × {{count}} · Issued as soon as payment succeeds",
+      "faces": {
+        "cindy": "Cindy · Brand Red",
+        "cat": "Black Cat · Night",
+        "bell": "Bell · Festive",
+        "leap": "Leap · Ivory"
+      },
+      "errors": {
+        "limitReached": "You’ve reached the gift card purchase limit. Try again later.",
+        "amountTooLarge": "This order is over the per-order payment limit. Choose fewer cards and try again."
+      },
+      "done": {
+        "title_one": "Your gift card is ready",
+        "title_other": "Your {{count}} gift cards are ready",
+        "pendingTitle": "Gift card paid",
+        "loading": "Getting the cards from this order…",
+        "description": "Send a claim link to a friend and they can redeem it as soon as they open it. You can also keep one for yourself.",
+        "missing": "Payment is complete. Your gift cards will appear in My Gift Cards shortly.",
+        "cardTitle": "Card {{index}} · {{amount}}",
+        "cardMeta": "Ending in {{tail}} · {{status}}",
+        "linkHint": "The claim link is the card: whoever opens it first gets it. Only send it to the person you’re giving it to.",
+        "viewAll": "View My Gift Cards",
+        "finish": "Done"
+      },
+      "list": {
+        "title": "My Gift Cards",
+        "description": "Send a claim link to a friend and they can redeem it as soon as they open it. Cards you haven’t given away never expire, and you can redeem them yourself. Redeemed cards go to your Top-up Balance.",
+        "count_one": "{{count}} card",
+        "count_other": "{{count}} cards",
+        "loadMore": "Load more",
+        "loadFailed": "Couldn’t load your gift cards",
+        "retry": "Reload",
+        "status": {
+          "unclaimed": "Not claimed",
+          "claimedBy": "Claimed by {{name}}",
+          "claimed": "Claimed",
+          "redeemedByYou": "Redeemed by you",
+          "refunded": "Refunded"
+        },
+        "meta": {
+          "purchased": "Bought {{date}} · Ending in {{tail}}",
+          "claimed": "Claimed {{date}} · Ending in {{tail}}",
+          "redeemed": "Redeemed {{date}} · Ending in {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copy Claim Link",
+        "copied": "Copied",
+        "more": "More actions",
+        "copyCode": "Copy Redeem Code",
+        "redeemSelf": "Redeem for Myself"
+      },
+      "toasts": {
+        "linkCopied": "Claim link copied",
+        "codeCopied": "Redeem code copied",
+        "copyFailed": "Couldn’t copy. Try again.",
+        "unavailable": "This card has already been claimed or refunded",
+        "revealFailed": "Couldn’t get the redeem code. Try again later."
       }
     }
   },

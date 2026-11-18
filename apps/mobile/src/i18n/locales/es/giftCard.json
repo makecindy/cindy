@@ -1,6 +1,6 @@
 {
   "sectionTitle": "Tarjetas de regalo",
-  "settingsFooter": "Introduce un código de canje o pega el enlace de una tarjeta de regalo para añadirla a tu saldo promocional. Las tarjetas de regalo solo se pueden canjear con una cuenta personal.",
+  "settingsFooter": "Introduce un código de canje o pega el enlace de una tarjeta de regalo para añadirla a tu saldo. Las tarjetas de regalo solo se pueden canjear con una cuenta personal.",
   "action": "Canjear tarjeta de regalo",
   "title": "Canjear tarjeta de regalo",
   "inputLabel": "Código de canje",
@@ -18,7 +18,9 @@
     "validityValue_other": "{{count}} días tras el canje",
     "claimBy": "Canjear antes del",
     "destination": "Se añade a",
-    "destinationValue": "Saldo promocional"
+    "destinationValue": "Saldo promocional",
+    "destinationPurchased": "Saldo de recargas",
+    "validityPermanent": "No caduca"
   },
   "doneTitle": "{{amount}} añadidos",
   "doneDescription": "Se añadió a tu Saldo promocional. Válido hasta el {{date}}.",
@@ -37,5 +39,7 @@
     "rateLimited": "Demasiados intentos. Inténtalo de nuevo más tarde.",
     "failed": "No se pudo canjear la tarjeta de regalo. Inténtalo de nuevo más tarde.",
     "personalRequired": "Las tarjetas de regalo solo se pueden canjear con una cuenta personal."
-  }
+  },
+  "doneDescriptionPurchased": "Se añadió a tu Saldo de recargas. No caduca.",
+  "pendingDescriptionPurchased": "Se está añadiendo {{amount}} y aparecerá en breve en tu Saldo de recargas. No hace falta canjearla de nuevo."
 }

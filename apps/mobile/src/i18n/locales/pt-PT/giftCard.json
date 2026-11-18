@@ -1,6 +1,6 @@
 {
   "sectionTitle": "Cartões de oferta",
-  "settingsFooter": "Introduza um código ou cole a ligação de um cartão de oferta para o adicionar ao seu saldo promocional. Os cartões de oferta só podem ser utilizados com uma conta pessoal.",
+  "settingsFooter": "Introduza um código ou cole a ligação de um cartão de oferta para o adicionar ao seu saldo. Os cartões de oferta só podem ser utilizados com uma conta pessoal.",
   "action": "Utilizar cartão de oferta",
   "title": "Utilizar cartão de oferta",
   "inputLabel": "Código do cartão",
@@ -18,7 +18,9 @@
     "validityValue_other": "{{count}} dias após a utilização",
     "claimBy": "Utilizar até",
     "destination": "Adicionado a",
-    "destinationValue": "Saldo promocional"
+    "destinationValue": "Saldo promocional",
+    "destinationPurchased": "Saldo de carregamentos",
+    "validityPermanent": "Não expira"
   },
   "doneTitle": "{{amount}} adicionados",
   "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
@@ -37,5 +39,7 @@
     "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
     "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde.",
     "personalRequired": "Os cartões de oferta só podem ser utilizados com uma conta pessoal."
-  }
+  },
+  "doneDescriptionPurchased": "Adicionado ao seu Saldo de carregamentos. Não expira.",
+  "pendingDescriptionPurchased": "{{amount}} está a ser adicionado e vai aparecer dentro de instantes no seu Saldo de carregamentos. Não precisa de o utilizar novamente."
 }

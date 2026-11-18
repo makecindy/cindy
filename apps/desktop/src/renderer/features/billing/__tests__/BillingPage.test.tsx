@@ -872,6 +872,90 @@ describe('BillingPage remote catalog rendering', () => {
     expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledTimes(1);
   });
 
+  // 「购买礼品卡」只在目录真的在卖礼品卡时出现；礼品卡是一次性付款，不能被当成订阅渠道滤掉。
+  it('offers Buy Gift Card only when the catalog sells gift cards', async () => {
+    const view = render(<BillingPage />);
+    await screen.findByText('billing.giftCard.action');
+    expect(screen.queryByText('billing.giftCardPurchase.action')).toBeNull();
+    view.unmount();
+
+    const getCatalog = window.electronAPI.billing.getCatalog as ReturnType<typeof vi.fn>;
+    getCatalog.mockResolvedValueOnce({
+      products: [{
+        code: 'gift_card', name: 'Gift card', kind: 'GIFT_CARD', level: null, sortOrder: 2,
+        offers: [{
+          code: 'gift_card_100', interval: null, currency: 'cny', amount: '100', minAmount: null,
+          maxAmount: null, creditAmount: '100', rolloverCap: null,
+          purchaseOptions: [{ id: 'listing_alipay', provider: 'alipay', capability: 'ONE_TIME_PAYMENT', paymentAction: 'QR_CODE' }],
+        }],
+      }],
+    });
+    render(<BillingPage />);
+    expect(await screen.findByText('billing.giftCardPurchase.action')).toBeTruthy();
+  });
+
+  // 买礼品卡不改买家自己的余额和分组：付款完成后换成「礼品卡已备好」，只列这一单的卡，
+  // 不重拉模型目录；之后在「我买的礼品卡」里一直能找到它们。
+  it('turns a paid gift card checkout into the cards-ready dialog for that order', async () => {
+    const giftOrder = {
+      orderId: 'order_gift',
+      productCode: 'gift_card',
+      offerCode: 'gift_card_100',
+      amount: '200',
+      currency: 'cny',
+      status: 'PENDING' as const,
+      paymentAction: null,
+      productKind: 'GIFT_CARD' as const,
+      quantity: 2,
+      createdAt: '2026-11-19T08:00:00.000Z',
+      updatedAt: '2026-11-19T08:00:00.000Z',
+    };
+    const purchased = (cardId: string, orderId: string, codeTail: string) => ({
+      cardId, orderId, faceCode: 'cat', amount: '100', currency: 'cny', senderName: '小鱼',
+      message: '生日快乐', codeTail, status: 'UNCLAIMED' as const, claimedAt: null,
+      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z',
+    });
+    const listPurchasedGiftCards = vi.fn(async () => ({
+      cards: [
+        purchased('card_1', 'order_gift', '7KQ2'),
+        purchased('card_2', 'order_gift', 'M3XD'),
+        purchased('card_old', 'order_old', 'Q8TR'),
+      ],
+      nextCursor: null,
+    }));
+    window.electronAPI.billing.listPurchasedGiftCards = listPurchasedGiftCards;
+    window.electronAPI.billing.revealPurchasedGiftCard = vi.fn(async () => ({
+      code: 'C012-3456-789A-BCDE',
+      claimUrl: 'https://share.example.test/gift?face=cat#C012-3456-789A-BCDE',
+    }));
+    Object.assign(checkout.state, {
+      open: true,
+      kind: 'TOPUP',
+      phase: 'AWAITING_PAYMENT',
+      order: giftOrder,
+    });
+    const view = render(<BillingPage />);
+    await waitFor(() => expect(listPurchasedGiftCards).toHaveBeenCalledTimes(1));
+    const getBalance = window.electronAPI.billing.getBalance as ReturnType<typeof vi.fn>;
+    const balanceCalls = getBalance.mock.calls.length;
+
+    Object.assign(checkout.state, { phase: 'COMPLETED', order: { ...giftOrder, status: 'SUCCEEDED' } });
+    view.rerender(<BillingPage />);
+
+    await screen.findByText('billing.giftCardPurchase.done.title:{"count":2}');
+    expect(checkout.close).toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getAllByText(/billing\.giftCardPurchase\.done\.cardTitle/)).toHaveLength(2);
+    expect(within(dialog).queryByText(/Q8TR/)).toBeNull();
+    expect(modelCatalogMocks.refreshBuiltinProviderModels).not.toHaveBeenCalled();
+    expect(getBalance.mock.calls.length).toBe(balanceCalls);
+
+    fireEvent.click(within(dialog).getAllByRole('button', { name: /billing\.giftCardPurchase\.actions\.copyLink/ })[0]!);
+    await waitFor(() => expect(uiMocks.clipboardWriteText)
+      .toHaveBeenCalledWith('https://share.example.test/gift?face=cat#C012-3456-789A-BCDE'));
+    expect(window.electronAPI.billing.revealPurchasedGiftCard).toHaveBeenCalledWith({ cardId: 'card_1', faceCode: 'cat' });
+  });
+
   it('refreshes the balance and XD models once a gift card is redeemed', async () => {
     const card = {
       status: 'AVAILABLE' as const,
@@ -879,6 +963,7 @@ describe('BillingPage remote catalog rendering', () => {
       faceCode: 'cindy',
       senderName: 'Cindy Team',
       message: null,
+      destination: 'PROMOTIONAL' as const,
       claimDeadline: '2026-12-31T16:00:00.000Z',
       validityDays: 90,
       claimedAt: null,

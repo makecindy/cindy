@@ -180,14 +180,23 @@ export function GiftCardRedeemDialog({
 
   if (step.kind === 'done') {
     const { card, credit } = step;
+    // 自己买的卡进充值余额、永久有效；后台发的卡进赠送余额、到期失效。
+    const purchased = card.destination === 'PURCHASED';
     const description =
       credit === null
         ? t('billing.giftCard.alreadyYours')
         : credit.state === 'APPLIED'
-          ? credit.expiresAt
-            ? t('billing.giftCard.doneDescription', { date: formatDate(credit.expiresAt, locale) })
-            : t('billing.giftCard.doneDescriptionNoDate')
-          : t('billing.giftCard.pendingDescription', { amount: amountOf(credit.amount) });
+          ? purchased
+            ? t('billing.giftCard.doneDescriptionPurchased')
+            : credit.expiresAt
+              ? t('billing.giftCard.doneDescription', { date: formatDate(credit.expiresAt, locale) })
+              : t('billing.giftCard.doneDescriptionNoDate')
+          : t(
+              purchased
+                ? 'billing.giftCard.pendingDescriptionPurchased'
+                : 'billing.giftCard.pendingDescription',
+              { amount: amountOf(credit.amount) },
+            );
     return (
       <ConfirmDialog
         open={open}
@@ -328,16 +337,35 @@ function GiftCardHero({ card, amount }: { card: BillingGiftCard; amount: string 
 
 function GiftCardTerms({ card, locale }: { card: BillingGiftCard; locale: string }) {
   const { t } = useTranslation();
+  // 自己买的卡没有领取截止，进充值余额、永久有效。
+  if (card.destination === 'PURCHASED') {
+    return (
+      <div className="mt-4 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
+        <SummaryRow
+          label={t('billing.giftCard.fields.destination')}
+          value={t('billing.balance.purchased')}
+        />
+        <SummaryRow
+          label={t('billing.giftCard.fields.validity')}
+          value={t('billing.giftCard.fields.validityPermanent')}
+        />
+      </div>
+    );
+  }
   return (
     <div className="mt-4 divide-y divide-[var(--border-default)] overflow-hidden rounded-xl border border-[var(--border-default)]">
-      <SummaryRow
-        label={t('billing.giftCard.fields.validity')}
-        value={t('billing.giftCard.fields.validityValue', { count: card.validityDays })}
-      />
-      <SummaryRow
-        label={t('billing.giftCard.fields.claimBy')}
-        value={formatDate(card.claimDeadline, locale)}
-      />
+      {card.validityDays !== null && (
+        <SummaryRow
+          label={t('billing.giftCard.fields.validity')}
+          value={t('billing.giftCard.fields.validityValue', { count: card.validityDays })}
+        />
+      )}
+      {card.claimDeadline !== null && (
+        <SummaryRow
+          label={t('billing.giftCard.fields.claimBy')}
+          value={formatDate(card.claimDeadline, locale)}
+        />
+      )}
       <SummaryRow
         label={t('billing.giftCard.fields.destination')}
         value={t('billing.balance.promotional')}

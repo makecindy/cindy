@@ -19697,7 +19697,8 @@
         "validity": "有効期間",
         "validityValue_other": "受け取りから {{count}} 日間",
         "claimBy": "受け取り期限",
-        "destination": "追加先"
+        "destination": "追加先",
+        "validityPermanent": "無期限"
       },
       "doneTitle": "{{amount}} を追加しました",
       "doneDescription": "特典残高に追加しました。{{date}} まで有効です。",
@@ -19716,7 +19717,9 @@
         "rateLimited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
         "failed": "ギフトカードを受け取れませんでした。しばらくしてからもう一度お試しください。",
         "personalRequired": "ギフトカードは個人アカウントでのみ受け取れます。"
-      }
+      },
+      "doneDescriptionPurchased": "チャージ残高に追加しました。期限はありません。",
+      "pendingDescriptionPurchased": "{{amount}} を追加中です。まもなくチャージ残高に反映されます。もう一度受け取る必要はありません。"
     },
     "usage": {
       "title": "残高使用量",
@@ -19761,7 +19764,8 @@
         "noPayment": "支払い不要",
         "page": "{{page}} ページ",
         "previous": "前のページ",
-        "next": "次のページ"
+        "next": "次のページ",
+        "giftCard_other": "ギフトカード × {{count}}"
       },
       "count": "{{count}}件",
       "orderId": "NO. {{id}}",
@@ -19988,6 +19992,90 @@
         "MONTH": "毎月 {{amount}} を含む",
         "YEAR": "毎年 {{amount}} を含む",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "ギフトカードを購入",
+      "title": "ギフトカードを購入",
+      "subtitle": "友だちに贈ることも、自分で使うこともできます。受け取るとチャージ残高に追加され、期限はありません。",
+      "previewLabel": "相手に届くカード",
+      "sameCards_other": "全 {{count}} 枚。デザイン・金額・メッセージは同じで、1 枚ごとにコードがあります",
+      "fields": {
+        "face": "デザイン",
+        "amount": "金額",
+        "quantity": "枚数",
+        "sender": "差出人",
+        "senderHint": "「{{sender}} より」と表示されます",
+        "senderPlaceholder": "あなたの名前",
+        "message": "メッセージ（任意）",
+        "messagePlaceholder": "相手へのひとこと",
+        "paymentMethod": "支払い方法"
+      },
+      "decrease": "1 枚減らす",
+      "increase": "1 枚増やす",
+      "quantityHint": "{{hours}} 時間で最大 {{limit}} 枚・あと {{remaining}} 枚購入できます",
+      "quantityLimitReached": "{{hours}} 時間で購入できる {{limit}} 枚に達しました。しばらくしてからお試しください",
+      "orderAmountCap": "1 回の注文は {{amount}} まで",
+      "totalDetail_other": "{{count}} 枚 × {{amount}}",
+      "pay": "支払いへ進む",
+      "cancel": "キャンセル",
+      "loadFailed": "購入制限を読み込めませんでした。しばらくしてからお試しください。",
+      "checkoutSubtitle_other": "ギフトカード {{amount}} × {{count}}・支払いが完了するとすぐに発行されます",
+      "faces": {
+        "cindy": "Cindy・ブランドレッド",
+        "cat": "黒猫・夜",
+        "bell": "ベル・お祝い",
+        "leap": "跳躍・アイボリー"
+      },
+      "errors": {
+        "limitReached": "ギフトカードの購入上限に達しました。しばらくしてからお試しください。",
+        "amountTooLarge": "この注文は 1 回の支払い上限を超えています。枚数を減らしてもう一度お試しください。"
+      },
+      "done": {
+        "title_other": "ギフトカード {{count}} 枚の準備ができました",
+        "pendingTitle": "ギフトカードの支払いが完了しました",
+        "loading": "この注文のギフトカードを取得しています…",
+        "description": "受け取りリンクを友だちに送ると、開いてすぐに受け取れます。自分で使うこともできます。",
+        "missing": "支払いは完了しました。ギフトカードはまもなく「購入したギフトカード」に表示されます。",
+        "cardTitle": "{{index}} 枚目・{{amount}}",
+        "cardMeta": "末尾 {{tail}}・{{status}}",
+        "linkHint": "受け取りリンクはカードそのものです。最初に開いた人が受け取れるので、贈りたい相手にだけ送ってください。",
+        "viewAll": "購入したギフトカードを見る",
+        "finish": "完了"
+      },
+      "list": {
+        "title": "購入したギフトカード",
+        "description": "受け取りリンクを友だちに送ると、開いてすぐに受け取れます。まだ贈っていないカードに期限はなく、自分で使うこともできます。受け取るとチャージ残高に追加されます。",
+        "count_other": "{{count}} 枚",
+        "loadMore": "さらに読み込む",
+        "loadFailed": "ギフトカードを読み込めませんでした",
+        "retry": "再読み込み",
+        "status": {
+          "unclaimed": "未受け取り",
+          "claimedBy": "{{name}} さんが受け取りました",
+          "claimed": "受け取り済み",
+          "redeemedByYou": "自分で使用済み",
+          "refunded": "返金済み"
+        },
+        "meta": {
+          "purchased": "{{date}} 購入・末尾 {{tail}}",
+          "claimed": "{{date}} 受け取り・末尾 {{tail}}",
+          "redeemed": "{{date}} 使用・末尾 {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "受け取りリンクをコピー",
+        "copied": "コピーしました",
+        "more": "その他の操作",
+        "copyCode": "コードをコピー",
+        "redeemSelf": "自分で使う"
+      },
+      "toasts": {
+        "linkCopied": "受け取りリンクをコピーしました",
+        "codeCopied": "コードをコピーしました",
+        "copyFailed": "コピーできませんでした。もう一度お試しください",
+        "unavailable": "このカードは受け取り済みか返金済みです",
+        "revealFailed": "コードを取得できませんでした。しばらくしてからお試しください"
       }
     }
   },

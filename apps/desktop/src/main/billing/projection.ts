@@ -4,6 +4,7 @@ import type {
   BillingCatalogProduct,
   BillingCurrentSubscription,
   BillingFulfillmentStatus,
+  BillingGiftCardPurchasePolicy,
   BillingOrderList,
   BillingPaymentHistory,
   BillingPaymentHistoryRecord,
@@ -15,6 +16,9 @@ import type {
   BillingPlanChangeStatus,
   BillingPlanChangeTargetPlan,
   BillingPurchaseOption,
+  BillingPurchasedGiftCard,
+  BillingPurchasedGiftCardList,
+  BillingPurchasedGiftCardStatus,
   BillingSubscription,
   BillingSubscriptionStatus,
 } from '../../shared/billing.js';
@@ -26,6 +30,8 @@ import type {
   ModelAccessPromotionalGrantSource,
   ModelAccessPromotionalGrantUsage,
 } from '../../shared/modelAccess.js';
+import { formatGiftCardCode, normalizeGiftCardCode } from '@cindy/maker-shared/gift-card';
+
 import { isAllowedBillingRedirectUrl, isAllowedStripeBillingPortalUrl } from './paymentRedirect.js';
 
 const MAX_ID_LENGTH = 128;
@@ -403,7 +409,7 @@ function projectPurchaseOption(
     return null;
   }
   const capability =
-    productKind === 'CREDIT_TOPUP'
+    productKind === 'CREDIT_TOPUP' || productKind === 'GIFT_CARD'
       ? value.capability === 'ONE_TIME_PAYMENT'
         ? value.capability
         : null
@@ -467,7 +473,16 @@ function projectOffer(
     minAmount !== null &&
     maxAmount !== null &&
     rolloverCap === null;
-  if (!isSubscription && !isFixedTopup && !isCustomTopup) return null;
+  // 礼品卡只有固定面额：面额印在卡面上，到账金额必须与它一致。
+  const isFixedGiftCard =
+    productKind === 'GIFT_CARD' &&
+    interval === null &&
+    amount !== null &&
+    creditAmount === amount &&
+    minAmount === null &&
+    maxAmount === null &&
+    rolloverCap === null;
+  if (!isSubscription && !isFixedTopup && !isCustomTopup && !isFixedGiftCard) return null;
 
   const optionIds = new Set<string>();
   const purchaseOptions = value.purchaseOptions
@@ -550,7 +565,7 @@ function projectProduct(value: unknown): BillingCatalogProduct | null {
   if (
     !isRecord(value) ||
     !Array.isArray(value.offers) ||
-    (value.kind !== 'CREDIT_TOPUP' && value.kind !== 'SUBSCRIPTION')
+    (value.kind !== 'CREDIT_TOPUP' && value.kind !== 'SUBSCRIPTION' && value.kind !== 'GIFT_CARD')
   ) {
     return null;
   }
@@ -558,7 +573,7 @@ function projectProduct(value: unknown): BillingCatalogProduct | null {
   const name = boundedString(value.name, MAX_NAME_LENGTH);
   const kind = value.kind;
   const level =
-    kind === 'CREDIT_TOPUP'
+    kind !== 'SUBSCRIPTION'
       ? value.level === null
         ? null
         : undefined
@@ -611,6 +626,17 @@ export function projectBillingCatalog(value: unknown): BillingCatalog {
   return { products };
 }
 
+const MAX_ORDER_QUANTITY = 100;
+
+function orderQuantity(value: unknown): number | null {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MAX_ORDER_QUANTITY
+    ? value
+    : null;
+}
+
 function projectPaymentOrder(value: unknown): BillingPaymentOrder {
   if (!isRecord(value)) invalidResponse();
   const orderId = boundedString(value.orderId);
@@ -642,6 +668,15 @@ function projectPaymentOrder(value: unknown): BillingPaymentOrder {
     FULFILLMENT_STATUSES.has(value.fulfillmentStatus as BillingFulfillmentStatus)
       ? (value.fulfillmentStatus as BillingFulfillmentStatus)
       : undefined;
+  // 旧服务端不下发这两项：订单都是充值。新服务端下发了却不认识，就不能当充值展示。
+  const productKind =
+    value.productKind === undefined
+      ? undefined
+      : value.productKind === 'CREDIT_TOPUP' || value.productKind === 'GIFT_CARD'
+        ? value.productKind
+        : null;
+  const quantity = value.quantity === undefined ? undefined : orderQuantity(value.quantity);
+  if (productKind === null || quantity === null) invalidResponse();
   return {
     orderId,
     productCode,
@@ -650,6 +685,8 @@ function projectPaymentOrder(value: unknown): BillingPaymentOrder {
     currency: orderCurrency,
     status,
     paymentAction: projectPaymentAction(value.paymentAction),
+    ...(productKind ? { productKind } : {}),
+    ...(quantity !== undefined ? { quantity } : {}),
     ...(fulfillmentStatus ? { fulfillmentStatus } : {}),
     createdAt,
     updatedAt,
@@ -685,7 +722,10 @@ export function projectBillingPaymentHistory(value: unknown): BillingPaymentHist
   const records = value.records.map((raw): BillingPaymentHistoryRecord => {
     if (!isRecord(raw) || !isRecord(raw.refundSummary)) invalidResponse();
     const sourceType = raw.sourceType === 'CREDIT_TOPUP' || raw.sourceType === 'SUBSCRIPTION_INVOICE'
+      || raw.sourceType === 'GIFT_CARD'
       ? raw.sourceType : null;
+    // 旧服务端不下发张数：那时只有充值和订阅账单，各算一笔。
+    const quantity = raw.quantity === undefined && sourceType !== 'GIFT_CARD' ? 1 : orderQuantity(raw.quantity);
     const sourceId = boundedString(raw.sourceId, 191);
     const subscriptionId = nullable(raw.subscriptionId, (input) => boundedString(input, 191));
     const productName = nullable(raw.productName, (input) => boundedString(input, 256));
@@ -703,7 +743,7 @@ export function projectBillingPaymentHistory(value: unknown): BillingPaymentHist
     const refundStatus = nullable(refund.status, (input) => input === 'UNREFUNDED' || input === 'PARTIALLY_REFUNDED' || input === 'REFUNDED'
       ? input : null);
     const refundedAmount = decimal(refund.refundedAmount);
-    if (!sourceType || !sourceId || raw.recordId !== `${sourceType}:${sourceId}`
+    if (!sourceType || !sourceId || raw.recordId !== `${sourceType}:${sourceId}` || quantity === null
       || subscriptionId === undefined || productName === undefined || billingReason === undefined || provider === undefined
       || providerTransactionId === undefined
       || amount === undefined || !recordCurrency || paidAt === undefined || !createdAt
@@ -713,7 +753,7 @@ export function projectBillingPaymentHistory(value: unknown): BillingPaymentHist
         || !Number.isSafeInteger(raw.amountPaidMinor) || raw.amountPaidMinor < 0))
       || (amount === null) !== (raw.amountPaidMinor === null)) invalidResponse();
     return {
-      recordId: raw.recordId, sourceType, sourceId, subscriptionId, productName, billingReason, provider,
+      recordId: raw.recordId, sourceType, quantity, sourceId, subscriptionId, productName, billingReason, provider,
       providerTransactionId,
       amount, amountPaidMinor: raw.amountPaidMinor, currency: recordCurrency,
       paidAt, createdAt, periodStartAt, periodEndAt,
@@ -722,6 +762,161 @@ export function projectBillingPaymentHistory(value: unknown): BillingPaymentHist
   });
   // A malformed paid record is a failed page, never a silently incomplete history.
   return { records, nextCursor };
+}
+
+const FACE_CODE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const CODE_TAIL_PATTERN = /^[0-9A-HJKMNP-TV-Z]{4}$/;
+const MAX_GIFT_MESSAGE_LENGTH = 240;
+const MAX_PURCHASED_GIFT_CARDS = 100;
+const PURCHASED_GIFT_CARD_STATUSES = new Set<BillingPurchasedGiftCardStatus>([
+  'UNCLAIMED',
+  'CLAIMED',
+  'REDEEMED_BY_YOU',
+  'REFUNDED',
+]);
+
+/** 礼品卡接口与 Preview DTO 一致用大写币种（CNY / USD），计费接口用小写；客户端统一成小写。 */
+function giftCardCurrency(value: unknown): string | null {
+  return typeof value === 'string' && /^[A-Za-z]{3}$/.test(value) ? value.toLowerCase() : null;
+}
+
+function boundedCount(value: unknown, max: number): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= max
+    ? value
+    : null;
+}
+
+export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPurchasePolicy {
+  if (!isRecord(value) || !Array.isArray(value.faces)) invalidResponse();
+  const policyCurrency = giftCardCurrency(value.currency);
+  const dailyLimit = boundedCount(value.dailyLimit, MAX_ORDER_QUANTITY);
+  const windowHours = boundedCount(value.windowHours, 24 * 31);
+  const remaining = boundedCount(value.remaining, MAX_ORDER_QUANTITY);
+  const maxQuantityPerOrder = orderQuantity(value.maxQuantityPerOrder);
+  const maxOrderAmount = nullable(value.maxOrderAmount, decimal);
+  const maxSenderNameLength = boundedCount(value.maxSenderNameLength, MAX_GIFT_SENDER_LENGTH);
+  const maxMessageLength = boundedCount(value.maxMessageLength, MAX_GIFT_MESSAGE_LENGTH);
+  const faces = value.faces.filter(
+    (face): face is string => typeof face === 'string' && FACE_CODE_PATTERN.test(face),
+  );
+  if (
+    !policyCurrency ||
+    dailyLimit === null ||
+    !windowHours ||
+    remaining === null ||
+    maxQuantityPerOrder === null ||
+    maxOrderAmount === undefined ||
+    !maxSenderNameLength ||
+    maxMessageLength === null ||
+    faces.length === 0
+  ) {
+    invalidResponse();
+  }
+  return {
+    currency: policyCurrency,
+    dailyLimit,
+    windowHours,
+    remaining: Math.min(remaining, dailyLimit),
+    maxQuantityPerOrder,
+    maxOrderAmount,
+    faces: [...new Set(faces)],
+    maxSenderNameLength,
+    maxMessageLength,
+  };
+}
+
+function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
+  if (!isRecord(value)) invalidResponse();
+  const cardId = boundedString(value.cardId);
+  const orderId = boundedString(value.orderId);
+  const faceCode =
+    typeof value.faceCode === 'string' && FACE_CODE_PATTERN.test(value.faceCode)
+      ? value.faceCode
+      : null;
+  const amount = decimal(value.amount);
+  const cardCurrency = giftCardCurrency(value.currency);
+  const senderName = boundedString(value.senderName, MAX_GIFT_SENDER_LENGTH);
+  const message = nullable(value.message, (input) =>
+    typeof input === 'string' && input.length <= MAX_GIFT_MESSAGE_LENGTH ? input : null,
+  );
+  const codeTail =
+    typeof value.codeTail === 'string' && CODE_TAIL_PATTERN.test(value.codeTail)
+      ? value.codeTail
+      : null;
+  const status =
+    typeof value.status === 'string' &&
+    PURCHASED_GIFT_CARD_STATUSES.has(value.status as BillingPurchasedGiftCardStatus)
+      ? (value.status as BillingPurchasedGiftCardStatus)
+      : null;
+  const claimedAt = nullable(value.claimedAt, isoTime);
+  const claimedByName = nullable(value.claimedByName, (input) =>
+    boundedString(input, MAX_GIFT_SENDER_LENGTH),
+  );
+  const purchasedAt = isoTime(value.purchasedAt);
+  if (
+    !cardId ||
+    !orderId ||
+    !faceCode ||
+    !amount ||
+    !cardCurrency ||
+    !senderName ||
+    message === undefined ||
+    !codeTail ||
+    !status ||
+    claimedAt === undefined ||
+    claimedByName === undefined ||
+    !purchasedAt
+  ) {
+    invalidResponse();
+  }
+  return {
+    cardId,
+    orderId,
+    faceCode,
+    amount,
+    currency: cardCurrency,
+    senderName,
+    message,
+    codeTail,
+    status,
+    claimedAt,
+    // 领取人昵称只属于「被别人领走」这一种状态，其它状态即使带了也不展示。
+    claimedByName: status === 'CLAIMED' ? claimedByName : null,
+    purchasedAt,
+  };
+}
+
+export function projectPurchasedGiftCardList(value: unknown): BillingPurchasedGiftCardList {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.cards) ||
+    value.cards.length > MAX_PURCHASED_GIFT_CARDS
+  ) {
+    invalidResponse();
+  }
+  const nextCursor =
+    value.nextCursor === null ? null : boundedString(value.nextCursor, MAX_CURSOR_LENGTH);
+  if (nextCursor === null && value.nextCursor !== null) invalidResponse();
+  const cardIds = new Set<string>();
+  const cards: BillingPurchasedGiftCard[] = [];
+  for (const raw of value.cards) {
+    const card = projectPurchasedGiftCard(raw);
+    if (cardIds.has(card.cardId)) continue;
+    cardIds.add(card.cardId);
+    cards.push(card);
+  }
+  return { cards, nextCursor };
+}
+
+/**
+ * 服务端只回兑换码（规范形式，按 16 位 Crockford Base32 校验后统一成
+ * XXXX-XXXX-XXXX-XXXX）；领取链接在主进程按分享站拼出。
+ */
+export function projectPurchasedGiftCardCode(value: unknown): { code: string } {
+  if (!isRecord(value) || typeof value.code !== 'string' || value.code.length > 32) invalidResponse();
+  const code = normalizeGiftCardCode(value.code);
+  if (!code) invalidResponse();
+  return { code: formatGiftCardCode(code) };
 }
 
 function projectEffectivePlan(value: unknown): BillingSubscription['effectivePlan'] {

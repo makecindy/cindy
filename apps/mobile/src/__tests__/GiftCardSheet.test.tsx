@@ -44,7 +44,7 @@ import { GiftCardSheet, type GiftCardSheetProps } from '@/gift-card/GiftCardShee
 const CODE = 'G0123456789ABCDE';
 const card = {
   status: 'AVAILABLE' as const, amount: '20.000000000', faceCode: 'cat', senderName: 'Cindy Team', message: 'Enjoy',
-  claimDeadline: '2026-12-31T16:00:00.000Z', validityDays: 90, claimedAt: null,
+  destination: 'PROMOTIONAL' as const, claimDeadline: '2026-12-31T16:00:00.000Z', validityDays: 90, claimedAt: null,
 };
 let root: Root, host: HTMLDivElement, props: GiftCardSheetProps;
 const render = () => act(async () => root.render(createElement(GiftCardSheet, props)));
@@ -93,6 +93,24 @@ it('shows the card for a linked code, redeems only after confirmation and report
   expect(node('close')).toBeNull();
   await click('primary');
   expect(props.onClose).toHaveBeenCalledOnce();
+});
+
+// 用户自己买的卡进充值余额、永久有效：不能照搬后台卡「有效 N 天 / 领取截止 / 赠送余额」的条款。
+it('states top-up balance and no expiry for a card someone bought', async () => {
+  const purchased = { ...card, destination: 'PURCHASED' as const, claimDeadline: null, validityDays: null };
+  h.preview.mockResolvedValue({ ok: true, card: purchased });
+  h.redeem.mockResolvedValue({
+    ok: true, card: { ...purchased, status: 'CLAIMED_BY_YOU' }, credit: { state: 'APPLIED', amount: '20.000000000', expiresAt: null },
+  });
+  props = { ...props, code: CODE }; await render();
+
+  expect(host.textContent).toContain('giftCard.fields.destinationPurchased');
+  expect(host.textContent).toContain('giftCard.fields.validityPermanent');
+  expect(host.textContent).not.toContain('giftCard.fields.claimBy');
+  expect(host.textContent).not.toContain('giftCard.fields.destinationValue');
+
+  await click('primary');
+  expect(node('result')!.textContent).toBe('giftCard.doneDescriptionPurchased');
 });
 
 it('accepts a pasted gift page link, and rejects other text without asking the server', async () => {

@@ -1,6 +1,6 @@
 {
   "sectionTitle": "Cartões-presente",
-  "settingsFooter": "Digite um código de resgate ou cole o link de um cartão-presente para adicioná-lo ao seu saldo promocional. Cartões-presente só podem ser resgatados com uma conta pessoal.",
+  "settingsFooter": "Digite um código de resgate ou cole o link de um cartão-presente para adicioná-lo ao seu saldo. Cartões-presente só podem ser resgatados com uma conta pessoal.",
   "action": "Resgatar cartão-presente",
   "title": "Resgatar cartão-presente",
   "inputLabel": "Código de resgate",
@@ -18,7 +18,9 @@
     "validityValue_other": "{{count}} dias após o resgate",
     "claimBy": "Resgatar até",
     "destination": "Adicionado a",
-    "destinationValue": "Saldo promocional"
+    "destinationValue": "Saldo promocional",
+    "destinationPurchased": "Saldo de recarga",
+    "validityPermanent": "Não expira"
   },
   "doneTitle": "{{amount}} adicionados",
   "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
@@ -37,5 +39,7 @@
     "rateLimited": "Muitas tentativas. Tente novamente mais tarde.",
     "failed": "Não foi possível resgatar o cartão-presente. Tente novamente mais tarde.",
     "personalRequired": "Cartões-presente só podem ser resgatados com uma conta pessoal."
-  }
+  },
+  "doneDescriptionPurchased": "Adicionado ao seu Saldo de recarga. Não expira.",
+  "pendingDescriptionPurchased": "{{amount}} está sendo adicionado e vai aparecer em instantes no seu Saldo de recarga. Não é preciso resgatar de novo."
 }

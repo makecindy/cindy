@@ -13,6 +13,12 @@ export type GiftCardRegion = 'cn' | 'global';
  */
 export type GiftCardStatus = 'AVAILABLE' | 'CLAIMED' | 'CLAIMED_BY_YOU' | 'EXPIRED' | 'VOIDED';
 
+/**
+ * 领取后的到账去向。PROMOTIONAL：后台发放的卡，进赠送余额，带领取截止与有效天数；
+ * PURCHASED：用户自己买的卡，进充值余额，永久有效，没有领取截止。
+ */
+export type GiftCardDestination = 'PROMOTIONAL' | 'PURCHASED';
+
 export type GiftCard = {
   status: GiftCardStatus;
   /** 面额，按当前区域的计费币种计量（与余额同口径）。 */
@@ -20,9 +26,11 @@ export type GiftCard = {
   faceCode: string;
   senderName: string;
   message: string | null;
-  claimDeadline: string;
-  /** 到账后的有效天数，从领取时起算。 */
-  validityDays: number;
+  destination: GiftCardDestination;
+  /** 领取截止；PURCHASED 的卡不过期，为 null。 */
+  claimDeadline: string | null;
+  /** 到账后的有效天数，从领取时起算；PURCHASED 的卡永久有效，为 null。 */
+  validityDays: number | null;
   claimedAt: string | null;
 };
 
@@ -156,9 +164,35 @@ function amount(value: unknown): string {
   return value;
 }
 
+function validityDaysOf(value: unknown): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_VALIDITY_DAYS
+  ) {
+    invalid();
+  }
+  return value;
+}
+
+/**
+ * 旧服务端不下发 destination，它发出的卡都是后台发放、进赠送余额。用户买的卡
+ * 没有领取截止和有效天数；后台发的卡这两项必须齐全，缺一项就不能告诉用户条款。
+ */
+function destinationOf(value: Record<string, unknown>): GiftCardDestination {
+  const { destination, source } = value;
+  if (destination === undefined) {
+    if (source === 'PURCHASE') invalid();
+    return 'PROMOTIONAL';
+  }
+  if (destination !== 'PROMOTIONAL' && destination !== 'PURCHASED') invalid();
+  return destination;
+}
+
 function projectCard(value: unknown): GiftCard {
   if (!isRecord(value)) invalid();
-  const { status, faceCode, senderName, message, validityDays } = value;
+  const { status, faceCode, senderName, message } = value;
   if (
     typeof status !== 'string' ||
     !STATUSES.has(status as GiftCardStatus) ||
@@ -167,22 +201,21 @@ function projectCard(value: unknown): GiftCard {
     typeof senderName !== 'string' ||
     senderName.length === 0 ||
     senderName.length > MAX_SENDER_LENGTH ||
-    (message !== null && (typeof message !== 'string' || message.length > MAX_MESSAGE_LENGTH)) ||
-    typeof validityDays !== 'number' ||
-    !Number.isInteger(validityDays) ||
-    validityDays < 1 ||
-    validityDays > MAX_VALIDITY_DAYS
+    (message !== null && (typeof message !== 'string' || message.length > MAX_MESSAGE_LENGTH))
   ) {
     invalid();
   }
+  const destination = destinationOf(value);
+  const purchased = destination === 'PURCHASED';
   return {
     status: status as GiftCardStatus,
     amount: amount(value.amount),
     faceCode,
     senderName,
     message: message === null ? null : message,
-    claimDeadline: time(value.claimDeadline),
-    validityDays,
+    destination,
+    claimDeadline: purchased ? nullableTime(value.claimDeadline) : time(value.claimDeadline),
+    validityDays: purchased && value.validityDays === null ? null : validityDaysOf(value.validityDays),
     claimedAt: nullableTime(value.claimedAt),
   };
 }

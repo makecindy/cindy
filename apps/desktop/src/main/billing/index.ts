@@ -2,7 +2,9 @@ import { ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'ele
 
 import {
   BILLING_INVOKE,
+  type BillingPurchasedGiftCardCode,
   type BillingSubscriptionPortalResult,
+  type CreateBillingGiftCardOrderRequest,
   type CreateBillingSubscriptionRequest,
   type CreateBillingTopupRequest,
 } from '../../shared/billing.js';
@@ -20,6 +22,9 @@ import {
 import {
   projectBillingCatalog,
   projectBillingCurrentSubscription,
+  projectGiftCardPurchasePolicy,
+  projectPurchasedGiftCardCode,
+  projectPurchasedGiftCardList,
   projectBillingOrderList,
   projectBillingPaymentHistory,
   projectBillingPortalSession,
@@ -34,6 +39,14 @@ const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
 const CODE_PATTERN = /^[a-z][a-z0-9_]{1,63}$/;
 const DECIMAL_PATTERN = /^(0|[1-9]\d{0,14})(?:\.\d{1,9})?$/;
 const ID_MAX_LENGTH = 128;
+const FACE_CODE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const RESOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const OPAQUE_CURSOR_PATTERN = /^[A-Za-z0-9_.~-]{1,1024}$/;
+// 服务端按自己的上限校验署名、留言与张数；这里只挡住明显越界的输入，不复制业务规则。
+const MAX_GIFT_SENDER_LENGTH = 80;
+const MAX_GIFT_MESSAGE_LENGTH = 240;
+const MAX_GIFT_CARD_QUANTITY = 100;
+const MAX_PURCHASED_GIFT_CARD_PAGE = 50;
 const BILLING_REQUEST_TIMEOUT_MS = 20_000;
 const EXTERNAL_BROWSER_LAUNCH_TIMEOUT_MS = 10_000;
 
@@ -43,6 +56,8 @@ export type BillingIpcDependencies = {
   getMainWindow: () => BrowserWindow | null;
   requirePersonalAccount: () => void;
   getBaseUrl?: () => string;
+  /** 当前账号区域的分享站；礼品卡领取链接拼在它的 `/gift` 下。 */
+  getShareBaseUrl?: () => string;
   fetch?: ServerFetch;
   openExternal?: (url: string) => Promise<void>;
 };
@@ -75,6 +90,12 @@ function throwBillingFetchError(error: unknown): never {
     }
     if (error.code === 'RESUME_NOT_AVAILABLE') {
       throwIpcError('RESUME_NOT_AVAILABLE', 'subscription is not resumable');
+    }
+    if (error.code === 'GIFT_CARD_PURCHASE_LIMIT_REACHED') {
+      throwIpcError('GIFT_CARD_PURCHASE_LIMIT_REACHED', 'gift card purchase limit reached');
+    }
+    if (error.code === 'GIFT_CARD_ORDER_AMOUNT_TOO_LARGE') {
+      throwIpcError('GIFT_CARD_ORDER_AMOUNT_TOO_LARGE', 'gift card order total is too large');
     }
     if (error.statusCode === 400) {
       throwIpcError('INVALID_PARAMS', 'billing request was rejected');
@@ -204,6 +225,73 @@ function parseCreateTopup(raw: unknown): {
   };
 }
 
+function requireGiftText(value: unknown, name: string, maxLength: number): string {
+  if (typeof value !== 'string') throwIpcError('INVALID_PARAMS', `${name} must be a string`);
+  const text = value.trim();
+  if (text.length > maxLength) throwIpcError('INVALID_PARAMS', `${name} is too long`);
+  return text;
+}
+
+function parseCreateGiftCardOrder(raw: unknown): {
+  request: CreateBillingGiftCardOrderRequest;
+  idempotencyKey: string;
+} {
+  const payload = requireObject(raw);
+  assertOnlyKeys(payload, ['request', 'idempotencyKey'], 'payload');
+  const request = requireObject(payload.request, 'request');
+  assertOnlyKeys(
+    request,
+    ['offerCode', 'quantity', 'faceCode', 'senderName', 'message', 'purchaseOptionId'],
+    'request',
+  );
+  const { quantity, faceCode } = request;
+  if (
+    typeof quantity !== 'number' ||
+    !Number.isInteger(quantity) ||
+    quantity < 1 ||
+    quantity > MAX_GIFT_CARD_QUANTITY
+  ) {
+    throwIpcError('INVALID_PARAMS', 'quantity is invalid');
+  }
+  if (typeof faceCode !== 'string' || !FACE_CODE_PATTERN.test(faceCode)) {
+    throwIpcError('INVALID_PARAMS', 'faceCode is invalid');
+  }
+  const senderName = requireGiftText(request.senderName, 'senderName', MAX_GIFT_SENDER_LENGTH);
+  if (!senderName) throwIpcError('INVALID_PARAMS', 'senderName is required');
+  const message =
+    request.message === null || request.message === undefined
+      ? null
+      : requireGiftText(request.message, 'message', MAX_GIFT_MESSAGE_LENGTH) || null;
+  return {
+    request: {
+      offerCode: requireCode(request.offerCode, 'offerCode'),
+      quantity,
+      faceCode,
+      senderName,
+      message,
+      purchaseOptionId: requireBoundedString(request.purchaseOptionId, 'purchaseOptionId'),
+    },
+    idempotencyKey: requireIdempotencyKey(payload.idempotencyKey),
+  };
+}
+
+/**
+ * 礼品卡领取链接：`<分享站>/gift?face=<卡面>#<兑换码>`。兑换码放在 fragment，
+ * 浏览器不会把它发给分享站。分享站只接受本版本配置的 https 源；拿不到时不拼链接。
+ */
+function giftCardClaimUrl(shareBaseUrl: () => string, faceCode: string, code: string): string | null {
+  try {
+    const base = new URL(shareBaseUrl());
+    if (base.protocol !== 'https:' || base.username || base.password) return null;
+    const url = new URL('/gift', base.origin);
+    url.searchParams.set('face', faceCode);
+    url.hash = code;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function parseCreateSubscription(raw: unknown): {
   request: CreateBillingSubscriptionRequest;
   idempotencyKey: string;
@@ -226,6 +314,7 @@ export function createBillingHandlers(
 ): Record<string, BillingHandler> {
   const fetch = deps.fetch ?? serverApiFetch;
   const getBaseUrl = deps.getBaseUrl ?? (() => getClientEndpoint('modelAccessApiBaseUrl'));
+  const getShareBaseUrl = deps.getShareBaseUrl ?? (() => getClientEndpoint('shareBaseUrl'));
   const openExternal = deps.openExternal ?? ((url: string) => shell.openExternal(url));
   const invoke = async <T>(path: string, options: Omit<ApiFetchOptions, 'baseUrl'> = {}) => {
     try {
@@ -329,7 +418,22 @@ export function createBillingHandlers(
       }
       const query = new URLSearchParams({ limit: String(payload.limit) });
       if (typeof payload.cursor === 'string') query.set('cursor', payload.cursor);
-      return projectResponse(await invoke<unknown>(`/api/billing/payment-history?${query}`), projectBillingPaymentHistory);
+      const withGiftCards = new URLSearchParams(query);
+      withGiftCards.set('includeGiftCards', 'true');
+      let response: unknown;
+      try {
+        response = await fetch<unknown>(`/api/billing/payment-history?${withGiftCards}`, {
+          timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
+          redactErrorDetails: true,
+          expectedErrors: [{ status: 400 }],
+          baseUrl: getBaseUrl,
+        });
+      } catch (error) {
+        // 服务端还没上线礼品卡时不认识这个参数（400）：退回原来的请求，订单记录照常显示。
+        if (!(error instanceof ServerApiError) || error.statusCode !== 400) throwBillingFetchError(error);
+        response = await invoke<unknown>(`/api/billing/payment-history?${query}`);
+      }
+      return projectResponse(response, projectBillingPaymentHistory);
     }),
     [BILLING_INVOKE.LIST_ORDERS]: protect(async (raw) => {
       const payload = requireObject(raw);
@@ -520,6 +624,83 @@ export function createBillingHandlers(
     [BILLING_INVOKE.REDEEM_GIFT_CARD]: protect((raw) =>
       giftCard('/api/gift-cards/redeem', raw, projectBillingGiftCardRedemption),
     ),
+    [BILLING_INVOKE.GET_GIFT_CARD_PURCHASE_POLICY]: protect(async (raw) => {
+      if (raw !== undefined) {
+        throwIpcError('INVALID_PARAMS', 'gift card purchase policy does not accept a payload');
+      }
+      return projectResponse(
+        await invoke<unknown>('/api/gift-cards/purchase-policy', {
+          // 旧服务端没有这个接口：按「还不能买礼品卡」处理，不当异常记录。
+          expectedErrors: [{ status: 404 }],
+        }),
+        projectGiftCardPurchasePolicy,
+      );
+    }),
+    [BILLING_INVOKE.CREATE_GIFT_CARD_ORDER]: protect(async (raw) => {
+      const payload = parseCreateGiftCardOrder(raw);
+      return projectResponse(
+        await invoke<unknown>('/api/billing/gift-card/orders', {
+          method: 'POST',
+          body: payload.request,
+          headers: { 'Idempotency-Key': payload.idempotencyKey },
+          allowedRedactedErrorCodes: [
+            'GIFT_CARD_PURCHASE_LIMIT_REACHED',
+            'GIFT_CARD_ORDER_AMOUNT_TOO_LARGE',
+          ],
+        }),
+        projectBillingPaymentOrder,
+      );
+    }),
+    [BILLING_INVOKE.LIST_PURCHASED_GIFT_CARDS]: protect(async (raw) => {
+      const payload = requireObject(raw);
+      assertOnlyKeys(payload, ['limit', 'cursor'], 'payload');
+      if (
+        typeof payload.limit !== 'number' ||
+        !Number.isInteger(payload.limit) ||
+        payload.limit < 1 ||
+        payload.limit > MAX_PURCHASED_GIFT_CARD_PAGE
+      ) {
+        throwIpcError('INVALID_PARAMS', 'limit must be an integer between 1 and 50');
+      }
+      if (
+        payload.cursor !== undefined &&
+        (typeof payload.cursor !== 'string' || !OPAQUE_CURSOR_PATTERN.test(payload.cursor))
+      ) {
+        throwIpcError('INVALID_PARAMS', 'cursor must be a bounded page cursor');
+      }
+      const query = new URLSearchParams({ limit: String(payload.limit) });
+      if (typeof payload.cursor === 'string') query.set('cursor', payload.cursor);
+      return projectResponse(
+        await invoke<unknown>(`/api/gift-cards/purchased?${query}`, {
+          expectedErrors: [{ status: 404 }],
+        }),
+        projectPurchasedGiftCardList,
+      );
+    }),
+    [BILLING_INVOKE.REVEAL_PURCHASED_GIFT_CARD]: protect(async (raw) => {
+      const payload = requireObject(raw);
+      assertOnlyKeys(payload, ['cardId', 'faceCode'], 'payload');
+      if (typeof payload.cardId !== 'string' || !RESOURCE_ID_PATTERN.test(payload.cardId)) {
+        throwIpcError('INVALID_PARAMS', 'cardId is invalid');
+      }
+      if (typeof payload.faceCode !== 'string' || !FACE_CODE_PATTERN.test(payload.faceCode)) {
+        throwIpcError('INVALID_PARAMS', 'faceCode is invalid');
+      }
+      const { code } = projectResponse(
+        await invoke<unknown>(
+          `/api/gift-cards/purchased/${encodeURIComponent(payload.cardId)}/code`,
+          {
+            method: 'POST',
+            expectedErrors: [{ status: 404 }, { status: 409 }],
+          },
+        ),
+        projectPurchasedGiftCardCode,
+      );
+      return {
+        code,
+        claimUrl: giftCardClaimUrl(getShareBaseUrl, payload.faceCode, code),
+      } satisfies BillingPurchasedGiftCardCode;
+    }),
   };
 }
 

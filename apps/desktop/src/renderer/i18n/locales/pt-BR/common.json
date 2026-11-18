@@ -19959,7 +19959,8 @@
         "validityValue_many": "{{count}} de dias após o resgate",
         "validityValue_other": "{{count}} dias após o resgate",
         "claimBy": "Resgatar até",
-        "destination": "Adicionado a"
+        "destination": "Adicionado a",
+        "validityPermanent": "Não expira"
       },
       "doneTitle": "{{amount}} adicionados",
       "doneDescription": "Adicionado ao seu Saldo promocional. Válido até {{date}}.",
@@ -19978,7 +19979,9 @@
         "rateLimited": "Muitas tentativas. Tente novamente mais tarde.",
         "failed": "Não foi possível resgatar o cartão-presente. Tente novamente mais tarde.",
         "personalRequired": "Cartões-presente só podem ser resgatados com uma conta pessoal."
-      }
+      },
+      "doneDescriptionPurchased": "Adicionado ao seu Saldo de recarga. Não expira.",
+      "pendingDescriptionPurchased": "{{amount}} está sendo adicionado e vai aparecer em instantes no seu Saldo de recarga. Não é preciso resgatar de novo."
     },
     "usage": {
       "title": "Uso do saldo",
@@ -20023,7 +20026,10 @@
         "noPayment": "Nenhum pagamento necessário",
         "page": "Página {{page}}",
         "previous": "Página anterior",
-        "next": "Próxima página"
+        "next": "Próxima página",
+        "giftCard_one": "Cartão-presente × {{count}}",
+        "giftCard_many": "Cartões-presente × {{count}}",
+        "giftCard_other": "Cartões-presente × {{count}}"
       },
       "count": "{{count}} pedidos",
       "orderId": "Nº {{id}}",
@@ -20250,6 +20256,100 @@
         "MONTH": "Inclui {{amount}} por mês",
         "YEAR": "Inclui {{amount}} por ano",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Comprar cartão-presente",
+      "title": "Comprar cartão-presente",
+      "subtitle": "Dê de presente ou fique com ele. Ao resgatar, o valor vai para o seu Saldo de recarga e nunca expira.",
+      "previewLabel": "O que a pessoa vai receber",
+      "sameCards_one": "{{count}} cartão com o próprio código de resgate",
+      "sameCards_many": "{{count}} cartões com o mesmo design, valor e mensagem, cada um com o próprio código",
+      "sameCards_other": "{{count}} cartões com o mesmo design, valor e mensagem, cada um com o próprio código",
+      "fields": {
+        "face": "Design",
+        "amount": "Valor",
+        "quantity": "Quantidade",
+        "sender": "De",
+        "senderHint": "Aparece como “De {{sender}}”",
+        "senderPlaceholder": "Seu nome",
+        "message": "Mensagem (opcional)",
+        "messagePlaceholder": "Um recado para a pessoa",
+        "paymentMethod": "Forma de pagamento"
+      },
+      "decrease": "Um cartão a menos",
+      "increase": "Um cartão a mais",
+      "quantityHint": "Até {{limit}} cartões a cada {{hours}} horas · ainda dá para comprar {{remaining}}",
+      "quantityLimitReached": "Você já comprou o máximo de {{limit}} cartões em {{hours}} horas. Tente novamente mais tarde.",
+      "orderAmountCap": "Até {{amount}} por pedido",
+      "totalDetail_one": "{{count}} cartão × {{amount}}",
+      "totalDetail_many": "{{count}} cartões × {{amount}}",
+      "totalDetail_other": "{{count}} cartões × {{amount}}",
+      "pay": "Continuar para o pagamento",
+      "cancel": "Cancelar",
+      "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
+      "checkoutSubtitle_one": "Cartão-presente {{amount}} × {{count}} · emitido assim que o pagamento for concluído",
+      "checkoutSubtitle_many": "Cartões-presente {{amount}} × {{count}} · emitidos assim que o pagamento for concluído",
+      "checkoutSubtitle_other": "Cartões-presente {{amount}} × {{count}} · emitidos assim que o pagamento for concluído",
+      "faces": {
+        "cindy": "Cindy · Vermelho da marca",
+        "cat": "Gato preto · Noite",
+        "bell": "Sino · Festivo",
+        "leap": "Salto · Marfim"
+      },
+      "errors": {
+        "limitReached": "Você atingiu o limite de compra de cartões-presente. Tente novamente mais tarde.",
+        "amountTooLarge": "Este pedido passa do limite de pagamento por pedido. Escolha menos cartões e tente de novo."
+      },
+      "done": {
+        "title_one": "Seu cartão-presente está pronto",
+        "title_many": "Seus {{count}} cartões-presente estão prontos",
+        "title_other": "Seus {{count}} cartões-presente estão prontos",
+        "pendingTitle": "Cartão-presente pago",
+        "loading": "Buscando os cartões deste pedido…",
+        "description": "Envie um link de resgate para alguém: ao abrir, a pessoa já pode resgatar. Você também pode ficar com um.",
+        "missing": "O pagamento foi concluído. Seus cartões vão aparecer em Meus cartões-presente em instantes.",
+        "cardTitle": "Cartão {{index}} · {{amount}}",
+        "cardMeta": "Final {{tail}} · {{status}}",
+        "linkHint": "O link de resgate é o próprio cartão: quem abrir primeiro fica com ele. Envie só para quem você vai presentear.",
+        "viewAll": "Ver meus cartões-presente",
+        "finish": "Concluir"
+      },
+      "list": {
+        "title": "Meus cartões-presente",
+        "description": "Envie um link de resgate para alguém: ao abrir, a pessoa já pode resgatar. Os cartões que você não deu nunca expiram e você pode resgatá-los. Ao resgatar, o valor vai para o seu Saldo de recarga.",
+        "count_one": "{{count}} cartão",
+        "count_many": "{{count}} cartões",
+        "count_other": "{{count}} cartões",
+        "loadMore": "Carregar mais",
+        "loadFailed": "Não foi possível carregar seus cartões-presente",
+        "retry": "Recarregar",
+        "status": {
+          "unclaimed": "Não resgatado",
+          "claimedBy": "Resgatado por {{name}}",
+          "claimed": "Resgatado",
+          "redeemedByYou": "Resgatado por você",
+          "refunded": "Reembolsado"
+        },
+        "meta": {
+          "purchased": "Comprado em {{date}} · final {{tail}}",
+          "claimed": "Resgatado em {{date}} · final {{tail}}",
+          "redeemed": "Resgatado em {{date}} · final {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copiar link de resgate",
+        "copied": "Copiado",
+        "more": "Mais ações",
+        "copyCode": "Copiar código de resgate",
+        "redeemSelf": "Resgatar para mim"
+      },
+      "toasts": {
+        "linkCopied": "Link de resgate copiado",
+        "codeCopied": "Código de resgate copiado",
+        "copyFailed": "Não foi possível copiar. Tente novamente.",
+        "unavailable": "Este cartão já foi resgatado ou reembolsado",
+        "revealFailed": "Não foi possível obter o código de resgate. Tente novamente mais tarde."
       }
     }
   },

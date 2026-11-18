@@ -1,14 +1,18 @@
 import type {
   BillingCatalog,
   BillingCurrentSubscription,
+  BillingGiftCardPurchasePolicy,
   BillingGiftCardPreviewResult,
   BillingGiftCardRedeemResult,
   BillingOrderList,
   BillingPaymentHistory,
   BillingPaymentOrder,
   BillingPlanChange,
+  BillingPurchasedGiftCardCode,
+  BillingPurchasedGiftCardList,
   BillingSubscriptionPortalResult,
   BillingSubscription,
+  CreateBillingGiftCardOrderRequest,
   CreateBillingSubscriptionRequest,
   CreateBillingTopupRequest,
 } from '../../../shared/billing';
@@ -89,5 +93,20 @@ export const billingApi = {
   },
   redeemGiftCard(code: string): Promise<BillingGiftCardRedeemResult> {
     return window.electronAPI.billing.redeemGiftCard({ code });
+  },
+  getGiftCardPurchasePolicy(): Promise<BillingGiftCardPurchasePolicy> {
+    return window.electronAPI.billing.getGiftCardPurchasePolicy();
+  },
+  createGiftCardOrder(
+    request: CreateBillingGiftCardOrderRequest,
+    idempotencyKey: string,
+  ): Promise<BillingPaymentOrder> {
+    return window.electronAPI.billing.createGiftCardOrder({ request, idempotencyKey });
+  },
+  listPurchasedGiftCards(limit = 20, cursor?: string): Promise<BillingPurchasedGiftCardList> {
+    return window.electronAPI.billing.listPurchasedGiftCards({ limit, ...(cursor ? { cursor } : {}) });
+  },
+  revealPurchasedGiftCard(cardId: string, faceCode: string): Promise<BillingPurchasedGiftCardCode> {
+    return window.electronAPI.billing.revealPurchasedGiftCard({ cardId, faceCode });
   },
 };
