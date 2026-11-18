@@ -44,6 +44,9 @@ export interface CodexHttpBridge {
   instanceId: string;
   /** 拼出 codex 端 config 用的 URL，例如 http://127.0.0.1:54321/mcp/lizi_feishu */
   url(serverName: string): string;
+  /** Replace configured user MCP factories for future sessions; existing
+   * transports keep their instances and the listener identity does not change. */
+  replaceAppServerFactories(factories: Record<string, () => McpServer>): void;
   /** Startup identity for App initialization and tools/list, never tool execution. */
   withDiscoveryContext<T>(ctx: LiziMcpSessionContext, run: () => Promise<T>): Promise<T>;
   prepareToolCancellation(identity: AppToolCallIdentity): () => void;
@@ -281,6 +284,9 @@ async function startCodexHttpBridge(
   if (serverNames.length === 0) {
     throw new Error('startCodexHttpBridge: at least one MCP server is required');
   }
+  const initialAppNames = new Set(opts.appServerNames ?? []);
+  const builtinFactories = new Map(Object.entries(opts.serverFactories).filter(([name]) => !initialAppNames.has(name)));
+  let appFactories = new Map(Object.entries(opts.serverFactories).filter(([name]) => initialAppNames.has(name)));
 
   // sessionId → transport，按 server 隔离 (不同 server 的 session 互不影响)。
   // codex 客户端走 streamable-http 协议，第一条 init request 拿到 mcp-session-id
@@ -421,8 +427,10 @@ async function startCodexHttpBridge(
       // scoped (persistent) token 仅限远端白名单 server:
       // 同一 remote-forward 能摸到完整 /mcp/<name> 路由, 不得经它初始化
       // cindy_ssh 等其余本机 server — codex-connector P1。
-      const appServer = opts.appServerNames?.includes(serverName) === true;
-      const remoteAppServer = isScopedRemoteToken && appServer && appServerIds().includes(serverName);
+      const appServer = appFactories.has(serverName);
+      // Local additions must not silently widen persistent remote credentials.
+      // Their advertised catalog remains the one accepted at bridge startup.
+      const remoteAppServer = isScopedRemoteToken && appServer && initialAppNames.has(serverName) && appServerIds().includes(serverName);
       if (isScopedRemoteToken && !REMOTE_ALLOWED_SERVER_NAMES.has(serverName) && !remoteAppServer) {
         res.statusCode = 403;
         res.end();
@@ -451,7 +459,7 @@ async function startCodexHttpBridge(
         res.end('MCP server is not mounted for this Session');
         return;
       }
-      const createMcpServer = opts.serverFactories[serverName];
+      const createMcpServer = appFactories.get(serverName) ?? builtinFactories.get(serverName);
       const transports = transportsByServer.get(serverName);
       if (!createMcpServer || !transports) {
         res.statusCode = 404;
@@ -658,6 +666,24 @@ async function startCodexHttpBridge(
     token,
     instanceId: randomBytes(8).toString('hex'),
     url: (serverName) => `http://127.0.0.1:${port}${MCP_PATH_PREFIX}${encodeURIComponent(serverName)}`,
+    replaceAppServerFactories: (factories) => {
+      const allowed = new Set(appServerIds());
+      const next = new Map(Object.entries(factories));
+      for (const name of next.keys()) {
+        if (!allowed.has(name) || builtinFactories.has(name) || opts.pluginIdByServerName?.[name])
+          throw new Error('MCP_APP_SERVER_FACTORY_NOT_ALLOWED');
+      }
+      // An edit changes only the next initialize request. Never clear the maps
+      // containing active sessions: their in-flight calls own the old server.
+      for (const name of next.keys()) {
+        if (!transportsByServer.has(name)) transportsByServer.set(name, new Map());
+      }
+      for (const [name, transports] of transportsByServer) {
+        if (!builtinFactories.has(name) && !next.has(name) && transports.size === 0)
+          transportsByServer.delete(name);
+      }
+      appFactories = next;
+    },
     withDiscoveryContext: async (ctx, run) => {
       const instance = ctx.sessionInstanceId;
       if (!instance) return run();

@@ -49,6 +49,7 @@ import {
   createProviderSecretStore,
   providerSecretSavedForSetup,
   storeCustomMcpToken,
+  removeCustomMcpToken,
   botEnvironmentSecretIo,
   readCustomProviderHeadersForMutation,
   readCustomProviderKeyForMutation,
@@ -724,6 +725,39 @@ describe('setup builtin secret presence', () => {
 // Minimal input: one old owner slot, then encryption / partial write / rename failure.
 // Execution and timing pending the separately authorized test window.
 describe('custom MCP token replacement', () => {
+  // Unit regression: transport changes must distinguish an absent key from a failed removal,
+  // and clearing an unused bearer cannot require an available encryption backend.
+  it('removes only the current owner bearer without keychain access and reports filesystem failures', () => {
+    const previousSession = { ...sessionState };
+    const previousElectron = { ...electronState };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mcp-remove-'));
+    let spy: { mockRestore(): void } | undefined;
+    try {
+      sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'owner-a';
+      electronState.userData = root; electronState.encryptionAvailable = false;
+      const directory = path.join(root, 'safe-storage');
+      fs.mkdirSync(directory);
+      const key = customMcpSecretStorageKey('test-mcp');
+      const target = path.join(directory, `${resolveOwnerScopedSecretStorageKey(key)}.enc`);
+      fs.writeFileSync(target, 'fake-A');
+      sessionState.dataOwnerId = 'owner-b';
+      const other = path.join(directory, `${resolveOwnerScopedSecretStorageKey(key)}.enc`);
+      fs.writeFileSync(other, 'fake-B');
+      sessionState.dataOwnerId = 'owner-a';
+      spy = vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => { throw new Error('fake removal failure'); });
+      expect(removeCustomMcpToken('test-mcp')).toBe(false);
+      expect(fs.readFileSync(target, 'utf8')).toBe('fake-A');
+      expect(removeCustomMcpToken('test-mcp')).toBe(true);
+      expect(removeCustomMcpToken('test-mcp')).toBe(true);
+      expect(fs.readdirSync(directory)).toEqual([path.basename(other)]);
+      expect(fs.readFileSync(other, 'utf8')).toBe('fake-B');
+    } finally {
+      spy?.mockRestore();
+      Object.assign(sessionState, previousSession); Object.assign(electronState, previousElectron);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(['encrypt', 'write', 'rename'] as const)(
     'preserves old ciphertext and cleans its temporary file after %s failure', (failure) => {
       const previousSession = { ...sessionState };

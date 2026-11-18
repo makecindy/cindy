@@ -1774,6 +1774,23 @@ it.each(['claude-code', 'codex', 'pi'] as const)('opens MCP Settings through the
     expect(request).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(context), {
       name: 'Example', url: 'https://example.test/mcp', transport: 'sse',
     });
+    const stdio = { name: 'Grafana', transport: 'stdio', command: 'uvx', args: ['mcp-grafana'],
+      envKeys: ['GRAFANA_URL', 'GRAFANA_SERVICE_ACCOUNT_TOKEN'] };
+    const saved = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+      name: 'request_mcp_setup', args: stdio,
+    } }));
+    expect(saved).toEqual({ ok: true, status: 'saved', serverId: 'custom_example' });
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining(context), stdio);
+    request.mockClear();
+    const rejectedSecret = await client.callTool({ name: 'call_tool', arguments: { name: 'request_mcp_setup', args: {
+      ...stdio, env: { TOKEN: 'test-invalid-stdio-secret' },
+    } } });
+    expect(request).not.toHaveBeenCalled();
+    expect(JSON.stringify(rejectedSecret)).not.toContain('test-invalid-stdio-secret');
+    await client.callTool({ name: 'call_tool', arguments: { name: 'request_mcp_setup', args: {
+      transport: 'stdio', command: 'uvx', url: 'https://example.test/mcp',
+    } } });
+    expect(request).not.toHaveBeenCalled();
     request.mockClear();
     await client.callTool({ name: 'call_tool', arguments: { name: 'request_mcp_setup', args: { url: 'https://example.test/mcp?token=test-invalid-token' } } });
     expect(request).not.toHaveBeenCalled();

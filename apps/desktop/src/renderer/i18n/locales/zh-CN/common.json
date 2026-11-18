@@ -9428,21 +9428,23 @@
       }
     },
     "mcp": {
+      "unreadable": "配置无法读取，暂不可用。可删除后重新添加。",
+      "loadFailed": "无法读取 MCP 配置，请重试。",
       "title": "外部工具",
-      "subtitle": "接入你自己的远程 MCP 服务器。HTTP / Streamable HTTP 服务器 Claude 和 Codex 均可调用；SSE 仅支持 Claude。",
+      "subtitle": "连接远程 HTTP/SSE 服务或本机 stdio 程序。",
       "cancel": "取消",
       "save": "保存",
       "editAria": "编辑",
       "deleteAria": "删除",
       "addCustom": {
         "title": "添加 MCP 服务器",
-        "subtitle": "填写远程 MCP 端点（http/sse）"
+        "subtitle": "配置 HTTP/SSE 地址或 stdio 命令"
       },
       "dialog": {
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
-        "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。",
-        "teammateDesc": "仅支持远程 http / sse 型 MCP。保存后伙伴会把它加入自己的工具，在本对话的下一条消息起即可使用，无需新建任务。"
+        "desc": "配置远程服务或本机程序。保存后，现有任务继续使用原配置；新启动的本机任务会加载更新。",
+        "teammateDesc": "配置远程服务或本机程序。保存后，现有任务继续使用原配置；新启动的本机任务会加载更新。"
       },
       "fields": {
         "name": "显示名称",
@@ -9454,16 +9456,35 @@
         "tokenPlaceholder": "填入鉴权 token",
         "tokenEditPlaceholder": "留空将删除已存 token",
         "tokenSaved": "已保存",
-        "tokenHelp": "用于鉴权：Claude 会作为 Authorization: Bearer 头发送；Codex 仅支持 Bearer 型鉴权。",
+        "tokenHelp": "由 Cindy 作为 Authorization: Bearer 请求头发送。",
         "headers": "请求头（可选）",
         "headerNamePlaceholder": "Header 名",
         "headerValuePlaceholder": "值",
         "addHeader": "添加请求头",
-        "removeRow": "删除此行"
+        "removeRow": "删除此行",
+        "command": "命令",
+        "commandHelp": "填写已安装的程序名或绝对路径，Cindy 会在需要连接时启动。",
+        "args": "参数",
+        "argsHelp": "每行一个参数。保留空格和空参数，不使用 shell 语法。",
+        "cwd": "工作目录（可选）",
+        "cwdHelp": "填写运行电脑上的绝对路径；留空使用用户主目录。",
+        "env": "环境变量（可选）",
+        "envHelp": "值会加密保存，不返回给助手。删除行会删除已保存的变量。",
+        "envName": "变量名",
+        "envValue": "值",
+        "envSaved": "已保存；不修改则保留",
+        "addArg": "添加参数",
+        "removeArg": "删除参数",
+        "addEnv": "添加变量",
+        "removeEnv": "删除变量"
       },
       "errors": {
         "nameRequired": "请填写显示名称",
-        "urlInvalid": "请填写合法的 http(s) URL"
+        "urlInvalid": "请填写合法的 http(s) URL",
+        "commandRequired": "请填写程序名或绝对路径",
+        "argsInvalid": "参数不能包含 NUL 字符",
+        "cwdInvalid": "工作目录不能包含 NUL 字符",
+        "envInvalid": "变量名不能重复，仅限字母、数字和下划线，且不能以数字开头。值不能包含 NUL。"
       },
       "toast": {
         "created": "MCP 服务器已添加",

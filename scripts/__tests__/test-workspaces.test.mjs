@@ -505,6 +505,7 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 		"src/__tests__/pi-manager.integration.test.ts",
 	]);
 	assert.deepEqual(desktop.tiers.e2e.include, [
+		"src/main/mcp-apps/__tests__/stdio.e2e.test.ts",
 		"src/main/maker-host/__tests__/*.e2e.test.ts",
 		"src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts",
 		"src/main/remote-agent/__tests__/execServerProjection.e2e.test.ts",
@@ -514,6 +515,9 @@ test("real agent integration tests are explicit tiers outside unit", () => {
 	const terraProxyTest = "apps/desktop/src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts";
 	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.e2e, [terraProxyTest]), [terraProxyTest]);
 	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, [terraProxyTest]), []);
+	const stdioProcessTest = "apps/desktop/src/main/mcp-apps/__tests__/stdio.e2e.test.ts";
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.e2e, [stdioProcessTest]), [stdioProcessTest]);
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, [stdioProcessTest]), []);
 });
 
 test("Pi RPC lifecycle stays in unit while binary resource discovery stays in integration", () => {

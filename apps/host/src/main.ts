@@ -16,6 +16,7 @@ import type { EngineKind } from '@cindy/maker-core';
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
+import { configureWindowsMcpJob } from '../../desktop/src/main/windowsMcpJob.js';
 import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.js';
 import type { HostStartFailureReason } from '../../desktop/src/shared/hostStartFailure.js';
 import { classifyHostStartFailure, HostAccountMismatchError, HostSignInRequiredError } from './start-failure.js';
@@ -342,10 +343,16 @@ refuseSkillProjectionOwnerCommit();
 // bootstrap-electron.ts configureUiText.
 bindHostUiText();
 bindHostProjectIconRuntime();
+const helperLayout = hostRuntimeLayout();
 configureWindowsAtomicRename({
-  packagedBinary: hostRuntimeLayout().atomicRenameBinary ?? undefined,
-  sourceFile: hostRuntimeLayout().atomicRenameSource ?? undefined,
+  packagedBinary: helperLayout.atomicRenameBinary ?? undefined,
+  sourceFile: helperLayout.atomicRenameSource ?? undefined,
   cacheDir: path.join(profileDir, 'windows-atomic-rename'),
+});
+configureWindowsMcpJob({
+  packagedBinary: helperLayout.mcpJobBinary ?? undefined,
+  sourceFile: helperLayout.mcpJobSource ?? undefined,
+  cacheDir: path.join(profileDir, 'windows-mcp-stdio-job'),
 });
 mkdirSync(profileDir, { recursive: true, mode: 0o700 });
 const serviceLease = acquireHostServiceLease(profileDir);
@@ -630,11 +637,15 @@ function invalidateHostSession(_reason: string): Promise<void> {
       stopPluginAuthorization?.(); stopPluginAuthorization = null;
       plugins?.authorization.cancelPending();
       interactionBroker.dispose();
-      await pluginGateway?.host.reset();
-      await requestsDrained;
+      // A failed MCP shutdown still has to drain requests before owner storage closes.
+      const settled = await Promise.allSettled([pluginGateway?.host.reset(), requestsDrained]);
+      const errors = settled.filter(result => result.status === 'rejected').map(result => result.reason);
+      if (errors.length) throw new AggregateError(errors, 'Owner request cleanup failed');
     },
     dispose: disposeOwnerRuntime,
-  }).then(({ errors }) => { if (errors.length) throw errors[0]; }).finally(() => {
+  }).then(({ errors }) => {
+    if (errors.length) throw new AggregateError(errors, 'Owner runtime cleanup failed');
+  }).finally(() => {
     commitVolatileAppSession('signed-out', null, true);
     release();
     runtime.state = 'uninitialized'; runtime.owner = null; runtime.storage = 'unopened';
@@ -2138,10 +2149,13 @@ async function disposeOwnerRuntime(): Promise<void> {
     taskRuntimePlugins = null;
     setGhostToolApprovalResolver(null);
     const stopPlugins = plugins?.close();
-    const stopApps = pluginGateway?.close();
+    const retiringGateway = pluginGateway;
+    const stopApps = retiringGateway?.close();
     // Attach a rejection handler immediately while other services drain.
     const drainedPlugins = stopPlugins?.then(() => {}, error => { errors.push(error); });
-    const drainedApps = stopApps?.then(() => {}, error => { errors.push(error); });
+    const drainedApps = stopApps?.then(() => {
+      if (pluginGateway === retiringGateway) pluginGateway = null;
+    }, error => { errors.push(error); });
     await attempt(() => remote?.stop());
     // Settle disconnected platform calls before Maker awaits task-close hooks.
     // Client-owned OS sessions are released by its authenticated socket teardown.
@@ -2167,7 +2181,6 @@ async function disposeOwnerRuntime(): Promise<void> {
   } finally {
     platformTools = null;
     plugins = null;
-    pluginGateway = null;
     pluginManager = null;
     hostTools = null;
     hostConfirmations = null;

@@ -5,6 +5,11 @@ export interface McpSetupProposal {
   name?: string;
   url?: string;
   transport?: McpTransport;
+  command?: string;
+  args?: string[];
+  cwd?: string;
+  /** Names only. The user supplies all values in the native form. */
+  envKeys?: string[];
 }
 
 export interface McpSetupRequest {

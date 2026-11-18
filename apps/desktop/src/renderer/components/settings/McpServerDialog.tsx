@@ -1,16 +1,4 @@
-/**
- * McpServerDialog —— 自定义 MCP 服务器「新建 / 编辑」表单弹窗。
- *
- * 结构参照 ProviderConnectionDialog:显示名称 + transport(http/sse)分段 + 端点 URL +
- * 可选 bearer token + 可选请求头(增删行)。
- *
- * 「MCP id」内部句柄由显示名 slug 派生 + 去重,对用户隐藏(= agent 侧 mcpServers[name],
- * 不能含 . 或 /)。配置经 maker IPC 入 localDb;token 经 safeStorage 存(见 lib/customMcpServers)。
- * 编辑态回填后清空 token 会清除，回填前空值保留;id 不可改。颜色全走主题 token。
- *
- * 说明:transport 仅远程 http/sse。token 在 Claude 端合成 Authorization: Bearer;
- * Codex 端只支持 Bearer 型鉴权,用户自定义的非 Bearer header 仅 Claude 生效。
- */
+/** Shared Settings / native setup form. Secret env values are write-only and stay local to the form. */
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -32,8 +20,11 @@ import {
   updateCustomMcpServer,
 } from '@/lib/customMcpServers';
 
+import { customMcpSettings } from './McpServerDialog.settings-search';
+import { StdioMcpFields, type McpEnvRow, type McpArgRow } from './StdioMcpFields';
+
 import type { McpSetupProposal } from '@/../shared/mcpSetup';
-import { MCP_TRANSPORTS, type CustomMcpConfig, type McpTransport } from '@/../shared/customMcp';
+import { MCP_TRANSPORTS, type CustomMcpRemoteConfig, type CustomMcpInput, type CustomMcpListEntry, type McpTransport } from '@/../shared/customMcp';
 
 /**
  * Saves the server somewhere other than this computer. Credentials are then managed apart from
@@ -41,16 +32,16 @@ import { MCP_TRANSPORTS, type CustomMcpConfig, type McpTransport } from '@/../sh
  * stored endpoint that is not shown back.
  */
 export interface McpServerPersistence {
-  create(config: CustomMcpConfig): Promise<void>;
-  update(config: CustomMcpConfig): Promise<void>;
+  create(config: CustomMcpRemoteConfig): Promise<void>;
+  update(config: CustomMcpRemoteConfig): Promise<void>;
   credentialsNote?: ReactNode;
 }
 
 interface McpServerDialogProps {
-  initial?: CustomMcpConfig;
+  initial?: CustomMcpListEntry;
   proposal?: McpSetupProposal;
   embedded?: boolean;
-  /** 伙伴对话里打开：新工具在同一对话下一轮生效，不提示新建任务。 */
+  /** 伙伴对话里打开；保存不打断现有任务，不承诺下一轮已加载新工具。 */
   teammate?: boolean;
   /** 已占用的全部 MCP id;新建自动生成 id 时避让。 */
   existingIds?: string[];
@@ -96,14 +87,22 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
 
   const [name, setName] = useState(initial?.name ?? proposal?.name ?? '');
   const [transport, setTransport] = useState<McpTransport>(initial?.transport ?? proposal?.transport ?? 'http');
-  const [url, setUrl] = useState(initial?.url ?? proposal?.url ?? '');
+  const remoteInitial = initial?.transport !== 'stdio' ? initial : undefined;
+  const stdioInitial = initial?.transport === 'stdio' ? initial : undefined;
+  const [url, setUrl] = useState(remoteInitial?.url ?? proposal?.url ?? '');
+  const [command, setCommand] = useState(stdioInitial?.command ?? proposal?.command ?? '');
+  const [cwd, setCwd] = useState(stdioInitial?.cwd ?? proposal?.cwd ?? '');
+  const [args, setArgs] = useState<McpArgRow[]>(() => (stdioInitial?.args ?? proposal?.args ?? []).map((value, key) => ({ value, key })));
+  const [env, setEnv] = useState<McpEnvRow[]>(() => (stdioInitial?.envKeys ?? proposal?.envKeys ?? []).map((name, key) => ({
+    name, key, value: '', saved: !!stdioInitial, changed: false,
+  })));
   const [token, setToken] = useState('');
   const [hasToken, setHasToken] = useState(false);
   const headerKeyRef = useRef(0);
   const [headers, setHeaders] = useState<HeaderRow[]>(() => {
     const initRows =
-      initial && Object.keys(initial.headers).length > 0
-        ? Object.entries(initial.headers).map(([n, v]) => ({ name: n, value: v }))
+      remoteInitial && Object.keys(remoteInitial.headers).length > 0
+        ? Object.entries(remoteInitial.headers).map(([n, v]) => ({ name: n, value: v }))
         : [{ name: '', value: '' }];
     return initRows.map((r) => ({ ...r, _key: headerKeyRef.current++ }));
   });
@@ -115,14 +114,14 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
   const returnFocusRef = useRef(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
-  const [errors, setErrors] = useState<{ name?: string; url?: string }>({});
+  const [errors, setErrors] = useState<{ name?: string; url?: string; command?: string; env?: string; cwd?: string; args?: string }>({});
   const close = () => {
     if (!savingRef.current) onClose();
   };
 
   // 编辑态:回填已存 token(让 token 框「能看」/可核对,据此点亮「已保存」徽标)。
   useEffect(() => {
-    if (!editing || !initial || persistence) return;
+    if (!editing || !initial || initial.transport === 'stdio' || persistence) return;
     let cancelled = false;
     void (async () => {
       const k = await readCustomMcpToken(initial.id);
@@ -141,20 +140,31 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
     if (savingRef.current) return;
     const trimmedName = name.trim();
     const trimmedUrl = url.trim();
-    const nextErrors: { name?: string; url?: string } = {};
+    const nextErrors: typeof errors = {};
     if (!trimmedName) nextErrors.name = t('settings.mcp.errors.nameRequired');
-    const keepStoredUrl = !!persistence && editing && !initial?.url && !trimmedUrl;
-    if (!keepStoredUrl)
+    const keepStoredUrl = !!persistence && editing && !remoteInitial?.url && !trimmedUrl;
+    if (transport === 'stdio') {
+      if (!command.trim() || command.includes('\0')) nextErrors.command = t('settings.mcp.errors.commandRequired');
+      if (args.some(arg => arg.value.includes('\0'))) nextErrors.args = t('settings.mcp.errors.argsInvalid');
+      if (cwd.includes('\0')) nextErrors.cwd = t('settings.mcp.errors.cwdInvalid');
+      const names = new Set<string>();
+      for (const row of env) {
+        const name = row.name.trim();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || names.has(name) || row.value.includes('\0')) {
+          nextErrors.env = t('settings.mcp.errors.envInvalid');
+          break;
+        }
+        names.add(name);
+      }
+    } else if (!keepStoredUrl) {
       try {
         const u = new URL(trimmedUrl);
-        if (u.protocol !== 'http:' && u.protocol !== 'https:')
-          nextErrors.url = t('settings.mcp.errors.urlInvalid');
-      } catch {
-        nextErrors.url = t('settings.mcp.errors.urlInvalid');
-      }
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') nextErrors.url = t('settings.mcp.errors.urlInvalid');
+      } catch { nextErrors.url = t('settings.mcp.errors.urlInvalid'); }
+    }
     setErrors(nextErrors);
-    if (nextErrors.name || nextErrors.url) {
-      const invalid = document.getElementById(`${id}-${nextErrors.name ? 'name' : 'url'}`);
+    if (Object.keys(nextErrors).length) {
+      const invalid = document.getElementById(`${id}-${Object.keys(nextErrors)[0]}`);
       invalid?.focus();
       invalid?.scrollIntoView?.({ block: 'nearest' });
       return;
@@ -166,17 +176,20 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
     }
     const configId =
       editing && initial ? initial.id : uniqueId(trimmedName, new Set(existingIds ?? []));
-    const config: CustomMcpConfig = {
-      id: configId,
-      name: trimmedName,
-      transport,
-      url: trimmedUrl,
-      headers: headerMap,
-    };
+    const config: CustomMcpInput = transport === 'stdio' ? {
+      id: configId, name: trimmedName, transport,
+      command: command.trim(), args: args.map(arg => arg.value),
+      ...(cwd.trim() ? { cwd: cwd.trim() } : {}),
+      envChanges: {
+        set: Object.fromEntries(env.filter(row => !row.saved || row.changed).map(row => [row.name.trim(), row.value])),
+        remove: (stdioInitial?.envKeys ?? []).filter(name => !env.some(row => row.name.trim() === name)),
+      },
+    } : { id: configId, name: trimmedName, transport, url: trimmedUrl, headers: headerMap };
     savingRef.current = true;
     setSaving(true);
     try {
       if (persistence) {
+        if (config.transport === 'stdio') throw new Error(t('settings.mcp.toast.saveFailed'));
         if (editing) await persistence.update(config);
         else await persistence.create(config);
         toast.success(t(editing ? 'settings.mcp.toast.updated' : 'settings.mcp.toast.created'));
@@ -205,6 +218,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
     token,
     hasToken,
     headers,
+    command, cwd, args, env, stdioInitial, remoteInitial,
     editing,
     initial,
     existingIds,
@@ -226,7 +240,10 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
               {editing ? t('settings.mcp.dialog.editTitle') : t('settings.mcp.dialog.createTitle')}
             </Title>
           </div>
-          <div className={cn("flex min-h-0 flex-col gap-4 px-4 pb-2 pt-1", !embedded && "overflow-y-auto")}>
+          <div className={cn("min-h-0", !embedded && "overflow-y-auto [scrollbar-gutter:stable]")}>
+            {/* The shared 12px scrollbar occupies the modal's right padding,
+                so content and footer retain the same 16px edge inset. */}
+            <div className={cn("flex flex-col gap-4 pb-2 pt-1", embedded ? "px-4" : "pl-4 pr-1")}>
             <Description className="text-13 leading-relaxed text-[var(--settings-section-desc)]">
               {t(teammate ? 'settings.mcp.dialog.teammateDesc' : 'settings.mcp.dialog.desc')}
             </Description>
@@ -239,6 +256,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
             >
               {(control) => (
                 <SettingsTextInput
+                  data-setting-id={customMcpSettings.name.id}
                   {...control}
                   inputRef={nameRef}
                   surface="ivory"
@@ -262,10 +280,11 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
                   键盘行为由控件自带,不再用独立 Button 自造第二套选中态(review P2)。
                 */}
                 <SegmentedControl
+                  data-setting-id={customMcpSettings.transport.id}
                   aria-label={t('settings.mcp.fields.transport')}
                   value={transport}
-                  onValueChange={setTransport}
-                  options={MCP_TRANSPORTS.map((tp) => ({
+                  onValueChange={(value) => { setTransport(value); setErrors({}); }}
+                  options={MCP_TRANSPORTS.filter(tp => !persistence || tp !== 'stdio').map((tp) => ({
                     value: tp,
                     label: <span className="uppercase">{tp}</span>,
                   }))}
@@ -273,6 +292,8 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
               </div>
             </fieldset>
             <div className="flex flex-col gap-4 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--surface)] p-4">
+              {transport === 'stdio' ? <StdioMcpFields id={id} command={command} setCommand={setCommand}
+                cwd={cwd} setCwd={setCwd} args={args} setArgs={setArgs} env={env} setEnv={setEnv} errors={errors} /> : <>
               <FormField
                 id={`${id}-url`}
                 label={t('settings.mcp.fields.url')}
@@ -282,6 +303,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
               >
                 {(control) => (
                   <SettingsTextInput
+                    data-setting-id={customMcpSettings.url.id}
                     {...control}
                     surface="ivory"
                     value={url}
@@ -315,6 +337,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
                     >
                       {(control) => (
                         <SettingsTextInput
+                          data-setting-id={customMcpSettings.headers.id}
                           {...control}
                           surface="ivory"
                           value={h.name}
@@ -337,6 +360,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
                     >
                       {(control) => (
                         <SettingsTextInput
+                          data-setting-id={customMcpSettings.headers.id}
                           {...control}
                           surface="ivory"
                           value={h.value}
@@ -353,6 +377,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
                       text={t('settings.mcp.fields.removeRow')}
                     >
                       <Button
+                        data-settings-search-action="Remove this custom MCP header"
                         variant="secondary"
                         className="w-9 px-0"
                         size="lg"
@@ -374,6 +399,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
                   </div>
                 ))}
                 <Button
+                  data-settings-search-action="Add a custom MCP header"
                   ref={addHeaderRef}
                   variant="secondary"
                   className="gap-1.5 self-start"
@@ -390,10 +416,13 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
                 </Button>
               </fieldset>
               </>}
+              </>}
+            </div>
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap justify-end gap-2.5 p-4">
             <Button
+              data-settings-search-action="Cancel the MCP configuration form"
               variant="secondary"
               size="lg"
               disabled={saving}
@@ -403,6 +432,7 @@ export function McpServerDialog({ initial, proposal, embedded, teammate, existin
               {t('settings.mcp.cancel')}
             </Button>
             <Button
+              data-settings-search-action="Save the MCP configuration form"
               variant="primary"
               size="lg"
               loading={saving}

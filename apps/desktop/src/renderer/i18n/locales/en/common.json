@@ -9471,21 +9471,23 @@
       }
     },
     "mcp": {
+      "unreadable": "Saved configuration cannot be read. You can delete it and add it again.",
+      "loadFailed": "Could not load MCP configurations. Try again.",
       "title": "External tools",
-      "subtitle": "Connect your own remote MCP servers. HTTP/Streamable HTTP servers work with both Claude and Codex; SSE is Claude-only.",
+      "subtitle": "Connect remote HTTP/SSE servers or local stdio programs.",
       "cancel": "Cancel",
       "save": "Save",
       "editAria": "Edit",
       "deleteAria": "Delete",
       "addCustom": {
         "title": "Add MCP server",
-        "subtitle": "Enter a remote MCP endpoint (http/sse)"
+        "subtitle": "Configure an HTTP/SSE endpoint or a stdio command"
       },
       "dialog": {
         "createTitle": "Add MCP server",
         "editTitle": "Edit MCP server",
-        "desc": "Remote http / sse MCP only. New sessions can call it after saving; in-flight sessions are unaffected.",
-        "teammateDesc": "Remote http / sse MCP only. After saving, your buddy adds it to their tools and can use it from the next message in this chat, with no new session needed."
+        "desc": "Configure a remote server or local program. Saving keeps existing tasks running with their current configuration. Newly started local tasks load the update.",
+        "teammateDesc": "Configure a remote server or local program. Saving keeps existing tasks running with their current configuration. Newly started local tasks load the update."
       },
       "fields": {
         "name": "Display name",
@@ -9497,16 +9499,35 @@
         "tokenPlaceholder": "Enter auth token",
         "tokenEditPlaceholder": "Leave blank to remove the saved token",
         "tokenSaved": "Saved",
-        "tokenHelp": "Used for auth: Claude sends it as an Authorization: Bearer header; Codex only supports Bearer auth.",
+        "tokenHelp": "Sent as an Authorization: Bearer header by Cindy.",
         "headers": "Headers (optional)",
         "headerNamePlaceholder": "Header name",
         "headerValuePlaceholder": "Value",
         "addHeader": "Add header",
-        "removeRow": "Remove row"
+        "removeRow": "Remove row",
+        "command": "Command",
+        "commandHelp": "An installed executable or its absolute path. Cindy starts it when needed.",
+        "args": "Arguments",
+        "argsHelp": "One argument per row. Spaces and empty arguments are preserved; no shell syntax.",
+        "cwd": "Working directory (optional)",
+        "cwdHelp": "An absolute path on the host computer. Leave blank to use your home directory.",
+        "env": "Environment variables (optional)",
+        "envHelp": "Values are encrypted and never returned to the assistant. Remove a row to delete it.",
+        "envName": "Variable name",
+        "envValue": "Value",
+        "envSaved": "Saved; leave untouched to keep",
+        "addArg": "Add argument",
+        "removeArg": "Remove argument",
+        "addEnv": "Add variable",
+        "removeEnv": "Remove variable"
       },
       "errors": {
         "nameRequired": "Display name is required",
-        "urlInvalid": "Enter a valid http(s) URL"
+        "urlInvalid": "Enter a valid http(s) URL",
+        "commandRequired": "Enter an executable name or absolute path",
+        "argsInvalid": "Arguments cannot contain a NUL character",
+        "cwdInvalid": "The working directory cannot contain a NUL character",
+        "envInvalid": "Use unique variable names containing letters, digits or underscores, starting with a letter or underscore. Values cannot contain NUL."
       },
       "toast": {
         "created": "MCP server added",

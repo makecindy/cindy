@@ -5,6 +5,7 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { safeStorage } from 'electron';
 import type { McpProvider } from '@cindy/maker-core';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
@@ -18,14 +19,13 @@ import {
   registerCustomMcpArrays,
   resetCustomMcpRegistry,
 } from '../../mcp-integrations/custom-mcp-registry.desktop.js';
-import type { CustomMcpConfig } from '../../../shared/customMcp.js';
+import type { CustomMcpInput, CustomMcpRemoteConfig } from '../../../shared/customMcp.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { createCustomMcpServerForSetup, createCustomMcpServerFromMain, registerMcpHandlers, type McpHandlerDeps } from '../mcpHandlers.js';
-import { refreshCodexMcpEnvironment } from '../codexMcpRefresh.js';
-import { DeferredCodexRestartService } from '../deferredCodexRestart.js';
-import { CodexCredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import { CustomMcpProvider } from '../../mcp-integrations/custom-mcp-provider.js';
+import { updateCustomMcpServer as updateFromNativeForm } from '../../../renderer/lib/customMcpServers.js';
 
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 
@@ -46,13 +46,14 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomMcpToken: () 
 const CREATE_SQL = `
   CREATE TABLE custom_mcp_servers (
     id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, transport TEXT NOT NULL, url TEXT NOT NULL,
-    headers TEXT NOT NULL DEFAULT '{}', sort_order INTEGER NOT NULL DEFAULT 0,
+    headers TEXT NOT NULL DEFAULT '{}',
+    command TEXT, args TEXT NOT NULL DEFAULT '[]', cwd TEXT, env TEXT NOT NULL DEFAULT '{}', sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
   );
   CREATE INDEX idx_custom_mcp_servers_sort_order ON custom_mcp_servers (sort_order);
 `;
 
-const validConfig: CustomMcpConfig = {
+const validConfig: CustomMcpRemoteConfig = {
   id: 'mytools',
   name: 'My Tools',
   transport: 'http',
@@ -87,12 +88,13 @@ function makeDeps(over: Partial<McpHandlerDeps> = {}): McpHandlerDeps {
     resolveBotContext: vi.fn(async () => ({ agentKind: 'claude-code' as const })),
     refreshProviders: vi.fn(async () => {}),
     broadcastChanged: vi.fn(() => {}),
-    invalidateCodex: vi.fn(async () => {}),
+    removeMcpToken: vi.fn(() => true),
     ...over,
   };
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.mocked(assertTrustedAppRendererEvent).mockReset();
   resetCustomMcpRegistry();
   if (client) clearCurrentDbClient(client);
@@ -102,6 +104,190 @@ afterEach(() => {
 });
 
 describe('mcp:custom:* CRUD handlers', () => {
+  // DB/IPC regression: a bad credential previously hid all settings, including its own delete action.
+  it('lists healthy configurations and secret-free unreadable identities, and deletes damaged rows', async () => {
+    mountDb();
+    await createCustomMcpServer(validConfig);
+    await createCustomMcpServer({ ...validConfig, id: 'broken-http', name: 'Broken HTTP' });
+    await createCustomMcpServer({ id: 'broken-local', name: 'Broken local', transport: 'stdio', command: 'uvx', args: [], env: {} });
+    raw!.prepare('UPDATE custom_mcp_servers SET headers = ? WHERE id = ?').run('safe-storage:v1:invalid-header-secret', 'broken-http');
+    raw!.prepare('UPDATE custom_mcp_servers SET env = ? WHERE id = ?').run('invalid-environment-secret', 'broken-local');
+    const harness = new IpcHarness();
+    registerMcpHandlers(harness, makeDeps());
+    expect(await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST)).toEqual({
+      servers: [validConfig], unreadableServers: [
+        { id: 'broken-http', name: 'Broken HTTP', transport: 'http', reason: 'unreadable' },
+        { id: 'broken-local', name: 'Broken local', transport: 'stdio', reason: 'unreadable' },
+      ],
+    });
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_DELETE, 'broken-http');
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_DELETE, 'broken-local');
+    expect(await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST)).toEqual({ servers: [validConfig] });
+  });
+
+  // Security regression (db tier): an HTTP token survived HTTP → stdio → another HTTP URL.
+  // Drive native IPC and observe the headers published to a real provider, not renderer call order.
+  it('never publishes a previous HTTP bearer after a stdio round trip, including overlapping saves', async () => {
+    mountDb();
+    await createCustomMcpServer(validConfig);
+    let token: string | null = 'fake-token-for-original-http';
+    const published: Array<ReturnType<CustomMcpProvider['appServerConfig']>> = [];
+    const harness = new IpcHarness();
+    registerMcpHandlers(harness, makeDeps({
+      removeMcpToken: () => { token = null; return true; },
+      storeMcpToken: (_id, value) => { token = value; return true; },
+      refreshProviders: async () => {
+        for (const config of await listCustomMcpServers()) published.push(new CustomMcpProvider(config, () => token).appServerConfig());
+      },
+    }));
+    const local: CustomMcpInput = { id: validConfig.id, name: 'Local', transport: 'stdio', command: 'uvx', args: [], envChanges: { set: {}, remove: [] } };
+    vi.stubGlobal('window', { electronAPI: { maker: {
+      updateCustomMcpServer: (...args: unknown[]) => harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, ...args),
+    } } });
+    await Promise.all([
+      updateFromNativeForm(local, 'fake-previously-hydrated-token', false),
+      updateFromNativeForm({ ...validConfig, url: 'https://different.example/mcp' }, '', false),
+    ]);
+    expect(token).toBeNull();
+    expect(published.at(-1)).toMatchObject({ url: 'https://different.example/mcp' });
+    expect(JSON.stringify(published)).not.toContain('fake-token-for-original-http');
+  });
+
+  it.each(['database', 'encryption'] as const)('preserves the working HTTP credential when conversion to stdio fails in %s', async failure => {
+    mountDb();
+    await createCustomMcpServer(validConfig);
+    let token: string | null = 'fake-working-http-token';
+    const harness = new IpcHarness();
+    const deps = makeDeps({ removeMcpToken: () => { token = null; return true; } });
+    registerMcpHandlers(harness, deps);
+    if (failure === 'database') raw!.exec("CREATE TRIGGER reject_mcp_update BEFORE UPDATE ON custom_mcp_servers BEGIN SELECT RAISE(ABORT, 'fake update failure'); END;");
+    const encryption = failure === 'encryption'
+      ? vi.spyOn(safeStorage, 'encryptString').mockImplementationOnce(() => { throw new Error('fake encryption failure'); }) : undefined;
+    try {
+      await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, { id: validConfig.id, name: 'Local', transport: 'stdio',
+        command: 'uvx', args: [], envChanges: { set: { TOKEN: 'fake-env-token' }, remove: [] } }))
+        .rejects.toThrow(failure === 'database' ? 'fake update failure' : 'MCP environment encryption failed');
+    } finally { encryption?.mockRestore(); }
+    expect(new CustomMcpProvider((await listCustomMcpServers())[0]!, () => token).appServerConfig())
+      .toMatchObject({ url: validConfig.url, headers: { Authorization: 'Bearer fake-working-http-token' } });
+    expect(deps.refreshProviders).not.toHaveBeenCalled();
+  });
+
+  it('does not redirect a queued native save to an account selected while another save is publishing', async () => {
+    mountDb();
+    await createCustomMcpServer(validConfig);
+    let token = 'fake-original-token';
+    let publishing!: () => void;
+    let resume!: () => void;
+    const entered = new Promise<void>(resolve => { publishing = resolve; });
+    const gate = new Promise<void>(resolve => { resume = resolve; });
+    const harness = new IpcHarness();
+    registerMcpHandlers(harness, makeDeps({
+      storeMcpToken: (_id, value) => { token = value; return true; },
+      refreshProviders: async () => { publishing(); await gate; },
+    }));
+    const first = harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, { ...validConfig, name: 'First edit' });
+    await entered;
+    const queued = harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, { ...validConfig, url: 'https://other.example/mcp' },
+      { action: 'set', value: 'fake-wrong-owner-token' });
+    setCurrentDbClient(client!, 'different-owner');
+    resume();
+    await first;
+    await expect(queued).rejects.toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('MCP settings owner changed') });
+    expect((await listCustomMcpServers())[0]).toMatchObject({ name: 'First edit', url: validConfig.url });
+    expect(token).toBe('fake-original-token');
+  });
+
+  it('blocks a new HTTP endpoint when obsolete-token removal fails and never revives it after a failed replacement', async () => {
+    mountDb();
+    await createCustomMcpServer({ id: validConfig.id, name: 'Local', transport: 'stdio', command: 'uvx', args: [], env: {} });
+    let token: string | null = 'fake-leftover-token';
+    let removable = false;
+    const published: Array<ReturnType<CustomMcpProvider['appServerConfig']>> = [];
+    const harness = new IpcHarness();
+    registerMcpHandlers(harness, makeDeps({
+      removeMcpToken: () => { if (!removable) return false; token = null; return true; },
+      storeMcpToken: () => false,
+      refreshProviders: async () => {
+        for (const config of await listCustomMcpServers()) published.push(new CustomMcpProvider(config, () => token).appServerConfig());
+      },
+    }));
+    const remote = { ...validConfig, url: 'https://new.example/mcp' };
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, remote, { action: 'set', value: 'fake-new-token' }))
+      .rejects.toThrow('Could not clear the previous MCP credential');
+    expect((await listCustomMcpServers())[0]!.transport).toBe('stdio');
+    expect(published).toEqual([]);
+    removable = true;
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, remote, { action: 'set', value: 'fake-new-token' });
+    expect(token).toBeNull();
+    expect(published).toEqual([{ id: remote.id, name: remote.name, url: remote.url, transport: 'http', headers: undefined }]);
+  });
+
+  it('allows stdio without an HTTP credential even when unused bearer cleanup fails', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerMcpHandlers(harness, makeDeps({ removeMcpToken: () => false }));
+    const local: CustomMcpInput = { id: 'local', name: 'Local', transport: 'stdio', command: 'uvx', args: [],
+      envChanges: { set: {}, remove: [] } };
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, local)).resolves.toEqual({ ok: true });
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, { ...local, name: 'Renamed' })).resolves.toEqual({ ok: true });
+    expect((await listCustomMcpServers())[0]).toMatchObject({ name: 'Renamed', transport: 'stdio', env: {} });
+  });
+
+  it('applies native bearer intent before publishing and preserves untouched HTTP/SSE credentials', async () => {
+    mountDb();
+    let token: string | null = 'fake-orphan-token';
+    const published: Array<string | undefined> = [];
+    const harness = new IpcHarness();
+    registerMcpHandlers(harness, makeDeps({
+      removeMcpToken: () => { token = null; return true; },
+      storeMcpToken: (_id, value) => { token = value; return true; },
+      refreshProviders: async () => {
+        const config = new CustomMcpProvider((await listCustomMcpServers())[0]!, () => token).appServerConfig();
+        published.push(config.transport === 'stdio' ? undefined : config.headers?.Authorization);
+      },
+    }));
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig, { action: 'set', value: 'fake-new-token' });
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, { ...validConfig, transport: 'sse' });
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, validConfig, { action: 'clear' });
+    expect(published).toEqual(['Bearer fake-new-token', 'Bearer fake-new-token', undefined]);
+  });
+
+  // Native stdio setup contract: previously no environment input or redacted output existed.
+  // Production IPC → encrypted SQLite → public list; minimum one fake secret. Tier: db.
+  it('saves and edits stdio environment values without returning them in lists or receipts', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerMcpHandlers(harness, makeDeps());
+    const config: CustomMcpInput = { id: 'grafana', name: 'Grafana', transport: 'stdio',
+      command: 'uvx', args: ['mcp-grafana'], envChanges: {
+        set: { GRAFANA_URL: 'https://example.test', GRAFANA_SERVICE_ACCOUNT_TOKEN: 'invalid-test-only-secret' }, remove: [],
+      } };
+    expect(await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, config)).toEqual({ ok: true });
+    const listed = await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST);
+    expect(listed).toEqual({ servers: [{ id: config.id, name: config.name, transport: 'stdio', command: 'uvx',
+      args: ['mcp-grafana'], envKeys: ['GRAFANA_SERVICE_ACCOUNT_TOKEN', 'GRAFANA_URL'] }] });
+    expect(JSON.stringify(listed)).not.toContain('invalid-test-only-secret');
+    expect(await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, { ...config, name: 'Renamed',
+      envChanges: { set: {}, remove: ['GRAFANA_URL'] } })).toEqual({ ok: true });
+    expect((await listCustomMcpServers())[0]).toMatchObject({ name: 'Renamed', env: { GRAFANA_SERVICE_ACCOUNT_TOKEN: 'invalid-test-only-secret' } });
+    expect(await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_LIST)).toMatchObject({ servers: [{ envKeys: ['GRAFANA_SERVICE_ACCOUNT_TOKEN'] }] });
+  });
+
+  it('rejects untrusted stdio configuration and plaintext readback attempts', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerMcpHandlers(harness, makeDeps());
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, { id: 'local', name: 'Local', transport: 'stdio',
+      command: 'uvx', args: [], env: { TOKEN: 'invalid-secret' } })).rejects.toThrow(/INVALID_PARAMS/);
+    vi.mocked(assertTrustedAppRendererEvent).mockImplementation(() => { throw new Error('[PERMISSION_DENIED]'); });
+    for (const channel of [MAKER_INVOKE.MCP_CUSTOM_CREATE, MAKER_INVOKE.MCP_CUSTOM_UPDATE,
+      MAKER_INVOKE.MCP_CUSTOM_LIST, MAKER_INVOKE.MCP_CUSTOM_DELETE, MAKER_INVOKE.MCP_CUSTOM_REFRESH]) {
+      await expect(harness.invoke(channel, validConfig)).rejects.toThrow(/PERMISSION_DENIED/);
+    }
+    expect(await listCustomMcpServers()).toEqual([]);
+  });
+
   // PR #9055: unit IPC boundary; valid payload from an untrusted sender must neither
   // disclose connections nor persist a choice. The shared guard has its own frame tests.
   it('rejects untrusted duplicate reads and writes before accessing preferences', async () => {
@@ -137,7 +323,7 @@ describe('mcp:custom:* CRUD handlers', () => {
     'projects registered MCP availability for %s while preserving the configuration list',
     async (agentKind) => {
       mountDb();
-      const configs: CustomMcpConfig[] = [
+      const configs: CustomMcpRemoteConfig[] = [
         validConfig,
         { ...validConfig, id: 'events', transport: 'sse' },
         { ...validConfig, id: 'public-http', url: 'http://example.test/mcp' },
@@ -254,8 +440,6 @@ describe('mcp:custom:* CRUD handlers', () => {
     expect(await listCustomMcpServers()).toHaveLength(1);
     expect(deps.refreshProviders).toHaveBeenCalledOnce();
     expect(deps.broadcastChanged).toHaveBeenCalledOnce();
-    // Codex 侧失效:让新 codex 会话按新 MCP 配置重 spawn。
-    expect(deps.invalidateCodex).toHaveBeenCalledOnce();
   });
 
   // P1 integration: both production write handlers reject the engine-owned id
@@ -271,70 +455,25 @@ describe('mcp:custom:* CRUD handlers', () => {
     expect(await listCustomMcpServers()).toEqual([]);
     expect(deps.refreshProviders).not.toHaveBeenCalled();
     expect(deps.broadcastChanged).not.toHaveBeenCalled();
-    expect(deps.invalidateCodex).not.toHaveBeenCalled();
   });
 
-  it('a failing invalidateCodex does not fail the CRUD (best-effort)', async () => {
+  // Unit regression: saving a custom MCP used to invoke the shared-host
+  // retirement hook, closing even idle task Sessions. Exercise create/edit and
+  // token refresh through the production handlers; persistence must not retire them.
+  it('saves new and edited configurations without invoking the old session-retirement hook', async () => {
     mountDb();
     const harness = new IpcHarness();
-    const deps = makeDeps({
-      invalidateCodex: vi.fn(async () => {
-        throw new Error('busy codex session');
-      }),
-    });
+    const retireSessions = vi.fn(async () => {});
+    const deps = { ...makeDeps(), invalidateCodex: retireSessions };
     registerMcpHandlers(harness, deps);
-    // CRUD 已落库,Codex 失效抛错被吞,仍返回 ok。
     await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig)).resolves.toEqual({
       ok: true,
     });
-    expect(await listCustomMcpServers()).toHaveLength(1);
-    expect(deps.invalidateCodex).toHaveBeenCalledOnce();
-  });
-
-  it('retains persisted MCP edits during a control RPC and refreshes the latest config before next start', async () => {
-    mountDb();
-    let rpcBusy = true;
-    let bridgeConfig: CustomMcpConfig[] = [];
-    const shutdown = vi.fn(async () => { bridgeConfig = await listCustomMcpServers(); });
-    const restart = async (refresh: () => Promise<void>) => {
-      if (rpcBusy) throw new CodexCredentialModeSwitchBusyError([]);
-      await refresh();
-    };
-    const deferred = new DeferredCodexRestartService({
-      hasBusyLocalCodexSession: () => false,
-      listLocalCodexSessionIds: () => [],
-      restart: (applyRuntime) => restart(async () => {
-        if (await applyRuntime()) await shutdown();
-      }),
-    });
-    const harness = new IpcHarness();
-    registerMcpHandlers(harness, makeDeps({
-      invalidateCodex: async () => {
-        await refreshCodexMcpEnvironment({
-          restartCodex: restart,
-          shutdownCodexEnvironment: shutdown,
-          onDeferred: () => deferred.schedule('Custom MCP configuration changed'),
-        });
-      },
-    }));
-    try {
-      await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig);
-      const updated = { ...validConfig, url: 'https://updated.example.com/mcp' };
-      await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, updated);
-      expect(await listCustomMcpServers()).toEqual([expect.objectContaining(updated)]);
-      await deferred.flushBeforeLocalCodexSessionStart();
-      expect(deferred.isPending()).toBe(true);
-      expect(shutdown).not.toHaveBeenCalled();
-      expect(bridgeConfig).toEqual([]);
-
-      rpcBusy = false;
-      await deferred.flushBeforeLocalCodexSessionStart();
-      expect(deferred.isPending()).toBe(false);
-      expect(shutdown).toHaveBeenCalledOnce();
-      expect(bridgeConfig).toEqual([expect.objectContaining(updated)]);
-    } finally {
-      deferred.clear();
-    }
+    const updated = { ...validConfig, url: 'https://updated.example.com/mcp' };
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_UPDATE, updated)).resolves.toEqual({ ok: true });
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_REFRESH);
+    expect(await listCustomMcpServers()).toEqual([expect.objectContaining(updated)]);
+    expect(retireSessions).not.toHaveBeenCalled();
   });
 
   it('rejects invalid config (bad url) with INVALID_PARAMS and does not write', async () => {

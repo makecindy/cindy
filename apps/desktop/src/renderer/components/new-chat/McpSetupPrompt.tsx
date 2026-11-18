@@ -67,8 +67,8 @@ export function McpSetupPrompt({ request, teammate }: { request: McpSetupRequest
   };
   useEffect(() => {
     let current = true;
-    void listCustomMcpServers().then(servers => {
-      if (current) setIds(servers.map(server => server.id));
+    void listCustomMcpServers().then(result => {
+      if (current) setIds([...result.servers, ...(result.unreadableServers ?? [])].map(server => server.id));
     }).catch(() => {
       if (!current) return;
       toast.error(t('settings.mcp.toast.saveFailed'));

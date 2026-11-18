@@ -9545,21 +9545,23 @@
       }
     },
     "mcp": {
+      "unreadable": "Não foi possível ler a configuração guardada. Pode eliminá-la e adicioná-la novamente.",
+      "loadFailed": "Não foi possível carregar as configurações MCP. Tente novamente.",
       "title": "Ferramentas externas",
-      "subtitle": "Ligue os seus próprios servidores MCP remotos. Os servidores HTTP/Streamable HTTP funcionam com Claude e Codex; SSE apenas com Claude.",
+      "subtitle": "Ligue servidores HTTP/SSE remotos ou programas stdio locais.",
       "cancel": "Cancelar",
       "save": "Guardar",
       "editAria": "Editar",
       "deleteAria": "Eliminar",
       "addCustom": {
         "title": "Adicionar servidor MCP",
-        "subtitle": "Introduza um endpoint MCP remoto (http/sse)"
+        "subtitle": "Configure um endereço HTTP/SSE ou comando stdio"
       },
       "dialog": {
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Apenas MCP remoto http / sse. As novas sessões do Agent podem utilizá-lo após guardar; as sessões do Agent em curso não são afetadas.",
-        "teammateDesc": "Apenas MCP remoto http / sse. Depois de guardar, o seu amigo adiciona-o às ferramentas dele e pode utilizá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova sessão."
+        "desc": "Configure um servidor remoto ou programa local. Ao guardar, as tarefas existentes mantêm a configuração atual. As tarefas locais iniciadas depois carregarão as alterações.",
+        "teammateDesc": "Configure um servidor remoto ou programa local. Ao guardar, as tarefas existentes mantêm a configuração atual. As tarefas locais iniciadas depois carregarão as alterações."
       },
       "fields": {
         "name": "Nome apresentado",
@@ -9571,16 +9573,35 @@
         "tokenPlaceholder": "Introduza o token de autenticação",
         "tokenEditPlaceholder": "Deixe em branco para remover o token guardado",
         "tokenSaved": "Guardado",
-        "tokenHelp": "Utilizado para autenticação: Claude envia-o como um cabeçalho Authorization: Bearer; Codex apenas suporta autenticação Bearer.",
+        "tokenHelp": "Enviado pela Cindy como cabeçalho Authorization: Bearer.",
         "headers": "Cabeçalhos (opcional)",
         "headerNamePlaceholder": "Nome do cabeçalho",
         "headerValuePlaceholder": "Valor",
         "addHeader": "Adicionar cabeçalho",
-        "removeRow": "Remover linha"
+        "removeRow": "Remover linha",
+        "command": "Comando",
+        "commandHelp": "Nome ou caminho absoluto de um executável instalado. A Cindy inicia-o quando necessário.",
+        "args": "Argumentos",
+        "argsHelp": "Um argumento por linha. Os espaços e argumentos vazios são preservados; sem sintaxe shell.",
+        "cwd": "Diretório de trabalho (opcional)",
+        "cwdHelp": "Caminho absoluto no computador de execução. Deixe vazio para usar a sua pasta pessoal.",
+        "env": "Variáveis de ambiente (opcional)",
+        "envHelp": "Os valores são guardados com encriptação e não são devolvidos ao assistente. Remova uma linha para eliminar a variável.",
+        "envName": "Nome da variável",
+        "envValue": "Valor",
+        "envSaved": "Guardado; não altere para manter",
+        "addArg": "Adicionar argumento",
+        "removeArg": "Remover argumento",
+        "addEnv": "Adicionar variável",
+        "removeEnv": "Remover variável"
       },
       "errors": {
         "nameRequired": "O nome a apresentar é obrigatório",
-        "urlInvalid": "Introduza um URL http(s) válido"
+        "urlInvalid": "Introduza um URL http(s) válido",
+        "commandRequired": "Introduza o nome ou caminho absoluto de um executável",
+        "argsInvalid": "Os argumentos não podem conter NUL",
+        "cwdInvalid": "O diretório de trabalho não pode conter NUL",
+        "envInvalid": "Use nomes únicos com letras, algarismos ou sublinhados, começando por letra ou sublinhado. Os valores não podem conter NUL."
       },
       "toast": {
         "created": "Servidor MCP adicionado",

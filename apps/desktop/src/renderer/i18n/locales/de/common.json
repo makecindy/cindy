@@ -9471,21 +9471,23 @@
       }
     },
     "mcp": {
+      "unreadable": "Die gespeicherte Konfiguration ist nicht lesbar. Sie können sie löschen und erneut hinzufügen.",
+      "loadFailed": "MCP-Konfigurationen konnten nicht geladen werden. Bitte erneut versuchen.",
       "title": "Externe Tools",
-      "subtitle": "Verbinde deine eigenen Remote-MCP-Server. HTTP/Streamable HTTP-Server funktionieren mit Claude und Codex; SSE nur mit Claude.",
+      "subtitle": "Remote-HTTP/SSE-Server oder lokale stdio-Programme verbinden.",
       "cancel": "Abbrechen",
       "save": "Speichern",
       "editAria": "Bearbeiten",
       "deleteAria": "Löschen",
       "addCustom": {
         "title": "MCP-Server hinzufügen",
-        "subtitle": "Remote-MCP-Endpunkt eingeben (http/sse)"
+        "subtitle": "HTTP/SSE-Adresse oder stdio-Befehl konfigurieren"
       },
       "dialog": {
         "createTitle": "MCP-Server hinzufügen",
         "editTitle": "MCP-Server bearbeiten",
-        "desc": "Nur Remote-MCP über http / sse. Neue Agent-Sitzungen können ihn nach dem Speichern aufrufen; laufende Agent-Sitzungen bleiben unverändert.",
-        "teammateDesc": "Nur Remote-MCP über http / sse. Nach dem Speichern fügt dein Freund ihn seinen Werkzeugen hinzu und kann ihn ab der nächsten Nachricht in diesem Chat nutzen; eine neue Sitzung ist nicht nötig."
+        "desc": "Remote-Server oder lokales Programm konfigurieren. Bestehende Aufgaben laufen nach dem Speichern mit ihrer bisherigen Konfiguration weiter. Neu gestartete lokale Aufgaben laden die Änderungen.",
+        "teammateDesc": "Remote-Server oder lokales Programm konfigurieren. Bestehende Aufgaben laufen nach dem Speichern mit ihrer bisherigen Konfiguration weiter. Neu gestartete lokale Aufgaben laden die Änderungen."
       },
       "fields": {
         "name": "Anzeigename",
@@ -9497,16 +9499,35 @@
         "tokenPlaceholder": "Authentifizierungstoken eingeben",
         "tokenEditPlaceholder": "Leer lassen, um das gespeicherte Token zu entfernen",
         "tokenSaved": "Gespeichert",
-        "tokenHelp": "Zur Authentifizierung: Claude sendet es als Authorization: Bearer-Header; Codex unterstützt nur Bearer-Authentifizierung.",
+        "tokenHelp": "Cindy sendet ihn als Authorization: Bearer-Header.",
         "headers": "Header (optional)",
         "headerNamePlaceholder": "Header-Name",
         "headerValuePlaceholder": "Wert",
         "addHeader": "Header hinzufügen",
-        "removeRow": "Zeile entfernen"
+        "removeRow": "Zeile entfernen",
+        "command": "Befehl",
+        "commandHelp": "Name oder absoluter Pfad einer installierten Programmdatei. Cindy startet sie bei Bedarf.",
+        "args": "Argumente",
+        "argsHelp": "Ein Argument pro Zeile. Leerzeichen und leere Argumente bleiben erhalten; keine Shell-Syntax.",
+        "cwd": "Arbeitsverzeichnis (optional)",
+        "cwdHelp": "Absoluter Pfad auf dem ausführenden Computer. Leer lassen, um das Benutzerverzeichnis zu verwenden.",
+        "env": "Umgebungsvariablen (optional)",
+        "envHelp": "Werte werden verschlüsselt gespeichert und nicht an den Assistenten zurückgegeben. Eine Zeile entfernen, um die Variable zu löschen.",
+        "envName": "Variablenname",
+        "envValue": "Wert",
+        "envSaved": "Gespeichert; ohne Änderung beibehalten",
+        "addArg": "Argument hinzufügen",
+        "removeArg": "Argument entfernen",
+        "addEnv": "Variable hinzufügen",
+        "removeEnv": "Variable entfernen"
       },
       "errors": {
         "nameRequired": "Anzeigename ist erforderlich",
-        "urlInvalid": "Gib eine gültige http(s)-URL ein"
+        "urlInvalid": "Gib eine gültige http(s)-URL ein",
+        "commandRequired": "Programmname oder absoluten Pfad eingeben",
+        "argsInvalid": "Argumente dürfen kein NUL enthalten",
+        "cwdInvalid": "Das Arbeitsverzeichnis darf kein NUL enthalten",
+        "envInvalid": "Eindeutige Namen aus Buchstaben, Ziffern und Unterstrichen verwenden, beginnend mit Buchstabe oder Unterstrich. Werte dürfen kein NUL enthalten."
       },
       "toast": {
         "created": "MCP-Server hinzugefügt",

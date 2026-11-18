@@ -1,15 +1,19 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { McpServerDialog } from '../McpServerDialog';
+import { McpServersSection } from '../McpServersSection';
 
-const api = vi.hoisted(() => ({ create: vi.fn(), update: vi.fn(), read: vi.fn(), error: vi.fn() }));
+const api = vi.hoisted(() => ({ create: vi.fn(), update: vi.fn(), read: vi.fn(), error: vi.fn(), list: vi.fn(), delete: vi.fn(), confirm: vi.fn() }));
 vi.mock('@/lib/customMcpServers', () => ({
   createCustomMcpServer: api.create,
   updateCustomMcpServer: api.update,
   readCustomMcpToken: api.read,
+  listCustomMcpServers: api.list,
+  deleteCustomMcpServer: api.delete,
 }));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: api.confirm }) }));
 vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: api.error } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 const initial = {
@@ -33,7 +37,53 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   document.querySelector('[data-ds6-trigger]')?.remove();
+});
+
+// UI regression: an unreadable credential must retain an identifiable, deletable settings row.
+// Unit tier drives the real settings section; the IPC/store suites cover actual ciphertext decoding.
+it('keeps healthy rows editable and unreadable rows visible with deletion only', async () => {
+  api.list.mockResolvedValue({ servers: [initial], unreadableServers: [
+    { id: 'broken-local', name: 'Broken local', transport: 'stdio', reason: 'unreadable' },
+    { id: 'broken-remote', name: 'Broken remote', transport: 'http', reason: 'unreadable' },
+  ] });
+  api.confirm.mockResolvedValue(true);
+  api.delete.mockResolvedValue(undefined);
+  vi.stubGlobal('electronAPI', undefined);
+  window.electronAPI = { maker: {
+    onMcpChanged: () => () => {},
+    listMcpDuplicates: async () => ({ connections: [], complete: true }),
+  } } as unknown as typeof window.electronAPI;
+  render(<McpServersSection />);
+  await screen.findByText('Broken local');
+  expect(within(screen.getByRole('group', { name: 'Example' })).getByRole('button', { name: 'settings.mcp.editAria' })).toBeTruthy();
+  for (const [name, id] of [['Broken local', 'broken-local'], ['Broken remote', 'broken-remote']]) {
+    const row = within(screen.getByRole('group', { name }));
+    expect(row.getByText('settings.mcp.unreadable')).toBeTruthy();
+    expect(row.queryByRole('button', { name: 'settings.mcp.editAria' })).toBeNull();
+    fireEvent.click(row.getByRole('button', { name: 'settings.mcp.deleteAria' }));
+    await waitFor(() => expect(api.delete).toHaveBeenLastCalledWith(id));
+  }
+});
+
+it('retains the last visible settings list on a failed read and offers an explicit retry', async () => {
+  const changes = new Set<() => void>();
+  api.list.mockResolvedValue({ servers: [initial] });
+  vi.stubGlobal('electronAPI', undefined);
+  window.electronAPI = { maker: {
+    onMcpChanged: (listener: () => void) => { changes.add(listener); return () => changes.delete(listener); },
+    listMcpDuplicates: async () => ({ connections: [], complete: true }),
+  } } as unknown as typeof window.electronAPI;
+  render(<McpServersSection />);
+  await screen.findByText('Example');
+  api.list.mockRejectedValueOnce(new Error('private-db-detail'));
+  await act(async () => { for (const listener of changes) listener(); });
+  expect(screen.getByText('Example')).toBeTruthy();
+  expect(screen.getByRole('alert').textContent).toContain('settings.mcp.loadFailed');
+  expect(document.body.textContent).not.toContain('private-db-detail');
+  fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
+  await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
 });
 
 it('associates field errors and focuses the first invalid field without sending a request', async () => {
@@ -208,6 +258,68 @@ it('saves through a supplied persistence without touching this computer or its c
     url: '',
     headers: {},
   });
+  expect(screen.queryByRole('radio', { name: 'stdio' })).toBeNull();
   expect(persistence.create).not.toHaveBeenCalled();
   for (const local of [api.read, api.create, api.update]) expect(local).not.toHaveBeenCalled();
+});
+
+// Unit: stdio uses argv without shell parsing and write-only env changes, while remote drafts stay separate.
+it('saves stdio suggestions with exact arguments and user-entered environment values', async () => {
+  const onSaved = vi.fn();
+  render(<McpServerDialog proposal={{ name: 'Grafana', transport: 'stdio', command: 'uvx',
+    args: ['mcp-grafana'], envKeys: ['GRAFANA_URL', 'GRAFANA_SERVICE_ACCOUNT_TOKEN'] }}
+    onSaved={onSaved} onClose={vi.fn()} />);
+  expect(screen.queryByLabelText('settings.mcp.fields.url')).toBeNull();
+  change('cwd', '/fixture/work');
+  fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.fields.addArg' }));
+  fireEvent.change(screen.getByLabelText('settings.mcp.fields.args 2'), { target: { value: ' a b ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.fields.addArg' }));
+  fireEvent.change(screen.getByLabelText('settings.mcp.fields.envValue 1'), { target: { value: 'https://example.test' } });
+  const secret = screen.getByLabelText('settings.mcp.fields.envValue 2') as HTMLInputElement;
+  expect(secret.type).toBe('password');
+  fireEvent.change(secret, { target: { value: ' test-invalid-token ' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(onSaved).toHaveBeenCalledWith('custom_grafana'));
+  expect(api.create).toHaveBeenCalledExactlyOnceWith({ id: 'custom_grafana', name: 'Grafana', transport: 'stdio',
+    command: 'uvx', args: ['mcp-grafana', ' a b ', ''], cwd: '/fixture/work',
+    envChanges: { set: { GRAFANA_URL: 'https://example.test', GRAFANA_SERVICE_ACCOUNT_TOKEN: ' test-invalid-token ' }, remove: [] } }, '');
+  expect(api.read).not.toHaveBeenCalled();
+});
+
+it('preserves untouched env, explicitly removes a row and replaces only the edited value', async () => {
+  const config = { id: 'custom_stdio', name: 'Local', transport: 'stdio' as const, command: 'uvx',
+    args: ['mcp-grafana'], envKeys: ['KEEP', 'REMOVE', 'REPLACE'] };
+  api.update.mockRejectedValueOnce(new Error('Retry'));
+  render(<McpServerDialog initial={config} onSaved={vi.fn()} onClose={vi.fn()} />);
+  expect((screen.getByLabelText('settings.mcp.fields.envValue 1') as HTMLInputElement).value).toBe('');
+  fireEvent.click(save());
+  await waitFor(() => expect(api.error).toHaveBeenCalled());
+  expect(api.update).toHaveBeenLastCalledWith({ id: config.id, name: config.name, command: config.command,
+    args: config.args, transport: 'stdio', envChanges: { set: {}, remove: [] } }, '', false);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.fields.removeEnv 2' }));
+  fireEvent.change(screen.getByLabelText('settings.mcp.fields.envValue 2'), { target: { value: 'new-invalid-value' } });
+  // Clearing an explicitly changed value means an empty env value, not deletion or fallback to the old value.
+  fireEvent.change(screen.getByLabelText('settings.mcp.fields.envValue 2'), { target: { value: '' } });
+  fireEvent.click(save());
+  await waitFor(() => expect(api.update).toHaveBeenCalledTimes(2));
+  expect(api.update.mock.calls[1][0].envChanges).toEqual({ set: { REPLACE: '' }, remove: ['REMOVE'] });
+  expect(api.read).not.toHaveBeenCalled();
+});
+
+it('validates stdio fields and never sends inactive transport fields', async () => {
+  render(<McpServerDialog proposal={{ name: 'Example', transport: 'stdio', envKeys: ['TOKEN', 'TOKEN'] }}
+    onSaved={vi.fn()} onClose={vi.fn()} />);
+  fireEvent.click(save());
+  expect(document.activeElement).toBe(field('command'));
+  expect(api.create).not.toHaveBeenCalled();
+  change('command', 'uvx');
+  fireEvent.click(save());
+  expect(screen.getByText('settings.mcp.errors.envInvalid')).toBeTruthy();
+  expect(api.create).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('radio', { name: 'http' }));
+  change('url', 'https://example.test/mcp');
+  fireEvent.click(save());
+  await waitFor(() => expect(api.create).toHaveBeenCalledOnce());
+  expect(api.create.mock.calls[0][0]).toEqual({ id: 'custom_example', name: 'Example',
+    transport: 'http', url: 'https://example.test/mcp', headers: {} });
 });

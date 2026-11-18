@@ -3158,7 +3158,9 @@ export function resetMaker(): void {
   setAnthropicModelProbe(null);
   _initialCustomMcpRefresh = undefined;
   resetPluginRegistry();
-  resetCustomMcpRegistry();
+  void resetCustomMcpRegistry().catch(() => {
+    desktopMakerLogger.warn('custom MCP process cleanup failed');
+  });
   // 轮 27 MEDIUM-2:resetMaker 是 account 边界收口 —— PI bridge 必须一并
   // 失效, 否则旧账号的 MCP server factories 残留(显式耦合, 防未来新调用点
   // 漏掉 teardownAuthAccountBoundary 链上的 shutdownPiEnvironment)。

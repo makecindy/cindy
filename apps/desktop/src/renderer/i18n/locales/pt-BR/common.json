@@ -9545,21 +9545,23 @@
       }
     },
     "mcp": {
+      "unreadable": "Não foi possível ler a configuração salva. Você pode excluí-la e adicioná-la novamente.",
+      "loadFailed": "Não foi possível carregar as configurações MCP. Tente novamente.",
       "title": "Ferramentas externas",
-      "subtitle": "Conecte seus próprios servidores MCP remotos. Servidores HTTP/Streamable HTTP funcionam com Claude e Codex; SSE funciona apenas com Claude.",
+      "subtitle": "Conecte servidores HTTP/SSE remotos ou programas stdio locais.",
       "cancel": "Cancelar",
       "save": "Salvar",
       "editAria": "Editar",
       "deleteAria": "Excluir",
       "addCustom": {
         "title": "Adicionar servidor MCP",
-        "subtitle": "Insira um endpoint MCP remoto (http/sse)"
+        "subtitle": "Configure um endereço HTTP/SSE ou comando stdio"
       },
       "dialog": {
         "createTitle": "Adicionar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Apenas MCP remoto http / sse. Novas sessões do Agent poderão chamá-lo após salvar; as sessões do Agent em andamento não serão afetadas.",
-        "teammateDesc": "Apenas MCP remoto http / sse. Depois de salvar, seu amigo o adiciona às ferramentas dele e pode usá-lo a partir da próxima mensagem desta conversa, sem precisar de uma nova Sessão."
+        "desc": "Configure um servidor remoto ou programa local. Ao salvar, as tarefas existentes mantêm a configuração atual. As tarefas locais iniciadas depois carregarão as alterações.",
+        "teammateDesc": "Configure um servidor remoto ou programa local. Ao salvar, as tarefas existentes mantêm a configuração atual. As tarefas locais iniciadas depois carregarão as alterações."
       },
       "fields": {
         "name": "Nome de exibição",
@@ -9571,16 +9573,35 @@
         "tokenPlaceholder": "Insira o token de autenticação",
         "tokenEditPlaceholder": "Deixe em branco para remover o token salvo",
         "tokenSaved": "Salvo",
-        "tokenHelp": "Usado para autenticação: Claude o envia como um cabeçalho Authorization: Bearer; Codex só oferece suporte à autenticação Bearer.",
+        "tokenHelp": "Enviado pela Cindy como cabeçalho Authorization: Bearer.",
         "headers": "Cabeçalhos (opcional)",
         "headerNamePlaceholder": "Nome do cabeçalho",
         "headerValuePlaceholder": "Valor",
         "addHeader": "Adicionar cabeçalho",
-        "removeRow": "Remover linha"
+        "removeRow": "Remover linha",
+        "command": "Comando",
+        "commandHelp": "Nome ou caminho absoluto de um executável instalado. A Cindy o inicia quando necessário.",
+        "args": "Argumentos",
+        "argsHelp": "Um argumento por linha. Espaços e argumentos vazios são preservados; sem sintaxe de shell.",
+        "cwd": "Diretório de trabalho (opcional)",
+        "cwdHelp": "Caminho absoluto no computador de execução. Deixe em branco para usar sua pasta pessoal.",
+        "env": "Variáveis de ambiente (opcional)",
+        "envHelp": "Os valores são salvos com criptografia e não são retornados ao assistente. Remova uma linha para excluir a variável.",
+        "envName": "Nome da variável",
+        "envValue": "Valor",
+        "envSaved": "Salvo; não altere para manter",
+        "addArg": "Adicionar argumento",
+        "removeArg": "Remover argumento",
+        "addEnv": "Adicionar variável",
+        "removeEnv": "Remover variável"
       },
       "errors": {
         "nameRequired": "O nome de exibição é obrigatório",
-        "urlInvalid": "Insira uma URL http(s) válida"
+        "urlInvalid": "Insira uma URL http(s) válida",
+        "commandRequired": "Insira o nome ou caminho absoluto de um executável",
+        "argsInvalid": "Os argumentos não podem conter NUL",
+        "cwdInvalid": "O diretório de trabalho não pode conter NUL",
+        "envInvalid": "Use nomes únicos com letras, dígitos ou sublinhados, começando por letra ou sublinhado. Os valores não podem conter NUL."
       },
       "toast": {
         "created": "Servidor MCP adicionado",

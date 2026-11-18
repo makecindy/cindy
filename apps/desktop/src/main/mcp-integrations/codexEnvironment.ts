@@ -9,6 +9,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Logger, McpProvider, McpProviderContext } from '@cindy/maker-core';
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
+import { CustomMcpProvider } from './custom-mcp-provider.js';
 import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plugins.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
@@ -255,6 +256,15 @@ function unregisterCodexMcpThreadContext(
 
 const TELEGRAM_BOT_MCP_SERVER_NAME = 'cindy_telegram_bot';
 
+function createSdkServer(provider: McpProvider, context: McpProviderContext): McpServer {
+  const config = provider.toClaudeSdkConfig?.(context) as
+    | { type?: string; instance?: McpServer }
+    | undefined;
+  if (config?.type !== 'sdk' || !config.instance)
+    throw new Error(`provider ${provider.name} did not return an SDK McpServer instance`);
+  return config.instance;
+}
+
 async function doStart(
   opts: GetCodexExtraSpawnConfigOptions,
 ): Promise<CodexExtraSpawnConfig> {
@@ -307,8 +317,13 @@ async function doStart(
     { url: string; bearerTokenEnvVar?: string; envHttpHeaders?: Record<string, string> }
   > = Object.create(null);
   const extraEnv: Record<string, string> = {};
-  for (const provider of opts.mcpProviders) {
+  // The registry can publish another catalog while getExtraEnv is pending.
+  // Classify spawn entries against the same snapshot used to select providers.
+  const initialRegistered = new Set(appServerIds());
+  const initialFactories = new WeakMap<McpProvider, () => McpServer>();
+  for (const provider of [...opts.mcpProviders]) {
     if (provider.isEnabled && !provider.isEnabled(ctx)) continue;
+    if (provider instanceof CustomMcpProvider && provider.supportsApps && !initialRegistered.has(provider.name)) continue;
 
     const providerEnv = await provider.getExtraEnv?.(ctx);
     if (providerEnv) Object.assign(extraEnv, providerEnv);
@@ -332,23 +347,10 @@ async function doStart(
       continue;
     }
 
-    const toClaudeSdkConfig = provider.toClaudeSdkConfig;
-    if (!toClaudeSdkConfig) continue;
-
-    const createServer = (startup?: LiziMcpSessionContext): McpServer => {
-      // Class providers read instance state, including when creating later client facades.
-      const cfg = toClaudeSdkConfig.call(provider, startup
-        ? { ...ctx, ...startup, agentKind: ctx.agentKind, getSessionContext: ctx.getSessionContext }
-        : ctx) as
-        | { type?: string; name?: string; instance?: unknown }
-        | null;
-      if (cfg?.type !== 'sdk' || !cfg.instance) {
-        throw new Error(
-          `provider ${provider.name} did not return an SDK McpServer instance`,
-        );
-      }
-      return cfg.instance as McpServer;
-    };
+    if (!provider.toClaudeSdkConfig) continue;
+    const createServer = (startup?: LiziMcpSessionContext) => createSdkServer(provider, startup
+      ? { ...ctx, ...startup, agentKind: ctx.agentKind, getSessionContext: ctx.getSessionContext }
+      : ctx);
 
     let firstInstance: McpServer | null;
     try {
@@ -370,6 +372,7 @@ async function doStart(
       }
       return createServer();
     };
+    if (initialRegistered.has(provider.name)) initialFactories.set(provider, serverFactories[provider.name]);
     const pluginId = pluginIdForKnownProviderName(provider.name);
     if (pluginId) pluginIdByServerName[provider.name] = pluginId;
   }
@@ -380,10 +383,11 @@ async function doStart(
 
   // 只有存在 in-process SDK server 时才起 HTTP bridge；纯远程 MCP (如 Slack 官方)
   // 不需要 bridge，bridge 保持 null。
+  const initialAppNames = Object.keys(serverFactories).filter(name => initialRegistered.has(name));
   const bridge = Object.keys(serverFactories).length > 0
     ? await startCodexHttpBridge({
         serverFactories,
-        appServerNames: Object.keys(serverFactories).filter(name => appServerIds().includes(name)),
+        appServerNames: initialAppNames,
         pluginIdByServerName,
         // 远端常驻 daemon 经 SSH remote-forward 直连本 bridge:接受 persistent
         // token (safeStorage, 跨 app 重启稳定)。函数形式读取,token 首用时惰性
@@ -398,6 +402,31 @@ async function doStart(
   const bridgeServerNames = Object.keys(serverFactories);
   activeBridge = bridge;
   activeBridgeServerNames = bridge ? bridgeServerNames : null;
+
+  // Spawn options and remote advertisements use the original catalog. Local
+  // threads can supply a complete HTTP MCP entry to the running app-server.
+  const fixedNames = bridgeServerNames.filter(name => !initialAppNames.includes(name));
+  function buildLocalRoutes(instanceId: string, vendorOptions?: Record<string, unknown>) {
+    const registered = new Set(appServerIds());
+    const factories: Record<string, () => McpServer> = Object.create(null);
+    const config: Record<string, unknown> = {};
+    for (const name of fixedNames) {
+      config[`mcp_servers.${name}.url`] = withMcpRouteIdentity(bridge!.url(name), { sessionInstanceId: instanceId });
+    }
+    for (const provider of opts.mcpProviders) {
+      if (!(provider instanceof CustomMcpProvider) || !provider.supportsApps || !registered.has(provider.name)) continue;
+      const name = provider.name;
+      factories[name] = initialFactories.get(provider) ?? (() => createSdkServer(provider, ctx));
+      const key = `mcp_servers.${name}`;
+      config[`${key}.url`] = withMcpRouteIdentity(bridge!.url(name), { sessionInstanceId: instanceId });
+      config[`${key}.bearer_token_env_var`] = TOKEN_ENV;
+      config[`${key}.startup_timeout_sec`] = MCP_TIMEOUT_SEC;
+      config[`${key}.tool_timeout_sec`] = MCP_TIMEOUT_SEC;
+      config[`${key}.enabled`] = isFrozenMcpServerAllowed(vendorOptions, name);
+    }
+    bridge!.replaceAppServerFactories(factories);
+    return config;
+  }
 
   const extraArgs: string[] = [];
   // 远程 MCP server：直接把 codex 指向远端 URL，token 走 env (bearer_token_env_var)。
@@ -423,7 +452,7 @@ async function doStart(
     // bearer_token_env_var 让 codex 从 env 读 token，不暴露在 process args。
     extraArgs.push('-c', `mcp_servers.${name}.url="${url}"`);
     extraArgs.push('-c', `mcp_servers.${name}.bearer_token_env_var="${TOKEN_ENV}"`);
-    if (appServerIds().includes(name)) extraArgs.push('-c', `mcp_servers.${name}.enabled=false`);
+    if (initialRegistered.has(name)) extraArgs.push('-c', `mcp_servers.${name}.enabled=false`);
     extraArgs.push('-c', `mcp_servers.${name}.startup_timeout_sec=${MCP_TIMEOUT_SEC}`);
     extraArgs.push('-c', `mcp_servers.${name}.tool_timeout_sec=${MCP_TIMEOUT_SEC}`);
   }
@@ -449,14 +478,7 @@ async function doStart(
             sessionInstanceId: string,
             session?: { vendorOptions?: Record<string, unknown> },
           ) => ({
-            ...Object.fromEntries(
-              bridgeServerNames.map((name) => [
-                `mcp_servers.${name}.url`,
-                withMcpRouteIdentity(bridge.url(name), { sessionInstanceId }),
-              ]),
-            ),
-            ...Object.fromEntries(bridgeServerNames.filter((name) => appServerIds().includes(name))
-              .map((name) => [`mcp_servers.${name}.enabled`, isFrozenMcpServerAllowed(session?.vendorOptions, name)])),
+            ...buildLocalRoutes(sessionInstanceId, session?.vendorOptions),
             // Cindy Make 个人版工具:app-server 共享一份 spawn 级 transport,只能按
             // 线程关。transport 与本 config 同源(上面刚写了 url),所以 enabled=false
             // 不会落成"只有 enabled 没有 transport"的非法条目(codex 先解析 transport)。

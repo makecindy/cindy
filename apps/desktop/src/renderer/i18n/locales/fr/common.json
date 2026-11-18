@@ -9545,21 +9545,23 @@
       }
     },
     "mcp": {
+      "unreadable": "La configuration enregistrée est illisible. Vous pouvez la supprimer et la recréer.",
+      "loadFailed": "Impossible de charger les configurations MCP. Réessayez.",
       "title": "Outils externes",
-      "subtitle": "Connectez vos propres serveurs MCP distants. Les serveurs HTTP/Streamable HTTP fonctionnent avec Claude et Codex ; SSE est réservé à Claude.",
+      "subtitle": "Connectez des serveurs HTTP/SSE distants ou des programmes stdio locaux.",
       "cancel": "Annuler",
       "save": "Enregistrer",
       "editAria": "Modifier",
       "deleteAria": "Supprimer",
       "addCustom": {
         "title": "Ajouter un serveur MCP",
-        "subtitle": "Saisissez un endpoint MCP distant (http/sse)"
+        "subtitle": "Configurer une adresse HTTP/SSE ou une commande stdio"
       },
       "dialog": {
         "createTitle": "Ajouter un serveur MCP",
         "editTitle": "Modifier le serveur MCP",
-        "desc": "MCP distant http / sse uniquement. Les nouvelles sessions peuvent l'appeler après l'enregistrement ; les sessions en cours ne sont pas affectées.",
-        "teammateDesc": "MCP distant http / sse uniquement. Après l'enregistrement, votre ami l'ajoute à ses outils et peut l'utiliser dès le prochain message de cette conversation, sans nouvelle session."
+        "desc": "Configurez un serveur distant ou un programme local. L’enregistrement préserve la configuration des tâches existantes. Les tâches locales démarrées ensuite chargent les modifications.",
+        "teammateDesc": "Configurez un serveur distant ou un programme local. L’enregistrement préserve la configuration des tâches existantes. Les tâches locales démarrées ensuite chargent les modifications."
       },
       "fields": {
         "name": "Nom d'affichage",
@@ -9571,16 +9573,35 @@
         "tokenPlaceholder": "Saisissez le jeton d'authentification",
         "tokenEditPlaceholder": "Laissez vide pour supprimer le jeton enregistré",
         "tokenSaved": "Enregistré",
-        "tokenHelp": "Utilisé pour l'authentification : Claude l'envoie dans un en-tête Authorization: Bearer ; Codex ne prend en charge que l'authentification Bearer.",
+        "tokenHelp": "Envoyé par Cindy dans l’en-tête Authorization: Bearer.",
         "headers": "En-têtes (facultatif)",
         "headerNamePlaceholder": "Nom de l'en-tête",
         "headerValuePlaceholder": "Valeur",
         "addHeader": "Ajouter un en-tête",
-        "removeRow": "Retirer la ligne"
+        "removeRow": "Retirer la ligne",
+        "command": "Commande",
+        "commandHelp": "Nom ou chemin absolu d’un exécutable installé. Cindy le lance au besoin.",
+        "args": "Arguments",
+        "argsHelp": "Un argument par ligne. Espaces et arguments vides conservés ; sans syntaxe shell.",
+        "cwd": "Répertoire de travail (facultatif)",
+        "cwdHelp": "Chemin absolu sur l’ordinateur d’exécution. Vide, votre répertoire personnel est utilisé.",
+        "env": "Variables d’environnement (facultatif)",
+        "envHelp": "Les valeurs sont chiffrées et ne sont pas renvoyées à l’assistant. Supprimez une ligne pour supprimer la variable.",
+        "envName": "Nom de la variable",
+        "envValue": "Valeur",
+        "envSaved": "Enregistrée ; ne pas modifier pour conserver",
+        "addArg": "Ajouter un argument",
+        "removeArg": "Supprimer l’argument",
+        "addEnv": "Ajouter une variable",
+        "removeEnv": "Supprimer la variable"
       },
       "errors": {
         "nameRequired": "Le nom d'affichage est obligatoire",
-        "urlInvalid": "Saisissez une URL http(s) valide"
+        "urlInvalid": "Saisissez une URL http(s) valide",
+        "commandRequired": "Saisissez le nom ou le chemin absolu d’un exécutable",
+        "argsInvalid": "Les arguments ne peuvent pas contenir NUL",
+        "cwdInvalid": "Le répertoire de travail ne peut pas contenir NUL",
+        "envInvalid": "Utilisez des noms uniques composés de lettres, chiffres ou tirets bas, commençant par une lettre ou un tiret bas. Les valeurs ne peuvent pas contenir NUL."
       },
       "toast": {
         "created": "Serveur MCP ajouté",

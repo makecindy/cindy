@@ -20,9 +20,9 @@ const HARNESS_READ_TIMEOUT_MS = 8_000;
 const TOOL_DESCRIPTION_MAX_CHARS = 300;
 
 const HARNESS_STATE_MESSAGES: Record<Exclude<AgentMcpServerToolsState, 'connected'>, string> = {
-  'not-mounted': '当前任务的引擎中没有挂载此服务，通常是任务开始后才添加或修改了它；新建任务后再试。',
+  'not-mounted': '当前任务的运行环境尚未加载此服务。保存配置不会改变已有任务的工具清单；新启动的本机任务会加载更新。请在新启动的本机任务中重新查询工具。',
   'no-tools': '当前任务未报告此服务的工具，可能是服务不适用于当前任务、尚未连接完成、连接失败或服务本身没有工具。仅凭空工具列表无法判断连接故障；请先核对服务用途和适用条件。',
-  failed: '引擎连接此服务失败。请在设置中检查该 MCP 的地址与连接状态，修正后新建任务再试。',
+  failed: '引擎连接此服务失败。请核对该 MCP 的连接或启动配置。修正后，在新启动的本机任务中重新查询工具；已有任务不会因保存配置而中断。',
   'needs-auth': '此服务需要先完成授权，引擎才能取得它的工具。',
   pending: '引擎仍在连接此服务，稍后再查询。',
   disabled: '此服务在当前任务的引擎中已被停用。',
@@ -70,7 +70,11 @@ export async function readAgentCapabilityCatalog(
   };
   const declaration = declarations.find((item) => item.server === query.server);
   if (!declaration) return { ok: false, errorCode: 'UNKNOWN_CAPABILITY', available: declarations.map((item) => item.server) };
-  if (declaration.status === 'unavailable') return { ok: false, capability: declaration };
+  if (declaration.status === 'unavailable') return {
+    ok: false, capability: declaration,
+    ...(declaration.reason === 'not-mounted-in-current-runtime' && !context.remoteHostId
+      ? { message: HARNESS_STATE_MESSAGES['not-mounted'] } : {}),
+  };
   // External connections are owned by the harness; never start another process,
   // inspect its credentials or execute a custom server's business operations.
   if (declaration.source !== 'builtin') return readHarnessCapability(declaration, readHarnessTools, query);

@@ -225,13 +225,16 @@ async function fixture(
         headers: { 'x-test-revision': 'changed' },
       }));
     },
+    invalidateConfig: () => {
+      registerAppServer(config.id, () => { throw new Error('Invalid saved configuration'); });
+    },
   };
 }
 
-const revocations = ['owner', 'server', 'config'] as const;
+const revocations = ['owner', 'server', 'invalid config'] as const;
 function revoke(f: Awaited<ReturnType<typeof fixture>>, kind: (typeof revocations)[number]) {
   if (kind === 'owner') f.changeOwner();
-  else if (kind === 'config') f.changeConfig();
+  else if (kind === 'invalid config') f.invalidateConfig();
   else clearAppServerConfigs();
 }
 
@@ -254,6 +257,23 @@ describe('ordinary MCP downstream client callbacks', () => {
     roots: { listChanged: true }, sampling: {}, elicitation: { form: {} },
     extensions: { 'example/client': {} },
   };
+
+  it.each(['http', 'sse'] as const)('finishes an in-flight %s call and keeps the task endpoint after settings edits', async transport => {
+    const f = await fixture(transport);
+    let finish!: () => void;
+    callTool.mockImplementationOnce(() => new Promise(resolve => {
+      finish = () => resolve({ content: [{ type: 'text', text: 'completed once' }] });
+    }));
+    const pending = f.client.callTool({ name: 'plain' });
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    f.changeConfig();
+    f.config.url += '/next-task-only';
+    finish();
+    expect((await pending).content).toEqual([{ type: 'text', text: 'completed once' }]);
+    expect((await f.client.callTool({ name: 'plain' })).content)
+      .toEqual([{ type: 'text', text: 'plain result' }]);
+    expect(callTool).toHaveBeenCalledTimes(2);
+  });
 
   it.each(['http', 'sse'] as const)('preserves declared capabilities and callbacks over %s', async (transport) => {
     const roots = vi.fn(async () => ({ roots: [{ uri: 'file:///fixture/project' }] }));

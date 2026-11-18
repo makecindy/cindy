@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { parseSetupSnapshot, serializedSetupSnapshotBytes } from '@cindy/device-link';
+import { parseSetupSnapshot, serializedSetupSnapshotBytes, SETUP_SNAPSHOT_LIMITS } from '@cindy/device-link';
 
 import {
   collectSetupSnapshot,
@@ -57,6 +57,20 @@ describe('collectSetupSnapshot', () => {
       settings: [{ id: group.id, platforms: group.platforms, customized: {} }],
     }));
     expect(plan.settings).toMatchObject([{ id: group.id, state: 'ready', changeCount: 1 }]);
+  });
+
+  // Stdio manual-setup contract: v1 migration cannot recreate a local executable/environment.
+  // Existing credential tests only cover remote URLs. Unit, one local and one remote source.
+  it('keeps remote MCP migration and explicitly marks omitted stdio configuration incomplete', async () => {
+    const local = { transport: 'stdio' as const, env: { GRAFANA_SERVICE_ACCOUNT_TOKEN: 'invalid-test-only-secret' } };
+    const result = await collectSetupSnapshot(deps({ readMcpServers: async () => [
+      ...Array.from({ length: SETUP_SNAPSHOT_LIMITS.mcpServers }, () => local),
+      { id: 'remote', name: 'Remote', transport: 'http', url: 'https://example.test/mcp', headers: {}, hasToken: false },
+    ] }));
+    expect(result.mcpServers.map(server => server.id)).toEqual(['remote']);
+    expect(result.unavailable).toContain('mcpServers');
+    expect(JSON.stringify(result)).not.toContain('invalid-test-only-secret');
+    expect(parseSetupSnapshot(JSON.parse(JSON.stringify(result)))).toEqual(result);
   });
 
   it('exports changed settings for this platform and parses on the other side', async () => {
