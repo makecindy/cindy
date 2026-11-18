@@ -40,6 +40,16 @@ export default {
       about: 'New project uses the same settings form and does not create a task before saving',
       data: { create: true },
     },
+    intro: {
+      about: 'Someone with no project yet meets the introduction before the new-project form',
+      data: { create: true, intro: true },
+      viewport: { width: 1040, height: 760 },
+    },
+    'intro-once': {
+      about: 'Closing the introduction leads on to the form, and later openings go straight to the form',
+      data: { create: true, intro: true },
+      viewport: { width: 1040, height: 760 },
+    },
     header: {
       about: 'Click a task header project icon to edit its owning project, including worktrees',
       data: { header: true },
@@ -89,6 +99,32 @@ export default {
     // Real header and dialog, with a local specimen row. Existing dialog cases
     // cannot verify hover/focus visibility. ProjectsSection unit tests cover
     // local/remote target routing separately from this browser layout check.
+    if (ui.case === 'intro' || ui.case === 'intro-once') {
+      const intro = page.locator('[data-feature-intro]');
+      const name = page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true });
+      const add = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.newProject'), exact: true });
+      // The device row reveals its add action on hover.
+      const device = page.getByRole('button', { expanded: true });
+      await device.hover();
+      await add.click();
+      await page.getByText(await ui.t('featureIntro.project.lead'), { exact: true }).waitFor();
+      const overflow = await intro.locator('.first-run-cover').evaluate((cover) => cover.scrollHeight - cover.clientHeight);
+      if (overflow > 0) throw new Error(`The introduction must fit without scrolling (${overflow}px over)`);
+      // One dialog at a time: the form waits for the introduction instead of opening under it.
+      if (await name.count()) throw new Error('The form opened together with the introduction');
+      if (ui.case === 'intro') return;
+      await page.getByRole('button', { name: await ui.t('featureIntro.project.start'), exact: true }).click();
+      await intro.waitFor({ state: 'detached' });
+      await name.waitFor();
+      // Shown once: opening the form again on this computer goes straight to it.
+      await page.getByRole('button', { name: await ui.t('projectSettings.cancel'), exact: true }).last().click();
+      await name.waitFor({ state: 'detached' });
+      await device.hover();
+      await add.click();
+      await name.waitFor();
+      if (await intro.count()) throw new Error('The introduction appeared a second time');
+      return;
+    }
     if (ui.case === 'create-device') {
       const add = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.newProject'), exact: true });
       const wrapper = add.locator('..');

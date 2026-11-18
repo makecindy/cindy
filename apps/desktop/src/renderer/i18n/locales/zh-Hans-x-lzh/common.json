@@ -10957,6 +10957,8 @@
     "autosave": {
       "saving": "方存…",
       "saved": "已存",
+      "unconfirmed": "尚未核实存否",
+      "savedModel": "已存，下轮生效",
       "retry": "再存"
     },
     "retry": "再试",
@@ -11070,7 +11072,7 @@
       "discard": "弃所改",
       "continueEditing": "续修"
     },
-    "profileSaveFailed": "同伴之设未能存，变更未生效。",
+    "profileSaveFailed": "同伴之设未能存。",
     "profileSaveOffline": "同伴所在之电脑未能连通，请复连后再存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（今不可用）",
@@ -16820,6 +16822,7 @@
         "summaryAria": "览 PR #{{number}} 摘要",
         "unresolvedLabel": "未决之 review 评论",
         "checks": "查验",
+        "following": "正随之",
         "checksTotal": "凡 {{count}} 项",
         "failed": "未成",
         "passed": "已过",
@@ -21538,6 +21541,24 @@
   },
   "featureIntro": {
     "close": "闭",
+    "project": {
+      "title": "识案",
+      "lead": "久为之事，宜付一案。卷帙皆存此机一卷匣，Cindy 每承前功续之，无须再述原委。",
+      "files": {
+        "title": "所成皆君之卷",
+        "body": "Cindy 径于案之卷匣读写，所成皆存此机，随时可取。"
+      },
+      "context": {
+        "title": "无须再述",
+        "body": "于案中新开差事，Cindy 即见诸卷，亦循此案所记之约。"
+      },
+      "separate": {
+        "title": "诸事各归其案",
+        "body": "各案差事自成一列，异事不相扰，久别复来仍可续之。"
+      },
+      "start": "续立新案",
+      "note": "命名即可立案；既有卷匣或代码仓库亦可径用。"
+    },
     "taskInbox": {
       "title": "识收件箱",
       "lead": "任务依其状自分为待处理、进行中、待后处理、已处理。善用之道，在常清其箱：事毕者点「毕」，未及者待后处理。",
