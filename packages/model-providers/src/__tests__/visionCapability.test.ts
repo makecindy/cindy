@@ -1,7 +1,7 @@
 /**
  * visionCapability 三态判定测试。
  *
- * 覆盖：deepseek 系列 → no-vision（含带命名空间 / 裸 id / [1m] 后缀各种形态）；
+ * 覆盖：DeepSeek V4.1 Flash → vision；旧型号 → no-vision（含命名空间 / 裸 id / [1m]）；
  * claude/gpt/gemini → vision；未知 → unknown；codex/ 前缀归一化。
  */
 import { describe, expect, it } from 'vitest';
@@ -10,6 +10,8 @@ import {
   classifyVisionCapability,
   isKnownNoVisionModel,
   normalizeVisionModelId,
+  resolveExplicitVisionSupport,
+  resolveRouteVisionCapability,
 } from '../visionCapability.js';
 
 describe('normalizeVisionModelId', () => {
@@ -26,6 +28,29 @@ describe('normalizeVisionModelId', () => {
 });
 
 describe('classifyVisionCapability', () => {
+  // Regression: model details without explicit image metadata fell back to the
+  // DeepSeek family denylist, and Vision Bridge treated V4.1 Flash as text-only.
+  // Existing coverage only exercised old V4 IDs and explicit -vision markers.
+  // Minimal failing input: deepseek-flash. Tier: unit; public classifier output.
+  it.each([
+    'deepseek-flash',
+    'deepseek/deepseek-flash',
+    'deepseek-v4.1-flash',
+    'deepseek/deepseek-v4.1-flash',
+    'deepseek-flash[1m]',
+    'codex/deepseek-flash',
+  ])('recognizes native image input for %s', (model) => {
+    expect(classifyVisionCapability(model)).toBe('vision');
+    expect(isKnownNoVisionModel(model)).toBe(false);
+  });
+
+  it.each(['deepseek-flash-lite', 'deepseek-v4.1-flash-text'])(
+    'does not infer image input for an unverified Flash variant %s',
+    (model) => {
+      expect(classifyVisionCapability(model)).toBe('no-vision');
+    },
+  );
+
   it('classifies deepseek v4 series as no-vision (namespace + bare + suffix)', () => {
     expect(classifyVisionCapability('deepseek/deepseek-v4-pro')).toBe('no-vision');
     expect(classifyVisionCapability('deepseek/deepseek-v4-flash')).toBe('no-vision');
@@ -83,5 +108,30 @@ describe('classifyVisionCapability', () => {
   it('isKnownNoVisionModel helper', () => {
     expect(isKnownNoVisionModel('deepseek/deepseek-v4-flash')).toBe(true);
     expect(isKnownNoVisionModel('anthropic/claude-opus-4-8')).toBe(false);
+  });
+
+  // Bug/rule: explicit route capability overrides ID fallback, and routes without
+  // unverified image forwarding keep the bridge when metadata-free.
+  // Minimal failing input: deepseek-flash with supportsImageInput:false or unverified Chat route. Tier: unit.
+  it('prefers explicit route capability and keeps bridge when unverified forwarding is disallowed', () => {
+    expect(resolveExplicitVisionSupport({ supportsImageInput: false })).toBe(false);
+    expect(resolveExplicitVisionSupport({ modalities: { input: ['text', 'image'] } })).toBe(true);
+    expect(resolveExplicitVisionSupport({})).toBeUndefined();
+
+    expect(
+      resolveRouteVisionCapability({ id: 'deepseek-flash', supportsImageInput: false }),
+    ).toBe('no-vision');
+    expect(
+      resolveRouteVisionCapability(
+        { id: 'deepseek-flash' },
+        { allowsUnverifiedImageForwarding: false },
+      ),
+    ).toBe('no-vision');
+    expect(
+      resolveRouteVisionCapability(
+        { id: 'deepseek-flash', supportsImageInput: true },
+        { allowsUnverifiedImageForwarding: false },
+      ),
+    ).toBe('vision');
   });
 });

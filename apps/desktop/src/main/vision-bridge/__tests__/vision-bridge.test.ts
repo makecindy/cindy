@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserMessage } from '@cindy/maker-core';
 
 import { createVisionBridge } from '../vision-bridge.js';
+import { resolveProviderRouteVisionCapability } from '../../../shared/visionRouteCapability.js';
 import type { VisionBridgeSettings } from '../vision-bridge-settings-store.js';
 
 vi.mock('../vision-bridge-settings-store.js', () => ({
@@ -71,6 +72,72 @@ describe('createVisionBridge hook', () => {
     mockedTargetsCustomized.mockReturnValue(true);
     mockedDescribe.mockResolvedValue('explicit bridge');
     expect((await hook(msg, { model: 'deepseek-v4', sessionId: 's' })).applied).toBe(true);
+  });
+
+  // Bug/rule: PR #8451 P1 #discussion_r4544710845 & #discussion_r4542952804 —
+  // Both Layer B (hook) and Layer A (isTargetModel with routeContext) must keep the vision bridge
+  // when a Claude custom openai-chat relay has metadata-free deepseek-flash or when a route
+  // explicitly sets supportsImageInput: false, and skip it once native forwarding is declared.
+  it('keeps vision bridge on metadata-free Claude custom openai-chat and explicit no-image routes in both Layer A and Layer B', async () => {
+    mockedSettings.mockReturnValue({ ...baseSettings(), targetModels: [] });
+    mockedTargetsCustomized.mockReturnValue(false);
+    mockedDescribe.mockResolvedValue('bridged text');
+
+    const relayProvider = {
+      source: 'user' as const,
+      routing: {
+        'claude-code': {
+          upstream: 'https://relay.example.com/v1',
+          wireProtocol: 'openai-chat' as const,
+          authStrategy: 'api-key-header' as const,
+        },
+        codex: {
+          upstream: 'https://api.deepseek.com/v1',
+          wireProtocol: 'openai-chat' as const,
+          authStrategy: 'api-key-header' as const,
+        },
+      },
+    };
+    const routes: Record<string, { agent: 'claude-code' | 'codex'; model: import('@cindy/model-providers').CatalogModel }> = {
+      's-relay-unverified': {
+        agent: 'claude-code',
+        model: { id: 'deepseek-flash', name: 'DeepSeek Flash', contextWindow: 128_000, efforts: [], defaultEffort: null },
+      },
+      's-relay-verified': {
+        agent: 'claude-code',
+        model: { id: 'deepseek-flash', name: 'DeepSeek Flash', contextWindow: 128_000, efforts: [], defaultEffort: null, supportsImageInput: true },
+      },
+      's-codex-disabled': {
+        agent: 'codex',
+        model: { id: 'deepseek-flash', name: 'DeepSeek Flash', contextWindow: 128_000, efforts: [], defaultEffort: null, supportsImageInput: false },
+      },
+    };
+
+    const { hook, isTargetModel } = createVisionBridge({
+      getProviderById: () => null,
+      resolveTargetCapability: (_modelId, ctx) => {
+        const entry = ctx?.sessionId ? routes[ctx.sessionId] : undefined;
+        if (!entry) return null;
+        return resolveProviderRouteVisionCapability(relayProvider, entry.agent, entry.model);
+      },
+    });
+
+    // Metadata-free Claude custom openai-chat relay: both Layer A and Layer B keep bridging.
+    expect(isTargetModel('deepseek-flash', { sessionId: 's-relay-unverified' })).toBe(true);
+    const unverifiedRes = await hook(userMsg('hi', '/tmp/a.png'), { model: 'deepseek-flash', sessionId: 's-relay-unverified' });
+    expect(unverifiedRes.applied).toBe(true);
+
+    // Explicit supportsImageInput: true on the same relay: both Layer A and Layer B bypass bridging.
+    expect(isTargetModel('deepseek-flash', { sessionId: 's-relay-verified' })).toBe(false);
+    const verifiedMsg = userMsg('hi', '/tmp/a.png');
+    const verifiedRes = await hook(verifiedMsg, { model: 'deepseek-flash', sessionId: 's-relay-verified' });
+    expect(verifiedRes.applied).toBe(false);
+    expect(verifiedRes.message).toBe(verifiedMsg);
+
+    // Explicit supportsImageInput: false on Codex route: both Layer A and Layer B keep bridging.
+    expect(isTargetModel('deepseek-flash', { sessionId: 's-codex-disabled' })).toBe(true);
+    const codexRes = await hook(userMsg('hi', '/tmp/a.png'), { model: 'deepseek-flash', sessionId: 's-codex-disabled' });
+    expect(codexRes.applied).toBe(true);
   });
 
   it('passes through when disabled', async () => {

@@ -21,7 +21,14 @@ import { createHash } from 'node:crypto';
 import type { UserContentBlock, UserMessage } from '@cindy/maker-core';
 import type { VisionBridgeHook, VisionBridgeResult } from '@cindy/maker-core';
 
-import { isKnownNoVisionModel, normalizeVisionModelId, type CatalogModel } from '@cindy/model-providers';
+import {
+  isKnownNoVisionModel,
+  normalizeVisionModelId,
+  resolveExplicitVisionSupport,
+  type CatalogModel,
+  type VisionCapability,
+} from '@cindy/model-providers';
+import type { VisionBridgeRouteContext } from './vision-bridge-controller.js';
 
 import type { VisionBridgeSettings } from '../../shared/visionBridgeSettings.js';
 import {
@@ -42,6 +49,8 @@ export interface VisionBridgeDeps extends VisionChannelDeps {
   logger?: LoggerLike;
   /** Resolve only the current task route; never borrow metadata from another provider. */
   resolveTargetModel?: (modelId: string, sessionId: string) => CatalogModel | null;
+  /** Resolve route-aware vision capability for the active session/provider/agent route. */
+  resolveTargetCapability?: (modelId: string, routeContext?: VisionBridgeRouteContext) => VisionCapability | null;
   /** 视觉桥不可用 / fallback 生效时的提示回调（host 可据此发 UI 事件）。sessionId 由 hook ctx 传入。
    *  kind 是结构化原因（'unavailable' | 'fallback'），host 据此分流，不做字符串匹配。 */
   onNote?: (note: string, sessionId: string, kind: 'unavailable' | 'fallback') => void;
@@ -117,7 +126,7 @@ function buildBridgedMessage(
 export function createVisionBridge(deps: VisionBridgeDeps, settingsSource: VisionBridgeSettingsSource): {
   hook: VisionBridgeHook;
   /** 判定某 model 是否启用视觉桥（层 A proxy transform 复用）。 */
-  isTargetModel: (model: string) => boolean;
+  isTargetModel: (model: string, routeContextOrSessionId?: string | VisionBridgeRouteContext) => boolean;
   /** 描述一张图（层 A proxy transform / ghost 工具结果描述复用，imageUrl 或 imagePath 形态）。 */
   describeImage: (input: {
     imageUrl?: string;
@@ -168,49 +177,62 @@ export function createVisionBridge(deps: VisionBridgeDeps, settingsSource: Visio
   }
 
   /**
-   * 每个 model 最近一次记录的判定结果。isTargetModel 在每轮请求都会被调用（日志实测
-   * ~4k/天，几乎全是重复的 disabled），只在某 model 的判定结果变化时才写 debug 日志。
+   * 每个 model/route 最近一次记录的判定结果。isTargetModel 在每轮请求都会被调用（日志实测
+   * ~4k/天，几乎全是重复的 disabled），只在某 model/route 的判定结果变化时才写 debug 日志。
    */
   const lastTargetDecisionByModel = new Map<string, string>();
   const TARGET_DECISION_LOG_LIMIT = 128;
-  function logTargetDecision(model: string, decision: string, ctx: Record<string, unknown>): void {
-    if (lastTargetDecisionByModel.get(model) === decision) return;
-    lastTargetDecisionByModel.delete(model);
+  function logTargetDecision(model: string, decision: string, ctx: Record<string, unknown>, routeKey?: string): void {
+    const key = routeKey ? `${model}::${routeKey}` : model;
+    if (lastTargetDecisionByModel.get(key) === decision) return;
+    lastTargetDecisionByModel.delete(key);
     if (lastTargetDecisionByModel.size >= TARGET_DECISION_LOG_LIMIT) {
       const oldest = lastTargetDecisionByModel.keys().next().value;
       if (oldest !== undefined) lastTargetDecisionByModel.delete(oldest);
     }
-    lastTargetDecisionByModel.set(model, decision);
+    lastTargetDecisionByModel.set(key, decision);
     logger?.debug?.(`vision bridge: target check -> ${decision}`, { model, ...ctx });
   }
 
   /** 判定某 model 是否启用视觉桥（总开关 + 目标模型命中）。层 B 与层 A 共用。 */
-  function isTargetModel(model: string, sessionId?: string): boolean {
+  function isTargetModel(model: string, routeContextOrSessionId?: string | VisionBridgeRouteContext): boolean {
+    const routeContext = typeof routeContextOrSessionId === 'string'
+      ? { sessionId: routeContextOrSessionId }
+      : routeContextOrSessionId;
+    const sessionId = routeContext?.sessionId;
+    const routeKey = [routeContext?.sessionId, routeContext?.providerId, routeContext?.agentKind]
+      .filter(Boolean)
+      .join(':');
     const settings = readVisionBridgeSettings();
     if (!settings.enabled) {
-      logTargetDecision(model, 'disabled', {});
+      logTargetDecision(model, 'disabled', {}, routeKey);
       return false;
     }
     // 显式命中：运行时 model 可能带 [1m]/codex//bare 变体，targetModels 存的是 catalog id；
     // 两边都归一化后再比对，避免勾选命中失败（如 deepseek/deepseek-v4-flash vs ...[1m]）。
     const normalizedModel = normalizeVisionModelId(model);
     if (settings.targetModels.some((id) => normalizeVisionModelId(id) === normalizedModel)) {
-      logTargetDecision(model, 'explicit hit', { normalizedModel, targetModels: settings.targetModels });
+      logTargetDecision(model, 'explicit hit', { normalizedModel, targetModels: settings.targetModels }, routeKey);
       return true;
     }
     // 默认合并：用户未显式自定义 targetModels 时，已知无视觉模型（deepseek 等）默认
     // 走视觉桥——对齐设计文档「no-vision 默认勾选」。用户显式保存过 targetModels 后，
     // 按用户勾选（可显式取消 no-vision）。
     const customized = isTargetModelsCustomized();
-    const entry = sessionId ? deps.resolveTargetModel?.(model, sessionId) : null;
-    const supportsImage = entry?.supportsImageInput ??
-      (entry?.modalities ? entry.modalities.input.includes('image') : undefined);
-    const knownNoVision = supportsImage !== undefined ? !supportsImage : isKnownNoVisionModel(model);
+    const resolvedCap = deps.resolveTargetCapability?.(model, routeContext) ?? null;
+    let knownNoVision: boolean;
+    if (resolvedCap !== null) {
+      knownNoVision = resolvedCap === 'no-vision';
+    } else {
+      const entry = sessionId ? deps.resolveTargetModel?.(model, sessionId) : null;
+      const supportsImage = resolveExplicitVisionSupport(entry);
+      knownNoVision = supportsImage !== undefined ? !supportsImage : isKnownNoVisionModel(model);
+    }
     if (!customized && knownNoVision) {
-      logTargetDecision(model, 'default no-vision hit', { normalizedModel });
+      logTargetDecision(model, 'default no-vision hit', { normalizedModel, resolvedCap }, routeKey);
       return true;
     }
-    logTargetDecision(model, 'miss', { normalizedModel, customized, knownNoVision });
+    logTargetDecision(model, 'miss', { normalizedModel, customized, knownNoVision, resolvedCap }, routeKey);
     return false;
   }
 
@@ -408,7 +430,10 @@ export function createVisionBridge(deps: VisionBridgeDeps, settingsSource: Visio
 
   const hook: VisionBridgeHook = async (msg, ctx) => {
     // 总开关 + 目标模型命中。未启用 / 不命中 → 原样透传（零干扰契约）。
-    const target = isTargetModel(ctx.model, ctx.sessionId);
+    const target = isTargetModel(
+      ctx.model,
+      ctx.sessionId ? { sessionId: ctx.sessionId } : undefined,
+    );
     logger?.debug?.('vision bridge: hook invoked', { model: ctx.model, target });
     if (!target) {
       return { applied: false, message: msg };

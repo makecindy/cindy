@@ -43,7 +43,7 @@ export function createToolResultImageDescriptor(deps: ToolResultImageDescriptorD
     const session = deps.getSession(sessionId);
     if (!session || session.instanceId !== sessionInstanceId) return { skipped: true, description: null };
     const model = session.model;
-    if (!model || !controller.shouldBridge(model)) return { skipped: true, description: null };
+    if (!model || !controller.shouldBridge(model, { sessionId })) return { skipped: true, description: null };
     let absPath: string;
     try {
       // cindy-media://blobs/<hash>.<ext> → 本地绝对路径(严格校验,非 blob 抛错)。

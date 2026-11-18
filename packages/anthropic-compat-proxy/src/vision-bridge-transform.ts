@@ -16,11 +16,11 @@
  *    vision_proxy.py 的不可用降级思路），不 502、不阻塞、不静默。
  */
 
-import type { ProxyLogger, RequestTransform } from './types.js';
+import type { ProxyLogger, RequestTransform, RequestTransformCtx } from './types.js';
 
 export interface VisionBridgeTransformOptions {
   /** 判定当前请求的 model 是否启用视觉桥。返回 true 才处理该请求的图片。 */
-  shouldBridge: (model: string) => boolean;
+  shouldBridge: (model: string, ctx?: RequestTransformCtx) => boolean;
   /**
    * 描述一张图，返回文字描述。
    * input.imageUrl：data: URL 或 http(s) URL；input.prompt：focus hint。
@@ -205,7 +205,7 @@ export function createVisionBridgeTransform(opts: VisionBridgeTransformOptions):
     const model = typeof body.model === 'string' ? body.model : '';
     if (model.length === 0) return null;
     // 短路：未启用 / 目标模型不含该模型 → 字节透传（视觉模型零影响）。
-    if (!shouldBridge(model)) return null;
+    if (!shouldBridge(model, ctx)) return null;
 
     const messages = Array.isArray(body.messages) ? body.messages : null;
     const input = Array.isArray(body.input) ? body.input : null;
