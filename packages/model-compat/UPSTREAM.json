@@ -78,7 +78,7 @@
       "source": "src/responses/custom-tool-compat.ts",
       "target": "src/upstream/responses/custom-tool-compat.ts",
       "upstreamSha256": "1545dee0ee7f29d0c489dc4bf3975984fd9648dbca5de50effc97f7df9adc024",
-      "portedSha256": "66c85b83d7782b50d9ac8840629c821c29e056c70a0065aa20da65a80a731ce9"
+      "portedSha256": "d3a2fd3b331743d72f6693c2ad9a16fd00105738a26f4ff74e1285a7d94911b0"
     },
     {
       "source": "src/responses/function-call-compat.ts",

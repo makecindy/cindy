@@ -55,6 +55,13 @@ function collectBareCustomToolNames(body: unknown): Set<string> {
       if (type === 'additional_tools') groups.push(tools);
     }
   }
+  const topLevelNames = new Set<string>();
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+    for (const tool of group) {
+      if (tool && typeof tool === 'object' && tool.type !== 'namespace' && typeof tool.name === 'string') topLevelNames.add(tool.name);
+    }
+  }
   for (const group of groups) {
     if (!Array.isArray(group)) continue;
     for (const tool of group) {
@@ -65,7 +72,7 @@ function collectBareCustomToolNames(body: unknown): Set<string> {
         const children = (tool as { tools?: unknown }).tools;
         if (!Array.isArray(children)) continue;
         for (const child of children) {
-          if (child && typeof child === 'object' && child.type === 'custom' && typeof child.name === 'string') names.add(child.name);
+          if (child && typeof child === 'object' && child.type === 'custom' && typeof child.name === 'string' && !topLevelNames.has(child.name)) names.add(child.name);
         }
       }
     }

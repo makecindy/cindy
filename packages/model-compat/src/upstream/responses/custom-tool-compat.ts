@@ -90,7 +90,8 @@ export function routedCustomToolTargetName(
   if (wireName === undefined) return undefined;
   if (names.has(wireName)) {
     if (displacement) {
-      const carriesNamespace = isPlainObject(value) && typeof value.namespace === "string";
+      const carriesNamespace = isPlainObject(value) && typeof value.namespace === "string"
+        && value.namespace !== BUILTIN_FUNCTIONS_NAMESPACE;
       if (carriesNamespace) {
         // Restoring the child is what puts the namespace on the item; an ordinary function child
         // must stay a function call rather than come back as a custom-tool call.

@@ -97,6 +97,54 @@ describe('request-owned Responses compatibility', () => {
     }
   });
 
+  // The canonical top-level declaration wins over a stale functions-group duplicate (#11199).
+  it.each(['application/json', 'text/event-stream'])('keeps the canonical bare kind over grouped duplicates (%s)', async contentType => {
+    for (const reverse of [false, true]) {
+      for (const allowed of [undefined, false, true]) {
+        const tools = [
+          { type: 'function', name: 'workspace__read', parameters: {} },
+          { type: 'namespace', name: 'functions', tools: [{ type: 'custom', name: 'workspace__read' }] },
+          { type: 'namespace', name: 'workspace', tools: [{ type: 'custom', name: 'read' }] },
+        ];
+        if (reverse) tools.reverse();
+        const selector = { type: 'custom', name: 'workspace__read' };
+        const input = { tools, ...(allowed === undefined ? {} : { tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector }) };
+        const adapter = createCodexResponsesCompatibilityAdapter();
+        const request = adapter.adaptRequest(input, 10092, undefined, true) as { tools: { name: string }[]; tool_choice?: unknown };
+        expect(request.tools.map(tool => tool.name).sort()).toEqual(['workspace__read', 'workspace__read_2']);
+        if (allowed !== undefined) expect(request.tool_choice).toEqual(allowed
+          ? { type: 'allowed_tools', tools: [{ type: 'function', name: 'workspace__read_2' }] }
+          : { type: 'function', name: 'workspace__read_2' });
+        const output = { status: 'completed', output: [
+          { type: 'function_call', name: 'workspace__read', call_id: 'bare', arguments: '{}' },
+          { type: 'function_call', name: 'workspace__read_2', call_id: 'child', arguments: '{"input":"child"}' },
+        ] };
+        const sse = contentType === 'text/event-stream';
+        const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+        const text = await responseText(adapter.createResponseTransform(10092, { contentType, contentEncoding: '' })!, wire);
+        const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+        expect((sse ? parsed.response : parsed).output).toMatchObject([
+          { type: 'function_call', name: 'workspace__read' },
+          { type: 'custom_tool_call', namespace: 'workspace', name: 'read' },
+        ]);
+      }
+    }
+  });
+
+  it.each(['application/json', 'text/event-stream'])('restores default functions custom calls as bare tools (%s)', async contentType => {
+    const adapter = createCodexResponsesCompatibilityAdapter();
+    adapter.adaptRequest({ tools: [
+      { type: 'namespace', name: 'functions', tools: [{ type: 'custom', name: 'workspace__read' }] },
+      { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read', parameters: {} }] },
+    ] }, 10093, undefined, true);
+    const output = { status: 'completed', output: [{ type: 'function_call', namespace: 'functions', name: 'workspace__read', call_id: 'bare', arguments: '{"input":"bare"}' }] };
+    const sse = contentType === 'text/event-stream';
+    const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+    const text = await responseText(adapter.createResponseTransform(10093, { contentType, contentEncoding: '' })!, wire);
+    const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+    expect((sse ? parsed.response : parsed).output[0]).toMatchObject({ type: 'custom_tool_call', name: 'workspace__read', input: 'bare' });
+  });
+
   it.each(['application/json', 'text/event-stream'])('repairs default functions calls without using the displaced child schema (%s)', async contentType => {
     for (const choice of [undefined, { type: 'function', namespace: 'functions', name: 'workspace__read' }]) {
       const adapter = createCodexResponsesCompatibilityAdapter();

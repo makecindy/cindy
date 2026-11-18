@@ -315,7 +315,7 @@
 -}
 --- a/src/responses/custom-tool-compat.ts
 +++ b/src/responses/custom-tool-compat.ts
-@@ -67,14 +67,45 @@
+@@ -67,14 +67,46 @@
  }
 
  /** Resolve a provider-emitted wire name to the routed custom tool the client declared. */
@@ -343,7 +343,8 @@
 -  if (names.has(wireName)) return wireName;
 +  if (names.has(wireName)) {
 +    if (displacement) {
-+      const carriesNamespace = isPlainObject(value) && typeof value.namespace === "string";
++      const carriesNamespace = isPlainObject(value) && typeof value.namespace === "string"
++        && value.namespace !== BUILTIN_FUNCTIONS_NAMESPACE;
 +      if (carriesNamespace) {
 +        // Restoring the child is what puts the namespace on the item; an ordinary function child
 +        // must stay a function call rather than come back as a custom-tool call.
@@ -362,7 +363,7 @@
    if (!isPlainObject(value) || typeof value.namespace === "string") return undefined;
    const normalized = normalizeDeclaredToolName(wireName, declaredNames);
    return normalized !== wireName && names.has(normalized) ? normalized : undefined;
-@@ -153,7 +184,9 @@
+@@ -153,7 +185,9 @@
      ) {
        names.add(value.name);
      }
@@ -373,7 +374,7 @@
    };
    visit(body);
    return names;
-@@ -173,7 +206,7 @@
+@@ -173,7 +207,7 @@
    ) {
      out.add(value.call_id);
    }
@@ -382,7 +383,7 @@
  }
 
  function rewriteForUpstream(
-@@ -234,7 +267,8 @@
+@@ -234,7 +268,8 @@
    let changed = false;
    const next: Record<string, unknown> = {};
    for (const [key, entry] of Object.entries(value)) {
@@ -392,7 +393,7 @@
      next[key] = rewritten;
      changed ||= rewritten !== entry;
    }
-@@ -266,13 +300,14 @@
+@@ -266,13 +301,14 @@
    names: ReadonlySet<string>,
    repairNames: ReadonlySet<string> = new Set(),
    declaredNames?: ReadonlySet<string>,
@@ -408,7 +409,7 @@
      if (
        (item.type === "function_call" || item.type === "custom_tool_call")
        && typeof item.name === "string"
-@@ -362,7 +397,7 @@
+@@ -362,7 +398,7 @@
      && value.type.startsWith("response.")
      && isPlainObject(value.response)
    ) {
@@ -417,7 +418,7 @@
      if (response.changed) {
        restored.response = response.value;
        changed = true;
-@@ -377,6 +412,7 @@
+@@ -377,6 +413,7 @@
    names: ReadonlySet<string>,
    repairNames: ReadonlySet<string> = new Set(),
    declaredNames?: ReadonlySet<string>,
@@ -425,7 +426,7 @@
  ): string {
    if (names.size === 0 && repairNames.size === 0) return text;
    let payload: unknown;
-@@ -385,7 +421,7 @@
+@@ -385,7 +422,7 @@
    } catch {
      return text;
    }
