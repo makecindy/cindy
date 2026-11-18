@@ -75,6 +75,7 @@ vi.mock('../BotsHomeView', async () => {
 
 const cloud = vi.hoisted(() => ({ demotedBotIds: [] as string[] }));
 vi.mock('../companionCloudStore', () => ({
+  getRetiredCompanionBotIds: () => new Set<string>(),
   useCompanionCloud: () => ({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', actors: [], demotedBotIds: cloud.demotedBotIds }),
 }));
 beforeEach(() => { cloud.demotedBotIds = []; });

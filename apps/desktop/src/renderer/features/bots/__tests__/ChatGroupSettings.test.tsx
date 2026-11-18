@@ -20,7 +20,7 @@ vi.mock('../botPronounContext', () => ({
 }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));
 vi.mock('../RemoteBotSettings', () => ({ RemoteBotSettings: () => null }));
-vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => ({ demotedBotIds: [] as string[] }) }));
+vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => ({ demotedBotIds: [] as string[] }), getRetiredCompanionBotIds: () => new Set<string>() }));
 vi.mock('../BotsHomeView', () => ({
   BotSettings: ({ bot, initialPage }: { bot: { id: string; name: string }; initialPage?: string }) => (
     <div data-testid="bot-settings" data-bot-id={bot.id} data-initial-page={initialPage}>{bot.name}</div>
