@@ -142,6 +142,10 @@
     "message": "Cindy no puede leer este archivo adjunto. Selecciona el archivo original para seguir enviando este mensaje. Si cancelas, se conserva tu borrador.",
     "button": "Usar archivo original"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Este envío se canceló porque la tarea o la ventana cambiaron.",
+    "invalid": "Este envío ya no es válido para la sesión actual."
+  },
   "mailReader": {
     "showExternalImages": "Mostrar imágenes externas",
     "markReadFailed": "No se pudo sincronizar el estado de lectura. Verifica la autorización del buzón y vuelve a abrir este correo electrónico.",

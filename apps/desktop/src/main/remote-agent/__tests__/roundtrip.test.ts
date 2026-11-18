@@ -62,26 +62,33 @@ vi.mock('node:zlib', async importOriginal => {
   } };
 });
 
-const { historyInvoke, historyOpenLink, historyCloseEpoch, historyCrossRegion, historyLogger } = vi.hoisted(() => {
+const { historyInvoke, historyOpenLink, historyCloseEpoch, historyCloseListeners, historyCrossRegion, historyLogger } = vi.hoisted(() => {
   const noop = () => undefined;
   const logger = { trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop,
     child: () => logger };
-  return { historyInvoke: vi.fn(), historyOpenLink: vi.fn(), historyCloseEpoch: vi.fn(() => 0),
-    historyCrossRegion: vi.fn(() => false), historyLogger: logger };
+  return { historyInvoke: vi.fn(), historyOpenLink: vi.fn(), historyCloseEpoch: vi.fn((_peer?: string) => 0),
+    historyCloseListeners: new Set<(peer: string) => void>(), historyCrossRegion: vi.fn(() => false), historyLogger: logger };
 });
 vi.mock('../../device-link/index.js', () => ({
   remoteBackgroundInvoke: (...args: unknown[]) => historyInvoke(...args),
   openRemoteLink: (...args: unknown[]) => historyOpenLink(...args),
-  getRemoteLinkCloseEpoch: () => historyCloseEpoch(),
+  getRemoteLinkCloseEpoch: (peer: string) => historyCloseEpoch(peer),
+  onRemoteLinkClosed: (peer: string, listener: () => void) => {
+    const notify = (closedPeer: string) => { if (closedPeer === peer) listener(); };
+    historyCloseListeners.add(notify);
+    return () => { historyCloseListeners.delete(notify); };
+  },
 }));
 vi.mock('../../device-link/providerShareCrossRegion.js', () => ({
   isCrossRegionProviderShareTarget: () => historyCrossRegion(),
   renewCrossRegionProviderShareLink: (...args: unknown[]) => historyOpenLink(...args),
 }));
-const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active', listeners: new Set<() => void>() }));
+const guestPermission = vi.hoisted(() => ({ epoch: 0, status: 'active',
+  availabilityOwner: undefined as { hostDeviceId: string; hostOnline: boolean; standbyOnline: boolean } | undefined,
+  listeners: new Set<() => void>() }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({
   parseProviderShareAgentDeviceId: (device: string) => device.startsWith('share:') ? device.slice(6) : null,
-  findReceivedShare: () => ({ status: guestPermission.status }),
+  findReceivedShare: () => ({ status: guestPermission.status, ...guestPermission.availabilityOwner }),
   providerShareAccessEpoch: () => guestPermission.epoch,
   onProviderShareReceivedChanged: (listener: () => void) => { guestPermission.listeners.add(listener); return () => { guestPermission.listeners.delete(listener); }; },
 }));
@@ -1713,7 +1720,7 @@ describe('shared startup lease budget', () => {
     const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
       startFailure: '', startFailureName: 'AgentStartupStoppedError', localFailure: '',
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
-      blockClose: false, blockPrepare: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false };
+      blockClose: false, blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => emit(run, { t: 'started', handle: { id: 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } });
     vi.spyOn(RemoteAgentPoller.prototype, 'register').mockImplementation(run => {
@@ -1770,10 +1777,11 @@ describe('shared startup lease budget', () => {
       return { ok: true, result: {} };
     });
     const start = createDeviceAgentStarter({
-      remoteInvoke, renewSharedProviderLink: async () => undefined,
+      remoteInvoke, renewSharedProviderLink: peer => historyOpenLink(peer),
       rgPath: () => RG, codexPath: () => 'fixture-never-spawned', mcpProviders: () => [],
       prepareMcpBridge: async (_providers, _logger, ctx) => {
         if (state.localFailure) throw new Error(state.localFailure);
+        state.preparing = true;
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
           disposeSessionCtx: () => { disposed.push(ctx.sessionId!); } } as never;
@@ -1797,7 +1805,135 @@ describe('shared startup lease budget', () => {
     }
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
   });
-  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+  afterEach(() => { guestPermission.availabilityOwner = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); historyInvoke.mockReset(); historyOpenLink.mockReset(); });
+
+  // #10826, unit: the real starter must reach the authorized M when O's online
+  // heartbeat outlives its link. Existing availability tests never start a task.
+  it.each(['offline', 'denied', 'closed', 'revoked'])(
+    'uses standby only for an online owner transport failure before allocation (%s)', async mode => {
+      const f = fixture(); f.state.ready = true;
+      guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', hostOnline: true, standbyOnline: true };
+      vi.spyOn(availability, 'lookupShareAvailability').mockResolvedValue(null);
+      const allocate = vi.spyOn(availability, 'allocateShareAvailability').mockResolvedValue({
+        deviceId: 'executor-m', generation: f.generation, leaseDurationMs: 30_000,
+      });
+      vi.spyOn(availability, 'reportShareAvailabilityStatus').mockResolvedValue(undefined);
+      historyOpenLink.mockImplementation(async peer => {
+        if (peer !== providerShareHostPeer('startup-budget', 'owner-o')) return;
+        if (mode === 'closed') historyCloseEpoch.mockReturnValue(1);
+        if (mode === 'revoked') guestPermission.epoch++;
+        throw Object.assign(new Error('owner link unavailable'), { code: mode === 'denied' ? 'ACCESS_REVOKED' : 'DEVICE_OFFLINE' });
+      });
+      if (mode === 'offline') {
+        const handle = await f.open('pending');
+        expect(f.calls.filter(call => call.op === 'open').map(call => call.device)).toEqual([f.target]);
+        expect(allocate).toHaveBeenCalledExactlyOnceWith('startup-budget', 'pending', 'codex', 'm');
+        expect(f.calls.some(call => call.op === 'allocate')).toBe(false);
+        await handle.close();
+      } else {
+        await expect(f.open('pending')).rejects.toThrow();
+        expect(allocate).not.toHaveBeenCalled();
+        expect(f.calls.some(call => call.op === 'open')).toBe(false);
+      }
+    },
+  );
+
+  // #10826 review / unit: an owner close after standby allocation must fence the
+  // first open, too. The handshake cases above end before asynchronous MCP preparation.
+  it.each(['MCP preparation', 'startup confirmation'] as const)('rejects the standby after the owner link closes during %s', async stage => {
+    const f = fixture(); f.state.ready = stage === 'MCP preparation'; f.state.blockPrepare = f.state.ready;
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', hostOnline: true, standbyOnline: true };
+    vi.spyOn(availability, 'lookupShareAvailability').mockResolvedValue(null);
+    vi.spyOn(availability, 'allocateShareAvailability').mockResolvedValue({
+      deviceId: 'executor-m', generation: f.generation, leaseDurationMs: 30_000,
+    });
+    const release = vi.spyOn(availability, 'reportShareAvailabilityStatus').mockResolvedValue(undefined);
+    const ownerPeer = providerShareHostPeer('startup-budget', 'owner-o');
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === ownerPeer) throw Object.assign(new Error('owner link unavailable'), { code: 'DEVICE_OFFLINE' });
+    });
+    let live: Awaited<ReturnType<typeof f.open>> | undefined;
+    const pending = f.open().then(handle => { live = handle; return undefined; }, error => error);
+    try {
+      await vi.waitFor(() => expect(stage === 'MCP preparation' ? f.state.preparing : f.runs.size === 1).toBe(true), { interval: 1 });
+      historyCloseEpoch.mockImplementation(peer => peer === ownerPeer ? 1 : 0);
+      expect(historyCloseEpoch(ownerPeer)).toBe(1);
+      f.prepare.resolve();
+      for (const run of f.runs.values()) f.started(run);
+      expect(String(await pending)).toContain('[LINK_NOT_OPEN]');
+      if (stage === 'MCP preparation') expect(f.calls.filter(call => call.op === 'open' || call.op === 'upload')).toEqual([]);
+      else {
+        expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
+        expect(f.calls.filter(call => call.op === 'close')).toHaveLength(1);
+      }
+      expect(f.disposed).toEqual(['pending']);
+      expect(release).toHaveBeenCalledWith('startup-budget', 'pending', f.generation, false);
+    } finally {
+      f.prepare.resolve();
+      await live?.close({ reason: 'account-boundary' });
+    }
+  });
+
+  // PR #10895 review / unit: the existing confirmation case delivered started
+  // after invalidation. A hung confirmation and close must still promptly reject,
+  // release this generation and dispose local resources through the real starter.
+  it.each(['owner close', 'access epoch'] as const)('cancels an unconfirmed standby immediately on %s', async boundary => {
+    const f = fixture();
+    const sibling = await f.open('sibling', 'ordinary-device');
+    const siblingRun = [...f.runs.values()][0]!;
+    f.state.blockClose = true;
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', hostOnline: true, standbyOnline: true };
+    vi.spyOn(availability, 'lookupShareAvailability').mockResolvedValue(null);
+    vi.spyOn(availability, 'allocateShareAvailability').mockResolvedValue({
+      deviceId: 'executor-m', generation: f.generation, leaseDurationMs: 30_000,
+    });
+    const release = vi.spyOn(availability, 'reportShareAvailabilityStatus').mockResolvedValue(undefined);
+    const ownerPeer = providerShareHostPeer('startup-budget', 'owner-o');
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === ownerPeer) throw Object.assign(new Error('owner link unavailable'), { code: 'DEVICE_OFFLINE' });
+    });
+    let rejected: unknown;
+    let live: Awaited<ReturnType<typeof f.open>> | undefined;
+    const pending = f.open().then(handle => { live = handle; }, error => { rejected = error; });
+    try {
+      await vi.waitFor(() => expect(f.runs.size).toBe(2), { interval: 1 });
+      const run = [...f.runs.values()].find(item => item !== siblingRun)!;
+      for (const listener of historyCloseListeners) listener('unrelated-peer');
+      for (const listener of guestPermission.listeners) listener();
+      await flush();
+      expect(rejected).toBeUndefined();
+      expect(release).not.toHaveBeenCalled();
+      if (boundary === 'owner close') {
+        historyCloseEpoch.mockImplementation(peer => peer === ownerPeer ? 1 : 0);
+        for (const listener of historyCloseListeners) listener(ownerPeer);
+      } else {
+        guestPermission.epoch++;
+        for (const listener of guestPermission.listeners) listener();
+      }
+      await flush();
+      expect(String(rejected)).toContain(boundary === 'owner close' ? '[LINK_NOT_OPEN]' : 'permission changed');
+      expect(f.calls.filter(call => call.op === 'close')).toEqual([
+        expect.objectContaining({ device: f.target, runId: run.runId }),
+      ]);
+      expect(f.disposed).toEqual(['pending']);
+      expect(release).toHaveBeenCalledExactlyOnceWith('startup-budget', 'pending', f.generation, false);
+      expect(historyCloseListeners.size).toBe(0);
+      expect(guestPermission.listeners.size).toBe(0);
+      // A late confirmation cannot resurrect the cancelled run or affect its sibling.
+      f.started(run);
+      await flush();
+      expect(live).toBeUndefined();
+      expect(liveSharedTaskTarget('pending', f.owner)).toBeNull();
+      await sibling.setModel?.('still-live');
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+    } finally {
+      cancelPendingRemoteStart('pending');
+      f.pendingClose.resolve();
+      await pending;
+      await live?.close({ reason: 'account-boundary' });
+      await sibling.close({ reason: 'account-boundary' });
+    }
+  });
 
   // Unit, direct-execution authorization contract: prompt preparation can keep
   // a send pending. Existing renewal cases returned its RPC result immediately,
@@ -2823,5 +2959,26 @@ describe('shared startup lease budget upload cancellation', () => {
     await expect(f.client.payload(f.payload)).rejects.toThrow('REMOTE_AGENT_EXPIRED');
     expect(payloadCompression.calls).toBe(1);
     expect(f.requests).toHaveLength(payload.chunks);
+  });
+
+  // #10826 review / unit: an explicit owner close invalidates startup without
+  // closing the shared M transport. Existing cases only abandon the run itself.
+  it.each(['gzip', 'upload'] as const)('stops standby startup when its guard expires during %s', async stage => {
+    const f = fixture();
+    let current = true;
+    if (stage === 'gzip') payloadCompression.paused = true;
+    else f.hold();
+    const starting = f.client.open('codex', f.payload, () => {
+      if (!current) throw new Error('[LINK_NOT_OPEN] owner link closed');
+    });
+    const rejected = expect(starting).rejects.toThrow('[LINK_NOT_OPEN]');
+    await flush();
+    expect(payloadCompression.calls).toBe(1);
+    current = false;
+    if (stage === 'gzip') payloadCompression.finish!();
+    else f.reply();
+    await rejected;
+    expect(f.requests.map(request => request.op)).toEqual(stage === 'gzip' ? [] : ['upload']);
+    f.client.abandon('start-cancelled');
   });
 });
