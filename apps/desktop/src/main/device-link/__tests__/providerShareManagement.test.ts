@@ -45,7 +45,7 @@ const remember = vi.hoisted(() => vi.fn());
 const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberQuery: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
   enqueueDirectCleanup: vi.fn(), listPendingDirectCleanup: vi.fn(), acknowledgeDirectCleanup: vi.fn(),
   actual: null as ReturnType<typeof import('../providerShareUsageStore').createProviderShareUsageStore> | null }));
-const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
+const memberNotes = vi.hoisted(() => ({ read: vi.fn(), readStrict: vi.fn(), set: vi.fn() }));
 const reshareList = vi.hoisted(() => vi.fn());
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
@@ -242,7 +242,7 @@ describe('local roster export', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-roster-test-'));
     destination = path.join(dir, 'members.csv');
     host.complete.mockReturnValue([share, { ...share, providerId: 'other' }, { ...share, hostDeviceId: 'other' }]);
-    memberNotes.read.mockReturnValue({ [member.memberId]: 'A,"B"\nC' });
+    memberNotes.readStrict.mockReturnValue({ [member.memberId]: 'A,"B"\nC' });
     registerProviderShareIpc();
   });
   afterEach(() => {
@@ -250,10 +250,10 @@ describe('local roster export', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  function save(expectedOwner = stamp) {
+  function save(expectedOwner = stamp, providerId = 'anthropic') {
     const calls = vi.mocked(ipcMain.handle).mock.calls;
     const handler = calls.find(([channel]) => channel === PROVIDER_SHARE_IPC.EXPORT_ROSTER)![1];
-    return handler({ sender: {} } as Electron.IpcMainInvokeEvent, 'anthropic', expectedOwner);
+    return handler({ sender: {} } as Electron.IpcMainInvokeEvent, providerId, expectedOwner);
   }
 
   it('saves exactly the authorized snapshot and its capture time at the chosen location', async () => {
@@ -267,6 +267,28 @@ describe('local roster export', () => {
       + `"share-1","fixture-member-full-id","'=guest","A,""B""\nC","active","${capturedAt}"\r\n`;
     expect(fs.readFileSync(destination)).toEqual(Buffer.from(expected));
     expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+  });
+
+  it('exports the legacy custom:xai provider through the same save boundary', async () => {
+    host.complete.mockReturnValue([{ ...share, providerId: 'custom:xai' }]);
+    saveDialog.mockResolvedValueOnce({ canceled: false, filePath: destination });
+    await save(stamp, 'custom:xai');
+    expect(fs.readFileSync(destination, 'utf8')).toContain('"fixture-member-full-id"');
+  });
+
+  it.each(['prepare', 'confirm'] as const)('preserves an existing export when notes cannot be read at %s', async phase => {
+    fs.writeFileSync(destination, 'original');
+    if (phase === 'prepare') {
+      memberNotes.readStrict.mockImplementationOnce(() => { throw new Error('synthetic unreadable notes'); });
+    }
+    saveDialog.mockImplementationOnce(async () => {
+      memberNotes.readStrict.mockImplementationOnce(() => { throw new Error('synthetic unreadable notes'); });
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toThrow();
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    if (phase === 'prepare') expect(saveDialog).not.toHaveBeenCalled();
   });
 
   it('leaves the destination alone when the owner cancels', async () => {

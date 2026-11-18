@@ -48,6 +48,13 @@ export function createProviderShareMemberNotesStore(options: {
       store.invalidateIfChanged();
       return store.read().notes;
     },
+    readStrict(): Record<string, string> {
+      try {
+        return store.readStrict().notes;
+      } catch {
+        throwIpcError('PRECONDITION_FAILED', 'Could not read provider share member notes');
+      }
+    },
     async set(memberId: string, note: string, assertCurrent: () => void): Promise<void> {
       assertCurrent();
       try {

@@ -41,10 +41,10 @@ describe('provider share member notes', () => {
   it('persists notes across store recreation, preserves other members and removes cleared overrides', async () => {
     const first = makeStore();
     const second = makeStore();
-    expect(second.read()).toEqual({});
+    expect(second.readStrict()).toEqual({});
     await first.set('m1', 'Alice', assertCurrent);
     await second.set('m2', 'Bob', assertCurrent);
-    expect(makeStore().read()).toEqual({ m1: 'Alice', m2: 'Bob' });
+    expect(makeStore().readStrict()).toEqual({ m1: 'Alice', m2: 'Bob' });
     await first.set('m1', '', assertCurrent);
     expect(makeStore().read()).toEqual({ m2: 'Bob' });
   });
@@ -81,6 +81,7 @@ describe('provider share member notes', () => {
     fs.writeFileSync(file(), '{private broken content');
     const store = makeStore();
     expect(store.read()).toEqual({});
+    expect(() => store.readStrict()).toThrow('[PRECONDITION_FAILED] Could not read provider share member notes');
     await expect(store.set('m1', 'Alice', assertCurrent)).rejects.toThrow(
       '[PRECONDITION_FAILED] Could not save provider share member note',
     );

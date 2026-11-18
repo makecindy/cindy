@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { renameSync } from 'node:fs';
-import { open, unlink } from 'node:fs/promises';
+import { open, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { BrowserWindow, dialog, type IpcMainInvokeEvent } from 'electron';
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
@@ -10,7 +9,6 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
-import { isProviderGroupProviderId } from '../../shared/providerGroup.js';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { getProviderShareHostCompleteSnapshot } from './providerShareHost.js';
 import { providerShareMemberNotes } from './providerShareMemberNotes.js';
@@ -26,7 +24,7 @@ function readRoster(providerId: string, capturedAt: string): string {
     share => share.providerId === providerId && share.hostDeviceId === deviceId && share.members.length > 0,
   );
   if (!shares?.length) throwIpcError('PRECONDITION_FAILED', 'The local member roster is unavailable');
-  const notes = providerShareMemberNotes.read();
+  const notes = providerShareMemberNotes.readStrict();
   const lines = ['share_id,member_id,display_name,note,status,captured_at'];
   for (const share of shares) {
     for (const member of share.members) {
@@ -37,12 +35,13 @@ function readRoster(providerId: string, capturedAt: string): string {
   return '\uFEFF' + lines.join('\r\n') + '\r\n';
 }
 
-export async function exportProviderShareRoster(event: IpcMainInvokeEvent, providerId: unknown, owner: unknown): Promise<void> {
+export async function exportProviderShareRoster(event: IpcMainInvokeEvent, rawProviderId: unknown, owner: unknown): Promise<void> {
   if (getDeviceLinkInvokeContext()) throwIpcError('PERMISSION_DENIED', 'Roster export is local only');
   assertTrustedAppRendererEvent(event);
-  if (!isProviderGroupProviderId(providerId) || !isDataOwnerPushStamp(owner)) {
+  if (typeof rawProviderId !== 'string' || !rawProviderId.trim() || rawProviderId.length > 256 || !isDataOwnerPushStamp(owner)) {
     throwIpcError('INVALID_PARAMS', 'Invalid roster export request');
   }
+  const providerId = rawProviderId.trim();
   const assertOwner = captureProviderManagementScope();
   const current = getActiveDataOwnerPushStamp();
   if (!current.dataOwnerId || current.dataOwnerId !== owner.dataOwnerId || current.ownerGeneration !== owner.ownerGeneration) {
@@ -79,8 +78,8 @@ export async function exportProviderShareRoster(event: IpcMainInvokeEvent, provi
       await file.close();
     }
     assertCurrent();
-    // Keep the final check and publication in the same main-process turn.
-    renameSync(temp, picked.filePath);
+    // Admit publication under the current owner before handing it to the filesystem.
+    await rename(temp, picked.filePath);
   } catch (error) {
     await unlink(temp).catch(() => {});
     if (isIpcError(error)) throw error;
