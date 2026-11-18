@@ -1,6 +1,10 @@
 import type { GhostInstallConsentRequest } from '../../../../shared/ghostInstallConsent';
 
-type Review = (requests: GhostInstallConsentRequest[], signal: AbortSignal) => Promise<Set<string>>;
+export interface UpdateReviewList {
+  subscribe(listener: () => void): () => void;
+  getSnapshot(): readonly GhostInstallConsentRequest[];
+}
+type Review = (requests: UpdateReviewList, signal: AbortSignal) => Promise<Set<string>>;
 type Collect = (request: GhostInstallConsentRequest, signal: AbortSignal, review: Review) => Promise<boolean>;
 
 // Window-local rendezvous. Each token routes one real Main prompt, never grants consent.
@@ -11,10 +15,34 @@ export function collectUpdateConsent(request: GhostInstallConsentRequest, signal
   return waiting.get(request.batchRowId)?.(request, signal, review);
 }
 
+// Do not spend the Host's nine-minute decision window waiting on other downloads.
+// Usually finish() flushes first. A stalled download must not postpone already verified rows.
+const COLLECTION_WINDOW_MS = 30_000;
+
 export class UpdateAllConsent {
+  private timer?: ReturnType<typeof setTimeout>;
+  private reviewInFlight?: Promise<void>;
   private entries = new Map<string, { request: GhostInstallConsentRequest; answer: (yes: boolean) => void }>();
   private review?: Review;
-  private readonly dismissed = new AbortController();
+  private visible?: AbortController;
+  private listeners = new Set<() => void>();
+  private snapshot: GhostInstallConsentRequest[] = [];
+  private readonly list: UpdateReviewList = {
+    subscribe: listener => {
+      this.listeners.add(listener);
+      return () => this.listeners.delete(listener);
+    },
+    getSnapshot: () => this.snapshot,
+  };
+
+  constructor(private readonly current: () => boolean = () => true) {}
+
+  private changed() {
+    if (!this.visible) return;
+    this.snapshot = Array.from(this.entries.values(), entry => entry.request);
+    this.listeners.forEach(listener => listener());
+    if (!this.snapshot.length) this.visible.abort();
+  }
 
   /** Start the next download after this row finishes or Main pauses it for review. */
   track(install: (token: string) => Promise<void>) {
@@ -25,18 +53,20 @@ export class UpdateAllConsent {
       waiting.delete(token);
       this.review = review;
       return new Promise<boolean>(resolve => {
-        const abort = () => {
-          answer(false);
-          if (this.reviewing) this.dismissed.abort();
-        };
+        const abort = () => answer(false);
         const answer = (yes: boolean) => {
           signal.removeEventListener('abort', abort);
           this.entries.delete(request.requestId);
+          this.changed();
           resolve(yes && !signal.aborted);
         };
         this.entries.set(request.requestId, { request, answer });
         signal.addEventListener('abort', abort, { once: true });
+        this.changed();
         if (signal.aborted) abort();
+        if (!this.visible && this.timer === undefined) {
+          this.timer = setTimeout(() => { void this.flush(); }, COLLECTION_WINDOW_MS);
+        }
         advance();
       });
     });
@@ -44,20 +74,34 @@ export class UpdateAllConsent {
     return { done, ready: Promise.race([done, paused]) };
   }
 
-  private reviewing = false;
+  private flush(): Promise<void> {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    if (this.reviewInFlight) return this.reviewInFlight;
+    const review = this.review;
+    if (!this.entries.size || !review) return Promise.resolve();
+    const dismissed = new AbortController();
+    this.visible = dismissed;
+    this.changed();
+    const run = async () => {
+      let selected = new Set<string>();
+      try {
+        if (this.current()) selected = await review(this.list, dismissed.signal);
+      } catch {
+        // An unavailable review surface cannot authorize an update.
+      } finally {
+        this.visible = undefined;
+        for (const { request, answer } of this.entries.values()) {
+          answer(this.current() && !dismissed.signal.aborted && selected.has(request.requestId));
+        }
+        this.reviewInFlight = undefined;
+      }
+    };
+    this.reviewInFlight = Promise.resolve().then(run);
+    return this.reviewInFlight;
+  }
 
-  async finish(current: () => boolean) {
-    const entries = [...this.entries.values()];
-    let selected = new Set<string>();
-    try {
-      if (entries.length && this.review && current()) {
-        this.reviewing = true;
-        selected = await this.review(entries.map(entry => entry.request), this.dismissed.signal);
-      }
-    } finally {
-      for (const { request, answer } of entries) {
-        answer(current() && !this.dismissed.signal.aborted && selected.has(request.requestId));
-      }
-    }
+  async finish() {
+    do { await this.flush(); } while (this.entries.size);
   }
 }

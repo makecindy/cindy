@@ -7,12 +7,13 @@ import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
  * 另需明确确认替换。无论确认、取消还是被 Main 收起（超时、账号切换），答案都会回给 Main。
  * 落位前 Main 还会在锁内用同一份包复核，确认框本身不是授权事实。
  */
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Checkbox } from '@/components/ui/checkbox';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
-import { collectUpdateConsent } from '@/features/plugin/lib/updateAllConsent';
+import { collectUpdateConsent, type UpdateReviewList } from '@/features/plugin/lib/updateAllConsent';
 import { permissionItemIcon } from '@/features/plugin/lib/permissionItemIcon';
 import { permissionItemDetail } from '../../shared/ghostPermissionDetail';
 import { cn } from '@/lib/utils';
@@ -185,6 +186,26 @@ function ConsentDetails({ request }: { request: GhostInstallConsentRequest }) {
   </>);
 }
 
+function BatchReviewRows({ requests, selected }: { requests: UpdateReviewList; selected: Set<string> }) {
+  const { t } = useTranslation();
+  const rows = useSyncExternalStore(requests.subscribe, requests.getSnapshot);
+  return rows.map(item => (
+    <section key={item.requestId} className="space-y-2 border-b border-[var(--border-default)] py-3">
+      <label className="flex items-center gap-2 font-medium">
+        <Checkbox onChange={event => {
+          if (event.target.checked) selected.add(item.requestId);
+          else selected.delete(item.requestId);
+        }} />
+        {item.facts.name}
+      </label>
+      {item.facts.kind === 'update' && <p className="text-12">{t('settings.ghosts.installConsent.updateMeta', {
+        from: item.facts.previousVersion, to: item.facts.version, source: ghostInstallConsentSourceLabel(t, item),
+      })}</p>}
+      <ConsentDetails request={item} />
+    </section>
+  ));
+}
+
 function isConsentRequest(payload: unknown): payload is GhostInstallConsentRequest {
   if (!payload || typeof payload !== 'object') return false;
   const request = payload as Partial<GhostInstallConsentRequest>;
@@ -239,21 +260,7 @@ export function GhostInstallConsentHost() {
                 confirmText: t('settings.ghosts.installConsent.confirmUpdate'),
                 maxWidth: 560,
                 contentSelectable: true,
-                content: requests.map(item => (
-                  <section key={item.requestId} className="space-y-2 border-b border-[var(--border-default)] py-3">
-                    <label className="flex items-center gap-2 font-medium">
-                      <input type="checkbox" onChange={event => {
-                        if (event.target.checked) selected.add(item.requestId);
-                        else selected.delete(item.requestId);
-                      }} />
-                      {item.facts.name}
-                    </label>
-                    {item.facts.kind === 'update' && <p className="text-12">{t('settings.ghosts.installConsent.updateMeta', {
-                      from: item.facts.previousVersion, to: item.facts.version, source: ghostInstallConsentSourceLabel(t, item),
-                    })}</p>}
-                    <ConsentDetails request={item} />
-                  </section>
-                )),
+                content: <BatchReviewRows requests={requests} selected={selected} />,
               }, signal);
               return accepted ? selected : new Set<string>();
             });

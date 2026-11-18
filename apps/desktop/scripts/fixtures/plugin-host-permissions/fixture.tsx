@@ -30,7 +30,7 @@ void mountPage({
           });
           await row.ready;
         }
-        void batch.finish(() => true);
+        void batch.finish();
         return;
       }
       callback({ requestId: 'fixture-host-permissions', initiator: 'user', origin: 'local-file',

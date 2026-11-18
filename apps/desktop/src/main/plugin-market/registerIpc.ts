@@ -32,6 +32,7 @@ import {
   type PluginMarketSnapshotOptions,
 } from './service.js';
 
+import { withBatchUpdatePlacement } from './batchUpdatePlacement.js';
 import { preparePluginShare } from './sharing.js';
 import { installLocalPluginShare, readLocalPluginShare, prepareLocalPluginShare, releaseLocalPluginShare, releaseLocalPluginSharesForCaller } from './localSharing.js';
 
@@ -298,7 +299,7 @@ export function registerPluginMarketIpc(): void {
           .map((g) => installedGhostStoragePart(g)),
       );
       return invokePluginMarket(async () => {
-        const result = await service().install(
+        const install = (waitForTurn?: () => Promise<void>) => service().install(
           requireString(pluginId, 'pluginId'),
           {
             expectedReleaseId,
@@ -309,7 +310,12 @@ export function registerPluginMarketIpc(): void {
           // 首装与扩权更新的确认框投给发起安装的这个窗口。
           {
             consent: {
-              prompt: request => prompt(batchRowId ? { ...request, batchRowId } : request),
+              prompt: async request => {
+                const accepted = await prompt(batchRowId ? { ...request, batchRowId } : request);
+                if (!accepted || !waitForTurn) return accepted;
+                await waitForTurn();
+                return !event.sender.isDestroyed() && getActiveAppSession().generation === owner.generation;
+              },
               initiator: 'user',
             },
             onProgress: (progress) => {
@@ -317,6 +323,7 @@ export function registerPluginMarketIpc(): void {
             },
           },
         );
+        const result = batchRowId ? await withBatchUpdatePlacement(install) : await install();
         if (
           getActiveAppSession().generation === owner.generation &&
           !previouslyInstalled.has(installedGhostStoragePart(result.ghost))

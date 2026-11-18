@@ -141,7 +141,7 @@ export function startUpdateAllBatch(marketUpdates: readonly PluginMarketItem[]):
 async function runQueue(generation: number): Promise<void> {
   if (state.running || !isGenerationCurrent(generation)) return;
   emit({ ...state, running: true });
-  const consent = new UpdateAllConsent();
+  const consent = new UpdateAllConsent(() => isGenerationCurrent(generation));
   const installs: Promise<void>[] = [];
   try {
     for (;;) {
@@ -157,7 +157,7 @@ async function runQueue(generation: number): Promise<void> {
       await row.ready;
     }
   } finally {
-    await consent.finish(() => isGenerationCurrent(generation));
+    await consent.finish();
     await Promise.all(installs);
     await settleBatchTail(generation);
   }
