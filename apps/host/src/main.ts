@@ -13,6 +13,7 @@ import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './ag
 import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
+import { configureWindowsMcpJob } from '../../desktop/src/main/windowsMcpJob.js';
 import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.js';
 import { createUserSession } from '../../desktop/src/main/localDb/ipc/createUserSession.js';
 import { setSessionOpeningModelAdmission } from '../../desktop/src/main/localDb/sessionOpening.js';
@@ -242,10 +243,16 @@ if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error('CINDY_
 const profileDir = resolveHostDataDir();
 configureUserDataDir(profileDir);
 configureAppDataDir(resolveHostAppDataDir());
+const helperLayout = hostRuntimeLayout();
 configureWindowsAtomicRename({
-  packagedBinary: hostRuntimeLayout().atomicRenameBinary ?? undefined,
-  sourceFile: hostRuntimeLayout().atomicRenameSource ?? undefined,
+  packagedBinary: helperLayout.atomicRenameBinary ?? undefined,
+  sourceFile: helperLayout.atomicRenameSource ?? undefined,
   cacheDir: path.join(profileDir, 'windows-atomic-rename'),
+});
+configureWindowsMcpJob({
+  packagedBinary: helperLayout.mcpJobBinary ?? undefined,
+  sourceFile: helperLayout.mcpJobSource ?? undefined,
+  cacheDir: path.join(profileDir, 'windows-mcp-stdio-job'),
 });
 mkdirSync(profileDir, { recursive: true, mode: 0o700 });
 const serviceLease = acquireHostServiceLease(profileDir);
@@ -415,9 +422,14 @@ function invalidateHostSession(_reason: string): Promise<void> {
       stopPluginAuthorization?.(); stopPluginAuthorization = null;
       plugins?.authorization.cancelPending();
       interactionBroker.dispose();
-      await pluginGateway?.host.reset();
-      await requestsDrained;
-      await disposeOwnerRuntime();
+      const cleanupErrors: unknown[] = [];
+      try { await pluginGateway?.host.reset(); } catch (error) { cleanupErrors.push(error); }
+      try { await requestsDrained; } catch (error) { cleanupErrors.push(error); }
+      // One failed process stop must not skip the remaining owner cleanup.
+      // disposeOwnerRuntime retries the same retained gateway and keeps its
+      // ownership again if cleanup still cannot be confirmed.
+      try { await disposeOwnerRuntime(); } catch (error) { cleanupErrors.push(error); }
+      if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Owner runtime cleanup failed');
     } finally {
       commitVolatileAppSession('signed-out', null, true);
       release();
@@ -1714,10 +1726,13 @@ async function disposeOwnerRuntime(): Promise<void> {
     agentGraph?.gatewayRestart.clear();
     await attempt(() => providerConfig?.close());
     const stopPlugins = plugins?.close();
-    const stopApps = pluginGateway?.close();
+    const retiringGateway = pluginGateway;
+    const stopApps = retiringGateway?.close();
     // Attach a rejection handler immediately while other services drain.
     const drainedPlugins = stopPlugins?.then(() => {}, error => { errors.push(error); });
-    const drainedApps = stopApps?.then(() => {}, error => { errors.push(error); });
+    const drainedApps = stopApps?.then(() => {
+      if (pluginGateway === retiringGateway) pluginGateway = null;
+    }, error => { errors.push(error); });
     await attempt(() => remote?.stop());
     // Settle disconnected platform calls before Maker awaits task-close hooks.
     // Client-owned OS sessions are released by its authenticated socket teardown.
@@ -1741,7 +1756,6 @@ async function disposeOwnerRuntime(): Promise<void> {
   } finally {
     platformTools = null;
     plugins = null;
-    pluginGateway = null;
     pluginManager = null;
     hostTools = null;
     hostConfirmations = null;

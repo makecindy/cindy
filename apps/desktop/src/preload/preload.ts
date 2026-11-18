@@ -7193,11 +7193,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     chooseMcpDuplicate: (input: { id: string; choice: import('../shared/customMcp').McpDuplicateChoice | null }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:mcp:duplicates:choose', input),
     createCustomMcpServer: (
-      config: import('../shared/customMcp').CustomMcpConfig,
-    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config),
+      config: import('../shared/customMcp').CustomMcpInput,
+      tokenChange?: import('../shared/customMcp').CustomMcpTokenChange,
+    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config, tokenChange),
     updateCustomMcpServer: (
-      config: import('../shared/customMcp').CustomMcpConfig,
-    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:update', config),
+      config: import('../shared/customMcp').CustomMcpInput,
+      tokenChange?: import('../shared/customMcp').CustomMcpTokenChange,
+    ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:update', config, tokenChange),
     deleteCustomMcpServer: (mcpId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:mcp:custom:delete', mcpId),
     /** token-only 后置刷新：safeStorage write/remove 完成后调用，消除竞态窗口。 */

@@ -680,12 +680,24 @@ export function removeCustomProviderHeaders(
 export function readCustomMcpToken(mcpId: string): string | null {
   try {
     return electronSecretIo.read(customMcpSecretStorageKey(mcpId));
-  } catch (err) {
-    log.warn(
-      { mcpId, err: err instanceof Error ? err.message : String(err) },
-      'read custom mcp token failed',
-    );
+  } catch {
+    log.warn({ mcpId }, 'read custom mcp token failed');
     return null;
+  }
+}
+
+/** Clear an obsolete bearer before publishing another transport. No keychain access is needed. */
+export function removeCustomMcpToken(mcpId: string): boolean {
+  try {
+    // Deletion also accepts malformed legacy DB ids so they can be removed from Settings.
+    if (/[\\/\0]/.test(mcpId)) return false;
+    const scopedKey = resolveOwnerScopedSecretStorageKey(customMcpSecretStorageKey(mcpId));
+    if (!scopedKey) return false;
+    fs.rmSync(path.join(secretDir(), `${scopedKey}.enc`), { force: true });
+    return true;
+  } catch {
+    log.warn({ mcpId }, 'remove custom mcp token failed');
+    return false;
   }
 }
 
@@ -720,11 +732,8 @@ export function storeCustomMcpToken(mcpId: string, value: string): boolean {
         }
       }
     }
-  } catch (err) {
-    log.warn(
-      { mcpId, err: err instanceof Error ? err.message : String(err) },
-      'write custom mcp token failed',
-    );
+  } catch {
+    log.warn({ mcpId }, 'write custom mcp token failed');
     return false;
   }
 }

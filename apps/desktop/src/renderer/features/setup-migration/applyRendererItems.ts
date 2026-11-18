@@ -6,7 +6,7 @@
  */
 import type { CustomProviderConfig } from '@cindy/model-providers';
 
-import type { CustomMcpConfig } from '../../../shared/customMcp';
+import type { CustomMcpRemoteConfig } from '../../../shared/customMcp';
 import type {
   SetupMigrationPlan,
   SetupMigrationProgress,
@@ -18,7 +18,7 @@ export interface RendererApplyApi {
   /** Still the account that previewed this plan; once false, nothing more is written. */
   isCurrent(): boolean;
   createProvider(config: CustomProviderConfig): Promise<{ ok: boolean }>;
-  createMcpServer(config: CustomMcpConfig): Promise<unknown>;
+  createMcpServer(config: CustomMcpRemoteConfig): Promise<unknown>;
   setBuiltinTool(id: string, enabled: boolean): Promise<unknown>;
   setRemoteControl(enabled: boolean): Promise<unknown>;
   setKeepAwake(enabled: boolean): Promise<unknown>;

@@ -6,6 +6,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersistedSetupMigrationState, SetupMigrationServiceDeps } from '../service.js';
 import type { SetupMigrationChecklistItem } from '../../../shared/setupMigration.js';
+import type { SetupTransferSourceDeps } from '../transfer.js';
+import type { readCustomMcpServers } from '../../maker-host/custom-mcp-store.desktop.js';
+import { collectSetupSnapshot } from '../snapshot.js';
 
 const h = vi.hoisted(() => {
   const blocked = vi.fn((): never => { throw new Error('unexpected host boundary in register test'); });
@@ -14,6 +17,8 @@ const h = vi.hoisted(() => {
   return {
     blocked, log, ipcHandle: vi.fn(), snapshotHandler: vi.fn(), transferHandler: vi.fn(),
     oldBearer: vi.fn(() => 'fake-orphaned-old-bearer'),
+    readMcps: vi.fn<typeof readCustomMcpServers>(),
+    transferDeps: undefined as SetupTransferSourceDeps | undefined,
     deps: undefined as SetupMigrationServiceDeps | undefined,
     normalize: undefined as ((raw: unknown) => PersistedSetupMigrationState) | undefined,
     disk: '',
@@ -40,7 +45,7 @@ vi.mock('../service.js', () => ({
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomMcpToken: h.oldBearer,
-  getProviderSecretStore: h.blocked, providerSecretSavedForSetup: h.blocked, readCustomProviderKey: h.blocked,
+  getProviderSecretStore: () => ({ get: h.blocked }), providerSecretSavedForSetup: h.blocked, readCustomProviderKey: h.blocked,
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => h.log }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: h.log }));
@@ -49,7 +54,10 @@ vi.mock('../rendererPrefsHost.js', () => ({ registerSetupMigrationRendererHost: 
 vi.mock('../../device-link/dispatch.desktop.js', () => ({
   setSetupSnapshotRemoteHandler: h.snapshotHandler, setSetupTransferRemoteHandler: h.transferHandler,
 }));
-vi.mock('../transfer.js', () => ({ createSetupTransferSource: () => h.blocked, requestSetupTransfer: h.blocked }));
+vi.mock('../transfer.js', () => ({
+  createSetupTransferSource: (deps: SetupTransferSourceDeps) => { h.transferDeps = deps; return h.blocked; },
+  requestSetupTransfer: h.blocked,
+}));
 
 // Named host imports are cut at this file's boundary, not recursively auto-mocked.
 // None of these operations is part of the predicate/normalizer contract under test.
@@ -60,7 +68,9 @@ vi.mock('../../device-link/ipc.js', () => ({ defaultDeps: h.blocked, handleListD
 vi.mock('../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: h.blocked }));
 vi.mock('../../im/ownerScopedStorage.js', () => ({ ownerScopedImSecrets: h.blocked }));
 vi.mock('../../maker-host/active-catalog.js', () => ({ getActiveCatalog: h.blocked }));
-vi.mock('../../maker-host/custom-mcp-store.desktop.js', () => ({ listCustomMcpNamesForSetup: h.blocked, listCustomMcpServers: h.blocked }));
+vi.mock('../../maker-host/custom-mcp-store.desktop.js', () => ({
+  listCustomMcpNamesForSetup: h.blocked, listCustomMcpRuntimeGenerations: h.blocked, readCustomMcpServers: h.readMcps,
+}));
 vi.mock('../../maker-host/custom-provider-header-secrets.js', () => ({ hydrateCustomProviderHeaders: h.blocked }));
 vi.mock('../../maker-host/custom-provider-store.js', () => ({ listCustomProviders: h.blocked }));
 vi.mock('../../maker-ipc/mcpHandlers.js', () => ({ createCustomMcpServerForSetup: h.blocked }));
@@ -112,6 +122,26 @@ beforeEach(() => {
 });
 
 describe('real setup-migration registration callbacks', () => {
+  // Unit: one damaged source row used to discard a healthy remote server both
+  // from the snapshot and from the user's subsequent approved transfer.
+  it('keeps readable MCPs in a partial snapshot and copies only requested, readable credentials', async () => {
+    const remote = { id: 'docs', name: 'Docs', transport: 'sse' as const, url: 'https://example.test/sse',
+      headers: { 'X-Key': 'invalid-test-header' } };
+    const other = { ...remote, id: 'unrequested' };
+    const unreadable = { id: 'damaged', name: 'Damaged', transport: 'http' as const, reason: 'unreadable' as const };
+    h.readMcps.mockImplementation(async (ids) => ({
+      servers: [remote, other].filter(server => !ids || ids.includes(server.id)), unreadableServers: [unreadable],
+    }));
+    const snapshot = await collectSetupSnapshot(deps().source);
+    expect(snapshot.unavailable).toContain('mcpServers');
+    expect(snapshot.mcpServers.map(server => server.id)).toEqual(['docs', 'unrequested']);
+    expect(JSON.stringify(snapshot)).not.toMatch(/invalid-test-header|fake-orphaned-old-bearer|damaged/i);
+    const bundle = await h.transferDeps!.collectSecrets({
+      mcpServers: ['docs', 'damaged'], providers: [], plugins: [], builtinKeys: [],
+    });
+    expect(bundle.mcpServers).toEqual([{ id: remote.id, url: remote.url, headers: remote.headers, token: 'fake-orphaned-old-bearer' }]);
+  });
+
   it('retains the copied flag through actual normalization and fake disk round trips', async () => {
     const normalized = normalize(stateWith([item({ mcpCredentialsCopied: true })]));
     await deps().writeState(normalized);

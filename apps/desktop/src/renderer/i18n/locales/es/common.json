@@ -9219,21 +9219,23 @@
       }
     },
     "mcp": {
+      "unreadable": "No se puede leer la configuración guardada. Puedes eliminarla y volver a añadirla.",
+      "loadFailed": "No se pudieron cargar las configuraciones MCP. Vuelve a intentarlo.",
       "title": "Herramientas externas",
-      "subtitle": "Conecta tus propios servidores MCP remotos. Los servidores HTTP/Streamable HTTP funcionan con Claude y Codex; SSE solo funciona con Claude.",
+      "subtitle": "Conecta servidores HTTP/SSE remotos o programas stdio locales.",
       "cancel": "Cancelar",
       "save": "Guardar",
       "editAria": "Editar",
       "deleteAria": "Eliminar",
       "addCustom": {
         "title": "Agregar servidor MCP",
-        "subtitle": "Introduce un endpoint MCP remoto (http/sse)"
+        "subtitle": "Configura una dirección HTTP/SSE o un comando stdio"
       },
       "dialog": {
         "createTitle": "Agregar servidor MCP",
         "editTitle": "Editar servidor MCP",
-        "desc": "Solo MCP remoto http / sse. Las nuevas sesiones de Agent podrán usarlo después de guardar; las sesiones de Agent en curso no se verán afectadas.",
-        "teammateDesc": "Solo MCP remoto http / sse. Después de guardar, tu amigo lo añade a sus herramientas y puede usarlo desde el siguiente mensaje de esta conversación, sin necesidad de una nueva sesión."
+        "desc": "Configura un servidor remoto o programa local. Al guardar, las tareas existentes conservan su configuración. Las tareas locales que se inicien después cargarán los cambios.",
+        "teammateDesc": "Configura un servidor remoto o programa local. Al guardar, las tareas existentes conservan su configuración. Las tareas locales que se inicien después cargarán los cambios."
       },
       "fields": {
         "name": "Nombre para mostrar",
@@ -9245,16 +9247,35 @@
         "tokenPlaceholder": "Introduce el token de autenticación",
         "tokenEditPlaceholder": "Déjalo en blanco para quitar el token guardado",
         "tokenSaved": "Guardado",
-        "tokenHelp": "Se usa para la autenticación: Claude lo envía como un encabezado Authorization: Bearer; Codex solo admite autenticación Bearer.",
+        "tokenHelp": "Cindy lo envía como cabecera Authorization: Bearer.",
         "headers": "Encabezados (opcional)",
         "headerNamePlaceholder": "Nombre del encabezado",
         "headerValuePlaceholder": "Valor",
         "addHeader": "Agregar encabezado",
-        "removeRow": "Quitar fila"
+        "removeRow": "Quitar fila",
+        "command": "Comando",
+        "commandHelp": "Nombre o ruta absoluta de un ejecutable instalado. Cindy lo inicia cuando se necesita.",
+        "args": "Argumentos",
+        "argsHelp": "Un argumento por fila. Se conservan los espacios y los argumentos vacíos; sin sintaxis de shell.",
+        "cwd": "Directorio de trabajo (opcional)",
+        "cwdHelp": "Ruta absoluta en el equipo de ejecución. Si se deja vacío, se usa tu directorio personal.",
+        "env": "Variables de entorno (opcional)",
+        "envHelp": "Los valores se guardan cifrados y no se devuelven al asistente. Elimina una fila para borrar la variable.",
+        "envName": "Nombre de la variable",
+        "envValue": "Valor",
+        "envSaved": "Guardado; no lo modifiques para conservarlo",
+        "addArg": "Añadir argumento",
+        "removeArg": "Eliminar argumento",
+        "addEnv": "Añadir variable",
+        "removeEnv": "Eliminar variable"
       },
       "errors": {
         "nameRequired": "El nombre para mostrar es obligatorio",
-        "urlInvalid": "Introduce una URL http(s) válida"
+        "urlInvalid": "Introduce una URL http(s) válida",
+        "commandRequired": "Introduce el nombre o la ruta absoluta de un ejecutable",
+        "argsInvalid": "Los argumentos no pueden contener NUL",
+        "cwdInvalid": "El directorio de trabajo no puede contener NUL",
+        "envInvalid": "Usa nombres únicos con letras, dígitos o guiones bajos, comenzando por letra o guion bajo. Los valores no pueden contener NUL."
       },
       "toast": {
         "created": "Servidor MCP agregado",

@@ -2,22 +2,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '@modelcontextprotocol/ext-apps';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { McpAppsHost, appServerRevision } from '../host.js';
-import type { AppConnection } from '../connection.js';
+import type { AppConnection, AppServerConfig } from '../connection.js';
+import { createMcpAppsRuntime } from '../runtimeCore.js';
 
 const hosts: McpAppsHost[] = [];
 afterEach(async () => {
   vi.useRealTimers();
   await Promise.all(hosts.splice(0).map((host) => host.reset()));
 });
-function fixture() {
+function fixture(serverConfig?: AppServerConfig) {
   const owner = {};
-  const config = { id: 'example', url: 'https://mcp.example.invalid', transport: 'http' as const };
+  const config = serverConfig ?? { id: 'example', url: 'https://mcp.example.invalid', transport: 'http' as const };
   const tool = { name: 'form', inputSchema: { type: 'object' as const }, _meta: { ui: { resourceUri: 'ui://form' } } };
   const record = { version: 1 as const, serverId: config.id, serverRevision: appServerRevision(config), resourceUri: 'ui://form', tool, arguments: {} };
   const resource = vi.fn<AppConnection['resource']>(async () => ({
     result: { contents: [{ uri: record.resourceUri, mimeType: 'text/html;profile=mcp-app', text: '<html>form</html>' }] },
   }));
   const connection = {
+    config,
     getClient: async () => ({ getServerCapabilities: () => ({}) }),
     tools: async () => [tool], resource, listen: () => () => {}, close: vi.fn(async () => {}),
   } as unknown as AppConnection;
@@ -42,6 +44,28 @@ async function initialize(host: McpAppsHost, viewId: string) {
   await vi.advanceTimersByTimeAsync(0);
 }
 describe('MCP App open cancellation', () => {
+  // Unit regression: release/reset used to forget an owned stdio process before
+  // close settled, so the next account reset falsely succeeded. Existing open
+  // tests only used successful closes; one rejecting connection is sufficient.
+  it.each(['release', 'reset'] as const)('retains a failed stdio %s until cleanup succeeds', async operation => {
+    const f = fixture({ id: 'example', transport: 'stdio', command: 'fixture', args: [], env: {} });
+    const runtime = createMcpAppsRuntime();
+    runtime.setMcpAppsHost(f.host);
+    f.host.registerConnection(f.connection);
+    const close = vi.mocked(f.connection.close).mockRejectedValue(new Error('MCP_STDIO_CLOSE_FAILED'));
+    try {
+      await expect(operation === 'release' ? f.host.releaseConnection(f.connection) : runtime.resetAppServers())
+        .rejects.toThrow('MCP_STDIO_CLOSE_FAILED');
+      await expect(runtime.resetAppServers()).rejects.toThrow('MCP_STDIO_CLOSE_FAILED');
+      await expect(runtime.resetAppServers()).rejects.toThrow('MCP_STDIO_CLOSE_FAILED');
+      close.mockResolvedValue(undefined);
+      await expect(runtime.resetAppServers()).resolves.toBeUndefined();
+      close.mockClear();
+      await expect(runtime.resetAppServers()).resolves.toBeUndefined();
+      expect(close).not.toHaveBeenCalled();
+    } finally { close.mockResolvedValue(undefined); }
+  });
+
   // UI extension contract: independently opened resources share the real Host,
   // never fabricate a task/card or replay a tool to obtain a document (unit).
   it('opens an authorized resource without reading or writing a tool card', async () => {

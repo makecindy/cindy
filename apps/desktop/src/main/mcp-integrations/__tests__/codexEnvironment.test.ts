@@ -119,6 +119,111 @@ describe('codexEnvironment', () => {
     expect(replacementUrl.toString()).not.toBe(boundUrl.toString());
   });
 
+  // Regression: saving a custom MCP after bridge startup omitted it even from new tasks.
+  // Build real per-thread overrides, then initialize/list/call through SDK clients:
+  // new tasks see additions/edits while existing transports and calls keep their snapshot.
+  // Tier: existing integration fixture (loopback bridge + SDK Client, no accounts/processes).
+  it('loads custom provider additions and edits for new bound sessions without replacing the cached bridge', async () => {
+    let enterCall!: () => void;
+    let releaseCall!: () => void;
+    const entered = new Promise<void>(resolve => { enterCall = resolve; });
+    const released = new Promise<void>(resolve => { releaseCall = resolve; });
+    const provider = (name: string, command: string, pauseFirstCall = false): CustomMcpProvider =>
+      new CustomMcpProvider({
+        id: name, name, transport: 'stdio', command, args: [], env: {},
+      }, () => null, (read) => {
+        const snapshot = read();
+        const server = new McpServer({ name, version: '1' });
+        server.registerTool('read_config', {}, async () => {
+          if (pauseFirstCall) {
+            pauseFirstCall = false;
+            enterCall();
+            await released;
+          }
+          return { content: [{ type: 'text', text: snapshot.transport === 'stdio' ? snapshot.command : snapshot.url }] };
+        });
+        return server;
+      });
+    const providers: McpProvider[] = [testProvider()];
+    const logger = noopLogger();
+    const first = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
+    const bridgeIdentity = { port: first.bridge!.port, token: first.bridge!.token, instanceId: first.bridge!.instanceId };
+    const clients: Client[] = [];
+    const instances: string[] = [];
+    const configure = (instance: string, names: string[]) => {
+      const vendorOptions = { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: [], cindyRuntimeMcpServerNames: names };
+      const bound = first.buildSessionMcpConfig!(instance, { vendorOptions });
+      instances.push(instance);
+      registerCodexMcpThreadContext(`thread-${instance}`, {
+        agentKind: 'codex', sessionId: `task-${instance}`, sessionInstanceId: instance, workingDir: '/fixture', vendorOptions,
+      });
+      return bound;
+    };
+    const connect = async (bound: Record<string, unknown>, name: string): Promise<Client> => {
+      const client = new Client({ name: 'provider-snapshot-test', version: '1' });
+      clients.push(client);
+      const tokenEnv = bound[`mcp_servers.${name}.bearer_token_env_var`] as string;
+      await client.connect(new StreamableHTTPClientTransport(new URL(bound[`mcp_servers.${name}.url`] as string), {
+        requestInit: { headers: { Authorization: `Bearer ${first.extraEnv[tokenEnv]}` } },
+      }));
+      return client;
+    };
+    const save = (...next: CustomMcpProvider[]) => {
+      // Match the registry: current configs are available before the provider array changes.
+      for (const entry of next) registerAppServer(entry.name, () => entry.appServerConfig());
+      providers.splice(1, providers.length - 1, ...next);
+    };
+    const expectConfigured = (bound: Record<string, unknown>, name: string, instance: string, enabled: boolean) => {
+      const url = new URL(bound[`mcp_servers.${name}.url`] as string);
+      expect(url.origin).toBe(new URL(first.bridge!.url(name)).origin);
+      expect(url.pathname).toBe(`/mcp/${name}`);
+      expect(url.searchParams.get('instance')).toBe(instance);
+      expect(first.extraEnv[bound[`mcp_servers.${name}.bearer_token_env_var`] as string]).toBe(first.bridge!.token);
+      expect(bound[`mcp_servers.${name}.startup_timeout_sec`]).toBe(600);
+      expect(bound[`mcp_servers.${name}.tool_timeout_sec`]).toBe(600);
+      expect(bound[`mcp_servers.${name}.enabled`]).toBe(enabled);
+    };
+    try {
+      save(provider('custom_snapshot', 'old-command', true));
+      const oldBound = configure('old-instance', ['custom_snapshot']);
+      expectConfigured(oldBound, 'custom_snapshot', 'old-instance', true);
+      const existing = await connect(oldBound, 'custom_snapshot');
+      const inFlight = existing.callTool({ name: 'read_config', arguments: {} });
+      await entered;
+      save(provider('custom_snapshot', 'new-command'), provider('custom_added', 'added-command'));
+      const cached = await getCodexExtraSpawnConfig({ mcpProviders: providers, logger });
+      expect(cached).toBe(first);
+      const nextBound = configure('new-instance', ['custom_snapshot', 'custom_added']);
+      expectConfigured(nextBound, 'custom_snapshot', 'new-instance', true);
+      expectConfigured(nextBound, 'custom_added', 'new-instance', true);
+      expect(oldBound).not.toHaveProperty('mcp_servers.custom_added.url');
+      expect({ port: cached.bridge!.port, token: cached.bridge!.token, instanceId: cached.bridge!.instanceId }).toEqual(bridgeIdentity);
+      // Remote consumers keep the startup advertisement; local overrides carry the new catalog.
+      expect(cached.bridgeServerNames).toEqual(['cindy_test']);
+      expect(getActiveCodexBridgeServerNames()).toEqual(['cindy_test']);
+      releaseCall();
+      expect(await inFlight).toMatchObject({ content: [{ type: 'text', text: 'old-command' }] });
+      expect(await existing.callTool({ name: 'read_config', arguments: {} }))
+        .toMatchObject({ content: [{ type: 'text', text: 'old-command' }] });
+
+      for (const [name, expected] of [['custom_snapshot', 'new-command'], ['custom_added', 'added-command']] as const) {
+        const client = await connect(nextBound, name);
+        expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(['read_config']);
+        expect(await client.callTool({ name: 'read_config', arguments: {} }))
+          .toMatchObject({ content: [{ type: 'text', text: expected }] });
+      }
+      const excluded = configure('excluded-instance', ['custom_snapshot']);
+      expectConfigured(excluded, 'custom_added', 'excluded-instance', false);
+      await expect(connect(excluded, 'custom_added')).rejects.toThrow('MCP server is not mounted for this Session');
+      expect(await existing.callTool({ name: 'read_config', arguments: {} }))
+        .toMatchObject({ content: [{ type: 'text', text: 'old-command' }] });
+    } finally {
+      releaseCall();
+      await Promise.all(clients.map(client => client.close()));
+      for (const instance of instances) unregisterCodexMcpThreadContext(`thread-${instance}`, instance);
+    }
+  });
+
   it.each(['http', 'sse'] as const)('keeps a %s custom MCP facade available across Codex clients', async (transport) => {
     const instances: McpServer[] = [];
     const appProxy = vi.fn((read: () => AppServerConfig, context: McpProviderContext) => {

@@ -176,6 +176,38 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  // Stdio additive-storage contract: real runner preserves legacy remote MCP rows and
+  // already-created local fields. Existing replay fixtures had no custom MCP data assertion.
+  // Minimal input: one remote row; migration tier because this executes historical SQLite DDL.
+  it.each(['missing', 'legacy', 'partial'] as const)('adds stdio fields without replacing %s MCP data', shape => {
+    const { db, cleanup } = createTempDb();
+    const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-mcp-stdio-upgrade-'));
+    try {
+      db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');
+      if (shape !== 'missing') {
+        db.exec(`CREATE TABLE custom_mcp_servers (
+          id text PRIMARY KEY, name text NOT NULL, transport text NOT NULL, url text NOT NULL,
+          headers text NOT NULL DEFAULT '{}', sort_order integer NOT NULL DEFAULT 0,
+          created_at integer NOT NULL, updated_at integer NOT NULL);
+          INSERT INTO custom_mcp_servers VALUES ('remote', 'Keep name', 'sse', 'https://example.test/mcp', 'safe-storage:v1:fixture', 7, 11, 22);`);
+        if (shape === 'partial') db.exec("ALTER TABLE custom_mcp_servers ADD command text; UPDATE custom_mcp_servers SET command = 'keep-command';");
+      }
+      const migration = listMigrations(drizzleDir()).find(item => item.fileName.endsWith('_custom_mcp_stdio.sql'))!;
+      copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+      mkdirSync(path.join(stagedDir, 'scripts'));
+      copyFileSync(migration.tsScriptPath!, path.join(stagedDir, 'scripts', path.basename(migration.tsScriptPath!)));
+      for (let replay = 0; replay < 2; replay += 1) {
+        runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: migration.seq - 1 });
+        if (shape === 'missing') expect(tableExists(db, 'custom_mcp_servers')).toBe(false);
+        else expect(db.prepare('SELECT * FROM custom_mcp_servers').all()).toEqual([{
+          id: 'remote', name: 'Keep name', transport: 'sse', url: 'https://example.test/mcp',
+          headers: 'safe-storage:v1:fixture', sort_order: 7, created_at: 11, updated_at: 22,
+          command: shape === 'partial' ? 'keep-command' : null, args: '[]', cwd: null, env: '{}',
+        }]);
+      }
+    } finally { rmSync(stagedDir, { recursive: true, force: true }); cleanup(); }
+  });
+
   it.each(['missing', 'legacy', 'partial'])(
     'replays remote report persistence with %s Worker schema',
     (shape) => {

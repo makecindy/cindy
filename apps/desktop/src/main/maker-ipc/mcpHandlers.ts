@@ -4,8 +4,8 @@
  *   - MCP_CUSTOM_LIST（只读：列出当前账号的自定义 MCP）。
  *   - MCP_CUSTOM_CREATE / UPDATE / DELETE（CRUD）。
  *
- * bearer token **不经这些 handler**：renderer 用通用 safe-storage IPC 写 `mcp_token_<id>`，
- * delete 时同样由 renderer 经通用 safe-storage-remove 清 token。
+ * bearer token 随原生表单意图交 Main 保存，不进配置列表和回执。
+ * 配置和凭证串行更新完成后才发布，stdio 切换不会继承旧 HTTP token。
  *
  * 副作用（CRUD 成功后刷新两个 agent 的 mcpProviders 数组 + 广播 MCP_CHANGED）经 deps 注入，
  * handler body 可脱 Electron 用 IpcHarness + 内存 db 直接 invoke 单测（规则 14）。
@@ -16,21 +16,25 @@ import { extractIpcError } from '../../shared/ipcError.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import type { CustomMcpListContext } from '../../shared/customMcp.js';
+import type { CustomMcpListContext, CustomMcpListEntry, CustomMcpInput, CustomMcpTokenChange } from '../../shared/customMcp.js';
 import type { McpDuplicateChoice, McpDuplicateReport } from '../../shared/customMcp.js';
 import { BOT_MODEL_CHAIN_MAX, type BotModelRoute } from '../../shared/botModelChain.js';
 import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
 import {
   createCustomMcpServer,
-  customMcpServerExists,
   deleteCustomMcpServer,
-  listCustomMcpServers,
+  readCustomMcpServers,
+  listCustomMcpRuntimeGenerations,
   updateCustomMcpServer,
-  validateCustomMcpConfig,
+  validateCustomMcpInput,
   type CustomMcpConfig,
 } from '../maker-host/custom-mcp-store.desktop.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
+import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('mcp-settings');
 
 export interface McpHandlerDeps {
   listDuplicates?(): Promise<McpDuplicateReport>;
@@ -45,16 +49,6 @@ export interface McpHandlerDeps {
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send MCP_CHANGED）。 */
   broadcastChanged(): void;
   /**
-   * 失效 Codex 本地 app-server 使新 MCP 配置对下个 codex 会话生效（可选，生产注入）。
-   *
-   * refreshProviders 只更新内存 mcpProviders 数组；Claude 每个会话重新 buildMcpServers 即时生效，
-   * 但 Codex 的 extraArgs/extraEnv 在 codexEnvironment 的模块级 `cached` 里被冻住，后续会话复用旧
-   * spawn 配置——不失效则新增 server 不出现、删除 / 换 token 仍残留，直到重启 app。生产实现清
-   * codexEnvironment 缓存 + dispose app-server（与 slack 变更同款,best-effort，busy 会话软重启失败
-   * 登记空闲重试而不阻塞 CRUD）。测试可省略。
-   */
-  invalidateCodex?(): Promise<void>;
-  /**
    * 内置 MCP server 名（生产 = getBuiltinMcpServerNames）。自定义 MCP 撞上这些名字时
    * 会在装配层顶替内置 server 并继承其审批信任，因此创建 / 更新阶段直接拒收。
    * 省略时不做保留名校验（测试便利）。
@@ -62,6 +56,21 @@ export interface McpHandlerDeps {
   getReservedMcpIds?(): string[];
   /** Main-only token write for new-computer setup (production = safeStorage, same key as Settings). */
   storeMcpToken?(mcpId: string, token: string): boolean;
+  /** False means the obsolete credential may still exist: do not publish a new transport. */
+  removeMcpToken(mcpId: string): boolean;
+}
+
+const tokenChangeSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('keep') }).strict(),
+  z.object({ action: z.literal('clear') }).strict(),
+  z.object({ action: z.literal('set'), value: z.string().trim().min(1) }).strict(),
+]);
+
+function parseTokenChange(input: unknown): CustomMcpTokenChange {
+  if (input === undefined) return { action: 'keep' };
+  const parsed = tokenChangeSchema.safeParse(input);
+  if (!parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP token change');
+  return parsed.data;
 }
 
 const listContextSchema = z.object({
@@ -103,6 +112,29 @@ export function createCustomMcpServerFromMain(input: unknown, token: string | nu
 }
 
 export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps): void {
+  // A late token write from one save must never attach to the next save's transport.
+  // Capture the owner before queuing so an account switch cannot redirect pending writes.
+  let mutations: Promise<unknown> = Promise.resolve();
+  function mutate<T>(operation: (assertOwner: () => void) => Promise<T>): Promise<T> {
+    const owner = getCurrentDbClientSnapshot();
+    const assertOwner = () => {
+      if (!owner || getCurrentDbClientSnapshot() !== owner) throwIpcError('PERMISSION_DENIED', 'MCP settings owner changed');
+    };
+    const result = mutations.then(() => { assertOwner(); return operation(assertOwner); });
+    mutations = result.catch(() => {});
+    return result;
+  }
+  function clearBearer(id: string): void {
+    let removed = false;
+    try { removed = deps.removeMcpToken(id); } catch { /* Never return a credential storage exception. */ }
+    if (!removed) throwIpcError('INTERNAL', 'Could not clear the previous MCP credential');
+  }
+  function saveBearer(id: string, token: string): boolean {
+    let saved = false;
+    try { saved = deps.storeMcpToken?.(id, token) === true; } catch { /* Never log credential exceptions. */ }
+    if (!saved) log.warn('MCP configuration saved but its optional bearer credential could not be saved');
+    return saved;
+  }
   registry.handle(MAKER_INVOKE.MCP_DUPLICATES_LIST, async (event) => {
     assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     return deps.listDuplicates?.() ?? { connections: [], complete: false };
@@ -118,7 +150,8 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     deps.broadcastChanged();
     return { ok: true };
   });
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_LIST, async (_event, context: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_LIST, async (event, context: unknown) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     const parsed = context === undefined ? undefined : listContextSchema.safeParse(context);
     if (parsed && !parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP catalog context');
     const input = parsed?.data;
@@ -126,63 +159,66 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
       ? await deps.resolveBotContext(input.botSessionId, input.modelChain)
       : input ? { agentKind: input.agentKind } : undefined;
     if (input?.botSessionId && !runtime) throwIpcError('NOT_FOUND', 'Canonical Bot task not found');
-    const servers = await listCustomMcpServers();
-    if (!runtime) return { servers };
+    const result = await readCustomMcpServers();
+    const unreadable = result.unreadableServers.length > 0 ? { unreadableServers: result.unreadableServers } : {};
+    const servers: CustomMcpListEntry[] = result.servers.map(config => {
+      if (config.transport !== 'stdio') return config;
+      const { env, ...publicConfig } = config;
+      return { ...publicConfig, envKeys: Object.keys(env).sort() };
+    });
+    if (!runtime) return { servers, ...unreadable };
     const { agentKind } = runtime;
     const catalog = await deps.listMcpServers(runtime);
     const available = new Set(catalog
       .filter((entry) => entry.source === 'custom' && entry.available !== false)
       .map((entry) => entry.name));
-    return { agentKind, servers: servers.map((server) => ({ ...server, available: available.has(server.id) })) };
+    return { agentKind, servers: servers.map((server) => ({ ...server, available: available.has(server.id) })), ...unreadable };
   });
 
-  // CRUD 成功后统一收尾：刷新 provider 数组 + 广播 + 失效 Codex app-server。
+  // 保存设置只发布配置，不关闭现有会话或重建其共享运行环境。
   async function afterChange(): Promise<void> {
     await deps.refreshProviders();
     deps.broadcastChanged();
-    // Codex 失效放最后：即使它慢 / 抛错(busy 会话),UI 列表与 Claude 侧已即时生效。
-    // 生产实现自身 best-effort;这里再包一层,保证 CRUD 结果不被 Codex 重启失败带崩。
-    try {
-      await deps.invalidateCodex?.();
-    } catch {
-      /* best-effort:Codex 失效失败不影响 CRUD 已落库的结果 */
-    }
   }
 
-  async function createConfiguration(input: unknown): Promise<CustomMcpConfig> {
-    const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
+  async function createConfiguration(input: unknown, assertOwner: () => void): Promise<CustomMcpConfig> {
+    const v = validateCustomMcpInput(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
-    const config = input as CustomMcpConfig;
-    if (await customMcpServerExists(config.id)) {
+    const config = input as CustomMcpInput;
+    if ((await listCustomMcpRuntimeGenerations()).some(row => row.id === config.id)) {
       throwIpcError('ALREADY_EXISTS', `custom mcp '${config.id}' already exists`);
     }
-    await createCustomMcpServer(config);
-    return config;
+    assertOwner();
+    if (config.transport !== 'stdio') clearBearer(config.id);
+    const created = await createCustomMcpServer(config);
+    assertOwner();
+    if (config.transport === 'stdio') {
+      try { deps.removeMcpToken(config.id); } catch { /* unused by stdio; checked again when leaving it */ }
+    }
+    return created;
   }
 
-  async function createServer(input: unknown, token: string | null): Promise<void> {
-    const config = await createConfiguration(input);
+  async function createServer(input: unknown, token: string | null, assertOwner: () => void): Promise<void> {
+    const config = await createConfiguration(input, assertOwner);
+    assertOwner();
     // Like the settings page: a token that cannot be stored leaves the server to be completed there
     // (the one-time checklist keeps it until a token is saved).
-    if (token) deps.storeMcpToken?.(config.id, token);
+    if (token && config.transport !== 'stdio') saveBearer(config.id, token);
     await afterChange();
   }
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown) => {
-    await createServer(input, null);
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (event, input: unknown, tokenInput: unknown) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    const change = parseTokenChange(tokenInput);
+    await mutate(assertOwner => createServer(input, change.action === 'set' ? change.value : null, assertOwner));
     return { ok: true };
   });
-  mainProcessMcpCreate = createServer;
-  mainProcessMcpSetupCreate = async (input, token) => {
-    const config = await createConfiguration(input);
+  mainProcessMcpCreate = (input, token) => mutate(assertOwner => createServer(input, token, assertOwner));
+  mainProcessMcpSetupCreate = (input, token) => mutate(async assertOwner => {
+    const config = await createConfiguration(input, assertOwner);
+    assertOwner();
     let tokenResult: SetupMcpCreateReceipt['token'] = 'not-requested';
-    if (token) {
-      try {
-        tokenResult = deps.storeMcpToken?.(config.id, token) === true ? 'saved' : 'failed';
-      } catch {
-        tokenResult = 'failed';
-      }
-    }
+    if (token && config.transport !== 'stdio') tokenResult = saveBearer(config.id, token) ? 'saved' : 'failed';
     let refreshError: IpcErrorCode | null = null;
     try {
       await afterChange();
@@ -191,31 +227,55 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
       refreshError = extractIpcError(error)?.code ?? 'INTERNAL';
     }
     return { configurationSaved: true, token: tokenResult, refreshError };
-  };
+  });
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown) => {
-    const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (event, input: unknown, tokenInput: unknown) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    const v = validateCustomMcpInput(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
-    const config = input as CustomMcpConfig;
-    const updated = await updateCustomMcpServer(config.id, config);
-    if (!updated) throwIpcError('NOT_FOUND', `custom mcp '${config.id}' not found`);
-    await afterChange();
+    const config = input as CustomMcpInput;
+    const change = parseTokenChange(tokenInput);
+    await mutate(async assertOwner => {
+      const previous = (await listCustomMcpRuntimeGenerations()).find(row => row.id === config.id);
+      if (!previous) throwIpcError('NOT_FOUND', `custom mcp '${config.id}' not found`);
+      assertOwner();
+      // A failed conversion into stdio must retain the working remote credential.
+      // Leaving stdio is different: its old bearer must be gone before any remote URL is stored.
+      if (previous.transport === 'stdio' && config.transport !== 'stdio') clearBearer(config.id);
+      const updated = await updateCustomMcpServer(config.id, config);
+      if (!updated) throwIpcError('NOT_FOUND', `custom mcp '${config.id}' not found`);
+      assertOwner();
+      if (config.transport === 'stdio' && previous.transport !== 'stdio') {
+        try { deps.removeMcpToken(config.id); } catch { /* unused by stdio; checked again when leaving it */ }
+      } else if (config.transport !== 'stdio') {
+        if (change.action === 'clear') clearBearer(config.id);
+        else if (change.action === 'set') saveBearer(config.id, change.value);
+      }
+      await afterChange();
+    });
     return { ok: true };
   });
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_DELETE, async (_event, mcpId: unknown) => {
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_DELETE, async (event, mcpId: unknown) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     if (typeof mcpId !== 'string' || mcpId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'mcpId required');
     }
-    await deleteCustomMcpServer(mcpId);
-    await afterChange();
+    await mutate(async assertOwner => {
+      await deleteCustomMcpServer(mcpId);
+      assertOwner();
+      // Deletion must revoke the server even if orphan cleanup fails. Creation always clears it first.
+      try { deps.removeMcpToken(mcpId); } catch { /* best-effort orphan cleanup */ }
+      await afterChange();
+    });
     return { ok: true };
   });
 
-  // token-only 后置刷新：renderer 在 safeStorage write/remove 完成后调用，消除竞态窗口。
-  // 无 DB 改动；仅重跑 afterChange()（refreshProviders + broadcastChanged + invalidateCodex）。
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_REFRESH, async () => {
-    await afterChange();
+  // 兼容旧 token-only 调用方；原生设置已通过单次保存 IPC 处理凭证和发布。
+  // 无 DB 改动；仅重跑 afterChange()（refreshProviders + broadcastChanged）。
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_REFRESH, async (event) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    await mutate(() => afterChange());
     return { ok: true };
   });
 }

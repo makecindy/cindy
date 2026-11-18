@@ -204,7 +204,53 @@ iOS 另保留显式顶层请求拦截；可信 proxy 同时检查实际 `event.o
 
 ## 接入
 
-在 Cindy 设置中添加普通自定义 MCP，选择 Streamable HTTP 或 SSE 地址及所需认证。
+在 Cindy 设置中添加普通自定义 MCP，选择 HTTP（Streamable HTTP）、SSE 或 stdio。
+HTTP/SSE 使用地址及所需认证；stdio 使用已安装的程序名或绝对路径、独立参数、可选工作目录和环境变量。
+命令与参数直接交给子进程，不拼接 shell 命令。省略工作目录时使用运行电脑的用户主目录。
+Cindy 只在连接需要时启动 stdio 程序；连接释放时回收，已有 MCP App 页面按原有持有规则继续保留连接。
+不会注册系统服务、自启动或为 stdio 新开监听端口。程序自行启动的外部服务不属于此保证。
+
+Windows 为每条 stdio 连接单独建立一个 Job Object，跟踪启动器及其后代。
+关闭连接时，Cindy 先关闭标准输入，让工具保存状态并退出。宽限期结束后，Windows 只终止该组中
+仍在运行的进程。即使启动器先退出，也能清理它留下的进程。独立启动的同名工具可以继续工作。
+
+在已安装项目依赖的 Windows 开发机上，可从仓库根目录运行以下测试。测试用 Rust 1.87+
+和 MSVC 工具链编译当前辅助程序，在临时目录启动本地 MCP，验证真实工具调用、退出前写盘、
+卡住的进程回收及第二条连接的隔离。全程使用测试数据，无需 Grafana 凭证。
+
+```powershell
+pnpm --dir apps/desktop exec vitest run src/main/mcp-apps/__tests__/stdio.e2e.test.ts --reporter=verbose
+```
+
+新增、编辑配置不重启已有任务，也不关闭合法的旧连接。已有 Agent 连接继续使用启动时的配置
+（包括旧环境变量），在途调用照常完成；连接正常释放后才回收。删除或不可读取的配置、账号切换
+与退出仍会失效并回收对应连接。MCP App 页面的当前配置与权限校验保持原有规则。
+Claude、Pi 新启动的运行会话读取新配置；本机 Codex 新启动的任务同样加载更新，即使它与已有
+任务共享 app-server，也不需要重启 Cindy。已有任务继续使用原配置，不因保存而热加载或中断。
+这项新任务更新保证限本机运行环境；SSH 远端继续使用既有装配链路。
+保存设置不安排强制重连或空闲会话重启。
+
+例如使用 Grafana 的 `mcp-grafana`，先在运行 Cindy 的电脑上安装 `uv`，再在表单中填写：
+
+- 传输方式：`stdio`
+- 命令：`uvx`
+- 参数：一行 `mcp-grafana`
+- 环境变量：`GRAFANA_URL` 和 `GRAFANA_SERVICE_ACCOUNT_TOKEN`，值仅在原生表单填写。
+
+`uvx` 首次运行可能需要下载程序，所需网络与 Grafana 访问权限由该程序负责。
+若从 Dock 启动时找不到命令，可填写 `uvx` 的绝对路径；宿主仍复用已有登录环境解析能力。
+环境变量加密保存；编辑时只展示变量名，不读回旧值。未修改的值保留，输入新值替换，删除行删除变量。
+某一项的已存配置无法读取时，设置列表会标出该项并保留删除入口，其他配置仍可使用。
+“已保存”只证明配置已落盘；应在工具出现后完成一次实际工具调用，再确认连接可用。
+`request_mcp_setup` 可建议命令、参数、工作目录及 `envKeys`，不接受环境变量值；回执仍只有保存状态与服务器 id。
+此阶段不提供 JSON/TOML 导入，也不自动安装命令。
+
+stdio 的 JSON-RPC 分帧与初始化握手复用仓内 `@modelcontextprotocol/sdk` 1.29，
+遵循 [MCP 2025-11-25 transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+与 [lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)。
+Grafana 只是通用 stdio 的配置示例，不增加供应商专用实现，也不引入 2026-07-28 v2 的协议差异。
+
+
 凭证留在 Main 的现有密钥存储中，不进入 iframe。Claude Code、Codex、Pi 都通过同一
 Host facade 调用自定义 MCP；支持 Apps 的工具执行时生成独立卡片，历史卡片可重新连接。
 不支持 UI 扩展的普通 MCP 保持文本工具使用方式。

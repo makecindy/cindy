@@ -3,7 +3,7 @@
  * http/sse、有无 token 下的输出。
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { McpProviderContext } from '@cindy/maker-core';
 import type { CustomMcpConfig } from '../../../shared/customMcp.js';
@@ -11,7 +11,7 @@ import { CustomMcpProvider } from '../custom-mcp-provider.js';
 
 const ctx: McpProviderContext = { agentKind: 'claude-code', workingDir: '/tmp' };
 
-function make(config: Partial<CustomMcpConfig>, token: string | null = null): CustomMcpProvider {
+function make(config: Partial<Extract<CustomMcpConfig, { transport: 'http' | 'sse' }>>, token: string | null = null): CustomMcpProvider {
   const full: CustomMcpConfig = {
     id: 'mytools',
     name: 'My Tools',
@@ -24,6 +24,52 @@ function make(config: Partial<CustomMcpConfig>, token: string | null = null): Cu
 }
 
 describe('CustomMcpProvider', () => {
+  // Unit regression: a retained provider for endpoint A lazily read endpoint B's new bearer by id.
+  // The host facade and native fallback must both keep the configuration's own credential snapshot.
+  it('keeps the previous endpoint credential when another configuration reuses its id', () => {
+    let token = 'fake-token-a';
+    const config: CustomMcpConfig = { id: 'shared-id', name: 'Remote', transport: 'http', url: 'https://a.example/mcp', headers: {} };
+    const upstream: unknown[] = [];
+    const previous = new CustomMcpProvider(config, () => token, read => { upstream.push(read()); return {} as never; });
+    const native = new CustomMcpProvider(config, () => token);
+    token = 'fake-token-b';
+    const next = new CustomMcpProvider({ ...config, url: 'https://b.example/mcp' }, () => token,
+      read => { upstream.push(read()); return {} as never; });
+    previous.toClaudeSdkConfig(ctx);
+    next.toClaudeSdkConfig(ctx);
+    expect(upstream).toEqual([
+      { id: config.id, name: config.name, url: config.url, transport: 'http', headers: { Authorization: 'Bearer fake-token-a' } },
+      { id: config.id, name: config.name, url: 'https://b.example/mcp', transport: 'http', headers: { Authorization: 'Bearer fake-token-b' } },
+    ]);
+    expect(native.getExtraEnv(ctx)).toEqual({ CUSTOM_MCP_SHARED_2DID_TOKEN: 'fake-token-a' });
+  });
+
+  // MCP stdio: one host owns the process and credentials for every engine;
+  // remote-only tests did not cover accidental native spawning/env injection.
+  it.each(['claude-code', 'codex', 'pi'] as const)('keeps stdio credentials in the shared host facade for %s', (agentKind) => {
+    const config: CustomMcpConfig = { id: 'local', name: 'Local', transport: 'stdio',
+      command: 'uvx', args: ['mcp-grafana'], env: { GRAFANA_SERVICE_ACCOUNT_TOKEN: 'invalid-test-secret' } };
+    const tokenReader = vi.fn(() => 'unused-http-token');
+    let upstream: unknown;
+    const facade = {} as import('@modelcontextprotocol/sdk/server/mcp.js').McpServer;
+    const provider = new CustomMcpProvider(config, tokenReader, (read) => { upstream = read(); return facade; });
+    const context = { ...ctx, agentKind };
+    expect(provider.toClaudeSdkConfig(context)).toEqual({ type: 'sdk', name: 'local', instance: facade });
+    expect(upstream).toEqual({ id: 'local', name: 'Local', transport: 'stdio', command: config.command,
+      args: config.args, env: config.env });
+    expect(provider.toCodexMcpConfig(context)).toBeNull();
+    expect(provider.getExtraEnv(context)).toBeNull();
+    expect(tokenReader).not.toHaveBeenCalled();
+  });
+
+  it('does not silently hand stdio spawning to the harness without a host facade', () => {
+    const provider = new CustomMcpProvider({ id: 'local', name: 'Local', transport: 'stdio',
+      command: 'node', args: [], env: {} }, () => null);
+    expect(() => provider.toClaudeSdkConfig(ctx)).toThrow('MCP_STDIO_HOST_REQUIRED');
+    expect(provider.toCodexMcpConfig(ctx)).toBeNull();
+    expect(provider.getExtraEnv(ctx)).toBeNull();
+  });
+
   it('name = config id', () => {
     expect(make({}).name).toBe('mytools');
   });

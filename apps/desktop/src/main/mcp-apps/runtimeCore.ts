@@ -9,6 +9,7 @@ export function createMcpAppsRuntime(ports: {
   setMcpAppCallerCleanup?(callback: (caller: string) => Promise<void>): void;
 } = {}) {
 let host: McpAppsHost | undefined;
+let resetting: Promise<void> | undefined;
 const configs = new Map<string, () => AppServerConfig>();
 const pluginConfigs = new Map<string, () => AppServerConfig>();
 function setMcpAppsHost(value: McpAppsHost): void {
@@ -50,13 +51,19 @@ async function stopPluginAppInstance(instance: string): Promise<void> {
   await host?.revokePluginConnections(instance);
 }
 
-function resetAppServers(): void {
+async function reconcileStdioAppServers(): Promise<void> { await host?.reconcileStdioConnections(); }
+
+function resetAppServers(): Promise<void> {
   pagePermissionGrants.clearServers(new Set(configs.keys()));
   configs.clear();
   pagePermissionGrants.clearServers(new Set(pluginConfigs.keys()));
   pluginConfigs.clear();
   ports.clearMcpAppDocuments?.();
-  void host?.reset();
+  const previous = resetting;
+  const current = Promise.all([previous, host?.reset()]).then(() => undefined);
+  resetting = current;
+  void current.finally(() => { if (resetting === current) resetting = undefined; }).catch(() => {});
+  return current;
 }
 
 /** Keep the snapshot pending until the send or steer carrying it is accepted. */
@@ -66,5 +73,5 @@ async function mcpAppModelContext(sessionId: string): Promise<McpAppModelContext
   );
 }
 
-return { setMcpAppsHost, getMcpAppsHost, registerAppServer, clearAppServerConfigs, readAppServer, appServerIds, replacePluginAppServers, revokePluginAppServers, stopPluginAppInstance, resetAppServers, mcpAppModelContext };
+return { setMcpAppsHost, getMcpAppsHost, registerAppServer, clearAppServerConfigs, readAppServer, appServerIds, replacePluginAppServers, revokePluginAppServers, stopPluginAppInstance, reconcileStdioAppServers, resetAppServers, mcpAppModelContext };
 }

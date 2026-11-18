@@ -9104,21 +9104,23 @@
       }
     },
     "mcp": {
+      "unreadable": "保存済みの設定を読み取れません。削除して再追加できます。",
+      "loadFailed": "MCP 設定を読み込めませんでした。再試行してください。",
       "title": "外部ツール",
-      "subtitle": "独自のリモート MCP サーバーを接続します。HTTP / Streamable HTTP サーバーは Claude と Codex の両方で利用できます。SSE は Claude 専用です。",
+      "subtitle": "リモート HTTP/SSE サーバーやローカル stdio プログラムに接続します。",
       "cancel": "キャンセル",
       "save": "保存",
       "editAria": "編集",
       "deleteAria": "削除",
       "addCustom": {
         "title": "MCP サーバーを追加",
-        "subtitle": "リモート MCP エンドポイント(http/sse)を入力"
+        "subtitle": "HTTP/SSE エンドポイントまたは stdio コマンドを設定"
       },
       "dialog": {
         "createTitle": "MCP サーバーを追加",
         "editTitle": "MCP サーバーを編集",
-        "desc": "リモート http / sse 型の MCP のみ対応。保存後、新しい Agent セッションから呼び出せます。実行中の Agent セッションには影響しません。",
-        "teammateDesc": "リモート http / sse 型の MCP のみ対応。保存すると仲間が自分のツールに追加し、このチャットの次のメッセージから使えます。新しいセッションは不要です。"
+        "desc": "リモートサーバーまたはローカルプログラムを設定します。保存しても既存のタスクは現在の設定で続行します。この端末で新たに開始するタスクには更新が反映されます。",
+        "teammateDesc": "リモートサーバーまたはローカルプログラムを設定します。保存しても既存のタスクは現在の設定で続行します。この端末で新たに開始するタスクには更新が反映されます。"
       },
       "fields": {
         "name": "表示名",
@@ -9130,16 +9132,35 @@
         "tokenPlaceholder": "認証トークンを入力",
         "tokenEditPlaceholder": "空欄で保存済みトークンを削除",
         "tokenSaved": "保存済み",
-        "tokenHelp": "認証に使用:Claude は Authorization: Bearer ヘッダーとして送信します。Codex は Bearer 認証のみ対応します。",
+        "tokenHelp": "Cindy が Authorization: Bearer ヘッダーで送信します。",
         "headers": "ヘッダー(任意)",
         "headerNamePlaceholder": "ヘッダー名",
         "headerValuePlaceholder": "値",
         "addHeader": "ヘッダーを追加",
-        "removeRow": "この行を削除"
+        "removeRow": "この行を削除",
+        "command": "コマンド",
+        "commandHelp": "インストール済みの実行ファイル名か絶対パスを入力します。必要なときに Cindy が起動します。",
+        "args": "引数",
+        "argsHelp": "1 行につき 1 引数。空白と空の引数を保持します。シェル構文は使いません。",
+        "cwd": "作業ディレクトリ（任意）",
+        "cwdHelp": "実行するコンピューター上の絶対パス。空欄の場合はホームディレクトリを使います。",
+        "env": "環境変数（任意）",
+        "envHelp": "値は暗号化して保存され、アシスタントには返されません。行を削除すると保存済みの変数も削除されます。",
+        "envName": "変数名",
+        "envValue": "値",
+        "envSaved": "保存済み・変更しなければ保持",
+        "addArg": "引数を追加",
+        "removeArg": "引数を削除",
+        "addEnv": "変数を追加",
+        "removeEnv": "変数を削除"
       },
       "errors": {
         "nameRequired": "表示名を入力してください",
-        "urlInvalid": "有効な http(s) URL を入力してください"
+        "urlInvalid": "有効な http(s) URL を入力してください",
+        "commandRequired": "実行ファイル名または絶対パスを入力してください",
+        "argsInvalid": "引数に NUL 文字は使えません",
+        "cwdInvalid": "作業ディレクトリに NUL 文字は使えません",
+        "envInvalid": "変数名は重複せず、英字かアンダースコアで始まる英数字とアンダースコアのみです。値に NUL は使えません。"
       },
       "toast": {
         "created": "MCP サーバーを追加しました",

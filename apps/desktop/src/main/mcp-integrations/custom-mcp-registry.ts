@@ -4,9 +4,7 @@
  *
  * 背景:ClaudeCodeAgent / CodexAgent 的 `mcpProviders` 数组在 maker-host 启动时
  * **构建一次**并存进 agent 实例;Claude/Codex/Pi 的消费点每次 startSession 时
- * **重新遍历该数组**。因此只要**原地**改已注册数组的内容(不换引用),下一次新建会话
- * 就会看到最新的自定义 MCP;进行中的会话不受影响
- * (与内置 plugin 的 mtime-cached 语义一致)。
+ * **重新遍历该数组**。本机 Codex 新任务从该数组组装自定义工具，复用已有 bridge。合法编辑不打断已有调用；stdio 配置删除或不可读时才主动回收。
  *
  * 用法:maker-host 构造各 agent 的 provider 数组后,把实际 mcpProviders 引用注册进来
  * (`registerCustomMcpArrays`),再在启动时与每次 CRUD 后调 `refreshCustomMcpProviders`。
@@ -25,14 +23,16 @@ import { CustomMcpProvider } from './custom-mcp-provider.js';
 
 export function createCustomMcpRegistry(ports: {
   listCustomMcpServers: ReturnType<typeof import('../maker-host/custom-mcp-store.js').createCustomMcpStore>['listCustomMcpServers'];
+  readCustomMcpServers: ReturnType<typeof import('../maker-host/custom-mcp-store.js').createCustomMcpStore>['readCustomMcpServers'];
   readCustomMcpToken(id: string): string | null;
   createAppServerProxy: ReturnType<typeof import('../mcp-apps/serverProxy.js').createAppServerProxyFactory>;
-} & Pick<ReturnType<typeof import('../mcp-apps/runtimeCore.js').createMcpAppsRuntime>, 'registerAppServer' | 'resetAppServers' | 'clearAppServerConfigs'>) {
-const { listCustomMcpServers, readCustomMcpToken, createAppServerProxy, registerAppServer, resetAppServers, clearAppServerConfigs } = ports;
+} & Pick<ReturnType<typeof import('../mcp-apps/runtimeCore.js').createMcpAppsRuntime>, 'registerAppServer' | 'resetAppServers' | 'clearAppServerConfigs' | 'reconcileStdioAppServers'>) {
+const { listCustomMcpServers, readCustomMcpServers, readCustomMcpToken, createAppServerProxy, registerAppServer, resetAppServers, clearAppServerConfigs, reconcileStdioAppServers } = ports;
 const log = createLogger('custom-mcp-registry');
 
 /** 被注入的 agent mcpProviders 数组(原地 mutate 的目标)。 */
 const registeredArrays: McpProvider[][] = [];
+let generation = 0;
 
 /**
  * 注册一个 agent 的 mcpProviders 数组,后续 refresh 会原地更新它。
@@ -45,9 +45,10 @@ function registerCustomMcpArrays(...arrays: McpProvider[][]): void {
 }
 
 /** 清空注册表（切账号 / resetMaker 时调用，防止旧数组引用残留）。 */
-function resetCustomMcpRegistry(): void {
+function resetCustomMcpRegistry(): Promise<void> {
+  generation++;
   registeredArrays.length = 0;
-  resetAppServers();
+  return resetAppServers();
 }
 
 /**
@@ -82,6 +83,7 @@ const __resetCustomMcpRegistryForTest = resetCustomMcpRegistry;
  * (移除旧 CustomMcpProvider,追加新的)。任何一步失败只 warn,不抛。
  */
 async function refreshCustomMcpProviders(): Promise<void> {
+  const attempt = ++generation;
   // Maker may be constructed before localDb. onReady refreshes again before
   // publishing account-provider readiness; a missing DB is not an empty registry.
   const owner = getCurrentDbClientSnapshot();
@@ -90,8 +92,10 @@ async function refreshCustomMcpProviders(): Promise<void> {
   // 按名字去重统计：同一个撞名配置会在每个已注册数组各命中一次，累加会虚报。
   const skippedNames = new Set<string>();
   try {
-    const configs = await listCustomMcpServers();
-    if (getCurrentDbClientSnapshot() !== owner) return;
+    const { servers: configs, unreadableServers } = await readCustomMcpServers();
+    if (getCurrentDbClientSnapshot() !== owner || generation !== attempt) return;
+    for (const { id } of unreadableServers) skippedNames.add(id);
+    if (unreadableServers.length) log.warn('unreadable MCP configurations removed from runtime', { count: unreadableServers.length });
     const reservedIds = getBuiltinMcpServerNames();
     providers = configs.flatMap((config) => {
       const validation = validateCustomMcpConfig(config, reservedIds);
@@ -106,8 +110,15 @@ async function refreshCustomMcpProviders(): Promise<void> {
         skippedNames.add(serverName);
         return [];
       }
-      const provider = new CustomMcpProvider(config, readCustomMcpToken, createAppServerProxy);
-      return [provider];
+      try {
+        return [new CustomMcpProvider(config, readCustomMcpToken, createAppServerProxy)];
+      } catch {
+        // Host credential readers can throw on a damaged encrypted file. Quarantine only
+        // this server; retaining the entire previous catalog would also retain deleted ones.
+        skippedNames.add(config.id);
+        log.warn('skipping custom MCP whose credential could not be read', { serverName: config.id });
+        return [];
+      }
     });
   } catch (err) {
     log.warn('list custom mcp servers failed; leaving providers unchanged', {
@@ -115,7 +126,7 @@ async function refreshCustomMcpProviders(): Promise<void> {
     });
     return;
   }
-  // Saved endpoint changes revoke open Views, while existing Agent calls retain their snapshot.
+  // Publish the complete catalog before checking existing process configurations.
   clearAppServerConfigs();
   for (const provider of providers) registerAppServer(provider.name, () => provider.appServerConfig());
   for (const arr of registeredArrays) {
@@ -155,6 +166,9 @@ async function refreshCustomMcpProviders(): Promise<void> {
       arr.push(provider);
     }
   }
+  // Removed/unreadable stdio entries revoke their processes. Valid edits leave
+  // existing connection snapshots alive until their normal release.
+  await reconcileStdioAppServers();
   log.info('custom mcp providers refreshed', {
     count: providers.length,
     skipped: skippedNames.size,

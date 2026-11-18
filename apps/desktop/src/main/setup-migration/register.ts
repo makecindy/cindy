@@ -53,7 +53,7 @@ import { readDeviceLinkSettings } from '../device-link/settings-store.desktop.js
 import { ownerScopedImSecrets } from '../im/ownerScopedStorage.js';
 import { createLogger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { listCustomMcpNamesForSetup, listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
+import { listCustomMcpNamesForSetup, listCustomMcpRuntimeGenerations, readCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
 import { hydrateCustomProviderHeaders } from '../maker-host/custom-provider-header-secrets.js';
 import { listCustomProviders } from '../maker-host/custom-provider-store.js';
 import { createCustomMcpServerForSetup } from '../maker-ipc/mcpHandlers.js';
@@ -279,9 +279,9 @@ async function collectSetupSecrets(request: SetupTransferSecretsRequest): Promis
     }
   }
   if (request.mcpServers.length > 0) {
-    const wanted = new Set(request.mcpServers);
-    for (const server of await listCustomMcpServers()) {
-      if (!wanted.has(server.id)) continue;
+    const { servers } = await readCustomMcpServers(request.mcpServers);
+    for (const server of servers) {
+      if (server.transport === 'stdio') continue;
       bundle.mcpServers.push({
         id: server.id,
         url: server.url,
@@ -415,7 +415,7 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
           { enabled: skill.cindyEnabled !== false },
         ]),
       ),
-    mcpIds: async () => new Set((await listCustomMcpServers()).map((server) => server.id)),
+    mcpIds: async () => new Set((await listCustomMcpRuntimeGenerations()).map((server) => server.id)),
     providerIds: async () => new Set((await listCustomProviders()).map((provider) => provider.id)),
     builtinTools: async () => {
       const items = await getPluginRegistry().listPlugins(undefined, true);
@@ -566,7 +566,7 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
         if (ghosts.some((ghost) => !defaults.has(ghost.manifest.id))) return false;
       }
       if ((await listCustomProviders()).some((provider) => isUserProvider(provider.id))) return false;
-      return (await listCustomMcpServers()).length === 0;
+      return (await listCustomMcpRuntimeGenerations()).length === 0;
     },
     source: {
       platform: process.platform,
@@ -617,11 +617,13 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
           origin: skill.registryEntry?.origin ?? null,
           enabled: skill.cindyEnabled !== false,
         })),
-      readMcpServers: async () =>
-        (await listCustomMcpServers()).map((server) => ({
-          ...server,
-          hasToken: readCustomMcpToken(server.id) !== null,
-        })),
+      readMcpServers: async (markPartial) => {
+        const { servers, unreadableServers } = await readCustomMcpServers();
+        if (unreadableServers.length) markPartial();
+        return servers.map((server) => server.transport === 'stdio'
+          ? { transport: 'stdio' as const }
+          : { ...server, hasToken: readCustomMcpToken(server.id) !== null });
+      },
       readProviders: async () =>
         (await listCustomProviders()).map((config) => ({ ...config }) as SourceProviderFact),
       isUserProvider,

@@ -99,6 +99,8 @@ const makerPiManagerIntegrationInclude = [
   'src/__tests__/pi-manager.integration.test.ts',
 ];
 const desktopE2eInclude = [
+  // Owned stdio MCP subprocesses and launcher descendants use real OS processes.
+  'src/main/mcp-apps/__tests__/stdio.e2e.test.ts',
   'src/main/maker-host/__tests__/*.e2e.test.ts',
   // The Terra proxy regression starts a real Codex binary when explicitly configured.
   'src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts',

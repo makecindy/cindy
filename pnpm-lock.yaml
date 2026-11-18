@@ -382,6 +382,9 @@ importers:
       cm6-graphql:
         specifier: ^1.0.0
         version: 1.0.0(@codemirror/autocomplete@6.20.3)(@codemirror/language@6.12.4)(@codemirror/lint@6.9.7)(@codemirror/state@6.7.1)(@codemirror/view@6.43.6)(@lezer/highlight@1.2.3)(graphql@17.1.0)
+      cross-spawn:
+        specifier: ^7.0.6
+        version: 7.0.6
       diff:
         specifier: ^8.0.4
         version: 8.0.4
@@ -593,6 +596,9 @@ importers:
       '@types/canvas-confetti':
         specifier: 1.9.0
         version: 1.9.0
+      "@types/cross-spawn":
+        specifier: ^6.0.6
+        version: 6.0.6
       '@types/mdast':
         specifier: ^4.0.4
         version: 4.0.4
@@ -710,6 +716,9 @@ importers:
       cindy-tools:
         specifier: workspace:*
         version: link:../../packages/cindy-tools
+      cross-spawn:
+        specifier: ^7.0.6
+        version: 7.0.6
       node-machine-id:
         specifier: ^1.1.12
         version: 1.1.12
@@ -5502,6 +5511,10 @@ packages:
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
+
+  "@types/cross-spawn@6.0.6":
+    resolution:
+      integrity: sha512-fXRhhUkG4H3TQk5dBhQ7m/JDdSNHKwR2BBia62lhwEIq9xGiQKLxd6LymNhn47SjXhsUEPmxi+PKw2OkW4LLjA==
 
   '@types/d3-array@3.2.2':
     resolution: {integrity: sha512-hOLWVbm7uRza0BYXpIIW5pxfrKe0W+D5lrFiAEYR+pb6w3N2SwSMaJbXdUfSEv+dT4MfHBLtn5js0LAWaO6otw==}
@@ -16458,6 +16471,10 @@ snapshots:
     dependencies:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
+
+  "@types/cross-spawn@6.0.6":
+    dependencies:
+      "@types/node": 25.9.5
 
   '@types/d3-array@3.2.2': {}
 

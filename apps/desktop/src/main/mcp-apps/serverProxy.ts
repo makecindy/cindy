@@ -130,7 +130,12 @@ function createAppServerProxy(
   readConfig: () => AppServerConfig,
   context: McpProviderContext,
 ): McpServer {
-  const config = readConfig();
+  const source = readConfig();
+  // A task owns its launch snapshot. Editing settings affects the next facade,
+  // not requests already using this one (including a later reconnect).
+  const config: AppServerConfig = source.transport === 'stdio'
+    ? { ...source, args: [...source.args], env: { ...source.env } }
+    : { ...source, ...(source.headers ? { headers: { ...source.headers } } : {}) };
   // Main-only live checks use a process-private key, independent of the vault.
   // Never persist this fingerprint or expose it as an App-card revision.
   const liveRevision = appServerRevision(config);
@@ -158,7 +163,8 @@ function createAppServerProxy(
   const assertCurrent = () => {
     host.assertOwner(owner);
     const current = readAppServer(config.id);
-    if (!current || appServerRevision(current) !== liveRevision)
+    if (!current || connection.isClosed || Boolean(current.plugin) !== Boolean(config.plugin) ||
+        (config.plugin && appServerRevision(current) !== liveRevision))
       throw new Error('MCP_APP_SERVER_CHANGED');
     return current;
   };
@@ -345,7 +351,9 @@ function createAppServerProxy(
   });
   server.server.onclose = () => {
     unlisten();
-    void host.releaseConnection(connection).catch(() => {});
+    void host.releaseConnection(connection).catch(() => {
+      if (config.transport === 'stdio') log.warn('stdio MCP process cleanup failed');
+    });
   };
   return server;
 }

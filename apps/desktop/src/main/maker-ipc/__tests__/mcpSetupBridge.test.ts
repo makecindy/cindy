@@ -15,7 +15,7 @@ it('shares one pending form and returns only the saved id, never form values', a
   const [{ request }] = bridge.pendingSnapshots('task');
   expect(broadcast.mock.calls).toEqual([[MAKER_PUSH.INTERACTION_REQUEST, { sessionId: 'task', request }]]);
   expect(bridge.resolve(request.requestId, { kind: 'mcp_setup', status: 'saved',
-    serverId: 'custom_example', token: 'test-invalid-token', headers: { X: 'test-invalid-header' } })).toBe(true);
+    serverId: 'custom_example', token: 'test-invalid-token', headers: { X: 'test-invalid-header' }, env: { TOKEN: 'test-invalid-env' } })).toBe(true);
   expect(await result).toEqual({ status: 'saved', serverId: 'custom_example' });
   expect(bridge.pendingSnapshots()).toEqual([]);
   expect(JSON.stringify(broadcast.mock.calls)).not.toContain('test-invalid');

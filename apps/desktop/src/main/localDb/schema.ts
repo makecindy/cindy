@@ -2195,16 +2195,15 @@ export const customProviders = sqliteTable(
 );
 
 /**
- * 用户自定义 MCP 服务器配置（远程 http/sse 型）。
+ * 用户自定义 MCP 服务器配置（http/sse 或宿主管理的 stdio）。
  *
  * 与 `customProviders` 同源设计：db 文件按 userId 切片，故本表天然账号隔离、无 owner 列。
- * 一条记录 = 一个可被 Claude Code / Codex 两个 agent 共同调用的远程 MCP server。
+ * 一条记录 = 一个经宿主代理供各引擎共同调用的 MCP server。
  *
- * 密钥**不在本表**：可选 bearer token 单独存 safeStorage（`mcp_token_<id>`，见
+ * 请求头与环境变量在本表加密保存；可选 bearer token 单独存 safeStorage（`mcp_token_<id>`，见
  * `customMcpSecretStorageKey`），由 CustomMcpProvider 在 resolve 时注入，绝不入库/回传明文。
  *
  * 「配了就生效」：列表里存在即注入 agent，删除即停用，不做 per-server toggle。
- * 仅支持远程 transport（http/sse）——stdio 在 Codex 侧当前无法表达，不在范围内。
  */
 export const customMcpServers = sqliteTable(
   'custom_mcp_servers',
@@ -2213,12 +2212,17 @@ export const customMcpServers = sqliteTable(
     id: text('id').primaryKey(),
     /** 展示名。 */
     name: text('name').notNull(),
-    /** transport 类型：'http' | 'sse'。 */
+    /** transport 类型：'http' | 'sse' | 'stdio'。 */
     transport: text('transport').notNull(),
-    /** 远程 MCP 端点 URL（http(s)）。 */
+    /** 远程 MCP 端点 URL（http(s)）；stdio 使用空字符串以保留旧列约束。 */
     url: text('url').notNull(),
-    /** 额外请求头 JSON：'{"X-Foo":"bar"}'。不含鉴权 token（走 safeStorage）。反序列化失败兜底 {}。 */
+    /** 非空映射经凭证存储加密；旧明文 JSON 在读取时转换。 */
     headers: text('headers').notNull().default('{}'),
+    command: text('command'),
+    args: text('args').notNull().default('[]'),
+    cwd: text('cwd'),
+    /** Nonempty environment maps use the same encrypted envelope as headers. */
+    env: text('env').notNull().default('{}'),
     /** 列表展示排序（升序）。 */
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: integer('created_at').notNull(),

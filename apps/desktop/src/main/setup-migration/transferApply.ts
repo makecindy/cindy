@@ -16,7 +16,7 @@ import type {
 } from '@cindy/device-link';
 
 import type { SetupMcpCreateReceipt } from '../maker-ipc/mcpHandlers.js';
-import type { CustomMcpConfig } from '../../shared/customMcp.js';
+import type { CustomMcpRemoteConfig } from '../../shared/customMcp.js';
 import {
   SETUP_MIGRATION_SECRETS_KEY,
   type SetupMigrationChecklistItem,
@@ -32,7 +32,7 @@ export interface SetupTransferApplyDeps {
     onCode(code: string): void;
   }): Promise<SetupTransferOutcome>;
   createProvider(config: Record<string, unknown>, keys: Record<string, string>): Promise<'done' | 'skipped'>;
-  createMcpServer(config: CustomMcpConfig, token: string | null): Promise<SetupMcpCreateReceipt>;
+  createMcpServer(config: CustomMcpRemoteConfig, token: string | null): Promise<SetupMcpCreateReceipt>;
   hasBuiltinKey(id: string): boolean;
   storeBuiltinKey(id: string, value: string): boolean;
   /** Installed plugin instance here for the other computer's plugin, or null. */
