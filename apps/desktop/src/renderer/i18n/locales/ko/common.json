@@ -142,6 +142,10 @@
     "message": "Cindy가 이 첨부 파일을 읽을 수 없습니다. 원본 파일을 선택하면 이 메시지 전송을 계속합니다. 취소하면 초안이 유지됩니다.",
     "button": "원본 파일 사용"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "작업 또는 창이 변경되어 이 전송이 취소되었습니다.",
+    "invalid": "이 전송은 현재 세션에 유효하지 않습니다."
+  },
   "mailReader": {
     "showExternalImages": "외부 이미지 표시",
     "markReadFailed": "읽음 상태를 동기화하지 못했습니다. 메일함 인증을 확인하고 다시 여세요.",
