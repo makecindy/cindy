@@ -12,6 +12,7 @@ export default {
     'src/renderer/lib/errorDiagnosisPrompt': 'export const buildErrorDiagnosisPrompt = () => ""; export const prefillErrorDiagnosisDraft = () => {};',
   },
   cases: {
+    'single-pr': { about: '特定 PR 的合并触发条件与运行记录', data: {} },
     'app-editing': { about: '编辑时背景详情停止账号读取：返回窗口仅一次读取', data: {} },
     'app-source': { about: 'GitHub App 仓库和事件选择：无需独立地址或密钥', data: {} },
     'app-connected': { about: 'GitHub App 已连接的自动任务', data: {} },
@@ -24,9 +25,14 @@ export default {
     unsupported: { about: '发送方格式不支持：说清是版本不认这个格式，不是暂时不可用', data: {} },
   },
   async ready(page) {
-    await page.locator('[role="status"], textarea').first().waitFor();
+    await page.locator('[role="status"], textarea, h2').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'single-pr') {
+      await page.getByText(/example\/project#42/).first().waitFor();
+      await page.getByRole('button', { name: await ui.t('scheduler.editor.webhook.authorizeRepositories') }).waitFor();
+      return;
+    }
     if (ui.case === 'app-editing') {
       await page.getByRole('button', { name: await ui.t('scheduler.editor.webhook.authorizeRepositories'), exact: true }).waitFor();
       await page.getByRole('button', { name: await ui.t('scheduler.button.edit'), exact: true }).click();
