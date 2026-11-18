@@ -23,7 +23,7 @@ import {
 import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
 import { botGroupDraftDoc } from './botGroupAttachments';
 import { BOT_GROUP_COMPOSER_INPUT } from './botGroupComposerChrome';
-import type { BotGroupTextInput } from './botGroupTextInput';
+import type { BotGroupInitialPaste, BotGroupTextInput } from './botGroupTextInput';
 
 function textOf(node: PMNode): string {
   if (node.isText) return node.text ?? '';
@@ -38,18 +38,42 @@ function textOffset(doc: PMNode, pos: number): number {
   return textOf(doc.cut(0, pos)).length;
 }
 
-function positionAt(doc: PMNode, offset: number): number {
-  let result = doc.content.size - 1;
-  doc.descendants((node, pos) => {
-    if (!node.isText && node.type.name !== 'pastedTextChip' && node.type.name !== 'hardBreak')
+type TextPosition = {
+  pos: number;
+  insideChip?: { text: string; offset: number; size: number };
+};
+
+function locateTextPosition(doc: PMNode, offset: number): TextPosition {
+  let result: TextPosition | undefined;
+  let start = 0;
+  doc.forEach((paragraph, paragraphPos) => {
+    if (result) return;
+    // Even an empty paragraph has a valid caret before its closing boundary.
+    if (offset <= start) {
+      result = { pos: paragraphPos + 1 };
       return;
-    const start = textOffset(doc, pos);
-    if (offset >= start && offset <= start + textOf(node).length) {
-      result = node.isText ? pos + offset - start : pos + (offset === start ? 0 : node.nodeSize);
-      return false;
     }
+    paragraph.forEach((node, nodePos) => {
+      if (result) return;
+      const pos = paragraphPos + 1 + nodePos;
+      const text = textOf(node);
+      const localOffset = offset - start;
+      if (localOffset <= text.length) {
+        if (node.isText) result = { pos: pos + localOffset };
+        else if (node.type.name === 'pastedTextChip' && localOffset > 0 && localOffset < text.length)
+          result = { pos, insideChip: { text, offset: localOffset, size: node.nodeSize } };
+        else result = { pos: localOffset === 0 ? pos : pos + node.nodeSize };
+      }
+      start += text.length;
+    });
+    start++; // textOf inserts one newline between paragraphs.
   });
-  return Math.max(1, result);
+  return result ?? { pos: Math.max(1, doc.content.size - 1) };
+}
+
+function positionAt(doc: PMNode, offset: number): number {
+  const { pos, insideChip } = locateTextPosition(doc, offset);
+  return pos + (insideChip?.size ?? 0);
 }
 
 export function BotGroupTextEditor({
@@ -57,6 +81,8 @@ export function BotGroupTextEditor({
   initialPaste,
   inputRef,
   disabled,
+  readOnly,
+  foldRestoredValue,
   label,
   placeholder,
   maxLength = -1,
@@ -69,9 +95,11 @@ export function BotGroupTextEditor({
   ariaProps,
 }: {
   value: string;
-  initialPaste?: { before: string; text: string; selected: string; after: string } | null;
+  initialPaste?: BotGroupInitialPaste | null;
   inputRef: RefObject<BotGroupTextInput | null>;
   disabled: boolean;
+  readOnly: boolean;
+  foldRestoredValue: boolean;
   label: string;
   placeholder: string;
   maxLength?: number;
@@ -84,12 +112,19 @@ export function BotGroupTextEditor({
   ariaProps: Record<string, string | undefined>;
 }) {
   const { t } = useTranslation();
-  const latest = useRef({ onChange, onSelect, maxLength, disabled, placeholder });
-  latest.current = { onChange, onSelect, maxLength, disabled, placeholder };
+  const editable = !disabled && !readOnly;
+  const latest = useRef({ onChange, onSelect, maxLength, editable, placeholder });
+  latest.current = { onChange, onSelect, maxLength, editable, placeholder };
   const [edit, setEdit] = useState<{ pos: number; text: string } | null>(null);
   const [ready, setReady] = useState(false);
   const labelFor = (text: string) =>
     t('newChat.pastedText.chipLabel', { lines: countPasteLines(text) });
+  const chipNode = (text: string): JSONContent => ({
+    type: 'pastedTextChip', attrs: { text, display: labelFor(text) },
+  });
+  const chipDoc = (text: string): JSONContent => ({
+    type: 'doc', content: [{ type: 'paragraph', content: [chipNode(text)] }],
+  });
   const plainNodes = (text: string): JSONContent[] =>
     text
       .split('\n')
@@ -99,6 +134,7 @@ export function BotGroupTextEditor({
       ]);
   const editor = useEditor({
     immediatelyRender: false,
+    editable,
     onCreate: ({ editor: created }) => {
       if (initialPaste) {
         const start = positionAt(created.state.doc, initialPaste.before.length);
@@ -132,18 +168,8 @@ export function BotGroupTextEditor({
     ],
     content: initialPaste
       ? botGroupDraftDoc(initialPaste.before + initialPaste.selected + initialPaste.after)
-      : isLongPasteText(value)
-        ? {
-            type: 'doc',
-            content: [
-              {
-                type: 'paragraph',
-                content: [
-                  { type: 'pastedTextChip', attrs: { text: value, display: labelFor(value) } },
-                ],
-              },
-            ],
-          }
+      : foldRestoredValue
+        ? chipDoc(value)
         : botGroupDraftDoc(value),
     editorProps: {
       clipboardTextSerializer: (slice) => {
@@ -154,15 +180,20 @@ export function BotGroupTextEditor({
       attributes: {
         role: 'textbox',
         'aria-multiline': 'true',
+        'aria-disabled': String(disabled),
+        'aria-readonly': String(readOnly),
+        // Tiptap removes its default tab stop in read-only mode, but the
+        // keyboard still needs to reach the composer to stop dictation.
+        ...(disabled ? {} : { tabindex: '0' }),
         class: `${BOT_GROUP_COMPOSER_INPUT} whitespace-pre-wrap`,
       },
       handleClickOn: (_view, _pos, node, nodePos) => {
-        if (node.type.name !== 'pastedTextChip' || latest.current.disabled) return false;
+        if (node.type.name !== 'pastedTextChip' || !latest.current.editable) return false;
         setEdit({ pos: nodePos, text: node.attrs.text });
         return true;
       },
       handlePaste: (view, event) => {
-        if (latest.current.disabled) {
+        if (!latest.current.editable) {
           event.preventDefault();
           return true;
         }
@@ -250,7 +281,7 @@ export function BotGroupTextEditor({
   }, [editor, inputRef, ready]);
   useLayoutEffect(() => {
     if (!editor || !ready || editor.isDestroyed) return;
-    editor.setEditable(!disabled, false);
+    if (editor.isEditable !== editable) editor.setEditable(editable, false);
     editor.view.dom.setAttribute('aria-label', label);
     for (const [key, val] of Object.entries(ariaProps)) {
       if (val === undefined) editor.view.dom.removeAttribute(key);
@@ -258,6 +289,10 @@ export function BotGroupTextEditor({
     }
     const current = textOf(editor.state.doc);
     if (current !== value) {
+      if (foldRestoredValue) {
+        editor.commands.setContent(chipDoc(value), { emitUpdate: false });
+        return;
+      }
       let start = 0;
       while (start < current.length && start < value.length && current[start] === value[start])
         start++;
@@ -268,7 +303,20 @@ export function BotGroupTextEditor({
         current[current.length - 1 - tail] === value[value.length - 1 - tail]
       )
         tail++;
-      const replacement = plainNodes(value.slice(start, value.length - tail));
+      const from = locateTextPosition(editor.state.doc, start);
+      const to = locateTextPosition(editor.state.doc, current.length - tail);
+      const keepChipText = (text: string): JSONContent[] =>
+        isLongPasteText(text)
+          ? [chipNode(text)]
+          : plainNodes(text);
+      // A plain-text edit can cut through a chip (for example, choosing a
+      // mention at the end of a restored draft). Replace the whole atom and
+      // keep its unaffected text, folding the remaining long parts again.
+      const replacement = [
+        ...keepChipText(from.insideChip?.text.slice(0, from.insideChip.offset) ?? ''),
+        ...plainNodes(value.slice(start, value.length - tail)),
+        ...keepChipText(to.insideChip?.text.slice(to.insideChip.offset) ?? ''),
+      ];
       const fragment = editor.schema.nodeFromJSON({
         type: 'paragraph',
         content: replacement,
@@ -276,8 +324,8 @@ export function BotGroupTextEditor({
       editor.view.dispatch(
         editor.state.tr
           .replaceWith(
-            positionAt(editor.state.doc, start),
-            positionAt(editor.state.doc, current.length - tail),
+            from.pos,
+            to.pos + (to.insideChip?.size ?? 0),
             fragment,
           )
           .setMeta('preventUpdate', true),
@@ -293,6 +341,7 @@ export function BotGroupTextEditor({
         onFocus={onFocus}
         onBlur={onBlur}
         aria-placeholder={placeholder}
+        data-bot-group-composer-loading={!ready && !disabled ? '' : undefined}
       />
       {edit && (
         <ToolPayloadLightbox
@@ -303,7 +352,7 @@ export function BotGroupTextEditor({
             onSave: (text) => {
               if (
                 !editor ||
-                disabled ||
+                !editable ||
                 (maxLength >= 0 && value.length - edit.text.length + text.length > maxLength)
               )
                 return;

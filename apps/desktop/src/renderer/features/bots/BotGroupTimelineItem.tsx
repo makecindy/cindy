@@ -174,11 +174,12 @@ function ReadTailRow() {
   return <div aria-hidden {...{ [SHARE_EXCLUDE_ATTR]: '' }} className="h-5 shrink-0" />;
 }
 
-function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, messageKey, onRichSend, readTail = false }: {
+function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, messageKey, onRichSend, sharing, readTail = false }: {
   messageKey?: string;
   onRichSend?: (text: string) => Promise<boolean>;
   /** Reserve room for the read check at the end of the last line. */
   readTail?: boolean;
+  sharing: boolean;
   authorKind?: BotGroupAuthorKind; content: string; mentionLabels: readonly string[]; members: readonly BotGroupMemberView[];
   /** Who the message mentioned; decides whose card a highlighted name opens. */
   mentions: BotGroupMention;
@@ -186,7 +187,7 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
 }) {
   const { t } = useTranslation();
   const [textPreview, setTextPreview] = useState(false);
-  const folded = authorKind !== 'bot' && isLongPasteText(content);
+  const folded = !sharing && authorKind !== 'bot' && isLongPasteText(content);
   const sender = useMemo(() => onRichSend ? { send: onRichSend } : null, [onRichSend]);
   const ref = useRef<HTMLDivElement>(null);
   const rangesRef = useRef<Range[]>([]);
@@ -218,7 +219,7 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
       syncMentionHighlight();
     };
     // labelsKey stands in for the label array.
-  }, [content, labelsKey]);
+  }, [content, labelsKey, folded]);
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
   const [tailRow, setTailRow] = useState(false);
   useLayoutEffect(() => {
@@ -231,7 +232,7 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
     observer?.observe(root, { childList: true, subtree: true, characterData: true });
     apply();
     return () => { observer?.disconnect(); root.querySelectorAll('[data-read-tail]').forEach(node => node.remove()); };
-  }, [content, readTail]);
+  }, [content, readTail, folded]);
 
   const schedule = (next: () => void, ms: number) => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -538,7 +539,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                       className="flex flex-col gap-2"
                     >
                       {quote}
-                      {hasText ? <BotGroupMessageText content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} readTail={hasReadMark && !hasAttachments} /> : null}
+                      {hasText ? <BotGroupMessageText content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} sharing={sharing} readTail={hasReadMark && !hasAttachments} /> : null}
                       <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />
                       {hasReadMark && hasAttachments ? <ReadTailRow /> : null}
                       {readMark}
@@ -659,7 +660,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                   {shareBody}
                   {!share && hasText ? (
                     <div className="min-w-0">
-                      <BotGroupMessageText authorKind={message.authorKind} messageKey={`group:${props.reactionGroupId ?? shareScope}:${message.id}`}
+                      <BotGroupMessageText sharing={sharing} authorKind={message.authorKind} messageKey={`group:${props.reactionGroupId ?? shareScope}:${message.id}`}
                         onRichSend={!props.readOnly && !sharing ? props.onRichSend : undefined} content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} />
                     </div>
                   ) : null}

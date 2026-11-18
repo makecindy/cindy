@@ -34,6 +34,7 @@
 import {
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -121,7 +122,7 @@ import { useBotGroupVoiceInput } from './useBotGroupVoiceInput';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import { isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
-import type { BotGroupTextInput } from './botGroupTextInput';
+import type { BotGroupInitialPaste, BotGroupTextInput } from './botGroupTextInput';
 import { isLongPasteText } from '@/components/new-chat/longPasteText';
 
 const BotGroupTextEditor = lazy(() => import('./BotGroupTextEditor').then(module => ({ default: module.BotGroupTextEditor })));
@@ -252,9 +253,20 @@ export function BotGroupComposer({
   const thread = mode === 'thread';
   const threadAttempt = useBotGroupThreadReplyAttempt(thread ? draftKey : null);
   const groupMask = useGroupMask(groupId);
-  const [text, setText] = useState(() => threadAttempt?.sending ? '' : botGroupDraftText(getDraft(draftKey)?.text));
-  const [richText, setRichText] = useState(() => isLongPasteText(text));
-  const [initialPaste, setInitialPaste] = useState<{ before: string; text: string; selected: string; after: string } | null>(null);
+  const [{ text, richText, initialPaste, foldRestoredValue }, setInput] = useState(() => {
+    const text = threadAttempt?.sending ? '' : botGroupDraftText(getDraft(draftKey)?.text);
+    const folded = isLongPasteText(text);
+    return { text, richText: folded, initialPaste: null as BotGroupInitialPaste | null, foldRestoredValue: folded };
+  });
+  const setText = (text: string) => setInput(current => current.text === text ? current : {
+    ...current, text, initialPaste: text ? current.initialPaste : null, foldRestoredValue: false,
+  });
+  const restoreDraftText = useCallback((text: string) => {
+    const folded = isLongPasteText(text);
+    setInput(current => current.text ? current : {
+      text, richText: current.richText || folded, initialPaste: null, foldRestoredValue: folded,
+    });
+  }, []);
   const [error, setError] = useState('');
   const [stopping, setStopping] = useState(false);
   /** Thread send in flight; group sends are owned by the outbox. */
@@ -330,7 +342,7 @@ export function BotGroupComposer({
   useEffect(() => {
     if (!threadAttempt?.errorKey) return;
     if (!textRef.current) mention.setTracked([...threadAttempt.tracked]);
-    setText(current => current || threadAttempt.draft);
+    restoreDraftText(threadAttempt.draft);
     setError(t(threadAttempt.errorKey));
   }, [threadAttempt?.clientId, threadAttempt?.errorKey]);
 
@@ -426,7 +438,7 @@ export function BotGroupComposer({
     const fail = (errorKey: string) => {
       onSendSettled?.(attempt.clientId, { ok: false });
       if (!textRef.current) mention.setTracked(tracked);
-      setText((current) => (current ? current : draft));
+      restoreDraftText(draft);
       setError(t(errorKey));
       const saved = getDraft(draftKey);
       if (!botGroupDraftText(saved?.text)) saveDraft(draftKey, {
@@ -499,7 +511,7 @@ export function BotGroupComposer({
             ...(entry.editHold ? { editSource: { groupId: entry.input.groupId, clientId: entry.input.clientId,
               revision: entry.editHold.revision } } : {}) };
           textRef.current = entry.draft;
-          setText(entry.draft);
+          restoreDraftText(entry.draft);
           mention.setTracked([...entry.tracked]);
           const restoredDivision = entry.input.division === true;
           divisionRef.current = restoredDivision;
@@ -515,7 +527,7 @@ export function BotGroupComposer({
         },
         notifyFailed: (errorKey) => toast.error(tRef.current(errorKey)),
       }),
-    [groupId, thread, ownsVoiceDraft],
+    [groupId, thread, ownsVoiceDraft, restoreDraftText],
   );
 
   const send = async () => {
@@ -645,8 +657,11 @@ export function BotGroupComposer({
       const end = textareaRef.current?.selectionEnd ?? start;
       const next = text.slice(0, start) + pasted + text.slice(end);
       if (thread && next.length > BOT_GROUP_MESSAGE_MAX_CHARS) return;
-      setInitialPaste({ before: text.slice(0, start), text: pasted, selected: text.slice(start, end), after: text.slice(end) });
-      setRichText(true);
+      setInput(current => ({
+        ...current,
+        richText: true,
+        initialPaste: { before: text.slice(0, start), text: pasted, selected: text.slice(start, end), after: text.slice(end) },
+      }));
       mention.onChange(next, { start, end, caret: start + pasted.length });
       groupMask?.participate();
     }
@@ -739,7 +754,7 @@ export function BotGroupComposer({
   };
 
   return (
-    <div className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
+    <div data-bot-group-composer className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
       <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
         {voice.lastError ? <VoiceInputStatusNotice message={voice.lastError} className="mb-2" /> : null}
@@ -804,8 +819,8 @@ export function BotGroupComposer({
               onUpdate={sending ? noop : attachmentState.updateFile}
             />
           ) : null}
-          {richText ? <Suspense fallback={<Spinner size={16} />}><BotGroupTextEditor value={voice.displayText} initialPaste={initialPaste} inputRef={textareaRef}
-            disabled={disabled || sending || voice.isBusy}
+          {richText ? <Suspense fallback={<Spinner size={16} data-bot-group-composer-loading={!disabled ? '' : undefined} />}><BotGroupTextEditor value={voice.displayText} initialPaste={initialPaste} inputRef={textareaRef}
+            disabled={disabled} readOnly={sending || voice.isBusy} foldRestoredValue={foldRestoredValue && voice.displayText === text}
             label={thread ? t('bots.groupChat.server.replyPlaceholder') : t('bots.groupChat.composer.label')}
             placeholder={placeholder} maxLength={thread ? BOT_GROUP_MESSAGE_MAX_CHARS : undefined}
             onChange={(value, edit) => { mention.onChange(value, edit); groupMask?.participate(); }}
