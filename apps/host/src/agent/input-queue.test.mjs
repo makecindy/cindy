@@ -5645,6 +5645,60 @@ test('runtime override: with no runtime change a task read is its row, in the de
   });
 });
 
+// Integration, coexistence §二. Exercise an overflow replay through the same send ports as an
+// ordinary input. The original overflow tests do not cover a pending engine choice or a task
+// that the desktop archives as the replay reaches send preparation.
+for (const held of [true, false]) {
+  test(`overflow replay: a pending engine switch ${held ? 'waits for release and a fresh send' : 'lands before replay'}`, async t => {
+    const r = await modelChangeRuntime(t);
+    const id = 'replay-engine-switch';
+    await r.createTask(id);
+    await enqueue(r.h, id, { clientId: 'original', text: 'work' });
+    const first = r.h.maker.getSession(id);
+    await r.selection.switchAgent({ sessionId: id, targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-a' });
+    assert.equal(r.selection.projectIntent(id)?.targetAgentKind, 'codex');
+    if (held) r.h.queue.holdForDesktop(HELD);
+    first.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+    await settleUntil(() => {
+      const replacement = r.h.maker.getSession(id);
+      return replacement && replacement !== first && replacement.sent.length > 0;
+    }, 'overflow replay reached an engine');
+    const replay = r.h.maker.getSession(id);
+    assert.deepEqual([replay.agentKind, r.row(id).agent_kind, r.selection.projectIntent(id)?.targetAgentKind],
+      held ? ['claude-code', 'cc', 'codex'] : ['codex', 'codex', undefined]);
+    if (held) {
+      replay.emit({ type: 'done', data: {}, sessionTurnGeneration: replay.generation, sessionInstanceId: replay.instanceId });
+      await settleUntil(() => !r.h.queue.isTurnRunning(id), 'replay settled');
+      assert.equal(await r.h.queue.releaseDesktopHold(), true);
+      await enqueue(r.h, id, { clientId: 'fresh', text: 'next' });
+      assert.equal(r.h.maker.getSession(id).agentKind, 'codex');
+      assert.equal(r.row(id).agent_kind, 'codex');
+    }
+  });
+
+  test(`overflow replay: a just-archived task ${held ? 'stays archived and refuses replay' : 'is restored and receives replay'}`, async t => {
+    let r, restore;
+    let sends = 0;
+    const id = 'replay-archived-task';
+    r = await modelChangeRuntime(t, { queue: { restoreArchivedSessionForSend: async sessionId => {
+      if (++sends === 2) r.db.db.prepare('UPDATE sessions SET status = ? WHERE id = ?').run('archived', id);
+      await restore.restoreArchivedSessionForSend(sessionId);
+    } } });
+    restore = createHostTaskRestore({ getOwner: getCurrentDbClientSnapshot, publish: event => r.h.events.push(event),
+      isHeldForDesktop: () => r.h.queue.isHeldForDesktop() });
+    await r.createTask(id);
+    await enqueue(r.h, id, { clientId: 'original', text: 'work' });
+    const first = r.h.maker.getSession(id);
+    if (held) r.h.queue.holdForDesktop(HELD);
+    first.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+    await settleUntil(() => held ? r.db.errorRows(id).length > 0
+      : r.h.maker.getSession(id) !== first && r.h.maker.getSession(id)?.sent.length > 0, 'replay reached a terminal failure or the replacement engine');
+    assert.equal(sends, 2);
+    assert.equal(r.row(id).status, held ? 'archived' : 'active');
+    assert.equal(Boolean(r.h.maker.getSession(id)?.sent.length), !held);
+  });
+}
+
 // Rule (the desktop's status writers run cleanupSessionRuntimeForTerminalStatus at an archive or delete,
 // which runs the cleanup register.ts set, now createSessionRuntimeCleanup, bound for the Host by
 // bindHostSessionRuntimeHooks): an archived task's runtime override does not outlive the archive. Gap: the

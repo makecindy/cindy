@@ -142,6 +142,7 @@ export interface HostRuntimeSelectionDeps {
     recordRuntimeControlError(sessionId: string, data: { message: string; reason: string }): void;
     isTurnRunning(sessionId: string): boolean;
     canSettleTurnControls(): boolean;
+    isHeldForDesktop(): boolean;
     retryTurnSettlement(sessionId: string): void;
     wakeSession: AgentInputCoordinator['wakeSession'];
     refreshQueuedRoute: AgentInputCoordinator['refreshQueuedRoute'];
@@ -164,7 +165,7 @@ export interface HostRuntimeSelectionDeps {
  */
 export const HOST_RUNTIME_SELECTION_QUEUE_MEMBERS = [
   'contextRecoveryRollover', 'sessionDbAgentKind', 'isTurnRunning', 'wakeSession', 'refreshQueuedRoute',
-  'cancelUsageLimitWait', 'discardWorkingDirectoryRecovery', 'startPorts', 'recordRuntimeControlError', 'canSettleTurnControls', 'retryTurnSettlement',
+  'cancelUsageLimitWait', 'discardWorkingDirectoryRecovery', 'startPorts', 'recordRuntimeControlError', 'canSettleTurnControls', 'retryTurnSettlement', 'isHeldForDesktop',
 ] as const satisfies readonly (keyof HostRuntimeSelectionDeps['inputQueue'])[];
 type UnlistedQueueMembers = Exclude<keyof HostRuntimeSelectionDeps['inputQueue'], typeof HOST_RUNTIME_SELECTION_QUEUE_MEMBERS[number]>;
 const everyQueueMemberListed: [UnlistedQueueMembers] extends [never] ? true : never = true;
@@ -696,8 +697,10 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
      * check).
      */
     async applyPendingAgentSwitch(sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }) {
-      await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
-      if (!options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
+      // A context recovery can replay its interrupted input while a desktop owns the profile.
+      // Leave independent user selections and model-renaming writes for the next normal send.
+      if (!deps.inputQueue.isHeldForDesktop()) await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      if (!deps.inputQueue.isHeldForDesktop() && !options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       await contextWindowBudgetReconcile.replayPendingSessionContextWindowBudgetUnderLock(sessionId);
     },
     /** The session settings write with the budget hook (persistSessionFieldsWith): /sessions/update's budget. */

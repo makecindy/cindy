@@ -1200,6 +1200,7 @@ setSessionRouteLockImplementation(withSendToSessionLock);
 // restore is recorded for idle archiving, as the desktop's task management records it.
 bindTaskRestoreRetention();
 const taskRestore = createHostTaskRestore({ getOwner: getCurrentDbClientSnapshot,
+  isHeldForDesktop: () => inputQueue.isHeldForDesktop(),
   publish: event => eventHub.publish(event) });
 
 // The pending handoff summary: one registry for the Host process, as the desktop's singleton.

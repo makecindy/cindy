@@ -1,3 +1,6 @@
+import { eq } from 'drizzle-orm';
+import { sessions } from '../../../desktop/src/main/localDb/schema.ts';
+import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { noteSessionsRestoring, setSessionRestoreObserver } from '../../../desktop/src/main/localDb/sessionRestoreRetention.ts';
 import { recordTaskArchiveRestores } from '../../../desktop/src/main/task-management/restoreObserver.ts';
@@ -30,7 +33,7 @@ export function bindTaskRestoreRetention(): () => void {
   return () => setSessionRestoreObserver(null);
 }
 
-export function createHostTaskRestore(deps: { getOwner(): unknown; publish: Publish }) {
+export function createHostTaskRestore(deps: { getOwner(): unknown; publish: Publish; isHeldForDesktop?(): boolean }) {
   async function restoreTaskToActive(
     sessionId: string,
     options: { signal?: AbortSignal; publish?: boolean } = {},
@@ -53,6 +56,15 @@ export function createHostTaskRestore(deps: { getOwner(): unknown; publish: Publ
     }
   }
 
+  function requireActiveDuringHold(id: string): boolean {
+    if (!deps.isHeldForDesktop?.()) return false;
+    const row = getDbClient().drizzle.select({ status: sessions.status }).from(sessions).where(eq(sessions.id, id)).get();
+    if (row?.status !== 'active') {
+      throwIpcError('PRECONDITION_FAILED', 'The interrupted turn cannot resume while its task is inactive and the profile is held');
+    }
+    return true;
+  }
+
   return {
     restoreTaskToActive,
     /**
@@ -60,10 +72,15 @@ export function createHostTaskRestore(deps: { getOwner(): unknown; publish: Publ
      * (the Host installs the send lock as that bridge in main.ts, as the desktop's registerAll does),
      * re-entrantly when the send already holds it; context recovery's replay does not hold it.
      */
-    restoreArchivedSessionForSend: (sessionId: string) => restoreArchivedTaskForSend(sessionId, {}, {
-      patchSessionMetaInDb: (id, _patch, options) => restoreTaskToActive(id, { signal: options.signal }),
-      captureOwnerScope: () => deps.getOwner(),
-      isOwnerScopeCurrent: owner => owner === deps.getOwner(),
-    }),
+    async restoreArchivedSessionForSend(sessionId: string) {
+      if (requireActiveDuringHold(sessionId)) return;
+      await restoreArchivedTaskForSend(sessionId, {}, {
+        async patchSessionMetaInDb(id, _patch, options) {
+          if (!requireActiveDuringHold(id)) await restoreTaskToActive(id, { signal: options.signal });
+        },
+        captureOwnerScope: () => deps.getOwner(),
+        isOwnerScopeCurrent: owner => owner === deps.getOwner(),
+      });
+    },
   };
 }
