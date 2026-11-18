@@ -49,6 +49,8 @@ export const agentActivityNative =
     ? requireOptionalNativeModule<AgentActivityNative>("CindyAgentActivity")
     : null;
 const path = "/api/device-link/live-activity";
+// Long enough for a recovery request to come back as an update or an end.
+const EXPIRED_GRACE_MS = 20_000;
 let generation = 0;
 const requests = new Set<Promise<void>>();
 
@@ -126,7 +128,36 @@ export function startActivityPushSync(options: {
   let last: string | undefined;
   let accepted = options.initiallyRegistered === true;
   let unsupported = false;
+  let expiry: { activityId: string | null; timer: ReturnType<typeof setTimeout> } | undefined;
   const recovery = options.recovery ?? {};
+  // An expired activity gets one chance to recover (the service answers a
+  // recovery request with fresh content or by ending it). If it is still expired
+  // after that, remove it here: offline, or with a service that cannot confirm,
+  // nothing else would, and outdated content must not stay on the Lock Screen.
+  const watchExpiry = (activityId: string | null, expired: boolean) => {
+    if (expiry && (!expired || expiry.activityId !== activityId)) {
+      clearTimeout(expiry.timer);
+      expiry = undefined;
+    }
+    if (!expired || expiry) return;
+    const timer = setTimeout(() => {
+      expiry = undefined;
+      void (async () => {
+        try {
+          assertCurrent();
+          const latest = await native.getPushRegistration!();
+          assertCurrent();
+          if (latest.accountScope !== options.accountScope || latest.isStale !== true ||
+              latest.activityId !== activityId) return;
+          native.setState(null);
+          mobileDebugLog("info", "lifecycle", "activity-expired");
+        } catch {
+          /* disposed, previous account or native module unavailable */
+        }
+      })();
+    }, EXPIRED_GRACE_MS);
+    expiry = { activityId, timer };
+  };
   const assertCurrent = () => {
     if (
       controller.signal.aborted ||
@@ -170,6 +201,7 @@ export function startActivityPushSync(options: {
         if (isStale === false && recovery.wasStale)
           mobileDebugLog("info", "lifecycle", "activity-recovered");
         recovery.wasStale = isStale === true;
+        watchExpiry(registration.activityId, isStale === true && !!registration.updateToken);
         const times = {
           confirmedAt: typeof confirmedAt === "number" && Number.isFinite(confirmedAt) ? confirmedAt : null,
           staleAt: typeof staleAt === "number" && Number.isFinite(staleAt) ? staleAt : null,
@@ -215,7 +247,13 @@ export function startActivityPushSync(options: {
           baseUrl,
           token,
           registration.enabled ? "PUT" : "DELETE",
-          registration.enabled ? { ...body, ...(refreshStale ? { refreshStale: true } : {}) } : undefined,
+          // staleAt tells the service when this content lapses. It changes with
+          // every update, so it stays out of the deduplication key above.
+          registration.enabled ? {
+            ...body,
+            ...(registration.updateToken && times.staleAt !== null ? { staleAt: times.staleAt } : {}),
+            ...(refreshStale ? { refreshStale: true } : {}),
+          } : undefined,
         );
         assertCurrent();
         last = key;
@@ -263,6 +301,8 @@ export function startActivityPushSync(options: {
     dispose() {
       controller.abort();
       listener?.remove();
+      if (expiry) clearTimeout(expiry.timer);
+      expiry = undefined;
     },
   };
 }

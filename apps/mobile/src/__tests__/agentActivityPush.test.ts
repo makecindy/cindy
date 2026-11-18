@@ -317,7 +317,8 @@ it('preserves the recovery budget across syncers and sends an explicit bounded r
     const body = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
     expect(body.refreshStale).toBe(true);
     expect(body).not.toHaveProperty('confirmedAt');
-    expect(body).not.toHaveProperty('staleAt');
+    // The service ends an activity it cannot confirm once this date has passed.
+    expect(body.staleAt).toBe(200);
     sync.dispose();
     sync = startActivityPushSync(opts);
     await sync.sync(true);
@@ -325,7 +326,7 @@ it('preserves the recovery budget across syncers and sends an explicit bounded r
     vi.advanceTimersByTime(30_000);
     await sync.sync(true);
     expect(JSON.parse(fetchMock.mock.calls.at(-1)![1]!.body as string).refreshStale).toBe(true);
-    // Native timestamps are diagnostic only: new content must not register again.
+    // Timestamps move with every update: new content must not register again.
     const count = fetchMock.mock.calls.length;
     fixture.native.getPushRegistration.mockResolvedValue({
       ...registration(), activityId: 'live', updateToken: 'update', isStale: false,
@@ -343,5 +344,29 @@ it('preserves the recovery budget across syncers and sends an explicit bounded r
     });
     await sync.sync();
     expect(JSON.parse(fetchMock.mock.calls.at(-1)![1]!.body as string).refreshStale).toBe(true);
+  } finally { sync.dispose(); vi.useRealTimers(); }
+});
+
+// Unit: an expired activity the service could not recover stayed on the Lock
+// Screen until the system limit (offline phone, or a service with no source).
+// Existing cases only cover the recovery request, not its outcome. Drive the
+// real syncer: recovery inside the window keeps the activity, none ends it.
+it("ends an activity that is still expired after its recovery window", async () => {
+  vi.useFakeTimers();
+  const live = { ...registration(), activityId: "live", updateToken: "update" };
+  fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: true, staleAt: 200 });
+  const sync = startActivityPushSync(options());
+  try {
+    await sync.sync();
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: false, staleAt: 1200 });
+    await sync.sync();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fixture.native.setState).not.toHaveBeenCalled();
+    fixture.native.getPushRegistration.mockResolvedValue({ ...live, isStale: true, staleAt: 1200 });
+    await sync.sync();
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(fixture.native.setState).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fixture.native.setState).toHaveBeenCalledExactlyOnceWith(null);
   } finally { sync.dispose(); vi.useRealTimers(); }
 });
