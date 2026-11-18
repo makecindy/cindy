@@ -163,10 +163,12 @@ export class BlueBubblesReceipts {
     for (const id of this.unsettledSends) if (this.state.outbox[id]?.chatId === chat) return true;
     return false;
   }
-  confirmEcho(chat: string, guid: string, tempGuid: string | undefined): void {
-    if (!tempGuid) return;
+  confirmEcho(chat: string, guid: string, tempGuid: string | undefined): boolean {
+    if (!tempGuid) return false;
     const prior = this.state.outbox[tempGuid];
-    if (prior?.chatId === chat && prior.state !== 'sent') this.outgoing(tempGuid, {chatId: chat, state: 'sent', messageId: guid});
+    if (prior?.chatId !== chat || prior.state === 'sent') return false;
+    this.outgoing(tempGuid, { chatId: chat, state: 'sent', messageId: guid });
+    return true;
   }
   outgoing(id: string, value: BlueBubblesState['outbox'][string]): void {
     if (this.state.outbox[id]?.state === 'sent') return;

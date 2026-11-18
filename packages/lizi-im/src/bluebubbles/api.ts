@@ -16,6 +16,7 @@ export interface BlueBubblesMessage {
   guid: string;
   text?: string | null;
   isFromMe: boolean;
+  service?: string | null;
   tempGuid?: string;
   error?: number | string;
   dateCreated: number;

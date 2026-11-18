@@ -129,7 +129,8 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
           sendText: im.sendText.bind(im),
           requestTextReply: (chatId, prompt, parse, timeoutMs, shared) => {
             if (interaction.cancelled) return Promise.reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED'));
-            return im.requestTextReply(chatId, prompt, parse, timeoutMs, shared, requestKey);
+            return im.requestTextReply(chatId, prompt, parse, timeoutMs, shared, requestKey,
+              request.kind === 'permission' ? 'owner' : 'chat');
           },
         }, target, request, interactionOptions);
       } finally {

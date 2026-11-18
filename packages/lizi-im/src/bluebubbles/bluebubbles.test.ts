@@ -1054,6 +1054,59 @@ describe('BlueBubbles local ingress', () => {
     expect(f.received).toHaveLength(1);
   });
 
+  // Tier 1, #11402: an echo arriving without tempGuid used to leave normal send waiting
+  // in the receive-failure queue. No clock advance or second webhook after the POST.
+  it('keeps the connection healthy and rechecks parked input as soon as the send confirms', async () => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    const statuses: string[] = [];
+    f.im.onStatusChange(status => statuses.push(status.kind));
+    let finish!: (value: { guid: string }) => void;
+    f.send.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const sending = f.im.sendText(f.chat.guid, 'outgoing');
+    for (const id of ['echo-without-id', 'manual-during-send']) f.message(id, { isFromMe: true, handle: undefined });
+    await f.im.reconcile();
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.received).toHaveLength(0);
+    finish({ guid: 'echo-without-id' });
+    await sending;
+    await vi.waitFor(() => expect(f.state().inbox['manual-during-send']?.state).toBe('accepted'));
+    expect(f.state().inbox['echo-without-id']?.state).toBe('ignored');
+    expect(f.received.map(row => row.messageId)).toEqual(['manual-during-send']);
+    expect(statuses).not.toContain('error');
+  });
+
+  // Tier 1, #11402: permission requests and ordinary questions may share a DM.
+  // Only a verified owner may consume an owner-scoped answer in that chat.
+  it('keeps an owner-scoped reply pending for the verified speaker', async () => {
+    const f = await fixture();
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(),
+      selfAccountAddresses: { [f.chat.guid]: 'member@example.test' } });
+    const parse = vi.fn((text: string) => text);
+    const answer = f.im.requestTextReply(f.chat.guid, 'Owner response?', parse, undefined, undefined, 'test', 'owner');
+    f.message('member', { text: 'sample member reply', isFromMe: true, handle: undefined });
+    await f.im.reconcile();
+    expect(parse).not.toHaveBeenCalled();
+    expect(f.received[0]?.speaker?.isOwner).toBe(false);
+    f.message('owner', { text: 'sample owner reply' });
+    await f.im.reconcile();
+    await expect(answer).resolves.toBe('sample owner reply');
+  });
+
+  // Tier 1, #11402: a transport-agnostic chat GUID and missing handle cannot
+  // establish iMessage service by themselves. The authenticated chat lookup can.
+  it.each(['SMS', undefined, 'iMessage'])('checks the verified service for handle-less self input (%s)', async service => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    vi.mocked(f.api.chat).mockResolvedValue({ ...f.chat, participants: [{ address: config.ownerAddress, service }] });
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    f.message('mapped', { isFromMe: true, handle: undefined, chats: [{ guid: f.chat.guid }] });
+    f.message('explicit-sms', { isFromMe: true, handle: undefined, service: 'SMS', chats: [{ guid: f.chat.guid }] });
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(service === 'iMessage' ? ['mapped'] : []);
+  });
+
   // Tier 1: a verified webhook can arrive before a failing POST returns.
   it('retains a matching outgoing receipt after a late transport failure', async () => {
     const f = await fixture();
