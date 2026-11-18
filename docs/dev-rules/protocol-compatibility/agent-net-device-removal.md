@@ -44,9 +44,8 @@ Agent-Net refuses this identity」（被拒后改走中转、签「没开」；�
 - **范围。** 只用于官方 Agent-Net。自建中转上删设备时直接在 Agent-Net 上撤销（可以重新配对加回来），不走这里。
 - **已知限制。** 开着「仅使用 Agent-Net」的设备被删以后再重新登录，因为不连 Device Link 中转，服务端不会恢复它的登记，其他电脑
   会一直不认它，要先关掉「仅使用 Agent-Net」连一次 Device Link。
-- **手机（2026-11-18）。** 规则移到 `packages/agent-net/src/membership.ts`，手机在 `agentNetRuntime.ts` 用同一份：列表经手机已有的
-  设备列表读取（`DeviceLinkContext.readDeviceList`，同一时间只读一次），手机每次读到列表也顺带交给这里；只在前台连着官方
-  Agent-Net 时在后台读（手机进后台连接就断开，不读）。自建中转上不用。
+- **手机（2026-11-18）。** 规则移到 `packages/agent-net/src/membership.ts`，手机在 `agentNetRuntime.ts` 用同一份：准入只认官方 Device Link 的原始
+  名单，普通的混合目录请求只把其中的 Device Link 结果交给准入。补读同一时间只发起一次，只在开关开启且连着官方 Agent-Net 时周期刷新。
 - **自建中转。** 不涉及中转协议，不需要递增 `RELAY_VERSION`。
 - **Node Host 重新登录。** `serve` 每次启动都从刷新出来的令牌开始，刷新令牌不带登录方式，服务端不会凭它恢复登记，所以一台被删的
   Host 原来重新登录了也回不来（Device Link 一直回 4410「设备已移除，请重新登录」，和 Agent-Net 无关，主干上一样）。现在

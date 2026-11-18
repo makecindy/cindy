@@ -69,8 +69,7 @@ import { getMobileAgentNetPreferences, useMobileAgentNetPreferences, waitForMobi
 import { isMobileAgentNetActive, openMobileAgentNetSocket, mobileAgentNetShouldUseLegacyPeer,
   mobileAgentNetShouldProbeLegacyPeer, mobileAgentNetPrefersPrimary, verifyMobileAgentNetTransportProof,
   connectMobileAgentNetSessionPeer, mobileAgentNetPeerConnectedAt, mobileAgentNetPeerRoute, mobileAgentNetPeerState,
-  mobileAgentNetSession, noteMobileAgentNetDeviceList, notifyMobileAgentNetNetworkChanged, setMobileAgentNetDeviceListReader,
-  useMobileAgentNetSessions } from './agentNetRuntime';
+  mobileAgentNetSession, notifyMobileAgentNetNetworkChanged, useMobileAgentNetSessions } from './agentNetRuntime';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net/portable';
 import { installPeerStreamTransport } from './peerFileRegistry';
 import { mobileAgentNetTransportProof } from './agentNetMode';
@@ -643,7 +642,6 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const apply = rosterConsumerRef.current?.();
     const owner = auth.accountGeneration;
     const rosterGeneration = rosterGenerationRef.current;
-    const startedAt = Date.now();
     const promise = rosterContinuity.read({ key: JSON.stringify([owner, DEVICE_LINK_API_BASE_URL, rosterGeneration]), joinPending: false,
       current: () => clientRef.current === client && accountGenerationRef.current === owner
         && rosterGenerationRef.current === rosterGeneration,
@@ -652,8 +650,6 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       baseUrl: DEVICE_LINK_API_BASE_URL, timeoutMs: 12_000,
     })).then((snapshot) => {
       const rawDevices = snapshot.value.devices;
-      // Agent-Net accepts only devices in this list (devices removed here are refused there too); a cached copy proves nothing.
-      if (!snapshot.stale && accountGenerationRef.current === owner) noteMobileAgentNetDeviceList(rawDevices.map(device => device.deviceId), startedAt);
       const result = { devices: rawDevices.map(device => {
         const deviceId = device.deviceId;
         const connection = client?.connectionFor(deviceId);
@@ -1368,8 +1364,6 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     meterDeviceLinkInvokes(client);
     clientRef.current = client;
     routedRef.current = routed;
-    setMobileAgentNetDeviceListReader(sessionLinks ? () => readDeviceList({ fresh: true })
-      .then(result => (result.stale ? null : result.devices.map(device => device.deviceId))) : null);
     const stopSharing = bindMobileAgentNetSharing(routed, connectionOptions, { deviceId: auth.deviceId ?? '', apiFetch: auth.apiFetch });
     const catalogRefresh = createDeviceCatalogRefresh({
       connectionEpoch: connectionEpochFor,
@@ -1909,10 +1903,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       stop: () => client.stop({ retainResultCache: true }),
       isHeld: () => backgroundHoldsRef.current > 0,
       // A tapped notification action is an explicit request too: it may leave the cooldown.
-      connect: (reason) => client.connectAllNow(reason === 'hold' ? 'notification-action' : 'appstate-active', {
-        overrideCongestionCooldown: true,
-        keepInFlightAttempt: true,
-      }),
+      connect: (reason) => {
+        sessionLinks?.start();
+        client.connectAllNow(reason === 'hold' ? 'notification-action' : 'appstate-active', {
+          overrideCongestionCooldown: true,
+          keepInFlightAttempt: true,
+        });
+      },
       graceMs: BACKGROUND_STOP_GRACE_MS,
       releaseWaitMs: BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS,
       suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
@@ -2052,7 +2049,6 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       offIssue();
       client.stop();
       useMobileAgentNetSessions(null);
-      setMobileAgentNetDeviceListReader(null);
       offFileStreams();
       if (routedRef.current === routed) routedRef.current = null;
       rosterConsumerRef.current = null;

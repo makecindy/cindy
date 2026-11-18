@@ -3,7 +3,8 @@ import { AppState } from 'react-native';
 import { AgentNetMembership, AgentNetSocket, NativeTransport, type SessionConfig, type SessionHandle } from '@cindy/agent-net/portable';
 import { agentNetStunServer } from '@cindy/agent-net-protocol';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
-import { getOfficialAgentNetApiBaseUrl } from '@/config/env';
+import { getOfficialAgentNetApiBaseUrl, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
+import { apiFetchRaw } from '@/api/client';
 import { getActiveSelfHostedRelay, getSelfHostedRelayRouteGeneration, isAgentNetOnlyRoute, subscribeSelfHostedRelayRoute } from './selfHostedRelayRouting';
 import { MobileAgentNetEngine } from './agentNetNative';
 import { ensureMobileAgentNetIdentity, clearMobileAgentNetIdentity, currentMobileAgentNetIdentity, type MobileAgentNetEnrollmentOptions } from './agentNetIdentity';
@@ -76,7 +77,7 @@ export function notifyMobileAgentNetNetworkChanged(): void { live()?.networkChan
 /**
  * On the official Agent-Net, a computer removed from this account in Device Link keeps a valid certificate until it signs
  * in again; like the Desktop, this phone accepts only devices in the account's Device Link list. The list is read through
- * the app's existing device-list read (single flight, its own retry) and every read it already does is noted here too.
+ * a raw official Device Link request. The merged UI directory can contain the same removed certificate.
  */
 let deviceListReader: (() => Promise<readonly string[] | null>) | null = null;
 const membership = new AgentNetMembership({
@@ -84,33 +85,40 @@ const membership = new AgentNetMembership({
   apply: rule => { if (!getActiveSelfHostedRelay()) live()?.restrictPeers(rule); },
   active: () => !!live() && !getActiveSelfHostedRelay(),
 });
-export function setMobileAgentNetDeviceListReader(reader: (() => Promise<readonly string[] | null>) | null): void { deviceListReader = reader; }
 /** An existing read of the official device list finished (it started at `startedAt`). */
 export function noteMobileAgentNetDeviceList(deviceIds: readonly string[], startedAt: number): void {
-  if (!getActiveSelfHostedRelay() && isMobileAgentNetActive()) membership.noteDeviceList(deviceIds, startedAt);
+  if (!getActiveSelfHostedRelay() && getMobileAgentNetPreferences().enabled && isMobileAgentNetActive()) {
+    membership.noteDeviceList(deviceIds, startedAt);
+  }
 }
 
 // ─── The relay's STUN and UDP forwarding (`/api/agent-net/info`) ─────────────────────────────────────────────────
-/** One read per relay at most this often: phones reconnect on every return to the foreground. */
+// A foreground reconnect can reuse both an in-flight lookup and its result.
 const RELAY_INFO_TTL_MS = 10 * 60_000;
-const relayInfo = new Map<string, { server: string | null; at: number }>();
-async function relayUdpServer(base: string | undefined, guard: () => void): Promise<string | null> {
-  if (!base) return null;
-  const known = relayInfo.get(base);
-  if (known && Date.now() - known.at < RELAY_INFO_TTL_MS) return known.server;
+const RELAY_INFO_RETRY_MS = 60_000;
+const relayInfo = new Map<string, { server: string | null; nextReadAt: number; pending?: Promise<string | null> }>();
+function relayUdpServer(base: string): Promise<string | null> {
+  const entry = relayInfo.get(base) ?? { server: null, nextReadAt: 0 };
+  if (entry.pending) return entry.pending;
+  if (Date.now() < entry.nextReadAt) return Promise.resolve(entry.server);
   const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 5_000);
-  try {
-    const response = await fetch(base + '/api/agent-net/info', { signal: abort.signal });
-    guard();
-    const server = response.ok ? agentNetStunServer(base, await response.json()) : null;
-    guard();
-    if (response.ok) relayInfo.set(base, { server, at: Date.now() });
-    return response.ok ? server : known?.server ?? null;
-  } catch (error) {
-    if ((error as Error)?.message === 'AGENT_NET_OWNER_CHANGED') throw error;
-    // An older relay or no answer: keep the last known server (as the Desktop), else stay on the WebSocket.
-    return known?.server ?? null;
-  } finally { clearTimeout(timer); }
+  entry.pending = (async () => {
+    let interval = RELAY_INFO_RETRY_MS;
+    try {
+      const response = await fetch(base + '/api/agent-net/info', { signal: abort.signal });
+      if (response.ok) {
+        entry.server = agentNetStunServer(base, await response.json());
+        interval = RELAY_INFO_TTL_MS;
+      }
+    } catch { /* Keep the last known server while the lookup is unavailable. */ }
+    finally {
+      clearTimeout(timer);
+      entry.nextReadAt = Date.now() + interval;
+    }
+    return entry.server;
+  })().finally(() => { entry.pending = undefined; });
+  relayInfo.set(base, entry);
+  return entry.pending;
 }
 export function isMobileAgentNetActive(): boolean {
   const settings = getMobileAgentNetPreferences(), route = getActiveSelfHostedRelay();
@@ -167,6 +175,7 @@ export function stopMobileAgentNetRuntime(): void {
   const previous = current; current = null;
   previous?.socket.close();
   peerConnectedAt.clear();
+  deviceListReader = null;
   membership.reset();
   clearMobileAgentNetNotifications();
   void clearMobileAgentNetIdentity();
@@ -204,15 +213,28 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
     try { const address = await Network.getIpAddressAsync(); return address && address !== '0.0.0.0' ? [address] : []; }
     catch { return []; /* Relay remains available without a local candidate. */ }
   };
-  const official = !getActiveSelfHostedRelay();
-  // Devices removed in Device Link are refused from the first directory on: read the list once first if there is none yet,
-  // alongside the relay information below (at most 3 s, as the Desktop).
-  const listing = official && !membership.hasDeviceList()
-    ? Promise.race([membership.prime(), new Promise<void>(resolve => { setTimeout(resolve, 3_000); })]) : null;
-  const udpServer = preferences.enabled ? await relayUdpServer(identity.api.base, guard) : null;
-  guard();
-  if (listing) { await listing; guard(); }
-  if (official) membership.noteDirectory(cachedDirectory.map(view => ({ deviceId: view.certificate.deviceId, online: false })));
+  const official = preferences.enabled && !getActiveSelfHostedRelay();
+  if (official) {
+    deviceListReader = async () => {
+      guard();
+      const token = await options.getAccessToken();
+      guard();
+      if (!token) return null;
+      const list = await apiFetchRaw<{ devices: { deviceId: string }[] }>('/api/device-link/devices', {
+        baseUrl: getOfficialDeviceLinkApiBaseUrl(), token, assertCurrent: guard, timeoutMs: 3_000,
+      });
+      guard();
+      return list.devices.map(device => device.deviceId);
+    };
+    if (!membership.hasDeviceList()) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([membership.prime(), new Promise<void>(resolve => { timer = setTimeout(resolve, 3_000); })]);
+      } finally { clearTimeout(timer); }
+      guard();
+    }
+  }
+  let openingDirectory = cachedDirectory.map(view => ({ deviceId: view.certificate.deviceId, online: false }));
   const engine = await identity.newTransportEngine(guard, preferences.enabled);
   try {
     const socket = await AgentNetSocket.openWithBindings({
@@ -222,7 +244,10 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
       onDirectory: devices => {
         void writeMobileAgentNetDirectory(identity, devices).catch(() => undefined);
         updateMobileAgentNetNotificationTrust(identity, devices, guard);
-        if (official && current?.guard === guard) membership.noteDirectory(devices.map(view => ({ deviceId: view.certificate.deviceId, online: view.online })));
+        if (official) {
+          openingDirectory = devices.map(view => ({ deviceId: view.certificate.deviceId, online: view.online }));
+          if (current?.guard === guard) membership.noteDirectory(openingDirectory);
+        }
       },
       onPathChanged: (deviceId, path) => {
         if (current?.guard !== guard) return;
@@ -232,8 +257,18 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
         verifyCertificate: verifyMobileAgentNetCertificate,
         verifyDelegation: verifyMobileAgentNetDelegation,
         notify: (recipient, payload, signal) => sendMobileAgentNetNotification(identity, recipient, payload, signal, guard),
-        createTransport: transport => NativeTransport.create(engine, { ...transport,
-          ...(udpServer ? { stunServers: [udpServer], relayUdpServer: udpServer } : {}) }, addresses, preferences.enabled),
+        createTransport: async options => {
+          const transport = await NativeTransport.create(engine, options, addresses, preferences.enabled);
+          const base = identity.api.base;
+          if (preferences.enabled && base && (transport.supports('stun') || transport.supports('relay-udp-v2'))) {
+            // The existing WebSocket/direct connection can start while the optional lookup runs.
+            void relayUdpServer(base).then(server => {
+              guard();
+              if (server) return transport.configureUdpServer(server);
+            }).catch(() => undefined);
+          }
+          return transport;
+        },
         createDiscovery: discovery => mobileAgentNetDiscovery(discovery, identity.signer, guard,
           () => currentMobileAgentNetIdentity()?.signer ?? identity.signer),
       },
@@ -242,7 +277,10 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
     const previous = current; current = { socket, guard };
     previous?.socket.close();
     peerConnectedAt.clear();
-    if (official) socket.restrictPeers(membership.rule());
+    if (official) {
+      socket.restrictPeers(membership.rule());
+      membership.noteDirectory(openingDirectory);
+    }
     if (preferences.enabled && sessionConfig) socket.useSessions(sessionConfig);
     let renewal: ReturnType<typeof setTimeout> | undefined, renewing = false;
     const schedule = (retry = false) => {

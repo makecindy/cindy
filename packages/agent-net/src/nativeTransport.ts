@@ -66,6 +66,7 @@ export class NativeTransport implements Transport {
   /** The relay UDP credentials last given to the engine (`undefined`: none given yet). */
   private relayCredentials: object | null | undefined = undefined;
   private relayUdpUp = false;
+  private relayUdpServer: string | undefined;
   private refreshingAddresses = false;
   private constructor(
     private readonly engine: NativeEnginePort,
@@ -78,6 +79,7 @@ export class NativeTransport implements Transport {
     this.id = keyHex(identity.transportKey);
     this.dial = identity.udpPort ? { udp: { address: '0.0.0.0', port: identity.udpPort } } : {};
     this.features = new Set(Array.isArray(identity.features) ? identity.features : []);
+    this.relayUdpServer = options.relayUdpServer;
     this.localAddresses = addresses;
     this.candidateList = this.computeCandidates();
     options.relay?.uplink.onDatagram((deviceId, bytes) => {
@@ -129,8 +131,12 @@ export class NativeTransport implements Transport {
     this.candidateList = next;
     for (const channel of this.channels.values()) channel.announceCandidates();
   }
-  private async startStun(): Promise<void> {
-    const servers = (this.options.stunServers ?? []).slice(0, MAX_STUN_SERVERS);
+  async configureUdpServer(server: string): Promise<void> {
+    if (this.closed || !this.enhanced) return;
+    this.relayUdpServer = server;
+    await this.startStun([server]);
+  }
+  private async startStun(servers = (this.options.stunServers ?? []).slice(0, MAX_STUN_SERVERS)): Promise<void> {
     if (!servers.length || !this.identity.udpPort || !this.supports('stun')) return;
     await this.call({ op: 'stun', servers }).catch(() => undefined);
   }
@@ -139,7 +145,7 @@ export class NativeTransport implements Transport {
    * none (an older relay, plain http). Until the relay acknowledges a registration, datagrams stay on the WebSocket.
    */
   private async synchronizeRelayUdp(): Promise<void> {
-    const server = this.options.relayUdpServer, read = this.options.relay?.udpCredentials;
+    const server = this.relayUdpServer, read = this.options.relay?.udpCredentials;
     if (!server || !read || !this.identity.udpPort || !this.supports('relay-udp-v2')) return;
     const credentials = read() ?? null;
     if (credentials === this.relayCredentials) return;
@@ -268,18 +274,15 @@ export class NativeTransport implements Transport {
     this.waiting.clear();
     for (const channel of [...this.channels.values()]) channel.close({ drain: false });
     this.channels.clear();
-    if (!this.enhanced) { await this.engine.destroy(); return; }
-    // As the Desktop driver closes its endpoint first: each connection's close packets go out (direct, or relay UDP) before
-    // the engine is destroyed, so the peer stops at once instead of declaring this side dead about 30 s later.
-    try {
-      this.engine.assertCurrent?.();
-      for (const id of ids) await this.engine.command({ op: 'close', id });
-      const result = await this.engine.command<Poll>({ op: 'poll' });
-      for (const packet of result.packets) {
-        const deviceId = this.deviceForLink.get(packet.link);
-        if (deviceId) this.options.relay?.uplink.send(deviceId, fromBase64Url(packet.data));
-      }
-    } catch { /* Another account or a failed engine: nothing more may be sent. */ }
+    if (this.enhanced && ids.length) {
+      // The socket has already closed its WebSocket. Flush native UDP close packets
+      // while the engine is current, then destroy it.
+      try {
+        this.engine.assertCurrent?.();
+        for (const id of ids) await this.engine.command({ op: 'close', id });
+        await this.engine.command({ op: 'poll' });
+      } catch { /* Another account or a failed engine: nothing more may be sent. */ }
+    }
     await this.engine.destroy();
   }
 }

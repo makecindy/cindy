@@ -13,9 +13,12 @@ import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 
 const fake = vi.hoisted(() => ({ target: vi.fn(), open: vi.fn(), identity: vi.fn(), enabled: false, agentNetOnly: false,
-  createTransport: vi.fn(), verifyCertificate: vi.fn(), readDirectory: vi.fn() }));
+  createTransport: vi.fn(), rawFetch: vi.fn(), verifyCertificate: vi.fn(), readDirectory: vi.fn() }));
 vi.mock('@cindy/agent-net/portable', async original => ({ ...await original<typeof import('@cindy/agent-net/portable')>(),
   AgentNetSocket: { openWithBindings: fake.open }, NativeTransport: { create: fake.createTransport } }));
+vi.mock('@/api/client', async original => ({
+  ...await original<typeof import('@/api/client')>(), apiFetchRaw: fake.rawFetch,
+}));
 vi.mock('expo-network', () => ({ getIpAddressAsync: vi.fn() }));
 vi.mock('react-native', () => ({ AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) } }));
 vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.test',
@@ -42,6 +45,7 @@ import { uploadMobileAttachment } from '@/session/mobileAttachmentUpload';
 beforeEach(() => {
   fake.target.mockReset(); fake.open.mockReset(); fake.identity.mockReset(); fake.enabled = false; fake.agentNetOnly = false;
   fake.readDirectory.mockReset().mockResolvedValue(null);
+  fake.rawFetch.mockReset().mockResolvedValue({ devices: [] });
   fake.createTransport.mockReset(); fake.verifyCertificate.mockReset().mockImplementation(verifyCertificate);
   setMobileAuthOwner('unit-media-owner');
 });
@@ -106,11 +110,8 @@ it('opens a legacy link with no cached directory while the V2 relay is offline, 
     identity, certificate: bootstrap.ownerCertificate, connect: async () => { throw new Error('offline'); } },
     signer: {}, newTransportEngine: async () => ({ destroy: vi.fn() }) });
   const connect = vi.fn();
-  fake.createTransport.mockResolvedValue({ id: 'phone', dial: {}, connect, close: async () => undefined });
-  // No live DNS or HTTP in the offline unit fixture.
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })));
-  const socket = await openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null })
-    .finally(() => vi.unstubAllGlobals());
+  fake.createTransport.mockResolvedValue({ id: 'phone', dial: {}, connect, supports: () => false, close: async () => undefined });
+  const socket = await openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null });
   expect(socket).not.toBeNull();
   await expect(socket!.dial('unknown')).rejects.toThrow('UNAUTHORIZED_PEER');
   expect(connect).not.toHaveBeenCalled();
@@ -155,27 +156,58 @@ it('fences the original account while the selected media module loads asynchrono
   expect(upload).not.toHaveBeenCalled(); expect(legacy).not.toHaveBeenCalled();
 });
 
-// Protocol opt-in: a V2-only self-hosted route predates the preference toggle
-// and must still connect with the toggle off, without discovering new UDP paths.
-// The ordinary legacy fallback test never opens a V2-only route. Unit: one
-// forced route, switch off, with the native engine and relay I/O stubbed.
-it('keeps the existing V2-only connection without opting into new transports when the switch is off', async () => {
+// Production socket startup must use the original V2 transport with the toggle
+// off. With opt-in, even a never-answering UDP lookup cannot delay startup.
+// Unit tier: one forced route, in-memory relay and native boundaries.
+it.each([false, true])('keeps forced V2 startup independent of UDP discovery (enabled=%s)', async enabled => {
   fake.agentNetOnly = true;
+  fake.enabled = enabled;
   const socket = new EventEmitter() as any;
   socket.close = () => socket.emit('close', 1000);
-  fake.open.mockResolvedValue(socket);
-  const createEngine = vi.fn(async () => ({ destroy: vi.fn() }));
+  const configureUdpServer = vi.fn();
+  fake.createTransport.mockResolvedValue({ supports: () => true, configureUdpServer });
+  fake.open.mockImplementation(async options => {
+    await options.bindings.createTransport({});
+    return socket;
+  });
+  const engine = { destroy: vi.fn() };
+  const createEngine = vi.fn(async () => engine);
   fake.identity.mockResolvedValue({ api: { base: 'https://private.example.test',
     identity: { deviceId: 'phone' }, certificate: { expiresAt: Date.now() + 48 * 60 * 60_000 } },
     signer: {}, newTransportEngine: createEngine });
-  const fetch = vi.fn(async () => new Response('{}'));
+  let finishLookup!: (response: Response) => void;
+  const fetch = vi.fn(() => new Promise<Response>(resolve => { finishLookup = resolve; }));
   vi.stubGlobal('fetch', fetch);
   try {
     await expect(openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => null })).resolves.toBe(socket);
-    expect(fetch).not.toHaveBeenCalled();
-    expect(createEngine).toHaveBeenCalledWith(expect.any(Function), false);
+    expect(fetch).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    expect(configureUdpServer).not.toHaveBeenCalled();
+    expect(fake.rawFetch).not.toHaveBeenCalled();
+    expect(createEngine).toHaveBeenCalledWith(expect.any(Function), enabled);
+    expect(fake.createTransport).toHaveBeenCalledWith(engine, {}, expect.any(Function), enabled);
   } finally {
+    finishLookup?.(new Response(null, { status: 503 }));
     socket.close();
     vi.unstubAllGlobals();
   }
+});
+
+// The admission rule must exclude a still-certified peer missing from the
+// official Device Link response, even on the first socket open. V2 directory
+// display tests cannot exercise this startup boundary. Unit with raw HTTP fake.
+it('applies the raw official Device Link list before opening the Agent-Net socket', async () => {
+  fake.enabled = true;
+  const events = new EventEmitter();
+  const socket = Object.assign(events, { restrictPeers: vi.fn(), close: () => events.emit('close', 1000) });
+  fake.open.mockResolvedValue(socket);
+  fake.rawFetch.mockResolvedValue({ devices: [{ deviceId: 'phone' }] });
+  fake.readDirectory.mockResolvedValue({ devices: [{ certificate: { deviceId: 'removed-desktop' } }] });
+  fake.identity.mockResolvedValue({ api: { identity: { deviceId: 'phone' }, certificate: { expiresAt: Date.now() + 48 * 60 * 60_000 } },
+    signer: {}, newTransportEngine: async () => ({ destroy: vi.fn() }) });
+  try {
+    await openMobileAgentNetSocket({ deviceId: 'phone', deviceName: 'Phone', getAccessToken: async () => 'unit-only' });
+    expect(fake.rawFetch).toHaveBeenCalledExactlyOnceWith('/api/device-link/devices',
+      expect.objectContaining({ baseUrl: 'https://relay.example.test' }));
+    expect(fake.open).toHaveBeenCalledWith(expect.objectContaining({ peerRule: { allowed: ['phone'], refused: [] } }));
+  } finally { socket.close(); }
 });

@@ -85,7 +85,7 @@ UDP port as well」（访客经 UDP 越权被断开）；`packages/agent-net/src
 
 **手机（2026-11-18）。** 原生库在 `packages/agent-net-native/src/udp_paths.rs` 实现同一套登记、确认、上下行与退回（时间与 `relayUdp.ts`
 一致，中转地址在单独的线程里解析、不卡住收发），上行包也带防重放计数器、超过 1350 字节的照旧走 WebSocket。凭据由
-`PortableAgentNetClient` 和 Node 客户端一样只在 TLS（或本机）上要，`agentNetRuntime.ts` 读中转的 `/api/agent-net/info` 拿 UDP 地址
-（成功读取后，同一中转 10 分钟内复用结果，读不到沿用上次的）。旧安装包的原生库没有这项，照旧全走 WebSocket。中转协议没变，不递增 `RELAY_VERSION`。
+`PortableAgentNetClient` 和 Node 客户端一样只在 TLS（或本机）上要，`agentNetRuntime.ts` 连接启动后异步读中转的 `/api/agent-net/info` 拿 UDP 地址
+（同一中转复用在途请求，成功结果保留 10 分钟，失败后 1 分钟内沿用已有结果）。旧安装包的原生库没有这项，照旧全走 WebSocket。中转协议没变，不递增 `RELAY_VERSION`。
 回归：`native.integration.test.ts`「carries sessions on the real native engine, relays them over UDP, ...」（1 MB 结果经 WebSocket 的不到
 256 KB；不下发凭据时失败）。
