@@ -670,6 +670,8 @@ import {
   seedDesktopScreenLocked,
   msSinceForeignDesktopInput,
   setPhysicalInputShielded,
+  openComputerUseSessions,
+  onComputerUseSessionsChange,
 } from './mcp-integrations/computer.desktop.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initCrashDiagnosisService } from './crash-diagnosis';
@@ -5251,6 +5253,10 @@ const registerIpcHandlers = () => {
       enabled: () => readWindowBehaviorSettings().awayGuard,
       delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
       screenLocked: isDesktopScreenLocked,
+      // The Agent driving this desktop must not find a system prompt in its screenshots
+      // or under its desktop clicks (2026-11-18 user decision).
+      computerInUse: () => openComputerUseSessions() > 0,
+      onComputerInUseChange: onComputerUseSessionsChange,
       seedScreenLocked: seedDesktopScreenLocked,
       msSinceOwnerInput: () => msSinceForeignDesktopInput(),
     });

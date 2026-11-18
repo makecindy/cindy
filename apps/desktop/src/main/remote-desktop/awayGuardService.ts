@@ -49,6 +49,10 @@ export interface AwayGuardServiceDeps {
   delaySeconds(): AwayGuardDelaySeconds | null;
   screenLocked(): boolean;
   /** Startup lock state, used until the first lock/unlock event. */
+  /** The Agent is driving this desktop through Computer Use right now. */
+  computerInUse(): boolean;
+  /** Fires when Computer Use sessions open or close. */
+  onComputerInUseChange(listener: () => void): () => void;
   seedScreenLocked(locked: boolean): void;
   msSinceOwnerInput(): number | null;
   /** Work needs the screen awake (see displayDemand.ts); otherwise the system sleeps and locks. */
@@ -291,6 +295,8 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
   let ownerPromptLowered = false;
   // A start still waiting for the helper's `ready`; the display can be released first.
   let ownerPromptStart: AbortController | null = null;
+  /** The last display request the controller made, so a session change can re-evaluate. */
+  let displayRequested = false;
   const raiseOwnerPrompt = () => {
     if (!ownerPromptLowered) return;
     ownerPromptLowered = false;
@@ -366,9 +372,17 @@ export function startAwayGuard(deps: AwayGuardServiceDeps): void {
       });
   };
   const syncOwnerPrompt = (awake: boolean) => {
-    if (awake) armOwnerPrompt();
+    displayRequested = awake;
+    // Computer Use reads the whole display and clicks desktop coordinates, so the system
+    // prompt is never in its way (2026-11-18 user decision).
+    if (awake && !deps.computerInUse()) armOwnerPrompt();
     else disarmOwnerPrompt();
   };
+  // A session that opens mid-cover takes the prompt down at once, not on the next tick.
+  onQuit(
+    'away-guard-owner-prompt',
+    deps.onComputerInUseChange(() => syncOwnerPrompt(displayRequested)),
+  );
   const verifyOwnerOrRetry = async () => {
     if (verifying || !heldUntilLocked) return;
     verifying = true;

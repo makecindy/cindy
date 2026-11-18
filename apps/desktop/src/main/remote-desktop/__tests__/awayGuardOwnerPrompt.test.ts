@@ -15,12 +15,19 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ windows: [] as any[], displays: [] as any[] }));
+interface MaskLike {
+  level: string;
+  [key: string]: unknown;
+}
+const state = vi.hoisted(() => ({
+  windows: [] as unknown[],
+  displays: [] as Array<{ id: number; bounds: Record<string, number> }>,
+}));
 const prompt = vi.hoisted(() => ({
   watch: vi.fn(),
   stop: vi.fn(async () => {}),
   signals: [] as AbortSignal[],
-  resolve: (_value: unknown) => {},
+  resolve: (() => {}) as (value: unknown) => void,
 }));
 
 vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
@@ -55,8 +62,10 @@ vi.mock('../privacyInput', () => ({
 // The system prompt never comes up on its own: each start stays pending until the test
 // resolves it, exactly like a helper that has not printed `ready` yet.
 vi.mock('../ownerPrompt', () => ({
-  watchOwnerPrompt: (onAnswer: (answer: string) => void, reason: string, ...rest: any[]) => {
-    prompt.signals.push(rest[0] === undefined ? rest[1] : rest[0]);
+  watchOwnerPrompt: (onAnswer: (answer: string) => void, reason: string, ...rest: unknown[]) => {
+    prompt.signals.push(
+      rest[0] instanceof AbortSignal ? rest[0] : (rest[1] as AbortSignal),
+    );
     prompt.watch(onAnswer, reason);
     return new Promise((resolve) => {
       prompt.resolve = resolve;
@@ -81,7 +90,7 @@ vi.mock('electron', () => ({
       setWindowOpenHandler: vi.fn(),
       focus: vi.fn(),
     });
-    constructor(public options: any) {
+    constructor(public options: Record<string, unknown>) {
       super();
       state.windows.push(this);
     }
@@ -170,17 +179,25 @@ afterEach(() => {
 
 it('raises the cover again and cancels a still-starting Touch ID prompt when the display is released', async () => {
   let needsDisplay = true;
+  // Computer Use: the Agent reads the whole display and clicks desktop coordinates.
+  let computerInUse = false;
+  const sessionChanges: Array<() => void> = [];
   startAwayGuard({
     excludedWindows: () => {},
     needsDisplay: () => needsDisplay,
     enabled: () => true,
     delaySeconds: () => 30,
     screenLocked: () => false,
+    computerInUse: () => computerInUse,
+    onComputerInUseChange: (listener) => {
+      sessionChanges.push(listener);
+      return () => {};
+    },
     seedScreenLocked: () => {},
     msSinceOwnerInput: () => Infinity,
   });
   await vi.advanceTimersByTimeAsync(30_000);
-  const mask = state.windows.at(-1);
+  const mask = state.windows.at(-1) as MaskLike;
   expect(mask).toBeDefined();
   // The covered tick arms the prompt: the cover holds the display and input is shielded.
   await vi.advanceTimersByTimeAsync(2_000);
@@ -203,4 +220,27 @@ it('raises the cover again and cancels a still-starting Touch ID prompt when the
   prompt.resolve({ stop: prompt.stop });
   await settle();
   expect(prompt.stop).toHaveBeenCalledOnce();
+
+  // 2026-11-18 user decision: no system prompt while Computer Use drives this desktop.
+  needsDisplay = true;
+  computerInUse = true;
+  await vi.advanceTimersByTimeAsync(2_000);
+  await settle();
+  expect(prompt.watch).toHaveBeenCalledOnce();
+
+  // The Agent is done looking: the prompt comes back at once, not on the next tick.
+  computerInUse = false;
+  for (const listener of sessionChanges) listener();
+  await settle();
+  expect(prompt.watch).toHaveBeenCalledTimes(2);
+  expect(mask.level).toBe('pop-up-menu');
+  prompt.resolve({ stop: prompt.stop });
+  await settle();
+
+  // ...and it goes the moment the Agent takes the desktop again.
+  computerInUse = true;
+  for (const listener of sessionChanges) listener();
+  await settle();
+  expect(prompt.stop).toHaveBeenCalledTimes(2);
+  expect(mask.level).toBe('screen-saver');
 });

@@ -473,6 +473,8 @@ it('recovers away-guard failure masks after OS unlock, including late lock failu
       enabled: () => enabled,
       delaySeconds: () => 30,
       screenLocked: () => false,
+      computerInUse: () => false,
+      onComputerInUseChange: () => () => {},
       seedScreenLocked: () => {},
       msSinceOwnerInput: () => Infinity,
     });

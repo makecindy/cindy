@@ -175,7 +175,10 @@ display awake, Main also arms the system's own Touch ID prompt (`--owner-prompt`
 resting a finger on the sensor verifies the owner and uncovers without locking, while
 keys and clicks still turn into the lock. The prompt lives only as long as the cover
 holds the display awake, and goes when the cover locks, ends, or enters the lock-failed
-state; it never unlocks a locked Mac. The owner unlocks with
+state; it never unlocks a locked Mac. It is also kept off while any Computer Use session
+is open: the Agent's full-display screenshots would otherwise include the sheet and its
+desktop clicks could hit it (`openComputerUseSessions` / `onComputerUseSessionsChange`).
+The owner unlocks with
 Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
 is up. Covering every Space briefly makes Electron a background app, so Main brings the
 Cindy window that was focused back to the front after unlock. Away masks are
