@@ -4,6 +4,7 @@ import {
   extractDisplayName,
   normalizeWorkingDir,
   projectIdentityKeyForSession,
+  type ProjectNode,
 } from '../../lib/projectGrouping';
 
 export interface DocModeSwitchProject {
@@ -73,10 +74,34 @@ export function hasSwitchableDocModeProject(
   );
 }
 
+/** Open the active task's workspace if it belongs to this project, otherwise a project member's. */
+export function projectFilesRoute(
+  project: Pick<ProjectNode, 'projectKey' | 'sessions'>,
+  activeSessionId: string | undefined,
+  sessions: readonly Session[],
+): string | null {
+  const inProject = (s: Session) =>
+    !!s.workingDir && s.status !== 'deleted' && projectIdentityKeyForSession(s) === project.projectKey;
+  const active = (s: Session) => s.id === activeSessionId && inProject(s);
+  const target =
+    sessions.find(active) ?? project.sessions.find(active) ??
+    sessions.find(inProject) ?? project.sessions.find(inProject);
+  if (!target) return null;
+  const query = target.deviceLinkDeviceId ? `?device=${encodeURIComponent(target.deviceLinkDeviceId)}` : '';
+  return `/cc-agent/files/${encodeURIComponent(target.id)}${query}`;
+}
+
 export function resolveDocModeFilesSession(
   sessions: readonly Session[],
   sessionId: string | undefined,
+  remoteSessions: readonly Session[] = [],
+  deviceId: string | null = null,
 ): Session | null {
   if (!sessionId) return null;
-  return sessions.find((session) => session.id === sessionId) ?? null;
+  // An explicitly targeted device must never fall back to the controller or a
+  // different mirror while its task list is reconnecting.
+  if (deviceId) {
+    return remoteSessions.find((s) => s.id === sessionId && s.deviceLinkDeviceId === deviceId) ?? null;
+  }
+  return sessions.find((s) => s.id === sessionId) ?? remoteSessions.find((s) => s.id === sessionId) ?? null;
 }

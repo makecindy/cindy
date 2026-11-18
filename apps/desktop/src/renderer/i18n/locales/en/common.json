@@ -3483,7 +3483,7 @@
         "end": "Everything above was imported from {{source}}",
         "endHandoff": "Everything above was imported from {{source}}. {{harness}} continues from here."
       },
-      "projectMenu": "Import this project’s sessions from other tools…"
+      "projectMenu": "Import tasks…"
     },
     "connections": {
       "codex": {
@@ -16530,6 +16530,7 @@
         "empty": "This automation has no sessions to archive."
       },
       "archiveAll": {
+        "projectTitle": "Archive all tasks in “{{name}}”?",
         "title": "Archive all sessions",
         "confirm": "Archive all",
         "cancel": "Cancel",
@@ -16674,18 +16675,28 @@
         }
       },
       "projectAction": {
+        "menu": "Project menu for {{name}}",
+        "previewFailed": "Could not load this project’s tasks. Try again.",
+        "remotePreviewFailed": "Could not read the remote project’s tasks. Check the connection and make sure Cindy is up to date on the remote computer.",
         "rename": "Rename project",
         "pin": "Pin project",
         "unpin": "Unpin project",
-        "removeFromSidebar": "Remove Project from Sidebar",
-        "removeFromSidebarConfirmTitle": "Remove {{name}}?",
-        "removeFromSidebarConfirmDescription": "This removes the project from the sidebar. Files on your computer won't be deleted. Existing sessions will move to the Chat section and remain available.",
-        "removeFromSidebarConfirmAction": "Remove Project",
-        "removeFromSidebarFailed": "Couldn’t remove the project from the sidebar — try again.",
-        "showFiles": "Show Files",
-        "archivedAll": "Archive all",
-        "unarchiveAll": "Restore all",
-        "openInExplorer": "Open in file manager",
+        "removeFromSidebar": "Remove project from Cindy…",
+        "removeFromSidebarConfirmTitle": "Remove {{name}} from Cindy?",
+        "removeFromSidebarConfirmDescription": "Active tasks: {{count}}. You can continue them in Conversations.",
+        "removeFromSidebarConfirmAction": "Remove project",
+        "removeFromSidebarFailed": "Could not remove the project. Try again.",
+        "archiveOnRemove": "Also archive tasks ({{count}})",
+        "keepSkippedOnRemove": "The following tasks will stay in Conversations ({{skip}}).",
+        "removedArchived": "Tasks to move to Archived: {{count}}.",
+        "removeAndArchive": "Remove project and archive tasks",
+        "removeKeepFiles": "The project pin, custom name and icon will be cleared. Files and folders will stay on disk.",
+        "showFiles": "View task files in sidebar",
+        "archivedAll": "Archive all tasks",
+        "unarchiveAll": "Restore all tasks",
+        "openInFinder": "Open project folder in Finder",
+        "openInExplorer": "Open project folder in File Explorer",
+        "openInFileManager": "Open project folder in file manager",
         "newInDirectory": "New session in this directory",
         "copyDeepLink": "Copy Project Link",
         "search": "Search sessions in this project"

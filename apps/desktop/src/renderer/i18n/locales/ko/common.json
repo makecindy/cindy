@@ -3442,7 +3442,7 @@
         "end": "위 내용은 {{source}}에서 가져온 기록입니다",
         "endHandoff": "위 내용은 {{source}}에서 가져온 기록입니다. 여기부터 {{harness}}(으)로 이어서 작업합니다."
       },
-      "projectMenu": "이 프로젝트의 다른 도구 세션 가져오기…"
+      "projectMenu": "작업 가져오기…"
     },
     "connections": {
       "codex": {
@@ -16456,6 +16456,7 @@
         "empty": "이 자동화에는 보관할 세션이 없습니다"
       },
       "archiveAll": {
+        "projectTitle": "‘{{name}}’의 모든 작업을 보관할까요?",
         "title": "모든 세션 보관",
         "confirm": "모두 보관",
         "cancel": "취소",
@@ -16600,18 +16601,28 @@
         }
       },
       "projectAction": {
+        "menu": "{{name}} 프로젝트 메뉴",
+        "previewFailed": "이 프로젝트의 작업을 불러오지 못했습니다. 다시 시도하세요.",
+        "remotePreviewFailed": "원격 프로젝트의 작업을 읽을 수 없습니다. 연결 상태와 원격 컴퓨터의 Cindy 버전을 확인하세요.",
         "rename": "프로젝트 이름 변경",
         "pin": "프로젝트 고정",
         "unpin": "프로젝트 고정 해제",
-        "removeFromSidebar": "사이드바에서 프로젝트 제거",
-        "removeFromSidebarConfirmTitle": "“{{name}}” 프로젝트를 제거할까요?",
-        "removeFromSidebarConfirmDescription": "이 프로젝트는 사이드바에서만 제거됩니다. 컴퓨터에 있는 파일은 삭제되지 않습니다. 기존 세션은 ‘대화’ 섹션으로 이동하며 계속 사용할 수 있습니다.",
+        "removeFromSidebar": "Cindy에서 프로젝트 제거…",
+        "removeFromSidebarConfirmTitle": "Cindy에서 {{name}} 프로젝트를 제거할까요?",
+        "removeFromSidebarConfirmDescription": "보관되지 않은 작업 {{count}}개는 대화에서 계속 사용할 수 있습니다.",
         "removeFromSidebarConfirmAction": "프로젝트 제거",
-        "removeFromSidebarFailed": "사이드바에서 프로젝트를 제거하지 못했습니다. 다시 시도해 주세요.",
-        "showFiles": "파일 보기",
-        "archivedAll": "모두 보관",
-        "unarchiveAll": "모두 보관 해제",
-        "openInExplorer": "파일 관리자에서 열기",
+        "removeFromSidebarFailed": "프로젝트를 제거할 수 없습니다.",
+        "archiveOnRemove": "작업도 보관({{count}}개)",
+        "keepSkippedOnRemove": "제외된 작업({{skip}})은 대화에 남습니다.",
+        "removedArchived": "작업 {{count}}개가 보관함으로 이동합니다.",
+        "removeAndArchive": "프로젝트 제거 및 작업 보관",
+        "removeKeepFiles": "프로젝트 고정, 사용자 지정 이름과 아이콘이 해제됩니다. 파일과 폴더는 유지됩니다.",
+        "showFiles": "사이드바에서 작업 파일 보기",
+        "archivedAll": "모든 작업 보관",
+        "unarchiveAll": "모든 작업 보관 해제",
+        "openInFinder": "Finder에서 프로젝트 폴더 열기",
+        "openInExplorer": "파일 탐색기에서 프로젝트 폴더 열기",
+        "openInFileManager": "파일 관리자에서 프로젝트 폴더 열기",
         "newInDirectory": "이 디렉터리에서 새 세션",
         "copyDeepLink": "프로젝트 링크 복사",
         "search": "이 프로젝트에서 세션 검색"
