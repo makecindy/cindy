@@ -5519,8 +5519,19 @@
       "title": "Entrada de mensagens",
       "sendShortcut": {
         "label": "Usar {{shortcut}} para enviar",
-        "hint": "Quando ativado, {{shortcut}} envia mensagens. Quando desativado, Enter envia mensagens e Shift+Enter insere uma nova linha.",
-        "ariaLabel": "Usar {{shortcut}} para enviar mensagens"
+        "hint": "Enter envia. Shift+Enter insere uma nova linha.",
+        "ariaLabel": "Usar {{shortcut}} para enviar mensagens",
+        "hintModifierEnter": "{{shortcut}} envia. Enter insere uma nova linha."
+      },
+      "followUp": {
+        "label": "Envio durante a execução",
+        "hintQueue": "Enquanto a tarefa executa, o botão de enviar e {{send}} colocam a mensagem na fila.",
+        "hintSteer": "Enquanto a tarefa executa, o botão de enviar e {{send}} orientam a tarefa em andamento.",
+        "ariaLabel": "Envio enquanto a tarefa executa",
+        "options": {
+          "queue": "Colocar na fila",
+          "steer": "Orientar"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -13809,9 +13820,8 @@
     "sendButton": {
       "send": "Enviar mensagem",
       "queue": "Adicionar mensagem à fila",
-      "queueTooltip": "Clique para colocar na fila; pressione {{shortcut}} para orientar sem interromper a tarefa",
-      "queueTooltipSendMode": "Clique para colocar na fila; pressione {{shortcut}} para enviar esta mensagem",
-      "stop": "Parar geração"
+      "stop": "Parar geração",
+      "steer": "Orientar a tarefa em andamento"
     },
     "pluginSetup": {
       "account": {
@@ -14715,6 +14725,13 @@
       "runningWithWorktree_one": "Espere terminar para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências.",
       "runningWithWorktree_other": "Espere todas terminarem para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências.",
       "runningWithWorktree_many": "Espere todas terminarem para mudar de branch. Com worktree, comece agora em uma cópia separada, sem interferências."
+    },
+    "followUpHint": {
+      "queueDefault": "As mensagens enviadas enquanto a tarefa executa vão para a fila.",
+      "steerDefault": "As mensagens enviadas enquanto a tarefa executa orientam a tarefa em andamento.",
+      "switchToSteer": "Orientar por padrão",
+      "switchToQueue": "Colocar na fila por padrão",
+      "dismiss": "Fechar dica"
     }
   },
   "onboarding": {

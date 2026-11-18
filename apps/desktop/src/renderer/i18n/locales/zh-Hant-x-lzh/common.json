@@ -5352,8 +5352,19 @@
       "title": "書訊",
       "sendShortcut": {
         "label": "以 {{shortcut}} 遣之",
-        "hint": "啟則按 {{shortcut}} 遣訊；闔則按 Enter 遣訊，按 Shift+Enter 換行。",
-        "ariaLabel": "以 {{shortcut}} 遣訊"
+        "hint": "Enter 則遣，Shift+Enter 則換行。",
+        "ariaLabel": "以 {{shortcut}} 遣訊",
+        "hintModifierEnter": "{{shortcut}} 則遣，Enter 則換行。"
+      },
+      "followUp": {
+        "label": "行中遣訊之法",
+        "hintQueue": "差事行中，遣鈕與 {{send}} 皆排隊。",
+        "hintSteer": "差事行中，遣鈕與 {{send}} 皆插話於今之差事。",
+        "ariaLabel": "差事行中遣訊之法",
+        "options": {
+          "queue": "排隊",
+          "steer": "插話"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -13640,9 +13651,8 @@
     "sendButton": {
       "send": "遣訊",
       "queue": "排隊遣",
-      "queueTooltip": "點之則排隊遣；按 {{shortcut}} 插話，不中斷今之差事",
-      "queueTooltipSendMode": "點之則排隊；按 {{shortcut}} 遣此訊",
-      "stop": "止生成"
+      "stop": "止生成",
+      "steer": "插話於今之差事"
     },
     "pluginSetup": {
       "account": {
@@ -14533,6 +14543,13 @@
       "runningWithWorktree_one": "它結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
       "runningWithWorktree_other": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。",
       "runningWithWorktree_many": "它們結束前不能切換分支。用 worktree 現在就能在獨立副本裡開始，互不影響。"
+    },
+    "followUpHint": {
+      "queueDefault": "差事行中所遣之訊，默從排隊。",
+      "steerDefault": "差事行中所遣之訊，默為插話於今之差事。",
+      "switchToSteer": "默改插話",
+      "switchToQueue": "默改排隊",
+      "dismiss": "關閉提示"
     }
   },
   "onboarding": {

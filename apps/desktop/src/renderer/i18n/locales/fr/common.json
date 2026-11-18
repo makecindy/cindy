@@ -5519,8 +5519,19 @@
       "title": "Saisie des messages",
       "sendShortcut": {
         "label": "Utiliser {{shortcut}} pour envoyer",
-        "hint": "Activé, {{shortcut}} envoie les messages. Désactivé, Enter envoie les messages et Shift+Enter insère un saut de ligne.",
-        "ariaLabel": "Utiliser {{shortcut}} pour envoyer les messages"
+        "hint": "Enter envoie le message. Shift+Enter insère un saut de ligne.",
+        "ariaLabel": "Utiliser {{shortcut}} pour envoyer les messages",
+        "hintModifierEnter": "{{shortcut}} envoie le message. Enter insère un saut de ligne."
+      },
+      "followUp": {
+        "label": "Envoi pendant l'exécution",
+        "hintQueue": "Pendant l'exécution de la tâche, le bouton d'envoi et {{send}} mettent le message en file d'attente.",
+        "hintSteer": "Pendant l'exécution de la tâche, le bouton d'envoi et {{send}} réorientent la tâche en cours.",
+        "ariaLabel": "Envoi pendant l'exécution de la tâche",
+        "options": {
+          "queue": "File d'attente",
+          "steer": "Réorienter"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -13809,9 +13820,8 @@
     "sendButton": {
       "send": "Envoyer le message",
       "queue": "Mettre le message en file d'attente",
-      "queueTooltip": "Cliquez pour mettre en file d'attente ; appuyez sur {{shortcut}} pour réorienter la tâche sans l'interrompre",
-      "queueTooltipSendMode": "Cliquez pour mettre en file d'attente ; appuyez sur {{shortcut}} pour envoyer ce message",
-      "stop": "Arrêter la génération"
+      "stop": "Arrêter la génération",
+      "steer": "Réorienter la tâche en cours"
     },
     "pluginSetup": {
       "account": {
@@ -14715,6 +14725,13 @@
       "runningWithWorktree_one": "Attendez sa fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_other": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_many": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences."
+    },
+    "followUpHint": {
+      "queueDefault": "Les messages envoyés pendant l'exécution de la tâche sont mis en file d'attente.",
+      "steerDefault": "Les messages envoyés pendant l'exécution de la tâche réorientent la tâche en cours.",
+      "switchToSteer": "Réorienter par défaut",
+      "switchToQueue": "File d'attente par défaut",
+      "dismiss": "Fermer l'astuce"
     }
   },
   "onboarding": {
