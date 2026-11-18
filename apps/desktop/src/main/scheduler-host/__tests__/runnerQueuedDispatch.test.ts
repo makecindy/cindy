@@ -2270,7 +2270,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     }
     const accepted = createQueuedAcceptedCallbacks();
     const preparations = new Map<string, SchedulerQueuedPreparation>();
-    const discarded = new Map<string, () => void>();
+    const discarded = new Map<string, SchedulerQueuedPromptObserver>();
     const dispatched: unknown[] = [];
     let retired = false;
     let precedingTurnRunning = true;
@@ -2300,7 +2300,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       },
       onAcceptedQueuedMessage: (id, item) => accepted.run(id, item),
       onDiscardedQueuedMessage: (_id, item) => {
-        accepted.discard(item.clientId); discarded.get(item.clientId)?.();
+        accepted.discard(item.clientId); discarded.get(item.clientId)?.onDiscarded();
         discarded.delete(item.clientId); preparations.delete(item.clientId);
       },
       steerToAgent: async () => {}, abortSession: async () => {},
