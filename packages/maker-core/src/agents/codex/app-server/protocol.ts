@@ -143,6 +143,8 @@ export interface CodexModelListParams {
 export interface CodexMcpServerStatus {
   name: string;
   tools: Record<string, unknown>;
+  runtimeStatus?: 'notStarted' | 'starting' | 'connected' | 'authenticationRequired' | 'failed' | 'cancelled' | 'disabled' | null;
+  toolsError?: string | null;
   [k: string]: unknown;
 }
 
