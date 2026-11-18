@@ -159,7 +159,7 @@ export function createInputQueue(deps) {
     // Context recovery (context-recovery-assembly.ts): one rollover per runtime, so its memory of
     // continued inputs lasts as long as this owner's runtime; a new owner's runtime gets a new one.
     let rollover = null;
-    const executor = createTurnExecutor({ ...deps,
+    const executor = createTurnExecutor({ ...deps, storedSessionOptions,
       assertCurrent, isCurrent,
       getRecoveryRollover: deps.createContextRecoveryRollover ? () => rollover : deps.getRecoveryRollover,
       prepareUserMessage: attachments?.prepareUserMessage,
@@ -371,6 +371,7 @@ export function createInputQueue(deps) {
       /** A context recovery's replay was accepted (the recovery factory's onRebuilt). */
       noteContextRecoveryRebuilt: id => executor.noteRecoveryRebuilt(id),
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
+      preparePiSkillRuntime: (id, dir) => command(id, () => executor.preparePiSkillRuntime(id, dir)),
       restoreSession: (id, check) => command(id, async () => {
         await check(); assertCurrent();
         const session = await executor.restoreSession(id, storedSessionOptions(await deps.readSession(id)), check);

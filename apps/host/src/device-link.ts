@@ -44,6 +44,7 @@ export interface HostDeviceLinkPorts {
   refreshToken?(): Promise<void>;
   invoke(path: string, body?: any, context?: { caller: string }): Promise<ServiceResult>;
   releaseAuthCaller?(caller: string): void;
+  preparePiSkillRuntime(id: string, workingDir: string): Promise<void>;
   createRuntimeSession(input: unknown): Promise<unknown>;
   subscribe(listener: (event: any) => void): () => void;
   // Cloud revocation is required before narrowing a persisted standby grant.
@@ -105,6 +106,18 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     });
   }
   registry.register('maker:create-session', ([input]) => deps.createRuntimeSession(input));
+  registry.register('maker:session:prewarm', async ([id, input]) => {
+    assertCurrent();
+    const caller = getDeviceLinkInvokeContext();
+    if (!caller || caller.sharedTask) throw new Error('[PRECONDITION_FAILED] Task owner required');
+    const request = input as { purpose?: string; workingDir?: string } | null;
+    if (request?.purpose !== 'pi-skill-dispatch') return { accepted: false };
+    if (typeof id !== 'string' || !id || typeof request.workingDir !== 'string' || !request.workingDir)
+      throw new Error('[INVALID_PARAMS] Session and working directory required');
+    await deps.preparePiSkillRuntime(id, request.workingDir);
+    assertCurrent();
+    return { accepted: true };
+  });
   if (deps.mcpApps) registry.register(MCP_APPS_INVOKE, async ([sessionId, input]) => {
     const source = getDeviceLinkInvokeContext();
     if (!source || source.sharedTask) throw new Error('[PRECONDITION_FAILED] MCP_APP_OWNER_ONLY');
