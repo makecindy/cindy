@@ -5418,8 +5418,19 @@
       "title": "메시지 입력",
       "sendShortcut": {
         "label": "{{shortcut}}로 보내기",
-        "hint": "켜면 {{shortcut}}로 메시지를 보냅니다. 끄면 Enter로 보내고 Shift+Enter로 줄을 바꿉니다.",
-        "ariaLabel": "{{shortcut}}로 메시지 보내기"
+        "hint": "Enter로 전송하고 Shift+Enter로 줄을 바꿉니다.",
+        "ariaLabel": "{{shortcut}}로 메시지 보내기",
+        "hintModifierEnter": "{{shortcut}}로 전송하고 Enter로 줄을 바꿉니다."
+      },
+      "followUp": {
+        "label": "실행 중 전송 방식",
+        "hintQueue": "작업 실행 중에는 전송 버튼과 {{send}}로 대기열에 추가합니다.",
+        "hintSteer": "작업 실행 중에는 전송 버튼과 {{send}}로 실행 중인 작업에 끼어듭니다.",
+        "ariaLabel": "작업 실행 중 전송 방식",
+        "options": {
+          "queue": "대기열에 추가",
+          "steer": "끼어들기"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -8254,6 +8265,8 @@
         "subscribeMessageDetail": "저장된 사용자 메시지와 AI 답변을 수신합니다. 첨부 파일은 별도의 읽기와 전달로 가져옵니다.",
         "subscribeToolExecution": "도구 실행 이벤트",
         "subscribeToolExecutionDetail": "도구 이름, 입력, 결과 및 오류를 수신합니다. 실행을 변경하지 않고 관찰만 합니다.",
+        "subscribeNativeRecovery": "네이티브 복구 이벤트",
+        "subscribeNativeRecoveryDetail": "재시도, 컨텍스트 압축 및 작업 중지에 대한 엔진 상태를 수신합니다.",
         "subscribeTaskState": "작업 상태 이벤트",
         "subscribeTaskStateDetail": "작업의 실행, 대기, 완료, 보관 및 숨김 상태 변경을 수신합니다.",
         "subscribeActivity": "AI가 언제 생각하고 언제 사용자를 기다리는지 수신",
@@ -8469,6 +8482,24 @@
         "openInSidebar": "사이드바에서 열기",
         "panelPageHosted": "플러그인 페이지에서 열림 · 벗어나면 자동으로 닫힘",
         "panelNone": "이 플러그인에는 패널이 없습니다",
+        "githubRelease": {
+          "title": "플러그인 업데이트",
+          "installed": "설치된 버전 {{version}}",
+          "upstream": "배포 버전 {{version}}",
+          "prerelease": "사전 릴리스",
+          "check": "업데이트 확인",
+          "update": "다운로드 및 설치",
+          "connect": "GitHub에 로그인",
+          "checking": "업데이트 확인 중…",
+          "updating": "다운로드 및 설치 중…",
+          "available": "새 버전이 있습니다.",
+          "current": "최신 버전입니다.",
+          "updated": "플러그인을 업데이트했습니다.",
+          "empty": "설치할 수 있는 릴리스가 없습니다.",
+          "sign-in": "업데이트를 확인하려면 GitHub에 로그인하세요.",
+          "forbidden": "현재 GitHub 계정에 비공개 저장소 읽기 권한이 없습니다.",
+          "unavailable": "업데이트를 확인하거나 설치하지 못했습니다. 다시 시도하세요."
+        },
         "customSlotTitle": "플러그인 사용자 정의 설정 영역",
         "dangerTitle": "플러그인 제거",
         "infoContents": "포함",
@@ -9819,6 +9850,41 @@
       },
       "providerTooltip": "세션에 현재 선택된 제공자입니다. 지정하지 않은 경우 비워 둡니다.",
       "tokensTooltip": "이 세션이 {{range}} 동안 사용한 토큰만 집계합니다."
+    },
+    "auxiliary": {
+      "title": "보조 모델 사용량",
+      "label": "보조 요청",
+      "purpose": "용도",
+      "requests": "기록된 요청",
+      "description": "총 토큰에 포함됩니다. 제공자가 반환한 사용량만 기록하며, 보고되지 않은 사용량과 과거 요청은 추정하지 않습니다.",
+      "sources": {
+        "title": "제목 생성",
+        "task-summary": "작업 요약",
+        "prompt-prediction": "입력 제안",
+        "working-status": "작업 상태",
+        "help": "도움말",
+        "bot-creation": "동료 만들기",
+        "bot-opening": "동료 인사말",
+        "group-planning": "그룹 계획",
+        "ambient-reply": "답장 판단",
+        "auto-review": "자동 검토",
+        "tool-loop-review": "도구 반복 검토",
+        "memory-review": "메모리 검토",
+        "git-summary": "변경 요약",
+        "hook-generation": "자동화 스크립트",
+        "automation-verification": "가져오기 검증",
+        "plugin-text": "플러그인 텍스트",
+        "voice-dialogue": "음성 대화",
+        "voice-exit": "음성 종료 판단",
+        "voice-refinement": "음성 텍스트 다듬기",
+        "dictionary-learning": "사전 학습",
+        "embedding-query": "벡터 검색",
+        "embedding-index": "벡터 색인",
+        "web-search": "웹 검색",
+        "provider-probe": "연결 테스트",
+        "vision-bridge": "비전 브리지",
+        "auxiliary": "기타 보조 요청"
+      }
     }
   },
   "usageDashboard": {
@@ -13638,9 +13704,8 @@
     "sendButton": {
       "send": "메시지 전송",
       "queue": "대기열에 추가",
-      "queueTooltip": "클릭하면 대기열에 추가됩니다. {{shortcut}}을(를) 누르면 작업을 중단하지 않고 끼어듭니다",
-      "queueTooltipSendMode": "클릭하면 대기열에 추가하고, {{shortcut}}를 누르면 이 메시지를 보냅니다.",
-      "stop": "생성 중지"
+      "stop": "생성 중지",
+      "steer": "실행 중인 작업에 끼어들기"
     },
     "pluginSetup": {
       "account": {
@@ -14531,6 +14596,13 @@
       "runningWithWorktree_one": "완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningWithWorktree_other": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningWithWorktree_many": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다."
+    },
+    "followUpHint": {
+      "queueDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 대기열에 추가됩니다.",
+      "steerDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 실행 중인 작업에 끼어듭니다.",
+      "switchToSteer": "기본값을 끼어들기로",
+      "switchToQueue": "기본값을 대기열 추가로",
+      "dismiss": "안내 닫기"
     }
   },
   "onboarding": {
@@ -19675,7 +19747,8 @@
           "expired": "만료됨",
           "voided": "무효화됨"
         }
-      }
+      },
+      "viewUsage": "사용량 보기"
     },
     "orders": {
       "title": "주문 내역",

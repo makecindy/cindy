@@ -1,3 +1,5 @@
+import { createPiVisionUsageRecorder } from '../../../desktop/src/main/vision-bridge/piVisionUsage.js';
+import { createOneShotUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
 import { createHostClaudeSubagentModelAccess } from './subagent-model-access.js';
@@ -799,6 +801,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           registerAgentProcess(pid, kind, role, sessionId),
         ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
+        createPiVisionUsageRecorder,
         // As the desktop (pi-host.ts): the cloud-file startup hint and the extension dialog strings.
         formatPiStartupCloudFileHint: (file) => t('logic.errors.piStartupCloudFile').replace('{{path}}', () => file),
         getPiExtensionUiStrings: () => ({
@@ -836,6 +839,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     Object.entries(agents).map(([kind, instance]) => [kind, instance.capabilities]),
   );
   const maker = new Maker({
+    createOneShotUsageRecorder,
     agents,
     storage: options.storage,
     lifecycleHooks: {

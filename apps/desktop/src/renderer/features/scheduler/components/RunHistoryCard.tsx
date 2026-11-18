@@ -148,7 +148,8 @@ export function RunHistoryCard({
   sessionReference,
 }: Props) {
   const { t, i18n } = useTranslation();
-  const errorCode = run.errorMsg ? parseAgentErrorCode(run.errorMsg)?.code : undefined;
+  const errorDetail = run.errorMsg?.replace(/^scheduled task auto-resume failed: /, '');
+  const errorCode = errorDetail ? parseAgentErrorCode(errorDetail)?.code : undefined;
   const errorKey = errorCode ? `chat.remoteError.${errorCode}` : undefined;
   const navigate = useNavigate();
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);
