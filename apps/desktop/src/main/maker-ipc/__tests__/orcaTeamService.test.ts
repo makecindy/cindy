@@ -4341,6 +4341,53 @@ describe('OrcaTeamService direct-turn report outcomes', () => {
     await service.workerReportQueuedContentMutated('worker-session-1', ['q-direct-1']);
     expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', null);
   });
+
+  // 直连轮的行在 turn 开始时是 running，终态分支不会走 idle/done/error 那条；
+  // 若终态只按原始 status 结算，failed 结论会被 done 洗掉、waiting 也不会回到 idle（Codex P2）。
+  it('applies the direct-turn report state at the terminal instead of the raw status', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.handleWorkerTurnStarted('worker-session-1');
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, { delivered: true, report: { state: 'failed', summary: '直连轮失败' } });
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '结果',
+    });
+
+    expect(deps.updateWorkerStatus).toHaveBeenLastCalledWith(
+      'worker-1',
+      'error',
+      expect.objectContaining({ state: 'failed' }),
+    );
+    expect(getWorker().status).toBe('error');
+  });
+
+  // 直连轮的 progress 在 await link 期间换了新直连轮：旧 progress 不得写进新轮的投影（Codex P2）。
+  it('rejects a direct-turn progress report when a new direct turn starts mid-await', async () => {
+    const { deps, service } = createDeps();
+    let live: { getTurnGeneration: () => number } | null = { getTurnGeneration: () => 1 };
+    (deps.getLiveSession as ReturnType<typeof vi.fn>).mockImplementation(() => live);
+    let releaseLink!: () => void;
+    const linkGate = new Promise<void>((resolve) => { releaseLink = resolve; });
+    const originalLink = deps.getWorkerLinkBySessionId;
+    deps.getWorkerLinkBySessionId = async (sessionId: string) => {
+      await linkGate;
+      return originalLink(sessionId);
+    };
+
+    const pending = service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '旧轮进度' });
+    // 旧轮停止、新直连轮开始：运行实例换新、代号递增。
+    live = { getTurnGeneration: () => 2 };
+    releaseLink();
+    await pending;
+
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1',
+      expect.objectContaining({ summary: '旧轮进度' }),
+    );
+  });
 });
 
 /**

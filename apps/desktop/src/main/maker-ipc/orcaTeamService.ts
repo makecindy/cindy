@@ -2431,6 +2431,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       // 捕获时的派活身份；await 之后可能已被新派活替换（那会清空 latest_report），
       // 必须在同一 worker transition 内复核，否则旧进度会写进新一轮甚至挂到它的通知上。
       const captured = autoBridge.get(sessionId);
+      // 直连轮（无派活）没有 identity 可比：归属必须在捕获时冻结运行实例与轮次代号，
+      // 写入前复核，否则换轮后的迟到 progress 会写进新轮的投影。
+      const capturedLive = deps.getLiveSession(sessionId);
+      const capturedGeneration = capturedLive?.getTurnGeneration?.();
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
       await withWorkerTransition(link.workerId, async () => {
@@ -2438,6 +2442,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         // 若新派活恰好装上了新的 identity，旧进度同样不得写进它。
         const current = autoBridge.get(sessionId);
         if (current !== captured) return;
+        if (!current) {
+          const live = deps.getLiveSession(sessionId);
+          if (live !== capturedLive) return;
+          if ((live?.getTurnGeneration?.() ?? undefined) !== capturedGeneration) return;
+        }
         // 终段回报已被 send_to_lead 接受入档后，迟到的 progress 是遥测：不得覆盖结论，
         // 否则终端回合会按 progress 跳过结算，把已判定的结论语义退化回 raw 状态。
         if (current?.structuredReport && current.structuredReport.state !== 'progress') return;
@@ -2771,7 +2780,23 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           if (state && structured) {
             await applyWorkerReportState(state, structured, params.status);
           } else {
-            await deps.updateWorkerStatus(link.workerId, params.status);
+            // 直连轮（无派活）的结论先到、终态后到：按真实终态补映射，
+            // 否则 failed 会被 raw done 洗掉、waiting 也回不到 idle。
+            const direct = directTurnOutcomes.get(params.sessionId);
+            const directMatches = Boolean(direct) && (!direct!.turnGeneration || !capture.turnGeneration || direct!.turnGeneration === capture.turnGeneration);
+            if (!state && directMatches && direct!.report) {
+              directTurnOutcomes.delete(params.sessionId);
+              await applyReportOutcome(link.workerId, link.leadSessionId, direct!.report, params.status);
+            } else {
+              await deps.updateWorkerStatus(link.workerId, params.status);
+              // 只登记直连轮（无派活）的真实终态：回报若在终态之后到达，仍按此终态补映射。
+              if (!state) {
+                directTurnOutcomes.set(params.sessionId, {
+                  turnGeneration: capture.turnGeneration,
+                  terminalStatus: params.status,
+                });
+              }
+            }
           }
           if (state) state.terminalObserved = true;
           deps.broadcastOrcaWorkerChanged(link.leadSessionId);
