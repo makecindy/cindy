@@ -11,6 +11,8 @@ import { extractIpcError } from '@/utils/ipcError';
 const UNSUPPORTED_RETRY_AFTER_MS = 15 * 60_000;
 /** A mount may reuse a live consumer's snapshot no older than this instead of re-reading. */
 const MOUNT_REUSE_MS = 60_000;
+const isVisible = () => document.visibilityState !== 'hidden'
+  && !document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR);
 function isSnapshotShape(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -178,20 +180,26 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
       .finally(() => {
         entry.pending = false;
         if (isDataOwnerGenerationCurrent(entry.owner)) for (const notify of entry.stateListeners) notify();
-        const liveQueued = entry.liveRefreshes.size > 0;
-        entry.liveRefreshes.clear();
-        if (entry.refreshQueued || liveQueued) {
-          const queuedScheduling = liveQueued ? undefined : entry.refreshScheduling;
-          // An old in-flight request can install a negative capability cache
-          // after reconnect. Native probes and still-observed live recovery
-          // tokens bypass that TTL; cancelling the card removes its token.
-          const retrySupport = entry.refreshSupportProbe || liveQueued;
-          entry.refreshSupportProbe = false;
-          entry.refreshQueued = false;
-          entry.refreshScheduling = undefined;
-          if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0) request(deviceId, providerId, false, queuedScheduling, retrySupport);
-        }
+        flushQueuedRefresh(entry, deviceId, providerId);
       });
+  }
+  function flushQueuedRefresh(entry: Entry, deviceId: string, providerId?: string): void {
+    // Visibility can change while the request preceding this recovery is pending.
+    // Keep the queue until the existing visibility observer resumes it.
+    if (entry.pending || (cfg.refreshIntervalMs && !isVisible())) return;
+    const liveQueued = entry.liveRefreshes.size > 0;
+    entry.liveRefreshes.clear();
+    if (entry.refreshQueued || liveQueued) {
+      const queuedScheduling = liveQueued ? undefined : entry.refreshScheduling;
+      // An old in-flight request can install a negative capability cache
+      // after reconnect. Native probes and still-observed live recovery
+      // tokens bypass that TTL; cancelling the card removes its token.
+      const retrySupport = entry.refreshSupportProbe || liveQueued;
+      entry.refreshSupportProbe = false;
+      entry.refreshQueued = false;
+      entry.refreshScheduling = undefined;
+      if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0) request(deviceId, providerId, false, queuedScheduling, retrySupport);
+    }
   }
   function useMirror(deviceId: string | null, providerId?: string, options: { live?: boolean; refreshEpoch?: number } = {}): T | null {
     const entry = deviceId ? entryFor(deviceId, providerId) : null;
@@ -229,8 +237,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         }
       }
       entry.listeners.add(notify);
-      const visible = () => document.visibilityState !== 'hidden'
-        && !document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR);
+      const visible = isVisible;
       if (cfg.refreshOnReconnect && firstObserver) {
         // Subscribe once per entry, rather than once per card: contextBridge
         // can clone the same host event separately for different consumers.
@@ -272,6 +279,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         clearInterval(timer);
         timer = undefined;
         if (visible()) {
+          flushQueuedRefresh(entry, deviceId, providerId);
           poll();
           timer = setInterval(poll, cfg.refreshIntervalMs);
         }

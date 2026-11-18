@@ -163,6 +163,31 @@ it('backs off failed remote quota reads and recovers only the visible target', a
   expect(first.result.current).toEqual({ quota: null, state: { failed: false, refreshing: false } });
 });
 
+// PR #11105 r4599742041, unit: the existing hidden-reconnect case did not cover
+// hiding AFTER recovery queued behind a slow native read. No hidden RPC should
+// start; restoring visibility consumes the queued recovery and updates the quota.
+it('defers an already queued quota recovery until the window becomes visible', async () => {
+  let finish!: (value: unknown) => void;
+  mocks.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const view = renderHook(() => useRemoteCodexAccountUsage('mini', 'openai', { live: true }));
+  act(() => mocks.reopenedListeners.forEach(cb => cb({ deviceId: 'mini' })));
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+  const response = (usedPercent: number) => ({ account: { planType: 'pro' }, providerId: 'openai',
+    rateLimits: { secondary: { usedPercent, windowMinutes: 10080 } } });
+  mocks.invoke.mockResolvedValue(response(22));
+  act(() => finish(response(4)));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(view.result.current?.secondary?.usedPercent).toBe(4);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  await flushMicrotasks();
+  expect(mocks.invoke).toHaveBeenCalledTimes(2);
+  expect(view.result.current?.secondary?.usedPercent).toBe(22);
+});
+
 // Unit r4389934308: a live card's owned recovery queue must be discarded by
 // identity clear or owner change even while another ordinary subscriber remains.
 // Previous owner/push tests did not contain a queued live observation-gap read.
