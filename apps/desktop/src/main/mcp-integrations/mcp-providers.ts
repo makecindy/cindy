@@ -31,7 +31,7 @@ import { manageAppModels } from '../app-settings/models.js';
 import { runProviderReadRequest } from './providerReadTools.js';
 import { runProviderSharingRequest } from './providerSharingTools.js';
 import { executeProviderShareManagementCommand, readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
-import { providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
+import { findReceivedShare, providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
 import { createProviderGroupCommandDeps, executeProviderGroupCommand } from '../provider-group/ipc.js';
 import { invokeProviderManagement } from '../provider-group/managementClient.js';
 import { remoteInvoke } from '../device-link/index.js';
@@ -785,7 +785,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               const response = await deps.invokeRemote(deviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL, [query], { preSend });
               return response.ok ? response.result : null;
             },
-            readShare: shareId => readReceivedProviderShareQuota(shareId).catch(() => null),
+            readShare: async shareId => findReceivedShare(shareId)?.providerId === 'xd'
+              ? readReceivedProviderShareQuota(shareId).catch(() => null) : null,
             shareAccessEpoch: providerShareAccessEpoch,
             resolveSubscription: async (providerId, deviceId) => {
               if (!deviceId) return resolveSubscriptionPoolProvider(providerId)?.kind ?? null;

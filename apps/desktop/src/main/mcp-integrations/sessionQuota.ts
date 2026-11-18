@@ -8,7 +8,7 @@ import {
   type SubscriptionProvider,
   type SubscriptionSessionAccountQuery,
 } from '../../shared/subscriptionAccounts.js';
-import { subscriptionUsageView } from '../subscription-accounts/usageView.js';
+import { SUBSCRIPTION_USAGE_TTL_MS, subscriptionUsageView } from '../subscription-accounts/usageView.js';
 
 interface SessionQuotaRoute {
   providerId: string | null;
@@ -35,21 +35,16 @@ function shareQuota(insights: ProviderShareInsights | null) {
     || !quota || quota.partial || quota.group || quota.accounts.length !== 1) return unavailable;
   const account = quota.accounts[0];
   if (account.state === 'unlimited') return { status: 'unlimited', source: 'shared' };
-  if (account.state !== 'ready' || (!account.windows.length && !account.balance)) return unavailable;
+  if (account.state !== 'ready' || !account.balance || account.windows.length) return unavailable;
   const now = Date.now();
-  const stale = account.updatedAt === null
-    || account.windows.some(window => window.resetsAt !== null && window.resetsAt <= now)
-    || (account.balance?.resetsAt != null && account.balance.resetsAt <= now);
+  const stale = account.updatedAt === null || now - account.updatedAt >= SUBSCRIPTION_USAGE_TTL_MS
+    || (account.balance.resetsAt !== null && account.balance.resetsAt <= now);
   return {
     source: 'shared',
     status: stale ? 'stale' : 'available',
     updatedAt: account.updatedAt,
-    windows: account.windows.map(window => ({
-      kind: window.kind, usedPercent: 100 - window.remainingPercent,
-      windowMinutes: window.windowMinutes, resetsAt: window.resetsAt,
-      updatedAt: account.updatedAt,
-    })),
-    balance: account.balance && {
+    windows: [],
+    balance: {
       remaining: account.balance.remaining, total: account.balance.total,
       unit: account.balance.currency, resetsAt: account.balance.resetsAt,
     },
@@ -95,6 +90,9 @@ export async function readSessionQuota(
   await assertCurrent();
   if (!route || route.remoteHostId) return unavailable;
   const shareId = providerShareIdOfAgentDeviceId(route.deviceId);
+  // The existing share reply does not identify a bound subscription account or
+  // model bucket. Cindy AI has one billing balance for the shared connection.
+  if (shareId && route.providerId !== 'xd') return unavailable;
   const shareEpoch = shareId ? ports.shareAccessEpoch(shareId) : null;
   let result;
   if (shareId) {

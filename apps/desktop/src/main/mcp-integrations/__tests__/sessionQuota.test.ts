@@ -41,26 +41,45 @@ it('collapses missing tasks and withholds a result when the execution route chan
 });
 
 it('reads only authorized, unambiguous shared quota', async () => {
-  const readRoute = async () => ({ ...route, deviceId: 'share:grant' });
+  const readRoute = async () => ({ ...route, deviceId: 'share:grant', providerId: 'xd' });
   const resetsAt = Date.now() + 60_000;
   const quota = { group: false, partial: false, accounts: [{
-    state: 'ready' as const, updatedAt: Date.now(), balance: null,
-    windows: [{ kind: 'week' as const, label: null, remainingPercent: 70, resetsAt, windowMinutes: 10080 }],
+    state: 'ready' as const, updatedAt: Date.now(),
+    balance: { remaining: 70, total: 100, currency: 'USD', resetsAt, pools: [] },
+    windows: [],
   }] };
+  const oldQuota = { ...quota, accounts: [{ ...quota.accounts[0], updatedAt: Date.now() - 181_000 }] };
   const readShare = vi.fn()
     .mockResolvedValueOnce({ capabilities: { quota: true }, status: { quota: 'ready' }, quota })
     .mockResolvedValueOnce({ capabilities: { quota: false }, status: { quota: 'disabled' }, quota })
     .mockResolvedValueOnce({ capabilities: { quota: true }, status: { quota: 'ready' }, quota: { ...quota, group: true } })
-    .mockResolvedValueOnce({ capabilities: { quota: true }, status: { quota: 'ready' }, quota });
+    .mockResolvedValueOnce({ capabilities: { quota: true }, status: { quota: 'ready' }, quota })
+    .mockResolvedValueOnce({ capabilities: { quota: true }, status: { quota: 'ready' }, quota: oldQuota });
   const shareAccessEpoch = vi.fn().mockReturnValue(0);
   const deps = ports({ readRoute, readShare, shareAccessEpoch });
   expect(await readSessionQuota('task', deps, () => undefined))
-    .toMatchObject({ source: 'shared', status: 'available', windows: [{ usedPercent: 30, resetsAt }] });
+    .toMatchObject({ source: 'shared', status: 'available', balance: { remaining: 70, resetsAt } });
   expect(await readSessionQuota('task', deps, () => undefined)).toEqual({ status: 'unavailable' });
   expect(await readSessionQuota('task', deps, () => undefined)).toEqual({ status: 'unavailable' });
   shareAccessEpoch.mockReturnValueOnce(0).mockReturnValueOnce(1);
   expect(await readSessionQuota('task', deps, () => undefined)).toEqual({ status: 'unavailable' });
+  expect(await readSessionQuota('task', deps, () => undefined))
+    .toMatchObject({ source: 'shared', status: 'stale', balance: { remaining: 70 } });
   expect(readShare).toHaveBeenCalledWith('grant');
   expect(deps.readLocal).not.toHaveBeenCalled();
   expect(deps.readRemote).not.toHaveBeenCalled();
+});
+
+it('does not read anonymous share windows for an account- or model-bound task', async () => {
+  const readRoute = async () => ({ ...route, providerId: 'openai', deviceId: 'share:grant', modelId: 'codex-spark' });
+  const readShare = vi.fn(async () => ({
+    capabilities: { quota: true, usage: false }, status: { quota: 'ready' as const, usage: 'not-requested' as const },
+    version: 1 as const, usage: null, quota: { group: false, partial: false, accounts: [{
+      state: 'ready' as const, updatedAt: Date.now(), balance: null,
+      windows: [{ kind: 'week' as const, label: null, remainingPercent: 90, resetsAt: null, windowMinutes: 10080 }],
+    }] },
+  }));
+  expect(await readSessionQuota('task', ports({ readRoute, readShare }), () => undefined))
+    .toEqual({ status: 'unavailable' });
+  expect(readShare).not.toHaveBeenCalled();
 });
