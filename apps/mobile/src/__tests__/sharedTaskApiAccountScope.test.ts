@@ -19,7 +19,7 @@ vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('react', async (importOriginal) => ({ ...(await importOriginal<typeof import('react')>()), useMemo: (factory: () => unknown) => factory() }));
 // This suite isolates the official HTTP refresh/account fence. V2 invitation
 // signing and secure native state have their own adapter integration coverage.
-vi.mock('@/device-link/agentNetSharing', () => ({ joinMobileAgentNetSharedTask: async () => null,
+vi.mock('@/device-link/agentNetSharing', () => ({ isMobileAgentNetPrivateOwnedTask: () => false, joinMobileAgentNetSharedTask: async () => null,
   requestMobileAgentNetSharedTask: async () => null }));
 vi.mock('@/config/env', () => ({
   DEVICE_LINK_API_BASE_URL: 'https://relay.example.invalid',
