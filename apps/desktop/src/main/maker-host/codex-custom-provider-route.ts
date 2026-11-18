@@ -20,6 +20,7 @@ import {
 import { getActiveCatalog } from './active-catalog.js';
 import {
   getProviderRouteCredentialRevision,
+  providerRoutingForModel,
   sessionProviderRoutingForModel,
 } from './provider-route.js';
 import {
@@ -128,6 +129,7 @@ function frozenRoutingDescriptor(
 ): RoutingDescriptor {
   const frozen = {
     ...routing,
+    ...(routing.modelInterface ? { modelInterface: structuredClone(routing.modelInterface) } : {}),
     ...(keepImageModel && routing.imageModel ? { imageModel: { ...routing.imageModel } } : {}),
   };
   if (!keepImageModel) delete frozen.imageModel;
@@ -144,7 +146,7 @@ function frozenRoutingDescriptor(
 function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
   if (!isCustomRoutedProvider(provider) || !provider.agents.includes('codex')) return null;
   // Native subscription accounts (claude / xai / codex) keep their fixed identities.
-  // Only a user-built API-key custom provider registers a cindy_custom route.
+  // Custom API/OAuth connections keep the generic route; native subscriptions do not.
   // An extra ChatGPT subscription row is also source:'user'; routing it here would
   // send the oauth placeholder bearer to chatgpt.com (#9759).
   if (provider.auth?.native) return null;
@@ -184,19 +186,17 @@ function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
       responseModels.map(model => [model.id, [...model.efforts]]),
     ),
     responseRoutingByModel: Object.fromEntries(
-      responseModels.map((model) => {
-        if (!model.route) return [model.id, { ...frozenRouting }];
-        const inherited = { ...frozenRouting };
-        delete inherited.requestPath;
-        return [
-          model.id,
-          {
-            ...inherited,
-            upstream: model.route.baseUrl,
-            wireProtocol: model.route.wireProtocol,
-            ...(model.route.requestPath ? { requestPath: model.route.requestPath } : {}),
-          },
-        ];
+      responseModels.map(model => {
+        // Register transport metadata even when the current catalog choice is unavailable:
+        // an existing task can still hold a valid interface pin. Selection/dispatch retain
+        // the real catalog's availability checks; do not let one row abort Host startup.
+        const transportProvider = model.interfaceUnavailable
+          ? { ...provider, models: { ...provider.models, codex: [{ ...model, interfaceUnavailable: false }] } }
+          : provider;
+        return [model.id, frozenRoutingDescriptor(
+          providerRoutingForModel(transportProvider, 'codex', model.id)!,
+          isOrganizationManagedProvider(provider),
+        )];
       }),
     ),
   };

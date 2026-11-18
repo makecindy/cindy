@@ -26,7 +26,7 @@ import {
   setCodexAppliedCustomProviderRoutes,
   toCodexCustomProviderHostRoutes,
 } from '../codex-custom-provider-route.js';
-import { setActiveCatalog } from '../active-catalog.js';
+import { getActiveCatalog, setActiveCatalog } from '../active-catalog.js';
 import {
   isCodexThreadModelProviderIdentityMismatch,
   shouldCloseSessionForCredentialSwitch,
@@ -426,9 +426,45 @@ describe('Codex custom Provider identity', () => {
         ...pinnedThread,
         currentCodexThreadModelProviderId: 'cindy_gateway',
       })).toBe(true);
+      // A catalog edit can invalidate its current selection without revoking an older
+      // accepted task pin. Keep the transport registered; new unpinned tasks still fail.
+      const currentCatalog = getActiveCatalog();
+      currentCatalog.providers.find(item => item.id === config.id)!.models.codex![0]!.interfaceUnavailable = true;
+      const refreshed = deriveCodexCustomProviderRoutes(currentCatalog);
+      expect(refreshed[0]?.modelProviderId).toBe(routes[0]?.modelProviderId);
+      expect(resolveCodexCustomProviderModelProviderId(refreshed, config.id, 'k3.1-pro', 'responses-task'))
+        .toBe(routes[0]?.modelProviderId);
+      expect(resolveCodexCustomProviderModelProviderId(refreshed, config.id, 'k3.1-pro', 'old-chat-task'))
+        .toBeNull();
+      expect(() => resolveCodexCustomProviderModelProviderId(refreshed, config.id, 'k3.1-pro', 'new-unpinned-task'))
+        .toThrow('MODEL_INTERFACE_UNAVAILABLE');
+
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  // #9611 unit: freezing a per-model Responses route must retain the ordinary proxy's
+  // exec default and explicit overrides. An unavailable model must not abort a healthy Host.
+  // The existing identity tests use Responses-default connections and miss this input.
+  it.each([undefined, true, false])('freezes effective mixed-protocol compatibility (%s)', capability => {
+    const provider = customProvider({ runtimes: { codex: {
+      baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'responses', name: 'Responses', route: {
+        baseUrl: 'https://provider.example/responses-v2', wireProtocol: 'openai-responses', requestPath: '/infer',
+      } }, { id: 'retired', name: 'Retired', route: {
+        baseUrl: 'https://provider.example/v1', wireProtocol: 'openai-responses',
+      } }],
+    } } });
+    provider.routing.codex!.supportsResponsesCustomTools = capability;
+    provider.models.codex!.find(model => model.id === 'retired')!.interfaceUnavailable = true;
+    const [route] = deriveCodexCustomProviderRoutes(catalog(provider));
+    expect(route?.responseModels).toEqual(['responses', 'retired']);
+    expect(route?.responseRoutingByModel.responses).toMatchObject({
+      upstream: 'https://provider.example/responses-v2', wireProtocol: 'openai-responses', requestPath: '/infer',
+      supportsResponsesCustomTools: capability ?? false,
+    });
+    expect(provider.routing.codex!.supportsResponsesCustomTools).toBe(capability);
   });
 
   it('uses the applied Host snapshot to identify only real dynamic identity crossings', () => {

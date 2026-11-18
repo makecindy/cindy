@@ -6770,27 +6770,30 @@ describe('codex proxy host', () => {
   // - 最小失败输入：已登记的 Responses 路由，url 为 /_cindy/custom-provider/<routeId>/responses，
   //   工具 type:'custom' name:'exec'，并注册了产品提示词。
   // - tier：unit。进程内代理桩，不访问网络。
-  it('adapts exec on a custom-provider namespace route and still skips ordinary rewrites', async () => {
+  it.each(['openai-responses', 'openai-chat'] as const)('adapts exec on a custom-provider namespace route and still skips ordinary rewrites (%s connection)', async wireProtocol => {
     const host = await freshCodexProxyHost();
     const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
     const { setActiveCatalog } = await import('../active-catalog.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
     const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    // Mixed Chat defaults must freeze the selected Responses model's exec compatibility too.
     const provider = buildUserProvider({
       id: 'namespace-exec-provider',
       name: 'Namespace Exec Provider',
       runtimes: {
         codex: {
           baseUrl: 'http://127.0.0.1:43169/v1',
-          wireProtocol: 'openai-responses',
-          models: [{ id: 'namespace-model', name: 'Namespace Model' }],
+          wireProtocol,
+          models: [{ id: 'namespace-model', name: 'Namespace Model',
+            ...(wireProtocol === 'openai-chat' ? { route: { baseUrl: 'http://127.0.0.1:43169/v1', wireProtocol: 'openai-responses' as const } } : {}),
+          }],
         },
       },
     });
     // 自定义供应商没有 modelIdRewrite，真实改写本来就是空操作。这里给它装上前缀剥离，
     // 模型改写 transform 一旦被调用就会改掉 model；它没被调用时 model 保持原样。
     provider.routing.codex!.modelIdRewrite = { stripPrefix: 'namespace-' };
-    expect(provider.routing.codex?.supportsResponsesCustomTools).toBe(false);
+    expect(provider.routing.codex?.supportsResponsesCustomTools).toBe(wireProtocol === 'openai-chat' ? undefined : false);
     const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
     setActiveCatalog(catalog);
     const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
