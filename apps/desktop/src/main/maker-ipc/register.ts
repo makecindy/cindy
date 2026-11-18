@@ -14296,32 +14296,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const live = maker.getSession(taskId);
       return live && (live.isTurnRunning() || live.getTurnControlSnapshot().pendingInteractionCount > 0) ? { instanceId: live.instanceId, generation: live.getTurnGeneration() } : null;
     };
+    const readImProjectPermissionMode = (alias: string): GhostErrandPermissionMode => {
+      const mode = getSharedProjectPref(alias).permissionMode ?? 'bypassPermissions';
+      if (!(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(mode))
+        throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project permission is unavailable');
+      return mode as GhostErrandPermissionMode;
+    };
+    const resolveImProjectTarget = async (pluginId: string, project: string) => {
+      assertPlugin(pluginId);
+      const catalog = await readPluginImProjectCatalog();
+      const selected = readImProject(pluginId, project);
+      const fingerprint = sharedImProjectFingerprint(selected.alias);
+      const assertProjectCurrent = () => {
+        assertPlugin(pluginId);
+        const current = readImProject(pluginId, project);
+        if (!catalog.isCurrent() || current.alias !== selected.alias || current.approval !== selected.approval ||
+          sharedImProjectFingerprint(current.alias) !== fingerprint)
+          throw new PluginTaskError('STALE_REVISION', 'Shared project settings changed');
+      };
+      const target = { workingDir: selected.workingDir, matches: selected.matches, assertCurrent: assertProjectCurrent,
+        label: selected.alias === HOOK_CHAT_WORKSPACE_ALIAS ? t('settings.tina.chat.title') : selected.alias };
+      return { alias: selected.alias, target };
+    };
     pluginTaskEpoch = snapshot;
     pluginTasks = createPluginTaskService({
       store: createPluginTaskStore(snapshot.client), assertCurrent, assertAuthorized: assertPlugin, resolveRoute,
+      resolveImProjectPermission: async (pluginId, project) => {
+        const { alias, target } = await resolveImProjectTarget(pluginId, project);
+        target.assertCurrent();
+        return { ...target, permissionMode: readImProjectPermissionMode(alias) };
+      },
       resolveImProject: async (pluginId, project, selectedRoute) => {
-        assertPlugin(pluginId);
-        const catalog = await readPluginImProjectCatalog();
-        const selected = readImProject(pluginId, project);
-        const fingerprint = sharedImProjectFingerprint(selected.alias);
-        const assertProjectCurrent = () => {
-          assertPlugin(pluginId);
-          const current = readImProject(pluginId, project);
-          if (!catalog.isCurrent() || current.alias !== selected.alias || current.approval !== selected.approval ||
-            sharedImProjectFingerprint(current.alias) !== fingerprint)
-            throw new PluginTaskError('STALE_REVISION', 'Shared project settings changed');
-        };
-        const target = { workingDir: selected.workingDir, matches: selected.matches, assertCurrent: assertProjectCurrent,
-          label: selected.alias === HOOK_CHAT_WORKSPACE_ALIAS ? t('settings.tina.chat.title') : selected.alias };
+        const { alias, target } = await resolveImProjectTarget(pluginId, project);
         if (selectedRoute) {
-          const permissionMode = getSharedProjectPref(selected.alias).permissionMode ?? 'bypassPermissions';
-          assertProjectCurrent();
-          if (!(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(permissionMode))
-            throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project permission is unavailable');
-          return { ...target, permissionMode: permissionMode as GhostErrandPermissionMode, route: selectedRoute };
+          target.assertCurrent();
+          return { ...target, permissionMode: readImProjectPermissionMode(alias), route: selectedRoute };
         }
-        const config = await resolveSharedImProjectConfig(selected.alias, log);
-        assertProjectCurrent();
+        const config = await resolveSharedImProjectConfig(alias, log);
+        target.assertCurrent();
         if (!config.providerId || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
           throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project configuration is unavailable');
         return { ...target,
@@ -14333,7 +14345,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       assertImProjectDispatch: (pluginId, project, task, granted) => {
         const selected = readImProject(pluginId, project);
         if (!selected.matches(task)) throw new PluginTaskError('PROJECT_MISMATCH', 'Task moved out of the selected project');
-        const permission = getSharedProjectPref(selected.alias).permissionMode ?? 'bypassPermissions';
+        const permission = readImProjectPermissionMode(selected.alias);
         // A conversation may run looser than its project only up to what the user allowed in Cindy.
         if (!isPluginTaskPermissionAllowed(task.permissionMode, permission, task.planModeEnabled) &&
           !(granted && isPluginTaskPermissionAllowed(task.permissionMode, granted, task.planModeEnabled)))
@@ -14874,19 +14886,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const snapshot = getCurrentDbClientSnapshot();
         const approval = pluginTargetAuthorizationRevision(pluginId);
         if (!approval) throw new PluginTaskError('PERMISSION_DENIED', 'Shared IM projects require agent.targets approval');
-        const project = await service.imProjectConfig(pluginId, request.imProject);
-        assertCallerCurrent();
-        if (isPluginTaskPermissionAllowed(request.permissionMode, project.permissionMode)) return { granted: true };
-        // The plugin's own Host card, when it shows one, is still the upper bound.
-        const cfg = getPluginTaskDefaults(pluginId);
-        if (cfg && !isPluginTaskPermissionAllowed(request.permissionMode, cfg.permissionMode))
-          throw new PluginTaskError('PERMISSION_DENIED', 'Requested permission exceeds plugin dispatch policy');
-        if (pluginPermissionRequests.size) throw new PluginTaskError('TASK_BUSY', 'A permission request is already open');
+        const project = await service.imProjectPermission(pluginId, request.imProject);
         const assertRequestCurrent = () => {
           assertCallerCurrent();
           if (snapshot !== getCurrentDbClientSnapshot() || pluginTargetAuthorizationRevision(pluginId) !== approval)
             throw new PluginTaskError('PERMISSION_DENIED', 'Account or plugin authorization changed');
+          project.assertCurrent();
+          // The plugin's own Host card is the ceiling for either confirmation path.
+          const cfg = getPluginTaskDefaults(pluginId);
+          if (cfg && !isPluginTaskPermissionAllowed(request.permissionMode, cfg.permissionMode))
+            throw new PluginTaskError('PERMISSION_DENIED', 'Requested permission exceeds plugin dispatch policy');
         };
+        assertRequestCurrent();
+        if (isPluginTaskPermissionAllowed(request.permissionMode, project.permissionMode)) return { granted: true };
+        if (pluginPermissionRequests.size) throw new PluginTaskError('TASK_BUSY', 'A permission request is already open');
         pluginPermissionRequests.add(pluginId);
         try {
           const fill = (key: string, values: Record<string, string>) =>

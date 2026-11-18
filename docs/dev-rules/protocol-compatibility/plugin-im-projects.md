@@ -41,6 +41,7 @@
   没有授权、授权属于别的插件或项目时返回 `CONFIRMATION_REQUIRED`。卸载时与任务回执一起标记
   `ownershipRevoked`，重装要重新确认；插件更新、迁移实例时保留。operation 是 TypeScript 枚举，
   没有数据库 migration；旧 Host 按 operation 查询，看不到这些行。
+- 权限确认只读取项目身份和权限，不依赖项目默认模型可用。
 - 正在使用的授权 id 写进创建回执的可选 `imPermissionGrant`；派发时任务权限不得超过项目权限与授权
   权限中更宽的那个。改回跟随项目后清除该字段。没有该字段的旧回执行为不变。
 - 创建键签名不含 `imOverride`：同一键改了覆盖后重试返回原任务，不报 `IDEMPOTENCY_CONFLICT`，
@@ -52,7 +53,8 @@ manifest 顶层 `imEntrance: true`（需同时声明 `agent.tasks` 与 `agent.ta
 `@cindy/plugin-protocol` 两个 manifest reader 同一规则）只影响展示：已启用的此类插件出现在
 「设置 → IM 机器人」的「插件」分栏（打开插件页），「项目与模型」在没开官方机器人时也显示；本地模式
 没有官方分栏时，这一块随「插件」分栏显示。不新增权限项，加上它的插件更新不产生新的安装确认；
-旧 Host 把它当未知字段保留。
+旧 Host 把它当未知字段保留。新包继续严格校验，历史清单保留此前同名扩展的原值，界面只识别
+布尔值 true 且已声明 tasks 与 targets 的插件。
 
 账号、目录与执行位置沿用宿主所有权：远程模型只改变 Agent 执行位置，项目和任务仍属于插件宿主。
 远程控制与手机页面仍经宿主原管子校验；没有新增跨端 IPC 或中转 payload。没有重连或共享连接重置。

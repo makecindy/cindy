@@ -145,6 +145,7 @@ export interface PluginTaskServiceDeps {
     inheritedDefault?: string;
   };
   resolveRoute(pluginId: string, route?: PluginTaskRoute, callId?: string): Promise<PluginTaskRoute>;
+  resolveImProjectPermission?(pluginId: string, project: string): Promise<Omit<PluginTaskProject, 'route'>>;
   resolveImProject?(pluginId: string, project: string, selectedRoute?: PluginTaskRoute): Promise<PluginTaskProject>;
   /** `granted` is a valid user-confirmed looser permission for this task's conversation, if any. */
   assertImProjectDispatch?(pluginId: string, project: string, task: PluginTaskView, granted?: GhostErrandPermissionMode): void;
@@ -290,7 +291,8 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     deps.assertAuthorized(pluginId);
     assertPlanCurrent();
     const data = receipt && JSON.parse(receipt.payload);
-    const project = data?.imProject;
+    const transition = data?.imProjectTransition;
+    const project = data?.imProject ?? (transition && transition.previousPermission !== view.permissionMode ? transition.project : undefined);
     if (typeof project === 'string') {
       if (!deps.assertImProjectDispatch) return fail('HOST_NOT_READY', 'Shared IM projects are unavailable');
       const granted = await readImPermissionGrant(pluginId, project, data.imPermissionGrant);
@@ -607,9 +609,9 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
         selected.assertCurrent();
         const row = (await deps.store.get(task.taskId))!;
         const data = JSON.parse(row.payload);
-        const { imPermissionGrant: previousGrant, ...rest } = data;
+        const { imPermissionGrant: previousGrant, imProjectTransition, ...rest } = data;
         const next = { ...rest, imProject: request.imProject, ...(override.grant ? { imPermissionGrant: override.grant } : {}) };
-        if (data.imProject !== next.imProject || previousGrant !== override.grant) await save(row, next);
+        if (data.imProject !== next.imProject || previousGrant !== override.grant || imProjectTransition) await save(row, next);
       });
       const same = (['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'] as const)
         .every(key => task.resolvedConfig[key] === override.route[key]) && task.permissionMode === override.permissionMode;
@@ -621,8 +623,11 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
           await assertUnchanged();
           const row = (await deps.store.get(task.taskId))!;
           const data = JSON.parse(row.payload);
-          // Bind legacy tasks before loosening so dispatch checks the project after a restart.
-          if (data.imProject === undefined) await save(row, { ...data, imProject: request.imProject });
+          // A legacy task still dispatches under its previous policy until its runtime mode changes.
+          // Keep enough data on disk to check the project even if Cindy exits mid-update.
+          if (data.imProject === undefined && data.imProjectTransition === undefined) {
+            await save(row, { ...data, imProjectTransition: { project: request.imProject, previousPermission: task.permissionMode } });
+          }
         });
         const result = same ? { status: 'unchanged' } : await deps.setModel!(task.taskId, override.route,
           async () => { await exclusive(assertUnchanged); }, task.permissionMode === override.permissionMode ? undefined : override.permissionMode);
@@ -641,6 +646,15 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
       const project = await deps.resolveImProject(pluginId, imProject);
       project.assertCurrent();
       return { imProject, label: project.label, route: project.route, permissionMode: project.permissionMode };
+    },
+    /** Host-only permission snapshot for the native confirmation, independent of model availability. */
+    imProjectPermission: async (pluginId: string, imProject: string) => {
+      deps.assertCurrent();
+      deps.assertAuthorized(pluginId);
+      if (!deps.resolveImProjectPermission) return fail('HOST_NOT_READY', 'Shared IM projects are unavailable');
+      const project = await deps.resolveImProjectPermission(pluginId, imProject);
+      project.assertCurrent();
+      return project;
     },
     /** Store a looser permission the user just allowed in Cindy's own dialog; returns its opaque id. */
     recordImPermissionGrant: (pluginId: string, imProject: string, permissionMode: PluginTaskPermissionMode) => exclusive(async () => {

@@ -1866,7 +1866,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   if (raw.showTaskPreferences !== undefined && typeof raw.showTaskPreferences !== 'boolean') {
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
   }
-  if (raw.imEntrance !== undefined) {
+  // Older manifests could use this formerly unknown name. Preserve their snapshot.
+  if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
     if (typeof raw.imEntrance !== 'boolean') return { ok: false, reason: 'imEntrance 必须是布尔值' };
     const imAgent = raw.agent as Record<string, unknown> | undefined;
     if (raw.imEntrance && (imAgent?.tasks !== true || imAgent?.targets !== true)) {

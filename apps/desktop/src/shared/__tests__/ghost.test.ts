@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest as validateProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
+import { validateGhostManifest as validateProtocolManifest, validateStoredGhostManifest as validateStoredProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
 
 // Host groups are separate install permissions; unknown groups never become permissions.
 it('validates and projects each host tool group independently in both manifest readers', () => {
@@ -30,6 +30,12 @@ it('accepts imEntrance only with tasks and targets, in both readers, without a n
     expect(validate({ ...base, imEntrance: true })).toMatchObject({ ok: true, manifest: { imEntrance: true } });
     for (const invalid of [{ imEntrance: 'yes' }, { imEntrance: true, agent: { tasks: true } }])
       expect(validate({ ...base, ...invalid }).ok).toBe(false);
+  }
+  for (const validate of [validateInstalledGhostManifest, validateStoredGhostManifest, validateStoredProtocolManifest]) {
+    // PR #11208 unit regression: former extension values survive stored validation.
+    const historical = { internal: 'legacy' };
+    expect(validate({ ...base, imEntrance: historical })).toMatchObject({ ok: true, manifest: { imEntrance: historical } });
+    expect(validate({ ...base, imEntrance: true, agent: { tasks: true } })).toMatchObject({ ok: true, manifest: { imEntrance: true } });
   }
   const before = validateGhostManifest(base);
   const after = validateGhostManifest({ ...base, imEntrance: true });

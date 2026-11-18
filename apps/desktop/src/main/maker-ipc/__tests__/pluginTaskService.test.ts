@@ -144,6 +144,24 @@ it("applies a conversation's own settings and loosens only with a grant for that
   expect(f.tasks.get(task.taskId)).toMatchObject({ resolvedConfig: f.route, permissionMode: 'auto' });
 });
 
+// PR #11208 unit regression: a legacy task without a project can still send after
+// a failed permission change. Previously the rejection left a project binding behind.
+it('preserves legacy dispatch when following an IM project fails before changing permissions', async () => {
+  const f = fixture();
+  f.deps.readPermissionMode = () => undefined;
+  const task = await f.create();
+  Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'bypassPermissions' });
+  f.deps.resolveImProject = async () => ({ route: f.route, permissionMode: 'ask', assertCurrent: () => {}, matches: () => true });
+  f.deps.assertImProjectDispatch = () => { throw new PluginTaskError('PERMISSION_DENIED', 'Project has no grant'); };
+  f.deps.setModel = async () => { throw new PluginTaskError('TASK_BUSY', 'Busy'); };
+  const grant = await f.service.recordImPermissionGrant('p', 'chat', 'auto');
+  await expect(f.service.followImProject('p', { taskId: task.taskId, expectedRevision: task.revision, imProject: 'chat',
+    imOverride: { permissionMode: 'auto', permissionGrant: grant } })).rejects.toMatchObject({ code: 'TASK_BUSY' });
+  await expect(f.service.assertDispatch('p', task.taskId)).resolves.toMatchObject({ permissionMode: 'bypassPermissions' });
+  Object.assign(f.tasks.get(task.taskId)!, { permissionMode: 'auto' });
+  await expect(f.service.assertDispatch('p', task.taskId)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+});
+
 // Same decision for the first message of a conversation. Existing creation cases had no per-conversation
 // input. Minimal inputs: looser without a grant, then own route + granted permission, then a retry
 // after the conversation went back to following the project (same creation key). Tier: unit.
@@ -162,6 +180,8 @@ it('creates with conversation settings, needs a grant to loosen and replays with
   expect(f.deps.createSession).not.toHaveBeenCalled();
   const grant = await f.service.recordImPermissionGrant('p', '/project', 'auto');
   defaultOffline = true;
+  f.deps.resolveImProjectPermission = async () => ({ permissionMode: 'ask', label: 'Project', assertCurrent: () => {}, matches: () => true });
+  await expect(f.service.imProjectPermission('p', '/project')).resolves.toMatchObject({ permissionMode: 'ask', label: 'Project' });
   const task = await f.service.create('p', { ...request, imOverride: { route: own, permissionMode: 'auto', permissionGrant: grant } });
   expect(f.deps.createSession).toHaveBeenLastCalledWith('p', task.taskId, 'Group', own, undefined, own, expect.any(Function),
     undefined, undefined, expect.objectContaining({ workingDir: '/project' }), 'auto');
