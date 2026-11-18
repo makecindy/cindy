@@ -5,6 +5,7 @@
  * 指针**拖出页签条**后接管:取消 Sortable 的这次拖动(复位 DOM、不提交重排),
  * 浮起一张页签拖影,点亮可落的目标:
  *   - 其它组的页签条(整条 = 落点,落下 = 搬到那一组);
+ *   - 展开后的右侧栏正文(落下 = 搬回右侧组);
  *   - 聊天区的四条边(各一道边带,落下 = 搬到对应边的组;右边带 = 右侧栏,收着时会展开);
  *   - 窗口外(指针离开本窗口可视区):松手 = 弹成独立窗口,新窗口落在松手点附近。
  *     窗外看不到本窗口里的拖影,借用任务拖出窗口那扇跟随指针的预览卡
@@ -116,7 +117,7 @@ function insetRect(rect: RectLike): RectLike {
   };
 }
 
-/** 起拖时一次性收集全部落点:其它组的页签条 + 聊天区边带。 */
+/** 起拖时一次性收集全部落点。 */
 function collectZones(sourceGroup: TabGroupId): TabDropZone[] {
   const zones: TabDropZone[] = [];
   for (const strip of document.querySelectorAll<HTMLElement>('[data-tab-group-strip]')) {
@@ -126,6 +127,17 @@ function collectZones(sourceGroup: TabGroupId): TabDropZone[] {
     const rect = rectOf(strip);
     if (rect.width < 24 || rect.height < 12) continue; // 收起 / 不在场的条不是落点
     zones.push({ group: group as TabGroupId, rect });
+  }
+
+  // 右侧栏展开后，聊天区的右边带停在分隔线内侧。让侧栏本身也能接住拖回的页签。
+  if (sourceGroup !== 'right') {
+    const sidebar = document.querySelector(
+      '[data-panel-drag-root="right-tabs"]:not([aria-hidden="true"])',
+    );
+    if (sidebar) {
+      const rect = rectOf(sidebar);
+      if (rect.width > 0 && rect.height > 0) zones.push({ group: 'right', rect });
+    }
   }
   const chat = document.querySelector('[data-panel-drag-root="chat-main"]');
   if (chat) zones.push(...computeChatEdgeZones(rectOf(chat), new Set([sourceGroup])));

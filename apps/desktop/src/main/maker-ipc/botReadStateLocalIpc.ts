@@ -1,6 +1,6 @@
 import type { BrowserWindow, IpcMainInvokeEvent, WebContents } from 'electron';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { createBotReadStateStorage, type BotReadStateStorageDependencies } from './botReadStateStorage.js';
+import type { createBotReadStateStorage } from './botReadStateStorage.js';
 
 /** app-content also includes detached panels. This feature belongs only to complete app shells. */
 export function createBotWindowAccess(deps: {
@@ -22,12 +22,12 @@ export function createBotWindowAccess(deps: {
 }
 
 /** Local trusted-app adapter. A sender is checked before any owner path or saved fact is read. */
-export function createBotReadStateIpc(deps: BotReadStateStorageDependencies & {
-  assertTrustedSender: (event: IpcMainInvokeEvent) => void;
-}) {
-  const storage = createBotReadStateStorage(deps);
+export function createBotReadStateIpc(
+  assertTrustedSender: (event: IpcMainInvokeEvent) => void,
+  storage: ReturnType<typeof createBotReadStateStorage>,
+) {
   return (event: IpcMainInvokeEvent, input: unknown) => {
-    deps.assertTrustedSender(event);
+    assertTrustedSender(event);
     return storage.access(input);
   };
 }

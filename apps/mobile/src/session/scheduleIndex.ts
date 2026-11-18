@@ -415,6 +415,7 @@ function scheduleInfoEqual(a: RemoteSessionScheduleInfo, b: RemoteSessionSchedul
     && a.latestFailedRun?.finishedAt === b.latestFailedRun?.finishedAt
     && a.latestFailedRun?.scheduleId === b.latestFailedRun?.scheduleId
     && a.latestFailedRun?.failureKind === b.latestFailedRun?.failureKind
+    && a.latestFailedRun?.nextFireAt === b.latestFailedRun?.nextFireAt
     && a.latestFailedRun?.errorMsg === b.latestFailedRun?.errorMsg
     && a.running === b.running
     && a.latestRunAt === b.latestRunAt

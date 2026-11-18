@@ -6734,17 +6734,25 @@ describe('DeviceLinkClient', () => {
   });
 
   it('relay 以 1012 service restart 关闭时自动重连', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9999);
     const h = makeHarness();
-    h.client.start();
-    await tick();
-    h.current().ack();
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
 
-    h.current().emit('close', 1012, 'service restart');
-    expect(h.client.getStatus()).toBe('connecting');
-    await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
-    h.current().ack();
-    expect(h.client.getStatus()).toBe('online');
-    h.client.stop();
+      h.current().emit('close', 1012, 'service restart');
+      expect(h.client.getStatus()).toBe('connecting');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.sockets).toHaveLength(2);
+      h.current().ack();
+      expect(h.client.getStatus()).toBe('online');
+    } finally {
+      h.client.stop();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('短暂上线后被 relay 顶掉时不立刻清零退避,避免重复连接风暴', async () => {
@@ -8697,6 +8705,88 @@ describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
       .toBe(1_000);
     expect(computeReconnectDelayMs({ ...timing, attempt: 0.9, congestionCloseStreak: 1.9, random: Number.NaN }))
       .toBe(3_500);
+  });
+});
+
+describe('DeviceLinkClient relay restart recovery', () => {
+  it('spreads a service restart reconnect and paces the shared socket while allowing link setup', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const info = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000 },
+      logger: { info, warn: vi.fn(), debug: vi.fn(), error: vi.fn() } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const off = h.client.onStatusChange(status => {
+        if (status === 'connecting') h.client.connectNow('network-change');
+      });
+      h.current().emit('close', 1012, 'service restart');
+      off();
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(h.sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.sockets).toHaveLength(2);
+      h.current().ack();
+
+      const firstLink = establishInboundReliableLink(h, 'stream-after-restart');
+      await vi.advanceTimersByTimeAsync(0);
+      await firstLink;
+      const socket = h.current();
+      socket.sent.length = 0;
+      for (let i = 0; i < 10; i++) h.client.sendPush('dev-b', 'maker:event', { part: i });
+      expect(socket.sent).toHaveLength(8);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(socket.sent).toHaveLength(10);
+      // The first controller stays silent. Link setup and an interactive reply
+      // for the other controller still use the same live WebSocket.
+      const secondLink = establishInboundReliableLink(h, 'second-stream-after-restart', 1, 'dev-c');
+      await vi.advanceTimersByTimeAsync(0);
+      await secondLink;
+      expect(socket.sent).toContainEqual(expect.objectContaining({ kind: 'link-accept', dst: 'dev-c' }));
+      h.client.sendInvokeResult('dev-c', 'second-controller', { ok: true, result: 'ready' });
+      expect(socket.sent).toContainEqual(expect.objectContaining({ kind: 'invoke-result', dst: 'dev-c', id: 'second-controller' }));
+      expect(h.client.getStatus()).toBe('online');
+
+      socket.bufferedAmount = 700 * 1024;
+      const queued = h.client.invoke('dev-c', { channel: 'maker:send', args: ['PRIVATE_REQUEST'] }, 100);
+      const expired = expect(queued).rejects.toMatchObject({ code: 'BACKPRESSURE', inFlight: false });
+      await vi.advanceTimersByTimeAsync(100);
+      await expired;
+      socket.bufferedAmount = 0;
+      await vi.advanceTimersByTimeAsync(2_000);
+      h.client.stop();
+      const traffic = info.mock.calls.map(([line]) => line)
+        .find(line => line.startsWith('device-link diagnostic ') && line.includes('"stage":"relay-traffic"'));
+      expect(traffic).not.toContain('PRIVATE_REQUEST');
+      const stats = JSON.parse(traffic.slice('device-link diagnostic '.length)).channels;
+      expect(stats['invoke:maker:send'].beforeWriteTimeouts).toBe(1);
+      expect(stats['push:maker:event'].firstFrames).toBe(10);
+      expect(stats['push:maker:event'].replayFrames).toBeGreaterThan(0);
+    } finally {
+      h.client.stop();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps ordinary backoff when 1012 means route recovery', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const h = makeHarness();
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.current().emit('close', 1012, 'route ownership lost, reconnect');
+      await vi.advanceTimersByTimeAsync(850);
+      expect(h.sockets).toHaveLength(2);
+    } finally {
+      h.client.stop();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -344,6 +344,12 @@ describe('applyListBackspace on a real editor', () => {
     expect(applyListBackspace(ed.view)).toBe(false);
   });
 
+  it('returns false on a long digit run before the CJK comma', () => {
+    const ed = makeEditor(['324325、']);
+    expect(applyListBackspace(ed.view)).toBe(false);
+    expect(docText(ed)).toBe('324325、');
+  });
+
   it('triggers at end of an empty item even when a later line exists (caret before hardBreak)', () => {
     const ed = makeEditor(['1. a', '2. ', '3. b']);
     // 光标放到第二行行尾("2. " 之后、hardBreak 之前):

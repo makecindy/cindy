@@ -1091,7 +1091,7 @@ export function pickInitialNewSessionWorkspace(
   return recentWorkspaces[0]?.workingDir ?? null;
 }
 
-export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateSessionOptions {
+export function buildRemoteCreateSessionOptions(draft: NewSessionDraft, projectDir?: string): CreateSessionOptions {
   const extraDirs = normalizeExtraDirs(draft.extraDirs);
   const effort = draft.effort.trim();
   const providerId = draft.providerId?.trim();
@@ -1111,6 +1111,7 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateS
   return {
     ...base,
     workingDir: draft.workingDir.trim(),
+    ...(projectDir ? { projectDir } : {}),
     ...(extraDirs.length > 0 ? { extraDirs } : {}),
   };
 }

@@ -19,7 +19,7 @@ import { verifyMobileAgentNetCertificate, verifyMobileAgentNetDelegation } from 
 import { readMobileAgentNetDirectory, writeMobileAgentNetDirectory } from './agentNetDirectoryCache';
 import { verifyMobileAgentNetModeProof } from './agentNetMode';
 import { connectMobileAgentNetSharingSession, mobileAgentNetSharingMediaTarget, mobileAgentNetSharingReachable,
-  mobileAgentNetSharingSession, useMobileAgentNetSharingSessions } from './agentNetSharing';
+  mobileAgentNetSharingSession, setMobileAgentNetPrivateSharingSupport, useMobileAgentNetSharingSessions } from './agentNetSharing';
 import { isScopedPeer } from '@cindy/device-link';
 
 let current: { socket: AgentNetSocket; guard(): void } | null = null;
@@ -96,18 +96,21 @@ export function noteMobileAgentNetDeviceList(deviceIds: readonly string[], start
 // A foreground reconnect can reuse both an in-flight lookup and its result.
 const RELAY_INFO_TTL_MS = 10 * 60_000;
 const RELAY_INFO_RETRY_MS = 60_000;
-const relayInfo = new Map<string, { server: string | null; nextReadAt: number; pending?: Promise<string | null> }>();
-function relayUdpServer(base: string): Promise<string | null> {
-  const entry = relayInfo.get(base) ?? { server: null, nextReadAt: 0 };
+interface RelayInfo { server: string | null; privateSharing: boolean; }
+const relayInfo = new Map<string, RelayInfo & { nextReadAt: number; pending?: Promise<RelayInfo> }>();
+function readRelayInfo(base: string): Promise<RelayInfo> {
+  const entry = relayInfo.get(base) ?? { server: null, privateSharing: false, nextReadAt: 0 };
   if (entry.pending) return entry.pending;
-  if (Date.now() < entry.nextReadAt) return Promise.resolve(entry.server);
+  if (Date.now() < entry.nextReadAt) return Promise.resolve(entry);
   const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 5_000);
   entry.pending = (async () => {
     let interval = RELAY_INFO_RETRY_MS;
     try {
       const response = await fetch(base + '/api/agent-net/info', { signal: abort.signal });
       if (response.ok) {
-        entry.server = agentNetStunServer(base, await response.json());
+        const info = await response.json();
+        entry.server = agentNetStunServer(base, info);
+        entry.privateSharing = Array.isArray(info?.features) && info.features.includes('private-sharing-v1');
         interval = RELAY_INFO_TTL_MS;
       }
     } catch { /* Keep the last known server while the lookup is unavailable. */ }
@@ -115,7 +118,7 @@ function relayUdpServer(base: string): Promise<string | null> {
       clearTimeout(timer);
       entry.nextReadAt = Date.now() + interval;
     }
-    return entry.server;
+    return entry;
   })().finally(() => { entry.pending = undefined; });
   relayInfo.set(base, entry);
   return entry.pending;
@@ -260,11 +263,14 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
         createTransport: async options => {
           const transport = await NativeTransport.create(engine, options, addresses, preferences.enabled);
           const base = identity.api.base;
-          if (preferences.enabled && base && (transport.supports('stun') || transport.supports('relay-udp-v2'))) {
+          const udp = preferences.enabled && (transport.supports('stun') || transport.supports('relay-udp-v2'));
+          const privateNetwork = preferences.enabled && identity.api.certificate.networkId.startsWith('private:');
+          if (base && (udp || privateNetwork)) {
             // The existing WebSocket/direct connection can start while the optional lookup runs.
-            void relayUdpServer(base).then(server => {
+            void readRelayInfo(base).then(info => {
               guard();
-              if (server) return transport.configureUdpServer(server);
+              if (privateNetwork) setMobileAgentNetPrivateSharingSupport(base, identity.api.rootPublicKey, info.privateSharing);
+              if (udp && info.server) return transport.configureUdpServer(info.server);
             }).catch(() => undefined);
           }
           return transport;

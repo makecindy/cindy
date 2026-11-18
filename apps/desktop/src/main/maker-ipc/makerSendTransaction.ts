@@ -140,6 +140,8 @@ type IpcUserMessage =
 
 
 type MakerSendOptions = {
+  /** Main-only observation: preparation may have side effects even if selection later changes. */
+  onRuntimePreparation?: () => void;
   readonly [MODEL_REQUEST_CONTROL]?: import('@cindy/maker-core').ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('@cindy/maker-core').SendOptions[typeof PI_CACHE_RECOVERY_EXPECTATION];
   /** Main-only live card guard, never serialized to queue history or provider options. */
@@ -1121,6 +1123,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         requestedSendOpts[AUTO_REVIEW_SOURCE_CONTENT] ?? requestedSendOpts[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message,
         requestedSendOpts.signal);
       if (runtimePreparation) {
+        requestedSendOpts.onRuntimePreparation?.();
         const runtime = await runtimePreparation;
         if (runtime.failure && !requestedSendOpts.signal?.aborted) return runtime.failure;
         Object.assign(requestedSendOpts, runtime.options);
@@ -1143,7 +1146,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       );
       try {
         const promptPreparation = deps.prepareRuntimePrompt?.(sessionId);
-        if (promptPreparation) await promptPreparation;
+        if (promptPreparation) {
+          requestedSendOpts.onRuntimePreparation?.();
+          await promptPreparation;
+        }
       } catch (error) {
         if (!(error instanceof RuntimePluginControlError) || requestedSendOpts.signal?.aborted) throw error;
         return toCompatibleMakerSendResult(createHostSendFailure(error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
@@ -1624,6 +1630,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         try {
           const pending = deps.composeRuntimeContext?.(sessionId,
             () => runtimePluginInputText(so[AUTO_REVIEW_SOURCE_CONTENT] ?? so[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message), so.signal);
+          if (pending) so.onRuntimePreparation?.();
           const context = pending ? await pending : undefined;
           if (context) outgoing = appendRuntimePluginContext(outgoing as HandoffWireMessage, context);
         } catch (error) {

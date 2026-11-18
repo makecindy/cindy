@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type {
   Schedule,
   ScheduleRun,
+  ScheduleClosureFailure,
   CreateScheduleInput,
   UpdateScheduleInput,
   ListFilter,
@@ -1965,7 +1966,9 @@ export class Scheduler extends EventEmitter {
     return updated;
   }
 
-  async delete(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
+  async delete(id: string): Promise<void>;
+  async delete(id: string, opts: { exemptRunId?: string; internalRoutine?: true } | undefined): Promise<ScheduleClosureFailure | undefined>;
+  async delete(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<ScheduleClosureFailure | void> {
     return this.serializeScheduleMutation(id, () => this.deleteUnlocked(id, opts));
   }
 
@@ -1992,7 +1995,7 @@ export class Scheduler extends EventEmitter {
     }
   }
 
-  private async deleteUnlocked(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
+  private async deleteUnlocked(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<ScheduleClosureFailure | undefined> {
     const schedule = await this.storage.get(id);
     if (!schedule || (schedule.source === 'bot' && !opts?.internalRoutine))
       throw new Error(`Schedule not found: ${id}`);
@@ -2008,10 +2011,18 @@ export class Scheduler extends EventEmitter {
     // schedule 级联删除,结束时 updateRun 落在已删行上是 no-op(storage 容错),
     // fireOne 尾部对 schedule 行的重排 update 同样 no-op —— 均无副作用。
     await this.abortInflightAndWait(id, opts?.exemptRunId);
+    const runId = opts?.exemptRunId;
+    const ownSession = runId && this.inflightByschedule.get(id)?.has(runId) && this.runIdToSessionId.get(runId);
+    // Only the task ending its own follow-up gets a receipt. An ordinary delete
+    // retains no run history. A diagnostic read must never prevent cleanup.
+    const previousFailure = ownSession
+      ? await this.storage.latestClosureFailure?.(id, ownSession).catch(() => undefined)
+      : undefined;
     await this.storage.delete(id);
     this.invalidScheduleIds.delete(id);
     this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
+    return previousFailure;
   }
 
   /** 按 schedule id 串行执行 CRUD，并在队尾完成后释放对应条目。 */
