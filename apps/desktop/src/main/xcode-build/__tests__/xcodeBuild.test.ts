@@ -631,7 +631,151 @@ Available destinations for the "Recipes" scheme:
     // 同一份 checkout + 同一个目标，第二个窗口不能再起一条；records 按 owner 存，
     // 只查自己名下的记录会漏掉这种跨窗口冲突。
     await expect(manager.start({ ...request, ownerId: 8 })).rejects.toThrow(
-      /another window is already building/,
+      /already building/,
+    );
+  });
+
+  it('treats nested workdirs of one checkout as the same target', async () => {
+    // /repo 与 /repo/apps/mobile 是两个 workdir 字符串，但都解析到同一个容器：
+    // 只按 workdir 判冲突会让两个会话同时构建同一份工程。
+    const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
+      if (args.includes('-showBuildSettings')) {
+        return { stdout: buildSettings('com.example.recipes', BUILD_DIR, '/flutter'), stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const child = new EventEmitter() as EventEmitter & {
+      stdin: { writable: boolean; write: ReturnType<typeof vi.fn> };
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdin = { writable: true, write: vi.fn() };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn(() => true);
+    const nestedWorkdir = underWorkdir('tests');
+    const directory = (name: string) => ({ name, isDirectory: () => true });
+    const manager = new XcodeBuildManager({
+      dependencies: managerDependencies({
+        execFile,
+        spawn: vi.fn(() => child) as unknown as XcodeBuildDependencies['spawn'],
+        stat: pubspecStat(WORKDIR),
+        readdir: (async (directoryPath: string) => {
+          if (directoryPath === WORKDIR) return [directory('tests')] as never;
+          if (directoryPath === underWorkdir('tests')) return [directory('ios')] as never;
+          if (directoryPath === underWorkdir('tests', 'ios')) {
+            return [directory('Recipes.xcworkspace')] as never;
+          }
+          // 第二个会话把 /repo/tests 当成自己的 workdir：同一个物理工程。
+          if (directoryPath === nestedWorkdir) return [directory('ios')] as never;
+          return [] as never;
+        }) as unknown as XcodeBuildDependencies['readdir'],
+      }),
+      emit: vi.fn(),
+    });
+    const base = {
+      sessionId: 'session-1',
+      ownerId: 7,
+      containerKind: 'workspace' as const,
+      scheme: 'Recipes',
+      destinationId: 'DEVICE-1',
+      destinationPlatform: 'iOS',
+      destinationName: 'Simon’s iPhone',
+      destinationOsVersion: null,
+    };
+    await manager.start({ ...base, workdir: WORKDIR, containerPath: 'tests/ios/Recipes.xcworkspace' });
+
+    await expect(
+      manager.start({
+        ...base,
+        ownerId: 8,
+        workdir: nestedWorkdir,
+        containerPath: 'ios/Recipes.xcworkspace',
+      }),
+    ).rejects.toThrow(/already building/);
+  });
+
+  it('does not start when the owner window closes during discovery', async () => {
+    let alive = true;
+    const execFile = vi.fn(async (_command: string, args: readonly string[]) => {
+      if (args.includes('-list')) {
+        return { stdout: JSON.stringify({ workspace: { schemes: ['Recipes'] } }), stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const manager = new XcodeBuildManager({
+      dependencies: managerDependencies({
+        execFile,
+        // 解析容器真实路径这一步之后窗口没了（发现 / realpath 都会等文件系统）。
+        realpath: (async (value: string) => {
+          alive = false;
+          return value;
+        }) as XcodeBuildDependencies['realpath'],
+      }),
+      emit: vi.fn(),
+    });
+
+    await expect(
+      manager.start({
+        sessionId: 'session-1',
+        ownerId: 7,
+        workdir: WORKDIR,
+        containerPath: 'ios/Recipes.xcworkspace',
+        containerKind: 'workspace',
+        scheme: 'Recipes',
+        destinationId: 'DEVICE-1',
+        destinationPlatform: 'iOS',
+        destinationName: 'Simon’s iPhone',
+        destinationOsVersion: null,
+        isOwnerAlive: () => alive,
+      }),
+    ).rejects.toThrow(/owner window closed/);
+    expect(manager.status(WORKDIR, 7).state).toBeNull();
+  });
+
+  it('terminates an app that is still launching when stopped', async () => {
+    const execFile = vi.fn(async (command: string, args: readonly string[]) => {
+      if (command === '/usr/bin/open') return new Promise<never>(() => undefined);
+      if (args.includes('-showBuildSettings')) {
+        return { stdout: buildSettings('com.example.recipes', BUILD_DIR), stderr: '' };
+      }
+      if (args[0] === 'simctl' && args[1] === 'bootstatus') return { stdout: '', stderr: '' };
+      if (args[0] === 'simctl' && args[1] === 'install') return { stdout: '', stderr: '' };
+      if (args[0] === 'simctl' && args[1] === 'launch') {
+        return { stdout: 'com.example.recipes: 42\n', stderr: '' };
+      }
+      if (args[0] === 'simctl' && args[1] === 'terminate') return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const manager = new XcodeBuildManager({
+      dependencies: managerDependencies({ execFile }),
+      emit: vi.fn(),
+    });
+
+    const state = await manager.start({
+      sessionId: 'session-1',
+      ownerId: 7,
+      workdir: WORKDIR,
+      containerPath: 'ios/Recipes.xcworkspace',
+      containerKind: 'workspace',
+      scheme: 'Recipes',
+      destinationId: 'SIM-1',
+      destinationPlatform: 'iOS Simulator',
+      destinationName: 'iPhone 16 Pro',
+      destinationOsVersion: '18.2',
+    });
+
+    // 卡在 /usr/bin/open（Simulator.app 还在起），此时 App 已经装好并启动了。
+    await vi.waitFor(() =>
+      expect(manager.status(WORKDIR, 7).state?.phase).toBe('launching'),
+    );
+    await manager.stop(state.buildId, 7);
+
+    expect(execFile).toHaveBeenCalledWith(
+      '/usr/bin/xcrun',
+      ['simctl', 'terminate', 'SIM-1', 'com.example.recipes'],
+      expect.any(Object),
     );
   });
 });

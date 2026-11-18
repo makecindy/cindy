@@ -461,6 +461,8 @@ interface BuildRecord {
   ownerId: number;
   state: XcodeBuildState;
   output: string;
+  /** 解析后的容器绝对路径：嵌套根目录的两个会话指向同一工程，要按它判冲突。 */
+  containerAbsolute: string;
   destinationId: string;
   destinationPlatform: string;
   bundleId: string | null;
@@ -489,7 +491,9 @@ export class XcodeBuildManager {
     return discoverXcodeProject(request, this.deps);
   }
 
-  async start(request: XcodeBuildStartRequest & { ownerId: number }): Promise<XcodeBuildState> {
+  async start(
+    request: XcodeBuildStartRequest & { ownerId: number; isOwnerAlive?: () => boolean },
+  ): Promise<XcodeBuildState> {
     const normalizedWorkdir = path.resolve(request.workdir);
     // 第一次 start 在扫描目录、解析容器时还没写入 records，只查运行记录挡不住第二次点击：
     // 两个构建会同时跑同一条 scheme。占位按「工作目录 + 目标」而不是窗口划分，否则同一份
@@ -507,19 +511,9 @@ export class XcodeBuildManager {
   }
 
   private async startReserved(
-    request: XcodeBuildStartRequest & { ownerId: number },
+    request: XcodeBuildStartRequest & { ownerId: number; isOwnerAlive?: () => boolean },
     normalizedWorkdir: string,
   ): Promise<XcodeBuildState> {
-    const otherOwnerBuild = [...this.records.values()].find(
-      (record) =>
-        record.ownerId !== request.ownerId &&
-        record.state.workdir === normalizedWorkdir &&
-        record.destinationId === request.destinationId &&
-        record.state.status === 'running',
-    );
-    if (otherOwnerBuild) {
-      throwIpcError('PRECONDITION_FAILED', 'another window is already building this target');
-    }
     const active = [...this.records.values()].find(
       (record) =>
         record.ownerId === request.ownerId &&
@@ -555,6 +549,22 @@ export class XcodeBuildManager {
     } catch (error) {
       throwIpcError('NOT_FOUND', commandErrorMessage(error));
     }
+    // 发现容器 / 解析真实路径都要等文件系统：这期间 owner 窗口可能已经关了，
+    // 那时 releaseOwner() 还没有记录可清 —— 在这里收口，别建出一条无主构建。
+    if (request.isOwnerAlive && !request.isOwnerAlive()) {
+      throwIpcError('PRECONDITION_FAILED', 'owner window closed');
+    }
+    // 同一份工程 + 同一个目标只允许一条构建：嵌套根目录（/repo 与 /repo/apps/mobile）
+    // 是两个不同的 workdir 字符串，但解析出的容器是同一个。
+    const conflicting = [...this.records.values()].find(
+      (record) =>
+        record.state.status === 'running' &&
+        record.containerAbsolute === absoluteContainer &&
+        record.destinationId === request.destinationId,
+    );
+    if (conflicting) {
+      throwIpcError('PRECONDITION_FAILED', 'this Xcode target is already building');
+    }
     const buildId = this.deps.createBuildId();
     const state: XcodeBuildState = {
       buildId,
@@ -570,6 +580,7 @@ export class XcodeBuildManager {
       ownerId: request.ownerId,
       state,
       output: '',
+      containerAbsolute: absoluteContainer,
       destinationId: request.destinationId,
       destinationPlatform: request.destinationPlatform,
       bundleId: null,
@@ -601,7 +612,9 @@ export class XcodeBuildManager {
       this.finish(record, null, 'cancelled');
       return;
     }
-    if (record.state.phase !== 'launched') {
+    // launchedPid 已经拿到、但 phase 还停在 launching（例如正在等 Simulator.app
+    // 起来）时，App 已经在跑了：按「未启动」直接取消会把它留在设备上。
+    if (record.state.phase !== 'launched' && record.launchedPid === null) {
       record.stopRequested = true;
       record.abortController.abort();
       this.finish(record, null, 'cancelled');
@@ -1087,7 +1100,11 @@ export function registerXcodeBuildIpc(options: {
     if (event.sender.isDestroyed()) {
       throwIpcError('PRECONDITION_FAILED', 'owner window closed');
     }
-    return manager.start({ ...parsed, ownerId: requesterId });
+    return manager.start({
+      ...parsed,
+      ownerId: requesterId,
+      isOwnerAlive: () => !event.sender.isDestroyed(),
+    });
   });
   ipcMain.handle(XCODE_BUILD_INVOKE.STOP, async (event, buildId: unknown) => {
     const requesterId = ownerId(event);
