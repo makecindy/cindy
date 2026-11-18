@@ -7,6 +7,7 @@ import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { cn } from '@/lib/utils';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip } from '@/components/ui/tooltip';
 
 // 长按钮文案在面板内换行、按钮纵向长高,不冲出弹窗也不截断(DESIGN.md §4)。
@@ -288,11 +289,9 @@ export function ConfirmDialog({
                   'text-[var(--confirm-desc)]',
                 )}
               >
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={dontShowAgain}
                   onChange={(e) => setDontShowAgain(e.target.checked)}
-                  className="size-3.5 cursor-pointer accent-[var(--confirm-btn-primary-bg)]"
                 />
                 {dontShowAgainLabel}
               </label>

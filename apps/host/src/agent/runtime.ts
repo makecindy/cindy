@@ -1,3 +1,4 @@
+import { applyProjectDirectoriesForTurn } from '../../../desktop/src/main/projectDirectoryRuntime.js';
 import { createOneShotUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
@@ -826,6 +827,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     agents,
     storage: options.storage,
     lifecycleHooks: {
+      beforeTurn: applyProjectDirectoriesForTurn,
       prepareStartOptions: startOptions.prepareStartOptions,
       onBeforeStart: startOptions.onBeforeStart,
       onStartFailed: startOptions.onStartFailed,

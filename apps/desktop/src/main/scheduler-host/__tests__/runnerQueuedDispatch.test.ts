@@ -570,7 +570,8 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
         } catch (error) { await accepted.rollback(id, clientId); throw error; }
       },
       beforeDispatchUserTurn: async () => {
-        if (++attempts === 1 || options.replacementFails) throw new Error(message);
+        if (++attempts === 1) throw new Error(message);
+        if (options.replacementFails) throw new Error('[MODEL_SELECTION_UNAVAILABLE] Replacement unavailable');
       },
       onAcceptedQueuedMessage: async (id, item) => { await accepted.run(id, item, bridge.recoverySourceClientId(id, item)); },
       onPersistedSendRejected: (id, error, item, recovering) => bridge.onPersistedSendRejected(id, error, item, recovering),
@@ -677,7 +678,11 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
         if (action === 'clear') { h.coordinator.clearSession(SESSION_ID); h.book.teardown(SESSION_ID); }
         if (action === 'pause-delete') h.ctx.abortController.abort();
         await vi.advanceTimersByTimeAsync(30_000);
-        await expect(h.fire).rejects.toThrow(action === 'pause-delete' ? /aborted/ : /Snapshot operation deadline exceeded/);
+        const expected = action === 'disabled' ? /^Snapshot operation deadline exceeded$/
+          : action === 'replacement-failed' ? /^scheduled task auto-resume failed: \[MODEL_SELECTION_UNAVAILABLE\] Replacement unavailable$/
+          : action === 'pause-delete' ? /aborted/
+          : /^scheduled task auto-resume failed: Snapshot operation deadline exceeded$/;
+        await expect(h.fire).rejects.toThrow(expected);
         expect(h.dispatched).toEqual([]);
         expect(h.bridge.hasQueuedPrompt(SESSION_ID, 'schedule-hb')).toBe(false);
         expect(h.session.listenerCount()).toBe(0);

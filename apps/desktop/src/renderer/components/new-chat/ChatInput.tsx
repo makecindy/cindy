@@ -876,6 +876,7 @@ interface ChatInputProps {
    * 不传 / 传 undefined → 不显示引用目录段(老调用方零迁移)。Claude 与 Codex 共用;
    * 但「+」按钮本身在有 onNewGoal(新建目标入口)时两端都会出现。
    */
+  onOpenProjectSettings?: () => void;
   extraDirs?: string[];
   onExtraDirsChange?: (next: string[]) => void | Promise<void>;
   /** 用户明确授予的附加可读写目录，与 extraDirs 的只读授权分开显示和保存。 */
@@ -1413,6 +1414,7 @@ export function ChatInput({
   writableGrantScope,
   onWritableDirsChange,
   onWritableDirRemove,
+  onOpenProjectSettings,
   onExtraDirsChange,
   onNewGoal,
   rememberedEffortByModel,
@@ -5121,7 +5123,19 @@ export function ChatInput({
     }
     // A new directory uses the existing Main-issued writable grant. The local
     // picker cannot authorize paths on an SSH or device-link execution host.
-    if (onWritableDirsChange && writableGrantScope && !remoteHostId && deviceLinkDeviceId === null) {
+    if (onOpenProjectSettings) {
+      actions.push({
+        id: 'add-extra-dir',
+        label: t('projectSettings.title'),
+        disabled: settingsLocked,
+        run: onOpenProjectSettings,
+      });
+    } else if (
+      onWritableDirsChange &&
+      writableGrantScope &&
+      !remoteHostId &&
+      deviceLinkDeviceId === null
+    ) {
       const currentExtraDirs = extraDirs ?? [];
       const currentWritableDirs = writableDirs ?? [];
       const totalDirs =
@@ -5152,6 +5166,8 @@ export function ChatInput({
     extraDirs,
     inSessionGoalEnabled,
     localAttachmentPickerEnabled,
+    onOpenProjectSettings,
+    settingsLocked,
     onExtraDirsChange,
     onWritableDirsChange,
     onNewGoal,

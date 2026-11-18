@@ -3,6 +3,7 @@ import './boot-env.js';
 // Second: keeps unreadable user settings files instead of deleting them.
 import './boot-settings.js';
 import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
+import type { ProjectInfoAuthorization } from '../../desktop/src/main/projectInfoAuthorization.js';
 import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
@@ -609,6 +610,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
   hostTools = createHostToolService({ profileDir: dataDir, ownerId,
+    deviceId: () => currentDeviceId ?? 'local',
+    onProjectsChanged: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
     current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null,
     files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
@@ -1245,9 +1248,26 @@ const serverDeps = {
   readProjectInfo,
   readProjectIconImage,
   resolveAutomaticProjectIcon,
-  updateProjectInfo: async (input: unknown) => {
-    const result = await updateProjectInfo(input);
-    eventHub.publish({ type: 'project_aliases_changed' });
+  updateProjectInfo: async (input: unknown, source: { desktopRequest?: string; legacyDesktop?: boolean } = {}) => {
+    const platform = platformClient;
+    let authorization: ProjectInfoAuthorization | undefined = { kind: 'host' };
+    if (source.desktopRequest) {
+      const requestId = source.desktopRequest;
+      authorization = { kind: 'renderer', async check(check) {
+        if (!platform || !platform.status().attached) throw Error('Desktop project window unavailable');
+        try {
+          const answer = await platform.call({ method: 'project.check', requestId, check });
+          if (answer !== true) throw Error('Project authorization unavailable');
+        } catch (error) {
+          if ((error as { code?: string }).code === 'MUTATION_CANCELLED') throw Error('[MUTATION_CANCELLED] Project action cancelled');
+          throw error;
+        }
+      } };
+    } else if (source.legacyDesktop) {
+      authorization = undefined;
+    }
+    const result = await updateProjectInfo(input, authorization);
+    eventHub.publish({ type: 'project_aliases_changed', catalogChanged: !!result.createdProjectKey });
     return result;
   },
   listProjectAliases: async () => {

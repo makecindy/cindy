@@ -260,11 +260,16 @@ describe('dispatch authorization refresh', () => {
   });
 });
 
-function makeSession(handle: AgentSessionHandle, agentKind: AgentKind = 'codex'): Session {
+function makeSession(
+  handle: AgentSessionHandle,
+  agentKind: AgentKind = "codex",
+  beforeTurn?: (session: Session) => Promise<void>,
+): Session {
   return new Session({
     id: 'session-1',
     agentKind,
-    workDir: path.join('workspace', 'repo'),
+    workDir: path.join("workspace", "repo"),
+    beforeTurn,
     handle,
     capabilities: {} as never,
     logger: createLogger() as never,
@@ -2238,6 +2243,31 @@ describe('Session native attachments and Host dispatch grants', () => {
     } finally {
       generation.mockRestore();
       await h.session.close();
+    }
+  });
+});
+
+// Project grants must be refreshed before provider dispatch, never while another turn is running.
+describe("Host per-turn settings refresh", () => {
+  it("refreshes each accepted turn, skips concurrent sends and releases failed reservations", async () => {
+    const h = createControllableHandle();
+    const send = vi.spyOn(h.handle, "send");
+    const prepare = vi.fn(async () => {});
+    const session = makeSession(h.handle, "codex", prepare);
+    try {
+      prepare.mockRejectedValueOnce(new Error("Account changed"));
+      await expect(session.send("blocked")).rejects.toThrow("Account changed");
+      expect(send).not.toHaveBeenCalled();
+      await session.send("first");
+      expect(prepare).toHaveBeenCalledTimes(2);
+      await expect(session.send("concurrent")).rejects.toThrow();
+      expect(prepare).toHaveBeenCalledTimes(2);
+      await h.emit({ type: "done", data: {} } as AgentEvent);
+      await session.send("next");
+      expect(prepare).toHaveBeenCalledTimes(3);
+      expect(prepare).toHaveBeenLastCalledWith(session);
+    } finally {
+      await session.close();
     }
   });
 });
