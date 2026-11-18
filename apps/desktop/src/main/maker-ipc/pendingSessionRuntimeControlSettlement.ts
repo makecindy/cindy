@@ -12,6 +12,8 @@ import type { ApplySessionRuntimeSelection } from './sessionRuntimeSelectionAppl
 
 export interface PendingSessionRuntimeControlSettlementPorts {
   canSettle?(sessionId: string, generation: number): boolean;
+  /** The Host waits for every generation. The desktop leaves each work promise untouched. */
+  onSettlementWork?(sessionId: string, work: Promise<void>): void;
   applySessionRuntimeSelection: ApplySessionRuntimeSelection;
   runtimeSelectionRequiresModelWindowConfirmation(result: Awaited<ReturnType<ApplySessionRuntimeSelection>>): boolean;
   broadcastSessionRuntimeProjection(sessionId: string): Promise<void>;
@@ -23,17 +25,17 @@ export interface PendingSessionRuntimeControlSettlementPorts {
 
 /** Applies the accepted control once its turn is idle, as in registerMakerIpc. */
 export function createPendingSessionRuntimeControlSettlement({
-  canSettle, applySessionRuntimeSelection, runtimeSelectionRequiresModelWindowConfirmation,
+  canSettle, onSettlementWork, applySessionRuntimeSelection, runtimeSelectionRequiresModelWindowConfirmation,
   broadcastSessionRuntimeProjection, onTurnErrorEvent, getSessionDbAgentKind, broadcastToAllWindows, log,
 }: PendingSessionRuntimeControlSettlementPorts) {
-  const settlingSessionRuntimeControls = new Map<string, Promise<void> | undefined>();
-  const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): Promise<void> | undefined => {
-    if (settlingSessionRuntimeControls.has(sessionId)) return settlingSessionRuntimeControls.get(sessionId);
+  const settlingSessionRuntimeControls = new Set<string>();
+  const settlePendingSessionRuntimeControl = (sessionId: string, reason: string): void => {
+    if (settlingSessionRuntimeControls.has(sessionId)) return;
     const pending = getPendingSessionRuntimeMutation(sessionId);
     if (!pending) return;
     const allowed = () => canSettle?.(sessionId, pending.generation) !== false;
     if (!allowed()) return;
-    settlingSessionRuntimeControls.set(sessionId, undefined);
+    settlingSessionRuntimeControls.add(sessionId);
     const work = (async () => {
       try {
         const settleSelection = {
@@ -125,15 +127,11 @@ export function createPendingSessionRuntimeControlSettlement({
         settlingSessionRuntimeControls.delete(sessionId);
         const latest = getPendingSessionRuntimeMutation(sessionId);
         if (latest && latest.generation !== pending.generation) {
-          return settlePendingSessionRuntimeControl(sessionId, `${reason}:generation-advanced`);
+          settlePendingSessionRuntimeControl(sessionId, `${reason}:generation-advanced`);
         }
       }
     })();
-    // Desktop callers keep firing and forgetting. Handle a reporting-port failure
-    // here as well, so exposing completion to the Host cannot leak a rejected promise.
-    const completion = work.catch(error => { log.warn('runtime settlement delivery failed', { sessionId, error }); });
-    if (settlingSessionRuntimeControls.has(sessionId)) settlingSessionRuntimeControls.set(sessionId, completion);
-    return completion;
+    onSettlementWork?.(sessionId, work);
   };
   return settlePendingSessionRuntimeControl;
 }
