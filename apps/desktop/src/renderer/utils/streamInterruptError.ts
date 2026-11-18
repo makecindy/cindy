@@ -11,10 +11,7 @@ export const UPSTREAM_STREAM_INTERRUPTED_REASON = 'upstream-stream-interrupted';
 
 const STREAM_INTERRUPTED_RE = /Response API in-stream error/i;
 
-export function isStreamInterruptedErrorMessage(
-  message: string,
-  reason?: string | null,
-): boolean {
+export function isStreamInterruptedErrorMessage(message: string, reason?: string | null): boolean {
   if (reason === UPSTREAM_STREAM_INTERRUPTED_REASON) return true;
   return STREAM_INTERRUPTED_RE.test(message);
 }
@@ -50,24 +47,32 @@ function extractErrorMessage(value: unknown, depth = 0): string | null {
   if (typeof value === 'string') {
     const text = value.trim();
     const nested = embeddedErrorObject(text);
-    if (nested) return extractErrorMessage(nested, depth + 1);
+    if (nested) {
+      const explanation = extractErrorMessage(nested, depth + 1);
+      if (explanation) return explanation;
+    }
     return text || null;
   }
   if (typeof value !== 'object' || Array.isArray(value)) return null;
   const obj = value as Record<string, unknown>;
   // Producers may supply end-user copy separately from their diagnostic message.
-  if (typeof obj.user_message === 'string' && obj.user_message.trim()) return obj.user_message.trim();
-  const nestedError = typeof obj.error === 'object' ? extractErrorMessage(obj.error, depth + 1) : null;
-  return nestedError ?? extractErrorMessage(obj.message, depth + 1)
-    ?? extractErrorMessage(obj.detail, depth + 1)
-    ?? (typeof obj.error === 'string' ? extractErrorMessage(obj.error, depth + 1) : null);
+  if (typeof obj.user_message === 'string' && obj.user_message.trim())
+    return obj.user_message.trim();
+  const nestedError =
+    typeof obj.error === 'object' ? extractErrorMessage(obj.error, depth + 1) : null;
+  return (
+    nestedError ??
+    extractErrorMessage(obj.message, depth + 1) ??
+    extractErrorMessage(obj.detail, depth + 1) ??
+    (typeof obj.error === 'string' ? extractErrorMessage(obj.error, depth + 1) : null)
+  );
 }
 
 /** Only promote a bounded message field, never the transport wrapper or a stack trace. */
 export function providerErrorExplanation(raw: string): string | null {
   if (raw.length > 64_000) return null;
   const message = extractErrorMessage(embeddedErrorObject(raw));
-  if (!message || message.length > 1500 || /(?:^\\s*[\\[{]|\\n\\s*at\\s)/.test(message)) return null;
+  if (!message || message.length > 1500 || /(?:^\s*[\[{]|\n\s*at\s)/.test(message)) return null;
   return message;
 }
 
