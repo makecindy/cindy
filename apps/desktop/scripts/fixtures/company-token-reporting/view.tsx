@@ -5,10 +5,8 @@ import { mountPage } from '../../ui-page/harness';
 void mountPage({
   host: () => {
     let participating = true;
-    let noted = false;
     return {
-      companyTokenView: async () => ({ generation: 1, participating, needsNotice: !noted }),
-      companyTokenNotice: async () => { noted = true; document.body.dataset.noticeShown = 'true'; },
+      companyTokenView: async () => ({ generation: 1, participating }),
       companyTokenParticipation: async (next: boolean) => { participating = next; },
     };
   },

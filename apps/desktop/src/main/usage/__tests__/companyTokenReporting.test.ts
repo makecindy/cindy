@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createCompanyTokenReporting } from '../companyTokenReporting.desktop';
-import { startCompanyUsage } from '../companyTokenFacts';
+import { companyExecutionReporting, startCompanyUsage } from '../companyTokenFacts';
 
 const ports = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -92,14 +92,15 @@ it('uses only the account endpoint until the company enables reporting; stops an
   expect(startCompanyUsage()).toBeUndefined();
   enabled = true;
   service.refresh();
-  await vi.waitFor(() => expect(service.view()?.participating).toBe(true));
-  expect(startCompanyUsage()).toBeUndefined();
-  service.noted(1);
+  await vi.waitFor(() => expect(startCompanyUsage()).toBeTypeOf('function'));
+  expect(companyExecutionReporting()?.available()).toBe(true);
+  expect(companyExecutionReporting()?.challenge('nonce')).toMatchObject({ nonce: 'nonce' });
   const record = startCompanyUsage()!;
   record('gpt-5', counts);
   const file = path.join(dir, 'company-token-outbox.json');
   expect(existsSync(file)).toBe(true);
   const change = service.set(false, 1);
+  expect(companyExecutionReporting()?.available()).toBe(false);
   record('gpt-5', counts);
   expect(existsSync(file)).toBe(false);
   await expect(change).rejects.toThrow('offline');
@@ -181,7 +182,6 @@ it('retains valid collection and the same pending batch when delivery fails', as
   service.refresh();
   await vi.waitFor(() => expect(batches).toHaveLength(1));
   expect(service.view()?.participating).toBe(true);
-  service.noted(1);
   startCompanyUsage()!('gpt-5', counts);
   service.refresh();
   await vi.waitFor(() => expect(batches).toEqual([batches[0], batches[0]]));

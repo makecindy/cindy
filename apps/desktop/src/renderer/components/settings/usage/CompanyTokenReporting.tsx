@@ -37,11 +37,6 @@ export function CompanyTokenSettings() {
   const view = useCompanyTokenView();
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (view?.participating && view.needsNotice) {
-      void window.electronAPI.companyTokenNotice(view.generation).catch(() => undefined);
-    }
-  }, [view]);
   if (!view) return null;
   const toggle = async () => {
     setBusy(true);

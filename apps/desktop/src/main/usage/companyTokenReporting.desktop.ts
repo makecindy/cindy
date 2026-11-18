@@ -2,7 +2,7 @@ import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { directCompanyTokenRoute } from './companyTokenRoute.js';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, mkdirSync } from 'node:fs';
+import { existsSync, writeFileSync, rmSync, readdirSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { app, net } from 'electron';
 import { meResponseSchema } from '@cindy/auth-client';
@@ -84,15 +84,6 @@ export function createCompanyTokenReporting() {
   // This local preference also suppresses reporting while a disconnected opt-out is waiting to sync.
   const optOutFile = (owner: string) =>
     path.join(dir, 'company-token-opt-out-' + createHash('sha256').update(owner).digest('hex'));
-  const noticeFile = (p: Policy) =>
-    path.join(dir, 'company-token-notice-' + createHash('sha256').update(p.owner).digest('hex'));
-  const hasNotice = (p: Policy) => {
-    try {
-      return readFileSync(noticeFile(p), 'utf8') === String(p.orgRevision);
-    } catch {
-      return false;
-    }
-  };
   let policy: Policy | null = null;
   let invalidation = 0;
   let activeOwner: string | null = null;
@@ -226,7 +217,7 @@ export function createCompanyTokenReporting() {
   };
   installCompanyUsageCapture(() => {
     const initial = visible();
-    if (!initial?.participating || !hasNotice(initial)) return;
+    if (!initial?.participating) return;
     const version = invalidation;
     return (model, counts) => {
       const p = visible();
@@ -261,13 +252,12 @@ export function createCompanyTokenReporting() {
       }
     },
     available() {
-      const p = visible();
-      return !!p?.participating && hasNotice(p);
+      return visible()?.participating === true;
     },
     challenge(nonce) {
       const p = visible(),
         who = identity();
-      if (!p?.participating || !who || !hasNotice(p)) return null;
+      if (!p?.participating || !who) return null;
       return {
         nonce,
         recipient: createHash('sha256')
@@ -278,7 +268,7 @@ export function createCompanyTokenReporting() {
     async issue(challenge) {
       const p = visible(),
         who = identity();
-      if (!p?.participating || !who || !hasNotice(p)) return null;
+      if (!p?.participating || !who) return null;
       const version = invalidation;
       const data = await (
         await request(who, endpoint(who) + '/grants', 'POST', {
@@ -297,7 +287,7 @@ export function createCompanyTokenReporting() {
     async redeem(nonce, grant) {
       const p = visible(),
         who = identity();
-      if (!p?.participating || !who || !hasNotice(p)) return;
+      if (!p?.participating || !who) return;
       const version = invalidation;
       const data = await (
         await request(who, endpoint(who) + '/redeem', 'POST', { nonce, grant })
@@ -370,14 +360,7 @@ export function createCompanyTokenReporting() {
     },
     view() {
       const p = visible();
-      return p
-        ? { participating: p.participating, generation: p.generation, needsNotice: !hasNotice(p) }
-        : null;
-    },
-    noted(generation: number) {
-      const p = visible();
-      if (p && p.generation === generation)
-        writeFileSync(noticeFile(p), String(p.orgRevision), { mode: 0o600 });
+      return p ? { participating: p.participating, generation: p.generation } : null;
     },
     async set(participating: boolean, generation: number) {
       const p = visible(),

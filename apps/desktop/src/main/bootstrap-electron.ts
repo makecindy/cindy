@@ -6843,10 +6843,6 @@ const registerIpcHandlers = () => {
     assertTrustedAppRendererEvent(event);
     return companyReporting?.view() ?? null;
   });
-  ipcMain.handle('auth:company-token-notice', (event, generation: number) => {
-    assertTrustedAppRendererEvent(event);
-    companyReporting?.noted(generation);
-  });
   ipcMain.handle('auth:company-token-participation', async (event, participating: boolean, generation: number) => {
     assertTrustedAppRendererEvent(event);
     if (!companyReporting) throw new Error('Company statistics unavailable');

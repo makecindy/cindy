@@ -19,7 +19,6 @@ export default {
   cases: { default: { about: 'Enterprise account with reporting enabled' } },
   async ready(page) { await page.getByRole('switch').waitFor(); },
   async check(page) {
-    await page.waitForFunction(() => document.body.dataset.noticeShown === 'true');
     const toggle = page.getByRole('switch');
     assert.equal(await toggle.isChecked(), true);
     await toggle.click();
