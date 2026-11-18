@@ -28,7 +28,11 @@ export type LocalePreference = SupportedLocale | 'system';
 export const DEFAULT_LOCALE: SupportedLocale = 'en';
 
 function normalizeLocaleTag(raw: string | undefined | null): string | null {
-  const tag = raw?.trim().replace(/_/g, '-').replace(/\..*$/, '');
+  const value = raw?.trim();
+  // Reject internal line breaks before dropping the suffix so invalid tags stay invalid.
+  if (!value || /[\r\n\u2028\u2029]/u.test(value)) return null;
+  // POSIX locales carry a codeset/modifier after the first dot (en_US.UTF-8).
+  const tag = value.replace(/_/g, '-').split('.', 1)[0];
   if (!tag) return null;
 
   try {

@@ -1,8 +1,7 @@
 /**
- * The 代输入 dialog, opened from the strip above the composer. Same reading
- * order as on the phone: what the agent needs, where it goes (lock + site, or
- * the app), anything to check first, then only what the owner fills in. It
- * closes without ending the handoff; the strip stays until it is done.
+ * The 代输入 dialog, opened from the strip above the composer. The verified
+ * source stays visible (lock + site, or the app) while the purpose, details
+ * and fields scroll together. Closing it leaves the handoff strip until done.
  */
 
 import type { ReactNode } from 'react';
@@ -49,20 +48,23 @@ export function InputHandoffDialog({
           onEscapeKeyDown={(event) => {
             if (event.isComposing || event.keyCode === 229) event.preventDefault();
           }}
-          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(440px,calc(100vw-32px))] flex-col gap-4 overflow-y-auto p-6 outline-none"
+          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(440px,calc(100vw-32px))] flex-col gap-4 overflow-hidden p-6 outline-none"
           data-testid="input-handoff-dialog"
         >
-          <InputHandoffDialogHeader snapshot={snapshot} inputBlocked={inputBlocked} />
-          {children}
-          {error && (
-            <p role="alert" className="text-center text-12 text-[var(--error-fg)]">
-              {error}
-            </p>
-          )}
-          {footer}
-          {links && <div className="-mt-1 flex flex-wrap justify-center gap-x-4">{links}</div>}
+          <div className="shrink-0"><InputHandoffDialogHeader snapshot={snapshot} /></div>
+          <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+            <InputHandoffDialogDetails snapshot={snapshot} inputBlocked={inputBlocked} />
+            <div className="shrink-0">{children}</div>
+            {error && (
+              <p role="alert" className="shrink-0 text-center text-12 text-[var(--error-fg)]">
+                {error}
+              </p>
+            )}
+          </div>
+          {footer && <div className="shrink-0">{footer}</div>}
+          {links && <div className="-mt-1 flex shrink-0 flex-wrap justify-center gap-x-4">{links}</div>}
           {!footer && (
-            <Dialog.Close className="mx-auto min-h-8 px-3 text-13 font-medium text-[var(--text-primary)] hover:text-[var(--text-secondary)]">
+            <Dialog.Close className="mx-auto min-h-8 shrink-0 px-3 text-13 font-medium text-[var(--text-primary)] hover:text-[var(--text-secondary)]">
               {t('inputHandoff.action.close')}
             </Dialog.Close>
           )}
@@ -72,7 +74,20 @@ export function InputHandoffDialog({
   );
 }
 
-function InputHandoffDialogHeader({
+function InputHandoffDialogHeader({ snapshot }: { snapshot: InputHandoffSnapshot }) {
+  const place = inputHandoffPlace(snapshot.source);
+  const Icon = inputHandoffIcon(snapshot);
+  return (
+    <div className="flex flex-col items-center gap-2 text-center">
+      <span className="flex size-12 items-center justify-center rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
+        <Icon size={22} aria-hidden />
+      </span>
+      <InputHandoffPlace label={place.label} secure={place.secure} />
+    </div>
+  );
+}
+
+function InputHandoffDialogDetails({
   snapshot,
   inputBlocked,
 }: {
@@ -80,8 +95,6 @@ function InputHandoffDialogHeader({
   inputBlocked: boolean;
 }) {
   const { t } = useTranslation();
-  const place = inputHandoffPlace(snapshot.source);
-  const Icon = inputHandoffIcon(snapshot);
   const warnings = [
     snapshot.source.warning ? t(`inputHandoff.originWarning.${snapshot.source.warning}`) : null,
     snapshot.agentPicture
@@ -91,14 +104,10 @@ function InputHandoffDialogHeader({
     snapshot.failure && !snapshot.terminal ? t(`inputHandoff.failure.${snapshot.failure}`) : null,
   ].filter((warning): warning is string => Boolean(warning));
   return (
-    <div className="flex flex-col items-center gap-2 text-center">
-      <span className="flex size-12 items-center justify-center rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)]">
-        <Icon size={22} aria-hidden />
-      </span>
-      <Dialog.Title className="mt-1 text-18 font-semibold leading-snug text-[var(--text-primary)] [overflow-wrap:anywhere]">
+    <div className="flex shrink-0 flex-col items-center gap-2 text-center">
+      <Dialog.Title className="text-18 font-medium leading-snug text-[var(--text-primary)] [overflow-wrap:anywhere]">
         {snapshot.purpose}
       </Dialog.Title>
-      <InputHandoffPlace label={place.label} secure={place.secure} />
       {snapshot.note && (
         <p className="text-12 leading-relaxed text-[var(--text-secondary)] [overflow-wrap:anywhere]">
           {t('inputHandoff.agentNote', { note: snapshot.note })}

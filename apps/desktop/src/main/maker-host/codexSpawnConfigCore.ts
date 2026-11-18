@@ -70,8 +70,11 @@ export function createCodexSpawnConfig(ports: {
         let buildSessionMcpConfig:
           | ((sessionInstanceId: string) => Record<string, unknown>)
           | undefined;
-        // Review hosts and native-storage-only (archive) hosts never expose Cindy MCP tools.
-        if (!isReview && !ctx.nativeStorageOnly) {
+        // Guests use only the controller's tunnel, installed by CodexAgent at
+        // thread creation. Injecting this computer's MCPs here makes the earlier
+        // process-level isolation check wait for unrelated local MCP startup.
+        // Keep that check; do not provision the local connections or credentials.
+        if (!isReview && !ctx.nativeStorageOnly && !guestProviderId) {
           try {
             const cfg = await getCodexExtraSpawnConfig({
               mcpProviders: providers,
@@ -88,7 +91,7 @@ export function createCodexSpawnConfig(ports: {
             });
           }
         }
-        const browserCompanion = isControlPlane || isReview
+        const browserCompanion = isControlPlane || isReview || guestProviderId
           ? null
           : await prepareCodexBrowserCompanion({ codexHome: ctx.runtimeCodexHome ?? effectiveCodexHome });
         const browserCompanionSpawnConfig =
@@ -161,20 +164,22 @@ export function createCodexSpawnConfig(ports: {
           : usesIsolatedProxy
             ? isCodexControlPlaneProxyHandleReady(authInjection)
             : isCodexProxyHandleReady();
-        if ((useOAuthBearer || authInjection === 'provider-oauth') && !ready) {
+        if (!ready) {
           const error = new Error(
             authInjection === 'provider-oauth'
               ? 'Codex provider OAuth mode requires the local proxy, but the proxy is not ready'
-              : 'Codex OAuth mode requires the local proxy, but the proxy is not ready',
+              : useOAuthBearer
+                ? 'Codex OAuth mode requires the local proxy, but the proxy is not ready'
+                : 'Codex gateway mode requires the local proxy, but the proxy is not ready',
           );
-          // fallback OAuth 也是凭据隔离要求,不能被 maker-core 当成普通 MCP 降级吞掉。
+          // Route materialization must not be swallowed as an optional MCP failure.
           (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
           if (usesScopedProxy) {
             await releaseCodexCustomContextProxy(scopedProxyKey);
           }
           throw error;
         }
-        // gateway-key 模式下 proxy 挂了仍可 fallback 到 gateway base_url(codex 直连 gateway, 不裸奔)。
+        // Every local host freezes proxy routing, including gateway-key hosts.
         const endpoint = usesScopedProxy
           ? getCodexCustomContextProxyEndpoint(scopedProxyKey)
           : usesIsolatedProxy

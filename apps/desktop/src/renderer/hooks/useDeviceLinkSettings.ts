@@ -249,6 +249,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       } catch (err) {
         log.warn('renameDevice failed', err);
         toast.error(t('settings.devices.toast.renameFailed'));
+        if (mounted.current) void refresh();
       }
     },
     [refresh, t],
@@ -274,6 +275,9 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         const ipcErr = extractIpcError(err);
         if (ipcErr?.code !== 'ALREADY_EXISTS') {
           toast.error(t('settings.devices.toast.deleteFailed'));
+          // Either directory may have committed before the other failed. Keep
+          // the failed result and local sessions, but reconcile the visible list.
+          if (mounted.current) void refresh();
           return false;
         }
         // 服务端以「设备在线」拒绝删除，删除没有发生。先刷新一次列表与服务端对齐(最多等一会儿)，

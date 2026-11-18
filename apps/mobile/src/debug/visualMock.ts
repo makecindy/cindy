@@ -1,4 +1,5 @@
 import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
+import { pluginPreviewFixture } from './pluginPreviewFixture';
 import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
@@ -14,7 +15,9 @@ import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REM
 import { ApiError, type ApiFetchOptions } from '@/api/client';
 import type { DeviceView, LinkAcceptPayload } from '@cindy/device-link';
 import type { MobileUser } from '@/auth/AuthContext';
-import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { refreshRemoteProjectAliases, setRemoteProjectAliasesAccount } from '@/session/remoteProjectAliases';
+import { PROJECT_AUTO_ICON_CHANNEL, PROJECT_ICON_IMAGE_CHANNEL, isProjectImageDraft, PROJECT_ALIASES_GET_CHANNEL, PROJECT_SETTINGS_SET_CHANNEL, validProjectIcon } from '@cindy/maker-shared/project-alias-sync';
 import { MOBILE_VISUAL_MOCK_REALDATA_URL } from '@/config/env';
 import type { DeviceLinkContextValue } from '@/device-link/DeviceLinkContext';
 import type {
@@ -29,6 +32,7 @@ import type {
   RemoteTextFilePreviewResult,
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
 import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
@@ -128,6 +132,8 @@ let realDataLoadPromise: Promise<VisualRealDataSnapshot | null> | null = null;
 let preparedContextPromise: Promise<DeviceLinkContextValue> | null = null;
 let didWarnRealDataLoad = false;
 const deletedDeviceIds = new Set<string>();
+// Synthetic task edits last only for this mock process; never touch real-data snapshots.
+const taskMetaOverrides = new Map<string, Partial<RemoteSession>>();
 const renamedDevices = new Map<string, string>();
 // 模拟电脑上的协同角色清单：最近使用在前，增删只在本次进程内生效。
 let workerRoles: Array<{ role: string; [key: string]: unknown }> = [
@@ -173,6 +179,13 @@ export function visualMockDevices(): DeviceView[] {
       remoteControlEnabled: true,
       isSelf: false,
     },
+    // Opt-in six-computer glance scene; regular mocks and imported data stay unchanged.
+    ...(!realData && !awaitingRealData && process.env.EXPO_PUBLIC_CINDY_GLANCE_MULTI_DEVICE_DEMO === '1'
+      ? ['Studio', 'MacBook Pro', 'Windows PC', 'Mac mini', 'Linux Desktop'].map((name, index) => ({
+        deviceId: `visual-glance-computer-${index}`, name: `Demo ${name}`,
+        platform: 'darwin', appVersion: '0.0.0-visual-mock', lastSeenAt: ISO_NOW,
+        online: true, busy: false, remoteControlEnabled: true, isSelf: false,
+      })) : []),
     {
       deviceId: VISUAL_MOCK_OFFLINE_DEVICE_ID,
       name: 'CINDY Offline Mock Mac',
@@ -188,12 +201,33 @@ export function visualMockDevices(): DeviceView[] {
     .map((device) => ({ ...device, name: renamedDevices.get(device.deviceId) ?? device.name }));
 }
 
+const visualProjectNames = new Map<string, string>();
+const visualProjectIcons = new Map<string, string>();
+const visualProjectImages = new Map<string, string>();
+let visualProjectImageRevision = 0;
+function visualProjectInfo() {
+  return {
+    aliases: Array.from(visualProjectNames, ([projectKey, alias]) => ({ projectKey, alias })),
+    icons: Object.fromEntries(visualProjectIcons),
+    platform: 'darwin',
+    settingsSupported: true,
+    settingsVersion: 5,
+    ownerStamp: { dataOwnerId: visualMockUser.id, ownerGeneration: 1 },
+  };
+}
+
 export function seedVisualMockStore(): void {
   // The startup/home-entry gate needs the same owner as the mock AuthProvider.
   setMobileAuthOwner(visualMockUser.id);
   const seededRealData = seedRealDataStore(realDataSnapshot);
   if (seededRealData) return;
+  setRemoteProjectAliasesAccount(visualMockUser.id, getMobileAuthOwner().generation);
+  void refreshRemoteProjectAliases(VISUAL_MOCK_DEVICE_ID, async () => visualProjectInfo());
 
+  // The mock auth owner is generation zero. Establish its empty in-memory roster cache
+  // before the six-host scene's ordinary roster replies populate it.
+  if (process.env.EXPO_PUBLIC_CINDY_GLANCE_MULTI_DEVICE_DEMO === '1')
+    readRemoteCollectionCache(`${visualMockUser.id}:0`, 'teammates');
   const sessions = visualMockSessions();
   remoteSessionStore.setDeviceIdentity(visualMockDevices().map((device) => ({
     deviceId: device.deviceId,
@@ -253,7 +287,8 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       lastSeenAt: NOW,
     },
     getPresenceAvailability: (candidateDeviceId: string) =>
-      candidateDeviceId === deviceId ? true : null,
+      candidateDeviceId === deviceId ? true
+        : visualMockDevices().find(device => device.deviceId === candidateDeviceId)?.online === true ? true : null,
     openLink: async (): Promise<LinkAcceptPayload> => ({
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
@@ -262,6 +297,7 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
     }),
+    recoverWaitingPeer: async () => true,
     closeLink: () => undefined,
     invoke: visualMockInvoke,
     subscribe: async () => undefined,
@@ -276,6 +312,12 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  // The extra computers have no recent work; sample tasks belong to their original host.
+  if (_deviceId.startsWith('visual-glance-computer-')) {
+    if (channel === 'local-db:sessions:list') return [] as T;
+    if (channel === 'local-db:history:query') return { ok: true, sessions: [], hasMore: false } as T;
+    if (channel === 'maker:bot-delegations:list') return { ok: true, delegations: [] } as T;
+  }
   if (channel === 'local-db:messages:around-client-id' && typeof args[0] === 'string' && args[0].startsWith('qa-process-')) {
     if (args[0] === 'qa-process-unavailable') throw new Error('Process unavailable');
     return [
@@ -350,6 +392,8 @@ async function visualMockInvoke<T = unknown>(
     return { accepted: true } as T;
   }
   const realData = await loadVisualRealDataSnapshot();
+  const previewResult = realData ? undefined : pluginPreviewFixture(channel, args);
+  if (previewResult !== undefined) return previewResult as T;
   const mailResult = realData ? undefined : (mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args));
   if (mailResult !== undefined) return mailResult as T;
   const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
@@ -375,6 +419,7 @@ async function visualMockInvoke<T = unknown>(
         : [],
     } satisfies TaskTagResult as T;
   }
+  if (realData && channel === 'local-db:sessions:patch-meta') throw new Error('UNSUPPORTED_CAPABILITY');
   if (realData) {
     switch (channel) {
       case 'local-db:sessions:list':
@@ -397,6 +442,34 @@ async function visualMockInvoke<T = unknown>(
     }
   }
   switch (channel) {
+    case PROJECT_ALIASES_GET_CHANNEL:
+      return visualProjectInfo() as T;
+    case PROJECT_AUTO_ICON_CHANNEL:
+      return {image:null,source:'',kind:'none',candidate:false} as T;
+    case PROJECT_ICON_IMAGE_CHANNEL:
+      return (visualProjectImages.get((args[0] as { projectKey: string }).projectKey) ?? null) as T;
+    case PROJECT_SETTINGS_SET_CHANNEL: {
+      const request = args[0] as { projectKey: string; field: string; value: string | null | { name?: string; icon?: string | null }; dataOwnerId: string; ownerGeneration: number };
+      if (request.dataOwnerId !== visualMockUser.id || request.ownerGeneration !== 1) throw new Error('Project account changed');
+      const changes = request.field === 'profile' ? request.value as { name?: string; icon?: string | null }
+        : request.field === 'name' ? { name: request.value as string } : { icon: request.value as string | null };
+      if ('name' in changes) {
+        if (typeof changes.name !== 'string' || changes.name.trim().length > 80) throw new Error('Invalid name');
+        const name = changes.name.trim();
+        if (name) visualProjectNames.set(request.projectKey, name); else visualProjectNames.delete(request.projectKey);
+      }
+      if ('icon' in changes) {
+        if (isProjectImageDraft(changes.icon)) {
+          visualProjectImages.set(request.projectKey, changes.icon);
+          // Valid content address; bytes live only in this mock instance.
+          visualProjectIcons.set(request.projectKey, `cindy-media://blobs/${(++visualProjectImageRevision).toString(16).padStart(64, '0')}.png`);
+        } else if (changes.icon === null || validProjectIcon(changes.icon)) {
+          if (changes.icon) visualProjectIcons.set(request.projectKey, changes.icon); else visualProjectIcons.delete(request.projectKey);
+          visualProjectImages.delete(request.projectKey);
+        } else throw new Error('Invalid icon');
+      }
+      return visualProjectInfo() as T;
+    }
     case 'maker:get-context-usage':
       return UI_MOCK_PI_CONTEXT_USAGE as T;
     case 'maker:regenerate-title':
@@ -404,6 +477,17 @@ async function visualMockInvoke<T = unknown>(
     case 'maker:predict-prompt':
       return { prompt: (args[0] as { sessionId?: string } | undefined)?.sessionId === 'visual-prompt-recommendation'
         ? '继续跟进 PR #4670' : null } as T;
+    case 'local-db:sessions:patch-meta': {
+      const id = String(args[0]);
+      const original = visualMockSessions('all').find(session => session.id === id);
+      if (!original) throw new Error('NOT_FOUND');
+      const patch = args[1] as Partial<RemoteSession>;
+      const until = patch.status !== undefined ? null : patch.snoozedUntil;
+      const next = { ...taskMetaOverrides.get(id), ...patch,
+        ...(until !== undefined ? { snoozedUntil: until, snoozedAt: until ? new Date().toISOString() : null } : {}) };
+      taskMetaOverrides.set(id, next);
+      return { ...original, ...next } as T;
+    }
     case 'local-db:sessions:list':
       return visualMockSessions((typeof args[0] === 'string' ? args[0] : args[1]) as string | undefined) as T;
     case 'local-db:history:query':
@@ -646,7 +730,7 @@ function realDataProjection(snapshot: VisualRealDataSnapshot, sessionId: string)
 }
 
 function visualMockSessions(statusFilter?: string): RemoteSession[] {
-  const catalog = getUiMockRows().sessions.map(catalogSession);
+  const catalog = getUiMockRows().sessions.map(catalogSession).map(session => ({ ...session, ...taskMetaOverrides.get(session.id) }));
   if (statusFilter === 'archived') return catalog.filter((session) => session.status === 'archived');
   const sessions = [
     { ...catalog.find(session => session.id === 'ui-mock-rich-answer')!, id: 'visual-teammate-process', source: 'bot' as const, title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' as const } },
@@ -774,6 +858,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'fixture-read', 'tool_use', { toolName: 'Read', input: { file_path: '/repo/tasks.md' }, toolUseId: 'fixture-read' }, -65000),
     message(sessionId, 'fixture-read-result', 'tool_result', 'Error: file not found', -64000, { toolUseId: 'fixture-read' }),
     message(sessionId, 'fixture-note2', 'assistant', '刚才的读取没有完成。我会保留已有记录，换一种方式继续核对。', -60000, { agentMeta: { assistantPhase: 'commentary' } }),
+    message(sessionId, 'fixture-model-switch', 'agent_switch', { fromAgentKind: 'pi', toAgentKind: 'codex', fromModel: 'quota-test', toModel: 'gpt-6.1-sol' }, -55000),
     message(sessionId, 'fixture-second-work', 'thinking', { text: '继续核对当前状态', durationMs: 1000 }, -50000),
     message(sessionId, 'fixture-search', 'tool_use', { toolName: 'Grep', input: { pattern: 'task', path: '/repo' }, toolUseId: 'fixture-search' }, -45000),
     message(sessionId, 'fixture-search-result', 'tool_result', 'Found task records', -44000, { toolUseId: 'fixture-search' }),
@@ -1065,7 +1150,10 @@ function handleVisualMockFileBrowser(input: unknown): unknown {
   const op = input && typeof input === 'object' && 'op' in input ? String(input.op) : '';
   const shared = sharedUiMockFiles(input);
   if (shared !== undefined) return shared;
-  if (op === 'caps') return { ok: true, gzip: true } satisfies FileBrowserCapsResult;
+  if (op === 'caps') return { ok: true, gzip: true, fileRead: true } satisfies FileBrowserCapsResult & { fileRead: boolean };
+  // Reuse the synthetic PDF bytes so the multi-file browser can exercise the real reader.
+  if (op === 'fileUrl' && (input as { relPath?: string }).relPath === 'quarterly-report.pdf')
+    return { ok: true, url: 'xdt-file://open?path=%2Fattachment-preview%2Fsample.pdf' };
   if (op === 'listDir') return visualMockFileBrowserEntries();
   if (op === 'listAllFiles') {
     return {

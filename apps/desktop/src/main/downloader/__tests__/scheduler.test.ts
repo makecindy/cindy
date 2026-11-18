@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../integrity', () => ({ computeHash: mocks.computeHash }));
 vi.mock('../transport', () => ({ executeOnce: mocks.executeOnce, assertDownloadUrl: vi.fn(), configureDefaultDownloadRequest: vi.fn() }));
-vi.mock('../retry', () => ({ withRetry: mocks.withRetry }));
+vi.mock('../retry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../retry')>()),
+  withRetry: mocks.withRetry,
+}));
 vi.mock('../resume', () => ({ deletePart: vi.fn(), deleteMeta: vi.fn() }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),

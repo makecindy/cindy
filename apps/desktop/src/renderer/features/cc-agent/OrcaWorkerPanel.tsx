@@ -6,11 +6,12 @@
  * 双栏布局与独立 resize/maximize。
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import { Button } from '@/components/ui/button';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { toast } from '@/lib/toast';
@@ -53,6 +54,43 @@ export interface OrcaWorkerPanelProps {
    * preload 和轻量入口，撑不起完整聊天视图，所以这里不嵌入 Worker 对话。
    */
   onViewWorkerInMainWindow?: (workerSessionId: string) => void;
+}
+
+/**
+ * Lead 在被控设备上时,与它同机运行的 worker(没有单独的运行设备)也在那台设备。
+ * 在工具栏、任务视图发出任何读取之前,把这些 worker 的归属钉到 Lead 的设备。
+ *
+ * 设备列表尚未跟上时(唤醒 / 重连后首拉还没落地,或 worker 晚于上一次快照创建),
+ * worker 不在镜像分片里,路由会回落本机:2026-11-17 协同面板显示「找不到这条任务」,
+ * main 日志是本机 `local-db:sessions:get` NOT_FOUND 与 `maker:worker:project-label`
+ * 「Local project required」。远程 worker 的读取不得回退到本机。
+ *
+ * 只登记路由;访问仍由 main 的 invoke 边界按设备与任务授权。已归属其他设备的不改。
+ * 返回值:选中的 worker 是否已经有归属,没有时任务视图先不挂载。
+ */
+function useLeadDeviceWorkerOrigins(
+  leadDeviceId: string | null,
+  workerSessionIds: readonly string[],
+  selectedSessionId: string | null,
+): boolean {
+  // 数组引用每次渲染都会变:用内容键驱动,effect 内从键还原输入。
+  const key = leadDeviceId
+    ? JSON.stringify([leadDeviceId, [...workerSessionIds, ...(selectedSessionId ? [selectedSessionId] : [])]])
+    : null;
+  useLayoutEffect(() => {
+    if (!key) return;
+    const [deviceId, sessionIds] = JSON.parse(key) as [string, string[]];
+    for (const sessionId of new Set(sessionIds)) {
+      if (remoteProjectsStore.getSessionDeviceId(sessionId) === undefined) {
+        remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
+      }
+    }
+  }, [key]);
+  const selectedOrigin = useSyncExternalStore(
+    remoteProjectsStore.subscribe,
+    () => (selectedSessionId ? remoteProjectsStore.getSessionDeviceId(selectedSessionId) : undefined),
+  );
+  return !leadDeviceId || !selectedSessionId || selectedOrigin !== undefined;
 }
 
 function sameVisibleSessionPayload(
@@ -126,6 +164,11 @@ export function OrcaWorkerPanel({
     shownWorker && shownWorker.sessionId === workerSessionId
       ? shownWorker.executionDevice
       : undefined;
+  const workerOriginReady = useLeadDeviceWorkerOrigins(
+    typeof deviceId === 'string' ? deviceId : null,
+    workers.filter((worker) => !worker.executionDevice && worker.sessionId).map((worker) => worker.sessionId),
+    workerSessionId && !remoteDevice ? workerSessionId : null,
+  );
 
   // 改名入口的远程兼容门:归属已确认本机时始终可编辑；device-link 被控端必须显式
   // 声明支持 maker:worker:update(旧被控端 allowlist 不认该 channel)。
@@ -256,7 +299,7 @@ export function OrcaWorkerPanel({
             viewVisible={viewVisible}
             chatRealtime={chatRealtime}
           />
-        ) : workerSessionId ? (
+        ) : workerSessionId && !workerOriginReady ? null : workerSessionId ? (
           <CCAgentSessionView
             key={workerSessionId}
             sessionIdProp={workerSessionId}

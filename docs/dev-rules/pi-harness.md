@@ -4,6 +4,20 @@
 > `apps/desktop/src/main/mcp-integrations/piEnvironment.ts`,或任何 PI 会话行为、权限、
 > 配置、system prompt 之前必读本文件。PI(github.com/earendil-works/pi)被定位为 Cindy
 > 未来的基座 harness,集成原则与其余 harness 有别 —— 详见「设计原则」。
+>
+> **读取时机**：修改 PI harness 集成、PI 会话权限／配置／system prompt／桥接，或做 PI 相关的上线判断之前
+> **适用路径**：`packages/maker-core/src/agents/pi/**`、`packages/maker-core/src/types/pi-*`、
+> `packages/maker-pi-manager/**`、`apps/desktop/src/main/maker-host/**/pi*`、
+> `apps/desktop/src/main/mcp-integrations/**/pi*`、
+> `apps/desktop/src/main/maker-ipc/**/pi{-kernel,IdleReleaseWatcher,PackageMutationIpc,UsageReceipts}*`、
+> `apps/desktop/src/main/agent-binaries/**/pi-*`、`apps/host/src/agent/pi-*`、
+> `apps/desktop/src/shared/pi{Packages,Kernel,RuntimeInitialization}.ts`、
+> `apps/desktop/src/renderer/components/settings/**/Pi*`、
+> `packages/lizi-mcps/src/xdt-helper/pi_runtime.ts`、`tools/pi/**`
+> **要点**：**Pi 原生能力非退化是红线**（§3.1）：Pi 原生允许的安装、更新、扩展加载与 Agent 自助修复，
+> Cindy 不得以静态分析、TUI／RPC 兼容提示、内容指纹、宿主审批或新增的“安全增强”为由拒绝、停用或变成
+> 不可逆流程；显式用户命令即授权。Cindy 只能增加可跳过的提示和更顺畅的 GUI，不能让 Cindy Pi 比同版本
+> 原生 Pi 更难用。
 
 ## 1. 架构总览
 
@@ -12,8 +26,14 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 - **provider/model**:`index.ts writeModelsJson` 把 host 注入的模型清单挂在单一自建
   provider `cindy` 下,写进 `<agentHome>/models.json`。`baseUrl = runtimeConfig.endpoint`
-  —— desktop 侧是本地 anthropic-compat proxy(loopback);proxy 未起时 fail-open 直连真上游
-  (`anthropic-compat-proxy-host.ts`)。凭证走 `$CINDY_PI_API_KEY` env 插值,不落盘。
+  —— Desktop 与 Host 的本地代理路由使用 anthropic-compat proxy(loopback)。实际启动和
+  live-refresh 等待在途创建；未就绪时明确失败，不把真上游写入启动快照、静默丢失选定来源。
+  失败后的下一次显式启动可重新创建，关闭期间的旧创建结果会回收，不增加后台重试。
+  原生 API/keyless BYOM 仍使用自身端点，远程端点与目录预览不依赖本机代理。
+  同步 endpoint getter 为辅助读取保留上游回退，不能代替启动就绪检查。
+  凭证走 `$CINDY_PI_API_KEY` env 插值,不落盘。共享生命周期及启动边界回归见
+  `anthropicCompatProxyInboundPort.test.ts`、`piByomNoCindyAuth.test.ts` 与
+  `hostPiNativeProvidersParity.test.ts`。
 - **system prompt**:`--append-system-prompt` 追加 host 产品段 + 用户段,**保留 pi 默认
   prompt**(不用 `--system-prompt` 整体替换 —— 那会丢掉 pi 自己调好的工具用法/工程约定)。
   追加段的文本写在会话 `configHome/append-system-prompt.md`,命令行只传该文件路径(pi 接受
@@ -378,7 +398,8 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    （经 Maker `closeSessionIfCurrent(session, 'runtime-refresh')`，让 session:closed
    带上 IM runner 认识的刷新原因；直接 Session.close 会被按 unexpected 丢弃排队回合。
    空闲口径与 closeIfIdle 一致：turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
-   rewind 等宿主排他操作进行中绝不回收），由既有 lazy bootstrap
+   rewind 等宿主排他操作、已跟踪后台任务及待续报 continuation 存续时绝不回收；
+   后台状态读取失败也保留运行时），由既有 lazy bootstrap
    以相同的显式装配语义重扫重建 —— 资源集合是 spawn argv 的输入，只能进程重建时重算；
    远端/Bot/受邀者会话无启动快照，不参与漂移检测。
 9. **Pi bash bounded timeout**:Cindy 覆盖的模型可调 `bash` 在 execute 入口强制默认
@@ -462,7 +483,7 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   轮次标记仅在实际 prompt RPC 边界登记。已完成的 Host 包 mutation 不退回可重放状态。
   复用原退出确认流程退役 root Pi，不重放输入、不重跑构建、不杀后代进程树；
   退出未确认时仍保留进程登记和 runtime 文件。SSH daemon 断链保活语义不变。
-  缺 settled 但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。
+  缺 settled 且没有明确失败终态但 RPC 仍通的情况仍走已有有界 watchdog，丢失工具结果不伪造。
   回归见 `pi-long-tool-lifecycle.test.ts`、`transport.test.ts` 与 `rpc-client.test.ts`。
 - Pi 的 `Request was aborted` 只在无当前 generation 的 Host Stop 时归入请求断流失败；
   无错误正文的 bare abort 仍保持取消。复用既有错误收口及重试预算，不重放包命令或工具。
@@ -472,6 +493,13 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   发送续跑指令，保留已有结果；用户 Stop 取消待续跑。Pi `auto_retry_end(success=false)`
   已用尽原生预算时保持 `pi-gateway-drop` 终态，不再叠加 Host 重试。本规则不修改受管
   Pi 二进制、版本或原生重试上限；原生分类兼容需由 Pi 上游独立修正。
+  重试耗尽即释放运行标记并发布失败收尾与空闲状态，Host Stop 则保留取消结果；
+  不依赖可能缺席的 `agent_settled`，不把失败伪装成原生成功。新 `agent_start` 前
+  到达的旧终态不重复结算，也不清除下一条已准备消息的逐轮权限策略；队列中的旧
+  `done`／空闲状态仍属于旧轮次。Stop 的异步成功回执也只清理发起停止时的策略归属；
+  归属从新消息准备发送时建立，不能只比较原生 `agent_start` 代次或策略对象引用。
+  回归见 `pi-long-tool-lifecycle.test.ts`、
+  `pi-translator.test.ts` 与 `pi-auto-review-dispatch.test.ts`。
 - SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
   已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
 
@@ -513,21 +541,25 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
   与 CC/Codex 对齐);版本差 + daemon 活着时 defer 并显示 UpgradeBanner, 用户确认
   后才 kill + 重装(daemon 已死则静默升级磁盘 bundle)。
 
-### 本机普通会话空闲回收(2026-10)
+### 本机会话空闲回收(2026-10，2026-11 补齐伙伴与自动化)
 
 - **动机**：`pi --mode rpc` 每个约 150~300MB，普通会话此前只有退出应用/切换 Agent
   才回收（Orca 工人另有 `workerIdleReleaseMinutes`，默认关闭），长时间使用进程与内存
   持续累积（upstream #5830）。
 - **实现**：`apps/desktop/src/main/maker-ipc/piIdleReleaseWatcher.ts`（30min TTL /
-  5min 扫描）。候选只取本机桌面普通任务或插件任务、无 Orca 角色、非远程的 pi 会话；
-  插件任务包含隐藏任务，其余隐藏任务仍排除
+  5min 扫描）。候选取本机桌面普通任务、插件、伙伴及自动化来源、无 Orca 角色、非远程的 Pi 会话；
+  插件、伙伴及自动化包含隐藏任务，其余隐藏任务仍排除
   （归档也纳入——归档不会关运行时）；释放前在发送锁内复查回合/后台任务/silent-stop
-  续跑/自动续跑/排队输入，并重读最新活动时间复核阈值；最后由
-  `Session.closeIfIdle()` 做同步的检查+关闭预约——它同时拒绝关闭宿主独占 RPC 操作
+  续跑/自动续跑/排队输入，并重读最新活动时间复核阈值；有未答异步问题时保留运行时，
+  避免关闭使问题失效。最后由
+  Maker 的 `closeSessionIfCurrent(..., 'runtime-refresh', { onlyIfIdle: true })` 在既有
+  rehydrate 抑制窗口内调用 `Session.closeIfIdle()`，保留暂存附件、工作区和输入边界。
+  `closeIfIdle()` 做同步的检查+关闭预约——它同时拒绝关闭宿主独占 RPC 操作
   （手动压缩 / rewind / 切模）在途的会话（pi 侧由 `runExclusivePiRpc` 计数，
   见 `hasPendingHostOperation`）。
 - **重建语义**：释放不影响会话数据；下一次发送走既有 lazy create-session，resume 自
   `sdk_session_id`，与冷启动一致。闲置后首次发送因此可能多等一次冷启动。
+  伙伴的 canonical link、产品任务和完整历史保持不变，不因闲置换窗或新建主任务。
 - **回归**：`apps/desktop/src/main/maker-ipc/__tests__/piIdleReleaseWatcher.test.ts`。
 
 ## 6. 上线门禁
@@ -540,18 +572,22 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
       字段指向整包 tar.gz(归档根即完整目录分发,SHA256 为 tar.gz 的),启动时按
       manifest 版本下载到 `userData/pi/<version>/` 并清理更旧版本。用户通过 About／受管
       命令选择版本后，`pi/selected.json` 的显式选择优先于 manifest 版本与高版本残留；
-      该路径不清理旧目录，不改变下面的联网启动边界。没有显式选择时，prepare 会先对所有带
+      该路径不清理旧目录。没有显式选择时，常规 prepare 会先对所有带
       `.verified` 的本地候选执行有界 `--version` 探针，真实 semver 不低于 manifest 时直接
       保留该安装（包括原地自更新后目录名仍旧的情况），不下载也不清理。只有 manifest
       版本更高，或探针没有得到可用候选时，才沿用原 CDN 安装流程。正式安装包不内置 Pi；
-      manifest 缺字段或下载失败时**不阻塞启动**(splash 不进失败态),本次不注册 pi。
-      **不变量(刻意如此,别当 bug 改掉)**:`pi-host.resolvePiBinaryPath` 只读
-      `getReadyBinaryPath('pi')`——即本次启动 prepare 成功回填的路径,**不回落
-      `getCachedBinaryStatus`**,因此不会复用上一次启动下载的旧版本。`prepare()` 先取
-      CDN manifest、取不到就直接失败(不看本地存货),所以离线时 pi 本次不可用。这与
-      Claude Code 一致(同样只读 `getReadyBinaryPath`),但与 **Codex 不同**——codex 读
-      `getCachedBinaryStatus`,会接受早前已 `.verified` 的旧版本,离线仍可用。想让 pi
-      也离线可用属于行为变更,需先确认再改,不要以"和 codex 对齐"为由顺手改回。
+      未安装且无法下载时**不阻塞启动**，本次不注册 Pi，但其它本地功能仍可用。
+      **离线启动（2026-11-11 用户确认）**：启动使用 `prepare(..., { localOnly: true })`，
+      不以 CDN 可达作为已安装 Pi 的使用条件。显式选择先由内核管理器验证；未选择时
+      复用带 `.verified` 且通过版本探针的本地安装，也可采用已下载并验证的更新。
+      `pi-host.resolvePiBinaryPath` 仍只读本次准备成功回填的 `getReadyBinaryPath('pi')`，
+      不直接绕到 `getCachedBinaryStatus`。选定版本缺失或损坏时不偷偷换成更高残留版本。
+      常规安装与更新仍走原 manifest 验证链；本地启动语义覆盖原先“离线不注册 Pi”的裁决。
+      回归见 `agent-binaries/__tests__/startup-policy.test.ts` 的本地发现与显式选择用例。
+      离线可用还要求运行环境本身完整：发行验收不能只跑 `--version`，需在无外部
+      `node_modules` 的干净 Windows 环境启动 RPC，加载使用 `typebox` 的 TypeScript
+      扩展并注册工具，检查 `jiti` / Babel 转换器等随包依赖。此验收不需要调用云端模型；
+      修改安装包或关闭 Electron ASAR 完整性校验不属于正式修复路径。
       发布入口**不在本仓**:
       二进制发布统一走 cindy 同级目录的独立工程 `cindy-binary-release`
       (`pnpm release:pi -- --region cn|global`,默认 canary 通道;配置与安全机制见

@@ -10,10 +10,13 @@ import {
 } from '@/../shared/appearanceSettings';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-let changed: (settings: AppearanceSettings) => void;
+const listeners = new Set<(settings: AppearanceSettings) => void>();
+const changed = (settings: AppearanceSettings) => listeners.forEach(listener => listener(settings));
 let saved: AppearanceSettings;
 let setPatch: ReturnType<typeof vi.fn>;
+let resetFields: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  listeners.clear();
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -32,13 +35,14 @@ beforeEach(() => {
     appearanceSettings: {
       getSync: () => saved,
       onChanged: (listener: typeof changed) => {
-        changed = listener;
-        return () => {};
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
       },
       setPatch: (setPatch = vi.fn(async (patch: Partial<AppearanceSettings>) => {
         saved = { ...saved, ...patch };
         changed(saved);
       })),
+      resetFields: (resetFields = vi.fn()),
     },
   });
   saved = { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-window', wallpaperBlur: 4 };
@@ -89,6 +93,7 @@ describe('wallpaper blur gesture persistence', () => {
     expect(visibility()).toBe('0.6');
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
     await waitFor(() => expect(setPatch).toHaveBeenCalledTimes(2));
+    expect(resetFields).not.toHaveBeenCalled();
     expect(visibility()).toBe('0');
     expect(saved.desktopVisibility).toBeNull();
   });
@@ -155,6 +160,7 @@ describe('wallpaper blur gesture persistence', () => {
     pointer(visibilityTrack(), 'pointerdown', 80);
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
     await waitFor(() => expect(setPatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ wallpaperVisibility: null })));
+    expect(resetFields).not.toHaveBeenCalled();
     expect(visibility()).not.toBe('0.8');
   });
   // Unit integration: zero visibility suspends rendering and interaction, but
@@ -232,8 +238,8 @@ describe('wallpaper blur gesture persistence', () => {
     render(view());
     pointer(track(), 'pointerdown', 80);
     fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.reset' }));
-    await waitFor(() => expect(setPatch).toHaveBeenCalledTimes(1));
-    expect(setPatch).toHaveBeenCalledWith(expect.objectContaining({ wallpaperBlur: null }));
+    await waitFor(() => expect(setPatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ wallpaperBlur: null })));
+    expect(resetFields).not.toHaveBeenCalled();
     expect(blur()).toBe('');
     expect(screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' }).getAttribute('aria-valuenow')).toBe('0');
   });

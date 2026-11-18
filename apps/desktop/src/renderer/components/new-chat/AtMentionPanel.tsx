@@ -135,7 +135,7 @@ interface AtMentionPanelProps {
   maxHeight?: number;
 }
 
-const ACTION_ICONS: Record<ComposerSuggestionAction['id'], typeof Paperclip> = {
+const ACTION_ICONS: Partial<Record<ComposerSuggestionAction['id'], typeof Paperclip>> = {
   'retry-plugins': RotateCw,
   'attach-files': Paperclip,
   'new-goal': Target,
@@ -321,7 +321,7 @@ export function AtMentionPanel({
 
   const renderActionRow = (action: ComposerSuggestionAction, idx: number) => {
     const focused = idx === focusedIndex;
-    const Icon = ACTION_ICONS[action.id];
+    const Icon = ACTION_ICONS[action.id] ?? Plug;
     const isCheckbox = action.checked !== undefined;
     // Collaboration keeps its Thinking-Orange enabled state from the legacy
     // `+` menu (id-driven presentation; the data model stays lean).

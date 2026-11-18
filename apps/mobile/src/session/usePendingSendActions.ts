@@ -78,10 +78,13 @@ export function usePendingOutboxActions({
 
 /** Shared action object for message rows; look up queue entries when clicked. */
 export function usePendingSendActions({
+  waitingComputerName, reconnectComputer,
   beginQueueEdit, moveQueueItem, queueBusy, queueSelectedClientId,
   removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId,
   setQueueSelectedClientId, steerQueueItem,
 }: {
+  waitingComputerName?: string;
+  reconnectComputer?: () => void;
   beginQueueEdit(item: QueuedRemoteMessage): void;
   moveQueueItem: PendingSendBubbleActions['onMove'];
   queueBusy: boolean;
@@ -95,6 +98,7 @@ export function usePendingSendActions({
 }) {
   return useMemo<PendingSendBubbleActions>(
     () => ({
+      waitingComputerName, onReconnectComputer: reconnectComputer,
       busy: queueBusy,
       selectedClientId: queueSelectedClientId,
       onSelect: setQueueSelectedClientId,
@@ -118,6 +122,6 @@ export function usePendingSendActions({
       onRetryOutbox: retryOutboxItem,
       onRemoveOutbox: removeOutboxItem,
     }),
-    [beginQueueEdit, setQueueSelectedClientId, moveQueueItem, queueBusy, queueSelectedClientId, removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId, steerQueueItem],
+    [waitingComputerName, reconnectComputer, beginQueueEdit, setQueueSelectedClientId, moveQueueItem, queueBusy, queueSelectedClientId, removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId, steerQueueItem],
   );
 }

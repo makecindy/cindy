@@ -142,6 +142,12 @@ export interface SessionLifecycleHooks {
 }
 
 export interface MakerDeps {
+  /** Capture the request owner before dispatch and retain it through final usage delivery. */
+  createOneShotUsageRecorder?: (agentKind: AgentKind, opts?: OneShotOptions) => {
+    onUsage: NonNullable<OneShotOptions['onUsage']>;
+    close(): void;
+  };
+
   agents: Partial<Record<AgentKind, BaseAgent>>;
   /**
    * 可选：在同账号另一台电脑上启动 Agent(CreateSessionOptions.agentDeviceId)。返回的句柄由
@@ -185,6 +191,8 @@ export class SessionCreationCleanupPendingError extends Error {
 }
 
 export interface CreateSessionOptions extends StartSessionOptions {
+  /** Host-only opt-in: retain confirmed-exit evidence for bounded startup recovery. */
+  preserveStartupStoppedError?: boolean;
   /** Host caller preferences before generated context; retained only by the live Session. */
   hostStartupPreferences?: SessionStartupPreferences;
   agentKind: AgentKind;
@@ -570,9 +578,11 @@ export class Maker {
   protected readonly visionBridge: import('./types/vision-bridge.js').VisionBridgeHook | undefined;
   private readonly toolLoopReviewer: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer | undefined;
   private readonly startDeviceAgentSession: MakerDeps['startDeviceAgentSession'];
+  private readonly createOneShotUsageRecorder: MakerDeps['createOneShotUsageRecorder'];
 
   constructor(deps: MakerDeps) {
     this.agents = deps.agents;
+    this.createOneShotUsageRecorder = deps.createOneShotUsageRecorder;
     this.storage = deps.storage;
     this.startDeviceAgentSession = deps.startDeviceAgentSession;
     this.visionBridge = deps.visionBridge;
@@ -790,7 +800,7 @@ export class Maker {
     });
 
     const startedAt = Date.now();
-    const startOpts: CreateSessionOptions = { ...opts };
+    const { preserveStartupStoppedError, ...startOpts }: CreateSessionOptions = { ...opts };
     const notifyStartFailed = async (
       stage: SessionStartFailureContext['stage'],
       error: unknown,
@@ -951,7 +961,7 @@ export class Maker {
           });
         });
       }
-      throw startupError;
+      throw runtimeStopped && preserveStartupStoppedError ? error : startupError;
     }
     const rejectCancelledStartup = async (): Promise<never> => {
       let cleanupFailed = false;
@@ -1058,6 +1068,7 @@ export class Maker {
           workDir: opts.workingDir,
           title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
           model: opts.model,
+          providerId: startOpts.providerId,
           workspaceKind: opts.workspaceKind,
           projectDir: opts.projectDir,
           effort: opts.effort,
@@ -1869,7 +1880,21 @@ export class Maker {
    * 决定 swallow (起标题) 还是上报 (skillReview)。
    */
   async oneShot(agentKind: AgentKind, prompt: string, opts?: OneShotOptions): Promise<string> {
-    return this.requireAgent(agentKind).oneShot(prompt, opts);
+    const recorder = this.createOneShotUsageRecorder?.(agentKind, opts);
+    try {
+      return await this.requireAgent(agentKind).oneShot(prompt, {
+        ...opts,
+        onUsage: async usage => {
+          // Accounting must not turn a paid response into a request failure/retry.
+          try { await recorder?.onUsage(usage); }
+          catch { this.logger.warn('oneShot usage could not be recorded'); }
+          try { await opts?.onUsage?.(usage); }
+          catch { this.logger.warn('oneShot usage observer failed'); }
+        },
+      });
+    } finally {
+      recorder?.close();
+    }
   }
 
   /**
@@ -1970,10 +1995,17 @@ export class Maker {
     if (!agent) {
       return { binaryReady: false, binaryPath: null, authReady: false };
     }
+    // A host may resolve the runtime lazily; a missing install is a status, not an IPC error.
+    let binaryPath: string | null = null;
+    try {
+      binaryPath = agent.getBinaryPath() || null;
+    } catch {
+      binaryPath = null;
+    }
     const auth = await agent.getAuthState();
     return {
-      binaryReady: !!agent.getBinaryPath(),
-      binaryPath: agent.getBinaryPath(),
+      binaryReady: binaryPath !== null,
+      binaryPath,
       authReady: auth.authenticated,
       identity: auth.identity,
     };

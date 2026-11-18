@@ -16,6 +16,12 @@ import {
   type LocalModelVariant,
 } from '@cindy/model-providers';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from './llamaCpp.js';
+import {
+  initialDownloadProgress,
+  isDownloadProgressActive,
+  type DownloadProgress,
+  type DownloadProgressPhase,
+} from './downloadProgress.js';
 
 export const MANAGED_OLLAMA_PROVIDER_ID = 'cindy-local-ollama';
 export const MANAGED_LMSTUDIO_PROVIDER_ID = 'cindy-local-lmstudio';
@@ -119,6 +125,45 @@ export interface LocalRuntimeInstallProgress {
   bytesPerSecond?: number;
   done: boolean;
   error?: string;
+  /** Standard display progress for the shared DownloadMeter (Main attaches it while installing). */
+  download?: DownloadProgress;
+}
+
+const INSTALL_DOWNLOAD_PHASE: Record<LocalRuntimeInstallPhase, DownloadProgressPhase> = {
+  resolving: 'preparing',
+  downloading: 'downloading',
+  verifying: 'verifying',
+  extracting: 'installing',
+  starting: 'installing',
+  success: 'completed',
+  error: 'failed',
+  cancelled: 'cancelled',
+};
+
+export function downloadPhaseOfInstall(phase: LocalRuntimeInstallPhase): DownloadProgressPhase {
+  return INSTALL_DOWNLOAD_PHASE[phase];
+}
+
+/**
+ * What the install meter shows. Steps after the archive (starting the app, final result) and
+ * the Renderer's own optimistic states carry no `download`; they keep the last bytes shown.
+ */
+export function installDownloadProgress(
+  progress: LocalRuntimeInstallProgress,
+  last: DownloadProgress | null = null,
+): DownloadProgress {
+  if (progress.download) return progress.download;
+  const phase = downloadPhaseOfInstall(progress.phase);
+  const base = last ?? initialDownloadProgress(phase, progress.total ?? null);
+  const done = phase === 'completed' && base.total !== null;
+  return {
+    ...base,
+    phase,
+    speedBps: 0,
+    etaSeconds: null,
+    retryReason: undefined,
+    ...(done ? { loaded: base.total as number, percent: 100 } : {}),
+  };
 }
 
 export interface LocalInstalledModel {
@@ -179,6 +224,49 @@ export interface LocalModelPullProgress {
   bytesPerSecond?: number;
   done: boolean;
   error?: string;
+  /** Standard display progress for the shared DownloadMeter; absent on stored paused pulls. */
+  download?: DownloadProgress;
+}
+
+const PULL_DOWNLOAD_PHASE: Record<LocalModelPullPhase, DownloadProgressPhase> = {
+  starting: 'preparing',
+  manifest: 'preparing',
+  downloading: 'downloading',
+  verifying: 'verifying',
+  writing: 'installing',
+  success: 'completed',
+  error: 'failed',
+  paused: 'paused',
+  cancelled: 'cancelled',
+};
+
+export function downloadPhaseOfPull(phase: LocalModelPullPhase): DownloadProgressPhase {
+  return PULL_DOWNLOAD_PHASE[phase];
+}
+
+/** What the pull meter shows, including snapshots stored before `download` existed. */
+export function pullDownloadProgress(progress: LocalModelPullProgress): DownloadProgress {
+  const phase = downloadPhaseOfPull(progress.phase);
+  if (progress.download) {
+    // A settled pull (paused, failed, cancelled, done) outranks the last live meter frame.
+    return isDownloadProgressActive(phase)
+      ? progress.download
+      : {
+          ...progress.download,
+          phase,
+          speedBps: 0,
+          etaSeconds: null,
+          retryReason: undefined,
+          ...(phase === 'completed' ? { percent: 100 } : {}),
+        };
+  }
+  const total = progress.total && progress.total > 0 ? progress.total : null;
+  return {
+    ...initialDownloadProgress(phase, total),
+    loaded: progress.completed ?? 0,
+    percent: progress.percent ?? (phase === 'completed' ? 100 : total ? 0 : null),
+    speedBps: phase === 'downloading' ? (progress.bytesPerSecond ?? 0) : 0,
+  };
 }
 
 export type OllamaPullErrorKind = 'not-gguf' | 'not-found' | 'unauthorized' | 'refused' | 'generic';
@@ -212,8 +300,10 @@ export function classifyOllamaPullError(value: unknown, pullName?: string): Olla
   if (typeof value === 'string' && OLLAMA_PULL_ERROR_KINDS.has(value as OllamaPullErrorKind)) {
     return value as OllamaPullErrorKind;
   }
-  if (pullName && isHfMlxPullName(pullName)) return 'not-gguf';
   const text = pullErrorText(value).toLowerCase();
+  // DNS failures do not establish that a model is missing or access is denied.
+  if (text.includes('no such host') || /\benotfound\b/.test(text)) return 'generic';
+  if (pullName && isHfMlxPullName(pullName)) return 'not-gguf';
   if (text.includes('not gguf') || text.includes('not compatible with llama.cpp')) {
     return 'not-gguf';
   }
@@ -225,12 +315,7 @@ export function classifyOllamaPullError(value: unknown, pullName?: string): Olla
   ) {
     return 'unauthorized';
   }
-  if (
-    text.includes('404') ||
-    text.includes('not found') ||
-    text.includes('file does not exist') ||
-    text.includes('no such host')
-  ) {
+  if (text.includes('404') || text.includes('not found') || text.includes('file does not exist')) {
     return 'not-found';
   }
   if (

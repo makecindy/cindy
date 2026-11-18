@@ -42,6 +42,7 @@ import { AttentionDot, type DotTone } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMainViews';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
+import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { SidebarIconButton, SIDEBAR_RAIL_ICON_BUTTON_CLASS } from './SidebarIconButton';
@@ -355,6 +356,7 @@ export function SidebarRailNavigation({
   };
   const showSearch = entries.isVisible('search') || forceSearch || searchOpen;
   const tiles = entries.order.filter((id) => entries.isVisible(id) || (id === 'search' && showSearch));
+  const pluginNavigation = readPluginUiEntries('sidebar.navigation');
 
   return (
     <>
@@ -385,6 +387,7 @@ export function SidebarRailNavigation({
           />
         );
       })}
+      {pluginNavigation.length > 0 && <PluginUiSlotControls entries={pluginNavigation} appearance="rail" />}
       <SidebarNavigationMoreMenu
         hiddenIds={entries.hidden}
         actions={actions}
@@ -546,6 +549,8 @@ export function SidebarTopNav({
   const renderRows = (ids: readonly SidebarNavigationEntryId[]) => ids
     .map((id) => <Fragment key={id}>{rowFor(id)}</Fragment>);
   const orderedNavigationRows = renderRows(orderedIds);
+  const pluginNavigation = readPluginUiEntries('sidebar.navigation');
+  const pluginRows = pluginNavigation.length ? <PluginUiSlotControls entries={pluginNavigation} sessionId={null} appearance="navigation" /> : null;
   const customizeRow = showScrollable ? (
     <SidebarNavigationMoreMenu
       hiddenIds={entries.hidden}
@@ -594,6 +599,7 @@ export function SidebarTopNav({
         ) : !showSearch ? (
           <div className="flex flex-col gap-0.5 pr-3 pl-3">
             {orderedNavigationRows}
+            {pluginRows}
             {customizeRow}
           </div>
         ) : (
@@ -615,6 +621,7 @@ export function SidebarTopNav({
                 results follow them instead of replacing them. */}
             <div className="-mt-1.5 flex flex-col gap-0.5 pr-3 pl-3">
               {rowsAfterSearch}
+              {pluginRows}
                 {customizeRow}
             </div>
           </>
@@ -658,6 +665,7 @@ export function SidebarTopNav({
           orderedNavigationRows
         ))}
       {showScrollable && !customizing && customizeRow}
+      {showScrollable && !customizing && pluginRows}
     </div>
   );
 }

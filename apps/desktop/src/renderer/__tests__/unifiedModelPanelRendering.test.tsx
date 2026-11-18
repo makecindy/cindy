@@ -25,6 +25,9 @@ import { useTransientModelPickerPreferences } from '@/components/new-chat/modelP
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import type { ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import type { LocalCatalogFailure } from '@/lib/localCatalogLoadState';
+import { toggleModelGroupFavorite } from '@/features/model-groups/modelGroupFavorites';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -105,6 +108,9 @@ vi.mock('@/hooks/useModelPricing', () => ({
 }));
 
 const providersRef = vi.hoisted(() => ({
+  loading: false,
+  error: null as LocalCatalogFailure | null,
+  refetch: vi.fn(async () => true),
   providers: [
     {
       id: 'anthropic',
@@ -208,7 +214,10 @@ const providersRef = vi.hoisted(() => ({
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersRef.providers, providerOrder: [] }),
+  useProviders: () => ({
+    providers: providersRef.providers, providerOrder: [], loading: providersRef.loading,
+    error: providersRef.error, loadFailed: !!providersRef.error, refetch: providersRef.refetch,
+  }),
 }));
 const remoteProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
@@ -364,6 +373,264 @@ beforeEach(() => {
   resetRecentModels();
 });
 
+// #10434, unit: the real unified picker previously dropped thinkingToggle and
+// had no live callback. Catalog-only tests missed this user-visible dead end.
+// Minimal input: one official Pi MiMo row, empty efforts, current thinking=true.
+describe('MiMo thinking switch in the actual unified picker', () => {
+  const oldProviders = providersRef.providers;
+  beforeEach(() => {
+    providersRef.providers = [{ ...buildUserProvider({ id: 'mimo-fixture', name: 'MiMo', runtimes: { pi: {
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }],
+    } } }, { modelRegistry: BUNDLED_CATALOG.modelRegistry }), connected: true }];
+  });
+  afterEach(() => { providersRef.providers = oldProviders; });
+
+  it('switches live thinking off/on and leaves rejected writes and model memory unchanged', async () => {
+    const setThinking = vi.fn();
+    const write = vi.fn(async (_enabled: boolean) => {});
+    function Picker() {
+      const [enabled, setEnabled] = React.useState(true);
+      return <ModelSelectorContent remoteAgent={undefined} vendorKey="pi" unifiedAgents={['pi']}
+        modelId="mimo-v2.6-pro" currentProviderId="mimo-fixture" effort="high"
+        onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()}
+        thinkingEnabled={enabled} onThinkingChange={async value => { await write(value); setEnabled(value); }}
+        modelMemory={{ getEffort: () => undefined, getFast: () => undefined,
+          setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => true, setThinking }} />;
+    }
+    render(<Picker />);
+    const flyout = await openRowFlyout('MiMo V2.6 Pro');
+    const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(within(flyout).queryByRole('slider')).toBeNull();
+    for (const expected of ['false', 'true']) {
+      await act(async () => fireEvent.click(toggle));
+      expect(toggle.getAttribute('aria-checked')).toBe(expected);
+    }
+    write.mockRejectedValueOnce(new Error('fixture write failed'));
+    await act(async () => fireEvent.click(toggle));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(setThinking).not.toHaveBeenCalled();
+  });
+
+  it('edits only the non-selected model preference, without changing the active model', async () => {
+    let remembered: boolean | undefined;
+    const setThinking = vi.fn((_agent, _provider, _model, value: boolean) => { remembered = value; });
+    const clearThinking = vi.fn(() => { remembered = undefined; });
+    const onThinkingChange = vi.fn();
+    renderPanel({ vendorKey: 'pi', unifiedAgents: ['pi'], modelId: 'other-model',
+      currentProviderId: 'mimo-fixture', onThinkingChange,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined,
+        setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => remembered, setThinking, clearThinking } });
+    const flyout = await openRowFlyout('MiMo V2.6 Pro');
+    const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    await act(async () => fireEvent.click(toggle));
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(setThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro', false);
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(onProviderChange).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(within(flyout).getByText('恢复推荐')));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(remembered).toBeUndefined();
+    expect(clearThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro');
+    expect(within(flyout).queryByText('恢复推荐')).toBeNull();
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(onProviderChange).not.toHaveBeenCalled();
+  });
+
+  // PR #10445 review: existing switch tests did not exercise reset. Unit tier;
+  // minimal input is a live Pi MiMo row with thinking=false. Observe the real
+  // picker state and saved preference across rejected, failed and successful writes.
+  it.each(['draft', 'session'] as const)('restores live thinking only after an accepted %s write', async kind => {
+    let remembered: boolean | undefined = false;
+    const clearThinking = vi.fn(() => { remembered = undefined; });
+    const clearFast = vi.fn();
+    const write = vi.fn(async (_enabled: boolean): Promise<boolean> => true);
+    const configure = vi.fn(() => true);
+    const resetFast = vi.fn(() => true);
+    function Picker() {
+      const [enabled, setEnabled] = React.useState(false);
+      return <ModelSelectorContent remoteAgent={undefined} vendorKey="pi" unifiedAgents={['pi']}
+        {...(kind === 'session' ? { sessionEngineFilter: {
+          currentAgent: 'pi' as const, runtimeAgent: 'pi' as const, onCrossEngineSelect: vi.fn(),
+        } } : { onUnifiedSelect: configure })}
+        modelId="mimo-v2.6-pro" currentProviderId="mimo-fixture" effort="high"
+        onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()} onFastModeChange={resetFast}
+        thinkingEnabled={enabled} onThinkingChange={async value => {
+          if (!await write(value)) return false;
+          setEnabled(value); remembered = value; return true;
+        }}
+        modelMemory={{ getEffort: () => undefined, getFast: () => undefined,
+          setEffort: vi.fn(), setFast: vi.fn(), clearFast,
+          getThinking: () => remembered, setThinking: vi.fn(), clearThinking }} />;
+    }
+    render(<Picker />);
+    const flyout = await openRowFlyout('MiMo V2.6 Pro');
+    const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+    const reset = () => within(flyout).getByText('恢复推荐');
+    for (const failure of ['rejected', 'false'] as const) {
+      if (failure === 'rejected') write.mockRejectedValueOnce(new Error('fixture rejected'));
+      else write.mockResolvedValueOnce(false);
+      await act(async () => fireEvent.click(reset()));
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      expect(remembered).toBe(false);
+      expect(clearThinking).not.toHaveBeenCalled();
+      expect(clearFast).not.toHaveBeenCalled();
+    }
+    // A later default-config write fails after thinking was restored: roll the
+    // switch back and keep its saved override, rather than leaving half a reset.
+    (kind === 'draft' ? configure : resetFast).mockReturnValueOnce(false);
+    await act(async () => fireEvent.click(reset()));
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(remembered).toBe(false);
+    expect(clearThinking).not.toHaveBeenCalled();
+    expect(clearFast).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(reset()));
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(remembered).toBeUndefined();
+    expect(within(flyout).queryByText('恢复推荐')).toBeNull();
+  });
+
+  // PR #10445 cross-engine reset regression (model-selector-unified §1.4, unit).
+  // Existing cases only reset Pi to Pi. Minimal missing input: a Codex override
+  // with thinking=false saved in the recommended Pi slot. Exercise the real
+  // picker and observe both the saved preference and the resulting default UI.
+  it.each(['draft', 'unselected', 'legacy-mirror'] as const)(
+    'clears recommended-engine thinking after a cross-engine reset (%s)', async kind => {
+      const route = { baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1', wireProtocol: 'openai-chat' as const,
+        models: [{ id: 'mimo-v2.6-pro', name: 'MiMo V2.6 Pro' }] };
+      const provider = buildUserProvider({ id: 'mimo-fixture', name: 'MiMo', runtimes: { pi: route, codex: route } },
+        { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      const piModel = { ...provider.models.pi![0], recommendedAgent: 'pi' as const };
+      providersRef.providers = [{ ...provider, connected: true,
+        models: { pi: [piModel], codex: [{ ...piModel, thinkingToggle: false }] } }];
+      setModelEngineOverride('mimo-fixture', 'mimo-v2.6-pro', 'codex');
+      let remembered: boolean | undefined = false;
+      const clearThinking = vi.fn((_agent, _provider, _model) => { remembered = undefined; });
+      const setThinking = vi.fn((_agent, _provider, _model, value: boolean) => { remembered = value; });
+      const configure = vi.fn(() => true);
+      const onThinkingChange = vi.fn();
+      function Picker() {
+        const [engine, setEngine] = React.useState<'codex' | 'pi'>('codex');
+        const [, refreshMemory] = React.useReducer(value => value + 1, 0);
+        return <ModelSelectorContent remoteAgent={undefined} vendorKey={engine} unifiedAgents={['pi', 'codex']}
+          modelId={kind === 'draft' ? 'mimo-v2.6-pro' : 'other-model'} currentProviderId="mimo-fixture" effort="high"
+          onModelChange={vi.fn()} onEffortChange={vi.fn()} onProviderChange={vi.fn()}
+          thinkingEnabled={remembered ?? true} onThinkingChange={onThinkingChange}
+          onUnifiedSelect={() => { if (!configure()) return false; setEngine('pi'); return true; }}
+          modelMemory={{ getEffort: () => undefined, getFast: () => undefined,
+            setEffort: vi.fn(), setFast: vi.fn(), getThinking: agent => agent === 'pi' ? remembered : undefined,
+            setThinking: (agent, provider, model, enabled) => {
+              setThinking(agent, provider, model, enabled); refreshMemory();
+            }, ...(kind === 'legacy-mirror' ? {} : { clearThinking: (agent, provider, model) => {
+              clearThinking(agent, provider, model); refreshMemory();
+            } }) }} />;
+      }
+      render(<Picker />);
+      const flyout = await openRowFlyout('MiMo V2.6 Pro');
+      const reset = await within(flyout).findByText('恢复推荐');
+      expect(rowFor('MiMo V2.6 Pro').querySelector('[data-unified-triple]')?.getAttribute('title')).toContain('Codex');
+      if (kind === 'draft') {
+        configure.mockReturnValueOnce(false);
+        await act(async () => fireEvent.click(reset));
+        expect(remembered).toBe(false);
+        expect(getModelEngineOverride('mimo-fixture', 'mimo-v2.6-pro')).toBe('codex');
+        expect(clearThinking).not.toHaveBeenCalled();
+      }
+      await act(async () => fireEvent.click(reset));
+      expect(getModelEngineOverride('mimo-fixture', 'mimo-v2.6-pro')).toBeUndefined();
+      if (kind === 'legacy-mirror') {
+        expect(remembered).toBe(true);
+        expect(setThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro', true);
+      } else {
+        expect(remembered).toBeUndefined();
+        expect(clearThinking).toHaveBeenCalledWith('pi', 'mimo-fixture', 'mimo-v2.6-pro');
+      }
+      const toggle = await within(flyout).findByRole('switch', { name: 'newChat.modelSelector.thinking' });
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+      expect(within(flyout).queryByText('恢复推荐')).toBeNull();
+      expect(onThinkingChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['favorite', 'recent'])('does not expose a global thinking edit in an unselected %s copy', async kind => {
+    const copy = { providerId: 'mimo-fixture', modelId: 'mimo-v2.6-pro', agent: 'pi' as const };
+    const uid = kind === 'favorite' ? addModelFavorite(copy) : recordRecentModel(copy, 1000);
+    const onThinkingChange = vi.fn();
+    const setThinking = vi.fn();
+    renderPanel({ vendorKey: 'pi', unifiedAgents: ['pi'], modelId: 'mimo-v2.6-pro',
+      currentProviderId: 'mimo-fixture', onThinkingChange,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined,
+        setEffort: vi.fn(), setFast: vi.fn(), getThinking: () => true, setThinking } });
+    if (kind === 'recent') await act(async () => {
+      fireEvent.click(document.querySelector('[data-rail-item="recent"]') as HTMLElement);
+    });
+    const row = document.querySelector(kind === 'favorite'
+      ? `[data-unified-anchor="fav::${uid}"]` : '[data-unified-anchor^="recent::"]') as HTMLElement;
+    if (kind === 'recent') {
+      // Recent snapshots already have no edit affordance; keep that boundary.
+      expect(within(row).queryByRole('button', { name: '自定义' })).toBeNull();
+    } else {
+      const flyout = await openFlyoutForRow(row);
+      await within(flyout).findByText('Pi');
+      expect(within(flyout).queryByRole('switch', { name: 'newChat.modelSelector.thinking' })).toBeNull();
+    }
+    expect(onThinkingChange).not.toHaveBeenCalled();
+    expect(setThinking).not.toHaveBeenCalled();
+  });
+});
+
+// model-groups.md §6: users without modes should not see an unused rail entry.
+// Existing coverage only supplies a populated config. Minimal input: empty routes;
+// tier: unit, real ModelSelectorContent. Also cover removing the last mode while open.
+it('shows the model-groups rail only while modes exist', async () => {
+  const picker = { config: { routes: [] }, active: null, onSelect: vi.fn(), onManage: vi.fn() };
+  const props = { remoteAgent: undefined, modelId: 'claude-opus-5', effort: 'medium', onModelChange: vi.fn(), onEffortChange: vi.fn() };
+  const view = renderPanel({ ...props, modelGroups: picker });
+  expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
+  view.rerender(<ModelSelectorContent {...props} modelGroups={{ ...picker, config: {
+    routes: [{ id: 'mode', name: 'My mode', strategy: 'order', candidates: [] }],
+  } }} />);
+  const rail = document.querySelector('[data-rail-item="model-groups"]');
+  expect(rail).not.toBeNull();
+  await act(async () => fireEvent.click(rail!));
+  expect(screen.getByText('My mode')).toBeTruthy();
+  view.rerender(<ModelSelectorContent {...props} modelGroups={picker} />);
+  expect(document.querySelector('[data-rail-item="model-groups"]')).toBeNull();
+  expect(document.querySelector('[data-rail-item="all"][aria-pressed="true"]')).not.toBeNull();
+});
+
+// #10207 / #10235 merge regression: local loading must not label a populated
+// mode section empty. Existing cases cover model favorites, not pinned modes.
+// Minimal input: pending local catalog + one mode; tier: unit, real picker.
+it('keeps a mode selectable in all and favorites while the local catalog is pending', async () => {
+  const readyProviders = providersRef.providers;
+  const modeId = 'pending-catalog-mode';
+  let favorited = false;
+  providersRef.providers = [];
+  providersRef.loading = true;
+  onTestFinished(() => {
+    providersRef.providers = readyProviders;
+    providersRef.loading = false;
+    if (favorited) act(() => toggleModelGroupFavorite(modeId));
+  });
+  const onSelect = vi.fn();
+  renderPanel({ modelGroups: {
+    config: { routes: [{ id: modeId, name: 'Ready mode', strategy: 'order', candidates: [] }] },
+    active: null, onSelect, onManage: vi.fn(),
+  } });
+  await act(async () => fireEvent.click(document.querySelector(`[data-model-group-favorite="${modeId}"]`)!));
+  favorited = true;
+  for (const rail of ['all', 'favorites']) {
+    await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
+    expect(screen.queryByText('newChat.modelSelector.trigger.loading')).toBeNull();
+    expect(screen.queryByText('无匹配模型')).toBeNull();
+    await act(async () => fireEvent.click(screen.getByText('Ready mode')));
+    expect(onSelect).toHaveBeenLastCalledWith({ type: 'route', id: modeId });
+  }
+  expect(onSelect).toHaveBeenCalledTimes(2);
+});
+
 describe('分享模型收藏', () => {
   const received = {
     shareId: 's1', memberId: 'm1', providerId: 'anthropic', providerLabel: 'Anthropic',
@@ -380,6 +647,34 @@ describe('分享模型收藏', () => {
     remoteProvidersRef.providers = [];
     setDataOwnerGeneration(null, 0);
     vi.restoreAllMocks();
+  });
+
+  // #10207 review: local pending must not mask a ready favorite from another source.
+  // Existing loading cases had no cross-source rows. Minimal input: empty local
+  // snapshot plus one ready shared favorite; tier: unit, real selector/panel path.
+  it('keeps a ready shared favorite selectable while the local catalog is pending', async () => {
+    const readyProviders = providersRef.providers;
+    addModelFavorite({ providerId: providerShareFavoriteSource(received), modelId: 'claude-opus-5', agent: 'cc', effort: 'medium' });
+    providersRef.providers = [];
+    providersRef.loading = true;
+    onTestFinished(() => { providersRef.providers = readyProviders; providersRef.loading = false; });
+    const onUnifiedSelect = vi.fn();
+    renderPanel({
+      remoteAgent: { devices: [{ deviceId: 'share:s1', name: 'Shared models' }], selectedDeviceId: null },
+      onUnifiedSelect,
+    });
+    for (const rail of ['all', 'favorites']) {
+      await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
+      const row = rowFor('Opus 5');
+      expect(row.getAttribute('aria-disabled')).not.toBe('true');
+      expect(screen.queryByText('newChat.modelSelector.trigger.loading')).toBeNull();
+      await act(async () => fireEvent.click(row));
+      expect(onUnifiedSelect).toHaveBeenLastCalledWith(expect.objectContaining({
+        providerId: 'anthropic', modelId: 'claude-opus-5',
+        agentDevice: expect.objectContaining({ deviceId: 'share:s1' }),
+      }));
+    }
+    expect(onUnifiedSelect).toHaveBeenCalledTimes(2);
   });
 
   it('点击收藏后可见、可重新选择，完整配置保存在受邀者账号', async () => {
@@ -600,6 +895,42 @@ describe('统一面板 · 配置应用与收尾一致', () => {
 });
 
 describe('统一模型选择器面板', () => {
+  // #10253: the real selector must expose distinct IDs before selection. Existing
+  // routing tests use unique names and cannot detect indistinguishable options.
+  // Minimal input: two custom models with near-identical names; unit (jsdom).
+  it.each([true, false])('shows custom model IDs and selects the exact ID (unified=%s)', async (unifiedPanel) => {
+    const models = [
+      { id: 'deepseek-current', name: 'DeepSeek-V4.1-Flash' },
+      { id: 'deepseek-compat', name: 'DeepSeek V4.1 Flash' },
+    ];
+    const provider = {
+      id: 'custom-identity', name: 'Custom API', source: 'user',
+      agents: ['codex'], auth: { method: 'apiKey' }, routing: { codex: {} },
+      connected: true,
+      models: { codex: models.map((model) => ({ ...model, contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' })) },
+    } as ProviderView;
+    renderPanel({ providersOverride: [provider], vendorKey: 'codex', unifiedPanel,
+      currentProviderId: provider.id, modelId: '', effort: 'high' });
+    const findRow = (id: string) => screen.getByRole('option', { name: new RegExp(id) });
+    for (const model of models) expect(within(findRow(model.id)).getByText(model.id)).toBeTruthy();
+    await act(async () => fireEvent.click(findRow(models[1].id)));
+    expect(onProviderChange.mock.lastCall?.slice(0, 3)).toEqual([provider.id, models[1].id, 'high']);
+    if (unifiedPanel) {
+      await act(async () => fireEvent.click(within(findRow(models[0].id)).getByRole('button', { name: '存为收藏' })));
+      await act(async () => fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!));
+      expect(within(findRow(models[0].id)).getByText(models[0].id)).toBeTruthy();
+      await act(async () => fireEvent.keyDown(findRow(models[0].id), { key: 'Enter' }));
+      expect(onProviderChange.mock.lastCall?.slice(0, 3)).toEqual([provider.id, models[0].id, 'high']);
+      await act(async () => fireEvent.click(document.querySelector('[data-rail-item="provider:custom-identity"]')!));
+      expect(within(findRow(models[1].id)).getByText(models[1].id)).toBeTruthy();
+    }
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: models[1].id } });
+    expect(findRow(models[1].id)).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /deepseek-current/ })).toBeNull();
+    await act(async () => fireEvent.keyDown(findRow(models[1].id), { key: ' ' }));
+    expect(onProviderChange.mock.lastCall?.slice(0, 3)).toEqual([provider.id, models[1].id, 'high']);
+  });
+
   it('按分组陈列跨引擎联合列表,每行右侧常驻三元组', () => {
     renderPanel();
     const list = screen.getByRole('listbox');
@@ -4568,6 +4899,88 @@ describe('teammate settings selected location catalog', () => {
 });
 
 describe('Teammate settings with the real model picker', () => {
+  // #10207, unit: existing picker tests only supplied ready catalogs. A missing local
+  // snapshot must show loading, then update the open picker without rewriting the
+  // saved route. The real BotModelChainEditor -> ModelRouteSelector -> ModelSelector
+  // -> UnifiedModelPanel path runs here; only the catalog input is controlled.
+  it('shows a pending local catalog and updates the open teammate picker when it becomes ready', async () => {
+    const readyProviders = providersRef.providers;
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const change = vi.fn();
+    providersRef.providers = [];
+    providersRef.loading = true;
+    onTestFinished(() => { providersRef.providers = readyProviders; providersRef.loading = false; });
+    const view = render(<BotModelChainEditor value={[route]} onChange={change} />);
+    const picker = view.container.querySelector('button[aria-haspopup="listbox"]')!;
+    fireEvent.click(picker);
+    expect((await screen.findByRole('status')).textContent).toContain('newChat.modelSelector.trigger.loading');
+    expect(screen.queryByText('无匹配模型')).toBeNull();
+    expect(change).not.toHaveBeenCalled();
+
+    providersRef.providers = readyProviders;
+    providersRef.loading = false;
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    expect(picker.textContent).toContain('GPT-5.5');
+    expect(screen.queryByText('newChat.modelSelector.trigger.loading')).toBeNull();
+    expect(rowFor('GPT-5.5')).toBeTruthy();
+    expect(change).not.toHaveBeenCalled();
+
+    // The same mounted picker loses its usable snapshot on an owner switch.
+    providersRef.providers = [];
+    providersRef.loading = true;
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    expect(screen.getByRole('status').textContent).toContain('newChat.modelSelector.trigger.loading');
+    expect(screen.queryByText('GPT-5.6')).toBeNull();
+    providersRef.providers = readyProviders;
+    providersRef.loading = false;
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    await act(async () => { fireEvent.click(within(rowFor('GPT-5.6')).getByText('GPT-5.6')); });
+    expect(change).toHaveBeenLastCalledWith([expect.objectContaining({ providerId: 'openai', model: 'gpt-5.6' })]);
+  });
+
+  it('keeps a successful empty local catalog distinct from an initial failure and retry', async () => {
+    const readyProviders = providersRef.providers;
+    providersRef.providers = [];
+    onTestFinished(() => {
+      providersRef.providers = readyProviders;
+      providersRef.loading = false;
+      providersRef.error = null;
+      providersRef.refetch.mockClear();
+    });
+    const route = { harness: 'codex' as const, providerId: 'xd', model: 'gpt-5.5', effort: 'high', fastMode: false };
+    const change = vi.fn();
+    const view = render(<BotModelChainEditor value={[route]} onChange={change} />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    expect(await screen.findByText('无匹配模型')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+
+    providersRef.loading = true;
+    providersRef.error = { reason: 'owner-pending' };
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    expect(screen.getByRole('status').textContent).toContain('settings.providers.catalogRecovery.pending');
+    expect(screen.queryByText('无匹配模型')).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' })); });
+    expect(providersRef.refetch).toHaveBeenCalledOnce();
+
+    providersRef.error = null;
+    providersRef.loading = false;
+    providersRef.providers = readyProviders;
+    view.rerender(<BotModelChainEditor value={[route]} onChange={change} />);
+    expect(rowFor('GPT-5.5')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(change).not.toHaveBeenCalled();
+  });
+
+  it('keeps the healthy local catalog selectable when another model source is offline', async () => {
+    const select = vi.fn();
+    renderPanel({ unifiedPanel: true, onUnifiedSelect: select,
+      remoteAgent: { devices: [{ deviceId: 'offline-computer', name: 'Offline computer' }], selectedDeviceId: null },
+    });
+    expect(screen.queryByText('newChat.modelSelector.trigger.loading')).toBeNull();
+    await act(async () => { fireEvent.click(within(rowFor('GPT-5.5')).getByText('GPT-5.5')); });
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'xd', modelId: 'gpt-5.5' }));
+  });
+
   it('opens the real config and saves the selected source, harness, effort and Fast as one route', async () => {
     const change = vi.fn();
     function Editor() {
@@ -5150,4 +5563,33 @@ it('shows one account-pool overview and opens reset details without changing the
   expect(screen.getByRole('tooltip').textContent).toContain('soon@example.test');
   expect(onModelChange).not.toHaveBeenCalled();
   expect(command.mock.calls.every(([value])=>['preview','read'].includes((value as any).action))).toBe(true);
+});
+
+// Bug: a one-account source repeated its account under the title that already names it
+// ("OpenAI · a@x" then "a@x · Remaining 14%"). Review #11003: a generated name truncated to
+// 50 characters holds only part of a long account, so the full account line must stay.
+it.each([
+  { identity: 'only@example.test', truncated: false },
+  { identity: 'a-very-long-subscription-account-name@example.test', truncated: true },
+])('shows the full single account exactly once in the source rail tooltip: $identity', async ({ identity, truncated }) => {
+  const originalProviders = providersRef.providers;
+  if (truncated) providersRef.providers = (originalProviders as ProviderView[]).map(provider => provider.id === 'anthropic'
+    ? { ...provider, name: `Anthropic · ${identity}`.slice(0, 50) } : provider);
+  try {
+    const command = vi.fn(async ({providerId}: {providerId:string}) => ({
+      providerId,configured:providerId==='anthropic',accounts:providerId==='anthropic' ? [
+        {id:'a',identity,paused:false,status:'ready',running:0,limit:4,
+          usage:{claude:{sevenDay:{utilization:86,resetsAt:Date.now()/1000+3*3600}}}},
+      ] : [],
+    }));
+    Object.assign(window.electronAPI.subscriptionAccounts,{command});
+    renderPanel();
+    await act(async()=>{});
+    fireEvent.focus(document.querySelector('[data-rail-item="provider:anthropic"]')!);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip.textContent).toContain('14%');
+    expect(tooltip.textContent!.split(identity)).toHaveLength(2);
+  } finally {
+    providersRef.providers = originalProviders;
+  }
 });

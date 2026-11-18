@@ -43,8 +43,28 @@ function client(base: string, secrets: RelaySecrets): AgentNetClient | null {
     fetch: outboundFetch, createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createOutboundHttpAgent(url) }),
   });
 }
+/**
+ * This account's enrolled official identity, also after its certificate expired, or null. Only for the signed statement that this
+ * device's Agent-Net is off (agentNetRuntime.ts `agentNetTransportAttestation`): the certificate is renewed only while Agent-Net is on,
+ * and peers accept "off" from an expired, unrevoked certificate (agentNetTransportStatement.ts). Never enrolls; a device that never
+ * joined has none (and no peer asks it for a statement).
+ */
+export function officialAgentNetStatementIdentity(): Identity | null {
+  if (isAppSessionBoundaryPending() || activeSelfHostedRelay() || !getCurrentUserId()) return null;
+  const base = officialAgentNetBase(); if (!base) return null;
+  const slot = officialAgentNetSlot(base), secrets = readRelaySecrets(slot);
+  return secrets?.agentNet ? identity(slot, secrets) : null;
+}
 export function currentOfficialAgentNetClient(): AgentNetClient | null {
-  if (!getCurrentUserId() || isAppSessionBoundaryPending() || activeSelfHostedRelay()) return null;
+  return isAppSessionBoundaryPending() || activeSelfHostedRelay() ? null : outgoingOfficialAgentNetClient();
+}
+/** Account-handover close only: the boundary is pending but the outgoing owner
+ * has not been replaced yet. The caller must verify the outgoing scope is still
+ * current, match the result against the persisted route, and capture it
+ * synchronously before the owner commit. Not gated on the selected relay: a
+ * task hosted on the official service stays there after a relay switch. */
+export function outgoingOfficialAgentNetClient(): AgentNetClient | null {
+  if (!getCurrentUserId()) return null;
   const base = officialAgentNetBase(); if (!base) return null;
   const stored = readRelaySecrets(officialAgentNetSlot(base)); return stored ? client(base, stored) : null;
 }

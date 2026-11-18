@@ -90,6 +90,22 @@ function setup(authorize?: (action: ExecutorAction) => ExecutorGateDecision) {
 // 测试价值：异步 realpath 后，真实 stdout 入口必须保序、背压，关闭/重连不能收到旧回复，退出不丢尾部。
 // 旧用例只覆盖入站授权；最小输入是两个 JSON-RPC 输出和一次暂停的路径准备。unit，手动释放 Promise。
 describe('exec-server asynchronous output projection', () => {
+  it('identifies the executing computer for an unenforceable sandbox and preserves other RPC errors', async () => {
+    const { relay, replies, sentIds } = setup();
+    const message = 'sandbox intent cannot be enforced on this executor';
+    const failure = { id: 1, error: { code: -32602, message, data: { reason: 'unsupported' } } };
+    const other = { id: 2, error: { code: -32602, message: 'invalid cwd' } };
+    try {
+      for (const reply of [failure, other]) spawned.outputs[0].write(JSON.stringify(reply) + '\n');
+      await vi.waitFor(() => expect(replies).toHaveLength(2));
+      expect(replies[0]).toEqual({ ...failure, error: { ...failure.error,
+        message: expect.stringContaining('Check sandbox support and the Codex version on the executing computer'),
+      } });
+      expect(replies[1]).toEqual(other);
+      expect(sentIds()).toEqual([]);
+    } finally { relay.close(); }
+  });
+
   function holdProjection(workspace: ExecutorWorkspace) {
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
@@ -185,6 +201,18 @@ describe('exec-server asynchronous output projection', () => {
 });
 
 describe('exec-server relay with confirmation on this computer', () => {
+  it.skipIf(process.platform === 'win32')('replies to an invalid Windows path and continues the next request', async () => {
+    const { relay, replies, send, sentIds } = setup();
+    try {
+      send({ id: 1, method: 'fs/writeFile', params: { path: 'C:/Agent/Temp/claude/scratchpad/marker.txt', dataBase64: '' } });
+      send({ id: 2, method: 'fs/readFile', params: { path: path.join(root, 'normal.txt') } });
+      await vi.waitFor(() => expect(replies).toEqual([{ id: 1, error: { code: -32602, message: 'Windows absolute paths must be mapped before use' } }]));
+      expect(sentIds()).toContain(2);
+    } finally {
+      relay.close();
+    }
+  });
+
   it('uses an explicit session consent for subsequent Codex credential requests', async () => {
     const workspace = new ExecutorWorkspace({ workingDir: root });
     const gate = new ExecutorGate(workspace, 'full', Date.now, { confirmCredentials: true });

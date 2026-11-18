@@ -14,6 +14,10 @@ describe('market Ghost session boundary', () => {
     resolve(process.cwd(), 'src/main/cindy-brain/index.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const availabilitySource = readFileSync(
+    resolve(process.cwd(), 'src/main/cindy-brain/ghostAvailability.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
   const marketServiceSource = readFileSync(
     resolve(process.cwd(), 'src/main/plugin-market/service.ts'),
     'utf8',
@@ -148,17 +152,23 @@ describe('market Ghost session boundary', () => {
   });
 
   it('fails owner-scoped plugin reads closed while an account boundary is pending', () => {
-    const start = source.indexOf('function availableGhosts(): InstalledGhost[] {');
-    const end = source.indexOf('\n}', start);
-    const body = source.slice(start, end);
+    // availableGhosts and findGhostForInstanceId delegate to ghostAvailability.ts
+    // (shared with the Node Host); their bodies are checked there.
+    expect(source).toContain('return availableGhostsIn(getGhostManager);');
+    expect(source).toContain(
+      'return findGhostForInstanceIdIn({ getGhostManager, isGhostAvailableForActiveSession, availableGhosts }, id, namespace);',
+    );
+    const start = availabilitySource.indexOf('export function availableGhostsIn(');
+    const end = availabilitySource.indexOf('\n}', start);
+    const body = availabilitySource.slice(start, end);
     expect(body).toContain('if (isAppSessionBoundaryPending()) return [];');
     expect(source).toContain(
       'const resolved = resolveInstalledGhost(availableGhosts(), id, namespace);',
     );
-    const resolverStart = source.indexOf('export function findGhostForInstanceId(');
-    const resolverBody = source.slice(resolverStart, source.indexOf('\n}', resolverStart));
+    const resolverStart = availabilitySource.indexOf('export function findGhostForInstanceIdIn(');
+    const resolverBody = availabilitySource.slice(resolverStart, availabilitySource.indexOf('\n}', resolverStart));
     expect(resolverBody.match(/availableGhosts\(\)/g)).toHaveLength(1);
-    expect(resolverBody).toContain('resolvePluginInstanceQuery(availableGhosts(), id, namespace)');
+    expect(resolverBody).toContain('resolvePluginInstanceQuery(lookup.availableGhosts(), id, namespace)');
     expect(resolverBody).not.toContain('findInstalledGhostByInstanceId');
     // The exact-key fast path fails closed at an account boundary and keeps the
     // active-session availability filter that availableGhosts() applies.
@@ -219,7 +229,7 @@ describe('market Ghost session boundary', () => {
     )({
       hasPendingGhostCalls: () => false, hasRunningGhostErrand: () => false, hasRunningGhostCindyWork: () => false,
       fsSlotSingleton: null, networkSlotSingleton: null,
-      handoffStoreSingleton: { isBusy: (part: string) => part === 'busy' },
+      isGhostHandoffBusy: (part: string) => part === 'busy',
     });
     expect(() => assertGhostRelocationIdle('busy')).toThrow('Ghost relocation is waiting for active work to finish');
     expect(() => assertGhostRelocationIdle('idle')).not.toThrow();
@@ -236,6 +246,7 @@ describe('market Ghost session boundary', () => {
       relocateGhostUserData(from: string, to: string): Promise<void>;
     }>({ functions: ['relocateGhostUserData'] })({
       getGhostHandoffStore: () => store,
+      withActiveOwnerGhostOauthMutationLock: async (_id: string, task: () => unknown) => task(),
       relocateIdleGhostUserData: async () => {
         during.push(store.hold('old'), store.hold('archive'));
         throw new Error('move failed');
@@ -285,13 +296,8 @@ describe('market Ghost session boundary', () => {
   });
 
   it('allows explicit local replacement and detaches market routing before landing', () => {
-    const updateStart = source.indexOf(
-      "ipcMain.handle('ghosts:update'",
-    );
-    const updateEnd = source.indexOf(
-      "ipcMain.handle('ghosts:pick-file'",
-      updateStart,
-    );
+    const updateStart = source.indexOf('const updateLocalFile = async (');
+    const updateEnd = source.indexOf("ipcMain.handle('ghosts:update'", updateStart);
     const updateBody = source.slice(updateStart, updateEnd);
     const helperStart = source.indexOf('async function updateLocalGhostPackageLocked(');
     const helperEnd = source.indexOf(
@@ -303,7 +309,9 @@ describe('market Ghost session boundary', () => {
     const ledgerReadIndex = helperBody.indexOf(
       '= readLocalGhostUpdateSource(',
     );
-    const captureIndex = updateBody.indexOf('const mutationOwner = captureGhostMutationOwner();');
+    const manualUpdate = source.slice(updateEnd, source.indexOf('\n  });', updateEnd));
+    expect(manualUpdate).toContain('updateLocalFile(event.sender, captureGhostMutationOwner(),');
+    const captureIndex = updateBody.indexOf('mutationOwner: ActiveAppSession');
     const inspectIndex = updateBody.indexOf('await manager.inspect(lizFilePath)');
     const leaseIndex = updateBody.indexOf('const releaseMutation = beginGhostMutation(mutationOwner);');
     const helperCallIndex = updateBody.indexOf('updateLocalGhostPackageLocked(');
@@ -318,7 +326,7 @@ describe('market Ghost session boundary', () => {
       'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
     );
     const oauthLockIndex = helperBody.indexOf(
-      'result = await withActiveOwnerGhostOauthMutationLock(',
+      'withCredentialMutation: sourceChanged ? undefined : run => withActiveOwnerGhostOauthMutationLock(',
     );
     const managerUpdateIndex = helperBody.indexOf('manager.update(cindyFilePath,');
     const detachIndex = helperBody.indexOf(
@@ -341,9 +349,14 @@ describe('market Ghost session boundary', () => {
     expect(helperBody.indexOf('if (isCurrent?.() === false)')).toBeGreaterThan(-1);
     expect(helperBody.indexOf('if (isCurrent?.() === false)')).toBeLessThan(stopAndWaitIndex);
     expect(oauthLockIndex).toBeGreaterThan(detachIndex);
-    expect(managerUpdateIndex).toBeGreaterThan(oauthLockIndex);
+    // The manager lane now precedes credential acquisition; source archival
+    // takes/releases its source lock before migrating incoming references.
+    expect(oauthLockIndex).toBeGreaterThan(managerUpdateIndex);
     expect(helperBody).toContain('marketLedger.restoreInstallation(');
     expect(helperBody).toContain('...deliveryNamespaceFields(previousGhost)');
+    expect(helperBody).toContain('expectedInstalledInstanceId: instanceId,');
+    expect(helperBody.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost)'))
+      .toBeGreaterThan(helperBody.indexOf('manager.update(cindyFilePath,'));
     expect(helperBody).not.toContain('marketLedger.isDefaultInstallSuppressed(');
     expect(helperBody).not.toContain('marketInstallSubject');
     expect(helperBody).toContain('用户显式卸载，不得产生 default-install opt-out');
@@ -384,18 +397,22 @@ describe('market Ghost session boundary', () => {
       'await getGhostNodeRuntimeBroker().stopAndWait(',
     );
     const oauthLockIndex = body.indexOf(
-      'await withActiveOwnerGhostOauthMutationLock(installedGhostStoragePart(installed)',
+      ': run => withActiveOwnerGhostOauthMutationLock(installedGhostStoragePart(installed)',
     );
     const updateIndex = body.indexOf('manager.update(cindyFilePath,');
 
     expect(waitIndex).toBeGreaterThan(-1);
     expect(waitIndex).toBeLessThan(oauthLockIndex);
-    expect(oauthLockIndex).toBeLessThan(updateIndex);
+    expect(oauthLockIndex).toBeGreaterThan(updateIndex);
     expect(body).toContain('runtime.stop(installedGhostStoragePart(installed));');
     expect(body).toContain(
       'await getGhostNodeRuntimeBroker().stopAndWait(installedGhostStoragePart(installed));',
     );
     expect(body).toContain('runtime.resetFuse(installedGhostStoragePart(result.ghost));');
+    expect(body).toContain('...(!previousRelId ? { expectedInstalledInstanceId: installedGhostStoragePart(installed) } : {}),');
+    const confirmNamespace = body.indexOf('await manager.confirmUpdatedInstanceNamespace(result.ghost,');
+    expect(confirmNamespace).toBeGreaterThan(body.indexOf('await expected.afterCommitInLock?.(result.ghost, commitEvidence)'));
+    expect(confirmNamespace).toBeLessThan(body.indexOf('spawnIfResident(result.ghost)'));
     expect(body).not.toContain(
       'pluginStoragePart(createPluginLogicalIdentity(expected.namespace ?? null, expected.ghostId))',
     );
@@ -404,8 +421,8 @@ describe('market Ghost session boundary', () => {
   });
 
   it('releases the mutation lease for shutdown failures and restores only after confirmed shutdown', () => {
-    const updateStart = source.indexOf("ipcMain.handle('ghosts:update'");
-    const updateEnd = source.indexOf("ipcMain.handle('ghosts:pick-file'", updateStart);
+    const updateStart = source.indexOf('const updateLocalFile = async (');
+    const updateEnd = source.indexOf("ipcMain.handle('ghosts:update'", updateStart);
     const updateBody = source.slice(updateStart, updateEnd);
     const helperStart = source.indexOf('async function updateLocalGhostPackageLocked(');
     const helperEnd = source.indexOf(
@@ -418,7 +435,7 @@ describe('market Ghost session boundary', () => {
       'await getGhostNodeRuntimeBroker().stopAndWait(instanceId);',
     );
     const oauthLockIndex = helperBody.indexOf(
-      'result = await withActiveOwnerGhostOauthMutationLock(',
+      'withCredentialMutation: sourceChanged ? undefined : run => withActiveOwnerGhostOauthMutationLock(',
     );
     const updateIndex = helperBody.indexOf('manager.update(cindyFilePath');
     const restoreIndex = helperBody.indexOf(
@@ -430,7 +447,7 @@ describe('market Ghost session boundary', () => {
     // per the documented invariant (owner lease → per-id lock).
     expect(waitIndex).toBeGreaterThan(-1);
     expect(waitIndex).toBeLessThan(oauthLockIndex);
-    expect(oauthLockIndex).toBeLessThan(updateIndex);
+    expect(oauthLockIndex).toBeGreaterThan(updateIndex);
     // spawnIfResident is in the market-provenance catch block, after
     // stopAndWait (rollback if provenance check fails).
     expect(restoreIndex).toBeGreaterThan(waitIndex);

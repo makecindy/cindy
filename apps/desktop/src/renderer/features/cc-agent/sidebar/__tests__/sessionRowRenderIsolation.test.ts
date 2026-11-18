@@ -311,7 +311,7 @@ describe('SessionItem — 归档视觉', () => {
     expect(archivedRow?.className).not.toContain('text-[var(--sidebar-list-muted)]');
 
     const archivedIconBranch = sessionStatusIconSource.slice(
-      sessionStatusIconSource.indexOf('{isArchived ? ('),
+      sessionStatusIconSource.indexOf('(isArchived ? ('),
       sessionStatusIconSource.indexOf(') : isOrcaLead ? ('),
     );
     expect(archivedIconBranch).toContain('<Archive');

@@ -1,5 +1,6 @@
 /** Live work preview parity and replay-safety tests for remote channels. */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setMainLocale } from '../../../i18n.desktop';
 
 import {
   applyStatusTokenRate,
@@ -18,6 +19,11 @@ import {
   setActivityTokenRate,
   setInteractionNotice,
 } from '../turnActivity';
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => setMainLocale('en'));
 
 describe('formatToolStep — shared friendly wording', () => {
   it('humanizes files, searches, commands and Codex file changes', () => {
@@ -342,5 +348,20 @@ describe('activity notice — 自动重试期间的单行状态', () => {
     expect(withText.notice).toBeNull();
     // 正文已在流, 过程区回到"无内容"→ 与旧行为逐字一致(纯文本快答无 chrome)。
     expect(renderActivity(withText, 1_000)).toBe('');
+  });
+});
+
+describe('activity copy follows the UI language', () => {
+  beforeEach(() => setMainLocale('en'));
+
+  it('uses English plural forms for the step count', () => {
+    const one = createTurnActivity(0);
+    pushToolStep(one, 'Read', { file_path: '/repo/a.ts' }, 'a');
+    expect(renderActivity(one, 2_000).split('\n')[0]).toMatch(/^⚙️ Working · 1 step · /);
+    const two = createTurnActivity(0);
+    pushToolStep(two, 'Read', { file_path: '/repo/a.ts' }, 'a');
+    pushToolStep(two, 'Read', { file_path: '/repo/b.ts' }, 'b');
+    expect(renderActivity(two, 2_000).split('\n')[0]).toMatch(/^⚙️ Working · 2 steps · /);
+    expect(buildActivityRecord(two, 2_000)?.title).toMatch(/^Activity log · 2 steps · /);
   });
 });

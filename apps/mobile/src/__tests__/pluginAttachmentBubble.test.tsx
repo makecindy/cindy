@@ -6,11 +6,18 @@ import { describe, expect, it, vi } from 'vitest';
 const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0, expanded: false }));
 
 // Keep site-video's native surface out of this Node message-rendering test.
+// Window geometry is a native boundary; preview placement has its own production-hook suite.
+vi.mock('@/session/usePreviewChromeFrame', () => ({ usePreviewChromeFrame: () => ({
+  top: 0, bottom: 0, left: 12, right: 12, contentTop: 48,
+  documentContentTop: 64, documentHeaderHeight: 64, sharedStatusRow: false,
+}) }));
 vi.mock('@/platform/gestureHandler', () => {
   const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
 });
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
+// Card previews are covered separately; retain this suite's attachment/message rendering assertions.
+vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
 vi.mock('expo-modules-core', () => ({
   requireOptionalNativeModule: () => null,
   requireNativeViewManager: () => () => null,

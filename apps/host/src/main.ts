@@ -1,7 +1,15 @@
+// Must stay first: removes inherited Anthropic credentials before other modules load.
+import './boot-env.js';
+// Second: keeps unreadable user settings files instead of deleting them.
+import './boot-settings.js';
+import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
+import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
+import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
 import { createRightSidebarTabsService } from '../../desktop/src/main/localDb/ipc/rightSidebarTabs.js';
 import { createHostPlatformTools } from './platform/tools.js';
-import { createHostCodexRuntime } from './agent/codex-runtime.js';
+import { createHostCodexRuntime, createHostSubscriptionFastPolicies } from './agent/codex-runtime.js';
+import { createHostClaudeProxyRuntime } from './agent/claude-proxy-runtime.js';
 import { createAvailabilityPolicy } from '../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
 import { configureWindowsAtomicRename } from '../../desktop/src/main/windowsAtomicRename.js';
 import { isDefinitiveRefreshError } from '../../desktop/src/main/authRefreshError.js';
@@ -11,7 +19,7 @@ import { resolveSessionExecutionSelection } from '../../desktop/src/main/maker-i
 import { buildLocalProviderRoutingContext } from '../../desktop/src/main/maker-ipc/orcaProviderRoutingContext.js';
 import { configureProvisionalSessions, isProvisionalSession, forgetProvisionalSession, sweepLeftoverProvisionalSessions } from '../../desktop/src/main/localDb/provisionalSessions.js';
 import { commitProvisionalSession, discardProvisionalSessionRow } from '../../desktop/src/main/localDb/sessionDraftLifecycle.js';
-import { activeOwnerScopeKey, beginAppSessionBoundary, commitVolatileAppSession, getActiveAppSession, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
+import { activeOwnerScopeKey, beginAppSessionBoundary, commitVolatileAppSession, getActiveAppSession, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
 import { statWorkingDirectory, workdirProbeHostClient } from '../../desktop/src/main/workdir-probe-host/index.js';
 import { mapMembershipToAuthUser, type User as AccountUser } from '../../desktop/src/shared/authUser.js';
 import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-identity.mjs';
@@ -24,6 +32,9 @@ import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.js';
 import os from 'node:os';
 import path from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import WebSocket from 'ws';
+import { createHostWebSocketAgent, hostOutbound } from './outbound.mjs';
 import { getDefaultVoiceInputSettings } from '../../desktop/src/shared/voiceInputData.ts';
 import { DEFAULT_APPEARANCE_SETTINGS } from '../../desktop/src/shared/appearanceSettings.ts';
 import { createDefaultLayout } from '../../desktop/src/shared/layoutTree.ts';
@@ -38,6 +49,7 @@ import { openSystemBrowser, openHostBrowser } from './browser-open.mjs';
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.js';
 import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStorageAdapter.js';
 import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
+import { waitForRetainedDbClient } from '../../desktop/src/main/localDb/client/pendingOperations.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { touchUserSendRow } from '../../desktop/src/main/localDb/sessionQueries.ts';
 import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
@@ -55,15 +67,24 @@ import { readAdoptedSessionState } from './credentials/session.mjs';
 import { refreshHostSession } from './auth/refresh.mjs';
 import { configureHostOwner, readClaudeSubscriptionState } from './agent/claude-auth.mjs';
 import { attachAgentsToMakerMemory, createHostMemoryManager, createHostMemoryMcpProviders } from './agent/memory.mjs';
-import { createHostAgentGraph } from './agent/runtime.mjs';
+import { createHostAgentGraph } from './agent/runtime.js';
+import { createHostReviewContextResolver } from './agent/review-context.js';
+import { createHostGitSnapshot, type HostGitSnapshot } from './agent/git-snapshot.js';
+import { removeTurnChangeSetsForSession } from '../../desktop/src/main/turn-change-set/store.js';
+import { removeSessionModelInterface } from '../../desktop/src/main/maker-host/session-model-interface.js';
+import { reconcileSavepointRefsForDeletedSessions } from '../../desktop/src/main/git-snapshot/savepointCleanup.js';
 import { createHostMcpRuntime } from './agent/mcp-runtime.js';
 import { createHostAgentAuth } from './agent/auth-service.js';
-import { initLogger } from '../../desktop/src/main/logger.js';
+import { createLogger, initLogger, setCcDebugTailingEnabled } from '../../desktop/src/main/logger.js';
+import { reapCodexToolTreesSync } from '../../desktop/src/main/codex-tool-tree-reaper.js';
+import { createHostIpcRoute } from './ipc-route.mjs';
+import { createHostIpcBindings } from './ipc-bindings/index.js';
+import { projectHostAuthState } from './auth-state.js';
 import { createHostModelAccess } from './agent/model-access.js';
 import { MODEL_ACCESS_STATUS_CHANNEL } from '../../desktop/src/shared/modelAccess.js';
 import { createProviderCatalog } from './agent/providers.mjs';
 import { closeClaudeCliProxyBridge } from '../../desktop/src/main/maker-host/claude-cli-proxy-bridge.js';
-import { setXdGatewayModels } from '../../desktop/src/main/maker-host/active-catalog.js';
+import { getXdGatewayModels, markXdGatewayModelAccessUnknown, setXdGatewayModels } from '../../desktop/src/main/maker-host/active-catalog.js';
 import { buildModelsSyncRequest, parseModelsSyncPayload, withModelsSyncOverallDeadline } from '../../desktop/src/main/model-access/modelsSyncRefresh.js';
 import { createHostProviderConfig } from './agent/provider-config.js';
 import { createProviderRouteResolver } from './agent/provider-credentials.mjs';
@@ -71,6 +92,7 @@ import { createHostHistoryReader, readMessagesList, readMessagesAroundClientId }
 import { runLoginCommand } from './login-cli.mjs';
 import { readOrCreateApiToken } from './api-token.mjs';
 import { CindyAuthClient } from '@cindy/auth-client';
+import { hostAuthFetch } from './auth-fetch.mjs';
 import type { Effort, PermissionMode } from '@cindy/maker-core';
 import { createRequire } from 'node:module';
 import { readAuthEndpoints } from './auth/endpoints.mjs';
@@ -81,6 +103,10 @@ import { initializeHostPluginRemoteAuthorization } from './plugins/remote-author
 import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.js';
 import { createHostPluginRuntime } from './plugins/runtime.js';
 import { createHostPluginGateway } from './plugins/gateway.js';
+import { createHostToolService } from './agent/host-tools.js';
+import { createHostConfirmations } from './host-confirmations.js';
+import { createMainI18n } from '../../desktop/src/main/i18n.js';
+import { createHostMcpDuplicateChoices } from './agent/mcp-duplicate-choices.js';
 import { toolAutoReviewAction } from '@cindy/maker-core';
 import { GhostGrantConfirmBridge } from '../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.js';
 import { getGhostCard, listGhostCardsBySession } from '../../desktop/src/main/cindy-brain/cardStoreDb.js';
@@ -106,7 +132,11 @@ import { createTaskTagService } from '../../desktop/src/main/localDb/ipc/taskTag
 import { executeConversationSearch } from '../../desktop/src/main/localDb/ipc/search.js';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../desktop/src/main/device-link/broadcast-tap.js';
 import { createInputQueue } from './agent/input-queue.mjs';
-import { applyLiveSessionSettings } from './agent/session-settings.mjs';
+import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
+import type { ContextRecoveryKind } from './agent/context-recovery.ts';
+import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
+import { lockSessionRoute } from './agent/session-route-lock.mjs';
+import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { readHostSessionList, readHostSession } from './session-reads.js';
@@ -138,7 +168,7 @@ function parsePermissionMode(value: unknown): PermissionMode | undefined {
 
 const command = process.argv[2];
 if (command === '--help' || command === '-h') {
-  console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>]|stop]');
+  console.log('Usage: cindy-host [serve|login [--region=cn|global] [--method=<id>]|open|status [--json]|remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]|stop]');
 } else if (command === 'open') {
   try {
     await openHostBrowser(resolveHostDataDir());
@@ -181,7 +211,8 @@ if (command === '--help' || command === '-h') {
  } else if (command === 'remote') {
   try {
     const action = process.argv[3] ?? 'status';
-    if (!['status', 'enable', 'disable', 'revoke'].includes(action)) throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>]');
+    if (!['status', 'enable', 'disable', 'revoke', 'agent-net-on', 'agent-net-off'].includes(action))
+      throw new Error('Usage: cindy-host remote [status|enable|disable|revoke <device-id>|agent-net-on|agent-net-off]');
     console.log(JSON.stringify(await requestHostRemote(resolveHostDataDir(), action, process.argv[4]), null, 2));
   } catch (error) {
     console.error(`cindy-host remote failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -214,6 +245,9 @@ mkdirSync(profileDir, { recursive: true, mode: 0o700 });
 const serviceLease = acquireHostServiceLease(profileDir);
 if (!serviceLease.held) throw new Error(`Cindy Host profile is busy (${serviceLease.reason}). Use status or stop for this profile.`);
 initLogger({ userDataDir: profileDir, isPackaged: true, logDir: path.join(profileDir, 'logs') });
+// As the desktop at startup (bootstrap-electron.ts): the tailer that merges each session's
+// cc-debug raw file into its NDJSON follows XDT_CC_DEBUG_NET.
+setCcDebugTailingEnabled(process.env.XDT_CC_DEBUG_NET === '1');
 const instanceId = randomUUID();
 let removeEndpoint: (() => void) | undefined;
 const releaseService = () => {
@@ -299,7 +333,7 @@ async function resolveAccountUser(expectedOwner: string | null = runtime.owner):
     region: realm,
     deviceId: verifiedDeviceId,
     clientType: 'desktop',
-    fetch: (input, init) => globalThis.fetch(input, init),
+    fetch: (input, init) => hostAuthFetch(input, init),
   });
   const { sessionToken } = await refreshHostSession({
     store,
@@ -404,13 +438,27 @@ function schedulePeriodicRefresh(): void {
 let claudeState: Record<string, unknown> | null = null;
 /** Real maker-core agents registered in this process. */
 let agentGraph: ReturnType<typeof createHostAgentGraph> | null = null;
+/** The desktop Git snapshot coordinator for this owner's tasks (agent/git-snapshot.ts). */
+let gitSnapshot: HostGitSnapshot | null = null;
+const hostLog = createLogger('host');
 let providerConfig: ReturnType<typeof createHostProviderConfig> | null = null;
 let codexRuntime: ReturnType<typeof createHostCodexRuntime> | null = null;
+let claudeProxy: ReturnType<typeof createHostClaudeProxyRuntime> | null = null;
 let mcpRuntime: ReturnType<typeof createHostMcpRuntime> | null = null;
 let agentAuth: ReturnType<typeof createHostAgentAuth> | null = null;
 const listProviders = createProviderCatalog({
   readProviders: connected => providerConfig?.publicViews(connected) ?? Promise.resolve([]),
-  applyModels: setXdGatewayModels,
+  // Keep each engine's model list in step with the account's models (the desktop refreshes on catalog change).
+  applyModels: (models: Parameters<typeof setXdGatewayModels>[0], options: Parameters<typeof setXdGatewayModels>[1]) => {
+    setXdGatewayModels(models, options);
+    agentGraph?.refreshModels();
+  },
+  markModelsUnknown: () => markXdGatewayModelAccessUnknown(),
+  // The XD snapshot in this process's active-catalog module (one module instance for every Host
+  // import of maker-host/active-catalog): setXdGatewayModels above writes it, and the subagent
+  // model access, the Codex proxy and the one-shot model candidates read it. A failed refresh keeps
+  // this current list, as the desktop's runModelsSync does with getXdGatewayModels().
+  readModels: () => getXdGatewayModels(),
   fetchModels: async () => {
     const baseUrl = readAuthEndpoints((account.realm ?? resolveHostRegion()) as 'cn' | 'global').modelAccessApiBaseUrl;
     if (!baseUrl) throw new Error('Model access endpoint is unavailable');
@@ -428,6 +476,8 @@ let platformTools: ReturnType<typeof createHostPlatformTools> | null = null;
 let plugins: Awaited<ReturnType<typeof createHostPluginRuntime>> | null = null;
 let pluginGateway: ReturnType<typeof createHostPluginGateway> | null = null;
 let pluginManager: ReturnType<typeof createHostGhostManager> | null = null;
+let hostTools: ReturnType<typeof createHostToolService> | null = null;
+let hostConfirmations: ReturnType<typeof createHostConfirmations> | null = null;
 let availabilityPolicy: ReturnType<typeof createAvailabilityPolicy> | null = null;
 let modelAccess: ReturnType<typeof createHostModelAccess> | null = null;
 const currentGateway = () => modelAccess?.gateway.credential && modelAccess.gateway.endpoint ? modelAccess.gateway : null;
@@ -496,9 +546,18 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   // installing it here keeps them on the same connection as the host runtime.
   setCurrentDbClient(client, ownerId);
   activeOwner = ownerId;
-  closeStorage = async () => { clearCurrentDbClient(client); await client.dispose(); };
+  await reconcileDeletedTaskViewState(client, () => activeOwner === ownerId);
+  closeStorage = async () => {
+    clearCurrentDbClient(client);
+    await waitForRetainedDbClient(client);
+    await client.dispose();
+  };
   configureProvisionalSessions(dataDir, { onSwept: sessionId => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }) });
   await sweepLeftoverProvisionalSessions();
+  // Desktop runs this repair once the account DB is ready (bootstrap-electron.ts):
+  // savepoint refs of tasks this DB marks deleted are removed from their repos.
+  void reconcileSavepointRefsForDeletedSessions().catch(error =>
+    hostLog.warn('savepoint reconcile postponed', { error: error instanceof Error ? error.message : String(error) }));
   runtime.owner = ownerId;
   runtime.storage = 'ready';
   delete runtime.detail;
@@ -532,6 +591,13 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   });
   await modelAccess.start();
   pluginManager = createHostGhostManager({ userDataDir: dataDir, ownerId,
+    onUninstallSourceState: async fromPart => {
+      const current = plugins;
+      if (!current || activeOwnerScopeKey() !== pluginOwner) throw new Error('Plugin account cleanup is unavailable');
+      const release = current.acquireMutationLease(current.captureMutationOwner());
+      try { await current.authorization.cleanupSourceReferences(fromPart); }
+      finally { release(); }
+    },
     onChanged: ghosts => {
       if (activeOwnerScopeKey() !== pluginOwner || isAppSessionBoundaryPending()) return;
       eventHub.publish({ type: 'plugin_push', channel: 'ghosts:changed', payload: { ghosts } });
@@ -539,7 +605,21 @@ async function ensureRuntime(ownerId: string): Promise<void> {
         .catch(error => console.warn('[host] plugin reconciliation failed:', error.message));
     },
   });
+  const toolOwnerCurrent = () => activeOwnerScopeKey() === pluginOwner && !isAppSessionBoundaryPending();
+  const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
+  hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
+  hostTools = createHostToolService({ profileDir: dataDir, ownerId,
+    owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
+    current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null,
+    files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
+    storage: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.storage; },
+    getSession: id => agentGraph?.maker.getSession(id), confirmations: hostConfirmations, t: i18n.t,
+    taskActions: {
+      input: id => inputQueue.taskActionInput(id),
+    },
+  });
   plugins = await createHostPluginRuntime({ profileDir: dataDir, ownerId, manager: pluginManager, credentials,
+    hostToolRequest: hostTools.request, onPluginStopped: hostTools.stopPlugin,
     getLoginEmail: () => accountUser?.email ?? null,
     getUser: () => accountUser,
     account: {
@@ -559,7 +639,6 @@ async function ensureRuntime(ownerId: string): Promise<void> {
         },
       }),
       openExternal: async url => { await openSystemBrowser(url); },
-      modelAccessReady: () => Boolean(currentGateway()?.credential),
     },
     getSession: id => agentGraph?.maker.getSession(id),
     requestFileConfirmation: (id, payload) => fileConfirmation.request(id, payload),
@@ -573,10 +652,13 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     },
   });
 
+  if (pluginManager.hasPendingMutationRecovery()) await pluginManager.retryInterruptedMutationsAfterDbReady();
+
   pluginGateway = createHostPluginGateway({ runtime: plugins, profileDir: dataDir, ownerId,
     version: layout.version, credentials, fileConfirmation,
     getSession: id => agentGraph?.maker.getSession(id),
-    restoreSession: (id, check) => inputQueue.restoreSession(id, check),
+    // Under the task's send lock, as the desktop's plugin page restore (register.ts).
+    restoreSession: lockSessionRoute((id: string, check: () => Promise<void>) => inputQueue.restoreSession(id, check)),
     requestHostPermission: async (id, instance, request, signal) => {
       const session = agentGraph?.maker.getSession(id);
       if (!session || session.instanceId !== instance) return null;
@@ -633,6 +715,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       return meta?.workDir && !meta.remoteHostId ? [meta.workDir] : [];
     },
   });
+  hostTools.providers.push(...platformTools.providers);
+  hostTools.services.replace(hostTools.providers);
 
   const claudeBinary = harnessBinaryPath('claude-code');
   const codexBinary = harnessBinaryPath('codex');
@@ -641,7 +725,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     const gateway = modelAccess!.gateway;
     // Memory uses the same owner-scoped store Desktop reads, so a task started
     // here sees the same memories as a task started there.
-    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId });
+    makerMemory = createHostMemoryManager({ userDataDir: dataDir, ownerId, getMaker: () => agentGraph?.maker ?? null });
     // Flip the flag before the agents are built: their runtimeConfig snapshots it
     // at construction, and native-agent syncoff needs the agents that do not exist yet.
     if (makerMemory.isEnabled()) await makerMemory.enable({ skipAgentSync: true });
@@ -651,13 +735,35 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       config: providerConfig, modelAccess: modelAccess!, availabilityPolicy: availabilityPolicy!, mcp: mcpRuntime,
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }),
     });
+    if (claudeBinary || piBinary) {
+      claudeProxy = createHostClaudeProxyRuntime({ profileDir: dataDir,
+        gateway: () => modelAccess?.gateway ?? null,
+        fastRequestPolicy: codexRuntime?.fastRequestPolicy ?? createHostSubscriptionFastPolicies(availabilityPolicy!).requestPolicy,
+        isOpenAiSubscriptionProviderId: id => providerConfig?.codexAccounts.isOpenAiSubscriptionProviderId(id) ?? false,
+        subscriptions: codexRuntime?.subscriptions ?? null,
+        resolveTaskId: sdkSessionId => agentGraph?.maker.listActiveSessions()
+          .find(session => session.requestSessionId === sdkSessionId)?.id ?? null,
+      });
+      // The desktop awaits the proxy before its first task (bootstrap-electron.ts); when it
+      // cannot start, the endpoint falls back to the upstream with a log, as there.
+      await claudeProxy.ready();
+    }
     agentGraph = createHostAgentGraph({
       onSessionClose: (id: string) => platformTools?.closeSession(id),
       codexRuntime,
+      claudeProxy,
       providerConfig,
       mcpRuntime,
       isSessionInTurn: (id: string) => inputQueue.isTurnRunning(id),
       wakeSession: (id: string, reason: string) => inputQueue.wakeSession(id, reason),
+      // A task restored at startup waits for the account's models, as on the desktop.
+      ensureProviderCatalog: () => listProviders({ gateway: currentGateway(), ownerId: runtime.owner }),
+      getGhostRosterPrompt: pluginGateway.rosterPrompt,
+      // The MCP duplicate choices made in the window, read from the same owner file.
+      resolveLocalMcpDuplicateChoices: createHostMcpDuplicateChoices(pluginGateway.customMcp).resolveLocalMcpDuplicateChoices,
+      // Built-in and approved plugin Skills, as the desktop gives all three engines
+      // (listCindyManagedSkills). Codex's Skill projection is release table row 25.
+      getManagedSkills: pluginGateway.managedSkills,
       resolveProviderRoute: createProviderRouteResolver({
         catalog: () => listProviders({ gateway, ownerId }),
         store: await createCredentialStore({ userDataDir: dataDir }),
@@ -669,10 +775,20 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       storage: sessionStorage,
       gateway,
       makerMemory,
-      mcpProviders: await pluginGateway.prepareMcpProviders([...createHostMemoryMcpProviders(makerMemory), ...platformTools.providers, pluginGateway.provider]),
+      reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
+      readAuthRealm: () => account.realm,
+      // Vision-bridge notices, which the desktop sends its windows; the client maps them to
+      // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
+      publishVisionBridgeNotice: notice => eventHub.publish(notice),
+      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
       userDataDir: dataDir,
     });
+    // The desktop's Auto-review authorization context (review-context.ts).
+    agentGraph.autoReview.setContextResolver(createHostReviewContextResolver({
+      acceptedInput: (id: string) => inputQueue.acceptedInputProvenance(id),
+    }));
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
+    gitSnapshot = createHostGitSnapshot(agentGraph.maker);
     agentAuth = createHostAgentAuth({ maker: agentGraph.maker, readApiKey: () => gateway?.credential ?? null,
       publish: (channel, payload) => eventHub.publish({ type: 'plugin_push', channel, payload }) });
     // Second step, now that the agents exist: turn their native memory off.
@@ -832,8 +948,28 @@ const insertSessionMessage = createHostMessageStore({ getOwner: getCurrentDbClie
 const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,
   publish: (event: unknown) => eventHub.publish(event) });
 
+// The pending handoff summary: one registry for the Host process, as the desktop's singleton.
+const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+  publish: event => eventHub.publish(event), log: createLogger('agent-handoff-pending') });
+// Context recovery of a turn's terminal error (context-recovery-assembly.ts). A kind opens after its
+// real-engine test (release table); until then it takes the normal error path, unclaimed.
+// - context-overflow: open (codex-runtime and claude-proxy e2e).
+// - oversized-history: closed; no engine emits this error now (maker-core Codex).
+// - unsupported-request-option: closed; Pi's own cache recovery handles it in the turn (pi-native e2e),
+//   so this fallback has no real-engine test.
+const OPEN_CONTEXT_RECOVERY_KINDS: ReadonlySet<ContextRecoveryKind> = new Set(['context-overflow']);
+const contextRecovery = createHostContextRecoveryWiring({
+  openKinds: OPEN_CONTEXT_RECOVERY_KINDS,
+  getGraph: () => agentGraph,
+  persistMessage: (...args) => insertSessionMessage(...args),
+  publish: event => eventHub.publish(event),
+  pendingHandoff,
+  log: createLogger('context-recovery'),
+});
 const inputQueue = createInputQueue({
   getOwner: getCurrentDbClientSnapshot,
+  pendingHandoff,
+  ...contextRecovery,
   createAttachments: ({ assertCurrent }: { assertCurrent(): void }) => createHostAttachments({
     getOwner: getCurrentDbClientSnapshot, assertCurrent,
   }),
@@ -842,12 +978,11 @@ const inputQueue = createInputQueue({
     if (!agentGraph) throw new Error('agent runtime is not ready');
     return agentGraph.maker;
   },
+  getGitSnapshot: () => gitSnapshot,
   hub: eventHub,
   hasPendingCredentialSwitch: (id: string) => agentGraph?.gatewayRestart.isSessionRestarting(id) ?? false,
+  reportAgentCindyGatewayKeyRejected: () => modelAccess?.reportCurrentKeyRejected(),
   onSessionSettled: () => agentGraph?.gatewayRestart.onSessionSettled(),
-  beforeSessionStart: async (_id: string, kind: string) => {
-    if (kind === 'codex') await agentGraph?.gatewayRestart.flushBeforeLocalCodexSessionStart();
-  },
   readSession: readSessionForRun,
   assertProviderExecutionSupported: (id: string, providerId?: string | null) => {
     if (hostProviderBindings.readProviderGroupBinding(id)
@@ -925,7 +1060,19 @@ function writeProfileAppearance(patch: unknown) {
   return applied;
 }
 
+const ipcLog = createLogger('host-ipc');
+/** Registered desktop IPC channels; local bearer callers only (see ipc-route.mjs). */
+const ipcRoute = createHostIpcRoute({
+  instanceId,
+  bindings: createHostIpcBindings({ getLiveSession: id => agentGraph?.maker.getSession(id) }),
+  readOwnerStamp: getActiveDataOwnerPushStamp,
+  isOwnerBoundaryPending: isAppSessionBoundaryPending,
+  // Every window call passes here: successes at debug, anything else stays visible.
+  log: event => (event.outcome === 'ok' ? ipcLog.debug('ipc call', event) : ipcLog.warn('ipc call', event)),
+});
+
 const serverDeps = {
+  ipcRoute,
   browserBackend: (handler: keyof NonNullable<typeof platformTools>['browserSettings'], payload: unknown) => {
     if (!platformTools) throw new Error('HOST_RUNTIME_NOT_READY');
     return platformTools.browserSettings[handler](undefined, payload);
@@ -1033,7 +1180,11 @@ const serverDeps = {
     if (!agentAuth) throw new Error('Agent runtime is unavailable');
     return agentAuth.invoke(channel, args, caller);
   },
-  releaseAuthCaller: (caller: string) => agentAuth?.releaseCaller(caller),
+  releaseAuthCaller: (caller: string) => { agentAuth?.releaseCaller(caller); hostConfirmations?.cancelCaller(caller); },
+  connectController: (caller: string, send: Parameters<NonNullable<typeof hostConfirmations>['connect']>[1]) =>
+    hostConfirmations?.connect(caller, send),
+  resolvePluginConfirmation: (caller: string, kind: 'confirm' | 'install', requestId: string, confirmed: boolean) =>
+    hostConfirmations?.resolve(caller, kind, requestId, confirmed) ?? false,
   cancelPendingAuth: async () => {
     agentAuth?.close();
     await providerConfig?.cancelLogins();
@@ -1061,7 +1212,7 @@ const serverDeps = {
       region: realm,
       deviceId: resolveSessionDevice(store.read(AUTH_SESSION_KEY), () => resolveRuntimeDeviceId(machineIdSync, '')),
       clientType: 'desktop',
-      fetch: (input, init) => globalThis.fetch(input, init),
+      fetch: (input, init) => hostAuthFetch(input, init),
     });
     const result = await withCrossProcessLock(
       path.join(resolveHostDataDir(), '.cindy-auth-accounts-v1.lock'),
@@ -1094,6 +1245,14 @@ const serverDeps = {
   },
   // Project aliases are rows in the same owner database; the sidebar groups by
   // them on both clients, so they come straight from that table.
+  readProjectInfo,
+  readProjectIconImage,
+  resolveAutomaticProjectIcon,
+  updateProjectInfo: async (input: unknown) => {
+    const result = await updateProjectInfo(input);
+    eventHub.publish({ type: 'project_aliases_changed' });
+    return result;
+  },
   listProjectAliases: async () => {
     const rows = await getDbClient().drizzle.select().from(projectAliasTable);
     return rows.map((row: Record<string, unknown>) => ({
@@ -1135,44 +1294,12 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: async (sessionId: string, patch: Record<string, unknown>) => {
-    const allowed: Record<string, true> = {
-      title: true, status: true, pinnedAt: true, notificationsMuted: true, model: true,
-      effort: true, permissionMode: true, fastMode: true, planModeEnabled: true,
-      providerId: true, agentKind: true,
-    };
-    if (Object.keys(patch).some((key) => allowed[key] !== true)) {
-      throw new Error('unsupported session field');
-    }
-    // A live Session keeps its own permission mode and model route. Apply the
-    // change there first so the stored value and the running Agent cannot
-    // disagree (a tighter mode must bind the very next tool call). An engine
-    // switch is left to the input queue, which recreates the Session.
-    const live = patch.agentKind === undefined ? agentGraph?.maker.getSession(sessionId) : undefined;
-    const stored = live && patch.model === undefined && Object.hasOwn(patch, 'providerId')
-      ? await readSessionForRun(sessionId) : null;
-    await applyLiveSessionSettings(live, patch, stored);
-    const update: Record<string, unknown> = { updatedAt: Date.now() };
-    if (typeof patch.title === 'string') update.title = patch.title;
-    if (patch.status === 'active' || patch.status === 'archived') update.status = patch.status;
-    if (patch.pinnedAt === null) update.pinnedAt = null;
-    else if (typeof patch.pinnedAt === 'string') update.pinnedAt = Date.parse(patch.pinnedAt) || null;
-    if (typeof patch.notificationsMuted === 'boolean') update.notificationsMuted = patch.notificationsMuted;
-    if (typeof patch.model === 'string') update.model = patch.model;
-    if (typeof patch.effort === 'string') update.effort = patch.effort;
-    if (typeof patch.permissionMode === 'string') update.permissionMode = patch.permissionMode;
-    if (typeof patch.fastMode === 'boolean' || patch.fastMode === 'ultrafast') update.fastMode = patch.fastMode;
-    if (typeof patch.planModeEnabled === 'boolean') update.planModeEnabled = patch.planModeEnabled;
-    if (patch.providerId === null || typeof patch.providerId === 'string') update.providerId = patch.providerId;
-    if (typeof patch.agentKind === 'string') update.agentKind = patch.agentKind === 'claude-code' ? 'cc' : patch.agentKind;
-    await getDbClient().drizzle.update(sessionTable).set(update).where(eq(sessionTable.id, sessionId));
-    const rows = await getDbClient().drizzle.select().from(sessionTable)
-      .where(eq(sessionTable.id, sessionId)).limit(1);
-    const row = rows[0];
-    if (!row) throw new Error('session not found');
-    eventHub.publish({ type: 'session_changed', action: 'update', sessionId, patch, status: row.status });
-    return sessionToCamel({ ...row, messageCount: 0 });
-  },
+  updateSession: lockSessionRoute(createHostSessionUpdate({
+    getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
+    readSessionForRun,
+    publish: event => eventHub.publish(event),
+    modelWindow: () => agentGraph?.modelWindow ?? null,
+  })),
   /**
    * Cross-engine switch: record the intent and let the next enqueue apply it.
    * Mirrors the desktop contract (`deferred: true`) so the renderer can show
@@ -1243,18 +1370,24 @@ const serverDeps = {
   getSession: async (sessionId: string) => {
     return readHostSession(getDbClient().drizzle, sessionId);
   },
-  deleteSession: async (sessionId: string) => {
+  deleteSession: lockSessionRoute(async (sessionId: string) => {
     if (!sessionStorage) throw new Error('agent runtime is not ready');
     const existing = await sessionStorage.get(sessionId);
     if (!existing) return { deleted: false, sessionId };
     await inputQueue.disposeSession(sessionId);
     pendingAgentSwitches.delete(sessionId);
     await sessionStorage.delete(sessionId);
+    // Desktop cleanup for a deleted task (localDb/ipc/sessions.ts cleanupSessionTerminalArtifacts).
+    try { removeSessionModelInterface(sessionId); } catch (error) {
+      hostLog.warn('session interface snapshot cleanup failed', { sessionId, error: String(error) });
+    }
+    void removeTurnChangeSetsForSession(sessionId).catch(error =>
+      hostLog.warn('turn change-set cleanup failed', { sessionId, err: error instanceof Error ? error.message : String(error) }));
     forgetProvisionalSession(sessionId);
     eventHub.publish({ type: 'session_changed', action: 'delete', sessionId, status: 'deleted' });
     return { deleted: true, sessionId };
-  },
-  discardProvisionalSession: async (sessionId: string) => {
+  }),
+  discardProvisionalSession: lockSessionRoute(async (sessionId: string) => {
     // Only an unsent draft may be closed: a late request for a task another
     // client already sent must leave its queue running.
     if (!isProvisionalSession(sessionId)) {
@@ -1264,7 +1397,7 @@ const serverDeps = {
     pendingAgentSwitches.delete(sessionId);
     const discarded = await discardProvisionalSessionRow(sessionId, sessionDraftPorts);
     return { discarded, remaining: Boolean(await sessionStorage?.get(sessionId)) };
-  },
+  }),
   commitProvisionalSession: async (sessionId: string) => ({
     committed: await commitProvisionalSession(sessionId, sessionDraftPorts),
   }),
@@ -1440,15 +1573,8 @@ const serverDeps = {
 };
 
 function projectAuthState() {
-  const authenticated = Boolean(account.authenticated && accountUser && accountUser.id === runtime.owner);
-  return {
-    authenticated, isAuthenticated: authenticated, user: authenticated ? accountUser : null,
-    realm: account.realm, owner: runtime.owner, dataOwnerId: authenticated ? runtime.owner : null,
-    mode: authenticated ? 'cloud' : 'signed-out', canEnterApp: authenticated,
-    ownerGeneration: getActiveAppSession().generation, isCanary: false, deviceId: currentDeviceId,
-    hasAccountDeletionReceipt: false, accountDeletionRestored: false,
-    credentialStoreUnavailable: Boolean(account.error),
-  };
+  return projectHostAuthState({ account, accountUser, owner: runtime.owner,
+    generation: getActiveAppSession().generation, deviceId: currentDeviceId });
 }
 
 /** Ordered disposal also runs after partial startup or a failed sign-out. */
@@ -1465,6 +1591,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     // Keep storage alive until all execution and memory writers have settled,
     // but still release every resource when any individual teardown fails.
     fileConfirmation.cleanupAll('session_closed');
+    hostConfirmations?.close(); hostTools?.close();
     stopPluginAuthorization?.(); stopPluginAuthorization = null;
     interactionBroker.dispose();
     await attempt(() => agentAuth?.close());
@@ -1482,7 +1609,12 @@ async function disposeOwnerRuntime(): Promise<void> {
     platformClient?.close();
     await attempt(() => inputQueue.dispose());
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
+    // Stop watching this profile's Pi packages once Maker no longer runs Pi.
+    agentGraph?.piPackages.close();
+    // As the desktop's teardown: the process-wide vision-bridge controller and key reader go.
+    await attempt(() => agentGraph?.visionBridge.close());
     await attempt(() => codexRuntime?.close());
+    await attempt(() => claudeProxy?.close());
     await attempt(() => mcpRuntime?.close());
     platformClient?.close(); platformClient = null;
     await attempt(() => platformTools?.close());
@@ -1497,9 +1629,13 @@ async function disposeOwnerRuntime(): Promise<void> {
     plugins = null;
     pluginGateway = null;
     pluginManager = null;
+    hostTools = null;
+    hostConfirmations = null;
     agentGraph = null;
+    gitSnapshot = null;
     mcpRuntime = null;
     codexRuntime = null;
+    claudeProxy = null;
     providerConfig = null;
     agentAuth = null;
     modelAccess = null;
@@ -1530,9 +1666,59 @@ const server = createHostServer({ ...serverDeps, service, platformClient: () => 
     if (action === 'status') return deviceLink.state();
     if (action === 'enable' || action === 'disable') return deviceLink.setEnabled(action === 'enable');
     if (action === 'revoke') return deviceLink.revoke(body.deviceId ?? '');
+    // This Host's 「Agent-Net (Beta)」 setting; off by default (docs/agent-net-session-plan.md 阶段 5).
+    if (action === 'agent-net-on' || action === 'agent-net-off') return deviceLink.setAgentNetEnabled(action === 'agent-net-on');
     throw new Error('Unknown remote control command');
   },
 });
+
+/**
+ * Agent-Net for this Host (docs/agent-net-session-plan.md 阶段 5), wired like the Desktop: the account token only enrolls
+ * this device on the region's official Agent-Net service; the identity's keys stay in this Host's credential store.
+ * Off until the Host's 「Agent-Net (Beta)」 setting is turned on.
+ */
+function hostAgentNetPorts(): Parameters<typeof createHostDeviceLink>[0]['agentNet'] {
+  const realm = account.realm === 'cn' ? 'cn' : 'global';
+  const base = readAuthEndpoints(realm).agentNetApiBaseUrl ?? null;
+  if (!base) return undefined;
+  let store: Promise<Awaited<ReturnType<typeof createCredentialStore>>> | null = null;
+  // A store that could not open (keyring still locked) is tried again on the next use, not remembered as failed.
+  const credentials = () => (store ??= createCredentialStore({ userDataDir: resolveHostDataDir(),
+    keyringApplication: process.env.CINDY_HOST_KEYRING_APPLICATION?.trim() || undefined }).catch((error: unknown) => { store = null; throw error; }));
+  let core: Promise<WebAssembly.Module> | null = null;
+  return {
+    base: () => base,
+    subject: () => accountUser?.id ?? null,
+    deviceId: () => currentDeviceId,
+    deviceName: () => process.env.CINDY_HOST_DEVICE_NAME?.trim() || `${os.hostname()} · Cindy Host`,
+    readSecret: async key => (await credentials()).read(key),
+    writeSecret: async (key, value) => { (await credentials()).write(key, value); },
+    enroll: (url, body) => serverApi('/api/agent-net/enroll', { baseUrl: url, method: 'POST', body, timeoutMs: 10_000, cache: 'no-store',
+      logLabel: '/api/agent-net/enroll', redactErrorDetails: true, allowedRedactedErrorCodes: ['DEVICE_REENROLLMENT_REQUIRES_APPROVAL'] }),
+    fetch: (input, init) => hostOutbound.outboundFetch(input, init),
+    createWebSocket: async (url, options) => new WebSocket(url, { ...options, agent: await createHostWebSocketAgent(url) }),
+    workerFile: () => (existsSync(layout.agentNetWorker) ? layout.agentNetWorker : null),
+    coreModule: () => (core ??= readFile(layout.agentNetCore).then(bytes => WebAssembly.compile(bytes))
+      .catch((error) => { core = null; throw error; })),
+    // Devices removed from the account in Device Link are refused on Agent-Net until they sign in again (packages/agent-net/src/membership.ts).
+    deviceLinkDeviceIds: async () => {
+      const baseUrl = readAuthEndpoints(realm).deviceLinkApiBaseUrl;
+      if (!baseUrl || !account.authenticated) return null;
+      const listed = await serverApi<{ devices?: Array<{ deviceId?: unknown }> }>('/api/device-link/devices', {
+        baseUrl, timeoutMs: 10_000, cache: 'no-store', redactErrorDetails: true });
+      return Array.isArray(listed?.devices)
+        ? listed.devices.map(device => device?.deviceId).filter((id): id is string => typeof id === 'string') : null;
+    },
+    // 名册缓存（公开证书）：官方 Agent-Net 服务出故障时重启也能起来，和 Desktop 一样（agentNetDirectoryCache.ts）。按服务与账号各一份。
+    directoryCacheFile: () => {
+      const subject = accountUser?.id;
+      if (!subject) return null;
+      const scope = createHash('sha256').update(JSON.stringify([base, subject])).digest('hex').slice(0, 32);
+      return path.join(resolveHostDataDir(), 'agent-net', scope, 'directory.json');
+    },
+    log: createLogger('agent-net'),
+  };
+}
 
 function startDeviceLink(): void {
   if (deviceLink) return;
@@ -1546,6 +1732,7 @@ function startDeviceLink(): void {
     getToken: async () => currentSessionToken,
     refreshToken: async () => { await refreshAuthSession(); },
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
+    agentNet: hostAgentNetPorts(),
     invoke: service, subscribe: eventHub.subscribe,
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();
@@ -1656,6 +1843,11 @@ const stop = () => {
   if (refreshTimer) clearInterval(refreshTimer);
   const requestsDrained = server.stopAccepting();
   const releaseOwnerBoundary = beginAppSessionBoundary();
+  // As the desktop's quit ('reap-codex-tool-trees', a sync step before the Maker shutdown):
+  // once the app-servers close, the parent chain proving these trees are the Host's is gone.
+  // Only on this exit; an owner change or a window handoff leaves the Host running.
+  try { reapCodexToolTreesSync(); }
+  catch (error) { console.error('cindy-host codex tool tree reap failed:', error instanceof Error ? error.message : String(error)); }
   void (async () => {
     try {
       // Always drain every in-flight writer before releasing the profile lease,

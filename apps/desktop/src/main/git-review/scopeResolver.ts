@@ -263,7 +263,7 @@ export async function resolveReviewScope(
   }
   const resolutionChain = [
     { source: 'telemetry', path: resolved.source === 'telemetry' ? resolved.workdir : null, ok: resolved.source === 'telemetry' },
-    { source: 'worktree', path: fallbackWorktreePath, ok: resolved.source === 'worktree' },
+    { source: 'worktree', path: resolved.source === 'worktree' ? resolved.workdir : fallbackWorktreePath, ok: resolved.source === 'worktree' },
     { source: 'workingDir', path: pinnedDir ?? row.workingDir, ok: resolved.source === 'workingDir' },
   ];
 

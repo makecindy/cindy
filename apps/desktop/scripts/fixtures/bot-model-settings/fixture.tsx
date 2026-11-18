@@ -6,6 +6,8 @@ import type { BotModelRoute } from '../../../src/shared/botModelChain';
 import { beginProvidersRefresh, commitProvidersSnapshot } from '../../../src/renderer/lib/providersSnapshotStore';
 import { getDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
+import { agentDeviceFavoriteSource } from '@cindy/device-link';
+import { addModelFavorite } from '../../../src/renderer/state/modelFavorites';
 
 const model = { id: 'available-model', name: 'Gemini with a very long model display name',
   contextWindow: 200000, efforts: ['low', 'medium', 'high'], defaultEffort: 'high' };
@@ -23,7 +25,7 @@ const isSharedCase = ctx.case.startsWith('shared-');
 function Fixture() {
   const { t } = useTranslation();
   const primary = isSharedCase ? { ...unknown, agentDeviceId: 'share:fixture', effort: 'high' }
-    : ctx.case === 'available' ? { ...unknown, model: model.id, effort: 'high' } : unknown;
+    : ctx.case === 'available' || ctx.case.startsWith('loading') ? { ...unknown, model: model.id, effort: 'high' } : unknown;
   const [routes, setRoutes] = useState<BotModelRoute[]>([primary,
     ...Array.from({ length: ctx.case === 'four-backups' ? 4 : 1 }, (_, i) => ({ ...(isSharedCase ? primary : unknown),
       model: isSharedCase ? sharedModels[1]!.id
@@ -42,8 +44,14 @@ void mountPage({
     const owner = getDataOwnerGeneration();
     const localProvider = ctx.case === 'shared-same-id' ? { ...provider,
       models: { codex: sharedModels.map(entry => ({ ...entry, name: `Local ${entry.name}`, efforts: ['low'], defaultEffort: 'low' })) } } : provider;
-    commitProvidersSnapshot(beginProvidersRefresh(), { dataOwnerId: owner.dataOwnerId,
+    const commitCatalog = () => commitProvidersSnapshot(beginProvidersRefresh(), { dataOwnerId: owner.dataOwnerId,
       ownerGeneration: owner.generation, providers: [localProvider], providerOrder: ['openai'] });
+    if (ctx.case.startsWith('loading')) window.addEventListener('fixture:catalog-ready', commitCatalog, { once: true });
+    else commitCatalog();
+    if (ctx.case === 'loading-remote-favorite') addModelFavorite({
+      providerId: agentDeviceFavoriteSource({ deviceId: 'fixture-device', providerId: 'openai' }),
+      modelId: sharedModels[0]!.id, agent: 'codex', effort: 'high',
+    });
     const capabilities = (shared: boolean) => ({
       hasFastMode: false,
       availableModels: (shared ? sharedModels : [model]).map(entry => ({ ...entry, displayName: entry.name })),

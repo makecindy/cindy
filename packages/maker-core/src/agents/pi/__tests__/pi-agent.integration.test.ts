@@ -297,7 +297,11 @@ function chatCompletionsStreamBody(text: string, model: string): string {
 }
 
 /** 让"模型"发起一次工具调用的 SSE 流(stop_reason=tool_use)。 */
-function anthropicToolUseBody(toolName: string, input: Record<string, unknown>): string {
+function anthropicToolUseBody(
+  toolName: string,
+  input: Record<string, unknown>,
+  options: { inputTokens?: number; toolCallId?: string } = {},
+): string {
   return sse([
     {
       event: 'message_start',
@@ -310,7 +314,7 @@ function anthropicToolUseBody(toolName: string, input: Record<string, unknown>):
           model: 'pi-test-model',
           content: [],
           stop_reason: null,
-          usage: { input_tokens: 42, output_tokens: 0 },
+          usage: { input_tokens: options.inputTokens ?? 42, output_tokens: 0 },
         },
       },
     },
@@ -319,7 +323,7 @@ function anthropicToolUseBody(toolName: string, input: Record<string, unknown>):
       data: {
         type: 'content_block_start',
         index: 0,
-        content_block: { type: 'tool_use', id: 'toolu_itest_1', name: toolName, input: {} },
+        content_block: { type: 'tool_use', id: options.toolCallId ?? 'toolu_itest_1', name: toolName, input: {} },
       },
     },
     {
@@ -441,6 +445,69 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  // Integration: execute the public ExtensionAPI through the real shipped
+  // bridge, not a replacement RPC or a host-side approximation of active tools.
+  it('reads and changes the native tool catalog through the existing bridge command', { timeout: 30_000 }, async () => {
+    const handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'native-tool-catalog', workingDir: agentHome,
+      model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+    try {
+      const tools = await handle.callNativeToolCatalog!('getAllTools', []) as Array<{ name: string; parameters?: unknown; sourceInfo?: unknown }>;
+      expect(tools.find(tool => tool.name === 'read')?.parameters).toBeDefined();
+      expect(tools.some(tool => tool.sourceInfo !== undefined)).toBe(false);
+      const active = await handle.callNativeToolCatalog!('getActiveTools', []) as string[];
+      expect(active).toContain('read');
+      expect(await handle.callNativeToolCatalog!('setActiveTools', [['read', 'not-a-native-tool']])).toEqual(['read']);
+      expect(await handle.callNativeToolCatalog!('setActiveTools', [active])).toEqual(active);
+      await expect(handle.callNativeToolCatalog!('registerTool', [])).rejects.toThrow('UNSUPPORTED_CAPABILITY');
+    } finally { await handle.close(); }
+  });
+
+  // Tool lifecycle contract, integration: injected input must execute through
+  // native permissions, then the supported result replacement reaches the model.
+  // Existing model-request tests cannot prove either native tool hook is wired.
+  // Minimal failure: read the original path instead of the transformed path.
+  it.each(['transform', 'deny', 'post-deny', 'prototype-input'] as const)('native plugin tool hooks: %s', { timeout: 20_000 }, async mode => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-tool-lifecycle-'));
+    const fixture = path.join(workingDir, 'actual.txt');
+    writeFileSync(fixture, 'native-tool-result');
+    const credential = path.join(workingDir, '.ssh', 'id_rsa');
+    if (mode === 'prototype-input') {
+      mkdirSync(path.dirname(credential));
+      writeFileSync(credential, 'FAKE_CREDENTIAL_CONTENT_FOR_HOOK_TEST');
+    }
+    const before = seenRequests.length;
+    const calls: Array<{ phase: string; input: unknown; result?: unknown }> = [];
+    const deps = buildDeps();
+    deps.toolLifecycleControl = { enabled: () => true, run: async (_sessionId, event) => {
+      calls.push(event);
+      if (mode === 'prototype-input') return event.phase === 'call'
+        ? { input: JSON.parse('{"__proto__":' + JSON.stringify({ path: credential }) + '}') } : {};
+      return event.phase === 'call' ? mode === 'deny' ? { decision: 'deny', reason: 'plugin-tool-denied' } : { input: { path: fixture } }
+        : mode === 'post-deny' ? { decision: 'deny', reason: 'plugin-stopped-continuation' }
+          : { result: { content: [{ type: 'text', text: 'plugin-tool-result' }] } };
+    } };
+    try {
+      scriptedResponses.push(anthropicToolUseBody('read', { path: path.join(workingDir, 'missing.txt') }), anthropicStreamBody('done'));
+      await runPermissionTurn({ sessionId: 'native-tool-hooks', workingDir,
+        permissionMode: mode === 'prototype-input' ? 'ask' : 'bypassPermissions', resolverBehavior: 'deny', deps });
+      const last = seenRequests.slice(before).at(-1)?.body ?? '';
+      expect(calls[0]).toMatchObject({ phase: 'call', input: { path: path.join(workingDir, 'missing.txt') } });
+      if (mode === 'prototype-input') {
+        expect(JSON.stringify(calls)).not.toContain('FAKE_CREDENTIAL_CONTENT_FOR_HOOK_TEST');
+        expect(last).not.toContain('FAKE_CREDENTIAL_CONTENT_FOR_HOOK_TEST');
+      } else if (mode === 'transform') {
+        expect(calls[1]).toMatchObject({ phase: 'result', input: { path: fixture } });
+        expect(JSON.stringify(calls[1].result)).toContain('native-tool-result');
+        expect(last).toContain('plugin-tool-result');
+      } else if (mode === 'post-deny') {
+        expect(calls).toHaveLength(2);
+        expect(seenRequests.slice(before)).toHaveLength(1);
+      } else {
+        expect(calls).toHaveLength(1);
+        expect(last).toContain('plugin-tool-denied');
+      }
+    } finally { rmSync(workingDir, { recursive: true, force: true }); scriptedResponses.length = 0; }
+  });
   // Runtime control contract, integration: tool continuations must route again;
   // payload changes reach HTTP, and a later unselected send preserves the baseline.
   it('routes and transforms each selected model request across a real tool continuation', { timeout: 30_000 }, async () => {
@@ -625,6 +692,57 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     } finally { rmSync(workingDir, { recursive: true, force: true }); }
   });
 
+  // #9803 regression, integration: App rebuilds the native session when the
+  // selected static fragments change. Fresh-only coverage misses switch_session
+  // reinitializing extensions before the next real provider request.
+  it('restores static fragments after selecting, deselecting and reselecting on resumed history', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-static-prompt-reselect-'));
+    const runtimeHome = path.join(workingDir, 'runtime');
+    const agent = new PiAgent({ ...buildDeps(), resolvePiAgentHome: () => runtimeHome });
+    const fragment = 'SELECTED_TASK_SYSTEM_FRAGMENT';
+    const systems: string[] = [];
+    let resumeSessionId: string | undefined;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      for (const selected of [true, false, true]) {
+        handle = await agent.startSession({ sessionId: 'static-prompt-reselect', workingDir,
+          model: 'pi-test-model', permissionMode: 'bypassPermissions', userPrompt: 'Original task instructions',
+          resumeSessionId, ...(selected ? { [TASK_SYSTEM_PROMPT]: fragment } : {}) });
+        const configHomes = readdirSync(path.join(runtimeHome, 'run-tmp'));
+        expect(configHomes).toHaveLength(1);
+        const configHome = path.join(runtimeHome, 'run-tmp', configHomes[0]);
+        const promptFile = path.join(configHome, 'task-system-prompt.md');
+        expect(existsSync(promptFile)).toBe(selected);
+        if (selected) expect(readFileSync(promptFile, 'utf8')).toBe(fragment);
+        const before = seenRequests.length;
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return;
+        } })();
+        await handle.send({ type: 'user', content: 'Reply briefly.' });
+        await done;
+        const body = JSON.parse(seenRequests[before].body);
+        const system = typeof body.system === 'string' ? body.system
+          : body.system.map((block: { text: string }) => block.text).join('\n\n');
+        systems.push(system);
+        expect(system.includes(fragment), 'turn ' + systems.length).toBe(selected);
+        expect(JSON.stringify(body.messages)).not.toContain(fragment);
+        // Resume must retain the earlier turns rather than silently starting fresh.
+        expect(body.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(systems.length);
+        resumeSessionId = handle.id;
+        await handle.close();
+        expect(existsSync(configHome)).toBe(false);
+        expect(existsSync(promptFile)).toBe(false);
+        handle = undefined;
+      }
+      expect(systems[0]).toBe(systems[1] + '\n\n' + fragment);
+      expect(systems[2]).toBe(systems[0]);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   // #8887, integration: the real runtime generates the retry lifecycle after
   // a completed tool request, a real HTTP 502 and successful recovery.
   it('preserves paid request usage across a real native 502 retry', { timeout: 60_000 }, async () => {
@@ -700,6 +818,89 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       rmSync(workingDir, { recursive: true, force: true });
     }
   });
+
+  // #10198, integration: PiAgent's real native compactor must publish a lower
+  // running watermark before the next tool, and resume from its compacted history.
+  // Translator fixtures inject compaction_end; the existing native tests only
+  // cover policy changes/no-op compaction. Two history spans allow a native cut
+  // outside its default keep-recent budget; a tool turn then exceeds the threshold.
+  it('publishes native automatic compaction usage before continuing tools and resumes compacted history',
+    { timeout: 30_000 }, async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-compact-usage-'));
+      const fixtureFile = path.join(workingDir, 'fixture.txt');
+      const outputFile = path.join(workingDir, 'continued.txt');
+      writeFileSync(fixtureFile, 'tool payload '.repeat(3_600));
+      const deps = buildDeps();
+      deps.resolveModelContextLimit = () => 32_000;
+      deps.runtimeConfig.piAutoCompactThresholdPct = 85;
+      const agent = new PiAgent(deps);
+      let handle: AgentSessionHandle | undefined;
+      const options = { sessionId: 'native-compact-usage', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' as const };
+      const send = async (content: string) => {
+        const events: AgentEvent[] = [];
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+        await handle!.send({ type: 'user', content });
+        await done;
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.at(-1)).toMatchObject({ type: 'done', data: { status: 'completed' } });
+        return events;
+      };
+      try {
+        handle = await agent.startSession(options);
+        await send('OLD_HISTORY_TO_SUMMARIZE '.repeat(1_920));
+        await send('RECENT_HISTORY '.repeat(3_200));
+        const summary = '## Goal\nCOMPACT_HISTORY_CANARY: read fixture.txt, then write continued.txt.';
+        const before = seenRequests.length;
+        scriptedResponses.push(
+          anthropicToolUseBody('read', { path: fixtureFile }, { inputTokens: 579_216 }),
+          anthropicStreamBody(summary),
+          anthropicToolUseBody('write', { path: outputFile, content: 'continued after compaction' },
+            { toolCallId: 'toolu_after_compaction' }),
+          anthropicStreamBody('finished after compaction'),
+        );
+        const events = await send('Read fixture.txt, then write continued.txt.');
+        const boundaryIndex = events.findIndex(event => event.type === 'compact_boundary');
+        expect(boundaryIndex).toBeGreaterThanOrEqual(0);
+        const boundary = events[boundaryIndex]!;
+        expect(boundary).toMatchObject({ type: 'compact_boundary', data: { trigger: 'auto' } });
+        const { preTokens, postTokens } = boundary.data as { preTokens: number; postTokens: number };
+        expect(postTokens).toBeGreaterThan(0);
+        expect(postTokens).toBeLessThan(preTokens);
+        expect(postTokens).toBeLessThan(32_000);
+        expect(events[boundaryIndex + 1]).toMatchObject({ type: 'status', data: {
+          isRunning: true, contextTokens: postTokens, contextWindow: 32_000,
+          contextSnapshotAuthoritative: true,
+        } });
+        const continuedTool = events.findIndex(event => event.type === 'tool_use'
+          && (event.data as { toolUseId?: string }).toolUseId === 'toolu_after_compaction');
+        expect(continuedTool).toBeGreaterThan(boundaryIndex + 1);
+        expect(events.slice(boundaryIndex, continuedTool).some(event => event.type === 'status'
+          && (event.data as { isRunning?: boolean }).isRunning === false)).toBe(false);
+        expect(readFileSync(outputFile, 'utf8')).toBe('continued after compaction');
+        expect(seenRequests.slice(before).some(request => request.body.includes('COMPACT_HISTORY_CANARY'))).toBe(true);
+        expect(scriptedResponses).toHaveLength(0);
+
+        const nativeId = handle.id;
+        await handle.close();
+        handle = await agent.startSession({ ...options, resumeSessionId: nativeId });
+        expect(handle.id).toBe(nativeId);
+        expect(handle.getUsageSnapshot().contextWindow).toBe(32_000);
+        const resumedRequest = seenRequests.length;
+        await send('Continue using the saved summary.');
+        expect(seenRequests[resumedRequest]!.body).toContain('COMPACT_HISTORY_CANARY');
+        expect(seenRequests[resumedRequest]!.body).not.toContain('OLD_HISTORY_TO_SUMMARIZE');
+      } finally {
+        await handle?.close();
+        scriptedResponses.length = 0;
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    });
 
   it('applies configured windows on creation and same-history resume, then restores the default',
     { timeout: 60_000 }, async () => {
@@ -2420,6 +2621,46 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
     }
   }
+
+  // Separate vision HTTP calls must produce private, per-attempt usage; they are not assistant usage.
+  it('meters vision primary and fallback through the real Pi bridge without exposing usage to the model', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-vision-usage-'));
+    const image = path.join(workingDir, 'image.png');
+    writeFileSync(image, Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]));
+    const calls: string[] = []; const packets: Array<{ backendRole?: string; model?: string; usage?: unknown }> = [];
+    const vision = createServer((req, res) => {
+      req.resume(); req.on('end', () => {
+        calls.push(req.url ?? ''); const primary = req.url === '/primary';
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ model: primary ? 'served-primary' : 'served-fallback',
+          choices: [{ message: { content: primary ? '' : 'a red button' } }],
+          usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 40 }, completion_tokens: 2 },
+        }));
+      });
+    });
+    await new Promise<void>(resolve => vision.listen(0, '127.0.0.1', resolve));
+    const address = vision.address() as { port: number };
+    const backend = { baseUrl: `http://127.0.0.1:${address.port}`, requestPath: '/primary', model: 'alias', authorization: null, headers: {}, wireProtocol: 'openai-chat' };
+    const deps = buildDeps(); const before = seenRequests.length;
+    deps.resolvePiVisionBridgeEnv = () => ({ CINDY_PI_VISION_BRIDGE: JSON.stringify({ enabled: true, primary: backend, fallback: { ...backend, requestPath: '/fallback' } }) });
+    deps.createPiVisionUsageRecorder = () => ({ observe: async value => { packets.push(value as typeof packets[number]); }, close() {} });
+    scriptedResponses.push(anthropicToolUseBody('vision', { path: image }), anthropicStreamBody('done after vision'));
+    try {
+      const result = await runPermissionTurn({ sessionId: 'vision-usage', workingDir, permissionMode: 'bypassPermissions', resolverBehavior: 'allow', deps });
+      expect(result.finalText).toContain('done after vision');
+      expect(calls).toEqual(['/primary', '/fallback']);
+      expect(packets.map(p => p.backendRole)).toEqual(['primary', 'fallback']);
+      expect(packets.map(p => p.model)).toEqual(['served-primary', 'served-fallback']);
+      expect(packets.map(p => p.usage)).toEqual([1, 2].map(() => ({ prompt_tokens: 100, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 40 } })));
+      const requests = seenRequests.slice(before).map(r => r.body).join();
+      expect(requests).toContain('a red button');
+      expect(requests).not.toContain('cindy:pi-vision-usage:');
+    } finally {
+      scriptedResponses.length = 0; vision.closeAllConnections();
+      await new Promise<void>(resolve => vision.close(() => resolve()));
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   // #9630, integration: catalog inheritance -> models.json -> real Pi HTTP.
   // Existing effort coverage used Gateway Chat, not native Anthropic relays.

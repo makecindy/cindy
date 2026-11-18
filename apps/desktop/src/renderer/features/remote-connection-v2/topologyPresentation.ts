@@ -5,16 +5,31 @@
 
 import { relativeTime as relativeTimeOf } from '@/components/settings/deviceLabels';
 
-import type { TopologyFlow, TopologyNode } from './topologyModel';
+import type { TopologyFlow, TopologyModel, TopologyNode } from './topologyModel';
 
 export { platformLabel, relativeTime } from '@/components/settings/deviceLabels';
 
 type T = (key: string, options?: Record<string, unknown>) => string;
 
-/** The negotiated link is authoritative; unknown or disconnected peers have no protocol label. */
-export function protocolLabel(node: TopologyNode, t: T): string | null {
+export type ProtocolKind = 'agent-net' | 'device-link';
+
+/** Protocol of the actual path shown in the topology. */
+export function protocolKind(node: TopologyNode): ProtocolKind | null {
   if (!node.path || node.status === 'offline' || node.encrypted === undefined) return null;
-  return t(node.encrypted ? 'settings.remoteControl.v2.protocol.agentNet' : 'settings.remoteControl.v2.protocol.deviceLink');
+  return node.encrypted ? 'agent-net' : 'device-link';
+}
+
+export function protocolLabel(node: TopologyNode, t: T): string | null {
+  return protocolKindLabel(protocolKind(node), t);
+}
+
+export function protocolKindLabel(kind: ProtocolKind | null | undefined, t: T): string | null {
+  if (!kind) return null;
+  return t(kind === 'agent-net' ? 'settings.remoteControl.v2.protocol.agentNet' : 'settings.remoteControl.v2.protocol.deviceLink');
+}
+
+export function selfProtocolKind(model: Pick<TopologyModel, 'relay'>, linkStatus: string): ProtocolKind | null {
+  return linkStatus === 'online' ? model.relay.protocol ?? null : null;
 }
 
 /** 一台设备「怎么连」的一句话:直连 / 经「X」中转 / 在线未建链 / 要处理原因 / 离线。 */
@@ -24,6 +39,7 @@ export function pathLabel(node: TopologyNode, relayName: string, t: T): string {
   if (node.attention === 'peer-control-off') return t('settings.remoteControl.myDevices.peerControlOff');
   if (node.path === 'direct') return t('settings.remoteControl.v2.path.direct');
   if (node.path === 'relay') return t('settings.remoteControl.v2.path.relay', { name: relayName });
+  if (node.status === 'connecting') return t('settings.devices.linkStatus.connecting');
   return t('settings.remoteControl.v2.path.unlinked');
 }
 
@@ -39,6 +55,7 @@ export type RowSubtitleTone = 'muted' | 'error' | 'live';
  */
 export function rowSubtitle(node: TopologyNode, t: T): { text: string; tone: RowSubtitleTone } {
   if (node.status === 'attention') return { text: pathLabel(node, '', t), tone: 'error' };
+  if (node.status === 'connecting') return { text: pathLabel(node, '', t), tone: 'muted' };
   if (node.status === 'offline') {
     return { text: t('settings.devices.lastSeen', { time: relativeTimeOf(node.lastSeenAt, t) }), tone: 'muted' };
   }
@@ -48,5 +65,5 @@ export function rowSubtitle(node: TopologyNode, t: T): { text: string; tone: Row
 }
 
 export function formatRtt(ms: number, t: T): string {
-  return t('settings.remoteControl.v2.ms', { value: ms });
+  return t('settings.remoteControl.v2.ms', { value: Math.round(ms) });
 }

@@ -1,4 +1,5 @@
 import { RemoteControlSection } from '../../../src/renderer/components/settings/RemoteControlSection';
+import type { PeerAgentNetReply, SelfHostedRelayCommand } from '../../../src/shared/selfHostedRelay';
 import { AppFrame, ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
 
 type Device = DeviceLinkDeviceView;
@@ -26,6 +27,14 @@ function link(deviceId: string, path: Link['path'], rttMs: number | null, sent: 
 }
 
 function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs: number | null } {
+  if (name === 'app-nodes' || name === 'app-nodes-list') {
+    return { devices: [SELF,
+      device({ deviceId: 'friend', name: 'Friend Mac', app: 'cindy-friend', remoteControlEnabled: false }),
+      device({ deviceId: 'future', name: 'Lab Mac', app: 'future-app', remoteControlEnabled: false }),
+      device({ deviceId: 'offline-friend', name: 'Travel Mac', app: 'cindy-friend', online: false, remoteControlEnabled: false }),
+      device({ deviceId: 'legacy', name: 'Legacy Cindy', remoteControlEnabled: false }),
+    ], links: [link('friend', 'direct', 4), link('future', 'relay', 35)], relayRttMs: 18 };
+  }
   if (name === 'empty') return { devices: [SELF], links: [], relayRttMs: 18 };
   if (name === 'fleet') {
     // 与真实账号同一形状(3 直连、7 经中转、15 离线),名字是虚构的;两台正在收发。
@@ -56,6 +65,48 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     for (let i = 0; i < 15; i++) {
       devices.push(device({ deviceId: `off${i}`, name: `Old device ${i + 1}`, platform: i % 2 ? 'win32' : 'darwin', online: false, lastSeenAt: '2026-10-20T08:00:00Z' }));
     }
+    return { devices, links, relayRttMs: 25 };
+  }
+  if (name.startsWith('remote-switch')) {
+    // 原型:在拓扑卡片里远程切换连接方式。每台设备一种情况(见 ui-page.mjs 的 remote-switch)。
+    const enc = (l: Link, encrypted: boolean): Link => ({ ...l, encrypted });
+    return {
+      devices: [
+        SELF,
+        device({ deviceId: 'work', name: 'Work PC', platform: 'win32', deviceInfo: { modelLabel: 'ThinkPad X1' } }),
+        device({ deviceId: 'build', name: 'Build Server', platform: 'linux' }),
+        device({ deviceId: 'vault', name: 'Archive Server', platform: 'linux' }),
+        device({ deviceId: 'lab', name: 'Lab Mac', deviceInfo: { modelLabel: 'Mac mini' } }),
+        device({ deviceId: 'phone', name: 'iPhone', platform: 'ios' }),
+        device({ deviceId: 'home', name: 'Home PC', platform: 'win32' }),
+        device({ deviceId: 'air', name: 'MacBook Air', appVersion: '1.3.2', deviceInfo: { modelLabel: 'MacBook Air' } }),
+        device({ deviceId: 'office', name: 'Office PC', platform: 'win32', remoteControlEnabled: false }),
+        device({ deviceId: 'spare', name: 'Spare PC', platform: 'win32' }),
+        device({ deviceId: 'mini', name: 'Mac mini', online: false, lastSeenAt: '2026-11-12T05:00:00Z' }),
+      ],
+      links: [
+        enc(link('work', 'direct', 4), false),
+        enc(link('build', 'direct', 3), true),
+        enc(link('vault', 'direct', 5), true),
+        enc(link('lab', 'direct', 2), false),
+        enc(link('phone', 'direct', 18), false),
+        enc(link('home', 'relay', 46), false),
+        enc(link('air', 'relay', 52), false),
+        enc(link('spare', 'direct', 6), false),
+      ],
+      relayRttMs: 21,
+    };
+  }
+  if (name === 'split-direct') {
+    // 直连多到拆成两组:第二组直连在左边上方,中转组排在它下面,中转站整个落在这台电脑的名字下面。
+    const devices: Device[] = [SELF];
+    const links: Link[] = [];
+    for (let i = 0; i < 9; i++) {
+      devices.push(device({ deviceId: `dir${i}`, name: `Desk ${i + 1}`, platform: i % 2 ? 'win32' : 'darwin' }));
+      links.push(link(`dir${i}`, 'direct', 3 + i));
+    }
+    devices.push(device({ deviceId: 'rel0', name: 'Office PC', platform: 'win32' }), device({ deviceId: 'idle', name: 'Studio mini' }), device({ deviceId: 'attention', name: 'Lab PC', remoteControlEnabled: false }));
+    links.push(link('rel0', 'relay', 64));
     return { devices, links, relayRttMs: 25 };
   }
   if (name === 'many') {
@@ -95,15 +146,80 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     ],
     links: [
       // 正在操作 Work PC:双向都有消息;Home server 只收到它发来的。
-      link('win', 'direct', 3, 200, 400),
+      link('win', 'direct', 3.252, 200, 400),
       link('mini', 'direct', 1),
-      link('nas', 'relay', 96, null, 600),
+      link('nas', 'relay', 96.752, null, 600),
     ],
-    relayRttMs: 24,
+    relayRttMs: 24.752,
   };
 }
 
 const data = scenario(ctx.case);
+const agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes'] = ctx.case === 'default' ? [
+  { deviceId: 'mini', path: 'direct', rttMs: 1 },
+  { deviceId: 'pixel', path: 'connecting', rttMs: null },
+] : undefined;
+if (agentNetRoutes) data.links = data.links.filter((link) => link.deviceId !== 'mini');
+if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filter((l) => l.encrypted);
+/**
+ * 这台电脑实际用的连接方式(拓扑中间名字下面):打开 Agent-Net 后通常就是 Agent-Net;self-device-link 是开着开关、
+ * 这次却跑在 Device Link 上(例如 Agent-Net 不认这台设备),主连接不是 Agent-Net 时所有对端也都是 Device Link。
+ */
+const selfEncrypted = ctx.case !== 'self-device-link';
+if (!selfEncrypted) for (const l of data.links) l.encrypted = false;
+/**
+ * 远程切换连接方式的模拟对端(remote-switch):代替那台电脑回答 `peer-agent-net`,并像真实切换一样
+ * 让与它的连接先断开、再以新方式连回来。MacBook Air 是旧版 Cindy(不认识这个请求)，Spare PC 在当前中转上
+ * 没有 Agent-Net 身份；Agent-Net 不通的那台(单台场景 Home PC、批量场景 Lab Mac)连回来的仍是 Device Link，
+ * 在它给出的期限后显示已退回。
+ */
+const peerPlan: Record<string, { status?: 'unsupported' | 'NOT_SIGNED_IN' | 'SECURE_STORAGE_UNAVAILABLE' | 'RELAY_IDENTITY_MISSING'; agentNetFails?: boolean; onlyEncrypted?: boolean; relayOnly?: boolean }> =
+  ctx.case.startsWith('remote-switch')
+    ? {
+        air: { status: 'unsupported' },
+        spare: { status: 'RELAY_IDENTITY_MISSING' },
+        build: { onlyEncrypted: ctx.case !== 'remote-switch-controller-strict' },
+        vault: { relayOnly: true },
+        // 单台：Home PC 退回；批量：第一台 Home PC 成功，Lab Mac 退回，Work PC 成功。
+        [ctx.case === 'remote-switch' ? 'home' : 'lab']: { agentNetFails: true },
+      }
+    : {};
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const pendingDeadline = new Map<string, number>();
+async function simulatePeer(command: Extract<SelfHostedRelayCommand, { type: 'peer-agent-net' }>): Promise<PeerAgentNetReply> {
+  const plan = peerPlan[command.deviceId] ?? {};
+  const link = data.links.find((l) => l.deviceId === command.deviceId);
+  const request = command.request;
+  await wait(request.action === 'status' ? 800 : 300);
+  if (plan.status === 'unsupported') return { ok: false, code: 'CHANNEL_NOT_ALLOWED', message: 'channel not allowed remotely' };
+  if (request.action === 'status') {
+    return { ok: true, controllerBlock: ctx.case === 'remote-switch-controller-strict' ? 'ENCRYPTION_REQUIRED' : null,
+      result: { version: 1, enabled: link?.encrypted === true, encrypted: link?.encrypted === true,
+      disableBlocked: plan.relayOnly ? 'V2_ONLY_RELAY' : null,
+      onlyEncrypted: plan.onlyEncrypted === true, blocked: plan.status ?? null, pending: (pendingDeadline.get(command.deviceId) ?? 0) > Date.now() } };
+  }
+  if (request.action === 'confirm') {
+    // 像真实对方一样：重连期间联系不上；连回来但不是 Agent-Net 时不认；过了期限说明已经退回。
+    if (pendingDeadline.has(command.deviceId) && Date.now() > pendingDeadline.get(command.deviceId)!) {
+      return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_STALE] agent-net switch failed' };
+    }
+    if (!link?.open) return { ok: false, code: 'NOT_CONNECTED', message: 'reconnecting' };
+    if (link.encrypted !== true) return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_NOT_ON_AGENT_NET] agent-net switch failed' };
+    pendingDeadline.delete(command.deviceId);
+    return { ok: true, result: { version: 1, switchId: request.switchId, confirmed: true } };
+  }
+  if (!request.enabled && ctx.case === 'remote-switch-controller-strict') return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_CONTROLLER_ENCRYPTION_REQUIRED] controller requires encryption' };
+  if (!request.enabled && plan.relayOnly) return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_V2_ONLY_RELAY] network requires encryption' };
+  if (!request.enabled && plan.onlyEncrypted) return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_ENCRYPTION_REQUIRED] target requires encryption' };
+  if (request.enabled && plan.status) return { ok: false, code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_NOT_READY] agent-net switch failed' };
+  if (link) {
+    setTimeout(() => { link.open = false; }, 300);
+    setTimeout(() => { link.open = true; link.encrypted = request.enabled && !plan.agentNetFails; }, 1_500);
+  }
+  const confirmWithinMs = request.enabled ? (plan.agentNetFails ? 4_000 : 60_000) : null;
+  if (confirmWithinMs) pendingDeadline.set(command.deviceId, Date.now() + confirmWithinMs);
+  return { ok: true, result: { version: 1, switchId: request.switchId, enabled: request.enabled, confirmWithinMs } };
+}
 if (ctx.case === 'default' && data.links[0]) data.links[0].encrypted = false;
 
 void mountPage({
@@ -122,7 +238,12 @@ void mountPage({
         disabledControlDeviceIds: [],
         unresponsiveDeviceIds: [],
       }),
-      getPeerLinks: async () => ({ links: data.links, relayRttMs: data.relayRttMs }),
+      getPeerLinks: async () => ({
+        links: data.links,
+        agentNetRoutes,
+        relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
+        relayRttMs: data.relayRttMs,
+      }),
       onPeerLinksChanged: subscription('peerLinks'),
       onPresenceChanged: subscription('presence'),
       onStatusChanged: subscription('linkStatus'),
@@ -135,11 +256,16 @@ void mountPage({
       deleteDevice: forbid('deviceLink.deleteDevice'),
     },
     selfHostedRelay: {
-      command: async () => ({
+      command: async (command: SelfHostedRelayCommand) => ({
+        ...(command.type === 'peer-agent-net' ? { peer: await simulatePeer(command) } : {}),
         state: {
           available: true,
-          agentNetEnabled: ctx.case !== 'legacy-off',
-          agentNetOnlyEncrypted: ctx.case === 'empty',
+          agentNetEnabled: ctx.case !== 'legacy-off' && ctx.case !== 'app-nodes-list',
+          agentNetOnlyEncrypted: ctx.case === 'empty' || ctx.case === 'remote-switch-controller-strict',
+          // 被切的那台电脑:开关下面写「由谁在几点远程打开」。
+          agentNetChangedBy: ctx.case === 'switched-here'
+            ? { deviceId: 'mbp', deviceName: 'MacBook Pro', at: new Date(2026, 10, 12, 10, 32).getTime(), enabled: true }
+            : null,
           mode: 'official',
           relay: null,
           issue: null,
@@ -160,6 +286,10 @@ void mountPage({
       onHostsChanged: subscription('sshHosts'),
     },
     openRemoteDesktop: forbid('openRemoteDesktop'),
+    maker: {
+      getOwnComputerModelUse: async () => ({ enabled: ctx.case === 'model-access-on' }),
+      setOwnComputerModelUse: async ({ enabled }: { enabled: boolean }) => ({ ok: true, enabled }),
+    },
   },
   render: () => (
     <AppFrame>

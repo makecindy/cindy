@@ -78,6 +78,21 @@
 全目录解析、已有预设三引擎投影与路由回归属于离线验证，不代表各账号实际可调用。
 Server Registry 与运行时二进制未修改；原生订阅的账号准入仍由原生发现控制。
 
+2026-11-18：GPT-6.2 Sol 于 2026-11-17 发布，Pi 公共目录尚未收录。Registry 登记该型号后，
+它成为 Sol 家族最近的一代；没有对应的 API 记录时，中转上的未来型号会改为继承 Registry 的
+1,050,000 公共容量，而不是 API 记录的 272,000 工作窗口。为保持这条继承约定，只为官方
+`https://api.openai.com/v1` 端点补入一条 `gpt-6.2-sol` 记录：执行参数与工作窗口同 GPT-6.1 Sol
+记录，另写 `contextWindowMax: 1050000`（官方容量），否则已核实的 272,000 会被当作硬上限，用户设置的
+更大任务预算会被夹紧；价格取[官方型号页](https://developers.openai.com/api/docs/models/gpt-6.2-sol)，来源记在
+`supplementalSources`。其它供应商、订阅端点和 GPT-6.2 Astra 未补记录（Astra 的 API 记录本就是
+1,050,000，行为不变）；Pi 上游发布后以上游资料为准。该记录未用 API Key 实测推理。
+
+同日：官方 `https://api.openai.com/v1` 端点的 `gpt-6.1-sol`、`gpt-6.1-terra`、`gpt-6-sol`、`gpt-6-luna`
+四条既有记录同样只有 272,000 工作窗口，用 API Key 直连时更大的任务预算被夹紧到 272,000。为它们补
+`contextWindowMax: 1050000`（Registry 登记的官方容量），工作默认不变。从 Pi 上游重新生成这些记录时
+须保留该字段，`modelGeneration.test.ts` 的对应用例会拦住丢失。其它渠道的同名记录不改：渠道自己的
+窗口可能就是它的真实上限。
+
 Copilot 发现使用官方账号主机的 `/models`，不依赖推理使用 Messages、Responses 还是 Chat。
 登录后的地址推导、手动获取和旧连接 `/v1/models` 读取共用
 `maker-host/copilot-account-url.ts`，客户端标识取已有渠道目录；不写回用户连接，不重置登录。
@@ -85,6 +100,15 @@ Copilot 发现使用官方账号主机的 `/models`，不依赖推理使用 Mess
 发现失败仍沿用现有备用目录，成功发现仍沿用现有合并规则；备用条目不是账号权限声明。
 
 ## 用户实测后的补充验收
+
+2026-11-13：[#10269](https://github.com/makecindy/cindy/issues/10269) 的 Copilot
+`gemini-4-carbon` 仅发现 ID 时曾继承连接的 Messages 默认值，缺少 IDE 身份头。
+标准目录补入精确 Carbon 的 Chat 适配；生成入口从同来源、同官方个人端点的 Argon
+记录复用 headers / compat，不另存版本头常量，也不通过型号代际猜协议。上游已有 Carbon
+记录时优先保留上游。补充记录只声明已验证的传输字段，不借用 Argon 的容量、价格、
+模态或推理能力；发现及用户显式配置继续按原优先级覆盖。来源登记在 supplementalSources。
+回归覆盖三引擎 ID-only 导入、Pi 启动描述符、Codex 账号主机路由及真实 SDK / Claude
+桥接的模拟文本与工具往返；不等于真实账号、图片或长上下文验收。Server Registry 未修改。
 
 最初审计把三引擎都构造成 Chat 路由，没有覆盖实际添加请求。OpenRouter 的公开模型接口
 带 Bearer 与 `anthropic-version` 时返回 20 条重写 ID 的兼容视图；普通目录返回 445 条。
@@ -95,6 +119,22 @@ Copilot 发现使用官方账号主机的 `/models`，不依赖推理使用 Mess
 BYOK 导入报价进入实际参考价发布链；用户价格覆盖仍最后应用。
 添加页只对明确默认开启项标推荐，完整目录成功后清除下架的预设候选；刷新可纠正
 经完整 OpenRouter 目录确认的发现结果错误前缀，保留手填 ID 与显式模型参数。
+
+### MiMo V2.6 思考开关
+
+MiMo 官方 Chat 路由的 `high` 是 Pi 开启思考时使用的内部级别，不是界面上的推理强度。
+`tools/pi/catalog-format.mjs` 在导入与在线刷新时，对确切的 V2.6 Pro / Flash / Pro UltraSpeed
+及 API、CN/AMS/SGP Token Plan 路由投影 `thinkingToggle: true`、空 `efforts` 和 `defaultEffort: null`，
+保留 `execution.pi.thinkingLevelMap`。连接投影只在精确路由上补该开关，保留用户覆盖且不写回存储；
+Pi 启动配置保留内部级别与 off 映射。新旧连接共用该路径。
+
+统一模型面板也须传递该能力：Pi 参数浮层显示思考开关，当前模型复用调用方的思考设置入口，
+未选模型只写其所属来源的模型记忆；失败不得提前改写当前值或模型记忆。
+收藏与最近使用的配置副本尚不保存该字段，其浮层不提供会改变模型默认或当前任务的思考开关。
+
+共享兼容层的 Chat 开关映射独立于固定上游快照，不套用到原生 Responses / Anthropic。
+回归分别经过实际连接投影、目录转换、Pi 启动配置及真实 Pi 进程的本地 HTTP 请求，
+验证开启→关闭→开启；不代表 Server 目录已修改、生产已部署或真实服务请求已验收。
 
 ### OpenCode mixed-protocol regression
 

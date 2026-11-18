@@ -56,6 +56,7 @@ import { registerRecordingAudioIpc } from './recordingAudio';
  */
 
 const log = createLogger('region-screenshot');
+const DISABLE_GLOBAL_SHORTCUTS = process.env.XDT_DISABLE_GLOBAL_SHORTCUTS === '1';
 const SHORTCUT_ID = 'region-screenshot' as const;
 const CAPTURE_TIMEOUT_MS = 5000;
 
@@ -133,6 +134,10 @@ function desiredAccelerator(): string | null {
 
 function syncShortcut(): void {
   if (!initialized) return;
+  if (DISABLE_GLOBAL_SHORTCUTS) {
+    setGlobalShortcutRegistrationFailures([]);
+    return;
+  }
   const desired = recording ? null : desiredAccelerator();
   if (desired === registeredAccelerator) return;
   if (registeredAccelerator) globalShortcut.unregister(registeredAccelerator);

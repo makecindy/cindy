@@ -820,6 +820,7 @@ function main() {
       childEnv.CINDY_PI_SUBAGENT_RUN_DIR = config.runDir;
       // Independent child turns do not share the parent welcome policy channel.
       delete childEnv.CINDY_PI_TURN_TOOL_POLICY;
+      delete childEnv.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
       delete childEnv.CINDY_PI_MCP_BRIDGE;
       for (const key of Object.keys(childEnv)) {
         if (key.startsWith('CINDY_PI_REMOTE_MCP_SECRET_')) delete childEnv[key];
@@ -922,6 +923,19 @@ function main() {
           try { request = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}'); } catch (_) {}
           const receipt = !task.stopRequested && !state.stopRequested ? cacheInputTracker.read(request && request.key) : undefined;
           send(task, { type: 'extension_ui_response', id: event.id, value: JSON.stringify(receipt || {}) });
+          return;
+        }
+        if (event.type === 'extension_ui_request' && event.method === 'notify'
+            && typeof event.message === 'string' && event.message.startsWith('cindy:pi-vision-usage:')) {
+          try {
+            const vision = JSON.parse(childEnv.CINDY_PI_VISION_BRIDGE || '{}');
+            const prefix = 'cindy:pi-vision-usage:' + vision.usageToken + ':';
+            if (vision.usageToken && event.message.startsWith(prefix) && event.message.length <= prefix.length + 4096) {
+              const usage = JSON.parse(event.message.slice(prefix.length));
+              // Keep per-request facts out of the bounded task/approval snapshot.
+              fs.appendFileSync(path.join(config.runDir, 'vision-usage.jsonl'), JSON.stringify(usage) + '\n', { encoding: 'utf8', mode: 0o600 });
+            }
+          } catch (_) { /* Private usage never becomes tool output or an approval. */ }
           return;
         }
         safeAppendTranscript(state, { type: 'cindy.subagent.child_event', at: Date.now(), childId: task.childId, event: event });

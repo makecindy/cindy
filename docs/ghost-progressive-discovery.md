@@ -1,8 +1,12 @@
 # 插件渐进式发现与花名册注入（Ghost Progressive Discovery）
 
-> **适用**：修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、
-> 插件运行期可见性门禁、FORGE_GUIDE 作者契约前先读本文。插件基座红线、沙箱与
-> 权限规则的正本仍是 `docs/dev-rules/plugin-security-and-authoring.md`，本文不替代它。
+> **读取时机**：修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、
+> 插件运行期可见性门禁、FORGE_GUIDE 作者契约之前
+> **适用路径**：`apps/desktop/src/main/mcp-integrations/**/ghost*`、
+> `apps/desktop/src/main/cindy-brain/**/{ghostVisibility,ghostManual,forgeGuide}*`、
+> `apps/desktop/src/main/plugin-market/**/agentTools*`、`packages/cindy-tools/src/ghost/**`
+> **关系**：插件基座红线、沙箱与权限规则的正本仍是
+> `docs/dev-rules/plugin-security-and-authoring.md`，本文不替代它。
 
 ## 1. 目标
 
@@ -188,7 +192,8 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
   工作目录调用同一个 `getGhostRosterPrompt` 生成，经远程 Agent 启动选项
   `ghostRosterSnapshot` 带过去；Agent 所在电脑只在隧道确实提供 `cindy` 时原样注入，
   从不读自己的已装插件（受邀者场景下那是分享者的插件）。空串同样要带到并按空注入，
-  否则对方会回退到它自己的插件。旧控制端不带该字段时：受邀者照旧不注入，同账号照旧用
+  否则对方会回退到它自己的插件；隔离运行的伙伴（本机同样不注入）带空串，V2 伙伴在自己项目里的
+  对话按普通任务生成。旧控制端不带该字段时：受邀者照旧不注入，同账号照旧用
   Agent 所在电脑的花名册。实现见 `remote-agent/controller/service.ts`、`host/service.ts`
   与 `maker-core/src/agents/shared/device-hosted.ts` 的 `deviceHostedGhostRoster`；
   回归见三 harness 的 `device-hosted-guest` 测试与 `remote-agent/__tests__/roundtrip.test.ts`。

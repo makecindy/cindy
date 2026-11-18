@@ -9,7 +9,8 @@
  * gemini / kimi 等)只需加条目;当前只做 claude / codex 两条(优先级最高、判据最稳)。
  *
  * 登录态判据只做**存在性判断**,绝不落盘 / 不进日志(CLAUDE.md 规则 23):
- *   - `file` 探测:stat 凭证文件是否存在(Codex 的 ~/.codex/auth.json)。
+ *   - `file` 探测:stat 凭证文件是否存在(Codex 的主目录下的 auth.json,主目录跟随
+ *     `CODEX_HOME`,默认 ~/.codex)。
  *   - `claude-oauth` 探测:Claude Code 登录态由 CLI 自己保存(macOS 在系统钥匙串,
  *     其它平台在 ~/.claude),只 stat 文件会漏掉 Mac 上正常登录(且可能连 ~/.claude
  *     目录都没有)的用户。故改用 host 侧的 `hasClaudeNativeLogin()`:读内置 CLI 的
@@ -53,30 +54,43 @@ export interface LocalCliDetection {
 }
 
 /**
+ * 探测基准目录的取法:
+ *   - `home`:用户的 home 目录(Claude CLI 的 ~/.claude 在它下面);
+ *   - `codex-home`:Codex CLI 的主目录 —— 跟随 `CODEX_HOME`(仅绝对路径生效),
+ *     未设置时是 `~/.codex`(#8258)。CODEX_HOME 指向别处时,codex 的配置目录与
+ *     登录态文件都在那里,不在 home 下面。
+ */
+export type LocalCliHomeBase = 'home' | 'codex-home';
+
+/**
  * 检测映射表:cli → { 配置目录, 登录态文件, 建议供应商 }。
- * 路径相对 home 目录,由 main 侧用 path.join 拼接(跨平台,规则 15)。
+ * 路径相对基准目录,由 main 侧用 path.join 拼接(跨平台,规则 15)。
  */
 export const LOCAL_CLI_DETECT_MAP: ReadonlyArray<{
   cli: LocalCliId;
   providerId: string;
-  /** 配置目录(相对 home 的路径段)。 */
+  /** 探测基准目录的取法。 */
+  homeBase: LocalCliHomeBase;
+  /** 配置目录(相对基准目录的路径段;空数组 = 基准目录本身)。 */
   configDirSegments: readonly string[];
   /** 登录态探测方式。 */
   credentialProbe: CredentialProbe;
-  /** `file` 探测用的凭证文件(相对 home 的路径段);`claude-oauth` 探测不用它。 */
+  /** `file` 探测用的凭证文件(相对基准目录的路径段);`claude-oauth` 探测不用它。 */
   credentialFileSegments?: readonly string[];
 }> = [
   {
     cli: 'claude-cli',
     providerId: 'anthropic',
+    homeBase: 'home',
     configDirSegments: ['.claude'],
     credentialProbe: 'claude-oauth',
   },
   {
     cli: 'codex-cli',
     providerId: 'openai',
-    configDirSegments: ['.codex'],
+    homeBase: 'codex-home',
+    configDirSegments: [],
     credentialProbe: 'file',
-    credentialFileSegments: ['.codex', 'auth.json'],
+    credentialFileSegments: ['auth.json'],
   },
 ];

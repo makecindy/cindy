@@ -298,7 +298,9 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     entry.type === 'file' && Boolean(onOpenInBrowser) && isBrowserOpenablePath(entry.relPath);
   const hasContextActions = (entry: DirEntry): boolean => {
     if (entry.type === 'directory') {
-      return Boolean(onNewFile || onNewFolder || onRename || onRevealInFolder);
+      return Boolean(
+        onNewFile || onNewFolder || onCopyFilePath || onRename || onRevealInFolder,
+      );
     }
     return Boolean(
       onOpenInFileBrowser ||
@@ -503,6 +505,19 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
           onSelect: () => {
             close();
             onNewFolder(entry.relPath);
+          },
+        });
+      }
+      // 文件夹也能复制路径：与文件的「复制文件路径」同走 onCopyFilePath，
+      // 宿主 handler 只拼 workdir + relPath，对目录同样成立。
+      if (onCopyFilePath) {
+        actions.push({
+          key: 'copy-folder-path',
+          icon: Clipboard,
+          label: t('ccAgent.workdirBrowse.treeMenu.copyFolderPath'),
+          onSelect: () => {
+            close();
+            onCopyFilePath(entry);
           },
         });
       }

@@ -1,0 +1,157 @@
+{
+  "before": {
+    "count": 21,
+    "bytes": 41517,
+    "hash": "0ef0726e8d2b992c2e52168f4097fd9b88f8c918e6cfac17700522d6a80db865",
+    "uniqueHashes": 1,
+    "listToolsMs": [
+      3.9217499999999745,
+      1.3750420000000076,
+      1.1154160000000388,
+      0.9640419999999494,
+      1.0612920000000372,
+      0.9909999999999854,
+      1.3956660000000056,
+      1.2907500000000027,
+      1.0361669999999776,
+      0.9262500000000387,
+      0.9326249999999732,
+      0.9694999999999823,
+      1.3004999999999995,
+      0.7300840000000335,
+      0.7062910000000215,
+      0.9429999999999836,
+      0.8113329999999905,
+      0.7870420000000422,
+      0.7577079999999796,
+      0.8281670000000076
+    ],
+    "tools": [
+      "start_team",
+      "create_worker",
+      "create_workers",
+      "list_workers",
+      "switch_focus",
+      "send_to_worker",
+      "interrupt_worker",
+      "get_worker_queue_status",
+      "update_queued_message",
+      "cancel_queued_message",
+      "merge_queued_messages",
+      "steer_queued_message",
+      "move_queued_message",
+      "idle_worker",
+      "end_team",
+      "archive_worker",
+      "update_worker",
+      "list_available_models",
+      "get_workspace_info",
+      "worker_status",
+      "read_worker"
+    ]
+  },
+  "after": {
+    "count": 22,
+    "bytes": 43969,
+    "hash": "f0c7337143f9624241dd6f7979a129a1b2fdcea8f652a7e63c059bf01efe435a",
+    "uniqueHashes": 1,
+    "listToolsMs": [
+      3.9228330000000824,
+      1.2623330000000124,
+      1.1202090000000453,
+      0.9141670000000204,
+      1.2604580000000851,
+      1.1448329999999487,
+      1.2735420000000204,
+      1.1347079999999323,
+      1.1145839999999225,
+      1.4655410000000302,
+      1.089083999999957,
+      0.9979170000000295,
+      1.1730000000000018,
+      0.7229170000000522,
+      0.6769170000000031,
+      0.8414579999999887,
+      0.8059589999999162,
+      0.86424999999997,
+      1.1005420000000186,
+      1.0938749999999118
+    ],
+    "tools": [
+      "start_team",
+      "create_worker",
+      "create_workers",
+      "list_workers",
+      "switch_focus",
+      "send_to_worker",
+      "interrupt_worker",
+      "get_worker_queue_status",
+      "update_queued_message",
+      "cancel_queued_message",
+      "merge_queued_messages",
+      "steer_queued_message",
+      "move_queued_message",
+      "idle_worker",
+      "end_team",
+      "archive_worker",
+      "update_worker",
+      "set_worker_runtime",
+      "list_available_models",
+      "get_workspace_info",
+      "worker_status",
+      "read_worker"
+    ]
+  },
+  "helper": {
+    "before": {
+      "bytes": 2027,
+      "hash": "a8c9b0cbdb020b6919f13cbfe8af7a6cb261d68e4e3e3552569ea368671a82c8",
+      "tools": [
+        "list_tools",
+        "call_tool"
+      ]
+    },
+    "after": {
+      "bytes": 2027,
+      "hash": "a8c9b0cbdb020b6919f13cbfe8af7a6cb261d68e4e3e3552569ea368671a82c8",
+      "tools": [
+        "list_tools",
+        "call_tool"
+      ]
+    }
+  },
+  "contextRuns": {
+    "before": {
+      "model": "claude-opus-5-5",
+      "toolCount": 21,
+      "mcpConnected": true,
+      "durationApiMs": 0,
+      "costUsd": 0,
+      "result": "## Context Usage\n\n**Model:** claude-opus-5-5  \n**Tokens:** 19.5k / 1m (2%)\n\n### Estimated usage by category\n\n| Category | Tokens | Percentage |\n|----------|--------|------------|\n| System prompt | 2.5k | 0.2% |\n| MCP tools | 17k | 1.7% |\n| Messages | 10 | 0.0% |\n| Free space | 947.5k | 94.8% |\n| Autocompact buffer | 33k | 3.3% |\n\n### MCP Tools\n\n| Tool | Server | Tokens |\n|------|--------|--------|\n| mcp__cindy_orca__archive_worker | cindy_orca | 313 |\n| mcp__cindy_orca__cancel_queued_message | cindy_orca | 475 |\n| mcp__cindy_orca__create_worker | cindy_orca | 4.5k |\n| mcp__cindy_orca__create_workers | cindy_orca | 3.1k |\n| mcp__cindy_orca__end_team | cindy_orca | 161 |\n| mcp__cindy_orca__get_worker_queue_status | cindy_orca | 448 |\n| mcp__cindy_orca__get_workspace_info | cindy_orca | 399 |\n| mcp__cindy_orca__idle_worker | cindy_orca | 223 |\n| mcp__cindy_orca__interrupt_worker | cindy_orca | 409 |\n| mcp__cindy_orca__list_available_models | cindy_orca | 1.6k |\n| mcp__cindy_orca__list_workers | cindy_orca | 144 |\n| mcp__cindy_orca__merge_queued_messages | cindy_orca | 453 |\n| mcp__cindy_orca__move_queued_message | cindy_orca | 458 |\n| mcp__cindy_orca__read_worker | cindy_orca | 455 |\n| mcp__cindy_orca__send_to_worker | cindy_orca | 1k |\n| mcp__cindy_orca__start_team | cindy_orca | 680 |\n| mcp__cindy_orca__steer_queued_message | cindy_orca | 453 |\n| mcp__cindy_orca__switch_focus | cindy_orca | 286 |\n| mcp__cindy_orca__update_queued_message | cindy_orca | 558 |\n| mcp__cindy_orca__update_worker | cindy_orca | 516 |\n| mcp__cindy_orca__worker_status | cindy_orca | 308 |\n\n"
+    },
+    "before2": {
+      "model": "claude-opus-5-5",
+      "toolCount": 21,
+      "mcpConnected": true,
+      "durationApiMs": 0,
+      "costUsd": 0,
+      "result": "## Context Usage\n\n**Model:** claude-opus-5-5  \n**Tokens:** 19.5k / 1m (2%)\n\n### Estimated usage by category\n\n| Category | Tokens | Percentage |\n|----------|--------|------------|\n| System prompt | 2.5k | 0.2% |\n| MCP tools | 17k | 1.7% |\n| Messages | 10 | 0.0% |\n| Free space | 947.5k | 94.8% |\n| Autocompact buffer | 33k | 3.3% |\n\n### MCP Tools\n\n| Tool | Server | Tokens |\n|------|--------|--------|\n| mcp__cindy_orca__archive_worker | cindy_orca | 313 |\n| mcp__cindy_orca__cancel_queued_message | cindy_orca | 475 |\n| mcp__cindy_orca__create_worker | cindy_orca | 4.5k |\n| mcp__cindy_orca__create_workers | cindy_orca | 3.1k |\n| mcp__cindy_orca__end_team | cindy_orca | 161 |\n| mcp__cindy_orca__get_worker_queue_status | cindy_orca | 448 |\n| mcp__cindy_orca__get_workspace_info | cindy_orca | 399 |\n| mcp__cindy_orca__idle_worker | cindy_orca | 223 |\n| mcp__cindy_orca__interrupt_worker | cindy_orca | 409 |\n| mcp__cindy_orca__list_available_models | cindy_orca | 1.6k |\n| mcp__cindy_orca__list_workers | cindy_orca | 144 |\n| mcp__cindy_orca__merge_queued_messages | cindy_orca | 453 |\n| mcp__cindy_orca__move_queued_message | cindy_orca | 458 |\n| mcp__cindy_orca__read_worker | cindy_orca | 455 |\n| mcp__cindy_orca__send_to_worker | cindy_orca | 1k |\n| mcp__cindy_orca__start_team | cindy_orca | 680 |\n| mcp__cindy_orca__steer_queued_message | cindy_orca | 453 |\n| mcp__cindy_orca__switch_focus | cindy_orca | 286 |\n| mcp__cindy_orca__update_queued_message | cindy_orca | 558 |\n| mcp__cindy_orca__update_worker | cindy_orca | 516 |\n| mcp__cindy_orca__worker_status | cindy_orca | 308 |\n\n"
+    },
+    "after": {
+      "model": "claude-opus-5-5",
+      "toolCount": 22,
+      "mcpConnected": true,
+      "durationApiMs": 0,
+      "costUsd": 0,
+      "result": "## Context Usage\n\n**Model:** claude-opus-5-5  \n**Tokens:** 20.5k / 1m (2%)\n\n### Estimated usage by category\n\n| Category | Tokens | Percentage |\n|----------|--------|------------|\n| System prompt | 2.5k | 0.2% |\n| MCP tools | 18k | 1.8% |\n| Messages | 10 | 0.0% |\n| Free space | 946.5k | 94.6% |\n| Autocompact buffer | 33k | 3.3% |\n\n### MCP Tools\n\n| Tool | Server | Tokens |\n|------|--------|--------|\n| mcp__cindy_orca__archive_worker | cindy_orca | 313 |\n| mcp__cindy_orca__cancel_queued_message | cindy_orca | 475 |\n| mcp__cindy_orca__create_worker | cindy_orca | 4.5k |\n| mcp__cindy_orca__create_workers | cindy_orca | 3.1k |\n| mcp__cindy_orca__end_team | cindy_orca | 162 |\n| mcp__cindy_orca__get_worker_queue_status | cindy_orca | 448 |\n| mcp__cindy_orca__get_workspace_info | cindy_orca | 399 |\n| mcp__cindy_orca__idle_worker | cindy_orca | 223 |\n| mcp__cindy_orca__interrupt_worker | cindy_orca | 409 |\n| mcp__cindy_orca__list_available_models | cindy_orca | 1.6k |\n| mcp__cindy_orca__list_workers | cindy_orca | 144 |\n| mcp__cindy_orca__merge_queued_messages | cindy_orca | 453 |\n| mcp__cindy_orca__move_queued_message | cindy_orca | 458 |\n| mcp__cindy_orca__read_worker | cindy_orca | 455 |\n| mcp__cindy_orca__send_to_worker | cindy_orca | 1k |\n| mcp__cindy_orca__set_worker_runtime | cindy_orca | 1.1k |\n| mcp__cindy_orca__start_team | cindy_orca | 681 |\n| mcp__cindy_orca__steer_queued_message | cindy_orca | 453 |\n| mcp__cindy_orca__switch_focus | cindy_orca | 286 |\n| mcp__cindy_orca__update_queued_message | cindy_orca | 558 |\n| mcp__cindy_orca__update_worker | cindy_orca | 517 |\n| mcp__cindy_orca__worker_status | cindy_orca | 308 |\n\n"
+    },
+    "after2": {
+      "model": "claude-opus-5-5",
+      "toolCount": 22,
+      "mcpConnected": true,
+      "durationApiMs": 0,
+      "costUsd": 0,
+      "result": "## Context Usage\n\n**Model:** claude-opus-5-5  \n**Tokens:** 20.5k / 1m (2%)\n\n### Estimated usage by category\n\n| Category | Tokens | Percentage |\n|----------|--------|------------|\n| System prompt | 2.5k | 0.2% |\n| MCP tools | 18k | 1.8% |\n| Messages | 10 | 0.0% |\n| Free space | 946.5k | 94.6% |\n| Autocompact buffer | 33k | 3.3% |\n\n### MCP Tools\n\n| Tool | Server | Tokens |\n|------|--------|--------|\n| mcp__cindy_orca__archive_worker | cindy_orca | 313 |\n| mcp__cindy_orca__cancel_queued_message | cindy_orca | 475 |\n| mcp__cindy_orca__create_worker | cindy_orca | 4.5k |\n| mcp__cindy_orca__create_workers | cindy_orca | 3.1k |\n| mcp__cindy_orca__end_team | cindy_orca | 162 |\n| mcp__cindy_orca__get_worker_queue_status | cindy_orca | 448 |\n| mcp__cindy_orca__get_workspace_info | cindy_orca | 399 |\n| mcp__cindy_orca__idle_worker | cindy_orca | 223 |\n| mcp__cindy_orca__interrupt_worker | cindy_orca | 409 |\n| mcp__cindy_orca__list_available_models | cindy_orca | 1.6k |\n| mcp__cindy_orca__list_workers | cindy_orca | 144 |\n| mcp__cindy_orca__merge_queued_messages | cindy_orca | 453 |\n| mcp__cindy_orca__move_queued_message | cindy_orca | 458 |\n| mcp__cindy_orca__read_worker | cindy_orca | 455 |\n| mcp__cindy_orca__send_to_worker | cindy_orca | 1k |\n| mcp__cindy_orca__set_worker_runtime | cindy_orca | 1.1k |\n| mcp__cindy_orca__start_team | cindy_orca | 681 |\n| mcp__cindy_orca__steer_queued_message | cindy_orca | 453 |\n| mcp__cindy_orca__switch_focus | cindy_orca | 286 |\n| mcp__cindy_orca__update_queued_message | cindy_orca | 558 |\n| mcp__cindy_orca__update_worker | cindy_orca | 517 |\n| mcp__cindy_orca__worker_status | cindy_orca | 308 |\n\n"
+    }
+  }
+}

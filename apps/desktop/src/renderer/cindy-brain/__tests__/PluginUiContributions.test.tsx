@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../shared/ghost';
+import { type InstalledGhost } from '../../../shared/ghost';
 import { NativePluginUiState } from '../../../main/mcp-apps/nativeState';
 import type { PluginUiStateChange } from '../../../shared/pluginUi';
 const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
 const translation = vi.hoisted(() => ({ read: vi.fn(() => ({ t: (key: string) => key })) }));
 const page = vi.hoisted(() => ({ mounted: vi.fn(), released: vi.fn() }));
-vi.mock('../useInstalledGhosts', () => ({ useInstalledGhosts: (enabled = true) => enabled ? installed.ghosts : [] }));
+vi.mock('../useInstalledGhosts', () => ({ useInstalledGhosts: (enabled = true) => enabled ? installed.ghosts : [],
+  readInstalledGhostsSnapshot: () => installed.ghosts }));
 vi.mock('react-i18next', () => ({ useTranslation: translation.read }));
 // Presenter lifetime is covered separately at McpAppCard; replace only that boundary here.
 vi.mock('../PluginUiView', async () => {
@@ -15,7 +16,7 @@ vi.mock('../PluginUiView', async () => {
   return { PluginUiView: () => { useEffect(() => { page.mounted(); return page.released; }, []); return <div>Local page</div>; } };
 });
 import { memo } from 'react';
-import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES, PluginUiBody, PluginUiProvider, PluginUiSlot, PluginUiSlotControls, PluginUiSidebarSections, readPluginUiEntries, renderPluginUiBody, usePluginUiMessageCandidates, type PluginUiMessageCandidates } from '../PluginUiContributions';
 
 // 生产入口：真实 Provider/正文/控件；只替换已装投影与 IPC，Main 订阅适配器不替换。
 // 规则与旧回归：无候选历史行不发请求、不构造数据；原测试只覆盖 App frame。
@@ -24,6 +25,8 @@ let receive: ((update: { epoch: string; updates: PluginUiStateChange[] }) => voi
 let host: NativePluginUiState;
 let invoke: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  // jsdom has no scrolling implementation; Radix Select focuses options with it.
+  Element.prototype.scrollIntoView ??= () => {};
   translation.read.mockClear();
   page.mounted.mockClear(); page.released.mockClear();
   installed.ghosts = [];
@@ -37,16 +40,17 @@ beforeEach(() => {
   } } } as unknown as typeof window.electronAPI;
 });
 
-it('opens a page beside its trigger only on demand and releases it on close', async () => {
-  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+// Unit: composer.header must enter the same on-demand view lifecycle as the toolbar.
+it.each(['composer.toolbar', 'composer.header'] as const)('opens a %s page only on demand and releases it on close', async position => {
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
     approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
       kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
         ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
         host: { views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'task' }],
-          contributions: [{ id: 'open', title: 'Open here', position: 'composer.toolbar', view: 'view', presentation: 'popover' }] },
+          contributions: [{ id: 'open', title: 'Open here', position, view: 'view', presentation: 'popover' }] },
       } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
-  render(<PluginUiProvider><PluginUiSlot position="composer.toolbar" sessionId="task-a" /></PluginUiProvider>);
+  installed.ghosts = [ghost];
+  render(<PluginUiProvider><PluginUiSlot position={position} sessionId="task-a" /></PluginUiProvider>);
   expect(page.mounted).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
   expect(await screen.findByText('Local page')).toBeTruthy();
@@ -56,13 +60,108 @@ it('opens a page beside its trigger only on demand and releases it on close', as
   expect(page.released).toHaveBeenCalledTimes(1);
 });
 
+// Unit: the new header slot must leave no wrapper or IPC when empty,
+// and approved native controls must disappear on disable/revocation. The toolbar
+// popover regression does not exercise header tool/select dispatch.
+it('exposes header controls through the existing actions and removes the empty header', async () => {
+  const scene = <PluginUiProvider><PluginUiSlot position="composer.header" sessionId="task-a" /></PluginUiProvider>;
+  const view = render(scene);
+  const original = view.container.innerHTML;
+  expect(invoke).not.toHaveBeenCalled();
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [{ name: 'refresh', description: 'Refresh' }], mcpApps: {
+        ui: { resources: [], tools: { refresh: { visibility: ['app'] } } }, host: { contributions: [
+          { id: 'refresh', title: 'Refresh', position: 'composer.header', tool: 'refresh' },
+          { id: 'scope', title: 'Scope', position: 'composer.header', kind: 'select', tool: 'refresh', options: [{ label: 'All', value: 'all' }] },
+          { id: 'progress', title: 'Ready', position: 'composer.header', kind: 'status' },
+        ] },
+      } } };
+  installed.ghosts = [ghost];
+  view.rerender(<PluginUiProvider><PluginUiSlot position="composer.header" sessionId="task-a" /></PluginUiProvider>);
+  expect(screen.getByText('Ready')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('task-a',
+    { op: 'plugin-action', instanceId: 'planner', id: 'refresh', value: undefined }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Scope' }));
+  fireEvent.click(await screen.findByRole('option', { name: 'All' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('task-a',
+    { op: 'plugin-action', instanceId: 'planner', id: 'scope', value: 'all' }));
+  for (const inactive of [{ ...ghost, enabled: false }, { ...ghost, approval: { state: 'invalid' as const } }]) {
+    installed.ghosts = [inactive];
+    view.rerender(<PluginUiProvider><PluginUiSlot position="composer.header" sessionId="task-a" /></PluginUiProvider>);
+    expect(view.container.innerHTML).toBe(original);
+  }
+});
+
+// Unit, sidebar lifecycle: no page before expansion; close/revoke releases the View.
+// Existing popover tests cannot cover a persistent sidebar section. Empty directory
+// must keep the original aside with no native IPC. Frame protocol is tested separately.
+it('loads sidebar sections only on expansion and removes them after revocation', async () => {
+  const Sections = () => {
+    const entries = readPluginUiEntries('sidebar.section');
+    return <aside><span>Original sidebar</span>{entries.length > 0 && <PluginUiSidebarSections entries={entries} sessionId={null} />}</aside>;
+  };
+  const view = render(<PluginUiProvider><Sections /></PluginUiProvider>);
+  expect(screen.getByText('Original sidebar')).toBeTruthy(); expect(invoke).not.toHaveBeenCalled();
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
+        ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} }, host: {
+          views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'global' }],
+          contributions: [{ id: 'summary', title: 'Summary', position: 'sidebar.section', view: 'view' }],
+        },
+      } } };
+  installed.ghosts = [ghost];
+  view.rerender(<PluginUiProvider><Sections /></PluginUiProvider>);
+  expect(page.mounted).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Summary · Planner' }));
+  expect(await screen.findByText('Local page')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Summary · Planner' }));
+  expect(screen.queryByText('Local page')).toBeNull(); expect(page.released).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Summary · Planner' }));
+  expect(await screen.findByText('Local page')).toBeTruthy();
+  installed.ghosts = [{ ...ghost, approval: { state: 'invalid' as const } }];
+  view.rerender(<PluginUiProvider><Sections /></PluginUiProvider>);
+  expect(screen.queryByRole('button', { name: 'Summary · Planner' })).toBeNull();
+  expect(page.released).toHaveBeenCalledTimes(2); expect(screen.getByText('Original sidebar')).toBeTruthy();
+});
+
+// Unit: titlebar actions use the original native action IPC and disappear on revoke.
+// Existing toolbar buttons do not cover the newly approved placement. No candidate
+// must add a control consumer or invoke IPC; original title content stays in place.
+it('runs an approved titlebar action and restores the original chrome after revocation', async () => {
+  const Chrome = () => {
+    const entries = readPluginUiEntries('window.titlebar');
+    return <header><span>Original chrome</span>{entries.length > 0 && <PluginUiSlotControls entries={entries} appearance="titlebar" />}</header>;
+  };
+  const view = render(<PluginUiProvider><Chrome /></PluginUiProvider>);
+  expect(invoke).not.toHaveBeenCalled(); expect(translation.read).not.toHaveBeenCalled();
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [{ name: 'refresh', description: 'Refresh' }], mcpApps: {
+        ui: { resources: [], tools: { refresh: { visibility: ['app'] } } }, host: {
+          contributions: [{ id: 'refresh', title: 'Refresh', position: 'window.titlebar', tool: 'refresh' }],
+        },
+      } } };
+  installed.ghosts = [ghost];
+  view.rerender(<PluginUiProvider><Chrome /></PluginUiProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh · Planner' }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith(null,
+    { op: 'plugin-action', instanceId: 'planner', id: 'refresh', value: undefined }));
+  installed.ghosts = [{ ...ghost, approval: { state: 'invalid' as const } }];
+  view.rerender(<PluginUiProvider><Chrome /></PluginUiProvider>);
+  expect(screen.queryByRole('button', { name: 'Refresh · Planner' })).toBeNull();
+  expect(screen.getByText('Original chrome')).toBeTruthy();
+});
+
 it('mounts the window host only for enabled and approved host declarations', () => {
   const view = render(<PluginUiProvider host={<span>Window host</span>}>Chat</PluginUiProvider>);
   expect(screen.queryByText('Window host')).toBeNull();
-  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
     approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
       kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: { host: { capabilities: ['draft'] } } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+  installed.ghosts = [ghost];
   view.rerender(<PluginUiProvider host={<span>Window host</span>}>Chat</PluginUiProvider>);
   expect(screen.getByText('Window host')).toBeTruthy();
   view.rerender(<PluginUiProvider enabled={false} host={<span>Window host</span>}>Chat</PluginUiProvider>);
@@ -113,27 +212,27 @@ it('keeps 500 message rows and 1000 tool bodies on their original elements with 
 });
 
 it('does not subscribe history when the installed plugin only matches another kind of tool', () => {
-  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
     approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
       kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
         ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
         host: { views: [{ id: 'view', title: 'View', resourceUri: 'ui://view' }],
           contributions: [{ id: 'body', title: 'Body', position: 'tool.body', view: 'view', match: { tools: ['other'] } }] },
       } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+  installed.ghosts = [ghost];
   const context = vi.fn(() => ({}));
   render(<PluginUiProvider><PluginUiBody position="tool.body" sessionId="task-a" tool="actual" context={context}>Original</PluginUiBody></PluginUiProvider>);
   expect(screen.getByText('Original')).toBeTruthy(); expect(invoke).not.toHaveBeenCalled(); expect(context).not.toHaveBeenCalled();
 });
 
 it('shares a visible control source, applies its update, and releases it when the controls unmount', async () => {
-  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
     approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
       kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
         ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
         host: { contributions: [{ id: 'progress', title: 'Ready', position: 'statusbar', kind: 'status' }] },
       } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+  installed.ghosts = [ghost];
   const view = render(<PluginUiProvider><PluginUiSlot position="statusbar" sessionId="task-a" /><PluginUiSlot position="statusbar" sessionId="task-a" /></PluginUiProvider>);
   await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
   expect(host.consumers('planner')).toHaveLength(1);
@@ -154,13 +253,13 @@ it.each([100, 1000])('subscribes only visible native controls among %i mounted h
     unobserve(element: Element) { elements.delete(element); }
     disconnect = disconnect;
   });
-  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture',
     approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
       kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
         ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
         host: { contributions: [{ id: 'progress', title: 'Ready', position: 'turn.footer', kind: 'status' }] },
       } } };
-  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+  installed.ghosts = [ghost];
   const view = render(<PluginUiProvider>{Array.from({ length: count }, (_, index) =>
     <div key={index} data-message-client-id={`message-${index}`}>
       <PluginUiSlot position="turn.footer" sessionId="task-a" clientId={`message-${index}`} />

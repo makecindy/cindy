@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { createLogger } from '@/lib/logger';
+import { createRemoteSessionSubscription } from '@/lib/remoteSessionSubscription';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { getSessionTurnActiveOn } from '@/lib/makerTransport';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
@@ -386,8 +387,9 @@ export function useRemoteSessionSync(
     let peerAvailable = remoteProjectsStore.getDeviceIds().includes(deviceId);
     let peerResponsive: boolean | undefined;
     const canRead = () => relayAvailable !== false && peerAvailable && peerResponsive !== false;
+    const subscription = createRemoteSessionSubscription(deviceId, sessionId);
     const recovery = createRemoteContentRecovery({
-      subscribe: () => window.electronAPI.deviceLink.subscribe(deviceId, [`session:${sessionId}`]),
+      subscribe: () => subscription.subscribe(),
       reconcile: () => makerChatStore.reconcileRemoteMessages(sessionId, { freshHistory: true }),
       changed: (state) => setContent({ sessionId, deviceId, state }),
       completed: (elapsedMs) => {
@@ -402,15 +404,12 @@ export function useRemoteSessionSync(
       () => ({ sessionId, deviceId }),
       {
         canRead,
-        subscribe: (d, topics) => {
+        subscribe: () => {
           if (!recovery.isReady()) { recovery.request(canRead()); return; }
-          return window.electronAPI.deviceLink
-            .subscribe(d, topics)
+          return subscription.subscribe()
             .catch((err) => log.warn('device-link subscribe(session) failed', err));
         },
-        unsubscribe: (d, topics) => {
-          return window.electronAPI.deviceLink.unsubscribe(d, topics).catch(() => {});
-        },
+        unsubscribe: () => subscription.release(),
         reconcile: (s) => {
           if (!recovery.isReady()) { recovery.request(canRead()); return; }
           // 挂起交互(permission/ask/plan)重建已并入 reconcileRemoteMessages 的同一代

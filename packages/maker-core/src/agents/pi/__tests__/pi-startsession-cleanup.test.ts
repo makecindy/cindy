@@ -26,8 +26,15 @@ import {
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import * as childProcess from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AutoReviewRequest } from '../../shared/auto-review-decision.js';
+import { estimateSpawnArgvLength, PI_WINDOWS_SPAWN_ARGV_BUDGET } from '../project-resource-cli.js';
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, execFile: vi.fn(actual.execFile) };
+});
 
 // hoisted 控制旋钮:vi.mock 工厂被提升到 import 之上,不能闭包引用普通 let。
 const knobs = vi.hoisted(() => ({
@@ -37,6 +44,7 @@ const knobs = vi.hoisted(() => ({
   transportCloseRejects: false,
   transportCloseCount: 0,
   getStateRejects: false,
+  timeoutCommand: null as string | null,
   getStateSessionFile: null as string | null,
   switchSessionGate: null as Promise<void> | null,
   switchSessionRejects: false,
@@ -85,7 +93,8 @@ vi.mock('../transport.js', () => ({
   attachJsonlReader: () => {},
 }));
 
-vi.mock('../rpc-client.js', () => ({
+vi.mock('../rpc-client.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../rpc-client.js')>(),
   PiRpcProcess: class {
     isClosed = false;
     constructor(opts: unknown) {
@@ -106,6 +115,10 @@ vi.mock('../rpc-client.js', () => ({
     ): Promise<{ success: boolean; data?: unknown; error?: string }> {
       knobs.requests.push(cmd.type);
       knobs.requestOptions.push({ commandType: cmd.type, timeoutMs: options?.timeoutMs });
+      if (cmd.type === knobs.timeoutCommand) {
+        const { PiRpcRequestTimeoutError } = await importOriginal<typeof import('../rpc-client.js')>();
+        throw new PiRpcRequestTimeoutError(cmd.type, 30_000);
+      }
       if (cmd.type === 'switch_session') {
         const gate = knobs.switchSessionGate;
         if (gate) await gate;
@@ -182,6 +195,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.transportCloseRejects = false;
     knobs.transportCloseCount = 0;
     knobs.getStateRejects = false;
+    knobs.timeoutCommand = null;
     knobs.getStateSessionFile = null;
     knobs.switchSessionGate = null;
     knobs.switchSessionRejects = false;
@@ -280,6 +294,48 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       ...overrides,
     };
   }
+
+  it('consumes only this runtime private vision receipts and releases the recorder on close', async () => {
+    const observe = vi.fn(async () => {}); const close = vi.fn();
+    const factory = vi.fn(() => ({ observe, close }));
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: factory })).startSession({ sessionId: 'vision-task', workingDir: cwd, model: 'm' });
+    const events: unknown[] = [];
+    void (async () => { for await (const event of handle.events()) events.push(event); })();
+    try {
+      const env = knobs.spawnedEnvs.at(-1)!; const token = env.CINDY_PI_TURN_TOOL_POLICY;
+      expect(JSON.parse(env.CINDY_PI_VISION_BRIDGE!).usageToken).toBe(token);
+      expect(factory).toHaveBeenCalledWith(expect.objectContaining({ CINDY_PI_VISION_BRIDGE: env.CINDY_PI_VISION_BRIDGE }), 'vision-task');
+      const notify = (value: string) => knobs.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:pi-vision-usage:' + value });
+      notify('wrong-token:{}'); notify(token + ':invalid'); notify(token + ':' + 'x'.repeat(4097));
+      expect(observe).not.toHaveBeenCalled();
+      notify(token + ':{"requestId":"receipt"}');
+      expect(observe).toHaveBeenCalledWith({ requestId: 'receipt' });
+    } finally { await handle.close(); }
+    expect(close).toHaveBeenCalledOnce();
+    expect(JSON.stringify(events)).not.toContain('cindy:pi-vision-usage:');
+  });
+
+  it('accepts a late vision receipt while process close is still unconfirmed', async () => {
+    let stopped!: () => void;
+    knobs.closeGate = new Promise<void>(resolve => { stopped = resolve; });
+    const observe = vi.fn(async () => {}); const close = vi.fn();
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close }) })).startSession({ sessionId: 'vision-late', workingDir: cwd, model: 'm' });
+    const closing = handle.close();
+    try {
+      await vi.waitFor(() => expect(knobs.closeCount).toBe(1));
+      expect(close).not.toHaveBeenCalled();
+      const token = knobs.spawnedEnvs.at(-1)!.CINDY_PI_TURN_TOOL_POLICY;
+      knobs.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:pi-vision-usage:' + token + ':{"requestId":"late"}' });
+      expect(observe).toHaveBeenCalledWith({ requestId: 'late' });
+    } finally { stopped(); await closing; }
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('releases the vision usage owner when Pi construction fails before returning a handle', async () => {
+    const close = vi.fn(); knobs.rpcCtorThrows = true;
+    await expect(new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe: async () => {}, close }) })).startSession({ sessionId: 'vision-fail', workingDir: cwd, model: 'm' })).rejects.toThrow();
+    expect(close).toHaveBeenCalledOnce();
+  });
 
   it('writes model-scoped compaction without replacing the inherited policy of other models or providers', async () => {
     const agent = new PiAgent(buildDeps({
@@ -659,6 +715,114 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(disposed).toBe(1);
     expect(proxyDisposed).toBe(2);
     expect(knobs.closeCount).toBe(1); // 已 spawn → 必须关掉,避免僵尸持有 ?session= 路由
+  });
+
+  // PR #10213 Windows CI: a failed initial durable scan logged through a deps
+  // alias assigned only after startup. Existing cases did not force scan failure
+  // before an RPC rejection, so they missed the unhandled TDZ error (unit tier).
+  it('reports a durable scan failure without masking a failed startup', async () => {
+    knobs.getStateRejects = true;
+    vi.spyOn(piSubagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* () {
+      throw new Error('initial scan unavailable');
+    });
+    const warn = vi.fn();
+    const agent = new PiAgent(buildDeps({ logger: { ...noopLogger, warn } }));
+
+    await expect(agent.startSession(opts())).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError', cause: new Error('get_state rejected (mock)'),
+    });
+    expect(warn).toHaveBeenCalledWith('pi subagent durable status refresh failed', {
+      message: 'initial scan unavailable',
+    });
+    expect(disposed).toBe(1);
+    expect(knobs.closeCount).toBe(1);
+  });
+
+  // #9855: the startup error previously exposed only the RPC timeout. Exercise
+  // startSession, not a formatter; simulate SF_DATALESS metadata, not a real
+  // iCloud stall. Existing cases cover confirmed/unconfirmed cleanup separately.
+  it.each(['local', 'remote', 'context-disabled', 'cleanup-unconfirmed', 'non-timeout', 'localized', 'localization-failed'] as const)(
+    'adds cloud-file recovery guidance only to an eligible local startup timeout: %s', async (mode) => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    const originalExecFile = (await vi.importActual<typeof import('node:child_process')>('node:child_process')).execFile;
+    const cloudFile = path.join(path.dirname(cwd), 'AGENTS.md');
+    const stat = vi.spyOn(childProcess, 'execFile').mockImplementation(((...args: unknown[]) => {
+      if (args[0] !== '/usr/bin/stat') return Reflect.apply(originalExecFile, childProcess, args);
+      expect(knobs.closeCount).toBe(1);
+      const paths = args[1] as string[];
+      const callback = args.at(-1) as (error: Error | null, stdout: string, stderr: string) => void;
+      queueMicrotask(() => {
+        if (paths.at(-1) === cloudFile) callback(null, '1073741824:Regular File\n', '');
+        else callback(Object.assign(new Error('missing'), { code: 1 }), '', 'stat: No such file or directory\n');
+      });
+      return { kill: vi.fn() };
+    }) as typeof childProcess.execFile);
+    try {
+      knobs.timeoutCommand = 'set_auto_compaction';
+      knobs.closeRejects = mode === 'cleanup-unconfirmed';
+      if (mode === 'non-timeout') {
+        knobs.timeoutCommand = null;
+        knobs.getStateRejects = true;
+      }
+      const agent = new PiAgent(buildDeps({
+        ...(mode === 'remote' ? {
+          runtimeConfig: { endpoint: 'http://127.0.0.1:9', remoteEndpoint: 'https://gateway.invalid' },
+          resolveRemotePiBinaryPath: async () => '/remote/pi',
+          getRemotePiTransport: async () => ({
+            pid: undefined,
+            writeLine: async () => {}, onLine: () => () => {}, onClose: () => () => {},
+            close: async () => {}, isClosed: () => false,
+          }),
+          getRemotePiFileOps: () => ({
+            mkdirp: async () => {}, writeFile: async () => {}, rm: async () => {},
+            stat: async () => ({ isFile: true }), listDir: async () => [],
+            readFile: async () => { throw new Error('no existing remote fixture'); },
+            sha256File: async () => { throw new Error('no existing remote fixture'); },
+          }),
+        } : {}),
+        ...(mode === 'localized' ? { formatPiStartupCloudFileHint: (file) => `云端文件 ${file}，请在访达下载后重试` } : {}),
+        ...(mode === 'localization-failed' ? { formatPiStartupCloudFileHint: () => { throw new Error('localization unavailable'); } } : {}),
+      }));
+      const failure = await agent.startSession({ ...opts(),
+        ...(mode === 'remote' ? { remoteHostId: 'remote-1' } : {}),
+        ...(mode === 'context-disabled' ? { botRuntimeProfile: {
+          botId: 'bot', profileVersion: 1,
+          skillPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+          mcpPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+          toolsetPolicy: { mode: 'allowlist' as const, configured: [], catalog: [] },
+        } } : {}),
+      }).catch((error: unknown) => error);
+      if (mode === 'cleanup-unconfirmed') {
+        expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+        expect(stat).not.toHaveBeenCalled();
+        knobs.closeRejects = false;
+        await agent.dispose();
+        return;
+      }
+      expect(failure).toBeInstanceOf(AgentStartupStoppedError);
+      if (!(failure instanceof AgentStartupStoppedError)) throw new Error('missing exit evidence');
+      if (mode === 'remote' || mode === 'context-disabled' || mode === 'non-timeout') {
+        expect(failure.message).not.toContain('AGENTS.md');
+        expect(stat).not.toHaveBeenCalled();
+      } else {
+        expect(failure.message).toContain('pi rpc timeout after 30000ms: set_auto_compaction');
+        if (mode === 'localization-failed') {
+          expect(failure.message).toBe('pi rpc timeout after 30000ms: set_auto_compaction');
+        } else {
+          expect(failure.message).toMatch(/^\[PI_STARTUP_CLOUD_CONTEXT_FILE\] /);
+          expect(failure.message).toContain('AGENTS.md');
+          expect(failure.message).toContain(mode === 'localized' ? '访达' : 'Finder');
+          if (mode !== 'localized') expect(failure.message).toContain('may');
+          expect(failure.cause).toMatchObject({ cause: { code: 'PI_RPC_TIMEOUT' } });
+        }
+        expect(stat).toHaveBeenCalled();
+      }
+      expect(disposed).toBe(1);
+      expect(knobs.closeCount).toBe(1);
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
   });
 
   it('quarantines a failed startup process until cleanup is confirmed', async () => {
@@ -1064,6 +1228,56 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await pollUntil(() => expect(proxyDisposed).toBe(2));
   });
 
+  it('records vision receipts from superseded child runs while showing only the latest task state', async () => {
+    useFakePollClock();
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    const receipt = (requestId: string) => ({ requestId, backendRole: 'primary', usage: { prompt_tokens: 10 } });
+    const first = { ...run, title: 'obsolete-vision-run', state: 'completed' as const, endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed' as const, pendingApproval: undefined, visionUsage: [receipt('first')] })) };
+    const latest = { ...first, title: 'current-vision-run', runId: '22222222-2222-4222-8222-222222222222', startedAt: first.startedAt + 1, tasks: first.tasks.map(task => ({ ...task, visionUsage: [receipt('latest')] })) };
+    let visible = false;
+    vi.spyOn(piSubagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* (_root, options) {
+      if (!visible) return;
+      await options?.onRead?.(first);
+      await options?.onRead?.(latest);
+      if (!options?.latestPerTask) yield first;
+      yield latest;
+    });
+    const observe = vi.fn(async () => {});
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close() {} }) })).startSession(opts());
+    const updates: unknown[] = [];
+    void (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'agent_task_update') updates.push(event.data);
+      }
+    })();
+    visible = true;
+    try {
+      await pollUntil(() => expect(observe).toHaveBeenCalledTimes(2));
+      await pollUntil(() => expect(JSON.stringify(updates)).toContain(latest.title));
+      expect(JSON.stringify(updates)).not.toContain(first.title);
+    }
+    finally { await closeWithoutPolls(handle.close()); }
+    expect(observe.mock.calls.map(([value]) => (value as { requestId: string }).requestId).sort()).toEqual(['first', 'latest']);
+  });
+
+  it('settles a terminal child vision receipt after navigation closes the parent and deduplicates later scans', async () => {
+    useFakePollClock();
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    const list = mockRunDiscovery().mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    const observe = vi.fn(async () => {}); const close = vi.fn();
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close }) })).startSession(opts());
+    await closeWithoutPolls(handle.close({ reason: 'navigation' }));
+    expect(close).not.toHaveBeenCalled();
+    const receipt = { requestId: '11111111-1111-4111-8111-111111111111', backendRole: 'primary', usage: { prompt_tokens: 100, completion_tokens: 2 } };
+    const runDir = path.join(piSubagentRuns.piSubagentRunRoot(agentHome, opts().sessionId), run.runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(path.join(runDir, 'vision-usage.jsonl'), JSON.stringify(receipt) + '\n');
+    list.mockResolvedValue([{ ...run, state: 'completed', endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed', pendingApproval: undefined })) }]);
+    await pollUntil(() => expect(close).toHaveBeenCalledOnce());
+    expect(observe).toHaveBeenCalledExactlyOnceWith(receipt);
+  });
+
   it('keeps answering detached Subagent approvals after the parent handle closes', async () => {
     // Regression: close() used to clear the only timer that refreshed
     // pendingApproval *and* short-circuit the approval handler on `closed`,
@@ -1238,6 +1452,26 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     // The run stays live for several supervisor periods: nothing re-leases the token.
     await vi.advanceTimersByTimeAsync(1_000);
     expect(proxyDisposed).toBe(2);
+  });
+
+  it('drains child vision facts before an already-exited parent releases its owner at an account boundary', async () => {
+    useFakePollClock();
+    const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
+    const list = mockRunDiscovery().mockResolvedValue([run]);
+    vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+    vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    const receipt = { requestId: '11111111-1111-4111-8111-111111111111', backendRole: 'primary', usage: { prompt_tokens: 10 } };
+    vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockImplementation(async () => {
+      list.mockResolvedValue([{ ...run, state: 'completed', endedAt: Date.now(), tasks: run.tasks.map(task => ({ ...task, status: 'completed', pendingApproval: undefined, visionUsage: [receipt] })) }]);
+      return true;
+    });
+    const observe = vi.fn(async () => {}); const close = vi.fn();
+    const handle = await new PiAgent(buildDeps({ resolvePiVisionBridgeEnv: () => ({ CINDY_PI_VISION_BRIDGE: '{"enabled":true}' }), createPiVisionUsageRecorder: () => ({ observe, close }) })).startSession(opts());
+    knobs.onExit?.({ code: 1, signal: null });
+    await settle(handle.close({ reason: 'account-boundary' }));
+    expect(observe).toHaveBeenCalledExactlyOnceWith(receipt);
+    expect(close).toHaveBeenCalledOnce();
+    expect(observe.mock.invocationCallOrder[0]).toBeLessThan(close.mock.invocationCallOrder[0]!);
   });
 
   it('does not resurrect a detached supervisor when the process exits after an account boundary', async () => {
@@ -2956,6 +3190,35 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       ),
     ]);
     await reviewHandle.close();
+  });
+
+  it('collapses oversized project Skill argv into one session directory', async () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      const skills = Array.from({ length: 220 }, (_, index) => {
+        const skillDir = path.join(cwd, '.agents', 'skills', `long-project-skill-${String(index).padStart(3, '0')}-${'nested-path-'.repeat(10)}`);
+        mkdirSync(skillDir, { recursive: true });
+        writeFileSync(path.join(skillDir, 'SKILL.md'), `# skill ${index}\n`);
+        return skillDir;
+      });
+
+      const handle = await new PiAgent(buildDeps()).startSession(opts());
+      try {
+        const args = knobs.spawnedArgs[0]!;
+        const skillArgs = repeatedArgValues(args, '--skill');
+        expect(skillArgs).toHaveLength(1);
+        expect(path.basename(skillArgs[0]!)).toBe('cindy-project-skills');
+        expect(readdirSync(skillArgs[0]!)).toHaveLength(skills.length);
+        expect(readdirSync(skillArgs[0]!).map((entry) => realpathSync(path.join(skillArgs[0]!, entry))).sort())
+          .toEqual(skills.map((skill) => realpathSync(skill)).sort());
+        expect(estimateSpawnArgvLength(args, 'win32')).toBeLessThanOrEqual(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+      } finally {
+        await handle.close();
+      }
+      await waitFor(() => !existsSync(path.join(knobs.spawnedEnvs[0]!.PI_CODING_AGENT_DIR!, 'cindy-project-skills')));
+    } finally {
+      platform.mockRestore();
+    }
   });
 
   it('still loads project resources when a local root session resumes a fork jsonl', async () => {

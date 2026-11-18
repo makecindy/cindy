@@ -577,6 +577,29 @@ App 为 active 的等待时间，`wallElapsedMs` 单独保留包含后台与离�
 实现与回归见 `src/debug/useContentRecoveryDiagnostics.ts`、`scrollDebugSampler.ts`
 及相邻测试，键盘回归见 `src/__tests__/composerKeyboard.test.tsx`、`sheetKeyboardSubscription.test.tsx`。
 
+### 切回任务后跳到旧消息
+
+先对照 `message history surface` 的尺寸、`message list visibility gate` 的定位状态与
+`list scroll` 的原生 offset。`nearBottom` 表示跟随意图，不是当前几何位置；应另外计算
+`contentHeight - viewportHeight - offsetY`。若没有 dragging / momentum / readingOlder /
+reopening，但意图仍贴底而几何突然远离尾部，不能直接归因于用户翻历史或书签恢复。
+保留列表在页面宽度变化后可能晚到一次原生位置修正，发生在 content-size / layout 校验结束之后。
+
+消息定位的边界：
+
+- 晚到的非手势偏移唤醒既有有界 tail follower，不在 onScroll 里直接发滚动命令；原生回执
+  到达底部后不再发命令。手指、惯性、历史分页与未完成的 seek 仍拥有优先权。
+- 页面隐藏或 App 非 active 时暂停定位；失去页面后原生可能不再发送手势结束事件，释放瞬时
+  touch / drag / momentum 状态，但保留用户的阅读历史意图。
+- 隐藏期间不消费首次书签恢复、搜索或消息链接定位，重新可见后才执行；旧版原生包的 inline
+  fallback 同样受定位状态约束。切换列表身份时取消旧的书签校正帧。
+- 后台暂停定位与订阅不等于隐藏页面画面，避免把 App 切换器中的页面变为空白。
+
+自动化回归见 `messageFollowGesture.test.ts`、`messageEntryPositioning.test.ts`、
+`messageReadingRestore.test.ts` 和 `recentMessageHistories.test.tsx`。这些测试覆盖回调顺序与状态
+所有权，不能替代 UIKit 真机验收。验收应覆盖：长任务切换后宽度改变、键盘收放、横竖屏、
+拖动途中离开/锁屏后返回、刻意阅读旧消息、搜索定位后切换，以及旧原生包的备用显示路径。
+
 ### 真机排查与并存测试版
 
 真机上的问题（缓存、推送、后台恢复等）先取证据再动手：读设备日志、核对正在运行的版本、
@@ -760,3 +783,20 @@ generated Pods or remove the Swift import.
 Keep the full `xcodebuild` output (redirect it to a task log when needed), rather
 than using `-quiet`: the full build report identifies the failed target and missing
 module; the quiet log can instead lead with `exit code 0 but produced no further output`.
+
+### 历史分页在中断手势后的恢复合同
+
+不变量：隐藏页面不发历史锚点定位或启动排队分页；回到可定位状态后，原分页事务继续收尾，
+不依赖原生补发手势结束事件，也不把读历史改成跟随最新。
+
+事务字段仍由 MessageRenderer 的既有分页事务拥有；可见性只释放瞬时手势、暂停/恢复既有工作，
+不创建第二份事务或重试机制。统一收尾沿用 `scheduleHistoryPrependUserHandoffSettle`、
+`scheduleHistoryAnchorRestore`、`maybeFinishHistoryPrependTransaction`，排队请求沿用 flush。
+
+| 事件 / 状态 | 已排队未请求 | 请求中、页未提交 | 页已提交、校正中 | 手势接管后暂停 |
+| --- | --- | --- | --- | --- |
+| 页面隐藏 / App 非 active | 保留队列，不启动 | 允许原请求结算，不发定位 | 停止校正帧，保留事务 | 释放手势标记，保留交接 |
+| 请求成功 / 失败 / 重复页在隐藏时返回 | 不适用 | 记录结算/进度，不新发请求 | 等返回再校验 | 等返回再交接 |
+| 页面恢复可定位 | flush 一次 | 等原请求；已结算则完成无坐标变化的交接 | 恢复既有校正，等原生回执 | 恢复交接，再校正或结束无进展事务 |
+| 重复恢复 / 迟到结束事件 | 单一队列帧去重 | 原事务代次隔离 | 单一校正帧去重 | 同一交接路径幂等 |
+| 新手势 / 切换身份 | 手势期间继续暂停 / 身份切换取消 | 捕捉最新阅读锚点 / 代次失效 | 暂停校正 / 取消旧事务 | 新手势优先 / 取消旧事务 |

@@ -21,6 +21,7 @@ import { requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { assertTaskActionCurrent } from './taskActionAuthorization.js';
 
 import { MAKER_INVOKE } from './channels.js';
 
@@ -32,6 +33,14 @@ const log = createLogger('maker-ipc/fork');
  */
 function broadcastSessionCreated(sessionId: string): void {
   emitSessionCreated(sessionId);
+}
+
+/** UI and Host tools share the completed fork, including task-list notification. */
+export async function forkTaskAtMessage(sessionId: string, messageClientId: string) {
+  const session = await forkSessionAtMessage(sessionId, messageClientId);
+  await assertTaskActionCurrent();
+  broadcastSessionCreated(session.id);
+  return session;
 }
 
 function assertSideChatCaller(event: Electron.IpcMainInvokeEvent, channel: string): void {
@@ -85,9 +94,7 @@ export function registerMakerForkIpc(): void {
       const sid = requireString(sourceSessionId, 'sourceSessionId');
       const mid = requireString(messageClientId, 'messageClientId');
       try {
-        const session = await forkSessionAtMessage(sid, mid);
-        broadcastSessionCreated(session.id);
-        return session;
+        return await forkTaskAtMessage(sid, mid);
       } catch (err) {
         const code = (err as { code?: string }).code;
         const msg = err instanceof Error ? err.message : String(err);

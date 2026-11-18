@@ -28,6 +28,8 @@ import { ConversationSearchProvider } from '@/features/cc-agent/sidebar/conversa
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 import { SidebarTopNav } from './SidebarTopNav';
+import { TaskListModeToggle } from './TaskListModeToggle';
+import { PluginUiSidebarSections, type PluginUiEntry } from '@/cindy-brain/PluginUiContributions';
 import { UpdateBanner } from './UpdateBanner';
 import { DatabaseSizeWarningBanner } from './DatabaseSizeWarningBanner';
 import { NativeBuildBanner } from './NativeBuildBanner';
@@ -40,6 +42,8 @@ import { UserInfoSection } from './UserInfoSection';
 const RAIL_WIDTH = 78;
 
 interface SidebarProps {
+  pluginSections?: readonly PluginUiEntry[];
+  pluginSessionId?: string | null;
   /** 完全隐藏（左上角 toggle / ⌘B）——w-0，与旧版语义一致。 */
   isCollapsed: boolean;
   /** rail 模式（拖动边框拉到最窄触发）——64px 竖排文字列，与 isCollapsed 独立。 */
@@ -88,6 +92,8 @@ export function Sidebar({
   onOpenStorage,
   peekState = null,
   peekDrawerProps,
+  pluginSections,
+  pluginSessionId = null,
 }: SidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
   useSidebarMaterial(sidebarRef);
@@ -231,6 +237,15 @@ export function Sidebar({
               } as React.CSSProperties
             }
           />
+          {/* 任务列表视图在本行最右端放收件箱开关（与前进 / 后退同一排）。rail 态放不下，隐藏。 */}
+          {shouldMountFeatureContent && ownsTopNavScrollableRows && !isRail && (
+            <div
+              className="ml-auto flex h-full shrink-0 items-center pr-2"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            >
+              <TaskListModeToggle />
+            </div>
+          )}
         </div>
 
         {/* ConversationSearchProvider:在顶部导航行(SidebarTopNav 的「搜索」行)与功能槽
@@ -258,6 +273,8 @@ export function Sidebar({
               the intentionally empty SettingsSidebarUpper), this simply leaves
               the upper area blank. */}
             <div className="flex flex-1 flex-col overflow-hidden">{upperContent}</div>
+            {!!pluginSections?.length && !isRail && (!isCollapsed || isPeek) &&
+              <PluginUiSidebarSections entries={pluginSections} sessionId={pluginSessionId} />}
           </ConversationSearchProvider>
         )}
 

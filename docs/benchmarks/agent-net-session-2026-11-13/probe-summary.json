@@ -1,0 +1,889 @@
+{
+  "generatedAt": "2026-11-13T15:17:59.730Z",
+  "note": "throughput-probe.ts，修正后的限速器；只保留每次传输的汇总，另附一条抖动下卡在低速的时间序列",
+  "experiments": {
+    "after-reverse-up/fast/deviceLink": [
+      {
+        "profile": "fast",
+        "mode": "portable",
+        "rep": 1,
+        "reverse": {
+          "ms": 2023
+        },
+        "kind": "deviceLink",
+        "direction": "up",
+        "ok": true,
+        "ms": 3168,
+        "throughputKiBps": 323,
+        "linkUtilization": 0.33,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 2,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 7,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 121
+        },
+        "medianRttMs": 83.422,
+        "maxRttMs": 89.341,
+        "medianBandwidthKiBps": 323,
+        "retransmittedSegments": 0,
+        "packetsSent": 762
+      },
+      {
+        "profile": "fast",
+        "mode": "portable",
+        "rep": 2,
+        "reverse": {
+          "ms": 2615
+        },
+        "kind": "deviceLink",
+        "direction": "up",
+        "ok": true,
+        "ms": 2851,
+        "throughputKiBps": 359,
+        "linkUtilization": 0.37,
+        "wireRatio": 1.05,
+        "peakSocketBufferedKiB": 2,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 6,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 101
+        },
+        "medianRttMs": 83.419,
+        "maxRttMs": 88.027,
+        "medianBandwidthKiBps": 361,
+        "retransmittedSegments": 6,
+        "packetsSent": 767
+      },
+      {
+        "profile": "fast",
+        "mode": "portable",
+        "rep": 3,
+        "reverse": {
+          "ms": 1816
+        },
+        "kind": "deviceLink",
+        "direction": "up",
+        "ok": true,
+        "ms": 2988,
+        "throughputKiBps": 343,
+        "linkUtilization": 0.35,
+        "wireRatio": 1.05,
+        "peakSocketBufferedKiB": 2,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 6,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 107
+        },
+        "medianRttMs": 83.437,
+        "maxRttMs": 88.354,
+        "medianBandwidthKiBps": 364,
+        "retransmittedSegments": 6,
+        "packetsSent": 767
+      }
+    ],
+    "after-reverse-up/fast/raw": [
+      {
+        "profile": "fast",
+        "mode": "portable",
+        "rep": 1,
+        "reverse": {
+          "ms": 2027
+        },
+        "kind": "raw",
+        "direction": "up",
+        "ok": true,
+        "ms": 3124,
+        "throughputKiBps": 328,
+        "linkUtilization": 0.34,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 6,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 93
+        },
+        "medianRttMs": 83.415,
+        "maxRttMs": 86.763,
+        "medianBandwidthKiBps": 326,
+        "retransmittedSegments": 0,
+        "packetsSent": 750
+      },
+      {
+        "profile": "fast",
+        "mode": "portable",
+        "rep": 2,
+        "reverse": {
+          "ms": 2946
+        },
+        "kind": "raw",
+        "direction": "up",
+        "ok": true,
+        "ms": 2876,
+        "throughputKiBps": 356,
+        "linkUtilization": 0.36,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 5,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 75
+        },
+        "medianRttMs": 83.43,
+        "maxRttMs": 86.867,
+        "medianBandwidthKiBps": 362,
+        "retransmittedSegments": 0,
+        "packetsSent": 749
+      },
+      {
+        "profile": "fast",
+        "mode": "portable",
+        "rep": 3,
+        "reverse": {
+          "ms": 2886
+        },
+        "kind": "raw",
+        "direction": "up",
+        "ok": true,
+        "ms": 2849,
+        "throughputKiBps": 359,
+        "linkUtilization": 0.37,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 5,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 75
+        },
+        "medianRttMs": 83.419,
+        "maxRttMs": 86.912,
+        "medianBandwidthKiBps": 358,
+        "retransmittedSegments": 0,
+        "packetsSent": 749
+      }
+    ],
+    "after-reverse-up/fast-jitter/deviceLink": [
+      {
+        "profile": "fast-jitter",
+        "mode": "portable",
+        "rep": 1,
+        "reverse": {
+          "ms": 1961
+        },
+        "kind": "deviceLink",
+        "direction": "up",
+        "ok": true,
+        "ms": 5700,
+        "throughputKiBps": 180,
+        "linkUtilization": 0.18,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 3,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 12,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 358
+        },
+        "medianRttMs": 143.926,
+        "maxRttMs": 156.585,
+        "medianBandwidthKiBps": 196,
+        "retransmittedSegments": 2,
+        "packetsSent": 767
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "portable",
+        "rep": 2,
+        "reverse": {
+          "ms": 11356
+        },
+        "kind": "deviceLink",
+        "direction": "up",
+        "ok": true,
+        "ms": 12778,
+        "throughputKiBps": 80,
+        "linkUtilization": 0.08,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 3,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 14,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 1343
+        },
+        "medianRttMs": 143.125,
+        "maxRttMs": 155.691,
+        "medianBandwidthKiBps": 83,
+        "retransmittedSegments": 1,
+        "packetsSent": 776
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "portable",
+        "rep": 3,
+        "reverse": {
+          "ms": 4392
+        },
+        "kind": "deviceLink",
+        "direction": "up",
+        "ok": true,
+        "ms": 14411,
+        "throughputKiBps": 71,
+        "linkUtilization": 0.07,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 3,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 14,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 1567
+        },
+        "medianRttMs": 144.15,
+        "maxRttMs": 163.093,
+        "medianBandwidthKiBps": 82,
+        "retransmittedSegments": 1,
+        "packetsSent": 777
+      }
+    ],
+    "after-reverse-up/fast-jitter/raw": [
+      {
+        "profile": "fast-jitter",
+        "mode": "portable",
+        "rep": 1,
+        "reverse": {
+          "ms": 1768
+        },
+        "kind": "raw",
+        "direction": "up",
+        "ok": true,
+        "ms": 6232,
+        "throughputKiBps": 164,
+        "linkUtilization": 0.17,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 12,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 378
+        },
+        "medianRttMs": 144.453,
+        "maxRttMs": 167.193,
+        "medianBandwidthKiBps": 180,
+        "retransmittedSegments": 0,
+        "packetsSent": 754
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "portable",
+        "rep": 2,
+        "reverse": {
+          "ms": 7257
+        },
+        "kind": "raw",
+        "direction": "up",
+        "ok": true,
+        "ms": 6104,
+        "throughputKiBps": 168,
+        "linkUtilization": 0.17,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 12,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 354
+        },
+        "medianRttMs": 144.453,
+        "maxRttMs": 160.344,
+        "medianBandwidthKiBps": 184,
+        "retransmittedSegments": 1,
+        "packetsSent": 753
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "portable",
+        "rep": 3,
+        "reverse": {
+          "ms": 1633
+        },
+        "kind": "raw",
+        "direction": "up",
+        "ok": true,
+        "ms": 11331,
+        "throughputKiBps": 90,
+        "linkUtilization": 0.09,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 14,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 1068
+        },
+        "medianRttMs": 145.566,
+        "maxRttMs": 160.77,
+        "medianBandwidthKiBps": 86,
+        "retransmittedSegments": 1,
+        "packetsSent": 770
+      }
+    ],
+    "warm-down": [
+      {
+        "profile": "fast",
+        "mode": "worker",
+        "rep": 1,
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 2735,
+        "throughputKiBps": 374,
+        "linkUtilization": 0.38,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 28
+        },
+        "medianRttMs": 83.562,
+        "maxRttMs": 85.035,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast",
+        "mode": "worker",
+        "rep": 1,
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 1518,
+        "throughputKiBps": 675,
+        "linkUtilization": 0.69,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 0,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 85.752,
+        "maxRttMs": 85.752,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast",
+        "mode": "worker",
+        "rep": 2,
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 1148,
+        "throughputKiBps": 892,
+        "linkUtilization": 0.91,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1024,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 85.238,
+        "maxRttMs": 87.891,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast",
+        "mode": "worker",
+        "rep": 2,
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 1352,
+        "throughputKiBps": 757,
+        "linkUtilization": 0.78,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 14
+        },
+        "medianRttMs": 85.283,
+        "maxRttMs": 95.619,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast",
+        "mode": "worker",
+        "rep": 3,
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 1224,
+        "throughputKiBps": 837,
+        "linkUtilization": 0.86,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 13
+        },
+        "medianRttMs": 86.578,
+        "maxRttMs": 96.244,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast",
+        "mode": "worker",
+        "rep": 3,
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 1149,
+        "throughputKiBps": 891,
+        "linkUtilization": 0.91,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1024,
+        "medianSocketBufferedKiB": 1024,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 87.752,
+        "maxRttMs": 87.752,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast",
+        "mode": "worker",
+        "rep": 4,
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 1144,
+        "throughputKiBps": 895,
+        "linkUtilization": 0.92,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1024,
+        "medianSocketBufferedKiB": 1024,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 85.912,
+        "maxRttMs": 85.912,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast",
+        "mode": "worker",
+        "rep": 4,
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 1230,
+        "throughputKiBps": 833,
+        "linkUtilization": 0.85,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 13
+        },
+        "medianRttMs": 87.018,
+        "maxRttMs": 105.713,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "worker",
+        "rep": 1,
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 4517,
+        "throughputKiBps": 227,
+        "linkUtilization": 0.23,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 45
+        },
+        "medianRttMs": 149.697,
+        "maxRttMs": 154.845,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "worker",
+        "rep": 1,
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 2492,
+        "throughputKiBps": 411,
+        "linkUtilization": 0.42,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1024,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 146.933,
+        "maxRttMs": 149.437,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "worker",
+        "rep": 2,
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 1839,
+        "throughputKiBps": 557,
+        "linkUtilization": 0.57,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1024,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 154.497,
+        "maxRttMs": 157.188,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "worker",
+        "rep": 2,
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 1790,
+        "throughputKiBps": 572,
+        "linkUtilization": 0.59,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 18
+        },
+        "medianRttMs": 157.12,
+        "maxRttMs": 160.207,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "worker",
+        "rep": 3,
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 1514,
+        "throughputKiBps": 676,
+        "linkUtilization": 0.69,
+        "wireRatio": 1.07,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 16
+        },
+        "medianRttMs": 161.305,
+        "maxRttMs": 195.608,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "worker",
+        "rep": 3,
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 1358,
+        "throughputKiBps": 754,
+        "linkUtilization": 0.77,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1024,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 168.666,
+        "maxRttMs": 192.738,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "worker",
+        "rep": 4,
+        "kind": "raw",
+        "direction": "down",
+        "ok": true,
+        "ms": 1307,
+        "throughputKiBps": 783,
+        "linkUtilization": 0.8,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1024,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 0,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {},
+        "medianRttMs": 187.938,
+        "maxRttMs": 196.153,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      },
+      {
+        "profile": "fast-jitter",
+        "mode": "worker",
+        "rep": 4,
+        "kind": "deviceLink",
+        "direction": "down",
+        "ok": true,
+        "ms": 1563,
+        "throughputKiBps": 655,
+        "linkUtilization": 0.67,
+        "wireRatio": 1.04,
+        "peakSocketBufferedKiB": 1027,
+        "medianSocketBufferedKiB": 0,
+        "peakDlPending": 1,
+        "dlLocalPressureShare": 0,
+        "dlBlockedBySamples": {
+          "none": 16
+        },
+        "medianRttMs": 187.941,
+        "maxRttMs": 224.377,
+        "medianBandwidthKiBps": null,
+        "retransmittedSegments": null,
+        "packetsSent": null
+      }
+    ]
+  },
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "series": {
+    "label": "after-reverse-up/fast-jitter/deviceLink rep3",
+    "samples": [
+      {
+        "t": 109,
+        "wireBytes": 5624,
+        "bandwidthBps": 12528,
+        "rttMs": 153
+      },
+      {
+        "t": 642,
+        "wireBytes": 22496,
+        "bandwidthBps": 35524,
+        "rttMs": 157
+      },
+      {
+        "t": 1171,
+        "wireBytes": 44992,
+        "bandwidthBps": 45922,
+        "rttMs": 157
+      },
+      {
+        "t": 1709,
+        "wireBytes": 61896,
+        "bandwidthBps": 45922,
+        "rttMs": 163
+      },
+      {
+        "t": 2217,
+        "wireBytes": 86002,
+        "bandwidthBps": 57402,
+        "rttMs": 147
+      },
+      {
+        "t": 2717,
+        "wireBytes": 115780,
+        "bandwidthBps": 57402,
+        "rttMs": 141
+      },
+      {
+        "t": 3217,
+        "wireBytes": 147029,
+        "bandwidthBps": 63970,
+        "rttMs": 140
+      },
+      {
+        "t": 3717,
+        "wireBytes": 178225,
+        "bandwidthBps": 63971,
+        "rttMs": 134
+      },
+      {
+        "t": 4217,
+        "wireBytes": 213675,
+        "bandwidthBps": 73054,
+        "rttMs": 136
+      },
+      {
+        "t": 4717,
+        "wireBytes": 250543,
+        "bandwidthBps": 73057,
+        "rttMs": 149
+      },
+      {
+        "t": 5217,
+        "wireBytes": 286046,
+        "bandwidthBps": 76141,
+        "rttMs": 144
+      },
+      {
+        "t": 5717,
+        "wireBytes": 321496,
+        "bandwidthBps": 76141,
+        "rttMs": 146
+      },
+      {
+        "t": 6217,
+        "wireBytes": 355528,
+        "bandwidthBps": 76141,
+        "rttMs": 144
+      },
+      {
+        "t": 6717,
+        "wireBytes": 390978,
+        "bandwidthBps": 75956,
+        "rttMs": 141
+      },
+      {
+        "t": 7221,
+        "wireBytes": 429317,
+        "bandwidthBps": 83552,
+        "rttMs": 143
+      },
+      {
+        "t": 7732,
+        "wireBytes": 467603,
+        "bandwidthBps": 83552,
+        "rttMs": 147
+      },
+      {
+        "t": 8232,
+        "wireBytes": 507307,
+        "bandwidthBps": 89916,
+        "rttMs": 146
+      },
+      {
+        "t": 8732,
+        "wireBytes": 548429,
+        "bandwidthBps": 89916,
+        "rttMs": 144
+      },
+      {
+        "t": 9232,
+        "wireBytes": 592440,
+        "bandwidthBps": 98911,
+        "rttMs": 144
+      },
+      {
+        "t": 9732,
+        "wireBytes": 639234,
+        "bandwidthBps": 98911,
+        "rttMs": 142
+      },
+      {
+        "t": 10232,
+        "wireBytes": 684610,
+        "bandwidthBps": 101843,
+        "rttMs": 137
+      },
+      {
+        "t": 10732,
+        "wireBytes": 731457,
+        "bandwidthBps": 101843,
+        "rttMs": 141
+      },
+      {
+        "t": 11232,
+        "wireBytes": 779669,
+        "bandwidthBps": 105476,
+        "rttMs": 139
+      },
+      {
+        "t": 11732,
+        "wireBytes": 826463,
+        "bandwidthBps": 105476,
+        "rttMs": 138
+      },
+      {
+        "t": 12232,
+        "wireBytes": 878982,
+        "bandwidthBps": 112007,
+        "rttMs": 135
+      },
+      {
+        "t": 12732,
+        "wireBytes": 930030,
+        "bandwidthBps": 112007,
+        "rttMs": 149
+      },
+      {
+        "t": 13232,
+        "wireBytes": 982558,
+        "bandwidthBps": 112007,
+        "rttMs": 140
+      },
+      {
+        "t": 13732,
+        "wireBytes": 1033606,
+        "bandwidthBps": 111908,
+        "rttMs": 144
+      },
+      {
+        "t": 14232,
+        "wireBytes": 1084654,
+        "bandwidthBps": 111908,
+        "rttMs": 148
+      }
+    ]
+  }
+}

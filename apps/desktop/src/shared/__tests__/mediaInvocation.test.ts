@@ -16,6 +16,56 @@ const operation = {
 const protocol = { schemaVersion: 1, guideId: 'opaque-server-id', revision: 'server-revision' };
 
 describe('媒体协议说明与本地执行绑定', () => {
+  // Unit: the real persisted JSON decoder must retain the chosen runtime/source
+  // across restart and must reject incomplete or credential-bearing bindings.
+  it('roundtrips a custom HTTP binding independently of the Guide revision', () => {
+    const snapshot = { ...protocol, ...operation, modelId: 'private/model',
+      binding: { providerId: 'relay', executor: 'provider-http', connectionRevision: 'connection-1', sourceAgent: 'pi', guideSource: 'custom' } };
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(snapshot)))).toEqual({ ok: true, value: snapshot });
+    for (const binding of [
+      { ...snapshot.binding, sourceAgent: undefined }, { ...snapshot.binding, guideSource: undefined },
+      { ...snapshot.binding, connectionRevision: undefined }, { ...snapshot.binding, host: 'https://other.example' },
+    ]) expect(parsePreparedMediaInvocationGuide({ ...snapshot, binding })).toMatchObject({ ok: false });
+  });
+  // Unit, #4577490768: the real persisted decoder must preserve a selected video
+  // runtime after restart while accepting existing snapshots without that field.
+  it('roundtrips an optional selected runtime in the official video binding', () => {
+    const snapshot = { ...protocol, ...operation, modelId: 'private-video',
+      binding: { providerId: 'relay', executor: 'provider-video', connectionRevision: 'video-1', videoProtocol: 'openai-videos' } };
+    for (const sourceAgent of [undefined, 'pi', 'codex']) {
+      const value = JSON.parse(JSON.stringify({ ...snapshot, binding: { ...snapshot.binding, sourceAgent } }));
+      expect(parsePreparedMediaInvocationGuide(value)).toEqual({ ok: true, value });
+    }
+    expect(parsePreparedMediaInvocationGuide({ ...snapshot, binding: { ...snapshot.binding, sourceAgent: 'unknown' } }))
+      .toMatchObject({ ok: false });
+  });
+
+  // 自带 provider 接入契约：用户资料不一定有官方链接，型号也可能只存在于 URL。
+  // 原解析器强制 bodyModelPath/officialDocs；unit，复用生产 parser 并核对持久快照。
+  it.each(['/render', '/v1beta/models/{model}:generateContent'])(
+    'accepts a user Guide without body model injection or official docs: %s', (requestPath) => {
+      const { officialDocs: _docs, ...definition } = operation;
+      const { bodyModelPath: _modelPath, ...request } = operation.request;
+      const customOperation = { ...definition, request: { ...request, path: requestPath } };
+      const guide = { ...protocol, operations: [customOperation] };
+      expect(parseMediaInvocationGuide(guide)).toEqual({ ok: true, value: guide });
+      const snapshot = { ...protocol, ...customOperation, modelId: 'private-model',
+        binding: { providerId: 'xd', executor: 'gateway' } };
+      expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(snapshot))))
+        .toEqual({ ok: true, value: snapshot });
+      expect(parseMediaInvocationGuide({ ...guide, operations: [{ ...customOperation,
+        request: { ...customOperation.request, bodyModelPath: [] },
+      }] })).toMatchObject({ ok: false });
+      expect(parseMediaInvocationGuide({ ...guide, operations: [{ ...customOperation,
+        request: { ...customOperation.request, path: '/models/{secret}' },
+      }] })).toMatchObject({ ok: false });
+      for (const header of ['Authorization', 'api-key', 'X-Api-Key', 'x-goog-api-key'])
+        expect(parseMediaInvocationGuide({ ...guide, operations: [{ ...customOperation,
+          request: { ...customOperation.request, headers: { [header]: 'must-stay-in-host-storage' } },
+        }] })).toMatchObject({ ok: false });
+    },
+  );
+
   // /v1/videos 成片仅从原任务下载的协议回归；unit：Server Guide 与持久快照必须保留下载路径。
   it('roundtrips an optional task content path and rejects absolute or unbound paths', () => {
     const asyncOperation = { ...operation, response: { mode: 'async', taskIdPath: ['id'], poll: {

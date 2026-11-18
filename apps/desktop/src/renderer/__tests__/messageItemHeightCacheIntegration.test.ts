@@ -49,6 +49,10 @@ function setup(keys: string[], mountedKeys: string[], cached = { before: 100, ca
     restoreSnapshotRef: { current: { itemHeights: { width: 720, byKey: cached } } },
     visibleRenderItems: keys.map((key) => ({ key })),
     visibleRenderItemsRef: { current: keys.map((key) => ({ key })) },
+    // saveScrollSnapshot 现在也从窗口首 item 取 store 裁剪地板;本 fixture 的 item
+    // 没有 message/toolCalls,取不到锚 → windowFloorClientId 省略,不影响高度缓存断言。
+    collectDeleteAnchorClientIds: () => [],
+    renderWindowFloorClientId: () => undefined,
     rememberedItemIntrinsicSize,
     findRenderItemElement,
     restoreLoadRef: { current: 'settled' },

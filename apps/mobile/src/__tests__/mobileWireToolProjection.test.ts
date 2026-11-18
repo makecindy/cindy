@@ -3,7 +3,7 @@ import { MOBILE_TOOL_RESULT_BYTES, projectMobileMessagePage, projectMobileToolMe
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import { fetchMobileToolInputDetail } from '@/session/messageToolPayloadProjection';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
-import { readFailedImageDelivery } from '@cindy/maker-shared/tool-process-media';
+import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
 import type { RemoteMessage } from '@/session/types';
 
 describe('Desktop tool projection consumed by Mobile', () => {
@@ -26,6 +26,35 @@ describe('Desktop tool projection consumed by Mobile', () => {
       projectMobileToolPush('local-db:messages:created', { sessionId: row.sessionId, message: row }),
     )],
   ] as const;
+
+  // Regression: decoded tool-result rows containing both text and process media
+  // lost their media during Mobile normalization. The string-only fixtures below
+  // did not cover the shape returned by history reads and durable row pushes.
+  // Unit tier: real Desktop projection -> Mobile store -> render model; no I/O.
+  // Single-file Vitest run on Windows: 3.36s (including module collection).
+  it.each(resultUpdates)('preserves saved tool images and videos arriving via %s', (_name, update) => {
+    const input: RemoteMessage = { ...tool, content: {
+      toolName: 'Read', toolUseId: tool.toolUseId, input: { file_path: '/project/capture.png' },
+    } };
+    const text = '[Image: source: /provider/tool-results/capture.png]';
+    const media = [
+      { kind: 'image', url: `cindy-media://blobs/${'c'.repeat(64)}.png` },
+      { kind: 'video', url: `cindy-media://blobs/${'d'.repeat(64)}.mp4` },
+    ];
+    const summary: RemoteMessage = {
+      ...tool, id: 'wire-result', clientId: 'wire-result', role: 'tool_result', content: text,
+    };
+    remoteSessionStore.setMessages(tool.sessionId, [input, summary]);
+
+    update({ ...summary, content: { text, cindy_process_media: media } });
+
+    const [normalized] = normalizeRemoteMessages(remoteSessionStore.getMessages(tool.sessionId));
+    expect(readToolProcessMedia(normalized.secondaryBody)).toEqual(media);
+    expect(readToolProcessText(normalized.secondaryBody)).toBe(text);
+    // Process previews stay inside their tool step, rather than becoming deliveries.
+    expect(normalized.media).toEqual([]);
+    expect(normalized.toolSettled).toBe(true);
+  });
 
   it.each(resultUpdates)('replaces an earlier summary with the newer result preview via %s', (_name, update) => {
     const summary: RemoteMessage = {

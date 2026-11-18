@@ -126,18 +126,18 @@ describe('bot group remote resources', () => {
 
   afterEach(() => h.sqlite?.close());
 
-  // Unit: real resource handler must not silently discard all scope (group chat §4.0).
-  // Previous coverage only checked visibility rejection; one server group is sufficient.
-  it('advertises scoped stop only for upgraded server groups and forwards explicit all', async () => {
+  // Unit: old phones can still send all. Reject it even if a cached detail grants legacy admin rights.
+  // The resource route must preserve new ownership metadata and forward only the default action.
+  it('preserves ownership support and refuses legacy all before dispatch', async () => {
     expect(botGroupRemoteChatData(detail()).supportsScopedStop).toBe(false);
-    const group = detail({ serverBacked: true, singleSpeaker: true, canStopAll: true });
+    const group = detail({ serverBacked: true, singleSpeaker: true, canStopAll: true, supportsOwnedStop: true });
     expect(botGroupRemoteChatData(group).supportsScopedStop).toBe(true);
+    expect(botGroupRemoteChatData(group)).toMatchObject({ canStopAll: false, supportsOwnedStop: true });
     service.getGroup.mockResolvedValue({ ok: true, group });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
-      actionId: 'stop', resourceRef: ref('g1'), input: { scope: 'all' } });
-    expect(service.stopRound).toHaveBeenCalledWith('g1', 'all');
+      actionId: 'stop', resourceRef: ref('g1') });
+    expect(service.stopRound).toHaveBeenCalledWith('g1', undefined);
     service.stopRound.mockClear();
-    service.getGroup.mockResolvedValue({ ok: true, group: { ...group, canStopAll: false } });
     await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
       actionId: 'stop', resourceRef: ref('g1'), input: { scope: 'all' } })).rejects.toMatchObject({ code: 'INVALID_PARAMS', message: 'ROLE_REQUIRED' });
     expect(service.stopRound).not.toHaveBeenCalled();
@@ -170,8 +170,8 @@ describe('bot group remote resources', () => {
   it('passes the edited revision to the server and adds just one visible companion', async () => {
     service.getGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, revision: 5 }) });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
-      actionId: 'update', resourceRef: ref('g1'), input: { name: 'New', expectedRevision: 5, allowMentionAllBots: false } });
-    expect(service.updateGroup).toHaveBeenCalledWith({ groupId: 'g1', name: 'New', expectedRevision: 5, allowMentionAllBots: false });
+      actionId: 'update', resourceRef: ref('g1'), input: { name: 'New', expectedRevision: 5, allowMentionAllBots: false, allowMemberInvites: true } });
+    expect(service.updateGroup).toHaveBeenCalledWith({ groupId: 'g1', name: 'New', expectedRevision: 5, allowMentionAllBots: false, allowMemberInvites: true });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
       actionId: 'add-member', resourceRef: ref('g1'), input: { botId: 'abu', expectedRevision: 5 } });
     expect(service.setMembers).toHaveBeenCalledWith({ groupId: 'g1', botIds: ['abu'], addOnly: true });

@@ -85,7 +85,8 @@ export interface RemoteSession {
   agentDeviceId?: string | null;
   /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
-  source?: string;
+  /** 任务来源；null = 已确认是普通任务，缺省 = 来源未知（任务入口须先向电脑核对）。 */
+  source?: string | null;
   companion?: import("./teammateTaskSource").TaskCompanion;
   taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
   orcaRole?: 'lead' | 'worker' | string | null;
@@ -101,6 +102,8 @@ export interface RemoteSession {
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
   createdAt: string;
@@ -247,7 +250,7 @@ export interface QueuedRemoteMessage {
   userName?: string;
   /** Interface language of this phone. The desktop stamps it only for a remote turn. */
   uiLanguage?: string;
-  /** Classical output style chosen next to the language; used only with a classical uiLanguage. */
+  /** Classical output style chosen next to the language; used only with a Chinese uiLanguage. */
   classicalStyle?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
