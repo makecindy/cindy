@@ -115,7 +115,8 @@ function StructureSpecimen() {
     workingDir: '/workspace/Cindy',
     workspaceKind: 'project' as const,
   };
-  const projects = groupSessions([task]).projects;
+  const manual = ctx.case === 'dialogue-order';
+  const projects = groupSessions(manual ? [task, sessions[2]] : [task]).projects;
   return (
     <div className="min-h-screen w-[320px] bg-sidebar text-foreground p-2">
       {/* Same placement as the sidebar's top chrome row (back / forward), right end. */}
@@ -125,11 +126,11 @@ function StructureSpecimen() {
       <ProjectsSection
         unclassified={[]}
         projects={projects}
-        dialogues={[]}
+        dialogues={manual ? [sessions[1]] : []}
         inboxSessions={[task, ...sessions.slice(1)]}
         allKnownProjects={projects}
         allProjectKeysForOrder={projects.map((p) => p.projectKey)}
-        filter={{ ...filter, groupBy: 'project', groupDevice: true, groupDialogue: true }}
+        filter={{ ...filter, groupBy: 'project', groupDevice: !manual, groupDialogue: true, projectOrder: manual ? 'custom' : filter.projectOrder }}
         collapsed={new Set(projects.map((p) => p.projectKey))}
         isAllCollapsed
         priorityContext={priorityContext}
@@ -211,7 +212,7 @@ void mountPage({
   },
   render: () => (
     <WorktreeProvider>
-      {ctx.case === 'intro' ? <IntroSpecimen /> : ctx.case === 'structure' ? <StructureSpecimen /> : <Specimen />}
+      {ctx.case === 'intro' ? <IntroSpecimen /> : (ctx.case === 'structure' || ctx.case === 'dialogue-order') ? <StructureSpecimen /> : <Specimen />}
     </WorktreeProvider>
   ),
 });

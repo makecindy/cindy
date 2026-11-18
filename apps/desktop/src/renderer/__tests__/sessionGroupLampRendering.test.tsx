@@ -6,6 +6,8 @@ import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@t
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getStartingSessionIds, markSessionStarting, resetSessionStartingStoreForTests, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { __testing as ownerStorage } from '@/lib/sidebarOwnerStorage';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
 import { groupSessions } from '@/features/cc-agent/lib/projectGrouping';
 import {
@@ -377,6 +379,52 @@ describe('Sidebar group context menus', () => {
 // unit harness with two projects in custom order; selectors come from the actual
 // SortableJS instance, and its real onEnd must persist the reordered projects.
 describe('Manual project sorting', () => {
+  it.each([false, true])('drags the dialogue header and restores its position (collapsed=%s)', collapsed => {
+    setDataOwnerGeneration('dialogue-sort-test');
+    ownerStorage.setOwnerAuthorityReader(dataOwnerId => ({
+      dataOwnerId, ownerGeneration: 1, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
+    }));
+    try {
+      const p = groupProps(false);
+      p.projects = ['A', 'B'].map((name) => ({
+        projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name,
+        scope: 'local', sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
+        remoteHostId: null, deviceLinkDeviceId: null,
+        deviceLinkDeviceName: null, deviceLinkConnectionStatus: null,
+      }));
+      p.allProjectKeysForOrder = p.projects.map(project => project.projectKey);
+      p.filter.manualProjectOrder = p.allProjectKeysForOrder.slice();
+      p.filter.projectOrder = 'custom';
+      const view = render(<ProjectsSection {...p} />);
+      if (collapsed) fireEvent.click(groupHeader());
+      const header = groupHeader();
+      const row = header.closest<HTMLElement>('[data-sortable-id]')!;
+      const list = row.parentElement!;
+      const sortable = Sortable.get(list)!;
+      expect(header.matches(sortable.option('handle') as string)).toBe(true);
+      expect(header.closest(sortable.option('filter') as string)).toBeNull();
+      expect(row).toBe(list.lastElementChild);
+      const children = Array.from(row.querySelectorAll('[data-testid]'), el => el.getAttribute('data-testid'));
+      list.insertBefore(row, list.children[1]);
+      act(() => sortable.option('onEnd')!.call(sortable, Object.assign(new Event('end'), {
+        item: row, from: list, oldIndex: 2, newIndex: 1,
+      }) as SortableEvent));
+      expect(list.children[1]).toBe(row);
+      expect(Array.from(row.querySelectorAll('[data-testid]'), el => el.getAttribute('data-testid'))).toEqual(children);
+      expect(p.filter.setManualProjectOrder).not.toHaveBeenCalled();
+      view.unmount();
+      const reopened = render(<ProjectsSection {...p} filter={{ ...p.filter, projectOrder: 'activity' }} />);
+      reopened.rerender(<ProjectsSection {...p} />);
+      expect(groupHeader().closest('[data-sortable-id]')?.previousElementSibling?.getAttribute('data-sortable-id'))
+        .toBe(p.allProjectKeysForOrder[0]);
+      expect(groupHeader().closest('[data-sortable-id]')?.nextElementSibling?.getAttribute('data-sortable-id'))
+        .toBe(p.allProjectKeysForOrder[1]);
+    } finally {
+      ownerStorage.setOwnerAuthorityReader(null);
+      setDataOwnerGeneration(null);
+    }
+  });
+
   it('leaves the real project header draggable and persists a completed reorder', () => {
     const p = props(false);
     p.projects = ['First', 'Second'].map((name) => ({
