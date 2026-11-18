@@ -166,6 +166,30 @@ it.each([true, false])('admits an archived Skill send before activating the task
   else expect(h.send).not.toHaveBeenCalled();
 });
 
+it.each(['queue', 'steer'] as const)('uses the selected engine only for the next %s input', async deliveryMode => {
+  const h = harness('codex');
+  h.environment.agentSwitchIntent = { target: 'pi', model: 'chosen-model' };
+  h.environment.displayAgentKind = 'pi';
+  h.create.mockImplementation(async () => {
+    h.release();
+    return { accepted: true, piRuntimePrepared: true, pendingRouteApplied: true };
+  });
+  await h.handleSend('/demo', 'chosen-model', 'medium', 'ask', [], [], { deliveryMode });
+  expect(h.create).toHaveBeenCalledTimes(deliveryMode === 'steer' ? 0 : 1);
+  expect(h.send.mock.calls[0][0]).toBe(deliveryMode === 'steer' ? '/demo' : '/skill:demo');
+});
+
+it('ignores the previous Pi alias when the next input switches away from Pi', async () => {
+  const h = harness();
+  h.environment.agentSwitchIntent = { target: 'codex' };
+  h.environment.displayAgentKind = 'codex';
+  h.environment.allCommandsRef.current = [{ name: 'demo', kind: 'agent-skill', runtimeCommandName: 'skill:demo' }];
+  h.environment.loadAllCommands = async () => [];
+  await h.handleSend('/demo', 'chosen-model', 'medium', 'ask');
+  expect(h.create).not.toHaveBeenCalled();
+  expect(h.send.mock.calls[0][0]).toBe('/demo');
+});
+
 it.each(['literal', 'codex', 'claude-code'])('leaves %s input unchanged without starting Pi', async kind => {
   const h = harness(kind === 'literal' ? 'pi' : kind);
   await h.handleSend('/demo hello', 'chosen-model', 'medium', 'ask', [], [], { literalText: kind === 'literal' });

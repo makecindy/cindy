@@ -1100,7 +1100,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         throwIpcError('PRECONDITION_FAILED', 'Session engine or working directory changed');
       }
       const live = deps.getSession(sessionId);
-      if (live) {
+      if (live && live.getStatus?.() !== 'error') {
         if (live.agentKind !== 'pi' || live.workDir !== workingDir) {
           throwIpcError('PRECONDITION_FAILED', 'Running session no longer matches the selected project');
         }

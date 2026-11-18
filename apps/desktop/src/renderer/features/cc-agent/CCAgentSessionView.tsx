@@ -3700,18 +3700,21 @@ function CCAgentSessionContent({
     model = session?.model,
     effort = session?.effort,
     permissionMode = session?.permissionMode,
+    pendingPiRoute?: { agentDeviceId?: string | null },
   ) => {
     if (!sessionId || !workingDir || !model || !permissionMode
-      || dbToMakerAgentKind(session?.agentKind) !== 'pi') return;
+      || (!pendingPiRoute && dbToMakerAgentKind(session?.agentKind) !== 'pi')) return;
     const request = {
       ...buildCreateOptsForCurrentSession(sessionId, model, effort ?? '', permissionMode, workingDir),
       purpose: 'pi-skill-dispatch',
+      ...(pendingPiRoute ? { pendingPiRoute } : {}),
     };
     try {
       const result = remoteDeviceId
         ? await window.electronAPI.deviceLink.invoke(remoteDeviceId, 'maker:session:prewarm', [sessionId, request])
         : await window.electronAPI.maker.prewarmSession?.(sessionId, request);
-      if ((result as { piRuntimePrepared?: boolean } | undefined)?.piRuntimePrepared !== true) throw new Error(t('richAnswer.sendFailed'));
+      const receipt = result as { piRuntimePrepared?: true; pendingRouteApplied?: true } | undefined;
+      if (!receipt?.piRuntimePrepared || (pendingPiRoute && !receipt.pendingRouteApplied)) throw new Error(t('richAnswer.sendFailed'));
     } catch (error) {
       const detail = extractIpcError(error)?.message ?? (error instanceof Error ? error.message : String(error));
       toast.error(detail || t('richAnswer.sendFailed'));
@@ -3730,9 +3733,10 @@ function CCAgentSessionContent({
         piRuntimeRetryDelaysMs?: readonly number[];
         workingDirOverride?: string;
         preparePiRuntime?: () => Promise<void>;
+        pendingRoute?: NonNullable<typeof agentSwitchIntent>;
       },
     ): Promise<{ handled: boolean; accepted: boolean; message: string }> => {
-      const agentKind = dbToMakerAgentKind(session?.agentKind);
+      const agentKind = options?.pendingRoute?.target ?? dbToMakerAgentKind(session?.agentKind);
       if (options?.builtInSkillIntent) {
         // Recheck the identity after handoff/collaboration/authentication waits.
         // Never feed its alias back through the generic name-based dispatcher.
@@ -3766,12 +3770,15 @@ function CCAgentSessionContent({
       const cached = allCommandsRef.current;
       // A newly selected project changes command ownership, so do not let a
       // pre-selection global hit suppress the forced project catalog refresh.
-      const commands = options?.workingDirOverride
+      const commands = options?.pendingRoute
+        ? await loadAllCommands(agentKind, workingDir, { skipAgentSkills: isRemoteSession, forceReload: true }, remoteDeviceId)
+        : options?.workingDirOverride
         ? []
         : cached.length > 0
           ? cached
           : await getHelpCommandsSnapshot();
       let runtimeCatalogSettled = false;
+      let readTargetRuntime = !options?.pendingRoute;
       const reconcileParams = {
         agentKind,
         sessionId: session?.id,
@@ -3783,7 +3790,7 @@ function CCAgentSessionContent({
             workingDir,
             {
               skipAgentSkills: isRemoteSession,
-              sessionId: session?.id,
+              sessionId: readTargetRuntime ? session?.id : undefined,
               forceReload: true,
               onPiRuntimeStatus: status => { runtimeCatalogSettled = status === 'loaded'; },
             },
@@ -3800,11 +3807,14 @@ function CCAgentSessionContent({
               throw new Error(detail);
             },
             runtimeCatalogSettled: () => runtimeCatalogSettled,
-            prepareRuntime: options.preparePiRuntime ?? (() => preparePiRuntimeForDispatch(workingDir)),
+            prepareRuntime: async () => {
+              await (options.preparePiRuntime ?? (() => preparePiRuntimeForDispatch(workingDir)))();
+              readTargetRuntime = true;
+            },
             retryDelaysMs: options.piRuntimeRetryDelaysMs,
           })
         : await reconcilePiRuntimeCommandForDispatch(reconcileParams);
-      if (reconciled.commands !== commands) {
+      if (!options?.pendingRoute && reconciled.commands !== commands) {
         allCommandsRef.current = reconciled.commands;
         setAllCommands(reconciled.commands);
       }
@@ -3993,13 +4003,16 @@ function CCAgentSessionContent({
                   piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
                   workingDirOverride: newDir,
                   builtInSkillIntent: pending.builtInSkillIntent,
+                  pendingRoute: pending.deliveryMode !== 'steer' ? agentSwitchIntent ?? undefined : undefined,
                   preparePiRuntime: async () => {
                     if (sessionId && session?.status === 'archived') {
                       await sessionService.setStatus(sessionId, 'active', remoteDeviceId
                         ? { kind: 'device-link', deviceId: remoteDeviceId } : { kind: 'local' });
                       emitRefresh();
                     }
-                    await preparePiRuntimeForDispatch(newDir, pending.model, pending.effort, pending.permissionMode);
+                    await preparePiRuntimeForDispatch(newDir, pending.model, pending.effort, pending.permissionMode,
+                      pending.deliveryMode !== 'steer' && agentSwitchIntent?.target === 'pi'
+                        ? { agentDeviceId: agentSwitchIntent.agentDeviceId } : undefined);
                   },
                 },
               );
@@ -4110,6 +4123,7 @@ function CCAgentSessionContent({
       preparePiRuntimeForDispatch,
       refreshServerSession,
       remoteDeviceId,
+      agentSwitchIntent,
       session?.status,
       session?.agentKind,
       session?.orcaRole,
@@ -4292,6 +4306,7 @@ function CCAgentSessionContent({
       // Pure Desktop commands do not activate an archived task. Defer only a
       // runtime-dependent Skill until the ordinary send gates have admitted it.
       const needsActiveSession = Symbol('archived Pi skill preparation');
+      const pendingRoute = deliveryMode === 'steer' ? undefined : agentSwitchIntent ?? undefined;
       const dispatchSlash = async (deferPreparation: boolean) => {
         const slashDispatch = opts?.literalText || opts?.builtInSkillIntent
           ? { handled: false, accepted: false, message }
@@ -4299,9 +4314,11 @@ function CCAgentSessionContent({
               // Command ownership is resolved here after loading the catalog;
               // the composer's delivery preference applies only to model input.
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+              pendingRoute,
               preparePiRuntime: () => {
                 if (deferPreparation) throw needsActiveSession;
-                return preparePiRuntimeForDispatch(session?.workingDir, model, effort, permissionMode);
+                return preparePiRuntimeForDispatch(session?.workingDir, model, effort, permissionMode,
+                  pendingRoute?.target === 'pi' ? { agentDeviceId: pendingRoute.agentDeviceId } : undefined);
               },
             });
         if (slashDispatch.handled) {
@@ -4359,7 +4376,7 @@ function CCAgentSessionContent({
       };
       let deferredSkill = false;
       try {
-        const dispatched = await dispatchSlash(session?.status === 'archived');
+        const dispatched = await dispatchSlash(session?.status === 'archived' || pendingRoute?.target === 'pi');
         if (dispatched) return dispatched.accepted;
       } catch (err) {
         if (err !== needsActiveSession) throw err;
@@ -4397,7 +4414,7 @@ function CCAgentSessionContent({
       // 续发)、本地插话和内置技能分派不经过 store 的乐观插入,仍在这里先查。
       // 归档任务也先查,避免认证拒绝后仍留下自动取消归档的副作用。
       const deferVendorAuthGate = Boolean(session?.workingDir) && !opts?.builtInSkillIntent &&
-        deliveryMode !== 'steer' && session?.status !== 'archived';
+        deliveryMode !== 'steer' && session?.status !== 'archived' && !deferredSkill;
       if (!remoteDeviceId && !recoveringBaseline && !deferVendorAuthGate) {
         if (!(await passesVendorAuthGate())) return false;
       }
