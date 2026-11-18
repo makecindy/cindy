@@ -49,6 +49,10 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
 manifest 新增 `usage` 声明走原整体安装确认；已有该组批准调用新增组内读取不补批。
 beta 存量同意范围扩展及维护者确认要求见[平台契约的授权记录](protocol-compatibility/plugin-host-tools-platform.md#usage-组范围扩展的维护确认)。
+
+`get_session_quota` 沿用 `usage` 组的安装批准。目标任务从当前账号任务库解析，
+异机和分享额度沿现有通道判权。额度结果不含任务正文、设备标识或账号标识；
+无法确认归属或授权已经失效时不可用。
 实现与回归见 `subscription-accounts/runtime.ts` 及其测试、`hostToolSlot.test.ts`、
 `ghostInstallConsent.test.ts`；作者用法见随包 `plugin-host-tools.md`「读取订阅用量」。
 
@@ -311,6 +315,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   实现与作者契约见 [通用投递目标](plugin-task-api-implementation.md#通用投递目标增量接口尚未发布)。
   同一批准也允许 IM 插件通过 `tasks.imProjects/create/followImProject` 复用侧栏项目与官方机器人
   的模型、来源和权限设置；仅接续插件自己的任务，不能搬动其他项目的任务。
+  同一批准下，插件还可按群聊／私聊覆盖自己任务的模型与权限（`imOverride`）；比项目更宽的权限只在用户于
+  Cindy 自己的确认框里允许后生效，见本文「完全访问须来自用户在插件设置中的选择」一条的 2026-11-18 例外。
+  顶层 `imEntrance` 只是展示声明（「IM 机器人」页列出插件），不新增权限项，不授予任何能力。
   增量字段、旧任务回执兼容与发送时复核见[插件 IM 共用项目与模型](protocol-compatibility/plugin-im-projects.md)。
 - `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
   只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
@@ -884,6 +891,13 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   选择本次新任务的 ask／auto／bypassPermissions；参数本身不授予权限、不写插件默认设置。
   完全访问须来自用户在插件设置中的选择；旧 `requestWriteAccess` 仍只支持 acceptEdits／auto，
   不增加完全访问确认弹窗，也不因复用该流程降低用户已授权的上限。
+  **例外（维护者裁决，2026-11-18）**：IM 共用项目里的插件任务（带 `imProject`），可以让某个群聊或私聊用比
+  项目更宽的权限（含完全访问），条件是用户在 `confirmImPermission` 弹出的 Cindy 自有确认框里允许
+  （手机页面同样由宿主弹出）。理由：插件 IM 入口按群聊／私聊运行，项目权限是所有官方机器人共用的默认，
+  放宽与否是用户自己的决定。约束：确认框写明插件、群聊或私聊、项目、目标权限与项目当前权限，群聊附成员
+  可控内容的提醒；同一时间只开一个框（作者契约要求只在用户操作时调用，宿主不区分调用来源）；授权绑定
+  插件实例与项目，卸载失效，派发时复核；
+  插件的 Host 任务卡启用时其上限仍然生效。此例外不扩展到 `requestWriteAccess`、普通任务或伙伴投递。
   Main 在创建前及异步准备后复核；省略参数保持旧行为，已有任务／伙伴投递不接受权限覆盖。
   旧 errand 适配器保留历史缺省 `plan` 与原 Agent 行为；历史 plan／acceptEdits 配置保留，但不列入新建接口和设置页的新选项。已有任务不自动改权。
   不把历史 `plan` 值宣称为跨 Agent 的只读保证，也不为它改造各 Agent 的权限引擎。

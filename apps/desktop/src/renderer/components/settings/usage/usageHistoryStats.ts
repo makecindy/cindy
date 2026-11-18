@@ -303,6 +303,7 @@ export function buildAgentRows(payload: UsageHistoryPayload | null): AgentTokenR
   // 走合并后的模型行 —— 同一模型的 api / subscription 两个计费维度已并成一行,
   // 否则 modelCount 会把同一个模型数成两个 (见 buildModelRows 的注释)。
   for (const model of buildModelRows(payload)) {
+    if (model.agentKind === 'auxiliary') continue;
     const tokens = model.tokens;
     if (tokens <= 0) continue;
     const acc = byAgent.get(model.agentKind) ?? {
@@ -368,4 +369,34 @@ export function isUsageHistoryEmpty(payload: UsageHistoryPayload | null): boolea
     toUsageDays(payload).length === 0 &&
     buildModelRows(payload).length === 0
   );
+}
+
+export interface AuxiliaryTokenRow {
+  source: string;
+  tokens: number;
+  requests: number;
+  share: number;
+  models: string[];
+}
+/** Uses the same filtered daily rows as every other Usage table. */
+export function buildAuxiliaryRows(payload: UsageHistoryPayload | null): AuxiliaryTokenRow[] {
+  if (!payload) return [];
+  const total = payload.modelDaily.reduce((sum, row) => sum + row.tokens, 0);
+  const rows = new Map<string, AuxiliaryTokenRow>();
+  for (const row of payload.modelDaily) {
+    if (row.agentKind !== 'auxiliary') continue;
+    const source = row.source ?? 'auxiliary';
+    const current = rows.get(source) ?? { source, tokens: 0, requests: 0, share: 0, models: [] };
+    current.tokens += row.tokens;
+    current.requests += row.requestCount ?? 0;
+    const model =
+      row.providerId && row.providerId !== 'unknown'
+        ? `${row.model} · ${row.providerId}`
+        : row.model;
+    if (!current.models.includes(model)) current.models.push(model);
+    rows.set(source, current);
+  }
+  return [...rows.values()]
+    .map((row) => ({ ...row, share: total > 0 ? row.tokens / total : 0 }))
+    .sort((a, b) => b.tokens - a.tokens || a.source.localeCompare(b.source));
 }

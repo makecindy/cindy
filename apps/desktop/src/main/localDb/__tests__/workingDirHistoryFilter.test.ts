@@ -55,6 +55,7 @@ function createLocalDb(): Database.Database {
       cleared_at INTEGER,
       pinned_at INTEGER,
       hidden_at INTEGER,
+      snoozed_until INTEGER, snoozed_at INTEGER,
       summary TEXT,
       provider_id TEXT,
       forked_at_message_id TEXT,

@@ -519,15 +519,41 @@ it.each(["onPress", "onLongPress"])(
   },
 );
 
+// Unit regression, PR #11283: the real status row supplies managed history to the
+// popover. A paused Host snapshot must hide recent throughput in both surfaces;
+// the counter-only tests did not cover this input, and average/total/peak stay visible.
+it("hides paused Host speed in the status row and pinned popover and restores it on output", async () => {
+  const speed = { rate: 50, average: 40, tokens: 80, elapsedMs: 2000, streaming: true, peak: 75 };
+  const renderStatus = (streaming: boolean) => act(async () => root.render(
+    createElement(ActivityStatus, {
+      ...base, visible: true, sideTaskRunning: false, reconnectAttempt: null,
+      tokenUsage: 100, tokenSpeed: { ...speed, streaming, totalOutputTokens: 5300 },
+    }),
+  ));
+  await renderStatus(true);
+  await gesture("onPress");
+  expect(card()!.textContent).toContain("50");
+  await renderStatus(false);
+  expect(card()!.textContent).toContain("—");
+  expect(card()!.textContent).not.toContain("50");
+  expect(card()!.textContent).toContain("40 tok/s");
+  expect(card()!.textContent).toContain("5.3k tok");
+  expect(card()!.textContent).toContain("75 tok/s");
+  expect(host.textContent).not.toContain("50 tok/s");
+  await renderStatus(true);
+  expect(card()!.textContent).toContain("50");
+});
+
 it("uses paired generation samples, expires recent speed, and isolates a different task", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(1000);
   await render();
   await render({ outputTokens: 100, generationDurationMs: 1000 });
-  await render({ outputTokens: 150, generationDurationMs: 2000 });
+  await render({ outputTokens: 150, totalOutputTokens: 5300, generationDurationMs: 2000 });
   await gesture("onPress");
   expect(card()!.textContent).toContain("50");
   expect(card()!.textContent).toContain("75 tok/s");
+  expect(card()!.textContent).toContain("5.3k tok");
   expect(card()!.textContent).toContain("100 tok/s");
   await act(async () => vi.advanceTimersByTime(60_000));
   expect(card()!.textContent).toContain("—");

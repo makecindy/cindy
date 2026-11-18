@@ -40,6 +40,7 @@ import type {
   AuthState,
 } from '@cindy/maker-core';
 import { getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
+import { codexSharedAuthLinkUnavailableReason } from '../../shared/codexAuthReason.js';
 import { createLogger } from '../logger.js';
 import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
@@ -855,6 +856,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private isolatedAuthLaunchProofTrusted: boolean | null = null;
   /** 运行期最近一次能够被文件/授权记录明确证明的来源，兜住系统 auth 原子替换后的旧硬链。 */
   private lastKnownCodexCredentialScope: AuthState['credentialScope'] = undefined;
+  /**
+   * 最近一轮 reconcile 建不出指向系统凭证的共享链接(典型:Windows 没有创建符号链接
+   * 的权限)。这时系统侧凭证明明已登录、Cindy 却连不上它 —— 凭证是「连不上」而不是
+   * 「没登录」,报错必须区别于通用 no_oauth,否则用户只会反复重登。
+   */
+  private sharedAuthLinkUnavailable = false;
 
   /**
    * Plugin capability enforcement is always rechecked after concurrent callers
@@ -1112,6 +1119,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   /** reconcile 真正的执行体 —— 只经由 reconcileWithSystemCodex(AfterLogin) 调用, 不直接对外。 */
   private async runReconcileWithSystemCodex(): Promise<void> {
+    // 每轮 reconcile 重新判定:只有这一轮真的建不出链接才算「连不上」。
+    this.sharedAuthLinkUnavailable = false;
     if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1') {
       // XDT_ISOLATED_AUTH 可能被 shell / IDE 环境继承；单一 flag 不是删除凭证的授权。
       // 与 OAuth 写门禁复用同一完整信任谓词，确保只有 restart 脚本本轮派生的
@@ -1318,6 +1327,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         credPathLog.warn('shared OpenAI auth link unavailable; use independent login', {
           error: error?.message,
         });
+        // 连不上系统凭证这件事要一路带到 getState 的 errorReason,否则用户只看到
+        // 通用 no_oauth,被引去反复重登 —— 而卡点其实是链接权限。
+        this.sharedAuthLinkUnavailable = true;
         break;
       case 'swap-failed-intact':
         // 替换失败但 myAuth 完好 (多半并发的另一次已放好) —— 无需补救。
@@ -1471,6 +1483,19 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     };
   }
 
+  /**
+   * 共享凭证连不上时的稳定 reason;系统侧没有凭证时不算(那是「没登录」)。
+   *
+   * 只在「这轮 reconcile 建不出链接」且「系统侧凭证确实在」时给 reason ——
+   * 这两者同时成立才是「连不上已登录的账号」,缺一个都该按未登录处理。
+   */
+  private codexSharedAuthLinkUnavailableReason(): string | undefined {
+    return codexSharedAuthLinkUnavailableReason({
+      linkUnavailable: this.sharedAuthLinkUnavailable,
+      systemAuthPresent: existsSync(getSystemCodexAuthPath()),
+    });
+  }
+
   private async readState(options?: {
     skipReconcile?: boolean;
     credentialMode?: AuthAdapterOptions['credentialMode'];
@@ -1516,7 +1541,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         if (accessToken) return this.withCodexRecoveryRequirement(localState);
       }
       if (this.oauthRecoveryRequiredReason) return this.codexRecoveryRequiredErrorState();
-      return { authenticated: false, errorReason: localState.errorReason ?? 'no_oauth' };
+      return {
+        authenticated: false,
+        errorReason: localState.errorReason ?? this.codexSharedAuthLinkUnavailableReason() ?? 'no_oauth',
+      };
     }
     const rawLocalState = await this.readLocalCodexAuthState();
     const localState =
@@ -1556,7 +1584,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (readClaudeApiKey()) {
       return { authenticated: true, identity: 'API Key · Cindy AI', authSource: 'api-key' };
     }
-    return localState;
+    // 没有 OAuth 也没有网关 key:连不上已登录的系统账号时给出可执行的原因,
+    // 别让「没登录」这种通用说法把用户引去反复重登。
+    const sharedLinkReason = this.codexSharedAuthLinkUnavailableReason();
+    return sharedLinkReason ? { ...localState, errorReason: sharedLinkReason } : localState;
   }
 
   private async clearStaleInvalidationIfSystemCodexChanged(): Promise<void> {

@@ -48,6 +48,7 @@ export async function getWorkingStatusCopy(raw: unknown): Promise<{ text: string
       const copy = new WorkingStatusCopy(async (current, previous, signal) => {
         if (!eligible() || signal.aborted) return null;
         const result = await requestUtilityText(maker, workingStatusPrompt(current, locale, previous), {
+          source: 'working-status', sessionId,
           // Use the utility transport's existing timeout, cancellation and routing.
           maxTokens: 96,
           disableReasoning: true,

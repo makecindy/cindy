@@ -98,6 +98,7 @@ import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-c
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
 import { AcceptedCallbackDispatchCancelled } from '../maker-ipc/acceptedCallbackRunner.js';
+import { schedulerFailureDetail } from '../maker-ipc/schedulerQueueBridge.js';
 
 
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff.js';
@@ -250,6 +251,7 @@ export interface SchedulerQueueDeps {
   /** 该 schedule 是否已有排队中(或正在派发)的心跳消息 —— 防重复入队。 */
   hasQueuedPrompt(sessionId: string, scheduleId: string): boolean;
   enqueuePrompt(req: {
+    signal?: AbortSignal;
     sessionId: string;
     text: string;
     persistedContent: string;
@@ -278,7 +280,7 @@ export interface SchedulerQueueDeps {
   isAutoResumePending?: (sessionId: string, runId: string) => boolean;
   /** 已接管的续跑最终仍失败（含补发未 dispatch / Stop / clear）。 */
   onAutoResumeFailed?: (
-    sessionId: string, runId: string, listener: () => void,
+    sessionId: string, runId: string, listener: (error?: string) => void,
     quotaWait?: { start(): void; resume(): boolean },
   ) => () => void;
   /** Schedule pause/delete：撤销仍属于该 run 的退避或派发前隐藏续跑。 */
@@ -2699,7 +2701,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // TS 控制流分析看不到,裸 let 会被收窄成 null/never。
     const waiterSlot: { current: TurnCompletionWaiter | null } = { current: null };
     let dispatched = false;
-    let persistedFailure: string | undefined;
+    let pendingRecoveryFailure: string | undefined;
     // ── 纯等待记账 + 派发取消标志 ──────────────────────────────────────────
     // 必须声明在 enqueuePrompt **之前**:队列此刻恰好空时 onAccepted 可能被同步调用,
     // 声明在后面会撞 TDZ。
@@ -2791,6 +2793,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
 
     const enqueuePrompt = options?.enqueuePrompt ?? sq.enqueuePrompt.bind(sq);
     const enqueueResult = await enqueuePrompt({
+      signal: ctx.signal,
       sessionId,
       text: promptToSend,
       inheritTargetPlanMode: true,
@@ -3030,8 +3033,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
         failDispatch(err);
       },
       onPersistedFailure: (message, recovering) => {
-        persistedFailure = message;
-        if (!recovering) failDispatch(new Error(message));
+        if (recovering) {
+          pendingRecoveryFailure = schedulerFailureDetail(message);
+        } else {
+          failDispatch(new Error(pendingRecoveryFailure === undefined
+            ? schedulerFailureDetail(message) : formatAutoResumeFailure(message)));
+        }
       },
       onDiscarded: () => {
         dispatchCancelled = true;
@@ -3058,8 +3065,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       return this.settleDuplicateQueuedFire(schedule, ctx, sessionId);
     }
     const { clientId } = enqueueResult;
-    const stopWaitingForRecovery = sq.onAutoResumeFailed?.(sessionId, ctx.runId, () => {
-      if (!dispatched) failDispatch(new Error(persistedFailure ?? 'scheduled task auto-resume failed'));
+    const stopWaitingForRecovery = sq.onAutoResumeFailed?.(sessionId, ctx.runId, (error) => {
+      if (!dispatched) failDispatch(new Error(formatAutoResumeFailure(error || pendingRecoveryFailure)));
     });
     this.deps.logger.info?.('[runner] heartbeat prompt queued behind busy session', {
       scheduleId: schedule.id,
@@ -3147,7 +3154,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (!sq.isPromptTracked(sessionId, clientId)) {
         failDispatch(
           new Error(
-            persistedFailure ?? 'queued heartbeat prompt was dropped before dispatch (queue cleared or recovery abandoned)',
+            pendingRecoveryFailure !== undefined ? formatAutoResumeFailure(pendingRecoveryFailure)
+              : 'queued heartbeat prompt was dropped before dispatch (queue cleared or recovery abandoned)',
           ),
         );
         return;
@@ -4145,9 +4153,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       autoResumeFailureUnsub = this.deps.schedulerQueue?.onAutoResumeFailed?.(
         sessionId,
         options.origin.runId,
-        () => fail(new Error(lastTerminalError
-          ? `scheduled task auto-resume failed: ${lastTerminalError}`
-          : 'scheduled task auto-resume failed')),
+        (error) => {
+          // A recovery callback can report a newer pre-dispatch failure. If it
+          // has no detail, keep the latest terminal error owned by this run.
+          fail(new Error(formatAutoResumeFailure(error || lastTerminalError)));
+        },
         {
           start: () => {
             if (settled || quotaWaiting) return;
@@ -4439,6 +4449,11 @@ function buildSchedulerSendContext(
     `sessionId=${sessionId}`,
     'action=send-user-prompt',
   ].join(' ');
+}
+
+function formatAutoResumeFailure(detail?: string): string {
+  return schedulerFailureDetail(detail
+    ? `scheduled task auto-resume failed: ${detail}` : 'scheduled task auto-resume failed');
 }
 
 function formatSchedulerSendError(context: string, reason: string): string {
