@@ -1025,7 +1025,8 @@ export const ImageLightbox = memo(function ImageLightbox({
             {/* 手机缩放靠捏合与双击,不放放大 / 缩小 / 适应按钮;原始尺寸在「更多」里。 */}
             {activeIsVideo ? (
               <VideoDownloadButton key={activeImage?.key}
-                source={activeResolveState && activeResolveState.status !== 'ready' ? null : activeUri}
+                source={activeResolveState && activeResolveState.status !== 'ready'
+                  && !activeUri?.startsWith('file://') ? null : activeUri}
                 mimeType={activeMimeType}
                 render={({ busy, progress, disabled, download }) => (
                   <PreviewIconButton
@@ -2152,12 +2153,15 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
     resolvedUnsupported || (!retryable && !media.previewable)
   ));
   const protectLocalFile = resolveState?.media?.protectLocalFile;
+  // A failed remote refresh does not invalidate a complete local copy. Keep it
+  // protected for export while retrying playback, even in loading/error state.
+  const retainSource = resolveState?.status === 'ready' || !!uri?.startsWith('file://');
   const leaseRefreshUsed = useRef(false);
   const leaseRetry = useRef({ image, onRetry, onSourceUnavailable });
   leaseRetry.current = { image, onRetry, onSourceUnavailable };
   useEffect(() => {
     if (!active) { leaseRefreshUsed.current = false; return; }
-    if (!uri || resolveState?.status !== 'ready') return;
+    if (!uri || !retainSource) return;
     // The active page's footer still exports this source after playback fails.
     // Keep its Range URL alive until paging, close, or source replacement.
     try {
@@ -2168,9 +2172,11 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
       if (!leaseRefreshUsed.current) {
         leaseRefreshUsed.current = true;
         leaseRetry.current.onRetry(leaseRetry.current.image);
-      } else leaseRetry.current.onSourceUnavailable(leaseRetry.current.image, resolveState.media, error);
+      } else if (resolveState?.media) {
+        leaseRetry.current.onSourceUnavailable(leaseRetry.current.image, resolveState.media, error);
+      }
     }
-  }, [active, protectLocalFile, resolveState?.status, uri]);
+  }, [active, protectLocalFile, retainSource, uri]);
   const handleNativeError = useCallback(() => {
     if (uri) setNativeFailedUri(uri);
   }, [uri]);

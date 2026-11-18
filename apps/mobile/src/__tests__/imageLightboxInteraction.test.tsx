@@ -2257,6 +2257,42 @@ describe("chrome toggle, loading and video pages", () => {
     root = createRoot(document.createElement("div"));
   });
 
+  // A complete retained file survives a failed remote refresh. Unit tier: real
+  // React retry/resolve lifecycle; the HTTP control must still disable stale exports.
+  it.each(['file:///cache/clip.mp4', 'http://127.0.0.1:12345/clip'])('preserves only a cached export across failed video refresh (%s)', async (source) => {
+    const url = 'xdt-video://cache/retry.mp4';
+    const video = { key: 'retry', title: 'retry.mp4', url,
+      payload: { kind: 'media', media: { kind: 'video', url, previewable: false } } } as ImageLightboxProps['images'][number];
+    let consumers = 0;
+    const resolved: MobileResolvedRemoteMedia = { url: source, previewable: true, mimeType: 'video/mp4',
+      ossKey: '', size: 16, expiresAt: '2099-01-01T00:00:00Z',
+      protectLocalFile: () => { consumers++; return () => { consumers--; }; } };
+    const resolver = vi.fn(async () => resolved);
+    await act(async () => { mount({ images: [video], initialUrl: url, resolveOpaqueSource: true,
+      onResolveRemoteMedia: resolver }); });
+    expect(consumers).toBe(1);
+    act(() => runtime.nodes.get('message.imageLightboxVideoPlayer').onError('unsupported codec'));
+    act(() => runtime.nodes.get('message.imageLightboxVideoWebPlayer').onStatusChange({ state: 'error' }));
+    let reject!: (error: Error) => void;
+    resolver.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+    await act(async () => press('message.imageLightboxRetryButton'));
+    const cached = source.startsWith('file://');
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(cached ? source : null);
+    expect(consumers).toBe(cached ? 1 : 0);
+    await act(async () => reject(new Error('REMOTE_OFFLINE')));
+    expect(isMounted('message.imageLightboxRetryButton')).toBe(true);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(cached ? source : null);
+    expect(consumers).toBe(cached ? 1 : 0);
+    resolver.mockResolvedValue({ ...resolved });
+    await act(async () => press('message.imageLightboxRetryButton'));
+    expect(runtime.nodes.get('message.imageLightboxVideoPlayer').url).toBe(source);
+    expect(runtime.nodes.get('message.videoDownload').source).toBe(source);
+    expect(consumers).toBe(1);
+    act(() => root.unmount());
+    root = createRoot(document.createElement('div'));
+    expect(consumers).toBe(0);
+  });
+
   // #10136: the existing player test covered rendering/cache eviction, not stream
   // survival. Real React + production stream idle/retain logic, unit tier; only
   // native commands/reader are in-memory. A paused active page is the minimum
