@@ -735,6 +735,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   // 保证改写检测覆盖整个可编辑期间（命中后删除）。
   const pendingReportSourceBySession = new Map<string, string>();
   const autoBridge = new Map<string, AutoBridgeState>();
+  // 直连轮（无派活）的结论/终态账本：回报与真实终态谁后到谁补全，按 turnGeneration
+  // 归属；保证 error 终态不被 ready 预写洗掉、迟到 progress 不覆盖已落库结论。
+  const directTurnOutcomes = new Map<
+    string,
+    { turnGeneration?: number; report?: OrcaStructuredWorkerReport; terminalStatus?: 'done' | 'error' }
+  >();
   const queueControl = createSessionQueueControlService({
     getSnapshot: async (sessionId) => {
       const snapshot = await deps.getSessionQueueSnapshot(sessionId);
@@ -2435,6 +2441,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         // 终段回报已被 send_to_lead 接受入档后，迟到的 progress 是遥测：不得覆盖结论，
         // 否则终端回合会按 progress 跳过结算，把已判定的结论语义退化回 raw 状态。
         if (current?.structuredReport && current.structuredReport.state !== 'progress') return;
+        // 直连轮（无派活）：结论已入档后，迟到 progress 同样是遥测，不得覆盖结论。
+        if (!current && directTurnOutcomes.get(sessionId)?.report) return;
         if (current) {
           current.structuredReport = report;
           // progress 不入队，没有可被队列编辑触碰的来源。
@@ -2459,10 +2467,27 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           if (!report || report.state === 'progress') return;
           const link = await deps.getWorkerLinkBySessionId(sessionId);
           if (!link) return;
+          const turnGeneration = deps.getLiveSession(sessionId)?.getTurnGeneration?.();
           await withWorkerTransition(link.workerId, async () => {
+            // capture 后有新派活认领该会话：本轮归属检查照旧放弃写入。
             if (autoBridge.get(sessionId)) return;
-            await applyReportOutcome(link.workerId, link.leadSessionId, report, 'done');
+            const entry = directTurnOutcomes.get(sessionId);
+            const status = entry && entry.turnGeneration === turnGeneration ? entry.terminalStatus : undefined;
+            if (entry && entry.turnGeneration !== turnGeneration) directTurnOutcomes.delete(sessionId);
+            // 入队来源与投影同登记，队列改写/撤回才能复核这份投影（与派活路径同款）。
+            if (receipt?.queuedMessageId) pendingReportSourceBySession.set(sessionId, receipt.queuedMessageId);
+            else pendingReportSourceBySession.delete(sessionId);
+            if (status) {
+              // 终态先到：按真实终态映射（error 终态不得被 ready 预写洗成 done）。
+              directTurnOutcomes.delete(sessionId);
+              await applyReportOutcome(link.workerId, link.leadSessionId, report, status);
+              return;
+            }
+            // turn 未终：结论先落库保证可见；状态映射等真实终态，避免 ready 预写成 done。
+            directTurnOutcomes.set(sessionId, { turnGeneration, report });
+            await deps.setWorkerLatestReport(link.workerId, report);
           });
+          deps.broadcastOrcaWorkerChanged(link.leadSessionId);
         };
       }
       const runtime = deps.getLiveSession(sessionId);
@@ -2683,6 +2708,27 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
           const state = autoBridge.get(params.sessionId);
           if (worker.status === 'done' || worker.status === 'error' || worker.status === 'idle') {
+            const direct = directTurnOutcomes.get(params.sessionId);
+            if (direct?.report && (!direct.turnGeneration || direct.turnGeneration === capture.turnGeneration)) {
+              // 直连结论先到：按真实终态补映射（error 终态不得被 ready 预写的 done 洗掉）。
+              directTurnOutcomes.delete(params.sessionId);
+              await applyReportOutcome(link.workerId, link.leadSessionId, direct.report, params.status);
+              retryAuthority = deferredDoneAcknowledgements.get(link.workerId)?.assertDeliveryCurrent;
+              retryAcknowledgeDone =
+                worker.status === 'done' && deferredDoneAcknowledgements.delete(link.workerId);
+              clearRuntimeState(params.sessionId);
+              return;
+            }
+            if (direct && direct.turnGeneration !== undefined && direct.turnGeneration !== capture.turnGeneration) {
+              directTurnOutcomes.delete(params.sessionId);
+            }
+            // 只登记直连轮（无派活）的真实终态；派活轮的结算账在 AutoBridgeState 上。
+            if (!state) {
+              directTurnOutcomes.set(params.sessionId, {
+                turnGeneration: capture.turnGeneration,
+                terminalStatus: params.status,
+              });
+            }
             if (state?.pending && (state.terminalObserved || state.retryAfterRejectedDelivery)) {
               completionState = state;
               return;

@@ -4208,12 +4208,9 @@ describe('OrcaTeamService direct-turn report outcomes', () => {
       'worker-1',
       expect.objectContaining({ state: 'failed' }),
     );
-    expect(deps.updateWorkerStatus).toHaveBeenCalledWith(
-      'worker-1',
-      'error',
-      expect.objectContaining({ state: 'failed' }),
-    );
-    expect(getWorker().status).toBe('error');
+    // turn 未终：结论先落库，状态映射等真实终态，不预写 done/error。
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
+    expect(getWorker().status).toBe('idle');
     // 直连轮没有 Lead 派活，不存在可结算的欠回报。
     expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
   });
@@ -4237,6 +4234,76 @@ describe('OrcaTeamService direct-turn report outcomes', () => {
       'done',
       expect.objectContaining({ state: 'dropped' }),
     );
+  });
+
+  // ready 回报先到时 turn 未终：结论先落库保证可见，但状态映射必须等真实终态，
+  // 否则 error 终态会被 ready 预写的 done 洗掉（Codex P2）。
+  it('maps a direct-turn ready report with the real terminal status, not done', async () => {
+    const { deps, getWorker, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, { delivered: true, report: { state: 'ready', summary: '完成' } });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'ready' }),
+    );
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
+    expect(getWorker().status).not.toBe('done');
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'error',
+      finalText: '出错了',
+    });
+    expect(deps.updateWorkerStatus).toHaveBeenLastCalledWith(
+      'worker-1',
+      'error',
+      expect.objectContaining({ state: 'ready' }),
+    );
+    expect(getWorker().status).toBe('error');
+  });
+
+  // 真实终态先到、回执后到：ready 回报按已判定的 error 映射，不得把行洗回 done（Codex P2）。
+  it('keeps a persisted error terminal when a late direct-turn ready report arrives', async () => {
+    const { deps, getWorker, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'error',
+      finalText: '出错了',
+    });
+    await finish(true, { delivered: true, report: { state: 'ready', summary: '完成' } });
+    expect(deps.updateWorkerStatus).toHaveBeenLastCalledWith(
+      'worker-1',
+      'error',
+      expect.objectContaining({ state: 'ready' }),
+    );
+    expect(getWorker().status).toBe('error');
+  });
+
+  // 结论已入档后，迟到/并发的 report_progress 是遥测，不得把 latest_report 退回进度态（Codex P2）。
+  it('keeps a direct-turn conclusion when a late report_progress lands', async () => {
+    const { deps, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, { delivered: true, report: { state: 'dropped', summary: '无需回复' } });
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '又动了' });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'dropped' }),
+    );
+  });
+
+  // 直连入队回报与派活同款登记排队来源：Lead 空闲后改写/撤回时能复核这份投影（Codex P2）。
+  it('tracks the queued source of a direct-turn report for queue mutations', async () => {
+    const { deps, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, {
+      delivered: true,
+      queuedMessageId: 'q-direct-1',
+      report: { state: 'ready', summary: '完成' },
+    });
+    // 改写的正是当前来源：投影失效（setWorkerLatestReport(null)）。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['q-direct-1']);
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', null);
   });
 });
 
