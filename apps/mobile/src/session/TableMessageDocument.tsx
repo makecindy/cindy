@@ -203,7 +203,9 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
             if (value.action === 'open') action?.onPress?.(); else action?.onLongPress?.();
             return;
           }
-          if (Math.round(value.width) !== now.width) return;
+          // Android quantizes WebView viewport pixels separately from Yoga dp.
+          // Revision still binds the current width; tolerate that one-pixel edge.
+          if (Math.abs(Math.round(value.width) - now.width) > 1) return;
           const nextSlots = value.slots.filter(slot => content.copies.some(copy => copy.id === slot.id));
           setHeight(old => old === value.height ? old : value.height);
           setSlots(old => JSON.stringify(old) === JSON.stringify(nextSlots) ? old : nextSlots);

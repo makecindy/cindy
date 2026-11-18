@@ -183,7 +183,7 @@ describe('actual message carrier lifecycle', () => {
     send({ kind: 'link', revision: current.revision, id: '0', action: 'open' });
     expect(native.open).toHaveBeenCalledTimes(1);
     const old = native.props, oldRevision = current.revision, oldKey = old.menuItems[0].key;
-    send({ kind: 'height', revision: current.revision, height: 420, width: 360, slots: [] });
+    send({ kind: 'height', revision: current.revision, height: 420, width: 360.76, slots: [] });
     expect(native.height).toBe(420);
     draw(source + '\n\n修订'); current = load();
     expect(current.links['0'].lit).toBe(true);
