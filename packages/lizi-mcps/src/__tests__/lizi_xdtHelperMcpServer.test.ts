@@ -7,6 +7,92 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit: native catalog discovery/mutation through the real host-tool registry.
+// Existing runtime controls lack native method argument and stdio boundaries.
+it('exposes native catalogs on demand and rejects process MCP configuration', async () => {
+  const call = vi.fn(async () => ({ ok: true as const, engine: 'pi', result: ['read'] }));
+  const server = createXdtHelperMcpServer({ sessionToolCatalog: { call } }, {
+    agentKind: 'pi', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'catalog', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(call).not.toHaveBeenCalled();
+    expect(server.hostTools.describe('get_session_tool_catalog')).toMatchObject({ category: 'control' });
+    expect(parsePayload(await server.hostTools.call('get_session_tool_catalog', { method: 'getActiveTools' })))
+      .toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+    for (const config of [{ url: 'http://localhost/mcp', command: 'node' }, { url: 'file:///fixture/server' }]) {
+      expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
+        session_id: 'target', method: 'registerMcpServer', args: ['external', config],
+      }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    }
+    expect(call).not.toHaveBeenCalled();
+    expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
+      session_id: 'target', method: 'setActiveTools', args: [['read']],
+    }))).toMatchObject({ ok: true, engine: 'pi', result: ['read'] });
+    expect(call).toHaveBeenCalledWith(expect.objectContaining({ hostCaller: expect.objectContaining({ pluginId: 'catalog' }) }),
+      { sessionId: 'target', method: 'setActiveTools', args: [['read']] });
+  } finally { await server.close(); }
+});
+
+// Unit / #10794 permission boundary: the real registry must not expose the raw
+// account view or provider directory to a plugin without a task. The original
+// plugin read case allowed both. Minimal input is subscriptionAccounts/read.
+it('keeps raw account reads and provider management unavailable to plugins without a Session', async () => {
+  const models = vi.fn(async () => ({ providers: [] }));
+  const server = createXdtHelperMcpServer({ modelSettings: { call: models } }, {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(parsePayload(await server.hostTools.call('list_model_providers', {})))
+      .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    expect(parsePayload(await server.hostTools.call('configure_model_provider', {
+      change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action: 'read' } },
+    }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    for (const action of ['login', 'configure', 'remove']) {
+      expect(parsePayload(await server.hostTools.call('configure_model_provider', {
+        change: { action: 'subscriptionAccounts', providerId: 'anthropic', command: { action, accountId: 'a' } },
+      }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    }
+    expect(parsePayload(await server.hostTools.call('configure_model_provider', {
+      change: { action: 'rename', providerId: 'anthropic', name: 'renamed' },
+    }))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    expect(models).not.toHaveBeenCalled();
+  } finally { await server.close(); }
+});
+
+// Unit / existing provider-group management query: keep original payloads and
+// truncation instead of calculating a plugin-only aggregate. Minimal one-row
+// response exercises new discovery and no-session plugin routing.
+it('exposes original usage history and provider group views through the shared registry', async () => {
+  const history = { providerId: 'anthropic', todayKey: '2026-11-16', coverageStart: '2026-11-15',
+    self: { lastUsedAt: null, days: [] }, relays: [], members: [{ shareId: 's', memberId: 'm', lastUsedAt: 1, days: [
+      { day: '2026-11-16', model: 'model-a', inputTokens: 3, outputTokens: 2, cacheCreateTokens: 4, cacheReadTokens: 5 },
+    ] }] };
+  const group = { providerId: 'anthropic', config: null, members: [] };
+  const call = vi.fn(async (input: { action: string }) => input.action === 'usage-history' ? history : group);
+  const server = createXdtHelperMcpServer({ providerReads: { call } }, {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  const client = new Client({ name: 'provider-read-discovery', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+    expect(overview).toMatchObject({ categories: expect.arrayContaining([
+      expect.objectContaining({ name: 'usage', description: expect.stringContaining('device') }),
+    ]) });
+    const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'models.provider-state' } }));
+    expect(detail).toMatchObject({ control: expect.objectContaining({ summary: expect.stringContaining('device') }) });
+    expect(server.hostTools.describe('get_provider_usage_history')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_provider_usage_history', { providerId: 'anthropic', device: 'computer' })))
+      .toEqual({ ok: true, ...history });
+    expect(call).toHaveBeenLastCalledWith({ action: 'usage-history', providerId: 'anthropic', device: 'computer', callerSessionId: undefined });
+    expect(parsePayload(await server.hostTools.call('get_provider_group', { providerId: 'anthropic' }))).toEqual({ ok: true, ...group });
+    expect(parsePayload(await server.hostTools.call('get_provider_usage_history', { providerId: 'anthropic', groupBy: 'day' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+  } finally { await client.close(); await server.close(); }
+});
+
 // Unit, provider-sharing.md §7 / agent-user-parity.md: the real registry must
 // expose owner management to an installed plugin without borrowing a task.
 // Existing model/settings tests do not exercise member operations or their schema.
@@ -461,6 +547,12 @@ describe("cindy_helper MCP server", () => {
       expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task' }), {
         purpose: 'Sign in to continue', target: { app: 'Google Chrome' },
       });
+      // The public tool must preserve a logical field plan through every harness.
+      const fields = [{ label: 'Code', contentType: 'one-time-code', targets: [{ label: 'Code 0', length: 1 }, { label: 'Code 1', length: 1 }] }];
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Enter code', target: {}, fields,
+      } }))).toMatchObject({ ok: true, status: 'pending' });
+      expect(start).toHaveBeenLastCalledWith(expect.anything(), { purpose: 'Enter code', target: {}, fields });
       expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
         purpose: 'Scan the simulator sign-in code', image: 'shots/qr.png',
       } }))).toMatchObject({ ok: true, request_id: 'handoff-image', status: 'pending' });
@@ -492,7 +584,7 @@ describe("cindy_helper MCP server", () => {
       } }))).toMatchObject({ errorCode: 'TARGET_IS_CINDY' });
       expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'next-task', sessionInstanceId: 'instance-2' }),
         { purpose: 'Sign in', target: { app: 'Cindy' } });
-      expect(start).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(3);
       expect(startImage).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   });

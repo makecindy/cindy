@@ -3,6 +3,10 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改 Settings UI、配置文件、本地偏好存储、运行时 profile，或
 > agent／MCP／provider 相关开关之前
+> **适用路径**：`apps/desktop/src/renderer/components/settings/**`、
+> `apps/desktop/src/main/app-settings/**`、
+> `apps/desktop/src/main/**/*{settings-store,SettingsStore,settingsStore}*`、
+> `apps/mobile/src/settings/**`、`apps/mobile/app/settings/**`、`apps/mobile/app/settings.tsx`
 
 本规则适用于所有用户可配置项。Cindy 允许用户高度定制，但**默认配置承载创作者品味，
 是产品体验的一部分**——不是让每个选项都堆进设置页。产品边界见
@@ -132,6 +136,21 @@ override 仍然优先。供应商／模型停用、退役、付费准入和凭�
 identity / canonical account history 场景，以及
 `provider-compatibility.integration.test.ts` 的原生开关往返与历史保留验证。
 
+### Codex 原生 TOML 的 UTF-8 BOM
+
+本机 Codex 配置读取（自定义上下文目录、插件桥接、上下文窗口、Browser companion 与
+历史归档定位）只容忍文件开头的**一个** UTF-8 BOM；profile TOML 使用同一解析规则。
+不 trim、不移除字符串中的 BOM，不把双 BOM 或其余损坏 TOML 当作空配置。
+各入口原有的抛错、告警或不可用语义不变。
+
+兼容只发生在解析内存副本，不为恢复启动而重写配置；插件追加仍保留原始文本（包括
+BOM、注释和用户值），并用原始快照参与现有原子写入的并发比对。
+随包原生 Codex `0.166.0` 已用隔离 home 实测接受单前导 BOM，因此启动仍读取原文件，
+不需要另存无 BOM 配置或迁移凭证。
+实现见 `maker-host/codex-config-toml.ts`；回归见 `codexCustomContextCatalog.test.ts`、
+`codexGlobalPlugins.test.ts` 与隔离 home／回环供应商的
+`codexContextSwitch.native.test.ts`（真实 `CodexAgent` 建会话、发送及冷恢复）。
+
 ## 3. 默认值演进与迁移
 
 ### 模型上下文与压缩（2026-10-27）
@@ -174,6 +193,31 @@ Pi 使用逐模型 reserveTokens，Claude Code 同步原生环境与 host 判断
 - 隐藏配置必须有清晰 schema、字段说明、取值约束和安全边界，不能依赖零散分支或隐式
   约定。
 - agent 修改配置时，只有用户明确要求才写入 override，不得把当前默认值固化回用户配置。
+
+### Pi 自定义 Chat 线路的 `store` 能力
+
+当指定连接和型号已确认因 `store` 字段被上游拒绝（#11023），可在执行端当前 owner 的
+`model-catalog-overrides.json` 中合并以下稀疏覆盖；保留该文件的其它内容，不编辑临时
+`models.json`。键使用活动目录的连接 ID（URL 编码）与原始模型 ID，不使用显示名称。
+
+```json
+{"version":1,"patches":{"connection-id:gemini-4-hydrogen":{"perAgent":{"pi":{"supportsStore":false}}}}}
+```
+
+`supportsStore` 只接受布尔值，且只允许写在 `perAgent.pi`；`base`、其它引擎及字符串值
+均会使该条覆盖隔离。只在自定义供应商的 Pi `openai-completions` 启动投影中生效：
+`false` 让 Pi 不发送 `store`，`true` 保留 Pi 对该字段的原生发送行为（不是要求保存回复）。
+该字段与现有兼容元数据合并，显式覆盖优先；不改端点、认证、路由、工具或思考档位。
+未配置的连接和型号保持原行为，不按 TrueFoundry 名称或 Gemini ID 推断兼容性。
+
+手改文件后，先刷新模型目录，再重启该任务的 Pi 运行实例；也可等待在途请求结束后重启
+执行端 Cindy。仅重启 Pi 不会重新读取覆盖文件，仍会使用内存中的旧目录。
+恢复默认删除这一个字段，并按上述步骤重新加载；它随连接/型号 ID 保存，更改该连接的
+上游后应重新核对或删除。
+这不是服务端目录字段，不自动下发或修改用户的故障连接；旧客户端隔离不认识的条目，
+文件原文保留。无需服务端或自建中转改动，手机控制同一执行端时沿用其配置。
+实现为 `localCatalogOverrides.ts` 与 `pi-native-catalog.ts`，持久化、投影和真实 Pi 回归分别见
+`model-catalog-override-store.test.ts`、`piNativeProviders.test.ts`、`piGoogleChat.e2e.test.ts`。
 
 ### 请求体积控制
 

@@ -13,12 +13,14 @@ const state = vi.hoisted(() => ({
   remote: [] as Array<{ id: string; source: string; model?: string; workingDir?: string }>,
   localSource: undefined as string | null | undefined,
   getSession: vi.fn(),
+  previewId: null as string | null,
   localListeners: new Set<() => void>(),
   origins: new Map<string, string>(),
   readCurrent: true,
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: {
   subscribe: () => () => {}, getMergedRemoteSessions: () => state.remote,
+  getCreationPreview: (id: string) => id === state.previewId ? {} : undefined,
   getSessionDeviceId: (id: string) => state.origins.get(id),
   pinSessionOrigin: (device: string, id: string) => { state.origins.set(id, device); },
   getDeviceSessions: () => state.remote,
@@ -37,6 +39,7 @@ vi.mock('@/lib/makerTransport', () => ({ getSessionFor: state.getSession }));
 afterEach(cleanup);
 beforeEach(() => {
   state.remote = [];
+  state.previewId = null;
   state.localSource = undefined;
   state.getSession.mockReset().mockResolvedValue(null);
   state.origins.clear();
@@ -66,6 +69,15 @@ describe('remote task route origin', () => {
       </Routes>
     </MemoryRouter></StrictMode>);
   }
+
+  // Unit: the pending task's host row doesn't exist yet. Rendering the real
+  // route must show its composer without an existence lookup or an error.
+  it('opens an optimistic new task before its host row arrives', async () => {
+    state.previewId = 'child';
+    await act(async () => { mountRoute('/cc-agent/child'); });
+    expect(screen.getByText('Remote composer')).toBeTruthy();
+    expect(state.getSession).not.toHaveBeenCalled();
+  });
 
   it('recovers a hidden task from only the URL after losing all renderer origins', async () => {
     const route = sideChatTaskRoute('child', 'host/encoded');

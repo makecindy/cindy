@@ -1,3 +1,4 @@
+import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -384,7 +385,7 @@ export function RemotePluginPage({
                 name: consent.facts.name,
               }),
               description: `${device.name} · ${consent.facts.kind === 'install' ? t('settings.ghosts.installConsent.installMeta', { version: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) }) : t('settings.ghosts.installConsent.updateMeta', { from: consent.facts.previousVersion, to: consent.facts.version, source: ghostInstallConsentSourceLabel(t, consent) })}`,
-              content: <>{consent.purpose === 'ui-capability' && <p className="text-13 text-[var(--text-secondary)]">{t(`mcpApps.pluginTrust.${consent.trust ?? 'unverified'}`)}</p>}<GhostInstallConsentContent facts={consent.facts} capabilityOnly={consent.purpose === 'ui-capability'} /></>,
+              content: <>{consent.purpose === 'ui-capability' && pluginSourceWarningKey(consent.installationSource) && <p className="text-13 text-[var(--warning-fg)]">{t(pluginSourceWarningKey(consent.installationSource)!)}</p>}<GhostInstallConsentContent facts={consent.facts} capabilityOnly={consent.purpose === 'ui-capability'} /></>,
               confirmText: t(
                 consent.purpose === 'ui-capability' ? 'newChat.pluginUi.enable' : consent.facts.kind === 'install'
                   ? 'settings.ghosts.installConsent.confirmInstall'

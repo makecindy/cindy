@@ -1,3 +1,4 @@
+import { taskSnoozeUntil } from '@cindy/maker-shared/live-task-priority';
 /**
  * 首页会话行滑动操作的纯逻辑层(刻意不依赖 react / react-native,便于 node 单测):
  *  - createSwipeRowRegistry:同一时间只允许一行处于滑开状态的互斥注册表;
@@ -13,7 +14,7 @@ import {
 } from '@/session/sessionSelection';
 
 /** swipe / 选项菜单可触发的全部动作。rename 无补丁形态(走重命名弹窗),单独排除。 */
-export type SessionSwipeAction = 'pin' | 'unpin' | 'archive' | 'restore' | 'delete' | 'rename';
+export type SessionSwipeAction = 'pin' | 'unpin' | 'archive' | 'restore' | 'delete' | 'rename' | 'snooze' | 'wake';
 
 export interface SwipeRowRegistry {
   /**
@@ -262,10 +263,10 @@ export function createPendingWriteTracker(): PendingWriteTracker {
 }
 
 /**
- * patch-meta 可写的全部元数据字段(与被控端 REMOTE_EDITABLE_META 同集)。
+ * patch-meta 可写元数据及其宿主派生字段（snoozedAt 与截止时间成对同步）。
  * 消费方:writeGuardFields 的移行写(delete/archive)全字段取代。
  */
-export const SESSION_META_FIELDS = ['status', 'title', 'pinnedAt'] as const;
+export const SESSION_META_FIELDS = ['status', 'title', 'pinnedAt', 'snoozedUntil', 'snoozedAt'] as const;
 
 /**
  * 写序登记字段:delete / archive 都是**移行**写——行从列表消失后,同会话 pending 的
@@ -341,12 +342,17 @@ export function statusToggleAction(
 export function buildSessionActionMenu(
   pinnedAt: string | null | undefined,
   status?: string | null,
+  snooze?: { snoozedUntil?: string | null; snoozedAt?: string | null; userSendAt?: string | null },
 ): SessionActionMenuItem[] {
   const pinToggle = pinToggleAction(pinnedAt);
   const statusToggle = statusToggleAction(status);
   return [
     { action: 'rename', label: i18n.t('session.menu.renameAction') },
     { action: pinToggle.action, label: pinToggle.label },
+    ...(!pinnedAt && status !== 'archived' && snooze ? [
+      { action: 'snooze' as const, label: i18n.t('devices.list.menu.inbox.snooze') },
+      ...(taskSnoozeUntil(snooze) > Date.now() ? [{ action: 'wake' as const, label: i18n.t('devices.list.menu.inbox.wake') }] : []),
+    ] : []),
     { action: statusToggle.action, label: statusToggle.label },
     { action: 'delete', label: i18n.t('session.menu.deleteConversation'), destructive: true },
   ];
@@ -354,7 +360,7 @@ export function buildSessionActionMenu(
 
 /** swipe 动作 → patchSessionMeta 补丁(rename 走重命名弹窗,不在此列)。 */
 export function swipeActionPatch(
-  action: Exclude<SessionSwipeAction, 'rename'>,
+  action: Exclude<SessionSwipeAction, 'rename' | 'snooze' | 'wake'>,
   now?: number,
 ): MobileSessionBulkPatch {
   return mobileSessionBulkPatch(action, now);

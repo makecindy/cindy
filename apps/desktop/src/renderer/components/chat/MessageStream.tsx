@@ -142,6 +142,7 @@ import {
   readSessionScroll,
   saveSessionScroll,
   updateRenderWindowFloor,
+  clearRenderWindowFloor,
   type SessionScrollSnapshot,
 } from '@/lib/sessionScrollStore';
 import {
@@ -2507,6 +2508,8 @@ const recentRenderProjections: {
   characters: number;
 }[] = [];
 let renderProjectionOwner = getDataOwnerGeneration();
+// 挂载视图地板的序号:每个 MessageStream mount 一个,只求同会话内不重复。
+let floorViewSeq = 0;
 
 /**
  * Reuse pure history projection across keyed MessageStream mounts. Retain at
@@ -3650,11 +3653,17 @@ export function MessageStream({
   // 自动跟随(pinToBottom)的程序化滚动不走滚动保存分支，只靠 saveSessionScroll
   // 会让一直跟随的挂载面板没有地板快照，维护拍永远裁不动(Greptile P1)。
   // 只 merge 地板字段，不碰阅读位置，上翻读者不受影响。
+  // viewId 按挂载视图记录:同会话双面板各自跟踪，卸载时清掉自己的。
+  const floorViewId = useMemo(() => `floor-${++floorViewSeq}`, []);
+  useEffect(() => {
+    if (!sessionId) return;
+    return () => clearRenderWindowFloor(sessionId, floorViewId);
+  }, [sessionId, floorViewId]);
   useEffect(() => {
     if (!sessionId) return;
     const floor = renderWindowFloorClientId(visibleRenderItems);
-    if (floor) updateRenderWindowFloor(sessionId, floor);
-  }, [sessionId, visibleRenderItems]);
+    if (floor) updateRenderWindowFloor(sessionId, floor, floorViewId);
+  }, [sessionId, visibleRenderItems, floorViewId]);
   const visibleMetadataItems = visibleMetadataProjection(visibleRenderItems);
 
   // 镜像 ref：unmount cleanup / ResizeObserver / 落定回调里读最新值（闭包会 stale）。
@@ -5649,6 +5658,7 @@ export function MessageStream({
     };
     content.addEventListener('click', onDisclosureClick, true);
     content.addEventListener(CARD_EXPAND_TOGGLE_EVENT, onCardExpandToggle);
+    let lastPinHeight = -1;
     const ro = new ResizeObserver(() => {
       // 还原中:内容高度因异步渲染 settle 时,持续按锚点纠偏(直到用户手动滚动接管)。
       if (restoringRef.current) {
@@ -5675,9 +5685,16 @@ export function MessageStream({
       }
       disclosureAnchorRef.current = null;
       if (isNearBottomRef.current) {
+        // 纯宽度变化的交付(窗口横拉、分享选中态的 padding 过渡)不会移动尾部:
+        // 只有内容高度真变了才 pin,避免逐帧重启 pin 循环。
+        const container = scrollRef.current;
+        if (container && container.scrollHeight === lastPinHeight) return;
+        if (container) lastPinHeight = container.scrollHeight;
         pinToBottom();
         return;
       }
+      // 离底期间内容可能收缩后再长回旧高度;失效基线,避免回底后的尾部跟随被误跳。
+      lastPinHeight = -1;
       compensateMessageHeight();
       refreshHiddenChildViewportAnchor();
     });
@@ -7309,7 +7326,7 @@ const MessageItem = memo(function MessageItem({
         return sessionId ? (
           <McpAppCard sessionId={sessionId} clientId={message.clientId}
             title={String(message.systemCardData?.title ?? '')}
-            plugin={message.systemCardData?.plugin}
+            plugin={message.systemCardData?.plugin} customMcp={message.systemCardData?.customMcp}
             fallbackText={String(message.systemCardData?.fallbackText ?? '')} />
         ) : null;
       }

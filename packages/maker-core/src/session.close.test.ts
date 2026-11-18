@@ -211,6 +211,33 @@ describe('Session close lifecycle', () => {
     expect(handle.close).toHaveBeenCalledOnce();
   });
 
+  // #11042: foreground completion is not permission to kill tracked background
+  // work. Existing close tests only cover foreground/host RPC ownership (unit).
+  it.each(['task', 'continuation', 'unavailable'] as const)(
+    'keeps an idle runtime alive while background %s remains', async (kind) => {
+      const { session, handle } = liveTurn(false);
+      let busy = true;
+      handle.hasProjectResourceDrift = () => true;
+      handle.listBackgroundTasks = () => {
+        if (busy && kind === 'unavailable') throw new Error('snapshot unavailable');
+        return busy && kind === 'task' ? [{ taskId: 'bash', taskType: 'local_bash' }] : [];
+      };
+      handle.countPendingWakeContinuations = () => busy && kind === 'continuation' ? 1 : 0;
+      try {
+        expect(session.hasRecyclableProjectResourceDrift()).toBe(false);
+        await expect(session.closeIfIdle()).resolves.toBe(false);
+        expect(session.getStatus()).toBe('active');
+        expect(handle.close).not.toHaveBeenCalled();
+        busy = false;
+        expect(session.hasRecyclableProjectResourceDrift()).toBe(true);
+        await expect(session.closeIfIdle()).resolves.toBe(true);
+        expect(handle.close).toHaveBeenCalledOnce();
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   it('resource recycling shares the closeIfIdle idle predicate and never breaks manual compaction', async () => {
     const { session, handle } = liveTurn();
     let hostOperationInFlight = true;

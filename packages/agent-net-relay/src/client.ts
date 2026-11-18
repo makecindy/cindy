@@ -9,12 +9,23 @@ import {
 } from '@cindy/agent-net-protocol';
 import { createDelegation, createRequestProof, sha256, signature, verifySignature, verifyCertificate, verifyDelegation, type Identity, type TenantJoinRequest } from './identity.js';
 import { delegationRequestPolicyValid, type DelegationRequest } from '@cindy/agent-net-protocol';
+import { UDP_RELAY_HEADER, UDP_RELAY_KEY_BYTES, UDP_RELAY_SESSION_BYTES, UDP_RELAY_VERSION, type UdpRelayCredentials } from './udpRelay.js';
 export { generateIdentity, publicBytes, issueCertificate, createJoinRequest, approveJoin, createDelegation,
   createTenantJoinRequest, verifyTenantJoinRequest, verifyTenantPairingProof, tenantVerifyCode } from './identity.js';
 export type { Identity, TenantJoinRequest } from './identity.js';
 export { createPrivateNetwork } from './bootstrap.js';
 export { uploadEncryptedMedia, openEncryptedMedia } from './media.js';
 export { sealNotification } from './notification.js';
+export { UDP_RELAY_HEADER, UDP_RELAY_REGISTER_ACK, UDP_RELAY_DOWN, UDP_RELAY_UP_OVERHEAD, encodeUdpRegister, encodeUdpUp, isUdpRelayPacket, udpRelayPeerHash,
+  verifyUdpDown, verifyUdpRegisterAck, type UdpRelayCredentials } from './udpRelay.js';
+/**
+ * Whether this relay WebSocket URL may carry UDP credentials: they are a reusable secret, so only over TLS or on this
+ * machine. Owner-pinned private relays on plain http stay on the WebSocket (2026-11-17 review: the key travelled in clear).
+ */
+export function udpCredentialsAllowed(wsUrl: string): boolean {
+  const url = new URL(wsUrl);
+  return url.protocol === 'wss:' || (url.protocol === 'ws:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname));
+}
 export class AgentNetClientError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
 }
@@ -140,8 +151,14 @@ export class AgentNetClient {
       return result as T;
     } finally { clearTimeout(timer); options?.signal?.removeEventListener('abort', abort); }
   }
-  async directory(): Promise<DeviceView[]> {
-    const result = await this.request<{ rootPublicKey: string; devices: DeviceView[] }>('GET', '/directory');
+  /**
+   * Read the encrypted directory. `signal` carries the caller's own deadline so a
+   * bounded read does not leave this request running past it: the next retry would
+   * otherwise start a second physical directory read while this one is still in
+   * flight (Codex review #9360).
+   */
+  async directory(signal?: AbortSignal): Promise<DeviceView[]> {
+    const result = await this.request<{ rootPublicKey: string; devices: DeviceView[] }>('GET', '/directory', undefined, signal ? { signal } : undefined);
     if (result.rootPublicKey !== this.rootPublicKey || !Array.isArray(result.devices)
       || result.devices.some((d) => !this.trustedDirectoryEntry(d))) throw new Error('UNTRUSTED_DIRECTORY');
     return result.devices;
@@ -370,6 +387,14 @@ export function createDelegationApprover(client: AgentNetClient, assertCurrent: 
     },
   };
 }
+/** A malformed credential only disables UDP for this session; it never fails the WebSocket handshake. */
+function udpCredentials(value: unknown): UdpRelayCredentials | null {
+  if (!value || typeof value !== 'object') return null;
+  const { session, key } = value as { session?: unknown; key?: unknown };
+  if (typeof session !== 'string' || typeof key !== 'string') return null;
+  const sessionBytes = Buffer.from(session, 'base64url'), keyBytes = Buffer.from(key, 'base64url');
+  return sessionBytes.length === UDP_RELAY_SESSION_BYTES && keyBytes.length === UDP_RELAY_KEY_BYTES ? { session: sessionBytes, key: keyBytes } : null;
+}
 export class AgentNetUplink extends EventEmitter {
   readonly kind = 'agent-net' as const;
   sent = 0;
@@ -378,6 +403,8 @@ export class AgentNetUplink extends EventEmitter {
   notifications = false;
   delegations: Delegation[] = [];
   delegationRequests: DelegationRequest[] = [];
+  /** UDP credentials for this session when the relay supports UDP forwarding (udpRelay.ts); null keeps the WebSocket path. */
+  udp: UdpRelayCredentials | null = null;
   private receiver: ((deviceId: string, packet: Uint8Array) => void) | null = null;
   private pending: Array<[string, Uint8Array]> = [];
   private pendingBytes = 0;
@@ -386,7 +413,11 @@ export class AgentNetUplink extends EventEmitter {
   private scheduled = false;
   private constructor(private readonly ws: WebSocket) { super(); }
   static async open(url: string, header: string, verifyDirectory: (devices: DeviceView[], delegations: Delegation[], requests: DelegationRequest[]) => void, factory?: AgentNetClientTransport['createWebSocket']): Promise<AgentNetUplink> {
-    const socketOptions = { headers: { authorization: header }, maxPayload: MAX_CONTROL_BYTES };
+    // Asking for UDP credentials is harmless on an older relay: it ignores the header and the session stays on WebSocket.
+    // Never asked over plain http to another machine (udpCredentialsAllowed).
+    const askUdp = udpCredentialsAllowed(url);
+    const socketOptions = { headers: { authorization: header, ...(askUdp ? { [UDP_RELAY_HEADER]: UDP_RELAY_VERSION } : {}) },
+      maxPayload: MAX_CONTROL_BYTES };
     const ws = factory ? await factory(url, socketOptions) : new WebSocket(url, socketOptions);
     const uplink = new AgentNetUplink(ws);
     return new Promise((resolve, reject) => {
@@ -424,6 +455,7 @@ export class AgentNetUplink extends EventEmitter {
             if (message.protocolVersion !== 2 || established) throw new Error('INVALID_HELLO');
             uplink.deviceId = message.deviceId;
             uplink.notifications = message.notifications === true;
+            uplink.udp = askUdp ? udpCredentials((message as { udp?: unknown }).udp) : null;
             established = true; clearTimeout(timer); resolve(uplink);
           } else uplink.emit('directory', message.devices);
         } catch (error) { fail(error instanceof Error ? error : new Error('INVALID_CONTROL')); }

@@ -51,12 +51,20 @@ export type SessionStopResult =
     }
   | Failure<'NOT_FOUND' | 'UNSUPPORTED_CAPABILITY'>;
 
+/**
+ * A route change waiting for its boundary. `user` marks a picker choice staged for the next
+ * send; Agent tools see it so they do not revise a selection they cannot see.
+ */
+export type SessionRuntimePendingProjection =
+  | PendingSessionRuntimeMutation
+  | { generation: number; source: 'user'; profile: SessionRuntimeProfile };
+
 export interface SessionRuntimeDetails extends SessionActivitySnapshot {
   permissionMode?: PermissionMode;
   runtimeGeneration: number;
   baselineProfile: SessionRuntimeProfile;
   effectiveProfile: SessionRuntimeProfile;
-  pendingMutation: PendingSessionRuntimeMutation | null;
+  pendingMutation: SessionRuntimePendingProjection | null;
   fallbackEnabled: boolean;
 }
 
@@ -70,7 +78,7 @@ export type SessionRuntimeSetResult =
       effectiveBoundary?: 'next_send';
       generation: number;
       effectiveProfile: SessionRuntimeProfile;
-      pendingMutation: PendingSessionRuntimeMutation | null;
+      pendingMutation: SessionRuntimePendingProjection | null;
       permissionMode?: PermissionMode;
     }
   | Failure<'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY' | 'INTERNAL'>;

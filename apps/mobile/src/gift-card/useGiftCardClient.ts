@@ -16,7 +16,7 @@ export function useGiftCardClient() {
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const deps = useRef(auth); deps.current = auth;
-  return useMemo(() => {
+  const client = useMemo(() => {
     const authOwner = getMobileAuthOwner();
     const current = () => mounted.current && active.current === owner
       && getActiveMobileSessionRealm() === realm && isMobileAuthOwnerCurrent(authOwner);
@@ -44,4 +44,7 @@ export function useGiftCardClient() {
     });
     return { ...api, owner, realm, current };
   }, [owner, realm]);
+  // 礼品卡的钱进个人账户：组织身份领不了。界面据此直接说明，不必先问一次服务端。
+  const personal = auth.user?.membershipKind !== 'org';
+  return useMemo(() => ({ ...client, personal }), [client, personal]);
 }

@@ -74,7 +74,6 @@
     "cancel": "保持不变"
   },
   "unified": {
-    "accountUnassigned": "账号待分配",
     "accountCount_other": "{{count}} 个账号",
     "accountFallback": "账号 {{index}}",
     "favoriteConfiguration": "收藏此配置",

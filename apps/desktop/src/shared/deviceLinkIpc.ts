@@ -15,7 +15,7 @@ export const DEVICE_LINK_INVOKE = {
   SET_DEVICE_CONTROL_ENABLED: 'device-link:set-device-control-enabled',
   /** 同账号设备列表(REST 经 main 转发,带 online/busy/开关三态) */
   LIST_DEVICES: 'device-link:list-devices',
-  /** 远程连接拓扑:本机已协商可靠链路的对端 + 数据路径 + RTT 快照(纯本机读,不进隧道) */
+  /** 远程连接拓扑:本机连接路径与 RTT 快照(纯本机读,不进隧道) */
   GET_PEER_LINKS: 'device-link:get-peer-links',
   /** 重命名设备 */
   RENAME_DEVICE: 'device-link:rename-device',
@@ -134,7 +134,9 @@ export type DeviceLinkConnectionIssueKind =
   | 'too-many-connections'
   | 'version-mismatch'
   /** 连续多次握手成功后仍在稳定期内断开。 */
-  | 'unstable';
+  | 'unstable'
+  /** 主连接是 Agent-Net、它和中转的连接断开超过 10 秒：直连的电脑照常，其他设备与手机推送暂时不通（只在开着 Agent-Net 时出现）。 */
+  | 'agent-net-relay-down';
 
 /** 连接问题(同 @cindy/device-link 的 DeviceLinkConnectionIssue) */
 export interface DeviceLinkConnectionIssue {
@@ -216,9 +218,19 @@ export interface DeviceLinkPeerLinkView {
   /** 距最近一次从对端收到业务消息多少毫秒;还没收到过为 null */
   receivedAgoMs: number | null;
 }
+
+/** 同账号 Agent-Net 传输路径，可在打开远程控制链路之前就绪。 */
+export interface DeviceLinkAgentNetPeerRouteView {
+  deviceId: string;
+  path: DeviceLinkPeerPath | 'connecting';
+  rttMs: number | null;
+}
+
 /** GET_PEER_LINKS 返回与 PEER_LINKS_CHANGED 推送的全量快照 */
 export interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
+  agentNetRoutes?: DeviceLinkAgentNetPeerRouteView[];
+  relayProtocol?: 'agent-net' | 'device-link';
   /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
   relayRttMs: number | null;
 }

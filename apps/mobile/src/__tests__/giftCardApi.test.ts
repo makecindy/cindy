@@ -37,6 +37,8 @@ describe('mobile gift card api', () => {
       ['GIFT_CARD_EXPIRED', 409, 'EXPIRED'],
       ['GIFT_CARD_VOIDED', 409, 'VOIDED'],
       ['RATE_LIMITED', 429, 'RATE_LIMITED'],
+      // 组织身份领不了：要让界面说明「仅限个人用户领取」，不能混进「稍后重试」。
+      ['PERSONAL_ACCOUNT_REQUIRED', 403, 'PERSONAL_REQUIRED'],
     ] as const) {
       const api = createGiftCardApi(vi.fn().mockRejectedValue(apiError(code, status)));
       await expect(api.preview(CODE)).resolves.toEqual({ ok: false, reason });
@@ -45,7 +47,7 @@ describe('mobile gift card api', () => {
   });
 
   it('lets outages, auth failures and unreadable responses surface as errors', async () => {
-    for (const error of [apiError('NETWORK_UNAVAILABLE', 0), apiError('INTERNAL', 500), apiError('PERSONAL_ACCOUNT_REQUIRED', 403), new Error('OWNER_CHANGED')]) {
+    for (const error of [apiError('NETWORK_UNAVAILABLE', 0), apiError('INTERNAL', 500), apiError('FORBIDDEN', 403), new Error('OWNER_CHANGED')]) {
       const api = createGiftCardApi(vi.fn().mockRejectedValue(error));
       await expect(api.preview(CODE)).rejects.toBe(error);
       await expect(api.redeem(CODE)).rejects.toBe(error);

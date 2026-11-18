@@ -13,7 +13,7 @@ import {
 } from '../protocol.js';
 
 import { configureUiText } from '../../uiText.js';
-configureUiText((key, fallback) => ({ 'mcpApps.pluginTrust.unverified': '未验证', 'mcpApps.pluginTrust.reviewed': '已审核' })[key] ?? fallback);
+configureUiText((key, fallback) => ({ 'mcpApps.customMcp': '自定义 MCP', 'mcpApps.pluginTrust.unverified': '未验证', 'mcpApps.pluginTrust.reviewed': '已审核' })[key] ?? fallback);
 import { projectMcpAppHistory } from '../history.js';
 
 const tool = (ui: unknown): Tool => ({
@@ -115,7 +115,7 @@ describe('standard MCP Apps metadata and policy', () => {
           uri,
           { prefersBorder: false },
         ),
-      ).toEqual({ html, meta: { prefersBorder: false } });
+      ).toEqual({ html, meta: { prefersBorder: false }, hostFullscreenButton: true });
     }
     expect(
       readAppResource(
@@ -205,12 +205,45 @@ describe('standard MCP Apps metadata and policy', () => {
 
 // Regression F07/F19: the public history projection stripped the Host badge.
 // Exercise the production projector, retaining no private schema/result. Tier: unit.
-it.each(['unverified', 'reviewed'])('projects Host plugin trust in the existing public title: %s', (trust) => {
+it.each(['unverified', 'reviewed'])('shows only the saved plugin name for legacy cards without source: %s', (trust) => {
   const record = card({ content: [{ type: 'text', text: 'public' }], _meta: { secret: 'private' } });
   record.tool._meta = { 'cindy/plugin': { name: 'Planner', trust } };
   const content = { mcpApp: record };
-  const expected = { mcpAppHistory: { version: 1, title: `Planner · ${trust === 'unverified' ? '未验证' : '已审核'}`, text: 'public' } };
+  const expected = { mcpAppHistory: { version: 1, title: 'Planner', text: 'public', plugin: { name: 'Planner' } } };
   expect(projectMcpAppHistory(content, true)).toEqual(expected);
   expect(projectMcpAppHistory(JSON.stringify(content), true)).toEqual(expected);
   expect(projectMcpAppHistory(content, false)).toBe(content);
+});
+
+// Card chrome / public wire: source is a bounded snapshot, never private tool metadata.
+it.each(['local', 'third-party', 'unknown', 'future-source', 'market', 'official'])('projects source %s while keeping old title readers useful', kind => {
+  const record = card({ content: [{ type: 'text', text: 'public' }], _meta: { secret: 'private' } });
+  record.tool._meta = { 'cindy/plugin': { name: 'Planner', source: { kind }, secret: 'private' } };
+  const projected = projectMcpAppHistory({ mcpApp: record }, true) as { mcpAppHistory: { title: string; plugin: unknown } };
+  expect(projected.mcpAppHistory.plugin).toEqual({ name: 'Planner', source: { kind: kind === 'future-source' ? 'unknown' : kind } });
+  expect(projected.mcpAppHistory.title.startsWith('Planner')).toBe(true);
+  expect(JSON.stringify(projected)).not.toContain('private');
+  expect(projectMcpAppHistory(projected, true)).toEqual(projected);
+});
+it.each([undefined, true, false])('reads the optional Host fullscreen button preference: %s', preference => {
+  const result = readAppResource({ contents: [{ uri, mimeType: 'text/html;profile=mcp-app', text: '<p>App</p>',
+    _meta: { 'cindy/host-fullscreen-button': preference } }] }, uri);
+  expect(result.hostFullscreenButton).toBe(preference !== false);
+});
+
+// R3 privacy / unit: production history is public, unlike the persisted tool.
+it('projects the saved custom MCP name for old readers without connection details', () => {
+  const record = card({ content: [] });
+  record.serverId = 'private-slug';
+  record.tool._meta = { 'cindy/custom-mcp': { name: 'Team reports', url: 'https://private.invalid:8443', headers: { secret: 'private' } } };
+  const expected = { mcpAppHistory: { version: 1, title: 'Team reports · 自定义 MCP', text: '', customMcp: { name: 'Team reports' } } };
+  expect(projectMcpAppHistory({ mcpApp: record }, true)).toEqual(expected);
+  expect(projectMcpAppHistory(expected, true)).toEqual(expected);
+});
+it('removes organization identifiers from same-account card history without changing its source kind', () => {
+  const record = card({ content: [] });
+  record.tool._meta = { 'cindy/plugin': { name: 'Planner', source: { kind: 'organization', namespace: 'acme' } } };
+  const expected = { mcpAppHistory: { version: 1, title: 'Planner', text: '', plugin: { name: 'Planner', source: { kind: 'organization' } } } };
+  expect(projectMcpAppHistory({ mcpApp: record }, true)).toEqual(expected);
+  expect(projectMcpAppHistory(expected, true)).toEqual(expected);
 });

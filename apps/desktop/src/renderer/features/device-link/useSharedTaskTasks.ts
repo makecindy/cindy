@@ -7,6 +7,7 @@ import type { Session } from '@/lib/ccAgent.types';
 import { remoteProjectsStore } from './remoteProjectsStore';
 import { bindSharedTaskPushOwner, resetRemoteDataOwnerPushFence } from '@/lib/remoteDataOwnerPushFence';
 import { leaveHiddenSharedTask } from './sharedTaskVisibility';
+import { forgetLegacySharedTaskCompletions } from './remoteSessionActivityStore';
 
 const membershipChangedEvent = 'cindy:shared-task-membership-changed';
 // Dispatched by notifySharedTaskEnded when a host revokes this guest.
@@ -86,6 +87,13 @@ export function useSharedTaskTasks(): void {
     const offStatus = window.electronAPI.deviceLink.onStatusChanged((state) => {
       if (state.status === 'online') refresh();
     });
+    // Shared peers have independent routes: ordinary relay status is not proof
+    // of a gap. Use the existing per-peer offline/transport-reset notification.
+    const forgetReadCompletion = ({ deviceId }: { deviceId: string }) => {
+      if (currentOwner()) forgetLegacySharedTaskCompletions(deviceId);
+    };
+    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.(forgetReadCompletion);
+    const offPeerReopened = window.electronAPI.deviceLink.onPeerLinkReopened?.(forgetReadCompletion);
     return () => {
       disposed = true;
       poller.dispose();
@@ -93,6 +101,8 @@ export function useSharedTaskTasks(): void {
       window.removeEventListener(membershipChangedEvent, refresh);
       window.removeEventListener(accessEndedEvent, refresh);
       offStatus();
+      offPeerReset?.();
+      offPeerReopened?.();
       for (const [peer, sessionId] of linked) {
         if (!isDataOwnerGenerationCurrent(owner)) break;
         void window.electronAPI.deviceLink.unsubscribe(peer, ['session:' + sessionId]).catch(() => undefined);

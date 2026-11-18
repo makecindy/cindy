@@ -111,7 +111,7 @@ export interface ProjectNodeProps {
   /** 仅隐藏本地项目的侧栏入口，不改变其中任务的生命周期。 */
   onRemoveFromSidebar: (project: ProjectNodeData) => void;
   onSessionClick: SessionClickHandler;
-  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'unarchive') => void;
+  onAction: (id: string, action: 'delete' | 'archive' | 'archive-now' | 'complete' | 'unarchive') => void;
   onRename: (id: string, title: string) => void;
   onTogglePin: (id: string, currentlyPinned: boolean) => void;
   onMoveSession?: (id: string, target: SessionMoveTarget) => void;

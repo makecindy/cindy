@@ -124,6 +124,15 @@ describe('GiftCardRedeemDialog', () => {
     expect(api.redeemGiftCard).not.toHaveBeenCalled();
   });
 
+  // 规则：礼品卡仅限个人用户领取。服务端拒绝组织身份时要如实说明，
+  // 不能显示成「暂时无法兑换，请稍后重试」。
+  it('tells an organization identity that gift cards are for personal accounts', async () => {
+    api.previewGiftCard.mockResolvedValue({ ok: false, reason: 'PERSONAL_REQUIRED' });
+    open(CODE);
+    await screen.findByText('billing.giftCard.errors.personalRequired');
+    expect(api.redeemGiftCard).not.toHaveBeenCalled();
+  });
+
   it('rejects text that is not a redeem code without asking the server', async () => {
     open();
 

@@ -356,4 +356,17 @@ describe('recentModels store', () => {
     m.setRecentModelsOwner('user-b');
     expect(m.listRecentModels().map((item) => item.modelId)).toEqual(['gpt-5.6-sol']);
   });
+
+  // 插件 /model-preferences 经收藏桥只读最近使用(plugin-security「模型收藏与最近使用」):
+  // 只答当前 owner 分区、不带 usedAt、不写入;owner 不一致必须抛(桥据此回 failed,不串号)。
+  it('host read path: newest-first copies of the current owner only, without timestamps', async () => {
+    const m = await loadModule();
+    m.setRecentModelsOwner('user-a');
+    m.recordRecentModel(OPUS, 1000);
+    m.recordRecentModel({ ...SOL, effort: 'high', fast: 'ultrafast' }, 2000);
+    const before = memStorage.getItem(`${m.__STORAGE_KEY}:user-a`);
+    expect(m.accessHostRecentModels('user-a')).toEqual([{ ...SOL, effort: 'high', fast: 'ultrafast' }, OPUS]);
+    expect(memStorage.getItem(`${m.__STORAGE_KEY}:user-a`)).toBe(before);
+    expect(() => m.accessHostRecentModels('user-b')).toThrow();
+  });
 });

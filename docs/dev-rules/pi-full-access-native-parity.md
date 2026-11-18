@@ -2,6 +2,7 @@
 
 > **状态**：权威产品需求  
 > **读取时机**：改 Pi 权限拦截、Full access、凭证路径、`/proc/*/environ`、扩展工具门，或处理相关 review 之前  
+> **适用路径**：`packages/maker-core/src/agents/pi/{index,cindy-bridge-source,auto-review-policy}.ts`、`packages/maker-core/src/agents/pi/__tests__/{cindyBridgeSource,pi-auto-review-dispatch}*`  
 > **关系**：补充 [`pi-harness.md`](pi-harness.md)「Pi 上游 GUI 非退化红线」。本文件只锁 Full access 的读/搜/bash 对齐，不改 Ask / Auto。
 
 ## 目标
