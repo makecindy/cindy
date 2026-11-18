@@ -2014,6 +2014,7 @@ function installFakeHost(
     subscribeThread,
     unsubscribeThread,
     hasThreadSubscription,
+    captureThreadResumeOwnership: vi.fn((threadId: string) => () => !hasThreadSubscription(threadId)),
     isCodexProxyActive,
     isCodexBrowserUseAvailable,
     getCodexBrowserUseVersion,
@@ -37414,7 +37415,7 @@ describe('expected helper normal and failure boundaries', () => {
 // Unit tier: one failed native client + next send; no processes or real waits.
 describe('failed expected helper recovery', () => {
   const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-  async function setup(state: string, background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
+  async function setup(state: string | (() => string), background: () => Promise<unknown> = async () => ({ data: [], nextCursor: null }), recover = true) {
     const agent = new CodexAgent(createDeps());
     let resumes = 0;
     const host = installFakeHost(agent, method => {
@@ -37423,7 +37424,7 @@ describe('failed expected helper recovery', () => {
         return { thread: { id: threadId }, model: 'gpt-5.4' };
       }
       if (method === Method.ThreadBackgroundTerminalsList) return background();
-      if (method === Method.McpServerStatusList) return { data: [{ name: 'cindy_helper', runtimeStatus: resumes > 1 && recover ? 'connected' : state,
+      if (method === Method.McpServerStatusList) return { data: [{ name: 'cindy_helper', runtimeStatus: resumes > 1 && recover ? 'connected' : typeof state === 'function' ? state() : state,
         tools: { list_tools: {}, call_tool: {} } }], nextCursor: null };
       if (method === Method.TurnStart) return { turn: { id: 'helper-turn' } };
       return undefined;
@@ -37490,6 +37491,53 @@ describe('failed expected helper recovery', () => {
     await Promise.all([first, second]);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
     await handle.close();
+    await agent.dispose();
+  });
+  // #11380 review: prior cancellation tests resolved the RPC before retrying.
+  // Unit tier, Session.send/abort: one stuck probe must not hold the next input.
+  it.each(['status', 'background'] as const)('accepts an immediate Session retry after Stop during the %s probe', async stage => {
+    let release!: (value: unknown) => void;
+    const probe = new Promise<unknown>(resolve => { release = resolve; });
+    const { agent, host, handle } = await setup('failed');
+    const request = host.request.getMockImplementation()!;
+    const methodToBlock = stage === 'status' ? Method.McpServerStatusList : Method.ThreadBackgroundTerminalsList;
+    let blocked = false;
+    host.request.mockImplementation((method, params) => {
+      if (method === methodToBlock && !blocked) { blocked = true; return probe; }
+      return request(method, params);
+    });
+    const session = new Session({ id: 'helper-recovery', agentKind: 'codex', workDir: '/repo',
+      handle, capabilities: agent.capabilities, logger: createNoopLogger(), turnStallMs: 0 });
+    session.onEvent(() => {});
+    const first = session.send('cancel this input').catch(() => {});
+    await waitForExpectation(() => expect(blocked).toBe(true));
+    await session.abort();
+    await expect(session.send('retry immediately')).resolves.toEqual({ accepted: true });
+    expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toEqual([
+      [Method.TurnStart, expect.objectContaining({ input: [{ type: 'text', text: 'retry immediately' }] }), expect.anything()],
+    ]);
+    release({ data: [] });
+    await first;
+    await session.close();
+    await agent.dispose();
+  });
+  // Pending optional startup stays silent, but a later confirmed failure must
+  // be visible even when background work prevents recovery (unit, no new RPC).
+  it.each(['failed', 'authenticationRequired'])('reports pending -> %s once without restarting a busy thread', async finalState => {
+    let state = 'starting';
+    const { agent, host, handle } = await setup(() => state, async () => ({ data: [{}] }));
+    state = finalState;
+    for (let i = 0; i < 2; i++) {
+      await handle.send({ type: 'user', content: 'continue' });
+      host.getThreadHandlers()?.turnCompleted?.({ threadId, turn: { id: 'helper-turn', status: 'completed' } });
+    }
+    await handle.close();
+    const events = [];
+    for await (const event of handle.events()) events.push(event);
+    expect(events.filter(event => event.type === 'text' && event.standaloneText
+      && (event.data as { code?: string }).code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE')).toHaveLength(1);
+    expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(1);
+    expect(host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList)).toHaveLength(finalState === 'failed' ? 3 : 2);
     await agent.dispose();
   });
   it('backs off repeated failures and stops after two recovery attempts', async () => {

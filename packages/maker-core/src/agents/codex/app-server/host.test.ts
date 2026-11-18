@@ -223,6 +223,46 @@ describe('AppServerHost isolated account lifecycle', () => {
 });
 
 describe('AppServerHost assistant text delta routing', () => {
+  // #11380: a subscriber-only guard misses a replacement's in-flight resume.
+  // Unit tier: real host/RPC transport, one old cleanup + newer resume; the
+  // observable contract is no thread/unsubscribe written for the newer owner.
+  it.each(['pending', 'pending-release', 'subscribed', 'unclaimed'] as const)('fences late cleanup with a %s replacement', async phase => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    try {
+      await host.request('thread/resume', { threadId: 'recovering-thread' });
+      const oldSubscription = phase === 'pending-release' ? host.subscribeThread('recovering-thread', {}) : null;
+      const ownsResume = host.captureThreadResumeOwnership('recovering-thread');
+      let written!: () => void;
+      const dispatched = new Promise<void>(resolve => { written = resolve; });
+      let pendingId: unknown;
+      const write = transport.writeLine.bind(transport);
+      vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+        const msg = JSON.parse(line);
+        if (msg.method === 'thread/resume') {
+          pendingId = msg.id; written(); return;
+        }
+        return write(line);
+      });
+      const replacement = phase === 'unclaimed' ? null : host.request('thread/resume', { threadId: 'recovering-thread' });
+      // Shutdown still observes the held RPC if an earlier assertion fails.
+      void replacement?.catch(() => {});
+      if (replacement) await dispatched;
+      if (phase === 'subscribed') {
+        transport.emit({ id: pendingId, result: {} });
+        await replacement;
+        host.subscribeThread('recovering-thread', {});
+      }
+      if (oldSubscription) await oldSubscription.release();
+      else await host.unsubscribeThread('recovering-thread', ownsResume);
+      expect(transport.lines.map(line => JSON.parse(line)).filter(msg => msg.method === 'thread/unsubscribe'))
+        .toHaveLength(phase === 'unclaimed' ? 1 : 0);
+      if (phase === 'pending' || phase === 'pending-release') { transport.emit({ id: pendingId, result: {} }); await replacement; }
+      // Another thread remains usable after the stale callback.
+      await host.request('turn/start', { threadId: 'healthy-peer', input: [] });
+    } finally { await host.shutdown(); }
+  });
   it('subscribes to dedicated agentMessage deltas and routes them to the owning thread', async () => {
     const transport = new NotificationTransport();
     const host = new AppServerHost({

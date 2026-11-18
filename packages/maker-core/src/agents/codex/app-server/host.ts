@@ -386,6 +386,8 @@ export class AppServerHost {
   private nativeInitializationEpoch = 0;
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
+  // Claims start before resume awaits transport startup, not at subscription.
+  private readonly threadResumeOwners = new Map<string, symbol>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
   private readonly lineageRoots = new Map<string, string>();
   /**
@@ -958,6 +960,10 @@ export class AppServerHost {
     params?: unknown,
     opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline },
   ): Promise<R> {
+    if (method === Method.ThreadResume) {
+      const threadId = (params as { threadId?: unknown } | undefined)?.threadId;
+      if (typeof threadId === 'string') this.threadResumeOwners.set(threadId, Symbol());
+    }
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
     // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它
     // 上界, 否则「关键 RPC 加超时」在启动路径上形同虚设 (greptile R6 P1)。
@@ -1004,14 +1010,25 @@ export class AppServerHost {
   }
 
   /** Release one thread's live runtime without archiving or deleting its history. */
-  async unsubscribeThread(threadId: string): Promise<void> {
+  async unsubscribeThread(threadId: string, isCurrent?: () => boolean): Promise<void> {
     const client = this.client;
-    if (!client) return;
+    if (!client || isCurrent?.() === false) return;
+    const owner = this.threadResumeOwners.get(threadId);
     await client.request<ThreadUnsubscribeResponse>(
       Method.ThreadUnsubscribe,
       { threadId },
+      // No await between the claim check and client.request's synchronous write.
       { timeoutMs: this.threadUnsubscribeTimeoutMs },
     );
+    if (!this.subscribers.has(threadId) && this.threadResumeOwners.get(threadId) === owner) {
+      this.threadResumeOwners.delete(threadId);
+    }
+  }
+
+  /** A late resume may clean up only while no newer resume or subscriber owns it. */
+  captureThreadResumeOwnership(threadId: string): () => boolean {
+    const owner = this.threadResumeOwners.get(threadId);
+    return () => owner !== undefined && this.threadResumeOwners.get(threadId) === owner && !this.hasThreadSubscription(threadId);
   }
 
   async selectModelProvider(modelProvider: string | undefined): Promise<void> {
@@ -1060,6 +1077,7 @@ export class AppServerHost {
       // MCP readiness belongs to the concrete app-server process.
       this.mcpToolAvailability.clear();
       this.subscribers.clear();
+      this.threadResumeOwners.clear();
       this.lineageRoots.clear();
       this.pendingLineage.clear();
       this.buffered.clear();
@@ -1194,6 +1212,8 @@ export class AppServerHost {
       this.logger.warn('overwriting thread subscription', { threadId });
     }
     if (this.client) this.writerCandidates.add(this.client);
+    if (!this.threadResumeOwners.has(threadId)) this.threadResumeOwners.set(threadId, Symbol());
+    const ownsResume = this.captureThreadResumeOwnership(threadId);
     this.subscribers.set(threadId, handlers);
     this.lineageRoots.set(threadId, threadId);
     this.notifyThreadHandlerWaiters(threadId);
@@ -1246,7 +1266,7 @@ export class AppServerHost {
           return Promise.resolve();
         }
 
-        releasePromise = this.unsubscribeThread(threadId)
+        releasePromise = this.unsubscribeThread(threadId, ownsResume)
           .then(() => {
             serverReleased = true;
           })

@@ -55,6 +55,7 @@ import {
   AgentNotAuthenticatedError,
   AgentStartupStoppedError,
   TurnPermissionPolicyUnsupportedError,
+  TurnDispatchRejectedError,
   type AgentSessionHandle,
   type AgentDeps,
   type CodexExtraSpawnConfig,
@@ -7275,6 +7276,7 @@ assertRouteCurrent();
     let helperRecoveryNotBefore = 0;
     let helperRecoveryAbort: AbortController | undefined;
     let helperRecoveryPending: Promise<void> | null = null;
+    let reportedHelperState: string | undefined;
     const expectedHelperConfig = (): Record<string, unknown> | null => {
       const config = currentThreadWorkspaceConfig().config;
       if (!config || reviewMode || config['mcp_servers.cindy_helper.enabled'] === false
@@ -7284,31 +7286,36 @@ assertRouteCurrent();
         })) return null;
       return Object.fromEntries(Object.entries(config).filter(([key]) => key.startsWith('mcp_servers.cindy_helper.')));
     };
-    const reportExpectedHelperAvailability = async (): Promise<void> => {
+    const reportExpectedHelperAvailability = async (
+      knownReport?: Awaited<ReturnType<typeof readCodexThreadMcpServerTools>>, signal?: AbortSignal,
+    ): Promise<void> => {
       const helperConfig = expectedHelperConfig();
-      if (!helperConfig) { helperNeedsRecheck = false; return; }
+      if (!helperConfig) { helperNeedsRecheck = false; reportedHelperState = undefined; return; }
       const checkedThreadId = threadId;
       let state: string;
       let ready = false;
       try {
-        const report = await readCodexThreadMcpServerTools(
+        const report = knownReport ?? await awaitCodexRouteSelection(readCodexThreadMcpServerTools(
           (method, params, requestOpts) => host.request(method, params, requestOpts),
           checkedThreadId, 'cindy_helper',
-        );
+        ), signal);
         ready = report.state === 'connected' && ['list_tools', 'call_tool'].every(name => report.tools.some(tool => tool.name === name));
         state = report.state;
       } catch {
+        signal?.throwIfAborted();
         // A failed probe is not proof of missing tools. Keep that distinction,
         // and never expose transport errors containing endpoints/credentials.
         state = 'unverified';
       }
       if (closed || threadId !== checkedThreadId || !isCurrentHost()
         || JSON.stringify(expectedHelperConfig()) !== JSON.stringify(helperConfig)) return;
-      if (ready) { helperNeedsRecheck = false; return; }
+      if (ready) { helperNeedsRecheck = false; reportedHelperState = undefined; return; }
       helperNeedsRecheck = state === 'failed' || state === 'pending';
       // Optional native servers can still be starting; do not turn async
       // discovery into an outage or restart an in-flight initialization.
       if (state === 'pending') return;
+      if (reportedHelperState === state) return;
+      reportedHelperState = state;
       const message = state === 'unverified'
         ? 'Could not verify cindy_helper for this task. Task result reporting may be unavailable.'
         : 'cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.';
@@ -8016,24 +8023,29 @@ assertRouteCurrent();
             assertCurrentHost('context settings refresh');
             if (closed || signal?.aborted) throw new Error('Codex context settings update cancelled');
             const workspaceConfig = currentThreadWorkspaceConfig(desired);
+            let ownsResume: () => boolean = () => false;
             const resp = await requestProfileLifecycle<ThreadResumeResponse>({
               action: 'refresh', signal,
-              request: (options) => host.request<ThreadResumeResponse>(Method.ThreadResume, {
-                threadId, cwd: opts.workingDir,
-                ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
-                ...workspaceConfig,
-                ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
-                ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
-                ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
-                ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
-              }, options),
+              request: (options) => {
+                const pending = host.request<ThreadResumeResponse>(Method.ThreadResume, {
+                  threadId, cwd: opts.workingDir,
+                  ...(resumeExcludeTurnsSupported ? { excludeTurns: true } : {}),
+                  ...workspaceConfig,
+                  ...(threadModelProvider ? { modelProvider: threadModelProvider } : {}),
+                  ...(mutableModel && mutableModel !== 'gpt-5' ? { model: mutableModel } : {}),
+                  ...(serviceTierState.value !== undefined ? { serviceTier: serviceTierState.value } : {}),
+                  ...(developerInstructions && !useProxyChannel ? { developerInstructions } : {}),
+                }, options);
+                ownsResume = host.captureThreadResumeOwnership(threadId);
+                return pending;
+              },
               onLateResolve: async () => {
                 // A new handle may already own this thread after cancellation.
                 // A late recovery must not unsubscribe that replacement.
-                if (host.hasThreadSubscription(threadId)) return;
+                if (!ownsResume()) return;
                 await runThreadCleanupOrRetire({
                   cleanupThreadId: threadId, reason: 'late context settings refresh',
-                  cleanup: () => host.unsubscribeThread(threadId), retireHostOnFailure: false,
+                  cleanup: () => host.unsubscribeThread(threadId, ownsResume), retireHostOnFailure: false,
                 });
               },
             });
@@ -8085,16 +8097,17 @@ assertRouteCurrent();
           assertRecoveryCurrent();
           let report;
           try {
-            report = await readCodexThreadMcpServerTools(
+            report = await awaitCodexRouteSelection(readCodexThreadMcpServerTools(
               (method, params, requestOpts) => host.request(method, params, requestOpts), threadId, 'cindy_helper',
-            );
+            ), recoverySignal);
           } catch { assertRecoveryCurrent(); return; }
           assertRecoveryCurrent();
-          if (report.state === 'connected') { helperNeedsRecheck = false; return; }
+          await reportExpectedHelperAvailability(report, recoverySignal);
+          assertRecoveryCurrent();
           if (report.state !== 'failed') return;
           // Unloading a thread also stops native children/terminals. Leave those
           // intact, and unknown background state is busy, just as idle cleanup.
-          if (await handle.hasLiveBackgroundWork!().catch(() => true)) return;
+          if (await awaitCodexRouteSelection(handle.hasLiveBackgroundWork!().catch(() => true), recoverySignal)) return;
           assertRecoveryCurrent();
           helperRecoveryAttempts++;
           helperRecoveryNotBefore = Date.now() + 30_000 * helperRecoveryAttempts;
@@ -8104,7 +8117,15 @@ assertRouteCurrent();
             await ensureContextLimitForNextTurn(recoverySignal, true, false);
           });
           assertRecoveryCurrent();
-          await reportExpectedHelperAvailability();
+          await reportExpectedHelperAvailability(undefined, recoverySignal);
+        } catch (error) {
+          // Probe cancellation is proven pre-dispatch. Let Session retire its
+          // reservation without an ambiguous provider-error drain. A cancelled
+          // cold resume closes the handle and keeps its existing failure fence.
+          if (!closed && recoverySignal.aborted) {
+            throw new TurnDispatchRejectedError('Codex helper recovery cancelled before acceptance');
+          }
+          throw error;
         } finally {
           if (helperRecoveryAbort === abort) helperRecoveryAbort = undefined;
         }
@@ -13975,6 +13996,7 @@ assertRouteCurrent();
           isTurnStartPending = false;
           endPlanCycleAfterPreStartFailure('workspace permission profile refresh failed');
           flushDeferredTerminalTurnCompletionsIfIdle();
+          if (e instanceof TurnDispatchRejectedError) throw e;
           rejectIfCancelled(sendOpts, 'send');
           const message = `Failed to restore Codex workspace permissions: ${String(e)}`;
           log.error('workspace permission profile refresh failed', { error: String(e), threadId });
@@ -14913,7 +14935,11 @@ assertRouteCurrent();
       },
 
       async abort() {
+        const pendingHelperRecovery = helperRecoveryPending;
         helperRecoveryAbort?.abort();
+        // Probe RPCs may outlive Stop. Their aborted wait must release the send
+        // reservation before abort returns so the next input can start afresh.
+        if (pendingHelperRecovery) await pendingHelperRecovery.catch(() => {});
         if (manualCompact) {
           manualCompact.cancelled = true;
           if (manualCompact.turnId) {

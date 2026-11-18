@@ -255,7 +255,7 @@ it.skipIf(!binaryPath).each(['initialize', 'tools/list'] as const)(
       expect([...models]).toEqual(['gpt-5.6-luna']);
       expect(helperInitializes).toBeGreaterThan(1);
       expect(resumes.mock.calls.filter(([method]) => method === 'thread/resume')).toHaveLength(1);
-      expect(unsubscribes.mock.calls).toEqual([[originalId]]);
+      expect(unsubscribes.mock.calls.map(([id]) => id)).toEqual([originalId]);
       expect(recovered.some(event => event.type === 'error')).toBe(false);
       expect(host.activeSubscriptions).toBe(2);
       expect((await handle.readMcpServerTools?.('cindy_docs'))?.state).toBe('connected');
