@@ -14934,6 +14934,7 @@
       "credentialSwitchBusy": "Codex 方行於他差事，暫不能依此差事所擇之模型來源而易（須重啟共用之 Codex 後臺程序）。俟其畢，點「再試」即可。",
       "accountBoundaryPending": "Cindy 方易名籍之態，暫不能始此差事。稍候片刻，點「再試」；若屢見之，請重啟 Cindy。",
       "codexThreadStale": "Codex 鑑權之式已易，此差事不能續 —— 請新開差事，方生效。",
+      "codexSharedAuthLinkUnavailable": "本機之 Codex 已登入，而此差事不能讀其登入：指向其之連結建不出來（Windows 常權之下，通常建不了）。請確認此電腦之 {{appName}} 有權建立連結（Windows 上可以管理員之身執行一次，或開啟開發人員模式），而後點「再試」。亦可點「重登 ChatGPT」，使 Cindy 以自有之一份登入行此差事。",
       "codexResumeNotReady": "Codex 暫不能復此差事，請稍後再試",
       "claudeGatewayOpusPlanMismatch": "此番 Opus 請求實經 XD Gateway，非君之 Claude.ai 訂閱；該閘道路由拒此模型。可易為 Claude.ai 訂閱再試，或另擇模型。",
       "claudeSubscriptionOpusPlanMismatch": "今所連之 Claude Pro 方案不支援 Opus。請易為方案所支援之模型；若方升級方案，請於規制中重連 Anthropic，再試。",
