@@ -5371,7 +5371,8 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         attachments: [],
         onTurnComplete,
       });
-      return { previous, replacement, maker, localRunner, runTurn, onTurnComplete };
+      return { previous, replacement, maker, localRunner, runTurn, onTurnComplete,
+        setLive: (session: Session | undefined) => { live = session; } };
     }
 
     it('keeps a coded runtime failure diagnosable instead of collapsing it to "Error"', async () => {
@@ -5635,6 +5636,96 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       } finally {
         await localRunner.disposeAllSessions();
         vi.useRealTimers();
+      }
+    });
+
+    // #11381/4618311264: bounded Maker wait may reject before real close
+    // settles; the eventual exact old close must not erase a queued successor.
+    it('preserves queued input when old close finishes after cleanup pending', async () => {
+      const entered = deferred<void>();
+      const timeout = deferred<void>();
+      const noticeEntered = deferred<void>();
+      const noticeDone = deferred<void>();
+      const { previous, replacement, localRunner, runTurn } = createLivenessSetup({
+        onRebuild: async () => { entered.resolve(); await timeout.promise; throw new SessionCreationCleanupPendingError(); },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      mocks.feishuIm.sendText.mockImplementationOnce(async () => { noticeEntered.resolve(); await noticeDone.promise; });
+      try {
+        const first = runTurn();
+        await entered.promise;
+        await runTurn();
+        timeout.resolve();
+        await noticeEntered.promise;
+        emitMakerEvent({ type: 'session:closed', sessionId: SESSION_ID,
+          session: previous.session, reason: 'requested' } as MakerEvent);
+        noticeDone.resolve();
+        await first;
+        await waitForAssertion(() => expect(replacement.send).toHaveBeenCalledOnce());
+      } finally {
+        noticeDone.resolve();
+        await localRunner.disposeAllSessions();
+      }
+    });
+
+    // #11381/4618311281: a post-switch message must not adopt the obsolete
+    // replacement before the cancelled preparation has retired it.
+    it('waits for disposed preparation retirement before wiring a successor', async () => {
+      const entered = deferred<void>();
+      const release = deferred<void>();
+      const { previous, replacement, maker, localRunner, runTurn, setLive } = createLivenessSetup({
+        onRebuild: async () => { entered.resolve(); await release.promise; },
+      });
+      const successor = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
+      previous.hasStartedClosing.mockReturnValue(true);
+      const originalCreate = maker.createSession.getMockImplementation()!;
+      maker.createSession.mockImplementation(async () => {
+        if (maker.createSession.mock.calls.length <= 2) return originalCreate();
+        setLive(successor.session);
+        return successor.session;
+      });
+      mocks.peekSessionById.mockResolvedValue({ id: SESSION_ID, agentKind: 'claude-code',
+        workingDir: '/new-project', model: 'claude-opus-4-7', effort: 'xhigh', permissionMode: 'bypassPermissions',
+        fastMode: false, sdkSessionId: null, providerId: null });
+      try {
+        const first = runTurn();
+        await entered.promise;
+        await localRunner.disposeOneSession(SESSION_ID);
+        const second = runTurn();
+        // Drain this known promise chain without allowing the old rebuild to finish.
+        for (let i = 0; i < 30; i++) await Promise.resolve();
+        const createsBeforeRetirement = maker.createSession.mock.calls.length;
+        release.resolve();
+        await Promise.all([first, second]);
+        expect(createsBeforeRetirement).toBe(2);
+        expect(replacement.session.close).toHaveBeenCalledOnce();
+        expect(successor.session.close).not.toHaveBeenCalled();
+        expect(successor.send).toHaveBeenCalledOnce();
+        expect(maker.getSession()).toBe(successor.session);
+      } finally {
+        release.resolve();
+        await localRunner.disposeAllSessions();
+      }
+    });
+
+    it('does not retire a replacement explicitly adopted by a successor state', async () => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup({
+        onRebuild: async () => {
+          await localRunner.disposeOneSession(SESSION_ID);
+          localRunner.attachSessionOutput(replacement.session, 'ou_user');
+        },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        expect(replacement.session.close).not.toHaveBeenCalled();
+        expect(localRunner.getMakerSessionById(SESSION_ID)).toBe(replacement.session);
+        await runTurn();
+        expect(maker.getSession()).toBe(replacement.session);
+        expect(replacement.send).toHaveBeenCalledOnce();
+        expect(replacement.listenerCount()).toBe(1);
+      } finally {
+        await localRunner.disposeAllSessions();
       }
     });
 

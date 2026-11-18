@@ -786,22 +786,15 @@ export function createTurnRunner(
    *  the cache, both spawn a maker session, and the second clobbers the first
    *  in `sessionStates`. */
   const wiringInFlight = new Map<string, Promise<SessionState>>();
+  // New wiring must not adopt a replacement that a disposed preparation owns.
+  const runtimePreparations = new Map<string, Promise<void>>();
+  // Maker bounds its wait, not native teardown. Keep exact old-close ownership
+  // until the actual event, without retaining failed runtimes strongly.
+  const rebuildingRuntimeCloses = new WeakSet<MakerSession>();
   /** 接线前跟随切换期间, 切换重建会话要用的渠道 vendorOptions(见 vendorOptionsForSession)。 */
   const coldWiringVendorOptions = new Map<string, Record<string, unknown>>();
-  /**
-   * 本轮主动 close、预期会收到 close 事件的旧 Session。只有对象身份匹配（且原因在登记
-   * 范围内）才忽略；同一业务 sessionId 下的其它实例照常清缓存。
-   *
-   * `anyReason` 用于「按库重建运行时」：`maker.createSession()` 会重试旧实例的 close，而
-   * close 原因在第一次拆除时就定下了（unexpected / requested / runtime-refresh …），重建
-   * 时无法预先知道它。此时 state 必须活到重建结束，否则 `forgetClosedSession` 会把正在
-   * 派发的这一轮标成 aborted，消息落到没有观察者的新实例上，回复永远回不到渠道
-   * （PR review P1）。重建结束后仍按最新 DB 行复核任务是否已被关掉。
-   */
-  const expectedSessionCloses = new Map<string, {
-    expectedSession: MakerSession;
-    anyReason?: boolean;
-  }>();
+  /** Agent-switch close suppression is scoped to its guarded preparation. */
+  const expectedSessionCloses = new Map<string, { expectedSession: MakerSession }>();
   type MakerInstance = ReturnType<typeof getMaker>;
   let subscribedMaker: MakerInstance | null = null;
   let unsubscribeMakerEvents: (() => void) | null = null;
@@ -812,6 +805,7 @@ export function createTurnRunner(
     subscribedMaker = maker;
     unsubscribeMakerEvents = maker.on((event) => {
       if (event.type !== 'session:closed') return;
+      if (rebuildingRuntimeCloses.delete(event.session)) return;
       const state = sessionStates.get(event.sessionId);
       // A retired instance must not clear a replacement already wired to this task.
       if (
@@ -827,7 +821,7 @@ export function createTurnRunner(
       const suppression = expectedSessionCloses.get(event.sessionId);
       if (
         suppression?.expectedSession === event.session &&
-        (suppression.anyReason === true || event.reason === 'agent-switch')
+        event.reason === 'agent-switch'
       ) return;
       forgetClosedSession(event.sessionId, 'maker session closed');
     });
@@ -2225,6 +2219,20 @@ export function createTurnRunner(
     sessionId: string,
     userId: string,
   ): Promise<void> {
+    const preparation = prepareSessionRuntime(state, sessionId, userId);
+    runtimePreparations.set(sessionId, preparation);
+    try {
+      await preparation;
+    } finally {
+      if (runtimePreparations.get(sessionId) === preparation) runtimePreparations.delete(sessionId);
+    }
+  }
+
+  async function prepareSessionRuntime(
+    state: SessionState,
+    sessionId: string,
+    userId: string,
+  ): Promise<void> {
     if (!deps.acquirePendingAgentSwitch) return;
     const previous = state.makerSession;
     const maker = getMaker();
@@ -2258,29 +2266,25 @@ export function createTurnRunner(
       setSessionFastMode(sessionId, startOverride.fastMode ?? row.fastMode ?? false);
       // Maker retries the retired instance's close before publishing its replacement.
       // Keep this turn's observer alive across that exact instance's close event.
-      expectedSessionCloses.set(sessionId, { expectedSession: current ?? previous, anyReason: true });
-      try {
-        current = await maker.createSession({
-          id: sessionId,
-          agentKind,
-          workingDir: row.workingDir,
-          model: row.model,
-          effort: row.effort,
-          permissionMode: row.permissionMode,
-          fastMode: row.fastMode,
-          // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
-          providerId: row.providerId,
-          agentDeviceId: row.agentDeviceId ?? undefined,
-          remoteHostId: row.remoteHostId ?? undefined,
-          resumeSessionId: row.sdkSessionId ?? undefined,
-          ...startOverride,
-          vendorOptions: ownsChannelOutput(state)
-            ? adapter.buildVendorOptions(userId, state.scopeKey)
-            : undefined,
-        });
-      } finally {
-        expectedSessionCloses.delete(sessionId);
-      }
+      rebuildingRuntimeCloses.add(current ?? previous);
+      current = await maker.createSession({
+        id: sessionId,
+        agentKind,
+        workingDir: row.workingDir,
+        model: row.model,
+        effort: row.effort,
+        permissionMode: row.permissionMode,
+        fastMode: row.fastMode,
+        // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
+        providerId: row.providerId,
+        agentDeviceId: row.agentDeviceId ?? undefined,
+        remoteHostId: row.remoteHostId ?? undefined,
+        resumeSessionId: row.sdkSessionId ?? undefined,
+        ...startOverride,
+        vendorOptions: ownsChannelOutput(state)
+          ? adapter.buildVendorOptions(userId, state.scopeKey)
+          : undefined,
+      });
       // A user archive/delete during the await still cancels this message.
       const [latest] = await getDbClient().drizzle.select().from(sessionsTable)
         .where(eq(sessionsTable.id, sessionId)).limit(1);
@@ -2302,7 +2306,9 @@ export function createTurnRunner(
     // Disposal may finish during either await above. Do not install an observer
     // after its owner has cleaned up: it could observe a later wiring of this id.
     if (sessionStates.get(sessionId) !== state) {
-      if (state.disposalIntent === 'runtime') await retirePreparedRuntime(maker, current);
+      if (state.disposalIntent === 'runtime' && sessionStates.get(sessionId)?.makerSession !== current) {
+        await retirePreparedRuntime(maker, current);
+      }
       throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} detached while preparing its runtime`);
     }
     if (current === previous) return;
@@ -2462,6 +2468,15 @@ export function createTurnRunner(
         existing.preserveSessionConfig = true;
       }
       return existing;
+    }
+    const preparation = runtimePreparations.get(target.row.id);
+    if (preparation) {
+      // The old owner may have been disposed after reading pre-switch config.
+      // Let it retire its exact result before creating with the latest task row.
+      await preparation.catch(() => {});
+      const latest = await repo.peekSessionById(target.row.id);
+      if (!latest) throw createSessionUnavailableError('SESSION_CLOSED', `session ${target.row.id} unavailable after runtime preparation`);
+      return ensureSessionWired({ ...target, row: latest }, userId);
     }
     const inFlight = wiringInFlight.get(target.row.id);
     if (inFlight) return inFlight;
