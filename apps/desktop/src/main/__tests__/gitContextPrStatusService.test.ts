@@ -18,6 +18,7 @@ import {
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
 import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
 import { PrFollowWatch, prStatusSignature } from '../git-context/prFollowWatch';
+import { admitTaskAction, assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization';
 import { followedGithubPrs } from '../scheduler-host/webhook/github';
 import { cachedGithubPrHeads, refreshGithubPrEvents } from '../git-context/githubPrEvents';
 import type { GithubClient } from '@cindy/github-client';
@@ -831,7 +832,7 @@ describe('PR follow watch', () => {
     await look(20);
     expect(runNow).not.toHaveBeenCalled();
     await look(30, 'b2');
-    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }]]);
+    expect(runNow.mock.calls).toEqual([[expect.objectContaining({ id: 'follow-85' }), { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }]]);
     await look(40, 'c3');
     expect(runNow).toHaveBeenCalledTimes(1);
     inflight.mockReturnValue(1);
@@ -840,6 +841,31 @@ describe('PR follow watch', () => {
     inflight.mockReturnValue(0);
     await look(80_000, 'e5');
     expect(runNow).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit regression: a PR event delivered from an expired tool context used to pass
+  // its pre-check but fail the session send. Ordinary tests run without a caller.
+  it('dispatches the scheduled turn independently of the expired action that observed the PR', async () => {
+    const { watch, runNow } = setup();
+    runNow.mockImplementation(async () => {
+      await assertTaskActionCurrent();
+      return { runId: 'scheduled-turn' };
+    });
+    let current = true;
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'caller', tool: 'manage_session_prs', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {
+        if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await decision.run(async () => {
+      current = false;
+      await watch.notify('https://github.com/makecindy/cindy/pull/85');
+      await expect(assertTaskActionCurrent()).rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    });
+    expect(runNow).toHaveBeenCalledOnce();
+    await expect(runNow.mock.results[0]!.value).resolves.toEqual({ runId: 'scheduled-turn' });
   });
 
   // Review (Greptile P1 on #9022): run-now skips the scheduler's concurrency cap, so a burst of PR
@@ -890,7 +916,7 @@ describe('PR follow watch', () => {
     vi.useFakeTimers();
     let busy = true;
     const url = 'https://github.com/example/project/pull/85';
-    const runNow = vi.fn<(id: string) => Promise<null>>(async () => null);
+    const runNow = vi.fn(async (_schedule: { id: string }) => null);
     const watch = new PrFollowWatch({
       listActive: async () => ['first', 'busy', 'paused', 'explicit-app'].map(id => schedule(id, url, {
         status: id === 'paused' ? 'paused' : 'active',
@@ -901,10 +927,10 @@ describe('PR follow watch', () => {
     });
     try {
       await watch.notify(url);
-      expect(runNow.mock.calls.map(call => call[0])).toEqual(['first']);
+      expect(runNow.mock.calls.map(([task]) => task.id)).toEqual(['first']);
       busy = false;
       await vi.advanceTimersByTimeAsync(5000);
-      expect(runNow.mock.calls.map(call => call[0])).toEqual(['first', 'busy']);
+      expect(runNow.mock.calls.map(([task]) => task.id)).toEqual(['first', 'busy']);
       await vi.advanceTimersByTimeAsync(120_000);
       expect(runNow).toHaveBeenCalledTimes(2);
     } finally { vi.clearAllTimers(); vi.useRealTimers(); }

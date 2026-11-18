@@ -178,10 +178,10 @@ const prFollowWatch = new PrFollowWatch({
   listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
   inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
   hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
-  runNow: async (id, trigger) => {
+  runNow: async (expectedSchedule, trigger) => {
     const scheduler = getSchedulerIfInitialized();
     if (!scheduler) return null;
-    return scheduler.runNow(id, { trigger });
+    return scheduler.runNow(expectedSchedule.id, { trigger, expectedSchedule });
   },
   log,
 });

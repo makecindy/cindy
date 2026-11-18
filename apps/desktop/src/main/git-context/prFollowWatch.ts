@@ -20,6 +20,7 @@
 import type { PrStatusResult } from '@cindy/maker-shared';
 import { prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
 import type { Schedule, ScheduleRunTrigger } from '@cindy/maker-scheduler';
+import { runTaskActionRequest } from '../maker-ipc/taskActionAuthorization';
 
 import type { PrStatusQuery } from './prStatusService';
 
@@ -38,7 +39,7 @@ export interface PrFollowWatchDeps {
   autoRunAllowed(): boolean;
   /** The scheduler has a free concurrency slot right now. */
   hasCapacity(): boolean;
-  runNow(id: string, trigger: ScheduleRunTrigger): Promise<unknown>;
+  runNow(schedule: Schedule, trigger: ScheduleRunTrigger): Promise<unknown>;
   now?: () => number;
   log?: { info?: (msg: string, meta?: unknown) => void; warn?: (msg: string, meta?: unknown) => void };
 }
@@ -159,8 +160,10 @@ export class PrFollowWatch {
       this.pending.delete(schedule.id);
       this.lastTriggered.set(schedule.id, now);
       this.deps.log?.info?.('pr follow watch: status changed, running schedule now', { scheduleId: schedule.id, url });
-      void this.deps
-        .runNow(schedule.id, { kind: 'watch', source: PR_WATCH_SOURCE, detail: url })
+      // The existing schedule owns this run. A status refresh can originate in a
+      // tool call whose action grant has already expired by the time CI changes.
+      void runTaskActionRequest(() =>
+        this.deps.runNow(schedule, { kind: 'watch', source: PR_WATCH_SOURCE, detail: url }))
         .catch((error) => {
           this.deps.log?.warn?.('pr follow watch runNow failed', {
             scheduleId: schedule.id,
