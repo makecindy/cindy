@@ -329,18 +329,24 @@ describe('ProviderShareManagePage', () => {
     vi.stubGlobal('URL', DownloadURL);
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     try {
+      const capturedAt = '2026-10-16T08:00:00.000Z';
+      vi.setSystemTime(new Date(capturedAt));
       renderPage();
-      fireEvent.click(await screen.findByRole('button', { name: 'providerShare.manage.exportRoster' }));
+      const exportButton = await screen.findByRole('button', { name: 'providerShare.manage.exportRoster' });
+      vi.setSystemTime(new Date('2026-10-16T08:01:00.000Z'));
+      fireEvent.click(exportButton);
       expect(click).toHaveBeenCalledOnce();
-      const csv = await new Promise<string>((resolve, reject) => {
+      const bytes = await new Promise<Uint8Array>((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
+        reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
         reader.onerror = reject;
-        reader.readAsText(contents!);
+        reader.readAsArrayBuffer(contents!);
       });
-      expect(csv).toContain('"share-1","mem-1","\'=guest","A,""B""\nC","active"');
-      expect(csv).not.toMatch(/other-provider-member|Wang Yi|4827/);
+      const expected = '\uFEFFshare_id,member_id,display_name,note,status,captured_at\r\n'
+        + `"share-1","mem-1","'=guest","A,""B""\nC","active","${capturedAt}"\r\n`;
+      expect(Array.from(bytes)).toEqual(Array.from(new TextEncoder().encode(expected)));
     } finally {
+      vi.useRealTimers();
       click.mockRestore();
       vi.unstubAllGlobals();
     }
