@@ -10,6 +10,8 @@ export interface ChildRunInput {
 export interface FireContext {
   runId: string;
   firedAt: number;
+  /** True only for a scheduled clock tick, not an explicit Run now. */
+  timed?: boolean;
   /** Host-owned validity check captured when this fire starts. */
   assertFireContext?: () => void;
   /** Continue the interrupted conversation, without replaying the initial prompt or precheck. */

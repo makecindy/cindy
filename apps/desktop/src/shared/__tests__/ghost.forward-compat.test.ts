@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest, ghostPermissionItems } from '../ghost.js';
+import { validateGhostManifest, validateInstalledGhostManifest, ghostPermissionItems } from '../ghost.js';
 
 const base = {
   schemaVersion: 3, minCindyVersion: '0.1.0', id: 'future-declarations',
@@ -8,6 +8,14 @@ const base = {
 const extension = { mode: 'future', options: [1, null, { enabled: true }] };
 
 describe('declaration forward compatibility is not Host authorization', () => {
+  // Unit: loading a previously installed v3 manifest preserves extension data and its digest input.
+  it('retains opaque and mixed-case GitHub release data in installed manifests', () => {
+    expect(validateInstalledGhostManifest({ ...base, githubRelease: extension }))
+      .toMatchObject({ ok: true, manifest: { githubRelease: extension } });
+    expect(validateInstalledGhostManifest({ ...base, settingsHtml: 'settings.html', githubRelease: 'Example/Plugin' }))
+      .toMatchObject({ ok: true, manifest: { githubRelease: 'Example/Plugin' } });
+  });
+
   it.each([
     ['mainView', { html: 'view.html' }],
     ['panel', { html: 'panel.html' }],

@@ -122,6 +122,7 @@ function makeHarness(opts?: {
   logger?: ConstructorParameters<typeof DeviceLinkClient>[0]['logger'];
   peerFailurePolicy?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerFailurePolicy'];
   reliablePeerTransport?: ConstructorParameters<typeof DeviceLinkClient>[0]['reliablePeerTransport'];
+  backoffOfflineLinkOpen?: boolean;
   peerResetReadRetry?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerResetReadRetry'];
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
   frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
@@ -147,6 +148,7 @@ function makeHarness(opts?: {
     peerFailurePolicy: opts?.peerFailurePolicy,
     reliablePeerTransport: opts?.reliablePeerTransport,
     peerResetReadRetry: opts?.peerResetReadRetry,
+    backoffOfflineLinkOpen: opts?.backoffOfflineLinkOpen,
     invokeMetrics: opts?.invokeMetrics,
     frameAuth: opts?.frameAuth,
     transportAllowed: opts?.transportAllowed,
@@ -6487,6 +6489,29 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  // Unit regression: a foreground phone repeatedly opened the same offline host while
+  // the relay served other computers. Existing invoke tests skip the handshake entry.
+  it('backs off mobile handshakes for just the offline peer until fresh online evidence', async () => {
+    const h = makeHarness({ backoffOfflineLinkOpen: true });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const open = (dst: string) => h.client.openLink(dst, {});
+    const first = open('dev-b');
+    const frame = h.current().sent.at(-1)!;
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: frame.id,
+      payload: { code: 'DEVICE_OFFLINE', dst: 'dev-b', message: 'offline' } });
+    await expect(first).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    await expect(open('dev-b')).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    const other = open('dev-c').catch(() => undefined);
+    h.client.noteRemoteControlEnabled('dev-b');
+    const recovered = open('dev-b').catch(() => undefined);
+    expect(h.current().sent.filter(e => e.kind === 'link-open').map(e => e.dst))
+      .toEqual(['dev-b', 'dev-c', 'dev-b']);
+    h.client.stop();
+    await Promise.all([other, recovered]);
+  });
+
   it('可靠 link 收到 DEVICE_OFFLINE 后清空 pending，下次握手用 baseSeq 跨过', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();
@@ -6709,17 +6734,25 @@ describe('DeviceLinkClient', () => {
   });
 
   it('relay 以 1012 service restart 关闭时自动重连', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9999);
     const h = makeHarness();
-    h.client.start();
-    await tick();
-    h.current().ack();
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
 
-    h.current().emit('close', 1012, 'service restart');
-    expect(h.client.getStatus()).toBe('connecting');
-    await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
-    h.current().ack();
-    expect(h.client.getStatus()).toBe('online');
-    h.client.stop();
+      h.current().emit('close', 1012, 'service restart');
+      expect(h.client.getStatus()).toBe('connecting');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.sockets).toHaveLength(2);
+      h.current().ack();
+      expect(h.client.getStatus()).toBe('online');
+    } finally {
+      h.client.stop();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('短暂上线后被 relay 顶掉时不立刻清零退避,避免重复连接风暴', async () => {
@@ -8675,7 +8708,210 @@ describe('computeReconnectDelayMs(relay 拥塞冷却下限)', () => {
   });
 });
 
+describe('DeviceLinkClient relay restart recovery', () => {
+  it('spreads a service restart reconnect and paces the shared socket while allowing link setup', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const info = vi.fn();
+    const h = makeHarness({ timing: { pingIntervalMs: 600_000 },
+      logger: { info, warn: vi.fn(), debug: vi.fn(), error: vi.fn() } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const off = h.client.onStatusChange(status => {
+        if (status === 'connecting') h.client.connectNow('network-change');
+      });
+      h.current().emit('close', 1012, 'service restart');
+      off();
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(h.sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.sockets).toHaveLength(2);
+      h.current().ack();
+
+      const firstLink = establishInboundReliableLink(h, 'stream-after-restart');
+      await vi.advanceTimersByTimeAsync(0);
+      await firstLink;
+      const socket = h.current();
+      socket.sent.length = 0;
+      for (let i = 0; i < 10; i++) h.client.sendPush('dev-b', 'maker:event', { part: i });
+      expect(socket.sent).toHaveLength(8);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(socket.sent).toHaveLength(10);
+      // The first controller stays silent. Link setup and an interactive reply
+      // for the other controller still use the same live WebSocket.
+      const secondLink = establishInboundReliableLink(h, 'second-stream-after-restart', 1, 'dev-c');
+      await vi.advanceTimersByTimeAsync(0);
+      await secondLink;
+      expect(socket.sent).toContainEqual(expect.objectContaining({ kind: 'link-accept', dst: 'dev-c' }));
+      h.client.sendInvokeResult('dev-c', 'second-controller', { ok: true, result: 'ready' });
+      expect(socket.sent).toContainEqual(expect.objectContaining({ kind: 'invoke-result', dst: 'dev-c', id: 'second-controller' }));
+      expect(h.client.getStatus()).toBe('online');
+
+      socket.bufferedAmount = 700 * 1024;
+      const queued = h.client.invoke('dev-c', { channel: 'maker:send', args: ['PRIVATE_REQUEST'] }, 100);
+      const expired = expect(queued).rejects.toMatchObject({ code: 'BACKPRESSURE', inFlight: false });
+      await vi.advanceTimersByTimeAsync(100);
+      await expired;
+      socket.bufferedAmount = 0;
+      await vi.advanceTimersByTimeAsync(2_000);
+      h.client.stop();
+      const traffic = info.mock.calls.map(([line]) => line)
+        .find(line => line.startsWith('device-link diagnostic ') && line.includes('"stage":"relay-traffic"'));
+      expect(traffic).not.toContain('PRIVATE_REQUEST');
+      const stats = JSON.parse(traffic.slice('device-link diagnostic '.length)).channels;
+      expect(stats['invoke:maker:send'].beforeWriteTimeouts).toBe(1);
+      expect(stats['push:maker:event'].firstFrames).toBe(10);
+      expect(stats['push:maker:event'].replayFrames).toBeGreaterThan(0);
+    } finally {
+      h.client.stop();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps ordinary backoff when 1012 means route recovery', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const h = makeHarness();
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      h.current().emit('close', 1012, 'route ownership lost, reconnect');
+      await vi.advanceTimersByTimeAsync(850);
+      expect(h.sockets).toHaveLength(2);
+    } finally {
+      h.client.stop();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
+  // Unit regression: production send/ACK entry points must keep the shared relay
+  // budget across the default 15-minute boundary. Existing pacing tests stop
+  // within seconds; one 24-result burst shortly before that boundary suffices.
+  it.each([false, true])('keeps pacing after 15 minutes with a recent burst (drained=%s)', async drained => {
+    vi.useFakeTimers();
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 3_600_000, requestTimeoutMs: 5_000,
+      congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50); h.current().ack();
+      await vi.advanceTimersByTimeAsync(15 * 60_000 - 1_000);
+      const opened = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await opened;
+      const other = establishInboundReliableLink(h, 'stream-b', 1, 'b');
+      await vi.advanceTimersByTimeAsync(0); await other;
+      const socket = h.current();
+      const reliable = () => socket.sent.filter(env => parseTransportPayload(env.payload));
+      const ackAll = (peer = 'a') => {
+        const last = reliable().filter(env => env.dst === peer).at(-1);
+        if (!last) return;
+        const { streamId, seq } = parseTransportPayload(last.payload)!.meta;
+        socket.push({ v: 1, kind: 'push', src: peer, payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId, ackSeq: seq },
+        } });
+      };
+      socket.sent.length = 0;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('a', `burst-${i}`, { ok: true, result: i });
+      expect(reliable()).toHaveLength(8);
+      if (drained) {
+        for (let i = 0; i < 3; i++) { ackAll(); await vi.advanceTimersByTimeAsync(250); }
+        ackAll();
+        expect(h.client.getReliableSendQueueDepth('a')).toBe(0);
+        await vi.advanceTimersByTimeAsync(250);
+      } else {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      // Without the fix this burst bypasses the budget as soon as the timer fires.
+      const before = reliable().length;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('b', `after-${i}`, { ok: true, result: i });
+      expect(reliable().length - before).toBeLessThanOrEqual(8);
+      if (!drained) {
+        // a stays silent while b completes a foreground operation on this same socket.
+        const foreground = h.client.invoke('b', { channel: 'local-db:sessions:list', args: [] });
+        await vi.advanceTimersByTimeAsync(0);
+        for (let i = 0; i < 8; i++) { ackAll('b'); await vi.advanceTimersByTimeAsync(250); }
+        const command = socket.sent.find(env => env.kind === 'invoke' && env.dst === 'b')!;
+        expect(command).toBeDefined();
+        socket.push({ v: 1, kind: 'invoke-result', src: 'b', id: command.id, payload: { ok: true, result: [] } });
+        await expect(foreground).resolves.toMatchObject({ ok: true, result: [] });
+        expect(h.client.getReliableSendQueueDepth('a')).toBeGreaterThan(0);
+      }
+      // Once both queues drain and the quiet window passes, normal throughput
+      // returns (the ordinary receive window admits 16 frames immediately).
+      for (let i = 0; i < 16; i++) { ackAll(); ackAll('b'); await vi.advanceTimersByTimeAsync(250); }
+      ackAll(); ackAll('b');
+      expect(h.client.getReliableSendQueueDepth('a') + h.client.getReliableSendQueueDepth('b')).toBe(0);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      const quietBefore = reliable().length;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('b', `quiet-${i}`, { ok: true, result: i });
+      expect(reliable().length - quietBefore).toBe(16);
+      expect(h.client.getStatus()).toBe('online');
+      expect(socket.closed).toBeNull();
+    } finally { h.client.stop(); clock.mockRestore(); vi.useRealTimers(); }
+  });
+
+  // Same unit regression, but socket pressure can outlive the reliable queue.
+  it('keeps the congestion budget while the socket is still above its low watermark', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 3_600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50); h.current().ack();
+      const socket = h.current();
+      socket.bufferedAmount = 256 * 1024;
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      const opened = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await opened;
+      socket.sent.length = 0;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('a', `buffered-${i}`, { ok: true, result: i });
+      expect(socket.sent.filter(env => parseTransportPayload(env.payload))).toHaveLength(8);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // Unit, shared-link fault radius: a parked peer's retained result is not
+  // current relay demand. Otherwise one sleeping controller pins every other
+  // controller to the congestion budget forever after the first 1013.
+  it('restores normal throughput while a disconnected peer retains its result for later recovery', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 3_600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50); h.current().ack();
+      const a = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await a;
+      const socket = h.current();
+      h.client.sendInvokeResult('a', 'retained-result', { ok: true, result: 'keep' });
+      socket.push({ v: 1, kind: 'link-close', src: 'a', payload: { reason: 'transport-timeout' } });
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      const b = establishInboundReliableLink(h, 'stream-b', 1, 'b');
+      await vi.advanceTimersByTimeAsync(0); await b;
+      socket.sent.length = 0;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('b', `normal-${i}`, { ok: true, result: i });
+      expect(socket.sent.filter(env => env.dst === 'b' && parseTransportPayload(env.payload))).toHaveLength(16);
+      const resumed = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await resumed;
+      expect(socket.sent.filter(env => env.dst === 'a' && env.id === 'retained-result')).toHaveLength(1);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('excludes idle and inbound-closed peers while admitting a new active target', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: {

@@ -42,6 +42,14 @@ import {
 } from '../mapAuxiliaryRefsToVoiceRefiners.js';
 
 describe('mapAuxiliaryRefsToVoiceRefiners', () => {
+  // Unit regression: retained remote pins used to resolve to the local voice account.
+  // Existing cases only cover local pins; even a known local model must not qualify.
+  it('rejects remote voice choices and retained profiles with a matching local model', () => {
+    const pin = 'remote-cat:other:cat:openai:codex:gpt-5.4-mini';
+    expect(mapAuxiliaryRefsToVoiceRefiners([pin])).toEqual([]);
+    expect(isActiveCatalogVoiceRefinerProfile({ id: pin })).toBe(false);
+  });
+
   it('maps profile keys 1:1 and skips Claude Messages catalog pins', () => {
     expect(mapAuxiliaryRefToVoiceRefiner('codex-gpt-5.4-mini')).toBe('codex-gpt-5.4-mini');
     expect(mapAuxiliaryRefToVoiceRefiner('litellm-kimi-k2.6')).toBe('litellm-kimi-k2.6');

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "dfd14ed1-f75b-4e11-89f9-6fdd0815161f",
+  "id": "8abc7fde-7114-45f2-9900-fc3f9eece661",
   "prevId": "71866ea6-68eb-4e46-b7ea-628920b387f6",
   "tables": {
     "account_usage_snapshots": {
@@ -3989,13 +3989,6 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
-        },
-        "latest_report": {
-          "name": "latest_report",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         }
       },
       "indexes": {
@@ -5231,6 +5224,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
+        },
+        "pr_trigger": {
+          "name": "pr_trigger",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "pre_run_hook_command": {
           "name": "pre_run_hook_command",

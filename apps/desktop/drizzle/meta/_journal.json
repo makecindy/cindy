@@ -1069,8 +1069,15 @@
     {
       "idx": 152,
       "version": "6",
-      "when": 1794318265219,
-      "tag": "0152_classy_the_renegades",
+      "when": 1794990451308,
+      "tag": "0152_schedule_pr_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "6",
+      "when": 1795017600190,
+      "tag": "0153_classy_the_renegades",
       "breakpoints": true
     }
   ]

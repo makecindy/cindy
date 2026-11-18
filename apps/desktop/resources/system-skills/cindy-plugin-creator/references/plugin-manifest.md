@@ -59,6 +59,7 @@
   // left / right / top / bottom)/ "window"(弹成独立窗口);只是左侧导航入口的默认打开方式,
   // 用户拖过 / 弹过后以用户的放置为准。可选 "multiple": true 允许同一视图同时开在多处。
   "settingsHtml": "settings.html",  // 可选:设置页「自定义设置区」自绘界面(见 §4.8;声明了用户填的凭证时仍必填,用于长期管理/替换/清除;调用前缺失时主机也会在统一 Setup 卡内联收单,见 §4.7)
+  "githubRelease": "example/plugin", // Optional desktop update source for a local install with settingsHtml.
   "showTaskPreferences": true,     // 可选:是否显示宿主「模型与任务」卡,缺省/true 显示,false 隐藏;见 §4.8
   "imEntrance": true,              // 可选:IM 入口插件(需同时声明 agent.tasks 与 agent.targets)。只影响展示:「设置 → IM 机器人」列出本插件,并在没开官方机器人时也显示「项目与模型」;不新增权限。见 plugin-agent-tasks.md「IM 共用项目与模型」
   "settingsHeight": 360             // 可选:固定高度 px(160–800);缺省 = 随内容自适应(矮内容真收矮,高至 800);内容会动态增减时才声明,避免抖动
@@ -432,3 +433,9 @@ UI 保留。检查、字段绑定、保存状态和恢复都在主机
 调用协议见 `plugin-runtime.md` 的「决策与重排模型」。使用此能力时通过
 `minCindyVersion` 声明已验证的最低版本；运行时仍须处理旧版不支持响应，不能把权限拒绝
 或账号失效当成不支持而绕过。
+
+### GitHub Release updates for locally installed plugins
+
+With `settingsHtml` present, set `githubRelease` to the GitHub.com repository in owner/repository form. Publish a GitHub Release tagged `v<version>` with an attached `<plugin-id>-<version>.cindy` asset. The package manifest must retain the plugin ID and repository and declare the same version as the tag. A draft does not appear. A published pre-release is labeled in settings.
+
+Users first import a package declaring the source. They then check and install updates from the host section of the plugin settings. Private repositories require GitHub authorization with read access to repository contents. The host checks GitHub?s asset digest and uses the existing plugin update confirmation flow. Existing installed packages without this field continue to work.

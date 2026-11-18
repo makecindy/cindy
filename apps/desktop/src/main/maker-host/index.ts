@@ -1,4 +1,4 @@
-import { createPiVisionUsageRecorder } from '../vision-bridge/piVisionUsage.js';
+import { applyProjectDirectoriesForTurn } from '../projectDirectoryRuntime.js';
 import { createOneShotUsageRecorder } from '../usage/auxiliaryUsage.js';
 import { attachmentPreservation, attachmentStorageRoots } from './oversized-attachment-recovery.js';
 import { createCodexLocalModelSink } from './codexLocalModelSink.js';
@@ -86,7 +86,6 @@ import {
 } from './codex-model-backfill.js';
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
 import { LspServerPool } from '@cindy/mcps';
-import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { listCustomMcpRuntimeGenerations } from './custom-mcp-store.desktop.js';
 
 import { createMessage } from '../localDb/ipc/messages.js';
@@ -190,17 +189,8 @@ import {
   writeCodexHistoryHasProductPrompt,
 } from './session-storage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
-import { guardedOutboundFetch, outboundFetch } from './outbound-fetch.desktop.js';
-import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
-import { createVisionBridge } from '../vision-bridge/vision-bridge.js';
-import {
-  getVisionBridgeController,
-  setVisionBridgeController,
-} from '../vision-bridge/vision-bridge-controller.js';
-import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
-import * as blobStore from '../cindy-media/blobStore.desktop.js';
-import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { captureCodexLocalAuthPolicy, resolveConnectedDefaultProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { guardedOutboundFetch } from './outbound-fetch.desktop.js';
+import { captureCodexLocalAuthPolicy, resolveConnectedDefaultProviderIdForModel } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -467,9 +457,6 @@ let botRuntimeResourcePreflight:
   | ((opts: MakerSessionCreateOpts) => Promise<BotProfileRuntimeSnapshot | null>)
   | null = null;
 let _registerPiAgent: (() => boolean) | null = null;
-/** 视觉桥实例（层 A/B/C 共用），在 resetMaker 时释放缓存。 */
-let _visionBridgeInstance: ReturnType<typeof createVisionBridge> | null = null;
-
 let providerAccessRuntimeRefreshListener: (() => void) | null = null;
 let modelContextRuntimeRefreshListener: (() => void) | null = null;
 
@@ -973,60 +960,6 @@ export function getPluginRegistry() {
  * MCP 由 @cindy/mcps 包提供 server/tool 定义，desktop main 在这里注入 token、
  * OAuth、缓存、bot 发送等宿主能力，再交给 maker-core 的 ClaudeCodeAgent。
  */
-
-/**
- * 视觉桥用户提示广播（层 B + 层 D 共用）。
- * renderer 仅信任 `source: 'vision-bridge'`，避免普通错误事件误触发视觉桥提示。
- */
-const VISION_BRIDGE_DEDUP_MS = 2_000;
-const _visionBridgeDedup = new Map<string, number>();
-
-function broadcastVisionBridgeEvent(
-  sessionId: string,
-  reason: 'vision-bridge-recognizing' | 'vision-bridge-fallback' | 'vision-bridge-unavailable',
-  extra: { imageCount?: number } = {},
-): void {
-  if (reason === 'vision-bridge-recognizing') {
-    for (const key of _visionBridgeDedup.keys()) {
-      if (key.startsWith(`${sessionId}|`)) _visionBridgeDedup.delete(key);
-    }
-  } else {
-    const key = `${sessionId}|${reason}`;
-    const now = Date.now();
-    const last = _visionBridgeDedup.get(key);
-    if (last !== undefined && now - last < VISION_BRIDGE_DEDUP_MS) return;
-    _visionBridgeDedup.set(key, now);
-  }
-
-  const message = reason === 'vision-bridge-recognizing'
-    ? '正在识别图片中…'
-    : reason === 'vision-bridge-fallback'
-      ? '视觉桥使用了备用视觉后端（主后端不可用）'
-      : '视觉桥当前不可用，图片无法转成文字描述，已以文字提示代替';
-  const payload = {
-    sessionId,
-    event: {
-      type: 'error' as const,
-      data: {
-        message,
-        isTerminal: false,
-        reason,
-        ...(extra.imageCount !== undefined ? { imageCount: extra.imageCount } : {}),
-      },
-      source: 'vision-bridge',
-    },
-  };
-  for (const win of BrowserWindow.getAllWindows()) {
-    try {
-      if (!win.isDestroyed()) win.webContents.send(MAKER_PUSH.EVENT, payload);
-    } catch (error) {
-      desktopMakerLogger.child('vision-bridge').warn('vision bridge event broadcast failed', {
-        reason,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-}
 
 /**
  * Client mode: another process (cindy-host) owns the runtime. Every maker access
@@ -2315,22 +2248,6 @@ export function getMaker(): Maker {
         await settleLocalPiPackageRuntimeSnapshot(maker, snapshot, callerSessionId, publishOutcome, createRetirementFailureEvent);
       },
       getGhostRosterPrompt,
-      // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
-      createPiVisionUsageRecorder,
-      resolvePiVisionBridgeEnv: (model, sessionId) =>
-        buildPiVisionBridgeEnv(
-          {
-            getProviderById: (providerId) =>
-              getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
-            readCustomProviderKey,
-            readGatewayKey: readClaudeApiKey,
-            resolveBackendRoute: (providerId, modelId) =>
-              resolveVisionBackendRoute(providerId, modelId, effectiveXdGatewayBaseUrl() || null),
-            fetch: outboundFetch,
-          },
-          model,
-          sessionId,
-        ),
       // 远端 Pi:给 session 标 remoteHostId 的, PiAgent 通过这个钩子拿远端
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
       // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
@@ -2510,35 +2427,6 @@ export function getMaker(): Maker {
     const piAgent = buildPiAgentForDesktop();
     if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent);
 
-    setVisionGatewayKeyReader(readClaudeApiKey);
-    _visionBridgeInstance = createVisionBridge({
-      getProviderById: (providerId) =>
-        getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
-      resolveTargetModel: (modelId, sessionId) => {
-        const session = _maker?.getSession(sessionId);
-        const providerId = getSessionProvider(sessionId);
-        if (!session || !providerId) return null;
-        const provider = getActiveCatalog().providers.find((entry) => entry.id === providerId);
-        return provider?.models[session.agentKind]?.find((model) => model.id === modelId) ?? null;
-      },
-      readCustomProviderKey,
-      readGatewayKey: readClaudeApiKey,
-      resolveGatewayEndpoint: () => effectiveXdGatewayBaseUrl() || null,
-      resolveBackendRoute: (providerId, modelId) =>
-        resolveVisionBackendRoute(providerId, modelId, effectiveXdGatewayBaseUrl() || null),
-      fetch: outboundFetch,
-      logger: desktopMakerLogger.child('vision-bridge'),
-      onStart: (sessionId, imageCount) => {
-        broadcastVisionBridgeEvent(sessionId, 'vision-bridge-recognizing', { imageCount });
-      },
-      onNote: (_note, sessionId, kind) => {
-        broadcastVisionBridgeEvent(
-          sessionId,
-          kind === 'fallback' ? 'vision-bridge-fallback' : 'vision-bridge-unavailable',
-        );
-      },
-    });
-
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
       getUserName: () => getAuthState().user?.name,
       listSkills: async ({ agentKind, workingDir, remoteHostId }) => {
@@ -2674,11 +2562,11 @@ export function getMaker(): Maker {
         logger: desktopMakerLogger,
       }),
       makerMemory: makerMemoryManager,
-      visionBridge: _visionBridgeInstance.hook,
       toolLoopReviewer: reviewToolLoop,
       // Desktop-specific session 生命周期副作用钩子。maker-core 不知道文件系统细节，
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
+        beforeTurn: applyProjectDirectoriesForTurn,
         prepareStartOptions: async (sessionId, opts) => {
           pendingBotRuntimeSnapshots.delete(sessionId);
           // Agent 在另一台电脑上运行的任务：所有入口(界面、定时任务、IM、协同等)恢复时都以任务
@@ -2760,7 +2648,7 @@ export function getMaker(): Maker {
               workingDir: createOpts.workingDir,
             });
             skillLinksChanged = result.changed;
-            for (const warning of result.warnings) {
+            for (const warning of result.warningsToReport) {
               desktopMakerLogger.warn('shared project skill link warning', {
                 workingDir: createOpts.workingDir,
                 warning,
@@ -2829,7 +2717,7 @@ export function getMaker(): Maker {
           // SSH remote 的 workingDir 属于远端文件系统，本机不能为它创建兼容链接。
           if (remoteHostId || !workingDir) return;
           const result = await prepareSharedProjectSkillLinks({ workingDir });
-          for (const warning of result.warnings) {
+          for (const warning of result.warningsToReport) {
             desktopMakerLogger.warn('shared project skill link warning', {
               workingDir,
               warning,
@@ -2968,10 +2856,6 @@ export function getMaker(): Maker {
       }
       return true;
     };
-    setVisionBridgeController({
-      shouldBridge: _visionBridgeInstance.isTargetModel,
-      describeImage: _visionBridgeInstance.describeImage,
-    });
     // 存量已登录用户补拉:maker 首次就绪后,若 Codex 已登录但当前无 codex 模型
     // (从没跑过会话、models_cache 未生成),fire-and-forget 触发一次 live model/list。
     // 不阻塞 getMaker 返回 / 启动(类比 refreshAnthropicModelsFromHttp 的后台刷新)。
@@ -3190,9 +3074,6 @@ export function resetMaker(): void {
   // Anthropic 清单探测同样捕获了旧 maker:注销后,旧实例的在途结果也不再生效。
   setAnthropicModelProbe(null);
   _initialCustomMcpRefresh = undefined;
-  setVisionBridgeController(null);
-  _visionBridgeInstance?.dispose();
-  _visionBridgeInstance = null;
   resetPluginRegistry();
   resetCustomMcpRegistry();
   // 轮 27 MEDIUM-2:resetMaker 是 account 边界收口 —— PI bridge 必须一并

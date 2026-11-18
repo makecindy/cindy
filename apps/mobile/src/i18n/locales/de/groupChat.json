@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} konnte nicht antworten: Das aktuelle Modell unterstützt keine Bilder.",
         "advice": "Wähle ein Modell mit Bildunterstützung.",
-        "details": "Wähle ein Modell mit Bildunterstützung oder aktiviere und konfiguriere Vision Bridge unter Einstellungen → Personalisierung. Sende deine Nachricht dann erneut."
+        "details": "Wähle ein Modell mit Bildunterstützung."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} konnte nicht antworten: Kein Modell verfügbar.",

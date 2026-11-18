@@ -45,6 +45,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { cancelActiveSortable } from '@/components/sidebar/SortableList';
 import type { TaskBotIdentity } from '@/features/bots/botFollowScopes';
 import { createLogger } from '@/lib/logger';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
@@ -293,19 +294,28 @@ export function useSidebarFilter(
     loadProjectOrder(),
   );
   const [pinnedSortBy, setPinnedSortByState] = useState(loadPinnedSortBy);
-  const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
+  const pinnedSortByRef = useRef(pinnedSortBy);
+  const applyPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    if (next === pinnedSortByRef.current) return;
+    pinnedSortByRef.current = next;
+    // Sortable may have moved a card into another column. Restore its DOM
+    // before React reconciles the newly sorted entries against their parents.
+    cancelActiveSortable('[data-sortable-scope="pinned"]');
     setPinnedSortByState(next);
-    persistPinnedSortBy(next);
   }, []);
+  const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    applyPinnedSortBy(next);
+    persistPinnedSortBy(next);
+  }, [applyPinnedSortBy]);
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key === PINNED_SORT_BY_KEY || event.key === null) {
-        setPinnedSortByState(loadPinnedSortBy());
+        applyPinnedSortBy(loadPinnedSortBy());
       }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, []);
+  }, [applyPinnedSortBy]);
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
     loadManualProjectOrder(ownerId),
   );
@@ -621,8 +631,10 @@ export function useSidebarFilter(
   );
 
   const setManualPinnedOrder = useCallback(
-    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) =>
-      updatePinnedOrder(
+    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) => {
+      // 显示排序不能写回手动顺序，也忽略切换模式后迟到的拖拽回调。
+      if (pinnedSortByRef.current !== 'manual') return Promise.resolve();
+      return updatePinnedOrder(
         () =>
           normalizeManualPinnedOrder(order, activeEntryIds, (entryId) =>
             sidebarPinnedEntryComparisonKey(entryId, window.electronAPI.platform),
@@ -632,7 +644,8 @@ export function useSidebarFilter(
           baseOrder: Array.from(baseOrder),
           order: nextOrder,
         }),
-      ),
+      );
+    },
     [updatePinnedOrder],
   );
 

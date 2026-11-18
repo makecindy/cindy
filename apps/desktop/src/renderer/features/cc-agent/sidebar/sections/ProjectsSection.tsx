@@ -254,11 +254,8 @@ export interface ProjectsSectionProps {
   onRemoveFromSidebar: (project: ProjectNodeData) => void;
   onCollapseAll: () => void;
   onExpandAll: () => void;
-  /**
-   * 段头新建项目：选择一个新项目目录后进入 transient draft route。
-   * 2026-08-12 起段头按钮暂时隐藏(见下方段头注释),prop 保留以便恢复入口。
-   */
-  onCreateProject?: () => void;
+  /** 在设备行指定的电脑上打开新建项目表单；null 表示本机。 */
+  onCreateProject?: (deviceTarget: DialogueDeviceTarget | null) => void;
   /** delayed-create:在该 project 的 workingDir 下进 transient draft route。
    *  父层 wrapper 会处理"预填 workingDir 到 newMakerDraft store + navigate('/cc-agent/new')"。
    *  vendor 由用户在 NewMakerDraftRoute 内的 VendorSegmentedSwitcher 决定(读 draft.vendor)。 */
@@ -326,6 +323,7 @@ export function ProjectsSection({
   onRemoveFromSidebar,
   onCollapseAll,
   onExpandAll,
+  onCreateProject,
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
@@ -1240,7 +1238,18 @@ export function ProjectsSection({
                 return (
                   <div key={key} className="flex flex-col">
                     {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
-                    <DeviceSectionHeader deviceId={section.deviceId} name={name}>
+                    <DeviceSectionHeader
+                      deviceId={section.deviceId}
+                      name={name}
+                      createProjectDisabled={!online}
+                      onCreateProject={
+                        onCreateProject
+                          ? () => onCreateProject(
+                              section.deviceId ? { deviceId: section.deviceId, deviceName: name } : null,
+                            )
+                          : undefined
+                      }
+                    >
                       <button
                         type="button"
                         onClick={() => toggleDeviceSection(key)}

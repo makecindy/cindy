@@ -1,3 +1,5 @@
+import { useRemoteProjectAliases as useProjectInfoSnapshots } from '@/session/remoteProjectAliases';
+import { ProjectSettingsSheet } from '@/session/ProjectSettingsSheet';
 import { ProjectPickerIcon } from '@/session/ProjectPickerIcon';
 import { playHaptic } from '@/platform/haptics';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
@@ -237,6 +239,7 @@ import {
   filterSlashCommands,
   insertAtResource,
   insertSlashCommand,
+  composerSlashInvocationName,
   mergeSlashCommands,
 } from '@/session/composerPalette';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -598,6 +601,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const maker = useMobileMakerTransport(selectedDeviceId);
   const sessions = useRemoteSessions();
   const projectAliases = useRemoteProjectAliases([selectedDeviceId]);
+  const projectInfo = useProjectInfoSnapshots().get(selectedDeviceId);
   const recentWorkspaces = useMemo(
     () => buildRecentWorkspaceOptions(
       sessions.filter((session) => session.deviceLinkDeviceId === selectedDeviceId),
@@ -722,6 +726,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 被控端落目标消息并自动开跑第一轮,成功后跳转会话页。
   const [goalBusy, setGoalBusy] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const createProjectPending = useRef(false);
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
   const workspacePickerHostRef = useRef<ViewInstance>(null);
   const workspacePickerAnchorRef = useRef<ViewInstance>(null);
@@ -3712,11 +3718,18 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     pendingGoalSkillRef.current = command.kind === 'agent-skill' ? command.name : null;
     const next = insertSlashCommand(current, detectComposerTrigger(current), command);
     if (next === current) return;
-    setFirstMessageDraft(next);
+    patchDraft({
+      firstMessage: next,
+      selectedSkill: command.kind === 'agent-skill' ? {
+        name: command.name, invocation: composerSlashInvocationName(command),
+        context: buildComposerPaletteCacheKey(selectedDeviceId, draft.agentKind,
+          draft.workspaceKind === 'project' ? draft.workingDir.trim() : ''),
+      } : null,
+    });
     const selection = { start: next.length, end: next.length };
     firstMessageSelectionRef.current = selection;
     setFirstMessageSelection(selection);
-  }, [setFirstMessageDraft]);
+  }, [patchDraft, selectedDeviceId, draft.agentKind, draft.workspaceKind, draft.workingDir]);
 
   const selectAtResource = useCallback((item: MobileAtResourceItem) => {
     const current = firstMessageRef.current;
@@ -4847,7 +4860,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         ...effectiveDraft,
       };
       const createOpts = {
-        ...buildRemoteCreateSessionOptions(finalDraft),
+        ...buildRemoteCreateSessionOptions(finalDraft, precreatedWorktree?.originalWorkingDir),
         // 与 worktree:create 共用预生成 id，确保被控端能把 managed path
         // 绑定到这一个 Goal session，而不是另起一条 base-repo 会话。
         id: sessionId,
@@ -4913,6 +4926,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
           ...finalDraft,
           firstMessage: input.objective,
         });
+        if (precreatedWorktree) session.projectDir = precreatedWorktree.originalWorkingDir;
       }
       if (isDefaultDraftSessionTitle(session.title)) {
         const titled = sessionFromCreateResult(result, {
@@ -5727,15 +5741,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               )}
               <View style={styles.workspaceDivider} />
               <Pressable
-                accessibilityLabel={t('session.new.chooseOtherFolder')}
+                accessibilityLabel={t('settings.projectInfo.createTitle')}
                 accessibilityRole="button"
                 disabled={creating}
-                onPress={openProjectBrowse}
+                onPress={() => { setWorkspacePickerOpen(false); if ((projectInfo?.settingsVersion ?? 0) >= 6) setCreateProjectOpen(true); else openProjectBrowse(); }}
                 style={({ pressed }) => [styles.workspaceOptionRow, pressed && styles.pressed]}
                 testID="newSession.workspaceBrowseOption"
               >
                 <FolderPlus color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-                <Text style={styles.workspaceOptionText} numberOfLines={1}>{t('session.new.chooseOtherFolder')}</Text>
+                <Text style={styles.workspaceOptionText} numberOfLines={1}>{t('settings.projectInfo.createTitle')}</Text>
               </Pressable>
               </ScrollView>
             </View>
@@ -5927,6 +5941,11 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       </ContextSheet>
       <OrcaWorkerDirectoryPicker picker={collabForm.directoryPicker}
         deviceId={collabForm.form.executionDeviceId} workingDir={collabForm.form.remoteDir} mode={collabForm.form.remoteDirMode} />
+      {createProjectOpen && selectedDeviceId && (
+        <ProjectSettingsSheet create deviceId={selectedDeviceId} projectKey="local:"
+          title="" directory="" visible onClose={() => setCreateProjectOpen(false)}
+          onCreated={selectRecentProject} />
+      )}
       {nativeSelectionSheet ? (
         <NewTaskSelectionSheet
         page={browseOpen ? 'directory' : devicePickerOpen ? 'device' : workspacePickerOpen ? 'workspace' : null}
@@ -5949,7 +5968,14 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               (device) => device.deviceId === id); if (option && !deviceSelectorDisabled) selectDevice(option); }}
         onDialogue={selectDialogueWorkspace}
         onProject={selectRecentProject}
-        onBrowse={openProjectBrowse}
+        browseLabel={t('settings.projectInfo.createTitle')}
+        onBrowse={() => { if ((projectInfo?.settingsVersion ?? 0) >= 6) { createProjectPending.current = true; setWorkspacePickerOpen(false); } else openProjectBrowse(); }}
+        onClosed={() => {
+          if (createProjectPending.current) {
+            createProjectPending.current = false;
+            setCreateProjectOpen(true);
+          }
+        }}
         onEnter={(path) => void loadBrowsePath(path)}
         onChoose={chooseWorkingDir}
         onShowHidden={setShowHiddenDirectories}
