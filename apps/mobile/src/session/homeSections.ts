@@ -596,9 +596,10 @@ export function buildInboxHomeSections(
         const group = taskInboxSection(task, {
           ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx), naturalPriorityRankForId(task.id, ctx)),
           following: item.scheduleInfo?.hasActiveFollowUp === true,
-          // A teammate's task reaches Pending only when it needs the user (2026-11-18).
+          // A teammate's task is listed only while it needs the user or runs (2026-11-18).
           teammate: taskTeammateId(task as RemoteSession) !== undefined,
         }, nowMs);
+        if (!group) continue;
         const until = taskSnoozeUntil(task);
         groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
           sourceLabel: group === 'snoozed' ? new Date(until).toLocaleString(i18n.language) : row.sourceLabel });

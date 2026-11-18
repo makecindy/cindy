@@ -57,12 +57,13 @@ it('keeps a quiet follow-up in working; results, waiting, snooze and archive tak
 });
 
 // 2026-11-18 user decision: the phone's inbox filled with teammates' routine results. A teammate's
-// task reaches Pending only when it needs the user (a question, a permission or an error).
-it('keeps a teammate task in working unless it needs the user', () => {
+// task is listed only while it needs the user (Pending) or runs (Working); idle ones are left out.
+it('lists a teammate task only while it needs the user or runs', () => {
   const now = Date.parse('2026-11-18T08:00:00Z');
   const teammate = { running: false, waiting: false, teammate: true };
-  expect(taskInboxSection({}, { ...teammate, unread: true }, now)).toBe('working');
-  expect(taskInboxSection({}, teammate, now)).toBe('working');
+  expect(taskInboxSection({}, { ...teammate, unread: true }, now)).toBeNull();
+  expect(taskInboxSection({}, teammate, now)).toBeNull();
+  expect(taskInboxSection({}, { ...teammate, running: true }, now)).toBe('working');
   expect(taskInboxSection({}, { ...teammate, waiting: true }, now)).toBe('inbox');
   expect(taskInboxSection({ snoozedUntil: new Date(now + 1000).toISOString() }, teammate, now)).toBe('snoozed');
   expect(taskInboxSection({ status: 'archived' }, teammate, now)).toBe('archived');

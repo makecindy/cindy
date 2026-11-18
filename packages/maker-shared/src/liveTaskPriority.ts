@@ -45,8 +45,10 @@ export interface TaskInboxState {
  * Sections follow whose turn it is. Reading never settles an ordinary task; an active
  * follow-up only keeps the task working while nothing is left for the user. Unread
  * results (including notified automation runs) and pending replies return it to inbox.
- * A teammate's task reaches the inbox only when it needs the user (a question, a permission
- * or an error); its new results stay with the teammate in working (2026-11-18 user decision).
+ * A teammate's task is listed only while it needs the user (a question, a permission or an
+ * error: Pending) or runs (Working); otherwise it stays with the teammate and the inbox
+ * leaves it out (null), so idle teammate tasks never pile up (2026-11-18 user decision).
+ * Tasks the user completed or snoozed keep those sections.
  */
 export function taskInboxSection(
   task: TaskInboxState,
@@ -57,11 +59,12 @@ export function taskInboxSection(
     teammate?: boolean;
   },
   nowMs: number,
-): TaskInboxSection {
+): TaskInboxSection | null {
   if (task.status === 'archived') return 'archived';
   if (taskSnoozeUntil(task) > nowMs) return 'snoozed';
   if (signals.waiting) return 'inbox';
-  if (signals.running || signals.teammate) return 'working';
+  if (signals.running) return 'working';
+  if (signals.teammate) return null;
   if (signals.following && !signals.unread) return 'working';
   return 'inbox';
 }

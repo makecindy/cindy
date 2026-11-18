@@ -28,7 +28,7 @@ import { sidebarPriorityContext } from '../lib/sidebarPriorityContext';
 type Props = Omit<SessionEntryRowsProps, 'entries'> & {
   sessions: readonly Session[];
   priorityContext: MainListPriorityContext;
-  /** A teammate's task only reaches Pending when it needs the user. */
+  /** A teammate's task is listed only while it needs the user or runs. */
   isTeammateTask?: (session: Session) => boolean;
 };
 const SECTIONS: TaskInboxSection[] = ['inbox', 'working', 'snoozed', 'archived'];
@@ -66,22 +66,20 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
     const result = new Map<TaskInboxSection, Session[]>(SECTIONS.map((key) => [key, []]));
     for (const session of sortSessionsForMainList([...sessions], 'priority', inboxContext)) {
       if (session.status === 'deleted') continue;
-      result
-        .get(
-          taskInboxSection(
-            session,
-            {
-              ...taskInboxSignalsFromRank(
-                sessionPriorityRank(session, inboxContext),
-                sessionNaturalPriorityRank(session, inboxContext),
-              ),
-              following: followingSessions.has(session),
-              teammate: isTeammateTask?.(session) === true,
-            },
-            now,
+      const section = taskInboxSection(
+        session,
+        {
+          ...taskInboxSignalsFromRank(
+            sessionPriorityRank(session, inboxContext),
+            sessionNaturalPriorityRank(session, inboxContext),
           ),
-        )!
-        .push(session);
+          following: followingSessions.has(session),
+          teammate: isTeammateTask?.(session) === true,
+        },
+        now,
+      );
+      // An idle teammate task stays with the teammate, outside the inbox.
+      if (section) result.get(section)!.push(session);
     }
     result.get('snoozed')!.sort((a, b) => taskSnoozeUntil(a) - taskSnoozeUntil(b));
     // The open task moves like any other (a reply sends it to Working at once); its row does not
