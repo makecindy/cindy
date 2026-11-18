@@ -1,6 +1,5 @@
 import { rendererProjectRequest } from '../../projectConfirmation.desktop.js';
 import { projectCreationRoot } from '../../projectCreation.js';
-import '../../projectDirectories.desktop.js';
 import { readProjectDirectories } from '../../projectDirectoryStore.js';
 import { resolveAutomaticProjectIcon } from '../../projectAutomaticIcon.desktop.js';
 import { readProjectIconImage, updateProjectInfo as updateProjectInfoCore } from '../../projectInfoCore.js';

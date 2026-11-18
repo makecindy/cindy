@@ -21,7 +21,6 @@ const h = vi.hoisted(() => ({
   remoteInvoke: false,
 }));
 vi.mock('../../../appSessionState.js', async (original) => ({ ...await original<typeof import('../../../appSessionState.js')>(), getActiveDataOwnerPushStamp: () => h.ownerStamp, isAppSessionBoundaryPending: () => false }));
-vi.mock('../../../projectDirectories.desktop.js', () => ({}));
 vi.mock('../../../projectDirectoryStore.js', () => ({ readProjectDirectories: () => ({}) }));
 vi.mock('../../../projectIconStore.js', () => ({
   readProjectIcons: () => ({}),

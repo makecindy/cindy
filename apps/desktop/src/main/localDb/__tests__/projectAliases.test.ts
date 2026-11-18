@@ -189,6 +189,5 @@ describe('projectAliases localDb helpers', () => {
 // Project creation is not exercised by alias CRUD/task moves; avoid its platform adapters.
 vi.mock('../../projectCreation.js', () => ({ projectCreationRoot: async () => '/Projects', prepareNewProject: vi.fn() }));
 
-vi.mock('../../projectDirectories.desktop.js', () => ({}));
 vi.mock('../../projectDirectoryStore.js', () => ({ readProjectDirectories: () => ({}) }));
 vi.mock('../../projectInfoCore.js', () => ({ readProjectIconImage: vi.fn(), updateProjectInfo: vi.fn() }));

@@ -689,6 +689,7 @@ import {
   WritableDirectoryPickerGrantError,
 } from './maker-ipc/writableDirectoryPickerGrant.js';
 import { projectDirectoryGrantScope } from './projectInfoAuthorization.js';
+import { configureProjectDirectoryProbe } from './projectDirectoryValidation.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
@@ -755,6 +756,7 @@ import { registerLocalThemesIpc } from './local-themes/register';
 import { registerCindyFileIpc } from './cindy-files/register';
 import {
   registerRemoteSshIpc,
+  probeRemoteWorkingDirectory,
   disposeRemoteSshPool,
   startAutoConnectHostsBackground,
   isCcMgrUpgradeInFlight,
@@ -7245,6 +7247,7 @@ const registerIpcHandlers = () => {
       registerFileBrowserDeviceOp();
       // Remote SSH host management (Phase A) —— 连接管理 + ~/.ssh/config IO,
       // 暂未涉及 agent-on-remote / session 同步,后续 Phase B 扩展。
+      configureProjectDirectoryProbe((...args) => probeRemoteWorkingDirectory(...args));
       registerRemoteSshIpc();
       // Phase D — 启动后台 autoConnect: 把 prefs 里 autoConnect=true 的 host
       // 提前连好, 用户进新建对话点远程项目时不用等。fire-and-forget, 失败仅
