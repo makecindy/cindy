@@ -7050,6 +7050,70 @@ test('list activity: a turn an automatic resume holds writes its end time only w
   assert.equal(turnEndWrites(spy.calls).length, 1);
 });
 
+/*
+ * A failed turn's paired done is not a successful completion (release table §五 甲, noteFailedTurnCompletionTail).
+ * - Production entry and observable result: the input queue and the Host turn executor (listen) with the
+ *   shared coordinator, an automatic resume and the product-turn gate; the client stream, the list
+ *   activity write and the turn the queue reports in progress.
+ * - Rule: the desktop notes a product terminal error's completion tail (sessionEventTerminal.ts) and does
+ *   not treat the unclaimed done of the same generation that follows as a successful completion (no
+ *   onSuccessfulProductTurn, which would clear the held failure; no Worker terminal). The Host has no tail:
+ *   its turn ends at the terminal error (finish), so a same-generation done afterwards takes the ended-turn
+ *   branch (turn.terminal) and an earlier generation's done the generation filter; neither reaches the
+ *   success decision (settleProductTurn) nor the clients. These tests pin that structure.
+ * - Coverage gap: the coordinator test above pins only that the paired done is not published; nothing pinned
+ *   that it cannot settle the failed turn as completed or end the next turn.
+ * - Minimal failing input: a terminal error the resume holds, then a done with successful data.
+ * - Tier: unit (node:test, the queue harness with fake runtimes; no database, account or engine).
+ */
+test('failed turn tail: the done after a held terminal error does not complete the failed turn', async t => {
+  const spy = activitySpy();
+  const r = await resumeHarness(t, { touchSessionActivity: spy.touchSessionActivity });
+  r.session.emit({ type: 'status', data: { isRunning: true } });
+  const before = Date.now();
+  await r.interrupt();
+  const after = Date.now();
+  const streamedBefore = r.streamed().length;
+  // The engine's unclaimed done of the failed turn, with successful data (as Codex and Claude send it).
+  const token = r.session.sendOptions.at(-1)?.turnAttemptToken;
+  r.session.emit({ type: 'done', data: {}, ...(typeof token === 'number' ? { turnAttemptToken: token } : {}) });
+  await settle();
+  assert.equal(r.response.writableEnded, false, 'the stream still follows the resume');
+  assert.equal(r.streamed().slice(streamedBefore).some(event => event.type === 'done'), false, 'the paired done reaches no client');
+  assert.deepEqual(turnEndWrites(spy.calls), [], 'the failure stays held, not completed');
+  // The resume gives up: the held failure is settled at the failed turn's own end.
+  r.session.send = async () => { throw new Error('vendor failed'); };
+  for (let i = 0; i < 100 && !r.response.writableEnded; i += 1) { t.mock.timers.tick(500); await settle(); }
+  await settle();
+  assert.equal(turnEndWrites(spy.calls).length, 1, 'committed once by the give-up');
+  assert.ok(turnEndWrites(spy.calls)[0].atMs >= before && turnEndWrites(spy.calls)[0].atMs <= after, 'at the failed turn\'s end');
+  assert.equal(r.errorRows().length, 1);
+  t.mock.timers.reset();
+  await r.h.queue.dispose();
+});
+
+test('failed turn tail: an earlier generation\'s done does not end the next turn', async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  await enqueue(h, 'tail-next', { clientId: 'failed-input', text: 'first' });
+  const session = h.maker.getSession('tail-next');
+  const failedGeneration = session.generation;
+  session.emit({ type: 'error', data: { message: 'upstream failed', isTerminal: true }, sessionTurnGeneration: failedGeneration });
+  await waitFor(() => !h.queue.projection('tail-next').turnInProgress);
+  // The failure pauses the queue (as the desktop); the person's next message goes once they resume it.
+  await h.queue.enqueue('tail-next', { clientId: 'next-input', text: 'second' });
+  await h.queue.resume('tail-next');
+  await waitFor(() => session.sent.length === 2);
+  assert.ok(session.generation > failedGeneration);
+  const published = h.events.length;
+  session.emit({ type: 'done', data: {}, sessionTurnGeneration: failedGeneration });
+  await settle();
+  assert.equal(h.queue.projection('tail-next').turnInProgress, true, 'the next turn is still running');
+  assert.equal(h.events.slice(published).some(event => event.type === 'done'), false, 'no done reaches the clients');
+  session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation });
+  await waitFor(() => !h.queue.projection('tail-next').turnInProgress);
+});
+
 for (const newerTurn of [false, true]) {
   test(`list activity: a context recovery that finally fails ${newerTurn ? 'after a newer turn started leaves that turn its own write' : 'commits the held end time'}`, { timeout: 10_000 }, async t => {
     const spy = activitySpy();
