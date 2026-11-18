@@ -1014,6 +1014,58 @@ describe('Provider pre-send link recovery', () => {
     expect(subscribed.flat()).not.toContain('session:abc');
   });
 
+  it('does not send the recovery handshake once no waiting request still needs it', async () => {
+    const client = transport.clients[0];
+    client.needsLinkRecovery = deviceId => deviceId === 'host';
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let page!: Promise<unknown>;
+    await act(async () => { page = context.subscribe('session:abc', 'host', ['session:abc']).catch(error => error); });
+    expect(client.openLink).not.toHaveBeenCalled();
+    let left!: Promise<unknown>;
+    await act(async () => {
+      // The last owner leaves while recovery is still waiting for the relay.
+      left = context.unsubscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+      client.status = 'online';
+      online();
+    });
+    await act(async () => { await left; });
+    expect(await page).toBeUndefined();
+    expect(client.openLink).not.toHaveBeenCalled();
+    expect(sentOn(client, 'device-link:subscribe')).toHaveLength(0);
+  });
+
+  it('still sends the shared recovery handshake while another request waits for it', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    client.openLink.mockImplementation(async () => { recovering = false; return accepted(supported); });
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let page!: Promise<unknown>;
+    let send!: Promise<unknown>;
+    await act(async () => {
+      page = context.subscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+      send = context.invoke('host', 'maker:send', []).catch(error => error);
+    });
+    let left!: Promise<unknown>;
+    await act(async () => {
+      left = context.unsubscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+      client.status = 'online';
+      online();
+    });
+    await act(async () => { await left; });
+    expect(await page).toBeUndefined();
+    expect(await send).toBe('history page');
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps file cleanup on the existing link instead of reopening it', async () => {
     const client = transport.clients[0];
     client.needsLinkRecovery = deviceId => deviceId === 'host';

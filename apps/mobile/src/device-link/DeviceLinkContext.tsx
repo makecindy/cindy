@@ -538,6 +538,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   // A read still awaiting the old entry may finish; real invalidations delete
   // entries instead and break the chain.
   const refreshedOpenLinksRef = useRef(new WeakMap<object, object>());
+  // Requests waiting on a device's pre-send recovery, each with its own liveness
+  // check. The handshake is shared, so it is sent only while one of them still
+  // wants to send.
+  const presendRecoveryWaitersRef = useRef(new Map<string, Set<() => boolean>>());
   const presenceWipeTimerDeps = useMemo(() => ({
     ...basePresenceWipeTimerDeps,
     wipe: offlineMirrorWipeQueue.enqueue,
@@ -760,6 +764,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           || client.isOutboundExplicitlyClosed(deviceId)) {
           throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during pre-send recovery');
         }
+        const waiters = presendRecoveryWaitersRef.current.get(deviceId);
+        if (waiters && waiters.size > 0 && ![...waiters].some((stillWanted) => stillWanted())) {
+          throw new DeviceLinkError('NOT_CONNECTED', 'no request still waits for this recovery');
+        }
       }
       if (pendingReplyRecovery && (
         clientRef.current !== client
@@ -809,9 +817,25 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
     if (!client.needsLinkRecovery(deviceId)) return;
     const userCloseEpoch = userCloseEpochsRef.current.get(deviceId) ?? 0;
-    // Reuse the peer's handshake single flight, but not a settled pre-fault ACK.
-    // This sends no business request and does not restart the shared relay.
-    await sendOpenLinkOnce(client, deviceId, false, true, false, true).request;
+    const stillWanted = () => {
+      try { preSend(); return true; } catch { return false; }
+    };
+    const waitersByDevice = presendRecoveryWaitersRef.current;
+    const waiters = waitersByDevice.get(deviceId) ?? new Set<() => boolean>();
+    waitersByDevice.set(deviceId, waiters);
+    waiters.add(stillWanted);
+    try {
+      // Reuse the peer's handshake single flight, but not a settled pre-fault ACK.
+      // This sends no business request and does not restart the shared relay.
+      await sendOpenLinkOnce(client, deviceId, false, true, false, true).request;
+    } catch (err) {
+      // A request that no longer wants to send reports its own reason first.
+      preSend();
+      throw err;
+    } finally {
+      waiters.delete(stillWanted);
+      if (waiters.size === 0 && waitersByDevice.get(deviceId) === waiters) waitersByDevice.delete(deviceId);
+    }
     preSend();
     if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
     if ((userCloseEpochsRef.current.get(deviceId) ?? 0) !== userCloseEpoch
