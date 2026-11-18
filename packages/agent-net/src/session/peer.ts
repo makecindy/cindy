@@ -15,11 +15,11 @@ export interface SessionRequest { id: string; channel: string; args: unknown[]; 
 
 type Message =
   | { t: 'open'; id: string; payload: unknown }
-  | { t: 'accept'; id: string; payload: unknown }
+  | { t: 'accept'; id: string; payload: unknown; at?: number }
   | { t: 'reject'; id: string; code: string; message: string }
   | { t: 'close'; reason: string }
-  // `at`: the sender's monotonic clock when it wrote the request (ms); `ms`: the caller's time limit, if any.
-  | { t: 'invoke'; id: string; channel: string; args: unknown[]; x?: Record<string, unknown>; at?: number; ms?: number }
+  // `deadline`: optional deadline on the receiver's monotonic clock, derived from a link acceptance. Older peers use `at` and `ms`.
+  | { t: 'invoke'; id: string; channel: string; args: unknown[]; x?: Record<string, unknown>; at?: number; ms?: number; deadline?: number }
   /** The caller gave up on this request (its time limit passed): if it has not been handed to the business yet, it never is. */
   | { t: 'cancel'; id: string }
   | { t: 'result'; id: string; result: SessionResult }
@@ -121,6 +121,8 @@ export class SessionPeer {
    * (a stalled path, a retransmission, a wait in this side's lane queue); neither clock has to agree with the other.
    */
   private lagFloor: number | null = null;
+  /** Receiver clock minus sender clock, measured from an authenticated link acceptance. Travel time makes this a lower bound. */
+  private peerClockLowerBound: number | undefined;
 
   constructor(private readonly options: SessionPeerOptions) {
     this.lanes = new SessionLanes({
@@ -148,7 +150,7 @@ export class SessionPeer {
       this.send('control', 'control', { t: 'open', id, payload });
     });
   }
-  accept(id: string, payload: unknown): void { this.send('control', 'control', { t: 'accept', id, payload }); }
+  accept(id: string, payload: unknown): void { this.send('control', 'control', { t: 'accept', id, payload, at: performance.now() }); }
   reject(id: string, code: string, message: string): void { this.send('control', 'control', { t: 'reject', id, code, message }); }
   close(reason: string): void { if (!this.broken) this.send('control', 'control', { t: 'close', reason }, { afterEarlier: true }); }
   presence(payload: unknown): void { if (!this.broken) this.send('control', 'control', { t: 'presence', payload }); }
@@ -182,8 +184,12 @@ export class SessionPeer {
       }
       this.pending.set(id, entry);
       try {
+        const now = performance.now();
+        const deadline = timeoutMs !== undefined && this.peerClockLowerBound !== undefined
+          ? now + timeoutMs + this.peerClockLowerBound : undefined;
         this.send(lane, 'request', { t: 'invoke', id, channel, args, ...(options.extra ? { x: options.extra } : {}),
-          at: Math.round(performance.now()), ...(timeoutMs !== undefined ? { ms: timeoutMs } : {}) }, { unordered: options.unordered });
+          at: Math.round(now), ...(timeoutMs !== undefined ? { ms: timeoutMs } : {}), ...(deadline !== undefined ? { deadline } : {}) },
+        { unordered: options.unordered });
         entry.written = true;
       } catch (error) {
         this.settle(id, failure(error instanceof Error && error.message === 'PAYLOAD_TOO_LARGE' ? 'PAYLOAD_TOO_LARGE' : 'NOT_SENT', String(error)));
@@ -226,8 +232,11 @@ export class SessionPeer {
   }
 
   /** The caller cancelled this request, or its time limit passed before it got here (see `lagFloor`). */
-  private lateOrCancelled(message: { id: string; at?: unknown; ms?: unknown }): boolean {
+  private lateOrCancelled(message: { id: string; at?: unknown; ms?: unknown; deadline?: unknown }): boolean {
     if (this.cancelled.delete(message.id)) return true;
+    if (typeof message.deadline === 'number' && Number.isFinite(message.deadline)) {
+      return performance.now() >= message.deadline;
+    }
     const arrivedLag = lag(message);
     if (arrivedLag === null) return false;
     this.lagFloor = this.lagFloor === null ? arrivedLag : Math.min(this.lagFloor, arrivedLag);
@@ -264,8 +273,11 @@ export class SessionPeer {
         if (!open) return;
         this.opening.delete(message.id);
         clearTimeout(open.timer);
-        if (message.t === 'accept') open.resolve(message.payload);
-        else open.reject(new SessionError(message.code, message.message));
+        if (message.t === 'accept') {
+          this.peerClockLowerBound = typeof message.at === 'number' && Number.isFinite(message.at)
+            ? message.at - performance.now() : undefined;
+          open.resolve(message.payload);
+        } else open.reject(new SessionError(message.code, message.message));
         return;
       }
       case 'cancel': {

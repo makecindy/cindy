@@ -13,7 +13,7 @@
  * - tier：unit；本机约 130 毫秒（假计时器）。
  */
 import { afterEach, expect, it, vi } from 'vitest';
-import { encodeUdpRegisterAck, verifyUdpRegister, type UdpRelayCredentials } from '@cindy/agent-net-relay';
+import { encodeUdpRegisterAck, verifyUdpRegister, verifyUdpUp, type UdpRelayCredentials } from '@cindy/agent-net-relay';
 import { UDP_RELAY_DOWN, UDP_RELAY_REGISTER_ACK } from '@cindy/agent-net-relay/client';
 import { RelayUdpPath, type RelayUdpOptions } from '../relayUdp.js';
 
@@ -115,6 +115,45 @@ it('registers again at once with the new cookie when the relay has not taken its
   // 带着同一个凭证还没被认定：不来回空转，等下一次定时登记。
   path.intercept(encodeUdpRegisterAck(credentials, 4n, false, moved));
   expect(registrations()).toHaveLength(4);
+});
+
+it('preserves registration and upload counters when DNS points the same credentials to a new address', async () => {
+  fakeTimers();
+  const credentials = { session: new Uint8Array(8), key: new Uint8Array(32).fill(1) };
+  let address = '192.0.2.1';
+  const packets: { address: string; bytes: Uint8Array }[] = [];
+  const { path } = open(credentials, {
+    resolveHost: async () => address,
+    sendUdp: (to, bytes) => { packets.push({ address: to.address, bytes }); },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const registerCounter = () => verifyUdpRegister(packets.at(-1)!.bytes, credentials.key)!.counter;
+  path.intercept(encodeUdpRegisterAck(credentials, registerCounter(), true, COOKIE));
+  expect(path.send('member', new Uint8Array(64))).toBe(true);
+  const priorUpload = verifyUdpUp(packets.at(-1)!.bytes, credentials.key)!.counter;
+  address = '192.0.2.2';
+  await vi.advanceTimersByTimeAsync(29_000);
+  const priorRegister = registerCounter();
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(packets.at(-1)?.address).toBe(address);
+  expect(registerCounter()).toBeGreaterThan(priorRegister);
+  path.intercept(encodeUdpRegisterAck(credentials, registerCounter(), true, COOKIE));
+  expect(path.send('member', new Uint8Array(64))).toBe(true);
+  expect(verifyUdpUp(packets.at(-1)!.bytes, credentials.key)!.counter).toBeGreaterThan(priorUpload);
+});
+
+it('backs off early lookups when UDP is down and DNS cannot refresh the relay address', async () => {
+  fakeTimers();
+  const lookups: number[] = [];
+  open({ session: new Uint8Array(8), key: new Uint8Array(32) }, {
+    resolveHost: async () => {
+      lookups.push(performance.now());
+      if (lookups.length > 1) throw new Error('ENOTFOUND');
+      return '192.0.2.1';
+    },
+  });
+  await vi.advanceTimersByTimeAsync(39_000);
+  expect(lookups).toEqual([0, 30_000, 32_000, 36_000]);
 });
 
 it('keeps resolving the relay address after a failed lookup and then registers', async () => {

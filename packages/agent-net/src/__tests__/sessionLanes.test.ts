@@ -116,9 +116,13 @@ it('delivers every message in order whatever the chunk boundaries', () => {
 function peers() {
   const sent: Record<SessionLane, Uint8Array[]> = { control: [], normal: [], background: [] };
   let toPeer!: (lane: SessionLane, bytes: Uint8Array) => void;
+  let toCaller!: (lane: SessionLane, bytes: Uint8Array) => void;
   const ran: string[] = [];
-  const caller = new SessionPeer({ wire: { write: (lane, bytes) => { sent[lane].push(bytes); }, bufferedAmount: 0, onData() {} }, laneFor: () => 'normal' });
-  new SessionPeer({ wire: { write() {}, bufferedAmount: 0, onData: (handler) => { toPeer = handler; } }, laneFor: () => 'normal',
+  const caller = new SessionPeer({ wire: { write: (lane, bytes) => { sent[lane].push(bytes); }, bufferedAmount: 0,
+    onData: (handler) => { toCaller = handler; } }, laneFor: () => 'normal' });
+  const callee = new SessionPeer({ wire: { write: (lane, bytes) => toCaller(lane, bytes), bufferedAmount: 0,
+    onData: (handler) => { toPeer = handler; } }, laneFor: () => 'normal',
+    onOpen: (id) => { callee.accept(id, { accepted: true }); },
     onRequest: (request) => { ran.push(request.channel); } });
   const arrive = (lane: SessionLane) => { for (const bytes of sent[lane].splice(0)) toPeer(lane, bytes); };
   return { caller, ran, arrive };
@@ -199,6 +203,20 @@ it('keeps a session inside a delegation one-way whichever end misbehaves', async
   await expect(opening).rejects.toMatchObject({ code: 'LINK_TIMEOUT' });
   await expect(calling).resolves.toMatchObject({ ok: false, error: { code: 'INVOKE_TIMEOUT' } });
   expect(reverse.seen[1]).toEqual(['push:test:event']);
+});
+
+it('uses link acceptance to expire the first request without waiting for cancel', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const { caller, ran, arrive } = peers();
+  const opened = caller.open({}, 1000);
+  arrive('control');
+  await expect(opened).resolves.toEqual({ accepted: true });
+  const request = caller.request('test:write', [], { timeoutMs: 1000 });
+  vi.advanceTimersByTime(1100);
+  await expect(request).resolves.toMatchObject({ ok: false, error: { code: 'INVOKE_TIMEOUT' } });
+  arrive('normal');
+  expect(ran).toEqual([]);
+  arrive('control');
 });
 
 it('drops a timed-out request when its cancel gets to the peer first', async () => {

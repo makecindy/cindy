@@ -170,8 +170,6 @@ export class RelayUdpPath {
   }
 
   private resetRegistration(): void {
-    this.counter = 0n;
-    this.upCounter = 0n;
     this.cookie = null;
     this.pending.clear();
     this.ackedAt = Number.NEGATIVE_INFINITY;
@@ -185,12 +183,16 @@ export class RelayUdpPath {
     // UDP 一直不通时，中继可能换了 IP：提前重新解析。
     const downTooLong = this.server !== null && this.credentials !== null && !this.up && now - this.resolvedAt >= RESOLVE_WHEN_DOWN_MS
       && (this.unackedSince === null || now - this.unackedSince >= RESOLVE_WHEN_DOWN_MS);
-    if (!this.resolving && (now >= this.nextResolveAt || downTooLong)) void this.resolve();
+    // An outage can accelerate the periodic refresh, but cannot bypass DNS failure backoff.
+    const canRefreshEarly = downTooLong && this.resolveRetryMs === RESOLVE_RETRY_FIRST_MS;
+    if (!this.resolving && (now >= this.nextResolveAt || canRefreshEarly)) void this.resolve();
     if (!this.server) return;
     const current = this.options.credentials();
     if (current !== this.credentials) {
       // 中继 WebSocket 重连换了会话：旧会话的登记、确认和凭证都作废。
       this.credentials = current;
+      this.counter = 0n;
+      this.upCounter = 0n;
       this.resetRegistration();
     }
     if (!current) return;
