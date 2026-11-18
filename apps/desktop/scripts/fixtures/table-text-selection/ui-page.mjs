@@ -55,7 +55,9 @@ export default {
     for (const text of ['Alpha', '42', 'First', 'Beta', '7', 'Final']) assert.ok(cells.includes(text));
     assert.equal(await copyAndPaste(), cells, 'Cross-cell clipboard must match the native range');
 
-    await page.getByText('Alpha', { exact: true }).dblclick();
+    const word = await point('Alpha', false);
+    await page.mouse.dblclick(word.x + 4, word.y);
+    assert.equal(await page.evaluate(() => getSelection().toString()), 'Alpha');
     assert.equal(await copyAndPaste(), 'Alpha', 'Local cell selection must still copy just that word');
 
     await select('Before the table', 'After the table');
