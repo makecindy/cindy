@@ -67,7 +67,7 @@ export interface DeviceAgentServiceDeps {
   attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
   attachmentStorageRoots?(sessionId: string): Record<string, string>;
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
-  remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
+  remoteInvoke(deviceId: string, channel: string, args: unknown[], options?: { beforeDispatch?: () => void }): Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
   /** Re-open the authenticated share link after a successful lease renewal. */
   renewSharedProviderLink?(peer: string): Promise<unknown>;
   rgPath(): string;

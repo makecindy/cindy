@@ -11969,8 +11969,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await takeOverLocalAgentVisibleSession(sessionId);
     let stage = 'direct-send:acquire';
     let deferPendingApply = false;
-    const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);
+    const release = await acquireSendToSessionLock(sessionId, undefined, () => stage, signal);
     try {
+      signal?.throwIfAborted();
       // An automation with a model override goes straight to its own route. Restoring
       // the owner first could destructively shrink history that this send can use.
       if (!selection && !scheduledModelOverride) await scheduledModelScope.restore(sessionId);
@@ -12028,6 +12029,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       // The caller retains the lease through runtime refresh and Session.send.
       stage = 'direct-send:caller-dispatch';
+      signal?.throwIfAborted();
       return { release, selection: resolvedSelection };
     } catch (err) {
       release();
