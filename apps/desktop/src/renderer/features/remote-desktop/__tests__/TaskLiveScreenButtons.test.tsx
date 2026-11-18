@@ -119,6 +119,65 @@ it.each(['installed', 'update-without-remote', 'other-source', 'lookup-unavailab
   },
 );
 
+// Review #11239: the update source matcher supports old physical-root installs,
+// but the detail gate rejected their omitted namespace. Unit tier: a real task
+// action must update that legacy copy, never a namespaced twin or another source.
+it.each(['legacy-root', 'root-current-layout', 'different-detail-source', 'different-detail-id'])(
+  'preserves installed-instance matching for compatible updates: %s',
+  async (scenario) => {
+    const old = {
+      ...plugin({ remote: false }),
+      dir: scenario === 'root-current-layout'
+        ? '/plugins/_ns/_root/cindy-simulator'
+        : '/plugins/cindy-simulator',
+    };
+    installed.ghosts = [old];
+    lookup.mockResolvedValue({ items: [{
+      pluginId: 'cindy-simulator', ghostId: 'cindy-simulator',
+      ...(scenario === 'root-current-layout' ? { namespace: null } : {}),
+      installState: 'update-available',
+    }] });
+    const release = {
+      pluginId: 'cindy-simulator',
+      ghostId: scenario === 'different-detail-id' ? 'other-plugin' : 'cindy-simulator',
+      ...(scenario === 'different-detail-source' ? { namespace: 'acme' } : {}),
+      installState: 'update-available', releaseId: 'legacy-compatible-release',
+      manifest: plugin().manifest,
+    };
+    detail.mockResolvedValue(release);
+    const upgraded = { ...old, manifest: plugin().manifest };
+    install.mockImplementation(async () => {
+      installed.ghosts = [upgraded];
+      return { ghost: upgraded };
+    });
+    invoke.mockImplementation(async (_device: string, _channel: string, [request]: [{ op: string }]) =>
+      request.op === 'capabilities'
+        ? { version: 1, enabled: true, liveScreens: true }
+        : { screens: [listed('sim-a', 'iPhone Air', ['task-1'])] });
+    render(<Entries />);
+    await settle();
+    await settle();
+    fireEvent.click(within(notice()!).getByRole('button', { name: 'Check for compatible update' }));
+    for (let i = 0; i < 4; i++) await settle();
+    if (scenario === 'legacy-root') {
+      expect(install).toHaveBeenCalledExactlyOnceWith('cindy-simulator', {
+        expectedReleaseId: release.releaseId,
+        expectedManifest: release.manifest,
+        expectedInstalledApproval: 'approved:r',
+        allowSourceReplacement: false,
+      });
+      expect(openTab).toHaveBeenCalledWith('task-1', 'cindy-simulator');
+      expect(toasts.info).not.toHaveBeenCalled();
+    } else {
+      expect(install).not.toHaveBeenCalled();
+      expect(openTab).not.toHaveBeenCalled();
+      expect(toasts.info).toHaveBeenLastCalledWith(i18n.t('remoteDesktop.liveScreenPlugin.unsupported.unavailable'));
+    }
+    expect(setEnabled).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  },
+);
+
 beforeEach(async () => {
   revokedDevicesStore.clearAll();
   unresponsiveDevicesStore.clearAll();
@@ -414,7 +473,7 @@ it.each([
     if (installs) expect(install).toHaveBeenLastCalledWith(installs, expect.objectContaining({ allowSourceReplacement: false }));
     else {
       expect(install).not.toHaveBeenCalled();
-      expect(toasts.info).toHaveBeenLastCalledWith(i18n.t('remoteDesktop.liveScreenPlugin.unsupported.unavailable'));
+      expect(toasts.info).toHaveBeenLastCalledWith(i18n.t('newChat.pluginSuggestions.unavailable'));
     }
     expect(navigate).not.toHaveBeenCalled();
     install.mockClear();

@@ -15,9 +15,20 @@ export default {
     },
     unsupported: { about: 'The latest same-source installed release does not support remote viewing; checking leaves the task in place' },
     update: { about: 'A compatible same-source release exists; checking starts its ordinary in-place update' },
+    'legacy-update': { about: 'An old physical-root install can update from a legacy market detail without a namespace' },
+    'install-unavailable': { about: 'An absent plugin with no available listing reports installation unavailability, not a missing update' },
   },
   async check(page, ui) {
     const scenario = await page.evaluate(() => window.__uiPage.ctx.case);
+    if (scenario === 'install-unavailable') {
+      const notice = page.locator('[data-banner-kind="task-live-screen-plugin"]');
+      await notice.waitFor();
+      await notice.getByRole('button', { name: await ui.t('remoteDesktop.liveScreenPlugin.install.action'), exact: true }).click();
+      await page.getByText(await ui.t('newChat.pluginSuggestions.unavailable'), { exact: true }).waitFor();
+      await ui.capture('install-unavailable');
+      assert.ok(await notice.isVisible());
+      return;
+    }
     if (scenario !== 'default') {
       const notice = page.locator('[data-banner-kind="task-live-screen-plugin"]');
       const title = await ui.t('remoteDesktop.liveScreenPlugin.unsupported.title', { plugin: 'Device Simulator' });
@@ -25,7 +36,7 @@ export default {
       assert.ok((await notice.innerText()).includes(title));
       await ui.capture('unsupported');
       await notice.getByRole('button', { name: await ui.t('remoteDesktop.liveScreenPlugin.unsupported.action'), exact: true }).click();
-      if (scenario === 'update') {
+      if (scenario === 'update' || scenario === 'legacy-update') {
         await notice.locator('button[aria-busy="true"]').waitFor();
         await ui.capture('updating');
       } else {

@@ -10,6 +10,7 @@ import { ToastContainer } from '../../../src/renderer/components/ui/toast/ToastC
 
 const installed = {
   id: 'cindy-simulator',
+  ...(ctx.case === 'legacy-update' ? { dir: '/plugins/cindy-simulator' } : {}),
   namespace: null,
   namespaceState: 'confirmed',
   enabled: true,
@@ -75,19 +76,21 @@ void mountPage({
   route: '/',
   host: () => ({
     ghosts: {
-      listSync: () => ({ ghosts: [installed] }),
+      listSync: () => ({ ghosts: ctx.case === 'install-unavailable' ? [] : [installed] }),
       onChanged: subscription('ghostsChanged'),
     },
     pluginMarket: {
       lookup: async () => ({
-        items: ctx.case === 'default'
+        items: ctx.case === 'install-unavailable' ? [] : ctx.case === 'default'
           ? [{ pluginId: 'second', ghostId: 'second', namespace: null, installState: 'not-installed' }]
-          : [{ pluginId: 'cindy-simulator', ghostId: 'cindy-simulator', namespace: null,
-            installState: ctx.case === 'update' ? 'update-available' : 'installed' }],
+          : [{ pluginId: 'cindy-simulator', ghostId: 'cindy-simulator',
+            ...(ctx.case === 'legacy-update' ? {} : { namespace: null }),
+            installState: ['update', 'legacy-update'].includes(ctx.case) ? 'update-available' : 'installed' }],
       }),
       detail: async (pluginId: string) => ({
-        pluginId, ghostId: pluginId, namespace: null,
-        installState: ctx.case === 'update' ? 'update-available' : 'not-installed',
+        pluginId, ghostId: pluginId,
+        ...(ctx.case === 'legacy-update' ? {} : { namespace: null }),
+        installState: ['update', 'legacy-update'].includes(ctx.case) ? 'update-available' : 'not-installed',
         releaseId: 'fixture-release', manifest: { id: pluginId, taskView: { html: 'task.html', remote: true } },
       }),
       // Main's permission confirmation is outside this page: the install stays pending.

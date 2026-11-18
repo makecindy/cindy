@@ -138,7 +138,9 @@ function useEntrySetup(sessionId: string) {
         },
         {
           isCurrent: () => shownSession.current === sessionId,
-          unavailableMessageKey: 'remoteDesktop.liveScreenPlugin.unsupported.unavailable',
+          unavailableMessageKey: entry.need === 'unsupported'
+            ? 'remoteDesktop.liveScreenPlugin.unsupported.unavailable'
+            : undefined,
           onReady: (ghost) => {
             if (canShowRemote(ghost)) void openPluginTaskTab(sessionId, installedGhostStoragePart(ghost)).catch(() => {});
           },

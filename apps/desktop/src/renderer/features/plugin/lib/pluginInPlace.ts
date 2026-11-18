@@ -12,6 +12,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { pluginMarketErrorKey } from './pluginMarketErrorKey';
 import {
   marketItemForInstalledGhost,
+  marketItemMatchesInstalledGhost,
   marketReviewTargetsInstalledGhost,
 } from './pluginMarketPresentation';
 
@@ -99,7 +100,7 @@ export async function makePluginUsableInPlace(target: PluginInPlaceTarget): Prom
         // A release is a remedy only if this exact source actually supplies the
         // required page. Version equality or a newer release alone proves nothing.
         if (target.requireRemoteTaskView && (
-          detail.ghostId !== target.ghostId || detail.namespace !== target.namespace ||
+          !marketItemMatchesInstalledGhost(detail, ghost) ||
           detail.manifest.taskView?.remote !== true
         )) return { status: 'unavailable' };
         ghost = (await window.electronAPI.pluginMarket.install(detail.pluginId, {
