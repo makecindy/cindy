@@ -57,7 +57,7 @@ function ReferencePanel() {
   const width = usePanelWidth('right-tabs');
   return <aside style={{ width: width ?? '50%' }} className="h-full min-w-0 shrink-0 overflow-hidden border-l border-border bg-content-area" data-width-reference>
     <div className="h-14 border-b border-border px-5 flex items-center text-14">plan.md</div>
-    <div className="p-5"><MarkdownRenderer content="### 工作计划\n\n这里保留参考资料。聊天区与资料区由现有分割线分配空间。" /></div>
+    <div className="p-5"><MarkdownRenderer content={'### 工作计划\n\n这里保留参考资料。聊天区与资料区由现有分割线分配空间。'} /></div>
   </aside>;
 }
 function Fixture() {
