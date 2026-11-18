@@ -51,6 +51,7 @@ export const PORTS_ONLY_CODEX_READS = {
 
 /** Ports only the Pi agent reads. */
 export const PORTS_ONLY_PI_READS = {
+  createPiVisionUsageRecorder: undefined,
   derivePiProxySessionToken: undefined,
   formatPiStartupCloudFileHint: undefined,
   getPiExtensionUiStrings: undefined,

@@ -726,6 +726,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     }),
     // Skills the user disabled in Cindy, from the profile's activation preferences.
     getDisabledSkillPaths: readDisabledSkillPaths,
+    // The native recovery topic is only published by the Desktop assembly.
+    nativeRecoveryObserver: undefined,
     getGhostRosterPrompt: options.getGhostRosterPrompt,
     getManagedSkills: options.getManagedSkills,
     capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
@@ -788,6 +790,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         get capabilityRouting() { return codexCapabilityRouting.capabilityRouting(); },
         resolveCapabilityRouting: codexCapabilityRouting.resolveCapabilityRouting,
         capabilityAdditions: availableModels('codex'),
+        nativeRecoveryObserver: undefined,
         getGhostRosterPrompt: options.getGhostRosterPrompt,
         runtimeConfig: runtimeConfigs.buildCodexRuntimeConfig(),
         binaryPath: codexBinaryPath,
@@ -921,6 +924,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           registerAgentProcess(pid, kind, role, sessionId),
         // Plugin tool interception: not connected yet (as the Claude bag above; row 33, 8i, 甲).
         toolLifecycleControl: options.toolLifecycleControl,
+        nativeRecoveryObserver: undefined,
         getGhostRosterPrompt: options.getGhostRosterPrompt,
         makerMemory: options.makerMemory,
         createPiVisionUsageRecorder,

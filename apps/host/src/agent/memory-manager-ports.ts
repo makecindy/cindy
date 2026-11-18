@@ -59,6 +59,7 @@ export function hostMemoryManagerPorts({ userDataDir, ownerId, generation, readE
     // Never reached: the disabled route above stops runReview first. The desktop binds the shared
     // auxiliary model chain here (maker-host/index.ts:1068-1074); that chain sends paid requests.
     reviewOneShot: undefined,
+    reviewAgentOneShot: undefined,
     reviewAgent: 'claude-code',
   });
 }

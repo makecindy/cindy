@@ -281,6 +281,7 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     canRestoreOrcaReport: undefined,
     // The usage-limit resume arrives with the third batch (release table).
     onUsageLimitedTurnError: undefined,
+    isScheduledQuotaInput: undefined,
     onUserAction: undefined,
     // Provider-group tasks are refused at Host admission.
     providerGroupSwitchCandidate: undefined,
