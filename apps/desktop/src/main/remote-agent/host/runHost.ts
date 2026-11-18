@@ -3,6 +3,7 @@ import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../a
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
+import { NATIVE_HISTORY_CHECKPOINT, parseNativeHistoryCommand, type NativeHistoryCheckpointSnapshot } from '../nativeHistoryTransfer';
 import { isProductTurnDoneEvent } from '@cindy/maker-shared/turn-continuation';
 import { parseProviderSharePeer, providerShareGuestPeer } from '@cindy/device-link';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits, type RemoteAgentLimitUsage } from '../../../shared/remoteAgentLimits.js';
@@ -217,7 +218,8 @@ export interface RemoteAgentHostDeps {
    * 时据此复制；组所在电脑中转时据此替组内电脑补文件。
    */
   managedSkills?(): Promise<Array<{ command: string; dir: string }>>;
-  nativeHistory?(scope: string, command: unknown, workingDir: string, assertCurrent: () => void): Promise<unknown>;
+  nativeHistory?(scope: string, command: unknown, workingDir: string, assertCurrent: () => void,
+    checkpoint?: NativeHistoryCheckpointSnapshot): Promise<unknown>;
   fastPolicy?(controller: string, command: import('@cindy/device-link').RemoteAgentFastPolicy): Promise<unknown>;
   /** Prepare native bytes; retain recovery ownership only for receipted controllers. */
   prepareImageEvent?(hostSessionId: string, event: AgentEvent, upstream: GeneratedImageUpstream | undefined, retainForRecovery: boolean): Promise<AgentEvent>;
@@ -228,8 +230,6 @@ export interface RemoteAgentHostDeps {
   forkHosted?(kind: RemoteAgentKind, options: ForkSdkSessionOptions): Promise<ForkSdkSessionResult>;
   /** 本机仍允许该控制端远程控制(总开关打开且未撤销)。 */
   isControllerAuthorized(controller: string): boolean;
-  /** 同账号的这台电脑被关了「用本机模型」：拒绝时报「没有开放供应商」而不是「不能远程控制」。 */
-  isControllerModelUseRevoked?(controller: string): boolean;
   /**
    * 控制端是否是本机同账号的设备。不提供 = 全部按同账号处理(现有接线)。返回 guest 时：
    * 载荷按白名单复核、只开放已隔离的 Agent、只能恢复自己建立的会话。
@@ -463,6 +463,8 @@ interface Run {
   forkWorkspaceIds?: string[];
   imageDeliveryEpoch?: number;
   acceptsImageDeliveryReceipts?: boolean;
+  acceptsNativeHistoryBackup?: boolean;
+  nativeHistoryCheckpoint?: { token: string; nativeId: string; assistantSha256: string };
   owner: unknown;
   kind: RemoteAgentKind;
   log: EventLog;
@@ -1877,7 +1879,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     try {
       for await (const event of handle.events()) {
         if (run.closing) break;
-        if (!run.abortRequested && startsRemoteProductTurn(event)) run.activeTurn = true;
+        if (startsRemoteProductTurn(event)) {
+          run.nativeHistoryCheckpoint = undefined;
+          if (!run.abortRequested) run.activeTurn = true;
+        }
         const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
         if (currentTerminal) {
           run.activeTurn = false;
@@ -1906,7 +1911,20 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             groupTurnFailed = false;
           }
         }
-        append(run, { t: 'event', event });
+        const data = event.data as Record<string, unknown> | null;
+        if (run.acceptsNativeHistoryBackup && currentTerminal && event.source === 'pi'
+          && isProductTurnDoneEvent(event) && data?.type === 'pi/agent_settled'
+          && data.status === 'completed' && data.silentStop !== true && typeof data.result === 'string'
+          && !handle.isTurnRunning?.()) {
+          const checkpoint = { token: randomUUID(), nativeId: handle.id,
+            assistantSha256: createHash('sha256').update(data.result).digest('hex') };
+          run.nativeHistoryCheckpoint = checkpoint;
+          append(run, { t: 'event', event: { ...event, data: { ...data,
+            [NATIVE_HISTORY_CHECKPOINT]: { token: checkpoint.token, runId: run.id },
+          } } });
+        } else {
+          append(run, { t: 'event', event });
+        }
         emitState(run);
       }
     } catch (error) {
@@ -3245,12 +3263,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   async function handleRequest(controller: string, request: RemoteAgentRequest,
     signal?: AbortSignal, directLocked = false): Promise<unknown> {
-    if (!deps.isControllerAuthorized(controller)) {
-      if (deps.isControllerModelUseRevoked?.(controller)) {
-        fail('REMOTE_AGENT_PROVIDER_NOT_ALLOWED', 'this computer does not let you use its models');
-      }
-      fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
-    }
+    if (!deps.isControllerAuthorized(controller)) fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
     switch (request.op) {
       case 'native-history': {
         if (trustOf(controller) !== 'owner' || !deps.nativeHistory) fail('REMOTE_AGENT_UNSUPPORTED', 'native history transfer is unavailable');
@@ -3261,11 +3274,33 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           }
         };
         const hostSessionId = hostSessionIdFor(controller, request.sessionId);
+        const command = parseNativeHistoryCommand(request.command);
+        const workingDir = path.join(shadowSessionRoot(controller, hostSessionId), 'fs', 'workspace', ...Array.from({ length: MAX_ANCESTOR_LEVELS }, () => 'p'));
+        const backupScope = JSON.stringify(['backup', controller, request.sessionId]);
+        if (command.action === 'checkpoint-export') {
+          const run = requireRun(controller, command.runId);
+          const checkpoint = run.nativeHistoryCheckpoint;
+          const assertUnchanged = () => {
+            assertCurrent();
+            if (!run.acceptsNativeHistoryBackup || run.trust !== 'owner' || !deps.isOwnerCurrent(run.owner)
+              || run.sessionId !== request.sessionId || run.hostSessionId !== hostSessionId
+              || run.kind !== 'pi' || run.closing || run.activeTurn || run.handle?.isTurnRunning?.()
+              || !checkpoint || checkpoint.token !== command.checkpoint
+              || run.nativeHistoryCheckpoint !== checkpoint || run.handle?.id !== checkpoint.nativeId) {
+              fail('REMOTE_AGENT_BUSY', 'native history checkpoint is no longer current');
+            }
+          };
+          assertUnchanged();
+          return deps.nativeHistory!(backupScope, { action: 'export', kind: 'pi', nativeId: checkpoint!.nativeId },
+            workingDir, assertCurrent, { prefix: command.prefix, assistantSha256: checkpoint!.assistantSha256, assertUnchanged });
+        }
+        if ((command.action === 'read' || command.action === 'release') && command.backup) {
+          return deps.nativeHistory!(backupScope, command, workingDir, assertCurrent);
+        }
         // The controller closes the source run before requesting a snapshot. Never copy a live writer.
         for (const run of runs.values()) {
           if (run.controller === controller && run.hostSessionId === hostSessionId && run.closedAt === undefined) fail('REMOTE_AGENT_BUSY', 'close the running session before transferring its history');
         }
-        const workingDir = path.join(shadowSessionRoot(controller, hostSessionId), 'fs', 'workspace', ...Array.from({ length: MAX_ANCESTOR_LEVELS }, () => 'p'));
         const result = await deps.nativeHistory!(`${controller}:${request.sessionId}`, request.command, workingDir, assertCurrent);
         assertCurrent();
         return result;
@@ -3486,7 +3521,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           virtualWorkspace: true,
           localApplication: true,
           ...(deps.forkHosted ? { nativeFork: true } : {}),
-          ...(!guest && deps.nativeHistory ? { nativeHistoryTransfer: true } : {}),
+          ...(!guest && deps.nativeHistory ? { nativeHistoryTransfer: true, nativeHistoryBackup: true } : {}),
           ...(deps.imageArtifacts ? { imageRecovery: true, imageRecoveryRelay: true } : {}),
           // 能按受邀者隔离运行(供应商级授权与出站边界都已接上)，才接受组所在电脑中转过来的受邀者任务。
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
@@ -3745,6 +3780,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           sessionId: payload.sessionId,
           authorizedModel: payload.options.model,
           acceptsImageDeliveryReceipts: payload.acceptsImageDeliveryReceipts === true,
+          acceptsNativeHistoryBackup: payload.acceptsNativeHistoryBackup === true && trust === 'owner'
+            && request.agentKind === 'pi' && !relayKey && !payload.options.localApplication && !!deps.nativeHistory,
           controller,
           trust,
           ...(relayKey ? { relayKey } : {}),
@@ -3802,6 +3839,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           return {};
         }
         run.calls.set(request.callId, 'running');
+        if (request.method === 'send' || request.method === 'abort' || request.method === 'compactSession'
+          || request.method === 'commitRewindFiles' || request.method === 'setModel') {
+          run.nativeHistoryCheckpoint = undefined;
+        }
         run.activeAt = now();
         void call(run, request.callId, request.method, request.payload);
         return {};

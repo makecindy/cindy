@@ -2159,7 +2159,11 @@ function forkSession(readyDb, args) {
         expectString(marker.clientId, 'recoveryMarker.clientId') + ':card',
         expectString(newSession.id, 'newSession.id'),
         'assistant', '', null,
-        JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
+        JSON.stringify({ contextRebuild: {
+          reason: content.reason,
+          handoff: content.handoffPreview ?? content.handoff,
+          handoffCoverage: content.handoffCoverage,
+        } }),
         expectString(newSession.agentKind, 'newSession.agentKind'),
         markerCreatedAt,
       );

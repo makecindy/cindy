@@ -437,7 +437,8 @@
       "loading": "Carregando acesso aos modelos…",
       "loadFailed": "Não foi possível carregar o acesso aos modelos. Reabra estas configurações.",
       "saveFailed": "Não foi possível salvar o acesso aos modelos. Tente novamente.",
-      "needsUpdate": "Atualize o Cindy no computador do provedor para gerenciar o acesso aos modelos."
+      "needsUpdate": "Atualize o Cindy no computador do provedor para gerenciar o acesso aos modelos.",
+      "followsPool": "Esta conexão foi mesclada a “{{pool}}”, então os modelos remotos seguem “{{pool}}”. Altere lá. Os limites de membros abaixo ainda podem ser definidos aqui."
     },
     "entry": {
       "label": "Acesso remoto e compartilhamento",
@@ -450,6 +451,8 @@
     },
     "manage": {
       "createLink": "Criar link de compartilhamento",
+      "exportRoster": "Exportar lista de membros",
+      "exportRosterFailed": "Não foi possível salvar a lista de membros.",
       "loading": "Carregando compartilhamento…",
       "notReady": "O compartilhamento não está disponível no momento. Verifique se você entrou e está online; uma nova tentativa será feita automaticamente.",
       "loadFailed": "Não foi possível carregar os detalhes do compartilhamento. Tente novamente em instantes.",
@@ -947,7 +950,7 @@
       "title": "Continuar em {{label}}?",
       "fallbackTitle": "Continuar em {{label}} com um resumo?",
       "fallbackDescription": "Não foi possível restaurar a conversa por completo. Um resumo pode omitir detalhes anteriores e resultados de ferramentas. Cancele para enviar no computador original.",
-      "description": "Para usar a cota de todas as contas de forma equilibrada, envie esta mensagem de {{label}} ({{quota}}). As últimas mensagens e um resumo serão transferidos; detalhes mais antigos podem ser perdidos.",
+      "description": "Para usar a cota de todas as contas de forma equilibrada, envie esta mensagem de {{label}} ({{quota}}). A conversa será transferida. As partes anteriores podem ser condensadas para caber no modelo.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
       "confirm": "Alternar só desta vez",
@@ -4398,7 +4401,8 @@
           "description": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O Agent é executado neste computador, usando o login e a cota dele.",
           "descriptionGroup": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O grupo de provedores escolhe o computador que executa o Agent.",
           "ariaLabel": "Permitir que seus outros computadores e as pessoas com quem você compartilha usem este provedor",
-          "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente."
+          "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente.",
+          "followsPool": "Esta conexão foi mesclada a “{{pool}}” e segue o “Permitir uso remoto” dele. Altere lá."
         },
         "ownComputersCanUse": "Disponível para meus outros computadores",
         "moreActionsAria": "Mais ações",
@@ -6486,18 +6490,13 @@
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controle remoto não ativado nesse dispositivo",
         "masterOffHint": "Primeiro, ative a opção principal acima",
-        "controllingThisMac": "Conectado ao Cindy",
-        "useThisDeviceModels": "Usar os modelos deste dispositivo",
-        "allowModelUseAria": "Permitir que {{name}} use os modelos deste computador"
+        "controllingThisMac": "Conectado ao Cindy"
       },
       "toast": {
         "revoked": "Acesso revogado para este dispositivo",
         "revokeFailed": "Falha ao revogar acesso",
         "restored": "Acesso restaurado para este dispositivo",
-        "restoreFailed": "Falha ao restaurar acesso",
-        "modelUseRestored": "Aquele computador pode usar os modelos deste de novo",
-        "modelUseRevoked": "Aquele computador não pode mais usar os modelos deste",
-        "modelUseFailed": "Não foi possível salvar “Usar os modelos daqui”. Tente novamente."
+        "restoreFailed": "Falha ao restaurar acesso"
       },
       "sections": {
         "myDevices": "Meus dispositivos",
@@ -6867,6 +6866,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Dispositivos antigos e compartilhamentos que usam a conexão anterior ficarão indisponíveis. Desativado por padrão.",
         "peerSwitch": {
@@ -7001,11 +7004,6 @@
       "description": "Dispositivos conectados à mesma conta do Feishu podem se descobrir. Quando \"Permitir controle\" estiver ativado, seus outros dispositivos poderão controlar remotamente o {{appName}} nesta máquina.",
       "allowControl": "Permitir que dispositivos da mesma conta controlem esta máquina",
       "allowControlHint": "Quando ativado, outros dispositivos conectados à mesma conta podem controlar esta máquina sem aprovação por conexão. Um indicador visível é exibido durante o controle, e você pode desconectar a qualquer momento.",
-      "ownModelAccess": {
-        "title": "Permitir que meus outros computadores usem os modelos deste",
-        "hint": "Quando ativado, seus outros computadores podem usar os provedores deste computador. O Agent é executado aqui, com o login e a cota deste computador. Nada é compartilhado com outras pessoas.",
-        "writeFailed": "Não foi possível salvar esta configuração. Tente novamente."
-      },
       "keepAwake": "Manter computador ativo",
       "keepAwakeHint": "Quando ativado, esta máquina não entrará em suspensão, para que Agents em segundo plano e tarefas agendadas continuem em execução (você ainda pode desligar o monitor ou bloquear a tela).",
       "linkStatus": {
@@ -14212,7 +14210,7 @@
         "effortEndFast": "Mais rápido",
         "effortEndSmart": "Mais inteligente",
         "railSameEngine": "Somente {{agent}}",
-        "crossEngineWarning": "Trocar de mecanismo reconstrói o contexto e pode causar perda de conteúdo",
+        "crossEngineWarning": "O mecanismo muda na próxima mensagem e dá continuidade à conversa. As partes anteriores podem ser condensadas.",
         "favoritesSyncFailed": "Não foi possível sincronizar os favoritos. Abra o seletor novamente para tentar outra vez; o computador remoto pode precisar de uma atualização.",
         "favoritesSyncFailedUnreachable": "Os favoritos ainda não foram sincronizados: aquele computador está inacessível. Reabra o seletor quando a conexão voltar.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14228,12 +14226,8 @@
         "ultrafast": "Ultrarrápido"
       },
       "discoveredCopy": {
-        "title": "Usar {{provider}} em “{{device}}”?",
-        "description": "{{unavailable}} Se continuar, ele será executado em “{{device}}”. Você pode voltar aqui quando quiser.",
         "unavailableHere": "{{provider}} neste computador não está disponível agora.",
-        "unavailableOn": "{{provider}} em “{{device}}” não está disponível agora.",
-        "confirm": "Usar",
-        "cancel": "Manter como está"
+        "unavailableOn": "{{provider}} em “{{device}}” não está disponível agora."
       }
     },
     "permissionSelector": {
@@ -14500,33 +14494,14 @@
       "credentialSwitchApplied": "A troca de provedor de modelo entrou em vigor.",
       "credentialSwitchFailed": "Falha ao trocar o provedor de modelo. Escolha o modelo novamente.",
       "modelSwitchContextGuard": {
-        "title": "A conversa atual não cabe neste modelo",
         "warnToast": "Esta conversa já usa {{used}} — cerca de {{pct}}% da capacidade de {{total}} do novo modelo",
-        "overflowDescription": "Esta conversa já usa {{used}}, mais do que o novo modelo comporta ({{total}}, cerca de {{pct}}%). Se você trocar, Cindy fará um breve resumo e continuará. O histórico da conversa será mantido, mas não será repassado integralmente.",
-        "overflowDescriptionRemote": "Esta tarefa remota já usa {{used}} / {{total}} do contexto do modelo menor (cerca de {{pct}}%), então Cindy não pode trocar com segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo.",
-        "confirmSwitch": "Trocar e continuar",
-        "cancelSwitch": "Manter este modelo"
+        "condensedToast": "As partes anteriores da conversa serão condensadas para caber no novo modelo. O histórico completo continua disponível.",
+        "overflowDescriptionRemote": "Esta tarefa remota já usa {{used}} / {{total}} do contexto do modelo menor (cerca de {{pct}}%), então Cindy não pode trocar com segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo."
       },
       "agentSwitch": {
         "engineNotReady": "Mecanismo alterado, mas o novo mecanismo não iniciou; haverá uma nova tentativa quando você enviar uma mensagem",
         "failed": "Falha ao trocar o mecanismo; troca não aplicada",
-        "deferred": "Troca agendada: mudará para {{agent}} · {{model}} quando sua próxima mensagem for enviada",
-        "confirmation": {
-          "title": "Trocar Agent?",
-          "description": "O novo mecanismo do Agent continua por meio de um resumo de transferência, portanto não é possível garantir que o raciocínio e outros conteúdos sejam transferidos perfeitamente; ao voltar, você ainda poderá continuar a sessão do mecanismo original. A troca também interrompe o cache de prompts uma vez e pode aumentar o uso de tokens.",
-          "confirm": "Trocar Agent",
-          "cancel": "Manter Agent atual",
-          "dontShowAgain": "Não me lembrar novamente"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Executar o Agent neste computador novamente?",
-        "titleOther": "Executar o Agent em “{{device}}”?",
-        "description": "O registro da conversa no outro computador não pode ser transferido, então ela continua a partir de um resumo de transferência. O raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
-        "descriptionNativeHistory": "O registro completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, ela continua a partir de um resumo de transferência, e o raciocínio e detalhes semelhantes podem não ser transferidos completamente. Entra em vigor quando você enviar a próxima mensagem.",
-        "confirm": "Trocar de computador",
-        "cancel": "Manter como está",
-        "discoveredDescription": "{{reason}} {{description}}"
+        "deferred": "Troca agendada: mudará para {{agent}} · {{model}} quando sua próxima mensagem for enviada"
       }
     },
     "agentSelect": {
@@ -15661,6 +15636,11 @@
         "relocatedElsewhere": "O Agent agora é executado em outro computador",
         "quotaRebalance": "a cota dele deve ser usada primeiro"
       },
+      "handoffCoverage": {
+        "complete": "Conversa transferida na íntegra",
+        "condensed": "Partes anteriores condensadas",
+        "details": "Conteúdo transferido para continuar a conversa"
+      },
       "contextRebuild": {
         "labelOverflow": "Contexto reorganizado, continuando",
         "labelTimeout": "O último turno não teve resposta; contexto reorganizado para continuar",
@@ -15939,7 +15919,7 @@
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy nos dois computadores.",
       "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Crie uma nova sessão pela lista de sessões e copie o conteúdo necessário para continuar. A sessão original e as mensagens na fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de compartilhamento definido pelo proprietário. Escolha outro modelo disponível para continuar.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não liberou para você este provedor ou o modelo selecionado. Se for seu próprio computador, ative “Permitir que meus outros computadores usem os modelos deste” na conexão remota dele. Se alguém compartilhou com você, peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento. Você também pode escolher outro modelo.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não liberou para você este provedor ou o modelo selecionado. Se for seu próprio computador, ative “Permitir uso remoto” neste provedor lá. Se alguém compartilhou com você, peça ao proprietário para ajustar o acesso em Acesso remoto e compartilhamento. Você também pode escolher outro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tente novamente ou tente outra mensagem.",
       "REMOTE_AGENT_SHARE_PAUSED": "O proprietário pausou este compartilhamento para você, então estes modelos não podem ser usados até que ele seja retomado. Troque para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Este compartilhamento não está mais disponível (o proprietário o removeu ou você saiu). Troque para outro modelo para continuar.",
@@ -17351,6 +17331,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "As verificações agendadas continuam sem notificações do GitHub App.",
+      "label": "PR",
+      "url": "URL da pull request",
+      "condition": "Executar quando",
+      "any": "Atividade na PR",
+      "merged": "Mesclagem",
+      "review": "Atividade de revisão",
+      "ci": "Alterações na CI",
+      "timed": "Verificar também periodicamente",
+      "invalid": "Insira a URL de uma pull request do GitHub."
+    },
     "presentation": {
       "status": {
         "active": "Ativo",

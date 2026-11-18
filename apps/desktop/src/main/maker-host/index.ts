@@ -2645,7 +2645,7 @@ export function getMaker(): Maker {
               workingDir: createOpts.workingDir,
             });
             skillLinksChanged = result.changed;
-            for (const warning of result.warnings) {
+            for (const warning of result.warningsToReport) {
               desktopMakerLogger.warn('shared project skill link warning', {
                 workingDir: createOpts.workingDir,
                 warning,
@@ -2714,7 +2714,7 @@ export function getMaker(): Maker {
           // SSH remote 的 workingDir 属于远端文件系统，本机不能为它创建兼容链接。
           if (remoteHostId || !workingDir) return;
           const result = await prepareSharedProjectSkillLinks({ workingDir });
-          for (const warning of result.warnings) {
+          for (const warning of result.warningsToReport) {
             desktopMakerLogger.warn('shared project skill link warning', {
               workingDir,
               warning,

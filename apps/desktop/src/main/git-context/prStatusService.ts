@@ -100,6 +100,7 @@ export interface PrStatusServiceDeps {
   now?: () => number;
   scope?: () => Promise<string>;
   /** Every fresh, cached result (ok / not-found) as it lands; for prFollowWatch. Must not throw. */
+  onInvalidated?: () => void;
   onObserved?: (query: PrStatusQuery, result: PrStatusResult) => void;
 }
 
@@ -137,6 +138,7 @@ export class PrStatusService {
 
   invalidate(): void {
     this.generation += 1;
+    this.deps.onInvalidated?.();
     this.cache.clear();
     this.inFlight.clear();
   }

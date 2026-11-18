@@ -73,6 +73,7 @@ export interface PreparedRemoteMcp {
 export interface StartRemoteAgentDeps {
   attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
   attachmentStorageRoots?(sessionId: string): Record<string, string>;
+  nativeHistoryBackup?: boolean;
   /** Cancellation for this startup attempt only; never cancels other starts of the task. */
   startupSignal?: AbortSignal;
   /** Recheck this attempt's permission/explicit-close boundary until its first startup finishes. */
@@ -930,6 +931,8 @@ async function prepareAndStartRemoteAgentSession(
     return {
       sessionId: opts.sessionId!,
       acceptsImageDeliveryReceipts: true,
+      ...(caps.nativeHistoryBackup && deps.nativeHistoryBackup && kind === 'pi'
+        ? { acceptsNativeHistoryBackup: true } : {}),
       ...(attachments ? { acceptsAttachmentPreservation: true } : {}),
       ...(imageDeliveryEpoch !== undefined ? { imageDeliveryEpoch } : {}),
       virtualWorkspace: true,

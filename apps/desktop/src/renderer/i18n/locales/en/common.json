@@ -432,7 +432,8 @@
       "loading": "Loading model access…",
       "loadFailed": "Could not load model access. Reopen these settings.",
       "saveFailed": "Could not save model access. Try again.",
-      "needsUpdate": "Update Cindy on the provider’s computer to manage model access."
+      "needsUpdate": "Update Cindy on the provider’s computer to manage model access.",
+      "followsPool": "This connection was merged into “{{pool}}”, so its remote models follow “{{pool}}”. Change them there. Member limits below can still be set here."
     },
     "entry": {
       "label": "Remote & Sharing",
@@ -444,6 +445,8 @@
     },
     "manage": {
       "createLink": "Create Share Link",
+      "exportRoster": "Export member list",
+      "exportRosterFailed": "Could not save the member list.",
       "loading": "Loading sharing…",
       "notReady": "Sharing isn’t available right now. Make sure you’re signed in and online; it will retry automatically.",
       "loadFailed": "Couldn’t load sharing details. Try again in a moment.",
@@ -932,7 +935,7 @@
       "title": "Continue on {{label}}?",
       "fallbackTitle": "Continue on {{label}} with a summary?",
       "fallbackDescription": "The original conversation could not be fully restored. A summary may omit earlier details and tool results. Cancel to send on the original computer.",
-      "description": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The last few messages and a summary carry over; older details may be lost.",
+      "description": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The conversation carries over. Earlier parts may be condensed to fit the model.",
       "quota": "{{left}}% left",
       "quotaReset": "{{left}}% left · {{reset}}",
       "confirm": "Switch this time only",
@@ -4342,7 +4345,8 @@
           "description": "When on, your other computers and the people you share with can use this provider’s models. The Agent runs on this computer, using this computer’s sign-in and quota.",
           "descriptionGroup": "When on, your other computers and the people you share with can use this provider’s models. The provider group picks the computer that runs the Agent.",
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
-          "writeFailed": "Couldn’t save the remote access setting. Try again."
+          "writeFailed": "Couldn’t save the remote access setting. Try again.",
+          "followsPool": "This connection was merged into “{{pool}}” and follows its “Allow remote use”. Change it there."
         },
         "ownComputersCanUse": "Available to my other computers",
         "moreActionsAria": "More Actions",
@@ -6423,18 +6427,13 @@
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
-        "controllingThisMac": "Connected to Cindy",
-        "useThisDeviceModels": "Use this device's models",
-        "allowModelUseAria": "Let {{name}} use this computer's models"
+        "controllingThisMac": "Connected to Cindy"
       },
       "toast": {
         "revoked": "Access revoked for this device",
         "revokeFailed": "Failed to revoke access",
         "restored": "Access restored for this device",
-        "restoreFailed": "Failed to restore access",
-        "modelUseRestored": "That computer can use this computer's models again",
-        "modelUseRevoked": "That computer can no longer use this computer's models",
-        "modelUseFailed": "Couldn't save “Use this device's models”. Try again."
+        "restoreFailed": "Failed to restore access"
       },
       "sections": {
         "myDevices": "My devices",
@@ -6800,6 +6799,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "Use Only Agent-Net",
         "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
         "peerSwitch": {
@@ -6934,11 +6937,6 @@
       "description": "Devices signed in with the same Feishu account can discover each other. Once \"Allow control\" is on, your other devices can remotely control {{appName}} on this machine.",
       "allowControl": "Allow same-account devices to control this machine",
       "allowControlHint": "When enabled, other devices signed in with the same account can control this machine without per-connection approval. A visible indicator is shown while being controlled, and you can disconnect at any time.",
-      "ownModelAccess": {
-        "title": "Let my other computers use this computer’s models",
-        "hint": "When on, your other computers can use the providers on this computer. The Agent runs here, using this computer’s sign-in and quota. Nothing is shared with other people.",
-        "writeFailed": "Couldn't save this setting. Try again."
-      },
       "keepAwake": "Keep computer awake",
       "keepAwakeHint": "When enabled, this machine won't go to sleep, so background agents and scheduled tasks keep running (you can still turn off the display or lock the screen).",
       "linkStatus": {
@@ -14097,7 +14095,7 @@
         "effortEndFast": "Faster",
         "effortEndSmart": "Smarter",
         "railSameEngine": "{{agent}} only",
-        "crossEngineWarning": "Switching engines rebuilds context and may lose content",
+        "crossEngineWarning": "The next message switches engines and carries over the conversation. Earlier parts may be condensed.",
         "favoritesSyncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update.",
         "favoritesSyncFailedUnreachable": "Favorites are not synced yet: that computer is unreachable. Reopen the picker after the connection returns.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14113,12 +14111,8 @@
         "ultrafast": "Ultrafast"
       },
       "discoveredCopy": {
-        "title": "Use {{provider}} on “{{device}}”?",
-        "description": "{{unavailable}} If you continue, it runs on “{{device}}”. You can switch back here anytime.",
         "unavailableHere": "{{provider}} on this computer isn’t available right now.",
-        "unavailableOn": "{{provider}} on “{{device}}” isn’t available right now.",
-        "confirm": "Use it",
-        "cancel": "Keep as is"
+        "unavailableOn": "{{provider}} on “{{device}}” isn’t available right now."
       }
     },
     "permissionSelector": {
@@ -14384,33 +14378,14 @@
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",
       "modelSwitchContextGuard": {
-        "title": "This model can’t fit the current conversation",
         "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",
-        "overflowDescription": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won’t all be passed through verbatim.",
-        "overflowDescriptionRemote": "This remote task already uses {{used}} / {{total}} of the smaller model's context (about {{pct}}%), so Cindy cannot switch safely. Keep the current model or start a new task before choosing this model.",
-        "confirmSwitch": "Switch and continue",
-        "cancelSwitch": "Keep this model"
+        "condensedToast": "Earlier parts of the conversation will be condensed for the new model. Your full conversation history stays available.",
+        "overflowDescriptionRemote": "This remote task already uses {{used}} / {{total}} of the smaller model's context (about {{pct}}%), so Cindy cannot switch safely. Keep the current model or start a new task before choosing this model."
       },
       "agentSwitch": {
         "engineNotReady": "Engine switched, but the new engine failed to start; it will retry when you send a message",
         "failed": "Engine switch failed; not applied",
-        "deferred": "Switch scheduled: will change to {{agent}} · {{model}} when your next message is sent",
-        "confirmation": {
-          "title": "Switch Agent?",
-          "description": "The new Agent engine continues through a handoff summary, so reasoning and other content cannot be guaranteed to carry over perfectly; switching back still lets you continue the original engine’s session. Switching also interrupts the prompt cache once and may increase token usage.",
-          "confirm": "Switch Agent",
-          "cancel": "Keep Current Agent",
-          "dontShowAgain": "Don’t remind me again"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Run the Agent on this computer again?",
-        "titleOther": "Run the Agent on “{{device}}”?",
-        "description": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
-        "descriptionNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
-        "confirm": "Switch computer",
-        "cancel": "Keep as is",
-        "discoveredDescription": "{{reason}} {{description}}"
+        "deferred": "Switch scheduled: will change to {{agent}} · {{model}} when your next message is sent"
       }
     },
     "agentSelect": {
@@ -15557,6 +15532,11 @@
         "relocatedElsewhere": "Agent now runs on another computer",
         "quotaRebalance": "its quota should be used first"
       },
+      "handoffCoverage": {
+        "complete": "Full conversation carried over",
+        "condensed": "Earlier parts condensed",
+        "details": "Content carried over to continue the conversation"
+      },
       "contextRebuild": {
         "labelOverflow": "Context reorganized, continuing",
         "labelTimeout": "Last turn didn't respond; context reorganized to continue",
@@ -15835,7 +15815,7 @@
       "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
       "REMOTE_AGENT_RESUME_REJECTED": "The computer running the model cannot resume this session. Create a new session from the session list and copy over the content you need to continue. The original session and queued messages are kept.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Let my other computers use this computer’s models” in its Remote Connection settings; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t opened this provider or the selected model to you. If it’s your own computer, switch on “Allow remote use” for this provider there; if someone shared it with you, ask them to adjust access in Remote & Sharing. Or pick another model.",
       "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
@@ -17185,6 +17165,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "Scheduled checks will continue while GitHub App notifications are unavailable.",
+      "label": "PR",
+      "url": "Pull request URL",
+      "condition": "Run when",
+      "any": "PR activity",
+      "merged": "Merged",
+      "review": "Review activity",
+      "ci": "CI status changes",
+      "timed": "Also check on a schedule",
+      "invalid": "Enter a GitHub pull request URL."
+    },
     "presentation": {
       "status": {
         "active": "Active",

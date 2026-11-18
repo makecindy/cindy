@@ -432,7 +432,8 @@
       "loading": "モデルの利用範囲を読み込み中…",
       "loadFailed": "モデルの利用範囲を読み込めませんでした。設定を開き直してください。",
       "saveFailed": "モデルの利用範囲を保存できませんでした。再試行してください。",
-      "needsUpdate": "モデルの利用範囲を設定するには、プロバイダーのコンピューターの Cindy を更新してください。"
+      "needsUpdate": "モデルの利用範囲を設定するには、プロバイダーのコンピューターの Cindy を更新してください。",
+      "followsPool": "この接続は「{{pool}}」に統合されたため、リモートで使えるモデルは「{{pool}}」に従います。そちらで変更してください。下の各メンバーの制限はここで設定できます。"
     },
     "entry": {
       "label": "リモートと共有",
@@ -443,6 +444,8 @@
     },
     "manage": {
       "createLink": "共有リンクを作成",
+      "exportRoster": "メンバー一覧をエクスポート",
+      "exportRosterFailed": "メンバー一覧を保存できませんでした。",
       "loading": "共有を読み込み中…",
       "notReady": "共有は現在利用できません。ログインしてネットワークに接続していることを確認してください。自動的に再試行します。",
       "loadFailed": "共有情報を読み込めませんでした。しばらくしてからもう一度お試しください。",
@@ -922,7 +925,7 @@
       "title": "{{label}} に切り替えて続けますか？",
       "fallbackTitle": "要約を使って {{label}} で続けますか？",
       "fallbackDescription": "元の会話を完全に復元できませんでした。要約では以前の詳細やツールの結果が省略される場合があります。キャンセルすると元のパソコンで送信します。",
-      "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。直近数回のやり取りと要約は引き継がれますが、それより前の細部は失われることがあります。",
+      "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。会話は引き継がれます。モデルの容量に合わせて以前のやり取りが圧縮される場合があります。",
       "quota": "残り {{left}}%",
       "quotaReset": "残り {{left}}%・{{reset}}",
       "confirm": "今回だけ切り替える",
@@ -4299,7 +4302,8 @@
           "description": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はこのパソコン上で、このパソコンのログインとクォータを使って実行されます。",
           "descriptionGroup": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はプロバイダーグループが選んだパソコンで実行されます。",
           "ariaLabel": "他のパソコンと共有相手にこのプロバイダーの利用を許可",
-          "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。"
+          "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。",
+          "followsPool": "この接続は「{{pool}}」に統合され、その「リモート利用を許可」に従います。「{{pool}}」で変更してください。"
         },
         "ownComputersCanUse": "自分の他のパソコンで利用可",
         "moreActionsAria": "その他の操作",
@@ -6380,18 +6384,13 @@
         "allowInboundAria": "{{name}} に本機の操作を許可するか切り替え",
         "peerControlOff": "相手側が操作を許可していません",
         "masterOffHint": "先に上のメインスイッチをオンにしてください",
-        "controllingThisMac": "Cindy に接続中",
-        "useThisDeviceModels": "このPCのモデルを使う",
-        "allowModelUseAria": "{{name}} にこのコンピュータのモデルの使用を許可"
+        "controllingThisMac": "Cindy に接続中"
       },
       "toast": {
         "revoked": "このデバイスのアクセス権を撤回しました",
         "revokeFailed": "撤回に失敗しました",
         "restored": "このデバイスのアクセス権を復元しました",
-        "restoreFailed": "復元に失敗しました",
-        "modelUseRestored": "このコンピュータのモデルを再び使えるようにしました",
-        "modelUseRevoked": "このコンピュータのモデルを使えないようにしました",
-        "modelUseFailed": "「このPCのモデルを使う」を保存できませんでした。もう一度お試しください。"
+        "restoreFailed": "復元に失敗しました"
       },
       "sections": {
         "myDevices": "マイデバイス",
@@ -6757,6 +6756,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "Agent-Net のみ使用",
         "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。",
         "peerSwitch": {
@@ -6891,11 +6894,6 @@
       "description": "同じ Feishu アカウントでログインしたデバイス同士が相互に検出できます。「操作を許可」をオンにすると、他のデバイスからこのマシンの {{appName}} をリモート操作できます。",
       "allowControl": "同一アカウントのデバイスによる操作を許可",
       "allowControlHint": "オンにすると、同じアカウントでログインした他のデバイスは毎回の承認なしでこのマシンを操作できます。被操作中はインジケーターが表示され、いつでも切断できます。",
-      "ownModelAccess": {
-        "title": "自分の他のパソコンでこのパソコンのモデルを使う",
-        "hint": "オンにすると、あなたの他のパソコンがこのパソコンのプロバイダーを使えます。Agent はこのパソコン上で、このパソコンのサインインとクォータを使って実行されます。ほかの人には共有されません。",
-        "writeFailed": "設定を保存できませんでした。もう一度お試しください。"
-      },
       "keepAwake": "パソコンをスリープさせない",
       "keepAwakeHint": "オンにするとこのマシンはスリープせず、バックグラウンドの Agent やスケジュールタスクが動作し続けます（ディスプレイのオフや画面ロックは可能です）。",
       "linkStatus": {
@@ -14043,7 +14041,7 @@
         "effortEndFast": "高速",
         "effortEndSmart": "高精度",
         "railSameEngine": "{{agent}} のみ",
-        "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります",
+        "crossEngineWarning": "次のメッセージでエンジンが切り替わり、会話を引き継ぎます。以前のやり取りは圧縮される場合があります。",
         "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
         "favoritesSyncFailedUnreachable": "お気に入りはまだ同期されていません。そのパソコンに現在接続できません。接続が戻ってから開き直してください。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14059,12 +14057,8 @@
         "ultrafast": "超高速"
       },
       "discoveredCopy": {
-        "title": "「{{device}}」の {{provider}} を使いますか？",
-        "description": "{{unavailable}}続けると「{{device}}」で実行します。ここからいつでも戻せます。",
         "unavailableHere": "このパソコンの {{provider}} は現在使えません。",
-        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。",
-        "confirm": "使う",
-        "cancel": "このままにする"
+        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。"
       }
     },
     "permissionSelector": {
@@ -14330,33 +14324,14 @@
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "credentialSwitchFailed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
       "modelSwitchContextGuard": {
-        "title": "このモデルには今の会話が収まりません",
         "warnToast": "この会話はすでに {{used}} 使っています。切替後は新しいモデルの容量（{{total}}）の約 {{pct}}% になります",
-        "overflowDescription": "この会話はすでに {{used}} 使っており、新しいモデルが扱える {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy が要約してから続けます。チャット履歴は残りますが、全文をそのままは渡しません。",
-        "overflowDescriptionRemote": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。",
-        "confirmSwitch": "切り替えて続ける",
-        "cancelSwitch": "今は切り替えない"
+        "condensedToast": "新しいモデルに合わせて以前のやり取りを圧縮します。会話履歴はすべて引き続き確認できます。",
+        "overflowDescriptionRemote": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。"
       },
       "agentSwitch": {
         "engineNotReady": "エンジンは切り替わりましたが、新しいエンジンの起動に失敗しました。メッセージ送信時に自動的に再試行されます",
         "failed": "エンジンの切り替えに失敗しました(未適用)",
-        "deferred": "切り替えを予約しました:次のメッセージ送信時に {{agent}} · {{model}} に切り替わります",
-        "confirmation": {
-          "title": "Agent を切り替えますか？",
-          "description": "新しい Agent エンジンは引き継ぎ要約を通じて続行するため、思考内容などが完全に引き継がれる保証はありません。元に戻せば、元のエンジンのセッションを引き続き利用できます。切り替えによってプロンプトキャッシュも一度中断され、トークン消費が増える可能性があります。",
-          "confirm": "Agent を切り替える",
-          "cancel": "現在の Agent を維持",
-          "dontShowAgain": "次回から表示しない"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Agent をこのパソコンで実行し直しますか？",
-        "titleOther": "Agent を「{{device}}」で実行しますか？",
-        "description": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-        "descriptionNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-        "confirm": "パソコンを切り替える",
-        "cancel": "このままにする",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "切り替えを予約しました:次のメッセージ送信時に {{agent}} · {{model}} に切り替わります"
       }
     },
     "agentSelect": {
@@ -15492,6 +15467,11 @@
         "relocatedElsewhere": "Agent を別のパソコンで実行するようにしました",
         "quotaRebalance": "こちらのクォータを先に使うため"
       },
+      "handoffCoverage": {
+        "complete": "会話をすべて引き継ぎました",
+        "condensed": "以前のやり取りを圧縮しました",
+        "details": "会話の引き継ぎ内容"
+      },
       "contextRebuild": {
         "labelOverflow": "コンテキストを整理して続行しました",
         "labelTimeout": "直前の応答がなかったため、整理して続行しました",
@@ -15770,7 +15750,7 @@
       "REMOTE_AGENT_INVALID": "Agent を実行しているパソコンとの通信でエラーが発生しました。もう一度お試しください。続く場合は両方のパソコンの Cindy を最新版に更新してください。",
       "REMOTE_AGENT_RESUME_REJECTED": "モデルを実行しているコンピューターでは、このセッションを再開できません。セッション一覧から新しいセッションを作成し、続行に必要な内容をコピーしてください。元のセッションと送信待ちのメッセージは保持されます。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "このモデルは共有者が設定したモデル使用割合の上限に達しました。別の利用可能なモデルで続行してください。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーまたは選択したモデルの利用が許可されていません。自分のパソコンなら、そのパソコンの「リモート接続」で「自分の他のパソコンでこのパソコンのモデルを使う」をオンにしてください。共有を受けたものなら、所有者に「リモートと共有」で利用範囲を変更してもらってください。別のモデルを選ぶこともできます。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーまたは選択したモデルの利用が許可されていません。自分のパソコンなら、そのパソコンでこのプロバイダーの「リモート利用を許可」をオンにしてください。共有を受けたものなら、所有者に「リモートと共有」で利用範囲を変更してもらってください。別のモデルを選ぶこともできます。",
       "REMOTE_AGENT_FORK_FAILED": "Agent を実行しているパソコンで、ここから新しいセッションを始められませんでした。もう一度試すか、別のメッセージでお試しください。",
       "REMOTE_AGENT_SHARE_PAUSED": "共有した人があなたへの共有を一時停止したため、再開されるまでこれらのモデルは使えません。別のモデルに切り替えて続けられます。",
       "REMOTE_AGENT_SHARE_REMOVED": "この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルに切り替えて続けられます。",
@@ -17111,6 +17091,18 @@
     "ultra": "究極"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "GitHub App の通知を受け取れない間も定期チェックは続きます。",
+      "label": "PR",
+      "url": "PR の URL",
+      "condition": "実行条件",
+      "any": "PR の更新",
+      "merged": "マージ時",
+      "review": "レビューの更新",
+      "ci": "CI 状態の変更",
+      "timed": "定期的にも確認",
+      "invalid": "GitHub PR の URL を入力してください。"
+    },
     "presentation": {
       "status": {
         "active": "有効",

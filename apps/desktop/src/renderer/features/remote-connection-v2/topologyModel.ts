@@ -83,6 +83,8 @@ export interface TopologyGroup {
 
 export interface TopologyRelay {
   protocol?: DeviceLinkPeerLinksSnapshot['relayProtocol'];
+  /** 经中转的数据走中转的 UDP 还是 WebSocket;rttMs 是这条路的往返。 */
+  transport?: DeviceLinkPeerLinksSnapshot['relayTransport'];
   name: string;
   selfHosted: boolean;
   rttMs: number | null;
@@ -117,6 +119,7 @@ export interface BuildTopologyInput {
   relayRttMs: number | null;
   relayName: string;
   relayProtocol?: DeviceLinkPeerLinksSnapshot['relayProtocol'];
+  relayTransport?: DeviceLinkPeerLinksSnapshot['relayTransport'];
   selfHosted: boolean;
   controlledBy: readonly string[];
   unresponsive: readonly string[];
@@ -276,6 +279,7 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
     relay: {
       name: input.relayName,
       protocol: input.relayProtocol,
+      transport: input.relayProtocol ? input.relayTransport : undefined,
       selfHosted: input.selfHosted,
       rttMs: input.relayRttMs,
       flow: mergeFlows(nodes.filter((n) => n.status === 'relay').map((n) => n.flow)),

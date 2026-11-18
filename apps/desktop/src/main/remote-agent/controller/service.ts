@@ -34,7 +34,7 @@ import {
   resolveMemoryScopeKey,
   snapshotManagedSkillGrants,
 } from '@cindy/maker-core';
-import { parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
+import { isProviderSharePeer, parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { createLogger } from '../../logger.js';
 import { findReceivedShare, parseProviderShareAgentDeviceId, providerShareAccessEpoch,
   onProviderShareReceivedChanged } from '../../device-link/providerShareGuest.js';
@@ -67,7 +67,7 @@ export interface DeviceAgentServiceDeps {
   attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
   attachmentStorageRoots?(sessionId: string): Record<string, string>;
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
-  remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
+  remoteInvoke(deviceId: string, channel: string, args: unknown[], options?: { beforeDispatch?: () => void }): Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>;
   /** Re-open the authenticated share link after a successful lease renewal. */
   renewSharedProviderLink?(peer: string): Promise<unknown>;
   rgPath(): string;
@@ -515,6 +515,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const handle = await startRemoteAgentSession(input.agentKind, opts, {
       startupSignal: attempt.signal,
       assertStartupCurrent: requireCurrent,
+      nativeHistoryBackup: !shared && !isProviderSharePeer(target) && !opts[LOCAL_AGENT_CLIENT],
       reconnectAuthorization: (isCurrent, options) => reconnectAuthorization?.(isCurrent, options) ?? Promise.resolve(),
       onTaskGrantRenewable: (renewable) => { grantRenewable = renewable; },
       readImageDeliveryEpoch: deps.readImageDeliveryEpoch,

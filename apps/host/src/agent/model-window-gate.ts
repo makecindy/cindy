@@ -1,9 +1,7 @@
 import {
-  assessRuntimeModelSwitchGate,
   type RuntimeModelSwitchGateInput,
 } from '../../../desktop/src/shared/runtimeModelSwitchGate.ts';
 import { lookupVerifiedContextWindow } from '../../../desktop/src/main/maker-ipc/contextOverflowRollover.ts';
-import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 
 /** The desktop's refusal on this path (register.ts, applySessionRuntimeSelection, `reject`). */
 export const MODEL_WINDOW_REBUILD_UNSUPPORTED =
@@ -12,8 +10,10 @@ export const MODEL_WINDOW_REBUILD_UNSUPPORTED =
 /** What the gate reads from a running task, as the desktop does from its live session. */
 export interface ModelSwitchLiveRuntime {
   model?: string;
+  isTurnRunning?(): boolean;
   getUsageSnapshot?(): { contextTokens?: number; contextWindow?: number } | undefined;
   previewModelSwitch?(model: string, options: { providerId: string | null }): Promise<{
+    action?: string;
     windowVerified?: boolean;
     targetContextWindow?: number;
   } | undefined>;
@@ -36,14 +36,10 @@ const positive = (value: unknown): value is number =>
 /**
  * The window gate's input for a model change a client asks the Host for, computed as the desktop
  * does for a model change from a Device Link client (register.ts applySessionRuntimeSelection:
- * target and current windows, context usage, `isRemote`). A Host client cannot confirm a rebuild,
- * so as on that path a verified shrink whose usage is at danger or overflow is refused, never
- * rebuilt; an unverified window or unknown usage lets the change through.
- *
- * Unlike the desktop, the Host applies a change during a turn at once (it has no deferred runtime
- * selection), so the gate judges it as the desktop judges a change it applies: as if idle.
+ * target and current windows and context usage). The legacy session update rejects verified
+ * pressured shrinks. Owner Device Link intent is evaluated separately at actual dispatch.
  */
-export async function modelSwitchGateInput(input: ModelSwitchWindowInput): Promise<RuntimeModelSwitchGateInput> {
+export async function modelSwitchGateInput(input: ModelSwitchWindowInput): Promise<RuntimeModelSwitchGateInput & { piCanVerifyLiveWindow: boolean }> {
   const { agentKind, live, stored, target } = input;
   const currentModel = live?.model ?? stored.model ?? undefined;
   const runtimeRouteChanged = currentModel !== undefined
@@ -70,6 +66,7 @@ export async function modelSwitchGateInput(input: ModelSwitchWindowInput): Promi
     ? usage.contextTokens : null;
   const liveUsageIsAuthoritative = liveContextTokens !== null && (liveContextTokens > 0 || persistedContextTokens === 0);
   return {
+    piCanVerifyLiveWindow: piPreview?.action === 'hot' || piPreview?.action === 'refresh',
     inTurn: false,
     isRemote: true,
     agentKind,
@@ -79,10 +76,4 @@ export async function modelSwitchGateInput(input: ModelSwitchWindowInput): Promi
     contextTokensKnown: liveUsageIsAuthoritative || persistedContextTokens !== null,
     contextTokens: liveUsageIsAuthoritative ? liveContextTokens : (persistedContextTokens ?? 0),
   };
-}
-
-/** Refuses, before anything changes, a model change the desktop would refuse on this path. */
-export async function assertModelSwitchWindow(input: ModelSwitchWindowInput): Promise<void> {
-  const gate = assessRuntimeModelSwitchGate(await modelSwitchGateInput(input));
-  if (gate.reject === 'remote-shrink-rebuild') throwIpcError('PRECONDITION_FAILED', MODEL_WINDOW_REBUILD_UNSUPPORTED);
 }

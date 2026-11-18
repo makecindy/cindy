@@ -135,8 +135,6 @@ import {
   clearControllerDisplayNames,
   getControllerDisplayName,
   setDispatchPresenceOfflineCheck,
-  revokeControllerModelUse,
-  notifyControllerModelUseRestored,
 } from './dispatch.desktop';
 import {
   clearControllerPlatforms,
@@ -222,7 +220,7 @@ import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute } from '
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
 import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
-  agentNetPeerRoute, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRttMs } from './agentNetRuntime.js';
+  agentNetPeerRoute, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute } from './agentNetRuntime.js';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery, requiresSessionLink } from './linkRecovery';
 import { invalidatePluginOauth } from '../plugin-oauth/runtime.js';
@@ -1973,6 +1971,13 @@ export function getDeviceLinkStatus(): DeviceLinkStatus {
 /** 远程连接拓扑:本机控制链路和 Agent-Net 传输路径的快照。 */
 export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
   if (!client || linkTornDown || isAppSessionBoundaryPending()) return { links: [], relayRttMs: null };
+  const relayProtocol = client.getStatus() === 'online' && !agentNetRelayDown()
+    ? (primaryUsesEncryptedTransport ? 'agent-net' : 'device-link')
+    : undefined;
+  // 经中转的数据走哪条路、往返取那条路的(2026-11-18 用户要求):Agent-Net 是中转的 UDP 端口或 WebSocket,
+  // Device Link 的中转只有 WebSocket。Agent-Net 主连接还没报上来时不写，不猜。
+  const agentNetRoute = primaryUsesEncryptedTransport ? agentNetRelayRoute() : null;
+  const relayTransport = !relayProtocol ? undefined : primaryUsesEncryptedTransport ? agentNetRoute?.via : 'websocket';
   return {
     // 拓扑只画同账号设备;跨账号 peer(共享任务 / 供应商分享)不在这页。
     links: client.getPeerLinkSnapshots().filter((link) => !isScopedPeer(link.deviceId)).map((link) => {
@@ -1981,10 +1986,9 @@ export function getDeviceLinkPeerLinks(): DeviceLinkPeerLinksSnapshot {
       return core ? { ...link, ...core, encrypted } : { ...link, encrypted };
     }),
     ...(primaryUsesEncryptedTransport ? { agentNetRoutes: agentNetPeerRoutes() } : {}),
-    relayProtocol: client.getStatus() === 'online' && !agentNetRelayDown()
-      ? (primaryUsesEncryptedTransport ? 'agent-net' : 'device-link')
-      : undefined,
-    relayRttMs: primaryUsesEncryptedTransport ? agentNetRelayRttMs() : client.getRelayRttMs(),
+    relayProtocol,
+    ...(relayTransport ? { relayTransport } : {}),
+    relayRttMs: primaryUsesEncryptedTransport ? agentNetRoute?.rttMs ?? null : client.getRelayRttMs(),
   };
 }
 
@@ -2177,20 +2181,6 @@ export async function restoreController(deviceId: string): Promise<void> {
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
   pollExternalSettingsChange();
   log.info(`access restored for controller ${shortDeviceRef(deviceId)}`);
-}
-
-/**
- * 被控端:单独开关某台同账号电脑的「用本机模型」(远程 Agent)。它跟着「控制本机」：控制本机开着时默认
- * 可用；关掉后结束它在本机的远程 Agent 任务并让它重读目录，其余远程控制不变。
- */
-export async function setControllerModelUse(deviceId: string, allowed: boolean): Promise<void> {
-  pollExternalSettingsChange();
-  await updateDeviceLinkSetting('modelUseRevokedControllers', (latest) => allowed
-    ? latest.filter((id) => id !== deviceId)
-    : latest.includes(deviceId) ? latest : [...latest, deviceId]);
-  if (allowed) notifyControllerModelUseRestored(deviceId);
-  else await revokeControllerModelUse(deviceId);
-  log.info(`model use ${allowed ? 'restored' : 'revoked'} for controller ${shortDeviceRef(deviceId)}`);
 }
 
 // ─── busy presence(被控端把「本机有 turn 在跑」上报,供控制端设备列表显示)──
@@ -2502,7 +2492,7 @@ export async function remoteInvoke(
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
+  options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
   if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
@@ -2516,7 +2506,7 @@ export async function remoteInvoke(
 
 async function remoteInvokeLive(
   deviceId: string, channel: string, args: unknown[],
-  options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' },
+  options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' },
 ): Promise<InvokeResultPayload> {
   options?.preSend?.();
   assertNotStandby();
@@ -2621,7 +2611,7 @@ export async function remoteBackgroundInvoke(
   agentDeviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; liveProviderMetadata?: true },
+  options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
   const owner = activeOwnerScopeKey();
   const current = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
@@ -2724,7 +2714,7 @@ export function providerShareHostInvoke(target: string, channel: string, args: u
   return remoteBackgroundInvoke(target, channel, args);
 }
 
-async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
+async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
   if (options?.liveProviderMetadata) return backgroundInvokeDeviceLive(deviceId, channel, args, options);
   const epoch = getRemoteLinkCloseEpoch(deviceId);
   return invokeProviderMetadataContinuity(deviceId, channel, args,
@@ -2735,7 +2725,7 @@ async function backgroundInvokeDevice(deviceId: string, channel: string, args: u
     });
 }
 
-async function backgroundInvokeDeviceLive(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
+async function backgroundInvokeDeviceLive(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; beforeDispatch?: () => void }): Promise<InvokeResultPayload> {
   options?.preSend?.();
   if (!client?.isLinkReady(deviceId)) {
     assertBackgroundLinkAccepted(await openRemoteLink(deviceId), {

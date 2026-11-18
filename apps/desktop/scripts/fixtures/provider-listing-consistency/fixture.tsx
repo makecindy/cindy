@@ -36,7 +36,6 @@ mountPage({
       scanLocalCli: async () => ({ detections: [] }),
       requestProviderModelsAutoRefresh: async () => ({ ok: true }),
       setProviderOrder: forbid('setProviderOrder'),
-      getOwnComputerModelUse: async () => ({ enabled: true }),
       listProviderPresets: async () => ({ presets: BUNDLED_CATALOG.presets ?? [] }),
       localModelList: async () => ({ status: { kind: 'ready' }, models: [], memoryGb: 0 }),
       localModelStatus: async () => ({ kind: 'ready' }),

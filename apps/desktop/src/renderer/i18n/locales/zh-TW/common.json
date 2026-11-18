@@ -432,7 +432,8 @@
       "loading": "正在讀取模型範圍…",
       "loadFailed": "無法讀取模型範圍，請重新開啟此設定。",
       "saveFailed": "無法儲存模型範圍，請重試。",
-      "needsUpdate": "請更新供應商所在電腦的 Cindy 後再設定模型範圍。"
+      "needsUpdate": "請更新供應商所在電腦的 Cindy 後再設定模型範圍。",
+      "followsPool": "這條連線已併入「{{pool}}」，遠端可用的模型跟隨「{{pool}}」，請在那裡修改。下方各成員的模型限制仍可在這裡設定。"
     },
     "entry": {
       "label": "遠端與分享",
@@ -443,6 +444,8 @@
     },
     "manage": {
       "createLink": "產生分享連結",
+      "exportRoster": "匯出成員名單",
+      "exportRosterFailed": "無法儲存成員名單",
       "loading": "正在讀取分享…",
       "notReady": "分享服務暫時無法使用。確認已登入且網路正常後會自動重試。",
       "loadFailed": "分享資訊沒有載入，請稍後重試。",
@@ -922,7 +925,7 @@
       "title": "換到 {{label}} 繼續？",
       "fallbackTitle": "用摘要換到 {{label}} 繼續？",
       "fallbackDescription": "無法完整接續原來的對話。使用摘要繼續可能遺漏早期細節和工具結果；取消則留在原電腦傳送。",
-      "description": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會帶上最近幾輪對話和摘要，更早的細節可能記不全。",
+      "description": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會接續對話。較早的部分可能會壓縮，以配合模型的容量。",
       "quota": "還剩 {{left}}%",
       "quotaReset": "還剩 {{left}}%，{{reset}}",
       "confirm": "僅這次換過去",
@@ -4299,7 +4302,8 @@
           "description": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，Agent 在這台電腦上執行，使用這台電腦的登入和配額。",
           "descriptionGroup": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，由供應商組選一台電腦執行 Agent。",
           "ariaLabel": "允許你的其他電腦和你分享的人呼叫此供應商",
-          "writeFailed": "遠端呼叫設定未能儲存，請重試"
+          "writeFailed": "遠端呼叫設定未能儲存，請重試",
+          "followsPool": "這條連線已併入「{{pool}}」，跟隨它的「允許遠端呼叫」，請在「{{pool}}」裡修改。"
         },
         "ownComputersCanUse": "我的其他電腦可用",
         "moreActionsAria": "更多操作",
@@ -6380,18 +6384,13 @@
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
         "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
-        "controllingThisMac": "已連接到 Cindy",
-        "useThisDeviceModels": "用本機模型",
-        "allowModelUseAria": "允許 {{name}} 用本機的模型"
+        "controllingThisMac": "已連接到 Cindy"
       },
       "toast": {
         "revoked": "已撤銷該裝置的存取權限",
         "revokeFailed": "撤銷失敗",
         "restored": "已恢復該裝置的存取權限",
-        "restoreFailed": "恢復失敗",
-        "modelUseRestored": "已允許這台電腦用本機的模型",
-        "modelUseRevoked": "這台電腦不能再用本機的模型",
-        "modelUseFailed": "「用本機模型」未能儲存，請重試"
+        "restoreFailed": "恢復失敗"
       },
       "sections": {
         "myDevices": "我的裝置",
@@ -6757,6 +6756,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "僅使用 Agent-Net",
         "onlyEncryptedHint": "開啟後，舊版裝置及仍使用舊連線的分享將無法使用。預設關閉。",
         "peerSwitch": {
@@ -6891,11 +6894,6 @@
       "description": "同一飛書帳號登入的裝置可以互相發現；開啟「允許控制」後，你的其它裝置可以遠端連線本機的 {{appName}}。",
       "allowControl": "允許同帳號裝置控制本機",
       "allowControlHint": "開啟後，使用同一帳號登入的其它裝置無需逐次確認即可控制本機；本機會顯示遠端控制提示，可隨時斷開。",
-      "ownModelAccess": {
-        "title": "讓我的其他電腦用本機模型",
-        "hint": "開啟後，你的其他電腦可以用這臺電腦上的模型供應商，Agent 在這臺電腦上執行，用這臺電腦的登入和配額。不會分享給別人。",
-        "writeFailed": "設定未能儲存，請重試"
-      },
       "keepAwake": "保持電腦喚醒",
       "keepAwakeHint": "開啟後本機不會進入休眠，背景中的 Agent 與定時任務可持續執行（仍可關閉顯示器或鎖定螢幕）。",
       "linkStatus": {
@@ -14042,7 +14040,7 @@
         "effortEndFast": "更高效",
         "effortEndSmart": "更聰明",
         "railSameEngine": "僅 {{agent}}",
-        "crossEngineWarning": "切換引擎會重建上下文，可能遺失內容",
+        "crossEngineWarning": "下一則訊息將切換引擎並接續對話，較早的部分可能會壓縮",
         "favoritesSyncFailed": "收藏未能同步。請重新開啟重試；被控電腦可能需要更新。",
         "favoritesSyncFailedUnreachable": "收藏暫時沒有同步：那台電腦目前連不上。恢復連線後重新開啟即可。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14059,12 +14057,8 @@
         "ultrafast": "超快"
       },
       "discoveredCopy": {
-        "title": "改用「{{device}}」上的 {{provider}}？",
-        "description": "{{unavailable}}確認後由「{{device}}」執行，之後隨時可以在這裡換回。",
         "unavailableHere": "這台電腦上的 {{provider}} 現在無法使用。",
-        "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。",
-        "confirm": "改用",
-        "cancel": "保持不變"
+        "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。"
       }
     },
     "permissionSelector": {
@@ -14330,33 +14324,14 @@
       "credentialSwitchApplied": "模型來源切換已生效。",
       "credentialSwitchFailed": "模型來源切換失敗，請重新選擇。",
       "modelSwitchContextGuard": {
-        "title": "這個模型裝不下目前的對話",
         "warnToast": "這段對話已經用了 {{used}}，換過去大約會佔新模型容量（{{total}}）的 {{pct}}%",
-        "overflowDescription": "這段對話已經用了 {{used}}，超過新模型能放下的 {{total}}（約 {{pct}}%）。換過去後，Cindy 會先整理一份摘要再繼續；對話記錄還在，只是不會整段原樣帶給新模型。",
-        "overflowDescriptionRemote": "目前遠端任務的上下文已用 {{used}} / {{total}}（約 {{pct}}%），無法安全切換到這個小視窗模型。請保留目前模型，或新增任務後再選擇。",
-        "confirmSwitch": "切換並繼續",
-        "cancelSwitch": "先不換"
+        "condensedToast": "為了配合新模型，較早的對話會壓縮，完整的對話記錄仍可查看。",
+        "overflowDescriptionRemote": "目前遠端任務的上下文已用 {{used}} / {{total}}（約 {{pct}}%），無法安全切換到這個小視窗模型。請保留目前模型，或新增任務後再選擇。"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切換，但新引擎啟動失敗；傳送訊息時會自動重試",
         "failed": "引擎切換失敗，未生效",
-        "deferred": "已登記切換：下一則訊息發出時將切換到 {{agent}} · {{model}}",
-        "confirmation": {
-          "title": "切換 Agent？",
-          "description": "新 Agent 引擎會透過交接摘要續接，思考內容等不能保證完美繼承；切回時仍可繼續原引擎會話。切換還會讓 prompt 快取中斷一次，可能造成 Token 消耗的增加。",
-          "confirm": "切換 Agent",
-          "cancel": "保留當前 Agent",
-          "dontShowAgain": "下次不再提醒"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "改回這台電腦執行 Agent？",
-        "titleOther": "改到「{{device}}」上執行 Agent？",
-        "description": "原來那台電腦上的對話記錄帶不過來，會整理成交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
-        "descriptionNativeHistory": "完整對話記錄會複製過去接著用；如果恢復不了，會改用交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
-        "confirm": "換電腦執行",
-        "cancel": "保持不變",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "已登記切換：下一則訊息發出時將切換到 {{agent}} · {{model}}"
       }
     },
     "agentSelect": {
@@ -15491,6 +15466,11 @@
         "relocatedElsewhere": "Agent 已改到另一台電腦上執行",
         "quotaRebalance": "這個帳號的配額更該先用"
       },
+      "handoffCoverage": {
+        "complete": "已完整接續對話",
+        "condensed": "較早的對話已壓縮",
+        "details": "用於接續對話的交接內容"
+      },
       "contextRebuild": {
         "labelOverflow": "已整理上下文並繼續",
         "labelTimeout": "上一輪沒有回應，已整理後繼續",
@@ -15769,7 +15749,7 @@
       "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
       "REMOTE_AGENT_RESUME_REJECTED": "執行模型的電腦無法恢復這個任務。請從任務列表建立新任務，將需要繼續的內容複製過去。原任務和排隊訊息會保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達到分享者設定的模型占比上限。請選擇其他可用模型繼續。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦未向你開放這個供應商或所選模型。是你自己的電腦時，在那臺電腦的「遠端連線」裡開啟「讓我的其他電腦用本機模型」；別人分享給你的，請對方在「遠端與分享」中調整。也可以換一個模型。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦未向你開放這個供應商或所選模型。是你自己的電腦時，在那臺電腦上為這個供應商開啟「允許遠端呼叫」；別人分享給你的，請對方在「遠端與分享」中調整。也可以換一個模型。",
       "REMOTE_AGENT_FORK_FAILED": "執行 Agent 的電腦沒能從這裡開啟新任務。請重試，或換一則訊息再試。",
       "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對你的分享，恢復前不能使用這些模型。可以換成其他模型繼續。",
       "REMOTE_AGENT_SHARE_REMOVED": "這個分享已無法使用（對方刪除了分享或你已退出）。可以換成其他模型繼續。",
@@ -17111,6 +17091,18 @@
     "ultra": "極致"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "尚未接通 GitHub App 通知，仍會依排程檢查。",
+      "label": "PR",
+      "url": "PR 連結",
+      "condition": "觸發條件",
+      "any": "PR 有新動態",
+      "merged": "PR 已合併",
+      "review": "審查有新動態",
+      "ci": "CI 狀態變更",
+      "timed": "同時定時檢查",
+      "invalid": "請輸入完整的 GitHub PR 連結。"
+    },
     "presentation": {
       "status": {
         "active": "啟用",
