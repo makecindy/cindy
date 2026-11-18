@@ -1681,7 +1681,7 @@ async function prepareProjectSkillLinksFailSoft(workingDir: unknown): Promise<bo
   if (isDeviceLinkInvoke() || typeof workingDir !== 'string' || !workingDir) return false;
   try {
     const result = await prepareSharedProjectSkillLinks({ workingDir });
-    for (const warning of result.warnings) {
+    for (const warning of result.warningsToReport) {
       log.warn('shared project skill link warning', { workingDir, warning });
     }
     return result.changed;
