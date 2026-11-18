@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { buildPage } from '../../ui-page/build.mjs';
 import { pageResponse } from '../../ui-page/run.mjs';
 
@@ -15,7 +14,7 @@ export default {
   entry: './fixture.tsx',
   viewport: { width: 640, height: 860 },
   real: 'AssistantMessage, MarkdownRenderer, native mouse selection, table TSV range copy, chat clipboard handlers, MessageActionBar and SelectionQuoteButton',
-  notCovered: 'Full application and virtualized/offscreen history. Existing image-copy toolbar is blocked by host CSP. Hidden Electron checks native range copy; replay with --engine chromium verifies the programmatic message button through a secure localhost origin and OS paste. No clipboard values are mocked.',
+  notCovered: 'Full application and virtualized/offscreen history. Existing image-copy toolbar is blocked by host CSP. Hidden Electron checks native range copy; replay with --engine chromium verifies the message button through a secure localhost origin, actual browser clipboard read and paste. The headless Chrome run does not verify the host macOS clipboard. No clipboard values are mocked.',
   stubs: {
     'src/renderer/components/chat/GhostToolCard': 'export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle"; export const GhostToolCard = () => null; export const MailCardEditor = () => null;',
   },
@@ -38,7 +37,7 @@ export default {
     await page.waitForFunction(() => window.__uiPage?.ready);
   },
   async check(page, ui) {
-    // Explicit permission for this test origin exercises real OS/browser writes,
+    // Explicit permission for this test origin exercises real browser writes,
     // unlike replacing navigator.clipboard with a value-capturing mock.
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(page.url()).origin });
     const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -105,10 +104,8 @@ export default {
       // The async handler is complete only once its success icon is visible.
       // Moving focus to the paste target sooner can race the browser write.
       await copyButton.locator('svg.lucide-check').waitFor();
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), content, 'Browser clipboard must contain the complete message');
       assert.equal(await pasteClipboard(), content, 'Complete-message copy must actually paste the complete Markdown');
-      if (process.platform === 'darwin') {
-        assert.equal(execFileSync('pbpaste', { encoding: 'utf8' }), content, 'OS clipboard must contain the complete message');
-      }
     }
     await ui.capture('copy-complete');
   },
