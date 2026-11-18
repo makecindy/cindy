@@ -47,6 +47,9 @@ export async function retryBotWelcomePermissionDispatch<T>(
       || isSendToSessionLockHeldByCurrentCall(sessionId) || !canRetry()) throw error;
     undispatched.delete(error as object);
     onUndispatchedRetry?.();
+    // Resetting preparation can synchronously trigger Stop. Do not install a
+    // waiter after its abort event has already fired.
+    if (signal.aborted) throw error;
     // The failed send has released its fence and reservation. A writer may now
     // restart the runtime. Stop/clear cancels this wait; a stuck writer or repeated
     // edits must eventually return the original, traceable failure to the queue.

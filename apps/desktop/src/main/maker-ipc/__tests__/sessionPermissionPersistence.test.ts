@@ -326,6 +326,29 @@ describe('permission persistence without a live runtime', () => {
     },
   );
 
+  // #10021, unit: cleanup may synchronously cancel the same queued input.
+  // The abort must settle now, even when its permission writer never settles.
+  it('cancels immediately when resetting welcome preparation triggers Stop', async () => {
+    vi.useFakeTimers();
+    const gate = deferred();
+    const change = withBotPermissionChangeForBot('bot-1', () => gate.promise);
+    const abort = new AbortController();
+    const runtime = { id: 'chat', stablePermissionModeState: { mode: 'ask' } } as unknown as Session;
+    const send = vi.fn(async () => { (await prepareBotPermissionDispatch(runtime))(); });
+    let settled = false;
+    const result = retryBotWelcomePermissionDispatch('chat', abort.signal, send, () => true, () => abort.abort());
+    const checked = expect(result).rejects.toThrow('Bot permissions are changing before dispatch')
+      .then(() => { settled = true; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(send).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve(); await change; await vi.runAllTimersAsync(); await checked; vi.useRealTimers();
+    }
+  });
+
   it('reconciles a tightened permission before recovering the welcome', async () => {
     const { session, send } = welcomeRuntime();
     await persistPermissionModeWithoutRuntime('chat', 'bypassPermissions');
