@@ -21,7 +21,7 @@ import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
 import { t } from '../i18n.desktop.js';
 import { openGithubSignIn, readGithubConnection } from '../git-context/githubSetupIpc.js';
 import { createGhostGateway } from './ghost.js';
-export type { GhostGrantLiveSessionState, ToolResultImageDescription, CindyGhostsHostDeps } from './ghost.js';
+export type { GhostGrantLiveSessionState, CindyGhostsHostDeps } from './ghost.js';
 
 const gateway = createGhostGateway({
   callEvaluate: (...args) => callEvaluate(...args),
@@ -63,4 +63,4 @@ const gateway = createGhostGateway({
   openGithubSignIn: (...args) => openGithubSignIn(...args),
   readGithubConnection: (...args) => readGithubConnection(...args)
 });
-export const { authorizeDesktopSessionPath, buildToolResultImageDescriptions, collectCindyMediaUrls, setPageControlGhostProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps } = gateway;
+export const { authorizeDesktopSessionPath, setPageControlGhostProvider, getGhostRosterPrompt, getCindyGhostsMcpDeps } = gateway;

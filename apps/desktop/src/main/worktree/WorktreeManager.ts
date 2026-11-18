@@ -659,13 +659,6 @@ async function rollbackPartialCreate(snap: CreatedSnapshot): Promise<void> {
   // parentEnsured 不清理 — 托管 worktree 根目录本身留着没坏处, 下次复用
 }
 
-async function configureHooksPath(worktreePath: string, baseRepo: string): Promise<void> {
-  // 让 worktree 的 hooks 仍指向源 repo 的 .git/hooks(共享 husky / pre-commit 等)
-  // git config 的路径以正斜杠书写最稳妥(Windows 下反斜杠会被转义), 这里统一标准化
-  const hooksPath = path.join(baseRepo, '.git', 'hooks').replace(/\\/g, '/');
-  await gitExec(['-C', worktreePath, 'config', 'core.hooksPath', hooksPath]);
-}
-
 const CLAUDE_COPY_EXCLUDED_TOP_LEVEL_DIRS = new Set(['worktrees']);
 
 export interface CopyClaudeSiviDirsOptions {
@@ -821,10 +814,9 @@ export async function copyClaudeSiviDirs(
  *   4. mkdirp parent
  *   5. git worktree add -b cindy/<name> <path> <sourceBranch>
  *      失败时若 stderr 含 core.longpaths → 自动 git config --global core.longpaths true 重试一次
- *   6. configureHooksPath
- *   7. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
- *   8. applyWorktreeIncludeFile
- *   9. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *   6. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
+ *   7. applyWorktreeIncludeFile
+ *   8. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
  *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
  *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
@@ -1038,16 +1030,10 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // 防止 unhandled rejection(stageCheckout 已设 .catch 但再保险一次)
       bgPromise?.catch(() => {});
 
-      // 6. hooks
-      try {
-        await timed('configure hooks', () => configureHooksPath(worktreePath, baseRepo));
-      } catch (err) {
-        if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
-        await rollbackPartialCreate(snap);
-        return { ok: false, error: classifyError(classifyAny(err)) };
-      }
+      // Git already shares default hooks. Preserve core.hooksPath (including
+      // inherited/relative settings); writing it here changes every checkout.
 
-      // 7. copy .claude / .sivi(目录不存在则跳过)
+      // 6. copy .claude / .sivi(目录不存在则跳过)
       try {
         await timed('copy .claude/.sivi', () => copyClaudeSiviDirs(baseRepo, worktreePath));
       } catch (err) {
@@ -1058,7 +1044,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         );
       }
 
-      // 8. include patterns
+      // 7. include patterns
       //    Multibox 已按 .worktreeinclude 克隆过同一批文件(同盘为 reflink); 只补缺,
       //    不用整份复制覆盖它们。
       try {
@@ -1080,7 +1066,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         );
       }
 
-      // 9. Recheck after asynchronous Git/setup work before publishing metadata.
+      // 8. Recheck after asynchronous Git/setup work before publishing metadata.
       // The profile/session lock also closes the check -> store.set window.
       try {
         assertPrecreatedSessionNotCancelled(req.sessionId);
