@@ -236,6 +236,7 @@ import {
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
   pooledCodexResetTarget,
+  refreshCodexSubscriptionAccountAfterReset,
   hasRestoredPooledCodexQuota,
 } from '../runtime.js';
 import { AccountServiceUnreachableError } from '../accountServiceError.js';
@@ -1532,6 +1533,98 @@ describe('pooled Codex model discovery', () => {
 // redemption path. Unit/in-process integration through the real service and engine;
 // the native CLI transport is the only replacement, so no real credit is consumed.
 describe('pooled Codex resets', () => {
+  // Unit regression: a completed reset on the original connection must bypass
+  // the warm pool quota and publish the new value before observers read again.
+  it.each([
+    ['openai', 'default'],
+    ['openai-old', 'second'],
+  ])('publishes fresh pool quota after resetting %s', async (scope, accountId) => {
+    h.pools.openai = {
+      strategy: 'least',
+      accounts: [account('default'), account('second')],
+      legacyCodexAccounts: { 'openai-old': 'second' },
+    };
+    let redeemed = false;
+    const resetsAt = Math.floor(Date.now() / 1000) + 86_400;
+    h.usage.mockImplementation(async (_provider, directory: string) => ({
+      codexUsage: providerGroupCodexUsageFromReads(null, {
+        rateLimits: {
+          limitId: 'codex',
+          secondary: {
+            usedPercent: redeemed && directory.endsWith(accountId) ? 0 : 100,
+            windowDurationMins: 10_080,
+            resetsAt,
+          },
+        },
+      }, Date.now()),
+    }));
+    const weeklyUsage = (view: Awaited<ReturnType<typeof readSubscriptionPool>>) =>
+      Object.fromEntries(view.accounts.map(entry =>
+        [entry.id, entry.usage?.codex?.buckets.codex.secondary?.usedPercent]));
+    expect(weeklyUsage(await readSubscriptionPool('openai'))).toEqual({ default: 100, second: 100 });
+    const updates: Promise<Awaited<ReturnType<typeof readSubscriptionPool>>>[] = [];
+    const unsubscribe = onSubscriptionAccountsChanged((provider, resetAccountId) => {
+      if (provider === 'openai' && resetAccountId === accountId) updates.push(readSubscriptionPool('openai'));
+    });
+    try {
+      redeemed = true;
+      await refreshCodexSubscriptionAccountAfterReset(scope);
+      expect((await Promise.all(updates)).map(weeklyUsage)).toEqual([{
+        default: accountId === 'default' ? 0 : 100,
+        second: accountId === 'second' ? 0 : 100,
+      }]);
+      expect(h.usage.mock.calls).toHaveLength(3);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  // Unit regression: a manual refresh started before redemption can return the old
+  // window. The reset notification must let observers read the renewed window.
+  it('publishes renewed default Codex quota after a pre-reset refresh finishes', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    const now = Date.now();
+    const quota = (usedPercent: number, remainingDays: number) => ({
+      codexUsage: providerGroupCodexUsageFromReads(null, {
+        rateLimits: {
+          limitId: 'codex',
+          secondary: {
+            usedPercent,
+            windowDurationMins: 10_080,
+            resetsAt: Math.floor(now / 1000) + remainingDays * 86_400,
+          },
+        },
+      }, now),
+    });
+    const exhausted = quota(100, 2);
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let finish!: (value: typeof exhausted) => void;
+    const pending = new Promise<typeof exhausted>(resolve => { finish = resolve; });
+    h.usage.mockImplementationOnce(() => {
+      started();
+      return pending;
+    });
+    h.usage.mockResolvedValue(quota(0, 7));
+    const weeklyUsed = (view: Awaited<ReturnType<typeof readSubscriptionPool>>) =>
+      view.accounts[0]?.usage?.codex?.buckets.codex.secondary?.usedPercent;
+    const updates: Promise<Awaited<ReturnType<typeof readSubscriptionPool>>>[] = [];
+    const unsubscribe = onSubscriptionAccountsChanged((provider, accountId) => {
+      if (provider === 'openai' && accountId === 'default') updates.push(readSubscriptionPool('openai'));
+    });
+    try {
+      const preResetRefresh = refreshSubscriptionPool('openai', true);
+      await reading;
+      const resetRefresh = refreshCodexSubscriptionAccountAfterReset('openai');
+      finish(exhausted);
+      expect(weeklyUsed(await preResetRefresh)).toBe(100);
+      await resetRefresh;
+      expect((await Promise.all(updates)).map(weeklyUsed)).toEqual([0]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('reads, automatically redeems and refreshes only the selected account', async () => {
     h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second'), account('third')] };
     const redeemed = new Set<string>();
