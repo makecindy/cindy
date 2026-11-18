@@ -122,6 +122,7 @@ function makeHarness(opts?: {
   logger?: ConstructorParameters<typeof DeviceLinkClient>[0]['logger'];
   peerFailurePolicy?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerFailurePolicy'];
   reliablePeerTransport?: ConstructorParameters<typeof DeviceLinkClient>[0]['reliablePeerTransport'];
+  backoffOfflineLinkOpen?: boolean;
   peerResetReadRetry?: ConstructorParameters<typeof DeviceLinkClient>[0]['peerResetReadRetry'];
   invokeMetrics?: ConstructorParameters<typeof DeviceLinkClient>[0]['invokeMetrics'];
   frameAuth?: ConstructorParameters<typeof DeviceLinkClient>[0]['frameAuth'];
@@ -147,6 +148,7 @@ function makeHarness(opts?: {
     peerFailurePolicy: opts?.peerFailurePolicy,
     reliablePeerTransport: opts?.reliablePeerTransport,
     peerResetReadRetry: opts?.peerResetReadRetry,
+    backoffOfflineLinkOpen: opts?.backoffOfflineLinkOpen,
     invokeMetrics: opts?.invokeMetrics,
     frameAuth: opts?.frameAuth,
     transportAllowed: opts?.transportAllowed,
@@ -6485,6 +6487,29 @@ describe('DeviceLinkClient', () => {
     });
     expect(h.client.isLinkReady('dev-b')).toBe(false);
     h.client.stop();
+  });
+
+  // Unit regression: a foreground phone repeatedly opened the same offline host while
+  // the relay served other computers. Existing invoke tests skip the handshake entry.
+  it('backs off mobile handshakes for just the offline peer until fresh online evidence', async () => {
+    const h = makeHarness({ backoffOfflineLinkOpen: true });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    const open = (dst: string) => h.client.openLink(dst, {});
+    const first = open('dev-b');
+    const frame = h.current().sent.at(-1)!;
+    h.current().push({ v: PROTOCOL_VERSION, kind: 'relay-error', id: frame.id,
+      payload: { code: 'DEVICE_OFFLINE', dst: 'dev-b', message: 'offline' } });
+    await expect(first).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    await expect(open('dev-b')).rejects.toMatchObject({ code: 'DEVICE_OFFLINE' });
+    const other = open('dev-c').catch(() => undefined);
+    h.client.noteRemoteControlEnabled('dev-b');
+    const recovered = open('dev-b').catch(() => undefined);
+    expect(h.current().sent.filter(e => e.kind === 'link-open').map(e => e.dst))
+      .toEqual(['dev-b', 'dev-c', 'dev-b']);
+    h.client.stop();
+    await Promise.all([other, recovered]);
   });
 
   it('可靠 link 收到 DEVICE_OFFLINE 后清空 pending，下次握手用 baseSeq 跨过', async () => {

@@ -5634,6 +5634,7 @@ function CCAgentSessionContent({
 
             {sessionId && scheduleSessionInfo?.latestFailedRun && shouldShowFailedScheduleNotice({
               latestFailedRun: scheduleSessionInfo.hasFailedRun ? scheduleSessionInfo.latestFailedRun : null,
+              userSendAt: session?.id === sessionId ? session?.userSendAt : undefined,
               readOnly, tailError: !!errorTailMsg, interrupted: !!interruptedFromSession,
               continuationPending: !!syntheticContinuationPending, error: !!error,
               credentialWait: !!credentialSwitchWait, streaming: isStreaming, running: agentStatus.isRunning,
