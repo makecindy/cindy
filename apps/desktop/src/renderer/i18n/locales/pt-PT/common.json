@@ -447,7 +447,7 @@
     "manage": {
       "createLink": "Criar ligação de partilha",
       "exportRoster": "Exportar lista de membros",
-      "exportRosterFailed": "Não foi possível guardar a lista de membros. Tente novamente.",
+      "exportRosterFailed": "Não foi possível guardar a lista de membros.",
       "loading": "A carregar a partilha…",
       "notReady": "A partilha não está disponível de momento. Certifique-se de que tem sessão iniciada e está online; será efetuada uma nova tentativa automaticamente.",
       "loadFailed": "Não foi possível carregar os detalhes da partilha. Tente novamente dentro de momentos.",

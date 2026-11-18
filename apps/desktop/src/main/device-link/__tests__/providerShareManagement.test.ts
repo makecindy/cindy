@@ -245,7 +245,7 @@ describe('local roster export', () => {
   const stamp = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
   const event = { sender: {} } as Electron.IpcMainInvokeEvent;
   const capturedAt = '2026-10-16T08:00:00.000Z';
-  const member = { memberId: 'fixture-member-full-id', displayName: '=guest', status: 'active' };
+  const member = { memberId: 'fixture-member-full-id', displayName: '=guest', status: 'active', joinedAt: '2026-10-01T00:00:00Z' };
   const share = { providerId: 'anthropic', hostDeviceId: 'host-device', shareId: 'share-1', members: [member] };
   let dir: string;
   let destination: string;
@@ -253,8 +253,7 @@ describe('local roster export', () => {
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-roster-test-'));
     destination = path.join(dir, 'members.csv');
-    host.complete.mockReturnValue([share, { ...share, providerId: 'other' }, { ...share, hostDeviceId: 'other' }]);
-    api.listOwned.mockImplementation(async () => host.complete());
+    api.listOwned.mockResolvedValue([share, { ...share, providerId: 'other' }, { ...share, hostDeviceId: 'other' }]);
     memberNotes.readStrict.mockResolvedValue({ [member.memberId]: 'A,"B"\nC' });
     nativeReplace.mockRejectedValue(new Error('synthetic native replacement failure'));
     registerProviderShareIpc();
@@ -315,6 +314,7 @@ describe('local roster export', () => {
   // fresh, incomplete and rejected authority reads, including late owner/frame
   // changes. The prior cache-only fences could publish departed members.
   it('uses the authoritative roster while the host cache still contains a departed member', async () => {
+    host.complete.mockReturnValue([share]);
     const freshMember = { ...member, memberId: 'fresh-member-id' };
     api.listOwned.mockResolvedValue([{ ...share, members: [freshMember] }]);
     saveDialog.mockResolvedValueOnce({ canceled: false, filePath: destination });
@@ -412,7 +412,7 @@ describe('local roster export', () => {
   });
 
   it('exports the legacy custom:xai provider through the same save boundary', async () => {
-    host.complete.mockReturnValue([{ ...share, providerId: 'custom:xai' }]);
+    api.listOwned.mockResolvedValue([{ ...share, providerId: 'custom:xai' }]);
     saveDialog.mockResolvedValueOnce({ canceled: false, filePath: destination });
     await save(stamp, 'custom:xai');
     expect(fs.readFileSync(destination, 'utf8')).toContain('"fixture-member-full-id"');
@@ -440,11 +440,10 @@ describe('local roster export', () => {
     expect(api.listOwned).toHaveBeenCalledOnce();
   });
 
-  it.each(['owner', 'roster'] as const)('preserves an existing file when the %s changes in the dialog', async change => {
+  it('preserves an existing file when the owner changes in the dialog', async () => {
     fs.writeFileSync(destination, 'original');
     saveDialog.mockImplementationOnce(async () => {
-      if (change === 'owner') state.owner = 'owner-b';
-      else host.complete.mockReturnValue([]);
+      state.owner = 'owner-b';
       return { canceled: false, filePath: destination };
     });
     await expect(save()).rejects.toThrow();
@@ -452,16 +451,51 @@ describe('local roster export', () => {
     expect(fs.readdirSync(dir)).toEqual(['members.csv']);
   });
 
-  it.each(['owner', 'roster'] as const)('rejects a late note read after the %s changes', async change => {
+  it('rejects a late note read after the owner changes', async () => {
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
     let finish!: (notes: Record<string, string>) => void;
-    memberNotes.readStrict.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    memberNotes.readStrict.mockImplementationOnce(() => {
+      started();
+      return new Promise(resolve => { finish = resolve; });
+    });
     const pending = save();
-    if (change === 'owner') state.owner = 'owner-b';
-    else host.complete.mockReturnValue([]);
+    await reading;
+    state.owner = 'owner-b';
     finish({ [member.memberId]: 'Team A' });
     await expect(pending).rejects.toThrow();
     expect(saveDialog).not.toHaveBeenCalled();
     expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
+  // PR #11287 / unit: the CSV omits membership generations, and a note can be
+  // edited while the authority request is pending. Earlier fences compared only
+  // CSV bytes read before that request, missing both publication changes.
+  it('preserves the destination when a note changes during the final roster request', async () => {
+    fs.writeFileSync(destination, 'original');
+    saveDialog.mockImplementationOnce(async () => {
+      api.listOwned.mockImplementationOnce(async () => {
+        memberNotes.readStrict.mockResolvedValue({ [member.memberId]: 'Updated note' });
+        return [share];
+      });
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
+  });
+
+  it('preserves the destination when a member is reapproved with a new membership generation', async () => {
+    fs.writeFileSync(destination, 'original');
+    saveDialog.mockImplementationOnce(async () => {
+      api.listOwned.mockResolvedValue([{ ...share, members: [{ ...member, joinedAt: '2026-10-16T08:01:00Z' }] }]);
+      return { canceled: false, filePath: destination };
+    });
+    await expect(save()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(fs.readFileSync(destination, 'utf8')).toBe('original');
+    expect(fs.readdirSync(dir)).toEqual(['members.csv']);
+    expect(fileRename).not.toHaveBeenCalled();
   });
 
   it('rejects device-link callers before opening a local dialog', async () => {

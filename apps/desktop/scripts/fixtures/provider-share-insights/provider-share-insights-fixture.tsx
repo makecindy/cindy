@@ -1,6 +1,7 @@
 import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
 import { ProviderShareManagePage } from '../../../src/renderer/features/provider-share/ProviderShareManagePage';
 import { ProviderShareReceivedDetail } from '../../../src/renderer/features/provider-share/ProviderShareReceivedRail';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast';
 import type {
   ProviderShareInsights,
   ProviderShareQuotaAccount,
@@ -267,6 +268,7 @@ void mountPage({
       },
       providerShare: {
         command,
+        exportRoster: async () => { throw new Error('Synthetic roster save failure'); },
         onOwnedChanged: subscription('ownedShares'),
         onReceivedChanged: subscription('receivedShares'),
       },
@@ -274,6 +276,7 @@ void mountPage({
   },
   render: (ctx) => (
     <AppFrame>
+      <ToastContainer />
       <div className="flex h-full min-h-0 flex-col">
         <p className="shrink-0 px-5 py-2 text-12 text-[var(--text-secondary)]">
           UI fixture · 测试数据 · Test data

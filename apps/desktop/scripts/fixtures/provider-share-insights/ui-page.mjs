@@ -4,9 +4,9 @@ export default {
   name: 'provider-share-insights',
   entry: './provider-share-insights-fixture.tsx',
   viewport: { width: 1220, height: 900 },
-  real: 'ProviderShareManagePage, ProviderShareReceivedDetail, visibility switches, quota cards, ProviderUsageSection, translations and themes',
+  real: 'ProviderShareManagePage, ProviderShareReceivedDetail, visibility switches, quota cards, ProviderUsageSection, ToastContainer, translations and themes',
   notCovered:
-    'Live cross-account transport, persisted permissions, real upstream quota, Windows. All numbers and names are fixture data.',
+    'Live cross-account transport, persisted permissions, real upstream quota, native save dialogs and filesystem publication. All numbers and names are fixture data.',
   stubs: {
     'src/renderer/hooks/useProviders': {
       partial: `export const useProviders = () => ({ providers: [{ id: 'xd', name: 'Cindy AI', source: 'builtin', auth: { method: 'oauth', native: 'claude' }, routing: {}, models: {}, subscriptionFastPolicy: { allowFast: true } }], loading: false });`,
@@ -18,6 +18,9 @@ export default {
   cases: {
     owner: {
       about: 'Owner detail with a two-computer subscription group and independent visibility switches; writes affect fixture memory only',
+    },
+    'owner-export-error': {
+      about: 'Owner roster save failure uses the real toast with synthetic API failure',
     },
     'owner-remote': {
       about: 'Same-account remote group management retains a visible, uncompressed account Fast setting',
@@ -62,7 +65,7 @@ export default {
   async check(page, ui) {
     if (ui.case.startsWith('owner')) {
       const exportRoster = page.getByRole('button', { name: await ui.t('providerShare.manage.exportRoster') });
-      if (ui.case === 'owner') await exportRoster.waitFor({ state: 'visible' });
+      if (ui.case !== 'owner-remote') await exportRoster.waitFor({ state: 'visible' });
       else assert.equal(await exportRoster.count(), 0);
       // 2026-11-11: a duplicate account Fast card shrank into a line below the page title.
       // Render the real page with a subscription group (previous fixture had no provider).
@@ -107,6 +110,13 @@ export default {
       assert.equal(await usage.getAttribute('aria-checked'), 'true');
       await quota.click();
       await ui.capture('owner-switches');
+      if (ui.case === 'owner-export-error') {
+        await exportRoster.click();
+        const error = page.getByText(await ui.t('providerShare.manage.exportRosterFailed'), { exact: true });
+        await error.waitFor();
+        await error.hover();
+        await ui.capture('export-error');
+      }
     } else {
       const body = await page.getByTestId('provider-share-insights').textContent();
       assert.ok(!body.includes('Private device name'));

@@ -19,9 +19,7 @@ function cell(value: string): string {
   return '"' + safe.replace(/"/g, '""') + '"';
 }
 
-async function readRoster(providerId: string, capturedAt: string, assertCaller: () => void): Promise<string> {
-  assertCaller();
-  const notes = await providerShareMemberNotes.readStrict();
+async function readRoster(providerId: string, capturedAt: string, assertCaller: () => void): Promise<{ csv: string; membership: string }> {
   assertCaller();
   const snapshot = await providerShareApi.listOwned()
     .catch(() => throwIpcError('PRECONDITION_FAILED', 'The current member roster is unavailable'));
@@ -29,6 +27,8 @@ async function readRoster(providerId: string, capturedAt: string, assertCaller: 
   if (snapshot.authorityIncomplete || snapshot.unavailableShareIds?.length) {
     throwIpcError('PRECONDITION_FAILED', 'The current member roster is unavailable');
   }
+  const notes = await providerShareMemberNotes.readStrict();
+  assertCaller();
   const deviceId = getDeviceId();
   const shares = snapshot.filter(
     share => share.providerId === providerId && share.hostDeviceId === deviceId && share.members.length > 0,
@@ -41,7 +41,11 @@ async function readRoster(providerId: string, capturedAt: string, assertCaller: 
         .map(cell).join(','));
     }
   }
-  return '\uFEFF' + lines.join('\r\n') + '\r\n';
+  const membership = JSON.stringify(shares.map(share => ({
+    shareId: share.shareId,
+    members: share.members.map(member => [member.memberId, member.joinedAt]),
+  })));
+  return { csv: '\uFEFF' + lines.join('\r\n') + '\r\n', membership };
 }
 
 export async function exportProviderShareRoster(event: IpcMainInvokeEvent, rawProviderId: unknown, owner: unknown): Promise<void> {
@@ -63,10 +67,7 @@ export async function exportProviderShareRoster(event: IpcMainInvokeEvent, rawPr
     assertTrustedAppRendererEvent(event);
   };
   const capturedAt = new Date().toISOString();
-  const csv = await readRoster(providerId, capturedAt, assertCaller);
-  const assertCurrent = async () => {
-    if (await readRoster(providerId, capturedAt, assertCaller) !== csv) throwIpcError('PRECONDITION_FAILED', 'The member roster changed');
-  };
+  const prepared = await readRoster(providerId, capturedAt, assertCaller);
 
   assertCaller();
   const picked = await dialog.showSaveDialog(win, {
@@ -82,11 +83,14 @@ export async function exportProviderShareRoster(event: IpcMainInvokeEvent, rawPr
   try {
     try {
       assertCaller();
-      await file.writeFile(csv, 'utf8');
+      await file.writeFile(prepared.csv, 'utf8');
     } finally {
       await file.close();
     }
-    await assertCurrent();
+    const latest = await readRoster(providerId, capturedAt, assertCaller);
+    if (latest.csv !== prepared.csv || latest.membership !== prepared.membership) {
+      throwIpcError('PRECONDITION_FAILED', 'The member roster changed');
+    }
     assertCaller();
     // Admit publication under the current owner before handing it to the filesystem.
     await replaceFile(temp, picked.filePath);

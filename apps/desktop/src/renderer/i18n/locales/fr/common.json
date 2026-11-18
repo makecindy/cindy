@@ -447,7 +447,7 @@
     "manage": {
       "createLink": "Créer un lien de partage",
       "exportRoster": "Exporter la liste des membres",
-      "exportRosterFailed": "Impossible d’enregistrer la liste des membres. Réessayez.",
+      "exportRosterFailed": "Impossible d’enregistrer la liste des membres.",
       "loading": "Chargement du partage…",
       "notReady": "Le partage n'est pas disponible pour le moment. Vérifiez que vous êtes connecté et en ligne ; une nouvelle tentative aura lieu automatiquement.",
       "loadFailed": "Impossible de charger les détails du partage. Réessayez dans un instant.",

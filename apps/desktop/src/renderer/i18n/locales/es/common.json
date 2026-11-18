@@ -447,7 +447,7 @@
     "manage": {
       "createLink": "Crear enlace para compartir",
       "exportRoster": "Exportar lista de miembros",
-      "exportRosterFailed": "No se pudo guardar la lista de miembros. Vuelve a intentarlo.",
+      "exportRosterFailed": "No se pudo guardar la lista de miembros.",
       "loading": "Cargando uso compartido…",
       "notReady": "Compartir no está disponible en este momento. Asegúrate de haber iniciado sesión y estar en línea; lo volverá a intentar automáticamente.",
       "loadFailed": "No se pudieron cargar los detalles para compartir. Inténtalo de nuevo en un momento.",

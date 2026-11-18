@@ -440,7 +440,7 @@
     "manage": {
       "createLink": "生分享链接",
       "exportRoster": "导出名册",
-      "exportRosterFailed": "名册未存，请复试。",
+      "exportRosterFailed": "名册未存",
       "loading": "方读分享…",
       "notReady": "分享服务暂不可用。确认已登门且网络无恙后，将自动再试。",
       "loadFailed": "分享信息未载，请稍后再试。",
