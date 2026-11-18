@@ -48,12 +48,15 @@ export function inboundToggleState(
   return { checked: !isRevokedController, disabled: !masterEnabled };
 }
 
-/** 连接问题原因行的显示规则。unstable 描述跨连接抖动,即使当前短暂 online 也保留。 */
+/**
+ * 连接问题原因行的显示规则。unstable 描述跨连接抖动,即使当前短暂 online 也保留。agent-net-relay-down 是 Agent-Net 主连接还在
+ * (状态 online)、只是连不上中转,同样要显示。
+ */
 export function resolveActiveConnectionIssue<T extends { kind: string }>(
   linkStatus: 'stopped' | 'connecting' | 'online',
   issue: T | null,
 ): T | null {
   if (!issue) return null;
-  if (issue.kind === 'unstable') return issue;
+  if (issue.kind === 'unstable' || issue.kind === 'agent-net-relay-down') return issue;
   return linkStatus === 'online' ? null : issue;
 }

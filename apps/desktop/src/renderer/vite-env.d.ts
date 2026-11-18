@@ -140,7 +140,7 @@ interface DeviceLinkDeviceView {
 
 /** 设备互联:relay 连接问题(镜像 @cindy/device-link 的 DeviceLinkConnectionIssue) */
 interface DeviceLinkConnectionIssuePayload {
-  kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
+  kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable' | 'agent-net-relay-down';
   closeCode?: number;
   detail?: string;
   at: number;

@@ -6923,7 +6923,8 @@
         "replaced": "连接为他处同一设备所替",
         "too-many-connections": "同名籍连接数已达上限",
         "version-mismatch": "协议版本不一，请升级应用",
-        "unstable": "连接屡断屡连，请察网络；若持续如此，请重启 Cindy"
+        "unstable": "连接屡断屡连，请察网络；若持续如此，请重启 Cindy",
+        "agent-net-relay-down": "不能达 Agent-Net 中转，方复连；已直连之电脑如常可用，余设备暂不能连"
       },
       "refresh": "重整",
       "empty": "海内尚无知己机。于另一台机上以同一名籍登录 {{appName}}，此处即见之。",
@@ -16001,7 +16002,8 @@
         "replaced": "此机连接为他处同一设备所替，方重连…",
         "too-many-connections": "同名籍在线之设备过多，连接为服务端所拒",
         "version-mismatch": "与服务端协议版本不合，请升级应用后再试",
-        "unstable": "此机连接屡断屡连，远程操作或屡逾时；请察网络，或重启 Cindy 后再试"
+        "unstable": "此机连接屡断屡连，远程操作或屡逾时；请察网络，或重启 Cindy 后再试",
+        "agent-net-relay-down": "此机不能达 Agent-Net 中转，方复连；彼机非直连者，远程操作将败"
       }
     },
     "common": {

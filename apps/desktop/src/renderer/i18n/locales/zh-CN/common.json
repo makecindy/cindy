@@ -6923,7 +6923,8 @@
         "replaced": "连接已被本设备上的另一个实例取代",
         "too-many-connections": "同账号连接数已达上限",
         "version-mismatch": "协议版本不一致，请升级应用",
-        "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy"
+        "unstable": "连接反复断开又重连，请检查网络；若持续如此，重启 Cindy",
+        "agent-net-relay-down": "连不上 Agent-Net 中转，正在重连；已直连的电脑照常可用，其他设备暂时连不上"
       },
       "refresh": "刷新",
       "empty": "暂无其它设备。在另一台电脑上用同一账号登录 {{appName}} 后，这里会显示该设备。",
@@ -16001,7 +16002,8 @@
         "replaced": "本机连接被另一处相同设备顶替，正在重新连接…",
         "too-many-connections": "同账号在线设备过多，连接被服务端拒绝",
         "version-mismatch": "与服务端协议版本不一致，请升级应用后重试",
-        "unstable": "本机连接反复断开又重连，远程操作可能一直超时；请检查网络，或重启 Cindy 后重试"
+        "unstable": "本机连接反复断开又重连，远程操作可能一直超时；请检查网络，或重启 Cindy 后重试",
+        "agent-net-relay-down": "本机连不上 Agent-Net 中转，正在重连；对方电脑不是直连时，远程操作会失败"
       }
     },
     "common": {
