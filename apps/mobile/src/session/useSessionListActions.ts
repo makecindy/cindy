@@ -44,8 +44,12 @@ import { confirmArchiveWithSchedules, loadActiveBoundScheduleNames } from '@/ses
 export function useSessionListActions(options?: {
   animateListChange?: (apply: () => void) => void;
   preferredRpcDeviceId?: string;
+  /** Whether an active automation is bound to the task (inbox Done then only marks it read). */
+  hasActiveAutomation?: (session: RemoteSession) => boolean;
 }) {
   const animateListChange = options?.animateListChange;
+  const hasActiveAutomationRef = useRef(options?.hasActiveAutomation);
+  hasActiveAutomationRef.current = options?.hasActiveAutomation;
   const preferredRpcDeviceId = options?.preferredRpcDeviceId;
   const { t } = useTranslation();
   const { invoke } = useDeviceLink();
@@ -279,10 +283,6 @@ export function useSessionListActions(options?: {
     runSwipeAction(session, action);
   }, [runSwipeAction]);
 
-  const completeSession = useCallback((session: RemoteSession) => {
-    runSwipeAction(session, 'archive', { skipScheduleConfirm: true });
-  }, [runSwipeAction]);
-
   const showSessionOptions = useCallback((session: RemoteSession) => {
     setActionSheetSession(session);
   }, []);
@@ -349,6 +349,18 @@ export function useSessionListActions(options?: {
       Alert.alert(t('devices.list.alert.actionFailed'), humanizeRemoteError(err));
     });
   }, [invoke, preferredRpcDeviceId, t]);
+
+  // Inbox Done. With an active automation bound it only marks the round read and the task
+  // returns to Working: archiving would recycle the worktree that the next round rebuilds
+  // (2026-11-18 user decision). Otherwise it archives in one tap, without the automation reminder.
+  const completeSession = useCallback((session: RemoteSession) => {
+    if (hasActiveAutomationRef.current?.(session)) {
+      swipeRegistry.closeOpenRow();
+      markSessionRead(session);
+      return;
+    }
+    runSwipeAction(session, 'archive', { skipScheduleConfirm: true });
+  }, [markSessionRead, runSwipeAction, swipeRegistry]);
 
   const sessionSwipeControls = useMemo<SessionSwipeControls>(() => ({
     onSnooze: snoozeSession,

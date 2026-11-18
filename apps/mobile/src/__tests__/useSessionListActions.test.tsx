@@ -28,9 +28,9 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
 let actions: ReturnType<typeof useSessionListActions>;
 const task = { id: 'task', deviceLinkDeviceId: 'old-shard', canonicalDeviceId: 'host' } as RemoteSession;
-function mount(preferredRpcDeviceId?: string) {
+function mount(preferredRpcDeviceId?: string, hasActiveAutomation?: (session: RemoteSession) => boolean) {
   function Probe() {
-    actions = useSessionListActions({ preferredRpcDeviceId });
+    actions = useSessionListActions({ preferredRpcDeviceId, hasActiveAutomation });
     return null;
   }
   act(() => root.render(createElement(Probe)));
@@ -269,4 +269,17 @@ it('archives with one tap from inbox Done, while ordinary archive still reminds 
     ['task', expect.objectContaining({ status: 'archived' })], expect.any(Object));
   // Done never looks up automations: the only schedule read is the ordinary archive's.
   expect(mocks.invoke.mock.calls.filter(([, channel]) => channel === 'maker:schedule:list')).toHaveLength(1);
+});
+
+// 2026-11-18 user decision: with an active automation bound, inbox Done only marks the round
+// read (the task returns to Working); archiving would recycle the worktree every round.
+it('only marks the task read from inbox Done while an active automation is bound', async () => {
+  const original = { ...task, status: 'active' } as RemoteSession;
+  remoteSessionStore.upsertDeviceSession('old-shard', 'Host', original);
+  mount(undefined, (session) => session.id === 'task');
+  await act(async () => actions.sessionSwipeControls.onComplete?.(original));
+  expect(mocks.invoke).not.toHaveBeenCalledWith('host', 'local-db:sessions:patch-meta', expect.anything(), expect.anything());
+  expect(mocks.invoke).toHaveBeenCalledWith('host', 'notification:clear-session-attention',
+    expect.arrayContaining(['task']), expect.anything());
+  expect(Alert.alert).not.toHaveBeenCalled();
 });

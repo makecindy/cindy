@@ -113,9 +113,8 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'explicit-off', persistentSession: false },
       { ...fields, id: 'expired', status: 'expired' },
       { ...fields, id: 'unbound', targetSessionId: undefined },
-      // Inbox PR follow-ups: only the derived flag crosses the tunnel, never the command text.
+      // The pre-run command never crosses the tunnel.
       { ...fields, id: 'pr', preRunHook: { command: "node gate.mjs 'https://github.com/o/r/pull/9'" } },
-      { ...fields, id: 'routine', preRunHook: { command: 'node check-3.mjs' } },
     ];
     const projected = __testing.projectInvokeResultForTunnel(
       'maker:schedule:list', full, false, [null, { sessionBindings: true }],
@@ -125,8 +124,7 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'second', recurring: false },
       { ...fields, id: 'persistent', persistentSession: true },
       { ...fields, id: 'explicit-off' },
-      { ...fields, id: 'pr', followsPr: true },
-      { ...fields, id: 'routine' },
+      { ...fields, id: 'pr' },
     ]);
     expect(JSON.stringify(projected)).not.toContain('gate.mjs');
     expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);

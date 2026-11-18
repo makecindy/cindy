@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { LIVE_TASK_PRIORITY, liveTaskPriorityRank, scheduleFollowsPr, taskInboxSection } from '../liveTaskPriority';
+import { LIVE_TASK_PRIORITY, liveTaskPriorityRank, taskInboxSection } from '../liveTaskPriority';
 
 describe('liveTaskPriorityRank', () => {
   it('puts waiting (including error) ahead of unread, then running, then rest', () => {
@@ -67,16 +67,4 @@ it('lists a teammate task only while it needs the user or runs', () => {
   expect(taskInboxSection({}, { ...teammate, waiting: true }, now)).toBe('inbox');
   expect(taskInboxSection({ snoozedUntil: new Date(now + 1000).toISOString() }, teammate, now)).toBe('snoozed');
   expect(taskInboxSection({ status: 'archived' }, teammate, now)).toBe('archived');
-});
-
-// Unit: same PR-follow contract as prFollowWatch; routine pre-run checks and lookalikes do not count.
-it('recognizes PR follow-ups only from a pre-run check naming a PR or MR', () => {
-  const hook = (command: string) => ({ preRunHook: { command } });
-  expect(scheduleFollowsPr(hook("node gate.mjs 'https://github.com/o/r/pull/12'"))).toBe(true);
-  expect(scheduleFollowsPr(hook('node gate.mjs https://gitlab.example.com/g/r/-/merge_requests/3'))).toBe(true);
-  expect(scheduleFollowsPr(hook('node check-3.mjs'))).toBe(false);
-  expect(scheduleFollowsPr(hook('node gate.mjs https://github.com/o/r/issues/12'))).toBe(false);
-  expect(scheduleFollowsPr(hook('http://'.repeat(10000)))).toBe(false);
-  expect(scheduleFollowsPr(hook('prefixhttps://github.com/o/r/pull/12'))).toBe(false);
-  expect(scheduleFollowsPr({})).toBe(false);
 });

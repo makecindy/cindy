@@ -199,6 +199,7 @@ import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
 import { hasSettledOnlineDeviceSection } from './lib/mainListModel';
 import { sidebarPriorityContext } from './lib/sidebarPriorityContext';
+import { settleInboxTaskWhileOpen } from './sidebar/TaskInbox';
 import {
   holdSidebarViewedPriority,
   ProjectsSection,
@@ -1020,6 +1021,50 @@ function ExpandedView({
     };
   }, []);
 
+  // Marks tasks read: clears their attention, dismisses pending alerts and marks unread
+  // automation runs read on the computer that owns them. `announce` shows the read count.
+  const markSessionsRead = useCallback(
+    async (sessionIds: readonly string[], deviceId: string | undefined, { announce }: { announce: boolean }) => {
+      // 远程任务拿不到被控端的 pending-alerts 处置通道，用户显式标已读即按 explicit
+      // 清除（对错误提醒同样生效），并经既有已读回执桥接到所属电脑。
+      clearSessionAttentionMany([...sessionIds], deviceId ? { intent: 'explicit' } : undefined);
+      if (!deviceId) {
+        try {
+          const { processed, failed } =
+            await window.electronAPI.localDb.sessions.dismissPendingAlerts([...sessionIds]);
+          clearSessionAttentionMany(processed, { intent: 'explicit' });
+          if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
+        } catch (e) {
+          log.warn('dismiss pending alerts failed', e);
+        }
+        void refreshPendingAlerts();
+      }
+      const unreadRunIds = sessionIds.flatMap(
+        (sessionId) =>
+          (deviceId
+            ? remoteProjectsStore.getSessionScheduleInfo(sessionId)
+            : scheduleSessionIndex.get(sessionId)
+          )?.unreadRunIds ?? [],
+      );
+      if (unreadRunIds.length === 0) return;
+      const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
+        unreadRunIds,
+        deviceId,
+      );
+      if (announce && processed.length > 0) {
+        toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
+      }
+      if (failed.length > 0) {
+        toast.error(
+          t('ccAgent.layout.markAllReadFailed', {
+            error: firstError ?? String(failed.length),
+          }),
+        );
+      }
+    },
+    [scheduleSessionIndex, t],
+  );
+
   const handleAutomationScheduleAction = useCallback(
     async (group: AutomationSessionGroup, action: Exclude<AutomationScheduleAction, 'archive-all'>) => {
       // 远程分组的操作发到任务所属电脑执行；本机分组仍走本机 IPC。
@@ -1030,44 +1075,7 @@ function ExpandedView({
           : localCall();
 
       if (action === 'mark-read') {
-        const sessionIds = group.sessions.map((session) => session.id);
-        // 远程分组拿不到被控端的 pending-alerts 处置通道，用户显式标已读即按 explicit
-        // 清除（对错误提醒同样生效），并经既有已读回执桥接到所属电脑。
-        clearSessionAttentionMany(sessionIds, deviceId ? { intent: 'explicit' } : undefined);
-        if (!deviceId) {
-          try {
-            const { processed, failed } =
-              await window.electronAPI.localDb.sessions.dismissPendingAlerts(sessionIds);
-            clearSessionAttentionMany(processed, { intent: 'explicit' });
-            if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
-          } catch (e) {
-            log.warn('dismiss pending alerts failed', e);
-          }
-          void refreshPendingAlerts();
-        }
-        const unreadRunIds = sessionIds.flatMap(
-          (sessionId) =>
-            (deviceId
-              ? remoteProjectsStore.getSessionScheduleInfo(sessionId)
-              : scheduleSessionIndex.get(sessionId)
-            )?.unreadRunIds ?? [],
-        );
-        if (unreadRunIds.length > 0) {
-          const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
-            unreadRunIds,
-            deviceId,
-          );
-          if (processed.length > 0) {
-            toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
-          }
-          if (failed.length > 0) {
-            toast.error(
-              t('ccAgent.layout.markAllReadFailed', {
-                error: firstError ?? String(failed.length),
-              }),
-            );
-          }
-        }
+        await markSessionsRead(group.sessions.map((session) => session.id), deviceId, { announce: true });
         return;
       }
 
@@ -1221,7 +1229,7 @@ function ExpandedView({
         knownSessionIds: group.sessions.map((session) => session.id),
       });
     },
-    [confirmDialog, navigate, requestDeleteSchedule, scheduleSessionIndex, t],
+    [confirmDialog, markSessionsRead, navigate, requestDeleteSchedule, scheduleSessionIndex, t],
   );
 
   const [confirm, setConfirm] = useState<ConfirmState>(CONFIRM_INITIAL);
@@ -3296,6 +3304,21 @@ function ExpandedView({
         toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
         return true;
       };
+      // 收件箱「完成」遇到绑着启用中自动化的任务，只把这轮结果标为已读、任务回到进行中，
+      // 不归档：归档会回收 worktree，下一轮又从快照重建，安静的一轮放回已归档再删一次
+      // （2026-11-18 用户决定，task-inbox.md）。读不到绑定时按无绑定处理，照常归档。
+      if (action === 'complete') {
+        const boundNames = await loadActiveBoundScheduleNames([
+          { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
+        ]).then((names) => names.get(sessionId) ?? [], () => []);
+        if (boundNames.length > 0) {
+          if (await blockedByAttachment()) return;
+          // The open task leaves Pending at once (explicit actions apply immediately).
+          if (session) settleInboxTaskWhileOpen(session);
+          await markSessionsRead([sessionId], session?.deviceLinkDeviceId ?? undefined, { announce: false });
+          return;
+        }
+      }
       // 归档一律不弹确认框:它是可逆的(菜单里就有「恢复」),菜单入口与行内
       // 快捷按钮同一口径直接执行 —— 行内那个本身已经是两步确认。
       // 例外:worktree 有未提交改动(归档会顺带回收 worktree)、或任务绑定了
@@ -3382,6 +3405,7 @@ function ExpandedView({
       closeOwnedSharedTask,
       archiveBlockedByRunning,
       confirmDialog,
+      markSessionsRead,
       runSessionAction,
       unarchiveSession,
       t,

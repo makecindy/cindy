@@ -32,6 +32,16 @@ type Props = Omit<SessionEntryRowsProps, 'entries'> & {
   isTeammateTask?: (session: Session) => boolean;
 };
 const SECTIONS: TaskInboxSection[] = ['inbox', 'working', 'snoozed', 'archived'];
+
+/**
+ * Open tasks the user completed while an automation stays bound (Done only marks them read).
+ * They are sorted by their natural rank instead of the held one, so they leave Pending at once
+ * rather than when the user opens another task. Cleared when the open task changes.
+ */
+const settledWhileOpen = new Set<string>();
+export function settleInboxTaskWhileOpen(session: Session): void {
+  settledWhileOpen.add(sessionRowKey(session));
+}
 export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }: Props) {
   const { t, i18n } = useTranslation();
   const followingSessions = useActiveFollowUpSessions(sessions);
@@ -44,6 +54,12 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表整表远程活动
     [priorityContext, sessions, remoteActivityRevision],
   );
+  // A task completed while open is settled only until another task is opened.
+  const settledFor = useRef(rows.activeSessionId);
+  if (settledFor.current !== rows.activeSessionId) {
+    settledFor.current = rows.activeSessionId;
+    settledWhileOpen.clear();
+  }
   const [now, setNow] = useState(Date.now);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
     () => new Set(['working', 'snoozed', 'archived']),
@@ -70,7 +86,9 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
         session,
         {
           ...taskInboxSignalsFromRank(
-            sessionPriorityRank(session, inboxContext),
+            settledWhileOpen.has(sessionRowKey(session))
+              ? sessionNaturalPriorityRank(session, inboxContext)
+              : sessionPriorityRank(session, inboxContext),
             sessionNaturalPriorityRank(session, inboxContext),
           ),
           following: followingSessions.has(session),

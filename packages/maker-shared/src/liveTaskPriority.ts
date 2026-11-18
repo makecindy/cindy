@@ -42,9 +42,11 @@ export interface TaskInboxState {
 }
 
 /**
- * Sections follow whose turn it is. Reading never settles an ordinary task; an active
- * follow-up only keeps the task working while nothing is left for the user. Unread
- * results (including notified automation runs) and pending replies return it to inbox.
+ * Sections follow whose turn it is. Reading never settles an ordinary task. A task bound to an
+ * active automation (any kind; 2026-11-18 user decision, replacing PR follow-ups only) stays in
+ * working while nothing is left for the user: completing it there only marks the round read, so
+ * its worktree is not recycled and rebuilt every round. Unread results (including notified
+ * automation runs) and pending replies return it to inbox.
  * A teammate's task is listed only while it needs the user (a question, a permission or an
  * error: Pending) or runs (Working); otherwise it stays with the teammate and the inbox
  * leaves it out (null), so idle teammate tasks never pile up (2026-11-18 user decision).
@@ -67,19 +69,6 @@ export function taskInboxSection(
   if (signals.teammate) return null;
   if (signals.following && !signals.unread) return 'working';
   return 'inbox';
-}
-
-/**
- * Only PR follow-ups put a quiet task in working. It is the host's existing PR-follow
- * contract (prFollowWatch): a configured pre-run check that names a PR / MR URL.
- * Routine automations bound to a task are ordinary tasks for the inbox.
- */
-export function scheduleFollowsPr(schedule: { preRunHook?: { command?: string } | null }): boolean {
-  const command = schedule.preRunHook?.command ?? '';
-  // Tokenize once, then anchor each candidate: repeated URL prefixes cannot make
-  // the matcher rescan the remaining command quadratically (CodeQL #517).
-  return command.split(/[\s'"]/).some(token =>
-    /^https?:\/\/[^\s'"]+\/(?:pull|-\/merge_requests)\/[1-9]\d*/i.test(token));
 }
 
 /**

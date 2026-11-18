@@ -19,11 +19,10 @@
 验证入口：`sessionsUpdate.test.ts` 的真实本机/远程处理器持久化，迁移回放，
 共享 `liveTaskPriority.test.ts`，手机 `homeSections.test.ts` 与 `mobileHomeListCache.test.ts`。
 
-## PR 跟进标记（2026-11-18）
+## 自动跟进判断（2026-11-18）
 
-`maker:schedule:list` 的 `sessionBindings: true` 投影新增可选 `followsPr: true`，由宿主按
-`scheduleFollowsPr`（前置检查写明 PR／MR 链接）派生，只传结论、不传命令正文。控制端解析时
-`followsPr` 只接受布尔值。旧宿主不发该字段：控制端把它的 PR 跟进任务按普通任务归入收件箱，
-不影响其他操作；旧控制端忽略该字段。手机读取完整定时任务列表，自行派生，不依赖此投影。
-仍走现有 channel，无新增 topic、relay 能力或授权。验证入口：`providerListProjection.test.ts`、
-`remoteScheduleBindings.test.tsx`。
+收件箱的进行中改为认任何启用中的绑定自动化，不再只认 PR 跟进，`sessionBindings: true` 投影里的
+`status` 与 `targetSessionId` 已足够，不需要额外字段。此前为 PR 跟进加的可选 `followsPr` 已撤掉：
+宿主不再发送；本 PR 之前的宿主若仍发送，控制端解析时忽略该字段（不再校验类型，也不会因此拒收整份
+列表）。手机读取完整定时任务列表自行判断。仍走现有 channel，无新增 topic、relay 能力或授权。验证入口：
+`providerListProjection.test.ts`、`remoteScheduleBindings.test.tsx`。

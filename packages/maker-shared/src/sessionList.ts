@@ -10,7 +10,6 @@ import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
 import { collapseWorktreeDirForGrouping, sessionTaskProjectDirectory } from './worktreePaths.js';
 import { normalizeProjectOrderPath } from './projectOrderSync.js';
-import { scheduleFollowsPr } from './liveTaskPriority.js';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
 
 let sessionListCollator: Intl.Collator | undefined;
@@ -747,8 +746,7 @@ export function buildSessionScheduleIndex(
     });
     const hasActiveFollowUp = Array.from(scheduleIds).some((scheduleId) => {
       const schedule = schedulesById.get(scheduleId);
-      return schedule?.status === 'active' && schedule.targetSessionId === sessionId
-        && scheduleFollowsPr(schedule);
+      return schedule?.status === 'active' && schedule.targetSessionId === sessionId;
     });
     index.set(sessionId, { ...info, allSchedulesStopped, hasActiveFollowUp });
   }
