@@ -1,7 +1,7 @@
 Pod::Spec.new do |s|
   s.name = 'CindyUsageWidgets'
   s.version = '0.1.0'
-  s.summary = 'Hands the quota and daily usage snapshot to the iOS home-screen widgets.'
+  s.summary = 'Hands the quota and daily usage snapshot to the iOS home-screen widgets and refreshes it in the background.'
   s.description = s.summary
   s.license = { :type => 'Apache-2.0' }
   s.author = 'Cindy'
@@ -11,6 +11,6 @@ Pod::Spec.new do |s|
   s.swift_version = '5.9'
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
-  s.frameworks = 'WidgetKit'
+  s.frameworks = 'WidgetKit', 'BackgroundTasks'
   s.source_files = '**/*.swift'
 end

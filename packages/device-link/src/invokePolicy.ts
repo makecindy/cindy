@@ -7,6 +7,7 @@ import {
 } from './taskMigration.js';
 import type { InvokePayload } from './protocol.js';
 import { isRemoteAgentReadInvoke, remoteAgentInvokeHoldMs } from './remoteAgent.js';
+import { FILE_PEER_CHANNEL, FILE_PEER_STREAM_RPC_MAX_TIMEOUT_MS } from './filePeer.js';
 import { REMOTE_UTILITY_TEXT_CHANNEL } from './remoteUtilityText.js';
 
 /** Inference cancellation uses the existing control-traffic admission path. */
@@ -189,6 +190,11 @@ export function resolveRemoteInvokeTimeoutMs(
 ): number | undefined {
   const appRequest = args?.[1] as { op?: unknown } | undefined;
   if (channel === 'maker:mcp-apps:v1' && appRequest?.op === 'open') return MCP_APP_OPEN_TIMEOUT_MS;
+  // A file connection's RPC on the invoke channel waits as long as it did on the data channel (up to 1 hour for a
+  // large attachment's finish); the request names its own wait, bounded here.
+  const fileRequest = args?.[0] as { action?: unknown; timeoutMs?: unknown } | undefined;
+  if (channel === FILE_PEER_CHANNEL && fileRequest?.action === 'stream-rpc' && Number.isSafeInteger(fileRequest.timeoutMs)
+    && (fileRequest.timeoutMs as number) > 15_000) return Math.min(fileRequest.timeoutMs as number, FILE_PEER_STREAM_RPC_MAX_TIMEOUT_MS);
   // Group sends can materialize phone attachments, upload media and then submit the message.
   // Only this action gets the larger window; a timeout still means an unconfirmed result.
   const groupRequest = args?.[0] as { collectionId?: unknown; actionId?: unknown } | undefined;

@@ -1,0 +1,52 @@
+== 8 MiB, 4 seeds, non-default stream
+wan 100M/20ms 1%               old->old  avg   1.090s  retransmitted=      2 packets_sent=   7821 rx_rejected=     0
+wan 100M/20ms 1%               new->old  avg   1.149s  retransmitted=      2 packets_sent=   8326 rx_rejected=     0
+wan 100M/20ms 1%               old->new  avg   0.995s  retransmitted=      2 packets_sent=   7809 rx_rejected=     0
+wan 100M/20ms 1%               new->new  avg   0.723s  retransmitted=     63 packets_sent=   6483 rx_rejected=     0
+far 50M/80ms 1%                old->old  avg   4.143s  retransmitted=      2 packets_sent=   7825 rx_rejected=     0
+far 50M/80ms 1%                new->old  avg   4.378s  retransmitted=      1 packets_sent=   8341 rx_rejected=     0
+far 50M/80ms 1%                old->new  avg   3.923s  retransmitted=      2 packets_sent=   7831 rx_rejected=     0
+far 50M/80ms 1%                new->new  avg   1.592s  retransmitted=     63 packets_sent=   6483 rx_rejected=     0
+4g 20M/60ms 2%                 old->old  avg   4.146s  retransmitted=     49 packets_sent=   6475 rx_rejected=     0
+4g 20M/60ms 2%                 new->old  avg   3.998s  retransmitted=     30 packets_sent=   7107 rx_rejected=     0
+4g 20M/60ms 2%                 old->new  avg   4.206s  retransmitted=     61 packets_sent=   6419 rx_rejected=     0
+4g 20M/60ms 2%                 new->new  avg   3.590s  retransmitted=    178 packets_sent=   6599 rx_rejected=     0
+wan 100M/20ms slowread 2MB/s   old->old  avg   4.196s  retransmitted=      0 packets_sent=   6035 rx_rejected=     0
+wan 100M/20ms slowread 2MB/s   new->old  avg   4.196s  retransmitted=      0 packets_sent=   6419 rx_rejected=     0
+wan 100M/20ms slowread 2MB/s   old->new  avg   4.196s  retransmitted=      0 packets_sent=   6035 rx_rejected=     0
+wan 100M/20ms slowread 2MB/s   new->new  avg   4.196s  retransmitted=      0 packets_sent=   6419 rx_rejected=     0
+== 8 MiB, 4 seeds, default stream
+wan 100M/20ms 1%               old->old  avg   0.995s  retransmitted=      2 packets_sent=   7809 rx_rejected=     0
+wan 100M/20ms 1%               new->old  avg   1.052s  retransmitted=      2 packets_sent=   8319 rx_rejected=     0
+wan 100M/20ms 1%               old->new  avg   0.995s  retransmitted=      2 packets_sent=   7809 rx_rejected=     0
+wan 100M/20ms 1%               new->new  avg   0.723s  retransmitted=     63 packets_sent=   6483 rx_rejected=     0
+far 50M/80ms 1%                old->old  avg   3.923s  retransmitted=      2 packets_sent=   7831 rx_rejected=     0
+far 50M/80ms 1%                new->old  avg   4.147s  retransmitted=      1 packets_sent=   8344 rx_rejected=     0
+far 50M/80ms 1%                old->new  avg   3.923s  retransmitted=      2 packets_sent=   7831 rx_rejected=     0
+far 50M/80ms 1%                new->new  avg   1.592s  retransmitted=     63 packets_sent=   6483 rx_rejected=     0
+4g 20M/60ms 2%                 old->old  avg   4.206s  retransmitted=     61 packets_sent=   6419 rx_rejected=     0
+4g 20M/60ms 2%                 new->old  avg   3.887s  retransmitted=     34 packets_sent=   7041 rx_rejected=     0
+4g 20M/60ms 2%                 old->new  avg   4.206s  retransmitted=     61 packets_sent=   6419 rx_rejected=     0
+4g 20M/60ms 2%                 new->new  avg   3.591s  retransmitted=    177 packets_sent=   6598 rx_rejected=     0
+wan 100M/20ms slowread 2MB/s   old->old  avg   4.196s  retransmitted=      0 packets_sent=   6035 rx_rejected=     0
+wan 100M/20ms slowread 2MB/s   new->old  avg   4.196s  retransmitted=      0 packets_sent=   6419 rx_rejected=     0
+wan 100M/20ms slowread 2MB/s   old->new  avg   4.196s  retransmitted=      0 packets_sent=   6035 rx_rejected=     0
+wan 100M/20ms slowread 2MB/s   new->new  avg   4.196s  retransmitted=      0 packets_sent=   6419 rx_rejected=     0
+== 20 MiB, seed 1, non-default stream, no loss
+lan 1G/2ms     old->old  done=true    0.260s  retransmitted=      0 packets_sent=  15088 rx_rejected=0
+lan 1G/2ms     new->old  done=true    0.274s  retransmitted=      0 packets_sent=  16046 rx_rejected=0
+lan 1G/2ms     old->new  done=true    0.242s  retransmitted=      0 packets_sent=  15088 rx_rejected=0
+lan 1G/2ms     new->new  done=true    0.165s  retransmitted=      0 packets_sent=  16046 rx_rejected=0
+wan 100M/20ms  old->old  done=true    2.592s  retransmitted=      0 packets_sent=  15088 rx_rejected=0
+wan 100M/20ms  new->old  done=true    2.732s  retransmitted=      0 packets_sent=  16046 rx_rejected=0
+wan 100M/20ms  old->new  done=true    2.409s  retransmitted=      0 packets_sent=  15088 rx_rejected=0
+wan 100M/20ms  new->new  done=true    1.715s  retransmitted=      0 packets_sent=  16046 rx_rejected=0
+far 50M/80ms   old->old  done=true   10.027s  retransmitted=      0 packets_sent=  15088 rx_rejected=0
+far 50M/80ms   new->old  done=true   10.614s  retransmitted=      0 packets_sent=  16046 rx_rejected=0
+far 50M/80ms   old->new  done=true    9.577s  retransmitted=      0 packets_sent=  15088 rx_rejected=0
+far 50M/80ms   new->new  done=true    3.506s  retransmitted=      0 packets_sent=  16046 rx_rejected=0
+fast 1G/20ms   old->old  done=true    2.423s  retransmitted=      0 packets_sent=  15088 rx_rejected=0
+fast 1G/20ms   new->old  done=true    2.566s  retransmitted=      0 packets_sent=  16046 rx_rejected=0
+fast 1G/20ms   old->new  done=true    2.383s  retransmitted=      0 packets_sent=  15088 rx_rejected=0
+fast 1G/20ms   new->new  done=true    0.264s  retransmitted=   1607 packets_sent=  17653 rx_rejected=0
+test window_mix ... ok

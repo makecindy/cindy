@@ -6930,7 +6930,8 @@
         "replaced": "동일한 기기의 다른 연결로 대체되었습니다",
         "too-many-connections": "이 계정의 동시 연결 수가 상한에 도달했습니다",
         "version-mismatch": "프로토콜 버전이 일치하지 않습니다. 앱을 업데이트해 주세요",
-        "unstable": "연결이 끊김과 재연결을 반복하고 있습니다. 네트워크를 확인하고, 계속되면 Cindy를 다시 시작해 주세요"
+        "unstable": "연결이 끊김과 재연결을 반복하고 있습니다. 네트워크를 확인하고, 계속되면 Cindy를 다시 시작해 주세요",
+        "agent-net-relay-down": "Agent-Net 중계에 연결할 수 없어 다시 연결하는 중입니다. 직접 연결된 컴퓨터는 계속 사용할 수 있지만 다른 기기는 잠시 연결할 수 없습니다"
       },
       "refresh": "새로고침",
       "empty": "아직 다른 기기가 없습니다. 다른 컴퓨터에서 같은 계정으로 {{appName}}에 로그인하면 여기에 표시됩니다.",
@@ -14881,6 +14882,8 @@
       "failed": "이미지를 생성하지 못했습니다. 다시 시도해 주세요"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "이 작업에서 cindy_helper가 활성화되어 있지만 사용할 수 없습니다. 작업 결과를 보고하지 못할 수 있습니다.",
+      "codexHelperUnverified": "이 작업에서 cindy_helper를 사용할 수 있는지 확인하지 못했습니다. 작업 결과를 보고하지 못할 수 있습니다.",
       "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
       "replyFailed": "답변을 완료하지 못했습니다",
       "retryTitle": "마지막 메시지 다시 보내기",
@@ -16006,7 +16009,8 @@
         "replaced": "동일한 기기의 다른 연결로 대체되었습니다. 다시 연결하는 중…",
         "too-many-connections": "이 계정의 동시 접속 기기가 너무 많아 서버가 연결을 거부했습니다",
         "version-mismatch": "서버와 프로토콜 버전이 일치하지 않습니다. 앱을 업데이트한 뒤 다시 시도해 주세요",
-        "unstable": "이 컴퓨터의 연결이 끊김과 재연결을 반복하고 있어 원격 작업이 계속 시간 초과될 수 있습니다. 네트워크를 확인하거나 Cindy를 다시 시작한 뒤 다시 시도해 주세요"
+        "unstable": "이 컴퓨터의 연결이 끊김과 재연결을 반복하고 있어 원격 작업이 계속 시간 초과될 수 있습니다. 네트워크를 확인하거나 Cindy를 다시 시작한 뒤 다시 시도해 주세요",
+        "agent-net-relay-down": "이 컴퓨터가 Agent-Net 중계에 연결할 수 없어 다시 연결하는 중입니다. 상대 컴퓨터와 직접 연결되어 있지 않으면 원격 작업이 실패합니다"
       }
     },
     "common": {
@@ -16227,7 +16231,8 @@
         "project": "프로젝트",
         "flat": "평면 목록",
         "device": "기기",
-        "dialogue": "대화"
+        "dialogue": "대화",
+        "automation": "자동화"
       },
       "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
       "deviceGroup": {
@@ -16575,6 +16580,7 @@
       "groupSummary": {
         "project": "프로젝트",
         "dialogue": "대화",
+        "automation": "자동화",
         "device": "기기"
       },
       "taskStatusHeading": "세션 상태",

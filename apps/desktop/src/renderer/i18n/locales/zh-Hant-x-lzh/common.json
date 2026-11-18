@@ -6930,7 +6930,8 @@
         "replaced": "連線為他處同一裝置所替",
         "too-many-connections": "同名籍連線數已達上限",
         "version-mismatch": "協議版本不一，請升級應用",
-        "unstable": "連線屢斷屢連，請察網路；若持續如此，請重啟 Cindy"
+        "unstable": "連線屢斷屢連，請察網路；若持續如此，請重啟 Cindy",
+        "agent-net-relay-down": "不能達 Agent-Net 中轉，方復連；已直連之電腦如常可用，餘裝置暫不能連"
       },
       "refresh": "重整",
       "empty": "海內尚無知己機。於另一臺機上以同一名籍登入 {{appName}}，此處即見之。",
@@ -14872,6 +14873,8 @@
       "failed": "圖生成未成，請再試"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "此差事已啟用 cindy_helper，然今不可用；差事結果或無法回傳。",
+      "codexHelperUnverified": "未能核實此差事之 cindy_helper 是否可用；差事結果或無法回傳。",
       "requestFormatError": "應用程式所發請求格式有謬，此答未能竟。",
       "replyFailed": "答未竟",
       "retryTitle": "再遣末一訊",
@@ -16006,7 +16009,8 @@
         "replaced": "此機連線為他處同一裝置所替，方重連…",
         "too-many-connections": "同名籍在線之裝置過多，連線為服務端所拒",
         "version-mismatch": "與服務端協議版本不合，請升級應用後再試",
-        "unstable": "此機連線屢斷屢連，遠端操作或屢逾時；請察網路，或重啟 Cindy 後再試"
+        "unstable": "此機連線屢斷屢連，遠端操作或屢逾時；請察網路，或重啟 Cindy 後再試",
+        "agent-net-relay-down": "此機不能達 Agent-Net 中轉，方復連；彼機非直連者，遠端操作將敗"
       }
     },
     "common": {
@@ -16227,7 +16231,8 @@
         "project": "案",
         "flat": "平列",
         "device": "機",
-        "dialogue": "言談"
+        "dialogue": "言談",
+        "automation": "自運"
       },
       "filterGroupByDeviceManualTip": "手動排序時，暫不能依裝置分組",
       "deviceGroup": {
@@ -16575,6 +16580,7 @@
       "groupSummary": {
         "project": "案",
         "dialogue": "言談",
+        "automation": "自運",
         "device": "機"
       },
       "taskStatusHeading": "差事狀態",

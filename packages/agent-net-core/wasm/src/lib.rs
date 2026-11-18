@@ -27,6 +27,12 @@ use agent_net_core::{
 const IO_LEN: usize = 65_536;
 const ADDR_LEN: usize = 24;
 const LINK_FAMILY: u8 = b'L';
+/// 在途分片数和每条流发送缓冲的上限，按内存定，见 `init`。实际在途量由拥塞控制按实测「带宽 × 往返」决定，
+/// 发送缓冲跟着拥塞窗口放大（两倍窗口，至少 1 MiB）。8192 个满长分片约 11.5 MB：1 Gbit/s 往返 90 毫秒、
+/// 100 Mbit/s 往返 0.9 秒以内都不会卡在窗口上；缓冲上限是两倍满窗口。一条连接最坏占用：发送缓冲两条流合计 48 MiB
+/// （只在线路快而远、应用一直在写时），接收端乱序 11.5 MB，应用不读时未读数据最多四个窗口。
+const SEND_WINDOW: u32 = 8192;
+const SEND_BUFFER_BYTES: usize = 24 << 20;
 
 /// UDP 地址，或者宿主编号的通道。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,10 +285,10 @@ pub extern "C" fn addr_ptr() -> *mut u8 {
     addr().as_mut_ptr()
 }
 
-/// 建立端点。io 里放本机长期公钥（32 字节）。`recovery`：0 自动、1 省流、2 偏速度；`share`：0 全速、1 让路。
-/// 成功返回 0。
+/// 建立端点。io 里放本机长期公钥（32 字节）。`max_packet_size` 是收包上限、`send_packet_size` 是发包上限（见 `Config`）；
+/// `recovery`：0 自动、1 省流、2 偏速度；`share`：0 全速、1 让路。成功返回 0。
 #[unsafe(no_mangle)]
-pub extern "C" fn init(max_packet_size: u32, recovery: u32, share: u32) -> i32 {
+pub extern "C" fn init(max_packet_size: u32, send_packet_size: u32, recovery: u32, share: u32) -> i32 {
     std::panic::set_hook(Box::new(|info| {
         let message = info.to_string();
         // SAFETY: 宿主读 `len` 字节。
@@ -299,11 +305,26 @@ pub extern "C" fn init(max_packet_size: u32, recovery: u32, share: u32) -> i32 {
         1 => BandwidthShare::Fair,
         _ => return -1,
     };
-    if !(576..=IO_LEN).contains(&(max_packet_size as usize)) {
+    if !(576..=IO_LEN).contains(&(max_packet_size as usize)) || !(576..=max_packet_size as usize).contains(&(send_packet_size as usize)) {
         return -1;
     }
     let public: [u8; PUBLIC_KEY_LEN] = io()[..PUBLIC_KEY_LEN].try_into().expect("32 bytes");
-    let config = Config { max_packet_size: max_packet_size as usize, bandwidth_share, ..Config::for_policy(recovery_policy) };
+    // 窗口与缓冲按内存定上限，实际用多少由拥塞控制按实测「带宽 × 往返」决定（见 SEND_WINDOW）。默认的 128 个分片
+    // （约 179 KB）在长往返、高带宽的路径上就是限速：100 Mbit/s、30 毫秒只能跑到约 6 MB/s，往返 200 毫秒只有约 0.9 MB/s。
+    // 2026-11-14 对比：1024 比 128 用时几何平均少 45%；8192 比 1024 再少 6.9%，20 MiB 在 1 Gbit/s、20 毫秒上从线路的
+    // 54% 到 95%，慢线路上发送缓冲仍只占约 1 MB（packages/agent-net-core/sim/results/2026-11-14-auto-window）。
+    // 和旧版（窗口 128）互通靠核心：所有流的新分片、在途分片和拥塞窗口都按对端确认里说出的窗口限着（说出来之前按 128），
+    // 新流的额度两端都从 128 起算、收到新流就放宽到自己的窗口。2026-11-17 以前只有默认流按对端的窗口限，别的流按 8192 发，
+    // 旧版接收端把越过它窗口的分片丢掉（packages/agent-net-core/sim/results/2026-11-17-window-interop）。
+    let config = Config {
+        max_packet_size: max_packet_size as usize,
+        send_packet_size: send_packet_size as usize,
+        bandwidth_share,
+        send_window: SEND_WINDOW,
+        recv_window: SEND_WINDOW,
+        send_buffer_bytes: SEND_BUFFER_BYTES,
+        ..Config::for_policy(recovery_policy)
+    };
     let state = State { endpoint: Endpoint::new(random_id), crypto: HostCrypto { public }, config };
     STATE.set(Some(state));
     0
@@ -377,6 +398,12 @@ pub extern "C" fn tick(now: f64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn next_wake() -> f64 {
     with(-1.0, |state| state.endpoint.next_wake().map_or(-1.0, |at| at as f64))
+}
+
+/// 计时器只能按 `granularity` 微秒醒的驱动问：有没有连接现在不能晚一个周期（是返回 1），见 `Connection::needs_fine_timer`。
+#[unsafe(no_mangle)]
+pub extern "C" fn fine_timer(granularity: f64) -> u32 {
+    with(0, |state| state.endpoint.needs_fine_timer(micros(granularity)) as u32)
 }
 
 /// 新接受的连接号，没有返回 0。
@@ -476,6 +503,12 @@ pub extern "C" fn conn_send(id: u32, now: f64, stream: u32, len: u32) -> i32 {
         Some(connection) => connection.send_stream(micros(now), stream, data) as i32,
         None => -1,
     })
+}
+
+/// 一条流还在发送缓冲里的字节（没发出的加上没确认的），见 `Connection::stream_buffered`；连接不存在返回 -1。
+#[unsafe(no_mangle)]
+pub extern "C" fn conn_stream_buffered(id: u32, stream: u32) -> f64 {
+    with(-1.0, |state| state.endpoint.connection(id).map_or(-1.0, |connection| connection.stream_buffered(stream) as f64))
 }
 
 /// 这条流不再写了，见 `SecureConnection::finish_stream`。成功返回 1。

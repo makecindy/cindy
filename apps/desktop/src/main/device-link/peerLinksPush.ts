@@ -11,13 +11,13 @@
  * 的 5 秒轮询补上；用户主动断链同理。
  */
 
-import type { DeviceLinkClient } from '@cindy/device-link';
+import type { PeerLinks } from './peerLinks.js';
 
 import type { DeviceLinkPeerLinksSnapshot } from '../../shared/deviceLinkIpc';
 
 /** 会改变拓扑结构的客户端事件；每个都返回退订函数。 */
 export type PeerLinksEventSource = Pick<
-  DeviceLinkClient,
+  PeerLinks,
   'onPeerStreamAccepted' | 'onPeerPathChanged' | 'onPeerTransportReset' | 'onPeerRouteStateChanged' | 'onStatusChange'
 >;
 

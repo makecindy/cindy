@@ -1,0 +1,18 @@
+### bulk 1 MiB, window 128 (Config::default)
+
+running 1 test
+线路 | 反向 | 第一阵 | 停 2 秒后 | 停 5 秒后（利用率，4 个种子平均）
+fast 8M 40ms | 95% | 95% | 96% | 97% | 缓冲峰值 1.0 MB
+fast 抖动30ms 不乱序 | 69% | 75% | 89% | 91% | 缓冲峰值 1.0 MB
+fast 抖动30ms 乱序 | 53% | 85% | 89% | 85% | 缓冲峰值 1.0 MB
+slow 2M 100ms | 93% | 93% | 88% | 90% | 缓冲峰值 1.0 MB
+very-slow 512k 200ms | 93% | 94% | 91% | 92% | 缓冲峰值 1.0 MB
+4G 20M 70ms 抖动20 丢1.5% | 29% | 28% | 38% | 38% | 缓冲峰值 1.2 MB
+Wi-Fi 50M 20ms 抖动4 丢0.5% | 53% | 63% | 79% | 77% | 缓冲峰值 1.2 MB
+跨地区 50M 200ms 丢0.5% | 9% | 9% | 13% | 12% | 缓冲峰值 1.2 MB
+千兆 1G 20ms | 5% | 5% | 6% | 7% | 缓冲峰值 1.0 MB
+家宽 100M 30ms | 33% | 33% | 41% | 40% | 缓冲峰值 1.2 MB
+平均 | 53% | 58% | 63% | 63%
+test bursty_transfers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s

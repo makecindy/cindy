@@ -209,6 +209,7 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
     token: 'a'.repeat(64), notificationKey: boundKey });
   await expect(controllerApi.request('PUT', '/push-token', { provider: 'apns', appVariant: 'global', apnsEnv: 'sandbox',
     token: 'a'.repeat(64), notificationKey: { ...boundKey, encryptionKey: owner.transportKey } })).rejects.toThrow('PUSH_REGISTRATION_INVALID');
+  let nativeAdmissions = 0;
   const make = (api: SocketClient, nativeMode: boolean) => {
     const client = new DeviceLinkClient({
       getWsUrl: () => 'ws://local-node.invalid', getToken: async () => 'local-native-fixture',
@@ -220,7 +221,8 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
         await peer.call({ seed, context, deviceId: member.deviceId, udp: false }, 'create');
         const port: NativeEnginePort = { command: value => peer.call(value), destroy: () => peer.destroy() };
         return PortableSocket.openWithBindings({ client: api, userId: certificate.subject, lanDiscovery: false, scoped: true,
-          bindings: { verifyCertificate, verifyDelegation, createTransport: options => NativeTransport.create(port, options) } });
+          bindings: { verifyCertificate, verifyDelegation, createTransport: options => NativeTransport.create(port, { ...options,
+            onIncoming(channel) { nativeAdmissions++; options.onIncoming(channel); } }) } });
       },
       timing: { requestTimeoutMs: 10_000, pingIntervalMs: 60_000 },
       logger: { debug() {}, info() {}, warn() {}, error() {} },
@@ -262,6 +264,18 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
   expect(await controller.invoke(owner.deviceId, { channel: 'test:echo', args: ['native authenticated RPC'] }))
     .toMatchObject({ ok: true, result: 'native authenticated RPC' });
   expect(await controller.invoke(owner.deviceId, { channel: 'test:large', args: [] })).toMatchObject({ ok: true, result: large });
+  // Real native receiver + unchanged private relay: a fresh same-identity Node
+  // host handshakes while the old SDK can still own the native peer slot.
+  // Deterministic late-frame/abort/deadline ordering is covered at NativeEnginePort
+  // in nativeTransport.test.ts; this gate validates the actual C ABI replacement.
+  const admissionsBeforeRestart = nativeAdmissions;
+  const restartedHost = make(hostApi, false); serve(restartedHost); restartedHost.start();
+  await restartedHost.waitUntilOnline(5000);
+  await until(async () => nativeAdmissions > admissionsBeforeRestart);
+  host.stop();
+  await controller.openLink(owner.deviceId, { controllerName: 'Native controller', appVersion: 'unit', protocolVersion: 1 });
+  expect(await controller.invoke(owner.deviceId, { channel: 'test:echo', args: ['native receiver survives host restart'] }))
+    .toMatchObject({ ok: true, result: 'native receiver survives host restart' });
   // Regression: a full-member native exchange cannot prove the cross-account
   // route projection/admission contract. Use the real C ABI with resource-only
   // host grants, and show that neither grant becomes full-device access.

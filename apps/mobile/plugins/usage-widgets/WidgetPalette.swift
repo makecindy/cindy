@@ -1,18 +1,30 @@
 import SwiftUI
-import UIKit
 import WidgetKit
+#if canImport(UIKit)
+import UIKit
+private typealias PlatformColor = UIColor
+private typealias PlatformFont = UIFont
+#else
+import AppKit
+private typealias PlatformColor = NSColor
+private typealias PlatformFont = NSFont
+#endif
 
 /// The macOS menu bar panel's palette (`apps/desktop/native/menubar`): every neutral is
 /// Cindy's warm black (Light) or warm white (Dark) at an opacity; only state, brand and
 /// harness colors are solid.
 enum WidgetPalette {
-  private static func rgb(_ value: UInt32, _ alpha: CGFloat = 1) -> UIColor {
-    UIColor(red: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
+  private static func rgb(_ value: UInt32, _ alpha: CGFloat = 1) -> PlatformColor {
+    PlatformColor(red: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
             blue: CGFloat(value & 0xFF) / 255, alpha: alpha)
   }
 
-  private static func dynamic(_ light: UIColor, _ dark: UIColor) -> Color {
+  private static func dynamic(_ light: PlatformColor, _ dark: PlatformColor) -> Color {
+    #if canImport(UIKit)
     Color(UIColor { $0.userInterfaceStyle == .dark ? dark : light })
+    #else
+    Color(nsColor: NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light })
+    #endif
   }
 
   private static let warmBlack: UInt32 = 0x26221C
@@ -26,14 +38,14 @@ enum WidgetPalette {
   static let ink3 = neutral(0.42, 0.42)
   static let ink4 = neutral(0.14, 0.13)
   static let line = neutral(0.08, 0.07)
-  static let tile = dynamic(UIColor(white: 1, alpha: 0.55), rgb(warmWhite, 0.05))
+  static let tile = dynamic(PlatformColor(white: 1, alpha: 0.55), rgb(warmWhite, 0.05))
   static let liquid = neutral(0.46, 0.72)
-  static let wellTop = dynamic(UIColor(white: 1, alpha: 0.75), rgb(warmWhite, 0.07))
-  static let wellBottom = dynamic(UIColor(white: 1, alpha: 0.5), rgb(warmWhite, 0.025))
-  static let wellShade = dynamic(UIColor(white: 0, alpha: 0.08), UIColor(white: 0, alpha: 0.5))
+  static let wellTop = dynamic(PlatformColor(white: 1, alpha: 0.75), rgb(warmWhite, 0.07))
+  static let wellBottom = dynamic(PlatformColor(white: 1, alpha: 0.5), rgb(warmWhite, 0.025))
+  static let wellShade = dynamic(PlatformColor(white: 0, alpha: 0.08), PlatformColor(white: 0, alpha: 0.5))
   static let background = dynamic(rgb(0xF7F5F0), rgb(0x1C1A18))
   static let glow = dynamic(rgb(0xEA6B17, 0.09), rgb(0xEA6B17, 0.12))
-  static let glow2 = dynamic(UIColor(white: 1, alpha: 0.55), rgb(0xFFF4E4, 0.04))
+  static let glow2 = dynamic(PlatformColor(white: 1, alpha: 0.55), rgb(0xFFF4E4, 0.04))
 
   /// Old-data notices ("updated 7 hours ago"); not a quota state.
   static let warn = Color(rgb(0xEA6B17))
@@ -116,7 +128,7 @@ enum WidgetNumFont {
     case .regular, .medium: face = "BarlowCondensed-Medium"
     default: face = "BarlowCondensed-SemiBold"
     }
-    if UIFont(name: face, size: size) == nil { return .system(size: (size * 0.8).rounded(), weight: weight) }
+    if PlatformFont(name: face, size: size) == nil { return .system(size: (size * 0.8).rounded(), weight: weight) }
     return .custom(face, fixedSize: size)
   }
 }

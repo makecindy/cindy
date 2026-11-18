@@ -7040,7 +7040,8 @@
         "replaced": "Ligação substituída por outra instância deste dispositivo",
         "too-many-connections": "Limite de ligações atingido para esta conta",
         "version-mismatch": "Versão do protocolo incompatível — atualize a aplicação",
-        "unstable": "A ligação está constantemente a cair e a restabelecer-se — verifique a rede ou reinicie o Cindy se o problema persistir"
+        "unstable": "A ligação está constantemente a cair e a restabelecer-se — verifique a rede ou reinicie o Cindy se o problema persistir",
+        "agent-net-relay-down": "Não é possível aceder ao relay do Agent-Net; a restabelecer a ligação. Os computadores ligados diretamente continuam a funcionar; os outros dispositivos não conseguem ligar-se por agora"
       },
       "refresh": "Atualizar",
       "empty": "Ainda não há outros dispositivos. Inicie sessão no {{appName}} com a mesma conta noutro computador e este aparecerá aqui.",
@@ -15042,6 +15043,8 @@
       "subtitle_many": "{{count}} mensagens selecionadas"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper está ativado, mas não está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
+      "codexHelperUnverified": "Não foi possível verificar se cindy_helper está disponível nesta tarefa. Pode não ser possível comunicar o resultado da tarefa.",
       "requestFormatError": "A aplicação enviou um pedido inválido, pelo que não foi possível concluir esta resposta.",
       "replyFailed": "Não foi possível concluir a resposta",
       "retryTitle": "Reenviar a última mensagem",
@@ -16231,7 +16234,8 @@
         "replaced": "Esta ligação foi substituída por outra instância do mesmo dispositivo — a restabelecer ligação…",
         "too-many-connections": "Demasiados dispositivos online nesta conta — o servidor recusou a ligação",
         "version-mismatch": "A versão do protocolo não corresponde à do servidor — atualize a aplicação e tente novamente",
-        "unstable": "Este computador perde e restabelece constantemente a ligação, pelo que as ações remotas podem continuar a exceder o tempo limite — verifique a rede ou reinicie a Cindy e tente novamente"
+        "unstable": "Este computador perde e restabelece constantemente a ligação, pelo que as ações remotas podem continuar a exceder o tempo limite — verifique a rede ou reinicie a Cindy e tente novamente",
+        "agent-net-relay-down": "Este computador não consegue aceder ao relay do Agent-Net e está a restabelecer a ligação. As ações remotas falham se o outro computador não estiver ligado diretamente"
       }
     },
     "common": {
@@ -16457,7 +16461,8 @@
         "project": "Projeto",
         "flat": "Lista simples",
         "device": "Dispositivo",
-        "dialogue": "Conversa"
+        "dialogue": "Conversa",
+        "automation": "Automatização"
       },
       "filterGroupByDeviceManualTip": "O agrupamento por dispositivo não está disponível durante a ordenação manual",
       "deviceGroup": {
@@ -16811,6 +16816,7 @@
       "groupSummary": {
         "project": "Projeto",
         "dialogue": "Conversa",
+        "automation": "Automatização",
         "device": "Dispositivo"
       },
       "taskStatusHeading": "Estado da sessão",

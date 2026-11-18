@@ -6973,7 +6973,8 @@
         "replaced": "Connection replaced by another instance of this device",
         "too-many-connections": "Connection limit reached for this account",
         "version-mismatch": "Protocol version mismatch — update the app",
-        "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists"
+        "unstable": "Connection keeps dropping and reconnecting — check the network, or restart Cindy if it persists",
+        "agent-net-relay-down": "Can't reach the Agent-Net relay, reconnecting. Computers connected directly still work; other devices can't connect for now"
       },
       "refresh": "Refresh",
       "empty": "No other devices yet. Sign in to {{appName}} with the same account on another computer and it will show up here.",
@@ -14946,6 +14947,8 @@
       "failed": "Couldn't generate the image — try again"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.",
+      "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
       "replyFailed": "Could not complete the reply",
       "retryTitle": "Resend the last message",
@@ -16080,7 +16083,8 @@
         "replaced": "This connection was replaced by another instance of the same device — reconnecting…",
         "too-many-connections": "Too many devices online for this account — the server refused the connection",
         "version-mismatch": "Protocol version doesn't match the server — update the app and retry",
-        "unstable": "This computer keeps losing and re-establishing its connection, so remote actions may keep timing out — check the network, or restart Cindy and retry"
+        "unstable": "This computer keeps losing and re-establishing its connection, so remote actions may keep timing out — check the network, or restart Cindy and retry",
+        "agent-net-relay-down": "This computer can't reach the Agent-Net relay and is reconnecting. Remote actions fail unless the other computer is connected directly"
       }
     },
     "common": {
@@ -16301,7 +16305,8 @@
         "project": "Project",
         "flat": "Flat list",
         "device": "Device",
-        "dialogue": "Chat"
+        "dialogue": "Chat",
+        "automation": "Automation"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -16649,6 +16654,7 @@
       "groupSummary": {
         "project": "Project",
         "dialogue": "Chat",
+        "automation": "Automation",
         "device": "Device"
       },
       "taskStatusHeading": "Session status",

@@ -159,9 +159,19 @@ export async function readCurrentDeviceDirectory(
     // AgentNetClient verifies pinned root, membership, subject and certificates.
     return { devices: devices.map(device => projectAgentNetDevice(device, api.certificate.deviceId)) };
   };
-  if (onlyEncrypted) return readEncrypted();
+  // A device removed in Device Link stays in the official Agent-Net directory: it is not part of this account until it
+  // signs in again there (agentNetMembership.ts), so it is not listed from there either. Everyone on a self-hosted relay.
+  // Also the rows a partial directory takes from the remembered complete one: a device deleted on another computer since
+  // would come back there for up to 30 minutes.
+  const withoutRefused = <T extends { devices: DeviceView[] }>(value: T): T =>
+    ({ ...value, devices: value.devices.filter(device => device.isSelf || runtime.agentNetDeviceAccepted(device.deviceId)) });
+  if (onlyEncrypted) return withoutRefused(await readEncrypted());
+  const startedAt = Date.now();
   const [legacy, encrypted] = await Promise.allSettled([readLegacy(), readEncrypted()]);
   assertCurrent();
+  // The Device Link list is the account's device list; the Agent-Net entries are judged against it (filtered below).
+  if (legacy.status === 'fulfilled') runtime.agentNetNoteDeviceLinkDevices(legacy.value.devices.map(device => ({ deviceId: device.deviceId, platform: device.platform })), startedAt);
+  if (encrypted.status === 'fulfilled') encrypted.value.devices = withoutRefused(encrypted.value).devices;
   // Only transient transport failures can use the other live directory. Never
   // hide a membership denial, invalid certificate or account boundary as fallback.
   // 期限到点的中止按**暂时性**失败处理:两条腿里只要有一条读成了,就用那条结果。
@@ -178,9 +188,9 @@ export async function readCurrentDeviceDirectory(
   if (legacy.status === 'rejected' && !legIsTemporary(legacy.reason)) throw legacy.reason;
   if (encrypted.status === 'rejected') {
     if (legacy.status === 'rejected') throw encrypted.reason;
-    return partialDirectory(scope, selection, legacy.value.devices);
+    return withoutRefused(partialDirectory(scope, selection, legacy.value.devices));
   }
-  if (legacy.status === 'rejected') return partialDirectory(scope, selection, encrypted.value.devices);
+  if (legacy.status === 'rejected') return withoutRefused(partialDirectory(scope, selection, encrypted.value.devices));
   const devices = new Map(legacy.value.devices.map(device => [device.deviceId, device]));
   for (const device of encrypted.value.devices) {
     const old = devices.get(device.deviceId);

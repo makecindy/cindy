@@ -92,6 +92,7 @@ export const {
   purgeRevokedController,
   wireInboundDispatch,
   hasRemoteInvokeWorkForPeer,
+  remoteInvokeEpoch,
   flushRemoteInvokeResultOutboxOnReconnect,
   flushMakerEventBatchesOnReconnect,
   runInvoke,
