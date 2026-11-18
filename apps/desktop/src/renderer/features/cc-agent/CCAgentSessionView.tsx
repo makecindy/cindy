@@ -3794,6 +3794,11 @@ function CCAgentSessionContent({
         ? await reconcilePiRuntimeCommandForSessionDispatch({
             ...reconcileParams,
             prepareMissing: Boolean(options.workingDirOverride),
+            onCatalogUnavailable: () => {
+              const detail = t('richAnswer.sendFailed');
+              toast.error(detail);
+              throw new Error(detail);
+            },
             runtimeCatalogSettled: () => runtimeCatalogSettled,
             prepareRuntime: options.preparePiRuntime ?? (() => preparePiRuntimeForDispatch(workingDir)),
             retryDelaysMs: options.piRuntimeRetryDelaysMs,

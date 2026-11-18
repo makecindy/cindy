@@ -128,6 +128,24 @@ it.each(['failed', 'unknown'])('reconciles a transient %s catalog until the alia
   expect(h.send.mock.calls[0][0]).toBe('/skill:demo');
 });
 
+it.each([true, false])('waits for late Pi capture and preserves input on exhaustion (recovers=%s)', async recovers => {
+  vi.useFakeTimers();
+  const h = harness();
+  const first = await h.environment.loadAllCommands();
+  const start = Date.now();
+  h.environment.loadAllCommands = async () => recovers && Date.now() - start >= 53_000
+    ? [{ ...first[0], runtimeStatus: 'loaded', runtimeCommandName: 'skill:demo' }] : first;
+  h.release();
+  const sent = h.handleSend('/demo', 'chosen-model', 'medium', 'ask');
+  const outcome = recovers ? sent : expect(sent).rejects.toThrow();
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(h.send).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(55_000);
+  await outcome;
+  if (recovers) expect(h.send.mock.calls[0][0]).toBe('/skill:demo');
+  else expect(h.send).not.toHaveBeenCalled();
+});
+
 it.each(['literal', 'codex', 'claude-code'])('leaves %s input unchanged without starting Pi', async kind => {
   const h = harness(kind === 'literal' ? 'pi' : kind);
   await h.handleSend('/demo hello', 'chosen-model', 'medium', 'ask', [], [], { literalText: kind === 'literal' });
