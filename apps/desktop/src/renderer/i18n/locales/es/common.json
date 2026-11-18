@@ -4394,7 +4394,8 @@
           "description": "Cuando está activado, sus otras computadoras y las personas con las que comparte pueden usar los modelos de este proveedor. El Agent se ejecuta en esta computadora, utilizando el inicio de sesión y la cuota de esta computadora.",
           "descriptionGroup": "Cuando está activado, sus otras computadoras y las personas con las que comparte pueden usar los modelos de este proveedor. El grupo de proveedores elige la computadora que ejecuta el Agent.",
           "ariaLabel": "Permita que sus otras computadoras y las personas con las que comparte usen este proveedor",
-          "writeFailed": "No se pudo guardar la configuración de acceso remoto. Por favor inténtalo de nuevo."
+          "writeFailed": "No se pudo guardar la configuración de acceso remoto. Por favor inténtalo de nuevo.",
+          "followsPool": "Esta conexión se fusionó con «{{pool}}» y sigue su «Permitir uso remoto». Cámbialo allí."
         },
         "ownComputersCanUse": "Disponible para mis otras computadoras",
         "moreActionsAria": "Más acciones",

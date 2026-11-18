@@ -4394,7 +4394,8 @@
           "description": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. L'Agent s'exécute sur cet ordinateur, avec la connexion et le quota de cet ordinateur.",
           "descriptionGroup": "Lorsque cette option est activée, vos autres ordinateurs et les personnes avec qui vous partagez peuvent utiliser les modèles de ce fournisseur. Le groupe de fournisseurs choisit l'ordinateur qui exécute l'Agent.",
           "ariaLabel": "Autoriser vos autres ordinateurs et les personnes avec qui vous partagez à utiliser ce fournisseur",
-          "writeFailed": "Impossible d'enregistrer le paramètre d'accès à distance. Veuillez réessayer."
+          "writeFailed": "Impossible d'enregistrer le paramètre d'accès à distance. Veuillez réessayer.",
+          "followsPool": "Cette connexion a été fusionnée dans « {{pool}} » et suit son réglage « Autoriser l'utilisation à distance ». Modifiez-le là-bas."
         },
         "ownComputersCanUse": "Disponible pour mes autres ordinateurs",
         "moreActionsAria": "Plus d'actions",

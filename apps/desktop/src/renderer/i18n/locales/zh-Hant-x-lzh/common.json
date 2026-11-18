@@ -4295,7 +4295,8 @@
           "description": "啟之，則君之他機與君所分享之人，可用此供方之模型；Agent 行於此機，用此機之登門與限額。",
           "descriptionGroup": "啟之，則君之他機與君所分享之人，可用此供方之模型，由供方組擇一機行 Agent。",
           "ariaLabel": "許君之他機與君所分享之人呼叫此供方",
-          "writeFailed": "遠端呼叫之設未能存，請再試"
+          "writeFailed": "遠端呼叫之設未能存，請再試",
+          "followsPool": "此連線已併入「{{pool}}」，隨其「許遠端呼叫」，請於「{{pool}}」中改之。"
         },
         "ownComputersCanUse": "吾之他機可用",
         "moreActionsAria": "餘者",

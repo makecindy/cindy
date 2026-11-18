@@ -4295,7 +4295,8 @@
           "description": "启之，则君之他机与君所分享之人，可用此供方之模型；Agent 行于此机，用此机之登门与限额。",
           "descriptionGroup": "启之，则君之他机与君所分享之人，可用此供方之模型，由供方组择一机行 Agent。",
           "ariaLabel": "许君之他机与君所分享之人调用此供方",
-          "writeFailed": "远程调用之设未能存，请再试"
+          "writeFailed": "远程调用之设未能存，请再试",
+          "followsPool": "此连接已并入「{{pool}}」，随其「许远程调用」，请于「{{pool}}」中改之。"
         },
         "ownComputersCanUse": "吾之他机可用",
         "moreActionsAria": "余者",

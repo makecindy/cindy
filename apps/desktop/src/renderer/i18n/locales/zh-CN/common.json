@@ -4295,7 +4295,8 @@
           "description": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，Agent 在这台电脑上运行，使用这台电脑的登录和配额。",
           "descriptionGroup": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，由供应商组选一台电脑运行 Agent。",
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
-          "writeFailed": "远程调用设置未能保存，请重试"
+          "writeFailed": "远程调用设置未能保存，请重试",
+          "followsPool": "这条连接已并进「{{pool}}」，跟随它的「允许被远程调用」，请在「{{pool}}」里修改。"
         },
         "ownComputersCanUse": "我的其他电脑可用",
         "moreActionsAria": "更多操作",

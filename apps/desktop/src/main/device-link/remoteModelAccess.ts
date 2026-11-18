@@ -48,10 +48,12 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
     store.invalidateIfChanged();
     const providers = store.read().providers;
     if (providers === null) throwIpcError('PRECONDITION_FAILED', 'Remote model permissions could not be read');
-    // A connection merged into an account pool uses the pool's range, including share members' limits.
-    const ruleId = remoteAccessProviderId(providerId);
-    const rule = Object.hasOwn(providers, ruleId) ? providers[ruleId] : undefined;
-    const providerModels = rule?.models ?? null;
+    const rule = Object.hasOwn(providers, providerId) ? providers[providerId] : undefined;
+    // A connection merged into an account pool takes the pool's provider-wide range. Share members' grants and
+    // budgets stay with the provider the share was made on, which is where sharing keeps writing them.
+    const poolId = remoteAccessProviderId(providerId);
+    const rangeRule = poolId === providerId ? rule : (Object.hasOwn(providers, poolId) ? providers[poolId] : undefined);
+    const providerModels = rangeRule?.models ?? null;
     const models = memberId ? (rule && Object.hasOwn(rule.members, memberId) ? rule.members[memberId] : null) : providerModels;
     if (memberId && rule?.budgets === null) throwIpcError('PRECONDITION_FAILED', 'Member budget settings could not be read');
     const hasBudget = !!memberId && !!rule?.budgets && Object.hasOwn(rule.budgets, memberId);

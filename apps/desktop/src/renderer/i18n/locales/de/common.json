@@ -4338,7 +4338,8 @@
           "description": "Wenn aktiviert, können deine anderen Computer und die Personen, mit denen du teilst, die Modelle dieses Anbieters nutzen. Der Agent läuft auf diesem Computer und nutzt dessen Anmeldung und Kontingent.",
           "descriptionGroup": "Wenn aktiviert, können deine anderen Computer und die Personen, mit denen du teilst, die Modelle dieses Anbieters nutzen. Die Anbietergruppe wählt den Computer aus, auf dem der Agent läuft.",
           "ariaLabel": "Deinen anderen Computern und den Personen, mit denen du teilst, die Nutzung dieses Anbieters erlauben",
-          "writeFailed": "Die Fernzugriffseinstellung konnte nicht gespeichert werden. Bitte versuche es erneut."
+          "writeFailed": "Die Fernzugriffseinstellung konnte nicht gespeichert werden. Bitte versuche es erneut.",
+          "followsPool": "Diese Verbindung wurde in „{{pool}}“ zusammengeführt und folgt dessen „Remote-Nutzung erlauben“. Ändere es dort."
         },
         "ownComputersCanUse": "Für meine anderen Computer verfügbar",
         "moreActionsAria": "Weitere Aktionen",

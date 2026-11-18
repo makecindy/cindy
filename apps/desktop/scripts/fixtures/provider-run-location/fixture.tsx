@@ -82,6 +82,14 @@ mountPage({
     if (ctx.page === 'provider-own-computers') {
       snapshot.providers[0] = { ...snapshot.providers[0], remoteInvocationEnabled: ctx.case === 'own-provider' || ctx.case === 'own-remote-off' };
     }
+    // provider-own-computers 页：并进 OpenAI 账号池、仍有分享的旧连接，开关跟随账号池且不可在这里改。
+    if (ctx.case === 'merged-shared') {
+      snapshot.providers.push({
+        ...provider('openai', 'OpenAI · old connection'), id: 'openai-old', remoteInvocationEnabled: true,
+        subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai',
+      } as typeof snapshot.providers[0]);
+      snapshot.providerOrder.push('openai-old');
+    }
     if (ctx.case === 'pinned' || ctx.case === 'recovery-pinned') snapshot.providers[0] = { ...snapshot.providers[0], runLocation: 'mbp' } as typeof snapshot.providers[0];
     refreshControl.defer = ctx.case === 'wizard-reopen';
     if (ctx.case === 'builtin-save-guard') snapshot.providers.push({
@@ -149,7 +157,7 @@ mountPage({
       },
       deviceLink: { getState: async () => ({ remoteControlEnabled: ctx.case !== 'own-remote-off' }) },
       providerShare: {
-        command: async () => ({ ready: true, providerIds: [] }),
+        command: async () => ({ ready: true, providerIds: ctx.case === 'merged-shared' ? ['openai-old'] : [] }),
         onOwnedChanged: subscription('ownedChanged'),
       },
       providerGroup: {

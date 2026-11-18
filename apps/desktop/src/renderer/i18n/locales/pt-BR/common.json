@@ -4394,7 +4394,8 @@
           "description": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O Agent é executado neste computador, usando o login e a cota dele.",
           "descriptionGroup": "Quando ativado, seus outros computadores e as pessoas com quem você compartilha podem usar os modelos deste provedor. O grupo de provedores escolhe o computador que executa o Agent.",
           "ariaLabel": "Permitir que seus outros computadores e as pessoas com quem você compartilha usem este provedor",
-          "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente."
+          "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente.",
+          "followsPool": "Esta conexão foi mesclada a “{{pool}}” e segue o “Permitir uso remoto” dele. Altere lá."
         },
         "ownComputersCanUse": "Disponível para meus outros computadores",
         "moreActionsAria": "Mais ações",

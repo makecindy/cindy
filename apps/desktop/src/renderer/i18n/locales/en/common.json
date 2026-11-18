@@ -4338,7 +4338,8 @@
           "description": "When on, your other computers and the people you share with can use this provider’s models. The Agent runs on this computer, using this computer’s sign-in and quota.",
           "descriptionGroup": "When on, your other computers and the people you share with can use this provider’s models. The provider group picks the computer that runs the Agent.",
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
-          "writeFailed": "Couldn’t save the remote access setting. Try again."
+          "writeFailed": "Couldn’t save the remote access setting. Try again.",
+          "followsPool": "This connection was merged into “{{pool}}” and follows its “Allow remote use”. Change it there."
         },
         "ownComputersCanUse": "Available to my other computers",
         "moreActionsAria": "More Actions",

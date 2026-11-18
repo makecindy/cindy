@@ -4295,7 +4295,8 @@
           "description": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，Agent 在這台電腦上執行，使用這台電腦的登入和配額。",
           "descriptionGroup": "開啟後，你的其他電腦和你分享的人可以用這個供應商的模型，由供應商組選一台電腦執行 Agent。",
           "ariaLabel": "允許你的其他電腦和你分享的人呼叫此供應商",
-          "writeFailed": "遠端呼叫設定未能儲存，請重試"
+          "writeFailed": "遠端呼叫設定未能儲存，請重試",
+          "followsPool": "這條連線已併入「{{pool}}」，跟隨它的「允許遠端呼叫」，請在「{{pool}}」裡修改。"
         },
         "ownComputersCanUse": "我的其他電腦可用",
         "moreActionsAria": "更多操作",

@@ -23,26 +23,28 @@ beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-remote-mo
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('remote model permissions', () => {
-  // PR #11312 review (Greptile P1): an old connection merged into an account pool is hidden with its own
-  // remote model range. A remote task still on the old id must use the pool's range, including share
-  // members' limits, neither blocked nor widened by the hidden one; stopping the old connection still applies.
-  // Minimal input: pool allows A, old allows B.
-  it('reads a merged connection through its pool, including member limits', async () => {
+  // PR #11312 review (Greptile P1, Codex P1): an old connection merged into an account pool is hidden with its
+  // own remote model range. A remote task still on the old id takes the pool's provider-wide range, neither blocked
+  // nor widened by the hidden one, while a share made on the old connection keeps its members' grants, which sharing
+  // still writes under the old id; stopping the old connection still applies.
+  // Minimal input: pool allows A and C, old allows B, the old share's member only C.
+  it('takes the pool range for a merged connection and keeps its own share members and stop', async () => {
     const store = make();
     const ok = () => {};
-    await store.set('openai', ['model-a'], undefined, ok);
-    await store.set('openai', ['model-a'], 'guest', ok);
+    await store.set('openai', ['model-a', 'model-c'], undefined, ok);
     await store.set('old-openai', ['model-b'], undefined, ok);
+    await store.set('old-openai', ['model-c'], 'guest', ok);
     setMergedProviderPoolResolver((id) => (id === 'old-openai' ? 'openai' : undefined));
     try {
       expect(store.allows('old-openai', 'model-a')).toBe(true);
       expect(store.allows('old-openai', 'model-b')).toBe(false);
-      expect(store.allows('old-openai', 'model-a', 'guest')).toBe(true);
-      expect(store.read('old-openai').models).toEqual(['model-a']);
-      // Codex review: only the range follows the pool; stopping the old connection itself still blocks it.
+      expect(store.read('old-openai').models).toEqual(['model-a', 'model-c']);
+      expect(store.allows('old-openai', 'model-c', 'guest')).toBe(true);
+      expect(store.allows('old-openai', 'model-a', 'guest')).toBe(false);
+      expect(store.read('old-openai', 'guest').models).toEqual(['model-c']);
       setProviderDisabled('old-openai', true);
       expect(store.allows('old-openai', 'model-a')).toBe(false);
-      expect(store.allowsDelegatedExecution('old-openai', 'model-a', 'guest')).toBe(false);
+      expect(store.allowsDelegatedExecution('old-openai', 'model-c', 'guest')).toBe(false);
       expect(store.allows('openai', 'model-a')).toBe(true);
       setProviderDisabled('old-openai', false);
     } finally { setMergedProviderPoolResolver(null); }
