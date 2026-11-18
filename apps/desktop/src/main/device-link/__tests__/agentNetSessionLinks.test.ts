@@ -308,32 +308,33 @@ describe('AgentNetSessionLinks', () => {
     expect(calls).toEqual(['device-link:invoke', 'device-link:openLink', 'device-link:sendInvokeResult']);
   });
 
-  it('waits for the session of a peer that just connected instead of settling on Device Link, and only within the grace period', async () => {
-    const connectedAt = new Map<string, number>([['a-host', performance.now()], ['c-old', performance.now() - 1450]]);
+  it('waits for the session of a peer that just connected instead of settling on Device Link, and only within the grace period', async ({ onTestFinished }) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    onTestFinished(() => vi.useRealTimers());
+    const connectedAt = new Map<string, number>([['a-host', performance.now()]]);
     const { links, connect } = pair({ connected: false, connectedAt: (id) => connectedAt.get(id) ?? null });
     answerOnSession(links.host);
     const calls: string[] = [];
     const controller = routeSessionPeers(idleDeviceLink(calls), links.controller);
     // 连接刚建好、会话还没到：建链与之前的调用都等它，到了就走会话。
-    const startedAt = performance.now();
     const probe = controller.invoke('a-host', { channel: 'device-link:remote-desktop:v1', args: [] });
     const opened = controller.openLink('a-host', openPayload);
     setTimeout(connect, 20);
+    await vi.advanceTimersByTimeAsync(20);
     await expect(probe).resolves.toEqual({ ok: true, result: 'session' });
     await expect(opened).resolves.toMatchObject({ appVersion: 'host' });
-    // 会话一到就放行，不等满宽限期（1.5 秒）。
-    expect(performance.now() - startedAt).toBeLessThan(1000);
     expect(calls).toEqual([]);
     // 没连着的对端不等，照常交给 Device Link（离线时立即失败，不拖慢）。
     void controller.invoke('offline-peer', { channel: 'device-link:remote-desktop:v1', args: [] });
     expect(calls).toEqual(['device-link:invoke:offline-peer']);
     // 连上快满宽限期还没有会话（对端没启用会话）：等到宽限期结束改走 Device Link，之后不再等。
-    const lateAt = performance.now();
+    connectedAt.set('c-old', performance.now() - 1450.25);
     const late = controller.openLink('c-old', openPayload);
+    await vi.advanceTimersByTimeAsync(49);
     expect(calls).toEqual(['device-link:invoke:offline-peer']);
+    // Only 49.75 ms remained when the timer was scheduled.
+    await vi.advanceTimersByTimeAsync(1);
     await expect(late).resolves.toMatchObject({ appVersion: 'dl' });
-    // 宽限期从连接建好算起，不是从这次调用算起。
-    expect(performance.now() - lateAt).toBeLessThan(1000);
     void controller.invoke('c-old', { channel: 'device-link:remote-desktop:v1', args: [] });
     expect(calls).toEqual(['device-link:invoke:offline-peer', 'device-link:openLink:c-old', 'device-link:invoke:c-old']);
   });

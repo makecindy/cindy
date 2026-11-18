@@ -339,8 +339,8 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     const wait = {
       promise,
       release: () => { clearTimeout(timer); if (this.sessionWaits.get(deviceId) === wait) this.sessionWaits.delete(deviceId); resolve(); },
-      /** 改成从现在起再等 ms。 */
-      until: (ms: number) => { clearTimeout(timer); timer = setTimeout(wait.release, Math.max(0, ms)); },
+      /** Round up so the timer cannot release just before the grace period ends. */
+      until: (ms: number) => { clearTimeout(timer); timer = setTimeout(wait.release, Math.ceil(Math.max(0, ms))); },
     };
     wait.until(timeoutMs);
     this.sessionWaits.set(deviceId, wait);
