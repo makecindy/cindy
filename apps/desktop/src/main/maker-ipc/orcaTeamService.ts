@@ -2620,6 +2620,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
         // 新 turn 开始：上一轮的回报不再描述当前状态，面板标记与未读判定都必须作废旧值。
         await deps.updateWorkerStatus(link.workerId, 'running', null);
+        // 直连结论的账本同样只属于上一轮：残留的旧 report 会把新轮 progress
+        // 当成迟到的遥测拦掉（与 running 结束路径不消费账本的两轮场景）。
+        directTurnOutcomes.delete(sessionId);
         deps.broadcastOrcaWorkerChanged(link.leadSessionId);
       });
       // running 提交后旧 entry 已不可能被重新登记,此时清理才是可靠的。

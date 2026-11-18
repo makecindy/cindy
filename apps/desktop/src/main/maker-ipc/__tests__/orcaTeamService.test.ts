@@ -4215,6 +4215,27 @@ describe('OrcaTeamService direct-turn report outcomes', () => {
     expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
   });
 
+  it('drops the prior direct-turn outcome at the next turn start so new progress lands', async () => {
+    const { deps, service } = createDeps();
+    // 轮 1:结论先落账(turn 未终,状态映射等真实终态),面板可见。
+    await service.handleWorkerTurnStarted('worker-session-1');
+    const finish1 = service.captureLocalWorkerReport('worker-session-1');
+    await finish1(true, { delivered: true, report: { state: 'failed', summary: '第一轮失败' } });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'failed' }),
+    );
+    // running 结束路径:terminal 不消费直连账,记录残留到下一轮。
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'done' });
+    // 轮 2 开始:上一轮结论作废,新 progress 不再被旧结论拦住。
+    await service.handleWorkerTurnStarted('worker-session-1');
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '第二轮进度' });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'progress' }),
+    );
+  });
+
   it('drops a late direct-turn report once a new Lead assignment owns the session', async () => {
     const { deps, service } = createDeps();
     const deliver = service.captureLocalWorkerReport('worker-session-1');
