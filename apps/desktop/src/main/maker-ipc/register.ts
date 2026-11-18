@@ -41,7 +41,8 @@ import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
 import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
-import { scheduleBotRemoteResourceChangedForFollowedSession } from './botRemoteResourceInvalidation.js';
+import { onBotRemoteResourceChanged, scheduleBotRemoteResourceChangedForFollowedSession } from './botRemoteResourceInvalidation.js';
+import { onBotReadStateChanged } from './botReadStateStore.js';
 import { assertBotTaskCoordination } from './botTaskCoordination.js';
 import type { BotTaskCoordination } from '../../shared/botTaskCoordination.js';
 import { openSession, setSessionOpeningModelAdmission } from '../localDb/sessionOpening.js';
@@ -296,6 +297,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } f
 import { accessChatDisplayCache } from './chatDisplayCache.js';
 import { accessBotGroupOutbox, commandBotGroupOutbox, sendCoordinatedBotGroupMessage, setBotGroupOutboxPublisher } from './botGroupOutboxStorage.js';
 import { createBotReadStateIpc, createBotWindowAccess } from './botReadStateLocalIpc.js';
+import { createBotReadStateStorage } from './botReadStateStorage.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
 import { createBotGroupOutboxIpc } from './botGroupOutboxIpc.js';
 import {
@@ -756,7 +758,7 @@ import { restartBotRuntime } from './botRuntimeRestart.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import { isSessionPermissionMode, persistPermissionModeWithoutRuntime } from './sessionPermissionPersistence.js';
 import { withSessionPermissionChange } from './sessionPermissionChange.js';
-import { withBotPermissionChange } from './botPermissionDispatch.js';
+import { retryBotWelcomePermissionDispatch, withBotPermissionChange } from './botPermissionDispatch.js';
 import { getPluginHostToolCaller } from '../mcp-integrations/hostToolCaller.js';
 import {
   createBotCompactRuntimeRefreshCoordinator,
@@ -13262,6 +13264,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** Host-only fence checked synchronously at the final enqueue boundary. */
     assertDispatchCurrent?: () => void;
     toolsDisabled?: boolean;
+    /** Only the invitation service may authorize welcome recovery. Never wire input. */
+    invitationWelcome?: true;
     retry?: boolean;
     onQueued?: (clientId: string) => Promise<void>;
     message: string;
@@ -13373,7 +13377,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         inputCoordinator.enqueue(params.targetSessionId, queued, { resumeRestorePausedQueue: true });
       };
       if (params.toolsDisabled) {
-        if (!await welcomeDispatchReceipts.dispatch(params.targetSessionId, clientId, enqueue)) {
+        if (!await welcomeDispatchReceipts.dispatch(params.targetSessionId, clientId, enqueue, params.invitationWelcome === true)) {
           return { ok: false as const, errorCode: 'AGENT_NOT_READY' as const, message: 'Welcome turn was not accepted by the runtime.' };
         }
       } else {
@@ -13393,7 +13397,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return sendToSessionInternal({ ...params, onAccepted: () => params.onAccepted?.() }, true);
   };
 
-  setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);
+  setBotInvitationWelcomeDispatch(input => dispatchBotSessionMessage({ ...input, invitationWelcome: true }));
   setVoiceTaskDispatch(dispatchBotSessionMessage);
   setVoiceCallMemoryReader(async botId =>
     (await maker.makerMemory?.getStore(buildBotMemoryScopeKey(botId)))?.getIndex() ?? '');
@@ -14010,13 +14014,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       catch { log.warn('Bot window state notification could not be delivered'); }
     }
   };
-  ipcMain.handle(MAKER_INVOKE.BOT_READ_STATE, createBotReadStateIpc({
-    assertTrustedSender: botWindowAccess.assertSender,
+  let invalidatePluginCompanions: () => void = () => {};
+  const botReadStateStorage = createBotReadStateStorage({
     currentOwner: getActiveAppSession,
     boundaryPending: isAppSessionBoundaryPending,
     ownerRoot: () => ownerScopedUserDataPath('bot-read-state'),
-    publish: event => publishBotWindowState(MAKER_PUSH.BOT_READ_STATE_CHANGED, event),
-  }));
+    publish: (event, identity) => {
+      publishBotWindowState(MAKER_PUSH.BOT_READ_STATE_CHANGED, event);
+      if (identity.kind === 'bot' || identity.kind === 'remote-bot') invalidatePluginCompanions();
+    },
+  });
+  ipcMain.handle(MAKER_INVOKE.BOT_READ_STATE, createBotReadStateIpc(botWindowAccess.assertSender, botReadStateStorage));
   const outboxIpc = createBotGroupOutboxIpc({
     assertCommandSender: botWindowAccess.assertSender, assertSendSender: assertTrustedAppRendererEvent,
     command: commandBotGroupOutbox, send: sendCoordinatedBotGroupMessage,
@@ -15026,7 +15034,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   // cindy.companions: changes reach watching plugins as content-free notices (island activity, companion
   // homes, pushes from the computers companions run on); subscribed on first use, once the island service exists.
-  let invalidatePluginCompanions: () => void = () => {};
   let companionChangesSubscribed = false;
   const subscribeCompanionChanges = () => {
     const island = getAgentIslandService();
@@ -15042,6 +15049,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   let companionDevices: { at: number; value: Promise<Array<{ deviceId: string; name: string; online: boolean; reachable: boolean }> | null> } | null = null;
   const companionHost = createPluginCompanionHost({
+    readPosition: async (identity) => {
+      const { dataOwnerId, generation } = getActiveAppSession();
+      if (!dataOwnerId) return null;
+      try {
+        return await botReadStateStorage.readPosition({ dataOwnerId, generation }, identity);
+      } catch {
+        return null; // An unavailable position must not invalidate the whole roster.
+      }
+    },
     pending: getPendingInteractionsForSession,
     openSession: (id, deviceId) => openMainWindowSession(id, { focus: 'if-active', ...(deviceId ? { deviceId } : {}) }),
     flushMessages: drainPersistQueue,
@@ -15110,6 +15126,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   });
   invalidatePluginCompanions = () => companionHub?.invalidate();
+  onBotRemoteResourceChanged(invalidatePluginCompanions);
+  onBotReadStateChanged(keys => {
+    if (keys.some(key => !key.startsWith('group:') && !key.startsWith('thread:'))) invalidatePluginCompanions();
+  });
   let pluginTargetReviewReady = false;
   setPluginTargetAdapter({
     prepareInvocation: preparePluginInvocation,
@@ -17613,7 +17633,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       compact: async (id, instructions, beforeMutation, beforeDelivery) => {
         const createOpts = await readSharedTaskTaskCreateOpts(id);
         await beforeMutation();
-        if (createOpts.agentKind !== 'claude-code') return compactSessionFromHost(id, instructions, beforeMutation);
+        if (createOpts.agentKind !== 'claude-code') {
+          return compactSessionFromHost(id, instructions, beforeMutation, beforeDelivery);
+        }
         if (instructions !== undefined) throwIpcError('UNSUPPORTED_CAPABILITY', 'Claude compact control does not accept custom instructions');
         return inputCoordinator.compact(id, createOpts, { beforeMutation: beforeDelivery });
       },
@@ -19825,7 +19847,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
-        const result = await sendToAgentAccepted(sessionId, message, createOpts, sendOpts);
+        let runtimePreparationStarted = false;
+        const send = () => sendToAgentAccepted(sessionId, message, createOpts, {
+          ...sendOpts,
+          onRuntimePreparation: () => { runtimePreparationStarted = true; },
+        });
+        // Welcome-only: ordinary/user/plugin requests retain their existing failure
+        // semantics. Selected runtime plugins can have preparation side effects.
+        const noRuntimePlugins = () => !Object.values(readRuntimePluginSettings(sessionId) ?? {})
+          .some(targets => targets?.length);
+        const clientId = sendOpts.persistUserMessage?.clientId;
+        const canRecoverWelcome = () => !!clientId && welcomeDispatchReceipts.hasWelcome(sessionId, clientId)
+          && !runtimePreparationStarted && noRuntimePlugins();
+        const recoverWelcome = sendOpts.toolsDisabled === true && canRecoverWelcome();
+        const result = recoverWelcome
+          ? await retryBotWelcomePermissionDispatch(sessionId, sendOpts.signal, send, canRecoverWelcome, sendOpts.onUndispatchedRetry)
+          : await send();
         await orcaInterAgentDispatcher.settleQueuedOrcaInterAgentAcceptedCallback(
           sessionId,
           sendOpts,
@@ -20352,6 +20389,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 结构上不可能被误认。详见 uiContinuationSignal 的模块注释。
       publishUiTurnDispatching(sessionId, item.clientId);
       await prepareQueuedPromptSnapshot(gitSnapshotCoordinator, schedulerQueuedPromptDiscardWatchers, sessionId, item, signal);
+    },
+    onRetryUndispatchedUserTurn: (sessionId) => {
+      // The welcome receipt still belongs to the same queued input. Only the
+      // proven undispatched attempt's file preparation is being replaced.
+      clearPendingTurnChangeSets(sessionId);
+      gitSnapshotCoordinator?.onTurnAbort(sessionId);
     },
     onUndispatchedUserTurn: (sessionId, item, disposition) => {
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
@@ -23359,7 +23402,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
   );
 
-  async function compactSessionFromHost(sessionId: string, instructions?: string, beforeMutation?: () => Promise<void>) {
+  async function compactSessionFromHost(
+    sessionId: string,
+    instructions?: string,
+    beforeMutation?: () => Promise<void>,
+    beforeDelivery?: () => Promise<void>,
+  ) {
     return withSendToSessionLock(sessionId, async () => {
       try {
         const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
@@ -23367,7 +23415,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
         }
         await beforeMutation?.();
-        return await sess.compactSession(instructions);
+        return await sess.compactSession(instructions, sess.agentKind === 'pi' ? beforeDelivery : undefined);
       } finally {
         await getOrResumeSessionForHistory.release(sessionId);
       }

@@ -15032,6 +15032,9 @@
       "continueFailed_other": "有 {{count}} 个任务没能继续，可以打开任务后重试。"
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
+      "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
+      "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "此前有自动运行失败。",
       "precheck": "自动检查暂时受阻。",
       "rateLimited": "自动检查暂时受阻：请求限流。",

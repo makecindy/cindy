@@ -24,7 +24,7 @@ import { NativeTransport, type NativeEnginePort } from '../nativeTransport.js';
 import { PortableAgentNetClient, type BinarySocket } from '../portableClient.js';
 import type { SocketClient } from '../socketPorts.js';
 import { uploadNativeMedia, readNativeMedia } from '../nativeMedia.js';
-import { openNativeMediaStream } from '../nativeMediaStream.js';
+import { openNativeByteStream, openNativeMediaStream } from '../nativeMediaStream.js';
 
 const library = process.env.CINDY_AGENT_NET_NATIVE_LIBRARY;
 const cleanups: Array<() => unknown> = [];
@@ -70,11 +70,15 @@ it.skipIf(!library)('streams only requested native video blocks and closes the l
   expect(reads).toHaveBeenCalledTimes(3);
   const tail = await fetch(stream.url, { headers: { range: 'bytes=-17' } });
   expect(Buffer.from(await tail.arrayBuffer())).toEqual(plain.subarray(-17));
+  // Block 1 remains cached after the tail read, block 2 does not. A mostly
+  // cached range must not regress its progress when network bytes start again.
+  const mixed = await fetch(stream.url, { headers: { range: `bytes=${block + 1}-${2 * block}` } });
+  expect(Buffer.from(await mixed.arrayBuffer())).toEqual(plain.subarray(block + 1, 2 * block + 1));
   expect((await fetch(stream.url, { headers: { range: 'bytes=999999999-' } })).status).toBe(416);
   await host.request('DELETE', '/devices/' + identity.deviceId);
-  // Block 2 has not been downloaded/cached. Revocation cannot yield new bytes.
+  // Block 0 has been evicted from the two-block cache. Revocation cannot yield new bytes.
   await expect((async () => {
-    const denied = await fetch(stream.url, { headers: { range: `bytes=${2 * block}-${2 * block + 9}` } });
+    const denied = await fetch(stream.url, { headers: { range: `bytes=0-9` } });
     return denied.arrayBuffer();
   })()).rejects.toThrow();
   await vi.waitFor(() => expect(stream.isOpen()).toBe(false), { interval: 5 });
@@ -484,3 +488,62 @@ it.skipIf(!library)('carries sessions on the real native engine, relays them ove
     phone.close();
   }
 }, 30_000);
+// #10142, integration tier: the old fixed 30s deadline truncates both HTTP
+// bodies. Use real time/C ABI to cross even the new 60s inactivity budget;
+// unit ticket-policy tests cover exact deadline edges without waiting.
+it.skipIf(!library)('keeps progressing and queued native HTTP requests alive beyond a total deadline', async () => {
+  const native = new NativePeer();
+  await native.call({ seed: Buffer.alloc(32, 74).toString('base64url'), context: 'progress-player', deviceId: 'player', udp: false }, 'create');
+  const size = 1024 * 1024, events: unknown[] = [];
+  const began = Date.now();
+  let release!: () => void;
+  const firstDone = new Promise<void>(resolve => { release = resolve; });
+  let first = true, hold = false, cancelled = false;
+  let reading!: () => void;
+  const heldRead = new Promise<void>(resolve => { reading = resolve; });
+  const stream = await openNativeByteStream({ command: async <T>(value: Record<string, unknown>): Promise<T> => {
+    const result = await native.call(value);
+    if (value.op !== 'httpMediaPoll' || (value.updates as unknown[] | undefined)?.length) {
+      events.push({ ms: Date.now() - began, op: value.op, id: value.id, updates: value.updates,
+        result: value.op === 'httpMediaReply' ? result : undefined });
+    }
+    return result as T;
+  }, destroy: () => native.destroy() },
+    'video/mp4', async () => ({ size, close: async () => {}, async read(start, end, write, activity) {
+      if (hold) {
+        hold = false; reading();
+        await new Promise<void>((_, reject) => activity!.signal!.addEventListener('abort', () => {
+          cancelled = true; reject(new Error('PLAYER_CANCELLED'));
+        }, { once: true }));
+      }
+      if (!first) { activity?.('queued'); await firstDone; activity?.('active'); }
+      else {
+        first = false;
+        for (let loaded = 0; loaded < end - start + 1; loaded += 64 * 1024) {
+          // real-wait: prove real Rust C ABI survives >60s with actual incoming bytes.
+          await new Promise(resolve => setTimeout(resolve, 4100));
+          await write(new Uint8Array(Math.min(64 * 1024, end - start + 1 - loaded)).fill(74), loaded);
+        }
+        release(); return;
+      }
+      await write(new Uint8Array(end - start + 1).fill(74), 0);
+    } }));
+  cleanups.push(() => stream.close());
+  const firstResponse = await fetch(stream.url);
+  const firstBody = firstResponse.arrayBuffer();
+  const secondResponse = await fetch(stream.url);
+  const secondBody = secondResponse.arrayBuffer();
+  const result = await Promise.all([firstBody, secondBody]).catch(cause => {
+    throw new Error('NATIVE_HTTP_PROGRESS: ' + JSON.stringify(events), { cause });
+  });
+  for (const bytes of result) expect(Buffer.from(bytes)).toEqual(Buffer.alloc(size, 74));
+  hold = true;
+  const controller = new AbortController();
+  const abandoned = await fetch(stream.url, { signal: controller.signal, headers: { range: 'bytes=0-0' } });
+  const abandonedBody = expect(abandoned.arrayBuffer()).rejects.toThrow();
+  await heldRead; controller.abort(); await abandonedBody;
+  await vi.waitFor(() => expect(cancelled).toBe(true), { interval: 10 });
+  const healthy = await fetch(stream.url, { headers: { range: 'bytes=0-0' } });
+  expect(Buffer.from(await healthy.arrayBuffer())).toEqual(Buffer.from([74]));
+  expect(stream.isOpen()).toBe(true);
+}, 85_000);

@@ -37126,6 +37126,18 @@ describe('Codex native manual compaction', () => {
     await handle.close();
   });
 
+  // Unit / engine capability: the native manual compact RPC has no
+  // instructions field. The existing empty-history test only covers no-op.
+  it('reports Codex compact instructions as unsupported before sending a native request', async () => {
+    const { handle, host } = await setup();
+    try {
+      await expect(handle.compactSession!('Keep decisions')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+      expect(host.request.mock.calls.some(([method]) => method === Method.ThreadCompactStart)).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('reports an empty native compact as a no-op, not success', async () => {
     const { handle, started, completed } = await setup();
     const result = handle.compactSession!();

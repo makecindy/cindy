@@ -701,6 +701,7 @@ import { runGhostPreviewNavigation } from './ghostPreviewNavigation.js';
 import { ownerScopedGhostPartitionForInstalledGhost, resolveGhostWebviewPartitionClaim } from './ghostWebviewPartition.js';
 import {
   ghostSecretSaved,
+  readGhostOauthManifestForUninstall,
   readGhostSecret,
   readGhostSecretStrict,
   getProviderSecretStore,
@@ -6479,6 +6480,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       vault: {
         read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
         readStrict: (ghostId, storageKey) => readGhostSecretStrict(ghostId, storageKey),
+        readForUninstall: (ghostId, storageKey) => readGhostOauthManifestForUninstall(ghostId, storageKey),
         store: (ghostId, storageKey, value) => storeGhostSecret(ghostId, storageKey, value),
         remove: (ghostId, storageKey) => removeGhostSecret(ghostId, storageKey),
       },
