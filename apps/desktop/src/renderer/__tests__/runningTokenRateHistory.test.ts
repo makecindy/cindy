@@ -380,6 +380,9 @@ describe('host token speed (Pi extension algorithm)', () => {
   });
 
   it('accepts only well-formed host snapshots', () => {
+    const measured = speed(10, 1000);
+    expect(readTokenSpeedSnapshot({ ...measured, totalOutputTokens: 5300 })?.totalOutputTokens).toBe(5300);
+    expect(readTokenSpeedSnapshot({ ...measured, totalOutputTokens: -1 })).toEqual(measured);
     expect(readTokenSpeedSnapshot(speed(10, 1000))).toEqual(speed(10, 1000));
     expect(readTokenSpeedSnapshot({ rate: 10 })).toBeUndefined();
     expect(readTokenSpeedSnapshot({ ...speed(10, 1000), rate: Number.NaN })).toBeUndefined();
