@@ -223,6 +223,36 @@ describe('AppServerHost isolated account lifecycle', () => {
 });
 
 describe('AppServerHost assistant text delta routing', () => {
+  // #11380 follow-up: request generations must not revoke a live handle's
+  // subscription. Unit tier, real Host/RPC: same-owner resume (including a
+  // rejected resume and daemon subscribe-before-resume) must still unsubscribe
+  // on close. Prior coverage only asserted that a replacement was protected.
+  it.each(['profile', 'daemon', 'failed', 'subscribe-after'] as const)(
+    'releases the same owner after a %s resume', async phase => {
+      const transport = new NotificationTransport();
+      const host = new AppServerHost({ createTransport: () => transport, logger,
+        clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+      const threadOwner = {};
+      try {
+        await host.ensureStarted();
+        if (phase !== 'daemon') await host.request('thread/resume', { threadId: 'same-handle' }, { threadOwner });
+        const subscription = phase === 'subscribe-after' ? null : host.subscribeThread('same-handle', {}, threadOwner);
+        if (phase === 'failed') {
+          const write = transport.writeLine.bind(transport);
+          vi.spyOn(transport, 'writeLine').mockImplementation(async line => {
+            const msg = JSON.parse(line);
+            if (msg.method !== 'thread/resume') return write(line);
+            transport.emit({ id: msg.id, error: { code: -32000, message: 'fixture resume rejected' } });
+          });
+          await expect(host.request('thread/resume', { threadId: 'same-handle' }, { threadOwner })).rejects.toThrow('fixture resume rejected');
+        } else await host.request('thread/resume', { threadId: 'same-handle' }, { threadOwner });
+        const active = subscription ?? host.subscribeThread('same-handle', {}, threadOwner);
+        await active.release();
+        expect(transport.lines.map(line => JSON.parse(line)).filter(msg => msg.method === 'thread/unsubscribe'))
+          .toEqual([expect.objectContaining({ params: { threadId: 'same-handle' } })]);
+        expect(host.activeSubscriptions).toBe(0);
+      } finally { await host.shutdown(); }
+    });
   // #11380: a subscriber-only guard misses a replacement's in-flight resume.
   // Unit tier: real host/RPC transport, one old cleanup + newer resume; the
   // observable contract is no thread/unsubscribe written for the newer owner.
@@ -245,7 +275,7 @@ describe('AppServerHost assistant text delta routing', () => {
         }
         return write(line);
       });
-      const replacement = phase === 'unclaimed' ? null : host.request('thread/resume', { threadId: 'recovering-thread' });
+      const replacement = phase === 'unclaimed' ? null : host.request('thread/resume', { threadId: 'recovering-thread' }, { threadOwner: {} });
       // Shutdown still observes the held RPC if an earlier assertion fails.
       void replacement?.catch(() => {});
       if (replacement) await dispatched;

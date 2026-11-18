@@ -387,7 +387,7 @@ export class AppServerHost {
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
   // Claims start before resume awaits transport startup, not at subscription.
-  private readonly threadResumeOwners = new Map<string, symbol>();
+  private readonly threadResumeOwners = new Map<string, object>();
   /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
   private readonly lineageRoots = new Map<string, string>();
   /**
@@ -958,11 +958,16 @@ export class AppServerHost {
   async request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline },
+    opts?: { timeoutMs?: number; beforeDispatch?: () => void; extendWhileProgress?: RequestProgressDeadline; threadOwner?: object },
   ): Promise<R> {
     if (method === Method.ThreadResume) {
       const threadId = (params as { threadId?: unknown } | undefined)?.threadId;
-      if (typeof threadId === 'string') this.threadResumeOwners.set(threadId, Symbol());
+      if (typeof threadId === 'string') {
+        // A handle keeps its claim across in-place resumes. A replacement
+        // supplies a different owner before awaiting transport or subscribing.
+        const subscribedOwner = this.subscribers.has(threadId) ? this.threadResumeOwners.get(threadId) : undefined;
+        this.threadResumeOwners.set(threadId, opts?.threadOwner ?? subscribedOwner ?? {});
+      }
     }
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
     // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它
@@ -1201,7 +1206,7 @@ export class AppServerHost {
  * 不做 refcount → shutdown：共享 server 仍只跟 host.shutdown() 绑定。这里仅释放
  * 已关闭 session 对应的 thread state，避免它继续持有 MCP/app-server 子进程资源。
    */
-  subscribeThread(threadId: string, handlers: ThreadEventHandlers): ThreadSubscription {
+  subscribeThread(threadId: string, handlers: ThreadEventHandlers, threadOwner?: object): ThreadSubscription {
     if (this.retired) {
       throw new Error(`AppServerHost.subscribeThread(${threadId}) after retirement`);
     }
@@ -1212,7 +1217,7 @@ export class AppServerHost {
       this.logger.warn('overwriting thread subscription', { threadId });
     }
     if (this.client) this.writerCandidates.add(this.client);
-    if (!this.threadResumeOwners.has(threadId)) this.threadResumeOwners.set(threadId, Symbol());
+    this.threadResumeOwners.set(threadId, threadOwner ?? this.threadResumeOwners.get(threadId) ?? handlers);
     const ownsResume = this.captureThreadResumeOwnership(threadId);
     this.subscribers.set(threadId, handlers);
     this.lineageRoots.set(threadId, threadId);

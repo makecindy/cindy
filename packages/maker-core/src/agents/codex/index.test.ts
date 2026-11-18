@@ -4651,7 +4651,7 @@ describe('CodexAgent reference directories', () => {
     expect(replacementStart.dynamicTools).toEqual(initialStart.dynamicTools);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
     expect(handle.id).toBe('start-thread-2');
-    expect(host.subscribeThread).toHaveBeenLastCalledWith('start-thread-2', expect.any(Object));
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('start-thread-2', expect.any(Object), expect.any(Object));
 
     const [, turnParams] = host.request.mock.calls.find(
       ([method]) => method === Method.TurnStart,
@@ -4922,6 +4922,11 @@ describe('CodexAgent reference directories', () => {
       ([method]) => method === Method.ThreadResume,
     );
     expect(resumeCalls).toHaveLength(1);
+    // #11380: in-place profile refresh must preserve the subscription's cleanup
+    // identity; real Host/RPC lifecycle coverage verifies that close releases it.
+    const resumeOwner = ((resumeCalls as unknown[][])[0][2] as { threadOwner: object }).threadOwner;
+    expect(resumeOwner).toBeDefined();
+    expect((host.subscribeThread.mock.calls as unknown[][]).every(call => call[2] === resumeOwner)).toBe(true);
     const [, resumeParams] = resumeCalls[0] as [string, Record<string, unknown>];
     expect(resumeParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-added']);
     expect(resumeParams.permissions).toBe(profileName);
@@ -5263,6 +5268,10 @@ describe('CodexAgent reference directories', () => {
     expect(resumeCalls).toHaveLength(1);
     const [, resumeParams] = resumeCalls[0] as [string, Record<string, unknown>];
     expect(resumeParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-retry']);
+    // Subscribe-before-resume after daemon recovery must use the same owner.
+    const resumeOwner = ((resumeCalls as unknown[][])[0][2] as { threadOwner: object }).threadOwner;
+    expect(resumeOwner).toBeDefined();
+    expect((host.subscribeThread.mock.calls as unknown[][]).every(call => call[2] === resumeOwner)).toBe(true);
     expect(resumeParams.permissions).toBe(profileName);
     expect(resumeParams.config).toHaveProperty(`permissions.${profileName}`);
 
@@ -26673,6 +26682,7 @@ describe('CodexAgent rewind', () => {
     expect(host.subscribeThread).toHaveBeenLastCalledWith(
       'rollback-thread-id',
       expect.any(Object),
+      expect.any(Object),
     );
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'session_id',
@@ -26723,7 +26733,7 @@ describe('CodexAgent rewind', () => {
     }), expect.objectContaining({ timeoutMs: 60_000 }));
     expect(commitResult).toEqual({ sdkSessionId: 'fork-thread-id' });
     expect(host.subscribeThread).toHaveBeenCalledTimes(2);
-    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object));
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object), expect.any(Object));
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'session_id',
       data: 'fork-thread-id',
@@ -26832,7 +26842,7 @@ describe('CodexAgent rewind', () => {
       cwd: '/repo',
     }), expect.objectContaining({ timeoutMs: 60_000 }));
     expect(commitResult).toEqual({ sdkSessionId: 'fork-thread-id' });
-    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object));
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object), expect.any(Object));
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'session_id',
       data: 'fork-thread-id',
@@ -26867,7 +26877,7 @@ describe('CodexAgent rewind', () => {
     expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
       threadId: 'start-thread-id', lastTurnId: 'persisted-boundary',
     }), expect.objectContaining({ timeoutMs: 60_000 }));
-    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object));
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object), expect.any(Object));
     await handle.close();
   });
 
@@ -26977,7 +26987,7 @@ describe('CodexAgent rewind', () => {
       expect.objectContaining({ cwd: '/repo' }),
       expect.objectContaining({ timeoutMs: 310_000 }),
     );
-    expect(host.subscribeThread).toHaveBeenLastCalledWith('fresh-thread-id', expect.any(Object));
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fresh-thread-id', expect.any(Object), expect.any(Object));
     expect(await nextEvent(iterator)).toMatchObject({
       type: 'session_id',
       data: 'fresh-thread-id',
@@ -27093,7 +27103,7 @@ describe('CodexAgent rewind', () => {
       .resolves.toEqual({ sdkSessionId: 'fresh-thread-id' });
     expect(host.request).toHaveBeenCalledWith(Method.ThreadRollback, { threadId: 'start-thread-id', numTurns: 2 });
     expect(host.request).not.toHaveBeenCalledWith(Method.ThreadFork, expect.anything());
-    expect(host.subscribeThread).toHaveBeenLastCalledWith('fresh-thread-id', expect.any(Object));
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fresh-thread-id', expect.any(Object), expect.any(Object));
     await handle.close();
   });
 
@@ -31218,7 +31228,7 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.send({ type: 'user', content: 'next turn' });
 
     expect(host.subscribeThread).toHaveBeenCalledTimes(2);
-    expect(host.subscribeThread).toHaveBeenLastCalledWith('start-thread-id', handlers);
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('start-thread-id', handlers, expect.any(Object));
     await handle.close();
   });
 
@@ -31250,7 +31260,7 @@ describe('CodexAgent turn lifecycle', () => {
     await handle.send({ type: 'user', content: 'next turn' });
 
     expect(host.subscribeThread).toHaveBeenCalledTimes(2);
-    expect(host.subscribeThread).toHaveBeenLastCalledWith('start-thread-id', handlers);
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('start-thread-id', handlers, expect.any(Object));
     await handle.close();
   });
 
@@ -37439,6 +37449,11 @@ describe('failed expected helper recovery', () => {
     expect(handle.id).toBe(threadId);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
     const sends = host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
+    const resumeOptions = (host.request.mock.calls as unknown[][]).filter(([method]) => method === Method.ThreadResume)
+      .map(call => call[2] as { threadOwner: object });
+    expect(resumeOptions[0].threadOwner).toBeDefined();
+    expect(resumeOptions[1].threadOwner).toBe(resumeOptions[0].threadOwner);
+    expect((host.subscribeThread.mock.calls as unknown[][]).every(call => call[2] === resumeOptions[0].threadOwner)).toBe(true);
     expect(sends).toHaveLength(1);
     expect(sends[0][1]).toMatchObject({ threadId, input: [{ type: 'text', text: 'continue the same task' }] });
     expect(host.retire).not.toHaveBeenCalled();

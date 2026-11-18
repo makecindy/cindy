@@ -6743,6 +6743,8 @@ assertRouteCurrent();
      * thread/start、thread/resume、turn/start 的等待上限。设备托管且宿主提供了隧道往来记录时，链路上
      * 还有往来就顺延(见 HOSTED_THREAD_RPC_IDLE_MS)；其它会话保持固定 60s。
      */
+    // Local handle identity only; never serialized into native RPC params.
+    const threadOwner = {};
     function criticalThreadRpcOptions(): { timeoutMs: number; extendWhileProgress?: RequestProgressDeadline } {
       const linkActivity = hosted?.linkActivity;
       if (!linkActivity) return { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS };
@@ -7494,6 +7496,7 @@ assertRouteCurrent();
           assertCurrentHost('thread/resume dispatch');
           const requestOptions = {
             ...criticalThreadRpcOptions(),
+            threadOwner,
             beforeDispatch: () => {
               assertCurrentHost('thread/resume write');
               startup.threadDispatched = true;
@@ -7695,7 +7698,7 @@ assertRouteCurrent();
     }: {
       action: 'refresh' | 'replacement';
       signal?: AbortSignal;
-      request: (options: { timeoutMs: number; extendWhileProgress?: RequestProgressDeadline }) => Promise<Response>;
+      request: (options: { timeoutMs: number; extendWhileProgress?: RequestProgressDeadline; threadOwner: object }) => Promise<Response>;
       onLateResolve?: (response: Response) => Promise<void> | void;
     }): Promise<Response> =>
       new Promise<Response>((resolve, reject) => {
@@ -7705,16 +7708,17 @@ assertRouteCurrent();
         // 内层 host.request 的三条边界(基准 / 静默 / 顺延封顶)都比外层接受期限多留一段
         // 晚到响应窗口, 保证任何收口路径下内层都严格晚于外层(见
         // PROFILE_LIFECYCLE_LATE_RESPONSE_GRACE_MS)。
-        const lateResponseOptions: { timeoutMs: number; extendWhileProgress?: RequestProgressDeadline } = rpcOptions.extendWhileProgress
+        const lateResponseOptions: { timeoutMs: number; extendWhileProgress?: RequestProgressDeadline; threadOwner: object } = rpcOptions.extendWhileProgress
           ? {
               timeoutMs: rpcOptions.timeoutMs + PROFILE_LIFECYCLE_LATE_RESPONSE_GRACE_MS,
+              threadOwner,
               extendWhileProgress: {
                 ...rpcOptions.extendWhileProgress,
                 idleMs: rpcOptions.extendWhileProgress.idleMs + PROFILE_LIFECYCLE_LATE_RESPONSE_GRACE_MS,
                 maxMs: rpcOptions.extendWhileProgress.maxMs + PROFILE_LIFECYCLE_LATE_RESPONSE_GRACE_MS,
               },
             }
-          : { timeoutMs: rpcOptions.timeoutMs + PROFILE_LIFECYCLE_LATE_RESPONSE_GRACE_MS };
+          : { timeoutMs: rpcOptions.timeoutMs + PROFILE_LIFECYCLE_LATE_RESPONSE_GRACE_MS, threadOwner };
         const startedAt = Date.now();
         let extended = false;
         const cleanup = () => {
@@ -7894,7 +7898,7 @@ assertRouteCurrent();
               generation: cursor.generation, total: { ...cursor.total },
             });
           }
-          subscription = host.subscribeThread(threadId, handlers);
+          subscription = host.subscribeThread(threadId, handlers, threadOwner);
           registerRootCodexMcpContext();
           refreshCodexAutoReviewerRoute(threadId);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
@@ -8053,7 +8057,7 @@ assertRouteCurrent();
             if (closed || signal?.aborted || resp.thread.id !== threadId) {
               throw new Error('Codex context settings resume was not confirmed');
             }
-            subscription = host.subscribeThread(threadId, handlers);
+            subscription = host.subscribeThread(threadId, handlers, threadOwner);
             registerRootCodexMcpContext();
             resetAcceptedUsageCursors('context settings refresh');
             if (reportHelperReadiness) await reportExpectedHelperAvailability();
@@ -13775,7 +13779,7 @@ assertRouteCurrent();
     };
     try {
       assertCurrentHost('thread subscription');
-      subscription = host.subscribeThread(threadId, handlers);
+      subscription = host.subscribeThread(threadId, handlers, threadOwner);
     } finally {
       releaseHostBindingLeaseIfNeeded();
     }
@@ -13783,7 +13787,7 @@ assertRouteCurrent();
     function resubscribeAfterTransportErrorIfNeeded(): void {
       if (!subscriptionInvalidatedByTransport) return;
       assertCurrentHost('resubscribe');
-      subscription = host.subscribeThread(threadId, handlers);
+      subscription = host.subscribeThread(threadId, handlers, threadOwner);
       subscriptionInvalidatedByTransport = false;
     }
 
@@ -14483,7 +14487,7 @@ assertRouteCurrent();
               // 用同一个 handlers 对象 re-subscribe (host.subscribers.set 覆盖语义),
               // 保存当前订阅句柄，确保重建后的关闭路径仍会释放原生线程。
               assertCurrentHost('thread/resume retry subscribe');
-              subscription = host.subscribeThread(threadId, handlers);
+              subscription = host.subscribeThread(threadId, handlers, threadOwner);
               const resumeModel = mutableModel;
               const resumeServiceTierGeneration = serviceTierMutationGeneration;
               const resumeParams: ThreadResumeParams = {
@@ -14498,6 +14502,7 @@ assertRouteCurrent();
               };
               const resumeResp = await host.request<ThreadResumeResponse>(Method.ThreadResume, resumeParams, {
                 ...criticalThreadRpcOptions(),
+                threadOwner,
               });
               if (mutableModel === resumeModel && resumeModel === 'gpt-5' && resumeResp.model) {
                 mutableModel = resumeResp.model;
@@ -15489,7 +15494,7 @@ assertRouteCurrent();
           workspacePermissionProfileActive = false;
           workspacePermissionProfileFingerprint = null;
           threadMayHaveRollout = true;
-          subscription = host.subscribeThread(threadId, handlers);
+          subscription = host.subscribeThread(threadId, handlers, threadOwner);
           registerRootCodexMcpContext();
           refreshCodexAutoReviewerRoute(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
