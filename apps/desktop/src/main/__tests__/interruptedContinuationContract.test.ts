@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createRuntimePluginInputHooks } from '../maker-ipc/runtimePluginTaskBindings.js';
 
 // The auto-resume runtime (guards, bookkeeping, undispatched settlement) is assembled in
 // autoResumeRuntime.ts; register.ts binds its ports. Appended after register.ts so register's own order holds.
@@ -229,9 +230,23 @@ describe('interrupted continuation enqueue contract', () => {
     expect(registerSource).toContain(
       "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected')",
     );
-    expect(registerSource).toContain(
-      "rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'blocked')",
-    );
+    expect(registerSource).toMatch(/createRuntimePluginInputHooks\(\{[^}]*rollbackAgentIslandUserPrompt,/);
+    const rollback = vi.fn();
+    const broadcast = vi.fn();
+    const hooks = createRuntimePluginInputHooks({
+      getStableSessionForTurnBoundary: () => null,
+      screenGhostUserMessage: vi.fn(),
+      rollbackAgentIslandUserPrompt: rollback,
+      revokeTrustedDesktopQueueOrigin: vi.fn(),
+      broadcastGhostMessageBlocked: broadcast,
+      broadcastGhostMessageRewritten: vi.fn(),
+    });
+    const item = { clientId: 'input', text: 'prompt' } as Parameters<typeof hooks.onUserMessageBlocked>[1];
+    const verdict = { ghostId: 'plugin', ghostName: 'Fixture', reason: 'blocked' };
+    hooks.onUserMessageBlocked('task', item, verdict);
+    expect(rollback).toHaveBeenCalledExactlyOnceWith('task', 'input', 'blocked');
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith({ sessionId: 'task', clientId: 'input', text: 'prompt', ...verdict });
+    expect(rollback.mock.invocationCallOrder[0]).toBeLessThan(broadcast.mock.invocationCallOrder[0]);
   });
 
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {

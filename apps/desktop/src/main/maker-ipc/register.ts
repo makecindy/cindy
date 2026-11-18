@@ -10,12 +10,11 @@ import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { canSwitchSubscriptionAccount, prepareSubscriptionAccountFailover, readSubscriptionAccountSwitch, type AccountFailoverDeps } from '../subscription-accounts/failover.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { prepareRestoredOrcaReportAcceptance } from '../maker-host/index.js';
-import { createTaskRuntimePlugins } from './runtimePlugins.js';
+import { createSessionControlRuntimeWriter } from './sessionControlRuntimeWriter.js';
+import { createRuntimePluginTaskPrompt, createPrepareTaskRuntimePluginTurn, createRuntimePluginSettingsHandler, createRuntimePluginInputHooks } from './runtimePluginTaskBindings.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
-import { parseRuntimePluginSettings } from '../../shared/pluginRuntime.js';
 import { resolveGhostControlPointPlugin, getGhostRuntimePluginControl, composeGhostRuntimeContext, ghostTaskSystemPrompt, isPluginModelRouteAvailableNow } from '../cindy-brain/index.js';
-import { assembleSystemPromptSections, TASK_SYSTEM_PROMPT } from '@cindy/maker-core';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
@@ -1231,8 +1230,6 @@ import {
 } from './sessionAgentSwitchHandler.js';
 import {
   pendingHarnessRuntimeMutation,
-  setSessionRuntimeHarness,
-  stagedSelectionProfile,
   userStagedSelectionProjection,
 } from './sessionRuntimeHarnessSelection.js';
 import {
@@ -1471,11 +1468,9 @@ import {
   applySessionRuntimeOverrideForStart,
   getSessionRuntimeControlSnapshot,
   isPendingSessionRuntimeRouteExplicit,
-  mergeSessionRuntimeProfilePatch,
   recordUserSessionRuntimeMutation,
   remapSessionRuntimeProvider,
   resolveCompatibleSessionRuntimeEffort,
-  resolveSessionRuntimeAxes,
   sessionRuntimeControlOwnerEpochMatches,
   type SessionRuntimeProfile,
 } from './sessionRuntimeControl.js';
@@ -1644,10 +1639,6 @@ import {
   writeGhostErrandSessionId,
 } from '../cindy-brain/pluginTaskPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
-import {
-  resolveGhostUserHookModel,
-  withGhostUserHookModel,
-} from '../cindy-brain/subscriptionGateway.js';
 import { createSessionExecutionResolver, resolveSessionExecutionSelection } from './sessionExecutionSelection.js';
 import { createGhostAgentTurnRunner } from './ghostAgentTurnRunner.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
@@ -8743,41 +8734,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return context;
   }
 
-  const appliedTaskPrompts = new WeakMap<Awaited<ReturnType<typeof maker.createSession>>, string>();
-  const readTaskPrompt = (sessionId: string, agentKind: AgentKind, agentDeviceId?: string | null) =>
-    ghostTaskSystemPrompt(sessionId, agentKind === 'claude-code' ? 'cc' : agentKind, !(agentKind === 'pi' && agentDeviceId));
-  const createSessionWithRuntimePlugins = (o: CreateOpts, signal?: AbortSignal) => {
-    if (o.id && maker.getSession(o.id)) return maker.createSession(o, signal);
-    const taskPrompt = o.id ? readTaskPrompt(o.id, o.agentKind, o.agentDeviceId) : '';
-    if (!taskPrompt) return maker.createSession(o, signal);
-    const runtimeOpts = { ...o,
-      ...(o.agentKind === 'pi' ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {
-        userPrompt: assembleSystemPromptSections(o.userPrompt?.trim() ?? '', [{ name: 'task', order: 0, text: taskPrompt }]),
-      }),
-    };
-    return maker.createSession(runtimeOpts, signal).then(session => {
-      appliedTaskPrompts.set(session, taskPrompt);
-      return session;
+  const { createSessionWithRuntimePlugins, prepareTaskPromptForSend, assertTaskPromptCurrent } =
+    createRuntimePluginTaskPrompt({
+      maker, ghostTaskSystemPrompt, readSessionRuntimeProfiles: id => readSessionRuntimeProfiles(id),
     });
-  };
-  const prepareTaskPromptForSend = (sessionId: string): Promise<void> | undefined => {
-    const live = maker.getSession(sessionId);
-    if (!live) {
-      if (!readRuntimePluginSettings(sessionId)?.['system-prompt']?.length) return undefined;
-      return readSessionRuntimeProfiles(sessionId).then(profiles => {
-        if (!profiles) throw new RuntimePluginControlError('block', '', true, 'task-unavailable');
-        readTaskPrompt(sessionId, profiles.effective.agentKind, profiles.effective.agentDeviceId);
-      });
-    }
-    if (live.isTurnRunning() || (appliedTaskPrompts.get(live) ?? '') === readTaskPrompt(sessionId, live.agentKind, live.agentDeviceId)) return undefined;
-    return withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId, 'agent-switch'));
-  };
-  const assertTaskPromptCurrent = (sessionId: string) => {
-    const live = maker.getSession(sessionId);
-    if (live && (appliedTaskPrompts.get(live) ?? '') !== readTaskPrompt(sessionId, live.agentKind, live.agentDeviceId)) {
-      throw new RuntimePluginControlError('block', '', true, 'prompt-selection-changed');
-    }
-  };
 
   async function bootstrapSession(o: CreateOpts, assertAccess?: () => void, nativeHistoryResume = false): Promise<{
     session: Awaited<ReturnType<typeof maker.createSession>>;
@@ -16899,141 +16859,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
     },
     setSessionPermissionMode: ({ sessionId, mode, beforeMutation }) => commitSessionPermissionMode(sessionId, mode, false, beforeMutation),
-    setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {
-      // A deliberate model choice becomes the task's own, like a choice in the composer:
-      // an earlier automation's saved route must not restore over it on the next run.
-      const keepAsTaskChoice = async <T extends { ok: boolean }>(result: T): Promise<T> => {
-        if (result.ok) {
-          await updateScheduledPreference(targetSessionId, null).catch(() => false);
-          await reconcileBotModelRoute.acceptTaskChoice(targetSessionId).catch(() => {});
-        }
-        return result;
-      };
-      // A selection staged for the next send (by the user's picker or a complete agent selection)
-      // owns the next route boundary; the turn-end override path would only be superseded by it.
-      // Revise that selection instead, as choosing again in the picker does.
-      const revisesStagedSelection = patch.harness === undefined && patch.agentDeviceId === undefined &&
-        stagedSelectionProfile(agentSwitchPending.get(targetSessionId)) !== null;
-      if (patch.harness !== undefined || patch.agentDeviceId !== undefined || revisesStagedSelection) {
-        const harness = patch.harness ?? (revisesStagedSelection
-          ? undefined
-          : (await readSessionRuntimeProfiles(targetSessionId))?.effective.agentKind);
-        if (!harness && !revisesStagedSelection) {
-          return { ok: false, errorCode: 'NOT_FOUND', message: 'Task runtime is unavailable' };
-        }
-        return keepAsTaskChoice(await setSessionRuntimeHarness({
-          withSessionLock: withSendToSessionLock,
-          ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
-          generation: (id) => getSessionRuntimeControlSnapshot(id).generation,
-          pendingRevision: (id) => agentSwitchPending.revision!(id),
-          pending: (id) => agentSwitchPending.get(id),
-          read: async (id) => (await readSessionRuntimeProfiles(id))?.effective ?? null,
-          resolve: async (profile, explicit) => {
-            const reroute = profile.agentDeviceId ? undefined
-              : await assertModelRouteUsable(profile.agentKind, profile.model, profile.providerId);
-            const providers = profile.agentDeviceId
-              ? await readUsableAgentDeviceProviders(profile.agentDeviceId, profile.agentKind, profile.model, profile.providerId)
-              : await getDesktopProviderService().listProviders({ allowSideEffects: false, catalog: getActiveCatalog() });
-            const providerId = reroute && shouldApplyExclusiveProviderRerouteLive(profile.providerId)
-              ? reroute
-              : profile.providerId ?? effectiveSourceIdForModel(providers, null, profile.model, profile.agentKind);
-            const provider = providers.find((candidate) => candidate.id === providerId);
-            const model = findCatalogModel(provider, profile.model, profile.agentKind, { exact: true });
-            if (!provider?.connected || !model) {
-              throwIpcError('INVALID_PARAMS', `model "${profile.model}" is unavailable for harness "${profile.agentKind}"`);
-            }
-            const axes = resolveSessionRuntimeAxes({
-              model, effort: profile.effort, fastMode: profile.fastMode,
-              effortExplicit: explicit.effort, fastExplicit: explicit.fast,
-            });
-            if (!axes.ok) throwIpcError('INVALID_PARAMS', `target model runtime axes unavailable: ${axes.reason}`);
-            return { ...profile, providerId: providerId ?? null, effort: axes.effort, fastMode: axes.fastMode };
-          },
-          stage: async (id, profile, assertSelectionCurrent, beforeMutation, source) => {
-            return performSessionAgentSwitch(agentSwitchDeps, {
-              sessionId: id, targetAgentKind: profile.agentKind, model: profile.model,
-              providerId: profile.providerId, effort: profile.effort, fastMode: profile.fastMode,
-              ...(profile.agentDeviceId !== undefined ? { agentDeviceId: profile.agentDeviceId } : {}),
-              runtimeSource: source === 'user' ? undefined : 'agent', assertSelectionCurrent, beforeMutation,
-            });
-          },
-        }, { targetSessionId, expectedGeneration, beforeMutation,
-          patch: { ...patch, ...(harness !== undefined ? { harness } : {}) } }));
-      }
-      const profiles = await readSessionRuntimeProfiles(targetSessionId);
-      if (beforeMutation) await beforeMutation();
-      if (!profiles) {
-        return {
-          ok: false,
-          errorCode: 'NOT_FOUND',
-          message: `session ${targetSessionId} not found`,
-        };
-      }
-      const routeExplicit = patch.model !== undefined || patch.providerId !== undefined;
-      const mergeBase = routeExplicit
-        ? (profiles.control.pending?.profile ?? profiles.effective)
-        : profiles.effective;
-      const next = mergeSessionRuntimeProfilePatch(mergeBase, patch);
-      let response: Awaited<ReturnType<typeof applySessionRuntimeSelection>>;
-      try {
-        response = await applySessionRuntimeSelection(
-          targetSessionId,
-          next.model,
-          next.providerId,
-          { effort: next.effort, fastMode: next.fastMode },
-          {
-            source: 'agent',
-            beforeMutation,
-            expectedGeneration,
-            deferWhileRunning: true,
-            effectiveProfile: profiles.effective,
-            effortExplicit: patch.effort !== undefined,
-            fastExplicit: patch.fastMode !== undefined,
-            routeExplicit,
-          },
-        );
-      } catch (error) {
-        const code = (error as { code?: unknown }).code;
-        if (
-          code === 'INVALID_PARAMS' ||
-          code === 'CREDENTIAL_SWITCH_BUSY' ||
-          code === 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE' ||
-          code === 'REMOTE_PROVIDER_UPDATING' ||
-          code === 'REMOTE_PROVIDER_UNSUPPORTED' ||
-          code === 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
-        ) {
-          return {
-            ok: false,
-            errorCode: 'ROUTE_UNAVAILABLE',
-            message: error instanceof Error ? error.message : String(error),
-          };
-        }
-        throw error;
-      }
-      if (response.superseded) {
-        return {
-          ok: false,
-          errorCode: 'CONFLICT',
-          message: `session runtime generation changed; read it again before retrying`,
-        };
-      }
-      if (runtimeSelectionRequiresModelWindowConfirmation(response)) {
-        return {
-          ok: false,
-          errorCode: 'ROUTE_UNAVAILABLE',
-          message: 'model-window confirmation is required; runtime selection was not changed',
-        };
-      }
-      await keepAsTaskChoice({ ok: true });
-      const control = getSessionRuntimeControlSnapshot(targetSessionId);
-      return {
-        ok: true,
-        status: response.deferred ? 'deferred' : 'applied',
-        generation: response.generation ?? control.generation,
-        effectiveProfile: control.effectiveOverride ?? profiles.effective,
-        pendingMutation: control.pending,
-      };
-    },
+    setSessionRuntime: createSessionControlRuntimeWriter({
+      agentSwitchPending, agentSwitchDeps, assertModelRouteUsable, getDesktopProviderService,
+      reconcileBotModelRoute, updateScheduledPreference, readSessionRuntimeProfiles, readUsableAgentDeviceProviders,
+      shouldApplyExclusiveProviderRerouteLive, applySessionRuntimeSelection: (...args) => applySessionRuntimeSelection(...args),
+      runtimeSelectionRequiresModelWindowConfirmation,
+    }),
     assertExternalInputAllowed: assertReviewExternalInputAllowed,
     captureRequest: (callerSessionId, message, target) => captureSessionAgentRequest(callerSessionId, message, target),
     createQueuedMessage: async ({ targetSessionId, callerSessionId, queuedMessageId, message }) => {
@@ -17575,19 +17406,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const runtimePluginControl = getGhostRuntimePluginControl();
   runtimePluginBudgetClearer = runtimePluginControl.forgetSession;
-  const taskRuntimePlugins = createTaskRuntimePlugins({
-    control: runtimePluginControl, readSettings: readRuntimePluginSettings,
-    requestSupported: sessionId => !maker.getSession(sessionId)?.remoteHostId,
-    readRoute: async sessionId => {
-      const profiles = await readSessionRuntimeProfiles(sessionId);
-      if (!profiles) throw new Error('Task runtime unavailable');
-      const route = profiles.pendingMutation?.profile ?? profiles.effective;
-      return { agentKind: route.agentKind === 'claude-code' ? 'cc' : route.agentKind,
-        model: route.model, providerId: route.providerId ?? 'xd',
-        ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
-        ...(route.effort ? { effort: route.effort } : {}), fastMode: route.fastMode };
-    },
-    routeAvailable: route => isPluginModelRouteAvailableNow({ ...route, effort: route.effort ?? '', fastMode: route.fastMode ?? false }),
+  const prepareRuntimeTurn = createPrepareTaskRuntimePluginTurn({
+    maker, runtimePluginControl, readSessionRuntimeProfiles, isPluginModelRouteAvailableNow, log,
     applyRoute: async (sessionId, route, assertCurrent) => {
       const current = await sessionControlService.getSessionRuntime({ targetSessionId: sessionId });
       if (!current.ok) throw new Error('Task runtime unavailable');
@@ -17605,28 +17425,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         } });
       if (!result.ok) throw new Error(result.errorCode);
     },
-    changed: (sessionId, pluginId, phase) => log.info('runtime plugin changed model request', { sessionId, pluginId, phase }),
   });
-  ipcMain.handle('maker:runtime-plugins', async (event, sessionId: unknown, value: unknown) => {
-    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
-    const owner = captureDataOwnerBroadcastScope();
-    if (typeof sessionId !== 'string' || !sessionId || !await maker.getSessionMeta(sessionId)) {
-      throwIpcError('NOT_FOUND', 'Task not found');
-    }
-    if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
-    if (value === undefined) return readRuntimePluginSettings(sessionId) ?? {};
-    await assertReviewSettingsUnlocked(sessionId);
-    const settings = parseRuntimePluginSettings(value);
-    if (!settings) throwIpcError('INVALID_PARAMS', 'Invalid runtime plugin settings');
-    for (const [point, targets] of Object.entries(settings)) {
-      for (const target of targets ?? []) resolveGhostControlPointPlugin(point as Parameters<typeof resolveGhostControlPointPlugin>[0], target.pluginId);
-    }
-    if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
-    await writeRuntimePluginSettings(sessionId, settings);
-    if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
-    broadcastSessionPatched(sessionId, { runtimePluginsSelected: !!readRuntimePluginSettings(sessionId) });
-    return readRuntimePluginSettings(sessionId) ?? {};
-  });
+  ipcMain.handle('maker:runtime-plugins', createRuntimePluginSettingsHandler({
+    assertCaller: (event: unknown) => assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+    maker, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, assertReviewSettingsUnlocked,
+    resolveGhostControlPointPlugin, writeRuntimePluginSettings, broadcastSessionPatched,
+  }));
 
   const {
     sendToAgentAccepted: sendToAgentAcceptedUnlocked,
@@ -17638,15 +17442,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readMcpAppModelContext: sessionId => mcpAppModelContext(sessionId),
     prepareRuntimePrompt: prepareTaskPromptForSend,
     composeRuntimeContext: composeGhostRuntimeContext,
-    prepareRuntimeTurn: (sessionId, message, signal) => {
-      const prepared = taskRuntimePlugins.prepare(sessionId, message, signal);
-      return prepared?.then(options => ({ options })).catch(error => ({ failure: {
-        accepted: false as const,
-        reason: error instanceof RuntimePluginControlError && error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' as const : 'PLUGIN_TURN_BLOCKED' as const,
-        outcome: createHostSendFailure(error instanceof RuntimePluginControlError && error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
-          'The selected runtime plugin stopped this reply.'),
-      } }));
-    },
+    prepareRuntimeTurn,
     prepareExternalInput: (sessionId) => takeOverLocalAgentVisibleSession(sessionId, true),
     restoreArchivedSessionForSend,
     prepareProductTurn: (sessionId) => {
@@ -19514,29 +19310,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       broadcastToAllWindows(MAKER_PUSH.INPUT_PROJECTION, projection);
       if (!isGoalInputBlocked(projection.sessionId)) notifyGoalIdleAfterTurnSettled(projection.sessionId);
     },
-    // 意识拦截钩(订阅槽①):派发/落库前问已装钩子意识;fail-open 由
-    // screenGhostUserMessage 内部收敛,快路径(无钩子意识)零开销。
-    screenUserMessage: (sessionId, agentFacingText, item) => {
-      const session = getStableSessionForTurnBoundary(sessionId);
-      const model = resolveGhostUserHookModel(
-        session?.isTurnRunning() === true,
-        session?.model,
-        item.createOpts.model,
-      );
-      return withGhostUserHookModel(model, () =>
-        screenGhostUserMessage(sessionId, agentFacingText),
-      );
-    },
-    onUserMessageBlocked: (sessionId, item, verdict) => {
-      rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'blocked');
-      broadcastGhostMessageBlocked({
-        sessionId,
-        clientId: item.clientId,
-        text: item.text,
-        ...verdict,
-      });
-    },
-    onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item), broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info })),
+    ...createRuntimePluginInputHooks({
+      getStableSessionForTurnBoundary, screenGhostUserMessage, rollbackAgentIslandUserPrompt,
+      broadcastGhostMessageBlocked, revokeTrustedDesktopQueueOrigin, broadcastGhostMessageRewritten,
+    }),
     beforeDispatchUserTurn: async (sessionId, item, signal) => {
       if (isRetiredGroupWelcomeInput(item)) throw new Error('INVALID_EXECUTION_TRIGGER');
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
