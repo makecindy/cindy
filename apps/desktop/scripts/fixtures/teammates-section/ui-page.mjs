@@ -14,7 +14,7 @@ export default {
   entry: './teammates-fixture.tsx',
   viewport: { width: 800, height: 600 },
   real: 'TeammatesSection rows, PinnedSection display sorting and menu, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
-  notCovered: 'Roster loading, cloud/device connections, create/delete menus, message delivery, pinned drag persistence and collapsed RailNav',
+  notCovered: 'Real database readiness and roster reads, cloud/device connections, create/delete menus, message delivery, pinned drag persistence and collapsed RailNav',
   stubs: {
     'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
@@ -28,6 +28,10 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'startup-read-pending': {
+      about: '#9706: initial read is pending; show loading instead of implying no buddies',
+      data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'pending' },
+    },
     'startup-read-error': {
       about: 'A failed roster read offers explicit recovery instead of an empty-roster create invitation; presentation fixture only',
       data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'error' },
@@ -229,6 +233,12 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'startup-read-pending') {
+      assert.equal(await page.getByRole('status').innerText(), await ui.t('ccAgent.common.loading'));
+      assert.equal(await page.getByRole('status').isVisible(), true);
+      assert.equal(await page.getByRole('alert').count(), 0);
+      return;
+    }
     if (ui.case === 'startup-read-error') {
       const alert = page.getByRole('alert');
       await alert.getByText(await ui.t('bots.rosterLoadFailed'), { exact: true }).waitFor();

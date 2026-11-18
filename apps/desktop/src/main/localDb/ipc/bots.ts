@@ -2506,7 +2506,7 @@ export function registerBotIpc(): void {
     const remote = isDeviceLinkInvoke();
     if (!remote) assertTrustedAppRendererEvent(event);
     const client = tryGetDbClient();
-    if (!client) return [];
+    if (!client) throwIpcError('PRECONDITION_FAILED', 'DbClient not ready');
     const owner = captureBotOperationOwner();
     const welcomeContext = !remote && raw && typeof raw === 'object'
       ? normalizeBotWelcomeContext((raw as Record<string, unknown>).welcomeContext) : undefined;
