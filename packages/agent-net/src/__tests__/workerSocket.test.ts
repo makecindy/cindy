@@ -131,6 +131,8 @@ it('reports whether its relay connection is open, and when that changes', async 
 // Keep the worker alive until cleanup: a once-only listener can let it exit
 // after ready and clear the route before the Windows CI assertion runs.
 it('reports a LAN handshake while the cached directory marks the peer offline', async () => {
+  // The handshake is still in progress: keep this worker alive until cleanup.
+  // A once listener let it exit just after ready, racing the route assertion.
   const workerFile = new URL('data:text/javascript,' + encodeURIComponent(`
 import { parentPort } from 'node:worker_threads';
 parentPort.on('message', (message) => {

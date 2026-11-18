@@ -344,6 +344,73 @@ describe('createRemoteDeviceUsageMirror', () => {
 // Minimal inputs: two cards share one pending native read; a clear arrives before it settles.
 // Single-file command wall time: 2.54s (2026-10-22).
 describe('remote native Codex quota', () => {
+  // Unit, #11329: the two production quota views previously shared only within
+  // their own mirrors. A slow group card and a live task for the same account
+  // must share the actual native RPC, while another peer remains independent.
+  it('shares a pending native RPC across group cards and live task quota views', async () => {
+    let finish!: (value: unknown) => void;
+    mocks.invoke.mockImplementation((device) => device === 'slow'
+      ? new Promise(resolve => { finish = resolve; })
+      : Promise.resolve({ providerId: 'openai', account: { planType: 'pro' },
+        rateLimits: { primary: { usedPercent: 12 } } }));
+    const group = renderHook(() => useRemoteCodexRateLimits('slow', 'openai'));
+    const task = renderHook(() => useRemoteCodexAccountUsage('slow', 'openai', { live: true, poll: false }));
+    const healthy = renderHook(() => useRemoteCodexAccountUsage('healthy', 'openai', { live: true, poll: false }));
+    await flushMicrotasks();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(mocks.invoke.mock.calls.filter(([device]) => device === 'slow')).toHaveLength(1);
+    expect(healthy.result.current?.primary?.usedPercent).toBe(12);
+    await act(async () => finish({ providerId: 'openai', account: { planType: 'pro' },
+      rateLimits: { primary: { usedPercent: 34 } } }));
+    expect(group.result.current?.rateLimits.primary?.usedPercent).toBe(34);
+    expect(task.result.current?.primary?.usedPercent).toBe(34);
+  });
+
+  // Unit, #11329: cross-view sharing must not lend a pre-clear/pre-owner RPC
+  // to a new observation. Existing clear tests exercise only one mirror.
+  it.each([
+    { boundary: 'clear', providerId: 'openai' },
+    { boundary: 'clear', providerId: 'openai-extra' },
+    { boundary: 'owner', providerId: 'openai' },
+  ])('separates a new $providerId quota observation after $boundary', async ({ boundary, providerId }) => {
+    const finishes: Array<(value: unknown) => void> = [];
+    mocks.invoke.mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
+    const old = renderHook(() => useRemoteCodexRateLimits('mini', providerId));
+    if (boundary === 'clear') act(() => emitPush(providerId === 'openai'
+      ? { deviceId: 'mini', channel: 'usage:codex-account-changed', payload: null }
+      : { deviceId: 'mini', channel: 'usage:codex-provider-account-changed', payload: { providerId, snapshot: null } }));
+    else act(() => { setDataOwnerGeneration('owner-b'); setDataOwnerGeneration('owner-a'); });
+    const current = renderHook(() => useRemoteCodexAccountUsage('mini', providerId, { live: true, poll: false }));
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    const response = (usedPercent: number) => ({ providerId, account: { planType: 'pro' },
+      rateLimits: { primary: { usedPercent } } });
+    await act(async () => finishes[0](response(90)));
+    expect(old.result.current).toBeNull();
+    expect(current.result.current).toBeNull();
+    // Finishing the retired read cannot evict the newer in-flight request.
+    act(() => requestRemoteCodexLiveRefresh('mini', providerId));
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    await act(async () => finishes[1](response(15)));
+    expect(current.result.current?.primary?.usedPercent).toBe(15);
+  });
+
+  // Unit, #11329: an unsupported shared native RPC still permits the existing
+  // task-only legacy fallback; sharing its failure must not create extra retries.
+  it('settles a shared native failure and preserves the legacy snapshot fallback', async () => {
+    let fail!: (error: unknown) => void;
+    const old = { primary: { usedPercent: 7 }, updatedAt: Date.now() - 60_000 };
+    mocks.invoke.mockImplementation((_device, channel) => channel === 'maker:usage:codex-rate-limits'
+      ? new Promise((_resolve, reject) => { fail = reject; }) : Promise.resolve(old));
+    const group = renderHook(() => useRemoteCodexRateLimits('mini', 'openai'));
+    const task = renderHook(() => useRemoteCodexAccountUsage('mini', 'openai', { live: true, poll: false }));
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    await act(async () => fail(new Error('[CHANNEL_NOT_ALLOWED] old host')));
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(mocks.invoke).toHaveBeenLastCalledWith('mini', 'maker:usage:account', ['codex', 'openai', 'default-subscription-account']);
+    expect(group.result.current).toBeNull();
+    expect(task.result.current).toEqual({ ...old, refreshFailed: true });
+  });
+
   it('shares native reads, ignores read-generated usage pushes, and fences late reads after a clear', async () => {
     let resolve!: (value: unknown) => void;
     mocks.invoke.mockImplementation(() => new Promise(done => { resolve = done; }));
