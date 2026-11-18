@@ -4511,6 +4511,48 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+// Chat gateways can carry Gemini thought signatures inside tool IDs, then route
+// the same history to a backend with a 64-character limit. Change only the wire
+// projection: Gemini still needs those signatures, and Responses has its own
+// native serializer. Reserve short IDs so hashing cannot alias an existing call.
+// This Cindy compat opt-in declares a wire constraint, not a model family.
+// Deployment names cannot identify Gemini; unknown routes keep their native IDs.
+function boundedChatToolIds(payload, model) {
+  if (model?.api !== 'openai-completions' || model.compat?.maxToolCallIdLength !== 64
+      || !Array.isArray(payload?.messages)) return payload;
+  const ids = new Set<string>();
+  for (const message of payload.messages) {
+    if (typeof message?.tool_call_id === 'string') ids.add(message.tool_call_id);
+    if (Array.isArray(message?.tool_calls)) for (const call of message.tool_calls) {
+      if (typeof call?.id === 'string') ids.add(call.id);
+    }
+  }
+  const mapped = new Map<string, string>();
+  const reserved = new Set([...ids].filter(id => id.length <= 64));
+  for (const id of ids) {
+    if (id.length <= 64) continue;
+    let salt = 0;
+    let candidate;
+    do {
+      candidate = 'call_' + createHash('sha256').update(salt ? id + ':' + salt : id).digest('hex').slice(0, 48);
+      salt++;
+    } while (reserved.has(candidate));
+    reserved.add(candidate);
+    mapped.set(id, candidate);
+  }
+  if (!mapped.size) return payload;
+  return { ...payload, messages: payload.messages.map(message => {
+    if (!message || typeof message !== 'object') return message;
+    let next = message;
+    if (mapped.has(message.tool_call_id)) next = { ...next, tool_call_id: mapped.get(message.tool_call_id) };
+    if (Array.isArray(message.tool_calls) && message.tool_calls.some(call => mapped.has(call?.id))) {
+      next = { ...next, tool_calls: message.tool_calls.map(call => mapped.has(call?.id)
+        ? { ...call, id: mapped.get(call.id) } : call) };
+    }
+    return next;
+  }) };
+}
+
 async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions', 'openai-codex-responses'].includes(model.api)) return undefined;
@@ -4810,6 +4852,7 @@ export default async function cindyBridge(piApi: any) {
         model: model.id, request: next });
       next = response.request ?? next;
     }
+    next = boundedChatToolIds(next, model);
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.
     const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
