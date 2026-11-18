@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useRef, type ReactNode } from 'react';
 import type { Session } from '@/lib/ccAgent.types';
-import { SidebarActivityClock, useSidebarActivityNow } from '../features/cc-agent/sidebar/SidebarActivityClock';
+import {
+  SidebarActivityClock,
+  useSidebarActivityNow,
+  useSidebarIdleCollapse,
+} from '../features/cc-agent/sidebar/SidebarActivityClock';
+import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../features/cc-agent/lib/sidebarCollapseConfig';
 import { ProjectNode, type ProjectNodeProps } from '../features/cc-agent/sidebar/sections/ProjectNode';
 import { SessionEntryList, type SessionEntryListProps } from '../features/cc-agent/sidebar/SessionEntryList';
 
@@ -52,6 +58,7 @@ function projectProps(id: string): ProjectNodeProps {
     onImportFromTools: noop, onBrowseFiles: noop, onArchiveAll: noop };
 }
 beforeEach(() => {
+  localStorage.setItem(SIDEBAR_IDLE_COLLAPSE_KEY, 'true');
   vi.useFakeTimers();
   vi.setSystemTime(now);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
@@ -65,17 +72,26 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  localStorage.removeItem(SIDEBAR_IDLE_COLLAPSE_KEY);
+  localStorage.removeItem('sidebar.collapse.projectSessionLimit');
   hostListeners.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+function Preview({ children }: { children: ReactNode }) {
+  const root = useRef<HTMLDivElement>(null);
+  return <SidebarActivityClock enabled interactionRoot={root}>
+    <div ref={root} data-testid="sidebar-clock-area">{children}</div>
+  </SidebarActivityClock>;
+}
 
 describe('sidebar idle folding interactions', () => {
   it('keeps only current, pinned, running and attention tasks in an idle list', () => {
     const sessions = ['old', 'current', 'pinned', 'running', 'attention'].map((id) =>
       task(id, 31, id === 'pinned' ? { pinnedAt: new Date(now).toISOString() } : {}));
     render(<SessionEntryList {...listProps(sessions)} activeSessionId="current"
-      runningSessionIds={new Set(['running'])} notifications={new Set(['attention'])} />);
+      runningSessionIds={new Set(['running'])} notifications={new Set(['attention'])} />, { wrapper: Preview });
     expect(screen.queryByText('old')).toBeNull();
     for (const id of ['current', 'pinned', 'running', 'attention']) expect(screen.getByText(id)).toBeTruthy();
   });
@@ -96,7 +112,7 @@ describe('sidebar idle folding interactions', () => {
   it('lets project headers expand and refold independently without collapsing the project', () => {
     const a = projectProps('A');
     const b = projectProps('B');
-    render(<><section aria-label="A"><ProjectNode {...a} /></section><section aria-label="B"><ProjectNode {...b} /></section></>);
+    render(<><section aria-label="A"><ProjectNode {...a} /></section><section aria-label="B"><ProjectNode {...b} /></section></>, { wrapper: Preview });
     const left = within(screen.getByRole('region', { name: 'A' }));
     const right = within(screen.getByRole('region', { name: 'B' }));
     expect(left.queryByText('A-old')).toBeNull();
@@ -113,7 +129,7 @@ describe('sidebar idle folding interactions', () => {
   // unfiltered project cases cannot catch a button that does nothing in this mode.
   it('hides the project folding action while showing all filtered matches', () => {
     const props = projectProps('A');
-    const { rerender } = render(<ProjectNode {...props} />);
+    const { rerender } = render(<ProjectNode {...props} />, { wrapper: Preview });
     fireEvent.click(screen.getByRole('button', { name: expand }));
 
     rerender(<ProjectNode {...props} disableSessionCollapse />);
@@ -123,6 +139,45 @@ describe('sidebar idle folding interactions', () => {
 
     rerender(<ProjectNode {...props} />);
     expect(screen.getByRole('button', { name: fold })).toBeTruthy();
+  });
+
+  // #11282: toggle the production preference while a project still has a
+  // legacy hidden row. The title action disappears and the old footer works.
+  it('hides the title action immediately when idle folding is switched off', () => {
+    localStorage.setItem('sidebar.collapse.projectSessionLimit', '0');
+    function PreferenceControl() {
+      const { setIdleCollapseEnabled } = useSidebarIdleCollapse();
+      return <button onClick={() => setIdleCollapseEnabled(false)}>Turn idle folding off</button>;
+    }
+    const props = projectProps('A');
+    props.project.sessions = [task('A-older', 24 * 60 + 1)];
+    render(<><PreferenceControl /><ProjectNode {...props} /></>, { wrapper: Preview });
+    expect(screen.getByRole('button', { name: expand })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Turn idle folding off' }));
+    expect(screen.queryByRole('button', { name: expand })).toBeNull();
+    expect(screen.queryByRole('button', { name: fold })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.showMoreSessions: 1' }));
+    expect(screen.getByText('A-older')).toBeTruthy();
+  });
+
+  // #11282: recent rows and an exempt idle task make the action a no-op.
+  // Exercise the real header in both modes using the same list as its body.
+  it('only offers the idle action when collapsing can actually hide a row', () => {
+    const props = projectProps('A');
+    const retained = Array.from({ length: 5 }, (_, index) => task(`retained-${index}`, 5));
+    const sixth = task('sixth');
+    props.project.sessions = [...retained, sixth];
+    const view = render(<ProjectNode {...props} />, { wrapper: Preview });
+    expect(screen.queryByText('sixth')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: expand }));
+    expect(screen.getByText('sixth')).toBeTruthy();
+    expect(screen.getByRole('button', { name: fold })).toBeTruthy();
+
+    view.rerender(<ProjectNode {...props} notifications={new Set(['sixth'])} />);
+    expect(screen.getByText('sixth')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: fold })).toBeNull();
+    expect(screen.queryByRole('button', { name: expand })).toBeNull();
   });
 
   it('stops the single clock for hidden windows and refreshes immediately on return', () => {
@@ -138,5 +193,25 @@ describe('sidebar idle folding interactions', () => {
     rendered.unmount();
     expect(hostListeners.size).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // #11282: one row crossing the cutoff exercises the production timer and
+  // pointer listeners; the unguarded clock test cannot catch row movement.
+  it('defers automatic folding until the pointer leaves the sidebar', () => {
+    render(<SessionEntryList {...listProps([task('hovered', 29.5)])} />, { wrapper: Preview });
+    const sidebar = screen.getByTestId('sidebar-clock-area');
+    fireEvent.pointerEnter(sidebar);
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByText('hovered')).toBeTruthy();
+    fireEvent.pointerLeave(sidebar);
+    expect(screen.queryByText('hovered')).toBeNull();
+  });
+
+  it('keeps the default 24h behavior without scheduling a periodic refresh', () => {
+    localStorage.removeItem(SIDEBAR_IDLE_COLLAPSE_KEY);
+    const interval = vi.spyOn(globalThis, 'setInterval');
+    render(<SessionEntryList {...listProps([task('hour-old', 60)])} collapseLimit={0} />, { wrapper: Preview });
+    expect(screen.getByText('hour-old')).toBeTruthy();
+    expect(interval).not.toHaveBeenCalled();
   });
 });

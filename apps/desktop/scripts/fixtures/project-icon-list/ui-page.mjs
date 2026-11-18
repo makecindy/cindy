@@ -13,10 +13,36 @@ export default {
     'idle-projects':{data:{avatarData,inactive:true},about:'Idle tasks fold independently under each project header (#11233)'},
     'idle-flat':{data:{avatarData,inactive:true,flat:'text'},about:'Idle tasks fold in a flat sidebar and can be shown again (#11233)'},
     'filtered-projects':{data:{avatarData,inactive:true,filtered:true},about:'Filtered project results show all matches and omit the inactivity toggle (#11233)'},
-    'idle-groups':{data:{avatarData,inactive:true,groups:true},about:'Automation and dialogue headers offer independent idle toggles on hover (#11252)'},
+    'idle-groups':{data:{avatarData,inactive:true,groups:true},about:'Even small automation and dialogue groups offer independent idle folding (#11282)'},
+    'idle-recent-groups':{data:{avatarData,idleOptIn:true,groups:true},about:'Groups with only recent tasks omit idle actions (#11282)'},
+    'idle-disabled':{data:{avatarData,inactive:true,idleDisabled:true},about:'Thirty-minute-old tasks stay visible by default (#11282)'},
   },
   async ready(page){await page.locator('[data-project-source] img, [data-project-working-dir="local:/Projects/Cindy"] .lucide-folder-open, [aria-label="Automation fixture"]').first().waitFor();},
   async check(page,ui){
+    if (ui.case === 'idle-recent-groups') {
+      const expand = await ui.t('ccAgent.sidebar.expandAllSessions');
+      const fold = await ui.t('ccAgent.sidebar.collapseInactiveSessions');
+      for (const name of ['Automation fixture', 'Dialogue fixture']) {
+        const group = page.getByRole('region', { name });
+        await group.getByRole('button', { expanded: true }).first().hover();
+        assert.equal(await group.getByRole('button', { name: expand, exact: true }).count(), 0);
+        assert.equal(await group.getByRole('button', { name: fold, exact: true }).count(), 0);
+      }
+      return;
+    }
+    if (ui.case === 'idle-disabled') {
+      await page.locator('[data-session-id="demo-0-1"]').waitFor();
+      await page.locator('[data-session-id="demo-1-0"]').waitFor();
+      // #11282: one ordinary project must omit the idle action while the
+      // preference is off, even when the rest of its header actions are visible.
+      const header = page.locator('[data-project-working-dir="local:/Projects/Cindy"] [data-project-header]');
+      await header.hover();
+      const expand = await ui.t('ccAgent.sidebar.expandAllSessions');
+      const fold = await ui.t('ccAgent.sidebar.collapseInactiveSessions');
+      assert.equal(await header.getByRole('button', { name: expand, exact: true }).count(), 0);
+      assert.equal(await header.getByRole('button', { name: fold, exact: true }).count(), 0);
+      return;
+    }
     if (ui.case === 'idle-groups') {
       const automation = page.getByRole('region', { name: 'Automation fixture' });
       const dialogue = page.getByRole('region', { name: 'Dialogue fixture' });

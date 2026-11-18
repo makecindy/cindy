@@ -13,6 +13,8 @@ import {
   clearRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
 import { ProjectsSection, type ProjectsSectionProps } from '../features/cc-agent/sidebar/sections/ProjectsSection';
+import { SidebarActivityClock, useSidebarIdleCollapse } from '../features/cc-agent/sidebar/SidebarActivityClock';
+import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../features/cc-agent/lib/sidebarCollapseConfig';
 import { useConversationSearch } from '../features/cc-agent/sidebar/ConversationSearchBox';
 import { SidebarInlineSearch } from '../features/cc-agent/sidebar/SidebarInlineSearch';
 import { ConfirmDialogProvider, useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -57,7 +59,7 @@ vi.mock('../features/cc-agent/sidebar/AutomationSessionGroupItem', () => ({
 function remoteSessions(): Session[] {
   const now = Date.now();
   return ['first', 'idle', 'lit'].map((id, i) => {
-    const activity = new Date(now - i * 60 * 60_000).toISOString();
+    const activity = new Date(now - i * 48 * 60 * 60_000).toISOString();
     return { id, title: id, status: 'active', createdAt: activity,
       updatedAt: activity, deviceLinkDeviceId: 'remote' } as Session;
   });
@@ -97,6 +99,7 @@ function groupProps(groupDevice: boolean): ProjectsSectionProps {
 
 beforeEach(() => {
   localStorage.clear();
+  localStorage.setItem('sidebar.collapse.projectSessionLimit', '0');
   // ProjectsSection 渲染时读 window.electronAPI.platform 做项目键比较(main 897de9031);
   // jsdom 没有 preload 桥,这里只补 platform 字段,与 windowCloseBehavior 用例同法。
   Object.defineProperty(window, 'electronAPI', {
@@ -618,7 +621,7 @@ describe('Dialogue groups across devices', () => {
     const view = render(<ProjectsSection {...p} />);
     const a = deviceHeader('Device A').parentElement!;
     const b = deviceHeader('Device B').parentElement!;
-    fireEvent.click(within(groupHeader(b)).getByRole('button', { name: 'ccAgent.sidebar.expandAllSessions' }));
+    fireEvent.click(within(b).getByRole('button', { name: 'ccAgent.sidebar.showMoreSessions' }));
     expect(within(b).getAllByTestId(/^row-/)).toHaveLength(3);
     expect(within(a).getAllByTestId(/^row-/)).toHaveLength(1);
     const bHeader = groupHeader(b);
@@ -651,7 +654,7 @@ describe('Dialogue groups across devices', () => {
     render(<ProjectsSection {...p} />);
     expect(screen.getAllByText('ccAgent.sidebar.dialogues')).toHaveLength(1);
     expect(screen.queryByText('Device A')).toBeNull();
-    fireEvent.click(within(groupHeader()).getByRole('button', { name: 'ccAgent.sidebar.expandAllSessions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.showMoreSessions' }));
     expect(screen.getAllByTestId(/^row-/)).toHaveLength(5);
   });
 });
@@ -683,11 +686,19 @@ it('switches between project navigation and inbox while retaining access to proc
 // dialogue row. Unit coverage for independent header toggles, all-idle footers
 // and filtering. The existing lamp tests cover dialogue/device state only.
 it('expands and refolds idle automation and dialogue rows from their own headers', () => {
+  localStorage.setItem(SIDEBAR_IDLE_COLLAPSE_KEY, 'true');
+  function PreferenceControl() {
+    const { setIdleCollapseEnabled } = useSidebarIdleCollapse();
+    return <button onClick={() => setIdleCollapseEnabled(false)}>Turn idle folding off</button>;
+  }
+  function Preview({ children }: { children: ReactNode }) {
+    return <SidebarActivityClock enabled={false}><PreferenceControl />{children}</SidebarActivityClock>;
+  }
   const p = props(false);
   p.filter.groupAutomation = true;
   const [dialogue, automation] = remoteSessions().slice(1);
   p.dialogues = [dialogue, { ...automation, source: 'scheduler', title: 'Weekly automation' }];
-  const view = render(<ProjectsSection {...p} />);
+  const view = render(<ProjectsSection {...p} />, { wrapper: Preview });
   const header = screen.getByText('ccAgent.layout.automations').closest<HTMLElement>('[role="button"]')!;
   const autoActions = within(header);
   const dialogueActions = within(groupHeader());
@@ -717,4 +728,11 @@ it('expands and refolds idle automation and dialogue rows from their own headers
   expect(screen.getByText('idle')).toBeTruthy();
   expect(screen.queryByRole('button', { name: expand })).toBeNull();
   expect(screen.queryByRole('button', { name: fold })).toBeNull();
+
+  view.rerender(<ProjectsSection {...p} />);
+  expect(screen.getAllByRole('button', { name: expand })).toHaveLength(2);
+  fireEvent.click(screen.getByRole('button', { name: 'Turn idle folding off' }));
+  expect(screen.queryByRole('button', { name: expand })).toBeNull();
+  expect(screen.queryByRole('button', { name: fold })).toBeNull();
+  expect(screen.getAllByRole('button', { name: 'ccAgent.sidebar.showMoreSessions' })).toHaveLength(2);
 });

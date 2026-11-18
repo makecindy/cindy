@@ -16621,6 +16621,7 @@
       "collapseInactiveSessions": "Contraer tareas inactivas",
       "showAllSessions": "Mostrar todas ({{count}})",
       "showMoreSessions": "Mostrar {{count}} más",
+      "autoCollapseIdleTasks": "Contraer tareas automáticamente tras {{minutes}} min de inactividad",
       "allSessions": "Todas las sesiones",
       "scopeLocalSessions": "Local",
       "dialogues": "Conversación",

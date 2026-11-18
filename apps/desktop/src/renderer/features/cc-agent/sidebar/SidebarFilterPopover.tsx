@@ -63,6 +63,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { useSidebarMainViewMode, type SidebarMainViewMode } from '@/hooks/useSidebarCardMode';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -97,6 +98,8 @@ import { DEFAULT_TASK_INFO_FIELDS } from '../hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields, type TaskInfoField } from '../hooks/useTaskInfoFields';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 import { FilterReminderDot } from './FilterReminderDot';
+import { useSidebarIdleCollapse } from './SidebarActivityClock';
+import { SIDEBAR_INACTIVE_COLLAPSE_MS } from '../lib/sidebarCollapseConfig';
 
 type Option<T extends string> = {
   value: T;
@@ -432,6 +435,7 @@ export function SidebarFilterPopover({
 
   // 主列表显示形态(独立于置顶段的三态设置,B 期拆分)。
   const { mode: mainViewMode, setMode: setMainViewMode } = useSidebarMainViewMode();
+  const { idleCollapseEnabled, setIdleCollapseEnabled } = useSidebarIdleCollapse();
 
   const statusValue = optionLabel(STATUS_OPTIONS, status, t);
   const vendorValue = optionLabel(VENDOR_OPTIONS, vendor, t);
@@ -928,6 +932,15 @@ export function SidebarFilterPopover({
                     Icon={option.Icon}
                   />
                 ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={idleCollapseEnabled}
+                  onCheckedChange={setIdleCollapseEnabled}
+                  onSelect={(event) => event.preventDefault()}
+                  className="h-auto min-h-8 whitespace-normal"
+                >
+                  {t('ccAgent.sidebar.autoCollapseIdleTasks', { minutes: SIDEBAR_INACTIVE_COLLAPSE_MS / 60_000 })}
+                </DropdownMenuCheckboxItem>
               </MenuSubRow>
               <MenuSubRow
                 label={t('ccAgent.sidebar.taskInfoHeading')}

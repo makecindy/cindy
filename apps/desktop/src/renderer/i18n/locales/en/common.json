@@ -16465,6 +16465,7 @@
       "collapseInactiveSessions": "Collapse Inactive Tasks",
       "showAllSessions": "Show all {{count}}",
       "showMoreSessions": "Show {{count}} more",
+      "autoCollapseIdleTasks": "Auto-collapse tasks after {{minutes}} min of inactivity",
       "allSessions": "All sessions",
       "scopeLocalSessions": "Local",
       "dialogues": "Chat",

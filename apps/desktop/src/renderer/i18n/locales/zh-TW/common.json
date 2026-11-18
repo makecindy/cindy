@@ -16391,6 +16391,7 @@
       "collapseInactiveSessions": "摺疊不活躍任務",
       "showAllSessions": "顯示全部 {{count}} 項",
       "showMoreSessions": "再顯示 {{count}} 項",
+      "autoCollapseIdleTasks": "閒置 {{minutes}} 分鐘後自動收起",
       "allSessions": "全部任務",
       "scopeLocalSessions": "本機任務",
       "dialogues": "對話",

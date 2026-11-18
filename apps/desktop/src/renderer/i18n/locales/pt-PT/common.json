@@ -16621,6 +16621,7 @@
       "collapseInactiveSessions": "Recolher tarefas inativas",
       "showAllSessions": "Mostrar todas as {{count}}",
       "showMoreSessions": "Mostrar mais {{count}}",
+      "autoCollapseIdleTasks": "Recolher tarefas após {{minutes}} min de inatividade",
       "allSessions": "Todas as sessões",
       "scopeLocalSessions": "Locais",
       "dialogues": "Conversa",

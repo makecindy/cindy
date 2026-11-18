@@ -77,7 +77,7 @@ import { ProjectNode } from './ProjectNode';
 import { UnclassifiedSection } from './UnclassifiedSection';
 import { getSidebarSessionCollapseView } from '../../lib/sessionListCollapse';
 import { sessionActivityMs } from '../../lib/dateSessionGrouping';
-import { useSidebarActivityNow } from '../SidebarActivityClock';
+import { useSidebarActivityNow, useSidebarIdleCollapse } from '../SidebarActivityClock';
 import {
   getProjectCollapseLimit,
   getProjectSessionCollapseLimit,
@@ -127,7 +127,7 @@ import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
-import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
+import { SessionEntryListContent, SessionEntryRows, useSessionEntryListView } from '../SessionEntryList';
 import { TaskInbox, type TaskInboxProps } from '../TaskInbox';
 import { SessionCollapseToggle } from '../SessionCollapseToggle';
 import { sessionRowKey } from '../sessionRowKey';
@@ -346,6 +346,7 @@ export function ProjectsSection({
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
   const nowMs = useSidebarActivityNow();
+  const { idleCollapseEnabled } = useSidebarIdleCollapse();
   const remoteDevices = useRemoteDevices();
   // 分组索引会排除断线设备；已有缓存条目的段头仍需读取设备名，并跟随改名更新。
   const cachedDeviceNames = useMemo(
@@ -672,7 +673,7 @@ export function ProjectsSection({
     scheduleSessionIndex,
   });
 
-  // 普通任务按闲置时间折叠；项目等容器仍保留原有数量上限和可展开的标题。
+  // 默认保留主列表原有条数规则。开启闲置折叠后，散排任务按活动时间收起，分组标题仍有独立上限。
   const entrySessions = getMainListEntrySessions;
   // 折叠视图共用一份参数:非设备分组 = 全列表一份;设备分组 = 每段各一份(见
   // deviceSections)。豁免口径 = attention ∪ running(priorityContext,含远程
@@ -697,16 +698,19 @@ export function ProjectsSection({
         disableCollapse: disableSessionCollapse,
         isFiltering: false,
         nowMs,
-        isContainerEntry: (entry) => entry.kind !== 'session' && entry.kind !== 'automation-group',
-        getActivityMs: (entry) => entrySessions(entry).reduce(
+        idleCollapseEnabled,
+        isContainerEntry: idleCollapseEnabled
+          ? (entry) => entry.kind !== 'session' && entry.kind !== 'automation-group'
+          : undefined,
+        getActivityMs: idleCollapseEnabled ? (entry) => entrySessions(entry).reduce(
           (latest, session) => Math.max(latest, sessionActivityMs(session)), 0,
-        ),
+        ) : undefined,
         isActiveEntry: (entry) => entrySessions(entry).some((s) => s.id === viewedIdForSort),
         hasAttentionEntry: (entry) =>
           entrySessions(entry).some((s) => lampFoldExemptIds.has(s.id)) ||
           entrySessions(entry).some((s) => !!s.pinnedAt),
       }),
-    [viewedIdForSort, entrySessions, lampFoldExemptIds, nowMs, disableSessionCollapse],
+    [viewedIdForSort, entrySessions, lampFoldExemptIds, nowMs, disableSessionCollapse, idleCollapseEnabled],
   );
   const {
     visibleEntries: visibleMixedEntries,
@@ -1389,7 +1393,7 @@ export function ProjectsSection({
                                   }
                                 />
                               )}
-                              {!disableSessionCollapse && expandedDeviceSections.has(key) && (
+                              {idleCollapseEnabled && !disableSessionCollapse && expandedDeviceSections.has(key) && (
                                 <ShowAllEntriesButton
                                   count={sectionView.hiddenCount}
                                   showAll
@@ -1424,7 +1428,7 @@ export function ProjectsSection({
           {!deviceGroupingActive && projectsOverflow && (
             <ShowAllEntriesButton count={hiddenEntryCount} onClick={() => setShowAllProjects(true)} />
           )}
-          {!deviceGroupingActive && !disableSessionCollapse && showAllProjects && (
+          {!deviceGroupingActive && idleCollapseEnabled && !disableSessionCollapse && showAllProjects && (
             <ShowAllEntriesButton
               count={hiddenEntryCount}
               showAll
@@ -1550,13 +1554,24 @@ export function SessionGroupNode({
   const { t } = useTranslation();
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [showAll, setShowAll] = useCollapsibleShowAll(parentSectionCollapsed || collapsed);
+  const view = useSessionEntryListView({
+    sessions,
+    notifications,
+    scheduleSessionIndex,
+    activeSessionId,
+    runningSessionIds,
+    foldExemptSessionIds,
+    collapsible: true,
+    collapseLimit: getProjectSessionCollapseLimit(),
+    disableCollapse: disableSessionCollapse,
+  });
   const headerRef = useRef<HTMLDivElement>(null);
   const restoreHeaderFocusOnClose = useRef(false);
   // 与 ProjectNode 同款:标题右侧 hover 渐显的展开/收起指示箭头。
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   const showRunning = collapsed && lamp?.running;
   const collapsedStatus = collapsed ? lamp?.dotTone : undefined;
-  const canToggleIdle = !disableSessionCollapse && sessions.length > 0;
+  const { canToggleIdle } = view;
   return (
     <div className="relative flex w-full select-none flex-col" data-no-drag>
       {/* 段头:与 ProjectNode Header 同款规格(h-8 药丸 hover / pl-3 pr-2 /
@@ -1656,15 +1671,14 @@ export function SessionGroupNode({
           与同一份折叠上限(getProjectSessionCollapseLimit)。 */}
       <SectionCollapse collapsed={collapsed} data-no-drag>
         <div className="flex flex-col gap-0.5 pt-0.5">
-          <SessionEntryList
-            sessions={sessions}
+          <SessionEntryListContent
+            view={view}
             showAll={showAll}
             onShowAllChange={setShowAll}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
             attachedSessionIds={attachedSessionIds}
             notifications={notifications}
-            scheduleSessionIndex={scheduleSessionIndex}
             selectedSessionIds={selectedSessionIds}
             onSessionClick={onSessionClick}
             onAction={onAction}
@@ -1673,9 +1687,6 @@ export function SessionGroupNode({
             onMoveSession={onMoveSession}
             projectOptions={projectOptions}
             onScheduleAction={onScheduleAction}
-            collapsible
-            collapseLimit={getProjectSessionCollapseLimit()}
-            disableCollapse={disableSessionCollapse}
             foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={parentSectionCollapsed || collapsed}
             sessionVariant={sessionVariant}

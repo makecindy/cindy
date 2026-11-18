@@ -16391,6 +16391,7 @@
       "collapseInactiveSessions": "收起不活跃任务",
       "showAllSessions": "显示全部 {{count}} 项",
       "showMoreSessions": "再显示 {{count}} 项",
+      "autoCollapseIdleTasks": "闲置 {{minutes}} 分钟后自动收起",
       "allSessions": "全部任务",
       "scopeLocalSessions": "本机任务",
       "dialogues": "对话",

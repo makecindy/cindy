@@ -1,9 +1,7 @@
 /**
  * 侧栏「自动收起」配置。
  * ---------------------------------------------------------------------------
- * 普通任务与项目内任务由 SIDEBAR_INACTIVE_COLLAPSE_MS 控制闲置折叠。
- * 下列历史数量配置保留给原有 rail 等消费者；主列表容器仍默认最多 20 个。
- * 普通任务不再因排在前 5 / 10 条而豁免闲置折叠。
+ * 默认保留原有数量下限，开启闲置折叠后按更短的活动窗口收起普通任务。
  *
  * 可配置但**不暴露 GUI**:用户(开发者)可在 DevTools 控制台改 localStorage 覆盖默认值,
  * 改完刷新生效(读取发生在 render 期,非响应式):
@@ -15,6 +13,7 @@
 
 /** 桌面侧栏普通任务的闲置折叠阈值；不改变手机端与自动化运行列表。 */
 export const SIDEBAR_INACTIVE_COLLAPSE_MS = 30 * 60 * 1000;
+export const SIDEBAR_IDLE_COLLAPSE_KEY = 'sidebar.collapse.idle30m';
 
 const PROJECT_SESSION_LIMIT_KEY = 'sidebar.collapse.projectSessionLimit';
 const DIALOGUE_LIMIT_KEY = 'sidebar.collapse.dialogueLimit';

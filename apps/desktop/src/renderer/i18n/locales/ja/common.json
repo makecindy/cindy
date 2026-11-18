@@ -16391,6 +16391,7 @@
       "collapseInactiveSessions": "非アクティブなタスクを折りたたむ",
       "showAllSessions": "{{count}} 件をすべて表示",
       "showMoreSessions": "さらに {{count}} 件を表示",
+      "autoCollapseIdleTasks": "{{minutes}} 分間操作のないタスクを自動で折りたたむ",
       "allSessions": "すべてのセッション",
       "scopeLocalSessions": "このデバイスのセッション",
       "dialogues": "会話",

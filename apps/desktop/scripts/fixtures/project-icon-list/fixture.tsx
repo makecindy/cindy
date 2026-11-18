@@ -5,10 +5,18 @@ import { useTranslation } from 'react-i18next';
 import { mountPage, subscription, ctx } from '../../ui-page/harness';
 import { ProjectNode } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectNode';
 import { SessionGroupNode } from '../../../src/renderer/features/cc-agent/sidebar/sections/ProjectsSection';
+import { SidebarActivityClock } from '../../../src/renderer/features/cc-agent/sidebar/SidebarActivityClock';
+import { SIDEBAR_IDLE_COLLAPSE_KEY } from '../../../src/renderer/features/cc-agent/lib/sidebarCollapseConfig';
 import { WorktreeProvider } from '../../../src/renderer/contexts/WorktreeContext';
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 setDataOwnerGeneration('fixture', 1);
+if (ctx.data.idleDisabled) {
+  // Verify the legacy activity window independently of the count floor.
+  localStorage.setItem('sidebar.collapse.projectSessionLimit', '0');
+} else if (ctx.data.inactive || ctx.data.idleOptIn) {
+  localStorage.setItem(SIDEBAR_IDLE_COLLAPSE_KEY, 'true');
+}
 const noop = () => {};
 const examples = [
   ['Cindy', null, ['完善项目设置界面', '检查手机端交互']],
@@ -75,4 +83,4 @@ void mountPage({route:'/cc-agent', host:{localDb:{
   projectAliases:{snapshot:async()=>({aliases:[],icons:Object.fromEntries(examples.filter(e=>e[1]).map(([name,icon])=>[`local:/Projects/${name}`,icon])),platform:'darwin',settingsSupported:true,settingsVersion:5,ownerStamp:{dataOwnerId:'fixture',ownerGeneration:1}}),onChanged:subscription('projectInfoChanged'),
     iconImage:async()=>ctx.data.avatarData as string,
     autoIcon:async(input:{projectKey:string})=>({image:input.projectKey==='local:/Projects/Cindy'?ctx.data.avatarData:null,source:'assets/icon.png',kind:'local',candidate:false})}
-}},render:()=> <WorktreeProvider><Preview /></WorktreeProvider>});
+}},render:()=> <WorktreeProvider><SidebarActivityClock enabled={false}><Preview /></SidebarActivityClock></WorktreeProvider>});

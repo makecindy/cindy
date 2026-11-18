@@ -1,6 +1,8 @@
-import type {
-  SessionListCollapseView,
-  SessionListCollapseViewInput,
+import {
+  SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
+  SESSION_LIST_COLLAPSE_RECENT_WINDOW_MS,
+  type SessionListCollapseView,
+  type SessionListCollapseViewInput,
 } from '@cindy/maker-shared/session-list-collapse';
 import { SIDEBAR_INACTIVE_COLLAPSE_MS } from './sidebarCollapseConfig';
 
@@ -13,7 +15,7 @@ export {
   type SessionListCollapseViewInput,
 } from '@cindy/maker-shared/session-list-collapse';
 
-/** Desktop-only idle folding (#11233). Container headers retain their count limit. */
+/** The opt-in replaces the task count floor with a shorter activity window. */
 export function getSidebarSessionCollapseView<T>({
   entries,
   showAll,
@@ -23,21 +25,28 @@ export function getSidebarSessionCollapseView<T>({
   hasAttentionEntry,
   nowMs = Date.now(),
   getActivityMs,
-  recentWindowMs = SIDEBAR_INACTIVE_COLLAPSE_MS,
-  minVisibleCount = Infinity,
+  idleCollapseEnabled = false,
+  recentWindowMs = idleCollapseEnabled
+    ? SIDEBAR_INACTIVE_COLLAPSE_MS
+    : SESSION_LIST_COLLAPSE_RECENT_WINDOW_MS,
+  minVisibleCount = SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,
   isContainerEntry,
 }: SessionListCollapseViewInput<T> & {
+  idleCollapseEnabled?: boolean;
   isContainerEntry?: (entry: T) => boolean;
 }): SessionListCollapseView<T> {
   let containerCount = 0;
+  const visibleHeadCount = Math.max(0, Math.round(minVisibleCount));
   const visibleEntries = showAll || disableCollapse || isFiltering
     ? entries
-    : entries.filter((entry) => {
+    : entries.filter((entry, index) => {
         const container = isContainerEntry?.(entry) ?? false;
-        if (container) containerCount++;
-        return isActiveEntry(entry) || hasAttentionEntry(entry) || (container
-          ? containerCount <= minVisibleCount
-          : getActivityMs != null && getActivityMs(entry) >= nowMs - recentWindowMs);
+        // Container headers keep their own limit so an all-idle group can be reopened.
+        const withinHead = container
+          ? containerCount++ < visibleHeadCount
+          : !idleCollapseEnabled && index < visibleHeadCount;
+        return withinHead || isActiveEntry(entry) || hasAttentionEntry(entry) ||
+          (!container && getActivityMs != null && getActivityMs(entry) >= nowMs - recentWindowMs);
       });
   const hiddenCount = entries.length - visibleEntries.length;
   return {

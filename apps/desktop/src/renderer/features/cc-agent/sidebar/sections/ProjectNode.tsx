@@ -46,7 +46,7 @@ import { toast } from '@/lib/toast';
 import { buildProjectDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
 import { SectionCollapse } from '../SectionCollapse';
-import { SessionEntryList } from '../SessionEntryList';
+import { SessionEntryListContent, useSessionEntryListView } from '../SessionEntryList';
 import { SessionCollapseToggle } from '../SessionCollapseToggle';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import type { SessionClickHandler } from '../SessionItem';
@@ -168,6 +168,17 @@ export const ProjectNode = memo(function ProjectNode({
   onArchiveAll,
 }: ProjectNodeProps) {
   const [showAll, setShowAll] = useCollapsibleShowAll(isCollapsed || parentSectionCollapsed);
+  const view = useSessionEntryListView({
+    sessions: displaySessions ?? project.sessions,
+    notifications,
+    scheduleSessionIndex,
+    activeSessionId,
+    runningSessionIds,
+    foldExemptSessionIds,
+    collapsible: true,
+    collapseLimit: getProjectSessionCollapseLimit(),
+    disableCollapse: disableSessionCollapse,
+  });
   return (
     // 两个 data 属性各自服务不同消费者:
     //   - data-project-working-dir : Sortable drop-target 识别 (历史: ProjectsSection 手写拖拽热区,
@@ -180,7 +191,7 @@ export const ProjectNode = memo(function ProjectNode({
       className={cn('relative flex flex-col w-full select-none')}
     >
       <ProjectHeader
-        disableSessionCollapse={disableSessionCollapse}
+        canToggleIdle={view.canToggleIdle}
         showAll={showAll}
         onShowAllChange={(value) => {
           if (isCollapsed) onToggle(project.projectKey);
@@ -210,19 +221,15 @@ export const ProjectNode = memo(function ProjectNode({
       <SectionCollapse collapsed={isCollapsed} data-no-drag>
         {/* 组间留白由外层树的 4px gap 承担，组内任务保持 2px 间隔。 */}
         <div className="flex flex-col gap-0.5 pt-0.5">
-          <SessionEntryList
+          <SessionEntryListContent
+            view={view}
             showAll={showAll}
             onShowAllChange={setShowAll}
-            sessions={displaySessions ?? project.sessions}
             activeSessionId={activeSessionId}
             runningSessionIds={runningSessionIds}
             attachedSessionIds={attachedSessionIds}
             notifications={notifications}
-            scheduleSessionIndex={scheduleSessionIndex}
             selectedSessionIds={selectedSessionIds}
-            collapsible
-            collapseLimit={getProjectSessionCollapseLimit()}
-            disableCollapse={disableSessionCollapse}
             foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={isCollapsed || parentSectionCollapsed}
             onSessionClick={onSessionClick}
@@ -245,7 +252,6 @@ type ProjectHeaderProps = Pick<
   | 'project'
   | 'statusFilter'
   | 'isCollapsed'
-  | 'disableSessionCollapse'
   | 'collapsedAttentionTone'
   | 'hideRemoteMachineLabel'
   | 'lamp'
@@ -258,12 +264,13 @@ type ProjectHeaderProps = Pick<
   | 'onBrowseFiles'
   | 'onArchiveAll'
 > & {
+  canToggleIdle: boolean;
   showAll: boolean;
   onShowAllChange: (showAll: boolean) => void;
 };
 
 const ProjectHeader = memo(function ProjectHeader({
-  disableSessionCollapse,
+  canToggleIdle,
   showAll,
   onShowAllChange,
   lamp,
@@ -484,7 +491,7 @@ const ProjectHeader = memo(function ProjectHeader({
         </div>
         {!isEditingName && (
           <SidebarGroupHeaderActions status={isCollapsed ? collapsedStatusTone : null} menuOpen={menuPos !== null}>
-            {!disableSessionCollapse && project.sessions.length > 0 && (
+            {canToggleIdle && (
               <SessionCollapseToggle showAll={!isCollapsed && showAll} onChange={onShowAllChange} />
             )}
             {/* More 按钮 —— 点击锚定 menuPos 到按钮正下方,复用下面同一份
