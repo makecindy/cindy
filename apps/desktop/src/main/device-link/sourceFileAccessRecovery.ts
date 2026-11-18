@@ -57,6 +57,16 @@ function attachDiagnosticCause(error: unknown, cause: unknown): void {
 }
 
 /**
+ * 传输链路明确抛出的中止标记(`mediaTransfer` / `filePeer` / `fileAccess` 抛的就是这两个
+ * token;被 IpcError 包装成 `DEVICE_LINK_MEDIA_TRANSFER_FAILED` 后也原样带在文案里)。
+ *
+ * 只认标记本身,**不认消息里的 "cancel" 子串**:附件路径自己就可能含这个词 ——
+ * `/tmp/cancel/report.pdf` 读取失败时,ENOENT 文案带着整条路径,按子串判就会把真实的
+ * 「文件不存在」误判成中止症状,又让它被权限错误顶替一次(#10906 review)。
+ */
+const CANCELLED_MARKER = /\b(?:UPLOAD_CANCELLED|FILE_PEER_CANCELLED)\b/;
+
+/**
  * 这个错误是不是「作用域作废掐断在途传输」的症状,而非失败根因。
  * 传输链路用 `UPLOAD_CANCELLED` / `FILE_PEER_CANCELLED` 报告中止,标准中止异常用
  * AbortError 标记 —— 都不说明"为什么"中止,只有作用域守卫知道。
@@ -66,7 +76,7 @@ function isScopeTeardownSymptom(error: unknown, signal?: AbortSignal): boolean {
   const candidate = error as { name?: unknown; code?: unknown; message?: unknown };
   if (candidate.name === 'AbortError' || candidate.code === 'ABORT_ERR') return true;
   if (signal && error === signal.reason) return true;
-  return typeof candidate.message === 'string' && /cancel/i.test(candidate.message);
+  return typeof candidate.message === 'string' && CANCELLED_MARKER.test(candidate.message);
 }
 
 /** Captured by each transfer, so its asynchronous checkpoints retain the initiating scope. */
@@ -113,7 +123,16 @@ export async function readWithSourceFileAccessRecovery<T>(source: string, read: 
   } catch (error) {
     if (!scope || !isSourceFileAccessError(error, source)
       || !(process.platform === 'win32' ? path.win32 : path).isAbsolute(source) || scope.attempted.has(source)) throw error;
-    scope.assertCurrent();
+    // 走到这里说明读取被真的拒绝了(EPERM / EACCES / ACCESS_DENIED),它才是根因。
+    // 若读取期间作用域恰好也失效了,守卫错误只作补充信息挂到 cause,并且不再弹选择框
+    // —— 否则「附件读失败保留真实原因」这半边会在内层又被权限错误顶替一次
+    // (#10906 review),外层无论如何都恢复不回来。
+    try {
+      scope.assertCurrent();
+    } catch (assertError) {
+      attachDiagnosticCause(error, assertError);
+      throw error;
+    }
     scope.attempted.add(source);
     const selected = await scope.selectFile(source);
     scope.assertCurrent();

@@ -85,4 +85,66 @@ describe('send failure error primacy', () => {
     await expect(result).rejects.toBe(scope);
     expect((scope as Error).cause).toBe(cancelled);
   });
+
+  it('treats the wrapped transfer failure as a cancellation symptom too', async () => {
+    // IpcError 包装后消息是 `[DEVICE_LINK_MEDIA_TRANSFER_FAILED] UPLOAD_CANCELLED`,
+    // 标记仍要认得出来,否则中止又会被当成普通故障顶掉作用域原因。
+    const scope = scopeError();
+    const wrapped = Object.assign(new Error('[DEVICE_LINK_MEDIA_TRANSFER_FAILED] FILE_PEER_CANCELLED'), {
+      code: 'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
+    });
+    const result = withSourceFileAccessRecovery({
+      selectFile: async () => null,
+      assertCurrent: () => { throw scope; },
+    }, async () => { throw wrapped; });
+    await expect(result).rejects.toBe(scope);
+    expect((scope as Error).cause).toBe(wrapped);
+  });
+
+  // #10906 review:路径里含 cancel 的真实故障不能再被误判成中止症状。
+  // 最小失败输入:一个文案带着 `/tmp/cancel/report.pdf` 的 ENOENT。
+  it('keeps a real read failure primary when its path merely contains cancel', async () => {
+    const scope = scopeError();
+    const missing = Object.assign(new Error("ENOENT: no such file or directory, stat '/tmp/cancel/report.pdf'"), {
+      code: 'ENOENT', syscall: 'stat', path: '/tmp/cancel/report.pdf',
+    });
+    const result = withSourceFileAccessRecovery({
+      selectFile: async () => null,
+      assertCurrent: () => { throw scope; },
+    }, async () => { throw missing; });
+    await expect(result).rejects.toBe(missing);
+    expect((missing as Error).cause).toBe(scope);
+  });
+});
+
+// #10906 review:内层复查也会顶替真实原因 —— 读取被拒后、准备弹选择框前那次
+// assertCurrent() 原来直接抛作用域错误,把 EPERM/EACCES/ACCESS_DENIED 盖掉。
+describe('attachment read failure keeps its own reason', () => {
+  const source = '/private/wechat/test.pdf';
+  const denied = () => Object.assign(new Error('source denied'), { code: 'EPERM', syscall: 'open', path: source });
+  const stale = () => Object.assign(new Error('scope is no longer current'), { code: 'PERMISSION_DENIED' });
+
+  it('keeps the read error primary when the scope expires during the read', async () => {
+    const scope = stale();
+    const readError = denied();
+    const selectFile = vi.fn(async () => source);
+    // 作用域在读完后才失效:入口复查必须放过,否则测不到内层那次复查。
+    let expired = false;
+    const read = vi.fn(async () => { expired = true; throw readError; });
+    const failure = await withSourceFileAccessRecovery({
+      selectFile, assertCurrent: () => { if (expired) throw scope; },
+    }, () => readWithSourceFileAccessRecovery(source, read)).catch((error: unknown) => error);
+    // 作用域在读取期间失效:第一次复查就命中,不得再弹选择框,读取错误仍是主错误。
+    expect(failure).toBe(readError);
+    expect((readError as Error).cause).toBe(scope);
+    expect(selectFile).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it('still reports the scope reason when the read itself is fine', async () => {
+    const read = vi.fn().mockResolvedValue('uploaded');
+    await expect(withSourceFileAccessRecovery({ selectFile: async () => null, assertCurrent: () => {} },
+      () => readWithSourceFileAccessRecovery(source, read))).resolves.toBe('uploaded');
+    expect(read).toHaveBeenCalledOnce();
+  });
 });

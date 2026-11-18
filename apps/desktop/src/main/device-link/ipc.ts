@@ -1866,6 +1866,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
         const current = getActiveAppSession();
         // 命中条件要能从日志反推(#10852 P1):守卫覆盖所有前台发送通道,
         // 不能再说「附件确认」——没有附件确认的发送也会走到这里。
+        // sender 已销毁就不再读 frame / window:原来的 `||` 链在 isDestroyed()
+        // 处就停住,销毁后再读 detached / mainFrame / isDestroyed() 可能直接抛
+        // Electron 的「对象已失效」,把一次中止变成莫名失败(#10906 review)。
+        // 这些条件在 resolveSendScopeReason 里都排在上面的项目之后,跳过不改变命中项。
+        const senderDestroyed = e.sender.isDestroyed();
         const reason = resolveSendScopeReason({
           aborted: transfer.signal.aborted,
           boundaryPending: isAppSessionBoundaryPending(),
@@ -1873,12 +1878,12 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
           ownerGeneration: owner.generation,
           currentDataOwnerId: current.dataOwnerId,
           currentGeneration: current.generation,
-          senderDestroyed: e.sender.isDestroyed(),
+          senderDestroyed,
           frameMissing: !frame,
-          frameDetached: frame?.detached ?? false,
-          frameIsMainFrame: frame ? e.sender.mainFrame === frame : false,
+          frameDetached: senderDestroyed ? false : frame?.detached ?? false,
+          frameIsMainFrame: senderDestroyed || !frame ? false : e.sender.mainFrame === frame,
           windowMissing: !targetWindow,
-          windowDestroyed: targetWindow?.isDestroyed() ?? false,
+          windowDestroyed: senderDestroyed ? false : targetWindow?.isDestroyed() ?? false,
         });
         if (reason) {
           log.warn('device-link send scope is no longer current', {
