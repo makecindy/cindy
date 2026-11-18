@@ -542,6 +542,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   // check. The handshake is shared, so it is sent only while one of them still
   // wants to send.
   const presendRecoveryWaitersRef = useRef(new Map<string, Set<() => boolean>>());
+  // Handshakes that an explicit caller (openLink, reopenLink, history reads, reply
+  // recovery) created or joined; they are always wanted.
+  const explicitOpenLinksRef = useRef(new WeakSet<object>());
   const presenceWipeTimerDeps = useMemo(() => ({
     ...basePresenceWipeTimerDeps,
     wipe: offlineMirrorWipeQueue.enqueue,
@@ -753,6 +756,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const connectionEpoch = connectionEpochFor(deviceId);
     const releaseGeneration = backgroundReleaseGenerationRef.current;
     const userCloseEpoch = userCloseEpochsRef.current.get(deviceId) ?? 0;
+    let ownRequest: object | undefined;
     const checkAvailability = () => {
       // A pre-send recovery may wait for the relay first. openLink clears a user
       // close, so recheck right before the handshake.
@@ -765,7 +769,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during pre-send recovery');
         }
         const waiters = presendRecoveryWaitersRef.current.get(deviceId);
-        if (waiters && waiters.size > 0 && ![...waiters].some((stillWanted) => stillWanted())) {
+        const explicit = ownRequest !== undefined && explicitOpenLinksRef.current.has(ownRequest);
+        if (!explicit && waiters && waiters.size > 0 && ![...waiters].some((stillWanted) => stillWanted())) {
           throw new DeviceLinkError('NOT_CONNECTED', 'no request still waits for this recovery');
         }
       }
@@ -798,6 +803,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       { retainSuccessful: true, refreshSettled },
     );
     if (previous && previous !== tracked) refreshedOpenLinksRef.current.set(previous, tracked);
+    ownRequest = tracked;
+    if (!presendRecovery) explicitOpenLinksRef.current.add(tracked);
     return tracked;
   }, [connectionEpochFor]);
 

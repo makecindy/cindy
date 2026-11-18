@@ -1038,6 +1038,37 @@ describe('Provider pre-send link recovery', () => {
     expect(sentOn(client, 'device-link:subscribe')).toHaveLength(0);
   });
 
+  it('still sends the shared recovery handshake when an explicit openLink joined it', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    client.openLink.mockImplementation(async () => { recovering = false; return accepted(supported); });
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let page!: Promise<unknown>;
+    let opened!: Promise<unknown>;
+    await act(async () => {
+      page = context.subscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+    });
+    await act(async () => {
+      // Joins the pending recovery handshake instead of starting another one.
+      opened = context.openLink('host').catch(error => error);
+    });
+    let left!: Promise<unknown>;
+    await act(async () => {
+      left = context.unsubscribe('session:abc', 'host', ['session:abc']).catch(error => error);
+      client.status = 'online';
+      online();
+    });
+    await act(async () => { await left; });
+    expect(await page).toBeUndefined();
+    expect(await opened).toMatchObject({ capabilities: supported });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+  });
+
   it('still sends the shared recovery handshake while another request waits for it', async () => {
     const client = transport.clients[0];
     let recovering = true;
