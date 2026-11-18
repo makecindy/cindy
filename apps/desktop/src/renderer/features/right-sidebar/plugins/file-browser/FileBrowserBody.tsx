@@ -250,8 +250,12 @@ function FileBrowserBodyWithWorkdir({
       const ok = await confirmSwitchAway(state.selectedFilePath, isHtmlFilePath(relPath) ? null : relPath);
       if (!ok) return;
       setExternalFile(null);
-      ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory,
-        previewHtmlPath: isHtmlFilePath(relPath) ? relPath : null });
+      ctx.patchState({
+        selectedFilePath: relPath,
+        currentDirectory: directory,
+        previewHtmlPath: isHtmlFilePath(relPath) ? relPath : null,
+        selectedFileLine: null,
+      });
     },
     [confirmSwitchAway, ctx, directory, state.selectedFilePath],
   );
@@ -266,7 +270,7 @@ function FileBrowserBodyWithWorkdir({
       const ok = await confirmSwitchAway(state.selectedFilePath, relPath);
       if (!ok) return;
       setExternalFile(null);
-      ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory, previewHtmlPath: null });
+      ctx.patchState({ selectedFilePath: relPath, currentDirectory: directory, previewHtmlPath: null, selectedFileLine: null });
       setMode('tree');
     },
     [confirmSwitchAway, ctx, directory, state.selectedFilePath],
@@ -307,6 +311,7 @@ function FileBrowserBodyWithWorkdir({
   // dirty guard,避免用户在当前 RSB 文件里有未保存编辑时被外部右键菜单直接切走。
   const revealFilePath = state.revealFilePath ?? null;
   const revealFileNonce = state.revealFileNonce ?? 0;
+  const revealFileLine = state.revealFileLine ?? null;
   useEffect(() => {
     if (!visible || !revealFilePath) return;
     let cancelled = false;
@@ -320,7 +325,12 @@ function FileBrowserBodyWithWorkdir({
       setMode('tree');
       setFilterQuery('');
       setExternalFile(null);
-      ctx.patchState({ selectedFilePath: revealFilePath, currentDirectory: dirname(revealFilePath), previewHtmlPath: null });
+      ctx.patchState({
+        selectedFilePath: revealFilePath,
+        currentDirectory: dirname(revealFilePath),
+        previewHtmlPath: null,
+        selectedFileLine: revealFileLine,
+      });
       await revealFileInTree(revealFilePath);
       if (cancelled) return;
       ctx.patchState({ revealFilePath: null });
@@ -329,9 +339,15 @@ function FileBrowserBodyWithWorkdir({
       cancelled = true;
     };
     // state/ctx/tree 引用变化不该重放已消费的请求。
-  }, [visible, revealFilePath, revealFileNonce]);
+  }, [visible, revealFilePath, revealFileNonce, revealFileLine]);
 
   // refresh 按钮:文件树 + 项目文件索引一起 invalidate。
+  // 聊天文件链接带的行号是一次性的：锚上之后清掉，避免切走再回来又被旧行号拉走。
+  const activeJumpLine = state.selectedFileLine ?? null;
+  const handleJumpLineConsumed = useCallback(() => {
+    if (state.selectedFileLine != null) ctx.patchState({ selectedFileLine: null });
+  }, [ctx, state.selectedFileLine]);
+
   const handleRefresh = useCallback(() => {
     void tree.refresh();
     projectFiles.refresh();
@@ -438,7 +454,7 @@ function FileBrowserBodyWithWorkdir({
         setExternalFile(null);
         setMode('tree');
         setFilterQuery('');
-        ctx.patchState({ selectedFilePath: localRelPath, currentDirectory: directory, previewHtmlPath: null });
+        ctx.patchState({ selectedFilePath: localRelPath, currentDirectory: directory, previewHtmlPath: null, selectedFileLine: null });
         void revealFileInTree(localRelPath);
         return;
       }
@@ -454,7 +470,7 @@ function FileBrowserBodyWithWorkdir({
       setMode('tree');
       setFilterQuery('');
       setExternalFile(external);
-      ctx.patchState({ selectedFilePath: null, currentDirectory: directory, previewHtmlPath: null });
+      ctx.patchState({ selectedFilePath: null, currentDirectory: directory, previewHtmlPath: null, selectedFileLine: null });
     },
     [confirmSwitchAway, ctx, directory, isRemote, revealFileInTree, state.selectedFilePath, t, workdir],
   );
@@ -676,6 +692,10 @@ function FileBrowserBodyWithWorkdir({
             /> : <FileBodyView
               key={externalFile?.absPath ?? 'project-file-browser'}
               visible={visible}
+              // 隐藏时先不传行号：隐藏容器里 CodeMirror 滚不动，会白跑掉一次性锚点。
+              jumpLine={visible ? activeJumpLine : null}
+              jumpLineNonce={state.revealFileNonce ?? 0}
+              onJumpLineConsumed={handleJumpLineConsumed}
               autosaveReady={fileContent.autosaveReady}
               workdir={activeWorkdir}
               remoteHostId={externalFile ? null : remoteHostId}

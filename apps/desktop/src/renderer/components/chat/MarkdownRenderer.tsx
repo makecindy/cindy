@@ -114,7 +114,11 @@ import {
 } from '@/lib/remoteFileOpen';
 import { i18n } from '@/i18n';
 import { toWorkdirRel } from '../../../shared/workdirPath';
-import { openDirInSidebarFileBrowser } from '@/features/right-sidebar/lib/openInSidebarFileBrowser';
+import { isTextPreviewSupported } from '@/lib/textPreview';
+import {
+  openDirInSidebarFileBrowser,
+  openFileInSidebarFileBrowser,
+} from '@/features/right-sidebar/lib/openInSidebarFileBrowser';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
 import {
@@ -1489,7 +1493,17 @@ async function activateResolvedLocalTarget(
     setModelLightboxPath(target.absPath);
     return;
   }
+  // 带行号的文本链接:侧边栏能预览时改用侧边栏并锚到那一行 —— 灯箱没有行号概念,
+  // 用户在这里还能就地编辑、接着跳。不带行号的链接保持原有灯箱行为。
   if (!(await shouldOpenTextLightboxForOrigin(ctx, target.absPath))) return;
+  if (target.line !== undefined) {
+    const rel = toWorkdirRel(ctx.workingDir, target.absPath);
+    const sidebarTargetSessionId = ctx.sidebarTargetSessionId ?? ctx.sessionId;
+    if (rel && sidebarTargetSessionId && isTextPreviewSupported(target.absPath)) {
+      await openFileInSidebarFileBrowser(sidebarTargetSessionId, rel, target.line);
+      return;
+    }
+  }
   setTextLightboxFile({
     path: target.absPath,
     name: basename(target.absPath),

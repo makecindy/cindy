@@ -101,6 +101,8 @@ export type RsbWindowCommand =
       sessionId: string;
       relPath: string;
       targetKind: 'file' | 'directory';
+      /** 1-based line to anchor the preview when opening a file. */
+      line?: number;
     }
   | {
       type: 'open-file-browser';
