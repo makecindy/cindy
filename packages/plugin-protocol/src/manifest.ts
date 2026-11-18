@@ -443,7 +443,7 @@ export interface GhostCindyNeeds {
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
  * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state', 'tool-execution'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
 
 /**

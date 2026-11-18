@@ -101,7 +101,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
   });
 
   it('loads archived sessions on demand for the selected connected remote devices', () => {
-    expect(sidebarSource).toContain("if (filter.status === 'active') return;");
+    expect(sidebarSource).toContain("if (taskListMode !== 'inbox' && filter.status === 'active') return;");
     expect(sidebarSource).toContain("requestRemoteSessionStatus(device.deviceId, 'archived')");
     expect(sidebarSource).toContain('if (!device.connected) continue;');
     expect(sidebarSource).toContain('selectedRemoteIds && !selectedRemoteIds.has(device.deviceId)');

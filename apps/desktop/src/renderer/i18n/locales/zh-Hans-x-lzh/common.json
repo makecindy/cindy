@@ -5352,8 +5352,19 @@
       "title": "书讯",
       "sendShortcut": {
         "label": "以 {{shortcut}} 遣之",
-        "hint": "启则按 {{shortcut}} 遣讯；阖则按 Enter 遣讯，按 Shift+Enter 换行。",
-        "ariaLabel": "以 {{shortcut}} 遣讯"
+        "hint": "Enter 则遣，Shift+Enter 则换行。",
+        "ariaLabel": "以 {{shortcut}} 遣讯",
+        "hintModifierEnter": "{{shortcut}} 则遣，Enter 则换行。"
+      },
+      "followUp": {
+        "label": "行中遣讯之法",
+        "hintQueue": "差事行中，遣钮与 {{send}} 皆排队。",
+        "hintSteer": "差事行中，遣钮与 {{send}} 皆插话于今之差事。",
+        "ariaLabel": "差事行中遣讯之法",
+        "options": {
+          "queue": "排队",
+          "steer": "插话"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -8240,6 +8251,8 @@
         "subscribeMessageDetail": "收已存之君讯与 AI 之答；附件另循读取与交接之途。",
         "subscribeToolExecution": "工具行事",
         "subscribeToolExecutionDetail": "收工具之名、输入、结果与过误；惟观之，不改其行。",
+        "subscribeNativeRecovery": "原生复行之事",
+        "subscribeNativeRecoveryDetail": "收重试、压缩上下文及任务止息之状态。",
         "subscribeTaskState": "差事状态",
         "subscribeTaskStateDetail": "收差事运行、候答、完毕、归档及隐显之变。",
         "subscribeActivity": "旁听 AI 何时思之、何时候君",
@@ -9819,6 +9832,41 @@
       },
       "providerTooltip": "取此差事今所选之供方；未指定则留空。",
       "tokensTooltip": "仅计此差事于{{range}}内所生之 token。"
+    },
+    "auxiliary": {
+      "title": "辅助模型用量",
+      "label": "辅助请求",
+      "purpose": "用途",
+      "requests": "已记请求",
+      "description": "已计入总 Token。惟录上游所报用量；未报者及往日遗漏，皆不估补。",
+      "sources": {
+        "title": "拟题",
+        "task-summary": "任务撮要",
+        "prompt-prediction": "输入建议",
+        "working-status": "进展文案",
+        "help": "问答释疑",
+        "bot-creation": "建立伙伴",
+        "bot-opening": "伙伴开场",
+        "group-planning": "群组筹画",
+        "ambient-reply": "判断回复",
+        "auto-review": "自动复核",
+        "tool-loop-review": "工具循环复核",
+        "memory-review": "记忆复核",
+        "git-summary": "变更撮要",
+        "hook-generation": "自动化脚本",
+        "automation-verification": "导入验证",
+        "plugin-text": "法器文字请求",
+        "voice-dialogue": "语音交谈",
+        "voice-exit": "判断结束语音",
+        "voice-refinement": "语音润饰",
+        "dictionary-learning": "词典习得",
+        "embedding-query": "向量检索",
+        "embedding-index": "向量索引",
+        "web-search": "网页搜寻",
+        "provider-probe": "连线测试",
+        "vision-bridge": "视觉桥",
+        "auxiliary": "其他辅助请求"
+      }
     }
   },
   "usageDashboard": {
@@ -13638,9 +13686,8 @@
     "sendButton": {
       "send": "遣讯",
       "queue": "排队遣",
-      "queueTooltip": "点之则排队遣；按 {{shortcut}} 插话，不中断今之差事",
-      "queueTooltipSendMode": "点之则排队；按 {{shortcut}} 遣此讯",
-      "stop": "止生成"
+      "stop": "止生成",
+      "steer": "插话于今之差事"
     },
     "pluginSetup": {
       "account": {
@@ -14531,6 +14578,13 @@
       "runningWithWorktree_one": "它跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
+    },
+    "followUpHint": {
+      "queueDefault": "差事行中所遣之讯，默从排队。",
+      "steerDefault": "差事行中所遣之讯，默为插话于今之差事。",
+      "switchToSteer": "默改插话",
+      "switchToQueue": "默改排队",
+      "dismiss": "关闭提示"
     }
   },
   "onboarding": {
@@ -16596,6 +16650,36 @@
         "priority": "缓急",
         "activity": "近动",
         "created": "立时"
+      },
+      "inbox": {
+        "thisEvening": "今夕",
+        "tomorrow": "明日",
+        "nextWeek": "下周",
+        "custom": "自定…",
+        "wakeAt": "唤回日期时辰",
+        "timeZone": "本地时辰（{{zone}}）",
+        "invalidTime": "请选择来岁以内之未来日期时辰。",
+        "inbox": "待处理",
+        "working": "进行中",
+        "snoozed": "待后处理",
+        "archived": "已处理",
+        "snooze": "留待后办",
+        "complete": "毕",
+        "wake": "即刻取回",
+        "restore": "恢复任务",
+        "process": "标记已处理（归档）",
+        "empty": "箱中已清",
+        "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
+        "hours": "{{count}} 小时后",
+        "hours_one": "{{count}} 小时后",
+        "hours_other": "{{count}} 小时后"
+      },
+      "taskListMode": {
+        "heading": "任务模式",
+        "tasks": "任务列表",
+        "inbox": "收件箱",
+        "enterInbox": "转至收件箱之式",
+        "leaveInbox": "转至任务列之式"
       }
     },
     "rename": {
@@ -16888,6 +16972,7 @@
         "menuSave": "存之",
         "menuInsertTable": "插表格",
         "externalChangeBlocked": "卷已为外部所改，自动保存已暂停。确认后可亲手存之以覆盖。",
+        "targetChanged": "档案指向已变更，目前的草稿仍保留在编辑器中。请先复制草稿，再重新开启档案",
         "tableMenu": {
           "addRowAbove": "上增一行",
           "addRowBelow": "下增一行",
@@ -19644,7 +19729,8 @@
           "expired": "已逾期",
           "voided": "已废"
         }
-      }
+      },
+      "viewUsage": "览耗用"
     },
     "orders": {
       "title": "订单录",
@@ -21439,6 +21525,27 @@
         "allow": "允许",
         "deny": "拒绝"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "闭",
+    "taskInbox": {
+      "title": "识收件箱",
+      "lead": "任务依其状自分为待处理、进行中、待后处理、已处理。善用之道，在常清其箱：事毕者点「毕」，未及者待后处理。",
+      "pending": {
+        "title": "待处理",
+        "body": "任务事竣有果，或待君答，则现于此。"
+      },
+      "done": {
+        "title": "毕",
+        "body": "事毕点「毕」，任务移入已处理；后有新进，自返其处。"
+      },
+      "snooze": {
+        "title": "待后处理",
+        "body": "今未暇则择一时，时至自返待处理。"
+      },
+      "start": "始用",
+      "note": "可随时以侧栏顶端之钮返任务列。"
     }
   },
   "firstRunGuide": {

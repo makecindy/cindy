@@ -305,3 +305,32 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     expect(fs.existsSync(bindingFile)).toBe(false);
   });
 });
+
+/**
+ * 共享凭证连不上时的报错归因(#10301)。
+ *
+ * 系统侧 Codex 已登录、但 Cindy 建不出指向它的共享链接(Windows 没有创建符号链接的
+ * 权限时 symlink 直接 EPERM)—— 凭证是「连不上」而不是「没登录」。旧实现把这个结论
+ * 只写进日志,readState 于是回落到通用 no_oauth / 无 reason,界面只显示「回复未完成」,
+ * 用户既看不出卡点,也无法行动(反复重登解决不了链接权限)。
+ */
+describe('codex shared auth link unavailable 的报错归因', () => {
+  it('连不上已登录的系统凭证时报可执行的原因,而不是通用未登录', async () => {
+    const { systemAuth, localAuth } = fixture();
+    h.dataOwnerId = 'owner-a';
+    writeStableProjectionOwner('owner-a');
+    // Windows 无符号链接权限:链接根本建不出来。
+    vi.spyOn(fs.promises, 'symlink').mockRejectedValue(
+      Object.assign(new Error('operation not permitted'), { code: 'EPERM' }),
+    );
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState()).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'codex_shared_auth_link_unavailable',
+    });
+    // 这条路径绝不搬走或复制 token:系统凭证原样保留,本地没有半截凭证。
+    expect(fs.existsSync(systemAuth)).toBe(true);
+    expect(fs.existsSync(localAuth)).toBe(false);
+  });
+});

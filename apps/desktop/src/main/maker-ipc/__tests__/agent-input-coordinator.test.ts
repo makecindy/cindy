@@ -5564,7 +5564,20 @@ describe('AgentInputCoordinator send transaction', () => {
       clientId: 'q-head',
     });
 
-    await h.coordinator.retryLastError(sid);
+    // The device picker can still hold the ID of a previously withdrawn head.
+    await h.coordinator.retryLastError(sid, 'previous-head');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).recovery).toMatchObject({ clientId: 'q-head' });
+
+    const send = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementationOnce(async (...args) => {
+      expect(h.coordinator.takeRetrySwitchRevision(sid, 'previous-head')).toBeUndefined();
+      expect(h.coordinator.takeRetrySwitchRevision(sid, 'q-head')).toBe(2);
+      expect(h.coordinator.takeRetrySwitchRevision(sid, 'q-head')).toBeUndefined();
+      return send(...args);
+    });
+    await h.coordinator.retryLastError(sid, 'q-head', 2);
     await flush();
 
     // 队首消息从未送达 agent,续跑语义不成立 —— 必须原样重发。
@@ -13896,6 +13909,7 @@ describe('Orca report durable recovery', () => {
   // Exercise the real host scheduling callback with its guard and bookkeeping;
   // a hand-written retry timer would miss pending-token and retry-budget bugs.
   function wireHostReportRecovery(h: ReturnType<typeof createHarness>) {
+    const workerInputs = new WeakSet<object>();
     const botFallbackInputs = new WeakSet<object>();
     const scheduledQuotaInputs = new WeakSet<object>();
     const runtimeFallback = vi.fn(async () => ({ session: null, outcome: 'unchanged' as const }));
@@ -13907,7 +13921,7 @@ describe('Orca report durable recovery', () => {
     });
     const host = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs, scheduledQuotaInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      botFallbackInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
       getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
       maybeApplySessionRuntimeFallback: runtimeFallback,
@@ -13929,8 +13943,64 @@ describe('Orca report durable recovery', () => {
       `return ({${source.slice(automaticStart, automaticEnd)}}).onAutomaticEnqueue;`,
       { compilerOptions: { target: ScriptTarget.ES2022 } },
     ).outputText)(...Object.values(deps)));
-    return { runtimeFallback, botFallbackInputs, scheduledQuotaInputs };
+    return { runtimeFallback, botFallbackInputs, scheduledQuotaInputs, workerInputs };
   }
+
+  // 2026-11-17: a worker can lose the runtime after an irreversible tool has
+  // run but before its result is persisted. Even zero observed progress must CONTINUE.
+  it.each(['direct', 'queued'] as const)('continues an unfinished %s Worker assignment on the rebuilt runtime', async mode => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const { workerInputs } = wireHostReportRecovery(h);
+      const runtime = { instanceId: 'worker-runtime' };
+      h.setTurnSessionIdentity(runtime);
+      h.setTurnGeneration(1);
+      h.setHasAssistantProgressAfter(async () => false);
+      const item = makeItem('assignment', 'publish the approved change');
+      item.createOpts.orcaRole = 'worker';
+      workerInputs.add(item.createOpts);
+      if (mode === 'queued') {
+        h.coordinator.enqueue('worker', item);
+        await flush();
+        h.setRunning(false);
+      } else {
+        h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+      }
+
+      h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
+        { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
+      expect(h.coordinator.isContinuationOnlyAutoResume('worker')).toBe(true);
+      h.coordinator.onSessionClosed('worker', { preserveAutoResumeIntent: true });
+      h.setTurnSessionIdentity({ instanceId: 'replacement' });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(mode === 'direct' ? 1 : 2);
+      expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['stopped', 'rejected', 'replaced', 'requested-close', 'ordinary-task'] as const)(
+    'does not continue an ineligible worker EOF (%s)', async boundary => {
+      const h = createHarness();
+      const { workerInputs } = wireHostReportRecovery(h);
+      const runtime = { instanceId: 'old' };
+      h.setTurnSessionIdentity(runtime);
+      h.setTurnGeneration(1);
+      const item = makeItem('old-assignment', 'apply approved change');
+      item.createOpts.orcaRole = 'worker';
+      if (boundary !== 'ordinary-task') workerInputs.add(item.createOpts);
+      const revoke = h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+      if (boundary === 'stopped') h.coordinator.stop('worker');
+      if (boundary === 'rejected') revoke();
+      if (boundary === 'replaced') h.setTurnSessionIdentity({ instanceId: 'new' });
+      h.coordinator.onTurnEvent('worker', 'error', boundary === 'requested-close'
+        ? 'Session closed before the current turn delivered a terminal event'
+        : 'Session event loop stopped unexpectedly without a terminal event',
+        { reason: 'session_event_loop_crashed' }, { sessionInstanceId: 'old', sessionTurnGeneration: 1 });
+      expect(h.coordinator.isAutoResumePending('worker')).toBe(false);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    },
+  );
 
   // Unit regression: the real coordinator must give a remote Bot Schedule quota
   // terminal to its wait owner before candidate fallback can switch suppliers.
