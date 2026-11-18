@@ -21,6 +21,7 @@ Strong signals: user says *"I prefer X"*, *"don't X"*, *"always X"*, *"never X"*
 - Git history — `git log` / `git blame`
 - Anything already in `CLAUDE.md` / `AGENTS.md`
 - Ephemeral state: in-progress work, current task progress (use plan/todos)
+- State an automation or recurring check keeps between runs ("already notified about X", last run's baseline or counters) — keep it in that automation's own notes or files
 - Tool output content verbatim — only persist things the user said or you reasoned about
 
 If you cannot write a one-line `description` hook for the index, the memory isn't worth saving. Time references in `body` should be absolute (`2026-05-10`), not relative.

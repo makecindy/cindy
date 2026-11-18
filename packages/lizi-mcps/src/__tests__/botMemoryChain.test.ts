@@ -652,6 +652,28 @@ describe('Cindy 记忆工具:账号级与项目两份之间的路由', () => {
     expect(await stored()).toEqual({ user: ['feedback_style.md'], project: [] });
   });
 
+  // 实际数据里出现过: 两个任务各自拿着启动时的索引快照, 同一天在同一份记忆里存下两条说同一件事
+  // 的记忆。新建时把这份记忆里刚存的其它条目带回去, 模型才有机会发现并合并。
+  it('新建时带回这份记忆里最近 24 小时保存的其它条目; 更新、另一份记忆、更早的条目不带', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-16T00:00:00.000Z'));
+      await call('memory_write', entry('feedback', 'old-rule'));
+      vi.setSystemTime(new Date('2026-11-18T00:41:00.000Z'));
+      await call('memory_write', entry('feedback', 'report-tmpdir'));
+      await call('memory_write', entry('feedback', 'everywhere', { scope: 'user' }));
+
+      vi.setSystemTime(new Date('2026-11-18T04:01:00.000Z'));
+      const created = data(await call('memory_write', entry('feedback', 'report-locale')));
+      expect(created.savedRecently).toEqual([{ filename: 'feedback_report-tmpdir.md', title: 'title report-tmpdir' }]);
+
+      const updated = data(await call('memory_write', entry('feedback', 'report-locale', { mode: 'update' })));
+      expect(updated).not.toHaveProperty('savedRecently');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('读 / 删不传 scope:两份都找,跟着文件所在的那一份走', async () => {
     await call('memory_write', entry('user', 'nickname'));
     await call('memory_write', entry('feedback', 'repo-style'));

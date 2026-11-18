@@ -22,7 +22,24 @@ import { z } from 'zod';
 import { shardNameSchema, memoryScopeArg, storeForNew, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
-import type { WriteOptions, WriteResult } from '@cindy/maker-core';
+import type { MakerMemoryStore, WriteOptions, WriteResult } from '@cindy/maker-core';
+
+const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RECENT_MAX = 5;
+
+/** 这份记忆里最近 24 小时保存的其它条目 (新的在前, 至多 5 条); 内部的 digest 不算。 */
+async function recentlySaved(
+  store: MakerMemoryStore,
+  justWritten: string,
+): Promise<Array<{ filename: string; title: string }>> {
+  const since = Date.now() - RECENT_WINDOW_MS;
+  return (await store.list())
+    .filter((record) => record.filename !== justWritten && record.frontmatter.type !== 'digest')
+    .filter((record) => (Date.parse(record.frontmatter.updatedAt) || 0) >= since)
+    .sort((a, b) => b.frontmatter.updatedAt.localeCompare(a.frontmatter.updatedAt))
+    .slice(0, RECENT_MAX)
+    .map((record) => ({ filename: record.filename, title: record.frontmatter.title }));
+}
 
 export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: MemoryMcpDeps): void {
   registry.register({
@@ -38,7 +55,9 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
       ' 不传时 user 类进 user, 其余进 project。' +
       ' 写入后 MEMORY.md 自动重建; 软超 size 上限返 warning + warningDetail' +
       ' (sizeBytes/softLimitBytes/hardLimitBytes), 按超限幅度决定不动 / 微剪 / memory_consolidate;' +
-      ' 会让索引越过硬上限的写入被拒绝 (INVALID_PARAMS), 先合并或删除再写。',
+      ' 会让索引越过硬上限的写入被拒绝 (INVALID_PARAMS), 先合并或删除再写。' +
+      ' 新建成功后若返回 savedRecently, 那是这份记忆里最近 24 小时保存的其它条目 (你上下文里的索引快照可能还没有它们):' +
+      ' 其中有说同一件事的, 用 memory_consolidate 合并, 不要留两条。',
     inputShape: {
       type: z.enum(['user', 'feedback', 'project', 'reference']),
       name: shardNameSchema,
@@ -64,7 +83,14 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
         written = await target.store.write(args as WriteOptions);
         // 伙伴只有一份记忆, 回执不带 scope; Cindy 记忆才分账号级和项目。
         if (ctx.scopes.user) writtenScope = target.scope;
-        return { ...written, scope: target.scope };
+        // 索引是任务启动时的快照: 别的任务 (或本任务更早) 刚存下的条目模型看不到, 实际数据里
+        // 同一天存出过两条说同一件事的记忆。新建时把这份记忆里刚存的其它条目告诉它, 由它判断
+        // 是否重复 —— 宿主不做相似度判断 (标题相近的常常是两件事)。
+        const savedRecently = args.mode === 'update' || args.mode === 'append'
+          ? []
+          // 只是提示: 记忆已经存好, 列不出来也不能把这次写入报成失败 (账号边界由 withStore 收尾复核)。
+          : await recentlySaved(target.store, written.filename).catch(() => []);
+        return { ...written, scope: target.scope, ...(savedRecently.length ? { savedRecently } : {}) };
       });
       if (!result.isError && written) saved?.({ key: written.filename, title: args.title as string,
         action: args.mode === 'update' || args.mode === 'append' ? 'updated' : 'created',
