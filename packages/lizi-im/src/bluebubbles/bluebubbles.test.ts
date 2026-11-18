@@ -1085,6 +1085,9 @@ describe('BlueBubbles local ingress', () => {
     await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
     f.send.mockRejectedValueOnce(new Error('response lost'));
     await expect(f.im.sendText(f.chat.guid, 'outgoing')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    // The outgoing copy lacks both a POST result and a temporary GUID. Its
+    // matching content remains ambiguous, while distinct human text can proceed.
+    f.message('late-echo', { isFromMe: true, handle: undefined, text: 'outgoing' });
     f.message('manual', { isFromMe: true, handle: undefined });
     await f.webhook('manual');
     vi.mocked(f.api.history).mockRejectedValueOnce(new Error('history unavailable'));
@@ -1098,14 +1101,58 @@ describe('BlueBubbles local ingress', () => {
     f.message('manual-after-restart', { isFromMe: true, handle: undefined });
     await f.im.init();
     expect(f.received.map(event => event.messageId)).toEqual(['manual', 'manual-after-restart']);
-    // A late echo can carry the correlation ID in history but omit it on lookup.
-    f.message('late-echo', { isFromMe: true, handle: undefined });
+    // Only the later positive correlation settles this pending copy.
+    expect(f.state().inbox['late-echo'].state).toBe('pending');
+    f.message('same-text-manual', { isFromMe: true, handle: undefined, text: 'outgoing' });
+    await f.im.reconcile();
+    expect(f.state().inbox['same-text-manual'].state).toBe('pending');
     const row = await f.api.message('late-echo');
     vi.mocked(f.api.history).mockResolvedValueOnce([{ ...row, tempGuid: f.send.mock.calls[0]![2] }]);
     await f.im.reconcile();
     expect(f.state().inbox['late-echo'].state).toBe('ignored');
+    await vi.waitFor(() => expect(f.received.map(event => event.messageId)).toEqual(['manual', 'manual-after-restart', 'same-text-manual']));
     expect(f.im.health().uncertainSends).toBe(0);
     expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
+  // Tier 1, #11402: an uncertain attachment has no comparable text digest.
+  // Its caption or missing metadata must not release it as fresh input.
+  it('isolates a possible file echo while delivering verified plain text', async () => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-bb-send-'));
+    try {
+      const file = path.join(dir, 'sample.txt');
+      await fs.writeFile(file, 'sample');
+      vi.spyOn(f.api, 'sendFile').mockRejectedValueOnce(new Error('no response'));
+      expect((await f.im.sendFile(f.chat.guid, file)).ok).toBe(false);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+    const self = { isFromMe: true, handle: undefined };
+    f.message('file-copy', { ...self, text: 'caption', attachments: [{ guid: 'attachment' }] });
+    f.message('incomplete', { ...self, text: null });
+    f.message('plain-text', { ...self, attachments: [] });
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['plain-text']);
+    expect(f.im.health().uncertainSends).toBe(1);
+  });
+
+  // Tier 1, #11402: scans cannot recover a missing or obsolete comparison key.
+  // The journal survives restarts and still admits independently identified incoming messages.
+  it.each(['legacy', 'rotated-key'])('keeps unidentifiable self input pending with a %s receipt', async scenario => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    f.send.mockRejectedValueOnce(new Error('no response'));
+    await expect(f.im.sendText(f.chat.guid, 'sample text')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    await f.im.dispose();
+    if (scenario === 'legacy') delete Object.values(f.state().outbox)[0]!.echoSignature;
+    else f.secrets.set('test-bluebubbles-echo-key', 'replacement-test-key');
+    f.message('ambiguous', { isFromMe: true, handle: undefined });
+    f.message('from-peer', { isFromMe: false });
+    await f.im.init();
+    expect(f.received.map(event => event.messageId)).toEqual(['from-peer']);
+    expect(f.state().inbox.ambiguous.state).toBe('pending');
   });
 
   // Tier 1, #11402: a verified error echo identifies the outgoing GUID before

@@ -1,3 +1,6 @@
+import { createHmac } from 'node:crypto';
+import type { BlueBubblesMessage } from './api.js';
+
 /** Receipt metadata only. Host owns atomic, account-scoped persistence. */
 export interface BlueBubblesState {
   version: 1;
@@ -8,7 +11,9 @@ export interface BlueBubblesState {
   inbox: Record<string, { receivedAt: number; state: 'pending' | 'dispatching' | 'accepted' | 'ignored';
     echoHint?: { id: string; failed: boolean };
     stop?: { chatId: string; sentAt: number; before: string[] } }>;
-  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string; failed?: true }>;
+  outbox: Record<string, { chatId: string; state: 'sending' | 'sent' | 'unknown'; messageId?: string; failed?: true;
+    /** Optional on old journals. Only retained while awaiting an authoritative ID. */
+    echoSignature?: string }>;
 }
 export type BlueBubblesReceiptUpdate =
   | { kind: 'inbox'; id: string; value: BlueBubblesState['inbox'][string] }
@@ -32,6 +37,8 @@ export function applyBlueBubblesReceiptUpdate(state: BlueBubblesState, update: B
   }
   else if (update.kind === 'outbox' && update.value && typeof update.value.chatId === 'string'
     && ['sending', 'sent', 'unknown'].includes(update.value.state)
+    && (update.value.echoSignature === undefined || update.value.echoSignature === 'file'
+      || (typeof update.value.echoSignature === 'string' && /^[a-f0-9]{64}\.[a-f0-9]{64}$/.test(update.value.echoSignature)))
     && (update.value.failed === undefined || (update.value.failed === true && update.value.state === 'unknown'
       && typeof update.value.messageId === 'string' && !!update.value.messageId))) state.outbox[update.id] = update.value;
   else throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
@@ -47,7 +54,13 @@ export class BlueBubblesReceipts {
   private readonly outgoingChats = new Map<string, string>();
   private readonly unresolved = new Set<string>();
   private readonly stops = new Map<string, { sentAt: number; before: Set<string> }>();
-  constructor(private readonly storage: BlueBubblesStateStorage, now: number) {
+  private readonly signatureKey?: Buffer;
+  private readonly signaturePrefix?: string;
+  constructor(private readonly storage: BlueBubblesStateStorage, now: number, echoKey?: string) {
+    if (echoKey) {
+      this.signatureKey = createHmac('sha256', echoKey).update('BlueBubbles echo content v1').digest();
+      this.signaturePrefix = createHmac('sha256', echoKey).update('BlueBubbles echo key v1').digest('hex') + '.';
+    }
     const saved = storage.read();
     if (saved && (saved.version !== 1 || !Number.isFinite(saved.activatedAt)
       || !saved.cursors || !saved.inbox || !saved.outbox)) throw new Error('BLUEBUBBLES_INVALID_RECEIPTS');
@@ -172,8 +185,29 @@ export class BlueBubblesReceipts {
   isOutgoing(chat: string, guid: string, tempGuid?: string): boolean {
     return this.outgoingChats.get(guid) === chat || (!!tempGuid && this.state.outbox[tempGuid]?.chatId === chat);
   }
-  hasPendingCorrelation(chat: string): boolean {
-    for (const id of this.awaitingCorrelation) if (this.state.outbox[id]?.chatId === chat) return true;
+  textSignature(text: string): string | undefined {
+    if (!this.signatureKey || !this.signaturePrefix) return undefined;
+    const normalized = text.normalize('NFKC').replace(/\s+/gu, ' ').trim();
+    return this.signaturePrefix + createHmac('sha256', this.signatureKey).update(normalized).digest('hex');
+  }
+  mayBeUnconfirmedEcho(chat: string, message: BlueBubblesMessage): boolean {
+    let signature: string | undefined;
+    for (const id of this.unsettledSends) {
+      const row = this.state.outbox[id];
+      if (row.chatId !== chat) continue;
+      // Before a complete scan, even a different-looking message can acquire
+      // an authoritative GUID from the in-flight POST or the history response.
+      if (this.awaitingCorrelation.has(id)) return true;
+      const expected = row.echoSignature;
+      if (!expected || !message.text?.trim() || message.text.includes('\uFFFC') || message.attachments?.length) return true;
+      if (expected === 'file') {
+        if (!Array.isArray(message.attachments)) return true;
+        continue; // Verified plain text with an explicitly empty attachment list.
+      }
+      if (!this.signaturePrefix || !expected.startsWith(this.signaturePrefix)) return true;
+      signature ??= this.textSignature(message.text);
+      if (signature === expected) return true;
+    }
     return false;
   }
   inactiveCorrelationsByChat(active: ReadonlySet<string>): Map<string, string[]> {
