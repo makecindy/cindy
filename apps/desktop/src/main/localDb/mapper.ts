@@ -1,3 +1,4 @@
+import { normalizePrTrigger } from '@cindy/maker-scheduler/pr-trigger';
 import { projectHandoffPreview } from '../maker-ipc/agentHandoff.js';
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 /**
@@ -769,6 +770,16 @@ function parseWebhookSource(value: unknown): Pick<ScheduleWebhookTrigger, 'sourc
   }
 }
 
+function parsePrTrigger(raw: string): Schedule['prTrigger'] {
+  try {
+    const value = JSON.parse(raw);
+    return value === null ? null : normalizePrTrigger(value);
+  } catch {
+    // A damaged or unknown explicit rule never falls back to matching a shell command.
+    return null;
+  }
+}
+
 function parseWebhookTrigger(raw: string | null): ScheduleWebhookTrigger | undefined {
   if (!raw) return undefined;
   try {
@@ -797,6 +808,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     jobConfig: row.jobConfig ?? undefined,
     executionMode: row.executionMode === 'script' ? 'script' : 'agent',
     scriptConfig: parseScriptConfig(row.scriptConfig),
+    ...(row.prTrigger ? { prTrigger: parsePrTrigger(row.prTrigger) } : {}),
     webhookTrigger: parseWebhookTrigger(row.webhookTrigger),
     source: row.source === 'project' ? 'project' : row.source === 'bot' ? 'bot' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
@@ -858,6 +870,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     jobConfig: s.jobConfig ?? null,
     executionMode: s.executionMode ?? 'agent',
     scriptConfig: serializeScriptConfig(s.scriptConfig),
+    prTrigger: s.prTrigger === undefined ? null : JSON.stringify(s.prTrigger),
     webhookTrigger: s.webhookTrigger ? JSON.stringify(s.webhookTrigger) : null,
     source: s.source ?? 'user',
     projectConfigId: s.projectConfigId ?? null,
@@ -917,6 +930,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'jobConfig')) out.jobConfig = patch.jobConfig ?? null;
   if (hasKey(patch, 'executionMode')) out.executionMode = patch.executionMode ?? 'agent';
   if (hasKey(patch, 'scriptConfig')) out.scriptConfig = serializeScriptConfig(patch.scriptConfig);
+  if (hasKey(patch, 'prTrigger')) out.prTrigger = patch.prTrigger === undefined ? null : JSON.stringify(patch.prTrigger);
   if (hasKey(patch, 'webhookTrigger')) out.webhookTrigger = patch.webhookTrigger ? JSON.stringify(patch.webhookTrigger) : null;
   if (hasKey(patch, 'source')) out.source = patch.source ?? 'user';
   if (hasKey(patch, 'projectConfigId')) out.projectConfigId = patch.projectConfigId ?? null;
@@ -1053,7 +1067,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
-    triggerSource: row.triggerSource === 'webhook' ? 'webhook' : undefined,
+    triggerSource: row.triggerSource === 'webhook' || row.triggerSource === 'pr-status' || row.triggerSource === 'pr-check' ? row.triggerSource : undefined,
     readAt: row.readAt ?? undefined,
     heartbeatAt: row.heartbeatAt ?? undefined,
   };

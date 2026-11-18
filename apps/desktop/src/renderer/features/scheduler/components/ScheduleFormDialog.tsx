@@ -21,6 +21,9 @@ import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
+import { Select } from '@/components/ui/select';
+import { PR_CHANGES, type PrChange } from '@cindy/maker-scheduler/pr-trigger';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -310,7 +313,7 @@ export function ScheduleFormDialog({
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
-  const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const triggerMode = form.prEnabled ? 'pr' : form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
   const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
 
   const initialId = initial?.id;
@@ -1169,12 +1172,14 @@ export function ScheduleFormDialog({
                           onValueChange={(mode) => {
                             if (mode === triggerMode) return;
                             preserveTriggerScrollPosition();
+                            if (mode === 'pr' || form.prEnabled) setField('prEnabled', mode === 'pr');
                             setField('webhookEnabled', mode === 'webhook');
                             setField('manual', mode !== 'automatic');
                             setField('recurring', mode !== 'manually');
                           }}
                           options={[
                             { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
+                            ...(!isProjectAutomationMode ? [{ value: 'pr', label: t('scheduler.prTrigger.label') }] : []),
                             { value: 'manually', label: t('scheduler.editor.fields.manually') },
                             ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
                               ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
@@ -1265,6 +1270,30 @@ export function ScheduleFormDialog({
                           </Popover>
                         )}
                       </div>
+                      {form.prEnabled && (
+                        <div className="flex flex-col gap-3">
+                          <FormField label={t('scheduler.prTrigger.url')}>
+                            {(control) => <Input {...control} value={form.prUrl ?? ''} onChange={value => setField('prUrl', value)}
+                              placeholder="https://github.com/owner/repo/pull/123" />}
+                          </FormField>
+                          <GithubAppCard automation timedPrCheck={!form.manual} repositories={[(form.prUrl ?? '').split('/').slice(3, 5).join('/')]} />
+                          <FormField label={t('scheduler.prTrigger.condition')}>
+                            {(control) => <Select {...control} label={t('scheduler.prTrigger.condition')} value={form.prChange ?? 'any'}
+                              options={PR_CHANGES.map(value => ({ value, label: t(`scheduler.prTrigger.${value}`) }))}
+                              onValueChange={value => setField('prChange', value as PrChange)} />}
+                          </FormField>
+                          <label className="flex items-center gap-2 text-13 text-[var(--text-primary)]">
+                            <Checkbox checked={!form.manual} onChange={event => {
+                              const enabled = event.currentTarget.checked;
+                              setField('manual', !enabled);
+                              if (enabled) setField('recurring', true);
+                            }} />
+                            {t('scheduler.prTrigger.timed')}
+                          </label>
+                          {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}
+                            onChangeSchedule={value => { setField('cronExpr', value.cronExpr); setField('intervalMs', value.intervalMs); }} />}
+                        </div>
+                      )}
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
                       {webhookSettingsVisible && form.webhookPreset !== 'github-app' && <WebhookAccountManager allowOpenSchedule={false} />}
                       {webhookSettingsVisible && (

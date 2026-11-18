@@ -36,7 +36,6 @@ const host = vi.hoisted(() => ({
   refresh: vi.fn(), snapshot: vi.fn(), quiet: vi.fn(), active: vi.fn(), decision: vi.fn(), member: vi.fn(),
   complete: vi.fn(), changed: vi.fn(),
 }));
-const accessMigration = vi.hoisted(() => ({ ids: vi.fn(), keep: vi.fn() }));
 const listProviders = vi.hoisted(() => vi.fn());
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
@@ -69,8 +68,7 @@ vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true,
-  onRemoteProviderAccessChanged: () => () => undefined,
-  sharedProviderIdsForRevert: accessMigration.ids, keepSharedProvidersOpen: accessMigration.keep }));
+  onRemoteProviderAccessChanged: () => () => undefined }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: remember }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
@@ -242,39 +240,6 @@ beforeEach(() => {
 });
 
 afterEach(() => { setBroadcastTapListener(null); stopProviderShareRuntime(); });
-
-// #10398 review / unit: content deduplication must not strand the one-time access
-// migration. Existing startup tests always had an incomplete snapshot. Exercise
-// the actual runtime subscription across unavailable local input and a failed write.
-it('retries unfinished access migration on unchanged refreshes and stops after success', async () => {
-  stopProviderShareRuntime();
-  const refreshed = new Set<() => void>();
-  host.changed.mockImplementation((listener, options) => {
-    if (options?.refreshed) refreshed.add(listener);
-    return () => refreshed.delete(listener);
-  });
-  const refresh = () => { for (const listener of refreshed) listener(); };
-  startProviderShareRuntime(vi.fn());
-  expect(accessMigration.keep).not.toHaveBeenCalled();
-  host.complete.mockReturnValue([{ providerId: 'openai' }]);
-  accessMigration.ids.mockReturnValue(null); // Legacy account pool cannot be read yet.
-  refresh();
-  expect(accessMigration.keep).not.toHaveBeenCalled();
-  const ids = new Set(['openai', 'legacy-account']);
-  accessMigration.ids.mockReturnValue(ids);
-  accessMigration.keep.mockRejectedValueOnce(new Error('synthetic unavailable'));
-  refresh(); refresh();
-  expect(accessMigration.keep).toHaveBeenCalledExactlyOnceWith(ids);
-  await new Promise<void>(resolve => setImmediate(resolve));
-  accessMigration.keep.mockResolvedValue(undefined);
-  refresh();
-  await new Promise<void>(resolve => setImmediate(resolve));
-  refresh(); refresh();
-  expect(accessMigration.keep).toHaveBeenCalledTimes(2);
-  expect(accessMigration.ids).toHaveBeenCalledTimes(3);
-  stopProviderShareRuntime();
-  expect(refreshed.size).toBe(0);
-});
 
 // #9437 / unit: real share entry points must not show the first hidden data host.
 // Earlier management coverage always returned no BrowserWindows. The shared
@@ -1049,6 +1014,16 @@ describe('remote model access management', () => {
       { id: 'image', name: 'Image' }, { id: 'video', name: 'Video' },
       { id: 'audio', name: 'Audio' }, { id: 'embedding', name: 'embedding' },
     ] });
+  });
+  // PR #11312 review (Codex P2): a merged connection reads its pool's provider-wide range, so a range saved on
+  // the old id would report success with no effect. Refuse it; member grants on the old share stay editable.
+  it('refuses a provider-wide range on a merged connection but keeps member grants', async () => {
+    listProviders.mockResolvedValue([{ id: 'anthropic', subscriptionPoolAlias: true, models: { 'claude-code': [{ id: 'small', name: 'Small' }] } }]);
+    await expect(executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', models: [] }))
+      .rejects.toThrow('PRECONDITION_FAILED');
+    expect(modelAccess.set).not.toHaveBeenCalled();
+    await executeProviderShareManagementCommand({ action: 'set-model-access', providerId: 'anthropic', memberId: 'm1', models: ['small'] });
+    expect(modelAccess.set).toHaveBeenCalledWith('anthropic', ['small'], 'm1', expect.any(Function), undefined, expect.any(Function));
   });
   it('refuses to modify a person who belongs to a different provider', async () => {
     host.snapshot.mockReturnValue([{ providerId: 'other', members: [{ memberId: 'm1' }] }]);

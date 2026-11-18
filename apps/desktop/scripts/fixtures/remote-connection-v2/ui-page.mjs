@@ -32,8 +32,6 @@ export default {
     },
     empty: { about: 'Only this computer, master switch off', storage: V2_ON },
     'legacy-off': { about: 'Agent-Net off: no topology; 我的设备 and the relay route are unchanged' },
-    'model-access-off': { about: '「让我的其他电脑用本机模型」 under the master switch, off by default; turning it on' },
-    'model-access-on': { about: 'Already turned on by the user' },
     'remote-switch': {
       about: 'Prototype: switch another computer between Device Link and Agent-Net from its topology card (switching, reverted, outdated, phone, control off, already Agent-Net)',
       storage: V2_ON,
@@ -80,19 +78,6 @@ export default {
         await ui.capture('unknown-app-card');
         await page.keyboard.press('Escape');
         await page.getByText(`${await ui.t('settings.devices.apps.cindyFriend')} · Travel Mac`, { exact: true }).waitFor();
-      }
-      return;
-    }
-    if (ui.case === 'model-access-off' || ui.case === 'model-access-on') {
-      const card = page.getByTestId('own-computer-model-access');
-      await card.waitFor();
-      const toggle = card.getByRole('switch');
-      assert.equal(await toggle.getAttribute('aria-checked'), ui.case === 'model-access-on' ? 'true' : 'false');
-      await ui.capture('card');
-      if (ui.case === 'model-access-off') {
-        await toggle.click();
-        await page.waitForFunction(() => document.querySelector('[data-testid="own-computer-model-access"] [role="switch"]')?.getAttribute('aria-checked') === 'true');
-        await ui.capture('turned-on');
       }
       return;
     }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 import { useDeviceLinkReconnectEpoch } from '../features/device-link/useDeviceLinkReconnectEpoch';
 import { CLAUDE_QUOTA_STATE_READ, isClaudeQuotaClear } from '../../shared/claudeQuotaState';
@@ -45,6 +46,43 @@ export type RemoteCodexAccountUsagePayload = RateLimitSnapshot & {
   appServerBuckets?: Record<string, RateLimitSnapshot> | null;
 };
 
+// The native group card and the task quota projection need different result
+// shapes, but read exactly the same account. Share only the running RPC, not a
+// cached result or a retry: each mirror keeps its own observation/cancel fences.
+const nativeQuotaReads = new Map<string, { promise: Promise<unknown>; stop: () => void }>();
+function readRemoteCodexNativeQuota(deviceId: string, providerId = 'openai', scheduling?: { background?: boolean }): Promise<unknown> {
+  const owner = getDataOwnerGeneration();
+  const key = JSON.stringify([owner.dataOwnerId, owner.generation, deviceId, providerId, scheduling?.background === true]);
+  const pending = nativeQuotaReads.get(key);
+  if (pending) return pending.promise;
+  const api = window.electronAPI.deviceLink;
+  let resolve!: (value: unknown) => void;
+  let reject!: (error: unknown) => void;
+  const response = new Promise<unknown>((done, fail) => { resolve = done; reject = fail; });
+  const entry = { promise: response.finally(() => {
+    entry.stop();
+    if (nativeQuotaReads.get(key) === entry) nativeQuotaReads.delete(key);
+  }), stop: () => {} };
+  nativeQuotaReads.set(key, entry);
+  entry.stop = api.onRemotePush((push, ownerStamp) => {
+    if (push.deviceId !== deviceId || !isDataOwnerGenerationCurrent(owner)
+      || !isDeviceLinkRemotePushCurrent(push, ownerStamp)) return;
+    const cleared = providerId === 'openai' && push.channel === 'usage:codex-account-changed' && push.payload === null
+      || push.channel === 'usage:codex-provider-account-changed' && push.payload !== null
+        && typeof push.payload === 'object' && 'providerId' in push.payload && push.payload.providerId === providerId
+        && 'snapshot' in push.payload && push.payload.snapshot === null;
+    // A new account observation must not join a pre-clear read. Its existing
+    // callers still settle normally and their mirror revisions discard it.
+    if (cleared && nativeQuotaReads.get(key) === entry) nativeQuotaReads.delete(key);
+  });
+  try {
+    void api.invoke(deviceId, 'maker:usage:codex-rate-limits', providerId === 'openai'
+      ? [providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
+    ...(scheduling ? [scheduling] : [])).then(resolve, reject);
+  } catch (error) { reject(error); }
+  return entry.promise;
+}
+
 const codexAccountMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsagePayload>({
   invokeChannel: 'maker:usage:account',
   read: (deviceId, providerId = 'openai', scheduling) => {
@@ -63,11 +101,7 @@ const codexNativeRateLimitsMirror = createRemoteDeviceUsageMirror<MobileCodexRat
   invokeChannel: 'maker:usage:codex-rate-limits',
   // Group cards use this richer native result for the default account. An
   // unscoped read returns usable pool quota and can borrow another account.
-  read: (deviceId, providerId = 'openai', scheduling) => window.electronAPI.deviceLink.invoke(
-    deviceId, 'maker:usage:codex-rate-limits', providerId === 'openai'
-      ? [providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
-    ...(scheduling ? [scheduling] : []),
-  ),
+  read: readRemoteCodexNativeQuota,
   pushChannel: 'usage:codex-account-changed',
   defaultProviderId: 'openai',
   providerPushChannel: 'usage:codex-provider-account-changed',
@@ -113,11 +147,7 @@ const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUs
     const matchesProvider = (value: { providerId?: string }) =>
       value.providerId === providerId || (value.providerId === undefined && providerId === 'openai');
     try {
-      const result = await window.electronAPI.deviceLink.invoke(
-        deviceId, 'maker:usage:codex-rate-limits', providerId === 'openai'
-          ? [providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
-        ...(scheduling ? [scheduling] as const : []),
-      ) as MobileCodexRateLimitsResult | null;
+      const result = await readRemoteCodexNativeQuota(deviceId, providerId, scheduling) as MobileCodexRateLimitsResult | null;
       if (result && matchesProvider(result) && result.rateLimits && result.account) {
         const updatedAt = Date.now();
         const buckets = result.rateLimitsByLimitId ?? {
@@ -287,6 +317,8 @@ export function selectRemoteCodexAccountUsage(
 
 /** 供单测重置全部镜像缓存。 */
 export function resetRemoteDeviceUsageMirrorsForTest(): void {
+  for (const entry of nativeQuotaReads.values()) entry.stop();
+  nativeQuotaReads.clear();
   codexAccountMirror.resetForTest();
   codexRateLimitsMirror.resetForTest();
   codexNativeRateLimitsMirror.resetForTest();
