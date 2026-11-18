@@ -617,6 +617,8 @@ withAccountDataAccess（2026-11-17）：新增第 26 项，减少 0 项。
 
 3d 用量记录（2026-11-18）：新增第 39 至 41 项，减少 0 项。
 
+Windows 启动重读（2026-11-18）：新增第 42 项，减少 0 项。
+
 | # | 位置 | 重写了桌面的什么 | 状态 |
 |---|---|---|---|
 | 1 | `agent/context-recovery.ts` `holdsOverflowBroadcast` | `sessionEventDelivery.ts` 压住上下文恢复错误广播的判据 | 保留并有对照测试（`sessionEventPipeline.test.ts`）；第一批改为共用 |
