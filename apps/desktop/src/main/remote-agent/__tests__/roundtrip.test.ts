@@ -61,17 +61,22 @@ vi.mock('node:zlib', async importOriginal => {
   } };
 });
 
-const { historyInvoke, historyOpenLink, historyCloseEpoch, historyCrossRegion, historyLogger } = vi.hoisted(() => {
+const { historyInvoke, historyOpenLink, historyCloseEpoch, historyCloseListeners, historyCrossRegion, historyLogger } = vi.hoisted(() => {
   const noop = () => undefined;
   const logger = { trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop,
     child: () => logger };
   return { historyInvoke: vi.fn(), historyOpenLink: vi.fn(), historyCloseEpoch: vi.fn((_peer?: string) => 0),
-    historyCrossRegion: vi.fn(() => false), historyLogger: logger };
+    historyCloseListeners: new Set<(peer: string) => void>(), historyCrossRegion: vi.fn(() => false), historyLogger: logger };
 });
 vi.mock('../../device-link/index.js', () => ({
   remoteBackgroundInvoke: (...args: unknown[]) => historyInvoke(...args),
   openRemoteLink: (...args: unknown[]) => historyOpenLink(...args),
   getRemoteLinkCloseEpoch: (peer: string) => historyCloseEpoch(peer),
+  onRemoteLinkClosed: (peer: string, listener: () => void) => {
+    const notify = (closedPeer: string) => { if (closedPeer === peer) listener(); };
+    historyCloseListeners.add(notify);
+    return () => { historyCloseListeners.delete(notify); };
+  },
 }));
 vi.mock('../../device-link/providerShareCrossRegion.js', () => ({
   isCrossRegionProviderShareTarget: () => historyCrossRegion(),
@@ -1803,6 +1808,67 @@ describe('shared startup lease budget', () => {
     } finally {
       f.prepare.resolve();
       await live?.close({ reason: 'account-boundary' });
+    }
+  });
+
+  // PR #10895 review / unit: the existing confirmation case delivered started
+  // after invalidation. A hung confirmation and close must still promptly reject,
+  // release this generation and dispose local resources through the real starter.
+  it.each(['owner close', 'access epoch'] as const)('cancels an unconfirmed standby immediately on %s', async boundary => {
+    const f = fixture();
+    const sibling = await f.open('sibling', 'ordinary-device');
+    const siblingRun = [...f.runs.values()][0]!;
+    f.state.blockClose = true;
+    guestPermission.availabilityOwner = { hostDeviceId: 'owner-o', hostOnline: true, standbyOnline: true };
+    vi.spyOn(availability, 'lookupShareAvailability').mockResolvedValue(null);
+    vi.spyOn(availability, 'allocateShareAvailability').mockResolvedValue({
+      deviceId: 'executor-m', generation: f.generation, leaseDurationMs: 30_000,
+    });
+    const release = vi.spyOn(availability, 'reportShareAvailabilityStatus').mockResolvedValue(undefined);
+    const ownerPeer = providerShareHostPeer('startup-budget', 'owner-o');
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === ownerPeer) throw Object.assign(new Error('owner link unavailable'), { code: 'DEVICE_OFFLINE' });
+    });
+    let rejected: unknown;
+    let live: Awaited<ReturnType<typeof f.open>> | undefined;
+    const pending = f.open().then(handle => { live = handle; }, error => { rejected = error; });
+    try {
+      await vi.waitFor(() => expect(f.runs.size).toBe(2), { interval: 1 });
+      const run = [...f.runs.values()].find(item => item !== siblingRun)!;
+      for (const listener of historyCloseListeners) listener('unrelated-peer');
+      for (const listener of guestPermission.listeners) listener();
+      await flush();
+      expect(rejected).toBeUndefined();
+      expect(release).not.toHaveBeenCalled();
+      if (boundary === 'owner close') {
+        historyCloseEpoch.mockImplementation(peer => peer === ownerPeer ? 1 : 0);
+        for (const listener of historyCloseListeners) listener(ownerPeer);
+      } else {
+        guestPermission.epoch++;
+        for (const listener of guestPermission.listeners) listener();
+      }
+      await flush();
+      expect(String(rejected)).toContain(boundary === 'owner close' ? '[LINK_NOT_OPEN]' : 'permission changed');
+      expect(f.calls.filter(call => call.op === 'close')).toEqual([
+        expect.objectContaining({ device: f.target, runId: run.runId }),
+      ]);
+      expect(f.disposed).toEqual(['pending']);
+      expect(release).toHaveBeenCalledExactlyOnceWith('startup-budget', 'pending', f.generation, false);
+      expect(historyCloseListeners.size).toBe(0);
+      expect(guestPermission.listeners.size).toBe(0);
+      // A late confirmation cannot resurrect the cancelled run or affect its sibling.
+      f.started(run);
+      await flush();
+      expect(live).toBeUndefined();
+      expect(liveSharedTaskTarget('pending', f.owner)).toBeNull();
+      await sibling.setModel?.('still-live');
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+    } finally {
+      cancelPendingRemoteStart('pending');
+      f.pendingClose.resolve();
+      await pending;
+      await live?.close({ reason: 'account-boundary' });
+      await sibling.close({ reason: 'account-boundary' });
     }
   });
 

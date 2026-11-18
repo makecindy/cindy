@@ -2328,10 +2328,22 @@ async function ensureOnlineForRequest(deviceId?: string): Promise<void> {
 
 /** closeRemoteLink 的取消代次(per-device):翻代使在途建链等待在发送前失效。 */
 const openLinkCloseEpochs = new Map<string, number>();
+const remoteLinkCloseListeners = new Map<string, Set<() => void>>();
 
 /** Long-lived consumers bind to this generation so later reads cannot undo an explicit close. */
 export function getRemoteLinkCloseEpoch(deviceId: string): number {
   return openLinkCloseEpochs.get(deviceId) ?? 0;
+}
+
+/** Notify pending consumers of an explicit local close, even if their remote wait never settles. */
+export function onRemoteLinkClosed(deviceId: string, listener: () => void): () => void {
+  const listeners = remoteLinkCloseListeners.get(deviceId) ?? new Set<() => void>();
+  remoteLinkCloseListeners.set(deviceId, listeners);
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size && remoteLinkCloseListeners.get(deviceId) === listeners) remoteLinkCloseListeners.delete(deviceId);
+  };
 }
 
 /**
@@ -2425,6 +2437,7 @@ export function closeRemoteLink(deviceId: string): void {
   //   6. OAuth 授权事务与本机回调监听(翻代后在后续操作前自败);
   //   7. MCP App View 的跨调用轮询与清理(绑定打开时的代次，翻代后自败);
   //   8. 独立文件连接及其排队/协商请求(stopFilePeers 翻代，迟到结果只清理)。
+  //   9. 监听主动断连的首次分享启动(翻代后立即取消，不等备用执行端确认)。
   // 新增任何 per-device 重试/恢复机制时必须同步登记到本清单。
   transportTimeoutReopen.cancel(deviceId);
   cancelSubscriptionReplay(deviceId);
@@ -2432,6 +2445,9 @@ export function closeRemoteLink(deviceId: string): void {
   // 结束后的复验处自我取消。
   openLinkCloseEpochs.set(deviceId, (openLinkCloseEpochs.get(deviceId) ?? 0) + 1);
   openLinkInFlight.delete(deviceId);
+  for (const listener of [...(remoteLinkCloseListeners.get(deviceId) ?? [])]) {
+    try { listener(); } catch { /* A consumer must not prevent the explicit close. */ }
+  }
   client?.closeLink(deviceId, 'user');
 }
 

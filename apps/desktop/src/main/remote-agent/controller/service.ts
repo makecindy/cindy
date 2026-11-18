@@ -38,7 +38,7 @@ import { parseProviderSharePeer, providerShareHostPeer } from '@cindy/device-lin
 import { createLogger } from '../../logger.js';
 import { findReceivedShare, parseProviderShareAgentDeviceId, providerShareAccessEpoch,
   onProviderShareReceivedChanged } from '../../device-link/providerShareGuest.js';
-import { getRemoteLinkCloseEpoch } from '../../device-link/index.js';
+import { getRemoteLinkCloseEpoch, onRemoteLinkClosed } from '../../device-link/index.js';
 import { isTemporaryProviderMetadataFailure } from '../../device-link/providerMetadataContinuity.js';
 import { credentialGrantFor } from '../executor/credentialGrants';
 import type { ExecutorCaptureHooks } from '../executor/executor';
@@ -246,6 +246,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const initialAccessEpoch = initialShareId && findReceivedShare(initialShareId)?.status === 'active'
       ? providerShareAccessEpoch(initialShareId) : undefined;
     let assertOwnerLinkCurrent: (() => void) | undefined;
+    let startupOwnerPeer: string | undefined;
     const requireCurrent = () => {
       attempt.signal.throwIfAborted();
       assertOwnerLinkCurrent?.();
@@ -371,6 +372,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         if (!cloudAllocation && owner?.hostDeviceId && (owner.hostDeviceOnline ?? owner.hostOnline)) {
           const ownerPeer = providerShareHostPeer(shareId, owner.hostDeviceId);
           const closeEpoch = getRemoteLinkCloseEpoch(ownerPeer);
+          startupOwnerPeer = ownerPeer;
           assertOwnerLinkCurrent = () => {
             if (getRemoteLinkCloseEpoch(ownerPeer) !== closeEpoch) {
               throw new Error('[LINK_NOT_OPEN] shared owner link closed during startup');
@@ -502,6 +504,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     const collect = { skipCredentials: shared };
     let cancelPreparedHandle: (() => void) | undefined;
     let restartedHistory = false;
+    // The executor can stall before confirming startup. Feed changes into the
+    // existing attempt cancellation so close/release/local cleanup do not wait for it.
+    const recheckStartup = () => {
+      try { requireCurrent(); }
+      catch (error) { attempt.abort(error instanceof Error ? error : new Error(String(error))); }
+    };
+    const offStartupPermission = initialShareId ? onProviderShareReceivedChanged(recheckStartup) : undefined;
+    const offStartupLink = startupOwnerPeer ? onRemoteLinkClosed(startupOwnerPeer, recheckStartup) : undefined;
     const handle = await startRemoteAgentSession(input.agentKind, opts, {
       startupSignal: attempt.signal,
       assertStartupCurrent: requireCurrent,
@@ -612,6 +622,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         info: (message, fields) => log.info(message, fields),
         warn: (message, fields) => log.warn(message, fields),
       },
+    }).finally(() => {
+      offStartupPermission?.();
+      offStartupLink?.();
     }).then(handle => {
       // Keep cancellation attached until the service finishes its optional early renewal.
       cancelPreparedHandle = () => { void handle.close({ reason: 'account-boundary' }).catch(() => undefined); };

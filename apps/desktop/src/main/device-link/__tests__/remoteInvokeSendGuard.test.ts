@@ -15,7 +15,7 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 const source = ts.createSourceFile('index.ts', readFileSync(new URL('../index.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
 const declarations = source.statements.filter((node): node is ts.FunctionDeclaration =>
   ts.isFunctionDeclaration(node) && ['remoteInvoke', 'remoteInvokeLive', 'remoteBackgroundInvoke',
-    'backgroundInvokeDevice', 'backgroundInvokeDeviceLive'].includes(node.name?.text ?? ''));
+    'backgroundInvokeDevice', 'backgroundInvokeDeviceLive', 'closeRemoteLink', 'onRemoteLinkClosed'].includes(node.name?.text ?? ''));
 const compiled = ts.transpileModule(declarations.map(node => node.getText(source).replace(/^export /, '')).join('\n'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
@@ -39,21 +39,47 @@ function loadAdapters(overrides: Record<string, unknown>) {
     assertNotStandby: () => {},
     assertRemoteControlTargetEnabled: () => {},
     openLinkCloseEpochs: epochs,
+    remoteLinkCloseListeners: new Map<string, Set<() => void>>(),
+    openLinkInFlight: new Map(),
+    invalidateProviderMetadataContinuity: () => {}, stopFilePeers: () => {}, invalidatePluginOauth: () => {},
+    transportTimeoutReopen: { cancel() {} }, cancelSubscriptionReplay: () => {},
     ensureOnlineForRequest: async () => {},
     isScopedPeer: () => false,
     tryPeerInvoke: async () => null,
     resolveRemoteInvokeTimeoutMs: () => undefined,
     openRemoteLink: vi.fn(),
-    closeRemoteLink: vi.fn(),
     responsivenessTracker: null,
     ...overrides,
-    client: { invoke: vi.fn(), isLinkReady: () => true, needsLinkRecovery: () => false, ...(overrides.client as object) },
+    client: { invoke: vi.fn(), closeLink: vi.fn(), isLinkReady: () => true, needsLinkRecovery: () => false, ...(overrides.client as object) },
   };
-  return new Function(...Object.keys(dependencies), compiled + '; return { remoteInvoke, remoteBackgroundInvoke };')(...Object.values(dependencies));
+  return new Function(...Object.keys(dependencies), compiled + '; return { remoteInvoke, remoteBackgroundInvoke, closeRemoteLink, onRemoteLinkClosed };')(...Object.values(dependencies));
 }
 
 const loadRemoteInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteInvoke;
 const loadBackgroundInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteBackgroundInvoke;
+
+// PR #10895 / unit: real closeRemoteLink must wake a hung startup after changing
+// its epoch, without notifying other peers or retaining disposed subscriptions.
+it('notifies only the explicitly closed peer after invalidating pending startup', () => {
+  const epochs = new Map<string, number>();
+  const listeners = new Map<string, Set<() => void>>();
+  const closeLink = vi.fn();
+  const { closeRemoteLink, onRemoteLinkClosed } = loadAdapters({ openLinkCloseEpochs: epochs,
+    remoteLinkCloseListeners: listeners, client: { closeLink } });
+  const observedEpochs: Array<number | undefined> = [];
+  const cancel = vi.fn(() => { observedEpochs.push(epochs.get('owner')); });
+  const off = onRemoteLinkClosed('owner', cancel);
+  closeRemoteLink('unrelated');
+  expect(cancel).not.toHaveBeenCalled();
+  closeRemoteLink('owner');
+  expect(cancel).toHaveBeenCalledTimes(1);
+  expect(observedEpochs).toEqual([1]);
+  expect(closeLink).toHaveBeenLastCalledWith('owner', 'user');
+  off();
+  expect(listeners.size).toBe(0);
+  closeRemoteLink('owner');
+  expect(cancel).toHaveBeenCalledTimes(1);
+});
 
 // #10826, unit: the production background adapter must recover the model directory
 // when presence says online but the owner's data link fails. The availability tests
