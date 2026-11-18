@@ -58,6 +58,9 @@ import {
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { OrcaSplitView } from '../OrcaSplitView';
 import { useFileContent } from './hooks/useFileContent';
+import { useXcodeBuild } from './hooks/useXcodeBuild';
+import { XcodeBuildOutput } from './XcodeBuildOutput';
+import { XcodeBuildToolbar } from './XcodeBuildToolbar';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { resolveDocModeFilesSession } from './lib/docModeSwitchProjects';
 import { useChatRailResize } from './hooks/useChatRailResize';
@@ -178,6 +181,15 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
 
   const selectedPath = searchParams.get('file');
   const { content, setLocal: setLocalContent } = useFileContent(browsableWorkdir, selectedPath, remoteHostId, deviceId);
+  const xcode = useXcodeBuild({
+    sessionId: sessionId ?? null,
+    workdir: browsableWorkdir,
+    enabled:
+      window.electronAPI.platform === 'darwin' &&
+      !remoteHostId &&
+      deviceId === null &&
+      !currentSession?.agentDeviceId,
+  });
   const rail = useChatRailResize();
   const railCollapse = useChatRailCollapsed();
   const activeSessionIsOrcaLead = Boolean(currentSession && isOrcaLeadSession(currentSession));
@@ -521,6 +533,23 @@ function WorkdirBrowseContent({ requestedDeviceId }: { requestedDeviceId: string
               onSearchJumpConsumed={handleSearchJumpConsumed}
             />
           </div>
+          {(xcode.loading || xcode.available || xcode.error || xcode.build) && (
+            <div className="shrink-0 border-t border-[var(--cmd-palette-border)]">
+              {xcode.build && xcode.outputExpanded && (
+                <XcodeBuildOutput
+                  build={xcode.build}
+                  output={xcode.output}
+                  expanded
+                  onToggle={xcode.toggleOutput}
+                />
+              )}
+              {(xcode.loading || xcode.available || xcode.error) && (
+                <div className="flex h-8 items-center justify-end">
+                  <XcodeBuildToolbar xcode={xcode} />
+                </div>
+              )}
+            </div>
+          )}
           {/* Interaction prompt slot — permission/askUser/plan 卡片在这一栏挂出来,
               rail 里只显占位。empty:hidden 让无 pending 时整栏从布局中消失。
               不画 border-t — 卡片自带 border + cornerRadius,视觉边界够清晰,

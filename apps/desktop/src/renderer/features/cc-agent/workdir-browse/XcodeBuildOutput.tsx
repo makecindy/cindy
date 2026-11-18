@@ -91,7 +91,7 @@ export function XcodeBuildOutput({
         <pre
           ref={outputRef}
           tabIndex={0}
-          className="m-0 min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-[hsl(var(--content-area))] px-3 py-2 font-mono text-11 leading-5 text-[var(--text-secondary)]"
+          className="m-0 min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-[hsl(var(--content-area))] px-3 py-2 font-mono text-11 leading-[1.818] text-[var(--text-secondary)]"
         >
           {output || t('ccAgent.workdirBrowse.xcode.waitingForOutput')}
         </pre>
