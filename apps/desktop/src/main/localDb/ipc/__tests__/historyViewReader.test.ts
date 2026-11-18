@@ -113,6 +113,25 @@ describe('host history view', () => {
     await api.page('s', undefined, true);
     expect(list).toHaveBeenCalledTimes(2); // live row not cached
   });
+  // Unit: a settled page is only valid while the session stays idle with an
+  // empty live source. A run that ends leaves its final row in the live source
+  // until the write lands, and the revision only moves once the write succeeds,
+  // so a hit taken then would hide the newest message until the TTL expires.
+  it('does not serve a settled page while the live source still holds rows', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let live: HistoryMessageSource[] = [];
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      live: () => live });
+    await api.page('s', undefined, true);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(1); // settled page served
+    live = [{ ...row(2, 'assistant'), id: 'live-1' }];
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // live row pending: re-read instead of serving the settled page
+  });
   it('never caches a page whose work summary keeps a live row id', async () => {
     const liveThinking = { ...row(1, 'thinking'), id: 'history-live:c1' };
     const source: HistoryMessageSource[] = [

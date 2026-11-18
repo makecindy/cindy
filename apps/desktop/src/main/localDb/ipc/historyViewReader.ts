@@ -559,7 +559,13 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       // one page object per key; the serialization boundary is the caller's.
       const settled = settledPages.get(key);
       if (settled) {
-        if (Date.now() - settled.cachedAt >= SETTLED_PAGE_TTL_MS) {
+        // The settled cache is only valid while the session stays idle with an
+        // empty live source. A run that ended leaves its final row in the live
+        // source until the write lands (a failed write keeps it there), and the
+        // revision only moves when a write succeeds: serving the settled page
+        // then hides the newest message until the TTL expires. Re-read instead.
+        const liveNow = (deps.live?.(sessionId) ?? []).length > 0;
+        if (Date.now() - settled.cachedAt >= SETTLED_PAGE_TTL_MS || liveNow || deps.running(sessionId)) {
           settledPages.delete(key);
           settledPageBytes -= settled.bytes;
         } else {
