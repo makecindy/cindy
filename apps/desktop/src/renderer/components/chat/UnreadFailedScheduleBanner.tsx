@@ -8,6 +8,7 @@ import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { cn } from '@/lib/utils';
 import {
   scheduleFailureMessageKey,
+  scheduleFailureDetails,
   type ScheduleMissingPlugin,
 } from '@cindy/maker-shared/schedule-model';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
@@ -106,7 +107,7 @@ function FailedScheduleNotice({
       details={latestFailedRun.errorMsg}
       onDiagnose={onDiagnose && latestFailedRun.errorMsg ? () => onDiagnose({
         message,
-        details: latestFailedRun.errorMsg!,
+        details: scheduleFailureDetails(latestFailedRun),
       }) : undefined}
       onDismiss={dismiss}
       dismissLabel={t('chat.unreadFailedScheduleBanner.dismissTitle')}

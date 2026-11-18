@@ -197,6 +197,10 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   先写文件的路径在拒绝保存后尝试恢复原内容，但只有读回内容仍等于本次写入时才回滚；校验期间
   后来保存、删除或直接编辑的文件保持原样。此为乐观核对，不是跨进程文件事务。仅改名称、时间等无关
   字段不读取目录。旧的无 `modelAgentKind` 配置继续跟随任务；SSH 保留原生目录校验路径。
+- 自动化运行历史保留各轮的实际状态。同一自动化后续执行成功时，历史中的授权失败可显示为已恢复；
+  成功完成前置检查并跳过本轮，只能消除前置检查告警。打开任务内的诊断会带上运行 ID 和时间。
+  自动化在原任务调用 `schedule_delete` 收尾时，回执可以包含最近一次授权失败的时间和后续成功状态；
+  手工删除仍按原方式清理历史。权限检查的具体原因在执行电脑的宿主日志中。
 - 跨电脑定时任务：`packages/lizi-mcps/src/scheduler/_devices.ts`、
   `apps/desktop/src/main/mcp-integrations/schedulerDevices.ts`。
 - 跨电脑新建普通任务：`device` + `apps/desktop/src/main/maker-ipc/remoteSessionCreation.ts`，复用 `openSession` 与普通消息队列；不建立协同或自动回传关系。

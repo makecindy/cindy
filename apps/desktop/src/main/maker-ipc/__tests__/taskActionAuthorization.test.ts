@@ -15,6 +15,8 @@ import { createOrcaMcpServer } from '../../../../../../packages/lizi-mcps/src/or
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
   assertTaskActionCurrent,
+  admitTaskAction,
+  TaskActionAuthorizationError,
   bindTaskActionInput,
   createTaskActionAuthorizer,
   taskActionInputGuard,
@@ -169,6 +171,16 @@ describe('Host task action authorization', () => {
       expect(operation).not.toHaveBeenCalled();
     },
   );
+
+  // Unit: temporary host transitions and proven revocation both deny admission,
+  // but only the latter can tell a caller its authorization expired.
+  it.each([
+    [new Error('HOST_NOT_READY'), 'HOST_NOT_READY', 'The host is not ready to check this action yet.'],
+    [new TaskActionAuthorizationError('The active input changed.'), 'TASK_ACTION_AUTHORIZATION_EXPIRED', 'The active input changed.'],
+  ] as const)('preserves the host diagnosis when admission fails: %s', async (error, errorCode, message) => {
+    expect(await admitTaskAction(call(), { key: 'input', ownerInput: true, delegated: false,
+      assertCurrent: async () => { throw error; } })).toEqual({ ok: false, errorCode, message });
+  });
 
   it('does not let approval racing with revocation execute', async () => {
     const h = fixture(true);
@@ -628,18 +640,18 @@ describe('Owner-delegated scheduled task actions', () => {
     expect(isTaskActionRevoked(error)).toBe(revoked);
   });
 
-  it.each(['permission', 'account', 'turn'] as const)('does not act or prompt if %s changes during review', async changed => {
+  it.each(['permission', 'account-transition', 'turn'] as const)('does not act or prompt if %s changes during review', async changed => {
     const h = scheduledFixture();
     h.runtime.reviewHostPermissionAction.mockImplementation(async () => {
       if (changed === 'permission') h.runtime.stablePermissionModeState.generation++;
-      if (changed === 'account') hostFacts.boundaryPending.mockReturnValue(true);
+      if (changed === 'account-transition') hostFacts.boundaryPending.mockReturnValue(true);
       if (changed === 'turn') h.runtime.getCurrentTurnOrigin = () => ({ kind: 'scheduler', runId: 'run-2' });
       return { verdict: 'ask' };
     });
     const effect = vi.fn(async () => 'sent');
     const result = await withToolCallAuthority(h.authorize, scheduledSend(), effect);
     expect(result).toMatchObject({ isError: true });
-    expect(JSON.stringify(result)).toContain('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    expect(JSON.stringify(result)).toContain(changed === 'account-transition' ? 'HOST_NOT_READY' : 'TASK_ACTION_AUTHORIZATION_EXPIRED');
     expect(effect).not.toHaveBeenCalled();
     expect(h.confirm).not.toHaveBeenCalled();
   });
