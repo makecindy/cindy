@@ -29,6 +29,7 @@ const names = new Set([
   'writeResourceSessionToVault',
   'initialize',
   'receiveHostAuthState',
+  'invalidateSession',
   'refresh',
   'scheduleRefresh',
   'scheduleRefreshRetry',
@@ -48,7 +49,7 @@ let coldStartAuthInFlight = null, coldStartRetryWait = null, refreshTimer = null
 let coldStartRecoveryStopped = false, coldStartRetryState = null;
 let lastAcceptedRefreshToken = null, persistedRefreshTokenNeedsIdentityCheck = false;
 let foreignDeviceLocalSignOut = false;
-let refreshPromise = null;
+let refreshPromise = null, sessionInvalidationPromise = null;
 let authRefreshOverride = null, delegatedAuthState = null;
 const refreshBackoff = new AuthRefreshBackoff();
 const passiveLocalSignOut = false, settledLoginCommitCount = 0;
@@ -85,6 +86,7 @@ return {
   state: snapshotAuthState,
   hostAuth: (reader) => { authRefreshOverride = reader; },
   receiveHostAuthState,
+  invalidateSession,
   activateRuntime: () => { accessToken = 'test-expired'; currentUser = { id: 'original' }; },
   backoff: refreshBackoff,
   fallback: () => { coldStartTimeoutFallbacks.record(authStateEpoch, authStateEpoch + 1); authStateEpoch++; loginFlowEpoch++; },
@@ -609,6 +611,26 @@ describe('runtime token rejection after an offline backoff', () => {
 // Regression: explicit Host login must establish the process-local data owner,
 // without writing a second account record or rotating credentials from Desktop.
 describe('delegated Host owner state', () => {
+  it('incidental client 401 cannot sign out the Host or write its credentials', async () => {
+    const h = setup();
+    const reader = vi.fn(async (): Promise<{ isAuthenticated: boolean; user: { id: string } | null }> => ({ isAuthenticated: true, user: { id: 'host-owner' } }));
+    h.hostAuth(reader);
+    await h.start();
+    const original = structuredClone(h.saved);
+    await Promise.all([h.invalidateSession('resource-unauthorized-after-refresh'), h.invalidateSession('account-unavailable')]);
+    expect(reader).toHaveBeenCalledTimes(2); // startup plus one coalesced authority read
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('cloud', 'host-owner');
+    expect(h.saved).toEqual(original);
+    expect(h.clear).not.toHaveBeenCalled();
+    expect(h.transaction).not.toHaveBeenCalled();
+    reader.mockRejectedValueOnce(new Error('offline'));
+    await expect(h.invalidateSession('resource-unauthorized-after-refresh')).resolves.toBeUndefined();
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('cloud', 'host-owner');
+    reader.mockResolvedValueOnce({ isAuthenticated: false, user: null });
+    await h.invalidateSession('resource-unauthorized-after-refresh');
+    expect(h.deps.commitVolatileAppSession).toHaveBeenLastCalledWith('signed-out');
+    expect(h.saved).toEqual(original);
+  });
   it('commits the remote owner at startup and clears it on a logout event', async () => {
     const h = setup();
     const state = { isAuthenticated: true, user: { id: 'host-owner' } };

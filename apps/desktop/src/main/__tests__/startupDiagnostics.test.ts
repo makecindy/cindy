@@ -65,13 +65,16 @@ function writeMarker(marker: Partial<RunMarker> & { pid: number }): string {
   return file;
 }
 
-function makeStore(opts: { pid?: number; alivePids?: number[]; now?: () => Date } = {}) {
+function makeStore(
+  opts: { pid?: number; alivePids?: number[]; now?: () => Date; bootTimeMs?: number | null } = {},
+) {
   return new RunMarkerStore({
     dir: tmpDir,
     pid: opts.pid ?? 111,
     version: '0.0.2',
     now: opts.now,
     isPidAlive: (pid) => (opts.alivePids ?? []).includes(pid),
+    bootTimeMs: () => opts.bootTimeMs ?? null,
     warn: () => {},
   });
 }
@@ -202,6 +205,37 @@ describe('analyzePreviousRuns classification', () => {
     fs.writeFileSync(path.join(tmpDir, 'other.txt'), 'x');
     const reports = makeStore({ pid: 111 }).analyzePreviousRuns();
     expect(reports).toEqual([]);
+  });
+
+  // issue #10071:Windows 更新在 Modern Standby 里直接重启,冻结的进程收不到 session-end,
+  // 标记停在 running,下次启动误报「上次意外退出」。
+  it('suspend → system rebooted while still asleep → ended-asleep, not abnormal', () => {
+    let t = new Date('2026-11-11T01:01:04.000Z');
+    const prev = makeStore({ pid: 930, now: () => t });
+    prev.begin();
+    t = new Date('2026-11-11T19:11:23.000Z');
+    prev.heartbeat();
+    prev.markSuspended();
+
+    const reports = makeStore({ bootTimeMs: Date.parse('2026-11-12T01:00:00.000Z') }).analyzePreviousRuns();
+    expect(reports).toMatchObject([{ kind: 'ended-asleep', marker: { pid: 930 } }]);
+  });
+
+  it.each([
+    ['已唤醒(收到 resume)', { resumed: true, heartbeatAt: '2026-11-11T19:11:23.000Z', boot: '2026-11-12T01:00:00.000Z' }],
+    ['睡下后心跳还在走(进程醒过)', { resumed: false, heartbeatAt: '2026-11-11T20:00:00.000Z', boot: '2026-11-12T01:00:00.000Z' }],
+    ['系统没有重启过', { resumed: false, heartbeatAt: '2026-11-11T19:11:23.000Z', boot: '2026-11-01T00:00:00.000Z' }],
+  ])('%s → still abnormal', (_label, c) => {
+    let t = new Date('2026-11-11T19:11:23.000Z');
+    const prev = makeStore({ pid: 931, now: () => t });
+    prev.begin();
+    prev.markSuspended();
+    if (c.resumed) prev.markResumed();
+    t = new Date(c.heartbeatAt);
+    prev.heartbeat();
+
+    const reports = makeStore({ bootTimeMs: Date.parse(c.boot) }).analyzePreviousRuns();
+    expect(reports[0].kind).toBe('abnormal');
   });
 
   it('mixed markers classified independently', () => {

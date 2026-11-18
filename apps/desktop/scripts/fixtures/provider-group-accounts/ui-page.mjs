@@ -38,7 +38,7 @@ export default {
       data: { long: true },
     },
     single: {
-      about: 'One account keeps the original card with no account name',
+      about: 'One account displays its own quota without a repeated account name',
       data: { single: true },
     },
     'single-added-paused': {
@@ -143,8 +143,10 @@ export default {
     }
     const accounts = page.getByTestId('provider-group-member-account');
     if (ui.case === 'single') {
-      await page.waitForTimeout(150);
-      assert.equal(await accounts.count(), 0);
+      await accounts.first().waitFor();
+      assert.equal(await accounts.count(), 1);
+      assert.equal(await accounts.getByText('first@example.com', { exact: true }).count(), 0);
+      assert.equal(await accounts.getByRole('progressbar').count(), 3);
       return;
     }
     if (ui.case === 'single-added-paused') {

@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createComputerMcpServer } from '@cindy/mcps/computer';
-import { cleanupComputerDriverSession, getComputerMcpDeps } from '../mcp-integrations/computer.js';
+import { cleanupComputerDriverSession, getComputerMcpDeps } from '../mcp-integrations/computer.desktop.js';
 import { createLogger } from '../logger.js';
 import { windowStateElements } from './windowStateElements.js';
 import { runFolderPickerWheelSmoke } from './folderPickerWheelSmoke.js';

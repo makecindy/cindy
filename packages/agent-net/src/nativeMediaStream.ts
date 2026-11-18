@@ -2,15 +2,29 @@ import type { NativeEnginePort } from './nativeTransport.js';
 import { openNativeMediaReader, type NativeMediaApi, type NativeMediaOptions } from './nativeMedia.js';
 import { toBase64Url } from './portableBytes.js';
 
-export interface NativeMediaStream { url: string; size: number; isOpen(): boolean; close(): Promise<void>; }
+export interface NativeMediaStream { url: string; size: number; isOpen(): boolean; close(): Promise<void>; retain?(): () => void; }
 /** Takes ownership of a dedicated native engine. Loopback requests carry only
  * an opaque random path; all upstream fetching remains signed and Root-bound.
  * Native limits concurrent players to four 1 MiB jobs. A bad AEAD block closes
  * this stream, never supplying unverified bytes or affecting other resources. */
 export async function openNativeMediaStream(api: NativeMediaApi | (() => NativeMediaApi), engine: NativeEnginePort,
   id: string, headerSha256: string, contentType: string, options: NativeMediaOptions = {}): Promise<NativeMediaStream> {
-  let reader: Awaited<ReturnType<typeof openNativeMediaReader>> | undefined;
+  return openNativeByteStream(engine, contentType,
+    current => openNativeMediaReader(api, engine, id, headerSha256, current), options);
+}
+
+export interface NativeByteReader {
+  size: number;
+  read(start: number, end: number, write: (bytes: Uint8Array, offset: number) => Promise<void>): Promise<unknown>;
+  close(): Promise<void>;
+}
+/** Existing loopback bridge, with upstream authorization owned by the supplied reader. */
+export async function openNativeByteStream(engine: NativeEnginePort, contentType: string,
+  openReader: (options: NativeMediaOptions) => Promise<NativeByteReader>,
+  options: NativeMediaOptions = {}): Promise<NativeMediaStream> {
+  let reader: NativeByteReader | undefined;
   let closed = false, timer: ReturnType<typeof setTimeout> | undefined, lastRequest = Date.now();
+  let consumers = 0;
   const jobs = new Set<number>(), controller = new AbortController();
   const assertCurrent = () => {
     if (closed || options.signal?.aborted) throw new Error('MEDIA_CLOSED');
@@ -25,7 +39,7 @@ export async function openNativeMediaStream(api: NativeMediaApi | (() => NativeM
   const abort = () => { void close(); };
   try {
     assertCurrent(); options.signal?.addEventListener('abort', abort, { once: true });
-    reader = await openNativeMediaReader(api, engine, id, headerSha256, { ...options, signal: controller.signal, assertCurrent });
+    reader = await openReader({ ...options, signal: controller.signal, assertCurrent });
     assertCurrent();
     // Container metadata identifies codecs; keep optional MIME parameters out
     // of the native HTTP header's deliberately small character set.
@@ -50,7 +64,7 @@ export async function openNativeMediaStream(api: NativeMediaApi | (() => NativeM
             throw new Error('INVALID_MEDIA_STREAM_REQUEST');
           lastRequest = Date.now(); jobs.add(r.id); void work(r);
         }
-        if (!jobs.size && Date.now() - lastRequest > 5 * 60_000) { await close(); return; }
+        if (!consumers && !jobs.size && Date.now() - lastRequest > 5 * 60_000) { await close(); return; }
       } catch { await close(); }
       if (!closed) {
         timer = setTimeout(() => { void poll(); }, jobs.size ? 10 : Date.now() - lastRequest > 1000 ? 200 : 25);
@@ -58,6 +72,10 @@ export async function openNativeMediaStream(api: NativeMediaApi | (() => NativeM
       }
     };
     void poll();
-    return { url: result.url, size: reader.size, isOpen: () => !closed, close };
+    return { url: result.url, size: reader.size, isOpen: () => !closed, close, retain: () => {
+      assertCurrent(); consumers++;
+      let released = false;
+      return () => { if (!released) { released = true; consumers--; lastRequest = Date.now(); } };
+    } };
   } catch (error) { await close(); throw error; }
 }

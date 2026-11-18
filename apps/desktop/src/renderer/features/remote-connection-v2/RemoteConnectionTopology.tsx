@@ -6,7 +6,7 @@
  * 线型只分三种:建了链的细实线、在线没建链 / 要处理的点线、离线的更淡点线。直的那一段贴往返延迟。
  * 图块里是单色系统标志;电脑是方块,手机是带「灵动岛」的竖条。线与几何由 topologyGeometry 算,
  * 状态由 topologyModel 算,这里只负责画和交互。拓扑图只管拓扑(用户裁决 2026-11-07):点开图块的卡片
- * 只展示连接信息;本机的配置在上方「我的设备」的本机卡片,这台电脑的卡片上「管理设备…」定位过去。
+ * 只展示连接信息;本机的配置直接使用上方「我的设备」的本机卡片。
  * 设备深链指向某台设备时直接打开它的卡片。
  *
  * 状态只用颜色表达,名字下面不写状态字(用户裁决 2026-11-07;文字状态在卡片、悬停提示与读屏标签里):
@@ -21,19 +21,31 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
+import { deviceLabel } from '@/components/settings/deviceLabels';
 import { MonitorOff, Radio } from 'lucide-react';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Spinner } from '@/components/ui/spinner';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
 
+import type { RemoteSwitchEntry, RemoteSwitchTarget } from './agentNetRemoteSwitch';
 import { DeviceNodePopover, HubNodePopover } from './DeviceNodePopover';
 import { PlatformGlyph } from './PlatformGlyph';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
 import { groupLines, layoutTopology, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
 import type { TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
-import { formatRtt, protocolLabel, rowSubtitle } from './topologyPresentation';
+import { ProtocolMark } from './ProtocolMark';
+import {
+  formatRtt,
+  protocolKind,
+  protocolKindLabel,
+  protocolLabel,
+  rowSubtitle,
+  selfProtocolKind,
+  type ProtocolKind,
+} from './topologyPresentation';
 
 import './remote-connection-v2.css';
 
@@ -53,8 +65,6 @@ const LIVE_STYLE = {
 export interface RemoteConnectionTopologyProps {
   model: TopologyModel;
   linkStatus: DeviceLinkLinkStatus;
-  /** 本机设备 id;这台电脑的卡片用它定位「我的设备」里的本机那一行 */
-  selfDeviceId: string | null;
   /** 连接问题的说明(这台电脑的卡片里显示);没有为 null */
   issue?: string | null;
   /** 本机另一个 Cindy 实例占着远程连接 */
@@ -62,14 +72,15 @@ export interface RemoteConnectionTopologyProps {
   /** 点折叠的离线行:展开 / 收起离线设备(折叠与否由 model 决定)。 */
   onToggleOffline: () => void;
   onRemoteDesktop: (node: TopologyNode) => void;
-  /** 这台电脑卡片上的「管理设备…」:定位到「我的设备」的本机卡片 */
-  onManage: (deviceId: string) => void;
   /** 深链要打开哪台设备的卡片;设备还没画出来(离线折叠)时等它出现 */
   focusDeviceId?: string | null;
   /** 同一台设备被再次请求时随之变化,每个值只打开一次 */
   focusRequestKey?: string | null;
   /** 首批数据(设备目录与第一份链路快照)是否都到了;到了之后图才算稳定,见 SETTLE_MS */
   ready?: boolean;
+  /** 远程切换连接方式(原型):各设备的切换状态与发起切换。 */
+  switches?: ReadonlyMap<string, RemoteSwitchEntry>;
+  onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
 }
 
 /**
@@ -196,6 +207,7 @@ function RowText({
   side,
   name,
   hint,
+  hintKind,
   dim,
   animate,
 }: {
@@ -204,6 +216,8 @@ function RowText({
   side: 1 | -1;
   name: string;
   hint?: string;
+  /** 小字是协议名时给出协议，画成图标 + 名称(Agent-Net 紫色) */
+  hintKind?: ProtocolKind | null;
   dim?: boolean;
   animate: boolean;
 }) {
@@ -229,7 +243,11 @@ function RowText({
       >
         {name}
       </span>
-      {hint ? <span className="max-w-full truncate text-12 leading-[1.3] text-[var(--text-tertiary)]">{hint}</span> : null}
+      {hint && hintKind ? (
+        <ProtocolMark kind={hintKind} label={hint} className="text-12 leading-[1.3] text-[var(--text-tertiary)]" />
+      ) : hint ? (
+        <span className="max-w-full truncate text-12 leading-[1.3] text-[var(--text-tertiary)]">{hint}</span>
+      ) : null}
     </div>
   );
 }
@@ -237,15 +255,15 @@ function RowText({
 export function RemoteConnectionTopology({
   model,
   linkStatus,
-  selfDeviceId,
   issue = null,
   standby = false,
   onToggleOffline,
   onRemoteDesktop,
-  onManage,
   focusDeviceId = null,
   focusRequestKey = null,
   ready = true,
+  switches,
+  onSwitch,
 }: RemoteConnectionTopologyProps) {
   const { t } = useTranslation();
   const reduced = useReducedMotion();
@@ -271,6 +289,9 @@ export function RemoteConnectionTopology({
   const layout = layoutTopology(model.groups, width, model.dense);
   const { m, hub } = layout;
   const selfName = model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer');
+  const selfProtocol = selfProtocolKind(model, linkStatus);
+  const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
+  const selfDescription = selfProtocolLabel ? `${selfName} · ${selfProtocolLabel}` : selfName;
   // 悬停优先于打开的浮层:鼠标移到别的设备上时跟着它走。
   const focusId = hoverId ?? openId;
   const setCardOpen = (id: string) => (open: boolean) => setOpenId((cur) => (open ? id : cur === id ? null : cur));
@@ -320,6 +341,9 @@ export function RemoteConnectionTopology({
       if (model.relay.flow) {
         flowing.push({ id: `${group.id}:relay`, shape: toRelay.shape, flow: model.relay.flow });
       }
+      const relayProtocol = protocolKindLabel(model.relay.protocol, t);
+      const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
+      const relayDetail = [relayProtocol, relayRtt].filter(Boolean).join(' · ');
       const size = m.relayR * 2;
       // 中转站的名字和它的往返写在小圆点旁边:贴着圆点朝中间那一侧排开(扇出的线都在另一侧),
       // 中间来的那段线从下面上来就放上面,反之放下面,不和线打架。
@@ -330,7 +354,7 @@ export function RemoteConnectionTopology({
           <span
             className="rcv2-relay flex h-full w-full items-center justify-center rounded-full border"
             role="img"
-            aria-label={model.relay.name}
+            aria-label={[model.relay.name, relayDetail].filter(Boolean).join(' · ')}
           >
             <Radio size={14} strokeWidth={1.75} aria-hidden />
           </span>
@@ -349,14 +373,14 @@ export function RemoteConnectionTopology({
           aria-hidden
         >
           <span>{model.relay.name}</span>
-          {model.relay.rttMs !== null ? (
+          {relayDetail ? (
             <span
               className={cn(
                 'tabular-nums',
                 emphasis !== 'rest' && emphasis !== 'dim' && 'text-[var(--text-secondary)]',
               )}
             >
-              {formatRtt(model.relay.rttMs, t)}
+              {relayDetail}
             </span>
           ) : null}
         </div>,
@@ -424,8 +448,15 @@ export function RemoteConnectionTopology({
       }
       const phone = node.isMobile;
       const sub = rowSubtitle(node, t);
-      const protocol = protocolLabel(node, t);
-      const description = [node.name, protocol, sub.text].filter(Boolean).join(' · ');
+      const switchEntry = switches?.get(node.id) ?? null;
+      // 对方切换后要重新连接:这段时间图块不再是「连着」的绿色，标志换成转圈；名字下面写正在切换。
+      const running = switchEntry?.kind === 'running' ? switchEntry : null;
+      const reconnecting = running !== null && running.step !== 'request';
+      const protocol = running
+        ? t(running.target === 'agent-net' ? 'settings.remoteControl.v2.peerSwitch.row.toAgentNet' : 'settings.remoteControl.v2.peerSwitch.row.toDeviceLink')
+        : protocolLabel(node, t);
+      const displayName = deviceLabel(node, t);
+      const description = [displayName, protocol, sub.text].filter(Boolean).join(' · ');
       pills.push(
         <LatencyPill
           key={`${row.id}:pill`}
@@ -456,18 +487,28 @@ export function RemoteConnectionTopology({
                 data-form={phone ? 'phone' : undefined}
                 data-dim={node.status === 'offline' ? 'true' : undefined}
                 data-live={node.flow ? 'true' : undefined}
-                data-linked={node.status === 'direct' || node.status === 'relay' ? 'true' : undefined}
+                data-linked={!reconnecting && (node.status === 'direct' || node.status === 'relay') ? 'true' : undefined}
                 data-error={node.status === 'attention' ? 'true' : undefined}
               >
                 {phone ? <span className="rcv2-island" aria-hidden /> : null}
-                <PlatformGlyph platform={node.platform} isMobile={node.isMobile} size={phone ? 13 : 16} />
+                {reconnecting ? (
+                  <Spinner size={phone ? 12 : 15} aria-hidden />
+                ) : (
+                  <PlatformGlyph platform={node.platform} isMobile={node.isMobile} size={phone ? 13 : 16} />
+                )}
                 {/* 忙碌:右上角心动橙的呼吸小圆点,与侧栏「运行中」同一套(DESIGN.md §15.14) */}
                 {node.busy && node.status !== 'offline' ? <span className="rcv2-busy session-status-breathing" aria-hidden /> : null}
               </span>
             </button>
           </PopoverTrigger>
           <PopoverContent side={group.side === 1 ? 'right' : 'left'} align="center" className="w-64 p-3">
-            <DeviceNodePopover node={node} relayName={model.relay.name} onRemoteDesktop={onRemoteDesktop} />
+            <DeviceNodePopover
+              node={node}
+              relayName={model.relay.name}
+              onRemoteDesktop={onRemoteDesktop}
+              switchEntry={switchEntry}
+              onSwitch={onSwitch}
+            />
           </PopoverContent>
         </Popover>,
         <RowText
@@ -475,8 +516,9 @@ export function RemoteConnectionTopology({
           layout={layout}
           at={p}
           side={group.side}
-          name={node.name}
+          name={displayName}
           hint={protocol ?? undefined}
+          hintKind={running ? null : protocolKind(node)}
           dim={node.status === 'offline'}
           animate={animate}
         />,
@@ -507,7 +549,7 @@ export function RemoteConnectionTopology({
             type="button"
             className="rcv2-hub flex items-center justify-center rounded-full border"
             style={placed(hub.x, hub.y, HUB, HUB, animate)}
-            aria-label={selfName}
+            aria-label={selfDescription}
           >
             <PlatformGlyph platform={model.self?.platform ?? null} isMobile={false} size={22} />
           </button>
@@ -518,8 +560,6 @@ export function RemoteConnectionTopology({
             linkStatus={linkStatus}
             issue={issue}
             standby={standby}
-            selfDeviceId={selfDeviceId}
-            onManage={onManage}
           />
         </PopoverContent>
       </Popover>
@@ -532,6 +572,22 @@ export function RemoteConnectionTopology({
           {selfName}
         </span>
       </div>
+      {/* 这台电脑自己用的连接方式，与其它设备名字下面同一个图标 + 名称(用户要求 2026-11-18) */}
+      {selfProtocol && selfProtocolLabel ? (
+        <div
+          className="pointer-events-none flex items-center justify-center"
+          style={placed(hub.x, hub.y + m.ring + 14 + 18, 180, 16, animate)}
+          aria-hidden
+        >
+          <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1.5">
+            <ProtocolMark
+              kind={selfProtocol}
+              label={selfProtocolLabel}
+              className="text-12 leading-[1.3] text-[var(--text-tertiary)]"
+            />
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

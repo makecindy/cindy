@@ -67,7 +67,7 @@ export interface BrowserExtensionSlotDeps {
   confirmNativeTakeover?(ghost: InstalledGhost): Promise<boolean>;
   getGhost(id: string): InstalledGhost | null;
   /** 把转交事件投到插件逻辑页;false = 逻辑页不在线。 */
-  sendToGhost(ghostId: string, payload: unknown): boolean;
+  sendToGhost(ghostId: string, payload: unknown): boolean | Promise<boolean>;
   /** 逻辑页不在线时拉起它(订阅网关同款);缺省不拉起。 */
   wake?(ghostId: string): Promise<boolean>;
   /** 配对缓存目录(owner 私有);切换账号后目录变化,桥接按新目录重启。 */
@@ -95,8 +95,14 @@ interface Entry {
   saved: SavedBrowserExtensionState;
   /** Earliest time the native binding may be retried after a failed or pending install. */
   nativeRetryAt?: number;
+  nativeFailures?: number;
+  nativeRetryBlocked?: boolean;
+  /** Log reason changes once per failure streak, across startup, retries and explicit activation. */
+  nativeFailureReason?: string;
   /** A native install retry still running; stopping waits for it before withdrawing the registration. */
   nativeRetry?: Promise<unknown>;
+  /** Failed native registration recovers even when no settings page or tool asks for status. */
+  nativeRetryTimer?: ReturnType<typeof setTimeout>;
   /** The startup sequence failed (for example every compatible port was busy); the next request rebuilds it. */
   startFailed?: true;
   /** Where the installed package came from; pairings never carry over to a package from elsewhere. */
@@ -178,6 +184,10 @@ export class GhostBrowserExtensionSlot {
     const entry = this.entries.get(instanceId);
     if (!entry && !this.deps.getGhost(instanceId)?.manifest.browserExtension) return () => undefined;
     this.updating.add(instanceId);
+    if (entry) {
+      clearTimeout(entry.nativeRetryTimer);
+      entry.nativeRetryTimer = undefined;
+    }
     const resume = entry?.bridge.pauseForUpdate();
     try {
       await resume?.settled;
@@ -185,6 +195,7 @@ export class GhostBrowserExtensionSlot {
     } catch (error) {
       this.updating.delete(instanceId);
       resume?.release();
+      if (entry?.native?.status() === 'unavailable') this.scheduleNativeRetry(entry);
       throw error;
     }
     return () => {
@@ -284,11 +295,7 @@ export class GhostBrowserExtensionSlot {
       if (!saved) void this.requestPairings(instanceId);
       if (native) {
         const installed = await native.install(bridge.listeningPort, needs.extensionIds);
-        if (!installed.ok)
-          this.deps.log?.warn('browser extension native binding unavailable', {
-            instanceId,
-            reason: installed.reason,
-          });
+        this.nativeInstallFinished(entry, installed);
       }
       this.deps.log?.info('browser extension bridge ready', {
         instanceId,
@@ -315,10 +322,85 @@ export class GhostBrowserExtensionSlot {
     });
   }
 
+  private nativeInstallFinished(entry: Entry, result: Awaited<ReturnType<NativeBinding['install']>>): void {
+    clearTimeout(entry.nativeRetryTimer);
+    entry.nativeRetryTimer = undefined;
+    if (result.ok) {
+      entry.nativeFailures = 0;
+      entry.nativeRetryAt = undefined;
+      entry.nativeRetryBlocked = false;
+      entry.nativeFailureReason = undefined;
+      return;
+    }
+    // These failures need a package/installation change or an explicit activation. Generic
+    // permission and missing-path errors can be transient; only a missing source binary is final.
+    entry.nativeRetryBlocked = ['NATIVE_HOST_IN_USE', 'NATIVE_PATH_UNSAFE', 'NATIVE_BINARY_MISSING']
+      .includes(result.reason);
+    if (entry.nativeFailureReason !== result.reason) {
+      this.deps.log?.warn('browser extension native binding unavailable', {
+        instanceId: entry.instanceId, reason: result.reason, retryBlocked: entry.nativeRetryBlocked,
+      });
+      entry.nativeFailureReason = result.reason;
+    }
+    const delays = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+    const attempt = entry.nativeFailures ?? 0;
+    entry.nativeFailures = Math.min(attempt + 1, delays.length);
+    entry.nativeRetryAt = (this.deps.now ?? Date.now)() + delays[Math.min(attempt, delays.length - 1)];
+    this.scheduleNativeRetry(entry);
+  }
+
+  private scheduleNativeRetry(entry: Entry): void {
+    if (!this.isLive(entry) || this.updating.has(entry.instanceId) || entry.nativeRetryBlocked || entry.nativeRetryTimer) return;
+    entry.nativeRetryTimer = setTimeout(() => {
+      entry.nativeRetryTimer = undefined;
+      void this.retryNative(entry);
+    }, Math.max(0, (entry.nativeRetryAt ?? 0) - (this.deps.now ?? Date.now)()));
+    entry.nativeRetryTimer.unref?.();
+  }
+
+  private async retryNative(entry: Entry): Promise<void> {
+    if (!this.isLive(entry) || this.updating.has(entry.instanceId) || !entry.native) return;
+    if (entry.nativeRetry) {
+      await entry.nativeRetry;
+      return;
+    }
+    if (entry.nativeRetryBlocked || entry.native.status() !== 'unavailable') return;
+    const now = (this.deps.now ?? Date.now)();
+    if (now < (entry.nativeRetryAt ?? 0)) {
+      this.scheduleNativeRetry(entry);
+      return;
+    }
+    clearTimeout(entry.nativeRetryTimer);
+    entry.nativeRetryTimer = undefined;
+    // Share one install between automatic recovery and the legacy status-triggered ensure.
+    // Never request takeover: conflicting registrations still need the user's explicit choice.
+    const retry = Promise.resolve().then(() => {
+      if (!this.isLive(entry) || this.updating.has(entry.instanceId)) return;
+      return entry.native!.install(
+        entry.bridge.listeningPort, entry.ghost.manifest.browserExtension!.extensionIds,
+      );
+    }).then(result => {
+      if (result) this.nativeInstallFinished(entry, result);
+    }).catch(err => {
+      this.nativeInstallFinished(entry, { ok: false, error: 'NATIVE_BINDING_UNAVAILABLE', reason: 'INSTALL_FAILED' });
+      this.deps.log?.warn('browser extension native binding retry failed', {
+        instanceId: entry.instanceId, error: errorText(err),
+      });
+    });
+    entry.nativeRetry = retry;
+    try {
+      await retry;
+    } finally {
+      if (entry.nativeRetry === retry) entry.nativeRetry = undefined;
+    }
+  }
+
   private stop(instanceId: string): Promise<void> {
     const entry = this.entries.get(instanceId);
     if (!entry || entry.closing) return this.stopping.get(instanceId) ?? Promise.resolve();
     entry.closing = true;
+    clearTimeout(entry.nativeRetryTimer);
+    entry.nativeRetryTimer = undefined;
     this.entries.delete(instanceId);
     const stopped = (async () => {
       // Close first: queued jobs end and new ones are refused at once, even while startup (native
@@ -340,6 +422,7 @@ export class GhostBrowserExtensionSlot {
   async dispose(): Promise<void> {
     this.disposed = true;
     await Promise.all([...this.entries.keys()].map((id) => this.stop(id)));
+    await Promise.all(this.stopping.values());
   }
 
   // ── 转交:扩展 → 插件 ────────────────────────────────────────────────────
@@ -355,18 +438,38 @@ export class GhostBrowserExtensionSlot {
       request: notice.request,
       ts: (this.deps.now ?? Date.now)(),
     };
-    let delivered = this.deps.sendToGhost(instanceId, payload);
-    if (!delivered && this.deps.wake) {
-      try {
-        delivered =
-          (await this.deps.wake(instanceId)) && this.deps.sendToGhost(instanceId, payload);
-      } catch (err) {
-        this.deps.log?.warn('browser extension relay wake failed', {
-          instanceId,
-          error: errorText(err),
-        });
+    const stillLive = () => {
+      if (this.isLive(entry)) return true;
+      // Owner changes can precede reconcile/close. Finish this old bridge's
+      // pending request now; never leave it waiting for a new account's plugin.
+      entry.bridge.relayResult(notice.id, { ok: false, error: 'BRIDGE_STOPPED' });
+      return false;
+    };
+    if (!stillLive()) return;
+    let delivered = false;
+    try {
+      delivered = await this.deps.sendToGhost(instanceId, payload);
+      if (!stillLive()) return;
+      if (!delivered && this.deps.wake) {
+        let awake = false;
+        try { awake = await this.deps.wake(instanceId); }
+        catch (err) {
+          // The first send explicitly reported offline. A failed wake cannot
+          // have delivered this request; retain the desktop failure contract.
+          this.deps.log?.warn('browser extension relay wake failed', {
+            instanceId, error: errorText(err),
+          });
+        }
+        if (!stillLive()) return;
+        if (awake) delivered = await this.deps.sendToGhost(instanceId, payload);
       }
+    } catch {
+      // An asynchronous transport error may follow delivery. Do not replay it.
+      if (!stillLive()) return;
+      entry.bridge.relayResult(notice.id, { ok: false, error: 'PLUGIN_DELIVERY_UNKNOWN' });
+      return;
     }
+    if (!stillLive()) return;
     if (delivered)
       this.deps.log?.info('browser extension relay delivered to plugin', {
         instanceId,
@@ -426,25 +529,9 @@ export class GhostBrowserExtensionSlot {
     try {
       switch (req.kind) {
         case 'status': {
-          // A native install that failed for a passing reason (a busy file, a registry timeout) would
-          // otherwise stay failed until the plugin is toggled; try again on a status request, at most
-          // every 30 seconds.
-          if (entry.native && entry.native.status() === 'unavailable') {
-            const now = (this.deps.now ?? Date.now)();
-            if (now >= (entry.nativeRetryAt ?? 0)) {
-              entry.nativeRetryAt = now + 30_000;
-              const retry = entry.native.install(
-                entry.bridge.listeningPort,
-                entry.ghost.manifest.browserExtension!.extensionIds,
-              );
-              entry.nativeRetry = retry;
-              try {
-                await retry;
-              } finally {
-                if (entry.nativeRetry === retry) entry.nativeRetry = undefined;
-              }
-            }
-          }
+          await this.retryNative(entry);
+          if (!this.isLive(entry) || this.updating.has(entry.instanceId))
+            return fail('HOST_NOT_READY', '浏览器扩展桥接已重建;稍后重试');
           const status = await entry.bridge.status();
           if (!status.ok) return { ...status, errorCode: 'HOST_NOT_READY' };
           return {
@@ -531,9 +618,23 @@ export class GhostBrowserExtensionSlot {
     await entry.ready;
     if (entry.closing || this.updating.has(instanceId) || this.entries.get(instanceId) !== entry) return false;
     if (entry.native) {
-      const result = await entry.native.install(entry.bridge.listeningPort,
+      // Explicit activation is the recovery boundary for blocked failures. Let any automatic
+      // install finish first, and keep shutdown waiting for this install as well.
+      await entry.nativeRetry;
+      if (!this.isLive(entry) || this.updating.has(instanceId)) return false;
+      clearTimeout(entry.nativeRetryTimer);
+      entry.nativeRetryTimer = undefined;
+      entry.nativeFailures = 0;
+      const install = entry.native.install(entry.bridge.listeningPort,
         entry.ghost.manifest.browserExtension!.extensionIds, { takeover: true });
-      if (!result.ok) return false;
+      entry.nativeRetry = install;
+      try {
+        const result = await install;
+        this.nativeInstallFinished(entry, result);
+        if (!result.ok) return false;
+      } finally {
+        if (entry.nativeRetry === install) entry.nativeRetry = undefined;
+      }
     }
     const current = this.deps.getGhost(instanceId);
     if (this.updating.has(instanceId) || !current || entrySignature(current, this.deps.ownerScopeKey()) !== entry.signature) return false;
@@ -663,12 +764,21 @@ export class GhostBrowserExtensionSlot {
    * Ask the plugin to push its paired browsers: wake it when offline, else send the request. The event
    * keeps its published name; plugins answer it with their pairings (and a site list that is ignored).
    */
+  private isLive(entry: Entry): boolean {
+    const ghost = this.deps.getGhost(entry.instanceId);
+    return !this.disposed && !entry.closing && this.entries.get(entry.instanceId) === entry &&
+      ghost?.enabled === true && entry.signature === entrySignature(ghost, this.deps.ownerScopeKey());
+  }
+
   private async requestPairings(instanceId: string): Promise<void> {
+    const entry = this.entries.get(instanceId);
+    if (!entry || !this.isLive(entry)) return;
     const payload = { type: 'event', name: 'browser-extension-policy-request' };
     try {
-      if (this.deps.sendToGhost(instanceId, payload)) return;
-      if (this.deps.wake && (await this.deps.wake(instanceId)))
-        this.deps.sendToGhost(instanceId, payload);
+      if (await this.deps.sendToGhost(instanceId, payload)) return;
+      if (!this.isLive(entry)) return;
+      if (this.deps.wake && await this.deps.wake(instanceId) && this.isLive(entry))
+        await this.deps.sendToGhost(instanceId, payload);
     } catch (err) {
       this.deps.log?.warn('browser extension pairing request failed', {
         instanceId,
@@ -676,6 +786,7 @@ export class GhostBrowserExtensionSlot {
       });
     }
   }
+
 }
 
 function errorText(err: unknown): string {

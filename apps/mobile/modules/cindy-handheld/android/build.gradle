@@ -6,6 +6,10 @@ plugins {
 group = 'com.cindy.handheld'
 version = '0.1.0'
 
+dependencies {
+  implementation 'com.facebook.react:react-android'
+}
+
 android {
   namespace 'com.cindy.handheld'
   defaultConfig {

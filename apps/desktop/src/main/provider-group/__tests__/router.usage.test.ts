@@ -99,6 +99,20 @@ describe('OpenAI subscription group routing', () => {
     h.usage.set('local', { ...quota(100, 20), primary: { usedPercent: 100, resetsAt: NOW / 1000 } });
     expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
   });
+
+  // Unit regression (2026-11-13): full plan windows still allow native-pool credit requests.
+  // Earlier routing cases had no native pool and only covered quota-based exclusion.
+  it('routes full-window native pools to upstream but retains real model cooldowns', async () => {
+    const h = openaiHarness();
+    const pooled = { nativeAccountPool: true, appServerBuckets: { codex: quota(100, 100) } };
+    h.usage.set('local', pooled);
+    h.usage.set(h.remote, pooled);
+    expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
+    expect((await h.router.view('openai')).members[0].state).toBe('available');
+    h.router.markCooling('openai', 'local', NOW + 100_000, GPT);
+    expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
+    expect(h.router.coolingUntil('openai', 'local', GPT)).toBe(NOW + 100_000);
+  });
 });
 
 function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolModelAvailability']) {
@@ -141,6 +155,18 @@ describe('provider-group quota routing', () => {
       .toBe(kind === 'member' ? null : NOW + 100_000);
   });
 
+  // PR #10150 review, unit: a same-account pick launches with the own-computer grant, so its cooling probe of the
+  // local pool must use the same grant; picks for guests keep the strict one.
+  it('probes the local pool with the own-computer grant only for same-account picks', async () => {
+    const h = harness(async (_member, _model, options) => options?.ownComputer === true);
+    const exclude = new Set([h.config.members[1].key]);
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, exclude }))
+      .toMatchObject({ kind: 'unavailable' });
+    expect(await h.router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model: OPUS, ownComputer: true, exclude }))
+      .toMatchObject({ kind: 'member', member: { key: 'local' } });
+  });
+
   // #9833, unit: recovery must not erase newer failures or unrelated scopes.
   // Previous cooldown tests had no asynchronous pool confirmation in pick().
   it('recovers only the confirmed model and retains newer failures while sharing an in-flight read', async () => {
@@ -176,19 +202,24 @@ describe('provider-group quota routing', () => {
     expect(h.router.coolingUntil('anthropic', 'local', SONNET)).toBe(NOW + 200_000);
   });
 
-  it('bounds a pool read and ignores a late positive result after the pick has returned', async () => {
+  // Unit regression: repeated 1.5s waits discarded healthy late evidence. The returned
+  // pick stays unchanged, but the next one must use it without a new probe.
+  it('bounds a pool read and applies a late healthy result to subsequent picks', async () => {
     vi.useFakeTimers();
     try {
       let finish!: (available: boolean) => void;
-      const h = harness(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      const read = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      const h = harness(read);
       h.config.members[1].paused = true;
       h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
       const pick = h.pick(OPUS);
       await vi.advanceTimersByTimeAsync(1500);
       expect((await pick).kind).toBe('unavailable');
       finish(true);
-      await Promise.resolve();
-      expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 100_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBeNull();
+      expect(await h.pick(OPUS)).toMatchObject({ member: { key: 'local' } });
+      expect(read).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

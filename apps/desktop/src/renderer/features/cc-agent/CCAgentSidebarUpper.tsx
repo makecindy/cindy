@@ -272,6 +272,7 @@ import {
   activePinnedSidebarEntryIds,
   buildPinnedSidebarRank,
   pinnedProjectEntryId,
+  sortPinnedSidebarEntries,
   pinnedSidebarEntryComparisonKey,
   projectKeyFromPinnedEntryId,
 } from './lib/pinnedSidebarOrder';
@@ -467,12 +468,7 @@ export function CCAgentSidebarUpper() {
     remoteProjectsStore.subscribe,
     remoteProjectsStore.getMergedRemoteSessions,
   );
-  const remoteProjectSessions = useMemo(
-    () => CINDY_MAKE_ENABLED
-      ? remoteProjectSessionsRaw
-      : remoteProjectSessionsRaw.filter((session) => !isCindyMakeSource(session.source)),
-    [remoteProjectSessionsRaw],
-  );
+  const remoteProjectSessions = useRemoteProjectSessions();
   const remoteDevices = useRemoteDevices();
   const selectedMachineId = useEffectiveSelectedMachineId();
   const projectAliasMembers = useMemo(
@@ -776,6 +772,7 @@ export function CCAgentSidebarUpper() {
         visibleNewOrder,
         comparisonKey,
       );
+      filter.setPinnedSortBy('manual');
       void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist rail pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
@@ -872,6 +869,7 @@ export function CCAgentSidebarUpper() {
               attentionSessionId={activeSessionId ?? filesSessionId ?? viewedBotSessionId}
               notifications={railNotifications}
               manualPinnedOrder={filter.manualPinnedOrder}
+              pinnedSortBy={filter.pinnedSortBy}
               onReorderPinned={handleRailPinnedReorder}
             />
           </div>
@@ -2105,10 +2103,10 @@ function ExpandedView({
     visibleUnclassified,
   ]);
   const projectPriorityContext = projectPriorityProjection.context;
-  // 只重排置顶项目的子任务；置顶项自身仍按用户的拖拽顺序排列。
+  // 置顶区的顶层顺序独立；项目子任务继续遵循主列表排序。
   const pinnedSortContext = filter.sortBy === 'priority' ? projectPriorityContext : undefined;
   const sortedPinnedEntries = useMemo(
-    () => visiblePinnedEntries.map((entry) =>
+    () => sortPinnedSidebarEntries(visiblePinnedEntries, filter.pinnedSortBy).map((entry) =>
       entry.kind === 'project'
         ? {
             ...entry,
@@ -2120,7 +2118,7 @@ function ExpandedView({
           }
         : entry,
     ),
-    [visiblePinnedEntries, filter.sortBy, pinnedSortContext],
+    [visiblePinnedEntries, filter.pinnedSortBy, filter.sortBy, pinnedSortContext],
   );
 
   const visibleProjectsWithVendor = useMemo(() => {
@@ -2191,6 +2189,7 @@ function ExpandedView({
         visibleNewOrder,
         comparisonKey,
       );
+      filter.setPinnedSortBy('manual');
       void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
@@ -3876,6 +3875,8 @@ function ExpandedView({
                  * 同样不展示，继续使用本地与已缓存内容即可。
                  */}
                 <PinnedSection
+                  sortBy={filter.pinnedSortBy}
+                  onSortByChange={filter.setPinnedSortBy}
                   entries={sortedPinnedEntries}
                   allKnownProjects={visibleProjectUniverse}
                   renderProject={(
@@ -4084,6 +4085,7 @@ interface CollapsedProps {
   notifications: ReadonlySet<string>;
   /** 与展开态共用的置顶顺序(置顶面板同序)。 */
   manualPinnedOrder: readonly string[];
+  pinnedSortBy: UseSidebarFilterReturn['pinnedSortBy'];
   /** 置顶瓷砖拖拽落定(写回 manualPinnedOrder,与展开态同一持久化语义)。 */
   onReorderPinned: (newOrderIds: string[]) => void;
 }
@@ -4104,6 +4106,7 @@ function CollapsedView({
   attentionSessionId,
   notifications,
   manualPinnedOrder,
+  pinnedSortBy,
   onReorderPinned,
 }: CollapsedProps) {
   const location = useLocation();
@@ -4206,6 +4209,7 @@ function CollapsedView({
         sessions={sessions}
         activeSessionId={activeSessionId}
         manualPinnedOrder={manualPinnedOrder}
+        pinnedSortBy={pinnedSortBy}
         runningSessionIds={railRunningIds}
         notifications={notifications}
         attentionKinds={attentionKinds}

@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { GHOST_SCHEME, ghostPanelLoopbackEmbedAllowed, type InstalledGhost, type GhostAppContextResult, type GhostAgentModelsResult, type GhostMediaModelsResult, type GhostMediaModelType } from '../../../shared/ghost.js';
+import { GHOST_SCHEME, ghostPanelLoopbackEmbedAllowed, type InstalledGhost, type GhostAppContextResult, type GhostAgentModelsResult, type GhostModelPreferencesResult, type GhostMediaModelsResult, type GhostMediaModelType } from '../../../shared/ghost.js';
 import type { PluginModelPickerResult } from '../../../shared/pluginModelPicker.js';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { GHOST_BOOT_PATH, GHOST_MAIL_SDK_PATH, ghostBootHtml, ghostFileMime, resolveGhostFilePath } from './ghostFiles.js';
@@ -29,6 +29,8 @@ export interface GhostPagePorts {
   ghostAppContextProvider: (() => GhostAppContextResult) | null;
   ghostModelPickerProvider: ((id: string, options: unknown, current: () => boolean, signal: AbortSignal) => Promise<PluginModelPickerResult>) | null;
   ghostAgentModelsProvider: ((id: string, device?: string) => Promise<GhostAgentModelsResult>) | null;
+  /** agent.modelPreferences: favorites read/write and recents read via the app's existing stores. */
+  ghostModelPreferencesProvider: GhostModelPreferencesProvider | null;
   ghostMediaModelsProvider: ((id: string, type: GhostMediaModelType) => Promise<GhostMediaModelsResult>) | null;
   ghostModelsHandler: GhostPageEndpoint | null;
   ghostSecretsHandler: GhostPageEndpoint | null;
@@ -39,6 +41,15 @@ export interface GhostPagePorts {
   serveGhostGallery: (id: string, origin: string) => Promise<Response>;
   log: { error(message: string, details?: Record<string, unknown>): void; warn(message: string, details?: Record<string, unknown>): void };
 }
+
+export interface GhostModelPreferencesProvider {
+  read(id: string): Promise<GhostModelPreferencesResult>;
+  /** `body` is the raw request text; the provider checks the capability before parsing it. */
+  applyFavorite(id: string, body: string): Promise<GhostModelPreferencesResult>;
+}
+const MODEL_PREFERENCES_STATUS: Record<string, number> = {
+  PERMISSION_DENIED: 403, INVALID_REQUEST: 400, CONFLICT: 409,
+};
 
 /** Shared page endpoints; Electron and the headless browser differ only in
  * transport. All providers retain the same receipt/owner checks and limits. */
@@ -153,6 +164,42 @@ export function createGhostPageHandler(ports: GhostPagePorts) {
             JSON.stringify({ ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model catalog unavailable' }),
             { status: 503, headers },
           );
+        }
+      }
+      // /model-preferences:本机模型收藏(读写,与 App 双向同步)与最近使用(只读)。
+      // 需 manifest 声明并经安装/更新确认的 agent.modelPreferences;守门在 provider 里按
+      // 已批准、已启用与声明现查。不收查询参数;旧 Host 404,插件按此判断不支持。
+      if (url.pathname === '/model-preferences' || url.pathname === '/model-preferences/favorites') {
+        const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+        const write = url.pathname === '/model-preferences/favorites';
+        if (request.method !== (write ? 'POST' : 'GET')) return new Response(null, { status: 405, headers });
+        if (url.search) return new Response(null, { status: 400, headers });
+        const provider = ports.ghostModelPreferencesProvider;
+        const unavailable = () => new Response(
+          JSON.stringify({ ok: false, errorCode: 'NOT_AVAILABLE', message: 'Model preferences unavailable' }),
+          { status: 503, headers },
+        );
+        if (!provider) return unavailable();
+        try {
+          let result: GhostModelPreferencesResult;
+          if (write) {
+            let body: string;
+            try { body = await readBoundedBodyText(request); }
+            catch { return new Response(null, { status: 400, headers }); }
+            // The body read can span an account switch or reinstall; never write for a stale page.
+            if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
+            result = await provider.applyFavorite(storagePart, body);
+          } else {
+            result = await provider.read(storagePart);
+          }
+          if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
+          return new Response(JSON.stringify(result), {
+            status: result.ok ? 200 : MODEL_PREFERENCES_STATUS[result.errorCode] ?? 503,
+            headers,
+          });
+        } catch {
+          if (!isRegistrationCurrent()) return new Response(null, { status: 403, headers });
+          return unavailable();
         }
       }
       // /media-models?type=image|video:插件自己的设置页 / 面板读取当前客户端可执行

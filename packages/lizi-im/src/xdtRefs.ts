@@ -14,6 +14,8 @@
 
 import path from 'node:path';
 
+import { tt } from './transportText.js';
+
 export interface XdtImageRef {
   alt: string;
   url: string;
@@ -202,9 +204,12 @@ export function xdtFileUrlToAbsPath(url: string): string {
 export function stripXdtForStreaming(text: string): string {
   const refs = parseXdtRefs(text);
   return replaceXdtRefs(text, refs, (ref) => {
-    if (ref.kind === 'image') return `[🖼️ ${ref.alt || '图片'} · 上传中...]`;
-    const display = ref.alt || path.basename(xdtFileUrlToAbsPath(ref.url));
-    return `[📎 ${display} · 准备发送...]`;
+    if (ref.kind === 'image') {
+      const name = ref.alt || tt('imBot.text.transport.streaming.imageFallbackName', '图片');
+      return tt('imBot.text.transport.streaming.imageUploading', '[🖼️ {{name}} · 上传中...]', { name });
+    }
+    const name = ref.alt || path.basename(xdtFileUrlToAbsPath(ref.url));
+    return tt('imBot.text.transport.streaming.filePreparing', '[📎 {{name}} · 准备发送...]', { name });
   });
 }
 

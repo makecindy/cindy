@@ -6,3 +6,6 @@ export function readBotProjectMode(config: Record<string, unknown> | { projectMo
   if (!('projectMode' in config)) return false;
   return config.projectMode === true;
 }
+
+/** No paths, Git output or identity values cross the settings boundary. */
+export type BotProjectRepositoryStatus = 'ready' | 'needs-identity' | 'not-ready' | 'unavailable' | 'failed';

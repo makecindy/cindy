@@ -103,7 +103,7 @@ function MaskedBlur({ mask, intensity, shade }: { mask: EdgeBlurMask; intensity:
   );
 }
 
-export function SessionHeaderNativeTitle({ title,
+export function SessionHeaderNativeTitle({ title, projectIcon,
   tags,
   onTagsPress,
   onTitleDoubleTap,
@@ -138,12 +138,16 @@ export function SessionHeaderNativeTitle({ title,
   return (
     <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }}>
       {/* 双击标题改名;不参与读屏焦点,读屏用户从「任务详情」进入重命名。 */}
-      <Pressable accessible={false} disabled={!onTitleDoubleTap} onPress={handleTitlePress}
-        style={style} testID="session.titleArea">
+      <View style={style}>
         {/* The title sits directly on the bar: no capsule material behind it. */}
         <View style={{ flexDirection: "row", minWidth: 0, alignItems: "center", justifyContent: "center", gap: spacing.xs }}>
           {pinned ? <Pin color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} /> : null}
-          {label}
+          {projectIcon}
+          <Pressable accessible={false} disabled={!onTitleDoubleTap} onPress={handleTitlePress}
+            hitSlop={{ top: 8, bottom: 8 }}
+            style={{ flexShrink: 1, minWidth: 0, minHeight: 28, justifyContent: 'center' }} testID="session.titleArea">
+            {label}
+          </Pressable>
           <TaskTagDots
             tags={tags}
             maxVisible={7}
@@ -158,7 +162,7 @@ export function SessionHeaderNativeTitle({ title,
             {notice}
           </Text>
         ) : null}
-      </Pressable>
+      </View>
     </View>
   );
 }

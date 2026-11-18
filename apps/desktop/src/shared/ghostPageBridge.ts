@@ -82,12 +82,19 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     return () => listeners.delete(cb);
   },
   send: (payload: unknown): Promise<unknown> => ports.send(payload),
+  host: {
+    call: (server: string, tool: string, args: Record<string, unknown> = {}): Promise<unknown> =>
+      ports.send({ type: 'host-tool-request', server, tool, args }),
+  },
   recommendations: (items: unknown[]): Promise<unknown> =>
     ports.send({ type: 'recommendations-update', items }),
   request: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'host-request' }),
   fetch: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'fetch-request' }),
+  network: Object.fromEntries(['open', 'read', 'send', 'close'].map(op => [op,
+    (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'network-request', op }),
+  ])),
   downloads: {
     start: (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'download-request', kind: 'start' }),
     cancel: (req: Record<string, unknown>): Promise<unknown> => ports.send({ ...req, type: 'download-request', kind: 'cancel' }),
@@ -96,6 +103,9 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     ports.send({ ...req, type: 'fs-request' }),
   deviceSync: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'device-sync-request' }),
+  // A live screen plugin's view of its own screens on the account's other computers.
+  liveScreenView: (req: Record<string, unknown>): Promise<unknown> =>
+    ports.send({ ...req, type: 'live-screen-view-request' }),
   library: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'library-request' }),
   targets: Object.fromEntries(['capabilities', 'list', 'resolve', 'send', 'get', 'cancel'].map(kind => [kind,
@@ -120,7 +130,7 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     },
   ])),
   tasks: Object.fromEntries(
-    ['capabilities', 'models', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
+    ['capabilities', 'models', 'imProjects', 'followImProject', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
       kind, async (req: Record<string, unknown> = {}): Promise<unknown> => {
         const result = await ports.send({ ...req, type: 'tasks-request', kind });
         if (result?.ok === true) return result.data;

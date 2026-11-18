@@ -64,6 +64,7 @@ import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHost
 import { useRelayAccountOffers } from '@/device-link/relayAccountDirectory';
 import { RELAY_JOIN_ROUTE, startRelayAccountJoin } from '@/device-link/relayJoinIntent';
 import { AgentNetSettingsGroup } from '@/device-link/AgentNetSettingsGroup';
+import { openManualGiftCard } from '@/gift-card/giftCardIntent';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
@@ -81,7 +82,9 @@ import {
   subscribeMobileVoiceDictionaryCache,
 } from '@/session/mobileVoiceDictionaryCache';
 import { buildMobileVoiceDictionaryEntryViews } from '@/session/mobileVoiceDictionaryView';
+import { AppIconSettings, useAppIconChoice } from '@/settings/AppIconSettings';
 import { UserBubbleSettings } from '@/settings/UserBubbleSettings';
+import { PromptRecommendationSettings } from '@/settings/PromptRecommendationSettings';
 import { shouldCheckBundleUpdate } from '@/update/bundleUpdate';
 import { isGooglePlayInstallation } from '@/update/androidInstallSource';
 import {
@@ -122,6 +125,7 @@ import { useGuardedPush } from '@/utils/useGuardedPush';
 type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'uptodate' | 'error';
 // 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列;
 // 文言等古典版本在菜单里合为一项放最后,选中后下方出现简繁与文风两行。
+// 简体中文 / 繁體中文界面不占额外选项,只在下方多出一行「AI 作答文风」。
 const CLASSICAL_OPTION = 'classical';
 type LanguageOption = LocalePreference | typeof CLASSICAL_OPTION;
 const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
@@ -149,6 +153,7 @@ function hasRunningRemoteTasks(): boolean {
 export default function SettingsScreen() {
   const styles = useThemedStyles(makeStyles);
   const rowStyles = useSettingsRowStyles();
+  const appIconChoice = useAppIconChoice();
   const { preference: themePreference, setPreference: setThemePreference } = useTheme();
   const router = useRouter();
   const push = useGuardedPush();
@@ -927,6 +932,17 @@ export default function SettingsScreen() {
           </SettingsGroup>
         ) : null}
 
+        {/* 礼品卡:与外部链接共用根级兑换面板,这里只负责打开。 */}
+        <SettingsGroup footer={t('giftCard.settingsFooter')} testID="settings.giftCard" title={t('giftCard.sectionTitle')}>
+          <ActionInfoRow
+            accessibilityLabel={t('giftCard.action')}
+            chevron={false}
+            label={t('giftCard.action')}
+            onPress={openManualGiftCard}
+            testID="settings.giftCard.redeem"
+          />
+        </SettingsGroup>
+
         <SettingsGroup title={t('sharedTask.title')}>
           <ActionInfoRow
             accessibilityLabel={t('sharedTask.manageSharing')}
@@ -936,6 +952,8 @@ export default function SettingsScreen() {
             testID="settings.sharedTasks.row"
           />
         </SettingsGroup>
+
+        <PromptRecommendationSettings />
 
         {/* 显示模式:默认跟随系统,手动选择浅色 / 深色即持久化 override(恢复跟随系统 = 清除 override) */}
         <SettingsGroup title={t('settings.appearance.title')}>
@@ -956,6 +974,7 @@ export default function SettingsScreen() {
             />
           </NativePullDownMenu>
           <UserBubbleSettings />
+          {appIconChoice ? <AppIconSettings choice={appIconChoice} /> : null}
         </SettingsGroup>
 
         {/* 显示语言:默认跟随系统,手动选择即持久化 override(恢复跟随系统 = 清除 override) */}
@@ -980,40 +999,40 @@ export default function SettingsScreen() {
             />
           </NativePullDownMenu>
           {classical ? (
-            <>
-              <NativePullDownMenu
-                actions={CLASSICAL_SCRIPTS.map((script) => ({
-                  id: script.locale,
-                  state: script.locale === classical ? 'on' : 'off',
-                  title: t(`settings.language.classical.script.${script.key}`),
-                }))}
-                onAction={selectClassicalScript}
-              >
-                <ChoicePickerRow
-                  expanded={classicalPicker === 'script'}
-                  label={t('settings.language.classical.scriptAriaLabel')}
-                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
-                  testID="settings.language.classicalScript"
-                  value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
-                />
-              </NativePullDownMenu>
-              <NativePullDownMenu
-                actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
-                  id: style.id,
-                  state: style.id === classicalStyle ? 'on' : 'off',
-                  title: t(`settings.language.classical.styles.${style.id}`),
-                }))}
-                onAction={selectClassicalStyle}
-              >
-                <ChoicePickerRow
-                  expanded={classicalPicker === 'style'}
-                  label={t('settings.language.classical.styleAriaLabel')}
-                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
-                  testID="settings.language.classicalStyle"
-                  value={t(`settings.language.classical.styles.${classicalStyle}`)}
-                />
-              </NativePullDownMenu>
-            </>
+            <NativePullDownMenu
+              actions={CLASSICAL_SCRIPTS.map((script) => ({
+                id: script.locale,
+                state: script.locale === classical ? 'on' : 'off',
+                title: t(`settings.language.classical.script.${script.key}`),
+              }))}
+              onAction={selectClassicalScript}
+            >
+              <ChoicePickerRow
+                expanded={classicalPicker === 'script'}
+                label={t('settings.language.classical.scriptAriaLabel')}
+                onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
+                testID="settings.language.classicalScript"
+                value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
+              />
+            </NativePullDownMenu>
+          ) : null}
+          {classical ? (
+            <NativePullDownMenu
+              actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
+                id: style.id,
+                state: style.id === classicalStyle ? 'on' : 'off',
+                title: t(`settings.language.classical.styles.${style.id}`),
+              }))}
+              onAction={selectClassicalStyle}
+            >
+              <ChoicePickerRow
+                expanded={classicalPicker === 'style'}
+                label={t('settings.language.classical.styleAriaLabel')}
+                onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
+                testID="settings.language.classicalStyle"
+                value={t(`settings.language.classical.styles.${classicalStyle}`)}
+              />
+            </NativePullDownMenu>
           ) : null}
         </SettingsGroup>
 

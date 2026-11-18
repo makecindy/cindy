@@ -1,3 +1,4 @@
+import { reconcileDeletedTaskViewState } from '../../mcp-apps/viewStateStore.js';
 import { registerCompanionImport } from '../../bot-import/registration.js';
 import { registerTaskTagsIpc } from './taskTags';
 /**
@@ -26,7 +27,7 @@ import { registerSessionImportIpc } from '../../session-import/ipc';
 import { registerSessionShareIpc } from './session-share';
 import { registerRecentWorkdirsIpc } from './recentWorkdirs';
 import { registerProjectAliasesIpc } from './projectAliases';
-import { registerRightSidebarTabsIpc } from './rightSidebarTabs';
+import { registerRightSidebarTabsIpc } from './rightSidebarTabs.desktop';
 import { registerSubagentRunsIpc } from './subagentRuns';
 import { enqueueDurableWrite } from '../../messagePersistBroadcaster.desktop';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
@@ -165,6 +166,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       // Resume saved invitations after the database and account boundary are ready.
       await recoverActiveTeammateInvitations();
       if (!isReadyOwnerCurrent()) return;
+      void reconcileDeletedTaskViewState(client, isReadyOwnerCurrent);
       startMediaRefCompensationReconcile(userId, client, isReadyOwnerCurrent);
       const withSessionLock = opts.withSessionLock;
       const db = client.drizzle;

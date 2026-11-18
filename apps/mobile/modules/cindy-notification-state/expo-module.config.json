@@ -1,0 +1,1 @@
+{"platforms":["apple"],"apple":{"podspecPath":"./ios/CindyNotificationState.podspec","modules":["CindyNotificationStateModule"],"appDelegateSubscribers":["CindyNotificationStateSubscriber"]}}

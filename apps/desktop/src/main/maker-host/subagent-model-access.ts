@@ -1,40 +1,17 @@
-import type {
-  AgentCredentialMode,
-  ClaudeSubagentModelAccessResult,
-} from '@cindy/maker-core';
 
+// The access check itself lives in subagentModelAccessCore.ts (shared with the Node Host). This
+// module builds the single Desktop instance; its ports resolve the Desktop key reader and provider
+// service when called, never when this module loads.
+import { createClaudeSubagentModelAccess } from './subagentModelAccessCore.js';
 import { readClaudeApiKey } from './auth-adapters.js';
-import {
-  getActiveCatalog,
-  getXdGatewayModelAccessSnapshot,
-} from './active-catalog.js';
 import { getDesktopProviderService } from './createDesktopProviderService.js';
-import { classifyClaudeSubagentModelAccess } from './subagent-model-access-policy.js';
 
-/**
- * ClaudeCodeAgent 的 host 注入入口。每次 PreToolUse 都现场读取 key、权威 XD
- * 快照和 ProviderView，因此账号切换不会复用会话启动时冻结的权限结论。
- */
-export async function resolveDesktopClaudeSubagentModelAccess(context: {
-  providerId?: string | null;
-  parentModel: string;
-  credentialMode?: AgentCredentialMode;
-  model: string;
-}): Promise<ClaudeSubagentModelAccessResult> {
-  try {
-    const providers = await getDesktopProviderService().listProviders({
-      allowSideEffects: false,
-      catalog: getActiveCatalog(),
-    });
-    return classifyClaudeSubagentModelAccess({
-      providerId: context.providerId,
-      credentialMode: context.credentialMode,
-      model: context.model,
-      gatewayKeyAvailable: Boolean(readClaudeApiKey()),
-      xdSnapshot: getXdGatewayModelAccessSnapshot(),
-      providers,
-    });
-  } catch {
-    return { status: 'unknown' };
-  }
+const desktopSubagentModelAccess = createClaudeSubagentModelAccess({
+  readClaudeApiKey: (...args) => readClaudeApiKey(...args),
+  getDesktopProviderService: (...args) => getDesktopProviderService(...args),
+});
+type Instance = typeof desktopSubagentModelAccess;
+
+export function resolveDesktopClaudeSubagentModelAccess(...args: Parameters<Instance['resolveDesktopClaudeSubagentModelAccess']>): ReturnType<Instance['resolveDesktopClaudeSubagentModelAccess']> {
+  return desktopSubagentModelAccess.resolveDesktopClaudeSubagentModelAccess(...args);
 }

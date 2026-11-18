@@ -27,6 +27,11 @@ export function modelDisableKey(providerId: string, modelId: string): string {
   return `${providerId}:${modelId}`;
 }
 
+/** Receiving-device preference; never aliases a local provider or another peer. */
+export function remoteProviderDisableKey(deviceId: string, providerId: string): string {
+  return `remote:${JSON.stringify([deviceId, providerId])}`;
+}
+
 /** 该供应商是否被整体停用。 */
 export function isProviderDisabled(
   access: ModelDisableOverrides | undefined,

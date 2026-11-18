@@ -104,6 +104,8 @@ export interface RegisterSetupMigrationOptions {
   getBuiltInSkills(): readonly BuiltInSkillDescriptor[];
   /** Window the keys/SSH question is shown over on this computer. */
   getMainWindow(): BrowserWindow | null;
+  /** Earlier-version data was brought over during this process's sign-in. */
+  getLegacyMigrated(): boolean;
 }
 
 const IM_CHANNEL_SECRETS: ReadonlyArray<[string, string]> = [
@@ -553,6 +555,7 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
           return null;
       }
     },
+    legacyMigrated: () => options.getLegacyMigrated(),
     looksNew: async () => {
       const ghosts = listGhosts().filter((ghost) => ghost.builtin !== true);
       if (ghosts.length > 0) {
@@ -711,6 +714,10 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
     assertTrustedAppRendererEvent(event);
     return service.dismiss(parseDismissRequest(raw));
   });
+  ipcMain.handle(SETUP_MIGRATION_IPC.FIRST_RUN_GUIDE, (event) => {
+    assertTrustedAppRendererEvent(event);
+    return service.firstRunGuide();
+  });
 }
 
 function stringList(value: unknown, max: number): string[] {
@@ -735,7 +742,7 @@ export function parseApplyRequest(raw: unknown): SetupMigrationApplyRequest {
 
 export function parseDismissRequest(raw: unknown): SetupMigrationDismissRequest {
   const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  if (value.kind === 'suggestion' || value.kind === 'checklist') return { kind: value.kind };
+  if (value.kind === 'checklist') return { kind: 'checklist' };
   if (value.kind === 'checklist-item' && typeof value.id === 'string' && value.id.length <= 600) {
     return { kind: 'checklist-item', id: value.id };
   }

@@ -1,10 +1,10 @@
 {
   "imageDelivery": {
     "stored": "Imagen entregada",
-    "failed": "Error en la entrega de la imagen. Vuelva a intentar transferir la imagen existente.",
+    "failed": "Error en la entrega de la imagen. Vuelve a intentar transferir la imagen existente.",
     "retry": "Reintentar entrega",
     "retrying": "Entregando…",
-    "retryFailed": "La entrega aún no está disponible. Verifique que la computadora de origen esté en línea."
+    "retryFailed": "La entrega aún no está disponible. Comprueba que la computadora de origen esté en línea."
   },
   "agentActionRow": {
     "noContent": "Nada que mostrar",
@@ -87,7 +87,7 @@
       "ghPrView": "Ver solicitud de extracción",
       "ghPrChecks": "Ver comprobaciones de la solicitud de extracción",
       "ghPrStatus": "Verificar el estado de la solicitud de extracción",
-      "ghPrDiff": "Ver cambios en las solicitudes de extracción",
+      "ghPrDiff": "Ver cambios de la solicitud de extracción",
       "ghPrCreate": "Crear solicitud de extracción",
       "ghPrEdit": "Editar solicitud de extracción",
       "ghPrComment": "Comentar sobre la solicitud de extracción",

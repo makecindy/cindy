@@ -47,6 +47,12 @@
     "footer": "로그는 휴대폰에 최대 7일, 8MB까지 저장되며 자동으로 업로드되지 않습니다. 내보낸 로그에는 대화 본문과 자격 증명이 포함되지 않고, 업로드 시에는 필터링된 실행 기록과 버전 정보만 보냅니다."
   },
   "title": "설정",
+  "promptRecommendation": {
+    "label": "다음 입력 제안",
+    "description": "답변 후 다음에 입력할 내용을 제안합니다. 이 휴대폰에만 적용됩니다.",
+    "saveFailed": "설정은 현재 사용 중에는 적용되지만 저장하지 못했습니다.",
+    "reset": "기본값으로 재설정"
+  },
   "appearance": {
     "title": "외관",
     "modeLabel": "표시 모드",
@@ -79,6 +85,16 @@
       "reset": "기본값으로 복원",
       "apply": "적용",
       "hex": "색상 코드"
+    },
+    "appIcon": {
+      "label": "앱 아이콘",
+      "saveFailed": "앱 아이콘을 변경하지 못했습니다. 다시 시도해 주세요",
+      "options": {
+        "default": "기본",
+        "cat": "검은 고양이",
+        "wordmark": "Cindy 워드마크",
+        "mark": "Cindy 심볼"
+      }
     }
   },
   "language": {
@@ -108,7 +124,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "문언문(기본)",
+        "prose": "문언문",
         "tang-poetry": "당시",
         "song-ci": "송사",
         "yuan-qu": "원곡",
@@ -171,7 +187,11 @@
       "auto": "자동",
       "on": "항상 켜기",
       "off": "끄기"
-    }
+    },
+    "actionReplyPlaceholder": "답장 입력",
+    "actionNotDelivered": "컴퓨터에 전달되지 않았습니다. Cindy를 열어 처리해 주세요.",
+    "actionReplyNotDelivered": "답장이 전송되지 않았습니다. Cindy를 열어 다시 보내 주세요: {{text}}",
+    "actionRequestEnded": "이 요청은 이미 처리되었거나 만료되었습니다."
   },
   "about": {
     "sectionTitle": "이 휴대폰 정보",
@@ -204,14 +224,14 @@
   },
   "devServerEnvironment": {
     "title": "서버 환경",
-    "description": "CindyDev가 연결하는 업무 서버에만 영향을 줍니다",
+    "description": "CindyDev가 연결하는 백엔드 서버에만 영향을 줍니다",
     "accessibility": "서버 환경 전환",
     "options": {
       "dev": "Dev",
       "release": "Release"
     },
     "confirmTitle": "{{environment}} 환경으로 전환할까요?",
-    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 App이 다시 시작됩니다.",
+    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 앱이 다시 시작됩니다.",
     "cancel": "취소",
     "switchAction": "전환",
     "switching": "전환 중",
@@ -420,7 +440,57 @@
       "voice": "길게 눌러 말하기",
       "scrollKeys": "오른쪽 스틱",
       "scroll": "스크롤",
-      "page": "페이지 이동"
+      "page": "페이지 이동",
+      "triggerScrollKeys": "L2 / R2 + 방향키 위/아래",
+      "triggerScroll": "표시된 내용 스크롤",
+      "sendText": "입력한 글 보내기",
+      "taskHint": "이 단축키는 세션 화면에서 사용할 수 있습니다. 음성 키로 지정한 버튼은 음성 입력이 우선되며, 놓으면 글이 입력란에 남습니다."
     }
+  },
+  "projectInfo": {
+    "automatic": "프로젝트 아이콘 사용",
+    "autoLoading": "아이콘 찾는 중…",
+    "autoNone": "프로젝트 이름으로 만든 문자 아이콘을 사용합니다.",
+    "autoSource": "출처",
+    "githubAvatar": "GitHub 계정 이미지 사용",
+    "title": "프로젝트 설정",
+    "name": "표시 이름",
+    "saveName": "이름 저장",
+    "reset": "기본값 복원",
+    "icon": "아이콘",
+    "directory": "프로젝트 폴더",
+    "done": "완료",
+    "failed": "저장하지 못했습니다. 다시 시도하세요.",
+    "unavailable": "설정을 사용할 수 없습니다. 업데이트된 컴퓨터에 연결하고 다시 시도하세요.",
+    "back": "뒤로",
+    "cancel": "취소",
+    "changeIcon": "아이콘 변경",
+    "chooseIcon": "아이콘 선택",
+    "save": "저장",
+    "symbols": "아이콘",
+    "emoji": "이모지",
+    "letters": "문자",
+    "image": "이미지",
+    "upload": "이미지 업로드",
+    "imageHint": "PNG, JPG, WebP · 정사각형으로 자르기",
+    "imageError": "이미지를 읽을 수 없습니다. 더 작은 PNG 또는 JPG를 사용하세요.",
+    "search": "아이콘 검색",
+    "customEmoji": "이모지 붙여넣기",
+    "lettersHint": "문자 또는 숫자 1~2개를 입력하세요.",
+    "thisComputer": "이 컴퓨터",
+    "nameHint": "프로젝트 목록에 표시됩니다. 폴더 이름은 바뀌지 않습니다.",
+    "copy": "경로 복사",
+    "copied": "복사됨",
+    "applyIcon": "아이콘 사용",
+    "noResults": "일치하는 아이콘이 없습니다",
+    "discardHint": "저장하지 않은 변경을 취소할까요?",
+    "keepEditing": "계속 편집",
+    "discard": "변경 취소",
+    "colors": {
+      "default": "기본 색상 (테마에 맞춤)"
+    }
+  },
+  "navigation": {
+    "unavailable": "대상 컴퓨터의 설정을 열 수 없습니다. 온라인 상태이고 원격 제어가 허용되어 있는지 확인하세요. 이전 버전이라면 Cindy를 업데이트하세요."
   }
 }

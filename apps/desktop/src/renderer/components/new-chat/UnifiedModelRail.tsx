@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { History, LayoutGrid, Star } from 'lucide-react';
+import { History, LayoutGrid, Star, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
 import { ModelPoolQuotaDetails, useModelPoolQuota, type ModelPoolQuota } from './ModelPoolQuota';
@@ -152,6 +152,8 @@ export function UnifiedModelRail({
                   })
                 : item.kind === 'all'
                   ? t('newChat.modelSelector.unified.railAll')
+                  : item.kind === 'model-groups'
+                    ? t('modelGroups.title')
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
@@ -198,6 +200,8 @@ export function UnifiedModelRail({
                 <engineOption.Mark size={14} className="shrink-0" />
               ) : item.kind === 'all' ? (
                 <LayoutGrid size={16} />
+              ) : item.kind === 'model-groups' ? (
+                <Waypoints size={16} />
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (
@@ -241,6 +245,7 @@ function RailButton(props: RailButtonProps) {
   return props.provider ? (
     <ModelPickerAccountBoundary
       providerId={props.provider.auth?.method === 'oauth' ? props.provider.id : ''}
+      subscriptionPool={!!props.provider.subscriptionPool || !!props.provider.subscriptionAccountPool}
       deviceId={props.usageDeviceId}
     >
       <ProviderQuotaButton {...props} provider={props.provider} />
@@ -265,12 +270,15 @@ function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }
     ? t('providerGroup.member.accountCount', { count: pool.members.length })
     : pool && pickerAccount ? pool.members[0].identity
     : pickerAccount
-      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      ? pickerAccount.identity
       : props.accountIdentity;
   const displayedQuota = pool
     ? pool.average === null
       ? null
-      : { usedPercent: 100 - pool.average, resetsAt: null }
+      : {
+          usedPercent: 100 - pool.average,
+          resetsAt: pool.isPool ? null : pool.members[0]?.resetsAt ?? null,
+        }
     : quota;
   return (
     <RailButtonView {...props} accountIdentity={identity} quota={displayedQuota} pool={pool} />
@@ -321,7 +329,8 @@ function RailButtonView({
   const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
-      <ModelPoolQuotaDetails pool={pool} />
+      {/* 标题已含完整账号时明细不再重复；供应商组标题不带账号、生成名截断到 50 字时只有半个账号，照常列出。 */}
+      <ModelPoolQuotaDetails pool={pool} accountInTitle={!groupNote && !!accountIdentity && displayLabel.includes(accountIdentity)} />
     </>
   ) : quotaLabel || note ? (
     <>

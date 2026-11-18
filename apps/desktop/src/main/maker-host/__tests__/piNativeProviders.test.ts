@@ -18,6 +18,14 @@ vi.mock('../managed-skills.js', () => ({
 vi.mock('../model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
 }));
+// Native provider specifications do not dispatch accounts. Keep migration
+// admission fail-closed without booting share/credential services during collection.
+// Real account permissions are exercised by subscription-accounts/runtime.test.ts.
+vi.mock('../../subscription-accounts/legacyAccountAccess.js', () => ({
+  legacyCodexAccountCanRun: () => false,
+  openAiRouteAllowsModel: () => false,
+  setLegacyCodexAccountPaused: () => { throw new Error('Account mutation is outside this provider fixture'); },
+}));
 
 vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => true,
@@ -58,6 +66,22 @@ import { EMPTY_MODEL_CATALOG_OVERRIDES, sanitizeModelCatalogOverrides } from '..
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
+
+// #10434, unit: an empty UI intensity ladder must not disable the native switch.
+it.each(['xiaomi', 'xiaomi-token-plan-cn', 'xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp'])(
+  'retains the %s native Pi on/off map behind the visible switch', source => {
+    const row = PROVIDER_MODEL_CATALOG.providers[source].find(row => row.id === 'mimo-v2.6-pro')!;
+    const config = { id: 'mimo-switch', name: 'MiMo', runtimes: { pi: {
+      baseUrl: row.upstream, wireProtocol: 'openai-chat' as const, models: [{ id: row.id, name: row.name }],
+    } } };
+    const provider = buildUserProvider(config, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const native = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined,
+      { ...BUNDLED_CATALOG, providers: [provider] }).providers[0].models[0];
+    expect(provider.models.pi![0]).toMatchObject({ thinkingToggle: true, efforts: [], defaultEffort: null });
+    expect(native).toMatchObject({ reasoning: true, thinkingLevelMap: row.execution.pi.thinkingLevelMap,
+      compat: { supportsReasoningEffort: false, thinkingFormat: 'deepseek' } });
+  },
+);
 
 // Unit: native Pi bypasses the Desktop proxy; assert the emitted model config,
 // including endpoint overrides and explicit user headers (not just a helper).
@@ -737,6 +761,74 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       pi: piRuntime({ baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'gemini-3.6-flash', name: 'Gemini', piApi: 'google-generative-ai' }] }),
     } }], () => 'fixture-key');
     expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe(baseUrl);
+  });
+
+  // #10200: discovered models absent from the static native catalog still use
+  // Chat. Exercise the launch builder, including explicit per-model routing.
+  it.each([
+    { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', store: false },
+    { baseUrl: 'https://generativelanguage.googleapis.com/v1/openai/', store: false },
+    { baseUrl: 'https://proxy.example/v1beta/openai', store: undefined },
+    { baseUrl: 'https://generativelanguage.googleapis.com.example/v1beta/openai', store: undefined },
+    { baseUrl: 'https://generativelanguage.googleapis.com:8443/v1beta/openai', store: undefined },
+    { baseUrl: 'https://generativelanguage.googleapis.com/custom/openai', store: undefined },
+  ])('scopes Google Chat store compatibility to $baseUrl', ({ baseUrl, store }) => {
+    const config = { id: 'google-discovered', name: 'Google', runtimes: { pi: {
+      catalogPresetId: 'google-gemini-api', baseUrl, wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }],
+    } } };
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, buildUserProvider(config)] };
+    const { providers } = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined, catalog);
+    const provider = providers[0];
+    const model = provider.models[0];
+    expect(model.api ?? provider.api).toBe('openai-completions');
+    expect(model.baseUrl ?? provider.baseUrl).toBe(baseUrl);
+    expect(model.compat?.supportsStore).toBe(store);
+  });
+
+  it('uses the final model endpoint for Google Chat compat and preserves explicit APIs and other compat', () => {
+    const official = 'https://generativelanguage.googleapis.com/v1beta/openai';
+    const proxy = 'https://proxy.example/v1';
+    const models = [
+      { id: 'explicit-chat', piApi: 'openai-completions' as const },
+      { id: 'proxy-chat', route: { baseUrl: proxy, wireProtocol: 'openai-chat' as const } },
+      { id: 'native-google', piApi: 'google-generative-ai' as const },
+      { id: 'custom-path', route: { baseUrl: official, wireProtocol: 'openai-chat' as const, requestPath: '/custom/chat' } },
+      { id: 'bundled-chat' },
+      // #10225 review: these saved paths are discarded by the production route
+      // resolver. The effective official Chat endpoint still needs store omitted.
+      { id: 'stale-api-route', api: 'openai-completions' as const,
+        route: { baseUrl: proxy, wireProtocol: 'anthropic-messages' as const, requestPath: '/custom/messages' } },
+      { id: 'stale-pi-api-route', piApi: 'openai-completions' as const,
+        route: { baseUrl: proxy, wireProtocol: 'anthropic-messages' as const, requestPath: '/custom/messages' } },
+    ];
+    const bundled = new Map([['fixture', new Map([['bundled-chat', {
+      id: 'bundled-chat', api: 'openai-completions' as const, baseUrl: official,
+      name: 'Bundled', reasoning: true, input: ['text'] as Array<'text' | 'image'>,
+      contextWindow: 128_000, maxTokens: 4096,
+      compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens' },
+    }]])]]);
+    const { providers } = buildPiNativeProvidersFromConfigs([
+      { id: 'official', name: 'Official', runtimes: { pi: { baseUrl: official, wireProtocol: 'openai-chat', models } } },
+      { id: 'proxy', name: 'Proxy', runtimes: { pi: { baseUrl: proxy, wireProtocol: 'openai-chat',
+        models: [{ id: 'routed-google', route: { baseUrl: official, wireProtocol: 'openai-chat' } }] } } },
+      { id: 'custom-runtime', name: 'Custom runtime', runtimes: { pi: { baseUrl: official,
+        wireProtocol: 'openai-chat', requestPath: '/custom/chat', models: [{ id: 'custom-runtime-chat' }] } } },
+    ], () => 'fixture-key', undefined, bundled);
+    expect(providers[0].models[0]).toMatchObject({ api: 'openai-completions', compat: { supportsStore: false } });
+    expect(providers[0].models[1]).toMatchObject({ baseUrl: proxy });
+    expect(providers[0].models[1].compat?.supportsStore).toBeUndefined();
+    expect(providers[0].models[2]).toMatchObject({ api: 'google-generative-ai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta' });
+    expect(providers[0].models[2].compat?.supportsStore).toBeUndefined();
+    expect(providers[0].models[3].compat?.supportsStore).toBeUndefined();
+    expect(providers[0].models[4].compat).toEqual({ supportsDeveloperRole: false, maxTokensField: 'max_tokens', supportsStore: false });
+    expect(providers[1].models[0]).toMatchObject({ baseUrl: official, compat: { supportsStore: false } });
+    for (const model of providers[0].models.slice(5)) {
+      expect(model.api ?? providers[0].api).toBe('openai-completions');
+      expect(model.baseUrl ?? providers[0].baseUrl).toBe(official);
+      expect(model.compat?.supportsStore).toBe(false);
+    }
+    expect(providers[2].models[0].compat?.supportsStore).toBeUndefined();
   });
 
   it('strips inherited /v1 only for an Anthropic model without its own route (#7258)', () => {
@@ -3201,6 +3293,45 @@ it.each(['field', 'model'] as const)('inherits a text-only default when the user
   expect(result.providers[0]!.models[0]!.input).toEqual(['text']);
 });
 
+// #11023, unit: an unknown Chat gateway must retain an explicit per-connection
+// capability through catalog refresh and launch. Existing Google-only tests do
+// not exercise local overrides; false is the minimal previously dropped value.
+it.each([false, true, undefined])('projects a scoped Pi Chat store override %s without changing routes', supportsStore => {
+  const cfg = { id: 'store-fixture', name: 'Gateway', runtimes: { pi: {
+    baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'gemini-4-hydrogen', name: 'Gemini' }, { id: 'other', name: 'Other' },
+      { id: 'responses', name: 'Responses', api: 'openai-responses' as const }],
+  } } };
+  setActiveCatalog(BUNDLED_CATALOG);
+  setCustomProviderConfigs([cfg]);
+  const patches = supportsStore === undefined ? {} : Object.fromEntries(
+    ['gemini-4-hydrogen', 'responses'].map(id => [`store-fixture:${id}`, { perAgent: { pi: { supportsStore } } }]),
+  );
+  const parsed = sanitizeModelCatalogOverrides({ patches });
+  expect(parsed.invalid).toEqual([]);
+  setLocalCatalogOverrides(parsed.overrides);
+  try {
+    const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(result.providers[0].baseUrl).toBe(cfg.runtimes.pi.baseUrl);
+    expect(result.providers[0].api).toBe('openai-completions');
+    expect(result.providers[0].models[0].compat).toEqual({ supportsDeveloperRole: false,
+      ...(supportsStore !== undefined ? { supportsStore } : {}) });
+    expect(result.providers[0].models[1].compat).toEqual({ supportsDeveloperRole: false });
+    expect(result.providers[0].models[2].compat).toBeUndefined();
+    // Removing the local setting restores the original native behavior.
+    setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+    const reset = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key', undefined, undefined, getActiveCatalog());
+    expect(reset.providers[0].models[0].compat).toEqual({ supportsDeveloperRole: false });
+  } finally { setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES); setCustomProviders([]); }
+});
+
+it.each([{ base: { supportsStore: false } }, { perAgent: { codex: { supportsStore: false } } },
+  { perAgent: { pi: { supportsStore: 'false' } } }])('rejects store overrides outside the Pi capability contract: %j', patch => {
+  const parsed = sanitizeModelCatalogOverrides({ patches: { 'custom%3Astore-fixture:model': patch } });
+  expect(parsed.invalid).toEqual(['patches:custom%3Astore-fixture:model']);
+  expect(parsed.overrides.patches).toEqual({});
+});
+
 it.each([true, false])('keeps local image override %s above the custom connection form', (supportsImageInput) => {
   const cfg = { id: 'xai', name: 'My gateway', runtimes: { pi: {
     baseUrl: 'https://user.example/v1', wireProtocol: 'openai-chat' as const,
@@ -3235,6 +3366,27 @@ it('keeps mixed OpenCode protocols and image inputs in the native Pi launch', ()
   expect(providers[0]?.models[1]).toMatchObject({ api: 'google-generative-ai', input: ['text', 'image'] });
   expect(providers[0]?.models[2]).toMatchObject({ input: ['text'] });
   expect(providers[0]?.models[3]).toMatchObject({ input: ['text', 'image'] });
+});
+
+// #10269, unit: OAuth Carbon needs both a per-model Chat API and IDE headers.
+// The existing Astra launch test uses an API key and never covers this failure.
+it('launches ID-only Copilot Carbon with the shared IDE Chat configuration', () => {
+  const { providers } = buildPiNativeProvidersFromConfigs([{
+    id: 'copilot-carbon', name: 'Copilot', auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! }, runtimes: { pi: {
+      baseUrl: 'https://api.individual.githubcopilot.com', wireProtocol: 'anthropic-messages',
+      catalogPresetId: 'github-copilot', models: [{ id: 'gemini-4-carbon', name: 'Carbon' }],
+    } },
+  }], () => null, undefined, undefined, undefined, 'http://127.0.0.1:12345');
+  expect(providers).toHaveLength(1);
+  expect(providers[0].api).toBe('anthropic-messages');
+  expect(providers[0].models[0]).toMatchObject({
+    id: 'gemini-4-carbon', api: 'openai-completions',
+    headers: { 'Copilot-Integration-Id': 'vscode-chat', 'Editor-Version': expect.any(String),
+      'Editor-Plugin-Version': expect.any(String), 'User-Agent': expect.any(String) },
+    compat: { supportsStrictMode: true, supportsStore: false,
+      supportsDeveloperRole: false, supportsReasoningEffort: false },
+  });
+  expect(providers[0].adapterProvider).toBe('github-copilot');
 });
 
 // #9863, unit: ID-only Copilot Astra must reach the actual native launch descriptor
@@ -3274,8 +3426,10 @@ it('carries every unambiguous portable catalog model into the Pi descriptor', ()
       }], () => 'test-key');
       expect(providers[0]?.models[0], `${row.upstream} ${row.id}`).toMatchObject({
         api, input: (row.modalities?.input ?? ['text']).filter(value => value === 'text' || value === 'image'),
-        contextWindow: row.contextWindow, maxTokens: row.maxOutput,
+        contextWindow: row.contextWindow,
       });
+      // Sparse transport-only records omit the optional output limit entirely.
+      expect(providers[0]?.models[0].maxTokens).toBe(row.maxOutput);
       checked++;
     }
   }

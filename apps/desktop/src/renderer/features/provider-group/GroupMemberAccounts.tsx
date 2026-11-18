@@ -14,7 +14,6 @@ import {
 } from '@/components/status/QuotaHoverCard';
 import {
   buildSubscriptionAccountUsageCard,
-  type UsageCardAccount,
 } from '@/components/status/usageCardModel';
 import {
   getDataOwnerGeneration,
@@ -118,14 +117,12 @@ export function useGroupMemberAccounts(
   return { accounts: current?.accounts ?? null, loading: pool !== null && current === null };
 }
 
-/** `defaultCard` 是这台电脑原有的用量卡，它属于 CLI 默认账号，保留实时刷新与 Codex 重置次数。 */
+/** Every listed account displays its own quota; unavailable snapshots remain unknown. */
 export function GroupMemberAccountList({
   accounts,
-  defaultCard,
   hideAccountNames = false,
 }: {
   accounts: GroupMemberAccount[];
-  defaultCard: UsageCardAccount | null;
   hideAccountNames?: boolean;
 }) {
   const { t, i18n } = useTranslation();
@@ -137,10 +134,7 @@ export function GroupMemberAccountList({
         {accounts.map(({ account, number }) => {
           const name =
             account.identity || t('providerGroup.member.accountFallback', { index: number });
-          const usage =
-            account.id === 'default' && defaultCard
-              ? defaultCard
-              : buildSubscriptionAccountUsageCard(account.usage, t, Date.now(), locale);
+          const usage = buildSubscriptionAccountUsageCard(account.usage, t, Date.now(), locale);
           // 正常的账号不写状态，只有不能分配或读不到时才说明。
           const status = account.paused
             ? t('providerGroup.member.status.paused')

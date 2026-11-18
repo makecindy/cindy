@@ -1,0 +1,506 @@
+{
+ "20MiB": {
+  "generatedAt": "2026-11-14T04:26:57.526Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "totalBytes": 20971520,
+  "chunkBytes": 524288,
+  "concurrency": 4,
+  "results": [
+   {
+    "profile": {
+     "name": "far",
+     "rateBytesPerSec": 6250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 640000
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.63,
+    "ms": 5286,
+    "failed": 0,
+    "taps": {
+     "count": 11,
+     "p50": 369,
+     "p90": 656,
+     "max": 671
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "far",
+     "rateBytesPerSec": 6250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 640000
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.69,
+    "ms": 4853,
+    "failed": 0,
+    "taps": {
+     "count": 10,
+     "p50": 351,
+     "p90": 642,
+     "max": 642
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "far",
+     "rateBytesPerSec": 6250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 640000
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.19,
+    "ms": 18057,
+    "failed": 0,
+    "taps": {
+     "count": 37,
+     "p50": 1626,
+     "p90": 4813,
+     "max": 5880
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "far",
+     "rateBytesPerSec": 6250000,
+     "oneWayDelayMs": 50,
+     "queueLimitBytes": 640000
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.21,
+    "ms": 16277,
+    "failed": 0,
+    "taps": {
+     "count": 33,
+     "p50": 1378,
+     "p90": 4780,
+     "max": 6131
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "wide",
+     "rateBytesPerSec": 12500000,
+     "oneWayDelayMs": 8,
+     "queueLimitBytes": 512000
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.9,
+    "ms": 1860,
+    "failed": 0,
+    "taps": {
+     "count": 4,
+     "p50": 144,
+     "p90": 179,
+     "max": 179
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "wide",
+     "rateBytesPerSec": 12500000,
+     "oneWayDelayMs": 8,
+     "queueLimitBytes": 512000
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.86,
+    "ms": 1962,
+    "failed": 0,
+    "taps": {
+     "count": 4,
+     "p50": 156,
+     "p90": 226,
+     "max": 226
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "wide",
+     "rateBytesPerSec": 12500000,
+     "oneWayDelayMs": 8,
+     "queueLimitBytes": 512000
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.37,
+    "ms": 4556,
+    "failed": 0,
+    "taps": {
+     "count": 10,
+     "p50": 323,
+     "p90": 878,
+     "max": 878
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "wide",
+     "rateBytesPerSec": 12500000,
+     "oneWayDelayMs": 8,
+     "queueLimitBytes": 512000
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.33,
+    "ms": 5094,
+    "failed": 0,
+    "taps": {
+     "count": 11,
+     "p50": 408,
+     "p90": 616,
+     "max": 807
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "unshaped",
+     "rateBytesPerSec": 1000000000,
+     "oneWayDelayMs": 0,
+     "queueLimitBytes": 67108864
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": null,
+    "ms": 842,
+    "failed": 0,
+    "taps": {
+     "count": 2,
+     "p50": 54,
+     "p90": 54,
+     "max": 54
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "unshaped",
+     "rateBytesPerSec": 1000000000,
+     "oneWayDelayMs": 0,
+     "queueLimitBytes": 67108864
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": null,
+    "ms": 962,
+    "failed": 0,
+    "taps": {
+     "count": 2,
+     "p50": 80,
+     "p90": 80,
+     "max": 80
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "unshaped",
+     "rateBytesPerSec": 1000000000,
+     "oneWayDelayMs": 0,
+     "queueLimitBytes": 67108864
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": null,
+    "ms": 2024,
+    "failed": 0,
+    "taps": {
+     "count": 5,
+     "p50": 168,
+     "p90": 180,
+     "max": 180
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "unshaped",
+     "rateBytesPerSec": 1000000000,
+     "oneWayDelayMs": 0,
+     "queueLimitBytes": 67108864
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 20971520,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": null,
+    "ms": 2089,
+    "failed": 0,
+    "taps": {
+     "count": 5,
+     "p50": 173,
+     "p90": 219,
+     "max": 219
+    },
+    "tapsFailed": 0
+   }
+  ]
+ },
+ "8MiB": {
+  "generatedAt": "2026-11-14T04:28:30.793Z",
+  "node": "v24.22.1",
+  "platform": "win32-x64",
+  "totalBytes": 8388608,
+  "chunkBytes": 524288,
+  "concurrency": 4,
+  "results": [
+   {
+    "profile": {
+     "name": "fast",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.96,
+    "ms": 8777,
+    "failed": 0,
+    "taps": {
+     "count": 18,
+     "p50": 1676,
+     "p90": 2098,
+     "max": 2485
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.95,
+    "ms": 8787,
+    "failed": 0,
+    "taps": {
+     "count": 18,
+     "p50": 1697,
+     "p90": 2063,
+     "max": 2091
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.75,
+    "ms": 11209,
+    "failed": 0,
+    "taps": {
+     "count": 23,
+     "p50": 2092,
+     "p90": 2937,
+     "max": 3842
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.76,
+    "ms": 10996,
+    "failed": 0,
+    "taps": {
+     "count": 22,
+     "p50": 2076,
+     "p90": 2633,
+     "max": 3557
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast-jitter",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144,
+     "jitterMs": 30
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.95,
+    "ms": 8835,
+    "failed": 0,
+    "taps": {
+     "count": 18,
+     "p50": 1674,
+     "p90": 2083,
+     "max": 2536
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast-jitter",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144,
+     "jitterMs": 30
+    },
+    "mode": "v1",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.95,
+    "ms": 8835,
+    "failed": 0,
+    "taps": {
+     "count": 18,
+     "p50": 1704,
+     "p90": 2048,
+     "max": 2075
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast-jitter",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144,
+     "jitterMs": 30
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "down",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.87,
+    "ms": 9636,
+    "failed": 0,
+    "taps": {
+     "count": 20,
+     "p50": 1988,
+     "p90": 2237,
+     "max": 2494
+    },
+    "tapsFailed": 0
+   },
+   {
+    "profile": {
+     "name": "fast-jitter",
+     "rateBytesPerSec": 1000000,
+     "oneWayDelayMs": 20,
+     "queueLimitBytes": 262144,
+     "jitterMs": 30
+    },
+    "mode": "udp-relay",
+    "run": 1,
+    "direction": "up",
+    "totalBytes": 8388608,
+    "chunkBytes": 524288,
+    "concurrency": 4,
+    "utilization": 0.87,
+    "ms": 9675,
+    "failed": 0,
+    "taps": {
+     "count": 20,
+     "p50": 2013,
+     "p90": 2289,
+     "max": 2457
+    },
+    "tapsFailed": 0
+   }
+  ]
+ }
+}

@@ -1,3 +1,4 @@
+import { closeFirstRunGuide } from '@/features/first-run-guide/firstRunGuideStore';
 import { resetTaskTagCatalogCache } from '@/features/task-tags/taskTagEvents';
 import {
   createContext,
@@ -114,7 +115,8 @@ export interface AuthContextValue {
   switchAccount: (accountKey: string) => Promise<void>;
   beginAddAccount: () => Promise<DesktopLoginActionResult>;
   cancelAddAccount: () => Promise<void>;
-  enterLocalMode: () => Promise<void>;
+  /** null explicitly marks clients that cannot create a local identity. */
+  enterLocalMode: (() => Promise<void>) | null;
   exitLocalMode: () => Promise<void>;
   hasAccountDeletionReceipt: boolean;
   accountDeletionRestored: boolean;
@@ -146,6 +148,7 @@ function publishDataOwnerGeneration(
   const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
   const ownerChanged = previousOwnerId !== dataOwnerId;
   if (ownerChanged) {
+    closeFirstRunGuide();
     resetTaskTagCatalogCache();
     invalidateRemoteCatalogSnapshots();
   }
@@ -707,7 +710,8 @@ export function AuthProvider({
       switchAccount,
       beginAddAccount,
       cancelAddAccount,
-      enterLocalMode,
+      // The web shim synthesizes methods, so method presence is not a capability.
+      enterLocalMode: window.electronAPI?.hostConnection?.client === 'browser' ? null : enterLocalMode,
       exitLocalMode,
       hasAccountDeletionReceipt,
       accountDeletionRestored,

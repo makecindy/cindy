@@ -85,6 +85,77 @@ const validParams = {
   providerId: null,
 };
 
+// #10893, unit: same-device group members are distinct provider connections.
+// The old same-engine no-op retained the old provider/native session. Exercise
+// the real transaction with an observable persisted route and bootstrap input.
+it.each([
+  { agentDeviceId: null, resolved: false },
+  { agentDeviceId: 'mini', resolved: false },
+  { agentDeviceId: 'mini', resolved: true },
+])('rebuilds a same-device group route for the selected subscription ($agentDeviceId, resolved=$resolved)', async ({ agentDeviceId, resolved }) => {
+  let row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId, providerId: 'openai-sub-aaaaaaaa' });
+  const bootstrapRoutes: AgentSwitchSessionRow[] = [];
+  const { deps, calls } = makeDeps({
+    getSessionRow: vi.fn(async () => ({ ...row })),
+    findParkedEngineSession: vi.fn(async () => ({ sdkSessionId: 'wrong-account', watermarkCreatedAt: 1, watermarkRowid: 1 })),
+    relocateNativeHistory: vi.fn(async () => 'wrong-account'),
+    assertAgentDeviceRouteUsable: vi.fn(async () => undefined),
+    ...(resolved ? { resolveProviderGroupTarget: vi.fn(async () => ({ agentDeviceId, providerId: 'openai-sub-bbbbbbbb' })) } : {}),
+    applyAgentSwitchToDb: vi.fn(async (_id, patch) => { row = { ...row, ...patch, providerId: patch.providerId ?? null }; }),
+    bootstrapSwitchedSession: vi.fn(async () => { bootstrapRoutes.push({ ...row }); }),
+  });
+  const result = await performSessionAgentSwitch(deps, {
+    ...validParams, agentDeviceId: resolved ? null : agentDeviceId,
+    providerId: resolved ? 'openai' : 'openai-sub-bbbbbbbb', applyNow: true,
+    ...(!resolved ? { providerGroupRelocation: true } : {}),
+  });
+  expect(result).toMatchObject({ switched: true, engineReady: true });
+  expect(calls[0]).toBe('close');
+  expect(bootstrapRoutes).toEqual([expect.objectContaining({ agentDeviceId, providerId: 'openai-sub-bbbbbbbb', sdkSessionId: null })]);
+  expect(deps.findParkedEngineSession).not.toHaveBeenCalled();
+  expect(deps.relocateNativeHistory).not.toHaveBeenCalled();
+  if (agentDeviceId) {
+    expect(deps.assertAgentDeviceRouteUsable).toHaveBeenCalledWith(agentDeviceId, 'codex', 'gpt-5.5', 'openai-sub-bbbbbbbb');
+    // The DB port uses this to avoid resolving the remote account's window
+    // against the task computer's catalog, even though the device did not move.
+    expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentDeviceId }));
+  }
+  const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0]![1];
+  expect(boundary).toMatchObject({ fromProviderId: 'openai-sub-aaaaaaaa', toProviderId: 'openai-sub-bbbbbbbb', resumed: false });
+  expect(boundary).not.toHaveProperty('toAgentDeviceId');
+  expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('你好'), undefined);
+});
+
+it('rejects an unavailable same-device connection before closing or changing the source', async () => {
+  const { deps } = makeDeps({
+    getSessionRow: vi.fn(async () => makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' })),
+    assertAgentDeviceRouteUsable: vi.fn(async () => { throw new Error('ACCESS_REVOKED'); }),
+  });
+  await expect(performSessionAgentSwitch(deps, {
+    ...validParams, agentDeviceId: 'mini', providerId: 'openai-sub-bbbbbbbb', applyNow: true, providerGroupRelocation: true,
+  })).rejects.toThrow('ACCESS_REVOKED');
+  expect(deps.closeSession).not.toHaveBeenCalled();
+  expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
+});
+
+it('keeps the source connection when same-device quota balancing summary is declined', async () => {
+  const row = makeRow({ agentKind: 'codex', model: 'gpt-5.5', agentDeviceId: 'mini', providerId: 'openai-sub-aaaaaaaa' });
+  const { deps } = makeDeps({
+    getSessionRow: vi.fn(async () => row),
+    confirmNativeHistoryFallback: vi.fn(async () => false),
+  });
+  await expect(performSessionAgentSwitch(deps, {
+    ...validParams, agentDeviceId: 'mini', providerId: 'openai-sub-bbbbbbbb', applyNow: true,
+    providerGroupRelocation: true, providerGroupSwitchReason: 'quota-rebalance',
+  })).rejects.toThrow('NATIVE_HISTORY_FALLBACK_DECLINED');
+  expect(deps.confirmNativeHistoryFallback).toHaveBeenCalledWith('s1', 'mini');
+  expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+  expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
+  expect(deps.setSessionProvider).not.toHaveBeenCalled();
+  expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
+});
+
 describe('same-harness native relocation', () => {
   // Quota balancing is now automatic only while native context survives. Exercise the
   // real switch entry: refusal after a failed resume must restore the original route.
@@ -118,6 +189,10 @@ describe('same-harness native relocation', () => {
     '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] remote task limit for this device reached',
     '[REMOTE_AGENT_DEVICE_UNREACHABLE] the other computer is offline',
     '[REMOTE_AGENT_MODEL_UNAVAILABLE] model is not offered',
+    // #10833, unit: presentation prefixes must not turn a transport failure into
+    // a native-history failure and offer a lossy summary after rollback.
+    ...['INVOKE_TIMEOUT', 'BACKPRESSURE', 'DEVICE_UNRESPONSIVE', 'DEVICE_OFFLINE', 'ACCESS_REVOKED']
+      .map(code => remoteAgentLinkError(Object.assign(new Error('transport failed'), { code })).message),
   ])('stays on the source without asking when the target cannot take the task: %s', async message => {
     let row = makeRow({ workingDir: '/project', sdkSessionId: 'source-native', agentDeviceId: null });
     const original = { ...row };
@@ -2092,18 +2167,24 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
   it.each([
     { orcaRole: null, orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' }) },
     { orcaRole: null, orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker', releasedAt: 1 }) },
-  ])('execution-device Worker rejects user relocation while preserving harness/model selection: %j', async (identity) => {
+  ])('execution-device Worker moves its Agent like a normal task (2026-11-12): %j', async (identity) => {
     const row = { ...identity, model: 'anthropic/claude-opus-5-5[1m]' };
     const { agentDeviceId: _omit, ...withoutLocation } = backToTaskComputer;
+    // The user's choice is only staged; it lands at the next send with a full handoff.
     const userMove = relocationHarness(row);
-    await expect(performSessionAgentSwitch(userMove.deps, { ...backToTaskComputer, agentDeviceId: 'office-pc' }))
-      .rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
-    const staged = relocationHarness(row);
-    await expect(performSessionAgentSwitch(staged.deps, {
-      ...backToTaskComputer,
-      agentDeviceId: 'office-pc',
-      providerGroupRelocation: true,
-    })).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
+    await expect(performSessionAgentSwitch(userMove.deps, { ...backToTaskComputer, agentDeviceId: 'share:s-1' }))
+      .resolves.toMatchObject({ deferred: true, switched: false });
+    expect(userMove.assertAgentDeviceRouteUsable).toHaveBeenCalled();
+    expect(userMove.pending.get('s1')).toMatchObject({ targetAgentDeviceId: 'share:s-1' });
+    expect(userMove.calls).toEqual([]);
+    await applyPendingAgentSwitchIfIdle(userMove.deps, 's1');
+    expect(userMove.findParkedEngineSession).not.toHaveBeenCalled();
+    expect(userMove.calls).toEqual(['close', 'db', 'provider', 'boundary', 'pending']);
+    expect(userMove.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentDeviceId: 'share:s-1',
+      sdkSessionId: null,
+    }));
+    expect(userMove.pending.get('s1')).toBeUndefined();
     const otherModel = relocationHarness(row);
     await expect(performSessionAgentSwitch(otherModel.deps, {
       ...withoutLocation,
@@ -2116,15 +2197,13 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       targetAgentKind: 'codex',
       applyNow: true,
       })).resolves.toMatchObject({ switched: true });
-    expect(userMove.calls).toEqual([]);
-    expect(staged.calls).toEqual([]);
   });
 
   // PR #6830 merge regression, unit: the scheduled entry materialized inherited
-  // null and turned a same-computer Harness switch into a forbidden Worker move.
-  // Earlier tests entered the handoff directly. Exercise both production entries;
-  // an actual location change must still fail before runtime or database mutation.
-  it.each([undefined, null, 'office-pc'])('scheduled execution-device Worker keeps its location boundary: %j', async (agentDeviceId) => {
+  // null and turned a same-computer Harness switch into a Worker move. Exercise
+  // both production entries; since 2026-11-12 an explicit location change on an
+  // execution-device Worker is applied like any other task.
+  it.each([undefined, null, 'office-pc'])('scheduled execution-device Worker applies the saved location: %j', async (agentDeviceId) => {
     const h = relocationHarness({ agentDeviceId: null, orcaRole: null,
       orcaRemoteLead: JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' }),
     });
@@ -2142,15 +2221,13 @@ describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
       }),
       applyModel,
     });
-    if (agentDeviceId) {
-      await expect(result).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
-      expect(h.calls).toEqual([]);
-      expect(applyModel).not.toHaveBeenCalled();
-    } else {
-      await expect(result).resolves.toMatchObject({ agentKind: 'codex', agentDeviceId: null });
-      expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({ agentKind: 'codex' }));
-      expect(applyModel).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', agentDeviceId: null }));
-    }
+    const expected = agentDeviceId ?? null;
+    await expect(result).resolves.toMatchObject({ agentKind: 'codex', agentDeviceId: expected });
+    // The DB write only carries agentDeviceId when the location actually changes.
+    expect(h.deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agentKind: 'codex', ...(agentDeviceId ? { agentDeviceId } : {}),
+    }));
+    expect(applyModel).toHaveBeenCalledWith(expect.objectContaining({ agentKind: 'codex', agentDeviceId: expected }));
   });
 
   it('协同 Lead 离开远程电脑:关闭旧远程会话遇链路错误仍提交新位置', async () => {
@@ -2485,9 +2562,15 @@ describe('换到供应商组那一项：由组选一台能用的电脑(provider-
     expect(pending.get('s1')).toBeUndefined();
   });
 
-  it.each(['lead', 'worker'])('协同任务 %s:组选回当前位置时按交接重建,不走需要点选窗口确认的原地换模型', async (orcaRole) => {
+  it.each(['lead', 'worker', 'remote-worker'])('协同任务 %s:组选回当前位置时按交接重建,不走需要点选窗口确认的原地换模型', async (role) => {
+    // PR #10230 unit: a remote Worker with null orcaRole must rebuild when
+    // its selected group returns to the current provider, clearing the intent.
+    const orcaRole = role === 'remote-worker' ? null : role;
+    const orcaRemoteLead = role === 'remote-worker'
+      ? JSON.stringify({ leadDeviceId: 'lead-device', leadSessionId: 'lead-1', workerLabel: 'worker' })
+      : null;
     const pending = createPendingAgentSwitchRegistry();
-    const row = makeRow({ agentKind: 'cc', model: 'claude-fable-5', providerId: 'xd', agentDeviceId: null, orcaRole });
+    const row = makeRow({ agentKind: 'cc', model: 'claude-fable-5', providerId: 'xd', agentDeviceId: null, orcaRole, orcaRemoteLead });
     const selectSameAgentModel = vi.fn(async () => ({ deferred: false }));
     const commitBinding = vi.fn(async () => undefined);
     const { deps } = makeDeps({

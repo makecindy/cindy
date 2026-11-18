@@ -153,6 +153,7 @@ export interface ScheduleFormState {
   webhookEvents?: string;
   /** 发送方预设 id，或 custom。 */
   webhookPreset?: string;
+  webhookRepositories?: string;
   /** 是否验证签名；只对预设生效，自定义格式在 JSON 里写。 */
   webhookSigned?: boolean;
   /** 自定义格式的 JSON 文本，原样保留用户输入。 */
@@ -605,7 +606,10 @@ export function scheduleAgentKindForForm(form: ScheduleFormState): ScheduleFormS
 /** 编辑已有任务时，从它的发送方得到表单初值。 */
 export function webhookSourceFormFields(
   source: ScheduleWebhookSource | undefined,
-): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat'> {
+): Pick<ScheduleFormState, 'webhookPreset' | 'webhookSigned' | 'webhookFormat' | 'webhookRepositories'> {
+  if (source?.preset === 'github-app') {
+    return { webhookPreset: 'github-app', webhookRepositories: source.repositories.join('\n'), webhookSigned: true, webhookFormat: '' };
+  }
   if (source?.preset === 'custom') {
     return { webhookPreset: 'custom', webhookSigned: true, webhookFormat: JSON.stringify(source.format, null, 2) };
   }
@@ -635,6 +639,7 @@ export function parseWebhookFormatText(text: string | undefined): ScheduleWebhoo
 function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhookSource } {
   const preset = form.webhookPreset;
   if (preset === undefined) return {};
+  if (preset === 'github-app') return { source: { preset, repositories: parseGithubRepositories(form.webhookRepositories) } };
   if (preset === 'custom') {
     const source = parseWebhookFormatText(form.webhookFormat);
     return source ? { source } : {};
@@ -642,6 +647,16 @@ function webhookSourceInput(form: ScheduleFormState): { source?: ScheduleWebhook
   const known = scheduleWebhookPreset(preset);
   if (!known) return {};
   return { source: form.webhookSigned === false ? { preset: known.id, signed: false } : { preset: known.id } };
+}
+
+export function parseGithubRepositories(text: string | undefined): string[] {
+  return [...new Set((text ?? '').split(/[\s,]+/).filter(Boolean).map(repo => repo.toLowerCase()))];
+}
+
+export function validGithubRepositories(text: string | undefined): boolean {
+  const repositories = parseGithubRepositories(text);
+  return repositories.length > 0 && repositories.length <= 50
+    && repositories.every(repo => /^[a-z\d][a-z\d-]{0,38}\/[a-z\d_.-]{1,100}$/i.test(repo));
 }
 
 export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput {

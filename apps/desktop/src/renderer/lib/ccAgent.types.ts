@@ -12,6 +12,8 @@ import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
   MessageSourceGroup,
+  MessageSourceGroupRequest,
+  MessageSourceGroupThread,
   MessageSourcePlugin,
 } from '@cindy/maker-shared/message-source';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
@@ -74,6 +76,10 @@ export interface MessageSessionOrigin {
   /** 来源任务属于某个伙伴时：标签显示伙伴名与头像（名字优先取实时资料，其次用快照）。 */
   senderBotId?: string;
   senderBotName?: string;
+  /** 群成员在伙伴任务卡的话题里说的话，由伙伴转进这件任务：标签写出是谁、在哪个群聊。 */
+  groupThread?: MessageSourceGroupThread;
+  /** 本机主人在群里交给「群里的 Cindy」的请求：标签写出来自哪个群、是谁。 */
+  groupRequest?: MessageSourceGroupRequest;
   /**
    * Orca Lead / Worker 互发的消息：发送方角色名（Worker 为其 role）。卡片标题据此写
    * 「来自 Worker「role」的消息」；来源标签仍只在有 senderSessionId 时出现。
@@ -106,6 +112,8 @@ export interface PluginModelRouteNote {
   effort?: string;
   reason?: string;
   why?: 'no-opinion' | 'failed' | 'unavailable-route';
+  /** 这行说明来自用户的模型组而不是插件(pluginName 是路线的名字)；缺省 = 插件。 */
+  source?: 'model-group';
 }
 
 /**
@@ -395,6 +403,8 @@ export interface Session {
   runtimePending?: SessionRuntimePendingProjection | null;
   /** Allows a companion input to reach host baseline recovery; does not assert model availability. */
   runtimeBaselineRecoveryPending?: boolean;
+  /** Host projection of existing task plugin choices, including uninstalled providers. */
+  runtimePluginsSelected?: boolean;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
@@ -427,7 +437,7 @@ export interface Session {
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
   /** Host-owned teammate link, also used by the existing history API. Display only. */
-  companion?: { id: string; role: string; channel?: string; routineId?: string } | null;
+  companion?: { id: string; role: string; taskProjectDir?: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */

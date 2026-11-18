@@ -61,7 +61,7 @@ export function initializeBotAuthorizationHost(
       !(await isBotAuthorizationSession(sessionId)) ||
       !isDataOwnerBroadcastScopeCurrent(scope)
     )
-      throw new Error('Authorization owner or teammate is unavailable');
+      throw new Error('Authorization owner or buddy is unavailable');
   };
   const service: Parameters<typeof initBotAuthorizationService>[0] = {
     async adapter(sessionId, target) {
@@ -76,7 +76,7 @@ export function initializeBotAuthorizationHost(
       const imChannel = target.kind === 'host' ? botAuthorizationImChannel(target.id) : null;
       if (imChannel) {
         const bot = await readBotAuthorizationBot(sessionId);
-        if (!bot) throw new Error('Authorization owner or teammate is unavailable');
+        if (!bot) throw new Error('Authorization owner or buddy is unavailable');
         return createBotImAuthorizationAdapter({
           channel: imChannel,
           bot,

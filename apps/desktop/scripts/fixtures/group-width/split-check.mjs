@@ -8,7 +8,7 @@ export async function checkSplit(page, ui) {
     const { group } = await window.electronAPI.maker.getBotGroup('fixture-group');
     group.messages = group.messages.map((message, i) => ({ ...message, reactions: [], content: i ? [
       '今天发布前需要确认这几件事：',
-      '1. **主界面与气泡宽度**：群聊和私聊使用同样的阅读宽度。打开话题后，两边正文随各自的可用空间调整。',
+      '1. **主界面与气泡宽度**：群聊长消息与私聊共用阅读宽度。打开话题后，两边正文随各自的可用空间调整。',
       '2. **分栏极值**：侧栏展开时，把话题拖到最宽和最窄，长消息仍然可以阅读，操作按钮不会遮住正文。',
       '3. **复杂内容**：长链接、代码、表格和长文件名保持在当前消息区域内，表格最后一列可以通过内部滚动查看。',
       '4. **输入与草稿**：主群和话题分别输入多行内容，拖拽、收起侧栏、关闭重开话题之后，两份草稿都应保留。',

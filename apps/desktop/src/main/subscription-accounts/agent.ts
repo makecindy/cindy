@@ -13,16 +13,24 @@ import {
   type RefreshLocalModelsOptions,
 } from '@cindy/maker-core';
 import { CHATGPT_MODEL_PREFIX } from '@cindy/model-providers/classification';
-import {
-  isSubscriptionProvider,
-  type SubscriptionProvider,
-} from '../../shared/subscriptionAccounts.js';
+import { isSubscriptionProvider, type SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import {
   acquireSubscriptionAccount,
+  codexSubscriptionAccountForHistoryHome,
   observeSubscriptionAccountUsage,
+  refreshSubscriptionPool,
+  refreshSubscriptionPoolCodexModels,
+  refreshSubscriptionPoolClaudeModels,
+  hasConnectedSubscriptionPool,
+  hasUnavailableSubscriptionPoolAccount,
   type SubscriptionAccountLease,
 } from './runtime.js';
-import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexAccountId } from './store.js';
+import { readAccountBinding, readPool, writeAccountBindings, readLegacyCodexProviderId } from './store.js';
+import {
+  readMergedProviderAccount,
+  accountProviderId,
+  resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
+} from './placement.js';
 import { registerSessionSubscriptionAccount } from './session.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 
@@ -32,20 +40,26 @@ interface SubscriptionRouteOptions {
   model?: string;
 }
 interface SubscriptionAccountRouting extends Pick<AuthAdapter, 'getState'> {
+  /** Host-owned thread history lookup; no credential reads or history relocation. */
+  resolveCodexHistoryHome?(threadId: string): Promise<string | undefined>;
   /** Codex can use an OAuth host while routing an implicit model elsewhere. */
   resolveDefaultProvider?(model?: string): string | null | Promise<string | null>;
 }
 
+/**
+ * The provider whose accounts serve this start: a built-in subscription, a provider Cindy created
+ * for subscription accounts, or a registered legacy Codex connection (placement.ts). Returns the
+ * provider id, never a different provider: each provider assigns only among its own accounts.
+ */
 async function providerFor(
   agent: Pick<BaseAgent, 'kind'>,
   options: SubscriptionRouteOptions,
   auth?: SubscriptionAccountRouting,
-): Promise<SubscriptionProvider | null> {
+  detectUnpooledDefault = false,
+): Promise<string | null> {
   if (options.remoteHostId) return null;
   const requested = options.providerId?.trim() || null;
-  let providerId = isSubscriptionProvider(requested)
-    ? requested
-    : requested && readLegacyCodexAccountId(requested) ? 'openai' : null;
+  let ref = requested ? resolveSubscriptionPoolProviderRef(requested) : null;
   // This reserved namespace always uses the OpenAI subscription bridge, even
   // without an explicit provider. Its account must be registered for the bridge.
   if (!requested && agent.kind === 'claude-code' && options.model?.startsWith(CHATGPT_MODEL_PREFIX))
@@ -54,17 +68,49 @@ async function providerFor(
     const native = agent.kind === 'claude-code' ? 'anthropic' : 'openai';
     // An implicit route may use the native login or the gateway. Ask the same
     // adapter as startup; a same-name catalog model is not proof of its source.
-    if (readPool(native) && !resolveAgentCredentialMode({ agentKind: agent.kind, model: options.model })) {
+    if ((detectUnpooledDefault || readPool(native)) && !resolveAgentCredentialMode({ agentKind: agent.kind, model: options.model })) {
       const source = agent.kind === 'codex' ? await auth.resolveDefaultProvider?.(options.model) : null;
       if (source && source !== native) return null;
       const state = await auth.getState({ model: options.model });
-      if (state.authenticated && state.authSource === 'oauth') providerId = native;
+      if (state.authenticated && state.authSource === 'oauth') ref = { kind: native, providerId: native };
     }
   }
-  return (agent.kind === 'claude-code' && providerId === 'anthropic') ||
-    (providerId === 'openai' && ['codex', 'claude-code', 'pi'].includes(agent.kind))
-    ? providerId
+  if (!ref) return null;
+  return (agent.kind === 'claude-code' && ref.kind === 'anthropic') ||
+    (ref.kind === 'openai' && ['codex', 'claude-code', 'pi'].includes(agent.kind))
+    ? ref.providerId
     : null;
+}
+
+/**
+ * Below this wrapper the engines know only the built-in subscription routes. A start routed
+ * through another provider's accounts runs on its kind's built-in route with the selected account,
+ * so the engine uses that account's directory. A legacy Codex connection running its own account
+ * keeps its id (its directory is the connection's own), as before 2026-11-13.
+ */
+function engineProviderId(providerId: string | null | undefined, accountId: string): string | null | undefined {
+  const ref = resolveSubscriptionPoolProviderRef(providerId);
+  if (!ref || ref.providerId === ref.kind) return providerId;
+  if (!ref.created && ref.ownAccount === accountId) return providerId;
+  return ref.kind;
+}
+
+/** Validate the shared identity before translating this call to the native engine's route.
+ * The outer session/grant remains on the original provider; only the engine-facing copy changes,
+ * with exactly the same model allowlist, route token and selected account capability.
+ */
+function engineOptions<T extends Pick<StartSessionOptions, 'providerId' | 'deviceHosted'>>(
+  options: T, accountId: string,
+): T {
+  const requested = options.providerId?.trim();
+  if (!requested) return options;
+  const guest = options.deviceHosted?.guest ? options.deviceHosted.guestProvider : undefined;
+  if (guest && guest.providerId !== requested)
+    throw new AgentStartupStoppedError(new Error('[REMOTE_AGENT_PROVIDER_NOT_ALLOWED] this provider is not allowed for remote use on this computer'));
+  const providerId = engineProviderId(requested, accountId)!;
+  return { ...options, providerId,
+    ...(guest && providerId !== requested ? { deviceHosted: { ...options.deviceHosted!,
+      guestProvider: { ...guest, providerId } } } : {}) };
 }
 function assertOwnerCurrent(owner: string) {
   if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
@@ -76,21 +122,68 @@ export async function resolveSubscriptionPoolProvider(
   agent: Pick<BaseAgent, 'kind'>,
   options: SubscriptionRouteOptions,
   auth?: SubscriptionAccountRouting,
-): Promise<SubscriptionProvider | null> {
+): Promise<string | null> {
   const owner = activeOwnerScopeKey();
   const provider = await providerFor(agent, options, auth);
   assertOwnerCurrent(owner);
-  return provider && readPool(provider) ? provider : null;
+  const kind = provider ? resolveSubscriptionPoolProviderRef(provider)?.kind : undefined;
+  return provider && kind && readPool(kind) ? provider : null;
 }
-function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string): string | undefined {
-  const account = providerId ? readLegacyCodexAccountId(providerId) : undefined;
-  if (!account) return;
-  if (!readPool('openai')?.accounts.some(entry => entry.id === account))
+function kindOf(providerId: string): SubscriptionProvider {
+  return resolveSubscriptionPoolProviderRef(providerId)?.kind ?? (providerId as SubscriptionProvider);
+}
+/** Existing native history proves its login independently of the old default auth.
+ * Share this gate between resume and fork so implicit routes keep the same boundaries.
+ */
+async function historicalCodexAccount(
+  agent: Pick<BaseAgent, 'kind'>,
+  options: SubscriptionRouteOptions,
+  threadId: string | undefined,
+  keys: string[],
+  auth?: SubscriptionAccountRouting,
+): Promise<string | undefined> {
+  const requested = options.providerId?.trim() || null;
+  if (agent.kind !== 'codex' || options.remoteHostId || !threadId || !readPool('openai') ||
+      (requested && requested !== 'openai')) return;
+  const owner = activeOwnerScopeKey();
+  if (!requested) {
+    if (resolveAgentCredentialMode({ agentKind: 'codex', model: options.model })) return;
+    const source = await auth?.resolveDefaultProvider?.(options.model);
+    assertOwnerCurrent(owner);
+    if (source && source !== 'openai') return;
+  }
+  const binding = keys.map(key => readAccountBinding(key, 'openai')).find(Boolean);
+  if (binding) return binding.accountId;
+  const home = await auth?.resolveCodexHistoryHome?.(threadId);
+  assertOwnerCurrent(owner);
+  return home ? codexSubscriptionAccountForHistoryHome(home) : undefined;
+}
+/**
+ * A provider merged into another one with no accounts left (a legacy connection or a created
+ * provider) still pins its own account for its old tasks. A provider that owns accounts assigns
+ * among them like any provider (placement.ts), so nothing is pinned here.
+ */
+function legacyConnectionAccount(providerId: string | null | undefined, keys: string[], agentKind: string, hasNativeHistory: boolean): string | undefined {
+  const ref = resolveSubscriptionPoolProviderRef(providerId);
+  if (!ref?.ownAccount) return;
+  if (!readPool(ref.kind)?.accounts.some(entry => entry.id === ref.ownAccount)
+    && keys.some(key => readAccountBinding(key, ref.kind)?.accountId === ref.ownAccount))
     throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
-  if (keys.some(key => {
-    const binding = readAccountBinding(key, 'openai');
-    return binding && binding.accountId !== account;
-  })) throw new Error('The task subscription account changed');
+  const fallback = readMergedProviderAccount(ref.providerId);
+  if (!fallback) return;
+  const bindings = keys.map(key => readAccountBinding(key, ref.kind)).filter(Boolean);
+  // A builtin with its CLI profile moved out is only a historical route. Fresh tasks cannot
+  // turn that history fallback into an explicit account selection in another provider.
+  if (ref.providerId === ref.kind && !hasNativeHistory && bindings.length === 0) return;
+  const binding = bindings[0];
+  if (bindings.some(entry => entry?.accountId !== binding?.accountId)
+    || (binding && binding.accountId !== fallback && (binding.via ?? ref.kind) !== ref.providerId))
+    throw new Error('The task subscription account changed');
+  // A merged provider may previously have hosted several accounts. Recorded history keeps its
+  // actual account; only an old route without any binding falls back to the provider's first one.
+  const account = binding?.accountId ?? fallback;
+  if (!readPool(ref.kind)?.accounts.some(entry => entry.id === account))
+    throw new AgentNotAuthenticatedError(agentKind, 'Subscription account was removed');
   return account;
 }
 function wrapHandle(
@@ -175,7 +268,11 @@ function guardAccountSwitch(
   agent: BaseAgent,
   initial: StartSessionOptions,
   auth?: SubscriptionAccountRouting,
+  /** The provider id the engine actually runs on (engineProviderId); same as initial by default. */
+  engineId: string | null | undefined = initial.providerId,
+  legacyDefaultProvider?: SubscriptionProvider,
 ): AgentSessionHandle {
+  const owner = activeOwnerScopeKey();
   let providerId = initial.providerId;
   const crossesPool = async (model: string, target?: { providerId?: string | null }) => {
     const next = target?.providerId !== undefined ? target.providerId : providerId;
@@ -186,12 +283,29 @@ function guardAccountSwitch(
     }
     return false;
   };
+  // Staying on the task's own provider means staying on the engine's route.
+  const toEngine = <T extends { providerId?: string | null } | undefined>(options: T): T =>
+    options && options.providerId !== undefined && options.providerId === providerId && engineId !== providerId
+      ? { ...options, providerId: engineId } : options;
   return new Proxy(handle, {
     get(target, property) {
+      if (property === 'send')
+        return async (...args: Parameters<AgentSessionHandle['send']>) => {
+          // The first pool setting can be saved after this default-account runtime started.
+          // Do not create a pool on startup, but honor its live pause/removal once it exists.
+          if (legacyDefaultProvider) {
+            assertOwnerCurrent(owner);
+            const pool = readPool(legacyDefaultProvider);
+            const account = pool?.accounts.find(a => a.id === 'default');
+            if (pool && (pool.disconnected || !account || account.paused))
+              throw new Error('The task subscription account is disabled; retry to switch accounts');
+          }
+          return target.send(...args);
+        };
       if (property === 'requiresModelSwitchRebuild')
         return async (model: string, options?: { providerId?: string | null }) =>
           (await crossesPool(model, options)) ||
-          (await target.requiresModelSwitchRebuild?.(model, options)) ||
+          (await target.requiresModelSwitchRebuild?.(model, toEngine(options))) ||
           false;
       if (property === 'previewModelSwitch' && target.previewModelSwitch)
         return async (model: string, options?: { providerId?: string | null }) =>
@@ -202,13 +316,20 @@ function guardAccountSwitch(
                 windowVerified: false,
                 reason: 'Select the subscription account for the new provider',
               }
-            : target.previewModelSwitch!(model, options);
+            : target.previewModelSwitch!(model, toEngine(options));
       if (property === 'setModel' && target.setModel)
         return async (...args: Parameters<NonNullable<AgentSessionHandle['setModel']>>) => {
           if (await crossesPool(args[0], args[1]))
             throw new Error('Subscription provider switch requires rebuilding the session');
-          const result = await target.setModel!(...args);
-          if (args[1]?.providerId !== undefined) providerId = args[1].providerId;
+          const nextProviderId = args[1]?.providerId !== undefined ? args[1].providerId : providerId;
+          const next = await providerFor(agent, { ...initial, model: args[0], providerId: nextProviderId }, auth, true);
+          assertOwnerCurrent(owner);
+          // Unknown historical accounts in an existing pool must retain their legacy route.
+          const nextDefault = next && isSubscriptionProvider(next) && (!readPool(next) || next === legacyDefaultProvider)
+            ? next : undefined;
+          const result = await target.setModel!(args[0], toEngine(args[1]), ...(args.slice(2) as []));
+          providerId = nextProviderId;
+          legacyDefaultProvider = nextDefault;
           return result;
         };
       const value = Reflect.get(target, property, target);
@@ -225,12 +346,25 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         return async (options?: RefreshLocalModelsOptions) => {
           if (target.kind === 'pi') return target.refreshLocalModels(options);
           const provider = target.kind === 'claude-code' ? 'anthropic' : 'openai';
+          const ref = options?.providerId ? resolveSubscriptionPoolProviderRef(options.providerId) : null;
           if (
             !readPool(provider) ||
-            (options?.providerId && options.providerId !== provider) ||
+            (options?.providerId && ref?.kind !== provider) ||
+            (ref && !ref.created && ref.providerId !== provider) ||
+            options?.[NATIVE_SUBSCRIPTION_ACCOUNT] ||
             options?.credentialMode === 'gateway-key'
           )
             return target.refreshLocalModels(options);
+          if (provider === 'anthropic')
+            return refreshSubscriptionPoolClaudeModels(true, options?.providerId ?? undefined);
+          if (provider === 'openai' && readPool(provider)?.accounts.some(a => !readLegacyCodexProviderId(a.id))) {
+            const providers = options?.providerId ? [options.providerId]
+              : [...new Set(readPool(provider)!.accounts.filter(account => !readLegacyCodexProviderId(account.id))
+                .map(account => accountProviderId(provider, account.id)))];
+            await Promise.all(providers.map(id => refreshSubscriptionPool(id)));
+            await refreshSubscriptionPoolCodexModels(true, options?.providerId ?? undefined);
+            return providers.some(id => hasConnectedSubscriptionPool(id) && !hasUnavailableSubscriptionPoolAccount(id));
+          }
           const lease = await acquireSubscriptionAccount(provider, undefined, [], true);
           try {
             return await target.refreshLocalModels({
@@ -243,23 +377,31 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         };
       if (property === 'startSession')
         return async (options: StartSessionOptions) => {
-          const startLegacy = async () =>
-            guardAccountSwitch(await target.startSession(options), target, options, auth);
+          const startLegacy = async () => {
+            const owner = activeOwnerScopeKey();
+            // A native default login can predate its first account-pool setting.
+            const provider = await providerFor(target, options, auth, true);
+            assertOwnerCurrent(owner);
+            const legacyDefaultProvider = provider && isSubscriptionProvider(provider) && !readPool(provider) ? provider : undefined;
+            return guardAccountSwitch(await target.startSession(options), target, options, auth, undefined, legacyDefaultProvider);
+          };
           const keys = [
             options.sessionId ? `task:${options.sessionId}` : '',
             options.resumeSessionId ? `native:${options.resumeSessionId}` : '',
           ].filter(Boolean);
-          let provider: SubscriptionProvider | null = null;
+          let provider: string | null = null;
           let imported: string | undefined;
           try {
-            provider = await resolveSubscriptionPoolProvider(target, options, auth);
+            imported = await historicalCodexAccount(target, options, options.resumeSessionId, keys, auth);
+            provider = imported ? 'openai' : await resolveSubscriptionPoolProvider(target, options, auth);
             if (!provider) return startLegacy();
-            const resolved = provider;
-            imported = legacyConnectionAccount(options.providerId?.trim(), keys, target.kind);
-            if (!imported && options.resumeSessionId && !keys.some((key) => readAccountBinding(key, resolved))) {
-              // Legacy Codex may use Cindy's private home, not ~/.codex. Keep that route.
-              if (provider === 'openai') return startLegacy();
-              await writeAccountBindings(keys, provider, 'default');
+            const kind = kindOf(provider);
+            imported ??= legacyConnectionAccount(options.providerId?.trim(), keys, target.kind, !!options.resumeSessionId);
+            if (!imported && options.resumeSessionId && !keys.some((key) => readAccountBinding(key, kind))) {
+              if (kind === 'openai') {
+                // Unknown private homes retain their legacy route; never pick another account.
+                return startLegacy();
+              } else await writeAccountBindings(keys, kind, 'default');
             }
           } catch (error) {
             // No underlying runtime has been started; Maker may release its worktree lease.
@@ -277,7 +419,8 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             let unregister = () => {};
             try {
               lease = await acquireSubscriptionAccount(poolProvider, options.model, keys, false, {
-                remote: !!options.deviceHosted, accountId: imported, resuming: !!options.resumeSessionId,
+                remote: !!options.deviceHosted, ownComputer: !!options.deviceHosted && !options.deviceHosted.guest,
+                accountId: imported, resuming: !!options.resumeSessionId,
                 ...(tried.size ? { exclude: tried } : {}),
               });
               if (!lease) {
@@ -294,8 +437,10 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
             const current = lease;
             let handle: AgentSessionHandle | undefined;
             try {
+              const sessionProvider = options.providerId?.trim() || poolProvider;
+              const engineId = engineProviderId(sessionProvider, current.accountId);
               handle = await target.startSession({
-                ...options,
+                ...engineOptions(options, current.accountId),
                 [NATIVE_SUBSCRIPTION_ACCOUNT]: current.account,
               });
               await current.bind([...keys, `native:${handle.id}`]);
@@ -304,8 +449,8 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 ...options,
                 // Keep the effective native source for later switch checks even if
                 // the user's implicit default changes while this runtime is alive.
-                providerId: options.providerId?.trim() || poolProvider,
-              }, auth);
+                providerId: sessionProvider,
+              }, auth, engineId);
             } catch (error) {
               let failure: unknown = error;
               const switchable = current.observeFailure(error, options.model, 'start');
@@ -338,19 +483,22 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         };
       if (property === 'forkSdkSession')
         return async (options: ForkSdkSessionOptions) => {
-          const provider = await resolveSubscriptionPoolProvider(target, options, auth);
-          if (!provider) return target.forkSdkSession(options);
           const key = `native:${options.sourceSdkSessionId}`;
-          const imported = legacyConnectionAccount(options.providerId?.trim(), [key], target.kind);
-          if (!imported && !readAccountBinding(key, provider)) {
-            if (provider === 'openai') return target.forkSdkSession(options);
-            await writeAccountBindings([key], provider, 'default');
+          let imported = await historicalCodexAccount(target, options, options.sourceSdkSessionId, [key], auth);
+          const provider = imported ? 'openai' : await resolveSubscriptionPoolProvider(target, options, auth);
+          if (!provider) return target.forkSdkSession(options);
+          imported ??= legacyConnectionAccount(options.providerId?.trim(), [key], target.kind, true);
+          const kind = kindOf(provider);
+          if (!imported && !readAccountBinding(key, kind)) {
+            if (kind === 'openai') {
+              return target.forkSdkSession(options);
+            } else await writeAccountBindings([key], kind, 'default');
           }
           const lease = await acquireSubscriptionAccount(provider, options.model, [key], true, { accountId: imported, resuming: true });
           if (!lease) return target.forkSdkSession(options);
           try {
             const result = await target.forkSdkSession({
-              ...options,
+              ...engineOptions(options, lease.accountId),
               [NATIVE_SUBSCRIPTION_ACCOUNT]: lease.account,
             });
             await lease.bind([key, `native:${result.newSdkSessionId}`]);

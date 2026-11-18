@@ -13,7 +13,7 @@ import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ items: [] as unknown[], reads: [] as Array<Record<string, unknown>>,
+const h = vi.hoisted(() => ({ copies: [] as any[], offline: new Set<string>(), items: [] as unknown[], reads: [] as Array<Record<string, unknown>>,
   pageGate: null as Promise<void> | null, dailyCheck: false, liveQuery: false, sessions: [] as any[], queried: [] as any[], delegations: [] as any[], prs: new Map(), activity: new Map(), closed: null as (() => void) | null, openURL: vi.fn(),
 }));
 vi.mock('react-native', () => ({
@@ -39,12 +39,14 @@ vi.mock('@/chat/useCloudCompanion', () => ({ useCloudCompanionHome: () => ({ act
 vi.mock('@/session/remoteSessionStore', () => ({ useRemoteHomeSessions: () => h.sessions,
   remoteSessionStore: { getHomeSessions: () => h.sessions, subscribeHomeStatus: () => () => undefined, getSessionLiveActivity: (id: string) => h.activity.get(id) } }));
 vi.mock('@/session/HomeSessionInfoMeta', () => ({ useHomeSessionPr: (_device: string, id: string) => h.prs.get(id) ?? null }));
-vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [], remoteResourceConnectionState: () => 'online' }));
+vi.mock('@/device-link/remoteResourceAvailability', async importOriginal => ({
+  ...await importOriginal<typeof import('@/device-link/remoteResourceAvailability')>(), readRemoteCollectionCache: () => h.copies,
+}));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, i18n: { language: 'en' } }) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => undefined } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u' }, accountGeneration: 1 }) }));
 // Stable like the real context: new functions per render would re-run the read effect forever.
-const link = vi.hoisted(() => ({ status: 'online', connectionEpoch: 1, getPresenceAvailability: () => true, invoke: vi.fn(), openLink: async () => undefined, onRemoteResourceChanged: vi.fn((_callback: any) => () => undefined) }));
+const link = vi.hoisted(() => ({ status: 'online', connectionEpoch: 1, getPresenceAvailability: (id: string) => !h.offline.has(id), invoke: vi.fn(), openLink: async () => undefined, onRemoteResourceChanged: vi.fn((_callback: any) => () => undefined) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => link, subscribeRemoteBotChanges: () => () => undefined }));
 vi.mock('@/device-link/remoteResources', () => ({
   invokeRemoteResourceAction: vi.fn(),
@@ -63,7 +65,7 @@ const { companionGlanceOutputs } = await import('@/session/companionProfileData'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
-beforeEach(() => { h.pageGate = null; h.dailyCheck = false; h.liveQuery = false; h.items = []; h.reads = []; h.sessions = []; h.queried = []; h.delegations = []; h.prs.clear(); h.activity.clear(); h.openURL.mockResolvedValue(undefined); root = createRoot(document.createElement('div')); });
+beforeEach(() => { h.copies = []; h.offline.clear(); h.pageGate = null; h.dailyCheck = false; h.liveQuery = false; h.items = []; h.reads = []; h.sessions = []; h.queried = []; h.delegations = []; h.prs.clear(); h.activity.clear(); h.openURL.mockResolvedValue(undefined); root = createRoot(document.createElement('div')); });
 afterEach(() => { act(() => root.unmount()); vi.useRealTimers(); });
 
 it('pauses retained query reads without discarding layout data, then refreshes on activation', async () => {
@@ -229,4 +231,44 @@ it('refreshes tasks in an open sheet and stops querying after closing it', async
   const reads = link.invoke.mock.calls.length;
   await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
   expect(link.invoke.mock.calls).toHaveLength(reads);
+});
+
+// Six computers previously occupied six rows before tasks. Exercise the real sheet's fold,
+// online navigation and offline rows, including reopening; no layout/source-string assertions.
+it('keeps six computers compact, expands all copies and switches only after closing', async () => {
+  const host = document.createElement('div');
+  await act(async () => root.unmount()); root = createRoot(host);
+  h.copies = Array.from({ length: 5 }, (_, i) => ({ key: `copy-${i}`,
+    host: { deviceId: `pc-${i}`, deviceName: `Computer ${i}` },
+    item: { ref: { kind: 'bot', id: 'cindy-default' } },
+  }));
+  h.offline.add('pc-4');
+  h.queried = [{ id: 'task', title: 'Recent task stays available', status: 'active', taskTeammate: { id: 'cindy-default' } }];
+  const onClose = vi.fn(), onOpenCindy = vi.fn();
+  const render = (visible: boolean) => act(async () => root.render(<CompanionGlanceSheet visible={visible} onClose={onClose}
+    name="Cindy" avatar={undefined} botId="cindy-default" deviceId="pc" deviceName="Current computer" sessionId="chat"
+    online cloudHome={false} onOpenTask={() => {}} onOpenCindy={onOpenCindy} onSwitchHome={() => {}} />));
+  const more = () => host.querySelector('[data-testid="companion.glance.computer.more"]') as HTMLButtonElement;
+  await render(true);
+  expect(host.textContent).toContain('Current computer');
+  expect(host.textContent).toContain('Recent task stays available');
+  expect(host.textContent).not.toContain('Computer 0');
+  expect(more().textContent).toContain('(5)');
+  await act(async () => more().click());
+  for (let i = 0; i < 5; i++) expect(host.textContent).toContain(`Computer ${i}`);
+  expect(host.querySelector('[data-testid="companion.glance.computer.pc-4"]')).toBeNull();
+  await act(async () => more().click());
+  expect(host.textContent).not.toContain('Computer 0');
+  await act(async () => more().click());
+  await act(async () => (host.querySelector('[data-testid="companion.glance.computer.pc-2"]') as HTMLButtonElement).click());
+  expect(onClose).toHaveBeenCalledOnce();
+  expect(onOpenCindy).not.toHaveBeenCalled();
+  await render(false);
+  // The native sheet retains its children during exit: keep expanded rows until onClosed.
+  expect(host.textContent).toContain('Computer 0');
+  await act(async () => h.closed?.());
+  expect(onOpenCindy).toHaveBeenCalledWith(h.copies[2]);
+  await render(true);
+  expect(host.textContent).not.toContain('Computer 0');
+  expect(host.textContent).toContain('Recent task stays available');
 });

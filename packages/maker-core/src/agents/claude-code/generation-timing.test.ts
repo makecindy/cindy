@@ -691,7 +691,7 @@ describe('claude generation pause boundaries', () => {
       generationReliable: true,
     });
     expect(events).toContainEqual(expect.objectContaining({
-      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done' },
+      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done', isError: false },
     }));
     if (hasEnvelope) {
       expect(events).toContainEqual(expect.objectContaining({
@@ -2310,5 +2310,15 @@ describe('claude live token speed', () => {
     // No reading may collapse towards zero after thinking or spike on a flushed burst.
     expect(Math.min(...readings) / realTps).toBeGreaterThan(0.4);
     expect(Math.max(...readings) / realTps).toBeLessThan(2.2);
+  });
+
+  it('publishes live thinking rate within 2.5s for non-Claude verbatim thinking streams', () => {
+    const { stream, speed, flow, thinking, finish, readings } = speedHarness();
+    stream({ type: 'message_start', message: { model: 'antigravity/gemini-4-hydrogen', usage: { input_tokens: 10 } } }, 0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 0);
+    flow(0, thinking, 107, 0, 2_500, 250);
+    expect(readings.length).toBeGreaterThan(0);
+    expect(speed(2_500)?.rate).toBeGreaterThan(150);
+    finish();
   });
 });

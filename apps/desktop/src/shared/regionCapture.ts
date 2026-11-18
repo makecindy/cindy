@@ -61,6 +61,16 @@ export function recordingControlsBounds(selection: RegionRect, viewport: Viewpor
   return controlsWithin(selection, area, expanded, point) ?? controlsWithin(selection, wholeDisplay(viewport), expanded, point);
 }
 
+/**
+ * Which way the recording controls' tooltips open: always away from the selection, so a hover
+ * label never lands inside the pixels being recorded (the controls sit only 8px outside it).
+ */
+export function recordingControlsTipSide(controls: RegionRect, selection: RegionRect): 'top' | 'bottom' | 'left' | 'right' {
+  if (controls.y >= selection.y + selection.height) return 'bottom';
+  if (controls.y + controls.height <= selection.y) return 'top';
+  return controls.x >= selection.x + selection.width ? 'right' : 'left';
+}
+
 function controlsWithin(selection: RegionRect, area: RegionRect, expanded: boolean, point?: RegionPoint): RegionRect | null {
   const width = 460, height = expanded ? 336 : 72, gap = 8;
   const left = area.x + gap, top = area.y + gap, right = area.x + area.width - gap, bottom = area.y + area.height - gap;

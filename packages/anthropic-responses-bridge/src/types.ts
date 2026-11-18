@@ -80,7 +80,7 @@ export type ResponsesInputItem =
       content: ResponsesContentPart[];
     }
   | { type: 'function_call'; name: string; arguments: string; call_id: string }
-  | { type: 'function_call_output'; call_id: string; output: string }
+  | { type: 'function_call_output'; call_id: string; output: string | ResponsesInputContentPart[] }
   | {
       type: 'reasoning';
       id?: string;
@@ -89,10 +89,11 @@ export type ResponsesInputItem =
       content?: unknown[];
     };
 
-export type ResponsesContentPart =
+export type ResponsesInputContentPart =
   | { type: 'input_text'; text: string }
-  | { type: 'output_text'; text: string }
   | { type: 'input_image'; image_url: string };
+
+export type ResponsesContentPart = ResponsesInputContentPart | { type: 'output_text'; text: string };
 
 export interface ResponsesFunctionTool {
   type: 'function';

@@ -6,7 +6,7 @@ import { BotGroupProcess } from './BotGroupProcess';
  *   时刻（text-11），下面是一个卡片底、细边框的气泡。引用、任务卡、分工表、附件与贴回的话题
  *   回复都收在气泡里。同一作者五分钟内的连续消息合并：后续行不再带头像和名字，时刻只在悬停
  *   时出现在左侧槽位。
- * - 气泡宽度由内容决定，上限 720px，并始终给外侧的操作栏留出位置；正文与任务正文同一字号。
+ * - 气泡按内容收窄，基础上限 720px；群聊主栏按可用空间扩展并调整操作栏，自己贴回的话题保持 560px。
  * - 表情回应贴在气泡外上角；消息操作栏（引用回复、话题、表情、更多）悬停时出现在气泡外侧，键盘
  *   聚焦与触屏时常显；话题入口是气泡下方一行。
  * - @ 点名在所有消息里都高亮：正文仍交给 MarkdownRenderer，高亮走 CSS Custom Highlight
@@ -31,6 +31,7 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from '@/components/chat/ChatBubble';
 import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
+import { CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS } from '@/components/chat/chatChrome';
 import { Button } from '@/components/ui/button';
 import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
 import { ChatReadReceipt } from './ChatMessageReaders';
@@ -60,7 +61,7 @@ import {
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotGroupQuoteBlock } from './BotGroupQuote';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
-import { BotGroupTaskCard } from './BotGroupTaskCard';
+import { BotGroupLiveTaskCard, BotGroupTaskCard } from './BotGroupTaskCard';
 import type { BotGroupTimelineMessage } from './BotGroupTimelineModel';
 import { ChatMessageHoverActions, ChatMessageReactions } from './ChatServerControls';
 
@@ -358,10 +359,11 @@ function Row({ message, highlighted, focusable, entering, block, children }: {
       data-bot-group-message-id={message.id}
       tabIndex={focusable ? -1 : undefined}
       className={cn(
-        'rounded-lg outline-none transition-colors first:mt-0',
+        'rounded-lg outline-none first:mt-0',
+        CHAT_MESSAGE_LOCATE_TRANSITION_CLASS,
         block === 'continued' ? 'mt-0.5' : block === 'author' ? 'mt-3.5' : 'mt-3',
         entering && 'animate-fade-in motion-reduce:animate-none',
-        highlighted && 'bg-[hsl(var(--search-match-bg))] ring-1 ring-[var(--border-default)]',
+        highlighted && CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS,
       )}
     >
       {children}
@@ -658,6 +660,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                     <BotGroupTaskCard task={message.task} owned={botGroupTaskOwned(message.authorBotId, members)}
                       botId={message.authorBotId} />
                   ) : null}
+                  {!share && message.liveTask ? <BotGroupLiveTaskCard task={message.liveTask} /> : null}
                   {!share && <BotGroupMessageAttachments attachments={message.attachments ?? []} align="start" />}
                   <BotGroupHandoffFiles files={message.files ?? []} workDir={props.plan?.workDir ?? null} />
                 </>

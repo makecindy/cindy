@@ -1,7 +1,11 @@
 # Cindy 的机器：账号下的电脑都是它的身体
 
-> 新增或修改 `list_machines`、`maker:machine:status`，或让 Agent 使用多台机器的能力前必须先读本文。
-> 主力电脑、接手与资料随行见 [云端伙伴](cloud-companions.md)。
+> **读取时机**：新增或修改 `list_machines`、`maker:machine:status`，让 Agent 使用多台机器的能力
+> （机器状态、按机器执行），或要为 Agent 的资源使用加上限之前。
+> **适用路径**：`apps/desktop/src/main/machines/**`、`packages/device-link/src/**/machineStatus*`、
+> `packages/lizi-mcps/src/xdt-helper/list_machines.ts`、
+> `packages/lizi-mcps/src/__tests__/listMachinesTool.test.ts`
+> **相关规则**：主力电脑、接手与资料随行见 [云端伙伴](cloud-companions.md)。
 
 ## 1. 产品方向（2026-11-02 用户确认）
 

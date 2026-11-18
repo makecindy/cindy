@@ -1,3 +1,4 @@
+import { useFirstRunGuideConnectionDialog } from '@/features/first-run-guide/firstRunGuideStore';
 import { withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 import { ProviderNameSearch } from './ProviderNameSearch';
 import { providerSearchChoices, type ProviderSearchTarget } from './providerSearch';
@@ -288,6 +289,8 @@ interface TestState {
   status: 'idle' | 'testing' | 'ok' | 'fail';
   /** 失败分类码（providerError.<code> i18n 键）。 */
   code?: string;
+  /** 本次实际被测的模型 ID，失败时展示，避免用户把它当成别的模型的结果。 */
+  modelId?: string;
   latencyMs?: number;
   decision?: ProviderConnectionTestResult['decision'];
   attempts?: ProviderConnectionTestResult['attempts'];
@@ -488,8 +491,15 @@ export function ProviderConnectionDialog({
   const dialog = useDialogExit(returnFocusRef);
   const suspendedRef = useRef(suspended);
   useLayoutEffect(() => { suspendedRef.current = suspended; }, [suspended]);
-  const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
-  const onSaved = useCallback(() => dialog.close(notifySaved), [dialog.close, notifySaved]);
+  const { complete: completeGuideConnection, cancel: cancelGuideConnection } = useFirstRunGuideConnectionDialog();
+  const onClose = useCallback(() => dialog.close(() => {
+    cancelGuideConnection();
+    notifyClosed();
+  }), [cancelGuideConnection, dialog.close, notifyClosed]);
+  const onSaved = useCallback(() => dialog.close(() => {
+    completeGuideConnection();
+    notifySaved();
+  }), [completeGuideConnection, dialog.close, notifySaved]);
   const editing = !!initial;
   const simpleAdding = !editing && !!onDetected;
   const [manualOpen, setManualOpen] = useState(false);
@@ -1624,7 +1634,7 @@ export function ProviderConnectionDialog({
         ...prev,
         [agent]: result.ok
           ? { status: 'ok', latencyMs: result.latencyMs }
-          : { status: 'fail', code: result.code ?? 'UNKNOWN', decision: result.decision, attempts: result.attempts },
+          : { status: 'fail', code: result.code ?? 'UNKNOWN', modelId: result.modelId ?? firstModel, decision: result.decision, attempts: result.attempts },
       }));
     } catch (e) {
       if (requestId && connectionTestRef.current?.id !== requestId) return;
@@ -1637,7 +1647,10 @@ export function ProviderConnectionDialog({
         return;
       if (requestId) connectionTestRef.current = null;
       const ipc = extractIpcError(e);
-      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
+      setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN',
+        // 只有 adhoc 请求的被测模型由本窗口决定；saved 请求由 Main 挑选，抛错时拿不到，
+        // 表单当前的首个模型可能不是它实际测的那个，宁可不标也不标错。
+        ...(useSaved ? {} : { modelId: firstModel }) } }));
       if (ipc?.message) toast.error(ipc.message);
     }
   }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate, catalogModels, simpleAdding, setRtSynced, picker, draft]);
@@ -2477,7 +2490,7 @@ export function ProviderConnectionDialog({
             <Sparkles size={20} className="text-[var(--settings-section-title)]" />
             <Dialog.Title asChild><h2
               id="custom-provider-dialog-title"
-              className="text-18 font-semibold text-[var(--settings-section-title)]"
+              className="text-18 font-medium text-[var(--settings-section-title)]"
             >
               {editing
                 ? t('settings.providers.custom.dialog.editTitle')
@@ -3319,6 +3332,11 @@ export function ProviderConnectionDialog({
                       : test[activeTab].decision === 'next'
                         ? t('settings.providers.custom.test.exhausted')
                         : t(`providerError.${test[activeTab].code ?? 'UNKNOWN'}`)}
+                    {test[activeTab].modelId && (
+                      <span className="block break-all text-[var(--text-secondary)]">
+                        {t('settings.providers.custom.test.model', { model: test[activeTab].modelId })}
+                      </span>
+                    )}
                   </span>
                 )}
                 {!mediaOnly && test[activeTab].status === 'testing' && (
@@ -3573,7 +3591,7 @@ export function ModelPickerOverlay({
           {/* Header */}
           <div className="flex items-center px-5 pb-1 pt-4">
             <div className="flex min-w-0 flex-col gap-0.5">
-              <Dialog.Title className="text-15 font-semibold text-[var(--settings-section-title)]">
+              <Dialog.Title className="text-15 font-medium text-[var(--settings-section-title)]">
                 {t('settings.providers.custom.fetch.pickerTitle', {
                   runtime: t(TAB_META[picker.agent].labelKey),
                 })}

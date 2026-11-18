@@ -18,6 +18,22 @@ function correctCopilotAstraApi(row) {
     : row;
 }
 
+// #10269 verified this exact Copilot route with Argon's IDE Chat configuration.
+// Reuse the source adapter instead of maintaining a second set of versioned
+// headers. Capacity, pricing, modalities and reasoning remain unknown. A future
+// upstream Carbon declaration is authoritative, including a different API.
+function withCopilotCarbon(models) {
+  if (models.some(row => row?.id === 'gemini-4-carbon')) return models;
+  const shared = models.find(row => row?.provider === 'github-copilot' &&
+    row.id === 'gemini-4-argon' && row.baseUrl === 'https://api.individual.githubcopilot.com' &&
+    row.api === 'openai-completions');
+  if (!shared) return models;
+  return [...models, {
+    id: 'gemini-4-carbon', name: 'Gemini 4 Carbon', provider: shared.provider,
+    baseUrl: shared.baseUrl, api: shared.api, headers: shared.headers, compat: shared.compat,
+  }];
+}
+
 /** Pi is an import source. Persist Cindy's public field names, with transport-specific data
  * confined to execution.pi. Never copy credentials or arbitrary headers into a public catalog. */
 export function toCindyProviderModel(row) {
@@ -41,7 +57,20 @@ export function toCindyProviderModel(row) {
       thinkingLevelMap: { ...row.thinkingLevelMap, minimal: null },
     };
   }
-  const efforts = piSupportedEfforts(row);
+  // MiMo's high is Pi's internal enabled level, not a user-facing intensity.
+  // Keep its native map intact; both online refresh and bundled import use this
+  // correction. https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/text-generation/deep-thinking
+  const mimoEndpoints = {
+    xiaomi: 'https://api.xiaomimimo.com/v1',
+    'xiaomi-token-plan-cn': 'https://token-plan-cn.xiaomimimo.com/v1',
+    'xiaomi-token-plan-ams': 'https://token-plan-ams.xiaomimimo.com/v1',
+    'xiaomi-token-plan-sgp': 'https://token-plan-sgp.xiaomimimo.com/v1',
+  };
+  const mimoThinkingRoute = Object.hasOwn(mimoEndpoints, row.provider) &&
+    mimoEndpoints[row.provider] === row.baseUrl && row.api === 'openai-completions' &&
+    ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.6-pro-ultraspeed'].includes(row.id);
+  const thinkingToggle = mimoThinkingRoute && row.reasoning === true;
+  const efforts = thinkingToggle ? [] : piSupportedEfforts(row);
   const { id, provider, baseUrl, api } = row;
   if (
     typeof id !== 'string' || !id.trim() || id.length > 256 ||
@@ -75,6 +104,15 @@ export function toCindyProviderModel(row) {
         value >= 0,
     ),
   );
+  // Cerebras bills cached tokens at the standard input rate (FAQ checked 2026-11-13):
+  // https://inference-docs.cerebras.ai/capabilities/prompt-caching.md
+  // Correct the known stale Pi tariff on fresh imports and refreshes alike;
+  // a different channel or a newer tariff must remain authoritative.
+  if (provider === 'cerebras' && id === 'gpt-oss-120b' &&
+      baseUrl === 'https://api.cerebras.ai/v1' && api === 'openai-completions' &&
+      cost.input === 0.35 && cost.output === 0.75 && cost.cacheRead === 0) {
+    cost.cacheRead = cost.input;
+  }
   if (Array.isArray(row.cost?.tiers)) cost.tiers = row.cost.tiers;
   return {
     id,
@@ -87,6 +125,7 @@ export function toCindyProviderModel(row) {
       supportsImageInput: row.input.includes("image"),
     } : {}),
     ...(typeof row.reasoning === "boolean" ? { reasoning: row.reasoning, efforts } : {}),
+    ...(mimoThinkingRoute && typeof row.reasoning === 'boolean' ? { thinkingToggle } : {}),
     ...Object.fromEntries(["supportsFastMode", "supportsToolCalls", "reasoningRequired"]
       .filter(key => typeof row[key] === "boolean").map(key => [key, row[key]])),
     ...(['anthropic-messages', 'openai-responses', 'openai-completions', 'google-generative-ai'].includes(row.nativeApi)
@@ -127,7 +166,7 @@ export function toCindyCatalog(providers, generatedAt, { previous, onError, inco
             const prior = new Map((previous?.providers?.[id] ?? []).map(row => [row.id, row]));
             const converted = new Map();
             let complete = !incomplete.has(id);
-            for (const sourceRow of models) {
+            for (const sourceRow of id === 'github-copilot' ? withCopilotCarbon(models) : models) {
               try {
                 const row = correctCopilotAstraApi(sourceRow);
                 const old = prior.get(row?.id);

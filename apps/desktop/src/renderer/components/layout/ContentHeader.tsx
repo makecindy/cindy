@@ -157,7 +157,7 @@ export function ContentHeader({
         // Sidebar 侧保持无横线的连续表面；设置页隐形 chrome 不画
         // （用户决策 2026-06-11）。
         !isInvisibleChrome && 'border-b border-titlebar-border',
-        'transition-[padding] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)]',
+        'transition-[padding] duration-[var(--motion-base)] ease-[var(--motion-ease-move)]',
         needsTrafficLightInset ? 'pl-[78px]' : 'pl-2',
       )}
       // 窗口拖拽区(B3 口径修订,Lizi 实测拍板):46px 顶带整条归窗口拖动 ——
@@ -189,7 +189,7 @@ export function ContentHeader({
           否则浮层按钮点击会被窗口拖拽吞掉。 */}
       <div
         aria-hidden
-        className="h-full shrink-0 overflow-hidden transition-[max-width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)]"
+        className="h-full shrink-0 overflow-hidden transition-[max-width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)]"
         style={
           {
             WebkitAppRegion: 'no-drag',
@@ -238,7 +238,7 @@ export function ContentHeaderSlot({
   trailing,
   children,
 }: Omit<ContentHeaderProps, 'hidden'> & { children: ReactNode }) {
-  const hidden = useContentHeaderHidden({ sidebarVisible, rightSidebarAvailable });
+  const hidden = useContentHeaderHidden({ sidebarVisible, rightSidebarAvailable }) && !trailing;
   return (
     <>
       <ContentHeader

@@ -125,6 +125,8 @@ export function buildQueueRowPresentation(input: {
   const editLocked = input.projection.queueEditLocks.includes(input.item.clientId);
   const interactionLocked = input.projection.queueInteractionLocks.length > 0;
   const orcaOrigin = isOrcaQueueItem(input.item);
+  const sessionOrigin = readRecord(input.item.origin)?.kind === 'session'
+    && !readRecord(input.item.sourcePlugin)?.pluginId;
   const syntheticKind = syntheticTriggerKind(input.item.text ?? '');
   const moveUpTarget = queueMoveTargetIndex(input.originalIndex, input.queueLength, 'up');
   const moveDownTarget = queueMoveTargetIndex(input.originalIndex, input.queueLength, 'down');
@@ -140,13 +142,13 @@ export function buildQueueRowPresentation(input: {
   const syntheticEditReason = syntheticKind
     ? presentationText(localizer, 'message.queuePresentation.row.syntheticEditDisabled', '系统指令消息不支持编辑或插话发送。')
     : null;
-  // 自动化 / 其他任务经工具 / 插件排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
+  // 自动化 / 插件排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
   // 落库气泡的来源标签就不再属实;删除与排序照常。
-  const autoSentReason = !orcaOrigin && isAutoSentQueueItem(input.item)
+  const autoSentReason = !orcaOrigin && !sessionOrigin && isAutoSentQueueItem(input.item)
     ? presentationText(localizer, 'message.queuePresentation.row.autoSentEditDisabled', '自动发送的消息不支持编辑或插话发送。')
     : null;
-  // 协同成员发来的消息不能改写(对齐桌面 canEdit=false),但可以插话:插话不改正文与来源。
-  const orcaEditReason = orcaOrigin
+  // 协同成员或其他任务发来的消息不能改写(对齐桌面 canEdit=false),但可以插话:插话不改正文与来源。
+  const orcaEditReason = orcaOrigin || sessionOrigin
     ? presentationText(localizer, 'message.queuePresentation.row.orcaEditDisabled', '协同消息不支持编辑。')
     : null;
 

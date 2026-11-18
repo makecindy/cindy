@@ -141,6 +141,15 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       role: 'reviewer',
       label: 'reviewer-2',
     })),
+    setWorkerRuntime: vi.fn(async () => {
+      const profile = { agentKind: 'claude-code' as const, model: 'claude-opus-5-5', providerId: 'gateway', effort: 'high' as const, fastMode: false };
+      return {
+        ok: true as const, workerId: 'worker-1', sessionId: 'worker-session-1', status: 'deferred' as const,
+        effectiveBoundary: 'next_send' as const, generation: 4,
+        effectiveProfile: { ...profile, providerId: 'subscription-account' },
+        pendingMutation: { generation: 4, source: 'agent', profile },
+      };
+    }),
     listAvailableModels: vi.fn(async () => ({ ok: true as const })),
     getWorkspaceInfo: vi.fn(async () => ({
       ok: true as const,
@@ -178,7 +187,7 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
 }
 
 describe('dynamic lizi MCP session context', () => {
-  it('keeps the 21-tool Orca manifest order stable across server construction', () => {
+  it('keeps the 22-tool Orca manifest order stable across server construction', () => {
     const context = {
       agentKind: 'codex' as const,
       workingDir: 'C:\\repo',
@@ -188,8 +197,8 @@ describe('dynamic lizi MCP session context', () => {
     const first = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
     const second = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
 
-    // 18 个 team 工具 + 3 个只读诊断工具。
-    expect(first).toHaveLength(21);
+    // 19 个 team 工具 + 3 个只读诊断工具。
+    expect(first).toHaveLength(22);
     expect(first).toEqual(second);
     expect(first).toContain('create_worker');
     expect(first).toContain('create_workers');
@@ -199,6 +208,7 @@ describe('dynamic lizi MCP session context', () => {
     expect(first).toContain('steer_queued_message');
     expect(first).toContain('move_queued_message');
     expect(first).toContain('update_worker');
+    expect(first).toContain('set_worker_runtime');
     expect(first).not.toContain('list_worker_queue');
   });
 
@@ -246,6 +256,35 @@ describe('dynamic lizi MCP session context', () => {
     const empty = await tools(server).update_worker.handler({ worker_id: 'worker-1' });
     expect(parse(empty as never)).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
     expect(deps.updateWorker).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-17: a Lead could not move Workers off an exhausted subscription without the
+  // cindy_helper session tools. The Orca tool is the Lead's own entry: it must stay scoped to
+  // the caller Lead, map its fields to the shared runtime patch, and report the send boundary.
+  it('routes set_worker_runtime through the caller lead and reports when the route lands', async () => {
+    const deps = createOrcaDeps();
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'claude-code', workingDir: '/repo', sessionId: 'lead-1', vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const result = parse(await tools(server).set_worker_runtime.handler({
+      worker_id: 'worker-1', agent: 'claude-code', model: 'claude-opus-5-5', provider_id: 'gateway',
+    }) as never);
+    expect(result).toMatchObject({
+      ok: true, worker_id: 'worker-1', session_id: 'worker-session-1', effective_boundary: 'next_send',
+      pending: { profile: { agent: 'claude-code', model: 'claude-opus-5-5', provider_id: 'gateway' } },
+    });
+    expect(String(result.instruction)).toContain('send_to_worker');
+    expect(deps.setWorkerRuntime).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1', workerId: 'worker-1',
+      patch: { harness: 'claude-code', model: 'claude-opus-5-5', providerId: 'gateway' },
+    });
+
+    for (const args of [{ worker_id: 'worker-1', agent: 'codex' }, { worker_id: 'worker-1' }]) {
+      expect(parse(await tools(server).set_worker_runtime.handler(args) as never))
+        .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    }
+    expect(deps.setWorkerRuntime).toHaveBeenCalledTimes(1);
   });
 
   it('forwards explicit send_to_worker delivery and reports steered or fallback receipts', async () => {

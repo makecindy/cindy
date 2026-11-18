@@ -30,12 +30,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createLogger } from '../logger';
+import { isPreservingUnreadableSettingsFilesByDefault } from '../maker-host/override-settings-file.js';
 
 
 export interface DeviceLinkSettings {
   /** Device-local V2 preference; absent in existing files means V1. */
   agentNetEnabled?: boolean;
   agentNetOnlyEncrypted?: boolean;
+  /** 同账号另一台电脑最近一次远程打开 / 关闭 Agent-Net(开关下面写「由谁在几点」);本机再改后清除。 */
+  agentNetChangedBy?: { deviceId: string; deviceName: string; at: number; enabled: boolean } | null;
+  /** 远程打开 Agent-Net 后等待确认的那一次;没确认前由被切的电脑自己兜底退回(agentNetRemoteSwitch.ts)。 */
+  agentNetPendingSwitch?: { switchId: string; controllerId: string; previous: boolean; deadlineAt: number; pid: number; restoring?: boolean } | null;
   /** Full desktop viewing/input is a separate, local opt-in. */
   remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
@@ -86,6 +91,9 @@ function normalize(raw: unknown): DeviceLinkSettings {
   return {
     agentNetEnabled: r.agentNetEnabled === true,
     agentNetOnlyEncrypted: r.agentNetOnlyEncrypted === true,
+    // 远程切换的两条记录只在发生过时出现，旧文件与默认值的形状不变。
+    ...optional('agentNetChangedBy', normalizeAgentNetChange(r.agentNetChangedBy)),
+    ...optional('agentNetPendingSwitch', normalizeAgentNetPendingSwitch(r.agentNetPendingSwitch)),
     remoteDesktopEnabled: r.remoteDesktopEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,
@@ -96,6 +104,26 @@ function normalize(raw: unknown): DeviceLinkSettings {
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
   };
+}
+
+function optional<K extends 'agentNetChangedBy' | 'agentNetPendingSwitch'>(key: K, value: DeviceLinkSettings[K]): Partial<Pick<DeviceLinkSettings, K>> {
+  return value ? { [key]: value } as Partial<Pick<DeviceLinkSettings, K>> : {};
+}
+
+function normalizeAgentNetChange(raw: unknown): DeviceLinkSettings['agentNetChangedBy'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.deviceId !== 'string' || typeof r.deviceName !== 'string' || typeof r.at !== 'number' || typeof r.enabled !== 'boolean') return null;
+  return { deviceId: r.deviceId, deviceName: r.deviceName.slice(0, 120), at: r.at, enabled: r.enabled };
+}
+
+function normalizeAgentNetPendingSwitch(raw: unknown): DeviceLinkSettings['agentNetPendingSwitch'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.switchId !== 'string' || typeof r.controllerId !== 'string' || typeof r.previous !== 'boolean'
+    || typeof r.deadlineAt !== 'number' || typeof r.pid !== 'number') return null;
+  return { switchId: r.switchId, controllerId: r.controllerId, previous: r.previous, deadlineAt: r.deadlineAt, pid: r.pid,
+    ...(r.restoring === true ? { restoring: true } : {}) };
 }
 
 function normalizeStringList(raw: unknown): string[] {
@@ -127,23 +155,53 @@ function normalizeDeviceNameMap(raw: unknown): Record<string, string> {
 let cached: DeviceLinkSettings | null = null;
 /** 缓存对应的文件 mtimeMs;文件不存在时为 null。mtime 变化 → 缓存失效重载(跨实例写入可见)。 */
 let cachedMtimeMs: number | null = null;
+/**
+ * Writes require a readable baseline after a filesystem failure or when the Host preserves
+ * malformed JSON. Both cases use fail-closed defaults while the file is unreadable.
+ */
+let cachedUnreadable = false;
+const READ_RETRY_DELAY_MS = 1_000;
+let retryReadAt = 0;
 
 function statMtimeMs(file: string): number | null {
   try {
     return fs.statSync(file).mtimeMs;
-  } catch {
-    return null; // 文件不存在
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
 }
 
-function readDeviceLinkSettings(): DeviceLinkSettings {
+function readDeviceLinkSettings(forceRead = false): DeviceLinkSettings {
+  if (!forceRead && retryReadAt !== 0 && performance.now() < retryReadAt) return { ...DEFAULTS };
   const file = settingsFilePath();
-  const mtimeMs = statMtimeMs(file);
-  if (cached && mtimeMs === cachedMtimeMs) return cached;
+  let mtimeMs: number | null;
+  let contents: string | undefined;
   try {
-    if (mtimeMs !== null) {
-      cached = normalize(JSON.parse(fs.readFileSync(file, 'utf-8')));
+    mtimeMs = statMtimeMs(file);
+    if (!forceRead && cached && mtimeMs === cachedMtimeMs) return cached;
+    if (mtimeMs !== null) contents = fs.readFileSync(file, 'utf-8');
+  } catch (error) {
+    // An I/O error does not tell us whether the file is valid. Keep it intact, drop the
+    // old grant, and let the next eligible read retry even if the mtime hasn't changed.
+    const now = performance.now();
+    if (now >= retryReadAt) {
+      log.warn('device-link-settings.json read failed → falling back to defaults', {
+        error: error instanceof Error ? error.message : String(error),
+        path: file,
+      });
+      retryReadAt = now + READ_RETRY_DELAY_MS;
+    }
+    cached = null;
+    cachedUnreadable = true;
+    return { ...DEFAULTS };
+  }
+  retryReadAt = 0;
+  try {
+    if (contents !== undefined) {
+      cached = normalize(JSON.parse(contents));
       cachedMtimeMs = mtimeMs;
+      cachedUnreadable = false;
       return cached;
     }
   } catch (err) {
@@ -151,10 +209,17 @@ function readDeviceLinkSettings(): DeviceLinkSettings {
       error: err instanceof Error ? err.message : String(err),
       path: file,
     });
+    if (isPreservingUnreadableSettingsFilesByDefault()) {
+      cached = { ...DEFAULTS };
+      cachedMtimeMs = mtimeMs;
+      cachedUnreadable = true;
+      return cached;
+    }
     try { fs.unlinkSync(file); } catch { /* no-op */ }
   }
   cached = { ...DEFAULTS };
   cachedMtimeMs = null;
+  cachedUnreadable = false;
   return cached;
 }
 
@@ -247,9 +312,8 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
   tag: string,
 ): DeviceLinkSettings[K] {
   // 强制丢缓存取盘上最新基线(mtime 粒度粗时缓存可能骗过 read)
-  cached = null;
-  cachedMtimeMs = null;
-  const current = readDeviceLinkSettings();
+  const current = readDeviceLinkSettings(true);
+  if (cachedUnreadable) throw new Error('device-link settings file is unreadable; refusing to overwrite it');
   const nextValue = updater(current[key]);
   const next = { ...current, [key]: nextValue };
   const tmp = `${file}.${process.pid}.${tag}.tmp`;

@@ -50,7 +50,10 @@ describe('reset preferences persistence', () => {
       restored: async () => { await waiter.resumeRestored(async () => redeemed); }, warn: vi.fn(),
     });
     await Promise.all([engine.check('openai'), engine.check('openai')]);
-    expect(consumeRpc).toHaveBeenCalledExactlyOnceWith({ creditId: 'one-credit', idempotencyKey: '00000000-0000-4000-8000-000000000001' });
+    expect(consumeRpc).toHaveBeenCalledExactlyOnceWith(
+      { creditId: 'one-credit', idempotencyKey: '00000000-0000-4000-8000-000000000001' },
+      { email: 'test@example.com', accountId: 'workspace' },
+    );
     expect(continueSession).toHaveBeenCalledOnce();
     expect(store.read('openai', account).lastUsedAt).toBe(now);
     expect((await service.read()).rateLimitResetCredits?.availableCount).toBe(0);

@@ -3,7 +3,7 @@ import { watch } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setImmediate } from 'node:timers/promises';
-import { app } from 'electron';
+import { getUserDataDir, getAppDataDir } from '../userDataPath.js';
 
 import { physicalWorktreeKey, worktreeResourceId } from './resourceLock';
 import type { WorktreeRecyclePolicy } from './recyclePolicy';
@@ -33,6 +33,8 @@ export interface WorktreeRecycleRecord {
   restoredGeneration?: string;
   /** Temporary checkout used to repair a partially removed worktree. */
   restoreCheckoutPath?: string;
+  /** Fresh Multibox snapshot checkout still needs its original HEAD/index reattached. */
+  multiboxRestore?: true;
   /** Written only by older clients; still honoured when restoring their records. */
   archive?: WorktreeRecoveryArchive;
   /** The one fresh retry budget for a request an older client paused over its archive. */
@@ -44,11 +46,11 @@ export interface WorktreeRecycleRecord {
 }
 
 export function recycleJournalRoot(): string {
-  return path.join(app.getPath('userData'), 'worktree-recycle');
+  return path.join(getUserDataDir(), 'worktree-recycle');
 }
 
 function sharedJournalLocationsRoot(): string {
-  return path.join(app.getPath('appData'), 'Cindy', 'shared-worktree-recycle-journals');
+  return path.join(getAppDataDir(), 'Cindy', 'shared-worktree-recycle-journals');
 }
 
 /** Keep publishing locators for older clients that may still borrow across profiles. */
@@ -72,6 +74,7 @@ function parseRecord(raw: string, id: string): WorktreeRecycleRecord {
     || typeof record.meta.baseRepo !== 'string' || !path.isAbsolute(record.meta.baseRepo)
     || (record.restoreCheckoutPath !== undefined
       && (typeof record.restoreCheckoutPath !== 'string' || !path.isAbsolute(record.restoreCheckoutPath)))
+    || (record.multiboxRestore !== undefined && record.multiboxRestore !== true)
     || typeof record.requestedAt !== 'string' || !Number.isFinite(Date.parse(record.requestedAt))
     || !Number.isInteger(record.attempts) || record.attempts < 0
     || (record.retryPolicy !== undefined && (!record.retryPolicy

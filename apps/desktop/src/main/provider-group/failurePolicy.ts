@@ -16,7 +16,7 @@
  * 走到运行中这一步的已是终态错误：偶发的网络 / 过载抖动先由中断自愈在同一台重试，重试用尽才会到这里，
  * 对应「同一台连续失败才算」。
  */
-import { SESSION_CLOSED_MID_TURN_MESSAGE } from '@cindy/maker-core';
+import { AgentNotAuthenticatedError, SESSION_CLOSED_MID_TURN_MESSAGE } from '@cindy/maker-core';
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
@@ -104,6 +104,13 @@ const CONNECTION_LOST_CODES = new Set(['REMOTE_AGENT_DEVICE_UNREACHABLE', 'REMOT
 /** 可能连不上：现读一次再说。 */
 const CONNECTION_CHECK_CODES = new Set([
   'REMOTE_AGENT_UNAVAILABLE',
+  // runClient distinguishes these for display; keep the same connection check
+  // as their former REMOTE_AGENT_UNAVAILABLE wrapper, including serialized errors.
+  'REMOTE_AGENT_TIMEOUT',
+  'REMOTE_AGENT_LINK_BUSY',
+  'REMOTE_AGENT_UNRESPONSIVE',
+  'REMOTE_AGENT_OFFLINE',
+  'REMOTE_AGENT_ACCESS_DENIED',
   'REMOTE_AGENT_SHARE_UNAVAILABLE',
   'REMOTE_AGENT_BUSY',
   'DEVICE_LINK_DEVICE_OFFLINE',
@@ -131,6 +138,27 @@ const MEMBER_UNAVAILABLE_CODES = new Set([
   'ACCESS_REVOKED',
   'REMOTE_DISABLED',
   'CHANNEL_NOT_ALLOWED',
+]);
+
+/**
+ * 任务绑定账号不可用时宿主给出的稳定码(`subscription-accounts/runtime.ts`)。按**码**判，不按文案：
+ * 这些文案要给用户看、会改写和翻译，靠 `quota` 之类的词猜原因两边都会错——旧文案
+ * 「requires login or quota reset」把「读不到状态」判成用量上限，把整台电脑冷却 30 分钟，
+ * 组里只有本机时无处可换，重启后所有新任务被拒(2026-11-12 实测)；改成结构化码后又反过来
+ * 漏判了真正的额度耗尽。冷却口径见 provider-groups.md §6.1「记不记进组的状态」。
+ */
+const SUBSCRIPTION_ACCOUNT_COOL_CAUSES: ReadonlyMap<string, ProviderGroupFailureCause> = new Map([
+  // 额度用尽、登录失效：那台账号的问题，记进组的状态。
+  ['SUBSCRIPTION_ACCOUNT_LIMITED', 'usage-limit'],
+  ['SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED', 'auth'],
+]);
+/**
+ * 暂时读不到账号状态、或那台正在登录：不是账号本身的故障，换下一台但**不冷却**。
+ * 一次读取抖动不该让整台电脑半小时接不了任务。
+ */
+const SUBSCRIPTION_ACCOUNT_TRANSIENT_CODES = new Set([
+  'SUBSCRIPTION_ACCOUNT_UNAVAILABLE',
+  'SUBSCRIPTION_ACCOUNT_SIGNING_IN',
 ]);
 
 /** 本机记下的、换到哪台都一样或与那台无关的 reason(translator / Cindy 自己给出的稳定 key)。 */
@@ -195,7 +223,7 @@ export function providerGroupFailureSignals(error: unknown): InterruptedTurnErro
   if (error instanceof Error) {
     const code = (error as { code?: unknown }).code;
     const message = error.message || (typeof code === 'string' ? `[${code}]` : '');
-    return { message };
+    return { message, ...(error instanceof AgentNotAuthenticatedError ? { sdkError: 'authentication_failed' } : {}) };
   }
   if (typeof error === 'string') return { message: error };
   if (error && typeof error === 'object') return error as InterruptedTurnErrorSignals;
@@ -235,6 +263,10 @@ export function decideProviderGroupFailure(
   const code = errorCodeOf(message);
   if (code === 'REMOTE_AGENT_GROUP_UNAVAILABLE' || code === 'REMOTE_AGENT_GROUP_USAGE_LIMIT') return { action: 'stay', why: 'group-unavailable' };
   if (phase !== 'run' && code && TASK_STATE_CODES.has(code)) return { action: 'stay', why: 'task-state' };
+  // 绑定账号不可用：按稳定码判，先于下面的文本启发式，避免用户可见文案的措辞决定要不要冷却整台电脑。
+  const subscriptionCause = code ? SUBSCRIPTION_ACCOUNT_COOL_CAUSES.get(code) : undefined;
+  if (subscriptionCause) return switchTo(subscriptionCause, null);
+  if (code && SUBSCRIPTION_ACCOUNT_TRANSIENT_CODES.has(code)) return switchTo('failed', null);
 
   // ── 换到哪台都一样 ──
   const stayReason = STAY_REASONS.get(reason);

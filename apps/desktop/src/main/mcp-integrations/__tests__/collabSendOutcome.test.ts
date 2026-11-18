@@ -74,7 +74,7 @@ vi.mock('@cindy/mcps', () => ({
   }),
 }));
 
-vi.mock('../computer.js', () => ({ getComputerMcpDeps: vi.fn(() => ({})) }));
+vi.mock('../computer.desktop.js', () => ({ getComputerMcpDeps: vi.fn(() => ({})) }));
 vi.mock('../android.js', () => ({ getAndroidMcpDeps: vi.fn(() => ({})) }));
 
 vi.mock('../../maker-host/index.js', () => ({
@@ -86,6 +86,10 @@ vi.mock('../../maker-host/index.js', () => ({
 vi.mock('../../scheduler-host/index.desktop.js', () => ({
   getScheduler: () => null,
 }));
+// This collaboration fixture exercises provider wiring without Desktop history/IPC setup.
+vi.mock('../historyAttachment.desktop.js', () => ({ readDesktopHistoryAttachment: vi.fn() }));
+vi.mock('../../maker-ipc/fork.js', () => ({ forkTaskAtMessage: vi.fn() }));
+vi.mock('../../maker-ipc/rewind.js', () => ({ commitTaskRewind: vi.fn() }));
 
 vi.mock('../../im/index.js', () => ({
   feishuIm: mockState.personalFeishu,
@@ -144,7 +148,7 @@ import type { FeishuBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
 import { beginAppSessionBoundary, commitVolatileAppSession, ownerScopedUserDataPath } from '../../appSessionState.js';
 import * as userDataPath from '../../userDataPath.js';
 import { createPluginRegistry, resetPluginRegistry } from '../../maker-host/plugins/index.js';
-import { getComputerMcpDeps } from '../computer.js';
+import { getComputerMcpDeps } from '../computer.desktop.js';
 import { getAndroidMcpDeps } from '../android.js';
 import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,

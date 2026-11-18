@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PiKernelState } from '../../../../shared/piKernel';
+import { initialDownloadProgress } from '../../../../shared/downloadProgress';
 import { PiKernelVersionRow } from '../PiKernelVersionRow';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'zh-CN' }, t: (key: string, values?: { version?: string }) => key + (values?.version ? ` ${values.version}` : '') }) }));
@@ -75,5 +76,15 @@ describe('Pi compact version management', () => {
     render(<PiKernelVersionRow />); await menu();
     expect(screen.getByText(key('download'))).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: /restore.*0.84.4/ }).getAttribute('aria-disabled')).toBe('true');
+  });
+
+  // Regression (2026-11-17): the Pi download showed only a phase word, never bytes or retries.
+  it('shows the standard download progress while the kernel downloads', async () => {
+    const download = { ...initialDownloadProgress('retrying', 100), loaded: 40, percent: 40, attempt: 2, retryReason: 'slow' as const };
+    getState.mockResolvedValue({ ...baseline, operation: { source: 'upstream', phase: 'download', download } });
+    render(<PiKernelVersionRow />);
+    const meter = await screen.findByTestId('pi-kernel-download');
+    expect(meter.textContent).toContain('40%');
+    expect(meter.textContent).toContain('downloadProgress.retry.slow');
   });
 });

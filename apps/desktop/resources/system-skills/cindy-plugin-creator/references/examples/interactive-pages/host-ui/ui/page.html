@@ -18,10 +18,11 @@ details{margin-top:16px}summary{cursor:pointer}h1{font-size:24px;margin-top:0}#s
 <div><button id="appearance" disabled>读取外观设置</button><button id="reset" disabled>恢复外观默认值</button></div>
 </details>
 <details><summary>区域显隐</summary><div id="regions"></div><button id="regions-reset" disabled>显示全部区域</button></details>
+<details><summary>插件设置</summary><button id="settings-read" disabled>读取统一插件设置</button></details>
 <p id="status" role="status">正在连接…</p>
 <script type="module">
 import { App } from '@modelcontextprotocol/ext-apps';
-const app = new App({ name: '插件界面示例', version: '1.1.1' }, {}, { autoResize: true });
+const app = new App({ name: '插件界面示例', version: '1.2.0' }, {}, { autoResize: true });
 const status = document.querySelector('#status');
 const regions = ['workspace','sidebar','header','messages','composer','tools','windowControls'];
 for (const region of regions) {
@@ -66,7 +67,8 @@ document.querySelector('#style').onclick = () => call('cindy.ui.appearance', { p
 document.querySelector('#wallpaper').onclick = () => call('cindy.ui.appearance', { patch: { wallpaper: { resource: 'asset:art', visibility: 0.2 } } });
 document.querySelector('#reset').onclick = () => call('cindy.ui.appearance', { reset: ['uiFont','codeFont','bodyFont','wallpaper','theme','reading','contentStyle'] });
 document.querySelector('#regions-reset').onclick = () => call('cindy.ui.visibility', { regions: Object.fromEntries(regions.map(region => [region,true])) });
-try { await app.connect(); update(); document.querySelector('#refresh').disabled = false; status.textContent = '可以操作。'; }
+document.querySelector('#settings-read').onclick = () => call('cindy.ui.settings', { operation: 'get' });
+try { await app.connect(); update(); document.querySelector('#refresh').disabled = false; document.querySelector('#settings-read').disabled = false; status.textContent = '可以操作。'; }
 catch { status.textContent = '页面未连接，请重新打开。'; }
 </script>
 </html>

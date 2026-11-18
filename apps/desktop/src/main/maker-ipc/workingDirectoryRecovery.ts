@@ -27,13 +27,32 @@ function recoveryDirectoryKey(sessionId: string, workingDir: string): string {
   return createHash('sha256').update(JSON.stringify([sessionId, path.resolve(workingDir)])).digest('hex');
 }
 
+/** Only the active owner's namespace may be recreated by generic cwd recovery.
+ * Existing directories (including user-provided junctions) are not redirected.
+ */
+export function canRecreateOwnerWorkingDirectory(
+  userDataRoot: string,
+  activeOwnerRoot: string,
+  workingDir: string,
+  paths: Pick<typeof path, 'relative' | 'sep' | 'join' | 'isAbsolute'> = path,
+): boolean {
+  const contains = (root: string, dir: string) => {
+    const relative = paths.relative(root, dir);
+    return relative === '' || (relative !== '..' && !relative.startsWith('..' + paths.sep) && !paths.isAbsolute(relative));
+  };
+  const ownersRoot = paths.join(userDataRoot, 'owners');
+  return !contains(ownersRoot, workingDir) || contains(activeOwnerRoot, workingDir);
+}
+
 /** Local directory recovery; failed Git restores may explicitly request conversation fallback. */
 export function createWorkingDirectoryRecovery(io: {
   stat(dir: string): Promise<{ isDirectory(): boolean; dev?: number }>;
-  mkdir(dir: string, opts: { recursive: true }): Promise<unknown>;
+  // Queued adapters must recheck isCurrent immediately before dispatching the write.
+  mkdir(dir: string, opts: { recursive: true }, isCurrent: () => boolean): Promise<unknown>;
   realpath?(dir: string): Promise<string>;
   requiredRoot?(dir: string): string | undefined;
   findFallback?(sessionId: string, workingDir: string): Promise<string | undefined>;
+  canRecreateDirectory?(dir: string): boolean;
 } = fsp, allocateFallback?: (sessionId: string, workingDir: string, mode: 'ordinary' | 'unrestored-worktree') => Promise<string>, log?: WorkdirDiagnosticLogger) {
   const pending = new Map<string, { workingDir: string; note: string | null; device?: number; fallback?: string; observationDeferred?: boolean }>();
   function entryFor(sessionId: string, dir: string) {
@@ -149,6 +168,15 @@ export function createWorkingDirectoryRecovery(io: {
       const startedAt = Date.now();
       const context = workdirDiagnosticContext(sessionId, workingDir);
       let stage = 'mount-check';
+      const canRecreate = (dir: string): boolean => {
+        // Owner teardown / a new binding may invalidate this attempt during a probe.
+        if (!own || pending.get(sessionId) !== own) return false;
+        if (io.canRecreateDirectory?.(dir) === false) {
+          log?.warn('workdir recovery rejected', { ...context, stage, reason: 'directory-recreation-disallowed' });
+          return false;
+        }
+        return true;
+      };
       const reportFailure = (error: unknown) => log?.warn('workdir recovery attempt failed', {
         ...context, stage, code: workdirDiagnosticErrorCode(error),
         usingFallback: !!own?.fallback, elapsedMs: Date.now() - startedAt,
@@ -197,7 +225,8 @@ export function createWorkingDirectoryRecovery(io: {
             }
           }
           stage = 'fallback-mkdir';
-          await io.mkdir(own.fallback, { recursive: true });
+          if (!canRecreate(own.fallback)) return false;
+          await io.mkdir(own.fallback, { recursive: true }, () => canRecreate(own.fallback!));
           if (pending.get(sessionId) !== own) return false;
           pending.set(sessionId, { ...own, note: [
             own.note ?? '[Working directory recovery]',
@@ -240,7 +269,8 @@ export function createWorkingDirectoryRecovery(io: {
         stage = 'similar-path';
         const similar = typeof similarPath === 'function' ? await similarPath() : similarPath;
         stage = 'original-mkdir';
-        await io.mkdir(workingDir, { recursive: true });
+        if (!canRecreate(workingDir)) return false;
+        await io.mkdir(workingDir, { recursive: true }, () => canRecreate(workingDir));
         log?.info('workdir recovery directory created', {
           ...context, action: 'directory-recreated', code: 'ENOENT',
           similarPathFound: !!similar, elapsedMs: Date.now() - startedAt,

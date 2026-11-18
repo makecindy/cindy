@@ -333,7 +333,7 @@ export function queueBotInvitation(
         : 'Without user background, introduce the help that fits your role without assuming what the user is working on.';
       const message = [
         `The user has just invited you. Write the entire greeting in ${locale}, even if your identity or these instructions use another language.`,
-        'Use your own voice and your current identity and memory. Give a brief, natural greeting as an ongoing AI teammate in a few short sentences, using paragraph breaks where they read naturally. Finish with at most one easy question.',
+        'Use your own voice and your current identity and memory. Give a brief, natural greeting as an ongoing AI buddy in a few short sentences, using paragraph breaks where they read naturally. Finish with at most one easy question.',
         'Choose one or two concrete ways you can help that fit your own role and responsibilities, rather than listing general capabilities. Mention learning or memory only when directly useful to this introduction and supported by your current memory settings.',
         help,
         'Describe abilities supported by your current host. Do not claim that unconnected services are ready.',
@@ -426,11 +426,11 @@ async function composeOpening(
       sessionAgentFallback: false,
       responseInstructions: 'Reply with only the JSON object requested in the user message.',
       prompt: [
-        `You write the very first message a teammate sends right after a user invites them. Write it in ${language}, in the teammate's own warm, direct voice.`,
+        `You write the very first message a buddy sends right after a user invites them. Write it in ${language}, in the buddy's own warm, direct voice.`,
         `Reply with ONLY a JSON object: {"greeting": string, "options": string[]}.`,
         'greeting: one or two short sentences on one line (at most 240 characters, no markdown, no question) that say hello and what you will help with, grounded in the package opening below. Do not list abilities and do not promise anything the package does not state.',
         `options: ${options.length} short starting choices (at most 60 characters each), the same choices as the starter options below reworded in ${language}; keep their order and meaning, add no new ones.`,
-        `Teammate: ${JSON.stringify(profile)}`,
+        `Buddy: ${JSON.stringify(profile)}`,
         `Package opening: ${JSON.stringify(opening.welcome)}; abilities: ${opening.capabilities.join(' / ')}`,
         `Starter options: ${JSON.stringify(options)}`,
         ...(context ? [

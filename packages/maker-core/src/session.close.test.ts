@@ -211,6 +211,33 @@ describe('Session close lifecycle', () => {
     expect(handle.close).toHaveBeenCalledOnce();
   });
 
+  // #11042: foreground completion is not permission to kill tracked background
+  // work. Existing close tests only cover foreground/host RPC ownership (unit).
+  it.each(['task', 'continuation', 'unavailable'] as const)(
+    'keeps an idle runtime alive while background %s remains', async (kind) => {
+      const { session, handle } = liveTurn(false);
+      let busy = true;
+      handle.hasProjectResourceDrift = () => true;
+      handle.listBackgroundTasks = () => {
+        if (busy && kind === 'unavailable') throw new Error('snapshot unavailable');
+        return busy && kind === 'task' ? [{ taskId: 'bash', taskType: 'local_bash' }] : [];
+      };
+      handle.countPendingWakeContinuations = () => busy && kind === 'continuation' ? 1 : 0;
+      try {
+        expect(session.hasRecyclableProjectResourceDrift()).toBe(false);
+        await expect(session.closeIfIdle()).resolves.toBe(false);
+        expect(session.getStatus()).toBe('active');
+        expect(handle.close).not.toHaveBeenCalled();
+        busy = false;
+        expect(session.hasRecyclableProjectResourceDrift()).toBe(true);
+        await expect(session.closeIfIdle()).resolves.toBe(true);
+        expect(handle.close).toHaveBeenCalledOnce();
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   it('resource recycling shares the closeIfIdle idle predicate and never breaks manual compaction', async () => {
     const { session, handle } = liveTurn();
     let hostOperationInFlight = true;
@@ -248,6 +275,26 @@ describe('Session close lifecycle', () => {
     queue.push({ type: 'done', source: 'pi', data: { status: 'completed', result: 'delivered' } });
     await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
     expect(handle.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('forwards continuation diagnostics and preserves handles without a reason API (#10547)', async () => {
+    const { session, handle } = liveTurn(false);
+    expect(session.getTurnContinuationCancellationReason(7)).toBeUndefined();
+    expect(session.onTurnContinuationChange(() => undefined)).toBeTypeOf('function');
+    let notify!: Parameters<NonNullable<AgentSessionHandle['onTurnContinuationChange']>>[0];
+    const unsubscribe = vi.fn();
+    handle.onTurnContinuationChange = listener => { notify = listener; return unsubscribe; };
+    handle.getTurnContinuationCancellationReason = id => id === 7 ? 'user_stop' : undefined;
+    const seen = vi.fn();
+    const off = session.onTurnContinuationChange(seen);
+    notify(7, 'cancelled', 'user_stop');
+    expect(seen).toHaveBeenCalledExactlyOnceWith(7, 'cancelled', 'user_stop');
+    expect(session.getTurnContinuationCancellationReason(7)).toBe('user_stop');
+    expect(session.getTurnContinuationCancellationReason(8)).toBeUndefined();
+    off();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    await session.close();
+    expect(session.getTurnContinuationCancellationReason(7)).toBeUndefined();
   });
 
   it('does not retire at a provider boundary with an outstanding continuation claim', async () => {

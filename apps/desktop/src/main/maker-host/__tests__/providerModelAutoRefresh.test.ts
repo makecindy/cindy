@@ -34,6 +34,18 @@ function deferred(): {
 }
 
 describe('provider model auto-refresh coordinator', () => {
+  // Unit: independent connections must trigger discovery even with the default signed out.
+  it.each(['anthropic', 'openai'] as const)('refreshes the %s family from a renamed independent connection', async kind => {
+    const refreshProvider = vi.fn(async () => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view(kind, false),
+        { ...view(`${kind}-sub-12345678`, true, 'user'), name: 'An unrelated name', subscriptionAccountPool: kind }],
+      refreshProvider, now: () => 1, log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    await coordinator.requestAutoRefresh('startup');
+    expect(refreshProvider).toHaveBeenCalledExactlyOnceWith(kind);
+  });
+
   it('refreshes the public image catalog before manual OpenAI discovery', async () => {
     const catalog = deferred();
     const refreshProvider = vi.fn(async () => undefined);

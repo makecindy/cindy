@@ -16,8 +16,9 @@ import { getCurrentUserId, getDeviceId, getAuthState, getActiveAuthRealm } from 
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
-import { agentNetClientForRelay, currentAgentNetClient, currentAgentNetScopedTarget, isAgentNetActive, openScopedAgentNetAppSocket } from './agentNetRuntime.js';
-import { currentOfficialAgentNetClient } from './agentNetOfficial.js';
+import { agentNetClientForRelay, currentAgentNetClient, currentAgentNetScopedTarget, isAgentNetActive, openScopedAgentNetAppSocket,
+  outgoingAgentNetClient, outgoingAgentNetClientForRelay, setAgentNetScopedSessionRoute } from './agentNetRuntime.js';
+import { currentOfficialAgentNetClient, outgoingOfficialAgentNetClient } from './agentNetOfficial.js';
 import { relayDataPath, secureStorageAvailable, readRelayConfig } from './selfHostedRelayConfig.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { hostJoinBaseUrl } from './selfHostedRelayAddress.js';
@@ -38,6 +39,7 @@ export interface AgentNetSharingRoute extends Omit<AgentNetSharingInvitation, 'i
   aliases?: { members?: string[]; requests?: string[]; invitations?: string[] };
 }
 interface Vault { version: 2; seed: string; routes: AgentNetSharingRoute[]; services?: AgentNetSharingRoute[]; }
+interface ProviderListRead { key: string; departedMembers: Set<string>; }
 interface Session {
   key: string;
   file: string;
@@ -48,6 +50,7 @@ interface Session {
   committed: Map<string, { route: AgentNetSharingRoute; member: AgentNetClient }>;
   sockets: Map<string, { api: AgentNetClient; socket: import('@cindy/agent-net').AgentNetAppSocket }>;
   lists: Map<string, unknown[]>;
+  providerListReads: Set<ProviderListRead>;
   originSync?: Promise<void>;
   originDigest?: string;
   originSyncedAt?: number;
@@ -55,9 +58,33 @@ interface Session {
 }
 let session: Session | null = null;
 type ScopedConnectionOptions = Omit<DeviceLinkClientOptions, 'getWsUrl' | 'getToken'>;
+/** `via`: where each installed resource is registered — the main connection, a resource-only connection (its
+ * `connectionKey`), or blocked (retired, unavailable, or its pin released). Agent-Net sessions follow it. */
 let binding: { client: RoutedDeviceLinkClient; options: ScopedConnectionOptions; session: Session;
-  selection: string; pins: Map<string, () => void>; stop(): void } | null = null;
+  selection: string; pins: Map<string, () => void>; via: Map<string, 'primary' | 'blocked' | { connection: string }>; stop(): void } | null = null;
 const keyOf = (kind: Kind, id: string) => kind + ':' + id;
+const originKey = (route: AgentNetSharingRoute) => JSON.stringify([route.server, route.networkId, route.rootPublicKey]);
+const providerListKey = (received: boolean, route?: AgentNetSharingRoute | null) =>
+  '/api/device-link/provider-shares' + (received ? '/received' : '') + (route ? originKey(route) : ':legacy');
+/** After a binding stops (and until the next one), its resources stay retired on that routed client. */
+let retiredVia: { client: RoutedDeviceLinkClient; via: Map<string, 'blocked'> } | null = null;
+/**
+ * The connection a cross-account peer's Agent-Net session may use: the one its scoped Device Link route is registered on
+ * (`installRoute`), so a session carries exactly what the scoped frames would have. Same rule as the routed client's
+ * `acceptsScopedEvent`: a blocked or retired resource (left the share, credentials unavailable) gets none, and one this
+ * computer has not installed yet only the main connection (an executor or owner learns of a share from the guest's first
+ * open and installs it then).
+ */
+function sessionRoute(peer: string): import('@cindy/agent-net').AgentNetAppSocket | 'primary' | null {
+  const task = parseSharedTaskPeer(peer), provider = task ? null : parseProviderSharePeer(peer);
+  if (!task && !provider) return null;
+  const key = task ? keyOf('shared-task', task.sharedTaskId) : keyOf('provider-share', provider!.shareId);
+  const via = binding ? binding.via.get(key) : retiredVia?.via.get(key);
+  if (via === undefined) return 'primary';
+  if (via === 'blocked') return null;
+  return via === 'primary' ? 'primary' : binding!.session.sockets.get(via.connection)?.socket ?? null;
+}
+setAgentNetScopedSessionRoute(sessionRoute);
 /** A listing origin may be any pinned route or a discovery placeholder on that
  * authority: carry only the authority, never another resource's host, member or aliases. */
 const resourceRoute = (origin: AgentNetSharingRoute, kind: Kind, resourceId: string, hostDeviceId: string): AgentNetSharingRoute =>
@@ -69,13 +96,13 @@ function publicReceipt(route: AgentNetSharingRoute, invitation: string): AgentNe
   return { v: route.v, kind: route.kind, resourceId: route.resourceId, networkId: route.networkId,
     rootPublicKey: route.rootPublicKey, hostDeviceId: route.hostDeviceId, region: route.region, invitation };
 }
-function routeValid(route: AgentNetSharingRoute): boolean {
+function routeValid(route: AgentNetSharingRoute, outgoing = false): boolean {
   try {
     const { server, memberId, seed, aliases } = route;
     encodeAgentNetSharingInvitation(publicReceipt(route, 'A'.repeat(43)));
     const url = new URL(server);
     const secure = url.protocol === 'https:' || url.protocol === 'http:' &&
-      (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || !memberId && !!hostClient(route));
+      (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || !memberId && !!hostClient(route, outgoing));
     return secure && !url.username && !url.password && !url.hash && !url.search
       && server === server.replace(/\/+$/, '') && (memberId === undefined || /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(memberId))
       && (seed === undefined || seedValid(seed)) && (memberId === undefined) === (seed === undefined)
@@ -96,23 +123,29 @@ function owner(): Session {
   if (!account || !getAuthState().isAuthenticated || isAppSessionBoundaryPending()) throw new Error('AGENT_NET_OWNER_CHANGED');
   if (session?.key === key) { session.guard(); return session; }
   if (session) retire(session);
-  const file = relayDataPath('agent-net', 'sharing-v2.enc');
   const guard = () => {
     if (!getAuthState().isAuthenticated || getCurrentUserId() !== account || activeOwnerScopeKey() !== key
       || isAppSessionBoundaryPending() || getClientEndpoint('authApiBaseUrl') !== auth) throw new Error('AGENT_NET_OWNER_CHANGED');
   };
+  const { file, vault } = readVault();
+  session = { key, file, vault, guard, clients: new Map(), connections: new Map(), leases: new Set(), committed: new Map(), sockets: new Map(), lists: new Map(), providerListReads: new Set() };
+  return session;
+}
+/** Reads the current owner's sharing vault; never writes or publishes a session.
+ * `outgoing` validates LAN host routes with the handover-close authority. */
+function readVault(outgoing = false): { file: string; vault: Vault } {
+  const file = relayDataPath('agent-net', 'sharing-v2.enc');
   let vault: Vault;
   if (fs.existsSync(file)) {
     if (!secureStorageAvailable() || fs.statSync(file).size > 2 * 1024 * 1024) throw new Error('AGENT_NET_SHARING_VAULT_UNAVAILABLE');
     try { vault = JSON.parse(safeStorage.decryptString(Buffer.from(fs.readFileSync(file, 'utf8'), 'base64'))); }
     catch { throw new Error('AGENT_NET_SHARING_VAULT_UNREADABLE'); }
     if (vault.version !== 2 || !seedValid(vault.seed) || !Array.isArray(vault.routes) || vault.routes.length > 1024
-      || vault.routes.some(route => !routeValid(route)) || new Set(vault.routes.map(r => keyOf(r.kind, r.resourceId))).size !== vault.routes.length
-      || vault.services !== undefined && (!Array.isArray(vault.services) || vault.services.length > 1024 || vault.services.some(route => !routeValid(route))))
+      || vault.routes.some(route => !routeValid(route, outgoing)) || new Set(vault.routes.map(r => keyOf(r.kind, r.resourceId))).size !== vault.routes.length
+      || vault.services !== undefined && (!Array.isArray(vault.services) || vault.services.length > 1024 || vault.services.some(route => !routeValid(route, outgoing))))
       throw new Error('AGENT_NET_SHARING_VAULT_UNREADABLE');
   } else vault = { version: 2, seed: randomBytes(32).toString('base64url'), routes: [] };
-  session = { key, file, vault, guard, clients: new Map(), connections: new Map(), leases: new Set(), committed: new Map(), sockets: new Map(), lists: new Map() };
-  return session;
+  return { file, vault };
 }
 function save(state: Session, vault: Vault): void {
   state.guard();
@@ -147,6 +180,8 @@ function dropConnection(state: Session, key: string): void {
   const scoped = state.connections.get(key), lease = scoped && leaseOf.get(scoped);
   scoped?.stop(); if (lease) { lease.close(); state.leases.delete(lease); }
   binding?.pins.get(key)?.(); binding?.pins.delete(key); state.connections.delete(key); state.sockets.delete(key);
+  // A released pin leaves the resource retired on the routed client until it is installed again; sessions likewise.
+  if (binding?.via.has(key)) binding.via.set(key, 'blocked');
 }
 /** The relay closes a member socket (4410) whenever the admission version moves: a pause, the
  * member's next device or a rotated credential. That client never restarts by itself, so once
@@ -160,18 +195,22 @@ function signer(identity: Identity) {
   return { identity, sign: async (value: string) => signature(identity.signingPrivateKey, value),
     random: async () => randomBytes(18).toString('base64url') };
 }
-function hostClient(route: AgentNetSharingRoute): AgentNetClient | null {
+/** `outgoing` is only for the account-handover close: the boundary is already
+ * pending, so the ordinary accessors refuse; the caller has verified that the
+ * outgoing owner scope is still current and captures the result synchronously. */
+function hostClient(route: AgentNetSharingRoute, outgoing = false): AgentNetClient | null {
   if (route.memberId || route.guest) return null;
   let active: AgentNetClient | null = null;
-  try { active = currentAgentNetClient(); } catch { /* A different selected route is not this resource's authority. */ }
+  try { active = outgoing ? outgoingAgentNetClient() : currentAgentNetClient(); } catch { /* A different selected route is not this resource's authority. */ }
   if (active?.rootPublicKey === route.rootPublicKey && active.certificate.networkId === route.networkId) return active;
   if (route.networkId.startsWith('account:')) {
-    const official = currentOfficialAgentNetClient();
+    const official = outgoing ? outgoingOfficialAgentNetClient() : currentOfficialAgentNetClient();
     return official?.base === route.server && official.rootPublicKey === route.rootPublicKey && official.certificate.networkId === route.networkId ? official : null;
   }
   if (!route.networkId.startsWith('private:')) return null;
   try {
-    const api = agentNetClientForRelay(route.networkId.slice('private:'.length), route.server);
+    const relayId = route.networkId.slice('private:'.length);
+    const api = outgoing ? outgoingAgentNetClientForRelay(relayId, route.server) : agentNetClientForRelay(relayId, route.server);
     return api.rootPublicKey === route.rootPublicKey ? api : null;
   } catch { return null; }
 }
@@ -275,6 +314,13 @@ export function retireAgentNetSharingGuest(kind: Kind, resourceId: string): void
   const route = agentNetSharingRoute(kind, resourceId);
   if (route?.memberId && !route.retired) remember(owner(), { ...route, retired: true });
 }
+/** A confirmed leave overrides this origin's display cache and reads already in
+ * flight. Fences live only with those reads, so a later admission is not hidden. */
+export function forgetAgentNetProviderShareMember(memberId: string, route: AgentNetSharingRoute | null): void {
+  const state = owner(), key = providerListKey(true, route), cached = state.lists.get(key);
+  if (cached) state.lists.set(key, cached.filter(row => (row as { memberId?: string })?.memberId !== memberId));
+  for (const read of state.providerListReads) if (read.key === key) read.departedMembers.add(memberId);
+}
 /** Save the origin before a mutation: an uncertain create still needs cleanup
  * there after a relay switch or a cold restart, even without its committed ID. */
 export function rememberAgentNetSharingService(selected: AgentNetSharingRoute): void {
@@ -356,13 +402,29 @@ export async function checkAgentNetProviderExecutor(input: SharingExecutorInput,
   return null;
 }
 /** Close-only cleanup for an outgoing account. Credentials, endpoints and pins
- * are captured before the boundary; nothing refreshes into the next account. */
+ * are captured before the boundary; nothing refreshes into the next account.
+ *
+ * Runs inside account teardown, after the app-session boundary is already
+ * pending. `owner()` and the ordinary network accessors refuse that window by
+ * design, so this reads the outgoing owner's live session (its scope key cannot
+ * have advanced yet — the owner commit happens after teardown) or, failing that,
+ * its vault without publishing a session, and resolves each hosted route's
+ * authority synchronously here. Never throw: a throw aborted every account
+ * switch after its services were already torn down. */
 export function captureAgentNetSharingBoundaryClose(token: string, authBase: string) {
-  const state = owner(), routes = state.vault.routes.filter(r => r.kind === 'shared-task' && !r.memberId);
-  const identity = identityFromSeed('cindy-agent-net/sharing-business/2', state.vault.seed, getDeviceId());
-  const captured = new Map(routes.map(route => [route.resourceId, { route, member: hostClient(route) }]));
+  const live = session?.key === activeOwnerScopeKey() ? session : null;
+  let vault = live?.vault ?? null;
+  if (!vault && getCurrentUserId()) { try { vault = readVault(true).vault; } catch { /* Unreadable vault: legacy close and journal retry still apply. */ } }
+  if (!vault) return () => null;
+  const committed = live?.committed ?? new Map<string, { route: AgentNetSharingRoute; member: AgentNetClient }>();
+  const routes = vault.routes.filter(r => r.kind === 'shared-task' && !r.memberId);
+  const identity = identityFromSeed('cindy-agent-net/sharing-business/2', vault.seed, getDeviceId());
+  // Resolve each hosted route's authority now, while the outgoing owner is still
+  // current; a null capture must not mask a committed create's own member client.
+  const captured = new Map(routes.map(route => [route.resourceId, { route, member: hostClient(route, true) }]));
   return (resourceId: string): Promise<unknown> | null => {
-    const value = captured.get(resourceId) ?? state.committed.get(resourceId); if (!value?.member) return null;
+    const hosted = captured.get(resourceId);
+    const value = hosted?.member ? hosted : committed.get(resourceId); if (!value?.member) return null;
     const { route, member } = value, expires = Date.now() + 3000;
     const guard = () => { if (Date.now() >= expires) throw new Error('AGENT_NET_CLEANUP_EXPIRED'); };
     const client = new AgentNetSharingClient({ base: member.base, networkId: route.networkId, rootPublicKey: route.rootPublicKey,
@@ -399,15 +461,16 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
   await syncOrigins(state);
   const known = state.vault.routes.filter(r => r.kind === 'provider-share');
   const origins = new Map<string, AgentNetSharingRoute>();
-  const originKey = (r: AgentNetSharingRoute) => JSON.stringify([r.server, r.networkId, r.rootPublicKey]);
   for (const route of [...(selected ? [selected] : []), ...known, ...(state.vault.services ?? []).map(r => ({ ...r, kind: 'provider-share' as const }))]) {
     if (received || !route.memberId && hostClient(route)) origins.set(originKey(route), route);
   }
   if (!selected && known.length === 0 && origins.size === 0) return null;
   const path = '/api/device-link/provider-shares' + (received ? '/received' : '');
-  const sources = [...origins.values()].map(route => ({ route, key: path + originKey(route),
+  const sources = [...origins.values()].map(route => ({ route, key: providerListKey(received, route), departedMembers: new Set<string>(),
     work: (signal: AbortSignal) => business(state, route).request(path, { method: 'GET', signal }) }));
-  if (agentNetAllowsLegacy()) sources.push({ route: undefined as unknown as AgentNetSharingRoute, key: path + ':legacy', work: () => legacy() });
+  if (agentNetAllowsLegacy()) sources.push({ route: undefined as unknown as AgentNetSharingRoute, key: providerListKey(received),
+    departedMembers: new Set<string>(), work: () => legacy() });
+  if (received) for (const source of sources) state.providerListReads.add(source);
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12_000);
   const values: PromiseSettledResult<unknown>[] = new Array(sources.length); let cursor = 0;
   try {
@@ -421,13 +484,18 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
         catch (reason) { values[i] = { status: 'rejected', reason }; }
       }
     }));
-  } finally { clearTimeout(timer); controller.abort(); }
+  } finally {
+    clearTimeout(timer); controller.abort();
+    for (const source of sources) state.providerListReads.delete(source);
+  }
   state.guard();
   if (values.length === 0 || values.every(v => v.status === 'rejected')) throw new Error('AGENT_NET_SHARING_SERVICES_UNAVAILABLE');
   const rows = new Map<string, unknown>(), unavailable = new Set<string>();
   for (let i = 0; i < sources.length; i++) {
     const source = sources[i], result = values[i];
-    const items = result.status === 'fulfilled' ? result.value as unknown[] : state.lists.get(source.key) ?? [];
+    const listed = result.status === 'fulfilled' ? result.value as unknown[] : state.lists.get(source.key) ?? [];
+    const items = source.departedMembers.size
+      ? listed.filter(row => !source.departedMembers.has((row as { memberId?: string })?.memberId ?? '')) : listed;
     if (result.status === 'fulfilled') state.lists.set(source.key, items);
     else if (source.route) for (const route of known.filter(r => originKey(r) === originKey(source.route))) unavailable.add(route.resourceId);
     for (const item of items) {
@@ -540,10 +608,18 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
   const active = currentAgentNetClient(), member = hostClient(route);
   if (route.retired || !route.memberId && !member) {
     target.pins.set(keyOf(route.kind, route.resourceId), target.client.registerScopedConnection(route, 'blocked'));
+    target.via.set(keyOf(route.kind, route.resourceId), 'blocked');
     return; // Pending/unavailable credentials cannot fall through to V1.
   }
   const primary = !!member && active?.rootPublicKey === member.rootPublicKey
     && active.certificate.networkId === member.certificate.networkId;
+  // An own route on another network is gated by this device's Agent-Net switch (the guard below). While the switch is
+  // off its connection could never connect and would only retry; it stays blocked until the switch rebinds the routes.
+  if (!primary && !route.memberId && !readDeviceLinkSettings().agentNetEnabled) {
+    target.pins.set(keyOf(route.kind, route.resourceId), target.client.registerScopedConnection(route, 'blocked'));
+    target.via.set(keyOf(route.kind, route.resourceId), 'blocked');
+    return;
+  }
   let connection: DeviceLinkClient | 'primary' = 'primary';
   if (!primary) {
     const key = connectionKey(route);
@@ -602,6 +678,7 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
     connection = scoped;
   }
   target.pins.set(keyOf(route.kind, route.resourceId), target.client.registerScopedConnection(route, connection));
+  target.via.set(keyOf(route.kind, route.resourceId), primary ? 'primary' : { connection: connectionKey(route) });
 }
 export function bindAgentNetSharing(client: RoutedDeviceLinkClient, options: ScopedConnectionOptions): () => void {
   const selection = agentNetSelectionKey();
@@ -609,9 +686,13 @@ export function bindAgentNetSharing(client: RoutedDeviceLinkClient, options: Sco
   binding?.stop();
   const state = owner();
   const unprefer = client.preferPrimaryScopedConnection(isAgentNetActive);
-  const target: NonNullable<typeof binding> = { client, options, session: state, selection, pins: new Map(), stop() {
+  // The routed client keeps a released resource retired until it is registered again; so do its sessions.
+  const via = new Map<string, 'primary' | 'blocked' | { connection: string }>(
+    retiredVia?.client === client ? [...retiredVia.via.keys()].map(key => [key, 'blocked' as const]) : []);
+  const target: NonNullable<typeof binding> = { client, options, session: state, selection, pins: new Map(), via, stop() {
     if (binding !== target) return;
     binding = null; unprefer(); for (const off of target.pins.values()) off();
+    retiredVia = { client, via: new Map([...target.via.keys()].map(key => [key, 'blocked' as const])) };
     retire(state); if (session === state) session = null;
   } };
   binding = target;

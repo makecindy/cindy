@@ -295,7 +295,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
           </>
         ) : (
           <article className="pb-4 pt-2 [overflow-wrap:anywhere]">
-            <h2 className="mb-4 text-18 font-semibold leading-snug text-[var(--chat-input-text)]">
+            <h2 className="mb-4 text-18 font-medium leading-snug text-[var(--chat-input-text)]">
               {title}
             </h2>
             <MarkdownRenderer
