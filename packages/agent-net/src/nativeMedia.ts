@@ -7,8 +7,8 @@ export interface NativeMediaApi {
   /** Starts an upload, offering direct transfer to the relay's storage when the client supports it. */
   createMedia?(recipient: string, size: number, signal?: AbortSignal): Promise<{ id: string; chunkBytes: number }>;
   putMediaChunk(id: string, offset: number, bytes: Uint8Array, signal?: AbortSignal): Promise<{ received: number; complete: boolean }>;
-  /** Keep cancellation and the range deadline through the consumer's body read. */
-  withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T>;
+  /** Keep cancellation through body consumption; report newly read bytes to renew the idle deadline. */
+  withMediaResponse<T>(id: string, range: string, consume: (response: Response, onByteProgress?: (bytes: number) => void) => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 /** Per-read transport activity; progress is cumulative bytes, never a timer heartbeat. */
 export interface NativeMediaReadActivity { (state: 'queued' | 'active', loaded?: number): void; signal?: AbortSignal; }
@@ -76,7 +76,7 @@ export async function uploadNativeMedia(api: NativeMediaApi, engine: NativeEngin
 async function range(api: NativeMediaApi, engine: NativeEnginePort, id: string, start: number, end: number,
   total: number | undefined, options: NativeMediaOptions, progress?: (bytes: number) => void): Promise<{ bytes: Uint8Array; total: number }> {
   check(options, engine);
-  const consume = async (response: Response) => {
+  const consume = async (response: Response, onByteProgress?: (bytes: number) => void) => {
     check(options, engine);
     const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
     if (response.status !== 206 || !match || Number(match[1]) !== start || Number(match[2]) !== end
@@ -92,7 +92,8 @@ async function range(api: NativeMediaApi, engine: NativeEnginePort, id: string, 
         const chunk = await reader.read(); check(options, engine);
         if (chunk.done) break;
         if (received + chunk.value.length > needed) throw new Error('INVALID_MEDIA_CHUNK');
-        bytes.set(chunk.value, received); received += chunk.value.length; progress?.(received);
+        bytes.set(chunk.value, received); received += chunk.value.length;
+        if (chunk.value.length) { onByteProgress?.(chunk.value.length); progress?.(received); }
       } if (received !== needed) throw new Error('MEDIA_INCOMPLETE'); }
       finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
     } else { bytes = new Uint8Array(await response.arrayBuffer()); check(options, engine); }
