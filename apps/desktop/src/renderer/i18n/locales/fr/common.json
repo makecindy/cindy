@@ -4167,6 +4167,7 @@
         "refreshSpeechAdded": "Modèles mis à jour ; 1 modèle vocal suggéré ajouté",
         "refreshNoNew": "La liste des modèles est à jour : rien de nouveau",
         "refreshFailed": "Impossible d'actualiser la liste des modèles : réessayez plus tard",
+        "refreshReconnect": "La liste des modèles n’a pas pu être actualisée. Reconnectez ce fournisseur, puis réessayez.",
         "refreshFetchDisabled": "La récupération du catalogue de modèles distant est désactivée : actualisation ignorée",
         "disableModel": "Désactiver ce modèle",
         "paymentRequired": "Payant",

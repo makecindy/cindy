@@ -4113,6 +4113,7 @@
         "refreshSpeechAdded": "Modelle aktualisiert; 1 empfohlenes Sprachmodell hinzugefügt",
         "refreshNoNew": "Modellliste ist aktuell – nichts Neues",
         "refreshFailed": "Modellliste konnte nicht aktualisiert werden – versuche es später erneut",
+        "refreshReconnect": "Die Modellliste konnte nicht aktualisiert werden. Verbinde diesen Anbieter erneut und versuche es noch einmal.",
         "refreshFetchDisabled": "Abruf des Remote-Modellkatalogs ist deaktiviert – Aktualisierung übersprungen",
         "disableModel": "Dieses Modell deaktivieren",
         "paymentRequired": "Kostenpflichtig",

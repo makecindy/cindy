@@ -4071,6 +4071,7 @@
         "refreshSpeechAdded": "模型已更，補 1 個語音參考型號",
         "refreshNoNew": "模型清單已是最新，無所增",
         "refreshFailed": "模型清單重整未成，請稍後再試",
+        "refreshReconnect": "模型列表刷新失敗。重新連接此供方後再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟，已略重整",
         "disableModel": "停此模型",
         "paymentRequired": "付費",
