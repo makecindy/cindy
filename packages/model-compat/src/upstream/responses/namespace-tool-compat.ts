@@ -178,6 +178,16 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
         bareWireNames.add(tool.name);
         addSelector(selectors, tool.name, tool.name);
       }
+      // Codex's reserved group is another spelling of bare declarations. Reserve its names
+      // before real namespaces allocate, but leave emission to the group's existing dedup path.
+      const parsed = parseNamespaceGroup(tool);
+      if (parsed?.namespace === BUILTIN_FUNCTIONS_NAMESPACE) {
+        for (const child of parsed.children) {
+          const name = child.name as string;
+          wireOwners.set(name, loweredIdentity(BUILTIN_FUNCTIONS_NAMESPACE, name));
+          addSelector(selectors, name, name);
+        }
+      }
     }
   }
 
@@ -194,6 +204,7 @@ function buildRewritePlan(groups: readonly unknown[][]): NamespaceRewritePlan {
         const identity = loweredIdentity(parsed.namespace, childName);
         const preferred = loweredWireName(parsed.namespace, childName);
         children.push({ namespace: parsed.namespace, child, childName, identity, preferred });
+        if (parsed.namespace === BUILTIN_FUNCTIONS_NAMESPACE) continue;
         const wanted = wantedBy.get(preferred);
         if (wanted) wanted.add(identity);
         else wantedBy.set(preferred, new Set([identity]));

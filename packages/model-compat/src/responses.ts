@@ -28,12 +28,12 @@ function collectNamespaceCustomToolNames(body: unknown): Set<string> {
     for (const tool of group) {
       if (!tool || typeof tool !== 'object') continue;
       const { type, name, tools } = tool as { type?: unknown; name?: unknown; tools?: unknown };
-      if (type !== 'namespace' || typeof name !== 'string' || !Array.isArray(tools)) continue;
+      if (type !== 'namespace' || typeof name !== 'string' || name === 'functions' || !Array.isArray(tools)) continue;
       for (const child of tools) {
         if (!child || typeof child !== 'object') continue;
         const { type: childType, name: childName } = child as { type?: unknown; name?: unknown };
         if (childType !== 'custom' || typeof childName !== 'string') continue;
-        names.add(name === 'functions' ? childName : `${name}__${childName}`);
+        names.add(`${name}__${childName}`);
       }
     }
   }
@@ -61,6 +61,13 @@ function collectBareCustomToolNames(body: unknown): Set<string> {
       if (!tool || typeof tool !== 'object') continue;
       const { type, name } = tool as { type?: unknown; name?: unknown };
       if (type === 'custom' && typeof name === 'string') names.add(name);
+      if (type === 'namespace' && name === 'functions') {
+        const children = (tool as { tools?: unknown }).tools;
+        if (!Array.isArray(children)) continue;
+        for (const child of children) {
+          if (child && typeof child === 'object' && child.type === 'custom' && typeof child.name === 'string') names.add(child.name);
+        }
+      }
     }
   }
   return names;

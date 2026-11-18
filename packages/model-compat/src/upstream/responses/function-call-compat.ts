@@ -172,7 +172,7 @@ function repairItem(
   const preferred = namespacedToolName(namespace, item.name);
   // A restored namespace coordinate names the declaration, not the allocated wire name; only an
   // item that actually carries the namespace is mapped, so the bare declaration keeps its own key.
-  const key = "namespace" in item ? (renamedWireNames?.get(preferred) ?? preferred) : preferred;
+  const key = namespace ? (renamedWireNames?.get(preferred) ?? preferred) : preferred;
   const schema = schemas.get(key);
   if (!schema) return item;
   // An explicit namespace is an identity coordinate, not another spelling to guess at.

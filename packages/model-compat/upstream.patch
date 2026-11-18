@@ -2122,10 +2122,26 @@
 
    for (const group of groups) {
      for (const tool of group) {
-@@ -127,6 +181,10 @@
-     }
-   }
-
+@@ -124,9 +178,23 @@
+         bareWireNames.add(tool.name);
+         addSelector(selectors, tool.name, tool.name);
+       }
+-    }
+-  }
+-
++      // Codex's reserved group is another spelling of bare declarations. Reserve its names
++      // before real namespaces allocate, but leave emission to the group's existing dedup path.
++      const parsed = parseNamespaceGroup(tool);
++      if (parsed?.namespace === BUILTIN_FUNCTIONS_NAMESPACE) {
++        for (const child of parsed.children) {
++          const name = child.name as string;
++          wireOwners.set(name, loweredIdentity(BUILTIN_FUNCTIONS_NAMESPACE, name));
++          addSelector(selectors, name, name);
++        }
++      }
++    }
++  }
++
 +  const children: LoweredNamespaceChild[] = [];
 +  // Which identities want each preferred wire name. The same logical tool may be declared in
 +  // several containers, so identity — not declaration — is what makes a name contested.
@@ -2133,7 +2149,7 @@
    for (const group of groups) {
      for (const tool of group) {
        const parsed = parseNamespaceGroup(tool);
-@@ -134,29 +192,61 @@
+@@ -134,29 +202,62 @@
        for (const child of parsed.children) {
          const childName = child.name as string;
          const identity = loweredIdentity(parsed.namespace, childName);
@@ -2157,6 +2173,7 @@
 -        }
 +        const preferred = loweredWireName(parsed.namespace, childName);
 +        children.push({ namespace: parsed.namespace, child, childName, identity, preferred });
++        if (parsed.namespace === BUILTIN_FUNCTIONS_NAMESPACE) continue;
 +        const wanted = wantedBy.get(preferred);
 +        if (wanted) wanted.add(identity);
 +        else wantedBy.set(preferred, new Set([identity]));
@@ -2214,7 +2231,7 @@
  }
 
  /**
-@@ -344,11 +434,24 @@
+@@ -344,11 +445,24 @@
  export function rewriteRoutedNamespaceToolsForUpstream(
    body: unknown,
    convertedCustomToolNames?: ReadonlySet<string>,
@@ -2240,7 +2257,7 @@
    const groups = collectResponsesToolGroups(body);
    const plan = buildRewritePlan(groups);
 
-@@ -368,8 +471,71 @@
+@@ -368,8 +482,71 @@
      if (inputChanged) input = rewrittenInput;
    }
 
@@ -2314,7 +2331,7 @@
    const ambiguousDotted = collectAmbiguousDottedAliases(groups);
    // Authorize canonical identities first, then add only unambiguous spellings.
    // Selection cannot hide a collision elsewhere in the original declaration set.
-@@ -379,11 +545,6 @@
+@@ -379,11 +556,6 @@
        && !ambiguousDotted.has(dotted) && !plan.bareWireNames.has(dotted)
        && !aliases.has(dotted)) aliases.set(dotted, identity);
    }
@@ -2326,7 +2343,7 @@
    return {
      body: {
        ...body,
-@@ -392,6 +553,8 @@
+@@ -392,6 +564,8 @@
        ...(toolChoice !== body.tool_choice ? { tool_choice: toolChoice } : {}),
      },
      aliases,
@@ -2554,7 +2571,7 @@
 +  const preferred = namespacedToolName(namespace, item.name);
 +  // A restored namespace coordinate names the declaration, not the allocated wire name; only an
 +  // item that actually carries the namespace is mapped, so the bare declaration keeps its own key.
-+  const key = "namespace" in item ? (renamedWireNames?.get(preferred) ?? preferred) : preferred;
++  const key = namespace ? (renamedWireNames?.get(preferred) ?? preferred) : preferred;
 +  const schema = schemas.get(key);
    if (!schema) return item;
    // An explicit namespace is an identity coordinate, not another spelling to guess at.

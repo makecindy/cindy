@@ -56,6 +56,65 @@ describe('request-owned Responses compatibility', () => {
     expect((sse ? parsed.response : parsed).output[0]).toMatchObject({ namespace: 'workspace', name: 'read', arguments: '{"line":12}' });
   });
 
+  // #11199 reserved-functions regressions (unit): real Codex adapter, not a catalog mock.
+  // Earlier bare/namespace cases declared the bare tool at top level and omitted default namespace.
+  it.each(['application/json', 'text/event-stream'])('keeps grouped bare tools when a namespace child collides (%s)', async contentType => {
+    for (const [bareKind, childKind] of [['function', 'function'], ['function', 'custom'], ['custom', 'function']]) {
+      for (const reverse of [false, true]) {
+        const tools = [
+          { type: 'namespace', name: 'functions', tools: [{ type: bareKind, name: 'workspace__read', parameters: {} }] },
+          { type: 'namespace', name: 'workspace', tools: [{ type: childKind, name: 'read', parameters: {} }] },
+        ];
+        if (reverse) tools.reverse();
+        // Flat selection of an opposite-kind child must use its kind before lowering.
+        if (bareKind !== childKind) {
+          for (const allowed of [false, true]) {
+            const selected = createCodexResponsesCompatibilityAdapter();
+            const selector = { type: childKind, name: 'workspace__read' };
+            const request = selected.adaptRequest({ tools, tool_choice: allowed ? { type: 'allowed_tools', tools: [selector] } : selector }, 10091, undefined, true) as { tool_choice: unknown };
+            expect(request.tool_choice).toEqual(allowed
+              ? { type: 'allowed_tools', tools: [{ type: 'function', name: 'workspace__read_2' }] }
+              : { type: 'function', name: 'workspace__read_2' });
+            selected.releaseResponse(10091);
+          }
+        }
+        const adapter = createCodexResponsesCompatibilityAdapter();
+        const request = adapter.adaptRequest({ tools }, 10089, undefined, true) as { tools: { name: string }[] };
+        expect(request.tools.map(tool => tool.name).sort()).toEqual(['workspace__read', 'workspace__read_2']);
+        const output = { status: 'completed', output: [
+          { type: 'function_call', name: 'workspace__read', call_id: 'bare', arguments: bareKind === 'custom' ? '{"input":"bare"}' : '{}' },
+          { type: 'function_call', name: 'workspace__read_2', call_id: 'child', arguments: childKind === 'custom' ? '{"input":"child"}' : '{}' },
+        ] };
+        const sse = contentType === 'text/event-stream';
+        const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+        const text = await responseText(adapter.createResponseTransform(10089, { contentType, contentEncoding: '' })!, wire);
+        const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+        expect((sse ? parsed.response : parsed).output).toMatchObject([
+          { name: 'workspace__read', type: bareKind === 'custom' ? 'custom_tool_call' : 'function_call' },
+          { namespace: 'workspace', name: 'read', type: childKind === 'custom' ? 'custom_tool_call' : 'function_call' },
+        ]);
+      }
+    }
+  });
+
+  it.each(['application/json', 'text/event-stream'])('repairs default functions calls without using the displaced child schema (%s)', async contentType => {
+    for (const choice of [undefined, { type: 'function', namespace: 'functions', name: 'workspace__read' }]) {
+      const adapter = createCodexResponsesCompatibilityAdapter();
+      adapter.adaptRequest({ tools: [
+        { type: 'function', name: 'workspace__read', parameters: { type: 'object', properties: { line: { type: 'integer' } } } },
+        { type: 'namespace', name: 'workspace', tools: [{ type: 'function', name: 'read', parameters: { type: 'object', properties: { line: { type: 'number' } } } }] },
+      ], ...(choice ? { tool_choice: choice } : {}) }, 10090);
+      const bare = { type: 'function_call', namespace: 'functions', name: 'workspace__read', call_id: 'bare', arguments: '{"line":12.0}' };
+      const child = { type: 'function_call', namespace: 'workspace', name: 'read', call_id: 'child', arguments: '{"line":12.0}' };
+      const output = { status: 'completed', output: [bare, child] };
+      const sse = contentType === 'text/event-stream';
+      const wire = sse ? `data: ${JSON.stringify({ type: 'response.completed', response: output })}\n\n` : JSON.stringify(output);
+      const text = await responseText(adapter.createResponseTransform(10090, { contentType, contentEncoding: '' })!, wire);
+      const parsed = JSON.parse(sse ? text.trim().slice(6) : text);
+      expect((sse ? parsed.response : parsed).output).toEqual([{ ...bare, arguments: '{"line":12}' }, child]);
+    }
+  });
+
   // Native tool-search history is a real schema source even without live declarations.
   // Keep its unqualified selector repair when sharing the native identity plan (#11199).
   it.each(['application/json', 'text/event-stream'])('repairs native tools discovered only in search history (%s)', async contentType => {
