@@ -34,7 +34,7 @@ vi.mock('@/lib/toast', () => ({ toast: { info: h.toast, error: h.toast } }));
 import { CLOUD_ATTACHMENT_LOADS, CloudCompanionOfflineView } from '../CloudCompanionOfflineView';
 import { BotHomeComputerSetting, companionArrivedHere, useCompanionHomeSwitch } from '../BotHomeComputerSetting';
 import { resetCompanionCloudStoreForTests, useCompanionCloud } from '../companionCloudStore';
-import { cloudOnlyRemoteBots, cloudRemoteBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from '../companionCloudPresentation';
+import { cloudOnlyRemoteBots, cloudRemoteBots, displayCompanionBots, isCloudCompanionRemote, withoutCloudCompanions, withoutShadowedBots } from '../companionCloudPresentation';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 
 const maker = {
@@ -79,6 +79,19 @@ it('renders the saved cloud transcript before the remote read and preserves it o
 });
 
 describe('presentation helpers', () => {
+  // #9782, unit: a recovery entry must never enter the runnable companion roster.
+  it('adds exactly one display-only local recovery row without a stale live session', () => {
+    const cloud = { ...snapshot('desk'), demotedBotIds: ['mia'] };
+    const [stale] = cloudOnlyRemoteBots({ ...cloud, selfDeviceId: null }, []);
+    const live = { ...stale!, online: true, sessionId: 'stale-session' };
+    expect(cloudRemoteBots(cloud, [])).toEqual([]);
+    expect(displayCompanionBots(cloud, [live])).toMatchObject([
+      { id: 'mia', deviceId: 'desk', online: false, sessionId: null },
+    ]);
+    expect(displayCompanionBots({ ...cloud, enabled: false }, [])).toEqual([]);
+    expect(displayCompanionBots({ ...cloud, demotedBotIds: [] }, [])).toEqual([]);
+    expect(displayCompanionBots({ ...cloud, actors: [] }, [])).toEqual([]);
+  });
   // #10112, unit tier: a rejected shadow must have a recovery entry, never a runnable copy.
   it('retains a read-only entry for a rejected local restore, then removes it on recovery', () => {
     const cloud = snapshot('desk');
@@ -138,6 +151,19 @@ describe('presentation helpers', () => {
 });
 
 describe('CloudCompanionOfflineView', () => {
+  // #9782, unit: a recovery entry is read-only and cannot silently claim another install.
+  it('shows local recovery history without claiming offline status or taking over', async () => {
+    maker.getCompanionTranscript.mockResolvedValue({ messages: [{ id: 'one', seq: '1', role: 'assistant', text: 'Saved reply', createdAt: 1 }] });
+    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk" recovery />);
+    expect(await screen.findByText('Saved reply')).toBeTruthy();
+    expect(screen.getByText('bots.cloud.recoveryNotReady')).toBeTruthy();
+    expect(screen.getByText('bots.cloud.readOnlyNote')).toBeTruthy();
+    expect(screen.queryByText('bots.cloud.continueHere')).toBeNull();
+    expect(screen.queryByText(/bots.cloud.homeOffline/)).toBeNull();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(maker.takeOverCompanion).not.toHaveBeenCalled();
+  });
+
   // #10112, integration tier: enter through the failed companion, edit the complete
   // 12001-character source, retain edits on a failed save, then return to the recovered buddy.
   it('corrects the rejected profile through its real form and preserves edits when saving fails', async () => {

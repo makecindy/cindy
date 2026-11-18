@@ -36,6 +36,8 @@ export interface CloudCompanionOfflineViewProps {
   /** The home is online but has not opened remote control; otherwise it is simply not reachable. */
   controlOff?: boolean;
   profileFailure?: BotProfileSourceFailure;
+  /** A demoted local home is not an offline remote computer. */
+  recovery?: boolean;
 }
 
 type TakeOverState =
@@ -52,7 +54,7 @@ export function CloudCompanionOfflineView(props: CloudCompanionOfflineViewProps)
   if (!owner.dataOwnerId || !isDataOwnerGenerationCurrent(transcriptOwner)) { transcriptOwner = owner; transcriptPages.clear(); }
   return <CloudCompanionOfflineContent key={JSON.stringify([owner, props.botId, props.deviceId])} {...props} />;
 }
-function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false, profileFailure }: CloudCompanionOfflineViewProps) {
+function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarColor, deviceName, controlOff = false, profileFailure, recovery = false }: CloudCompanionOfflineViewProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const conflict = useCompanionCindyConflictAction();
@@ -198,27 +200,29 @@ function CloudCompanionOfflineContent({ botId, deviceId, name, avatar, avatarCol
           <BotAvatar bot={identity} size="sm" />
           <div className="min-w-0 flex-1">
             <p className="text-14 font-medium text-[var(--text-primary)]">
-              {t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
+              {recovery ? t('bots.cloud.recoveryNotReady') : t(controlOff ? 'bots.cloud.homeControlOff' : 'bots.cloud.homeOffline', { device })}
             </p>
-            <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
+            {!recovery && <p className="mt-0.5 text-12 text-[var(--text-secondary)]">
               {state.kind === 'running' ? t('bots.cloud.takingOver', { name })
                 : state.kind === 'conflict' ? t('bots.cloud.takeOverConflict', { name, device: state.device })
                   : state.kind === 'error' ? t(state.key, { name })
                     : t('bots.cloud.takeOverHint', { name })}
-            </p>
+            </p>}
           </div>
         </div>
-        <CompanionCindyConflictAction action={conflict.action} />
-        <Button
-          variant="primary"
-          size="md"
-          type="button"
-          loading={state.kind === 'running'}
-          disabled={state.kind === 'running'}
-          onClick={() => void takeOver()}
-        >
-          {t('bots.cloud.continueHere')}
-        </Button>
+        {!recovery && <>
+          <CompanionCindyConflictAction action={conflict.action} />
+          <Button
+            variant="primary"
+            size="md"
+            type="button"
+            loading={state.kind === 'running'}
+            disabled={state.kind === 'running'}
+            onClick={() => void takeOver()}
+          >
+            {t('bots.cloud.continueHere')}
+          </Button>
+        </>}
       </section>}
       <div
         ref={scroller}

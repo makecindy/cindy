@@ -77,6 +77,22 @@ export function cloudRemoteBots(cloud: CompanionCloudSnapshot, remoteBots: reado
   return [...listed, ...cloudOnlyRemoteBots(cloud, listed)];
 }
 
+/** A local recovery row is presentation-only, never an execution candidate. */
+export function isLocalRecoveryRow(cloud: CompanionCloudSnapshot, bot: Pick<RemoteBot, 'id' | 'deviceId'>): boolean {
+  return !!cloud.selfDeviceId && bot.deviceId === cloud.selfDeviceId
+    && !!cloudCompanionAt(cloud, bot.deviceId, bot.id) && cloud.demotedBotIds.includes(bot.id);
+}
+
+/** Sidebar/search only: keep unfinished local homes reachable without changing runnable rosters. */
+export function displayCompanionBots(cloud: CompanionCloudSnapshot, remoteBots: readonly RemoteBot[]): RemoteBot[] {
+  const rows = cloudRemoteBots(cloud, remoteBots).filter(bot => !isLocalRecoveryRow(cloud, bot));
+  if (!cloud.enabled || !cloud.selfDeviceId) return rows;
+  // Reuse cloud row construction, including its absence of sessions and execution state.
+  const recovery = cloudOnlyRemoteBots({ ...cloud, selfDeviceId: null }, [])
+    .filter(bot => isLocalRecoveryRow(cloud, bot));
+  return [...rows, ...recovery];
+}
+
 export function homeDeviceName(cloud: CompanionCloudSnapshot, botId: string, fallback: string): string {
   const actor = cloud.actors.find((candidate) => candidate.externalId === botId);
   return actor?.homeDevice?.name?.trim() || fallback;

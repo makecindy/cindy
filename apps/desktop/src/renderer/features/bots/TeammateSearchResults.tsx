@@ -8,7 +8,7 @@ import { useBotGroupList } from './botGroupStore';
 import { filterBotRoster, sortBotRoster } from './botRosterDisplay';
 import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
-import { cloudRemoteBots, withoutShadowedBots } from './companionCloudPresentation';
+import { displayCompanionBots, isLocalRecoveryRow, withoutShadowedBots } from './companionCloudPresentation';
 import { useRemoteBots } from './useRemoteBots';
 
 export interface TeammateSearchMatch {
@@ -37,7 +37,7 @@ export function useTeammateSearchMatches(
   const rosterRemoteBots = useRemoteBots();
   // 与伙伴段同一份名册:隐藏已交给别的电脑的本机副本,每个云端伙伴只在主力电脑上列一行。
   const bots = useMemo(() => withoutShadowedBots(allBots, cloud), [allBots, cloud]);
-  const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [rosterRemoteBots, cloud]);
+  const remoteBots = useMemo(() => displayCompanionBots(cloud, rosterRemoteBots), [rosterRemoteBots, cloud]);
   const { groups } = useBotGroupList();
   const { t } = useTranslation();
   return useMemo(() => {
@@ -62,7 +62,7 @@ export function useTeammateSearchMatches(
         key: `remote:${bot.deviceId}:${bot.id}`,
         kind: 'bot',
         name: bot.name,
-        detail: bot.deviceName,
+        detail: isLocalRecoveryRow(cloud, bot) ? t('bots.cloud.recoveryNotReady') : bot.deviceName,
         route: `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`,
         avatar: bot,
       }));
@@ -78,7 +78,7 @@ export function useTeammateSearchMatches(
         avatar: group.members[0] ?? null,
       }));
     return [...local, ...remote, ...groupMatches];
-  }, [bots, remoteBots, groups, rawQuery, lockedSessionGroupName, t]);
+  }, [bots, remoteBots, groups, rawQuery, lockedSessionGroupName, cloud, t]);
 }
 
 /** 与会话结果行同几何(rounded-lg、px-3 py-2.5、20px 标记、13 号标题、类型小标签)。 */
@@ -123,7 +123,7 @@ export function TeammateSearchResults({
               </span>
             </span>
             {match.detail ? (
-              <span className="mt-1 block truncate text-11 leading-none text-[var(--text-tertiary)]">{match.detail}</span>
+              <span title={match.detail} className="mt-1 block truncate text-11 leading-none text-[var(--text-tertiary)]">{match.detail}</span>
             ) : null}
           </span>
         </button>

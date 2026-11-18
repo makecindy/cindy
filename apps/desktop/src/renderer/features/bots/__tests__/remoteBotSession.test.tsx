@@ -98,6 +98,22 @@ beforeEach(() => {
   window.electronAPI = { deviceLink: { invoke: h.invoke } } as unknown as Window['electronAPI'];
 });
 afterEach(cleanup);
+
+// #9782, unit: no profileFailure is needed to reach the same-home read-only entry.
+it('opens same-home demoted history and never invokes itself as a remote device', async () => {
+  h.listed = false;
+  h.cloud = { enabled: true, selfDeviceId: 'home', humanActorId: 'human', demotedBotIds: ['writer'], actors: [
+    { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'home' }] };
+  const view = render(<RemoteBotSessionView />);
+  await screen.findByText('cloud-offline-view');
+  expect(h.cloudView).toHaveBeenLastCalledWith(expect.objectContaining({ recovery: true }));
+  expect(h.invoke).not.toHaveBeenCalled();
+  expect(h.view).not.toHaveBeenCalled();
+  expect(h.navigate).not.toHaveBeenCalled();
+  h.cloud = { ...h.cloud, demotedBotIds: [] };
+  view.rerender(<RemoteBotSessionView />);
+  expect(h.navigate).toHaveBeenLastCalledWith({ to: '/bots/writer', replace: true });
+});
 // #10112, unit tier: the former-home route must show the local failure rather
 // than spin forever; automatic recovery follows the completed home projection.
 it.each([true, false])('keeps rejected local source editing open until recovery (demoted: %s)', async demoted => {

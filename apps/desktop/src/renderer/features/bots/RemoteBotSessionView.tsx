@@ -42,9 +42,10 @@ function RemoteBotSessionGate() {
   const cloudActor = cloudCompanionAt(cloud, deviceId, botId);
   const homeActor = cloud.enabled ? cloud.actors.find(actor => actor.externalId === botId) : undefined;
   const rejectedHere = homeActor?.homeDeviceId === cloud.selfDeviceId && !!homeActor?.profileFailure;
+  const localRecovery = !!cloudActor && deviceId === cloud.selfDeviceId && !!botId && cloud.demotedBotIds.includes(botId);
   const deviceListState = useDeviceLinkDeviceListRequestState();
   const recoveringHere = useRef(false);
-  if (rejectedHere) recoveringHere.current = true;
+  if (rejectedHere || localRecovery) recoveringHere.current = true;
   const [ready, setReady] = useState<(RemoteBot & { sessionId: string; canonicalChat: true }) | null>(() => {
     if (!bot?.sessionId || !deviceId || (requestedSessionId && requestedSessionId !== bot.sessionId)
       || remoteProjectsStore.getSessionDeviceId(bot.sessionId) !== deviceId) return null;
@@ -61,7 +62,7 @@ function RemoteBotSessionGate() {
     const owner = getDataOwnerGeneration();
     setFailed(false);
     setOriginalTask(false);
-    if (!deviceId || !bot?.online) return;
+    if (!deviceId || deviceId === cloud.selfDeviceId || !bot?.online) return;
     setValidatedSessionId(null);
     const request: RemoteResourceGetRequest = {
       client: { protocolVersion: 1, primitives: ['status', 'session-link'] },
@@ -122,7 +123,7 @@ function RemoteBotSessionGate() {
     return () => {
       disposed = true;
     };
-  }, [deviceId, botId, sessionId, bot?.online, bot?.deviceName, retry, requestedSessionId]);
+  }, [deviceId, botId, sessionId, bot?.online, bot?.deviceName, retry, requestedSessionId, cloud.selfDeviceId]);
 
   useEffect(() => {
     if (!failed || !bot?.online || !ready) return;
@@ -169,7 +170,7 @@ function RemoteBotSessionGate() {
   const offlineActor = !requestedSessionId && rejectedHere ? homeActor : cloudActor;
   // Its main computer is offline (or never reachable here): read the cloud conversation
   // and offer to continue on this computer instead of a stale read-only mirror.
-  if (offlineActor && deviceId && botId && (rejectedHere || (homeAway && (homeOffline || controlOff) && (!liveChat || homeAwayLong)))) {
+  if (offlineActor && deviceId && botId && (rejectedHere || localRecovery || (homeAway && (homeOffline || controlOff) && (!liveChat || homeAwayLong)))) {
     return (
       <Suspense fallback={<main className="flex h-full items-center justify-center bg-[var(--surface)]"><Spinner size={18} /></main>}>
       <CloudCompanionOfflineView
@@ -182,6 +183,7 @@ function RemoteBotSessionGate() {
         deviceName={bot?.deviceName || offlineActor.homeDevice?.name || ''}
         controlOff={controlOff}
         profileFailure={offlineActor.profileFailure}
+        recovery={localRecovery}
       />
       </Suspense>
     );
