@@ -15,7 +15,7 @@ const h = vi.hoisted(() => ({
   params: {} as { sessionId?: string; deviceId?: string; sharedTaskId?: string; expectedOwnedSharedTaskId?: string; mode?: string }, generation: 1,
   router: { replace: vi.fn(), push: vi.fn() }, alert: vi.fn(), revoked: vi.fn(),
   link: { sharedTaskAvailable: true, invoke: vi.fn(), openLink: vi.fn(), closeLink: vi.fn(), readDeviceList: vi.fn() },
-  api: { list: vi.fn(), get: vi.fn(), join: vi.fn(), leave: vi.fn(), close: vi.fn() },
+  api: { list: vi.fn(), get: vi.fn(), join: vi.fn(), leave: vi.fn(), close: vi.fn(), isPrivateOwner: vi.fn() },
   store: { getSessions: vi.fn(), removeDevice: vi.fn(), setDeviceSessions: vi.fn(), upsertDeviceSession: vi.fn() },
   t: (key: string, options?: { title?: string; link?: string }) => key === 'sharedTask.invitationMessage' ? `Join “${options?.title}”\n${options?.link}\nOpen the link, or paste it into Join Shared Task in Cindy.` : options?.title ? key + ':' + options.title : key,
 }));
@@ -432,9 +432,12 @@ it('replaces stale guest state only for confirmed membership loss and can join a
   await click('sharedTask.returnToTasks');
   expect(h.router.replace).toHaveBeenCalledWith('/devices');
 });
-it('closes only the confirmed owned tasks and retains failures for retry', async () => {
+// #11276: a private row must close on its original host while existing rows retain their route.
+// Unit through the actual management screen, one successful close and one retryable failure.
+it.each([false, true])('closes only confirmed owned tasks and retains failures for retry (private=%s)', async privateFirst => {
   h.params = { sessionId: 'task', deviceId: 'host' };
-  h.api.list.mockResolvedValue([owned('one'), owned('two'), { ...owned('foreign'), ownerAccountId: 'other' }]);
+  h.api.isPrivateOwner.mockImplementation((id: string) => privateFirst && id === 'one');
+  h.api.list.mockResolvedValue([{ ...owned('one'), hostDeviceId: privateFirst ? 'desktop' : 'host' }, owned('two'), { ...owned('foreign'), ownerAccountId: 'other' }]);
   await render(); await click('sharedTask.tabOwned'); await click('sharedTask.closeAll');
   expect(h.alert.mock.lastCall![3].cancelable).toBe(true);
   await act(async () => h.alert.mock.lastCall![3].onDismiss());
@@ -444,9 +447,14 @@ it('closes only the confirmed owned tasks and retains failures for retry', async
   expect(h.api.close).not.toHaveBeenCalled();
   expect(h.alert.mock.lastCall![1]).toContain('Test computer');
   h.api.close.mockImplementation((id: string) => id === 'two' ? Promise.reject(new Error('offline')) : Promise.resolve());
+  h.link.invoke.mockImplementation(async (_device, _channel, [command]) => command.action === 'close' ? { ok: true } : { available: true, detail: null });
   h.api.list.mockResolvedValue([owned('two')]);
   await act(async () => confirmation()[1].onPress!());
-  expect(h.api.close.mock.calls.map(([id]) => id)).toEqual(['one', 'two']);
+  expect(h.api.close.mock.calls.map(([id]) => id)).toEqual(privateFirst ? ['two'] : ['one', 'two']);
+  if (privateFirst) {
+    expect(h.link.openLink).toHaveBeenCalledWith('desktop');
+    expect(h.link.invoke).toHaveBeenCalledWith('desktop', 'maker:shared-task', [{ action: 'close', sharedTaskId: 'one' }]);
+  }
   expect(element.textContent).toContain('sharedTask.closeFailedToast');
   expect(element.textContent).toContain('two'); expect(element.textContent).not.toContain('one');
 });

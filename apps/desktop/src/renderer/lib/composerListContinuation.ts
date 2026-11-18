@@ -24,8 +24,9 @@ export interface ListPrefixMatch {
 const CHECKBOX_RE = /^(\s*)([-+*])(\s+)\[[ xX]\](\s+|$)/;
 const BULLET_RE = /^(\s*)([-+*•])(\s+)/;
 const ORDERED_RE = /^(\s*)(\d{1,9})([.)])(\s+)/;
-// 中文顿号序号(`1、`)不要求后随空格,符合中文输入习惯。
-const ORDERED_CJK_RE = /^(\s*)(\d{1,9})(、)(\s*)/;
+// 中文顿号序号(`1、`)不要求后随空格,符合中文输入习惯。序号限两位:
+// 更长的数字串是正文(与 ComposerListNodes 的输入规则一致)。
+const ORDERED_CJK_RE = /^(\s*)(\d{1,2})(、)(\s*)/;
 const QUOTE_RE = /^(\s*)(>)(\s+)/;
 
 /**

@@ -63,7 +63,6 @@ vi.mock('../AppearanceSection', () => ({ AppearanceSection: () => {
 } }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
-vi.mock('../VisionBridgeSection', () => ({ VisionBridgeSection: Stub }));
 vi.mock('../ProvidersSection', () => ({ ProvidersSection: Stub }));
 vi.mock('../McpServersSection', () => ({ McpServersSection: Stub }));
 vi.mock('../RemoteControlSection', () => ({ RemoteControlSection: Stub }));

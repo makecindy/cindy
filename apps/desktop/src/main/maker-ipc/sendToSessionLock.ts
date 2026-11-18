@@ -228,6 +228,11 @@ export async function acquireSendToSessionLock(
   return release;
 }
 
+/** A recovery wait must not retain an outer, reentrant send fence. */
+export function isSendToSessionLockHeldByCurrentCall(sessionId: string): boolean {
+  return heldLockKeys.getStore()?.get(sessionId)?.active === true;
+}
+
 /** Serialize every local send / runtime release / route mutation for one session. */
 export async function withSendToSessionLock<T>(
   sessionId: string,

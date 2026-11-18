@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { installedTool } from '../managed-tools/installer.js';
+import { installedTool } from '../managed-tools/installed.js';
 import { ghArtifact } from './ghArtifact.js';
 
 let managedRoot: string | undefined;

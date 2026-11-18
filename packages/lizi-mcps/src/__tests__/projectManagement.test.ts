@@ -42,14 +42,28 @@ describe("project management MCP", () => {
         workingDir: "/repo",
         removed: true,
       }));
-      const inspectIcon = vi.fn(async () => ({ok:true as const,icon:{image:null,source:"",kind:"none",candidate:false}}));
+      const inspectIcon = vi.fn(async () => ({
+        ok: true as const,
+        icon: { image: null, source: "", kind: "none", candidate: false },
+      }));
+      const readInfo = vi.fn(async () => ({
+        ok: true as const,
+        project: { directories: [{ path: "/reference", access: "read" }] },
+      }));
       const updateInfo = vi.fn(async () => ({
         ok: true as const,
         saved: true,
       }));
       const server = createXdtHelperMcpServer(
         {
-          projectManagement: { list, rename, remove, updateInfo, inspectIcon },
+          projectManagement: {
+            list,
+            rename,
+            remove,
+            updateInfo,
+            inspectIcon,
+            readInfo,
+          },
           resolveSurface: async () => surface,
         },
         {
@@ -74,8 +88,28 @@ describe("project management MCP", () => {
           }),
         );
       try {
-        expect(await call("get_project_icon",{project_key:"local:/repo"})).toMatchObject({ok:true,icon:{image:null}});
-        expect(inspectIcon).toHaveBeenCalledWith({callerSessionId:"caller",device:undefined,projectKey:"local:/repo"});
+        expect(
+          await call("get_project_info", {
+            project_key: "local:/repo",
+            device: "other-computer",
+          }),
+        ).toMatchObject({
+          ok: true,
+          project: { directories: [{ path: "/reference", access: "read" }] },
+        });
+        expect(readInfo).toHaveBeenCalledWith({
+          callerSessionId: "caller",
+          device: "other-computer",
+          projectKey: "local:/repo",
+        });
+        expect(
+          await call("get_project_icon", { project_key: "local:/repo" }),
+        ).toMatchObject({ ok: true, icon: { image: null } });
+        expect(inspectIcon).toHaveBeenCalledWith({
+          callerSessionId: "caller",
+          device: undefined,
+          projectKey: "local:/repo",
+        });
         const discovery = parse(
           await client.callTool({
             name: "list_tools",
@@ -91,6 +125,7 @@ describe("project management MCP", () => {
             "remove_project",
             "update_project_info",
             "get_project_icon",
+            "get_project_info",
           ]),
         );
         expect(
