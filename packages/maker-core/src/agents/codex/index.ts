@@ -3707,6 +3707,9 @@ assertRouteCurrent();
     const hostedEnvironmentId = hosted ? `cindy-device-${randomUUID()}` : undefined;
     // 受邀者(另一个账号)：本机用户的插件、技能、MCP、hooks、connectors、记忆与全局说明不进入会话。
     const hostedGuest = hosted?.guest === true;
+    const nativeRecovery = !reviewMode && !opts.remoteHostId && !opts.deviceHosted && sid
+      ? this.deps.nativeRecoveryObserver?.(sid)
+      : undefined;
     // 受邀者只能用分享给它的那一个供应商(启动来源就是它)：app-server 不升格、不开智能子代理调配，
     // 自定义供应商路由与按模型分流也只留它(见 prepareCodexExtraSpawnConfig 的 deviceHostedGuestProviderId)。
     const guestProviderId = hostedGuest ? hosted?.guestProvider?.providerId : undefined;
@@ -4502,6 +4505,7 @@ assertRouteCurrent();
      * 一起失去。memory flush 侧仍保持原有的「controller 存在才通知」语义。
      */
     const handleCompactBoundary = (): void => {
+      nativeRecovery?.publish('codex', 'contextCompaction', {});
       compactionStormTracker.noteCompaction();
       memoryFlushController?.onCompactBoundary();
     };
@@ -12952,6 +12956,9 @@ assertRouteCurrent();
           terminalErroredTurnIds.add(params.turn.id);
           return;
         }
+        if (nativeRecovery && params.turn.id === currentTurnId && !terminalErroredTurnIds.has(params.turn.id)) {
+          nativeRecovery.publish('codex', 'turn/completed', { status: params.turn.status });
+        }
         handleTurnCompleted(params);
       },
       itemStarted: (params) => {
@@ -13357,6 +13364,9 @@ assertRouteCurrent();
           cancelActiveYieldContinuation('transport error');
         }
         if (!isTransportError && shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        if (nativeRecovery && !isTransportError) {
+          nativeRecovery.publish('codex', 'error', { willRetry: params.willRetry === true });
+        }
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
         // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
         // currentTurnId 是 null 且 isTurnInFlight 是 false —— 上面两条既有判据都不成立,

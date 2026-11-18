@@ -8297,6 +8297,8 @@
         "subscribeMessageDetail": "Receives saved user messages and AI replies. Attachments use separate reading and handoff.",
         "subscribeToolExecution": "Tool execution events",
         "subscribeToolExecutionDetail": "Receives tool names, inputs, results and errors. Observes without changing execution.",
+        "subscribeNativeRecovery": "Native recovery events",
+        "subscribeNativeRecoveryDetail": "Receives engine status for retries, context compaction, and task stops.",
         "subscribeTaskState": "Task state events",
         "subscribeTaskStateDetail": "Receives changes to running, waiting, completion, archive and hidden task states.",
         "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",

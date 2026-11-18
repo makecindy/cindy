@@ -742,9 +742,9 @@ export interface GhostCindyNeeds {
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
  * 两项在安装或更新确认中展示；整体批准后按当前声明订阅，旧元数据主题语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state', 'tool-execution'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
-export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state', 'tool-execution'] as const;
+export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state', 'tool-execution', 'native-recovery'] as const;
 export type GhostTaskEventTopic = (typeof GHOST_TASK_EVENT_TOPICS)[number];
 export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subscribe'>): GhostTaskEventTopic[] {
   return GHOST_TASK_EVENT_TOPICS.filter(topic => manifest.subscribe?.topics?.includes(topic));
@@ -2774,8 +2774,8 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       if (topics?.length) {
         for (const topic of declaredGhostTaskEventTopics(manifest)) items.push({
           key: `subscribe:topics:${topic}`, kind: 'subscribe',
-          labelKey: topic === 'message' ? 'subscribeMessage' : topic === 'tool-execution' ? 'subscribeToolExecution' : 'subscribeTaskState',
-          detailKey: topic === 'message' ? 'subscribeMessageDetail' : topic === 'tool-execution' ? 'subscribeToolExecutionDetail' : 'subscribeTaskStateDetail',
+          labelKey: topic === 'message' ? 'subscribeMessage' : topic === 'tool-execution' ? 'subscribeToolExecution' : topic === 'native-recovery' ? 'subscribeNativeRecovery' : 'subscribeTaskState',
+          detailKey: topic === 'message' ? 'subscribeMessageDetail' : topic === 'tool-execution' ? 'subscribeToolExecutionDetail' : topic === 'native-recovery' ? 'subscribeNativeRecoveryDetail' : 'subscribeTaskStateDetail',
         });
         // 旧 key 只在真订了 turn / session 时产出:纯 activity 插件不该在确认框里
         // 多出一行"旁听轮次与会话事件"——网关根本不给它投 turn / session,那行是凭空
@@ -9134,6 +9134,7 @@ export type GhostActivityEventName =
 /** did- 旁听事件名，按声明并批准的 topic 分发。 */
 export type GhostDidEventName =
   | 'did-tool-execution'
+  | 'did-native-recovery'
   | 'did-message-created'
   | 'did-task-state-changed'
   | 'did-turn-start'
@@ -9198,7 +9199,13 @@ export type GhostEventActivityData = GhostEventThinkingData | GhostEventInteract
 
 /** did- 旁听载荷；消息内容与任务状态使用各自的批准主题。 */
 export type GhostDidEventData =
-  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData | GhostToolExecutionData;
+  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData | GhostToolExecutionData | GhostNativeRecoveryData;
+export interface GhostNativeRecoveryData {
+  sessionId: string;
+  engine: 'claude-code' | 'codex' | 'pi';
+  nativeEvent: string;
+  metadata: Readonly<Record<string, string | number | boolean>>;
+}
 export interface GhostToolExecutionData {
   sessionId: string;
   eventType: string;

@@ -8369,6 +8369,8 @@
         "subscribeMessageDetail": "Recebe mensagens guardadas do utilizador e respostas da IA. Os anexos são lidos e transferidos separadamente.",
         "subscribeToolExecution": "Eventos de execução de ferramentas",
         "subscribeToolExecutionDetail": "Recebe nomes, entradas, resultados e erros das ferramentas. Observa sem alterar a execução.",
+        "subscribeNativeRecovery": "Eventos nativos de recuperação",
+        "subscribeNativeRecoveryDetail": "Recebe o estado do motor durante novas tentativas, a compactação do contexto e a interrupção de tarefas.",
         "subscribeTaskState": "Eventos de estado de tarefas",
         "subscribeTaskStateDetail": "Recebe alterações de execução, espera, conclusão, arquivo e ocultação de tarefas.",
         "subscribeActivity": "Observa quando a IA está a pensar e quando está à sua espera",
