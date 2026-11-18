@@ -52,13 +52,14 @@ export function useDialogueGroupOrder(enabled: boolean) {
 }
 
 /** Place before truncation so a group moved to the top stays there in a short list. */
-export function placeDialogueGroup(entries: readonly MainListEntry[], position?: Position): readonly MainListEntry[] {
+export function placeDialogueGroup(entries: readonly MainListEntry[], position: Position | undefined, comparisonKey: (key: string) => string): readonly MainListEntry[] {
   if (!position) return entries;
   const dialogue = entries.find(entry => entry.kind === 'dialogue-group');
   if (!dialogue) return entries;
   const projects = entries.filter(entry => entry.kind === 'project');
-  const next = projects.findIndex(entry => entry.project.projectKey === position.next);
-  const previous = projects.findIndex(entry => entry.project.projectKey === position.previous);
+  const projectKeys = projects.map(entry => comparisonKey(entry.project.projectKey));
+  const next = position.next === null ? -1 : projectKeys.indexOf(comparisonKey(position.next));
+  const previous = position.previous === null ? -1 : projectKeys.indexOf(comparisonKey(position.previous));
   let index = projects.length;
   if (position.previous === null) index = 0;
   else if (position.next !== null && next >= 0) index = next;

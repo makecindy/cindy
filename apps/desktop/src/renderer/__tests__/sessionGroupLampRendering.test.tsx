@@ -6,6 +6,7 @@ import { act, cleanup, createEvent, fireEvent, render, screen, within } from '@t
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getStartingSessionIds, markSessionStarting, resetSessionStartingStoreForTests, useStartingSessionIds } from '@/lib/sessionStartingStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import * as sidebarOwnerStorage from '@/lib/sidebarOwnerStorage';
 import { __testing as ownerStorage } from '@/lib/sidebarOwnerStorage';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
@@ -380,6 +381,7 @@ describe('Sidebar group context menus', () => {
 // SortableJS instance, and its real onEnd must persist the reordered projects.
 describe('Manual project sorting', () => {
   it.each([false, true])('drags the dialogue header and restores its position (collapsed=%s)', collapsed => {
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { platform: 'win32' } });
     setDataOwnerGeneration('dialogue-sort-test');
     ownerStorage.setOwnerAuthorityReader(dataOwnerId => ({
       dataOwnerId, ownerGeneration: 1, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
@@ -387,7 +389,7 @@ describe('Manual project sorting', () => {
     try {
       const p = groupProps(false);
       p.projects = ['A', 'B'].map((name) => ({
-        projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name,
+        projectKey: 'local:C:/Work/' + name, workingDir: 'C:/Work/' + name, displayName: name,
         scope: 'local', sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
         remoteHostId: null, deviceLinkDeviceId: null,
         deviceLinkDeviceName: null, deviceLinkConnectionStatus: null,
@@ -413,6 +415,9 @@ describe('Manual project sorting', () => {
       expect(Array.from(row.querySelectorAll('[data-testid]'), el => el.getAttribute('data-testid'))).toEqual(children);
       expect(p.filter.setManualProjectOrder).not.toHaveBeenCalled();
       view.unmount();
+      // Filtered sessions can spell the same Windows project path differently.
+      p.projects = p.projects.map(project => ({ ...project, projectKey: project.projectKey.toLowerCase() }));
+      p.allProjectKeysForOrder = p.projects.map(project => project.projectKey);
       const reopened = render(<ProjectsSection {...p} filter={{ ...p.filter, projectOrder: 'activity' }} />);
       reopened.rerender(<ProjectsSection {...p} />);
       expect(groupHeader().closest('[data-sortable-id]')?.previousElementSibling?.getAttribute('data-sortable-id'))
@@ -426,7 +431,10 @@ describe('Manual project sorting', () => {
   });
 
   it('leaves the real project header draggable and persists a completed reorder', () => {
-    const p = props(false);
+    const p = groupProps(false);
+    const writePreference = vi.spyOn(sidebarOwnerStorage, 'writeSidebarOwnerStorage');
+    p.filter.groupAutomation = true;
+    p.dialogues = p.dialogues.map((session, index) => index === 0 ? { ...session, source: 'scheduler' } : session);
     p.projects = ['First', 'Second'].map((name) => ({
       projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name,
       scope: 'local', sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
@@ -448,12 +456,16 @@ describe('Manual project sorting', () => {
 
     // Sortable owns pointer geometry; replay its drop boundary against the real
     // list and DOM move rather than copying its reorder or persistence logic.
-    list.append(moved);
+    const automation = list.querySelector('[data-sortable-id="automations-group"]');
+    expect(automation?.nextElementSibling?.getAttribute('data-sortable-id')).toBe('dialogue-group');
+    list.insertBefore(moved, automation);
     act(() => {
       sortable.option('onEnd')!.call(sortable, Object.assign(new Event('end'), {
         item: moved, from: list, oldIndex: 0, newIndex: 1,
       }) as SortableEvent);
     });
+    expect(writePreference.mock.calls.filter(([key]) => key === 'cc-agent.sidebar.dialogueGroupOrder')).toHaveLength(0);
+    writePreference.mockRestore();
     expect(p.filter.setManualProjectOrder).toHaveBeenCalledWith(
       ['local:/Second', 'local:/First'], p.allProjectKeysForOrder,
     );

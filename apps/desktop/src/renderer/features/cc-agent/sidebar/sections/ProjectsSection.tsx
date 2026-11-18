@@ -704,7 +704,7 @@ export function ProjectsSection({
     totalCount: projectsTotal,
   } = collapseEntries(
     customProjectOrder && !deviceGroupingActive
-      ? placeDialogueGroup(mixedEntries, dialogueOrder.positions.get(orderScope(DIALOGUE_GROUP_ALL_KEY)))
+      ? placeDialogueGroup(mixedEntries, dialogueOrder.positions.get(orderScope(DIALOGUE_GROUP_ALL_KEY)), projectComparisonKey)
       : mixedEntries,
     showAllProjects,
   );
@@ -1167,7 +1167,16 @@ export function ProjectsSection({
         if (ordered.every((id, i) => id === sortableIds[i])) return;
         const projectIds = ordered.filter(id => id !== DIALOGUE_SORT_ID);
         const priorProjectIds = sortableIds.filter(id => id !== DIALOGUE_SORT_ID);
-        if (ordered.includes(DIALOGUE_SORT_ID)) dialogueOrder.remember(orderScope(groupKey), ordered);
+        const index = ordered.indexOf(DIALOGUE_SORT_ID);
+        const scope = orderScope(groupKey);
+        if (index >= 0) {
+          const moved = index !== sortableIds.indexOf(DIALOGUE_SORT_ID);
+          const neighborsChanged = ordered[index - 1] !== sortableIds[index - 1] ||
+            ordered[index + 1] !== sortableIds[index + 1];
+          if (moved || (dialogueOrder.positions.has(scope) && neighborsChanged)) {
+            dialogueOrder.remember(scope, ordered);
+          }
+        }
         if (projectIds.some((id, i) => id !== priorProjectIds[i])) handleReorder(projectIds);
       }}
       disabled={!projectDragEnabled || overflow}
@@ -1338,7 +1347,7 @@ export function ProjectsSection({
                         {(() => {
                           const sectionView = collapseEntries(
                             customProjectOrder
-                              ? placeDialogueGroup(section.entries, dialogueOrder.positions.get(orderScope(key)))
+                              ? placeDialogueGroup(section.entries, dialogueOrder.positions.get(orderScope(key)), projectComparisonKey)
                               : section.entries,
                             expandedDeviceSections.has(key),
                           );
