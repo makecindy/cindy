@@ -4,7 +4,7 @@ import { hydrateQueuedAgentReferences } from '../../../desktop/src/main/maker-ip
 import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
 import type { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
 import type { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
-import type { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
+import { prepareQueuedPromptSnapshot, type createSchedulerQueueBridge, type SchedulerQueuedPromptObserver } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { settleTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionAuthorization.ts';
 import type { HostAutoResume } from './auto-resume.ts';
 import { explicitPorts } from './explicit-ports.ts';
@@ -49,7 +49,10 @@ export interface HostCoordinatorExecutor {
   isRunning(sessionId: string): boolean;
   isSettling(sessionId: string): boolean;
   reconcileIdle: NonNullable<Deps['reconcileTurnIdle']>;
-  beforeDispatchUserTurn: NonNullable<Deps['beforeDispatchUserTurn']>;
+  beforeDispatchUserTurn(
+    ...args: [...Parameters<NonNullable<Deps['beforeDispatchUserTurn']>>,
+      (snapshots: Parameters<typeof prepareQueuedPromptSnapshot>[0]) => Promise<void>]
+  ): ReturnType<NonNullable<Deps['beforeDispatchUserTurn']>>;
   onUndispatchedUserTurn: NonNullable<Deps['onUndispatchedUserTurn']>;
   persistTerminalSendError(sessionId: string, message: string, inputClientId?: string): void;
   /** The task's event persistence (historyFor), for the reply anchor of a user row. */
@@ -76,7 +79,7 @@ export interface HostCoordinatorContext {
   attachmentOwnership: QueuedAttachmentOwnershipRegistry;
   acceptedCallbacks: ReturnType<typeof createQueuedAcceptedCallbacks>;
   schedulePreparations: Parameters<typeof runSchedulerQueuedPreparation>[1];
-  scheduleDiscardWatchers: Map<string, () => void>;
+  scheduleDiscardWatchers: Map<string, SchedulerQueuedPromptObserver>;
   /** The auto-resume runtime and hooks of this owner runtime (auto-resume.ts). */
   autoResume: HostAutoResume;
   /** This owner runtime's context recovery, if assembled; read when a port runs. */
@@ -161,8 +164,10 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
     // and before vendor dispatch, open the turn change record, then the Git baseline.
     beforeDispatchUserTurn: (id, item, signal) => {
       ctx.autoResume.autoResumeBookkeeping.markReplacementDispatching(id, item.clientId);
-      return executor.beforeDispatchUserTurn(id, item, signal);
+      return executor.beforeDispatchUserTurn(id, item, signal,
+        snapshots => prepareQueuedPromptSnapshot(snapshots, ctx.scheduleDiscardWatchers, id, item, signal));
     },
+    onRetryUndispatchedUserTurn: (id, item) => executor.onUndispatchedUserTurn(id, item, 'cancelled'),
     // A durable turn that never reached the vendor: drop the record, then the baseline.
     // Then, as register.ts, the auto-resume that item carried hands its error back (exactly once).
     onUndispatchedUserTurn: (id, item, disposition) => {
@@ -220,7 +225,7 @@ export function hostCoordinatorDeps(ctx: HostCoordinatorContext): AgentInputCoor
       if (autoResume) ctx.autoResume.settleUndispatchedInterruptedAutoResume(id, item);
       finalizeUndispatchedClaimedRetry(id, item, 'cancelled');
       if (!autoResume) ctx.autoResume.settleUndispatchedInterruptedAutoResume(id, item);
-      discarded?.();
+      discarded?.onDiscarded();
     },
 
     // ── Interrupted-turn auto-resume (auto-resume.ts), as register.ts binds it ───────────────────

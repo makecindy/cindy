@@ -127,7 +127,7 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     }, threadId),
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
     resolveVerifiedWindow: host.resolveVerifiedWindow,
-    ...(host.resolveHandoffWindow ? { resolveHandoffWindow: host.resolveHandoffWindow } : {}),
+    resolveHandoffWindow: host.resolveHandoffWindow,
     listMessages: sessionId => listMessagesForAgentHandoff(sessionId, 400) as ReturnType<ContextOverflowRolloverDeps['listMessages']>,
     listReplayMessages: sessionId => listMessagesForAgentHandoff(sessionId, null, undefined, 'replay'),
     findLatestUser: sessionId => findLatestUserMessageForRebuild(sessionId) as ReturnType<NonNullable<ContextOverflowRolloverDeps['findLatestUser']>>,

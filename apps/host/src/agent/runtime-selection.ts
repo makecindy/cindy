@@ -20,6 +20,7 @@ import {
   findParkedEngineSession,
   rebroadcastAgentSwitchBoundaryWith,
 } from '../../../desktop/src/main/localDb/agentSwitchRows.ts';
+import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import {
   createHandleSetModel,
@@ -117,6 +118,15 @@ import { createSessionControlRuntimeWriter } from '../../../desktop/src/main/mak
 import { shouldApplyExclusiveProviderRerouteLive } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.js';
 import type { GhostModelRoute } from '../../../desktop/src/shared/ghost.js';
 import { explicitPorts } from './explicit-ports.ts';
+
+interface HostPendingSwitchOptions {
+  signal?: AbortSignal;
+  scheduled?: boolean;
+  clientId?: string;
+  nextInputChars?: number;
+  expectedPiModel?: string;
+  assertPreparationCurrent?: () => void;
+}
 
 /** What the Host's runtime selection reads from the rest of the Host (main.ts binds it). */
 export interface HostRuntimeSelectionDeps {
@@ -362,7 +372,13 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     resolveProviderGroupTarget: undefined,
     assertAgentDeviceRouteUsable: undefined,
     describeAgentDevice: undefined,
-    confirmNativeHistoryFallback: undefined,
+    resolveHandoffWindow: async ({ sessionId, agent, model, providerId, agentDeviceId }) => {
+      if (agentDeviceId) return null;
+      const budget = await deps.readStoredSessionContextWindowBudget(sessionId);
+      return deps.resolveConfiguredContextWindow(getActiveCatalog(), agent, providerId, model, budget, 'required');
+    },
+    // Host does not assemble companion lanes for runtime handoffs.
+    listCompanionSessionIds: undefined,
     relocateNativeHistory: undefined,
     readOwnerGeneration: () => getActiveAppSession().generation,
     peekPendingHandoff: deps.pendingHandoff.peek ? sessionId => deps.pendingHandoff.peek!(sessionId) : undefined,
@@ -372,7 +388,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     getSessionRow: readAgentSwitchSessionRow,
     getLiveSession: sessionId => maker().getSession(sessionId),
     closeSession: sessionId => maker().closeSession(sessionId, 'agent-switch'),
-    listMessagesForHandoff: (sessionId, after) => listMessagesForAgentHandoff(sessionId, 400, after),
+    listMessagesForHandoff: (sessionId, after) => listMessagesForAgentHandoff(sessionId, null, after, 'replay'),
     findParkedEngineSession: (sessionId, targetDbKind, fromAgentDeviceId) =>
       findParkedEngineSession(sessionId, targetDbKind, fromAgentDeviceId),
     applyAgentSwitchToDb: createAgentSwitchDbApply(
@@ -846,10 +862,49 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
      * Host yet (release table: the scheduled model scope, the Orca pending check, the provider group
      * check).
      */
-    async applyPendingAgentSwitch(sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }) {
+    async applyPendingAgentSwitch(sessionId: string, options?: HostPendingSwitchOptions) {
       // A context recovery can replay its interrupted input while a desktop owns the profile.
       // Leave independent user selections and model-renaming writes for the next normal send.
-      if (!deps.inputQueue.isHeldForDesktop()) await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId);
+      const assertPreparation = options?.assertPreparationCurrent;
+      if (options && assertPreparation) {
+        const intent = pendingSwitches.get(sessionId);
+        assertPreparation();
+        if (!intent || intent.targetAgentKind !== 'pi' || intent.model !== options.expectedPiModel || intent.targetAgentDeviceId) {
+          throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected Pi route changed; retry the send');
+        }
+        const sameOwner = captureRouteOwner();
+        const check = () => {
+          try { assertPreparation(); }
+          catch (error) { throw new HostRouteAdmissionError(error instanceof Error ? error.message : String(error), { cause: error }); }
+        };
+        const selectionDeps: MakerSessionAgentSwitchHandlerDeps = {
+          ...agentSwitchDeps,
+          selectSameAgentModel: createSelectSameAgentModel({
+            applySessionRuntimeSelection: (id, model, provider, selection, selectionOptions) =>
+              recoverRejectedRoute(id, sameOwner, check, bindRehydrated => {
+                const select = createHandleSetModel(() => ({
+                  ...ports(), rehydrateColdPiRuntimeForWindowVerification: bindColdPiRehydration(bindRehydrated),
+                }));
+                return select(id, model, provider, undefined, selection, {
+                  ...selectionOptions,
+                  assertSelectionCurrent: () => { check(); selectionOptions?.assertSelectionCurrent?.(); },
+                });
+              }),
+          }),
+          applyAgentSwitchToDb: (...args) => { check(); return agentSwitchDeps.applyAgentSwitchToDb(...args); },
+        };
+        await applyPendingAgentSwitchIfIdle(selectionDeps, sessionId, {
+          expectedRevision: pendingSwitches.revision?.(sessionId), nextInputChars: options.nextInputChars,
+        });
+        assertPreparation();
+        if (pendingSwitches.get(sessionId)) {
+          throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected Pi route is not ready');
+        }
+        return;
+      }
+      if (!deps.inputQueue.isHeldForDesktop()) await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, {
+        signal: options?.signal, nextInputChars: options?.nextInputChars,
+      });
       if (!deps.inputQueue.isHeldForDesktop() && !options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       await contextWindowBudgetReconcile.replayPendingSessionContextWindowBudgetUnderLock(sessionId);
     },
@@ -943,7 +998,7 @@ export function hostRuntimeSelectionQueueHooks(
   ports: { isSessionRestarting(sessionId: string): boolean; afterTurnSettled?(sessionId: string): void },
 ) {
   return {
-    applyPendingAgentSwitch: (sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }) =>
+    applyPendingAgentSwitch: (sessionId: string, options?: HostPendingSwitchOptions) =>
       getSelection().applyPendingAgentSwitch(sessionId, options),
     hasPendingCredentialSwitch: createDeferredRestartQueueGate(explicitPorts<Parameters<typeof createDeferredRestartQueueGate>[0]>({
       hasPendingCredentialSwitchEntry: (sessionId: string) => getSelection().hasPendingCredentialSwitch(sessionId),

@@ -1943,14 +1943,18 @@ const serverDeps = {
   agentCommands: async (input: { agentKind?: string; sessionId?: string }) => {
     const rawKind = String(input.agentKind ?? '');
     const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
-    const agent = agentGraph?.instances?.[kind];
-    if (!agent) return { success: false, error: `Agent '${kind}' is not registered` };
+    const graph = agentGraph;
+    const agent = graph?.instances?.[kind];
+    if (!graph || !agent) return { success: false, error: `Agent '${kind}' is not registered` };
     const builtins = agent.listAgentCommands();
     if (kind !== 'pi' || !input.sessionId) return { success: true, commands: builtins };
+    const owner = getCurrentDbClientSnapshot();
     const meta = await sessionStorage?.get(input.sessionId);
+    if (graph !== agentGraph || owner !== getCurrentDbClientSnapshot() || isAppSessionBoundaryPending())
+      throw new Error('Host account changed');
     if (!meta) throw new Error('session not found');
     if (!shouldListPiPackageCommands(kind, true, meta)) return { success: true, commands: builtins };
-    const manifest = agentGraph?.maker.getSessionRuntimeCapabilities(input.sessionId);
+    const manifest = graph.maker.getSessionRuntimeCapabilities(input.sessionId);
     const extra = manifest?.status === 'loaded'
       ? listPiRuntimePaletteCommands(manifest.commands, manifest.authorizedSlashCommandNames ?? manifest.managedPackageCommandNames) : [];
     return { success: true, commands: mergePiPackageCommands(kind, builtins, extra), runtimeStatus: manifest?.status ?? 'pending' };
@@ -1996,6 +2000,7 @@ const serverDeps = {
       supportsSessionAgentSwitch: true,
       supportsModelWindowSwitchGuard: true,
       supportsSessionAgentSwitchCas: true,
+      supportsRemoteModelWindowRebuild: kind === 'claude-code' || kind === 'pi',
       supportsOrcaWorkerPermissionMode: false,
       supportsOrcaWorkerUpdate: false,
     };
@@ -2215,6 +2220,13 @@ function startDeviceLink(): void {
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     agentNet: hostAgentNetPorts(),
     invoke: service, subscribe: eventHub.subscribe,
+    preparePiSkillRuntime: (id, workingDir, route) => {
+      const assertPreparationCurrent = inputQueue.capturePiSkillPreparation(id);
+      return withSendToSessionLock(id, () => inputQueue.preparePiSkillRuntime(id, workingDir, {
+        assertPreparationCurrent,
+        ...(route ? { applyPendingOwnerSelection: true, expectedPiModel: route.model, nextInputChars: route.nextInputChars } : {}),
+      }));
+    },
     // The Device Link create entry, with the runtime start admission (agent/create-runtime-session.ts).
     // Coexistence plan A: a new task's runtime and a plugin page's calls are refused while held (device-link.ts).
     profileHold: () => (inputQueue.isHeldForDesktop() ? profileInUseMessage() : null),

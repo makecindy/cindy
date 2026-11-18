@@ -51,7 +51,6 @@ export const PORTS_ONLY_CODEX_READS = {
 
 /** Ports only the Pi agent reads. */
 export const PORTS_ONLY_PI_READS = {
-  createPiVisionUsageRecorder: undefined,
   derivePiProxySessionToken: undefined,
   formatPiStartupCloudFileHint: undefined,
   getPiExtensionUiStrings: undefined,
@@ -76,7 +75,6 @@ export const PORTS_ONLY_PI_READS = {
   resolvePiProjectTrustInput: undefined,
   resolvePiRuntimeModelDescriptor: undefined,
   resolvePiRuntimeModels: undefined,
-  resolvePiVisionBridgeEnv: undefined,
   resolveRemotePiBinaryPath: undefined,
   spawnPiSubagentRunner: undefined,
 } as const satisfies UnreadPorts;

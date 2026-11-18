@@ -478,22 +478,6 @@ describe('Host copies of desktop expressions', () => {
       '26b5e363262ad7e18d1b5f2cc350fe39a6b158ea4af6519ae54e7a290e1f887e');
   });
 
-  // 规则：视觉桥的提示文案与去重时间，是桌面 broadcastVisionBridgeEvent 的同一段。
-  // 失效后果：Host 上的视觉桥提示与桌面不同或重复弹出。
-  it('sends the vision bridge notices with the desktop text and dedup', () => {
-    const desktop = read(desktopIndex);
-    const hostSource = read(path.join(hostAgent, 'vision-bridge.ts'));
-    const body = (source: string) => {
-      const start = source.indexOf("if (reason === 'vision-bridge-recognizing') {");
-      const end = source.indexOf("source: 'vision-bridge',", start);
-      return source.slice(start, end).replace(/\s+/g, '');
-    };
-    assert.ok(body(desktop).length > 200);
-    assert.equal(body(hostSource), body(desktop));
-    assert.ok(hostSource.includes('const VISION_BRIDGE_DEDUP_MS = 2_000;'));
-    assert.ok(desktop.includes('const VISION_BRIDGE_DEDUP_MS = 2_000;'));
-  });
-
   // 规则：Host 的 Pi 持久子代理入口与桌面入口逐行相同，只有 ready 帧的发法、断开通道和父进程监视不同。
   // 失效后果：Host 上的 runner 行为与桌面分叉（P4、m1-cp18c 审核方定乙）。
   it('starts the Pi subagent runner with the desktop entry, except the ready frame, the channel and the watchdog', () => {

@@ -368,6 +368,30 @@ test('Stop prevents Pi skill preparation from booting after an in-flight lookup'
   } finally { await h.queue.dispose(); }
 });
 
+// Unit regression for #11352: a prewarm admitted by Device Link must not open a
+// runtime once a desktop owns the profile, even if the stored task was already located.
+test('profile hold that starts during Pi skill preparation prevents runtime startup', async () => {
+  const dir = os.tmpdir();
+  let started, resume;
+  const reading = new Promise(resolve => { started = resolve; });
+  const pause = new Promise(resolve => { resume = resolve; });
+  const h = createHarness({ readSession: async id => {
+    started();
+    await pause;
+    return { id, agentKind: 'pi', model: 'stored-model', status: 'active', workingDir: dir };
+  } });
+  try {
+    const preparation = h.queue.preparePiSkillRuntime('s', dir);
+    const denied = assert.rejects(preparation, { code: 'PRECONDITION_FAILED', message: '[PRECONDITION_FAILED] profile is held' });
+    await reading;
+    h.queue.holdForDesktop('profile is held');
+    resume();
+    await denied;
+    assert.equal(h.maker.getSession('s'), null);
+    assert.deepEqual(h.persisted, []);
+  } finally { await h.queue.dispose(); }
+});
+
 const waitFor = async (check) => {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     if (check()) return;
@@ -611,14 +635,11 @@ test('persisted scheduler snapshot failure reaches its run with the original err
     onAccepted() { assert.fail('snapshot failed before acceptance'); },
   }));
   await waitFor(() => failure);
-  // 4b: the snapshot preparation failure is an auto-resume candidate (register.ts canRecoverTurn,
-  // coordinator recoverPersistedSchedulerPreparation), so the run hears that its input is recovering.
-  assert.deepEqual(failure, { error: message, recovering: true });
+  // Snapshot deadlines return their cause to the scheduler for its existing backoff.
+  assert.deepEqual(failure, { error: message, recovering: false });
   assert.equal(h.persisted.some(row => row.clientId === result.clientId), true);
-  // The resume holds the error and keeps the prompt tracked for its retry.
-  assert.equal(bridge.isPromptTracked('scheduled-task', result.clientId), true);
-  assert.ok(h.queue.projection('scheduled-task').autoResumePending);
-  assert.equal(h.queue.projection('scheduled-task').error, null);
+  assert.equal(bridge.isPromptTracked('scheduled-task', result.clientId), false);
+  assert.equal(h.queue.projection('scheduled-task').autoResumePending, undefined);
   assert.equal(h.maker.getSession('scheduled-task').sent.length, 0);
 });
 
@@ -4529,7 +4550,7 @@ async function preSendRecovery(t, agent = 'codex') {
   h = createHarness({
     ...createHostContextRecoveryWiring({
       openKinds: new Set(['context-overflow']), pendingHandoff,
-      getGraph: () => ({ maker: h.maker, contextRecovery: { codexHistory, resolveVerifiedWindow: () => null } }),
+      getGraph: () => ({ maker: h.maker, contextRecovery: { codexHistory, resolveVerifiedWindow: () => null, resolveHandoffWindow: () => null } }),
       persistMessage: (...args) => db.persistMessage(...args), publish: event => h.events.push(event), log: quiet,
     }),
     getOwner: getCurrentDbClientSnapshot, pendingHandoff, persistMessage: db.persistMessage,

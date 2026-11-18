@@ -61,7 +61,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   let source;
   // Coexistence plan A: the refusal while a desktop uses the profile (null: not held).
   let held = null;
-  let created = 0, appCalls = 0, oauthCalls = 0;
+  let created = 0, appCalls = 0, oauthCalls = 0, piPrewarms = 0;
   const oauthCancelled = [];
   const modelChoices = [];
   t.after(async () => {
@@ -125,6 +125,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
     preparePiSkillRuntime: async (id, dir, route) => {
+      piPrewarms++;
       assert.equal(id, 'task'); assert.equal(dir, '/project');
       if (route) assert.deepEqual(route, { model: 'pi-test', nextInputChars: 45_000 });
     },
@@ -241,14 +242,15 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // page's call are refused with the typed reason, and none reaches its handler; reads still answer.
   held = 'HOST_PROFILE_IN_USE_BY_DESKTOP: held for this test';
   for (const [channel, args] of [['maker:input:enqueue', ['task', { clientId: 'held', text: 'refused' }]],
-    ['maker:create-session', [{}]], [MCP_APPS_INVOKE, ['task', {}]], [PLUGIN_OAUTH_CHANNEL, [{}]]]) {
+    ['maker:create-session', [{}]], ['maker:session:prewarm', ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }]],
+    [MCP_APPS_INVOKE, ['task', {}]], [PLUGIN_OAUTH_CHANNEL, [{}]]]) {
     const reply = await clients[0].invoke('host', { channel, args });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     // The dispatcher answers every plugin OAuth failure with its own fixed text (dispatch.ts:5148).
     if (channel !== PLUGIN_OAUTH_CHANNEL)
       assert.ok(JSON.stringify(reply.error).includes('HOST_PROFILE_IN_USE_BY_DESKTOP'), `${channel}: ${JSON.stringify(reply)}`);
   }
-  assert.deepEqual([writes, created, appCalls, oauthCalls], [2, 0, 0, 0], 'nothing reached a handler');
+  assert.deepEqual([writes, created, appCalls, oauthCalls, piPrewarms], [2, 0, 0, 0, 2], 'nothing reached a handler while held');
   assert.equal((await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] })).ok, true, 'reads still answer');
   // A controller closing its link still cancels its pending plugin authorizations while held: that
   // cancel only drops in-memory requests (plugin-oauth/runtime.ts invalidatePluginOauth), no stored sign-in.

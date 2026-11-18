@@ -27,7 +27,7 @@ export interface HostAgentSkillListPorts {
 }
 
 export function createHostAgentSkillList(ports: HostAgentSkillListPorts) {
-  return async (input: { agentKind?: string; workingDir?: string; sessionId?: string }) => {
+  return async (input: { agentKind?: string; workingDir?: string; sessionId?: string; forceReload?: boolean }) => {
     const rawKind = String(input.agentKind ?? '');
     const kind: AgentKind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const maker = ports.maker();
@@ -42,6 +42,7 @@ export function createHostAgentSkillList(ports: HostAgentSkillListPorts) {
     const result = await maker.listAgentSkills(kind, {
       ...(workingDir ? { workingDir } : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(kind === 'pi' && input.forceReload === true && !ports.isProfileHeld() ? { forceReload: true } : {}),
     }, readDisabled);
     return { success: true, skills: result.skills ?? [] };
   };

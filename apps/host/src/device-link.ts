@@ -225,7 +225,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     if (result && typeof result === 'object') dispatch.markRemoteSettingPersistedInsideHandler(result);
     return result;
   });
-  registry.register(MAKER_INVOKE.SWITCH_SESSION_AGENT, ([sessionId, targetAgentKind, model, providerId, effort, fastMode, options]) => {
+  registry.register(MAKER_INVOKE.SWITCH_SESSION_AGENT, ([sessionId, targetAgentKind, model, providerId, effort, fastMode, options, thinking]) => {
     if (options && typeof options === 'object') {
       if ('confirmedContextWindow' in options) {
         throw new Error('[PRECONDITION_FAILED] remote model-window confirmation is unsupported');
@@ -236,7 +236,11 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
         (providerId !== null && providerId !== undefined && typeof providerId !== 'string')) {
       throw new Error('[INVALID_PARAMS] invalid model or provider');
     }
-    return call('/api/sessions/switch-agent', { sessionId, targetAgentKind, model, providerId, effort, fastMode });
+    if (readDeviceLinkModelSelectionOrigin() !== 'owner') {
+      throw new Error('[PRECONDITION_FAILED] remote agent switching requires an owner controller');
+    }
+    return call('/api/sessions/switch-agent', { sessionId, targetAgentKind, model, providerId, effort, fastMode,
+      options, thinking });
   });
   registry.register(MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT, ([sessionId]) =>
     call('/api/sessions/agent-switch-intent', { sessionId }));
@@ -245,6 +249,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     if (readDeviceLinkModelSelectionOrigin() !== 'owner') throw new Error('[PRECONDITION_FAILED] Task owner required');
     const request = input as { purpose?: string; workingDir?: string; pendingPiRoute?: unknown; model?: unknown } | null;
     if (request?.purpose !== 'pi-skill-dispatch') return { accepted: false };
+    refuseWhileHeld();
     if (typeof id !== 'string' || !id || typeof request.workingDir !== 'string' || !request.workingDir)
       throw new Error('[INVALID_PARAMS] Session and working directory required');
     const pending = request.pendingPiRoute;
@@ -263,6 +268,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       ? { model: request.model as string, ...(nextInputChars !== undefined ? { nextInputChars } : {}) }
       : undefined;
     await deps.preparePiSkillRuntime(id, request.workingDir, route);
+    refuseWhileHeld();
     assertCurrent();
     return { accepted: true, piRuntimePrepared: true, ...(route ? { pendingRouteApplied: true } : {}) };
   });

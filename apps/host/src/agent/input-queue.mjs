@@ -249,10 +249,6 @@ export function createInputQueue(deps) {
         deps.hub?.publish({ type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted' });
       });
     }
-    const applyPendingAgentSwitchAtDispatch = (id, signal, nextInputChars, assertPreparationCurrent) => deps.applyPendingAgentSwitch?.(id, {
-      signal, nextInputChars, assertPreparationCurrent,
-      prepareModelWindowSwitch: (taskId, target) => rollover?.prepareModelWindowSwitch(taskId, target) ?? 'unknown-context',
-    });
     const executor = createTurnExecutor({ ...deps, storedSessionOptions,
       // The owner this runtime's turns started under (assertCurrent): usage is written to that account only.
       runtimeOwner: () => owner ?? null,
@@ -475,15 +471,19 @@ export function createInputQueue(deps) {
       noteContextRecoveryRebuilt: id => executor.noteRecoveryRebuilt(id),
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
       capturePiSkillPreparation(id) {
+        refuseWhileHeld();
+        assertCurrent();
         const state = stateFor(id);
         const admission = state.admission;
         return () => {
+          refuseWhileHeld();
           assertCurrent();
           if (closing || state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
         };
       },
       preparePiSkillRuntime: (id, dir, options = {}) => command(id, async (state, admission) => {
         const check = () => {
+          refuseWhileHeld();
           options.assertPreparationCurrent?.();
           assertCurrent();
           if (state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
@@ -491,7 +491,11 @@ export function createInputQueue(deps) {
         check();
         if (options.applyPendingOwnerSelection) {
           // This explicitly selected Skill send is already under the task's route lock.
-          await applyPendingAgentSwitchAtDispatch(id, undefined, options.nextInputChars, check);
+          await deps.applyPendingAgentSwitch?.(id, {
+            nextInputChars: options.nextInputChars,
+            expectedPiModel: options.expectedPiModel,
+            assertPreparationCurrent: check,
+          });
           check();
         }
         await executor.preparePiSkillRuntime(id, dir, check);
