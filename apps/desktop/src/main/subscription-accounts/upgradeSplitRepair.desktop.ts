@@ -6,7 +6,7 @@
  * this write; Host client mode does not start it and the Host only reads the result.
  */
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { getProviderShareHostCompleteSnapshot } from '../device-link/providerShareHost.js';
+import { getProviderShareHostCompleteSnapshot, onProviderShareHostChanged } from '../device-link/providerShareHost.js';
 import { createLogger } from '../logger.js';
 import { setUpgradeSplitRepair } from '../maker-host/createDesktopProviderService.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
@@ -54,7 +54,14 @@ async function repairOnce(): Promise<void> {
     await recordUpgradeSplitRepairStarted(repair.providerId, owner);
     if (!isCurrent()) return;
     try {
-      await executeSubscriptionAccountCommand({ action: 'merge', providerId: repair.providerId, target: repair.kind });
+      await executeSubscriptionAccountCommand(
+        { action: 'merge', providerId: repair.providerId, target: repair.kind },
+        () => {
+          // Recording the attempt and acquiring the placement lock both yield to user actions.
+          if (!isCurrent() || !findUpgradeSplitRepair(upgradeSplitRepairDeps, repair.providerId))
+            throw new Error('Subscription upgrade repair no longer applies');
+        },
+      );
     } finally {
       // A merge that went through is settled as done even if the command failed afterwards; one that
       // did not stays pending and eligible for a later check. Any throw ends this run.
@@ -97,4 +104,5 @@ export function startUpgradeSplitRepair(): void {
     if (!resetAccountId && !change) void scheduleRepair();
   });
   onSubscriptionAccountSignInEvidenceChanged(() => void scheduleRepair());
+  onProviderShareHostChanged(() => void scheduleRepair());
 }

@@ -116,7 +116,7 @@ export interface UpgradeSplitRepair {
 }
 
 /** The next split provider to put back, if any. Callers merge one and ask again. */
-export function findUpgradeSplitRepair(deps: UpgradeSplitRepairDeps): UpgradeSplitRepair | null {
+export function findUpgradeSplitRepair(deps: UpgradeSplitRepairDeps, onlyProviderId?: string): UpgradeSplitRepair | null {
   // Unreadable files leave everything for a later load.
   file.invalidateIfChanged();
   const created = readCreatedSubscriptionProvidersIfReadable();
@@ -131,6 +131,7 @@ export function findUpgradeSplitRepair(deps: UpgradeSplitRepairDeps): UpgradeSpl
     if (providerAccounts(kind, pool.accounts, kind)
       .some((account) => !account.paused && deps.signInEvidence(kind, account.id) !== 'signed-out')) continue;
     for (const [providerId, entry] of Object.entries(created)) {
+      if (onlyProviderId !== undefined && onlyProviderId !== providerId) continue;
       if (entry.kind !== kind || repaired[providerId] === 'done' || !isUpgradeSplitProvider(providerId, entry)) continue;
       if (accountProviderId(kind, entry.account) !== providerId) continue;
       const own = providerAccounts(kind, pool.accounts, providerId);

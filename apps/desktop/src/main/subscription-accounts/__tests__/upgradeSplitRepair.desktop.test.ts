@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   queue: [] as Array<Repair | null>,
   calls: [] as string[],
   failMerge: false,
+  eligibleAtWrite: true,
+  shareChanged: null as null | (() => void),
   installed: null as null | (() => Promise<void>),
   disabledProviders: {} as Record<string, true>,
   presentation: {} as Record<string, { name?: string }>,
@@ -20,7 +22,10 @@ const h = vi.hoisted(() => ({
   shares: null as null | Array<{ providerId: string }>,
 }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false }));
-vi.mock('../../device-link/providerShareHost.js', () => ({ getProviderShareHostCompleteSnapshot: () => h.shares }));
+vi.mock('../../device-link/providerShareHost.js', () => ({
+  getProviderShareHostCompleteSnapshot: () => h.shares,
+  onProviderShareHostChanged: (callback: () => void) => { h.shareChanged = callback; },
+}));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   setUpgradeSplitRepair: (repair: () => Promise<void>) => { h.installed = repair; },
@@ -35,13 +40,21 @@ vi.mock('../runtime.js', () => ({
   subscriptionAccountSignInEvidence: () => 'unknown',
 }));
 vi.mock('../service.js', () => ({
-  executeSubscriptionAccountCommand: async (command: { action: string; providerId: string; target: string }) => {
+  executeSubscriptionAccountCommand: async (
+    command: { action: string; providerId: string; target: string },
+    assertCanMerge: () => void,
+  ) => {
+    assertCanMerge();
     h.calls.push(`${command.action}:${command.providerId}->${command.target}`);
     if (h.failMerge) throw new Error('busy');
   },
 }));
 vi.mock('../upgradeSplitRepair.js', () => ({
-  findUpgradeSplitRepair: () => {
+  findUpgradeSplitRepair: (_deps: unknown, providerId?: string) => {
+    if (providerId) {
+      h.calls.push('check-before-write');
+      return h.eligibleAtWrite ? { providerId } : null;
+    }
     h.calls.push('check');
     return h.queue.shift() ?? null;
   },
@@ -53,14 +66,14 @@ import { startUpgradeSplitRepair, upgradeSplitRepairDeps } from '../upgradeSplit
 const first: Repair = { kind: 'anthropic', providerId: 'anthropic-sub-0ff053bb' };
 const second: Repair = { kind: 'anthropic', providerId: 'anthropic-sub-bd13cd38' };
 startUpgradeSplitRepair();
-beforeEach(() => { h.calls = []; h.queue = []; h.failMerge = false; });
+beforeEach(() => { h.calls = []; h.queue = []; h.failMerge = false; h.eligibleAtWrite = true; });
 
 it('records each merge before the user merge command, settles it, and checks again after every merge', async () => {
   h.queue = [first, second, null];
   await h.installed!();
   expect(h.calls).toEqual([
-    'settle', 'check', `start:${first.providerId}`, `merge:${first.providerId}->anthropic`, 'settle',
-    'settle', 'check', `start:${second.providerId}`, `merge:${second.providerId}->anthropic`, 'settle',
+    'settle', 'check', `start:${first.providerId}`, 'check-before-write', `merge:${first.providerId}->anthropic`, 'settle',
+    'settle', 'check', `start:${second.providerId}`, 'check-before-write', `merge:${second.providerId}->anthropic`, 'settle',
     'settle', 'check',
   ]);
 });
@@ -69,7 +82,21 @@ it('settles a failed merge, ends the run and never throws', async () => {
   h.queue = [first, second];
   h.failMerge = true;
   await expect(h.installed!()).resolves.toBeUndefined();
-  expect(h.calls).toEqual(['settle', 'check', `start:${first.providerId}`, `merge:${first.providerId}->anthropic`, 'settle']);
+  expect(h.calls).toEqual(['settle', 'check', `start:${first.providerId}`, 'check-before-write', `merge:${first.providerId}->anthropic`, 'settle']);
+});
+
+// One repair candidate becomes ineligible while its placement write is pending.
+it('leaves the accounts in place when eligibility changes before the write', async () => {
+  h.queue = [first, null];
+  h.eligibleAtWrite = false;
+  await h.installed!();
+  expect(h.calls).toEqual(['settle', 'check', `start:${first.providerId}`, 'check-before-write', 'settle']);
+});
+
+it('checks again as soon as the owned share snapshot changes', async () => {
+  h.shareChanged!();
+  await h.installed!();
+  expect(h.calls).toEqual(['settle', 'check', 'settle', 'check']);
 });
 
 it('reads each condition from its own setting', () => {

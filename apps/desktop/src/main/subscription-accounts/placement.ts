@@ -215,6 +215,7 @@ export async function placeSubscriptionAccount(
   kind: SubscriptionProvider,
   accountId: string | readonly string[],
   providerId: string,
+  assertCanMove?: () => void,
 ): Promise<void> {
   const ids = typeof accountId === 'string' ? [accountId] : accountId;
   if (ids.some(id => !accountIdValid(id)) || !PROVIDER_ID.test(providerId))
@@ -223,6 +224,7 @@ export async function placeSubscriptionAccount(
   const owner = activeOwnerScopeKey();
   await file.updateAtomic(({ value }) => {
     assertOwner(owner);
+    assertCanMove?.();
     const accounts = { ...value.accounts };
     // The built-in provider is the default; storing it explicitly records the user's choice so a
     // later load never mistakes this account for one the upgrade merged.

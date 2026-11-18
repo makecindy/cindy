@@ -2450,6 +2450,7 @@ export async function acquireSubscriptionAccount(
 
 export async function runSubscriptionAccountCommand(
   command: SubscriptionAccountCommand,
+  assertCanMerge?: () => void,
 ): Promise<SubscriptionPoolView> {
   const state = currentRuntime();
   assertOwner(state);
@@ -2473,7 +2474,7 @@ export async function runSubscriptionAccountCommand(
   const managed = target && command.action !== 'login'
     ? await managedAccountProfiles(state, provider, owned, target) : new Set<string>();
   if (command.action === 'place' || command.action === 'merge' || command.action === 'remove-provider') {
-    await changeAccountPlacement(state, ref, command, managed);
+    await changeAccountPlacement(state, ref, command, managed, assertCanMerge);
     assertOwner(state);
     changed(provider);
     // A deleted provider no longer resolves; answer with the built-in one of its kind.
@@ -2760,6 +2761,7 @@ async function changeAccountPlacement(
   ref: SubscriptionPoolProviderRef,
   command: Extract<SubscriptionAccountCommand, { action: 'place' | 'merge' | 'remove-provider' }>,
   managed: ReadonlySet<string>,
+  assertCanMerge?: () => void,
 ): Promise<void> {
   const kind = ref.kind;
   const pool = readPool(kind);
@@ -2805,7 +2807,9 @@ async function changeAccountPlacement(
     // The built-in provider holds the CLI default login and is never merged away as a whole, even
     // when its pool has no default account (a pool migrated without one); move accounts instead.
     if (ref.providerId === kind) throw new Error('The built-in provider cannot be merged into another provider');
-    await placeSubscriptionAccount(kind, accounts.map(account => account.id), target);
+    if (assertCanMerge && (accounts.length !== 1 || accounts[0]?.id !== ref.ownAccount))
+      throw new Error('Subscription upgrade repair no longer applies');
+    await placeSubscriptionAccount(kind, accounts.map(account => account.id), target, assertCanMerge);
     return;
   }
   // Deleting a created provider stops using its accounts; their CLI logins and histories stay.

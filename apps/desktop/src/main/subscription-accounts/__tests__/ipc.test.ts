@@ -201,6 +201,13 @@ it('moves and takes out all homes of an account atomically, including failed wri
   expect(h.placement).toEqual(before);
   expect(h.created).toEqual({});
   h.placementWriteFails = false;
+  // One concurrent eligibility change while the automatic move waits for the placement lock.
+  let eligible = true;
+  h.beforeWrite = () => { eligible = false; };
+  await expect(placeSubscriptionAccount('openai', [first, second], 'openai-target', () => {
+    if (!eligible) throw new Error('Account is no longer eligible');
+  })).rejects.toThrow('Account is no longer eligible');
+  expect(h.placement).toEqual(before);
   let writes = 0;
   h.beforeWrite = () => { writes++; };
   await placeSubscriptionAccount('openai', [first, second], 'openai-target');

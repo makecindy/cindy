@@ -248,6 +248,10 @@ function runtimeForActiveOwner(): OwnerRuntime {
     },
     listReceivedShares: () => getReceivedShares(),
     isMobilePlatform: (platform) => isMobilePlatform(platform),
+    captureCandidateScope: () => {
+      const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+      return () => isCurrent() && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint;
+    },
     // Own computers only: a received share is closed under the sharer's peer key, which this
     // generation cannot see, so its list entry keeps a single read.
     captureLinkCloseEpoch: (agentDeviceId) => {

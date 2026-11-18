@@ -41,6 +41,8 @@ export interface ProviderGroupDirectoryDeps {
     Promise<{ views: ProviderView[]; stale: boolean; remainingMs?: number }>;
   listReceivedShares(): readonly ProviderShareReceived[];
   isMobilePlatform(platform: string | null): boolean;
+  /** Captures the owner and service endpoint for the entire add-computer query. */
+  captureCandidateScope?(): () => boolean;
   /** The add-computer list left this computer out because its directory could not be read. */
   onCandidateReadFailed?(agentDeviceId: string, error: unknown): void;
   /** Captures the user's link-close generation; the returned check is false once that link was closed
@@ -450,8 +452,9 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
     },
 
     async listCandidates(providerId, config) {
+      const isCurrent = deps.captureCandidateScope?.() ?? (() => true);
       const local = await localGroupProvider(providerId);
-      if (!local) return [];
+      if (!local || !isCurrent()) return [];
       const memberKeys = new Set(config?.members.map((m) => m.key) ?? []);
       const candidates: ProviderGroupCandidate[] = [];
       // The quick read answers from its last snapshot after 2s, but fails outright when that
@@ -464,15 +467,16 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
         const linkStillOpen = deps.captureLinkCloseEpoch?.(agentDeviceId) ?? (() => true);
         return readCatalog(agentDeviceId)
           .catch((error: unknown) => {
-            if (!isInterruptedCatalogRead(error) || !linkStillOpen()) throw error;
+            if (!isCurrent() || !isInterruptedCatalogRead(error) || !linkStillOpen()) throw error;
             return readCatalog(agentDeviceId, true);
           })
           .catch((error: unknown) => {
-            deps.onCandidateReadFailed?.(agentDeviceId, error);
+            if (isCurrent()) deps.onCandidateReadFailed?.(agentDeviceId, error);
             return [] as ProviderView[];
           });
       };
       const deviceList = await readDevices().catch(() => [] as readonly DeviceLinkDeviceView[]);
+      if (!isCurrent()) return [];
       const deviceReads = deviceList.filter(isControllable).map(async (device) => {
         const views = await candidateCatalog(device.deviceId);
         for (const view of views) {
@@ -515,6 +519,7 @@ export function createProviderGroupDirectory(deps: ProviderGroupDirectoryDeps): 
         candidates.push({ ...base, providerName: view.name });
       });
       await Promise.all([...deviceReads, ...shareReads]);
+      if (!isCurrent()) return [];
       // 同账号电脑在前，分享来的在后；各自按名称排序，结果稳定。
       return candidates.sort((a, b) =>
         a.kind === b.kind ? a.label.localeCompare(b.label) : a.kind === 'device' ? -1 : 1);
