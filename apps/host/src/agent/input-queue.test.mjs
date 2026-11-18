@@ -34,6 +34,9 @@ import { SILENT_STOP_AUTO_RESUME_SETTINGS_FILE } from '../../../desktop/src/main
 import { lockSessionRoute } from './session-route-lock.mjs';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
 import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind, createHostContextRecovery } from './context-recovery.ts';
+import { createHostCodexThreadStorage } from './codex-thread-storage.ts';
+import { createHostContextRecoveryWiring } from './context-recovery-wiring.ts';
+import { CODEX_HISTORY_OVERSIZED_REASON, CODEX_LIVE_TAIL_OVERSIZED_BYTES } from '@cindy/maker-core';
 import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
 import { createHostAgentHandoffPending } from './handoff-pending.ts';
 import { markCodexPlanInterrupted, writeCodexPlanUpdate } from '../../../desktop/src/main/localDb/codexPlanState.ts';
@@ -3079,6 +3082,7 @@ function assembledRuntime(t, db, overrides = {}, recoveryHost = {}) {
       return createHostContextRecoveryRollover({ getMaker: () => h.maker, persistMessage: db.persistMessage,
         publish: event => h.events.push(event), buildCreateOptsWithStderr: createSessionStderrOptions(quiet),
         readSessionExtraDirsFromDb: async () => [], readSessionWritableDirsFromDb: async () => [],
+        codexHistory: { readCodexThreadStorageReadOnly: async () => undefined, classifyCodexHistoryOversized: async () => 'unknown' },
         pendingHandoff: handoffs, log: quiet, ...recoveryHost }, runtime);
     },
     ...overrides,
@@ -4391,30 +4395,215 @@ test('context recovery assembly: the coordinator holds an overflow error from it
   assert.deepEqual(r.rows(id, 'error'), []);
 });
 
-// Current behaviour, pinned on request (release table section 5, "溢出错误时后面已排着输入"; row 30). Rule
-// shared with the desktop (contextRecoveryAssembly.ts contextRecoveryAbortSignal, from #4170): when input
-// is already queued behind an overflowed turn, the recovery gives way to it, clears the error and reports
-// recovered, so the overflowed message gets neither a replay nor an error row. The desktop then prepares
-// the unhealthy session before that send (prepareUnhealthySessionForSend, which can rebuild on token
-// pressure); the Host has no such step (row 30), so the queued input is sent on the overflowed runtime.
-// Tier: unit, real database, Host event path.
-test('context recovery assembly (current behaviour): an overflow with input queued behind it gives way to that input on the same runtime, with no rebuild and no error row', { timeout: 30_000 }, async t => {
-  const r = await assembledRecovery(t);
-  const id = 'assembled-queued-behind';
-  await r.db.createTask(id);
-  await r.h.queue.enqueue(id, { clientId: `${id}-input`, text: 'long task' });
-  await waitFor(() => r.h.maker.sessions.get(id)?.sent.length === 1);
-  const first = r.h.maker.sessions.get(id);
-  await r.h.queue.enqueue(id, { clientId: 'queued-behind', text: 'next' });
-  first.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
-  await waitFor(() => first.sent.length === 2);
-  assert.deepEqual(first.sent, ['long task', 'next'], 'the queued input goes to the overflowed runtime');
-  assert.equal(r.h.maker.sessions.get(id), first, 'no rebuilt runtime');
-  assert.deepEqual(r.rows(id, 'context_rebuild'), [], 'no rebuild');
-  assert.deepEqual(r.rows(id, 'error'), [], 'no error row for the overflowed message');
-  assert.equal(r.h.queue.projection(id).error, null);
-  assert.equal(r.h.events.some(event => event.sessionId === id && event.type === 'error'), false, 'the error is not published');
+// §3.2, integration. A saved Codex history error can outlive the harness that emitted it.
+// Exercise queued sends, real SQLite and the same native locator as main.ts. All Codex
+// discovery, including its external HOME fallback, stays inside this test's directories.
+async function preSendRecovery(t, agent = 'codex') {
+  const db = await recoveryDatabase(t);
+  const home = path.join(db.root, 'home');
+  mkdirSync(home);
+  const keys = ['HOME', 'USERPROFILE', 'CODEX_HOME', 'APPDATA', 'XDG_CONFIG_HOME'];
+  const before = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  Object.assign(process.env, { HOME: home, USERPROFILE: home, APPDATA: home, XDG_CONFIG_HOME: home });
+  delete process.env.CODEX_HOME;
+  t.after(() => {
+    for (const key of keys) {
+      if (before[key] === undefined) delete process.env[key];
+      else process.env[key] = before[key];
+    }
+  });
+  const id = 'pre-send-task';
+  const thread = '04111111-2222-4333-8444-555555555551';
+  const profile = path.join(db.root, 'profile');
+  const codexHistory = createHostCodexThreadStorage({
+    profileDir: profile, accounts: { codexAccountHome: key => path.join(profile, 'codex-accounts', key) },
+    check: () => {},
+  });
+  const lookup = t.mock.method(codexHistory, 'readCodexThreadStorageReadOnly');
+  let h;
+  const pendingHandoff = createHostAgentHandoffPending({ getOwner: getCurrentDbClientSnapshot,
+    publish: event => h.events.push(event), log: quiet });
+  h = createHarness({
+    ...createHostContextRecoveryWiring({
+      openKinds: new Set(['context-overflow']), pendingHandoff,
+      getGraph: () => ({ maker: h.maker, contextRecovery: { codexHistory, resolveVerifiedWindow: () => null } }),
+      persistMessage: (...args) => db.persistMessage(...args), publish: event => h.events.push(event), log: quiet,
+    }),
+    getOwner: getCurrentDbClientSnapshot, pendingHandoff, persistMessage: db.persistMessage,
+    readSession: async () => {
+      const row = db.db.prepare('SELECT sdk_session_id FROM sessions WHERE id = ?').get(id);
+      return { id, agentKind: agent, status: 'active', model: 'stored-model', providerId: 'xd',
+        permissionMode: 'ask', workingDir: db.root, sdkSessionId: row.sdk_session_id };
+    },
+  });
+  const originalOwner = getCurrentDbClientSnapshot();
+  t.after(async () => {
+    if (getCurrentDbClientSnapshot() === originalOwner) await h.queue.dispose();
+    else await assertOwnerChangedDisposal(h.queue.dispose());
+  });
+  await db.createTask(id);
+  db.db.prepare('UPDATE sessions SET agent_kind = ? WHERE id = ?').run(agent === 'claude-code' ? 'cc' : agent, id);
+  const send = text => h.queue.enqueue(id, { clientId: text, text });
+  await send('first');
+  await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
+  const first = h.maker.getSession(id);
+  function done(session) {
+    session.emit({ type: 'done', data: {}, sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId });
+    return waitFor(() => !h.queue.projection(id).running);
+  }
+  await done(first);
+  await db.persistMessage(id, { role: 'assistant', clientId: 'first-reply', content: 'previous answer to retain' });
+  db.db.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run(thread, id);
+  const close = t.mock.method(h.maker, 'closeSession');
+  const markers = () => db.db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'context_rebuild'").all(id);
+  const seedError = () => db.persistMessage(id, { clientId: 'old-error', role: 'error', content: { reason: CODEX_HISTORY_OVERSIZED_REASON } });
+  function writeRollout(folder, oversized = false) {
+    const dir = path.join(folder, 'sessions', '2026', '11', '18');
+    mkdirSync(dir, { recursive: true });
+    const meta = { type: 'session_meta', timestamp: '2026-11-18T00:00:00Z', payload: { id: thread, source: 'cli', cwd: home } };
+    const lines = [JSON.stringify(meta)];
+    if (oversized) lines.push(JSON.stringify({ payload: { type: 'custom_tool_call_output',
+      output: 'data:image/png;base64,' + 'A'.repeat(CODEX_LIVE_TAIL_OVERSIZED_BYTES) } }));
+    writeFileSync(path.join(dir, 'rollout-2026-11-18T00-00-00-' + thread + '.jsonl'), lines.join('\n') + '\n');
+  }
+  return { db, h, id, first, home, profile, close, lookup, send, done, markers, seedError, writeRollout, pendingHandoff };
+}
+
+for (const [scenario, rebuild] of [
+  ['healthy Host history', false], ['healthy history only in the external Codex home', false],
+  ['oversized Host history', true], ['missing history', true], ['a task now using another engine', true],
+]) {
+  test('pre-send recovery: ' + scenario, async t => {
+    const codex = scenario !== 'a task now using another engine';
+    const r = await preSendRecovery(lifoCleanup(t), codex ? 'codex' : 'claude-code');
+    if (scenario !== 'missing history') {
+      const external = scenario === 'healthy history only in the external Codex home';
+      r.writeRollout(external ? path.join(r.home, '.codex') : path.join(r.profile, 'codex-home'), scenario === 'oversized Host history');
+    }
+    await r.seedError();
+    await r.send('next');
+    await waitFor(() => r.h.maker.getSession(r.id)?.sent.some(text => text.endsWith('next')));
+    const live = r.h.maker.getSession(r.id);
+    assert.equal(r.lookup.mock.callCount(), codex ? 1 : 0);
+    assert.equal(r.close.mock.callCount(), rebuild ? 1 : 0);
+    assert.equal(r.markers().length, rebuild ? 1 : 0);
+    if (!rebuild) {
+      assert.equal(live, r.first);
+      assert.deepEqual(live.sent, ['first', 'next']);
+      return;
+    }
+    assert.notEqual(live, r.first);
+    assert.equal(live.options.resumeSessionId, undefined);
+    const handoff = JSON.parse(r.markers()[0].content).handoff;
+    assert.match(handoff, /previous answer to retain/);
+    assert.deepEqual(live.sent, [handoff + '\n\nnext']);
+    await r.done(live);
+    await r.send('again');
+    await waitFor(() => live.sent.length === 2);
+    assert.equal(live.sent[1], 'again');
+    assert.equal(r.markers().length, 1);
+  });
+}
+
+test('pre-send recovery: a live oversized-history error stays on the ordinary terminal path', async t => {
+  const r = await preSendRecovery(lifoCleanup(t));
+  await r.send('second');
+  await waitFor(() => r.first.sent.length === 2);
+  r.first.emit({ type: 'error', data: { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'old history limit' },
+    sessionTurnGeneration: r.first.generation, sessionInstanceId: r.first.instanceId });
+  await waitFor(() => r.db.errorRows(r.id).length === 1 && r.h.queue.projection(r.id).error);
+  assert.equal(r.h.events.filter(event => event.type === 'error' && event.sessionId === r.id).length, 1);
+  assert.equal(r.lookup.mock.callCount(), 0);
+  assert.equal(r.close.mock.callCount(), 0);
+  assert.equal(r.markers().length, 0);
 });
+
+test('pre-send recovery: a rebuild write failure refuses the input before dispatch', async t => {
+  const r = await preSendRecovery(lifoCleanup(t));
+  await r.seedError();
+  r.db.db.exec("CREATE TRIGGER reject_rebuild BEFORE INSERT ON messages WHEN NEW.role = 'context_rebuild' BEGIN SELECT RAISE(ABORT, 'fixture rebuild failed'); END");
+  await r.send('next');
+  await waitFor(() => Boolean(r.h.queue.projection(r.id).error));
+  assert.match(r.h.queue.projection(r.id).error, /fixture rebuild failed/);
+  assert.deepEqual(r.first.sent, ['first']);
+  assert.equal(r.h.maker.getSession(r.id), null);
+  assert.equal(r.markers().length, 0);
+});
+
+// Switch owners before close, during close, or after the old owner's rebuild commits.
+// A second account has the same task id; a stale decision must never commit to that database.
+for (const boundary of ['before close', 'before commit', 'before handoff']) {
+  test('pre-send recovery: an owner change ' + boundary + ' protects the new account', async t => {
+    t = lifoCleanup(t);
+    const other = await recoveryDatabase(t);
+    const otherClient = getCurrentDbClientSnapshot().client;
+    const r = await preSendRecovery(t, 'claude-code');
+    await other.createTask(r.id);
+    other.db.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run('other-thread', r.id);
+    await r.seedError();
+    const switchOwner = () => setCurrentDbClient(otherClient, 'other-account');
+    if (boundary === 'before close') {
+      r.first.getUsageSnapshot = () => { switchOwner(); return { contextTokens: 0, contextWindow: 100 }; };
+    } else if (boundary === 'before commit') {
+      const close = r.h.maker.closeSession.bind(r.h.maker);
+      r.h.maker.closeSession = async (...args) => { await close(...args); switchOwner(); };
+    } else {
+      const persist = r.db.persistMessage;
+      t.mock.method(r.db, 'persistMessage', async (...args) => { await persist(...args); switchOwner(); });
+    }
+    await assert.rejects(r.h.queue.contextRecoveryRollover().prepareUnhealthySession(r.id), /owner changed/);
+    assert.equal(r.close.mock.callCount(), boundary === 'before close' ? 0 : 1);
+    assert.equal(other.db.prepare('SELECT sdk_session_id AS thread FROM sessions WHERE id = ?').get(r.id).thread, 'other-thread');
+    assert.equal(other.db.prepare("SELECT count(*) AS count FROM messages WHERE role = 'context_rebuild'").get().count, 0);
+    assert.equal(r.markers().length, boundary === 'before handoff' ? 1 : 0);
+    assert.equal(await r.pendingHandoff.peek(r.id), null);
+  });
+}
+
+test('pre-send recovery: a healthy decision cannot reuse the next owner\'s live session', async t => {
+  t = lifoCleanup(t);
+  const other = await recoveryDatabase(t);
+  const otherClient = getCurrentDbClientSnapshot().client;
+  const r = await preSendRecovery(t, 'claude-code');
+  let changed = false;
+  r.first.getUsageSnapshot = () => {
+    setCurrentDbClient(otherClient, 'other-account');
+    changed = true;
+    return { contextTokens: 1, contextWindow: 100 };
+  };
+  const getStatus = t.mock.fn(() => 'idle');
+  r.first.getStatus = () => changed ? getStatus() : 'idle';
+  await r.send('next');
+  await waitFor(() => changed && Boolean(r.h.queue.projection(r.id).error));
+  assert.equal(getStatus.mock.callCount(), 0, 'the old send never inspects the replacement owner\'s live session');
+  assert.deepEqual(r.first.sent, ['first']);
+});
+
+// §3.2, integration. #4170 gives an already queued input priority over the failed turn.
+// Its send independently checks the live window; a full window needs one new native instance.
+for (const full of [false, true]) {
+  test('queued overflow gives way without replay or error: ' + (full ? 'full window rebuilds before dispatch' : 'healthy window keeps the runtime'), async t => {
+    const r = await assembledRecovery(lifoCleanup(t));
+    const id = 'assembled-queued-behind';
+    await r.db.createTask(id);
+    await r.h.queue.enqueue(id, { clientId: 'original', text: 'long task' });
+    await waitFor(() => r.h.maker.getSession(id)?.sent.length === 1);
+    const first = r.h.maker.getSession(id);
+    r.db.db.prepare('UPDATE sessions SET sdk_session_id = ? WHERE id = ?').run('native-before-overflow', id);
+    first.getUsageSnapshot = () => ({ contextTokens: full ? 200_000 : 25_000, contextWindow: 200_000 });
+    await r.h.queue.enqueue(id, { clientId: 'queued-behind', text: 'next' });
+    first.emit({ type: 'error', data: OVERFLOW, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
+    await waitFor(() => r.h.maker.getSession(id)?.sent.some(text => text.endsWith('next')));
+    const live = r.h.maker.getSession(id);
+    assert.equal(first === live, !full);
+    assert.deepEqual(first.sent, full ? ['long task'] : ['long task', 'next']);
+    assert.equal(r.rows(id, 'context_rebuild').length, full ? 1 : 0);
+    if (full) assert.deepEqual(live.sent, [r.marker(id).handoff + '\n\nnext']);
+    assert.deepEqual(r.rows(id, 'error'), []);
+    assert.equal(r.h.queue.projection(id).error, null);
+    assert.equal(r.h.events.some(event => event.sessionId === id && event.type === 'error'), false);
+  });
+}
 
 test('context recovery assembly: a summary not yet sent when the Host restarts goes with the next send, once', { timeout: 30_000 }, async t => {
   const r = await assembledRecovery(t);

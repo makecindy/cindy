@@ -56,8 +56,8 @@ export interface HostRecoveryPorts {
   resolveVerifiedWindow?: ContextOverflowRolloverDeps['resolveVerifiedWindow'];
   /** A cold Pi runtime resumed only to read its window and usage (runtime-selection.ts, the desktop's binding). */
   rehydrateColdPiRuntimeForWindowVerification?: ContextOverflowRolloverDeps['rehydrateColdPiRuntimeForWindowVerification'];
-  /** Present only while oversized Codex history recovery is open (classifyCodexHistory). */
-  codexHistory?: Pick<ClassifyCodexHistoryPorts, 'readCodexThreadStorageReadOnly' | 'classifyCodexHistoryOversized'>;
+  /** The native thread locator and classifier used before sending to a task with a saved history error. */
+  codexHistory: Pick<ClassifyCodexHistoryPorts, 'readCodexThreadStorageReadOnly' | 'classifyCodexHistoryOversized'>;
   /** Present only while Pi's unsupported request option recovery is open. */
   piCompat?: {
     read: NonNullable<ContextOverflowRolloverDeps['readPiNativeCompatOverride']>;
@@ -79,6 +79,8 @@ export interface HostRecoveryPorts {
 export interface HostRecoveryRuntimePorts {
   /** The replay turn (turn-executor.mjs replay); the recovery holds the task's send lock. */
   replay: ReplayContextRecoveryPorts['sendToAgentAcceptedUnlocked'];
+  /** Checks the database owner bound to this queue runtime when the turn started. */
+  assertCurrent(): void;
   drainHistories(): Promise<void>;
   resetWireNotes(sessionId: string): void;
   readAutoReviewHistory: ReplayContextRecoveryPorts['readAutoReviewHistory'];
@@ -118,20 +120,27 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
     // model change uses (register.ts binds one function into both, as here).
     rehydrateColdPiRuntimeForWindowVerification: host.rehydrateColdPiRuntimeForWindowVerification,
     getSessionRow: readSession,
-    classifyCodexHistory: host.codexHistory ? (threadId: string) => classifyCodexHistoryWithPorts({
+    classifyCodexHistory: (threadId: string) => classifyCodexHistoryWithPorts({
       captureDataOwnerBroadcastScope, getCurrentDbClientSnapshot, isDataOwnerBroadcastScopeCurrent,
-      ...host.codexHistory!,
-    }, threadId) : undefined,
+      ...host.codexHistory,
+    }, threadId),
     getAutoCompactThresholdPct: () => DEFAULT_MODEL_COMPACTION_PCT,
     resolveVerifiedWindow: host.resolveVerifiedWindow,
     listMessages: sessionId => listMessagesForAgentHandoff(sessionId, 400) as ReturnType<ContextOverflowRolloverDeps['listMessages']>,
     findLatestUser: sessionId => findLatestUserMessageForRebuild(sessionId) as ReturnType<NonNullable<ContextOverflowRolloverDeps['findLatestUser']>>,
     findLatestRebuildMeta: findLatestContextRebuildMeta,
     getLiveSession: sessionId => host.getMaker().getSession(sessionId),
-    closeSession: sessionId => host.getMaker().closeSession(sessionId, 'runtime-refresh'),
+    closeSession: sessionId => {
+      runtime.assertCurrent();
+      return host.getMaker().closeSession(sessionId, 'runtime-refresh');
+    },
     drainPersistQueue: () => runtime.drainHistories(),
     commitRebuild: (sessionId, handoff, meta, signal) => commitContextRecoveryWithPorts({
-      captureDataOwnerBroadcastScope, getCurrentDbClientSnapshot, isDataOwnerBroadcastScopeCurrent,
+      captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
+      getCurrentDbClientSnapshot: () => {
+        runtime.assertCurrent();
+        return getCurrentDbClientSnapshot();
+      },
       sessions, eq: (left, right) => eq(left, right),
       commitContextRebuild: (id, text, rebuildMeta) => commitContextRebuildWithPorts({
         now: () => Date.now(), createId: () => createId(), tx: (name, args) => getDbClient().tx(name, args),
@@ -141,8 +150,10 @@ export function createHostContextRecoveryRollover(host: HostRecoveryPorts, runti
       createId: () => createId(),
       log: host.log,
     }, sessionId, handoff, meta, signal),
-    setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
-      host.pendingHandoff.set(sessionId, handoff, expectedGeneration),
+    setPendingHandoff: (sessionId, handoff, expectedGeneration) => {
+      runtime.assertCurrent();
+      return host.pendingHandoff.set(sessionId, handoff, expectedGeneration);
+    },
     readPendingHandoffGeneration: sessionId => host.pendingHandoff.readGeneration(sessionId),
     onRebuilt: sessionId => {
       contextRecoveryRebuilt(callbacks, sessionId);

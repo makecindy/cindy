@@ -277,6 +277,13 @@ export function createInputQueue(deps) {
       holdSuppressedError: (id, data) => autoResume.autoResumeBookkeeping.stashSuppressedError(id, data,
         coordinator.getAutoResumeAttemptToken(id), coordinator.getAutoResumeDeferredOwner(id)),
       assertCurrent, isCurrent,
+      prepareUnhealthySession: deps.createContextRecoveryRollover ? async id => {
+        assertCurrent();
+        const rebuilt = await rollover.prepareUnhealthySession(id);
+        // A healthy result also crosses an await before the transaction reads the live session.
+        assertCurrent();
+        return rebuilt;
+      } : undefined,
       getRecoveryRollover: deps.createContextRecoveryRollover ? () => rollover : deps.getRecoveryRollover,
       prepareUserMessage: attachments?.prepareUserMessage,
       isClearBoundaryCurrent: (id, boundary, generation) => coordinator.getClearBoundaryMs(id) === boundary
@@ -400,6 +407,7 @@ export function createInputQueue(deps) {
     }
     if (deps.createContextRecoveryRollover) {
       rollover = deps.createContextRecoveryRollover({
+        assertCurrent,
         replay: (...args) => executor.replay(...args),
         drainHistories: () => executor.drainHistories(),
         resetWireNotes: id => executor.resetWireNotes(id),

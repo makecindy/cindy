@@ -10,7 +10,7 @@ type AgentGraph = Pick<ReturnType<typeof createHostAgentGraph>, 'maker' | 'conte
  * The input queue's context recovery (createInputQueue's isContextRecoveryOpen and
  * createContextRecoveryRollover), as main.ts wires it: a kind opens only when it is in `openKinds`,
  * after its real-engine test (release table); a closed kind takes the normal error path, unclaimed.
- * The Codex history and Pi ports reach the rollover only once their kind is open.
+ * A saved Codex history error is classified before a send even when terminal claims are closed.
  */
 export function createHostContextRecoveryWiring(deps: {
   openKinds: ReadonlySet<ContextRecoveryKind>;
@@ -48,11 +48,11 @@ export function createHostContextRecoveryWiring(deps: {
       readSessionWritableDirsFromDb,
       resolveVerifiedWindow: (agentKind, modelId, providerId) =>
         deps.getGraph()?.contextRecovery.resolveVerifiedWindow(agentKind, modelId, providerId) ?? null,
-      ...(openKinds.has('oversized-history') ? { codexHistory: {
-        readCodexThreadStorageReadOnly: (threadId: string) => codexHistory().readCodexThreadStorageReadOnly(threadId),
+      codexHistory: {
+        readCodexThreadStorageReadOnly: async (threadId: string) => codexHistory().readCodexThreadStorageReadOnly(threadId),
         classifyCodexHistoryOversized: (threadId: string, located?: { rolloutPath?: string }) =>
           codexHistory().classifyCodexHistoryOversized(threadId, located),
-      } } : {}),
+      },
       ...(openKinds.has('unsupported-request-option') ? { piCompat: {
         read: (providerId: string, modelId: string, routeKey?: string) =>
           deps.getGraph()?.contextRecovery.piCompat.read(providerId, modelId, routeKey),

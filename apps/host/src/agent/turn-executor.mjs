@@ -827,6 +827,7 @@ export function createTurnExecutor(deps) {
     // A model or engine the user picked lands when the message is sent, before the runtime is read
     // (makerSendTransaction.ts), with the desktop's steps (runtime-selection.ts).
     applyPendingAgentSwitch: deps.applyPendingAgentSwitch,
+    prepareUnhealthySession: deps.prepareUnhealthySession,
     // A server's OS language is not the remote user's interface preference.
     getResolvedMainLocale: deps.getResolvedMainLocale ?? (() => null),
     getMainClassicalStyle: deps.getMainClassicalStyle ?? (() => DEFAULT_CLASSICAL_REPLY_STYLE),
