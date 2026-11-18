@@ -32,7 +32,9 @@ function Task() {
   const width = useProportionalWidth(ctx.data.legacy ? 914 : TASK_MESSAGE_MAX_WIDTH);
   return <main className="min-w-[400px] flex-1 h-full" data-task-pane>
     <div ref={width.containerRef} className="relative h-full w-full" data-task-width>
-      <MessageStream workingDir="" historyLoaded messages={messages} contentWidth={width.messageWidth}
+      <MessageStream workingDir="" historyLoaded messages={ctx.data.streaming
+        ? messages.map(message => message.clientId === 'answer' ? { ...message, isStreaming: true, turnCompleted: false } : message)
+        : messages} contentWidth={width.messageWidth}
         getContentWidth={width.getMessageWidth} bottomPadding={220} />
       <div className="absolute bottom-0 flex flex-col items-center pb-5 bg-content-area"
         style={{ left: width.inputPad, right: width.inputPad }}>
