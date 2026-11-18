@@ -217,6 +217,7 @@ export async function update(
      */
     providerId?: string | null;
     notificationsMuted?: boolean;
+    snoozedUntil?: string | null;
   },
 ): Promise<Session> {
   return wrap(window.electronAPI.localDb.sessions.update(id, patch));
@@ -237,6 +238,7 @@ export async function patchMeta(
     title?: string;
     pinnedAt?: string | null;
     notificationsMuted?: boolean;
+    snoozedUntil?: string | null;
   },
 ): Promise<Session> {
   // 「消息免打扰」是**本机**属性（提醒由任务所在的那台设备发出，菜单也对 device-link

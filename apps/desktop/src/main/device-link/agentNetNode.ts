@@ -14,7 +14,7 @@ import { identityFromSeed, publicBytes, verifyCertificate, type DeviceCertificat
 import { AgentNetClient, acceptEnrollment, createEnrollmentRequest, createTransportModeProof } from '@cindy/agent-net-relay/client';
 import { acceptTransportStatement } from './agentNetTransportStatement.js';
 import { agentNetStunServer } from '@cindy/agent-net-protocol';
-import { AgentNetMembership } from './agentNetMembership.js';
+import { AgentNetMembership } from '@cindy/agent-net';
 import { readAgentNetDirectoryCache, writeAgentNetDirectoryCache } from './agentNetDirectoryCache.js';
 
 /** One record in the launcher's credential store: the seed, and once enrolled the certificate and private keys. */
@@ -46,7 +46,7 @@ export interface AgentNetNodePorts {
   coreModule(): Promise<WebAssembly.Module>;
   /**
    * The device ids in this account's Device Link device list (the official service), or null when it cannot be read now.
-   * With it, devices removed there are refused on Agent-Net until they sign in again (agentNetMembership.ts).
+   * With it, devices removed there are refused on Agent-Net until they sign in again (packages/agent-net/src/membership.ts).
    */
   deviceLinkDeviceIds?(): Promise<readonly string[] | null>;
   /**

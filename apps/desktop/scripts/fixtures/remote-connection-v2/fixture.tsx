@@ -143,6 +143,11 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
 }
 
 const data = scenario(ctx.case);
+const agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes'] = ctx.case === 'default' ? [
+  { deviceId: 'mini', path: 'direct', rttMs: 1 },
+  { deviceId: 'pixel', path: 'connecting', rttMs: null },
+] : undefined;
+if (agentNetRoutes) data.links = data.links.filter((link) => link.deviceId !== 'mini');
 if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filter((l) => l.encrypted);
 /**
  * 这台电脑实际用的连接方式(拓扑中间名字下面):打开 Agent-Net 后通常就是 Agent-Net;self-device-link 是开着开关、
@@ -223,6 +228,7 @@ void mountPage({
       }),
       getPeerLinks: async () => ({
         links: data.links,
+        agentNetRoutes,
         relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
         relayRttMs: data.relayRttMs,
       }),

@@ -4293,7 +4293,8 @@ export class PiAgent extends BaseAgent {
     let retainedLiveGatewayModel = initialProvider === PI_PROVIDER_ID ? selectedRuntimeModel : undefined;
     const providerRefreshStages = new Map<string, {
       nonce: string;
-      operation: 'inspect' | 'refresh';
+      operation: 'inspect' | 'refresh' | 'tool-catalog';
+      toolRequest?: { method: string; args: unknown[] };
       env: Record<string, string>;
       aliases: ReturnType<typeof nativeProviderAdapterAliases>;
       acknowledge: (ok: boolean, code?: string, settings?: unknown) => void;
@@ -5974,7 +5975,8 @@ export class PiAgent extends BaseAgent {
               if (event.title === 'cindy:provider-refresh') {
                 proc.send(valid
                   ? { type: 'extension_ui_response', id: requestId,
-                    value: JSON.stringify({ nonce: stage!.nonce, operation: stage!.operation, env: stage!.env, aliases: stage!.aliases }) }
+                    value: JSON.stringify({ nonce: stage!.nonce, operation: stage!.operation, env: stage!.env, aliases: stage!.aliases,
+                      ...(stage!.toolRequest ? { toolRequest: stage!.toolRequest } : {}) }) }
                   : { type: 'extension_ui_response', id: requestId, cancelled: true });
               } else {
                 if (valid) stage!.acknowledge(payload.ok === true, typeof payload.code === 'string' ? payload.code : undefined, payload.runtimeSettings);
@@ -7007,21 +7009,23 @@ export class PiAgent extends BaseAgent {
     };
     let liveRuntimeSettings: PiNativeRuntimeSettings | undefined;
     const queryNativeRuntime = async (
-      operation: 'inspect' | 'refresh',
+      operation: 'inspect' | 'refresh' | 'tool-catalog',
       env: Record<string, string> = {},
       aliases: ReturnType<typeof nativeProviderAdapterAliases> = [],
-    ): Promise<{ ok: boolean; code?: string }> => {
+      toolRequest?: { method: string; args: unknown[] },
+    ): Promise<{ ok: boolean; code?: string; toolCatalog?: unknown }> => {
       // Unknown extension commands become model prompts. Check ownership first.
       const commands = await proc.request({ type: 'get_commands' });
       const entries = (commands.data as { commands?: Array<{ name?: unknown; source?: unknown }> } | undefined)?.commands;
       if (!commands.success || !entries?.some((entry) =>
         entry.name === 'cindy-native-provider-refresh' && entry.source === 'extension')) {
+        if (operation === 'tool-catalog') throw new Error('UNSUPPORTED_CAPABILITY');
         throw new Error('Cindy native provider refresh extension is unavailable; reopen this task with the current Cindy version.');
       }
       const nonce = randomBytes(24).toString('base64url');
       let timer: ReturnType<typeof setTimeout> | undefined;
       const ack = new Promise<{ ok: boolean; code?: string; settings?: unknown }>((resolve) => {
-        providerRefreshStages.set(nonce, { nonce, operation, env, aliases,
+        providerRefreshStages.set(nonce, { nonce, operation, env, aliases, toolRequest,
           acknowledge: (ok, code, settings) => resolve({ ok, code, settings }) });
         timer = setTimeout(() => resolve({ ok: false, code: 'ACK_TIMEOUT' }), 10_000);
       });
@@ -7030,6 +7034,7 @@ export class PiAgent extends BaseAgent {
         if (!response.success) return { ok: false, code: 'COMMAND_FAILED' };
         const receipt = await ack;
         if (!receipt.ok) return receipt;
+        if (operation === 'tool-catalog') return { ok: true, toolCatalog: receipt.settings };
         const settings = parsePiNativeRuntimeSettings(receipt.settings);
         if (!settings) return { ok: false, code: 'INVALID_SETTINGS' };
         liveRuntimeSettings = settings;
@@ -7921,6 +7926,12 @@ export class PiAgent extends BaseAgent {
       },
       getRuntimeCapabilities() {
         return runtimeCapabilityManifest;
+      },
+      async callNativeToolCatalog(method: string, args: unknown[]) {
+        if (remote || hostedGuest || reviewMode) throw new Error('UNSUPPORTED_CAPABILITY');
+        const receipt = await queryNativeRuntime('tool-catalog', {}, [], { method, args });
+        if (!receipt.ok) throw new Error(receipt.code ?? 'NATIVE_TOOL_CATALOG_FAILED');
+        return receipt.toolCatalog;
       },
       disabledSkillPaths: disabledSkillSnapshot,
       hasProjectResourceDrift() {

@@ -9,6 +9,8 @@ import { imBotSettings } from './ImBotSection.settings-search';
  *      (HookConnectionsSection,原 Tina 设置区,由 Cindy 维护、用户零凭证)
  *   2. 个人(group='personal'):按渠道折叠的用户自配机器人。每个渠道独立保存
  *      Agent / 模型与凭证配置；同一时刻最多展开一个，渠道增加时页面不会线性变长。
+ *   3. 插件:声明 imEntrance 的已启用插件(没有时不显示)。它们读官方机器人那份
+ *      「项目与模型」；本地模式没有官方分栏时，这一块随插件分栏显示。
  *
  * ?imGroup= 参数仍由 SettingsView 驱动,但只负责把深链滚动到对应分区；缺省时
  * 保持页面顶部不动,旧「飞书机器人」深链继续定位到「个人」。
@@ -28,6 +30,7 @@ import { DiscordBotSection } from './DiscordBotSection';
 import { DingTalkBotSection } from './DingTalkBotSection';
 import { FeishuBotSection } from './FeishuBotSection';
 import { HookConnectionsSection } from './HookConnectionsSection';
+import { ImPluginEntrancesCard, useImEntrancePlugins } from './ImPluginEntrances';
 import { TelegramBotSection } from './TelegramBotSection';
 import { WechatBotSection } from './WechatBotSection';
 import { WecomBotSection } from './WecomBotSection';
@@ -115,6 +118,7 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
   const { mode, dataOwnerId } = useAuth();
   const { entry, activation } = useSettingsSearchNavigation();
   const cindyGroupAvailable = showCindyGroup({ mode });
+  const imPlugins = useImEntrancePlugins();
   const targetChannel =
     (['wechat', 'wecom', 'feishu', 'discord', 'telegram', 'dingtalk'] as const).find(
       (channel) => entry?.targetId === 'personal-im-' + channel,
@@ -190,6 +194,24 @@ export function ImBotSection({ targetGroup }: { targetGroup: ImBotSettingsGroup 
             activation={activation}
           />
         </section>
+
+        {imPlugins.length > 0 && (
+          <section
+            id="im-bot-group-plugins"
+            aria-labelledby="im-bot-group-heading-plugins"
+            className="flex scroll-mt-4 flex-col gap-3"
+          >
+            <h3
+              id="im-bot-group-heading-plugins"
+              className="text-14 font-medium leading-[1.4] text-[var(--settings-section-title)]"
+            >
+              {t('settings.imBot.groups.plugins')}
+            </h3>
+            <GroupTip message={t('settings.imBot.tips.plugins')} />
+            <ImPluginEntrancesCard plugins={imPlugins} />
+            {!cindyGroupAvailable && <HookConnectionsSection projectsOnly />}
+          </section>
+        )}
       </div>
     </div>
   );
