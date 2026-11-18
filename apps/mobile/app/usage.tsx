@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { Alert, Platform, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -24,12 +24,20 @@ export default function UsageScreen() {
       : t('devices.widgetGuideAndroid');
     Alert.alert(t('devices.widgetGuideAction'), instructions, [{ text: t('devices.widgetGuideDismiss') }]);
   }
+  const widgetAction = canShowWidgetGuide ? {
+    label: t('devices.widgetGuideAction'), onPress: showWidgetGuide, testID: 'usage.widgetGuide',
+  } : undefined;
   return (
     <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={{ flex: 1, backgroundColor: colors.surface }}>
       <SimpleStackHeader scrollEdge title={title} onBack={() => goBackGuarded(router)}
-        action={canShowWidgetGuide ? {
-          label: t('devices.widgetGuideAction'), onPress: showWidgetGuide, testID: 'usage.widgetGuide',
-        } : undefined} />
+        action={Platform.OS === 'android' ? widgetAction : undefined}
+        rightToolbar={Platform.OS === 'ios' && widgetAction ? (
+          <Stack.Toolbar placement="right">
+            <Stack.Toolbar.Button onPress={widgetAction.onPress} accessibilityLabel={widgetAction.label}>
+              {widgetAction.label}
+            </Stack.Toolbar.Button>
+          </Stack.Toolbar>
+        ) : undefined} />
       <ScrollView {...simpleScrollInsetProps} contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg }}>
         {state?.kind === 'snapshot'
           ? <UsageDashboard snapshot={state.snapshot} name={state.deviceName} />

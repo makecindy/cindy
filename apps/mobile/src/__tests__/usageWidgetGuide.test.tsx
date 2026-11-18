@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, expect, it, vi } from 'vitest';
 import UsageScreen from '../../app/usage';
@@ -6,20 +7,30 @@ import zh from '../i18n/locales/zh-CN/devices.json';
 const mock = vi.hoisted(() => ({
   platform: { OS: 'ios', Version: '18.0' },
   supported: true,
+  nativeButton: false,
   alert: vi.fn(),
   action: undefined as { onPress(): void } | undefined,
 }));
 
 vi.mock('react-native', () => ({ Platform: mock.platform, Alert: { alert: mock.alert }, ScrollView: () => null }));
 vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: 'main' }));
-vi.mock('expo-router', () => ({ useRouter: () => ({}) }));
+vi.mock('expo-router', () => ({
+  useRouter: () => ({}),
+  Stack: { Toolbar: Object.assign(({ children }: { children: ReactNode }) => children, {
+    Button: (props: { onPress(): void }) => { mock.nativeButton = true; mock.action = props; return null; },
+  }) },
+}));
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: vi.fn() }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }) }));
 vi.mock('@/components/ErrorNotice', () => ({ ErrorNotice: () => null }));
 vi.mock('@/widgets/UsageDashboard', () => ({ useAutomaticUsage: () => null }));
 vi.mock('@/widgets/usageWidgetSync', () => ({ get usageWidgetsSupported() { return mock.supported; } }));
 vi.mock('@/platform/chrome', () => ({
-  SimpleStackHeader: ({ action }: { action?: typeof mock.action }) => { mock.action = action; return null; },
+  SimpleStackHeader: ({ action, rightToolbar }: { action?: typeof mock.action; rightToolbar?: ReactNode }) => {
+    if (rightToolbar) expect(action).toBeUndefined();
+    mock.action = action;
+    return rightToolbar ?? null;
+  },
   simpleScrollInsetProps: {}, simpleScrollScreenSafeAreaEdges: () => undefined,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({
@@ -29,7 +40,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({
   },
 }) }));
 
-beforeEach(() => { mock.supported = true; mock.alert.mockClear(); });
+beforeEach(() => { mock.supported = true; mock.nativeButton = false; mock.alert.mockClear(); });
 
 it.each([
   ['ios', '17.6', '点+'],
@@ -39,6 +50,7 @@ it.each([
   Object.assign(mock.platform, { OS, Version });
   renderToStaticMarkup(<UsageScreen />);
   expect(mock.alert).not.toHaveBeenCalled();
+  expect(mock.nativeButton).toBe(OS === 'ios');
   mock.action!.onPress();
   const [title, help] = mock.alert.mock.calls[0]!;
   expect(title).toBe('添加小组件');
