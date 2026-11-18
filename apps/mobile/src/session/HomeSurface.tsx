@@ -276,6 +276,7 @@ import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 import {
   diffHomeDeviceSyncScope,
   HomeDeviceSyncLimiter,
+  readHomeSessionList,
   resolveHomeDeviceSyncIds,
   runHomeDeviceSyncBatch,
 } from '@/session/homeDeviceSync';
@@ -1090,11 +1091,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           async () => {
             assertCurrentScope();
             const epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId);
-            const list = await invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
-              LIST_LIMIT,
-              requestedListFilter,
-              { includePinned: true, fresh: true },
-            ]);
+            const list = await readHomeSessionList(requestedListFilter, status => {
+              assertCurrentScope();
+              return invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
+                LIST_LIMIT,
+                status,
+                { includePinned: true, fresh: true },
+              ]);
+            });
+            assertCurrentScope();
             const enriched = await readTeammateTasks({ invoke, deviceId: device.deviceId, deviceName: device.name,
               scope: JSON.stringify([expectedAccountGeneration, expectedHomeSyncGeneration, device.deviceId]),
               sessions: Array.isArray(list) ? list : [], previous: remoteSessionStore.getHomeSessions(),
