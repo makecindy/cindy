@@ -2623,12 +2623,9 @@ export async function remoteSubscribe(
       if (liveTopics.length === 0) return { ok: true, result: null };
     }
     if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
-      throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
-    }
-    assertRemoteControlTargetEnabledAfterReopen(deviceId);
-    if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
       throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while restoring subscriptions');
     }
+    assertRemoteControlTargetEnabledAfterReopen(deviceId);
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     return client.invoke(deviceId, {
       channel: DL_SUBSCRIBE_CHANNEL,

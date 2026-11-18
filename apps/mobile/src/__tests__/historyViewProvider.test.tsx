@@ -937,6 +937,98 @@ describe('Provider pre-send link recovery', () => {
     expect(client.openLink).not.toHaveBeenCalled();
     expect(client.invoke).not.toHaveBeenCalled();
   });
+
+  const hostOnline = {
+    deviceId: 'host', deviceName: 'Host', platform: 'darwin', appVersion: 'test',
+    online: true, remoteControlEnabled: true, busy: false, lastSeenAt: 1,
+  } as const;
+  const sentOn = (client: (typeof transport.clients)[number], channel: string) =>
+    client.invoke.mock.calls.filter(([deviceId, payload]) => deviceId === 'host' && payload.channel === channel);
+
+  it('sends the request when a presence update lands between link-open and link-accept', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    const open = deferredAccept();
+    client.openLink.mockReturnValue(open.promise);
+    let result!: Promise<unknown>;
+    await act(async () => { result = context.invoke('host', 'maker:send', []).catch(error => error); });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      // A self-hosted relay replays presence right after hello-ack, ahead of link-accept.
+      client.presenceChanged(hostOnline);
+      recovering = false;
+      open.resolve(accepted(supported));
+    });
+    expect(await result).toBe('history page');
+    expect(sentOn(client, 'maker:send')).toHaveLength(1);
+  });
+
+  it('still sends the recovery handshake when presence arrives while waiting for the relay', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    client.openLink.mockImplementation(async () => { recovering = false; return accepted(supported); });
+    let online!: () => void;
+    client.waitUntilOnline.mockImplementation(() => new Promise<never>(resolve => {
+      online = () => resolve(undefined as never);
+    }));
+    client.status = 'connecting';
+    let result!: Promise<unknown>;
+    await act(async () => { result = context.invoke('host', 'maker:send', []).catch(error => error); });
+    expect(client.openLink).not.toHaveBeenCalled();
+    await act(async () => {
+      client.presenceChanged(hostOnline);
+      client.status = 'online';
+      online();
+    });
+    expect(await result).toBe('history page');
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    expect(sentOn(client, 'maker:send')).toHaveLength(1);
+  });
+
+  it('keeps subscribing the topics still held when another one is released during recovery', async () => {
+    const client = transport.clients[0];
+    let recovering = true;
+    client.needsLinkRecovery = deviceId => deviceId === 'host' && recovering;
+    const open = deferredAccept();
+    client.openLink.mockReturnValue(open.promise);
+    let home!: Promise<unknown>;
+    let page!: Promise<unknown>;
+    await act(async () => {
+      home = context.subscribe('home', 'host', ['sessions']).catch(error => error);
+      page = context.subscribe('session:abc', 'host', ['sessions', 'session:abc']).catch(error => error);
+    });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      // The task page goes away mid-handshake; Home still holds `sessions`.
+      await context.unsubscribe('session:abc', 'host', ['sessions', 'session:abc']);
+      recovering = false;
+      open.resolve(accepted(supported));
+    });
+    expect(await home).toBeUndefined();
+    expect(await page).toBeUndefined();
+    const subscribed = sentOn(client, 'device-link:subscribe')
+      .map(([, payload]) => (payload.args[0] as { topics: string[] }).topics);
+    expect(subscribed).toContainEqual(['sessions']);
+    expect(subscribed.flat()).not.toContain('session:abc');
+  });
+
+  it('lets a history read finish when a refresh replaces the settled handshake it is using', async () => {
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    await act(async () => { await context.openLink('host'); });
+    const fresh = deferredAccept();
+    client.openLink.mockReturnValue(fresh.promise);
+    let history!: Promise<unknown>;
+    await act(async () => {
+      history = context.invoke('host', historyChannel).catch(error => error);
+      // Replaces the settled entry the history read is still awaiting.
+      void context.reopenLink('host').catch(() => undefined);
+    });
+    expect(await history).toBe('history page');
+    await act(async () => fresh.resolve(accepted(supported)));
+  });
 });
 
 describe('pending catalog recovery', () => {

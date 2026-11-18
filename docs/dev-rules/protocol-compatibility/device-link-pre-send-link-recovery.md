@@ -9,10 +9,14 @@
 返回 false，继续原路径。
 
 - **Mobile**：invoke 与订阅发送前复用 `sendOpenLinkOnce` 的按设备单飞缓存，不复用故障前已结算的
-  accept。等待前后复验调用方的 `preSend`、客户端是否已换账号、这台设备的建链缓存是否已被用户断开
-  或新的建链替换，以及 `isOutboundExplicitlyClosed`；任一失效即以 `NOT_CONNECTED` / `LINK_NOT_OPEN`
-  结束，请求不写出。恢复握手若要先等中继上线，在真正调用 `openLink` 前再复核一次：`openLink` 会清除
-  用户关闭标记，等待期间用户已断开或这次建链已被替换时不发 `link-open`，不会把用户刚关掉的链路重新打开。
+  accept。用户断开按每台设备的断开代次判断（只在 `closeLink` 时加一，与 Desktop 的
+  `openLinkCloseEpochs` 同义），不看建链缓存条目：presence、对端重置、直连路径结束都会删缓存条目，
+  中继重连后 presence 又通常先于 link-accept 到达，按条目判断会误丢已经就绪的请求。恢复握手在真正
+  调用 `openLink` 前（`openLink` 会清除用户关闭标记）和 accept 之后各复核一次：客户端已换账号以
+  `NOT_CONNECTED` 结束；断开代次变化或 `isOutboundExplicitlyClosed` 以 `LINK_NOT_OPEN` 结束，不发
+  `link-open`、请求不写出。订阅在恢复期间有 topic 被释放时按原有语义返回 false，由确认流程重算
+  仍缺的 topic 继续订阅。被 `refreshSettled` 替换掉的已结算建链只算刷新：仍在等它的历史读取可以
+  完成；真正的失效（presence、对端重置等）删除条目，照旧作废。
 - **Desktop**：`remoteInvokeLive` 经 `linkRecovery.ts` 的 `ensureInvokeLinkReady`，`remoteSubscribe`
   在发送前按同一判据重开。订阅等待期间用户断开时直接以 `LINK_NOT_OPEN` 失败，不再复验控制权限；
   复验失败会再次拆链，而这条链路已经被用户关掉。
@@ -37,9 +41,11 @@
    reliable links」用内存中继让手机与另一台健康控制端共享同一被控端，手机经 1006 / 1012 断线后恢复：
    健康控制端的请求照常完成、链路保持就绪，被控端与健康控制端都不新建 socket，手机断线前已写出的写
    操作只执行一次。Mobile `historyViewProvider.test.tsx`「Provider pre-send link recovery」经真实
-   Provider 验证 invoke 与订阅发送前先重开这台设备、另一台电脑的请求不建链、共享连接不重启，用户
-   断开后请求不写出，等中继上线期间断开也不重新建链；Desktop `remoteInvokeSendGuard.test.ts` 覆盖发送前恢复、取消、断开、禁用与仅
-   列表订阅。
+   Provider 验证 invoke 与订阅发送前先重开这台设备、另一台电脑的请求不建链、共享连接不重启；用户
+   断开后请求不写出，等中继上线期间断开也不重新建链；presence 夹在 link-open 与 link-accept 之间、或在
+   等中继上线时到达，请求照常发出；恢复期间释放部分 topic，其余 topic 照常订阅；刷新替换已结算建链时，
+   在等它的历史读取照常完成。Desktop `remoteInvokeSendGuard.test.ts` 覆盖发送前恢复、取消、断开、禁用与
+   仅列表订阅。
 
 实现见 `apps/mobile/src/device-link/DeviceLinkContext.tsx`（`recoverLinkBeforeSend`）、
 `apps/desktop/src/main/device-link/index.ts`（`remoteInvokeLive`、`remoteSubscribe`）与

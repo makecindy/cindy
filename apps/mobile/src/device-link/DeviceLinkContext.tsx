@@ -528,6 +528,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const openLinkInFlightRef = useRef(
     new Map<string, PresenceTrackedRequest<LinkAcceptPayload>>(),
   );
+  // Counts user closes per device; only closeLink bumps it. Handshake cache entries
+  // are also dropped by presence, peer resets and path changes, so an entry's
+  // identity cannot tell whether the user closed the link (same as Desktop's
+  // openLinkCloseEpochs).
+  const userCloseEpochsRef = useRef(new Map<string, number>());
+  // A settled handshake replaced by a refresh (refreshSettled) -> its replacement.
+  // A read still awaiting the old entry may finish; real invalidations delete
+  // entries instead and break the chain.
+  const refreshedOpenLinksRef = useRef(new WeakMap<object, object>());
   const presenceWipeTimerDeps = useMemo(() => ({
     ...basePresenceWipeTimerDeps,
     wipe: offlineMirrorWipeQueue.enqueue,
@@ -738,16 +747,18 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   ) => {
     const connectionEpoch = connectionEpochFor(deviceId);
     const releaseGeneration = backgroundReleaseGenerationRef.current;
-    let recoveryRequest: unknown;
+    const userCloseEpoch = userCloseEpochsRef.current.get(deviceId) ?? 0;
     const checkAvailability = () => {
       // A pre-send recovery may wait for the relay first. openLink clears a user
-      // close, so recheck right before the handshake that this recovery is current.
-      if (presendRecovery && (
-        clientRef.current !== client
-        || client.isOutboundExplicitlyClosed(deviceId)
-        || (recoveryRequest !== undefined && openLinkInFlightRef.current.get(deviceId) !== recoveryRequest)
-      )) {
-        throw new DeviceLinkError('LINK_NOT_OPEN', 'pre-send recovery is no longer current');
+      // close, so recheck right before the handshake.
+      if (presendRecovery) {
+        if (clientRef.current !== client) {
+          throw new DeviceLinkError('NOT_CONNECTED', 'pre-send recovery is no longer current');
+        }
+        if ((userCloseEpochsRef.current.get(deviceId) ?? 0) !== userCloseEpoch
+          || client.isOutboundExplicitlyClosed(deviceId)) {
+          throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during pre-send recovery');
+        }
       }
       if (pendingReplyRecovery && (
         clientRef.current !== client
@@ -768,6 +779,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         throw new DeviceLinkError(disabled ? 'REMOTE_DISABLED' : 'DEVICE_OFFLINE', 'remote device is unavailable');
       }
     };
+    const previous = refreshSettled ? openLinkInFlightRef.current.get(deviceId) : undefined;
     const tracked = getOrCreatePresenceTrackedRequest(
       openLinkInFlightRef.current,
       presenceAvailabilityEpochsRef.current,
@@ -776,9 +788,18 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       () => sendOpenLinkWithAccessHandling(client, deviceId, allowProbe, checkAvailability, pendingReplyRecovery),
       { retainSuccessful: true, refreshSettled },
     );
-    if (presendRecovery) recoveryRequest = tracked;
+    if (previous && previous !== tracked) refreshedOpenLinksRef.current.set(previous, tracked);
     return tracked;
   }, [connectionEpochFor]);
+
+  /** The device's current handshake is this one, or only a refresh of it. */
+  const isCurrentOpenLink = useCallback((deviceId: string, tracked: object) => {
+    const current = openLinkInFlightRef.current.get(deviceId);
+    for (let entry: object | undefined = tracked; entry; entry = refreshedOpenLinksRef.current.get(entry)) {
+      if (entry === current) return true;
+    }
+    return false;
+  }, []);
 
   const recoverLinkBeforeSend = useCallback(async (
     client: DeviceLinkClient, deviceId: string, preSend: () => void,
@@ -786,14 +807,15 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     preSend();
     if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
     if (!client.needsLinkRecovery(deviceId)) return;
+    const userCloseEpoch = userCloseEpochsRef.current.get(deviceId) ?? 0;
     // Reuse the peer's handshake single flight, but not a settled pre-fault ACK.
     // This sends no business request and does not restart the shared relay.
-    const tracked = sendOpenLinkOnce(client, deviceId, false, true, false, true);
-    await tracked.request;
+    await sendOpenLinkOnce(client, deviceId, false, true, false, true).request;
     preSend();
-    if (clientRef.current !== client || openLinkInFlightRef.current.get(deviceId) !== tracked
+    if (clientRef.current !== client) throw new DeviceLinkError('NOT_CONNECTED', 'link changed');
+    if ((userCloseEpochsRef.current.get(deviceId) ?? 0) !== userCloseEpoch
       || client.isOutboundExplicitlyClosed(deviceId)) {
-      throw new DeviceLinkError('LINK_NOT_OPEN', 'recovery was superseded');
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed during pre-send recovery');
     }
   }, [sendOpenLinkOnce]);
 
@@ -857,9 +879,17 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
           && !backgroundReleaseInFlightRef.current
           && backgroundReleaseGenerationRef.current === releaseGeneration
           && toSend.every((topic) => registryRef.current.hasTopic(deviceId, topic));
-        await recoverLinkBeforeSend(client, deviceId, () => {
-          if (!current()) throw new DeviceLinkError('NOT_CONNECTED', 'subscription was superseded');
-        });
+        // A topic released during recovery returns false like the send itself, so
+        // the confirmation recomputes and still subscribes the topics others hold.
+        const superseded = Symbol('subscription superseded');
+        try {
+          await recoverLinkBeforeSend(client, deviceId, () => {
+            if (!current()) throw superseded;
+          });
+        } catch (err) {
+          if (err === superseded) return false;
+          throw err;
+        }
         return sendSubscribeWithAccessHandling(client, deviceId, toSend, current);
       },
       acknowledge: (toSend) => {
@@ -2082,6 +2112,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   );
 
   const closeLink = useCallback((deviceId: string) => {
+    userCloseEpochsRef.current.set(deviceId, (userCloseEpochsRef.current.get(deviceId) ?? 0) + 1);
     resetMobilePeer(deviceId);
     registryRef.current.untrackOpenLink(deviceId);
     forcedPeerRecoveryIntentRef.current.cancel(deviceId);
@@ -2111,7 +2142,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // A late accept from an obsolete link must not declare a downgrade.
         const tracked = sendOpenLinkOnce(client, deviceId);
         const accepted = await tracked.request;
-        if (clientRef.current !== client || openLinkInFlightRef.current.get(deviceId) !== tracked) {
+        if (clientRef.current !== client || !isCurrentOpenLink(deviceId, tracked)) {
           throw new DeviceLinkError('NOT_CONNECTED', 'history link was superseded');
         }
         preSend();
@@ -2140,7 +2171,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     // is single-flight and never changes task-list success or connection recovery.
     if (channel === 'local-db:sessions:list') refreshProjectAliasesForClient(client, deviceId);
     return result;
-  }, [refreshProjectAliasesForClient, sendOpenLinkOnce, recoverLinkBeforeSend]);
+  }, [refreshProjectAliasesForClient, sendOpenLinkOnce, recoverLinkBeforeSend, isCurrentOpenLink]);
 
   const subscribe = useCallback(async (owner: string, deviceId: string, topics: string[]) => {
     topics = sharedTaskTopics(deviceId, topics);
