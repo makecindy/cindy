@@ -1329,10 +1329,11 @@
         "body": "此務於他機開 {{device}}。於本機啟「{{plugin}}」法器，即可於右欄觀之、操之。",
         "action": "啟之"
       },
-      "update": {
-        "title": "須更「{{plugin}}」法器",
-        "body": "此務於他機開 {{device}}。更本機「{{plugin}}」法器至新版，即可於右欄觀之、操之。",
-        "action": "更之"
+      "unsupported": {
+        "title": "「{{plugin}}」尚不能遠覽",
+        "body": "此機所裝法器尚不能顯示遠方之機的 {{device}}。可查相容新版，或往行此差事之機使用裝置。",
+        "action": "查相容新版",
+        "unavailable": "此法器來源尚無可供遠覽之新版，可往行此差事之機使用裝置"
       }
     },
     "lockOnExitHintPrivacy": "退出遠端桌面後覆以隱私畫面，AI 可續作；有人觸機即鎖屏。",

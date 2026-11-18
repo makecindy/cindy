@@ -1360,10 +1360,11 @@
         "body": "Esta tarefa está com {{device}} aberto em outro computador. Ative o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
         "action": "Ativar"
       },
-      "update": {
-        "title": "Atualize o plugin “{{plugin}}”",
-        "body": "Esta tarefa está com {{device}} aberto em outro computador. Atualize o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
-        "action": "Atualizar"
+      "unsupported": {
+        "title": "O plugin “{{plugin}}” não oferece visualização remota",
+        "body": "O plugin instalado não pode exibir {{device}} de outro computador. Procure uma atualização compatível ou use o dispositivo no computador que executa esta sessão.",
+        "action": "Buscar atualização compatível",
+        "unavailable": "Não há atualização compatível na origem deste plugin. Use o dispositivo no computador que executa esta sessão."
       }
     },
     "lockOnExitHintPrivacy": "Mostra a tela de privacidade ao sair, para a IA continuar trabalhando; tocar no computador o bloqueia.",
