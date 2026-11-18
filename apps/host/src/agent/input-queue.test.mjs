@@ -51,12 +51,14 @@ import { OwnerSessionStorage } from '../../../desktop/src/main/localDb/sessionSt
 import { createHostRuntimeSession } from './create-runtime-session.ts';
 import { createHostProviderExecutionCheck } from './send-preflight.ts';
 import { bindHostSessionRuntimeHooks, createHostRuntimeSelection, hostRuntimeSelectionQueueHooks, HOST_RUNTIME_SELECTION_QUEUE_MEMBERS, HOST_RUNTIME_START_PORTS } from './runtime-selection.ts';
-import { acceptSessionRuntimeMutation } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
+import { Session } from '../../../../packages/maker-core/src/session.ts';
+import { acceptSessionRuntimeMutation, getSessionRuntimeControlSnapshot } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 import { readHostSession } from '../session-reads.ts';
 import { createHostSessionUpdate } from './session-update.ts';
 import { createHostTaskRestore } from './task-restore.ts';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { appliedContextWindowBudgets, pendingSessionContextWindowBudgetReconciles } from '../../../desktop/src/main/maker-ipc/sessionContextWindowBudgetState.js';
+import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.js';
 import { getUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { getSessionProvider } from '../../../desktop/src/main/maker-host/session-provider-store.ts';
 import { watchCredentialGrantRevocation } from '../../../desktop/src/main/remote-agent/executor/credentialGrants.ts';
@@ -3189,9 +3191,9 @@ async function modelChangeRuntime(t, { agent = 'claude-code', queue = {} } = {})
     publish: event => h.events.push(event),
     createDbMessage: db.persistMessage,
     pendingHandoff: handoffs,
-    listProviderViews: async () => views.current,
+    listProviderViews: async () => { await views.beforeList?.(); return views.current; },
     resolveConfiguredContextWindow: (_catalog, _agentKind, _providerId, modelId) => SWITCH_WINDOWS[modelId] ?? null,
-    readStoredSessionContextWindowBudget: async id => budgets.get(id) ?? null,
+    readStoredSessionContextWindowBudget: async id => budgets.has(id) ? budgets.get(id) : readSessionContextWindowBudget(id),
     contextWindowBudgetChangesEffectiveWindow: ({ previous, next }) => previous !== next,
     codexProxyAuthInjectionState: () => null,
     inputQueue: h.queue,
@@ -5133,20 +5135,33 @@ test('auto-resume exit 6: a Host shutdown during the wait gives the resume up fi
   t.mock.timers.reset();
 });
 
-// Rule (register.ts wires sessionRuntimeFallback.ts into the interrupted-turn resume, and its
-// bootstrapSession starts the next runtime on the accepted override): with the user's route fallback
-// setting on, the second interruption of an episode moves the task to another provider's candidate,
-// and the resume runs on that route. Gap: the Host accepted the fallback but started the rebuilt
-// runtime from the task row (which a fallback does not write), so the resume ran on the failing route
-// again. Minimal failing input: two interruptions in a row on a task whose provider has a sibling.
-test('auto-resume route switch: the second interruption resumes on another provider when the setting is on', { timeout: 30_000 }, async t => {
-  const r = await modelChangeRuntime(t, { queue: { hasAssistantProgressAfter: async () => true } });
-  const twoProviders = ['prov-a', 'prov-b'].map(id => ({ ...switchViews('claude-code')[0], id }));
+function providePiWindows(r) {
+  const create = r.h.maker.createSession;
+  r.h.maker.createSession = async options => {
+    const session = await create(options);
+    session.previewModelSwitch = async model => ({ action: 'hot', targetContextWindow: SWITCH_WINDOWS[model], windowVerified: true });
+    session.getUsageSnapshot = () => ({ contextTokens: 0, tokenUsage: 0, contextWindow: SWITCH_WINDOWS[session.model], costUsd: 0 });
+    return session;
+  };
+}
+
+function runtimeCancellations(r, id) {
+  const persisted = r.db.db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'error'").all(id)
+    .map(row => JSON.parse(row.content)).filter(error => error.reason === 'runtime-selection-cancelled');
+  const surfaced = r.h.events.filter(event => event.sessionId === id && event.type === 'error'
+    && event.data?.reason === 'runtime-selection-cancelled');
+  return { history: persisted.length, surfaced: surfaced.length };
+}
+
+async function interruptedFallbackTask(t, id, agent) {
+  const r = await modelChangeRuntime(t, { agent, queue: { hasAssistantProgressAfter: async () => true } });
+  if (agent === 'pi') providePiWindows(r);
+  const twoProviders = ['prov-a', 'prov-b'].map(id => ({ ...switchViews(agent)[0], id }));
   r.views.current = twoProviders;
   writeFileSync(path.join(r.db.root, 'profile', 'session-runtime-fallback-settings.json'), JSON.stringify({ enabled: true }));
-  await r.createTask('fb');
-  await r.h.queue.enqueue('fb', { clientId: 'fb-1', text: 'long job' });
-  await waitFor(() => r.h.maker.sessions.get('fb')?.sent.length === 1);
+  await r.createTask(id);
+  await r.h.queue.enqueue(id, { clientId: 'fb-1', text: 'long job' });
+  await waitFor(() => r.h.maker.sessions.get(id)?.sent.length === 1);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   t.after(() => t.mock.timers.reset());
   const interrupt = async session => {
@@ -5157,16 +5172,67 @@ test('auto-resume route switch: the second interruption resumes on another provi
     session.emit({ type: 'error', data: INTERRUPTION, ...stamp });
     await settle();
   };
+  const advanceUntil = async (ready, what) => {
+    for (let i = 0; i < 200 && !ready(); i += 1) { t.mock.timers.tick(500); await settle(); }
+    await settleUntil(ready, what);
+  };
   const resumed = async (before, sent) => {
     const ready = () => {
-      const now = r.h.maker.sessions.get('fb');
+      const now = r.h.maker.sessions.get(id);
       return Boolean(now && (now !== before ? now.sent.length >= 1 : now.sent.length >= sent));
     };
-    for (let i = 0; i < 200 && !ready(); i += 1) { t.mock.timers.tick(500); await settle(); }
-    // The resume's send reaches the engine after its working-directory check (settleUntil).
-    await settleUntil(ready, 'the resume reached the engine');
-    return r.h.maker.sessions.get('fb');
+    await advanceUntil(ready, 'the resume reached the engine');
+    return r.h.maker.sessions.get(id);
   };
+  return { r, interrupt, resumed, advanceUntil };
+}
+
+// A local picker and set-effort during a turn must retain the desktop's timing. Real task settings,
+// queue and migrated DB, three consecutive inputs: effort alone, a model/source pick with effort,
+// then a cross-engine pick. Existing send tests cover landing but do not distinguish control.pending.
+test('runtime control inputs: local picker and engine choices wait for a send, effort alone applies directly', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'local-runtime-choices';
+  const models = ['big', 'small'].map(model => ({ ...switchModel(model), efforts: ['medium', 'high'], defaultEffort: 'medium' }));
+  r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('claude-code')[0], id: provider,
+    agents: ['claude-code', 'codex'], models: { 'claude-code': models, codex: [switchModel('gpt-x')] } }));
+  const control = () => getSessionRuntimeControlSnapshot(id).pending;
+  const end = async live => {
+    live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+    await settleUntil(() => !r.h.queue.isTurnRunning(id), 'the running turn ended');
+  };
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'one', text: 'one' });
+  const first = r.h.maker.getSession(id);
+  await r.selection.setEffort(id, 'high');
+  assert.deepEqual([control(), first.options.effort, r.row(id).effort], [null, 'high', 'high']);
+  const picked = await r.selection.setModel(id, 'small', 'prov-b', undefined, undefined);
+  assert.equal(picked.pendingUntilSend, true);
+  await r.selection.setEffort(id, 'medium');
+  await end(first);
+  assert.deepEqual([control(), r.selection.projectIntent(id)?.effort, r.row(id).model], [null, 'medium', 'big']);
+  await r.h.queue.enqueue(id, { clientId: 'two', text: 'two' });
+  await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('two'), 'the model pick landed on the second turn');
+  const second = r.h.maker.getSession(id);
+  assert.deepEqual([second.model, r.row(id).provider_id, r.row(id).effort], ['small', 'prov-b', 'medium']);
+  const engine = await r.selection.switchAgent({ sessionId: id, targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-b' });
+  assert.equal(engine.deferred, true);
+  await end(second);
+  assert.deepEqual([control(), r.selection.projectIntent(id)?.targetAgentKind, r.row(id).agent_kind], [null, 'codex', 'cc']);
+  await r.h.queue.enqueue(id, { clientId: 'three', text: 'three' });
+  await settleUntil(() => r.h.maker.getSession(id)?.sent.some(text => text.endsWith('three')) || r.h.queue.projection(id).error, 'the third input settled');
+  assert.equal(r.h.queue.projection(id).error ?? null, null);
+  assert.deepEqual([r.h.maker.getSession(id).agentKind, r.h.maker.getSession(id).model, control()], ['codex', 'gpt-x', null]);
+});
+
+// Rule (register.ts wires sessionRuntimeFallback.ts into the interrupted-turn resume, and its
+// bootstrapSession starts the next runtime on the accepted override): with the user's route fallback
+// setting on, the second interruption of an episode moves the task to another provider's candidate,
+// and the resume runs on that route. Gap: the Host accepted the fallback but started the rebuilt
+// runtime from the task row (which a fallback does not write), so the resume ran on the failing route
+// again. Minimal failing input: two interruptions in a row on a task whose provider has a sibling.
+test('auto-resume route switch: the second interruption resumes on another provider when the setting is on', { timeout: 30_000 }, async t => {
+  const { r, interrupt, resumed } = await interruptedFallbackTask(t, 'fb', 'claude-code');
   const first = r.h.maker.sessions.get('fb');
   await interrupt(first);
   const second = await resumed(first, 2);
@@ -5179,6 +5245,131 @@ test('auto-resume route switch: the second interruption resumes on another provi
   // As the desktop: a start on the accepted override keeps the task row's saved provider baseline.
   assert.equal(r.row('fb').provider_id, 'prov-a', 'the task row keeps its saved provider');
 });
+
+// A permission change awaiting the engine's acknowledgement counts as busy in maker-core Session.
+// Exercise its actual accounting. The test engine supplies only the acknowledgement and turn state.
+function holdEnginePermissionAck(live) {
+  const started = Promise.withResolvers();
+  const ack = Promise.withResolvers();
+  const native = new Session({
+    id: live.id, agentKind: live.agentKind, workDir: live.workDir, permissionMode: 'ask', turnStallMs: 0,
+    capabilities: { permissionModes: [{ id: 'ask' }, { id: 'auto' }], setPermissionModeMidSession: { supported: true } },
+    handle: { setInteractionResolver() {}, isTurnRunning: () => live.running,
+      setPermissionMode() { started.resolve(); return ack.promise; } },
+    logger: { child() { return this; }, info() {}, debug() {}, warn() {}, error() {} },
+  });
+  live.setPermissionMode = mode => native.setPermissionMode(mode);
+  live.isTurnRunning = () => native.isTurnRunning();
+  return { started: started.promise, release: ack.resolve };
+}
+
+async function acceptedPiFallback(t, id) {
+  const { r, interrupt, resumed, advanceUntil } = await interruptedFallbackTask(t, id, 'pi');
+  const first = r.h.maker.getSession(id);
+  await interrupt(first);
+  const live = await resumed(first, 2);
+  const ack = holdEnginePermissionAck(live);
+  const edit = r.selection.setPermissionMode(id, 'auto');
+  try {
+    await ack.started;
+    await interrupt(live);
+    await advanceUntil(() => getSessionRuntimeControlSnapshot(id).pending?.profile.providerId === 'prov-b',
+      'the second automatic fallback accepted the sibling provider as runtimePending');
+  } finally {
+    ack.release();
+    await edit;
+  }
+  return { r, resume: () => resumed(live, 3) };
+}
+
+// Rule: the desktop settles an accepted runtime control at the final terminal and reports a
+// runtime-selection-cancelled error if it fails. The ordinary fallback case has an idle engine at
+// selection time. Tier: db, two interrupted turns and a permission acknowledgement overlapping the
+// second retry, via the real queue, permission entry, automatic fallback, and session projection.
+for (const withdraw of [false, true]) {
+  test(`auto-resume route switch: a deferred Pi fallback ${withdraw ? 'reports cancellation if the source disappears' : 'runs the subsequent turn on the accepted source'}`, async t => {
+    const id = withdraw ? 'fb-pi-cancel' : 'fb-pi-apply';
+    const { r, resume } = await acceptedPiFallback(t, id);
+    const control = () => getSessionRuntimeControlSnapshot(id);
+    assert.equal(control().pending.source, 'fallback');
+    if (withdraw) r.views.current = r.views.current.filter(view => view.id !== 'prov-b');
+    const continuation = await resume();
+    continuation.emit({ type: 'done', data: {}, sessionTurnGeneration: continuation.generation, sessionInstanceId: continuation.instanceId });
+    await settleUntil(() => !r.h.queue.isTurnRunning(id), 'the continued turn ended');
+    await settle();
+    await r.h.maker.closeSession(id);
+    await enqueue(r.h, id, { clientId: 'next-input', text: 'next' });
+    const nextRoute = r.h.maker.getSession(id).options;
+    assert.deepEqual({ pending: control().pending?.profile.providerId ?? null, next: nextRoute.providerId, ...runtimeCancellations(r, id) },
+      { pending: null, next: withdraw ? 'prov-a' : 'prov-b', history: withdraw ? 1 : 0, surfaced: withdraw ? 1 : 0 });
+  });
+}
+
+// The Pi provider list is asynchronous. A permission edit can begin after an idle send, rename
+// recovery or budget rebuild passes its initial admission. Pause the real catalog read to place
+// that edit at the decision, without writing a pending control or forcing isTurnRunning.
+for (const operation of ['picker', 'rename', 'budget']) {
+  test(`runtime control producer: Pi ${operation} overlapping a permission acknowledgement`, async t => {
+    const id = 'control-' + operation;
+    const r = await modelChangeRuntime(t, { agent: 'pi' });
+    providePiWindows(r);
+    await r.createTask(id);
+    await enqueue(r.h, id, { clientId: 'original', text: 'work' });
+    const live = r.h.maker.getSession(id);
+    const ack = holdEnginePermissionAck(live);
+    t.after(() => { appliedContextWindowBudgets.delete(id); pendingSessionContextWindowBudgetReconciles.delete(id); });
+    if (operation === 'budget') await taskListUpdate(r)(id, { contextWindowBudget: 100_000 });
+    if (operation === 'picker') assert.equal((await r.selection.setModel(id, 'small', undefined, undefined, undefined)).pendingUntilSend, true);
+    if (operation === 'rename') r.rename('big', 'xai/big');
+    assert.equal(getSessionRuntimeControlSnapshot(id).pending, null);
+    const entered = Promise.withResolvers();
+    const listing = Promise.withResolvers();
+    const interceptList = () => {
+      r.views.beforeList = () => {
+        delete r.views.beforeList;
+        entered.resolve();
+        return listing.promise;
+      };
+    };
+    if (operation === 'budget') interceptList();
+    live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+    await settleUntil(() => !r.h.queue.isTurnRunning(id), 'the original turn ended');
+    if (operation !== 'budget') {
+      interceptList();
+      await r.h.queue.enqueue(id, { clientId: 'next', text: 'next input' });
+    }
+    await entered.promise;
+    const edit = r.selection.setPermissionMode(id, 'auto');
+    try {
+      await ack.started;
+      listing.resolve();
+      await settle();
+      const pending = getSessionRuntimeControlSnapshot(id).pending;
+      assert.deepEqual({ source: pending?.source, model: pending?.profile.model }, {
+        source: 'agent', model: operation === 'picker' ? 'small' : operation === 'rename' ? 'xai/big' : 'big',
+      });
+    } finally {
+      listing.resolve(); ack.release(); await edit;
+    }
+    if (operation === 'budget') {
+      await r.h.queue.enqueue(id, { clientId: 'next', text: 'next input' });
+    } else {
+      await settleUntil(() => r.h.queue.projection(id).recovery?.kind === 'queue-head', 'the route change deferred before send');
+      await r.h.queue.retryLastError(id);
+    }
+    await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('next input'), 'the first input after the edit reached the engine');
+    const next = r.h.maker.getSession(id);
+    next.emit({ type: 'done', data: {}, sessionTurnGeneration: next.generation, sessionInstanceId: next.instanceId });
+    await settleUntil(() => !r.h.queue.isTurnRunning(id), 'the next turn ended');
+    await settle();
+    await r.h.queue.enqueue(id, { clientId: 'following', text: 'following input' });
+    await settleUntil(() => r.h.maker.getSession(id)?.sent.includes('following input'), 'the following turn reached its runtime');
+    assert.deepEqual({ pending: getSessionRuntimeControlSnapshot(id).pending?.profile.model ?? null,
+      nextModel: r.h.maker.getSession(id).model, ...runtimeCancellations(r, id) },
+      { pending: null, nextModel: operation === 'picker' ? 'small' : operation === 'rename' ? 'xai/big' : 'big',
+        history: 0, surfaced: 0 });
+  });
+}
 
 // An automatic route fallback on a task of the model-change runtime: the shared fallback step accepts it
 // as the interrupted-turn auto-resume does (sessionRuntimeFallback.ts acceptSessionRuntimeMutation,
@@ -5279,6 +5470,209 @@ const taskListUpdate = r => {
     move: async () => { throw new Error('Unexpected move'); },
   }));
 };
+
+// §3.2 profile coexistence, tier db. A fallback produced by the real retry and
+// a credential change registered on a busy runtime must survive the same boundary.
+// A desktop can edit the stored route while holding the profile; an owner can
+// sign out. Observe the task's state, committed UPDATEs, history and client events.
+for (const kind of ['runtime', 'credential']) {
+  for (const boundary of ['held', 'unchanged', 'route changed', 'owner changed']) {
+    test(`profile hold settlement: ${kind} with ${boundary}`, { timeout: 30_000 }, async t => {
+      const id = `hold-${kind}-${boundary.replace(' ', '-')}`;
+      let r, live;
+      if (kind === 'runtime') {
+        const fallback = await acceptedPiFallback(t, id);
+        r = fallback.r;
+        live = await fallback.resume();
+      } else {
+        r = await modelChangeRuntime(t);
+        r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('claude-code')[0], id: provider }));
+        await r.createTask(id);
+        await enqueue(r.h, id, { clientId: 'work', text: 'one' });
+        live = r.h.maker.getSession(id);
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        t.after(() => t.mock.timers.reset());
+        await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-b' });
+      }
+      t.after(bindHostSessionRuntimeHooks(r.selection));
+      const readPending = () => kind === 'runtime' ? getSessionRuntimeControlSnapshot(id).pending : r.selection.hasPendingCredentialSwitch(id);
+      const registered = readPending();
+      assert.ok(registered, 'the real switch has been accepted');
+      const writes = observeRouteUpdates(r, id);
+      const applied = () => r.h.events.filter(e => e.channel === 'maker:session-credential-switch-applied' && e.payload.sessionId === id);
+      const failed = () => r.h.events.filter(e => e.channel === 'maker:session-credential-switch-failed' && e.payload.sessionId === id);
+      r.h.queue.holdForDesktop(HELD);
+      live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+      await settleUntil(() => !r.h.queue.isTurnRunning(id), 'the held turn ended');
+      await settle();
+      assert.deepEqual({ pending: readPending(), updates: writes(), applied: applied().length,
+        ...runtimeCancellations(r, id) }, { pending: registered, updates: [], applied: 0, history: 0, surfaced: 0 });
+      if (boundary === 'held') return;
+      if (boundary === 'route changed') {
+        // The desktop's edit writes the original database while Host is holding.
+        r.db.db.prepare('UPDATE sessions SET model = ? WHERE id = ?').run('small', id);
+      } else if (boundary === 'owner changed') {
+        const profile = path.join(r.db.root, 'profile');
+        configureHostOwner({ userDataDir: profile, ownerId: null });
+        configureHostOwner({ userDataDir: profile, ownerId: 'other-owner' });
+      }
+      const priorWrites = writes();
+      assert.equal(await r.h.queue.releaseDesktopHold(), true);
+      await settle();
+      if (boundary === 'unchanged') {
+        assert.ok(!readPending(), 'accepted switch settled on release');
+        if (kind === 'credential') {
+          assert.deepEqual(writes().slice(priorWrites.length), [{ model: 'small', provider_id: 'prov-b' }]);
+          assert.equal(applied().length, 1);
+        } else {
+          const settled = getSessionRuntimeControlSnapshot(id);
+          assert.equal(settled.effectiveOverride?.providerId, 'prov-b');
+          const generation = settled.generation;
+          await r.h.queue.releaseDesktopHold();
+          assert.equal(getSessionRuntimeControlSnapshot(id).generation, generation);
+        }
+      } else {
+        assert.ok(!readPending(), 'the stale choice no longer gates sends');
+        assert.deepEqual(writes(), priorWrites);
+        assert.equal(applied().length, 0);
+        assert.equal(failed().length, 0, 'non-Pi credential failures have no desktop failure push');
+        const cancel = kind === 'runtime' && boundary === 'route changed' ? 1 : 0;
+        assert.deepEqual(runtimeCancellations(r, id), { history: cancel, surfaced: cancel });
+      }
+    });
+  }
+}
+
+// §3.2, tier db. The retry and Maker's close notification can arrive without a
+// turn-end callback. Neither may apply a same-route rebuild while the desktop owns
+// the profile. Count UPDATEs as well as pushes, since the stored values match.
+for (const source of ['retry timer', 'session close']) {
+  test(`profile hold: a pending credential switch survives the ${source}`, async t => {
+    const r = await modelChangeRuntime(t);
+    const id = `held-credential-${source.replace(' ', '-')}`;
+    t.after(() => { appliedContextWindowBudgets.delete(id); pendingSessionContextWindowBudgetReconciles.delete(id); });
+    await r.createTask(id);
+    await enqueue(r.h, id, { clientId: 'first', text: 'long job' });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    t.after(() => t.mock.timers.reset());
+    await taskListUpdate(r)(id, { contextWindowBudget: 100_000 });
+    assert.equal(r.selection.hasPendingCredentialSwitch(id), true);
+    const routeWrites = observeRouteUpdates(r, id);
+    r.h.queue.holdForDesktop(HELD);
+    const session = r.h.maker.getSession(id);
+    await r.h.maker.closeSession(id);
+    if (source === 'retry timer') {
+      t.mock.timers.tick(10_000);
+    } else {
+      const listeners = new Set();
+      r.h.maker.on = fn => { listeners.add(fn); return () => listeners.delete(fn); };
+      t.after(r.selection.attachMaker(r.h.maker));
+      session.getUsageSnapshot = () => undefined;
+      for (const listener of listeners) listener({ type: 'session:closed', sessionId: id, session });
+    }
+    await settle();
+    assert.deepEqual({
+      updates: routeWrites(), pending: r.selection.hasPendingCredentialSwitch(id),
+      applied: r.h.events.filter(e => e.channel === 'maker:session-credential-switch-applied').map(e => e.payload.sessionId),
+    }, { updates: [], pending: true, applied: [] });
+  });
+}
+
+// §3.2 coexistence rule, tier db. A hold may arrive after settlement started. The last
+// provider catalog read is asynchronous, after the in-memory provider changed but before
+// SQLite's UPDATE. Hold at that boundary and observe both the actual write and the client.
+test('profile hold: a credential switch already inside persistence cannot write or notify', { timeout: 20_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'held-during-persist';
+  r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('claude-code')[0], id: provider }));
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'work', text: 'long job' });
+  const live = r.h.maker.getSession(id);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-b' });
+  const entered = Promise.withResolvers();
+  const resume = Promise.withResolvers();
+  r.views.beforeList = async () => {
+    if (getSessionProvider(id) !== 'prov-b') return;
+    entered.resolve();
+    await resume.promise;
+  };
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  try {
+    await entered.promise;
+    assert.equal(r.row(id).provider_id, 'prov-a');
+    r.h.queue.holdForDesktop(HELD);
+    const routeWrites = observeRouteUpdates(r, id);
+    resume.resolve();
+    await settle();
+    assert.deepEqual({
+      updates: routeWrites(), pending: r.selection.hasPendingCredentialSwitch(id),
+      applied: r.h.events.filter(e => e.channel === 'maker:session-credential-switch-applied').map(e => e.payload.sessionId),
+    }, { updates: [], pending: true, applied: [] });
+  } finally {
+    resume.resolve();
+  }
+});
+
+function observeRouteUpdates(r, id) {
+  const sql = r.db.db;
+  sql.exec(`CREATE TEMP TABLE held_route_writes (id TEXT, model TEXT, provider_id TEXT);
+    CREATE TEMP TRIGGER record_held_route_write AFTER UPDATE OF model, provider_id ON sessions
+    BEGIN INSERT INTO held_route_writes VALUES (NEW.id, NEW.model, NEW.provider_id); END`);
+  return () => sql.prepare('SELECT model, provider_id FROM held_route_writes WHERE id = ?').all(id);
+}
+
+// The actual target source must stay pending across a held turn end. The adjacent budget edit
+// exercises external registration, but requests a same-route rebuild. Tier: db, two sources,
+// registration through the real credential switch service and the blocking turn's real terminal.
+test('profile hold: a credential switch to another source leaves the stored source intact', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'held-new-source';
+  r.views.current = ['prov-a', 'prov-b'].map(provider => ({ ...switchViews('claude-code')[0], id: provider }));
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'work', text: 'long job' });
+  const live = r.h.maker.getSession(id);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  await r.selection.registerPendingCredentialSwitch(id, { model: 'small', providerId: 'prov-b' });
+  assert.equal(r.selection.hasPendingCredentialSwitch(id), true);
+  r.h.queue.holdForDesktop(HELD);
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await settleUntil(() => !r.h.queue.isTurnRunning(id), 'the held running turn finishes');
+  await settle();
+  assert.deepEqual({ pending: r.selection.hasPendingCredentialSwitch(id), stored: r.row(id).provider_id,
+    model: r.row(id).model, applied: r.h.events.filter(e => e.channel === 'maker:session-credential-switch-applied').map(e => e.payload.providerId) },
+    { pending: true, stored: 'prov-a', model: 'big', applied: [] });
+});
+
+// Coexistence rule: the running turn may finish during a profile hold. The budget update registers
+// a rebuild with the credential switch service. The earlier credential tests registered it directly
+// and only covered the open gate. Tier: db, one live task, a budget edit, a hold, then its terminal.
+test('profile hold: a credential switch registered by a budget change waits when the running turn ends', async t => {
+  const r = await modelChangeRuntime(t);
+  const id = 'held-budget';
+  t.after(() => { appliedContextWindowBudgets.delete(id); pendingSessionContextWindowBudgetReconciles.delete(id); });
+  await r.createTask(id);
+  await enqueue(r.h, id, { clientId: 'work', text: 'long job' });
+  const live = r.h.maker.getSession(id);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  await taskListUpdate(r)(id, { contextWindowBudget: 100_000 });
+  assert.equal(r.selection.hasPendingCredentialSwitch(id), true, 'the budget edit registered a switch');
+  // Same-route rebuilds write the same model/provider values. Observe the UPDATE itself.
+  const routeWrites = observeRouteUpdates(r, id);
+  r.h.queue.holdForDesktop(HELD);
+  live.emit({ type: 'done', data: {}, sessionTurnGeneration: live.generation, sessionInstanceId: live.instanceId });
+  await settleUntil(() => !r.h.queue.isTurnRunning(id), 'the held running turn finishes');
+  await settle();
+  assert.deepEqual({
+    pending: r.selection.hasPendingCredentialSwitch(id),
+    sameRuntime: r.h.maker.getSession(id) === live,
+    routeWrites: routeWrites(),
+    applied: r.h.events.filter(e => e.channel === 'maker:session-credential-switch-applied').map(e => e.payload.sessionId),
+  }, { pending: true, sameRuntime: true, routeWrites: [], applied: [] });
+});
 
 test('runtime override: a task archived after a fallback and restored starts on its saved route', { timeout: 30_000 }, async t => {
   const r = await fallenBackTask(t, 'shelved');
