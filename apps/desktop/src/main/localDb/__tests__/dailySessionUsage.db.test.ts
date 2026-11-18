@@ -4,7 +4,7 @@ import { createDrizzleProxy } from '../client/drizzleProxy';
 import type { DbTransport } from '../client/DbTransport';
 
 const state = vi.hoisted(() => ({ db: null as unknown }));
-vi.mock('../client/current.js', () => ({ getDbClient: () => ({ drizzle: state.db }) }));
+vi.mock('../client/current.js', () => ({ getDbClient: () => ({ drizzle: state.db, query: async (sql: string, params: unknown[]) => sqlite.prepare(sql).all(...params) }) }));
 import { getSessionUsageSince, getUsageTaskMeta } from '../dailySessionUsage';
 
 let sqlite: Database.Database;
@@ -17,6 +17,10 @@ beforeEach(() => {
       status TEXT NOT NULL, context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0, user_send_at INTEGER, updated_at INTEGER NOT NULL,
       source TEXT
+    );
+    CREATE TABLE auxiliary_usage_receipts (
+      receipt_id TEXT PRIMARY KEY, day TEXT, session_id TEXT,
+      input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_create_tokens INTEGER
     );
     CREATE TABLE daily_session_usage (
       day TEXT NOT NULL, session_id TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0,
@@ -75,4 +79,19 @@ describe('daily session usage SQL', () => {
     expect(usage.tasks.find((task) => task.sessionId === 'recent')).toMatchObject({ source });
     expect(usage.rows).toEqual([{ day: '2026-09-25', sessionId: 'recent', tokens: 7 }]);
   });
+});
+
+it('adds auxiliary usage only to its real non-deleted task, including receipt-only tasks', async () => {
+  sqlite.exec(`INSERT INTO auxiliary_usage_receipts VALUES
+    ('a', '2026-09-25', 'recent', 10, 2, 3, NULL),
+    ('b', '2026-09-25', 'unused', 20, 1, NULL, NULL),
+    ('c', '2026-09-25', 'gone', 999, 1, NULL, NULL),
+    ('d', '2026-09-25', NULL, 100, 2, NULL, NULL)`);
+  const result = await getSessionUsageSince('2026-09-25');
+  expect(result.rows).toEqual(expect.arrayContaining([
+    { day: '2026-09-25', sessionId: 'recent', tokens: 22, auxiliaryTokens: 15 },
+    { day: '2026-09-25', sessionId: 'unused', tokens: 21, auxiliaryTokens: 21 },
+  ]));
+  expect(result.rows).toHaveLength(2);
+  expect(result.tasks.some(task => task.sessionId === 'unused')).toBe(true);
 });

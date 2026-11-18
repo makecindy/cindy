@@ -54,7 +54,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { SELF_HOSTED_RELAY_IPC, type SelfHostedRelayApi } from '../shared/selfHostedRelay';
-import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
+import { DEVICE_LINK_PUSH, type DeviceLinkPeerLinksSnapshot } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
 import { PROVIDER_GROUP_IPC, type ProviderGroupCommand } from '../shared/providerGroup';
 import {
@@ -783,6 +783,7 @@ const fanOutLayoutChanged = createIpcFanOut('layout:changed');
 // 意识仓库变化广播 (install/uninstall 后 main 推全量已装清单,多窗口热更新;
 // 见 main/cindy-brain/index.ts)。
 const fanOutRetirementOpen = createIpcFanOut('ghosts:retirement-open');
+const fanOutGithubPluginReleaseProgress = createIpcFanOut('ghosts:github-release:progress');
 const fanOutGhostsChanged = createIpcFanOut('ghosts:changed');
 const fanOutGhostWorkdirPrefsChanged = createIpcFanOut('ghosts:workdir-prefs-changed');
 const fanOutPluginPublisherProgress = createIpcFanOut('plugin-publisher:progress');
@@ -1572,6 +1573,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       config: Record<string, unknown> | null,
     ): Promise<{ config: Record<string, unknown> }> =>
       ipcRenderer.invoke('ghosts:errand-prefs:set', id, config),
+    githubRelease: (action: 'check' | 'update' | 'sign-in', instanceId: string, assetId?: number):
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
+      ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),
+    onGithubReleaseProgress: fanOutGithubPluginReleaseProgress,
     pickFile: (): Promise<{ canceled: true } | { filePath: string }> =>
       ipcRenderer.invoke('ghosts:pick-file'),
     inspect: (
@@ -3268,6 +3273,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         type: 'file' | 'directory';
         size: number;
         mtimeMs: number;
+        /** Directory link's canonical target, relative to the workdir. */
+        symlinkTarget?: string;
       }>
     > => ipcRenderer.invoke('maker:file-browser:list-dir', params),
     /** 项目级文件名扁平列表(ripgrep --files honor .gitignore);供 RSB 快速文件
@@ -3295,6 +3302,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
             size: number;
             mtimeMs: number;
             truncated: boolean;
+            resolvedPath?: string;
           };
         }
       | { ok: false; code: 'BINARY_FILE' | 'READ_FAILED'; message?: string }
@@ -3310,7 +3318,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workdir: string;
       relPath: string;
       content: string;
-    }): Promise<{ ok: true; size: number; mtimeMs: number } | { ok: false; message: string }> =>
+      expectedResolvedPath?: string;
+    }): Promise<{ ok: true; size: number; mtimeMs: number; resolvedPath?: string } | { ok: false; message: string }> =>
       ipcRenderer.invoke('maker:file-browser:write-file', params),
     createFile: (params: {
       remoteHostId?: string | null;
@@ -4175,6 +4184,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     showOpenDirectory: (params?: {
       defaultPath?: string;
       writableGrantScope?: string;
+      projectGrantScope?: string;
     }): Promise<{
       success: boolean;
       path: string | null;
@@ -5238,7 +5248,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       linkStatus: 'stopped' | 'connecting' | 'online';
       directDataDeviceIds?: string[];
       connectionIssue: {
-        kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
+        kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable' | 'agent-net-relay-down';
         closeCode?: number;
         detail?: string;
         at: number;
@@ -5259,10 +5269,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }> =>
       ipcRenderer.invoke('device-link:set-device-control-enabled', { deviceId, enabled }),
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照(轮询 + onPeerLinksChanged) */
-    getPeerLinks: (): Promise<{
-      links: Array<{ deviceId: string; path: 'direct' | 'relay'; rttMs: number | null; open: boolean }>;
-      relayRttMs: number | null;
-    }> => ipcRenderer.invoke('device-link:get-peer-links'),
+    getPeerLinks: (): Promise<DeviceLinkPeerLinksSnapshot> => ipcRenderer.invoke('device-link:get-peer-links'),
     /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload 为全量快照 */
     onPeerLinksChanged: fanOutDeviceLinkPeerLinksChanged,
     listDevices: (): Promise<{
@@ -7903,6 +7910,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       engineReady: boolean;
       deferred?: boolean;
       sameEngineRevision?: number;
+      pendingSwitchRevision?: number;
       sameEngineSuperseded?: boolean;
     }> =>
       options || thinking !== undefined
@@ -8379,7 +8387,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:images:retry', sessionId, imageId),
       retryLastError: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: { expectedClearBoundaryMs?: number | null; expectedQueueHeadClientId?: string; expectedSwitchRevision?: number },
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:retry-last-error', sessionId, opts),
       clearError: (

@@ -1,3 +1,5 @@
+import { setAuxiliaryUsageChangedListener } from './auxiliaryUsage.js';
+import { rebroadcastTodaySpend } from '../usageBroadcaster.js';
 /**
  * usageHistory — 首页用量仪表盘的聚合查询 (main 侧, renderer 只渲染)。
  *
@@ -72,6 +74,7 @@ import {
 } from '../../shared/regionalMoney.js';
 
 const log = createLogger('usageHistory');
+setAuxiliaryUsageChangedListener(() => { void rebroadcastTodaySpend(); });
 
 /** 活跃日判定阈值: 当日花费 ≥ $0.01 才算"用过"。 */
 const ACTIVE_DAY_MIN_USD = 0.01;
@@ -86,7 +89,7 @@ const MODEL_WINDOW_DAYS = 30;
 //    的聚合值，直接沿用会让升级后的首页继续显示按错币种算出的历史。整份作废重算。
 // v4:恢复 CN usage 的 CNY 账本口径，并让订阅 USD 估值按 6.7 投影到 CNY。
 // v6：重算每日展示投影，避免迁移前的 USD 历史继续沿用已归零的旧缓存。
-const DISK_CACHE_VERSION = 6;
+const DISK_CACHE_VERSION = 7;
 const DISK_CACHE_FILE = 'usage-history.json';
 /** 后台刷新完成后, renderer 的短轮询能拿到 fresh payload, 避免 stale 状态自循环。 */
 const MEMORY_FRESH_MS = 10_000;
@@ -99,11 +102,11 @@ export interface UsageHistoryDay {
 }
 
 function usageAgentKind(value: string): UsageHistoryModel['agentKind'] {
-  return value === 'codex' || value === 'pi' || value === 'media' ? value : 'claude-code';
+  return value === 'codex' || value === 'pi' || value === 'media' || value === 'auxiliary' ? value : 'claude-code';
 }
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
   money: RegionalMoney;
@@ -117,8 +120,11 @@ export interface UsageHistoryModel {
 
 /** 每日 × 模型的一行明细 — 右栏堆叠柱状图的分段数据。 */
 export interface UsageHistoryModelDay {
+  requestCount?: number;
+  source?: string;
+  providerId?: string;
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media' | 'auxiliary';
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
   money: RegionalMoney;
@@ -192,6 +198,7 @@ export const LOCAL_TASK_DEVICE = 'local';
 
 /** 「最耗 token 的任务」的每日 × 任务一行。taskKey = `${deviceId}:${sessionId}`。 */
 export interface UsageHistoryTaskDay {
+  auxiliaryTokens?: number;
   day: string;
   taskKey: string;
   tokens: number;
@@ -231,7 +238,7 @@ export function combineUsageDeviceRows(sources: readonly UsageDeviceRows[]): Usa
       spendByDay.set(row.day, monies);
     }
     for (const row of source.modelRows) {
-      const key = [row.day, row.agentKind, row.model, row.money.currency, row.money.kind].join('\u0000');
+      const key = [row.day, row.agentKind, row.model, row.money.currency, row.money.kind, row.source ?? '', row.providerId ?? ''].join('\u0000');
       const existing = modelByKey.get(key);
       if (!existing) {
         modelByKey.set(key, { ...row });
@@ -239,6 +246,7 @@ export function combineUsageDeviceRows(sources: readonly UsageDeviceRows[]): Usa
       }
       existing.money =
         addCompatibleRegionalMoney([existing.money, row.money], row.money.currency) ?? existing.money;
+      if (row.requestCount !== undefined) existing.requestCount = (existing.requestCount ?? 0) + row.requestCount;
       existing.inputTokens += row.inputTokens;
       existing.outputTokens += row.outputTokens;
       existing.cacheReadTokens += row.cacheReadTokens;
@@ -371,6 +379,7 @@ function tagTaskUsage(
       day: row.day,
       taskKey: usageTaskKey(deviceId, row.sessionId),
       tokens: row.tokens,
+      ...(row.auxiliaryTokens !== undefined ? { auxiliaryTokens: row.auxiliaryTokens } : {}),
     })),
     tasks: usage.tasks.map((task) => ({
       ...task,
@@ -837,6 +846,9 @@ export async function readUsageHistoryWith(
     return {
       day: row.day,
       agentKind,
+      requestCount: row.requestCount,
+      source: row.source,
+      providerId: row.providerId,
       model,
       money,
       apiMoney,

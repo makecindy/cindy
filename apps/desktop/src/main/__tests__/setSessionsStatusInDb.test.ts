@@ -196,7 +196,7 @@ describe('setSessionsStatusInDb', () => {
       for (const sessionId of ids)
         expect(h.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
           sessionId,
-          patch: { status: 'archived' },
+          patch: { status: 'archived', snoozedUntil: null, snoozedAt: null },
         });
     } finally {
       finish?.();
@@ -310,7 +310,7 @@ describe('setSessionsStatusInDb', () => {
     expect(h.tapWindowBroadcast).toHaveBeenCalledTimes(2);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 's1',
-      patch: { status: 'active' },
+      patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
     });
     expect(h.webContentsSend).toHaveBeenCalledTimes(2);
     // 返回值是精简后的行(不含 workspaceKind)

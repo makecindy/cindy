@@ -445,6 +445,23 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  // Integration: execute the public ExtensionAPI through the real shipped
+  // bridge, not a replacement RPC or a host-side approximation of active tools.
+  it('reads and changes the native tool catalog through the existing bridge command', { timeout: 30_000 }, async () => {
+    const handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'native-tool-catalog', workingDir: agentHome,
+      model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+    try {
+      const tools = await handle.callNativeToolCatalog!('getAllTools', []) as Array<{ name: string; parameters?: unknown; sourceInfo?: unknown }>;
+      expect(tools.find(tool => tool.name === 'read')?.parameters).toBeDefined();
+      expect(tools.some(tool => tool.sourceInfo !== undefined)).toBe(false);
+      const active = await handle.callNativeToolCatalog!('getActiveTools', []) as string[];
+      expect(active).toContain('read');
+      expect(await handle.callNativeToolCatalog!('setActiveTools', [['read', 'not-a-native-tool']])).toEqual(['read']);
+      expect(await handle.callNativeToolCatalog!('setActiveTools', [active])).toEqual(active);
+      await expect(handle.callNativeToolCatalog!('registerTool', [])).rejects.toThrow('UNSUPPORTED_CAPABILITY');
+    } finally { await handle.close(); }
+  });
+
   // Tool lifecycle contract, integration: injected input must execute through
   // native permissions, then the supported result replacement reaches the model.
   // Existing model-request tests cannot prove either native tool hook is wired.
@@ -2604,6 +2621,46 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
     }
   }
+
+  // Separate vision HTTP calls must produce private, per-attempt usage; they are not assistant usage.
+  it('meters vision primary and fallback through the real Pi bridge without exposing usage to the model', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-vision-usage-'));
+    const image = path.join(workingDir, 'image.png');
+    writeFileSync(image, Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]));
+    const calls: string[] = []; const packets: Array<{ backendRole?: string; model?: string; usage?: unknown }> = [];
+    const vision = createServer((req, res) => {
+      req.resume(); req.on('end', () => {
+        calls.push(req.url ?? ''); const primary = req.url === '/primary';
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ model: primary ? 'served-primary' : 'served-fallback',
+          choices: [{ message: { content: primary ? '' : 'a red button' } }],
+          usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 40 }, completion_tokens: 2 },
+        }));
+      });
+    });
+    await new Promise<void>(resolve => vision.listen(0, '127.0.0.1', resolve));
+    const address = vision.address() as { port: number };
+    const backend = { baseUrl: `http://127.0.0.1:${address.port}`, requestPath: '/primary', model: 'alias', authorization: null, headers: {}, wireProtocol: 'openai-chat' };
+    const deps = buildDeps(); const before = seenRequests.length;
+    deps.resolvePiVisionBridgeEnv = () => ({ CINDY_PI_VISION_BRIDGE: JSON.stringify({ enabled: true, primary: backend, fallback: { ...backend, requestPath: '/fallback' } }) });
+    deps.createPiVisionUsageRecorder = () => ({ observe: async value => { packets.push(value as typeof packets[number]); }, close() {} });
+    scriptedResponses.push(anthropicToolUseBody('vision', { path: image }), anthropicStreamBody('done after vision'));
+    try {
+      const result = await runPermissionTurn({ sessionId: 'vision-usage', workingDir, permissionMode: 'bypassPermissions', resolverBehavior: 'allow', deps });
+      expect(result.finalText).toContain('done after vision');
+      expect(calls).toEqual(['/primary', '/fallback']);
+      expect(packets.map(p => p.backendRole)).toEqual(['primary', 'fallback']);
+      expect(packets.map(p => p.model)).toEqual(['served-primary', 'served-fallback']);
+      expect(packets.map(p => p.usage)).toEqual([1, 2].map(() => ({ prompt_tokens: 100, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 40 } })));
+      const requests = seenRequests.slice(before).map(r => r.body).join();
+      expect(requests).toContain('a red button');
+      expect(requests).not.toContain('cindy:pi-vision-usage:');
+    } finally {
+      scriptedResponses.length = 0; vision.closeAllConnections();
+      await new Promise<void>(resolve => vision.close(() => resolve()));
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   // #9630, integration: catalog inheritance -> models.json -> real Pi HTTP.
   // Existing effort coverage used Gateway Chat, not native Anthropic relays.

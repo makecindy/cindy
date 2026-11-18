@@ -399,6 +399,7 @@ export interface SessionAgentSwitchResult {
    * 该值做 CAS，防止另一控制端的更新在 ack 往返期间被旧选择覆盖。
    */
   sameEngineRevision?: number;
+  pendingSwitchRevision?: number;
   /** 同引擎请求已被更晚的意图写入/撤销超车，renderer 必须丢弃旧选择。 */
   sameEngineSuperseded?: boolean;
 }
@@ -1016,7 +1017,10 @@ export async function performSessionAgentSwitch(
       model,
       ...(agentDeviceChanges ? { agentDeviceChange: targetAgentDeviceId ? 'other-device' : 'task-device' } : {}),
     });
-    return { switched: false, agentKind: targetAgentKind, model, engineReady: true, deferred: true };
+    return {
+      switched: false, agentKind: targetAgentKind, model, engineReady: true, deferred: true,
+      pendingSwitchRevision: deps.pendingSwitches.revision?.(sessionId),
+    };
   }
 
   const live = deps.getLiveSession(sessionId);
@@ -1539,8 +1543,12 @@ export function settleSystemRouteSwitchIntent(input: {
 export function applyPendingAgentSwitchIfIdle(
   deps: MakerSessionAgentSwitchHandlerDeps,
   sessionId: string,
-  opts?: { bootstrapAfterSwitch?: boolean; signal?: AbortSignal },
+  opts?: { bootstrapAfterSwitch?: boolean; signal?: AbortSignal; expectedRevision?: number },
 ): Promise<void> {
+  if (opts?.expectedRevision !== undefined && (!deps.pendingSwitches?.get(sessionId)
+    || deps.pendingSwitches.revision?.(sessionId) !== opts.expectedRevision)) {
+    throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected computer changed before retry; confirm the new selection and retry');
+  }
   const existing = pendingAgentSwitchApplyInFlight.get(sessionId);
   if (existing) return existing;
 

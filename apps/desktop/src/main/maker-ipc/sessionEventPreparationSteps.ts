@@ -37,6 +37,19 @@ export function defaultDecisionForPending(
 
 /** A post-terminal runtime recovery receipt, in the user's language; other events unchanged. */
 export function localizeRuntimeRecoveryEvent(event: AgentEvent, t: (key: string) => string): AgentEvent {
+  // Helper readiness is Host-authored, not vendor prose. Translate fixed codes
+  // before either error-banner delivery or the independent durable message;
+  // preserve the original event for other listeners and never rewrite model text.
+  if (event.source === 'codex' && (event.type === 'error' || event.type === 'text' && event.standaloneText)) {
+    const data = event.data as Record<string, unknown> | null;
+    const text = data?.code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE'
+      ? t('chat.errorBanner.codexHelperUnavailable')
+      : data?.code === 'CINDY_EXPECTED_HELPER_UNVERIFIED'
+        ? t('chat.errorBanner.codexHelperUnverified') : undefined;
+    if (text !== undefined) {
+      event = { ...event, data: { ...data, ...(event.type === 'error' ? { message: text } : { text }) } };
+    }
+  }
   // Post-terminal Host recovery bypasses the model. Localize before both
   // persistence and renderer delivery, without mutating the internal receipt.
   if (event.runtimeRecovery && event.source === 'pi' && event.type === 'text') {

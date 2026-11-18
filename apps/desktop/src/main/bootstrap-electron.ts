@@ -18,6 +18,7 @@ import { registerSetupMigration } from './setup-migration/register';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
+import { startDesktopWidgets } from './quota-overview/desktopWidgets.js';
 import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
 import { getQuotaOverviewService, readUsageWidgetSnapshot } from './quota-overview/service.js';
 import {
@@ -365,7 +366,8 @@ import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.desktop.js';
 import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.desktop.js';
 import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.desktop.js';
-import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
+import { fetchRemoteMediaImageBytes, openRemoteMediaForSave } from './device-link/remoteMediaProtocol';
+import { saveMediaStream } from './mediaSaveStream';
 import * as imageCacheStore from './imageCacheStore.desktop';
 import { readCachedImage } from './cindy-media/readCachedImage';
 import {
@@ -686,6 +688,8 @@ import {
   issueWritableDirectoryRecentGrant,
   WritableDirectoryPickerGrantError,
 } from './maker-ipc/writableDirectoryPickerGrant.js';
+import { projectDirectoryGrantScope } from './projectInfoAuthorization.js';
+import { configureProjectDirectoryProbe } from './projectDirectoryValidation.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
@@ -706,6 +710,7 @@ import { registerProviderShareIpc } from './device-link/providerShareRuntime.js'
 import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
+import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
 import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
@@ -751,6 +756,7 @@ import { registerLocalThemesIpc } from './local-themes/register';
 import { registerCindyFileIpc } from './cindy-files/register';
 import {
   registerRemoteSshIpc,
+  probeRemoteWorkingDirectory,
   disposeRemoteSshPool,
   startAutoConnectHostsBackground,
   isCcMgrUpgradeInFlight,
@@ -1318,6 +1324,7 @@ import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 // Keep opt-in platform dependencies after the existing desktop bootstrap imports.
+import { forwardProjectWrite } from './host-platform/project-writes.desktop.js';
 import { connectHostPlatformClient } from './host-platform/client.desktop.js';
 
 let makerProviderRefreshConfigured = false;
@@ -1335,6 +1342,11 @@ function hostDelegation(): HostDelegationConfig | null {
 }
 
 const hostClientMode = hostDelegation() !== null;
+function projectWindowOwnerStamp() {
+  if (!hostClientMode) return getActiveDataOwnerPushStamp();
+  const { dataOwnerId, ownerGeneration } = authManager.getAuthState();
+  return { dataOwnerId, ownerGeneration };
+}
 if (hostClientMode) {
   console.log('[bootstrap-electron] client mode requested at startup');
 }
@@ -1363,6 +1375,7 @@ function installHostClientMode(): boolean {
     }
   };
   const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain,
+    forwardProjectWrite: (client, event, input) => forwardProjectWrite(client, event, input, projectWindowOwnerStamp),
     assertTrusted: assertTrustedAppRendererEvent,
     authorizePluginApproval: (event, channel, args) => {
       if (!isTrustedAppRendererEvent(event)) return false;
@@ -1555,8 +1568,9 @@ function installHostClientMode(): boolean {
     onErrorPersisted: event => sendToAllWindows('local-db:session:error-persisted', event),
     onRightSidebarTabsChanged: event => sendToAllWindows('maker:right-sidebar-tabs:changed', event),
     onSubagentRunsChanged: event => sendToAllWindows('local-db:subagent-runs:changed', event),
-    onProjectAliasesChanged: () => {
+    onProjectAliasesChanged: event => {
       sendToAllWindows('local-db:project-aliases:changed', {});
+      if (event.catalogChanged) sendToAllWindows('local-db:recent-workdirs:changed', {});
     },
     onError: (error) => {
       console.warn(
@@ -5260,6 +5274,12 @@ const registerIpcHandlers = () => {
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();
   if (agentIsland) onQuit('agent-island-quota', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
+  // macOS 桌面小组件:同一份余量概览,桌面上放了 Cindy 小组件时才读取,数据变化后通知系统刷新。
+  // 共享 userData 的被动实例不写,避免两个实例争写同一份组件数据。
+  if (!authManager.isPassiveSharedUserDataInstance()) {
+    const stopDesktopWidgets = startDesktopWidgets(getQuotaOverviewService());
+    if (stopDesktopWidgets) onQuit('desktop-widgets', stopDesktopWidgets);
+  }
 
   // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
   initRegionScreenshot();
@@ -7227,6 +7247,7 @@ const registerIpcHandlers = () => {
       registerFileBrowserDeviceOp();
       // Remote SSH host management (Phase A) —— 连接管理 + ~/.ssh/config IO,
       // 暂未涉及 agent-on-remote / session 同步,后续 Phase B 扩展。
+      configureProjectDirectoryProbe((...args) => probeRemoteWorkingDirectory(...args));
       registerRemoteSshIpc();
       // Phase D — 启动后台 autoConnect: 把 prefs 里 autoConnect=true 的 host
       // 提前连好, 用户进新建对话点远程项目时不用等。fire-and-forget, 失败仅
@@ -7888,15 +7909,22 @@ const registerIpcHandlers = () => {
       {
         defaultPath,
         writableGrantScope,
-      }: { defaultPath?: string; writableGrantScope?: string } = {},
+        projectGrantScope,
+      }: { defaultPath?: string; writableGrantScope?: string; projectGrantScope?: string } = {},
     ) => {
+      const projectOwner = projectWindowOwnerStamp();
+      const projectScope =
+        projectGrantScope === undefined
+          ? undefined
+          : projectDirectoryGrantScope(projectOwner, projectGrantScope);
+      if (projectScope !== undefined) assertTrustedAppRendererEvent(event);
       if (writableGrantScope !== undefined) {
         assertTrustedAppRendererEvent(event);
         if (!writableGrantScope || writableGrantScope.length > 128) {
           throw new Error('invalid writable directory grant scope');
         }
       }
-      const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
+      const targetWin = projectScope !== undefined ? BrowserWindow.fromWebContents(event.sender) : getWindow() ?? BrowserWindow.getFocusedWindow();
       if (!targetWin) return { success: true, path: null };
       const result = await dialog.showOpenDialog(targetWin, {
         // createDirectory:macOS 显示"新建文件夹"按钮(Windows 自带);
@@ -7908,6 +7936,23 @@ const registerIpcHandlers = () => {
         return { success: true, path: null };
       }
       const selectedPath = result.filePaths[0];
+      let displayedPath = selectedPath;
+      if (projectScope !== undefined) {
+        const current = projectWindowOwnerStamp();
+        if (
+          isAppSessionBoundaryPending() ||
+          current.dataOwnerId !== projectOwner.dataOwnerId ||
+          current.ownerGeneration !== projectOwner.ownerGeneration
+        )
+          throwIpcError('PRECONDITION_FAILED', 'Project account changed');
+        assertTrustedAppRendererEvent(event);
+        displayedPath = await issueWritableDirectoryPickerGrant({
+          useCanonicalPath: true,
+          scopeId: projectScope,
+          senderId: event.sender.id,
+          directory: selectedPath,
+        });
+      }
       if (writableGrantScope !== undefined) {
         await issueWritableDirectoryPickerGrant({
           scopeId: writableGrantScope,
@@ -7915,7 +7960,7 @@ const registerIpcHandlers = () => {
           directory: selectedPath,
         });
       }
-      return { success: true, path: selectedPath };
+      return { success: true, path: displayedPath };
     },
   );
 
@@ -9167,6 +9212,10 @@ const registerIpcHandlers = () => {
         }
       },
       fetchRemoteMediaImage: (url) => fetchRemoteMediaImageBytes(url),
+      saveRemoteMedia: (source, destination) => saveMediaStream(source, destination, {
+        fetchHttp: (url, signal) => net.fetch(url, { signal }),
+        fetchRemote: (url, signal) => openRemoteMediaForSave(url, signal),
+      }),
       getTempDir: () => {
         fs.mkdirSync(remoteImagesTmpDir, { recursive: true });
         return remoteImagesTmpDir;
@@ -10764,6 +10813,9 @@ app.on('ready', async () => {
   setAgentNetSwitchRemoteHandler(agentNetSwitchRemoteHandler());
   registerProviderGroupIpc({ reshare: providerGroupReshare });
   registerSubscriptionAccountsIpc();
+  // 0.1.137–0.1.139 拆坏的内置订阅供应商自动并回(subscription-account-pools.md「升级拆坏的自动并回」)。
+  // 这是写操作，归窗口进程；Host 客户端模式不补做(docs/host/personal-migration-release-table.md)。
+  if (!hostClientMode) startUpgradeSplitRepair();
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();

@@ -7,18 +7,22 @@ import {
   CalendarDays,
   ChartColumn,
   Code,
+  ContactRound,
   Database,
   Folder,
   Globe,
   Image,
   MessageCircle,
+  Podcast,
   Puzzle,
+  TabletSmartphone,
+  Workflow,
   type LucideIcon,
 } from 'lucide-react';
 
-import type { GhostMainViewIcon } from '../../shared/ghost';
+import type { GhostMainViewDecl, GhostMainViewIcon } from '../../shared/ghost';
 
-export const MAIN_VIEW_ICONS: Record<GhostMainViewIcon, LucideIcon> = {
+export const MAIN_VIEW_ICONS = {
   puzzle: Puzzle,
   globe: Globe,
   code: Code,
@@ -28,4 +32,19 @@ export const MAIN_VIEW_ICONS: Record<GhostMainViewIcon, LucideIcon> = {
   image: Image,
   'message-circle': MessageCircle,
   'calendar-days': CalendarDays,
-};
+  'tablet-smartphone': TabletSmartphone,
+  'contact-round': ContactRound,
+  podcast: Podcast,
+  workflow: Workflow,
+} satisfies Record<GhostMainViewIcon, LucideIcon> & Record<string, LucideIcon>;
+
+export type MainViewIconName = keyof typeof MAIN_VIEW_ICONS;
+
+function isMainViewIconName(name: unknown): name is MainViewIconName {
+  return typeof name === 'string' && Object.hasOwn(MAIN_VIEW_ICONS, name);
+}
+
+export function mainViewIconName(view?: GhostMainViewDecl): MainViewIconName {
+  if (isMainViewIconName(view?.preferredIcon)) return view.preferredIcon;
+  return isMainViewIconName(view?.icon) ? view.icon : 'puzzle';
+}

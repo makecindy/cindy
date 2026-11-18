@@ -888,6 +888,15 @@ describe('provider group relay for shared users', () => {
 
     const none = setup({ plans: [{ kind: 'unavailable' }] });
     await expect(openAsGuest(none, GUEST_A, openPayload(SESSION))).rejects.toThrow(/REMOTE_AGENT_UNAVAILABLE/);
+
+    const unavailable = setup({ plans: [
+      { kind: 'unavailable', full: true },
+      { kind: 'unavailable', usageLimit: { resetAtMs: 1794978600000 } },
+    ] });
+    await expect(openAsGuest(unavailable, GUEST_A, openPayload(SESSION))).rejects.toThrow('[REMOTE_AGENT_GROUP_FULL]');
+    await expect(openAsGuest(unavailable, GUEST_B, openPayload(SESSION)))
+      .rejects.toThrow(/^\[REMOTE_AGENT_GROUP_USAGE_LIMIT\].*resets_at: 1794978600000$/);
+    expect(unavailable.ownerStarted).toHaveLength(0);
   });
 
   it('asks the computer to forget a removed shared user, and the computer clears only that user', async () => {

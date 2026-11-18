@@ -65,15 +65,18 @@ describe('task runtime plugin control', () => {
   });
   // Same live selection/owner checks as existing control points; a tool hook
   // that becomes stale defers to the engine rather than manufacturing denial.
-  it.each(['selection', 'owner'] as const)('keeps the native default after an in-flight %s change', async boundary => {
-    let settings: RuntimePluginSettings = { 'will-tool-call': [{ pluginId: 'original', onFailure: 'block' }] };
+  it.each((['selection', 'owner'] as const).flatMap(boundary =>
+    (['call', 'result'] as const).map(phase => ({ boundary, phase })),
+  ))('keeps the native default after an in-flight $boundary change at $phase', async ({ boundary, phase }) => {
+    const point = phase === 'call' ? 'will-tool-call' : 'did-tool-result';
+    let settings: RuntimePluginSettings = { [point]: [{ pluginId: 'original', onFailure: 'block' }] };
     let ownerCurrent = true;
     let resolve!: (value: GhostRuntimeControlPointResult) => void;
     const reply = new Promise<GhostRuntimeControlPointResult>(done => { resolve = done; });
     const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => ownerCurrent,
       screen: () => reply });
     const lifecycle = createPluginToolLifecycle({ readSettings: () => settings, control: () => control });
-    const event = { engine: 'pi' as const, phase: 'call' as const, toolName: 'bash', toolCallId: 'call', input: {} };
+    const event = { engine: 'pi' as const, phase, toolName: 'bash', toolCallId: 'call', input: {} };
     const pending = lifecycle.run('task', event);
     await Promise.resolve();
     if (boundary === 'selection') settings = {};

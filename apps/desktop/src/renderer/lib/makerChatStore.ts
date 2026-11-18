@@ -4143,16 +4143,34 @@ function _trimSessionMessages(sessionId: string): void {
   // 正在被看：读者视口必须在窗口尾部（贴底）。但渲染窗口会折叠工具过程、隐藏子代理
   // 内部行 —— 贴底不代表原始前缀已离屏（一轮提问+300 条折叠工具行+回答可以同屏），
   // 所以还必须按「渲染窗口覆盖地板」裁：窗口外的原始行没有 DOM，裁掉才可证不可见；
-  // 上翻阅读中不裁；快照缺 windowFloorClientId（旧快照/窗口未建立）时无法证明前缀
-  // 不可见，同样不裁。
+  // 上翻阅读中不裁；快照缺地板（旧快照/窗口未建立）时无法证明前缀不可见，同样不裁。
   if (_activeViewSessions.has(sessionId)) {
     const scroll = readSessionScroll(sessionId);
-    if (scroll?.isNearBottom === false) return;
-    const floorIdx = scroll?.windowFloorClientId
-      ? messageIndexByClientId(state.messages, scroll.windowFloorClientId)
-      : -1;
-    if (floorIdx < 0) return;
-    floors.push(floorIdx);
+    // 聚合所有挂载视图的地板：同会话双面板（如 Orca worker 面板 + 侧栏）各自记录，
+    // 旧快照/未带 viewId 的写入回退到单槽 windowFloorClientId。
+    const floorIds = scroll?.renderFloorsByView
+      ? Object.values(scroll.renderFloorsByView)
+      : scroll?.windowFloorClientId
+        ? [scroll.windowFloorClientId]
+        : [];
+    const floorIdxs = floorIds
+      .map((id) => messageIndexByClientId(state.messages, id))
+      .filter((idx) => idx >= 0);
+    // 没有任何可解析地板（旧快照/窗口未建立）时无法证明前缀不可见，不裁。
+    if (floorIdxs.length === 0) return;
+    const deepestFloorIdx = Math.min(...floorIdxs);
+    // isNearBottom 只在手动滚动时刷新：程序化钉底与窗口推进地板同步都不改它。
+    // 读过历史的挂载面板会留下残留 false，再叠加窗口推进同步进来的尾部地板，
+    // 豁免就变成永久 —— live push 无界堆积成刻度墙。豁免只保护「真的在看历史」：
+    // 任一视图的渲染窗口地板距尾超过暖读上限才算深读；所有地板都在尾部附近时，
+    // 各视图的读者窗口就是各自地板到结尾，裁掉更老的前缀不动任何视图。
+    if (
+      scroll?.isNearBottom === false &&
+      state.messages.length - deepestFloorIdx > WARM_READING_MAX_MESSAGES
+    ) {
+      return;
+    }
+    floors.push(...floorIdxs);
   }
   // 正在忙：不再整窗豁免，改为以「在途轮起始行」为地板 —— 完成轮照裁，运行轮整体
   // 保留（pending 交互、running 快照、远端乐观气泡都住在当前轮里）。轮起点是最后
@@ -15817,6 +15835,8 @@ function maybeAutoNameUnnamedSession(
  * 不能丢)。
  */
 type SendMessageOpts = {
+  /** Reuse the bubble already displayed during remote creation. */
+  firstMessageIdentity?: { clientId: string; createdAt: string };
   vendorOptions?: Record<string, unknown>;
   /** 本条消息正文前缀含「选中引用」编码块,渲染侧据此启用胶囊化解析。 */
   quotesEncoded?: boolean;
@@ -15976,10 +15996,12 @@ function sendMessage(
           opts,
           clearGenerationAtStart,
           remoteScopeAtStart,
+          undefined,
+          opts?.firstMessageIdentity,
         );
       }
       if (remoteScopeAtStart) {
-        const identity = {
+        const identity = opts?.firstMessageIdentity ?? {
           clientId: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
         };
@@ -17204,7 +17226,7 @@ function clearError(sessionId: string): void {
   });
 }
 
-function retryLastError(sessionId: string): Promise<void> {
+function retryLastError(sessionId: string, expected?: { expectedQueueHeadClientId: string; expectedSwitchRevision: number }): Promise<void> {
   if (!sessionId) return Promise.resolve();
   disposeLiveErrorPersist(sessionId);
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
@@ -17249,8 +17271,9 @@ function retryLastError(sessionId: string): Promise<void> {
     markLocalSentUserMessage(sessionId, preRetryQueueHeadClientId);
   }
   const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  const retryOpts = expected ? { ...boundaryOpts, ...expected } : boundaryOpts;
   return runAgentDispatchProjectionOperation(sessionId, (input) =>
-    boundaryOpts ? input.retryLastError(sessionId, boundaryOpts) : input.retryLastError(sessionId),
+    retryOpts ? input.retryLastError(sessionId, retryOpts) : input.retryLastError(sessionId),
   ).then(
     ({ projection }) => {
       // 一次性意图的兜底清理：正常路径下 applyInputProjection 已凭意图认领

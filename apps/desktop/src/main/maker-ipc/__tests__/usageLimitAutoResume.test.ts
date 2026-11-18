@@ -12,6 +12,7 @@ import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue';
 import type { ProviderView } from '@cindy/model-providers';
 import { resolveSessionUsageReset, type SessionUsageRoute, type SessionUsageResetDeps } from '../sessionUsageReset';
+import { createAutomaticContinueEligibility } from '../automaticContinueEligibility';
 
 const NOW = 1_000_000;
 const RESET_AT = NOW + 60 * 60 * 1000;
@@ -33,6 +34,32 @@ function remoteResetHarness() {
   } satisfies SessionUsageResetDeps;
   return { provider, route, deps, changeOwner: () => { owner = 'new-owner'; } };
 }
+
+// Unit regression: real eligibility + quota timer. Existing tests stubbed eligibility,
+// missing a remote companion's real Schedule run. Ordinary wakes have no quota owner.
+describe('remote companion scheduled quota wait', () => {
+  it.each(['resume', 'pause', 'takeover', 'shared', 'owner', 'local', 'no-run'] as const)('%s', async action => {
+    let paused = false; let owns = action !== 'no-run'; let shared = false; let owner = 'a';
+    const eligibility = createAutomaticContinueEligibility({
+      ownerEpoch: () => owner, isPaused: () => paused,
+      readSession: async () => ({ source: 'bot', status: 'active', agentDeviceId: action === 'local' ? null : 'remote' }),
+      isShared: () => shared, goalOwnsRecovery: async () => false,
+      readCompanion: async () => ({ role: 'canonical', profileStatus: 'active', hiddenAt: null, shadowed: false }),
+      ownsCompanionInput: () => false, ownsScheduledQuotaInput: () => owns,
+    });
+    const h = harness({ isEligible: eligibility.usageLimit });
+    expect(await h.guard.onTurnError('s', LIMIT)).toBe(action !== 'local' && action !== 'no-run');
+    if (action === 'local' || action === 'no-run') { expect(h.timers).toHaveLength(0); return; }
+    if (action === 'pause') paused = true;
+    if (action === 'takeover') owns = false;
+    if (action === 'shared') shared = true;
+    if (action === 'owner') { owner = 'b'; owns = false; }
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledTimes(action === 'resume' ? 1 : 0);
+    expect(await eligibility.providerGroup('s', { kind: 'before-send', clientId: 'retry', scheduled: true }))
+      .toBe(action === 'resume');
+  });
+});
 
 function harness(overrides: Partial<UsageLimitAutoResumeDeps> = {}) {
   const timers: Array<{ fn: () => void; delayMs: number; cleared: boolean }> = [];

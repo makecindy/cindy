@@ -5,10 +5,12 @@ import type { AutoResumeBookkeeping, SuppressedTurnErrorOwner } from './autoResu
 import {
   isContinuationOnlyAutoResumeReason,
   isInterruptedTurnError,
+  isUnexpectedWorkerStreamEnd,
   type InterruptedTurnAutoResumeGuard,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON, isBotCandidateUnavailable, canResumeAfterRuntimeFallback, type RuntimeFallbackResult } from './botCandidateRecovery.js';
+import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 
 type Hook<K extends keyof AgentInputCoordinatorDeps> = NonNullable<AgentInputCoordinatorDeps[K]>;
 
@@ -29,6 +31,8 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     | 'finalizeSuppressedError' | 'abandonUnconfirmedPersistedResume' | 'surfaceSuppressedErrorForRetry'
   >;
   botFallbackInputs: { has(createOpts: object): boolean };
+  workerInputs?: { has(createOpts: object): boolean };
+  scheduledQuotaInputs?: { has(createOpts: object): boolean };
   saveTurnStartedAtForDeferred(sessionId: string): void;
   beginSchedulerAutoResume(sessionId: string, runId: string, attemptToken: number): void;
   getStableSessionForTurnBoundary(sessionId: string): RuntimeSession | null | undefined;
@@ -61,17 +65,21 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  * surface or flush the held error when no attempt runs. Shared by the desktop and the Node Host.
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
-  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs,
+  inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
   notifySchedulerAutoResumeFailed, autoResumeAttemptToken, log,
 }: InterruptedTurnAutoResumeHookPorts<RuntimeSession>) {
   const canRecoverTurn = (signals: InterruptedTurnErrorSignals, item?: AgentInputQueuedMessage | null) =>
-    signals.reason === 'scheduler-snapshot-preparation'
+    item && scheduledQuotaInputs?.has(item.createOpts) && isAccountUsageLimitError(signals)
+      ? false // Same-provider quota waiting owns this run; never enter a cross-route candidate chain.
+      : signals.reason === 'scheduler-snapshot-preparation'
       ? item?.origin?.kind === 'scheduler' && !!item.origin.runId
       : signals.reason === 'orca-report-preparation'
       ? !!item?.orcaReportDelivery && item.origin?.kind === 'orca' && canRecoverUndeliveredOrcaReport(signals.message)
+      : signals.reason === 'session_event_loop_crashed'
+      ? !!item && workerInputs?.has(item.createOpts) === true && isUnexpectedWorkerStreamEnd(signals)
       : isInterruptedTurnError(signals) ||
         (!!item && botFallbackInputs.has(item.createOpts) && isBotCandidateUnavailable(signals));
   const hooks: {

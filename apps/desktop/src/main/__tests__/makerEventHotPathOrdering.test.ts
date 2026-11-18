@@ -1107,8 +1107,10 @@ describe('session context window budget reconciler', () => {
       source.indexOf('applyPendingAgentSwitch: async (sessionId, options) => {'),
       source.indexOf('providerGroupService?.beforeSend(', source.indexOf('applyPendingAgentSwitch: async (sessionId, options) => {')),
     );
-    expect(desktopSend).toContain('applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId)');
-    expect(desktopSend).toContain('replayPendingSessionContextWindowBudgetUnderLock(sessionId)');
+    const applySwitch = desktopSend.search(/await applyPendingAgentSwitchIfIdle\(agentSwitchDeps, sessionId[,)]/);
+    const replayBudget = desktopSend.indexOf('await replayPendingSessionContextWindowBudgetUnderLock(sessionId)');
+    expect(applySwitch).toBeGreaterThanOrEqual(0);
+    expect(replayBudget).toBeGreaterThan(applySwitch);
   });
 
   it('runs drift-recycle closes inside the rehydrate suppression window so the in-flight send survives (cancelled-before-dispatch regression)', async () => {

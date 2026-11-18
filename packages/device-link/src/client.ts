@@ -206,6 +206,10 @@ const RECOVERY_TRACE_WINDOW_MS = 30_000;
 // With the default 2s tick this allows 8KiB/s, capped at 120s per attempt. Small
 // messages retain their existing retry cadence; dead peers still exhaust retries.
 const RELIABLE_RETRY_BYTES_PER_INTERVAL = 16 * 1024;
+/** `reliablePeerTransport` 下，对端仍在送达时继续等确认的上限。 */
+const RELIABLE_UNDERLAY_ACK_PATIENCE_MS = 120_000;
+/** `reliablePeerTransport` 下，「对端仍在送达」要求最近这么久内收到过它的帧。 */
+const RELIABLE_UNDERLAY_ALIVE_WINDOW_MS = 10_000;
 const RELIABLE_RETRY_MAX_SIZE_INTERVALS = 60;
 /** 连续三次握手成功后仍没撑过稳定期，才把普通抖动升级为可见问题。 */
 const SHORT_LIVED_STREAK_LIMIT = 3;
@@ -363,10 +367,22 @@ export interface DeviceLinkClientOptions {
    */
   peerFailurePolicy?: DeviceLinkPeerFailurePolicy;
   /**
+   * 当前这条连接下面是否已经是逐对端可靠、按序送达的传输(Agent-Net:每台对端一条加密可靠流)。
+   * 为 true 时，单个对端可靠重试耗尽:
+   * - 这条消息首发之后对端一直有帧送到、最近仍在送，说明它活着，确认只是排在它自己正在发来的大数据后面
+   *   (慢线路上 1 MiB 结果要几十秒):在耐心上限内继续等，不复位、不重发;
+   * - 否则只复位这一个对端，不拆整条连接——这里拆的是整个 Agent-Net 节点，所有对端与中转上行一起断，
+   *   对端还要等它那边的旧连接超时才认新连接。
+   * 每次判断时取值；不传或返回 false 时行为与原来完全一样。不改变任何 wire 值。
+   */
+  reliablePeerTransport?: () => boolean;
+  /**
    * Peer 可靠传输复位时，是否让幂等的本地数据库读请求快速失败给 host，
    * 由 host 重开 link 后最多重试一次。写请求和长执行请求不走这条路径。
    */
   peerResetReadRetry?: boolean;
+  /** Foreground mobile screens also open links automatically while a peer is offline. */
+  backoffOfflineLinkOpen?: boolean;
   /**
    * invoke 结果传输编码（gzip 与内容标签，见 invokeTransfer.ts）。控制端提供
    * gunzipBase64 才声明可解 gzip；被控端提供 gzipBase64 / contentTag 才编码。
@@ -821,6 +837,10 @@ interface PeerTransportState {
    */
   lastBusinessSentAt: number | null;
   lastBusinessReceivedAt: number | null;
+  /** 最近一次收到这台对端转发来的任一帧(含 ACK 与可靠分片)的单调时刻；只给 `reliablePeerTransport` 判断对端是否仍在送达。 */
+  lastFrameReceivedAt: number;
+  /** 已为哪一个 seq 记过「确认排在对端数据后面、继续等」，同一条只记一次日志。 */
+  ackPatienceLoggedSeq?: number;
 }
 
 interface PendingInboundLinkOffer {
@@ -1675,7 +1695,10 @@ export class DeviceLinkClient {
 
   /** Fresh, current authority says the peer accepts outbound control again. */
   noteRemoteControlEnabled(deviceId: string): void {
-    if (!isScopedPeer(deviceId)) this.remoteControlDisabled.delete(deviceId);
+    if (isScopedPeer(deviceId)) return;
+    this.remoteControlDisabled.delete(deviceId);
+    // A fresh roster can recover the phone even if it missed the online push.
+    if (this.opts.backoffOfflineLinkOpen) this.peerOfflineGate.markReachable(deviceId);
   }
 
   /** Fresh, current authority says the peer refuses outbound control. */
@@ -2019,10 +2042,21 @@ export class DeviceLinkClient {
     return true;
   }
 
+  private admitPeerRequest(dst: string): void {
+    if (this.peerOfflineGate.isGated(dst)) {
+      // 已有直连说明对端可达，离线判断作废；否则窗口内与 relay 回绝同码同文、不触网。
+      if (this.directPaths.has(dst)) this.peerOfflineGate.markReachable(dst);
+      else if (this.peerOfflineGate.admit(dst) === 'blocked') {
+        throw new DeviceLinkError('DEVICE_OFFLINE', 'target device offline');
+      }
+    }
+  }
+
   /** 控制端:向目标设备发起 link-open,等待 link-accept */
   async openLink(dst: string, payload: unknown, timeoutMs?: number): Promise<LinkAcceptPayload> {
     // 主动开链 = 控制意图续新:清除出站关闭标记,后续 transport-timeout 恢复照常。
     this.getPeerTransport(dst).outboundExplicitlyClosed = false;
+    if (this.opts.backoffOfflineLinkOpen) this.admitPeerRequest(dst);
     const linkPayload = this.addLocalCapabilities(dst, payload);
     const id = createRequestId();
     const attestation = this.opts.transportAttestation?.(dst, id);
@@ -2132,13 +2166,7 @@ export class DeviceLinkClient {
     if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) {
       throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
     }
-    if (this.peerOfflineGate.isGated(dst)) {
-      // 已有直连说明对端可达，离线判断作废；否则窗口内与 relay 回绝同码同文、不触网。
-      if (this.directPaths.has(dst)) this.peerOfflineGate.markReachable(dst);
-      else if (this.peerOfflineGate.admit(dst) === 'blocked') {
-        throw new DeviceLinkError('DEVICE_OFFLINE', 'target device offline');
-      }
-    }
+    this.admitPeerRequest(dst);
     const requestId = createRequestId();
     const queuedAt = this.monotonicNow();
     // 调度槽的上限，也是增量失败后重发可用的总预算。
@@ -3187,6 +3215,8 @@ export class DeviceLinkClient {
         this.lastPeerInboundAt = this.lastInboundAt;
         // 对端发来的任何路由帧都证明它在线，上线后第一笔调用不再等退避窗口。
         this.peerOfflineGate.markReachable(env.src);
+        const sender = this.peerTransport.get(env.src);
+        if (sender) sender.lastFrameReceivedAt = this.lastInboundAt;
       }
       if (this.networkProbeTimer) {
         clearTimeout(this.networkProbeTimer);
@@ -3490,6 +3520,12 @@ export class DeviceLinkClient {
           if (env.kind === 'invoke-result' && env.src) this.logRecoveryStage(env.src, 'first-response-received');
           p.resolve(env);
           return true;
+        }
+        // A result whose request already settled here (usually timed out): the host
+        // finished after this side stopped waiting. Logged so the two sides line up.
+        if (!p && env.kind === 'invoke-result') {
+          this.log.debug(`device-link late invoke-result src=${shortDeviceRef(env.src)}`
+            + ` request=${typeof env.id === 'string' ? env.id.slice(0, 8) : 'none'}`);
         }
         return this.emitFrame(env);
       }
@@ -5262,6 +5298,7 @@ export class DeviceLinkClient {
         lastInboundPath: 'relay',
         lastBusinessSentAt: null,
         lastBusinessReceivedAt: null,
+        lastFrameReceivedAt: Number.NEGATIVE_INFINITY,
       };
       this.peerTransport.set(dst, peer);
     }
@@ -6239,7 +6276,7 @@ export class DeviceLinkClient {
       this.timing.handshakeTimeoutMs * 2,
       retransmitBaseMs(peer.rtt, normalizeTransportRetryInterval(this.timing.transportRetryIntervalMs)) * attempts,
     );
-    confirmation.timer = setTimeout(() => {
+    const onConfirmationTimeout = () => {
       confirmation.timer = null;
       if (
         peer.pendingLinkConfirmation !== confirmation
@@ -6249,12 +6286,19 @@ export class DeviceLinkClient {
       ) {
         return;
       }
+      // 下层逐对端可靠、对端仍在送达时再等一轮（总共不超过 RELIABLE_UNDERLAY_ACK_PATIENCE_MS，见 peerStillDelivering）。
+      // 这是唯一的计时器：不重新计时就直接返回的话，这个对端一直停在等确认，发给它的结果只排队（2026-11-17 review）。
+      if (this.opts.reliablePeerTransport?.() === true && this.peerStillDelivering(dst, peer, confirmation.minimumAckSeq)) {
+        confirmation.timer = setTimeout(onConfirmationTimeout, confirmationTimeoutMs);
+        return;
+      }
       this.log.warn(
         `device-link link confirmation timeout for ${shortDeviceRef(dst)}`
         + ` request=${requestId.slice(0, 8)}; resetting peer link`,
       );
       this.handleReliableRetryExhausted(dst, confirmation.minimumAckSeq);
-    }, confirmationTimeoutMs);
+    };
+    confirmation.timer = setTimeout(onConfirmationTimeout, confirmationTimeoutMs);
   }
 
   /**
@@ -6353,22 +6397,27 @@ export class DeviceLinkClient {
   private handleReliableRetryExhausted(dst: string, seq: number): void {
     if (this.stopped || this.status !== 'online') return;
     const peer = this.peerTransport.get(dst);
+    // 下层逐对端可靠(Agent-Net)时，整条连接是整个节点:单个对端的故障不拆它，见 `reliablePeerTransport`。
+    const reliableUnderlay = this.opts.reliablePeerTransport?.() === true;
     // retry callback 与显式 close/stop 竞态时 peer 可能已经被回收。Mobile 的
     // 隔离策略不能把迟到计时器升级成连接级重建；默认策略仍保留历史语义。
     if (!peer) {
-      if (!this.opts.peerFailurePolicy || this.opts.peerFailurePolicy === 'legacy') {
+      if ((!this.opts.peerFailurePolicy || this.opts.peerFailurePolicy === 'legacy') && !reliableUnderlay) {
         this.forceReconnectForReliableTimeout(dst, seq);
       }
       return;
     }
+    if (reliableUnderlay && this.peerStillDelivering(dst, peer, seq)) return;
     // 能力门:旧控制端(未声明 transport-timeout-close-v1)把未知 reason 当永久
     // 关闭且不会自动重开——relay/presence 保持在线时订阅与在途请求会静默挂死。
     // 对这类对端保留整连接重连的兼容恢复路径(presence 闪断触发其既有 rehydrate)。
+    // 下层逐对端可靠时，对端那一侧看到的是加密连接的断开或重连,不依赖 presence 闪断,只复位这一个对端。
     const isolatePeer = this.opts.peerFailurePolicy === 'isolate-peer'
       || (this.opts.peerFailurePolicy === 'isolate-outbound' && !peer.linkAcceptedInbound);
     if (
       (!peer.linkAcceptedInbound || !peer.supportsTransportTimeoutClose)
       && !isolatePeer
+      && !reliableUnderlay
     ) {
       this.forceReconnectForReliableTimeout(dst, seq);
       return;
@@ -6483,6 +6532,31 @@ export class DeviceLinkClient {
         this.ensureRetryTimer(dst);
       }
     }
+  }
+
+  /**
+   * 下层逐对端可靠时，确认没回来最常见的原因是它排在对端自己正在发来的大数据后面:同一条加密流先进先出，
+   * 慢线路上 1 MiB 结果要几十秒(2026-11-13 基线：每秒 64 KB 的线路上 30 秒确认超时触发整节点重连，
+   * 3 分钟内没有恢复，见 docs/benchmarks/agent-net-session-2026-11-13)。这条消息首发之后对端一直有帧送到、
+   * 最近一次还在活动窗口内，就继续等，不复位也不重发；对端安静下来或超过耐心上限(例如它丢了这条消息)，
+   * 再交给对端级复位。
+   */
+  private peerStillDelivering(dst: string, peer: PeerTransportState, seq: number): boolean {
+    const head = peer.pending.get(seq) ?? (peer.pending.values().next().value as PendingReliableMessage | undefined);
+    const firstSentAt = head?.firstSentAt;
+    if (firstSentAt === undefined) return false;
+    const now = this.monotonicNow();
+    if (peer.lastFrameReceivedAt <= firstSentAt || now - peer.lastFrameReceivedAt > RELIABLE_UNDERLAY_ALIVE_WINDOW_MS) return false;
+    if (now - firstSentAt > RELIABLE_UNDERLAY_ACK_PATIENCE_MS) return false;
+    if (peer.ackPatienceLoggedSeq !== seq) {
+      peer.ackPatienceLoggedSeq = seq;
+      this.log.info(
+        `reliable transport ACK delayed behind peer traffic; keeping link`
+        + ` ${this.describeReliableTimeout(dst, seq, peer)}`
+        + ` receivedAgoMs=${Math.round(now - peer.lastFrameReceivedAt)}`,
+      );
+    }
+    return true;
   }
 
   private forceReconnectForReliableTimeout(dst: string, seq: number): void {
@@ -6969,6 +7043,11 @@ const UNLINKED_LEGACY_PUSH_CHANNELS = new Set([
   PLUGIN_SYNC_CHANNEL,
   'device-link:voice:dictionary:snapshot',
 ]);
+
+/** A push that needs no control link (same-account request or sync); every other push arrives only on an open link. */
+export function isUnlinkedPushChannel(channel: string): boolean {
+  return UNLINKED_LEGACY_PUSH_CHANNELS.has(channel);
+}
 
 function isUnlinkedLegacyEnvelope(env: Envelope): boolean {
   const payload = env.payload as { channel?: unknown } | undefined;

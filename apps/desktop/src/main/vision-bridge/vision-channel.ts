@@ -17,6 +17,8 @@
  *    provider-oauth-header / oauth-token）暂不支持 —— 该后端判为不可用，走 fallback/回退。
  */
 import fs from 'node:fs/promises';
+import { withAuxiliaryUsage } from '../usage/auxiliaryUsage.js';
+import { parseAuxiliaryTokens } from '../../shared/auxiliaryUsage.js';
 
 import { isCodexGatewayWireModel, resolvePiModelWireProtocol, type AgentKind, type Provider } from '@cindy/model-providers';
 
@@ -74,6 +76,7 @@ export interface VisionChannelDeps {
 }
 
 export interface VisionChannelInput {
+  sessionId?: string;
   /** 图片来源之一：本地绝对路径。 */
   imagePath?: string;
   /** 图片来源之一：http(s) / data: URL。 */
@@ -316,69 +319,80 @@ export async function describeImageWithProvider(
     catalogPresetId: endpoint.catalogPresetId,
     upstream: endpoint.upstream,
   }) ?? {};
-  const imageUrl = await resolveImageUrl(input);
-  const prompt =
-    input.prompt && input.prompt.trim().length > 0 ? input.prompt.trim() : DEFAULT_VISION_PROMPT;
+  return withAuxiliaryUsage({ source: 'vision-bridge', providerId, model: endpoint.model,
+    sessionId: input.sessionId, transport: endpoint.wireProtocol }, async record => {
+    const observe = async (body: unknown) => {
+      const tokens = parseAuxiliaryTokens(body, endpoint.wireProtocol);
+      const model = (body as { model?: unknown } | null)?.model;
+      if (tokens) await record(tokens, typeof model === 'string' && model ? { model } : {});
+    };
+    const imageUrl = await resolveImageUrl(input);
+    const prompt =
+      input.prompt && input.prompt.trim().length > 0 ? input.prompt.trim() : DEFAULT_VISION_PROMPT;
 
-  // 按 wire 协议构造对应请求体（对齐 agent 上游形态）：
-  //  - openai-chat → messages[].content[] 里 image_url
-  //  - openai-responses → input[].content[] 里 input_image
-  //  - anthropic-messages → messages[].content[] 里 image block
-  const body = buildVisionRequestBody(endpoint.wireProtocol, endpoint.model, prompt, imageUrl);
+    // 按 wire 协议构造对应请求体（对齐 agent 上游形态）：
+    //  - openai-chat → messages[].content[] 里 image_url
+    //  - openai-responses → input[].content[] 里 input_image
+    //  - anthropic-messages → messages[].content[] 里 image block
+    const body = buildVisionRequestBody(endpoint.wireProtocol, endpoint.model, prompt, imageUrl);
 
-  const fetchImpl = deps.fetch ?? globalThis.fetch;
-  const timeoutMs = deps.timeoutMs ?? 30000;
-  let res: Response;
-  // 组合 signal：调用方取消（turn abort）+ 超时。Stop/取消能中止视觉请求，不再等超时。
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const effectiveSignal = input.signal
-    ? AbortSignal.any([input.signal, timeoutSignal])
-    : timeoutSignal;
-  try {
-    res = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...headers },
-      body: JSON.stringify(body),
-      // 安全：视觉请求携带 Authorization 头与图片内容，跟随 30x 重定向会把凭证/图片
-      // 发往非预期端点。显式拒绝重定向（fetch 对 30x 回原样响应，调用方按 !res.ok 处理）。
-      redirect: 'error',
-      signal: effectiveSignal,
-    });
-  } catch (err) {
-    // 区分取消/超时/网络：便于诊断（Stop 取消 vs 后端超时 vs DNS/连接失败）。
-    if (effectiveSignal.aborted) {
-      if (input.signal?.aborted) {
-        throw new VisionBackendError('abort', 'vision request cancelled');
-      }
-      throw new VisionBackendError('timeout', `vision request timed out: ${url}`);
-    }
-    throw new VisionBackendError('network', `vision request failed: ${url}`, err);
-  }
-  if (!res.ok) {
-    let bodyText = '';
+    const fetchImpl = deps.fetch ?? globalThis.fetch;
+    const timeoutMs = deps.timeoutMs ?? 30000;
+    let res: Response;
+    // 组合 signal：调用方取消（turn abort）+ 超时。Stop/取消能中止视觉请求，不再等超时。
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const effectiveSignal = input.signal
+      ? AbortSignal.any([input.signal, timeoutSignal])
+      : timeoutSignal;
     try {
-      bodyText = (await res.text()).slice(0, 512);
-    } catch {
-      // 忽略 body 读取失败
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+        // 安全：视觉请求携带 Authorization 头与图片内容，跟随 30x 重定向会把凭证/图片
+        // 发往非预期端点。显式拒绝重定向（fetch 对 30x 回原样响应，调用方按 !res.ok 处理）。
+        redirect: 'error',
+        signal: effectiveSignal,
+      });
+    } catch (err) {
+      // 区分取消/超时/网络：便于诊断（Stop 取消 vs 后端超时 vs DNS/连接失败）。
+      if (effectiveSignal.aborted) {
+        if (input.signal?.aborted) {
+          throw new VisionBackendError('abort', 'vision request cancelled');
+        }
+        throw new VisionBackendError('timeout', `vision request timed out: ${url}`);
+      }
+      throw new VisionBackendError('network', `vision request failed: ${url}`, err);
     }
-    throw new VisionBackendError('http', `vision backend returned ${res.status}`, bodyText);
-  }
-  let parsed: unknown;
-  try {
-    parsed = await res.json();
-  } catch (err) {
-    // 2xx 但响应非 JSON：后端协议错（非网络问题），归 http 以便诊断。
-    throw new VisionBackendError('http', 'vision backend returned non-JSON response', err);
-  }
-  const content = extractVisionContent(parsed, endpoint.wireProtocol);
-  if (!content || content.trim().length === 0) {
-    throw new VisionBackendError('empty', 'vision backend returned empty description');
-  }
-  // 裁剪超长描述（异常/恶意后端可返回超大 content，撑爆内存与上下文）。
-  const trimmed = content.trim();
-  return trimmed.length > MAX_DESCRIPTION_CHARS
-    ? `${trimmed.slice(0, MAX_DESCRIPTION_CHARS)}…[truncated]`
-    : trimmed;
+    if (!res.ok) {
+      let bodyText = '';
+      try {
+        const raw = await res.text();
+        try { await observe(JSON.parse(raw)); } catch { /* Non-JSON errors have no usage facts. */ }
+        bodyText = raw.slice(0, 512);
+      } catch {
+        // 忽略 body 读取失败
+      }
+      throw new VisionBackendError('http', `vision backend returned ${res.status}`, bodyText);
+    }
+    let parsed: unknown;
+    try {
+      parsed = await res.json();
+    } catch (err) {
+      // 2xx 但响应非 JSON：后端协议错（非网络问题），归 http 以便诊断。
+      throw new VisionBackendError('http', 'vision backend returned non-JSON response', err);
+    }
+    await observe(parsed);
+    const content = extractVisionContent(parsed, endpoint.wireProtocol);
+    if (!content || content.trim().length === 0) {
+      throw new VisionBackendError('empty', 'vision backend returned empty description');
+    }
+    // 裁剪超长描述（异常/恶意后端可返回超大 content，撑爆内存与上下文）。
+    const trimmed = content.trim();
+    return trimmed.length > MAX_DESCRIPTION_CHARS
+      ? `${trimmed.slice(0, MAX_DESCRIPTION_CHARS)}…[truncated]`
+      : trimmed;
+  });
 }
 
 /** 从各协议响应抽文字描述。返回 null 表示无描述（空响应）。 */

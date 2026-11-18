@@ -256,6 +256,8 @@
     "notSent": "Não enviado",
     "imagesNotUploaded_one": "Não foi possível carregar {{count}} imagem",
     "imagesNotUploaded_other": "Não foi possível carregar {{count}} imagens",
+    "waitingForNamedComputer": "Envio automático quando {{name}} se ligar",
+    "reconnectComputer": "Voltar a ligar",
     "waitingForComputer": "Será enviado quando o computador voltar a estar disponível",
     "waitingForNetwork": "Será enviado quando voltar a estar online",
     "queued": "Em fila",
