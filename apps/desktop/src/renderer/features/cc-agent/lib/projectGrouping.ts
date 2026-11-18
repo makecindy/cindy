@@ -223,8 +223,8 @@ export function filterPersistentLocalProjectsByLastActivity(
 
 /**
  * The sessions and persistent projects the sidebar groups into its project tree.
- * The teammate filter is deliberately ignored here: it narrows task rows only
- * (see sidebarProjectRows), so choosing a teammate never removes project folders.
+ * The teammate filter is deliberately ignored here and applied in sidebarProjectRows,
+ * so choosing a teammate never removes ordinary project folders.
  */
 export function sidebarGroupingInput(
   sessions: readonly Session[],
@@ -239,19 +239,26 @@ export function sidebarGroupingInput(
   };
 }
 
+/** 「筛选 → 伙伴」：只决定伙伴的文件夹和伙伴的任务；null 表示全部伙伴。 */
+export interface SidebarTeammateFilter {
+  session: (session: Session) => boolean;
+  project: (project: ProjectNode) => boolean;
+}
+
 /**
- * Rows shown under each project node. The vendor filter decides which projects
- * stay (as before); the teammate filter only narrows the rows inside them, so a
- * project with no matching teammate task stays as an empty folder.
+ * Project nodes and their rows after the vendor and teammate filters. The
+ * teammate filter hides only teammate folders and teammate tasks; ordinary
+ * projects stay exactly as without it.
  */
 export function sidebarProjectRows(
   projects: readonly ProjectNode[],
   vendor: string,
-  sessionMatchesCreators: ((session: Session) => boolean) | null,
+  teammateFilter: SidebarTeammateFilter | null,
 ): ProjectNode[] {
   const vendorPredicate =
     vendor === 'all' ? null : (session: Session) => (session.agentKind ?? 'cc') === vendor;
   return projects.flatMap((project) => {
+    if (teammateFilter && !teammateFilter.project(project)) return [];
     const matchingSessions = vendorPredicate ? project.sessions.filter(vendorPredicate) : project.sessions;
     if (
       matchingSessions.length === 0 &&
@@ -259,7 +266,7 @@ export function sidebarProjectRows(
     )
       return [];
     const rows = matchingSessions.filter(
-      (session) => session.pinnedAt == null && (sessionMatchesCreators === null || sessionMatchesCreators(session)),
+      (session) => session.pinnedAt == null && (teammateFilter === null || teammateFilter.session(session)),
     );
     return [withProjectSessions(project, rows)];
   });

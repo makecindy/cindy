@@ -25,9 +25,15 @@ import {
   persistentProjectMatchesVendor,
   sidebarGroupingInput,
   sidebarProjectRows,
+  type ProjectNode,
 } from '@/features/cc-agent/lib/projectGrouping';
 import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
-import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
+import {
+  matchesSidebarTeammateFilter,
+  sidebarTeammateProjectVisible,
+  taskCreatorProjectKey,
+  taskCreatorSessionKey,
+} from '@/features/bots/botFollowScopes';
 import {
   gcProjectsAgainstActive,
   normalizeManualPinnedOrder,
@@ -1191,39 +1197,46 @@ describe('groupSessions', () => {
 /**
  * 测试价值
  * - 生产入口与可观察结果：CCAgentSidebarUpper 用 sidebarGroupingInput → groupSessions →
- *   sidebarProjectRows 生成侧栏项目树；用户看到的是项目文件夹与其中的任务行。
- * - Bug：选「筛选 → 伙伴 → 产品巡检伙伴」时只剩该伙伴的项目，其他项目文件夹消失；
- *   原因是伙伴筛选在分组前过滤任务并清空持久项目，项目集合从筛选后的任务反推。
+ *   sidebarProjectRows，配合 matchesSidebarTeammateFilter / sidebarTeammateProjectVisible
+ *   生成侧栏项目树；用户看到的是项目文件夹与其中的任务行。
+ * - Bug：选「筛选 → 伙伴 → 产品巡检伙伴」时只剩该伙伴的文件夹，项目、Harness 下的其他
+ *   文件夹全部消失。规则：伙伴筛选只管伙伴文件夹与伙伴任务，「都不显示」隐藏全部伙伴文件夹，
+ *   普通项目与普通任务不受影响。
  * - 现有覆盖缺口：只测了最近活跃与 vendor 两个维度，没有伙伴维度。
  * - 最小失败输入：一个普通项目 + 一个伙伴项目，伙伴筛选选该伙伴。
  * - tier：unit（纯函数，无 IO）。
  */
-describe('sidebar teammate filter keeps the project tree', () => {
-  const PATROL = '/Users/me/owners/o1/bots/patrol/workspace';
-  const NOTE = '/Users/me/owners/o1/bots/note/workspace';
-  const cindyTask = s({ id: 'cindy-task', workingDir: '/work/app' });
+describe('sidebar teammate filter only narrows teammate content', () => {
+  const owners = '/Users/me/owners/o1/bots';
+  const CINDY = `${owners}/cindy/workspace`;
+  const PATROL = `${owners}/patrol/workspace`;
+  const NOTE = `${owners}/note/workspace`;
   const sessions = [
-    cindyTask,
+    s({ id: 'cindy-in-app', workingDir: '/work/app' }),
     s({ id: 'user-app', workingDir: '/work/app' }),
     s({ id: 'user-site', workingDir: '/work/site' }),
+    s({ id: 'cindy-own', workingDir: CINDY }),
     s({ id: 'patrol-task', workingDir: PATROL }),
     s({ id: 'note-task', workingDir: NOTE }),
   ];
   const persistent = [{ workingDir: '/work/empty', lastUsedAt: '2026-01-01T00:00:00.000Z', knownAgentKinds: [] }];
-  const allProjects = ['/work/app', '/work/empty', '/work/site', NOTE, PATROL].sort();
-  // Cindy opened a task in an ordinary project; other teammates own their workspace folder.
-  const creatorOf = (session: Session) =>
-    session.id === cindyTask.id ? 'cindy' : teammateFolderOfProjectPath(session.workingDir);
-  const predicateFor = (selected: 'all' | 'none' | string) =>
-    selected === 'all' ? null
-      : selected === 'none' ? (session: Session) => creatorOf(session) === null
-        : (session: Session) => creatorOf(session) === selected;
+  const ordinary = ['/work/app', '/work/empty', '/work/site'];
+  // Same shape useTaskCreatorIndex builds: each teammate owns its folder; Cindy also opened a task elsewhere.
+  const index = new Map<string, ReadonlySet<string>>([
+    [taskCreatorProjectKey('cindy'), new Set(['cindy'])],
+    [taskCreatorProjectKey('patrol'), new Set(['patrol'])],
+    [taskCreatorProjectKey('note'), new Set(['note'])],
+    [taskCreatorSessionKey('cindy-in-app'), new Set(['cindy'])],
+  ]);
 
-  function sidebar(selected: 'all' | 'none' | string, lastActivityCutoffMs: number | null = null) {
-    const sessionMatchesCreators = predicateFor(selected);
+  function sidebar(selected: 'all' | 'none' | readonly string[], lastActivityCutoffMs: number | null = null) {
+    const teammateFilter = selected === 'all' ? null : {
+      session: (session: Session) => matchesSidebarTeammateFilter(session, selected, index),
+      project: (project: ProjectNode) => sidebarTeammateProjectVisible(project, selected, index),
+    };
     const input = sidebarGroupingInput(sessions, persistent, lastActivityCutoffMs, sessionActivityMs);
     const groups = groupSessions(input.sessions, { persistentLocalProjects: input.persistentLocalProjects });
-    const rows = sidebarProjectRows(groups.projects, 'all', sessionMatchesCreators);
+    const rows = sidebarProjectRows(groups.projects, 'all', teammateFilter);
     return {
       projects: rows.map((project) => project.workingDir).sort(),
       tasks: rows.flatMap((project) => project.sessions.map((session) => session.id)).sort(),
@@ -1231,22 +1244,26 @@ describe('sidebar teammate filter keeps the project tree', () => {
   }
 
   it.each([
-    ['all', ['cindy-task', 'note-task', 'patrol-task', 'user-app', 'user-site']],
-    ['none', ['user-app', 'user-site']],
-    ['cindy', ['cindy-task']],
-    ['patrol', ['patrol-task']],
-    ['note', ['note-task']],
-  ])('teammate filter %s keeps every project and shows only matching tasks', (selected, tasks) => {
-    expect(sidebar(selected)).toEqual({ projects: allProjects, tasks });
+    ['all', 'all', [CINDY, NOTE, PATROL], ['cindy-in-app', 'cindy-own', 'note-task', 'patrol-task']],
+    ['none', 'none', [], []],
+    ['Cindy', ['cindy'], [CINDY], ['cindy-in-app', 'cindy-own']],
+    ['产品巡检伙伴', ['patrol'], [PATROL], ['patrol-task']],
+    ['小记', ['note'], [NOTE], ['note-task']],
+  ] as const)('%s keeps ordinary projects and shows only the chosen teammate folders', (_, selected, folders, teammateTasks) => {
+    expect(sidebar(selected)).toEqual({
+      projects: [...ordinary, ...folders].sort(),
+      tasks: ['user-app', 'user-site', ...teammateTasks].sort(),
+    });
   });
 
-  it('keeps the project set stable while switching between teammates', () => {
-    const sets = ['all', 'none', 'cindy', 'patrol', 'note', 'all'].map((selected) => sidebar(selected).projects);
-    expect(new Set(sets.map((set) => set.join('|')))).toEqual(new Set([allProjects.join('|')]));
+  it('keeps ordinary projects unchanged while switching between teammates', () => {
+    for (const selected of ['all', 'none', ['cindy'], ['patrol'], ['note']] as const) {
+      expect(sidebar(selected).projects.filter((dir) => !dir.startsWith(owners))).toEqual(ordinary);
+    }
   });
 
   it('still lets the last-activity filter drop projects with no recent task', () => {
-    expect(sidebar('patrol', Date.parse('2027-01-01T00:00:00.000Z'))).toEqual({ projects: [], tasks: [] });
+    expect(sidebar(['patrol'], Date.parse('2027-01-01T00:00:00.000Z'))).toEqual({ projects: [], tasks: [] });
   });
 });
 

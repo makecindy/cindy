@@ -1,4 +1,9 @@
-import { matchesTaskCreators, useTaskCreatorIndex, useTaskCreatorOptions } from '@/features/bots/botFollowScopes';
+import {
+  matchesSidebarTeammateFilter,
+  sidebarTeammateProjectVisible,
+  useTaskCreatorIndex,
+  useTaskCreatorOptions,
+} from '@/features/bots/botFollowScopes';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
@@ -1622,12 +1627,16 @@ function ExpandedView({
   );
 
   const taskCreatorIndex = useTaskCreatorIndex();
-  // 「筛选 → 伙伴」只筛任务行；项目树由 sidebarGroupingInput 决定，伙伴筛选不改变项目集合。
-  const sessionMatchesCreators = useMemo(() => {
+  // 「筛选 → 伙伴」只管伙伴的文件夹和伙伴的任务；普通项目和普通任务不受影响。
+  const teammateFilter = useMemo(() => {
     const selected = filter.creators;
     if (selected === 'all') return null;
-    return (s: Session) => matchesTaskCreators(s, selected, taskCreatorIndex);
+    return {
+      session: (s: Session) => matchesSidebarTeammateFilter(s, selected, taskCreatorIndex),
+      project: (project: ProjectNode) => sidebarTeammateProjectVisible(project, selected, taskCreatorIndex),
+    };
   }, [filter.creators, taskCreatorIndex]);
+  const sessionMatchesCreators = teammateFilter?.session ?? null;
   const groupingInput = useMemo(
     () =>
       sidebarGroupingInput(
@@ -2119,7 +2128,7 @@ function ExpandedView({
       (project) =>
         !projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform),
     );
-    const projects = sidebarProjectRows(unpinnedProjects, filter.vendor, sessionMatchesCreators);
+    const projects = sidebarProjectRows(unpinnedProjects, filter.vendor, teammateFilter);
     return sortProjectsForSidebar(
       projects,
       hostProjectSort.sortBy,
@@ -2132,7 +2141,7 @@ function ExpandedView({
     visibleProjects,
     pinnedProjectComparisonKeys,
     localPlatform,
-    sessionMatchesCreators,
+    teammateFilter,
     filter.vendor,
     hostProjectSort,
     projectPriorityContext,
@@ -2141,7 +2150,7 @@ function ExpandedView({
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
   // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
   const visibleRailProjectsWithVendor = useMemo(() => {
-    const projects = sidebarProjectRows(visibleProjects, filter.vendor, sessionMatchesCreators);
+    const projects = sidebarProjectRows(visibleProjects, filter.vendor, teammateFilter);
     return sortProjectsForSidebar(
       projects,
       hostProjectSort.sortBy,
@@ -2150,7 +2159,7 @@ function ExpandedView({
       localPlatform,
       projectPriorityContext,
     );
-  }, [visibleProjects, sessionMatchesCreators, filter.vendor, hostProjectSort, localPlatform, projectPriorityContext]);
+  }, [visibleProjects, teammateFilter, filter.vendor, hostProjectSort, localPlatform, projectPriorityContext]);
 
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter
