@@ -2351,6 +2351,7 @@ describe("chrome toggle, loading and video pages", () => {
       expect(isMounted('message.imageLightboxVideoWebPlayer')).toBe(false);
       expect(resolver).toHaveBeenCalledTimes(2);
       expect(consumers).toBe(0);
+      expect(runtime.nodes.get('message.videoDownload').source).toBe(null);
       if (refreshResult === 'rejected') {
         act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 400 } } }));
         act(() => runtime.nodes.get('FlatList').onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 0 } } }));

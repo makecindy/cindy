@@ -597,6 +597,16 @@ export const ImageLightbox = memo(function ImageLightbox({
     resolveImage(image, true, true);
   }, [resolveImage]);
 
+  const handleVideoSourceUnavailable = useCallback((
+    image: MobileMessageGalleryImage, source: MobileResolvedRemoteMedia, error: unknown,
+  ) => {
+    setResolveMap((prev) => {
+      const current = prev[image.url];
+      if (current?.status !== 'ready' || current.media !== source) return prev;
+      return { ...prev, [image.url]: { status: 'error', error, media: source } };
+    });
+  }, []);
+
   // 取件成功但原生 Image 加载失败(典型:桌面去重缓存返回了已被删除的悬空 key,
   // presign 下载 404)→ 一次性 forceRefresh 重取自愈,再失败落错误态给重试按钮。
   const handleImageLoadError = useCallback((image: MobileMessageGalleryImage) => {
@@ -892,6 +902,7 @@ export const ImageLightbox = memo(function ImageLightbox({
               insetBottom={chromeBottom}
               insetTop={chromeTop}
               onRetry={handleRetryPage}
+              onSourceUnavailable={handleVideoSourceUnavailable}
               onToggleChrome={toggleChrome}
               previewUri={previewUriFor(item)}
                 resolveOpaqueSource={resolveOpaqueSource}
@@ -2101,6 +2112,7 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
   insetBottom,
   insetTop,
   onRetry,
+  onSourceUnavailable,
   onToggleChrome,
   previewUri,
   resolveState,
@@ -2114,6 +2126,7 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
   insetBottom: number;
   insetTop: number;
   onRetry(image: MobileMessageGalleryImage): void;
+  onSourceUnavailable(image: MobileMessageGalleryImage, source: MobileResolvedRemoteMedia, error: unknown): void;
   onToggleChrome(): void;
   previewUri: string | null;
   resolveState: PageResolveState | null;
@@ -2140,8 +2153,8 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
   ));
   const protectLocalFile = resolveState?.media?.protectLocalFile;
   const leaseRefreshUsed = useRef(false);
-  const leaseRetry = useRef({ image, onRetry });
-  leaseRetry.current = { image, onRetry };
+  const leaseRetry = useRef({ image, onRetry, onSourceUnavailable });
+  leaseRetry.current = { image, onRetry, onSourceUnavailable };
   useEffect(() => {
     if (!active) { leaseRefreshUsed.current = false; return; }
     if (!uri || resolveState?.status !== 'ready') return;
@@ -2149,13 +2162,13 @@ const LightboxVideoPage = memo(function LightboxVideoPage({
     // Keep its Range URL alive until paging, close, or source replacement.
     try {
       return protectLocalFile?.();
-    } catch {
+    } catch (error) {
       // Releasing the last consumer can close a cached stream. On returning to
       // this page, refresh once; a failed refresh keeps the existing retry UI.
       if (!leaseRefreshUsed.current) {
         leaseRefreshUsed.current = true;
         leaseRetry.current.onRetry(leaseRetry.current.image);
-      } else setWebFailedUri(uri);
+      } else leaseRetry.current.onSourceUnavailable(leaseRetry.current.image, resolveState.media, error);
     }
   }, [active, protectLocalFile, resolveState?.status, uri]);
   const handleNativeError = useCallback(() => {
