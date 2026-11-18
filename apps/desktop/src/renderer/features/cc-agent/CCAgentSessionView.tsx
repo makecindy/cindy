@@ -1020,7 +1020,7 @@ function CCAgentSessionContent({
   const controlledBannerCollapsed = useComposerCollapsed(sessionId ?? null);
   const isMac = window.electronAPI?.platform === 'darwin';
   // messageWidth：消息流容器宽度（视觉边距 50px / compact 20px）
-  // inputWidth：ChatInput / 状态栏 / workingDir 行的宽度（视觉边距 40px / compact 10px）
+  // inputWidth：普通任务填满 pane（边距40px / compact10px）；其他聊天沿用消息宽+20。
   // doc rail 内嵌场景(isCompactRail)恒 compact;主会话不显式传 compact,由 hook
   // 自身按实测容器宽 `< AUTO_COMPACT_THRESHOLD`(700px)自动切 compact——右栏打开
   // 把主区压到阈值之下时, padding 50→20 平滑收紧,不臃肿。
@@ -6028,7 +6028,7 @@ function CCAgentSessionContent({
 
         {/* Input overlay — sticky at bottom with gradient fade.
            左右 padding 由 useProportionalWidth.inputPad 计算:默认 40,compact
-           rail 为 0。inputWidth = messageWidth + 20,每侧多 10px,正好填满 overlay。 */}
+           rail 为10。普通任务输入填满 overlay，其他聊天保留 messageWidth+20。 */}
         <div
           ref={overlayRef}
           style={{ left: inputPad, right: inputPad }}

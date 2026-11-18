@@ -6875,9 +6875,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
           >
             <div
               className="relative flex w-full flex-col items-start"
-              // 与进行中对话页同源:内容列宽度跟随 useProportionalWidth 算出的
-              // inputWidth(封顶 914+20=934px,见 hook 首参),不再死锁 800——大屏留出
-              // 左右呼吸空间、窄屏自适应收窄,且发送后同一个 ChatInput 无宽度跳变。
+              // 与进行中任务同源：输入区按实测 pane 扣除边距后的可用宽度适配。
               // inputWidth 由 useLayoutEffect 在 paint 前写入继承 CSS 变量；后续窗口缩放
               // 直接更新变量，不经过整页 React render。
               style={{ maxWidth: inputWidth }}
