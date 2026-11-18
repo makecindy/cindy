@@ -313,6 +313,7 @@ import {
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.desktop.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
+import { createLocalSkillLibraryCoordinator } from '../skillhub/localSkillLibrary.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.desktop.js';
 import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.desktop.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
@@ -1081,6 +1082,7 @@ export function getMaker(): Maker {
     });
 
     const makerMemoryProviderDeps = {
+      localSkillLibraryCoordinator: createLocalSkillLibraryCoordinator(),
       runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
         const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
         if (!session || (context.sessionInstanceId && session.instanceId !== context.sessionInstanceId))
