@@ -145,6 +145,46 @@ describe('intentional plugin hook suspension', () => {
     expect(send).toHaveBeenCalledTimes(3);
   });
 
+  it.each(['user', 'assistant'] as const)('lets a pending %s message through on hold without counting a hook failure', async kind => {
+    let hookId = 0;
+    const newHookId = vi.fn(() => 'hook-' + ++hookId);
+    const resolveMessageHookContext = vi.fn(() => ({}));
+    const { gateway, hold, release, signal, send, wake, fused } = fixture({
+      newHookId, resolveMessageHookContext, isRunning: () => !signal().aborted,
+    });
+    const screen = () => kind === 'user' ? gateway.screenUserMessage(message) : gateway.screenAssistantMessage(message);
+    for (let call = 1; call <= 3; call++) {
+      const settled = vi.fn();
+      const pending = screen().then(settled);
+      expect(send).toHaveBeenCalledTimes(call);
+      expect(settled).not.toHaveBeenCalled();
+      hold();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledExactlyOnceWith({ action: 'allow' });
+      await pending;
+      release();
+    }
+    expect(fused).not.toHaveBeenCalled();
+    const resumed = screen();
+    expect(send).toHaveBeenCalledTimes(4);
+    verdict(gateway, 'hook-4', { action: 'rewrite', text: 'after hold' });
+    await expect(resumed).resolves.toMatchObject({ action: 'rewrite', text: 'after hold' });
+
+    // Admission was open when the message loop selected the hook. A synchronous
+    // context reader can close it before the gateway allocates a request.
+    resolveMessageHookContext.mockImplementationOnce(() => { hold(); return {}; });
+    await expect(screen()).resolves.toEqual({ action: 'allow' });
+    expect(newHookId).toHaveBeenCalledTimes(4);
+    release();
+
+    // Close the hold while admitting the request. The registered listener
+    // settles it, and dispatch must not attempt to wake an already stopped page.
+    newHookId.mockImplementationOnce(() => { hold(); return 'hook-' + ++hookId; });
+    await expect(screen()).resolves.toEqual({ action: 'allow' });
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(wake).not.toHaveBeenCalled();
+  });
+
   it.each(['verdict', 'delivery failure', 'deadline', 'hold'])('removes the pause listener after %s', async outcome => {
     const send = vi.fn(() => {
       if (outcome === 'delivery failure') throw new Error('ordinary delivery error');
