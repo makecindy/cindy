@@ -87,6 +87,7 @@ import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import {
+  createSessionUnavailableError,
   isTerminalAgentErrorEvent,
   MAIN_OWNED_SEND_CONTEXT,
   TurnPermissionPolicyUnsupportedError,
@@ -783,10 +784,19 @@ export function createTurnRunner(
   /** 接线前跟随切换期间, 切换重建会话要用的渠道 vendorOptions(见 vendorOptionsForSession)。 */
   const coldWiringVendorOptions = new Map<string, Record<string, unknown>>();
   /**
-   * agent switch 主动 close 的旧 Session。只有对象身份和 close reason 都匹配才
-   * 忽略；同一业务 sessionId 下的用户关闭或新引擎关闭必须照常清缓存。
+   * 本轮主动 close、预期会收到 close 事件的旧 Session。只有对象身份匹配（且原因在登记
+   * 范围内）才忽略；同一业务 sessionId 下的其它实例照常清缓存。
+   *
+   * `anyReason` 用于「按库重建运行时」：`maker.createSession()` 会重试旧实例的 close，而
+   * close 原因在第一次拆除时就定下了（unexpected / requested / runtime-refresh …），重建
+   * 时无法预先知道它。此时 state 必须活到重建结束，否则 `forgetClosedSession` 会把正在
+   * 派发的这一轮标成 aborted，消息落到没有观察者的新实例上，回复永远回不到渠道
+   * （PR review P1）。重建结束后仍按最新 DB 行复核任务是否已被关掉。
    */
-  const agentSwitchCloseSuppressed = new Map<string, { expectedSession: MakerSession }>();
+  const expectedSessionCloses = new Map<string, {
+    expectedSession: MakerSession;
+    anyReason?: boolean;
+  }>();
   type MakerInstance = ReturnType<typeof getMaker>;
   let subscribedMaker: MakerInstance | null = null;
   let unsubscribeMakerEvents: (() => void) | null = null;
@@ -809,8 +819,11 @@ export function createTurnRunner(
         state && event.reason === 'runtime-refresh' &&
         deps.acquirePendingAgentSwitch
       ) return;
-      const suppression = agentSwitchCloseSuppressed.get(event.sessionId);
-      if (suppression?.expectedSession === event.session && event.reason === 'agent-switch') return;
+      const suppression = expectedSessionCloses.get(event.sessionId);
+      if (
+        suppression?.expectedSession === event.session &&
+        (suppression.anyReason === true || event.reason === 'agent-switch')
+      ) return;
       forgetClosedSession(event.sessionId, 'maker session closed');
     });
   }
@@ -1606,14 +1619,16 @@ export function createTurnRunner(
         // 后面的 refreshSessionAfterPendingAgentSwitch 原地换绑。
         let blocked: string | null;
         if (deps.acquirePendingAgentSwitch) {
-          agentSwitchCloseSuppressed.set(rowId, { expectedSession: state.makerSession });
+          expectedSessionCloses.set(rowId, { expectedSession: state.makerSession });
           try {
             blocked = await deps.companion.prepareSend(rowId);
           } finally {
-            agentSwitchCloseSuppressed.delete(rowId);
+            expectedSessionCloses.delete(rowId);
           }
           if (sessionStates.get(rowId) !== state) {
-            throw new Error(`session ${rowId} closed while preparing the bot send`);
+            throw createSessionUnavailableError(
+              'SESSION_CLOSED', `session ${rowId} closed while preparing the bot send`,
+            );
           }
         } else {
           blocked = await deps.companion.prepareSend(rowId);
@@ -1648,7 +1663,9 @@ export function createTurnRunner(
       if (deps.prepareUnhealthySession) {
         await deps.prepareUnhealthySession(rowId);
         if (sessionStates.get(rowId) !== state) {
-          throw new Error(`session ${rowId} closed while checking its context before send`);
+          throw createSessionUnavailableError(
+            'SESSION_CLOSED', `session ${rowId} closed while checking its context before send`,
+          );
         }
       }
       // deferred 切换会关闭旧 session。apply 成功后重新读取 maker 里的 live
@@ -1657,21 +1674,30 @@ export function createTurnRunner(
         const suppression = {
           expectedSession: state.makerSession,
         };
-        agentSwitchCloseSuppressed.set(rowId, suppression);
+        expectedSessionCloses.set(rowId, suppression);
         try {
           releaseAgentSwitchLock = await deps.acquirePendingAgentSwitch(rowId, {
             // 伙伴任务跟随伙伴模型链, 不对齐渠道默认。
             channelOwned: !state.attached && !item.turn.notificationReply && !state.botLane,
           });
         } finally {
-          agentSwitchCloseSuppressed.delete(rowId);
+          expectedSessionCloses.delete(rowId);
         }
         if (sessionStates.get(rowId) !== state) {
-          throw new Error(`session ${rowId} closed while refreshing deferred agent switch`);
+          throw createSessionUnavailableError(
+            'SESSION_CLOSED', `session ${rowId} closed while refreshing deferred agent switch`,
+          );
         }
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
       } else {
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
+      }
+      // 重建/换绑期间 state 仍可能被别的路径清掉（用户关任务、账号边界…）。新运行时若没有
+      // 观察者，继续 send 只会把这一轮的输出丢在没人收的地方；宁可明确失败并留下 code。
+      if (sessionStates.get(rowId) !== state) {
+        throw createSessionUnavailableError(
+          'SESSION_CLOSED', `session ${rowId} closed while preparing the runtime for send`,
+        );
       }
       // 发送时刻的实际路由兜底: 授权检查只验过「将要切到」的新默认路由, 跟随切换
       // 失败被吞后这条消息会按旧路由发送 —— 按实际路由补一次授权检查, 旧供应商断开
@@ -2187,38 +2213,56 @@ export function createTurnRunner(
         sessionId,
         `session became ${row?.status ?? 'missing'} during route refresh`,
       );
-      throw new Error(`session ${sessionId} is not active after deferred agent switch`);
+      throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} is not active after deferred agent switch`);
     }
     let current = maker.getSession(sessionId);
     // apply 已提交 DB 但 bootstrap 失败时,直发路径也要像 makerSendTransaction 的
     // lazy-create 一样按最新 DB 行自愈,不能退回已关闭的 previous.send()。
-    if (!current) {
+    const unusable = describeUnusableRuntime(current);
+    if (unusable) {
+      log.info(`rebuilding ${unusable} runtime before send session=${sessionId.slice(-8)}`);
+    }
+    if (!current || unusable) {
       if (!row.workingDir) {
-        throw new Error(`session ${sessionId} missing after deferred agent switch`);
+        throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} missing after deferred agent switch`);
       }
       const agentKind = toCoreAgentKind(row.agentKind);
       const startOverride = getSessionRuntimeStartOverride(sessionId, agentKind, row.agentDeviceId);
       hydrateSessionProvider(sessionId, startOverride.providerId === undefined ? row.providerId ?? null : startOverride.providerId);
       setSessionEffort(sessionId, startOverride.model ? startOverride.effort : row.effort);
       setSessionFastMode(sessionId, startOverride.fastMode ?? row.fastMode ?? false);
-      current = await maker.createSession({
-        id: sessionId,
-        agentKind,
-        workingDir: row.workingDir,
-        model: row.model,
-        effort: row.effort,
-        permissionMode: row.permissionMode,
-        fastMode: row.fastMode,
-        // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
-        providerId: row.providerId,
-        agentDeviceId: row.agentDeviceId ?? undefined,
-        remoteHostId: row.remoteHostId ?? undefined,
-        resumeSessionId: row.sdkSessionId ?? undefined,
-        ...startOverride,
-        vendorOptions: ownsChannelOutput(state)
-          ? adapter.buildVendorOptions(userId, state.scopeKey)
-          : undefined,
-      });
+      // Maker retries the retired instance's close before publishing its replacement.
+      // Keep this turn's observer alive across that exact instance's close event.
+      expectedSessionCloses.set(sessionId, { expectedSession: current ?? previous, anyReason: true });
+      try {
+        current = await maker.createSession({
+          id: sessionId,
+          agentKind,
+          workingDir: row.workingDir,
+          model: row.model,
+          effort: row.effort,
+          permissionMode: row.permissionMode,
+          fastMode: row.fastMode,
+          // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
+          providerId: row.providerId,
+          agentDeviceId: row.agentDeviceId ?? undefined,
+          remoteHostId: row.remoteHostId ?? undefined,
+          resumeSessionId: row.sdkSessionId ?? undefined,
+          ...startOverride,
+          vendorOptions: ownsChannelOutput(state)
+            ? adapter.buildVendorOptions(userId, state.scopeKey)
+            : undefined,
+        });
+      } finally {
+        expectedSessionCloses.delete(sessionId);
+      }
+      // A user archive/delete during the await still cancels this message.
+      const [latest] = await getDbClient().drizzle.select().from(sessionsTable)
+        .where(eq(sessionsTable.id, sessionId)).limit(1);
+      if (!latest || latest.status === 'archived' || latest.status === 'deleted') {
+        forgetClosedSession(sessionId, 'session closed while rebuilding its runtime');
+        throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} closed while rebuilding its runtime`);
+      }
     }
     if (current === previous) return;
 
@@ -2324,13 +2368,31 @@ export function createTurnRunner(
 
   // ── per-session wiring (idempotent) ─────────────────────────────────────────
 
+  /**
+   * 缓存里的运行时还能不能收新输入。`null` = 可以继续用；否则返回不可用原因（写日志）。
+   *
+   * 只看对象身份不够：Maker 只在 status === 'closed' 时才把会话移出 activeSessions，
+   * 拆除已开始（`hasStartedClosing()`，含 close 失败停住的实例）或 close 刚失败的
+   * error 态仍是同一个实例，`session.send` 会直接抛「is closing / is in error state」。
+   * `'aborting'` 不算不可用：那是同一轮 Stop 的瞬态，不应该为它重建运行时。
+   */
+  function describeUnusableRuntime(session: MakerSession | undefined): string | null {
+    if (!session) return 'missing';
+    // status 比「拆除已开始」更具体：close 失败停住的实例两者都成立，日志要写 error。
+    const status = session.getStatus();
+    if (status === 'closed' || status === 'error') return `status=${status}`;
+    return session.hasStartedClosing() ? 'closing' : null;
+  }
+
   async function ensureSessionWired(target: RouteTarget, userId: string): Promise<SessionState> {
     const existing = sessionStates.get(target.row.id);
     if (existing) {
       if (existing.detachDrainPromise) {
         const outcome = await existing.detachDrainPromise;
         if (outcome === 'cancelled') {
-          throw new Error(`session wiring cancelled during cleanup: ${target.row.id}`);
+          throw createSessionUnavailableError(
+            'SESSION_CLOSING', `session wiring cancelled during cleanup: ${target.row.id}`,
+          );
         }
         return ensureSessionWired(target, userId);
       }
