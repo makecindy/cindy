@@ -720,7 +720,7 @@ test('a refresh after a failed start keeps the start-failure reason (no saved se
   const child = spawn(process.execPath, ['--import', 'tsx', '--import', './src/loaders/register-raw.mjs', 'src/main.ts', 'serve'], {
     cwd: hostDir, stdio: ['ignore', 'ignore', 'pipe'],
     env: isolatedServeEnv(root, bin, { CINDY_HOST_DATA_DIR: profile, CINDY_HOST_APP_DATA_DIR: path.join(root, 'app-data'),
-      CINDY_HOST_OWNER: 'owner-locked', CINDY_HOST_PORT: '0', CINDY_HOST_KEYRING_APPLICATION: 'cindy-host-start-reason-test',
+      CINDY_HOST_OWNER: 'owner-locked', CINDY_HOST_PORT: '0', XDT_DEVICE_ID_OVERRIDE: 'synthetic-host', CINDY_HOST_KEYRING_APPLICATION: 'cindy-host-start-reason-test',
       // Anything that leaves the machine fails at once.
       HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', NODE_USE_ENV_PROXY: '1' }),
   });
