@@ -4236,6 +4236,21 @@ describe('OrcaTeamService direct-turn report outcomes', () => {
     );
   });
 
+  it('does not apply a stale direct-turn receipt to a newer direct turn', async () => {
+    const { deps, service } = createDeps();
+    let live: { getTurnGeneration: () => number } | null = null;
+    (deps.getLiveSession as ReturnType<typeof vi.fn>).mockImplementation(() => live);
+    live = { getTurnGeneration: () => 1 };
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    // 旧轮被停止、新直连轮开始：运行实例换新、代号递增,回执才迟到。
+    live = { getTurnGeneration: () => 2 };
+    await finish(true, { delivered: true, report: { state: 'failed', summary: '旧结论' } });
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'failed' }),
+    );
+  });
+
   it('drops a late direct-turn report once a new Lead assignment owns the session', async () => {
     const { deps, service } = createDeps();
     const deliver = service.captureLocalWorkerReport('worker-session-1');

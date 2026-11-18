@@ -2462,15 +2462,22 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       if (!state) {
         // 直连轮也有结构化结论：保存并映射自己的结论，但不结算 Lead 的欠回报；
         // 回调执行时若已有新派活认领该会话，本轮归属检查照旧放弃写入。
+        // 归属在回执创建时冻结：停止旧轮再发新消息会换运行实例并递增轮次代号，
+        // 迟到回执必须仍归属创建时的那一轮，不能靠回执返回后的现场重读。
+        const liveSession = deps.getLiveSession(sessionId);
+        const turnGeneration = liveSession?.getTurnGeneration?.();
         return async (accepted, receipt) => {
           const report = accepted ? receipt?.report : undefined;
           if (!report || report.state === 'progress') return;
           const link = await deps.getWorkerLinkBySessionId(sessionId);
           if (!link) return;
-          const turnGeneration = deps.getLiveSession(sessionId)?.getTurnGeneration?.();
           await withWorkerTransition(link.workerId, async () => {
             // capture 后有新派活认领该会话：本轮归属检查照旧放弃写入。
             if (autoBridge.get(sessionId)) return;
+            // 新直连轮换实例或递增代号：旧回执不得写进新轮。
+            const currentLive = deps.getLiveSession(sessionId);
+            if (currentLive !== liveSession) return;
+            if ((currentLive?.getTurnGeneration?.() ?? undefined) !== turnGeneration) return;
             const entry = directTurnOutcomes.get(sessionId);
             const status = entry && entry.turnGeneration === turnGeneration ? entry.terminalStatus : undefined;
             if (entry && entry.turnGeneration !== turnGeneration) directTurnOutcomes.delete(sessionId);
