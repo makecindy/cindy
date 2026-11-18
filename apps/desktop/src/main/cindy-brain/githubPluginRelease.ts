@@ -12,24 +12,41 @@ const releaseApi = (repository: string) => 'https://api.github.com/repos/' + rep
 const MAX_PACKAGE_BYTES = PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES;
 const MAX_RELEASE_BYTES = 1024 * 1024;
 
-function githubHeaders(token: string, accept: string) {
-  return { Authorization: `Bearer ${token}`, Accept: accept, 'X-GitHub-Api-Version': '2022-11-28' };
+function githubHeaders(token: string | null, accept: string): Record<string, string> {
+  return { ...(token ? { Authorization: 'Bearer ' + token } : {}), Accept: accept, 'X-GitHub-Api-Version': '2022-11-28' };
 }
 
-function readCandidate(raw: unknown, pluginId: string): GithubPluginRelease | undefined {
-  if (typeof raw !== 'object' || !raw) return;
+export function parseGithubPluginReleaseSource(input: unknown): { repository: string; tag?: string } | undefined {
+  if (typeof input !== 'string' || input.length > 512) return;
+  const match = /^https:\/\/github\.com\/([a-z0-9][a-z0-9-]{0,38})\/([a-z0-9_.-]{1,100})(?:\/releases(?:\/tag\/(v[a-z0-9.+-]+))?)?\/?$/i.exec(input.trim());
+  if (!match || match[2] === '.' || match[2] === '..') return;
+  const tag = match[3];
+  if (tag && (tag[0] !== 'v' || parseAppUpdateVersion(tag.slice(1)) !== tag.slice(1))) return;
+  return { repository: (match[1] + '/' + match[2]).toLowerCase(), ...(tag ? { tag } : {}) };
+}
+
+type ReleasePackage = GithubPluginRelease & { pluginId: string };
+
+function readCandidates(raw: unknown, pluginId?: string): ReleasePackage[] {
+  if (typeof raw !== 'object' || !raw) return [];
   const release = raw as { tag_name?: unknown; draft?: unknown; prerelease?: unknown; assets?: unknown };
   if (release.draft !== false || typeof release.prerelease !== 'boolean' ||
-      typeof release.tag_name !== 'string' || !Array.isArray(release.assets)) return;
+      typeof release.tag_name !== 'string' || !Array.isArray(release.assets)) return [];
   const version = release.tag_name.slice(1);
-  if (release.tag_name !== `v${version}` || parseAppUpdateVersion(version) !== version) return;
+  if (release.tag_name !== `v${version}` || parseAppUpdateVersion(version) !== version) return [];
+  const candidates: ReleasePackage[] = [];
+  const suffix = `-${version}.cindy`;
   for (const asset of release.assets) {
-    if (!asset || asset.name !== `${pluginId}-${version}.cindy` || asset.state !== 'uploaded') continue;
+    if (!asset || typeof asset.name !== 'string' || !asset.name.endsWith(suffix) || asset.state !== 'uploaded') continue;
+    const id = asset.name.slice(0, -suffix.length);
+    if (!/^[a-z0-9-]{1,32}$/.test(id) || (pluginId && pluginId !== id)) continue;
     if (!Number.isSafeInteger(asset.id) || asset.id <= 0 || !Number.isSafeInteger(asset.size) ||
         asset.size <= 0 || asset.size > MAX_PACKAGE_BYTES ||
         typeof asset.digest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(asset.digest)) continue;
-    return { version, assetId: asset.id, size: asset.size, sha256: asset.digest.slice(7), prerelease: release.prerelease };
+    candidates.push({ pluginId: id, version, assetId: asset.id, size: asset.size, sha256: asset.digest.slice(7), prerelease: release.prerelease });
+    if (pluginId) break;
   }
+  return candidates;
 }
 
 async function* responseChunks(response: Response, limit: number) {
@@ -50,16 +67,14 @@ async function* responseChunks(response: Response, limit: number) {
   }
 }
 
-export async function checkGithubPluginRelease(
+async function readGithubReleases(
   fetch: typeof globalThis.fetch,
   token: string | null,
   repository: string,
-  pluginId: string,
-  currentVersion: string,
-): Promise<GithubPluginReleaseCheck> {
-  if (!token) return { status: 'sign-in' };
+  tag?: string,
+): Promise<{ status: 'ok'; releases: unknown[] } | { status: 'sign-in' | 'forbidden' | 'not-found' | 'unavailable' }> {
   try {
-    const response = await fetch(`${releaseApi(repository)}?per_page=30`, {
+    const response = await fetch(tag ? releaseApi(repository) + '/tags/' + encodeURIComponent(tag) : releaseApi(repository) + '?per_page=30', {
       headers: githubHeaders(token, 'application/vnd.github+json'),
       redirect: 'error',
       signal: AbortSignal.timeout(15_000),
@@ -67,6 +82,8 @@ export async function checkGithubPluginRelease(
     if (!response.ok) {
       await response.body?.cancel();
       if (response.status === 401) return { status: 'sign-in' };
+      if (response.status === 404 && !token) return { status: 'sign-in' };
+      if (response.status === 404 && tag) return { status: 'not-found' };
       if (response.status === 404 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') !== '0')) {
         return { status: 'forbidden' };
       }
@@ -75,24 +92,57 @@ export async function checkGithubPluginRelease(
     const chunks: Uint8Array[] = [];
     for await (const bytes of responseChunks(response, MAX_RELEASE_BYTES)) chunks.push(bytes);
     const data: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    if (!Array.isArray(data) || !parseAppUpdateVersion(currentVersion)) return { status: 'unavailable' };
-    let release: GithubPluginRelease | undefined;
-    for (const item of data) {
-      const candidate = readCandidate(item, pluginId);
-      if (candidate && (!release || compareAppUpdateVersions(candidate.version, release.version) === 'newer')) {
-        release = candidate;
-      }
+    if (tag) {
+      if (typeof data !== 'object' || !data || !('tag_name' in data) || data.tag_name !== tag) return { status: 'unavailable' };
+      return { status: 'ok', releases: [data] };
     }
-    if (!release) return { status: 'empty' };
-    return { status: compareAppUpdateVersions(release.version, currentVersion) === 'newer' ? 'available' : 'current', release };
+    return Array.isArray(data) ? { status: 'ok', releases: data } : { status: 'unavailable' };
   } catch {
     return { status: 'unavailable' };
   }
 }
 
+export async function findGithubPluginInstall(
+  fetch: typeof globalThis.fetch,
+  token: string | null,
+  source: { repository: string; tag?: string },
+) {
+  const data = await readGithubReleases(fetch, token, source.repository, source.tag);
+  if (data.status !== 'ok') return data;
+  const packages = data.releases.flatMap(item => readCandidates(item));
+  if (packages.length === 0) return { status: 'empty' } as const;
+  if (new Set(packages.map(item => item.pluginId)).size !== 1) return { status: 'ambiguous' } as const;
+  const release = packages.reduce((best, item) =>
+    compareAppUpdateVersions(item.version, best.version) === 'newer' ? item : best);
+  return { status: 'available', release } as const;
+}
+
+export async function checkGithubPluginRelease(
+  fetch: typeof globalThis.fetch,
+  token: string | null,
+  repository: string,
+  pluginId: string,
+  currentVersion: string,
+): Promise<GithubPluginReleaseCheck> {
+  if (!token) return { status: 'sign-in' };
+  const data = await readGithubReleases(fetch, token, repository);
+  if (data.status !== 'ok') return { status: data.status === 'not-found' ? 'empty' : data.status };
+  if (!parseAppUpdateVersion(currentVersion)) return { status: 'unavailable' };
+  let release: GithubPluginRelease | undefined;
+  for (const item of data.releases) {
+    const candidate = readCandidates(item, pluginId)[0];
+    if (candidate && (!release || compareAppUpdateVersions(candidate.version, release.version) === 'newer')) {
+      const { pluginId: _id, ...matchingRelease } = candidate;
+      release = matchingRelease;
+    }
+  }
+  if (!release) return { status: 'empty' };
+  return { status: compareAppUpdateVersions(release.version, currentVersion) === 'newer' ? 'available' : 'current', release };
+}
+
 export async function downloadGithubPluginRelease(
   fetch: typeof globalThis.fetch,
-  token: string,
+  token: string | null,
   repository: string,
   release: GithubPluginRelease,
   destination: string,

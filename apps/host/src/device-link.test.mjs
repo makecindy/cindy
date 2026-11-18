@@ -294,3 +294,22 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   assert.deepEqual(releasedApps, ['device:desktop', 'device:phone']);
   assert.deepEqual(releasedAuth, ['device:desktop', 'device:phone']);
 });
+
+// Unit: the authenticated transport determines who can ask Desktop Main for project
+// evidence. Persisted profile fields never select the privileged write adapter.
+test('routes project writes by their authenticated caller', async () => {
+  const writes = [];
+  const service = createHostService({ updateProjectInfo: (...args) => { writes.push(args); return {}; } });
+  const input = { create: true, projectKey: 'local:', repositoryUrl: 'https://gitlab.com/team/demo' };
+  const envelope = { requestId: 'from-main', input };
+  for (const caller of ['web:paired', 'device:phone']) {
+    assert.equal((await service('/api/project-info/desktop-set', envelope, { caller })).status, 403);
+    assert.equal((await service('/api/project-info/set', input, { caller })).status, 200);
+    assert.deepEqual(writes.pop(), [input, { legacyDesktop: false }]);
+  }
+  const local = { caller: 'local-api:host' };
+  await service('/api/project-info/set', input, local);
+  assert.deepEqual(writes.pop(), [input, { legacyDesktop: true }]);
+  await service('/api/project-info/desktop-set', envelope, local);
+  assert.deepEqual(writes.pop(), [input, { desktopRequest: 'from-main' }]);
+});

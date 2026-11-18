@@ -268,3 +268,6 @@ it("reopening the primary menu after info does not initialize an engine, but ent
     act(() => root.unmount());
   }
 });
+
+// These menu tests exercise the entry only; the project form owns native media dependencies.
+vi.mock('../session/ProjectSettingsSheet', () => ({ ProjectSettingsSheet: () => null }));

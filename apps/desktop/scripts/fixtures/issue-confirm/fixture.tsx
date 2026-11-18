@@ -1,14 +1,17 @@
+import { useState } from 'react';
 import { mountPage } from '../../ui-page/harness';
 import { IssueConfirmCard } from '../../../src/renderer/features/cc-agent/IssueConfirmCard';
 
-void mountPage({
-  render: () => (
+function Preview() {
+  const [submitting, setSubmitting] = useState(false);
+  return (
     <main className="mx-auto max-w-[760px] p-6">
       <IssueConfirmCard
         sessionId="issue-preview"
-        onRespond={() => {}}
+        onRespond={() => setSubmitting(true)}
         pending={{
           requestId: 'issue-preview',
+          submitting,
           draft: {
             title: '手机无法完成问题反馈确认',
             type: 'bug',
@@ -29,5 +32,7 @@ void mountPage({
         }}
       />
     </main>
-  ),
-});
+  );
+}
+
+void mountPage({ render: () => <Preview /> });
