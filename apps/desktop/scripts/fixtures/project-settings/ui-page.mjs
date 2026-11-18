@@ -41,8 +41,13 @@ export default {
       data: { create: true },
     },
     intro: {
-      about: 'The first new project on this computer starts with the introduction; the form follows it, and later openings go straight to the form',
-      data: { create: true },
+      about: 'Someone with no project yet meets the introduction before the new-project form',
+      data: { create: true, intro: true },
+      viewport: { width: 1040, height: 760 },
+    },
+    'intro-once': {
+      about: 'Closing the introduction leads on to the form, and later openings go straight to the form',
+      data: { create: true, intro: true },
       viewport: { width: 1040, height: 760 },
     },
     header: {
@@ -94,7 +99,7 @@ export default {
     // Real header and dialog, with a local specimen row. Existing dialog cases
     // cannot verify hover/focus visibility. ProjectsSection unit tests cover
     // local/remote target routing separately from this browser layout check.
-    if (ui.case === 'intro') {
+    if (ui.case === 'intro' || ui.case === 'intro-once') {
       const intro = page.locator('[data-feature-intro]');
       const name = page.getByRole('textbox', { name: await ui.t('projectSettings.name'), exact: true });
       const add = page.getByRole('button', { name: await ui.t('ccAgent.sidebar.newProject'), exact: true });
@@ -107,7 +112,7 @@ export default {
       if (overflow > 0) throw new Error(`The introduction must fit without scrolling (${overflow}px over)`);
       // One dialog at a time: the form waits for the introduction instead of opening under it.
       if (await name.count()) throw new Error('The form opened together with the introduction');
-      await ui.capture('intro');
+      if (ui.case === 'intro') return;
       await page.getByRole('button', { name: await ui.t('featureIntro.project.start'), exact: true }).click();
       await intro.waitFor({ state: 'detached' });
       await name.waitFor();

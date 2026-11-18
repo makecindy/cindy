@@ -15,7 +15,7 @@ if (!crypto.randomUUID) {
 }
 setDataOwnerGeneration('fixture', 1);
 // Only the intro case starts as someone who has no project yet and has not seen the introduction.
-if (page.case !== 'intro') localStorage.setItem('featureIntro.project.seen', '1');
+if (!page.data.intro) localStorage.setItem('featureIntro.project.seen', '1');
 const writes: unknown[] = [];
 const pickerScopes: unknown[] = [];
 Object.assign(window, { projectSettingsWrites: writes, projectPickerScopes: pickerScopes });
@@ -25,7 +25,7 @@ function DeviceEntry({ enabled, children }: { enabled: boolean; children: (close
   const { t } = useTranslation();
   // The sidebar keeps this computer's project list loaded; the introduction reads it.
   useEffect(() => {
-    if (page.case === 'intro') void recentWorkdirsStore.ensure();
+    if (page.data.intro) void recentWorkdirsStore.ensure();
   }, []);
   if (!enabled) return children(() => {});
   return <div className="max-w-80 p-4">
@@ -101,7 +101,7 @@ mountPage({
         <span>Task in a worktree</span>
       </div>
     ) : (
-      <DeviceEntry enabled={ctx.case === 'create-device' || ctx.case === 'intro'}>
+      <DeviceEntry enabled={ctx.case === 'create-device' || !!ctx.data.intro}>
       {(close) => <ProjectSettingsDialog
         create={!!ctx.data.create}
         onClose={close}
