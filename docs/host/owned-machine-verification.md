@@ -1,5 +1,7 @@
 # 在自有电脑验证 Host
 
+这份流程供维护者在自有机器上做发布前验证。下文的机器列表、别名和远端任务命令来自维护者自己的测试工具。外部贡献者只需按对应平台的说明准备 Node 和依赖，再按「Host 门禁与回执」运行命令、记录结果。
+
 Ubuntu x64、Windows x64、macOS arm64 分别验证同一份待发布源码。每台机器用独立的任务目录安装 Node 和依赖。Host 回归入口和验收脚本以待测提交的 [Host CI 作业](../../.github/workflows/ci.yml) 和 [Host package.json](../../apps/host/package.json) 为准。
 
 ## 准备同一份源码
