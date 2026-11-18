@@ -1,7 +1,7 @@
 /** Development-only experiment; never selected by a production message renderer. */
-import { Redirect, Stack } from 'expo-router';
+import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
 import { useMemo, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Text, TextInput } from '@/components/AppText';
@@ -17,6 +17,10 @@ export default function TableSelectionPreview() {
 }
 
 function Experiment() {
+  const { menu } = useLocalSearchParams<{ menu?: string }>();
+  // Android's installed WebView custom ActionMode may replace system Copy.
+  // Verify real Copy first; the quote URL tests that callback separately.
+  const quoteMenu = Platform.OS === 'ios' || menu === 'quote';
   const { colors } = useTheme();
   const settled = useRef(false);
   const [selected, setSelected] = useState('');
@@ -36,7 +40,7 @@ function Experiment() {
   const textStyle = { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption };
   return <SafeAreaView style={[styles.fill, { backgroundColor: colors.surface }]}>
     <Stack.Screen options={{ headerShown: false }} />
-    <Text style={textStyle}>Table selection · isolated fixture · native handles only</Text>
+    <Text style={textStyle}>Table selection · isolated fixture · {quoteMenu ? 'quote menu' : 'system copy'}</Text>
     <Text style={textStyle} testID="table-selection.observation">选区 {selected.length} 字 · 横滚 {scroll}</Text>
     <View style={styles.fill}>
       <WebView
@@ -49,7 +53,7 @@ function Experiment() {
         setSupportMultipleWindows={false}
         allowFileAccess={false}
         mediaCapturePermissionGrantType="deny"
-        menuItems={menuItems}
+        menuItems={quoteMenu ? menuItems : undefined}
         onCustomMenuSelection={event => {
           const { key, selectedText } = event.nativeEvent;
           if (key === 'xdtQuote' && typeof selectedText === 'string' && selectedText.length <= 4096) {
