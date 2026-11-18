@@ -569,3 +569,37 @@ describe('CompanionShadowBanner', () => {
     await waitFor(() => expect(h.ensureLoaded).toHaveBeenCalledWith(true));
   });
 });
+
+// #9760 / #8350: unit tier, real cloud mirror and projection. Existing cases did not
+// retain removed identities across hydration. Minimal input: cached Mia + fresh empty actors.
+describe('deleted cloud companion cache reconciliation', () => {
+  const row = { id: 'mia', deviceId: 'laptop', deviceName: 'Laptop', name: 'Mia', avatar: '',
+    avatarColor: 'violet', description: '', preview: '', activityAt: 0, sessionId: null, online: false, connectionKnown: true };
+  it.each(['refresh', 'push'])('hydrates identities before a startup %s and retains deletion after mirror restart', async source => {
+    const { renderHook } = await import('@testing-library/react');
+    resetCompanionCloudStoreForTests();
+    let finish!: (value: unknown) => void;
+    let push!: (next: CompanionCloudSnapshot) => void;
+    let saved: unknown;
+    maker.chatDisplayCache.mockImplementation((request: { action: string; key: string; value?: unknown }) => {
+      if (request.action === 'read') return new Promise(resolve => { finish = resolve; });
+      if (request.action === 'write' && request.key === 'cloud-homes') saved = request.value;
+      return Promise.resolve(null);
+    });
+    maker.onCompanionCloudChanged.mockImplementation(((fn: typeof push) => { push = fn; return () => undefined; }) as never);
+    const fresh = { ...snapshot('laptop'), actors: [] };
+    maker.getCompanionCloudState.mockResolvedValue(fresh);
+    const view = renderHook(() => useCompanionCloud());
+    if (source === 'push') act(() => push(fresh));
+    await act(async () => finish(snapshot('laptop')));
+    await waitFor(() => expect(saved).toMatchObject({ actors: [], retiredBotIds: ['mia'] }));
+    expect(cloudRemoteBots(view.result.current, [row, { ...row, id: 'ordinary' }]).map(x => x.id)).toEqual(['ordinary']);
+    view.unmount();
+    resetCompanionCloudStoreForTests();
+    maker.chatDisplayCache.mockImplementation((request: { action: string }) => Promise.resolve(request.action === 'read' ? saved : null));
+    const restarted = renderHook(() => useCompanionCloud());
+    await waitFor(() => expect(restarted.result.current.enabled).toBe(true));
+    expect(cloudRemoteBots(restarted.result.current, [row])).toEqual([]);
+    restarted.unmount();
+  });
+});

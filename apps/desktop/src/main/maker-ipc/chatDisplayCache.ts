@@ -11,6 +11,12 @@ const schema = z.intersection(z.object({ owner: z.object({ dataOwnerId: z.string
   z.discriminatedUnion('action', [z.object({ action: z.literal('read') }),
     z.object({ action: z.literal('write'), value: z.unknown() }), z.object({ action: z.literal('remove') })]));
 const MAX_BYTES = 8 * 1024 * 1024;
+// All renderer windows share one Main. Seed through the existing read before writing;
+// merging this bounded slot adds no synchronous disk read to a write/IPC hot path.
+let cloudHomes: { scope: string; retiredBotIds: string[]; revision: number } | null = null;
+let cloudHomesRevision = 0;
+const stringIds = (value: unknown): string[] => Array.isArray(value)
+  ? value.filter((id): id is string => typeof id === 'string') : [];
 /** Bounded, owner/endpoint-scoped snapshots behind the trusted local renderer boundary. */
 export function accessChatDisplayCache(input: unknown): unknown {
   const request = schema.parse(input);
@@ -20,14 +26,44 @@ export function accessChatDisplayCache(input: unknown): unknown {
   const digest = createHash('sha256').update(JSON.stringify([getClientEndpoint('chatApiBaseUrl'), request.key])).digest('hex');
   const root = ownerScopedUserDataPath('chat-display');
   const file = path.join(root, `${digest}.json`);
+  const scope = JSON.stringify([file, request.owner.generation]);
   if (request.action === 'read') {
     const raw = readAtomicFileSync(file);
-    return raw && Buffer.byteLength(raw) <= MAX_BYTES ? JSON.parse(raw) : null;
+    const value = raw && Buffer.byteLength(raw) <= MAX_BYTES ? JSON.parse(raw) : null;
+    if (request.key !== 'cloud-homes') return value;
+    const retiredBotIds = stringIds(value?.retiredBotIds);
+    if (cloudHomes?.scope !== scope || JSON.stringify(cloudHomes.retiredBotIds) !== JSON.stringify(retiredBotIds)) {
+      cloudHomes = { scope, retiredBotIds, revision: ++cloudHomesRevision };
+    }
+    return value && typeof value === 'object' ? { ...value, retirementRevision: cloudHomes.revision } : value;
   }
-  const raw = JSON.stringify(request.action === 'remove' ? null : request.value);
+  let value = request.action === 'remove' ? null : request.value;
+  let retiredBotIds: string[] | null = null;
+  if (request.action === 'write' && request.key === 'cloud-homes') {
+    // Failed/missing hydration must never erase deletions we have not loaded.
+    if (cloudHomes?.scope !== scope) throw new Error('CACHE_NOT_LOADED');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_INPUT');
+    const { revivedBotIds, retirementRevision, ...incoming } = value as Record<string, unknown>;
+    const retired = new Set([...cloudHomes.retiredBotIds, ...stringIds(incoming.retiredBotIds)]);
+    const active = new Set(Array.isArray(incoming.actors) ? incoming.actors.flatMap(actor =>
+      actor && typeof actor.externalId === 'string' ? [actor.externalId] : []) : []);
+    // Presence alone may come from a stale renderer. Only a renderer that observed
+    // retirement then a fresh active actor can explicitly revive that identity.
+    if (retirementRevision === cloudHomes.revision) {
+      for (const id of stringIds(revivedBotIds)) if (active.has(id)) retired.delete(id);
+    }
+    retiredBotIds = [...retired];
+    value = { ...incoming, retiredBotIds };
+  }
+  const raw = JSON.stringify(value);
   if (!raw || Buffer.byteLength(raw) > MAX_BYTES) throw new Error('CACHE_TOO_LARGE');
   mkdirSync(root, { recursive: true, mode: 0o700 }); atomicWriteFileSync(file, raw);
+  if (retiredBotIds) {
+    const unchanged = cloudHomes?.scope === scope && JSON.stringify(cloudHomes.retiredBotIds) === JSON.stringify(retiredBotIds);
+    cloudHomes = { scope, retiredBotIds, revision: unchanged ? cloudHomes!.revision : ++cloudHomesRevision };
+  }
+  if (request.key === 'cloud-homes' && request.action === 'remove') cloudHomes = null;
   rmSync(`${file}.bak`, { force: true });
   if (request.action === 'remove') rmSync(file, { force: true });
-  return null;
+  return retiredBotIds ? { retiredBotIds, retirementRevision: cloudHomes!.revision } : null;
 }
