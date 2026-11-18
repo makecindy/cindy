@@ -310,16 +310,22 @@ var cindyMail = (function () {
         return [name, Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('')];
       })));
     }
-    async function completedSaveMerge(record, original, local, remote) {
+    async function completedSaveMerge(record, original, local, remote, restoring) {
       const base = { ...original }, changed = [];
       if (Object.keys(record.completedSaveHashes || {}).length) {
-        const [hashes, originals] = await Promise.all([fieldDigests(remote), fieldDigests(original || {})]);
+        const [hashes, originals, locals] = await Promise.all([fieldDigests(remote), fieldDigests(original || {}),
+          restoring ? fieldDigests(local) : undefined]);
         for (const name of Object.keys(remote)) {
           const proof = record.completedSaveHashes[name];
           if (!originals[name] || !proof ||
               (originals[name] !== proof.base && originals[name] !== proof.previous)) continue;
-          if (hashes[name] === proof.attempt) base[name] = remote[name];
-          else if (originals[name] !== proof.attempt && comparable(name, local[name]) !== comparable(name, remote[name]))
+          if (hashes[name] === proof.attempt) {
+            base[name] = remote[name];
+            // A pre-save durable editor is not evidence of later user input.
+            // Without a newer Host baseline or field observation, keep it locked.
+            if (restoring && originals[name] !== proof.attempt && locals[name] !== proof.attempt &&
+                (!proof.host || locals[name] === proof.host)) changed.push(name);
+          } else if (originals[name] !== proof.attempt && comparable(name, local[name]) !== comparable(name, remote[name]))
             changed.push(name); // Includes an explicit remote rollback to the pre-save value.
         }
       }
@@ -414,7 +420,7 @@ var cindyMail = (function () {
         // Legacy clean cards are their own last synchronized snapshot. A legacy
         // error without a base can still converge when both contents are equal.
         const merged = await completedSaveMerge(record, card.baseValues || (card.state === 'draft' ? local :
-          ['syncing', 'sending'].includes(card.state) && readBack.fingerprint === record.fingerprint ? remote : undefined), local, remote);
+          ['syncing', 'sending'].includes(card.state) && readBack.fingerprint === record.fingerprint ? remote : undefined), local, remote, true);
         const base = merged.base;
         const active = await mailRecords(records => {
           const current = records[key];
@@ -843,9 +849,17 @@ var cindyMail = (function () {
             edit.error = result;
             const completedSave = !sending && !additions.length && result.execution === "executed";
             if (completedSave) {
-              const [attempt, base] = await Promise.all([fieldDigests(fields), fieldDigests(draftValues(edit.readBack))]);
+              let saved;
+              try { saved = await readMailCard(record.callId, sourceCallId); } catch (_) { /* Recovery stays conservative. */ }
+              const hostFields = saved?.ok && saved.draft?.key === key && saved.draft.accountId === record.account &&
+                saved.draft.draftId === record.draftId ? Object.fromEntries(saved.draft.fields.map(f => [f.name, f.value])) : undefined;
+              const [attempt, base, host] = await Promise.all([
+                fieldDigests(fields), fieldDigests(draftValues(edit.readBack)), fieldDigests(hostFields || {}),
+              ]);
               record.completedSaveHashes = Object.fromEntries(Object.keys(attempt).map(name =>
-                [name, { base: base[name], attempt: attempt[name] }]));
+                [name, { base: base[name], attempt: attempt[name],
+                  host: hostFields && edit.revision !== revision && comparable(name, hostFields[name]) === comparable(name, edit.fields[name])
+                    ? attempt[name] : host[name] }]));
               if (edit.additions?.length) record.unverifiedAdditions = true;
             }
             // A failed completed save has never attempted delivery. Keep its
@@ -914,12 +928,15 @@ var cindyMail = (function () {
             const hostBase = saved?.ok && saved.draft?.key === key &&
               saved.draft.accountId === record.account && saved.draft.draftId === record.draftId
               ? saved.draft.baseValues : undefined;
-            const [attempt, previous, base] = await Promise.all([
-              fieldDigests(draftValues(result.data.readBack)), fieldDigests(preceding), fieldDigests(hostBase || {}),
+            const hostFields = hostBase ? Object.fromEntries(saved.draft.fields.map(f => [f.name, f.value])) : undefined;
+            const [attempt, previous, base, host] = await Promise.all([
+              fieldDigests(draftValues(result.data.readBack)), fieldDigests(preceding), fieldDigests(hostBase || {}), fieldDigests(hostFields || {}),
             ]);
             record.completedSaveHashes = Object.fromEntries(Object.keys(attempt).map(name => [name, {
               base: base[name] || record.completedSaveHashes[name]?.base,
               previous: previous[name], attempt: attempt[name],
+              host: hostFields && edit.revision !== revision && comparable(name, hostFields[name]) === comparable(name, edit.fields[name])
+                ? attempt[name] : host[name],
             }]));
           }
           edit.readBack = result.data.readBack;
@@ -1248,6 +1265,10 @@ var cindyMail = (function () {
         await continueMailTask(message, record, copy, key);
       }
     }
+    function denySentUpdate(result) {
+      return result.ok && result.data?.sent
+        ? { ok: false, execution: 'not_executed', message: '草稿已发送，不能继续修改。' } : result;
+    }
     // Provider tool names and argument schemas stay in the adapter. null means the
     // caller can proceed with its ordinary operation after pending edits are saved.
     async function beforeTool(args) {
@@ -1260,14 +1281,14 @@ var cindyMail = (function () {
       // Terminal receipts and uncertain outcomes do not restore private edits.
       // Host restore intentionally excludes sent/deleted/unconfirmed cards;
       // keep the existing idempotent/unknown branch reachable without a write.
-      if (operation === 'send' && readOnly === false) {
+      if (['send', 'update'].includes(operation) && readOnly === false) {
         const settled = candidates.find(id => ['sent', 'pending', 'deleted'].includes(records[id].state));
         if (settled) {
           const outcome = await withMailCompose(settled, async function () {
             const current = await mailRecords();
             return mailDraftOutcome(sharedMailBlock(current, settled) || current[settled]);
           });
-          if (outcome) return outcome;
+          if (outcome) return operation === 'update' ? denySentUpdate(outcome) : outcome;
           // A save completed while we waited. Continue through the normal owned
           // draft path so a real send still receives its full undo countdown.
           records = await mailRecords();
@@ -1360,7 +1381,7 @@ var cindyMail = (function () {
         const current = await mailRecords();
         if (sharedMailBlock(current, key) || Object.entries(current).some(([id, r]) => id !== key &&
             r.account === account && r.draftId === draftId && r.unverifiedAdditions))
-          return runMailDraft(key, false, sourceCallId);
+          return denySentUpdate(await runMailDraft(key, false, sourceCallId));
         return null;
       }
       // Inspect a failed completed save without replaying it. Serialize with
@@ -1481,6 +1502,7 @@ var cindyMail = (function () {
           return latest;
         });
       }
+      if (operation === 'update' && result.ok && result.data?.sent) return denySentUpdate(result);
       return operation === "send" || !result.ok ? result : null;
     }
     cindy.onHostMessage(async function (message) {

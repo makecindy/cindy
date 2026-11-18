@@ -2019,3 +2019,82 @@ test('send waiting for a pending save still receives the full countdown', async 
   assert.equal((await sending).ok, true);
   assert.equal(f.writes.filter(r => r.send).length, 1);
 });
+
+// Acknowledgements may outlive failed DB writes from the very first edit.
+// The pre-edit durable card must not become a new edit over a completed save.
+for (const operation of ['get', 'send']) for (const older of ['Original', 'Older local C', 'Unreadable older C']) test(`pre-save durable card cannot roll back a completed save after restart: ${operation}, ${older}`, async () => {
+  let f, drop = false, restarted = false;
+  f = fixture({ hostRead: () => { if (older === 'Unreadable older C' && f.writes.length === 1 && !restarted) throw new Error('Synthetic Host unavailable'); }, durablePublish: card => !drop || card.type !== 'mail-draft-update', write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  if (older !== 'Original') await f.card('change', { ...f.values(), body: older });
+  drop = true;
+  await f.card('change', { ...f.values(), body: 'Saved replacement B' });
+  assert.equal((await f.tool('update')).execution, 'executed');
+  assert.equal(f.durableCards.at(-1).draft.fields.find(field => field.name === 'body').value, older);
+  drop = false; restarted = true; f.restart();
+  const result = await f.tool(operation);
+  if (operation === 'get') assert.ok(result.data.conflicts.includes('body'));
+  else assert.equal(result.ok, false);
+  await f.advance(2000);
+  assert.equal(f.current().editor.body, 'Saved replacement B');
+  assert.equal(f.writes.length, 1);
+});
+
+// beforeTool null explicitly authorizes the provider's ordinary operation.
+// A retained active route must never grant update after its sibling sent.
+for (const restart of [false, true]) test(`retained task update stops at a sibling terminal send: restart=${restart}`, async () => {
+  let f;
+  f = fixture({ allowCardRead: false, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: request.fields.body });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Saved replacement B' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  await f.tool('get');
+  assert.equal((await f.tool('send')).ok, true);
+  if (restart) f.restart();
+  const writes = f.writes.length, cards = f.cards.length;
+  const result = await f.tool('update', { sourceCallId: 'card-call' });
+  assert.equal(result?.execution, 'not_executed');
+  assert.equal(result.ok, false);
+  assert.equal(f.writes.length, writes);
+  assert.equal(f.cards.length, cards);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
+
+// A sibling may send after the first route snapshot but before ownership returns.
+// Even the explicit-conflict update exit must deny provider fallthrough then.
+test('conflict update racing a sibling send cannot authorize an ordinary update', async () => {
+  let f, armed = false, entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  f = fixture({ allowCardRead: false, hostRead: async card => {
+    if (armed && card.callId === 'card-call' && !card.sourceCallId) { entered(); await waiting; }
+  }, write: request => {
+    if (f.writes.length === 1) {
+      f.externalEdit({ body: 'Remote replacement' });
+      return { ok: false, execution: 'executed', message: 'Verification failed' };
+    }
+  } });
+  await f.present();
+  await f.card('change', { ...f.values(), body: 'Private replacement' });
+  await f.tool('update', { sourceCallId: 'card-call' });
+  assert.ok((await f.tool('get', { sourceCallId: 'card-call' })).data.conflicts.includes('body'));
+  await f.tool('get');
+  armed = true;
+  const updating = f.tool('update', { sourceCallId: 'card-call' });
+  await started;
+  assert.equal((await f.tool('send')).ok, true);
+  release();
+  assert.equal((await updating)?.execution, 'not_executed');
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.writes.filter(r => r.send).length, 1);
+});
