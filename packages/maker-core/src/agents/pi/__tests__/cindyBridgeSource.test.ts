@@ -482,6 +482,44 @@ function loadReviewSearchHelpers(
   return context as ReviewSearchHelpers;
 }
 
+function loadPiBashShellSettings(): {
+  readPiBashShellSettings: (settings: unknown) => { shellPath?: string; commandPrefix?: string };
+} {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function readPiBashShellSettings(');
+  const end = source.indexOf('const piBashSettings =', start);
+  if (start < 0 || end <= start) {
+    throw new Error('Pi bash shell settings helper was not found in the generated bridge');
+  }
+  const factory = new Function(
+    `${source.slice(start, end)}; return { readPiBashShellSettings };`,
+  ) as () => {
+    readPiBashShellSettings: (settings: unknown) => { shellPath?: string; commandPrefix?: string };
+  };
+  return factory();
+}
+
+// Load-time snapshot only. Calling pi.getSettings() here throws
+// "Action methods cannot be called during extension loading" and drops the bridge
+// before bash, the permission gate, and the MCP gateway register (#9732).
+function loadInitialNativeSettings(agentDir: string): unknown {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('const initialNativeSettings =');
+  const end = source.indexOf("pi.registerCommand('cindy-native-provider-refresh'", start);
+  if (start < 0 || end <= start) {
+    throw new Error('initial native settings snapshot was not found in the generated bridge');
+  }
+  const snapshot = source.slice(start, end);
+  if (snapshot.includes('pi.getSettings(')) {
+    throw new Error('load-time settings snapshot called a Pi action API');
+  }
+  const factory = new Function(
+    'readFileSync', 'path', 'process',
+    `${snapshot}\nreturn initialNativeSettings;`,
+  ) as (readFileSync: typeof import('node:fs').readFileSync, path: typeof import('node:path'), process: { env: NodeJS.ProcessEnv }) => unknown;
+  return factory(readFileSync, path, { env: { ...process.env, PI_CODING_AGENT_DIR: agentDir } });
+}
+
 function loadBashTimeoutHelpers(): {
   resolveCindyBashTimeout: (params: unknown) => number;
   applyCindyBashTimeoutParams: (params: unknown) => Record<string, unknown>;
@@ -1488,6 +1526,81 @@ describe('cindy-bridge extension source', () => {
   it('keeps generated extension source free of template literals', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('`');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('${');
+  });
+
+  it('forwards settings.json shellPath and shellCommandPrefix into the overriding bash tool (#9705)', () => {
+    const { readPiBashShellSettings } = loadPiBashShellSettings();
+    expect(readPiBashShellSettings(undefined)).toEqual({});
+    expect(readPiBashShellSettings(null)).toEqual({});
+    expect(readPiBashShellSettings({})).toEqual({});
+    expect(readPiBashShellSettings({
+      shellPath: '   ',
+      shellCommandPrefix: '',
+      npmCommand: ['npm'],
+    })).toEqual({});
+    expect(readPiBashShellSettings({
+      shellPath: '  /bin/zsh  ',
+      shellCommandPrefix: '  set -a; . "$HOME/.zshenv"; set +a  ',
+    })).toEqual({
+      shellPath: '/bin/zsh',
+      commandPrefix: 'set -a; . "$HOME/.zshenv"; set +a',
+    });
+    expect(readPiBashShellSettings({ shellCommandPrefix: 12, shellPath: ['/bin/zsh'] })).toEqual({});
+
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const bashStart = source.indexOf('const bashTool = createBashTool(process.cwd(), {');
+    const bashEnd = source.indexOf('var bashParameters = bashTool.parameters;', bashStart);
+    const bashCall = source.slice(bashStart, bashEnd);
+    expect(bashCall).toContain('...readPiBashShellSettings(piBashSettings)');
+    expect(bashCall).toContain('exposeSessionEnvironment: false');
+    expect(bashCall).toContain('isolatedBashEnvironment(env, bashPackageHome)');
+
+    // pi.getSettings() is a runtime action API. The load-time snapshot and the bash
+    // registration that consumes it must stay on the file read (#9732).
+    const bashRegistration = source.slice(
+      source.indexOf('function readPiBashShellSettings('),
+      source.indexOf('var bashParameters = bashTool.parameters;'),
+    );
+    expect(bashRegistration).not.toContain('pi.getSettings(');
+    const loadSnapshot = source.slice(
+      source.indexOf('const initialNativeSettings ='),
+      source.indexOf("pi.registerCommand('cindy-native-provider-refresh'"),
+    );
+    expect(loadSnapshot).not.toContain('pi.getSettings(');
+
+    const agentDir = mkdtempSync(path.join(tmpdir(), 'cindy-pi-bash-settings-'));
+    try {
+      writeFileSync(path.join(agentDir, 'settings.json'), JSON.stringify({
+        shellPath: '  /bin/zsh  ',
+        shellCommandPrefix: '  set -a; . "$HOME/.zshenv"; set +a  ',
+        compaction: { reserveTokens: 1234 },
+      }));
+      const loaded = loadInitialNativeSettings(agentDir) as {
+        shellPath?: string;
+        shellCommandPrefix?: string;
+      };
+      expect(readPiBashShellSettings(loaded)).toEqual({
+        shellPath: '/bin/zsh',
+        commandPrefix: 'set -a; . "$HOME/.zshenv"; set +a',
+      });
+      const missingDir = mkdtempSync(path.join(tmpdir(), 'cindy-pi-bash-settings-missing-'));
+      try {
+        expect(loadInitialNativeSettings(missingDir)).toEqual({});
+        expect(readPiBashShellSettings(loadInitialNativeSettings(missingDir))).toEqual({});
+      } finally {
+        rmSync(missingDir, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+
+    // PowerShell keeps its own shell. A bash prefix or bash.exe path must not land there.
+    const powershellStart = source.indexOf('const powershellTool = createPowerShellTool(process.cwd(), {');
+    const powershellEnd = source.indexOf('var powershellParameters = powershellTool.parameters;', powershellStart);
+    const powershellCall = source.slice(powershellStart, powershellEnd);
+    expect(powershellCall).not.toContain('readPiBashShellSettings');
+    expect(powershellCall).not.toContain('commandPrefix');
+    expect(powershellCall).not.toContain('shellPath');
   });
 
   it('preserves the permission denial source across the private Pi UI envelope', () => {
