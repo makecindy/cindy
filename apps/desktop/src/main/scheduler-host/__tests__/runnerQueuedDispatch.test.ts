@@ -36,7 +36,7 @@ import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker
 import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
 import type { FireContext, Logger, Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import type { ProviderView } from '@cindy/model-providers';
-import { resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
+import { ScheduledModelSelectionBusyError, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import { createScheduledSessionBootstrap } from '../../maker-ipc/scheduledSessionBootstrap';
 import {
   setCodexAppliedCustomProviderRoutes,
@@ -1046,6 +1046,40 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     h.emit({ type: 'done', data: {}, source: 'claude-code' });
     await expect(fire).resolves.toMatchObject({ sessionId: SESSION_ID });
     expect(opts.prepareModelPreferences).toHaveBeenCalledTimes(1);
+  });
+
+  // #9642 / unit: queued preparation precedes the send transaction's route apply.
+  // Direct-send Busy coverage did not exercise this dispatchGate consumer.
+  it.each([
+    { name: 'recurring', overrides: {}, deferToCaller: false, deferred: true },
+    { name: 'manual', overrides: { manual: true }, deferToCaller: false, deferred: false },
+    { name: 'one-off', overrides: { recurring: false }, deferToCaller: false, deferred: false },
+    { name: 'caller-owned', overrides: { manual: true }, deferToCaller: true, deferred: true },
+  ])('preserves $name retry ownership when queued route preparation is busy', async ({ overrides, deferToCaller, deferred }) => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const prepareModelPreferences = vi.fn(async () => {
+      throw new ScheduledModelSelectionBusyError('route is still settling');
+    });
+    const { runner, notifier } = createRunnerHarness(h.session, queue.deps, { prepareModelPreferences });
+    const ctx = { ...createFireContext(), deferToCaller };
+    const fire = runner.fire(heartbeatSchedule({ model: 'scheduled-model', ...overrides }), ctx);
+    const outcome = fire.then(value => ({ value }), (error: Error) => ({ error }));
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+    await queue.accept();
+    const result = await outcome;
+    if (deferred) {
+      expect(result).toMatchObject({ value: { sessionId: SESSION_ID, deferred: true } });
+      expect(notifier.notify).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject({ error: { message: expect.stringContaining('SESSION_RUNNING') } });
+      expect(notifier.notify).toHaveBeenCalledOnce();
+    }
+    expect(prepareModelPreferences).toHaveBeenCalledOnce();
+    expect(h.session.send).not.toHaveBeenCalled();
+    expect(h.session.setModel).not.toHaveBeenCalled();
+    expect(ctx.onTurnActive).not.toHaveBeenCalled();
+    expect(h.listenerCount()).toBe(0);
   });
 
   it('dispatches a fresh implicit provider route using the resolved fire-local schedule', async () => {

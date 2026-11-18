@@ -3195,6 +3195,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
         waiterSlot.current?.stopListening();
         return this.settleStoppedDispatch(schedule, ctx, sessionId, holder, err);
       }
+      if (err instanceof ScheduledModelSelectionBusyError) {
+        return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+      }
       if (err instanceof RoutineDispatchDeferredError) {
         const persistent = this.notePermissionMismatch(schedule, ctx, sessionId, err);
         if (persistent) {
