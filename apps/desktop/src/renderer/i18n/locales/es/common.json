@@ -1359,10 +1359,11 @@
         "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Activa el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
         "action": "Activar"
       },
-      "update": {
-        "title": "Actualiza el complemento «{{plugin}}»",
-        "body": "Esta tarea tiene {{device}} abierto en otro ordenador. Actualiza el complemento «{{plugin}}» en este ordenador para verlo y manejarlo en la barra lateral derecha.",
-        "action": "Actualizar"
+      "unsupported": {
+        "title": "El complemento «{{plugin}}» no admite la vista remota",
+        "body": "El complemento instalado no puede mostrar {{device}} desde otro ordenador. Busca una actualización compatible o usa el dispositivo en el ordenador que ejecuta esta sesión.",
+        "action": "Buscar actualización compatible",
+        "unavailable": "No hay una actualización compatible en el origen de este complemento. Usa el dispositivo en el ordenador que ejecuta esta sesión."
       }
     },
     "lockOnExitHintPrivacy": "Muestra la pantalla de privacidad al salir para que la IA siga trabajando; tocar la computadora la bloquea.",
@@ -1934,7 +1935,6 @@
       "memory": "Memoria",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Modelos auxiliares",
-      "visionBridge": "Puente de visión",
       "compaction": "Compactación de contexto",
       "terminalShell": "Shell de terminal predeterminado",
       "composer": "Entrada de mensaje",
@@ -5472,37 +5472,6 @@
       "title": "Consejos",
       "description": "Interruptores de funciones. Algunos requieren una nueva sesión para surtir efecto (consulta la descripción de cada opción)."
     },
-    "visionBridge": {
-      "title": "Puente de visión",
-      "description": "Da a los modelos de solo texto la capacidad de leer imágenes enviándolas a un modelo multimodal independiente que las convierte en descripciones de texto.",
-      "enableLabel": "Habilitar puente de visión",
-      "enableHint": "Si está desactivado, todos los modelos se comportan exactamente como antes. Si está activado, los modelos que selecciones abajo envían sus imágenes al backend de visión. Al activarlo, las imágenes enviadas a estos modelos y el texto cercano usado como pista de enfoque se envían al backend de visión que elijas.",
-      "enableAria": "Alternar puente de visión",
-      "toast": {
-        "saved": "Configuración del puente de visión guardada",
-        "saveFailed": "No se pudo guardar la configuración del puente de visión"
-      },
-      "capability": {
-        "vision": "Capacidad de visión conocida",
-        "noVision": "Sólo texto conocido",
-        "unknown": "Capacidad de visión desconocida"
-      },
-      "targetModels": {
-        "label": "Modelos que usan el puente de visión",
-        "hint": "Los modelos de solo texto (por ejemplo, DeepSeek) están marcados de forma predeterminada. También puedes marcar modelos con capacidad de visión, por ejemplo, para usar un modelo de descripción más económico y ahorrar tokens.",
-        "empty": "No hay modelos disponibles.",
-        "toggleAria": "Alternar puente de visión para {{model}}"
-      },
-      "backends": {
-        "label": "Modelos de backend de visión",
-        "hint": "Elige hasta dos modelos multimodales para convertir imágenes en texto. El segundo, que se usa como alternativa, es opcional.",
-        "primary": "Principal",
-        "fallback": "Alternativo",
-        "unset": "Ninguno seleccionado",
-        "noBackup": "Sin modelo alternativo",
-        "hintSecondary": "Se usa primero el modelo principal. Si falla y hay un modelo alternativo configurado, se usa este último. Si ambos fallan, la imagen no se puede describir y se sustituye por un aviso de texto."
-      }
-    },
     "terminalShell": {
       "title": "Shell de terminal predeterminado",
       "description": "Usa este shell al abrir una nueva pestaña de terminal en la barra lateral.",
@@ -7946,6 +7915,18 @@
         "overviewTab": "Descripción general",
         "addPlugin": "Agregar complemento",
         "addPluginAria": "Opciones para agregar complementos",
+        "githubInstall": {
+          "label": "Instalar desde una release de GitHub…",
+          "title": "Instalar desde una release de GitHub",
+          "description": "Pega el enlace de un repositorio o de una release. Para un repositorio privado, inicia sesión con una cuenta de GitHub con acceso.",
+          "url": "Dirección de GitHub",
+          "submit": "Buscar plugin",
+          "loading": "Buscando y descargando…",
+          "invalid": "Introduce una URL de un repositorio o una etiqueta de release de GitHub.",
+          "not-found": "Esta versión no está disponible. Comprueba el enlace y tu acceso al repositorio.",
+          "ambiguous": "Este enlace contiene varios plugins. Elige una release con un solo paquete o instala el archivo directamente.",
+          "installedAlready": "Este plugin ya está instalado. Puedes actualizarlo en sus ajustes."
+        },
         "installedSection": "Instalado",
         "installedExpand": "Mostrar los {{count}} complementos instalados",
         "installedCollapse": "Ocultar complementos instalados adicionales",
@@ -8320,7 +8301,7 @@
         "hostTools_handoff": "Mensajes a tareas",
         "hostTools_handoffDetail": "Usar las herramientas de Cindy para enviar mensajes a tareas existentes. Las operaciones que necesitan una tarea actual requieren un destino explícito.",
         "hostTools_usage": "Leer el uso y el estado de los grupos de proveedores",
-        "hostTools_usageDetail": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de proveedores y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes.",
+        "hostTools_usageDetail": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de proveedores y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes. También lee la cuota de las tareas accesibles, incluso en otro ordenador autorizado de la misma cuenta o mediante un proveedor compartido que permite ver la cuota.",
         "hostTools_settings": "Ajustes de la aplicación",
         "hostTools_settingsDetail": "Usar las herramientas de Cindy para leer y cambiar la configuración. No se devuelven secretos y los datos privados los introduces tú.",
         "hostTools_scheduler": "Gestión de automatizaciones",
@@ -8844,6 +8825,10 @@
       "panelHost": {
         "close": "Cerrar panel"
       },
+      "installProgress": {
+        "awaitingConsent": "Esperando confirmación…",
+        "installFailed": "Error al instalar"
+      },
       "updateAll": {
         "title": "Actualizar todos · {{count}} complementos",
         "collapseDiff": "Contraer",
@@ -8854,6 +8839,7 @@
         "statusDone": "Actualizado",
         "statusSkipped": "Saltado",
         "statusFailed": "Error al actualizar",
+        "progressCount": "{{done}} de {{total}} actualizados",
         "background": "Continuar en segundo plano",
         "doneAction": "Listo",
         "doneToast": "Actualización por lotes finalizada: {{done}} actualizados, {{rest}} sin completar",
@@ -11529,7 +11515,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} no puede responder: el dispositivo del amigo alcanzó su límite de sesiones remotas.\nPídele al propietario del amigo que archive las sesiones sin usar o al propietario de la computadora remota que aumente el límite en Acceso remoto y uso compartido.",
           "REMOTE_TOTAL_LIMIT": "{{name}} no puede responder: la computadora remota alcanzó su límite total de sesiones remotas.\nPídele al propietario de esa computadora que libere las sesiones sin usar o aumente el límite en Acceso remoto y uso compartido.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} no pudo responder: el modelo actual no admite imágenes.\nElige un modelo compatible con imágenes o activa y configura Vision Bridge en Configuración → Personalización y vuelve a enviar tu mensaje.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} no pudo responder: el modelo actual no admite imágenes.\nElige un modelo compatible con imágenes.",
           "MODEL_UNAVAILABLE": "{{name}} no pudo responder: no hay ningún modelo disponible.\nElige un modelo conectado y disponible en la configuración del amigo y vuelve a enviar tu mensaje.",
           "AUTH_REQUIRED": "{{name}} no pudo responder: la conexión del modelo requiere autenticación.\nVuelve a conectar el proveedor del modelo en Configuración y vuelve a enviar tu mensaje.",
           "RATE_LIMITED": "{{name}} no pudo responder: hay demasiadas solicitudes al modelo.\nVuelve a enviar tu mensaje más tarde o elige otro modelo disponible.",
@@ -15027,11 +15013,6 @@
       "unavailable": "Imagen no disponible",
       "loading": "Cargando imagen…"
     },
-    "visionBridge": {
-      "analyzing": "Analizando imágenes ({{count}})…",
-      "fallback": "El puente de visión recurrió a un backend de visión de respaldo (el principal no está disponible); el reconocimiento de imágenes podría verse afectado",
-      "unavailable": "El puente de visión no está disponible; no se pudo describir la imagen y se reemplazó por un aviso de texto"
-    },
     "newMessageIndicator": {
       "aria": "Ir al final, ver {{count}} mensajes nuevos",
       "label_one": "{{count}} nuevo mensaje",
@@ -16676,7 +16657,10 @@
       "confirmArchive": {
         "title": "Archivar sesión",
         "description": "¿Archivar esta sesión? Se quitará de la lista.",
-        "dirtyWorktreeWarning": "El worktree de esta sesión tiene cambios sin commit; se guardarán como una instantánea de git antes de archivarla y se podrán restaurar desde la sesión más adelante.",
+        "dirtyWorktreeWarning": "Los cambios sin confirmar se guardarán antes de archivar. Podrás restaurarlos desde la tarea.",
+        "discardChanges": "Descartar cambios sin confirmar",
+        "discardWarning": "Los cambios sin confirmar y los archivos nuevos se perderán.",
+        "discardAndArchive": "Descartar y archivar",
         "scheduleWarning_one": "La automatización vinculada {{names}} seguirá ejecutándose y restaurará esta sesión.",
         "scheduleWarning_other": "Las automatizaciones vinculadas {{names}} seguirán ejecutándose y restaurarán esta sesión.",
         "scheduleWarningMany_one": "{{count}} de estas sesiones tiene automatizaciones vinculadas que la restaurarán cuando se ejecuten.",
@@ -21664,7 +21648,6 @@
       "sessionRuntimeFallback": "Cambio automático del modelo de las tareas",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Modelos auxiliares",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Modelos visibles y ocultos",
       "providerOrder": "Orden de proveedores",
       "modelCatalogOverrides": "Parámetros de modelo modificados",

@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}不能作覆：今之模型不支援圖。",
         "advice": "請易以支援圖之模型。",
-        "details": "請易以支援圖之模型，或於「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後再遣。"
+        "details": "請易以支援圖之模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}不能作覆：今無可用之模型。",

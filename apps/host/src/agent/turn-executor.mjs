@@ -100,12 +100,12 @@ export function createTurnExecutor(deps) {
     }
   }
 
-  function startGitBaseline(sessionId, signal) {
+  function startGitBaseline(sessionId, signal, prepareSnapshot) {
     const turn = turns.get(sessionId);
     const snapshot = deps.getGitSnapshot?.();
     if (!turn || !snapshot) return;
     turn.gitBaseline = { aborted: false, ended: false };
-    return snapshot.onTurnStart(sessionId, signal);
+    return prepareSnapshot ? prepareSnapshot(snapshot) : snapshot.onTurnStart(sessionId, signal);
   }
 
   // recoveryOwnsError: context recovery claimed this terminal error and writes its row if it fails.
@@ -615,7 +615,7 @@ export function createTurnExecutor(deps) {
     async drainHistories() { await Promise.all([...histories.values()].map(history => history.drain())); },
     /** A rebuilt native context has seen no environment notes (contextRecoveryRebuilt). */
     resetWireNotes: id => wireNotes.reset(id),
-    async beforeDispatchUserTurn(id, item, signal) {
+    async beforeDispatchUserTurn(id, item, signal, prepareSnapshot) {
       const turn = turns.get(id);
       const live = deps.getMaker()?.getSession(id);
       if (live) {
@@ -623,7 +623,7 @@ export function createTurnExecutor(deps) {
         turn.changeRecordStarted = true;
       }
       turn.check();
-      await startGitBaseline(id, signal);
+      await startGitBaseline(id, signal, prepareSnapshot);
     },
     onUndispatchedUserTurn(id) {
       const turn = turns.get(id);

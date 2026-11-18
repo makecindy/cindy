@@ -1,6 +1,6 @@
 /**
  * 群聊输入框：长粘贴复用伙伴对话的文本标签；发送正文仍为纯文本。
- * Enter 发送、Shift+Enter 换行，IME 组合中不发送
+ * 发送快捷键沿用聊天设置，Shift+Enter 换行，IME 组合中不发送
  * （DESIGN.md §14.3）。输入 `@` 弹出点名候选（useBotGroupMentionPicker，主群与话题回复同一套）。
  *
  * 发送时以正文重新解析点名（见 botGroupMentions.ts），clientId 作为幂等键：同一段
@@ -61,6 +61,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import type { UseAttachmentsReturn } from '@/hooks/useAttachments';
+import { resolveComposerEnterIntent, useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
 import {
   areAttachedFileSnapshotsEqual,
   captureDraftDiscardToken,
@@ -250,6 +251,7 @@ export function BotGroupComposer({
   footerStart?: (sending: boolean) => ReactNode;
 }) {
   const { t } = useTranslation();
+  const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
   const thread = mode === 'thread';
   const threadAttempt = useBotGroupThreadReplyAttempt(thread ? draftKey : null);
   const groupMask = useGroupMask(groupId);
@@ -741,7 +743,16 @@ export function BotGroupComposer({
       onQuoteChange(null);
       return;
     }
-    if (event.key === 'Enter' && !event.shiftKey) {
+    const enterIntent = resolveComposerEnterIntent(event.nativeEvent, sendShortcutPreference, {
+      // Group delivery already owns interruption; it has no separate queue/steer shortcut.
+      turnRunning: false,
+      platform: window.electronAPI?.platform,
+    });
+    if (enterIntent === 'ignore') {
+      event.preventDefault();
+      return;
+    }
+    if (enterIntent === 'queue') {
       event.preventDefault();
       void send();
       return;

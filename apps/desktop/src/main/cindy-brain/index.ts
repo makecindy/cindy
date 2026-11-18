@@ -736,8 +736,8 @@ import { readModelDisableOverrides } from '../maker-host/model-disable-store.js'
 import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { getGhostGithubReleaseRepository } from '@cindy/plugin-protocol';
-import { GITHUB_PLUGIN_RELEASE_PROGRESS_CHANNEL } from '../../shared/githubPluginRelease.js';
-import { checkGithubPluginRelease, downloadGithubPluginRelease, installCheckedGithubPluginRelease } from './githubPluginRelease.js';
+import { GITHUB_PLUGIN_RELEASE_PROGRESS_CHANNEL, type GithubPluginReleaseInstallResult } from '../../shared/githubPluginRelease.js';
+import { checkGithubPluginRelease, downloadGithubPluginRelease, findGithubPluginInstall, installCheckedGithubPluginRelease, parseGithubPluginReleaseSource } from './githubPluginRelease.js';
 import { compareAppUpdateVersions } from '../updateVersionPolicy.js';
 import { guardedOutboundFetch, outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
@@ -10934,12 +10934,16 @@ export function registerGhostIpc(): void {
     finally { release(); }
   });
 
-  ipcMain.handle('ghosts:install', async (event, lizFilePath: unknown, opts: unknown) => {
-    assertTrustedAppRendererEvent(event);
+  const installLocalFile = async (
+    sender: Parameters<typeof createWindowGhostInstallConsentPrompt>[0],
+    mutationOwner: ActiveAppSession,
+    lizFilePath: unknown,
+    opts: unknown,
+    releaseTarget?: { pluginId: string; version: string; repository: string },
+  ) => {
     // 与市场路径同款 owner 租约:入口处同步捕获 owner,异步 inspect 之后、真正动
     // 文件系统之前取租约并核对 owner 未变 —— manager 的内容根/状态根都是调用时
     // 现解析的,异步窗口里账号切换落定会让后半段写进新 owner 的命名空间。
-    const mutationOwner = captureGhostMutationOwner();
     if (typeof lizFilePath !== 'string' || lizFilePath.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'lizFilePath must be a non-empty string');
     }
@@ -10961,21 +10965,31 @@ export function registerGhostIpc(): void {
     if (probe.packageSha256 !== expectedPackageSha256) {
       throwIpcError('GHOST_FILE_INVALID', '插件文件在检查后发生了变化，请重新选择');
     }
+    if (releaseTarget) {
+      const repository = getGhostGithubReleaseRepository(probe.manifest);
+      if (probe.manifest.id !== releaseTarget.pluginId || probe.manifest.version !== releaseTarget.version ||
+          (probe.manifest.githubRelease !== undefined && repository !== releaseTarget.repository)) {
+        throwIpcError('GHOST_FILE_INVALID', 'Plugin ID, version or declared repository does not match the GitHub release');
+      }
+      if (!ghostOwnerScope.isStable(mutationOwner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
+    }
     rejectReservedGhostId(probe.manifest.id);
     rejectBrokerWithoutDeclaredRedirectPort(probe.manifest);
     rejectUnauthorizedTokenBroker(probe.manifest, { namespace: LOCAL_PLUGIN_NAMESPACE });
     // 首装一律先在发起安装的窗口里请用户确认插件权限；确认在任何锁与 owner 租约
     // 之外等待，落位前由 installAndDock 在锁内按同一份包复核。
+    const existing = findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: probe.manifest.id, namespace: LOCAL_PLUGIN_NAMESPACE });
+    if (releaseTarget && existing) throwIpcError('ALREADY_EXISTS', 'Update the plugin from its settings');
     const consent = await obtainGhostInstallConsent(
       {
         mode: 'prompt',
-        prompt: createWindowGhostInstallConsentPrompt(event.sender),
+        prompt: createWindowGhostInstallConsentPrompt(sender),
         initiator: 'user',
         origin: 'local-file',
         trust: probe.trust.level,
         target: ghostInstallTargetContext(manager.list(), probe.manifest.id, LOCAL_PLUGIN_NAMESPACE, undefined, false),
       },
-      findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: probe.manifest.id, namespace: LOCAL_PLUGIN_NAMESPACE }),
+      existing,
       probe.manifest,
       probe.packageSha256,
     );
@@ -11003,6 +11017,54 @@ export function registerGhostIpc(): void {
     } finally {
       releaseMutation();
     }
+  };
+
+  ipcMain.handle('ghosts:install', (event, lizFilePath: unknown, opts: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    return installLocalFile(event.sender, captureGhostMutationOwner(), lizFilePath, opts);
+  });
+
+  const githubReleaseInstalls = new Set<string>();
+  ipcMain.handle('ghosts:install-github-release', async (event, action: unknown, url: unknown, requestId: unknown): Promise<GithubPluginReleaseInstallResult | boolean> => {
+    assertTrustedAppRendererEvent(event);
+    const owner = captureGhostMutationOwner();
+    if (action === 'sign-in') return openGithubSignIn();
+    const source = action === 'install' ? parseGithubPluginReleaseSource(url) : undefined;
+    if (!source || typeof requestId !== 'string' || !/^install:[a-f0-9-]{36}$/.test(requestId)) return { status: 'invalid' };
+    const token = await readLocalGithubToken();
+    if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
+    const check = await findGithubPluginInstall(outboundFetch as typeof fetch, token, source);
+    if (check.status !== 'available') return { status: check.status };
+    if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
+    const release = check.release;
+    const ownerStamp = getGhostOwnerPushStamp();
+    let instanceId: string | undefined;
+    const result = await installCheckedGithubPluginRelease({
+      check,
+      expectedAssetId: release.assetId,
+      pending: githubReleaseInstalls,
+      updateKey: activeOwnerScopeKey(),
+      tempRoot: app.getPath('temp'),
+      isCurrentOwner: () => ghostOwnerScope.isStable(owner),
+      download: (file, asset, callbacks) => downloadGithubPluginRelease(
+        outboundFetch as typeof fetch, token, source.repository, asset, file, callbacks,
+      ),
+      install: async file => {
+        const { ghost } = await installLocalFile(event.sender, owner, file, {
+          enable: true, expectedPackageSha256: release.sha256,
+        }, { pluginId: release.pluginId, version: release.version, repository: source.repository });
+        instanceId = installedGhostStoragePart(ghost);
+        return ghost.manifest.version;
+      },
+      emit(progress) {
+        if (!event.sender.isDestroyed() && ghostOwnerScope.isStable(owner)) {
+          sendGhostContentsPush(event.sender, GITHUB_PLUGIN_RELEASE_PROGRESS_CHANNEL, { instanceId: requestId, progress }, ownerStamp);
+        }
+      },
+    });
+    return result.status === 'updated' && instanceId
+      ? { status: 'installed', instanceId, version: result.version }
+      : { status: 'unavailable' };
   });
 
   // 原位更新(同 id 换版):先熄灯沙箱(新代码由下一次派活/面板重挂拉起),

@@ -28,7 +28,7 @@
 | 开关、滑杆 | `Switch`、`Slider`、`EffortSlider` | §15.17、§15.18 |
 | 复选框 | `components/ui/checkbox.tsx` 的 `Checkbox` | §4 Desktop settings controls |
 | 加载中 | `components/ui/spinner.tsx` 的 `Spinner` | §14.4 |
-| 下载、安装进度 | `components/ui/download-meter.tsx` 的 `DownloadMeter` | §4 Download progress |
+| 下载、安装进度 | `components/ui/download-meter.tsx` 的 `DownloadMeter`；按钮大小的位置用同文件的 `DownloadRing` | §4 Download progress |
 | 错误与通知 | `ErrorNotice`；短通知用 `lib/toast.ts` | §4 Error notices、§4 Toast |
 | 展开收起 | `components/ui/collapse.tsx` 的 `Collapse` | §14.4 |
 | 聊天内容 | `chatChrome.ts`、`activityRowChrome.ts` | §4 Desktop chat and operation authorization |
@@ -713,6 +713,17 @@ Desktop 上用户能看到的下载与安装进度（工具、运行时、模型
   提供，组件只负责显示。`role="progressbar"` 的 `aria-valuetext` 汇总状态与速度，供读屏读取。
 - 启动页、壁纸缩略图等已登记的品牌或特定界面若不能放入三行结构，保留原外形，但状态文字与数值
   仍取自同一份 `DownloadProgress` 和本组件导出的格式化函数。
+- **圆环形态（2026-11-18 用户裁决，插件更新）**：进度出现在按钮大小的位置、放不下三行时，用同文件
+  的 `DownloadRing`。圆环几何沿用 `ContextCapacityRing`（2.5px 线宽、圆头、从 12 点顺时针），
+  轨道 `--msg-tool-card-border`、填充 `--text-primary`；尺寸 16（列表行）、20（卡片）、24（详情头部）。
+  圆环旁只写步骤（`downloadProgress.phase.*`，有空间时重试写原因），**不画百分比、字节、速度或剩余
+  时间**——用户裁决「有圆圈表示就够了」；这些数值只进 `aria-valuetext`。下载完成后的校验、安装阶段
+  圆环保持满格，由文字说明；完成时换成对勾与 `--card-status-done` 文字，失败时填充改
+  `--remote-status-failed`、文字 `--error-flat`。失败原因与失败提示同一句话：详情页与「全部更新」弹窗直接显示，卡片写
+  「更新失败／安装失败」，原因放在悬停提示与读屏文本里。卡片上的失败状态旁用带 `Tip`「重试」的正方形图标
+  按钮（§4 Icon buttons），使失败状态不比原按钮宽；详情页与弹窗空间够，用文字按钮。同样不旋转、不循环。使用方：插件市场的手动
+  安装与更新——已装插件卡片与详情页、「全部更新」弹窗、市场卡片和市场详情页；首装完成写「已安装」，
+  更新写「已更新」。
 
 ### Dialog & Modal
 

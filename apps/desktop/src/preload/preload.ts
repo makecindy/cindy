@@ -673,6 +673,7 @@ const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
 const fanOutPluginUpdateConsentHoldsChanged = createIpcFanOut(
   'plugin-market:update-consent-holds-changed',
 );
+const fanOutPluginInstallProgress = createIpcFanOut('plugin-market:install-progress');
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
@@ -1577,6 +1578,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
       ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),
     onGithubReleaseProgress: fanOutGithubPluginReleaseProgress,
+    installGithubRelease: (action: 'install' | 'sign-in', url?: string, requestId?: string):
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseInstallResult | boolean> =>
+      ipcRenderer.invoke('ghosts:install-github-release', action, url, requestId),
     pickFile: (): Promise<{ canceled: true } | { filePath: string }> =>
       ipcRenderer.invoke('ghosts:pick-file'),
     inspect: (
@@ -1869,6 +1873,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     > => ipcRenderer.invoke('plugin-market:consume-removal-notice'),
     onRemovalNoticeAvailable: fanOutPluginRemovalNoticeAvailable,
     onUpdateConsentHoldsChanged: fanOutPluginUpdateConsentHoldsChanged,
+    /** Display-only progress of installs and updates started from this window. */
+    onInstallProgress: (
+      callback: (
+        progress: import('../shared/pluginMarket').PluginMarketInstallProgress,
+        ownerStamp?: unknown,
+      ) => void,
+    ): (() => void) =>
+      fanOutPluginInstallProgress((data, ownerStamp) =>
+        callback(data as import('../shared/pluginMarket').PluginMarketInstallProgress, ownerStamp),
+      ),
     listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
       ipcRenderer.invoke('plugin-market:list-sources'),
     pickLocalSource: (
@@ -5735,7 +5749,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   worktreeListBranches: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:list-branches', req),
   // P1: 删除/归档确认预检(有无 worktree、是否有未提交更改)
-  worktreeRemovalPreview: (sessionId: string): Promise<{ hasWorktree: boolean; dirty: boolean }> =>
+  worktreeRemovalPreview: (sessionId: string): Promise<{ hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }> =>
     ipcRenderer.invoke('worktree:removal-preview', sessionId),
   // P1: worktree 被回收后的可恢复状态 + 一键恢复(分支重建 + 快照 apply)
   worktreeRestoreStatus: (sessionId: string): Promise<unknown> =>
@@ -8118,19 +8132,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       patch: AuxiliaryModelSettingsPatch,
     ): Promise<AuxiliaryModelSettingsState> =>
       ipcRenderer.invoke('maker:auxiliary-model-settings:set', patch),
-
-    /**
-     * 视觉桥设置（两个清单：目标模型勾选 + 视觉后端主/备选）。
-     * 读写 <userData>/vision-bridge-settings.json（main 为真源）。
-     */
-    visionBridgeSettingsGet: (): Promise<VisionBridgeSettingsState> =>
-      ipcRenderer.invoke('maker:vision-bridge-settings:get'),
-    visionBridgeSettingsSet: (
-      patch: VisionBridgeSettingsPatch,
-    ): Promise<VisionBridgeSettingsState> =>
-      ipcRenderer.invoke('maker:vision-bridge-settings:set', patch),
-    visionBridgeSettingsReset: (): Promise<VisionBridgeSettingsState> =>
-      ipcRenderer.invoke('maker:vision-bridge-settings:reset'),
 
     // Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。
     // 并发上限即刻生效;优先级降档对在跑 agent 进程约 15s 内生效(watcher 轮询);

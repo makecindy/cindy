@@ -11,6 +11,13 @@ const host = vi.hoisted(() => ({ packaged: false, endpoint: 'http://127.0.0.1:43
 vi.mock('electron', () => ({ app: { get isPackaged() { return host.packaged; } } }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => host.endpoint }));
 vi.mock('../../downloader/http', () => ({ requestResponse: fetchMock }));
+// Exercise the real retry controller and attempt limits without waiting for network backoff.
+vi.mock('../../downloader/retry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../downloader/retry')>();
+  const withRetry: typeof actual.withRetry = (operation, options) =>
+    actual.withRetry(operation, { ...options, config: { ...options.config, baseDelayMs: 0 } });
+  return { ...actual, withRetry };
+});
 
 import { downloadVerifiedPlugin } from '../download';
 import * as downloader from '../../downloader/index';
@@ -145,9 +152,8 @@ describe('downloadVerifiedPlugin', () => {
 
   // Retry decision 2026-11-17: market packages get up to 3 tries instead of failing on one blip.
   it('allows the exact archive limit to reach the download boundary and retries a busy server', async () => {
-    vi.useFakeTimers();
     fetchMock.mockImplementation(async () => new Response(null, { status: 503 }));
-    const result = expect(
+    await expect(
       downloadVerifiedPlugin(
         'https://downloads.example.test/a',
         {
@@ -157,20 +163,16 @@ describe('downloadVerifiedPlugin', () => {
         target(),
       ),
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_FAILED' });
-    await settle(result);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('recovers when a retry succeeds', async () => {
-    vi.useFakeTimers();
     const bytes = Buffer.from('fixture');
     fetchMock
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
       .mockResolvedValueOnce(new Response(bytes));
     const file = target();
-    await settle(
-      downloadVerifiedPlugin('https://downloads.example.test/a', expected(bytes), file),
-    );
+    await downloadVerifiedPlugin('https://downloads.example.test/a', expected(bytes), file);
     expect(fs.readFileSync(file).equals(bytes)).toBe(true);
   });
 
@@ -213,16 +215,14 @@ describe('downloadVerifiedPlugin', () => {
   });
 
   it('sanitizes native network errors including signed URLs', async () => {
-    vi.useFakeTimers();
     fetchMock.mockRejectedValue(new Error('net::ERR_FAILED https://private.test/?secret=signed'));
     const file = target();
-    const result = expect(
+    await expect(
       downloadVerifiedPlugin('https://downloads.example.test/a', expected(Buffer.from('a')), file),
     ).rejects.toMatchObject({
       code: 'GHOST_DOWNLOAD_FAILED',
       message: expect.not.stringContaining('signed'),
     });
-    await settle(result);
     expect(fs.existsSync(file)).toBe(false);
   });
 

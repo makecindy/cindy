@@ -15,6 +15,8 @@ import { useTranslation } from 'react-i18next';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Spinner } from '@/components/ui/spinner';
 import { GhostPluginIcon } from './GhostPluginIcon';
+import { PluginInstallRing } from './PluginInstallRing';
+import { usePluginInstallProgressMap, type PluginInstallProgressState } from './lib/pluginInstallProgress';
 import { isBatchFinished, type UpdateAllRow } from './lib/updateAllModel';
 
 interface UpdateAllDialogProps {
@@ -26,8 +28,20 @@ interface UpdateAllDialogProps {
 }
 
 /** 单行状态徽标(纯文字 + 图标,不用彩色圆点——绿色专职未读语义)。 */
-function RowStatus({ row }: { row: UpdateAllRow }) {
+function RowStatus({ row, progress }: { row: UpdateAllRow; progress?: PluginInstallProgressState }) {
   const { t } = useTranslation();
+  // 正在更新或失败的这一行:圆环表示下了多少,文字写当前步骤或失败原因。
+  if (progress && (row.status === 'installing' || row.status === 'failed')) {
+    return (
+      <PluginInstallRing
+        label={row.name}
+        progress={progress}
+        size={16}
+        failure={row.errorText}
+        className="max-w-[220px]"
+      />
+    );
+  }
   if (row.status === 'done') {
     return (
       <span className="flex items-center gap-1.5 text-12 text-[var(--card-status-done)]">
@@ -73,6 +87,8 @@ export function UpdateAllDialog({
 }: UpdateAllDialogProps) {
   const { t } = useTranslation();
   const finished = isBatchFinished(rows);
+  const progressByPluginId = usePluginInstallProgressMap();
+  const doneCount = rows.filter((row) => row.status === 'done').length;
   return (
     <Dialog.Root open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
       <Dialog.Portal>
@@ -124,13 +140,16 @@ export function UpdateAllDialog({
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <RowStatus row={row} />
+                    <RowStatus row={row} progress={progressByPluginId.get(row.pluginId)} />
                   </div>
                 </div>
               </div>
             ))}
           </div>
-          <div className="flex items-center justify-end gap-2 border-t-[0.5px] border-[var(--border-default)] px-6 py-4">
+          <div className="flex items-center justify-between gap-3 border-t-[0.5px] border-[var(--border-default)] px-6 py-4">
+            <span className="text-12 tabular-nums text-[var(--text-tertiary)]">
+              {t('settings.ghosts.updateAll.progressCount', { done: doneCount, total: rows.length })}
+            </span>
             <Button
               variant={finished ? 'cta' : 'secondary'}
               size="lg"

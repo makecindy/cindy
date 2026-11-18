@@ -105,6 +105,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 媒体模型 | `configure_model_connection` 声明 mode/modalities 与 imageApi/videoApi，读取时保留这些字段；`manage_media_guide` 按需 get、validate、save 自定义调用说明；`media` prepare/request/poll 使用指定连接 | 有（未发布；沿用任务权限，各连接保留自己的 API 声明和凭证，图片／视频各按其来源读取显示开关；保存或校验不等于真实出片，错误原因与后备由 Agent 判断） | 在媒体连接所在电脑的本机任务执行；不新增跨电脑 Guide 同步或 SSH 管理 |
 | 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略；2026-11-13 起另含登录为单独供应商（`create`）或加入指定供应商（`add`）、移动／拿出（`place`）、整体并入（`merge`）、删除新建的订阅供应商（`remove-provider`），与设置页共用校验和执行服务 | 有（Claude / Codex；任意同类供应商，每个供应商只用自己的账号；2026-11-16 起所有账号均可移除／移动，读取包含上游已知的 planTier / planType） | 工具按目标电脑的本机任务执行；同账号远控 UI 复用管理 IPC，执行电脑版本过旧时拒绝新操作 |
 | 供应商状态与用量 | `get_provider_usage_history` 原样读取已记录用量与 coverageStart；`get_provider_group` 读取既有组视图、成员/设备显示信息、运行状态与已知 quota，未知不当零，不做宿主聚合 | 有（Agent 与声明 usage 的插件共用原处理器；仅 settings 不授权，未声明 usage 的旧插件权限不变，manifest 新增 usage 走整体安装确认，已有该组批准可调用新增组内读取、不补批；不开放原账号身份/目录/指纹） | 有（device 指定同账号已授权电脑，复用原 manage-share/usage-history 与 manage-group/get；旧端不支持时明确报错） |
+| 按任务读取额度 | `get_session_quota` 按当前用户任务的实际执行来源读取已有额度；插件沿用 `usage` 组 | 有（只返回额度和来源类别） | 本机、同账号已授权电脑、允许查看额度的分享连接；无明确归属时返回不可用 |
 | 脚本读取供应商状态 | 只跑脚本的 `settings.read` 允许分享成员名单及模型范围；`usage.read` 允许 get_subscription_usage、已记录用量和组状态；现有 broker 直接调用相同处理器，不启动模型、不开放写操作或原始账号视图 | 有（未授予时拒绝；保留原完整性及套餐字段，组名称沿原投影去身份，不返回邮箱/目录/内部指纹/凭证） | 成员/用量/组状态沿同账号已授权电脑管理；订阅额度仅执行电脑。未装配服务的Host或旧端明确不支持，不降级执行 |
 | 订阅用量 | `get_subscription_usage`（`usage` 分类；搜索「用量／额度」可发现）：逐账号只读标识、套餐、额度窗口与观测时间；插件通过独立 `agent.hostTools:['usage']` 声明调用同一入口 | 有（本机 Claude / Codex，不返回邮箱、凭证、目录或内部身份指纹） | 仅执行电脑当前 Cindy 账号已连接的本机订阅；不汇总远程／分享供应商，Node Host 未接入时明确不支持 |
 | 任务     | 列出、搜索、读聊天记录、发现电脑；技术消息通过 `get_chat_history.roles` 显式选择，插件 `history` 组共用分页与存储结果限制（作者示例见随包 `plugin-history-and-http.md`） | 有 | 有 |
@@ -128,7 +129,8 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 共享任务 | 为当前原任务生成原生邀请、查询共享状态（`create_shared_task_invitation` / `get_shared_task_state`） | 有（房主；沿用任务权限，Plan 只读） | 手机或同账号其他电脑控制当前任务时在任务宿主执行；不支持指定其他任务 |
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
 | 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，可指定基线分支 `base_ref`；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10） | 无 |
-| 任务     | 看输入队列；编辑 / 撤回 / 调序自己发的排队消息；插话；停止 | 有   | 无               |
+| 任务     | 看输入队列；编辑 / 撤回 / 调序 / 插话待发消息；任务调用方沿原消息归属，声明 control 的插件可查看、撤回、调序、插话所有来源，编辑范围与任务界面一致，消费中与已消费项不可撤回 | 有（共用唯一队列；插件编辑标明实际插件来源，不沿用原文授权） | 无 |
+| 任务运行 | `control_session` 暂停 / 恢复 / 重试 / 压缩，Agent 与插件共用执行暂停锁、错误恢复与原生压缩事务；送达未知不自动重放 | 有（执行电脑本机；Claude 原 `/compact` 队列、Codex/Pi 原生手动压缩；不打断在途模型和工具） | 无 |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
 | 任务     | `fork_session` 按指定消息分叉；`rewind_session` 恢复指定 user 消息前的历史与检查点 | 有（整体安装授予的 control 声明；共用界面入口的屏障、锁与清理） | 有（既有 fork / rewind 通道，不自动重试） |
 | 任务     | `get_session_runtime` 读权限档；`set_session_runtime(permission_mode)` 复用界面权限提交与回滚 | 有（整体安装授予的 control 声明；持有 admission 的任务修改自身权限含混合请求，在所有写入前返回 `UNSUPPORTED_CAPABILITY`，其余原判定保持） | 任务在目标电脑运行工具；不新增跨电脑设置入口 |
