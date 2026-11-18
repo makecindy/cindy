@@ -11,9 +11,20 @@ export default {
     default:{data:{avatarData},about:'Sidebar folders preserve expand/collapse semantics regardless of saved project icon'},
     'idle-projects':{data:{avatarData,inactive:true},about:'Idle tasks fold independently under each project header (#11233)'},
     'idle-flat':{data:{avatarData,inactive:true,flat:'text'},about:'Idle tasks fold in a flat sidebar and can be shown again (#11233)'},
+    'filtered-projects':{data:{avatarData,inactive:true,filtered:true},about:'Filtered project results show all matches and omit the inactivity toggle (#11233)'},
   },
   async ready(page){await page.locator('[data-project-source] img, [data-project-working-dir="local:/Projects/Cindy"] .lucide-folder-open').first().waitFor();},
   async check(page,ui){
+    if (ui.case === 'filtered-projects') {
+      await page.locator('[data-session-id="demo-1-0"]').waitFor();
+      const expand=await ui.t('ccAgent.sidebar.expandAllSessions');
+      const fold=await ui.t('ccAgent.sidebar.collapseInactiveSessions');
+      if (await page.getByRole('button', { name: expand, exact: true }).count() ||
+          await page.getByRole('button', { name: fold, exact: true }).count()) {
+        throw new Error('Filtered projects must not offer inactivity folding');
+      }
+      return;
+    }
     if(ui.case === 'idle-projects') {
       const project=page.locator('[data-project-working-dir="local:/Projects/Cindy"]');
       const other=page.locator('[data-project-working-dir="local:/Projects/移动客户端"]');

@@ -191,6 +191,14 @@ export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriority
   return Math.max(sessionActivityMs(session), viewedAt);
 }
 
+/** Manual project sorting only depends on whether any project rows are hidden. */
+export function hasHiddenProjectRows(
+  entries: readonly MainListEntry[],
+  visibleProjectCount: number,
+): boolean {
+  return entries.filter((entry) => entry.kind === 'project').length > visibleProjectCount;
+}
+
 export function getMainListEntrySessions(entry: MainListEntry): readonly Session[] {
   if (entry.kind === 'project') return entry.project.sessions;
   if (

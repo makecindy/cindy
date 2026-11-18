@@ -180,6 +180,7 @@ export const ProjectNode = memo(function ProjectNode({
       className={cn('relative flex flex-col w-full select-none')}
     >
       <ProjectHeader
+        disableSessionCollapse={disableSessionCollapse}
         showAll={showAll}
         onShowAllChange={(value) => {
           if (isCollapsed) onToggle(project.projectKey);
@@ -244,6 +245,7 @@ type ProjectHeaderProps = Pick<
   | 'project'
   | 'statusFilter'
   | 'isCollapsed'
+  | 'disableSessionCollapse'
   | 'collapsedAttentionTone'
   | 'hideRemoteMachineLabel'
   | 'lamp'
@@ -261,6 +263,7 @@ type ProjectHeaderProps = Pick<
 };
 
 const ProjectHeader = memo(function ProjectHeader({
+  disableSessionCollapse,
   showAll,
   onShowAllChange,
   lamp,
@@ -479,7 +482,7 @@ const ProjectHeader = memo(function ProjectHeader({
             />
           )}
         </div>
-        {!isEditingName && project.sessions.length > 0 && (
+        {!isEditingName && !disableSessionCollapse && project.sessions.length > 0 && (
           <SessionCollapseToggle showAll={showAll} onChange={onShowAllChange} />
         )}
         {/* 右侧状态槽几何与 SessionItem 同一份:ml-auto + h-6 + 16px 指示器入流,

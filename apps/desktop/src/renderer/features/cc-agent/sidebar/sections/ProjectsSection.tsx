@@ -98,6 +98,7 @@ import {
   CINDY_MAKE_GROUP_KEY,
   dialogueGroupActionSessions,
   getMainListEntrySessions,
+  hasHiddenProjectRows,
   holdViewedPriorityRank,
   onlineDeviceSectionIds,
   splitEntriesByDevice,
@@ -1205,7 +1206,7 @@ export function ProjectsSection({
           ) : null}
           {/* 混排渲染(D / E 期):
               - 自定义项目顺序:Cindy Make 固定在前,项目段走 SortableList,
-                其后是散排对话 / 对话组。折叠+溢出时禁用拖拽,点「显示全部」后再拖。
+                其后是散排对话 / 对话组。只有项目行被折叠时才禁用拖拽。
                 可与设备分组叠加:每段各自拖本段项目。
               - 按最近活动:按 deviceSections 切段(设备分组开启时),段内项目行与
                 散排对话按任务排序口径交错,项目行不可拖。 */}
@@ -1215,7 +1216,9 @@ export function ProjectsSection({
                 items={visibleProjectNodes}
                 getId={getProjectId}
                 onReorder={handleReorder}
-                disabled={!projectDragEnabled || (projectsOverflow && !showAllProjects)}
+                disabled={
+                  !projectDragEnabled || hasHiddenProjectRows(mixedEntries, visibleProjectNodes.length)
+                }
                 reducedMotion={reducedMotion}
                 handle={MANUAL_PROJECT_SORT_HANDLE}
                 filter={MANUAL_PROJECT_SORT_FILTER}
@@ -1352,8 +1355,7 @@ export function ProjectsSection({
                                     onReorder={handleReorder}
                                     disabled={
                                       !projectDragEnabled ||
-                                      (sectionView.isOverflowing &&
-                                        !expandedDeviceSections.has(key))
+                                      hasHiddenProjectRows(section.entries, sectionProjects.length)
                                     }
                                     reducedMotion={reducedMotion}
                                     handle={MANUAL_PROJECT_SORT_HANDLE}

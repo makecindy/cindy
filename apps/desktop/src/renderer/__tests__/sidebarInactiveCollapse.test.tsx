@@ -108,6 +108,22 @@ describe('sidebar idle folding interactions', () => {
     expect(a.onToggle).not.toHaveBeenCalled();
   });
 
+  // A filtered project with an idle match has no folding action. The existing
+  // unfiltered project cases cannot catch a button that does nothing in this mode.
+  it('hides the project folding action while showing all filtered matches', () => {
+    const props = projectProps('A');
+    const { rerender } = render(<ProjectNode {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: expand }));
+
+    rerender(<ProjectNode {...props} disableSessionCollapse />);
+    expect(screen.getByText('A-old')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: fold })).toBeNull();
+    expect(screen.queryByRole('button', { name: expand })).toBeNull();
+
+    rerender(<ProjectNode {...props} />);
+    expect(screen.getByRole('button', { name: fold })).toBeTruthy();
+  });
+
   it('stops the single clock for hidden windows and refreshes immediately on return', () => {
     function Clock() { return <output>{useSidebarActivityNow()}</output>; }
     const interval = vi.spyOn(globalThis, 'setInterval');
