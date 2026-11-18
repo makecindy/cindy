@@ -6,6 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
+import { SessionProjectMoveSubmenu } from '../SessionProjectMoveSubmenu';
 import { SessionTaskMenu } from '../SessionTaskMenu';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
@@ -23,6 +25,9 @@ const state = vi.hoisted(() => ({
   removeDevice: vi.fn(),
   writeClipboard: vi.fn(),
   setMuted: vi.fn(),
+  moveProject: vi.fn(),
+  browseProject: vi.fn(),
+  listDevices: vi.fn(),
   installed: [] as InstalledGhost[],
   listGhosts: vi.fn(),
   ghostsChanged: vi.fn(),
@@ -49,7 +54,15 @@ vi.mock('@/features/device-link/JoinSharedTaskDialog', () => ({
 }));
 
 const session = { id: 'task', title: 'Task', status: 'active' } as Session;
-function Harness({ target = session, blocked = false }: { target?: Session; blocked?: boolean }) {
+function Harness({
+  target = session,
+  blocked = false,
+  projects,
+}: {
+  target?: Session;
+  blocked?: boolean;
+  projects?: readonly FolderPickerOption[];
+}) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const slot = (text: string) => <DropdownMenuItem>{text}</DropdownMenuItem>;
@@ -68,7 +81,15 @@ function Harness({ target = session, blocked = false }: { target?: Session; bloc
           onUnarchive={vi.fn()}
           onDelete={vi.fn()}
           onOpenInNewWindow={vi.fn()}
-          move={target.status === 'active' ? slot('move') : null}
+          move={target.status === 'active' ? projects ? (
+            <SessionProjectMoveSubmenu
+              projectOptions={projects}
+              currentSession={target}
+              isDialogue={target.workspaceKind === 'dialogue'}
+              onSelectProject={state.moveProject}
+              onBrowseProject={state.browseProject}
+            />
+          ) : slot('move') : null}
           tags={slot('tags')}
           copy={slot('copy')}
           exportShare={slot('export')}
@@ -106,9 +127,10 @@ beforeEach(() => {
   state.openLink.mockResolvedValue(undefined);
   state.writeClipboard.mockResolvedValue(undefined);
   state.setMuted.mockResolvedValue(undefined);
+  state.listDevices.mockResolvedValue({ devices: [] });
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: state.writeClipboard } });
   Object.assign(window, {
-    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke },
+    electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke, listDevices: state.listDevices },
       ghosts: { listSync: state.listGhosts, onChanged: state.ghostsChanged,
         runtimePlugins: state.runtimePlugins, listControlPointCandidates: state.candidates } },
   });
@@ -204,6 +226,42 @@ it('offers moving a task whose agent runs on another computer to another project
   openMenu();
   expect(labels()).toContain('moveToProject');
   expect(labels()).toContain('openInNewWindow');
+});
+
+// #11034, unit: open SessionTaskMenu's real move submenu. Existing tests supplied
+// only a placeholder move row, so missing recent-workdir options went unchecked.
+// Minimal failure: one missing option. Sidebar-hidden but valid options remain
+// usable; sidebar visibility is deliberately not a move-destination constraint.
+it('excludes missing move destinations without excluding valid or unknown directories', async () => {
+  const projects: FolderPickerOption[] = [
+    { path: '/projects/gone', name: 'Removed project', missing: true },
+    { path: '/projects/hidden', name: 'Hidden valid project', missing: false },
+    { path: '/projects/unknown', name: 'Unknown existence' },
+    { path: '/projects/current', name: 'Current project' },
+  ];
+  render(<Harness
+    target={{ ...session, workspaceKind: 'project', projectDir: '/projects/current' }}
+    projects={projects}
+  />);
+  openMenu();
+  fireEvent.keyDown(screen.getByRole('menuitem', { name: 'moveToProject' }), { key: 'ArrowRight' });
+  const valid = await screen.findByRole('menuitem', { name: 'Hidden valid project' });
+  expect(screen.queryByRole('menuitem', { name: 'Removed project' })).toBeNull();
+  expect(screen.getByRole('menuitem', { name: 'Unknown existence' }).getAttribute('aria-disabled')).toBeNull();
+  expect(screen.getByRole('menuitem', { name: 'Current project' }).getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(valid);
+  expect(state.moveProject).toHaveBeenCalledWith('/projects/hidden');
+});
+
+it('shows the move empty state and retains folder browsing when all projects are missing', async () => {
+  render(<Harness projects={[{ path: '/projects/gone', name: 'Removed project', missing: true }]} />);
+  openMenu();
+  fireEvent.keyDown(screen.getByRole('menuitem', { name: 'moveToProject' }), { key: 'ArrowRight' });
+  await screen.findByText('noProjects');
+  expect(screen.queryByRole('menuitem', { name: 'Removed project' })).toBeNull();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'browseProjectFolder' }));
+  expect(state.browseProject).toHaveBeenCalledTimes(1);
+  expect(state.moveProject).not.toHaveBeenCalled();
 });
 
 it('mutes and unmutes one task from the menu', async () => {
