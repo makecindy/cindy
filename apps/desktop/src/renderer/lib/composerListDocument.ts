@@ -1,7 +1,7 @@
 import type { JSONContent } from '@tiptap/core';
 
 type ListKind = 'bullet' | 'ordered';
-type OrderedMarker = '.' | ')' | '、';
+type OrderedMarker = '.' | ')';
 
 interface ListMarker {
   kind: ListKind;
@@ -17,7 +17,8 @@ interface ComposerLine {
 }
 
 const BULLET_RE = /^([-+*•])([ \t]+)/;
-const ORDERED_RE = /^([1-9]\d{0,8})([.)、])([ \t]*)/;
+// Markdown only: the CJK ordinal is not list syntax for stored or pasted text.
+const ORDERED_RE = /^([1-9]\d{0,8})([.)])([ \t]+)/;
 
 function inlineNodeText(node: JSONContent): string {
   if (node.type === 'text') return node.text ?? '';
@@ -80,16 +81,11 @@ function parseListMarker(text: string): ListMarker | null {
 
   const ordered = text.match(ORDERED_RE);
   if (ordered) {
-    const marker = ordered[2] as OrderedMarker;
-    if (marker !== '、' && ordered[3].length === 0) return null;
     return {
       kind: 'ordered',
-      // CJK ordered markers are valid with or without a following space.
-      // Keep that space in the item body so serialization preserves the
-      // user's original form without adding another list attribute.
-      prefixLength: marker === '、' ? ordered[1].length + marker.length : ordered[0].length,
-      marker,
-      separator: marker === '、' ? '' : ordered[3],
+      prefixLength: ordered[0].length,
+      marker: ordered[2] as OrderedMarker,
+      separator: ordered[3],
       start: Number(ordered[1]),
     };
   }
@@ -130,7 +126,7 @@ function listFromLines(
   });
   const attrs =
     marker.kind === 'ordered'
-      ? marker.separator === ' ' && marker.marker !== '、'
+      ? marker.separator === ' '
         ? { start: marker.start ?? 1, marker: marker.marker }
         : { start: marker.start ?? 1, marker: marker.marker, separator: marker.separator }
       : marker.marker === '-' && marker.separator === ' '

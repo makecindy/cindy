@@ -1,8 +1,7 @@
 import { flushStandbyUsage, importStandbyUsage } from './providerShareAvailabilityUsage.js';
 import { publishShareAvailability, refreshStandbyGuests } from './providerShareAvailability.js';
 import { onProviderGroupChanged } from '../provider-group/store.js';
-import { keepSharedProvidersOpen, onRemoteProviderAccessChanged, sharedProviderIdsForRevert } from '../maker-host/remote-provider-access-store.js';
-import { readSharedOpenAiLegacyAccountsIfReadable } from '../subscription-accounts/placement.js';
+import { onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
 import { onDeviceLinkSettingChanged } from './settings-store.desktop.js';
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
@@ -99,7 +98,7 @@ import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { tapWindowBroadcast } from './broadcast-tap.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { broadcast as broadcastLocal } from './index.js';
-import { fetchIdentityCard, providerShareApi, providerShareLinkFor, providerShareOwnerKey, sha256Hex } from './providerShareApi.js';
+import { providerShareApi, providerShareLinkFor, providerShareOwnerKey } from './providerShareApi.js';
 import { configureProviderShareApprovalWindows } from './providerShareApprovalWindows.js';
 import {
   findReceivedShare,
@@ -128,8 +127,6 @@ import {
   clearProviderShareRequestQuiet,
   ensureProviderSharePeerKnown,
   getProviderShareHostSnapshot,
-  getProviderShareHostCompleteSnapshot,
-  onProviderShareHostChanged,
   getProviderShareQuietRequestIds,
   getProviderShareWatchedRequests,
   markProviderShareHostActive,
@@ -370,24 +367,6 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   const stopModels = remoteModelAccess.subscribe(queueAvailabilityPublish);
   const stopAccess = onRemoteProviderAccessChanged(queueAvailabilityPublish);
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
-  // 撤回 11-10 的默认开放：等拿到本账号完整的分享快照，那段时间里用户建过分享的供应商补记为打开。
-  // 补记只做一次，有分享服务暂时读不到、或账号池文件读不了时不做，等下一次再试。
-  let accessDefaultMigrated = false;
-  let accessDefaultMigrating = false;
-  const migrateAccessDefault = () => {
-    if (accessDefaultMigrated || accessDefaultMigrating) return;
-    const loaded = getProviderShareHostCompleteSnapshot();
-    if (!loaded) return;
-    const ids = sharedProviderIdsForRevert(loaded, readSharedOpenAiLegacyAccountsIfReadable);
-    if (!ids) return;
-    accessDefaultMigrating = true;
-    void keepSharedProvidersOpen(ids)
-      .then(() => { accessDefaultMigrated = true; })
-      .catch((error) => log.warn('remote provider access default revert failed', { error: String(error) }))
-      .finally(() => { accessDefaultMigrating = false; });
-  };
-  const stopAccessDefault = onProviderShareHostChanged(migrateAccessDefault, { refreshed: true });
-  migrateAccessDefault();
   const timer = setInterval(queueAvailabilityPublish, 60_000);
   timer.unref?.();
   availabilitySnapshot = undefined;
@@ -395,7 +374,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   stopAvailabilityPublisher = () => {
     availabilityPublisherEpoch += 1;
     availabilityPublishPending = false;
-    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings(); stopAccessDefault();
+    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings();
   };
 
   // 启动仲裁可能早于 IPC 注册；必须在 host 的第一轮快照前配置持久归属。
@@ -980,18 +959,21 @@ async function createLink(
   assertCurrent();
   const provider = providers.find((item) => item.id === providerId);
   if (!provider || !provider.connected || provider.agents.length === 0) throwIpcError('PRECONDITION_FAILED', 'Provider is not available');
-  const hostDeviceId = getDeviceId();
-  if (!hostDeviceId) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Device is not registered');
-  const identityCard = await fetchIdentityCard('share-link', sha256Hex(`${hostDeviceId}:${providerId}`));
+  if (!getDeviceId()) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Device is not registered');
   assertCurrent();
-  const created = await providerShareApi.createLink({
-    providerId,
-    // 名称可能自动带上登录身份(如「OpenAI · 邮箱」)，分享出去前去掉。
-    providerLabel: scrubProviderShareLabel(provider.name, [provider.subscriptionAccount?.identity, provider.openAiAccount?.identity], provider.id),
-    // 电脑名不给受邀者(provider-sharing.md §6)：字段必填(旧版受邀者按必填解析)，填固定占位。
-    deviceName: PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
-    identityCard,
-  });
+  let created: Awaited<ReturnType<typeof providerShareApi.createLink>>;
+  try {
+    created = await providerShareApi.createLink({
+      providerId,
+      // 名称可能自动带上登录身份(如「OpenAI · 邮箱」)，分享出去前去掉。
+      providerLabel: scrubProviderShareLabel(provider.name, [provider.subscriptionAccount?.identity, provider.openAiAccount?.identity], provider.id),
+      // 电脑名不给受邀者(provider-sharing.md §6)：字段必填(旧版受邀者按必填解析)，填固定占位。
+      deviceName: PROVIDER_SHARE_NEUTRAL_DEVICE_NAME,
+    }, assertCurrent);
+  } catch (error) {
+    assertCurrent();
+    throw error;
+  }
   assertCurrent();
   if (requireLinkId && !created.linkId) {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Remote share links require an update to the provider share server');
@@ -1051,6 +1033,9 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       const budgetModelIds = recommendationModelIds.filter(id => id === unifiedModelKeyId(id)
         || !recommendationModelIds.includes(unifiedModelKeyId(id)));
       if (command.action === 'set-model-access') {
+        // A connection merged into an account pool reads the pool's provider-wide range; only member grants stay here.
+        if (command.memberId === undefined && provider.subscriptionPoolAlias)
+          throwIpcError('PRECONDITION_FAILED', 'This provider follows its account pool; change the range there');
         if (command.memberBudget?.rules.length && !budgetAvailable) throwIpcError('PRECONDITION_FAILED', 'Member model limits are not available for this provider group');
         if (command.memberBudget) {
           const previous = remoteModelAccess.read(command.providerId, command.memberId).memberBudget;

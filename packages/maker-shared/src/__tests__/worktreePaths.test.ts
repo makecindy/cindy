@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   collapseWorktreeDirForGrouping,
+  sessionProjectDirectory,
   sessionTaskProjectIconDirectory,
   groupingWorktreeBaseRepo,
   isManagedWorktreeDirectoryName,
@@ -40,6 +41,13 @@ describe('worktreePaths', () => {
     expect(managedWorktreeBaseRepo('/repo/.cindy-worktrees/serene-lovelace')).toBe('/repo');
     expect(managedWorktreeBaseRepo('/repo/.cindy-worktrees/serene-lovelace/src/main')).toBe('/repo');
     expect(managedWorktreeBaseRepo('/repo/.xdt-worktrees/pensive-pasteur')).toBe('/repo');
+  });
+
+  it('opens the owning project for legacy managed tasks and honors explicit membership', () => {
+    const workingDir = '/repo/.cindy-worktrees/checkout';
+    expect(sessionProjectDirectory({ workingDir, projectDir: null })).toBe('/repo');
+    expect(sessionProjectDirectory({ workingDir, projectDir: '/selected' })).toBe('/selected');
+    expect(sessionProjectDirectory({ workingDir: '/repo/.worktrees/custom' })).toBe('/repo/.worktrees/custom');
   });
 
   it('collapses conventional worktree layouts only for grouping', () => {

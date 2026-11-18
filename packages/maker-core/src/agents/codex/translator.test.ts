@@ -22,6 +22,8 @@ import {
   stableCitationBoundary,
   translateErrorNotification,
   translateAgentMessageDelta,
+  translateReasoningSummaryTextDelta,
+  translateReasoningTextDelta,
   translateAccountRateLimitsUpdated,
   translateItemNotification,
   translateOmittedItem,
@@ -34,6 +36,7 @@ import {
   resetCodexGenerationTiming,
   resumeCodexGeneration,
   codexSpeedSnapshot,
+  codexUsageRefreshDue,
   settleCodexSpeedUsage,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
@@ -2991,6 +2994,40 @@ describe('codex speed around unpaired output and human waits', () => {
     }
   };
 
+  // Unit regression: a remote panel received usage and a peak but no live speed during reasoning.
+  // The recorded Codex fixtures only exercise dedicated answer deltas and silent reasoning.
+  it.each(['summary', 'content', 'snapshot'] as const)('publishes live speed for %s reasoning before usage settles', (source) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      const ids = { threadId: 't', turnId: 'turn', itemId: 'r' };
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      const item = { type: 'reasoning', id: 'r', summary: [] as string[], content: [] as string[] };
+      translateItemNotification('started', { ...ids, item }, q, ctx);
+      const chunk = 'word '.repeat(20);
+      for (let i = 1; i <= 14; i++) {
+        vi.setSystemTime(i * 1_000);
+        if (source === 'content') translateReasoningTextDelta({ ...ids, contentIndex: 0, delta: chunk }, q, ctx);
+        if (source === 'summary') translateReasoningSummaryTextDelta({ ...ids, summaryIndex: 0, delta: chunk }, q, ctx);
+        const parts = source === 'content' ? 'content' : 'summary';
+        translateItemNotification('updated', { ...ids, item: { ...item, [parts]: [chunk.repeat(i)] } }, q, ctx);
+        if (source === 'summary') translateReasoningTextDelta({ ...ids, contentIndex: 0, delta: chunk }, q, ctx);
+      }
+      const speed = codexSpeedSnapshot(rt);
+      expect(speed?.streaming).toBe(true);
+      expect(speed!.rate).toBeCloseTo(20, 0);
+      expect(speed!.tokens).toBe(280);
+      // A just-published warm-up must not hide the first reading until the next delta.
+      expect(codexUsageRefreshDue(rt, Date.now() - 1, false)).toBe(true);
+      expect(codexUsageRefreshDue(rt, Date.now() - 1, true)).toBe(false);
+      settleCodexSpeedUsage(rt, { outputTokens: 400, reasoningOutputTokens: 400 });
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 400, streaming: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('drops output that streamed while tools owned the turn instead of timing the next response with it', () => {
     vi.useFakeTimers();
     try {
@@ -3007,7 +3044,7 @@ describe('codex speed around unpaired output and human waits', () => {
       translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'a1', delta: 'w '.repeat(50) }, q, ctx);
       vi.setSystemTime(16_000);
       expect(settleCodexSpeedUsage(rt, { outputTokens: 50 })).toBeUndefined();
-      expect(codexSpeedSnapshot(rt)).toBeUndefined();
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ streaming: false, tokens: 250, totalOutputTokens: 300, elapsedMs: 5_000, average: 50 });
       translateItemNotification('completed', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
       // The next response is timed from its own first byte, at its own 50 tok/s.
       vi.setSystemTime(17_000);

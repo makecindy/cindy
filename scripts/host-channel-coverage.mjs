@@ -147,7 +147,7 @@ export const OWNERSHIP_RULES = [
   { owner: 'A', reason: 'Orca', channel: /^(maker:(orca|worker|team|mark-orca|sync-worker)|local-db:orca)/ },
   { owner: 'A', reason: '伙伴与 IM', channel: /^(maker:(bot|companion|im-)|local-db:bots|binding:|botImConnection|telegramBot|wechatBot|feishuBot|discordBot|dingtalkBot|wecomBot|wecomGroupNotification|desktop:cc-prefs|companion-import)/, module: /^(im|bot-import)\b/ },
   { owner: 'A', reason: '账号与凭据', channel: /^(auth:|safe-storage|builtin-api-key|plugin-oauth|maker:(api-key|claude-oauth|xai-oauth|auth:|subscription))/ },
-  { owner: 'A', reason: '供应商与模型', channel: /^(maker:(provider|model|usage|local-model|llamacpp|sync-provider|auxiliary-model|subagent-model|vision-bridge|claude-session-route)|provider-group|provider-share|model-favorites|model-access)/ },
+  { owner: 'A', reason: '供应商与模型', channel: /^(maker:(provider|model|usage|local-model|llamacpp|sync-provider|auxiliary-model|subagent-model|claude-session-route)|provider-group|provider-share|model-favorites|model-access)/ },
   { owner: 'A', reason: '插件、技能与 MCP', channel: /^(ghosts:|ghost-pipe|forge-oidc|maker:(plugins|plugin-setup|mcp|runtime-plugins|pi-packages)|plugin-market|plugin-publisher|plugin-contributions|skillhub)/ },
   { owner: 'A', reason: '设备互联与远程执行', channel: /^(device-link|direct-link|file-peer|shared-task|self-hosted-relay|local-agent|maker:(remote-resources|shared-task|remote-ssh|provider-share))/ },
   { owner: 'A', reason: 'git 与工作树', channel: /^(git-context|git-review|worktree|remote-precreated-worktree|maker:git-safety)/ },

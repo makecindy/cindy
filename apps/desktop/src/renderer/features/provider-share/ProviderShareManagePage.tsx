@@ -537,7 +537,9 @@ export function ProviderShareManagePage({
           <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />
         </div>
       )}
-      <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
+      <RemoteModelAccessSection key={`models:${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId}
+        {...(providerForApproval?.subscriptionPoolAlias ? { poolName: (deviceId ? remoteCatalog.providers : providers)
+          .find(entry => entry.id === (providerForApproval.subscriptionPoolTarget ?? 'openai'))?.name ?? 'OpenAI' } : {})} />
 
       <ProviderGroupSection
         providerId={providerId} providerName={providerName} deviceId={deviceId} deviceName={deviceName}

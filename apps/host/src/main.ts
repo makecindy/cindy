@@ -3,6 +3,7 @@ import './boot-env.js';
 // Second: keeps unreadable user settings files instead of deleting them.
 import './boot-settings.js';
 import { resolveAutomaticProjectIcon } from '../../desktop/src/main/projectAutomaticIcon.js';
+import type { ProjectInfoAuthorization } from '../../desktop/src/main/projectInfoAuthorization.js';
 import { readProjectIconImage, readProjectInfo, updateProjectInfo } from '../../desktop/src/main/projectInfoCore.js';
 import { reconcileDeletedTaskViewState } from '../../desktop/src/main/mcp-apps/viewStateStore.js';
 import { clientMigrationContract } from './client-migration-contract.mjs';
@@ -136,6 +137,7 @@ import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
+import { listPiRuntimePaletteCommands, mergePiPackageCommands, shouldListPiPackageCommands } from '../../desktop/src/shared/piPackages.js';
 import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
@@ -609,6 +611,8 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
   hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
   hostTools = createHostToolService({ profileDir: dataDir, ownerId,
+    deviceId: () => currentDeviceId ?? 'local',
+    onProjectsChanged: catalogChanged => eventHub.publish({ type: 'project_aliases_changed', catalogChanged }),
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
     current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null,
     files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
@@ -777,9 +781,6 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       makerMemory,
       reportGatewayKeyRejected: key => modelAccess?.reportRejectedKey(key),
       readAuthRealm: () => account.realm,
-      // Vision-bridge notices, which the desktop sends its windows; the client maps them to
-      // MAKER_PUSH.EVENT (device-link.ts) and they are not persisted.
-      publishVisionBridgeNotice: notice => eventHub.publish(notice),
       mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
       userDataDir: dataDir,
     });
@@ -895,16 +896,24 @@ function projectAgentSwitchIntent(intent: {
   };
 }
 
-async function applyPendingAgentSwitch(sessionId: string): Promise<void> {
+const updateHostSession = createHostSessionUpdate({
+    getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
+    readSessionForRun,
+    publish: event => eventHub.publish(event),
+    modelWindow: () => agentGraph?.modelWindow ?? null,
+  });
+const applyPendingAgentSwitch = lockSessionRoute(applyPendingAgentSwitchUnlocked);
+async function applyPendingAgentSwitchUnlocked(sessionId: string): Promise<void> {
   const intent = pendingAgentSwitches.get(sessionId);
   if (!intent) return;
-  await serverDeps.updateSession(sessionId, {
+  await updateHostSession(sessionId, {
     agentKind: intent.targetAgentKind,
     model: intent.model,
     providerId: intent.providerId,
     ...(intent.effort ? { effort: intent.effort } : {}),
     ...(intent.fastMode !== undefined ? { fastMode: intent.fastMode } : {}),
   });
+  if (pendingAgentSwitches.get(sessionId) !== intent) throw new Error('The selected route changed; retry the send');
   pendingAgentSwitches.delete(sessionId);
   eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: null } });
 }
@@ -1248,9 +1257,26 @@ const serverDeps = {
   readProjectInfo,
   readProjectIconImage,
   resolveAutomaticProjectIcon,
-  updateProjectInfo: async (input: unknown) => {
-    const result = await updateProjectInfo(input);
-    eventHub.publish({ type: 'project_aliases_changed' });
+  updateProjectInfo: async (input: unknown, source: { desktopRequest?: string; legacyDesktop?: boolean } = {}) => {
+    const platform = platformClient;
+    let authorization: ProjectInfoAuthorization | undefined = { kind: 'host' };
+    if (source.desktopRequest) {
+      const requestId = source.desktopRequest;
+      authorization = { kind: 'renderer', async check(check) {
+        if (!platform || !platform.status().attached) throw Error('Desktop project window unavailable');
+        try {
+          const answer = await platform.call({ method: 'project.check', requestId, check });
+          if (answer !== true) throw Error('Project authorization unavailable');
+        } catch (error) {
+          if ((error as { code?: string }).code === 'MUTATION_CANCELLED') throw Error('[MUTATION_CANCELLED] Project action cancelled');
+          throw error;
+        }
+      } };
+    } else if (source.legacyDesktop) {
+      authorization = undefined;
+    }
+    const result = await updateProjectInfo(input, authorization);
+    eventHub.publish({ type: 'project_aliases_changed', catalogChanged: !!result.createdProjectKey });
     return result;
   },
   listProjectAliases: async () => {
@@ -1294,12 +1320,7 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: lockSessionRoute(createHostSessionUpdate({
-    getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
-    readSessionForRun,
-    publish: event => eventHub.publish(event),
-    modelWindow: () => agentGraph?.modelWindow ?? null,
-  })),
+  updateSession: lockSessionRoute(updateHostSession),
   /**
    * Cross-engine switch: record the intent and let the next enqueue apply it.
    * Mirrors the desktop contract (`deferred: true`) so the renderer can show
@@ -1476,14 +1497,22 @@ const serverDeps = {
     },
   },
   interactions,
-  agentCommands: async (input: { agentKind?: string }) => {
+  agentCommands: async (input: { agentKind?: string; sessionId?: string }) => {
     const rawKind = String(input.agentKind ?? '');
     const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const agent = agentGraph?.instances?.[kind];
     if (!agent) return { success: false, error: `Agent '${kind}' is not registered` };
-    return { success: true, commands: agent.listAgentCommands() };
+    const builtins = agent.listAgentCommands();
+    if (kind !== 'pi' || !input.sessionId) return { success: true, commands: builtins };
+    const meta = await sessionStorage?.get(input.sessionId);
+    if (!meta) throw new Error('session not found');
+    if (!shouldListPiPackageCommands(kind, true, meta)) return { success: true, commands: builtins };
+    const manifest = agentGraph?.maker.getSessionRuntimeCapabilities(input.sessionId);
+    const extra = manifest?.status === 'loaded'
+      ? listPiRuntimePaletteCommands(manifest.commands, manifest.authorizedSlashCommandNames ?? manifest.managedPackageCommandNames) : [];
+    return { success: true, commands: mergePiPackageCommands(kind, builtins, extra), runtimeStatus: manifest?.status ?? 'pending' };
   },
-  agentSkills: async (input: { agentKind?: string; workingDir?: string; sessionId?: string }) => {
+  agentSkills: async (input: { agentKind?: string; workingDir?: string; sessionId?: string; forceReload?: boolean }) => {
     const rawKind = String(input.agentKind ?? '');
     const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const agent = agentGraph?.instances?.[kind];
@@ -1492,7 +1521,9 @@ const serverDeps = {
     if (input.sessionId && !stored) throw new Error('session not found');
     const workingDir = stored?.workDir || input.workingDir || undefined;
     if (workingDir && !path.isAbsolute(workingDir)) throw new Error('workingDir must be absolute');
-    const result = await agent.listAgentSkills({ workingDir });
+    const result = kind === 'pi' && agentGraph
+      ? await agentGraph.maker.listAgentSkills(kind, { workingDir, sessionId: input.sessionId, forceReload: input.forceReload === true })
+      : await agent.listAgentSkills({ workingDir });
     return { success: true, skills: result.skills ?? [] };
   },
   capabilities: async (agentKind: string) => {
@@ -1611,8 +1642,6 @@ async function disposeOwnerRuntime(): Promise<void> {
     await attempt(() => (agentGraph?.maker as { shutdown?: () => Promise<void> } | undefined)?.shutdown?.());
     // Stop watching this profile's Pi packages once Maker no longer runs Pi.
     agentGraph?.piPackages.close();
-    // As the desktop's teardown: the process-wide vision-bridge controller and key reader go.
-    await attempt(() => agentGraph?.visionBridge.close());
     await attempt(() => codexRuntime?.close());
     await attempt(() => claudeProxy?.close());
     await attempt(() => mcpRuntime?.close());
@@ -1734,6 +1763,28 @@ function startDeviceLink(): void {
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     agentNet: hostAgentNetPorts(),
     invoke: service, subscribe: eventHub.subscribe,
+    preparePiSkillRuntime: lockSessionRoute(async (id: string, dir: string, route?: { model: string }) => {
+      if (route) {
+        const owner = activeOwnerScopeKey();
+        const checkOwner = () => {
+          if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('Host account changed');
+        };
+        const row = await readSessionForRun(id);
+        checkOwner();
+        const intent = pendingAgentSwitches.get(id);
+        const maker = agentGraph?.maker;
+        const live = maker?.getSession(id);
+        if (!maker || row.source === 'review' || row.workingDir !== dir || row.remoteHostId || row.agentDeviceId || row.orcaRole
+          || intent?.targetAgentKind !== 'pi' || intent.model !== route.model || live?.isTurnRunning()) {
+          throw new Error('[PRECONDITION_FAILED] The selected Pi route is not ready');
+        }
+        await applyPendingAgentSwitchUnlocked(id);
+        checkOwner();
+        if (live && live.agentKind !== 'pi') await maker.closeSessionIfCurrent(live, 'runtime-refresh');
+        checkOwner();
+      }
+      await inputQueue.preparePiSkillRuntime(id, dir);
+    }),
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();
       const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);

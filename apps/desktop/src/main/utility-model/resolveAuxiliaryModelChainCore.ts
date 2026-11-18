@@ -158,10 +158,17 @@ function parsedAuxiliaryModelRefs(refs: readonly string[]): ParsedAuxiliaryModel
   const parsed: ParsedAuxiliaryModelRef[] = [];
   for (const ref of refs) {
     const item = parseAuxiliaryModelRef(ref);
-    if (item) parsed.push(item);
+    if (item && !(item.kind === 'catalog' && item.route.agentDeviceId)) parsed.push(item);
   }
   return parsed;
 }
 
-return { getEffectiveAuxiliaryModelChain, getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs, formatAuxiliaryModelRefLabel, parsedAuxiliaryModelRefs };
+/** Label the same local candidate chain used by plugin execution, not a retained remote head. */
+function getEffectiveAuxiliaryModelLabel(): string | null {
+  const first = parsedAuxiliaryModelRefs(getEffectiveAuxiliaryModelChain().refs)[0];
+  if (!first) return null;
+  return formatAuxiliaryModelRefLabel(first.kind === 'profile' ? first.id : encodeCatalogModelPin(first.route));
+}
+
+return { getEffectiveAuxiliaryModelChain, getEffectiveAuxiliaryModelChainSnapshot, getEffectiveAuxiliaryModelRefs, getEffectiveAuxiliaryModelLabel, formatAuxiliaryModelRefLabel, parsedAuxiliaryModelRefs };
 }
