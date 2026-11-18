@@ -25,6 +25,8 @@
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import { claudeProfileSessionStore } from './profile-session-store.js';
+import { claudeToolLifecycleHooks } from './tool-lifecycle-hooks.js';
+import { claudeNativeRecoveryHooks } from './native-recovery-hooks.js';
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -48,6 +50,7 @@ import type {
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
+import { callClaudeToolCatalog } from './native-tool-catalog.js';
 import {
   reportSubagentModelDiagnostics,
   resolveSubagentModelDefault,
@@ -2287,6 +2290,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
         )
       : mergeClaudeHookSets(
+          !hosted?.guest && !opts.remoteHostId ? claudeToolLifecycleHooks(this.deps.toolLifecycleControl, opts.sessionId) : undefined,
+          !opts.deviceHosted && !opts.remoteHostId ? claudeNativeRecoveryHooks(this.deps.nativeRecoveryObserver, opts.sessionId) : undefined,
           buildClaudeLocalToolGuardHooks(
             capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -7710,6 +7715,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         }).mcpServerStatus;
         if (typeof readStatus !== 'function') return null;
         return claudeMcpServerToolsReport(await readStatus.call(q), serverName);
+      },
+
+      async callNativeToolCatalog(method: string, args: unknown[]) {
+        if (opts.remoteHostId || hosted?.guest || reviewMode) throw new Error('UNSUPPORTED_CAPABILITY');
+        return callClaudeToolCatalog(q, method, args);
       },
 
       setInteractionResolver(resolver: InteractionResolver) {

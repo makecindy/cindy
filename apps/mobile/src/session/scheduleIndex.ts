@@ -420,6 +420,7 @@ function scheduleInfoEqual(a: RemoteSessionScheduleInfo, b: RemoteSessionSchedul
     && a.scheduleStatus === b.scheduleStatus
     && a.nextFireAt === b.nextFireAt
     && a.allSchedulesStopped === b.allSchedulesStopped
+    && !!a.hasActiveFollowUp === !!b.hasActiveFollowUp
     && stringListsEqual(a.unreadRunIds, b.unreadRunIds);
 }
 

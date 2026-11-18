@@ -468,8 +468,9 @@ describe('botGroupChatService', () => {
   });
 
   it('preserves a safe dispatch failure category for a local-only group', async () => {
+    const prompts: string[] = [];
     const harness = createHarness(() => null, {
-      dispatch: async () => ({ ok: false, errorCode: 'INTERNAL', message: 'authentication_failed private credential' }),
+      dispatch: async input => { prompts.push(input.message); return { ok: false, errorCode: 'INTERNAL', message: 'authentication_failed private credential' }; },
     });
     const groupId = await createGroup(harness, ['mimi', 'abu']);
     await harness.service.sendMessage({ groupId, text: '@咪咪 hello', mentions: { all: false, botIds: ['mimi'] }, clientId: 'rejected-input' });
@@ -478,6 +479,15 @@ describe('botGroupChatService', () => {
       expect.objectContaining({ noticeCode: 'member-failed', runtimeFailureCode: 'AUTH_REQUIRED' }),
     ]);
     expect(JSON.stringify(group.messages)).not.toContain('private credential');
+    // #11097 / unit: follow-up through sendMessage must deliver the stored failure
+    // to the peer. The old UI-only assertion never inspected the next Agent input.
+    await harness.service.sendMessage({ groupId, text: '@阿布 咪咪怎么样了', mentions: { all: false, botIds: ['abu'] }, clientId: 'peer-status' });
+    await waitForIdle(harness, groupId);
+    expect(prompts.at(-1)).toContain('historicalExecutionFailure');
+    expect(prompts.at(-1)).toContain('AUTH_REQUIRED');
+    expect(prompts.at(-1)).toContain('咪咪');
+    expect(prompts.at(-1)).not.toContain('private credential');
+    expect(prompts.at(-1)).not.toContain('cindy-runtime-error:');
   });
 
   it.each([

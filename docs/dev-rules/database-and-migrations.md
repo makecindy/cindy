@@ -3,6 +3,10 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改 `apps/desktop/src/main/localDb/`、数据库 schema、Drizzle migration、
 > migration companion script 或运行期数据库访问之前
+> **适用路径**：`apps/desktop/src/main/localDb/**`、`apps/desktop/drizzle/**`、
+> `apps/desktop/drizzle.config.ts`、`apps/desktop/scripts/validate-migrations.mjs`、
+> `apps/desktop/scripts/lib/migration-freeze.mjs`、`scripts/ci-database-tests.mjs`、
+> `scripts/dev-migration-policy.mjs`
 
 本文只治理 Desktop 的 Drizzle／SQLite。本仓不包含服务端数据库；服务端 migration 以
 对应服务端仓规则为准。

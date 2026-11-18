@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canRecoverUndeliveredOrcaReport, probeSharedTask } from '../sharedTaskRecovery.js';
+import { canRecoverUndeliveredOrcaReport, probeSharedTask, sharedTaskFailureReason, sharedTaskRecoveryError } from '../sharedTaskRecovery.js';
 
 // Unit: the actual probe runner must survive a short outage without repeating
 // allocation/open/send. Earlier coverage did not exercise delayed recovery or
@@ -49,5 +49,28 @@ describe('shared task report preparation recovery', () => {
     expect(canRecoverUndeliveredOrcaReport(
       `[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_timeout] [SHARED_TASK_STAGE_${stage}]`,
     )).toBe(false);
+  });
+});
+
+// #10848, unit: the public wrapper must retain bounded local diagnostics, not
+// secret-bearing Error messages/stacks/metadata. Existing probes tested only
+// the message and could not detect a dropped or unsafe cause.
+describe('shared task bounded diagnostic cause', () => {
+  it('retains a safe source code and classification without retaining the upstream object', () => {
+    const source = Object.assign(new Error('https://private.invalid secret-account'), { code: 'TIMEOUT', privateData: 'secret' });
+    const error = sharedTaskRecoveryError('owner', sharedTaskFailureReason(source), source);
+    expect(error.cause).toEqual({ reason: 'timeout', code: 'TIMEOUT' });
+    expect(error.cause).not.toBe(source);
+    expect(Object.keys(error)).not.toContain('cause');
+    expect(JSON.stringify(error.cause)).not.toMatch(/private|secret|https/);
+    expect(error.message).toContain('[SHARED_TASK_CODE_TIMEOUT]');
+  });
+
+  it('does not guess a business reason or retain unknown source metadata', () => {
+    const source = Object.assign(new Error('Provider share access is unavailable https://private.invalid'), { code: 'PRIVATE_CODE' });
+    const error = sharedTaskRecoveryError('owner', sharedTaskFailureReason(source), source);
+    expect(error.cause).toEqual({ reason: 'unknown' });
+    expect(error.message).toContain('[SHARED_TASK_RECOVERY_unknown]');
+    expect(error.message).not.toMatch(/PRIVATE_CODE|private|https/);
   });
 });

@@ -74,7 +74,6 @@
     "cancel": "このままにする"
   },
   "unified": {
-    "accountUnassigned": "アカウント未割り当て",
     "accountCount_other": "{{count}} 個のアカウント",
     "accountFallback": "アカウント {{index}}",
     "favoriteConfiguration": "この設定をお気に入りに追加",

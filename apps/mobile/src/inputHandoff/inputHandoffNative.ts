@@ -37,7 +37,7 @@ export function nativeTextInputProps(
       return {
         textContentType: "oneTimeCode",
         autoComplete: "sms-otp",
-        keyboardType: numericKeyboard("number-pad"),
+        keyboardType: "default",
       };
     case "username":
       return { textContentType: "username", autoComplete: "username" };
@@ -80,7 +80,7 @@ export function swiftFieldTraits(contentType: InputHandoffContentType): {
     case "password":
       return { textContentType: "password", keyboardType: "default" };
     case "one-time-code":
-      return { textContentType: "oneTimeCode", keyboardType: "numbers-and-punctuation" };
+      return { textContentType: "oneTimeCode", keyboardType: "default" };
     case "username":
       return { textContentType: "username", keyboardType: "default" };
     case "email":

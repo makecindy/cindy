@@ -50,7 +50,9 @@ function reportFromCodexStatus(server: CodexMcpServerStatus): AgentMcpServerTool
     const description = tool && typeof tool === 'object'
       ? (tool as { description?: unknown }).description
       : undefined;
-    return typeof description === 'string' && description ? { name, description } : { name };
+    const inputSchema = tool && typeof tool === 'object' ? (tool as { inputSchema?: unknown }).inputSchema : undefined;
+    return { name, ...(typeof description === 'string' && description ? { description } : {}),
+      ...(inputSchema && typeof inputSchema === 'object' && !Array.isArray(inputSchema) ? { inputSchema: inputSchema as Record<string, unknown> } : {}) };
   });
   if (tools.length > 0) return { state: 'connected', tools };
   // Codex lists configured servers even when their startup failed and reports

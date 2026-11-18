@@ -91,7 +91,7 @@ it('binds incoming negotiation to both current transport streams', async () => {
 // retry independently without blocking relay traffic. Existing tests fence stale
 // offers but do not cover retry timing, cancellation or stable-connection reset.
 // Unit tier: virtual time and an in-memory runtime, with no sockets or real waits.
-function negotiationFixture(identity = 'a') {
+function negotiationFixture(identity = 'a', isBusy?: () => boolean) {
   const sessions: Array<{ events: DirectRuntimeEvents; close: ReturnType<typeof vi.fn> }> = [];
   const create = vi.fn((_id: string, events: DirectRuntimeEvents) => {
     const close = vi.fn();
@@ -105,6 +105,7 @@ function negotiationFixture(identity = 'a') {
     runtime: { create }, identity: () => identity,
     streams: () => ({ local: 'local', remote: 'remote' }), id: () => `attempt-${++nextId}`,
     signal, attach: () => ({ receive() {}, drained() {}, closed() {}, isActive: () => true }),
+    ...(isBusy ? { isBusy: () => isBusy() } : {}),
   });
   return { controller, create, signal, sessions };
 }
@@ -332,14 +333,16 @@ it('spreads simultaneous failed peers across the first retry window', async () =
   } finally { fixture.controller.clear(); }
 });
 
+// Keep retries bounded at one minute: receiver-side network changes cannot wake
+// the initiator through the existing protocol, so a larger cap delays recovery.
 it.each([0, 0.999999])('bounds jittered exponential retries through the capped stage (random=%s)', async random => {
   vi.useFakeTimers();
   vi.spyOn(Math, 'random').mockReturnValue(random);
-  const fixture = negotiationFixture();
+  const fixture = negotiationFixture('a', () => true);
   fixture.create.mockImplementation(() => { throw new Error('runtime unavailable'); });
   try {
     fixture.controller.ready('b');
-    for (const base of [5_000, 10_000, 20_000, 40_000, 60_000, 60_000]) {
+    for (const base of [5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 60_000, 60_000]) {
       const before = fixture.create.mock.calls.length;
       const delay = Math.floor(base * (0.8 + random * 0.2));
       await vi.advanceTimersByTimeAsync(delay - 1);
@@ -347,6 +350,21 @@ it.each([0, 0.999999])('bounds jittered exponential retries through the capped s
       await vi.advanceTimersByTimeAsync(1);
       expect(fixture.create).toHaveBeenCalledTimes(before + 1);
     }
+  } finally { fixture.controller.clear(); }
+});
+
+it('restarts a long backoff from the first step after a local network change', async () => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, 'random').mockReturnValue(0.999999);
+  const fixture = negotiationFixture('a', () => true);
+  fixture.create.mockImplementation(() => { throw new Error('runtime unavailable'); });
+  try {
+    fixture.controller.ready('b');
+    await vi.advanceTimersByTimeAsync(5_000 + 10_000 + 20_000 + 40_000 + 80_000);
+    const before = fixture.create.mock.calls.length;
+    fixture.controller.networkChanged();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fixture.create).toHaveBeenCalledTimes(before + 1);
   } finally { fixture.controller.clear(); }
 });
 

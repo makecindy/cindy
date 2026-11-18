@@ -328,6 +328,7 @@
       "renameDevice": "为 {{label}} 易名",
       "project": "案 {{title}}",
       "dialogue": "言谈",
+      "automation": "自运",
       "openAutomationLatest": "启自运 {{title}} 之最新差事",
       "automationTask": "自运 {{title}}",
       "openConversation": "启差事 {{title}}",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "言谈",
+      "groupAutomation": "自运",
       "dialogueFolder": "言谈",
+      "automationFolder": "自运",
       "search": "寻",
       "settings": "规制",
       "remoteSettings": "远程连接之规制",
@@ -423,7 +426,33 @@
       "filterTeammatesHeading": "同伴",
       "filterAnySource": "全",
       "filterHideAllTeammates": "皆不示",
-      "filterSelectedTeammates": "已择 {{count}} 位"
+      "filterSelectedTeammates": "已择 {{count}} 位",
+      "inbox": {
+        "inbox": "待处理",
+        "working": "进行中",
+        "snoozed": "待后处理",
+        "archived": "已处理",
+        "snooze": "留待后办",
+        "complete": "毕",
+        "wake": "即刻取回",
+        "restore": "恢复任务",
+        "process": "标记已处理（归档）",
+        "empty": "箱中已清",
+        "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
+        "hours": "{{count}} 小时后",
+        "hours_one": "{{count}} 小时后",
+        "hours_other": "{{count}} 小时后",
+        "thisEvening": "今夕",
+        "tomorrow": "明日",
+        "nextWeek": "下周",
+        "custom": "自定…",
+        "invalidTime": "请选择来岁以内之未来日期时辰。"
+      },
+      "taskListMode": {
+        "heading": "任务模式",
+        "tasks": "任务列表",
+        "inbox": "收件箱"
+      }
     },
     "search": {
       "placeholder": "寻标题或内容…",
