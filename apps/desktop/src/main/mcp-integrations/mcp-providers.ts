@@ -744,7 +744,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     xdtHelper: {
       sessionToolCatalog: { call: (context, request) => withAccountDataAccess(context.sessionId, assertCurrent =>
         createSessionToolCatalogExecutor({
-          getSession: async id => (await import('../maker-host/index.js')).getMakerIfReady()?.getSession(id),
+          getSession: async id => getTaskActionSession(id),
           pluginCall: getPluginHostToolCaller, getGhost: findGhostForInstanceId,
         })(request, assertCurrent)) },
       subscriptionUsage: { read: (context, providerId) => withAccountDataAccess(context.sessionId, async assertCurrent => {

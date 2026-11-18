@@ -19,9 +19,11 @@ it('exposes native catalogs on demand and rejects process MCP configuration', as
     expect(server.hostTools.describe('get_session_tool_catalog')).toMatchObject({ category: 'control' });
     expect(parsePayload(await server.hostTools.call('get_session_tool_catalog', { method: 'getActiveTools' })))
       .toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
-    expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
-      session_id: 'target', method: 'registerMcpServer', args: ['external', { url: 'http://localhost/mcp', command: 'node' }],
-    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    for (const config of [{ url: 'http://localhost/mcp', command: 'node' }, { url: 'file:///fixture/server' }]) {
+      expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
+        session_id: 'target', method: 'registerMcpServer', args: ['external', config],
+      }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    }
     expect(call).not.toHaveBeenCalled();
     expect(parsePayload(await server.hostTools.call('set_session_tool_catalog', {
       session_id: 'target', method: 'setActiveTools', args: [['read']],

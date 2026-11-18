@@ -10,7 +10,7 @@ export interface SessionToolCatalogCallbacks {
 
 // Native web transports only. A process server belongs in the plugin's own
 // approved Node worker, never in the harness's credential-bearing environment.
-const webServer = z.object({ url: z.string().url(), headers: z.record(z.string(), z.string()).optional(),
+const webServer = z.object({ url: z.url({ protocol: /^https?$/ }), headers: z.record(z.string(), z.string()).optional(),
   type: z.enum(['http', 'sse']).optional() }).passthrough().refine(config =>
   !['command', 'args', 'env', 'cwd', 'instance'].some(key => key in config), 'Only HTTP/SSE MCP configurations are supported.');
 
@@ -35,7 +35,7 @@ export function registerSessionToolCatalogTools(registry: XdtHelperToolRegistry,
     },
   });
   registry.register({ name: 'set_session_tool_catalog', category: 'control',
-    description: '直接调用本机任务的公开原生接口。Claude setMcpServers 替换 SDK 动态服务器完整集合（省略可移除宿主 SDK 服务），不自动合并；Pi setActiveTools 接收原生工具名数组，registerMcpServer/unregisterMcpServer 按原生注册语义。args 是该方法的原生位置参数数组。添加 MCP 仅支持已批准 node 的插件自带 HTTP/SSE 配置；不接受 stdio、不读取宿主凭据。显示/隐藏工具不代表授权或撤权，不修改任务权限，不持久化配置，不自动重放或恢复。Codex 创建期 dynamicTools 不支持在途改表。',
+    description: '修改运行中本机任务的原生工具目录，直接调用公开原生接口。Claude setMcpServers 替换 SDK 动态服务器完整集合（省略可移除宿主 SDK 服务），不自动合并；Pi setActiveTools 接收原生工具名数组，registerMcpServer/unregisterMcpServer 按原生注册语义。args 是该方法的原生位置参数数组。添加 MCP 仅支持已批准 node 的插件自带 HTTP/SSE 配置；不接受 stdio、不读取宿主凭据。显示/隐藏工具不代表授权或撤权，不修改任务权限，不持久化配置，不自动重放或恢复。Codex 创建期 dynamicTools 不支持在途改表。',
     inputShape: { session_id: z.string().min(1).optional(), method: z.enum(['setMcpServers', 'setActiveTools', 'registerMcpServer', 'unregisterMcpServer']),
       args: z.array(z.unknown()) },
     handler: async ({ session_id, method, args }) => {

@@ -89,6 +89,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 
 | 对象     | 操作                                                       | 本机 | 跨电脑           |
 | -------- | ---------------------------------------------------------- | ---- | ---------------- |
+| 原生工具目录 | `get_session_tool_catalog` / `set_session_tool_catalog` 按需直转引擎 MCP／active tools；通过现有工具 registry 第一层搜索发现 | 有（Desktop 本机已有运行实例；Agent 与声明 control 的插件同入口，添加 MCP 限已批准 node 插件自带 HTTP/SSE；原生新方法不向访客／Review 开放，既有 MCP 读取不加新隔离规则） | 无；不启动远程运行时，不新增控制通道 |
 | 供应商分享 | 列出自己分享的成员、暂停／恢复、读改成员模型范围（`list_provider_share_members`、`set_provider_share_member_status`、`get_provider_share_model_access`、`set_provider_share_model_access`）；名单沿原 owned 跳过用量与页面轮询，写入与界面共用处理器，暂停立即关停运行中任务，回执不等待全部实例关停 | 有（Agent 与声明 `settings` 的插件共用；受邀者无管理权） | 有（`device` 指定同账号已授权电脑，沿现有 `provider-group:remote` 管理通道；旧端缺轻读取回执时明确报错） |
 | 模型目录 | `configure_model_provider` 的 `rediscover`：内置供应商复用设置页真实刷新，等待发现完成后返回目录 | 有（2026-11-10；Claude 订阅通过内置 CLI 的 SDK 发现） | 在执行电脑的任务中调用；同账号远控 UI 复用原有刷新 IPC |
 | 模型供应商 | `configure_model_connection`：查询预设、读取／添加／编辑／删除 API 与免密本机连接、安全填写或更换密钥、发现与设置型号、验证连接 | 有（2026-11-07；复用设置页事务，保存、目录获取与推理验证分别报告） | 在执行电脑的任务中调用；手机及同账号电脑沿原有加密代输入卡填写密钥，不支持指定另一台电脑或 SSH |

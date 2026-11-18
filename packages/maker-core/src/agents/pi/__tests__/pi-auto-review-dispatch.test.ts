@@ -1839,7 +1839,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     try {
       captured.commandCatalog = [];
       captured.requests = [];
-      await expect(handle.callNativeToolCatalog!('getAllTools', [])).rejects.toThrow('unavailable');
+      await expect(handle.callNativeToolCatalog!('getAllTools', [])).rejects.toThrow('UNSUPPORTED_CAPABILITY');
       expect(captured.requests.map(request => request.type)).toEqual(['get_commands']);
     } finally { await handle.close(); }
   });

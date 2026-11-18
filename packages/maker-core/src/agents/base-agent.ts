@@ -2513,7 +2513,7 @@ export type AgentMcpServerToolsState =
 export interface AgentMcpServerToolsReport {
   state: AgentMcpServerToolsState;
   /** Raw MCP tool names as the server declared them, not harness-qualified names. */
-  tools: Array<{ name: string; description?: string }>;
+  tools: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
 }
 
 export interface AgentSessionHandle {
