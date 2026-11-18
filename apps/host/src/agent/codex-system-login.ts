@@ -124,7 +124,7 @@ export function createHostCodexSystemLogin(options: {
   let sharedAuthLinkUnavailable = false;
 
   /** runReconcileWithSystemCodex, steps 2 to 9 (auth-adapters.ts 1172–1353). */
-  async function run(systemAuth: string, canWrite: () => boolean): Promise<void> {
+  async function run(systemAuth: string, profileAllowsWrite: () => boolean): Promise<void> {
     // Every pass judges again: only this pass failing to link counts as unreachable.
     sharedAuthLinkUnavailable = false;
     // Step 2: an explicit disconnect or an invalidation still covering the system login.
@@ -136,7 +136,7 @@ export function createHostCodexSystemLogin(options: {
     // Step 5: a healthy hardlink is marked shared and replaced by a file symlink below.
     const topology = await inspectCodexAuthLink(systemAuth, myAuth);
     if (topology.healthy && topology.linkType === 'hardlink') {
-      if (!canWrite()) return;
+      if (!profileAllowsWrite()) return;
       markNativeProviderAuthSharedSystemCredential('openai');
     }
     if (topology.healthy && topology.linkType === 'symlink') return;
@@ -157,7 +157,7 @@ export function createHostCodexSystemLogin(options: {
     if (!sysAccount && topology.linkType !== 'hardlink') return;
     const myAccount = hasLocalEntry ? await readCodexAccountId(myAuth) : null;
     if (legacyExplicitOwner && myAccount && myAccount !== sysAccount) {
-      if (!canWrite()) return;
+      if (!profileAllowsWrite()) return;
       const migrated = migrateLegacyExplicitNativeProviderAuthToInstanceIsolated('openai', legacyExplicitOwner);
       log.info('keeping account-distinct legacy explicit Codex auth',
         { provenanceMigrated: migrated, ownerMatchesActive: legacyExplicitOwner === getActiveAppSession().dataOwnerId });
@@ -165,7 +165,7 @@ export function createHostCodexSystemLogin(options: {
     }
     // Step 8: Windows keeps a standalone file (no Release snapshot on the Host).
     if (process.platform === 'win32' && topology.linkType === 'file') {
-      if (legacyExplicitOwner && canWrite())
+      if (legacyExplicitOwner && profileAllowsWrite())
         migrateLegacyExplicitNativeProviderAuthToInstanceIsolated('openai', legacyExplicitOwner);
       return;
     }
@@ -174,9 +174,9 @@ export function createHostCodexSystemLogin(options: {
         { linkType: topology.linkType, accountMatch: myAccount ? myAccount === sysAccount : 'unknown', dryRunCandidate: true });
     }
     // Step 9: the reads above crossed awaits; a login may have started since.
-    if (options.loginActive() || !canWrite()) return;
+    if (options.loginActive() || !profileAllowsWrite()) return;
     await fsp.mkdir(options.codexHome, { recursive: true }).catch(() => undefined);
-    if (!canWrite()) return;
+    if (!profileAllowsWrite()) return;
     const { kind, error, linkType } = await relinkSharedCodexAuth(systemAuth, myAuth);
     if (kind === 'linked') log.info('codex auth.json linked with shared OpenAI login', { linkType });
     else if (kind === 'link-unsupported') {
@@ -233,15 +233,15 @@ export function createHostCodexSystemLogin(options: {
       if (!opts?.allowCurrentLogin && options.loginActive()) return Promise.resolve();
       if (pending) return pending;
       const sessionAtStart = getActiveAppSession();
-      let mayWrite = true;
-      const canWrite = () => {
-        const current = getActiveAppSession();
-        mayWrite = mayWrite && !options.isProfileHeld?.() && !isAppSessionBoundaryPending()
-          && current.generation === sessionAtStart.generation && current.dataOwnerId === sessionAtStart.dataOwnerId;
-        return mayWrite;
+      // As on desktop, the filesystem link is independent of which account gets the binding.
+      // An observed profile hold ends this pass; only a later pass can resume writing.
+      let sawProfileHold = false;
+      const profileAllowsWrite = () => {
+        sawProfileHold ||= options.isProfileHeld?.() === true;
+        return !sawProfileHold;
       };
-      const current = run(systemAuth, canWrite)
-        .then(() => { if (canWrite()) claim(systemAuth, sessionAtStart); })
+      const current = run(systemAuth, profileAllowsWrite)
+        .then(() => { if (profileAllowsWrite()) claim(systemAuth, sessionAtStart); })
         .finally(() => { if (pending === current) pending = null; });
       pending = current;
       return current;
