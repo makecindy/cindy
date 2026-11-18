@@ -4,7 +4,7 @@ import { isDeliveryProseText } from '@cindy/maker-shared/message-render';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import {
   HISTORY_VIEW_PAGE_BYTES, HISTORY_VIEW_PAGE_ITEMS, HISTORY_DETAIL_PAGE_BYTES,
-  HISTORY_WORK_LINE_LIMIT, completesHistoryTurn, projectHistoryView, projectHistoryWorkLines, historySubagentScopes, mapHistoryViewMessages, historyWorkSummaries,
+  HISTORY_WORK_LINE_LIMIT, completesHistoryTurn, projectHistoryView, projectHistoryWorkLines, historySubagentScopes, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries,
   type HistoryMessageSource, type HistoryWorkLine, type HistoryViewItem, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkReference,
 } from '@cindy/maker-shared/message-window';
 
@@ -62,6 +62,9 @@ export interface HistoryViewReaderDependencies<T extends HistoryMessageSource> {
   live?(sessionId: string): T[];
   /** Caller context that changes what `list` does (e.g. import side effects). Read per call. */
   shareScope?(): string;
+  /** True for item ids that only exist while a run is live (e.g. `history-live:`)
+   * — pages containing them are never kept in the settled cache. */
+  isVolatileItemId?(id: string): boolean;
 }
 
 function compareRows(a: HistoryMessageSource, b: HistoryMessageSource): number {
@@ -506,7 +509,15 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
   const pendingPages = new Map<string, Promise<{ page: HistoryViewPage<T>; shape?: HistoryPageShape }>>();
   const SETTLED_PAGE_MAX_ENTRIES = 8;
   const SETTLED_PAGE_MAX_BYTES = 4 * 1024 * 1024;
-  const settledPages = new Map<string, { page: HistoryViewPage<T>; shape?: HistoryPageShape; bytes: number }>();
+  // The world can move while a read is in flight: a cancelled run drops its
+  // live-thinking row without a DB write, and a failed task-image restore
+  // stays a degraded-but-successful page. Neither bumps the revision, so a
+  // settled entry also needs a short TTL and a volatile-row guard.
+  const SETTLED_PAGE_TTL_MS = 30_000;
+  const settledPages = new Map<
+    string,
+    { page: HistoryViewPage<T>; shape?: HistoryPageShape; bytes: number; cachedAt: number }
+  >();
   let settledPageBytes = 0;
   const evictSettledPages = () => {
     while (settledPages.size > SETTLED_PAGE_MAX_ENTRIES || settledPageBytes > SETTLED_PAGE_MAX_BYTES) {
@@ -530,9 +541,14 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       // one page object per key; the serialization boundary is the caller's.
       const settled = settledPages.get(key);
       if (settled) {
-        settledPages.delete(key); settledPages.set(key, settled);
-        if (settled.shape) options.onShape?.(settled.shape);
-        return settled.page;
+        if (Date.now() - settled.cachedAt >= SETTLED_PAGE_TTL_MS) {
+          settledPages.delete(key);
+          settledPageBytes -= settled.bytes;
+        } else {
+          settledPages.delete(key); settledPages.set(key, settled);
+          if (settled.shape) options.onShape?.(settled.shape);
+          return settled.page;
+        }
       }
       let shared = pendingPages.get(key);
       if (!shared) {
@@ -540,12 +556,18 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         const promise = reader.page(sessionId, before, lazyDetails, {
           workLines: options.workLines,
           ...(options.onShape ? { onShape: (value: HistoryPageShape) => { shape = value; } } : {}),
-        }, revision).then((page) => {
-          const bytes = Buffer.byteLength(JSON.stringify(page), 'utf8');
-          if (bytes <= SETTLED_PAGE_MAX_BYTES) {
-            settledPages.set(key, { page, shape, bytes });
-            settledPageBytes += bytes;
-            evictSettledPages();
+        }, revision).then(async (page) => {
+          const isVolatile = deps.isVolatileItemId;
+          const volatile = isVolatile != null
+            && historyViewLeaves(page.items).some((leaf) => leaf.type === 'messages'
+              && leaf.messages.some((message) => isVolatile?.(message.id) === true));
+          if (!volatile && await deps.revision!() === revision) {
+            const bytes = Buffer.byteLength(JSON.stringify(page), 'utf8');
+            if (bytes <= SETTLED_PAGE_MAX_BYTES) {
+              settledPages.set(key, { page, shape, bytes, cachedAt: Date.now() });
+              settledPageBytes += bytes;
+              evictSettledPages();
+            }
           }
           return { page, shape };
         }).finally(() => {

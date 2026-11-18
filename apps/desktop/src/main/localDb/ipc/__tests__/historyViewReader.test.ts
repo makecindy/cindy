@@ -77,6 +77,47 @@ describe('host history view', () => {
     await Promise.all([local, api.page('s', undefined, true)]);
     expect(list).toHaveBeenCalledTimes(3);
   });
+  // Settling guards (review round 1): a page is only kept when it is still a
+  // settled read — live-projected rows must not come back after their run was
+  // cancelled, a mid-read DB write invalidates the key anyway, and a page older
+  // than the TTL rereads so transient degradation (e.g. image restore failures)
+  // self-heals instead of being pinned forever.
+  it('never caches pages with live-projected rows or a moved revision, and expires settled pages by TTL', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let revision = 'owner-a:1';
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => revision, anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      isVolatileItemId: id => id.startsWith('history-live:') });
+    // Live row projected into the page: settle it, then reread — never cached.
+    const liveBase = reader([...source, { ...row(2, 'user'), id: 'history-live:x' }]);
+    list.mockImplementationOnce((...args: Parameters<typeof base.list>) => liveBase.list(...args)).mockImplementationOnce(base.list);
+    await api.page('s', undefined, true);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // volatile page not cached
+    // Revision moves while the read is in flight: the settled key is dead on arrival.
+    revision = 'owner-a:3';
+    list.mockImplementationOnce(async (...args: Parameters<typeof base.list>) => {
+      const result = await base.list(...args);
+      revision = 'owner-a:4';
+      return result;
+    });
+    await api.page('s', undefined, true);
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(4); // stale key not cached
+    // A clean page caches, but only for the TTL window.
+    vi.useFakeTimers();
+    try {
+      await api.page('s', undefined, true);
+      expect(list).toHaveBeenCalledTimes(4); // clean page from the segment above still cached
+      vi.advanceTimersByTime(31_000);
+      await api.page('s', undefined, true);
+      expect(list).toHaveBeenCalledTimes(5); // TTL expiry rereads
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   // Unit: the cache must not serve a running task (live rows change without
   // writes) and must not pin a failed read.
   it('keeps running-task pages uncached and drops failed pages instead of caching them', async () => {
