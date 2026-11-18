@@ -14,7 +14,6 @@ const LOCAL_ONLY_ENTRIES: Record<string, string[]> = {
   // 只有快问快答、不能建任务的插件仍只限本机；能建任务的插件与普通任务一样列远程来源。
   'cindy-brain/PluginTaskPrefs.tsx': ['one-shot-local-request'],
   'components/settings/SubagentModelSection.tsx': ['subagent-in-parent-task'],
-  'components/settings/VisionBridgeSection.tsx': ['vision-bridge-local-proxy'],
 };
 
 function sourceFiles(dir: string): string[] {
@@ -35,7 +34,7 @@ describe('模型选择器的来源声明', () => {
     const found: Record<string, string[]> = {};
     for (const { file, text } of sources) {
       if (file === 'components/new-chat/ModelSelector.tsx') continue;
-      const reasons = [...text.matchAll(/['"](subagent-in-parent-task|vision-bridge-local-proxy|one-shot-local-request)['"]/g)]
+      const reasons = [...text.matchAll(/['"](subagent-in-parent-task|one-shot-local-request)['"]/g)]
         .map((match) => match[1]);
       if (/localOnlyReason/.test(text)) found[file] = [...new Set(reasons)];
     }

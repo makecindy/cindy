@@ -1866,7 +1866,6 @@
       "memory": "记忆",
       "subagentModels": "Subagent",
       "auxiliaryModels": "辅佐模型",
-      "visionBridge": "视觉桥",
       "compaction": "上下文缩略",
       "terminalShell": "常例终端 shell",
       "composer": "讯之输入",
@@ -5434,37 +5433,6 @@
     "compatMode": {
       "title": "妙诀",
       "description": "诸功能之开关，或须新开差事方生效（详见各 cell 之说明）。"
-    },
-    "visionBridge": {
-      "title": "视觉桥",
-      "description": "令纯文字模型得以观图：以独立之多模态模型转图为文字描述，再付纯文字模型。",
-      "enableLabel": "启视觉桥",
-      "enableHint": "阖则诸模型之行一如往昔。启则下方所勾之模型，将经视觉后端转图为文字描述。启用后，遣此等模型之图及同讯之文字提示，将传予君所择之视觉后端。",
-      "enableAria": "启闭视觉桥",
-      "toast": {
-        "saved": "视觉桥之设已存",
-        "saveFailed": "视觉桥之设存之未成"
-      },
-      "capability": {
-        "vision": "已知能视",
-        "noVision": "已知纯文",
-        "unknown": "视觉之能未知"
-      },
-      "targetModels": {
-        "label": "经视觉桥之模型",
-        "hint": "纯文字模型（如 DeepSeek）常例已勾。亦可勾能视之模型——如特用较廉之描述模型以省 token。",
-        "empty": "暂无可用之模型。",
-        "toggleAria": "切换 {{model}} 之视觉桥"
-      },
-      "backends": {
-        "label": "视觉所倚模型",
-        "hint": "择至多二个转图为文之多模态模型。其二（备用）可选。",
-        "primary": "主用",
-        "fallback": "备用",
-        "unset": "未择",
-        "noBackup": "无备",
-        "hintSecondary": "先用主后端。主后端未成且设有备用时，切至备用。二者皆未成，则图无从辨识，将以文字提示代之并告君。"
-      }
     },
     "chatEmbedding": {
       "cell": {
@@ -11407,7 +11375,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}不能回复：同伴所在设备所留之远程差事数已达上限。\n请同伴之主封存暂不用之差事，或请远方之机之主于「远程与分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}不能回复：远方之机所留差事总数已达上限。\n请彼机之主释暂不用之差事，或于「远程与分享」中提高上限。",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}}不能回复：当前模型不支图。\n请易为支图之模型，或于「规制 → 个性化 → 视觉桥」启用并设视觉模型，再遣之。",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}不能作覆：今之模型不支持图。\n请易以支持图之模型。",
           "MODEL_UNAVAILABLE": "{{name}}不能回复：今无可用之模型。\n请于同伴之设中择已连接之可用模型，再遣之。",
           "AUTH_REQUIRED": "{{name}}不能回复：模型连接须重新验证。\n请于规制中重连对应之模型来源，再遣之。",
           "RATE_LIMITED": "{{name}}不能回复：模型请求过频。\n请稍后再遣，或择他可用模型。",
@@ -14879,11 +14847,6 @@
       "title": "图已佚",
       "unavailable": "图暂不可见",
       "loading": "方载图…"
-    },
-    "visionBridge": {
-      "analyzing": "方辨图…（{{count}} 张）",
-      "fallback": "视觉桥已改用备用视觉后端（主后端不可用），辨图或受影响",
-      "unavailable": "视觉桥今不可用，图不能辨，已以文字提示代之"
     },
     "newMessageIndicator": {
       "aria": "归至底，览新讯 {{count}} 条",
@@ -21518,7 +21481,6 @@
       "sessionRuntimeFallback": "差事模型自动降级",
       "subagentModels": "Subagent",
       "auxiliaryModels": "辅助模型",
-      "visionBridge": "视觉桥",
       "modelVisibility": "模型显示与隐藏",
       "providerOrder": "供方顺序",
       "modelCatalogOverrides": "模型参数调整",
