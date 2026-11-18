@@ -70,7 +70,7 @@ import {
   providerOffersModel,
 } from '@cindy/model-providers';
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
-import { TASK_MESSAGE_MAX_WIDTH, useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import {
   Activity,
@@ -1040,7 +1040,7 @@ function CCAgentSessionContent({
     getMessageWidth,
   } = useProportionalWidth(914, {
     compact: isCompactRail,
-    expandTo: botChatIdentity ? undefined : TASK_MESSAGE_MAX_WIDTH,
+    paneLayout: !isCompactRail && !botChatIdentity,
   });
   const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;
   const { sessions: allSessions, refreshSessions, patchLocal: patchLocalSession } = useCCSessions();
