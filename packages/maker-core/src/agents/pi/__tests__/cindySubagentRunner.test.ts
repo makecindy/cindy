@@ -1019,17 +1019,24 @@ describe('Cindy durable PI Subagent runner', () => {
     });
 
     // #9705, integration: real resume staging rejects redirected/oversized shell files.
-    it.skipIf(process.platform === 'win32')('rejects linked and oversized shell settings before launching a resumed child', async () => {
+    it.for(['linked', 'oversized'] as const)('rejects %s shell settings before launching a resumed child', async (kind, context) => {
       const { fixture, first } = await resumableFixture();
       const sourceFile = path.join(fixture.root, first.runId, 'pi-home', 'settings.json');
-      const outside = path.join(fixture.root, 'outside-settings.json');
-      await writeFile(outside, '{}');
-      await symlink(outside, sourceFile);
+      if (kind === 'linked') {
+        const outside = path.join(fixture.root, 'outside-settings.json');
+        await writeFile(outside, '{}');
+        try {
+          await symlink(outside, sourceFile, 'file');
+        } catch (error) {
+          // Probe the actual capability; Windows with symlink permission runs it too.
+          if (['EPERM', 'EACCES', 'ENOSYS', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) return context.skip();
+          throw error;
+        }
+      } else {
+        await writeFile(sourceFile, 'x'.repeat(2 * 1024 * 1024 + 1));
+      }
       const launchRunner = vi.fn(async () => {});
       const launch = { ...resumeLaunch(fixture), runtimeSnapshot: undefined, launchRunner };
-      await expect(resumePiSubagentRun(fixture.root, first.runId, 'continue', launch)).rejects.toThrow('settings escaped');
-      await rm(sourceFile);
-      await writeFile(sourceFile, 'x'.repeat(2 * 1024 * 1024 + 1));
       await expect(resumePiSubagentRun(fixture.root, first.runId, 'continue', launch)).rejects.toThrow('settings escaped');
       expect(launchRunner).not.toHaveBeenCalled();
     });
