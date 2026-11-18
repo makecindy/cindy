@@ -778,7 +778,6 @@ export function CCAgentSidebarUpper() {
         visibleNewOrder,
         comparisonKey,
       );
-      filter.setPinnedSortBy('manual');
       void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist rail pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
@@ -2259,7 +2258,6 @@ function ExpandedView({
         visibleNewOrder,
         comparisonKey,
       );
-      filter.setPinnedSortBy('manual');
       void filter.setManualPinnedOrder(order, fullActivePinnedIds, baseOrder).catch((err) => {
         log.warn('failed to persist pinned order', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
