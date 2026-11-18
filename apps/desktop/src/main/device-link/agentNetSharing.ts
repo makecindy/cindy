@@ -64,8 +64,11 @@ let binding: { client: RoutedDeviceLinkClient; options: ScopedConnectionOptions;
   selection: string; pins: Map<string, () => void>; via: Map<string, 'primary' | 'blocked' | { connection: string }>; stop(): void } | null = null;
 const keyOf = (kind: Kind, id: string) => kind + ':' + id;
 const originKey = (route: AgentNetSharingRoute) => JSON.stringify([route.v, route.server, route.networkId, route.rootPublicKey]);
+const listIdentityKey = (route: AgentNetSharingRoute) => route.v === 3
+  ? originKey(route) + (route.memberId || route.guest ? ':guest' : ':member')
+  : originKey(route);
 const providerListKey = (received: boolean, route?: AgentNetSharingRoute | null) =>
-  '/api/device-link/provider-shares' + (received ? '/received' : '') + (route ? originKey(route) : ':legacy');
+  '/api/device-link/provider-shares' + (received ? '/received' : '') + (route ? listIdentityKey(route) : ':legacy');
 /** After a binding stops (and until the next one), its resources stay retired on that routed client. */
 let retiredVia: { client: RoutedDeviceLinkClient; via: Map<string, 'blocked'> } | null = null;
 /**
@@ -339,6 +342,7 @@ async function syncOrigins(state: Session): Promise<void> {
   const api = currentAgentNetClient(); if (!api || api.delegation) return;
   const origins = new Map<string, { server: string; networkId: string; rootPublicKey: string; region: 'cn' | 'global' }>();
   for (const route of [...state.vault.routes, ...(state.vault.services ?? [])]) {
+    if (route.v === 3) continue;
     const origin = { server: route.server, networkId: route.networkId, rootPublicKey: route.rootPublicKey, region: route.region };
     origins.set(JSON.stringify(origin), origin);
   }
@@ -471,7 +475,7 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
   const known = state.vault.routes.filter(r => r.kind === 'provider-share');
   const origins = new Map<string, AgentNetSharingRoute>();
   for (const route of [...(selected ? [selected] : []), ...known, ...(state.vault.services ?? []).map(r => ({ ...r, kind: 'provider-share' as const }))]) {
-    if (received || !route.memberId && hostClient(route)) origins.set(originKey(route), route);
+    if (received || !route.memberId && hostClient(route)) origins.set(listIdentityKey(route), route);
   }
   if (!selected && known.length === 0 && origins.size === 0) return null;
   const path = '/api/device-link/provider-shares' + (received ? '/received' : '');
@@ -506,7 +510,7 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
     const items = source.departedMembers.size
       ? listed.filter(row => !source.departedMembers.has((row as { memberId?: string })?.memberId ?? '')) : listed;
     if (result.status === 'fulfilled') state.lists.set(source.key, items);
-    else if (source.route) for (const route of known.filter(r => originKey(r) === originKey(source.route))) unavailable.add(route.resourceId);
+    else if (source.route) for (const route of known.filter(r => listIdentityKey(r) === listIdentityKey(source.route))) unavailable.add(route.resourceId);
     for (const item of items) {
       const row = item as { shareId: string; hostDeviceId: string; memberId?: string; status?: string; members?: { memberId: string }[]; requests?: { requestId: string; linkId?: string }[] };
       if (!row || typeof row.shareId !== 'string' || rows.has(row.shareId)) throw new Error('AGENT_NET_SHARING_ROUTE_CONFLICT');
@@ -527,7 +531,7 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
     }
     if (received && source.route && result.status === 'fulfilled') {
       const ids = new Set(items.map(r => (r as { shareId: string }).shareId));
-      for (const route of known) if (route.memberId && originKey(route) === originKey(source.route) && !ids.has(route.resourceId)) retireAgentNetSharingGuest('provider-share', route.resourceId);
+      for (const route of known) if (route.memberId && listIdentityKey(route) === listIdentityKey(source.route) && !ids.has(route.resourceId)) retireAgentNetSharingGuest('provider-share', route.resourceId);
     }
   }
   return { shares: [...rows.values()], unavailableShareIds: [...unavailable],
@@ -557,13 +561,13 @@ export async function listAgentNetSharedTasks(legacy: () => Promise<unknown>): P
   const known = state.vault.routes.filter(r => r.kind === 'shared-task');
   if (!selected && known.length === 0 && !state.vault.services?.length) return null;
   const services = new Map<string, AgentNetSharingRoute>();
-  for (const route of [...(selected ? [selected] : []), ...known, ...(state.vault.services ?? []).map(r => ({ ...r, kind: 'shared-task' as const }))]) services.set(JSON.stringify([route.v, route.server, route.networkId, route.rootPublicKey]), route);
+  for (const route of [...(selected ? [selected] : []), ...known, ...(state.vault.services ?? []).map(r => ({ ...r, kind: 'shared-task' as const }))]) services.set(listIdentityKey(route), route);
   const db = getCurrentDbClientSnapshot();
   const journal = db ? await createSharedTaskJournal(db.client).latest() : [];
   state.guard();
   const oldIds = journal.filter(item => !known.some(r => r.resourceId === item.sharedTaskId)).map(item => item.sharedTaskId);
   const sources: Array<{ route?: AgentNetSharingRoute; ids: string[]; work(signal: AbortSignal): Promise<unknown> }> = [...services.values()].map(route => ({
-    route, ids: known.filter(r => originKey(r) === originKey(route)).map(r => r.resourceId),
+    route, ids: known.filter(r => listIdentityKey(r) === listIdentityKey(route)).map(r => r.resourceId),
     work: signal => business(state, route).request('/api/device-link/shared-tasks', { method: 'GET', signal }),
   }));
   if (agentNetAllowsLegacy()) sources.push({ ids: oldIds, work: () => legacy() });

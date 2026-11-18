@@ -222,6 +222,7 @@ async function syncOrigins(state: State): Promise<void> {
   const identity = currentMobileAgentNetIdentity(); if (!identity || identity.api.delegation) return;
   const origins = new Map<string, SharingOrigin & { v?: 2 | 3 }>();
   for (const r of [...state.book.routes, ...(state.book.origins ?? [])]) {
+    if ('v' in r && r.v === 3) continue;
     const o: SharingOrigin = { server: r.server, networkId: r.networkId, rootPublicKey: r.rootPublicKey, region: r.region }; origins.set(JSON.stringify(o), o);
   }
   const digest = JSON.stringify([identity.api.base, identity.api.certificate.signature, [...origins.values()]]);
