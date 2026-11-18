@@ -13,7 +13,7 @@ export function ChatBubble({ speaker = 'assistant', bare = false, className, ...
 }) {
   return <div {...props} className={cn(
     CHAT_BODY_CLASS,
-    bare ? 'chat-task-answer w-full min-w-0' : 'relative min-w-0 max-w-full rounded-xl border',
+    bare ? 'w-full min-w-0' : 'relative min-w-0 max-w-full rounded-xl border',
     speaker === 'user'
       ? 'border-[var(--msg-user-border)] bg-[var(--msg-user-bg)] px-4 py-3 text-[var(--msg-user-text)]'
       : cn('text-[var(--msg-assistant-text)]', !bare && 'border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 py-2.5'),

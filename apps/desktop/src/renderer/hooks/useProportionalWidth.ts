@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
-/** Shared work column for new and running tasks; prose keeps its own reading width. */
-export const TASK_MESSAGE_MAX_WIDTH = 1200;
+/** Wide-pane ceiling shared by prose, blocks and the new/running task composers. */
+export const TASK_MESSAGE_MAX_WIDTH = 1120;
 
 /**
  * 主区域内容宽度 hook
@@ -12,8 +12,9 @@ export const TASK_MESSAGE_MAX_WIDTH = 1200;
  *
  * maxWidth 为内容封顶宽（首参）：容器再宽,内容列也不超过它,超出部分靠 mx-auto
  * 居中留白。不传时回落到 MAX_MESSAGE_WIDTH(1200) 的历史默认。新建对话页与进行中
- * 对话页共用 TASK_MESSAGE_MAX_WIDTH,保证发送首条消息时输入框宽度不跳变。
- * 大屏给表格、代码与过程更多空间；普通回复的连续正文另由 ChatBubble 限制阅读行宽。
+ * 对话页以914为基线，expandTo 共用 TASK_MESSAGE_MAX_WIDTH：pane<=1200 保留
+ * 笔记本行宽，1200→1600 渐进展开，之后封顶。正文与表格、代码使用同一列，
+ * 纯文字也获得空间，不产生两个内容右边界。新建和进行中页沿用同一计算。
  *
  * - 消息流侧 (50px)：MessageStream 是 overflow-y-auto 的原生滚动容器,占满
  *   全宽 containerWidth，内部 contentRef `mx-auto` + `maxWidth=messageWidth`
@@ -39,6 +40,8 @@ export const TASK_MESSAGE_MAX_WIDTH = 1200;
  */
 // 内容封顶宽的历史默认值:调用方不传首参时回落到它(旧行为)。
 const MAX_MESSAGE_WIDTH = 1200;
+const WIDE_PANE_START = 1200;
+const WIDE_PANE_END = 1600;
 const INPUT_OUTSET = 20; // 输入框比消息流每侧宽 10px（共 20px）
 const DEFAULT_MESSAGE_PAD = 50;
 // compact 之前用 10/0 太贴边了,input 完全没呼吸空间。20/10 仍比默认紧凑 60%,
@@ -54,6 +57,8 @@ const AUTO_COMPACT_THRESHOLD = 700;
 export interface UseProportionalWidthOptions {
   /** 紧凑模式 (workdir-browse rail / 主会话右栏打开等窄容器场景),两侧 padding 由 50→20。 */
   compact?: boolean;
+  /** Optional wide-pane cap: preserve maxWidth through 1200px, expand to this cap at 1600px. */
+  expandTo?: number;
   /**
    * 内容宽度下限(px)。给"填满可用宽 + 封顶 1200"的自适应再补一个地板:容器
    * 足够宽时 inputWidth 不低于该值。为避免窄窗溢出,地板本身再夹到实测容器宽
@@ -91,7 +96,13 @@ export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWid
       const nextInputPad = Math.max(0, messagePad - INPUT_OUTSET / 2);
       const messageAvailable = Math.max(0, containerWidth - messagePad * 2);
       // 首参 maxWidth 为内容封顶宽;非法/未传时回落到历史默认 1200。
-      const cap = maxWidth && maxWidth > 0 ? maxWidth : MAX_MESSAGE_WIDTH;
+      const baseCap = maxWidth && maxWidth > 0 ? maxWidth : MAX_MESSAGE_WIDTH;
+      const progress = Math.max(0, Math.min(1,
+        (containerWidth - WIDE_PANE_START) / (WIDE_PANE_END - WIDE_PANE_START),
+      ));
+      const cap = opts.expandTo && opts.expandTo > baseCap
+        ? baseCap + (opts.expandTo - baseCap) * progress
+        : baseCap;
       const nextMessage = Math.min(cap, messageAvailable);
       let nextInput = nextMessage + INPUT_OUTSET;
       if (opts.minWidth && opts.minWidth > nextInput) {
@@ -122,7 +133,7 @@ export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWid
           : { isCompact: useCompact, inputWidthBand: resolvedBand },
       );
     },
-    [maxWidth, opts.compact, opts.minWidth, opts.responsiveBreakpoints],
+    [maxWidth, opts.compact, opts.expandTo, opts.minWidth, opts.responsiveBreakpoints],
   );
 
   // useLayoutEffect + 同步量一次:在首次 paint 前写好 CSS 变量，消除 width=0 的坏帧。

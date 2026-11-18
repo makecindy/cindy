@@ -4,7 +4,7 @@ import { MessageStream } from '../../../src/renderer/components/chat/MessageStre
 import { MarkdownRenderer } from '../../../src/renderer/components/chat/MarkdownRenderer';
 import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
 import { PluginUiProvider } from '../../../src/renderer/cindy-brain/PluginUiContributions';
-import { TASK_MESSAGE_MAX_WIDTH, useProportionalWidth } from '../../../src/renderer/hooks/useProportionalWidth';
+import * as proportionalWidth from '../../../src/renderer/hooks/useProportionalWidth';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
 import { LayoutRoot } from '../../../src/renderer/layout/LayoutRoot';
 import { usePanelWidth } from '../../../src/renderer/layout/paneWidths';
@@ -18,6 +18,7 @@ const table = '| 项目 | 适用场景 | 目标 | 当前进展 | 负责人 | 下
   Array.from({ length: 4 }, (_, i) => `| 方案 ${i + 1} | 大屏多任务工作区 | 让宽表格利用更多空间 | 等待布局验证 | 设计与开发 | 核对内容与控件边界 | 浅色和深色真实组件截图 |`).join('\n');
 const code = '```ts\n' + Array.from({ length: 4 }, (_, i) => `const section${i} = { title: "Responsive workspace", availableWidth: 1920, columns: ["summary", "progress", "owner", "next step", "validation"] };`).join('\n') + '\n```';
 const content = `### 宽屏工作区\n\n${paragraph.repeat(3)}\n\n${table}\n\n${code}\n\n${paragraph}`;
+const textContent = `${paragraph.repeat(3)}\n\n${paragraph.repeat(3)}\n\nA larger workspace should make ordinary reading and structured results easier to use together. The available chat pane determines the content width, so opening a reference panel or expanding the sidebar preserves the same layout relationships.\n\n${paragraph.repeat(2)}`;
 const messages: ChatMessage[] = [
   { clientId: 'request', role: 'user', content: '请整理这份工作计划，并保留完整表格和代码。' },
   { clientId: 'note', role: 'assistant', content: '先核对当前内容和可用空间。', assistantPhase: 'commentary' },
@@ -30,13 +31,17 @@ let layout = createDefaultLayout();
 if (layout.content.type === 'split') layout.content.children.forEach(child => { child.fraction = 0.5; });
 
 function Task() {
-  const width = useProportionalWidth(ctx.data.legacy ? 914 : TASK_MESSAGE_MAX_WIDTH);
+  // Namespace lookup keeps --compare runnable against the original hook,
+  // which has no wide-pane export/option; its unchanged914px behavior is replayed.
+  const wideCap = Reflect.get(proportionalWidth, 'TASK_MESSAGE_MAX_WIDTH') ?? 914;
+  const width = proportionalWidth.useProportionalWidth(914, { expandTo: ctx.data.legacy ? undefined : wideCap });
   const attachmentState = useAttachments('fixture-task-width');
   return <main className="min-w-[400px] flex-1 h-full" data-task-pane>
-    <div ref={width.containerRef} className="relative h-full w-full" data-task-width>
-      <MessageStream workingDir="" historyLoaded messages={ctx.data.streaming
-        ? messages.map(message => message.clientId === 'answer' ? { ...message, isStreaming: true, turnCompleted: false } : message)
-        : messages} contentWidth={width.messageWidth}
+    <div ref={width.containerRef} className="relative h-full w-full" data-task-width data-wide-cap={wideCap}>
+      <MessageStream workingDir="" historyLoaded messages={messages.map(message => message.clientId === 'answer'
+        ? { ...message, content: ctx.data.textOnly ? textContent : content,
+          ...(ctx.data.streaming ? { isStreaming: true, turnCompleted: false } : {}) }
+        : message)} contentWidth={width.messageWidth}
         getContentWidth={width.getMessageWidth} bottomPadding={220} />
       <div className="absolute bottom-0 flex flex-col items-center pb-5 bg-content-area"
         style={{ left: width.inputPad, right: width.inputPad }}>

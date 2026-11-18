@@ -3,14 +3,6 @@
   container: chat-bubble-layout / inline-size;
 }
 
-/* Ordinary tasks use a wider work column on large displays. Keep continuous
-   prose at its existing reading width, sharing the left edge with full-width
-   tables, code and process blocks. Only top-level prose is constrained: nested
-   cells, rich answers and companion/group bubbles retain their own layouts. */
-.chat-task-answer .msg-markdown:not(:where(.rich-answer *)) > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
-  max-width: min(100%, 914px);
-}
-
 @container chat-bubble-layout (max-width: 480px) {
   /* Group topics retain their explicitly selected outer toolbar layout. */
   .chat-bubble-column:not(:where(.thread-panel:not(.thread-panel-inline-actions) *)) {

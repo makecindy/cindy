@@ -795,13 +795,15 @@ Chat prose and compact code use the existing `chatChrome.ts` presentation entry;
 ### Desktop task content width (2026-11-18)
 
 普通任务以聊天面板的实际可用宽度适配，不根据整窗断点或侧栏开关猜测空间。
-新建页与进行中任务共用 1200px 工作列上限；消息、过程、表格与代码在同一列，输入框和状态区
-沿同一中心轴、每侧向外 10px。普通 Markdown 的连续正文、标题、列表与引用保留 914px 阅读上限并与工作列左侧对齐，
-表格和代码可使用整列，表格保留块内横向滚动、普通代码保留自动折行。窄面板继续沿用现有 50px / compact 20px
+新建页与进行中任务共用同一内容列：pane≤1200px 时保留成熟的 914px 上限，pane 从1200到1600px
+时将上限连续扩大到1120px，之后封顶。纯文字、标题、列表、引用、表格、代码与过程一起展开，
+不另造窄正文列；输入框和状态区沿同一中心轴、每侧向外10px。这样1440px笔记本展开260px侧栏后
+仍保留原行宽，大pane的纯文字也最多增加22.5%空间，正文和代码不会突然出现两个右边界。
+表格保留块内横向滚动、普通代码保留自动折行。窄面板继续沿用现有 50px / compact 20px
 消息边距，不新增宽屏开关或拖宽手柄；右侧面板和分栏仍由现有布局引擎分配空间。
 结构化答案卡片保持自己的布局；用户通过外观自定义的阅读宽度继续优先约束整条回复（包括表格和代码）。
 伙伴私聊与群聊继续使用 914px 内容列及原气泡宽度。实现见 `useProportionalWidth.ts`、
-`ChatBubble.css`，真实组件与分割线回归见 `scripts/fixtures/task-content-width/`。
+`CCAgentSessionView.tsx`，纯文字/混合内容同窗口前后对照及分割线回归见 `scripts/fixtures/task-content-width/`。
 
 ### Desktop chat threads
 

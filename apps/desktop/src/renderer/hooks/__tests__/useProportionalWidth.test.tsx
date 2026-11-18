@@ -50,7 +50,7 @@ describe('useProportionalWidth resize hot path', () => {
     let latestCompact = false;
 
     function Harness() {
-      const width = useProportionalWidth(TASK_MESSAGE_MAX_WIDTH, { responsiveBreakpoints: BREAKPOINTS });
+      const width = useProportionalWidth(914, { expandTo: TASK_MESSAGE_MAX_WIDTH, responsiveBreakpoints: BREAKPOINTS });
       renders += 1;
       latestBand = width.inputWidthBand;
       latestCompact = width.isCompact;
@@ -66,19 +66,21 @@ describe('useProportionalWidth resize hot path', () => {
     expect(latestBand).toBe(3);
     expect(latestCompact).toBe(false);
 
-    // Feedback #12: a large task pane stayed 914px wide. Existing coverage
-    // exercised only shrinking. Unit tier, real hook: the 1600px input must
-    // expand both message and composer without another session render.
-    measuredWidth = 1600;
-    act(() => {
-      notifyResize?.(
-        [{ contentRect: { width: measuredWidth } } as ResizeObserverEntry],
-        {} as ResizeObserver,
-      );
-    });
-    expect(container.style.getPropertyValue('--cindy-message-width')).toBe('1200px');
-    expect(container.style.getPropertyValue('--cindy-input-width')).toBe('1220px');
-    expect(renders).toBe(initialRenderCount);
+    // Feedback #12, unit tier, real hook. A fixed cap never covered the
+    // laptop-to-large-pane transition: preserve914 through1200, interpolate,
+    // then bound text and wide blocks together, without session rerenders.
+    for (const [pane, message, input] of [[1200, 914, 934], [1400, 1017, 1037], [1600, 1120, 1140], [2400, 1120, 1140]]) {
+      measuredWidth = pane;
+      act(() => {
+        notifyResize?.(
+          [{ contentRect: { width: measuredWidth } } as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(container.style.getPropertyValue('--cindy-message-width')).toBe(`${message}px`);
+      expect(container.style.getPropertyValue('--cindy-input-width')).toBe(`${input}px`);
+      expect(renders).toBe(initialRenderCount);
+    }
 
     measuredWidth = 900;
     act(() => {
