@@ -17166,6 +17166,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "Scheduled checks will continue while GitHub App notifications are unavailable.",
+      "label": "PR",
+      "url": "Pull request URL",
+      "condition": "Run when",
+      "any": "PR activity",
+      "merged": "Merged",
+      "review": "Review activity",
+      "ci": "CI status changes",
+      "timed": "Also check on a schedule",
+      "invalid": "Enter a GitHub pull request URL."
+    },
     "presentation": {
       "status": {
         "active": "Active",

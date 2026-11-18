@@ -17332,6 +17332,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "As verificações agendadas continuam sem notificações do GitHub App.",
+      "label": "PR",
+      "url": "URL da pull request",
+      "condition": "Executar quando",
+      "any": "Atividade na PR",
+      "merged": "Mesclagem",
+      "review": "Atividade de revisão",
+      "ci": "Alterações na CI",
+      "timed": "Verificar também periodicamente",
+      "invalid": "Insira a URL de uma pull request do GitHub."
+    },
     "presentation": {
       "status": {
         "active": "Ativo",

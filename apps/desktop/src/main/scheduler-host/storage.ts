@@ -14,7 +14,7 @@
  *   - snake↔camel 全部走 `localDb/mapper.ts`，本文件不写字段转换代码。
  */
 
-import { eq, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { eq, gte, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
@@ -669,6 +669,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       AND ${scheduleRuns.firedAt} <= ${run.firedAt}
       AND NOT ${failureRecoveredSql('schedule_runs')}
     `).limit(1);
+    return rows.length > 0;
+  }
+
+  async hasSuccessfulPrRunSince(scheduleId: string, since: number): Promise<boolean> {
+    const rows = await this.getDb().select({ id: scheduleRuns.id }).from(scheduleRuns).where(and(
+      eq(scheduleRuns.scheduleId, scheduleId), gte(scheduleRuns.firedAt, since),
+      eq(scheduleRuns.triggerSource, 'pr-status'), eq(scheduleRuns.status, 'success'),
+    )).limit(1);
     return rows.length > 0;
   }
 

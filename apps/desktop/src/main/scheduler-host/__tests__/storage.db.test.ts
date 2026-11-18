@@ -134,6 +134,7 @@ const SCHEDULER_DDL = [
       execution_mode TEXT NOT NULL DEFAULT 'agent',
       script_config TEXT,
       webhook_trigger TEXT,
+      pr_trigger TEXT,
       source TEXT DEFAULT 'user',
       project_config_id TEXT,
       legacy_session_fallback INTEGER NOT NULL DEFAULT 0,
@@ -2132,6 +2133,20 @@ it('bounds history chunk reads while preserving run costs and schedule totals', 
   } finally { harness.close(); }
 });
 
+
+// #11309, database: recovery must distinguish a completed PR execution from a later timed lookup.
+it('only counts successful PR-triggered runs since the merge when reconciling', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    await h.storage.insertRun({ id: 'check', scheduleId: 'sch-1', firedAt: 30, status: 'failed', triggerSource: 'pr-check' });
+    await h.storage.insertRun({ id: 'skipped', scheduleId: 'sch-1', firedAt: 40, status: 'skipped', triggerSource: 'pr-check' });
+    expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 20)).toBe(false);
+    await h.storage.insertRun({ id: 'watch', scheduleId: 'sch-1', firedAt: 50, status: 'success', triggerSource: 'pr-status' });
+    expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 20)).toBe(true);
+    expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 51)).toBe(false);
+  } finally { h.close(); }
+});
 
 it('deduplicates only identical unrecovered failures across persistent history', async () => {
   const h = createStorageHarness();
