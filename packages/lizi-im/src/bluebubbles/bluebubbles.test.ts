@@ -1040,12 +1040,13 @@ describe('BlueBubbles local ingress', () => {
   });
 
   // Tier 1: the same Apple account can produce both manual input and bot echoes.
-  it('recovers mapped manual input while correlating machine sends only in their chat', async () => {
+  it.each([false, true])('correlates machine sends across chat associations (sending chat first: %s)', async sendingFirst => {
     const f = await fixture(null, undefined, true);
     const config = f.im.getEditableConfig();
     await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
-    await f.im.sendText(f.chat.guid, 'machine');
-    f.message('outbound', { isFromMe: true, handle: undefined });
+    await f.im.sendText(f.otherChat.guid, 'machine');
+    const chats = sendingFirst ? [f.otherChat, f.chat] : [f.chat, f.otherChat];
+    f.message('outbound', { isFromMe: true, handle: undefined, chats });
     f.message('manual', { isFromMe: true, handle: undefined });
     f.message('elsewhere', { isFromMe: true, handle: undefined, chats: [f.otherChat] });
     await f.im.reconcile();
@@ -1057,15 +1058,15 @@ describe('BlueBubbles local ingress', () => {
   // Tier 1, #11402: an echo arriving without tempGuid used to leave normal send waiting
   // in the receive-failure queue. No clock advance or second webhook after the POST.
   it('keeps the connection healthy and rechecks parked input as soon as the send confirms', async () => {
-    const f = await fixture();
+    const f = await fixture(null, undefined, true);
     const config = f.im.getEditableConfig();
     await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
     const statuses: string[] = [];
     f.im.onStatusChange(status => statuses.push(status.kind));
     let finish!: (value: { guid: string }) => void;
     f.send.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    const sending = f.im.sendText(f.chat.guid, 'outgoing');
-    for (const id of ['echo-without-id', 'manual-during-send']) f.message(id, { isFromMe: true, handle: undefined });
+    const sending = f.im.sendText(f.otherChat.guid, 'outgoing');
+    for (const id of ['echo-without-id', 'manual-during-send']) f.message(id, { isFromMe: true, handle: undefined, chats: [f.chat, f.otherChat] });
     await f.im.reconcile();
     expect(f.im.getStatus().kind).toBe('connected');
     expect(f.received).toHaveLength(0);
@@ -1212,9 +1213,9 @@ describe('BlueBubbles local ingress', () => {
 
   // Tier 1: a verified webhook can arrive before a failing POST returns.
   it('retains a matching outgoing receipt after a late transport failure', async () => {
-    const f = await fixture();
+    const f = await fixture(null, undefined, true);
     f.send.mockImplementationOnce(async (_chat, _body, id) => {
-      f.message('echo', { isFromMe: true });
+      f.message('echo', { isFromMe: true, chats: [f.otherChat, f.chat] });
       await fetch(f.url(), { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ type: 'new-message', data: { guid: 'echo', tempGuid: id } }) });
       await f.im.reconcile();

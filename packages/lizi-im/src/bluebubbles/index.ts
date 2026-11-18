@@ -91,7 +91,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private receiveFailure: 'input' | 'other' | null = null;
   // Park ambiguous same-account input until an outgoing receipt changes, a new
   // callback adds correlation, or history reconciliation refreshes the message.
-  private readonly awaitingSend = new Map<string, string>();
+  private readonly awaitingSend = new Map<string, string[]>();
   private readonly retryAt = new Map<string, number>();
   private partialCleanup = new Map<string, Array<() => Promise<void>>>();
   private lastCatchUpAt: number | null = null;
@@ -554,21 +554,24 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           const message = cached;
           this.assertLive(generation);
           preparing = false;
-          const chat = message.chats?.find(item => config.chatGuids.includes(item.guid));
-          const selfAddress = chat && message.isFromMe ? config.selfAccountAddresses?.[chat.guid] : undefined;
+          const associations = message.chats ?? [];
           const hint = receipts.echoHintFor(guid);
           const tempGuid = message.tempGuid ?? hint?.id;
-          const echo = chat && message.isFromMe && receipts.isOutgoing(chat.guid, message.guid, tempGuid);
-          if (echo && message.guid === guid) {
+          // An outgoing message can be listed under multiple BlueBubbles chat GUIDs.
+          // Correlate against the verified associations before choosing an inbound route.
+          const echoChat = message.isFromMe && associations.find(item => receipts.isOutgoing(item.guid, message.guid, tempGuid));
+          if (echoChat && message.guid === guid) {
             const failed = (hint?.id === tempGuid && hint?.failed === true) || (!!message.error && message.error !== '0');
-            if (receipts.recordEcho(chat.guid, guid, tempGuid, failed)) this.wakeSendWaiters(chat.guid, generation);
+            if (receipts.recordEcho(echoChat.guid, guid, tempGuid, failed)) this.wakeSendWaiters(echoChat.guid, generation);
           }
+          const chat = associations.find(item => config.chatGuids.includes(item.guid));
+          const selfAddress = chat && message.isFromMe ? config.selfAccountAddresses?.[chat.guid] : undefined;
           const sender = message.handle?.address?.toLowerCase() || selfAddress;
           const participants = chat?.participants ?? (chat && this.chats.get(chat.guid)?.participants);
           const verifiedSelfService = !message.handle && selfAddress && participants?.length
             && participants.every(person => person.service === 'iMessage');
           const service = message.handle?.service ?? (verifiedSelfService ? 'iMessage' : undefined);
-          if (message.guid !== guid || echo || (message.isFromMe && (!selfAddress || sender !== selfAddress)) || !chat || !sender || service !== 'iMessage'
+          if (message.guid !== guid || echoChat || (message.isFromMe && (!selfAddress || sender !== selfAddress)) || !chat || !sender || service !== 'iMessage'
             || (message.service != null && message.service !== 'iMessage')
             || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAtFor(chat.guid)
             || (message.associatedMessageType !== undefined && message.associatedMessageType >= 2000)) {
@@ -576,9 +579,9 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           }
           // A callback may precede the send response and omit tempGuid. It cannot
           // establish a human sender while this chat still awaits correlation.
-          if (selfAddress && !message.tempGuid && receipts.mayBeUnconfirmedEcho(chat.guid, message)) {
+          if (selfAddress && !message.tempGuid && associations.some(item => receipts.mayBeUnconfirmedEcho(item.guid, message))) {
             this.retryAt.delete(guid);
-            this.awaitingSend.set(guid, chat.guid);
+            this.awaitingSend.set(guid, associations.map(item => item.guid));
             continue;
           }
           if (receipts.wasStopped(guid, chat.guid, message.dateCreated)) {
@@ -820,8 +823,8 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   }
   private wakeSendWaiters(chatId: string, generation: number): void {
     let changed = false;
-    for (const [guid, waitingChat] of this.awaitingSend) {
-      if (waitingChat === chatId) {
+    for (const [guid, associatedChats] of this.awaitingSend) {
+      if (associatedChats.includes(chatId)) {
         this.awaitingSend.delete(guid);
         changed = true;
       }
