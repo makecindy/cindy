@@ -13631,7 +13631,7 @@ function ComposerActivityStatus({
   tokenSpeed?: TokenSpeedSnapshot;
   generationActive: boolean;
   visible: boolean;
-  /** Set once a new task's creation has waited past the slow-send delay. */
+  /** Host preparation, or a new task's creation past the slow-send delay. */
   slowSendPhase?: SlowSendPhase | null;
 }) {
   // Host speed counts and times generation itself; usage counters stay the fallback.
@@ -13665,7 +13665,7 @@ function ComposerActivityStatus({
     startedAt: samplerStartedAt,
     outputTokens,
     generationDurationMs,
-    generationReliable: generationReliable && visible && !reconnectAttempt && !sideTaskRunning,
+    generationReliable: generationReliable && visible && !reconnectAttempt && !sideTaskRunning && !slowSendPhase,
     tokenSpeed,
     streaming,
   });
@@ -13694,7 +13694,7 @@ function ComposerActivityStatus({
   const tokenCount = formatComposerActivityTokenCount(tokenUsage);
   const tokenText = t('session.screen.tokenCount', { tokens: tokenCount });
   const tokenA11yText = t('session.screen.tokenCountFull', { tokens: tokenCount });
-  const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt);
+  const showElapsedOnly = sideTaskRunning || Boolean(reconnectAttempt) || Boolean(slowSendPhase);
   const rateValue = formatComposerActivityRateValue(showElapsedOnly ? null : rateHistory.latestRate);
   const canShowRateDetails = !showElapsedOnly
     && generationReliable

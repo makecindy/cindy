@@ -629,12 +629,20 @@ it.each([
   expect(host.querySelector('[data-testid="session.tokenRate.trigger"]')).toBeNull();
 });
 
-it('keeps a slow new-task send in the activity row, then continues as thinking', async () => {
-  const show = async (slowSendPhase: string | null) => act(async () => root.render(createElement(ActivityStatus, {
-    ...base, visible: true, tokenUsage: 0, sideTaskRunning: false, reconnectAttempt: null, slowSendPhase,
+// #10021: the host can prepare a welcome while the last turn's metrics remain.
+// Render the production status component (unit), rather than asserting route JSX.
+it('keeps preparation and slow sends in the activity row without stale usage, then continues as thinking', async () => {
+  const show = async (slowSendPhase: string | null, metrics = {}) => act(async () => root.render(createElement(ActivityStatus, {
+    ...base, visible: true, tokenUsage: 0, sideTaskRunning: false, reconnectAttempt: null, slowSendPhase, ...metrics,
   })));
   const pillNode = () => host.querySelector('[data-testid="session.composerActivityPill"]');
   const pill = () => pillNode()?.textContent;
+  await show('preparing', { tokenUsage: 1234, outputTokens: 500, generationDurationMs: 1000 });
+  expect(pill()).toBe('session.new.slowSend.preparing');
+  expect(pillNode()?.getAttribute('aria-live')).toBe('polite');
+  expect(host.querySelector('[data-testid="session.tokenRate.trigger"]')).toBeNull();
+  expect(host.textContent).not.toContain('session.screen.tokenCount');
+  expect(host.textContent).not.toContain('session.screen.tokenRate');
   await show('connecting');
   expect(pill()).toBe('session.new.slowSend.connecting');
   // Phases are announced (the old in-composer notice was a polite live region); thinking is not.
