@@ -2,6 +2,7 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import Sortable from 'sortablejs';
 
 import {
   setDataOwnerGeneration,
@@ -123,13 +124,31 @@ function renderFilter() {
 
 describe('pinned sidebar persistence', () => {
   // 用户回归：最近活动下拖拽把显示顺序写成手动顺序。现有用例只测切换偏好，
-  // 未覆盖 reorder 入口。最小输入为两条手动置顶，最近活动时收到反序回调；unit。
+  // 未覆盖 reorder 入口。两条手动置顶在跨窗口切换时取消拖拽，拒绝反序回调；unit。
   it('ignores drag reorders in recency mode and keeps manual dragging available', async () => {
     durablePinnedOrder = ['older', 'newer'];
     pinnedOrderIsAuthoritative = true;
     const view = renderFilter();
     const pendingDrag = view.result.current.setManualPinnedOrder;
-    act(() => view.result.current.setPinnedSortBy('recency'));
+    const scope = document.createElement('div');
+    scope.dataset.sortableScope = 'pinned';
+    const row = scope.appendChild(document.createElement('div'));
+    const onCancel = vi.fn(() => {
+      expect(view.result.current.pinnedSortBy).toBe('manual');
+      void pendingDrag(['newer', 'older'], ['older', 'newer'], ['older', 'newer']);
+    });
+    Sortable.dragged = row;
+    document.addEventListener('pointercancel', onCancel, { once: true });
+    try {
+      act(() => {
+        localStorage.setItem(PINNED_SORT_BY_KEY, 'recency');
+        window.dispatchEvent(new StorageEvent('storage', { key: PINNED_SORT_BY_KEY }));
+      });
+      expect(onCancel).toHaveBeenCalledOnce();
+    } finally {
+      Sortable.dragged = null;
+      document.removeEventListener('pointercancel', onCancel);
+    }
 
     await act(async () => {
       await pendingDrag(['newer', 'older'], ['older', 'newer'], ['older', 'newer']);

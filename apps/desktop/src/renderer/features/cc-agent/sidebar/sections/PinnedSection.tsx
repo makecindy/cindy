@@ -408,7 +408,7 @@ export function PinnedSection({
   if (entries.length === 0) return null;
 
   return (
-    <div className="flex flex-col w-full">
+    <div data-sortable-scope="pinned" className="flex flex-col w-full">
       {/* Section Title — height 24, padding [0,12,0,24]
           颜色规格（2026-04-20 二次确认对标设计稿 ZVIpx/WazkW）：
             Light #262626 / Dark #f5f0e8（深色文本，非 Stone 灰）

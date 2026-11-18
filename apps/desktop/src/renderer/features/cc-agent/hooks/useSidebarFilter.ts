@@ -45,6 +45,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { cancelActiveSortable } from '@/components/sidebar/SortableList';
 import type { TaskBotIdentity } from '@/features/bots/botFollowScopes';
 import { createLogger } from '@/lib/logger';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
@@ -294,20 +295,27 @@ export function useSidebarFilter(
   );
   const [pinnedSortBy, setPinnedSortByState] = useState(loadPinnedSortBy);
   const pinnedSortByRef = useRef(pinnedSortBy);
-  pinnedSortByRef.current = pinnedSortBy;
-  const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
+  const applyPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    if (next === pinnedSortByRef.current) return;
+    pinnedSortByRef.current = next;
+    // Sortable may have moved a card into another column. Restore its DOM
+    // before React reconciles the newly sorted entries against their parents.
+    cancelActiveSortable('[data-sortable-scope="pinned"]');
     setPinnedSortByState(next);
-    persistPinnedSortBy(next);
   }, []);
+  const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    applyPinnedSortBy(next);
+    persistPinnedSortBy(next);
+  }, [applyPinnedSortBy]);
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key === PINNED_SORT_BY_KEY || event.key === null) {
-        setPinnedSortByState(loadPinnedSortBy());
+        applyPinnedSortBy(loadPinnedSortBy());
       }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, []);
+  }, [applyPinnedSortBy]);
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
     loadManualProjectOrder(ownerId),
   );

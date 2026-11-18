@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import Sortable from 'sortablejs';
+import { isSortableCancellationRequested } from '@/components/sidebar/SortableList';
 
 export interface DraggableCardColumnsProps<T> {
   items: T[];
@@ -166,7 +167,7 @@ export function DraggableCardColumns<T>({
     const onEnd = (evt: Sortable.SortableEvent) => {
       document.body.classList.remove(SORTING_BODY_CLASS);
 
-      const aborted = abortNextEndRef.current;
+      const aborted = abortNextEndRef.current || isSortableCancellationRequested();
       abortNextEndRef.current = false;
       const dropDisposition = nativeDropDispositionRef.current;
       nativeDropDispositionRef.current = null;
