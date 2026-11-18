@@ -19,6 +19,11 @@ export default {
       const other=page.locator('[data-project-working-dir="local:/Projects/移动客户端"]');
       const hidden=page.locator('[data-session-id="demo-0-1"]');
       if(await hidden.count()) throw new Error('Idle task must start folded');
+      // Regression for #11252: an open project with one idle task keeps only
+      // its header action. This real-component UI check also covers a mixed list.
+      const showOne=await ui.t('ccAgent.sidebar.showAllSessions',{count:1});
+      if(await other.getByRole('button',{name:showOne,exact:true}).count()) throw new Error('An all-idle project must not show a list footer');
+      await project.getByRole('button',{name:await ui.t('ccAgent.sidebar.showAllSessions',{count:2}),exact:true}).waitFor();
       await ui.capture('inactive-folded');
       await project.getByRole('button',{name:await ui.t('ccAgent.sidebar.expandAllSessions'),exact:true}).click();
       await hidden.waitFor();

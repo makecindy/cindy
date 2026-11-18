@@ -254,6 +254,11 @@ export function SessionEntryList({
       (foldExemptSessionIds != null && entryHasAttention(entry, foldExemptSessionIds)),
   });
 
+  // Projects with no visible tasks can still be expanded from their headers.
+  const showFooter = controlledShowAll === undefined
+    ? isOverflowing || showAll
+    : isOverflowing && visibleEntries.length > 0;
+
   return (
     <>
       <SessionEntryRows
@@ -262,7 +267,7 @@ export function SessionEntryList({
         foldExemptSessionIds={foldExemptSessionIds}
         {...props}
       />
-      {(isOverflowing || (showAll && controlledShowAll === undefined)) && (
+      {showFooter && (
         <button
           type="button"
           className={cn(
