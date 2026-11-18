@@ -1341,10 +1341,11 @@
         "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktiviere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
         "action": "Aktivieren"
       },
-      "update": {
-        "title": "Plugin „{{plugin}}“ aktualisieren",
-        "body": "Diese Aufgabe hat {{device}} auf einem anderen Computer geöffnet. Aktualisiere das Plugin „{{plugin}}“ auf diesem Computer, um es in der rechten Seitenleiste anzusehen und zu bedienen.",
-        "action": "Aktualisieren"
+      "unsupported": {
+        "title": "„{{plugin}}“ unterstützt keine Fernansicht",
+        "body": "Das installierte Plugin kann {{device}} auf einem anderen Computer nicht anzeigen. Suche nach einem kompatiblen Update oder nutze das Gerät auf dem Computer, auf dem diese Sitzung läuft.",
+        "action": "Kompatibles Update suchen",
+        "unavailable": "Bei der Quelle dieses Plugins ist kein kompatibles Update verfügbar. Nutze das Gerät auf dem Computer, auf dem diese Sitzung läuft."
       }
     },
     "lockOnExitHintPrivacy": "Zeigt beim Beenden den Sichtschutz, damit die KI weiterarbeiten kann; eine Berührung am Computer sperrt ihn.",
@@ -1896,7 +1897,6 @@
       "memory": "Gedächtnis",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Hilfsmodelle",
-      "visionBridge": "Vision Bridge",
       "compaction": "Kontextkomprimierung",
       "terminalShell": "Standard-Terminal-Shell",
       "composer": "Nachrichteneingabe",
@@ -5414,37 +5414,6 @@
       "title": "Tipps",
       "description": "Funktionelle Umschalter. Einige erfordern eine neue Sitzung, um wirksam zu werden (siehe Beschreibungen der einzelnen Zellen)."
     },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Ermögliche reinen Textmodellen, Bilder zu lesen, indem du sie über ein separates multimodales Modell leitest, das Bilder in Textbeschreibungen umwandelt.",
-      "enableLabel": "Vision Bridge aktivieren",
-      "enableHint": "Wenn deaktiviert, verhalten sich alle Modelle genau wie bisher. Wenn aktiviert, leiten die unten ausgewählten Modelle ihre Bilder über das Vision-Backend. Dabei werden Bilder, die du an diese Modelle sendest, sowie benachbarter Text als Fokushinweis an das von dir gewählte Vision-Backend gesendet.",
-      "enableAria": "Vision Bridge ein-/ausschalten",
-      "toast": {
-        "saved": "Vision Bridge-Einstellungen gespeichert",
-        "saveFailed": "Vision Bridge-Einstellungen konnten nicht gespeichert werden"
-      },
-      "capability": {
-        "vision": "Als bildfähig bekannt",
-        "noVision": "Als reines Textmodell bekannt",
-        "unknown": "Bildverarbeitungsfähigkeit unbekannt"
-      },
-      "targetModels": {
-        "label": "Über Vision Bridge geleitete Modelle",
-        "hint": "Reine Textmodelle (z. B. DeepSeek) sind standardmäßig ausgewählt. Du kannst auch Modelle mit Bildverarbeitung auswählen — etwa um mit einem günstigeren Beschreibungsmodell Token zu sparen.",
-        "empty": "Keine Modelle verfügbar.",
-        "toggleAria": "Vision Bridge für {{model}} ein-/ausschalten"
-      },
-      "backends": {
-        "label": "Vision-Backend-Modelle",
-        "hint": "Wähle bis zu zwei multimodale Modelle, die Bilder in Text umwandeln. Das zweite (Ersatzmodell) ist optional.",
-        "primary": "Primär",
-        "fallback": "Ersatzmodell",
-        "unset": "Keine Auswahl",
-        "noBackup": "Kein Ersatzmodell",
-        "hintSecondary": "Das primäre Backend wird zuerst verwendet. Schlägt es fehl und ist ein Ersatzmodell festgelegt, wird dieses verwendet. Schlagen beide fehl, kann das Bild nicht beschrieben werden und wird durch einen Texthinweis ersetzt."
-      }
-    },
     "terminalShell": {
       "title": "Standard-Terminal-Shell",
       "description": "Verwende diese Shell beim Öffnen eines neuen Terminal-Tabs in der Seitenleiste.",
@@ -7879,6 +7848,18 @@
         "overviewTab": "Übersicht",
         "addPlugin": "Plugin hinzufügen",
         "addPluginAria": "Optionen zum Hinzufügen von Plugins",
+        "githubInstall": {
+          "label": "Aus GitHub Release installieren…",
+          "title": "Aus GitHub Release installieren",
+          "description": "Füge die URL eines Repositorys oder eines Release ein. Für private Repositorys ist ein GitHub-Konto mit Zugriff erforderlich.",
+          "url": "GitHub-Adresse",
+          "submit": "Plugin suchen",
+          "loading": "Suche und Download laufen…",
+          "invalid": "Gib eine GitHub-URL für ein Repository oder einen Release-Tag ein.",
+          "not-found": "Diese Version ist nicht verfügbar. Prüfe den Link und deine Zugriffsrechte.",
+          "ambiguous": "Der Link enthält mehrere Plugins. Wähle ein Release mit einem Paket oder installiere die Datei direkt.",
+          "installedAlready": "Dieses Plugin ist bereits installiert. Du kannst es in seinen Einstellungen aktualisieren."
+        },
         "installedSection": "Installiert",
         "installedExpand": "Alle {{count}} installierten Plugins anzeigen",
         "installedCollapse": "Weitere installierte Plugins ausblenden",
@@ -8248,7 +8229,7 @@
         "hostTools_handoff": "Aufgabennachrichten",
         "hostTools_handoffDetail": "Mit Cindys Werkzeugen Nachrichten an vorhandene Aufgaben senden. Vorgänge, die eine aktuelle Aufgabe benötigen, erfordern ein ausdrücklich angegebenes Ziel.",
         "hostTools_usage": "Nutzung und Anbietergruppenstatus lesen",
-        "hostTools_usageDetail": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen.",
+        "hostTools_usageDetail": "Liest IDs, Tarife, Kontingentzeiträume und Aktualisierungszeiten lokaler Claude/Codex-Konten, die mit deinem Cindy-Konto verbunden sind. Liest erfasste Nutzung nach Tag und Modell, geschätzte Kosten, Konfiguration und Status von Anbietergruppen sowie sichtbare IDs, Namen und Avatare von Mitgliedern und Geräten auf diesem Computer oder anderen autorisierten Computern desselben Kontos. Kein Zugriff auf Anmelde-E-Mail-Adressen von Abonnements, Kontoverzeichnisse, interne Identitätsfingerabdrücke, Zugangsdaten oder Dateien; keine Änderung von Konten oder Einstellungen. Liest auch das Kontingent für zugängliche Aufgaben, einschließlich autorisierter Computer im selben Konto und Freigaben, bei denen die Kontingentanzeige erlaubt ist.",
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
@@ -8772,6 +8753,10 @@
       "panelHost": {
         "close": "Panel schließen"
       },
+      "installProgress": {
+        "awaitingConsent": "Warten auf Bestätigung…",
+        "installFailed": "Installation fehlgeschlagen"
+      },
       "updateAll": {
         "title": "Alle aktualisieren · {{count}} Plugins",
         "collapseDiff": "Einklappen",
@@ -8782,6 +8767,7 @@
         "statusDone": "Aktualisiert",
         "statusSkipped": "Übersprungen",
         "statusFailed": "Update fehlgeschlagen",
+        "progressCount": "{{done}} von {{total}} aktualisiert",
         "background": "Im Hintergrund fortsetzen",
         "doneAction": "Fertig",
         "doneToast": "Sammelupdate abgeschlossen: {{done}} aktualisiert, {{rest}} nicht abgeschlossen",
@@ -10869,6 +10855,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Freunde konnten nicht geladen werden",
+    "rosterReload": "Freunde neu laden",
     "avatarStatus": {
       "awaiting": "Benötigt deine Bestätigung",
       "error": "Erfordert Aufmerksamkeit",
@@ -11438,7 +11426,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} kann nicht antworten: Das Gerät des Freundes hat sein Limit für Remote-Sitzungen erreicht.\nBitte den Besitzer des Freundes, ungenutzte Sitzungen zu archivieren, oder den Besitzer des Remote-Computers, das Limit unter „Remote & Freigabe“ zu erhöhen.",
           "REMOTE_TOTAL_LIMIT": "{{name}} kann nicht antworten: Der Remote-Computer hat sein Gesamtlimit für Remote-Sitzungen erreicht.\nBitte den Besitzer dieses Computers, ungenutzte Sitzungen freizugeben oder das Limit unter „Remote & Freigabe“ zu erhöhen.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} konnte nicht antworten: Das aktuelle Modell unterstützt keine Bilder.\nWähle ein bildfähiges Modell oder aktiviere und konfiguriere Vision Bridge unter Einstellungen → Personalisierung. Sende deine Nachricht dann erneut.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} konnte nicht antworten: Das aktuelle Modell unterstützt keine Bilder.\nWähle ein Modell mit Bildunterstützung.",
           "MODEL_UNAVAILABLE": "{{name}} konnte nicht antworten: Kein Modell verfügbar.\nWähle in den Einstellungen des Freundes ein verbundenes, verfügbares Modell und sende deine Nachricht erneut.",
           "AUTH_REQUIRED": "{{name}} konnte nicht antworten: Die Modellverbindung erfordert eine Authentifizierung.\nVerbinde den Modellanbieter in den Einstellungen erneut und sende deine Nachricht noch einmal.",
           "RATE_LIMITED": "{{name}} konnte nicht antworten: Zu viele Modellanfragen.\nSende deine Nachricht später erneut oder wähle ein anderes verfügbares Modell.",
@@ -14899,11 +14887,6 @@
       "unavailable": "Bild nicht verfügbar",
       "loading": "Bild wird geladen…"
     },
-    "visionBridge": {
-      "analyzing": "{{count}} Bild(er) werden analysiert…",
-      "fallback": "Vision Bridge ist auf ein Ersatz-Vision-Backend ausgewichen (primäres Backend nicht verfügbar); die Bilderkennung kann beeinträchtigt sein",
-      "unavailable": "Vision Bridge ist nicht verfügbar; das Bild konnte nicht beschrieben werden und wurde durch einen Texthinweis ersetzt"
-    },
     "newMessageIndicator": {
       "aria": "Nach unten, {{count}} neue Nachrichten ansehen",
       "label_one": "{{count}} neue Nachricht",
@@ -16518,7 +16501,10 @@
       "confirmArchive": {
         "title": "Sitzung archivieren",
         "description": "Diese Sitzung archivieren? Sie wird aus der Liste entfernt.",
-        "dirtyWorktreeWarning": "Der Worktree dieser Sitzung enthält nicht committete Änderungen. Sie werden vor dem Archivieren als Git-Snapshot gespeichert und können später über die Sitzung wiederhergestellt werden.",
+        "dirtyWorktreeWarning": "Nicht committete Änderungen werden vor dem Archivieren gespeichert. Du kannst sie über die Aufgabe wiederherstellen.",
+        "discardChanges": "Nicht committete Änderungen verwerfen",
+        "discardWarning": "Nicht committete Änderungen und neue Dateien gehen verloren.",
+        "discardAndArchive": "Verwerfen und archivieren",
         "scheduleWarning_one": "Die verknüpfte Automatisierung {{names}} läuft weiter und stellt diese Sitzung wieder her.",
         "scheduleWarning_other": "Die verknüpften Automatisierungen {{names}} laufen weiter und stellen diese Sitzung wieder her.",
         "scheduleWarningMany_one": "{{count}} dieser Sitzungen hat verknüpfte Automatisierungen, die sie bei ihrer Ausführung wiederherstellen.",
@@ -21469,7 +21455,6 @@
       "sessionRuntimeFallback": "Automatischer Modellwechsel für Aufgaben",
       "subagentModels": "Subagenten",
       "auxiliaryModels": "Hilfsmodelle",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Angezeigte und ausgeblendete Modelle",
       "providerOrder": "Reihenfolge der Anbieter",
       "modelCatalogOverrides": "Geänderte Modellparameter",
@@ -22008,6 +21993,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "Dieses Repository auf diesen Computer herunterladen?",
+    "credentialNotice": "Für private Repositorys kann Cindy das auf diesem Computer angemeldete Konto verwenden.",
+    "saveTo": "Speicherort",
+    "confirmImport": "Import bestätigen",
+    "confirmSshTitle": "Diesem Projekt Zugriff auf die folgenden SSH-Verzeichnisse erlauben?",
+    "sshHost": "SSH-Host",
+    "readWriteAccess": "Lesen und schreiben",
+    "readAccess": "Nur lesen",
+    "confirmAccess": "Zugriff erlauben",
     "autoLoading": "Projektsymbol wird gesucht…",
     "autoNone": "Initialen aus dem Projektnamen werden verwendet.",
     "autoSource": "Quelle",
@@ -22047,7 +22041,42 @@
     "discard": "Verwerfen",
     "colors": {
       "default": "Standard (dem Design folgen)"
-    }
+    },
+    "directories": "Projektverzeichnisse",
+    "directoriesHint": "Gilt ab dem nächsten Durchlauf für alle Aufgaben dieses Projekts. Bestehende aufgabenspezifische Verzeichnisse bleiben erhalten.",
+    "removeDirectory": "Verzeichnis entfernen",
+    "directoryPath": "Vollständiger Verzeichnispfad",
+    "addDirectory": "Verzeichnis hinzufügen",
+    "browseDirectory": "Verzeichnisse durchsuchen",
+    "mainDirectory": "Hauptverzeichnis",
+    "createTitle": "Neues Projekt",
+    "createAction": "Projekt erstellen",
+    "repository": "Repository-URL",
+    "repositoryHint": "Unterstützt GitHub, GitLab und andere Git-Repositories über HTTPS oder SSH.",
+    "autoDirectory": "Ohne Verzeichnisauswahl wird {{path}} verwendet. Bei Namenskonflikten wird eine Nummer ergänzt.",
+    "cloning": "Repository wird geklont…",
+    "invalidRepository": "Eine gültige GitHub-, GitLab- oder Git-Repository-URL eingeben.",
+    "createFailed": "Projekt konnte nicht erstellt werden. Schreibzugriff, Repository-URL und Git-Zugriff auf diesem Computer prüfen. Das Klon-Ziel muss leer sein.",
+    "createNamePlaceholder": "Projektname",
+    "createNameHint": "Gib deinem Projekt einen Namen, um loszulegen.",
+    "createFromRepository": "Aus einem Code-Repository erstellen",
+    "createBlank": "Zu einem leeren Projekt wechseln",
+    "source_blank": "Leeres Projekt",
+    "source_existing": "Vorhandenen Ordner öffnen",
+    "source_repository": "Code-Repository importieren",
+    "sourceHint_blank": "Name eingeben. Der Projektordner wird automatisch erstellt.",
+    "sourceHint_existing": "Einen vorhandenen Projektordner auf diesem Computer wählen.",
+    "sourceHint_repository": "Repository-Link einfügen und auf diesen Computer herunterladen.",
+    "source": "Projektquelle",
+    "sourceShort_blank": "Neu",
+    "sourceShort_existing": "Ordner",
+    "sourceShort_repository": "Repository",
+    "automaticMain": "Hauptordner · Automatisch",
+    "source_local": "Lokaler Ordner",
+    "sourceShort_local": "Lokaler Ordner",
+    "sourceHint_local": "Einen Namen zum Erstellen eingeben oder einen vorhandenen Ordner wählen.",
+    "chooseExistingFolder": "Vorhandenen Ordner wählen",
+    "changeMainDirectory": "Ändern"
   },
   "taskManagement": {
     "scope": "Nur für dieses Konto auf diesem Computer.",

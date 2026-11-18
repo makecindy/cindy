@@ -1328,10 +1328,11 @@
         "body": "這個任務在另一台電腦上開著 {{device}}。在這台電腦上開啟「{{plugin}}」插件後，就能在右側欄查看和操作它。",
         "action": "開啟"
       },
-      "update": {
-        "title": "需要更新「{{plugin}}」插件",
-        "body": "這個任務在另一台電腦上開著 {{device}}。把這台電腦上的「{{plugin}}」插件更新到新版本後，就能在右側欄查看和操作它。",
-        "action": "更新"
+      "unsupported": {
+        "title": "「{{plugin}}」暫不支援遠端檢視",
+        "body": "已安裝的插件無法顯示另一台電腦上的 {{device}}。可以檢查相容更新，或在執行此任務的電腦上使用裝置。",
+        "action": "檢查相容更新",
+        "unavailable": "此插件的來源暫無支援遠端檢視的更新，可在執行此任務的電腦上使用裝置"
       }
     },
     "lockOnExitHintPrivacy": "退出遠端桌面後蓋上隱私畫面，AI 可以繼續工作；有人碰電腦就會鎖定。",
@@ -1866,7 +1867,6 @@
       "memory": "記憶",
       "subagentModels": "Subagent",
       "auxiliaryModels": "輔助模型",
-      "visionBridge": "視覺橋",
       "compaction": "上下文壓縮",
       "terminalShell": "預設終端 shell",
       "composer": "訊息輸入",
@@ -5435,37 +5435,6 @@
       "title": "小技巧",
       "description": "一些功能性開關，部分需要新建任務才會生效(具體見各 cell 說明)。"
     },
-    "visionBridge": {
-      "title": "視覺橋",
-      "description": "讓純文字模型獲得看圖能力：用獨立的多模態模型把圖片轉成文字描述後再交給純文字模型。",
-      "enableLabel": "啟用視覺橋",
-      "enableHint": "關閉時所有模型行為與之前完全一致。開啟後，下方勾選的模型會把圖片經視覺後端轉成文字描述。啟用後，傳送給這些模型的圖片以及同訊息文字提示會傳送給你選擇的視覺後端。",
-      "enableAria": "切換視覺橋",
-      "toast": {
-        "saved": "視覺橋設定已儲存",
-        "saveFailed": "儲存視覺橋設定失敗"
-      },
-      "capability": {
-        "vision": "已知支援視覺",
-        "noVision": "已知純文字",
-        "unknown": "視覺能力未知"
-      },
-      "targetModels": {
-        "label": "走視覺橋的模型",
-        "hint": "純文字模型（如 DeepSeek）預設已勾選。也可以勾選支援視覺的模型——例如故意用更便宜的描述模型來節省 token。",
-        "empty": "暫無可用的模型。",
-        "toggleAria": "切換 {{model}} 的視覺橋"
-      },
-      "backends": {
-        "label": "視覺後端模型",
-        "hint": "選擇最多兩個把圖片轉文字的多模態模型。第二個（備用）可選。",
-        "primary": "主後端",
-        "fallback": "備用",
-        "unset": "未選擇",
-        "noBackup": "無備用",
-        "hintSecondary": "優先使用主後端。主後端失敗且設定了備用時切換到備用。兩者都失敗時圖片無法辨識，會以文字提示代替並提醒你。"
-      }
-    },
     "chatEmbedding": {
       "cell": {
         "label": "啟用對話記錄語義索引",
@@ -7836,6 +7805,18 @@
         "overviewTab": "總覽",
         "addPlugin": "新增插件",
         "addPluginAria": "插件新增選項",
+        "githubInstall": {
+          "label": "從 GitHub Release 安裝…",
+          "title": "從 GitHub Release 安裝",
+          "description": "貼上 GitHub 儲存庫或指定版本的 Release 連結。私人儲存庫需要以有存取權限的 GitHub 帳號登入。",
+          "url": "GitHub 位址",
+          "submit": "尋找插件",
+          "loading": "正在尋找並下載…",
+          "invalid": "請輸入 GitHub 儲存庫或 Release 標籤連結。",
+          "not-found": "找不到這個版本，請檢查連結和儲存庫權限。",
+          "ambiguous": "這個連結包含多個插件。請使用只含一個插件的 Release 連結，或直接從檔案安裝。",
+          "installedAlready": "這個插件已安裝。可以在該插件的設定中更新。"
+        },
         "installedSection": "已安裝",
         "installedExpand": "展開全部 {{count}} 個已安裝插件",
         "installedCollapse": "收起更多已安裝插件",
@@ -8205,7 +8186,7 @@
         "hostTools_handoff": "任務投遞",
         "hostTools_handoffDetail": "透過 Cindy 的任務工具向現有任務傳送訊息。需要目前任務情境的操作須明確指定任務。",
         "hostTools_usage": "讀取用量與供應商組狀態",
-        "hostTools_usageDetail": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、供應商組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定",
+        "hostTools_usageDetail": "讀取目前 Cindy 帳號在本機已連接的 Claude/Codex 帳號識別碼、方案、配額時段及更新時間，以及本機或同帳號已授權其他電腦上已記錄的每日/型號用量、估算費用、供應商組設定與狀態、可見的成員和裝置識別碼、名稱及頭像。無法讀取訂閱登入電子郵件、帳號目錄、內部指紋、憑證或檔案，也無法修改帳號或設定。還可讀取有權存取的任務配額，包括同帳號已授權的電腦及允許查看配額的分享供應商。",
         "hostTools_settings": "應用程式設定",
         "hostTools_settingsDetail": "透過 Cindy 的設定工具讀取及修改應用程式設定；不傳回金鑰，也不代你完成機密輸入。",
         "hostTools_scheduler": "自動化管理",
@@ -8729,6 +8710,10 @@
       "panelHost": {
         "close": "關閉面板"
       },
+      "installProgress": {
+        "awaitingConsent": "等待確認…",
+        "installFailed": "安裝失敗"
+      },
       "updateAll": {
         "title": "全部更新 · {{count}} 個插件",
         "collapseDiff": "收起",
@@ -8739,6 +8724,7 @@
         "statusDone": "已更新",
         "statusSkipped": "已跳過",
         "statusFailed": "更新失敗",
+        "progressCount": "已更新 {{done}} / {{total}}",
         "background": "在背景繼續",
         "doneAction": "完成",
         "doneToast": "批次更新完成：{{done}} 個已更新，{{rest}} 個未完成",
@@ -10826,6 +10812,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "未能讀取夥伴列表",
+    "rosterReload": "重新讀取夥伴",
     "avatarStatus": {
       "awaiting": "待你確認",
       "error": "需要注意",
@@ -11393,7 +11381,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}無法回覆：夥伴所在裝置保留的遠端任務數已達上限。\n請夥伴的主人封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}無法回覆：遠端電腦保留的任務總數已達上限。\n請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}}無法回覆：目前模型不支援圖片。\n請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}無法回覆：目前模型不支援圖片。\n請切換至支援圖片的模型。",
           "MODEL_UNAVAILABLE": "{{name}}無法回覆：目前沒有可用模型。\n請在夥伴設定中選擇已連線的可用模型後重新傳送。",
           "AUTH_REQUIRED": "{{name}}無法回覆：模型連線需要重新驗證。\n請在設定中重新連線對應的模型來源後重新傳送。",
           "RATE_LIMITED": "{{name}}無法回覆：模型請求過於頻繁。\n請稍後重新傳送，或選擇其他可用模型。",
@@ -14874,11 +14862,6 @@
       "unavailable": "圖片暫時無法顯示",
       "loading": "正在載入圖片…"
     },
-    "visionBridge": {
-      "analyzing": "正在辨識圖片中…（{{count}} 張）",
-      "fallback": "視覺橋使用了備用視覺後端（主後端不可用），圖片辨識可能受影響",
-      "unavailable": "視覺橋目前不可用，圖片無法辨識，已以文字提示代替"
-    },
     "newMessageIndicator": {
       "aria": "回到底部，檢視 {{count}} 則新訊息",
       "label_one": "{{count}} 則新訊息",
@@ -16444,7 +16427,10 @@
       "confirmArchive": {
         "title": "歸檔任務",
         "description": "確定要歸檔這個任務嗎？歸檔後將從列表中移除。",
-        "dirtyWorktreeWarning": "該任務的 worktree 有未提交的更改；歸檔前會自動儲存為 git 快照，之後可在任務內一鍵恢復。",
+        "dirtyWorktreeWarning": "未提交的變更會在歸檔前儲存，可在任務中復原。",
+        "discardChanges": "捨棄未提交的變更",
+        "discardWarning": "未提交的變更和新檔案將無法復原。",
+        "discardAndArchive": "捨棄並歸檔",
         "scheduleWarning_one": "關聯的自動化{{names}}仍會執行，並恢復此任務。",
         "scheduleWarning_other": "關聯的自動化{{names}}仍會執行，並恢復此任務。",
         "scheduleWarningMany_one": "其中 {{count}} 個任務關聯了自動化，後續執行時會恢復這些任務。",
@@ -21387,7 +21373,6 @@
       "sessionRuntimeFallback": "任務模型自動降級",
       "subagentModels": "Subagent",
       "auxiliaryModels": "輔助模型",
-      "visionBridge": "視覺橋",
       "modelVisibility": "模型顯示與隱藏",
       "providerOrder": "供應商順序",
       "modelCatalogOverrides": "模型參數調整",
@@ -21925,6 +21910,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "將這個儲存庫下載到本機？",
+    "credentialNotice": "如果是私人儲存庫，Cindy 可能會使用本機已登入的帳號。",
+    "saveTo": "儲存到本機",
+    "confirmImport": "確認匯入",
+    "confirmSshTitle": "允許此專案存取下列 SSH 目錄？",
+    "sshHost": "SSH 主機",
+    "readWriteAccess": "可讀寫",
+    "readAccess": "唯讀",
+    "confirmAccess": "允許存取",
     "autoLoading": "正在辨識專案圖示…",
     "autoNone": "使用專案名稱產生的字母圖示。",
     "autoSource": "來源",
@@ -21964,7 +21958,42 @@
     "discard": "放棄修改",
     "colors": {
       "default": "預設色（跟隨主題）"
-    }
+    },
+    "directories": "專案目錄",
+    "directoriesHint": "從下一輪起套用至此專案的所有任務。既有任務個別加入的目錄會保留。",
+    "removeDirectory": "移除目錄",
+    "directoryPath": "完整目錄路徑",
+    "addDirectory": "加入目錄",
+    "browseDirectory": "瀏覽目錄",
+    "mainDirectory": "主目錄",
+    "createTitle": "新增專案",
+    "createAction": "建立專案",
+    "repository": "儲存庫連結",
+    "repositoryHint": "支援 GitHub、GitLab，以及其他 Git 儲存庫的 HTTPS / SSH 連結。",
+    "autoDirectory": "未選目錄時建立於 {{path}}，重名會自動編號。",
+    "cloning": "正在複製儲存庫…",
+    "invalidRepository": "請輸入有效的 GitHub、GitLab 或 Git 儲存庫網址。",
+    "createFailed": "建立失敗。請檢查目錄寫入權限、儲存庫網址與這台電腦的 Git 存取權限；複製目錄必須為空。",
+    "createNamePlaceholder": "專案名稱",
+    "createNameHint": "取個名字，就可以開始了。",
+    "createFromRepository": "從程式碼儲存庫建立",
+    "createBlank": "改為空白專案",
+    "source_blank": "建立空白專案",
+    "source_existing": "開啟現有資料夾",
+    "source_repository": "從程式碼儲存庫匯入",
+    "sourceHint_blank": "填寫名稱，自動建立專案目錄。",
+    "sourceHint_existing": "選擇這台電腦上現有的專案目錄。",
+    "sourceHint_repository": "貼上儲存庫連結，下載到這台電腦。",
+    "source": "專案來源",
+    "sourceShort_blank": "空白專案",
+    "sourceShort_existing": "現有資料夾",
+    "sourceShort_repository": "儲存庫匯入",
+    "automaticMain": "主目錄 · 自動建立",
+    "source_local": "本機資料夾",
+    "sourceShort_local": "本機資料夾",
+    "sourceHint_local": "填寫名稱自動建立，也可以選擇現有資料夾。",
+    "chooseExistingFolder": "選擇現有資料夾",
+    "changeMainDirectory": "更改"
   },
   "taskManagement": {
     "scope": "僅套用於目前帳號在這台電腦上的任務。",

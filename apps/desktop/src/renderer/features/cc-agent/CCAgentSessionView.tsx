@@ -1,3 +1,5 @@
+import { useProjectInfo } from './hooks/useProjectInfo';
+import { SessionProjectSettingsDialog } from './sidebar/SessionProjectSettingsButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
 import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatStore';
 import { findErrorTailMessage } from '@/lib/errorTailMessage';
@@ -1626,6 +1628,8 @@ function CCAgentSessionContent({
 
   // F2: controlled folder picker open state
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const projectInfo = useProjectInfo(session?.deviceLinkDeviceId ?? null);
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
 
   // ── Full-area drag-and-drop (F-FI-1 enhancement) ──
   // Attachments are managed here so the entire content area can act as a drop zone.
@@ -2259,7 +2263,7 @@ function CCAgentSessionContent({
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
-  const { providers: localProviders } = useProviders();
+  const { providers: localProviders, loading: localProvidersLoading, error: localProvidersError } = useProviders();
   const { mode: authMode, user: authUser, dataOwnerId, deviceId: selfDeviceId } = useAuth();
   const {
     begin: beginHistoryRecovery,
@@ -2428,9 +2432,17 @@ function CCAgentSessionContent({
   );
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
+  const taskAccountCatalog = useDeviceProviders(taskAccountDeviceId ?? undefined);
   const taskAccountProviderId = usageAccount.kind === 'unreadable' ? null
     : sessionSubscriptionPoolProvider(normalizeDbAgentKind(displayAgentKind), usageChipProviderId,
-        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId));
+        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId),
+        !agentSwitchIntent && session?.providerId == null, {
+          modelId: session?.model,
+          providers: taskAccountDeviceId ? taskAccountCatalog.providers : localProviders,
+          catalogReady: taskAccountDeviceId
+            ? !taskAccountCatalog.loading && !taskAccountCatalog.error
+            : !localProvidersLoading && !localProvidersError,
+        });
   const canSwitchToClaudeSubscription = useMemo(() => {
     if (
       remoteDeviceId ||
@@ -6318,7 +6330,7 @@ function CCAgentSessionContent({
               pendingPermission ||
               (pendingAskUser && askUserViewerState !== 'minimized') ||
               pendingPluginSetup ||
-              pendingIssueConfirm ||
+              (pendingIssueConfirm && !remoteDeviceId) ||
               pendingRenameSessionsConfirm ||
               pendingGhostGrantConfirm) ? null : sessionBinding.attached && sessionId ? (
                 <TakeoverMask
@@ -6363,7 +6375,14 @@ function CCAgentSessionContent({
                   inert={voiceModeOpen && voiceSurfaceAvailable}
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
+                {projectSettingsOpen && session && (
+                  <SessionProjectSettingsDialog key={session.id} session={session}
+                    onClose={() => setProjectSettingsOpen(false)} />
+                )}
                 <ChatInput
+                  onOpenProjectSettings={(projectInfo?.settingsVersion ?? 0) >= 6 && session?.workspaceKind === 'project' &&
+                    !isSharedTaskPeer(session.deviceLinkDeviceId ?? '')
+                    ? () => setProjectSettingsOpen(true) : undefined}
                   sessionModelPickRef={sessionModelPickRef}
                   {...(taskModelGroups ? { modelGroups: taskModelGroups } : {})}
                   modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
@@ -7227,7 +7246,7 @@ export function RunningStatusBar({
                 }
                 tokenUsage={displayTokens}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
-                outputTokens={rateOutputTokens}
+                outputTokens={tokenSpeed?.totalOutputTokens ?? rateOutputTokens}
                 history={rateHistory}
                 onPinnedChange={setRatePanelPinned}
               />

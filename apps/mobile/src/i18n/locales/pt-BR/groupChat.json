@@ -130,7 +130,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}} não conseguiu responder: o modelo atual não aceita imagens.",
         "advice": "Escolha um modelo compatível com imagens.",
-        "details": "Escolha um modelo compatível com imagens ou ative e configure Vision Bridge em Configurações → Personalização. Depois, envie sua mensagem novamente."
+        "details": "Escolha um modelo compatível com imagens."
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}} não conseguiu responder: nenhum modelo disponível.",
