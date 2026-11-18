@@ -111,6 +111,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     invoke: service, subscribe: hub.subscribe,
     isBusyForProjectArchive: () => false,
     onProjectTaskStatus: (sessionId, status) => hub.publish({ type: 'session_changed', sessionId, status, patch: { status } }),
+    preparePiSkillRuntime: async (id, dir, route) => {
+      assert.equal(id, 'task'); assert.equal(dir, '/project');
+      if (route) assert.deepEqual(route, { model: 'pi-test' });
+    },
     createRuntimeSession: async () => { throw new Error('Not part of this transport test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
   });
@@ -146,6 +150,15 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     assert.equal(result.result, 'updated');
     assert.equal(sqlite.prepare("SELECT status FROM sessions WHERE id='task'").pluck().get(), expected);
   }
+  const prepared = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }] });
+  assert.deepEqual(prepared.result, { accepted: true, piRuntimePrepared: true }, JSON.stringify(prepared));
+  const switched = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: {} }] });
+  assert.deepEqual(switched.result, { accepted: true, piRuntimePrepared: true, pendingRouteApplied: true });
+  const unsupported = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { agentDeviceId: 'other' } }] });
+  assert.equal(unsupported.ok, false);
   const received = clients.map(() => []);
   clients.forEach((client, i) => client.onFrame(frame => { if (frame.kind === 'push') received[i].push(frame); }));
   duplicateNext = true;

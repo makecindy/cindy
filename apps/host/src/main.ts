@@ -137,6 +137,7 @@ import { createHostAgentHandoffPending } from './agent/handoff-pending.ts';
 import type { ContextRecoveryKind } from './agent/context-recovery.ts';
 import { createHostContextRecoveryWiring } from './agent/context-recovery-wiring.ts';
 import { lockSessionRoute } from './agent/session-route-lock.mjs';
+import { listPiRuntimePaletteCommands, mergePiPackageCommands, shouldListPiPackageCommands } from '../../desktop/src/shared/piPackages.js';
 import { createHostSessionUpdate } from './agent/session-update.ts';
 import { createInteractionBroker } from './agent/interactions.mjs';
 import { messageToCamel, sessionToCamel } from '../../desktop/src/main/localDb/mapper.ts';
@@ -895,16 +896,24 @@ function projectAgentSwitchIntent(intent: {
   };
 }
 
-async function applyPendingAgentSwitch(sessionId: string): Promise<void> {
+const updateHostSession = createHostSessionUpdate({
+    getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
+    readSessionForRun,
+    publish: event => eventHub.publish(event),
+    modelWindow: () => agentGraph?.modelWindow ?? null,
+  });
+const applyPendingAgentSwitch = lockSessionRoute(applyPendingAgentSwitchUnlocked);
+async function applyPendingAgentSwitchUnlocked(sessionId: string): Promise<void> {
   const intent = pendingAgentSwitches.get(sessionId);
   if (!intent) return;
-  await serverDeps.updateSession(sessionId, {
+  await updateHostSession(sessionId, {
     agentKind: intent.targetAgentKind,
     model: intent.model,
     providerId: intent.providerId,
     ...(intent.effort ? { effort: intent.effort } : {}),
     ...(intent.fastMode !== undefined ? { fastMode: intent.fastMode } : {}),
   });
+  if (pendingAgentSwitches.get(sessionId) !== intent) throw new Error('The selected route changed; retry the send');
   pendingAgentSwitches.delete(sessionId);
   eventHub.publish({ type: 'session_changed', sessionId, patch: { agentSwitchIntent: null } });
 }
@@ -1311,12 +1320,7 @@ const serverDeps = {
       activity: row.lastToolUse?.toolName ?? null,
     }));
   },
-  updateSession: lockSessionRoute(createHostSessionUpdate({
-    getLiveSession: (sessionId: string) => agentGraph?.maker.getSession(sessionId),
-    readSessionForRun,
-    publish: event => eventHub.publish(event),
-    modelWindow: () => agentGraph?.modelWindow ?? null,
-  })),
+  updateSession: lockSessionRoute(updateHostSession),
   /**
    * Cross-engine switch: record the intent and let the next enqueue apply it.
    * Mirrors the desktop contract (`deferred: true`) so the renderer can show
@@ -1493,14 +1497,22 @@ const serverDeps = {
     },
   },
   interactions,
-  agentCommands: async (input: { agentKind?: string }) => {
+  agentCommands: async (input: { agentKind?: string; sessionId?: string }) => {
     const rawKind = String(input.agentKind ?? '');
     const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const agent = agentGraph?.instances?.[kind];
     if (!agent) return { success: false, error: `Agent '${kind}' is not registered` };
-    return { success: true, commands: agent.listAgentCommands() };
+    const builtins = agent.listAgentCommands();
+    if (kind !== 'pi' || !input.sessionId) return { success: true, commands: builtins };
+    const meta = await sessionStorage?.get(input.sessionId);
+    if (!meta) throw new Error('session not found');
+    if (!shouldListPiPackageCommands(kind, true, meta)) return { success: true, commands: builtins };
+    const manifest = agentGraph?.maker.getSessionRuntimeCapabilities(input.sessionId);
+    const extra = manifest?.status === 'loaded'
+      ? listPiRuntimePaletteCommands(manifest.commands, manifest.authorizedSlashCommandNames ?? manifest.managedPackageCommandNames) : [];
+    return { success: true, commands: mergePiPackageCommands(kind, builtins, extra), runtimeStatus: manifest?.status ?? 'pending' };
   },
-  agentSkills: async (input: { agentKind?: string; workingDir?: string; sessionId?: string }) => {
+  agentSkills: async (input: { agentKind?: string; workingDir?: string; sessionId?: string; forceReload?: boolean }) => {
     const rawKind = String(input.agentKind ?? '');
     const kind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
     const agent = agentGraph?.instances?.[kind];
@@ -1509,7 +1521,9 @@ const serverDeps = {
     if (input.sessionId && !stored) throw new Error('session not found');
     const workingDir = stored?.workDir || input.workingDir || undefined;
     if (workingDir && !path.isAbsolute(workingDir)) throw new Error('workingDir must be absolute');
-    const result = await agent.listAgentSkills({ workingDir });
+    const result = kind === 'pi' && agentGraph
+      ? await agentGraph.maker.listAgentSkills(kind, { workingDir, sessionId: input.sessionId, forceReload: input.forceReload === true })
+      : await agent.listAgentSkills({ workingDir });
     return { success: true, skills: result.skills ?? [] };
   },
   capabilities: async (agentKind: string) => {
@@ -1754,6 +1768,28 @@ function startDeviceLink(): void {
     onProjectTaskStatus: (sessionId, status) => {
       eventHub.publish({ type: 'session_changed', sessionId, status, patch: { status } });
     },
+    preparePiSkillRuntime: lockSessionRoute(async (id: string, dir: string, route?: { model: string }) => {
+      if (route) {
+        const owner = activeOwnerScopeKey();
+        const checkOwner = () => {
+          if (activeOwnerScopeKey() !== owner || isAppSessionBoundaryPending()) throw new Error('Host account changed');
+        };
+        const row = await readSessionForRun(id);
+        checkOwner();
+        const intent = pendingAgentSwitches.get(id);
+        const maker = agentGraph?.maker;
+        const live = maker?.getSession(id);
+        if (!maker || row.source === 'review' || row.workingDir !== dir || row.remoteHostId || row.agentDeviceId || row.orcaRole
+          || intent?.targetAgentKind !== 'pi' || intent.model !== route.model || live?.isTurnRunning()) {
+          throw new Error('[PRECONDITION_FAILED] The selected Pi route is not ready');
+        }
+        await applyPendingAgentSwitchUnlocked(id);
+        checkOwner();
+        if (live && live.agentKind !== 'pi') await maker.closeSessionIfCurrent(live, 'runtime-refresh');
+        checkOwner();
+      }
+      await inputQueue.preparePiSkillRuntime(id, dir);
+    }),
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();
       const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);

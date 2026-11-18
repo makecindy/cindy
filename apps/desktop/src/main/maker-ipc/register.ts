@@ -21,7 +21,7 @@ import { McpSetupBridge } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { measureTraceOperation } from '../performance-trace/measure.js';
-import { assertSessionCreationCurrent, currentSessionCreationSignal } from '../localDb/sessionRuntimeCleanup.js';
+import { assertSessionCreationCurrent, currentSessionCreationSignal, runSessionCreationAttempt } from '../localDb/sessionRuntimeCleanup.js';
 import { pagePermissionGrants } from '../mcp-apps/pagePermissions.js';
 import { setPluginPageToolRunner, readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import { callPluginAttachmentProvider, callPluginAttachmentTool } from '../mcp-apps/pluginAttachment.js';
@@ -18372,6 +18372,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const {
     sendToAgentAccepted: sendToAgentAcceptedUnlocked,
+    preparePiSkillRuntime,
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
@@ -18455,6 +18456,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         title: row.title ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
         remoteHostId: row.remoteHostId ?? undefined,
+        agentDeviceId: row.agentDeviceId ?? undefined,
         orcaRole: row.orcaRole as CreateOpts['orcaRole'],
         codexHistoryHasProductPrompt: row.codexHistoryHasProductPrompt ?? undefined,
       };
@@ -18470,7 +18472,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readSessionWorkingDirFromDb,
     readSessionWorkingDirState: readSessionWorkingDirRow,
     withRehydrateCloseSuppressed,
-    bootstrapSession,
+    bootstrapSession: (opts) => bootstrapSession(opts, assertSessionCreationCurrent),
     markOrcaRoleIfNeeded,
     broadcastSessionCreated,
     prepareSendUserMessage: (sessionId, message) =>
@@ -19342,12 +19344,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 尽力而为：立即返回，启动在后台进行；不支持、已在运行或启动失败都只是下一次发送照常冷启动。
   ipcMain.handle(
     MAKER_INVOKE.SESSION_PREWARM,
-    async (event, sessionId: unknown, createOpts?: unknown): Promise<{ accepted: boolean }> => {
+    async (event, sessionId: unknown, createOpts?: unknown): Promise<{ accepted: boolean; piRuntimePrepared?: true; pendingRouteApplied?: true }> => {
       const sid = requireSessionId(sessionId);
       if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
       if (getDeviceLinkInvokeContext()?.sharedTask) return { accepted: false };
       if (!createOpts || typeof createOpts !== 'object' || Array.isArray(createOpts)) {
         throwIpcError('INVALID_PARAMS', 'createOpts required');
+      }
+      if ('purpose' in createOpts && createOpts.purpose === 'pi-skill-dispatch') {
+        const request = createOpts as Record<string, unknown>;
+        const workingDir = request.workingDir;
+        if (typeof workingDir !== 'string' || !workingDir) throwIpcError('INVALID_PARAMS', 'workingDir required');
+        const preferences = {
+          ...(typeof request.userPrompt === 'string' ? { userPrompt: request.userPrompt } : {}),
+          ...(typeof request.makerMemoryEnabled === 'boolean' ? { makerMemoryEnabled: request.makerMemoryEnabled } : {}),
+        };
+        await runSessionCreationAttempt(sid, getDbClient, () => withSendToSessionLock(sid, async () => {
+          assertSessionCreationCurrent();
+          const row = await getSessionRowSnapshotStrict(sid);
+          assertSessionCreationCurrent();
+          if (!row || row.status === 'deleted' || row.status === 'archived' || row.source === 'review') {
+            throwIpcError('PRECONDITION_FAILED', 'Pi session is unavailable');
+          }
+          if (request.pendingPiRoute !== undefined) {
+            const route = request.pendingPiRoute as { agentDeviceId?: unknown } | null;
+            const intent = agentSwitchPending.get(sid);
+            if (!route || typeof route !== 'object' || !intent || intent.targetAgentKind !== 'pi'
+              || intent.model !== request.model || intent.targetAgentDeviceId !== route.agentDeviceId) {
+              throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected Pi route changed; retry the send');
+            }
+            await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sid, { expectedRevision: agentSwitchPending.revision?.(sid) });
+            assertSessionCreationCurrent();
+            if (agentSwitchPending.get(sid)) throwIpcError('HARNESS_SWITCH_NOT_READY', 'The selected Pi route is not ready');
+          }
+          await preparePiSkillRuntime(sid, workingDir, preferences);
+          assertSessionCreationCurrent();
+        }));
+        return { accepted: true, piRuntimePrepared: true, ...(request.pendingPiRoute ? { pendingRouteApplied: true as const } : {}) };
       }
       void agentPrewarmer.request(sid, createOpts);
       return { accepted: true };

@@ -6835,7 +6835,7 @@ interface ElectronAPI {
     // effort/mode 透传 string —— 合法值由 maker capabilities 决定, vite-env 不重复枚举
     setEffort: (sessionId: string, effort: string) => Promise<void>;
     /** 输入框开始打字时提前启动 Agent；尽力而为。 */
-    prewarmSession?: (sessionId: string, createOpts: unknown) => Promise<{ accepted: boolean }>;
+    prewarmSession?: (sessionId: string, createOpts: unknown) => Promise<{ accepted: boolean; piRuntimePrepared?: true }>;
     /** 新建页的未发送任务：清空输入时删除 / 第一次发送前转为普通任务（仅本机）。 */
     discardProvisionalSession?: (sessionId: string) => Promise<{ discarded: boolean; remaining?: boolean }>;
     commitProvisionalSession?: (sessionId: string) => Promise<{ committed: boolean }>;
