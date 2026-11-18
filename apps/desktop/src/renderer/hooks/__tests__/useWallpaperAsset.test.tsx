@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useWallpaperAsset } from '../useWallpaperAsset';
 import { type WallpaperId, type WallpaperDownloadProgress } from '@/../shared/appearanceSettings';
 import manifest from '@/../shared/wallpaper-video-manifest.json';
+import { initialDownloadProgress } from '@/../shared/downloadProgress';
 
 const image = vi.fn();
 const video = vi.fn();
@@ -88,8 +89,17 @@ describe('on-demand wallpaper assets', () => {
     act(() => emit(progress));
     expect(result.current.loaded).toBe(total / 2);
     expect(result.current.total).toBe(total);
-    act(() => emit({ ...progress, loaded: 0 }));
+    act(() =>
+      emit({
+        ...progress,
+        loaded: 0,
+        download: { ...initialDownloadProgress('retrying', total), retryReason: 'slow' },
+      }),
+    );
     expect(result.current.loaded).toBe(0);
+    expect(result.current.retryReason).toBe('slow');
+    act(() => emit({ ...progress, download: initialDownloadProgress('downloading', total) }));
+    expect(result.current.retryReason).toBeUndefined();
     await act(async () => finish('cindy-media://client-wallpaper/image.webp'));
     expect(result.current.loaded).toBe(total);
     expect(progressListeners.size).toBe(0);

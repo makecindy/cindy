@@ -12,7 +12,7 @@
  *          passphrases; Cindy never decrypts private keys for this path.
  *   3. Identity file  (authMethod='key', identityFile=<private key>)
  *        → read the file, hand the bytes straight to ssh2. Bypasses the
- *          agent entirely; encrypted keys need a passphrase per connect.
+ *          agent entirely; encrypted keys are not supported by the current UI.
  *
  * On macOS / Linux: agent socket comes from $SSH_AUTH_SOCK.
  * On Windows: prefer OpenSSH agent's named pipe, fall back to Pageant.

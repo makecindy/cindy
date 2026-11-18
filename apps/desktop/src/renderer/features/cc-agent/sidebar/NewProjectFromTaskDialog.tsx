@@ -130,7 +130,7 @@ export function NewProjectFromTaskDialog({
           }}
           className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[85vh] w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto p-4 outline-none"
         >
-          <Dialog.Title className="text-16 font-semibold text-[var(--confirm-title)]">
+          <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
             {t('ccAgent.sidebar.newProjectDialog.title')}
           </Dialog.Title>
           <Dialog.Description className="mt-2 text-13 leading-relaxed text-[var(--confirm-desc)]">

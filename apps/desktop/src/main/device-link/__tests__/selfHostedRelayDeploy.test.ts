@@ -176,6 +176,30 @@ describe('deployRelayToServer', () => {
     expect(verifyAgentNet).not.toHaveBeenCalled();
   });
 
+  // #10562: 旧 SSH fake 默认认为网关总能启动，掩盖首次签发还没有 material.json 的竞态。
+  // unit：真实部署入口，certificate status 为 ready 以前启动网关即失败；CA 拒绝时禁止启动。
+  it.each([false, true])('waits for TLS material before starting the gateway (CA failure: %s)', async (failed) => {
+    const { bootstrap } = createPrivateNetwork('Certificate ordering');
+    const testInit = { ...init, relayId: bootstrap.networkId.slice(8), ownerPublicKey: bootstrap.rootPublicKey };
+    let certificateReady = false;
+    mocks.responses['relay-deploy-status'] = () => {
+      certificateReady = !failed;
+      return ok(`ACTIVE active\nSTATUS ${JSON.stringify({ certificate: failed
+        ? { state: 'failed', error: 'validation failed: connection refused' } : { state: 'ready' } })}\n`);
+    };
+    mocks.responses['relay-deploy-agent-net-configure'] = () => certificateReady ? ok('') : { stdout: '', stderr: '', exitCode: 24 };
+    vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ relayId: testInit.relayId }), { status: 200 }));
+    const result = await run({ init: testInit, agentNetBootstrap: () => bootstrap, verifyAgentNet: async () => {} });
+    if (failed) {
+      expect(result.error).toMatchObject({ code: 'CERTIFICATE_FAILED' });
+      expect(mocks.commands.some(c => c.label === 'relay-deploy-agent-net-configure')).toBe(false);
+    } else {
+      expect(result.error).toBeNull();
+      const labels = mocks.commands.map(c => c.label);
+      expect(labels.indexOf('relay-deploy-agent-net-configure')).toBeGreaterThan(labels.indexOf('relay-deploy-status'));
+    }
+  });
+
   // 2026-10-29：下载中界面没有反馈；旧 exec 等待命令结束才拿到输出。
   // 最小输入：SSH 分片输出一个进度标记后保持运行；unit，回调必须先于下载完成，且不透传原文。
   it('reports allowlisted download events before the SSH command finishes', async () => {

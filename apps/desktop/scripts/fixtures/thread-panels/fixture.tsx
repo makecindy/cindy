@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { mountPage, subscription } from '../../ui-page/harness';
+import { forbid, mountPage, subscription } from '../../ui-page/harness';
 import { BotDmThreadPanel } from '../../../src/renderer/features/bots/BotDmThreadViews';
 import { ChatThreadPanel } from '../../../src/renderer/features/bots/ChatThreadPanel';
 import { BotGroupComposer } from '../../../src/renderer/features/bots/BotGroupComposer';
 import { useWallpaperBackground } from '../../../src/renderer/hooks/useWallpaperBackground';
 import wallpaper from '../../../src/renderer/assets/wallpapers/cindy-window.webp';
 import type { BotGroupDetail } from '../../../src/shared/botGroupChat';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import fixturePhoto from '../../../src/renderer/assets/bot-presets/cindy.png';
 
 const sends: unknown[] = [];
@@ -24,6 +25,21 @@ const root = { id: 'root', sequence: 1, kind: 'message' as const, authorKind: 'b
   authorBotId: bot.id, authorName: bot.name, content: text, mentions: { all: false, botIds: [] },
   noticeCode: null, planId: null, files: [], attachments: [], createdAt: 1792990000000 };
 
+// PR #9182 UI regression: real topic rows with a read receipt and both toolbar sides.
+const actionRoot = { ...root, authorKind: 'user' as const, isSelf: true,
+  content: '请核对这条消息。', readByOthers: true };
+const actionReplies = [
+  { ...root, id: 'reply-bot', sequence: 2, content: '已核对，说明完整。' },
+  { ...actionRoot, id: 'reply-self', sequence: 3, content: '好的。' },
+  // The attribution avatar consumes row width even though the bubble's max-width is percentage based.
+  ...[false, true].map((withReactions, index) => ({ ...actionRoot,
+    id: withReactions ? 'reply-mask-reactions' : 'reply-mask', sequence: 4 + index,
+    content: '这是一条由伙伴代答的长消息，需要保留归属头像、已读标记和可点击的外侧操作栏。'.repeat(3),
+    maskAttribution: { self: { id: 'me', name: 'You', avatarUrl: null },
+      companion: { id: bot.id, name: bot.name, avatarUrl: null }, sourceMessageId: 'root' },
+    reactions: withReactions ? [{ emoji: '👍', count: 1, me: false }] : [],
+  })),
+];
 const report = '| 日期 | 站点 | 访问量 | 下载点击 | 访客 |\n| --- | --- | --- | --- | --- |\n| 10/28 | cindy.app | 4388 | 1048 | 759 |\n| 10/29 | cindy.app | 3621 | 639 | 466 |';
 const reportName = '2026-10-29-Cindy双站逐日来源明细-完整报表.csv';
 const reportRoot = { ...root, content: report + '\n\n交付物：逐日、分来源明细，可用 Excel 打开。', attachments: [
@@ -56,7 +72,7 @@ function Scenario({ kind }: { kind: string }) {
         <button type="button" onClick={() => setClosed(false)} data-ui-page-control>Reopen thread</button> : null}
     </div>
     {closed ? <span data-closed="" /> : kind.startsWith('group') ? <ChatThreadPanel
-      group={{ id: 'fixture-group', members: [], messages: [kind === 'group-narrow' ? reportRoot : root] } as unknown as BotGroupDetail}
+      group={{ id: 'fixture-group', members: [], messages: [kind === 'group-narrow' ? reportRoot : kind === 'group-actions' ? actionRoot : root] } as unknown as BotGroupDetail}
       rootId="root" onClose={() => setClosed(true)} /> : <BotDmThreadPanel
       bot={bot} rootSessionId="fixture-main" rootClientId="root"
       state={kind === 'failed' ? { kind: 'failed', message: '暂时无法打开话题 · Could not open topic' } : { kind: 'opening' }}
@@ -69,14 +85,24 @@ void mountPage({
   host: ctx => {
     let following = false;
     return {
+      voiceInput: {
+        getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('win32'), fastActivationEnabled: false }, history: [] }),
+        onDataChanged: subscription('voiceDataChanged'),
+        onEvent: subscription('voiceEvent'),
+        onGlobalShortcutTrigger: subscription('voiceShortcut'),
+        setGlobalShortcut: async () => ({ ok: true }),
+        prewarm: async () => ({ ok: true }),
+        start: forbid('voiceInput.start'),
+      },
       getFilePath: (file: File) => `/fixture/${file.name}`,
       cacheImageFromPath: async () => ctx.case === 'group-cache-pending'
         ? new Promise<{ url: string }>(resolve => { imageCacheControl.finish = () => resolve({ url: photoUrl }); })
         : { url: photoUrl },
       maker: { onBotGroupChanged: subscription('groupChanged'), chatServer: {
+        reactors: async () => ({ ok: true, reactors: [] }),
         thread: async () => ({ ok: true,
-          root: ctx.case === 'group-narrow' ? reportRoot : ['group-attachments', 'group-cache-pending'].includes(ctx.case) ? { ...root, content: '图片附件验收 · Attachment check' } : root,
-          replies: [], hasMore: false, following }),
+          root: ctx.case === 'group-actions' ? actionRoot : ctx.case === 'group-narrow' ? reportRoot : ['group-attachments', 'group-cache-pending'].includes(ctx.case) ? { ...root, content: '图片附件验收 · Attachment check' } : root,
+          replies: ctx.case === 'group-actions' ? actionReplies : [], hasMore: false, following }),
         reply: async (input: unknown) => { sends.push(input); return { ok: true, messageId: 'fixture-image-reply' }; },
         followThread: async (input: { following: boolean }) => {
           following = input.following;

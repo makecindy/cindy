@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { CODEX_HISTORY_OVERSIZED_REASON, CONTEXT_OVERFLOW_REASON, UNSUPPORTED_REQUEST_OPTION_REASON } from '@cindy/maker-core';
 
 import {
   CODEX_HISTORY_CONTINUE_MESSAGE,
@@ -7,6 +8,7 @@ import {
   effectiveContextWindow,
   effectivePiContextWindow,
   findLatestRebuildableError,
+  holdsContextRecoveryBroadcast,
   hasModelWindowContextToProtect,
   lookupVerifiedContextWindow,
   isContextOverflowErrorData,
@@ -71,6 +73,26 @@ describe('isContextOverflowErrorData', () => {
           'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content',
       }),
     ).toBe(false);
+  });
+});
+
+// The broadcast hold the desktop's delivery and the Node Host share: only a terminal overflow-class
+// error of a local task is held for recovery; a remote task, a retried error or another error is not.
+describe('holdsContextRecoveryBroadcast', () => {
+  const local = { remoteHostId: null };
+  const error = (data: Record<string, unknown>) => ({ type: 'error', data } as never);
+  it.each([
+    ['context overflow', { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' }],
+    ['oversized history', { reason: CODEX_HISTORY_OVERSIZED_REASON, message: 'history too large' }],
+    ['unsupported request option', { reason: UNSUPPORTED_REQUEST_OPTION_REASON, message: 'option refused' }],
+  ])('holds a terminal %s error of a local task', (_kind, data) => {
+    expect(holdsContextRecoveryBroadcast(local, error(data))).toBe(true);
+  });
+  it('does not hold a remote task, a retried error or another error', () => {
+    const overflow = { reason: CONTEXT_OVERFLOW_REASON, message: 'prompt is too long' };
+    expect(holdsContextRecoveryBroadcast({ remoteHostId: 'ssh-host' }, error(overflow))).toBe(false);
+    expect(holdsContextRecoveryBroadcast(local, error({ ...overflow, willRetry: true }))).toBe(false);
+    expect(holdsContextRecoveryBroadcast(local, error({ message: 'boom', reason: 'sdk_crash' }))).toBe(false);
   });
 });
 

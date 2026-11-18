@@ -424,6 +424,9 @@ export interface Session {
    * 任务内的未读与角标照常。老 payload 缺失按未静音处理。
    */
   notificationsMuted?: boolean;
+  /** Inbox deferral, saved by the task host. Missing on older hosts. */
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
   /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
    * Sidebar 排序唯一时间轴：null ⟺ 草稿（归未分类），非 null 即按倒序上浮。
@@ -437,7 +440,7 @@ export interface Session {
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
   /** Host-owned teammate link, also used by the existing history API. Display only. */
-  companion?: { id: string; role: string; channel?: string; routineId?: string } | null;
+  companion?: { id: string; role: string; taskProjectDir?: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */

@@ -2,7 +2,8 @@ import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pause, Play, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { DownloadMeter, type DownloadMeterProgress } from './DownloadMeter';
+import { DownloadMeter } from '@/components/ui/download-meter';
+import type { DownloadProgress } from '../../../shared/downloadProgress';
 
 /** One visibility rule for both runtimes: installed items only appear in search;
  * active/paused/failed downloads stay visible, once, even while searching. */
@@ -291,7 +292,7 @@ export function LocalModelManualDownload({
 }
 export function LocalRuntimeInstallView({
   description,
-  progress,
+  download,
   canInstall,
   installing,
   onInstall,
@@ -299,7 +300,8 @@ export function LocalRuntimeInstallView({
   label,
 }: {
   description: string;
-  progress?: DownloadMeterProgress;
+  /** Standard progress drawn by the shared DownloadMeter. */
+  download?: { label: string; progress: DownloadProgress; error?: string | null };
   canInstall: boolean;
   installing: boolean;
   onInstall: () => void;
@@ -312,7 +314,7 @@ export function LocalRuntimeInstallView({
       <p className="text-13 leading-[1.5]" style={{ color: 'var(--text-secondary)' }}>
         {description}
       </p>
-      {progress && <DownloadMeter progress={progress} />}
+      {download && <DownloadMeter {...download} />}
       <div className="flex flex-wrap gap-2">
         {canInstall && (
           <Button

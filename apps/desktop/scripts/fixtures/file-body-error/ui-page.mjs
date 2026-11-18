@@ -8,9 +8,15 @@ export default {
   name: 'file-body-error',
   entry: './fixture.tsx',
   viewport: { width: 180, height: 160 },
-  real: 'FileBodyView error branch, product typography, themes and translations',
+  real: 'useFileContent reloads, FileBodyView load/save error branches, product typography, themes and translations',
   notCovered: 'Filesystem/IPC, full sidebar interaction and OS clipboard; these require full mock-client acceptance',
   cases: {
+    // #10882: the save error used to suggest an overwrite that the host rejects.
+    // Real editor/save flow; verify localized advice wraps in a narrow pane.
+    'target-changed': {
+      about: 'Retargeting to a large remote file retains the dirty editor; rejected save explains how to reopen safely',
+      viewport: { width: 360, height: 320 },
+    },
     default: {
       about: 'Continuous Windows path wraps in a narrow pane and scrolls from start to end',
       data: { message: `Error: ENOENT: no such file or directory, realpath 'C:\\projects\\${'VeryLongDirectoryName'.repeat(12)}\\missing.txt'` },
@@ -26,6 +32,20 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'target-changed') {
+      const editor = page.locator('.cm-content');
+      await editor.fill('Unsaved draft');
+      await ui.emit('file-event', { workdir: '/fixture', relPath: 'alias', type: 'change' });
+      assert.equal(await editor.textContent(), 'Unsaved draft');
+      await editor.press(ui.platform === 'darwin' ? 'Meta+s' : 'Control+s');
+      const alert = page.getByRole('alert');
+      await alert.waitFor({ state: 'visible' });
+      assert.equal(await alert.textContent(), await ui.t('ccAgent.workdirBrowse.fileBody.saveFailed', {
+        message: await ui.t('ccAgent.workdirBrowse.fileBody.targetChanged'),
+      }));
+      assert.equal(await editor.textContent(), 'Unsaved draft');
+      return;
+    }
     const viewport = page.locator('[data-error-viewport]');
     const error = viewport.locator(':scope > div');
     const geometry = await error.evaluate(el => {

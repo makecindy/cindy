@@ -62,7 +62,7 @@ describe('Bot group lane transactions', () => {
         effort TEXT, permission_mode TEXT, status TEXT NOT NULL, sdk_session_id TEXT,
         total_token_usage INTEGER, total_cost_usd REAL, context_tokens INTEGER,
         context_window INTEGER, fast_mode INTEGER, plan_mode_enabled INTEGER, cleared_at INTEGER,
-        pinned_at INTEGER, user_send_at INTEGER, agent_kind TEXT, orca_role TEXT,
+        pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, user_send_at INTEGER, agent_kind TEXT, orca_role TEXT,
         parent_session_id TEXT, forked_at_message_id TEXT, worktree_path TEXT, extra_dirs TEXT,
         remote_host_id TEXT, agent_device_id TEXT, provider_id TEXT, source TEXT NOT NULL, created_at INTEGER,
         updated_at INTEGER NOT NULL
@@ -131,8 +131,8 @@ describe('Bot group lane transactions', () => {
 
   // bot-group-chat.md §7.5: a V2 teammate's group lane follows the group's project folder on this
   // computer. Moving archives the old lane; a restart keeps the folder and fails if it is gone.
-  it('moves a group lane into the project folder and restarts it there', async () => {
-    const routeKey = chatGroupLaneRouteKey('g1', { mode: 'owner', revision: 1 });
+  it.each(['owner', 'tools', 'chat'] as const)('moves a %s group lane into the shared project and restarts it there', async mode => {
+    const routeKey = chatGroupLaneRouteKey('g1', { mode, revision: 1 });
     tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session: laneSession('lane-1') } });
     const projectDir = path.join(ownerRoot, 'cindy');
     await mkdir(projectDir);
@@ -147,6 +147,7 @@ describe('Bot group lane transactions', () => {
     const opts: MakerSessionCreateOpts = { id: 'lane-2', agentKind: 'claude-code', model: 'model-a', workingDir: '/stale', workspaceKind: 'dialogue' };
     await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
     expect(opts).toMatchObject({ workingDir: projectDir, workspaceKind: 'project', projectDir, remoteHostId: undefined });
+    expect(ensureWorkspaceDir).not.toHaveBeenCalled();
     await rm(projectDir, { recursive: true });
     await expect(prepareBotWorkspaceRuntime({ ...opts, workingDir: '/stale' }, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir }))
       .rejects.toBeInstanceOf(BotPlanWorkDirUnavailableError);
@@ -170,6 +171,21 @@ describe('Bot group lane transactions', () => {
       expect(opts).toMatchObject({ workingDir, workspaceKind, remoteHostId: undefined });
       expect((await stat(opts.workingDir)).isDirectory()).toBe(true);
     }
+    expect(ensureWorkspaceDir).not.toHaveBeenCalled();
+  });
+
+  // Unit: a new chat-only work step persists the resolved group folder, not
+  // an empty cwd or a separate legacy chat workspace. Recovery must accept it.
+  it('restores a chat-only work step from its persisted shared group folder', async () => {
+    const workingDir = path.join(ownerRoot, 'group-project');
+    await mkdir(workingDir);
+    const routeKey = `${chatGroupLaneRouteKey('g1', { mode: 'chat', revision: 1 })}:plan:chat-work`;
+    const session = { ...laneSession('chat-project-step'), workingDir, projectDir: workingDir, workspaceKind: 'project' };
+    tx(db, { name: 'bots.createGroupLane', args: { botId: 'mimi', groupId: 'g1', routeKey, session } });
+    const ensureWorkspaceDir = vi.fn(async () => '/private-home');
+    const opts: MakerSessionCreateOpts = { id: session.id, agentKind: 'claude-code', model: session.model, workingDir: '', workspaceKind: 'dialogue' };
+    await prepareBotWorkspaceRuntime(opts, { ownerUserDataPath: () => ownerRoot, ensureWorkspaceDir });
+    expect(opts).toMatchObject({ workingDir, workspaceKind: 'project' });
     expect(ensureWorkspaceDir).not.toHaveBeenCalled();
   });
 

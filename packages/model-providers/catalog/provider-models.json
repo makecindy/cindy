@@ -12203,7 +12203,7 @@
         "cost": {
           "input": 0.35,
           "output": 0.75,
-          "cacheRead": 0,
+          "cacheRead": 0.35,
           "cacheWrite": 0
         },
         "execution": {
@@ -31357,6 +31357,7 @@
         "name": "GPT-6 Luna",
         "upstream": "https://api.openai.com/v1",
         "contextWindow": 272000,
+        "contextWindowMax": 1050000,
         "maxOutput": 128000,
         "modalities": {
           "input": [
@@ -31421,6 +31422,7 @@
         "name": "GPT-6 Sol",
         "upstream": "https://api.openai.com/v1",
         "contextWindow": 272000,
+        "contextWindowMax": 1050000,
         "maxOutput": 128000,
         "modalities": {
           "input": [
@@ -31485,6 +31487,7 @@
         "name": "GPT-6.1 Sol",
         "upstream": "https://api.openai.com/v1",
         "contextWindow": 272000,
+        "contextWindowMax": 1050000,
         "maxOutput": 128000,
         "modalities": {
           "input": [
@@ -31549,6 +31552,7 @@
         "name": "GPT-6.1 Terra",
         "upstream": "https://api.openai.com/v1",
         "contextWindow": 272000,
+        "contextWindowMax": 1050000,
         "maxOutput": 128000,
         "modalities": {
           "input": [
@@ -31589,6 +31593,71 @@
             "api": "openai-responses",
             "thinkingLevelMap": {
               "off": "none",
+              "minimal": null,
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "xhigh",
+              "max": "max"
+            },
+            "compat": {
+              "supportsStrictMode": true,
+              "supportsOpenAIGrammarTools": true,
+              "supportsAdditionalTools": true,
+              "supportsToolSearch": true,
+              "supportsMidConvoSystemMessages": true,
+              "supportsExplicitPromptCacheMode": true,
+              "supportsMidConvoEffort": true
+            }
+          }
+        }
+      },
+      {
+        "id": "gpt-6.2-sol",
+        "name": "GPT-6.2 Sol",
+        "upstream": "https://api.openai.com/v1",
+        "contextWindow": 272000,
+        "contextWindowMax": 1050000,
+        "maxOutput": 128000,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "reasoning": true,
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "defaultEffort": "medium",
+        "cost": {
+          "input": 2,
+          "output": 10,
+          "cacheRead": 0.1,
+          "cacheWrite": 2.5,
+          "tiers": [
+            {
+              "inputTokensAbove": 272000,
+              "input": 4,
+              "output": 15,
+              "cacheRead": 0.2,
+              "cacheWrite": 5
+            }
+          ]
+        },
+        "execution": {
+          "pi": {
+            "api": "openai-responses",
+            "thinkingLevelMap": {
+              "off": null,
               "minimal": null,
               "low": "low",
               "medium": "medium",
@@ -74484,10 +74553,8 @@
         },
         "supportsImageInput": true,
         "reasoning": true,
-        "efforts": [
-          "high"
-        ],
-        "defaultEffort": "high",
+        "efforts": [],
+        "defaultEffort": null,
         "cost": {
           "input": 0.14,
           "output": 0.28,
@@ -74513,7 +74580,8 @@
               "thinkingFormat": "deepseek"
             }
           }
-        }
+        },
+        "thinkingToggle": true
       },
       {
         "id": "mimo-v2.6-pro",
@@ -74532,10 +74600,8 @@
         },
         "supportsImageInput": true,
         "reasoning": true,
-        "efforts": [
-          "high"
-        ],
-        "defaultEffort": "high",
+        "efforts": [],
+        "defaultEffort": null,
         "cost": {
           "input": 0.435,
           "output": 0.87,
@@ -74561,7 +74627,8 @@
               "thinkingFormat": "deepseek"
             }
           }
-        }
+        },
+        "thinkingToggle": true
       },
       {
         "id": "mimo-v2.6-pro-ultraspeed",
@@ -74580,10 +74647,8 @@
         },
         "supportsImageInput": true,
         "reasoning": true,
-        "efforts": [
-          "high"
-        ],
-        "defaultEffort": "high",
+        "efforts": [],
+        "defaultEffort": null,
         "cost": {
           "input": 4.35,
           "output": 8.7,
@@ -74609,7 +74674,8 @@
               "thinkingFormat": "deepseek"
             }
           }
-        }
+        },
+        "thinkingToggle": true
       }
     ],
     "xiaomi-token-plan-ams": [
@@ -74709,10 +74775,8 @@
         },
         "supportsImageInput": true,
         "reasoning": true,
-        "efforts": [
-          "high"
-        ],
-        "defaultEffort": "high",
+        "efforts": [],
+        "defaultEffort": null,
         "cost": {
           "input": 0,
           "output": 0,
@@ -74738,7 +74802,8 @@
               "thinkingFormat": "deepseek"
             }
           }
-        }
+        },
+        "thinkingToggle": true
       },
       {
         "id": "mimo-v2.6-pro",
@@ -74757,10 +74822,8 @@
         },
         "supportsImageInput": true,
         "reasoning": true,
-        "efforts": [
-          "high"
-        ],
-        "defaultEffort": "high",
+        "efforts": [],
+        "defaultEffort": null,
         "cost": {
           "input": 0,
           "output": 0,
@@ -74786,7 +74849,8 @@
               "thinkingFormat": "deepseek"
             }
           }
-        }
+        },
+        "thinkingToggle": true
       }
     ],
     "xiaomi-token-plan-cn": [
@@ -74886,10 +74950,8 @@
         },
         "supportsImageInput": true,
         "reasoning": true,
-        "efforts": [
-          "high"
-        ],
-        "defaultEffort": "high",
+        "efforts": [],
+        "defaultEffort": null,
         "cost": {
           "input": 0,
           "output": 0,
@@ -74915,7 +74977,8 @@
               "thinkingFormat": "deepseek"
             }
           }
-        }
+        },
+        "thinkingToggle": true
       },
       {
         "id": "mimo-v2.6-pro",
@@ -74934,10 +74997,8 @@
         },
         "supportsImageInput": true,
         "reasoning": true,
-        "efforts": [
-          "high"
-        ],
-        "defaultEffort": "high",
+        "efforts": [],
+        "defaultEffort": null,
         "cost": {
           "input": 0,
           "output": 0,
@@ -74963,7 +75024,8 @@
               "thinkingFormat": "deepseek"
             }
           }
-        }
+        },
+        "thinkingToggle": true
       }
     ],
     "xiaomi-token-plan-sgp": [
@@ -75063,10 +75125,8 @@
         },
         "supportsImageInput": true,
         "reasoning": true,
-        "efforts": [
-          "high"
-        ],
-        "defaultEffort": "high",
+        "efforts": [],
+        "defaultEffort": null,
         "cost": {
           "input": 0,
           "output": 0,
@@ -75092,7 +75152,8 @@
               "thinkingFormat": "deepseek"
             }
           }
-        }
+        },
+        "thinkingToggle": true
       },
       {
         "id": "mimo-v2.6-pro",
@@ -75111,10 +75172,8 @@
         },
         "supportsImageInput": true,
         "reasoning": true,
-        "efforts": [
-          "high"
-        ],
-        "defaultEffort": "high",
+        "efforts": [],
+        "defaultEffort": null,
         "cost": {
           "input": 0,
           "output": 0,
@@ -75140,7 +75199,8 @@
               "thinkingFormat": "deepseek"
             }
           }
-        }
+        },
+        "thinkingToggle": true
       }
     ],
     "zai": [
@@ -75962,6 +76022,12 @@
   "sourceVersion": "0.85.1",
   "supplementalSources": [
     {
+      "url": "https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/text-generation/deep-thinking",
+      "modelIds": ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed"],
+      "checkedAt": "2026-11-13",
+      "scope": "Official MiMo Chat API and CN/AMS/SGP Token Plan thinking switch; UI efforts empty, native Pi map retained. Applied by tools/pi/catalog-format.mjs without refreshing unrelated rows."
+    },
+    {
       "url": "https://pi.dev/api/models/providers/opencode-go",
       "modelIds": [
         "deepseek-v4.1-flash"
@@ -75987,6 +76053,14 @@
       ],
       "checkedAt": "2026-11-13",
       "scope": "Copilot Chat transport only; shared Argon IDE headers and compatibility. No capacity, pricing or input capability claims."
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "modelIds": [
+        "gpt-6.2-sol"
+      ],
+      "checkedAt": "2026-11-18",
+      "scope": "Official OpenAI API endpoint only, added ahead of the Pi public catalog. Same Responses parameters and 272K working window as the GPT-6.1 Sol record; prices from the official model page. Upstream Pi metadata replaces this row once published."
     }
   ]
 }

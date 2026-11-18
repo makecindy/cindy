@@ -27,6 +27,14 @@ function link(deviceId: string, path: Link['path'], rttMs: number | null, sent: 
 }
 
 function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs: number | null } {
+  if (name === 'app-nodes' || name === 'app-nodes-list') {
+    return { devices: [SELF,
+      device({ deviceId: 'friend', name: 'Friend Mac', app: 'cindy-friend', remoteControlEnabled: false }),
+      device({ deviceId: 'future', name: 'Lab Mac', app: 'future-app', remoteControlEnabled: false }),
+      device({ deviceId: 'offline-friend', name: 'Travel Mac', app: 'cindy-friend', online: false, remoteControlEnabled: false }),
+      device({ deviceId: 'legacy', name: 'Legacy Cindy', remoteControlEnabled: false }),
+    ], links: [link('friend', 'direct', 4), link('future', 'relay', 35)], relayRttMs: 18 };
+  }
   if (name === 'empty') return { devices: [SELF], links: [], relayRttMs: 18 };
   if (name === 'fleet') {
     // 与真实账号同一形状(3 直连、7 经中转、15 离线),名字是虚构的;两台正在收发。
@@ -89,6 +97,18 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
       relayRttMs: 21,
     };
   }
+  if (name === 'split-direct') {
+    // 直连多到拆成两组:第二组直连在左边上方,中转组排在它下面,中转站整个落在这台电脑的名字下面。
+    const devices: Device[] = [SELF];
+    const links: Link[] = [];
+    for (let i = 0; i < 9; i++) {
+      devices.push(device({ deviceId: `dir${i}`, name: `Desk ${i + 1}`, platform: i % 2 ? 'win32' : 'darwin' }));
+      links.push(link(`dir${i}`, 'direct', 3 + i));
+    }
+    devices.push(device({ deviceId: 'rel0', name: 'Office PC', platform: 'win32' }), device({ deviceId: 'idle', name: 'Studio mini' }), device({ deviceId: 'attention', name: 'Lab PC', remoteControlEnabled: false }));
+    links.push(link('rel0', 'relay', 64));
+    return { devices, links, relayRttMs: 25 };
+  }
   if (name === 'many') {
     const devices: Device[] = [SELF];
     const links: Link[] = [];
@@ -135,7 +155,18 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
 }
 
 const data = scenario(ctx.case);
+const agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes'] = ctx.case === 'default' ? [
+  { deviceId: 'mini', path: 'direct', rttMs: 1 },
+  { deviceId: 'pixel', path: 'connecting', rttMs: null },
+] : undefined;
+if (agentNetRoutes) data.links = data.links.filter((link) => link.deviceId !== 'mini');
 if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filter((l) => l.encrypted);
+/**
+ * 这台电脑实际用的连接方式(拓扑中间名字下面):打开 Agent-Net 后通常就是 Agent-Net;self-device-link 是开着开关、
+ * 这次却跑在 Device Link 上(例如 Agent-Net 不认这台设备),主连接不是 Agent-Net 时所有对端也都是 Device Link。
+ */
+const selfEncrypted = ctx.case !== 'self-device-link';
+if (!selfEncrypted) for (const l of data.links) l.encrypted = false;
 /**
  * 远程切换连接方式的模拟对端(remote-switch):代替那台电脑回答 `peer-agent-net`,并像真实切换一样
  * 让与它的连接先断开、再以新方式连回来。MacBook Air 是旧版 Cindy(不认识这个请求)，Spare PC 在当前中转上
@@ -207,7 +238,12 @@ void mountPage({
         disabledControlDeviceIds: [],
         unresponsiveDeviceIds: [],
       }),
-      getPeerLinks: async () => ({ links: data.links, relayRttMs: data.relayRttMs }),
+      getPeerLinks: async () => ({
+        links: data.links,
+        agentNetRoutes,
+        relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
+        relayRttMs: data.relayRttMs,
+      }),
       onPeerLinksChanged: subscription('peerLinks'),
       onPresenceChanged: subscription('presence'),
       onStatusChanged: subscription('linkStatus'),
@@ -224,7 +260,7 @@ void mountPage({
         ...(command.type === 'peer-agent-net' ? { peer: await simulatePeer(command) } : {}),
         state: {
           available: true,
-          agentNetEnabled: ctx.case !== 'legacy-off',
+          agentNetEnabled: ctx.case !== 'legacy-off' && ctx.case !== 'app-nodes-list',
           agentNetOnlyEncrypted: ctx.case === 'empty' || ctx.case === 'remote-switch-controller-strict',
           // 被切的那台电脑:开关下面写「由谁在几点远程打开」。
           agentNetChangedBy: ctx.case === 'switched-here'

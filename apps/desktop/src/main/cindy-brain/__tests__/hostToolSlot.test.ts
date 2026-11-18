@@ -7,9 +7,8 @@ import { captureTaskActionSyncGuard, captureTaskActionDeliveryGuard, hasTaskActi
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { createGhostPageBridge } from '../../../shared/ghostPageBridge.js';
-import { createSchedulerMcpServer, type SchedulerMcpDeps } from '@cindy/mcps';
+import { createSchedulerMcpServer, createXdtHelperMcpServer, type SchedulerMcpDeps } from '@cindy/mcps';
 import { Scheduler, type Schedule } from '@cindy/maker-scheduler';
-import { getDesktopMcpToolApprovalPolicy } from '../../maker-host/mcp-tool-approval-policy.js';
 import { withPluginSchedulerApproval } from '../pluginSchedulerApproval.js';
 import { GhostRuntime, type SandboxHandle } from '../runtime/GhostRuntime.js';
 import { isValidPluginInstallRelId, pluginInstallStoragePart } from '../../../shared/pluginIdentity.js';
@@ -17,6 +16,9 @@ import { isValidPluginInstallRelId, pluginInstallStoragePart } from '../../../sh
 const uiPipe = createGhostProductionCallbacks<{
   send(event: { sender: { id: number; isDestroyed(): boolean } }, payload: unknown): Promise<unknown>;
 }>({ variables: ['executionPipe'], callbacks: { send: ['ipcMain.handle', 'ghost-pipe:send'] } });
+const production = createGhostProductionCallbacks<{
+  requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
+}>({ functions: ['requestPluginHostToolCall'] });
 
 const lifecycle = createGhostProductionCallbacks<{ getGhostRuntime(): GhostRuntime }>({
   functions: ['getGhostRuntime', 'disposePluginRuntimeHostServices'], initialize: 'let runtimeSingleton = null;',
@@ -34,7 +36,6 @@ function fixture() {
     enabled: true, dir: '/fixture/dashboard', approval: { state: 'approved', revision: 'r1' },
     manifest: { schemaVersion: 3, id: 'dashboard', name: 'Dashboard', version: '1.0.0', kind: 'chip', entry: 'main.js',
       agent: { hostTools: ['history', 'control', 'scheduler'] } },
-    approvedHostToolGroups: ['history', 'control', 'scheduler'],
   };
   let generation = 1;
   let pageLive = true;
@@ -55,9 +56,7 @@ function fixture() {
       },
       close: vi.fn(async () => {}),
     }),
-    approveGroup: vi.fn(async (_id, group, current) => current() && ghost?.approvedHostToolGroups?.includes(group) === true),
-    policy: (_server, tool) => tool === 'archive_sessions' ? 'prompt-each-time' : 'auto-approve',
-    confirm: vi.fn(async () => true), recordCall: vi.fn(),
+    recordCall: vi.fn(),
   };
   const call = (tool = 'list_sessions', args: Record<string, unknown> = {}) => handlePluginHostToolRequest('dashboard', {
     type: 'host-tool-request', server: tool === 'schedule_list' ? 'cindy_scheduler' : 'cindy_helper', tool, args,
@@ -65,6 +64,123 @@ function fixture() {
   return { ports, invoke, result, call, closePage: () => { pageLive = false; }, get ghost() { return ghost!; }, remove: () => { ghost = null; }, changeOwner: () => { generation++; } };
 }
 const code = (value: Awaited<ReturnType<typeof handlePluginHostToolRequest>>) => JSON.parse(value.content[0].type === 'text' ? value.content[0].text : '{}').errorCode;
+
+// Unit: the quota endpoint is new; existing history tests cannot prove that settings
+// permission alone cannot read it. Exercise the actual helper registry through the plugin gateway.
+it('requires usage permission and suppresses a quota result after plugin revocation', async () => {
+  const f = fixture();
+  f.ghost.manifest.agent!.hostTools = ['settings'];
+  let revoke = false;
+  const read = vi.fn(async () => {
+    if (revoke) f.ghost.enabled = false;
+    return { scope: 'local', accounts: [{ accountId: 'only-owner-account' }] };
+  });
+  const ports: PluginHostToolPorts = { ...f.ports, createRuntime: (_server, caller) => {
+    const server = createXdtHelperMcpServer({ subscriptionUsage: { read }, authorizeCall: authorizePluginHostToolCall },
+      { agentKind: 'codex', workingDir: '', hostCaller: caller });
+    return { ...server.hostTools, close: () => server.close() };
+  } };
+  const request = () => handlePluginHostToolRequest('dashboard', {
+    type: 'host-tool-request', server: 'cindy_helper', tool: 'get_subscription_usage', args: {},
+  }, () => true, ports);
+  expect(code(await request())).toBe('PERMISSION_DENIED');
+  expect(read).not.toHaveBeenCalled();
+  f.ghost.manifest.agent!.hostTools = ['usage'];
+  expect(JSON.stringify(await request())).toContain('only-owner-account');
+  revoke = true;
+  const late = await request();
+  expect(code(late)).toBe('PERMISSION_DENIED');
+  expect(JSON.stringify(late)).not.toContain('only-owner-account');
+});
+
+// Unit / #10794 P1: raw provider reads must use the declared usage group. The
+// existing quota test covers only get_subscription_usage, not these registry
+// entries. One approved plugin declaring settings is the minimal failing input.
+it.each(['get_provider_usage_history', 'get_provider_group'])('requires usage instead of settings for %s', async tool => {
+  const f = fixture();
+  f.ghost.manifest.agent!.hostTools = ['settings'];
+  const raw = { providerId: 'anthropic', members: [{ memberId: 'member', label: 'Example device' }] };
+  const call = vi.fn(async () => raw);
+  const ports: PluginHostToolPorts = { ...f.ports, createRuntime: (_server, caller) => {
+    const server = createXdtHelperMcpServer({ providerReads: { call }, authorizeCall: authorizePluginHostToolCall },
+      { agentKind: 'codex', workingDir: '', hostCaller: caller });
+    return { ...server.hostTools, close: () => server.close() };
+  } };
+  const request = () => handlePluginHostToolRequest('dashboard', {
+    type: 'host-tool-request', server: 'cindy_helper', tool, args: { providerId: 'anthropic' },
+  }, () => true, ports);
+  expect(code(await request())).toBe('PERMISSION_DENIED');
+  expect(call).not.toHaveBeenCalled();
+  f.ghost.manifest.agent!.hostTools = ['usage'];
+  const result = await request();
+  expect(result.isError).not.toBe(true);
+  expect(JSON.parse(result.content[0].type === 'text' ? result.content[0].text : '{}')).toEqual({ ok: true, ...raw });
+  expect(call).toHaveBeenCalledOnce();
+});
+
+// Unit, plugin installation authority: the real gateway previously asked the Agent
+// policy again after group approval, including a model patch retaining ask. Existing
+// cases expected that extra prompt. One installed group must dispatch without any UI.
+describe('installed group approval', () => {
+  it.each([
+    { server: 'cindy_helper', tool: 'list_sessions', group: 'history', args: { limit: 10 } },
+    { server: 'cindy_helper', tool: 'set_session_runtime', group: 'control', args: {
+      session_id: 'target', expected_generation: 7, model: 'next', effort: 'high', fast: true, permission_mode: 'ask',
+    } },
+    { server: 'cindy_helper', tool: 'send_to_session', group: 'handoff', args: { target_session_id: 'target', message: 'Continue' } },
+    { server: 'cindy_helper', tool: 'get_app_settings', group: 'settings', args: { section: 'appearance' } },
+    { server: 'cindy_scheduler', tool: 'schedule_delete', group: 'scheduler', args: { id: 'schedule' } },
+  ])('dispatches $group through Host authority without another approval', async ({ server, tool, group, args }) => {
+    const f = fixture(), create = f.ports.createRuntime;
+    f.ghost.manifest.agent!.hostTools = [group];
+    const approveGroup = vi.fn(async () => { throw new Error('unexpected capability prompt'); });
+    const policy = vi.fn(() => 'prompt-each-time');
+    const confirm = vi.fn(async () => { throw new Error('unexpected per-call prompt'); });
+    const ports = { ...f.ports, approveGroup, policy, confirm,
+      createRuntime: (name: string, caller: Parameters<PluginHostToolPorts['createRuntime']>[1]) => ({
+        ...create(name, caller)!, describe: () => ({ name: tool, category: group }),
+      }),
+    };
+    expect(await handlePluginHostToolRequest('dashboard', { type: 'host-tool-request', server, tool, args }, () => true, ports)).toBe(f.result);
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(tool, args);
+    const entry = production({
+      handlePluginHostToolRequest, withPluginSchedulerApproval,
+      findGhostForInstanceId: () => f.ghost, getActiveDataOwnerPushStamp: ports.owner,
+      createHostToolRuntime: ports.createRuntime, log: { info: vi.fn() },
+      requestPluginTaskApproval: approveGroup, getDesktopMcpToolApprovalPolicy: policy,
+      dialog: { showMessageBox: confirm },
+    });
+    const sender = { id: 7, isDestroyed: () => false };
+    const ipc = uiPipe({
+      ghostIdForLogicWebContents: () => 'dashboard', requireGhostAvailableForActiveSession() {},
+      requestPluginHostToolCall: entry.requestPluginHostToolCall,
+    });
+    const page = createGhostPageBridge({ ping: async () => ({ ok: true, id: 'dashboard' }), send: payload => ipc.send({ sender }, payload) });
+    expect(await page.api.host.call(server, tool, args)).toBe(f.result);
+    expect(f.invoke).toHaveBeenCalledTimes(2);
+    expect(approveGroup).not.toHaveBeenCalled();
+    expect(policy).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it.each(['invalid-install', 'missing-declaration'] as const)('rejects $0 without an automatic approval request', async missing => {
+    const f = fixture();
+    if (missing === 'invalid-install') f.ghost.approval = { state: 'legacy-unapproved' };
+    else f.ghost.manifest.agent!.hostTools = [];
+    const approveGroup = vi.fn(async () => true);
+    const policy = vi.fn(() => 'auto-approve');
+    const confirm = vi.fn(async () => true);
+    const ports = { ...f.ports, approveGroup, policy, confirm };
+    const result = await handlePluginHostToolRequest('dashboard', {
+      type: 'host-tool-request', server: 'cindy_helper', tool: 'list_sessions', args: {},
+    }, () => true, ports);
+    expect(code(result)).toBe('PERMISSION_DENIED');
+    expect(f.invoke).not.toHaveBeenCalled();
+    expect(approveGroup).not.toHaveBeenCalled();
+    expect(policy).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+});
 
 const desktopEntry = createGhostProductionCallbacks<{
   requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
@@ -77,7 +193,7 @@ describe('plugin Host tool entry', () => {
     const f = fixture(), create = f.ports.createRuntime;
     const close = vi.fn(async () => {
       await Promise.resolve();
-      if (change === 'owner') f.changeOwner(); else f.ghost.approvedHostToolGroups = [];
+      if (change === 'owner') f.changeOwner(); else f.ghost.approval = { state: 'legacy-unapproved' };
     });
     f.ports.createRuntime = (server, caller) => ({ ...create(server, caller)!, close });
     expect(code(await f.call())).toBe('PERMISSION_DENIED');
@@ -98,27 +214,24 @@ describe('plugin Host tool entry', () => {
       type: 'host-tool-request', server, tool, args: {},
     }, () => true, f.ports))).toBe('PERMISSION_DENIED');
     expect(create).not.toHaveBeenCalled();
-    expect(f.ports.approveGroup).not.toHaveBeenCalled();
-    expect(f.ports.confirm).not.toHaveBeenCalled();
     expect(f.invoke).not.toHaveBeenCalled();
   });
   it('creates a private output directory only for an approved Desktop service execution', async () => {
     const f = fixture(), mkdirSync = vi.fn(), mkdir = vi.fn(async () => {});
     f.ghost.manifest.agent!.hostTools = ['docs'];
-    f.ghost.approvedHostToolGroups = [];
+    f.ghost.approval = { state: 'legacy-unapproved' };
     const api = desktopEntry({ handlePluginHostToolRequest, findGhostForInstanceId: () => f.ghost,
       getActiveDataOwnerPushStamp: f.ports.owner, ghostInstallApprovalToken: () => 'r1',
       ownerScopedUserDataPath: () => '/fixture/private', fs: { mkdirSync, promises: { mkdir } },
       createHostToolRuntime: () => ({ describe: () => ({ name: 'read_sheet', category: 'read' }), call: f.invoke, close: async () => {} }),
-      requestPluginTaskApproval: async () => f.ghost.approvedHostToolGroups!.includes('docs'),
-      getDesktopMcpToolApprovalPolicy: () => 'auto-approve', log: { info: vi.fn() },
+      withPluginSchedulerApproval, log: { info: vi.fn() },
     });
     const request = () => api.requestPluginHostToolCall('dashboard', { type: 'host-tool-request', server: 'cindy_docs', tool: 'read_sheet', args: {} }, () => true);
     await request();
     expect(mkdirSync).not.toHaveBeenCalled();
     expect(mkdir).not.toHaveBeenCalled();
     expect(f.invoke).not.toHaveBeenCalled();
-    f.ghost.approvedHostToolGroups = ['docs'];
+    f.ghost.approval = { state: 'approved', revision: 'r1' };
     expect(await request()).toEqual(f.result);
     expect(mkdirSync).not.toHaveBeenCalled();
     expect(mkdir).toHaveBeenCalledExactlyOnceWith('/fixture/private', { recursive: true });
@@ -181,10 +294,11 @@ describe('plugin Host tool entry', () => {
 
   it('rejects malformed server identities before service lookup', async () => {
     const f = fixture();
+    const create = vi.spyOn(f.ports, 'createRuntime');
     expect(code(await handlePluginHostToolRequest('dashboard', {
       type: 'host-tool-request', server: { toString: null }, tool: 'browser', args: {},
     }, () => true, f.ports))).toBe('INVALID_PARAMS');
-    expect(f.ports.approveGroup).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('keeps computer observations per plugin until stop and honors live provider disable', async () => {
@@ -221,27 +335,26 @@ describe('plugin Host tool entry', () => {
   // Item 26: these existing services were inaccessible from the public plugin entry.
   // One approved plugin is enough to expose group/category confusion and risky calls.
   it.each([
-    ['cindy_browser', 'browser', 'browser', { action: 'status' }, false],
-    ['cindy_browser', 'browser', 'browser', { action: 'setBackend', backend: 'user-browser' }, true],
-    ['cindy_computer', 'computer', 'status', {}, false],
-    ['cindy_ssh', 'ssh', 'ssh_exec', { host: 'example', command: 'pwd' }, true],
-    ['cindy_docs', 'docs', 'read_sheet', { path: 'own.csv' }, false],
-    ['cindy_docs', 'docs', 'make_docx', { outPath: 'own.docx', markdown: 'Report' }, true],
-  ] as const)('opens %s/%s through its existing risk policy', async (server, group, tool, args, confirmed) => {
+    ['cindy_browser', 'browser', 'browser', { action: 'status' }],
+    ['cindy_browser', 'browser', 'browser', { action: 'setBackend', backend: 'user-browser' }],
+    ['cindy_computer', 'computer', 'status', {}],
+    ['cindy_ssh', 'ssh', 'ssh_exec', { host: 'example', command: 'pwd' }],
+    ['cindy_docs', 'docs', 'read_sheet', { path: 'own.csv' }],
+    ['cindy_docs', 'docs', 'make_docx', { outPath: 'own.docx', markdown: 'Report' }],
+  ] as const)('dispatches declared %s/%s without supplementary approval', async (server, group, tool, args) => {
     const f = fixture();
     f.ghost.manifest.agent!.hostTools = [group];
-    f.ghost.approvedHostToolGroups = [group];
     f.ports.createRuntime = () => ({ describe: name => ({ name, category: group === 'docs' ? 'read' : group }),
       call: async () => f.result, close: async () => {} });
-    f.ports.policy = (serverName, name, input) => getDesktopMcpToolApprovalPolicy(serverName === 'cindy_docs'
-      ? { serverName, toolName: name, toolParams: input }
-      : { serverName, toolName: 'call_tool', toolParams: { name, args: input } });
-    const call = () => handlePluginHostToolRequest('dashboard', { type: 'host-tool-request', server, tool, args }, () => true, f.ports);
+    const ports = { ...f.ports, approveGroup: vi.fn(), policy: vi.fn(), confirm: vi.fn() };
+    const call = () => handlePluginHostToolRequest('dashboard', { type: 'host-tool-request', server, tool, args }, () => true, ports);
     expect(await call()).toEqual(f.result);
-    expect(f.ports.confirm).toHaveBeenCalledTimes(confirmed ? 1 : 0);
-    f.ghost.approvedHostToolGroups = [];
+    expect(ports.approveGroup).not.toHaveBeenCalled();
+    expect(ports.policy).not.toHaveBeenCalled();
+    expect(ports.confirm).not.toHaveBeenCalled();
+    f.ghost.enabled = false;
     expect(code(await call())).toBe('PERMISSION_DENIED');
-    f.ghost.approvedHostToolGroups = [group];
+    f.ghost.enabled = true;
     f.ghost.manifest.agent!.hostTools = ['history'];
     expect(code(await call())).toBe('PERMISSION_DENIED');
   });
@@ -306,7 +419,7 @@ describe('plugin Host tool entry', () => {
       if (change === 'removed') f.remove();
       if (change === 'directory') f.ghost.dir = '/fixture/replaced';
       if (change === 'revision') f.ghost.approval = { state: 'approved', revision: 'r2' };
-      if (change === 'group') f.ghost.approvedHostToolGroups = [];
+      if (change === 'group') f.ghost.manifest.agent!.hostTools = [];
       if (change === 'body') item.text = 'changed';
       if (change === 'client') item.clientId = 'changed';
       const delivery = taskActionInputGuard(change === 'target' ? 'other-target' : 'target', item)!;
@@ -324,37 +437,44 @@ describe('plugin Host tool entry', () => {
     });
     expect(await f.call(tool)).toBe(f.result);
     expect(f.invoke).toHaveBeenCalledOnce();
-    expect(f.ports.confirm).toHaveBeenCalledTimes(tool === 'archive_sessions' ? 1 : 0);
   });
 
-  it.each(['missing-approval', 'group-removed', 'owner', 'update', 'uninstall', 'window', 'deny'] as const)('rejects %s before the handler executes', async scenario => {
-    const f = fixture();
-    if (scenario === 'missing-approval') f.ghost.approvedHostToolGroups = [];
+  it.each(['invalid-install', 'group-removed', 'owner', 'update', 'uninstall', 'page'] as const)('rejects %s before the handler executes', async scenario => {
+    const f = fixture(), create = f.ports.createRuntime;
+    if (scenario === 'invalid-install') f.ghost.approval = { state: 'legacy-unapproved' };
     if (scenario === 'group-removed') f.ghost.manifest.agent!.hostTools = ['history'];
-    f.ports.confirm = vi.fn(async () => {
-      if (scenario === 'owner') f.changeOwner();
-      if (scenario === 'update') f.ghost.approval = { state: 'approved', revision: 'r2' };
-      if (scenario === 'uninstall') f.remove();
-      return scenario !== 'deny' && scenario !== 'window';
-    });
+    f.ports.createRuntime = (server, caller) => {
+      const runtime = create(server, caller)!;
+      return { ...runtime, describe: name => {
+        if (scenario === 'owner') f.changeOwner();
+        if (scenario === 'update') f.ghost.approval = { state: 'approved', revision: 'r2' };
+        if (scenario === 'uninstall') f.remove();
+        if (scenario === 'page') f.closePage();
+        return runtime.describe(name);
+      } };
+    };
     expect(code(await f.call('archive_sessions', { session_ids: ['target'] }))).toBe('PERMISSION_DENIED');
     expect(f.invoke).not.toHaveBeenCalled();
   });
 
-  it('denies group-external tools and plugin-management servers without prompting', async () => {
+  it('denies group-external tools and plugin-management servers', async () => {
     const f = fixture();
     expect(code(await f.call('request_input_handoff'))).toBe('PERMISSION_DENIED');
     expect(code(await handlePluginHostToolRequest('dashboard', { type: 'host-tool-request', server: 'cindy', tool: 'ghost_call', args: {} }, () => true, f.ports))).toBe('PERMISSION_DENIED');
-    expect(f.ports.confirm).not.toHaveBeenCalled();
     expect(f.invoke).not.toHaveBeenCalled();
   });
 
-  it('confirms every risky invocation and executes the exact parameter snapshot shown', async () => {
-    const f = fixture(), args = { session_ids: ['original'] };
-    f.ports.confirm = vi.fn(async input => { expect(input.args).toEqual({ session_ids: ['original'] }); args.session_ids = ['changed']; return true; });
+  it('executes the exact parameter snapshot even when the source request changes', async () => {
+    const f = fixture(), args = { session_ids: ['original'] }, create = f.ports.createRuntime;
+    f.ports.createRuntime = (server, caller) => {
+      const runtime = create(server, caller)!;
+      return { ...runtime, call: (tool, input) => {
+        args.session_ids = ['changed'];
+        return runtime.call(tool, input);
+      } };
+    };
     await f.call('archive_sessions', args);
     await f.call('archive_sessions', { session_ids: ['original'] });
-    expect(f.ports.confirm).toHaveBeenCalledTimes(2);
     expect(f.invoke.mock.calls.every(([, input]) => JSON.stringify(input) === '{"session_ids":["original"]}')).toBe(true);
     expect(f.ports.recordCall).toHaveBeenCalledWith('dashboard', 'cindy_helper', 'archive_sessions');
   });
@@ -370,9 +490,6 @@ describe('plugin Host tool entry', () => {
 // registry. Earlier tests covered group approval but never shell-bearing inputs.
 describe('plugin scheduler command boundary', () => {
   const command = "printf 'complete command'";
-  const production = createGhostProductionCallbacks<{
-    requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
-  }>({ functions: ['requestPluginHostToolCall'] });
   function schedulerFixture(node = false, allow = true, script = true) {
     const f = fixture();
     if (node) f.ghost.manifest.node = { entry: 'node.cjs', protocol: 'json-rpc-stdio' };
@@ -394,7 +511,7 @@ describe('plugin scheduler command boundary', () => {
     });
     const dialog = { showMessageBox: vi.fn(async (_parent: unknown, _options: Record<string, unknown>) => ({ response: allow ? 0 : 1 })) };
     const entry = production({
-      handlePluginHostToolRequest, withPluginSchedulerApproval, getDesktopMcpToolApprovalPolicy,
+      handlePluginHostToolRequest, withPluginSchedulerApproval,
       findGhostForInstanceId: () => f.ghost, getActiveDataOwnerPushStamp: f.ports.owner,
       createHostToolRuntime: (_server: string, caller: NonNullable<Parameters<typeof createSchedulerMcpServer>[1]>['hostCaller']) =>
         createSchedulerMcpServer({ getScheduler: () => actualScheduler ?? ({ create, updateFromCurrent: update, runNow, resume, get }) as never,
@@ -403,8 +520,6 @@ describe('plugin scheduler command boundary', () => {
           remote,
           hookScript: { install } },
         { agentKind: 'codex', workingDir: '', hostCaller: caller }).hostTools,
-      requestPluginTaskApproval: (id: string, active: () => boolean, _confirm: unknown, _explicit: boolean, capability: string) =>
-        f.ports.approveGroup(id, capability.split(':')[1] as 'scheduler', active),
       getDeepLinkMainWindow: () => ({ isDestroyed: () => false }), isTrustedAppRendererWindow: () => true,
       createWindowGhostInstallConsentPrompt: vi.fn(), dialog, t: (key: string) => key, log: { info: vi.fn() },
       getPluginHostToolCaller,
@@ -417,12 +532,12 @@ describe('plugin scheduler command boundary', () => {
       setHook: () => { Object.assign(schedule, { preRunHook: { command } }); } };
   }
 
-  // Unit, #9801: group revocation must still stop ordinary non-shell schedules.
+  // Unit, #9801: removing the declaration must still stop ordinary non-shell schedules.
   it('rechecks revocation between separate calls', async () => {
     const f = schedulerFixture(false, true, false);
     await f.call('schedule_run_now', { id: 'automation' });
     expect(f.runNow).toHaveBeenCalledOnce();
-    f.ghost.approvedHostToolGroups = [];
+    f.ghost.manifest.agent!.hostTools = [];
     expect(code(await f.call('schedule_run_now', { id: 'automation' }) as never)).toBe('PERMISSION_DENIED');
     expect(f.runNow).toHaveBeenCalledOnce();
   });

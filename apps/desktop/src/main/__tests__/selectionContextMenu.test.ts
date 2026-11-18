@@ -1,11 +1,26 @@
-import { describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+import {
+  Menu,
+  shell,
+  type BrowserWindow,
+  type ContextMenuParams,
+} from 'electron';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildEditableContextMenuTemplate,
   buildSelectionContextMenuTemplate,
   buildSelectionSearchUrl,
   frameSelectionSupportsAddToChat,
+  installSelectionContextMenu,
 } from '../selection-context-menu';
+import { SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL } from '../../shared/selectionContextMenu';
+
+vi.mock('electron', () => ({
+  app: { getPreferredSystemLanguages: () => ['en-US'] },
+  Menu: { buildFromTemplate: vi.fn() },
+  shell: { openExternal: vi.fn(async () => undefined) },
+}));
 
 const params = {
   canAddToChat: true,
@@ -134,6 +149,108 @@ function editableParams(
 }
 
 const editableActions = () => ({ lookUp: vi.fn(), searchWeb: vi.fn() });
+
+// Feature #10646: template-only tests missed the Linux early return. Exercise
+// the installed context-menu listener with a selected message or empty editor
+// and inspect the native menu actually shown (unit tier, no real clipboard).
+describe('installed context menu', () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+    vi.clearAllMocks();
+  });
+
+  function install(platform: NodeJS.Platform) {
+    Object.defineProperty(process, 'platform', { value: platform });
+    const popup = vi.fn();
+    vi.mocked(Menu.buildFromTemplate).mockReturnValue({ popup } as unknown as Menu);
+    const webContents = Object.assign(new EventEmitter(), { showDefinitionForSelection: vi.fn() });
+    const win = { webContents, isDestroyed: () => false } as unknown as BrowserWindow;
+    installSelectionContextMenu(win);
+    const frame = {
+      isDestroyed: () => false,
+      executeJavaScript: vi.fn(async () => true),
+      send: vi.fn(),
+    };
+    return {
+      popup,
+      win,
+      webContents,
+      frame,
+      emit(overrides: Partial<ContextMenuParams>) {
+        webContents.emit('context-menu', {}, {
+          editFlags: RICH_EDIT_FLAGS,
+          frame,
+          isEditable: false,
+          selectionText: '',
+          x: 40,
+          y: 25,
+          ...overrides,
+        });
+      },
+      template: () => vi.mocked(Menu.buildFromTemplate).mock.calls[0]![0],
+    };
+  }
+
+  it.each(['darwin', 'win32', 'linux'] as const)('opens the selected-message menu on %s', async (platform) => {
+    const menu = install(platform);
+    menu.emit({ selectionText: ' selected words ' });
+
+    await vi.waitFor(() => {
+      expect(menu.popup).toHaveBeenCalledWith({ window: menu.win, x: 40, y: 25 });
+    }, { interval: 1 });
+    const template = menu.template();
+    expect(template[0]).toMatchObject({ role: 'copy', enabled: true });
+    const click = (item: (typeof template)[number]) => (item.click as () => void)();
+    click(template.find((item) => item.label === 'Add to chat')!);
+    expect(menu.frame.send).toHaveBeenCalledWith(SELECTION_CONTEXT_MENU_ADD_TO_CHAT_CHANNEL);
+    expect(shell.openExternal).not.toHaveBeenCalled();
+    click(template.at(-1)!);
+    if (platform === 'darwin') {
+      expect(menu.webContents.showDefinitionForSelection).toHaveBeenCalledOnce();
+      expect(shell.openExternal).not.toHaveBeenCalled();
+    } else {
+      expect(shell.openExternal).toHaveBeenCalledWith('https://www.bing.com/search?q=selected%20words');
+      expect(menu.webContents.showDefinitionForSelection).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['darwin', 'win32', 'linux'] as const)('opens an empty plain input menu with Paste on %s', (platform) => {
+    const menu = install(platform);
+    menu.emit({
+      isEditable: true,
+      editFlags: { ...RICH_EDIT_FLAGS, canEditRichly: false, canCopy: false, canCut: false },
+    });
+
+    expect(menu.popup).toHaveBeenCalledWith({ window: menu.win, x: 40, y: 25 });
+    expect(menu.template()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'paste', enabled: true }),
+      expect.objectContaining({ role: 'copy', enabled: false }),
+      expect.objectContaining({ role: 'cut', enabled: false }),
+    ]));
+    expect(menu.template().some((item) => item.role === 'pasteAndMatchStyle')).toBe(false);
+    expect(menu.frame.executeJavaScript).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('honors rich editor paste availability on Linux: %s', (canPaste) => {
+    const menu = install('linux');
+    menu.emit({ isEditable: true, editFlags: { ...RICH_EDIT_FLAGS, canPaste } });
+
+    expect(menu.popup).toHaveBeenCalledOnce();
+    expect(menu.template()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'paste', enabled: canPaste }),
+      expect.objectContaining({ role: 'pasteAndMatchStyle', enabled: canPaste }),
+    ]));
+  });
+
+  it('keeps unselected read-only areas silent on Linux', () => {
+    const menu = install('linux');
+    menu.emit({ selectionText: '  ' });
+    expect(Menu.buildFromTemplate).not.toHaveBeenCalled();
+    expect(menu.popup).not.toHaveBeenCalled();
+  });
+});
 
 describe('editable context menu shape', () => {
   it('offers the standard edit commands in the user locale', () => {

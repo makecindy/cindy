@@ -6,6 +6,7 @@
  */
 
 import { SPEAKER_ENROLLMENT_MAX_CLIP_SEC } from '@cindy/voice-input-core';
+import type { DownloadProgress } from './downloadProgress';
 
 export const VOICE_SPEAKER_FILTER_CHANNELS = {
   getStatus: 'voice-input:speaker:get-status',
@@ -25,6 +26,8 @@ export type VoiceSpeakerFilterStatus = {
   modelState: VoiceSpeakerModelState;
   downloadedBytes: number;
   totalBytes: number;
+  /** Standard progress for the shared DownloadMeter while `modelState` is downloading. */
+  download?: DownloadProgress;
   /** Short failure kind for the last download, not a raw error message. */
   downloadError?: 'network' | 'disk' | 'checksum' | 'unavailable';
   enrolled: boolean;

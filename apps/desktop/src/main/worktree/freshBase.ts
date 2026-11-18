@@ -20,6 +20,7 @@
  */
 import { gitExec, KILL_CLEANUP_BUDGET_MS, type GitExecOpts } from './gitExec';
 import { createLogger } from '../logger';
+import { readOriginDefaultBranch } from './branchSync';
 
 const log = createLogger('worktree');
 
@@ -108,16 +109,60 @@ export async function resolveFreshSourceBranch(
   }
   if (!defaultBranch) {
     for (const candidate of ['main', 'master']) {
-      if ((await tryGit(['rev-parse', '--verify', `refs/remotes/${remote}/${candidate}`], baseRepo)) !== null) {
+      if (
+        (await tryGit(
+          ['rev-parse', '--verify', `refs/remotes/${remote}/${candidate}`],
+          baseRepo,
+        )) !== null
+      ) {
         defaultBranch = candidate;
         break;
       }
     }
   }
-  if (!defaultBranch) return { sourceBranch: fallback, fetched: false, reason: 'no-default-branch' };
+  if (!defaultBranch)
+    return { sourceBranch: fallback, fetched: false, reason: 'no-default-branch' };
 
+  const fetched = await fetchRemoteDefaultBranch(
+    baseRepo,
+    remote,
+    defaultBranch,
+    stepBudgetMs(totalBudgetMs),
+  );
+
+  // 完整远端跟踪引用:本地若恰好存在名为 "origin/main" 的**分支**,短名会歧义
+  // (git 会警告并可能解析到 refs/heads/origin/main),worktree 创建可能失败或
+  // 切错基底;refs/remotes/ 全名无歧义,后续 rev-parse/merge-base/worktree add
+  // 全部照常接受。
+  const remoteRef = `refs/remotes/${remote}/${defaultBranch}`;
+  if (
+    (await tryGit(
+      ['rev-parse', '--verify', `refs/remotes/${remote}/${defaultBranch}`],
+      baseRepo,
+    )) !== null
+  ) {
+    if (fetched) return { sourceBranch: remoteRef, fetched: true };
+    // fetch 未成功时 remoteRef 可能陈旧:若它已是 fallback 的祖先(本地分支不落后于
+    // 它,如本地 main 有未推送提交而 origin/main 较旧),用它会丢 fallback 上的提交,
+    // 比旧行为还旧——此时保留 fallback。分叉或远端领先(非祖先)才值得用 stale ref。
+    const staleRefBehindFallback =
+      (await tryGit(['merge-base', '--is-ancestor', remoteRef, fallback], baseRepo)) !== null;
+    if (staleRefBehindFallback) {
+      return { sourceBranch: fallback, fetched: false, reason: 'stale-remote-ref-behind-fallback' };
+    }
+    return { sourceBranch: remoteRef, fetched: false, reason: 'stale-remote-ref' };
+  }
+  return { sourceBranch: fallback, fetched: false, reason: 'remote-ref-missing' };
+}
+
+/** Shared bounded, fail-open fetch for automatic and explicitly selected default sources. */
+async function fetchRemoteDefaultBranch(
+  baseRepo: string,
+  remote: string,
+  defaultBranch: string,
+  fetchBudgetMs: number,
+): Promise<boolean> {
   let fetched = false;
-  const fetchBudgetMs = stepBudgetMs(totalBudgetMs);
   if (fetchBudgetMs > 0) {
     try {
       // 显式目标 refspec:--single-branch 或收窄 remote.<name>.fetch 的 clone 里,
@@ -147,26 +192,34 @@ export async function resolveFreshSourceBranch(
       log.warn(`[freshBase] fetch ${remote}/${defaultBranch} 失败,退用本地已有远端 ref:`, msg);
     }
   } else {
-    // ls-remote 已把总预算耗尽(典型:离线挂满超时)——不再以新预算发起第二次网络操作。
-    log.warn(`[freshBase] 网络总预算已耗尽,跳过 fetch ${remote}/${defaultBranch},退用本地已有远端 ref`);
+    // 预算耗尽时不能把 0 传给 gitExec（0 代表无限等待）。
+    log.warn(
+      `[freshBase] 网络总预算已耗尽,跳过 fetch ${remote}/${defaultBranch},退用本地已有远端 ref`,
+    );
   }
 
-  // 完整远端跟踪引用:本地若恰好存在名为 "origin/main" 的**分支**,短名会歧义
-  // (git 会警告并可能解析到 refs/heads/origin/main),worktree 创建可能失败或
-  // 切错基底;refs/remotes/ 全名无歧义,后续 rev-parse/merge-base/worktree add
-  // 全部照常接受。
-  const remoteRef = `refs/remotes/${remote}/${defaultBranch}`;
-  if ((await tryGit(['rev-parse', '--verify', `refs/remotes/${remote}/${defaultBranch}`], baseRepo)) !== null) {
-    if (fetched) return { sourceBranch: remoteRef, fetched: true };
-    // fetch 未成功时 remoteRef 可能陈旧:若它已是 fallback 的祖先(本地分支不落后于
-    // 它,如本地 main 有未推送提交而 origin/main 较旧),用它会丢 fallback 上的提交,
-    // 比旧行为还旧——此时保留 fallback。分叉或远端领先(非祖先)才值得用 stale ref。
-    const staleRefBehindFallback =
-      (await tryGit(['merge-base', '--is-ancestor', remoteRef, fallback], baseRepo)) !== null;
-    if (staleRefBehindFallback) {
-      return { sourceBranch: fallback, fetched: false, reason: 'stale-remote-ref-behind-fallback' };
-    }
-    return { sourceBranch: remoteRef, fetched: false, reason: 'stale-remote-ref' };
+  return fetched;
+}
+
+/** Desktop creation refreshes only the selected origin default; never redirects
+ * an explicit choice to upstream or a newly renamed remote default. */
+export async function refreshSelectedDefaultSource(
+  baseRepo: string,
+  sourceBranch: string,
+  totalBudgetMs = NET_TOTAL_BUDGET_MS,
+): Promise<void> {
+  if (!sourceBranch?.startsWith('refs/remotes/origin/')) return;
+  const deadline = Date.now() + totalBudgetMs;
+  try {
+    if (sourceBranch !== (await readOriginDefaultBranch(baseRepo))) return;
+    await fetchRemoteDefaultBranch(
+      baseRepo,
+      'origin',
+      sourceBranch.slice('refs/remotes/origin/'.length),
+      deadline - Date.now() - KILL_CLEANUP_BUDGET_MS,
+    );
+  } catch {
+    // A failed local probe also retains the source already selected by the user.
+    log.warn('[freshBase] 默认源分支探测失败，使用本地已有 ref');
   }
-  return { sourceBranch: fallback, fetched: false, reason: 'remote-ref-missing' };
 }

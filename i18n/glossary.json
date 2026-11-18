@@ -186,7 +186,8 @@
       },
       "note": "产品一级概念，五语统一保留英文原词。zh-CN 现状 44:5 已是主流；zh-TW 沿用同一裁决；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故四个目标语言一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 \"Agent\"→「代理」的 4 处和 \"Subagent models\" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 \"SSH agent\" / \"probe agent\"），是与产品 Agent 同形的另一个概念。",
       "exempt": [
-        "desktop:settings.remote."
+        "desktop:settings.remote.",
+        "desktop:ipcError.SSH_AGENT_UNAVAILABLE"
       ]
     },
     {
@@ -771,6 +772,25 @@
       "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
     },
     {
+      "id": "cindy-friend",
+      "status": "proposed",
+      "en": "Cindy Friend",
+      "translations": {
+        "zh-CN": "Cindy Friend",
+        "zh-TW": "Cindy Friend",
+        "ja": "Cindy Friend",
+        "ko": "Cindy Friend",
+        "fr": "Cindy Friend",
+        "es": "Cindy Friend",
+        "de": "Cindy Friend",
+        "pt-PT": "Cindy Friend",
+        "pt-BR": "Cindy Friend",
+        "zh-Hant-x-lzh": "Cindy Friend",
+        "zh-Hans-x-lzh": "Cindy Friend"
+      },
+      "note": "Agent-Net App name supplied by the product request; preserve the brand in every locale."
+    },
+    {
       "id": "cindy-make",
       "status": "proposed",
       "en": "Cindy Make",
@@ -1161,6 +1181,26 @@
         ]
       },
       "note": "计费点数用「点数」。清理前中文「额度」同时对应 Balance / Credits / Quota 三个英文概念，是计费面板里最容易误导用户的一处：同一个 billing 页面里「点数」和「额度」并存，而「额度」在别处又指配额。裁决把三者拆开——Credits =「点数」、Quota =「配额」、Balance =「余额」，「额度」整体退出。「额度」的禁用按英文源拆成三条条件禁用,分别挂在 credits / quota / balance 下。不能无条件禁:同一个「额度」在不同 key 里分别对应 Credits / Quota / Balance,目标译法不唯一,无条件禁只会让自动替换随机挑一个——xAI 的 subscription quota 就是这样被改成「订阅点数」的。第三方原生 credits 与 reset credits 属不同概念，走 alsoAllowed。whenEn 写单数 Credit:匹配本来就带可选复数 s,单数能同时覆盖 Credit / Credits,写成复数反而漏掉全部单数用法(Promotional Credit Details、credit snapshot 等 8 个 key 原先完全不受约束)。(2026-07-30 更新:Desktop billing 界面弃用「点数」概念(PR #1053),计费文案与金额直接挂钩——新增计费文案一律用金额/余额(Balance=余额)措辞,en 源不再引入 Credit/Credits 用词,因此本条的 Credits→点数 映射不再适用于计费界面;裁决继续约束的只剩 alsoAllowed 覆盖的第三方原生 credits(Codex / ChatGPT 订阅余量)与 reset credits 语境。后续给计费界面添加文案时不要恢复「点数」。)"
+    },
+    {
+      "id": "custom-mcp",
+      "status": "proposed",
+      "en": "Custom MCP",
+      "translations": {
+        "zh-CN": "自定义 MCP",
+        "zh-TW": "自訂 MCP",
+        "ja": "カスタム MCP",
+        "ko": "사용자 지정 MCP",
+        "fr": "MCP personnalisé",
+        "es": "MCP personalizado",
+        "de": "Benutzerdefiniertes MCP",
+        "pt-PT": "MCP personalizado",
+        "pt-BR": "MCP personalizado",
+        "zh-Hant-x-lzh": "自訂 MCP",
+        "zh-Hans-x-lzh": "自定 MCP"
+      },
+      "checkCase": false,
+      "note": "插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。"
     },
     {
       "id": "database-cleanup",
@@ -2174,6 +2214,25 @@
       "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。"
     },
     {
+      "id": "model-category-rerank",
+      "status": "proposed",
+      "en": "Rerank",
+      "translations": {
+        "zh-CN": "重排",
+        "zh-TW": "重排",
+        "ja": "リランキング",
+        "ko": "재순위화",
+        "es": "Reordenación",
+        "fr": "Reclassement",
+        "de": "Neusortierung",
+        "pt-PT": "Reordenação",
+        "pt-BR": "Reordenação",
+        "zh-Hans-x-lzh": "重排",
+        "zh-Hant-x-lzh": "重排"
+      },
+      "note": "模型分类 rerank，对查询的候选文档重新排序，不进入对话模型清单。"
+    },
+    {
       "id": "model-category-stt",
       "status": "proposed",
       "en": "Speech to Text",
@@ -2206,7 +2265,7 @@
         "ko": "모델 그룹"
       },
       "checkCase": false,
-      "note": "用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一条条「路线」（几个来源加一种选法，可选推理强度，英文 Route；2026-11-11 原「模式」并入路线）；这个词只在模型组语境下这样用，不约束网络路由等其它语境。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。"
+      "note": "用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。"
     },
     {
       "id": "model-id",
@@ -2546,6 +2605,66 @@
       "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
     },
     {
+      "id": "plugin-source-local",
+      "status": "proposed",
+      "en": "Locally installed",
+      "translations": {
+        "zh-CN": "本地安装",
+        "zh-TW": "本機安裝",
+        "ja": "ローカルインストール",
+        "ko": "로컬 설치",
+        "fr": "Installation locale",
+        "es": "Instalación local",
+        "de": "Lokal installiert",
+        "pt-PT": "Instalação local",
+        "pt-BR": "Instalação local",
+        "zh-Hant-x-lzh": "本機裝入",
+        "zh-Hans-x-lzh": "本机装入"
+      },
+      "checkCase": false,
+      "note": "插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。"
+    },
+    {
+      "id": "plugin-source-third-party",
+      "status": "proposed",
+      "en": "Third-party source",
+      "translations": {
+        "zh-CN": "第三方来源",
+        "zh-TW": "第三方來源",
+        "ja": "サードパーティの提供元",
+        "ko": "타사 출처",
+        "fr": "Source tierce",
+        "es": "Fuente de terceros",
+        "de": "Drittanbieterquelle",
+        "pt-PT": "Origem de terceiros",
+        "pt-BR": "Origem de terceiros",
+        "zh-Hant-x-lzh": "他方來源",
+        "zh-Hans-x-lzh": "他方来源"
+      },
+      "checkCase": false,
+      "note": "插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。"
+    },
+    {
+      "id": "plugin-source-unknown",
+      "status": "proposed",
+      "en": "Unknown source",
+      "translations": {
+        "zh-CN": "来源未知",
+        "zh-TW": "來源未知",
+        "ja": "提供元不明",
+        "ko": "알 수 없는 출처",
+        "fr": "Source inconnue",
+        "es": "Fuente desconocida",
+        "de": "Unbekannte Quelle",
+        "pt-PT": "Origem desconhecida",
+        "pt-BR": "Origem desconhecida",
+        "zh-Hant-x-lzh": "來源未詳",
+        "zh-Hans-x-lzh": "来源未详"
+      },
+      "checkCase": false,
+      "note": "插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。"
+    },
+    {
       "id": "pricing-component-audio",
       "status": "proposed",
       "en": "Audio",
@@ -2632,6 +2751,18 @@
         ]
       },
       "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。"
+    },
+    {
+      "id": "privacy-screen",
+      "status": "proposed",
+      "en": "Privacy screen",
+      "translations": {
+        "zh-CN": "隐私屏",
+        "zh-TW": "隱私畫面",
+        "ja": "プライバシースクリーン",
+        "ko": "프라이버시 화면"
+      },
+      "note": "Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。"
     },
     {
       "id": "process",
@@ -3296,6 +3427,12 @@
       },
       "checkCase": false,
       "alsoAllowed": {
+        "fr": [
+          {
+            "text": "En cours d'exécution",
+            "when": "标题或状态标签使用大写首字母；句中仍使用小写首字母。"
+          }
+        ],
         "zh-CN": [
           {
             "text": "正在运行",
@@ -3807,6 +3944,101 @@
           }
         ]
       }
+    },
+    {
+      "id": "task-header",
+      "status": "proposed",
+      "en": "Header",
+      "translations": {
+        "zh-CN": "顶栏",
+        "zh-TW": "頂列",
+        "zh-Hans-x-lzh": "顶列",
+        "zh-Hant-x-lzh": "頂列",
+        "ja": "上部",
+        "ko": "상단",
+        "de": "Kopfzeile",
+        "es": "encabezado",
+        "fr": "en-tête",
+        "pt-BR": "cabeçalho",
+        "pt-PT": "cabeçalho"
+      },
+      "note": "任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。"
+    },
+    {
+      "id": "task-inbox",
+      "status": "proposed",
+      "en": "Inbox",
+      "translations": {
+        "zh-CN": "收件箱",
+        "zh-TW": "收件匣",
+        "ja": "受信トレイ",
+        "ko": "받은 편지함",
+        "fr": "Boîte de réception",
+        "es": "Bandeja de entrada",
+        "de": "Posteingang",
+        "pt-PT": "Caixa de entrada",
+        "pt-BR": "Caixa de entrada",
+        "zh-Hant-x-lzh": "收件匣",
+        "zh-Hans-x-lzh": "收件箱"
+      },
+      "note": "按状态整理任务的列表模式，由任务栏右上角按钮切换；分区为待处理、进行中、稍后处理、已处理。"
+    },
+    {
+      "id": "task-pending",
+      "status": "proposed",
+      "en": "Pending",
+      "translations": {
+        "zh-CN": "待处理",
+        "zh-TW": "待處理",
+        "ja": "未処理",
+        "ko": "처리 대기",
+        "fr": "À traiter",
+        "es": "Pendientes",
+        "de": "Offen",
+        "pt-PT": "Pendentes",
+        "pt-BR": "Pendentes",
+        "zh-Hant-x-lzh": "待處理",
+        "zh-Hans-x-lzh": "待处理"
+      },
+      "note": "收件箱模式的第一个分区：需要用户处理的任务（新结果、等待回复、未归档的普通任务）。"
+    },
+    {
+      "id": "task-processed",
+      "status": "proposed",
+      "en": "Processed",
+      "translations": {
+        "zh-CN": "已处理",
+        "zh-TW": "已處理",
+        "ja": "処理済み",
+        "ko": "처리됨",
+        "fr": "Traitées",
+        "es": "Procesadas",
+        "de": "Erledigt",
+        "pt-PT": "Tratadas",
+        "pt-BR": "Tratadas",
+        "zh-Hant-x-lzh": "已處理",
+        "zh-Hans-x-lzh": "已处理"
+      },
+      "note": "任务列表底部已归档任务分区的名称，沿用归档生命周期。"
+    },
+    {
+      "id": "task-snoozed",
+      "status": "proposed",
+      "en": "Snoozed",
+      "translations": {
+        "zh-CN": "稍后处理",
+        "zh-TW": "稍後處理",
+        "ja": "後で処理",
+        "ko": "나중에 처리",
+        "fr": "Reportées",
+        "es": "Pospuestas",
+        "de": "Zurückgestellt",
+        "pt-PT": "Adiadas",
+        "pt-BR": "Adiadas",
+        "zh-Hant-x-lzh": "待後處理",
+        "zh-Hans-x-lzh": "待后处理"
+      },
+      "note": "任务暂时收起，到期回到当前执行状态对应的分区，不停止 Agent。"
     },
     {
       "id": "task-tag",

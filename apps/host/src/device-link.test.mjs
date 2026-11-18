@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import WebSocket, { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION } from '@cindy/device-link';
+import { AgentNetWorkerSocket } from '@cindy/agent-net';
+import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink } from './device-link.ts';
 import { createHostService } from './service.mjs';
@@ -20,6 +22,8 @@ import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
+import { publishAgentEvent } from './agent/turn-executor.mjs';
+import { redactEventForRenderer } from '../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
 
 const waitFor = async condition => {
   const deadline = Date.now() + 5000;
@@ -133,6 +137,20 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   // Saved error rows must reach the channel desktop and mobile already listen on.
   hub.publish({ type: 'error_persisted', sessionId: 'task', persistId: 'err' });
   await waitFor(() => received.every(frames => frames.some(frame => frame.payload.channel === 'local-db:session:error-persisted')));
+  // An agent event reaches every controller as the Host publishes it for its clients: the desktop's
+  // renderer-boundary projection, without the proxy credential or Host lifecycle fields.
+  const browserEvent = { type: 'tool_use', sessionTurnGeneration: 3, sessionInstanceId: 'fixture-runtime', turnAttemptToken: 'fixture-attempt',
+    data: { toolUseId: 'browse-remote', toolName: 'mcp__cindy_browser__call_tool',
+      input: { name: 'browser', args: { action: 'open', proxyServer: 'http://fixture-user:fixture-pass@proxy.test:8080' } } } };
+  publishAgentEvent(hub, 'task', browserEvent, { inputClientId: 'single' });
+  const carries = frame => JSON.stringify(frame).includes('browse-remote');
+  await waitFor(() => received.every(frames => frames.some(carries)));
+  for (const frames of received) {
+    const pushed = frames.filter(carries);
+    assert.equal(JSON.stringify(pushed).includes('fixture-pass'), false);
+    assert.equal(JSON.stringify(pushed).includes('fixture-attempt'), false);
+    assert.ok(JSON.stringify(pushed).includes(JSON.stringify(redactEventForRenderer(browserEvent).data)));
+  }
   // Desktop connection lifetime must not own the Host/mobile connection. Keep a
   // mobile write admitted while the old desktop disconnects; the replacement
   // reads the same Host without replaying the mobile operation.
@@ -176,4 +194,90 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   release();
   await stopping;
   clients[1].stop(); await inFlight;
+});
+
+// An outage on the main connection must release only its own MCP App views and OAuth callers.
+test('keeps compatibility app callers alive when only the Agent-Net connection drops', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-app-routes-'));
+  configureAppDataDir(profile);
+  configureHostOwner({ userDataDir: profile, ownerId: 'test-app-routes' });
+  const sqlite = new Database(':memory:');
+  for (const table of [sessions, botSessionLinks, botProfiles]) {
+    sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  sqlite.exec("INSERT INTO sessions(id,title,source,status,created_at,updated_at) VALUES ('session','Fixture','desktop','active',1,1)");
+  const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(db, 'test-app-routes');
+
+  class Wire extends EventEmitter {
+    sent = [];
+    bufferedAmount = 0;
+    send(data) {
+      const frame = JSON.parse(data);
+      this.sent.push(frame);
+      if (frame.kind === 'hello') queueMicrotask(() => this.push({ kind: 'hello-ack', payload: {
+        serverProtocolVersion: PROTOCOL_VERSION, deviceId: 'host', userId: 'test-app-routes',
+      } }));
+    }
+    push(frame) { this.emit('message', JSON.stringify({ v: PROTOCOL_VERSION, ...frame })); }
+    close(code = 1000) { this.emit('close', code); }
+    knowsPeer(peer) { return peer === 'desktop'; }
+    supports(peer) { return this.knowsPeer(peer); }
+  }
+  const wire = () => {
+    const socket = new Wire();
+    setImmediate(() => socket.emit('open'));
+    return socket;
+  };
+  const { root, bootstrap } = createPrivateNetwork('Test Host network', generateIdentity('root-test'));
+  const secrets = new Map();
+  const releasedApps = [], releasedAuth = [];
+  let primary, compatibility;
+  t.mock.method(AgentNetWorkerSocket, 'open', async () => (primary = wire()));
+  const host = createHostDeviceLink({
+    profileDir: profile, version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    getToken: async () => 'synthetic-host', canRegister: () => true,
+    invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createWebSocket: () => (compatibility = wire()),
+    releaseAuthCaller: caller => releasedAuth.push(caller),
+    mcpApps: { invoke: async caller => caller, releaseCaller: async caller => { releasedApps.push(caller); } },
+    agentNet: {
+      base: () => 'https://test-agent-net.invalid', subject: () => 'test-app-routes',
+      deviceId: () => 'host', deviceName: () => 'Test Host',
+      readSecret: async key => secrets.get(key) ?? null,
+      writeSecret: async (key, value) => { secrets.set(key, value); },
+      enroll: async (_base, identity) => ({ rootPublicKey: bootstrap.rootPublicKey,
+        certificate: issueCertificate(root, { networkId: 'account:test', subject: 'test-app-routes', identity, role: 'member' }) }),
+      fetch: async () => new Response(null, { status: 404 }),
+      createWebSocket: async () => { throw new Error('No real Agent-Net relay in this test'); },
+      workerFile: () => 'fixture-worker.mjs', coreModule: async () => ({}), log: { info() {}, warn() {} },
+    },
+  });
+  t.after(async () => {
+    await host.stop();
+    clearCurrentDbClient(db); sqlite.close();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+
+  await host.setAgentNetEnabled(true);
+  await host.setEnabled(true);
+  await waitFor(() => host.state().status === 'online' && compatibility?.sent.some(frame => frame.kind === 'hello'));
+  for (const [socket, peer] of [[primary, 'desktop'], [compatibility, 'phone']]) {
+    socket.push({ kind: 'link-open', src: peer, id: 'link-' + peer,
+      payload: { controllerName: peer, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' } });
+    await waitFor(() => socket.sent.some(frame => frame.kind === 'link-accept'));
+    socket.push({ kind: 'invoke', src: peer, id: 'app-' + peer,
+      payload: { channel: 'maker:mcp-apps:v1', args: ['session', {}] } });
+    await waitFor(() => socket.sent.some(frame => frame.kind === 'invoke-result'));
+    assert.deepEqual(socket.sent.find(frame => frame.kind === 'invoke-result')?.payload, { ok: true, result: 'device:' + peer });
+  }
+  primary.close(1006);
+  assert.deepEqual(releasedApps, ['device:desktop']);
+  assert.deepEqual(releasedAuth, ['device:desktop']);
+
+  await host.setEnabled(false);
+  assert.deepEqual(releasedApps, ['device:desktop', 'device:phone']);
+  assert.deepEqual(releasedAuth, ['device:desktop', 'device:phone']);
 });

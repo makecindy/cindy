@@ -155,7 +155,8 @@ export interface AgentInputChatMessage {
   isPendingPersist?: boolean;
   createdAt?: string;
   images?: Array<AgentInputImageRef | AgentInputFallbackImage>;
-  files?: Array<{ name: string; path: string }>;
+  /** `url` is the cindy-media address of Host-stored audio/video, kept so the message pins it. */
+  files?: Array<{ name: string; path: string; url?: string }>;
   quotesEncoded?: boolean;
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
@@ -317,6 +318,17 @@ export interface AgentInputQueuedMessage {
    * 随队列快照持久化,旧快照没有该字段即视为未挂起。
    */
   held?: true;
+  /** Host-owned merged delivery identities survive edits without granting recovery. */
+  mergedDeliveryClientIds?: string[];
+  /** Main-only persistence fence retained by edits; never grants automatic recovery. */
+  orcaReportDeliveryFence?: true;
+  /** Main-authored Worker report receipt. Kept in snapshots, never accepted from input IPC. */
+  orcaReportDelivery?: {
+    workerId: string;
+    recoveryBlocked?: true;
+    /** Host-coalesced reports retain every delivery and relationship identity. */
+    members?: Array<{ clientId: string; workerId: string; senderSessionId: string }>;
+  };
   text: string;
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled
@@ -339,6 +351,12 @@ export interface AgentInputQueuedMessage {
   workingDir: string;
   vendorOptions?: Record<string, unknown>;
   files?: AgentInputSerializedFile[];
+  /**
+   * Main-only reference attachments for the model (a plugin's relayed group history or quoted
+   * messages), sent after `files`. Never shown or persisted with the message, and stripped
+   * from Renderer and device-link input.
+   */
+  contextFiles?: AgentInputSerializedFile[];
   mentions?: AgentInputMention[];
   sessionRefs?: AgentInputSessionRef[];
   trustedSessionReferenceContexts?: AgentInputSessionReferenceContext[];
@@ -1208,7 +1226,7 @@ export function buildMakerUserMessage(
   // 本条消息内 image block 的序号(从 1 起),与模型看到的图片顺序一致。
   let imageBlockCount = 0;
   const regionDescriptions: string[] = [];
-  for (const f of queued.files ?? []) {
+  for (const f of [...(queued.files ?? []), ...(queued.contextFiles ?? [])]) {
     const type = getAgentInputAttachmentBlockType(f.category, f.ext);
     const pathOrigin = type === 'image' && f.pathOrigin === 'desktop-host'
       ? { pathOrigin: f.pathOrigin }

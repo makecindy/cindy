@@ -715,6 +715,8 @@ describe('newSessionCreation pipeline', () => {
     // fresh getSession 失败(makeMaker 默认抛 NOT_FOUND)时权威覆盖没发生,管线
     // 收口前必须主动清 pendingLocalCreation 禁发标(codex P2)。
     expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.pendingLocalCreation).toBe(false);
+    // 没拿到权威行时乐观行仍须标明是普通任务,任务入口才不会在管线收口后切成「正在读取任务」。
+    expect(remoteSessionStore.getSessions().find((s) => s.id === 's2')?.source).toBeNull();
     // 入队成功只解禁,标题预览要等到权威标题离开哨兵才让位。
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [
       sessionFromCreateResult({ sessionId: 's2' }, { ...DRAFT, firstMessage: '' }),

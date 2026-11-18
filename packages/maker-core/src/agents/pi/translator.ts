@@ -1,3 +1,4 @@
+import { piToolMarkupProjection } from './tool-markup-projection.js';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
 /**
@@ -210,9 +211,8 @@ export interface PiTranslateContext {
    */
   pendingAssistantError: PiPendingAssistantError | null;
   /**
-   * A terminal provider error already emitted before agent_settled (currently
-   * exhausted native auto-retry). The later empty settled frame is closure,
-   * not a silent assistant stop that the Host should continue automatically.
+   * A terminal provider error already emitted (currently exhausted native
+   * auto-retry). It must not become a silent stop or a second RPC-loss error.
    */
   terminalAssistantErrorEmitted: boolean;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
@@ -428,6 +428,15 @@ function stopPiGenerationHeartbeat(ctx: PiTranslateContext): void {
   ctx.generationHeartbeatTimer = null;
   ctx.generationHeartbeatAt = 0;
   ctx.generationOpenAt = 0;
+}
+
+/** Release a completed native run before publishing its product terminal. */
+function settlePiRun(ctx: PiTranslateContext): void {
+  ctx.turnSettled = true;
+  ctx.isStreaming = false;
+  ctx.pendingPriceVariants = [];
+  ctx.tokenSpeed.stop(ctx.turnMainOutput + ctx.unreportedEstimatedOutput);
+  stopPiGenerationHeartbeat(ctx);
 }
 
 /** Release translator-owned resources when a Pi session ends outside a normal turn boundary. */
@@ -847,6 +856,24 @@ export function translatePiEvent(
   queue: AsyncQueue<AgentEvent>,
   ctx: PiTranslateContext,
 ): void {
+  const projection = piToolMarkupProjection(ctx);
+  const message = event.message as PiAssistantMessage | undefined;
+  if (event.type === 'auto_retry_start') projection.beginSample(queue);
+  if (event.type === 'message_start' && (!message || message.role === 'assistant')) projection.beginSample(queue);
+  const preserve = message?.stopReason === 'error' || message?.stopReason === 'aborted'
+    || message?.stopReason === 'length' || isCurrentTurnHostAbortRequested(ctx);
+  if (event.type === 'message_end' && message?.role === 'assistant') projection.setMessage(message.content, preserve);
+  const generation = ctx.turnGeneration;
+  translatePiEventInternal(event, projection.queue(queue) as AsyncQueue<AgentEvent>, ctx);
+  if (ctx.turnGeneration !== generation) projection.resetTurn(queue);
+  if (event.type === 'message_end' && message?.role === 'assistant') projection.finish(queue, preserve);
+}
+
+function translatePiEventInternal(
+  event: PiRpcEvent,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: PiTranslateContext,
+): void {
   switch (event.type) {
     case 'agent_start': {
       if (ctx.isStreaming && !ctx.turnSettled && !ctx.terminalAssistantErrorEmitted
@@ -1214,16 +1241,11 @@ export function translatePiEvent(
 
     case 'agent_settled': {
       if (ctx.turnSettled) return;
-      ctx.turnSettled = true;
-      ctx.isStreaming = false;
-      ctx.pendingPriceVariants = [];
       // `turnMainOutput` only covers messages that reported output usage, so the
       // settled total is the reported output plus the estimates parked for the
       // messages without usage. Every message_end re-anchored `lastCalibratedTokens`,
       // so `unreportedEstimatedOutput` never double counts a reported message.
-      const finalTokens = ctx.turnMainOutput + ctx.unreportedEstimatedOutput;
-      ctx.tokenSpeed.stop(finalTokens);
-      stopPiGenerationHeartbeat(ctx);
+      settlePiRun(ctx);
       const calibratedElapsedMs = ctx.tokenSpeed.snapshot()?.elapsedMs;
       const usageDurationMs =
         typeof calibratedElapsedMs === 'number' && Number.isFinite(calibratedElapsedMs) && calibratedElapsedMs > 0
@@ -1374,12 +1396,27 @@ export function translatePiEvent(
     }
 
     case 'auto_retry_end': {
-      if (isCurrentTurnHostAbortRequested(ctx)) {
+      if (ctx.turnSettled) return;
+      if (event.success === true) {
         ctx.pendingAssistantError = null;
         return;
       }
-      if (event.success === true) {
+      // Failed/aborted runs may omit agent_settled. Close this run now, without
+      // inventing a successful native settlement or waiting for another frame.
+      // Keep turnSettled latched until agent_start so a late old settled frame
+      // cannot close the next Host prompt while it is still being prepared.
+      const hostAbortRequested = isCurrentTurnHostAbortRequested(ctx);
+      settlePiRun(ctx);
+      if (hostAbortRequested) {
         ctx.pendingAssistantError = null;
+        clearPiHostAbortRequests(ctx);
+        // Leave no idle tail behind the terminal that admits the next send.
+        pushStatus(queue, ctx, 'Done', false);
+        queue.push({
+          type: 'done',
+          data: { type: 'pi/auto_retry_end', status: 'cancelled', usage: piTurnUsageOf(ctx) },
+          source: 'pi',
+        });
         return;
       }
       const rawFinalError = typeof event.finalError === 'string' && event.finalError.trim()
@@ -1407,6 +1444,18 @@ export function translatePiEvent(
           } : {}),
           isTerminal: true,
           ...(exhaustedReason ? { reason: exhaustedReason } : {}),
+        },
+        source: 'pi',
+      });
+      // Session holds admission after the terminal error until the paired done.
+      // Drain the old idle status first: a listener may send synchronously when
+      // done releases that hold, so no old status may remain behind it.
+      pushStatus(queue, ctx, 'Done', false);
+      queue.push({
+        type: 'done',
+        data: {
+          type: 'pi/auto_retry_end', status: 'failed', result: '',
+          requestUsage: ctx.requestUsageTracker.snapshot(), usage: piTurnUsageOf(ctx),
         },
         source: 'pi',
       });

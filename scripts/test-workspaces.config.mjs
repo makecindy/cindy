@@ -162,6 +162,8 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Host and desktop source contracts: lines the Node Host copies or wires as the desktop does.
+  'src/main/maker-host/__tests__/hostDesktopSourceContracts.guard.test.ts',
   // Build fuses and Node worker entrypoints are a cross-file packaging contract.
   'src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts',
   'src/renderer/components/settings/__tests__/settingsSearchCatalog.guard.test.ts',
@@ -241,6 +243,11 @@ const desktopGuardInclude = [
   // the full device-link singleton would start Electron runtime wiring. Keep it in the explicit
   // guard tier rather than letting its source extraction enter ordinary unit tests.
   'src/main/mcp-apps/__tests__/remoteViews.test.ts',
+  // Executes the picker admission and confirmation branches it extracts from the source text of
+  // register.ts and of sessionRuntimeSelectionApply.ts (handleSetModel moved there). Importing
+  // register.ts would load Electron, so the test reads source text instead; that extraction stays in
+  // the guard tier, as remoteViews above.
+  'src/main/maker-ipc/__tests__/orcaModelSelectionIntent.test.ts',
   'src/renderer/features/cc-agent/sidebar/__tests__/sessionCardReviewRegressions.test.ts',
   'src/renderer/__tests__/orcaModelWindowSelection.test.ts',
   'src/renderer/__tests__/markdownRendererXdtAudio.test.ts',
@@ -395,11 +402,15 @@ export default {
         },
         integration: {
           status: 'manual',
-          reason: 'Local Agent protocol tests use real sockets; Skill archive size regressions perform large encrypted disk transfers.',
+          reason: 'Local Agent protocol tests use real sockets; Skill archive size regressions perform large encrypted disk transfers; the Host Pi package parity runs the bundled Pi binary.',
           execution: 'exclusive',
           coverage: 'allowlist',
           command: vitestBin('run', '--maxWorkers=2'),
-          include: ['src/main/local-agent/__tests__/*.integration.test.ts', 'src/main/bot-import/__tests__/skillArchive.integration.test.ts'],
+          include: [
+            'src/main/local-agent/__tests__/*.integration.test.ts',
+            'src/main/bot-import/__tests__/skillArchive.integration.test.ts',
+            'src/main/maker-host/__tests__/hostPiPackagesParity.integration.test.ts',
+          ],
         },
         'git-integration': {
           status: 'manual',

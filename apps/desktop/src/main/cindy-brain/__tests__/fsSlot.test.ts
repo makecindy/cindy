@@ -177,7 +177,6 @@ describe('GhostFsSlot', () => {
   it('亲选引用可自主读写列删监听，撤权与根替换立即失效', async () => {
     const ghost = makeGhost(false);
     ghost.manifest.agent = { hostTools: ['files'] };
-    ghost.approvedHostToolGroups = ['files'];
     const stat = await fs.promises.stat(workdir, { bigint: true });
     const directory = { ref: 'picked', path: await fs.promises.realpath(workdir), dev: stat.dev.toString(), ino: stat.ino.toString() };
     const { deps } = makeHarness(dataRoot);
@@ -203,11 +202,11 @@ describe('GhostFsSlot', () => {
     expect(fs.existsSync(path.join(outside, 'secret.txt'))).toBe(false);
     expect(await slot.handleFsRequest('other', { root: 'picked', directoryRef: 'picked', op: 'list' })).toMatchObject({ ok: false });
     expect(await call('delete', { path: 'folder/a.txt' })).toMatchObject({ ok: true, existed: true });
-    ghost.approvedHostToolGroups = [];
+    ghost.enabled = false;
     notify({ path: 'folder/b.txt', type: 'create' });
     expect(await call('changes', { watchId: watch.watchId })).toMatchObject({ ok: false });
     expect(release).toHaveBeenCalledOnce();
-    ghost.approvedHostToolGroups = ['files'];
+    ghost.enabled = true;
     await fs.promises.rename(workdir, `${workdir}-previous`);
     await fs.promises.mkdir(workdir);
     expect(await call('write', { path: 'new.txt', content: 'never' })).toMatchObject({ ok: false });
@@ -828,36 +827,41 @@ describe('GhostFsSlot', () => {
     expect(await slot.handleFsRequest(GHOST_ID, request)).toMatchObject({ ok: false });
   });
 
-  it.each(['allow', 'block', 'ask'] as const)('workdir:Auto 删除遵循当前宿主审核的 %s 裁决', async verdict => {
+  it.each(['auto', 'ask', 'bypassPermissions'] as const)('workdir:%s 删除不追加插件侧审核或确认', async permissionMode => {
     await fs.promises.writeFile(path.join(workdir, 'x.md'), 'hello');
-    const reviewAction = vi.fn(async () => ({ verdict }));
+    const reviewAction = vi.fn(async () => ({ verdict: 'block' as const }));
     const { slot, confirmCalls } = makeHarness(dataRoot, {
-      session: { workingDir: workdir, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null, reviewAction },
+      session: { workingDir: workdir, permissionMode, planModeEnabled: false, remoteHostId: null, reviewAction },
+      confirm: async () => ({ confirmed: false }),
     });
     expect(await slot.handleFsRequest(GHOST_ID, {
       type: 'fs-request', root: 'workdir', op: 'delete', path: 'x.md', callId: 'call-1',
-    })).toMatchObject({ ok: verdict !== 'block' });
-    expect(fs.existsSync(path.join(workdir, 'x.md'))).toBe(verdict === 'block');
-    expect(reviewAction).toHaveBeenCalledOnce();
-    expect(confirmCalls).toHaveLength(verdict === 'ask' ? 1 : 0);
+    })).toMatchObject({ ok: true });
+    expect(fs.existsSync(path.join(workdir, 'x.md'))).toBe(false);
+    expect(reviewAction).not.toHaveBeenCalled();
+    expect(confirmCalls).toHaveLength(0);
   });
 
-  it('workdir:删除确认明确标识删除且不沿用写入记忆，确认期间交卷不执行', async () => {
-    await fs.promises.writeFile(path.join(workdir, 'x.md'), 'hello');
+  it('workdir:删除前的实际 IO 期间交卷仍不执行，也不请求二次确认', async () => {
+    const target = path.join(await fs.promises.realpath(workdir), 'x.md');
+    await fs.promises.writeFile(target, 'hello');
     let live = true;
     const { slot, deps } = makeHarness(dataRoot, {
       inFlight: () => live,
       session: { workingDir: workdir, permissionMode: 'ask', planModeEnabled: false, remoteHostId: null },
     });
-    deps.requestWriteConfirm = vi.fn(async (_sessionId, payload) => {
-      expect(payload.lane).toBe('fs_delete');
-      live = false;
-      return { confirmed: true as const };
+    const lstat = fs.promises.lstat;
+    let reads = 0;
+    vi.spyOn(fs.promises, 'lstat').mockImplementation(async (...args) => {
+      const stat = await lstat(...args);
+      if (args[0] === target && ++reads === 2) live = false;
+      return stat;
     });
+    deps.requestWriteConfirm = vi.fn(async () => ({ confirmed: false as const, reason: 'cancelled' as const }));
     expect(await slot.handleFsRequest(GHOST_ID, {
       type: 'fs-request', op: 'delete', root: 'workdir', path: 'x.md', callId: 'call-1',
     })).toMatchObject({ ok: false });
-    expect(deps.requestWriteConfirm).toHaveBeenCalledOnce();
+    expect(deps.requestWriteConfirm).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(workdir, 'x.md'))).toBe(true);
   });
 

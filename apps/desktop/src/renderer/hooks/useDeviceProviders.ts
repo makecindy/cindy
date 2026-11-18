@@ -450,6 +450,19 @@ export function getCachedDeviceProviders(deviceId: string): DeviceProvidersPaylo
   return expiry.valid(deviceId) ? cache.get(deviceId) ?? null : null;
 }
 
+/** Mounted consumers (including empty/error states) and reads still in flight. */
+export function hasDeviceProvidersInterest(deviceId: string): boolean {
+  return getInterestedDeviceProviderTargets(deviceId).length > 0;
+}
+
+/** Include task-host routes that eviction of this source would also invalidate. */
+export function getInterestedDeviceProviderTargets(deviceId: string): string[] {
+  return [...new Set([...inflight.keys(), ...listeners.keys()])].filter(key => {
+    const route = parseModelCatalogKey(key);
+    return key === deviceId || route?.taskDeviceId === deviceId || route?.agentDeviceId === deviceId;
+  });
+}
+
 /** Only subscription shares opt into freshness polling; custom API catalogs keep their existing lifetime. */
 export function hasSubscriptionShareCatalog(deviceId: string): boolean {
   return subscriptionFetchedAt.has(deviceId);
@@ -461,7 +474,11 @@ export function isSubscriptionShareCatalogStale(deviceId: string, now = Date.now
 }
 
 export function isDeviceProvidersGenerationCurrent(deviceId: string, generation: number): boolean {
-  return (deviceGen.get(deviceId) ?? 0) === generation;
+  return getDeviceProvidersGeneration(deviceId) === generation;
+}
+
+export function getDeviceProvidersGeneration(deviceId: string): number {
+  return deviceGen.get(deviceId) ?? 0;
 }
 
 export function evictDeviceProviders(

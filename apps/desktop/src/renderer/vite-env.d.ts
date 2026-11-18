@@ -127,6 +127,7 @@ interface DeviceLinkDeviceView {
   selfName?: string | null;
   deviceInfo?: DeviceLinkDeviceInfo | null;
   platform: string | null;
+  app?: string;
   appVersion: string | null;
   lastSeenAt: string | null;
   online: boolean;
@@ -139,7 +140,7 @@ interface DeviceLinkDeviceView {
 
 /** 设备互联:relay 连接问题(镜像 @cindy/device-link 的 DeviceLinkConnectionIssue) */
 interface DeviceLinkConnectionIssuePayload {
-  kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
+  kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable' | 'agent-net-relay-down';
   closeCode?: number;
   detail?: string;
   at: number;
@@ -153,6 +154,7 @@ interface DeviceLinkPresenceSnapshot {
   selfName?: string | null;
   deviceInfo?: DeviceLinkDeviceInfo | null;
   platform: string;
+  app?: string;
   appVersion: string;
   lastSeenAt: number;
   remoteControlEnabled: boolean;
@@ -175,6 +177,8 @@ interface DeviceLinkPeerLinkView {
 }
 interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
+  agentNetRoutes?: import('../shared/deviceLinkIpc').DeviceLinkAgentNetPeerRouteView[];
+  relayProtocol?: 'agent-net' | 'device-link';
   /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
   relayRttMs: number | null;
 }
@@ -429,6 +433,8 @@ interface ComputerDriverUpdateProgress {
   phase: 'downloading' | 'installing' | 'done';
   downloadedBytes: number | null;
   totalBytes: number | null;
+  /** Standard progress (speed, time left) for the shared DownloadMeter. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── CCD Progress ── */
@@ -450,6 +456,8 @@ interface BinaryDownloadProgressPayload {
   reset?: boolean;
   /** 失败/调试文案使用，标识当前推进度的 vendor。 */
   vendor?: 'claude' | 'codex' | 'pi';
+  /** Standard display progress (phase, retry reason, speed, time left); `progress` stays the bar. */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── App Update Progress ── */
@@ -463,6 +471,8 @@ interface AppUpdateProgressPayload {
   failed?: boolean;
   /** DownloadError code (e.g. 'NETWORK', 'CHECKSUM', 'HTTP_4XX'). */
   error?: string;
+  /** Standard display progress (phase, retry reason, speed, time left). */
+  download?: import('../shared/downloadProgress').DownloadProgress;
 }
 
 /* ── Auth types ── */
@@ -1358,6 +1368,7 @@ interface ElectronAPI {
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
+    commit: (decisionId: string) => Promise<boolean>;
     get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
@@ -1472,7 +1483,7 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string, capability?: 'observe' | 'companions' | `host-tools:${import('@cindy/plugin-protocol').GhostHostToolGroup}` | `event:${import('../shared/ghost').GhostTaskEventTopic}`) => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
     listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId) => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
     runtimePlugins: (sessionId: string, settings?: import('../shared/pluginRuntime').RuntimePluginSettings) => Promise<import('../shared/pluginRuntime').RuntimePluginSettings>;
@@ -1574,6 +1585,16 @@ interface ElectronAPI {
     getCard: (callId: string) => Promise<{
       card: { callId: string; ghostId: string; html: string; height: number; v: number } | null;
     }>;
+    /** A card of a task on another computer, sanitized again on this one (mail cards are rebuilt
+     *  here from their data). Null: no card, an older host or a legacy mail card; failed: the read
+     *  itself failed. */
+    getRemoteCard: (deviceId: string, sessionId: string, callId: string) => Promise<{
+      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean; mailUpload?: boolean } | null;
+      unsupported?: true;
+      failed?: true;
+    }>;
+    /** Pick a file here and upload it for a remote task's mail card. attachment null: cancelled. */
+    uploadRemoteMailAttachment: (deviceId: string) => Promise<{ ok: boolean; attachment: { url: string; name: string } | null }>;
     /** 权威实测高回填:GhostToolCard 量出内容真实高度后写回卡片库,历史
      *  回放据此零动画首帧贴合(行不存在主机静默跳过)。 */
     reportCardHeight: (callId: string, height: number) => Promise<{ ok: true }>;
@@ -1736,6 +1757,8 @@ interface ElectronAPI {
     clearUsage: (subjectId: string | null) => Promise<void>;
     readme: (id: string, locale?: string) => Promise<import('@cindy/plugin-protocol').GhostReadmeContent | null>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    reusableAccounts: (id: string) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseGroup[]>;
+    reuseAccount: (id: string, request: import('../shared/pluginAccountReuse').GhostAccountReuseAction) => Promise<import('../shared/pluginAccountReuse').GhostAccountReuseResult>;
     handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
     handoffFolder: (id: string) => Promise<string | null>;
     handoffDelete: (id: string, ref: string) => Promise<{ existed: boolean }>;
@@ -1854,8 +1877,8 @@ interface ElectronAPI {
      * status 与 getSystemPermissions 的各项同为 string 形状（granted / denied / …）。
      */
     requestInputMonitoringPermission: () => Promise<{ ok: true; status: string }>;
-    muteSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
-    restoreSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
+    muteSystemAudio: (payload?: { recordingId?: string }) => Promise<{ ok: true } | { ok: false; error: string }>;
+    restoreSystemAudio: (payload?: { recordingId?: string }) => Promise<{ ok: true } | { ok: false; error: string }>;
     testConnection: () => Promise<VoiceInputConnectionTestResult>;
     getReadiness: () => Promise<{
       ok: boolean;
@@ -1913,6 +1936,7 @@ interface ElectronAPI {
     reloadModelSelection: () => Promise<VoiceInputModelSelectionResultData>;
     openSettings: (tab: 'voice-input' | 'providers') => Promise<{ ok: true }>;
     start: (params?: {
+      recordingId?: string;
       sourceLanguage?: string;
       refinementEnabled?: boolean;
       refinementCacheScope?: string;
@@ -2823,6 +2847,7 @@ interface ElectronAPI {
         type: 'file' | 'directory';
         size: number;
         mtimeMs: number;
+        symlinkTarget?: string;
       }>
     >;
     /** 项目级文件名扁平列表(ripgrep --files honor .gitignore);失败返回空数组
@@ -2850,6 +2875,7 @@ interface ElectronAPI {
             size: number;
             mtimeMs: number;
             truncated: boolean;
+            resolvedPath?: string;
           };
         }
       /** OVERSIZE = 远程文本超传输上限(device-link 帧限预判),stat 供"文件过大"占位卡。 */
@@ -2865,7 +2891,8 @@ interface ElectronAPI {
       workdir: string;
       relPath: string;
       content: string;
-    }) => Promise<{ ok: true; size: number; mtimeMs: number } | { ok: false; message: string }>;
+      expectedResolvedPath?: string;
+    }) => Promise<{ ok: true; size: number; mtimeMs: number; resolvedPath?: string } | { ok: false; message: string }>;
     createFile: (params: {
       remoteHostId?: string | null;
       workdir: string;
@@ -3191,6 +3218,8 @@ interface ElectronAPI {
       surfaceId: string;
       bounds: import('../shared/rsbNativePopup').RsbNativePopupBounds;
       visible: boolean;
+      /** One-shot restoration after the native view has been shown. */
+      focus?: boolean;
     }) => Promise<{ ok: true }>;
     command: (
       input: { surfaceId: string } & import('../shared/rsbNativePopup').RsbNativePopupCommand,
@@ -3243,6 +3272,8 @@ interface ElectronAPI {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
+        | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ) => () => void;
@@ -3267,6 +3298,8 @@ interface ElectronAPI {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
+    | { type: 'gift-card'; code: string }
+    | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
   >;
@@ -4027,6 +4060,8 @@ interface ElectronAPI {
           | 'done'
           | 'failed';
         name: string;
+        /** Standard progress while downloading (shared/downloadProgress.ts). */
+        download?: import('../shared/downloadProgress').DownloadProgress;
         version?: string;
         absolutePath?: string;
         errorCode?: string;
@@ -4346,7 +4381,9 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }>;
     listDevices: () => Promise<{ devices: DeviceLinkDeviceView[]; stale?: boolean;
-      displayBudget?: { remainingMs: number } }>;
+      /** Only one hybrid discovery leg answered: absence is not an authoritative removal. */
+      partial?: boolean;
+      displayBudget?: { remainingMs: number }; retryAtMs?: number }>;
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
     getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
     /** 对端链路拓扑变化,payload 为全量快照 */
@@ -4638,6 +4675,9 @@ interface ElectronAPI {
   worktreeSuggestName: (req: {
     baseRepo: string;
   }) => Promise<import('@/lib/worktree.types').SuggestNameResp>;
+  /** Opt-in model-written name for a new task's worktree; `name: null` keeps the generated one. */
+  worktreeGenerateName: (req: { taskText: string }) => Promise<{ name: string | null }>;
+  worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest) => Promise<import('../shared/worktreeCheckout').CheckoutReply>;
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncStatus>;
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest) => Promise<import('../shared/worktreeBranchSync').BranchSyncReply>;
   worktreeListBranches: (req: {
@@ -4676,8 +4716,9 @@ interface ElectronAPI {
       provider: 'telegram' | 'x' | 'feishu',
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
-    setWorkspaces: (
-      workspaces: Record<string, string>,
+    /** 把一个本机目录加进项目列表(侧栏与 IM 机器人共用)。 */
+    addProject: (
+      directory: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     /** Official X assignment, compared with the caller's last observed value. */
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>
@@ -4721,22 +4762,16 @@ interface ElectronAPI {
       action: import('../shared/hookControlIpc').ProviderOpenAction,
       scopeId?: string,
     ) => Promise<{ ok: true }>;
-    getWorkspacePrefs: () => Promise<{
-      prefs: import('../shared/hookControlIpc').HookPrefsView;
+    getSharedProjectPrefs: () => Promise<{
+      prefs: import('../shared/hookControlIpc').SharedProjectPrefsView;
     }>;
-    setWorkspacePrefs: (
+    setSharedProjectPrefs: (
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
-      teamId?: string | null,
-    ) => Promise<{ prefs: import('../shared/hookControlIpc').HookPrefsView }>;
-    getProviderWorkspacePrefs: (provider: 'telegram' | 'x' | 'feishu') => Promise<{
-      prefs: import('../shared/hookControlIpc').ProviderPrefsView;
-    }>;
-    setProviderWorkspacePrefs: (
-      provider: 'telegram' | 'x' | 'feishu',
-      workspace: string,
-      patch: import('../shared/hookControlIpc').HookPrefsPatch,
-    ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
+    ) => Promise<{ prefs: import('../shared/hookControlIpc').SharedProjectPrefsView }>;
+    onSharedProjectPrefsChanged: (
+      cb: (view: import('../shared/hookControlIpc').SharedProjectPrefsView) => void,
+    ) => () => void;
     getTelegramBehavior: (bindingId: string) => Promise<{
       behavior: import('../shared/hookControlIpc').TelegramHookBehaviorState;
     }>;
@@ -4761,7 +4796,7 @@ interface ElectronAPI {
     }>;
     setWorkspaceProviderSource: (payload: {
       agentDeviceId?: string | null;
-      channel: 'slack' | 'telegram' | 'x' | 'feishu';
+      channel: 'slack' | 'telegram' | 'x' | 'feishu' | 'shared';
       teamId: string | null;
       workspace: string;
       providerId: string | null;
@@ -4772,12 +4807,6 @@ interface ElectronAPI {
       listener: (
         entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[],
       ) => void,
-    ) => () => void;
-    onPrefsChanged: (
-      cb: (view: import('../shared/hookControlIpc').HookPrefsView) => void,
-    ) => () => void;
-    onProviderPrefsChanged: (
-      cb: (view: import('../shared/hookControlIpc').ProviderPrefsView) => void,
     ) => () => void;
     onTelegramBehaviorChanged: (
       cb: (view: import('../shared/hookControlIpc').TelegramHookBehaviorState) => void,
@@ -4914,6 +4943,7 @@ interface ElectronAPI {
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 
+  taskManagement: import('../shared/taskManagement').TaskManagementApi;
   sidebarSettings: {
     claimLegacyRendererOwner: () => import('../shared/sidebarSettings').SidebarLegacyRendererOwnerClaim;
     loadSnapshot: () => import('../shared/sidebarSettings').SidebarSettingsSnapshot;
@@ -5162,6 +5192,7 @@ interface ElectronAPI {
           pinnedAt?: string | null;
           /** 任务级「消息免打扰」：不发系统通知 / 灵动岛 / 手机推送 / IM 消息。 */
           notificationsMuted?: boolean;
+    snoozedUntil?: string | null;
           status?: import('@/lib/ccAgent.types').SessionStatus;
           orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
           /** 附加只读引用目录覆盖列表 (绝对路径)。 */
@@ -5386,6 +5417,10 @@ interface ElectronAPI {
       ) => Promise<import('@cindy/maker-shared').TaskTagResult>;
     };
     projectAliases: {
+      autoIcon: (input: { projectKey: string }) => Promise<unknown>;
+      iconImage: (input: { projectKey: string }) => Promise<string | null>;
+      snapshot: () => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
+      updateInfo: (input: {projectKey: string; field: 'name' | 'icon' | 'profile'; value: string | null | {name?: string; icon?: string | null}; dataOwnerId: string | null; ownerGeneration: number}) => Promise<import('@cindy/maker-shared/project-alias-sync').HostProjectAliasesSnapshot>;
       list: () => Promise<import('../shared/projectAliases').ProjectAlias[]>;
       set: (input: {
         projectKey: string;
@@ -5857,6 +5892,7 @@ interface ElectronAPI {
       ownerGeneration: number;
       providers: import('@cindy/model-providers').ProviderView[];
       providerOrder: string[];
+      disabledProviders?: Record<string, boolean>;
     }>;
     /** 复用各内置供应商既有真源刷新模型清单。 */
     refreshBuiltinProviderModels: (
@@ -6148,7 +6184,7 @@ interface ElectronAPI {
     setModelDisable: (
       input:
         | { kind: 'model'; providerId: string; modelIds: string[]; disabled: boolean }
-        | { kind: 'provider'; providerId: string; disabled: boolean }
+        | { kind: 'provider'; providerId: string; disabled: boolean; remoteDeviceId?: string }
         // reset = 恢复默认:删除该供应商整组停用 override(含指向已下架模型的陈旧条目)。
         | { kind: 'reset'; providerId: string },
     ) => Promise<{ ok: true }>;
@@ -6614,7 +6650,7 @@ interface ElectronAPI {
       retryImageDelivery: (sessionId: string, imageId: string) => Promise<void>;
       retryLastError: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: { expectedClearBoundaryMs?: number | null; expectedQueueHeadClientId?: string; expectedSwitchRevision?: number },
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
       clearError: (
         sessionId: string,
@@ -6771,6 +6807,7 @@ interface ElectronAPI {
       engineReady: boolean;
       deferred?: boolean;
       sameEngineRevision?: number;
+      pendingSwitchRevision?: number;
       sameEngineSuperseded?: boolean;
     }>;
     /**
@@ -6966,7 +7003,13 @@ interface ElectronAPI {
       effective: 'immediate';
     }>;
 
-    /** Claude Code 自动上下文压缩触发百分比。仅对新建会话生效 */
+    /** Codex 压缩方式；null 恢复默认，下次启动/恢复生效。 */
+    codexCompactionGet: () => Promise<{ enabled: boolean; isCustomized: boolean }>;
+    codexCompactionSet: (
+      enabled: boolean | null,
+      owner: { dataOwnerId: string | null; ownerGeneration: number },
+    ) => Promise<{ enabled: boolean; isCustomized: boolean }>;
+    /** Claude Code 自动上下文压缩触发百分比。 */
     compactionGetPct: () => Promise<number>;
     compactionGetState: () => Promise<{ pct: number; isCustomized: boolean; defaultPct: number }>;
     /** 写入后返回 main 端 clamp 后的最终百分比 */

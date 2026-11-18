@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   GHOST_COMPOSER_LIST_CHANNEL,
   ghostComposerListSchema,
+  MAX_COMPOSER_KNOWN_ICONS,
   type GhostComposerEntry,
+  type GhostComposerListOptions,
 } from '../../shared/ghostComposer';
 import {
   getDataOwnerGeneration,
@@ -18,8 +20,50 @@ import {
 const EMPTY: GhostComposerEntry[] = [];
 
 /**
- * The remote catalog carries plugin icons and reaches ~1 MB, and every remote composer
- * mount used to read it again (twice: the mount and its first "connected" epoch).
+ * The remote catalog used to carry every plugin icon inline (~1 MB) on every read.
+ * New hosts tag each icon (`iconRef`) and skip the icons this controller reports
+ * holding, so after the first read a catalog is a few KB; old hosts ignore the
+ * request option and keep sending icons inline, which are used as before.
+ * Icons are content-tagged, so a cached copy never goes stale.
+ */
+const MAX_CACHED_ICONS = 256;
+const iconsByRef = new Map<string, string>();
+/** Icon tags each host's latest catalog referenced; reported back as already held. */
+const iconRefsByDevice = new Map<string, string[]>();
+
+function rememberIcon(ref: string, dataUrl: string): void {
+  iconsByRef.delete(ref);
+  iconsByRef.set(ref, dataUrl);
+  while (iconsByRef.size > MAX_CACHED_ICONS) iconsByRef.delete(iconsByRef.keys().next().value!);
+}
+
+function catalogOptions(deviceId: string): GhostComposerListOptions {
+  const knownIcons = (iconRefsByDevice.get(deviceId) ?? [])
+    .filter((ref) => iconsByRef.has(ref))
+    .slice(0, MAX_COMPOSER_KNOWN_ICONS);
+  return { iconRefs: 1, ...(knownIcons.length ? { knownIcons } : {}) };
+}
+
+/** Fills omitted icons from the cache; an icon the host could not fit stays generic. */
+function resolveCatalogIcons(deviceId: string, ghosts: GhostComposerEntry[]): GhostComposerEntry[] {
+  const refs: string[] = [];
+  const resolved = ghosts.map((entry) => {
+    if (!entry.iconRef) return entry;
+    refs.push(entry.iconRef);
+    if (entry.iconDataUrl) {
+      rememberIcon(entry.iconRef, entry.iconDataUrl);
+      return entry;
+    }
+    const cached = iconsByRef.get(entry.iconRef);
+    return cached ? { ...entry, iconDataUrl: cached } : entry;
+  });
+  iconRefsByDevice.set(deviceId, [...new Set(refs)]);
+  return resolved;
+}
+
+/**
+ * Every remote composer mount used to read the catalog again (twice: the mount and
+ * its first "connected" epoch).
  * Composers share one copy per device and directory. Mounting reuses a copy younger
  * than CATALOG_REUSE_MS; opening the menu or reconnecting re-reads one older than
  * CATALOG_SOFT_REFRESH_MS; a host plugin change ("plugins" push) or a retry always
@@ -68,18 +112,18 @@ function loadCatalog(key: string, deviceId: string, workingDir: string | null | 
   if (pending?.generation === generation) return pending.request;
   const capturedOwner = getDataOwnerGeneration();
   const request = window.electronAPI.deviceLink
-    .invoke(deviceId, GHOST_COMPOSER_LIST_CHANNEL, workingDir ? [workingDir] : [])
+    .invoke(deviceId, GHOST_COMPOSER_LIST_CHANNEL, [workingDir ?? '', catalogOptions(deviceId)])
     .then((raw) => {
       const result = ghostComposerListSchema.safeParse(raw);
       if (!result.success) throw new Error('Invalid remote plugin catalog');
       // A plugin change after this read started: a newer read replaces it.
       if ((deviceGenerations.get(deviceId) ?? 0) !== generation) throw STALE_CATALOG;
-      if (isDataOwnerGenerationCurrent(capturedOwner)) {
-        catalogs.delete(key);
-        catalogs.set(key, { ghosts: result.data, at: Date.now() });
-        while (catalogs.size > MAX_CACHED_CATALOGS) catalogs.delete(catalogs.keys().next().value!);
-      }
-      return result.data;
+      if (!isDataOwnerGenerationCurrent(capturedOwner)) return result.data;
+      const ghosts = resolveCatalogIcons(deviceId, result.data);
+      catalogs.delete(key);
+      catalogs.set(key, { ghosts, at: Date.now() });
+      while (catalogs.size > MAX_CACHED_CATALOGS) catalogs.delete(catalogs.keys().next().value!);
+      return ghosts;
     })
     .finally(() => {
       if (inflight.get(key)?.request === request) inflight.delete(key);

@@ -35,6 +35,36 @@ export async function fetchHostProjectOrder(
   }
 }
 
+/** One completion covers the existing bounded load, including retry backoff. */
+export function startHostProjectOrderLoad(loadAttempt: () => Promise<boolean>): {
+  completion: Promise<void>;
+  cancel: () => void;
+} {
+  let cancelled = false;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let releaseBackoff: (() => void) | undefined;
+  const completion = (async () => {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      if (cancelled) return;
+      const retry = await loadAttempt();
+      if (cancelled || !retry || attempt === 3) return;
+      await new Promise<void>((resolve) => {
+        releaseBackoff = resolve;
+        retryTimer = setTimeout(resolve, 2000);
+      });
+      releaseBackoff = undefined;
+    }
+  })();
+  return {
+    completion,
+    cancel: () => {
+      cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+      releaseBackoff?.();
+    },
+  };
+}
+
 type RemoteProjectOrderListener = (deviceId: string, snapshot: SyncedProjectOrderSnapshot) => void;
 const remoteProjectOrderListeners = new Set<RemoteProjectOrderListener>();
 const remoteProjectOrderStamps = new Map<string, SyncedProjectOrderOwnerStamp>();

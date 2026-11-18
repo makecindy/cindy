@@ -74,6 +74,7 @@ import type {
   SendOptions,
   StartSessionOptions,
   TurnContinuationState,
+  TurnContinuationCancellationReason,
 } from './agents/base-agent.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
@@ -1614,6 +1615,23 @@ export class Session {
   }
 
   /**
+   * Provider work that outlives a turn but is not listed as a background task
+   * (see AgentSessionHandle.hasLiveBackgroundWork). Closed runtimes have none.
+   * A throwing probe counts as busy: reclamation must never guess "idle".
+   */
+  async hasLiveBackgroundWork(): Promise<boolean> {
+    if (this.status === 'closed' || this.status === 'error') return false;
+    const probe = this.handle.hasLiveBackgroundWork;
+    if (!probe) return false;
+    try {
+      return await probe.call(this.handle);
+    } catch (error) {
+      this.logger.warn('hasLiveBackgroundWork probe failed; treating runtime as busy', { error: String(error) });
+      return true;
+    }
+  }
+
+  /**
    * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
    * 会话已关闭 / agent 不支持 → 0(此时不会再有 wake turn,0 即事实)。
    */
@@ -1636,9 +1654,15 @@ export class Session {
 
   /** Subscribe to provider-owned continuation lifecycle transitions. */
   onTurnContinuationChange(
-    listener: (continuationId: number, state: TurnContinuationState) => void,
+    listener: (continuationId: number, state: TurnContinuationState, reason?: TurnContinuationCancellationReason) => void,
   ): () => void {
     return this.handle.onTurnContinuationChange?.(listener) ?? (() => undefined);
+  }
+
+  /** Read only the cause belonging to this exact retained continuation claim. */
+  getTurnContinuationCancellationReason(continuationId: number): TurnContinuationCancellationReason | undefined {
+    if (this.status === 'closed' || this.status === 'error') return undefined;
+    return this.handle.getTurnContinuationCancellationReason?.(continuationId);
   }
 
   /** True once teardown has started, including an unconfirmed failed close. */
@@ -1741,17 +1765,33 @@ export class Session {
 
   /**
    * Close only when no send reservation, agent turn, or host-initiated exclusive
-   * RPC operation (manual compact / rewind / model switch) is active. The check
+   * RPC operation (manual compact / rewind / model switch), tracked background
+   * task or wake continuation is active. Provider-only asynchronous probes must
+   * run in the caller before this final synchronous check. The check
    * and close reservation are synchronous, so a concurrent send either wins
    * first and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(): Promise<boolean> {
+    if (!this.isIdleForRuntimeRecycling()) return Promise.resolve(false);
+    return this.close().then(() => true);
+  }
+
+  /** Shared synchronous predicate for automatic idle and resource-drift teardown. */
+  private isIdleForRuntimeRecycling(): boolean {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasUnsettledTurn()
       || this.retirementContinuationGeneration === this.turnGeneration
       || this.hasPendingHostOperation()) {
-      return Promise.resolve(false);
+      return false;
     }
-    return this.close().then(() => true);
+    try {
+      if (this.listBackgroundTasks().length > 0 || this.countPendingWakeContinuations() > 0) {
+        return false;
+      }
+    } catch {
+      // A missing snapshot cannot establish that destructive teardown is safe.
+      return false;
+    }
+    return true;
   }
 
   private async performClose(teardown: AgentSessionTeardownOptions): Promise<void> {
@@ -1901,6 +1941,12 @@ export class Session {
   async readMcpServerTools(serverName: string): Promise<AgentMcpServerToolsReport | null> {
     this.ensureActive();
     return await this.handle.readMcpServerTools?.(serverName) ?? null;
+  }
+
+  async callNativeToolCatalog(method: string, args: unknown[]): Promise<unknown> {
+    this.ensureActive();
+    if (!this.handle.callNativeToolCatalog) throw new Error('UNSUPPORTED_CAPABILITY');
+    return this.handle.callNativeToolCatalog(method, args);
   }
 
   /**
@@ -2395,16 +2441,12 @@ export class Session {
    * 认识的刷新原因 —— 直接 Session.close 绕过 Maker 的 closeReasons 登记,IM
    * runner 会按 unexpected 清掉排队中的回合、丢失已接受的派发。空闲口径与
    * closeIfIdle 一致:turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
-   * rewind 等宿主排他操作进行中绝不回收。回收后由既有 lazy bootstrap 在下次
+   * rewind 等宿主排他操作、后台任务及待续报 continuation 存续时绝不回收。
+   * 回收后由既有 lazy bootstrap 在下次
    * 发送时重扫项目资源、重算 argv。
    */
   hasRecyclableProjectResourceDrift(): boolean {
-    if (this.status !== 'active' || this.closePromise) return false;
-    if (this.isTurnRunning() || this.hasUnsettledTurn()
-      || this.retirementContinuationGeneration === this.turnGeneration
-      || this.hasPendingHostOperation()) {
-      return false;
-    }
+    if (!this.isIdleForRuntimeRecycling()) return false;
     return this.handle.hasProjectResourceDrift?.() === true;
   }
 
@@ -3289,7 +3331,9 @@ export class Session {
       return;
     }
     if (event.type !== 'tool_result_full' || typeof data.fullText !== 'string') return;
-    const verdict = control.toolLoopMonitor.onToolResult(data.toolUseId, data.fullText, data.isError === true);
+    const verdict = control.toolLoopMonitor.onToolResult(
+      data.toolUseId, data.outputOmitted === 'oversized' ? null : data.fullText, data.isError === true,
+    );
     if (verdict.kind !== 'hard') return;
     // Both translators enqueue full text before its summary. Let listeners
     // consume both projections before terminal cleanup clears their pairing.

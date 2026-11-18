@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 // 测试价值：通过真实入口保护「远程任务的设备（模拟器）在电脑上由同一个插件自己的任务页显示」——只认
 // 那台电脑绑定到当前任务、正在运行的设备；本机装着同一个插件时设备出现就自动打开它的任务页一次（之后
-// 不反复弹出），入口可再次打开；本机没装、没开启或版本太旧时不打开任何页面，而是提示并带用户去安装 /
-// 开启 / 更新；旧版电脑（不支持设备画面）不发列表请求、不出现入口。此前设备画面由宿主自己画，没有
-// 「需要插件」这条路径。最小输入：一台在线可远控的电脑、一份设备列表与本机已装插件；unit tier，单独约 3 秒。
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+// 不反复弹出），入口可再次打开；本机没装、没开启或版本太旧时不打开任何页面，而是在输入框上方留一条
+// 提示（2026-11-17 起不再用顶部几秒即逝的提示），点一下就在原地安装 / 开启 / 更新并打开设备，只装同一
+// 来源的那一个市场条目；旧版电脑（不支持设备画面）不发列表请求、不出现入口。最小输入：一台在线可远控
+// 的电脑、一份设备列表与本机已装插件；unit tier，单独约 3 秒。
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import i18n from '@/i18n';
@@ -13,11 +14,11 @@ import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDev
 import {
   resetAutoOpenedTaskLiveScreens,
   TaskLiveScreenButtons,
+  TaskLiveScreenNotices,
   taskLiveScreenEntries,
   useAutoOpenTaskLiveScreens,
 } from '../TaskLiveScreenButtons';
 import { useTaskLiveScreens } from '../useTaskLiveScreens';
-import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 
 const fixture = vi.hoisted(() => ({ devices: [] as DeviceLinkDeviceView[] }));
@@ -30,10 +31,13 @@ vi.mock('@/features/right-sidebar/lib/openPluginTaskTab', () => ({ openPluginTas
 const installed = vi.hoisted(() => ({ ghosts: [] as unknown[] }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installed.ghosts }));
 const lookup = vi.hoisted(() => vi.fn());
+const detail = vi.hoisted(() => vi.fn());
+const install = vi.hoisted(() => vi.fn());
+const setEnabled = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
-const notices = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/toast', () => ({ toast: { info: notices } }));
+const toasts = vi.hoisted(() => ({ info: vi.fn(), success: vi.fn(), error: vi.fn() }));
+vi.mock('@/lib/toast', () => ({ toast: toasts }));
 
 const invoke = vi.fn();
 const listed = (id: string, name: string, taskIds: string[], state = 'running') => ({
@@ -52,6 +56,7 @@ const plugin = (patch: { enabled?: boolean; remote?: boolean } = {}) => ({
   namespace: null,
   namespaceState: 'confirmed',
   enabled: patch.enabled !== false,
+  approval: { state: 'approved', revision: 'r' },
   manifest: {
     id: 'cindy-simulator',
     name: 'Device Simulator',
@@ -62,11 +67,13 @@ function Entries() {
   const screens = useTaskLiveScreens('remote', 'task-1');
   const entries = useAutoOpenTaskLiveScreens('task-1', screens);
   return (
-    <ConfirmDialogProvider>
+    <>
       <TaskLiveScreenButtons sessionId="task-1" entries={entries} />
-    </ConfirmDialogProvider>
+      <TaskLiveScreenNotices sessionId="task-1" />
+    </>
   );
 }
+const notice = () => document.querySelector<HTMLElement>('[data-banner-kind="task-live-screen-plugin"]');
 const settle = () => act(async () => void (await Promise.resolve()));
 
 beforeEach(async () => {
@@ -89,12 +96,27 @@ beforeEach(async () => {
   invoke.mockReset();
   openTab.mockClear();
   navigate.mockClear();
-  notices.mockClear();
+  for (const fn of Object.values(toasts)) fn.mockClear();
   lookup.mockReset();
   lookup.mockResolvedValue({ items: [{ pluginId: 'cindy-simulator', ghostId: 'cindy-simulator', namespace: null, installState: 'not-installed' }] });
+  detail.mockReset();
+  detail.mockImplementation(async (pluginId: string) => ({
+    ...(await lookup.mock.results.at(-1)?.value)?.items.find((item: { pluginId: string }) => item.pluginId === pluginId),
+    releaseId: `release-${pluginId}`,
+    manifest: { id: 'cindy-simulator' },
+  }));
+  install.mockReset();
+  install.mockResolvedValue({ ghost: plugin() });
+  setEnabled.mockClear();
   installed.ghosts = [plugin()];
   resetAutoOpenedTaskLiveScreens();
-  Object.assign(window, { electronAPI: { deviceLink: { invoke }, pluginMarket: { lookup } } });
+  Object.assign(window, {
+    electronAPI: {
+      deviceLink: { invoke },
+      pluginMarket: { lookup, detail, install },
+      ghosts: { listSync: () => ({ ghosts: installed.ghosts }), setEnabled },
+    },
+  });
   vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   await i18n.changeLanguage('en');
 });
@@ -143,7 +165,7 @@ it('opens the plugin’s own task page when a device of this task appears, once,
     expect(instance).toBe('_root__cindy-simulator');
     // The device appeared: the plugin's task page opens by itself, without claiming a user gesture.
     expect(openTab).toHaveBeenCalledExactlyOnceWith('task-1', instance, { userInitiated: false });
-    expect(notices).not.toHaveBeenCalled();
+    expect(notice()).toBeNull();
     const buttons = screen.getAllByRole('button');
     expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
       'Device Simulator · iPhone Air',
@@ -178,7 +200,7 @@ it('shows no entry and asks for no list on a computer without device screens', a
   expect(openTab).not.toHaveBeenCalled();
 });
 
-it('asks for the plugin instead of opening anything when this computer cannot show the device', async () => {
+it('asks above the composer and sets the plugin up right here when this computer cannot show the device', async () => {
   invoke.mockImplementation(
     async (_device: string, _channel: string, [request]: [{ op: string }]) =>
       request.op === 'capabilities'
@@ -189,48 +211,82 @@ it('asks for the plugin instead of opening anything when this computer cannot sh
   const view = render(<Entries />);
   await settle();
   await settle();
-  // Not installed here: a notice says what is needed, once, and leads to the plugin.
+  // Not installed here: nothing opens, and the ask stays with the task instead of passing by.
   expect(openTab).not.toHaveBeenCalled();
-  expect(notices).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining('Install the “Device Simulator” plugin on this computer'),
-    expect.objectContaining({
-      title: 'Install the “Device Simulator” plugin',
-      action: expect.objectContaining({ label: 'Install' }),
-    }),
-  );
-  // The entry explains the same and goes there only when the user agrees.
-  fireEvent.click(screen.getByRole('button', { name: 'Install the “Device Simulator” plugin' }));
+  expect(toasts.info).not.toHaveBeenCalled();
+  expect(notice()?.textContent).toContain('Install the “Device Simulator” plugin on this computer');
+  // One click installs the market release that was shown (Main asks for permission) and opens the device.
+  fireEvent.click(within(notice()!).getByRole('button', { name: 'Install' }));
   await settle();
+  await settle();
+  await settle();
+  expect(install).toHaveBeenCalledExactlyOnceWith('cindy-simulator', {
+    expectedReleaseId: 'release-cindy-simulator',
+    expectedManifest: { id: 'cindy-simulator' },
+    allowSourceReplacement: false,
+  });
   expect(navigate).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Install' }));
-  await settle();
-  await settle();
-  expect(lookup).toHaveBeenLastCalledWith(['cindy-simulator']);
-  expect(navigate).toHaveBeenCalledExactlyOnceWith('/plugins?market=cindy-simulator');
+  expect(openTab).toHaveBeenLastCalledWith('task-1', '_root__cindy-simulator');
+  openTab.mockClear();
 
-  // Installed but turned off, or too old to show another computer's device: say which.
+  // Installed but turned off: say so, and turn it on with the same click.
   installed.ghosts = [plugin({ enabled: false })];
   view.rerender(<Entries />);
   await settle();
-  expect(notices).toHaveBeenLastCalledWith(
-    expect.any(String),
-    expect.objectContaining({ title: 'Enable the “Device Simulator” plugin' }),
-  );
+  expect(notice()?.textContent).toContain('Enable the “Device Simulator” plugin');
+  fireEvent.click(within(notice()!).getByRole('button', { name: 'Turn on' }));
+  await settle();
+  expect(setEnabled).toHaveBeenCalledExactlyOnceWith('_root__cindy-simulator', true, 'approved:r');
+
+  // Too old to show another computer's device: update it in place from its own market listing.
   installed.ghosts = [plugin({ remote: false })];
+  lookup.mockResolvedValue({ items: [{ pluginId: 'cindy-simulator', ghostId: 'cindy-simulator', namespace: null, installState: 'update-available' }] });
   view.rerender(<Entries />);
   await settle();
-  expect(notices).toHaveBeenLastCalledWith(
-    expect.any(String),
-    expect.objectContaining({ title: 'Update the “Device Simulator” plugin' }),
-  );
-  expect(openTab).not.toHaveBeenCalled();
+  expect(notice()?.textContent).toContain('Update the “Device Simulator” plugin');
+  fireEvent.click(within(notice()!).getByRole('button', { name: 'Update' }));
+  await settle();
+  await settle();
+  await settle();
+  expect(install).toHaveBeenLastCalledWith('cindy-simulator', expect.objectContaining({
+    expectedInstalledApproval: 'approved:r',
+    allowSourceReplacement: false,
+  }));
+  // Closing the ask keeps it closed while the device stays.
+  fireEvent.click(within(notice()!).getByRole('button', { name: 'Dismiss' }));
+  expect(notice()).toBeNull();
+  view.rerender(<Entries />);
+  await settle();
+  expect(notice()).toBeNull();
   // Once it can, the page opens without another request from the user.
+  openTab.mockClear();
   installed.ghosts = [plugin()];
   view.rerender(<Entries />);
   await settle();
+  expect(notice()).toBeNull();
   expect(openTab).toHaveBeenCalledExactlyOnceWith('task-1', '_root__cindy-simulator', {
     userInitiated: false,
   });
+});
+
+// Review #11030: the title-bar entries stay mounted when the user moves to another task.
+// Unit: an install that finishes after the switch is reported, but must not open the
+// first task's device page over the task now on screen.
+it('does not open the earlier task’s device when an install finishes after switching tasks', async () => {
+  installed.ghosts = [];
+  let finish!: (value: { ghost: unknown }) => void;
+  install.mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+  const entries = taskLiveScreenEntries([listed('sim-a', 'iPhone Air', ['task-1'])] as never, []);
+  const view = render(<TaskLiveScreenButtons sessionId="task-1" entries={entries} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Install the “Device Simulator” plugin' }));
+  for (let i = 0; i < 4; i++) await settle();
+  expect(install).toHaveBeenCalledOnce();
+  view.rerender(<TaskLiveScreenButtons sessionId="task-2" entries={entries} />);
+  await act(async () => finish({ ghost: plugin() }));
+  await settle();
+  expect(toasts.success).toHaveBeenCalledOnce();
+  expect(openTab).not.toHaveBeenCalled();
+  expect(navigate).not.toHaveBeenCalled();
 });
 
 // Multiple providers are independent: one working plugin must not hide another
@@ -289,16 +345,16 @@ it('matches stamped logical source instead of the physical install name', () => 
 });
 
 // Review #4540881698: the old helper mock hid cross-source installation links.
-// Unit: exercise the actual shared route through both the notice and manual entry;
-// one same-name listing from another source must never become the destination.
+// Unit: exercise the actual shared lookup through both the notice and the title-bar entry;
+// one same-name listing from another source must never be installed.
 it.each([
-  { name: 'organization alongside root', identity: '_ns__acme__cindy-simulator', sources: [null, 'acme'], route: '/plugins?market=item-1' },
-  { name: 'local with only root available', identity: '_ns__local__cindy-simulator', sources: [null], route: '/plugins' },
-  { name: 'root with unknown legacy source', identity: 'cindy-simulator', sources: [undefined], route: '/plugins' },
-  { name: 'root with explicit verified source', identity: 'cindy-simulator', sources: [null], route: '/plugins?market=item-0' },
-  { name: 'ambiguous same-source listings', identity: '_ns__acme__cindy-simulator', sources: ['acme', 'acme'], route: '/plugins' },
-  { name: 'no listing', identity: '_ns__acme__cindy-simulator', sources: [], route: '/plugins' },
-])('routes both setup actions by verified identity: $name', async ({ identity, sources, route }) => {
+  { name: 'organization alongside root', identity: '_ns__acme__cindy-simulator', sources: [null, 'acme'], installs: 'item-1' },
+  { name: 'local with only root available', identity: '_ns__local__cindy-simulator', sources: [null], installs: null },
+  { name: 'root with unknown legacy source', identity: 'cindy-simulator', sources: [undefined], installs: null },
+  { name: 'root with explicit verified source', identity: 'cindy-simulator', sources: [null], installs: 'item-0' },
+  { name: 'ambiguous same-source listings', identity: '_ns__acme__cindy-simulator', sources: ['acme', 'acme'], installs: null },
+  { name: 'no listing', identity: '_ns__acme__cindy-simulator', sources: [], installs: null },
+])('installs only the listing from the verified source: $name', async ({ identity, sources, installs }) => {
   installed.ghosts = [];
   lookup.mockResolvedValue({ items: sources.map((namespace, i) => ({
     pluginId: `item-${i}`, ghostId: 'cindy-simulator', installState: 'not-installed',
@@ -311,13 +367,20 @@ it.each([
   render(<Entries />);
   await settle();
   await settle();
-  await act(async () => notices.mock.calls[0][1].action.onClick());
-  expect(navigate).toHaveBeenLastCalledWith(route);
-  navigate.mockClear();
+  const check = () => {
+    if (installs) expect(install).toHaveBeenLastCalledWith(installs, expect.objectContaining({ allowSourceReplacement: false }));
+    else {
+      expect(install).not.toHaveBeenCalled();
+      expect(toasts.info).toHaveBeenLastCalledWith(i18n.t('newChat.pluginSuggestions.unavailable'));
+    }
+    expect(navigate).not.toHaveBeenCalled();
+    install.mockClear();
+    toasts.info.mockClear();
+  };
+  fireEvent.click(within(notice()!).getByRole('button', { name: 'Install' }));
+  for (let i = 0; i < 4; i++) await settle();
+  check();
   fireEvent.click(screen.getByRole('button', { name: 'Install the “Device Simulator” plugin' }));
-  await settle();
-  fireEvent.click(screen.getByRole('button', { name: 'Install' }));
-  await settle();
-  await settle();
-  expect(navigate).toHaveBeenLastCalledWith(route);
+  for (let i = 0; i < 4; i++) await settle();
+  check();
 });

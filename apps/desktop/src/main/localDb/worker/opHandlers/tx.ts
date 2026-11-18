@@ -8,6 +8,7 @@ import { recordMediaSpend } from './mediaSpendTx.js';
 import { recordPiUsage } from './piUsageTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
+import { IDLE_ARCHIVE_GUARD_SQL } from '../../../task-management/eligibility.js';
 import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
@@ -173,6 +174,15 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return botsResumeLifecycle(db, txArgs);
     case 'bots.archiveLifecycle':
       return botsArchiveLifecycle(db, txArgs);
+    case 'bots.retireCloudCopy': {
+      const p = asRecord(txArgs, 'bots.retireCloudCopy args');
+      // Keep every version, session link and message. Only a confirmed cloud retirement
+      // releases this hidden copy's name; moving to another computer never calls this.
+      const result = db.prepare(`UPDATE bot_profiles SET status = 'archived', updated_at = ?
+        WHERE id = ? AND status NOT IN ('archived', 'deleting')`)
+        .run(expectNumber(p.at, 'at'), expectString(p.botId, 'botId'));
+      return { changed: result.changes > 0 };
+    }
     case 'bots.deleteProfile':
       return botsDeleteProfile(db, txArgs);
     case 'bots.prepareProfileDeletion':
@@ -867,7 +877,7 @@ function insertBotSession(db: Database.Database, s: Record<string, unknown>): vo
       expectNumber(s.updatedAt, 'session.updatedAt'), nullableString(s.agentDeviceId), nullableString(s.projectDir));
 }
 
-/** One hidden lane per (group, Bot); reuses an active lane instead of creating a second. */
+/** One isolated lane per (group, Bot); reuses an active lane instead of creating a second. */
 function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArgs): BotGroupsCreateLaneResult {
   const p = asRecord(args, 'bots.createGroupLane args');
   const botId = expectString(p.botId, 'botId');
@@ -896,8 +906,8 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
     if (existing) {
       // The group's project folder changed on this computer: the lane moves with it.
       db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?').run(createdAt, existing.sessionId);
-      db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ? AND status = 'active'`)
-        .run(createdAt, existing.sessionId);
+      db.prepare(`UPDATE sessions SET status = 'archived' WHERE id = ? AND status = 'active'`)
+        .run(existing.sessionId);
     }
     insertBotSession(db, s);
     db.prepare(`INSERT INTO bot_session_links
@@ -2129,7 +2139,7 @@ function sessionsRenameTitles(db: Database.Database, args: unknown): Array<{
   }>;
 }
 
-const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel', 'group') LIMIT 1";
 
 // 批量归档 / 取消归档:存在性预检 + 状态更新放进同一事务,任一 id 缺失整批回滚(全有才写)。
 // 本文件是 inproc 回滚口;默认热路径走 file worker 的同名 handler(client/WorkerThreadTransport.ts)。
@@ -2156,7 +2166,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = db.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   const transaction = db.transaction(() => {
     const applied: Array<{
@@ -2185,6 +2195,11 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
         throw Object.assign(new Error(`Bot 任务必须通过 Bot 生命周期管理: ${sessionId}`), {
           code: 'PRECONDITION_FAILED',
         });
+      }
+      // Restoring history never makes it the live receiver again. Detach in
+      // the same transaction, before a later trigger can create its successor.
+      if ((existing as { source?: unknown }).source === 'bot' && (status === 'archived' || (existing as { status?: unknown }).status === 'archived')) {
+        db.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
       }
       const updated = updateSession.get(status, now, sessionId) as
         | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null }
@@ -2225,6 +2240,15 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
   const status = expectString(payload.status, 'status');
   if (status !== 'archived' && status !== 'deleted') throw invalidArgs('invalid terminal status: ' + status);
   const transaction = db.transaction((): SessionsSetTerminalStatusResult => {
+    if (payload.idleArchiveCutoff !== undefined && (status !== 'archived'
+      || typeof payload.idleArchiveCutoff !== 'number' || !Number.isFinite(payload.idleArchiveCutoff)
+      || !db.prepare(IDLE_ARCHIVE_GUARD_SQL).get(sessionId, payload.idleArchiveCutoff))) {
+      throw Object.assign(new Error('Task is no longer idle'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (payload.unusedOnly !== undefined && (payload.unusedOnly !== true || status !== 'deleted'
+      || !db.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
+      throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
+    }
     const existing = db.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId) as
       | { id: string; status: string; source: string } | undefined;
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
@@ -2232,10 +2256,13 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
     // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
     if (existing.source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
+    if (existing.source === 'bot') {
+      db.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
+    }
     if (status === 'archived' || status === 'deleted') db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = db.prepare(
-      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
-    ).get(status, now, sessionId) as {
+      'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    ).get(status, payload.idleArchiveCutoff ?? null, now, sessionId) as {
       id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null;
     } | undefined;
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });

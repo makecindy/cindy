@@ -141,6 +141,7 @@ interface UseCCAgentChatReturn {
       pastedTextRanges?: PastedTextRange[];
       slashCommandRanges?: SlashCommandRange[];
       replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+      firstMessageIdentity?: { clientId: string; createdAt: string };
       beforeEnqueue?: () => Promise<boolean>;
       onInputCreated?: (clientId: string) => void;
       onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;
@@ -445,6 +446,7 @@ export function useCCAgentChat(
         pastedTextRanges?: PastedTextRange[];
         slashCommandRanges?: SlashCommandRange[];
         replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
+        firstMessageIdentity?: { clientId: string; createdAt: string };
         beforeEnqueue?: () => Promise<boolean>;
         onInputCreated?: (clientId: string) => void;
         onRemoteOptimisticFailure?: (clientId: string, error?: unknown) => void;

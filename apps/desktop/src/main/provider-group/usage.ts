@@ -125,6 +125,7 @@ interface CodexUsageWindow {
 }
 
 interface CodexUsageBucket {
+  planType?: string;
   limitId: string | null;
   limitName: string | null;
   updatedAt: number | null;
@@ -169,6 +170,7 @@ function codexBucket(raw: unknown): CodexUsageBucket | null {
   if (!value) return null;
   return {
     limitId: typeof value.limitId === 'string' ? value.limitId : null,
+    ...(typeof value.planType === 'string' ? { planType: value.planType } : {}),
     limitName: typeof value.limitName === 'string' ? value.limitName : null,
     updatedAt: typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt) ? value.updatedAt : null,
     primary: codexWindow(value.primary), secondary: codexWindow(value.secondary),
@@ -199,7 +201,9 @@ export function providerGroupCodexUsageFromReads(account: unknown, rateLimits: u
   const table = resolveCodexBucketTable({ byLimitId: result?.rateLimitsByLimitId })
     ?? { [codexLimitBucketKey(latest)]: latest };
   return providerGroupCodexUsageSnapshot({
-    appServerBuckets: Object.fromEntries(Object.entries(table).map(([key, bucket]) => [key, { ...bucket, updatedAt: now }])),
+    appServerBuckets: Object.fromEntries(Object.entries(table).map(([key, bucket]) => [key, {
+      ...bucket, planType: bucket.planType ?? latest.planType, updatedAt: now,
+    }])),
     webSnapshot: cached?.webSnapshot,
   });
 }
@@ -304,12 +308,28 @@ export interface ProviderGroupUsageReaderDeps<T> {
   now(): number;
   parseSnapshot(raw: unknown, now: number): T | null;
   cacheLocal?: boolean;
+  /** Capture the existing target permission/link generation without allocating a new registry. */
+  captureCurrent?(member: ProviderGroupMember): () => boolean;
+}
+
+export interface ProviderGroupUsageInvalidation {
+  /** Empty string denotes this computer; absent denotes all computers. */
+  agentDeviceId?: string;
+  providerIds?: readonly string[];
+  /** Usage/load notifications do not revoke the identity behind an in-flight read. */
+  preservePending?: boolean;
+}
+
+export function providerGroupUsageMatches(key: string, scope?: ProviderGroupUsageInvalidation): boolean {
+  const [deviceId, providerId] = JSON.parse(key) as [string | null, string];
+  return (scope?.agentDeviceId === undefined || (deviceId ?? '') === scope.agentDeviceId)
+    && (scope?.providerIds === undefined || scope.providerIds.includes(providerId));
 }
 
 /** Per-owner, bounded remote reads. A slow/old peer cannot stall routing or multiply in-flight requests. */
 export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReaderDeps<T>) {
-  const cached = new Map<string, { at: number; snapshot: T | null }>();
-  const pending = new Map<string, Promise<T | null>>();
+  const cached = new Map<string, { at: number; snapshot: T | null; refresh: boolean; current: () => boolean }>();
+  const pending = new Map<string, { result: Promise<T | null>; refresh: boolean; current: () => boolean }>();
 
   async function bounded(promise: Promise<T | null>) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -329,7 +349,7 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
         || (member.agentDeviceId && isProviderShareAgentDeviceId(member.agentDeviceId))
         || (member.kind === 'local' && !deps.cacheLocal)) return null;
       const previous = cached.get(JSON.stringify([member.agentDeviceId, member.providerId]));
-      return previous && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS
+      return previous?.current() && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS
         ? deps.parseSnapshot(previous.snapshot, deps.now()) : null;
     },
     async read(member: ProviderGroupMember): Promise<T | null> {
@@ -337,32 +357,55 @@ export function createProviderGroupUsageReader<T>(deps: ProviderGroupUsageReader
         || (member.agentDeviceId && isProviderShareAgentDeviceId(member.agentDeviceId))) return null;
       const key = JSON.stringify([member.agentDeviceId, member.providerId]);
       const previous = cached.get(key);
-      if ((member.kind !== 'local' || deps.cacheLocal) && previous && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS) {
+      if ((member.kind !== 'local' || deps.cacheLocal) && previous?.current() && !previous.refresh
+        && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS) {
         return deps.parseSnapshot(previous.snapshot, deps.now());
       }
       let request = pending.get(key);
+      if (request && !request.current()) { pending.delete(key); request = undefined; }
       if (!request) {
         if (pending.size >= MAX_CACHED_ACCOUNTS) return null;
-        request = Promise.resolve().then(async () => {
-          if (!deps.isCurrent()) return null;
+        const current = deps.captureCurrent?.(member) ?? deps.isCurrent;
+        const entry = { result: null! as Promise<T | null>, refresh: false, current };
+        request = entry;
+        entry.result = Promise.resolve().then(async () => {
+          if (!deps.isCurrent() || !current()) return null;
           const raw = member.kind === 'local'
             ? await deps.readLocal(member.providerId)
             : await deps.readRemote(member.agentDeviceId!, member.providerId);
-          return deps.isCurrent() ? deps.parseSnapshot(raw, deps.now()) : null;
+          return deps.isCurrent() && current() ? deps.parseSnapshot(raw, deps.now()) : null;
         }).catch(() => null).then((snapshot) => {
           if (pending.get(key) !== request) return null;
           pending.delete(key);
-          if (deps.isCurrent() && (member.kind !== 'local' || deps.cacheLocal)) {
+          if (deps.isCurrent() && current() && (member.kind !== 'local' || deps.cacheLocal)) {
             if (cached.size >= MAX_CACHED_ACCOUNTS) cached.delete(cached.keys().next().value!);
-            cached.set(key, { at: deps.now(), snapshot });
+            cached.set(key, { at: deps.now(), snapshot, refresh: entry.refresh, current });
           }
           return snapshot;
         });
         pending.set(key, request);
       }
-      const snapshot = await bounded(request);
-      return deps.isCurrent() ? deps.parseSnapshot(snapshot, deps.now()) : null;
+      const snapshot = await bounded(request.result);
+      // A usage notification asks for a refresh, not an identity revocation. A
+      // late valid reply must stay useful if the next refresh also exceeds the
+      // wait budget; otherwise a busy slow peer can remain unknown forever.
+      if (snapshot === null && previous?.current() && cached.get(key) === previous
+        && deps.now() - previous.at < REMOTE_USAGE_CACHE_MS) {
+        return deps.parseSnapshot(previous.snapshot, deps.now());
+      }
+      return deps.isCurrent() && request.current() ? deps.parseSnapshot(snapshot, deps.now()) : null;
     },
-    invalidate() { cached.clear(); pending.clear(); },
+    invalidate(scope?: ProviderGroupUsageInvalidation) {
+      for (const [key, entry] of cached) {
+        if (!providerGroupUsageMatches(key, scope)) continue;
+        if (scope?.preservePending) entry.refresh = true;
+        else cached.delete(key);
+      }
+      if (!scope?.preservePending) {
+        for (const key of pending.keys()) if (providerGroupUsageMatches(key, scope)) pending.delete(key);
+      } else {
+        for (const [key, entry] of pending) if (providerGroupUsageMatches(key, scope)) entry.refresh = true;
+      }
+    },
   };
 }

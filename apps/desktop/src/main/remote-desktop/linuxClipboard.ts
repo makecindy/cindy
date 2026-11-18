@@ -6,7 +6,10 @@ import { readLinuxClipboardSnapshot } from './linuxClipboardNative';
  * This is called within the controlling lease, never as an application watcher. */
 export async function linuxClipboardVersion(): Promise<string> {
   const snapshot = await readLinuxClipboardSnapshot();
-  return createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+  const digest = createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+  // Existing Desktop/Mobile sync accepts decimal generation strings. Preserve
+  // all 256 fingerprint bits; Number would lose precision and miss changes.
+  return BigInt(`0x${digest}`).toString(10);
 }
 export async function linuxSelection(): Promise<string> {
   const text = (await readLinuxClipboardSnapshot(true)).content.text ?? '';

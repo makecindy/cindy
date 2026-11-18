@@ -19,7 +19,7 @@ describe('Codex thread MCP server tools', () => {
     ] } });
     expect(await readCodexThreadMcpServerTools(invoke, 'thread-1', 'custom_omc')).toEqual({
       state: 'connected',
-      tools: [{ name: 'search', description: 'Search OMC' }, { name: 'open' }],
+      tools: [{ name: 'search', description: 'Search OMC', inputSchema: {} }, { name: 'open', inputSchema: {} }],
     });
     expect(request).toHaveBeenCalledWith('mcpServerStatus/list',
       { cursor: null, limit: 100, detail: 'toolsAndAuthOnly', threadId: 'thread-1' },

@@ -21,6 +21,16 @@ import type { BotGroupDetail, BotGroupMessageView, BotGroupThreadSummary, ChatMa
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { queryShareableMessageIds, stripInteractiveElements } from '@/lib/shareConversationImage';
 
+// Native dictation is covered in useBotGroupVoiceInput.test.tsx; keep this
+// thread/send suite independent of microphone and account-service setup.
+vi.mock('../useBotGroupVoiceInput', () => {
+  const ownsDraft = () => false;
+  return { useBotGroupVoiceInput: ({ text }: { text: string }) => ({
+  ownsDraft,
+  displayText: text, state: 'idle', isBusy: false, isListening: false, isCaptureReady: false,
+  lastError: null, shortcutLabel: '', start: () => false, stop: async () => {}, cancel: async () => {},
+}) }; });
+
 const mocks = vi.hoisted(() => ({
   status: vi.fn(), react: vi.fn(), reactors: vi.fn(), thread: vi.fn(), followThread: vi.fn(), reply: vi.fn(), createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(),
   mask: vi.fn(), mentions: vi.fn(), refresh: vi.fn(), shareToMain: vi.fn(), ownerCurrent: true,
@@ -53,7 +63,7 @@ beforeEach(() => {
   // The thread reply keeps a draft per thread; one test's unsent text must not start the next.
   discardDraft(botGroupThreadDraftKey(group.id, 'root'));
   mocks.materialize.mockReset().mockImplementation(async files => [...files]);
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   mocks.status.mockResolvedValue({ enabled: true, connected: true });
   mocks.mask.mockResolvedValue({ ok: false, errorCode: 'UNSUPPORTED_OPERATION' });
   mocks.mentions.mockResolvedValue({ ok: true, mentions: [{ messageId: 'question', sequence: '1' }], hasMore: false });
@@ -514,6 +524,8 @@ describe('chat interaction controls', () => {
     const oldRow = (await screen.findByText('Reply 2')).closest('article');
     const root = screen.getByText('Root message').closest('article')!;
     fireEvent.click(within(root).getByRole('button', { name: k('reactionCount') }));
+    // Sharing intentionally retains all loaded DOM; normal reading only mounts a viewport window.
+    act(() => shareSelectionStore.enter('bot-group:room:thread:root'));
     await screen.findByText('Reply 101');
     expect(screen.getByText('Reply 2').closest('article')).toBe(oldRow);
     expect(screen.getByText('Reply 51')).toBeTruthy();

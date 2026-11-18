@@ -1,3 +1,6 @@
+import { ProjectIcon } from '@/features/cc-agent/sidebar/ProjectIcon';
+import { useProjectInfo } from '@/features/cc-agent/hooks/useProjectInfo';
+import { resolveProjectIcon } from '@cindy/maker-shared/project-alias-sync';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
 import {
@@ -39,6 +42,16 @@ export interface FolderPickerOption {
     deviceId: string;
     deviceName: string;
   };
+}
+
+function PickerProjectIcon({ project }: { project: FolderPickerOption }) {
+  const deviceId = project.remoteDevice?.deviceId ?? null;
+  const info = useProjectInfo(deviceId);
+  // The path belongs to the selected computer; UI option keys can also contain device IDs.
+  const projectKey = `local:${project.path}`;
+  return <ProjectIcon value={resolveProjectIcon(info, projectKey)} projectKey={projectKey}
+    projectName={project.name} deviceId={deviceId}
+    automaticEnabled={(info?.settingsVersion ?? 0) >= 4} size={24} />;
 }
 
 /**
@@ -316,13 +329,9 @@ export function FolderPickerPopover({
             'outline-none',
           )}
         >
-          <Folder
-            size={20}
-            className={cn(
-              'shrink-0 text-[var(--folder-item-icon)]',
-              project.missing && 'opacity-50',
-            )}
-          />
+          <span aria-hidden="true" className={cn('shrink-0', project.missing && 'opacity-50')}>
+            <PickerProjectIcon project={project} />
+          </span>
           <div className="flex min-w-0 flex-1 flex-col items-start">
             <span
               className={cn(

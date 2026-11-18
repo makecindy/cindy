@@ -178,6 +178,14 @@ because the app is signed. Building and isolated probing must not restart the ac
 ## Preparation and updates
 
 Each `prepare` uses a **new output directory**, preserving existing builds and dirty source worktrees.
+
+When a Cindy Chrome seed declares a native host, the composed plugin repository's
+`scripts/build-browser-native.mjs` builds the connectors before the seed hash is
+recorded. Install the Go version pinned by that script on the build machine
+(`go` on PATH or `CINDY_BUILD_GO`). A directory override must supply its own
+built connectors. Missing connectors block preparation and verification of
+older candidates. After a source change, use the plugin detail page to select
+the browser extension and check the connection with the user-browser backend.
 It fully paginates the open PR list, orders selected stacked PRs by dependency, fetches exact main/PR
 commit IDs and records them. Fork PRs use their exact SHA, not a same-named local branch. Local merge
 commits use the developer's Git identity and Signed-off-by; no branch is pushed and no PR is created.
@@ -893,6 +901,14 @@ standalone cold startup: keep using the personal launcher when the runtime is st
 Test cold-start routing separately before changing default handlers. Never edit the installed
 app's Info.plist in place: that breaks its signature and runtime receipt.
 
+The personal runtime also seals the same English privacy usage strings as the Forge package
+(`apps/desktop/resources/mac-permission-locales.json`). macOS silently refuses some protected
+resources when the declaration is missing: without `NSLocalNetworkUsageDescription` the personal
+app and every agent, SSH or scheduled child process it is responsible for receive `EHOSTUNREACH`
+("No route to host") even for the LAN gateway (2026-11). An already installed runtime gets the
+declaration only from the next personal build; afterwards check System Settings → Privacy &
+Security → Local Network for the personal app.
+
 Mobile debug recording includes non-secret push registration stages, realm, app variant, APNs
 environment and numeric HTTP failure status. It never records the native token or authorization
 headers. A registered event confirms only registration, and a desktop notify-sent log confirms
@@ -969,3 +985,42 @@ and the target phone before calling delivery successful.
 `app.localRefs`。其它功能已有自己的未合并 PR 时由正常 PR 发现流程纳入，不重复挂本地
 分支，也不混入个人版 PR。保留原分支、冻结报告和已安装版本用于追溯；下一轮重新发现
 PR 并冻结新 SHA，不能修改已验收候选来冒充新构建。
+
+### 共享启动预检与显式数据库升级
+
+隔离 smoke 不证明共享 profile 可以启动。`manual-check` 和 `manual-restart` 在交出监督权、
+停止旧应用前调用候选的真实 `assertSharedDevMigrationPolicy(..., ['--shared'])`；实际启动时
+再次检查。策略拒绝就保持旧应用运行，不靠 sandbox 验收绕过共享迁移规则。
+
+数据库变化使用独立、一次性的计划：
+
+```sh
+node scripts/personal-build.mjs database-plan --config FILE --report BUILD_REPORT \
+  --out NEW_PLAN --approve-database-upgrade yes
+node scripts/personal-build.mjs manual-check --config FILE --report BUILD_REPORT \
+  --out NEW_MANUAL_REPORT --database-plan NEW_PLAN
+```
+
+该流程只面向开发者手动共享模式（macOS），自动模式保持关闭；参数不是用户授权的替代品。
+计划绑定 baseline/candidate、profile、冻结迁移树、迁移执行器摘要和数据库清单。
+准备阶段以 SQLite backup 复制账号库，仅在副本回放追加的 SQL；历史迁移变化、伴随脚本、
+私有 DB_SCRIPT 均拒绝。实际交接确认旧进程停止后，先取得所有库的 schema writer lease，
+确认没有其它进程打开它们，备份全部库再逐库迁移。任一步失败保留收据及备份，禁止自动
+把旧代码或旧备份覆盖到已经变化的数据；恢复备份会丢失其后的写入，需另行判断。
+
+默认只接受冻结 main 的迁移树。开发者本地显式例外可用
+`--approve-unmerged-migration-pr NUMBER` 绑定冻结 PR 的完整迁移树；还必须提供已提交的
+`scripts/personal-migration-allowlist.json`，计划固定其 SHA-256，并通过候选真实启动策略。
+仓库自带的启动策略仍拒绝未合入 SQL；此参数不会改写策略，也不提供个人批准清单。
+本地例外的策略及清单不得混入通用分发，下一轮不得沿用不同迁移树的批准。
+
+`automatic/activation-events.jsonl` 保留迁移和启动阶段及原始失败。启动前失败只有在
+未尝试数据库升级时才能沿用安全恢复；尝试过迁移即保持 blocked。
+`reconcile-running --config FILE --app REPAIRED_CHECKOUT --expected-pid PID --out NEW_RECEIPT`
+只处理原失败 checkout 中启动策略及批准记录的修复：其它代码/数据实现变化拒绝。
+它持有监督锁，以只读连接核对账号库、真实进程身份和至少两分钟连续心跳后备份并更新
+journal/known-good；不启动应用、不改业务库、不自动接管监督。已经 stable 的恢复不得重放。
+
+自动回归 `scripts/__tests__/personal-build-database.test.mjs` 使用临时 Git、SQLite 与独立
+Node 进程验证停机前拒绝、备份后迁移、启动失败阻断、受证据保护的账本恢复；它不等于
+真实 Electron 换包、钥匙串、权限、Windows 或手机验收，也不实现任务不中断升级。

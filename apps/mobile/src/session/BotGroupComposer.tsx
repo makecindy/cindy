@@ -60,6 +60,7 @@ import type { BotGroupIdentityLookup } from './BotGroupPlan';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from './ComposerAttachmentTray';
 import { useComposerPendingImagePreview } from './useComposerPendingImagePreview';
 import { ContextSheet, ContextSheetGroup, ContextSheetRow } from './ContextSheet';
+import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from './ContextSheetMediaSelection';
 import { RecentPhotosStrip } from './ContextSheetMediaViews';
 import { ImageLightbox } from './ImageLightbox';
 import { ComposerToolbarLeftGroup, ComposerToolbarSpacer } from './MobileComposerInputRow';
@@ -154,6 +155,13 @@ export function BotGroupComposer({
     deviceId,
     upload: uploadAttachment,
     onPicked: () => { setSheetOpen(false); focusInput(); },
+  });
+  // Photos picked with their selection circles wait in the sheet until its bottom button adds them.
+  const mediaSelection = useContextSheetMediaSelection({
+    open: sheetOpen,
+    getRemainingSlots: tray.getRemainingSlots,
+    onLimitReached: tray.reportLimit,
+    onChanged: () => tray.setError(null),
   });
   const pendingImagePreview = useComposerPendingImagePreview(tray);
   const attachmentsEnabled = attachmentsSupported && online;
@@ -301,6 +309,11 @@ export function BotGroupComposer({
       attemptRef.current = null;
       setAlsoSendToMain(false);
       tray.clearSent(attachmentIds);
+      // 发出后收起输入框与软键盘(与下拉收起同口径),把屏幕让给群聊;等待期间又打了字就不打断。
+      if (!textRef.current) {
+        inputRef.current?.blur();
+        setFocused(false);
+      }
     } catch {
       restoreDraft();
     } finally {
@@ -485,7 +498,11 @@ export function BotGroupComposer({
       // If attachment access goes away while open, keep only supported group actions.
       media={mediaLibraryEnabled && attachmentsEnabled ? <RecentPhotosStrip busyAssetIds={tray.busyAssetIds}
         enabled={sheetOpen} onToggleAsset={tray.toggleMediaAsset} selectedAssetIds={tray.selectedAssetIds}
-        testID="botGroup.contextSheetPhotos" /> : null}
+        selection={mediaSelection} testID="botGroup.contextSheetPhotos" /> : null}
+      footer={mediaLibraryEnabled && attachmentsEnabled && mediaSelection.assets.length > 0
+        ? <ContextSheetMediaAddButton onAddAssets={tray.addMediaAssets} selection={mediaSelection}
+          testID="botGroup.contextSheetAddPhotosButton" />
+        : undefined}
       testID="botGroup.contextSheet"
     >
       {attachmentsEnabled ? <ContextSheetGroup label={Platform.OS === 'ios' && mediaLibraryEnabled ? '' : t('session.common.groupAdd')}>

@@ -398,6 +398,9 @@ export function registerRsbNativePopupSurfaceIpc(tabRegistry: TabRegistry): void
     if (typeof raw.visible !== 'boolean') {
       throwIpcError('INVALID_PARAMS', 'visible must be boolean');
     }
+    if (raw.focus !== undefined && typeof raw.focus !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'focus must be boolean');
+    }
     const bounds = parseBounds(raw.bounds);
     // window.close() can destroy the native surface while the renderer still
     // has a queued ResizeObserver update. Treat that late cleanup update as a
@@ -407,6 +410,14 @@ export function registerRsbNativePopupSurfaceIpc(tabRegistry: TabRegistry): void
     record.requestedBounds = bounds;
     record.requestedVisible = raw.visible;
     applyVisibility(record);
+    // Native pages live outside the renderer DOM. Restore only on an explicit
+    // one-shot request, after showing, and never raise a background window.
+    if (
+      raw.focus === true && raw.visible && record.crash === null &&
+      !record.webContents.isDestroyed() && record.ownerWindow.isFocused()
+    ) {
+      record.webContents.focus();
+    }
     return { ok: true };
   });
 

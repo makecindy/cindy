@@ -9,6 +9,7 @@ import { createOrcaRemoteWorkerHost, type OrcaRemoteWorkerExistingSession } from
 import { orcaModelDiscoveryFailure } from '../orcaServiceFailure.js';
 
 const store = vi.hoisted(() => ({
+  readInputDeliveryReceipts: vi.fn(async (_lead: string, ids: string[]) => ids.map(clientId => ({ clientId, state: 'pending' as const }))),
   archiveSingleWorkerSession: vi.fn(async () => undefined),
   getRemoteWorkerByProxySession: vi.fn(async () => null),
   listActiveRemoteWorkers: vi.fn(async () => []),
@@ -25,6 +26,7 @@ const store = vi.hoisted(() => ({
   removeWorker: vi.fn(async () => undefined),
 }));
 vi.mock('../../localDb/orcaTeamStore.js', () => store);
+vi.mock('../../localDb/agentInputQueueSnapshots.js', () => ({ readInputDeliveryReceipts: store.readInputDeliveryReceipts }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ info: vi.fn(), warn: vi.fn() }) }));
 
 import {
@@ -634,6 +636,18 @@ describe('wrapTeamDeps', () => {
       listWorkersByLead: async () => [worker],
       getManualInterrupt: () => null,
       clearManualInterrupt: vi.fn(),
+      hasSendToSessionLock: () => false,
+      markWorkerIdle: vi.fn(async () => { worker = { ...worker, status: 'idle' }; }),
+      markWorkerIdleIfStatus: vi.fn(async (_id: string, expected: string) => {
+        if (worker.status !== expected) return false;
+        worker = { ...worker, status: 'idle' };
+        return true;
+      }),
+      restoreWorkerDoneIfIdle: vi.fn(async () => {
+        if (worker.status !== 'idle') return false;
+        worker = { ...worker, status: 'done' };
+        return true;
+      }),
       updateWorkerStatus: vi.fn(async (_id: string, status: OrcaWorkerRecordSnapshot['status']) => {
         worker = { ...worker, status };
       }),
@@ -645,6 +659,130 @@ describe('wrapTeamDeps', () => {
     service = createOrcaTeamService(ctx.workers.wrapTeamDeps(deps));
     return { ...ctx, service, deps, getWorker: () => worker };
   }
+
+  // #11042 / PR #11060: unit, real TeamService + remote adapter. Existing report
+  // tests never acknowledged done. A foreground-idle remote has no background
+  // signal, so automatic acknowledgement must preserve done. Explicit idle and
+  // idle-only release must still stop/archive it (#11060 review regression).
+  it.each(['idle', 'release'] as const)('retains remote done without background evidence but honors explicit %s', async (action) => {
+    const report = reportService();
+    const h = await trackedTeam({ handle: report.handle });
+    try {
+      await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'proxy-1', message: 'A' });
+      report.history.push({ id: 'reply-a', role: 'assistant', content: 'Background work started' });
+      await h.workers.runtime.pollNow();
+      expect(h.getWorker().status).toBe('done');
+      expect(h.workers.runtime.isTurnRunning('proxy-1')).toBe(false);
+      const result = await h.service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1', expectedStatus: 'done' });
+      expect(result).toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+      expect(h.getWorker().status).toBe('done');
+      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(false);
+
+      if (action === 'release') store.getRemoteWorkerByProxySession.mockResolvedValueOnce(restoredRow as never);
+      await expect(action === 'idle'
+        ? h.service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1' })
+        : h.service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1', onlyIfIdle: true }))
+        .resolves.toMatchObject({ ok: true });
+      expect(h.getWorker().status).toBe(action === 'idle' ? 'idle' : 'done');
+      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(true);
+      if (action === 'release') {
+        expect(store.archiveSingleWorkerSession).toHaveBeenCalledWith('proxy-1', expect.any(Function));
+        expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(true);
+        expect(store.markWorkerRemoteReleased).toHaveBeenCalledWith('w-1');
+        expect(h.workers.runtime.isRemote('proxy-1')).toBe(false);
+      }
+    } finally { h.workers.stop(); }
+  });
+
+  // Explicit release must keep both remote foreground and pending-report gates.
+  it.each(['running', 'pending-report'] as const)('refuses explicit remote release with %s', async (state) => {
+    const report = reportService();
+    const h = await trackedTeam({ handle: report.handle });
+    let restoreRunning = () => {};
+    try {
+      await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'proxy-1', message: 'A' });
+      if (state === 'running') {
+        report.history.push({ id: 'reply-a', role: 'assistant', content: 'Reported' });
+        await h.workers.runtime.pollNow();
+        const running = vi.spyOn(h.workers.runtime, 'isTurnRunning').mockReturnValue(true);
+        restoreRunning = () => running.mockRestore();
+      }
+      await expect(h.service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1', onlyIfIdle: true }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+      expect(store.archiveSingleWorkerSession).not.toHaveBeenCalled();
+      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(false);
+      expect(h.workers.runtime.isRemote('proxy-1')).toBe(true);
+    } finally { restoreRunning(); h.workers.stop(); }
+  });
+
+  // #9346 P1, unit: real terminal → TeamService → wrapped send handoff. The old
+  // settlement-only tests missed the crash after queue ownership transferred.
+  it('reconciles an automatic handoff without sending twice after retirement fails', async () => {
+    const report = reportService();
+    const h = await trackedTeam({ handle: report.handle });
+    try {
+      await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'proxy-1', message: 'A' });
+      let deliveryId: string | undefined;
+      h.deps.sendAutoBridgeToLead.mockImplementation(async (...args: unknown[]) => {
+        const saved = store.saveWorkerRemoteReport.mock.calls.at(-1)?.[1];
+        deliveryId = saved?.delivery?.clientId;
+        expect(deliveryId).toBeTruthy();
+        expect(args[4]).toBe(deliveryId);
+        store.saveWorkerRemoteReport.mockRejectedValueOnce(new Error('crash after Lead queue commit'));
+        return { accepted: true };
+      });
+      report.history.push({ id: 'reply-a', role: 'assistant', content: 'A completed' });
+      await h.workers.runtime.pollNow();
+      expect(h.workers.runtime.hasPendingReport('proxy-1')).toBe(true);
+      expect(h.service.hasPendingWorkerReports('lead-1')).toBe(true);
+      await h.workers.runtime.pollNow();
+      expect(store.readInputDeliveryReceipts).toHaveBeenCalledWith('lead-1', [deliveryId]);
+      expect(h.deps.sendAutoBridgeToLead).toHaveBeenCalledOnce();
+      expect(h.workers.runtime.hasPendingReport('proxy-1')).toBe(false);
+      expect(h.service.hasPendingWorkerReports('lead-1')).toBe(false);
+      expect(h.getWorker().status).toBe('done');
+    } finally { h.workers.stop(); }
+  });
+
+  it('does not auto-report a turn retired by an in-flight manual report', async () => {
+    const report = reportService();
+    let releaseHistory!: () => void, historyEntered!: () => void;
+    const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
+    const historyStarted = new Promise<void>(resolve => { historyEntered = resolve; });
+    let pauseHistory = false;
+    const h = await trackedTeam({ handle: async (device, channel, args) => {
+      if (pauseHistory && channel === 'local-db:history:messages' && (args[0] as { roles: string[] }).roles.includes('user')) {
+        historyEntered(); await historyGate;
+      }
+      return report.handle(device, channel, args);
+    } });
+    try {
+      await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'proxy-1', message: 'A' });
+      const input = h.remoteInvoke.mock.calls.find(([, channel]) => channel === 'maker:input:enqueue')![2][1] as { clientId: string };
+      report.history.push({ id: 'reply-a', role: 'assistant', content: 'A completed' });
+      pauseHistory = true;
+      const poll = h.workers.runtime.pollNow();
+      await historyStarted;
+      let releaseManual!: () => void, manualEntered!: () => void, autoEntered!: () => void;
+      const manualGate = new Promise<void>(resolve => { releaseManual = resolve; });
+      const manualStarted = new Promise<void>(resolve => { manualEntered = resolve; });
+      const autoStarted = new Promise<void>(resolve => { autoEntered = resolve; });
+      const run = h.workers.runtime.runReportDelivery;
+      const spy = vi.spyOn(h.workers.runtime, 'runReportDelivery').mockImplementation((...args) => { autoEntered(); return run(...args); });
+      const manualSend = vi.fn(async () => { manualEntered(); await manualGate; return true; });
+      const manual = h.workers.runReportDelivery('proxy-1', [input.clientId], manualSend, Boolean);
+      await manualStarted;
+      releaseHistory();
+      await autoStarted;
+      releaseManual();
+      await Promise.all([manual, poll]);
+      expect(manualSend).toHaveBeenCalledOnce();
+      expect(h.deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+      expect(h.workers.runtime.hasPendingReport('proxy-1')).toBe(false);
+      expect(h.service.hasPendingWorkerReports('lead-1')).toBe(false);
+      spy.mockRestore();
+    } finally { releaseHistory(); h.workers.stop(); }
+  });
 
   // PR #6659 / discussion_r4334849858: deleting runtime/durable pending before Team
   // settlement loses the only retry after a DB lookup/write failure. The inverse
