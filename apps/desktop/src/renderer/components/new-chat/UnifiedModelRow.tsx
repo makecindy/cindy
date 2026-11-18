@@ -386,7 +386,7 @@ export function UnifiedModelRow({
         </div>
       ) : null}
       {sourceNotice && !measurementOnly && (
-        <div className="w-0 min-w-full break-words pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]">
+        <div className="w-0 min-w-full text-balance break-words pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]">
           {sourceNotice}
         </div>
       )}
