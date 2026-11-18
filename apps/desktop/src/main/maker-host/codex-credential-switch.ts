@@ -380,6 +380,79 @@ export function shouldCloseSessionForCredentialSwitch(
 }
 
 /**
+ * 本地 Codex 会话的 thread 身份是否已经不适合继续派发到目标路由。
+ *
+ * 排队心跳在 `onAccepted` 里才发现错配时已经处在 vendor dispatch 边界，不能就地
+ * 重建；派发前的 preparation 阶段(会话尚未被 send 事务捕获)可以安全关会话。本函数
+ * 只负责判定，调用方据此决定是否 cold-resume：
+ *   - 当前 provider store / live model 与实际 thread 身份分化(报错文案里的
+ *     current session route)；
+ *   - 目标路由(任务显式 model/source 或改道结果)需要另一个 thread 身份，跨
+ *     provider / 凭证家族时必须销毁旧线程重建(#4687)。
+ *
+ * thread 身份是 app-server 启动/恢复时冻结的事实，provider store 可能已被 UI 切模、
+ * 账号切换或自动续跑提前覆盖，因此两层都要查。非本地 Codex / 非 proxy-active 的
+ * 会话不走这条 identity 判定。
+ */
+export function isLocalCodexThreadRouteStale(input: {
+  agentKind: AgentKind;
+  remoteHostId?: string | null;
+  currentCodexProxyActive?: boolean | null;
+  currentCodexThreadModelProviderId?: string | null;
+  currentCodexCindyRemoteCompactionCompatible?: boolean | null;
+  currentProviderId: string | null;
+  currentModel: string;
+  targetProviderId: string | null;
+  targetModel: string;
+}): boolean {
+  if (input.remoteHostId || input.agentKind !== 'codex') return false;
+  const shared = {
+    agentKind: input.agentKind,
+    remoteHostId: input.remoteHostId,
+    currentProviderId: input.currentProviderId,
+    currentModel: input.currentModel,
+    currentCodexProxyActive: input.currentCodexProxyActive,
+    currentCodexThreadModelProviderId: input.currentCodexThreadModelProviderId,
+    currentCodexCindyRemoteCompactionCompatible:
+      input.currentCodexCindyRemoteCompactionCompatible,
+  };
+  // store 与 thread 已分化：继续按 store 派发会把模型送给错误的上游。
+  if (
+    isCodexThreadModelProviderIdentityMismatch({
+      ...shared,
+      nextProviderId: input.currentProviderId,
+      nextModel: input.currentModel,
+    })
+  ) {
+    return true;
+  }
+  if (
+    normalizeProviderId(input.targetProviderId) === normalizeProviderId(input.currentProviderId) &&
+    input.targetModel === input.currentModel
+  ) {
+    return false;
+  }
+  const target = {
+    ...shared,
+    nextProviderId: input.targetProviderId,
+    nextModel: input.targetModel,
+  };
+  if (
+    crossesCodexAppliedCustomProviderIdentity({
+      agentKind: input.agentKind,
+      remoteHostId: input.remoteHostId,
+      currentCodexProxyActive: input.currentCodexProxyActive,
+      currentThreadModelProviderId: input.currentCodexThreadModelProviderId,
+      targetProviderId: input.targetProviderId,
+      targetModel: input.targetModel,
+    })
+  ) {
+    return true;
+  }
+  return shouldCloseSessionForCredentialSwitch(target);
+}
+
+/**
  * 准备切换单个本地 agent 会话的凭证形态。
  *
  * Claude Code 是 per-session 子进程：只需要关当前会话，下一次 send 会按新来源重建。
@@ -398,6 +471,11 @@ export async function prepareLocalSessionCredentialModeSwitch(
 
   await withRehydrateCloseSuppressed(session.id, async () => {
     throwIfCredentialSwitchAborted(input.signal);
+    // 空闲判定与真正 close 之间可能刚好起了一个新 turn（排队心跳自愈、发送锁
+    // 交接等窗口）。关闭前再确认一次，避免把刚开始运行的 turn 连同进程一起拆掉。
+    if (isSessionBusy(session, input.isSessionInTurn)) {
+      throw new CredentialModeSwitchBusyError([session.id]);
+    }
     await input.maker.closeSession(session.id, 'runtime-refresh');
   });
   return { closedSessionIds: [session.id] };

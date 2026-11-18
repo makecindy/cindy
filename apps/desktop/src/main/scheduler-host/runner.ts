@@ -90,6 +90,7 @@ import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effo
 import {
   CredentialModeSwitchBusyError,
   isCodexThreadModelProviderIdentityMismatch,
+  isLocalCodexThreadRouteStale,
   prepareLocalCodexCredentialModeSwitch,
   prepareLocalSessionCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
@@ -2817,6 +2818,24 @@ export class MakerScheduleRunner implements ScheduleRunner {
             };
           }
         }
+        // Codex thread 身份与路由分化时，accepted 边界只能 fail-closed。此处仍在
+        // send 事务捕获 live Session 之前且持有发送锁：空闲会话可以受控关闭后按目标
+        // 路由 cold-resume，让同一排队项继续派发；在跑 turn 的会话保持原样。
+        const healedRoute = await this.healStaleQueuedCodexThread({
+          schedule,
+          ctx,
+          sessionId,
+          holder,
+          baseline: routingBaseline,
+        });
+        if (healedRoute) {
+          routingBaseline = {
+            ...routingBaseline,
+            agentKind: 'codex',
+            model: healedRoute.model,
+            providerId: healedRoute.providerId,
+          };
+        }
         const preparingLive = this.deps.maker.getSession(sessionId);
         if ((preparingLive?.agentKind ?? routingBaseline.agentKind ?? schedule.agentKind) !== 'pi') return;
         preparedPiRoute = await this.prepareQueuedPiRouting(
@@ -3285,6 +3304,137 @@ export class MakerScheduleRunner implements ScheduleRunner {
       live.model !== selection.model || getSessionProvider(live.id) !== selection.providerId) {
       throw new QueuedRouteDisabledError('Scheduled model route changed before queued dispatch');
     }
+  }
+
+  /**
+   * 空闲的本地 Codex 排队心跳在 preparation 阶段自愈 thread 身份。
+   *
+   * onAccepted 位于 send 事务的 vendor dispatch 边界，那里关会话会打断已捕获的
+   * Session，只能 fail-closed。preparation 则跑在发送锁内、send 事务取 live
+   * Session 之前：会话空闲时按目标路由关闭旧 thread 并 cold-resume 同一任务，
+   * 随后的路由同步与派发就能正常完成。正在跑 turn 的会话绝不强杀，仍由
+   * accepted 边界按身份错配失败收口。
+   */
+  private async healStaleQueuedCodexThread(input: {
+    schedule: Schedule;
+    ctx: FireContext;
+    sessionId: string;
+    holder: EphemeralSessionHolder;
+    baseline: {
+      model?: string;
+      agentKind?: AgentKind;
+      effort?: string;
+      fastMode?: boolean | 'ultrafast';
+      resolvedSelection?: ScheduledModelSelection;
+      providerId: string | null;
+    };
+  }): Promise<{ model: string; providerId: string | null } | null> {
+    const live = this.deps.maker.getSession(input.sessionId);
+    if (!live || live.agentKind !== 'codex' || live.remoteHostId || live.agentDeviceId) {
+      return null;
+    }
+    const targetModel =
+      input.baseline.resolvedSelection?.model ??
+      input.schedule.model?.trim() ??
+      input.baseline.model?.trim() ??
+      live.model;
+    const currentProviderId = getSessionProvider(input.sessionId) ?? input.baseline.providerId;
+    const targetProviderId =
+      input.baseline.resolvedSelection?.providerId ??
+      input.schedule.providerId?.trim() ??
+      currentProviderId;
+    if (
+      !isLocalCodexThreadRouteStale({
+        agentKind: live.agentKind,
+        remoteHostId: live.remoteHostId,
+        currentCodexProxyActive: live.codexProxyActive,
+        currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
+        currentCodexCindyRemoteCompactionCompatible:
+          live.codexCindyRemoteCompactionCompatible,
+        currentProviderId,
+        currentModel: live.model,
+        targetProviderId,
+        targetModel,
+      })
+    ) {
+      return null;
+    }
+    if (this.runtime.isSessionInTurn(input.sessionId) || live.isTurnRunning?.() === true) {
+      this.deps.logger.info?.(
+        '[runner] queued heartbeat Codex thread identity mismatch; session busy, leaving fail-closed to dispatch guard',
+        {
+          scheduleId: input.schedule.id,
+          sessionId: input.sessionId,
+          fromModel: live.model,
+          toModel: targetModel,
+          currentProviderId,
+          targetProviderId,
+        },
+      );
+      return null;
+    }
+    try {
+      await prepareLocalSessionCredentialModeSwitch({
+        maker: this.deps.maker,
+        sessionId: input.sessionId,
+        isSessionInTurn: this.runtime.isSessionInTurn,
+        signal: input.ctx.signal,
+      });
+    } catch (err) {
+      if (err instanceof CredentialModeSwitchBusyError) {
+        // 空闲判定与 close 之间的竞态：turn 刚起，保持 fail-closed 等下一轮。
+        this.deps.logger.info?.(
+          '[runner] queued heartbeat Codex rebuild raced a new turn; keeping fail-closed',
+          { scheduleId: input.schedule.id, sessionId: input.sessionId },
+        );
+        return null;
+      }
+      throw err;
+    }
+    throwIfFireAborted(input.ctx.signal, 'queued Codex thread rebuild');
+    const meta = await this.deps.maker.getSessionMeta(input.sessionId);
+    if (!meta?.workDir || !meta.agentKind) {
+      throw new QueuedCodexThreadIdentityMismatchError(
+        `queued heartbeat Codex thread provider identity does not match the current session route and the session cannot be cold-resumed (session ${input.sessionId})`,
+      );
+    }
+    const replacement = await this.createSession(
+      {
+        id: input.sessionId,
+        agentKind: meta.agentKind,
+        workingDir: meta.workDir,
+        model: targetModel,
+        ...(meta.effort ? { effort: meta.effort } : {}),
+        ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
+        permissionMode: meta.permissionMode ?? 'ask',
+        ...(meta.planMode !== undefined ? { planMode: meta.planMode } : {}),
+        resumeSessionId: meta.sdkSessionId,
+        providerId: targetProviderId,
+        vendorOptions: { source: 'scheduler' as const },
+      },
+      input.ctx.signal,
+      input.holder.assertOwner,
+    );
+    if (replacement === live) {
+      throw new QueuedCodexThreadIdentityMismatchError(
+        `queued heartbeat Codex thread could not be rebuilt for the current session route (session ${input.sessionId})`,
+      );
+    }
+    setSessionProvider(input.sessionId, targetProviderId);
+    this.runtime.wireSessionToIpc(replacement);
+    this.deps.logger.info?.(
+      '[runner] queued heartbeat cold-resumed idle Codex thread for route identity',
+      {
+        scheduleId: input.schedule.id,
+        sessionId: input.sessionId,
+        fromModel: live.model,
+        toModel: targetModel,
+        currentProviderId,
+        targetProviderId,
+        resumedFrom: meta.sdkSessionId ?? null,
+      },
+    );
+    return { model: targetModel, providerId: targetProviderId };
   }
 
   /**
@@ -4267,7 +4417,8 @@ type FireAbortStage =
   | 'session creation'
   | 'agent turn dispatch'
   | 'credential switch setup'
-  | 'credential mode switch';
+  | 'credential mode switch'
+  | 'queued Codex thread rebuild';
 
 function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
   if (signal.aborted) {
