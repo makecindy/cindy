@@ -4512,8 +4512,10 @@ function astraResponsesPayload(payload, model) {
 // the same history to a backend with a 64-character limit. Change only the wire
 // projection: Gemini still needs those signatures, and Responses has its own
 // native serializer. Reserve short IDs so hashing cannot alias an existing call.
+// This Cindy compat opt-in declares a wire constraint, not a model family.
+// Deployment names cannot identify Gemini; unknown routes keep their native IDs.
 function boundedChatToolIds(payload, model) {
-  if (model?.api !== 'openai-completions' || /(^|[/:])gemini-/i.test(model.id ?? '')
+  if (model?.api !== 'openai-completions' || model.compat?.maxToolCallIdLength !== 64
       || !Array.isArray(payload?.messages)) return payload;
   const ids = new Set<string>();
   for (const message of payload.messages) {

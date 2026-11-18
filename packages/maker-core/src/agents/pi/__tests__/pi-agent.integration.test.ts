@@ -982,9 +982,11 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     deps.resolvePiNativeProviders = async () => ({
       providers: [{ id: 'call-id-gateway', name: 'Test gateway', baseUrl: endpoint,
         api: 'openai-completions', apiKeyEnvVar: 'CINDY_PI_CALL_ID_TEST_KEY',
-        models: [...['gemini-test', 'gpt-test', 'vendor/gemini-test'].map(id => ({
+        models: [...['gemini-test', 'gpt-test', 'vendor/gemini-test', 'production-chat',
+          'production-flash', 'gemini', 'gpt-unknown'].map(id => ({
           id, name: id, reasoning: false, contextWindow: 200_000,
-          compat: { supportsStore: false },
+          compat: { supportsStore: false,
+            ...(['gpt-test', 'production-chat'].includes(id) ? { maxToolCallIdLength: 64 } : {}) },
         })), { id: 'gpt-responses-test', name: 'Responses', api: 'openai-responses' as const,
           reasoning: false, contextWindow: 200_000 }],
       }], env: { CINDY_PI_CALL_ID_TEST_KEY: 'test-only-key' },
@@ -1015,8 +1017,14 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await send();
       await handle.setModel?.('vendor/gemini-test', { providerId: 'call-id-gateway' });
       await send();
-      await handle.setModel?.('gpt-test', { providerId: 'call-id-gateway' });
+      await handle.setModel?.('production-chat', { providerId: 'call-id-gateway' });
       await send();
+      // Review #11108: wire IDs are deployment aliases, not model capabilities.
+      // Minimal regression: an aliased Gemini request with a signed long ID.
+      for (const model of ['production-flash', 'gemini', 'gpt-unknown']) {
+        await handle.setModel?.(model, { providerId: 'call-id-gateway' });
+        await send();
+      }
       await handle.setModel?.('gpt-responses-test', { providerId: 'call-id-gateway' });
       await send();
       const requests = seenRequests.slice(start).map(request => JSON.parse(request.body));
@@ -1024,7 +1032,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         (message.tool_calls ?? []).map((call: any) => call.id));
       const results = (request: any): string[] => request.messages.filter((message: any) =>
         message.role === 'tool').map((message: any) => message.tool_call_id);
-      expect(requests).toHaveLength(6);
+      expect(requests).toHaveLength(9);
       expect(calls(requests[1])).toEqual(ids);
       expect(results(requests[1])).toEqual(ids);
       expect(calls(requests[3])).toEqual(ids);
@@ -1037,9 +1045,15 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       expect(fallbackIds[3]).toBe(ids[3]);
       expect(results(requests[2])).toEqual(fallbackIds);
       expect(calls(requests[4])).toEqual(fallbackIds);
-      expect(requests.slice(0, 5).every(request => !('store' in request))).toBe(true);
-      const responseCalls = requests[5].input.filter((item: any) => item.type === 'function_call');
-      const responseResults = requests[5].input.filter((item: any) => item.type === 'function_call_output');
+      expect(results(requests[4])).toEqual(fallbackIds);
+      for (const request of requests.slice(5, 8)) {
+        expect(calls(request)).toEqual(ids);
+        expect(results(request)).toEqual(ids);
+      }
+      expect(requests.slice(0, 8).every(request => !('store' in request))).toBe(true);
+      expect(requests.every(request => !('maxToolCallIdLength' in request))).toBe(true);
+      const responseCalls = requests[8].input.filter((item: any) => item.type === 'function_call');
+      const responseResults = requests[8].input.filter((item: any) => item.type === 'function_call_output');
       expect(responseCalls).toHaveLength(4);
       expect(responseCalls.every((item: any) => item.call_id.length <= 64)).toBe(true);
       expect(responseResults.map((item: any) => item.call_id)).toEqual(responseCalls.map((item: any) => item.call_id));
