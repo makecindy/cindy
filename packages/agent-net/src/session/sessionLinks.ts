@@ -7,7 +7,7 @@
  *   的编解码用和 Device Link 客户端同一批模块、同一套请求字段，调用排队用同一个 InvokeScheduler。
  * - 被控端：会话来的 link-open / invoke / push / link-close 原样交给 onFrame 的处理者（dispatch），回复走请求来的那条会话；
  *   结果按控制端在这次请求上的声明编码，推送按它建链时声明的字典压缩。
- * 送达只靠会话层（核心负责重传与拥塞控制），这里不确认、不重发、不因慢重置。哪个对端走这里由 agentNetSessionRouting.ts 决定。
+ * 送达只靠会话层（核心负责重传与拥塞控制），这里不确认、不重发、不因慢重置。哪个对端走这里由 sessionRouting.ts 决定。
  */
 import {
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1, DeviceLinkError, HistoryViewDeltaCache, InboundInvokeTransferOptions, InvokeDeltaBases,
@@ -19,7 +19,8 @@ import {
   type Envelope, type InvokePayload, type InvokeResultPayload, type LinkAcceptPayload, type LinkCloseReason, type PresenceSnapshot,
   type PushPayload, diagnosticChannel, invokeIntendedHoldMs, shortDeviceRef,
 } from '@cindy/device-link';
-import { SessionError, newSessionRequestId, type SessionHandle, type SessionHandlers, type SessionLane, type SessionRequest, type SessionResult } from '@cindy/agent-net';
+import { SessionError, newSessionRequestId, type SessionHandle, type SessionHandlers, type SessionRequest, type SessionResult } from './peer.js';
+import type { SessionLane } from './lanes.js';
 import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinkMergedMethod, type PeerLinkRoutedMethod, type PeerLinks } from './peerLinks.js';
 
 type PushOwnerStamp = NonNullable<PushPayload['ownerStamp']>;
@@ -206,7 +207,7 @@ export class AgentNetSessionLinks implements Pick<PeerLinks, PeerLinkRoutedMetho
     this.invokeResultCache = new InvokeResultCache(options.transferCodec);
   }
 
-  // ─── 选路查询（agentNetSessionRouting.ts） ───────────────────────────────
+  // ─── 选路查询（sessionRouting.ts） ───────────────────────────────
 
   /** 这个对端现在能走会话（双方都启用了，连接在）。 */
   available(deviceId: string): boolean { return !this.stopped && !!this.live(deviceId); }

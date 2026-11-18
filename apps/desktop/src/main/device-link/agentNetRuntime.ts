@@ -19,7 +19,7 @@ import { acceptTransportStatement } from './agentNetTransportStatement.js';
 import { deviceName } from './deviceName.js';
 import { authorizeAgentNetSharingRequest, prepareAgentNetSharingPrimary } from './agentNetSharingPolicy.js';
 import { createLogger } from '../logger';
-import { AgentNetMembership } from './agentNetMembership.js';
+import { AgentNetMembership } from '@cindy/agent-net';
 import { isMobilePlatform } from './controllerPlatform.js';
 import { readAgentNetDirectoryCache, writeAgentNetDirectoryCache } from './agentNetDirectoryCache.js';
 
@@ -49,7 +49,7 @@ let listedPhones: { scope: string; ids: readonly string[] } | null = null;
 function noteListedPhones(scope: string, devices: readonly DeviceLinkListedDevice[]): void {
   listedPhones = { scope, ids: devices.filter((device) => isMobilePlatform(device.platform)).map((device) => device.deviceId) };
 }
-/** 官方 Agent-Net 上不认 Device Link 已删除的设备（agentNetMembership.ts）；按账号与网络（membershipScope）各算各的。 */
+/** 官方 Agent-Net 上不认 Device Link 已删除的设备（packages/agent-net/src/membership.ts）；按账号与网络（membershipScope）各算各的。 */
 const membership = new AgentNetMembership({
   readDeviceLinkDeviceIds: async () => {
     const scope = membershipScope;
@@ -125,7 +125,7 @@ function relayChanged(): void {
 export function agentNetNetworkChanged(): void { current?.networkChanged?.(); }
 /** 本机在官方 Device Link 里删掉了这台设备：Agent-Net 上马上不认它。 */
 export function agentNetNoteDeviceRemoved(deviceId: string): void { currentMembership()?.noteRemoved(deviceId); }
-/** 官方 Agent-Net 上认不认这台设备：Device Link 里删掉了、还没重新登录的不认（agentNetMembership.ts）；自建中转上都认。 */
+/** 官方 Agent-Net 上认不认这台设备：Device Link 里删掉了、还没重新登录的不认（packages/agent-net/src/membership.ts）；自建中转上都认。 */
 export function agentNetDeviceAccepted(deviceId: string): boolean {
   const rule = currentMembership()?.rule();
   return !rule || (!rule.refused.includes(deviceId) && (rule.allowed === null || rule.allowed.includes(deviceId)));

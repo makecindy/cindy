@@ -17,13 +17,10 @@
  *   不做增量，按对端取连接拿到的是那条分享连接，离线事件带它的代次（业务按这个代次丢弃过期事件）。
  * - tier：unit，两个真实的 SessionPeer 在内存里相连，真实的 Node 压缩编码器。 */
 import { describe, expect, it, vi } from 'vitest';
-import { SessionPeer, type SessionLane } from '@cindy/agent-net';
+import { AgentNetSessionLinks, SESSION_INVOKE_REPLAY, SessionPeer, agentNetSessionLane, routeSessionPeers, type AgentNetSessionLinksOptions, type SessionLane } from '@cindy/agent-net';
 import { DeviceLinkError, providerShareGuestPeer, providerShareHostPeer, type DeviceLinkClient, type DeviceLinkPeerRouteStateChanged, type Envelope,
   type InvokeResultPayload } from '@cindy/device-link';
 import { desktopTransferCodec } from '../transferCodec';
-import { AgentNetSessionLinks, agentNetSessionLane, type AgentNetSessionLinksOptions } from '../agentNetSessionLinks';
-import { routeSessionPeers } from '../agentNetSessionRouting';
-import { SESSION_INVOKE_REPLAY } from '../peerLinks';
 
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 const openPayload = { controllerName: 'test', protocolVersion: 1, appVersion: 'test' };

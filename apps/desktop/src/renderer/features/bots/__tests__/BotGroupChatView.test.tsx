@@ -5,6 +5,7 @@ import { InvokeScheduler } from '../../../../../../../packages/device-link/src/i
 import { copyRenderedSelection } from '../../../../test/vitest/rendererSelectionStyles';
 
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { Editor } from '@tiptap/core';
 import { Tooltip } from '@/components/ui/tooltip';
 import userEvent from '@testing-library/user-event';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
@@ -39,6 +40,8 @@ vi.mock('@/components/chat/FileLightbox', () => ({
 }));
 
 const mocks = vi.hoisted(() => ({
+  voiceBusy: false,
+  stopVoice: vi.fn(async () => {}),
   // Keep translation identity stable so attachment effects do not reload on every render.
   t: (key: string, options?: Record<string, unknown>) =>
     key === 'bots.groupChat.assistant.actingFor' ? `${options?.name} · for ${options?.person}`
@@ -143,13 +146,17 @@ vi.mock('../useBotGroupVoiceInput', () => {
   const ownsDraft = () => false;
   return { useBotGroupVoiceInput: ({ text }: { text: string }) => ({
   ownsDraft,
-  displayText: text, state: 'idle', isBusy: false, isListening: false, isCaptureReady: false,
-  lastError: null, shortcutLabel: '', start: () => false, stop: async () => {}, cancel: async () => {},
+  displayText: text, state: mocks.voiceBusy ? 'listening' : 'idle',
+  isBusy: mocks.voiceBusy, isListening: mocks.voiceBusy, isCaptureReady: false,
+  lastError: null, shortcutLabel: '', start: () => false, stop: mocks.stopVoice, cancel: async () => {},
 }) }; });
 
 beforeAll(() => {
   // jsdom has no layout; scrolling is a no-op here.
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 0 });
+  // ProseMirror's selection scroll consults Range geometry; real layout is covered by group-paste's UI cases.
+  Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
 });
 
 // Unit / PR #9249 r4500563150: real group input handlers and resize observer.
@@ -942,18 +949,23 @@ describe('BotGroupChatView', () => {
     } finally { cleanup(); motion.restore(); }
   });
 
-  it('cancels closing when Enter reopens the same thread and restores its input and draft', async () => {
+  it.each(['native', 'folded'])('cancels closing when Enter reopens the same thread and restores its %s input', async (inputKind) => {
     const motion = mockThreadMotion('200ms');
     try {
       mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+      const folded = inputKind === 'folded';
+      if (folded) saveDraft(botGroupThreadDraftKey('g1', 'u1'), {
+        attachments: [], text: botGroupDraftDoc('line\n'.repeat(23) + 'Still editing'),
+      });
       const user = userEvent.setup();
       renderView();
       const trigger = (await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!;
       await user.click(trigger);
       await act(async () => motion.animations[0]!.finish());
       const panel = screen.getByRole('complementary');
-      const input = within(panel).getByRole('textbox');
-      await user.type(input, 'Still editing');
+      const input = await within(panel).findByRole('textbox');
+      await waitFor(() => expect(document.activeElement).toBe(input));
+      if (!folded) await user.type(input, 'Still editing');
       await user.keyboard('{Escape}');
       const closing = motion.animations[1]!;
       expect(panel.inert).toBe(true);
@@ -965,8 +977,13 @@ describe('BotGroupChatView', () => {
       expect(motion.animate).toHaveBeenCalledTimes(2);
       await act(async () => closing.finish());
       expect(screen.getByRole('complementary')).toBe(panel);
-      await user.keyboard(' now');
-      expect((input as HTMLTextAreaElement).value).toBe('Still editing now');
+      if (folded) {
+        const chip = input.querySelector('[data-pasted-text-chip]');
+        expect(chip?.getAttribute('data-pasted-text')).toBe('line\n'.repeat(23) + 'Still editing');
+      } else {
+        await user.keyboard(' now');
+        expect((input as HTMLTextAreaElement).value).toBe('Still editing now');
+      }
       await user.click(within(panel).getByRole('button', { name: 'bots.close' }));
       await act(async () => motion.animations[2]!.finish());
       expect(screen.queryByRole('complementary')).toBeNull();
@@ -1819,6 +1836,133 @@ describe('BotGroupChatView', () => {
     expect(typeof input0.clientId).toBe('string');
     expect(input.value).toBe('');
     await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
+  });
+
+  // Regression (WeChat report 2026-11-18): the group textarea bypassed the long-paste
+  // pipeline used by private chats. Real group entry -> visible chip -> unchanged send.
+  // Existing send/attachment tests never pasted text. Minimal failure: 24 lines; unit tier.
+  it('folds a long paste and sends every line through the real group outbox', async () => {
+    renderView();
+    const input = await screen.findByRole('textbox');
+    const text = Array.from({ length: 24 }, (_, i) => `log ${i}`).join('\n');
+    fireEvent.paste(input, { clipboardData: { items: [], getData: (type: string) => type === 'text/plain' ? text : '' } });
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    expect(screen.getByRole('textbox').textContent).not.toContain('log 23');
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe(text);
+  });
+
+  it('keeps short pasted text in the native group input', async () => {
+    renderView();
+    const input = await screen.findByRole('textbox');
+    const event = createEvent.paste(input, { clipboardData: { items: [], getData: () => 'short text' } });
+    fireEvent(input, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.querySelector('[data-pasted-text-chip]')).toBeNull();
+  });
+
+  // Group textarea -> rich editor -> outbox. A caret or selection on an empty
+  // paragraph used to put the first chip at the end of the editor.
+  it.each([2, 3])('keeps a long paste on the selected blank line (end=%i)', async (end) => {
+    renderView();
+    const input = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'a\n\nb' } });
+    input.setSelectionRange(2, end);
+    const text = 'line\n'.repeat(23) + 'last';
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => text } });
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    const editor = screen.getByRole('textbox');
+    fireEvent.paste(editor, { clipboardData: { items: [], getData: () => '!' } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe('a\n' + text + '!' + (end === 2 ? '\nb' : 'b'));
+  });
+
+  // A restored draft packs the entire string into one chip. Picking a name at
+  // its end and continuing to type must replace the old query in the outbox.
+  it('replaces a partial mention at the end of a restored long draft', async () => {
+    const body = 'line\n'.repeat(23) + 'last';
+    saveDraft(botGroupAttachmentScope('g1'), { attachments: [], text: botGroupDraftDoc(body + ' @ast') });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+      members: [{ ...detail().members[0]!, name: 'Aster' }, detail().members[1]!],
+    }) });
+    renderView();
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    const input = screen.getByRole('textbox') as HTMLElement & { editor: Editor };
+    // Drive ProseMirror's caret directly because jsdom cannot put it after a
+    // rendered chip via End or a pointer click.
+    act(() => {
+      input.editor.commands.setTextSelection(input.editor.state.doc.content.size - 1);
+      input.focus();
+    });
+    fireEvent.click(await screen.findByRole('option', { name: 'Aster' }));
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'please' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0]).toMatchObject({
+      text: body + ' @Aster please',
+      mentions: { botIds: [detail().members[0]!.botId] },
+    });
+  });
+
+  it('opens the full text from a long human message without folding bot answers', async () => {
+    const text = Array.from({ length: 24 }, (_, i) => `line ${i}`).join('\n');
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
+      msg({ id: 'long-human', authorKind: 'user', authorBotId: null, content: text }),
+      msg({ id: 'long-bot', sequence: 2, authorKind: 'bot', authorBotId: 'mimi', content: text }),
+    ] }) });
+    renderView();
+    const chip = await screen.findByText('newChat.pastedText.chipLabel');
+    fireEvent.click(chip);
+    const preview = await screen.findByRole('textbox', { name: 'newChat.pastedText.previewTitle' });
+    expect((preview as HTMLTextAreaElement).value).toBe(text);
+    expect((preview as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(document.querySelector('[data-bot-group-message-id="long-bot"]')?.textContent).toContain('line 23');
+  });
+
+  it('keeps surrounding text and restores the complete folded draft', async () => {
+    const view = renderView();
+    const input = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'before  after' } });
+    input.setSelectionRange(7, 7);
+    const text = 'x'.repeat(4000);
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => text } });
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    expect(screen.getByRole('textbox').textContent).toContain('before ');
+    expect(screen.getByRole('textbox').textContent).toContain(' after');
+    view.unmount();
+    expect(JSON.stringify(getDraft(botGroupAttachmentScope('g1'))?.text)).toContain(`before ${text} after`);
+    renderView();
+    const restored = await screen.findByRole('textbox');
+    fireEvent.keyDown(restored, { key: 'Enter' });
+    await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+    expect(mocks.sendBotGroupMessage.mock.calls[0][0].text).toBe(`before ${text} after`);
+  });
+
+  // A folded input becomes read-only during dictation. Enter must still reach
+  // the focused field as it does with the native composer.
+  it('keeps the folded input keyboard-accessible while dictating', async () => {
+    const text = 'line\n'.repeat(23) + 'last';
+    saveDraft(botGroupAttachmentScope('g1'), { attachments: [], text: botGroupDraftDoc(text) });
+    const view = renderView();
+    await waitFor(() => expect(document.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    const input = screen.getByRole('textbox');
+    act(() => input.focus());
+    try {
+      mocks.voiceBusy = true;
+      // A group refresh re-renders the existing composer without touching its draft.
+      await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+      await waitFor(() => expect(input.getAttribute('contenteditable')).toBe('false'));
+      expect(input.tabIndex).toBe(0);
+      expect(document.activeElement).toBe(input);
+      await userEvent.setup().keyboard('{Enter}');
+      expect(mocks.stopVoice).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      mocks.voiceBusy = false;
+      mocks.stopVoice.mockClear();
+    }
   });
 
   it('opens the @ picker with Everyone first and inserts the chosen teammate', async () => {
@@ -3865,11 +4009,15 @@ describe('BotGroupChatView', () => {
   });
 });
 
-it('keeps copy/share in each author row\'s more menu and shares only message content through the standard selection flow', async () => {
+it('keeps copy/share in the more menu and includes folded human text in exported message clones', async () => {
+  // A 24-line human message used to export just the label because the clone
+  // reads from the selection view. Cover both own and other-member rows.
+  const long = 'export line\n'.repeat(23) + 'final export line';
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [
     msg({ id: 'bot-share', authorKind: 'bot', authorName: '咪咪', content: 'Share this answer' }),
-    msg({ id: 'mine-share', sequence: 2, content: 'My question' }),
-    msg({ id: 'notice', sequence: 3, kind: 'notice', authorKind: 'system', content: 'Group notice' }),
+    msg({ id: 'mine-share', sequence: 2, content: long }),
+    msg({ id: 'other-share', sequence: 3, content: long, isSelf: false, authorName: 'Guest' }),
+    msg({ id: 'notice', sequence: 4, kind: 'notice', authorKind: 'system', content: 'Group notice' }),
   ] }) });
   const view = renderView();
   try {
@@ -3878,7 +4026,11 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
     expect(await screen.findByRole('menuitem', { name: 'chat.messageActionBar.copy' })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: 'chat.shareImage.entry' }));
     expect(shareSelectionStore.getSelectedIds()).toEqual(['bot-share']);
-    expect(queryShareableMessageIds('bot-group:g1')).toEqual(['bot-share', 'mine-share']);
+    expect(queryShareableMessageIds('bot-group:g1')).toEqual(['bot-share', 'mine-share', 'other-share']);
+    for (const id of ['mine-share', 'other-share']) {
+      const row = document.querySelector<HTMLElement>(`[data-bot-group-message-id="${id}"]`)!.querySelector('article')!;
+      expect(prepareShareMessageClone(row)?.textContent).toContain('final export line');
+    }
     expect(within(article).getByRole('checkbox').getAttribute('aria-checked')).toBe('true');
     expect(screen.getByRole('button', { name: 'chat.shareImage.copy' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'chat.shareImage.cancel' }));
@@ -4023,13 +4175,21 @@ describe('Telegram / Slack-grade timeline', () => {
     expect(screen.getAllByText('在吗')).toHaveLength(1);
   });
 
-  it('takes the pending copy back and restores the draft when the send fails', async () => {
-    mocks.sendBotGroupMessage.mockResolvedValue({ ok: false, errorCode: 'SERVICE_ERROR', message: '' });
+  it.each(['short', 'folded'])('takes the pending copy back and restores the %s draft when the send fails', async (draftKind) => {
+    // Hold the host reply until the mounted editor actually clears.
+    const failed = deferred<{ ok: false; errorCode: 'SERVICE_ERROR'; message: string }>();
+    mocks.sendBotGroupMessage.mockReturnValue(failed.promise);
+    const text = draftKind === 'folded' ? 'line\n'.repeat(23) + 'last' : '没发出去';
+    saveDraft(botGroupAttachmentScope('g1'), { attachments: [], text: botGroupDraftDoc(text) });
     renderView();
-    const input = (await screen.findByRole('textbox')) as HTMLTextAreaElement;
-    fireEvent.change(input, { target: { value: '没发出去' } });
+    const input = await screen.findByRole('textbox');
+    const readDraft = () => input instanceof HTMLTextAreaElement
+      ? input.value : input.querySelector('[data-pasted-text-chip]')?.getAttribute('data-pasted-text');
+    await waitFor(() => expect(readDraft()).toBe(text));
     fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(input.value).toBe('没发出去'));
+    await waitFor(() => expect(readDraft()).not.toBe(text));
+    await act(async () => failed.resolve({ ok: false, errorCode: 'SERVICE_ERROR', message: '' }));
+    await waitFor(() => expect(readDraft()).toBe(text));
     expect(document.querySelector('[data-bot-group-message-id^="pending:"]')).toBeNull();
   });
 
