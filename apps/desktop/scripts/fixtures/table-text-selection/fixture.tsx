@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { mountPage } from '../../ui-page/harness';
+import { mountPage, subscription } from '../../ui-page/harness';
 import { MarkdownRenderer } from '../../../src/renderer/components/chat/MarkdownRenderer';
 import { MessageActionBar } from '../../../src/renderer/components/chat/MessageActionBar';
 import { SelectionQuoteButton } from '../../../src/renderer/components/chat/SelectionQuoteButton';
@@ -27,4 +27,7 @@ function Fixture({ content }: { content: string }) {
   </main>;
 }
 
-mountPage({ render: ctx => <Fixture content={ctx.data.content} /> });
+mountPage({
+  host: { onSelectionContextMenuAddToChat: subscription('selection-context-menu.add-to-chat') },
+  render: ctx => <Fixture content={ctx.data.content} />,
+});
