@@ -14,6 +14,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
+import { bumpSkillFactsGeneration } from '../skillFactsGeneration';
+
 import type {
   PiPackageCommandDiagnostic,
   PiNativeManagementCommand,
@@ -185,6 +187,8 @@ function onPiPackagesChanged(
 }
 
 function notifyPiPackagesChanged(origin: PiPackagesChangeOrigin): void {
+  // Managed pi packages carry plugin-sourced skills; drop facts caches first.
+  bumpSkillFactsGeneration();
   for (const listener of changeListeners) {
     try {
       listener(origin);

@@ -303,9 +303,14 @@ describe('Maker Pi managed-package skill boundary', () => {
     const maker = new Maker({ agents: { pi: agent }, storage, logger: createLogger() });
 
     await maker.listAgentSkills('pi', { workingDir: '/repo' });
+    maker.invalidateAgentSkillFacts();
     await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'local' });
+    maker.invalidateAgentSkillFacts();
     await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'review' });
+    maker.invalidateAgentSkillFacts();
     await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'remote' });
+    // Same scan identity without an invalidation in between reuses the cached scan.
+    await maker.listAgentSkills('pi', { workingDir: '/repo', sessionId: 'review' });
 
     expect(vi.mocked(agent.listAgentSkills).mock.calls.map(([options]) => (
       options.includeManagedPiPackages
@@ -344,6 +349,89 @@ function createDeferred<T = void>(): {
   });
   return { promise, resolve };
 }
+
+describe('Maker agent skill scan facts cache', () => {
+  // P1-1: the raw scan is generation-cached per scan identity; session
+  // filtering stays per call, forceReload and invalidation rescan.
+  it('shares one scan across sessions and rescans only after invalidation or forceReload', async () => {
+    const scan = vi.fn(async () => ({ skills: [{ kind: 'agent-skill' as const,
+      name: 'demo', source: 'skill' as const, path: '/fixture/demo' }] }));
+    const agent = createAgent(async (opts) => createHandle({ id: opts.sessionId ?? 'fixture' }));
+    agent.listAgentSkills = scan;
+    const readDisabled = vi.fn(async () => [] as readonly string[]);
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      await maker.createSession({ id: 'one', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+      await maker.createSession({ id: 'two', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+      await maker.listAgentSkills('codex', { workingDir: '/repo' }, readDisabled);
+      await maker.listAgentSkills('codex', { workingDir: '/repo', sessionId: 'one' }, readDisabled);
+      await Promise.all([
+        maker.listAgentSkills('codex', { workingDir: '/repo', sessionId: 'two' }, readDisabled),
+        maker.listAgentSkills('codex', { workingDir: '/repo' }, readDisabled),
+      ]);
+      expect(scan).toHaveBeenCalledTimes(1);
+      // Per-session filtering still runs on every call.
+      expect(readDisabled).toHaveBeenCalledTimes(4);
+      await maker.listAgentSkills('codex', { workingDir: '/other' }, readDisabled);
+      expect(scan).toHaveBeenCalledTimes(2);
+      await maker.listAgentSkills('codex', { workingDir: '/repo', forceReload: true }, readDisabled);
+      expect(scan).toHaveBeenCalledTimes(3);
+      maker.invalidateAgentSkillFacts();
+      await maker.listAgentSkills('codex', { workingDir: '/repo' }, readDisabled);
+      expect(scan).toHaveBeenCalledTimes(4);
+    } finally { await maker.shutdown(); }
+  });
+
+  it('applies per-session filtering to the shared scan without mutating it', async () => {
+    const disabledPath = '/fixture/disabled-skill';
+    const scan = vi.fn(async () => ({ skills: [
+      { kind: 'agent-skill' as const, name: 'kept', source: 'skill' as const, path: '/fixture/kept' },
+      { kind: 'agent-skill' as const, name: 'gone', source: 'skill' as const, path: disabledPath },
+    ] }));
+    const agent = createAgent(async (opts) => ({
+      ...createHandle({ id: opts.sessionId ?? 'fixture' }),
+      disabledSkillPaths: snapshotDisabledSkillPaths([disabledPath]),
+    }));
+    agent.filterActiveSkillCommands = (result, remoteHostId, snapshot, current) =>
+      BaseAgent.prototype.filterActiveSkillCommands.call(
+        { deps: { getDisabledSkillPaths: () => [] } } as unknown as BaseAgent,
+        result as never,
+        remoteHostId,
+        snapshot,
+        current,
+      ) as typeof result;
+    agent.listAgentSkills = scan;
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      await maker.createSession({ id: 'snap', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+      const all = await maker.listAgentSkills('codex', { workingDir: '/repo' });
+      expect(all.skills.map((skill) => skill.name)).toEqual(['kept', 'gone']);
+      const filtered = await maker.listAgentSkills('codex', { workingDir: '/repo', sessionId: 'snap' });
+      expect(filtered.skills.map((skill) => skill.name)).toEqual(['kept']);
+      // The cached raw scan is untouched by the session filter above.
+      const again = await maker.listAgentSkills('codex', { workingDir: '/repo' });
+      expect(again.skills.map((skill) => skill.name)).toEqual(['kept', 'gone']);
+      expect(scan).toHaveBeenCalledTimes(1);
+    } finally { await maker.shutdown(); }
+  });
+
+  it('does not cache a failed scan', async () => {
+    let calls = 0;
+    const scan = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('scan failed');
+      return { skills: [] };
+    });
+    const agent = createAgent(async () => undefined);
+    agent.listAgentSkills = scan;
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      await expect(maker.listAgentSkills('codex', { workingDir: '/repo' })).rejects.toThrow('scan failed');
+      await expect(maker.listAgentSkills('codex', { workingDir: '/repo' })).resolves.toEqual({ skills: [] });
+      expect(scan).toHaveBeenCalledTimes(2);
+    } finally { await maker.shutdown(); }
+  });
+});
 
 describe('application-owned session lifecycle', () => {
   // PR #7697 / 4401270741: visible apps enter createSession, not the already

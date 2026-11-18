@@ -1761,6 +1761,37 @@ export class Maker {
     return this.requireAgent(agentKind).listAgentCommands();
   }
 
+  /** Facts generation, bumped by the host after skill/plugin installs, removals or owner switches. */
+  private agentSkillScanGeneration = 0;
+  private agentSkillScanCache = new Map<string, { generation: number; load: Promise<ListAgentSkillsResult> }>();
+
+  /** Drop every cached skill/plugin scan; call after installs, removals or owner switches. */
+  invalidateAgentSkillFacts(): void {
+    this.agentSkillScanGeneration += 1;
+    this.agentSkillScanCache.clear();
+  }
+
+  private loadAgentSkillFacts(
+    key: string,
+    scan: () => Promise<ListAgentSkillsResult>,
+  ): Promise<ListAgentSkillsResult> {
+    const cached = this.agentSkillScanCache.get(key);
+    if (cached && cached.generation === this.agentSkillScanGeneration) return cached.load;
+    const entry = {
+      generation: this.agentSkillScanGeneration,
+      // A failed scan must not be cached; the next open retries.
+      load: scan().catch((error: unknown) => {
+        this.agentSkillScanCache.delete(key);
+        throw error;
+      }),
+    };
+    this.agentSkillScanCache.set(key, entry);
+    if (this.agentSkillScanCache.size > 8) {
+      this.agentSkillScanCache.delete(this.agentSkillScanCache.keys().next().value as string);
+    }
+    return entry.load;
+  }
+
   /**
    * Agent 用户/项目目录扫出的 skill (palette 'agent-skill' 类目) —— 异步, 有 IO。
    */
@@ -1786,10 +1817,22 @@ export class Maker {
       const current = !remoteHostId && snapshot === undefined ? await readDisabledSkillPaths?.() : undefined;
       return agent.filterActiveSkillCommands(result, remoteHostId, snapshot, current);
     };
-    const result = await filter(await agent.listAgentSkills({
+    // The raw scan walks every skill root and re-reads managed package
+    // resources; it only changes through installs, removals, owner switches or
+    // forceReload. Share one generation-cached scan across sessions; the
+    // session filtering below still runs per call on the cached result.
+    const scanKey = JSON.stringify([
+      agentKind,
+      agentOpts.workingDir ?? null,
+      includeManagedPiPackages === true,
+      agentOpts.remoteHostId ?? null,
+    ]);
+    const scan = () => agent.listAgentSkills({
       ...agentOpts,
       includeManagedPiPackages,
-    }));
+    });
+    if (agentOpts.forceReload) this.agentSkillScanCache.delete(scanKey);
+    const result = await filter(await this.loadAgentSkillFacts(scanKey, scan));
     if (agentKind !== 'pi' || !sessionId) return result;
     if (
       session?.agentKind !== 'pi'

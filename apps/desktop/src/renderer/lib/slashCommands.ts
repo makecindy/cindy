@@ -502,7 +502,10 @@ export async function loadAllCommands(
   };
   const skillP: Promise<SkillListResult> = shouldLoadSkills
     ? loadPendingSkills(
-        opts?.sessionId ? JSON.stringify([agentKind, deviceId || null, workingDir || null, opts.sessionId]) : null,
+        // Scan identity is agentKind + device + workingDir: concurrent
+        // sessions on the same directory share one in-flight scan. The
+        // session-specific filtering still happens per call on the main side.
+        opts ? JSON.stringify([agentKind, deviceId || null, workingDir || null]) : null,
         opts?.forceReload === true,
         () => deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [

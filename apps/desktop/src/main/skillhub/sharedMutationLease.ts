@@ -5,6 +5,7 @@ import path from 'node:path';
 import { getAppDataDir } from '../userDataPath.js';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { createLogger } from '../logger';
+import { bumpSkillFactsGeneration } from '../skillFactsGeneration';
 import { skillInstallLockKey } from './installLock';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
 
@@ -50,10 +51,20 @@ export async function withSkillMutation<T>(
   // Borrowing pins the underlying lease until the child finishes, even if its
   // caller starts releasing the lease without awaiting that child.
   const run = held.reduceRight<() => Promise<T>>((next, lease) => () => lease.run(next), operation);
-  if (!missing.length) return run();
+  // Every successful skill write invalidates generation-keyed facts caches.
+  if (!missing.length) {
+    return run().then((value) => {
+      bumpSkillFactsGeneration();
+      return value;
+    });
+  }
   const lease = await acquireSharedSkillMutationLease(missing, undefined, options);
   if (!lease) return undefined;
-  try { return await lease.run(run); }
+  try {
+    const value = await lease.run(run);
+    bumpSkillFactsGeneration();
+    return value;
+  }
   finally { await lease(); }
 }
 
