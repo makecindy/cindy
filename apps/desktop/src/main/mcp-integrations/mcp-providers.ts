@@ -51,6 +51,7 @@ import { createDesktopSessionShareCallbacks } from '../session-share/sessionShar
 import { listProjects, renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
+import { previewWorkspaceMove, requestWorkspaceMove, workspaceMoveStatus, cancelWorkspaceMove } from '../workspace-migration/service.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
 import { join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
@@ -155,7 +156,7 @@ import { BUILTIN_LIZI_MCP_IDS } from '../maker-host/plugins/builtin-plugins.js';
 import {
   type ChatHistoryReaderDeps,
 } from './remoteChatHistory.js';
-import { botSessionLinks, sessions } from '../localDb/schema.js';
+import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
 import { createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
@@ -1319,6 +1320,50 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return result.ok ? { ok: true, teammateId, homeDeviceId: targetDeviceId }
             : { ok: false, errorCode: result.code, message: `The buddy did not move (${result.code})` };
         },
+      },
+      workspaceMigration: {
+        run: (request, signal) => withAccountDataAccess(request.callerSessionId, async assertAccess => {
+          const db = getDbClient();
+          const owner = activeOwnerScopeKey();
+          const root = ownerScopedUserDataPath();
+          const actionGuard = captureTaskActionSyncGuard();
+          let assertGroupCurrent: (() => void) | undefined;
+          const assertCurrent = () => {
+            signal?.throwIfAborted();
+            actionGuard?.();
+            assertGroupCurrent?.();
+            const lane = readChannelToolScope({ sessionId: request.callerSessionId, sessionInstanceId: request.callerSessionInstanceId });
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || db !== tryGetDbClient()
+              || isSessionSharedTaskActive(request.callerSessionId) || (lane && !lane.requesterIsOwner)
+              || !deps.isCurrentLocalSessionInstance?.(request.callerSessionId, request.callerSessionInstanceId)) {
+              throw new Error('WORKSPACE_MIGRATION_CALLER_CHANGED_OR_RESTRICTED');
+            }
+          };
+          assertCurrent();
+          const [profile] = await db.drizzle.select({ status: botProfiles.status }).from(botProfiles)
+            .where(eq(botProfiles.id, request.teammateId)).limit(1);
+          if (!profile || profile.status === 'deleting') throw new Error('BUDDY_NOT_FOUND');
+          const [callerLink] = await db.drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
+            .from(botSessionLinks).where(eq(botSessionLinks.sessionId, request.callerSessionId)).limit(1);
+          if (callerLink?.role === 'group') {
+            const group = await authorizeGroupTool(request.callerSessionId, callerLink.botId, 'owner-action');
+            assertGroupCurrent = group.assertCurrent;
+          }
+          if (request.action === 'preview' || request.action === 'request') {
+            const cloud = activeCompanionCloud();
+            if (cloud && (await cloud.homeChoices(request.teammateId)).mode !== 'local') throw new Error('BUDDY_WORKSPACE_IS_ON_ANOTHER_COMPUTER');
+          }
+          await assertAccess();
+          assertCurrent();
+          if (request.action === 'request' || request.action === 'cancel') await assertTaskActionCurrent();
+          if (request.action === 'request') return requestWorkspaceMove(root, request.teammateId, request.target!, assertCurrent, signal);
+          if (request.action === 'cancel') return cancelWorkspaceMove(root, request.teammateId, assertCurrent);
+          const result = request.action === 'preview'
+            ? await previewWorkspaceMove(root, request.teammateId, request.target!, signal)
+            : await workspaceMoveStatus(root, request.teammateId);
+          assertCurrent();
+          return result;
+        }),
       },
       botProfiles: {
         create: async ({ callerSessionId, callerSessionInstanceId, name, description, identitySource }) => {

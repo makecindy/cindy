@@ -153,6 +153,19 @@ describe('伙伴的家', () => {
     expect((await readBotProfileFolder(root, 'bot-a')).identitySource).toBe('');
     await expect(removeBotProfileFolder(root, 'bot-a')).resolves.toBeUndefined();
   });
+
+  // #10568: deleting Home must unlink its relocated workspace, never recursively
+  // traverse the junction into the user-selected data-disk directory.
+  it('preserves a relocated workspace target when its companion is deleted', async () => {
+    const home = botProfileDir(root, 'bot-a');
+    const target = path.join(root, 'data-disk');
+    await fs.mkdir(home, { recursive: true });
+    await fs.mkdir(target);
+    await fs.writeFile(path.join(target, 'keep.txt'), 'user-work');
+    await fs.symlink(target, path.join(home, 'workspace'), process.platform === 'win32' ? 'junction' : 'dir');
+    await removeBotProfileFolder(root, 'bot-a');
+    expect(await fs.readFile(path.join(target, 'keep.txt'), 'utf8')).toBe('user-work');
+  });
 });
 
 describe('搬家', () => {

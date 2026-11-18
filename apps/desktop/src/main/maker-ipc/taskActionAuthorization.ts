@@ -140,6 +140,7 @@ export function createTaskActionAuthorizer(deps: {
     const protectedAction =
       call.server === 'cindy_helper'
         ? TASK_ACTION_TOOLS.has(call.tool) || HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
+          || (call.tool === 'teammate_workspace_migration' && !['preview', 'status'].includes(String((call.args as Record<string, unknown>)?.action)))
         : call.server === 'cindy_scheduler' ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
         : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
     if (!protectedAction || (call.tool === 'manage_session_prs' && (call.args as Record<string, unknown>)?.action === 'list') ||

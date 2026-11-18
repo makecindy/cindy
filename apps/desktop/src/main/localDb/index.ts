@@ -30,6 +30,8 @@ import { userDataPath } from '../userDataPath.js';
 import { isHostClientMode } from '../host-client-mode.js';
 import { isCindyPersonalRuntime } from '../cindy-make/versionRuntimeIdentity.js';
 import fs from 'node:fs';
+import { ownerScopedPath } from '../dataOwnerPath.js';
+import { recoverWorkspaceMovesAtStartup } from '../workspace-migration/service.js';
 
 import { createBetterSqliteDatabase } from './betterSqliteFactory';
 import { ensureCjkFtsTempTriggersInstalled } from './registerCjkSeg';
@@ -218,6 +220,23 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       exists: fs.existsSync(filePath),
     }),
   );
+
+  try {
+    // No sessions, project-memory stores or scheduler for this owner may start
+    // before its offline workspace cutover has completed (or restored the source).
+    await recoverWorkspaceMovesAtStartup(ownerScopedPath(userDataPath(), userId), startupLease.kind === 'writer');
+  } catch (error) {
+    releaseSchemaLeasesAfterFailure();
+    const reason = error instanceof Error ? error.message : 'WORKSPACE_MOVE_RECOVERY_REQUIRED';
+    const blocked = reason === 'WORKSPACE_MOVE_REQUIRES_EXCLUSIVE_STARTUP' || reason === 'WORKSPACE_MOVE_IN_PROGRESS';
+    const code = blocked ? 'DB_SCHEMA_LOCKED' : 'DB_INIT_FAILED';
+    const message = blocked
+      ? localDbText(reason === 'WORKSPACE_MOVE_IN_PROGRESS' ? 'localDbFatal.schemaLease.writer-active' : 'localDbFatal.schemaLease.readers-active')
+      : `${localDbText('localDbFatal.initFailed.description')} (WORKSPACE_MOVE_RECOVERY_REQUIRED)`;
+    log.error('workspace migration startup recovery blocked', { code });
+    showFatalDialog(localDbText('localDbFatal.initFailed.title'), message, code);
+    return { ready: false, error: { code, message } };
+  }
 
   let maintenance: { handled: boolean; originalDatabaseReady: boolean };
   try {

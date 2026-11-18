@@ -76,6 +76,7 @@
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { assertWorkspaceMoveReady } from '../workspace-migration/service.js';
 
 import { teammateFolderName } from '@cindy/maker-shared/teammate-project';
 
@@ -133,6 +134,7 @@ export async function ensureBotWorkspaceDir(
   legacyUserDataDir?: string,
 ): Promise<string> {
   await migrateLegacyBotProfileFolder(userDataDir, legacyUserDataDir, botId);
+  await assertWorkspaceMoveReady(userDataDir, botId);
   const workspace = path.join(botProfileDir(userDataDir, botId), 'workspace');
   await fs.mkdir(workspace, { recursive: true });
   return workspace;
