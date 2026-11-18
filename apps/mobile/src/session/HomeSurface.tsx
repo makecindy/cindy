@@ -12,7 +12,7 @@ import type { ViewInstance } from 'react-native';
 import { useTaskListNavigation } from './useTaskListNavigation';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { cloudCompanionRows } from '@/chat/cloudCompanion';
-import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
+import { normalizeTaskTeammateSelection, taskTeammateId, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
 import { readTeammateTasks } from './readTeammateTasks';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { MountOnFirstOpen } from './MountOnFirstOpen';
@@ -2392,7 +2392,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     teammates: effectiveTeammateFilter,
     teammateKey: item => {
       const session = item.session as RemoteSession;
-      const id = session.taskTeammate?.id ?? session.companion?.id;
+      const id = taskTeammateId(session);
       return id ? taskTeammateKey(id, session.deviceLinkDeviceId ?? '', cloudTeammateIds, cindyTeammateIds) : undefined;
     },
     vendor: vendorFilter,

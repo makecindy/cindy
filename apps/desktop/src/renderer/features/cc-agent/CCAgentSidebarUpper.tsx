@@ -1646,6 +1646,11 @@ function ExpandedView({
       && matchesTaskCreators(session, filter.creators, taskCreatorIndex));
   }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys,
     localPlatform, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  // The inbox counts a task as a teammate's by the same test as the teammate filter.
+  const isInboxTeammateTask = useCallback(
+    (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
+    [taskCreatorIndex],
+  );
   const inboxGroups = useProjectGroups(inboxSourceSessions, projectAliases.aliases, false,
     undefined, localPlatform, undefined, projectAliasMembers);
 
@@ -3997,6 +4002,7 @@ function ExpandedView({
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
                 <ProjectsSection
                   inboxSessions={inboxSessions}
+                  isInboxTeammateTask={isInboxTeammateTask}
                   unclassified={visibleUnclassified}
                   projects={visibleProjectsWithVendor}
                   dialogues={visibleDialogues}

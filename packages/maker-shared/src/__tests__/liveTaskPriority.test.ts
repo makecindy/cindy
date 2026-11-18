@@ -56,6 +56,18 @@ it('keeps a quiet follow-up in working; results, waiting, snooze and archive tak
   expect(taskInboxSection({ status: 'archived' }, signals, now)).toBe('archived');
 });
 
+// 2026-11-18 user decision: the phone's inbox filled with teammates' routine results. A teammate's
+// task reaches Pending only when it needs the user (a question, a permission or an error).
+it('keeps a teammate task in working unless it needs the user', () => {
+  const now = Date.parse('2026-11-18T08:00:00Z');
+  const teammate = { running: false, waiting: false, teammate: true };
+  expect(taskInboxSection({}, { ...teammate, unread: true }, now)).toBe('working');
+  expect(taskInboxSection({}, teammate, now)).toBe('working');
+  expect(taskInboxSection({}, { ...teammate, waiting: true }, now)).toBe('inbox');
+  expect(taskInboxSection({ snoozedUntil: new Date(now + 1000).toISOString() }, teammate, now)).toBe('snoozed');
+  expect(taskInboxSection({ status: 'archived' }, teammate, now)).toBe('archived');
+});
+
 // Unit: same PR-follow contract as prFollowWatch; routine pre-run checks and lookalikes do not count.
 it('recognizes PR follow-ups only from a pre-run check naming a PR or MR', () => {
   const hook = (command: string) => ({ preRunHook: { command } });

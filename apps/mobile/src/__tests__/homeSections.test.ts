@@ -509,6 +509,26 @@ it('builds inbox sections and recomputes snooze expiry without losing collapsed 
   expect(buildInboxHomeSections(home, new Set(), signals, now + 3600000).find(s => s.key === 'inbox-inbox')?.count).toBe(4);
 });
 
+// 2026-11-18 user decision: teammates' routine results filled the phone's inbox. Teammate tasks
+// (by the teammate filter's test) reach Pending only when they need the user.
+it('keeps a teammate task with a new result in working until it needs the user', () => {
+  const routine = listItem('routine', '2026-11-18T08:00:00Z');
+  (routine.session as { source?: string; companion?: object }).source = 'bot';
+  (routine.session as { companion?: object }).companion = { id: 'bot-1', role: 'routine' };
+  const opened = listItem('opened', '2026-11-18T08:00:00Z');
+  (opened.session as { taskTeammate?: object }).taskTeammate = { id: 'bot-1', name: 'Mate' };
+  const mine = listItem('mine', '2026-11-18T08:00:00Z');
+  const home = presentation({ chats: [routine, opened, mine] });
+  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(),
+    unreadSessionIds: new Set(['routine', 'opened', 'mine']) };
+  const ids = (key: string) => buildInboxHomeSections(home, new Set(), signals, Date.now())
+    .find(s => s.key === key)!.data.flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
+  expect(ids('inbox-inbox')).toEqual(['mine']);
+  expect(ids('inbox-working').sort()).toEqual(['opened', 'routine']);
+  signals.waitingSessionIds.add('routine');
+  expect(ids('inbox-inbox').sort()).toEqual(['mine', 'routine']);
+});
+
 it('puts a quiet followed task in working and returns it to inbox for results, waiting or pause', () => {
   const item = listItem('followed', '2026-11-13T08:00:00Z');
   item.scheduleInfo = { scheduleId: 'schedule', scheduleName: 'Follow', hasActiveFollowUp: true,

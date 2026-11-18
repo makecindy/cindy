@@ -32,6 +32,8 @@ import {
   localizeRemoteSessionListItem,
   type RemoteSessionListItem,
 } from './sessionList';
+import { taskTeammateId } from './teammateTaskSource';
+import type { RemoteSession } from './types';
 
 /** 首页列表的一行:目录分组头,或一条任务(置顶 / 普通 / 项目内)。 */
 export type HomeRow =
@@ -594,6 +596,8 @@ export function buildInboxHomeSections(
         const group = taskInboxSection(task, {
           ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx), naturalPriorityRankForId(task.id, ctx)),
           following: item.scheduleInfo?.hasActiveFollowUp === true,
+          // A teammate's task reaches Pending only when it needs the user (2026-11-18).
+          teammate: taskTeammateId(task as RemoteSession) !== undefined,
         }, nowMs);
         const until = taskSnoozeUntil(task);
         groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,

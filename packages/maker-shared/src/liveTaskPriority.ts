@@ -45,20 +45,23 @@ export interface TaskInboxState {
  * Sections follow whose turn it is. Reading never settles an ordinary task; an active
  * follow-up only keeps the task working while nothing is left for the user. Unread
  * results (including notified automation runs) and pending replies return it to inbox.
- * Pass signals from the viewed-priority rank so the open task stays put until left.
+ * A teammate's task reaches the inbox only when it needs the user (a question, a permission
+ * or an error); its new results stay with the teammate in working (2026-11-18 user decision).
  */
 export function taskInboxSection(
   task: TaskInboxState,
   signals: Pick<LiveTaskPrioritySignals, 'waiting' | 'running'> & {
     unread?: boolean;
     following?: boolean;
+    /** The task belongs to a teammate (the same test as the task list's teammate filter). */
+    teammate?: boolean;
   },
   nowMs: number,
 ): TaskInboxSection {
   if (task.status === 'archived') return 'archived';
   if (taskSnoozeUntil(task) > nowMs) return 'snoozed';
   if (signals.waiting) return 'inbox';
-  if (signals.running) return 'working';
+  if (signals.running || signals.teammate) return 'working';
   if (signals.following && !signals.unread) return 'working';
   return 'inbox';
 }

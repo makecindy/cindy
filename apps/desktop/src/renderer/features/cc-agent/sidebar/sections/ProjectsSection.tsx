@@ -195,6 +195,8 @@ export interface ProjectsSectionProps {
   unclassified: Session[];
   /** Same device/content scope, including archived tasks, for the standalone inbox mode. */
   inboxSessions?: readonly Session[];
+  /** Inbox: whether a task belongs to a teammate (the task list's teammate-filter test). */
+  isInboxTeammateTask?: (session: Session) => boolean;
   /** 已经按 filter.projects 过滤后、仅会被渲染的 Project 子集。 */
   projects: ProjectNodeData[];
   /**
@@ -293,6 +295,7 @@ export interface ProjectsSectionProps {
 export function ProjectsSection({
   unclassified,
   inboxSessions,
+  isInboxTeammateTask,
   projects,
   dialogues,
   dialogueActionSessions = dialogues,
@@ -1397,6 +1400,7 @@ export function ProjectsSection({
       {taskListMode === 'inbox' && inboxSessions && (
         <TaskInbox
           sessions={inboxSessions}
+          isTeammateTask={isInboxTeammateTask}
           priorityContext={priorityContext}
           activeSessionId={activeSessionId}
           runningSessionIds={runningSessionIds}

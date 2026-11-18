@@ -28,9 +28,11 @@ import { sidebarPriorityContext } from '../lib/sidebarPriorityContext';
 type Props = Omit<SessionEntryRowsProps, 'entries'> & {
   sessions: readonly Session[];
   priorityContext: MainListPriorityContext;
+  /** A teammate's task only reaches Pending when it needs the user. */
+  isTeammateTask?: (session: Session) => boolean;
 };
 const SECTIONS: TaskInboxSection[] = ['inbox', 'working', 'snoozed', 'archived'];
-export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
+export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }: Props) {
   const { t, i18n } = useTranslation();
   const followingSessions = useActiveFollowUpSessions(sessions);
   // The inbox spans more tasks than the regular list (e.g. outside its status filter), so remote
@@ -74,6 +76,7 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
                 sessionNaturalPriorityRank(session, inboxContext),
               ),
               following: followingSessions.has(session),
+              teammate: isTeammateTask?.(session) === true,
             },
             now,
           ),
@@ -84,7 +87,7 @@ export function TaskInbox({ sessions, priorityContext, ...rows }: Props) {
     // The open task moves like any other (a reply sends it to Working at once); its row does not
     // scroll the sidebar after it (useScrollActiveRowIntoView).
     return result;
-  }, [sessions, inboxContext, now, followingSessions]);
+  }, [sessions, inboxContext, now, followingSessions, isTeammateTask]);
   // While the pointer is over the list (or a row menu / snooze popover it opened is still open),
   // rows keep their arrangement so a one-click Done never lands on a row that just moved.
   const rootRef = useRef<HTMLDivElement>(null);
