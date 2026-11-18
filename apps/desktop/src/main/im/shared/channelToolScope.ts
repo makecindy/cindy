@@ -110,6 +110,7 @@ export function isLaneTurnScopeChannel(channel: string): channel is LaneTurnScop
 
 export interface IMessageToolScope {
   channel: 'imessage';
+  readArchive?: (query: string | undefined, before: number | undefined, limit: number) => Promise<unknown>;
   im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health'>;
   botId: string;
   laneUserId: string;

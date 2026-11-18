@@ -1,3 +1,4 @@
+import { companionLaneRouteKey } from '../shared/imBotBindingRoute';
 import { readBotImConnection } from '../shared/botImConnectionStore';
 import { randomUUID } from 'node:crypto';
 import { IMESSAGE_GROUP_WINDOW, sanitizeGroupWindowName } from '../shared/channelGroupWindow';
@@ -10,14 +11,29 @@ import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { createImOrchestrator } from '../shared/orchestrator';
 import { channelForceConfirmToolCall } from '../shared/channelToolPolicy';
 import { handleDingTalkTextInteraction } from '../dingtalk/interaction';
+import { archiveDirectory, readArchive } from './archive';
 import { ui } from './uiText';
 
 export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestratorConfig,
   options: { instanceKey: string; companionBotId: string; connectionId: string }) {
   const textInteractions = new Map<string, { cancelled: boolean }>();
+  const companionLane: NonNullable<ImChannelAdapter['companionLane']> = userId => im.isGroup(userId)
+    ? { kind: 'group', chatId: userId, threadId: '' }
+    : userId === im.getOwnerUserId() ? { kind: 'owner-dm' } : { kind: 'guest-dm', userId };
   const adapter: ImChannelAdapter = {
     channel: 'imessage', im, config, ui,
     getBotContextId: () => im.botContextId,
+    scheduledNotificationText(text) {
+      const value = text.trim();
+      if (value === '[SILENT]') return null;
+      if (!value.startsWith('<heartbeat>')) return undefined;
+      // Codex emits raw message text, including URLs and literal angle brackets.
+      const envelope = /^<heartbeat>\s*<automation_id>[^<>]+<\/automation_id>\s*<decision>(NOTIFY|SILENT|DONT_NOTIFY)<\/decision>\s*(?:<message>([\s\S]*)<\/message>\s*)?<\/heartbeat>$/.exec(value);
+      if (!envelope || (envelope[1] === 'NOTIFY' && !envelope[2]?.trim())) {
+        throw new Error('IMESSAGE_INVALID_HEARTBEAT_NOTIFICATION');
+      }
+      return envelope[1] === 'NOTIFY' ? envelope[2].trim() : null;
+    },
     processingEmoji: '', silentQueue: true,
     output: { kind: 'chunked-text', im, commitFinal: async output => {
       await im.commitFinal(output);
@@ -38,12 +54,23 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       extraInsertColumns: (imBotContextId, imUserId) => ({ imBotContextId, imUserId }),
     },
     buildVendorOptions: userId => ({ imessageChatId: userId, source: 'imessage' }),
-    companionLane: userId => im.isGroup(userId) ? { kind: 'group', chatId: userId, threadId: '' }
-      : userId === im.getOwnerUserId() ? { kind: 'owner-dm' } : { kind: 'guest-dm', userId },
-    channelToolScopeFor: event => ({ channel: 'imessage', im, botId: event.contextId,
+    companionLane,
+    connectedChatForLane(botId, routeKey) {
+      if (botId !== options.companionBotId) return undefined;
+      return im.listChats().find(chat => {
+        const lane = companionLane(chat.guid);
+        return lane.kind !== 'owner-dm' && companionLaneRouteKey('imessage', im.botContextId, lane) === routeKey;
+      })?.guid;
+    },
+    channelToolScopeFor: event => {
+      const origin = im.connectedOrigin;
+      const directory = origin && archiveDirectory(options.connectionId, origin);
+      return { channel: 'imessage', im, botId: event.contextId,
       laneUserId: event.senderId, chatId: event.chatId,
+      readArchive: directory ? (query, before, limit) => readArchive(directory, event.chatId, query, before, limit) : undefined,
       chatKind: im.isGroup(event.chatId) ? 'group' : 'direct',
-      requesterIsOwner: event.speaker?.isOwner === true, companion: true }),
+      requesterIsOwner: event.speaker?.isOwner === true, companion: true };
+    },
     channelNoteSourceFor: event => ({
       toolsHint: 'iMessage via local BlueBubbles. cindy_imessage tools provide connected chat history, immediate text/file sending and connection health. Normal final replies are delivered automatically.',
       chatKind: im.isGroup(event.chatId) ? 'group' : 'direct', chatId: event.chatId,
@@ -90,10 +117,14 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
       if (persisted && userMessageId) im.acknowledgeIncoming(userMessageId);
     },
     handleTextInteraction: async (userId, request, interactionOptions) => {
-      // Only the configured owner can answer permissions, including member-originated turns.
-      const target = request.kind === 'permission' ? im.getOwnerUserId() : userId;
-      if (!target) return interactionOptions?.sharedPermission?.result
-        ?? Promise.resolve({ kind: 'permission', behavior: 'deny', reason: 'imessage_owner_not_connected' });
+      const audience = request.kind === 'ask_user_question' ? 'chat' : 'owner';
+      const target = audience === 'owner' ? im.getOwnerUserId() : userId;
+      if (!target) {
+        const reason = 'imessage_owner_not_connected';
+        if (request.kind === 'plan_review') return { kind: 'plan_review', behavior: 'deny', dismissed: true, reason };
+        if (request.kind === 'ask_user_question') return { kind: 'ask_user_question', answers: {}, dismissed: true };
+        return interactionOptions?.sharedPermission?.result ?? { kind: 'permission', behavior: 'deny', reason };
+      }
       const requestKey = JSON.stringify([userId, request.requestId]);
       const interaction = { cancelled: false };
       textInteractions.set(requestKey, interaction);
@@ -102,7 +133,7 @@ export function wireIMessageOrchestrator(im: BlueBubblesIM, config: ImOrchestrat
           sendText: im.sendText.bind(im),
           requestTextReply: (chatId, prompt, parse, timeoutMs, shared) => {
             if (interaction.cancelled) return Promise.reject(new Error('BLUEBUBBLES_INTERACTION_CANCELLED'));
-            return im.requestTextReply(chatId, prompt, parse, timeoutMs, shared, requestKey);
+            return im.requestTextReply(chatId, prompt, parse, timeoutMs, shared, requestKey, audience);
           },
         }, target, request, interactionOptions);
       } finally {

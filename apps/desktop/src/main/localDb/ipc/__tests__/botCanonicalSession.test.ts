@@ -26,6 +26,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
 import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
 import { configureBotModelSelectionCoordinator, createBotModelSelectionCoordinator } from '../../../maker-ipc/botModelSelectionCoordinator';
+import { createBotSettingsAutosave, normalizeBotSettingsPayload, type BotAutosaveStatus } from '../../../../renderer/features/bots/botSettingsAutosave';
 import { createScheduledModelScope, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../../../maker-ipc/scheduledModelSelection';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
@@ -617,6 +618,68 @@ describe('Bot global model restore IPC', () => {
 });
 
 describe('Bot canonical Session lifecycle', () => {
+  // DB regression: an unanswered host write is not cancelled by the UI timeout.
+  // Prior persistence tests always awaited its receipt; unit form tests use a
+  // memory fake. Exercise real IPC + SQLite and read back the last chosen route.
+  it('persists the latest model after an unconfirmed settings save finally completes', async () => {
+    const original = await invoke('local-db:bots:get', 'bot-1');
+    let baseline = normalizeBotSettingsPayload(original, original.name);
+    const route = { ...baseline.capabilities.modelChain[0]!, model: 'first-choice' };
+    const selection = (model: string) => ({ ...baseline, capabilities: { ...baseline.capabilities,
+      ...route, model, modelChain: [{ ...route, model }], modelChainOverride: [{ ...route, model }],
+      modelOverride: { model, providerId: route.providerId, effort: route.effort, fastMode: route.fastMode } } });
+    let draft = selection(route.model);
+    let version = original.currentVersion;
+    let entered!: () => void;
+    const hostEntered = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const hostGate = new Promise<void>(resolve => { release = resolve; });
+    configureBotModelSelectionCoordinator(async (_ids, operation) => {
+      entered();
+      await hostGate;
+      return operation();
+    });
+    let confirmed!: () => void;
+    const latestConfirmed = new Promise<void>(resolve => { confirmed = resolve; });
+    const statuses: BotAutosaveStatus[] = [];
+    const save = createBotSettingsAutosave({ readBaseline: () => baseline, readPayload: () => draft,
+      commit: async payload => {
+        const saved = await invoke('local-db:bots:update', {
+          id: 'bot-1', capabilities: payload.capabilities, acceptSavedModelSelectionVersion: version,
+        });
+        version = saved.currentVersion;
+        baseline = normalizeBotSettingsPayload(saved, saved.name);
+        if (saved.capabilities.model === 'latest-choice') confirmed();
+      },
+      onStatusChange: status => statuses.push(status),
+    });
+    vi.useFakeTimers();
+    try {
+      const firstWait = save.flush();
+      await hostEntered;
+      await vi.advanceTimersByTimeAsync(30_000);
+      await firstWait;
+      expect(statuses).toEqual(['saving', 'error']);
+      expect((await invoke('local-db:bots:get', 'bot-1')).currentVersion).toBe(original.currentVersion);
+      draft = selection('latest-choice');
+      save.schedule('model');
+      await vi.advanceTimersByTimeAsync(0);
+      release();
+      await latestConfirmed;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statuses.filter(status => status === 'saved')).toHaveLength(1);
+      expect(save.isDirty()).toBe(false);
+      const reread = await invoke('local-db:bots:get', 'bot-1');
+      expect(reread.capabilities.modelChain).toEqual([{ ...route, model: 'latest-choice' }]);
+      expect(reread.currentVersion).toBe(original.currentVersion + 2);
+    } finally {
+      release();
+      save.cancel();
+      configureBotModelSelectionCoordinator(async (_ids, operation) => operation());
+      vi.useRealTimers();
+    }
+  });
+
   it('reads the stored 代输入 and follow-by-scheduler choices back into the settings profile', async () => {
     expect((await invoke('local-db:bots:get', 'bot-1')).capabilities).not.toHaveProperty('inputHandoff');
     await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { inputHandoff: false, allowSchedulerFollow: true } });
@@ -3314,8 +3377,8 @@ describe('Bot canonical Session lifecycle', () => {
       },
     }, { persistSnapshot: false });
 
-    // 读不出自己的技能架子不是「用户配的 Skill 有一条不可用」,不该稀释降级信号。
-    expect(snapshot?.resolutionStatus).toBe('applied');
+    // The session starts with a degraded snapshot. No individual skill was identified as missing.
+    expect(snapshot?.resolutionStatus).toBe('degraded');
     expect(snapshot?.unavailableSkills).toEqual([]);
     expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toBeUndefined();
   });

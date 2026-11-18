@@ -3,6 +3,7 @@ import { createLogger } from '../logger';
 import { t } from '../i18n.desktop';
 import { privacyScreenHtml } from './privacyScreenHtml';
 import { watchPrivacyInput, type PrivacyInputMonitor } from './privacyInput';
+import { loadWindowsTaskbarNative } from '../windowsTaskbarNative';
 import { scheduleMainAppPresenceRestore } from '../appPresence';
 
 /** Below 1 so windows behind stay "visible" to macOS; high enough to hide them from people. */
@@ -166,11 +167,11 @@ export class PrivacyScreen {
       );
       this.partitionConfigured = true;
     }
-    const displays = screen.getAllDisplays();
     const html =
       this.options.html?.() ?? privacyScreenHtml(t('privacyExit.status'), t('privacyExit.hint'));
     const nonActivating = this.options.nonActivating === true && process.platform === 'darwin';
     try {
+      const displays = screen.getAllDisplays();
       for (const display of displays) {
         const window = new BrowserWindow({
           ...display.bounds,
@@ -255,6 +256,9 @@ export class PrivacyScreen {
           windowFailed();
         });
       }
+      // Register the first mask synchronously so display changes during preparation
+      // invalidate the lease, including while the Windows shell bridge loads.
+      const windowsShell = process.platform === 'win32' ? await loadWindowsTaskbarNative() : null;
       if (!current() || generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
       const ids = this.windows.map((window) => Number(window.getMediaSourceId().split(':')[1]));
       if (!ids.length || ids.some((id) => !Number.isSafeInteger(id) || id <= 0))
@@ -274,6 +278,10 @@ export class PrivacyScreen {
         if (!target) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
         window.showInactive();
         window.setBounds(target, false);
+        // Chromium can apply its screenshot policy when showing the HWND. Set
+        // and read back the exact exclusion policy on the final visible window.
+        if (windowsShell && !windowsShell.excludePrivacyMaskFromCapture(window.getNativeWindowHandle()))
+          throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
         log.debug('mask shown', {
           windowId: window.id,
           target,

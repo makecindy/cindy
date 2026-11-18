@@ -445,6 +445,8 @@
     },
     "manage": {
       "createLink": "Create Share Link",
+      "exportRoster": "Export member list",
+      "exportRosterFailed": "Could not save the member list.",
       "loading": "Loading sharing…",
       "notReady": "Sharing isn’t available right now. Make sure you’re signed in and online; it will retry automatically.",
       "loadFailed": "Couldn’t load sharing details. Try again in a moment.",
@@ -933,7 +935,7 @@
       "title": "Continue on {{label}}?",
       "fallbackTitle": "Continue on {{label}} with a summary?",
       "fallbackDescription": "The original conversation could not be fully restored. A summary may omit earlier details and tool results. Cancel to send on the original computer.",
-      "description": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The last few messages and a summary carry over; older details may be lost.",
+      "description": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The conversation carries over. Earlier parts may be condensed to fit the model.",
       "quota": "{{left}}% left",
       "quotaReset": "{{left}}% left · {{reset}}",
       "confirm": "Switch this time only",
@@ -3481,7 +3483,7 @@
         "end": "Everything above was imported from {{source}}",
         "endHandoff": "Everything above was imported from {{source}}. {{harness}} continues from here."
       },
-      "projectMenu": "Import this project’s sessions from other tools…"
+      "projectMenu": "Import tasks…"
     },
     "connections": {
       "codex": {
@@ -4114,6 +4116,7 @@
         "refreshSpeechAdded": "Models updated; added 1 suggested speech model",
         "refreshNoNew": "Model list is up to date — nothing new",
         "refreshFailed": "Model list couldn’t be refreshed — try again later",
+        "refreshReconnect": "Model list couldn’t be refreshed. Reconnect this provider, then try again.",
         "refreshFetchDisabled": "Remote model catalog fetching is disabled — refresh skipped",
         "disableModel": "Disable This Model",
         "paymentRequired": "Paid",
@@ -6796,6 +6799,10 @@
         "protocol": {
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
+        },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
         },
         "onlyEncrypted": "Use Only Agent-Net",
         "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
@@ -10989,6 +10996,8 @@
     "autosave": {
       "saving": "Saving…",
       "saved": "Saved",
+      "unconfirmed": "Save not confirmed",
+      "savedModel": "Saved · applies next turn",
       "retry": "Save Again"
     },
     "retry": "Retry",
@@ -11102,7 +11111,7 @@
       "discard": "Discard Changes",
       "continueEditing": "Keep Editing"
     },
-    "profileSaveFailed": "Buddy settings could not be saved. No changes were applied.",
+    "profileSaveFailed": "Buddy settings could not be saved.",
     "profileSaveOffline": "Cannot connect to the buddy’s computer. Reconnect, then save again.",
     "modelLabel": "Model",
     "modelUnavailable": "{{model}} (currently unavailable)",
@@ -14089,7 +14098,7 @@
         "effortEndFast": "Faster",
         "effortEndSmart": "Smarter",
         "railSameEngine": "{{agent}} only",
-        "crossEngineWarning": "Switching engines rebuilds context and may lose content",
+        "crossEngineWarning": "The next message switches engines and carries over the conversation. Earlier parts may be condensed.",
         "favoritesSyncFailed": "Favorites could not sync. Reopen the picker to retry; the remote computer may need an update.",
         "favoritesSyncFailedUnreachable": "Favorites are not synced yet: that computer is unreachable. Reopen the picker after the connection returns.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14105,12 +14114,8 @@
         "ultrafast": "Ultrafast"
       },
       "discoveredCopy": {
-        "title": "Use {{provider}} on “{{device}}”?",
-        "description": "{{unavailable}} If you continue, it runs on “{{device}}”. You can switch back here anytime.",
         "unavailableHere": "{{provider}} on this computer isn’t available right now.",
-        "unavailableOn": "{{provider}} on “{{device}}” isn’t available right now.",
-        "confirm": "Use it",
-        "cancel": "Keep as is"
+        "unavailableOn": "{{provider}} on “{{device}}” isn’t available right now."
       }
     },
     "permissionSelector": {
@@ -14376,33 +14381,14 @@
       "credentialSwitchApplied": "Model provider switch is now in effect.",
       "credentialSwitchFailed": "Model provider switch failed. Choose the model again.",
       "modelSwitchContextGuard": {
-        "title": "This model can’t fit the current conversation",
         "warnToast": "This conversation already uses {{used}} — about {{pct}}% of the new model's {{total}} capacity",
-        "overflowDescription": "This conversation already uses {{used}}, more than the new model can hold ({{total}}, about {{pct}}%). If you switch, Cindy will make a short summary and continue. Your chat history stays; it just won’t all be passed through verbatim.",
-        "overflowDescriptionRemote": "This remote task already uses {{used}} / {{total}} of the smaller model's context (about {{pct}}%), so Cindy cannot switch safely. Keep the current model or start a new task before choosing this model.",
-        "confirmSwitch": "Switch and continue",
-        "cancelSwitch": "Keep this model"
+        "condensedToast": "Earlier parts of the conversation will be condensed for the new model. Your full conversation history stays available.",
+        "overflowDescriptionRemote": "This remote task already uses {{used}} / {{total}} of the smaller model's context (about {{pct}}%), so Cindy cannot switch safely. Keep the current model or start a new task before choosing this model."
       },
       "agentSwitch": {
         "engineNotReady": "Engine switched, but the new engine failed to start; it will retry when you send a message",
         "failed": "Engine switch failed; not applied",
-        "deferred": "Switch scheduled: will change to {{agent}} · {{model}} when your next message is sent",
-        "confirmation": {
-          "title": "Switch Agent?",
-          "description": "The new Agent engine continues through a handoff summary, so reasoning and other content cannot be guaranteed to carry over perfectly; switching back still lets you continue the original engine’s session. Switching also interrupts the prompt cache once and may increase token usage.",
-          "confirm": "Switch Agent",
-          "cancel": "Keep Current Agent",
-          "dontShowAgain": "Don’t remind me again"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Run the Agent on this computer again?",
-        "titleOther": "Run the Agent on “{{device}}”?",
-        "description": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
-        "descriptionNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
-        "confirm": "Switch computer",
-        "cancel": "Keep as is",
-        "discoveredDescription": "{{reason}} {{description}}"
+        "deferred": "Switch scheduled: will change to {{agent}} · {{model}} when your next message is sent"
       }
     },
     "agentSelect": {
@@ -15549,6 +15535,11 @@
         "relocatedElsewhere": "Agent now runs on another computer",
         "quotaRebalance": "its quota should be used first"
       },
+      "handoffCoverage": {
+        "complete": "Full conversation carried over",
+        "condensed": "Earlier parts condensed",
+        "details": "Content carried over to continue the conversation"
+      },
       "contextRebuild": {
         "labelOverflow": "Context reorganized, continuing",
         "labelTimeout": "Last turn didn't respond; context reorganized to continue",
@@ -16539,6 +16530,7 @@
         "empty": "This automation has no sessions to archive."
       },
       "archiveAll": {
+        "projectTitle": "Archive all tasks in “{{name}}”?",
         "title": "Archive all sessions",
         "confirm": "Archive all",
         "cancel": "Cancel",
@@ -16683,18 +16675,28 @@
         }
       },
       "projectAction": {
+        "menu": "Project menu for {{name}}",
+        "previewFailed": "Could not load this project’s tasks. Try again.",
+        "remotePreviewFailed": "Could not read the remote project’s tasks. Check the connection and make sure Cindy is up to date on the remote computer.",
         "rename": "Rename project",
         "pin": "Pin project",
         "unpin": "Unpin project",
-        "removeFromSidebar": "Remove Project from Sidebar",
-        "removeFromSidebarConfirmTitle": "Remove {{name}}?",
-        "removeFromSidebarConfirmDescription": "This removes the project from the sidebar. Files on your computer won't be deleted. Existing sessions will move to the Chat section and remain available.",
-        "removeFromSidebarConfirmAction": "Remove Project",
-        "removeFromSidebarFailed": "Couldn’t remove the project from the sidebar — try again.",
-        "showFiles": "Show Files",
-        "archivedAll": "Archive all",
-        "unarchiveAll": "Restore all",
-        "openInExplorer": "Open in file manager",
+        "removeFromSidebar": "Remove project from Cindy…",
+        "removeFromSidebarConfirmTitle": "Remove {{name}} from Cindy?",
+        "removeFromSidebarConfirmDescription": "Active tasks: {{count}}. You can continue them in Conversations.",
+        "removeFromSidebarConfirmAction": "Remove project",
+        "removeFromSidebarFailed": "Could not remove the project. Try again.",
+        "archiveOnRemove": "Also archive tasks ({{count}})",
+        "keepSkippedOnRemove": "The following tasks will stay in Conversations ({{skip}}).",
+        "removedArchived": "Tasks to move to Archived: {{count}}.",
+        "removeAndArchive": "Remove project and archive tasks",
+        "removeKeepFiles": "The project pin, custom name and icon will be cleared. Files and folders will stay on disk.",
+        "showFiles": "View task files in sidebar",
+        "archivedAll": "Archive all tasks",
+        "unarchiveAll": "Restore all tasks",
+        "openInFinder": "Open project folder in Finder",
+        "openInExplorer": "Open project folder in File Explorer",
+        "openInFileManager": "Open project folder in file manager",
         "newInDirectory": "New session in this directory",
         "copyDeepLink": "Copy Project Link",
         "search": "Search sessions in this project"
@@ -16899,6 +16901,7 @@
         "summaryAria": "View PR #{{number}} Summary",
         "unresolvedLabel": "Unresolved Review Threads",
         "checks": "Checks",
+        "following": "Following",
         "checksTotal": "{{count}} total",
         "failed": "Failed",
         "passed": "Passed",
@@ -21590,6 +21593,24 @@
   },
   "featureIntro": {
     "close": "Close",
+    "project": {
+      "title": "Meet Projects",
+      "lead": "Give ongoing work a project. Its files live in a folder on your computer, and Cindy picks up where the last task left off, so you never re-explain the background.",
+      "files": {
+        "title": "Results stay yours",
+        "body": "Cindy reads and edits right in the project folder. What it makes stays on your computer."
+      },
+      "context": {
+        "title": "No re-explaining",
+        "body": "New tasks in the project already see these files and follow what the project has noted."
+      },
+      "separate": {
+        "title": "Work stays separate",
+        "body": "Each project keeps its own tasks together, so different work never mixes."
+      },
+      "start": "Continue to new project",
+      "note": "Next, just give it a name. An existing folder or a code repository works too."
+    },
     "taskInbox": {
       "title": "Meet the Inbox",
       "lead": "Tasks sort themselves into Pending, Working, Snoozed and Processed. The best habit is to keep your inbox clear: click Done when a task is handled, and snooze what can wait.",

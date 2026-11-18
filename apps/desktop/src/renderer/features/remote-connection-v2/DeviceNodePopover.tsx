@@ -42,6 +42,7 @@ import {
   protocolKindLabel,
   protocolLabel,
   relativeTime,
+  relayTransportLabel,
   selfProtocolKind,
 } from './topologyPresentation';
 
@@ -378,6 +379,13 @@ export function HubNodePopover({
   // 这台电脑用的连接方式单独一行，与拓扑里名字下面同一个图标 + 名称(用户要求 2026-11-18)。
   const kind = selfProtocolKind(model, linkStatus);
   const protocol = protocolKindLabel(kind, t);
+  // 与中转的连接：在线时写经中转的数据走 UDP 还是 WS,往返是那条路的(用户要求 2026-11-18)。
+  const online = linkStatus === 'online';
+  const relayStatus = [
+    t(`settings.devices.linkStatus.${linkStatus}`),
+    online ? relayTransportLabel(model.relay, t) : null,
+    online && model.relay.rttMs !== null ? formatRtt(model.relay.rttMs, t) : null,
+  ].filter(Boolean).join(' · ');
   return (
     <div className="flex flex-col gap-3">
       <Heading
@@ -392,14 +400,7 @@ export function HubNodePopover({
             <ProtocolMark kind={kind} label={protocol} className="justify-end" />
           </Row>
         ) : null}
-        <Row
-          label={t('settings.remoteControl.v2.popover.linkStatus', { name: model.relay.name })}
-          value={
-            model.relay.rttMs !== null && linkStatus === 'online'
-              ? `${t(`settings.devices.linkStatus.${linkStatus}`)} · ${formatRtt(model.relay.rttMs, t)}`
-              : t(`settings.devices.linkStatus.${linkStatus}`)
-          }
-        />
+        <Row label={t('settings.remoteControl.v2.popover.linkStatus', { name: model.relay.name })} value={relayStatus} />
         {issue ? <span className="text-12 text-[var(--error-fg)]">{issue}</span> : null}
         {standby ? <span className="text-12 text-[var(--text-tertiary)]">{t('settings.devices.standbyHint')}</span> : null}
       </div>

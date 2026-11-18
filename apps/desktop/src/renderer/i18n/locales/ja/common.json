@@ -444,6 +444,8 @@
     },
     "manage": {
       "createLink": "共有リンクを作成",
+      "exportRoster": "メンバー一覧をエクスポート",
+      "exportRosterFailed": "メンバー一覧を保存できませんでした。",
       "loading": "共有を読み込み中…",
       "notReady": "共有は現在利用できません。ログインしてネットワークに接続していることを確認してください。自動的に再試行します。",
       "loadFailed": "共有情報を読み込めませんでした。しばらくしてからもう一度お試しください。",
@@ -923,7 +925,7 @@
       "title": "{{label}} に切り替えて続けますか？",
       "fallbackTitle": "要約を使って {{label}} で続けますか？",
       "fallbackDescription": "元の会話を完全に復元できませんでした。要約では以前の詳細やツールの結果が省略される場合があります。キャンセルすると元のパソコンで送信します。",
-      "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。直近数回のやり取りと要約は引き継がれますが、それより前の細部は失われることがあります。",
+      "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。会話は引き継がれます。モデルの容量に合わせて以前のやり取りが圧縮される場合があります。",
       "quota": "残り {{left}}%",
       "quotaReset": "残り {{left}}%・{{reset}}",
       "confirm": "今回だけ切り替える",
@@ -3440,7 +3442,7 @@
         "end": "ここまでは {{source}} からインポートした記録です",
         "endHandoff": "ここまでは {{source}} からインポートした記録です。ここから {{harness}} が続けます。"
       },
-      "projectMenu": "このプロジェクトのほかのツールのセッションをインポート…"
+      "projectMenu": "タスクをインポート…"
     },
     "connections": {
       "codex": {
@@ -4072,6 +4074,7 @@
         "refreshSpeechAdded": "モデルを更新し、参考の音声モデルを 1 件追加しました",
         "refreshNoNew": "モデル一覧は最新です。新規はありません",
         "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください",
+        "refreshReconnect": "モデル一覧を更新できませんでした。このプロバイダーに再接続してから、もう一度お試しください。",
         "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
         "disableModel": "このモデルを無効にする",
         "paymentRequired": "有料",
@@ -6753,6 +6756,10 @@
         "protocol": {
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
+        },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
         },
         "onlyEncrypted": "Agent-Net のみ使用",
         "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。",
@@ -10944,6 +10951,8 @@
     "autosave": {
       "saving": "保存中…",
       "saved": "保存しました",
+      "unconfirmed": "保存を確認できません",
+      "savedModel": "保存済み・次のターンから適用",
       "retry": "再保存"
     },
     "retry": "再試行",
@@ -11057,7 +11066,7 @@
       "discard": "変更を破棄",
       "continueEditing": "編集を続ける"
     },
-    "profileSaveFailed": "仲間設定を保存できませんでした。変更は適用されていません。",
+    "profileSaveFailed": "仲間設定を保存できませんでした。",
     "profileSaveOffline": "仲間がいるパソコンに接続できません。再接続してから、もう一度保存してください。",
     "modelLabel": "モデル",
     "modelUnavailable": "{{model}}（現在利用できません）",
@@ -14035,7 +14044,7 @@
         "effortEndFast": "高速",
         "effortEndSmart": "高精度",
         "railSameEngine": "{{agent}} のみ",
-        "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります",
+        "crossEngineWarning": "次のメッセージでエンジンが切り替わり、会話を引き継ぎます。以前のやり取りは圧縮される場合があります。",
         "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
         "favoritesSyncFailedUnreachable": "お気に入りはまだ同期されていません。そのパソコンに現在接続できません。接続が戻ってから開き直してください。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14051,12 +14060,8 @@
         "ultrafast": "超高速"
       },
       "discoveredCopy": {
-        "title": "「{{device}}」の {{provider}} を使いますか？",
-        "description": "{{unavailable}}続けると「{{device}}」で実行します。ここからいつでも戻せます。",
         "unavailableHere": "このパソコンの {{provider}} は現在使えません。",
-        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。",
-        "confirm": "使う",
-        "cancel": "このままにする"
+        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。"
       }
     },
     "permissionSelector": {
@@ -14322,33 +14327,14 @@
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "credentialSwitchFailed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
       "modelSwitchContextGuard": {
-        "title": "このモデルには今の会話が収まりません",
         "warnToast": "この会話はすでに {{used}} 使っています。切替後は新しいモデルの容量（{{total}}）の約 {{pct}}% になります",
-        "overflowDescription": "この会話はすでに {{used}} 使っており、新しいモデルが扱える {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy が要約してから続けます。チャット履歴は残りますが、全文をそのままは渡しません。",
-        "overflowDescriptionRemote": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。",
-        "confirmSwitch": "切り替えて続ける",
-        "cancelSwitch": "今は切り替えない"
+        "condensedToast": "新しいモデルに合わせて以前のやり取りを圧縮します。会話履歴はすべて引き続き確認できます。",
+        "overflowDescriptionRemote": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。"
       },
       "agentSwitch": {
         "engineNotReady": "エンジンは切り替わりましたが、新しいエンジンの起動に失敗しました。メッセージ送信時に自動的に再試行されます",
         "failed": "エンジンの切り替えに失敗しました(未適用)",
-        "deferred": "切り替えを予約しました:次のメッセージ送信時に {{agent}} · {{model}} に切り替わります",
-        "confirmation": {
-          "title": "Agent を切り替えますか？",
-          "description": "新しい Agent エンジンは引き継ぎ要約を通じて続行するため、思考内容などが完全に引き継がれる保証はありません。元に戻せば、元のエンジンのセッションを引き続き利用できます。切り替えによってプロンプトキャッシュも一度中断され、トークン消費が増える可能性があります。",
-          "confirm": "Agent を切り替える",
-          "cancel": "現在の Agent を維持",
-          "dontShowAgain": "次回から表示しない"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Agent をこのパソコンで実行し直しますか？",
-        "titleOther": "Agent を「{{device}}」で実行しますか？",
-        "description": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-        "descriptionNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-        "confirm": "パソコンを切り替える",
-        "cancel": "このままにする",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "切り替えを予約しました:次のメッセージ送信時に {{agent}} · {{model}} に切り替わります"
       }
     },
     "agentSelect": {
@@ -15484,6 +15470,11 @@
         "relocatedElsewhere": "Agent を別のパソコンで実行するようにしました",
         "quotaRebalance": "こちらのクォータを先に使うため"
       },
+      "handoffCoverage": {
+        "complete": "会話をすべて引き継ぎました",
+        "condensed": "以前のやり取りを圧縮しました",
+        "details": "会話の引き継ぎ内容"
+      },
       "contextRebuild": {
         "labelOverflow": "コンテキストを整理して続行しました",
         "labelTimeout": "直前の応答がなかったため、整理して続行しました",
@@ -16465,6 +16456,7 @@
         "empty": "この自動化にはアーカイブできるセッションがありません"
       },
       "archiveAll": {
+        "projectTitle": "「{{name}}」のすべてのタスクをアーカイブしますか？",
         "title": "すべてのセッションをアーカイブ",
         "confirm": "すべてアーカイブ",
         "cancel": "キャンセル",
@@ -16609,18 +16601,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」のプロジェクトメニュー",
+        "previewFailed": "このプロジェクトのタスクを読み込めませんでした。もう一度お試しください。",
+        "remotePreviewFailed": "リモートプロジェクトのタスクを読み込めません。接続を確認し、リモート側の Cindy を最新版にしてください。",
         "rename": "プロジェクト名を変更",
         "pin": "プロジェクトをピン留め",
         "unpin": "プロジェクトのピン留めを解除",
-        "removeFromSidebar": "サイドバーからプロジェクトを削除",
-        "removeFromSidebarConfirmTitle": "「{{name}}」を削除しますか？",
-        "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「会話」セクションに移動し、引き続き利用できます。",
+        "removeFromSidebar": "Cindy からプロジェクトを削除…",
+        "removeFromSidebarConfirmTitle": "Cindy から「{{name}}」を削除しますか？",
+        "removeFromSidebarConfirmDescription": "未アーカイブのタスク {{count}} 件は「会話」で引き続き使用できます。",
         "removeFromSidebarConfirmAction": "プロジェクトを削除",
-        "removeFromSidebarFailed": "サイドバーからプロジェクトを削除できませんでした。もう一度お試しください。",
-        "showFiles": "ファイルを表示",
-        "archivedAll": "すべてアーカイブ",
-        "unarchiveAll": "すべてアーカイブ解除",
-        "openInExplorer": "ファイルマネージャーで開く",
+        "removeFromSidebarFailed": "プロジェクトを削除できませんでした。",
+        "archiveOnRemove": "タスクもアーカイブ（{{count}} 件）",
+        "keepSkippedOnRemove": "対象外のタスク（{{skip}}）は「会話」に残ります。",
+        "removedArchived": "{{count}} 件のタスクをアーカイブに移動します。",
+        "removeAndArchive": "プロジェクトを削除してタスクをアーカイブ",
+        "removeKeepFiles": "プロジェクトのピン留め、カスタム名、アイコンは解除されます。ファイルとフォルダーは保持されます。",
+        "showFiles": "サイドバーでタスクのファイルを表示",
+        "archivedAll": "すべてのタスクをアーカイブ",
+        "unarchiveAll": "すべてのタスクのアーカイブを解除",
+        "openInFinder": "Finder でプロジェクトフォルダを開く",
+        "openInExplorer": "エクスプローラーでプロジェクトフォルダーを開く",
+        "openInFileManager": "ファイルマネージャーでプロジェクトフォルダーを開く",
         "newInDirectory": "このディレクトリで新規セッション",
         "copyDeepLink": "プロジェクトリンクをコピー",
         "search": "このプロジェクト内のセッションを検索"
@@ -16825,6 +16827,7 @@
         "summaryAria": "PR #{{number}} の概要を表示",
         "unresolvedLabel": "未解決のレビューコメント",
         "checks": "チェック",
+        "following": "フォロー中",
         "checksTotal": "全 {{count}} 件",
         "failed": "失敗",
         "passed": "成功",
@@ -21502,6 +21505,24 @@
   },
   "featureIntro": {
     "close": "閉じる",
+    "project": {
+      "title": "プロジェクトの使い方",
+      "lead": "続けて取り組む作業は、プロジェクトにまとめましょう。ファイルはパソコン上のフォルダに置かれ、Cindy は毎回前回の成果の続きから作業するので、背景を説明し直す必要がありません。",
+      "files": {
+        "title": "成果は手元に残る",
+        "body": "Cindy はプロジェクトのフォルダで直接読み書きします。成果はパソコンに残ります。"
+      },
+      "context": {
+        "title": "説明し直しは不要",
+        "body": "プロジェクトの新しいタスクは、最初からファイルと決めておいた内容を把握しています。"
+      },
+      "separate": {
+        "title": "作業ごとに整理",
+        "body": "タスクはプロジェクトごとにまとまり、別の作業と混ざりません。"
+      },
+      "start": "新規プロジェクトへ進む",
+      "note": "名前を付けるだけで作成できます。既存のフォルダやコードリポジトリも使えます。"
+    },
     "taskInbox": {
       "title": "受信トレイの使い方",
       "lead": "タスクは状態に応じて「未処理」「実行中」「後で処理」「処理済み」に自動で分かれます。おすすめは受信トレイをこまめに空にすること。済んだら完了、今やらないものは後で処理にしましょう。",

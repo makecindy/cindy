@@ -71,6 +71,10 @@
 - **包长**：上行、下行在核心的包外分别加 41、25 字节（`UDP_RELAY_UP_OVERHEAD`、`UDP_RELAY_DOWN_OVERHEAD`；第 1 版上行是 33）。
   Desktop 按这个余量把核心的发包上限算成 `1350 - 41` = 1309 字节，经中转的 UDP 载荷不超过 1350，隧道里不再被拆片；
   见 [Agent-Net 发包上限与收包上限分开](agent-net-send-packet-size.md)。
+- **本机可见（2026-11-18，不改协议）**：Desktop 的 worker 每秒随状态快照报告经中转的数据报现在走 UDP 还是 WebSocket，
+  以及 UDP 的往返（已有登记从发出到确认，不另发包）。远程连接页的中转点据此在协议下面写「UDP · 延迟」或「WS · 延迟」，
+  延迟取实际在走的那条路；每次切换在本机日志记一行 `agent-net relayed datagrams now go over the relay UDP port / WebSocket`。
+  入口：`RelayUdpPath.rttMs`、`Transport.relayRoute`、`AgentNetWorkerSocket.relayRoute`（事件 `relay-route`）。
 
 回归：`packages/agent-net-relay/src/__tests__/relay.integration.test.ts`
 「forwards over UDP only to devices that proved their address and confirmed receiving it, and keeps the WebSocket otherwise」

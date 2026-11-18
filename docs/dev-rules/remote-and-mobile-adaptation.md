@@ -7,6 +7,34 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 远程 Agent 控制请求与发送取消（2026-11-18）
+
+`maker:remote-agent:v1` 按请求内容区分优先级：发送、插话、停止、关闭以及内联交互／回调／错误回复
+复用已有交互名额；上传、执行环境帧、HTTP 回复与长轮询仍走普通名额。不扩大并发、排队、字节或
+超时上限。普通等待队列满时，空闲的交互名额仍可立即使用；接收端准入与结果 outbox 使用同一判据。
+不解压或读取上传载荷来决定优先级；不认识的请求保持普通优先级，实际授权与校验仍由原处理器负责。
+Agent-Net 会话入口同样按载荷做准入分类，并把这些请求放进控制通道，不能仅修改 Device Link 入口。
+模型目录、Agent 能力、可用 Agent 与安装状态读取使用已有后台配额（活动 4、等待 96），避免预读
+占满普通请求名额；两种传输使用同一判据。实际目录响应与权限检查不变，前台模型／上下文操作和
+导航读取仍走原有普通名额，不因目录预读借用交互预留容量。
+
+远程发送在 Device Link 真正派发前复核任务生命周期、取消信号和 Stop 代次，取消后不迟到投递旧消息。
+此检查使用本地 `beforeDispatch` 回调，两种传输均在出队后、创建请求前执行；同区和跨区分享都透传。
+它不在回包后执行，已发送的输入保留真实结果，不能因随后取消而误报未发送。账号／授权的 `preSend`
+和回包归属检查继续独立执行。以上回调不进入 wire payload。
+发送锁的等待者可由原输入取消信号结束；它的占位仍等待前驱结算，避免后继越过尚未结束的持有者。
+已取得锁的操作必须完成真实清理再释放，不用超时竞速放行仍在运行的写操作。原重启栅栏与 watchdog 保留。
+
+故障半径：① 只处理当前目标的准入和当前输入取消；② 不重建共享连接、不新增写入重试或重放、不恢复
+已结束任务；③ 同设备其它输入继续按原 FIFO／优先级与容量运行。未取得对方原始日志时，不能据截图
+把任何一次 300 秒锁告警认定为这些缺陷。这里只证明可控复现，不代替现场事故归因。
+
+实现与回归：`invokePolicy.ts`、`invokeScheduler.test.ts`、`client.test.ts`、Desktop
+`deviceLinkDispatch.test.ts`、`runClientReply.test.ts`、`sendToSessionLock.test.ts` 与
+`orcaModelSelectionIntent.test.ts`，以及 `agentNetSessionLinks.test.ts`、`remoteInvokeSendGuard.test.ts`、
+`providerShareCrossRegion.test.ts`。沿用原业务载荷与 relay 帧，自建中转仅透传，无需升级服务端。
+混合版本保持通信兼容；单端升级只改善该端调度，旧端继续原有准入行为。
+
 ## 远程慢请求的两端诊断（2026-11-18）
 
 `maker:create-session` 在被控端要等 Agent 真正起来才回结果。Codex 的 `thread/start` 会先等

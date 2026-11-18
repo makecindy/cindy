@@ -6,6 +6,7 @@
  * 给主进程内部做可信来源标记。
  */
 
+import { isScopedPeer } from '@cindy/device-link';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { sanitizeSourceName, type MessageSourceDevice } from '@cindy/maker-shared/message-source';
@@ -66,6 +67,15 @@ export function runOutsideDeviceLinkInvokeContext<T>(fn: () => T): T {
 
 export function getDeviceLinkInvokeContext(): DeviceLinkInvokeContext | null {
   return storage.getStore() ?? null;
+}
+
+/** Trusted selection origin. Queue drains do not inherit the original invoke context. */
+export function readDeviceLinkModelSelectionOrigin(): 'owner' | 'scoped' | undefined {
+  const context = storage.getStore();
+  if (!context) return undefined;
+  return context.controllerDeviceId && !context.sharedTask && !isScopedPeer(context.controllerDeviceId)
+    ? 'owner'
+    : 'scoped';
 }
 
 export function isDeviceLinkInvoke(): boolean {

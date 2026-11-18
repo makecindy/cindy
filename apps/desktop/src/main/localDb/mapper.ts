@@ -1,4 +1,5 @@
 import { normalizePrTrigger } from '@cindy/maker-scheduler/pr-trigger';
+import { projectHandoffPreview } from '../maker-ipc/agentHandoff.js';
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 /**
  * chat-data-localization F5：IPC 边界 row ↔ camel/ISO 转换。
@@ -386,12 +387,19 @@ export function messageToCamel(row: MessageRow): Message {
       agentMeta = null;
     }
   }
+  const rebuild = (agentMeta as (AgentMeta & { contextRebuild?: unknown }) | null)?.contextRebuild;
+  if (rebuild) {
+    const contextRebuild = projectHandoffPreview(rebuild);
+    if (contextRebuild !== rebuild) agentMeta = { ...agentMeta, contextRebuild } as AgentMeta;
+  }
   return {
     id: row.id,
     clientId: row.clientId,
     sessionId: row.sessionId,
     role: row.role as MessageRole,
-    content: projectMcpAppHistory(content, agentMeta?.mcpApp === true),
+    content: row.role === 'agent_switch'
+      ? projectHandoffPreview(content)
+      : projectMcpAppHistory(content, agentMeta?.mcpApp === true),
     toolUseId: row.toolUseId,
     agentMeta,
     agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,

@@ -5235,6 +5235,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   // 供应商分享：分享者管理与受邀者申请走同一个命令通道(只接受本机应用窗口)。
   providerShare: {
+    exportRoster: (providerId: string, owner: import('../shared/dataOwnerPush').DataOwnerPushStamp): Promise<void> =>
+      ipcRenderer.invoke(PROVIDER_SHARE_IPC.EXPORT_ROSTER, providerId, owner),
     command: (command: ProviderShareCommand): Promise<unknown> =>
       ipcRenderer.invoke(PROVIDER_SHARE_IPC.COMMAND, command),
     onOwnedChanged: fanOutProviderShareOwnedChanged,
@@ -6262,6 +6264,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     sessions: {
       list: listLocalDbSessions,
+      projectArchive: (request: import('../shared/projectArchive').ProjectArchiveRequest) =>
+        ipcRenderer.invoke('local-db:sessions:project-archive', request),
       create: (body?: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:create', body),
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get', id),

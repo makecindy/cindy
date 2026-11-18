@@ -788,6 +788,41 @@ describe("native plugin card deliberate actions", () => {
     expect(input.disabled).toBe(false);
     expect(button.disabled).toBe(false);
   });
+  // Unit regression: the first click starts a read-only poll. Its failure used to
+  // lock every action forever even after that click was acknowledged. Existing
+  // lost-receipt tests cover writes, not this independent read failure.
+  it.each(['transient', 'expired'])('keeps acknowledged actions usable after a %s poll failure', async (failure) => {
+    vi.useFakeTimers();
+    let opens = 0, polls = 0;
+    const dispatch = vi.fn(async () => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_device: string, _channel: string, args: any[]) => {
+      const request = args[0];
+      if (request.collectionId === 'plugin-results') return dispatch();
+      if (request.actionId === 'open-interaction') return { result: { pageId: `page-${++opens}` } };
+      if (request.actionId === 'poll') {
+        if (++polls === 1) throw new Error(failure === 'expired' ? '[NOT_FOUND] Plugin page is no longer available' : 'poll timed out');
+        return { result: { confirms: [] } };
+      }
+      return { effects: [] };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 'session', callId: 'call',
+      data: { pluginId: 'practice', revision: 'unchanged', items: [{ id: 'refresh', label: 'Refresh', disabled: false }] },
+    })));
+    const button = container.querySelector('button')!;
+    await act(async () => button.click());
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(false);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(dispatch).toHaveBeenCalledTimes(1); // never replay the click
+    await act(async () => button.click());
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(opens).toBe(failure === 'expired' ? 2 : 1);
+    expect(button.disabled).toBe(false);
+  });
+
   it.each([false, true])(
     "releases only a known successful delivery (unknown=%s)",
     async (unknown) => {

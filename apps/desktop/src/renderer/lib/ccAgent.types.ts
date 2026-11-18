@@ -294,6 +294,9 @@ export interface CcMeta {
    */
   goalNotice?: 'usage-resumed' | 'capacity-resumed';
 
+  /** Context rebuilt in-place. Older hosts may omit the coverage marker. */
+  contextRebuild?: ContextRebuildMeta;
+
   /**
    * Host-side marker:个人版制作任务里 Agent 调用 cindy_make.report_complete 后落的
    * 完成记录(role:'assistant' + 空 content)。renderer 渲成完成卡片,不进 prompt。
@@ -565,7 +568,7 @@ export type MessageRole =
 
 /**
  * role='agent_switch' 行的 content 结构(JSON 存于 messages.content)。
- * handoff 是发给新引擎的交接摘要全文——只用于 UI 展开查看与 debug,
+ * handoff 是发给新引擎的交接内容——只用于 UI 展开查看与 debug,
  * 不作为对话正文渲染,也绝不回发给 agent(注入走 main 的 wire 前缀通道)。
  */
 export interface AgentSwitchContent {
@@ -581,9 +584,18 @@ export interface AgentSwitchContent {
   resumed?: boolean;
   /** Same-Harness cross-computer restoration result; omitted for legacy switches. */
   nativeHistory?: 'restored' | 'fallback';
+  handoffCoverage?: HandoffCoverage;
   toAgentDeviceId?: string | null;
   toAgentDeviceName?: string | null;
   switchReason?: 'quota-rebalance';
+}
+
+export type HandoffCoverage = 'complete' | 'condensed';
+
+export interface ContextRebuildMeta {
+  reason: string;
+  handoff?: string;
+  handoffCoverage?: HandoffCoverage;
 }
 
 export interface Message {

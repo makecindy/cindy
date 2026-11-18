@@ -101,27 +101,17 @@ export function effectiveAgentDeviceId(
 }
 
 /**
- * 选中一行模型时 Agent 位置怎么处理(与桌面已建任务的换电脑规则同口径):
- * - catalogDeviceId = 这一行来自哪台电脑的目录(null = 被控电脑本机);
- * - relocateTo:与任务当前位置不同才带给被控端(switchSessionAgent 第 7 参);选回任务当前
- *   所在电脑 = 撤销挂着的换位置,不带位置;
- * - needsConfirm:换到下一条消息时所在电脑以外、且不是任务当前所在电脑时才确认(已确认过的
- *   同一目标、或撤销挂着的换位置都不再问)。
+ * 选回任务当前的运行位置时不带位置，覆盖挂着的搬迁意图。
+ * 固定位置的任务只接受当前电脑的目录。null 位置值指被控电脑。
  */
 export function resolveAgentLocationPick(input: {
+  movable: boolean;
   session: Pick<RemoteSession, 'agentDeviceId'> | null | undefined;
-  intent: RemoteSessionAgentSwitchIntent | null | undefined;
   catalogDeviceId: string | null;
-}): { relocateTo: string | null | undefined; needsConfirm: boolean } {
-  const current = sessionAgentRunsOnOtherComputer(input.session)
-    ? input.session!.agentDeviceId!
-    : null;
-  const effective = effectiveAgentDeviceId(input.session, input.intent);
-  const target = input.catalogDeviceId;
-  return {
-    relocateTo: target !== current ? target : undefined,
-    needsConfirm: target !== effective && target !== current,
-  };
+}): { agentDeviceId?: string | null } | null {
+  const current = effectiveAgentDeviceId(input.session, null);
+  if (input.catalogDeviceId === current) return {};
+  return input.movable ? { agentDeviceId: input.catalogDeviceId } : null;
 }
 
 /** agent_switch 边界行里 Agent 换电脑后的目标位置;缺 toAgentDeviceId 键 = 没换电脑。 */

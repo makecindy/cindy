@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
+import { isBotGroupInTaskClientId } from '../../../shared/botGroupChat.js';
 import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
@@ -284,6 +285,7 @@ function botTaskDispatchHarness(
     AcceptedCallbackDispatchCancelled: class extends Error {},
     // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
     resolveSendToSessionCreateRoute,
+    isBotGroupInTaskClientId,
     getSelfDeviceId: () => 'self-device',
   };
   Object.assign(stubs, overrides);
