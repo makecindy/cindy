@@ -21,7 +21,7 @@ export default {
     default: { about: 'Same task opened remotely: equivalent sources also fold' },
     'remote-device-only': { about: 'Remote ChatInput without location choices passes only deviceId; target rails and rows still fold' },
     'remote-single': { about: 'A genuinely single-record target catalog stays single when remotely viewed' },
-    'remote-current': { about: 'A currently used duplicate route remains visible' },
+    'remote-current': { about: 'The duplicate the task uses stays listed and its equal steps aside: still one entry' },
     'remote-distinct': { about: 'Different verified account identities remain separate despite equal display names' },
     'remote-extra-model': { about: 'A source with additional models is not hidden' },
     'remote-other-computer': { about: 'Task on another computer: a third computer offering the same source is not listed again' },
@@ -35,8 +35,9 @@ export default {
       assert.equal(otherRails, ui.case === 'remote-other-distinct' ? 1 : 0, `Observed other-computer rails: ${otherRails}`);
     const rails = page.locator('[data-rail-item^="provider:"]');
     const count = await rails.count();
-    const separate = ['remote-current', 'remote-distinct', 'remote-extra-model'].includes(ui.case);
+    const separate = ['remote-distinct', 'remote-extra-model'].includes(ui.case);
     assert.equal(count, separate ? 2 : 1, `Observed provider rails: ${count}`);
+    if (ui.case === 'remote-current') assert.equal(await rails.first().getAttribute('data-rail-item'), 'provider:openai-old');
     const rows = page.getByRole('option').filter({ hasText: 'GPT-6-Astra' });
     assert.equal(await rows.count(), separate ? 2 : 1, 'The visible model rows must match the source rail');
     assert.equal(await page.getByText('VIEWER ONLY MODEL', { exact: true }).count(), 0);

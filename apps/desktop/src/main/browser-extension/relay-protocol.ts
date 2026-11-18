@@ -29,6 +29,9 @@ const OPERATIONS = new Set([
   'subtitles',
   'subtitle-document',
   'subtitle-cache-clear',
+  // Side panel model picker (Cindy Chrome 0.4.95+): read-only model list and the app's favorites.
+  'models',
+  'model-favorite',
 ]);
 
 const MODEL_OPERATIONS = new Set([
@@ -109,6 +112,27 @@ function source(value: unknown): RelaySource {
     url: url ? new URL(url).href : '',
     title,
     ...(time === undefined ? {} : { time: time as number }),
+  };
+}
+
+// Same effort keys as Cindy's picker, including `none` (shown as "Off" where a model offers it).
+const EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+const AGENTS = new Set(['cc', 'codex', 'pi']);
+
+/** A favorite in Cindy's own favorites shape; mirrors the plugin's learning-core rule. */
+function favorite(value: unknown, withUid: boolean): Record<string, unknown> {
+  const f = value as Record<string, unknown> | null;
+  if (!f || typeof f !== 'object' || Array.isArray(f) || !AGENTS.has(f.agent as string) ||
+    (f.effort !== undefined && !EFFORTS.has(f.effort as string)) ||
+    (f.fast !== undefined && f.fast !== true && f.fast !== 'ultrafast'))
+    throw new Error('INVALID_INPUT');
+  return {
+    ...(withUid ? { uid: string(f.uid, 512, true) } : {}),
+    providerId: string(f.providerId, 512, true),
+    modelId: string(f.modelId, 512, true),
+    agent: f.agent,
+    ...(f.effort !== undefined ? { effort: f.effort } : {}),
+    ...(f.fast !== undefined ? { fast: f.fast } : {}),
   };
 }
 
@@ -229,6 +253,26 @@ export function validateRelayRequest(input: unknown): RelayRequest {
       validateRelayRequest({ ...(entry as object), op: 'save' }),
     );
   }
+  // The model picked in the side panel for webpage chat: only this computer's routes. The plugin
+  // validates again and the Host re-checks the exact route before running it.
+  if (raw.route !== undefined) {
+    const r = raw.route as Record<string, unknown> | null;
+    if (out.op !== 'conversation' || out.scenario !== 'webpage-chat' || !r || typeof r !== 'object' ||
+      Array.isArray(r) || r.agentDeviceId !== undefined || !AGENTS.has(r.agentKind as string) ||
+      ![true, false, 'ultrafast'].includes(r.fastMode as boolean | string) ||
+      typeof r.effort !== 'string' || (r.effort !== '' && !EFFORTS.has(r.effort)))
+      throw new Error('INVALID_INPUT');
+    out.route = { agentKind: r.agentKind, providerId: string(r.providerId, 200, true),
+      model: string(r.model, 200, true), effort: r.effort, fastMode: r.fastMode };
+  }
+  if (out.op === 'model-favorite') {
+    const m = raw.mutation as Record<string, unknown> | null;
+    if (!m || typeof m !== 'object' || !['add', 'update', 'remove'].includes(m.kind as string))
+      throw new Error('INVALID_INPUT');
+    out.mutation = m.kind === 'add' ? { kind: 'add', item: favorite(m.item, false) }
+      : m.kind === 'remove' ? { kind: 'remove', expected: favorite(m.expected, true) }
+        : { kind: 'update', expected: favorite(m.expected, true), item: favorite(m.item, false) };
+  }
   if (out.op === 'list') {
     out.offset = Number.isInteger(raw.offset) && (raw.offset as number) >= 0 ? raw.offset : 0;
     out.limit = Number.isInteger(raw.limit) ? Math.min(100, Math.max(1, raw.limit as number)) : 50;
@@ -261,3 +305,9 @@ export const RELAY_PROGRESS_STAGES = [
   'validating',
   'saving',
 ] as const;
+
+/**
+ * Partial answer a plugin may attach to progress (side panel streaming, 2026-11-17). UTF-16 chars;
+ * longer text is dropped, never truncated, so the panel only shows what the plugin actually sent.
+ */
+export const RELAY_PROGRESS_TEXT_MAX_CHARS = 32_768;

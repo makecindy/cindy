@@ -4,12 +4,18 @@ import { isAbsolute } from 'node:path';
 
 import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
+import { providerReadInputSchema, providerShareMembersInputSchema, providerShareModelAccessInputSchema,
+  subscriptionUsageInputSchema, projectProviderReadError, projectProviderSharingError,
+  projectSubscriptionUsageError, type ProviderSharingRequest } from '@cindy/mcps';
 
 import type { GhostToolCallResult } from '../../shared/ghost.js';
 import { hasDeliveryNamespace, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { validateFsRelPath } from '../cindy-brain/fsSlot.js';
 import { assertReviewSessionExternalInputAllowed } from '../reviewer/reviewSessionInputPolicy';
 import { isManagedScheduledTarget } from './restore-target';
+import { runProviderSharingRequest, type ProviderSharingPorts } from '../mcp-integrations/providerSharingTools.js';
+import { runProviderReadRequest, type ProviderReadPorts } from '../mcp-integrations/providerReadTools.js';
+import type { ProviderGroupLocalCommand } from '../../shared/providerGroup.js';
 import type { ScriptCapabilityBroker, ScriptCapabilityCall } from './script-runner.desktop';
 // model 兜底与 runner 同源(2026-06 曾因多份拷贝不同步导致 UI 显示与实跑模型不一致)
 
@@ -20,6 +26,14 @@ export interface SchedulerScriptRuntime {
   tryGetOrcaCollabService: typeof import('../maker-ipc/register.js').tryGetOrcaCollabService;
   getSessionRowSnapshotStrict: typeof import('../localDb/sessionDispatchSnapshot.js').getSessionRowSnapshotStrict;
   restoreArchivedSessionForSend: typeof import('../localDb/ipc/sessions').restoreArchivedSessionForSend;
+  settings?: {
+    captureScope(): () => void;
+    deviceId(): string;
+    usage: typeof import('../subscription-accounts/runtime.js').readSubscriptionUsage;
+    shares: ProviderSharingPorts['command'];
+    group(command: ProviderGroupLocalCommand): Promise<unknown>;
+    remote: ProviderReadPorts['remote'];
+  };
 }
 
 type DispatchEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -205,6 +219,11 @@ const SCRIPT_METHOD_CATALOG: ReadonlyArray<{
 }> = [
   ...(['get_pr_status', 'get_pr_changes', 'get_pr_details'] as const).map(name => ({ method: `github.${name}`, capability: 'github.read' as const, params: '{pr:{url}|{repo,number},freshness?,kind?,after?,limit?,item?}', description: '读取与界面共用的 GitHub 状态/变化/详情；不关联任务、不启动监听，读取不确认投递' })),
   { method: 'host.capabilities', capability: null, params: '{}', description: '自省:返回协议版本、本任务已授予的能力、可用方法目录' },
+  { method: 'settings.list_provider_share_members', capability: 'settings.read', params: '{providerId?,device?}', description: '读取自己分享的成员；沿原无用量名单入口，不激活页面轮询' },
+  { method: 'settings.get_provider_share_model_access', capability: 'settings.read', params: '{providerId,memberId,device?}', description: '读取分享成员的模型范围' },
+  { method: 'usage.get_subscription_usage', capability: 'usage.read', params: '{providerId?}', description: '只读执行电脑的订阅额度白名单投影；含套餐和额度窗口，不含登录邮箱、目录、账号指纹或凭证' },
+  { method: 'usage.get_provider_usage_history', capability: 'usage.read', params: '{providerId,device?}', description: '读取本机或同账号已授权电脑的原 usage-history 与 coverageStart；缺失不是零，筛选汇总由脚本完成' },
+  { method: 'usage.get_provider_group', capability: 'usage.read', params: '{providerId,device?}', description: '读取本机或同账号已授权电脑的原组状态和已知额度；自动名称沿原投影去订阅身份，缺少额度表示未知' },
   { method: 'jira.get', capability: 'jira.read', params: '{issue_key, fields?, out_file?}', description: '按 key 读单条 Jira issue(out_file = 结果落盘到工作目录的相对路径)' },
   { method: 'jira.search_jql', capability: 'jira.read', params: '{jql, fields?, max_results?≤100, next_page_token?, out_file?}', description: 'JQL 搜索(大结果集用 next_page_token 分页,或 out_file 落盘后自行读回)' },
   { method: 'jira.add_comment', capability: 'jira.comment', params: '{issue_key, body_text | body_adf}', description: '向 Jira issue 添加评论;body_text 纯文本与 body_adf(ADF 文档对象,支持 @mention)恰好二选一' },
@@ -286,9 +305,65 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           granted: [...granted].sort(),
           methods: SCRIPT_METHOD_CATALOG.map((entry) => ({
             ...entry,
-            available: entry.capability === null || granted.has(entry.capability),
+            available: entry.capability === null || (granted.has(entry.capability)
+              && ((entry.capability !== 'settings.read' && entry.capability !== 'usage.read') || !!this.runtime.settings)),
           })),
         };
+      case 'settings.list_provider_share_members':
+      case 'settings.get_provider_share_model_access':
+      case 'usage.get_subscription_usage':
+      case 'usage.get_provider_usage_history':
+      case 'usage.get_provider_group': {
+        requireCapability(granted, request.method.startsWith('usage.') ? 'usage.read' : 'settings.read');
+        const settings = this.runtime.settings;
+        if (!settings) fail('UNSUPPORTED_CAPABILITY', 'Host reads are unavailable on this host');
+        const assertCurrent = settings.captureScope();
+        if (request.method === 'usage.get_subscription_usage') {
+          const input = subscriptionUsageInputSchema.safeParse(params);
+          if (!input.success) fail('INVALID_ARGS', input.error.message);
+          try {
+            const result = await settings.usage(input.data.providerId);
+            assertCurrent();
+            return result;
+          } catch {
+            const failure = projectSubscriptionUsageError();
+            fail(failure.code, failure.message);
+          }
+        }
+        if (request.method === 'settings.list_provider_share_members' || request.method === 'settings.get_provider_share_model_access') {
+          let input: ProviderSharingRequest;
+          if (request.method === 'settings.list_provider_share_members') {
+            const parsed = providerShareMembersInputSchema.safeParse(params);
+            if (!parsed.success) fail('INVALID_ARGS', parsed.error.message);
+            input = { action: 'members', ...parsed.data };
+          } else {
+            const parsed = providerShareModelAccessInputSchema.safeParse(params);
+            if (!parsed.success) fail('INVALID_ARGS', parsed.error.message);
+            input = { action: 'get-models', ...parsed.data };
+          }
+          input.device = input.device === settings.deviceId() ? 'local' : input.device;
+          return runProviderSharingRequest(input, {
+            command: settings.shares,
+            remote: (deviceId, command, guard) => settings.remote(deviceId, { action: 'manage-share', command }, guard),
+          }, assertCurrent).catch(error => {
+            const failure = projectProviderSharingError(error);
+            fail(failure.code, failure.message);
+          });
+        }
+        const input = providerReadInputSchema.safeParse(params);
+        if (!input.success) fail('INVALID_ARGS', input.error.message);
+        return runProviderReadRequest({ action: request.method === 'usage.get_provider_group' ? 'group' : 'usage-history',
+          ...input.data, device: input.data.device === settings.deviceId() ? 'local' : input.data.device }, {
+          local: (input, guard) => {
+            guard();
+            return input.action === 'manage-share' ? settings.shares(input.command, guard) : settings.group(input.command);
+          },
+          remote: settings.remote,
+        }, assertCurrent, true).catch(error => {
+          const failure = projectProviderReadError(error);
+          fail(failure.code, failure.message);
+        });
+      }
       case 'github.get_pr_status':
       case 'github.get_pr_changes':
       case 'github.get_pr_details': {

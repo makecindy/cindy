@@ -2031,6 +2031,15 @@ describe('agent.hiddenTasks declaration', () => {
   });
 });
 
+// Model favorites/recents access is standalone; a non-boolean value must not install (plugin-security §1.2).
+it('validates standalone agent.modelPreferences', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'prefs-test', name: 'Prefs', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { modelPreferences: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ modelPreferences: true });
+  expect(validateGhostManifest({ ...base, agent: { modelPreferences: 'yes' } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { modelPreferences: false } }).ok).toBe(false);
+});
+
 // New target access is not implied by the old plugin-owned tasks declaration.
 it('validates independent target access without dropping the tasks dependency', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'target-test', name: 'Targets', version: '1.0.0', entry: 'main.js' };

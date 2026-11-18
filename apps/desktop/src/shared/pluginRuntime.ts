@@ -1,7 +1,7 @@
 import { isGhostControlPointId, type GhostControlPointFailureAction, type GhostControlPointId } from './ghost.js';
 
 /** Task-local opt-in. An installed capability alone never selects a provider. */
-export const RUNTIME_PLUGIN_POINTS = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'system-prompt'] as const;
+export const RUNTIME_PLUGIN_POINTS = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'system-prompt', 'will-tool-call', 'did-tool-result'] as const;
 export type RuntimePluginPoint = (typeof RUNTIME_PLUGIN_POINTS)[number];
 export interface RuntimePluginTarget {
   pluginId: string;
@@ -54,6 +54,7 @@ export function parseRuntimePluginSettings(value: unknown): RuntimePluginSetting
         || !['allow', 'skip', 'block'].includes(target.onFailure) || seen.has(target.pluginId)) return null;
       seen.add(target.pluginId);
       if (point === 'will-search-memory' && target.onFailure !== 'allow') return null;
+      if ((point === 'will-tool-call' || point === 'did-tool-result') && target.onFailure === 'skip') return null;
       parsed.push({ pluginId: target.pluginId, onFailure: target.onFailure });
     }
     if (parsed.length) result[point] = parsed;

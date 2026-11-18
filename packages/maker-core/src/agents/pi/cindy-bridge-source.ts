@@ -2,6 +2,7 @@ import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
 import { PI_NATIVE_TOOL_CATALOG_SOURCE } from './native-tool-catalog-source.js';
 import { MAX_JSONL_BUFFER_CHARS } from './rpc-limits.js';
+import { assertToolLifecycleBudget } from '../shared/tool-lifecycle.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -193,6 +194,7 @@ const SECRET_ENV_NAMES = new Set<string>([
   'CINDY_PI_TASK_SYSTEM_PROMPT_FILE',
   'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
+  'CINDY_PI_TOOL_LIFECYCLE',
   PI_PACKAGE_MANAGEMENT_ENV,
   PI_BASH_PACKAGE_HOME_ENV,
   MANAGED_RG_PATH_ENV,
@@ -5147,6 +5149,41 @@ export default async function cindyBridge(piApi: any) {
   // 设备托管：文件、命令与搜索工具改用任务所在电脑上的执行器(替换上面的本机注册)。
   registerCindyHostedTools(pi, bashTool, applyCindyBashTimeoutParams);
 
+  // Native plugin hooks run before Cindy permissions, so transformed parameters
+  // enter the same permission/capture path. With no selected plugin no RPC runs.
+  const toolLifecyclePoints = (process.env.CINDY_PI_TOOL_LIFECYCLE ?? '').split(',');
+  const assertToolHookBudget = ${assertToolLifecycleBudget.toString()};
+  const pluginToolLifecycle = async (event: any, ctx: any, phase: 'call' | 'result') => {
+    const data = { phase, toolName: event.toolName, toolCallId: event.toolCallId,
+      input: event.input ?? {}, ...(phase === 'result' ? { result: { content: event.content, details: event.details, isError: event.isError }, isError: event.isError } : {}) };
+    assertToolHookBudget(data);
+    const serialized = JSON.stringify(data);
+    const frameBudget = ${MAX_JSONL_BUFFER_CHARS - 4096};
+    if (serialized.length > frameBudget / 2 && JSON.stringify(serialized).length > frameBudget) throw new Error('Tool hook exceeds the transport frame budget');
+    const raw = await ctx.ui.input('cindy:tool-lifecycle', serialized, { timeout: 2_000 });
+    const result = typeof raw === 'string' ? JSON.parse(raw) : null;
+    if (!result || result.error) throw new Error('Tool hook failed');
+    return result;
+  };
+  if ((toolLifecyclePoints.includes('call') || toolLifecyclePoints.includes('result')) && !guestToolGate && !currentPermissionState().reviewOnly) {
+    const pluginToolCall = async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'call');
+      if (result.decision === 'deny') return { block: true, reason: result.reason ?? 'Plugin denied tool call' };
+      if (result.input) {
+        for (const key of Object.keys(event.input)) delete event.input[key];
+        Object.defineProperties(event.input, Object.getOwnPropertyDescriptors(result.input));
+      }
+    };
+    if (toolLifecyclePoints.includes('call')) pi.on('tool_call', pluginToolCall);
+    if (toolLifecyclePoints.includes('result')) pi.on('tool_result', async (event: any, ctx: any) => {
+      const result = await pluginToolLifecycle(event, ctx, 'result');
+      if (result.decision === 'deny') {
+        ctx.abort();
+        throw new Error(result.reason ?? 'Plugin blocked tool result');
+      }
+      return result.result;
+    });
+  }
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
     if (guestToolGate && guestToolGate.blocks(event.toolName)) {

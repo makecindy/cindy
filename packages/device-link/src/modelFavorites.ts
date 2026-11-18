@@ -92,6 +92,13 @@ export function parseProviderShareFavoriteSource(value: string): {
     return null;
   }
 }
+/**
+ * 收藏来源键是否指向本机之外（同账号另一台电脑或分享来的供应商）。按前缀判定：
+ * 即使键内容损坏解析不出来，也不能被当成本机供应商。
+ */
+export function isNonLocalModelFavoriteSource(providerId: string): boolean {
+  return providerId.startsWith(AGENT_DEVICE_FAVORITE_PREFIX) || providerId.startsWith(PROVIDER_SHARE_FAVORITE_PREFIX);
+}
 /** 收藏通道能往返的分享来源键。更长的键 Desktop 本机仍可存，但手机会整表读失败，所以不提供星标。 */
 export function providerShareFavoriteWireKey(source: ProviderShareFavoriteSource): string | null {
   try {

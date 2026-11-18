@@ -81,6 +81,8 @@ export interface NativeActRequest {
   kind: NativeActKind;
   /** Owner value for `text` / key name for `key`. Sent on stdin only. */
   value?: string;
+  /** One-character code cells may advance focus after receiving their character. */
+  allowFocusAdvance?: boolean;
 }
 
 export type NativeActResult =
@@ -93,7 +95,7 @@ export type NativeActResult =
  */
 export type ControlBinding =
   | { kind: 'press'; ref: string; fp: string }
-  | { kind: 'text'; ref: string; fp: string; secure: boolean };
+  | { kind: 'text'; ref: string; fp: string; identity: string; secure: boolean; nativeSecure?: boolean; frameOrigin?: string; segments?: Array<{ ref: string; fp: string; identity: string; secure: boolean; length: number }> };
 
 /** One step photographed for the owner. In memory only; never written to disk. */
 export interface WindowCapture {
@@ -127,4 +129,11 @@ export interface HandoffTarget {
   window: NativeWindowRef;
   /** The window was minimized when chosen: it has to come back before it can be read or seen. */
   minimized?: boolean;
+}
+
+/** Agent-supplied structure only, checked against current host controls. Never contains values. */
+export interface HandoffFieldPlan {
+  label: string;
+  contentType: 'text' | 'username' | 'password' | 'one-time-code';
+  targets: Array<{ label: string; length?: number }>;
 }

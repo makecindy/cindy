@@ -1472,6 +1472,9 @@ export interface AgentDeps {
    */
   claudeHooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
 
+  /** Optional native tool hooks; the host owns live task selection and plugin lifecycle. */
+  toolLifecycleControl?: import('./shared/tool-lifecycle.js').ToolLifecycleControl;
+
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
   getClaudeSubagentTaskUsage?: (taskId: string) => ClaudeSubagentTaskUsage | undefined;

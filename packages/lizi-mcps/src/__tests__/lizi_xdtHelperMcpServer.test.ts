@@ -547,6 +547,12 @@ describe("cindy_helper MCP server", () => {
       expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task' }), {
         purpose: 'Sign in to continue', target: { app: 'Google Chrome' },
       });
+      // The public tool must preserve a logical field plan through every harness.
+      const fields = [{ label: 'Code', contentType: 'one-time-code', targets: [{ label: 'Code 0', length: 1 }, { label: 'Code 1', length: 1 }] }];
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Enter code', target: {}, fields,
+      } }))).toMatchObject({ ok: true, status: 'pending' });
+      expect(start).toHaveBeenLastCalledWith(expect.anything(), { purpose: 'Enter code', target: {}, fields });
       expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
         purpose: 'Scan the simulator sign-in code', image: 'shots/qr.png',
       } }))).toMatchObject({ ok: true, request_id: 'handoff-image', status: 'pending' });
@@ -578,7 +584,7 @@ describe("cindy_helper MCP server", () => {
       } }))).toMatchObject({ errorCode: 'TARGET_IS_CINDY' });
       expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'next-task', sessionInstanceId: 'instance-2' }),
         { purpose: 'Sign in', target: { app: 'Cindy' } });
-      expect(start).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(3);
       expect(startImage).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   });

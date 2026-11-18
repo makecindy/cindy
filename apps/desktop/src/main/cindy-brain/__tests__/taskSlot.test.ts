@@ -70,7 +70,8 @@ describe('plugin task pipe', () => {
       }
     }
     expect(await handlePluginTaskRequest('p', { type: 'tasks-request', kind: 'capabilities' }, deps))
-      .toMatchObject({ ok: true, data: { remoteRoutes: true } });
+      // runPreview is the feature flag plugins check before reading getRun().preview (2026-11-17).
+      .toMatchObject({ ok: true, data: { remoteRoutes: true, runPreview: true } });
   });
   it('round-trips collapsed context with screenshots while model history retains the full material', () => {
     const message = buildPluginMessage('Look here', 'Window text and pointer coordinates', 'Attached context');

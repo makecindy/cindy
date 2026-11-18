@@ -4,6 +4,13 @@
 > **读取时机**：新增或修改插件（`.cindy`）的运行时、沙箱、权限、能力声明、面板供片、
 > 网络／凭证／文件交接、插件市场分页读取、安装扫描、实例核对、使用统计与远程插件状态读取，插件作者可见的
 > 身份卡、管子协议、打包与编写手册，或批准状态、安装布局、指纹格式等**存量安装读得到的任何东西**之前
+> **适用路径**：`apps/desktop/src/main/cindy-brain/**`、`apps/desktop/src/main/plugin-*/**`、
+> `apps/desktop/src/main/mcp-integrations/**/ghost*`、
+> `apps/desktop/src/main/maker-ipc/**/{ghost,plugin,runtimePlugins}*`、
+> `apps/desktop/src/shared/**/{ghost,plugin}*`、`apps/desktop/src/preload/**/ghost*`、
+> `apps/desktop/src/renderer/cindy-brain/**`、`apps/desktop/src/renderer/features/plugin/**`、
+> `apps/host/src/plugins/**`、`apps/mobile/src/plugins/**`、`packages/plugin-protocol/**`、
+> `packages/cindy-tools/src/ghost/**`、`apps/desktop/resources/system-skills/cindy-plugin-creator/**`
 
 本文治理 Cindy 中运行的插件——以 `ghost.json` 为身份卡的 `.cindy` 包。它约束三件
 互为支撑的事：**运行时权限安全**（宿主如何隔离并授权插件）、**存量插件兼容**（升级
@@ -322,6 +329,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   直接拒装；已安装快照里不成对的历史值原样保留但不授予。它单列为 `agent:hidden-tasks` 权限，
   更新新增即「权限变多」；运行期由 taskSlot 与任务服务按身份卡双重守门。透明性兜底与多端口径见
   [`plugin-task-api-implementation.md`](plugin-task-api-implementation.md)「后台任务」。
+- `agent.modelPreferences`（模型收藏与最近使用，2026-11 产品决定）是独立能力，不依赖 tasks；新包非布尔拒装，
+  已安装快照里的非 `true` 历史值原样保留但不授予。按 hiddenTasks 的方式单列 `agent:model-preferences` 权限：
+  安装／更新确认接受即整体授予，更新新增即「权限变多」，不另存分项批准、不补批。运行期由
+  `/model-preferences` 端点按已批准、已启用且该版本 manifest 声明现查守门，见下文
+  [模型收藏与最近使用](#模型收藏与最近使用新增接口尚未发布)。
 - **Agent 在途调用不需要重复登记具体操作。** 插件工具是否执行由当前
   `ghost_call` 的 Cindy Agent 授权决定；普通网络和当前工作目录操作使用主机
   下发且仍在途的 `callId`。随包代码与 CLI 继续使用已有 Node 工作进程，顶层
@@ -413,10 +425,19 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 - **插件提供的模型（2026-11-01）**：清单 `models.types` 声明能力，列表经 `PUT /models` 运行时发布，存在插件自己的
   `/kv` 之外，读时重新校验。`route` 模型必须声明 `will-start-task`，节点批准后才显示；选择器只读落盘列表，
   不调用插件，文案全部来自插件。`route` 模型不进执行目录。
+- **原生工具控制节点**：`will-tool-call` / `did-tool-result` 经现有任务插件选择、整体安装批准与
+  `subscribe.hooks` 声明接 Claude SDK hooks 和 Pi cindy-bridge。
+  每个调用／结果有独立 1 秒等待预算，不消费轮前 5 秒；不选时不装钩子或序列化内容。
+  只允许收紧权限，改参后仍走原权限链；原生支持、错误／取消和结果变换差异见随包
+  `plugin-control-points.md`「原生工具生命周期」。Codex 不自动接入：不复制原生内部信任指纹或路径，
+  不改用户信任、不 bypass；Review／访客隔离不变。静默超时沿用引擎默认行为。
+  实时选择、owner 与安装检查复用主干控制节点；在途选择／owner 变化按原生默认处理。
+  不新增选择快照、实例刷新或贡献者终检；按点安装，新点服从原生实例边界。Claude 不改参，Pi 改参仍走原权限。
+  接线与行为回归见 `toolLifecycleControl.ts`、Claude 钩子测试与 Pi 原生集成用例。
 - **任务运行时控制点**：`will-start-turn` 在 App 正常发送入口为 Claude Code／Codex／Pi 新轮开始前选模，
   复用任务原有模型控制服务；`will-model-request` 仅本机 Pi 支持，使用原生虚拟模型与
   `before_provider_request`，分 `select` 和 `payload` 两阶段。后者可变更参数和请求正文，
-  只要求结果仍是合法请求；认证头、连接凭证不进入数据。五个任务运行时控制点只要求整包
+  只要求结果仍是合法请求；认证头、连接凭证不进入数据。任务运行时控制点只要求整包
   安装批准有效、已启用且该版本 manifest 已声明，不维护分项批准、不补批或逐次确认，
   不套用 Agent MCP 权限策略；旧 receipt 中这些节点的分项记录读到即忽略，不迁移或改写原数据。
   安装／更新确认仍展示声明能力，接受即整体授予，拒绝就不安装／更新；用户在任务菜单的
@@ -1400,12 +1421,38 @@ IPC 时追加对应专项规则要求的验证。
 `agent_device_id`：带上后读那台允许远程调用的来源并回显 `agentDeviceId`，不查 `locations`。
 来源级强度不能被跨来源合并。无参 visible 复用当前账号模型选择器的用户开关与目录默认值；
 带参 visible 只用模型目录默认值，不套本机开关。隐藏项保留供显式展开，偏好未就绪不伪造默认。
+每项可选附带与模型选择器同源的展示字段：`description`（`shared/modelDescriptionKey.ts` 的编辑说明，按 Main 当前界面语言取
+`modelDescriptions.*`，不用目录原始 description）、`icon`、`group`、`contextWindow`、`supportsFastMode`（布尔）、
+`supportsUltrafastMode:true`、`effortDisplayNames`、供应商 `logoKind`；只作展示、不作路由或能力判据，旧 Host 缺字段时插件照原样显示。
 使用 ProviderService 的 `allowSideEffects:false` 读取本机清单；带参经 `readDeviceProviderViews`
 跨设备读取。不主动发现或认领凭证，不调用模型。不暴露 ProviderView、auth、账号 identity 或 endpoint；
 响应 no-store、仅 GET。其他参数、重复参数、空或超过 128 字符的 id 返回 400；格式合法但读不到
 （离线、未知、没开远程控制）返回 503 且 `errorCode` 为 `NOT_AVAILABLE`，响应里没有本机条目。
 旧 Host 带任何参数都返回 400。检查插件在装启用与 owner 归属，异步返回前复核。
 旧 Host 404 时插件应明确提示升级。此端点不覆盖远程 SSH 模型，执行前仍需核验真实路由。
+
+### 模型收藏与最近使用（新增接口，尚未发布）
+
+用途：Host 选择器嵌不进去的地方（如 Chrome 侧边栏）由插件自绘与 App 一致的选择器。收藏和最近使用是个人数据，
+只在插件声明 `agent.modelPreferences: true` 且经安装／更新确认后开放（2026-11 产品决定）；未声明或批准无效返回 403
+`PERMISSION_DENIED`，不触达收藏桥。插件同源端点与 `/agent-models` 同一套安装、owner 与启用复核，响应 no-store，
+任何查询参数 400，方法不对 405：
+
+- `GET /model-preferences` → `{ok:true,favorites:[{uid,providerId,modelId,agent,effort?,fast?}],recents:[...]}`，按 App 展示顺序。
+- `POST /model-preferences/favorites`：正文就是 device-link 的 `ModelFavoriteMutation`（add／update／remove），
+  经 `parseModelFavoriteMutation` 校验；不合法或指向非本机来源 400 `INVALID_REQUEST`，App 拒绝（已变化、上限、
+  owner 未就绪）409 `CONFLICT`，什么都不写；成功返回持久化后的收藏。
+- 主窗口答不上（启动、切换账号、无 App renderer）503 `NOT_AVAILABLE`；Node Host 不提供（503）。
+
+边界：只读写**本机**条目，`agent-device-favorite:` 与 `provider-share-favorite:` 前缀的来源一律滤掉且不可写；收藏与
+App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner 围栏的 renderer 收藏桥
+（`maker-ipc/modelFavoritesSync.ts` 的 `readHostModelPreferences`／`applyHostModelFavorite`），App 选择器经原有 store
+订阅即时反映；最近使用由同一请求带 `recents:true` 让 renderer 只读当前 owner 分区（`accessHostRecentModels`），
+不建 Main 副本，插件选模也不写入最近使用。不返回凭证、endpoint 或账号信息。手机与远程控制页面暂不开放此端点
+（`mobilePageService` 的 fetch 白名单未登记），不经 device-link 新增 IPC。旧 Host 404，插件退回只用 `/agent-models`。
+实现见 `cindy-brain/ghostModelPreferences.ts`、`runtime/ghostPageHandler.ts`；回归见
+`electronSandboxAdapter.ownerPartition.test.ts`、`modelFavoritesSync.test.ts`、`recentModels.test.ts` 与 `ghost.tasks.test.ts`；
+作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md` §4.0.3c。
 
 ### 宿主统一模型选择器（新增接口，尚未发布）
 

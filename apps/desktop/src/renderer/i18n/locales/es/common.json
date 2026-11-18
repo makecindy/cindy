@@ -2,6 +2,7 @@
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",
+    "nativeHooksUnsupported": "Los hooks de herramientas solo admiten Claude Code y Pi locales.",
     "title": "Complementos de la tarea",
     "description": "Selecciona los complementos de esta tarea. Los cambios se aplican desde el siguiente mensaje.",
     "unsupported": "El procesamiento de cada solicitud solo está disponible con Pi local. El motor de esta tarea no lo admite.",
@@ -1396,7 +1397,7 @@
     "REMOTE_PROVIDER_UPDATING": "Las credenciales del proveedor se están actualizando. Vuelve a intentarlo en un momento.",
     "REMOTE_PROVIDER_UNSUPPORTED": "Este proveedor no es compatible con sesiones remotas SSH; elige otra fuente",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Las tareas remotas no pueden usar una suscripción de Claude: elige una puerta de enlace o un modelo con clave de API",
-    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "El dispositivo de destino no responde. Revisa el dispositivo remoto e inténtalo de nuevo.",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "El dispositivo de destino no responde en este momento. Puede que la red sea lenta o que el dispositivo esté ocupado. Cindy lo comprueba automáticamente; inténtalo de nuevo cuando se recupere la conexión.",
     "INTERNAL": "La operación falló. Inténtalo de nuevo más tarde.",
     "SSH_CONFIG_CONCURRENT_MODIFICATION": "La configuración de SSH cambió en el disco. Vuelve a cargarla e inténtalo de nuevo.",
     "SSH_CONFIG_RELOAD_REQUIRED": "La configuración de SSH se guardó, pero Cindy no pudo actualizarla. Vuelve a cargar la configuración de SSH.",
@@ -4401,7 +4402,6 @@
           "label": "Ejecutar en",
           "optionLocal": "Esta computadora",
           "notSignedIn": "Sin sesión",
-          "autoBorrowing": "Esta computadora no tiene sesión iniciada, así que las tareas nuevas se ejecutan en {{device}}. No hace falta iniciar sesión.",
           "local": "Las tareas nuevas se ejecutan en esta computadora. Puedes elegir otra de tus computadoras con sesión iniciada.",
           "pinned": "Las tareas nuevas se ejecutan en {{device}} con su sesión. Las tareas en curso siguen donde están.",
           "inline": "Se ejecuta en",
@@ -7033,7 +7033,8 @@
         "replaced": "Conexión reemplazada por otra instancia de este dispositivo",
         "too-many-connections": "Se alcanzó el límite de conexiones de esta cuenta",
         "version-mismatch": "La versión del protocolo no coincide: actualiza la aplicación",
-        "unstable": "La conexión se interrumpe y se restablece continuamente: revisa la red o reinicia Cindy si el problema persiste"
+        "unstable": "La conexión se interrumpe y se restablece continuamente: revisa la red o reinicia Cindy si el problema persiste",
+        "agent-net-relay-down": "No se puede acceder al relé de Agent-Net; reconectando. Las computadoras conectadas directamente siguen funcionando; los demás dispositivos no pueden conectarse por ahora"
       },
       "refresh": "Actualizar",
       "empty": "Aún no hay otros dispositivos. Inicia sesión en {{appName}} con la misma cuenta en otra computadora y aparecerá aquí.",
@@ -8328,6 +8329,8 @@
         "hostTools_terminalDetail": "Iniciar comandos y terminales interactivos con tus permisos en este equipo, leer la salida, enviar entradas y detener los procesos de este complemento. Los comandos pueden acceder a tus archivos y aplicaciones.",
         "agentHiddenTasks": "Puede crear tareas en segundo plano ocultas de la lista de tareas",
         "agentHiddenTasksDetail": "Las tareas que crea este complemento pueden permanecer fuera de la lista de tareas, la búsqueda y las notificaciones. Siempre puedes verlas, abrirlas o mostrarlas en la lista de tareas desde Tareas en segundo plano en la página de este complemento; al desinstalar el complemento, vuelven a mostrarse.",
+        "agentModelPreferences": "Leer y editar tus modelos favoritos, y leer tus modelos usados recientemente",
+        "agentModelPreferencesDetail": "Puede leer los modelos favoritos y los usados recientemente en esta computadora, incluida la intensidad de razonamiento y Fast, y añadir, cambiar o quitar favoritos. Los cambios también aparecen en el selector de modelo de Cindy. Los modelos elegidos en el complemento no se añaden a los recientes. No incluye modelos de tus otras computadoras ni compartidos contigo, y no comparte credenciales.",
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",
         "agentErrandDetail": "Las tareas creadas aparecen en la lista de tareas de Cindy, donde puedes ver el progreso y continuar la conversación.",
         "agentSchedule": "Puede pedirte que crees una automatización",
@@ -8356,6 +8359,8 @@
         "subscribeTopics": "Observa la actividad de tus sesiones (eventos de turno y de sesión, sin contenido de mensajes)",
         "subscribeMessage": "Eventos de contenido de mensajes",
         "subscribeMessageDetail": "Recibe mensajes guardados del usuario y respuestas de la IA. Los adjuntos se leen y transfieren por separado.",
+        "subscribeToolExecution": "Eventos de ejecución de herramientas",
+        "subscribeToolExecutionDetail": "Recibe nombres, entradas, resultados y errores de herramientas. Observa sin cambiar la ejecución.",
         "subscribeTaskState": "Eventos de estado de tareas",
         "subscribeTaskStateDetail": "Recibe cambios de ejecución, espera, finalización, archivo y ocultación de tareas.",
         "subscribeActivity": "Observa cuándo la IA está pensando y cuándo te está esperando",
@@ -8378,6 +8383,10 @@
         "subscribeStartTurnDetail": "Solo las tareas en las que seleccionas este complemento comparten el mensaje actual con él. Puede elegir un modelo conectado, la intensidad de razonamiento y Fast. Los errores siguen la configuración de la tarea; no puede aprobar acciones por ti.",
         "subscribeModelRequest": "Puede procesar cada solicitud al modelo en tareas seleccionadas",
         "subscribeModelRequestDetail": "Solo las tareas en las que seleccionas este complemento comparten sus solicitudes al modelo con él. Puede ajustar modelos, parámetros y contenido. Actualmente solo se admite Pi local; los errores siguen la configuración de la tarea. No se incluyen credenciales de conexión.",
+        "subscribeToolCall": "Puede procesar llamadas a herramientas en las tareas seleccionadas",
+        "subscribeToolCallDetail": "Puede leer, cambiar o rechazar parámetros según lo permita el motor. No puede aprobar operaciones por ti.",
+        "subscribeToolResult": "Puede procesar resultados de herramientas en las tareas seleccionadas",
+        "subscribeToolResultDetail": "Puede leer resultados y añadir contexto o sustituir resultados si el motor lo permite. No deshace operaciones ya realizadas.",
         "subscribeStartTask": "Puede elegir el modelo de las tareas nuevas",
         "subscribeStartTaskDetail": "Cuando una tarea nueva usa un modelo que ofrece, lee el primer mensaje y elige uno de tus modelos conectados. Este punto solo se ejecuta antes del primer mensaje.",
         "card": "Representa tarjetas de mensajes",
@@ -12686,6 +12695,7 @@
       "createOwnApp": "Crear mi App ↗"
     },
     "outboundAttachmentsIncomplete": "⚠️ Entrega de adjuntos incompleta: {{count}} sin enviar ({{names}}).",
+    "outboundAttachmentOverLimit": "{{name}} (supera el límite de {{limit}} MB)",
     "unnamedAttachment": "Adjunto sin título",
     "text": {
       "discord": {
@@ -13647,9 +13657,17 @@
         "submitLabel": "Enviar respuestas",
         "multiSelectHint": " (puedes elegir varias)",
         "resolved": "✅ Elegido: {{option}}",
+        "resolvedLabeled": "✅ {{label}}: {{option}}",
         "expired": "Esta tarjeta ha caducado",
         "textHint": "Solo puede responder quien hizo la consulta. Escribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar.",
-        "replyHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar.\nEscribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar."
+        "replyHint": "Solo quien hizo la solicitud puede responder. Toca una opción; para varias preguntas o selecciones, envía al terminar.\nEscribe {{code}} seguido de tu respuesta. Para varias preguntas: {{code}} 2: respuesta; después {{code}} OK para enviar.",
+        "nextLabel": "Siguiente pregunta",
+        "stepHint": "Solo quien hizo la solicitud puede responder. Toca una opción o escribe {{code}} seguido de tu respuesta.",
+        "stepSubmitHint": "Solo quien hizo la solicitud puede responder. Elige y toca «{{action}}»; o escribe {{code}} seguido de tu respuesta y después {{code}} OK.",
+        "stepTextHint": "Solo quien hizo la solicitud puede responder. Escribe {{code}} seguido de tu respuesta.",
+        "unanswered": "⚠️ Aún sin responder: pregunta {{numbers}}. Responde todas las preguntas y luego envía.",
+        "unansweredSingle": "⚠️ Aún no hay respuesta. Elige una opción o escribe una respuesta primero.",
+        "numberSeparator": ", "
       }
     }
   },
@@ -14141,6 +14159,14 @@
         "standard": "Estándar",
         "fast": "Rápido",
         "ultrafast": "Ultrarrápido"
+      },
+      "discoveredCopy": {
+        "title": "¿Usar {{provider}} en “{{device}}”?",
+        "description": "{{unavailable}} Si continúas, se ejecutará en “{{device}}”. Puedes volver aquí cuando quieras.",
+        "unavailableHere": "{{provider}} en esta computadora no está disponible ahora.",
+        "unavailableOn": "{{provider}} en “{{device}}” no está disponible ahora.",
+        "confirm": "Usar",
+        "cancel": "Dejar como está"
       }
     },
     "permissionSelector": {
@@ -14432,7 +14458,8 @@
         "description": "El registro de conversación en la otra computadora no se puede mover, por lo que continúa desde un resumen de transferencia. Es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envíes el siguiente mensaje.",
         "descriptionNativeHistory": "El registro completo de la conversación se copia y continúa desde donde estaba. Si no se puede restaurar, continúa desde un resumen de transferencia y es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envíes el siguiente mensaje.",
         "confirm": "Cambiar de computadora",
-        "cancel": "Dejar como está"
+        "cancel": "Dejar como está",
+        "discoveredDescription": "{{reason}} {{description}}"
       }
     },
     "agentSelect": {
@@ -15009,6 +15036,8 @@
       "subtitle_many": "{{count}} mensajes seleccionados"
     },
     "errorBanner": {
+      "codexHelperUnavailable": "cindy_helper está habilitado, pero no está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea.",
+      "codexHelperUnverified": "No se pudo comprobar si cindy_helper está disponible en esta tarea. Es posible que no se pueda comunicar el resultado de la tarea.",
       "requestFormatError": "La aplicación envió una solicitud no válida, por lo que no se pudo completar esta respuesta.",
       "replyFailed": "No se pudo completar la respuesta",
       "retryTitle": "Reenviar el último mensaje",
@@ -16148,6 +16177,7 @@
       "saveFailed": "No se pudo guardar el nivel de la ventana de contexto"
     },
     "agentStatus": {
+      "waitingRemoteResponse": "Esperando la respuesta remota…",
       "readingMemory": "Leyendo la memoria…",
       "savingMemory": "Guardando memoria…",
       "deletingMemory": "Borrando memoria…",
@@ -16197,7 +16227,8 @@
         "replaced": "Esta conexión fue reemplazada por otra instancia del mismo dispositivo. Reconectando…",
         "too-many-connections": "Hay demasiados dispositivos conectados a esta cuenta; el servidor rechazó la conexión",
         "version-mismatch": "La versión del protocolo no coincide con la del servidor. Actualiza la aplicación e inténtalo de nuevo",
-        "unstable": "Esta computadora pierde y restablece la conexión constantemente, por lo que las acciones remotas pueden seguir agotando el tiempo de espera. Revisa la red o reinicia Cindy e inténtalo de nuevo"
+        "unstable": "Esta computadora pierde y restablece la conexión constantemente, por lo que las acciones remotas pueden seguir agotando el tiempo de espera. Revisa la red o reinicia Cindy e inténtalo de nuevo",
+        "agent-net-relay-down": "Esta computadora no puede acceder al relé de Agent-Net y se está reconectando. Las acciones remotas fallan si la otra computadora no está conectada directamente"
       }
     },
     "common": {
@@ -16423,7 +16454,8 @@
         "project": "Proyecto",
         "flat": "Lista plana",
         "device": "Dispositivo",
-        "dialogue": "Conversación"
+        "dialogue": "Conversación",
+        "automation": "Automatización"
       },
       "filterGroupByDeviceManualTip": "No se puede agrupar por dispositivo con el orden manual",
       "deviceGroup": {
@@ -16777,6 +16809,7 @@
       "groupSummary": {
         "project": "Proyecto",
         "dialogue": "Conversación",
+        "automation": "Automatización",
         "device": "Dispositivo"
       },
       "taskStatusHeading": "Estado de la sesión",
@@ -16999,6 +17032,7 @@
         "openInFileBrowser": "Abrir en el explorador de archivos",
         "showInFolder": "Mostrar en carpeta",
         "copyFilePath": "Copiar ruta del archivo",
+        "copyFolderPath": "Copiar ruta de la carpeta",
         "deleteFile": "Eliminar archivo"
       },
       "searchPanel": {
@@ -17475,7 +17509,9 @@
           "jira_read": "Leer Jira",
           "jira_comment": "Comentar en Jira",
           "sessions_dispatch": "Enviar sesiones",
-          "feishu_read": "Leer mensajes de Feishu"
+          "feishu_read": "Leer mensajes de Feishu",
+          "settings_read": "Leer miembros con acceso compartido",
+          "usage_read": "Leer el uso y el estado de los grupos de proveedores"
         },
         "project": "Directorio del proyecto",
         "capabilitiesLabel": "Capacidades permitidas",
@@ -17487,7 +17523,9 @@
           "jira_read": "Leer incidencias de Jira (obtener por clave / búsqueda JQL)",
           "jira_comment": "Agregar comentarios a incidencias de Jira",
           "sessions_dispatch": "Crear o reactivar sesiones de {{appName}} y entregar mensajes",
-          "feishu_read": "Listar chats con actividad reciente; obtener mensajes recientes de un chat (grupal o directo)"
+          "feishu_read": "Listar chats con actividad reciente; obtener mensajes recientes de un chat (grupal o directo)",
+          "settings_read": "Lee los miembros con los que compartes y sus modelos permitidos en este equipo u otros equipos autorizados de la misma cuenta; no realiza cambios",
+          "usage_read": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de proveedores y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes."
         },
         "capabilityWarn": {
           "ghostMissing": "Requiere el complemento \"{{name}}\", que no está instalado; esta capacidad fallará al ejecutarse",
@@ -19232,6 +19270,7 @@
       "registrationFailed": "No se pudo crear, inténtalo de nuevo más tarde",
       "silentStopExhausted": "Se ha detectado una respuesta vacía. La continuación automática está en pausa.",
       "executionResultUnavailable": "No se puede recuperar el resultado de la ejecución. La continuación automática se ha detenido. Pídele al asistente que verifique el resultado de la ejecución existente.",
+      "unexecutedToolMarkup": "El modelo escribió una llamada a una herramienta como texto. No se pudo confirmar la ejecución, por lo que este turno no se completó.",
       "outputLimit": "El modelo alcanzó su límite de salida, por lo que esta respuesta puede estar incompleta. Envía un nuevo mensaje para continuar. Si se repite, reduce la intensidad de razonamiento o compacta primero el historial de la conversación.",
       "outputLimitReasoning": "El razonamiento consumió la mayor parte del presupuesto de salida de esta solicitud, por lo que la respuesta puede estar incompleta. Reduce la intensidad de razonamiento o compacta el historial de la conversación antes de continuar.",
       "outputLimitUsage": "Esta solicitud al modelo utilizó {{outputTokens}} tokens de salida, incluidos {{reasoningTokens}} tokens de razonamiento.",
@@ -21834,6 +21873,7 @@
     "removeTitle": "¿Quitar {{name}}?",
     "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en esta computadora.",
     "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
+    "unreachable": "No se pudo conectar con el servicio de la cuenta, así que no se puede confirmar el inicio de sesión. Comprueba la red e inténtalo de nuevo.",
     "openDirectory": "Abrir carpeta de la cuenta",
     "openDirectoryFailed": "No se pudo abrir la carpeta de la cuenta. Puede que se haya movido o eliminado.",
     "loginAgain": "Iniciar sesión nuevamente",

@@ -270,6 +270,15 @@ export interface GhostAgentNeeds {
    * 并在主窗口打开伙伴的任务。不能替用户批准或回答;不依赖 tasks,需独立批准(companionsCapabilityApproved)。
    */
   companions?: boolean;
+  /**
+   * modelPreferences = 「读取并修改你的模型收藏，读取你最近使用的模型」(2026-11)。
+   *
+   * 独立能力,不依赖 tasks;单列 `agent:model-preferences` 权限,与 hiddenTasks 相同:
+   * 安装/更新确认展示该行即整体授予,更新新增即「权限变多」,不另存分项批准。
+   * 运行期由 `/model-preferences` 端点按已批准、已启用且 manifest 声明守门:只读写本机
+   * 收藏(不含其他电脑与分享来的来源),最近使用只读;插件选模不写入 App 的最近使用。
+   */
+  modelPreferences?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -731,9 +740,9 @@ export interface GhostCindyNeeds {
  * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
  * 两项在安装或更新确认中展示；整体批准后按当前声明订阅，旧元数据主题语义保持。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state', 'tool-execution'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
-export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state'] as const;
+export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state', 'tool-execution'] as const;
 export type GhostTaskEventTopic = (typeof GHOST_TASK_EVENT_TOPICS)[number];
 export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subscribe'>): GhostTaskEventTopic[] {
   return GHOST_TASK_EVENT_TOPICS.filter(topic => manifest.subscribe?.topics?.includes(topic));
@@ -764,14 +773,14 @@ export type GhostMessageHook = (typeof GHOST_MESSAGE_HOOKS)[number];
  * - 插件只能收紧：`allow` 只表示"不反对"，不能替用户批准本来需要确认的事；
  * - 只问用户在该任务里选定的插件(任务的 preRunPlugin)，不是装了就管所有任务；
  * - 出错(没装/停用/超时/崩溃/熔断)怎么办由用户在任务里设置(onFailure)，插件不能自报；
- * - 旧控制节点沿用 receipt approvedControlPoints；任务运行时五点只依赖整包安装批准，
+ * - 旧控制节点沿用 receipt approvedControlPoints；任务运行时节点只依赖整包安装批准，
  *   并在任务里选择提供者，不额外批准节点。
  * 新增节点 = 在本目录加一项 + 在 Host 对应流程按任务配置调用 screenControlPoint。
  */
 export const GHOST_CONTROL_POINT_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
 export type GhostControlPointFailureAction = (typeof GHOST_CONTROL_POINT_FAILURE_ACTIONS)[number];
 
-export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform' | 'context' | 'memories';
+export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform' | 'context' | 'memories' | 'tool';
 
 export interface GhostControlPointSpec {
   /** 插件可返回的裁决(allow 恒可用)。route 只用于开新任务时选模型。 */
@@ -854,6 +863,16 @@ export const GHOST_CONTROL_POINTS = {
     actions: ['allow'], failureActions: ['allow', 'skip', 'block'], defaultOnFailure: 'block', timeoutMs: 8_000,
     permissionKey: 'system-prompt', labelKey: 'systemPrompt', detailKey: 'systemPromptDetail',
   },
+  'will-tool-call': {
+    actions: ['allow', 'block', 'tool'], failureActions: ['allow', 'block'],
+    defaultOnFailure: 'block', timeoutMs: 1_000, permissionKey: 'subscribe:hooks:tool-call',
+    labelKey: 'subscribeToolCall', detailKey: 'subscribeToolCallDetail',
+  },
+  'did-tool-result': {
+    actions: ['allow', 'block', 'tool'], failureActions: ['allow', 'block'],
+    defaultOnFailure: 'block', timeoutMs: 1_000, permissionKey: 'subscribe:hooks:tool-result',
+    labelKey: 'subscribeToolResult', detailKey: 'subscribeToolResultDetail',
+  },
 } as const satisfies Record<string, GhostControlPointSpec>;
 export type GhostControlPointId = keyof typeof GHOST_CONTROL_POINTS;
 export const GHOST_CONTROL_POINT_IDS = Object.keys(GHOST_CONTROL_POINTS) as GhostControlPointId[];
@@ -873,13 +892,14 @@ export function declaredGhostControlPoints(manifest: Pick<GhostManifest, 'subscr
   return manifest.systemPrompt?.length ? [...points, 'system-prompt'] : points;
 }
 
-/** 任务运行时五点随整包安装批准，不维护节点级批准记录。 */
+/** 任务运行时节点随整包安装批准，不维护节点级批准记录。 */
 export function isGhostRuntimeControlPoint(point: string): boolean {
   return point === 'will-start-turn' || point === 'will-model-request' || point === 'will-compose-context'
-    || point === 'will-search-memory' || point === 'system-prompt';
+    || point === 'will-search-memory' || point === 'system-prompt'
+    || point === 'will-tool-call' || point === 'did-tool-result';
 }
 
-/** 任务运行时五点只检查整包安装；旧控制节点保留原有名单语义。 */
+/** 任务运行时节点只检查整包安装；旧控制节点保留原有名单语义。 */
 export function ghostControlPointActive(
   ghost: Pick<InstalledGhost, 'enabled' | 'manifest' | 'approval' | 'approvedControlPoints'>,
   point: GhostControlPointId,
@@ -2330,6 +2350,14 @@ export function ghostDeclaresHiddenTasks(manifest: Pick<GhostManifest, 'agent'> 
   return manifest?.agent?.tasks === true && manifest.agent.hiddenTasks === true;
 }
 
+/**
+ * 插件是否声明了模型收藏与最近使用的读写能力(`agent.modelPreferences: true`)。
+ * 已安装快照里非 true 的历史值只作为未知数据保留,不授予。
+ */
+export function ghostDeclaresModelPreferences(manifest: Pick<GhostManifest, 'agent'> | null | undefined): boolean {
+  return manifest?.agent?.modelPreferences === true;
+}
+
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
   items.push(...ghostHostUiPermissionItems(manifest));
@@ -2442,6 +2470,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         kind: 'agent',
         labelKey: 'agentHiddenTasks',
         detailKey: 'agentHiddenTasksDetail',
+      });
+    }
+    // 模型收藏与最近使用:独立 key 单列(理由同 hiddenTasks/schedule —— 并进其它 key 会让
+    // 更新里新增该声明时 added 为空,扩权复核拦不住)。
+    if (ghostDeclaresModelPreferences(manifest)) {
+      items.push({
+        key: 'agent:model-preferences',
+        kind: 'agent',
+        labelKey: 'agentModelPreferences',
+        detailKey: 'agentModelPreferencesDetail',
       });
     }
     // 「可以请你新建自动化任务」:独立 key 单列一档。理由同 badge/errand ——
@@ -2729,8 +2767,8 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       if (topics?.length) {
         for (const topic of declaredGhostTaskEventTopics(manifest)) items.push({
           key: `subscribe:topics:${topic}`, kind: 'subscribe',
-          labelKey: topic === 'message' ? 'subscribeMessage' : 'subscribeTaskState',
-          detailKey: topic === 'message' ? 'subscribeMessageDetail' : 'subscribeTaskStateDetail',
+          labelKey: topic === 'message' ? 'subscribeMessage' : topic === 'tool-execution' ? 'subscribeToolExecution' : 'subscribeTaskState',
+          detailKey: topic === 'message' ? 'subscribeMessageDetail' : topic === 'tool-execution' ? 'subscribeToolExecutionDetail' : 'subscribeTaskStateDetail',
         });
         // 旧 key 只在真订了 turn / session 时产出:纯 activity 插件不该在确认框里
         // 多出一行"旁听轮次与会话事件"——网关根本不给它投 turn / session,那行是凭空
@@ -3060,7 +3098,7 @@ export function diffInstalledGhostPermissionItems(
       cindy: installed.manifest.cindy ? { ...installed.manifest.cindy,
         models: declaredGhostCindyModelActions(installed.manifest).filter(action => installed.approvedCindyModelActions?.includes(action)),
       } : undefined,
-      // 仅旧控制节点沿用分项批准；任务运行时五点以已安装 manifest 为比较基线。
+      // 仅旧控制节点沿用分项批准；任务运行时节点以已安装 manifest 为比较基线。
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
     };
@@ -5183,15 +5221,16 @@ function validateGhostManifestInput(
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
     if (!preserveHistoricalTasks && agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
+    if (!preserveHistoricalTasks && agentRaw.modelPreferences !== undefined && typeof agentRaw.modelPreferences !== 'boolean') return { ok: false, reason: 'agent.modelPreferences must be boolean' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true 六项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true 七项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -5201,6 +5240,7 @@ function validateGhostManifestInput(
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
       ...(agentRaw.companions === true ? { companions: true } : {}),
+      ...(agentRaw.modelPreferences === true ? { modelPreferences: true } : {}),
     };
   }
 
@@ -7881,6 +7921,26 @@ export type GhostAgentModelsResult =
         providerName: string;
         efforts: string[];
         defaultEffort: string | null;
+        /*
+         * Optional, non-personal catalog display data (2026-11; older Hosts omit them).
+         * Same sources as the Cindy model picker; never routing or credential data.
+         */
+        /** Localized editorial blurb shown in the picker, in Cindy's interface language. */
+        description?: string;
+        /** Catalog icon id (CatalogModel.icon), e.g. claude / codex / cindy; unknown → use the provider mark. */
+        icon?: string;
+        /** Vendor group id used for picker grouping (CatalogModel.group). */
+        group?: string;
+        /** Context window in tokens for this source and engine. */
+        contextWindow?: number;
+        /** Catalog Fast support for this source and engine; the route is still validated when used. */
+        supportsFastMode?: boolean;
+        /** Present only when the account can use the Ultrafast tier. */
+        supportsUltrafastMode?: true;
+        /** Model-specific effort display names, when the catalog has them. */
+        effortDisplayNames?: Record<string, string>;
+        /** Provider brand mark kind (ProviderView.logoKind). */
+        logoKind?: string;
       }>;
       agentDeviceId?: string;
       locations?: Array<{ agentDeviceId: string; name: string }>;
@@ -7888,6 +7948,20 @@ export type GhostAgentModelsResult =
       supportsRemoteRoutes?: boolean;
     }
   | { ok: false; errorCode: 'PERMISSION_DENIED' | 'NOT_AVAILABLE'; message: string };
+
+/** One favorite or recent configuration copy, in the same shape as the device-link favorites channel. */
+export interface GhostModelPreferenceItem {
+  providerId: string;
+  modelId: string;
+  agent: 'cc' | 'codex' | 'pi';
+  effort?: string;
+  fast?: true | 'ultrafast';
+}
+/** `GET /model-preferences` and `POST /model-preferences/favorites` (agent.modelPreferences). */
+export type GhostModelPreferencesResult =
+  | { ok: true; favorites: Array<GhostModelPreferenceItem & { uid: string }>; recents: GhostModelPreferenceItem[] }
+  | { ok: true; favorites: Array<GhostModelPreferenceItem & { uid: string }> }
+  | { ok: false; errorCode: 'PERMISSION_DENIED' | 'NOT_AVAILABLE' | 'INVALID_REQUEST' | 'CONFLICT'; message: string };
 
 /** 插件设置页 / 面板可读取的 Cindy Core 媒体模型类型。 */
 export const GHOST_MEDIA_MODEL_TYPES = ['image', 'video'] as const;
@@ -9041,6 +9115,7 @@ export type GhostActivityEventName =
 
 /** did- 旁听事件名，按声明并批准的 topic 分发。 */
 export type GhostDidEventName =
+  | 'did-tool-execution'
   | 'did-message-created'
   | 'did-task-state-changed'
   | 'did-turn-start'
@@ -9105,7 +9180,14 @@ export type GhostEventActivityData = GhostEventThinkingData | GhostEventInteract
 
 /** did- 旁听载荷；消息内容与任务状态使用各自的批准主题。 */
 export type GhostDidEventData =
-  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData;
+  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData | GhostToolExecutionData;
+export interface GhostToolExecutionData {
+  sessionId: string;
+  eventType: string;
+  source?: string;
+  payload: unknown;
+  truncated?: true;
+}
 export interface GhostTaskEventData {
   sessionId: string;
   messageId?: string;
@@ -9177,7 +9259,8 @@ export interface GhostMemorySearchPointData {
 }
 export interface GhostComposeContextPointData { sessionId: string; text: string }
 
-export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData | GhostMemorySearchPointData | GhostComposeContextPointData;
+export type GhostToolPointData = import('@cindy/maker-core/tool-lifecycle').ToolLifecycleEvent & { sessionId: string };
+export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData | GhostMemorySearchPointData | GhostComposeContextPointData | GhostToolPointData;
 
 /** 选择器里的一个插件模型(已按当前语言解析文案)。 */
 export interface GhostPickerModel {
@@ -9206,6 +9289,7 @@ export type GhostControlPointResult =
   | { action: 'route'; ghostId: string; ghostName: string; route: GhostModelRoute; reason: string };
 
 export type GhostRuntimeControlPointResult = GhostControlPointResult
+  | { action: 'tool'; ghostId: string; ghostName: string; tool: import('@cindy/maker-core/tool-lifecycle').ToolLifecycleVerdict }
   | { action: 'context'; ghostId: string; ghostName: string; blocks: GhostContextBlock[] }
   | { action: 'memories'; ghostId: string; ghostName: string; entries: GhostMemoryEntry[] }
   | { action: 'transform'; ghostId: string; ghostName: string; request: Record<string, unknown> };
@@ -9346,7 +9430,8 @@ export type GhostPipeEventPush =
 export interface GhostPipeEventVerdict {
   type: 'event-verdict';
   hookId: string;
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories' | 'tool';
+  tool?: import('@cindy/maker-core/tool-lifecycle').ToolLifecycleVerdict;
   blocks?: GhostContextBlock[];
   entries?: GhostMemoryEntry[];
   /** Provider request JSON body, only for will-model-request phase=payload. */

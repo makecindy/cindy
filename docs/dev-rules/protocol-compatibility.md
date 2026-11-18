@@ -2,7 +2,8 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改插件分发来源边界、device-link 协议／relay／隧道 payload／IPC
-> allowlist，或任何改动客户端与服务端之间 wire protocol 的地方之前
+> allowlist，或任何改动客户端与服务端之间 wire protocol 的地方之前；Device Link 改动同时读「自建中转同步维护」
+> **适用路径**：`packages/{device-link*,*-protocol}/**`、`apps/{desktop/src/main,mobile/src}/device-link/**`
 
 客户端与服务端分别维护本仓所需的 wire Bean、validator、parser 与 builder，不共享代码仓库
 或发布节奏。真正危险的是单端改变既有 wire 语义，或在不兼容变更中缺少协同；这类问题在

@@ -270,7 +270,7 @@ function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }
     ? t('providerGroup.member.accountCount', { count: pool.members.length })
     : pool && pickerAccount ? pool.members[0].identity
     : pickerAccount
-      ? (pickerAccount.identity ?? t('subscriptionAccounts.unassigned'))
+      ? pickerAccount.identity
       : props.accountIdentity;
   const displayedQuota = pool
     ? pool.average === null

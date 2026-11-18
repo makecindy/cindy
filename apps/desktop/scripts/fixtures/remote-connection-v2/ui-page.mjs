@@ -190,7 +190,9 @@ export default {
       // Fractional RTT samples must render as whole milliseconds in the topology and both cards.
       await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 3 }), { exact: true }).waitFor();
       await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 97 }), { exact: true }).waitFor();
-      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 25 }), { exact: true }).waitFor();
+      const relayProtocol = await ui.t('settings.remoteControl.v2.protocol.agentNet');
+      const relayRtt = await ui.t('settings.remoteControl.v2.ms', { value: 25 });
+      await page.getByText(`${relayProtocol} · ${relayRtt}`, { exact: true }).waitFor();
       // Mixed real routes: both protocols share the topology, independently of direct/relay grouping.
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.deviceLink'), { exact: true }).waitFor();
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).first().waitFor();
