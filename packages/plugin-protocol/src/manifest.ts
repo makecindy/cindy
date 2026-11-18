@@ -1041,7 +1041,7 @@ export interface GhostManifest {
    */
   imEntrance?: boolean;
   /** Optional GitHub.com owner/repository for local plugin updates. */
-  githubRelease?: string;
+  githubRelease?: unknown;
   /** 仅 schemaVersion 2 存在的兼容声明。 */
   slots?: LegacyGhostSlot[];
   /**
@@ -1370,6 +1370,15 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   iosSimulator: 'ios-simulator',
   liveScreen: 'live-screen',
 };
+
+/** Select only a supported GitHub.com repository; stored historical declarations remain opaque. */
+export function getGhostGithubReleaseRepository(manifest: { githubRelease?: unknown; settingsHtml?: unknown }): string | undefined {
+  const { githubRelease, settingsHtml } = manifest;
+  if (typeof settingsHtml !== 'string' || typeof githubRelease !== 'string' ||
+      !/^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9_.-]{1,100}$/i.test(githubRelease) ||
+      /\/(?:\.|\.\.)$/.test(githubRelease)) return;
+  return githubRelease.toLowerCase();
+}
 
 type PreparedGhostManifest = {
   raw: Record<string, unknown>;
@@ -1873,9 +1882,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
   }
   // Older manifests could use this formerly unknown name. Preserve their snapshot.
-  if (raw.githubRelease !== undefined && (raw.settingsHtml === undefined || typeof raw.githubRelease !== 'string' ||
-      !/^[a-z0-9](?:[a-z0-9-]{0,38})\/[a-z0-9_.-]{1,100}$/i.test(raw.githubRelease) ||
-      /\/(?:\.|\.\.)$/.test(raw.githubRelease))) {
+  if (raw.githubRelease !== undefined && !preserveHistoricalParameterSize && !getGhostGithubReleaseRepository(raw)) {
     return { ok: false, reason: 'githubRelease requires settingsHtml and a GitHub owner/repository' };
   }
   if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
@@ -4072,7 +4079,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
-      ...(typeof raw.githubRelease === 'string' ? { githubRelease: raw.githubRelease.toLowerCase() } : {}),
+      ...(raw.githubRelease !== undefined ? { githubRelease: raw.githubRelease } : {}),
       ...(raw.imEntrance !== undefined ? { imEntrance: raw.imEntrance as boolean } : {}),
       ...(prepared.schemaVersion === 2 ? { slots } : {}),
       ...(card !== undefined

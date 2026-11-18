@@ -11,6 +11,7 @@ import type { RemotePluginSettingsDirectory } from '../../shared/remotePluginSet
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
 import { GHOST_SCHEME, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
+import { getGhostGithubReleaseRepository } from '@cindy/plugin-protocol';
 import { GithubPluginReleaseSettings } from './GithubPluginReleaseSettings';
 import {
   installedGhostLogicalIdentity,
@@ -449,6 +450,7 @@ export function GhostSettingsWebview({
     (remoteDeviceId ? remoteDeviceId + ':' : '') +
     pluginStoragePart(installedGhostLogicalIdentity(ghost));
   if (!manifest.settingsHtml) return null;
+  const releaseRepository = getGhostGithubReleaseRepository(manifest);
   return (
     <div
       className={cn(
@@ -472,8 +474,8 @@ export function GhostSettingsWebview({
         </div>
       )}
       {!remoteDeviceId && ghost.namespace === 'local' && ghost.namespaceState === 'confirmed' &&
-        manifest.githubRelease && (
-          <GithubPluginReleaseSettings key={`${ownerKey}:${installedGhostStoragePart(ghost)}`} ghost={ghost} />
+        releaseRepository && (
+          <GithubPluginReleaseSettings key={`${ownerKey}:${installedGhostStoragePart(ghost)}`} ghost={ghost} repository={releaseRepository} />
         )}
       {ghost.enabled && <Fragment key={`account:${ownerKey}`}>{account}</Fragment>}
       {ghost.enabled && account ? (

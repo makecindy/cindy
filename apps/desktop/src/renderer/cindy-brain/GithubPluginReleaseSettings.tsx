@@ -6,7 +6,7 @@ import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 import type { InstalledGhost } from '../../shared/ghost';
 import type { GithubPluginReleaseResult } from '../../shared/githubPluginRelease';
 
-export function GithubPluginReleaseSettings({ ghost }: { ghost: InstalledGhost }) {
+export function GithubPluginReleaseSettings({ ghost, repository }: { ghost: InstalledGhost; repository: string }) {
   const { t } = useTranslation();
   const [result, setResult] = useState<GithubPluginReleaseResult>();
   const [busy, setBusy] = useState<'check' | 'update' | 'sign-in'>();
@@ -38,7 +38,7 @@ export function GithubPluginReleaseSettings({ ghost }: { ghost: InstalledGhost }
       <div className="min-w-0 space-y-1">
         <h3 className="text-13 font-medium text-[var(--text-primary)]">{t('settings.ghosts.detail.githubRelease.title')}</h3>
         <p className="flex flex-wrap gap-x-3 gap-y-1 text-12 text-[var(--text-secondary)]">
-          <span className="break-all">{ghost.manifest.githubRelease}</span>
+          <span className="break-all">{repository}</span>
           <span>{t('settings.ghosts.detail.githubRelease.installed', { version: currentVersion })}</span>
           <span>{t('settings.ghosts.detail.githubRelease.upstream', { version: remoteVersion ?? '—' })}{release?.prerelease ? ` · ${t('settings.ghosts.detail.githubRelease.prerelease')}` : ''}</span>
         </p>

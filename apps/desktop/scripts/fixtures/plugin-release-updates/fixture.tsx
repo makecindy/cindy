@@ -12,6 +12,6 @@ void mountPage({
     status: 'available', release: { version: '1.3.0', assetId: 42 },
   }) } },
   render: () => <div className="bg-[var(--settings-bg)] p-6">
-    <GithubPluginReleaseSettings ghost={ghost} />
+    <GithubPluginReleaseSettings ghost={ghost} repository="example/plugin" />
   </div>,
 });

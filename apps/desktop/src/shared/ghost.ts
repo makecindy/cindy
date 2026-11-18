@@ -1,5 +1,5 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
+import { getGhostGithubReleaseRepository, declaredGhostHostToolGroups, isGhostCindyModelActionsDeclaration } from '@cindy/plugin-protocol';
 import { isValidGhostNetworkHostPattern as isValidPluginNetworkHostPattern, ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 export { ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
@@ -1845,7 +1845,7 @@ export interface GhostManifest {
    */
   imEntrance?: boolean;
   /** Optional GitHub.com owner/repository for local plugin updates. */
-  githubRelease?: string;
+  githubRelease?: unknown;
   /**
    * 卡片能力；空对象表示基础卡片渲染。
    * externalLinks: true 时卡片内可声明 data-ghost-link,点击经宿主确认框后打开浏览器。
@@ -4908,9 +4908,7 @@ function validateGhostManifestInput(
     return { ok: false, reason: 'showTaskPreferences 必须是布尔值' };
   }
   // Older manifests could use this formerly unknown name. Preserve their snapshot.
-  if (raw.githubRelease !== undefined && (raw.settingsHtml === undefined || typeof raw.githubRelease !== 'string' ||
-      !/^[a-z0-9](?:[a-z0-9-]{0,38})\/[a-z0-9_.-]{1,100}$/i.test(raw.githubRelease) ||
-      /\/(?:\.|\.\.)$/.test(raw.githubRelease))) {
+  if (raw.githubRelease !== undefined && !preserveHistoricalParameterSize && !getGhostGithubReleaseRepository(raw)) {
     return { ok: false, reason: 'githubRelease requires settingsHtml and a GitHub owner/repository' };
   }
   if (raw.imEntrance !== undefined && !preserveHistoricalParameterSize) {
@@ -6996,7 +6994,7 @@ function validateGhostManifestInput(
       ...(raw.showTaskPreferences !== undefined
         ? { showTaskPreferences: raw.showTaskPreferences as boolean }
         : {}),
-      ...(typeof raw.githubRelease === 'string' ? { githubRelease: raw.githubRelease.toLowerCase() } : {}),
+      ...(raw.githubRelease !== undefined ? { githubRelease: raw.githubRelease } : {}),
       ...(raw.imEntrance !== undefined ? { imEntrance: raw.imEntrance as boolean } : {}),
       ...(tools !== undefined ? { tools } : {}),
       ...(raw.mail === true ? { mail: true as const } : {}),

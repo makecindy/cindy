@@ -734,6 +734,7 @@ import {
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
+import { getGhostGithubReleaseRepository } from '@cindy/plugin-protocol';
 import { checkGithubPluginRelease, downloadGithubPluginRelease } from './githubPluginRelease.js';
 import { compareAppUpdateVersions } from '../updateVersionPolicy.js';
 import { guardedOutboundFetch, outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
@@ -11035,7 +11036,7 @@ export function registerGhostIpc(): void {
     }
     if (releaseTarget && (inspected.manifest.id !== releaseTarget.pluginId ||
         inspected.manifest.version !== releaseTarget.version ||
-        inspected.manifest.githubRelease !== releaseTarget.repository)) {
+        getGhostGithubReleaseRepository(inspected.manifest) !== releaseTarget.repository)) {
       throwIpcError('GHOST_FILE_INVALID', 'Plugin ID, version or repository does not match the GitHub release');
     }
     if (!ghostOwnerScope.isStable(mutationOwner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
@@ -11047,7 +11048,7 @@ export function registerGhostIpc(): void {
     );
     if (!existingForUpdate) throwIpcError('PRECONDITION_FAILED', '目标插件实例已变化，请刷新后重试');
     if (releaseTarget && (existingForUpdate.namespace !== LOCAL_PLUGIN_NAMESPACE ||
-        existingForUpdate.manifest.githubRelease !== releaseTarget.repository ||
+        getGhostGithubReleaseRepository(existingForUpdate.manifest) !== releaseTarget.repository ||
         compareAppUpdateVersions(releaseTarget.version, existingForUpdate.manifest.version) !== 'newer')) {
       throwIpcError('PRECONDITION_FAILED', 'The installed plugin or its update source changed');
     }
@@ -11115,7 +11116,8 @@ export function registerGhostIpc(): void {
     const owner = captureGhostMutationOwner();
     const target = typeof instanceId === 'string'
       ? findInstalledGhostByInstanceId(manager.list(), instanceId) : null;
-    if (!target?.manifest.githubRelease || target.namespace !== LOCAL_PLUGIN_NAMESPACE ||
+    const repository = target && getGhostGithubReleaseRepository(target.manifest);
+    if (!target || !repository || target.namespace !== LOCAL_PLUGIN_NAMESPACE ||
         target.namespaceState !== 'confirmed') {
       throwIpcError('PRECONDITION_FAILED', 'Local plugin with a GitHub release source not found');
     }
@@ -11130,7 +11132,7 @@ export function registerGhostIpc(): void {
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
     if (action === 'sign-in') return openGithubSignIn();
     const token = await readLocalGithubToken();
-    const result = await checkGithubPluginRelease(outboundFetch as typeof fetch, token, target.manifest.githubRelease, target.manifest.id, target.manifest.version);
+    const result = await checkGithubPluginRelease(outboundFetch as typeof fetch, token, repository, target.manifest.id, target.manifest.version);
     if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
     if (action === 'check') return result;
     if (result.status !== 'available' || !token || result.release.assetId !== expectedAssetId) return result;
@@ -11143,9 +11145,10 @@ export function registerGhostIpc(): void {
     let dir: string | undefined;
     try {
       dir = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'cindy-plugin-update-'));
+      if (!ghostOwnerScope.isStable(owner)) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed');
       const file = path.join(dir, 'release.cindy');
       try {
-        await downloadGithubPluginRelease(outboundFetch as typeof fetch, token, target.manifest.githubRelease, result.release, file);
+        await downloadGithubPluginRelease(outboundFetch as typeof fetch, token, repository, result.release, file);
       } catch {
         return { status: 'unavailable' };
       }
@@ -11156,7 +11159,7 @@ export function registerGhostIpc(): void {
       }, {
         pluginId: target.manifest.id,
         version: result.release.version,
-        repository: target.manifest.githubRelease,
+        repository,
       });
       return { status: 'updated', version: updated.ghost.manifest.version };
     } finally {
