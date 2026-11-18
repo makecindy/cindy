@@ -1,6 +1,19 @@
+import type { TurnTokenDeltas } from './turnCostCalculator.js';
 import type { CompanyTokenCounts } from './companyTokenQueue.js';
 
-export type CaptureCompanyUsage = (model: string, counts: CompanyTokenCounts) => void;
+export type CompanyModelTokens = CompanyTokenCounts & { model: string };
+export type CaptureCompanyUsage = (samples: readonly CompanyModelTokens[]) => void;
+
+export function companyModelTokens(model: string, usage: TurnTokenDeltas): CompanyModelTokens {
+  return {
+    model,
+    input: usage.inputTokens,
+    output: usage.outputTokens,
+    cacheRead: usage.cacheReadTokens,
+    cacheWrite: usage.cacheCreateTokens,
+  };
+}
+
 let capture: (() => CaptureCompanyUsage | undefined) | undefined;
 
 /** The execution pipeline can run without Electron or an authenticated desktop. */

@@ -1,8 +1,13 @@
-import { afterEach, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { afterEach, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, renameSync, rmSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CompanyTokenQueue, projectUsage } from '../companyTokenQueue';
+vi.mock('node:fs', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs')>();
+  return { ...fs, renameSync: vi.fn(fs.renameSync) };
+});
+
 const files: string[] = [];
 afterEach(() => {
   for (const dir of files.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -24,19 +29,19 @@ it('projects only catalog models and four nonnegative counters before storage', 
   const row = projectUsage(models, day, 'gpt-5', privateData)!;
   expect(row).toEqual({ model: 'gpt-5', day, ...counts });
   const { file, queue } = fixture();
-  queue.add(policy, row);
+  queue.add(policy, [row]);
   expect(readFileSync(file, 'utf8')).not.toMatch(/sessionId|sensitive|prompt|private|costUsd/);
 });
 it('replays an immutable batch after losing its receipt and preserves later deltas', () => {
   const { file, queue } = fixture();
   const row = projectUsage(models, day, 'gpt-5', counts)!;
-  queue.add(policy, row);
-  queue.add(policy, row);
+  queue.add(policy, [row]);
+  queue.add(policy, [row]);
   expect(queue.next(policy, '2026-11-17')).toBeNull();
   const first = queue.next(policy, day)!;
   expect(first.rows[0].input).toBe(22);
   const restarted = new CompanyTokenQueue(file);
-  restarted.add(policy, row);
+  restarted.add(policy, [row]);
   expect(restarted.next(policy, day)).toEqual(first);
   restarted.acknowledge(policy, first.batchId);
   const next = restarted.next(policy, day)!;
@@ -47,7 +52,24 @@ it('replays an immutable batch after losing its receipt and preserves later delt
 });
 it('discards a sealed batch on a member or company policy revision change', () => {
   const { queue } = fixture();
-  queue.add(policy, projectUsage(models, day, 'gpt-5', counts)!);
+  queue.add(policy, [projectUsage(models, day, 'gpt-5', counts)!]);
   expect(queue.next(policy, day)).not.toBeNull();
   expect(queue.next({ ...policy, memberRevision: 3 }, day)).toBeNull();
+});
+
+it('commits a turn in one snapshot and preserves sealed rows across restart', () => {
+  const { file, queue } = fixture();
+  const row = { model: 'a', day, ...counts };
+  queue.add(policy, [row]);
+  const pending = queue.next(policy, day)!;
+  vi.mocked(renameSync).mockClear();
+  queue.add(policy, [...Array(50).fill(row), { ...row, model: 'b' }]);
+  expect(renameSync).toHaveBeenCalledTimes(1);
+  const restarted = new CompanyTokenQueue(file);
+  expect(restarted.next(policy, day)).toEqual(pending);
+  restarted.acknowledge(policy, pending.batchId);
+  expect(restarted.next(policy, day)?.rows).toEqual([
+    { model: 'a', day, input: 550, output: 100, cacheRead: 50, cacheWrite: 150 },
+    { ...row, model: 'b' },
+  ]);
 });

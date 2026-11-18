@@ -86,13 +86,23 @@ export class CompanyTokenQueue {
     return { ...policy, rows: [], pending: null };
   }
 
-  add(policy: CompanyPolicy, row: DailyTokens) {
+  add(policy: CompanyPolicy, rows: readonly DailyTokens[]) {
+    if (!rows.length) return;
     const data = this.read(policy);
-    const previous = data.rows.find((r) => r.model === row.model && r.day === row.day);
-    if (previous) {
-      if (!counters.every((k) => Number.isSafeInteger(previous[k] + row[k]))) return;
-      for (const k of counters) previous[k] += row[k];
-    } else data.rows.push(row);
+    // UTC day has fixed width. Only index open rows; a pending batch is immutable.
+    const byBucket = new Map(data.rows.map(row => [row.day + row.model, row]));
+    for (const row of rows) {
+      const key = row.day + row.model;
+      const previous = byBucket.get(key);
+      if (previous) {
+        if (!counters.every(k => Number.isSafeInteger(previous[k] + row[k]))) continue;
+        for (const k of counters) previous[k] += row[k];
+      } else {
+        const aggregate = { ...row };
+        data.rows.push(aggregate);
+        byBucket.set(key, aggregate);
+      }
+    }
     this.save(data);
   }
 

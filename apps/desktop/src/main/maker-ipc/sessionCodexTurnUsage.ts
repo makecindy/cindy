@@ -1,4 +1,4 @@
-import { takeCompanyTurn } from '../usage/companyTokenFacts.js';
+import { companyModelTokens, takeCompanyTurn } from '../usage/companyTokenFacts.js';
 import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
@@ -157,12 +157,10 @@ export function recordSessionCodexTurnUsage(
             (isCodexSubscriptionAccessRoute || codexAuthInjection === 'oauth-bearer' || isCustomProviderRoute)) {
           const record = takeCompanyTurn(turnContext);
           if (record && codexSegmentsReliable) {
-            for (const segment of codexUsageSegments) {
-              if (segment.model) record(normalizeModelIdForPricing(segment.model), { input: segment.inputTokens,
-                output: segment.outputTokens, cacheRead: segment.cacheReadTokens, cacheWrite: segment.cacheCreateTokens });
-            }
+            record(codexUsageSegments.flatMap(segment => segment.model
+              ? [companyModelTokens(normalizeModelIdForPricing(segment.model), segment)] : []));
           } else if (record && u.segments === undefined) {
-            record(pricingModel, { input: promptTokens, output: completionTokens, cacheRead: cachedTokens, cacheWrite: cacheCreationTokens });
+            record([{ model: pricingModel, input: promptTokens, output: completionTokens, cacheRead: cachedTokens, cacheWrite: cacheCreationTokens }]);
           }
         }
         const modelUsageKey = isRemoteCodexSession

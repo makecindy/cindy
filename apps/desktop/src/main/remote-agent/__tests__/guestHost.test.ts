@@ -842,7 +842,7 @@ describe('guest provider access and usage', () => {
           expect(Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString()).toContain('"type":"done"');
         }, {timeout:10000});
       }
-      expect(record.mock.calls).toEqual([['claude-opus', {input:12,output:3,cacheRead:0,cacheWrite:0}]]);
+      expect(record.mock.calls).toEqual([[[{ model: 'claude-opus', input: 12, output: 3, cacheRead: 0, cacheWrite: 0 }]]]);
     } finally {
       host.dispose();
       installExecutionReporting(undefined);

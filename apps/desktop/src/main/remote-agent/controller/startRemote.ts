@@ -671,17 +671,7 @@ async function prepareAndStartRemoteAgentSession(
       }
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(runId, poller, {
-      beforeSend: reporting ? async () => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          await Promise.race([
-            syncReporting(runId, isCurrent),
-            new Promise<void>(resolve => { timer = setTimeout(resolve, 1500); }),
-          ]);
-        } finally {
-          clearTimeout(timer);
-        }
-      } : undefined,
+      onSend: reporting ? () => { void syncReporting(runId, isCurrent); } : undefined,
       onEvent: (event) => {
         if (!isCurrent()) return;
         touch();

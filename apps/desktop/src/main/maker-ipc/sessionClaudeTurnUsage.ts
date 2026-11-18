@@ -1,4 +1,4 @@
-import { takeCompanyTurn } from '../usage/companyTokenFacts.js';
+import { companyModelTokens, takeCompanyTurn } from '../usage/companyTokenFacts.js';
 import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
 import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
@@ -281,11 +281,10 @@ export function recordSessionClaudeTurnUsage(
           (turnContext.subscriptionKind === 'claude' || observedClaudeRoute === 'subscription' ||
             (explicitProviderBillingRoute === 'provider-api' && turnContext.isUserProviderRoute) ||
             explicitProviderBillingRoute === 'subscription') ? takeCompanyTurn(turnContext) : undefined;
+        if (companyUsage && (billingRoute === 'subscription' || billingRoute === 'provider-api')) {
+          companyUsage(perModel.filter(m => m.source !== 'gateway').map(m => companyModelTokens(m.model, m.deltas)));
+        }
         for (const m of perModel) {
-          if (m.source !== 'gateway' && (billingRoute === 'subscription' || billingRoute === 'provider-api')) {
-            companyUsage?.(m.model, { input: m.deltas.inputTokens, output: m.deltas.outputTokens,
-              cacheRead: m.deltas.cacheReadTokens, cacheWrite: m.deltas.cacheCreateTokens });
-          }
           const isSubscriptionValueRow = m.source === 'subscription';
           const subscriptionEstimate =
             isSubscriptionValueRow

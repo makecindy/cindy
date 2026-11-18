@@ -120,12 +120,12 @@ it('uses only the account endpoint until the company enables reporting; stops an
   expect(companyExecutionReporting()?.available()).toBe(true);
   expect(companyExecutionReporting()?.challenge('nonce')).toMatchObject({ nonce: 'nonce' });
   const record = startCompanyUsage()!;
-  record('gpt-5', counts);
+  record([{ model: 'gpt-5', ...counts }]);
   const file = path.join(dir, 'company-token-outbox.json');
   expect(existsSync(file)).toBe(true);
   const change = service.set(false, 1);
   expect(companyExecutionReporting()?.available()).toBe(false);
-  record('gpt-5', counts);
+  record([{ model: 'gpt-5', ...counts }]);
   expect(existsSync(file)).toBe(false);
   await expect(change).rejects.toThrow('offline');
   expect(
@@ -196,7 +196,7 @@ it('retains valid collection and the same pending batch when delivery fails', as
   const { CompanyTokenQueue } = await import('../companyTokenQueue');
   const file = path.join(dir, 'company-token-outbox.json');
   const scope = { owner: JSON.stringify(['cn', org.orgId, org.id]), orgRevision: 2, memberRevision: 1 };
-  new CompanyTokenQueue(file).add(scope, { day: '2020-01-01', model: 'gpt-5', ...counts });
+  new CompanyTokenQueue(file).add(scope, [{ day: '2020-01-01', model: 'gpt-5', ...counts }]);
   const batches: string[] = [];
   ports.fetch.mockImplementation(async (url, options) => {
     if (url.endsWith('/api/me')) return Response.json(me(true));
@@ -206,7 +206,7 @@ it('retains valid collection and the same pending batch when delivery fails', as
   service.refresh();
   await vi.waitFor(() => expect(batches).toHaveLength(1));
   expect(service.view()?.participating).toBe(true);
-  startCompanyUsage()!('gpt-5', counts);
+  startCompanyUsage()!([{ model: 'gpt-5', ...counts }]);
   service.refresh();
   await vi.waitFor(() => expect(batches).toEqual([batches[0], batches[0]]));
 });
@@ -215,9 +215,10 @@ it('reports only confirmed Pi root requests even when a Gateway child used the s
   const { recordCompanyPiRoots } = await import('../companyPiReceipts');
   const record = vi.fn();
   const request = { model: 'gpt-5', inputTokens: 12, outputTokens: 7 };
-  recordCompanyPiRoots(record, ['pi:1', 'pi:1', 'pi-child:task:1', 'pi-unattributed:3', undefined]
+  recordCompanyPiRoots(record, ['pi:1', 'pi:2', 'pi:1', 'pi-child:task:1', 'pi-unattributed:3', undefined]
     .map(id => ({ id, ...request })));
-  expect(record.mock.calls).toEqual([['gpt-5', { input: 12, output: 7, cacheRead: 0, cacheWrite: 0 }]]);
+  const sample = { model: 'gpt-5', input: 12, output: 7, cacheRead: 0, cacheWrite: 0 };
+  expect(record.mock.calls).toEqual([[[sample, sample]]]);
 });
 
 it('coalesces remote renewals and reauthorizes after midnight or a long idle period', async () => {
@@ -239,6 +240,34 @@ it('coalesces remote renewals and reauthorizes after midnight or a long idle per
     now.mockReturnValue(Date.parse('2026-11-19T01:30:00Z'));
     await renew('run', () => true);
     expect(issue).toHaveBeenCalledTimes(3);
+  } finally {
+    now.mockRestore();
+    installExecutionReporting(undefined);
+  }
+});
+
+it('keeps one slow handshake in flight, then backs off failed sends for 30 seconds', async () => {
+  const { createCompanyReportingRenewal } = await import('../../remote-agent/controller/companyReportingRenewal');
+  const { installExecutionReporting } = await import('../companyTokenFacts');
+  installExecutionReporting({ available: () => true, direct: () => true, challenge: () => null,
+    issue: async () => null, redeem: async () => undefined });
+  let finish!: () => void;
+  const invoke = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(null); }))
+    .mockResolvedValue(null);
+  const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+  try {
+    const renew = createCompanyReportingRenewal(invoke);
+    const first = renew('run', () => true);
+    now.mockReturnValue(40_000);
+    const second = renew('run', () => true);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    finish();
+    await Promise.all([first, second]);
+    for (let i = 0; i < 10; i++) await renew('run', () => true);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(70_000);
+    await renew('run', () => true);
+    expect(invoke).toHaveBeenCalledTimes(2);
   } finally {
     now.mockRestore();
     installExecutionReporting(undefined);

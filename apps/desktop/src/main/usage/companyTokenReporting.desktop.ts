@@ -10,7 +10,7 @@ import * as auth from '../authManager.js';
 import { getClientEndpointForRealm } from '../clientEndpointsService.js';
 import { dailyUploadSlot, latestUploadableDay } from './enterpriseDailyUpload.js';
 import { CompanyTokenQueue, projectUsage, type CompanyPolicy } from './companyTokenQueue.js';
-import { installCompanyUsageCapture, installExecutionReporting } from './companyTokenFacts.js';
+import { installCompanyUsageCapture, installExecutionReporting, type CompanyModelTokens } from './companyTokenFacts.js';
 
 const POLICY_CHECK_INTERVAL_MS = 12 * 60 * 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -70,6 +70,13 @@ async function request(id: Identity, route: string, method = 'GET', body?: objec
   if ([401, 403, 404, 409].includes(response.status)) throw new CompanyAuthorizationError();
   if (!response.ok) throw new Error('Company request failed');
   return response;
+}
+
+function projectTurn(models: ReadonlySet<string>, day: string, samples: readonly CompanyModelTokens[]) {
+  return samples.flatMap(sample => {
+    const row = projectUsage(models, day, sample.model, sample);
+    return row ? [row] : [];
+  });
 }
 
 export function createCompanyTokenReporting() {
@@ -223,7 +230,7 @@ export function createCompanyTokenReporting() {
     const initial = visible();
     if (!initial?.participating) return;
     const version = invalidation;
-    return (model, counts) => {
+    return (samples) => {
       const p = visible();
       if (
         version !== invalidation ||
@@ -233,12 +240,12 @@ export function createCompanyTokenReporting() {
         p.memberRevision !== initial.memberRevision
       )
         return;
-      const row = projectUsage(p.models, new Date().toISOString().slice(0, 10), model, counts);
-      if (row) {
+      const rows = projectTurn(p.models, new Date().toISOString().slice(0, 10), samples);
+      if (rows.length) {
         try {
           queue.add(
             { owner: p.owner, orgRevision: p.orgRevision, memberRevision: p.memberRevision },
-            row,
+            rows,
           );
         } catch {
           /* Model execution is independent of the reporting store. */
@@ -313,7 +320,7 @@ export function createCompanyTokenReporting() {
       liveReceipts.set(data.receipt, data.expires);
       return {
         receipt: data.receipt,
-        record(model, counts) {
+        record(samples) {
           const active = visible();
           if (
             !active?.participating ||
@@ -326,11 +333,11 @@ export function createCompanyTokenReporting() {
             return;
           const day = new Date().toISOString().slice(0, 10);
           if (day !== data.day) return;
-          const row = projectUsage(active.models, day, model, counts);
-          if (!row) return;
+          const rows = projectTurn(active.models, day, samples);
+          if (!rows.length) return;
           try {
             mkdirSync(delegatedDir, { recursive: true, mode: 0o700 });
-            delegated(data.receipt).add(scope, row);
+            delegated(data.receipt).add(scope, rows);
           } catch {
             /* A recording failure must never interrupt a remote run. */
           }

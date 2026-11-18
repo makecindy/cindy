@@ -1,5 +1,5 @@
 import { recordCompanyPiRoots } from '../../usage/companyPiReceipts.js';
-import { companyExecutionReporting, type CaptureCompanyUsage } from '../../usage/companyTokenFacts.js';
+import { companyExecutionReporting, companyModelTokens, type CaptureCompanyUsage } from '../../usage/companyTokenFacts.js';
 import { bindHostedAttachmentPreservation } from '../../maker-host/attachmentPreservation.js';
 import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../attachmentPreservation.js';
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
@@ -1994,13 +1994,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             const usage = (event.data as { usage?: { receipts?: unknown; segments?: unknown; segmentsComplete?: boolean } } | undefined)?.usage;
             recordCompanyPiRoots(run.turnUsage, usage?.receipts ?? (usage?.segmentsComplete ? usage.segments : undefined));
           }
-        } else {
-          for (const sample of observed) {
-            run.turnUsage(sample.model, {
-              input: sample.inputTokens, output: sample.outputTokens,
-              cacheRead: sample.cacheReadTokens, cacheWrite: sample.cacheCreateTokens,
-            });
-          }
+        } else if (observed.length) {
+          run.turnUsage(observed.map(sample => companyModelTokens(sample.model, sample)));
         }
       }
       // Native proxy receipts already include root and child tokens. Terminal events only count turns.
