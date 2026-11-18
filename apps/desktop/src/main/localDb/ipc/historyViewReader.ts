@@ -499,10 +499,24 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
     },
   };
   // A task switch can request the same closed page from several surfaces at
-  // once. Share only work that is still in flight, keyed by the DB revision
-  // (client epoch + write counters), so no settled page acts as a cache. A
-  // running task keeps independent reads: its live rows change without writes.
+  // once. Share in-flight reads, then keep the settled page: the key carries
+  // the DB revision, so a cached page stays valid until the next DB write
+  // bumps it out of the key space. A running task keeps independent reads:
+  // its live rows change without writes.
   const pendingPages = new Map<string, Promise<{ page: HistoryViewPage<T>; shape?: HistoryPageShape }>>();
+  const SETTLED_PAGE_MAX_ENTRIES = 8;
+  const SETTLED_PAGE_MAX_BYTES = 4 * 1024 * 1024;
+  const settledPages = new Map<string, { page: HistoryViewPage<T>; shape?: HistoryPageShape; bytes: number }>();
+  let settledPageBytes = 0;
+  const evictSettledPages = () => {
+    while (settledPages.size > SETTLED_PAGE_MAX_ENTRIES || settledPageBytes > SETTLED_PAGE_MAX_BYTES) {
+      const oldest = settledPages.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      const entry = settledPages.get(oldest);
+      settledPages.delete(oldest);
+      if (entry) settledPageBytes -= entry.bytes;
+    }
+  };
   return {
     ...reader,
     async page(sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}): Promise<HistoryViewPage<T>> {
@@ -512,13 +526,29 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       const revision = await deps.revision();
       if (deps.running(sessionId)) return reader.page(sessionId, before, lazyDetails, options, revision);
       const key = JSON.stringify([scope, sessionId, before ?? null, !!options.workLines, !!options.onShape, revision]);
+      // Same shared-page semantics as a concurrent in-flight read: callers get
+      // one page object per key; the serialization boundary is the caller's.
+      const settled = settledPages.get(key);
+      if (settled) {
+        settledPages.delete(key); settledPages.set(key, settled);
+        if (settled.shape) options.onShape?.(settled.shape);
+        return settled.page;
+      }
       let shared = pendingPages.get(key);
       if (!shared) {
         let shape: HistoryPageShape | undefined;
         const promise = reader.page(sessionId, before, lazyDetails, {
           workLines: options.workLines,
           ...(options.onShape ? { onShape: (value: HistoryPageShape) => { shape = value; } } : {}),
-        }, revision).then((page) => ({ page, shape })).finally(() => {
+        }, revision).then((page) => {
+          const bytes = Buffer.byteLength(JSON.stringify(page), 'utf8');
+          if (bytes <= SETTLED_PAGE_MAX_BYTES) {
+            settledPages.set(key, { page, shape, bytes });
+            settledPageBytes += bytes;
+            evictSettledPages();
+          }
+          return { page, shape };
+        }).finally(() => {
           if (pendingPages.get(key) === promise) pendingPages.delete(key);
         });
         pendingPages.set(key, promise);

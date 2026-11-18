@@ -39,16 +39,18 @@ describe('host history view', () => {
 
   // Unit performance regression: concurrent closed-history pages duplicated DB
   // scans/projection. Existing pagination tests never overlapped requests.
-  // Two identical in-flight reads must share work, but later reads remain fresh.
-  it('shares in-flight closed pages, fans out shape callbacks and rereads after completion', async () => {
+  // Two identical in-flight reads must share work, and the settled page stays
+  // cached until a DB write bumps the revision (task switch P1-2).
+  it('shares in-flight closed pages, fans out shape callbacks and caches the settled page until the revision moves', async () => {
     const source = [row(0, 'user'), row(1), row(2, 'assistant')];
     const base = reader(source);
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const list = vi.fn(async (...args: Parameters<typeof base.list>) => { await gate; return base.list(...args); });
     let scope = 'local';
+    let revision = 'owner-a:1';
     const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
-      revision: async () => 'owner-a:1', anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
+      revision: async () => revision, anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => false,
       shareScope: () => scope });
     const firstShape = vi.fn(), secondShape = vi.fn();
     const a = api.page('s', undefined, true, { onShape: firstShape });
@@ -60,13 +62,41 @@ describe('host history view', () => {
     expect(firstShape).toHaveBeenCalledTimes(1);
     expect(secondShape).toHaveBeenCalledWith(firstShape.mock.calls[0][0]);
     expect(list).toHaveBeenCalledTimes(1);
+    // Settled page: a repeat read hits the cache and replays the shape.
+    const replayedShape = vi.fn();
+    await api.page('s', undefined, true, { onShape: replayedShape });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(replayedShape).toHaveBeenCalledWith(firstShape.mock.calls[0][0]);
+    // A DB write bumps the revision: the page rereads.
+    revision = 'owner-a:2';
     await api.page('s', undefined, true);
     expect(list).toHaveBeenCalledTimes(2);
     // A device-link caller reads with different import side effects: never joined.
     const local = api.page('s', undefined, true);
     scope = 'device-link';
     await Promise.all([local, api.page('s', undefined, true)]);
-    expect(list).toHaveBeenCalledTimes(4);
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+  // Unit: the cache must not serve a running task (live rows change without
+  // writes) and must not pin a failed read.
+  it('keeps running-task pages uncached and drops failed pages instead of caching them', async () => {
+    const source = [row(0, 'user'), row(1, 'assistant')];
+    const base = reader(source);
+    const list = vi.fn(base.list);
+    let running = false;
+    let revision = 'rev-1';
+    const api = createHistoryViewReader({ list, outline: list, hydrate: async (_sid, ids) => source.filter(r => ids.includes(r.id)),
+      revision: async () => revision, anchor: async (_sid, id) => source.find(r => r.id === id)!, running: () => running });
+    await api.page('s', undefined, true);
+    running = true;
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(2); // running bypasses the settled cache
+    running = false;
+    revision = 'rev-2';
+    list.mockRejectedValueOnce(new Error('read failed'));
+    await expect(api.page('s', undefined, true)).rejects.toThrow('read failed');
+    await api.page('s', undefined, true);
+    expect(list).toHaveBeenCalledTimes(4); // the failed read was not cached
   });
   it('reaches a long run through compact outlines and keeps SDK metadata in hydrated details', async () => {
     const source = [row(0, 'user'), ...Array.from({ length: 1100 }, (_, i) => ({
