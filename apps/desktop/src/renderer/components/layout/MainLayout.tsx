@@ -1126,7 +1126,12 @@ export function MainLayout() {
       }
       if (targetSessionId === currentSessionId) {
         // 前台路径:走 UI + 持久化；全局具名页没有任务时只更新本窗口折叠态。
-        setRightTabsUserToggle(opts.userInitiated !== false);
+        const userInitiated = opts.userInitiated !== false;
+        setRightTabsUserToggle(userInitiated);
+        // 程序动作(插件 / agent / MCP App)把面板放出来时不占窗口宽度。这一帧可能正好
+        // 是全局具名页第一次可用:面板第一次就绪且已展开,得按被动展示处理,否则会在
+        // 没有任务语境的页面上把窗口拉宽。
+        if (visibility === 'open') setRightTabsPassiveReveal(!userInitiated);
         setIsRightSidebarCollapsed((prev) => {
           if (prev === targetCollapsed) return prev;
           if (shouldAnimateSidebarVisibilityRequest(opts)) {
