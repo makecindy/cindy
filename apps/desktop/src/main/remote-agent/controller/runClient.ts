@@ -229,7 +229,7 @@ export class RemoteAgentRunClient implements PolledRun {
       // Stop can overtake gzip or a chunk acknowledgement, including the final
       // await before dispatch. Never deliver that old send after Stop.
       requireActive();
-      await this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], { preSend: requireActive });
+      await this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], { beforeDispatch: requireActive });
     } catch (error) {
       this.pendingCalls.delete(callId);
       throw error;
@@ -491,7 +491,7 @@ function remoteAgentLinkGuidanceCode(code: string | undefined): string | undefin
 /** 生产接线：经设备互联后台链路调用某台电脑的远程 Agent 通道。 */
 export function remoteAgentInvoker(
   deviceId: string,
-  invoke: (deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void }) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>,
+  invoke: (deviceId: string, channel: string, args: unknown[], options?: { beforeDispatch?: () => void }) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>,
 ): RemoteAgentInvoke {
   return async (args, options) => {
     let result: Awaited<ReturnType<typeof invoke>>;

@@ -1,8 +1,11 @@
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { DeviceLinkError, FILE_PEER_CHANNEL, parseProviderSharePeer, providerShareHostPeer, type DeviceLinkClient } from '@cindy/device-link';
 import { ensureInvokeLinkReady, invokeWithClosedLinkRecovery } from '../linkRecovery';
+import { RemoteAgentRunClient, remoteAgentInvoker } from '../../remote-agent/controller/runClient';
+import type { RemoteAgentPoller } from '../../remote-agent/controller/poller';
 
 // Run the production adapter with only its host dependencies injected, without
 // importing Electron startup. The shared-client tests cover actual queue admission.
@@ -47,6 +50,47 @@ function loadAdapters(overrides: Record<string, unknown>) {
 
 const loadRemoteInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteInvoke;
 const loadBackgroundInvoke = (overrides: Record<string, unknown>) => loadAdapters(overrides).remoteBackgroundInvoke;
+
+// Unit regression #11345: a shared target rechecks ownership after its RPC result.
+// The real RunClient + background adapter must cancel an unsent input, but retain
+// an accepted result after Stop/signal. Earlier queue tests missed this post-RPC
+// adapter boundary. Only client admission and its acknowledgement are deferred.
+it.each(['signal', 'stop'] as const)('preserves shared input delivery across %s at the dispatch boundary', async cancel => {
+  for (const phase of ['queued', 'sent'] as const) {
+    const callId = randomUUID();
+    let release!: () => void, reached!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { reached = resolve; });
+    const delivered: string[] = [];
+    const remoteBackgroundInvoke = loadBackgroundInvoke({ client: {
+      invoke: vi.fn<DeviceLinkClient['invoke']>(async (_peer, payload, _timeout, options) => {
+        const request = payload.args![0] as { callId: string };
+        if (request.callId === callId && phase === 'queued') { reached(); await held; }
+        options?.preSend?.();
+        options?.beforeDispatch?.();
+        delivered.push(request.callId);
+        if (request.callId === callId && phase === 'sent') { reached(); await held; }
+        client.onData(Buffer.from(JSON.stringify({ t: 'result', callId: request.callId, ok: true, value: 'accepted' }) + '\n'), false);
+        return { ok: true, result: {} };
+      }),
+    } });
+    const invoke = remoteAgentInvoker(providerShareHostPeer('share', 'host'), remoteBackgroundInvoke);
+    const client = new RemoteAgentRunClient(randomUUID(), { invoke, unregister() {} } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {}, onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    const abort = new AbortController();
+    const result = client.callWithId(callId, 'send', ['hello'], abort.signal);
+    const observed = result.then(value => ({ value }), error => ({ error }));
+    await waiting;
+    if (cancel === 'signal') abort.abort();
+    else await client.callWithId(randomUUID(), 'abort', []);
+    release();
+    if (phase === 'queued') expect(await observed).toMatchObject({ error: { name: 'AbortError' } });
+    else expect(await observed).toEqual({ value: 'accepted' });
+    expect(delivered.filter(id => id === callId)).toHaveLength(phase === 'sent' ? 1 : 0);
+    client.abandon('fixture-complete');
+  }
+});
 
 // Unit: compile all production adapters together, not just the former public body.
 // Minimal regression: a live recovery probe must reach RPC exactly once and bypass metadata snapshots.

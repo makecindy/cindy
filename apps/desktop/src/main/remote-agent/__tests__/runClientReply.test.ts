@@ -33,7 +33,7 @@ describe('RemoteAgentRunClient slow payload delivery', () => {
       const request = parseRemoteAgentRequest(args[0]);
       if (request.op === 'call') {
         if (request.callId === oldId) { queued(); await admitted; }
-        options?.preSend?.();
+        options?.beforeDispatch?.();
         delivered.push(request.callId);
         client.onData(Buffer.from(`${JSON.stringify({ t: 'result', callId: request.callId, ok: true, value: null })}\n`), false);
       }

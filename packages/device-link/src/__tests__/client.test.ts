@@ -8634,7 +8634,10 @@ describe('DeviceLinkClient', () => {
 // queued listings. Prior coverage cancelled only a joining consumer, not the first.
 // Minimal input: fill admission, enqueue two identical reads, cancel either one.
 describe('remote recovery regression', () => {
-  it.each([0, 1])('keeps identical queued listings independent when consumer %i cancels', async (cancelIndex) => {
+  // #11345: dispatch-only cancellation uses the same queue boundary, but an
+  // accepted result must survive cancellation after the physical send.
+  it.each([[0, 'preSend'], [1, 'preSend'], [0, 'beforeDispatch'], [1, 'beforeDispatch']] as const)(
+    'keeps identical queued listings independent when consumer %i cancels via %s', async (cancelIndex, guard) => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
     const pending: Promise<unknown>[] = [];
@@ -8650,7 +8653,7 @@ describe('remote recovery regression', () => {
       const cancelled = [false, false];
       const reads = cancelled.map((_, i) => h.client.invoke('a', {
         channel: 'local-db:sessions:list', args: [],
-      }, undefined, { preSend: () => {
+      }, undefined, { [guard]: () => {
         if (cancelled[i]) throw new Error('cancelled consumer');
       } }).catch(error => error));
       pending.push(...reads);
@@ -8659,6 +8662,7 @@ describe('remote recovery regression', () => {
       sent().forEach(reply);
       await vi.advanceTimersByTimeAsync(0);
       expect(sent()).toHaveLength(13); // Only the valid caller reaches the wire.
+      cancelled[1 - cancelIndex] = true; // Already dispatched: retain its acknowledgement.
       reply(sent().at(-1)!);
       expect(await reads[cancelIndex]).toMatchObject({ message: 'cancelled consumer' });
       expect(await reads[1 - cancelIndex]).toEqual({ ok: true, result: 'ok' });

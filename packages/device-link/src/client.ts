@@ -2161,7 +2161,7 @@ export class DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { preSend?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' },
+    options?: { preSend?: () => void; beforeDispatch?: () => void; noResultCache?: boolean; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' },
   ): Promise<InvokeResultPayload> {
     if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) {
       throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
@@ -2176,6 +2176,8 @@ export class DeviceLinkClient {
       // Admission may wait: validate caller ownership/cancellation after dequeue,
       // synchronously before creating the request or retaining a transport frame.
       options?.preSend?.();
+      // Dispatch-only cancellation must never invalidate an accepted result.
+      options?.beforeDispatch?.();
       if (payload.channel === 'git-context:github-read' && !this.getPeerTransport(dst).supportsGithubRead) {
         return { ok: false as const, error: { code: 'IPC_ERROR' as const, message: 'GITHUB_READ_UNSUPPORTED: update the target computer to use GitHub queries' } };
       }
@@ -2229,6 +2231,7 @@ export class DeviceLinkClient {
         const timeout = outcome.retry === 'full-timeout' ? timeoutMs : remainingMs;
         if (outcome.retry === 'full-timeout' || remainingMs >= 100) {
           options?.preSend?.();
+          options?.beforeDispatch?.();
           sentId = createRequestId();
           outcome = await attempt(sentId, outcome.retry === 'full-timeout', timeout);
         }
