@@ -870,14 +870,12 @@ preparation never authorizes a restart or enables it. Moving from an ad-hoc shel
 identity can require macOS permission approval once; signature verification does not prove
 privacy permission or remote login works. This is local signing, not notarized public distribution.
 
-The supervisor and dev server share one Terminal window. It passes live stdin and
-`--reuse-terminal` to `desktop-restart-runner.mjs`; coordinator output still goes to the
-generation's `console.log`. The repository wrapper writes dev output directly to that input
-terminal, using one `script` PTY with the existing bounded `apps/desktop/logs/dev-terminal.log`
-drain. It does not open another Terminal window. Missing terminal input fails before stopping
-anything; ordinary headless developer launches retain their existing new-window behavior.
-Do not add another detached PTY or pipe PTY output through the supervisor: a blocked/lost
-consumer can leave Electron alive after Forge/Vite exits and produce a white window.
+The supervisor passes live stdin and `--reuse-terminal` to the runner and writes coordinator
+output to the generation's `console.log`. With redirected output, the fixed shared app runs its
+dev server in a separate Terminal tab. The isolated smoke can reuse the caller's terminal and
+its environment. Both paths use a single `script` PTY with a bounded
+`apps/desktop/logs/dev-terminal.log` drain. Keep the dev server's terminal open while the
+app is running. A failed or cancelled generation cannot start the fixed app after a late build.
 A nonzero wrapper exit immediately fails acceptance even if a main PID remains.
 A successful wrapper exit means readiness only, not the end of the running app. The interface
 still uses the development server; prebuilt static UI delivery is not part of this change.
@@ -991,6 +989,12 @@ PR 并冻结新 SHA，不能修改已验收候选来冒充新构建。
 隔离 smoke 不证明共享 profile 可以启动。`manual-check` 和 `manual-restart` 在交出监督权、
 停止旧应用前调用候选的真实 `assertSharedDevMigrationPolicy(..., ['--shared'])`；实际启动时
 再次检查。策略拒绝就保持旧应用运行，不靠 sandbox 验收绕过共享迁移规则。
+
+使用固定安装路径时，两个手动命令还会用正式切换的参数和重定向输出读取候选启动器的策略。
+候选缺少冷启动保护会在旧版退出前被拒绝。macOS 受监督的源码启动给编译到首个窗口最多
+10 分钟，首次出现窗口后给登录和数据库就绪另计 3 分钟。明确的启动错误立即上报；
+监督程序仍受配置的总启动时限约束（默认 15 分钟）。正式切换时若输出已重定向，
+开发服务使用独立的 Terminal 标签页，保持该标签页打开直至应用退出。
 
 数据库变化使用独立、一次性的计划：
 

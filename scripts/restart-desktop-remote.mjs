@@ -1351,10 +1351,29 @@ function attachStartupFailure(error, status) {
   return error;
 }
 
-export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+export function resolveDesktopLaunchPolicy(argv, {
+  env = process.env, platform = process.platform, stdoutIsTTY = process.stdout.isTTY,
+} = {}) {
+  const reuseRequested = argv.includes('--reuse-terminal');
+  const supervised = platform === 'darwin' && reuseRequested &&
+    Boolean(env.CINDY_PERSONAL_MONITOR_DIR && env.CINDY_PERSONAL_GENERATION);
+  // The unattended shared launcher can have a tty on stdin that is already at EOF.
+  // Give the long-lived Forge process its own Terminal instead of that descriptor.
+  const needsOwnTerminal = supervised && argv.includes('--shared') && env.CINDY_PERSONAL_FIXED_APP && !stdoutIsTTY;
+  return { reuseTerminal: reuseRequested && !needsOwnTerminal, coldBuildTimeoutMs: supervised ? 600_000 : null };
+}
+
+export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs, {
+  coldBuildTimeoutMs = null, now = Date.now, wait = sleep,
+} = {}) {
+  let waitingForWindow = coldBuildTimeoutMs !== null;
+  let deadline = now() + (coldBuildTimeoutMs ?? timeoutMs);
+  while (now() < deadline) {
     const status = readDesktopStartupStatus(statusPath);
+    if (waitingForWindow && status?.state === 'window-ready') {
+      waitingForWindow = false;
+      deadline = now() + timeoutMs;
+    }
     if (status?.state === 'ready') {
       console.log(`==> Desktop dev is ready (window + auth/local database, pid ${status.pid ?? 'unknown'}).`);
       fs.rmSync(statusPath, { force: true });
@@ -1369,21 +1388,16 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
         status,
       );
     }
-    await sleep(pollIntervalMs);
+    await wait(pollIntervalMs);
   }
-  // Keep a tombstone so a late Electron startup signal cannot recreate a stale
-  // status file after this waiter has already reported timeout to its caller.
-  writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: Date.now() });
-  throw attachStartupFailure(
-    new Error(
-      `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s. Check the dev terminal and apps/desktop/logs/.`,
-    ),
-    {
-      state: 'failed',
-      code: 'STARTUP_TIMEOUT',
-      message: `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s.`,
-    },
-  );
+  // A late Electron signal must not recreate the status file after a timeout.
+  writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: now() });
+  const phase = waitingForWindow ? 'cold build and first window'
+    : coldBuildTimeoutMs !== null ? 'auth/database startup after window-ready' : 'window/auth/database startup';
+  const limit = waitingForWindow ? coldBuildTimeoutMs : timeoutMs;
+  const message = `Desktop dev did not finish ${phase} within ${Math.round(limit / 1000)}s.`;
+  throw attachStartupFailure(new Error(`${message} Check the dev terminal and apps/desktop/logs/.`),
+    { state: 'failed', code: 'STARTUP_TIMEOUT', message });
 }
 
 /**
@@ -1437,7 +1451,7 @@ async function main() {
   }
   const killOnly = argv.includes('--kill-only');
   const waitReady = argv.includes('--wait-ready');
-  const reuseTerminal = argv.includes('--reuse-terminal');
+  const { reuseTerminal, coldBuildTimeoutMs } = resolveDesktopLaunchPolicy(argv);
   // Fail before the stop stage if the requested terminal has disappeared.
   if (reuseTerminal) currentDarwinTerminal();
   const preserveRunning = argv.includes('--preserve-running');
@@ -1840,7 +1854,7 @@ async function main() {
   };
   if (startupStatusPath) {
     try {
-      await waitForDesktopStartup(startupStatusPath);
+      await waitForDesktopStartup(startupStatusPath, startupReadyTimeoutMs, { coldBuildTimeoutMs });
       const report = collectDesktopWhoamiReport({
         rootDir,
         userDataDir: process.env.XDT_USER_DATA_DIR,

@@ -8,7 +8,7 @@ import { managedConfig, runtimeEnv } from './managed.mjs';
 import { prepare, main, run, packageHash, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 import {acquire} from './lock.mjs';
 import {prepareDatabasePlan, validateDatabasePlan, runDatabasePlan} from './database-upgrade.mjs';
-import {preflightSharedStartup} from './startup-preflight.mjs';
+import {preflightPersonalLauncher, preflightSharedStartup} from './startup-preflight.mjs';
 import {activatePreparedCandidate} from './activation-stages.mjs';
 export {acquire} from './lock.mjs';
 import {installFixedRuntime, preflightFixedRuntime} from './fixed-install.mjs';
@@ -86,6 +86,9 @@ async function stopLaunch(c, release, launched, dataDir = c.runtime.dataDir) {
   // A LaunchServices app is reparented outside the wrapper tree. Stop its exact
   // verified PID first; normal app exit lets the Terminal/runner finish as well.
   // Tearing down their process groups first can strand the app without its UI server.
+  // A cold Forge build in Terminal can outlive the coordinator. Disallow a late
+  // LaunchServices open from this generation before inspecting or stopping its app.
+  if (launched?.dir) durableWrite(path.join(launched.dir, 'cancelled.json'), {generation:launched.generation});
   const owned = snapshot(c, release, dataDir);
   check(!owned.unknown, 'Process identity unavailable; cleanup deferred');
   if (owned.pid) await stopOwned(c, release, dataDir);
@@ -179,9 +182,8 @@ function start(c, release, { mock = false, beforeSpawn = () => {} } = {}) {
   env.CINDY_PERSONAL_MONITOR_DIR = dir; env.CINDY_PERSONAL_GENERATION = generation;
   const mode = mock ? [`--isolated=personal-smoke-${generation.slice(0, 8)}`, '--mock'] : c.runtime.mode === 'shared' ? ['--shared'] : [`--isolated=${c.name}`, ...(c.automatic.mock ? ['--mock'] : [])];
   const log = path.join(dir, 'console.log');
-  // Keep coordinator output in a file, but pass the existing terminal input.
-  // The repository wrapper uses that terminal for the dev server and owns its
-  // single PTY + bounded log drain. Never pipe the PTY through the supervisor.
+  // Capture coordinator output. The shared fixed app gets a separate Terminal;
+  // an isolated smoke can still inherit the caller's terminal and environment.
   const output = fs.openSync(log, 'a', 0o600);
   let child;
   try {
@@ -434,8 +436,10 @@ function preflightInstallation(c, release) {
   const file = path.join(release.directory, 'apps/desktop/resources/personal-native.json');
   const runtime = fs.existsSync(file) ? read(file).runtime : null;
   const destination = c.runtime.mode === 'shared' ? c.runtime.personalApp : null;
-  if (runtime && destination) preflightFixedRuntime(runtime, destination,
-    {verifySignature: verifyDeveloperSignature, requirement: designatedRequirement});
+  if (runtime && destination) {
+    preflightPersonalLauncher(c.runtime.node, release.directory, destination);
+    preflightFixedRuntime(runtime, destination, {verifySignature: verifyDeveloperSignature, requirement: designatedRequirement});
+  }
 }
 async function verifyLaunchProfile(c) {
   const startup = await import(pathToFileURL(path.join(c.app.checkout, 'scripts/restart-desktop-remote.mjs')));
