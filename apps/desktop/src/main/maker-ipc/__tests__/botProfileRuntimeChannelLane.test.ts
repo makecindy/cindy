@@ -184,6 +184,16 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(opts.botRuntimeProfile?.skillPolicy.catalog.find(item => item.name === 'pr')).toMatchObject({ enabled: false, runtimeStatus: 'failed' });
   });
 
+  // Tier 1: a scheduler opened the group session without imessageChatId after restart.
+  // Later family input then had a valid per-turn scope but no archive tool in its harness.
+  it('mounts iMessage tools for a saved dedicated lane on scheduler-first startup', async () => {
+    seed('channel', 'im:imessage:imessage-abcd:g:any;+;group');
+    const opts = { id: 'lane', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm',
+      vendorOptions: { source: 'scheduler' } } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(opts, {}, { persistSnapshot: false });
+    expect(opts.vendorOptions).toEqual({ source: 'scheduler', [BOT_IM_CHANNELS_VENDOR_KEY]: ['imessage'] });
+  });
+
   it('treats a channel group lane as a full-profile lane with the whole SOUL', async () => {
     seed('channel', 'im:telegram:777:g:-100123');
     const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
