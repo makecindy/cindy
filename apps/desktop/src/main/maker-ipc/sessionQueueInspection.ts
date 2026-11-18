@@ -8,7 +8,7 @@ import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 export interface SessionQueueInspectionEntry {
   queuedMessageId: string;
   position: number;
-  source: 'user' | 'orca' | 'scheduler' | 'session';
+  source: 'user' | 'orca' | 'scheduler' | 'session' | 'plugin';
   sourceLabel: string | null;
   enqueuedAtMs: number | null;
   content: string;
@@ -90,10 +90,12 @@ function acceptedAtMs(item: AgentInputQueuedMessage): number | null {
 }
 
 function queueSource(item: AgentInputQueuedMessage): SessionQueueInspectionEntry['source'] {
+  if (item.sourcePlugin) return 'plugin';
   return item.origin?.kind ?? 'user';
 }
 
 function queueSourceLabel(item: AgentInputQueuedMessage): string | null {
+  if (item.sourcePlugin) return item.sourcePlugin.pluginId;
   if (item.origin?.kind === 'orca') return item.origin.senderLabel;
   if (item.origin?.kind === 'scheduler') return item.origin.scheduleName;
   if (item.origin?.kind === 'session') return item.origin.senderSessionId;

@@ -12,6 +12,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'send_to_session',
   'steer_session',
   'stop_session_turn',
+  'control_session',
   'set_session_runtime',
   'set_session_tool_catalog',
   'set_app_default_model',

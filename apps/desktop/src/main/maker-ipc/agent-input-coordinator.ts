@@ -3,10 +3,11 @@ import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequ
 import { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, bindTaskActionInput, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { BOT_SUBSCRIPTION_STARTUP_ADMISSION_REASON } from './botCandidateRecovery.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
+import { SnapshotOperationDeadlineError } from '../utils/operationBudget.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
 import { MCP_APP_MESSAGE_GUARD, isUnrestorableMcpAppMessage, queuedAppMessageGuard, type McpAppMessageGuard } from '../mcp-apps/message.js';
 import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
@@ -567,6 +568,7 @@ export interface AgentInputCoordinatorDeps {
     sessionId: string,
     item: AgentInputQueuedMessage,
     disposition: 'cancelled' | 'failed',
+    error?: string,
   ) => void;
   /** Called immediately before the durable user-row write begins. */
   onUserMessagePersisting?: (sessionId: string, item: AgentInputQueuedMessage) => void;
@@ -749,6 +751,7 @@ interface ActiveTurn {
 interface PendingCompactRequest {
   createOpts: AgentInputCreateOpts;
   userName?: string;
+  beforeMutation?: () => Promise<void>;
   waitForClientIds: string[];
 }
 
@@ -2431,7 +2434,7 @@ export class AgentInputCoordinator {
   async compact(
     sessionId: string,
     createOpts: AgentInputCreateOpts,
-    opts?: { userName?: string },
+    opts?: { userName?: string; beforeMutation?: () => Promise<void> },
   ): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
     // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
@@ -2456,6 +2459,7 @@ export class AgentInputCoordinator {
     const request: PendingCompactRequest = {
       createOpts,
       userName: opts?.userName,
+      beforeMutation: opts?.beforeMutation,
       waitForClientIds: state.pendingQueue.map((item) => item.clientId),
     };
 
@@ -2508,6 +2512,8 @@ export class AgentInputCoordinator {
     this.emit(sessionId);
 
     try {
+      if (request.beforeMutation) await request.beforeMutation();
+      if (!this.isActiveTurnCurrent(sessionId, active)) return this.getProjection(sessionId);
       active.sendStarted = true;
       active.dispatchLifecycle = 'sending';
       const result = await this.deps.sendToAgent(
@@ -2520,6 +2526,7 @@ export class AgentInputCoordinator {
           throwOnStartFailure: true,
           expectedClearBoundaryMs: active.clearBoundaryMs,
           expectedInputGeneration: active.generation,
+          ...(request.beforeMutation ? { [MCP_APP_MESSAGE_GUARD]: request.beforeMutation } : {}),
           onVendorTurnReserved: (generation) =>
             this.captureReservedVendorGeneration(sessionId, active, generation),
         },
@@ -3524,8 +3531,15 @@ export class AgentInputCoordinator {
   }
 
   /** 用户点「重试 / 继续任务」。行为见 performRetryLastError。 */
-  async retryLastError(sessionId: string, expectedQueueHeadClientId?: string, expectedSwitchRevision?: number): Promise<AgentInputProjection> {
-    const { projection } = await this.performRetryLastError(sessionId, { expectedQueueHeadClientId, expectedSwitchRevision });
+  async retryLastError(
+    sessionId: string,
+    expectedQueueHeadClientId?: string,
+    expectedSwitchRevision?: number,
+    guards?: { beforeMutation: () => Promise<void>; beforeDelivery: () => Promise<void> },
+  ): Promise<AgentInputProjection> {
+    const { projection } = await this.performRetryLastError(sessionId, {
+      expectedQueueHeadClientId, expectedSwitchRevision, ...guards,
+    });
     return projection;
   }
 
@@ -3575,6 +3589,8 @@ export class AgentInputCoordinator {
     opts?: {
       auto?: boolean;
       attemptToken?: number;
+      beforeMutation?: () => Promise<void>;
+      beforeDelivery?: () => Promise<void>;
       expectedQueueHeadClientId?: string;
       expectedSwitchRevision?: number;
       /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
@@ -3826,6 +3842,11 @@ export class AgentInputCoordinator {
         return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
       }
     }
+    if (opts?.beforeMutation) {
+      await opts.beforeMutation();
+      if (this.getState(sessionId).recovery !== recovery)
+        return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+    }
     state.error = null;
     clearErrorProjectionSignals(state);
     state.stickyError = null;
@@ -3893,6 +3914,7 @@ export class AgentInputCoordinator {
       // Manual retry is a user takeover. The old scheduler waiter settles as
       // failed; its FireContext must not be inherited by the user's new turn.
       if (!automatic && isSchedulerOriginItem(item)) item.origin = undefined;
+      if (opts?.beforeDelivery) bindTaskActionInput(sessionId, item, opts.beforeDelivery);
       if (usageWait && state.queuePausedByRestore) this.restoredUsageLimitRetryItems.add(item);
       state.pendingQueue.unshift(item);
       this.prependPendingCompactWaitClientId(state, item.clientId);
@@ -6039,7 +6061,7 @@ export class AgentInputCoordinator {
       latest.activeTurn = null;
       const recovering = !rewound && this.recoverPersistedSchedulerPreparation(sessionId, latest, active, head, errorMessage(err), err);
       this.notifyRejectedUserTurn(sessionId, head);
-      this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
+      this.notifyUndispatchedUserTurn(sessionId, head, 'failed', errorMessage(err));
       if (!rewound) {
         this.persistTerminalSendError(sessionId, errorMessage(err), recovering ? latest.autoResumeAttemptToken ?? undefined : undefined);
         this.notifyPersistedSendRejected(sessionId, errorMessage(err), head, recovering);
@@ -6255,6 +6277,7 @@ export class AgentInputCoordinator {
       sessionId,
       item,
       cancelledByUserBoundary ? 'cancelled' : 'failed',
+      cancelledByUserBoundary ? undefined : message,
     );
     if (
       latest.queueAbortPending &&
@@ -6763,7 +6786,8 @@ export class AgentInputCoordinator {
       const schedulerOrigin = this.setActiveTurnRecovery(state, item, {
         persistedFailure: true,
       }) === 'dropped-scheduler';
-      this.notifyUndispatchedUserTurn(sessionId, item, 'failed');
+      this.notifyUndispatchedUserTurn(sessionId, item, 'failed', message);
+      if (schedulerOrigin) this.notifyPersistedSendRejected(sessionId, message, item);
       log.warn(
         schedulerOrigin
           ? 'session closed before dispatch after persistence; dropped scheduler prompt (no user retry)'
@@ -7358,7 +7382,9 @@ export class AgentInputCoordinator {
     if (isTurnDispatchUnconfirmedError(outcome) || failure?.code === 'PRECONDITION_FAILED'
       || failure?.reason === 'cancelled-before-dispatch'
       || message.startsWith('[SEND_CANCELLED_BEFORE_DISPATCH]')) return false;
-    const signals = message === 'Snapshot operation deadline exceeded'
+    // Only the local typed budget authorizes the backoff retry. Provider text,
+    // even with the same wording, is never proof that dispatch did not happen.
+    const signals = outcome instanceof SnapshotOperationDeadlineError
       ? { reason: 'scheduler-snapshot-preparation' } : undefined;
     if (!this.isResumableTurnErrorCandidate(sessionId, message, signals, item)) return false;
     this.setActiveTurnRecovery(state, item, { allowSchedulerAutoResume: true });
@@ -8046,9 +8072,11 @@ export class AgentInputCoordinator {
     sessionId: string,
     item: AgentInputQueuedMessage,
     disposition: 'cancelled' | 'failed',
+    error?: string,
   ): void {
     try {
-      this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition);
+      if (error === undefined) this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition);
+      else this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition, error);
     } catch (err) {
       log.warn('onUndispatchedUserTurn failed', {
         sessionId,

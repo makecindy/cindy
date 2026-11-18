@@ -409,9 +409,6 @@
     "apps/desktop/src/main/skillhub/registry/__tests__/registryService.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/vision-bridge/__tests__/vision-bridge-settings-store.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/main/voice-input/__tests__/dictionarySyncStore.test.ts": {
       "sourceReads": 2
     },
@@ -995,9 +992,6 @@
     },
     "packages/maker-core/src/session.origin.test.ts": {
       "realWaits": 3
-    },
-    "packages/maker-core/src/session.vision-bridge.test.ts": {
-      "realWaits": 2
     },
     "packages/maker-pi-manager/src/__tests__/concurrency.test.ts": {
       "realWaits": 2
