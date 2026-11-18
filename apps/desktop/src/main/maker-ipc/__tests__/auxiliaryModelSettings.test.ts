@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
+  getDesktopSelectableCatalog: () => ({ providers: [] }),
+}));
 
 vi.mock('../../cindyAiProviderName.js', () => ({ getCindyAiProviderName: () => 'Cindy AI · 心动' }));
 
@@ -103,6 +106,17 @@ function builtinCodexCatalog() {
 }
 
 describe('auxiliary model settings IPC helpers', () => {
+  // Unit: retain experimental remote settings for removal, but reject new selections.
+  // Existing persisted-route cases do not distinguish execution computers.
+  it('keeps a remote selection unavailable even when the local route is usable', () => {
+    const pin = 'remote-cat:other:' + PIN;
+    const choices = buildAuxiliaryModelOptions({ settings: { models: [pin] }, catalog: catalog(),
+      overrides: undefined, hasCredential: () => true });
+    expect(choices.find(option => option.id === pin)?.available).toBe(false);
+    expect(() => parseAuxiliaryModelSettingsPatch({ models: [pin] }, new Set([PIN]))).toThrow();
+    expect(parseAuxiliaryModelSettingsPatch({ models: [] }, new Set([PIN]), new Set([pin]))).toEqual({ models: [] });
+  });
+
   it('round-trips a Pi-only HTTP choice while retaining old catalog pins', () => {
     const preset = BUNDLED_CATALOG.presets!.find((entry) => entry.id === 'opencode-go')!;
     const provider = buildUserProvider({ id: 'go', name: 'Go', runtimes: {

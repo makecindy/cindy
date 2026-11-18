@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
-import { LoaderCircle, Monitor, MonitorOff } from 'lucide-react';
+import { LoaderCircle, Monitor, MonitorOff, FolderPlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { SIDEBAR_RAIL_ICON_BUTTON_CLASS } from '@/components/sidebar/SidebarIconButton';
 import { Tip } from '@/components/ui/tooltip';
@@ -50,7 +50,7 @@ function RemoteDesktopShortcut({
   return (
     <div
       className={cn(
-        'shrink-0 pointer-events-none opacity-0 transition-opacity duration-150 motion-reduce:transition-none',
+        'shrink-0 pointer-events-none opacity-0 transition-opacity duration-[var(--motion-fast)] motion-reduce:transition-none',
         'group-hover/device-header:pointer-events-auto group-hover/device-header:opacity-100',
         'has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100',
       )}
@@ -107,11 +107,16 @@ export function DeviceSectionHeader({
   deviceId,
   name,
   children,
+  onCreateProject,
+  createProjectDisabled = false,
 }: {
   deviceId: string | null;
   name: string;
   children: ReactNode;
+  onCreateProject?: () => void;
+  createProjectDisabled?: boolean;
 }) {
+  const { t } = useTranslation();
   const revealRef = useRef<(() => void) | null>(null);
   const reveal = () => revealRef.current?.();
   return (
@@ -121,6 +126,34 @@ export function DeviceSectionHeader({
       onFocus={reveal}
     >
       {children}
+      {onCreateProject && (
+        <div className="shrink-0 pointer-events-none opacity-0 transition-opacity duration-[var(--motion-fast)] motion-reduce:transition-none group-hover/device-header:pointer-events-auto group-hover/device-header:opacity-100 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
+          <Tip
+            text={t(
+              createProjectDisabled
+                ? 'ccAgent.sidebar.deviceGroup.offline'
+                : 'ccAgent.sidebar.newProject',
+            )}
+            side="right"
+          >
+            <button
+              type="button"
+              aria-label={t('ccAgent.sidebar.newProject')}
+              aria-disabled={createProjectDisabled}
+              className={cn(
+                SIDEBAR_RAIL_ICON_BUTTON_CLASS,
+                'h-6 w-6 aria-disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              )}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!createProjectDisabled) onCreateProject();
+              }}
+            >
+              <FolderPlus size={14} aria-hidden />
+            </button>
+          </Tip>
+        </div>
+      )}
       {deviceId && <RemoteDesktopShortcut deviceId={deviceId} name={name} revealRef={revealRef} />}
     </div>
   );
