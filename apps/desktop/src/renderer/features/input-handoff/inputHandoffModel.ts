@@ -107,7 +107,6 @@ export function inputModeFor(
   control: InputHandoffTextControl,
 ): 'numeric' | 'email' | 'tel' | 'url' | 'text' {
   switch (control.contentType) {
-    case 'one-time-code':
     case 'number':
       return 'numeric';
     case 'email':

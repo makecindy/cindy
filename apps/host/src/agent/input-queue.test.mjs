@@ -165,6 +165,100 @@ function createHarness(overrides = {}) {
   return { maker, events, persisted, queue };
 }
 
+// Unit: preparation of a cold remote Pi task must use the stored route and never create a user turn.
+test('remote Pi skill preparation uses the stored session without sending input', async () => {
+  const dir = os.tmpdir();
+  const h = createHarness({ readSession: async id => ({ id, agentKind: 'pi', model: 'stored-model',
+    status: 'active', workingDir: dir, sdkSessionId: 'pi-native' }) });
+  try {
+    await assert.rejects(h.queue.preparePiSkillRuntime('s', dir + '-other'), /unavailable|changed/);
+    assert.equal(h.maker.getSession('s'), null);
+    await h.queue.preparePiSkillRuntime('s', dir);
+    const live = h.maker.getSession('s');
+    assert.equal(live.options.resumeSessionId, 'pi-native');
+    await h.queue.preparePiSkillRuntime('s', dir);
+    assert.equal(h.maker.getSession('s'), live);
+    assert.deepEqual(live.sent, []);
+    assert.deepEqual(h.persisted, []);
+  } finally { await h.queue.dispose(); }
+});
+
+// #11352, unit: the cold preparation entry must open the committed Pi route after a
+// rebuild closes the live session. The earlier cold fixture has no stopped turn.
+test('Pi skill preparation boots the committed route after a stopped turn', async () => {
+  const dir = os.tmpdir();
+  let model = 'old-model';
+  const h = createHarness({ readSession: async id => ({ id, agentKind: 'pi', model,
+    status: 'active', workingDir: dir, providerId: 'xd', permissionMode: 'ask' }) });
+  try {
+    await h.queue.enqueue('s', { clientId: 'previous', text: 'previous' });
+    await waitFor(() => h.maker.getSession('s')?.sent.length === 1);
+    await h.queue.stop('s');
+    await h.maker.closeSession('s');
+    model = 'rebuilt-model';
+    await h.queue.preparePiSkillRuntime('s', dir);
+    assert.equal(h.maker.getSession('s').options.model, model);
+    assert.deepEqual(h.maker.getSession('s').sent, []);
+  } finally { await h.queue.dispose(); }
+});
+
+// #11352, unit: Stop at the prewarm verification boundary must win before any
+// mutation. An ordinary queued-send cancellation runs through a different entry.
+test('Stop invalidates Pi skill preparation before applying the selected route', async () => {
+  const dir = os.tmpdir();
+  let started, release;
+  const verifying = new Promise(resolve => { started = resolve; });
+  const commit = new Promise(resolve => { release = resolve; });
+  let model = 'old-model';
+  const h = createHarness({
+    readSession: async id => ({ id, agentKind: 'pi', model, status: 'active', workingDir: dir }),
+    applyPendingAgentSwitch: async (_id, prepare) => {
+      started();
+      await commit;
+      prepare.assertPreparationCurrent();
+      model = 'rebuilt-model';
+    },
+  });
+  try {
+    const assertPreparationCurrent = h.queue.capturePiSkillPreparation('s');
+    const rejected = assert.rejects(h.queue.preparePiSkillRuntime('s', dir, { applyPendingOwnerSelection: true }),
+      /input cancelled before acceptance/);
+    await verifying;
+    const stopping = h.queue.stop('s');
+    release();
+    await rejected;
+    await stopping;
+    await assert.rejects(h.queue.preparePiSkillRuntime('s', dir, {
+      applyPendingOwnerSelection: true, assertPreparationCurrent,
+    }), /input cancelled before acceptance/);
+    assert.equal(model, 'old-model');
+    assert.equal(h.maker.getSession('s'), null);
+  } finally { await h.queue.dispose(); }
+});
+
+// #11352, unit: even when there is no pending route to apply, Stop during the
+// preparation lookup must prevent a cold runtime from opening.
+test('Stop prevents Pi skill preparation from booting after an in-flight lookup', async () => {
+  const dir = os.tmpdir();
+  let lookupStarted, release;
+  const reading = new Promise(resolve => { lookupStarted = resolve; });
+  const read = new Promise(resolve => { release = resolve; });
+  const h = createHarness({ readSession: async id => {
+    lookupStarted();
+    await read;
+    return { id, agentKind: 'pi', model: 'stored-model', status: 'active', workingDir: dir };
+  } });
+  try {
+    const rejected = assert.rejects(h.queue.preparePiSkillRuntime('s', dir), /input cancelled before acceptance/);
+    await reading;
+    const stopping = h.queue.stop('s');
+    release();
+    await rejected;
+    await stopping;
+    assert.equal(h.maker.getSession('s'), null);
+  } finally { await h.queue.dispose(); }
+});
+
 const waitFor = async (check) => {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     if (check()) return;
@@ -306,6 +400,24 @@ const scheduledInput = (overrides = {}) => ({ sessionId: 'scheduled-task',
   origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Fixture', runId: 'run' },
   onAccepted() {}, ...overrides });
 
+test('scheduler cleanup distinguishes restore-pending from accepted input', async t => {
+  t = lifoCleanup(t);
+  let available = false;
+  const h = createHarness({ loadQueueSnapshot: async () => {
+    if (!available) throw new Error('snapshot unavailable');
+    return [];
+  } });
+  t.after(() => h.queue.dispose());
+  const bridge = h.queue.schedulerQueue();
+  assert.equal(bridge.isSessionBusy('empty'), true);
+  assert.equal(bridge.hasPendingInput('empty'), false);
+  await assert.rejects(bridge.ensureQueueRestored('empty'), /snapshot unavailable/);
+  assert.equal(bridge.hasPendingInput('empty'), false);
+  available = true;
+  assert.equal(await bridge.ensureQueueRestored('empty'), true);
+  assert.equal(bridge.hasPendingInput('empty'), false);
+});
+
 test('scheduled input waits behind user input, deduplicates and retains its origin through dispatch', async t => {
   t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
@@ -318,6 +430,7 @@ test('scheduled input waits behind user input, deduplicates and retains its orig
   const result = await bridge.enqueuePrompt(request);
   assert.ok(result.clientId);
   assert.equal(bridge.hasQueuedPrompt('scheduled-task', 'schedule'), true);
+  assert.equal(bridge.hasPendingInput('scheduled-task'), true);
   assert.deepEqual(await bridge.enqueuePrompt(request), { duplicate: true });
   assert.equal(accepted, 0);
   h.maker.getSession('scheduled-task').emit({ type: 'done' });
@@ -403,6 +516,7 @@ test('an outgoing scheduler cannot restore queues after its input runtime is dis
   await previous.ensureQueueRestored('old-owner-task');
   await h.queue.dispose();
   const before = restored;
+  assert.throws(() => previous.hasPendingInput('new-owner-task'), /owner changed|closed/);
   await assert.rejects(previous.ensureQueueRestored('new-owner-task'), /session is closed/);
   assert.equal(restored, before, 'closed scheduler must not read the next account database');
 });

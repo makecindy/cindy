@@ -328,6 +328,7 @@
       "renameDevice": "重新命名 {{label}}",
       "project": "專案 {{title}}",
       "dialogue": "對話",
+      "automation": "自動化",
       "openAutomationLatest": "開啟自動化 {{title}} 的最新任務",
       "automationTask": "自動化 {{title}}",
       "openConversation": "開啟任務 {{title}}",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "對話",
+      "groupAutomation": "自動化",
       "dialogueFolder": "對話",
+      "automationFolder": "自動化",
       "search": "搜尋",
       "settings": "設定",
       "remoteSettings": "遠端連線設定",
@@ -423,7 +426,33 @@
       "filterTeammatesHeading": "夥伴",
       "filterAnySource": "全部",
       "filterHideAllTeammates": "都不顯示",
-      "filterSelectedTeammates": "已選 {{count}} 位"
+      "filterSelectedTeammates": "已選 {{count}} 位",
+      "inbox": {
+        "inbox": "待處理",
+        "working": "進行中",
+        "snoozed": "稍後處理",
+        "archived": "已處理",
+        "snooze": "稍後處理",
+        "complete": "完成",
+        "wake": "立即取回",
+        "restore": "恢復任務",
+        "process": "標記已處理（封存）",
+        "empty": "收件匣已清空",
+        "snoozeFailed": "無法儲存稍後處理時間，請檢查連線並確認任務所在電腦已更新。",
+        "hours": "{{count}} 小時後",
+        "hours_one": "{{count}} 小時後",
+        "hours_other": "{{count}} 小時後",
+        "thisEvening": "今晚",
+        "tomorrow": "明天",
+        "nextWeek": "下週",
+        "custom": "自訂…",
+        "invalidTime": "請選擇未來一年內的日期與時間。"
+      },
+      "taskListMode": {
+        "heading": "任務模式",
+        "tasks": "任務列表",
+        "inbox": "收件匣"
+      }
     },
     "search": {
       "placeholder": "搜尋標題或內容…",

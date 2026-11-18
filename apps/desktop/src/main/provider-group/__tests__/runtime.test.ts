@@ -9,6 +9,7 @@ import { normalizeProviderGroupConfig, providerGroupSummaryForWire, type Provide
 import { PROVIDER_GROUP_PICK_QUICK_MS } from '../router.js';
 import { PROVIDER_GROUP_USAGE_READ_TIMEOUT_MS, providerGroupMemberUsageState } from '../usage.js';
 import { createGroupContinuityExecutor } from '../continuityExecutor.js';
+import { handleProviderGroupRemote } from '../remoteHandler.js';
 import type { GroupContinuityGrant } from '../../../shared/providerGroupContinuity.js';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../service.js';
 import type { ProviderGroupBinding } from '../bindings.desktop.js';
@@ -26,6 +27,7 @@ const io = vi.hoisted(() => ({
   shares: vi.fn(() => [] as readonly ProviderShareReceived[]),
   group: vi.fn(() => null as ProviderGroupConfig | null),
   status: vi.fn(() => 'online'),
+  endpoint: vi.fn(() => 'https://device-link.invalid'),
   self: vi.fn(() => 'self'),
   closeEpoch: vi.fn(() => 0),
   offlineDirect: vi.fn(() => false),
@@ -52,7 +54,7 @@ vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: i
 vi.mock('../../device-link/ipc.js', () => ({ handleListDevices: io.devices, defaultDeps: vi.fn() }));
 vi.mock('../../device-link/index.js', () => ({ onRemotePushChannel: (listener: typeof io.accountPush) => { io.accountPush = listener; return () => {}; }, remoteBackgroundInvoke: io.invoke, getDeviceLinkStatus: io.status,
   getSelfDeviceId: io.self, getRemoteLinkCloseEpoch: io.closeEpoch, hasOfflineDirectPath: io.offlineDirect }));
-vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://device-link.invalid' }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: io.endpoint }));
 vi.mock('../../device-link/controllerPlatform.js', () => ({ isMobilePlatform: () => false }));
 vi.mock('../../device-link/deviceName.js', () => ({ deviceName: () => 'This computer' }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
@@ -88,6 +90,7 @@ const { captureProviderMetadataContinuityScope, invokeProviderMetadataContinuity
 
 afterEach(() => {
   io.closeEpoch.mockReturnValue(0);
+  io.endpoint.mockReturnValue('https://device-link.invalid');
   setProviderGroupClaudeUsageReader(null);
   setProviderGroupCodexUsageReader(null);
   io.group.mockReset();
@@ -685,6 +688,90 @@ describe('provider group runtime quota account selection', () => {
     const read = () => getProviderGroupDirectory().resolveMembers(localId, config);
     return { read, config, localId };
   }
+
+  // Unit, interrupted add-computer lookup: the original owner and endpoint fence the live retry.
+  // Minimal case: a single device reports a metadata error after the account or endpoint changes.
+  it.each(['owner', 'endpoint'] as const)('does not retry an interrupted candidate read after the %s changes', async (changed) => {
+    const { localId } = harness();
+    io.shares.mockReturnValue([]);
+    io.catalogState.mockClear();
+    io.catalogState.mockImplementationOnce(async () => {
+      if (changed === 'owner') owner = 'new-candidate-owner';
+      else io.endpoint.mockReturnValue('https://new-device-link.invalid');
+      throw new Error('Metadata scope changed');
+    });
+    expect(await getProviderGroupDirectory().listCandidates(localId, null)).toEqual([]);
+    expect(io.catalogState).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #10910 / unit: production owner factory must wire external pending load,
+  // not just direct router fixtures that inject that dependency themselves.
+  it('wires pending same-account picks through the owner runtime and actual remote handler', async () => {
+    const h = harness('anthropic', 'claude');
+    const model = 'claude-sonnet-5';
+    const devices = ['pooled', 'single'];
+    io.devices.mockResolvedValue({ devices: devices.map(deviceId => ({ deviceId, online: true,
+      remoteControlEnabled: true, controlEnabled: true, platform: 'darwin' })) });
+    io.catalog.mockImplementation(async (_invoke, deviceId) => [{ id: 'anthropic', connected: true,
+      subscriptionAccountPool: 'anthropic', auth: { method: 'oauth', native: 'claude' },
+      agents: ['claude-code'], models: { 'claude-code': [{ id: model }] }, routing: { 'claude-code': {} },
+      runningTurns: deviceId === 'pooled' ? 4 : 3,
+    } as unknown as ProviderView]);
+    h.config.members = normalizeProviderGroupConfig({ members: devices.map(agentDeviceId => ({
+      kind: 'device', agentDeviceId, providerId: 'anthropic',
+    })) }, h.localId)!.members;
+    io.group.mockReturnValue(h.config);
+    io.invoke.mockImplementation(async (deviceId, _channel, args) => ({ ok: true, result: args.length === 1
+      ? { providerId: 'anthropic', pooled: true, usage: null, schedulingVersion: 1 }
+      : { providerId: 'anthropic', model, scheduling: { version: 1, accounts: deviceId === 'pooled' ? 2 : 1,
+        running: deviceId === 'pooled' ? 0 : 3, totalRunning: deviceId === 'pooled' ? 4 : 3,
+        full: false, urgency: null, fiveHourTight: false } },
+    }));
+    const scope = getProviderGroupOwnerScope();
+    const results = await Promise.all(Array.from({ length: 5 }, (_, i) => handleProviderGroupRemote({
+      scope: () => scope, readGroup: () => h.config, isRemoteAllowed: () => true,
+      now: Date.now, sessionGroup: async () => null, replaceReportedUsage() {},
+    }, i % 2 ? 'phone' : 'laptop', { action: 'pick', providerId: h.localId, sessionId: `runtime-${i}`,
+      agentKind: 'claude-code', model })));
+    expect(results.map(result => result && 'member' in result ? result.member.agentDeviceId : null))
+      .toEqual(['pooled', 'pooled', 'pooled', 'pooled', 'single']);
+  });
+
+  // Unit: actual owner runtime → IPC client → parser → router. Prior pool tests
+  // only returned quota/availability; they could not detect a new host's anonymous
+  // account load being dropped, or old replies accidentally becoming capacity.
+  it.each(['current', 'old', 'wrong-model', 'malformed', 'full'] as const)(
+    'uses only negotiated, matching account scheduling facts (%s)', async reply => {
+      const h = harness('anthropic', 'claude');
+      const model = 'claude-sonnet-5';
+      io.devices.mockResolvedValue({ devices: ['pooled', 'single'].map(deviceId => ({ deviceId, online: true,
+        remoteControlEnabled: true, controlEnabled: true, platform: 'darwin' })) });
+      io.catalog.mockImplementation(async (_invoke, deviceId) => [{ id: 'anthropic', connected: true,
+        subscriptionAccountPool: 'anthropic', auth: { method: 'oauth', native: 'claude' },
+        agents: ['claude-code'], models: { 'claude-code': [{ id: model }] }, routing: { 'claude-code': {} },
+        runningTurns: deviceId === 'pooled' ? 4 : 3,
+      } as unknown as ProviderView]);
+      h.config.members = normalizeProviderGroupConfig({ members: ['pooled', 'single'].map(agentDeviceId => ({
+        kind: 'device', agentDeviceId, providerId: 'anthropic',
+      })) }, h.localId)!.members;
+      io.group.mockReturnValue(h.config);
+      io.invoke.mockImplementation(async (deviceId, channel, args) => {
+        expect(channel).toBe('maker:subscription-pool:quota');
+        if (args.length === 1) return { ok: true, result: { providerId: 'anthropic', pooled: true, usage: null,
+          ...(reply !== 'old' ? { schedulingVersion: 1 } : {}) } };
+        const pooled = deviceId === 'pooled';
+        return { ok: true, result: { providerId: 'anthropic', model: pooled && reply === 'wrong-model' ? 'other' : model,
+          scheduling: { version: 1, accounts: pooled ? reply === 'full' ? 0 : reply === 'malformed' ? -2 : 2 : 1,
+            running: pooled ? 0 : 3, totalRunning: pooled ? 4 : 3, full: pooled && reply === 'full',
+            urgency: null, fiveHourTight: false } } };
+      });
+      const result = await getProviderGroupRouter().pick({ providerId: h.localId, model, agentKind: 'claude-code' });
+      expect(result).toMatchObject({ kind: 'member', member: { agentDeviceId: reply === 'current' ? 'pooled' : 'single' } });
+      expect(io.invoke.mock.calls.filter(([, , args]) => args.length === 3)).toHaveLength(reply === 'old' ? 0 : 2);
+      // The owner uses this internally, including for its shared guests; no account summary is in the pick response.
+      expect(JSON.stringify(result)).not.toContain('totalRunning');
+    },
+  );
 
   // #9833, unit: run the owner runtime → directory → router with a remote
   // account-pool reply. Legacy aggregate quota cannot prove model availability.

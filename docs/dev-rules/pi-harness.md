@@ -4,6 +4,20 @@
 > `apps/desktop/src/main/mcp-integrations/piEnvironment.ts`,或任何 PI 会话行为、权限、
 > 配置、system prompt 之前必读本文件。PI(github.com/earendil-works/pi)被定位为 Cindy
 > 未来的基座 harness,集成原则与其余 harness 有别 —— 详见「设计原则」。
+>
+> **读取时机**：修改 PI harness 集成、PI 会话权限／配置／system prompt／桥接，或做 PI 相关的上线判断之前
+> **适用路径**：`packages/maker-core/src/agents/pi/**`、`packages/maker-core/src/types/pi-*`、
+> `packages/maker-pi-manager/**`、`apps/desktop/src/main/maker-host/**/pi*`、
+> `apps/desktop/src/main/mcp-integrations/**/pi*`、
+> `apps/desktop/src/main/maker-ipc/**/pi{-kernel,IdleReleaseWatcher,PackageMutationIpc,UsageReceipts}*`、
+> `apps/desktop/src/main/agent-binaries/**/pi-*`、`apps/host/src/agent/pi-*`、
+> `apps/desktop/src/shared/pi{Packages,Kernel,RuntimeInitialization}.ts`、
+> `apps/desktop/src/renderer/components/settings/**/Pi*`、
+> `packages/lizi-mcps/src/xdt-helper/pi_runtime.ts`、`tools/pi/**`
+> **要点**：**Pi 原生能力非退化是红线**（§3.1）：Pi 原生允许的安装、更新、扩展加载与 Agent 自助修复，
+> Cindy 不得以静态分析、TUI／RPC 兼容提示、内容指纹、宿主审批或新增的“安全增强”为由拒绝、停用或变成
+> 不可逆流程；显式用户命令即授权。Cindy 只能增加可跳过的提示和更顺畅的 GUI，不能让 Cindy Pi 比同版本
+> 原生 Pi 更难用。
 
 ## 1. 架构总览
 
@@ -98,6 +112,24 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   读回后沿用原生档位并按正常接受边界消耗一次性计划意图，不默认关闭计划模式。
 
 > Cindy 自有子代理的委派、控制、结果收口与测试边界见 [Pi 子代理设计](../research/pi-subagent-delegation.md)。与 Orca 协作模式分别维护。
+
+### Chat 网关工具 ID 与子代理兼容配置
+
+Chat Completions 网关在 Gemini 工具 ID 中携带签名时，切到受限后端可能超过
+下游的 64 字符限制。仅在目标模型配置显式声明 `compat.maxToolCallIdLength: 64` 时，
+bridge 才在 `openai-completions` 请求投影中缩短超长 ID，调用与结果使用同一映射，
+并避开已有短 ID；不写回会话历史。这是 Cindy bridge 消费的兼容选项，经过原生
+`models.json` 的模型 `compat` 传递，不作为 HTTP 请求字段发送；生产投影为官方
+OpenAI Chat 端点默认声明此约束。自定义网关通过持久 `perAgent.pi.maxToolCallIdLength`
+覆盖声明（见 [配置规则](configuration-and-overrides.md#pi-chat-工具-id-上限)），不编辑临时
+`models.json`。只给已确认允许重写
+ID 且要求 64 字符上限的目标线路配置，不给依赖签名 ID 的 Gemini 线路配置。
+未声明该选项的线路保留原 ID，包括 `production-flash`、`gemini` 等部署别名；
+不依据用户可自定义的模型名推断能力。自定义 GPT 网关也须显式声明，不能自动猜测。
+Responses 沿用 Pi 原生归一化。子代理自带 bridge，
+并在启动与恢复时继承父模型配置中的 `compat`（含 `supportsStore: false`），无需
+为此转发用户扩展或放开 `--no-extensions`。真实 Pi 回归见
+`pi-agent.integration.test.ts` 的 Gemini 切模与 Chat 子代理恢复用例。
 
 ### 原生请求 Fast 偏好
 
@@ -384,7 +416,8 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    （经 Maker `closeSessionIfCurrent(session, 'runtime-refresh')`，让 session:closed
    带上 IM runner 认识的刷新原因；直接 Session.close 会被按 unexpected 丢弃排队回合。
    空闲口径与 closeIfIdle 一致：turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
-   rewind 等宿主排他操作进行中绝不回收），由既有 lazy bootstrap
+   rewind 等宿主排他操作、已跟踪后台任务及待续报 continuation 存续时绝不回收；
+   后台状态读取失败也保留运行时），由既有 lazy bootstrap
    以相同的显式装配语义重扫重建 —— 资源集合是 spawn argv 的输入，只能进程重建时重算；
    远端/Bot/受邀者会话无启动快照，不参与漂移检测。
 9. **Pi bash bounded timeout**:Cindy 覆盖的模型可调 `bash` 在 execute 入口强制默认

@@ -1,7 +1,9 @@
+import os from 'node:os';
 import path from 'node:path';
 import type { App } from 'electron';
 
 import type { LoginItemState } from '../shared/loginItem.js';
+import { createMacLoginItemSettings } from './macos-login-item.js';
 import { requireBoolean, throwIpcError } from './utils/ipcValidate.js';
 
 /** Injectable OS adapter: tests never register real login items. */
@@ -9,6 +11,8 @@ interface LoginItemDependencies {
   app: Pick<App, 'isPackaged' | 'getLoginItemSettings' | 'setLoginItemSettings'>;
   platform: NodeJS.Platform;
   execPath: string;
+  darwinRelease?: string;
+  performMacOperation?: Parameters<typeof createMacLoginItemSettings>[0];
 }
 
 /**
@@ -17,7 +21,13 @@ interface LoginItemDependencies {
  * Absence of our login item is the default (off); disabling removes that override.
  * Windows NSIS installs use a stable executable path, not Squirrel's Update.exe.
  */
-export function createLoginItemSettings({ app, platform, execPath }: LoginItemDependencies) {
+export function createLoginItemSettings(deps: LoginItemDependencies) {
+  const { app, platform, execPath } = deps;
+  // macOS 13 (Darwin 22) introduced SMAppService. Monterey uses Electron's
+  // older login-item implementation and has no SMAppService to call.
+  if (platform === 'darwin' && app.isPackaged && parseInt(deps.darwinRelease ?? os.release(), 10) >= 22) {
+    return createMacLoginItemSettings(deps.performMacOperation);
+  }
   const windows = platform === 'win32';
   const name = path.win32.basename(execPath, '.exe');
   const target = windows ? { path: execPath, args: [] as string[] } : {};

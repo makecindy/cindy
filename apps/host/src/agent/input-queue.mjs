@@ -5,7 +5,7 @@ import { createTurnExecutor } from './turn-executor.mjs';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
-import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
+import { createSchedulerQueueBridge, prepareQueuedPromptSnapshot } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
 import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
 import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
@@ -159,9 +159,14 @@ export function createInputQueue(deps) {
     // Context recovery (context-recovery-assembly.ts): one rollover per runtime, so its memory of
     // continued inputs lasts as long as this owner's runtime; a new owner's runtime gets a new one.
     let rollover = null;
-    const executor = createTurnExecutor({ ...deps,
+    const applyPendingAgentSwitchAtDispatch = (id, signal, nextInputChars, assertPreparationCurrent) => deps.applyPendingAgentSwitch?.(id, {
+      signal, nextInputChars, assertPreparationCurrent,
+      prepareModelWindowSwitch: (taskId, target) => rollover?.prepareModelWindowSwitch(taskId, target) ?? 'unknown-context',
+    });
+    const executor = createTurnExecutor({ ...deps, storedSessionOptions,
       assertCurrent, isCurrent,
       getRecoveryRollover: deps.createContextRecoveryRollover ? () => rollover : deps.getRecoveryRollover,
+      applyPendingAgentSwitch: applyPendingAgentSwitchAtDispatch,
       prepareUserMessage: attachments?.prepareUserMessage,
       isClearBoundaryCurrent: (id, boundary, generation) => coordinator.getClearBoundaryMs(id) === boundary
         && (generation === undefined || coordinator.isGenerationCurrent(id, generation)),
@@ -226,7 +231,8 @@ export function createInputQueue(deps) {
       },
       // Desktop register.ts (AgentInputCoordinator hooks): after the user row is durable
       // and before vendor dispatch, open the turn change record, then the Git baseline.
-      beforeDispatchUserTurn: executor.beforeDispatchUserTurn,
+      beforeDispatchUserTurn: (id, item, signal) => executor.beforeDispatchUserTurn(id, item, signal,
+        snapshot => prepareQueuedPromptSnapshot(snapshot, scheduleDiscardWatchers, id, item, signal)),
       // A durable turn that never reached the vendor: drop the record, then the baseline.
       onUndispatchedUserTurn: executor.onUndispatchedUserTurn,
       onPersistedSendRejected: (id, message, item, recovering) =>
@@ -242,7 +248,7 @@ export function createInputQueue(deps) {
         schedulePreparations.delete(item.clientId);
         const discarded = scheduleDiscardWatchers.get(item.clientId);
         scheduleDiscardWatchers.delete(item.clientId);
-        discarded?.();
+        discarded?.onDiscarded();
       },
     });
     const scheduleBridge = createSchedulerQueueBridge({
@@ -350,6 +356,10 @@ export function createInputQueue(deps) {
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
         isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },
+        hasPendingInput: id => {
+          if (closing) throw new Error('session is closed');
+          assertCurrent(); return scheduleBridge.hasPendingInput(id);
+        },
         enqueuePrompt: req => command(req.sessionId, async (_state, admission) => {
           // The bridge reads metadata and the stored row before enqueue. Keep
           // the original command generation across every one of those reads.
@@ -367,6 +377,29 @@ export function createInputQueue(deps) {
       /** A context recovery's replay was accepted (the recovery factory's onRebuilt). */
       noteContextRecoveryRebuilt: id => executor.noteRecoveryRebuilt(id),
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
+      capturePiSkillPreparation(id) {
+        const state = stateFor(id);
+        const admission = state.admission;
+        return () => {
+          assertCurrent();
+          if (closing || state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
+        };
+      },
+      preparePiSkillRuntime: (id, dir, options = {}) => command(id, async (state, admission) => {
+        const check = () => {
+          options.assertPreparationCurrent?.();
+          assertCurrent();
+          if (state.closed || state.admission !== admission) throw new Error('input cancelled before acceptance');
+        };
+        check();
+        if (options.applyPendingOwnerSelection) {
+          // This explicitly selected Skill send is already under the task's route lock.
+          await applyPendingAgentSwitchAtDispatch(id, undefined, options.nextInputChars, check);
+          check();
+        }
+        await executor.preparePiSkillRuntime(id, dir, check);
+        check();
+      }),
       restoreSession: (id, check) => command(id, async () => {
         await check(); assertCurrent();
         const session = await executor.restoreSession(id, storedSessionOptions(await deps.readSession(id)), check);

@@ -56,7 +56,7 @@ const BODY_MAX = 4500;
 
 export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirmCardProps) {
   const { t, i18n } = useTranslation();
-  const cardRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLFieldSetElement>(null);
   const titleInputId = useId();
   const bodyInputId = useId();
   const publicNameInputId = useId();
@@ -187,10 +187,13 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
   };
 
   return (
-    <div
+    <fieldset
       ref={cardRef}
+      disabled={pending.submitting}
+      aria-busy={pending.submitting}
       tabIndex={-1}
       onKeyDown={(e) => {
+        if (pending.submitting) return;
         // Scoped bubbling excludes other panes and portalled Markdown content.
         if (e.repeat || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node))
           return;
@@ -442,7 +445,9 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
       {/* Action buttons */}
       <div className="flex flex-wrap items-center justify-end gap-3 border-t border-[var(--chat-input-border)] px-5 py-3">
         <p className="min-w-0 flex-[1_1_220px] text-12 leading-relaxed text-[var(--status-bar-meta)]">
-          {t('issueAgent.confirm.publicationNotice')}
+          {pending.submitting
+            ? t('newChat.permissionPrompt.submitting')
+            : t('issueAgent.confirm.publicationNotice')}
         </p>
         <div className="flex shrink-0 items-center gap-2">
           <Button variant="secondary" size="md" compact type="button" onClick={handleCancel}>
@@ -467,6 +472,6 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
           )}
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 }

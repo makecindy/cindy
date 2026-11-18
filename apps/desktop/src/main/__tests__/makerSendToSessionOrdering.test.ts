@@ -190,7 +190,7 @@ describe('sendToSession ordering', () => {
     const pluginStateBlock = extractBetween(
       source,
       'ipcMain.handle(\n    MAKER_INVOKE.PLUGINS_GET_STATE',
-      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
+      'registerPluginEnableHandlers(',
     );
 
     expect(pluginStateBlock).toContain('resolveLocalCollabPolicyWorkingDir(');
@@ -671,10 +671,12 @@ describe('sendToSession ordering', () => {
       'selection,',
     );
     expect(source).toContain('withSessionLock: withSendToSessionLock,');
-    expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);');
+    // Keep the ordering contract and cancellation-signal wiring together;
+    // orcaModelSelectionIntent covers the actual waiting/preparation aborts.
+    expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId, undefined, () => stage, signal);');
     expectOrder(
       directSendSwitchBlock,
-      'const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);',
+      'const release = await acquireSendToSessionLock(sessionId, undefined, () => stage, signal);',
       'applyPendingAgentSwitchIfIdle(',
     );
     for (const [operation, call] of [
@@ -1132,7 +1134,7 @@ expect(serviceDepsBlock).toContain('await orcaWorkerResumeScheduler.request(targ
     expectOrder(
       serviceDispatchBlock,
       'const wasLiveBeforeDispatch = deps.getLiveSession(target.sessionId) !== null;',
-      'if (!wasLiveBeforeDispatch) await deps.resumeWorkerSession(target, link);',
+      'if (!wasLiveBeforeDispatch && !deps.hasPendingAgentSwitch?.(target.sessionId)) {',
     );
     expect(serviceDispatchBlock).not.toContain(
       "target.status === 'idle' || target.status === 'done'",

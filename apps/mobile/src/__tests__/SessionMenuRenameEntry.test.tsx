@@ -276,3 +276,6 @@ it('opens project moving from task details after the menu closes', async () => {
     await act(async () => root.unmount());
   }
 });
+
+// These menu tests exercise the entry only; the project form owns native media dependencies.
+vi.mock('../session/ProjectSettingsSheet', () => ({ ProjectSettingsSheet: () => null }));

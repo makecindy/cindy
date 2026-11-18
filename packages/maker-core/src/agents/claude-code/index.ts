@@ -25,6 +25,8 @@
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import { claudeProfileSessionStore } from './profile-session-store.js';
+import { claudeToolLifecycleHooks } from './tool-lifecycle-hooks.js';
+import { claudeNativeRecoveryHooks } from './native-recovery-hooks.js';
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -48,6 +50,7 @@ import type {
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
+import { callClaudeToolCatalog } from './native-tool-catalog.js';
 import {
   reportSubagentModelDiagnostics,
   resolveSubagentModelDefault,
@@ -78,6 +81,7 @@ import {
   type RefreshLocalModelsOptions,
   type SendOptions,
   type TurnPermissionPolicy,
+  type TurnContinuationCancellationReason,
   isolatedBotProfile,
 } from '../base-agent.js';
 import { preparePinnedClaudeSkillInvocation } from './pinned-skill-invocation.js';
@@ -1351,6 +1355,16 @@ export class ClaudeCodeAgent extends BaseAgent {
         { signal: timeoutController.signal },
       );
 
+      try {
+      await opts?.onUsage?.({
+        model: resp.model ?? model,
+        inputTokens: resp.usage?.input_tokens,
+        outputTokens: resp.usage?.output_tokens,
+        cacheReadTokens: resp.usage?.cache_read_input_tokens ?? undefined,
+        cacheCreateTokens: resp.usage?.cache_creation_input_tokens ?? undefined,
+      });
+      } catch { log.warn('oneShot usage observer failed'); }
+
       const text = resp.content
         .filter((b): b is Anthropic.TextBlock => b.type === 'text')
         .map((b) => b.text)
@@ -2302,6 +2316,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           nativeCliAuth ? workspaceSettingsConfigChangeHooks : undefined,
         )
       : mergeClaudeHookSets(
+          !hosted?.guest && !opts.remoteHostId ? claudeToolLifecycleHooks(this.deps.toolLifecycleControl, opts.sessionId) : undefined,
+          !opts.deviceHosted && !opts.remoteHostId ? claudeNativeRecoveryHooks(this.deps.nativeRecoveryObserver, opts.sessionId) : undefined,
           buildClaudeLocalToolGuardHooks(
             capabilityRouting,
             () => activeCapabilitySelectionText,
@@ -3303,6 +3319,9 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableLibraryRoot: string | null | undefined = opts.remoteHostId || reviewMode ? undefined : (opts[LIBRARY_READ_ROOT] ?? undefined);
     let mutableExtraDirs: string[] = Array.isArray(opts.extraDirs) ? [...opts.extraDirs] : [];
     let mutableWritableDirs: string[] = Array.isArray(opts.writableDirs) ? [...opts.writableDirs] : [];
+    // Only the host-validated project subset may cross SSH; legacy controller paths stay local.
+    let remoteExtraDirs: string[] = [];
+    let remoteWritableDirs: string[] = [];
     let autoReviewDirectoryGeneration = 0;
     let activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
     let activeQueryReadonlyDirs = [...mutableExtraDirs];
@@ -3964,6 +3983,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
         ];
 
+        activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
+        activeQueryReadonlyDirs = [...remoteExtraDirs];
+        activeQueryHasDirectoryGrants = remoteExtraDirs.length > 0 || remoteWritableDirs.length > 0;
         activeQueryModelEnvGeneration = applyModelOutputEnv();
         const startParams: Record<string, unknown> = {
           cwd: opts.workingDir,
@@ -4006,12 +4028,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               ...(appendText ? { append: appendText } : {}),
             };
           })(),
-          // **不透传 extraDirs 到远端**: mutableExtraDirs 由 desktop session/draft
-          // 提供, 路径基于 desktop 本地文件系统 (用户拖进来的文件夹), 跟远端机器
-          // 上的路径毫无关系。SDK 把 additionalDirectories 当 cwd 之外的允许范围,
-          // 用 desktop 路径只会让远端 SDK 报"路径不存在 / 不在允许范围"或者更糟,
-          // 误把同名远端路径加进允许范围。远端 cwd 在 startParams.cwd 已传, 别处
-          // 想加额外目录要由远端用户在远端机器上配置, 不在本 PR scope。
+          ...((remoteExtraDirs.length || remoteWritableDirs.length)
+            ? { additionalDirectories: [...new Set([...remoteExtraDirs, ...remoteWritableDirs])] }
+            : {}),
           ...(remoteMcpServers && Object.keys(remoteMcpServers).length > 0 ? { mcpServers: remoteMcpServers } : {}),
           ...(resumeSdkSid ? { resumeSdkSessionId: resumeSdkSid } : {}),
           // includePartialMessages 必须跟本地分支保持一致 — 否则 daemon 端 SDK
@@ -4997,6 +5016,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       id: number;
       tasks: Map<string, ContinuationTaskState>;
       state: 'awaiting' | 'active' | 'cancelled';
+      cancellationReason?: TurnContinuationCancellationReason;
       /** Number of claim-bearing done events not yet processed by Session. */
       pendingBoundaryEvents: number;
       /** A later natural/synthetic done has closed the product turn. */
@@ -5038,17 +5058,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       wakeContractReconcileTimer = null;
     };
     const continuationClaims = new Map<number, ContinuationClaim>();
-    const continuationListeners = new Set<(
-      continuationId: number,
-      state: 'awaiting' | 'active' | 'cancelled',
-    ) => void>();
+    const continuationListeners = new Set<Parameters<NonNullable<AgentSessionHandle['onTurnContinuationChange']>>[0]>();
     const emitContinuationState = (
       continuationId: number,
       state: 'awaiting' | 'active' | 'cancelled',
+      reason?: TurnContinuationCancellationReason,
     ): void => {
       for (const listener of [...continuationListeners]) {
         try {
-          listener(continuationId, state);
+          if (reason === undefined) listener(continuationId, state);
+          else listener(continuationId, state, reason);
         } catch (e) {
           log.warn('turn continuation listener threw', { error: String(e) });
         }
@@ -5079,16 +5098,17 @@ export class ClaudeCodeAgent extends BaseAgent {
         terminalBackgroundTaskIds.add(taskId);
       }
     };
-    const cancelActiveContinuation = (reason: string): ContinuationClaim | null => {
+    const cancelActiveContinuation = (reason: TurnContinuationCancellationReason): ContinuationClaim | null => {
       queuedAsyncAnswer = false;
       const claim = activeContinuationClaim();
       if (!claim || claim.state !== 'awaiting') return null;
       claim.state = 'cancelled';
+      claim.cancellationReason = reason;
       claim.settled = true;
       activeContinuationId = null;
       clearWakeContractReconciliation();
       log.info('turn continuation cancelled', { reason, continuationId: claim.id });
-      emitContinuationState(claim.id, 'cancelled');
+      emitContinuationState(claim.id, 'cancelled', reason);
       releaseSettledContinuationClaim(claim);
       return claim;
     };
@@ -5235,7 +5255,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         states.length > 0 &&
         states.every((state) => state === 'stopped')
       ) {
-        return cancelActiveContinuation('all wake tasks stopped');
+        return cancelActiveContinuation('all_wake_tasks_stopped');
       }
       return null;
     };
@@ -6943,12 +6963,17 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
           rollbackUnacceptedFork?.();
         };
-        if (pendingRewindTo || activeBridgeRewindResumeAt) {
+        // An unused Query has no durable resume id yet. It still needs the same
+        // directory snapshot rebuild before its first input reaches the SDK.
+        const initialDirectoryRebuild =
+          !durableSdkSessionId && activeQueryDirectoryGeneration !== autoReviewDirectoryGeneration;
+        if (pendingRewindTo || activeBridgeRewindResumeAt || initialDirectoryRebuild) {
           const resumeAt = pendingRewindTo ?? activeBridgeRewindResumeAt;
-          if (!resumeAt) {
+          if (!resumeAt && !initialDirectoryRebuild) {
             throw new Error('Claude rewind rebuild missing resume target');
           }
-          const directoryGrantRebuild = pendingRewindTo === durableSdkSessionId;
+          const directoryGrantRebuild =
+            initialDirectoryRebuild || pendingRewindTo === durableSdkSessionId;
           log.debug('send ▶ pendingRewindTo detected — rebuilding sdkQuery with 三件套', {
             resumeSessionAt: directoryGrantRebuild ? undefined : resumeAt,
             resumeSdkSid: durableSdkSessionId,
@@ -6987,7 +7012,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (directoryGrantRebuild) {
             rewindTransitionQueries.add(q);
             try {
-              q.close();
+              await q.close();
             } catch (e) {
               log.warn('rewind rebuild: q.close threw', { error: String(e) });
             }
@@ -6997,7 +7022,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           for (;;) {
             q = await buildQuery({
               ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
-              forkSession: true,
+              ...(!initialDirectoryRebuild && (!opts.remoteHostId || !directoryGrantRebuild)
+                ? { forkSession: true }
+                : {}),
               permissionMode: snapSdkPermissionMode,
             });
             if (resolveMaxOutputTokens(mutableModel) === appliedMaxOutputTokens || sendOpts?.signal?.aborted || closed) break;
@@ -7064,7 +7091,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 轮直接撞上下文上限。
           // 桥接 turn 计数: 实际 push /compact 时 +1, 让后续 middle-turn suppress /
           // onTurnEnd 保持 turnInFlight 靠精确计数, 不受 SDK prompt 消费模式影响。
-          bridgeCompactQueued = queueAutoCompactBridge('rewind', resumeAt);
+          if (resumeAt) bridgeCompactQueued = queueAutoCompactBridge('rewind', resumeAt);
           // 本次 send 的 bridge state 已注册;guard 继续保持到下面 turnInFlight=true,
           // 防止 runtime setter 在 user turn 尚未登记时把 /compact 注入成未标记 turn。
         }
@@ -7608,10 +7635,15 @@ export class ClaudeCodeAgent extends BaseAgent {
         return continuationClaims.get(continuationId)?.state ?? null;
       },
 
+      getTurnContinuationCancellationReason(continuationId: number) {
+        return continuationClaims.get(continuationId)?.cancellationReason;
+      },
+
       onTurnContinuationChange(
         listener: (
           continuationId: number,
           state: 'awaiting' | 'active' | 'cancelled',
+          reason?: TurnContinuationCancellationReason,
         ) => void,
       ) {
         continuationListeners.add(listener);
@@ -7719,6 +7751,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         }).mcpServerStatus;
         if (typeof readStatus !== 'function') return null;
         return claudeMcpServerToolsReport(await readStatus.call(q), serverName);
+      },
+
+      async callNativeToolCatalog(method: string, args: unknown[]) {
+        if (opts.remoteHostId || hosted?.guest || reviewMode) throw new Error('UNSUPPORTED_CAPABILITY');
+        return callClaudeToolCatalog(q, method, args);
       },
 
       setInteractionResolver(resolver: InteractionResolver) {
@@ -8117,8 +8154,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         return mutablePlanMode || planTurnActive || sdkInPlanMode;
       },
 
-      async setExtraDirs(newDirs: string[], libraryRoot?: string | null) {
+      async setExtraDirs(newDirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }) {
         if (reviewMode) return;
+        const remoteDirs = remote && remote.hostId === opts.remoteHostId && opts.remoteHostId
+          ? remote.directories.filter(dir => newDirs.includes(dir)) : [];
+        if (remoteExtraDirs.length !== remoteDirs.length || remoteExtraDirs.some((dir, i) => dir !== remoteDirs[i])) {
+          remoteExtraDirs = [...remoteDirs];
+          autoReviewDirectoryGeneration++;
+        }
         // 只覆盖 closure。SDK 没有运行时 setAdditionalDirectories 入口, 但 buildQuery
         // 是 turn-by-turn 装配的 (rewind 重启 / fork 都走 buildQuery), 改完下一 turn
         // 自动用新值。当前 in-flight turn 不会变 (允许的 — 用户在 turn 中加目录
@@ -8134,8 +8177,16 @@ export class ClaudeCodeAgent extends BaseAgent {
         extraDirsRebuildAttempted = false;
       },
 
-      async setWritableDirs(newDirs: string[]) {
+      async setWritableDirs(newDirs: string[], remote?: { hostId: string; directories: string[] }) {
         if (reviewMode) return;
+        const remoteDirs = remote && remote.hostId === opts.remoteHostId && opts.remoteHostId
+          ? remote.directories.filter(dir => newDirs.includes(dir)) : [];
+        if (remoteWritableDirs.length !== remoteDirs.length || remoteWritableDirs.some((dir, i) => dir !== remoteDirs[i])) {
+          if (remoteWritableDirs.some(dir => !remoteDirs.includes(dir)))
+            dismissDirectorySensitivePending('writable_dirs_revoked');
+          remoteWritableDirs = [...remoteDirs];
+          autoReviewDirectoryGeneration++;
+        }
         if (
           mutableWritableDirs.length === newDirs.length
           && mutableWritableDirs.every((dir, index) => dir === newDirs[index])

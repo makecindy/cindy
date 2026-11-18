@@ -53,7 +53,8 @@ void mountPage({
   render: (ctx) => (
     <AppFrame header={false}>
       <div className="p-6">
-        <RemoteModelAccessSection providerId={ctx.case === 'budget-claude' ? 'anthropic' : 'openai'} />
+        <RemoteModelAccessSection providerId={ctx.case === 'budget-claude' ? 'anthropic' : 'openai'}
+          {...(ctx.case === 'merged-pool' ? { poolName: 'OpenAI' } : {})} />
         {ctx.case.startsWith('alias-') && <RemoteModelAccessDialog providerId="openai" memberId={ctx.case === 'alias-pi-ceiling' ? 'fixture-member' : undefined} onClose={() => {}} />}
         {(ctx.case === 'member' || ctx.case.startsWith('budget')) && <RemoteModelAccessDialog providerId={ctx.case === 'budget-claude' ? 'anthropic' : 'openai'} memberId="fixture-member" memberName="小林" onClose={() => {}} />}
       </div>

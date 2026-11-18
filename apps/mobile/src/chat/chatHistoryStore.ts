@@ -4,6 +4,10 @@ import type { ChatHistoryState, ChatHistoryStore } from '@cindy/maker-shared/cha
 import type { HistoryDiskIO } from '@/session/historyDiskStore';
 
 const writes = new Map<string, Promise<unknown>>();
+// What this process last saw or committed for each file. Every writer goes through this
+// module, so a store that already knows a room compares against it instead of re-reading
+// and re-parsing the whole room before each write.
+const committed = new Map<string, { version: number | null; generation: string | null }>();
 let io: Promise<HistoryDiskIO> | undefined;
 let epoch = 0;
 let clearing: Promise<void> | undefined;
@@ -47,26 +51,41 @@ export function createMobileChatHistoryStore(owner: string, realm: string, endpo
       const value = decode(await files.read(key));
       versions.set(room, value?.version ?? null);
       generations.set(room, value?.state.generation ?? null);
+      committed.set(key, { version: value?.version ?? null, generation: value?.state.generation ?? null });
       return value?.state;
     }),
     write: (room, state) => serial(room, async (files, key) => {
-      const old = decode(await files.read(key));
-      if ((old?.version ?? null) !== (versions.get(room) ?? null)
-        || (old?.state.generation ?? null) !== (generations.get(room) ?? null)) throw new Error('CHAT_CACHE_CONFLICT');
+      // A store that has never read or written this room still checks the file itself.
+      let old = versions.has(room) ? committed.get(key) : undefined;
+      if (!old) {
+        const value = decode(await files.read(key));
+        old = { version: value?.version ?? null, generation: value?.state.generation ?? null };
+        committed.set(key, old);
+      }
+      if (old.version !== (versions.get(room) ?? null)
+        || old.generation !== (generations.get(room) ?? null)) throw new Error('CHAT_CACHE_CONFLICT');
       assertCurrent();
-      if (!state) { await persist(() => files.remove(key)); versions.set(room, null); generations.set(room, null); return; }
-      const version = (old?.version ?? 0) + 1;
+      if (!state) {
+        await persist(() => files.remove(key));
+        versions.set(room, null); generations.set(room, null); committed.set(key, { version: null, generation: null });
+        return;
+      }
+      const version = (old.version ?? 0) + 1;
       const payload = JSON.stringify({ version, state });
       await persist(() => files.write(key, payload));
       versions.set(room, version); generations.set(room, state.generation);
+      committed.set(key, { version, generation: state.generation });
     }),
   };
 }
 
+/** Changes whenever every earlier store has been fenced, so a shared history is rebuilt. */
+export const mobileChatHistoryStoreEpoch = () => epoch;
+
 /** Fence old mounts synchronously, drain native writes, then remove every account's files. */
 export function clearMobileChatHistoryStore(): Promise<void> {
   if (clearing) return clearing;
-  epoch++;
+  epoch++; committed.clear();
   const pending = [...writes.values()];
   clearing = (async () => {
     await Promise.allSettled(pending);

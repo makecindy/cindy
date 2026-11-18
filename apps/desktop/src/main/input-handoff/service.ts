@@ -1,3 +1,4 @@
+import type { HandoffFieldPlan } from './types.js';
 import { randomUUID } from 'node:crypto';
 import {
   parseInputHandoffDecision,
@@ -36,6 +37,7 @@ export interface InputHandoffStartRequest {
   purpose: string;
   note?: string;
   requester?: string;
+  fields?: HandoffFieldPlan[];
   target: HandoffTargetSpec;
   completeWhen?: HandoffCompletionHints;
   timeoutMinutes?: number;
@@ -201,6 +203,7 @@ export class InputHandoffService {
       ...(request.note ? { note: request.note } : {}),
       ...(request.requester ? { requester: request.requester } : {}),
       target: request.target,
+      fields: request.fields,
       ...(request.completeWhen ? { completeWhen: request.completeWhen } : {}),
       timeoutMs: timeoutMs(request.timeoutMinutes),
       hostPid: this.deps.hostPid,

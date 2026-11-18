@@ -11,6 +11,7 @@ import { getMobileAuthOwner } from '../auth/authOwnerGeneration';
 import { useSideChatCount } from '../session/useSideChatCount';
 import { summarizeSessionOverview } from '../session/sessionOverview';
 import { projectMobileSessionActions } from '../session/sessionActionProjection';
+import { sessionNavigationTitleMaxWidth } from '../platform/chrome/navigationTitleWidth';
 import type { RemoteSession } from '../session/types';
 
 const summaryStore = vi.hoisted(() => ({
@@ -83,6 +84,7 @@ const nativeActions = vi.fn((_props: unknown) => null);
 const nativeTitle = vi.fn((_props: unknown) => null);
 const toolbar = Object.assign(native, { View: native });
 const headerBindings = {
+  sessionNavigationTitleMaxWidth,
   ...bindings, isSharedTaskPeer: () => false, useRemoteProjectAliases: () => new Map(), projectDirectoryName: (s: string) => s.split("/").pop(), deviceDisplayName: () => "PC", ProjectSettingsSheet: icon, sessionProjectDirectory, ProjectPickerIcon: icon, MessagesSquare: icon, summarizeSessionOverview, projectMobileSessionActions, Platform: headerPlatform,
   Pressable: native,
   useAdaptiveWindow: () => ({ width: 400, height: 800, insets: { top: 0, bottom: 0, left: 0, right: 0 } }),

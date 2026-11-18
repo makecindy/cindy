@@ -17,7 +17,10 @@ import {
   resolveRunningUsageMeta,
 } from '@/features/cc-agent/lib/runningTokenUsage';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({
+  t: (key: string, values?: { rate?: string; tokens?: string }) =>
+    [key, values?.rate ?? values?.tokens].filter(Boolean).join(' '),
+}) }));
 
 // Execute the actual status bar without loading the entire session view's IPC/store graph.
 const source = readFileSync(
@@ -35,7 +38,7 @@ const component = ast.statements.find(
   (node) => ts.isFunctionDeclaration(node) && node.name?.text === 'RunningStatusBar',
 );
 if (!component) throw new Error('RunningStatusBar not found');
-const compiled = ts.transpileModule(component.getText(ast), {
+const compiled = ts.transpileModule(component.getText(ast).replace(/^export\s+/, ''), {
   compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const Icon = () => null;
@@ -71,6 +74,9 @@ const RunningStatusBar = new Function(
 )(deps) as React.ComponentType<{
   visible: boolean;
   suppressContent?: boolean;
+  preparing?: boolean;
+  backgroundTasksRunning?: boolean;
+  onStopBackgroundTasks?: () => void;
   rightLeadingSlot?: React.ReactNode;
   status: string;
   reconnectStatus?: string | null;
@@ -86,10 +92,24 @@ const RunningStatusBar = new Function(
     elapsedMs: number;
     streaming: boolean;
     peak?: number;
+    totalOutputTokens?: number;
   };
 }>;
 
 afterEach(cleanup);
+
+it('keeps background stop available during remote preparation without displaying old metrics', () => {
+  const stop = vi.fn();
+  const props = { visible: true, preparing: true, status: 'Waiting for remote response',
+    startedAt: 1, tokenUsage: 1234, outputTokens: 1234, generationDurationMs: 1000 };
+  const { container, rerender } = render(<RunningStatusBar {...props} />);
+  expect(container.querySelector('[data-running-status-meta]')).toBeNull();
+  rerender(<RunningStatusBar {...props} backgroundTasksRunning onStopBackgroundTasks={stop} />);
+  fireEvent.click(screen.getByRole('button', { name: 'chat.backgroundActivity.stopAll' }));
+  expect(stop).toHaveBeenCalledOnce();
+  expect(container.querySelector('[data-running-status-meta]')?.textContent).not.toContain('1234');
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
 
 it.each([false, true])('reconnect hides stale speed and pinned history, then waits for fresh samples (pinned=%s)', (pinned) => {
   const props = {
@@ -188,11 +208,12 @@ it('paused token speed hides the current rate but keeps average and peak', () =>
   // A tool call pauses generation: the cached live rate (fresh for 60s) must not
   // be shown as a current speed, while average and peak still describe the turn.
   rerender(
-    <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average }} />,
+    <RunningStatusBar {...props} tokenSpeed={{ ...speed, streaming: false, rate: speed.average, totalOutputTokens: 5_300 }} />,
   );
   expect(trigger()?.textContent).not.toContain('tokenRate');
   expect(currentRate()?.textContent).toContain('—');
-  expect(value('chat.runningStatus.averageRate')?.textContent).not.toContain('—');
+  expect(value('chat.runningStatus.averageRate')?.textContent).toContain('100');
+  expect(value('chat.runningStatus.outputTotal')?.textContent).toContain('5.3k');
   expect(value('chat.runningStatus.observedPeak')?.textContent).not.toContain('—');
 
   // Streaming resumes: the live reading is back.

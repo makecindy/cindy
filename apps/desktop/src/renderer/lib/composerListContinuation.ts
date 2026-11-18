@@ -24,8 +24,9 @@ export interface ListPrefixMatch {
 const CHECKBOX_RE = /^(\s*)([-+*])(\s+)\[[ xX]\](\s+|$)/;
 const BULLET_RE = /^(\s*)([-+*•])(\s+)/;
 const ORDERED_RE = /^(\s*)(\d{1,9})([.)])(\s+)/;
-// 中文顿号序号(`1、`)不要求后随空格,符合中文输入习惯。
-const ORDERED_CJK_RE = /^(\s*)(\d{1,9})(、)(\s*)/;
+// 中文顿号序号(`1、`)不要求后随空格,符合中文输入习惯。序号限两位:
+// 更长的数字串是正文(与 ComposerListNodes 的输入规则一致)。
+const ORDERED_CJK_RE = /^(\s*)(\d{1,2})(、)(\s*)/;
 const QUOTE_RE = /^(\s*)(>)(\s+)/;
 
 /**
@@ -145,6 +146,17 @@ export function applyListContinuation(view: EditorView): boolean {
     // 空项:删除光标前的整段前缀(含缩进),退出列表。
     const lineStartAbs = $from.start() + lineStartOffset;
     view.dispatch(state.tr.delete(lineStartAbs, $from.pos).scrollIntoView());
+    return true;
+  }
+
+  // 顶层引用行接续成独立段落:引用与之后的评论各占一段,单行段落的引用缩进
+  // 只是段落属性,输入法组字时无需撤掉,在下方评论里打中文时引用不会左右跳;
+  // 发送文本不变(顶层段落与 hardBreak 都序列化为换行)。待办 / 文本列表
+  // 仍插 hardBreak:顶层段落开头的 `- ` / `1. ` 会被提升为结构化列表。
+  if (QUOTE_RE.test(lineText) && $from.depth === 1 && $from.parent.type.name === 'paragraph') {
+    const tr = state.tr.split($from.pos);
+    tr.insertText(continuation.insert);
+    view.dispatch(tr.scrollIntoView());
     return true;
   }
 

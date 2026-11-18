@@ -7,6 +7,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { managedConfig, runtimeEnv } from './managed.mjs';
 import { prepare, main, run, packageHash, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 import {acquire} from './lock.mjs';
+import {prepareDatabasePlan, validateDatabasePlan, runDatabasePlan} from './database-upgrade.mjs';
+import {preflightSharedStartup} from './startup-preflight.mjs';
+import {activatePreparedCandidate} from './activation-stages.mjs';
 export {acquire} from './lock.mjs';
 import {installFixedRuntime, preflightFixedRuntime} from './fixed-install.mjs';
 import { nativeIdentity, verifyDeveloperSignature, designatedRequirement } from './native-capabilities.mjs';
@@ -151,6 +154,7 @@ function assertFixedAppStopped(app) {
 function start(c, release, { mock = false, beforeSpawn = () => {} } = {}) {
   check(process.stdin.isTTY, 'Run the personal developer launcher in Terminal; a live TTY is required for the repository startup wrapper');
   verifyRelease(release);
+  if (!mock) preflightSharedStartup(c, release);
   const isolated = mock || c.runtime.mode !== 'shared';
   if (isolated) {
     const needsCandidateGuard = mock || c.automatic.mock === true;
@@ -380,12 +384,13 @@ export function validateManualUpgrade(report, c, state, release) {
     report.dataDir === c.runtime.dataDir && report.region === c.region, 'Manual upgrade identity/profile changed');
   check(release.monitorProtocol === 1 && report.smoke?.ready === true && report.smoke.releaseId === release.id,
     'Manual upgrade needs a successful isolated startup for this candidate');
-  check(release.migrations === state.good.migrations && !release.dbScript,
+  if (report.databaseUpgrade) validateDatabasePlan(report.databaseUpgrade, c, state.good, release);
+  else check(release.migrations === state.good.migrations && !release.dbScript,
     'Manual upgrade does not permit migration changes or private database scripts');
   check(!state.rejected.some(r => r.id === release.id), 'Candidate was rejected; inspect before retrying');
   return release;
 }
-async function prepareManualUpgrade(file, reportFile, output) {
+async function prepareManualUpgrade(file, reportFile, output, databasePlanFile) {
   const c = config(file), unlock = acquire(path.join(root(c), 'prepare.lock'));
   try {
     check(c.automatic.enabled !== true, 'Keep automatic switching disabled');
@@ -393,11 +398,14 @@ async function prepareManualUpgrade(file, reportFile, output) {
     const state = journal(c).read(), report = verifyReport(reportFile);
     check(state.phase === 'stable' && report.state === 'checked', 'Finish checks/recovery before manual preparation');
     const release = releaseDescriptor(report.directory);
-    check(release.migrations === state.good.migrations && !release.dbScript, 'Migration changes need a separate migration workflow');
+    const databaseUpgrade = databasePlanFile ? validateDatabasePlan(read(databasePlanFile), c, state.good, release) : undefined;
+    if (databaseUpgrade) runDatabasePlan(databaseUpgrade, 'preflight');
+    else check(release.migrations === state.good.migrations && !release.dbScript, 'Migration changes need a separate migration workflow');
     check(release.monitorProtocol === 1, 'Candidate lacks host health protocol');
     check(!state.rejected.some(r => r.id === release.id), 'Candidate was previously rejected');
     const old = snapshot(c, state.good);
     check(old.pid && old.ready && !old.unknown, 'Manual upgrade needs an observed ready baseline');
+    preflightSharedStartup(c, release, databaseUpgrade);
     preflightInstallation(c, release);
     run(c.runtime.node, ['scripts/ensure-dev-runtime-assets.mjs'], report.directory);
     verifyUpgradeSnapshot(c, report);
@@ -405,7 +413,7 @@ async function prepareManualUpgrade(file, reportFile, output) {
     verifyUpgradeSnapshot(c, report);
     verifyRelease(release);
     durableWrite(output, { kind: 'personal-manual-upgrade', checked: true, buildReport: path.resolve(reportFile),
-      baseline: state.good, candidate: release, dataDir: c.runtime.dataDir, region: c.region,
+      baseline: state.good, candidate: release, dataDir: c.runtime.dataDir, region: c.region, databaseUpgrade,
       smoke: { ...proof, ready: true, releaseId: release.id }, rollbackPolicy: 'manual' });
   } finally { unlock(); }
 }
@@ -417,6 +425,8 @@ function manualCandidate(c, store, manualFile) {
   const manual = validateManualUpgrade(report, c, state, release);
   check(manual.id !== state.good.id && manual.directory !== state.good.directory, 'Candidate is already selected');
   verifyRelease(manual); verifyRelease(state.good);
+  if (report.databaseUpgrade) runDatabasePlan(report.databaseUpgrade, 'preflight');
+  preflightSharedStartup(c, manual, report.databaseUpgrade);
   preflightInstallation(c, manual);
   return { manual, baseline: state.good };
 }
@@ -541,13 +551,31 @@ async function superviseLocked(file, c, store, bootstrapFile, manualFile, onVeri
     const existing = snapshot(c, s.good); check(!existing.unknown && !existing.pid && !hasLaunchRunner(c, s.good), 'A personal application is already running');
     let v = manual || bootstrap || (c.automatic.enabled === true ? candidate(c, s) : null);
     if (v && !manual && !bootstrap) {
-      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); preflightInstallation(c, v); }
+      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); preflightSharedStartup(c, v); preflightInstallation(c, v); }
       catch(e) { status(c, 'stale-candidate', {error:e.message}); v = null; }
     }
     if (v) {
       if (manual) store.beginManual(v, { prepared: true, stopped: true, manualRequested: true, smokeVerified: true, profileVerified: true });
       else store.begin(v, { compatible: true, prepared: true, idle: true, stopped: true });
-      try { current = await trial(c, store, v); } catch (e) { status(c, store.read().phase, { error: e.message }); }
+      try {
+        const databaseUpgrade = manualFile ? read(manualFile).databaseUpgrade : undefined;
+        current = await activatePreparedCandidate(store, v, {
+          databasePlan: databaseUpgrade,
+          migrate: plan => runDatabasePlan(plan, 'apply'),
+          launch: release => trial(c, store, release),
+          record: (stage, extra = {}) => {
+            const event = {at:Date.now(), candidate:v.id, stage, ...extra};
+            fs.appendFileSync(path.join(root(c), 'activation-events.jsonl'), JSON.stringify(event) + '\n', {mode:0o600});
+            status(c, 'activation-stage', event);
+          },
+        });
+      } catch (e) {
+        if (store.read().phase === 'trial') store.reject(e.message);
+        status(c, store.read().phase, { error: e.message });
+        // Preserve safe old-version recovery for failures before data changes.
+        // A migrated/manual blocked trial must retain the original failure.
+        if (store.read().phase !== 'recovering') throw e;
+      }
     }
   }
   s = store.read();
@@ -595,7 +623,7 @@ async function superviseLocked(file, c, store, bootstrapFile, manualFile, onVeri
       pluginRequests.add(current.launched.generation);
     }
     if (v && h?.healthy && h.busy === false && h.idle === true) {
-      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); preflightInstallation(c, v); }
+      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); preflightSharedStartup(c, v); preflightInstallation(c, v); }
       catch (e) { status(c, 'stale-candidate', {error:e.message}); await sleep(60000); continue; }
       durableWrite(path.join(current.launched.dir, 'request.json'), { action: 'quit', generation: current.launched.generation, pid: current.pid, requireRemote: c.automatic.requireRemote, expiresAt: Date.now() + 10000 });
       // The host rechecks all activity and exits normally. Silence is not an acknowledgement.
@@ -633,9 +661,16 @@ export async function automaticCommand(command, options) {
   if (command === 'auto-check') return automaticCheck(options.config);
   if (command === 'auto-launch') return supervise(options.config);
   if (command === 'auto-bootstrap') { check(options.report, '--report required'); return supervise(options.config, options.report); }
+  if (command === 'database-plan') {
+    check(options.report && options.out && options['approve-database-upgrade'] === 'yes', 'Database upgrade requires explicit --approve-database-upgrade yes');
+    const c = config(options.config), state = journal(c).read(), build = verifyReport(options.report);
+    check(state.phase === 'stable' && build.state === 'checked', 'Prepare a checked candidate and stable baseline');
+    verifyUpgradeSnapshot(c, build);
+    return prepareDatabasePlan(c, state.good, releaseDescriptor(build.directory), build, path.resolve(options.out), { pr: options['approve-unmerged-migration-pr'] ? Number(options['approve-unmerged-migration-pr']) : undefined, buildReport: path.resolve(options.report) });
+  }
   if (command === 'manual-check') {
     check(options.report && options.out, '--report and --out required');
-    return prepareManualUpgrade(options.config, options.report, path.resolve(options.out));
+    return prepareManualUpgrade(options.config, options.report, path.resolve(options.out), options['database-plan']);
   }
   if (command === 'manual-activate') {
     check(options.report, '--report required');

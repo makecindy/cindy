@@ -1,6 +1,9 @@
+import { bindHostedAttachmentPreservation } from '../../maker-host/attachmentPreservation.js';
+import { remoteAttachmentPreservation, ATTACHMENT_PRESERVATION_PATH } from '../attachmentPreservation.js';
 import type { GeneratedImageUpstream } from '../../cindy-media/generatedImageJournal';
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { RemoteTurnTerminalOwnership, startsRemoteProductTurn } from '../turnLifecycle';
+import { NATIVE_HISTORY_CHECKPOINT, parseNativeHistoryCommand, type NativeHistoryCheckpointSnapshot } from '../nativeHistoryTransfer';
 import { isProductTurnDoneEvent } from '@cindy/maker-shared/turn-continuation';
 import { parseProviderSharePeer, providerShareGuestPeer } from '@cindy/device-link';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits, type RemoteAgentLimitUsage } from '../../../shared/remoteAgentLimits.js';
@@ -56,7 +59,7 @@ import {
   type RemoteAgentReverseRequest,
   type RemoteAgentTeardownReason,
 } from '@cindy/device-link';
-import { TurnDispatchRejectedError, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
+import { AgentNotAuthenticatedError, AgentStartupStoppedError, TurnDispatchRejectedError, type AgentEvent, type AgentSessionHandle, type SendOptions, type DeviceHostedLinkActivity, type InteractionRequest, type ForkSdkSessionOptions, type ForkSdkSessionResult } from '@cindy/maker-core';
 
 import { EXEC_SERVER_WS_PATH } from '../controller/execServerRelay';
 import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke, type RemoteAgentPoller } from '../controller/runClient';
@@ -78,7 +81,8 @@ import {
   reshareKeyForGuest,
   type RelayRunFailure,
 } from './groupRelay';
-import { PROVIDER_GROUP_LOCAL_MEMBER_KEY } from '../../../shared/providerGroup';
+import { PROVIDER_GROUP_LOCAL_MEMBER_KEY, type ProviderGroupUsageLimit } from '../../../shared/providerGroup';
+import { decideProviderGroupFailure, providerGroupFailureSignals, providerGroupUnavailableError } from '../../provider-group/failurePolicy';
 import { isAccountUsageLimitError } from '../../maker-ipc/usageLimitAutoResume';
 import { projectPathText } from '../executor/workspace';
 import { listManagedSkillFiles, managedSkillDigest } from '../managedSkillDigest';
@@ -214,7 +218,8 @@ export interface RemoteAgentHostDeps {
    * 时据此复制；组所在电脑中转时据此替组内电脑补文件。
    */
   managedSkills?(): Promise<Array<{ command: string; dir: string }>>;
-  nativeHistory?(scope: string, command: unknown, workingDir: string, assertCurrent: () => void): Promise<unknown>;
+  nativeHistory?(scope: string, command: unknown, workingDir: string, assertCurrent: () => void,
+    checkpoint?: NativeHistoryCheckpointSnapshot): Promise<unknown>;
   fastPolicy?(controller: string, command: import('@cindy/device-link').RemoteAgentFastPolicy): Promise<unknown>;
   /** Prepare native bytes; retain recovery ownership only for receipted controllers. */
   prepareImageEvent?(hostSessionId: string, event: AgentEvent, upstream: GeneratedImageUpstream | undefined, retainForRecovery: boolean): Promise<AgentEvent>;
@@ -225,8 +230,6 @@ export interface RemoteAgentHostDeps {
   forkHosted?(kind: RemoteAgentKind, options: ForkSdkSessionOptions): Promise<ForkSdkSessionResult>;
   /** 本机仍允许该控制端远程控制(总开关打开且未撤销)。 */
   isControllerAuthorized(controller: string): boolean;
-  /** 同账号的这台电脑被关了「用本机模型」：拒绝时报「没有开放供应商」而不是「不能远程控制」。 */
-  isControllerModelUseRevoked?(controller: string): boolean;
   /**
    * 控制端是否是本机同账号的设备。不提供 = 全部按同账号处理(现有接线)。返回 guest 时：
    * 载荷按白名单复核、只开放已隔离的 Agent、只能恢复自己建立的会话。
@@ -283,6 +286,8 @@ export interface RemoteAgentHostDeps {
    * 组内电脑运行，本机中转。不提供 = 受邀者的任务一律在本机运行(现有接线)。
    */
   groupRelay?: RemoteAgentGroupRelayDeps;
+  /** Owner-side probe only: another account inside this exact shared provider can accept the task. */
+  canSwitchLocalAccount?(input: { providerId: string; hostSessionId: string; model: string }): Promise<boolean>;
   groupContinuity?(): boolean;
   /** Group owner chooses an executor; executor accepts a bounded grant from its authenticated owner peer. */
   directGuestExecution?: {
@@ -363,7 +368,17 @@ export type GroupRelayPlan =
   | { kind: 'local'; load?: GroupRelayLoad }
   | ({ kind: 'member'; load?: GroupRelayLoad } & GroupRelayMember)
   /** 组里没有能接这个任务的电脑。 */
-  | { kind: 'unavailable' };
+  | { kind: 'unavailable'; full?: true; usageLimit?: ProviderGroupUsageLimit };
+
+function groupUnavailableAfterStartup(
+  plan: Extract<GroupRelayPlan, { kind: 'unavailable' }>,
+  failure: unknown,
+): Error {
+  const error = providerGroupUnavailableError(plan);
+  return failure instanceof Error && (failure.name === 'AgentStartupStoppedError' || failure.name === 'AgentNotAuthenticatedError')
+    ? new AgentStartupStoppedError(error)
+    : error;
+}
 
 export interface RemoteAgentGroupRelayDeps {
   bindFastPolicy?(input: { group: string; deviceId?: string | null; sessionId: string; relay?: string }): Promise<void>;
@@ -448,6 +463,8 @@ interface Run {
   forkWorkspaceIds?: string[];
   imageDeliveryEpoch?: number;
   acceptsImageDeliveryReceipts?: boolean;
+  acceptsNativeHistoryBackup?: boolean;
+  nativeHistoryCheckpoint?: { token: string; nativeId: string; assistantSha256: string };
   owner: unknown;
   kind: RemoteAgentKind;
   log: EventLog;
@@ -467,6 +484,7 @@ interface Run {
   closing: boolean;
   handle?: AgentSessionHandle;
   tunnel?: RunTunnel;
+  releaseAttachmentPreservation?: () => void;
   execStartupBatches?: Map<string, ReturnType<typeof createExecServerStartupBatch>>;
   attachmentsDir: string;
   /** 影子工作区根(按 hostSessionId 复用，任务收尾后清理)。 */
@@ -529,8 +547,8 @@ interface Run {
   abortRequested?: boolean;
   /** 本机 Agent 上一次报来的「正在运行一轮」。 */
   turnRunning?: boolean;
-  /** 同一次发送的限额 RPC 失败与终态事件共用一次交付，下一次发送时作废。 */
-  quotaFailure?: { delivery: Promise<void>; deliver?: () => void };
+  /** 同一次发送的账号认证／限额 RPC 失败与终态事件共用一次交付，下一次发送时作废。 */
+  accountFailure?: { delivery: Promise<void>; deliver?: () => void };
   lastSendCallId?: string;
 }
 
@@ -585,6 +603,19 @@ export function remoteAgentErrorInfo(error: unknown): RemoteAgentErrorInfo {
   const code = /^\[([A-Z][A-Z0-9_]+)\]/.exec(err.message)?.[1]
     ?? (typeof rawCode === 'string' && rawCode ? rawCode : 'AGENT_ERROR');
   return { code: code.slice(0, 128), message: err.message.slice(0, 2048), name: err.name };
+}
+
+/** Native terminal events prove the attempt ended; share the existing failure policy. */
+function isAccountFailure(failure: RelayRunFailure): boolean {
+  const decision = decideProviderGroupFailure(failure, 'run');
+  return isAccountUsageLimitError(failure) || (decision.action === 'switch' && decision.cause === 'auth');
+}
+
+/** This stable allocator rejection happens before native send. A generic 401 or
+ * auth-looking exception after invocation is not proof that work was rejected. */
+function isAccountSendFailure(failure: RemoteAgentErrorInfo): boolean {
+  return isAccountUsageLimitError(failure) || failure.code === 'SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED'
+    || failure.message.startsWith('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED]');
 }
 
 /** 本机侧的任务 id：控制端设备 + 控制端任务 id 派生，避免与本机自己的任务撞 id。 */
@@ -1635,6 +1666,21 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         return;
       }
       run.tunnel = tunnel;
+      if (payload.acceptsAttachmentPreservation && payload.virtualWorkspace && !payload.options.localApplication?.hostToolsOnly) {
+        const assertCurrent = () => {
+          if (run.closing || !deps.isOwnerCurrent(run.owner) || !deps.isControllerAuthorized(run.controller)
+            || !delegatedRunAllowed(run)) throw new Error('Attachment recovery owner changed');
+        };
+        run.releaseAttachmentPreservation = bindHostedAttachmentPreservation(hostSessionId,
+          remoteAttachmentPreservation(async (request, signal) => {
+            assertCurrent();
+            const response = await reverseHttp(run, { method: 'POST', path: ATTACHMENT_PRESERVATION_PATH,
+              headers: [['content-type', 'application/json']], body: Buffer.from(JSON.stringify(request)) }, signal);
+            assertCurrent();
+            if (response.status !== 200 || !response.body) throw new Error('Attachment preservation unavailable');
+            return JSON.parse(response.body.toString('utf8'));
+          }, assertCurrent));
+      }
       // 必须先发布映射，再启动 Agent。Codex startSession 会在 started 之前读取 exec-server 环境。
       if (payload.virtualWorkspace) append(run, { t: 'state', state: {
         workspaceProjection: { shadowDir, mirrorRoot, extraDirs, writableDirs, virtualWorkspace: true, ...(previousMirrorRoots.length ? { previousMirrorRoots } : {}) },
@@ -1762,8 +1808,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
    */
   async function offerSwitchAfterResumeFailure(run: Run, member: GroupRelayMember, error: unknown, model: string): Promise<void> {
     if (!run.acceptsGroupSwitch || run.closing) return;
-    const message = error instanceof Error ? error.message : String(error);
-    const token = await groupSwitchOfferFor(run, member, { message }, model, 'start').catch(() => null);
+    const stopped = error instanceof AgentStartupStoppedError || error instanceof AgentNotAuthenticatedError;
+    const token = await groupSwitchOfferFor(run, member, providerGroupFailureSignals(error), model, 'start', stopped).catch(() => null);
     if (token && !run.closing) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
   }
 
@@ -1787,6 +1833,11 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       reserve: true,
       reshareKey: reshareKeyForGuest(run.controller),
     }).catch(() => null);
+    if (next?.kind === 'unavailable' && (next.full || next.usageLimit) && !run.closing) {
+      append(run, { t: 'start-failed', error: remoteAgentErrorInfo(groupUnavailableAfterStartup(next, error)) });
+      await finishRun(run, 'start-failed', 'navigation', false);
+      return true;
+    }
     if (next?.kind !== 'member' || run.closing) {
       if (next && next.kind !== 'unavailable') next.load?.release();
       return false;
@@ -1802,6 +1853,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run.guestRoute = undefined;
     run.ownerRoute?.release();
     run.ownerRoute = undefined;
+    run.releaseAttachmentPreservation?.();
+    run.releaseAttachmentPreservation = undefined;
     await run.tunnel?.close().catch(() => undefined);
     run.execStartupBatches?.clear();
     await imagePreparation.get(run);
@@ -1826,7 +1879,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     try {
       for await (const event of handle.events()) {
         if (run.closing) break;
-        if (!run.abortRequested && startsRemoteProductTurn(event)) run.activeTurn = true;
+        if (startsRemoteProductTurn(event)) {
+          run.nativeHistoryCheckpoint = undefined;
+          if (!run.abortRequested) run.activeTurn = true;
+        }
         const currentTerminal = (run.terminalOwnership ??= new RemoteTurnTerminalOwnership()).observe(event);
         if (currentTerminal) {
           run.activeTurn = false;
@@ -1834,9 +1890,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         }
         meterRunUsage(run, handle.model, event);
         const failure = currentTerminal ? relayRunFailureOf(event) : null;
-        if (failure && isAccountUsageLimitError(failure)) {
+        if (failure && isAccountFailure(failure)) {
           groupTurnFailed = true;
-          await deliverQuotaFailure(run, localGroupMember(run.providerId ?? ''), failure, handle.model, () => {
+          await deliverAccountFailure(run, localGroupMember(run.providerId ?? ''), failure, handle.model, () => {
             append(run, { t: 'event', event });
           });
           continue;
@@ -1851,11 +1907,24 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             if (run.closing) break;
             if (token) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
           } else if (isProductTurnDoneEvent(event)) {
-            noteGroupSwitchTurnEnded(run, groupTurnFailed || !!run.quotaFailure);
+            noteGroupSwitchTurnEnded(run, groupTurnFailed || !!run.accountFailure);
             groupTurnFailed = false;
           }
         }
-        append(run, { t: 'event', event });
+        const data = event.data as Record<string, unknown> | null;
+        if (run.acceptsNativeHistoryBackup && currentTerminal && event.source === 'pi'
+          && isProductTurnDoneEvent(event) && data?.type === 'pi/agent_settled'
+          && data.status === 'completed' && data.silentStop !== true && typeof data.result === 'string'
+          && !handle.isTurnRunning?.()) {
+          const checkpoint = { token: randomUUID(), nativeId: handle.id,
+            assistantSha256: createHash('sha256').update(data.result).digest('hex') };
+          run.nativeHistoryCheckpoint = checkpoint;
+          append(run, { t: 'event', event: { ...event, data: { ...data,
+            [NATIVE_HISTORY_CHECKPOINT]: { token: checkpoint.token, runId: run.id },
+          } } });
+        } else {
+          append(run, { t: 'event', event });
+        }
         emitState(run);
       }
     } catch (error) {
@@ -1865,15 +1934,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     // Native close can end this stream. Its caller owns teardown; the event pump
     // must not join that finish and become part of a close -> pump -> close wait.
     if (run.closing) return;
-    // RPC 的限额拒绝可能先到、没有原生终态；流结束或抛错都不能抢先作废切换入口。
-    await waitForQuotaFailureDelivery(run).catch(error => {
+    // RPC 的账号故障拒绝可能先到、没有原生终态；流结束或抛错都不能抢先作废切换入口。
+    await waitForAccountFailureDelivery(run).catch(error => {
       if (!streamFailed) streamError = error;
       streamFailed = true;
     });
     // 受邀者的任务按组分到了本机这一台、一轮进行中本机的 Agent 意外结束(进程退出、事件流中断)：与组内电脑上的
     // 任务意外结束一样可以换一台——凭证排在收尾前面，收尾按出错处理，受邀者那边才会把这一轮当作失败。
     const midTurn = run.activeTurn === true;
-    if (run.acceptsGroupSwitch && !run.closing && midTurn && !groupTurnFailed && !run.quotaFailure) {
+    if (run.acceptsGroupSwitch && !run.closing && midTurn && !groupTurnFailed && !run.accountFailure) {
       const info = streamFailed ? remoteAgentErrorInfo(streamError) : RELAY_UNAVAILABLE_ERROR;
       const token = await groupSwitchOfferFor(run, localGroupMember(run.providerId!), {
         reason: 'remote_agent_closed',
@@ -2045,9 +2114,43 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     failure: RelayRunFailure,
     model: string,
     phase: 'start' | 'run' = 'run',
+    localAccountRecovery = true,
   ): Promise<string | null> {
     const relayDeps = deps.groupRelay;
     if (!relayDeps || !run.providerId || !run.hostSessionId) return null;
+    // An ordinary shared provider can grow into a local account pool without becoming a
+    // computer group. Its old native sessions still need a handoff before selecting again.
+    // Reuse the guest/task switch token and round budget; never move an old native ID.
+    const round = groupSwitchRounds.get(key(run.controller, run.hostSessionId));
+    const decision = decideProviderGroupFailure(failure, phase);
+    if (localAccountRecovery && member.memberKey === PROVIDER_GROUP_LOCAL_MEMBER_KEY && run.acceptsGroupSwitch
+      && deps.canSwitchLocalAccount && decision.action === 'switch'
+      && (decision.cause === 'usage-limit' || decision.cause === 'auth')
+      && (!round || now() - round.at > GROUP_SWITCH_ROUND_MS || !round.tried.has(member.memberKey))) {
+      const sendCallId = run.lastSendCallId;
+      const authorizedModel = run.authorizedModel;
+      const providerId = run.providerId;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let available = false;
+      try {
+        available = await Promise.race([
+          deps.canSwitchLocalAccount({ providerId: run.providerId, hostSessionId: run.hostSessionId, model }),
+          new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 2_000); }),
+        ]);
+      } catch { /* An optional probe cannot replace the original failure. */ }
+      finally { if (timer) clearTimeout(timer); }
+      // A stopped/replaced turn cannot issue a late token or consume the new
+      // turn's local handoff. Model changes likewise invalidate the old probe.
+      if (run.closing || run.abortRequested || run.lastSendCallId !== sendCallId
+        || run.authorizedModel !== authorizedModel || run.providerId !== providerId
+        || !deps.isOwnerCurrent(run.owner) || !deps.isControllerAuthorized(run.controller)
+        || !deps.providerAccess?.isAllowed(run.providerId, run.controller, model, run.sessionId)) return null;
+      if (available) {
+        const exclude = noteGroupSwitchTried(run, member);
+        exclude.delete(member.memberKey);
+        return issueGroupSwitchToken(run, exclude);
+      }
+    }
     const canSwitch = phase === 'start'
       ? relayDeps.noteStartFailure(run.providerId, member, failure.message ?? '', model)
       : relayDeps.noteRunFailure(run.providerId, member, failure, model);
@@ -2073,33 +2176,33 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   /**
-   * SDK 的限额终态与 send() 拒绝可能按任意顺序到达。先交付凭证与唯一一次终态，再返回 RPC 失败，
+   * SDK 的账号故障终态与 send() 拒绝可能按任意顺序到达。先交付凭证与唯一一次终态，再返回 RPC 失败，
    * 控制端才能在 active turn 仍在时接管；迟到的同次终态不再触发第二次交接或续跑。
    */
-  function deliverQuotaFailure(
+  function deliverAccountFailure(
     run: Run,
     member: GroupRelayMember,
     failure: RelayRunFailure,
     model: string,
     deliver?: () => void,
   ): Promise<void> {
-    if (run.quotaFailure) {
+    if (run.accountFailure) {
       // 选下一台期间原生终态到了，优先保留它的结构化字段与事件来源。
-      if (deliver) run.quotaFailure.deliver = deliver;
-      return run.quotaFailure.delivery;
+      if (deliver) run.accountFailure.deliver = deliver;
+      return run.accountFailure.delivery;
     }
     const pending = { delivery: Promise.resolve(), deliver };
-    run.quotaFailure = pending;
+    run.accountFailure = pending;
     pending.delivery = Promise.resolve().then(async () => {
       const token = run.relay || run.acceptsGroupSwitch || run.groupLoad
         ? await groupSwitchOfferFor(run, member, failure, model).catch(() => null)
         : null;
-      if (run.closing || run.quotaFailure !== pending) return;
+      if (run.closing || run.accountFailure !== pending) return;
       if (token) append(run, { t: 'state', state: { [GROUP_SWITCH_STATE_KEY]: token } });
       if (pending.deliver) pending.deliver();
       else append(run, {
         t: 'event',
-        event: { type: 'error', source: run.kind, data: { ...failure, isTerminal: true, usageLimit: true } },
+        event: { type: 'error', source: run.kind, data: { ...failure, isTerminal: true, ...(isAccountUsageLimitError(failure) ? { usageLimit: true } : {}) } },
       });
       emitState(run);
     });
@@ -2107,12 +2210,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   /** 只供被动结束等待；显式关闭仍直接走 finishRun，不等待组选下一台。 */
-  async function waitForQuotaFailureDelivery(run: Run): Promise<void> {
-    let pending = run.quotaFailure;
+  async function waitForAccountFailureDelivery(run: Run): Promise<void> {
+    let pending = run.accountFailure;
     while (!run.closing && pending) {
       await pending.delivery;
-      if (run.quotaFailure === pending) return;
-      pending = run.quotaFailure;
+      if (run.accountFailure === pending) return;
+      pending = run.accountFailure;
     }
   }
 
@@ -2132,7 +2235,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         run.activeTurn === true, run.abortRequested === true);
       run.abortRequested = false;
       run.activeTurn = true;
-      run.quotaFailure = undefined;
+      run.accountFailure = undefined;
       run.lastSendCallId = callId;
     }
     const opts = args[1];
@@ -2227,15 +2330,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       let turnFailed = false;
       /** 失败时先(异步)判定要不要发凭证，期间那台转来的内容暂存，凭证排在错误前面。 */
       const holdForGroupSwitch = (failure: RelayRunFailure, deliver: () => void): void => {
-        const quota = isAccountUsageLimitError(failure);
-        if (quota && held) {
-          void deliverQuotaFailure(run, current, failure, backend.model ?? payload.options.model, deliver);
+        const accountFailure = isAccountFailure(failure);
+        if (accountFailure && held) {
+          void deliverAccountFailure(run, current, failure, backend.model ?? payload.options.model, deliver);
           return;
         }
-        const queue: Array<() => void> = quota ? [] : [deliver];
+        const queue: Array<() => void> = accountFailure ? [] : [deliver];
         held = queue;
-        const delivery = quota
-          ? deliverQuotaFailure(run, current, failure, backend.model ?? payload.options.model, deliver)
+        const delivery = accountFailure
+          ? deliverAccountFailure(run, current, failure, backend.model ?? payload.options.model, deliver)
           : groupSwitchOfferFor(run, current, failure, backend.model ?? payload.options.model);
         void delivery
           .catch(() => null)
@@ -2265,8 +2368,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           });
           void finishRun(run, reason, 'navigation', false, true);
         };
-        if (run.quotaFailure) {
-          void waitForQuotaFailureDelivery(run).then(() => emit(finish), finish);
+        if (run.accountFailure) {
+          void waitForAccountFailureDelivery(run).then(() => emit(finish), finish);
           return;
         }
         // 一轮进行中那台的任务意外结束(离线、崩溃等)：与终态错误一样可以换一台。
@@ -2306,13 +2409,13 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           }
           if (failure) {
             turnFailed = true;
-            if (!held || isAccountUsageLimitError(failure)) {
+            if (!held || isAccountFailure(failure)) {
               holdForGroupSwitch(failure, deliver);
               return;
             }
           }
           if (isProductTurnDoneEvent(typed)) {
-            noteGroupSwitchTurnEnded(run, turnFailed || !!run.quotaFailure);
+            noteGroupSwitchTurnEnded(run, turnFailed || !!run.accountFailure);
             turnFailed = false;
           }
           emit(deliver);
@@ -2479,6 +2582,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           reserved = next.load;
         } else if (next?.kind === 'local') {
           next.load?.release();
+        } else if (next?.kind === 'unavailable' && (next.full || next.usageLimit)) {
+          lastError = groupUnavailableAfterStartup(next, lastError);
         }
       }
     }
@@ -2528,19 +2633,19 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         ? error.info.code === 'TURN_DISPATCH_REJECTED' : info.code === 'TURN_DISPATCH_REJECTED';
       if (dispatchRejected) info.code = 'TURN_DISPATCH_REJECTED';
       if (method === 'send' && run.lastSendCallId === callId && run.relay === relay) {
-        const quota = run.quotaFailure !== undefined || isAccountUsageLimitError(info);
-        const previous = dispatchRejected && !quota && !run.closing ? run.terminalOwnership?.rejectSend(callId) : undefined;
+        const accountFailure = run.accountFailure !== undefined || isAccountSendFailure(info);
+        const previous = dispatchRejected && !accountFailure && !run.closing ? run.terminalOwnership?.rejectSend(callId) : undefined;
         // A post-invocation timeout can still have accepted work. Preserve any
         // live turn, without rearming one already ended by a terminal or Stop.
         if (previous) {
           run.abortRequested = run.abortRequested === true || previous.aborted;
           run.activeTurn = !run.abortRequested && previous.active;
-        } else if (!sendInvoked || dispatchRejected || quota) {
+        } else if (!sendInvoked || dispatchRejected || accountFailure) {
           run.activeTurn = false;
         }
-        if (run.quotaFailure) await run.quotaFailure.delivery;
-        else if (isAccountUsageLimitError(info)) {
-          await deliverQuotaFailure(run, relay.member, info, relay.model ?? run.authorizedModel ?? '');
+        if (run.accountFailure) await run.accountFailure.delivery;
+        else if (isAccountSendFailure(info)) {
+          await deliverAccountFailure(run, relay.member, info, relay.model ?? run.authorizedModel ?? '');
         }
       }
       append(run, { t: 'result', callId, ok: false, error: info });
@@ -2617,6 +2722,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     run.guestRoute = undefined;
     run.ownerRoute?.release();
     run.ownerRoute = undefined;
+    run.releaseAttachmentPreservation?.();
+    run.releaseAttachmentPreservation = undefined;
     await run.tunnel?.close().catch(() => undefined);
     run.execStartupBatches?.clear();
     // Native image materialization must finish before the log becomes unreadable.
@@ -2836,18 +2943,18 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       const info = remoteAgentErrorInfo(error);
       if (error instanceof TurnDispatchRejectedError) info.code = error.code;
       if (method === 'send' && run.lastSendCallId === callId) {
-        const quota = run.quotaFailure !== undefined || isAccountUsageLimitError(info);
-        const previous = info.code === 'TURN_DISPATCH_REJECTED' && !quota && !run.closing
+        const accountFailure = run.accountFailure !== undefined || isAccountSendFailure(info);
+        const previous = info.code === 'TURN_DISPATCH_REJECTED' && !accountFailure && !run.closing
           ? run.terminalOwnership?.rejectSend(callId) : undefined;
         if (previous) {
           run.abortRequested = run.abortRequested === true || previous.aborted;
           run.activeTurn = !run.abortRequested && previous.active;
-        } else if (!sendInvoked || info.code === 'TURN_DISPATCH_REJECTED' || quota) {
+        } else if (!sendInvoked || info.code === 'TURN_DISPATCH_REJECTED' || accountFailure) {
           run.activeTurn = false;
         }
-        if (run.quotaFailure) await run.quotaFailure.delivery;
-        else if (isAccountUsageLimitError(info)) {
-          await deliverQuotaFailure(run, localGroupMember(run.providerId ?? ''), info, handle?.model ?? run.authorizedModel ?? '');
+        if (run.accountFailure) await run.accountFailure.delivery;
+        else if (isAccountSendFailure(info)) {
+          await deliverAccountFailure(run, localGroupMember(run.providerId ?? ''), info, handle?.model ?? run.authorizedModel ?? '');
         }
       }
       append(run, { t: 'result', callId, ok: false, error: info });
@@ -3156,12 +3263,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   async function handleRequest(controller: string, request: RemoteAgentRequest,
     signal?: AbortSignal, directLocked = false): Promise<unknown> {
-    if (!deps.isControllerAuthorized(controller)) {
-      if (deps.isControllerModelUseRevoked?.(controller)) {
-        fail('REMOTE_AGENT_PROVIDER_NOT_ALLOWED', 'this computer does not let you use its models');
-      }
-      fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
-    }
+    if (!deps.isControllerAuthorized(controller)) fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
     switch (request.op) {
       case 'native-history': {
         if (trustOf(controller) !== 'owner' || !deps.nativeHistory) fail('REMOTE_AGENT_UNSUPPORTED', 'native history transfer is unavailable');
@@ -3172,11 +3274,33 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           }
         };
         const hostSessionId = hostSessionIdFor(controller, request.sessionId);
+        const command = parseNativeHistoryCommand(request.command);
+        const workingDir = path.join(shadowSessionRoot(controller, hostSessionId), 'fs', 'workspace', ...Array.from({ length: MAX_ANCESTOR_LEVELS }, () => 'p'));
+        const backupScope = JSON.stringify(['backup', controller, request.sessionId]);
+        if (command.action === 'checkpoint-export') {
+          const run = requireRun(controller, command.runId);
+          const checkpoint = run.nativeHistoryCheckpoint;
+          const assertUnchanged = () => {
+            assertCurrent();
+            if (!run.acceptsNativeHistoryBackup || run.trust !== 'owner' || !deps.isOwnerCurrent(run.owner)
+              || run.sessionId !== request.sessionId || run.hostSessionId !== hostSessionId
+              || run.kind !== 'pi' || run.closing || run.activeTurn || run.handle?.isTurnRunning?.()
+              || !checkpoint || checkpoint.token !== command.checkpoint
+              || run.nativeHistoryCheckpoint !== checkpoint || run.handle?.id !== checkpoint.nativeId) {
+              fail('REMOTE_AGENT_BUSY', 'native history checkpoint is no longer current');
+            }
+          };
+          assertUnchanged();
+          return deps.nativeHistory!(backupScope, { action: 'export', kind: 'pi', nativeId: checkpoint!.nativeId },
+            workingDir, assertCurrent, { prefix: command.prefix, assistantSha256: checkpoint!.assistantSha256, assertUnchanged });
+        }
+        if ((command.action === 'read' || command.action === 'release') && command.backup) {
+          return deps.nativeHistory!(backupScope, command, workingDir, assertCurrent);
+        }
         // The controller closes the source run before requesting a snapshot. Never copy a live writer.
         for (const run of runs.values()) {
           if (run.controller === controller && run.hostSessionId === hostSessionId && run.closedAt === undefined) fail('REMOTE_AGENT_BUSY', 'close the running session before transferring its history');
         }
-        const workingDir = path.join(shadowSessionRoot(controller, hostSessionId), 'fs', 'workspace', ...Array.from({ length: MAX_ANCESTOR_LEVELS }, () => 'p'));
         const result = await deps.nativeHistory!(`${controller}:${request.sessionId}`, request.command, workingDir, assertCurrent);
         assertCurrent();
         return result;
@@ -3397,7 +3521,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           virtualWorkspace: true,
           localApplication: true,
           ...(deps.forkHosted ? { nativeFork: true } : {}),
-          ...(!guest && deps.nativeHistory ? { nativeHistoryTransfer: true } : {}),
+          ...(!guest && deps.nativeHistory ? { nativeHistoryTransfer: true, nativeHistoryBackup: true } : {}),
           ...(deps.imageArtifacts ? { imageRecovery: true, imageRecoveryRelay: true } : {}),
           // 能按受邀者隔离运行(供应商级授权与出站边界都已接上)，才接受组所在电脑中转过来的受邀者任务。
           ...(deps.providerAccess && deps.bindGuestProviderRoute ? { guestRelay: true } : {}),
@@ -3586,7 +3710,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               reserve: true,
               reshareKey: reshareKeyForGuest(controller),
             });
-            if (plan?.kind === 'unavailable') fail('REMOTE_AGENT_UNAVAILABLE', 'no computer can run this task right now');
+            if (plan?.kind === 'unavailable') {
+              if (plan.full || plan.usageLimit) throw providerGroupUnavailableError(plan);
+              fail('REMOTE_AGENT_UNAVAILABLE', 'no computer can run this task right now');
+            }
             if (plan?.kind === 'member' || plan?.kind === 'local') reserved = plan.load;
             if (plan?.kind === 'member') {
               const { memberKey, agentDeviceId, providerId: memberProviderId, sameAccount } = plan;
@@ -3653,6 +3780,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           sessionId: payload.sessionId,
           authorizedModel: payload.options.model,
           acceptsImageDeliveryReceipts: payload.acceptsImageDeliveryReceipts === true,
+          acceptsNativeHistoryBackup: payload.acceptsNativeHistoryBackup === true && trust === 'owner'
+            && request.agentKind === 'pi' && !relayKey && !payload.options.localApplication && !!deps.nativeHistory,
           controller,
           trust,
           ...(relayKey ? { relayKey } : {}),
@@ -3710,6 +3839,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           return {};
         }
         run.calls.set(request.callId, 'running');
+        if (request.method === 'send' || request.method === 'abort' || request.method === 'compactSession'
+          || request.method === 'commitRewindFiles' || request.method === 'setModel') {
+          run.nativeHistoryCheckpoint = undefined;
+        }
         run.activeAt = now();
         void call(run, request.callId, request.method, request.payload);
         return {};

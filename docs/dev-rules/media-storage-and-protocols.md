@@ -3,6 +3,20 @@
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：新增或修改图片、视频、音频、3D 模型的生成、导入、附件、缓存、
 > 持久化、协议解析、远程传递或回收逻辑之前
+> **适用路径**：`apps/desktop/src/main/cindy-media/**`、
+> `apps/desktop/src/main/cindy-proxy-media/**`、
+> `apps/desktop/src/main/{image,video,model,audioFile,localFile}Protocol.ts`、
+> `apps/desktop/src/main/cindy-brain/ghostMedia*.ts`、
+> `apps/desktop/src/main/device-link/*{M,m}edia*.ts`、
+> `apps/desktop/src/main/im/**/*{M,m}edia*.ts`、
+> `apps/desktop/src/main/maker-ipc/chatServerMedia.ts`、
+> `apps/desktop/src/main/mcp-integrations/{cindyProxyMedia,mediaToolResultFallback}.ts`、
+> `apps/desktop/src/main/{lightboxMediaActions,projectIconMedia}.ts`、
+> `apps/desktop/src/main/bot-import/memoryMedia.ts`、
+> `apps/desktop/src/main/session-share/mediaUrlRewrite.pure.ts`、
+> `apps/desktop/src/shared/{remoteMediaUrl,mediaInvocation}.ts`、
+> `apps/desktop/src/main/maker-host/{attachmentPreservation,oversized-attachment-recovery,oversizedAttachmentRecoveryCore}.ts`、
+> `apps/desktop/src/main/remote-agent/attachmentPreservation.ts`
 
 本文治理 Desktop 中由 Cindy 管理副本的媒体字节。Electron 协议与进程安全另见
 [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)，
@@ -48,6 +62,11 @@
     `im-attachments/wechat/sessions/<任务ID>/`。
   - 任务删除时，两者与上述四个渠道统一由 `removeImSessionAttachmentDirs` 清理。迁移这两个渠道前，
     先对齐本条规则。
+- 插件经 `cindy.tasks.send` / `cindy.targets.send` 转进任务的附件（例如微信群插件转发的照片、视频、文件）
+  按同一判据分流（`cindy-media/pluginMessageAttachments.ts`）：Host 按真实字节识别，总仓白名单内的图片与音视频
+  进总仓，其余按非媒体文件放进同一棵 `im-attachments/plugin/`（消息本身的文件领养进 `sessions/<任务ID>/`，
+  只给模型的参考文件留在 `staging/` 按龄回收）。细则见
+  [插件任务接口实现](plugin-task-api-implementation.md#消息附件)。
 
 ## 写入与记账
 
@@ -368,8 +387,11 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 - JSON 请求超过宿主入口内存阈值（`maxRequestBodyBytes`）时，先由 `collectRecoverableBody` 分块落 Host 私有临时文件，
   再恢复，不因固定的 128 MiB 内存门槛提前拒绝仍可恢复的历史。Codex 的 HTTP 入口／回退上限
   从 128 MiB 降为 42 MiB，Claude Code／Pi 保持 32 MiB；这些是新控制器无法完成恢复时的边界，
-  不是默认的主动控制触发线。带图但缺少 DB、有效任务绑定、任务已删除或属于远端时，只运行已注入的
-  预处理，不写本机附件路径；仍超宿主上限的请求走旧恢复链，无法恢复则本地拒绝。
+  不是默认的主动控制触发线。托管运行若已绑定控制端附件保存能力，预算计算留在模型运行端，
+  被移出的附件保存到任务所在电脑并返回可读的虚拟路径，无需在运行端伪造任务 DB 行。
+  兼容与故障处理见[远程 Agent 协议](protocol-compatibility/remote-agent.md#托管请求的附件预算与保存2026-11-17)。
+  没有该绑定且缺少 DB、有效任务绑定、任务已删除或属于 SSH 远端时，只运行已注入的
+  预处理，不写本机附件路径；仍超宿主上限且无法恢复则本地拒绝。
 - 旧恢复链继续用 `tokenizeStrings`、`recoverInlineAttachments` 分块扫描和解码，不另设固定的
   单附件体积门槛。临时写入按实际可用磁盘共享预算，预留 256 MiB，并为解析、解码和保存预留副本
   空间；磁盘不足返回明确的 507，可清理空间后重试，原始历史不变。**当前新控制器落盘后会整包

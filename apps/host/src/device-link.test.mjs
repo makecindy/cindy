@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import WebSocket, { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION } from '@cindy/device-link';
-import { readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.ts';
+import { AgentNetWorkerSocket } from '@cindy/agent-net';
+import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
+import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink } from './device-link.ts';
 import { createHostService } from './service.mjs';
 import { createEventHub } from './events.mjs';
@@ -52,6 +54,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const clients = [];
   let host, hold, release, writes = 0, duplicateNext = false;
   let source;
+  const modelChoices = [];
   t.after(async () => {
     clients.forEach(client => client.stop());
     await host?.stop();
@@ -91,6 +94,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const service = createHostService({
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
+    updateSession: async (id, patch) => {
+      modelChoices.push({ id, patch, origin: readDeviceLinkModelSelectionOrigin() });
+      return { deferred: true };
+    },
     input: { enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
@@ -102,6 +109,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
+    preparePiSkillRuntime: async (id, dir, route) => {
+      assert.equal(id, 'task'); assert.equal(dir, '/project');
+      if (route) assert.deepEqual(route, { model: 'pi-test', nextInputChars: 45_000 });
+    },
     createRuntimeSession: async () => { throw new Error('Not part of this transport test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
   });
@@ -123,6 +134,32 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  // 2026-11-18: exercise the real Host registry over the existing integration relay.
+  // A positive controller window on either picker channel or Skill preparation must fail before applying it.
+  const numericSelections = [
+    { channel: 'maker:set-model', args: ['task', 'small', null, null, { effort: null, fastMode: false, confirmedContextWindow: 100 }] },
+    { channel: 'maker:switch-session-agent', args: ['task', 'claude-code', 'small', null, null, false, { confirmedContextWindow: 100 }] },
+    { channel: 'maker:session:prewarm', args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: {}, confirmedContextWindow: 100 }] },
+  ];
+  for (const selection of numericSelections) {
+    const rejected = await clients[0].invoke('host', selection);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error.message, /PRECONDITION_FAILED/);
+  }
+  assert.deepEqual(modelChoices, []);
+  const stage = await clients[0].invoke('host', { channel: 'maker:set-model', args: ['task', 'small'] });
+  assert.deepEqual(stage.result, { deferred: true });
+  assert.deepEqual(modelChoices, [{ id: 'task', patch: { model: 'small' }, origin: 'owner' }]);
+
+  const prepared = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }] });
+  assert.deepEqual(prepared.result, { accepted: true, piRuntimePrepared: true }, JSON.stringify(prepared));
+  const switched = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { nextInputChars: 45_000 } }] });
+  assert.deepEqual(switched.result, { accepted: true, piRuntimePrepared: true, pendingRouteApplied: true });
+  const unsupported = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { agentDeviceId: 'other' } }] });
+  assert.equal(unsupported.ok, false);
   const received = clients.map(() => []);
   clients.forEach((client, i) => client.onFrame(frame => { if (frame.kind === 'push') received[i].push(frame); }));
   duplicateNext = true;
@@ -192,4 +229,109 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   release();
   await stopping;
   clients[1].stop(); await inFlight;
+});
+
+// An outage on the main connection must release only its own MCP App views and OAuth callers.
+test('keeps compatibility app callers alive when only the Agent-Net connection drops', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-app-routes-'));
+  configureAppDataDir(profile);
+  configureHostOwner({ userDataDir: profile, ownerId: 'test-app-routes' });
+  const sqlite = new Database(':memory:');
+  for (const table of [sessions, botSessionLinks, botProfiles]) {
+    sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  sqlite.exec("INSERT INTO sessions(id,title,source,status,created_at,updated_at) VALUES ('session','Fixture','desktop','active',1,1)");
+  const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(db, 'test-app-routes');
+
+  class Wire extends EventEmitter {
+    sent = [];
+    bufferedAmount = 0;
+    send(data) {
+      const frame = JSON.parse(data);
+      this.sent.push(frame);
+      if (frame.kind === 'hello') queueMicrotask(() => this.push({ kind: 'hello-ack', payload: {
+        serverProtocolVersion: PROTOCOL_VERSION, deviceId: 'host', userId: 'test-app-routes',
+      } }));
+    }
+    push(frame) { this.emit('message', JSON.stringify({ v: PROTOCOL_VERSION, ...frame })); }
+    close(code = 1000) { this.emit('close', code); }
+    knowsPeer(peer) { return peer === 'desktop'; }
+    supports(peer) { return this.knowsPeer(peer); }
+  }
+  const wire = () => {
+    const socket = new Wire();
+    setImmediate(() => socket.emit('open'));
+    return socket;
+  };
+  const { root, bootstrap } = createPrivateNetwork('Test Host network', generateIdentity('root-test'));
+  const secrets = new Map();
+  const releasedApps = [], releasedAuth = [];
+  let primary, compatibility;
+  t.mock.method(AgentNetWorkerSocket, 'open', async () => (primary = wire()));
+  const host = createHostDeviceLink({
+    profileDir: profile, version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    getToken: async () => 'synthetic-host', canRegister: () => true,
+    invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createWebSocket: () => (compatibility = wire()),
+    releaseAuthCaller: caller => releasedAuth.push(caller),
+    mcpApps: { invoke: async caller => caller, releaseCaller: async caller => { releasedApps.push(caller); } },
+    agentNet: {
+      base: () => 'https://test-agent-net.invalid', subject: () => 'test-app-routes',
+      deviceId: () => 'host', deviceName: () => 'Test Host',
+      readSecret: async key => secrets.get(key) ?? null,
+      writeSecret: async (key, value) => { secrets.set(key, value); },
+      enroll: async (_base, identity) => ({ rootPublicKey: bootstrap.rootPublicKey,
+        certificate: issueCertificate(root, { networkId: 'account:test', subject: 'test-app-routes', identity, role: 'member' }) }),
+      fetch: async () => new Response(null, { status: 404 }),
+      createWebSocket: async () => { throw new Error('No real Agent-Net relay in this test'); },
+      workerFile: () => 'fixture-worker.mjs', coreModule: async () => ({}), log: { info() {}, warn() {} },
+    },
+  });
+  t.after(async () => {
+    await host.stop();
+    clearCurrentDbClient(db); sqlite.close();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+
+  await host.setAgentNetEnabled(true);
+  await host.setEnabled(true);
+  await waitFor(() => host.state().status === 'online' && compatibility?.sent.some(frame => frame.kind === 'hello'));
+  for (const [socket, peer] of [[primary, 'desktop'], [compatibility, 'phone']]) {
+    socket.push({ kind: 'link-open', src: peer, id: 'link-' + peer,
+      payload: { controllerName: peer, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' } });
+    await waitFor(() => socket.sent.some(frame => frame.kind === 'link-accept'));
+    socket.push({ kind: 'invoke', src: peer, id: 'app-' + peer,
+      payload: { channel: 'maker:mcp-apps:v1', args: ['session', {}] } });
+    await waitFor(() => socket.sent.some(frame => frame.kind === 'invoke-result'));
+    assert.deepEqual(socket.sent.find(frame => frame.kind === 'invoke-result')?.payload, { ok: true, result: 'device:' + peer });
+  }
+  primary.close(1006);
+  assert.deepEqual(releasedApps, ['device:desktop']);
+  assert.deepEqual(releasedAuth, ['device:desktop']);
+
+  await host.setEnabled(false);
+  assert.deepEqual(releasedApps, ['device:desktop', 'device:phone']);
+  assert.deepEqual(releasedAuth, ['device:desktop', 'device:phone']);
+});
+
+// Unit: the authenticated transport determines who can ask Desktop Main for project
+// evidence. Persisted profile fields never select the privileged write adapter.
+test('routes project writes by their authenticated caller', async () => {
+  const writes = [];
+  const service = createHostService({ updateProjectInfo: (...args) => { writes.push(args); return {}; } });
+  const input = { create: true, projectKey: 'local:', repositoryUrl: 'https://gitlab.com/team/demo' };
+  const envelope = { requestId: 'from-main', input };
+  for (const caller of ['web:paired', 'device:phone']) {
+    assert.equal((await service('/api/project-info/desktop-set', envelope, { caller })).status, 403);
+    assert.equal((await service('/api/project-info/set', input, { caller })).status, 200);
+    assert.deepEqual(writes.pop(), [input, { legacyDesktop: false }]);
+  }
+  const local = { caller: 'local-api:host' };
+  await service('/api/project-info/set', input, local);
+  assert.deepEqual(writes.pop(), [input, { legacyDesktop: true }]);
+  await service('/api/project-info/desktop-set', envelope, local);
+  assert.deepEqual(writes.pop(), [input, { desktopRequest: 'from-main' }]);
 });

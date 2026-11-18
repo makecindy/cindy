@@ -12,37 +12,40 @@
  *
  * State is intentionally in-memory and per-instance. A process restart returns
  * every thread to the reactive retry path, and a model change clears the mark.
+ * An optional scope also clears the mark when the upstream changes, even when
+ * different providers use the same model name. Callers must supply it on both
+ * markActive and reconcile; existing unscoped conditions retain their behavior.
  */
 export interface ThreadStripController {
   /** 标记某 thread 进入主动剥离(记下当时的 model)。 */
-  markActive(threadId: string, model: string): void;
+  markActive(threadId: string, model: string, scope?: string): void;
   /**
    * 状态收敛(有副作用):若该 thread 已标记但 model 变了(切了模型/供应商),清除标记。
    * 每个请求周期在 shouldStrip 之前调用一次。
    */
-  reconcile(threadId: string, model: string): void;
+  reconcile(threadId: string, model: string, scope?: string): void;
   /** 纯读:该 thread 当前是否处于主动剥离状态(不修改任何状态)。 */
   shouldStrip(threadId: string): boolean;
   clear(threadId: string): void;
 }
 
 export function createThreadStripController(): ThreadStripController {
-  const activeByThread = new Map<string, string>();
+  const activeByThread = new Map<string, { model: string; scope?: string }>();
 
   return {
-    markActive(threadId, model) {
+    markActive(threadId, model, scope) {
       const tid = threadId.trim();
       const mid = model.trim();
       if (!tid || !mid) return;
-      activeByThread.set(tid, mid);
+      activeByThread.set(tid, { model: mid, scope });
     },
 
-    reconcile(threadId, model) {
+    reconcile(threadId, model, scope) {
       const tid = threadId.trim();
       const mid = model.trim();
       if (!tid || !mid) return;
-      const activeModel = activeByThread.get(tid);
-      if (activeModel && activeModel !== mid) {
+      const active = activeByThread.get(tid);
+      if (active && (active.model !== mid || active.scope !== scope)) {
         activeByThread.delete(tid);
       }
     },

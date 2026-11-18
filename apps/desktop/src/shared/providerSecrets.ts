@@ -100,6 +100,8 @@ const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
 /** Custom-provider runtime header blobs are main-only credential material. */
 export const CUSTOM_PROVIDER_HEADER_SECRET_PREFIX = 'provider_headers_';
 
+export const GHOST_QUARANTINED_OAUTH_PREFIX = 'ghost_quarantined_oauth_';
+
 /**
  * Whether the generic Renderer safeStorage bridge may access this logical
  * key. Main-only credentials use dedicated IPC that never returns plaintext.
@@ -113,6 +115,7 @@ export function isRendererAccessibleSafeStorageKey(storageKey: string): boolean 
     // read/store/remove calls must leave this entire namespace to Main.
     && !normalized.startsWith('bot_environment_')
     && !normalized.startsWith('ghost_alias_migration_')
+    && !normalized.startsWith(GHOST_QUARANTINED_OAUTH_PREFIX)
   );
 }
 

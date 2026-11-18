@@ -14,11 +14,12 @@ import { guardedOutboundFetch } from './maker-host/outbound-fetch.desktop.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { readReferencedClientWallpaperUrls } from './custom-wallpaper-settings.js';
 import { createDownloader } from './downloader/index.js';
+import { createDownloadProgressReporter } from './downloader/progressReporter.js';
 import { createLogger } from './logger.js';
 
 type OfficialWallpaper = keyof typeof manifest;
 type Asset = { sha256: string; bytes: number };
-type ProgressBytes = Pick<WallpaperDownloadProgress, 'loaded' | 'total'>;
+type ProgressBytes = Pick<WallpaperDownloadProgress, 'loaded' | 'total' | 'download'>;
 type Transfer = {
   promise: Promise<string | null>;
   progress: ProgressBytes;
@@ -57,8 +58,17 @@ async function ensureWallpaperAsset(
   if (!transfer) {
     const progress: ProgressBytes = { loaded: 0, total: asset.bytes };
     const listeners = new Set<(progress: ProgressBytes) => void>();
+    // `loaded` stays the raw byte count the tile draws (a retry truthfully restarts from
+    // zero); `download` adds the standard phase so assistive text can say why it restarted.
+    const reporter = createDownloadProgressReporter({
+      initialPhase: 'downloading',
+      total: asset.bytes,
+      throttleMs: 0,
+      emit: () => undefined,
+    });
     const report = (loaded: number) => {
       progress.loaded = Number.isFinite(loaded) ? Math.max(0, Math.min(loaded, asset.bytes)) : 0;
+      progress.download = reporter.snapshot();
       for (const listener of listeners) listener({ ...progress });
     };
     const operation = (async () => {
@@ -69,6 +79,7 @@ async function ensureWallpaperAsset(
         const cached = await readBoundedFileNoFollow(cachedPath, asset.bytes).catch(() => null);
         // Check durable media before even resolving the CDN: offline upgrades need no network config.
         if (cached && matchesWallpaperVideo(cached, asset)) {
+          reporter.setPhase('completed');
           report(asset.bytes);
           return url;
         }
@@ -94,9 +105,15 @@ async function ensureWallpaperAsset(
           retry: { maxAttempts: 3 },
           timeout: { totalMs: 120_000 },
           logger: log,
-          onProgress: ({ loaded }) => report(loaded),
+          onProgress: (event) => {
+            reporter.callbacks.onProgress(event);
+            report(event.loaded);
+          },
           // These small files restart from zero after a failed attempt; report that truthfully.
-          onRetry: () => report(0),
+          onRetry: (event) => {
+            reporter.callbacks.onRetry(event);
+            report(0);
+          },
         });
         const bytes = await readBoundedFileNoFollow(targetPath, asset.bytes);
         if (!bytes || !matchesWallpaperVideo(bytes, asset))
@@ -111,6 +128,7 @@ async function ensureWallpaperAsset(
           );
           return media.url;
         });
+        reporter.setPhase('completed');
         report(asset.bytes);
         return published;
       } catch {

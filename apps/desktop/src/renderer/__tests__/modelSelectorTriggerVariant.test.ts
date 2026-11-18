@@ -1057,7 +1057,97 @@ describe('ModelSelector trigger variants', () => {
     expect(trigger.getAttribute('aria-label')).toContain('超高');
   });
 
-  it('closes on composer resize and stays closed after an Agent confirmation settles', async () => {
+  it('drops the whole tail to keep the model name, and brings it back when the name fits', () => {
+    const composer = document.createElement('div');
+    let composerWidth = 500;
+    Object.defineProperty(composer, 'clientWidth', { get: () => composerWidth });
+    let notifyComposerResize: (() => void) | undefined;
+    const originalResizeObserver = globalThis.ResizeObserver;
+    class MockResizeObserver {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        if (target === composer) notifyComposerResize = () => this.callback([], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() { notifyComposerResize = undefined; }
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: MockResizeObserver });
+    const props = {
+      remoteAgent: undefined,
+      modelId: 'claude-opus-4-8',
+      effort: 'xhigh' as Effort,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      engineMarkVendor: 'cc' as const,
+      compactToolbar: true,
+      composerRef: { current: composer },
+    };
+    const view = render(React.createElement(ModelSelector, props));
+    const trigger = () => screen.getByRole('button', { name: /Current: Opus 4\.8, effort: 超高/ });
+    try {
+      // 空间够：档名与引擎小标照常显示。
+      expect(within(trigger()).getByText('超高')).toBeTruthy();
+      expect(trigger().querySelector('[data-composer-engine-mark]')).not.toBeNull();
+
+      // 同档位内把 composer 拖窄（ChatInput 不会重渲）：尺寸回调必须自己发现名字被截断。
+      // jsdom 没有布局，直接给出「名字被截断」的盒子尺寸。
+      const squeezed = within(trigger()).getByText('Opus 4.8');
+      Object.defineProperty(squeezed, 'scrollWidth', { configurable: true, value: 128 });
+      Object.defineProperty(squeezed, 'clientWidth', { configurable: true, value: 72 });
+      composerWidth = 484;
+      act(() => notifyComposerResize?.());
+      expect(within(trigger()).queryByText('超高')).toBeNull();
+      expect(trigger().querySelector('[data-composer-engine-mark]')).toBeNull();
+      // 收起的只是视觉身份组：完整档名仍留在可及名里。
+      expect(trigger().getAttribute('aria-label')).toContain('超高');
+
+      // composer 变宽（≥16px）后名字放得下，尾部自动回来。
+      Object.defineProperty(squeezed, 'clientWidth', { configurable: true, value: 128 });
+      composerWidth = 520;
+      act(() => notifyComposerResize?.());
+      expect(within(trigger()).getByText('超高')).toBeTruthy();
+
+      // 开关 Fast 也会改变尾部宽度：挤着的状态下关掉它，剩下的档名放得下就恢复。
+      Object.defineProperty(squeezed, 'clientWidth', { configurable: true, value: 72 });
+      providersRef.providers = [
+        {
+          id: 'anthropic',
+          name: 'Anthropic',
+          source: 'builtin',
+          connected: true,
+          agents: ['claude-code'],
+          auth: { method: 'oauth' },
+          routing: { 'claude-code': {} },
+          models: {
+            'claude-code': [
+              {
+                id: 'claude-opus-4-8',
+                name: 'Opus 4.8',
+                contextWindow: 200000,
+                efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+                defaultEffort: 'high',
+                supportsFastMode: true,
+              },
+            ],
+          },
+        },
+      ];
+      const fastProps = { ...props, fastMode: true };
+      view.rerender(React.createElement(ModelSelector, fastProps));
+      expect(trigger().querySelector('.lucide-zap')).not.toBeNull();
+      act(() => notifyComposerResize?.());
+      expect(within(trigger()).queryByText('超高')).toBeNull();
+      Object.defineProperty(squeezed, 'clientWidth', { configurable: true, value: 128 });
+      view.rerender(React.createElement(ModelSelector, { ...fastProps, fastMode: false }));
+      expect(within(trigger()).getByText('超高')).toBeTruthy();
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
+    }
+  });
+
+  it('closes on composer resize', async () => {
     const originalResizeObserver = globalThis.ResizeObserver;
     const composer = document.createElement('div');
     let width = 500;
@@ -1075,15 +1165,12 @@ describe('ModelSelector trigger variants', () => {
       disconnect() { if (this.observingComposer) notifyResize = undefined; }
     }
     Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: MockResizeObserver });
-    let resolveConfirmation!: (confirmed: boolean) => void;
-    const confirmBrowseSwitch = vi.fn(() => new Promise<boolean>((resolve) => { resolveConfirmation = resolve; }));
     try {
       render(React.createElement(ModelSelector, {
         remoteAgent: undefined,
         modelId: 'claude-opus-4-8', effort: 'high', vendorKey: 'cc',
         onModelChange: vi.fn(), onEffortChange: vi.fn(),
         composerRef: { current: composer },
-        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
       }));
       const trigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
       await act(async () => fireEvent.click(trigger));
@@ -1094,16 +1181,6 @@ describe('ModelSelector trigger variants', () => {
       act(() => notifyResize?.());
       expect(screen.queryByTestId('model-options-popover')).toBeNull();
 
-      await act(async () => fireEvent.click(trigger));
-      fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
-      await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
-      fireEvent.click(screen.getByTestId('mock-popover-dismiss'));
-      expect(screen.getByTestId('model-options-popover')).toBeTruthy();
-      width = 400;
-      act(() => notifyResize?.());
-      expect(screen.queryByTestId('model-options-popover')).toBeNull();
-      await act(async () => resolveConfirmation(false));
-      expect(screen.queryByTestId('model-options-popover')).toBeNull();
     } finally {
       Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: originalResizeObserver });
     }
@@ -3014,7 +3091,6 @@ describe('ModelSelector trigger variants', () => {
       },
     );
     const onDismiss = vi.fn();
-    const confirmBrowseSwitch = vi.fn(async () => true);
     let releaseFirstSwitch!: () => void;
     const firstSwitch = new Promise<void>((resolve) => {
       releaseFirstSwitch = resolve;
@@ -3053,16 +3129,13 @@ describe('ModelSelector trigger variants', () => {
           onProviderChange: vi.fn(),
           onDismiss,
           modelMemory,
-          agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch },
+          agentSwitch: { currentVendor: 'cc', onSwitch },
         }),
       );
 
       fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
       const row = await screen.findByRole('option', { name: /GPT-5\.5/ });
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
-      // 确认门收**本次目标引擎**(Chris 2026-08-19):调用方靠它判「已有指向该目标的意图」,
-      // 不传目标会让确认框在任何残留意图之后永久静默。
-      expect(confirmBrowseSwitch).toHaveBeenCalledWith('codex');
+      expect(onSwitch).not.toHaveBeenCalled(); // Browsing alone does not stage a switch.
       // 来源 mark 存在说明目标 Agent 仍走 provider sections，而不是退化成 flat。
       expect(row.textContent).toContain('Z');
       // 行尾与悬浮面板同读目标 Agent 的 per-(来源,模型) 记忆，不落模型默认 medium。
@@ -3076,11 +3149,8 @@ describe('ModelSelector trigger variants', () => {
       ).toBe('true');
       fireEvent.click(within(options).getByRole('option', { name: 'low' }));
       expect(setEffort).toHaveBeenCalledWith('codex', 'zeta-codex', 'gpt-5.5', 'low');
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
       await waitFor(() => expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex'));
       expect(onDismiss).not.toHaveBeenCalled();
-      // 配置点击同时选中目标模型；确认门仍只在 Agent 分段切换。
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
 
       fireEvent.click(
         within(screen.getByRole('group', { name: /GPT-5\.5/ })).getByRole('option', {
@@ -3107,67 +3177,9 @@ describe('ModelSelector trigger variants', () => {
           'true',
         ),
       );
-      // 返回当前引擎直接切分段，不重复确认。
-      expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
     }
-  });
-
-  it('keeps the current Agent tab when pre-browse confirmation is canceled', async () => {
-    const confirmBrowseSwitch = vi.fn(async () => false);
-    render(
-      React.createElement(ModelSelectorContent, {
-        remoteAgent: undefined,
-        modelId: 'claude-opus-4-8',
-        effort: 'high',
-        onModelChange: vi.fn(),
-        onEffortChange: vi.fn(),
-        vendorKey: 'cc',
-        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
-    await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByRole('tab', { name: /Codex/ }).getAttribute('aria-selected')).toBe('false');
-    expect(screen.queryByText('newChat.modelSelector.agentSwitch.hint')).toBeNull();
-  });
-
-  it('keeps the expanded model panel open while Agent browse confirmation is shown', async () => {
-    let resolveConfirmation!: (confirmed: boolean) => void;
-    const confirmBrowseSwitch = vi.fn(
-      () =>
-        new Promise<boolean>((resolve) => {
-          resolveConfirmation = resolve;
-        }),
-    );
-    render(
-      React.createElement(ModelSelector, {
-        remoteAgent: undefined,
-        modelId: 'claude-opus-4-8',
-        effort: 'high',
-        onModelChange: vi.fn(),
-        onEffortChange: vi.fn(),
-        vendorKey: 'cc',
-        agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch: vi.fn() },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
-    fireEvent.click(screen.getByRole('tab', { name: /Codex/ }));
-    await waitFor(() => expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1));
-
-    // 模拟 AlertDialog 被 Popover 判成外部交互而发出的 close 请求；确认未结束时
-    // 面板仍留在原 Agent 页签，取消后也不发生关闭再打开的闪烁。
-    fireEvent.click(screen.getByTestId('mock-popover-dismiss'));
-    expect(screen.getByTestId('model-options-popover')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
-
-    await act(async () => resolveConfirmation(false));
-    await waitFor(() => expect(screen.getByTestId('model-options-popover')).toBeTruthy());
-    expect(screen.getByRole('tab', { name: /Claude/ }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('shares inactive model presets across conversations while protecting an active model', () => {

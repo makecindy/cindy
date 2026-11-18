@@ -347,6 +347,10 @@ export interface CatalogModel {
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
+  /** Local Pi Chat compatibility override; not inherited public model metadata. */
+  supportsStore?: boolean;
+  /** Connection-scoped Pi Chat ID constraint; null explicitly preserves native IDs. */
+  maxToolCallIdLength?: 64 | null;
   catalogPresetId?: string;
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;

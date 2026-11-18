@@ -294,6 +294,9 @@ export interface CcMeta {
    */
   goalNotice?: 'usage-resumed' | 'capacity-resumed';
 
+  /** Context rebuilt in-place. Older hosts may omit the coverage marker. */
+  contextRebuild?: ContextRebuildMeta;
+
   /**
    * Host-side marker:个人版制作任务里 Agent 调用 cindy_make.report_complete 后落的
    * 完成记录(role:'assistant' + 空 content)。renderer 渲成完成卡片,不进 prompt。
@@ -424,6 +427,9 @@ export interface Session {
    * 任务内的未读与角标照常。老 payload 缺失按未静音处理。
    */
   notificationsMuted?: boolean;
+  /** Inbox deferral, saved by the task host. Missing on older hosts. */
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
   /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
    * Sidebar 排序唯一时间轴：null ⟺ 草稿（归未分类），非 null 即按倒序上浮。
@@ -562,7 +568,7 @@ export type MessageRole =
 
 /**
  * role='agent_switch' 行的 content 结构(JSON 存于 messages.content)。
- * handoff 是发给新引擎的交接摘要全文——只用于 UI 展开查看与 debug,
+ * handoff 是发给新引擎的交接内容——只用于 UI 展开查看与 debug,
  * 不作为对话正文渲染,也绝不回发给 agent(注入走 main 的 wire 前缀通道)。
  */
 export interface AgentSwitchContent {
@@ -578,9 +584,18 @@ export interface AgentSwitchContent {
   resumed?: boolean;
   /** Same-Harness cross-computer restoration result; omitted for legacy switches. */
   nativeHistory?: 'restored' | 'fallback';
+  handoffCoverage?: HandoffCoverage;
   toAgentDeviceId?: string | null;
   toAgentDeviceName?: string | null;
   switchReason?: 'quota-rebalance';
+}
+
+export type HandoffCoverage = 'complete' | 'condensed';
+
+export interface ContextRebuildMeta {
+  reason: string;
+  handoff?: string;
+  handoffCoverage?: HandoffCoverage;
 }
 
 export interface Message {

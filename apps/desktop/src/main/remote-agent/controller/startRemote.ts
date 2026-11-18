@@ -1,4 +1,7 @@
+import { createAttachmentPreservationReceiver } from '../attachmentPreservation.js';
+import type { PreserveAttachmentBatch } from '../../maker-host/attachmentPreservation.js';
 import { currentSessionCreationSignal } from '../../localDb/sessionRuntimeCleanup.js';
+import { readRemoteProviderGroupUsageLimit } from '../../provider-group/failurePolicy.js';
 /**
  * 在另一台电脑上启动 Agent、任务留在本机(控制端入口)。
  *
@@ -58,7 +61,7 @@ import {
 } from './proxyHandle';
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
-import { RemoteAgentPoller, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
+import { RemoteAgentPoller, RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
 import { isSharedTaskAuthorizationDenied } from './poller';
 
 export interface PreparedRemoteMcp {
@@ -68,8 +71,13 @@ export interface PreparedRemoteMcp {
 }
 
 export interface StartRemoteAgentDeps {
+  attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
+  attachmentStorageRoots?(sessionId: string): Record<string, string>;
+  nativeHistoryBackup?: boolean;
   /** Cancellation for this startup attempt only; never cancels other starts of the task. */
   startupSignal?: AbortSignal;
+  /** Recheck this attempt's permission/explicit-close boundary until its first startup finishes. */
+  assertStartupCurrent?(): void;
   /** A direct share must renew the original executor's grant before reopening. */
   reconnectAuthorization?(isCurrent: () => boolean, options?: { force?: boolean }): Promise<void>;
   /** Background renewal is allowed only while M has confirmed the current grant. */
@@ -440,6 +448,13 @@ async function prepareAndStartRemoteAgentSession(
         }
       : {}),
   });
+  const attachmentRoots = !hostToolsOnly ? deps.attachmentStorageRoots?.(opts.sessionId!) : undefined;
+  const attachments = attachmentRoots && deps.attachmentPreservation
+    ? createAttachmentPreservationReceiver(deps.attachmentPreservation(opts.sessionId!), async file => {
+      const projected = workspace.toAgentPath(file);
+      if (projected === file) throw new Error('Attachment path projection unavailable');
+      return projected;
+    }) : undefined;
   let preparedMcp: PreparedRemoteMcp | undefined;
   let executorDisposal: Promise<void> | undefined;
   const disposePreparation = async (): Promise<void> => {
@@ -447,7 +462,7 @@ async function prepareAndStartRemoteAgentSession(
     preparedMcp = undefined;
     executorDisposal ??= Promise.resolve().then(() => executor.close());
     const results = await Promise.allSettled([
-      executorDisposal, Promise.resolve().then(() => prepared?.dispose()),
+      executorDisposal, Promise.resolve().then(() => prepared?.dispose()), Promise.resolve().then(() => attachments?.dispose()),
     ]);
     const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
     if (failures.length) throw new AggregateError(failures, 'Remote agent preparation cleanup failed');
@@ -460,9 +475,11 @@ async function prepareAndStartRemoteAgentSession(
   let mcp: PreparedRemoteMcp;
   try {
     if (signal.aborted) throw signal.reason;
+    deps.assertStartupCurrent?.();
     mcp = await startupTiming.measure('mcp-prepare', () => deps.prepareMcp({ kind, opts, vendorOptions }));
     preparedMcp = mcp;
     if (signal.aborted) throw signal.reason;
+    deps.assertStartupCurrent?.();
   } catch (error) {
     // A late MCP result is disposed here even though the caller already rejected.
     await disposePreparation();
@@ -470,7 +487,7 @@ async function prepareAndStartRemoteAgentSession(
   } finally {
     signal.removeEventListener('abort', cancelPreparation);
   }
-  const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name), hostToolsOnly });
+  const router = createReverseHttpRouter({ executor, mcpTarget: (name) => mcp.servers.get(name), hostToolsOnly, attachments });
 
   // 连回对方时按最新值打开(换模型、推理强度等在已让出名额时只记在这里)。
   let model = opts.model;
@@ -517,6 +534,7 @@ async function prepareAndStartRemoteAgentSession(
   const stateNow = (): LinkState => linkState;
   const requireOpen = () => {
     signal.throwIfAborted();
+    if (!firstStarted) deps.assertStartupCurrent?.();
     if (stateNow() === 'closed') throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
   };
   const activeNow = (): RemoteAgentRunClient | null => active;
@@ -640,6 +658,10 @@ async function prepareAndStartRemoteAgentSession(
       } else workspace.setAliases(aliases);
       managedAliasFroms = managed;
       workspace.setVirtualRoot(virtualRoot);
+      if (virtualRoot && attachmentRoots) {
+        const native = /^[A-Za-z]:|^\\\\/.test(virtualRoot) ? path.win32 : path.posix;
+        workspace.addAliases(Object.entries(attachmentRoots).map(([name, to]) => ({ from: native.join(virtualRoot, 'additional', 'attachments', name), to })));
+      }
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(deps.newId(), poller, {
       onEvent: (event) => {
@@ -769,8 +791,9 @@ async function prepareAndStartRemoteAgentSession(
     active = client;
     let remoteStarted = false;
     try {
-      const raw = await client.open(kind, payload);
+      const raw = await client.open(kind, payload, reconnect ? undefined : requireOpen);
       remoteStarted = true;
+      if (!reconnect) requireOpen();
       if (closedEarly) throw new Error((closedEarly as { message?: string }).message ?? '[REMOTE_AGENT_UNAVAILABLE] The agent stopped right after starting.');
       if (stateNow() === 'closed') {
         // 连回途中任务关掉了(那时还没有这条连接可关)：对方已经起了进程，关掉它让出名额。
@@ -809,6 +832,13 @@ async function prepareAndStartRemoteAgentSession(
           });
         });
       } else client.abandon('start-failed');
+      if (!remoteStarted && (
+        (error instanceof Error && 'code' in error && error.code === 'IPC_ERROR')
+        || (error instanceof RemoteAgentRemoteError && error.phase === 'start' && error.info.name === 'AgentStartupStoppedError')
+      )) {
+        const quota = readRemoteProviderGroupUsageLimit(error);
+        if (quota) throw quota;
+      }
       throw error;
     }
   }
@@ -901,6 +931,9 @@ async function prepareAndStartRemoteAgentSession(
     return {
       sessionId: opts.sessionId!,
       acceptsImageDeliveryReceipts: true,
+      ...(caps.nativeHistoryBackup && deps.nativeHistoryBackup && kind === 'pi'
+        ? { acceptsNativeHistoryBackup: true } : {}),
+      ...(attachments ? { acceptsAttachmentPreservation: true } : {}),
       ...(imageDeliveryEpoch !== undefined ? { imageDeliveryEpoch } : {}),
       virtualWorkspace: true,
       options: encodeStartOptions(startOptions),

@@ -36,7 +36,10 @@ vi.mock('electron', () => ({
   },
 }));
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: mocks.guard }));
-vi.mock('../git-context/ghBinary', () => ({ configureManagedGhRoot: vi.fn() }));
+vi.mock('../git-context/ghBinary', () => ({
+  configureManagedGhRoot: vi.fn(),
+  exposeInstalledManagedGh: vi.fn(async () => undefined),
+}));
 vi.mock('../git-context/ghCliTokenSource', () => ({
   getSharedGhCliTokenSource: () => ({ invalidate: mocks.invalidate, readToken: mocks.readToken }),
 }));
