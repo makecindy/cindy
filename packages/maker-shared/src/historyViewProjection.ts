@@ -68,11 +68,47 @@ export function completesHistoryTurn(row: HistoryMessageSource): boolean {
     || (typeof meta.turnUsageDetails === 'object' && meta.turnUsageDetails !== null);
 }
 
+type RowFacts = { fileDelivery: boolean; visibleResult: boolean };
+const NO_FACTS: RowFacts = { fileDelivery: false, visibleResult: false };
+
+/**
+ * A projection derives the same two facts from a tool row several times per pass,
+ * and again on every refresh and page. Both are pure in the persisted body, and the
+ * outline stamp changes whenever that body is rewritten, so (id, role, stamp) is a
+ * safe key. Rows without a stamp (live rows, non-outline callers) stay uncached.
+ * Bounded FIFO: a page works on a few thousand rows at most.
+ */
+const ROW_FACTS_LIMIT = 4096;
+const rowFacts = new Map<string, RowFacts>();
+
+function computeRowFacts(row: HistoryMessageSource): RowFacts {
+  if (row.role === 'tool_use') {
+    const tool = parseMessageToolUse(row);
+    const descriptor = describeToolUse(tool.toolName, tool.input);
+    return { fileDelivery: descriptor.kind === 'mcp' && !!descriptor.createdPath, visibleResult: false };
+  }
+  if (row.role === 'tool_result') return { fileDelivery: false, visibleResult: hasVisibleHistoryResult(row.content) };
+  return NO_FACTS;
+}
+
+function factsFor(row: HistoryMessageSource): RowFacts {
+  const stamp = row.historyContentStamp;
+  if (!stamp) return computeRowFacts(row);
+  const key = `${row.id}\u0000${row.role}\u0000${stamp}`;
+  const hit = rowFacts.get(key);
+  if (hit) return hit;
+  const facts = computeRowFacts(row);
+  rowFacts.set(key, facts);
+  if (rowFacts.size > ROW_FACTS_LIMIT) rowFacts.delete(rowFacts.keys().next().value!);
+  return facts;
+}
+
 function hasFileDelivery(row: HistoryMessageSource): boolean {
-  if (row.role !== 'tool_use') return false;
-  const tool = parseMessageToolUse(row);
-  const descriptor = describeToolUse(tool.toolName, tool.input);
-  return descriptor.kind === 'mcp' && !!descriptor.createdPath;
+  return factsFor(row).fileDelivery;
+}
+
+function hasVisibleResult(row: HistoryMessageSource): boolean {
+  return factsFor(row).visibleResult;
 }
 
 /**
@@ -87,7 +123,7 @@ export function projectHistoryView<T extends HistoryMessageSource>(
 ): HistoryViewItem<T>[] {
   if (lazyDetails) {
     const scopes = historySubagentScopes(rows);
-    const visibleTools = new Set(rows.filter((row) => row.role === 'tool_result' && hasVisibleHistoryResult(row.content)).map((row) => row.toolUseId));
+    const visibleTools = new Set(rows.filter((row) => row.role === 'tool_result' && hasVisibleResult(row)).map((row) => row.toolUseId));
     for (const row of rows) if (hasFileDelivery(row)) visibleTools.add(parseMessageToolUse(row).toolUseId);
     const children = new Map<string, T[]>();
     const visible = rows.filter((row) => {
@@ -154,7 +190,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     }
     if (row.role === 'tool_result' && row.toolUseId) {
       settledTools.add(row.toolUseId);
-      if (hasVisibleHistoryResult(row.content)
+      if (hasVisibleResult(row)
         || (row.agentMeta as { mcpApp?: unknown } | null)?.mcpApp) visibleResults.add(row.toolUseId);
     }
   }
@@ -191,7 +227,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
   // between its tools, which would move the media and create an extra work group.
   let toolSegment: SourceItem<T>[] = [];
   const flushToolSegment = () => {
-    if ((preserveMixedSegments || toolSegment.some((item) => item.row.role === 'tool_result' && hasVisibleHistoryResult(item.row.content)))
+    if ((preserveMixedSegments || toolSegment.some((item) => item.row.role === 'tool_result' && hasVisibleResult(item.row)))
       && toolSegment.some((item) => !item.activity)) {
       for (const item of toolSegment) { item.activity = false; item.archivable = false; }
     }

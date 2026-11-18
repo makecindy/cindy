@@ -19,6 +19,19 @@ describe('history reading projection', () => {
     expect(projected.flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id))
       .toContain('1');
   });
+  // Tier: behavior. Tool facts are memoized per (id, outline stamp); a rewritten body
+  // carries a new stamp, so a result that turned into a card must surface again.
+  it('re-derives a tool result when its outline stamp changes', () => {
+    const call = { ...row(1, 'tool_use', { toolName: 'Bash', toolUseId: 't', input: { command: 'ls' } }), historyContentStamp: 'a' };
+    const result = { ...row(2, 'tool_result', 'ready'), toolUseId: 't', historyContentStamp: 'a' };
+    const rows = [row(0, 'user', 'Work'), call, result];
+    const visibleIds = (items: ReturnType<typeof projectHistoryView>) => items
+      .flatMap((item) => item.type === 'messages' ? item.messages : []).map((message) => message.id);
+    expect(visibleIds(projectHistoryView(rows, false, true))).not.toContain('2');
+    const rewritten = rows.map((r) => r.id === '2'
+      ? { ...r, content: JSON.stringify({ xdt_card_id: 'card' }), historyContentStamp: 'b' } : r);
+    expect(visibleIds(projectHistoryView(rewritten, false, true))).toContain('2');
+  });
   // Tier: behavior. A teammate's reply lists the tasks it started from these receipts; folded into
   // deferred work they never reached the chat (2026-11-10).
   it('keeps a send_to_session receipt available outside deferred work', () => {
