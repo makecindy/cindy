@@ -228,7 +228,14 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
           if (scannedRows > rowBudget || scannedBytes > MAX_HISTORY_SCAN_BYTES) { cut = true; break; }
         }
         if (cut) break;
-        if (rows.length === 0) { exhausted = true; break; }
+        if (rows.length === 0) {
+          // Reaching the start of history moves project()'s cut from the first
+          // boundary to row 0, so the snapshot must be rebuilt even though no row
+          // was appended; otherwise the oldest work group never comes back.
+          exhausted = true;
+          stale = true;
+          break;
+        }
         const next = rows[rows.length - 1].id;
         if (next === cursor) throwIpcError('INTERNAL', 'History cursor did not advance');
         cursor = next;

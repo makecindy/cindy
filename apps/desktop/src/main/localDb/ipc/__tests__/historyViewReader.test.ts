@@ -427,6 +427,22 @@ describe('history scan budget', () => {
     }
     expect(ids(received)).toEqual(everything);
   });
+  // Tier: behavior. Greptile #11190: an empty read is the only signal that the
+  // window starts at history, which moves project()'s cut to row 0. Without a
+  // rebuild the withheld oldest work group never becomes reachable again.
+  it('releases the oldest work group once a page reaches the start of history', async () => {
+    const source = Array.from({ length: 999 }, (_, index) => row(index));
+    source.push({ ...row(999, 'assistant'), content: '# Report\nDelivered', agentMeta: { turnCompleted: true } });
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list, outline: base.list,
+      hydrate: async (_sid, ids) => source.filter((r) => ids.includes(r.id)),
+      anchor: async (_sid, id) => source.find((r) => r.id === id)!, running: () => false });
+    const page = await api.page('s', undefined, true);
+    expect(base.list).toHaveBeenCalledTimes(2);
+    expect(page.items[0]).toMatchObject({ type: 'work', summary: { firstMessageId: '0', lastMessageId: '998' } });
+    expect(page.items.at(-1)).toMatchObject({ type: 'messages', messages: [{ id: '999' }] });
+    expect(page.hasMore).toBe(false);
+  });
 
   it('stops a boundary-free history before a twenty-first query without returning partial groups', async () => {
     const { api, list } = reader(Array.from({ length: 2500 }, (_, i) => row(i)));

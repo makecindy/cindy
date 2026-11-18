@@ -73,10 +73,12 @@ const NO_FACTS: RowFacts = { fileDelivery: false, visibleResult: false };
 
 /**
  * A projection derives the same two facts from a tool row several times per pass,
- * and again on every refresh and page. Both are pure in the persisted body, and the
- * outline stamp changes whenever that body is rewritten, so (id, role, stamp) is a
- * safe key. Rows without a stamp (live rows, non-outline callers) stay uncached.
- * Bounded FIFO: a page works on a few thousand rows at most.
+ * and again on every refresh and page, so (id, role, body) is the key. The outline
+ * stamp only covers length plus the last 96 bytes, which an equal-length rewrite of
+ * the middle leaves unchanged; hashing the body is cheap next to the parse and regex
+ * work it lets us skip. Bounded FIFO: a page works on a few thousand rows at most.
+ * shortcut: hashing is linear in the body, so a multi-megabyte outline body costs
+ * about what recomputing its facts costs; upgrade only if such bodies dominate.
  */
 const ROW_FACTS_LIMIT = 4096;
 const rowFacts = new Map<string, RowFacts>();
@@ -91,10 +93,16 @@ function computeRowFacts(row: HistoryMessageSource): RowFacts {
   return NO_FACTS;
 }
 
+function contentDigest(content: unknown): string {
+  const text = typeof content === 'string' ? content : JSON.stringify(content) ?? '';
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
+  return `${text.length}:${hash >>> 0}`;
+}
+
 function factsFor(row: HistoryMessageSource): RowFacts {
-  const stamp = row.historyContentStamp;
-  if (!stamp) return computeRowFacts(row);
-  const key = `${row.id}\u0000${row.role}\u0000${stamp}`;
+  if (row.role !== 'tool_use' && row.role !== 'tool_result') return NO_FACTS;
+  const key = `${row.id}\u0000${row.role}\u0000${contentDigest(row.content)}`;
   const hit = rowFacts.get(key);
   if (hit) return hit;
   const facts = computeRowFacts(row);
