@@ -7,6 +7,23 @@
 > `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
 > `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
 
+## 远程新建任务的等待时长（2026-11-18）
+
+`maker:create-session` 在被控端要等 Agent 真正起来才回结果。Codex 的 `thread/start` 会先等
+一次上游预热请求，实测两次各约 40 秒，同机当天 Codex 建会话中位数 8 秒、14 次超过 30 秒、
+最长 71 秒；控制端原先 30 秒放弃，被控端随后仍把任务建成。该 channel 改登记在协议契约表
+`INVOKE_TIMEOUT_OVERRIDES_MS`，桌面与手机控制端统一等 90 秒，手机不再单列 30 秒。
+被控端的执行与结果暂存时长由同一张表推导，不另改。
+
+故障半径：① 证据只是这一类请求的执行本身慢，链路与同时段其它请求正常；② 只延长这一个
+channel 的等待，不改变其它请求、熔断计数口径或断链恢复；③ 控制端预生成会话 id、超时后按
+id 回查的既有逻辑不变，延长等待只减少进入回查的次数。旧控制端仍按 30 秒，行为不变。
+
+诊断：被控端对慢请求追加记录结果是已交给链路还是因链路重置被丢弃；控制端对已结束等待后
+才到的结果记录 `late invoke-result`；Codex 的 `thread/start ok` 带上 `elapsedMs`。
+自建中转只转发原消息，不需升级。验证入口：Device Link `invokePolicy.test.ts`、Mobile
+`invokeTimeouts.test.ts`。
+
 ## 弱网下的备用截图与视频恢复（2026-11-15）
 
 备用截图仍走原有远程桌面请求，发送端将 JPEG 压到 64 KiB 以内；base64 与回复包装

@@ -3590,16 +3590,23 @@ async function handleInvoke(
   inFlightRemoteInvokeBytes += invokeBytes;
   if (listingKey) remoteListingFlights.set(listingKey, inFlightEntry);
   let result: InvokeResultPayload;
+  // Slow results are the ones most likely to outlive the controller's wait; record
+  // how each one left this host so a controller timeout can be matched to it.
+  let slowResultLabel: string | undefined;
   try {
     result = normalizeInvokeResultForWire(await resultPromise);
     const executionWaitMs = Math.round(performance.now() - handlerStartedAt);
     // debug only: 300ms already shows up as a visible send delay over the relay.
     if (executionWaitMs >= 300 + intendedHoldMs) {
-      log.debug(`remote invoke slow execution request=${shortId(requestId)} from=${shortId(src)}`
-        + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`
+      slowResultLabel = `request=${shortId(requestId)} from=${shortId(src)}`
+        + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`;
+      log.debug(`remote invoke slow execution ${slowResultLabel}`
         + ` executionWaitMs=${executionWaitMs} ok=${result.ok} stagesMs=${JSON.stringify(timing.stages)}`);
     }
-    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
+    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) {
+      if (slowResultLabel) log.debug(`remote invoke slow result dropped ${slowResultLabel} reason=link-reset`);
+      return;
+    }
   } finally {
     if (inFlightRemoteInvokeResults.get(cacheKey) === inFlightEntry) {
       inFlightRemoteInvokeResults.delete(cacheKey);
@@ -3611,7 +3618,7 @@ async function handleInvoke(
   }
   // Fresh execution already includes the DB checks in runInvoke, within its
   // orphan deadline and busy lease. Only replayed replies need a new async check.
-  if (!sendInvokeResultSafe(
+  const accepted = sendInvokeResultSafe(
     client,
     src,
     requestId,
@@ -3619,7 +3626,9 @@ async function handleInvoke(
     payload?.channel,
     payload?.args,
     fingerprint,
-  )) {
+  );
+  if (slowResultLabel) log.debug(`remote invoke slow result handed off ${slowResultLabel} accepted=${accepted}`);
+  if (!accepted) {
     throw new DeviceLinkError('BACKPRESSURE', 'invoke-result could not be queued');
   }
 }

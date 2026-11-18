@@ -957,6 +957,11 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // NTFS 复制模式更慢)。控制端在此期间显示创建中,给 5 分钟执行预算 + 回程余量。
   // 旧控制端仍按 60s 超时,超时后走既有预创建补偿;被控端执行不受此值影响。
   'worktree:create': 300_000,
+  // 被控端建会话要等 Agent 真正起来:Codex thread/start 会先等一次上游预热请求返回,
+  // 2026-11-18 实测同机 codex 建会话中位数 8s、14 次超过 30s、最长 71s(其中两次各有
+  // 约 40s 停在上游预热)。默认 30s 会在被控端仍在建的时候先报超时,控制端随后重试或
+  // 回查;给到 90s 让常见慢启动直接拿到结果。被控端执行本身不受此值影响。
+  'maker:create-session': 90_000,
   // User-triggered fetch (30s) plus local probes and process cleanup. Never replay.
   'worktree:sync-branch': 90_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。

@@ -47,9 +47,10 @@ describe("resolveMobileInvokeTimeoutMs", () => {
     expect(resolveMobileInvokeTimeoutMs('maker:send')).toBe(30_000);
     // regenerate-title:OAuth 刷新(~10s)+ 标题请求自身 12s,合法总预算 ~22s。
     expect(resolveMobileInvokeTimeoutMs('maker:regenerate-title')).toBe(30_000);
-    // create-session:冷启动 app-server / agent 拉起无更短 deadline;goal 路径
-    // 无稳定客户端会话 id,误超时重试会建出第二个任务。
-    expect(resolveMobileInvokeTimeoutMs('maker:create-session')).toBe(30_000);
+    // create-session:被控端要等 Agent 真正起来(Codex 还要等一次上游预热),
+    // 实测常见 40s+;与桌面控制端共用协议契约表的 90s,不再由 mobile 单列 30s。
+    expect(resolveMobileInvokeTimeoutMs('maker:create-session')).toBe(90_000);
+    expect(MOBILE_INVOKE_TIMEOUT_OVERRIDES_MS['maker:create-session']).toBeUndefined();
     // goal set/resume:restoreSessionForGoal 同样 await createSession 重启持久化
     // agent;两者有真实副作用,误超时重试会改动/重启已在跑的 goal。
     expect(resolveMobileInvokeTimeoutMs('maker:goal:set')).toBe(30_000);
