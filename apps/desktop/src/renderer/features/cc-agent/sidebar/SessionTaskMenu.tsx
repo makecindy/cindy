@@ -42,6 +42,14 @@ import { TaskRuntimePluginsDialog } from './TaskRuntimePluginsDialog';
 import { setSessionNotificationsMuted } from './sessionNotificationMute';
 import { MENU_ITEM_CLASS, MENU_ROW_CLASS } from './menuStyles';
 import { readPluginUiEntries, PluginUiSessionMenuItems } from '@/cindy-brain/PluginUiContributions';
+import { clearSessionAttention, hasSessionAttention } from '@/lib/sessionAttentionStore';
+import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
+import { createLogger } from '@/lib/logger';
+import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
+import { useAutomationScheduleSessionInfo } from '@/features/cc-agent/hooks/useAutomationScheduleSessionIndex';
+import { markScheduleRunsReadAndSync } from '@/features/scheduler/lib/scheduleRunReadSync';
+
+const log = createLogger('SessionTaskMenu');
 
 // Native window dragging ignores portal stacking. Leave 8px below the 50px drag
 // strip so the first item remains clickable when a tall menu flips upward.
@@ -107,6 +115,17 @@ function ActiveSessionTaskMenu({
   const ownerGeneration = getDataOwnerGeneration().generation;
   const peer = parseSharedTaskPeer(session.deviceLinkDeviceId ?? '');
   const guest = peer?.role === 'host';
+  // 行的「未读」不只来自本地 attention 表：device-link 远程会话行的未读终态由被控端
+  // 活动镜像（remoteSessionActivityStore）点亮，定时任务后台跑完的 run 未读由 schedule
+  // 索引点亮。二者都要算进「标为已读」的可用性，否则行上有绿点却没有入口。
+  const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
+  const scheduleInfo = useAutomationScheduleSessionInfo(session.id);
+  const remoteUnread =
+    session.deviceLinkDeviceId != null &&
+    remoteActivity?.attention === true &&
+    (remoteActivity.phase === 'completed' || remoteActivity.phase === 'error');
+  const showMarkAsRead =
+    hasSessionAttention(session.id) || remoteUnread || scheduleInfo?.hasUnreadRun === true;
   const [sharing, setSharing] = useState<SharedTaskHostState | null>(null);
   const [copying, setCopying] = useState(false);
   const copyPending = useRef(false);
@@ -245,6 +264,52 @@ function ActiveSessionTaskMenu({
             {!archived &&
               !empty &&
               item(session.pinnedAt != null ? 'unpin' : 'pin', onPin, ownerActionsBlocked)}
+            {showMarkAsRead && (
+              <DropdownMenuItem
+                className={MENU_ITEM_CLASS}
+                disabled={ownerActionsBlocked}
+                onSelect={async () => {
+                  const deviceId = session.deviceLinkDeviceId ?? undefined;
+                  // 显式清除：本地无记录时也照样发已读回执，远程行的未读靠被控端收敛。
+                  clearSessionAttention(session.id, deviceId ? { intent: 'explicit' } : undefined);
+                  if (!deviceId) {
+                    try {
+                      const { processed } =
+                        await window.electronAPI.localDb.sessions.dismissPendingAlerts([session.id]);
+                      if (processed.includes(session.id)) {
+                        clearSessionAttention(session.id, { intent: 'explicit' });
+                      }
+                    } catch (e) {
+                      log.warn('dismiss pending alerts failed', e);
+                    }
+                    void refreshPendingAlerts();
+                  }
+                  // 定时任务后台跑完的 run 未读不走 attention 表：与自动化分组的
+                  // 「标为已读」一致，把该会话未读的 run 一并标记已读，否则绿点会留在原地。
+                  const unreadRunIds = scheduleInfo?.unreadRunIds ?? [];
+                  if (unreadRunIds.length > 0) {
+                    const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
+                      unreadRunIds,
+                      deviceId,
+                    );
+                    if (processed.length > 0) {
+                      toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
+                    }
+                    if (failed.length > 0) {
+                      toast.error(
+                        t('ccAgent.layout.markAllReadFailed', {
+                          error: firstError ?? String(failed.length),
+                        }),
+                      );
+                    }
+                  }
+                }}
+              >
+                {/* 键名沿用分组菜单的既有文案键（值本就是单任务措辞：en "Mark as read"、
+                    zh-CN「标为已读」），避免为一个菜单项新增 12 份语言包。 */}
+                {t('ccAgent.sidebar.automationGroup.menu.markAllAsRead')}
+              </DropdownMenuItem>
+            )}
             {item('rename', onRename, ownerActionsBlocked)}
             {/* 提醒归任务所在的那台设备发，device-link 任务（别人的任务）在这里设不了。 */}
             {!archived && !empty && !session.deviceLinkDeviceId && (

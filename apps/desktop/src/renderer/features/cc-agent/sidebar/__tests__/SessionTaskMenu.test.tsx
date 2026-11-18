@@ -10,6 +10,8 @@ import { SessionTaskMenu } from '../SessionTaskMenu';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 import { __resetInstalledGhostsStoreForTest, readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { clearSessionAttention, hasSessionAttention, addSessionAttention } from '@/lib/sessionAttentionStore';
+import { applyRemoteSessionActivity, clearRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import type { InstalledGhost } from '../../../../../shared/ghost';
 
 const state = vi.hoisted(() => ({
@@ -29,6 +31,12 @@ const state = vi.hoisted(() => ({
   publishGhosts: null as null | ((value: { ghosts: InstalledGhost[] }) => void),
   runtimePlugins: vi.fn(),
   candidates: vi.fn(),
+  markRunsRead: vi.fn(),
+  dismissAlerts: vi.fn(),
+  refreshAlerts: vi.fn(),
+  scheduleInfo: undefined as
+    | undefined
+    | { unreadRunIds: string[]; unreadFailedRunIds: string[]; hasUnreadRun: boolean },
 }));
 vi.mock('../sessionNotificationMute', () => ({ setSessionNotificationsMuted: state.setMuted }));
 vi.mock('react-i18next', () => ({
@@ -37,6 +45,17 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   remoteProjectsStore: { removeDevice: state.removeDevice, getDeviceName: () => undefined },
   isRemoteDeviceMarkedDisconnected: () => false,
+  useRemoteSessionScheduleInfo: () => undefined,
+  getSessionDeviceId: () => undefined,
+}));
+vi.mock('@/features/cc-agent/hooks/useAutomationScheduleSessionIndex', () => ({
+  useAutomationScheduleSessionInfo: () => state.scheduleInfo,
+}));
+vi.mock('@/features/scheduler/lib/scheduleRunReadSync', () => ({
+  markScheduleRunsReadAndSync: (...args: unknown[]) => state.markRunsRead(...args),
+}));
+vi.mock('@/hooks/usePendingAlertAttention', () => ({
+  refreshPendingAlerts: () => state.refreshAlerts(),
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'owner', isAuthenticated: true }) }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -99,6 +118,11 @@ beforeEach(() => {
   });
   state.runtimePlugins.mockResolvedValue({});
   state.candidates.mockResolvedValue([]);
+  state.scheduleInfo = undefined;
+  state.markRunsRead.mockResolvedValue({ processed: ['run-1'], failed: [] });
+  state.dismissAlerts.mockResolvedValue({ processed: ['task'], failed: [] });
+  clearSessionAttention('task', { intent: 'explicit' });
+  clearRemoteSessionActivity();
   setDataOwnerGeneration('owner');
   state.host.mockResolvedValue({ available: false, detail: null });
   state.account.mockImplementation(async ({ action, sharedTaskId }) => action === 'close' ? { closed: [sharedTaskId], failed: [] } : []);
@@ -109,6 +133,7 @@ beforeEach(() => {
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: state.writeClipboard } });
   Object.assign(window, {
     electronAPI: { sharedTask: { host: state.host, account: state.account }, deviceLink: { openLink: state.openLink, closeLink: state.closeLink, invoke: state.invoke },
+      localDb: { sessions: { dismissPendingAlerts: state.dismissAlerts } },
       ghosts: { listSync: state.listGhosts, onChanged: state.ghostsChanged,
         runtimePlugins: state.runtimePlugins, listControlPointCandidates: state.candidates } },
   });
@@ -482,4 +507,44 @@ it('does not submit a confirmation from an old account', async () => {
   setDataOwnerGeneration('other-account');
   fireEvent.click(screen.getByRole('button', { name: 'leaveShort' }));
   expect(state.account).not.toHaveBeenCalled();
+});
+
+// #9839 review: a scheduled run that finishes in the background keeps its own
+// unread marker in the schedule index, which the attention map never clears.
+it('marks unread scheduled runs read together with the session attention', async () => {
+  addSessionAttention('task', 'done');
+  state.scheduleInfo = { unreadRunIds: ['run-1'], unreadFailedRunIds: [], hasUnreadRun: true };
+  render(<Harness />);
+  openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'markAllAsRead' }));
+  await waitFor(() => expect(state.markRunsRead).toHaveBeenCalledWith(['run-1'], undefined));
+  expect(state.dismissAlerts).toHaveBeenCalledWith(['task']);
+  expect(state.refreshAlerts).toHaveBeenCalled();
+  expect(hasSessionAttention('task')).toBe(false);
+  expect(toast.success).toHaveBeenCalledWith('markedAsRead');
+});
+
+// #9839 review: a device-link task that finishes before it is opened on this
+// controller only has the controlled side's activity mirror as its unread source.
+it('offers mark as read for a remote row whose unread lives in the activity mirror', async () => {
+  const remote = { ...session, id: 'remote-task', deviceLinkDeviceId: 'device-1' } as Session;
+  render(<Harness target={remote} />);
+  openMenu();
+  expect(screen.queryByRole('menuitem', { name: 'markAllAsRead' })).toBeNull();
+  act(() => {
+    applyRemoteSessionActivity('device-1', {
+      sessionId: 'remote-task',
+      phase: 'completed',
+      attention: true,
+    });
+  });
+  await waitFor(() => expect(screen.getByRole('menuitem', { name: 'markAllAsRead' })).toBeTruthy());
+});
+
+it('marks a remote row read through the owning device', async () => {
+  state.scheduleInfo = { unreadRunIds: ['run-remote'], unreadFailedRunIds: [], hasUnreadRun: true };
+  render(<Harness target={{ ...session, id: 'remote-task', deviceLinkDeviceId: 'device-1' } as Session} />);
+  openMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'markAllAsRead' }));
+  await waitFor(() => expect(state.markRunsRead).toHaveBeenCalledWith(['run-remote'], 'device-1'));
 });
