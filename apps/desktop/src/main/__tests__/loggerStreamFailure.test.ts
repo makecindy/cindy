@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
-import { expect, it, vi } from 'vitest';
+import { afterAll, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
   app: { isPackaged: true, getVersion: () => 'test', getPath: () => '' },
@@ -15,12 +15,22 @@ import { RECORD_FORMAT_SENTINEL_MSG } from '../../shared/mainLogRecordFormat';
 // 每个用例开头清空,按用例隔离。
 const stderr: string[] = [];
 
+// 文件级 fixture(#10907 review P1):initLogger 是一次性入口(`if (initialized) return`),
+// 同一文件的用例共享同一个 logger 实例与同一个 logDir —— 逐用例 mkdtemp 再传进 initLogger
+// 只会静默 no-op,还会让 sessionAgentSlot 的 mkdir 把第一个用例删掉的根目录**重建**出来,
+// 每跑一次泄漏一份 `cindy-log-*/sessions/{s-stale-ts,s-backoff}`。
+// 因此:根目录只建一次,由 initLogger(第一个用例,见下)使用,afterAll 统一删;用例之间用
+// 不同 sessionId 与清空 stderr 数组隔离,谁也不再各自 rmSync。
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-log-failure-'));
+afterAll(() => {
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 // #10790: 跨天后当天的日志文件 0 字节一整天,原因是落盘失败被整段吞掉 ——
 // 流被置空后再没人开新的,谁也看不出是磁盘满了还是文件被锁。
 // 这里钉住三件事:失败原因要留下(健康自检 + stderr)、失败期间不要每条日志都重开流、
 // 退避窗口之后要能自己恢复,并把格式哨兵补回当天文件的最前面(读侧只看第 0 字节)。
 it('surfaces why the daily log stopped writing and recovers on the next retry', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-log-failure-'));
   stderr.length = 0;
   // 必须在 logger 模块加载前挂上:logger 在模块顶层就绑定了原始 stderr.write。
   vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
@@ -46,6 +56,9 @@ it('surfaces why the daily log stopped writing and recovers on the next retry', 
   });
   try {
     const { createLogger, getLogStreamHealth, initLogger } = await import('../logger.js');
+    // 本文件唯一一次 initLogger(一次性入口):main/agent 流在这一步就被打开,所以它必须留在
+    // **第一个**用例里、排在本用例的 failing mock 之后 —— 放进文件级 beforeAll 会让初始流
+    // 落到默认 mock 上,后面的 ENOSPC 失败就再也触发不了。后续用例共享这个实例与这个 logDir。
     initLogger({ isDev: false, level: 'trace', logDir: root });
     await vi.waitFor(() => expect(getLogStreamHealth().main.lastFailure?.code).toBe('ENOSPC'));
 
@@ -75,7 +88,8 @@ it('surfaces why the daily log stopped writing and recovers on the next retry', 
     expect(mainWritten.some((line) => line.includes('after recovery'))).toBe(true);
   } finally {
     open.mockRestore();
-    fs.rmSync(root, { recursive: true, force: true });
+    // 根目录交给文件级 afterAll 统一删:在用例里删会让后续用例的 sessionAgentSlot mkdir
+    // 把它重建出来(#10907 review P1 的泄漏路径)。
   }
 });
 
@@ -93,7 +107,6 @@ it('surfaces why the daily log stopped writing and recovers on the next retry', 
 // - 最小失败输入:ENOSPC 失败一次 → 等过 1s 退避窗口 → 用同一行(时间戳不动)重试。
 // - tier:unit(fs / electron mock + 假时钟)。
 it('lets a record that carries an old timestamp past the retry window', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-log-stale-'));
   const SESSION = 's-stale-ts';
   stderr.length = 0;
   vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
@@ -117,8 +130,9 @@ it('lets a record that carries an old timestamp past the retry window', async ()
     return stream as fs.WriteStream;
   });
   try {
-    const { initLogger, writeCcDebugLine } = await import('../logger.js');
-    initLogger({ isDev: false, level: 'trace', logDir: root });
+    const { writeCcDebugLine } = await import('../logger.js');
+    // 不再各自 initLogger(一次性入口,这里是静默 no-op)也不再各自 mkdtemp:共享第一个用例
+    // 的根目录与实例,隔离靠 sessionId = s-stale-ts。
 
     // 今天本地 00:00 —— 保证与 slot 的 dateKey 同一天(只按日期取 key),但远早于 nextRetryAt。
     const midnight = new Date();
@@ -143,7 +157,7 @@ it('lets a record that carries an old timestamp past the retry window', async ()
     expect(written.join('')).toContain('stale line');
   } finally {
     open.mockRestore();
-    fs.rmSync(root, { recursive: true, force: true });
+    // 根目录由文件级 afterAll 统一删(见文件头注释)。
   }
 });
 
@@ -161,7 +175,6 @@ it('lets a record that carries an old timestamp past the retry window', async ()
 // - 最小失败输入:ENOSPC 持续三轮,每轮之间只推进各自的退避窗口。
 // - tier:unit(fs / electron mock + 假时钟)。
 it('keeps growing the backoff and reports a persistent failure only once', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-log-backoff-'));
   const SESSION = 's-backoff';
   stderr.length = 0;
   vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
@@ -184,8 +197,8 @@ it('keeps growing the backoff and reports a persistent failure only once', async
     return stream as fs.WriteStream;
   });
   try {
-    const { initLogger, writeCcDebugLine } = await import('../logger.js');
-    initLogger({ isDev: false, level: 'trace', logDir: root });
+    const { writeCcDebugLine } = await import('../logger.js');
+    // 共享第一个用例的根目录与实例,隔离靠 sessionId = s-backoff。
     const round = async (text: string): Promise<void> => {
       writeCcDebugLine(text, SESSION);
       await vi.advanceTimersByTimeAsync(0);
@@ -224,6 +237,6 @@ it('keeps growing the backoff and reports a persistent failure only once', async
     expect(stderr.join('').match(/ENOSPC/g)?.length ?? 0).toBe(2);
   } finally {
     open.mockRestore();
-    fs.rmSync(root, { recursive: true, force: true });
+    // 根目录由文件级 afterAll 统一删(见文件头注释)。
   }
 });
