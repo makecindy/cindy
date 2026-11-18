@@ -11162,6 +11162,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                         ) : null}
                         {shouldShowFailedScheduleNotice({
                           latestFailedRun: scheduleFailure?.source === scheduleNoticeSource ? scheduleFailure.run : null,
+                          userSendAt: currentSession?.id === sessionId ? currentSession.userSendAt : undefined,
                           readOnly: false,
                           tailError: !!errorTailClientId || !!retryHiddenTailClientId,
                           interrupted: tailBannerState?.kind === 'interrupted',
