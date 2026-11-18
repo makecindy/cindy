@@ -7937,6 +7937,18 @@
         "overviewTab": "Descripción general",
         "addPlugin": "Agregar complemento",
         "addPluginAria": "Opciones para agregar complementos",
+        "githubInstall": {
+          "label": "Instalar desde una release de GitHub…",
+          "title": "Instalar desde una release de GitHub",
+          "description": "Pega el enlace de un repositorio o de una release. Para un repositorio privado, inicia sesión con una cuenta de GitHub con acceso.",
+          "url": "Dirección de GitHub",
+          "submit": "Buscar plugin",
+          "loading": "Buscando y descargando…",
+          "invalid": "Introduce una URL de un repositorio o una etiqueta de release de GitHub.",
+          "not-found": "Esta versión no está disponible. Comprueba el enlace y tu acceso al repositorio.",
+          "ambiguous": "Este enlace contiene varios plugins. Elige una release con un solo paquete o instala el archivo directamente.",
+          "installedAlready": "Este plugin ya está instalado. Puedes actualizarlo en sus ajustes."
+        },
         "installedSection": "Instalado",
         "installedExpand": "Mostrar los {{count}} complementos instalados",
         "installedCollapse": "Ocultar complementos instalados adicionales",

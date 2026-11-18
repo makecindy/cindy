@@ -7870,6 +7870,18 @@
         "overviewTab": "Overview",
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
+        "githubInstall": {
+          "label": "Install from GitHub Release…",
+          "title": "Install from GitHub Release",
+          "description": "Paste a GitHub repository link or a specific Release link. For a private repository, sign in with an account that has access.",
+          "url": "GitHub address",
+          "submit": "Find plugin",
+          "loading": "Looking up and downloading…",
+          "invalid": "Enter a GitHub repository or Release tag URL.",
+          "not-found": "The tag is unavailable. Check the link and your repository access.",
+          "ambiguous": "This link contains more than one plugin. Use a Release link with one plugin package, or install the file directly.",
+          "installedAlready": "This plugin is already installed. Use its settings to update it."
+        },
         "installedSection": "Installed",
         "installedExpand": "Show all {{count}} installed plugins",
         "installedCollapse": "Hide additional installed plugins",

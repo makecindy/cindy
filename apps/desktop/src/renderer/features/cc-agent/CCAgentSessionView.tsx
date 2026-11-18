@@ -7246,7 +7246,7 @@ export function RunningStatusBar({
                 }
                 tokenUsage={displayTokens}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
-                outputTokens={rateOutputTokens}
+                outputTokens={tokenSpeed?.totalOutputTokens ?? rateOutputTokens}
                 history={rateHistory}
                 onPinnedChange={setRatePanelPinned}
               />

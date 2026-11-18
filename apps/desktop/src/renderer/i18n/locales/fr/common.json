@@ -7937,6 +7937,18 @@
         "overviewTab": "Vue d'ensemble",
         "addPlugin": "Ajouter un plugin",
         "addPluginAria": "Options d'ajout de plugin",
+        "githubInstall": {
+          "label": "Installer depuis une release GitHub…",
+          "title": "Installer depuis une release GitHub",
+          "description": "Collez le lien d’un dépôt ou d’une release. Pour un dépôt privé, connectez-vous avec un compte GitHub autorisé.",
+          "url": "Adresse GitHub",
+          "submit": "Rechercher le plugin",
+          "loading": "Recherche et téléchargement…",
+          "invalid": "Saisissez une URL de dépôt GitHub ou de tag de release.",
+          "not-found": "Cette version est indisponible. Vérifiez le lien et votre accès au dépôt.",
+          "ambiguous": "Ce lien contient plusieurs plugins. Choisissez une release avec un seul paquet ou installez le fichier directement.",
+          "installedAlready": "Ce plugin est déjà installé. Vous pouvez le mettre à jour dans ses paramètres."
+        },
         "installedSection": "Installés",
         "installedExpand": "Afficher les {{count}} plugins installés",
         "installedCollapse": "Masquer les autres plugins installés",

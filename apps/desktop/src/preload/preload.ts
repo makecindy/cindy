@@ -1577,6 +1577,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       Promise<import('../shared/githubPluginRelease').GithubPluginReleaseResult | boolean> =>
       ipcRenderer.invoke('ghosts:github-release', action, instanceId, assetId),
     onGithubReleaseProgress: fanOutGithubPluginReleaseProgress,
+    installGithubRelease: (action: 'install' | 'sign-in', url?: string, requestId?: string):
+      Promise<import('../shared/githubPluginRelease').GithubPluginReleaseInstallResult | boolean> =>
+      ipcRenderer.invoke('ghosts:install-github-release', action, url, requestId),
     pickFile: (): Promise<{ canceled: true } | { filePath: string }> =>
       ipcRenderer.invoke('ghosts:pick-file'),
     inspect: (

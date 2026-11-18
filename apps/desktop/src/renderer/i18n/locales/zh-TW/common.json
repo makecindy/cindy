@@ -7827,6 +7827,18 @@
         "overviewTab": "總覽",
         "addPlugin": "新增插件",
         "addPluginAria": "插件新增選項",
+        "githubInstall": {
+          "label": "從 GitHub Release 安裝…",
+          "title": "從 GitHub Release 安裝",
+          "description": "貼上 GitHub 儲存庫或指定版本的 Release 連結。私人儲存庫需要以有存取權限的 GitHub 帳號登入。",
+          "url": "GitHub 位址",
+          "submit": "尋找插件",
+          "loading": "正在尋找並下載…",
+          "invalid": "請輸入 GitHub 儲存庫或 Release 標籤連結。",
+          "not-found": "找不到這個版本，請檢查連結和儲存庫權限。",
+          "ambiguous": "這個連結包含多個插件。請使用只含一個插件的 Release 連結，或直接從檔案安裝。",
+          "installedAlready": "這個插件已安裝。可以在該插件的設定中更新。"
+        },
         "installedSection": "已安裝",
         "installedExpand": "展開全部 {{count}} 個已安裝插件",
         "installedCollapse": "收起更多已安裝插件",

@@ -7827,6 +7827,18 @@
         "overviewTab": "綜覽",
         "addPlugin": "增法器",
         "addPluginAria": "增法器之選",
+        "githubInstall": {
+          "label": "自 GitHub Release 裝入…",
+          "title": "自 GitHub Release 裝入",
+          "description": "貼 GitHub 庫址或指定 Release 之連結。私庫須以有權之 GitHub 帳號登入。",
+          "url": "GitHub 位址",
+          "submit": "尋法器",
+          "loading": "查找並下載中…",
+          "invalid": "請輸入 GitHub 庫址或 Release 標籤連結。",
+          "not-found": "此版不可得，請查連結及私庫權限。",
+          "ambiguous": "此連結含數宗法器。請選擇僅含一包之 Release，或自檔案裝入。",
+          "installedAlready": "此法器已裝。可於其設定中更新。"
+        },
         "installedSection": "已納",
         "installedExpand": "展全部已納法器 {{count}} 件",
         "installedCollapse": "收餘下已納法器",

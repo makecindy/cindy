@@ -7870,6 +7870,18 @@
         "overviewTab": "Übersicht",
         "addPlugin": "Plugin hinzufügen",
         "addPluginAria": "Optionen zum Hinzufügen von Plugins",
+        "githubInstall": {
+          "label": "Aus GitHub Release installieren…",
+          "title": "Aus GitHub Release installieren",
+          "description": "Füge die URL eines Repositorys oder eines Release ein. Für private Repositorys ist ein GitHub-Konto mit Zugriff erforderlich.",
+          "url": "GitHub-Adresse",
+          "submit": "Plugin suchen",
+          "loading": "Suche und Download laufen…",
+          "invalid": "Gib eine GitHub-URL für ein Repository oder einen Release-Tag ein.",
+          "not-found": "Diese Version ist nicht verfügbar. Prüfe den Link und deine Zugriffsrechte.",
+          "ambiguous": "Der Link enthält mehrere Plugins. Wähle ein Release mit einem Paket oder installiere die Datei direkt.",
+          "installedAlready": "Dieses Plugin ist bereits installiert. Du kannst es in seinen Einstellungen aktualisieren."
+        },
         "installedSection": "Installiert",
         "installedExpand": "Alle {{count}} installierten Plugins anzeigen",
         "installedCollapse": "Weitere installierte Plugins ausblenden",

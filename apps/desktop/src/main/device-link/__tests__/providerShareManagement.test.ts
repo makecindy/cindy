@@ -61,7 +61,7 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => state.boundaryPending,
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.owner, ownerGeneration: 1 }),
 }));
-vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
+vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device', getAuthState: () => ({ isAuthenticated: true }) }));
 vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
@@ -92,13 +92,29 @@ vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
   providerUsageLocalDay: () => '2026-10-17',
 }));
 vi.mock('../settings-store.desktop.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
-vi.mock('../providerShareApi.js', () => ({
-  providerShareApi: api,
-  fetchIdentityCard: identityCard,
-  sha256Hex: (value: string) => value,
-  providerShareLinkFor: () => 'https://cindy.app/s#test-link',
-  providerShareOwnerKey: () => state.owner,
+vi.mock('../agentNetRuntime.js', () => ({
+  agentNetSelectionKey: () => 'test-legacy', isAgentNetActive: () => false, agentNetAllowsLegacy: () => true,
 }));
+vi.mock('../agentNetSharing.js', () => ({ selectedAgentNetSharingRoute: () => null }));
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://share.example.test' }));
+vi.mock('../../serverApiClient.desktop.js', () => ({
+  serverApiFetch(resource: string, options: { baseUrl(): string; body: unknown }) {
+    options.baseUrl();
+    if (resource === '/api/me/identity-card') return identityCard();
+    if (resource === '/api/device-link/provider-shares/links') return api.createLink(options.body);
+    throw new Error('Unexpected provider share request: ' + resource);
+  },
+}));
+vi.mock('../providerShareApi.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../providerShareApi.js')>();
+  return {
+    ...actual,
+    // Keep creation and its permission checks real. Only substitute the HTTP boundary.
+    providerShareApi: { ...api, createLink: actual.providerShareApi.createLink },
+    providerShareLinkFor: () => 'https://cindy.app/s#test-link',
+    providerShareOwnerKey: () => state.owner,
+  };
+});
 vi.mock('../dispatch.desktop.js', () => ({
   notifyProviderShareCatalogChanged: fastPolicy.publish,
   getControllerDisplayName: vi.fn(), providerShareActiveControllers: vi.fn(),
@@ -159,6 +175,7 @@ import {
 
 const createLink: ProviderShareManagementCommand = { action: 'create-link', providerId: 'anthropic' };
 const LINK_ID = 'a'.repeat(64);
+const issuedLink = { invitation: 'Q'.repeat(43), shareId: 'share-id', expiresAt: '2026-11-18T10:00:00Z' };
 const mutations: ProviderShareManagementCommand[] = [
   { action: 'approve', requestId: 'r1' },
   { action: 'reject', requestId: 'r1' },
@@ -191,7 +208,7 @@ beforeEach(() => {
   received.ready = true;
   clearAllProviderShareCatalogs();
   identityCard.mockResolvedValue({ card: 'test-identity-card' });
-  api.createLink.mockResolvedValue({ invitation: 'test-invitation', linkId: LINK_ID });
+  api.createLink.mockResolvedValue({ ...issuedLink, linkId: LINK_ID });
   api.approve.mockResolvedValue({ ok: true });
   api.reject.mockResolvedValue({ ok: true });
   api.setMember.mockResolvedValue({ status: 'removed' });
@@ -861,8 +878,11 @@ describe('same-account share management during account transitions', () => {
 
   it.each(['provider lookup', 'identity card', 'link response'])('stops link creation when teardown begins during %s', async (stage) => {
     if (stage === 'provider lookup') listProviders.mockImplementationOnce(async () => { state.boundaryPending = true; return []; });
-    if (stage === 'identity card') identityCard.mockImplementationOnce(async () => { state.boundaryPending = true; return {}; });
-    if (stage === 'link response') api.createLink.mockImplementationOnce(async () => { state.boundaryPending = true; return {}; });
+    if (stage === 'identity card') identityCard.mockImplementationOnce(async () => { state.boundaryPending = true; return { card: 'test-identity-card' }; });
+    if (stage === 'link response') api.createLink.mockImplementationOnce(async () => {
+      state.boundaryPending = true;
+      return { ...issuedLink, linkId: LINK_ID };
+    });
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(identityCard).toHaveBeenCalledTimes(stage === 'provider lookup' ? 0 : 1);
     expect(api.createLink).toHaveBeenCalledTimes(stage === 'link response' ? 1 : 0);
@@ -884,7 +904,10 @@ describe('same-account share management during account transitions', () => {
   });
 
   it('also discards a link response after a committed account switch', async () => {
-    api.createLink.mockImplementationOnce(async () => { state.owner = 'owner-b'; return {}; });
+    api.createLink.mockImplementationOnce(async () => {
+      state.owner = 'owner-b';
+      return { ...issuedLink, linkId: LINK_ID };
+    });
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/PRECONDITION_FAILED/);
     expect(host.quiet).not.toHaveBeenCalled();
     expect(remember).not.toHaveBeenCalled();
@@ -914,12 +937,12 @@ describe('same-account share management during account transitions', () => {
     listProviders.mockResolvedValue([{ id: 'xd', name: 'Cindy AI · Example Studio', connected: true, agents: ['codex'] }]);
     await executeProviderShareManagementCommand({ action: 'create-link', providerId: 'xd' });
     expect(api.createLink).toHaveBeenCalledExactlyOnceWith({
-      providerId: 'xd', providerLabel: 'Cindy AI', deviceName: 'Cindy', identityCard: { card: 'test-identity-card' },
+      providerId: 'xd', providerLabel: 'Cindy AI', deviceName: 'Cindy', identityCard: 'test-identity-card',
     });
   });
 
   it('rejects an old server before exposing or registering a remote link', async () => {
-    api.createLink.mockResolvedValueOnce({ invitation: 'test-invitation' });
+    api.createLink.mockResolvedValueOnce(issuedLink);
     await expect(executeProviderShareManagementCommand(createLink)).rejects.toThrow(/UNSUPPORTED_CAPABILITY/);
     expect(host.quiet).not.toHaveBeenCalled();
     expect(host.active).not.toHaveBeenCalled();
@@ -927,7 +950,7 @@ describe('same-account share management during account transitions', () => {
   });
 
   it('still creates local share links with an old server', async () => {
-    api.createLink.mockResolvedValueOnce({ invitation: 'test-invitation' });
+    api.createLink.mockResolvedValueOnce(issuedLink);
     const handle = vi.spyOn(ipcMain, 'handle');
     try {
       registerProviderShareIpc();

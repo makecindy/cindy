@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { checkGithubPluginRelease, downloadGithubPluginRelease, installCheckedGithubPluginRelease } from '../githubPluginRelease';
+import { checkGithubPluginRelease, downloadGithubPluginRelease, findGithubPluginInstall, installCheckedGithubPluginRelease, parseGithubPluginReleaseSource } from '../githubPluginRelease';
 
 const bytes = 'fixture plugin archive';
 const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -35,6 +35,34 @@ describe('GitHub plugin release', () => {
     expect(await checkGithubPluginRelease(fetch, null, 'example/plugin', 'example-plugin', '0.2.11')).toEqual({ status: 'sign-in' });
     expect(fetch).not.toHaveBeenCalled();
     expect(await checkGithubPluginRelease(fetch, 'fixture', 'example/plugin', 'example-plugin', '0.2.11')).toEqual({ status: 'forbidden' });
+  });
+
+  it('installs from an exact tag using the fixed GitHub API and never falls back to newer releases', async () => {
+    const source = parseGithubPluginReleaseSource('https://github.com/Example/Plugin/releases/tag/v0.2.12');
+    expect(source).toEqual({ repository: 'example/plugin', tag: 'v0.2.12' });
+    expect(parseGithubPluginReleaseSource('https://github.com@elsewhere.test/Example/Plugin')).toBeUndefined();
+    expect(parseGithubPluginReleaseSource('https://github.com/Example/Plugin/releases/tag/%2e%2e')).toBeUndefined();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(Response.json(release('0.2.12')));
+    const result = await findGithubPluginInstall(fetch, 'fixture', source!);
+    expect(result).toMatchObject({ status: 'available', release: { pluginId: 'example-plugin', version: '0.2.12' } });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('https://api.github.com/repos/example/plugin/releases/tags/v0.2.12',
+      expect.objectContaining({ redirect: 'error' }));
+    fetch.mockResolvedValueOnce(new Response(null, { status: 404 }));
+    expect(await findGithubPluginInstall(fetch, 'fixture', source!)).toEqual({ status: 'not-found' });
+    fetch.mockResolvedValueOnce(new Response(null, { status: 404 }));
+    expect(await findGithubPluginInstall(fetch, null, source!)).toEqual({ status: 'sign-in' });
+  });
+
+  it('finds the highest published public package and refuses to guess across plugin identities', async () => {
+    const source = { repository: 'example/plugin' };
+    const other = release('0.2.15');
+    other.assets[0].name = 'other-0.2.15.cindy';
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(Response.json([release('0.4.0', true), release('0.2.12'), release('0.2.14')]))
+      .mockResolvedValueOnce(Response.json([other, release('0.2.14')]));
+    expect(await findGithubPluginInstall(fetch, null, source)).toMatchObject({ status: 'available', release: { version: '0.2.14' } });
+    expect(new Headers(fetch.mock.calls[0][1]?.headers).has('authorization')).toBe(false);
+    expect(await findGithubPluginInstall(fetch, 'fixture', source)).toEqual({ status: 'ambiguous' });
   });
 
   it('verifies downloaded bytes and keeps Authorization on the API request', async () => {

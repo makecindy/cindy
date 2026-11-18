@@ -218,6 +218,7 @@ import {
   pauseCodexGeneration,
   resetCodexGenerationTiming,
   codexSpeedSnapshot,
+  codexUsageRefreshDue,
   resetCodexSpeed,
   settleCodexSpeedUsage,
   resumeCodexGeneration,
@@ -10638,14 +10639,16 @@ assertRouteCurrent();
     // 由 renderer 显示最新一条, react batch 自然消化中间抖动。
     let lastStatusText = 'Working…';
     let lastUsageRefreshAt = 0;
-    const USAGE_REFRESH_MIN_MS = 500;
+    let publishedLiveRate = false;
 
     function pushStatus(text: string): void {
       lastStatusText = text;
       lastUsageRefreshAt = Date.now();
+      const usage = liveUsageSnapshot();
+      publishedLiveRate = Boolean(usage.tokenSpeed?.streaming && usage.tokenSpeed.rate > 0);
       eventQueue.push({
         type: 'status',
-        data: { status: text, ...liveUsageSnapshot(), isRunning: true },
+        data: { status: text, ...usage, isRunning: true },
         source: 'codex',
       });
     }
@@ -10656,13 +10659,7 @@ assertRouteCurrent();
       // next event from tests / terminal error sequences. Real turns always
       // pushStatus or send() first, which stamps lastUsageRefreshAt.
       if (lastUsageRefreshAt === 0) return;
-      if (now - lastUsageRefreshAt < USAGE_REFRESH_MIN_MS) return;
-      lastUsageRefreshAt = now;
-      eventQueue.push({
-        type: 'status',
-        data: { status: lastStatusText, ...liveUsageSnapshot(), isRunning: true },
-        source: 'codex',
-      });
+      if (codexUsageRefreshDue(translatorRt, lastUsageRefreshAt, publishedLiveRate, now)) pushStatus(lastStatusText);
     }
 
     function pushItemStatus(item: { type?: string; command?: string; tool?: string }): void {
@@ -12890,7 +12887,9 @@ assertRouteCurrent();
             const calibration = settleCodexSpeedUsage(translatorRt, last);
             if (calibration) log.debug('SDK ▷ token speed calibration', { turnId: params.turnId, ...calibration });
           }
-          maybePushUsageRefresh();
+          // The tool can run for minutes with no further delta to flush this settlement.
+          if (last.outputTokens > 0 && translatorRt.generationPendingToolIds.size > 0) pushStatus(lastStatusText);
+          else maybePushUsageRefresh();
           // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
           if (memoryFlushController) {
             const snap = usageTracker.snapshot();
@@ -13028,11 +13027,11 @@ assertRouteCurrent();
           params.turnId,
           'started',
         );
-        pushItemStatus(translatedItem);
         translateItemNotification('started', translatedParams, eventQueue, {
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
+          onItemBoundary: () => pushItemStatus(translatedItem),
         });
         // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
         if (replayedSubagentUpdate) emitSubagentCardUpdate(replayedSubagentUpdate);
@@ -13079,6 +13078,7 @@ assertRouteCurrent();
           log,
           onCompactBoundary: handleCompactBoundary,
         });
+        if (translatedItem.type === 'agentMessage' || translatedItem.type === 'reasoning') maybePushUsageRefresh();
         if (replayedSubagentUpdateOnUpdated) {
           emitSubagentCardUpdate(replayedSubagentUpdateOnUpdated);
         }
@@ -13859,6 +13859,7 @@ assertRouteCurrent();
           oneShotTipState.pity.delete(id);
         }
         lastStatusText = turnStartPick.text;
+        publishedLiveRate = false;
         lastUsageRefreshAt = Date.now();
         eventQueue.push({
           type: 'status',

@@ -7827,6 +7827,18 @@
         "overviewTab": "개요",
         "addPlugin": "플러그인 추가",
         "addPluginAria": "플러그인 추가 옵션",
+        "githubInstall": {
+          "label": "GitHub Release에서 설치…",
+          "title": "GitHub Release에서 설치",
+          "description": "저장소 또는 Release 주소를 붙여넣으세요. 비공개 저장소는 접근 권한이 있는 GitHub 계정이 필요합니다.",
+          "url": "GitHub 주소",
+          "submit": "플러그인 찾기",
+          "loading": "찾아서 다운로드하는 중…",
+          "invalid": "GitHub 저장소 또는 Release 태그 주소를 입력하세요.",
+          "not-found": "이 버전을 찾을 수 없습니다. 주소와 저장소 접근 권한을 확인하세요.",
+          "ambiguous": "플러그인이 여러 개 있습니다. 패키지가 하나인 Release를 선택하거나 파일에서 설치하세요.",
+          "installedAlready": "이미 설치된 플러그인입니다. 플러그인 설정에서 업데이트하세요."
+        },
         "installedSection": "설치됨",
         "installedExpand": "설치된 플러그인 {{count}}개 모두 보기",
         "installedCollapse": "추가 설치 플러그인 숨기기",
