@@ -16806,7 +16806,8 @@
         "compactResumeFirst": "请先遣一讯以续此差事，再压缩上下文。",
         "compactNothing": "无可压缩者",
         "sessionBranches": "差事分支",
-        "copySessionLink": "录差事链接"
+        "copySessionLink": "录差事链接",
+        "deliveryReceipt": "此交割"
       },
       "sessionBranches": {
         "title": "差事分支",
@@ -22500,5 +22501,49 @@
     "pane": "System & App Protection Override",
     "selectApp": "在「System & App Protection Override」里找到 {{app}}，点右侧 ⓘ。找不到时可点「＋」，按路径添加。",
     "review": "$t(macControlPermission.selectApp)\n系统若提供「选择 App」，可限定控制范围。整机控制允许访问所有应用和数据。如果同意，请逐项阅读并点「OK」确认，再点窗口底部的允许按钮。"
+  },
+  "deliveryReceipt": {
+    "title": "此交割",
+    "loading": "正读此交割…",
+    "loadFailed": "读此交割不得",
+    "copied": "收据之链已录",
+    "copyFailed": "录收据之链不成",
+    "copyLink": "录收据之链",
+    "close": "阖",
+    "status": "状",
+    "workingDir": "工作目录",
+    "branch": "枝",
+    "changes": "此番所改",
+    "verification": "所行命令",
+    "outputs": "此番所出",
+    "pullRequest": "PR",
+    "ci": "CI",
+    "ciNone": "无相联之 PR",
+    "unknown": "未明",
+    "more": "尚有 {{count}} 项",
+    "conversationOnly": "此番唯有言谈，未改文件，亦无产出。",
+    "phaseValue": {
+      "running": "方行",
+      "waiting-permission": "待汝许",
+      "waiting-answer": "待汝答",
+      "errored": "有误",
+      "usage-limit": "用量已尽",
+      "finished": "此轮已竟",
+      "idle": "闲"
+    },
+    "ciValue": {
+      "unknown": "未明",
+      "none": "未行",
+      "passed": "过",
+      "failed": "败",
+      "pending": "尚行"
+    },
+    "next": "下一步",
+    "nextValue": {
+      "waiting-answer": "待汝答",
+      "waiting-approval": "待汝许",
+      "waiting-merge": "待并",
+      "none": "无待办之下一步"
+    }
   }
 }

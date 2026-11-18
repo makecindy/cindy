@@ -17042,7 +17042,8 @@
         "compactResumeFirst": "Envía un mensaje para reanudar esta tarea antes de compactar su contexto.",
         "compactNothing": "Aún no hay nada que compactar",
         "sessionBranches": "Ramas de la sesión",
-        "copySessionLink": "Copiar enlace de la sesión"
+        "copySessionLink": "Copiar enlace de la sesión",
+        "deliveryReceipt": "Esta entrega"
       },
       "sessionBranches": {
         "title": "Ramas de la sesión",
@@ -22802,5 +22803,49 @@
     "pane": "System & App Protection Override",
     "selectApp": "En «System & App Protection Override», pulsa ⓘ junto a {{app}}. Si no aparece, añade la app en ejecución con +.",
     "review": "$t(macControlPermission.selectApp)\nSi se ofrece, puedes limitar el control a las apps que elijas. El control total permite acceder a todas las apps y datos. Si estás de acuerdo, lee y confirma cada punto y permite el acceso al final de la ventana."
+  },
+  "deliveryReceipt": {
+    "title": "Esta entrega",
+    "loading": "Leyendo esta entrega…",
+    "loadFailed": "No se pudo leer esta entrega",
+    "copied": "Enlace del recibo copiado",
+    "copyFailed": "No se pudo copiar el enlace del recibo",
+    "copyLink": "Copiar enlace del recibo",
+    "close": "Cerrar",
+    "status": "Estado",
+    "workingDir": "Directorio de trabajo",
+    "branch": "Rama",
+    "changes": "Qué cambió",
+    "verification": "Comandos ejecutados",
+    "outputs": "Qué se produjo",
+    "pullRequest": "Pull request",
+    "ci": "CI",
+    "ciNone": "Sin pull request",
+    "unknown": "Desconocido",
+    "more": "{{count}} más",
+    "conversationOnly": "Esta sesión solo tiene conversación. No hubo cambios ni archivos producidos.",
+    "phaseValue": {
+      "running": "En ejecución",
+      "waiting-permission": "Esperando tu aprobación",
+      "waiting-answer": "Esperando tu respuesta",
+      "errored": "Hubo un error",
+      "usage-limit": "Límite de uso alcanzado",
+      "finished": "Este turno terminó",
+      "idle": "Inactivo"
+    },
+    "ciValue": {
+      "unknown": "Desconocido",
+      "none": "No ejecutado",
+      "passed": "Aprobado",
+      "failed": "Fallido",
+      "pending": "En curso"
+    },
+    "next": "Siguiente",
+    "nextValue": {
+      "waiting-answer": "Esperando tu respuesta",
+      "waiting-approval": "Esperando tu aprobación",
+      "waiting-merge": "Pendiente de fusionar",
+      "none": "No hay otro paso en espera"
+    }
   }
 }

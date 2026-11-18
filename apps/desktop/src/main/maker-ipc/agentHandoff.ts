@@ -12,6 +12,7 @@
  */
 
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
+import { judgeCommandOutcome } from '@cindy/maker-shared/delivery-receipt';
 import {
   describeMessageSourceSender,
   formatSourceRef,
@@ -450,17 +451,12 @@ function extractFailedPathHints(text: string): string[] {
   return hints;
 }
 
-function extractCommandOutcome(content: Record<string, unknown>): string | undefined {
-  if (content.isError === true) return 'failed';
-  if (typeof content.exitCode === 'number' && Number.isFinite(content.exitCode)) {
-    return `exit ${content.exitCode}`;
-  }
-  const text = extractPlainText(content.fullText ?? content.output ?? content.content ?? content);
-  const exitMatch = text.match(/exit(?:ed)?(?:\s+code)?[:\s]+(-?\d+)/i);
-  if (exitMatch) return `exit ${exitMatch[1]}`;
-  if (/\b(tests? failed|failing tests|assertionerror)\b/i.test(text)) return 'tests failed';
-  if (content.isError === false) return 'ok';
-  return undefined;
+export function extractCommandOutcome(content: Record<string, unknown>): string | undefined {
+  return judgeCommandOutcome({
+    isError: content.isError,
+    exitCode: content.exitCode,
+    text: extractPlainText(content.fullText ?? content.output ?? content.content ?? content),
+  });
 }
 
 function isFailedOutcome(outcome: string | undefined): boolean {

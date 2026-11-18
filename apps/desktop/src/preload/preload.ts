@@ -4390,7 +4390,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onDeepLinkNavigate: (
     callback: (
       payload:
-        | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string }
+        | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string; openDeliveryReceipt?: true }
         | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string }
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
@@ -4431,6 +4431,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         messageClientId?: unknown;
         deviceId?: unknown;
         islandEntryId?: unknown;
+        openDeliveryReceipt?: unknown;
         groupId?: unknown;
         messageId?: unknown;
         threadRootId?: unknown;
@@ -4449,6 +4450,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
           ...(typeof p.islandEntryId === 'string' && /^[0-9]{1,32}$/.test(p.islandEntryId)
             ? { islandEntryId: p.islandEntryId }
             : {}),
+          ...(p.openDeliveryReceipt === true ? { openDeliveryReceipt: true as const } : {}),
         });
       } else if (p.type === 'plugin' && isValidPluginResourceId(p.pluginId)) {
         callback({ type: 'plugin', pluginId: p.pluginId });
@@ -4528,7 +4530,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // MainLayout mount 和供应商导入唤醒事件共用此入口，take 一次清空。
   // 详见 main/deepLink.ts 的 pending buffer 段。
   takePendingDeepLink: (): Promise<
-    | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string }
+    | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string; openDeliveryReceipt?: true }
         | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string }
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }

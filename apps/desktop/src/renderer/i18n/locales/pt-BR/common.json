@@ -17042,7 +17042,8 @@
         "compactResumeFirst": "Envie uma mensagem para retomar esta tarefa antes de compactar o contexto.",
         "compactNothing": "Nada para compactar ainda",
         "sessionBranches": "Branches da sessão",
-        "copySessionLink": "Copiar link da sessão"
+        "copySessionLink": "Copiar link da sessão",
+        "deliveryReceipt": "Esta entrega"
       },
       "sessionBranches": {
         "title": "Branches da sessão",
@@ -22803,5 +22804,49 @@
     "pane": "System & App Protection Override",
     "selectApp": "Em “System & App Protection Override”, clique em ⓘ ao lado de {{app}}. Se o app não estiver na lista, use + para adicionar a cópia em execução.",
     "review": "$t(macControlPermission.selectApp)\nSe a opção estiver disponível, você pode limitar o controle aos apps que escolher. O controle total dá acesso a todos os apps e dados. Se concordar, leia e confirme cada item e permita o acesso no fim da janela."
+  },
+  "deliveryReceipt": {
+    "title": "Esta entrega",
+    "loading": "Lendo esta entrega…",
+    "loadFailed": "Não foi possível ler esta entrega",
+    "copied": "Link do recibo copiado",
+    "copyFailed": "Não foi possível copiar o link do recibo",
+    "copyLink": "Copiar link do recibo",
+    "close": "Fechar",
+    "status": "Estado",
+    "workingDir": "Diretório de trabalho",
+    "branch": "Branch",
+    "changes": "O que mudou",
+    "verification": "Comandos executados",
+    "outputs": "O que foi produzido",
+    "pullRequest": "Pull request",
+    "ci": "CI",
+    "ciNone": "Sem pull request",
+    "unknown": "Desconhecido",
+    "more": "mais {{count}}",
+    "conversationOnly": "Esta sessão só tem a conversa. Nada foi alterado nem produzido.",
+    "phaseValue": {
+      "running": "Em execução",
+      "waiting-permission": "Aguardando sua aprovação",
+      "waiting-answer": "Aguardando sua resposta",
+      "errored": "Ocorreu um erro",
+      "usage-limit": "Limite de uso atingido",
+      "finished": "Este turno terminou",
+      "idle": "Ociosa"
+    },
+    "ciValue": {
+      "unknown": "Desconhecido",
+      "none": "Não executado",
+      "passed": "Aprovado",
+      "failed": "Falhou",
+      "pending": "Ainda em execução"
+    },
+    "next": "Próximo",
+    "nextValue": {
+      "waiting-answer": "Aguardando sua resposta",
+      "waiting-approval": "Aguardando sua aprovação",
+      "waiting-merge": "Aguardando merge",
+      "none": "Não há mais nada aguardando"
+    }
   }
 }

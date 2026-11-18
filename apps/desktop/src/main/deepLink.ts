@@ -93,7 +93,7 @@ export type DeepLinkPayload =
    * islandEntryId 只由主进程的灵动岛点击写入(URL 解析从不产生它),标识这一次点击,
    * 供 renderer 在导航落地后申请处置被点的那张卡。
    */
-  | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string }
+  | { type: 'session'; id: string; deviceId?: string; messageClientId?: string; islandEntryId?: string; openDeliveryReceipt?: true }
   | { type: 'chat-message'; groupId: string; messageId: string; threadRootId?: string; conversationKind?: 'direct' }
   | { type: 'project'; workingDir: string }
   /**
@@ -222,10 +222,12 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (type === 'session') {
     const messageClientId = parseSessionQueryParam(rawValue, 'message');
     const deviceId = parseSessionQueryParam(rawValue, 'device');
+    const openDeliveryReceipt = parseSessionQueryParam(rawValue, 'receipt') === '1';
     return {
       type: 'session', id: decoded,
       ...(messageClientId ? { messageClientId } : {}),
       ...(deviceId ? { deviceId } : {}),
+      ...(openDeliveryReceipt ? { openDeliveryReceipt: true as const } : {}),
     };
   }
   if (type === 'project') {
@@ -291,7 +293,7 @@ function parseSettingsConnectParam(rawValue: string): string | null | typeof INV
  * 从 session 深链的原始 value 里抽消息锚点或设备归属。
  * 值为空 / 解码失败 → null(锚点非法不拖累 sessionId 本身的解析)。
  */
-function parseSessionQueryParam(rawValue: string, key: 'message' | 'device' | 'group'): string | null {
+function parseSessionQueryParam(rawValue: string, key: 'message' | 'device' | 'group' | 'receipt'): string | null {
   const hashIdx = rawValue.indexOf('#');
   const noHash = hashIdx >= 0 ? rawValue.slice(0, hashIdx) : rawValue;
   const queryIdx = noHash.indexOf('?');

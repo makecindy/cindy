@@ -17042,7 +17042,8 @@
         "compactResumeFirst": "Envoyez un message pour reprendre cette session avant de compacter son contexte.",
         "compactNothing": "Rien à compacter pour l'instant",
         "sessionBranches": "Branches de la session",
-        "copySessionLink": "Copier le lien de la session"
+        "copySessionLink": "Copier le lien de la session",
+        "deliveryReceipt": "Cette livraison"
       },
       "sessionBranches": {
         "title": "Branches de la session",
@@ -22802,5 +22803,49 @@
     "pane": "System & App Protection Override",
     "selectApp": "Dans « System & App Protection Override », cliquez sur ⓘ à côté de {{app}}. Si l’app ne figure pas dans la liste, ajoutez la copie en cours d’exécution avec +.",
     "review": "$t(macControlPermission.selectApp)\nSi l’option est proposée, vous pouvez limiter le contrôle aux apps de votre choix. Le contrôle intégral donne accès à toutes les apps et données. Si vous acceptez, lisez et confirmez chaque élément, puis autorisez l’accès en bas de la fenêtre."
+  },
+  "deliveryReceipt": {
+    "title": "Cette livraison",
+    "loading": "Lecture de cette livraison…",
+    "loadFailed": "Impossible de lire cette livraison",
+    "copied": "Lien du reçu copié",
+    "copyFailed": "Impossible de copier le lien du reçu",
+    "copyLink": "Copier le lien du reçu",
+    "close": "Fermer",
+    "status": "État",
+    "workingDir": "Répertoire de travail",
+    "branch": "Branche",
+    "changes": "Ce qui a changé",
+    "verification": "Commandes exécutées",
+    "outputs": "Ce qui a été produit",
+    "pullRequest": "Pull request",
+    "ci": "CI",
+    "ciNone": "Aucune pull request",
+    "unknown": "Inconnu",
+    "more": "{{count}} de plus",
+    "conversationOnly": "Cette session ne contient que la conversation. Rien n’a été modifié ni produit.",
+    "phaseValue": {
+      "running": "En cours",
+      "waiting-permission": "En attente de votre accord",
+      "waiting-answer": "En attente de votre réponse",
+      "errored": "Une erreur est survenue",
+      "usage-limit": "Limite d’usage atteinte",
+      "finished": "Ce tour est terminé",
+      "idle": "Inactif"
+    },
+    "ciValue": {
+      "unknown": "Inconnu",
+      "none": "Non exécuté",
+      "passed": "Réussi",
+      "failed": "Échoué",
+      "pending": "Encore en cours"
+    },
+    "next": "Suite",
+    "nextValue": {
+      "waiting-answer": "En attente de votre réponse",
+      "waiting-approval": "En attente de votre accord",
+      "waiting-merge": "En attente de fusion",
+      "none": "Rien d’autre n’est en attente"
+    }
   }
 }
