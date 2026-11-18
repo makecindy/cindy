@@ -7033,7 +7033,8 @@
         "replaced": "Ligação substituída por outra instância deste dispositivo",
         "too-many-connections": "Limite de ligações atingido para esta conta",
         "version-mismatch": "Versão do protocolo incompatível — atualize a aplicação",
-        "unstable": "A ligação está constantemente a cair e a restabelecer-se — verifique a rede ou reinicie o Cindy se o problema persistir"
+        "unstable": "A ligação está constantemente a cair e a restabelecer-se — verifique a rede ou reinicie o Cindy se o problema persistir",
+        "agent-net-relay-down": "Não é possível aceder ao relay do Agent-Net; a restabelecer a ligação. Os computadores ligados diretamente continuam a funcionar; os outros dispositivos não conseguem ligar-se por agora"
       },
       "refresh": "Atualizar",
       "empty": "Ainda não há outros dispositivos. Inicie sessão no {{appName}} com a mesma conta noutro computador e este aparecerá aqui.",
@@ -16227,7 +16228,8 @@
         "replaced": "Esta ligação foi substituída por outra instância do mesmo dispositivo — a restabelecer ligação…",
         "too-many-connections": "Demasiados dispositivos online nesta conta — o servidor recusou a ligação",
         "version-mismatch": "A versão do protocolo não corresponde à do servidor — atualize a aplicação e tente novamente",
-        "unstable": "Este computador perde e restabelece constantemente a ligação, pelo que as ações remotas podem continuar a exceder o tempo limite — verifique a rede ou reinicie a Cindy e tente novamente"
+        "unstable": "Este computador perde e restabelece constantemente a ligação, pelo que as ações remotas podem continuar a exceder o tempo limite — verifique a rede ou reinicie a Cindy e tente novamente",
+        "agent-net-relay-down": "Este computador não consegue aceder ao relay do Agent-Net e está a restabelecer a ligação. As ações remotas falham se o outro computador não estiver ligado diretamente"
       }
     },
     "common": {
@@ -21872,6 +21874,7 @@
     "removeTitle": "Remover {{name}}?",
     "removeDescription": "O Cindy deixará de atribuir tarefas a esta conta. A sessão da CLI e o histórico de conversas permanecem neste computador.",
     "failed": "Não foi possível ler ou atualizar a conta. Verifique a sessão da CLI e a ligação à rede e tente novamente.",
+    "unreachable": "Não foi possível contactar o serviço da conta, por isso não é possível confirmar a sessão. Verifique a ligação à rede e tente novamente.",
     "openDirectory": "Abrir pasta da conta",
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Pode ter sido movida ou eliminada.",
     "loginAgain": "Iniciar sessão novamente",

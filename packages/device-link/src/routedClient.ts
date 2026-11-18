@@ -6,8 +6,8 @@
  * 事件从两条连接汇总;官方线路下专用连接不启动,全部调用落回基类,行为不变。
  *
  * 已验证的 V2 分享按资源安装独立连接,优先于兼容线路,撤下后也不回落。
- * 各条连接的故障互不牵连:状态、连接问题与 presence 只反映主连接;host 要看承载某个 peer 的
- * 连接时用 `connectionFor` / `crossAccountConnection`。
+ * 各条连接的故障互不牵连:状态与连接问题只反映主连接;同账号 presence 取承载该设备的连接。
+ * host 要看承载某个 peer 的连接时用 `connectionFor` / `crossAccountConnection`。
  */
 import {
   DeviceLinkClient,
@@ -61,6 +61,13 @@ export interface LegacyPeerConnectionOptions {
   primaryCapability?: string;
   /** The host verifies the attestation in the base client before this classifier runs. */
   prefersPrimary?(payload: unknown): boolean;
+  /**
+   * After a probe found that the peer prefers the main connection, how to re-open it there. Absent: the main connection's own
+   * link-open, as before. A host with its own channel to that peer (Agent-Net sessions) may open it there, and calls
+   * `primary` otherwise.
+   */
+  openOnPrimary?(peer: string, payload: unknown, timeoutMs: number | undefined,
+    primary: () => Promise<LinkAcceptPayload>): Promise<LinkAcceptPayload>;
   options: DeviceLinkClientOptions;
 }
 
@@ -190,20 +197,27 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     return this.routed(peer) ?? this;
   }
 
+  /**
+   * The compatibility connection while it runs (the newer transport is the main connection and older connections are
+   * allowed); null otherwise. For what only it reaches, such as phones that never registered on the newer transport.
+   */
+  legacyConnection(): DeviceLinkClient | null {
+    return this.legacyRunning ? this.legacy : null;
+  }
+
+  /**
+   * The compatibility connection's own connection problems (a rejected token there, for example); the main connection's go to
+   * onConnectionIssue. A host without a separate cross-account connection watches this, or a token rejected on the
+   * compatibility connection is never refreshed and the devices only it reaches stay away (2026-11-17: Node Host).
+   */
+  onLegacyConnectionIssue(cb: (issue: DeviceLinkConnectionIssue | null) => void): () => void {
+    return this.legacy?.onConnectionIssue(cb) ?? (() => undefined);
+  }
+
   override crossAccountConnection(): DeviceLinkClient {
     if (this.primaryScopedPreference()) return this;
     if (this.legacyRunning && this.crossAccountUsesLegacy()) return this.legacy!;
     return (this.crossAccountRunning ? this.crossAccount : null) ?? this;
-  }
-
-  /**
-   * 旧同账号对端专用的兼容连接(没有则为 null)。
-   *
-   * host 据此区分「承载某个 peer 的连接是哪条」—— 它与跨账号的官方连接是两条不同的
-   * 连接,用的中转也不同(legacy 走当前中转,跨账号走官方中转)。
-   */
-  override legacyConnection(): DeviceLinkClient | null {
-    return this.legacy;
   }
 
   preferPrimaryScopedConnection(check: () => boolean): () => void {
@@ -337,9 +351,11 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     });
     connection.onStatusChange((status) => {
       if (status !== 'online') {
+        const lost = connection === this ? [] : [...cache.values()];
         cache.clear();
-        // host 在主连接断开时清空自己的在线视图;重连后承载连接上仍有效的快照要重新交一次。
+        // The host clears its online view when the primary disconnects. Replay any still-valid legacy snapshots on reconnect.
         if (connection === this) for (const subscriber of this.presenceSubscribers) subscriber.delivered.clear();
+        if (this.started) for (const snap of lost) this.routePresence(snap.deviceId, snap);
         return;
       }
       for (const peer of this.presencePeers()) this.routePresence(peer);
@@ -353,12 +369,14 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
   }
 
   /** 把承载该 peer 的连接上的最新快照交给 host;承载连接还没有快照时不猜测。 */
-  private routePresence(peer: string): void {
+  private routePresence(peer: string, lost?: PresenceSnapshot): void {
     const carrier = this.connectionFor(peer);
-    const snap = this.presenceByConnection.get(carrier)?.get(peer);
-    if (!snap) return;
+    const current = this.presenceByConnection.get(carrier)?.get(peer);
+    const offline = lost?.online ? { ...lost, online: false, busy: false, remoteControlEnabled: false } : undefined;
     for (const subscriber of this.presenceSubscribers) {
-      if (subscriber.delivered.get(peer) === snap) continue;
+      const delivered = subscriber.delivered.get(peer);
+      const snap = current ?? (delivered === lost ? offline : undefined);
+      if (!snap || delivered === snap) continue;
       subscriber.delivered.set(peer, snap);
       try {
         subscriber.cb(snap);
@@ -542,7 +560,8 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
           // onPeerRouteOwnerChanged(桌面端 #9537 的 Codex review P1)。
           this.setLegacyRoute(dst, true);
           this.routePresence(dst);
-          return super.openLink(dst, payload, timeoutMs);
+          const primary = () => super.openLink(dst, payload, timeoutMs);
+          return this.legacyOptions?.openOnPrimary ? this.legacyOptions.openOnPrimary(dst, payload, timeoutMs, primary) : primary();
         }
         this.setLegacyRoute(dst, false);
         this.routePresence(dst);

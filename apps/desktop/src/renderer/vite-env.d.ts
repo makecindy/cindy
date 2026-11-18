@@ -141,7 +141,7 @@ interface DeviceLinkDeviceView {
 
 /** 设备互联:relay 连接问题(镜像 @cindy/device-link 的 DeviceLinkConnectionIssue) */
 interface DeviceLinkConnectionIssuePayload {
-  kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
+  kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable' | 'agent-net-relay-down';
   closeCode?: number;
   detail?: string;
   at: number;
@@ -178,6 +178,7 @@ interface DeviceLinkPeerLinkView {
 }
 interface DeviceLinkPeerLinksSnapshot {
   links: DeviceLinkPeerLinkView[];
+  relayProtocol?: 'agent-net' | 'device-link';
   /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
   relayRttMs: number | null;
 }

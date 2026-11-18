@@ -20,7 +20,10 @@ export function protocolKind(node: TopologyNode): ProtocolKind | null {
 }
 
 export function protocolLabel(node: TopologyNode, t: T): string | null {
-  const kind = protocolKind(node);
+  return protocolKindLabel(protocolKind(node), t);
+}
+
+export function protocolKindLabel(kind: ProtocolKind | null | undefined, t: T): string | null {
   if (!kind) return null;
   return t(kind === 'agent-net' ? 'settings.remoteControl.v2.protocol.agentNet' : 'settings.remoteControl.v2.protocol.deviceLink');
 }

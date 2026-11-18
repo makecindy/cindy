@@ -384,3 +384,24 @@ describe("Anthropic Batch reference prices vendor-effective 2026-10-22 and adopt
     }
   });
 });
+
+// Server #1497 / #1498: GPT-6.2 Sol and Astra shipped 2026-11-17 without a catalog price, so
+// subscription value could not be estimated. Sol works in a 500K window, so the price must
+// also resolve above the 272K boundary. Unit tier; shared price consumer, no account access.
+describe("GPT-6.2 official reference prices", () => {
+  it.each([
+    ["gpt-6.2-sol", "standard", 272000, 2, 10, 0.1, 2.5],
+    ["gpt-6.2-sol", "standard", 272001, 4, 15, 0.2, 5],
+    ["gpt-6.2-sol", "fast", 400000, 8, 30, 0.4, 10],
+    ["gpt-6.2-astra", "standard", 272000, 8, 40, 0.4, 10],
+    ["gpt-6.2-astra", "standard", 272001, 16, 60, 0.8, 20],
+    ["gpt-6.2-astra", "batch", 100000, 4, 20, 0.2, 5],
+  ] as const)("resolves %s %s at %i input tokens", (model, variant, inputTokens, input, output, read, write) => {
+    const options = { at: "2026-11-18", officialOnly: true, variant, inputTokens };
+    expect(resolveModelReferencePrice(registry, "openai", model, options)?.price).toMatchObject({
+      currency: "USD", variant, inputPerMtok: input, outputPerMtok: output, cacheReadPerMtok: read, cacheWritePerMtok: write,
+    });
+    // Released 2026-11-17: no tariff is invented for earlier usage.
+    expect(resolveBaseModelReferencePrice(registry, model, { ...options, at: "2026-11-16" })).toBeUndefined();
+  });
+});

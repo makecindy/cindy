@@ -6923,7 +6923,8 @@
         "replaced": "連線為他處同一裝置所替",
         "too-many-connections": "同名籍連線數已達上限",
         "version-mismatch": "協議版本不一，請升級應用",
-        "unstable": "連線屢斷屢連，請察網路；若持續如此，請重啟 Cindy"
+        "unstable": "連線屢斷屢連，請察網路；若持續如此，請重啟 Cindy",
+        "agent-net-relay-down": "不能達 Agent-Net 中轉，方復連；已直連之電腦如常可用，餘裝置暫不能連"
       },
       "refresh": "重整",
       "empty": "海內尚無知己機。於另一臺機上以同一名籍登入 {{appName}}，此處即見之。",
@@ -16002,7 +16003,8 @@
         "replaced": "此機連線為他處同一裝置所替，方重連…",
         "too-many-connections": "同名籍在線之裝置過多，連線為服務端所拒",
         "version-mismatch": "與服務端協議版本不合，請升級應用後再試",
-        "unstable": "此機連線屢斷屢連，遠端操作或屢逾時；請察網路，或重啟 Cindy 後再試"
+        "unstable": "此機連線屢斷屢連，遠端操作或屢逾時；請察網路，或重啟 Cindy 後再試",
+        "agent-net-relay-down": "此機不能達 Agent-Net 中轉，方復連；彼機非直連者，遠端操作將敗"
       }
     },
     "common": {
@@ -21585,6 +21587,7 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 將不復派差事予此帳號。CLI 登入與言談錄仍存於此機。",
     "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
+    "unreachable": "暫時連不上帳號服務，無法確認登入狀態。請檢查網路後重試。",
     "openDirectory": "啟帳號目錄",
     "openDirectoryFailed": "帳號目錄未能啟，或已移或已刪。",
     "loginAgain": "重登",

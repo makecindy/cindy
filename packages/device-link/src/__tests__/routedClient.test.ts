@@ -211,6 +211,112 @@ describe('RoutedDeviceLinkClient', () => {
     expect(legacy.sent.some((f) => f.kind === 'invoke')).toBe(!newer);
     client.stop();
   });
+  // 2026-11-17: a peer probed during its restart attests the newer transport before it is reachable there; the host opens the link
+  // on its own channel to that peer (Agent-Net sessions) instead of queueing a link-open frame on the main connection.
+  it('lets the host re-open a peer that prefers the main connection on its own channel, or fall back to the main connection', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-test-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const seen: string[] = [];
+    let ownChannel = true;
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => true, useForPeer: () => false, probeForPeer: () => true, primaryCapability: 'agent-net-node-v2',
+      openOnPrimary: async (peer, _payload, _timeout, primaryOpen) => {
+        seen.push(peer);
+        return ownChannel ? { appVersion: 'own-channel', allowlistHash: 'own' } : primaryOpen();
+      },
+      options: options('ws://v1-relay'),
+    });
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    const primary = sockets.find((s) => s.url === 'ws://v2-node')!, legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
+    const probeAccepted = async (peer: string) => {
+      const probe = legacy.sent.find((f) => f.kind === 'link-open' && f.dst === peer)!;
+      legacy.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: probe.id, src: peer, payload: {
+        appVersion: '1', allowlistHash: 'unit', capabilities: ['agent-net-node-v2'] } });
+      await vi.advanceTimersByTimeAsync(1);
+    };
+    const own = client.openLink('restarting-peer', {}); await vi.advanceTimersByTimeAsync(1);
+    await probeAccepted('restarting-peer');
+    await expect(own).resolves.toMatchObject({ appVersion: 'own-channel' });
+    expect(primary.sent.some((f) => f.kind === 'link-open')).toBe(false);
+    ownChannel = false;
+    const fallback = client.openLink('other-peer', {}); await vi.advanceTimersByTimeAsync(1);
+    await probeAccepted('other-peer');
+    const actual = primary.sent.find((f) => f.kind === 'link-open' && f.dst === 'other-peer')!;
+    expect(actual).toBeDefined();
+    primary.push({ v: PROTOCOL_VERSION, kind: 'link-accept', id: actual.id, src: 'other-peer', payload: { appVersion: '1', allowlistHash: 'unit' } });
+    await expect(fallback).resolves.toMatchObject({ appVersion: '1' });
+    expect(seen).toEqual(['restarting-peer', 'other-peer']);
+    client.stop();
+  });
+  // 2026-11-17 audit: presence arriving on the compatibility socket never reached the host, so phones without the newer
+  // transport and older Desktops no longer updated online/allow-control live while it was on.
+  it('marks a legacy-only phone offline when its connection drops and leaves primary presence alone', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-test-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    let compatibility = true;
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => compatibility, useForPeer: (peer) => peer === 'phone', options: options('ws://v1-relay'),
+    });
+    const seen: string[] = [];
+    client.onPresenceChanged((snap) => seen.push(`${snap.deviceId}:${snap.online}:${snap.busy}`));
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    const primary = sockets.find((s) => s.url === 'ws://v2-node')!, legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    primary.ack(); legacy.ack(); await vi.advanceTimersByTimeAsync(1);
+    expect(client.legacyConnection()).not.toBeNull();
+    const presence = (socket: FakeWs, deviceId: string, online: boolean, busy = false) => socket.push({ v: PROTOCOL_VERSION,
+      kind: 'presence-changed', payload: { deviceId, online, busy, deviceName: deviceId, platform: 'test', appVersion: '1', lastSeenAt: 1,
+        remoteControlEnabled: true } });
+    // A phone only the compatibility socket knows.
+    presence(legacy, 'phone', true);
+    presence(primary, 'desktop', true, true);
+    presence(legacy, 'desktop', false);
+    expect(seen).toEqual(['phone:true:false', 'desktop:true:true']);
+    legacy.close(1006); await vi.advanceTimersByTimeAsync(1);
+    expect(seen).toEqual(['phone:true:false', 'desktop:true:true', 'phone:false:false']);
+    client.stop();
+    // Compatibility connection not running (the newer transport off): exactly the main connection's presence.
+    compatibility = false; sockets.length = 0; seen.length = 0;
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    const mainOnly = sockets.find((s) => s.url === 'ws://v2-node')!;
+    mainOnly.ack(); await vi.advanceTimersByTimeAsync(1);
+    expect(client.legacyConnection()).toBeNull();
+    presence(mainOnly, 'desktop', false); presence(mainOnly, 'desktop', true, true);
+    expect(seen).toEqual(['desktop:false:false', 'desktop:true:true']);
+    client.stop();
+  });
+  // 2026-11-17：Node Host 没有单独的跨账号连接，兼容连接的 401 没人听，令牌一直不刷新、手机一直连不上它，状态里也看不到原因。
+  it('reports a problem of the compatibility connection on its own, and leaves the main connection clear', async () => {
+    const sockets: FakeWs[] = [];
+    const options = (url: string): DeviceLinkClientOptions => ({
+      getWsUrl: () => url, getToken: async () => 'unit-test-token',
+      getHello: () => ({ deviceName: 'unit', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+      createWebSocket: (address, headers) => { const socket = new FakeWs(address, headers); sockets.push(socket); return socket; },
+    });
+    const client = new RoutedDeviceLinkClient(options('ws://v2-node'), undefined, {
+      active: () => true, useForPeer: (peer) => peer === 'phone', options: options('ws://v1-relay'),
+    });
+    const issues: Array<string | null> = [];
+    const off = client.onLegacyConnectionIssue((issue) => issues.push(issue?.kind ?? null));
+    client.start(); await vi.advanceTimersByTimeAsync(1);
+    sockets.find((s) => s.url === 'ws://v2-node')!.ack();
+    const legacy = sockets.find((s) => s.url === 'ws://v1-relay')!;
+    legacy.emit('error', new Error('Unexpected server response: 401'));
+    legacy.emit('close', 1006);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(issues).toContain('auth-failed');
+    expect(client.getConnectionIssue()).toBeNull();
+    off(); client.stop();
+  });
+
   it('routes only peers without V2 to the compatibility socket and replies on the path which accepted a request', async () => {
     const sockets: FakeWs[] = [];
     const options = (url: string): DeviceLinkClientOptions => ({
