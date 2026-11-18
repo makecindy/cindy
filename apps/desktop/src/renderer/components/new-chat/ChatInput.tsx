@@ -45,12 +45,14 @@ import {
   ComposerOrderedList,
   handleStructuredListBackspace,
   handleComposerListEnter,
+  handleComposerListTab,
   hasTrailingPlainListParagraph,
   isTopLevelBlockSelection,
   isTrailingEmptyTopLevelParagraph,
   promoteTrailingPlainListParagraph,
 } from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
+import { ComposerLineEdgeKeymap } from './ComposerLineEdgeKeymap';
 import { useVoiceProcessingIndicator } from '../../voice-input/useVoiceProcessingIndicator';
 import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import { restoreComposerDocument } from './restoreComposerDocument';
@@ -164,6 +166,7 @@ import { captureComposerSendSnapshot, isComposerSendSnapshotCurrent } from './co
 import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 
 import {
+  discoveredCopyReason,
   confirmAgentSwitchRisk,
   isAgentSwitchEchoConfigConsistent,
   isAgentSwitchResponseFresh,
@@ -386,7 +389,7 @@ import {
 } from '@/lib/providerModels';
 import {
   clearProviderModelEffort,
-  clearProviderModelFast, editProviderModelMemoryBatch,
+  clearProviderModelFast, clearProviderModelThinking, editProviderModelMemoryBatch,
   getProviderModelEffort,
   setProviderModelChoice,
   setProviderModelEffort,
@@ -988,6 +991,7 @@ const LOCAL_MODEL_MEMORY: ModelMemoryAccessors = {
   setFast: setProviderModelFast,
   getThinking: getProviderModelThinking,
   setThinking: setProviderModelThinking,
+  clearThinking: clearProviderModelThinking,
   // 「恢复推荐」= 删记忆键(跟随目录新默认),不是把这一版的默认快照写回去。
   // device-link 镜像没有这两个入口(隧道协议没有删除那一笔),按各自能力退化。
   clearEffort: clearProviderModelEffort,
@@ -1019,6 +1023,9 @@ const SSH_PROJECT_MODEL_MEMORY: ModelMemoryAccessors = (() => {
       local(agent) ? getProviderModelThinking(agent, providerId, modelId) : undefined,
     setThinking: (agent, providerId, modelId, enabled) => {
       if (local(agent)) setProviderModelThinking(agent, providerId, modelId, enabled);
+    },
+    clearThinking: (agent, providerId, modelId) => {
+      if (local(agent)) clearProviderModelThinking(agent, providerId, modelId);
     },
     clearEffort: (agent, providerId, modelId) => {
       if (local(agent)) clearProviderModelEffort(agent, providerId, modelId);
@@ -2056,6 +2063,9 @@ export function ChatInput({
   const hostSupportsOrcaRemoteWorkerAgentRelocation =
     hostCcCaps.capabilities?.supportsOrcaRemoteWorkerAgentRelocation === true ||
     hostCodexCaps.capabilities?.supportsOrcaRemoteWorkerAgentRelocation === true;
+  const hostSupportsQueueHeadRetry = !deviceLinkDeviceId
+    || hostCcCaps.capabilities?.supportsQueueHeadRetry === true
+    || hostCodexCaps.capabilities?.supportsQueueHeadRetry === true;
   // Orca Lead/Worker keeps its workflow identity in the session row and vendor
   // options; it can therefore use the same deferred handoff transaction as a
   // normal session. Remote sessions remain gated by their host capabilities.
@@ -2505,6 +2515,11 @@ export function ChatInput({
       WindowsSelectionReplacement.configure({
         enabled: window.electronAPI.platform === 'win32',
       }),
+      // macOS Ctrl+A / Ctrl+E 按"当前行"(hardBreak 分行)移到行首 / 行尾,
+      // 而不是 Tiptap 默认的整段开头 / 结尾。
+      ComposerLineEdgeKeymap.configure({
+        enabled: window.electronAPI.platform === 'darwin',
+      }),
       // 空输入框全选 / 全选后删空都会在行首留一块幽灵高亮(空 paragraph 被整体框进
       // AllSelection,删空后 Chromium 的 DOM selection 也不跟着折叠)。见模块头注释。
       EmptyDocSelectionGuard,
@@ -2834,6 +2849,14 @@ export function ChatInput({
         // but we expose a ref-based escape hatch via `panelBridgeRef`.
         const bridge = panelBridgeRef.current;
         if (bridge?.captureKey(event)) {
+          event.preventDefault();
+          return true;
+        }
+
+        // Tab / Shift+Tab — 光标在结构化列表里时调整列表层级(大纲式编辑)。
+        // 放在 captureKey 之后(palette 打开时 Tab 归 palette),推荐提示词与
+        // cycle-permission-mode 之前:在列表里 Shift+Tab 不会误切权限模式。
+        if (handleComposerListTab(view, event)) {
           event.preventDefault();
           return true;
         }
@@ -4717,12 +4740,17 @@ export function ChatInput({
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
   // agent-builtin + agent-skill); 内部并发, mergeCommands 按优先级合并去重。
-  const paletteAgentKind = agentKind ?? 'claude-code';
+  const paletteAgentKind = runtimeAgentKind ?? agentKind ?? 'claude-code';
+  const slashContextReady = !sessionId || runtimeAgentKind != null;
+  // Existing tasks use one authoritative snapshot. Mirrored composer state
+  // catches up in an effect and otherwise scans the previous/global folder first.
+  const slashWorkingDir = sessionId ? initialWorkingDir : workingDir;
   // remote session:workingDir 是远端主机路径,不能按它扫本机 skills/files。
   // slash 退化为 desktop + agent-builtin(传 null),@ 文件面板直接关闭(见 atOpen)。
   const isRemoteSession = !!remoteHostId;
   const slashCommandContextKey = JSON.stringify([
-    workingDir ?? null,
+    slashWorkingDir ?? null,
+    slashContextReady,
     paletteAgentKind,
     isRemoteSession,
     sessionId ?? null,
@@ -4735,7 +4763,7 @@ export function ChatInput({
   });
   const [piRuntimeCommandStatus, setPiRuntimeCommandStatus] =
     useState<PiPackageCommandRuntimeStatus | null>(null);
-  const slashCommandsReady = isSlashCommandRosterReady(
+  const slashCommandsReady = slashContextReady && isSlashCommandRosterReady(
     slashCommandLoadState,
     slashCommandContextKey,
   );
@@ -4770,9 +4798,10 @@ export function ChatInput({
       // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
         paletteAgentKind,
-        workingDir,
+        slashWorkingDir,
         {
           ...opts,
+          contextReady: slashContextReady,
           skipAgentSkills: isRemoteSession,
           sessionId,
           allowManagedPiPackagePreview: !isRemoteSession,
@@ -4800,7 +4829,8 @@ export function ChatInput({
         });
     },
     [
-      workingDir,
+      slashWorkingDir,
+      slashContextReady,
       paletteAgentKind,
       isRemoteSession,
       sessionId,
@@ -7439,6 +7469,7 @@ export function ChatInput({
          */
         agentDeviceId?: string | null;
         thinking?: boolean;
+        onSwitchStaged?: (revision: number) => void;
       },
     ): Promise<boolean> => {
       // ★ 返回值 = **本端请求的完整配置真的落到会话上了没有**(2026-08-17 review 确立
@@ -7645,6 +7676,7 @@ export function ChatInput({
         // 调用方的清理若按成功走,清掉的是**用户最新那次选择**对应的配置。
         if (ackAction === 'discard') return false;
         if (ackAction === 'apply-intent') {
+          if (result.pendingSwitchRevision !== undefined) overrides?.onSwitchStaged?.(result.pendingSwitchRevision);
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
           // 在下一条消息发送时刻执行;turn 运行中额外提示旧 turn 不受影响。
@@ -7944,11 +7976,22 @@ export function ChatInput({
   // 标题写那台电脑的名字(「这台电脑」在控制端看来是本机,会读错)。
   const relocationSourceAgent = sessionEngineFilter?.currentAgent;
   const confirmAgentRelocation = useCallback(
-    (target: UnifiedSelectionAgentDevice, targetAgent: string) =>
-      confirmAgentSwitchRisk({
+    (target: UnifiedSelectionAgentDevice, targetAgent: string, retryLabel?: string) => {
+      const description = t(relocationDescriptionKey({
+        fromAgent: relocationSourceAgent,
+        toAgent: targetAgent,
+        fromAgentDeviceId: agentDeviceId,
+        toAgentDeviceId: target?.deviceId,
+      }));
+      // 另一台电脑上那份只是因为任务所在电脑的这一份用不了才列出来：每次都问(不受「不再提示」影响)，
+      // 同一个框里说明原因。不答或取消 = 不换；正在进行的回复和这一份的恢复都不受影响(2026-11-18)。
+      const ask = target?.askBeforeUse;
+      const reason = ask ? discoveredCopyReason(t, ask) : null;
+      return confirmAgentSwitchRisk({
         hasSwitchIntent:
           (target?.deviceId ?? null) === agentDeviceId ||
           (intentAgentDeviceId !== undefined && intentAgentDeviceId === (target?.deviceId ?? null)),
+        alwaysAsk: !!ask || retryLabel !== undefined,
         confirm: confirmDialog,
         copy: {
           title: target
@@ -7958,17 +8001,17 @@ export function ChatInput({
                   device: deviceDisplayName(deviceLinkDeviceId, deviceLinkDeviceName),
                 })
               : t('newChat.chatInput.agentRelocation.titleLocal'),
-          description: t(relocationDescriptionKey({
-            fromAgent: relocationSourceAgent,
-            toAgent: targetAgent,
-            fromAgentDeviceId: agentDeviceId,
-            toAgentDeviceId: target?.deviceId,
-          })),
-          confirmText: t('newChat.chatInput.agentRelocation.confirm'),
+          description: reason
+            ? t('newChat.chatInput.agentRelocation.discoveredDescription', { reason, description })
+            : description,
+          confirmText: retryLabel !== undefined
+            ? t('modelGroups.switchOffer.action', { model: retryLabel })
+            : t('newChat.chatInput.agentRelocation.confirm'),
           cancelText: t('newChat.chatInput.agentRelocation.cancel'),
           dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
         },
-      }),
+      });
+    },
     [agentDeviceId, intentAgentDeviceId, deviceLinkDeviceId, deviceLinkDeviceName, relocationSourceAgent, confirmDialog, t],
   );
   const sessionRemoteAgentOptions = useMemo<RemoteAgentSelectorOptions | undefined>(() => {
@@ -7999,12 +8042,25 @@ export function ChatInput({
         ? { readProviderGroup: () => readSessionProviderGroup(sessionId, deviceLinkDeviceId || undefined) }
         : {}),
       onRelocate: async (selection) => {
-        if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent))) return false;
-        return performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
+        const recovery = makerChatStore.getSnapshot(sessionId).inputRecovery;
+        const retryClientId = hostSupportsQueueHeadRetry && selection.retryQueuedSend && recovery?.kind === 'queue-head'
+          ? recovery.clientId : undefined;
+        const retryLabel = retryClientId === undefined ? undefined : selection.agentDevice?.name ?? selection.modelId;
+        if (!(await confirmAgentRelocation(selection.agentDevice, selection.agent, retryLabel))
+          || currentSessionIdRef.current !== sessionId) return false;
+        let expectedSwitchRevision: number | undefined;
+        const selected = await performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
           ...(selection.effort ? { effort: selection.effort } : {}),
           fastMode: selection.fast,
           agentDeviceId: selection.agentDevice?.deviceId ?? null,
+          onSwitchStaged: (revision) => { expectedSwitchRevision = revision; },
         });
+        const latest = makerChatStore.getSnapshot(sessionId).inputRecovery;
+        if (selected && retryClientId !== undefined && expectedSwitchRevision !== undefined && currentSessionIdRef.current === sessionId
+          && latest?.kind === 'queue-head' && latest.clientId === retryClientId) {
+          await makerChatStore.retryLastError(sessionId, { expectedQueueHeadClientId: retryClientId, expectedSwitchRevision });
+        }
+        return selected;
       },
     };
   }, [
@@ -8020,6 +8076,7 @@ export function ChatInput({
     sessionOrcaRemoteWorker,
     hostSupportsOrcaAgentRelocation,
     hostSupportsOrcaRemoteWorkerAgentRelocation,
+    hostSupportsQueueHeadRetry,
     remoteAgentDevices,
     catalogHostDeviceId,
     effectiveAgentDeviceId,
@@ -9572,6 +9629,9 @@ export function ChatInput({
           )}
         </div>
       )}
+      {pluginUiCandidates.header && !remoteHostId && !deviceLinkDeviceId && (
+        <PluginUiSlot position="composer.header" sessionId={sessionId} />
+      )}
       {/* When the pending-queue panel is visible, the wrapper div owns the
           border + corner radius + focus-within highlight. Both inner halves
           (panel + input card) become borderless sections, so a focus on the
@@ -10191,7 +10251,28 @@ export function ChatInput({
                         : true
                     }
                     onThinkingChange={async (enabled) => {
-                      if (settingsLocked) return;
+                      if (settingsLocked) return false;
+                      // Apply to the runtime (or the next-message intent) before
+                      // confirming the preference. A rejected write must leave
+                      // the visible switch and its remembered value unchanged.
+                      if (sessionId) {
+                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
+                        if (intent) {
+                          const applied = await performAgentSwitch(intent.target, intent.model, intent.providerId, {
+                            ...(intent.effort ? { effort: intent.effort as Effort } : {}),
+                            fastMode: intent.fastMode,
+                            thinking: enabled,
+                            axesOnly: true,
+                          });
+                          if (!applied) return false;
+                        } else {
+                          const api = deviceLinkDeviceId
+                            ? makerApiForDevice(deviceLinkDeviceId)
+                            : window.electronAPI.maker;
+                          await api.setThinkingEnabled(sessionId, enabled);
+                        }
+                        if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) return false;
+                      }
                       if (currentModelAgentKind && effectiveSourceId) {
                         if (modelMemory?.setThinking) {
                           modelMemory.setThinking(
@@ -10208,24 +10289,6 @@ export function ChatInput({
                             enabled,
                           );
                         }
-                      }
-                      // 意图期内(点选尚未发送)必须把开关写回 staged 意图：否则结算回放
-                      // 会按登记时的旧快照下发档位，把用户刚关掉的思考又打开(或反之)。
-                      if (sessionId && currentModelAgentKind) {
-                        const intent = makerChatStore.getAgentSwitchIntent(sessionId);
-                        if (intent) {
-                          await performAgentSwitch(intent.target, intent.model, intent.providerId, {
-                            ...(intent.effort ? { effort: intent.effort as Effort } : {}),
-                            fastMode: intent.fastMode,
-                            thinking: enabled,
-                          });
-                        }
-                      }
-                      if (sessionId) {
-                        const api = deviceLinkDeviceId
-                          ? makerApiForDevice(deviceLinkDeviceId)
-                          : window.electronAPI.maker;
-                        await api.setThinkingEnabled(sessionId, enabled);
                       }
                     }}
                     modelMemory={modelMemory}

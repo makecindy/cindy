@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { InputHandoffSnapshot } from '@cindy/device-link';
 import type { HandoffDriver } from '../macDriver.js';
 import { InputHandoffSession, type HandoffResult, type HandoffTargetSpec } from '../session.js';
-import type { NativeAxNode } from '../types.js';
+import type { HandoffFieldPlan, NativeAxNode } from '../types.js';
 
 const node = (ref: string, role: string, extra: Partial<NativeAxNode> = {}): NativeAxNode => ({
   ref,
@@ -27,6 +27,9 @@ const screens = {
   ]),
   password: page('https://login.example.com/', [
     node('1.0', 'AXTextField', { title: 'Password', secure: true }),
+  ]),
+  code: page('https://login.example.com/', [
+    node('1.0', 'AXTextField', { title: 'Verification code' }),
   ]),
   blank: page('https://login.example.com/', []),
   signedIn: page('https://app.example.com/inbox', [node('1.0', 'AXTextArea', { title: 'Reply' })]),
@@ -103,6 +106,7 @@ function desktop(first: keyof typeof screens = 'email') {
 function start(
   driver: HandoffDriver,
   target: HandoffTargetSpec = { app: 'Google Chrome', windowTitle: 'Sign in' },
+  fields?: HandoffFieldPlan[],
 ) {
   const published: InputHandoffSnapshot[] = [];
   const finished: HandoffResult[] = [];
@@ -112,6 +116,7 @@ function start(
     requestId: 'req1',
     purpose: 'Sign in',
     target,
+    fields,
     timeoutMs: 600_000,
     hostPid: 1,
     remoteInput: true,
@@ -141,6 +146,28 @@ function start(
 const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
 
 describe('a sign-in step', () => {
+  // Regression: a validated field plan must not force a local sign-in into a form,
+  // or stop observing completion just because the owner never submitted that form.
+  it.each(['email', 'password', 'code'] as const)('keeps planned %s sign-in on the original window and observes completion', async (screen) => {
+    const { driver, state } = desktop(screen);
+    const label = screen === 'email' ? 'Email' : screen === 'password' ? 'Password' : 'Verification code';
+    const run = start(driver, undefined, [{
+      label, contentType: screen === 'email' ? 'username' : screen === 'password' ? 'password' : 'one-time-code', targets: [{ label }],
+    }]);
+    try {
+      await run.session.start();
+      expect(run.latest()).toMatchObject({ phase: 'ready', directSignIn: true, preferRemoteForm: true });
+      expect(await run.session.bringToFront()).toBe(true);
+      await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { local: true });
+      state.screen = 'signedIn';
+      state.windowTitle = 'Inbox';
+      await vi.waitFor(() => expect(run.finished).toHaveLength(1));
+      expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0, finalWindow: 'Inbox' });
+    } finally {
+      run.session.cancel();
+    }
+  });
+
   it('is done on the window: it comes forward, and the form stays for clients without a live view', async () => {
     const { driver, state } = desktop();
     const run = start(driver);

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "dfd14ed1-f75b-4e11-89f9-6fdd0815161f",
+  "id": "1610a85c-5ef6-48ee-97f4-57557f37c384",
   "prevId": "37b05c44-2de8-4e4e-aa5f-21d3ed8bfc4c",
   "tables": {
     "account_usage_snapshots": {
@@ -3874,13 +3874,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "latest_report": {
-          "name": "latest_report",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "integer",
@@ -5943,6 +5936,20 @@
         },
         "pinned_at": {
           "name": "pinned_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "snoozed_until": {
+          "name": "snoozed_until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "snoozed_at": {
+          "name": "snoozed_at",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,

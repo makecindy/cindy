@@ -1,6 +1,14 @@
 # 自动化任务的 Webhook 触发
 
-> **读取时机**：修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前。
+> **读取时机**：新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前。
+> **适用路径**：`apps/desktop/src/main/scheduler-host/webhook/**`、`packages/maker-scheduler/src/**/webhook-*`、
+> `packages/lizi-mcps/src/scheduler/*webhook*`、
+> `apps/desktop/src/renderer/features/scheduler/components/**/Webhook*`、
+> `apps/desktop/src/renderer/features/scheduler/lib/webhookEventOptions.ts`、
+> `apps/desktop/src/shared/webhookAccount.ts`、
+> `apps/desktop/scripts/fixtures/{webhook-detail,webhook-account}/**`、
+> `packages/lizi-mcps/src/scheduler/{create,update}.ts`
+> **要点**：事件只是门铃，正文不进任务，密钥不进任务记录。
 
 ## 用户行为
 
@@ -17,6 +25,18 @@ Webhook 表单沿用自动化编辑器的「内容与触发 / 运行选项」分
 事件筛选使用按发送方分组、可搜索的多选列表，默认明确显示「全部事件」，已选事件以可移除标签呈现。取消最后一项不自动扩大为全部：须在选择器中明确选择「全部事件」或另选事件后应用；取消选择器保留原配置。常用目录不是白名单，未收录的已有值原样保留，自定义名称通过高级入口逐项添加并校验。Standard Webhooks 和自定义格式没有固定目录，明确说明后提供相同高级入口。
 
 存储仍是 `event` 或 `event.action` 列表，例如 `check_suite`、`pull_request.closed`、`pullrequest:created`；空列表响应全部。界面不改变接收协议，不收集事件正文。预设目录与交互见 `webhookEventOptions.ts`、`WebhookEventSelect.tsx`，保存行为回归在 `ScheduleFormDialog.test.tsx`。更细的判断交给前置检查脚本，它和脚本模式任务都能收到事件元数据。
+
+## Agent 工具的触发方式
+
+Agent 工具 `schedule_create` / `schedule_update` 接受可选布尔字段 `manual`。
+`manual: true` 关闭定时并清空 `nextFireAt`，保留立即运行；与 `webhookTrigger` 同用即仅事件触发，
+适用于 Agent 和脚本执行方式。`manual: false` 按保存的 cron／间隔恢复定时。
+创建时省略沿用默认 `false`，更新时省略不修改；创建仍须提供合法 `cronExpr` 和 `timezone`。
+定时的一次性任务与 Webhook 不兼容的校验保持不变，已有组合触发不自动改写。
+本机和跨电脑沿用原调用链；跨电脑更新不得同时带 `cronExpr`、`manual`、`notify`，
+否则可能命中目标电脑的旧手机全量表单兼容逻辑。工具在发送前明确报错，可单独更新 `manual`；
+不自动拆分写入，也不先读后复制未修改字段。实现及回归见 `packages/lizi-mcps/src/scheduler/{create,update}.ts`
+与 `cindy_schedulerMcpServer.test.ts`、`schedulerDevices.test.ts`。
 
 ## 账号接收地址管理（2026-11-04）
 

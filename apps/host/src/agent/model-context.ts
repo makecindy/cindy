@@ -1,6 +1,6 @@
 import type { Catalog } from '@cindy/model-providers';
 
-import { getActiveCatalog, getActiveCatalogWithCodexModels } from '../../../desktop/src/main/maker-host/active-catalog.js';
+import { getActiveCatalog, getActiveCatalogWithCodexModels, getActiveCatalogWithClaudeModels } from '../../../desktop/src/main/maker-host/active-catalog.js';
 import { filterLegacyGptContextProfiles } from '../../../desktop/src/main/maker-host/legacy-context-profiles.js';
 import { createModelContextProviderResolver } from '../../../desktop/src/main/maker-host/modelContextProvider.js';
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.js';
@@ -10,6 +10,7 @@ import { projectSubscriptionPoolCatalog } from '../../../desktop/src/main/maker-
 import { readMergedProviderAccount, accountProviderId } from '../../../desktop/src/main/subscription-accounts/placement.js';
 import { readPool, readProviderBoundAccountIds } from '../../../desktop/src/main/subscription-accounts/store.js';
 import { getAppCapabilities } from '../../../desktop/src/main/appCapabilities.js';
+import { setGuestProviderModelCatalogReader } from '../../../desktop/src/main/maker-host/guest-provider-route-store.js';
 
 export interface HostModelContext {
   /** The catalog Host resolves models against; read on every call. */
@@ -36,19 +37,20 @@ export function createHostModelContext(ports: {
   check?(): void;
 }): HostModelContext {
   const check = ports.check ?? (() => {});
+  const readCatalog = (routing = false): Catalog => {
+    check();
+    const base = filterProviderCatalogForAccount(getActiveCatalog(), {
+      canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
+    });
+    const catalog = projectSubscriptionPoolCatalog(base, { readPool, codexAccountState: ports.codexAccountState,
+      getActiveCatalogWithCodexModels, getActiveCatalogWithClaudeModels, readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds,
+      // M2: subscription-pool discovery is still a desktop runtime; see the release table.
+      readSubscriptionPoolCodexModels: () => null, readSubscriptionPoolClaudeModels: () => null }, routing);
+    return routing ? catalog : filterLegacyGptContextProfiles(catalog);
+  };
+  setGuestProviderModelCatalogReader(() => readCatalog(true));
   return {
-    getSelectableCatalog: () => {
-      check();
-      const base = filterProviderCatalogForAccount(getActiveCatalog(), {
-        canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
-      });
-      return filterLegacyGptContextProfiles(
-        projectSubscriptionPoolCatalog(base, { readPool, codexAccountState: ports.codexAccountState,
-          getActiveCatalogWithCodexModels, readMergedProviderAccount, accountProviderId, readProviderBoundAccountIds,
-          // M2: subscription-pool Codex discovery is still a desktop runtime; see the release table.
-          readSubscriptionPoolCodexModels: () => null }, false),
-      );
-    },
+    getSelectableCatalog: () => readCatalog(),
     resolveContextProviderId: createModelContextProviderResolver({
       readGatewayKey: ports.readGatewayKey, hasClaudeNativeLogin, hasCodexOAuthLogin: ports.hasCodexOAuthLogin,
     }),

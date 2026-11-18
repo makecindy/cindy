@@ -1,3 +1,4 @@
+import { useRightSidebarMaximizeEscape } from './useRightSidebarMaximizeEscape';
 import { toast } from '@/lib/toast';
 import { openSettingsNavigation } from '@/lib/settingsNavigation';
 import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
@@ -12,6 +13,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { buildSharedTaskInvitationLink, isSharedTaskPeer } from '@cindy/device-link';
 import { JoinSharedTaskDialog } from '@/features/device-link/JoinSharedTaskDialog';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { setPendingGiftCardCode } from '@/features/billing/giftCardIntent';
 import { useRememberMainEntry } from './MainEntryRedirect';
 import { useTranslation } from 'react-i18next';
 
@@ -332,13 +334,6 @@ export function MainLayout() {
   // 实例）会经 Outlet context 的 setRightSidebarAvailable 置 true，卸载时置 false。
   // 据此决定是否渲染右栏面板：离开聊天视图 → 面板卸载，不会卡在展开态且无入口关闭。
   const [rightSidebarAvailable, setRightSidebarAvailable] = useState(false);
-  // 经过不声明右栏的路由时保持挂载并强制折叠，避免销毁内置浏览器 guest（#6485）。
-  const { mounted: rightSidebarMounted, forceCollapsed: rightSidebarForceCollapsed } =
-    useRetainedRightSidebarMount({
-      available: rightSidebarAvailable,
-      loaded: rsbWindow.loaded,
-      detached: rsbDetached,
-    });
   // 当前 cc-agent session id —— 由 CCAgentSessionView 的路由主实例(ownsRoute=true)经 outlet context
   // 推上来,Shell 据此从 module-level store 拉对应桶的 tab 列表持久化数据。null = 不在聊天会话内。
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
@@ -433,9 +428,6 @@ export function MainLayout() {
   const remoteTaskEntriesWidth = remoteDesktopDeviceId
     ? (1 + Math.min(taskLiveScreenEntries.length, TASK_LIVE_SCREEN_LIMIT)) * 32
     : 0;
-  // Windows 内容区右上的显示入口始终跟随聊天区，展开时也不移入侧栏。
-  const showWindowsRightSidebarTrigger =
-    rightSidebarAvailable && rsbWindow.loaded;
   const rowRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   // B1a(去方位化):左侧占位块(pinning spacer + Sidebar)的 wrapper。
@@ -499,7 +491,12 @@ export function MainLayout() {
   // (下面的 `!isSettingsRoute && <ChromeActions>`)，快捷键不能跟着一起消失——
   // hook 的语义包含「从设置等栈外页后退回最近任务」。浏览栈按数据所有者
   // (账号 + 恢复代次)隔离：切号时不能把上一个账号的任务带过来。
-  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration } = useAuth();
+  const { dataOwnerId, dataOwnerRecoveryEpoch, dataOwnerGeneration, mode: authMode, user: authUser } = useAuth();
+  // 礼品卡链接到达时的身份。只在确定不是个人身份（未登录 Cindy 账号，或当前是组织身份）时拦下；
+  // 账号资料还没加载出来时照常放行，由计费页自己的可见性判断兜底。用 ref 读最新值，
+  // 不让链接处理器随身份变化重建。
+  const canRedeemGiftCardRef = useRef(true);
+  canRedeemGiftCardRef.current = authMode === 'cloud' && authUser?.membershipKind !== 'org';
   const browseHistory = useSessionBrowseHistory({
     ownerKey: `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`,
   });
@@ -773,6 +770,7 @@ export function MainLayout() {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => {
@@ -805,6 +803,18 @@ export function MainLayout() {
       }
       if (payload.type === 'plugin') {
         navigate(`/plugins?market=${encodeURIComponent(payload.pluginId)}`);
+        return;
+      }
+      if (payload.type === 'gift-card') {
+        // 礼品卡仅限个人用户领取，兑换入口所在的计费页也只对个人身份显示。组织身份或
+        // 未登录时不跳转（否则会落到「通用」页、什么都不发生），提示后丢弃兑换码。
+        if (!canRedeemGiftCardRef.current) {
+          toast.error(t('billing.giftCard.errors.personalRequired'));
+          return;
+        }
+        // 兑换码不进路由 URL：暂存在内存，计费页消费意图时取走。
+        setPendingGiftCardCode(payload.code);
+        navigate('/settings?tab=billing&intent=redeem-gift-card');
         return;
       }
       if (payload.type === 'installed-plugin') {
@@ -883,6 +893,11 @@ export function MainLayout() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
       if (payload.type === 'chat-invite' || payload.type === 'chat-invite-malformed') {
+        void pullChatInvitations();
+        return;
+      }
+      // 礼品卡意图同样由 Main 保留到登录之后，和下面几类一样从暂存槽原子取出。
+      if (payload.type === 'gift-card') {
         void pullChatInvitations();
         return;
       }
@@ -1033,7 +1048,6 @@ export function MainLayout() {
     return onRequestRightSidebarVisibility((visibility, opts) => {
       const currentSessionId = rightSidebarSessionIdRef.current;
       const targetSessionId = opts.sessionId ?? currentSessionId;
-      if (!targetSessionId) return;
       const targetCollapsed = visibility === 'close';
       const windowState = getRsbWindowUiState();
       if (!windowState.loaded) return;
@@ -1043,6 +1057,7 @@ export function MainLayout() {
       // (agent tab-op 在 detached 时 dispatch 到子窗口 renderer,其内的
       // SidebarWindowLayout 也订阅了本通道;这里主要覆盖主窗内直接调用方。)
       if (detachedNow) {
+        if (!targetSessionId) return;
         writeCollapsedFor(targetSessionId, targetCollapsed);
         if (visibility === 'open') {
           detachedHostSessionIdRef.current = detachedHostAfterOpen({
@@ -1065,7 +1080,7 @@ export function MainLayout() {
         return;
       }
       if (targetSessionId === currentSessionId) {
-        // 前台路径:走 UI + 持久化
+        // 前台路径:走 UI + 持久化；全局具名页没有任务时只更新本窗口折叠态。
         setIsRightSidebarCollapsed((prev) => {
           if (prev === targetCollapsed) return prev;
           if (shouldAnimateSidebarVisibilityRequest(opts)) {
@@ -1074,7 +1089,7 @@ export function MainLayout() {
           writeCollapsedFor(targetSessionId, targetCollapsed);
           return targetCollapsed;
         });
-      } else {
+      } else if (targetSessionId) {
         // 后台路径:写入目标 session 存档。用户手势跨任务 open 才切主窗;
         // agent / 插件自动化(userInitiated:false)只落档,不抢当前输入焦点。
         writeCollapsedFor(targetSessionId, targetCollapsed);
@@ -1106,20 +1121,11 @@ export function MainLayout() {
   // - 折叠 RSB 时自动退出(否则 maximize 状态下点折叠会导致主区 hidden + RSB 也 0 宽 → 全黑)
   // - 不持久化:刷新 / 切 session 默认非 maximize,跟"临时聚焦视图"语义一致
   const [isRightSidebarMaximized, setIsRightSidebarMaximized] = useState(false);
-  const rightSidebarOwnsRailChromeActions = resolveRightSidebarRailChromeActionsOwner({
-    hasRailChromeActions,
-    rightSidebarSide,
-    rightSidebarAvailable,
-    rightSidebarLoaded: rsbWindow.loaded,
-    isRightSidebarCollapsed,
-    isRightSidebarMaximized,
-    rsbDetached,
-  });
   const handleMaximizeRightSidebar = useCallback(() => {
     setIsRightSidebarMaximized((v) => !v);
   }, []);
   // 左 / 上 / 下边页签组:按「组里有没有可见页签」注册 / 注销 pane,并保证树里有它。
-  useTabGroupPanes({
+  const globalRightViewAvailable = useTabGroupPanes({
     sessionId: rightSidebarSessionId,
     enabled: rsbWindow.loaded && !rsbDetached && !isSettingsRoute,
     // 离开聊天页(如 /plugins)时在聊天页出现过的组停放而不卸载,webview 不重载(#8081)。
@@ -1128,24 +1134,27 @@ export function MainLayout() {
     deviceLinkDeviceId: rightSidebarWorkdirInfo.deviceLinkDeviceId,
     subagentsAvailable: rightSidebarSubagentsAvailable,
   });
-  useEffect(() => {
-    if (!isRightSidebarMaximized) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      // 输入态让路 —— 用户在 input / contenteditable 里按 Esc 通常是取消编辑。
-      const target = e.target as HTMLElement | null;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target?.closest?.('[contenteditable="true"]')
-      ) {
-        return;
-      }
-      setIsRightSidebarMaximized(false);
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [isRightSidebarMaximized]);
+  const rightSidebarPaneAvailable = rightSidebarAvailable || globalRightViewAvailable;
+  // Windows/Linux 与 macOS 使用同一在场条件，按钮占位也由它推导。
+  const showWindowsRightSidebarTrigger = rightSidebarPaneAvailable && rsbWindow.loaded;
+  const rightSidebarOwnsRailChromeActions = resolveRightSidebarRailChromeActionsOwner({
+    hasRailChromeActions,
+    rightSidebarSide,
+    rightSidebarAvailable: rightSidebarPaneAvailable,
+    rightSidebarLoaded: rsbWindow.loaded,
+    isRightSidebarCollapsed,
+    isRightSidebarMaximized,
+    rsbDetached,
+  });
+  // 全局具名页可以从 /plugins 等非任务路由打开；其余页签仍按原规则保留并强制折叠。
+  const { mounted: rightSidebarMounted, forceCollapsed: rightSidebarForceCollapsed } =
+    useRetainedRightSidebarMount({
+      available: rightSidebarPaneAvailable,
+      loaded: rsbWindow.loaded,
+      detached: rsbDetached,
+    });
+  const exitRightSidebarMaximize = useCallback(() => setIsRightSidebarMaximized(false), []);
+  useRightSidebarMaximizeEscape(isRightSidebarMaximized, exitRightSidebarMaximize);
   // 折叠 RSB / session 切换 / 主路由切走聊天视图 → 自动退出 maximize。
   useEffect(() => {
     if (isRightSidebarCollapsed && isRightSidebarMaximized) {
@@ -1153,10 +1162,10 @@ export function MainLayout() {
     }
   }, [isRightSidebarCollapsed, isRightSidebarMaximized]);
   useEffect(() => {
-    if (!rightSidebarAvailable && isRightSidebarMaximized) {
+    if (!rightSidebarPaneAvailable && isRightSidebarMaximized) {
       setIsRightSidebarMaximized(false);
     }
-  }, [rightSidebarAvailable, isRightSidebarMaximized]);
+  }, [rightSidebarPaneAvailable, isRightSidebarMaximized]);
 
   // ── 侧边栏子窗口(detached)联动 ─────────────────────────────────────────
   // 1) 上下文上推:sessionId / workdir / available 变化时无条件推给 main
@@ -1958,7 +1967,7 @@ export function MainLayout() {
                   </FadeSwitcher>
                 </ContentHeaderSlot>
                 {/* 开关属于聊天区；窗口向右扩宽时留在原地，再次点击收起侧栏。 */}
-                {isMac && rightSidebarAvailable && rsbWindow.loaded && (
+                {isMac && rightSidebarPaneAvailable && rsbWindow.loaded && (
                   <div
                     data-testid="right-sidebar-fixed-trigger"
                     className="absolute right-0 top-0 z-50 flex h-[46px] items-center pr-2"
@@ -2018,7 +2027,7 @@ export function MainLayout() {
             <LayoutRoot
               onInstalledGhostsChange={handleInstalledGhostsChange}
               suppressNonChatPanels={isSettingsRoute}
-              sidebarExpansionReady={rightSidebarAvailable && rsbWindow.loaded && !rsbDetached}
+              sidebarExpansionReady={rightSidebarPaneAvailable && rsbWindow.loaded && !rsbDetached}
               rightTabsCollapsed={
                 !rightSidebarMounted || isRightSidebarCollapsed || rightSidebarForceCollapsed
               }

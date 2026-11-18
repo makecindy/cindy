@@ -331,6 +331,7 @@
       "renameDevice": "Cambiar el nombre de {{label}}",
       "project": "Proyecto {{title}}",
       "dialogue": "Conversación",
+      "automation": "Automatizaciones",
       "openAutomationLatest": "Abrir la última sesión de la automatización {{title}}",
       "automationTask": "Automatización {{title}}",
       "openConversation": "Abrir sesión {{title}}",
@@ -356,7 +357,9 @@
     },
     "menu": {
       "groupDialogue": "Conversación",
+      "groupAutomation": "Automatización",
       "dialogueFolder": "Conversación",
+      "automationFolder": "Automatizaciones",
       "search": "Buscar",
       "settings": "Configuración",
       "remoteSettings": "Configuración de conexión remota",
@@ -426,7 +429,34 @@
       "filterTeammatesHeading": "Amigos",
       "filterAnySource": "Todo",
       "filterHideAllTeammates": "Ocultar todo",
-      "filterSelectedTeammates": "{{count}} seleccionados"
+      "filterSelectedTeammates": "{{count}} seleccionados",
+      "inbox": {
+        "inbox": "Pendientes",
+        "working": "En curso",
+        "snoozed": "Pospuestas",
+        "archived": "Procesadas",
+        "snooze": "Posponer tarea",
+        "complete": "Hecho",
+        "wake": "Mostrar ahora",
+        "restore": "Restaurar tarea",
+        "process": "Marcar como procesada (archivar)",
+        "empty": "La bandeja está vacía",
+        "snoozeFailed": "No se pudo guardar la hora. Comprueba la conexión y actualiza el equipo que aloja esta tarea.",
+        "hours": "En {{count}} horas",
+        "hours_one": "En {{count}} hora",
+        "hours_many": "En {{count}} horas",
+        "hours_other": "En {{count}} horas",
+        "thisEvening": "Esta tarde",
+        "tomorrow": "Mañana",
+        "nextWeek": "La próxima semana",
+        "custom": "Personalizar…",
+        "invalidTime": "Elige una fecha y hora futuras dentro de un año."
+      },
+      "taskListMode": {
+        "heading": "Modo de tareas",
+        "tasks": "Lista de tareas",
+        "inbox": "Bandeja de entrada"
+      }
     },
     "search": {
       "placeholder": "Buscar en títulos o contenido…",

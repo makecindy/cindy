@@ -4264,6 +4264,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // 缓存文件永久留在本地)。
       composerAnnotationsRef.current?.forgetAllAttachments();
       handedOff = true;
+      // 首条消息已交接:收起输入框与软键盘(与任务页发送同口径),进入任务页时不带着键盘。
+      setComposerVoiceHoldArmed(false);
+      firstMessageInputRef.current?.blur();
       router.replace({
         pathname: '/sessions/[sessionId]',
         params: { sessionId, deviceId: deviceIdSnapshot, deviceName: selectedDeviceName },

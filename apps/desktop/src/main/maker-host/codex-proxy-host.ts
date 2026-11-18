@@ -25,7 +25,7 @@ import {
 } from '@cindy/model-providers';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
-import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
+import { normalizeProviderRequest, normalizeUnsupportedCodexWebSearch, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody, normalizeKimiToolHistory, resolveProviderCompatibilityProfile } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -139,6 +139,7 @@ import {
   xaiModelInputStripController,
 } from './thread-strip-controllers.js';
 import { createMakerLogger } from './logger-adapter.js';
+import { createCodexBedrockSearchCompatibilityRule } from './codex-bedrock-search-compat.js';
 import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { getLogDir } from '../logger.js';
 import { createCodexImageModelRewrite } from './codex-image-model-rewrite.js';
@@ -357,6 +358,7 @@ const CODEX_BODY_RECOVERY_RULES = [
   duplicateResponsesToolCallRecoveryRule,
   xaiModelInputRecoveryRule,
   vllmResponsesCompatibilityRule,
+  createCodexBedrockSearchCompatibilityRule(),
 ] as const;
 
 /** Only fall back for the exact dialect mismatches the outgoing normalizer can repair. */
@@ -511,9 +513,26 @@ function headerValue(headers: Readonly<Record<string, string>>, name: string): s
 }
 
 function selectedThreadIdFromHeaders(headers: Readonly<Record<string, string>>): string {
-  return headerValue(headers, 'thread-id') ||
-    headerValue(headers, 'x-client-request-id') ||
-    'unknown';
+  const threadId = headerValue(headers, 'thread-id');
+  if (threadId) return threadId;
+  const requestId = headerValue(headers, 'x-client-request-id');
+  if (requestId && threadToSession.has(requestId)) return requestId;
+
+  // Standalone web search carries its thread in turn metadata, not thread-id.
+  // Only registered threads may select a session's Provider route.
+  const turnMetadata = headerValue(headers, 'x-codex-turn-metadata');
+  if (turnMetadata) {
+    try {
+      const metadata: unknown = JSON.parse(turnMetadata);
+      if (isPlainObject(metadata) && typeof metadata.thread_id === 'string'
+        && threadToSession.has(metadata.thread_id)) {
+        return metadata.thread_id;
+      }
+    } catch {
+      // Malformed optional metadata retains the legacy request-id fallback.
+    }
+  }
+  return requestId || 'unknown';
 }
 
 function guardianParentThreadIdFromHeaders(
@@ -2918,7 +2937,11 @@ function createCustomProviderReasoningTransform(
       || !isPlainObject(body) || typeof body.model !== 'string') return null;
     const route = customProviderRouteSnapshot(path.routeId, frozenRoutes);
     if (!route?.responseModels.includes(body.model)) return null;
-    const next = reconcileResponsesReasoningEffort(body, route.responseEffortsByModel[body.model] ?? []);
+    const routing = route.responseRoutingByModel[body.model];
+    const supported = routing && (routing.wireProtocol ?? 'openai-responses') === 'openai-responses'
+      ? normalizeUnsupportedCodexWebSearch(body, { harness: 'codex', protocol: 'openai-responses',
+          upstreamBase: ctx.upstreamBase ?? routing.upstream, model: body.model }) : body;
+    const next = reconcileResponsesReasoningEffort(supported, route.responseEffortsByModel[body.model] ?? []);
     return next === body ? null : next;
   };
 }
@@ -3649,7 +3672,7 @@ async function createCodexProxyHandle(
         scoped.onRequestSettled = transform.onRequestSettled;
         return scoped;
       },
-    ).concat((body, ctx) => {
+    ).concat(Object.assign((body: unknown, ctx: RequestTransformCtx) => {
       // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
       // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
       if (crossProviderRequests.has(ctx.headers)) return null;
@@ -3663,7 +3686,7 @@ async function createCodexProxyHandle(
         );
       }
       return reconciled;
-    }),
+    }, { errorMode: 'reject-request' as const })),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);

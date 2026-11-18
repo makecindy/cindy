@@ -6,14 +6,90 @@ import { Script } from 'node:vm';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { mcpAppSandboxDocument } from '@cindy/maker-shared/mcp-apps';
+import { McpAppView } from '../session/mcpAppView';
+import { MessageListRevealContext, MessageListKeepKeyboardContext } from '../session/messageListReveal';
+
+// #10431 unit: the real View must consume local focus geometry without sending
+// it to the remote host. Existing viewport prop tests do not exercise focus.
+it('keeps focus geometry local and rejects invalid or stale focus events', async () => {
+  const invoke = vi.fn();
+  const view = new McpAppView(invoke, 'device', 'task', 'card', () => {}, () => {}, async () => {}, 0);
+  const receive = (params: unknown, key = view.bridgeKey) => view.receive(JSON.stringify({ key,
+    message: { jsonrpc: '2.0', method: 'ui/notifications/cindy-mobile-focus', params } }));
+  receive({ top: 80, bottom: 200 });
+  expect(view.state.focus).toEqual({ top: 80, bottom: 200 });
+  receive({ top: -10, bottom: 999999 });
+  expect(view.state.focus).toEqual({ top: 80, bottom: 200 });
+  receive({ top: 10, bottom: 20 }, 'other-view');
+  expect(view.state.focus).toEqual({ top: 80, bottom: 200 });
+  receive(null);
+  expect(view.state.focus).toBeUndefined();
+  view.closing = true;
+  receive({ top: 10, bottom: 20 });
+  expect(view.state.focus).toBeUndefined();
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+// #10431 unit: actual card focus and keyboard callbacks must reveal the input
+// using slot window coordinates and release the keyboard lease on blur.
+it('reveals the focused field again after keyboard layout and releases it on blur', async () => {
+  const reveal = vi.fn(), release = vi.fn(), keepKeyboard = vi.fn(() => release);
+  await act(async () => render(<MessageListRevealContext.Provider value={reveal}>
+    <MessageListKeepKeyboardContext.Provider value={keepKeyboard}>
+      <McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />
+    </MessageListKeepKeyboardContext.Provider>
+  </MessageListRevealContext.Provider>));
+  const send = (params: unknown) => state.props.onMessage({ nativeEvent: { data: JSON.stringify({
+    key: state.prepare.mock.calls[0][1], message: { jsonrpc: '2.0', method: 'ui/notifications/cindy-mobile-focus', params },
+  }) } });
+  await act(async () => send({ top: 80, bottom: 200 }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+  expect(reveal).toHaveBeenLastCalledWith({ top: 180, bottom: 300 });
+  expect(keepKeyboard).toHaveBeenCalledOnce();
+  reveal.mockClear();
+  await act(async () => state.keyboardListeners.get('keyboardDidShow')!());
+  await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+  expect(reveal).toHaveBeenLastCalledWith({ top: 180, bottom: 300 });
+  await act(async () => send(null));
+  expect(release).toHaveBeenCalledOnce();
+  reveal.mockClear();
+  await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+  expect(reveal).not.toHaveBeenCalled();
+});
+
+// #10431 unit: keyboard resize can temporarily make the edited row non-viewable.
+// Keep its live document until blur, so focus and unsaved form data survive.
+it('retains the focused document across viewability changes until blur', async () => {
+  const release = vi.fn(), keepKeyboard = vi.fn(() => release);
+  const card = (active: boolean) => <MessageListKeepKeyboardContext.Provider value={keepKeyboard}>
+    <McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" active={active} />
+  </MessageListKeepKeyboardContext.Provider>;
+  await act(async () => render(card(true)));
+  const send = (params: unknown) => state.props.onMessage({ nativeEvent: { data: JSON.stringify({
+    key: state.prepare.mock.calls[0][1], message: { jsonrpc: '2.0', method: 'ui/notifications/cindy-mobile-focus', params },
+  }) } });
+  await act(async () => send({ top: 80, bottom: 200 }));
+  const slot = container.querySelector('[data-slot]')?.getAttribute('data-slot');
+  await act(async () => render(card(false)));
+  expect(container.querySelector('[data-slot]')?.getAttribute('data-slot')).toBe(slot);
+  expect(release).not.toHaveBeenCalled();
+  await act(async () => render(card(true)));
+  expect(state.prepare).toHaveBeenCalledOnce();
+  await act(async () => render(card(false)));
+  await act(async () => send(null));
+  expect(container.querySelector('[data-slot]')).toBeNull();
+  expect(release).toHaveBeenCalledOnce();
+});
 const state = vi.hoisted(() => ({
   props: {} as Record<string, any>,
   inject: vi.fn(),
   invoke: vi.fn(),
   mode: 'light',
+  platform: 'android',
   prepare: vi.fn(),
   random: 0,
   foreground: 'active',
+  keyboardListeners: new Map<string, () => void>(),
   appStateListeners: new Set<(state: string) => void>(),
   surfaceAvailable: true,
   mounts: 0,
@@ -26,13 +102,20 @@ vi.mock('../session/NativeMcpAppSurface', () => ({
 }));
 vi.mock('../session/mcpAppNativeDocument', () => ({ prepareMcpAppNativeDocument: state.prepare }));
 vi.mock('react-native', () => ({
-  View: ({ children }: { children: React.ReactNode }) => createElement('div', null, children),
+  View: ({ children, ref }: any) => {
+    useImperativeHandle(ref, () => ({ measureInWindow: (callback: any) => callback(0, 100, 380, 320) }));
+    return createElement('div', null, children);
+  },
+  Keyboard: { addListener: (name: string, listener: () => void) => {
+    state.keyboardListeners.set(name, listener);
+    return { remove: () => state.keyboardListeners.delete(name) };
+  } },
   ActivityIndicator: () => null,
   Pressable: ({ children, onPress }: { children?: React.ReactNode; onPress?: () => void }) =>
     createElement('button', { onClick: onPress }, children),
   Linking: { openURL: vi.fn() },
   StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
-  Platform: { OS: 'android' },
+  Platform: { get OS() { return state.platform; } },
   AppState: {
     currentState: 'active',
     addEventListener: (_name: string, listener: (state: string) => void) => {
@@ -124,6 +207,7 @@ beforeEach(() => {
   state.inject.mockReset();
   state.props = {};
   state.mode = 'light';
+  state.platform = 'android';
   state.prepare.mockReset().mockResolvedValue(nativeDocument);
   state.invoke.mockImplementation(async (_device, _channel, [, input]) =>
     input.op === 'open' ? { ...doc } : input.op === 'poll' ? new Promise(() => {}) : {},
@@ -221,6 +305,32 @@ it('binds a served resource origin and gates declared frame navigation', async (
   expect(nativePost).not.toHaveBeenCalled();
   listeners.get('message')!({ source: appFrame.contentWindow, origin: 'http://127.0.0.1:5001', data: message });
   expect(JSON.parse(nativePost.mock.calls[0][0]).message).toEqual(message);
+});
+
+/* #10431: the card's native WebView must remain a content-sized inline surface,
+ * including after an App height notification. Existing tests cover navigation and
+ * teardown, but not the native scroll/inset configuration that causes keyboard
+ * clipping. Minimal input: one mounted card and one size-changed message; unit
+ * tier exercises the real card/provider/controller and inspects the native API
+ * boundary. Keyboard/caret behavior still requires iOS/Android device validation. */
+it.each(['ios', 'android'])('keeps the %s native viewport fixed while App content resizes', async (platform) => {
+  state.platform = platform;
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
+  const original = container.querySelector('[data-testid="mcp-webview"]');
+  const assertInlineViewport = () => expect(state.props).toMatchObject({
+    scrollEnabled: false,
+    bounces: false,
+    automaticallyAdjustContentInsets: false,
+    contentInsetAdjustmentBehavior: 'never',
+  });
+  assertInlineViewport();
+  await act(async () => state.props.onMessage({ nativeEvent: { data: JSON.stringify({
+    key: state.prepare.mock.calls[0][1],
+    message: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 480 } },
+  }) } }));
+  expect(state.props.style.height).toBe(480);
+  expect(container.querySelector('[data-testid="mcp-webview"]')).toBe(original);
+  assertInlineViewport();
 });
 
 it('rejects a Desktop-only descriptor without starting a native document or leaving a View open', async () => {
@@ -608,4 +718,21 @@ it('restores a warm SDK on the phone without forwarding its cache hash into page
   expect(input.sdkCacheHashes).toEqual([hash]);
   expect(input.context).not.toHaveProperty('sdkCacheHashes');
   expect(state.prepare.mock.calls.at(-1)![0].sdk).toEqual(sdk);
+});
+
+// R3 / unit: real mobile presenter must prefer the saved config name; public
+// organization metadata deliberately has no namespace and must not gain a warning.
+it('shows the custom service snapshot and namespace-free organization history', async () => {
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="custom" title="Tool title" customMcp={{ name: 'Team reports' }} />));
+  expect(container.textContent).toContain('Team reports');
+  expect(container.textContent).toContain('mcpApps.customMcp');
+  expect(container.textContent).not.toContain('Tool title');
+  for (const customMcp of [true, {}, { name: 42 }]) {
+    await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="custom" title="Tool title" customMcp={customMcp} />));
+    expect(container.textContent).toContain('Tool title');
+    expect(container.textContent).toContain('mcpApps.customMcp');
+  }
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="org" title="Planner" plugin={{ name: 'Planner', source: { kind: 'organization' } }} />));
+  expect(container.textContent).toContain('Planner');
+  expect(container.textContent).not.toContain('mcpApps.source.');
 });

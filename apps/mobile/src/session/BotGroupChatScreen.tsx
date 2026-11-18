@@ -1,3 +1,4 @@
+import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupWorkRow } from './BotGroupWorkArea';
 import { ComposerPullThroughScrollView, useComposerPullThroughBridge } from './composerPullThrough';
@@ -926,7 +927,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
-        canStop={group.round.canStop} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
+        canStop={group.round.canStop !== false && (!group.serverBacked || group.supportsOwnedStop === true && (chat.server ? group.round.canStop === true
+          : chat.state.kind === 'ready' && chat.state.group.round.speakers.some(speaker => canStopBotGroupSpeaker(group, speaker))))} running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
         divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
       </View>
       {Platform.OS === 'ios' ? <DockKeyboardBottomSpacer restingBottom={insets.bottom}
@@ -967,7 +969,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       {header}
       {body}
     </>}
-    {group && !direct ? <BotGroupSettingsSheet readOnly={chat.server} visible={settings} group={group} host={host} identityFor={identityFor} online={chat.online}
+    {/* Settings apply to the whole group, including requests in other topics. */}
+    {group && !direct ? <BotGroupSettingsSheet readOnly={chat.server} visible={settings} group={chat.state.kind === 'ready' ? chat.state.group : group} host={host} identityFor={identityFor} online={chat.online}
       mask={mask} onMask={mask.state ? () => { openMaskAfterSettings.current = true; setSettings(false); } : undefined}
       act={actFromSettings} onClose={() => setSettings(false)}
       onRefresh={chat.reload}
@@ -1141,7 +1144,10 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   const messages = useMemo(() => threadRootId
     ? [...(root ? [root] : []), ...group.messages.filter(message => message.threadRootId === threadRootId && !message.deleted), ...local.map(pendingChatMessage)]
     : [...group.messages, ...local.map(pendingChatMessage)], [group.messages, local, root, threadRootId]);
-  const timeline = useMemo(() => interleaveBotGroupWork(messages, workRows), [messages, workRows]);
+  const timeline = useMemo(() => interleaveBotGroupWork(messages.map(message => {
+    const receipt = pendingById.get(message.id)?.chat?.messageId;
+    return receipt ? { ...message, serverMessageId: receipt } : message;
+  }), workRows), [messages, pendingById, workRows]);
   const [expandedRoot, setExpandedRoot] = useState(false);
   const planById = useMemo(() => new Map(group.plans.map((plan) => [plan.id, plan])), [group.plans]);
   const openPlan = openBotGroupPlan(group);

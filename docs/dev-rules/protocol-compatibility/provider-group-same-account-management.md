@@ -24,6 +24,12 @@
     旧 C 忽略新增字段；旧 O 不认识命令时沿用 `INVALID_PARAMS → UNSUPPORTED_CAPABILITY` 映射，C 保留草稿、提示更新，不重放或改存本机。
   - O 在执行前后核对账号未切换；`approve` / `reject` / `set-member` 先刷新快照，申请或成员不在 O 的分享里回 `[NOT_FOUND]`；
     `owned` 的回包只含 `{ ready, shares }`，不带 O 自己的弹窗安排。不再转发给第三台电脑。
+  - `owned` 可选 `includeUsage:false`（2026-11-16）：沿原快照返回成员，跳过历史查询与估价，不延长管理页快速轮询。
+    回包明确附 `includeUsage:false`；成员 `lastUsedAt:null`、`models:[]` 表示未请求用量，不能解释成零用量。
+    不传参数保留旧完整读取与管理页轮询；非法参数拒绝。新工具核对回执，旧 O 忽略参数且不回该标记时明确报
+    `UNSUPPORTED_CAPABILITY`，不静默降级或重试；第一次旧端探测仍可能承担一次完整读取成本。
+    沿既有 manage-share 业务 payload，不新增 action、channel 或 relay 顶层字段；自建中转透明转发，无需服务端适配。
+    回归由 `providerShareManagement.test.ts`、`providerSharingTools.test.ts` 覆盖参数、本机/同账号回执、旧端拒绝和无额外轮询。
   - `reshare-decide` 只修改 O 当前账号的本机转分享记录，写锁内和返回前继续核对账号边界；撤回由 O 停止对应中转任务。
     旧 O 不认识该动作时明确拒绝，C 不重试、不改为在本机执行；完整转分享管理需要 O 更新。
     远程修改组后由 O 刷新转分享名单，逐人同意明细仍只附在 O 本机设置页的组视图里。

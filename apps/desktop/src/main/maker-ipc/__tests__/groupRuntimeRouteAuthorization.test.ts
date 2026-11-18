@@ -4,7 +4,7 @@ import { ScriptTarget, transpileModule } from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createSessionControlService } from '../sessionControlService.js';
 import { GroupToolAuthorizationError, authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
-import { setSessionRuntimeHarness } from '../sessionRuntimeHarnessSelection.js';
+import { setSessionRuntimeHarness, stagedSelectionProfile } from '../sessionRuntimeHarnessSelection.js';
 import { createPendingAgentSwitchRegistry, performSessionAgentSwitch } from '../sessionAgentSwitchHandler.js';
 import { applyRuntimeSetModelChange } from '../runtimeSetModel.js';
 import { mergeSessionRuntimeProfilePatch } from '../sessionRuntimeControl.js';
@@ -50,7 +50,7 @@ it.each(['catalog', 'harness-read', 'native-preview', 'valid-harness', 'valid-mo
     };
     setSessionProvider('route-child', 'provider');
     const deps = {
-      setSessionRuntimeHarness, performSessionAgentSwitch,
+      setSessionRuntimeHarness, stagedSelectionProfile, performSessionAgentSwitch,
       withSendToSessionLock: async (_id: string, fn: () => Promise<unknown>) => fn(),
       captureSessionRuntimeControlOwnerEpoch: () => 'owner',
       getSessionRuntimeControlSnapshot: () => ({ generation: 1, effectiveOverride: current, pending: null }),

@@ -33,8 +33,10 @@ import { createDeviceAgentStarter, liveDirectGuestSession } from '../controller/
 import { credentialGrantFor, forgetCredentialGrants } from '../executor/credentialGrants';
 import { cancelPendingRemoteStart, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
+import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
+import { ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
 import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
@@ -279,6 +281,77 @@ function createHost(
 }
 
 describe('remote agent round trip', () => {
+  // Unit: groupRelay covers the host reply. The controller must restore the typed
+  // quota cause from either admission rejection or the asynchronous startup stream.
+  it.each(['admission', 'startup stream'])('restores the group quota reset from %s', async boundary => {
+    const message = '[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached: the available accounts for this model have reached their usage limit; resets_at: 1794978600000';
+    const host = createHost(undefined, undefined, async () => { throw new AgentStartupStoppedError(new Error(message)); });
+    const invoke = makeDeps(host).invoke;
+    const start = createDeviceAgentStarter({
+      remoteInvoke: async (_deviceId, _channel, args) => {
+        if (boundary === 'admission' && (args[0] as { op: string }).op === 'open') {
+          return { ok: false, error: { code: 'IPC_ERROR', message } };
+        }
+        return { ok: true, result: await invoke(args) };
+      },
+      rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge: async () => null, makerMemory: () => undefined,
+      captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: historyLogger,
+    });
+    try {
+      const failure = await start({ agentKind: 'codex', deviceId: 'ordinary-peer', options: {
+        sessionId: 'remote-quota', workingDir: project, model: 'gpt-5', providerId: 'openai',
+      } }).catch(error => error);
+      expect(failure).toBeInstanceOf(AgentStartupStoppedError);
+      expect(failure.cause).toBeInstanceOf(ProviderGroupUsageLimitError);
+      expect(failure.cause.limit).toEqual({ resetAtMs: 1794978600000 });
+      expect(hostInputs).toHaveLength(boundary === 'admission' ? 0 : 1);
+    } finally { host.dispose(); }
+  });
+
+  // Hosted 413 integration: production open/host/reverse HTTP/projection must
+  // return an attachment readable by the native executor, not a provider file.
+  // Prior tests exercised tools but never a host-initiated preservation batch.
+  it('preserves hosted attachments on the controller and releases the binding on close', async () => {
+    const storage = path.join(root, 'attachments');
+    fs.mkdirSync(storage);
+    const bytes = Buffer.alloc(600_000, 7); // Cross one transport chunk boundary.
+    const host = createHost();
+    let handle: AgentSessionHandle | undefined;
+    let hostedId = '';
+    try {
+      handle = await startRemoteAgentSession('pi', { sessionId: 'attachment-task', workingDir: project, model: 'm', permissionMode: 'bypassPermissions' }, {
+        ...makeDeps(host),
+        attachmentStorageRoots: () => ({ files: storage }),
+        attachmentPreservation: () => async (signal, operation) => {
+          const staged: Array<{ file: string; bytes: Buffer }> = [];
+          const result = await operation(async (content, _mime, index) => {
+            const file = path.join(storage, `${index}.bin`);
+            staged.push({ file, bytes: content });
+            return file;
+          });
+          signal.throwIfAborted();
+          if (result !== null) for (const item of staged) fs.writeFileSync(item.file, item.bytes);
+          return result;
+        },
+      });
+      const input = hostInputs[0];
+      hostedId = input.hostSessionId;
+      const batch = hostedAttachmentPreservation(hostedId);
+      expect(batch).toBeDefined();
+      const reference = await batch!(new AbortController().signal, preserve => preserve(bytes, 'application/octet-stream', 0));
+      expect(reference).not.toBe(path.join(storage, '0.bin'));
+      const response = await fetch(`${input.tunnel.url}/exec/fs.read`, { method: 'POST',
+        headers: { authorization: `Bearer ${input.tunnel.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ path: reference, encoding: 'base64' }) });
+      expect(response.status).toBe(200);
+      const read = await response.json() as { data: string };
+      // Native byte comparison retains the full 600 kB round-trip assertion
+      // without Vitest walking every Buffer index (seconds on CI workers).
+      expect(Buffer.from(read.data, 'base64').equals(bytes)).toBe(true);
+    } finally { await handle?.close(); host.dispose(); }
+    expect(hostedAttachmentPreservation(hostedId)).toBeUndefined();
+  });
+
   // #9263 integration: the real starter, host advertisement, JSON wire and
   // dispatch must preserve guest iMessage permissions through send and steer.
   it('delivers iMessage policy and identity to the remote execution handle', async () => {

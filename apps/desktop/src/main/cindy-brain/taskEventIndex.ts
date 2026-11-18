@@ -8,6 +8,7 @@ import type { TaskChangeEvent } from '../localDb/taskEvents.js';
 import { tryGetDbClient } from '../localDb/client/current.js';
 import { createLogger } from '../logger.js';
 import type { GhostSubscriptionGateway } from './subscriptionGateway.js';
+import { isToolExecutionEvent, projectToolExecutionEvent } from './toolExecutionEvents.js';
 
 const log = createLogger('ghost-task-events');
 
@@ -15,6 +16,16 @@ const log = createLogger('ghost-task-events');
 export class GhostTaskEventIndex {
   private owner: DataOwnerPushStamp | undefined;
   private readonly topics = new Map<GhostTaskEventTopic, InstalledGhost[]>();
+
+  wantsToolEvent(type: string): boolean { return this.topics.has('tool-execution') && isToolExecutionEvent(type); }
+
+  publishTool(sessionId: string, event: { type: string; data?: unknown; source?: string },
+    owner: DataOwnerPushStamp, gateway: () => GhostSubscriptionGateway): void {
+    const ghosts = this.topics.get('tool-execution');
+    if (!ghosts?.length || !this.owner || owner.dataOwnerId !== this.owner.dataOwnerId
+      || owner.ownerGeneration !== this.owner.ownerGeneration || !isToolExecutionEvent(event.type)) return;
+    gateway().publishIndexed(ghosts, 'tool-execution', 'did-tool-execution', projectToolExecutionEvent(sessionId, event));
+  }
 
   subscribedKinds(): TaskChangeEvent['kind'][] {
     return [...(this.topics.has('message') ? ['message' as const] : []),

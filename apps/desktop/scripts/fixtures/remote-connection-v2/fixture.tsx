@@ -143,7 +143,18 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
 }
 
 const data = scenario(ctx.case);
+const agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes'] = ctx.case === 'default' ? [
+  { deviceId: 'mini', path: 'direct', rttMs: 1 },
+  { deviceId: 'pixel', path: 'connecting', rttMs: null },
+] : undefined;
+if (agentNetRoutes) data.links = data.links.filter((link) => link.deviceId !== 'mini');
 if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filter((l) => l.encrypted);
+/**
+ * 这台电脑实际用的连接方式(拓扑中间名字下面):打开 Agent-Net 后通常就是 Agent-Net;self-device-link 是开着开关、
+ * 这次却跑在 Device Link 上(例如 Agent-Net 不认这台设备),主连接不是 Agent-Net 时所有对端也都是 Device Link。
+ */
+const selfEncrypted = ctx.case !== 'self-device-link';
+if (!selfEncrypted) for (const l of data.links) l.encrypted = false;
 /**
  * 远程切换连接方式的模拟对端(remote-switch):代替那台电脑回答 `peer-agent-net`,并像真实切换一样
  * 让与它的连接先断开、再以新方式连回来。MacBook Air 是旧版 Cindy(不认识这个请求)，Spare PC 在当前中转上
@@ -215,7 +226,12 @@ void mountPage({
         disabledControlDeviceIds: [],
         unresponsiveDeviceIds: [],
       }),
-      getPeerLinks: async () => ({ links: data.links, relayRttMs: data.relayRttMs }),
+      getPeerLinks: async () => ({
+        links: data.links,
+        agentNetRoutes,
+        relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
+        relayRttMs: data.relayRttMs,
+      }),
       onPeerLinksChanged: subscription('peerLinks'),
       onPresenceChanged: subscription('presence'),
       onStatusChanged: subscription('linkStatus'),

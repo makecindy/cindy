@@ -17,21 +17,39 @@ import {
   type PluginSuggestionRequest,
 } from '@/features/cc-agent/pendingPluginSuggestion';
 import { GhostPluginPage } from '../GhostPluginPage';
+import { pluginCatalogMemory, pluginCatalogOwnerKey, resetPluginCatalogMemoryForTest } from '../lib/pluginCatalogMemory';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import { leadingSlashInvocation, loadAllCommands, rewriteAgentSkillInvocationForDispatch } from '@/lib/slashCommands';
 import { toast } from '@/lib/toast';
 import { getDraft as getWorkspaceDraft, patchDraft, resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 
-const { auth, translation, pickAndUpdateGhost, catalog } = vi.hoisted(() => ({
+const { auth, translation, pickAndUpdateGhost, catalog, detailRenders, readmeRenders } = vi.hoisted(() => ({
+  readmeRenders: vi.fn(),
+  detailRenders: vi.fn(),
   catalog: { device: null as { deviceId: string; name: string } | null },
   pickAndUpdateGhost: vi.fn(),
-  auth: { user: { membershipKind: 'personal' }, mode: 'local', dataOwnerId: 'navigation-owner' },
+  auth: { user: { membershipKind: 'personal' }, mode: 'local', dataOwnerId: 'navigation-owner', dataOwnerGeneration: 0 },
   translation: {
-    t: (key: string) => key,
+    t: ((key: string) => key) as (key: string, options?: Record<string, unknown>) => string,
     i18n: { language: 'en', resolvedLanguage: 'en' },
   },
 }));
+
+vi.mock('../MarketPluginDetailView', async importOriginal => {
+  const original = await importOriginal<typeof import('../MarketPluginDetailView')>();
+  return { ...original, MarketPluginDetailView: (props: Parameters<typeof original.MarketPluginDetailView>[0]) => {
+    detailRenders();
+    return <original.MarketPluginDetailView {...props} />;
+  } };
+});
+vi.mock('../PluginReadmeSection', async importOriginal => {
+  const original = await importOriginal<typeof import('../PluginReadmeSection')>();
+  return { ...original, PluginReadmeSection: (props: Parameters<typeof original.PluginReadmeSection>[0]) => {
+    readmeRenders();
+    return <original.PluginReadmeSection {...props} />;
+  } };
+});
 
 vi.mock('../useCatalogDevice', () => ({ CatalogDeviceScope: ({ children }: { children: (...args: unknown[]) => unknown }) =>
   children(catalog.device, false, 1, { selected: catalog.device, onSelect: vi.fn(), directory: { candidates: [], online: false, relayOnline: false } }) }));
@@ -99,8 +117,17 @@ const loadDetail = vi.fn<() => Promise<PluginMarketDetail>>();
 const listAgentSkills = vi.fn();
 
 beforeEach(() => {
+  resetPluginCatalogMemoryForTest();
+  auth.dataOwnerGeneration += 1;
+  detailRenders.mockClear();
+  readmeRenders.mockClear();
   catalog.device = null;
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  // jsdom has no layout. Use a viewport for real virtual ranges, rather than
+  // relying on the removed transient fallback cards.
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.tagName === 'MAIN' ? 800 : 150; });
   auth.mode = 'local';
   auth.dataOwnerId = 'navigation-owner';
   auth.user.membershipKind = 'personal';
@@ -158,6 +185,7 @@ it('opens a shared package before the selected remote plugin catalogue', async (
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   clearDraft(NEW_MAKER_DRAFT_KEY);
   resetDraftWorkspaceTargets();
@@ -205,7 +233,7 @@ describe('market action feedback', () => {
   it.each([
     [false, 'body'], [false, 'arrow'], [false, 'downloads'],
     [true, 'body'], [true, 'downloads'],
-  ] as const)('shows detail loading without installation from compact=%s %s', async (compact, entry) => {
+  ] as const)('opens detail immediately without installation from compact=%s %s', async (compact, entry) => {
     let finish!: (value: PluginMarketDetail) => void;
     loadDetail.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const install = vi.fn();
@@ -217,16 +245,16 @@ describe('market action feedback', () => {
       : card.getByRole('group'));
     expect(action.getAttribute('aria-busy')).not.toBe('true');
     expect(action.querySelector('.animate-spinner')).toBeNull();
-    expect(card.getByRole('status').textContent).toBe('settings.ghosts.market.loadingDetails');
-    expect(body.getAttribute('aria-busy')).toBe('true');
-    fireEvent.click(body);
-    fireEvent.click(action);
+    expect(screen.getByRole('heading', { level: 1, name: detail.name })).toBeTruthy();
+    const detailAction = screen.getByRole('button', { name: 'settings.ghosts.market.install' });
+    expect((detailAction as HTMLButtonElement).disabled).toBe(true);
+    expect(detailAction.querySelector('.animate-spinner')).toBeNull();
+    fireEvent.click(detailAction);
     expect(loadDetail).toHaveBeenCalledTimes(1);
     expect(install).not.toHaveBeenCalled();
     await act(async () => { finish(detail); });
     await screen.findByRole('heading', { level: 1, name: detail.name });
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.backToList' }));
-    expect(screen.queryByText('settings.ghosts.market.loadingDetails')).toBeNull();
     expect((await screen.findByRole('button', { name: detail.name }) as HTMLButtonElement).disabled).toBe(false);
     expect(install).not.toHaveBeenCalled();
   });
@@ -255,17 +283,18 @@ describe('market action feedback', () => {
     expect((action as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('clears failed detail feedback and allows a fresh explicit install', async () => {
+  it('shows failed detail in the page and allows a fresh explicit install after returning', async () => {
     let fail!: (error: Error) => void;
     loadDetail.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
     const error = vi.spyOn(toast, 'error').mockReturnValue('detail-error');
-    const { body, card } = await openCard(false);
+    const { body } = await openCard(false);
     fireEvent.click(body);
-    expect(card.getByRole('status')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: detail.name })).toBeTruthy();
     await act(async () => { fail(new Error('Details unavailable')); });
-    expect(error).toHaveBeenCalledTimes(1);
-    expect(card.queryByRole('status')).toBeNull();
-    const action = card.getByRole('button', { name: 'settings.ghosts.page.installAria' });
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(error).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.backToList' }));
+    const action = screen.getByRole('button', { name: 'settings.ghosts.page.installAria' });
     expect((action as HTMLButtonElement).disabled).toBe(false);
     loadDetail.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
     fireEvent.click(action);
@@ -284,11 +313,12 @@ describe('market action feedback', () => {
     vi.spyOn(toast, 'error').mockReturnValue('detail-error');
     const { body, rerender } = await openCard(false);
     fireEvent.click(body);
-    expect(screen.getByText('settings.ghosts.market.loadingDetails')).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: detail.name })).toBeTruthy();
     if (change === 'owner') auth.dataOwnerId = 'another-owner';
     else auth.mode = 'cloud';
     rerender(page('/plugins'));
-    expect(screen.queryByText('settings.ghosts.market.loadingDetails')).toBeNull();
+    expect(screen.queryByRole('heading', { level: 1, name: detail.name })).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
     loadDetail.mockImplementationOnce(() => new Promise((_resolve, reject) => { failNew = reject; }));
     const action = await screen.findByRole('button', { name: 'settings.ghosts.page.installAria' });
     fireEvent.click(action);
@@ -301,6 +331,58 @@ describe('market action feedback', () => {
     expect(action.getAttribute('aria-busy')).not.toBe('true');
     expect((action as HTMLButtonElement).disabled).toBe(false);
   });
+});
+
+// Unit: route unmount used to discard all catalog view state. Only IPC is
+// stubbed; the same page mounts again with its real catalog and search controls.
+// Unit / Codex 4584198380: Settings can remount the local Plugins pane
+// underneath Skills. Cached installed-tab prewarming and hidden revisions must
+// not query the catalog; activation resumes the existing page/count readers.
+it('defers local catalog prewarming and hidden revisions until activation', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+  vi.useFakeTimers();
+  const query = vi.fn(window.electronAPI.pluginMarket.query);
+  window.electronAPI.pluginMarket.query = query;
+  const view = (active: boolean) => <MemoryRouter initialEntries={['/plugins']}><GhostPluginPage active={active} /></MemoryRouter>;
+  const warm = render(view(true));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(query.mock.calls.some(([input]) => input.counts)).toBe(true);
+  const memory = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+  const pages = memory.browser.current.pages;
+  warm.unmount();
+  query.mockClear();
+  clock.mockReturnValue(131_000);
+  const mounted = render(view(false));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(query).not.toHaveBeenCalled();
+  memory.catalogRevision += 1;
+  mounted.rerender(view(false));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(query).not.toHaveBeenCalled();
+  expect(memory.browser.current.pages).toBe(pages);
+  mounted.rerender(view(true));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(query.mock.calls.filter(([input]) => !input.counts)).toHaveLength(1);
+  expect(query.mock.calls.filter(([input]) => input.counts)).toHaveLength(1);
+  fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+  expect(screen.getByRole('button', { name: detail.name })).toBeTruthy();
+});
+
+it('restores tab, search, source and scroll together after leaving the plugin route', async () => {
+  const mounted = render(page('/plugins'));
+  fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+  await screen.findByRole('button', { name: detail.name });
+  const search = screen.getByRole('textbox');
+  fireEvent.change(search, { target: { value: 'Navigation' } });
+  fireEvent.click(screen.getByRole('radio', { name: /settings.ghosts.page.origin.public/ }));
+  await screen.findByRole('button', { name: detail.name });
+  fireEvent.scroll(screen.getByRole('main'), { target: { scrollTop: 640 } });
+  mounted.unmount();
+  render(page('/plugins'));
+  expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('Navigation');
+  expect(screen.getByRole('radio', { name: /settings.ghosts.page.origin.public/ }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.getByRole('main').scrollTop).toBe(640);
+  expect(screen.getByRole('button', { name: detail.name })).toBeTruthy();
 });
 
 // Unit: the new recommendation pool must survive tab/search/detail navigation;
@@ -480,6 +562,490 @@ async function openFromCatalog() {
 }
 
 describe('plugin page return navigation', () => {
+  // Unit / audit-2 N2: the real empty installed search action must leave the
+  // query view. Existing tab tests never activated this empty-search entry.
+  it('clears the empty search when browsing the plugin market', async () => {
+    render(page('/plugins'));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'zz-no-ux-plugin' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.browseMarket' }));
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('');
+    expect(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }).getAttribute('aria-selected')).toBe('true');
+    expect(await screen.findByRole('button', { name: detail.name })).toBeTruthy();
+  });
+
+  // Unit / UX-06: real card -> detail -> back/Escape must preserve keyboard
+  // position, not just scroll. Previous navigation cases never checked focus.
+  it.each([['market', 'back'], ['market', 'escape'], ['installed', 'back'], ['installed', 'escape']] as const)(
+    'restores the originating %s card focus after %s', async (kind, method) => {
+      const name = kind === 'market' ? detail.name : 'Focus Installed';
+      if (kind === 'installed') {
+        window.electronAPI.ghosts.listSync = () => ({ ghosts: [{ manifest: { ...detail.manifest, name },
+          dir: '/plugins/navigation-plugin', enabled: true, approval: { state: 'approved', revision: 'focus' } }] });
+        window.electronAPI.pluginMarket.snapshot = async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+      }
+      render(page('/plugins'));
+      if (kind === 'market') fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+      const card = await screen.findByRole('button', { name });
+      card.focus(); fireEvent.click(card);
+      const back = await screen.findByRole('button', { name: 'settings.ghosts.detail.backToList' });
+      if (method === 'back') fireEvent.click(back);
+      else fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+      const returned = await screen.findByRole('button', { name });
+      expect(document.activeElement).toBe(returned);
+    },
+  );
+
+  // Unit / UX-04: installing opens configuration before the follow-up snapshot.
+  // Hold that read to verify all previously known header identity stays visible.
+  it('keeps the verified market header when first installation opens before its snapshot', async () => {
+    vi.spyOn(translation, 't').mockImplementation((key, options) =>
+      key === 'settings.ghosts.detail.byAuthor' || key === 'settings.ghosts.usage.downloadsValue'
+        ? `${key} ${Object.values(options ?? {}).join(' ')}` : key);
+    const official = { ...detail, namespace: null, publisherKind: 'official' as const, downloadStatistics: { requestCount: '42' } };
+    let ghosts: InstalledGhost[] = [];
+    let installed = false;
+    const changed = new Set<Parameters<typeof window.electronAPI.ghosts.onChanged>[0]>();
+    window.electronAPI.ghosts.listSync = () => ({ ghosts });
+    window.electronAPI.ghosts.onChanged = callback => { changed.add(callback); return () => { changed.delete(callback); }; };
+    window.electronAPI.pluginMarket.snapshot = () => installed ? new Promise(() => {}) : Promise.resolve({
+      items: [official], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    loadDetail.mockResolvedValue(official);
+    Object.assign(window.electronAPI.pluginMarket, { install: vi.fn(async () => {
+      // Real Main receipt can precede its hydrated namespace/source projection.
+      const ghost: InstalledGhost = { manifest: detail.manifest, instanceKey: '_root__navigation-plugin', dir: '/plugins/_ns/_root/navigation-plugin', enabled: true,
+        publishingSource: { kind: 'unavailable' }, approval: { state: 'approved', revision: 'installed' } };
+      installed = true; ghosts = [{ ...ghost, namespace: null, namespaceState: 'confirmed' }];
+      changed.forEach(callback => callback({ ghosts })); return { ghost };
+    }) });
+    render(page('/plugins'));
+    await openFromCatalog();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', false));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.market.install' })); });
+    const heading = await screen.findByRole('heading', { level: 1, name: detail.name });
+    const header = heading.closest('header')!;
+    expect(header.textContent).toContain('Cindy');
+    expect(header.textContent).toContain('42');
+    expect(header.textContent).toContain('settings.ghosts.market.publisherKind.official');
+    // Audit-2 R4: author/statistics do not cover the separately confirmed source
+    // line. Keep its layout slot without claiming a source before confirmation.
+    expect(header.textContent).not.toContain('settings.ghosts.detail.publicInstall');
+    const lines = header.querySelectorAll('p').length;
+    await act(async () => {
+      ghosts = ghosts.map(ghost => ({ ...ghost, namespaceState: 'confirmed' as const, publishingSource: { kind: 'public-market' as const, pluginId: detail.pluginId } }));
+      changed.forEach(callback => callback({ ghosts }));
+    });
+    expect(header.textContent).toContain('settings.ghosts.detail.publicInstall');
+    expect(header.querySelectorAll('p').length).toBe(lines);
+  });
+
+  // Unit / review N1: the V2 freshness cases stayed in one detail. A same-page
+  // publishing route keeps this component mounted, so an old install waiter
+  // must be cancelled there too, including a return/remount before it settles.
+  it.each(['publishing', 'publishing-return', 'back', 'unmount-remount'] as const)('cancels an installation waiting for detail after %s', async target => {
+    auth.mode = 'cloud';
+    Object.assign(window.electronAPI, { pluginContributions: { discard: vi.fn(), prepare: vi.fn(),
+      list: vi.fn().mockResolvedValue({ plugins: [], nextCursor: null, queriedAt: detail.publishedAt }) } });
+    function Navigation() {
+      const navigate = useNavigate();
+      return <>
+        <button onClick={() => navigate('/plugins?myPlugins=1')}>Open publishing route</button>
+        <button onClick={() => navigate('/plugins')}>Return to catalog route</button>
+      </>;
+    }
+    const view = () => <MemoryRouter initialEntries={['/plugins']}><Navigation /><GhostPluginPage /></MemoryRouter>;
+    let mounted = render(view());
+    await openFromCatalog();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', false));
+    vi.useFakeTimers();
+    let finish!: (value: PluginMarketDetail) => void;
+    loadDetail.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const install = vi.fn(() => new Promise(() => {}));
+    Object.assign(window.electronAPI.pluginMarket, { install });
+    await act(async () => { vi.advanceTimersByTime(31_000); fireEvent.focus(window); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.market.install' })); });
+    expect(install).not.toHaveBeenCalled();
+    vi.useRealTimers();
+    if (target.startsWith('publishing')) {
+      fireEvent.click(screen.getByRole('button', { name: 'Open publishing route' }));
+      expect(screen.getByRole('heading', { name: 'settings.ghosts.contribution.myPlugins' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: detail.name })).toBeNull();
+      if (target === 'publishing-return') fireEvent.click(screen.getByRole('button', { name: 'Return to catalog route' }));
+    } else if (target === 'back') {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.backToList' }));
+    } else {
+      mounted.unmount();
+      mounted = render(view());
+    }
+    if (target !== 'publishing') await openFromCatalog();
+    const fresh = { ...detail, releaseId: 'after-cancellation-v2', manifest: { ...detail.manifest, version: '2.0.0' } };
+    loadDetail.mockResolvedValue(fresh);
+    await act(async () => { finish(fresh); });
+    expect(install).not.toHaveBeenCalled();
+    if (target === 'publishing') {
+      expect(screen.getByRole('heading', { name: 'settings.ghosts.contribution.myPlugins' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: detail.name })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Return to catalog route' }));
+      await openFromCatalog();
+    }
+    const button = screen.getByRole('button', { name: 'settings.ghosts.market.install' });
+    expect(button).toHaveProperty('disabled', false);
+    await act(async () => { fireEvent.click(button); });
+    expect(install).toHaveBeenCalledOnce();
+    expect(install).toHaveBeenCalledWith(detail.pluginId, expect.objectContaining({ expectedReleaseId: fresh.releaseId, expectedManifest: fresh.manifest }));
+  });
+
+  // Unit / Codex C1: the foreground path requests preserveOnError. Even after
+  // the reader accepts partial data, this caller must publish successful custom
+  // metadata while retaining the official cards and bounded outage behavior.
+  it('publishes partial custom-source refreshes during an official outage', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const snapshots = vi.fn().mockResolvedValue({ items: [detail], unavailableReason: null,
+      customSourceNames: [], unavailableCustomSourceNames: [] });
+    window.electronAPI.pluginMarket.snapshot = snapshots;
+    render(page('/plugins'));
+    const memory = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+    await waitFor(() => expect(memory.snapshot?.items).toHaveLength(1));
+    const custom = { ...detail, pluginId: 'custom-updated', ghostId: 'custom-updated', sourceType: 'local-market' as const,
+      sourceMarketName: 'working', version: '2.0.0' };
+    snapshots.mockResolvedValue({ items: [custom], unavailableReason: 'official offline',
+      customSourceNames: ['working'], unavailableCustomSourceNames: [] });
+    clock.mockReturnValue(32_000);
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(memory.snapshot?.customSourceNames).toEqual(['working']));
+    expect(memory.snapshot?.items.map(item => item.pluginId)).toEqual([detail.pluginId, custom.pluginId]);
+    expect(memory.snapshot?.unavailableReason).toBe('official offline');
+  });
+
+  // Unit / Codex C1 (approved convergence): the retained catalog can miss
+  // ghosts:changed while its route is closed. Warm-page tests did not change
+  // the installed set off-route. Both directions must re-read within the TTL,
+  // retain the usable page while pending, and preserve it on a failed read.
+  it.each([
+    ['install', 'success'], ['uninstall', 'success'],
+    ['install', 'failure'], ['uninstall', 'failure'],
+  ] as const)('revalidates a local warm remount after an off-page %s: %s', async (change, outcome) => {
+    type Snapshot = Awaited<ReturnType<typeof window.electronAPI.pluginMarket.snapshot>>;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    const stable: PluginMarketDetail = { ...detail, pluginId: 'stable-market', ghostId: 'stable-tool', name: 'Stable warm card',
+      manifest: { ...detail.manifest, id: 'stable-tool', name: 'Stable warm card' } };
+    const ghost: InstalledGhost = { manifest: detail.manifest, dir: '/fixture/installed', namespace: null, enabled: true,
+      approval: { state: 'approved', revision: 'remount-test' }, publishingSource: { kind: 'public-market', pluginId: detail.pluginId } };
+    let installed = change === 'uninstall';
+    const listeners = new Set<Parameters<typeof window.electronAPI.ghosts.onChanged>[0]>();
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: installed ? [ghost] : [] });
+    window.electronAPI.ghosts.onChanged = listener => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+    const value = (): Snapshot => ({ items: [{ ...detail, installState: installed ? 'installed' : 'not-installed' }, stable],
+      unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    const snapshots = vi.fn(async () => value());
+    window.electronAPI.pluginMarket.snapshot = snapshots;
+    window.electronAPI.pluginMarket.query = async () => ({ ...value(), items: installed ? [stable] : [detail, stable],
+      nextCursor: null, counts: { all: installed ? 1 : 2, public: installed ? 1 : 2, organization: 0, personal: 0, custom: 0 } });
+    const first = render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    await screen.findByText(stable.name);
+    const memory = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'en'), 'local');
+    await waitFor(() => expect(memory.localeReady && !memory.snapshotFlight).toBe(true));
+    const pages = memory.browser.current.pages;
+    first.unmount();
+    installed = !installed;
+    act(() => listeners.forEach(listener => listener({ ghosts: installed ? [ghost] : [] })));
+    clock.mockReturnValue(10_001);
+    let finish!: (next: Snapshot) => void, fail!: (error: Error) => void;
+    const pending = new Promise<Snapshot>((resolve, reject) => { finish = resolve; fail = reject; });
+    snapshots.mockReturnValueOnce(pending);
+    const reads = snapshots.mock.calls.length;
+    render(page('/plugins'));
+    expect(screen.getByText(stable.name)).toBeTruthy();
+    expect(memory.browser.current.pages).toBe(pages);
+    expect(snapshots).toHaveBeenCalledTimes(reads + 1);
+    await act(async () => { if (outcome === 'success') finish(value()); else fail(new Error('temporary snapshot failure')); });
+    if (outcome === 'success') {
+      await waitFor(() => expect(memory.snapshot?.items.find(item => item.pluginId === detail.pluginId)?.installState)
+        .toBe(installed ? 'installed' : 'not-installed'));
+      await waitFor(() => expect([...memory.browser.current.pages.values()].flat().some(item => item.pluginId === detail.pluginId)).toBe(!installed));
+      const list = screen.getByText(stable.name).closest('section')!;
+      await waitFor(() => expect(Boolean(within(list).queryByText(detail.name))).toBe(!installed));
+    }
+    expect(screen.getByText(stable.name)).toBeTruthy();
+    expect(screen.queryByText('ccAgent.common.loading')).toBeNull();
+  });
+
+  // Unit / review finding 3: settled partition-switch tests miss a pending old
+  // locale. Snapshot success/error and recommendations may only publish to their
+  // initiating bucket; the new language still waits for Main's locale sync.
+  it.each(['success', 'failure'] as const)('discards the old language snapshot and recommendations: %s', async outcome => {
+    type Snapshot = Awaited<ReturnType<typeof window.electronAPI.pluginMarket.snapshot>>;
+    let finish!: (value: Snapshot) => void, fail!: (error: Error) => void;
+    let finishRecommendations!: (value: PluginMarketDetail[]) => void, failRecommendations!: (error: Error) => void;
+    let finishLocale!: () => void;
+    const english = new Promise<Snapshot>((resolve, reject) => { finish = resolve; fail = reject; });
+    const oldRecommendations = new Promise<PluginMarketDetail[]>((resolve, reject) => { finishRecommendations = resolve; failRecommendations = reject; });
+    const localeGate = new Promise<void>(resolve => { finishLocale = resolve; });
+    const chinese: Snapshot = { items: [{ ...detail, name: 'Chinese snapshot' }], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] };
+    const snapshots = vi.fn().mockReturnValueOnce(english).mockResolvedValue(chinese);
+    const recommendations = vi.fn().mockReturnValueOnce(oldRecommendations).mockResolvedValue([{ ...detail, name: 'Chinese recommendation' }]);
+    Object.assign(window.electronAPI.pluginMarket, { snapshot: snapshots, recommendations,
+      query: async () => ({ ...chinese, items: [], counts: null, nextCursor: null }) });
+    window.electronAPI.setApplicationMenuLocale = async locale => {
+      if (locale === 'zh-CN') await localeGate;
+      return { ok: true };
+    };
+    const mounted = render(page('/plugins'));
+    await waitFor(() => expect(recommendations).toHaveBeenCalledOnce());
+    translation.i18n.language = 'zh-CN'; translation.i18n.resolvedLanguage = 'zh-CN';
+    mounted.rerender(page('/plugins'));
+    const bucket = pluginCatalogMemory(pluginCatalogOwnerKey('local', auth.dataOwnerId, auth.dataOwnerGeneration, 'zh-CN'), 'local');
+    const refresh = vi.fn(async () => {});
+    bucket.browser.current.refresh = refresh;
+    await act(async () => {
+      if (outcome === 'success') { finish({ ...chinese, items: [{ ...detail, name: 'Old English snapshot' }] }); finishRecommendations([{ ...detail, name: 'Old English recommendation' }]); }
+      else { fail(new Error('old snapshot failed')); failRecommendations(new Error('old recommendations failed')); }
+    });
+    expect(bucket.snapshot).toBeNull();
+    expect(bucket.todayPool).toEqual([]);
+    expect(bucket.todayLoaded).toBe(false);
+    expect(refresh).not.toHaveBeenCalled();
+    await act(async () => { finishLocale(); });
+    await waitFor(() => expect(bucket.snapshot?.items[0]?.name).toBe('Chinese snapshot'));
+    expect(bucket.todayPool[0]?.name).toBe('Chinese recommendation');
+  });
+
+  // Unit / review finding 1 (R2): existing freshness cases only reopened a cache.
+  // A visible V1 plus a pending foreground V2 must never install V1; failure
+  // must leave installation blocked while the readable cached detail stays.
+  it.each(['success', 'failure', 'access-denied-before-focus'] as const)('waits for the foreground detail before installing: %s', async outcome => {
+    render(page('/plugins'));
+    await openFromCatalog();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', false));
+    vi.useFakeTimers();
+    let finish!: (value: PluginMarketDetail) => void;
+    let fail!: (error: Error) => void;
+    loadDetail.mockReturnValueOnce(new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+    const install = vi.fn(() => new Promise(() => {}));
+    Object.assign(window.electronAPI.pluginMarket, { install });
+    await act(async () => {
+      vi.advanceTimersByTime(31_000);
+      if (outcome !== 'access-denied-before-focus') fireEvent.focus(window);
+    });
+    expect(loadDetail).toHaveBeenCalledTimes(outcome === 'access-denied-before-focus' ? 1 : 2);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.market.install' })); });
+    expect(install).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: detail.name })).toBeTruthy();
+    const fresh = { ...detail, releaseId: 'foreground-v2', version: '2.0.0', manifest: { ...detail.manifest, version: '2.0.0' } };
+    await act(async () => {
+      if (outcome === 'success') finish(fresh);
+      else fail(new Error(outcome === 'failure' ? 'temporary foreground failure' : '[PERMISSION_DENIED] detail revoked'));
+    });
+    if (outcome === 'success') {
+      expect(install).toHaveBeenCalledWith(detail.pluginId, expect.objectContaining({ expectedReleaseId: fresh.releaseId, expectedManifest: fresh.manifest }));
+    } else {
+      expect(install).not.toHaveBeenCalled();
+      expect(screen.getByRole('alert').textContent).toContain(`settings.ghosts.market.errors.${outcome === 'failure' ? 'generic' : 'accessDenied'}`);
+      expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', true);
+      if (outcome === 'access-denied-before-focus') expect(screen.queryByText('settings.ghosts.perm.grantsTitle')).toBeNull();
+    }
+    expect(loadDetail).toHaveBeenCalledTimes(2);
+  });
+
+  // Integration: both caches must leave the same owner/language partition. A
+  // mounted page with a warm detail and saved query detects mismatched keys.
+  it.each(['generation', 'language'] as const)('invalidates catalog state and warm details together when %s changes', async boundary => {
+    const mounted = render(page('/plugins'));
+    await openFromCatalog();
+    await screen.findByRole('button', { name: 'settings.ghosts.market.install' });
+    expect(loadDetail).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.backToList' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Navigation' } });
+    if (boundary === 'generation') auth.dataOwnerGeneration += 1;
+    else { translation.i18n.language = 'ja'; translation.i18n.resolvedLanguage = 'ja'; }
+    mounted.rerender(page('/plugins'));
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('');
+    expect(screen.getByRole('tab', { name: /settings.ghosts.page.installedSection/ }).getAttribute('aria-selected')).toBe('true');
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    fireEvent.click(await screen.findByRole('button', { name: detail.name }));
+    await waitFor(() => expect(loadDetail).toHaveBeenCalledTimes(2));
+    await screen.findByRole('button', { name: 'settings.ghosts.market.install' });
+  });
+
+  // Unit: pointer/focus prefetch uses real card events; a fast pass must not
+  // create network work, and an equal background response must not render detail.
+  it('prefetches only a sustained hover, opens warm details and skips unchanged background renders', async () => {
+    const warm = { ...detail, icon: { mimeType: 'image/png', sha256: 'a'.repeat(64), sizeBytes: 42,
+      url: 'https://example.invalid/icon.png?signature=first', expiresAt: '2099-01-01T00:00:00.000Z' } };
+    loadDetail.mockResolvedValue(warm);
+    render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    const card = await screen.findByRole('button', { name: detail.name });
+    vi.useFakeTimers();
+    fireEvent.pointerEnter(card.closest('article')!);
+    act(() => { vi.advanceTimersByTime(100); });
+    fireEvent.pointerLeave(card.closest('article')!);
+    act(() => { vi.advanceTimersByTime(100); });
+    expect(loadDetail).not.toHaveBeenCalled();
+    fireEvent.focus(card);
+    await act(async () => { vi.advanceTimersByTime(250); });
+    expect(loadDetail).toHaveBeenCalledOnce();
+    act(() => { vi.advanceTimersByTime(30_001); });
+    let finishRefresh!: (value: PluginMarketDetail) => void;
+    loadDetail.mockReturnValueOnce(new Promise(resolve => { finishRefresh = resolve; }));
+    fireEvent.click(card);
+    expect(screen.getByRole('button', { name: 'settings.ghosts.remote.detailLoading' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('main').getAttribute('aria-busy')).toBeNull();
+    const renders = readmeRenders.mock.calls.length;
+    await act(async () => { finishRefresh({ ...warm, icon: { ...warm.icon, url: 'https://example.invalid/icon.png?signature=second' } }); });
+    expect(readmeRenders).toHaveBeenCalledTimes(renders);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.backToList' }));
+    fireEvent.click(screen.getByRole('button', { name: detail.name }));
+    expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', false);
+    expect(loadDetail).toHaveBeenCalledTimes(2);
+    const beforeForeground = detailRenders.mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(30_001);
+      window.dispatchEvent(new Event('focus'));
+      await Promise.resolve();
+    });
+    expect(loadDetail).toHaveBeenCalledTimes(3);
+    expect(detailRenders).toHaveBeenCalledTimes(beforeForeground);
+  });
+
+  it('uses the refreshed release and manifest for installation instead of cached confirmation data', async () => {
+    render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    const card = await screen.findByRole('button', { name: detail.name });
+    vi.useFakeTimers();
+    fireEvent.focus(card);
+    await act(async () => { vi.advanceTimersByTime(250); });
+    act(() => { vi.advanceTimersByTime(30_001); });
+    const fresh: PluginMarketDetail = { ...detail, releaseId: 'fresh-release', version: '2.0.0', manifest: { ...detail.manifest, version: '2.0.0', notify: true } };
+    let finish!: (value: PluginMarketDetail) => void;
+    loadDetail.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const install = vi.fn().mockResolvedValue({ ghost: { manifest: fresh.manifest, dir: '/plugins/navigation-plugin', enabled: true } });
+    Object.assign(window.electronAPI.pluginMarket, { install });
+    fireEvent.click(card);
+    const button = screen.getByRole('button', { name: 'settings.ghosts.remote.detailLoading' });
+    expect(button).toHaveProperty('disabled', true);
+    fireEvent.click(button);
+    expect(install).not.toHaveBeenCalled();
+    await act(async () => { finish(fresh); });
+    await act(async () => { fireEvent.click(button); });
+    expect(install).toHaveBeenCalledWith(detail.pluginId, expect.objectContaining({ expectedReleaseId: fresh.releaseId, expectedManifest: fresh.manifest }));
+  });
+
+  it('does not keep a prefetch response after the pointer leaves its card', async () => {
+    render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    const card = await screen.findByRole('button', { name: detail.name });
+    let finish!: (value: PluginMarketDetail) => void;
+    loadDetail.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    vi.useFakeTimers();
+    fireEvent.pointerEnter(card.closest('article')!);
+    await act(async () => { vi.advanceTimersByTime(250); });
+    fireEvent.pointerLeave(card.closest('article')!);
+    await act(async () => { finish(detail); });
+    fireEvent.click(card);
+    expect(loadDetail).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', true);
+    await act(async () => { await Promise.resolve(); });
+  });
+
+  it('keeps prefetch to one request and suppresses it while the catalog is scrolling', async () => {
+    const second = { ...detail, pluginId: 'prefetch-second', name: 'Prefetch Second' };
+    window.electronAPI.pluginMarket.snapshot = async () => ({ items: [detail, second],
+      unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    const firstCard = (await screen.findByRole('button', { name: detail.name })).closest('article')!;
+    const secondCard = screen.getByRole('button', { name: second.name }).closest('article')!;
+    let finish!: (value: PluginMarketDetail) => void;
+    loadDetail.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    vi.useFakeTimers();
+    fireEvent.pointerEnter(firstCard);
+    await act(async () => { vi.advanceTimersByTime(250); });
+    fireEvent.pointerLeave(firstCard);
+    fireEvent.pointerEnter(secondCard);
+    await act(async () => { vi.advanceTimersByTime(250); });
+    expect(loadDetail).toHaveBeenCalledOnce();
+    await act(async () => { finish(detail); });
+    fireEvent.pointerLeave(secondCard);
+    fireEvent.pointerEnter(secondCard);
+    act(() => { vi.advanceTimersByTime(200); });
+    fireEvent.scroll(screen.getByRole('main'));
+    await act(async () => { vi.advanceTimersByTime(50); });
+    expect(loadDetail).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['[PERMISSION_DENIED] denied', 'accessDenied'],
+    ['network failure', 'generic'],
+  ])('keeps installation disabled after an unsuccessful fresh detail read: %s', async (message, errorKey) => {
+    render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    const card = await screen.findByRole('button', { name: detail.name });
+    vi.useFakeTimers();
+    fireEvent.focus(card);
+    await act(async () => { vi.advanceTimersByTime(250); });
+    act(() => { vi.advanceTimersByTime(30_001); });
+    loadDetail.mockRejectedValueOnce(new Error(message));
+    await act(async () => { fireEvent.click(card); });
+    expect(screen.getByRole('alert').textContent).toContain(`settings.ghosts.market.errors.${errorKey}`);
+    expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('main').getAttribute('aria-busy')).toBeNull();
+  });
+  // Unit / plugin-page-ux-fix: the old selection waited for IPC and held the
+  // install lock. Existing navigation cases resolve immediately and miss this
+  // timing: one pending detail must show its catalog identity without allowing
+  // installation, and cannot overwrite a newer selection after returning.
+  it('opens catalog details immediately and discards a previous pending selection', async () => {
+    let finishFirst!: (value: PluginMarketDetail) => void;
+    const first = new Promise<PluginMarketDetail>(resolve => { finishFirst = resolve; });
+    const second = { ...detail, pluginId: 'second-plugin', ghostId: 'second-plugin', name: 'Second Plugin' };
+    window.electronAPI.pluginMarket.snapshot = async () => ({ items: [detail, second],
+      unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    loadDetail.mockReturnValueOnce(first).mockResolvedValueOnce(second);
+    const install = vi.fn();
+    Object.assign(window.electronAPI.pluginMarket, { install });
+    render(page('/plugins'));
+    fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+    fireEvent.click(await screen.findByRole('button', { name: detail.name }));
+
+    const heading = screen.getByRole('heading', { level: 1, name: detail.name });
+    expect(screen.getByText(detail.description!)).toBeTruthy();
+    expect(screen.getByRole('main').contains(document.activeElement)).toBe(true);
+    const pendingAction = screen.getByRole('button', { name: 'settings.ghosts.market.install' });
+    expect(pendingAction).toHaveProperty('disabled', true);
+    expect(pendingAction.getAttribute('aria-busy')).toBe('true');
+    fireEvent.click(pendingAction);
+    expect(install).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    const secondCard = await screen.findByRole('button', { name: second.name });
+    expect(secondCard).toHaveProperty('disabled', false);
+    fireEvent.click(secondCard);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', false));
+    await act(async () => { finishFirst({ ...detail, description: 'Stale response' }); });
+    expect(screen.getByRole('heading', { level: 1, name: second.name })).toBeTruthy();
+    expect(heading.isConnected).toBe(false);
+    expect(screen.queryByText('Stale response')).toBeNull();
+  });
+
+  it.each(['[PLUGIN_ORGANIZATION_CONTEXT_UNAVAILABLE] private detail', 'network failure'])(
+    'keeps a readable unavailable detail with retry after %s', async message => {
+      let fail!: (error: Error) => void;
+      loadDetail.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+      render(page('/plugins'));
+      fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+      fireEvent.click(await screen.findByRole('button', { name: detail.name }));
+      const heading = screen.getByRole('heading', { level: 1, name: detail.name });
+      await act(async () => { fail(new Error(message)); });
+      const errorKey = message.startsWith('[') ? 'organizationContextUnavailable' : 'generic';
+      expect(screen.getByRole('alert').textContent).toContain(`settings.ghosts.market.errors.${errorKey}`);
+      expect(screen.queryByText(message)).toBeNull();
+      expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.remote.retry' }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'settings.ghosts.market.install' })).toHaveProperty('disabled', false));
+      expect(screen.getByRole('heading', { level: 1, name: detail.name })).toBe(heading);
+      expect(screen.queryByRole('alert')).toBeNull();
+    },
+  );
   // Public-share deep links must open the existing installation without starting
   // an install. Catalog-only cases below cannot cover this query entry (unit).
   it.each(['installed', 'update-available'] as const)(
@@ -1457,4 +2023,21 @@ describe('plugin use details and independent author management', () => {
     expect(screen.queryByText(`${prefix}.anonymous`)).toBeNull();
     expect(api.prepare).not.toHaveBeenCalled();
   });
+});
+
+// Unit / round-5: source selection must not pull a still-visible secondary bar
+// to the viewport edge; only a bar already scrolled past starts the new list.
+it.each([[120, 50], [-50, 0]])('keeps the source switch viewport appropriate at marker top %s', async (top, expected) => {
+  render(page('/plugins'));
+  fireEvent.click(screen.getByRole('tab', { name: /settings.ghosts.page.marketSection/ }));
+  await screen.findByRole('button', { name: detail.name });
+  const radio = screen.getByRole('radio', { name: /settings.ghosts.page.origin.public/ });
+  const sticky = radio.closest('[role="radiogroup"]')!.parentElement!.parentElement!;
+  const marker = sticky.previousElementSibling!;
+  const root = screen.getByRole('main');
+  vi.spyOn(root, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 800, 800));
+  vi.spyOn(marker, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, top, 800, 0));
+  root.scrollTop = 50;
+  fireEvent.click(radio);
+  expect(root.scrollTop).toBe(expected);
 });

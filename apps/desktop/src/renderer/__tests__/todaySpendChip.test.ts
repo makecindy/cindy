@@ -305,6 +305,16 @@ describe('shared usage-card provider projections', () => {
     expect(card.windows[0].window.utilization).toBe(25);
   });
 
+  // Unit: the rendered card previously ignored the native display name when its machine code was pro.
+  it('shows the official Claude plan name without changing quota windows', () => {
+    const card = buildClaudeUsageCard({
+      subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra', updatedAt: now,
+      fiveHour: { utilization: 25 },
+    }, t);
+    expect(card.planLabel).toBe('Ultra');
+    expect(card.windows[0].window.utilization).toBe(25);
+  });
+
   it.each(['free', 'plus', 'business', 'enterprise', 'custom_plan'])(
     'preserves ChatGPT plan %s without requiring quota windows',
     (planType) => {

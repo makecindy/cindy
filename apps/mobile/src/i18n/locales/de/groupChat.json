@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · für {{person}}"
+  },
   "progress": {
     "stop": "Stoppen",
     "stopMine": "Meine stoppen",
@@ -295,6 +298,8 @@
       "loading": "Einstellungen werden geladen…",
       "unavailable": "Die Gruppeneinstellungen konnten nicht geladen werden. Versuch es erneut."
     },
+    "allowMemberInvites": "Alle Mitglieder dürfen Freunde einladen",
+    "allowMemberInvitesHint": "Wenn aktiviert, dürfen alle beigetretenen Mitglieder Freunde einladen. Nur Gruppeninhaber und Admins können dies ändern.",
     "allowMentionAllBots": "@Alle Freunde erlauben",
     "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle könnten antworten: Vorsicht in großen Gruppen. KI-Antworten in deinem Namen sind unabhängig.",
     "notifications": {
@@ -578,6 +583,11 @@
     "transferHint": "Das Mitglied wird Gruppeninhaber und du wirst Admin.",
     "removeTitle": "{{name}} aus dieser Gruppe entfernen?",
     "removeHint": "Diese Person verliert den Zugriff auf Nachrichten. Ihre Freunde verlassen die Gruppe ebenfalls.",
+    "removeOwn": "Aus Gruppe entfernen",
+    "removeOwnScope": "Dies betrifft nur diese Gruppe. Dein Partner bleibt in deinem Konto.",
+    "removeOwnHint": "{{name}} erhält keine Nachrichten mehr aus „{{group}}“. Der Verlauf bleibt erhalten; andere Gruppen und private Chats sind nicht betroffen.",
+    "removeOwnActiveHint": "Aktive Anfragen dieses Partners in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
+    "stopAndRemove": "Stoppen und entfernen",
     "confirm": "Bestätigen",
     "inviteTitle": "Zur Gruppe einladen",
     "reusableLink": "Kein Ablaufdatum · Für mehrere Personen wiederverwendbar",

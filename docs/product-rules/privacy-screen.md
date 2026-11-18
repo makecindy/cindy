@@ -1,5 +1,17 @@
 # 隐私屏：用遮罩代替锁屏，让 AI 在你不在时继续用电脑
 
+> **读取时机**：新增或修改隐私屏（离开时遮住屏幕、远程控制时的遮罩、远程结束后的保护）、物理输入转锁屏、锁屏失败处理、
+> 屏幕常亮策略，或「离开电脑时」设置与遥控端「安全」面板里的相关开关之前
+> **适用路径**：`apps/desktop/src/main/remote-desktop/**/{privacy,awayGuard,controlledOverlay,displayDemand,linuxPrivacy,linuxSessionLock,linuxLock,windowsLockScreenSetup}*`、
+> `apps/desktop/native/remote-desktop/hyprland-privacy/**`、
+> `apps/desktop/native/remote-desktop/windows-input/src/privacy.rs`、
+> `apps/desktop/native/remote-desktop/macos-input.swift`、
+> `apps/desktop/src/main/device-link/**/{power-blocker,powerBlocker}*`、
+> `apps/desktop/src/main/remote-desktop-viewer/**/safety*`、`apps/desktop/src/shared/awayGuard.ts`、
+> `apps/desktop/src/renderer/components/settings/AwayFromComputerSection*`、
+> `apps/desktop/src/renderer/hooks/use{AwayGuard,KeepAwake}Setting.ts`、
+> `apps/mobile/src/remote-desktop/{RemoteDesktopSecuritySettings,useRemoteDesktopSafety}*`
+
 2026-11-14，用户裁决：把「离开时继续工作」的黑色遮罩和远程桌面的「电脑防窥」合并成同一个东西，
 统一叫**隐私屏**。画面、有人碰电脑时的处理、锁不上时的处理、对屏幕的保护和设置位置，都按本文
 统一。原 PR #9899（远程结束后保留遮罩）已关闭，其原生能力和锁屏修复并入本文的实现。

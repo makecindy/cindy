@@ -36,8 +36,10 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state/topic-preview cases and is otherwise an empty frame',
   cases: {
+    'topic-preview': { about: 'Sidebar source label and independent group/reply targets, exact reply highlight and repeat navigation',
+      viewport: { width: 1000, height: 700 }, data: { ...base, name: 'Cindy 讨论', bubbles: true, topicPreview: true } },
     'reply-composer': {
       about: 'Real thread reply composer with microphone and editable draft at narrow width',
       viewport: { width: 420, height: 600 },
@@ -78,7 +80,10 @@ export default {
     'work-unknown': { about: 'Remote work with no readable task: generic activity, no invented thinking', data: { ...base, messages: 2, workState: 'unknown' } },
     'work-remote': { about: 'Authenticated remote target projection, scenario data (not a live device-link run)', data: { ...base, messages: 2, workState: 'testing', workRemote: true } },
     'work-parallel': { about: 'Two concurrent execution rows, separate task entries and one group stop', data: { ...base, messages: 2, workState: 'testing', workParallel: true } },
+    'work-requesters': { about: 'Cindy progress keeps each requester visible', data: { ...base, members: [{ botId: 'a', name: 'Cindy' }, { botId: 'b', name: 'Cindy' }], messages: 3, workState: 'testing', workParallel: true, workReadonly: true, workRequesterNames: ['nana', 'chris'] } },
+    'work-chronology': { about: 'Concurrent work follows request time; another requester remains read-only', data: { ...base, messages: 3, workState: 'testing', workParallel: true, workReadonly: true } },
     'work-parallel-stopping': { about: 'Last execution is stopping while the first still runs: the group stop control remains available', data: { ...base, messages: 2, workState: 'testing', workParallel: true, workLastStopping: true } },
+    'planning-foreign': { about: 'My local arrangement decision remains cancellable when its organizer belongs to someone else', data: { ...base, messages: 2, sidebar: false, planningForeign: true } },
     'body-answer': {
       about: '#6550: component body is readable; literal punctuation and surrounding Markdown are retained',
       viewport: { width: 720, height: 700 },
@@ -104,6 +109,10 @@ export default {
     'no-sidebar': { about: 'Collapsed sidebar layout', data: { ...base, sidebar: false } },
     bubbles: {
       about: 'Teammate bubbles: quote, corner reaction, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
+      data: { ...base, bubbles: true },
+    },
+    'reaction-colors': {
+      about: 'Color emoji retain full opacity in the reaction picker and badges in both themes',
       data: { ...base, bubbles: true },
     },
     arrangement: {
@@ -193,6 +202,73 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'topic-preview') {
+      const row = page.locator('[data-bot-group-id="fixture-group"]');
+      const topic = row.getByRole('button', { name: new RegExp(await ui.t('bots.groupChat.server.thread.viewThread')) });
+      const group = row.getByRole('button', { name: 'Cindy 讨论', exact: true });
+      assert.equal(await row.locator('button button').count(), 0, 'independent native buttons');
+      const originalHeight = await row.evaluate(el => el.getBoundingClientRect().height);
+      const hitArea = await topic.evaluate(el => {
+        const bounds = el.getBoundingClientRect();
+        const title = el.closest('[data-bot-group-id]').querySelector('[title="Cindy 讨论"]').getBoundingClientRect();
+        return { height: bounds.height, separate: bounds.top >= title.bottom,
+          sourceFits: el.firstElementChild.getBoundingClientRect().right <= bounds.right };
+      });
+      assert.ok(hitArea.height >= 24 && hitArea.separate && hitArea.sourceFits, 'source fits; the reply target is at least 24px and does not overlap the group title');
+      await topic.click();
+      const reply = page.locator('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]');
+      await reply.waitFor();
+      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      await ui.capture('reply-located');
+      await reply.evaluate(el => el.classList.remove('ring-2'));
+      await topic.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      await group.click();
+      await reply.waitFor({ state: 'detached' });
+      assert.equal(await row.evaluate(el => el.getBoundingClientRect().height), originalHeight, 'row geometry stays stable');
+      await ui.capture('main-chat');
+      return;
+    }
+    if (definition.data.planningForeign) {
+      await page.getByTestId('bot-group-speaking').waitFor();
+      const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true });
+      await stop.waitFor();
+      assert.equal(await stop.isEnabled(), true, 'My local planning stays cancellable with a foreign organizer');
+      await ui.capture('planning');
+      return;
+    }
+    if (ui.case === 'reaction-colors') {
+      const row = page.locator('[data-bot-group-message-id="a2"]');
+      await row.hover();
+      await row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true }).click();
+      const picker = page.getByRole('dialog', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      await picker.waitFor();
+      await ui.capture('reaction-picker');
+      // Visual regression: translucent text ink also fades native color emoji.
+      // jsdom cannot paint color fonts; sample the actual computed ink alpha in Electron.
+      // Old code fails with tertiary alpha in the picker and primary alpha in badges.
+      const inkAlpha = element => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d');
+        context.fillStyle = getComputedStyle(element).color;
+        context.fillRect(0, 0, 1, 1);
+        return context.getImageData(0, 0, 1, 1).data[3];
+      };
+      const choice = picker.getByRole('button', { name: '👍', exact: true });
+      const glyph = choice.locator('span');
+      // Use the button itself in the pre-fix comparison, before the emoji span existed.
+      assert.equal(await ((await glyph.count()) ? glyph : choice).evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
+      await choice.hover();
+      await choice.focus();
+      assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');
+      await page.keyboard.press('Escape');
+      const badge = row.locator('[data-reaction-corner] button > span').first();
+      assert.equal(await badge.evaluate(inkAlpha), 255, 'reaction badges preserve emoji colors');
+      return;
+    }
+
     if (ui.case === 'public-cindy') {
       await page.getByTestId('bot-group-work').waitFor();
       assert.equal(await page.getByTestId('bot-group-work').count(), 1);
@@ -398,6 +474,13 @@ export default {
         assert.ok(!(await strip.innerText()).includes(elapsed), 'unknown start time must not display elapsed time');
         const timeline = page.getByTestId('bot-group-timeline');
         await timeline.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).last().waitFor();
+      }
+      if (ui.case === 'work-chronology') {
+        const rows = page.getByTestId('bot-group-work');
+        assert.equal(await rows.count(), 2);
+        assert.equal(await rows.nth(1).getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0);
+        const order = await page.getByTestId('bot-group-timeline').evaluate(el => [...el.querySelectorAll('[data-testid="bot-group-work"], [data-bot-group-message-id]')].map(row => row.getAttribute('data-bot-group-message-id') ?? 'work'));
+        assert.ok(order.indexOf('work') < order.lastIndexOf('m2'), 'earlier live work precedes later messages');
       }
       if (ui.case === 'work-parallel-stopping') {
         const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
@@ -695,11 +778,8 @@ export default {
         assert.ok(order, 'topic work retains its original timestamp between replies');
         const stop = page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
         await stop.click();
-        await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopMine'), exact: true }).click();
         assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'mine');
-        await stop.click();
-        await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopAll') }).click();
-        assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'all');
+        assert.equal(await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopAll') }).count(), 0);
       }
       if (ui.case === 'thread-work-overflow') {
         const panel = page.locator('aside.thread-panel');

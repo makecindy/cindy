@@ -306,6 +306,24 @@ const scheduledInput = (overrides = {}) => ({ sessionId: 'scheduled-task',
   origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Fixture', runId: 'run' },
   onAccepted() {}, ...overrides });
 
+test('scheduler cleanup distinguishes restore-pending from accepted input', async t => {
+  t = lifoCleanup(t);
+  let available = false;
+  const h = createHarness({ loadQueueSnapshot: async () => {
+    if (!available) throw new Error('snapshot unavailable');
+    return [];
+  } });
+  t.after(() => h.queue.dispose());
+  const bridge = h.queue.schedulerQueue();
+  assert.equal(bridge.isSessionBusy('empty'), true);
+  assert.equal(bridge.hasPendingInput('empty'), false);
+  await assert.rejects(bridge.ensureQueueRestored('empty'), /snapshot unavailable/);
+  assert.equal(bridge.hasPendingInput('empty'), false);
+  available = true;
+  assert.equal(await bridge.ensureQueueRestored('empty'), true);
+  assert.equal(bridge.hasPendingInput('empty'), false);
+});
+
 test('scheduled input waits behind user input, deduplicates and retains its origin through dispatch', async t => {
   t = lifoCleanup(t);
   const h = createHarness(); t.after(() => h.queue.dispose());
@@ -318,6 +336,7 @@ test('scheduled input waits behind user input, deduplicates and retains its orig
   const result = await bridge.enqueuePrompt(request);
   assert.ok(result.clientId);
   assert.equal(bridge.hasQueuedPrompt('scheduled-task', 'schedule'), true);
+  assert.equal(bridge.hasPendingInput('scheduled-task'), true);
   assert.deepEqual(await bridge.enqueuePrompt(request), { duplicate: true });
   assert.equal(accepted, 0);
   h.maker.getSession('scheduled-task').emit({ type: 'done' });
@@ -372,6 +391,28 @@ test('a cancelled scheduler acceptance rolls back before vendor dispatch', async
   assert.equal(h.maker.getSession('scheduled-task').sent.length, 0);
 });
 
+// #10803 / unit: the Host uses the same queue bridge after the user row is
+// durable. A failed snapshot must report its cause, not look like a lost queue row.
+test('persisted scheduler snapshot failure reaches its run with the original error', async t => {
+  t = lifoCleanup(t);
+  const message = 'Snapshot operation deadline exceeded';
+  const h = createHarness({ getGitSnapshot: () => ({
+    onTurnStart() { throw new Error(message); }, onTurnAbort() {}, onTurnEnd() {}, onSessionClosed() {},
+  }) });
+  t.after(() => h.queue.dispose());
+  let failure;
+  const bridge = h.queue.schedulerQueue();
+  const result = await bridge.enqueuePrompt(scheduledInput({
+    onPersistedFailure: (error, recovering) => { failure = { error, recovering }; },
+    onAccepted() { assert.fail('snapshot failed before acceptance'); },
+  }));
+  await waitFor(() => failure);
+  assert.deepEqual(failure, { error: message, recovering: false });
+  assert.equal(h.persisted.some(row => row.clientId === result.clientId), true);
+  assert.equal(bridge.isPromptTracked('scheduled-task', result.clientId), false);
+  assert.equal(h.maker.getSession('scheduled-task').sent.length, 0);
+});
+
 test('an outgoing scheduler cannot restore queues after its input runtime is disposed', async t => {
   t = lifoCleanup(t);
   let restored = 0;
@@ -381,6 +422,7 @@ test('an outgoing scheduler cannot restore queues after its input runtime is dis
   await previous.ensureQueueRestored('old-owner-task');
   await h.queue.dispose();
   const before = restored;
+  assert.throws(() => previous.hasPendingInput('new-owner-task'), /owner changed|closed/);
   await assert.rejects(previous.ensureQueueRestored('new-owner-task'), /session is closed/);
   assert.equal(restored, before, 'closed scheduler must not read the next account database');
 });

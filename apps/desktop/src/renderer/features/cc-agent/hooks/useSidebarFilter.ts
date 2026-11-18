@@ -66,9 +66,14 @@ import {
   loadVendor,
   loadGroupBy,
   loadGroupDialogue,
+  loadGroupAutomation,
   loadGroupDevice,
   loadLastActivity,
   loadSortBy,
+  loadPinnedSortBy,
+  persistPinnedSortBy,
+  PINNED_SORT_BY_KEY,
+  type PinnedSortBy,
   loadProjectOrder,
   loadManualProjectOrder,
   migrateLegacyManualSort,
@@ -79,6 +84,7 @@ import {
   persistVendor,
   persistGroupBy,
   persistGroupDialogue,
+  persistGroupAutomation,
   persistGroupDevice,
   persistLastActivity,
   persistSortBy,
@@ -147,10 +153,14 @@ export interface UseSidebarFilterReturn {
   groupBy: FilterGroupBy;
   /** 「对话归为一组」开关(D 期):true = 无项目任务收进「对话」组;默认 false 散排。 */
   groupDialogue: boolean;
+  /** 「自动化归为一组」开关:true = 自动化运行的任务收进「自动化」组;默认 true。 */
+  groupAutomation: boolean;
   /** 「按设备分组」开关(E 期):默认 true;有可选远程设备（含断线缓存）时可见/生效。 */
   groupDevice: boolean;
   /** Sidebar 主列表任务排序。默认 'recency'。 */
   sortBy: FilterSortBy;
+  /** 置顶区独立的显示排序；默认保留手动顺序。 */
+  pinnedSortBy: PinnedSortBy;
   /** 按项目分组时的项目行顺序。默认 'activity'。 */
   projectOrder: FilterProjectOrder;
   /** Project 分组自定义顺序。元素为 normalized workingDir。 */
@@ -179,10 +189,14 @@ export interface UseSidebarFilterReturn {
   setGroupBy: (groupBy: FilterGroupBy) => void;
   /** 设置「对话归为一组」，持久化到 localStorage。 */
   setGroupDialogue: (groupDialogue: boolean) => void;
+  /** 设置「自动化归为一组」，持久化到 localStorage。 */
+  setGroupAutomation: (groupAutomation: boolean) => void;
   /** 设置「按设备分组」，持久化到 localStorage。 */
   setGroupDevice: (groupDevice: boolean) => void;
   /** 设置主列表任务排序，持久化到 localStorage。 */
   setSortBy: (sortBy: FilterSortBy) => void;
+  /** 设置置顶显示排序，保留原有手动顺序。 */
+  setPinnedSortBy: (sortBy: PinnedSortBy) => void;
   /** 设置项目行顺序，持久化到 localStorage。 */
   setProjectOrder: (projectOrder: FilterProjectOrder) => void;
   /** 重置项目 / Harness / 最近活跃筛选；保留独立的任务状态与展示偏好。 */
@@ -269,6 +283,7 @@ export function useSidebarFilter(
   );
   const [groupBy, setGroupByState] = useState<FilterGroupBy>(() => loadGroupBy());
   const [groupDialogue, setGroupDialogueState] = useState<boolean>(() => loadGroupDialogue());
+  const [groupAutomation, setGroupAutomationState] = useState<boolean>(() => loadGroupAutomation());
   const [groupDevice, setGroupDeviceState] = useState<boolean>(() => loadGroupDevice());
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => {
     migrateLegacyManualSort();
@@ -277,6 +292,20 @@ export function useSidebarFilter(
   const [projectOrder, setProjectOrderState] = useState<FilterProjectOrder>(() =>
     loadProjectOrder(),
   );
+  const [pinnedSortBy, setPinnedSortByState] = useState(loadPinnedSortBy);
+  const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    setPinnedSortByState(next);
+    persistPinnedSortBy(next);
+  }, []);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === PINNED_SORT_BY_KEY || event.key === null) {
+        setPinnedSortByState(loadPinnedSortBy());
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
     loadManualProjectOrder(ownerId),
   );
@@ -540,6 +569,11 @@ export function useSidebarFilter(
     persistGroupDialogue(next);
   }, []);
 
+  const setGroupAutomation = useCallback((next: boolean) => {
+    setGroupAutomationState(next);
+    persistGroupAutomation(next);
+  }, []);
+
   const setGroupDevice = useCallback((next: boolean) => {
     setGroupDeviceState(next);
     persistGroupDevice(next);
@@ -660,8 +694,10 @@ export function useSidebarFilter(
     lastActivity,
     groupBy,
     groupDialogue,
+    groupAutomation,
     groupDevice,
     sortBy,
+    pinnedSortBy,
     projectOrder,
     manualProjectOrder,
     manualPinnedOrder,
@@ -674,8 +710,10 @@ export function useSidebarFilter(
     setLastActivity,
     setGroupBy,
     setGroupDialogue,
+    setGroupAutomation,
     setGroupDevice,
     setSortBy,
+    setPinnedSortBy,
     setProjectOrder,
     resetContentFilters,
     setManualProjectOrder,

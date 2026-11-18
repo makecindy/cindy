@@ -654,6 +654,12 @@ export function buildUserProvider(
       return {
         ...(imported?.cost ? { cost: imported.cost } : {}),
         ...projected,
+        // Only the exact current route lends an on/off switch. Explicit user
+        // choices stay authoritative, and derived defaults are never persisted.
+        ...(agent === 'pi' && m.thinkingToggle === undefined && m.reasoning !== false &&
+          projected.efforts.length === 0 && imported?.thinkingToggle && !imported.inheritedFrom &&
+          imported === providerModelRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl, m.api ?? m.piApi ?? wire)
+          ? { thinkingToggle: true } : {}),
         ...(m.interfaceUnavailable ? { interfaceUnavailable: true, availableInterfaces: m.availableInterfaces } : {}),
         ...(m.selectedInterface ? { selectedInterface: { ...m.selectedInterface, defaults: catalogModelMetadata(projected) }, availableInterfaces: m.availableInterfaces,
           ...(m.selectedInterface.nativeApis !== undefined ? { nativeApis: m.selectedInterface.nativeApis } : {}) } : {}),

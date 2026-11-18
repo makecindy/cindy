@@ -77,6 +77,7 @@ import {
 import {
   getClaudeEndpoint,
   isAnthropicCompatProxyHandleReady,
+  ensureAnthropicCompatProxyReady,
 } from './anthropic-compat-proxy-host.js';
 import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.desktop.js';
@@ -139,6 +140,7 @@ export function resolvePiBinaryPath(): string | null {
 const piNativeProviderResolver = createPiNativeProviderResolver({
   getClaudeEndpoint: () => getClaudeEndpoint(),
   isAnthropicCompatProxyHandleReady: () => isAnthropicCompatProxyHandleReady(),
+  ensureAnthropicCompatProxyReady: () => ensureAnthropicCompatProxyReady(),
   resolvePiBinaryPath: () => resolvePiBinaryPath(),
   isOpenAiSubscriptionProviderId: (...args) => isOpenAiSubscriptionProviderId(...args),
   hasGrokOAuthLogin: (...args) => hasGrokOAuthLogin(...args),
@@ -174,7 +176,7 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
   return buildPiRuntimeConfig({
     ripgrepPath: getRipgrepBinaryPath(),
     userDataPath: app.getPath('userData'),
-    endpoint: () => getClaudeEndpoint(),
+    endpoint: () => isAnthropicCompatProxyHandleReady() ? getClaudeEndpoint() : undefined,
     remoteEndpoint: () => claudeUpstreamEndpoint(),
   });
 }
@@ -184,6 +186,7 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
 export interface BuildPiAgentOpts {
   logger: AgentDeps['logger'];
   turnChangeCapture?: AgentDeps['turnChangeCapture'];
+  toolLifecycleControl?: AgentDeps['toolLifecycleControl'];
   registerLocalAgentProcess?: AgentDeps['registerLocalAgentProcess'];
   capabilityAdditions?: AgentDeps['capabilityAdditions'];
   reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
@@ -248,6 +251,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     get binaryPath() { return resolvePiBinaryPath() ?? binaryPath; },
     logger: opts.logger,
     turnChangeCapture: opts.turnChangeCapture,
+    toolLifecycleControl: opts.toolLifecycleControl,
     registerLocalAgentProcess: opts.registerLocalAgentProcess,
     spawnPiSubagentRunner,
     derivePiProxySessionToken,

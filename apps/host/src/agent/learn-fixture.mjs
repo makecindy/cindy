@@ -59,6 +59,7 @@ export async function learnFixture(t, { publish = true } = {}) {
   const home = path.join(root, 'home');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   process.env.HOME = process.env.USERPROFILE = home;
+  t.mock.method(os, 'homedir', () => home);
   process.env.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
   const profile = path.join(root, 'profile');
   const appData = path.join(root, 'app-data');

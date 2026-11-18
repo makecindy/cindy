@@ -11,6 +11,7 @@ import {
   resolveOfficialSidecarAsset,
 } from '../ollamaInstall.js';
 import { OLLAMA_GITHUB_API_LATEST } from '../ollamaRelease.js';
+import { DownloadError } from '../../downloader/index.js';
 import { findOllamaBinary } from '../ollamaSidecar.js';
 
 describe('installOfficialSidecar', () => {
@@ -41,6 +42,49 @@ describe('installOfficialSidecar', () => {
     await expect(
       access(path.join(dir, 'ollama-runtime', 'downloads', 'ollama-darwin.tgz')),
     ).rejects.toThrow();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：installOfficialSidecar 推给 maker:local-model:install-progress 的
+  //   进度；设置页 Ollama 安装进度条据此显示重试原因、校验与安装阶段。
+  // - Bug／规则依据：verified-downloads.md「下载进度与界面」——重试与校验不能看起来像卡住。
+  // - 现有覆盖缺口：此前没有任何用例断言安装进度；旧实现丢弃了重试与校验回调。
+  // - 最小失败输入：下载中途一次龟速重试，随后完成。
+  // - tier：unit（注入下载与解压，临时目录）。
+  it('reports retries, verifying and unpacking in the standard download progress', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ollama-install-'));
+    const seen: Array<{ phase: string; download?: { phase: string; retryReason?: string } }> = [];
+    await installOfficialSidecar(dir, {
+      platform: 'darwin',
+      resolve: async () => ({
+        version: '0.32.14',
+        url: 'https://github.com/ollama/ollama/releases/download/v0.32.14/ollama-darwin.tgz',
+        sha256: 'ab'.repeat(32),
+        sizeBytes: 100,
+        assetName: 'ollama-darwin.tgz',
+      }),
+      download: async (_asset, _target, opts) => {
+        opts?.onProgress?.(40, 100, 10);
+        opts?.onRetry?.({
+          attempt: 2,
+          delayMs: 1,
+          cause: new DownloadError('TIMEOUT', 'slow', undefined, undefined, 'slow'),
+        });
+        opts?.onProgress?.(100, 100, 10);
+        opts?.onVerifying?.();
+      },
+      extract: async () => path.join(dir, 'ollama'),
+      onProgress: (progress) => seen.push(progress),
+    });
+    expect(seen.map((p) => [p.phase, p.download?.phase])).toEqual([
+      ['resolving', 'preparing'],
+      ['downloading', 'downloading'], // 40% falls inside the throttle window after the reset
+      ['downloading', 'retrying'],
+      ['downloading', 'downloading'],
+      ['verifying', 'verifying'],
+      ['extracting', 'installing'],
+    ]);
+    expect(seen[2]!.download?.retryReason).toBe('slow');
   });
 
   it('removes a leftover archive after a failed extract', async () => {

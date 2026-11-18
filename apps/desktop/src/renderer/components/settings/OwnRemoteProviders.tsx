@@ -161,6 +161,8 @@ export function OwnRemoteProviderRows({
             <button
               type="button"
               data-testid="own-remote-provider-row"
+              data-settings-search-action="Open the detail of a provider on another of your computers"
+              data-listed-source={`${entry.deviceId}:${entry.provider.id}`}
               aria-current={selected}
               aria-label={label}
               onClick={() => onSelect(entry.key)}

@@ -26,6 +26,8 @@ export function compareSessionListStrings(left: string, right: string): number {
 }
 
 export interface RemoteSessionListSessionLike extends SessionInterruptionState {
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
   tags?: import('./taskTags').TaskTag[];
   _count?: { messages?: number } | null;
   agentKind: 'cc' | 'codex' | string;
@@ -141,6 +143,8 @@ export interface RemoteSessionScheduleInfo {
   nextFireAt?: number;
   /** 同一会话的所有已知 schedule 绑定都已 paused / expired 时为 true；缺失按 false。 */
   allSchedulesStopped?: boolean;
+  /** An active PR follow-up currently targets this task, including between runs. */
+  hasActiveFollowUp?: boolean;
   unreadRunIds: string[];
   hasUnreadFailedRun?: boolean;
   latestFailedRun?: FailedScheduleRunSnapshot;
@@ -740,7 +744,11 @@ export function buildSessionScheduleIndex(
       const status = schedulesById.get(scheduleId)?.status;
       return status === 'paused' || status === 'expired';
     });
-    index.set(sessionId, { ...info, allSchedulesStopped });
+    const hasActiveFollowUp = Array.from(scheduleIds).some((scheduleId) => {
+      const schedule = schedulesById.get(scheduleId);
+      return schedule?.status === 'active' && schedule.targetSessionId === sessionId;
+    });
+    index.set(sessionId, { ...info, allSchedulesStopped, hasActiveFollowUp });
   }
   return index;
 }
@@ -930,10 +938,28 @@ export function groupAutomationListItems(
 }
 
 /**
- * 单条列表项的自动化组键(不含 scopeKey 前缀):`schedule:<id>`,或无 run 记录的 legacy 会话
- * 兜底 `fallback:...`。导出给「自动化任务作用域」页用同一算法反查某任务的全部运行。
+ * 旧伙伴例行任务专线(`source='bot'`、`companion.role='routine'`)按例行规则归组,与桌面
+ * getAutomationSidebarGroupInfo 同口径;旧主机不带 routineId 时返回 null,维持逐条显示。
+ */
+function teammateRoutineGroupKey(session: RemoteSessionListItem['session']): string | null {
+  const like = session as {
+    source?: unknown;
+    orcaRole?: unknown;
+    companion?: { id?: string | null; role?: unknown; routineId?: string | null } | null;
+  };
+  if (like.source !== 'bot' || like.orcaRole === 'worker') return null;
+  const companion = like.companion;
+  if (companion?.role !== 'routine' || !companion.id || !companion.routineId) return null;
+  return `routine:${companion.id}:${companion.routineId}`;
+}
+
+/**
+ * 单条列表项的自动化组键(不含 scopeKey 前缀):`schedule:<id>`、旧伙伴例行任务 `routine:<伙伴>:<规则>`,
+ * 或无 run 记录的 legacy 会话兜底 `fallback:...`。导出给「自动化任务作用域」页用同一算法反查某任务的全部运行。
  */
 export function automationGroupKey(item: RemoteSessionListItem): string | null {
+  const routineKey = teammateRoutineGroupKey(item.session);
+  if (routineKey) return routineKey;
   if (!isAutomationGeneratedSession(item.session)) return null;
   const scheduleInfo = item.scheduleInfo;
   if (scheduleInfo?.scheduleId) return `schedule:${scheduleInfo.scheduleId}`;
@@ -1022,6 +1048,7 @@ function mergeScheduleInfo(group: readonly RemoteSessionListItem[]): RemoteSessi
   const unreadRunIds = Array.from(new Set(group.flatMap((item) => item.scheduleInfo?.unreadRunIds ?? [])));
   return {
     ...base,
+    hasActiveFollowUp: group.some((item) => item.scheduleInfo?.hasActiveFollowUp === true),
     allSchedulesStopped: group.every((item) => item.scheduleInfo?.allSchedulesStopped === true),
     unreadRunIds,
     unreadCount: unreadRunIds.length,

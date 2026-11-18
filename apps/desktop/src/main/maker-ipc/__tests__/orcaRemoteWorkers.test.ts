@@ -636,6 +636,18 @@ describe('wrapTeamDeps', () => {
       listWorkersByLead: async () => [worker],
       getManualInterrupt: () => null,
       clearManualInterrupt: vi.fn(),
+      hasSendToSessionLock: () => false,
+      markWorkerIdle: vi.fn(async () => { worker = { ...worker, status: 'idle' }; }),
+      markWorkerIdleIfStatus: vi.fn(async (_id: string, expected: string) => {
+        if (worker.status !== expected) return false;
+        worker = { ...worker, status: 'idle' };
+        return true;
+      }),
+      restoreWorkerDoneIfIdle: vi.fn(async () => {
+        if (worker.status !== 'idle') return false;
+        worker = { ...worker, status: 'done' };
+        return true;
+      }),
       updateWorkerStatus: vi.fn(async (_id: string, status: OrcaWorkerRecordSnapshot['status']) => {
         worker = { ...worker, status };
       }),
@@ -648,6 +660,61 @@ describe('wrapTeamDeps', () => {
     service = createOrcaTeamService(ctx.workers.wrapTeamDeps(deps));
     return { ...ctx, service, deps, getWorker: () => worker };
   }
+
+  // #11042 / PR #11060: unit, real TeamService + remote adapter. Existing report
+  // tests never acknowledged done. A foreground-idle remote has no background
+  // signal, so automatic acknowledgement must preserve done. Explicit idle and
+  // idle-only release must still stop/archive it (#11060 review regression).
+  it.each(['idle', 'release'] as const)('retains remote done without background evidence but honors explicit %s', async (action) => {
+    const report = reportService();
+    const h = await trackedTeam({ handle: report.handle });
+    try {
+      await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'proxy-1', message: 'A' });
+      report.history.push({ id: 'reply-a', role: 'assistant', content: 'Background work started' });
+      await h.workers.runtime.pollNow();
+      expect(h.getWorker().status).toBe('done');
+      expect(h.workers.runtime.isTurnRunning('proxy-1')).toBe(false);
+      const result = await h.service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1', expectedStatus: 'done' });
+      expect(result).toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+      expect(h.getWorker().status).toBe('done');
+      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(false);
+
+      if (action === 'release') store.getRemoteWorkerByProxySession.mockResolvedValueOnce(restoredRow as never);
+      await expect(action === 'idle'
+        ? h.service.idleWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1' })
+        : h.service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1', onlyIfIdle: true }))
+        .resolves.toMatchObject({ ok: true });
+      expect(h.getWorker().status).toBe(action === 'idle' ? 'idle' : 'done');
+      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(true);
+      if (action === 'release') {
+        expect(store.archiveSingleWorkerSession).toHaveBeenCalledWith('proxy-1', expect.any(Function));
+        expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:orca:remote-worker:release')).toBe(true);
+        expect(store.markWorkerRemoteReleased).toHaveBeenCalledWith('w-1');
+        expect(h.workers.runtime.isRemote('proxy-1')).toBe(false);
+      }
+    } finally { h.workers.stop(); }
+  });
+
+  // Explicit release must keep both remote foreground and pending-report gates.
+  it.each(['running', 'pending-report'] as const)('refuses explicit remote release with %s', async (state) => {
+    const report = reportService();
+    const h = await trackedTeam({ handle: report.handle });
+    let restoreRunning = () => {};
+    try {
+      await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'proxy-1', message: 'A' });
+      if (state === 'running') {
+        report.history.push({ id: 'reply-a', role: 'assistant', content: 'Reported' });
+        await h.workers.runtime.pollNow();
+        const running = vi.spyOn(h.workers.runtime, 'isTurnRunning').mockReturnValue(true);
+        restoreRunning = () => running.mockRestore();
+      }
+      await expect(h.service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'w-1', onlyIfIdle: true }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
+      expect(store.archiveSingleWorkerSession).not.toHaveBeenCalled();
+      expect(h.remoteInvoke.mock.calls.some(([, channel]) => channel === 'maker:abort-session')).toBe(false);
+      expect(h.workers.runtime.isRemote('proxy-1')).toBe(true);
+    } finally { restoreRunning(); h.workers.stop(); }
+  });
 
   // #9346 P1, unit: real terminal → TeamService → wrapped send handoff. The old
   // settlement-only tests missed the crash after queue ownership transferred.

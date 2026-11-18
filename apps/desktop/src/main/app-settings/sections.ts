@@ -27,7 +27,7 @@ export const appSettingsSections: AppSettingsSection[] = [{
   reset: async () => { await updateTaskArchiveSettings(null); },
 }, {
   id: 'preferences', title: '语言、主题与使用偏好',
-  description: '界面语言、明暗主题、主题家族、通知、发送快捷键、链接打开方式、流式动效、消息导航、文件显示和首页偏好。', effective: 'immediate',
+  description: '界面语言、明暗主题、主题家族、通知、发送快捷键、链接打开方式、流式动效、消息导航、文件显示、首页偏好，以及新建 worktree 是否用模型按任务取名（worktreeModelNaming）。', effective: 'immediate',
   schema: appPreferenceSchema,
   read: async () => manageAppPreferences('get'),
   update: async patch => manageAppPreferences('update', patch),

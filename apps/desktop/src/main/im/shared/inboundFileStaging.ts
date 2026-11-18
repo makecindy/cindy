@@ -38,7 +38,12 @@ export const STAGING_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 /** 同一 staging 目录两次清扫的最小间隔。 */
 const SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
 
-type Integration = Parameters<IMHostFileStaging['stage']>[0]['integration'];
+/**
+ * IM 渠道之外, 插件转进任务的非媒体文件(`tasks.send` / `targets.send` 附件)也放在
+ * 同一棵树的 `plugin/` 下: 消息本身的文件随即领养进任务目录, 只给模型的参考文件
+ * 留在 staging 按龄回收, 任务删除时由 `removeImSessionAttachmentDirs` 一并清理。
+ */
+type Integration = Parameters<IMHostFileStaging['stage']>[0]['integration'] | 'plugin';
 
 const lastSweepAt = new Map<string, number>();
 const UUID_PREFIX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i;

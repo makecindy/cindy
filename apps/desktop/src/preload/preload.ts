@@ -54,7 +54,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { createChatFolderUpload } from './chatFolderUpload';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { SELF_HOSTED_RELAY_IPC, type SelfHostedRelayApi } from '../shared/selfHostedRelay';
-import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
+import { DEVICE_LINK_PUSH, type DeviceLinkPeerLinksSnapshot } from '../shared/deviceLinkIpc';
 import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
 import { PROVIDER_GROUP_IPC, type ProviderGroupCommand } from '../shared/providerGroup';
 import {
@@ -1717,6 +1717,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{
       cards: Array<{ callId: string; ghostId: string; html: string; height: number; v: number }>;
     }> => ipcRenderer.invoke('ghosts:card:list-by-session', sessionId),
+    getRemoteCard: (
+      deviceId: string,
+      sessionId: string,
+      callId: string,
+    ): Promise<{
+      card: { ghostId: string; html: string; height: number; revision: string; externalLinks: boolean; mailUpload?: boolean } | null;
+      unsupported?: true;
+      failed?: true;
+    }> => ipcRenderer.invoke('ghosts:card:get-remote', deviceId, sessionId, callId),
+    uploadRemoteMailAttachment: (deviceId: string): Promise<{ ok: boolean; attachment: { url: string; name: string } | null }> =>
+      ipcRenderer.invoke('ghosts:card:remote-mail-attachment', deviceId),
     // 会话切换上报(订阅槽① did-session-switched 的数据源):路由 effect 每次
     // 路由变化调,单向 send 零等待;去重/资格门全在 main。
     noteSessionFocused: (sessionId: string | null): void =>
@@ -1769,6 +1780,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ghosts:readme', id, locale),
     libraryOverview: (id: string): Promise<import('../shared/ghost').GhostLibraryOverview> =>
       ipcRenderer.invoke('ghosts:library-overview', id),
+    reusableAccounts: (id: string): Promise<import('../shared/pluginAccountReuse').GhostAccountReuseGroup[]> =>
+      ipcRenderer.invoke('ghosts:reusable-accounts', id),
+    reuseAccount: (id: string, request: import('../shared/pluginAccountReuse').GhostAccountReuseAction): Promise<import('../shared/pluginAccountReuse').GhostAccountReuseResult> =>
+      ipcRenderer.invoke('ghosts:reuse-account', id, request),
     handoffList: (id: string): Promise<import('../shared/ghost').GhostHandoffFile[]> =>
       ipcRenderer.invoke('ghosts:handoff-list', id),
     handoffFolder: (id: string): Promise<string | null> => ipcRenderer.invoke('ghosts:handoff-folder', id),
@@ -3226,6 +3241,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openSubscriptionPortal: () => ipcRenderer.invoke(BILLING_INVOKE.OPEN_SUBSCRIPTION_PORTAL),
     openPaymentRedirect: (payload) =>
       ipcRenderer.invoke(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, payload),
+    previewGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.PREVIEW_GIFT_CARD, payload),
+    redeemGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.REDEEM_GIFT_CARD, payload),
   } satisfies BillingRendererApi,
 
   // ── Workdir File Browser (vscode-style file tree + content viewer) ──
@@ -3251,6 +3268,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         type: 'file' | 'directory';
         size: number;
         mtimeMs: number;
+        /** Directory link's canonical target, relative to the workdir. */
+        symlinkTarget?: string;
       }>
     > => ipcRenderer.invoke('maker:file-browser:list-dir', params),
     /** 项目级文件名扁平列表(ripgrep --files honor .gitignore);供 RSB 快速文件
@@ -3278,6 +3297,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
             size: number;
             mtimeMs: number;
             truncated: boolean;
+            resolvedPath?: string;
           };
         }
       | { ok: false; code: 'BINARY_FILE' | 'READ_FAILED'; message?: string }
@@ -3293,7 +3313,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workdir: string;
       relPath: string;
       content: string;
-    }): Promise<{ ok: true; size: number; mtimeMs: number } | { ok: false; message: string }> =>
+      expectedResolvedPath?: string;
+    }): Promise<{ ok: true; size: number; mtimeMs: number; resolvedPath?: string } | { ok: false; message: string }> =>
       ipcRenderer.invoke('maker:file-browser:write-file', params),
     createFile: (params: {
       remoteHostId?: string | null;
@@ -4108,6 +4129,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
           | 'done'
           | 'failed';
         name: string;
+        /** Standard progress while downloading (shared/downloadProgress.ts). */
+        download?: import('../shared/downloadProgress').DownloadProgress;
         version?: string;
         absolutePath?: string;
         errorCode?: string;
@@ -4333,6 +4356,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
+        | { type: 'gift-card'; code: string }
         | { type: 'shared-task-join'; invitation: string; server: string }
         | { type: 'provider-share-join'; link: string }
         | { type: 'chat-invite'; token: string }
@@ -4353,6 +4377,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         pluginId?: unknown;
         snapshotId?: unknown;
         ghostId?: unknown;
+        code?: unknown;
         invitation?: unknown;
         token?: unknown;
         server?: unknown;
@@ -4386,6 +4411,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         callback({ type: 'plugin', pluginId: p.pluginId });
       } else if (p.type === 'local-plugin-share' && isLocalPluginSnapshotId(p.snapshotId)) {
         callback({ type: 'local-plugin-share', snapshotId: p.snapshotId });
+      } else if (p.type === 'gift-card' && typeof p.code === 'string' && /^[0-9A-HJKMNP-TV-Z]{16}$/.test(p.code)) {
+        // Main already normalized the redeem code; anything else is dropped here.
+        callback({ type: 'gift-card', code: p.code });
       } else if (p.type === 'installed-plugin' && (p.ghostId === undefined || (typeof p.ghostId === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(p.ghostId)))) {
         // A plugin's own id (same rule as isValidGhostId in shared/ghost), not a market resource id.
         // The bare list link carries none. Main validated it already; a malformed id drops the payload.
@@ -4466,6 +4494,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
+    | { type: 'gift-card'; code: string }
     | { type: 'shared-task-join'; invitation: string; server: string }
     | { type: 'provider-share-join'; link: string }
     | { type: 'chat-invite'; token: string }
@@ -5213,7 +5242,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       linkStatus: 'stopped' | 'connecting' | 'online';
       directDataDeviceIds?: string[];
       connectionIssue: {
-        kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable';
+        kind: 'auth-failed' | 'device-removed' | 'replaced' | 'too-many-connections' | 'version-mismatch' | 'unstable' | 'agent-net-relay-down';
         closeCode?: number;
         detail?: string;
         at: number;
@@ -5234,10 +5263,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ): Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }> =>
       ipcRenderer.invoke('device-link:set-device-control-enabled', { deviceId, enabled }),
     /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照(轮询 + onPeerLinksChanged) */
-    getPeerLinks: (): Promise<{
-      links: Array<{ deviceId: string; path: 'direct' | 'relay'; rttMs: number | null; open: boolean }>;
-      relayRttMs: number | null;
-    }> => ipcRenderer.invoke('device-link:get-peer-links'),
+    getPeerLinks: (): Promise<DeviceLinkPeerLinksSnapshot> => ipcRenderer.invoke('device-link:get-peer-links'),
     /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload 为全量快照 */
     onPeerLinksChanged: fanOutDeviceLinkPeerLinksChanged,
     listDevices: (): Promise<{
@@ -5262,7 +5288,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }>;
       /** Bounded last-known directory; absence is not an authoritative removal. */
       stale?: boolean;
+      /**
+       * Only one hybrid discovery leg answered; its rows are fresh but its
+       * absence proves nothing, so nothing may be pruned on it.
+       */
+      partial?: boolean;
       displayBudget?: { remainingMs: number };
+      /** Server rate-limit deadline (wall-clock ms) for the next directory read. */
+      retryAtMs?: number;
     }> => ipcRenderer.invoke('device-link:list-devices'),
     renameDevice: (
       deviceId: string,
@@ -5688,6 +5721,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('worktree:reveal', req),
   worktreeSuggestName: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:suggest-name', req),
+  worktreeGenerateName: (req: { taskText: string }): Promise<unknown> =>
+    ipcRenderer.invoke('worktree:generate-name', req),
+  worktreeCheckout: (req: import('../shared/worktreeCheckout').CheckoutRequest): Promise<import('../shared/worktreeCheckout').CheckoutReply> => ipcRenderer.invoke('worktree:checkout', req),
   worktreeBranchSyncStatus: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncStatus> => ipcRenderer.invoke('worktree:branch-sync-status', req),
   worktreeSyncBranch: (req: import('../shared/worktreeBranchSync').BranchSyncRequest): Promise<import('../shared/worktreeBranchSync').BranchSyncReply> => ipcRenderer.invoke('worktree:sync-branch', req),
   worktreeListBranches: (req: { baseRepo: string }): Promise<unknown> =>
@@ -7868,6 +7904,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       engineReady: boolean;
       deferred?: boolean;
       sameEngineRevision?: number;
+      pendingSwitchRevision?: number;
       sameEngineSuperseded?: boolean;
     }> =>
       options || thinking !== undefined
@@ -8344,7 +8381,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:images:retry', sessionId, imageId),
       retryLastError: (
         sessionId: string,
-        opts?: { expectedClearBoundaryMs?: number | null },
+        opts?: { expectedClearBoundaryMs?: number | null; expectedQueueHeadClientId?: string; expectedSwitchRevision?: number },
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:retry-last-error', sessionId, opts),
       clearError: (

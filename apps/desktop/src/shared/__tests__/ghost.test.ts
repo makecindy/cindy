@@ -1,5 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest as validateProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
+import { validateGhostManifest as validateProtocolManifest, validateStoredGhostManifest as validateStoredProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
+
+// 测试价值：validateGhostManifest 的主视图图标提示须在安装解析后保留，
+// 依据 plugin-security-and-authoring §6 的双解析器契约；既有 icon 用例未覆盖 preferredIcon。
+// 最小输入：mainView.preferredIcon='future-icon'；非字符串应忽略而保留兼容 icon。
+// tier=unit，纯内存解析，无新增资源。单文件实测耗时 1.01s。
+it.each([2, 3])('preserves preferred navigation icons and ignores malformed hints in schema v%s', schemaVersion => {
+  const base = {
+    schemaVersion, minCindyVersion: '0.1.61', id: 'icon-hint', name: 'Icon hint',
+    version: '1.0.0', entry: 'index.js',
+    ...(schemaVersion === 2 ? { slots: ['main-view'] } : {}),
+  };
+  for (const preferredIcon of ['podcast', 'future-icon', undefined, 42, null, {}]) {
+    const mainView = { html: 'view.html', icon: 'globe', preferredIcon };
+    const result = validateGhostManifest({ ...base, mainView });
+    expect(result).toMatchObject({ ok: true, manifest: { mainView: { html: 'view.html', icon: 'globe' } } });
+    if (!result.ok) throw new Error(result.reason);
+    if (typeof preferredIcon === 'string') {
+      expect(result.manifest.mainView?.preferredIcon).toBe(preferredIcon);
+    } else {
+      expect(result.manifest.mainView).not.toHaveProperty('preferredIcon');
+    }
+  }
+});
 
 // Host groups are separate install permissions; unknown groups never become permissions.
 it('validates and projects each host tool group independently in both manifest readers', () => {
@@ -18,6 +41,48 @@ it('validates and projects each host tool group independently in both manifest r
   // A command-capable plugin must not be described as unable to access local files.
   expect(ghostPermissionItems(after.manifest).find(item => item.kind === 'code')?.detailKey).toBe('codeDetailTerminal');
   expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key)).toEqual(['agent:host-tools:scheduler', 'agent:host-tools:terminal', 'code']);
+});
+
+// User decision 2026-11-18: `imEntrance` only lists a plugin on the IM bots page. Both manifest readers
+// must agree, it needs the task/target declarations it relies on, and adding it in an update must not
+// add a permission prompt (existing installs keep working). Minimal inputs: with/without tasks+targets.
+it('accepts imEntrance only with tasks and targets, in both readers, without a new permission', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'im-plugin', name: 'IM plugin', version: '1.0.0', entry: 'main.js',
+    agent: { tasks: true, targets: true } };
+  for (const validate of [validateGhostManifest, validateProtocolManifest]) {
+    expect(validate({ ...base, imEntrance: true })).toMatchObject({ ok: true, manifest: { imEntrance: true } });
+    for (const invalid of [{ imEntrance: 'yes' }, { imEntrance: true, agent: { tasks: true } }])
+      expect(validate({ ...base, ...invalid }).ok).toBe(false);
+  }
+  for (const validate of [validateInstalledGhostManifest, validateStoredGhostManifest, validateStoredProtocolManifest]) {
+    // PR #11208 unit regression: former extension values survive stored validation.
+    const historical = { internal: 'legacy' };
+    expect(validate({ ...base, imEntrance: historical })).toMatchObject({ ok: true, manifest: { imEntrance: historical } });
+    expect(validate({ ...base, imEntrance: true, agent: { tasks: true } })).toMatchObject({ ok: true, manifest: { imEntrance: true } });
+  }
+  const before = validateGhostManifest(base);
+  const after = validateGhostManifest({ ...base, imEntrance: true });
+  if (!before.ok || !after.ok) throw new Error('invalid fixture');
+  expect(before.manifest).not.toHaveProperty('imEntrance');
+  expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([]);
+});
+
+// 第23项：HTTPS 域名旧批准不能变成 HTTP 或自定义端口批准；双 validator 与权限 diff 共用真实入口。
+it('keeps exact-origin network permissions separate from existing HTTPS domain approvals', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'local-service', name: 'Local service', version: '1.0.0', kind: 'chip', entry: 'main.js' };
+  const oldNetwork = { hosts: ['*.example.com'] }, newNetwork = { hosts: ['http://api.example.com', 'https://api.example.com:8443'] };
+  for (const validate of [validateGhostManifest, validateProtocolManifest]) {
+    const result = validate({ ...base, network: newNetwork });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, manifest: { network: newNetwork } });
+  }
+  const before = validateGhostManifest({ ...base, network: oldNetwork });
+  const after = validateGhostManifest({ ...base, network: newNetwork });
+  if (!before.ok || !after.ok) throw new Error('invalid fixture');
+  expect(ghostNetworkAuthorizationWithinCap(before.manifest, after.manifest)).toBe(false);
+  expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key))
+    .toEqual(['network:host:http://api.example.com', 'network:host:https://api.example.com:8443']);
+  expect(unreviewedGhostPermissionItems(before.manifest, undefined, after.manifest).map(item => item.key))
+    .toEqual(['network:host:http://api.example.com', 'network:host:https://api.example.com:8443']);
 });
 
 import {
@@ -1716,7 +1781,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(withTools(['panel', 'tool'], [{ name: 'gen_image', description: '生成图片' }]).ok).toBe(
       true,
     );
-    // 名字非法 / 重名 / 描述空 / 超 16 条
+    // 名字非法 / 重名 / 描述空 / 超 48 条
     expect(withTools(['panel', 'tool'], [{ name: 'Bad', description: 'y' }]).ok).toBe(false);
     expect(
       withTools(
@@ -1731,9 +1796,15 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(
       withTools(
         ['panel', 'tool'],
-        Array.from({ length: 17 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
+        Array.from({ length: 48 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
       ).ok,
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      withTools(
+        ['panel', 'tool'],
+        Array.from({ length: 49 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
+      ),
+    ).toEqual({ ok: false, reason: 'tools 必须是 1–48 项的数组' });
   });
 
   it('@ 资源入口只可引用一个已声明工具，并按已知字段收窄', () => {
@@ -2329,6 +2400,20 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
     slots: ['panel', 'subscribe'],
     subscribe,
     ...extra,
+  });
+
+  // Unit / installation disclosure: the new content topic needs its own visible
+  // capability row; the legacy turn-only manifest must retain its original row.
+  it('discloses tool execution content separately while retaining legacy topic permissions', () => {
+    const result = validateGhostManifest(withSub({ topics: ['turn', 'tool-execution'] }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(ghostPermissionItems(result.manifest)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'subscribe:topics', labelKey: 'subscribeTopics' }),
+      expect.objectContaining({ key: 'subscribe:topics:tool-execution', labelKey: 'subscribeToolExecution', detailKey: 'subscribeToolExecutionDetail' }),
+    ]));
+    const old = validateGhostManifest(withSub({ topics: ['turn'] }));
+    expect(old.ok && ghostPermissionItems(old.manifest).some(item => item.key === 'subscribe:topics:tool-execution')).toBe(false);
   });
 
   it('topics 合法值放行并归一化进清单', () => {
@@ -3108,13 +3193,13 @@ describe('ghost · 官方保留 id 前缀', () => {
 });
 
 describe('ghost · network 域名条目格式与匹配', () => {
-  it('合法条目:小写域名至少两段,通配只允许最左一段', () => {
-    for (const p of ['api.example.com', 'example.com', '*.weather.com', 'a-b.c1.io']) {
+  it('合法条目:域名或精确 origin，通配只允许域名最左一段', () => {
+    for (const p of ['api.example.com', 'example.com', '*.weather.com', 'a-b.c1.io', 'https://api.example.com']) {
       expect(isValidGhostNetworkHostPattern(p), p).toBe(true);
     }
   });
 
-  it('非法条目:裸 TLD/单段/IP/端口/路径/协议/大写/中缀通配', () => {
+  it('非法条目:不完整地址、路径、大写与中缀通配', () => {
     for (const p of [
       'com',
       '*.com',
@@ -3122,7 +3207,6 @@ describe('ghost · network 域名条目格式与匹配', () => {
       '127.0.0.1',
       'api.example.com:8080',
       'api.example.com/v1',
-      'https://api.example.com',
       'API.Example.com',
       'a.*.example.com',
       'api.*.com',
