@@ -125,6 +125,26 @@ it('reports whether its relay connection is open, and when that changes', async 
   expect(socket.relayRttMs()).toBeNull();
 });
 
+// PR #11236: the cached directory can show the peer offline during a LAN dial.
+// Unit, real WorkerSocket: one cached same-account device, one pending dial,
+// no routable path. Existing live-relay tests only exercise available peers.
+it('reports a LAN handshake while the cached directory marks the peer offline', async () => {
+  const workerFile = new URL('data:text/javascript,' + encodeURIComponent(`
+import { parentPort } from 'node:worker_threads';
+parentPort.once('message', () => {
+  const deviceId = 'lan-peer';
+  parentPort.postMessage({ type: 'directory', directory: [{ certificate: { deviceId } }], cached: true });
+  parentPort.postMessage({ type: 'status', queued: 0, known: [deviceId],
+    peers: [[deviceId, { available: false, path: null, rttMs: null, dialing: true }]] });
+  parentPort.postMessage({ type: 'ready' });
+});
+`));
+  const client = { identity: { deviceId: 'unit-device' }, transport: {} } as unknown as AgentNetClient;
+  const socket = await AgentNetWorkerSocket.open({ workerFile, client, userId: 'unit-user' });
+  cleanup.push(() => socket.terminate());
+  expect(socket.peerRoutes()).toEqual([{ deviceId: 'lan-peer', path: 'connecting', rttMs: null }]);
+});
+
 it('replaces a relay connection that does not answer right after a network change, before the keepalive would', async () => {
   const { server, warnings, socket } = await openAgainstRelay({ autoPong: false, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 }, networkChangeProbeMs: 30 });
   const closed = new Promise<void>((resolve) => { server.on('close', () => resolve()); });
