@@ -221,6 +221,50 @@ export function filterPersistentLocalProjectsByLastActivity(
   return [];
 }
 
+/**
+ * The sessions and persistent projects the sidebar groups into its project tree.
+ * The teammate filter is deliberately ignored here: it narrows task rows only
+ * (see sidebarProjectRows), so choosing a teammate never removes project folders.
+ */
+export function sidebarGroupingInput(
+  sessions: readonly Session[],
+  persistentLocalProjects: readonly PersistentLocalProject[],
+  /** 「最近活跃」截止时间；null 表示全部。 */
+  cutoff: number | null,
+  activityMs: (session: Session) => number,
+): { sessions: readonly Session[]; persistentLocalProjects: readonly PersistentLocalProject[] } {
+  return {
+    sessions: cutoff === null ? sessions : sessions.filter((s) => activityMs(s) >= cutoff),
+    persistentLocalProjects: filterPersistentLocalProjectsByLastActivity(persistentLocalProjects, cutoff),
+  };
+}
+
+/**
+ * Rows shown under each project node. The vendor filter decides which projects
+ * stay (as before); the teammate filter only narrows the rows inside them, so a
+ * project with no matching teammate task stays as an empty folder.
+ */
+export function sidebarProjectRows(
+  projects: readonly ProjectNode[],
+  vendor: string,
+  sessionMatchesCreators: ((session: Session) => boolean) | null,
+): ProjectNode[] {
+  const vendorPredicate =
+    vendor === 'all' ? null : (session: Session) => (session.agentKind ?? 'cc') === vendor;
+  return projects.flatMap((project) => {
+    const matchingSessions = vendorPredicate ? project.sessions.filter(vendorPredicate) : project.sessions;
+    if (
+      matchingSessions.length === 0 &&
+      (!project.isPersistentLocal || (vendorPredicate && !persistentProjectMatchesVendor(project, vendor)))
+    )
+      return [];
+    const rows = matchingSessions.filter(
+      (session) => session.pinnedAt == null && (sessionMatchesCreators === null || sessionMatchesCreators(session)),
+    );
+    return [withProjectSessions(project, rows)];
+  });
+}
+
 export function persistentProjectMatchesVendor(
   project: Pick<ProjectNode, 'isPersistentLocal' | 'persistentLocalKnownAgentKinds'>,
   vendor: string,

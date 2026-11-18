@@ -153,14 +153,13 @@ import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSideba
 import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHiddenProjects';
 import {
   buildPersistentLocalProjects,
-  filterPersistentLocalProjectsByLastActivity,
   normalizeProjectKey,
   normalizeWorkingDir,
   projectIdentityKey,
   projectIdentityKeyForSession,
   pinnedSessionIdsInDisplayOrder,
-  persistentProjectMatchesVendor,
-  withProjectSessions,
+  sidebarGroupingInput,
+  sidebarProjectRows,
   type PersistentLocalProject,
   type ProjectNode,
 } from './lib/projectGrouping';
@@ -1623,20 +1622,24 @@ function ExpandedView({
   );
 
   const taskCreatorIndex = useTaskCreatorIndex();
-  const activityFilteredSessions = useMemo(() => {
-    const cutoff = cutoffForLastActivity(filter.lastActivity);
-    if (cutoff === null && filter.creators === 'all') return sidebarSessions;
-    return sidebarSessions.filter((s) => (cutoff === null || sessionActivityMs(s) >= cutoff)
-      && matchesTaskCreators(s, filter.creators, taskCreatorIndex));
-  }, [sidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
-  const activityFilteredPersistentLocalProjects = useMemo(
+  // 「筛选 → 伙伴」只筛任务行；项目树由 sidebarGroupingInput 决定，伙伴筛选不改变项目集合。
+  const sessionMatchesCreators = useMemo(() => {
+    const selected = filter.creators;
+    if (selected === 'all') return null;
+    return (s: Session) => matchesTaskCreators(s, selected, taskCreatorIndex);
+  }, [filter.creators, taskCreatorIndex]);
+  const groupingInput = useMemo(
     () =>
-      filterPersistentLocalProjectsByLastActivity(
-        filter.creators === 'all' ? visiblePersistentLocalProjects : [],
+      sidebarGroupingInput(
+        sidebarSessions,
+        visiblePersistentLocalProjects,
         cutoffForLastActivity(filter.lastActivity),
+        sessionActivityMs,
       ),
-    [filter.lastActivity, filter.creators, visiblePersistentLocalProjects],
+    [sidebarSessions, visiblePersistentLocalProjects, filter.lastActivity],
   );
+  const activityFilteredSessions = groupingInput.sessions;
+  const activityFilteredPersistentLocalProjects = groupingInput.persistentLocalProjects;
 
   /* ---- Grouping & collapse ---- */
   const allGroups = useProjectGroups(
@@ -1979,11 +1982,11 @@ function ExpandedView({
   }, [visiblePinnedEntries, pinnedRemoteActivityRevision]);
 
   const visibleUnclassified = useMemo(() => {
-    const sessions = vendorPredicate
-      ? groups.unclassified.filter(vendorPredicate)
-      : groups.unclassified;
+    const sessions = groups.unclassified.filter(
+      (s) => (!vendorPredicate || vendorPredicate(s)) && (!sessionMatchesCreators || sessionMatchesCreators(s)),
+    );
     return sortSessionsForSidebar(sessions, filter.sortBy);
-  }, [groups.unclassified, vendorPredicate, filter.sortBy]);
+  }, [groups.unclassified, vendorPredicate, sessionMatchesCreators, filter.sortBy]);
 
   // rail 项目面板的未分类与展开态同一门控:选中具体项目筛选时隐藏
   // (ProjectsSection.unclassifiedHidden 同判定 filter.projects !== 'all'),
@@ -1994,10 +1997,14 @@ function ExpandedView({
   );
 
   const visibleDialogues = useMemo(() => {
-    const sessions = vendorPredicate ? groups.dialogues.filter(vendorPredicate) : groups.dialogues;
+    const sessions = vendorPredicate || sessionMatchesCreators
+      ? groups.dialogues.filter(
+          (s) => (!vendorPredicate || vendorPredicate(s)) && (!sessionMatchesCreators || sessionMatchesCreators(s)),
+        )
+      : groups.dialogues;
     if (filter.projectsAsSet === null) return sessions;
     return filter.projectsAsSet.has(DIALOGUE_FILTER_KEY) ? sessions : [];
-  }, [groups.dialogues, vendorPredicate, filter.projectsAsSet]);
+  }, [groups.dialogues, vendorPredicate, sessionMatchesCreators, filter.projectsAsSet]);
   // Group actions include pinned and content-filtered members;
   // allProjectGroups still respects device scope and task status.
   const dialogueActionSessions = allProjectGroups.dialogues;
@@ -2112,20 +2119,7 @@ function ExpandedView({
       (project) =>
         !projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform),
     );
-    const projects = unpinnedProjects.flatMap((project) => {
-      const matchingSessions = vendorPredicate
-        ? project.sessions.filter(vendorPredicate)
-        : project.sessions;
-      if (
-        matchingSessions.length === 0 &&
-        (!project.isPersistentLocal ||
-          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
-      )
-        return [];
-      return [
-        withProjectSessions(project, matchingSessions.filter((session) => session.pinnedAt == null)),
-      ];
-    });
+    const projects = sidebarProjectRows(unpinnedProjects, filter.vendor, sessionMatchesCreators);
     return sortProjectsForSidebar(
       projects,
       hostProjectSort.sortBy,
@@ -2138,7 +2132,7 @@ function ExpandedView({
     visibleProjects,
     pinnedProjectComparisonKeys,
     localPlatform,
-    vendorPredicate,
+    sessionMatchesCreators,
     filter.vendor,
     hostProjectSort,
     projectPriorityContext,
@@ -2147,23 +2141,7 @@ function ExpandedView({
   // 折叠 rail 没有独立的 Pinned 项目瓷砖，因此项目面板必须保留置顶项目，
   // 否则侧栏折叠后这些项目及其取消置顶入口都会完全不可达。
   const visibleRailProjectsWithVendor = useMemo(() => {
-    const projects = visibleProjects.flatMap((project) => {
-      const matchingSessions = vendorPredicate
-        ? project.sessions.filter(vendorPredicate)
-        : project.sessions;
-      if (
-        matchingSessions.length === 0 &&
-        (!project.isPersistentLocal ||
-          (vendorPredicate && !persistentProjectMatchesVendor(project, filter.vendor)))
-      )
-        return [];
-      return [
-        {
-          ...project,
-          sessions: matchingSessions.filter((session) => session.pinnedAt == null),
-        },
-      ];
-    });
+    const projects = sidebarProjectRows(visibleProjects, filter.vendor, sessionMatchesCreators);
     return sortProjectsForSidebar(
       projects,
       hostProjectSort.sortBy,
@@ -2172,7 +2150,7 @@ function ExpandedView({
       localPlatform,
       projectPriorityContext,
     );
-  }, [visibleProjects, vendorPredicate, filter.vendor, hostProjectSort, localPlatform, projectPriorityContext]);
+  }, [visibleProjects, sessionMatchesCreators, filter.vendor, hostProjectSort, localPlatform, projectPriorityContext]);
 
   /**
    * Pinned 拖拽落定回调。SortableList 给的是当前 visible（含 vendor / projectsFilter

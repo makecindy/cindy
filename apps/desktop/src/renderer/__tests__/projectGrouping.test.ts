@@ -23,7 +23,11 @@ import {
   projectIdentityKey,
   pinnedSessionIdsInDisplayOrder,
   persistentProjectMatchesVendor,
+  sidebarGroupingInput,
+  sidebarProjectRows,
 } from '@/features/cc-agent/lib/projectGrouping';
+import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
+import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 import {
   gcProjectsAgainstActive,
   normalizeManualPinnedOrder,
@@ -1179,6 +1183,70 @@ describe('groupSessions', () => {
       const r = groupSessions([aActive, aArchived, bActive]);
       expect(r.projects.map((p) => p.displayName)).toEqual(['alpha', 'beta']);
     });
+  });
+});
+
+/* ============================== 侧栏伙伴筛选 ============================== */
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：CCAgentSidebarUpper 用 sidebarGroupingInput → groupSessions →
+ *   sidebarProjectRows 生成侧栏项目树；用户看到的是项目文件夹与其中的任务行。
+ * - Bug：选「筛选 → 伙伴 → 产品巡检伙伴」时只剩该伙伴的项目，其他项目文件夹消失；
+ *   原因是伙伴筛选在分组前过滤任务并清空持久项目，项目集合从筛选后的任务反推。
+ * - 现有覆盖缺口：只测了最近活跃与 vendor 两个维度，没有伙伴维度。
+ * - 最小失败输入：一个普通项目 + 一个伙伴项目，伙伴筛选选该伙伴。
+ * - tier：unit（纯函数，无 IO）。
+ */
+describe('sidebar teammate filter keeps the project tree', () => {
+  const PATROL = '/Users/me/owners/o1/bots/patrol/workspace';
+  const NOTE = '/Users/me/owners/o1/bots/note/workspace';
+  const cindyTask = s({ id: 'cindy-task', workingDir: '/work/app' });
+  const sessions = [
+    cindyTask,
+    s({ id: 'user-app', workingDir: '/work/app' }),
+    s({ id: 'user-site', workingDir: '/work/site' }),
+    s({ id: 'patrol-task', workingDir: PATROL }),
+    s({ id: 'note-task', workingDir: NOTE }),
+  ];
+  const persistent = [{ workingDir: '/work/empty', lastUsedAt: '2026-01-01T00:00:00.000Z', knownAgentKinds: [] }];
+  const allProjects = ['/work/app', '/work/empty', '/work/site', NOTE, PATROL].sort();
+  // Cindy opened a task in an ordinary project; other teammates own their workspace folder.
+  const creatorOf = (session: Session) =>
+    session.id === cindyTask.id ? 'cindy' : teammateFolderOfProjectPath(session.workingDir);
+  const predicateFor = (selected: 'all' | 'none' | string) =>
+    selected === 'all' ? null
+      : selected === 'none' ? (session: Session) => creatorOf(session) === null
+        : (session: Session) => creatorOf(session) === selected;
+
+  function sidebar(selected: 'all' | 'none' | string, lastActivityCutoffMs: number | null = null) {
+    const sessionMatchesCreators = predicateFor(selected);
+    const input = sidebarGroupingInput(sessions, persistent, lastActivityCutoffMs, sessionActivityMs);
+    const groups = groupSessions(input.sessions, { persistentLocalProjects: input.persistentLocalProjects });
+    const rows = sidebarProjectRows(groups.projects, 'all', sessionMatchesCreators);
+    return {
+      projects: rows.map((project) => project.workingDir).sort(),
+      tasks: rows.flatMap((project) => project.sessions.map((session) => session.id)).sort(),
+    };
+  }
+
+  it.each([
+    ['all', ['cindy-task', 'note-task', 'patrol-task', 'user-app', 'user-site']],
+    ['none', ['user-app', 'user-site']],
+    ['cindy', ['cindy-task']],
+    ['patrol', ['patrol-task']],
+    ['note', ['note-task']],
+  ])('teammate filter %s keeps every project and shows only matching tasks', (selected, tasks) => {
+    expect(sidebar(selected)).toEqual({ projects: allProjects, tasks });
+  });
+
+  it('keeps the project set stable while switching between teammates', () => {
+    const sets = ['all', 'none', 'cindy', 'patrol', 'note', 'all'].map((selected) => sidebar(selected).projects);
+    expect(new Set(sets.map((set) => set.join('|')))).toEqual(new Set([allProjects.join('|')]));
+  });
+
+  it('still lets the last-activity filter drop projects with no recent task', () => {
+    expect(sidebar('patrol', Date.parse('2027-01-01T00:00:00.000Z'))).toEqual({ projects: [], tasks: [] });
   });
 });
 
