@@ -11,8 +11,8 @@ export default {
   name: 'table-text-selection',
   entry: './fixture.tsx',
   viewport: { width: 900, height: 800 },
-  real: 'AssistantMessage, MarkdownRenderer, table copy PNG/TSV payload, native mouse selection, chat clipboard handlers, MessageActionBar and SelectionQuoteButton',
-  notCovered: 'Full application and virtualized/offscreen history. The image-copy preload transport is adapted to the browser Clipboard API; production Electron main IPC validation is covered separately. Clipboard permissions are scoped to this isolated test origin; no clipboard values are mocked.',
+  real: 'AssistantMessage, MarkdownRenderer, native mouse selection, table TSV range copy, chat clipboard handlers, MessageActionBar and SelectionQuoteButton',
+  notCovered: 'Full application and virtualized/offscreen history. Existing table image-copy toolbar cannot rasterize under the isolated host CSP (base-uri/connect-src); it requires full-client acceptance. Clipboard permissions are scoped to this isolated test origin; no clipboard values are mocked.',
   stubs: {
     'src/renderer/components/chat/GhostToolCard': 'export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle"; export const GhostToolCard = () => null; export const MailCardEditor = () => null;',
   },
@@ -59,16 +59,11 @@ export default {
       assert.ok(!pasted.includes(label), `Message control must not leak: ${label}`);
     }
 
-    // Whole table by native range, then the existing whole-table copy control.
+    // Whole table by its existing native range, including the empty cell.
     const cells = await select('名称', '末行 Final');
     assert.equal(await copyAndPaste(), cells);
+    assert.equal(cells, tableText, 'Whole-table range TSV must preserve all rows/columns, spaces and empty cell');
     const tableMessage = page.locator('[data-copy-message="table"]');
-    const tableCopy = tableMessage.getByRole('button', { name: await ui.t('chat.markdownRenderer.copy'), exact: true });
-    await tableCopy.click();
-    await tableMessage.getByRole('button', { name: await ui.t('chat.markdownRenderer.blockCopied'), exact: true }).waitFor();
-    assert.equal(await pasteClipboard(), tableText, 'Whole-table TSV must retain Chinese, spaces, empty cell and every row/column');
-    const types = await page.evaluate(async () => (await navigator.clipboard.read()).flatMap(item => item.types));
-    assert.ok(types.includes('image/png') && types.includes('text/plain'));
 
     const word = await point('项目甲 Alpha', false);
     await page.mouse.dblclick(word.x + 56, word.y);

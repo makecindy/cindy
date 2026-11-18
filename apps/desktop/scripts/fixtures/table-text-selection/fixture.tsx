@@ -32,14 +32,6 @@ mountPage({
   host: {
     onSelectionContextMenuAddToChat: subscription('selection-context-menu.add-to-chat'),
     maker: { getCapabilities: async () => ({ availableModels: [], fork: { supported: false }, rewind: { supported: false } }) },
-    // Adapt only the preload transport: the production table exports PNG + TSV,
-    // then this isolated test host writes both real clipboard formats.
-    copyPngToClipboard: async ({ png, plainText }: { png: ArrayBuffer; plainText?: string }) => {
-      await navigator.clipboard.write([new ClipboardItem({
-        'image/png': new Blob([png], { type: 'image/png' }),
-        'text/plain': new Blob([plainText ?? ''], { type: 'text/plain' }),
-      })]);
-    },
   },
   render: ctx => <Fixture content={ctx.data.content} multiple={ctx.case === 'multiple-messages'} />,
 });
