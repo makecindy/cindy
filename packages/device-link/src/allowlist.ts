@@ -382,6 +382,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 窄口径元数据写:仅 status / title / pinnedAt(归档/删除/恢复/重命名/置顶)。专用
   // handler、白名单字段、不是裸 update(update 写任意字段、不放行)。支撑远程删/归档/改名/置顶对等。
   'local-db:sessions:patch-meta',
+  // Atomic empty-task cleanup; older hosts reject the channel without deleting anything.
+  'local-db:sessions:discard-unused',
   // 只读:「疑似中断」(startedAt > endedAt)的 active 会话 id(错误红点数据源)。
   // 与 sessions:list 同安全级。
   'local-db:sessions:interrupted-pending',
@@ -957,11 +959,11 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // NTFS 复制模式更慢)。控制端在此期间显示创建中,给 5 分钟执行预算 + 回程余量。
   // 旧控制端仍按 60s 超时,超时后走既有预创建补偿;被控端执行不受此值影响。
   'worktree:create': 300_000,
-  // 被控端建会话要等 Agent 真正起来:Codex thread/start 会先等一次上游预热请求返回,
-  // 2026-11-18 实测同机 codex 建会话中位数 8s、14 次超过 30s、最长 71s(其中两次各有
-  // 约 40s 停在上游预热)。默认 30s 会在被控端仍在建的时候先报超时,控制端随后重试或
-  // 回查;给到 90s 让常见慢启动直接拿到结果。被控端执行本身不受此值影响。
-  'maker:create-session': 90_000,
+  // 被控端 await agent.startSession:Codex app-server 冷启动 + thread/start 没有更短
+  // deadline,机器高负载时实测 41.6s / 42.4s(2026-11-18)。默认 30s 会让控制端先超时:
+  // 被控端照样建完任务,控制端却当失败处理,首条消息没发、用户重试又建一个新任务,
+  // 旧的空任务永久滞留。给 2 分钟执行预算;被控端执行不受此值影响。
+  'maker:create-session': 120_000,
   // User-triggered fetch (30s) plus local probes and process cleanup. Never replay.
   'worktree:sync-branch': 90_000,
   // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。

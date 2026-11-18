@@ -22,6 +22,10 @@ export default {
     },
     fleet: { about: 'Same shape as a real account: 3 direct, 7 via relay, 15 folded offline; two links carrying messages', storage: V2_ON },
     many: { about: 'Twenty other devices: dense rows, split direct group, folded offline', storage: V2_ON },
+    'self-device-link': {
+      about: 'Agent-Net switch on, but this computer runs on Device Link this time: Device Link under its name, in its card and on every peer',
+      storage: V2_ON,
+    },
     empty: { about: 'Only this computer, master switch off', storage: V2_ON },
     'legacy-off': { about: 'Agent-Net off: no topology; 我的设备 and the relay route are unchanged' },
     'model-access-off': { about: '「让我的其他电脑用本机模型」 under the master switch, off by default; turning it on' },
@@ -170,7 +174,24 @@ export default {
       await page.getByRole('button', { name: new RegExp(`^${await ui.t('settings.remoteControl.sections.myDevices')}`) }).waitFor();
       return;
     }
-    await page.getByRole('button', { name: 'Studio Mac', exact: true }).waitFor();
+    // 这台电脑名字下面写它实际用的连接方式;读屏名字同样带上(用户要求 2026-11-18)。
+    const agentNet = await ui.t('settings.remoteControl.v2.protocol.agentNet');
+    const deviceLink = await ui.t('settings.remoteControl.v2.protocol.deviceLink');
+    const selfProtocol = ui.case === 'self-device-link' ? deviceLink : agentNet;
+    const hub = page.getByRole('button', { name: `Studio Mac · ${selfProtocol}`, exact: true });
+    await hub.waitFor();
+    const hubCardStatus = `${await ui.t('settings.devices.linkStatus.online')} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`;
+    if (ui.case === 'self-device-link') {
+      // 主连接跑在 Device Link 上:中间与所有对端都写 Device Link,哪里都没有 Agent-Net。
+      assert.equal(await page.getByText(agentNet, { exact: true }).count(), 0);
+      await hub.click();
+      const hubCard = page.getByRole('dialog');
+      await hubCard.getByText(deviceLink, { exact: true }).waitFor();
+      await hubCard.getByText(hubCardStatus, { exact: true }).waitFor();
+      await ui.capture('hub-card');
+      await page.keyboard.press('Escape');
+      return;
+    }
     if (ui.case === 'default' || ui.case === 'fleet') {
       // 默认截图是减弱动效(在用的线是略粗的绿色实线);这里放开动效,有消息的线变成流动的绿色虚线。
       // 隔半节虚线的时间再截一帧(flow-later),两帧的空隙应整体往消息方向挪了一点。
@@ -207,9 +228,10 @@ export default {
       await ui.capture('agent-net-card');
       await page.keyboard.press('Escape');
       // 这台电脑的卡只展示连接信息;本机设置直接使用同页上方的卡片。
-      await page.getByRole('button', { name: 'Studio Mac', exact: true }).click();
+      await hub.click();
       const hubCard = page.getByRole('dialog');
-      await hubCard.getByText(`${await ui.t('settings.devices.linkStatus.online')} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`, { exact: true }).waitFor();
+      await hubCard.getByText(agentNet, { exact: true }).waitFor();
+      await hubCard.getByText(hubCardStatus, { exact: true }).waitFor();
       await ui.capture('hub-card');
       await page.keyboard.press('Escape');
       // 要处理的设备:点开卡片,「状态」用红字写原因(没有单独的「需要处理」卡片)。

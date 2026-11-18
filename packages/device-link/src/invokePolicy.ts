@@ -109,8 +109,6 @@ export function bypassInvokeScheduling(payload: InvokePayload): boolean {
  *    桌面仍会接收并发出该消息,用户重试会把同一条消息发两遍;
  *  - maker:regenerate-title:桌面路径先读取来源凭证(可能要刷新 token,最长 ~10s)
  *    再发标题请求(自身 TITLE_TIMEOUT_MS=12s),合法总预算 ~22s;
- *  - maker:create-session:已改由协议契约表统一给 90s(见 INVOKE_TIMEOUT_OVERRIDES_MS),
- *    这里不再单列;
  *  - maker:message:delete:桌面提交删除前先读 handoff 历史并 await
  *    maker.closeSession(Claude 远端 close 的 cc-manager RPC 自带 15s 超时),
  *    合法可贴着 15s 边界;破坏性操作,误超时后删除实际已生效,mobile 却报失败;

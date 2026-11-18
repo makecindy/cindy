@@ -46,8 +46,8 @@ describe('remote invoke policy boundaries', () => {
   // 2026-11-18: two Codex create-session calls took 41.6s/42.4s on the host and both
   // controllers gave up at 30s while the host was still creating the task.
   it('waits for a slow agent start on both controllers instead of timing out at 30s', () => {
-    expect(resolveRemoteInvokeTimeoutMs('maker:create-session', [{}], 'desktop')).toBe(90_000);
-    expect(resolveRemoteInvokeTimeoutMs('maker:create-session', [{}], 'mobile')).toBe(90_000);
+    expect(resolveRemoteInvokeTimeoutMs('maker:create-session', [{}], 'desktop')).toBe(120_000);
+    expect(resolveRemoteInvokeTimeoutMs('maker:create-session', [{}], 'mobile')).toBe(120_000);
     expect(isPeerResetRetryableReadChannel('maker:create-session')).toBe(false);
   });
   it.each(['local-db:sessions:list', 'local-db:sessions:get', 'local-db:sessions:get-many', 'local-db:sessions:interrupted-pending', 'maker:list-active'])(

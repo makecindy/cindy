@@ -574,6 +574,8 @@ const LOCAL_GUEST_HOST_PREFIX = 'local-guest:';
 // One bridge is shared by every local host, including account and utility hosts.
 const LOCAL_MCP_REFRESH_KEY = 'local-mcp-refresh';
 const LOCAL_CONFIGURATION_CHANGE_KEY = LOCAL_MCP_REFRESH_KEY;
+class LocalResumeTimeoutError extends Error {}
+
 // Only raised before a caller sends a thread RPC; safe to select a fresh route.
 class CodexRouteSelectionChangedError extends Error {
   constructor(message = 'Codex route changed during startup', readonly retryable = true) { super(message); }
@@ -3650,9 +3652,10 @@ assertRouteCurrent();
       throw new AgentStartupStoppedError(new Error('Native history requires a valid Codex thread id'));
     }
     const signal = this.routeResolutionAbort.signal;
+    let retriedResume = false;
     for (let attempt = 0; ; attempt++) {
       const startup = {
-        signal, threadDispatched: false,
+        signal, threadDispatched: false, retriedResume,
         cleanup: undefined as (() => Promise<void>) | undefined,
         customContext: undefined as (() => Promise<void>) | undefined,
       };
@@ -3672,6 +3675,11 @@ assertRouteCurrent();
         }
         if (startup.customContext) {
           await startup.customContext();
+          if (!retriedResume && !signal.aborted && error instanceof LocalResumeTimeoutError) {
+            // Strict cleanup above confirmed that the old writer has exited.
+            retriedResume = true;
+            continue;
+          }
           // Retirement of this isolated local host proves the failed startup
           // cannot keep using its workdir. Propagate that proof to Maker so its
           // onStartFailed hook releases the directory lease.
@@ -3685,7 +3693,7 @@ assertRouteCurrent();
   private async startSessionInternal(
     opts: StartSessionOptions,
     registerFailedCustomContextStartupCleanup: (cleanup: (() => Promise<void>) | null) => void,
-    startup: { signal: AbortSignal; threadDispatched: boolean; cleanup?: () => Promise<void> },
+    startup: { signal: AbortSignal; threadDispatched: boolean; retriedResume: boolean; cleanup?: () => Promise<void> },
   ): Promise<AgentSessionHandle> {
     // scope 带完整 s:<sessionId> 前缀 → host logger 落盘时提取 business sessionId,
     // 路由到 sessions/<id>/<date>.ndjson (logger.ts extractSessionId / sessionAgentSlot)。
@@ -7445,7 +7453,7 @@ assertRouteCurrent();
           try {
             return await host.request<ThreadResumeResponse>(Method.ThreadResume, params, requestOptions);
           } catch (error) {
-            if (!hostUsesCodexProxy || opts.remoteHostId || indexedRolloutMissing
+            if (startup.retriedResume || !hostUsesCodexProxy || opts.remoteHostId || indexedRolloutMissing
               || !isSavedModelProviderMismatch(error, threadModelProvider)) throw error;
             // New native versions forbid changing a saved thread's provider.
             // Fork the complete canonical history, keeping the Cindy task and
@@ -7492,7 +7500,7 @@ assertRouteCurrent();
           // 我们能拿到的最佳目录线索(与下方 wire 规范化不同,后者不更新它)。
           mutableCatalogModel = resp.model;
         }
-        if (!providerHistoryFork && (preparedResumePath || sessionStorage?.rolloutPath) && resp.thread.id !== opts.resumeSessionId) {
+        if (!providerHistoryFork && (startup.retriedResume || preparedResumePath || sessionStorage?.rolloutPath) && resp.thread.id !== opts.resumeSessionId) {
           throw new Error('Codex resumed an unexpected thread');
         }
         // A missing indexed path is not permission to select an older copy by ID.
@@ -7556,7 +7564,7 @@ assertRouteCurrent();
       } catch (e) {
         if (!startup.threadDispatched && (e instanceof CodexRouteSelectionChangedError || startup.signal.aborted)) throw e;
         let freshThreadStarted = false;
-        if (opts.vendorOptions?._cindyRequireNativeResume !== true
+        if (!startup.retriedResume && opts.vendorOptions?._cindyRequireNativeResume !== true
           && !preparedResumePath && (!indexedRolloutMissing || indexedThreadAbsent)
           && isExactNoRolloutThreadResumeError(e, opts.resumeSessionId)) {
           // For indexed threads, both native metadata and rollout must be absent.
@@ -7580,6 +7588,15 @@ assertRouteCurrent();
           }
         }
         if (!freshThreadStarted) {
+          if (e instanceof AppServerRequestTimeoutError && e.method === Method.ThreadResume
+            && sid && !hosted && !opts.remoteHostId && !reviewMode && (accountSessionHost || usesCustomContextHost)
+            && isCurrentHost() && this.hostActiveUseCount(currentHostKey, host, { ignoreBindingLeases: 1 }) === 0) {
+            const stackSymbols = await host.sampleResumeStack().catch(() => []);
+            log.warn('local thread/resume timed out before turn dispatch', {
+              resumeSessionId: opts.resumeSessionId, connectionId, timeoutMs: e.timeoutMs, stackSymbols,
+            });
+            throw new LocalResumeTimeoutError(`Failed to resume Codex thread: ${String(e)}`);
+          }
           releaseHostBindingLeaseIfNeeded();
           log.error('thread/resume failed', { error: String(e), resumeSessionId: opts.resumeSessionId });
           const message = `Failed to resume Codex thread: ${String(e)}`;
