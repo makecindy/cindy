@@ -258,6 +258,22 @@ describe('GiftCardPurchaseDialog', () => {
     expect(button('billing.giftCardPurchase.pay').hasAttribute('disabled')).toBe(true);
   });
 
+  // 评审发现（PR #11412）：规则请求慢或失败后重试时署名框可以编辑，规则晚到不能把用户填的署名换回默认。
+  it('keeps a sender the user typed while the limits were still loading', async () => {
+    let resolvePolicy: (value: BillingGiftCardPurchasePolicy) => void = () => undefined;
+    api.getGiftCardPurchasePolicy
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementationOnce(() => new Promise<BillingGiftCardPurchasePolicy>((resolve) => { resolvePolicy = resolve; }));
+    open();
+    await screen.findByText('billing.giftCardPurchase.loadFailed');
+    const sender = screen.getByPlaceholderText('billing.giftCardPurchase.fields.senderPlaceholder') as HTMLInputElement;
+    fireEvent.change(sender, { target: { value: '阿杰' } });
+    fireEvent.click(button('billing.actions.retry'));
+    resolvePolicy(policy);
+    await waitFor(() => expect(button('billing.giftCardPurchase.pay').hasAttribute('disabled')).toBe(false));
+    expect(sender.value).toBe('阿杰');
+  });
+
   it('keeps payment unavailable and offers a retry when the limits cannot be read', async () => {
     api.getGiftCardPurchasePolicy.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(policy);
     open();

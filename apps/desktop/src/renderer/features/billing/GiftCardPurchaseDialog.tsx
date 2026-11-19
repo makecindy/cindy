@@ -65,6 +65,8 @@ export function GiftCardPurchaseDialog({
   const customInputRef = useRef<HTMLInputElement>(null);
   const focusCustomRef = useRef(false);
   const requestRef = useRef(0);
+  // 这次打开后用户改过署名：之后读到的规则（慢请求、失败后重试）不能再用默认署名覆盖它。
+  const senderEditedRef = useRef(false);
 
   const policy = policyState.kind === 'ready' ? policyState.policy : null;
   // 只给出服务端允许、本版本也认识的卡面。规则还没读到时先列出本地卡面（此时不能付款）；
@@ -95,6 +97,7 @@ export function GiftCardPurchaseDialog({
       requestRef.current += 1;
       return;
     }
+    senderEditedRef.current = false;
     setFaceCode(GIFT_CARD_FACES[0]);
     setOfferCode(null);
     setQuantity(1);
@@ -107,7 +110,9 @@ export function GiftCardPurchaseDialog({
   }, [open]);
 
   useEffect(() => {
-    if (open && policy) setSender(defaultGiftCardSender(accountName, policy.maxSenderNameLength));
+    if (open && policy && !senderEditedRef.current) {
+      setSender(defaultGiftCardSender(accountName, policy.maxSenderNameLength));
+    }
   }, [accountName, open, policy]);
 
   const customEntry = offers.find((entry) => entry.kind === 'custom') ?? null;
@@ -429,7 +434,10 @@ export function GiftCardPurchaseDialog({
                     id={control.id}
                     aria-describedby={control['aria-describedby']}
                     value={sender}
-                    onChange={setSender}
+                    onChange={(value) => {
+                      senderEditedRef.current = true;
+                      setSender(value);
+                    }}
                     maxLength={policy?.maxSenderNameLength ?? 40}
                     placeholder={t('billing.giftCardPurchase.fields.senderPlaceholder')}
                     autoComplete="off"

@@ -209,7 +209,7 @@ export function PurchasedGiftCardsCard({
                 : t('billing.giftCardPurchase.list.meta.purchased', { date: formatDate(card.purchasedAt, locale), tail: card.codeTail });
           return (
             <li key={card.cardId} className="flex flex-wrap items-center gap-x-3.5 gap-y-2 px-4 py-3">
-              <div className={cn('w-[76px] shrink-0', (card.status === 'REFUNDED' || card.status === 'ON_HOLD') && 'opacity-50')}>
+              <div className={cn('w-[76px] shrink-0', card.status === 'REFUNDED' && 'opacity-50')}>
                 <GiftCardFace
                   faceCode={card.faceCode}
                   amount={card.amount}

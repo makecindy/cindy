@@ -1164,6 +1164,8 @@ describe('BillingPage remote catalog rendering', () => {
     }));
     render(<BillingPage />);
     expect(await screen.findByText(/billing\.giftCardPurchase\.list\.status\.onHold/)).toBeTruthy();
+    // 处理中的卡之后可能恢复：卡面照常显示，只有已退款的卡变淡（DESIGN.md 礼品卡卡面一节）。
+    expect(screen.getByRole('img', { name: /billing\.giftCard\.cardLabel/ }).closest('.opacity-50')).toBeNull();
     expect(screen.queryByText(/billing\.giftCardPurchase\.list\.status\.refunded/)).toBeNull();
     expect(screen.queryByRole('button', { name: /billing\.giftCardPurchase\.actions\./ })).toBeNull();
   });
