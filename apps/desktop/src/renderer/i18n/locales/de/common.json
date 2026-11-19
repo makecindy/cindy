@@ -16492,7 +16492,7 @@
       "confirmArchive": {
         "title": "Sitzung archivieren",
         "description": "Diese Sitzung archivieren? Sie wird aus der Liste entfernt.",
-        "dirtyWorktreeWarning": "Nicht committete Änderungen werden vor dem Archivieren gespeichert. Du kannst sie über die Aufgabe wiederherstellen.",
+        "dirtyWorktreeWarning": "Diese Aufgabe enthält noch nicht committete Dateiänderungen. Beim Archivieren werden sie standardmäßig gespeichert. Du kannst sie später in der Aufgabe wiederherstellen.",
         "discardChanges": "Nicht committete Änderungen verwerfen",
         "discardWarning": "Nicht committete Änderungen und neue Dateien gehen verloren.",
         "discardAndArchive": "Verwerfen und archivieren",

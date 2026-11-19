@@ -16418,7 +16418,7 @@
       "confirmArchive": {
         "title": "セッションをアーカイブ",
         "description": "このセッションをアーカイブしますか？アーカイブ後はリストから消えます。",
-        "dirtyWorktreeWarning": "未コミットの変更はアーカイブ前に保存されます。タスクから復元できます。",
+        "dirtyWorktreeWarning": "このタスクには未コミットのファイル変更があります。アーカイブ時には既定で変更が保存され、後からタスク内で復元できます。",
         "discardChanges": "未コミットの変更を破棄",
         "discardWarning": "未コミットの変更と新しいファイルは復元できなくなります。",
         "discardAndArchive": "破棄してアーカイブ",
