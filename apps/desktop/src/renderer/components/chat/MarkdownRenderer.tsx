@@ -4,8 +4,10 @@ import { SettingsLinkChip } from './SettingsLinkChip';
 import '@/styles/chatContentDirection.css';
 import { VideoSitePreview } from './VideoSitePreview';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
-import { splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
+import { splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode, type RichPart } from '@cindy/maker-shared/rich-answer';
 import { RichAnswer } from './RichAnswer';
+import { Spinner } from '@/components/ui/spinner';
+import { splitA2uiMessage, type A2uiMessagePart } from './a2uiMessage';
 import { WorkspaceMediaSrc } from './useWorkspaceMediaPath';
 /**
  * MarkdownRenderer
@@ -25,7 +27,7 @@ import { useImageLoadFailure } from './useImageLoadFailure';
 import { ChatLoadingImage } from './ChatLoadingImage';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
-import { createElement, memo, useId, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, lazy, Suspense, memo, useId, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -2164,6 +2166,11 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
 });
 
 /** Assistant-only envelope decoding, before Markdown chunking or repairs. */
+function A2uiLoadFallback({ source }: { source: string }) {
+  const { t } = useTranslation();
+  return <div><p role="status">{t('richAnswer.incomplete')}</p><pre className="whitespace-pre-wrap break-words">{source}</pre></div>;
+}
+const A2uiAnswer = lazy(() => import('./A2uiAnswer').then(module => ({ default: module.A2uiAnswer })).catch(() => ({ default: A2uiLoadFallback })));
 export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRendererProps) {
   const instanceKey = useId();
   const sessionFileCtx = useChatSessionFile();
@@ -2193,9 +2200,15 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
       </WorkspaceMediaSrc>
     );
   };
-  const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
-  return <div className="rich-answer-body">{parts.map(part => part.kind === 'rich'
+  const parts = useMemo(() => props.renderRichAnswers ? splitA2uiMessage(source).flatMap<RichPart | A2uiMessagePart>(part => part.kind === 'a2ui'
+    ? [part]
+    : splitRichAnswer(part.source).map(child => ({ ...child, key: part.key + child.key }))) : [], [source, props.renderRichAnswers]);
+  if (!parts.some(part => part.kind === 'rich' || part.kind === 'a2ui')) return <MarkdownRendererBase {...props} />;
+  return <div className="rich-answer-body">{parts.map(part => part.kind === 'a2ui'
+    ? <Suspense key={part.key} fallback={<div role="status" aria-label="A2UI" aria-busy="true"><Spinner /></div>}><A2uiAnswer source={part.source} renderMedia={renderMedia}
+        stateKey={`${props.currentSessionId ?? 'unscoped'}:${props.streamFadeKey ?? instanceKey}:${part.key}`}
+        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} isStreaming={false} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} />} /></Suspense>
+    : part.kind === 'rich'
     ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
         renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} />} />

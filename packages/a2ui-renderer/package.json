@@ -1,0 +1,25 @@
+{
+  "name": "@cindy/a2ui-renderer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pinned official A2UI runtime with its compatible schema dependency, isolated from the host's Zod 4.",
+  "license": "Apache-2.0",
+  "exports": {
+    "./react": "./react.ts",
+    "./core": "./core.ts"
+  },
+  "dependencies": {
+    "@a2ui/react": "0.15.0",
+    "@a2ui/web_core": "0.15.0",
+    "zod": "3.25.76"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  }
+}
