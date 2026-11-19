@@ -12239,6 +12239,7 @@ describe('confirmed duplicate-open gap repair', () => {
 describe('host-triggered recovery of previously reliable links', () => {
   it.each([1006, 1012])('recovers from relay close %s without replaying writes or disturbing the healthy controller', async (closeCode) => {
     vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     const relay = new MemoryRelay();
     const sockets = vi.spyOn(relay, 'makeWebSocket');
     const host = makeRelayClient(relay, 'host');
@@ -12266,10 +12267,13 @@ describe('host-triggered recovery of previously reliable links', () => {
       expect(executed.filter(x => x === 'phone:maker:send')).toHaveLength(1);
       relay.disconnect('phone', closeCode);
       const other = healthy.invoke('host', { channel: 'local-db:sessions:list', args: [] });
-      await vi.advanceTimersByTimeAsync(30); await pump();
+      await pump();
+      await expect(other).resolves.toEqual({ ok: true, result: 'ready' });
+      // The first 1012 service-restart retry has 1–5s of jitter. Use its
+      // deterministic lower bound, within the original write's 2s deadline.
+      await vi.advanceTimersByTimeAsync(closeCode === 1012 ? 1_000 : 30); await pump();
       expect(phone.getStatus()).toBe('online');
       expect(phone.needsLinkRecovery('host')).toBe(true);
-      await expect(other).resolves.toEqual({ ok: true, result: 'ready' });
       // The adapters use this query before admitting fresh work, including a
       // listing-only subscription, which must reopen its old link.
       const send = async (channel: string) => {
@@ -12289,7 +12293,7 @@ describe('host-triggered recovery of previously reliable links', () => {
       expect(sockets.mock.calls.filter(x => x[0] === 'healthy')).toHaveLength(1);
       phone.closeLink('host', 'user');
       expect(phone.needsLinkRecovery('host')).toBe(false);
-    } finally { for (const c of [host, phone, healthy]) c.stop(); sockets.mockRestore(); vi.useRealTimers(); }
+    } finally { for (const c of [host, phone, healthy]) c.stop(); sockets.mockRestore(); random.mockRestore(); vi.useRealTimers(); }
   });
 });
 
