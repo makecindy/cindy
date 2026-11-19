@@ -6703,12 +6703,7 @@ export function MessageStream({
               ref={scrollRef}
               data-scroll-container=""
               onCopy={copyChatSelection}
-              className={cn(
-                'h-full w-full overflow-y-auto overflow-x-hidden',
-                // Task content and composer share a center axis. A one-sided
-                // stable gutter shifts the message column by half a scrollbar.
-                simplifiedBotConversation ? '[scrollbar-gutter:stable]' : '[scrollbar-gutter:stable_both-edges]',
-              )}
+              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable_both-edges]"
               onScroll={handleScroll}
               onPointerDownCapture={() => refreshViewportAnchor()}
               onKeyDownCapture={() => refreshViewportAnchor()}

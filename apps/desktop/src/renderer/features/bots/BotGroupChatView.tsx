@@ -54,7 +54,7 @@ import {
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { useAttachments } from '@/hooks/useAttachments';
-import { useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { CHAT_MESSAGE_MAX_WIDTH, useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { captureDraftRecoveryScope, discardDraftTree } from '@/lib/composerDraftStore';
 import {
   classifyUnclassifiedDroppedItems,
@@ -1443,7 +1443,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           previousScrollTop.current = element.scrollTop;
           if (atBottom) acknowledgeSoon();
         }}
-        className="min-h-0 flex-1 overflow-y-auto pb-4 pt-4"
+        className="min-h-0 flex-1 overflow-y-auto pb-4 pt-4 [scrollbar-gutter:stable_both-edges]"
       >
         <div ref={contentRef} className="mx-auto flex w-full max-w-[var(--cindy-message-width)] flex-col">
           {hasMoreBefore ? (
@@ -1639,7 +1639,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 /** Mount the observer with the ready view, after the loading/error early returns. */
 function BotGroupChatMain(props: ComponentProps<'main'>) {
   // Share the task/private-chat cap, padding and narrow-pane behavior.
-  const { containerRef } = useProportionalWidth(914);
+  const { containerRef } = useProportionalWidth(914, { expandTo: CHAT_MESSAGE_MAX_WIDTH });
   return <main {...props} ref={containerRef} />;
 }
 

@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
-/** Wide-pane ceiling shared by prose, blocks and the new/running task composers. */
-export const TASK_MESSAGE_MAX_WIDTH = 1120;
+/** Wide-pane ceiling shared by task, companion and group chat columns. */
+export const CHAT_MESSAGE_MAX_WIDTH = 1120;
 
 /**
  * 主区域内容宽度 hook
@@ -11,10 +11,10 @@ export const TASK_MESSAGE_MAX_WIDTH = 1120;
  *   inputWidth   = messageWidth + INPUT_OUTSET (输入框每侧少 10px)
  *
  * maxWidth 为内容封顶宽（首参）：容器再宽,内容列也不超过它,超出部分靠 mx-auto
- * 居中留白。不传时回落到 MAX_MESSAGE_WIDTH(1200) 的历史默认。新建对话页与进行中
- * 对话页以914为基线，expandTo 共用 TASK_MESSAGE_MAX_WIDTH：pane<=1200 保留
+ * 居中留白。不传时回落到 MAX_MESSAGE_WIDTH(1200) 的历史默认。新建任务、普通任务、
+ * 伙伴私聊和群聊以914为基线，expandTo 共用 CHAT_MESSAGE_MAX_WIDTH：pane<=1200 保留
  * 笔记本行宽，1200→1600 渐进展开，之后封顶。正文与表格、代码使用同一列，
- * 纯文字也获得空间，不产生两个内容右边界。新建和进行中页沿用同一计算。
+ * 气泡内的内容仍受各自气泡宽度约束。
  *
  * - 消息流侧 (50px)：MessageStream 是 overflow-y-auto 的原生滚动容器,占满
  *   全宽 containerWidth，内部 contentRef `mx-auto` + `maxWidth=messageWidth`
@@ -117,6 +117,11 @@ export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWid
       const el = containerRef.current;
       if (el) {
         el.style.setProperty('--cindy-message-width', `${nextMessage}px`);
+        // Keep spacing between short table columns tied to their contents on large panes.
+        el.style.setProperty(
+          '--cindy-markdown-table-width',
+          opts.expandTo && containerWidth >= WIDE_PANE_END ? 'fit-content' : '100%',
+        );
         el.style.setProperty('--cindy-input-width', `${nextInput}px`);
         el.style.setProperty('--cindy-input-pad', `${nextInputPad}px`);
         el.style.setProperty(

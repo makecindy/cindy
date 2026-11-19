@@ -644,7 +644,7 @@ const baseComponents: Components = {
   table({ children, ...props }) {
     return (
       <CopyAsImageBlock
-        className="my-3"
+        className="my-3 w-[var(--cindy-markdown-table-width,100%)] max-w-full"
         contentClassName="overflow-x-auto"
         extractPlainText={tableToTsv}
       >
