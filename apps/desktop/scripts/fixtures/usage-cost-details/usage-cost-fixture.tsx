@@ -89,8 +89,8 @@ mountPage({
           copyText="Mission Bay"
           sessionId="fixture-cost-session"
           clientId="fixture-reply"
-          turnMoney={money(4.87, true)}
-          turnCostIsEstimate
+          // No price for the model: the cell falls back to the turn's token count.
+          {...(ctx.data.noPrice ? {} : { turnMoney: money(4.87, true), turnCostIsEstimate: true })}
           turnUsageDetails={{
             inputTokens: 1200,
             outputTokens: 500,
@@ -99,7 +99,7 @@ mountPage({
             totalTokens: 5700,
             cacheHitRate: 4000 / 5200,
             model: 'gpt-6.1',
-            additionalCosts: [money(3.34)],
+            ...(ctx.data.noPrice ? {} : { additionalCosts: [money(3.34)] }),
             ...(typeof ctx.data.traceRequests === 'number'
               ? { trace: fixtureTrace(ctx.data.traceRequests, ctx.data.traceShape ?? 'full') } : {}),
           }}

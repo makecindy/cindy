@@ -593,34 +593,43 @@ export function MessageActionBar({
       'text-[var(--settings-section-desc)] cursor-default',
     );
 
+    // 本轮的速度与推理图：有金额时在费用明细顶部，没有金额时由 token 回退入口打开同一张图。
+    const turnTrace = turnUsageDetails?.trace && traceHasChart(turnUsageDetails.trace)
+      ? <TurnGenerationTrace trace={turnUsageDetails.trace} /> : undefined;
+
     const costText = displayedMoney && displayedMoney.amount > 0 && (
       <UsageCostPopover key="cost" sessionId={sessionId} clientId={clientId}
         className={metaTextClassName} label={costLabel} fallback={turnCostTooltipNode}
-        header={turnUsageDetails?.trace && traceHasChart(turnUsageDetails.trace)
-          ? <TurnGenerationTrace trace={turnUsageDetails.trace} /> : undefined} />
+        header={turnTrace} />
     );
 
     // 金额缺席时的回退:显示本轮 token 总量。成因可能是网关目录整体不下发价格、
     // 模型不在价表、或订阅估值也 miss —— 对用户都一样,这一格不该因此空着。
     // 钱算不出来不代表用量算不出来:明细由 main 在 turn 结束时落库,与金额同源。
+    // 看本轮推理量不该取决于价格是否可用（免费模型、价表缺失、估值未命中都会走到这里）：有图时
+    // 这一格与金额一样悬停预览、点击固定，浮窗里是同一张图加 token 明细；不带 sessionId，
+    // 不读取也不显示费用明细。没有图时保持原来的文字提示。
     const tokensText = !(displayedMoney && displayedMoney.amount > 0) &&
       turnUsageDetails &&
-      turnUsageDetails.totalTokens > 0 && (
-        <Tooltip.Root key="tokens">
-          <Tooltip.Trigger asChild>
-            <span className={metaTextClassName}>
-              {t('chat.messageActionBar.turnTokens', {
-                tokens: formatCompactTokens(turnUsageDetails.totalTokens),
-              })}
-            </span>
-          </Tooltip.Trigger>
-          <Tooltip.Content>
-            <span className="whitespace-pre-line">
-              {buildTurnUsageTooltipLines({ details: turnUsageDetails, t }).join('\n')}
-            </span>
-          </Tooltip.Content>
-        </Tooltip.Root>
-      );
+      turnUsageDetails.totalTokens > 0 && (() => {
+        const label = t('chat.messageActionBar.turnTokens', {
+          tokens: formatCompactTokens(turnUsageDetails.totalTokens),
+        });
+        const lines = buildTurnUsageTooltipLines({ details: turnUsageDetails, t }).join('\n');
+        return turnTrace ? (
+          <UsageCostPopover key="tokens" className={metaTextClassName} label={label} header={turnTrace}
+            fallback={<div className="whitespace-pre-line text-12 text-[var(--text-secondary)]">{lines}</div>} />
+        ) : (
+          <Tooltip.Root key="tokens">
+            <Tooltip.Trigger asChild>
+              <span className={metaTextClassName}>{label}</span>
+            </Tooltip.Trigger>
+            <Tooltip.Content>
+              <span className="whitespace-pre-line">{lines}</span>
+            </Tooltip.Content>
+          </Tooltip.Root>
+        );
+      })();
 
     return [costText, tokensText];
   })();

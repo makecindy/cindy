@@ -16,8 +16,23 @@ export default {
     'trace-unreported': { about: 'Provider reports no reasoning split: the speed curve alone, no empty lower half', data: { traceRequests: 12, traceShape: 'unreported' } },
     'trace-strokes-only': { about: 'A turn too short for a speed curve: strokes without an empty band above', data: { traceRequests: 3, traceShape: 'strokes-only' } },
     'trace-empty': { about: 'Neither a curve nor reported reasoning: no chart, the panel as before', data: { traceRequests: 2, traceShape: 'empty' } },
+    'trace-no-price': { about: 'No price for the model: the token count opens the same chart, without a cost section', data: { traceRequests: 12, noPrice: true } },
   },
   async check(page, ui) {
+    if (ui.data.noPrice) {
+      // Without a price the cell shows tokens; it opens the same chart and no cost section.
+      const tokens = page.getByRole('button').filter({ hasText: /5\.7k/ });
+      await tokens.click();
+      const panel = page.getByRole('dialog');
+      await panel.waitFor();
+      await panel.getByTestId('turn-generation-trace').waitFor();
+      assert.match(await panel.getByTestId('turn-thinking-share').innerText(), /(<1|\d+)%/);
+      assert.equal(await panel.getByTestId('usage-cost-details').count(), 0, 'No cost section without a price');
+      await ui.capture('details', { locator: panel });
+      await page.keyboard.press('Escape');
+      await panel.waitFor({ state: 'hidden' });
+      return;
+    }
     const trigger = page.getByRole('button').filter({ hasText: /1\.53/ });
     assert.match(await trigger.innerText(), /\+.*3\.34/);
     await trigger.hover();
