@@ -1,3 +1,4 @@
+import { mailTextParagraphs } from '@cindy/maker-shared/mail-text-edit';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { captureImContext, type ImMessageSource } from '../../../shared/imMessageSource';
 /**
@@ -70,6 +71,53 @@ export function resolveHookGroupContext(source: {
   return captureImContext({ groupPrefix: source.content }).groupContext ?? null;
 }
 
+export function isFeishuIm(im: string | undefined): boolean {
+  return im === 'feishu' || im === 'lark';
+}
+
+function paragraphsAsText(fragment: string): string {
+  return mailTextParagraphs(fragment).map((paragraph) => paragraph.text).join('\n\n');
+}
+
+/** Feishu/Lark rich text can arrive as a paragraph-wrapped string. */
+function displayImParagraphs(im: string | undefined, text: string): string {
+  if (!isFeishuIm(im)) return text;
+  const fragment = text.trim();
+  if (!/^<p(?:\s[^>]*)?>/i.test(fragment) || !/<\/p>$/i.test(fragment)) return text;
+  return paragraphsAsText(fragment);
+}
+
+const historyTime = String.raw`(?:\d{4}-)?(?:\d{2}-\d{2} )?\d{2}:\d{2}(?: UTC| \(UTC[+-]\d{2}:\d{2}\))?`;
+const contextAuthor = String.raw`\[[^\r\n]*?\][ \t]+`;
+// Do not consume a later opening paragraph when a closing tag is missing.
+const contextParagraph = String.raw`<p(?:[ \t][^>\r\n]*)?>(?:(?!<\/?p(?:\s|>))[\s\S])*?(?:<\/p>|\[…已截断\])`;
+const contextParagraphRun = String.raw`${contextParagraph}(?:\s*${contextParagraph})*`;
+const groupParagraphs = new RegExp(
+  String.raw`^(${contextAuthor}${historyTime}[ \t]+)(${contextParagraphRun})(?=\r?$|[ \t]+\[(?:图片\]|文件: ))`,
+  'gim',
+);
+const replyParagraphs = new RegExp(
+  String.raw`^((?:${contextAuthor}(?:(?:${historyTime}|\[时间未知\])[ \t]+)?)?)(${contextParagraphRun})(?=\r?$)`,
+  'gim',
+);
+
+/** Convert paragraph runs while retaining author lines, attachments and the saved appendix. */
+export function displayImContext(im: string, text: string, kind: 'group' | 'reply'): string {
+  if (!isFeishuIm(im)) return text;
+  // Group snapshots may end with actual file text, where tags are content.
+  const appendix = kind === 'group'
+    ? text.search(/\n(?:历史附件实际提供情况（JSON 数据）：|\[历史消息 [^\r\n]+ 的内容\])/)
+    : -1;
+  const context = appendix < 0 ? text : text.slice(0, appendix);
+  const trailing = appendix < 0 ? '' : text.slice(appendix);
+  return context.replace(kind === 'group' ? groupParagraphs : replyParagraphs, (_, prefix: string, markup: string) => {
+    const truncation = '[…已截断]';
+    return markup.endsWith(truncation)
+      ? prefix + paragraphsAsText(markup.slice(0, -truncation.length)) + truncation
+      : prefix + paragraphsAsText(markup);
+  }) + trailing;
+}
+
 /**
  * 输入按结构收敛到两个字段,不 import ChatMessage / props 类型:
  * UserMessage 传的是 props(content + hookSource),导航条传的是 ChatMessage,
@@ -77,7 +125,7 @@ export function resolveHookGroupContext(source: {
  */
 export interface UserDisplayTextSource {
   content: string;
-  hookSource?: { userText?: string } | null;
+  hookSource?: { im?: string; userText?: string } | null;
   automationOrigin?: { kind: string };
 }
 
@@ -93,7 +141,8 @@ export function resolveUserDisplayText(
   const rawDisplayContent = orcaCommunication?.content ?? source.content;
   if (!source.hookSource) return source.automationOrigin?.kind === 'session'
     ? forwardedRequestDisplayText(rawDisplayContent) : rawDisplayContent;
-  return (
-    source.hookSource.userText ?? rawDisplayContent.replace(THREAD_CONTEXT_PREFIX_RE, '').trim()
+  return displayImParagraphs(
+    source.hookSource.im,
+    source.hookSource.userText ?? rawDisplayContent.replace(THREAD_CONTEXT_PREFIX_RE, '').trim(),
   );
 }

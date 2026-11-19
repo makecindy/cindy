@@ -26,3 +26,24 @@ describe('forwarded companion reply quotes', () => {
     expect(botReplyQuoteDisplay(quote, human, names)).toMatchObject({ state: 'live', excerpt: quote.excerpt });
   });
 });
+
+describe('IM companion reply quotes', () => {
+  const names = { owner: 'Chris', companion: 'Cindy' };
+  const content = '<p>原文 &amp; 记录<br>第二行</p>';
+  it.each(['feishu', 'lark'])('uses %s display text for live and newly saved quotes', (im) => {
+    const message = { clientId: 'im', role: 'user' as const, content, hookSource: { im, userText: content } };
+    const quote = botReplyQuoteFor(message)!;
+    expect(quote.excerpt).toBe('原文 & 记录 第二行');
+    expect(botReplyQuoteDisplay({ ...quote, excerpt: content }, message, names)).toMatchObject({ state: 'live', excerpt: quote.excerpt });
+    expect(botReplyQuoteDisplay(quote, undefined, names)).toMatchObject({ state: 'snapshot', excerpt: quote.excerpt });
+    expect(message.hookSource.userText).toBe(content);
+    expect(message.content).toBe(content);
+  });
+
+  it('preserves other channels and older snapshots whose source is unloaded', () => {
+    const message = { clientId: 'im', role: 'user' as const, content, hookSource: { im: 'slack', userText: content } };
+    const quote = botReplyQuoteFor(message)!;
+    expect(quote.excerpt).toBe(content);
+    expect(botReplyQuoteDisplay(quote, undefined, names)).toMatchObject({ state: 'snapshot', excerpt: content });
+  });
+});
