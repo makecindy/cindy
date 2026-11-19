@@ -118,7 +118,7 @@ const ACCOUNT_SNAPSHOT_FAILURE_TTL_MS = 3_000;
  * 额度照常在同一次读取里接着读、读完写回缓存：
  * - `read`：照旧等完整读取(设置页、用量卡、分享与组查询、额度摘要等所有非选号调用)；
  * - `recent`：多账号新分配。同一登录的额度在 `CODEX_SELECTION_RECENT_QUOTA_MS` 内读到过，就先按它排序；
- * - `known`：额度改变不了结果(已绑定账号的任务、只剩一个可选账号)，登录读完即可。
+ * - `known`：额度改变不了结果(已绑定账号、只剩一个可选账号、启动认证)，登录读完即可。
  * 先放行的快照带 `quotaPending`；`read` 调用方不采用它，继续等这次读取的最终结果，所以它们看到的额度与
  * 改动前一致。只影响 OpenAI：Anthropic 的窗口仍决定能否启动。登录与模型检查不受影响。
  */
@@ -151,8 +151,8 @@ interface AccountSnapshot {
   at: number;
   usageAt?: number;
   /**
-   * Published once the login was read while this read still fetches Codex quota. Only account
-   * selection may use it (CodexSelectionQuota); the read's final snapshot replaces it.
+   * Published once the login was read while this read still fetches Codex quota.
+   * Selection and runtime authentication can use it before the final snapshot replaces it.
    */
   quotaPending?: true;
 }
@@ -644,7 +644,10 @@ export function observeSubscriptionAccountUsage(
   // The event updates usage, not the last account/endpoint read. Renewing `at`
   // here lets a stream of SDK events postpone authoritative polling indefinitely.
   const next = { ...cached, usage,
-    ...(usage.codexPlan ? { auth: { ...cached.auth, plan: usage.codexPlan, planType: usage.codexPlan } } : {}),
+    // A pending read owns the auth object used by model discovery and applies the final
+    // plan. The event's quota is still merged into the pending read.
+    ...(usage.codexPlan && !cached.quotaPending
+      ? { auth: { ...cached.auth, plan: usage.codexPlan, planType: usage.codexPlan } } : {}),
   };
   state.cache.set(key, next);
   void persistUsage(state, provider, key.slice(provider.length + 1), next);
@@ -666,14 +669,14 @@ async function snapshot(
   id: string,
   force = false,
   forceUsage = false,
-  /** Only account selection passes another mode (CodexSelectionQuota). */
+  /** Only account selection and runtime authentication can proceed with pending quota. */
   quota: CodexSelectionQuota = 'read',
 ): Promise<AccountSnapshot> {
   assertOwner(state);
   const key = keyOf(provider, id);
   const cached = state.cache.get(key);
   const ttl = cached?.unavailable ? ACCOUNT_SNAPSHOT_FAILURE_TTL_MS : ACCOUNT_SNAPSHOT_TTL_MS;
-  // A snapshot still waiting for its quota serves account selection only; others join that read.
+  // Quota consumers join the read for its full result.
   if (!force && cached && Date.now() - cached.at < ttl
     && (!cached.quotaPending || selectionMayUseSnapshot(cached, quota, Date.now()))
     && (id !== 'default' || defaultAccountBound(provider))) return cached;
@@ -687,17 +690,23 @@ async function snapshot(
       return state.cache.get(key) ?? snapshot(state, provider, id, false, forceUsage);
     return result;
   };
+  const usableEarly = (entry: AccountSnapshot | null): entry is AccountSnapshot => {
+    assertOwner(state);
+    return !!entry && state.cache.get(key)?.auth === entry.auth
+      && (id !== 'default' || defaultAccountBound(provider))
+      && selectionMayUseSnapshot(entry, quota, Date.now());
+  };
   const pending = state.flights.get(key);
   if (pending) {
-    if (pending.early && quota !== 'read' && !forceUsage) {
+    if (pending.early && quota !== 'read' && !force && !forceUsage) {
       const early = await pending.early;
-      if (early && selectionMayUseSnapshot(early, quota, Date.now())) return early;
+      if (usableEarly(early)) return early;
     }
     if (!forceUsage || pending.forceUsage) return readCurrent(pending.promise);
     // A normal read may reuse its cached quota. A manual refresh waits for it,
     // then starts one fresh read shared by any other concurrent refreshes.
     await pending.promise;
-    return snapshot(state, provider, id, force, forceUsage);
+    return snapshot(state, provider, id, force, forceUsage, quota);
   }
   const directory = directoryFor(provider, id);
   const defaultCodexAuthEpoch = state.defaultCodexAuthEpoch;
@@ -787,10 +796,9 @@ async function snapshot(
           current?.usageAt !== undefined &&
           Date.now() - current.usageAt < SUBSCRIPTION_USAGE_TTL_MS;
         // The login is settled; only the Codex quota read remains. Let account selection start on
-        // the login now (CodexSelectionQuota) while this read continues and installs its final
-        // snapshot as before. The plan must already come from the login, so the final snapshot
-        // keeps this exact auth object and model discovery keyed on it stays current.
-        if (early && auth.authenticated && auth.plan !== undefined && !reuseUsage
+        // the login now while this read continues. A legacy login has no plan metadata until
+        // quota arrives. Keep its auth object stable for the model read started with this login.
+        if (early && auth.authenticated && !reuseUsage
           && !(id === 'default' && state.defaultCodexAuthEpoch !== defaultCodexAuthEpoch)) {
           assertOwner(state);
           const known = sameAccount(current) ? current : undefined;
@@ -821,6 +829,12 @@ async function snapshot(
               })
           : undefined;
         const latest = state.cache.get(key);
+        // Startup can invalidate this login while quota is in flight. A late quota reply
+        // cannot restore that login, and must not leave quota readers on an unfinished entry.
+        if (earlySnapshot && latest?.auth !== earlySnapshot.auth) {
+          assertOwner(state);
+          return latest ?? { auth: { authenticated: false }, at: 0 };
+        }
         const eventDuringRead = auth.authenticated && sameAccount(latest)
           && latest?.usage !== current?.usage;
         // A successful read owns the full snapshot; overlay only concurrent
@@ -853,12 +867,17 @@ async function snapshot(
             }) };
           }
         }
+        const plan = auth.plan ?? usage?.codexPlan
+          ?? (earlySnapshot && eventDuringRead ? latest?.usage?.codexPlan : undefined);
+        const planType = auth.planType ?? plan;
+        if (earlySnapshot) {
+          earlySnapshot.auth.plan = plan;
+          earlySnapshot.auth.planType = planType;
+        }
         result = {
           ...(accountKey ? { accountKey } : {}),
-          // Same content as computed below (the login supplied the plan); see the early snapshot.
-          auth: earlySnapshot?.auth ?? { ...auth, plan: auth.plan ?? usage?.codexPlan,
-            ...(provider === 'openai' ? { planType: auth.planType ?? auth.plan ?? usage?.codexPlan } : {}) },
-          usage: provider === 'openai' && usage ? { ...usage, codexPlan: auth.planType ?? auth.plan ?? usage.codexPlan } : usage,
+          auth: earlySnapshot?.auth ?? { ...auth, plan, ...(provider === 'openai' ? { planType } : {}) },
+          usage: provider === 'openai' && usage ? { ...usage, codexPlan: planType } : usage,
           at: Date.now(),
           usageAt: reuseUsage || !readSucceeded ? current?.usageAt
             : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
@@ -932,7 +951,7 @@ async function snapshot(
     .catch(() => {});
   if (early && quota !== 'read') {
     const value = await early.promise;
-    if (value && selectionMayUseSnapshot(value, quota, Date.now())) return value;
+    if (usableEarly(value)) return value;
   }
   return readCurrent(flight);
 }
@@ -2480,7 +2499,9 @@ export async function acquireSubscriptionAccount(
       assertCurrent,
       readState: async () => {
         assertCurrent();
-        const result = await snapshot(state, provider, selected);
+        // The native host checks the login after acquiring this lease. Quota is only
+        // needed by account ranking and quota views, not by Codex authentication.
+        const result = await snapshot(state, provider, selected, false, false, 'known');
         assertCurrent();
         // Preserve read failure evidence for request-time auth checks. A failed
         // CLI read is not proof of logout and must not cool this account as auth.
@@ -2497,6 +2518,7 @@ export async function acquireSubscriptionAccount(
             ...cached,
             auth: { ...cached.auth, authenticated: false, errorReason: reason },
             at: Date.now(),
+            quotaPending: undefined,
           });
         changed(provider);
       },

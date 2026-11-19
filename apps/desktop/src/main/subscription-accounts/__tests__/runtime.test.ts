@@ -4856,9 +4856,14 @@ describe('native account assignment on the executing computer', () => {
       h.usage.mockImplementation(async (_kind: string, directory: string) => { await gate; return quotaFor(directory, fresh); });
       return release;
     };
-    const startAgent = (kind: 'codex' | 'claude-code') => {
-      const start = vi.fn(async (_options: StartSessionOptions) => ({ id: 'task-native', close: async () => {} }) as unknown as AgentSessionHandle);
-      return { start, agent: withSubscriptionAccounts({ kind, startSession: start } as unknown as BaseAgent) };
+    const startAgent = (kind: 'codex' | 'claude-code', checkAuth = false) => {
+      const spawned = vi.fn();
+      const start = vi.fn(async (options: StartSessionOptions) => {
+        if (checkAuth) expect(await options[NATIVE_SUBSCRIPTION_ACCOUNT]?.readState()).toMatchObject({ authenticated: true });
+        spawned();
+        return { id: 'task-native', close: async () => {} } as unknown as AgentSessionHandle;
+      });
+      return { start, spawned, agent: withSubscriptionAccounts({ kind, startSession: start } as unknown as BaseAgent) };
     };
     const shownQuota = async (provider: SubscriptionProvider, accountId: string) => {
       const usage = (await readSubscriptionPool(provider)).accounts.find((entry) => entry.id === accountId)?.usage;
@@ -4932,31 +4937,90 @@ describe('native account assignment on the executing computer', () => {
       } finally { clock.mockRestore(); }
     });
 
-    // Same decision: a new task's model check is keyed on the login it started with. The quota read
-    // finishing first must keep that login current, otherwise the account's first model list is
-    // discarded and a healthy single account fails with "No subscription account is available".
-    it('keeps a new task startable when its quota read finishes during model discovery', async () => {
+    // The host checks auth again before spawning. Hold quota and release it on either side of
+    // model discovery: the native start must proceed, and its login must survive quota enrichment
+    // even for a legacy default login without a plan (review threads #11479, unit).
+    it.each([
+      { legacy: false, finishQuotaFirst: true },
+      { legacy: false, finishQuotaFirst: false },
+      { legacy: true, finishQuotaFirst: true },
+      { legacy: true, finishQuotaFirst: false },
+    ])('starts with legacy=$legacy and quota finishing before models=$finishQuotaFirst', async ({ legacy, finishQuotaFirst }) => {
       const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      let releaseQuota: (() => void) | undefined;
+      let listModels: (() => void) | undefined;
+      let starting: Promise<AgentSessionHandle> | undefined;
+      let existing: Awaited<ReturnType<typeof acquireSubscriptionAccount>> = null;
       try {
-        h.pools.openai = { strategy: 'least', accounts: [account('default')] };
-        const release = await holdNextQuotaRead('openai', 4 * 60_000, 50);
-        let listModels!: () => void;
+        h.pools.openai = { strategy: 'least', accounts: [{ ...account('default'), limit: 2 }], legacyCodexDefault: legacy };
+        if (legacy && finishQuotaFirst) existing = await acquireSubscriptionAccount('openai', undefined, []);
+        releaseQuota = await holdNextQuotaRead('openai', 4 * 60_000, 50);
+        const originalUsage = h.usage.getMockImplementation()!;
+        h.usage.mockImplementation(async (kind: string, directory: string) => ({
+          ...await originalUsage(kind, directory), codexPlan: 'pro',
+        }));
         const listed = new Promise<void>((resolve) => { listModels = resolve; });
         h.rpc.mockImplementation(async (_directory: string, method: string) => {
           if (method !== 'model/list') return undefined;
           await listed;
           return { data: [{ id: 'gpt-6' }], nextCursor: null };
         });
-        const { start, agent } = startAgent('codex');
-        const starting = agent.startSession({ providerId: 'openai', sessionId: 'task', model: 'gpt-6' } as StartSessionOptions);
+        const { start, spawned, agent } = startAgent('codex', true);
+        starting = agent.startSession({ providerId: 'openai', sessionId: 'task', model: 'gpt-6' } as StartSessionOptions);
+        void starting.catch(() => {});
         await vi.waitFor(() => expect(h.rpc.mock.calls.some((call) => call[1] === 'model/list')).toBe(true));
-        release();
-        expect(await shownQuota('openai', 'default')).toBe(50);
-        listModels();
-        const handle = await starting;
-        expect(start.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/default');
-        await handle.close();
-      } finally { clock.mockRestore(); }
+        if (finishQuotaFirst) {
+          // A running task can publish its plan and quota while a new task is discovering models.
+          if (legacy) {
+            expect(existing).not.toBeNull();
+            observeSubscriptionAccountUsage(existing!.account, {
+              limitId: 'codex-other', planType: 'pro',
+              secondary: { usedPercent: 65, windowMinutes: 10_080, resetsAt: now / 1000 + 3600 },
+            });
+          }
+          releaseQuota();
+          expect(await shownQuota('openai', 'default')).toBe(50);
+        }
+        listModels!();
+        await vi.waitFor(() => expect(spawned).toHaveBeenCalledOnce());
+        await starting;
+        expect(start.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir)
+          .toBe(legacy ? '/existing-cindy/codex-home' : 'openai/default');
+        releaseQuota();
+        const view = await readSubscriptionPool('openai');
+        expect(view.accounts[0].plan).toBe(legacy ? 'pro' : 'plus');
+        expect(view.accounts[0].usage?.codex?.buckets.codex.primary?.usedPercent).toBe(50);
+        if (legacy && finishQuotaFirst)
+          expect(view.accounts[0].usage?.codex?.buckets['codex-other']?.secondary?.usedPercent).toBe(65);
+      } finally {
+        releaseQuota?.();
+        listModels?.();
+        await starting?.then((handle) => handle.close(), () => {});
+        existing?.release();
+        clock.mockRestore();
+      }
+    });
+
+    // An auth rejection can now race the pending quota request. A late successful quota
+    // must never make the rejected login usable again (account pool login admission, unit).
+    it('keeps a rejected Codex login unavailable after its pending quota read completes', async () => {
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      let releaseQuota: (() => void) | undefined;
+      try {
+        h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+        releaseQuota = await holdNextQuotaRead('openai', 4 * 60_000, 50);
+        const lease = await acquireSubscriptionAccount('openai', 'gpt-6', []);
+        expect(lease).not.toBeNull();
+        const viewing = readSubscriptionPool('openai');
+        lease!.account.invalidateAuth?.('invalid_grant', 'test-token');
+        releaseQuota();
+        expect((await viewing).accounts[0].status).toBe('signed-out');
+        await expect(lease!.account.readState()).resolves.toMatchObject({ authenticated: false });
+        lease!.release();
+      } finally {
+        releaseQuota?.();
+        clock.mockRestore();
+      }
     });
   });
   it('reserves login before asynchronous writes, and an early cancellation never launches the CLI', async () => {
