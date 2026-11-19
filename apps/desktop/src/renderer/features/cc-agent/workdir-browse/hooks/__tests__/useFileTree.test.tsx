@@ -524,6 +524,64 @@ describe('useFileTree refresh scheduling', () => {
     } finally { view.unmount(); }
   });
 
+  // #11392, unit: a watch event supersedes the new file's first read while the
+  // previous video's replacement is still downloading, including on a return visit.
+  it('reads the selected file independently of a previous video transfer', async () => {
+    const workdir = '/remote-file-handoff';
+    const video = 'clip.mp4';
+    const note = 'notes.md';
+    const copy = (revision: number) => ({ ok: true, cachePath: `/cache/clip-${revision}.mp4` });
+    const noteResult = (content: string) => ({
+      ok: true, data: { relPath: note, content, size: content.length, mtimeMs: 1, truncated: false },
+    });
+    const previousTransfer = deferred<ReturnType<typeof copy>>();
+    const firstNoteRead = deferred<ReturnType<typeof noteResult>>();
+    const readNote = vi.fn().mockReturnValueOnce(firstNoteRead.promise).mockResolvedValue(noteResult('latest note'));
+    let videoRevision = 1;
+    const fetchRemote = vi.fn(({ mtimeMs }: { mtimeMs: number }) =>
+      mtimeMs === 2 ? previousTransfer.promise : Promise.resolve(copy(mtimeMs)));
+    vi.stubGlobal('electronAPI', { fileBrowser: { fetchRemote, onTransferProgress: () => () => {}, cachePut: vi.fn() } });
+    mocks.readFile.mockImplementation(({ relPath }) => relPath === video ? { ok: false, code: 'BINARY_FILE' } : readNote());
+    mocks.fileBrowserApiFor.mockReturnValue({
+      readFile: mocks.readFile,
+      stat: async () => ({ relPath: video, type: 'file', size: 4096, mtimeMs: videoRevision }),
+    });
+    const notify = (relPath: string) => {
+      for (const cb of mocks.eventCallbacks) cb({ workdir, relPath, type: 'change' });
+    };
+    const view = renderHook(({ file }) => useFileContent(workdir, file, 'ssh'), { initialProps: { file: video } });
+    try {
+      await waitFor(() => expect(view.result.current.content).toMatchObject({ cachePath: copy(1).cachePath }));
+      videoRevision = 2;
+      await act(async () => { notify(video); });
+      expect(view.result.current.content).toMatchObject({ cachePath: copy(1).cachePath, progress: { kind: 'fetching' } });
+      await act(async () => { notify(video); });
+
+      view.rerender({ file: note });
+      expect(readNote).toHaveBeenCalledTimes(1);
+      await act(async () => { notify(note); notify(note); });
+      expect(view.result.current.content).toMatchObject({ kind: 'text', relPath: note, content: 'latest note' });
+      expect(readNote).toHaveBeenCalledTimes(2);
+      await act(async () => { firstNoteRead.resolve(noteResult('obsolete note')); });
+      expect(view.result.current.content).toMatchObject({ content: 'latest note' });
+
+      videoRevision = 3;
+      view.rerender({ file: video });
+      await waitFor(() => expect(view.result.current.content).toMatchObject({ cachePath: copy(3).cachePath }));
+      videoRevision = 4;
+      await act(async () => { notify(video); });
+      expect(view.result.current.content).toMatchObject({ cachePath: copy(4).cachePath });
+      const reads = mocks.readFile.mock.calls.length;
+      await act(async () => { previousTransfer.resolve(copy(2)); });
+      expect(view.result.current.content).toMatchObject({ cachePath: copy(4).cachePath });
+      expect(mocks.readFile).toHaveBeenCalledTimes(reads);
+      expect(mocks.onFileTreeEventFor).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
   // #10882 review follow-up: superseding an initial binary/error read used to
   // discard both results without reaching the normal stat/error terminal state.
   it.each(['BINARY_FILE', 'READ_FAILED'])('finishes initial %s loading after a directory event', async (code) => {

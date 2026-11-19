@@ -38,6 +38,12 @@ interface FileStat {
   mtimeMs: number;
 }
 
+interface FileReadQueue {
+  readonly relPath: string;
+  running: boolean;
+  pending: boolean;
+}
+
 type PreviewTransfer = {
   kind: 'fetching';
   requestId: string;
@@ -160,15 +166,21 @@ export function useFileContent(
   visibleRef.current = visible;
   const lastReadScope = useRef<string | null>(null);
   const silentRead = useRef<(() => void) | null>(null);
+  const readQueue = useRef<FileReadQueue | null>(null);
   const preserveViewOnRead = useRef(false);
   const transferObserver = useRef<ReturnType<typeof observeFileTransferProgress> | null>(null);
   const [transfer, setTransfer] = useState<{
     scope: string; relPath: string; progress: PreviewTransfer;
   } | null>(null);
 
-  useEffect(() => () => {
-    transferObserver.current?.dispose();
-    transferObserver.current = null;
+  useEffect(() => {
+    // A return visit to the same path can overlap a download from the previous visit.
+    readQueue.current = visible && relPath ? { relPath, running: false, pending: false } : null;
+    return () => {
+      readQueue.current = null;
+      transferObserver.current?.dispose();
+      transferObserver.current = null;
+    };
   }, [contentCacheScope, relPath, visible, refreshTick]);
 
   const fetchRemotePreview = useCallback(async (
@@ -398,21 +410,6 @@ export function useFileContent(
     };
   }, [workdir, relPath, remoteHostId, deviceId, contentCacheScope, refreshTick, visible, fetchRemotePreview]);
 
-  // listener 拿当前 relPath 的最新值, 但不进 effect deps —— 不能因为切文件就
-  // 重新订阅 chokidar(那会丢掉订阅期间的事件)。
-  const relPathRef = useRef(relPath);
-  useEffect(() => {
-    relPathRef.current = relPath;
-  }, [relPath]);
-
-  // 静默重读的端点保鲜:同 workdir+relPath 跨端点切换时,in-flight 重读的
-  // 续体仅靠 relPathRef 判不出"端点已变",旧端点的字节会被写进新端点的
-  // 视图与缓存桶(后续保存 = 覆写错机器)。
-  const contentCacheScopeRef = useRef(contentCacheScope);
-  useEffect(() => {
-    contentCacheScopeRef.current = contentCacheScope;
-  }, [contentCacheScope]);
-
   // chokidar push events → cache evict + 当前文件静默重读。
   //   - 任何文件被改 / 被删 都要 invalidate 该 entry, 否则下次切回时仍然看到
   //     stale 内容 (跟 useFileTree 同样的设计教训, listener 全程一根)。
@@ -428,19 +425,16 @@ export function useFileContent(
     // device-link 走 onRemotePush 过滤 —— transport 统一,按 workdir 过滤后
     // 逻辑与本地完全一致。
     let disposed = false;
-    let running = false;
-    let pending = false;
-    const reread = async () => {
-      if (running || disposed) return;
-      running = true;
+    const reread = async (queue: FileReadQueue) => {
+      if (queue.running) return;
+      const isCurrent = () => !disposed && visibleRef.current && readQueue.current === queue;
+      const targetRelPath = queue.relPath;
+      queue.running = true;
       try {
-        while (pending && !disposed && visibleRef.current) {
-          pending = false;
-          const targetRelPath = relPathRef.current;
-          if (!targetRelPath) break;
+        while (queue.pending && isCurrent()) {
+          queue.pending = false;
           const epoch = readEpoch.current;
-          const stale = () => disposed || !visibleRef.current || epoch !== readEpoch.current
-            || relPathRef.current !== targetRelPath || contentCacheScopeRef.current !== contentCacheScope;
+          const stale = () => epoch !== readEpoch.current || !isCurrent();
           try {
             const api = fileBrowserApiFor(deviceId);
             const request = { workdir, relPath: targetRelPath, remoteHostId };
@@ -479,21 +473,23 @@ export function useFileContent(
             }
           } catch (err) {
             log.warn('silent re-read on change failed', err);
-            if (!disposed && epoch === readEpoch.current && stateRef.current.content.kind === 'loading') {
+            if (!stale() && stateRef.current.content.kind === 'loading') {
               setRefreshTick(t => t + 1);
             }
           }
         }
       } finally {
-        running = false;
+        queue.running = false;
       }
     };
     const scheduleRead = () => {
-      if (!visibleRef.current) return;
+      const queue = readQueue.current;
+      if (!queue || !visibleRef.current || disposed) return;
       setAwaitingVerification(true);
       readEpoch.current++;
-      pending = true;
-      queueMicrotask(() => { void reread(); });
+      if (queue.pending) return;
+      queue.pending = true;
+      queueMicrotask(() => { void reread(queue); });
     };
     silentRead.current = scheduleRead;
     const changed = (event: { workdir: string; relPath: string }) => {
@@ -503,7 +499,7 @@ export function useFileContent(
         if (changedPath === '') invalidateWorkdirCache(contentCacheScope);
         else invalidateCachedFile(contentCacheScope, changedPath);
       }
-      const current = relPathRef.current;
+      const current = readQueue.current?.relPath;
       if (current && [...changedPaths].some(p => p === '' || current === p || current.startsWith(`${p}/`))) {
         // Invalidate in-flight reads synchronously; an A response must not
         // repopulate the cache after the directory has changed to B.
