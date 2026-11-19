@@ -88,7 +88,10 @@ describe('screenshot rendering recovery', () => {
     expect(screen.getByText('250 × 200')).toBeTruthy();
     // Space during a pending native hit must select the window beneath the click-through front.
     fireEvent.keyDown(window, { key: ' ' });
+    // Moving over a different window before the queued query starts must preserve the keypress target.
+    fireEvent.pointerMove(root, { clientX: 451, clientY: 351 });
     await act(async () => replies[5]({ window: outer, rects: [] }));
+    expect(bridge.elementsAt).toHaveBeenLastCalledWith('one', outer.id, 200, 150);
     expect(screen.getByText('250 × 200')).toBeTruthy(); // stale opaque hit
     await act(async () => replies[6]({ window: corrected, rects: [] }));
     fireEvent.pointerMove(root, { clientX: 450, clientY: 350 });

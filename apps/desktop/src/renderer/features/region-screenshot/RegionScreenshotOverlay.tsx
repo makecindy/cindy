@@ -696,6 +696,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     const s = state.current;
     if (!s.session || busyRef.current) return;
     if (event.button !== 0) return;
+    elementsRef.current.selectAfterHit = undefined;
     const point = localPoint(event);
     if (s.aiMenuOpen) {
       setAiMenuOpen(false);
@@ -759,7 +760,8 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     state.current.pointer = point;
     const current = s.drag;
     if (!current) {
-      if (!s.selection) {
+      // Keep the keypress point in the native query queue until its result arrives.
+      if (!s.selection && !elementsRef.current.selectAfterHit) {
         refreshHover(point);
         requestElements(point);
       }
@@ -973,6 +975,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
           const screenRect = { x: 0, y: 0, ...s.session.viewport };
           const point = s.pointer;
           const tracker = elementsRef.current;
+          if (tracker.selectAfterHit) return;
           const cache = tracker.cache;
           if (!point || !topWindowAt(s.session.windows, point)) {
             selectRegion(screenRect);
@@ -984,7 +987,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
               if (queried.x !== point.x || queried.y !== point.y) return;
               tracker.selectAfterHit = undefined;
               const latest = state.current;
-              if (latest.pointer === point && !latest.drag && !latest.selection) {
+              if (!latest.drag && !latest.selection) {
                 selectRegion(hit?.window?.rect ?? screenRect);
               }
             };
