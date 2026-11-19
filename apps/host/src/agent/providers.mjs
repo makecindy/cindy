@@ -86,6 +86,12 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
           // A round that ends after the credentials were held proves nothing for them: it is dropped,
           // and the round after ok replaces it.
           if (credentialHold) return;
+          if (isProfileHeld?.()) {
+            // The request crossed into a desktop hold. Keep the last list for reads but make the
+            // next read after release fetch again, even if this was a forced refresh of a fresh list.
+            if (cached) cached = { ...cached, at: -Infinity };
+            return;
+          }
           cached = { at: Date.now(), models };
           applyPricedModels?.(models, owner.dataOwnerId ?? undefined);
         }).finally(() => { if (flight === pending) flight = null; });

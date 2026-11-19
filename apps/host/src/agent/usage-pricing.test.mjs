@@ -93,7 +93,7 @@ function setup(t, ownerId) {
   const rounds = [];
   const fed = [];
   let generation = 1;
-  const catalog = (usagePricing) => createProviderCatalog({
+  const catalog = (usagePricing, isProfileHeld) => createProviderCatalog({
     readProviders: async () => [],
     applyModels: () => {},
     readModels: () => [],
@@ -101,6 +101,7 @@ function setup(t, ownerId) {
     readOwner: () => ({ dataOwnerId: ownerId, generation, pending: false }),
     applyPricedModels: (models, owner) => { fed.push(models.length); usagePricing.replaceGatewayModelPricing(models, owner); },
     trackModelsSync: sync => usagePricing.trackGatewayModelPricingSync(sync),
+    isProfileHeld,
   });
   const list = (listProviders, force = false) =>
     listProviders({ gateway: { endpoint: 'https://gateway.example.test', credential: 'key-a' }, ownerId, force });
@@ -132,6 +133,41 @@ test('a successful /models round feeds the Host prices; reads between rounds and
   assert.deepEqual(await usagePricing.getGatewayModelPricing(), first);
   assert.equal(fs.readFileSync(env.cacheFile, 'utf8'), written);
   assert.equal(fs.statSync(env.cacheFile).mtimeMs, writtenAt);
+});
+
+// Rule: a providers read cannot write shared pricing while the desktop holds the profile.
+// Gap: the existing admission check ran before fetching, so a response could arrive during the hold.
+// Minimal input: a forced round crosses into a hold while the previous price is still fresh.
+// Tier: unit through the Host provider catalog and pricing writer with a temporary profile.
+test('a model response that arrives during a desktop hold leaves the pricing files unchanged', async t => {
+  const env = setup(t, 'pricing-owner-held');
+  const usagePricing = env.pricing();
+  let held = false;
+  const listProviders = env.catalog(usagePricing, () => held);
+  const readFiles = () => [env.cacheFile, path.join(env.profile, 'cache', 'ledger-currency.json')]
+    .map(file => fs.readFileSync(file));
+  env.rounds.push(PRICED);
+  await env.list(listProviders);
+  await env.settle();
+  const before = readFiles();
+
+  let reply;
+  env.rounds.push(new Promise(resolve => { reply = resolve; }));
+  const refreshing = env.list(listProviders, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(env.rounds.length, 0, 'the refresh has started');
+  held = true;
+  reply([{ ...PRICED[0], currency: 'CNY', inputCostPerToken: 0.000009 }]);
+  await refreshing;
+  await env.settle();
+  assert.deepEqual(env.fed, [1], 'the round never reaches the pricing writer');
+  assert.deepEqual(readFiles(), before);
+
+  held = false;
+  env.rounds.push([{ ...PRICED[0], inputCostPerToken: 0.000006 }]);
+  await env.list(listProviders);
+  assert.deepEqual(env.fed, [1, 1], 'the next ordinary read refreshes');
+  assert.equal((await usagePricing.getGatewayModelPricing())?.xd?.['claude-sonnet-4']?.inputPerMtok, 6);
 });
 
 test('a fresh Host process restores the price snapshot from its profile before any round', async t => {
