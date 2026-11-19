@@ -69,3 +69,58 @@ it('reloads the edited local page and closes only its focused file tab', async (
   act(() => command({ command: 'close-tab' }));
   expect(closeTab).toHaveBeenCalledExactlyOnceWith('session', 'files');
 });
+
+// #11392, unit: the host intercepts these keys even for the inline webview.
+it('sends reload and available history navigation only to the focused preview', () => {
+  const onCommand = vi.fn<typeof window.electronAPI.onRsbBrowserCommand>(() => () => {});
+  vi.stubGlobal('electronAPI', { onRsbBrowserCommand: onCommand });
+  const view = render(<InlineHtmlPreview {...tab} workdir="/docs" relPath="index.html" deviceId={null} />);
+  const guest = view.container.querySelector<HTMLElement>('webview')!;
+  const history = {
+    reload: vi.fn(), canGoBack: vi.fn(() => true), goBack: vi.fn(),
+    canGoForward: vi.fn(() => false), goForward: vi.fn(),
+  };
+  Object.assign(guest, history);
+  fireEvent(guest, new Event('dom-ready'));
+  fireEvent(guest, new Event('did-finish-load'));
+  const command = onCommand.mock.lastCall![0];
+  act(() => command({ command: 'reload' }));
+  expect(history.reload).not.toHaveBeenCalled();
+  guest.tabIndex = 0;
+  guest.focus();
+  act(() => command({ command: 'reload' }));
+  act(() => command({ command: 'go-back' }));
+  act(() => command({ command: 'go-forward' }));
+  expect(history.reload).toHaveBeenCalledTimes(1);
+  expect(history.goBack).toHaveBeenCalledTimes(1);
+  expect(history.goForward).not.toHaveBeenCalled();
+  history.canGoForward.mockReturnValue(true);
+  act(() => command({ command: 'go-forward' }));
+  expect(history.goForward).toHaveBeenCalledTimes(1);
+});
+
+// #11392, unit: a hidden inline preview used to keep playing into another tab.
+it('mutes the same page while hidden and restores its previous audio state', () => {
+  const visibility = vi.fn<typeof window.electronAPI.onWindowHiddenChange>(() => () => {});
+  vi.stubGlobal('electronAPI', { onRsbBrowserCommand: () => () => {}, onWindowHiddenChange: visibility });
+  const preview = { ...tab, workdir: '/docs', relPath: 'index.html', deviceId: null };
+  const view = render(<InlineHtmlPreview {...preview} />);
+  const guest = view.container.querySelector<HTMLElement>('webview')!;
+  let muted = false;
+  Object.assign(guest, { isAudioMuted: () => muted, setAudioMuted: (value: boolean) => { muted = value; } });
+  fireEvent(guest, new Event('dom-ready'));
+  view.rerender(<InlineHtmlPreview {...preview} active={false} />);
+  expect(muted).toBe(true);
+  view.rerender(<InlineHtmlPreview {...preview} />);
+  expect(muted).toBe(false);
+  const windowHidden = visibility.mock.lastCall![0];
+  act(() => windowHidden(true));
+  expect(muted).toBe(true);
+  act(() => windowHidden(false));
+  expect(muted).toBe(false);
+  muted = true;
+  act(() => windowHidden(true));
+  act(() => windowHidden(false));
+  expect(muted).toBe(true);
+  expect(view.container.querySelector('webview')).toBe(guest);
+});

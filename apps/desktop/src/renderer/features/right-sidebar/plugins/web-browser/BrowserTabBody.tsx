@@ -360,27 +360,24 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     };
   }, [tabVisible, tabId]);
 
-  // webview guest 内 Cmd/Ctrl+L:main 推送过来,只有 active tab 响应。
+  // Several tab groups may be visible. An embedded guest's shortcut belongs
+  // to its focused group; native popup surfaces use the active browser tab.
   useEffect(() => {
     if (!active) return;
-    const off = window.electronAPI.onRsbBrowserFocusUrlBar(() => {
-      chromeRef.current?.focusUrlBar();
+    const ownsFocus = () => {
+      const focused = document.activeElement;
+      return focused?.tagName !== 'WEBVIEW' || rootRef.current?.contains(focused);
+    };
+    const offFocus = window.electronAPI.onRsbBrowserFocusUrlBar(() => {
+      if (ownsFocus()) chromeRef.current?.focusUrlBar();
     });
-    return off;
-  }, [active]);
-
-  useEffect(() => {
-    if (!active) return;
-    const off = window.electronAPI.onRsbBrowserCommand(({ command }) => {
+    const offCommand = window.electronAPI.onRsbBrowserCommand(({ command }) => {
+      if (!ownsFocus()) return;
       if (command === 'go-back') {
         if (canGoBackRef.current) goBackRef.current();
       } else if (command === 'go-forward') {
         if (canGoForwardRef.current) goForwardRef.current();
       } else if (command === 'close-tab') {
-        // Several visible tab groups can receive the same host command. The
-        // focused guest may belong to an inline file preview in another group.
-        const focused = document.activeElement;
-        if (focused?.tagName === 'WEBVIEW' && !rootRef.current?.contains(focused)) return;
         // guest 内 ⌘W / Ctrl+W:关掉本 tab,与焦点在 host 侧右侧栏内按 ⌘W 的
         // 行为对齐(store.closeTab 同路径；确认关闭后由 store 释放 pool entry)。
         void closeTab(sessionId, tabId).catch((err) => {
@@ -390,7 +387,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         reloadRef.current();
       }
     });
-    return off;
+    return () => { offFocus(); offCommand(); };
   }, [active, sessionId, tabId]);
 
   // 截图:main 端对当前 tab 的 webview capturePage → 系统剪贴板。

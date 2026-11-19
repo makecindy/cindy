@@ -221,10 +221,10 @@ describe('BrowserTabBody navigation', () => {
     expect(browserNavigate).not.toHaveBeenCalled();
   });
 
-  // #11392: two groups can each have an active tab. The inline HTML guest's
-  // forwarded close command must never also close the adjacent browser tab.
-  it('leaves the browser tab open when a different guest has keyboard focus', () => {
-    browserState = makeBrowserState();
+  // #11392: two groups can each have an active tab, but only the focused guest
+  // may receive the host's browser shortcuts.
+  it('ignores browser shortcuts when a different guest has keyboard focus', () => {
+    browserState = makeBrowserState({ canGoBack: true, canGoForward: true });
     const close = vi.spyOn(sidebarTabs, 'closeTab').mockResolvedValue(undefined);
     const other = document.createElement('webview') as HTMLElement;
     try {
@@ -233,8 +233,16 @@ describe('BrowserTabBody navigation', () => {
       other.tabIndex = 0;
       document.body.appendChild(other);
       other.focus();
+      act(() => vi.mocked(window.electronAPI.onRsbBrowserFocusUrlBar).mock.lastCall![0]());
+      expect(document.activeElement).toBe(other);
       act(() => command({ command: 'close-tab' }));
+      act(() => command({ command: 'reload' }));
+      act(() => command({ command: 'go-back' }));
+      act(() => command({ command: 'go-forward' }));
       expect(close).not.toHaveBeenCalled();
+      expect(browserState.reload).not.toHaveBeenCalled();
+      expect(browserState.goBack).not.toHaveBeenCalled();
+      expect(browserState.goForward).not.toHaveBeenCalled();
       other.blur();
       act(() => command({ command: 'close-tab' }));
       expect(close).toHaveBeenCalledWith('session-a', 'tab-browser');
