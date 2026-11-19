@@ -3442,7 +3442,7 @@
         "end": "위 내용은 {{source}}에서 가져온 기록입니다",
         "endHandoff": "위 내용은 {{source}}에서 가져온 기록입니다. 여기부터 {{harness}}(으)로 이어서 작업합니다."
       },
-      "projectMenu": "이 프로젝트의 다른 도구 세션 가져오기…"
+      "projectMenu": "작업 가져오기…"
     },
     "connections": {
       "codex": {
@@ -4074,6 +4074,7 @@
         "refreshSpeechAdded": "모델을 업데이트하고 추천 음성 모델 1개를 추가했습니다",
         "refreshNoNew": "모델 목록이 최신 상태입니다. 새 항목이 없습니다",
         "refreshFailed": "모델 목록을 새로고침하지 못했습니다. 잠시 후 다시 시도해 주세요",
+        "refreshReconnect": "모델 목록을 새로고침하지 못했습니다. 이 제공자에 다시 연결한 후 다시 시도하세요.",
         "refreshFetchDisabled": "모델 카탈로그 원격 가져오기가 비활성화되어 새로고침을 건너뛰었습니다",
         "disableModel": "이 모델 비활성화",
         "paymentRequired": "유료",
@@ -14942,7 +14943,7 @@
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘다시 시도’를 눌러 주세요.",
       "accountBoundaryPending": "Cindy가 계정 상태를 전환하는 중이라 아직 이 작업을 시작할 수 없습니다. 잠시 후 ‘다시 시도’를 눌러 주세요. 계속 표시되면 Cindy를 다시 시작해 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 세션은 계속할 수 없습니다. 새 세션을 시작하세요.",
-      "codexSharedAuthLinkUnavailable": "이 컴퓨터에서 Codex에 로그인되어 있지만 이 세션은 해당 로그인을 사용할 수 없습니다. 그 로그인으로 가는 링크를 만들 수 없기 때문입니다(Windows 표준 계정에서는 보통 만들 수 없습니다). 이 컴퓨터의 {{appName}}이 링크를 만들 수 있는 권한이 있는지 확인해 주세요(Windows에서는 관리자 권한으로 한 번 실행하거나 개발자 모드를 켜면 됩니다). 이후 ‘다시 시도’를 눌러 주세요.",
+      "codexSharedAuthLinkUnavailable": "이 컴퓨터에서 Codex에 로그인되어 있지만 이 세션은 해당 로그인을 사용할 수 없습니다. 그 로그인으로 가는 링크를 만들 수 없기 때문입니다(Windows 표준 계정에서는 보통 만들 수 없습니다). 이 컴퓨터의 {{appName}}이 링크를 만들 수 있는 권한이 있는지 확인해 주세요(Windows에서는 관리자 권한으로 한 번 실행하거나 개발자 모드를 켜면 됩니다). 이후 ‘다시 시도’를 눌러 주세요. ‘ChatGPT 다시 로그인’을 눌러 Cindy가 이 세션을 위해 자체 로그인을 사용하도록 할 수도 있습니다.",
       "codexResumeNotReady": "Codex에서 현재 이 작업을 재개할 수 없습니다. 잠시 후 다시 시도해 주세요.",
       "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",
       "claudeSubscriptionOpusPlanMismatch": "현재 연결된 Claude Pro 요금제에서는 Opus를 사용할 수 없습니다. 요금제에 포함된 모델로 전환하세요. 최근 요금제를 업그레이드했다면 설정에서 Anthropic을 다시 연결한 후 재시도하세요.",
@@ -16456,6 +16457,7 @@
         "empty": "이 자동화에는 보관할 세션이 없습니다"
       },
       "archiveAll": {
+        "projectTitle": "‘{{name}}’의 모든 작업을 보관할까요?",
         "title": "모든 세션 보관",
         "confirm": "모두 보관",
         "cancel": "취소",
@@ -16600,18 +16602,28 @@
         }
       },
       "projectAction": {
+        "menu": "{{name}} 프로젝트 메뉴",
+        "previewFailed": "이 프로젝트의 작업을 불러오지 못했습니다. 다시 시도하세요.",
+        "remotePreviewFailed": "원격 프로젝트의 작업을 읽을 수 없습니다. 연결 상태와 원격 컴퓨터의 Cindy 버전을 확인하세요.",
         "rename": "프로젝트 이름 변경",
         "pin": "프로젝트 고정",
         "unpin": "프로젝트 고정 해제",
-        "removeFromSidebar": "사이드바에서 프로젝트 제거",
-        "removeFromSidebarConfirmTitle": "“{{name}}” 프로젝트를 제거할까요?",
-        "removeFromSidebarConfirmDescription": "이 프로젝트는 사이드바에서만 제거됩니다. 컴퓨터에 있는 파일은 삭제되지 않습니다. 기존 세션은 ‘대화’ 섹션으로 이동하며 계속 사용할 수 있습니다.",
+        "removeFromSidebar": "Cindy에서 프로젝트 제거…",
+        "removeFromSidebarConfirmTitle": "Cindy에서 {{name}} 프로젝트를 제거할까요?",
+        "removeFromSidebarConfirmDescription": "보관되지 않은 작업 {{count}}개는 대화에서 계속 사용할 수 있습니다.",
         "removeFromSidebarConfirmAction": "프로젝트 제거",
-        "removeFromSidebarFailed": "사이드바에서 프로젝트를 제거하지 못했습니다. 다시 시도해 주세요.",
-        "showFiles": "파일 보기",
-        "archivedAll": "모두 보관",
-        "unarchiveAll": "모두 보관 해제",
-        "openInExplorer": "파일 관리자에서 열기",
+        "removeFromSidebarFailed": "프로젝트를 제거할 수 없습니다.",
+        "archiveOnRemove": "작업도 보관({{count}}개)",
+        "keepSkippedOnRemove": "제외된 작업({{skip}})은 대화에 남습니다.",
+        "removedArchived": "작업 {{count}}개가 보관함으로 이동합니다.",
+        "removeAndArchive": "프로젝트 제거 및 작업 보관",
+        "removeKeepFiles": "프로젝트 고정, 사용자 지정 이름과 아이콘이 해제됩니다. 파일과 폴더는 유지됩니다.",
+        "showFiles": "사이드바에서 작업 파일 보기",
+        "archivedAll": "모든 작업 보관",
+        "unarchiveAll": "모든 작업 보관 해제",
+        "openInFinder": "Finder에서 프로젝트 폴더 열기",
+        "openInExplorer": "파일 탐색기에서 프로젝트 폴더 열기",
+        "openInFileManager": "파일 관리자에서 프로젝트 폴더 열기",
         "newInDirectory": "이 디렉터리에서 새 세션",
         "copyDeepLink": "프로젝트 링크 복사",
         "search": "이 프로젝트에서 세션 검색"

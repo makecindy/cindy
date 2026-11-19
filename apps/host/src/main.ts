@@ -1881,6 +1881,11 @@ function startDeviceLink(): void {
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     agentNet: hostAgentNetPorts(),
     invoke: service, subscribe: eventHub.subscribe,
+    isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
+      || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
+    onProjectTaskStatus: (sessionId, status) => {
+      eventHub.publish({ type: 'session_changed', sessionId, status, patch: { status } });
+    },
     preparePiSkillRuntime: (id, dir, route) => preparePiSkillRuntime(id, dir, route, inputQueue.capturePiSkillPreparation(id)),
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();

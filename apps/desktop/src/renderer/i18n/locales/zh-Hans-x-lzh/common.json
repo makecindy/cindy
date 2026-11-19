@@ -3442,7 +3442,7 @@
         "end": "以上为自 {{source}} 纳入之记录",
         "endHandoff": "以上为自 {{source}} 纳入之记录，此后由 {{harness}} 接续"
       },
-      "projectMenu": "纳此案于他器中之差事…"
+      "projectMenu": "导入差事…"
     },
     "connections": {
       "codex": {
@@ -4074,6 +4074,7 @@
         "refreshSpeechAdded": "模型已更，补 1 个语音参考型号",
         "refreshNoNew": "模型清单已是最新，无所增",
         "refreshFailed": "模型清单重整未成，请稍后再试",
+        "refreshReconnect": "模型清单重整未成。请重连此供方，再试。",
         "refreshFetchDisabled": "模型目录远程获取未启，已略重整",
         "disableModel": "停此模型",
         "paymentRequired": "付费",
@@ -14933,7 +14934,7 @@
       "credentialSwitchBusy": "Codex 方行于他差事，暂不能依此差事所择之模型来源而易（须重启共用之 Codex 后台进程）。俟其毕，点「再试」即可。",
       "accountBoundaryPending": "Cindy 方易名籍之态，暂不能始此差事。稍候片刻，点「再试」；若屡见之，请重启 Cindy。",
       "codexThreadStale": "Codex 鉴权之式已易，此差事不能续 —— 请新开差事，方生效。",
-      "codexSharedAuthLinkUnavailable": "本机之 Codex 已登入，而此差事不能读其登入：指向其之链接建不出来（Windows 常权之下，通常建不了）。请确认此电脑之 {{appName}} 有权建立链接（Windows 上可以管理员之身执行一次，或开启开发人员模式），而后点「再试」。",
+      "codexSharedAuthLinkUnavailable": "本机之 Codex 已登入，而此差事不能读其登入：指向其之链接建不出来（Windows 常权之下，通常建不了）。请确认此电脑之 {{appName}} 有权建立链接（Windows 上可以管理员之身执行一次，或开启开发人员模式），而后点「再试」。亦可点「重登 ChatGPT」，使 Cindy 以自有之一份登入行此差事。",
       "codexResumeNotReady": "Codex 暂不能复此差事，请稍后再试",
       "claudeGatewayOpusPlanMismatch": "此番 Opus 请求实经 XD Gateway，非君之 Claude.ai 订阅；该闸道路由拒此模型。可易为 Claude.ai 订阅再试，或另择模型。",
       "claudeSubscriptionOpusPlanMismatch": "今所连之 Claude Pro 方案不支持 Opus。请易为方案所支持之模型；若方升级方案，请于规制中重连 Anthropic，再试。",
@@ -16456,6 +16457,7 @@
         "empty": "此自运无可封存之差事"
       },
       "archiveAll": {
+        "projectTitle": "尽封存「{{name}}」诸差事乎？",
         "title": "尽封存差事",
         "confirm": "尽封存",
         "cancel": "罢",
@@ -16600,18 +16602,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」项目之目",
+        "previewFailed": "未能读取此项目诸务，请再试。",
+        "remotePreviewFailed": "远机项目之差事未得读取。请察连线，并核远机 Cindy 是否为新版。",
         "rename": "案易名",
         "pin": "置顶此案",
         "unpin": "解置顶此案",
-        "removeFromSidebar": "自侧栏除案",
-        "removeFromSidebarConfirmTitle": "除“{{name}}”？",
-        "removeFromSidebarConfirmDescription": "此举将自侧栏除此案。机上之卷不删。现有差事将移至“言谈”分组，仍可如常使用。",
-        "removeFromSidebarConfirmAction": "除此案",
-        "removeFromSidebarFailed": "不能自侧栏除案，请再试",
-        "showFiles": "览卷",
-        "archivedAll": "尽封存",
-        "unarchiveAll": "尽解封存",
-        "openInExplorer": "于卷管理器中启",
+        "removeFromSidebar": "自 Cindy 移除此案…",
+        "removeFromSidebarConfirmTitle": "自 Cindy 移除「{{name}}」乎？",
+        "removeFromSidebarConfirmDescription": "未归档之差事凡 {{count}}，仍可于「对话」续办。",
+        "removeFromSidebarConfirmAction": "移除此案",
+        "removeFromSidebarFailed": "移案未成，请重试。",
+        "archiveOnRemove": "并归档差事（{{count}}）",
+        "keepSkippedOnRemove": "{{skip}}之差事仍留于「对话」。",
+        "removedArchived": "差事 {{count}} 将入归档。",
+        "removeAndArchive": "移案并归档差事",
+        "removeKeepFiles": "案之置顶、别名、图记皆除。机中卷册与卷夹俱留。",
+        "showFiles": "于侧栏览差事之卷",
+        "archivedAll": "尽归档诸差事",
+        "unarchiveAll": "尽复诸差事",
+        "openInFinder": "于访达中启案之卷夹",
+        "openInExplorer": "于文件资源管理器中启案之卷夹",
+        "openInFileManager": "于卷管理器中启案之卷夹",
         "newInDirectory": "于此目录新开差事",
         "copyDeepLink": "录案之链接",
         "search": "于案内寻差事"

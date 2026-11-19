@@ -72,7 +72,7 @@ export interface ConfirmDialogProps {
   zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
   confirmVariant?: 'default' | 'destructive';
-  checkedOverrides?: { description: string; confirmText: string; confirmVariant: 'destructive' };
+  checkedOverrides?: { description: string; confirmText: string; confirmVariant?: 'destructive' };
   /**
    * 主按钮文字前的小图标(如 Full access 确认的警示三角)。跟随按钮文字颜色,
    * 不引入新的语义色;loading 时与文字一起被 spinner 顶掉。

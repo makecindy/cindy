@@ -369,8 +369,12 @@ export function ErrorBanner({
     reconnectCredentialScope,
     recoveryCheck: openAiRecoveryCheck,
     refresh: refreshOpenAiAuth,
+    triggerLogin: triggerCodexLogin,
   } = useCodexAuth({
-    enabled: isOpenAiAuthFailure && !independentOpenAiAccount,
+    // #10301:共享凭证连不上时也要开着这个 observer —— 下面的「重新登录」入口要经它发起
+    // 独立登录,observer 关着时 triggerLogin 会直接返回 cancelled。原有的
+    // isOpenAiAuthFailure 路径一个都没多开,只是把这个 reason 也纳进来。
+    enabled: (isOpenAiAuthFailure || isCodexSharedAuthLinkUnavailable) && !independentOpenAiAccount,
     recoveryHint: isOpenAiAuthFailure ? { reason: error } : undefined,
   });
   const openAiConnectionRecoveredSinceError =
@@ -380,6 +384,9 @@ export function ErrorBanner({
       ? isOpenAiConnectionExpired && selectedOpenAiAccount?.connected === true
       : isChatGptConnectionConnected(openAiAuthState, false));
   const openAiReconnectRequired = isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError;
+  // #10301:横幅里的独立登录进行中。与 openAiRecoveryBusy 分开记:那条路上还有
+  // 账号池重连与「检测中」的状态机,混在一起会让这个按钮在别人的忙闲上被禁用。
+  const [sharedLinkLoginBusy, setSharedLinkLoginBusy] = useState(false);
   const openAiAuthLoading = openAiAuthState.kind === 'loading';
   const openAiLoginPending = openAiAuthState.kind === 'login-pending';
   const openAiRecoveryBusy =
@@ -562,6 +569,8 @@ export function ErrorBanner({
   } else if (isCodexSharedAuthLinkUnavailable) {
     // 保留 Retry:权限补齐(管理员一次 / 开发者模式)后,下一次 reconcile 就能建出链接,
     // 重试是这条文案承诺的动作里唯一能立刻生效的那个。
+    // 同时给「重新登录」这个入口(#10301 行动项 2):主侧的独立登录流程早就走得通
+    // —— 断的只是入口,失败表面上没有任何东西把用户带到那里,用户只能自己在设置里翻。
     displayError = t('chat.errorBanner.codexSharedAuthLinkUnavailable');
   } else if (showInvalidEncryptedContentRecovery) {
     displayError = t('chat.errorBanner.invalidEncryptedContent');
@@ -724,6 +733,27 @@ export function ErrorBanner({
     }
   };
 
+  // #10301 行动项 2:共享凭证连不上时的第二条恢复路线。这里直接发起**独立登录**
+  // (mode:'local')—— 与设置页「连接」同一个进程级单例 adapter、同一份本地登录逻辑,
+  // 凭证由 Codex 写进 Cindy 自己的 codex-home,正是这个任务读的目录。
+  // 之所以不改成跳转到供应商卡片(code review P1):配了 OpenAI 账号池时,那张卡是
+  // NativeSubscriptionHeader,它的登录走 mode:'browser' 写 ~/.codex,池里已有账号时甚至
+  // 只显示「断开」—— 用户照做了,旧任务读的目录里依然什么都没有。深链保留给没有本 reason 的
+  // 通用场景(见 isCodexLocalOAuthAuthMissing 分支)。
+  const handleCodexSharedAuthLinkLogin = async (): Promise<void> => {
+    if (sharedLinkLoginBusy) return;
+    setSharedLinkLoginBusy(true);
+    try {
+      const outcome = await triggerCodexLogin('local');
+      if (outcome === 'authenticated') await refreshOpenAiAuth();
+      else if (outcome !== 'cancelled') toast.error(t('chatgptAuthRecovery.verificationFailed'));
+    } catch {
+      toast.error(t('chatgptAuthRecovery.verificationFailed'));
+    } finally {
+      setSharedLinkLoginBusy(false);
+    }
+  };
+
   const handleOpenAiRecovery = async (): Promise<void> => {
     if (openAiRecoveryBusy) return;
     if (independentOpenAiAccount && authProviderId) {
@@ -879,6 +909,22 @@ export function ErrorBanner({
           )}
           {isCodexLocalOAuthAuthMissing && !isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError && (
             <OpenAiConnectionSettingsAction providerId={authProviderId ?? 'openai'} />
+          )}
+          {/* #10301 行动项 2:共享凭证连不上时,第二条恢复路线是让 Cindy 自己登一次。
+              只给本机任务(isLocalAuthSession):远端会话的凭证在另一台电脑上,控制端的
+              「重新登录」写的是控制端自己的 codex-home,修不了被控电脑上那个失败的任务
+              (code review P1)—— 那条路上用户该去做的是在出错的那台电脑上重试或重连。 */}
+          {isCodexSharedAuthLinkUnavailable && isLocalAuthSession && (
+            <Button
+              size="sm"
+              compact
+              type="button"
+              onClick={() => void handleCodexSharedAuthLinkLogin()}
+              disabled={sharedLinkLoginBusy}
+            >
+              <Spinner icon={RefreshCw} size={12} spinning={sharedLinkLoginBusy} />
+              {t('chatgptAuthRecovery.relogin')}
+            </Button>
           )}
           {isClaudeGatewayOpusPlanMismatch && onSwitchToClaudeSubscription && (
             <Button

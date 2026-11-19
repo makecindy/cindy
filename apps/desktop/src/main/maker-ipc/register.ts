@@ -758,7 +758,7 @@ import { createDesktopGroupProjectCheckouts } from './groupProjectCheckout.deskt
 import { markGroupCindyTask } from './groupCollaborationSkill.js';
 import { listPrRefs } from '../git-context/prRefsStore.js';
 import { gitExec } from '../worktree/gitExec.js';
-import { BOT_GROUP_CLIENT_ID_PREFIX, botGroupLiveTaskStateOfPhase } from '../../shared/botGroupChat.js';
+import { BOT_GROUP_CLIENT_ID_PREFIX, botGroupLiveTaskStateOfPhase, isBotGroupInTaskClientId } from '../../shared/botGroupChat.js';
 import { syncBotLanePermission, syncBotLinkedLanePermissions } from './botPermissionSync.js';
 import { ensureBotGroupLaneSession } from '../localDb/ipc/bots.js';
 import { restartBotRuntime } from './botRuntimeRestart.js';
@@ -13412,7 +13412,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // This private dispatcher owns Bot/group inputs and their host continuations.
     // Keep the host marker separate from message params so handoff payloads
     // cannot supply it. External cross-task delivery uses the default false.
-    return sendToSessionInternal({ ...params, onAccepted: () => params.onAccepted?.() }, true);
+    // Visible group tasks also accept private user turns. Queue group requests even when idle
+    // so their terminal carries the exact input ID the group execution is waiting for.
+    return sendToSessionInternal({ ...params, forceQueue: isBotGroupInTaskClientId(params.clientId),
+      onAccepted: () => params.onAccepted?.() }, true);
   };
 
   setBotInvitationWelcomeDispatch(input => dispatchBotSessionMessage({ ...input, invitationWelcome: true }));

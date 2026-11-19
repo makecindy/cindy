@@ -84,6 +84,16 @@ describe('shared worktree recycling', () => {
     expect(state.registry.has(meta.sessionId)).toBe(true);
   });
 
+  it.each(['owner', 'borrower'] as const)('preserves uncommitted files across later recycle attempts after %s project removal', async (role) => {
+    await requestWorktreeRecycle(meta.sessionId);
+    await requestWorktreeRecycle(role === 'owner' ? meta.sessionId : 'borrower', [meta.path], 'keep');
+    await requestWorktreeRecycle(meta.sessionId);
+    expect((await readRecycleRecord(meta.path))?.retryPolicy?.state).toBe('kept');
+    expect(await recycle()).toBe(false);
+    expect(await fs.readFile(path.join(meta.path, 'draft.txt'), 'utf8')).toBe('uncommitted contents');
+    expect(state.registry.has(meta.sessionId)).toBe(true);
+  });
+
   it('limits simultaneous recycling of distinct resources to one', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });

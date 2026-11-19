@@ -1797,19 +1797,25 @@ describe('Chat Server result delivery and refresh', () => {
 
   // bot-group-chat.md §4.0: teammates ask each other with @. The turn lists who is in the group
   // (owner and, where known, description); the reply's @ names go out as the completion's mentions.
-  it.each([true, false])('sends the teammates a reply names with @ (server support: %s)', async supported => {
+  it.each([[true, 'Cindy'], [true, 'Luna'], [false, 'Cindy']] as const)('returns a result to its named requester (mentions: %s, requester: %s)', async (supported, requesterName) => {
     const luna = '20000000-0000-4000-8000-000000000002';
     // Incident 2026-11-13 (integration): a companion that shares only the short name of the
     // group's own Cindy must not be woken by 「@Cindy」; one @ names one identity.
     const ownerCindy = '20000000-0000-4000-8000-000000000003', groupCindy = '20000000-0000-4000-8000-000000000004';
+    const requesterLuna = { id: luna, kind: 'bot', name: 'Luna', displayName: 'Luna', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null };
     const members = [
       { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
-      { id: luna, kind: 'bot', name: 'Luna', displayName: 'Luna', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
+      requesterLuna,
       { id: ownerCindy, kind: 'bot', name: 'Cindy', displayName: 'Cindy', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'chat', accessRevision: 1, avatar: null },
       { id: groupCindy, kind: 'bot', assistant: true, name: 'Cindy', displayName: 'Cindy', nickname: null, state: 'joined', role: 'member', guestAccess: 'none', accessRevision: 1, avatar: null },
       { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
     ];
+    const requesterId = requesterName === 'Cindy' ? ownerCindy : luna;
+    if (requesterName === 'Luna') members.push({ ...requesterLuna, id: '20000000-0000-4000-8000-000000000005', ownerActorId: '30000000-0000-4000-8000-000000000005', ownerName: 'Alice' });
+    const source = { id: execution.source_message_id, seq: '1', authorId: requesterId, author: { kind: 'bot', name: requesterName },
+      origin: 'bot', content: [{ type: 'text', text: 'Please review' }], deleted: false, threadRootId: null };
     fixture.handle.mockImplementation(route => {
+      if (route.endsWith(`/messages/${source.id}`)) return { body: source };
       if (route === '/me') return { body: { actor: { id: selfId }, capabilities: supported ? { groupTeammateMentions: 1 } : {} } };
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [], cursor: '1' } };
       return response(route);
@@ -1818,12 +1824,13 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     const prompt = vi.mocked(deps.dispatch).mock.calls[0][0].message;
     expect(prompt.includes('Do not call another participant just to reply.')).toBe(!supported);
-    expect(prompt.includes('write @ and its name')).toBe(supported);
+    expect(prompt.includes('An @name in your final reply wakes that teammate')).toBe(supported);
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
     expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
     expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
-    await service.settleLaneTurn({ ...terminal, resultText: '@Luna can you review this? @Bot is done. @Cindy, anything to add?' });
-    if (supported) expect(deliveries()[0][2].mentions).toEqual([luna, groupCindy]);
+    expect(data.currentRequest.replyToMention).toBe(supported ? `@${requesterName} (Owner)` : undefined);
+    await service.settleLaneTurn({ ...terminal, resultText: `${data.currentRequest.replyToMention ?? ''} review done. @Bot is done. @Cindy, anything to add?` });
+    if (supported) expect(deliveries()[0][2].mentions).toEqual([requesterId, groupCindy]);
     else expect(deliveries()[0][2]).not.toHaveProperty('mentions');
   });
 
@@ -2275,6 +2282,29 @@ describe('Chat Server result delivery and refresh', () => {
     // Claimed as the group's Cindy, never through AI reply mode; the requester's own words become one
     // ordinary visible message in the group's task with its label and the group's recent messages; only
     // that input's turn end answers the group.
+    it.each(['user', 'teammate'])('delivers a public Cindy handoff only from the exact group input (request from %s)', async sender => {
+      members = [...cindyMembers, luna];
+      const original = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => route === '/me'
+        ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
+        : original(route, method, body));
+      if (sender === 'user') await ask(5, 'Please arrange this');
+      else {
+        history.push(message(5, teammateId, 'Please review this', { origin: 'bot' }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+      }
+      const [input] = dispatched();
+      expect(input!.message).toContain('Luna');
+      const context = [...input!.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
+        .map(match => JSON.parse(match[1])).find(block => block.teammates);
+      expect(context.replyToMention).toBe(sender === 'teammate' ? '@Luna (Chris)' : undefined);
+      const reply = { ...terminal, sessionId: input!.targetSessionId, resultText: sender === 'user' ? '@Luna please draft the offer' : `${context.replyToMention} review done` };
+      expect(await service.settleLaneTurn({ ...reply, activeInputClientId: null })).toBe(false);
+      expect(await service.settleLaneTurn({ ...reply, activeInputClientId: input!.clientId })).toBe(true);
+      expect(deliveries()[0][2]).toMatchObject({ mentions: [teammateId] });
+    });
+
     it('stops the exact public Cindy task input when another device requests a stop', async () => {
       await ask(5, 'Wait until stopped');
       const [input] = dispatched();
@@ -3755,6 +3785,19 @@ describe('Chat Server result delivery and refresh', () => {
     }
     const prompt = () => vi.mocked(deps.dispatch).mock.calls[0][0].message;
 
+    it('posts a new independent message without consulting or adding to a legacy plan', async () => {
+      singleSpeaker(route => route === '/me'
+        ? { body: { actor: { id: selfId }, capabilities: { groupSingleSpeaker: 1, independentReplies: 1 } } }
+        : undefined);
+      const sent = await service.sendMessage({ groupId: roomId, text: 'Another thing', clientId: 'independent-send',
+        mentions: { all: false, botIds: [] } });
+      expect(sent).toMatchObject({ ok: true });
+      expect(fixture.handle.mock.calls).toContainEqual(expect.arrayContaining([
+        `/conversations/${roomId}/messages`, 'POST', expect.objectContaining({ independentReplies: true }),
+      ]));
+      expect(fixture.handle.mock.calls.some(([path]) => path.includes('/plans'))).toBe(false);
+    });
+
     it('posts an un-addressed reply as written and never asks the server to continue a round', async () => {
       singleSpeaker(route => route.endsWith(`/messages/${execution.source_message_id}`) ? { body: message(execution.source_message_id, 'Let us discuss') } : undefined);
       await start();
@@ -3870,8 +3913,9 @@ describe('Chat Server result delivery and refresh', () => {
     describe('安排分工', () => {
       const sourceId = '50000000-0000-4000-8000-000000000031', planId = '80000000-0000-4000-8000-000000000031';
       const named = () => members().map(m => m.id === otherBot ? { ...m, name: 'Nova' } : m);
-      function divisionServer(open: object[] = []) {
+      function divisionServer(open: object[] = [], independentReplies = false) {
         singleSpeaker((route, method) => {
+          if (independentReplies && route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupSingleSpeaker: 1, independentReplies: 1 } } };
           if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: named(), messages: [], cursor: '1' } };
           if (route === `/conversations/${roomId}/messages` && method === 'POST') return { body: { id: sourceId } };
           if (route === `/conversations/${roomId}/plans` && method === 'POST') return { body: { id: planId, revision: 1 } };
@@ -3961,6 +4005,18 @@ describe('Chat Server result delivery and refresh', () => {
         expect(await service.sendMessage({ groupId: roomId, text: 'Another thing', clientId: 'after-division', mentions: { all: false, botIds: [] } }))
           .toMatchObject({ ok: false, errorCode: 'PLAN_OPEN' });
         expect(posts().filter(([route]) => route === `/conversations/${roomId}/messages`)).toHaveLength(1);
+      });
+
+      it('keeps an accepted division active when a separate independent message arrives', async () => {
+        divisionServer([], true);
+        let finish!: (value: unknown) => void;
+        deps.decidePlan = vi.fn(() => new Promise(resolve => { finish = resolve; })) as typeof deps.decidePlan;
+        await send('Make a draft');
+        expect(await service.sendMessage({ groupId: roomId, text: 'Another thing', clientId: 'independent-after-division',
+          mentions: { all: false, botIds: [] } })).toMatchObject({ ok: true });
+        finish({ needsPlan: true, steps: [{ botId: otherBot, task: 'draft' }] });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(posts().find(([route]) => route === `/conversations/${roomId}/plans`)?.[2]).toMatchObject({ sourceMessageId: sourceId });
       });
 
       it('asks the organizer when the steps are not written out', async () => {
