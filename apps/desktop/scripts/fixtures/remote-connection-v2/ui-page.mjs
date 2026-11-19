@@ -253,9 +253,12 @@ export default {
       await page.mouse.move(0, 0);
     }
     if (ui.case === 'default') {
-      // Fractional RTT samples must render as whole milliseconds in the topology and both cards.
-      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 3 }), { exact: true }).waitFor();
-      await page.getByText(await ui.t('settings.remoteControl.v2.ms', { value: 97 }), { exact: true }).waitFor();
+      // Fractional RTT samples must render as whole milliseconds alongside each link's actual transport protocol.
+      const udp = await ui.t('settings.remoteControl.v2.relayTransport.udp');
+      const webrtc = await ui.t('settings.remoteControl.v2.linkTransport.webrtc');
+      await page.getByText(`${webrtc} · ${await ui.t('settings.remoteControl.v2.ms', { value: 3 })}`, { exact: true }).waitFor();
+      await page.getByText(`${udp} · ${await ui.t('settings.remoteControl.v2.ms', { value: 1 })}`, { exact: true }).waitFor();
+      await page.getByText(`${udp} · ${await ui.t('settings.remoteControl.v2.ms', { value: 97 })}`, { exact: true }).waitFor();
       await page.getByText(`${relayTransport} · ${relayRtt}`, { exact: true }).waitFor();
       // Mixed real routes: both protocols share the topology, independently of direct/relay grouping.
       await page.getByText(await ui.t('settings.remoteControl.v2.protocol.deviceLink'), { exact: true }).waitFor();
@@ -263,11 +266,13 @@ export default {
       // 拓扑卡片只展示连接信息(本机的配置在上方「我的设备」的本机卡片,其它设备不再列出)。
       await page.getByRole('button', { name: /^Work PC/ }).click();
       await page.getByRole('dialog').waitFor();
+      await page.getByRole('dialog').getByText(`· ${webrtc}`, { exact: true }).waitFor();
       await page.getByRole('dialog').getByText(`${await ui.t('settings.remoteControl.v2.ms', { value: 3 })} · ${await ui.t('settings.remoteControl.v2.popover.rttNote')}`, { exact: true }).waitFor();
       await ui.capture('popover');
       await page.keyboard.press('Escape');
       await page.getByRole('button', { name: /^Home server/ }).click();
       await page.getByRole('dialog').getByText(await ui.t('settings.remoteControl.v2.protocol.agentNet'), { exact: true }).waitFor();
+      await page.getByRole('dialog').getByText(`· ${udp}`, { exact: true }).waitFor();
       await ui.capture('agent-net-card');
       await page.keyboard.press('Escape');
       // 这台电脑的卡只展示连接信息;本机设置直接使用同页上方的卡片。

@@ -39,6 +39,7 @@ import type { TopologyModel, TopologyNode, TopologyStatus } from './topologyMode
 import { ProtocolMark } from './ProtocolMark';
 import {
   formatRtt,
+  peerTransportLabel,
   protocolKind,
   protocolKindLabel,
   protocolLabel,
@@ -192,24 +193,27 @@ function lineAttrs(kind: LineKind, emphasis: LineEmphasis) {
   return { strokeDasharray: dash, style: { ...look, transition: LINE_TRANSITION } };
 }
 
-const PILL_W = 72;
+const PILL_W = 116;
 
-/** 延迟标签:at 是靠图块的那条边,标签朝中间排开;同一边的标签因此贴着图块对齐成一列。 */
+/** 链路标签(底层传输协议 · 延迟):at 是靠图块的那条边,标签朝中间排开;同一边的标签因此贴着图块对齐成一列。 */
 function LatencyPill({
   at,
   side,
+  transport,
   ms,
   strong,
   animate,
 }: {
   at: Point;
   side: 1 | -1;
+  transport: string | null;
   ms: number | null;
   strong: boolean;
   animate: boolean;
 }) {
   const { t } = useTranslation();
-  if (ms === null) return null;
+  const text = [transport, ms === null ? null : formatRtt(ms, t)].filter(Boolean).join(' · ');
+  if (!text) return null;
   return (
     <div
       className={cn('pointer-events-none flex items-center', side === 1 ? 'justify-end' : 'justify-start')}
@@ -218,11 +222,11 @@ function LatencyPill({
     >
       <span
         className={cn(
-          'rounded-full bg-[var(--settings-theme-card-bg)] px-1.5 py-0.5 text-11 leading-none tabular-nums',
+          'whitespace-nowrap rounded-full bg-[var(--settings-theme-card-bg)] px-1.5 py-0.5 text-11 leading-none tabular-nums',
           strong ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
         )}
       >
-        {formatRtt(ms, t)}
+        {text}
       </span>
     </div>
   );
@@ -504,13 +508,15 @@ export function RemoteConnectionTopology({
       const protocol = running
         ? t(running.target === 'agent-net' ? 'settings.remoteControl.v2.peerSwitch.row.toAgentNet' : 'settings.remoteControl.v2.peerSwitch.row.toDeviceLink')
         : protocolLabel(node, t);
+      const transport = reconnecting ? null : peerTransportLabel(node, t);
       const displayName = deviceLabel(node, t);
-      const description = [displayName, protocol, sub.text].filter(Boolean).join(' · ');
+      const description = [displayName, protocol, transport, sub.text].filter(Boolean).join(' · ');
       pills.push(
         <LatencyPill
           key={`${row.id}:pill`}
           at={row.at}
           side={group.side}
+          transport={transport}
           ms={node.rttMs}
           strong={emphasis !== 'rest' && emphasis !== 'dim'}
           animate={animate}
