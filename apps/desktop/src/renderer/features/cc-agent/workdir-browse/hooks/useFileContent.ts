@@ -20,6 +20,7 @@ import { createLogger } from '@/lib/logger';
 import { observeFileTransferProgress } from '@/lib/fileTransferProgress';
 import { fileBrowserApiFor, onFileTreeEventFor } from '@/lib/fileBrowserTransport';
 import { fileTreeEventPaths, hasFileTreeWatcher, onDirectoryAliasChange } from './useFileTree';
+import { isVideoPath } from '../lib/videoExt';
 import {
   fileContentScope,
   getCachedFileContent,
@@ -148,18 +149,18 @@ export function useFileContent(
   visibleRef.current = visible;
   const lastReadScope = useRef<string | null>(null);
   const silentRead = useRef<(() => void) | null>(null);
-  const preserveEditorOnRead = useRef(false);
+  const preserveViewOnRead = useRef(false);
 
   useEffect(() => {
     const epoch = ++readEpoch.current;
     if (!visible) {
-      preserveEditorOnRead.current = true;
+      preserveViewOnRead.current = true;
       // A read-only external file may not have a tree watcher of its own.
       if (relPath && !hasFileTreeWatcher(workdir, remoteHostId, deviceId)) invalidateCachedFile(contentCacheScope, relPath);
       return;
     }
-    const resumeEditor = preserveEditorOnRead.current && lastReadScope.current === contentCacheScope;
-    preserveEditorOnRead.current = false;
+    const resumeInPlace = preserveViewOnRead.current && lastReadScope.current === contentCacheScope;
+    preserveViewOnRead.current = false;
     lastReadScope.current = contentCacheScope;
     if (!workdir || !relPath) {
       setState({ workdir, relPath: null, content: { kind: 'empty' } });
@@ -177,8 +178,8 @@ export function useFileContent(
     // Keep the editor mounted when refreshing an already displayed document.
     // The same silent path as watcher edits preserves its draft and selection.
     const previous = stateRef.current;
-    if (resumeEditor && previous.workdir === workdir && previous.relPath === relPath
-        && previous.content.kind === 'text' && silentRead.current) {
+    const resumingFile = resumeInPlace && previous.workdir === workdir && previous.relPath === relPath;
+    if (resumingFile && previous.content.kind === 'text' && silentRead.current) {
       silentRead.current();
       return;
     }
@@ -186,7 +187,10 @@ export function useFileContent(
     let cancelled = false;
     const stale = () => cancelled || epoch !== readEpoch.current;
     let transferProgress: ReturnType<typeof observeFileTransferProgress> | undefined;
-    setState({ workdir, relPath, content: { kind: 'loading' } });
+    // Recheck the file without replacing a paused player and losing its playhead.
+    const retainedVideo = resumingFile && isVideoPath(relPath)
+      && (previous.content.kind === 'binary' || previous.content.kind === 'cached') ? previous.content : null;
+    if (!retainedVideo) setState({ workdir, relPath, content: { kind: 'loading' } });
 
     void (async () => {
       try {
@@ -197,9 +201,13 @@ export function useFileContent(
           mtimeMs: number,
           fallback: FileContent,
         ): Promise<void> => {
-          setState({ workdir, relPath, content: { kind: 'fetching', received: 0, total: size } });
+          const sameCachedVideo = retainedVideo?.kind === 'cached' && retainedVideo.stat.size === size
+            && retainedVideo.stat.mtimeMs === mtimeMs;
+          if (!sameCachedVideo) {
+            setState({ workdir, relPath, content: { kind: 'fetching', received: 0, total: size } });
+          }
           const progress = observeFileTransferProgress((e) => {
-            if (stale()) return;
+            if (stale() || sameCachedVideo) return;
             // 打包 / 解包阶段只出现在文件夹下载(relPath 键为远端绝对路径),这里收不到。
             if (e.phase === 'pack' || e.phase === 'extract') return;
             setState({
@@ -484,7 +492,7 @@ export function useFileContent(
     // 显式 invalidate 当前文件 + bump tick 触发 effect 重跑 → 走 miss 路径。
     if (!relPath) return;
     invalidateCachedFile(contentCacheScope, relPath);
-    if (options?.preserveEditor) preserveEditorOnRead.current = true;
+    if (options?.preserveEditor) preserveViewOnRead.current = true;
     setRefreshTick((t) => t + 1);
     // contentCacheScope 必须进 deps:同 workdir 跨端点切换时闭包若滞留旧
     // scope,invalidate/写入会落进别的端点的缓存桶(串内容 + 反向覆写)。

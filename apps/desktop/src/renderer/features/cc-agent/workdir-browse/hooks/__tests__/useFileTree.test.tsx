@@ -137,6 +137,35 @@ describe('useFileTree refresh scheduling', () => {
     second.unmount();
   });
 
+  // #11392, unit: two retained tabs swap in the same React commit while the root
+  // is loading. Sequential mounts miss the outgoing cleanup disposing the incoming reader.
+  it('hands a pending directory read to the next visible tab in the same commit', async () => {
+    const pending = deferred<readonly DirEntry[]>();
+    const fresh: DirEntry[] = [{ name: 'new.md', relPath: 'new.md', type: 'file', size: 1, mtimeMs: 2 }];
+    mocks.listDir.mockImplementationOnce(() => pending.promise).mockResolvedValue(fresh);
+    const options = { workdir: '/tab-handoff', remoteHostId: 'ssh' };
+    const view = renderHook(({ tab, extra }: { tab: string | null; extra: boolean }) => {
+      useFileTree({ ...options, enabled: tab === 'first' });
+      const second = useFileTree({ ...options, enabled: tab === 'second' });
+      useFileTree({ ...options, enabled: extra });
+      return second;
+    }, { initialProps: { tab: 'first' as string | null, extra: false } });
+    view.rerender({ tab: 'second', extra: false });
+    view.rerender({ tab: 'second', extra: true });
+    expect(mocks.startWatchFor).toHaveBeenCalledTimes(1);
+    expect(mocks.stopWatchFor).not.toHaveBeenCalled();
+    expect(mocks.listDir).toHaveBeenCalledTimes(1);
+
+    view.rerender({ tab: null, extra: false });
+    expect(mocks.stopWatchFor).toHaveBeenCalledTimes(1);
+    view.rerender({ tab: 'second', extra: false });
+    await waitFor(() => expect(view.result.current.entries.get('')).toEqual(fresh));
+    await act(async () => { pending.resolve([]); });
+    expect(view.result.current.entries.get('')).toEqual(fresh);
+    expect(mocks.listDir).toHaveBeenCalledTimes(2);
+    view.unmount();
+  });
+
   // #11392, unit: the old content cache survived the last directory watcher.
   // No event is delivered for edits made after the last watcher stops.
   it('revalidates text and sibling cache entries after a gap in workdir watching', async () => {

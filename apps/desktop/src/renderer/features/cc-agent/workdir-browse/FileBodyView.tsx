@@ -142,6 +142,8 @@ function getContextMenuPosition(x: number, y: number): { x: number; y: number } 
 
 export interface FileBodyViewProps {
   workdir: string;
+  /** A retained sidebar page can stay mounted while its player is hidden. */
+  visible?: boolean;
   /**
    * 非空 = SSH remote 会话:保存(writeFile)经 main 路由到远端 file-service;
    * 图片 / PDF 预览与"在系统中打开"依赖本机文件路径,remote 下降级为占位卡。
@@ -203,6 +205,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     content,
     onSaved,
     allowEdit = true,
+    visible = true,
     jumpQuery,
     jumpLine,
     onSearchJumpConsumed,
@@ -832,6 +835,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         stat={content.stat}
         cachePath={content.cachePath}
         stale={content.stale === true}
+        visible={visible}
       />
     );
   }
@@ -866,7 +870,12 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
     }
     if (isVideoPath(content.stat.relPath)) {
       const filePath = toOsAbsolutePath(workdir, content.stat.relPath);
-      return <VideoFilePreview key={filePath} workdir={workdir} stat={content.stat} filePath={filePath} />;
+      return (
+        <VideoFilePreview
+          key={JSON.stringify([filePath, content.stat.size, content.stat.mtimeMs])}
+          workdir={workdir} stat={content.stat} filePath={filePath} visible={visible}
+        />
+      );
     }
     if (isImagePath(content.stat.relPath)) {
       return (
@@ -1288,15 +1297,17 @@ function CachedFileView({
   stat,
   cachePath,
   stale,
+  visible,
 }: {
   workdir: string;
   stat: { relPath: string; size: number; mtimeMs: number };
   cachePath: string;
+  visible: boolean;
   /** true = 实时取回失败后回落的历史副本(可能非远端最新),顶部标注提示。 */
   stale?: boolean;
 }) {
   const { t } = useTranslation();
-  const body = <CachedFileBody workdir={workdir} stat={stat} cachePath={cachePath} />;
+  const body = <CachedFileBody workdir={workdir} stat={stat} cachePath={cachePath} visible={visible} />;
   if (!stale) return body;
   // stale 副本:顶部一条 amber 标注(与本文件 EditingChip 同用 upgrade-banner
   // 警示 token,语义豁免色),正文照常预览。
@@ -1315,14 +1326,21 @@ function CachedFileView({
   );
 }
 
-function VideoFilePreview({ workdir, stat, filePath, cached = false }: {
+function VideoFilePreview({ workdir, stat, filePath, visible, cached = false }: {
   workdir: string;
   stat: { relPath: string; size: number; mtimeMs: number };
   filePath: string;
+  visible: boolean;
   cached?: boolean;
 }) {
   const { t } = useTranslation();
   const [videoFailed, setVideoFailed] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!visible || !video) return;
+    return () => { if (!video.paused) video.pause(); };
+  }, [visible, videoFailed]);
   if (videoFailed) {
     return (
       <UnrenderablePlaceholder
@@ -1342,10 +1360,12 @@ function VideoFilePreview({ workdir, stat, filePath, cached = false }: {
       <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
         {/* 缓存副本是本地文件,xdt-file:// range 流式,2GB 也可拖进度条 */}
         <video
+          ref={videoRef}
           controls
           className="min-h-0 min-w-0 max-h-full max-w-full rounded-lg bg-black"
           preload="metadata"
           src={toLocalFileUrl(filePath)}
+          onPlay={event => { if (!visible) event.currentTarget.pause(); }}
           onError={() => setVideoFailed(true)}
         />
       </div>
@@ -1370,10 +1390,12 @@ function CachedFileBody({
   workdir,
   stat,
   cachePath,
+  visible,
 }: {
   workdir: string;
   stat: { relPath: string; size: number; mtimeMs: number };
   cachePath: string;
+  visible: boolean;
 }) {
   const sep = Math.max(cachePath.lastIndexOf('/'), cachePath.lastIndexOf('\\'));
   const cacheDir = cachePath.slice(0, sep);
@@ -1417,7 +1439,12 @@ function CachedFileBody({
     return <PdfPreview workdir={cacheDir} relPath={cacheBase} size={stat.size} mtimeMs={stat.mtimeMs} />;
   }
   if (isVideo) {
-    return <VideoFilePreview key={cachePath} workdir={workdir} stat={stat} filePath={cachePath} cached />;
+    return (
+      <VideoFilePreview
+        key={JSON.stringify([cachePath, stat.size, stat.mtimeMs])}
+        workdir={workdir} stat={stat} filePath={cachePath} visible={visible} cached
+      />
+    );
   }
   if (text !== null && /\.svg$/i.test(stat.relPath) && !isDrawioPath(stat.relPath)) {
     return (

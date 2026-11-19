@@ -10,7 +10,6 @@ import { getTabKind } from '../../../registry';
 import { saveExpandedSet } from '@/features/cc-agent/workdir-browse/lib/expandedStore';
 
 vi.mock('@/components/chat/ImageLightbox', () => ({ ImageLightbox: () => null }));
-vi.mock('@/features/cc-agent/workdir-browse/FileBodyView', () => ({ FileBodyView: () => null }));
 vi.mock('@/features/cc-agent/workdir-browse/hooks/useConfirmSwitchAwayIfDirty', () => ({
   useConfirmSwitchAwayIfDirty: () => async () => true,
 }));
@@ -151,5 +150,55 @@ it('pauses remote directory reads while the sidebar preview is hidden', async ()
   view.rerender(<FileBrowserBody ctx={ctx} state={state} active />);
   await waitFor(() => expect(listDir).toHaveBeenCalledTimes(1));
   expect(view.container.querySelector('webview')).toBe(guest);
+  view.unmount();
+});
+
+// #11392, unit: retained tabs hide without unmounting. Exercise the actual video
+// element, including a fetched copy, since HTML guest mute tests cannot cover it.
+it.each([null, 'ssh'])('pauses the video on hide and keeps its position on return (remote=%s)', async remoteHostId => {
+  const relPath = 'recording.mp4';
+  let mtimeMs = 1;
+  const readFile = vi.fn(async () => ({ ok: false, code: 'BINARY_FILE' }));
+  vi.stubGlobal('electronAPI', {
+    fileBrowser: { listDir: async () => [], startWatch: vi.fn(), stopWatch: vi.fn(), onEvent: () => () => {},
+      readFile, stat: async () => ({ type: 'file', relPath, size: 1024, mtimeMs }),
+      fetchRemote: async () => ({ ok: true, cachePath: '/cache/video.mp4' }),
+      onTransferProgress: () => () => {} },
+    search: { onEvent: () => () => {} },
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const ctx = { sessionId: 'video', tabId: 'file', remoteHostId, deviceLinkDeviceId: null, workdir: '/videos',
+    patchState: vi.fn(), onVisibilityChange: vi.fn(), setCloseInterceptor: () => () => {} };
+  const tab = (active: boolean, shellVisible: boolean) =>
+    <FileBrowserBody ctx={ctx} state={{ selectedFilePath: relPath }} active={active} shellVisible={shellVisible} />;
+  const view = render(tab(true, true));
+  const video = await waitFor(() => {
+    const player = view.container.querySelector('video');
+    expect(player).not.toBeNull();
+    return player!;
+  });
+  let paused = false;
+  Object.defineProperty(video, 'paused', { get: () => paused });
+  vi.spyOn(video, 'pause').mockImplementation(() => { paused = true; });
+  const play = vi.spyOn(video, 'play').mockResolvedValue(undefined);
+  video.currentTime = 14;
+  for (const hidden of [tab(false, true), tab(true, false)]) {
+    paused = false;
+    view.rerender(hidden);
+    expect(video.paused).toBe(true);
+    paused = false;
+    fireEvent.play(video);
+    expect(video.paused).toBe(true);
+    await act(async () => { view.rerender(tab(true, true)); });
+    expect(view.container.querySelector('video')).toBe(video);
+    expect(video.currentTime).toBe(14);
+    expect(play).not.toHaveBeenCalled();
+  }
+  view.rerender(tab(false, true));
+  mtimeMs++;
+  await act(async () => { view.rerender(tab(true, true)); });
+  const replacement = view.container.querySelector('video');
+  expect(replacement).not.toBe(video);
+  expect(replacement?.currentTime).toBe(0);
   view.unmount();
 });

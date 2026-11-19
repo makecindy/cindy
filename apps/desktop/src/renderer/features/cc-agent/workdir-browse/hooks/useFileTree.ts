@@ -41,7 +41,7 @@
  * 不进 React state,避免 setState 触发不必要的订阅者重渲。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { createLogger } from '@/lib/logger';
 import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
@@ -791,8 +791,7 @@ function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
   }, EVENT_COALESCE_MS);
 }
 
-/** 首次挂载触发:initial fetch + 恢复 localStorage expanded + 启动 watcher。
- *  幂等:重复调用直接 no-op(refCount 已 >0)。 */
+/** The first subscription starts the watcher and restores the shared directory tree. */
 async function initStore(store: FileTreeStore): Promise<void> {
   const generation = ++store.restoreGeneration;
   // 恢复 localStorage 持久化的 expanded 集合(workdir × 视图模式共享,见
@@ -1085,62 +1084,68 @@ export function useFileTree({
   const options = useMemo(() => ({
     workdir, remoteHostId, deviceId, hideMetaFiles, docMode, showIgnoredDirs: effectiveShowIgnoredDirs,
   }), [workdir, remoteHostId, deviceId, hideMetaFiles, docMode, effectiveShowIgnoredDirs]);
-  const store = useMemo(() => enabled ? getOrCreateStore(options) : null, [enabled, options]);
+  const reader = useMemo(() => ({
+    store: null as FileTreeStore | null,
+    getSnapshot: () => enabled ? getOrCreateStore(options).snapshot : EMPTY_TREE,
+  }), [enabled, options]);
 
-  // ref-count 生命周期:首挂触发 init(initial fetch + start watch),最后离开
-  // 触发 dispose(stop watch + 从 stores 表移除)。
-  useEffect(() => {
-    if (!store) return;
-    store.refCount += 1;
-    if (store.refCount === 1) {
-      void initStore(store);
-    }
+  // Claim the current store at commit. All incoming tabs have claimed theirs
+  // before React cleans up the outgoing tabs' passive subscriptions.
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    const store = getOrCreateStore(options);
+    reader.store = store;
+    store.refCount++;
     return () => {
-      store.refCount -= 1;
-      if (store.refCount === 0) {
-        disposeStore(store);
-      }
+      reader.store = null;
+      store.refCount--;
     };
-  }, [store]);
+  }, [enabled, options, reader]);
 
   // 订阅 store snapshot 变化。useSyncExternalStore 保证多个订阅者 + concurrent
   // mode 下 tearing-free。
   const snapshot = useSyncExternalStore(
     useCallback(
       (cb) => {
+        const store = reader.store;
         if (!store) return () => {};
         store.listeners.set(cb, displayedDirectory);
-        return () => store.listeners.delete(cb);
+        if (!store.watcherOff) void initStore(store);
+        return () => {
+          store.listeners.delete(cb);
+          if (!store.refCount && !store.listeners.size) disposeStore(store);
+        };
       },
-      [store, displayedDirectory],
+      [reader, displayedDirectory],
     ),
-    () => store?.snapshot ?? EMPTY_TREE,
-    () => store?.snapshot ?? EMPTY_TREE,
+    reader.getSnapshot,
+    reader.getSnapshot,
   );
 
   // Restoring a tab's directory must also work with a collapsed tree. Share
   // the bounded restore workers, and leave the user's expanded rows untouched.
   useEffect(() => {
+    const store = reader.store;
     if (!store || !displayedDirectory) return;
     const missing = displayedDirectoryPaths(store);
     for (const path of missing) {
       if (store.snapshot.entries.has(path) || store.snapshot.loadingPaths.has(path)) missing.delete(path);
     }
     if (missing.size) void refresh(store, missing);
-  }, [store, displayedDirectory]);
+  }, [reader, displayedDirectory]);
 
   // 把 store-level actions wrap 成跟 store 绑死的稳定引用。
   const toggleFolderCb = useCallback((relPath: string) => {
-    if (store) toggleFolder(store, relPath);
-  }, [store]);
+    if (reader.store) toggleFolder(reader.store, relPath);
+  }, [reader]);
   const collapseAllCb = useCallback(() => {
-    if (store) collapseAll(store);
-  }, [store]);
-  const refreshCb = useCallback(() => store ? refresh(store) : Promise.resolve(), [store]);
+    if (reader.store) collapseAll(reader.store);
+  }, [reader]);
+  const refreshCb = useCallback(() => reader.store ? refresh(reader.store) : Promise.resolve(), [reader]);
   const expandToPathCb = useCallback(
     (relPath: string, kind?: 'file' | 'directory', refreshTarget?: boolean) =>
-      store ? expandToPath(store, relPath, kind, refreshTarget) : Promise.resolve(),
-    [store],
+      reader.store ? expandToPath(reader.store, relPath, kind, refreshTarget) : Promise.resolve(),
+    [reader],
   );
 
   return useMemo(

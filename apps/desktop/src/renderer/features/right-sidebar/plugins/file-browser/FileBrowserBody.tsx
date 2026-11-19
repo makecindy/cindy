@@ -675,6 +675,7 @@ function FileBrowserBodyWithWorkdir({
               sessionId={ctx.sessionId} tabId={ctx.tabId} active={visible}
             /> : <FileBodyView
               key={externalFile?.absPath ?? 'project-file-browser'}
+              visible={visible}
               workdir={activeWorkdir}
               remoteHostId={externalFile ? null : remoteHostId}
               deviceId={externalFile ? null : deviceId}
