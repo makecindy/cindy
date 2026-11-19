@@ -40,6 +40,13 @@
   成功回执额外带 `focusRequested: true`，表示导航请求已投递，不表示目标任务一定存在；
   不存在的任务沿用任务导航的错误处理。旧宿主可能忽略 `focus`，缺该回执字段时应提示更新，
   不能声称已跳转。`peek: true` 始终只查询，即使同时传 `focus: true` 也不导航。
+- 打开另一台电脑上的任务：`sessionId` 可传 `list_sessions` 给出的 `设备ID::任务ID`
+  （`local::任务ID` 或本机设备 ID 视同本机任务）。这类请求只接受 `focus: true`，同样须消费
+  真实点击；宿主沿既有任务导航切到那台电脑上的任务，回执的 `sessionId` 保持
+  `设备ID::任务ID`。只有声明 `taskView.remote`（§4.22.2）的插件会在该任务上打开任务页页签，
+  其余插件只导航到任务。不带 focus 的远程请求回 `INVALID_REQUEST`；`peek: true` 只回显
+  落点。旧版 Cindy 不认识这种写法，同样回 `INVALID_REQUEST`，插件应提示更新或只显示链接，
+  不能声称已打开；
 - `cindy.taskView({ peek: true })` 只问"现在打开会落到哪个任务",不开页签:有台前任务
   回 `{ ok: true, sessionId }`,没有则 `HOST_NOT_READY`。用它决定自己的界面(如 mainView
   管理页)要不要出现"在当前任务中打开"一类入口——整页主视图里通常没有台前任务;
@@ -51,7 +58,7 @@
 - 任务页与 panel / mainView 共用同一 Ghost WebView 沙箱:零 Node、零通用 preload、每插件
   专属 partition、CSP 与导航守门不变,本身不附赠联网、文件或凭证能力;通信、唤醒与
   主题规则同 §5;
-- 远程任务(工作目录在另一台电脑)不显示本机插件的任务页;插件停用、卸载或不再声明
+- 远程任务(工作目录在另一台电脑)不显示本机插件的任务页(声明 `taskView.remote` 的除外);插件停用、卸载或不再声明
   taskView 时,已有任务页页签自动隐藏。
 
 ### 4.22.1 在手机上查看与操作设备画面(liveScreen 能力)
@@ -111,7 +118,8 @@
   不是本机)。带 `device` 时
   任务的 Agent 在另一台电脑上运行。插件可以在同一个页签里列出本机和那台电脑的设备,
   必须明确标识设备所在电脑,并将管理操作路由到该电脑;本机设备由用户操作。设备出现时宿主
-  自动打开页签一次;逻辑页此时调 `cindy.taskView()` 不会打开远程任务的页面。
+  自动打开页签一次;逻辑页此时调不带 `sessionId` 的 `cindy.taskView()` 不会打开远程任务的页面,
+  用户点击时传 `设备ID::任务ID` 加 `focus: true` 才会切过去并打开(见上文 §4.22)。
 - **通道**:逻辑页调 `cindy.liveScreenView(req)`(等价于
   `cindy.send({type:'live-screen-view-request', ...req})`,旧版 Cindy 没有这个方法),
   结果都是 `{ok, ...}`,失败带 `errorCode`:

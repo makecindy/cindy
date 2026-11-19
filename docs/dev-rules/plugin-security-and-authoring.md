@@ -1317,9 +1317,13 @@ panel / mainView 同一 Ghost WebView 沙箱（专属分区，仅有下述页面
 保留用户放置位置，分离命令由 Main 沿既有路由与排队路径传递来源，不在执行端降级为后台。
 成功回执的 `focusRequested: true` 仅表示导航请求已投递，不保证任务存在或已呈现；
 旧 Host 可能忽略 focus，缺该回执字段时插件应提示更新。`peek: true` 始终只查询落点，
-即使同时传 focus 也不消费手势或导航。实现与回归见 `taskViewSlot.ts`、`taskViewSlot.test.ts`
+即使同时传 focus 也不消费手势或导航。`sessionId` 也可为 `list_sessions` 的 `设备ID::任务ID`
+（`local::` 与本机设备 ID 视同本机）：远程任务只接受 focus 并消费同一手势，Host 把设备交给既有
+任务导航（`openMainWindowSession` 的 `deviceId`），仅向声明 `taskView.remote` 的插件推页签，
+回执保留限定 ID；旧 Host 对该形状回 `INVALID_REQUEST`，不新增管子或跨端字段。
+实现与回归见 `taskViewSlot.ts`、`taskViewSlot.test.ts`
 和 right-sidebar 的 `openPluginTaskTab.test.ts`、`executeSidebarCommand.test.ts`。
-远程任务不投影本机插件的任务页；插件停用、卸载或不再声明 taskView 时页签隐藏。
+远程任务只投影声明 `taskView.remote` 的插件任务页；插件停用、卸载或不再声明 taskView 时页签隐藏。
 使用该能力的插件须声明实际支持且完成整包验收的最低宿主版本。旧 Host 可能保留未知顶层
 字段，但会拒绝 `locale.taskView` 或 v2 的 `task-view` 槽；运行时检测 API 不能替代安装兼容验证。
 `mainView.icon` 只接受 Cindy 系统线性图标

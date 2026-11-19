@@ -10,7 +10,7 @@ import type { InstalledGhost } from '../../../shared/ghost';
 import { broadcastTaskViewOpen, GhostTaskViewSlot, type TaskViewSlotDeps } from '../taskViewSlot';
 import { GhostErrandSlot } from '../errandSlot';
 
-function taskGhost(options: { taskView?: boolean; enabled?: boolean; instanceKey?: string } = {}): InstalledGhost {
+function taskGhost(options: { taskView?: boolean; enabled?: boolean; instanceKey?: string; remote?: boolean } = {}): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 3,
@@ -19,7 +19,7 @@ function taskGhost(options: { taskView?: boolean; enabled?: boolean; instanceKey
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      ...(options.taskView !== false ? { taskView: { html: 'task.html' } } : {}),
+      ...(options.taskView !== false ? { taskView: { html: 'task.html', ...(options.remote ? { remote: true } : {}) } } : {}),
     },
     dir: '/fake/sim',
     enabled: options.enabled ?? true,
@@ -103,6 +103,53 @@ describe('taskViewSlot', () => {
       errorCode: 'HOST_NOT_READY',
     });
     expect(failedReveal).not.toHaveBeenCalled();
+  });
+
+  // Plugin boards list tasks from every computer as deviceId::sessionId (list_sessions); a
+  // click must open the task on its own computer through the existing navigation.
+  // Minimal inputs: a qualified id with and without focus, local::, and a malformed device.
+  // unit: only pages declared taskView.remote get a tab push for a remote task.
+  it('opens a task on another computer only on a real click, through device navigation', () => {
+    const { slot, pushes } = makeSlot();
+    const reveal = vi.fn();
+    slot.setRevealSession(reveal);
+    expect(slot.handleRequest('sim', { sessionId: 'studio::task-9', peek: true })).toEqual({ ok: true, sessionId: 'studio::task-9' });
+    expect(slot.handleRequest('sim', { sessionId: 'studio::task-9' })).toMatchObject({ ok: false, errorCode: 'INVALID_REQUEST' });
+    for (const sessionId of ['stu dio::task-9', 'studio::', '::task-9', 'a::b::task-9']) {
+      expect(slot.handleRequest('sim', { sessionId, focus: true })).toMatchObject({ ok: false, errorCode: 'INVALID_REQUEST' });
+    }
+    expect(reveal).not.toHaveBeenCalled();
+    expect(slot.handleRequest('sim', { sessionId: 'studio::task-9', focus: true })).toEqual({
+      ok: true,
+      sessionId: 'studio::task-9',
+      focusRequested: true,
+    });
+    expect(reveal).toHaveBeenLastCalledWith('task-9', 'studio');
+    // This plugin's task page is not shown on remote tasks, so no tab is pushed.
+    expect(pushes).toEqual([]);
+    expect(slot.handleRequest('sim', { sessionId: 'local::task-1', focus: true })).toMatchObject({ ok: true, sessionId: 'task-1' });
+    expect(reveal).toHaveBeenLastCalledWith('task-1');
+    expect(pushes).toEqual([{ instanceId: 'sim', sessionId: 'task-1', focus: true }]);
+    const self = makeSlot({ localDeviceId: () => 'this-mac' });
+    const selfReveal = vi.fn();
+    self.slot.setRevealSession(selfReveal);
+    expect(self.slot.handleRequest('sim', { sessionId: 'this-mac::task-2', focus: true })).toMatchObject({ ok: true, sessionId: 'task-2' });
+    expect(selfReveal).toHaveBeenCalledExactlyOnceWith('task-2');
+    expect(self.pushes).toEqual([{ instanceId: 'sim', sessionId: 'task-2', focus: true }]);
+
+    const viewer = makeSlot({ getGhost: () => taskGhost({ remote: true }) });
+    viewer.slot.setRevealSession(vi.fn());
+    viewer.slot.handleRequest('sim', { sessionId: 'studio::task-9', focus: true });
+    expect(viewer.pushes).toEqual([{ instanceId: 'sim', sessionId: 'task-9', focus: true }]);
+
+    const noGesture = makeSlot({ consumeUserGesture: () => false });
+    const blockedReveal = vi.fn();
+    noGesture.slot.setRevealSession(blockedReveal);
+    expect(noGesture.slot.handleRequest('sim', { sessionId: 'studio::task-9', focus: true })).toMatchObject({
+      ok: false,
+      errorCode: 'PERMISSION_DENIED',
+    });
+    expect(blockedReveal).not.toHaveBeenCalled();
   });
 
   // PR #6861 discussion_r4353708280：原有 broadcast=false 用例绕过了真实选窗适配器。

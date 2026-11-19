@@ -13936,7 +13936,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     forkSessionAtMessage,
     broadcastSessionCreated,
   }));
-  setGhostSessionRevealer((sessionId) => openMainWindowSession(sessionId));
+  setGhostSessionRevealer((sessionId, deviceId) => openMainWindowSession(sessionId, deviceId ? { deviceId } : undefined));
 
   // One receipt service per account/database epoch. No mutable current-DB lookup
   // is retained by an asynchronous task request.

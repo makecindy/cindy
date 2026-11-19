@@ -367,7 +367,7 @@ import {
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
 import { builtinSeedStoreInstall, isRetainedSeedMarketTarget } from './builtinSeedStoreInstall.js';
-import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.js';
+import { getAccessToken, getAuthState, getDeviceId, onAuthStateChange } from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveBundledSystemSkillsRoot } from '../maker-host/built-in-skills.js';
@@ -2538,7 +2538,7 @@ export function setGhostAgentModelLocationSources(sources: {
 }
 
 /** maker-ipc 完成初始化后注入「切到这条可见任务」；保持 cindy-brain 不反向依赖 deepLink。 */
-export function setGhostSessionRevealer(reveal: ((sessionId: string) => void) | null): void {
+export function setGhostSessionRevealer(reveal: ((sessionId: string, deviceId?: string) => void) | null): void {
   getGhostAgentSlot().setRevealSession(reveal);
   getGhostErrandSlot().setRevealSession(reveal);
   getGhostTaskViewSlot().setRevealSession(reveal);
@@ -4640,6 +4640,7 @@ export function getGhostTaskViewSlot(): GhostTaskViewSlot {
       getGhost: findGhostForInstanceId,
       focusedSessionId: () => ghostSessionFocusTracker.current(),
       consumeUserGesture: (id) => getGhostErrandSlot().consumeUserGesture(id),
+      localDeviceId: getDeviceId,
       broadcast: (payload) => broadcastTaskViewOpen(
         BrowserWindow.getAllWindows(), payload,
         (window, push) => sendGhostWindowPush(window, GHOST_TASK_VIEW_OPEN_CHANNEL, push),
