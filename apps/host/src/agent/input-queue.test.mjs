@@ -1856,6 +1856,7 @@ test('late provider idle after stop saves the partial reply before draining', as
   t.mock.timers.tick(250);
   try {
     await settleUntil(() => writing, 'the partial reply reached persistence');
+    await settle();
     assert.deepEqual(session.sent, ['first']);
     assert.equal(h.events.some(event => event.type === 'input_receipt'), false, 'do not settle before the reply write finishes');
   } finally {
@@ -7238,6 +7239,7 @@ test('profile hold: every new send is refused, typed; the running turn ends; not
   const session = h.maker.sessions.get('held');
   session.emit({ type: 'done', data: {} });
   await settleUntil(() => !h.queue.isTurnRunning('held'), 'the held turn finished');
+  await settle();
   assert.deepEqual(session.sent, ['long job'], 'the queued input does not start');
   const projection = h.queue.projection('held');
   assert.deepEqual(projection.pendingQueue.map(i => i.clientId), ['queued']);
