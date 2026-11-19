@@ -967,12 +967,23 @@ describe("cindy_helper MCP server", () => {
         availability: "available",
         summary: expect.stringContaining("仅本机"),
       });
-      for (const query of ["向另一个任务发送消息", "send a message to another task", "给伙伴发消息"]) {
+      // PR #11583: the exact action should still match with polite prefixes or sentence punctuation.
+      for (const query of [
+        "向另一个任务发送消息",
+        "send a message to another task",
+        "给伙伴发消息",
+        "请发消息给另一个任务会话",
+        "发消息给另一个任务会话。",
+        "请帮我发消息给另一个任务会话！",
+        "Please, send a message to another task.",
+      ]) {
         const result = await list({ query });
-        expect((result.items as unknown[])[0]).toMatchObject({ key: "native.send_to_session", availability: "available" });
+        expect((result.items as unknown[])[0], query).toMatchObject({ key: "native.send_to_session", availability: "available" });
       }
       const genericSearch = await list({ query: "任务" });
       expect((genericSearch.items as unknown[])[0]).not.toMatchObject({ key: "native.send_to_session" });
+      const wrappedGenericSearch = await list({ query: "请任务。" });
+      expect((wrappedGenericSearch.items as Array<{ key: string }>).map(item => item.key)).not.toContain("native.send_to_session");
       const detail = parsePayload(await client.callTool({
         name: firstMatch.next.tool,
         arguments: firstMatch.next.args,
@@ -986,7 +997,11 @@ describe("cindy_helper MCP server", () => {
       const controlNames = (control.tools as Array<{ name: string }>).map((tool) => tool.name);
       expect(controlNames).toContain("set_current_session_title");
       expect(controlNames).not.toContain("send_to_session");
-      for (const query of ["把这个会话改名", "不要给伙伴发消息，只把这个会话改名"]) {
+      for (const query of [
+        "把这个会话改名",
+        "不要给伙伴发消息，只把这个会话改名",
+        "请不要给伙伴发消息，只把这个会话改名。",
+      ]) {
         const renameSearch = await list({ query });
         expect(renameSearch).toMatchObject({ ok: true });
         expect((renameSearch.items as Array<{ key: string }>).map((item) => item.key)).not.toContain("native.send_to_session");
@@ -1571,7 +1586,7 @@ describe("cindy_helper MCP server", () => {
         await client.callTool({ name: "list_tools", arguments: {} }),
       );
       expect(overview.categories).toEqual([]);
-      for (const args of [{ name: "send_to_session" }, { query: "发消息给另一个任务会话" }]) {
+      for (const args of [{ name: "send_to_session" }, { query: "请发消息给另一个任务会话。" }]) {
         expect(parsePayload(await client.callTool({ name: "list_tools", arguments: args })))
           .toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }

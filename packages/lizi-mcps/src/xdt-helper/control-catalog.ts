@@ -177,14 +177,16 @@ export function createControlReader(deps: Deps) {
     if (!query.category && !query.toolQuery && !query.cursor) return { ok: true, domains: domains.map(([id, title, summary]) => ({ id, title, summary })),
       next: 'call_tool({name:"get_capabilities",args:{scope:"control",category:<id>}})', coverage: '包含独立界面；每项详情说明实际接通情况，不代表全量设置均已开放。' };
     const term = query.toolQuery?.toLowerCase().trim();
+    const actionPhrase = term
+      ?.replace(/^(?:请(?:\s*帮我)?[\s,，]*|please[\s,，]+)/u, '')
+      .replace(/[\s.!?。！？．…]+$/u, '') ?? '';
     const score = (item: Control) => {
       if (!term) return 1;
       if (item.key === term) return 100;
       // Agents often search with the exact tool name a prompt gave them.
       if (item.tools?.includes(term)) return 90;
-      // Match complete action phrases so generic or negated wording cannot
-      // promote this operation just by containing part of a phrase.
-      const matchesPhrase = nativeSearchPhrases[item.key]?.includes(term);
+      // Match the whole action after trimming only polite prefixes and end punctuation.
+      const matchesPhrase = nativeSearchPhrases[item.key]?.includes(actionPhrase);
       const words = [item.key, item.title, ...item.aliases].map(word => word.toLowerCase());
       return (matchesPhrase ? 20 : 0) + (item.summary.toLowerCase().includes(term) ? 1 : 0)
         + words.reduce((n, word) => n + (word.includes(term) || term.includes(word) ? Math.min(word.length, 20) : 0), 0);
