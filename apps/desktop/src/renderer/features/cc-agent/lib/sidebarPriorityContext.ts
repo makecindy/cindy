@@ -1,3 +1,4 @@
+import { getStartingSessionIds } from '@/lib/sessionStartingStore';
 import type { Session } from '@/lib/ccAgent.types';
 import type { RemoteSessionActivityPhase } from '@/features/device-link/remoteSessionActivityStore';
 import { sessionRowKey } from '../sidebar/sessionRowKey';
@@ -9,6 +10,7 @@ export function sidebarPriorityContext(
   sessions: Iterable<Session>,
   remotePhaseOf: (session: Session) => RemoteSessionActivityPhase | undefined,
 ): MainListPriorityContext {
+  const starting = getStartingSessionIds();
   const running = new Set(ctx.runningSessionIds);
   const attention = new Set(ctx.attentionSessionIds);
   const waiting = new Set(ctx.waitingSessionIds);
@@ -16,8 +18,8 @@ export function sidebarPriorityContext(
   for (const session of sessions) {
     const phase = remotePhaseOf(session);
     if (session.deviceLinkDeviceId) {
-      // Match the remote row indicator, including after a read receipt removes the completion.
-      remoteRunningByRow.set(sessionRowKey(session), phase === 'running');
+      // Preserve a new send before its first host push; terminal evidence still ends the old turn.
+      remoteRunningByRow.set(sessionRowKey(session), phase === 'running' || (!phase && starting.has(session.id)));
     }
     if (!phase) continue;
     if (phase === 'running') {

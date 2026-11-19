@@ -16,6 +16,7 @@ vi.mock('../SessionEntryList', () => ({ SessionEntryRows: ({ entries, onAction }
   entries: { session: Session }[]; onAction: (id: string, action: 'complete') => unknown;
 }) => <div data-testid="row" data-device={entries[0].session.deviceLinkDeviceId}>{entries[0].session.id}<button data-inbox-complete aria-label={`complete:${entries[0].session.id}`}
   onClick={() => { void onAction(entries[0].session.id, 'complete'); }} /></div> }));
+import { markSessionStarting, clearSessionStarting } from '@/lib/sessionStartingStore';
 import { TaskInbox } from '../TaskInbox';
 beforeEach(() => following.clear());
 afterEach(() => { cleanup(); clearRemoteSessionActivity(); });
@@ -43,6 +44,26 @@ it('moves only the finished device’s task to Pending without a pointer or a li
   expect(rows(pending)).toEqual(['studio']);
   push('studio', 'running');
   expect(rows(pending)).toEqual([]);
+});
+
+it('moves a remote task to Working immediately after sending, before its first host push', () => {
+  const task = { id: 'remote-send', title: 'Remote', status: 'active', deviceLinkDeviceId: 'studio' } as Session;
+  const props: Parameters<typeof TaskInbox>[0] = {
+    sessions: [task], priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
+    runningSessionIds: new Set(), attachedSessionIds: new Set(), notifications: new Set(),
+    onSessionClick: () => {}, onAction: () => {}, onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
+  };
+  const view = render(<TaskInbox {...props} />);
+  const [pending, working] = view.container.querySelectorAll('section');
+  expect(pending.contains(screen.getByTestId('row'))).toBe(true);
+  act(() => markSessionStarting(task.id, 'new-input'));
+  const starting = new Set([task.id]);
+  view.rerender(<TaskInbox {...props} priorityContext={{ ...props.priorityContext, runningSessionIds: starting }} />);
+  expect(working.contains(screen.getByTestId('row'))).toBe(true);
+  // A fast turn may finish before the controller absorbs the optimistic starting flag.
+  act(() => applyRemoteSessionActivity('studio', { sessionId: task.id, phase: 'completed', attention: true }));
+  expect(pending.contains(screen.getByTestId('row'))).toBe(true);
+  act(() => clearSessionStarting(task.id));
 });
 
 it('commits explicit moves before another restore while hovering another task’s Done button', () => {

@@ -1394,8 +1394,9 @@ function SessionAction({
 }) {
   return (
     <Tip text={label}>
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        tone="quiet"
         data-inbox-complete={inboxComplete}
         aria-label={label}
         onClick={(e) => {
@@ -1405,15 +1406,15 @@ function SessionAction({
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
         className={cn(
-          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'shrink-0 size-5 p-0 flex items-center justify-center rounded-md',
           'focus:outline-none',
           isActive
-            ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-            : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+            ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+            : 'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground',
         )}
       >
         {children}
-      </button>
+      </Button>
     </Tip>
   );
 }
