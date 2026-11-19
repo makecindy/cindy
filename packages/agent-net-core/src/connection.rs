@@ -343,6 +343,8 @@ struct SentPacket {
     /// 发送时是第几个探测周期。
     cycle: u32,
     app_idle: bool,
+    /// 应用没数据了、在途却还超过一个初始窗口：这是一阵数据的尾巴，不是零星消息。见发包处的说明。
+    tail: bool,
     // 发送时的送达进度，确认到达时用来计算实际送达速率。
     delivered: u64,
     delivered_at: u64,
@@ -1433,7 +1435,7 @@ impl Connection {
                 rtt_us,
                 prior_delivered: packet.delivered,
                 app_limited: packet.app_limited,
-                app_idle: packet.app_idle,
+                app_idle: packet.app_idle && !packet.tail,
                 send_span_us: send_elapsed,
                 train: packet.train,
             };
@@ -2439,6 +2441,14 @@ impl Connection {
             let app_limited = self.retransmit.is_empty() && self.next_stream().is_none();
             let app_idle = self.retransmit.is_empty() && !self.send_streams.values().any(SendStream::has_data);
             let below_capacity = app_idle || self.congestion.sends_below_capacity();
+            // 拥塞控制按「应用空闲」把一段的送达速率当成应用的速度：判限速的那一段整段作废，带宽和排队统计也跳过。
+            // 这只该是零星消息，在途不超过一个初始窗口。一阵数据的尾巴和紧跟着的重传发完也是「没数据了」，但那时在途还有
+            // 一整个窗口、按带宽估计的速率在发，送达速率就是路径的速率。令牌桶放行的突发把带宽估计抬高以后，小文件几乎全程
+            // 都是这样的尾巴，算成空闲的话限速一直认不出来，一直按估计超发（2026-11-19 xdt-server：往返 10 毫秒、出口约
+            // 0.7 MB/s；模拟器里往返 90 毫秒、64 KB 令牌的限速器上 1 MiB 在线路上发了 11 倍）。
+            // 尾巴照样当随机丢包样本：长往返有随机丢包的线路上，尾巴的重传是测随机丢包率的好样本，
+            // 不算的话「高延迟 300ms 丢包 5%」大窗口慢 16%。被限速器挡下的尾巴见 `Bbr::update_random_loss` 的封顶。
+            let tail = app_idle && self.bytes_in_flight > self.congestion.initial_window_bytes();
             self.sent.push_back(SentPacket {
                 number,
                 sent_at: now_us,
@@ -2455,6 +2465,7 @@ impl Connection {
                 cruising: self.congestion.is_cruising(),
                 cycle: self.congestion.phase_cycle(),
                 app_idle,
+                tail,
                 delivered: self.delivered,
                 delivered_at: self.delivered_at,
                 first_sent_at: self.first_sent_at,
