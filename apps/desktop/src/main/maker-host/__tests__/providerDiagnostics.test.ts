@@ -137,6 +137,14 @@ describe('classifyProviderError', () => {
     }
   });
 
+  it('prioritizes explicit payload rejection when one unknown field is named model', () => {
+    const body = 'Invalid JSON payload received. Unknown name "model": Cannot find field. '
+      + 'Unknown name "messages": Cannot find field.';
+    expect(classifyProviderError({ status: 400, bodyText: body })).toMatchObject({
+      code: 'WIRE_INCOMPATIBLE', retryable: false,
+    });
+  });
+
   it.each([
     [400, 'Invalid JSON payload received: malformed JSON', 'UNKNOWN'],
     [422, 'Invalid JSON payload received. Unknown name', 'UNKNOWN'],
