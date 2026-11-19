@@ -21,12 +21,71 @@
 
 - **11-12 #10019 旧阴影 ID 兼容修复**——生产注册与本地主题导出回归证实，删除 `shadow-chip-raised` 会使旧主题的 `shadow-menu: var(--shadow-chip-raised)` 引用失效。按治理合同 §4 保留旧 ID 及原 Light/Dark 默认值，仅作兼容项，不恢复生产 UI 的直接消费；这是对 11-11 A-14 实施范围的兼容修正，历史记录保留。现行落点：`DESIGN.md` §10、DTCG reference/semantic 与 desktop bindings、`colors.ts` 注册项及 ThemeService 回归测试。
 
+- **11-12 内联字号加守卫，选中态外框登记例外（维护者追加裁决，随规范整理一组落地）**——B-06 只登记了内联字号不随「外观 → UI 字号」缩放的缺口；维护者追加：现在就加守卫，只拦新增，存量登记基线只减不增，登录 / Splash 品牌画布按已登记例外豁免。现行：`typographyDiscipline.test.ts` 新增 `inline-literal-size` 规则，`apps/desktop/src/renderer` 里白名单内的静态内联字号也判红；基线 `INLINE_SIZE_DEBT` 登记真实界面 11 处（技能市场 6、`MakerExperimentalView` 4、`ModelLightbox` 1）与核对时新发现的 CodeMirror 编辑器主题 6 处 px 字面量；登录画布家族 10 处（`LoginControls` 2、`LegacyMigrationDialog` 3、`LoginCaptchaOverlay` 5）与分享图片生成按次数登记为豁免，§3 豁免表「登录 / Splash 品牌画布」行补上 `LoginCaptchaOverlay` 与 `LegacyMigrationDialog` 的设计 px 字号。已验证新增一处、删掉一条基线或修掉一处未下调基线都会失败。选中态外框：`TemplateCard` 1.5px、外观页主题预览与壁纸预览 2px 不改，在 §7 登记「选中态指示」例外，允许 1.5–2px，普通容器仍为 1px。落点：`DESIGN.md` §3「内联字号守卫」条与豁免表、§7 Don't 边框条。
+
+- **11-11 规范文档整理：合并重复、删除失效说法（维护者裁决：E-01 方案 B、E-19 方案 B，E-04 / E-06 / E-07 / E-08 / E-09 / E-10 / E-11 / E-14 / E-15 / E-17 / E-18 / A-08 / A-12 / A-13 / C-09 / C-10 / C-11 / C-14 / B-09 / D-02 / D-03 / D-08 / D-09 / D-12 / D-14 / D-15 方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现同一参数多处重复、部分说法已与代码不符，Agent 读到的颜色也不是大多数用户看到的。维护者要求给规范瘦身、去矛盾，只合并与删除，不重写其他章节。现行：称呼——原 Default 主题统一称 Classic，新用户默认是 CINDY，§9 速查表改列 CINDY Light / Dark（墨水写成「黑 88%」），Classic 降为附注，§15 标题去掉「可选」（E-01）。单一出处——按钮尺寸只在 §4 按钮结构块写一次（C-09）；用量图表几何、淡化与选中只留在 `usage-history-charts.md`，§4 两节合成一段指针，§5 只留圆角与点击区登记，§14.4 只留动效 token 与一次性超调例外，放大效果的适用范围写成「用量历史 + 供应商『远程与分享』页用量块」（C-10、D-08）；运行橙以 §15.14 为唯一正文，Desktop 中性按钮色值以 §15.10 为准（E-09）；品牌红用途只看 §15.10 白名单（E-08）；§7 圆角与 700 字重改为引用 §5 / §3（B-09）；CINDY 墨水透明度只在 §15.16，决策表 §9 只留裁决经过与对比度（A-13）；Android 更新弹层搬到手机设计指南 §9（C-14）。纠错——数值编辑源统一写成 `packages/design-tokens`（DTCG），`colors.ts` 是注册 API 与生成产物（E-04、A-08）；§9 示例拆分 Select 与 DropdownMenu，设置卡与输入框改为复用 `SettingsSection` / `ComposerCard`（E-06、E-07）；`status-badge-fg` 无界面使用，与 `shadow-chip-raised` 一样作兼容保留（E-10）；聊天代码块底为 `surface-elevated`，`perm-code-bg` 只给权限卡（E-11）；创建页登记可用宽度 < 560px 时的窄档位置（E-14）；外观页不再写「只保留三项」（E-15）；颜色门禁同时阻断规范外圆角（E-17）；治理、索引与入口的失效引用改到现行出处（E-18）；中性按钮的 8% / 10% 规则限定中性变体，并改正 `colors.ts` 旧注释（C-11）；`outline` 只对被聚焦元素本身失效（D-02）；展开收起参考实现改为 `components/ui/collapse.tsx`，`SectionCollapse` 改用 `--motion-base` / `--motion-ease-move`，默认值不变（D-03）；用量历史页面标题沿用设置页标题（D-09）；壁纸文档后半段的三张场景图规则只作退役兼容，见下条（D-12）；可点性文档旧接口名标为已被不变量 C 取代，「只多一条下划线」并入文件类型图标例外（D-14、D-15）；决策表「跳过登录」文字色标注 Desktop 已改为墨水次要档（A-12）；台账人工区去掉「尚未合并」、过期复查日期与临时负责人安排，未排期的下一动作写「待定」，`owner` 列按台账 schema 保留（E-19）。在最新 main 上核对时已失效、不再处理：E-18 中豁免表 Toast 一处（A-15 已把 Toast 改为 token，条目已删）、A-08 中权限高亮 token 的出处（§2 已无该句）、D-02 中输入框 `outline: revert` 的误述（已更正）。被取代：§9「Default-theme values」速查与三条示例、§15.13 品牌红 only-for 清单、§15.8 失效消费者行号、§7 圆角与豁免域列举、决策表 §9 的透明度列。落点：`DESIGN.md` §2、§3、§4、§5、§7、§9、§10、§14.2、§14.4、§15；`design-governance.md`、`cindy-design-system.md`、`token-decision-table.md`、`design-inventory.md`、`usage-history-charts.md`、`message-link-clickability.md`、`wallpaper.md`、手机设计指南 §9；`motionDiscipline.test.ts` 基线删去 `SectionCollapse`。
+
+- **11-11 壁纸文档退役场景归档（D-12）**——Window Companion、Future Atelier、Dream Wander 已于 2026-10-17 退出选择器，`wallpaper.md` 后半段仍按「三张场景图」写现行规则。现行：通用的动态壁纸规则（固定机位、按需下载与校验、每窗一个解码器、静态 / 动态切换淡入淡出、消息层淡出）改写为适用于所有内置视频；三张退役场景只保留兼容已保存选择所需的说明（构图、遮罩、素材规格与「不得重做动效」）。以下为原文中只属于这三张场景的美术与动效验收要求，原样归档：
+
+  > The scene-led Cindy wallpaper alternatives (2026-10-01) place the recognizable
+  > character and black cat in three distinct illustrated environments: a sunny
+  > window, a futuristic atelier and a floating garden above clouds. Preserve each
+  > landscape as one viewport-sized, cover-fitted canvas behind navigation, chat and
+  > tools. Do not confine the scene to chat, fade its edges into a separate backdrop,
+  > or reposition/scale it when sidebars open: that splits the app into disconnected
+  > pieces (user correction, 2026-10-01). Only window resizing changes the crop.
+  > These curated scenes use a lighter theme-derived
+  > veil than arbitrary photos, with a stronger Dark veil to preserve reading
+  > contrast. Validate real long messages, not only empty chat views.
+  >
+  > The three approved scenes also offer an explicit Static / Dynamic choice (2026-10-01).
+  > Static remains the default. Dynamic uses a silent, subtly moving loop with a fixed
+  > camera, preserving the same composition and full-window crop. Camera position,
+  > viewing angle and field of view must stay constant throughout the entire loop,
+  > including Dream Wander and Future Atelier (user correction, 2026-10-02). No pans,
+  > tilts, dolly movement, zooms or perspective drift; matching first and last frames
+  > alone is insufficient. Built-in static artwork
+  > uses 3584×2240 WebP. The three official scenes use bundled 640×400 previews and
+  > download the full WebP or 2304×1440 MP4 on demand (2026-10-15 decision), with no
+  > resolution switching on window resize. Only the previews enter the Renderer bundle.
+  > The motion approved on 2026-10-02 is preserved frame for frame at its original
+  > 24fps. The 2304×1440 delivery is Real-ESRGAN anime-video super-resolution
+  > of the approved 1214×758 sources, not native 2K generation; do not regenerate,
+  >
+  > Environment motion must be clearly perceptible rather than concentrated on the
+  > character (user correction, 2026-10-01). Animate existing foliage, curtains and
+  > leaf shadows in the sunny scene; rain, plants and reflections in the atelier;
+  > clouds, grasses, vines and waterfalls in the floating garden. Keep architecture
+  > and the camera stationary. Prefer several slow, independent environmental rhythms
+  > with restrained character movement; verify foliage crops and loop transitions,
+  > including after the Light/Dark readability veil is applied.
+  > For the floating garden, keep the environmental amplitude restrained: tiny leaf
+  > and vine-tip movement, slow cloud-edge drift and fine downward water flow. Avoid
+  > large drifting petals, rolling cloud banks and whole flowerbeds sweeping across
+  > the view (user correction, 2026-10-01). Demonstrate motion in recordings of the real
+  > chat interface with messages, composer and pane chrome, not only isolated artwork.
+  > In the sunny window scene, keep the curtain close to its resting drape: small,
+  > slow folds rather than large billows across the window. Nearby leaves and light
+  > shadows should move gently without competing with messages (user correction,
+  > 2026-10-01).
+  > The window scene needs infrequent, natural blinking and coherent whole-scene
+  > motion (user corrections, 2026-10-01). Judge hair, face, eyes, cat, curtains and
+  > foliage together at normal playback speed. Do not retime an isolated eye patch
+  > against a differently moving face or reverse hair motion to manufacture a loop.
+  > Keep the blink gentle and the environment moving at a steady pace: never speed
+  > up the entire frame to shorten a blink, which also accelerates curtains, hair and
+  > shadows (user correction, 2026-10-02). Avoid mid-blink reopening, alternating-frame
+  > holds and doubled eyelid outlines. Decoder frame counts alone do not establish natural
+  > motion; inspect the complete action and loop boundary before accepting an asset.
+
 - **11-11 颜色与主题一组落地（维护者裁决：A-03 A、A-04 A（含 E-16）、A-05 B、A-06 A、A-07 A、A-09 A、A-14 A、A-15 A、A-16 A、E-02 B、E-03 A、E-05 A、E-12 A）**——设计规范矛盾审核（基准 `6b8468f37c`）颜色组。改界面：Classic 的 `text-primary-hsl` / `surface-hover-hsl` / `text-tertiary-hsl` 改为与 hex 同色（Light `0 0% 9%`→`0 0% 15%`，Dark `60 2% 17%`→`60 2% 23%`、`0 0% 45%`→`0 0% 64%`；`text-tertiary-hsl` 跟随次要档，与 CINDY 一致；取代 DS-8「历史 HSL 不按名称纠正」），Classic 浅色 shadcn 正文/主按钮略浅、深色侧栏与标题栏悬停更明显、深色侧栏灰字提亮一档；聊天输入框占位字注册默认改为占位档本身（不再叠 40%），删除 CINDY 的同值覆盖，未使用的 `chat-placeholder-text` 改指占位档（ID 保留）；图片预览底、文件预览「未保存」浮签与旧副本横幅、worktree 失败提示、计划保存失败、搜索错误、转换对话框对勾、语音权限对勾、终端错误改走现有 token，删除 composer-pill 兜底色；`.diff` / `.patch` 文件在文件预览与文档预览里按 `--diff-*` 整行上色，patch 代码块与 diff 代码块同款渲染，深色 hljs 增删行改走 token；Toast 四色改走 `--focus-ring` / `--card-status-done` / `--warning-fg` / `--card-status-error`，撤销 10-30 续期的 Toast 豁免（与已过期的 composer 兜底豁免一起移入归档）；CINDY Dark `sidebar-item-hover` 由白 9% 并入墨水阶梯白 6%（取代 07-21 玻璃面白 9%；核对 #9828 只改侧栏底色、薄黑与系统磨砂，未改此值）；计划编辑框去掉自设光标、CodeMirror 主题删除被全局规则覆盖的 `caretColor`。只改规范：§2 补登在用的功能彩色（推理强度、价格档、Fast 蓝、收藏金、引擎徽标、SSH 状态点、Skill Hub 审核徽标、info 蓝），完整清单改为 §2 + §10 + §15.4 合读；§2 渐变清单补登模型名预算彩虹（7 段、深浅两套、只用于折扣路由模型名文字）、GhostTool 中性扫光与 Computer Use 光晕，改正 §7 / §15.4「中性色条」说法；§10 登记 `--shadow-soft-panel` 为命令面板 / 确认框阴影基值并删除未使用的 `--shadow-chip-raised`，§7 只引用 §6 清单；§10 豁免表补 `--warning-accent` 根 token，四个跟随者写成 `= var(--warning-accent)`；§15.11 登记截图标注光标跟随画笔色为例外；§15.4 改正 `destructive` / `search-match-bg` 与 `HSL_FORMAT_IDS` 的关系，`cindyThemes.test.ts` ③ 补「名单外不得写成 HSL」断言；CINDY 主题与冻结数据文件头改为数值看 `packages/design-tokens`、规则看 §15。现行落点：`DESIGN.md` §2、§7、§10、§15.4、§15.6、§15.11、§15.16；`packages/design-tokens` 源与生成物，`cindyDecisionData.ts` 与两份冻结快照。
 - **11-11 动效一组：面板宽度回到 base 档，循环指示器逐个登记或移除（2026-11-11 维护者裁决：D-04 方案 A、D-05 方案 C、D-06 方案 C、D-07 方案 A、D-11 方案 B、D-16 方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现动效规范、开发规范与代码三方不一致。D-04：左右侧栏、标题栏红绿灯让位与浮动按钮簇、文件浏览聊天栏的宽度动画写死 250ms，比面板开合的 base 档（200ms）慢；Toast 列表重排写死 300ms + 浏览器默认 ease-out。现行：全部改用 `--motion-base` / `--motion-ease-move`（侧栏开合快 50ms），开发规范不再写死数值；新增守卫禁止 renderer 的 `.ts` / `.tsx` 写死时长与 `cubic-bezier`，存量 67 个文件 117 处登记为只减不增的基线。D-05：语音「整理中」转圈与麦克风波形在 SVG 内部做循环动画，违反「SVG 上不做动画」红线，但改到 HTML 层会让多行文字每帧重绘抖动；登记为 SVG 例外，转圈从 0.9s 改为共用的 `--motion-spinner-cycle`（1 秒）。D-06：Thinking 三点与 GhostTool 运行扫光登记为循环例外；插件页唯一一处呼吸脉冲未读点改为与其他未读点一致的静态点（`AttentionDot` 去掉 `breathing`）；已无人使用的 `session-card-prog`、`session-running-dot-wave` 残留样式删除。D-07：Agent Island 设置页吉祥物预览登记为品牌例外，代码与参数保持现状。D-11：壁纸视频 Static / Dynamic 淡入淡出从 base（200ms）改为与预览图相同的 fast / ease-move（150ms），下载进度条的 base + linear 登记为窄例外（以 #9828 后的现状为准，只改时长）。D-16：菜单栏面板任务列表的运行中图标扩散环（2.2s）与呼吸点（0.8s）补登记，代码不动。被取代：§14.4 菜单栏「持续动效只有液面涟漪与份额条高光两种」的说法、`wallpaper.md`「视频淡入淡出 base/ease-move (200ms)」、`desktop-development.md`「250ms 宽度动画」。落点：`DESIGN.md` §14.4（Panel width and list reorder、Registered looping indicators、红线、菜单栏段落、Application wallpaper）、§15.7（Agent Island mascot preview）；`wallpaper.md`、`macos-menu-bar-quota.md`、`desktop-development.md`；守卫 `motionDiscipline.test.ts`。
 
 - **11-11 固定行高的定义扩展到 rem 与 Tailwind 数字档（维护者裁决：方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`，B-01）发现：§3 只把 `text-<n>` + `leading-[Mpx]` 算作固定行高缺陷，§4 DS-11 却要求行框随字号设置增长；而 Tailwind 自带的 `leading-3…10` 是 rem 长度，字号设置只改写 `--text-*`、不改根字号，UI 字号 24 时 `text-13` 变成 22px 而 `leading-5` 仍是 20px，多行文字几乎贴住。守卫只匹配 `leading-[数字px]`，renderer 中同类组合约 370 处，包括共享的 ErrorNotice 与 DownloadToast。维护者在三个方案中选 A：补规范和守卫，先改共享组件，存量分批。现行：固定行高 = `leading-[Mpx]` / `leading-[Nrem]` / `leading-3…10`，一律改无单位比例（原 px ÷ 默认字号）；守卫只拦新增，存量 119 个文件 375 处登记为只减不增的基线，按区域分五批迁移。被取代：#1553「只有 px 行高算缺陷」的口径。落点：`DESIGN.md §3` 排版 non-goals 行高例外条款；`typographyDiscipline.test.ts` 的 `fixed-leading` 规则与 `FIXED_LEADING_DEBT`；`components/ui/error-notice.tsx`、`components/ui/toast/DownloadToast.tsx`。
 
 - **11-11 确认弹窗按钮顺序改为「取消在左、主操作在右」，标准按钮成为唯一呈现（维护者裁决：C-01 方案 B、C-02 方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现：§4 规定确认弹窗按「主操作 → 可选第三按钮 → 取消」排列（DS-6），但 `ConfirmDialog` 另有未登记的 `cancelFirst` 开关，9 处调用把取消挪到左边，同一 App 出现两种顺序；同时 §4 仍写 `presentation="standard"` 只在两处删除入口试点，实际已有三十余处显式使用，其余调用仍是旧呈现，长按钮文案会冲出弹窗。维护者选 C-01 B：所有确认弹窗统一为取消在最左、主操作在最右，三个按钮时为取消 → 第三按钮 → 主操作，移除 `cancelFirst`；选 C-02 A：标准按钮设为唯一呈现，移除 `presentation` 参数，Full Access 与插件授权确认一并统一（对话内权限卡不是 ConfirmDialog，不受影响）。默认焦点仍落在取消（Radix 按 Cancel 定位，与 DOM 位置无关），`autoFocusConfirm` 与逐字输入分支、Enter / Esc 行为不变。手写弹窗中按钮顺序相反的一并对调：「删除定时任务」「任务运行时插件」，以及供应商分享 / 中转 / 供应商组共用底栏的申请、粘贴链接、成员备注、分享审批、中转审批、加入供应商组，和账单结账失败态的「关闭 / 重试」。被取代：DS-6 D3 的「主 → 第三 → 取消」排列与「仅两处 opt-in」范围。落点：`DESIGN.md §4` Inputs & Forms、Dialog & Modal（Button order / Focus on open）；`components/ui/confirm-dialog.tsx`。
+
+- **11-11 对话框其余：删除伙伴改用共享确认弹窗、「下次不再提示」用共享复选框、弹窗一律带浮层阴影（维护者裁决：C-05 A、C-13 A、C-04 A、C-06 A、A-01 A、C-03 A）**——设计规范矛盾审核（基准 `6b8468f37c`）对话框组的其余条目。改界面：删除伙伴的确认弹窗原是手写的一套（右上角 × 与「取消」并存、取消是无边框小字、标题红色、正文 12px），改用共享 `ConfirmDialog` 的破坏性样式，去掉 ×、取消变描边胶囊、标题常规色、正文 16px，取消在左；删除失败提示保留在弹窗内（C-05）。共享确认弹窗里的「下次不再提示」从手写 14px 原生复选框改为共享 `Checkbox`（16px、`--text-primary` 强调色、统一焦点环与禁用态）（C-13）。实验页「关闭会话」不是确认步骤，从红底实心改为 `tone="danger"` 红字透明底；数据库清理与图像生成中断两处手写确认的红底按钮写法统一为与 ConfirmDialog 相同的 `variant="primary" tone="danger-solid"`，外观不变（C-06）。只改文档：`danger-solid` 的使用范围从「只给 ConfirmDialog 的确认按钮」放宽为「确认弹窗的最终确认按钮」，含同结构的手写确认，手写确认优先迁到 ConfirmDialog（C-06）；确认弹窗正文以代码为准写成 regular 400，标题仍为 500（C-04）；所有弹窗（确认与其他）统一保留现有浮层阴影 `--shadow-menu`，§6 层级表新增「Floating」一行，Lifted 行与 §2 居中卡片不再列模态，§1 的阴影例外改为指向 §6 登记（A-01，维护者备注；并入 B-17）；按钮迁移说明去掉已过时的「legacy ConfirmDialog」（C-03）。被取代：§2「Centered-card layouts（含 modal）无需阴影」、§6 Lifted 行的「modals」、§1「窄例外由 §10 的 Token 约束」、§4「Title / description … medium weight」与「danger-solid reserved for the ConfirmDialog confirm button」。落点：`DESIGN.md` §1、§2（Layer rule、ConfirmDialog Danger）、§4 Buttons / Desktop settings controls / Dialog & Modal、§6；`BotDeleteDialog.tsx`、`confirm-dialog.tsx`。
 
 - **11-11 字体一组：标题字重统一为 500，§3 / §5 对齐生成源与实际用法（2026-11-11 维护者裁决：B-03 方案 B，B-02 / B-04 / B-05 / B-06 / B-07 / B-08 / B-11 / B-12 方案 A）**——设计规范矛盾审核（基准 `6b8468f37c`）发现标题字重四处说法不一：字重阶梯写 500，Hierarchy 表 Card Title 写 400，§7 写 400/500，§4 DS-11 又规定表单弹窗标题 18/600、紧凑提示标题 15/600，相邻弹窗看起来轻重不一。维护者选 B：标题全部回到 500。现行：桌面端页面、弹窗、分区、卡片与提示卡标题一律 500，600 只做局部强调、不用于标题；登录 / Splash 品牌画布的标题按 §16 / `login-flow.md` 的明确规定取字重（§3 豁免表的 700 只限该行所列文件，注销状态气泡标题 Regular 400），登录规范没有规定的界面同样用 500；手机端角色表不变。代码：原先 600 的 16 处弹窗标题（服务商、MCP、语音、代输入、技能扫描、Cindy Make、中转服务、任务标签等）、9 处提示卡标题（权限、插件授权、重命名、计划审阅、插件配置、收起的提示卡外壳、远程桌面确认）与 12 处页面 / 卡片 / 面板标题改为 500，自动化表单弹窗标题由 400、人机验证弹窗、文本附件读取失败提示与 Review 授权确认窗（main 进程生成的独立窗口）标题由 600 改为 500；分组小标签、表头与名称不是标题，仍可用 600。同批纯文档纠错：§3 Hierarchy 桌面行按实际角色重写（13px 按钮与可阅读说明、15px 聊天正文与卡片标题、20px 页面标题；去掉「按钮 18px」）；代码行改为跟随 `--app-code-font-size`（默认 14，可设 10–24）与系统等宽栈；UI 与代码回退字体栈改为引用生成值并说明中文字体排在 Segoe UI 之前的原因；§5 间距改为引用生成的 DTCG `space-*`（4px 基准，含 2px 半档），删除手写的 8px 基准与 12 档；豁免表改正桌面守卫扫描范围（整个 `apps/desktop/src`）与 xterm 字号来源（`terminalSize`，默认 13，可设 10–24），补登 Windows 任务栏角标 8–12px / bold；§3 登记内联字号不随 UI 字号缩放的缺口与分批迁移计划，存量本轮不改。被取代：DS-11「provider/MCP form title 18/600；compact prompt title 15/600」、§7「display headings 400 / 500」、§5「Base unit: 8px」及 12 档列表。落点：`DESIGN.md` §2 Windows 角标条、§3、§4 DS-11、§5 Spacing System、§7；`typographyDiscipline.test.ts` 盲区注释。
 

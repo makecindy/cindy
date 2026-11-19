@@ -5,6 +5,7 @@ import { FILE_PEER_MAX_BYTES, FILE_PEER_RANGE_BYTES, validFileVersion, type Devi
 import { MobileAgentNetEngine } from './agentNetNative';
 import { tryMobilePeerFileRange, peerMediaUri, releasePeerMedia, recordPeerMediaPlayback } from './peerFileRegistry';
 
+interface ReadActivity { (state: 'queued' | 'active', loaded?: number): void; signal?: AbortSignal; }
 const streams = new Set<NativeMediaStream>();
 let opening = 0;
 
@@ -25,9 +26,10 @@ export async function openPeerMediaStream(device: string, url: string, metadata:
 async function open(device: string, url: string, metadata: DeviceFileResult,
   current: () => boolean, signal?: AbortSignal): Promise<DeviceFileResult | null> {
   const guard = () => { if (!current() || signal?.aborted) throw new Error('FILE_PEER_CANCELLED'); };
-  const fetchRange = async (start: number, end: number, readSignal?: AbortSignal) => {
+  const fetchRange = async (start: number, end: number, readSignal?: AbortSignal, activity?: ReadActivity) => {
     guard();
-    const value = await tryMobilePeerFileRange(device, url, { start, end, version: metadata.version! }, readSignal);
+    const value = await tryMobilePeerFileRange(device, url, { start, end, version: metadata.version! }, readSignal,
+      loaded => activity?.('active', loaded), () => activity?.('active'));
     if (!value) { guard(); return null; }
     const uri = peerMediaUri(value);
     try {
@@ -41,14 +43,40 @@ async function open(device: string, url: string, metadata: DeviceFileResult,
   // Native players can retry the same HTTP block while probing or buffering.
   // Retain only the most recent block (at most 1 MiB), including its in-flight
   // request, so a retry does not queue another transfer over the file channel.
-  let cached: { start: number; end: number; bytes: Promise<Uint8Array | null> } | undefined;
-  const read = async (start: number, end: number, readSignal?: AbortSignal) => {
+  let cached: { start: number; end: number; bytes: Promise<Uint8Array | null>;
+    state: 'queued' | 'active'; loaded: number; listeners: Set<ReadActivity>; controller: AbortController } | undefined;
+  const read = async (start: number, end: number, readSignal?: AbortSignal, activity?: ReadActivity) => {
     guard();
-    if (!cached || cached.start !== start || cached.end !== end)
-      cached = { start, end, bytes: fetchRange(start, end, readSignal) };
-    const bytes = await cached.bytes;
-    guard();
-    return bytes;
+    if (!cached || cached.start !== start || cached.end !== end) {
+      const entry = { start, end, bytes: Promise.resolve<Uint8Array | null>(null),
+        state: 'queued' as 'queued' | 'active', loaded: 0, listeners: new Set<ReadActivity>(), controller: new AbortController() };
+      cached = entry;
+      if (readSignal?.aborted) entry.controller.abort();
+      const abort = () => entry.controller.abort();
+      readSignal?.addEventListener('abort', abort, { once: true });
+      entry.bytes = fetchRange(start, end, entry.controller.signal, (state, loaded = entry.loaded) => {
+        entry.state = state; entry.loaded = loaded;
+        for (const listener of entry.listeners) if (!listener.signal?.aborted) listener(state, loaded);
+      }).finally(() => readSignal?.removeEventListener('abort', abort));
+    }
+    const entry = cached;
+    let abort: (() => void) | undefined;
+    try {
+      if (activity) { entry.listeners.add(activity); activity(entry.state, entry.loaded); }
+      const bytes = await (activity?.signal ? Promise.race([entry.bytes, new Promise<never>((_, reject) => {
+        abort = () => reject(new Error('FILE_PEER_CANCELLED'));
+        if (activity.signal!.aborted) abort(); else activity.signal!.addEventListener('abort', abort, { once: true });
+      })]) : entry.bytes);
+      guard(); return bytes;
+    } finally {
+      if (abort) activity?.signal?.removeEventListener('abort', abort);
+      if (activity) {
+        entry.listeners.delete(activity);
+        if (activity.signal?.aborted && !entry.listeners.size) {
+          entry.controller.abort(); if (cached === entry) cached = undefined;
+        }
+      }
+    }
   };
   // Probe the negotiated path before publishing a player URL. Old hosts return
   // null without receiving a range request; their full-file/OSS path is unchanged.
@@ -60,15 +88,15 @@ async function open(device: string, url: string, metadata: DeviceFileResult,
   try {
     stream = await openNativeByteStream(engine, metadata.mimeType, async options => ({
       size: metadata.size,
-      async read(start, end, write) {
+      async read(start, end, write, activity) {
         guard();
         let bytes: Uint8Array | null;
         if (first && end < first.length) bytes = first.slice(start, end + 1);
-        else { first = null; bytes = await read(start, end, options.signal); }
+        else { first = null; bytes = await read(start, end, options.signal, activity); }
         if (!bytes) throw new Error('FILE_PEER_UNAVAILABLE');
         guard(); await write(bytes, 0);
       },
-      async close() { first = null; cached = undefined; },
+      async close() { first = null; cached?.controller.abort(); cached = undefined; },
     }), { assertCurrent: guard, signal });
   } catch (error) { await engine.destroy(); throw error; }
   streams.add(stream);

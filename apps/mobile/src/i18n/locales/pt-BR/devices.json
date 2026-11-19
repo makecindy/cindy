@@ -331,6 +331,7 @@
       "renameDevice": "Renomear {{label}}",
       "project": "Projeto {{title}}",
       "dialogue": "Conversa",
+      "automation": "Automações",
       "openAutomationLatest": "Abrir a sessão mais recente da automação {{title}}",
       "automationTask": "Automação {{title}}",
       "openConversation": "Abrir sessão {{title}}",
@@ -356,7 +357,9 @@
     },
     "menu": {
       "groupDialogue": "Conversa",
+      "groupAutomation": "Automação",
       "dialogueFolder": "Conversa",
+      "automationFolder": "Automações",
       "search": "Pesquisar",
       "settings": "Configurações",
       "remoteSettings": "Configurações de conexão remota",
@@ -426,7 +429,33 @@
       "filterTeammatesHeading": "Amigos",
       "filterAnySource": "Todas",
       "filterHideAllTeammates": "Ocultar tudo",
-      "filterSelectedTeammates": "{{count}} selecionados"
+      "filterSelectedTeammates": "{{count}} selecionados",
+      "inbox": {
+        "inbox": "Pendentes",
+        "working": "Em andamento",
+        "snoozed": "Adiadas",
+        "archived": "Tratadas",
+        "snooze": "Adiar tarefa",
+        "complete": "Concluído",
+        "wake": "Mostrar agora",
+        "restore": "Restaurar tarefa",
+        "process": "Marcar como tratada (arquivar)",
+        "empty": "A caixa de entrada está vazia",
+        "snoozeFailed": "Não foi possível salvar o horário. Verifique a conexão e atualize o computador que hospeda esta tarefa.",
+        "hours": "Em {{count}} horas",
+        "hours_one": "Em {{count}} hora",
+        "hours_many": "Em {{count}} horas",
+        "hours_other": "Em {{count}} horas",
+        "thisEvening": "Hoje à noite",
+        "tomorrow": "Amanhã",
+        "nextWeek": "Na próxima semana",
+        "custom": "Personalizar…",
+        "invalidTime": "Escolha uma data e hora futuras dentro de um ano."
+      },
+      "taskListMode": {
+        "enterInbox": "Caixa de entrada",
+        "leaveInbox": "Lista de tarefas"
+      }
     },
     "search": {
       "placeholder": "Buscar títulos ou conteúdo…",

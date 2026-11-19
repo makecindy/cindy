@@ -281,6 +281,12 @@ function OwnerScopedRouter() {
 }
 
 export function App() {
+  useEffect(() => {
+    const root = document.getElementById('root');
+    if (!root) return;
+    root.dataset.cindyMounted = '1';
+    return () => { delete root.dataset.cindyMounted; };
+  }, []);
   useDisableContextMenu();
   // mac ⌘W 根级兜底: splash / env check / 登录 / 迁移等壳外阶段关(隐藏)本窗口;
   // MainLayout / SidebarWindowLayout 挂载期间声明所有权, 本兜底让路给壳层的
@@ -354,6 +360,7 @@ export function App() {
         fast,
         thinking,
         markModelChoice,
+        selectDraftAgent,
         taskProviderId,
         appDefaultSelection,
       }) => {
@@ -405,7 +412,7 @@ export function App() {
               model: modelId,
               providerId: providerId || null,
               ...(effort !== undefined ? { effort: effort as Effort } : {}),
-            });
+            }, { selectVendor: selectDraftAgent });
           }
         }
         if (effort !== undefined) {

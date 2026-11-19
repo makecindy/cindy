@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
-import { parse as parseToml } from 'smol-toml';
+import { parseCodexConfigToml as parseToml } from './codex-config-toml.js';
 // Unmodified Apache-2.0 OpenAI Codex rust-v0.153.0 models-manager/prompt.md.
 // This is the native unknown-model prompt, never a GPT-specific template.
 import nativeFallbackPrompt from './codex-native-fallback-prompt.md?raw';

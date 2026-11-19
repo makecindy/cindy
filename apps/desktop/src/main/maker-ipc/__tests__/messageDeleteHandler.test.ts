@@ -63,6 +63,7 @@ describe('performMessageDeletion', () => {
       ['target'],
       expect.any(String),
       undefined,
+      'complete',
     );
     const handoff = vi.mocked(deps.commitDeletion).mock.calls[0]?.[2] ?? '';
     expect(handoff).toContain('keep before');
@@ -138,6 +139,7 @@ describe('performMessageDeletion', () => {
         startedAtInclusive: 100,
         startedAtExclusive: 700,
       },
+      'complete',
     );
     const handoff = vi.mocked(deps.commitDeletion).mock.calls[0]?.[2] ?? '';
     expect(handoff).toContain('diagnose it');
@@ -186,6 +188,7 @@ describe('performMessageDeletion', () => {
         startedAtInclusive: 100,
         startedAtExclusive: 700,
       },
+      'complete',
     );
     const handoff = vi.mocked(deps.commitDeletion).mock.calls[0]?.[2] ?? '';
     expect(handoff).toContain('diagnose it');
@@ -283,6 +286,7 @@ describe('performMessageDeletion', () => {
       ['target'],
       expect.any(String),
       undefined,
+      'complete',
     );
   });
 });

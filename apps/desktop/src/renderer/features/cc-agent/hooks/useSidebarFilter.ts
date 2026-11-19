@@ -45,6 +45,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { cancelActiveSortable } from '@/components/sidebar/SortableList';
 import type { TaskBotIdentity } from '@/features/bots/botFollowScopes';
 import { createLogger } from '@/lib/logger';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
@@ -66,6 +67,7 @@ import {
   loadVendor,
   loadGroupBy,
   loadGroupDialogue,
+  loadGroupAutomation,
   loadGroupDevice,
   loadLastActivity,
   loadSortBy,
@@ -83,6 +85,7 @@ import {
   persistVendor,
   persistGroupBy,
   persistGroupDialogue,
+  persistGroupAutomation,
   persistGroupDevice,
   persistLastActivity,
   persistSortBy,
@@ -151,6 +154,8 @@ export interface UseSidebarFilterReturn {
   groupBy: FilterGroupBy;
   /** 「对话归为一组」开关(D 期):true = 无项目任务收进「对话」组;默认 false 散排。 */
   groupDialogue: boolean;
+  /** 「自动化归为一组」开关:true = 自动化运行的任务收进「自动化」组;默认 true。 */
+  groupAutomation: boolean;
   /** 「按设备分组」开关(E 期):默认 true;有可选远程设备（含断线缓存）时可见/生效。 */
   groupDevice: boolean;
   /** Sidebar 主列表任务排序。默认 'recency'。 */
@@ -185,6 +190,8 @@ export interface UseSidebarFilterReturn {
   setGroupBy: (groupBy: FilterGroupBy) => void;
   /** 设置「对话归为一组」，持久化到 localStorage。 */
   setGroupDialogue: (groupDialogue: boolean) => void;
+  /** 设置「自动化归为一组」，持久化到 localStorage。 */
+  setGroupAutomation: (groupAutomation: boolean) => void;
   /** 设置「按设备分组」，持久化到 localStorage。 */
   setGroupDevice: (groupDevice: boolean) => void;
   /** 设置主列表任务排序，持久化到 localStorage。 */
@@ -277,6 +284,7 @@ export function useSidebarFilter(
   );
   const [groupBy, setGroupByState] = useState<FilterGroupBy>(() => loadGroupBy());
   const [groupDialogue, setGroupDialogueState] = useState<boolean>(() => loadGroupDialogue());
+  const [groupAutomation, setGroupAutomationState] = useState<boolean>(() => loadGroupAutomation());
   const [groupDevice, setGroupDeviceState] = useState<boolean>(() => loadGroupDevice());
   const [sortBy, setSortByState] = useState<FilterSortBy>(() => {
     migrateLegacyManualSort();
@@ -286,19 +294,28 @@ export function useSidebarFilter(
     loadProjectOrder(),
   );
   const [pinnedSortBy, setPinnedSortByState] = useState(loadPinnedSortBy);
-  const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
+  const pinnedSortByRef = useRef(pinnedSortBy);
+  const applyPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    if (next === pinnedSortByRef.current) return;
+    pinnedSortByRef.current = next;
+    // Sortable may have moved a card into another column. Restore its DOM
+    // before React reconciles the newly sorted entries against their parents.
+    cancelActiveSortable('[data-sortable-scope="pinned"]');
     setPinnedSortByState(next);
-    persistPinnedSortBy(next);
   }, []);
+  const setPinnedSortBy = useCallback((next: PinnedSortBy) => {
+    applyPinnedSortBy(next);
+    persistPinnedSortBy(next);
+  }, [applyPinnedSortBy]);
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key === PINNED_SORT_BY_KEY || event.key === null) {
-        setPinnedSortByState(loadPinnedSortBy());
+        applyPinnedSortBy(loadPinnedSortBy());
       }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, []);
+  }, [applyPinnedSortBy]);
   const [manualProjectOrder, setManualProjectOrderState] = useState<string[]>(() =>
     loadManualProjectOrder(ownerId),
   );
@@ -562,6 +579,11 @@ export function useSidebarFilter(
     persistGroupDialogue(next);
   }, []);
 
+  const setGroupAutomation = useCallback((next: boolean) => {
+    setGroupAutomationState(next);
+    persistGroupAutomation(next);
+  }, []);
+
   const setGroupDevice = useCallback((next: boolean) => {
     setGroupDeviceState(next);
     persistGroupDevice(next);
@@ -609,8 +631,10 @@ export function useSidebarFilter(
   );
 
   const setManualPinnedOrder = useCallback(
-    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) =>
-      updatePinnedOrder(
+    (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) => {
+      // 显示排序不能写回手动顺序，也忽略切换模式后迟到的拖拽回调。
+      if (pinnedSortByRef.current !== 'manual') return Promise.resolve();
+      return updatePinnedOrder(
         () =>
           normalizeManualPinnedOrder(order, activeEntryIds, (entryId) =>
             sidebarPinnedEntryComparisonKey(entryId, window.electronAPI.platform),
@@ -620,7 +644,8 @@ export function useSidebarFilter(
           baseOrder: Array.from(baseOrder),
           order: nextOrder,
         }),
-      ),
+      );
+    },
     [updatePinnedOrder],
   );
 
@@ -682,6 +707,7 @@ export function useSidebarFilter(
     lastActivity,
     groupBy,
     groupDialogue,
+    groupAutomation,
     groupDevice,
     sortBy,
     pinnedSortBy,
@@ -697,6 +723,7 @@ export function useSidebarFilter(
     setLastActivity,
     setGroupBy,
     setGroupDialogue,
+    setGroupAutomation,
     setGroupDevice,
     setSortBy,
     setPinnedSortBy,

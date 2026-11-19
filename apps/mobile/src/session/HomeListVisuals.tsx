@@ -16,10 +16,12 @@ const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
 export const SESSION_ROW_LONG_PRESS_MS = 400;
 /** Shared by the full home list and its persistent, narrow task pane. */
 export function SessionStatusMark({
+  identityIcon,
   item,
   running,
   showDraftIndicator,
 }: {
+  identityIcon?: ReactNode;
   item: RemoteSessionListItem;
   running: boolean;
   showDraftIndicator: boolean;
@@ -33,7 +35,7 @@ export function SessionStatusMark({
   const glyphColor = running ? colors.statusAccent : colors.textTertiary;
   return (
     <View style={styles.sessionStatusMark}>
-      {archived ? (
+      {identityIcon ?? (archived ? (
         <Archive color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
       ) : orcaLead ? (
         // 与桌面 SessionStatusIcon /「+」菜单协同项同款 UsersRound，不再用旧 Puzzle。
@@ -54,7 +56,7 @@ export function SessionStatusMark({
           // Agent 在被控电脑之外的另一台电脑运行(远程供应商):与桌面侧栏同一个波纹标识。
           remote={sessionAgentRunsOnOtherComputer(item.session)}
         />
-      )}
+      ))}
       {!archived && showDraftIndicator ? (
         <View style={styles.sessionDraftIndicator}>
           {/* 9px:Pencil 微徽标,徽标容器几何依赖(designTokenDiscipline ALLOWLIST 登记豁免)。 */}

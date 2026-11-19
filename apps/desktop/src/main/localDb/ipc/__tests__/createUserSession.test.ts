@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   bootstrap: vi.fn(),
   insert: vi.fn(),
   notify: vi.fn(),
+  projectForNewTask: vi.fn(),
 }));
 const db = {
   insert: () => ({
@@ -49,7 +50,10 @@ vi.mock('../../../maker-host/git-safety-settings-store', () => ({
   readGitSafetySettings: () => ({}),
 }));
 vi.mock('../sessionSourceGuard', () => ({ assertRendererSessionSourceAllowed: vi.fn() }));
-vi.mock('../recentWorkdirsCore', () => ({ upsertRecentWorkdir: vi.fn(async () => undefined) }));
+vi.mock('../recentWorkdirsCore', () => ({ touchRecentWorkdir: vi.fn(async () => undefined) }));
+vi.mock('../../../mcp-integrations/projectManagementCore', () => ({
+  projectForNewTask: h.projectForNewTask,
+}));
 import { createUserSession } from '../createUserSession';
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 const tree = {
@@ -91,6 +95,7 @@ beforeEach(() => {
     return { stdout: tree.path };
   });
   h.bootstrap.mockResolvedValue(undefined);
+  h.projectForNewTask.mockResolvedValue({ projectDir: tree.baseRepo, workspaceKind: 'project' });
   setSessionOpeningModelAdmission(async (body) => body);
 });
 it('opens an empty borrower with durable project and worktree references while preserving the owner', async () => {
@@ -111,6 +116,22 @@ it('opens an empty borrower with durable project and worktree references while p
   expect(h.row?.parentSessionId).toBeNull();
   expect(h.entries).toEqual([tree]);
   expect(h.git).toHaveBeenCalledWith(['rev-parse', '--show-toplevel'], tree.path);
+  expect(h.projectForNewTask).toHaveBeenCalledWith(tree.path, tree.baseRepo);
+});
+// Unit regression for the upstream membership check: the selected registered
+// project can be a subdirectory. Its repo root only identifies the checkout.
+it('preserves a registered subdirectory as the project when reusing its repository worktree', async () => {
+  const projectDir = '/repo/app';
+  h.git.mockImplementation(async (_args: string[], cwd: string) => ({
+    stdout: cwd === projectDir ? tree.baseRepo : tree.path,
+  }));
+  h.projectForNewTask.mockResolvedValueOnce({ projectDir, workspaceKind: 'project' });
+  await expect(createUserSession({ ...request, workingDir: projectDir }, ports)).resolves.toMatchObject({
+    projectDir,
+    workingDir: tree.path,
+    worktreePath: tree.path,
+  });
+  expect(h.projectForNewTask).toHaveBeenCalledWith(tree.path, projectDir);
 });
 it.each(['removed', 'another-project', 'ephemeral', 'quarantine', 'replaced'] as const)(
   'rejects a %s selection before opening any task',

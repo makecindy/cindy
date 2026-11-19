@@ -71,7 +71,7 @@ function visit(node: ts.Node) {
     terminalGuard = node.getText(source);
   }
   if (ts.isPropertyAssignment(node)) {
-    if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('runtimeStatus.orcaRole')) {
+    if (node.name.getText(source) === 'confirmedTargetPressure' && node.initializer.getText(source).includes('localWindowRebuild')) {
       confirmationChecks.push(node.initializer.getText(source));
     }
     if (node.name.getText(source) === 'selectSameAgentModel') applySelectionAdapter = node.initializer.getText(source);
@@ -100,7 +100,11 @@ const orcaIdentities = [
 
 function compile(expression: string, bindings: Record<string, unknown>) {
   const js = ts.transpileModule(`return ${expression};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const context = { getSessionRowSnapshotStrict: async () => null, ...bindings };
+  const context = {
+    readDeviceLinkModelSelectionOrigin: () => undefined,
+    isProviderShareAgentDeviceId: () => false,
+    getSessionRowSnapshotStrict: async () => null, ...bindings,
+  };
   return new Function(...Object.keys(context), js)(...Object.values(context));
 }
 
@@ -421,6 +425,47 @@ describe('complete selection commit boundaries', () => {
     expect(recoverRenamedSessionModelOnSend).toHaveBeenCalledTimes(route === 'ordinary' ? 1 : 0);
   });
 
+  // Unit: execute the production direct-send adapter with the real send lock.
+  // An input cancelled during lock admission must not restore/rebuild its task;
+  // existing queue tests always released the predecessor before cancellation.
+  it.each(['waiting', 'preparing'] as const)('cancels direct-send %s without leaking its route lease', async phase => {
+    const id = `cancelled-direct-send-${phase}`;
+    const release = phase === 'waiting' ? await acquireSendToSessionLock(id) : () => {};
+    let finishPreparation!: () => void;
+    const preparation = new Promise<void>(resolve => { finishPreparation = resolve; });
+    let preparationEntered!: () => void;
+    const entered = new Promise<void>(resolve => { preparationEntered = resolve; });
+    const restore = vi.fn(async () => {});
+    const rebuild = vi.fn(async () => {});
+    const adapter = compile(directSendAdapter, {
+      takeOverLocalAgentVisibleSession, acquireSendToSessionLock,
+      scheduledModelScope: { restore }, agentSwitchPending: new Map(),
+      isUserPendingAgentSwitchIntent, reconcileBotModelRoute: vi.fn(),
+      applyPendingAgentSwitchIfIdle: rebuild, agentSwitchDeps: {},
+      recoverRenamedSessionModelOnSend: vi.fn(),
+      replayPendingSessionContextWindowBudgetUnderLock: vi.fn(),
+      prepareUnhealthySessionForSend: vi.fn(async () => {
+        if (phase === 'preparing') { preparationEntered(); await preparation; }
+        return false;
+      }),
+    });
+    const abort = new AbortController();
+    let failure: unknown;
+    const pending = adapter(id, abort.signal).catch((error: unknown) => { failure = error; });
+    if (phase === 'preparing') await entered;
+    else for (let n = 0; n < 10; n++) await Promise.resolve();
+    abort.abort();
+    finishPreparation();
+    try {
+      await vi.waitFor(() => expect(failure).toBe(abort.signal.reason));
+      if (phase === 'waiting') {
+        expect(restore).not.toHaveBeenCalled();
+        expect(rebuild).not.toHaveBeenCalled();
+      }
+    } finally { release(); finishPreparation(); await pending; }
+    await withSendToSessionLock(id, async () => {});
+  });
+
   it('reads a picker intent staged while the direct send waits for the real route lock', async () => {
     const pending = createPendingAgentSwitchRegistry();
     let status = 'archived';
@@ -614,7 +659,7 @@ describe('Orca model-only picker intent admission', () => {
         internalOptions, runtimeStatus, sessionId: 's1', model: 'new',
         targetProviderId: 'provider', effectiveProviderId: 'provider', currentProviderId: 'old-provider',
         agentKind: 'codex', dbToMakerAgentKind: (kind: string) => kind,
-        targetEffort: 'high', targetFastMode: true, targetContextWindow: undefined,
+        targetEffort: 'high', targetFastMode: true, targetContextWindow: onOtherDevice ? 200000 : undefined as number | undefined,
         confirmedContextWindow: 200000 as number | undefined,
         atomicSelection: { effort: 'high', fastMode: true },
         assertRuntimeOwnerCurrent: vi.fn(), assertSharedTaskCurrent: { admit: vi.fn() },
@@ -623,7 +668,8 @@ describe('Orca model-only picker intent admission', () => {
         agentSwitchDeps: { onPendingSwitchChanged: changed },
         projectPendingAgentSwitchIntent: (intent: unknown) => intent,
         wakeSessionInputAfterCredentialSwitch: vi.fn(),
-        isDeviceLinkInvoke: () => true, markRemoteSettingPersistedInsideHandler: vi.fn(), applyLive,
+        isDeviceLinkInvoke: () => true, readDeviceLinkModelSelectionOrigin: () => undefined,
+        markRemoteSettingPersistedInsideHandler: vi.fn(), applyLive,
       };
       const compiled = ts.transpileModule(`return async () => { ${branch}; return applyLive(); };`,
         { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -637,13 +683,26 @@ describe('Orca model-only picker intent admission', () => {
       expect(bindings.markRemoteSettingPersistedInsideHandler).toHaveBeenCalledOnce();
       expect(applyLive).not.toHaveBeenCalled();
       expect(runtimeStatus.model).toBe('old');
-      if (!onOtherDevice) {
+      {
+        // PR #11071: remote restaging lost an already confirmed small window.
+        // The existing unit matrix only checked receipt inheritance locally.
         expect(pending.get('s1').confirmedContextWindow).toBe(200000);
         // Axis-only restaging retains this route's receipt; a different route
         // must not inherit acknowledgement from the previous selection.
         bindings.confirmedContextWindow = undefined;
+        bindings.targetContextWindow = undefined;
         await run();
         expect(pending.get('s1').confirmedContextWindow).toBe(200000);
+        const confirmedIntent = pending.get('s1');
+        for (const changedTarget of [
+          { providerId: 'another-provider' }, { targetAgentKind: 'pi' },
+          ...(onOtherDevice ? [{ targetAgentDeviceId: 'another-device' }] : []),
+        ]) {
+          pending.set('s1', { ...confirmedIntent, ...changedTarget });
+          await run();
+          expect(pending.get('s1')).not.toHaveProperty('confirmedContextWindow');
+        }
+        pending.set('s1', confirmedIntent);
         bindings.model = 'another-model';
         await run();
         expect(pending.get('s1')).not.toHaveProperty('confirmedContextWindow');
@@ -669,23 +728,21 @@ describe('Orca model-only picker intent admission', () => {
       expect(pending.has('s1')).toBe(false);
       await applyPendingAgentSwitchIfIdle(deps, 's1');
       expect(applyLive).toHaveBeenCalledTimes(1);
-      expect(changed).toHaveBeenCalledTimes(onOtherDevice ? 1 : 3);
+      expect(changed).toHaveBeenCalledTimes(onOtherDevice ? 6 : 5);
     }
   });
 
-  it.each([undefined, 400000, 200000])('authorizes Orca local/final Pi rebuild only for the checked window: %s', confirmed => {
+  it.each([undefined, 400000, 200000])('authorizes Orca local/final Pi rebuild only with a checked window or owner intent: %s', confirmed => {
     expect(confirmationChecks).toHaveLength(2);
     for (const expression of confirmationChecks) {
-      const check = new Function('runtimeStatus', 'internalOptions', 'isDeviceLinkInvoke',
-        'confirmedContextWindow', 'targetContextWindow', 'finalPiWindow', 'parseOrcaRemoteLead', `return ${expression};`);
-      for (const identity of orcaIdentities) {
-        for (const remote of [false, true]) {
-          expect(check(identity, { source: 'user', applyingUserSelectionOnSend: true },
-            () => remote, confirmed, 200000, 200000, parseOrcaRemoteLead)).toBe(!remote && confirmed === 200000);
-        }
-      }
-      expect(check({ orcaRole: null }, { source: 'user', applyingUserSelectionOnSend: true },
-        () => false, confirmed, 200000, 200000, parseOrcaRemoteLead)).toBe(true);
+      const check = new Function('internalOptions', 'isDeviceLinkInvoke',
+        'confirmedContextWindow', 'targetContextWindow', 'finalPiWindow',
+        'modelSelectionOrigin', 'ownerWindowRebuild', 'localWindowRebuild', `return ${expression};`);
+      const applying = { source: 'user', applyingUserSelectionOnSend: true };
+      expect(check(applying, () => false, confirmed, 200000, 200000, undefined, false, false)).toBe(confirmed === 200000);
+      expect(check(applying, () => true, confirmed, 200000, 200000, 'owner', true, false)).toBe(true);
+      expect(check(applying, () => false, confirmed, 200000, 200000, 'scoped', false, false)).toBe(false);
+      expect(check(applying, () => false, confirmed, 200000, 200000, undefined, false, true)).toBe(true);
     }
   });
 

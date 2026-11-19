@@ -3,14 +3,19 @@ import { i18n } from '@/i18n';
 import {
   buildGroupedHomeRows,
   buildHomeSections,
+  buildInboxHomeSections,
   buildMixedHomeRows,
   HOME_MAIN_SECTION_KEY,
   homeFolderRowsShareRenderData,
   homeRowsShareRenderData,
   homeRowBefore,
+  mergeAutomationItems,
+  withMergedAutomationPriority,
 } from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
+import { collectHomePriorityContext, collectInboxHomePriorityContext } from '@/session/homeListPriority';
+import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -120,6 +125,176 @@ describe('buildHomeSections', () => {
       ...next,
       sourceLabel: 'Chat',
     })).toBe(false);
+  });
+});
+
+describe('自动化归组', () => {
+  function run(id: string, lastActivityAt: string, source?: string): RemoteSessionListItem {
+    return { session: { id, title: id, source }, title: id, lastActivityAt, pendingInteractionCount: 0 } as unknown as RemoteSessionListItem;
+  }
+
+  it('把项目和对话里的自动化运行收进一个目录,只剩自动化的项目随之消失', () => {
+    const home = presentation({
+      chats: [run('digest', '2026-11-14T00:00:00Z', 'scheduler'), run('chat', '2026-11-13T00:00:00Z')],
+      projects: [
+        projectGroup('buddy', '2026-11-17T03:30:00Z', [run('review', '2026-11-17T03:30:00Z', 'scheduler')]),
+        projectGroup('repo', '2026-11-16T00:00:00Z', [
+          run('report', '2026-11-16T00:00:00Z', 'scheduler'),
+          run('work', '2026-11-15T00:00:00Z'),
+        ]),
+      ],
+    });
+    const rows = buildHomeSections(home, true, false, { groupAutomation: true, automationTitle: '自动化' })
+      .find((section) => section.key === HOME_MAIN_SECTION_KEY)?.data ?? [];
+    expect(rows.map((row) => row.kind === 'session' ? row.item.session.id : `${row.kind}:${row.project.key}`)).toEqual([
+      'automation:automation',
+      'project:repo',
+      'chat',
+    ]);
+    const folder = rows[0];
+    expect(folder.kind === 'automation' && folder.project.sessions.map((item) => item.session.id))
+      .toEqual(['review', 'report', 'digest']);
+    expect(rows[1].kind === 'project' && rows[1].project.sessionCount).toBe(1);
+  });
+
+  it('改过项目目录的同一自动化:各项目里已折叠的运行收进目录后合成一个文件夹', () => {
+    const nightly = (id: string, workingDir: string, at: string) => ({
+      session: { id, title: 'Nightly', source: 'scheduler', workingDir, status: 'idle', agentKind: 'codex', deviceLinkDeviceId: 'mac' },
+      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', running: false, unreadCount: 0 },
+      title: 'Nightly',
+      lastActivityAt: at,
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    // 上游(buildMobileHomePresentation)按项目分别折叠。
+    const perProject = (dir: string, runs: RemoteSessionListItem[]) =>
+      groupAutomationListItems(runs, Date.parse('2026-11-17T00:00:00Z'), true, () => dir);
+    const home = presentation({
+      projects: [
+        projectGroup('old', '2026-11-10T00:00:00Z', perProject('old', [
+          nightly('r1', '/old', '2026-11-09T00:00:00Z'),
+          nightly('r2', '/old', '2026-11-10T00:00:00Z'),
+        ])),
+        projectGroup('new', '2026-11-16T00:00:00Z', perProject('new', [
+          nightly('r3', '/new', '2026-11-15T00:00:00Z'),
+          nightly('r4', '/new', '2026-11-16T00:00:00Z'),
+        ])),
+      ],
+    });
+    const rows = buildHomeSections(home, true, false, { groupAutomation: true, automationTitle: '自动化' })
+      .find((section) => section.key === HOME_MAIN_SECTION_KEY)?.data ?? [];
+    expect(rows).toHaveLength(1);
+    const folder = rows[0];
+    expect(folder.kind).toBe('automation');
+    if (folder.kind !== 'automation') return;
+    expect(folder.project.sessions).toHaveLength(1);
+    expect([...(folder.project.sessions[0].automationGroup?.sessionIds ?? [])].sort()).toEqual(['r1', 'r2', 'r3', 'r4']);
+    expect(folder.project.sessionCount).toBe(4);
+  });
+
+  it('跨项目合并按全局最近活动排列成员,较新的运行不会被折到后面', () => {
+    const nightly = (id: string, workingDir: string, at: string) => ({
+      session: { id, title: 'Nightly', source: 'scheduler', workingDir, updatedAt: at, status: 'active', agentKind: 'codex', deviceLinkDeviceId: 'mac' },
+      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', running: false, unreadCount: 0 },
+      title: 'Nightly',
+      lastActivityAt: at,
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    const now = Date.parse('2026-11-20T00:00:00Z');
+    const a = groupAutomationListItems([
+      nightly('a17', '/a', '2026-11-17T00:00:00Z'),
+      nightly('a06', '/a', '2026-11-06T00:00:00Z'),
+    ], now, true, () => 'a');
+    const b = groupAutomationListItems([
+      nightly('b16', '/b', '2026-11-16T00:00:00Z'),
+      nightly('b15', '/b', '2026-11-15T00:00:00Z'),
+    ], now, true, () => 'b');
+    const [merged] = mergeAutomationItems([...a, ...b], now);
+    expect(merged.automationGroup?.items.map((item) => item.session.id)).toEqual(['a17', 'b16', 'b15', 'a06']);
+  });
+
+  it('旧伙伴例行任务专线随「自动化」收进目录;没有 routineId 的旧主机任务留在原位', () => {
+    const routine = (id: string, routineId?: string) => ({
+      session: { id, title: id, source: 'bot', companion: { id: 'cindy', role: 'routine', ...(routineId ? { routineId } : {}) } },
+      title: id,
+      lastActivityAt: '2026-11-16T00:00:00Z',
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    const home = presentation({
+      projects: [projectGroup('buddy', '2026-11-16T00:00:00Z', [routine('review', 'memory'), routine('legacy')])],
+    });
+    const rows = buildHomeSections(home, true, false, { groupAutomation: true, automationTitle: '自动化' })
+      .find((section) => section.key === HOME_MAIN_SECTION_KEY)?.data ?? [];
+    const folder = rows.find((row) => row.kind === 'automation');
+    expect(folder?.kind === 'automation' && folder.project.sessions.map((item) => item.session.id)).toEqual(['review']);
+    const project = rows.find((row) => row.kind === 'project');
+    expect(project?.kind === 'project' && project.project.sessions.map((item) => item.session.id)).toEqual(['legacy']);
+  });
+
+  it('同一伙伴同一 routineId 的旧例行运行折成一个子组', () => {
+    const routineRun = (id: string, at: string) => ({
+      session: { id, title: 'Review memory', source: 'bot', updatedAt: at, status: 'active', agentKind: 'codex', companion: { id: 'cindy', role: 'routine', routineId: 'memory' } },
+      title: 'Review memory',
+      lastActivityAt: at,
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    const grouped = groupAutomationListItems(
+      [routineRun('m2', '2026-11-16T00:00:00Z'), routineRun('m1', '2026-11-15T00:00:00Z')],
+      Date.parse('2026-11-17T00:00:00Z'),
+    );
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].automationGroup?.baseKey).toBe('routine:cindy:memory');
+    expect(grouped[0].automationGroup?.sessionIds).toEqual(['m2', 'm1']);
+  });
+
+  it('跨项目合并后换了代表运行,旧目录里等待确认的档位仍归到合并后的组', () => {
+    const nightly = (id: string, workingDir: string, at: string, pending = 0) => ({
+      session: { id, title: 'Nightly', source: 'scheduler', workingDir, updatedAt: at, status: 'idle', agentKind: 'codex', deviceLinkDeviceId: 'mac' },
+      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', running: false, unreadCount: 0 },
+      title: 'Nightly',
+      lastActivityAt: at,
+      pendingInteractionCount: pending,
+    }) as unknown as RemoteSessionListItem;
+    const now = Date.parse('2026-11-17T00:00:00Z');
+    const oldGroup = groupAutomationListItems([
+      nightly('r1', '/old', '2026-11-09T00:00:00Z', 1),
+      nightly('r2', '/old', '2026-11-10T00:00:00Z'),
+    ], now, true, () => 'old');
+    const newGroup = groupAutomationListItems([
+      nightly('r3', '/new', '2026-11-15T00:00:00Z'),
+      nightly('r4', '/new', '2026-11-16T00:00:00Z'),
+    ], now, true, () => 'new');
+    const before = [...oldGroup, ...newGroup];
+    // 合并前的上下文:只有旧目录组的代表在等待档。
+    const ctx = {
+      runningSessionIds: new Set<string>(),
+      unreadSessionIds: new Set<string>(),
+      waitingSessionIds: new Set(before.filter((item) => item.pendingInteractionCount > 0).map((item) => item.session.id)),
+    };
+    const [merged] = mergeAutomationItems(before, now);
+    expect(ctx.waitingSessionIds.has(merged.session.id)).toBe(false);
+    expect(withMergedAutomationPriority(ctx, [merged]).waitingSessionIds.has(merged.session.id)).toBe(true);
+  });
+
+  it('跨项目合并按成员各自档位取最优:旧目录完成未读 + 新目录运行中,整组仍在未读档', () => {
+    const nightly = (id: string, workingDir: string, at: string) => ({
+      session: { id, title: 'Nightly', source: 'scheduler', workingDir, updatedAt: at, status: 'idle', agentKind: 'codex', deviceLinkDeviceId: 'mac' },
+      scheduleInfo: { scheduleId: 'nightly', scheduleName: 'Nightly', running: false, unreadCount: 0 },
+      title: 'Nightly',
+      lastActivityAt: at,
+      pendingInteractionCount: 0,
+    }) as unknown as RemoteSessionListItem;
+    const now = Date.parse('2026-11-17T00:00:00Z');
+    const runs = [nightly('r1', '/old', '2026-11-09T00:00:00Z'), nightly('r4', '/new', '2026-11-16T00:00:00Z')];
+    const ctx = {
+      runningSessionIds: new Set(['r4']),
+      unreadSessionIds: new Set(['r1']),
+      waitingSessionIds: new Set<string>(),
+    };
+    const [merged] = mergeAutomationItems(runs, now);
+    expect(merged.session.id).toBe('r4');
+    const next = withMergedAutomationPriority(ctx, [merged]);
+    expect(next.unreadSessionIds.has('r4')).toBe(true);
+    expect(next.runningSessionIds.has('r4')).toBe(false);
   });
 });
 
@@ -307,4 +482,136 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
       expect(reversedKeys).toEqual(forwardKeys);
     }
   });
+});
+
+// Unit: real home projection must retain pins/Make tasks and split active runs from waiting work.
+it('builds inbox sections and recomputes snooze expiry without losing collapsed counts', () => {
+  const now = Date.parse('2026-11-12T08:00:00Z');
+  const idle = listItem('idle', new Date(now).toISOString());
+  const running = listItem('run', new Date(now).toISOString());
+  const waiting = listItem('wait', new Date(now).toISOString());
+  waiting.pendingInteractionCount = 1;
+  const later = listItem('later', new Date(now).toISOString());
+  later.session.snoozedUntil = new Date(now + 3600000).toISOString();
+  const done = listItem('done', new Date(now).toISOString());
+  done.session.status = 'archived';
+  const home = presentation({ pinned: [listItem('pin', '')], chats: [idle, running, waiting, later, done], projects: [
+    { ...projectGroup('make', '', [listItem('make-task', '')]), kind: 'cindy-make' },
+  ] });
+  const signals = { runningSessionIds: new Set(['run', 'wait']), waitingSessionIds: new Set(['wait']), unreadSessionIds: new Set<string>() };
+  const sections = buildInboxHomeSections(home, new Set(['inbox-working']), signals, now);
+  expect(sections.map(s => s.key)).toEqual(['inbox-inbox', 'inbox-working', 'inbox-snoozed', 'inbox-archived']);
+  const combined = [...buildHomeSections(home, true, false), ...sections];
+  expect(combined.map(s => s.key)).toEqual(['pinned', 'main', 'inbox-inbox', 'inbox-working', 'inbox-snoozed', 'inbox-archived']);
+  expect(combined.find(s => s.key === 'pinned')?.data).toHaveLength(1);
+  expect(sections.find(s => s.key === 'inbox-inbox')?.count).toBe(3);
+  expect(sections.find(s => s.key === 'inbox-working')).toMatchObject({ count: 1, data: [] });
+  expect(sections.find(s => s.key === 'inbox-snoozed')?.count).toBe(1);
+  expect(sections.find(s => s.key === 'inbox-archived')?.count).toBe(1);
+  expect(buildInboxHomeSections(home, new Set(), signals, now + 3600000).find(s => s.key === 'inbox-inbox')?.count).toBe(4);
+});
+
+// 2026-11-18 user decision: teammates' routine results filled the phone's inbox. Teammate tasks
+// (by the teammate filter's test) are listed only while they need the user or run.
+it('leaves idle teammate tasks out of the inbox until they need the user or run', () => {
+  const routine = listItem('routine', '2026-11-18T08:00:00Z');
+  (routine.session as { source?: string; companion?: object }).source = 'bot';
+  (routine.session as { companion?: object }).companion = { id: 'bot-1', role: 'routine' };
+  const opened = listItem('opened', '2026-11-18T08:00:00Z');
+  (opened.session as { taskTeammate?: object }).taskTeammate = { id: 'bot-1', name: 'Mate' };
+  const mine = listItem('mine', '2026-11-18T08:00:00Z');
+  const home = presentation({ chats: [routine, opened, mine] });
+  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(),
+    unreadSessionIds: new Set(['routine', 'opened', 'mine']) };
+  const ids = (key: string) => buildInboxHomeSections(home, new Set(), signals, Date.now())
+    .find(s => s.key === key)!.data.flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
+  expect(ids('inbox-inbox')).toEqual(['mine']);
+  expect(ids('inbox-working')).toEqual([]);
+  routine.pendingInteractionCount = 1;
+  signals.runningSessionIds.add('opened');
+  expect(ids('inbox-inbox').sort()).toEqual(['mine', 'routine']);
+  expect(ids('inbox-working')).toEqual(['opened']);
+});
+
+it('puts a quiet followed task in working and returns it to inbox for results, waiting or pause', () => {
+  const item = listItem('followed', '2026-11-13T08:00:00Z');
+  item.scheduleInfo = { scheduleId: 'schedule', scheduleName: 'Follow', hasActiveFollowUp: true,
+    running: false, latestRunAt: 0, unreadRunIds: [], unreadCount: 0 };
+  const home = presentation({ chats: [item] });
+  const signals = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const workingCount = () => buildInboxHomeSections(home, new Set(), signals, Date.now()).find(s => s.key === 'inbox-working')?.count;
+  expect(workingCount()).toBe(1);
+  item.pendingInteractionCount = 1;
+  expect(workingCount()).toBe(0);
+  item.pendingInteractionCount = 0;
+  // A finished round with a result for the user goes back to inbox even while followed.
+  item.scheduleInfo.unreadRunIds = ['run-1'];
+  item.scheduleInfo.unreadCount = 1;
+  signals.unreadSessionIds.add('followed');
+  expect(workingCount()).toBe(0);
+  // Opening it clears unread, but the viewed task keeps its section until the user leaves.
+  signals.unreadSessionIds.clear();
+  item.scheduleInfo.unreadRunIds = [];
+  item.scheduleInfo.unreadCount = 0;
+  expect(buildInboxHomeSections(home, new Set(), { ...signals, heldPriorityRanks: new Map([['followed', 1]]) },
+    Date.now()).find(s => s.key === 'inbox-working')?.count).toBe(0);
+  expect(workingCount()).toBe(1);
+  item.scheduleInfo.hasActiveFollowUp = false;
+  expect(workingCount()).toBe(0);
+});
+
+// Bug 2026-11-18: a task that finished while open kept its held running rank and stayed in
+// working until another task was opened.
+it('moves a task that finished while open to inbox right away, keeping held unread in place', () => {
+  const item = listItem('open', '2026-11-18T08:00:00Z');
+  const home = presentation({ chats: [item] });
+  const section = (ctx: Parameters<typeof buildInboxHomeSections>[2]) =>
+    buildInboxHomeSections(home, new Set(), ctx, Date.now()).find(s => s.count === 1)?.key;
+  const idle = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  expect(section({ ...idle, runningSessionIds: new Set(['open']), heldPriorityRanks: new Map([['open', 2]]) })).toBe('inbox-working');
+  expect(section({ ...idle, heldPriorityRanks: new Map([['open', 2]]) })).toBe('inbox-inbox');
+});
+
+// PR #10685, unit: production collector and inbox builder must unpack automation
+// members before deciding each run's section. Earlier tests never mixed a waiting
+// old run with an idle/running/followed representative, so group signals leaked.
+it.each(['chat', 'project'] as const)('keeps each %s automation run independent of aggregate signals', source => {
+  const now = Date.parse('2026-11-18T09:00:00Z');
+  const make = (id: string, at: string) => ({
+    ...listItem(id, at),
+    session: { id, source: 'scheduler', status: 'active', updatedAt: at,
+      taskTeammate: { id: 'mate', name: 'Mate' } },
+    scheduleInfo: { scheduleId: 's', scheduleName: 'Routine', running: false,
+      latestRunAt: 0, unreadCount: 0, unreadRunIds: [] },
+  }) as unknown as RemoteSessionListItem;
+  for (const mode of ['idle', 'running', 'followed', 'unread'] as const) {
+    const latest = make('latest', '2026-11-18T08:00:00Z');
+    const older = make('older', '2026-11-18T07:00:00Z');
+    older.pendingInteractionCount = mode === 'unread' ? 0 : 1;
+    if (mode === 'unread') {
+      older.scheduleInfo!.unreadRunIds = ['old-run'];
+      older.scheduleInfo!.unreadCount = 1;
+    }
+    if (mode === 'followed' || mode === 'unread') {
+      latest.scheduleInfo!.hasActiveFollowUp = true;
+      delete (latest.session as { taskTeammate?: unknown }).taskTeammate;
+    }
+    const grouped = groupAutomationListItems([latest, older], now, true, () => 'mac');
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0].session.id).toBe('latest');
+    const home = source === 'chat' ? presentation({ chats: grouped })
+      : presentation({ projects: [projectGroup('p', latest.lastActivityAt, grouped)] });
+    const running = new Set(mode === 'running' ? ['latest'] : []);
+    const hold = { heldPriorityRanks: new Map<string, number>(), recentlyViewedAtMs: new Map<string, number>() };
+    // Pass the ordinary list's aggregate context too: inbox must not trust its sets.
+    const aggregate = collectHomePriorityContext(grouped, running, hold);
+    const own = collectInboxHomePriorityContext(grouped, running, hold);
+    expect(own.waitingSessionIds.has('latest')).toBe(false);
+    expect(own.unreadSessionIds.has('latest')).toBe(false);
+    const sections = buildInboxHomeSections(home, new Set(), aggregate, now);
+    const ids = (key: string) => sections.find(section => section.key === key)!.data
+      .flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
+    expect(ids('inbox-inbox')).toEqual(mode === 'unread' ? [] : ['older']);
+    expect(ids('inbox-working')).toEqual(mode === 'idle' ? [] : ['latest']);
+  }
 });

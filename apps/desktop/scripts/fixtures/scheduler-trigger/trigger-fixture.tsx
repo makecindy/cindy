@@ -26,7 +26,9 @@ void mountPage({
     scriptCapabilityStatus: async () => ({ statuses: [] }),
   } } },
   render: () => <ScheduleFormDialog open
-    initial={ctx.case === 'create' ? null
+    initial={ctx.case === 'script-settings' ? { ...schedule, webhookTrigger: undefined, executionMode: 'script',
+      scriptConfig: { command: 'node read-status.mjs', capabilities: ['settings.read', 'usage.read'] } }
+      : ctx.case === 'create' ? null
       : ctx.case === 'long-prompt' || ctx.case === 'expanded' ? { ...schedule, prompt: longPrompt } : schedule}
     initialValues={ctx.case === 'create' ? { webhookEnabled: true } : undefined}
     onOpenChange={() => {}} onSubmit={forbid('save automation')} />,

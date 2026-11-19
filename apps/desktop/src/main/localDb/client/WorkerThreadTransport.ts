@@ -1,3 +1,4 @@
+import { PROJECT_ARCHIVE_GUARD_SQL } from '../projectArchiveGuard.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
@@ -40,6 +41,7 @@ const createAutoReviewIntentProjection = ${createAutoReviewIntentProjection.toSt
 const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
 const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
 const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
+const PROJECT_ARCHIVE_GUARD_SQL = ${JSON.stringify(PROJECT_ARCHIVE_GUARD_SQL)};
 const IDLE_ARCHIVE_GUARD_SQL = ${JSON.stringify(IDLE_ARCHIVE_GUARD_SQL)};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
 const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
@@ -1201,12 +1203,16 @@ function sessionsSetStatus(readyDb, args) {
     'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   return readyDb.transaction(() => {
     const applied = [];
     const now = Date.now();
     for (const sessionId of sessionIds) {
+      const guard = payload.projectGuard;
+      if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+        sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, status === 'active' ? 'archived' : 'active',
+      )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
       const existing = selectSession.get(sessionId);
       if (!existing) throw Object.assign(new Error('Session 不存在: ' + sessionId), { code: 'NOT_FOUND' });
       if (existing.status === 'deleted') {
@@ -1253,10 +1259,18 @@ function sessionsSetTerminalStatus(readyDb, args) {
     throw Object.assign(new Error('invalid terminal status: ' + status), { code: 'INVALID_ARGS' });
   }
   return readyDb.transaction(() => {
+    const guard = payload.projectGuard;
+    if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
+      sessionId, guard.workingDir, guard.projectDir, guard.workspaceKind, guard.remoteHostId, 'active',
+    )) throw Object.assign(new Error('Project task changed'), { code: 'PRECONDITION_FAILED' });
     if (payload.idleArchiveCutoff !== undefined && (status !== 'archived'
       || typeof payload.idleArchiveCutoff !== 'number' || !Number.isFinite(payload.idleArchiveCutoff)
       || !readyDb.prepare(IDLE_ARCHIVE_GUARD_SQL).get(sessionId, payload.idleArchiveCutoff))) {
       throw Object.assign(new Error('Task is no longer idle'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (payload.unusedOnly !== undefined && (payload.unusedOnly !== true || status !== 'deleted'
+      || !readyDb.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
+      throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
     }
     const existing = readyDb.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
@@ -1269,7 +1283,7 @@ function sessionsSetTerminalStatus(readyDb, args) {
     }
     readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = readyDb.prepare(
-      'UPDATE sessions SET status = ?, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+      'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
     ).get(status, payload.idleArchiveCutoff ?? null, now, sessionId);
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     const deletedSideChats = status === 'deleted' && existing.source !== 'side-chat'
@@ -2145,7 +2159,11 @@ function forkSession(readyDb, args) {
         expectString(marker.clientId, 'recoveryMarker.clientId') + ':card',
         expectString(newSession.id, 'newSession.id'),
         'assistant', '', null,
-        JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
+        JSON.stringify({ contextRebuild: {
+          reason: content.reason,
+          handoff: content.handoffPreview ?? content.handoff,
+          handoffCoverage: content.handoffCoverage,
+        } }),
         expectString(newSession.agentKind, 'newSession.agentKind'),
         markerCreatedAt,
       );

@@ -117,6 +117,7 @@ import {
 import { providerGroupDeviceCount, type ProviderGroupConfig } from '../../../shared/providerGroup';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { readProviderShareGroupSize } from '@cindy/device-link';
+import { SharedProviderGroupStatus } from '@/features/provider-share/SharedProviderGroupStatus';
 import { modelPriceDiscountLabelValues, modelPriceDetailRows } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import {
@@ -665,7 +666,10 @@ export function resolveModelSelectorAgentIdentity(
 }
 
 /** 远程 Agent 草稿里一次行选中的落点电脑;null = Agent 在本机。 */
-export type UnifiedSelectionAgentDevice = { deviceId: string; name: string } | null;
+export type UnifiedSelectionAgentDevice = {
+  deviceId: string;
+  name: string;
+} | null;
 
 /** 「配置模型」打开设置 → 模型供应商时直接选中的一项;不传 = 只打开供应商页。 */
 export interface ProvidersNavigationTarget {
@@ -684,6 +688,8 @@ export interface RemoteAgentRelocation {
   fast: boolean | 'ultrafast';
   /** 这一行所属的电脑;null = 本机。 */
   agentDevice: UnifiedSelectionAgentDevice;
+  /** An explicit model selection, rather than an edit inside its options panel. */
+  retryQueuedSend: boolean;
 }
 
 /**
@@ -735,7 +741,6 @@ export interface RemoteAgentSelectorOptions {
  */
 export type ModelSelectorLocalOnlyReason =
   | 'subagent-in-parent-task'
-  | 'vision-bridge-local-proxy'
   | 'one-shot-local-request';
 
 /**
@@ -963,14 +968,6 @@ export interface ModelSelectorBaseProps {
   agentSwitch?: {
     currentVendor: 'cc' | 'codex' | 'pi';
     /**
-     * 进入非当前 Agent 浏览态前确认；false 时保持原分段，什么都不改。
-     *
-     * ★ 必须把**本次目标引擎**交出去(Chris 2026-08-19):调用方的「已确认过就不再问」
-     * 判据是「会话上已有**指向该目标**的切换意图」。不传目标,它只能判「有没有意图」,
-     * 于是先切 Codex 再选 Pi 时确认框永久静默(见 agentSwitchConfirmation.hasSwitchIntent)。
-     */
-    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
-    /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
      * `onCrossEngineSelect`(后者按真实结果决定要不要做清理动作)。
@@ -1168,8 +1165,6 @@ export interface ModelSelectorContentBaseProps {
   /** 语义同 ModelSelectorProps.agentSwitch(显式两步引擎切换)。 */
   agentSwitch?: {
     currentVendor: 'cc' | 'codex' | 'pi';
-    /** 语义同 ModelSelectorProps.agentSwitch.confirmBrowseSwitch(带本次目标引擎)。 */
-    confirmBrowseSwitch?: (targetVendor: 'cc' | 'codex' | 'pi') => Promise<boolean>;
     /**
      * 返回值(若有)= 切换事务**真的登记成功了没有**;本两步分段路径不消费它,
      * 声明成宽联合只是为了让同一个 `performAgentSwitch` 能同时喂给这里与统一面板的
@@ -1412,20 +1407,8 @@ function ModelSelectorContentView({
   const [browseVendor, setBrowseVendor] = useState<'cc' | 'codex' | 'pi'>(
     agentSwitch?.currentVendor ?? vendorKey ?? 'cc',
   );
-  const browseSwitchPendingRef = useRef(false);
-  const handleBrowseVendorChange = async (next: 'cc' | 'codex' | 'pi') => {
-    if (interactionDisabled || next === browseVendor || browseSwitchPendingRef.current) return;
-    // 返回当前引擎（含已有意图时浏览原引擎准备撤销）不需要确认；只有从
-    // currentVendor 进入另一 Agent 浏览态才调用上层风险确认。确认前绝不翻分段。
-    if (agentSwitch && next !== agentSwitch.currentVendor && agentSwitch.confirmBrowseSwitch) {
-      browseSwitchPendingRef.current = true;
-      try {
-        if (!(await agentSwitch.confirmBrowseSwitch(next))) return;
-      } finally {
-        browseSwitchPendingRef.current = false;
-      }
-    }
-    setBrowseVendor(next);
+  const handleBrowseVendorChange = (next: 'cc' | 'codex' | 'pi') => {
+    if (!interactionDisabled) setBrowseVendor(next);
   };
   // 会话引擎在外部变化(切换完成 / 换会话)时重置浏览态,跟随新的当前引擎。
   useEffect(() => {
@@ -1828,10 +1811,21 @@ function ModelSelectorContentView({
     for (const id of folds.hiddenBase) hiddenLocal.add(id);
     for (const [otherDeviceId, ids] of folds.hiddenOther)
       for (const id of ids) hiddenRemote.add(remoteProviderEntryKey(otherDeviceId, id));
-    return { hiddenRemote, hiddenLocal };
+    const unavailableReasons = new Map<string, string>();
+    const homeName = taskDeviceId ? deviceDisplayName(taskDeviceId, remoteAgent?.homeDeviceName) : null;
+    for (const [key, baseProviderId] of folds.askBeforeUse) {
+      const split = key.indexOf('\n');
+      const baseProvider = taskProviders.find((provider) => provider.id === baseProviderId);
+      const provider = baseProvider ? providerDisplayName(baseProvider, t) : baseProviderId;
+      const reason = homeName
+        ? t('newChat.modelSelector.discoveredCopy.unavailableOn', { device: homeName, provider })
+        : t('newChat.modelSelector.discoveredCopy.unavailableHere', { provider });
+      unavailableReasons.set(remoteProviderEntryKey(key.slice(0, split), key.slice(split + 1)), reason);
+    }
+    return { hiddenRemote, hiddenLocal, unavailableReasons };
   }, [remoteAgent, deviceId, remoteProviders.providers, remoteAgentDevices, homeDeviceId, homeDeviceProviders.providers,
     localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
-    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups]);
+    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, t]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -1844,6 +1838,12 @@ function ModelSelectorContentView({
               || (remoteAgentDeviceId === device.deviceId && currentProviderId === provider.id)),
         )
         : [];
+      // A known share must remain browsable while its first catalog is loading or
+      // failed, so the existing status/retry panel is reachable without cached models.
+      if (shared.length === 0 && isProviderShareAgentDeviceId(device.deviceId)
+        && (!catalog || catalog.loading || catalog.error)) {
+        return [{ deviceId: device.deviceId, providers: [], providerIds: [''], entries: [] }];
+      }
       if (!catalog || shared.length === 0) return [];
       const entries = unifiedModelEntries({
         providers: shared,
@@ -1922,6 +1922,7 @@ function ModelSelectorContentView({
   const remoteAgentLabelOf = useCallback(
     (targetDeviceId: string, providerId: string): string => {
       const device = remoteAgentDevices?.find((entry) => entry.deviceId === targetDeviceId);
+      if (!providerId) return deviceDisplayName(targetDeviceId, device?.name);
       const provider = remoteAgentGroups
         .find((group) => group.deviceId === targetDeviceId)
         ?.providers.find((entry) => entry.id === providerId);
@@ -3533,6 +3534,10 @@ function ModelSelectorContentView({
         remoteAgentGroups.find((group) => group.deviceId === remoteBrowse.deviceId)?.providerIds[0] ??
         null)
       : null;
+    const browsedShareGroupSize = remoteBrowse && isProviderShareAgentDeviceId(remoteBrowse.deviceId)
+      ? readProviderShareGroupSize(remoteAgentGroups.find((group) => group.deviceId === remoteBrowse.deviceId)
+        ?.providers.find((provider) => provider.id === remoteActiveProviderId))
+      : null;
     const remoteBrowseDevice: UnifiedSelectionAgentDevice = remoteBrowse
       ? {
           deviceId: remoteBrowse.deviceId,
@@ -3541,7 +3546,6 @@ function ModelSelectorContentView({
             remoteBrowse.deviceId,
         }
       : null;
-    // 选中直通带上这一行属于哪台电脑(仅远程 Agent 入口);落点不同由调用方连运行位置一起换。
     const withAgentDevice = remoteAgent ? { agentDevice: remoteBrowseDevice } : {};
     // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」;归组的任务在组那一项里显示为正在用的。
     const panelSelection = browsingSelectedCatalog
@@ -3572,8 +3576,8 @@ function ModelSelectorContentView({
       runLiveWrite(() =>
         relocate!(
           browsingBoundGroupEntry && row.providerId === boundEntry!.providerId && currentProviderId
-            ? { ...row, providerId: currentProviderId, agentDevice: currentAgentDevice }
-            : { ...row, agentDevice: remoteBrowseDevice },
+            ? { ...row, providerId: currentProviderId, agentDevice: currentAgentDevice, retryQueuedSend: dismiss }
+            : { ...row, agentDevice: remoteBrowseDevice, retryQueuedSend: dismiss },
         ),
       ).then((applied) => {
         if (applied && dismiss) {
@@ -3631,6 +3635,7 @@ function ModelSelectorContentView({
             ...(rowEffortValue ? { effort: rowEffortValue } : {}),
             fast: rowConfig.fast,
             agentDevice,
+            retryQueuedSend: true,
           }),
         ).then(dismissIfApplied);
       }
@@ -3807,6 +3812,8 @@ function ModelSelectorContentView({
                     localProviderLabel: remoteAgentLocalLabel,
                     groups: remoteAgentGroups,
                     labelOf: remoteAgentLabelOf,
+                    homeUnavailableReasonOf: (deviceId: string, providerId: string) =>
+                      runLocationFold.unavailableReasons.get(remoteProviderEntryKey(deviceId, providerId)),
                     // 远程收藏按任务所在电脑共享(§1.5):被控电脑上的任务读写那台的收藏,本机任务读写本机。
                     ...(homeDeviceId ? { favoritesDeviceId: homeDeviceId } : {}),
                     shareFavoriteSources: routedFavoriteSources,
@@ -3819,6 +3826,17 @@ function ModelSelectorContentView({
                     ready:
                       remoteBrowse === null ||
                       (remoteModelListStatus === 'ready' && remoteActiveProviderId !== null),
+                    ...(remoteBrowse && remoteActiveProviderId && browsedShareGroupSize !== null
+                      ? {
+                          status: <SharedProviderGroupStatus
+                            key={JSON.stringify([remoteBrowse.deviceId, remoteActiveProviderId])}
+                            deviceId={modelCatalogKey(remoteBrowse.deviceId, remoteAgent.catalogHostDeviceId) ?? remoteBrowse.deviceId}
+                            providerId={remoteActiveProviderId}
+                            initialSize={browsedShareGroupSize}
+                            compact
+                          />,
+                        }
+                      : {}),
                     ...(remoteBrowse && remoteModelListStatus === 'error'
                       ? {
                           failure: (
@@ -3834,7 +3852,7 @@ function ModelSelectorContentView({
                     onActivate: (target: { deviceId: string; providerId: string } | null) => {
                       closeOptionsPanel();
                       setRemoteBrowseTouched(true);
-                      setRemoteBrowse(target);
+                      setRemoteBrowse(target && !target.providerId ? { deviceId: target.deviceId, providerId: null } : target);
                     },
                   },
                 }
@@ -4351,9 +4369,9 @@ export function ModelSelector({
   const [open, setOpen] = useState(false);
   const openRef = useRef(false);
   const sshCodexRefresh = sshCodex?.refresh;
-  const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
+  const [keepOpenForAgentSwitch, setKeepOpenForAgentSwitch] = useState(false);
   const composerResizeGenerationRef = useRef(0);
-  useProviderShareQuotaViewing(open || keepOpenForAgentConfirmation);
+  useProviderShareQuotaViewing(open || keepOpenForAgentSwitch);
   // 打开触发的那次模型发现是否仍在途(并发语义与理由见 useModelDiscoveryPending)。
   const discovery = useModelDiscoveryPending();
   const [showDiscoveryPending, setShowDiscoveryPending] = useState(false);
@@ -4428,58 +4446,22 @@ export function ModelSelector({
 
   useEffect(() => {
     const composer = composerRef?.current;
-    if (!composer || !(open || keepOpenForAgentConfirmation) || typeof ResizeObserver === 'undefined') return;
+    if (!composer || !(open || keepOpenForAgentSwitch) || typeof ResizeObserver === 'undefined') return;
     let width = composer.clientWidth;
     const observer = new ResizeObserver(() => {
       const nextWidth = composer.clientWidth;
       if (nextWidth === width) return;
       width = nextWidth;
       composerResizeGenerationRef.current += 1;
-      setKeepOpenForAgentConfirmation(false);
+      setKeepOpenForAgentSwitch(false);
       handleOpenChange(false);
     });
     observer.observe(composer);
     return () => observer.disconnect();
-  }, [composerRef, open, keepOpenForAgentConfirmation, handleOpenChange]);
+  }, [composerRef, open, keepOpenForAgentSwitch, handleOpenChange]);
 
-  // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
-  // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
-  // 时的焦点回落再次把面板收掉。模型行确认及其它消费者不经过这层包装。
-  const contentAgentSwitch = useMemo(() => {
-    const confirmBrowseSwitch = agentSwitch?.confirmBrowseSwitch;
-    if (!confirmBrowseSwitch) return agentSwitch;
-    return {
-      ...agentSwitch,
-      confirmBrowseSwitch: async (targetVendor: 'cc' | 'codex' | 'pi') => {
-        const resizeGeneration = composerResizeGenerationRef.current;
-        setKeepOpenForAgentConfirmation(true);
-        try {
-          return await confirmBrowseSwitch(targetVendor);
-        } finally {
-          if (composerResizeGenerationRef.current === resizeGeneration) setOpenWithoutAutoRefresh(true);
-          setKeepOpenForAgentConfirmation(false);
-        }
-      },
-    };
-  }, [agentSwitch, setOpenWithoutAutoRefresh]);
-
-  // 统一面板下没有「先切分段再选模型」那一步,跨引擎的确认落在**真正选中那一行**的这一下。
-  // 确认用的 AlertDialog 同样会被 Popover 当成外部交互顺手把面板收掉,所以复用上面那把
-  // 保命锁。模型行选中成功后关掉选单；配置浮层切换成功后保持展开；
-  // 取消 / 失败留在原地,方便重选。
-  //
-  // 2026-08-17 review 第二项之后,这个 await 等的是**整条切换事务**(确认框 + 登记往返),
-  // 不再只是确认框那一下。保命锁刻意**覆盖整个 await 期**:事务在途时面板被 Popover 的
-  // 外点判定收掉,收尾再把 open 设回 true,就成了「面板闪一下又自己弹回来」。锁按住期间
-  // 面板恒可见,切换 in-flight 由 interactionDisabled 置灰。
-  //
-  // ★ open 的表达式必须是 `open || keepOpenForAgentConfirmation`,disabled **不能**参与
-  // 开关(Chris 2026-08-19「面板原地刷新」+ 2026-08-20「改思维闪关菜单」):
-  // 事务一进 beginAgentSwitchOperation,调用方的 agentSwitchInFlight 就把 disabled 拉高。
-  // `(open && !disabled) || keepOpen` 只保住确认框那条路,改思维 / 同引擎重登记不走
-  // keepOpen,选单照关。disabled 只该让面板置灰(interactionDisabled),不该有权把窗口关掉。
-  // 不能写成 `(open || keepOpen) && !disabled` —— 那是 08-19 的原症状。
-  // 不能写成 `(open && !disabled) || keepOpen` —— 那是 08-20 改思维仍闪关。
+  // Keep the panel mounted while the switch intent is saved. A successful row
+  // selection closes it; configuration edits and rejected writes leave it open.
   const contentSessionEngineFilter = useMemo(() => {
     if (!sessionEngineFilter) return undefined;
     const { onCrossEngineSelect } = sessionEngineFilter;
@@ -4488,7 +4470,7 @@ export function ModelSelector({
       configuring: boolean,
     ): Promise<boolean> => {
       const resizeGeneration = composerResizeGenerationRef.current;
-      setKeepOpenForAgentConfirmation(true);
+      setKeepOpenForAgentSwitch(true);
       try {
         const applied = await onCrossEngineSelect(args);
         // 配置浮层里的切换保持展开；选中模型行成功后才收起。
@@ -4500,7 +4482,7 @@ export function ModelSelector({
         if (composerResizeGenerationRef.current === resizeGeneration) setOpenWithoutAutoRefresh(true);
         return false;
       } finally {
-        setKeepOpenForAgentConfirmation(false);
+        setKeepOpenForAgentSwitch(false);
       }
     };
     return {
@@ -5267,7 +5249,7 @@ export function ModelSelector({
       pointerRevealRequiresIntent={morphEnabled}
       optionsPanelUsesLayoutPositioning={isCreateAgentVariant}
       fluidWidth={fieldPanelFollowsTrigger}
-      agentSwitch={contentAgentSwitch}
+      agentSwitch={agentSwitch}
       discoveringModels={showDiscoveryPending && discovery.pending}
       interactionDisabled={switching || disabled}
       gatewayPricing={gatewayPricing}
@@ -5289,7 +5271,7 @@ export function ModelSelector({
   if (morphEnabled) {
     return (
       <MorphPopover
-        open={open || keepOpenForAgentConfirmation}
+        open={open || keepOpenForAgentSwitch}
         onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
@@ -5307,7 +5289,7 @@ export function ModelSelector({
         {...(restoreFocusTarget ? { restoreFocusTarget } : {})}
         trigger={trigger}
       >
-        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentConfirmation}>
+        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentSwitch}>
           {content}
         </ProviderShareQuotaViewingContext.Provider>
       </MorphPopover>
@@ -5315,7 +5297,7 @@ export function ModelSelector({
   }
 
   return (
-    <Popover open={open || keepOpenForAgentConfirmation} onOpenChange={handleOpenChange}>
+    <Popover open={open || keepOpenForAgentSwitch} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         side={popoverSide}
@@ -5332,7 +5314,7 @@ export function ModelSelector({
           'border border-[var(--model-dropdown-border)]',
         )}
       >
-        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentConfirmation}>
+        <ProviderShareQuotaViewingContext.Provider value={open || keepOpenForAgentSwitch}>
           {content}
         </ProviderShareQuotaViewingContext.Provider>
       </PopoverContent>

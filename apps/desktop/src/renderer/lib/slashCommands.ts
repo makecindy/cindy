@@ -51,7 +51,11 @@ export function commandsForHelpCard(commands: readonly UnifiedCommand[]): HelpCa
   }));
 }
 
-export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000] as const;
+export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [
+  // Pi capture can take four 5s requests plus 4s, 10s and 20s backoff.
+  // Keep early cold starts responsive, then sample sparsely through the full chain.
+  100, 250, 500, 1_000, 2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000,
+] as const;
 
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
@@ -392,6 +396,9 @@ export function filterSlashCommands(
       // 插件指令同名时 name 带隐藏的 `/slug`,菜单只显示 label:按两者中更好的一个排序,
       // 输入显示名算精确匹配,输入完整限定指令也照常命中。
       const ranks = [rankOf(command.name)];
+      if (command.kind === 'agent-skill' && command.runtimeCommandName) {
+        ranks.push(rankOf(command.runtimeCommandName));
+      }
       if (command.kind === 'desktop' && command.label) ranks.push(rankOf(command.label));
       const matched = ranks.filter((r) => r >= 0);
       const rank = q ? (matched.length > 0 ? Math.min(...matched) : -1) : 0;
@@ -566,6 +573,32 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   }
 }
 
+export async function reconcilePiRuntimeCommandForSessionDispatch(
+  params: Parameters<typeof reconcilePiRuntimeCommandForDispatchWithRetry>[0] & { prepareMissing?: boolean; onCatalogUnavailable?: () => never },
+): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
+  // Refresh the preview first: a cold cache may not yet contain the project
+  // skill. Unknown text and ordinary Desktop commands must not start Pi just
+  // because the caller can now prepare a runtime.
+  const initial = await reconcilePiRuntimeCommandForDispatch(params);
+  if (params.agentKind !== 'pi' || !params.sessionId) return initial;
+  if (params.runtimeCatalogSettled?.()) {
+    if (initial.command && isSlashCommandUnavailable(initial.command)) params.onCatalogUnavailable?.();
+    return initial;
+  }
+  const needsRuntime = initial.command !== undefined && (
+    isSlashCommandUnavailable(initial.command)
+    || (initial.command.kind === 'desktop' && hasShadowedUnavailableSkill(initial.commands, params.commandName))
+  );
+  if (!needsRuntime && !(params.prepareMissing && !initial.command)) return initial;
+  const result = await reconcilePiRuntimeCommandForDispatchWithRetry({ ...params, commands: initial.commands });
+  if ((result.command && isSlashCommandUnavailable(result.command))
+    || (!params.runtimeCatalogSettled?.() && (!result.command
+      || (result.command.kind === 'desktop' && hasShadowedUnavailableSkill(result.commands, params.commandName))))) {
+    params.onCatalogUnavailable?.();
+  }
+  return result;
+}
+
 export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   agentKind: AgentKind;
   sessionId?: string;
@@ -575,6 +608,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   prepareRuntime?: () => Promise<void>;
   retryDelaysMs?: readonly number[];
   sleep?: (delayMs: number) => Promise<void>;
+  runtimeCatalogSettled?: () => boolean;
 }): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
   if (params.agentKind !== 'pi' || !params.sessionId) {
     return reconcilePiRuntimeCommandForDispatch(params);
@@ -608,7 +642,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
           result.command.kind === 'desktop'
           && hasShadowedUnavailableSkill(result.commands, params.commandName)
         );
-    if (!shouldRetry) return result;
+    if (!shouldRetry || params.runtimeCatalogSettled?.()) return result;
     await sleep(delayMs);
     result = await reconcilePiRuntimeCommandForDispatch({
       ...params,

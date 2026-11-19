@@ -92,6 +92,7 @@ import {
   getProviderShareWatchedRequests,
   PROVIDER_SHARE_REMOTE_LINK_WINDOW_MS,
   providerShareGuestAccess,
+  ownedProviderShareGuestAccess,
   providerShareGuestDenial,
   providerShareMemberMatcher,
   quietProviderShareRequests,
@@ -523,6 +524,25 @@ describe('provider share host snapshot', () => {
     state.remoteControl = true;
     state.scope = 'cloud:other:2';
     expect(providerShareGuestAccess(guest('m1'))).toBeNull();
+  });
+
+  // #10848, unit: actual authorization collapses cleanup and revocation to null.
+  // Recovery must consult its bounded local verdict rather than call null a
+  // definite denial. Existing log tests did not flip the memberReady fence.
+  it('preserves readiness diagnostics when the real owner access projection is null', async () => {
+    state.owned = [share([member('m1')])];
+    let ready = true;
+    startProviderShareHost({ ...events(), memberReady: () => ready });
+    await refreshProviderShareHost('test');
+    expect(ownedProviderShareGuestAccess(guest('m1'))).not.toBeNull();
+    ready = false;
+    expect(ownedProviderShareGuestAccess(guest('m1'))).toBeNull();
+    expect(providerShareGuestDenial(guest('m1'))).toBe('member-cleanup-pending');
+    ready = true;
+    expect(ownedProviderShareGuestAccess(guest('m1'))).not.toBeNull();
+    applyLocalMemberChange('m1', 'paused');
+    expect(ownedProviderShareGuestAccess(guest('m1'))).toBeNull();
+    expect(providerShareGuestDenial(guest('m1'))).toBe('member-not-active');
   });
 
   it('names the reason a guest is refused, for the diagnostic log', async () => {

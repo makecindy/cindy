@@ -570,6 +570,14 @@ bot 身份按入站使用的稳定 ID 校验；Discord 取 gateway application i
 图片读取只接受当前 bot 的 provider，命中缓存也不例外；跨 bot 的文字检索沿用既有权限。
 工具直接返回 MCP 图片内容，图片内文字仍是不可信群聊数据。
 
+两条 Telegram 入口共用的群上下文中，带有图片标识的历史消息行显示
+`[图片消息 #<原消息号>]`；只有本次实际选入上下文的消息含图片标识时，才附加取图提示：
+用户问到上文图片且本轮未附图时，可按图片消息号调用 `cindy_group_history.get_images`，
+不确定消息号时先用 `search` 定位。没有图片标识的历史消息不新增该标注或提示。
+这只增加已有取图能力的可发现性，仍沿用上述历史授权与图片可取回条件，不主动补取图片。
+实现见 `apps/desktop/src/main/im/shared/groupWindowCore.ts`，两入口的共用行为回归见
+`apps/desktop/src/main/hook-control/__tests__/groupWindow.test.ts`。
+
 两条 Telegram 入口均在收到普通照片或图片文件时，把小型媒体标识存入本机
 `hook_group_messages.image_refs`，不会为了群历史预下载全部图片。图片按需下载后复用
 `cindy-media` 可回收缓存；授权结束、账号切换、个人连接或官方绑定失效时丢弃在途结果。

@@ -44,6 +44,54 @@ async function makeSymlinkFixture(): Promise<
 }
 
 describe('file-browser scanner symlink boundaries', () => {
+  // #10863 exposes directory links in the tree: rename/delete must act on the
+  // selected link, not its target. Existing tests only cover escaping links.
+  // Unit tier, one real junction is the minimal destructive regression input.
+  it('renames and deletes a directory link without changing the target directory', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
+    try {
+      await mkdir(path.join(root, 'target'));
+      await fsWriteFile(path.join(root, 'target/note.md'), 'keep');
+      await symlink(path.join(root, 'target'), path.join(root, 'alias'), 'junction');
+      expect(await renameEntry(root, 'alias', 'renamed')).toMatchObject({
+        relPath: 'renamed', type: 'directory', size: 0,
+      });
+      expect((await lstat(path.join(root, 'renamed'))).isSymbolicLink()).toBe(true);
+      expect(await fsReadFile(path.join(root, 'target/note.md'), 'utf8')).toBe('keep');
+      await deleteEntry(root, 'renamed');
+      expect(await fsReaddir(root)).toEqual(['target']);
+      expect(await fsReadFile(path.join(root, 'target/note.md'), 'utf8')).toBe('keep');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // #10882 review: existing cases only reject links outside the workdir.
+  // Unit: reading A then retargeting the same logical file to B must never
+  // write an A draft into B, even before any watcher notification arrives.
+  it('rejects saving a draft after its directory link changes target', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'xdt-file-browser-'));
+    try {
+      for (const name of ['a', 'b']) {
+        await mkdir(path.join(root, name));
+        await fsWriteFile(path.join(root, name, 'note.md'), name);
+      }
+      await symlink(path.join(root, 'a'), path.join(root, 'alias'), 'junction');
+      const original = await readFile(root, 'alias/note.md');
+      await rm(path.join(root, 'alias'));
+      await symlink(path.join(root, 'b'), path.join(root, 'alias'), 'junction');
+      await expect(writeFile(root, 'alias/note.md', 'a edited', original.resolvedPath))
+        .rejects.toThrow('FILE_TARGET_CHANGED');
+      expect(await fsReadFile(path.join(root, 'a', 'note.md'), 'utf8')).toBe('a');
+      expect(await fsReadFile(path.join(root, 'b', 'note.md'), 'utf8')).toBe('b');
+      const fresh = await readFile(root, 'alias/note.md');
+      await writeFile(root, 'alias/note.md', 'b edited', fresh.resolvedPath);
+      expect(await fsReadFile(path.join(root, 'b', 'note.md'), 'utf8')).toBe('b edited');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects read/stat/write through a symlink that escapes the workdir', async () => {
     const fixture = await makeSymlinkFixture();
     try {

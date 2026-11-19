@@ -225,6 +225,33 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     expect(await h.mgr.getFreshAccessToken(GHOST, KEY, h.sourceManifest.network!.secrets![0]!.oauth!)).toMatchObject({ ok: true });
   });
 
+  // Unit regression: a strict read error used to block uninstall before the
+  // consumer lock could retire the unreadable manifest. Archive stays strict.
+  it('retires an unreadable manifest under the consumer lock only on uninstall', async () => {
+    let held = false;
+    const h = setup(async (_id, run) => {
+      held = true;
+      try { return await run(); }
+      finally { held = false; }
+    });
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection)).toMatchObject({ ok: true });
+    const key = KEY + '-accounts';
+    const readError = new Error('test unreadable manifest');
+    h.vault.readStrict = () => { throw readError; };
+    h.vault.readForUninstall = (id, storageKey) => {
+      expect(held).toBe(true);
+      h.vault.remove(id, storageKey);
+      return null;
+    };
+    const targets = [{ instanceKey: h.consumer, keys: [key] }];
+    await expect(h.mgr.relocateSourceReferences(GHOST, 'archive-source', targets)).rejects.toBe(readError);
+    expect(h.vault.read(h.consumer, key)).not.toBeNull();
+    await h.mgr.relocateSourceReferences(GHOST, null, targets);
+    expect(h.vault.read(h.consumer, key)).toBeNull();
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'NO_ACCOUNT' });
+  });
+
   it('does not bind to an incompatible service', async () => {
     const h = setup();
     const secret = h.consumerManifest.network!.secrets![0]!;

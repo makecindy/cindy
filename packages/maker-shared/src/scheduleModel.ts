@@ -231,7 +231,11 @@ export function summarizeRun(
       : null,
     title: runStatusLabel(run.status, localizer),
     subtitle,
-    detail: error || previewText(result) || null,
+    detail: run.status === 'failed' && isScheduleActionExpired(error)
+      ? run.failureRecovered
+        ? presentationText(localizer, 'session.failedScheduleNotice.actionRecovered', '这次操作的授权已失效。同一自动化后来已成功运行。')
+        : presentationText(localizer, 'session.failedScheduleNotice.actionExpired', '这次操作的任务授权已失效。请查看自动化最近一次运行的结果。')
+      : error || previewText(result) || null,
     markReadLabel: canMarkRead
       ? presentationText(localizer, 'devices.automations.presentation.run.markRead', '已读')
       : null,
@@ -605,8 +609,11 @@ function readString(value: Record<string, unknown>, key: string): string | null 
 /** Historical failure notices are independent of read receipts. */
 export type ScheduleFailureKind = 'precheck' | 'rate-limit' | 'execution';
 export interface FailedScheduleRunSnapshot {
+  /** Next scheduled fire of this failure's automation, if still active. */
+  nextFireAt?: number;
   runId: string;
   firedAt: number;
+  finishedAt?: number;
   scheduleId?: string;
   failureKind?: ScheduleFailureKind;
   /** Optional on older hosts; error content is only disclosed on demand. */
@@ -647,11 +654,31 @@ export function scheduleRunMissingPlugin(run: {
   };
 }
 
+/** Only recognize host error envelopes, not a code quoted in arbitrary script output. */
+export function isScheduleActionExpired(message?: string): boolean {
+  const detail = message?.replace(/^scheduled task auto-resume failed: /, '');
+  return detail === 'TASK_ACTION_AUTHORIZATION_EXPIRED';
+}
+
+/** The run may be gone by the time a diagnosis task is opened. */
+export function scheduleFailureDetails(run: FailedScheduleRunSnapshot): string {
+  const date = new Date(run.firedAt);
+  return [
+    run.scheduleId && `scheduleId: ${run.scheduleId}`,
+    `runId: ${run.runId}`,
+    Number.isFinite(date.getTime()) && `firedAt: ${date.toISOString()}`,
+    run.errorMsg,
+  ].filter(Boolean).join('\n');
+}
+
 /** Old hosts can omit the classification; keep their warning generic. */
 export function scheduleFailureMessageKey(run: FailedScheduleRunSnapshot): string {
   if (run.failureKind === 'precheck' && run.missingPlugin) {
     const key = run.missingPlugin.installed ? 'pluginDisabled' : 'pluginMissing';
     return run.missingPlugin.name ? key : `${key}Unnamed`;
+  }
+  if ((!run.failureKind || run.failureKind === 'execution') && isScheduleActionExpired(run.errorMsg)) {
+    return run.nextFireAt && run.nextFireAt > Date.now() ? 'actionScheduled' : 'actionExpired';
   }
   return run.failureKind === 'rate-limit' ? 'rateLimited'
     : run.failureKind === 'precheck' ? 'precheck' : 'text';
@@ -693,9 +720,13 @@ export function compareFailedScheduleRuns(a: FailedScheduleRunSnapshot, b: Faile
 }
 export function shouldShowFailedScheduleNotice(state: {
   latestFailedRun?: FailedScheduleRunSnapshot | null;
+  userSendAt?: RemoteTimestamp;
   readOnly: boolean; tailError: boolean; interrupted: boolean; continuationPending: boolean;
   error: boolean; credentialWait: boolean; streaming: boolean; running: boolean;
 }): boolean {
-  return !!state.latestFailedRun && !state.readOnly && !state.tailError && !state.interrupted
+  const run = state.latestFailedRun;
+  if (run?.finishedAt && toMillis(state.userSendAt) > run.finishedAt
+    && /^scheduled task auto-resume failed(?::|$)/.test(run.errorMsg ?? '')) return false;
+  return !!run && !state.readOnly && !state.tailError && !state.interrupted
     && !state.continuationPending && !state.error && !state.credentialWait && !state.streaming && !state.running;
 }

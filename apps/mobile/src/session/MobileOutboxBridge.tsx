@@ -38,7 +38,8 @@ import {
   uploadMobileAttachmentFromFile,
   discardMobileUploadedAttachment,
 } from "./mobileAttachmentUpload";
-import { buildQueuedTextMessage, EMPTY_INPUT_PROJECTION } from "./inputProjection";
+import { resolveNewSessionSkillDraft } from "./newSession";
+import { buildQueuedMessageForEngine, EMPTY_INPUT_PROJECTION } from "./inputProjection";
 import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import { outboxItemAttachments } from "./sessionOutbox";
 import { dismissRecoveredPrecreatedSession, getNewSessionCreationTask, restoreNewSessionDurableEdit } from "./newSessionCreation";
@@ -228,9 +229,13 @@ export function MobileOutboxBridge() {
         if (!session?.workingDir)
           throw new Error(i18n.t("session.screen.missingWorkingDir"));
         const item = r.item;
-        const rebuilt = buildQueuedTextMessage(
+        const firstMessage = r.creation?.draft.selectedSkill
+          ? (await resolveNewSessionSkillDraft({ ...r.creation.draft, firstMessage: item.text }, r.deviceId, maker(r))).firstMessage
+          : item.text;
+        guard();
+        const rebuilt = await buildQueuedMessageForEngine(maker(r),
           { ...session, permissionMode: item.permissionModeAtSend },
-          item.text,
+          firstMessage,
           new Date(r.createdAt),
           item.clientId,
           {
@@ -243,12 +248,16 @@ export function MobileOutboxBridge() {
             replyQuote: readChatReplyQuote(item.replyQuote) ?? undefined,
           },
         );
+        guard();
         return prepareMobileQueuedSessionReferences(
           {
             ...rebuilt,
             ...(r.template
               ? {
                   ...r.template,
+                  ...(rebuilt.text !== item.text.trim() ? {
+                    text: rebuilt.text, agentReferences: rebuilt.agentReferences,
+                  } : {}),
                   files: rebuilt.files,
                   persistedContent: rebuilt.persistedContent,
                   chatMessage: rebuilt.chatMessage,

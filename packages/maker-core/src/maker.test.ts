@@ -20,6 +20,7 @@ import {
   AgentNotAuthenticatedError,
   AgentStartupCleanupPendingError,
   AgentStartupStoppedError,
+  AgentStartupResourcesReleasedError,
   LOCAL_AGENT_CLIENT,
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
@@ -1466,18 +1467,36 @@ describe('Maker session close events', () => {
     queue.end();
   });
 
-  it('recycles drifted pi runtimes with the runtime-refresh reason for direct senders', async () => {
+  // Unit #11060: send-time drift recycling must retain background work just as
+  // closeIfIdle does. Earlier coverage only recycled an already-empty runtime.
+  it.each(['none', 'task', 'continuation', 'unavailable'] as const)('recycles drifted pi runtimes after background %s settles', async (kind) => {
     const queue = createAsyncQueue<AgentEvent>();
     const handle = createHandle({ id: 'drifted', agentKind: 'pi' });
     handle.hasProjectResourceDrift = () => true;
+    let busy = kind !== 'none';
+    handle.listBackgroundTasks = () => {
+      if (busy && kind === 'unavailable') throw new Error('snapshot unavailable');
+      return busy && kind === 'task' ? [{ taskId: 'subagent', taskType: 'local_agent' }] : [];
+    };
+    handle.countPendingWakeContinuations = () => busy && kind === 'continuation' ? 1 : 0;
     handle.events = () => queue;
     const start = vi.fn().mockResolvedValue(handle);
     const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
     const session = await maker.createSession({ id: 'drifted', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
-    expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(true);
-    expect(maker.getSessionCloseReason(session)).toBe('runtime-refresh');
-    expect(maker.getSession(session.id)).toBeUndefined();
-    queue.end();
+    try {
+      if (busy) {
+        expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(false);
+        expect(maker.getSession(session.id)).toBe(session);
+        expect(session.hasStartedClosing()).toBe(false);
+      }
+      busy = false;
+      expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(true);
+      expect(maker.getSessionCloseReason(session)).toBe('runtime-refresh');
+      expect(maker.getSession(session.id)).toBeUndefined();
+    } finally {
+      queue.end();
+      await session.close();
+    }
   });
 
   it('recycle is a no-op when project resources have not drifted', async () => {
@@ -2006,6 +2025,41 @@ describe('Maker start-option lifecycle hooks', () => {
     await vi.waitFor(() => expect(leased.size).toBe(0));
   });
 
+  // Unit: a failed native unsubscribe leaves the workdir guarded before an adapter
+  // can be entered again. Retry must drain captured cleanup before prepareStartOptions.
+  it('retries unpublished adapter cleanup before reopening a guarded task', async () => {
+    const stopped = createDeferred();
+    let guarded = false;
+    const retryCleanup = vi.fn().mockRejectedValueOnce(new Error('still unconfirmed'))
+      .mockImplementation(async () => { stopped.resolve(); });
+    const pending = new AgentStartupCleanupPendingError('startup cleanup pending', {
+      cause: new Error('native unsubscribe failed'), whenStopped: stopped.promise, retryCleanup,
+    });
+    const startSession = vi.fn().mockRejectedValueOnce(pending)
+      .mockResolvedValueOnce(createHandle({ id: 'reopened-thread' }));
+    const onStartCleanupSucceeded = vi.fn(async () => { guarded = false; });
+    const maker = new Maker({
+      agents: { codex: createAgent(startSession) }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: {
+        prepareStartOptions: () => { if (guarded) throw new Error('workdir still guarded'); },
+        onStartFailed: ({ runtimeMayBeAlive }) => { guarded = runtimeMayBeAlive === true; },
+        onStartCleanupSucceeded,
+      },
+    });
+    const options: CreateSessionOptions = { id: 'guarded-reopen', agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4' };
+    await expect(maker.createSession(options)).rejects.toBe(pending);
+    expect(guarded).toBe(true);
+    await expect(maker.createSession(options)).rejects.toThrow('Previous session startup cleanup is still pending');
+    expect(guarded).toBe(true);
+    expect(startSession).toHaveBeenCalledOnce();
+    const reopened = await maker.createSession(options);
+    expect(retryCleanup).toHaveBeenCalledTimes(2);
+    expect(onStartCleanupSucceeded).toHaveBeenCalledOnce();
+    expect(guarded).toBe(false);
+    expect(startSession).toHaveBeenCalledTimes(2);
+    await reopened.close();
+  });
+
   it('does not release adapter startup resources when exit confirmation fails', async () => {
     let rejectStopped!: (error: unknown) => void;
     const whenStopped = new Promise<void>((_resolve, reject) => { rejectStopped = reject; });
@@ -2097,6 +2151,20 @@ describe('Maker start-option lifecycle hooks', () => {
       sessionId: 'unknown-startup-exit', stage: 'agent-start', runtimeMayBeAlive: true,
     }));
     expect(onStartCleanupSucceeded).not.toHaveBeenCalled();
+  });
+
+  // #11380: a shared Codex process can keep healthy tasks while the unpublished
+  // thread is confirmed released. Unit, real Maker entry: release only its lease
+  // and do not turn that thread proof into process-exit proof for scheduler retry.
+  it.each([false, true])('releases task resources without claiming shared-process exit (preserve: %s)', async preserve => {
+    const cause = new Error('post-resume startup failed');
+    const onStartFailed = vi.fn();
+    const agent = createAgent(vi.fn().mockRejectedValue(new AgentStartupResourcesReleasedError(cause)));
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger(),
+      lifecycleHooks: { onStartFailed } });
+    await expect(maker.createSession({ id: 'released-thread', agentKind: 'codex', workingDir: '/repo',
+      model: 'gpt-5.4', preserveStartupStoppedError: preserve })).rejects.toBe(cause);
+    expect(onStartFailed).toHaveBeenCalledWith(expect.objectContaining({ runtimeMayBeAlive: false, error: cause }));
   });
 
   it('does not run the success hook when agent startup fails', async () => {
@@ -2416,7 +2484,10 @@ describe('Maker Pi runtime skill status', () => {
         generation: 1,
         status: 'loaded',
         source: 'pi:get_commands',
-        commands: [],
+        commands: [{
+          name: 'skill:poteto-mode', source: 'skill',
+          sourceInfo: { path: '/pstack/skills/poteto-mode/SKILL.md', scope: 'user', origin: 'package' },
+        }],
         managedPackageSkills: [
           {
             sourcePath: managedPath,
@@ -2484,6 +2555,9 @@ describe('Maker Pi runtime skill status', () => {
         name: 'unproven-at-launch',
         runtimeStatus: 'unknown',
         origin: 'package',
+      }),
+      expect.objectContaining({
+        name: 'poteto-mode', runtimeCommandName: 'skill:poteto-mode', runtimeStatus: 'loaded',
       }),
     ]);
     expect(active.skills.some((skill) => skill.name === 'installed-after-start')).toBe(false);

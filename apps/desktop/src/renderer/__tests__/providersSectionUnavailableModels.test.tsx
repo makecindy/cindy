@@ -43,6 +43,8 @@ const {
     disabledProviders: {} as Record<string, true>,
     mediaReady: false,
     customOverride: null as ProviderView | null,
+    /** The run location the user chose for Anthropic on this computer's provider page. */
+    anthropicRunLocation: undefined as string | undefined,
     loading: false,
     error: null as { reason: 'storage-quota' } | null,
   },
@@ -102,6 +104,7 @@ vi.mock('@/hooks/useProviders', () => ({
           ],
         },
         connected: false,
+        ...(providerSnapshotState.anthropicRunLocation ? { runLocation: providerSnapshotState.anthropicRunLocation } : {}),
       } satisfies ProviderView,
       {
         id: 'xd',
@@ -249,6 +252,7 @@ beforeEach(() => {
   providerSnapshotState.disabledProviders = {};
   providerSnapshotState.mediaReady = false;
   providerSnapshotState.customOverride = null;
+  providerSnapshotState.anthropicRunLocation = undefined;
   providerSnapshotState.loading = false;
   providerSnapshotState.error = null;
   providerSnapshotState.order = ['anthropic', 'xd', 'custom'];
@@ -670,6 +674,71 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(screen.queryByRole('switch', { name: 'Custom model' })).toBeNull();
   });
 
+  // #9619: saved connection refresh must consume structured failures instead of
+  // losing them in continue. Real component/button, in-memory IPC responses (unit).
+  // Minimal failure: all configured runtimes reject discovery. Existing coverage
+  // checked retry/saving but not the reason or OAuth recovery shown to the user.
+  it.each([
+    ['oauth', 'AUTH_INVALID', 'settings.providers.models.refreshReconnect'],
+    ['apiKey', 'AUTH_INVALID', 'providerError.AUTH_INVALID'],
+    ['oauth', 'UPSTREAM_ERROR', 'providerError.UPSTREAM_ERROR'],
+    ['oauth', 'UPSTREAM_UNREACHABLE', 'providerError.UPSTREAM_UNREACHABLE'],
+  ] as const)('explains %s refresh failure %s and allows recovery', async (method, code, message) => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    providerSnapshotState.customOverride = {
+      id: 'copilot-saved', name: 'Copilot', source: 'user', agents: ['codex'], connected: true,
+      auth: method === 'oauth' ? { method, oauth } : { method },
+      routing: { codex: { upstream: 'https://api.enterprise.githubcopilot.com', authStrategy: 'oauth-token' } },
+      models: { codex: [{ id: 'old-model', name: 'Old', contextWindow: 64000, efforts: [], defaultEffort: null, defaultEnabled: false }] },
+    };
+    providerSnapshotState.order = ['copilot-saved', 'xd'];
+    const fetchModels = vi.fn().mockResolvedValueOnce({ ok: false, code, status: 401, detail: 'synthetic-secret' })
+      .mockResolvedValue({ ok: true, models: [{ id: 'new-model', name: 'New' }] });
+    Object.assign(window.electronAPI.maker, { fetchProviderModels: fetchModels });
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    expect(toast.error).toHaveBeenCalledWith(message);
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain('synthetic-secret');
+    const refresh = screen.getByRole('button', { name: 'settings.providers.models.refreshAria' });
+    expect(refresh.hasAttribute('disabled')).toBe(false);
+    await act(async () => { fireEvent.click(refresh); });
+    expect(updateCustomProvider).toHaveBeenCalledOnce();
+    expect(vi.mocked(updateCustomProvider).mock.calls[0][0].runtimes.codex!.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'old-model', defaultEnabled: false }), expect.objectContaining({ id: 'new-model' }),
+    ]));
+    expect(toast.success).toHaveBeenCalledWith('settings.providers.models.refreshAdded');
+  });
+
+  it.each([false, true])('preserves multi-runtime refresh semantics (partial success: %s)', async partialSuccess => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    const model = { id: 'old-model', name: 'Old', contextWindow: 64000, efforts: [], defaultEffort: null, defaultEnabled: false };
+    const route = { upstream: 'https://api.enterprise.githubcopilot.com', authStrategy: 'oauth-token' as const };
+    providerSnapshotState.customOverride = {
+      id: 'copilot-mixed', name: 'Copilot', source: 'user', agents: ['codex', 'pi'], connected: true,
+      auth: { method: 'oauth', oauth }, routing: { codex: route, pi: route },
+      models: { codex: [model], pi: [model] },
+    };
+    providerSnapshotState.order = ['copilot-mixed', 'xd'];
+    Object.assign(window.electronAPI.maker, { fetchProviderModels: vi.fn()
+      .mockResolvedValueOnce({ ok: false, code: 'UPSTREAM_ERROR', status: 503 })
+      .mockResolvedValueOnce(partialSuccess ? { ok: true, models: [{ id: 'new-model', name: 'New' }] }
+        : { ok: false, code: 'AUTH_INVALID', status: 401 }) });
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    if (partialSuccess) {
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(toast.success).toHaveBeenCalledWith('settings.providers.models.refreshAdded');
+      expect(updateCustomProvider).toHaveBeenCalledOnce();
+      const saved = vi.mocked(updateCustomProvider).mock.calls[0][0];
+      expect(saved.runtimes.codex!.models).toEqual([expect.objectContaining({ id: 'old-model', defaultEnabled: false })]);
+      expect(saved.runtimes.pi!.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'new-model' })]));
+    } else {
+      expect(toast.error).toHaveBeenCalledWith('settings.providers.models.refreshReconnect');
+      expect(updateCustomProvider).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([
     ['openrouter-existing', 'oauth', true],
     ['openrouter-new', 'oauth', false],
@@ -853,11 +922,13 @@ describe('ProvidersSection — 双栏管理', () => {
   // - Bug／规则依据：PR #9740(0.1.133)把另一台电脑的供应商合进本机条目后，模型区仍读本机空目录、
   //   刷新走本机 CLI 必然失败；provider-sharing.md「同账号借用与运行于」要求整页按能用显示。
   // - 现有覆盖缺口：本文件只覆盖本机目录；借用状态此前没有任何设置页用例。
-  // - 最小失败输入：本机 Anthropic 未连接 + 一台在线电脑提供已连接、开放远程调用的 Anthropic。
+  // - 最小失败输入：本机 Anthropic 未连接 + 一台在线电脑提供已连接、开放远程调用的 Anthropic，
+  //   用户把「运行于」改成那台(2026-11-18 起不再自动换过去，见 provider-sharing.md)。
   // - tier：unit(jsdom，内存 fake)。
   // 失败分支：真实目录预取吞掉请求异常时仍提示失败，模型区卸载后提示中的重试仍指向原电脑。
   it.each(['success', 'prefetch-error'])(
     '本机没登录、借用另一台电脑时，模型清单与刷新都按那台电脑（%s）', async (outcome) => {
+    providerSnapshotState.anthropicRunLocation = 'starforce';
     ownDevicesState.devices = [{ deviceId: 'starforce', name: 'Starforce', platform: 'darwin' }];
     ownDevicesState.catalogs = new Map([['starforce', {
       providers: [{

@@ -328,6 +328,7 @@
       "renameDevice": "{{label}} umbenennen",
       "project": "Projekt {{title}}",
       "dialogue": "Chat",
+      "automation": "Automatisierungen",
       "openAutomationLatest": "Neueste Sitzung der Automatisierung {{title}} öffnen",
       "automationTask": "Automatisierung {{title}}",
       "openConversation": "Sitzung {{title}} öffnen",
@@ -353,7 +354,9 @@
     },
     "menu": {
       "groupDialogue": "Chat",
+      "groupAutomation": "Automatisierung",
       "dialogueFolder": "Chat",
+      "automationFolder": "Automatisierungen",
       "search": "Suchen",
       "settings": "Einstellungen",
       "remoteSettings": "Remote-Verbindungseinstellungen",
@@ -423,7 +426,32 @@
       "filterTeammatesHeading": "Freunde",
       "filterAnySource": "Alle",
       "filterHideAllTeammates": "Alle ausblenden",
-      "filterSelectedTeammates": "{{count}} ausgewählt"
+      "filterSelectedTeammates": "{{count}} ausgewählt",
+      "inbox": {
+        "inbox": "Offen",
+        "working": "In Arbeit",
+        "snoozed": "Zurückgestellt",
+        "archived": "Erledigt",
+        "snooze": "Aufgabe zurückstellen",
+        "complete": "Erledigt",
+        "wake": "Jetzt zurückholen",
+        "restore": "Aufgabe wiederherstellen",
+        "process": "Als erledigt markieren (archivieren)",
+        "empty": "Der Posteingang ist leer",
+        "snoozeFailed": "Die Zeit konnte nicht gespeichert werden. Prüfe die Verbindung und aktualisiere den Computer mit dieser Aufgabe.",
+        "hours": "In {{count}} Stunden",
+        "hours_one": "In {{count}} Stunde",
+        "hours_other": "In {{count}} Stunden",
+        "thisEvening": "Heute Abend",
+        "tomorrow": "Morgen",
+        "nextWeek": "Nächste Woche",
+        "custom": "Benutzerdefiniert…",
+        "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres."
+      },
+      "taskListMode": {
+        "enterInbox": "Zum Posteingang",
+        "leaveInbox": "Zur Aufgabenliste"
+      }
     },
     "search": {
       "placeholder": "Titel oder Inhalte durchsuchen…",
