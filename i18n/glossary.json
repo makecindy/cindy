@@ -4091,8 +4091,8 @@
       "checkCase": false,
       "forbidden": {
         "en": ["teammate", "teammates", "Teammate", "Teammates"],
-        "ja": ["チームメイト"],
-        "ko": ["동료"],
+        "ja": ["チームメイト", "パートナー"],
+        "ko": ["동료", "파트너"],
         "es": ["compañero", "compañera", "compañeros", "compañeras", "Compañero", "Compañera", "Compañeros", "Compañeras", "amigo de equipo", "amigos de equipo", "Amigo de equipo", "Amigos de equipo"],
         "fr": ["coéquipier", "coéquipière", "coéquipiers", "coéquipières", "Coéquipier", "Coéquipière", "Coéquipiers", "Coéquipières"],
         "de": ["Teammitglied", "Teammitglieds", "Teammitglieder", "Teammitgliedern"],
