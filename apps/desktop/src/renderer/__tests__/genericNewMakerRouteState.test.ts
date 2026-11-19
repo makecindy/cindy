@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const origins = new Map<string, string>();
@@ -28,6 +29,8 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   },
 }));
 
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { getLastCreatedTaskWorkspace, rememberCreatedTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
 import {
@@ -36,6 +39,8 @@ import {
 } from '@/features/cc-agent/lib/newMakerRouteState';
 
 beforeEach(() => {
+  localStorage.clear();
+  setDataOwnerGeneration('owner-a');
   origins.clear();
   localSessionIds.clear();
   sshHosts.clear();
@@ -43,7 +48,38 @@ beforeEach(() => {
   __resetStickySessionOriginForTest();
 });
 
-describe('new task inherits the current task computer', () => {
+describe('last successful new task takes precedence over the viewed task', () => {
+  const remote = { deviceId: 'computer-a', deviceName: 'A', remoteHostId: null, workingDir: '/project' };
+
+  it('recalls the same computer and base project from another task or from Settings', () => {
+    rememberCreatedTaskWorkspace('owner-a', { ...remote, workingDir: '/project/.cindy-worktrees/task' });
+    origins.set('task-b', 'computer-b');
+    for (const route of ['/cc-agent/task-b', '/settings', '/cc-agent/new']) {
+      expect(makeGenericNewMakerRouteState(route)).toEqual({ workspacePrompt: 'generic', restoreLastCreatedWorkspace: true });
+      expect(getLastCreatedTaskWorkspace('owner-a')).toEqual(remote);
+    }
+    setDataOwnerGeneration('owner-b');
+    expect(makeGenericNewMakerRouteState('/settings')).toEqual({ workspacePrompt: 'generic' });
+  });
+
+  it.each([
+    { ...remote, workingDir: null },
+    { deviceId: null, deviceName: null, remoteHostId: 'ssh-host', workingDir: '/srv/project' },
+    { deviceId: null, deviceName: null, remoteHostId: null, workingDir: null },
+  ])('replaces the previous device and project together with %o', workspace => {
+    rememberCreatedTaskWorkspace('owner-a', remote);
+    rememberCreatedTaskWorkspace('owner-a', workspace);
+    expect(getLastCreatedTaskWorkspace('owner-a')).toEqual(workspace);
+  });
+
+  it('ignores a damaged record instead of applying a partial target', () => {
+    rememberCreatedTaskWorkspace('owner-a', remote);
+    localStorage.setItem(localStorage.key(0)!, JSON.stringify({ workingDir: '/wrong-computer' }));
+    expect(getLastCreatedTaskWorkspace('owner-a')).toBeNull();
+  });
+});
+
+describe('without a previous creation, new task inherits the current task computer', () => {
   it.each([
     '/cc-agent/task-a',
     '/cc-agent/orca/task-a',

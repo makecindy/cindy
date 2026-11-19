@@ -360,7 +360,7 @@ async function submit(options: {
     localDraftSessionIdRef: { current: 'draft-id' },
     optimisticFirstMessageTitle: () => options.titlePreview ?? null, autoTitleLabels: {},
     remoteProjectsStore,
-    createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
+    createSession, rememberCreatedWorkspace: vi.fn(), toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
     markSessionStarting: noop, clearSessionStarting: noop,
     rehomeDraftAttachments: options.copyAttachments ?? (async () => []), getComposerDraft: () => options.builtInSkillIntent
@@ -481,6 +481,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
         firstMessageIdentity: { clientId: bubble.clientId, createdAt: bubble.createdAt },
       })]]);
     expect(navigate).toHaveBeenCalledTimes(1);
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
   });
 
   it('sends once to the confirmed host task after losing the create acknowledgement', async () => {
@@ -504,6 +505,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
     });
     expect(navigate).toHaveBeenCalledTimes(1);
     expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.environment.rememberCreatedWorkspace).not.toHaveBeenCalled();
     const [failure] = result.environment.remoteProjectsStore.setCreationPreview.mock.calls.at(-1)!;
     await failure.editAfterFailure();
     expect(result.environment.rememberRecoverableHandoff).not.toHaveBeenCalled();
