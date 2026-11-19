@@ -970,8 +970,8 @@
       "loading": "方載圖…"
     },
     "moveToolbar": "左右拖移工具列",
-    "hint": "點擊擇視窗或元素，拖曳框選 · 滾輪易範圍 · 空白鍵全螢幕 · C 錄顏色 · Esc 終",
-    "hintWithLast": "點擊擇視窗或元素，拖曳框選 · 滾輪易範圍 · 空白鍵全螢幕 · R 前次區域 · C 錄顏色 · Esc 終",
+    "hint": "點擊擇視窗或元素，拖曳框選 · 滾輪易範圍 · 空白鍵擇全窗 · C 錄顏色 · Esc 終",
+    "hintWithLast": "點擊擇視窗或元素，拖曳框選 · 滾輪易範圍 · 空白鍵擇全窗 · R 前次區域 · C 錄顏色 · Esc 終",
     "copy": "錄之",
     "cancel": "終截圖",
     "captureFailed": "不能擷取螢幕",
@@ -6761,6 +6761,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "唯用 Agent-Net",
         "onlyEncryptedHint": "啟之則舊版裝置及仍循舊路之分享不可用。常例為闔。",
         "peerSwitch": {
@@ -9754,6 +9757,10 @@
     "cacheLine": "快取分項：讀 {{read}} · 寫 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "快取分項：讀 {{read}} · 寫 {{create}}",
     "stepsLine": "本輪共請 {{steps}} 次 · 每請約 {{context}} 上下文",
+    "traceChartLabel": "本輪生成之速與每請所思",
+    "traceRequests": "本輪共請 {{requests}} 次",
+    "traceThinkingShare": "思占所出 {{share}}",
+    "traceThinkingTokens": "思耗 {{thinking}} tokens",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 個模型",
     "costBreakdownHeader": "依模型分之：",
@@ -13551,6 +13558,8 @@
         },
         "reply": {
           "unsupportedMedia": "今版尚不能理此類微信媒體。",
+          "delayedReply": "此覆遲至，成於 {{createdAt}}，答 {{receivedAt}} 所收舊訊，所述或已過時。",
+          "delayedReplyQuestion": "原訊：{{question}}",
           "stillProcessing": "差事猶在理中…",
           "ownerOnlyCommands": "唯主人可用機器人之令。",
           "companionManagedCommand": "請於 Cindy 開此同僚：模型於同僚之設中調之，權柄於言談輸入框下易之。",
@@ -14918,6 +14927,7 @@
       "rateHistory": "生成速率史",
       "outputTotal": "累出",
       "observedPeak": "至高",
+      "thinkingShare": "思占所出",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "近一段生成之速，不計器具執行與等候。",

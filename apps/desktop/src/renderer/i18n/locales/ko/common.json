@@ -970,8 +970,8 @@
       "loading": "이미지를 불러오는 중…"
     },
     "moveToolbar": "도구 모음을 좌우로 이동",
-    "hint": "클릭하여 창이나 요소 선택, 드래그하여 영역 선택 · 스크롤로 범위 변경 · Space 전체 화면 · C 색상 복사 · Esc 종료",
-    "hintWithLast": "클릭하여 창이나 요소 선택, 드래그하여 영역 선택 · 스크롤로 범위 변경 · Space 전체 화면 · R 이전 영역 · C 색상 복사 · Esc 종료",
+    "hint": "클릭하여 창이나 요소 선택, 드래그하여 영역 선택 · 스크롤로 범위 변경 · Space 창 전체 선택 · C 색상 복사 · Esc 종료",
+    "hintWithLast": "클릭하여 창이나 요소 선택, 드래그하여 영역 선택 · 스크롤로 범위 변경 · Space 창 전체 선택 · R 이전 영역 · C 색상 복사 · Esc 종료",
     "copy": "복사",
     "cancel": "스크린샷 종료",
     "captureFailed": "화면을 캡처하지 못했습니다",
@@ -6761,6 +6761,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Agent-Net만 사용",
         "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다.",
         "peerSwitch": {
@@ -9754,6 +9757,10 @@
     "cacheLine": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}} · 적중률 {{rate}}",
     "cacheLineNoRate": "캐시 세부: 읽기 {{read}} · 쓰기 {{create}}",
     "stepsLine": "이번 턴 요청 {{steps}}회 · 요청당 약 {{context}} 컨텍스트",
+    "traceChartLabel": "이번 턴의 생성 속도와 요청별 추론량",
+    "traceRequests": "이번 턴 요청 {{requests}}회",
+    "traceThinkingShare": "추론이 출력의 {{share}}",
+    "traceThinkingTokens": "추론 {{thinking}} tokens",
     "modelLine": "모델: {{model}}",
     "multipleModels": "모델 {{count}}개",
     "costBreakdownHeader": "모델별:",
@@ -13551,6 +13558,8 @@
         },
         "reply": {
           "unsupportedMedia": "현재 버전에서는 이 유형의 WeChat 미디어를 아직 처리할 수 없습니다.",
+          "delayedReply": "지연된 답변입니다. {{receivedAt}}에 받은 메시지에 대해 {{createdAt}}에 작성되었으며, 내용이 오래되었을 수 있습니다.",
+          "delayedReplyQuestion": "원래 메시지: {{question}}",
           "stillProcessing": "아직 처리 중이에요…",
           "ownerOnlyCommands": "봇 명령은 소유자만 사용할 수 있습니다.",
           "companionManagedCommand": "Cindy에서 이 동료를 열어 주세요. 모델은 동료 설정에서 바꾸고, 권한은 대화 입력창 아래에서 전환합니다.",
@@ -14927,6 +14936,7 @@
       "rateHistory": "생성 속도 추이",
       "outputTotal": "누적 출력",
       "observedPeak": "최고",
+      "thinkingShare": "추론 비중",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "최근 생성 구간의 속도. 도구 실행과 대기는 제외합니다.",

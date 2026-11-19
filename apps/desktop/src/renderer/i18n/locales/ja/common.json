@@ -970,8 +970,8 @@
       "loading": "画像を読み込み中…"
     },
     "moveToolbar": "ツールバーを左右に移動",
-    "hint": "クリックでウィンドウや要素を選択、ドラッグで範囲を選択 · スクロールで範囲を切り替え · Space で全画面 · C で色をコピー · Esc で終了",
-    "hintWithLast": "クリックでウィンドウや要素を選択、ドラッグで範囲を選択 · スクロールで範囲を切り替え · Space で全画面 · R で前回の範囲 · C で色をコピー · Esc で終了",
+    "hint": "クリックでウィンドウや要素を選択、ドラッグで範囲を選択 · スクロールで範囲を切り替え · Space でウィンドウ全体を選択 · C で色をコピー · Esc で終了",
+    "hintWithLast": "クリックでウィンドウや要素を選択、ドラッグで範囲を選択 · スクロールで範囲を切り替え · Space でウィンドウ全体を選択 · R で前回の範囲 · C で色をコピー · Esc で終了",
     "copy": "コピー",
     "cancel": "スクリーンショットを終了",
     "captureFailed": "画面をキャプチャできませんでした",
@@ -6761,6 +6761,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Agent-Net のみ使用",
         "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。",
         "peerSwitch": {
@@ -9754,6 +9757,10 @@
     "cacheLine": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}} · ヒット率 {{rate}}",
     "cacheLineNoRate": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}}",
     "stepsLine": "このターンのリクエスト {{steps}} 回 · 1 回あたり約 {{context}} のコンテキスト",
+    "traceChartLabel": "このターンの生成速度とリクエストごとの推論量",
+    "traceRequests": "このターンのリクエスト {{requests}} 回",
+    "traceThinkingShare": "推論は出力の {{share}}",
+    "traceThinkingTokens": "推論 {{thinking}} tokens",
     "modelLine": "モデル: {{model}}",
     "multipleModels": "{{count}} 個のモデル",
     "costBreakdownHeader": "モデル別:",
@@ -13551,6 +13558,8 @@
         },
         "reply": {
           "unsupportedMedia": "このバージョンでは、この種類の WeChat メディアにはまだ対応していません。",
+          "delayedReply": "この返信は遅れて届きました。{{receivedAt}} に受信したメッセージへの返信として、{{createdAt}} に作成されました。内容が古くなっている可能性があります。",
+          "delayedReplyQuestion": "元のメッセージ：{{question}}",
           "stillProcessing": "まだ処理中です…",
           "ownerOnlyCommands": "ボットのコマンドを使えるのはオーナーだけです。",
           "companionManagedCommand": "Cindy でこの仲間を開いてください。モデルは仲間の設定で変更し、権限は会話の入力欄の下で切り替えます。",
@@ -14927,6 +14936,7 @@
       "rateHistory": "生成速度の推移",
       "outputTotal": "累計出力",
       "observedPeak": "ピーク",
+      "thinkingShare": "推論の割合",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "直近の生成区間の速度。ツール実行と待機は除きます。",

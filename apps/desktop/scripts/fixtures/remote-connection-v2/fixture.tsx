@@ -42,6 +42,13 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
     ], links: [link('friend', 'direct', 4), link('future', 'relay', 35)], relayRttMs: 18 };
   }
   if (name === 'empty') return { devices: [SELF], links: [], relayRttMs: 18 };
+  if (name === 'narrow-relay') {
+    return {
+      devices: [SELF, device({ deviceId: 'relay-peer', name: 'Relay PC', platform: 'win32' })],
+      links: [link('relay-peer', 'relay', 24)],
+      relayRttMs: 25,
+    };
+  }
   if (name === 'fleet') {
     // 与真实账号同一形状(3 直连、7 经中转、15 离线),名字是虚构的;两台正在收发。
     const devices: Device[] = [SELF];
@@ -160,7 +167,15 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
   };
 }
 
-const data = scenario(ctx.case);
+const scene = ctx.case === 'narrow-fleet' ? 'fleet' : ctx.case;
+const data = scenario(scene);
+if (ctx.case === 'narrow-fleet') {
+  data.links = data.links.map((link) => {
+    if (link.deviceId === 'dir0') return { ...link, encrypted: false };
+    if (link.deviceId === 'rel6') return { ...link, encrypted: undefined };
+    return link;
+  });
+}
 const agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes'] = ctx.case === 'default' ? [
   { deviceId: 'mini', path: 'direct', rttMs: 1 },
   { deviceId: 'pixel', path: 'connecting', rttMs: null },
@@ -249,7 +264,7 @@ void mountPage({
         agentNetRoutes,
         relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
         // Agent-Net 经中转的数据走 UDP;fleet 演示 UDP 不通退回 WebSocket。Device Link 只有 WebSocket。
-        relayTransport: selfEncrypted && ctx.case !== 'fleet' ? 'udp' : 'websocket',
+        relayTransport: selfEncrypted && scene !== 'fleet' ? 'udp' : 'websocket',
         relayRttMs: data.relayRttMs,
       }),
       onPeerLinksChanged: subscription('peerLinks'),

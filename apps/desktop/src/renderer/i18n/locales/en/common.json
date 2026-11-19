@@ -982,8 +982,8 @@
       "loading": "Loading image…"
     },
     "moveToolbar": "Move toolbar left or right",
-    "hint": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · C: copy color · Esc: exit",
-    "hintWithLast": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · R: last area · C: copy color · Esc: exit",
+    "hint": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: select whole window · C: copy color · Esc: exit",
+    "hintWithLast": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: select whole window · R: last area · C: copy color · Esc: exit",
     "copy": "Copy",
     "cancel": "Exit Screenshot",
     "captureFailed": "Could not capture the screen",
@@ -6804,6 +6804,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Use Only Agent-Net",
         "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
         "peerSwitch": {
@@ -9797,6 +9800,10 @@
     "cacheLine": "Cache breakdown: read {{read}} · write {{create}} · hit rate {{rate}}",
     "cacheLineNoRate": "Cache breakdown: read {{read}} · write {{create}}",
     "stepsLine": "Requests this turn: {{steps}} · ~{{context}} context each",
+    "traceChartLabel": "Generation speed and reasoning per request this turn",
+    "traceRequests": "Requests this turn: {{requests}}",
+    "traceThinkingShare": "Reasoning: {{share}} of output",
+    "traceThinkingTokens": "Reasoning: {{thinking}} tokens",
     "modelLine": "Model: {{model}}",
     "multipleModels": "{{count}} models",
     "costBreakdownHeader": "By model:",
@@ -13605,6 +13612,8 @@
         },
         "reply": {
           "unsupportedMedia": "This version can't handle this type of WeChat media yet.",
+          "delayedReply": "Delayed reply prepared at {{createdAt}}, for your message received at {{receivedAt}}. The contents may be out of date.",
+          "delayedReplyQuestion": "Original message: {{question}}",
           "stillProcessing": "Still working on it…",
           "ownerOnlyCommands": "Only the owner can use bot commands.",
           "companionManagedCommand": "Open this teammate in Cindy: change the model in the teammate's settings, and switch permissions below the input box.",
@@ -14991,6 +15000,7 @@
       "rateHistory": "Generation speed history",
       "outputTotal": "Output",
       "observedPeak": "Peak",
+      "thinkingShare": "Reasoning",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Latest generation interval. Excludes tools and waits.",

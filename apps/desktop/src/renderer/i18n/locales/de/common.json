@@ -982,8 +982,8 @@
       "loading": "Bild wird geladen…"
     },
     "moveToolbar": "Symbolleiste nach links oder rechts verschieben",
-    "hint": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: Vollbild · C: Farbe kopieren · Esc: Beenden",
-    "hintWithLast": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: Vollbild · R: letzter Bereich · C: Farbe kopieren · Esc: Beenden",
+    "hint": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: ganzes Fenster auswählen · C: Farbe kopieren · Esc: Beenden",
+    "hintWithLast": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: ganzes Fenster auswählen · R: letzter Bereich · C: Farbe kopieren · Esc: Beenden",
     "copy": "Kopieren",
     "cancel": "Screenshot-Modus verlassen",
     "captureFailed": "Bildschirm konnte nicht aufgenommen werden",
@@ -6804,6 +6804,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Nur Agent-Net verwenden",
         "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert.",
         "peerSwitch": {
@@ -9797,6 +9800,10 @@
     "cacheLine": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}} · Trefferquote {{rate}}",
     "cacheLineNoRate": "Cache-Aufschlüsselung: Lesen {{read}} · Schreiben {{create}}",
     "stepsLine": "Anfragen in dieser Runde: {{steps}} · je ca. {{context}} Kontext",
+    "traceChartLabel": "Generierungsgeschwindigkeit und Denken je Anfrage in dieser Runde",
+    "traceRequests": "Anfragen in dieser Runde: {{requests}}",
+    "traceThinkingShare": "Denken: {{share}} der Ausgabe",
+    "traceThinkingTokens": "Denken: {{thinking}} Tokens",
     "modelLine": "Modell: {{model}}",
     "multipleModels": "{{count}} Modelle",
     "costBreakdownHeader": "Nach Modell:",
@@ -13605,6 +13612,8 @@
         },
         "reply": {
           "unsupportedMedia": "Diese Version kann diese Art von WeChat-Medien noch nicht verarbeiten.",
+          "delayedReply": "Verzögerte Antwort, erstellt am {{createdAt}} auf deine am {{receivedAt}} empfangene Nachricht. Der Inhalt ist möglicherweise veraltet.",
+          "delayedReplyQuestion": "Ursprüngliche Nachricht: {{question}}",
           "stillProcessing": "Wird noch bearbeitet…",
           "ownerOnlyCommands": "Nur der Besitzer kann Bot-Befehle verwenden.",
           "companionManagedCommand": "Öffne dieses Teammitglied in Cindy: Das Modell änderst du in den Einstellungen des Teammitglieds, die Berechtigungen unter dem Eingabefeld der Unterhaltung.",
@@ -14954,6 +14963,7 @@
       "rateHistory": "Verlauf der Generierungsgeschwindigkeit",
       "outputTotal": "Ausgabe",
       "observedPeak": "Spitzenwert",
+      "thinkingShare": "Denkanteil",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Letztes Generierungsintervall. Ohne Tools und Wartezeiten.",

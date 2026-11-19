@@ -40,17 +40,6 @@ export const remoteControlSettings = defineSettings({
     sectionKey: 'settings.remoteControl.v2.sectionTitle',
     aliases: ['Agent-Net', 'agent net', 'device-link', 'topology', 'new connection', '拓扑', '新版连接', '连接拓扑'],
   },
-  onlyEncrypted: {
-    id: 'remoteControl.onlyEncrypted',
-    isVisible: ({ mode }) => mode === 'cloud',
-    tab: 'remote-control',
-    targetId: 'settings-search-target-remote-only-encrypted',
-    fallbackTargetId: 'settings-search-target-remote-v2',
-    titleKey: 'settings.remoteControl.v2.onlyEncrypted',
-    descriptionKey: 'settings.remoteControl.v2.onlyEncryptedHint',
-    sectionKey: 'settings.remoteControl.v2.sectionTitle',
-    aliases: ['Agent-Net only', 'encrypted connections', '仅使用 Agent-Net', '加密连接'],
-  },
   ssh: {
     id: 'remoteControl.ssh',
     tab: 'remote-control',

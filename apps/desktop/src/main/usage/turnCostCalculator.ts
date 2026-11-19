@@ -570,6 +570,7 @@ export function buildClaudeTurnUsageDetails(
   durationMs?: number,
   turnDurationMs?: number,
   billing?: UsageBillingSource,
+  trace?: unknown,
 ): TurnUsageDetails | null {
   const hasModelUsageDeltas = Boolean(deltas && deltas.length > 0);
   const perModelCost = perModel
@@ -601,5 +602,6 @@ export function buildClaudeTurnUsageDetails(
     perModelCost: perModelCost && perModelCost.length > 0 ? perModelCost : undefined,
     durationMs,
     turnDurationMs,
+    trace,
   });
 }

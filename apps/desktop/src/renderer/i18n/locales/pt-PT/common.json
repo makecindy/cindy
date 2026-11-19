@@ -999,8 +999,8 @@
       "loading": "A carregar imagem…"
     },
     "moveToolbar": "Mover a barra de ferramentas para a esquerda ou para a direita",
-    "hint": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Desloque para alterar o âmbito · Espaço: ecrã inteiro · C: copiar cor · Esc: sair",
-    "hintWithLast": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Desloque para alterar o âmbito · Espaço: ecrã inteiro · R: última área · C: copiar cor · Esc: sair",
+    "hint": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Desloque para alterar o âmbito · Espaço: selecionar toda a janela · C: copiar cor · Esc: sair",
+    "hintWithLast": "Clique para selecionar uma janela ou elemento, ou arraste para selecionar uma área · Desloque para alterar o âmbito · Espaço: selecionar toda a janela · R: última área · C: copiar cor · Esc: sair",
     "copy": "Copiar",
     "cancel": "Sair da captura de ecrã",
     "captureFailed": "Não foi possível capturar o ecrã",
@@ -6871,6 +6871,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Os dispositivos antigos e as partilhas que usam a ligação anterior ficarão indisponíveis. Desativado por predefinição.",
         "peerSwitch": {
@@ -9869,6 +9872,10 @@
     "cacheLine": "Detalhes da cache: leitura {{read}} · escrita {{create}} · taxa de acerto {{rate}}",
     "cacheLineNoRate": "Detalhes da cache: leitura {{read}} · escrita {{create}}",
     "stepsLine": "Pedidos neste turno: {{steps}} · ~{{context}} de contexto cada",
+    "traceChartLabel": "Velocidade de geração e raciocínio por pedido neste turno",
+    "traceRequests": "Pedidos neste turno: {{requests}}",
+    "traceThinkingShare": "Raciocínio: {{share}} da saída",
+    "traceThinkingTokens": "Raciocínio: {{thinking}} tokens",
     "modelLine": "Modelo: {{model}}",
     "multipleModels": "{{count}} modelos",
     "costBreakdownHeader": "Por modelo:",
@@ -13719,6 +13726,8 @@
         },
         "reply": {
           "unsupportedMedia": "Esta versão ainda não suporta este tipo de conteúdo multimédia do WeChat.",
+          "delayedReply": "Resposta atrasada, preparada em {{createdAt}} para a tua mensagem recebida em {{receivedAt}}. O conteúdo pode estar desatualizado.",
+          "delayedReplyQuestion": "Mensagem original: {{question}}",
           "stillProcessing": "Ainda em processamento…",
           "ownerOnlyCommands": "Só o proprietário pode usar os comandos do bot.",
           "companionManagedCommand": "Abra este colega no Cindy: o modelo muda-se nas definições do colega e as permissões por baixo da caixa de entrada da conversa.",
@@ -15086,6 +15095,7 @@
       "rateHistory": "Histórico de velocidade de geração",
       "outputTotal": "Saída",
       "observedPeak": "Pico",
+      "thinkingShare": "Raciocínio",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Intervalo de geração mais recente. Exclui ferramentas e tempos de espera.",

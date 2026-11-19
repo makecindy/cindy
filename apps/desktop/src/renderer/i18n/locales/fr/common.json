@@ -999,8 +999,8 @@
       "loading": "Chargement de l'image…"
     },
     "moveToolbar": "Déplacer la barre d'outils à gauche ou à droite",
-    "hint": "Cliquez pour sélectionner une fenêtre ou un élément, ou faites glisser pour sélectionner une zone · Faites défiler pour changer la portée · Espace : plein écran · C : copier la couleur · Échap : quitter",
-    "hintWithLast": "Cliquez pour sélectionner une fenêtre ou un élément, ou faites glisser pour sélectionner une zone · Faites défiler pour changer la portée · Espace : plein écran · R : dernière zone · C : copier la couleur · Échap : quitter",
+    "hint": "Cliquez pour sélectionner une fenêtre ou un élément, ou faites glisser pour sélectionner une zone · Faites défiler pour changer la portée · Espace : sélectionner toute la fenêtre · C : copier la couleur · Échap : quitter",
+    "hintWithLast": "Cliquez pour sélectionner une fenêtre ou un élément, ou faites glisser pour sélectionner une zone · Faites défiler pour changer la portée · Espace : sélectionner toute la fenêtre · R : dernière zone · C : copier la couleur · Échap : quitter",
     "copy": "Copier",
     "cancel": "Quitter la capture d'écran",
     "captureFailed": "Impossible de capturer l'écran",
@@ -6871,6 +6871,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Utiliser uniquement Agent-Net",
         "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut.",
         "peerSwitch": {
@@ -9869,6 +9872,10 @@
     "cacheLine": "Détail du cache : lecture {{read}} · écriture {{create}} · taux de succès {{rate}}",
     "cacheLineNoRate": "Détail du cache : lecture {{read}} · écriture {{create}}",
     "stepsLine": "Requêtes ce tour : {{steps}} · env. {{context}} de contexte chacune",
+    "traceChartLabel": "Vitesse de génération et raisonnement par requête pour ce tour",
+    "traceRequests": "Requêtes ce tour : {{requests}}",
+    "traceThinkingShare": "Raisonnement : {{share}} de la sortie",
+    "traceThinkingTokens": "Raisonnement : {{thinking}} tokens",
     "modelLine": "Modèle : {{model}}",
     "multipleModels": "{{count}} modèles",
     "costBreakdownHeader": "Par modèle :",
@@ -13719,6 +13726,8 @@
         },
         "reply": {
           "unsupportedMedia": "Cette version ne prend pas encore en charge ce type de média WeChat.",
+          "delayedReply": "Réponse retardée, préparée le {{createdAt}} pour votre message reçu le {{receivedAt}}. Le contenu peut être obsolète.",
+          "delayedReplyQuestion": "Message d’origine : {{question}}",
           "stillProcessing": "Toujours en cours de traitement…",
           "ownerOnlyCommands": "Seul le propriétaire peut utiliser les commandes du bot.",
           "companionManagedCommand": "Ouvrez ce coéquipier dans Cindy : le modèle se règle dans les paramètres du coéquipier, et les autorisations sous le champ de saisie de la conversation.",
@@ -15086,6 +15095,7 @@
       "rateHistory": "Historique de la vitesse de génération",
       "outputTotal": "Sortie",
       "observedPeak": "Pic",
+      "thinkingShare": "Raisonnement",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Dernier intervalle de génération. Hors outils et attentes.",
