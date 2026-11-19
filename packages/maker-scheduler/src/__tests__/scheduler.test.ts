@@ -701,6 +701,7 @@ describe('Scheduler', () => {
     local.clock.setTo(schedule.nextFireAt!);
     const settled = await Promise.race([
       local.scheduler.tick().then(() => 'tick' as const),
+      // real-wait: 挂死哨兵 —— 必须显著大于修复路径的 20ms storage 上限,让旧代码的无界 await 稳定判 hung 而非偶发竞态
       new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
     ]);
     expect(settled).toBe('tick');
@@ -724,6 +725,7 @@ describe('Scheduler', () => {
     local.clock.setTo(expireAt + 1);
     const settled = await Promise.race([
       local.scheduler.tick().then(() => 'tick' as const),
+      // real-wait: 挂死哨兵 —— 必须显著大于修复路径的 20ms storage 上限,让旧代码的无界 await 稳定判 hung 而非偶发竞态
       new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
     ]);
     expect(settled).toBe('tick');
