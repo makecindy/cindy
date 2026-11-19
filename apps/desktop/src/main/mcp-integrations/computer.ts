@@ -3144,41 +3144,57 @@ function resetComputerDriverUpdateStateForTests(): void {
   driverUpdateCheckLastFetchAt = 0;
 }
 
+/** 一次检查的结果,外加「被这次检查证伪的那个版本」——它只给缓存判断用,不下发给界面。 */
+interface DriverUpdateCheckProbe {
+  result: Omit<ComputerDriverUpdateCheck, 'updating'>;
+  /** 读到清单、但这个版本明确没有可下载包(404/204/空包)或刚被预检排除的版本。 */
+  missingVersion: string | null;
+}
+
 /** 真正执行一次「本地版本 + 上游已发布版本」的检查,无缓存语义。 */
 async function fetchDriverUpdateCheck(
   fetchImpl: typeof fetch,
   rejectedVersion: string | null = null,
-): Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> {
+): Promise<DriverUpdateCheckProbe> {
+  // 只在这场检查读到清单后才有值:网络失败与限流不产生它,缓存就此保留旧入口。
+  let missingVersion: string | null = null;
+  const done = (
+    result: Omit<ComputerDriverUpdateCheck, 'updating'>,
+  ): DriverUpdateCheckProbe => ({ result, missingVersion });
   let currentVersion: string | null = null;
   try {
     currentVersion = extractDriverSemver(await readDriverVersion());
   } catch {
     // 本地未安装或版本读取失败:没有比较基准,直接视为无更新。
-    return { currentVersion: null, latestVersion: null, updateAvailable: false };
+    return done({ currentVersion: null, latestVersion: null, updateAvailable: false });
   }
   if (!currentVersion) {
-    return { currentVersion: null, latestVersion: null, updateAvailable: false };
+    return done({ currentVersion: null, latestVersion: null, updateAvailable: false });
   }
 
   try {
     const latestVersion = await fetchPublishedCuaDriverVersion(fetchImpl);
     if (compareSemver(currentVersion, latestVersion) >= 0) {
       cachedDriverReleaseAssets = [];
-      return { currentVersion, latestVersion, updateAvailable: false };
+      return done({ currentVersion, latestVersion, updateAvailable: false });
     }
 
     // 点击更新时的预检刚证伪这个版本、上游清单也还没变:不重复 HEAD 同一个包。
     if (rejectedVersion !== null && latestVersion === rejectedVersion) {
-      return { currentVersion, latestVersion: null, updateAvailable: false };
+      missingVersion = latestVersion;
+      return done({ currentVersion, latestVersion: null, updateAvailable: false });
     }
 
     const asset = await probeCuaDriverReleaseAsset(latestVersion, fetchImpl);
     // 上游已推进版本号但安装包还没传全(或当前平台没有包):本次不给入口,
-    // 下一次检查会重试。latestVersion 保持 null 让 commit 保留已知可用的入口。
-    if (!asset) return { currentVersion, latestVersion: null, updateAvailable: false };
+    // 下一次检查会重试。latestVersion 保持 null,由 commit 决定旧入口留不留。
+    if (!asset) {
+      missingVersion = latestVersion;
+      return done({ currentVersion, latestVersion: null, updateAvailable: false });
+    }
 
     cachedDriverReleaseAssets = asset.size > 0 ? [asset] : [];
-    return { currentVersion, latestVersion, updateAvailable: true };
+    return done({ currentVersion, latestVersion, updateAvailable: true });
   } catch (err) {
     if (err instanceof GitHubRateLimitError) {
       // 限流不是用户侧故障,但它是「现在查不到」的主因;warn 级别让日志能自证。
@@ -3186,22 +3202,22 @@ async function fetchDriverUpdateCheck(
         status: err.status,
         resetAt: err.resetAt === null ? null : new Date(err.resetAt).toISOString(),
       });
-      return {
+      return done({
         currentVersion,
         latestVersion: null,
         updateAvailable: false,
         checkError: { kind: 'rate_limited' },
-      };
+      });
     }
     logger.debug('cua-driver update check failed', {
       message: err instanceof Error ? err.message : String(err),
     });
-    return {
+    return done({
       currentVersion,
       latestVersion: null,
       updateAvailable: false,
       checkError: { kind: 'network' },
-    };
+    });
   }
 }
 
@@ -3216,9 +3232,14 @@ async function fetchDriverUpdateCheck(
  */
 function commitDriverUpdateCheck(
   result: Omit<ComputerDriverUpdateCheck, 'updating'>,
+  missingVersion: string | null = null,
 ): void {
+  // 只清「刚被这次检查证伪的那个版本」:清单已推进到尚未传包的 0.8.0 时,缓存的
+  // 0.7.0 并没有被重新探测过,那个仍可下载的入口要留着。
   const disprovedTarget =
-    result.currentVersion !== null && result.latestVersion === null && !result.checkError;
+    missingVersion !== null &&
+    cachedDriverUpdateCheck?.latestVersion === missingVersion &&
+    result.latestVersion === null;
   if (disprovedTarget) {
     cachedDriverReleaseAssets = [];
     cachedDriverUpdateCheck = result;
@@ -3252,11 +3273,11 @@ function completedDriverUpdateCheck(
 function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> {
   if (!driverUpdateCheckInFlight) {
     const pending: Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> = fetchDriverUpdateCheck(fetchImpl)
-      .then((result) => {
+      .then(({ result, missingVersion }) => {
         const completed = completedDriverUpdateCheck(result);
         // An installation can invalidate a check that started against the old binary.
         if (driverUpdateCheckInFlight === pending) {
-          commitDriverUpdateCheck(completed);
+          commitDriverUpdateCheck(completed, missingVersion);
           return cachedDriverUpdateCheck!;
         }
         // Existing callers must also receive the post-install state, not only
@@ -3313,7 +3334,7 @@ async function revalidateComputerDriverUpdateTarget(fetchImpl: typeof fetch): Pr
 
     // 已确认缓存目标不可安装:重新读上游。刷新失败时 completedDriverUpdateCheck
     // 会带上 error 状态,入口不会留着指向一个下不下来的包。
-    const refreshed = completedDriverUpdateCheck(await fetchDriverUpdateCheck(fetchImpl, cachedTarget));
+    const refreshed = completedDriverUpdateCheck((await fetchDriverUpdateCheck(fetchImpl, cachedTarget)).result);
     cachedDriverUpdateCheck = refreshed;
     if (!refreshed.updateAvailable) cachedDriverReleaseAssets = [];
     return refreshed.updateAvailable ? refreshed.latestVersion : null;

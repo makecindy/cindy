@@ -4927,6 +4927,32 @@ describe('computer driver update check', () => {
     });
   });
 
+  it('keeps the cached offer when only the newer release is missing its asset', async () => {
+    // 清单已经推进到 0.8.0、但它还没传平台包:缓存的 0.7.0 从未被重新探测过,
+    // 那个仍可下载的入口不能被当成「被证伪」清掉。
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const offered = vi
+      .fn()
+      .mockResolvedValueOnce(publishedVersionResponse('0.7.0'))
+      .mockResolvedValue({ ok: true, status: 200, headers: { get: (n: string) => (n === 'content-length' ? '1024' : null) } });
+    await expect(checkComputerDriverUpdate(offered as unknown as typeof fetch)).resolves.toMatchObject({
+      latestVersion: '0.7.0',
+      updateAvailable: true,
+    });
+
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const newerWithoutAsset = vi
+      .fn()
+      .mockResolvedValueOnce(publishedVersionResponse('0.8.0'))
+      .mockResolvedValue({ ok: false, status: 404 });
+    await expect(
+      checkComputerDriverUpdate(newerWithoutAsset as unknown as typeof fetch, { force: true }),
+    ).resolves.toMatchObject({
+      latestVersion: '0.7.0',
+      updateAvailable: true,
+    });
+  });
+
   it('keeps installable releases when the proxy strips the length header', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
     const fetchImpl = vi
