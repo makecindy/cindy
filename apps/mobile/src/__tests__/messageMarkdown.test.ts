@@ -2639,6 +2639,26 @@ describe('reference definition boundaries', () => {
     }
   });
 
+  // #9440 / review PRRT_kwDOTgdRUs65V-BZ: special raw-HTML declarations
+  // have explicit terminators and must not hide a following root definition.
+  it('closes special raw HTML declarations at their own terminators', () => {
+    for (const declaration of [
+      '<!DOCTYPE html>',
+      '<?xml version="1.0"?>',
+      '<![CDATA[content]]>',
+    ]) {
+      const source = '[site][s]\n\n' + declaration + '\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(mobileMarkdownPreviewText(source)).not.toContain('[s]:');
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);

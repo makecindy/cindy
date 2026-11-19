@@ -216,6 +216,17 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       continue;
     }
     if (!line.trim()) { html = false; paragraph = false; continue; }
+    const rawDeclaration = /^ {0,3}(?:<!DOCTYPE\b|<\?(?=[\s\S])|<!\[CDATA\[)/i.test(line);
+    if (rawDeclaration) {
+      const end = line.trimStart().startsWith('<?')
+        ? /\?>/
+        : line.trimStart().startsWith('<![CDATA[')
+          ? /\]\]>/
+          : />/;
+      if (!end.test(line)) rawHtmlEnd = end;
+      paragraph = false;
+      continue;
+    }
     const rawTag = /^ {0,3}<(script|pre|style|textarea)(?=[\s>])/i.exec(line);
     if (rawTag) {
       const end = new RegExp(`</${rawTag[1]}\\s*>`, 'i');
