@@ -19737,6 +19737,7 @@
         "empty": "当前没有赠送记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
         "unnamed": "赠送余额",
+        "rolloverName": "滚存额度",
         "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原始金额",
         "used": "已用",
@@ -19974,6 +19975,8 @@
       "basicModels": "可用部分模型",
       "subscription": "订阅套餐",
       "rollover": "剩余余额可留到{{period}}，最多 {{amount}}",
+      "rolloverMonthly": "剩余余额最多滚存 {{amount}}，转为赠送余额\n1 个月内有效，不再继续滚存\n优先于订阅余额和充值余额使用",
+      "rolloverMonthlySummary": "剩余余额最多滚存 {{amount}}，1 个月内有效",
       "nextPeriod": {
         "MONTH": "下月",
         "YEAR": "下一年",

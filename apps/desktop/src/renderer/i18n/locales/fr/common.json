@@ -19999,6 +19999,7 @@
         "empty": "Aucune attribution promotionnelle disponible.",
         "incomplete": "Il existe de nombreuses attributions. Seules les {{count}} plus récentes sont affichées.",
         "unnamed": "Attribution promotionnelle",
+        "rolloverName": "Report",
         "giftCard": "Carte cadeau · de la part de {{sender}}",
         "original": "Initial",
         "used": "Utilisé",
@@ -20236,6 +20237,8 @@
       "basicModels": "Accès à certains modèles",
       "subscription": "Forfait d'abonnement",
       "rollover": "Conservez jusqu'à {{amount}} de solde inutilisé pour {{period}}",
+      "rolloverMonthly": "Reportez jusqu’à {{amount}} de solde inutilisé en solde promotionnel\nValable 1 mois, sans nouveau report\nUtilisé avant le Solde du forfait et le Solde rechargé",
+      "rolloverMonthlySummary": "Reportez jusqu’à {{amount}} de solde inutilisé, valable 1 mois",
       "nextPeriod": {
         "MONTH": "le mois suivant",
         "YEAR": "l'année suivante",

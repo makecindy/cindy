@@ -19999,6 +19999,7 @@
         "empty": "No hay asignaciones promocionales disponibles.",
         "incomplete": "Hay muchos registros de asignaciones. Solo se muestran los últimos {{count}}.",
         "unnamed": "Asignación promocional",
+        "rolloverName": "Saldo acumulado",
         "giftCard": "Tarjeta de regalo · de {{sender}}",
         "original": "Importe original",
         "used": "Usado",
@@ -20236,6 +20237,8 @@
       "basicModels": "Accede a algunos modelos",
       "subscription": "Plan de suscripción",
       "rollover": "Conserva hasta {{amount}} de saldo sin usar durante {{period}}",
+      "rolloverMonthly": "Acumula hasta {{amount}} de saldo sin usar como saldo promocional\nVálido durante 1 mes, sin nueva acumulación\nSe utiliza antes del Saldo del plan y del Saldo de recargas",
+      "rolloverMonthlySummary": "Acumula hasta {{amount}} de saldo sin usar, válido durante 1 mes",
       "nextPeriod": {
         "MONTH": "el próximo mes",
         "YEAR": "el próximo año",

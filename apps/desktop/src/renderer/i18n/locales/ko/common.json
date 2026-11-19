@@ -19737,6 +19737,7 @@
         "empty": "프로모션 지급 내역이 없습니다.",
         "incomplete": "지급 내역이 많아 최근 {{count}}건만 표시합니다.",
         "unnamed": "프로모션 잔액",
+        "rolloverName": "이월분",
         "giftCard": "기프트 카드 · {{sender}} 님이 보냄",
         "original": "지급액",
         "used": "사용",
@@ -19974,6 +19975,8 @@
       "basicModels": "일부 모델 사용",
       "subscription": "구독 요금제",
       "rollover": "남은 잔액은 {{period}}에 최대 {{amount}}까지 사용 가능",
+      "rolloverMonthly": "미사용 잔액을 최대 {{amount}}까지 프로모션 잔액으로 이월\n1개월간 유효하며 다시 이월되지 않음\n요금제 잔액과 충전 잔액보다 먼저 사용",
+      "rolloverMonthlySummary": "미사용 잔액은 최대 {{amount}}까지 이월되며 1개월간 유효",
       "nextPeriod": {
         "MONTH": "다음 달",
         "YEAR": "다음 해",
