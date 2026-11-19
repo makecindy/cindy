@@ -39,22 +39,24 @@ export function readPortableRendererPrefs(
  * Writes the selected values this computer has not set itself; a preference already chosen
  * here (before or after the preview) is kept. Returns how many were written.
  */
-export function applyPortableRendererPrefs(
+export async function applyPortableRendererPrefs(
   values: Record<string, string>,
   storage: Storage = window.localStorage,
   ownerId: string | null = getDataOwnerGeneration().dataOwnerId,
-): number {
+): Promise<number> {
   let changed = 0;
+  // Commit the asynchronous language import after the other local preferences.
+  let language: string | undefined;
   for (const [key, value] of Object.entries(values)) {
     if (!isMovablePrefKey(key, ownerId) || typeof value !== 'string' || value.length > MAX_VALUE_LENGTH) continue;
     if (storage.getItem(key) !== null) continue;
     if (key === LOCALE_STORAGE_KEY) {
-      if (!isLocalePreference(value)) continue;
-      if (!writeStoredLocale(value, storage)) throw new Error('PERSISTENCE_NOT_CONFIRMED');
-    } else {
-      storage.setItem(key, value);
+      language = value;
+      continue;
     }
+    storage.setItem(key, value);
     changed += 1;
   }
+  if (isLocalePreference(language) && await writeStoredLocale(language, storage, true)) changed += 1;
   return changed;
 }

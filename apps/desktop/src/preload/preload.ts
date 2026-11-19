@@ -1302,12 +1302,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getArm64Translation: (): Promise<boolean> => ipcRenderer.invoke('app:get-arm64-translation'),
   clientEndpoints: { websiteUrl: clientEndpointsInfo?.websiteUrl ?? '' },
   preferredSystemLocale: readInitialPreferredSystemLocale(),
-  restoreDisplayLanguage: (legacy: LocalePreference | null): LocalePreference | null => {
-    const saved: unknown = ipcRenderer.sendSync('app-locale:preference-sync', 'restore', legacy);
+  restoreDisplayLanguage: async (legacy: LocalePreference | null): Promise<LocalePreference | null> => {
+    const saved: unknown = await ipcRenderer.invoke('app-locale:preference', 'restore', legacy);
     return isLocalePreference(saved) ? saved : null;
   },
-  saveDisplayLanguage: (preference: LocalePreference): boolean =>
-    ipcRenderer.sendSync('app-locale:preference-sync', 'set', preference) === preference,
+  saveDisplayLanguage: async (preference: LocalePreference, onlyIfUnset?: boolean): Promise<boolean> =>
+    (await ipcRenderer.invoke('app-locale:preference', onlyIfUnset ? 'import' : 'set', preference)) === preference,
   appDisplayVersion: appDisplayVersionInfo.display,
   appDisplayVersionDetail: appDisplayVersionInfo.detail,
   getDeviceId: (): Promise<string> => ipcRenderer.invoke('get-device-id'),

@@ -47,7 +47,7 @@ interface LocaleContextValue {
   /** 实际生效的语言 ('system' 已解析为 OS 语言)。 */
   effectiveLocale: SupportedLocale;
   /** 用户主动选择并保存偏好。 */
-  setLocale: (next: LocalePreference) => boolean;
+  setLocale: (next: LocalePreference) => boolean | Promise<boolean>;
   /** 主进程广播只更新当前窗口的显示。 */
   setDisplayLocale: (next: SupportedLocale) => void;
   /** AI 作答文风（文言、唐诗……）；现代中文界面下也可选，默认照常作答。 */
@@ -119,14 +119,17 @@ export function LocaleProvider({ children, syncHostOnMount = false }: { children
   }, [classicalStyle]);
 
   const setLocale = useCallback((next: LocalePreference) => {
+    const apply = (saved: boolean) => {
+      if (saved || !window.electronAPI?.saveDisplayLanguage) {
+        setLocaleState(next);
+        const effective = effectiveOf(next);
+        setEffectiveLocale(effective);
+        syncApplicationMenuLocale(effective);
+      }
+      return saved;
+    };
     const saved = writeStoredLocale(next);
-    if (saved || !window.electronAPI?.saveDisplayLanguage) {
-      setLocaleState(next);
-      const effective = effectiveOf(next);
-      setEffectiveLocale(effective);
-      syncApplicationMenuLocale(effective);
-    }
-    return saved;
+    return typeof saved === 'boolean' ? apply(saved) : saved.then(apply);
   }, []);
 
   useEffect(() => {

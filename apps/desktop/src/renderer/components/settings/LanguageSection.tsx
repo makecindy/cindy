@@ -28,18 +28,18 @@ export function LanguageSection() {
   const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
   const classical = isClassicalLocale(locale) ? locale : null;
 
-  const saveLanguage = (preference: LocalePreference) => {
-    if (!setLocale(preference)) toast.error(t('regionScreenshot.translation.saveFailed'));
+  const saveLanguage = async (preference: LocalePreference) => {
+    if (!await setLocale(preference)) toast.error(t('regionScreenshot.translation.saveFailed'));
   };
 
   const chooseLanguage = (option: LanguageOption) => {
     if (option !== CLASSICAL_OPTION) {
-      saveLanguage(option);
+      void saveLanguage(option);
       return;
     }
     if (classical) return;
     // First switch keeps the script the user already reads.
-    saveLanguage(effectiveLocale === 'zh-TW' ? 'zh-Hant-x-lzh' : 'zh-Hans-x-lzh');
+    void saveLanguage(effectiveLocale === 'zh-TW' ? 'zh-Hant-x-lzh' : 'zh-Hans-x-lzh');
   };
 
   return (
@@ -79,7 +79,7 @@ export function LanguageSection() {
                     value: script.value,
                     label: t(script.labelKey),
                   }))}
-                  onValueChange={(next) => saveLanguage(next as ClassicalLocale)}
+                  onValueChange={(next) => { void saveLanguage(next as ClassicalLocale); }}
                   label={t('settings.language.classical.scriptAriaLabel')}
                   width="xs"
                   className="shrink-0"

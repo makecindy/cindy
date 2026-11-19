@@ -25,20 +25,16 @@ export function readDisplayLanguagePreference(): LocalePreference | null {
 }
 
 export function registerDisplayLanguagePreference(): void {
-  // A startup restore must finish before i18n reads localStorage. User selections
-  // use the same acknowledgement so immediate quit cannot abandon an in-flight write.
-  ipcMain.on('app-locale:preference-sync', (event, operation: unknown, value: unknown) => {
-    if (!isTrustedAppRendererEvent(event)) {
-      event.returnValue = null;
-      return;
-    }
-    void applyPreference(operation, value).then(
-      saved => { event.returnValue = saved; },
-      () => {
-        log.warn('Could not persist the display language preference');
-        event.returnValue = null;
-      },
-    );
+  let pending: Promise<unknown> = Promise.resolve();
+  ipcMain.handle('app-locale:preference', (event, operation: unknown, value: unknown) => {
+    if (!isTrustedAppRendererEvent(event)) return null;
+    // Preserve the order of requests from this process even when the file lock is busy.
+    const result = pending.then(() => applyPreference(operation, value)).catch(() => {
+      log.warn('Could not persist the display language preference');
+      throw new Error('Could not persist the display language preference');
+    });
+    pending = result.catch(() => undefined);
+    return result;
   });
 }
 
@@ -46,10 +42,14 @@ async function applyPreference(operation: unknown, value: unknown): Promise<Loca
   const saved = readDisplayLanguagePreference();
   if (operation === 'restore' && saved !== null) return saved;
   if (!isLocalePreference(value)) return null;
-  if (operation === 'restore') {
-    // Another window may have saved an explicit choice since the first read.
-    const restored = await store.updateAtomic(current => ({ language: current.value.language ?? value }));
-    return restored.language;
+  if (operation === 'restore' || operation === 'import') {
+    let imported = false;
+    const result = await store.updateAtomic(({ value: current }) => {
+      if (current.language !== null) return null;
+      imported = true;
+      return { language: value };
+    });
+    return operation === 'restore' || imported ? result.language : null;
   }
   if (operation !== 'set') return null;
   if (saved !== value) await store.writePatchAtomic({ language: value });
