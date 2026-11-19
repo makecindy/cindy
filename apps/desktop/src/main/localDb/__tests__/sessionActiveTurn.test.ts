@@ -260,6 +260,27 @@ describe('sessionActiveTurn', () => {
     expect(next?.last_turn_ended_at).toBeGreaterThanOrEqual(next!.active_turn_started_at!);
   });
 
+  it('keeps a completion captured before a pending barrier when idle close overtakes it', async () => {
+    const { markSessionTurnStarted, markSessionTurnEnded, markSessionTurnEndedAfterBarrier,
+      drainSessionActiveTurnWrites } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-barrier-close');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10000);
+    markSessionTurnStarted('s-barrier-close');
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    clock.mockReturnValue(12000);
+    markSessionTurnEndedAfterBarrier('s-barrier-close', barrier);
+    clock.mockReturnValue(20000);
+    markSessionTurnEnded('s-barrier-close');
+    await drainSessionActiveTurnWrites('s-barrier-close');
+    expect((await readMarks(client, 's-barrier-close'))?.last_turn_ended_at).toBe(12000);
+    release();
+    await barrier;
+    await drainSessionActiveTurnWrites('s-barrier-close');
+    expect((await readMarks(client, 's-barrier-close'))?.last_turn_ended_at).toBe(12000);
+  });
+
   it('markSessionTurnEnded honors endedAtOverride so deferred writes keep the frozen timestamp', async () => {
     const { markSessionTurnStarted, markSessionTurnEnded } = await import('../sessionActiveTurn.js');
     const client = createTestDbClient();

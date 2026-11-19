@@ -170,6 +170,15 @@ export function getSessionNotificationTurnSignal(sessionId: string): { id: strin
   };
 }
 
+/** Capture the first real completion before a persistence barrier can delay it. */
+function captureSessionTurnEnd(sessionId: string, endedAt: number): number {
+  const turn = _notificationTurns.get(sessionId);
+  // A delayed previous-turn completion must not freeze the new turn's clock.
+  if (!turn || endedAt < turn.startedAt) return endedAt;
+  turn.endedAt ??= endedAt;
+  return turn.endedAt;
+}
+
 /** Wait for the turn-marker writes already queued for this session. */
 export function drainSessionActiveTurnWrites(sessionId: string): Promise<void> {
   return _writeChains.get(sessionId) ?? Promise.resolve();
@@ -241,9 +250,7 @@ function queueSessionTurnStarted(sessionId: string, durable: boolean): Promise<v
 export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number): void {
   if (isEndedWriteSuppressed()) return;
   const notifyContext = captureTurnEndedPersistedContext();
-  const endedAt = Math.min(endedAtOverride ?? Date.now(), Date.now());
-  const notificationTurn = _notificationTurns.get(sessionId);
-  if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
+  const endedAt = captureSessionTurnEnd(sessionId, Math.min(endedAtOverride ?? Date.now(), Date.now()));
   enqueueEndedWrite(
     sessionId,
     endedAt,
@@ -264,11 +271,9 @@ export function markSessionTurnEnded(sessionId: string, endedAtOverride?: number
  */
 export function markSessionTurnEndedAfterBarrier(sessionId: string, barrier: Promise<unknown>): void {
   if (isEndedWriteSuppressed()) return;
-  const endedAt = Date.now();
+  const endedAt = captureSessionTurnEnd(sessionId, Date.now());
   const notifyContext = captureTurnEndedPersistedContext();
   const db = captureMarkerDb();
-  const notificationTurn = _notificationTurns.get(sessionId);
-  if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
   void barrier.then(
     () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db, true),
     () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db, true),
