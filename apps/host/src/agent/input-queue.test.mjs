@@ -1814,7 +1814,7 @@ test('once the rows settle no stale-boundary retry is left running, even with in
   t.mock.timers.enable({ apis: ['setTimeout'] });
   session.emit({ type: 'text', data: { text: 'finished after failed abort', isFinal: true } });
   session.emit({ type: 'done' });
-  for (let i = 0; i < 20 && h.queue.projection('no-poll').turnInProgress; i += 1) { await settle(); t.mock.timers.tick(250); }
+  await settleUntil(() => !h.queue.projection('no-poll').turnInProgress, 'the reply rows settled');
   assert.equal(h.queue.projection('no-poll').turnInProgress, false);
   const settled = retriesFor('no-poll');
   for (let i = 0; i < 8; i += 1) { t.mock.timers.tick(250); await settle(); }
@@ -1824,15 +1824,23 @@ test('once the rows settle no stale-boundary retry is left running, even with in
   // No dispose: its stop would meet the same failing abort (as in the failed abort test above).
 });
 
-// A provider may acknowledge abort before it is idle, without a later done.
-// Reconciliation must release that boundary only after the partial reply saves.
+// Host stop/resume with the shared coordinator (unit): a provider can acknowledge abort
+// before going idle, without a later done. Hold a partial reply write to verify the receipt
+// and the queued send both wait for it. In CI the working-directory probe on the next send
+// outlasted a fixed number of loop turns, even though that send eventually reached the engine.
 test('late provider idle after stop saves the partial reply before draining', async t => {
+  let writing = false;
   let releaseWrite;
   const write = new Promise(resolve => { releaseWrite = resolve; });
-  const h = createHarness({ readSession: async id => ({ id, agentKind: 'codex', model: 'm', workingDir: '/tmp' }),
+  const h = createHarness({
+    readSession: async id => ({ id, agentKind: 'codex', model: 'm', workingDir: '/tmp' }),
     persistMessage: async (_id, row) => {
-    if (row.role === 'assistant') await write;
-  } });
+      if (row.role === 'assistant') {
+        writing = true;
+        await write;
+      }
+    },
+  });
   await enqueue(h, 'late-stop', { clientId: 'a', text: 'first' });
   const session = h.maker.getSession('late-stop');
   let running = true;
@@ -1846,15 +1854,14 @@ test('late provider idle after stop saves the partial reply before draining', as
   assert.deepEqual(session.sent, ['first']);
   running = false;
   t.mock.timers.tick(250);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(session.sent, ['first']);
-  assert.equal(h.events.some(event => event.type === 'input_receipt'), false, 'do not settle before the reply write finishes');
-  releaseWrite();
-  await new Promise(resolve => setImmediate(resolve));
-  t.mock.timers.tick(250);
-  // The next send checks its working directory on disk first (working-directory.ts); setTimeout is
-  // mocked here, so yield to I/O until it is dispatched.
-  for (let turn = 0; turn < 200 && session.sent.length < 2; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  try {
+    await settleUntil(() => writing, 'the partial reply reached persistence');
+    assert.deepEqual(session.sent, ['first']);
+    assert.equal(h.events.some(event => event.type === 'input_receipt'), false, 'do not settle before the reply write finishes');
+  } finally {
+    releaseWrite();
+  }
+  await settleUntil(() => session.sent.length >= 2, 'the next input reached the engine');
   assert.deepEqual(session.sent, ['first', 'second']);
   assert.deepEqual(h.events.filter(event => event.type === 'input_receipt'), [{
     type: 'input_receipt', sessionId: 'late-stop', inputClientId: 'a', clientId: 'a', status: 'interrupted',
@@ -7230,7 +7237,7 @@ test('profile hold: every new send is refused, typed; the running turn ends; not
 
   const session = h.maker.sessions.get('held');
   session.emit({ type: 'done', data: {} });
-  await settle();
+  await settleUntil(() => !h.queue.isTurnRunning('held'), 'the held turn finished');
   assert.deepEqual(session.sent, ['long job'], 'the queued input does not start');
   const projection = h.queue.projection('held');
   assert.deepEqual(projection.pendingQueue.map(i => i.clientId), ['queued']);
@@ -7246,7 +7253,7 @@ test('profile hold: the desktop answered one queued input meanwhile; reopened, t
   await h.queue.enqueue('held', { clientId: 'waiting', text: 'still waiting' });
   h.queue.holdForDesktop(HELD);
   h.maker.sessions.get('held').emit({ type: 'done', data: {} });
-  await settle();
+  await settleUntil(() => !h.queue.isTurnRunning('held'), 'the held turn finished before the desktop writes');
   // The desktop, on the same database: it sends "answered" (its user row) and saves its queue without it.
   h.record('held', 'answered');
   await saveAgentInputQueueSnapshot('held', (await loadAgentInputQueueSnapshot('held')).filter(i => i.clientId !== 'answered'));
