@@ -451,6 +451,8 @@
     },
     "manage": {
       "createLink": "Crear enlace para compartir",
+      "exportRoster": "Exportar lista de miembros",
+      "exportRosterFailed": "No se pudo guardar la lista de miembros.",
       "loading": "Cargando uso compartido…",
       "notReady": "Compartir no está disponible en este momento. Asegúrate de haber iniciado sesión y estar en línea; lo volverá a intentar automáticamente.",
       "loadFailed": "No se pudieron cargar los detalles para compartir. Inténtalo de nuevo en un momento.",
@@ -948,7 +950,7 @@
       "title": "¿Continuar en {{label}}?",
       "fallbackTitle": "¿Continuar en {{label}} con un resumen?",
       "fallbackDescription": "La conversación original no se pudo restaurar por completo. Un resumen puede omitir detalles anteriores y resultados de herramientas. Cancela para enviarlo desde la computadora original.",
-      "description": "Para usar la cuota de cada cuenta de manera uniforme, envía este mensaje desde {{label}} ({{quota}}). Se conservan los últimos mensajes y un resumen; es posible que se pierdan detalles más antiguos.",
+      "description": "Para usar la cuota de cada cuenta de manera uniforme, envía este mensaje desde {{label}} ({{quota}}). La conversación se transfiere. Es posible que se condensen las partes anteriores para ajustarse al modelo.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
       "confirm": "Cambiar solo esta vez",
@@ -1147,14 +1149,14 @@
   },
   "awayGuard": {
     "status": "Cindy está trabajando",
-    "hint": "Presiona cualquier tecla o la tecla Touch ID para bloquear y luego desbloquea con tu huella o contraseña",
+    "hint": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
     "lockFailed": {
       "status": "Cindy no pudo bloquear esta Mac",
       "hint": "Toca la computadora para volver a intentar el bloqueo. Si sigue sin bloquearse, verifícate con Touch ID o tu contraseña para quitar la pantalla. También puedes cerrar la tapa o pulsar el botón de encendido.",
       "hintWindows": "Toca la computadora para volver a intentar el bloqueo. Si sigue sin bloquearse, verifícate con Windows Hello o tu PIN para quitar la pantalla. También puedes presionar la tecla del logotipo de Windows + L."
     },
-    "hintWindows": "Presiona cualquier tecla para bloquear; desbloquea con Windows Hello o tu contraseña",
-    "hintLinux": "Presiona cualquier tecla para bloquear; desbloquea con tu contraseña",
+    "hintWindows": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
+    "hintLinux": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
     "verifyReason": "quitar la pantalla de privacidad"
   },
   "appBadge": {
@@ -3526,7 +3528,7 @@
         "end": "Todo lo anterior se importó de {{source}}",
         "endHandoff": "Todo lo anterior se importó de {{source}}. {{harness}} continúa desde aquí."
       },
-      "projectMenu": "Importar sesiones de este proyecto desde otras herramientas…",
+      "projectMenu": "Importar tareas…",
       "hiddenCount_many": "{{count}} ocultas",
       "groupTasks_many": "{{count}} sesiones",
       "selectedSummary_many": "{{count}} seleccionadas · {{size}}",
@@ -4168,6 +4170,7 @@
         "refreshSpeechAdded": "Modelos actualizados; se añadió 1 modelo de voz sugerido",
         "refreshNoNew": "La lista de modelos está actualizada, nada nuevo",
         "refreshFailed": "No se pudo actualizar la lista de modelos. Vuelve a intentarlo más tarde.",
+        "refreshReconnect": "No se pudo actualizar la lista de modelos. Vuelve a conectar este proveedor e inténtalo de nuevo.",
         "refreshFetchDisabled": "La recuperación remota del catálogo de modelos está deshabilitada: se omitió la actualización",
         "disableModel": "Deshabilitar este modelo",
         "paymentRequired": "De pago",
@@ -6863,6 +6866,10 @@
         "protocol": {
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
+        },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
         },
         "onlyEncrypted": "Usar solo Agent-Net",
         "onlyEncryptedHint": "Los dispositivos antiguos y los recursos compartidos que usen la conexión anterior no estarán disponibles. Desactivado por defecto.",
@@ -11073,6 +11080,8 @@
     "autosave": {
       "saving": "Guardando…",
       "saved": "Guardado",
+      "unconfirmed": "Guardado sin confirmar",
+      "savedModel": "Guardado · desde el próximo turno",
       "retry": "Guardar de nuevo"
     },
     "retry": "Reintentar",
@@ -11186,7 +11195,7 @@
       "discard": "Descartar cambios",
       "continueEditing": "Seguir editando"
     },
-    "profileSaveFailed": "No se pudo guardar la configuración del amigo. No se aplicó ningún cambio.",
+    "profileSaveFailed": "No se pudo guardar la configuración del amigo.",
     "profileSaveOffline": "No se puede conectar con el ordenador del amigo. Restablece la conexión y vuelve a guardar.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (no disponible actualmente)",
@@ -11563,7 +11572,7 @@
         "projectDirChoose": "Elegir carpeta",
         "projectDirChange": "Cambiar carpeta",
         "projectDirClear": "Quitar carpeta",
-        "projectDirNote": "Los amigos trabajan aquí cuando se reparten el trabajo. Si lo dejas vacío, usarán la carpeta de esta conversación grupal. Si eliges un proyecto de Git, cada encargo tendrá un worktree y una rama nuevos para no modificar tu código.",
+        "projectDirNote": "Elige un proyecto existente en este equipo. Si lo dejas vacío, se usará el proyecto del repositorio o el del compañero que ejecute la tarea. La división del trabajo en Git usa un árbol de trabajo independiente.",
         "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
         "projectDirSaveFailed": "No se pudo guardar la carpeta del proyecto. Asegúrate de que la carpeta aún exista e inténtalo de nuevo.",
         "allowMemberInvites": "Permitir que todos inviten amigos",
@@ -11897,15 +11906,15 @@
           "replyModeAssistant": "Cindy responde",
           "replyModeAssistantNote": "Responde la Cindy del grupo.",
           "work": "División del trabajo",
-          "ownFolder": "Carpeta propia del grupo",
+          "ownFolder": "Automático",
           "projectDirHint": "Solo se aplica en este ordenador.",
-          "projectDirClearHint": "Usar la carpeta propia del grupo en su lugar",
+          "projectDirClearHint": "Volver a la selección automática del proyecto",
           "project": "Proyecto",
           "projectCaption": "Los amigos responden y hacen los repartos de trabajo en este proyecto. El repositorio se comparte con el grupo; la carpeta se queda en este ordenador.",
           "githubRepo": "Repositorio de GitHub",
-          "githubRepoHint": "Escribe owner/name. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Repositorio",
-          "repositoryHint": "GitHub: escribe owner/name. GitLab (también propio de tu empresa), CNB y otros: pega el enlace del repositorio. Los ordenadores sin carpeta elegida usan su propia copia de este proyecto o descargan una.",
+          "repositoryHint": "Para GitHub, introduce owner/name o pega la URL del repositorio. Cindy busca un único proyecto coincidente en este equipo.",
           "repositoryPlaceholder": "owner/name o enlace del repositorio",
           "githubRepoSaveFailed": "No se guardó el repositorio. Revísalo e inténtalo de nuevo.",
           "folderRepoFilled": "Se completó el repositorio {{repo}} a partir de esta carpeta. Los ordenadores de los demás miembros también lo usarán.",
@@ -14204,7 +14213,7 @@
         "effortEndFast": "Más rápido",
         "effortEndSmart": "Más inteligente",
         "railSameEngine": "Solo {{agent}}",
-        "crossEngineWarning": "Cambiar de motor reconstruye el contexto y puede provocar pérdida de contenido",
+        "crossEngineWarning": "El motor cambiará con el próximo mensaje y retomará la conversación. Es posible que se condensen las partes anteriores.",
         "favoritesSyncFailed": "No se pudieron sincronizar los favoritos. Vuelve a abrir el selector para intentarlo de nuevo; es posible que la computadora remota necesite una actualización.",
         "favoritesSyncFailedUnreachable": "Los favoritos aún no se han sincronizado: no se puede acceder a esa computadora. Vuelve a abrir el selector cuando se restablezca la conexión.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14220,12 +14229,8 @@
         "ultrafast": "Ultrarrápido"
       },
       "discoveredCopy": {
-        "title": "¿Usar {{provider}} en “{{device}}”?",
-        "description": "{{unavailable}} Si continúas, se ejecutará en “{{device}}”. Puedes volver aquí cuando quieras.",
         "unavailableHere": "{{provider}} en esta computadora no está disponible ahora.",
-        "unavailableOn": "{{provider}} en “{{device}}” no está disponible ahora.",
-        "confirm": "Usar",
-        "cancel": "Dejar como está"
+        "unavailableOn": "{{provider}} en “{{device}}” no está disponible ahora."
       }
     },
     "permissionSelector": {
@@ -14492,33 +14497,14 @@
       "credentialSwitchApplied": "El cambio de proveedor de modelo ya está en vigor.",
       "credentialSwitchFailed": "No se pudo cambiar el proveedor de modelos. Vuelve a elegir el modelo.",
       "modelSwitchContextGuard": {
-        "title": "La conversación actual no cabe en este modelo",
         "warnToast": "Esta conversación ya usa {{used}}: aproximadamente el {{pct}}% de la capacidad de {{total}} del nuevo modelo",
-        "overflowDescription": "Esta conversación ya utiliza {{used}}, más de lo que el nuevo modelo puede contener ({{total}}, aproximadamente {{pct}}%). Si cambias, Cindy hará un breve resumen y continuará. Tu historial de conversación se conserva; simplemente no se transmitirá todo palabra por palabra.",
-        "overflowDescriptionRemote": "Esta tarea remota ya utiliza {{used}} / {{total}} del contexto del modelo más pequeño (aproximadamente {{pct}}%), por lo que Cindy no puede cambiar de forma segura. Mantén el modelo actual o inicia una nueva tarea antes de elegir este modelo.",
-        "confirmSwitch": "Cambiar y continuar",
-        "cancelSwitch": "Mantener este modelo"
+        "condensedToast": "Las partes anteriores de la conversación se condensarán para ajustarse al nuevo modelo. El historial completo seguirá disponible.",
+        "overflowDescriptionRemote": "Esta tarea remota ya utiliza {{used}} / {{total}} del contexto del modelo más pequeño (aproximadamente {{pct}}%), por lo que Cindy no puede cambiar de forma segura. Mantén el modelo actual o inicia una nueva tarea antes de elegir este modelo."
       },
       "agentSwitch": {
         "engineNotReady": "Se cambió el motor, pero el nuevo motor no pudo iniciarse; se reintentará cuando envíes un mensaje",
         "failed": "Falló el cambio de motor; no se aplicó",
-        "deferred": "Cambio programado: se cambiará a {{agent}} · {{model}} cuando envíes tu próximo mensaje",
-        "confirmation": {
-          "title": "¿Cambiar de Agent?",
-          "description": "El nuevo motor de Agent continúa mediante un resumen de transferencia, por lo que no se puede garantizar que el razonamiento y otros contenidos se transfieran perfectamente; si vuelves al motor anterior, podrás continuar su sesión original. El cambio también interrumpe una vez la caché de prompts y puede aumentar el uso de tokens.",
-          "confirm": "Cambiar de Agent",
-          "cancel": "Mantener el Agent actual",
-          "dontShowAgain": "No volver a recordármelo"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "¿Volver a ejecutar el Agent en esta computadora?",
-        "titleOther": "¿Ejecutar el Agent en “{{device}}”?",
-        "description": "El registro de conversación en la otra computadora no se puede mover, por lo que continúa desde un resumen de transferencia. Es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envíes el siguiente mensaje.",
-        "descriptionNativeHistory": "El registro completo de la conversación se copia y continúa desde donde estaba. Si no se puede restaurar, continúa desde un resumen de transferencia y es posible que los pensamientos y detalles similares no se transmitan por completo. Entra en vigor cuando envíes el siguiente mensaje.",
-        "confirm": "Cambiar de computadora",
-        "cancel": "Dejar como está",
-        "discoveredDescription": "{{reason}} {{description}}"
+        "deferred": "Cambio programado: se cambiará a {{agent}} · {{model}} cuando envíes tu próximo mensaje"
       }
     },
     "agentSelect": {
@@ -14763,12 +14749,14 @@
       "runningWithWorktree_other": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias.",
       "runningWithWorktree_many": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias."
     },
-    "followUpHint": {
-      "queueDefault": "Los mensajes enviados mientras la tarea se ejecuta se ponen en cola.",
-      "steerDefault": "Los mensajes enviados mientras la tarea se ejecuta dan indicaciones a la tarea en curso.",
+    "sendDelivery": {
+      "menuAria": "Cómo enviar este mensaje",
+      "queueHint": "Tras esta respuesta",
+      "steerHint": "En el siguiente paso",
+      "setDefault": "Usar por defecto",
+      "nowDefault": "Ya es por defecto",
       "switchToSteer": "Dar indicaciones por defecto",
-      "switchToQueue": "Poner en cola por defecto",
-      "dismiss": "Cerrar sugerencia"
+      "switchToQueue": "Poner en cola por defecto"
     }
   },
   "onboarding": {
@@ -15118,6 +15106,7 @@
       "credentialSwitchBusy": "Otra tarea de Codex sigue en ejecución, por lo que aún no se puede aplicar el proveedor de esta sesión (el proceso compartido de Codex necesita reiniciarse). Reintenta cuando terminen esas tareas.",
       "accountBoundaryPending": "Cindy aún está cambiando el estado de la cuenta, por lo que esta tarea todavía no puede iniciarse. Espera un momento y presiona Reintentar. Si el problema persiste, reinicia Cindy.",
       "codexThreadStale": "Cambió el modo de autenticación de Codex; esta sesión no puede continuar. Inicia una nueva sesión para aplicarlo.",
+      "codexSharedAuthLinkUnavailable": "En este ordenador ya has iniciado sesión en Codex, pero esta sesión no puede acceder a ese inicio de sesión: no se puede crear el vínculo con él (con una cuenta estándar de Windows normalmente no se puede). Comprueba que {{appName}} en este ordenador puede crear ese vínculo (en Windows, ejecútalo una vez como administrador o activa el modo de desarrollador) y luego haz clic en «Reintentar». También puedes hacer clic en «Volver a iniciar sesión en ChatGPT» para que Cindy use un inicio de sesión propio para esta sesión.",
       "codexResumeNotReady": "Codex no puede reanudar esta tarea en este momento. Vuelve a intentarlo dentro de un rato.",
       "claudeGatewayOpusPlanMismatch": "Esta solicitud de Opus pasó por XD Gateway, no por tu suscripción de Claude.ai. Esa ruta de la puerta de enlace rechazó el modelo. Cambia a tu suscripción de Claude.ai y reintenta, o elige otro modelo.",
       "claudeSubscriptionOpusPlanMismatch": "Opus no está disponible en el plan Claude Pro conectado. Cambia a un modelo incluido en tu plan. Si mejoraste tu plan recientemente, vuelve a conectar Anthropic en Configuración y reintenta.",
@@ -15652,6 +15641,11 @@
         "relocatedTaskComputer": "Agent ahora se ejecuta en la computadora de la tarea",
         "relocatedElsewhere": "Agent ahora se ejecuta en otra computadora",
         "quotaRebalance": "su cuota debe usarse primero"
+      },
+      "handoffCoverage": {
+        "complete": "Conversación transferida íntegramente",
+        "condensed": "Partes anteriores condensadas",
+        "details": "Contenido transferido para continuar la conversación"
       },
       "contextRebuild": {
         "labelOverflow": "Contexto reorganizado, continuando",
@@ -16656,7 +16650,7 @@
       "confirmArchive": {
         "title": "Archivar sesión",
         "description": "¿Archivar esta sesión? Se quitará de la lista.",
-        "dirtyWorktreeWarning": "Los cambios sin confirmar se guardarán antes de archivar. Podrás restaurarlos desde la tarea.",
+        "dirtyWorktreeWarning": "Esta tarea contiene cambios en archivos que aún no se han confirmado. Al archivar la tarea, estos cambios se guardan de forma predeterminada y podrás restaurarlos más adelante desde la tarea.",
         "discardChanges": "Descartar cambios sin confirmar",
         "discardWarning": "Los cambios sin confirmar y los archivos nuevos se perderán.",
         "discardAndArchive": "Descartar y archivar",
@@ -16697,6 +16691,7 @@
         "empty": "Esta automatización no tiene sesiones para archivar."
       },
       "archiveAll": {
+        "projectTitle": "¿Archivar todas las tareas de «{{name}}»?",
         "title": "Archivar todas las sesiones",
         "confirm": "Archivar todo",
         "cancel": "Cancelar",
@@ -16845,18 +16840,28 @@
         }
       },
       "projectAction": {
+        "menu": "Menú del proyecto {{name}}",
+        "previewFailed": "No se pudieron cargar las tareas de este proyecto. Vuelve a intentarlo.",
+        "remotePreviewFailed": "No se pudieron leer las tareas del proyecto remoto. Comprueba la conexión y actualiza Cindy en el equipo remoto.",
         "rename": "Cambiar nombre del proyecto",
         "pin": "Fijar proyecto",
         "unpin": "Desfijar proyecto",
-        "removeFromSidebar": "Quitar proyecto de la barra lateral",
-        "removeFromSidebarConfirmTitle": "¿Quitar {{name}}?",
-        "removeFromSidebarConfirmDescription": "Esto quita el proyecto de la barra lateral. No se eliminarán los archivos de tu computadora. Las sesiones existentes se moverán a la sección Conversación y seguirán disponibles.",
+        "removeFromSidebar": "Quitar proyecto de Cindy…",
+        "removeFromSidebarConfirmTitle": "¿Quitar {{name}} de Cindy?",
+        "removeFromSidebarConfirmDescription": "Tareas activas: {{count}}. Podrás continuarlas en Conversaciones.",
         "removeFromSidebarConfirmAction": "Quitar proyecto",
-        "removeFromSidebarFailed": "No se pudo quitar el proyecto de la barra lateral. Inténtalo de nuevo.",
-        "showFiles": "Mostrar archivos",
-        "archivedAll": "Archivar todo",
-        "unarchiveAll": "Restaurar todo",
-        "openInExplorer": "Abrir en el administrador de archivos",
+        "removeFromSidebarFailed": "No se pudo quitar el proyecto.",
+        "archiveOnRemove": "Archivar también las tareas ({{count}})",
+        "keepSkippedOnRemove": "Estas tareas seguirán en Conversaciones ({{skip}}).",
+        "removedArchived": "Tareas que se moverán a Archivadas: {{count}}.",
+        "removeAndArchive": "Quitar proyecto y archivar tareas",
+        "removeKeepFiles": "Se borrarán el anclaje, el nombre personalizado y el icono del proyecto. Los archivos y carpetas se conservarán.",
+        "showFiles": "Ver los archivos de la tarea en la barra lateral",
+        "archivedAll": "Archivar todas las tareas",
+        "unarchiveAll": "Restaurar todas las tareas",
+        "openInFinder": "Abrir la carpeta del proyecto en Finder",
+        "openInExplorer": "Abrir la carpeta del proyecto en el Explorador de archivos",
+        "openInFileManager": "Abrir la carpeta del proyecto en el gestor de archivos",
         "newInDirectory": "Nueva sesión en este directorio",
         "copyDeepLink": "Copiar enlace del proyecto",
         "search": "Buscar sesiones en este proyecto"
@@ -16894,6 +16899,7 @@
         "thisEvening": "Esta tarde",
         "tomorrow": "Mañana",
         "nextWeek": "La próxima semana",
+        "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
         "wakeAt": "Fecha y hora de regreso",
         "timeZone": "Hora local ({{zone}})",
@@ -17078,6 +17084,7 @@
         "summaryAria": "Ver resumen del PR #{{number}}",
         "unresolvedLabel": "Hilos de revisión sin resolver",
         "checks": "Verificaciones",
+        "following": "En seguimiento",
         "checksTotal": "{{count}} en total",
         "failed": "Con errores",
         "passed": "Con éxito",
@@ -19675,6 +19682,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "Este turno ha fallado.",
+    "blockedReasonUnknown": "No se ha indicado un motivo concreto del bloqueo.",
+    "blockedNextStep": "Puedes añadir información en esta tarea. Tras resolver la causa, haz clic en «{{action}}» para continuar.",
     "status": {
       "active": "Avanzando hacia el objetivo",
       "paused": "En pausa",
@@ -20011,6 +20021,7 @@
         "empty": "No hay asignaciones promocionales disponibles.",
         "incomplete": "Hay muchos registros de asignaciones. Solo se muestran los últimos {{count}}.",
         "unnamed": "Asignación promocional",
+        "rolloverName": "Saldo acumulado",
         "giftCard": "Tarjeta de regalo · de {{sender}}",
         "original": "Importe original",
         "used": "Usado",
@@ -20248,6 +20259,8 @@
       "basicModels": "Accede a algunos modelos",
       "subscription": "Plan de suscripción",
       "rollover": "Conserva hasta {{amount}} de saldo sin usar durante {{period}}",
+      "rolloverMonthly": "Acumula hasta {{amount}} de saldo sin usar como saldo promocional\nVálido durante 1 mes, sin nueva acumulación\nSe utiliza antes del Saldo del plan y del Saldo de recargas",
+      "rolloverMonthlySummary": "Acumula hasta {{amount}} de saldo sin usar, válido durante 1 mes",
       "nextPeriod": {
         "MONTH": "el próximo mes",
         "YEAR": "el próximo año",
@@ -21718,6 +21731,24 @@
   },
   "featureIntro": {
     "close": "Cerrar",
+    "project": {
+      "title": "Conoce los proyectos",
+      "lead": "Dale un proyecto a cada trabajo continuo. Sus archivos viven en una carpeta de tu equipo y Cindy retoma siempre desde el último resultado, sin volver a explicar el contexto.",
+      "files": {
+        "title": "Resultados tuyos",
+        "body": "Cindy lee y edita en la carpeta del proyecto. Lo que crea se queda en tu equipo."
+      },
+      "context": {
+        "title": "Sin repetir contexto",
+        "body": "Una tarea nueva del proyecto ya ve estos archivos y sigue lo anotado en el proyecto."
+      },
+      "separate": {
+        "title": "Cada cosa en su sitio",
+        "body": "Cada proyecto reúne sus tareas, así los trabajos distintos no se mezclan."
+      },
+      "start": "Continuar al nuevo proyecto",
+      "note": "Solo ponle un nombre. También sirve una carpeta existente o un repositorio de código."
+    },
     "taskInbox": {
       "title": "Conoce la bandeja de entrada",
       "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. El mejor hábito es mantener la bandeja vacía: haz clic en Hecho cuando termines una tarea y pospón lo que pueda esperar.",

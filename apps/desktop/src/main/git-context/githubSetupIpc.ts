@@ -51,8 +51,10 @@ export async function readGithubConnection(
   const owner = activeOwnerScopeKey();
   const source = getSharedGhCliTokenSource();
   source.invalidate();
+  const gh = await source.readTokenDetailed();
+  if (owner !== activeOwnerScopeKey()) return { status: 'missing' };
   const result = await githubConnection({
-    readGh: () => source.readToken(),
+    readGh: async () => gh.ok ? gh.token : null,
     readFallback: () =>
       owner !== activeOwnerScopeKey()
         ? null
@@ -62,7 +64,11 @@ export async function readGithubConnection(
     readApp: readGithubAppToken,
     fetch: outboundFetch,
   });
-  return owner === activeOwnerScopeKey() ? result : { status: 'missing' };
+  if (owner !== activeOwnerScopeKey()) return { status: 'missing' };
+  if (result.status === 'missing' && !gh.ok && (gh.reason === 'gh-timeout' || gh.reason === 'gh-exec-failed')) {
+    return { status: 'network', source: 'gh-cli' };
+  }
+  return result;
 }
 
 /**

@@ -1,8 +1,13 @@
+import { INDEFINITE_SNOOZE_UNTIL } from '@cindy/maker-shared/live-task-priority';
+import type { ProjectArchiveGuard } from '../projectArchiveGuard.js';
+import { PROJECT_ARCHIVE_CHANNEL } from '../../../shared/projectArchive.js';
+import { runProjectArchive } from '../projectArchive.js';
 import { getSessionRowSnapshot, getSessionRowSnapshotStrict, type SessionRowSnapshot } from '../sessionDispatchSnapshot.js';
 import { commitProvisionalSession as commitSessionDraft, discardProvisionalSessionRow as discardSessionDraft } from '../sessionDraftLifecycle.js';
 import { createUserSession, withWorktreeMutation } from './createUserSession.js';
 import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
+import { scheduleNativeHistoryBackupCleanup } from '../../remote-agent/controller/nativeHistoryBackup.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
 import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
@@ -85,7 +90,7 @@ import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import * as imageCacheStore from '../../imageCacheStore.desktop';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
 import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
-import { upsertRecentWorkdir } from './recentWorkdirs';
+import { touchRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import {
   DESKTOP_VISIBLE_SESSION_SOURCES,
@@ -192,13 +197,14 @@ function compactTerminalSessionToolResults(
   });
 }
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
-type SessionWorktreeRecycle = (sessionId: string, resources?: readonly string[], discardChanges?: true) => Promise<void>;
+export type SessionWorktreeRecycle = (sessionId: string, resources?: readonly string[], disposition?: true | 'keep') => Promise<void>;
 export interface SessionRecycleScope {
   ownerScope: OwnerScope;
   mediaDb: DbClient['drizzle'];
 }
 
 export interface RegisterSessionIpcOpts {
+  isBusyForProjectArchive?: (sessionId: string) => boolean;
   /** Use the same live catalog as runtime usage, without writing during reads. */
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
   /** Close a local Pi/Codex runtime only if its current turn is idle. */
@@ -267,6 +273,7 @@ async function withStatusWriteLock<T>(
   requireNoWorktree = false,
   recycleAfterWrite = false,
   discardWorktreeChanges?: true,
+  preserveFiles = false,
 ): Promise<T> {
   const write = async () => {
     const resources = status === undefined ? [] : await readSessionWorktreeResources(db, sessionId);
@@ -284,7 +291,7 @@ async function withStatusWriteLock<T>(
       }
       if (!recycleAfterWrite && (status === 'archived' || status === 'deleted')
         && (!discardWorktreeChanges || discardOnTransition))
-        await requestWorktreeRecycle(sessionId, resources);
+        await requestWorktreeRecycle(sessionId, resources, preserveFiles ? 'keep' : undefined);
       beforeWrite?.();
       const result = await task();
       if (recycleAfterWrite) await requestWorktreeRecycle(sessionId, resources);
@@ -342,11 +349,11 @@ async function finalizeSharedTaskClosure(
 async function requestWorktreeRecycle(
   sessionId: string,
   resources: readonly string[] = [],
-  discardChanges?: true,
+  disposition?: true | 'keep',
 ): Promise<void> {
   const recycle = sessionWorktreeRecycle;
   if (!recycle) throw new Error('worktree recycle implementation is not wired');
-  if (discardChanges) await recycle(sessionId, resources, true);
+  if (disposition) await recycle(sessionId, resources, disposition);
   else await recycle(sessionId, resources);
 }
 
@@ -420,10 +427,12 @@ async function setTerminalSessionStatus(
   status: 'archived' | 'deleted',
   idleArchiveCutoff?: number,
   unusedOnly?: boolean,
+  projectGuard?: ProjectArchiveGuard,
 ): Promise<SessionsSetTerminalStatusResult['deletedSideChats']> {
   try {
     const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status,
       ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}),
+      ...(projectGuard && { projectGuard }),
       ...(unusedOnly ? { unusedOnly: true } : {}) });
     return result.deletedSideChats;
   } catch (error) {
@@ -511,6 +520,9 @@ export function broadcastSessionPatched(
   ownerScope?: OwnerScope,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  if (patch.status === 'deleted' || 'sdkSessionId' in patch || 'clearedAt' in patch || 'agentDeviceId' in patch) {
+    scheduleNativeHistoryBackupCleanup(sessionId, patch.status === 'deleted');
+  }
   pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
@@ -962,7 +974,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
     isRetainableProjectSession(row)
   ) {
     const projectDir = normalizeWorkingDirForProjectSettings(row.projectDir ?? row.workingDir);
-    const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
+    const touched = await touchRecentWorkdir(projectDir, ts, process.platform, dbClient);
     if (touched && projectDir) broadcastRecentWorkdirsChanged(projectDir, ownerScope);
   }
 }
@@ -1652,6 +1664,18 @@ export function registerSessionIpc(
     return updated;
   });
 
+  ipcMain.handle(PROJECT_ARCHIVE_CHANNEL, async (event, input: unknown) => {
+    const viaDeviceLink = isDeviceLinkInvoke();
+    if (!viaDeviceLink) assertTrustedAppRendererEvent(event);
+    return runProjectArchive(input, viaDeviceLink, {
+      busy: id => opts.isBusyForProjectArchive?.(id) ?? true,
+      withLock: withSessionRouteLock,
+      write: async (id, status, beforeWrite, projectGuard, preserveFiles) => {
+        await patchSessionMetaInDb(id, { status }, { routeLockHeld: true, beforeWrite, projectGuard, preserveFiles });
+      },
+    });
+  });
+
   // fork-session: 已迁到 maker-ipc/fork.ts (Stage 2 C2), IPC channel 改名 maker:fork。
   // 业务函数 forkSessionAtMessage 仍在 apps/desktop/src/main/maker-orchestration/fork.ts, 内部 SDK 调用
   // 走 maker-core 的 Maker.forkSdkSession (Codex 自动抛 NotSupportedError)。
@@ -2060,7 +2084,7 @@ export async function updateSessionInDb(
       !row.remoteHostId &&
       isRetainableProjectSession(row)
     ) {
-      const touched = await upsertRecentWorkdir(
+      const touched = await touchRecentWorkdir(
         row.projectDir ?? row.workingDir,
         Date.now(),
         process.platform,
@@ -2214,7 +2238,7 @@ export async function patchSessionMetaInDb(
     pinnedAt?: string | null;
     snoozedUntil?: string | null;
   },
-  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean } = {},
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   const { discardWorktreeChanges: discardRequested, ...patch } = rawPatch;
@@ -2266,7 +2290,7 @@ export async function patchSessionMetaInDb(
         const { status: _status, ...nonTerminalPatch } = setObj;
         await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
         beforeWrite();
-        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', options.idleArchiveCutoff, options.unusedOnly);
+        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', options.idleArchiveCutoff, options.unusedOnly, options.projectGuard);
       } else {
         const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
         try {
@@ -2291,7 +2315,7 @@ export async function patchSessionMetaInDb(
       const { status: _status, ...nonStatusPatch } = setObj;
       await writeSessionPatch(db, sessionId, nonStatusPatch, undefined, assertRestoreCurrent);
       assertRestoreCurrent();
-      await dbClient.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active' });
+      await dbClient.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active', ...(options.projectGuard && { projectGuard: options.projectGuard }) });
     } else {
       // All asynchronous preparation has finished. Once this write is issued,
       // cancellation does not roll back a committed lifecycle transition.
@@ -2313,7 +2337,7 @@ export async function patchSessionMetaInDb(
       await closeSharedTaskForTask(sessionId, dbClient);
     }
     return sessionToCamel(row);
-  }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges);
+  }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges, options.preserveFiles);
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
   }
@@ -2332,7 +2356,7 @@ export async function patchSessionMetaInDb(
     });
   }
   cleanupSessionTerminalArtifacts(sessionId, patch.status);
-  scheduleWorktreeRecycleForStatusChange(sessionId, patch.status, { ownerScope, mediaDb: db });
+  if (!options.preserveFiles) scheduleWorktreeRecycleForStatusChange(sessionId, patch.status, { ownerScope, mediaDb: db });
   notifyGhostSessionStatusChange(sessionId, patch.status, updated.workingDir);
   // 远程 / MCP 改动绕过 renderer 乐观更新,故主动广播 sessions:patched:
   //   - sessionsStore.onPatched → patchLocal,即时反映到 sidebar(删/归档移出 active 桶、改名/置顶刷新);
@@ -3129,9 +3153,9 @@ export async function setSessionSourceInDb(
   }
 }
 
-/** Deferral is a bounded timestamp, never a command or task lifecycle transition. */
+/** Only scheduled wake times are subject to the one-year limit. */
 function validateSnoozeTime(value: unknown): void {
-  if (value === undefined || value === null) return;
+  if (value === undefined || value === null || value === INDEFINITE_SNOOZE_UNTIL) return;
   const ms = typeof value === 'string' ? Date.parse(value) : NaN;
   if (!Number.isFinite(ms) || ms <= Date.now() || ms > Date.now() + 366 * 86_400_000) {
     throwIpcError('INVALID_PARAMS', 'snoozedUntil must be a future ISO timestamp within one year');

@@ -1537,7 +1537,7 @@ describe('session runtime control wiring', () => {
     expect(gate).toBeGreaterThan(-1);
     expect(setModel).toContain("modelSwitchPlan.outcome === 'reject'");
     expect(setModel.replace(/\s+/g, ' ')).toContain(
-      'isRemote: !!runtimeStatus.remoteHostId || (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())',
+      "isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' || (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())",
     );
     expect(remotePressureRejection).toBeGreaterThan(gate);
     expect(remotePressureRejection).toBeLessThan(apply);
@@ -1833,7 +1833,10 @@ function recoveryFixture() {
     readCodexThreadStorageReadOnly: vi.fn(async () => ({ rolloutPath: '/fixture/history' })),
     classifyCodexHistoryOversized: vi.fn(async () => 'healthy'),
     DEFAULT_MODEL_COMPACTION_PCT: 80, getActiveCatalog: vi.fn(), dbToMakerAgentKind: (x: unknown) => x,
-    resolveConfiguredContextWindow: vi.fn(), listMessagesForAgentHandoff: vi.fn(),
+    // This fixture checks recovery ordering and ownership, independent of the
+    // device/provider catalogue used to size a replay.
+    resolveConfiguredContextWindow: vi.fn(), resolveDesktopHandoffWindow: vi.fn(async () => null),
+    listMessagesForAgentHandoff: vi.fn(),
     listBotRecallSessionIds: vi.fn(), COMPANION_SESSION_IDS_LIMIT: 10,
     findLatestUserMessageForRebuild: vi.fn(), findLatestContextRebuildMeta: vi.fn(),
     rehydrateColdPiRuntimeForWindowVerification: vi.fn(), drainPersistQueue: vi.fn(),

@@ -416,9 +416,9 @@ ActivityIndicator。未知结果保留原有退出/修改/同 operationId 重试
 
 内屏竖向适配保留顶部返回按钮、底部工具栏及各 16pt 留白；Duo 外屏和展开后的横屏使用完整画面，系统安全区仅用于安排控件。复古外观按显示器玻璃开口适配，不能让旧的电脑长宽比反过来决定开口。
 
-画面可缩到适配大小以下并自由平移。手势过程中不吸附；捏合的全部手指松开后，大小在适配大小的 80%～120% 内时，以 280ms 动画恢复到适配大小并居中。这里的 1:1 指适配大小，不是电脑像素与手机像素一一对应。偏离更远则保留大小与位置。
+触屏模式下，画面在适配大小及以下保持居中，放大后可拖动查看局部。手势过程中不吸附；捏合的全部手指松开后，大小在适配大小的 80%～120% 内时，以 280ms 动画恢复到适配大小并居中。这里的 1:1 指适配大小，不是电脑像素与手机像素一一对应。偏离更远则保留缩放大小。
 
-在适配大小平移后，水平、垂直独立吸附：距离中心不超过对应可用画面尺寸的 20%（每轴最多 96pt）时，松手后对齐该轴；更远仍可停留。新触摸立即中断动画，减少动态效果时直接到达目标。实现与回归见 `src/remote-desktop/RemoteDesktopScreen.tsx`、`packages/maker-shared/src/remote-desktop/viewerRuntime.js` 及 `screen.test.tsx`、`viewer.test.ts`。
+在允许自由平移的浏览模式下，适配大小的画面按水平、垂直方向独立吸附：距离中心不超过对应可用画面尺寸的 20%（每轴最多 96pt）时，松手后对齐该轴；更远仍可停留。新触摸立即中断动画，减少动态效果时直接到达目标。实现与回归见 `src/remote-desktop/RemoteDesktopScreen.tsx`、`packages/maker-shared/src/remote-desktop/viewerRuntime.js` 及 `screen.test.tsx`、`viewer.test.ts`。
 
 ### 折叠态远程桌面默认键盘（2026-11-01）
 
@@ -472,3 +472,7 @@ There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separat
   - **Timing guards (not motion)**: a 1.6s native timeout ends a morph whose target never appears; the new-task page restores its normal push animation on `transitionEnd`, with a 1600ms fallback; the JS fallback focus (320ms) and focus-release grace (400ms) in `useComposerPillOpen.ts` only cover a missing native view or refused focus.
   - **Degradation**: under Reduce Motion neither the morph nor the pill opening plays — the page and card land directly in place. Without the native module (non-iOS or older binaries) the JS path navigates and focuses without a morph.
   - **Scope boundary**: this button and pill only. Its overshoot must not leak into other buttons, sheets or navigation; other mobile transitions stay on the §14.4 Motion tokens. Implementation: `CindyComposerMorphModule.swift`, `ComposerMorphSource.ios.tsx`, `ComposerFrame.ios.tsx`, `useComposerPillOpen.ts`; geometry in `composerGeometry.ts`, behavior notes in `apps/mobile/docs/navigation-and-composer.md`.
+
+### Android in-app update card (owner-approved HTML direction, registered 2026-10-16, #6199)
+
+`AndroidUpdateSheet` is one content-height Material bottom sheet for discovery, install permission, download and install. Its paired actions are pills (secondary `surfaceChip` left, primary `cta` right). The only bare-text control is the centered browser-download fallback ("改用浏览器下载" / "Download in Browser Instead") shown under the pills while a decision is pending: frameless, `footnote` 13/18 medium in `textSecondary`, full-width 44pt hit height, pressed opacity 0.72. It is a secondary escape route rather than a commit action, so it stays out of the pill pair; this is not a general exemption for other sheet actions. In short windows the details region scrolls while the actions stay pinned. Floating compatibility presentations round all four container corners. The Light/Dark HTML previews are not Android device screenshots. Behavior rules (download, install permission, fallback) are in [Mobile development](../../../docs/dev-rules/mobile-development.md).

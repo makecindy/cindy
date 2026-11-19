@@ -4,8 +4,9 @@ import type { AppModelsRequest } from '@cindy/mcps';
 import type { registerProviderHandlers } from '../maker-ipc/providerHandlers.js';
 import { manageProviderConnection, type RequestProviderSecret } from './connections.js';
 import { parseMediaInvocationGuide } from '../../shared/mediaInvocation.js';
-import { getMediaGuide, localMediaGuides, resetExecutableMediaModelCache, supportsMediaCapability } from '../model-access/mediaModels.js';
-import { providerMediaGuideScope } from '../cindy-media/providerMediaRuntime.js';
+import { getMediaGuide, fetchMediaInvocationGuide, localMediaGuides, resetExecutableMediaModelCache, supportsMediaCapability } from '../model-access/mediaModels.js';
+import { providerMediaGuideScope, providerMediaGuideTarget } from '../cindy-media/providerMediaRuntime.js';
+import { mediaGuideModel } from '../cindy-brain/customMediaConnection.js';
 
 type Actions = ReturnType<typeof registerProviderHandlers>;
 let actions: Actions | undefined;
@@ -36,10 +37,18 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
   if (input.operation === 'connection') return { scope: 'local', ...await manageProviderConnection(input.change, api.connections, guard,
     (name, endpoints) => requestSecret(name, endpoints, { signal, deadline })) };
   if (input.operation === 'mediaGuide') {
-    const { target, change } = input;
+    const { change } = input;
+    if (input.target.providerId === 'xd') {
+      if (change.action !== 'get') return { ok: false, errorCode: 'GUIDE_OVERRIDE_NOT_SUPPORTED',
+        message: 'Cindy AI 只使用官方 Guide，不支持自定义覆盖；无需配置其他模型连接。' };
+      const result = await fetchMediaInvocationGuide(input.target.modelId);
+      await guard();
+      return { scope: 'local', target: input.target, status: 'available', source: 'official', guide: result.guide, customRevision: null };
+    }
+    const target = providerMediaGuideTarget(input.target);
     const catalog = await api.list(false);
     await guard();
-    const model = catalog.providers.find(provider => provider.id === target.providerId)?.models[target.agent]?.find(model => model.id === target.modelId);
+    const model = mediaGuideModel(catalog.providers.find(provider => provider.id === target.providerId), target);
     const connectionScope = providerMediaGuideScope(target);
     if (!model || !connectionScope) return { ok: false, errorCode: 'MEDIA_DECLARATION_REQUIRED',
       message: '先通过 configure_model_connection 为这个实际连接的型号声明 image_generation/video_generation 和 modalities。' };

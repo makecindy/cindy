@@ -105,10 +105,11 @@ vi.mock('@cindy/device-link', async (importOriginal) => ({
     hasOfflineDirectPath() { return false; }
     isLinkReady() { return false; }
     async openLink() {}
-    async invoke(target: string, request: { channel: string }, _timeout?: number, options?: { preSend?: () => void }) {
+    async invoke(target: string, request: { channel: string }, _timeout?: number, options?: { preSend?: () => void; beforeDispatch?: () => void }) {
       state.invokeEntered?.();
       await state.invokeGate;
       options?.preSend?.();
+      options?.beforeDispatch?.();
       state.invokes.push({ target, channel: request.channel });
       if (state.invokeError) throw state.invokeError;
       return state.invokeResult ?? { ok: true, result: { providers: [{ id: 'openai' }], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } };
@@ -603,7 +604,9 @@ describe('cross-region provider share', () => {
 
   // Unit: the same wrapper is used by reads, metadata mirrors and the remote
   // agent; a caller close or a known pause must stop it before any physical send.
-  it('applies caller and share revocation guards at every cross-region send boundary', async () => {
+  // #11345: the cross-region adapter must forward dispatch-only cancellation too;
+  // existing preSend-only coverage missed a dropped optional callback.
+  it.each(['preSend', 'beforeDispatch'] as const)('applies %s and share revocation guards at the cross-region send boundary', async guard => {
     state.responses.set('/session', { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
     startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     await refreshReceivedShares('test');
@@ -611,11 +614,11 @@ describe('cross-region provider share', () => {
     let checks = 0;
     const preSend = vi.fn(() => {
       checks += 1;
-      if (checks > 1) throw new Error('closed during wait');
+      if (checks > (guard === 'preSend' ? 1 : 0)) throw new Error('closed during wait');
     });
-    await expect(crossRegionInvoke(target, 'maker:provider:list', [{ capabilities: ['send-boundary'] }], undefined, { preSend }))
+    await expect(crossRegionInvoke(target, 'maker:provider:list', [{ capabilities: ['send-boundary'] }], undefined, { [guard]: preSend }))
       .rejects.toThrow();
-    expect(preSend.mock.calls.length).toBeGreaterThan(1);
+    expect(preSend.mock.calls.length).toBeGreaterThan(guard === 'preSend' ? 1 : 0);
     expect(state.invokes).toEqual([]);
 
     await crossRegionInvoke(target, 'maker:provider:list', [{ capabilities: ['cached-boundary'] }]);

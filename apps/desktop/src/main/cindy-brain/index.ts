@@ -793,9 +793,9 @@ import {
 import { createCustomImageChannel, registerCustomImageChannels } from './customImageChannel.js';
 import { readByokCredential, readByokInferenceBase } from '../model-access/byokCredentials.js';
 import type { AgentKind } from '@cindy/model-providers';
-import { resolveCustomMediaConnection, isCustomVideoProvider, customMediaAgents as declaredCustomMediaAgents, customMediaGuideProtocol } from './customMediaConnection.js';
+import { resolveCustomMediaConnection, isCustomVideoProvider, customMediaAgents as declaredCustomMediaAgents, customMediaGuideProtocol, mediaGuideScope, mediaGuideTarget, isCustomMediaGuideProvider } from './customMediaConnection.js';
 import { videoConnectionRevision } from '../cindy-media/customVideoProtocol.js';
-import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
+import { createXaiVideoProviders } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
 import { callCindyMedia } from '../cindy-media/invocationService.js';
 import { invokeLegacyMedia, legacyVideoReceipt } from '../cindy-media/legacyMediaInvocation.js';
@@ -4936,20 +4936,18 @@ function getVideoProviderRegistry() {
       )
     : [];
   if (xaiCatalogProviderId && routableXaiAliases.some((alias) => !registry.hasAlias(alias))) {
-    registry.registerOrExtend(
-      createXaiVideoProvider({
-        modelAliases: routableXaiAliases,
-        hasOAuthLogin: () => hasGrokOAuthLogin(),
-        getAccessToken: () => getGrokAccessToken(),
-        getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
-        getOwnerScopeKey: () => activeOwnerScopeKey(),
-        isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
-        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-        beforeDispatch: (model) => assertMediaModelStillEnabled('video', model),
-        onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
-      }),
-      xaiCatalogProviderId,
-    );
+    const providers = createXaiVideoProviders({
+      modelAliases: routableXaiAliases,
+      hasOAuthLogin: () => hasGrokOAuthLogin(),
+      getAccessToken: () => getGrokAccessToken(),
+      getCredentialGeneration: () => getGrokOAuthCredentialGeneration(),
+      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('video', model),
+      onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
+    });
+    for (const provider of providers) registry.registerOrExtend(provider, xaiCatalogProviderId);
   }
   return registry;
 }
@@ -5948,9 +5946,14 @@ function resolveCustomVideoConnection(providerId: string, modelId: string, agent
 }
 
 configureProviderMediaRuntime({
+  guideTarget: target => mediaGuideTarget(getActiveCatalog().providers.find(provider => provider.id === target.providerId), target),
   guideProtocol: target => {
     const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
-    return customMediaGuideProtocol(provider, target.modelId, target.agent);
+    if (provider && isCustomMediaGuideProvider(provider)) return customMediaGuideProtocol(provider, target.modelId, target.agent);
+    return customMediaGuideProtocol(provider, target.modelId, target.agent) ??
+      (provider?.imageModels?.some(model => model.id === target.modelId)
+        ? getImageChannelRegistry().protocolForProvider(target.providerId)
+        : target.providerId === 'xai' ? 'xai-videos' : undefined);
   },
   resolveHttpConnection: (providerId, modelId, capability, agent) => {
     const kind = capability.startsWith('image.') ? 'image' : 'video';
@@ -5975,13 +5978,7 @@ configureProviderMediaRuntime({
   },
   guideScope: target => {
     const provider = getActiveCatalog().providers.find(provider => provider.id === target.providerId);
-    const route = provider?.routing[target.agent];
-    const model = provider?.models[target.agent]?.find(model => model.id === target.modelId);
-    if (!provider || provider.source !== 'user' || provider.auth.native ||
-        !['apiKey', 'none'].includes(provider.auth.method) || !route || !model ||
-        !['image_generation', 'video_generation'].includes(model.mode ?? '')) return null;
-    return createHash('sha256').update(JSON.stringify([target, model.route?.baseUrl ?? route.upstream,
-      route.authStrategy, model.route?.wireProtocol ?? route.wireProtocol])).digest('hex');
+    return mediaGuideScope(provider, target);
   },
   resolveVideoConnection: (providerId, modelId, agent) => providerId === 'xai'
     ? resolveNativeVideoConnection(providerId, modelId)
@@ -9660,7 +9657,7 @@ export function registerGhostIpc(): void {
       ? networkSecretDecls.filter((s) => s.source === 'gh-cli')
       : [];
     const ghCliAvailable =
-      ghCliSecretDecls.length > 0
+      method === 'GET' && pathname === '/secrets' && ghCliSecretDecls.length > 0
         ? await getSharedGhCliTokenSource().probeAvailability() || Boolean(await readGithubAppToken().catch(() => null))
         : false;
     return handleGhostSecretsRequest({

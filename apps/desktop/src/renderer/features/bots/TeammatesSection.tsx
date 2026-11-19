@@ -27,6 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { Tip } from '@/components/ui/tooltip';
+import { Spinner } from '@/components/ui/spinner';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -674,6 +675,13 @@ export function TeammatesSection() {
               </>
             );
           })()}
+        </div>
+      ) : null}
+
+      {!profilesLoaded && profileLoadState === 'pending' ? (
+        <div role="status" className="flex items-center gap-2 px-3 py-3 text-12 text-[var(--text-secondary)]">
+          <Spinner size={14} />
+          {t('ccAgent.common.loading')}
         </div>
       ) : null}
 

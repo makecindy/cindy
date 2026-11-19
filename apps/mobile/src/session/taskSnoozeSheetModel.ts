@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { INDEFINITE_SNOOZE_UNTIL } from '@cindy/maker-shared/live-task-priority';
 import { taskSnoozeOptions, formatTaskSnoozeTime } from '@cindy/maker-shared/task-snooze-options';
 
 export interface TaskSnoozeSheetProps {
@@ -34,6 +35,7 @@ export function useTaskSnoozeSheet(props: TaskSnoozeSheetProps) {
   };
   return {
     t, custom, setCustom, date, setDate, invalid, choose,
+    chooseIndefinite: () => props.onConfirm(INDEFINITE_SNOOZE_UNTIL),
     minimumDate: openedAt,
     maximumDate: new Date(openedAt.getTime() + 366 * 86_400_000),
     options: taskSnoozeOptions(openedAt).map(option => ({

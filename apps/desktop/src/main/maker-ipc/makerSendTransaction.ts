@@ -61,6 +61,7 @@ import {
   turnClassicalStyleFromSendOpts,
   turnUiLanguageFromSendOpts,
 } from './uiLanguageErrorNote.js';
+import { prependPrivateChatContext, type PrivateChatContext } from './privateChatContext.js';
 import type { RepeatableWireNotes, WireNotePlan } from './wireNoteMemory.js';
 import {
   excludeDirectoryGrantConflicts,
@@ -341,7 +342,7 @@ export interface MakerSendTransactionDeps {
   readSessionExtraDirsFromDb(sessionId: string): Promise<string[]>;
   readSessionWritableDirsFromDb?(sessionId: string): Promise<string[]>;
   withRehydrateCloseSuppressed<T>(sessionId: string, fn: () => Promise<T>): Promise<T>;
-  bootstrapSession(opts: CreateOpts): Promise<{
+  bootstrapSession(opts: CreateOpts, assertStartupCurrent?: () => void): Promise<{
     session: MakerSendTransactionSession;
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
@@ -435,7 +436,9 @@ export interface MakerSendTransactionDeps {
    * 保留意图本次不动。undefined = 不启用(测试最小 harness)。`signal` 是这次发送的取消信号：
    * 供应商组在这里等原电脑恢复时，发送被停止就不再等、不再换电脑。
    */
-  applyPendingAgentSwitch?(sessionId: string, options?: { signal?: AbortSignal; scheduled?: boolean; clientId?: string }): Promise<void>;
+  applyPendingAgentSwitch?(sessionId: string, options?: {
+    signal?: AbortSignal; scheduled?: boolean; clientId?: string; nextInputChars?: number;
+  }): Promise<void>;
   onModelDispatched?(sessionId: string, clientId: string): void;
   /**
    * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
@@ -497,12 +500,12 @@ export interface MakerSendTransactionDeps {
    * 伙伴私聊引用回复的 `[引用说明]`:按落库内容里的 `replyQuote` 从库里重读原消息;没有引用时为 null。
    * 逐条都要带(陈述的是「本条」引用了什么),不进 wireNoteMemory 去重。
    */
-  readReplyQuoteNote?(sessionId: string, persistedContent: string | undefined): Promise<string | null>;
+  readReplyQuoteNote?(sessionId: string, persistedContent: string | undefined): Promise<PrivateChatContext | null>;
   /**
    * 私聊话题的 `[话题说明]`(话题开在主对话的哪条消息上);不是私聊话题时为 null。
    * 与 `[客户端说明]` 同层,只进 wire 消息。
    */
-  readBotThreadNote?(sessionId: string): Promise<string | null>;
+  readBotThreadNote?(sessionId: string): Promise<PrivateChatContext | null>;
   /** The owner's message closed a waiting 代输入 card: the agent hears it here, with no turn of its own. */
   readInputHandoffOwnerNote?(sessionId: string): string | null;
   inputHandoffOwnerNoteDelivered?(sessionId: string): void;
@@ -533,7 +536,10 @@ export interface MakerSendTransaction {
    * task row. Returns false when a runtime already exists or startup failed;
    * the next send then follows its normal path.
    */
-  preparePiSkillRuntime(sessionId: string, workingDir: string, preferences: Pick<CreateOpts, 'userPrompt' | 'makerMemoryEnabled'>): Promise<void>;
+  preparePiSkillRuntime(
+    sessionId: string, workingDir: string, preferences: Pick<CreateOpts, 'userPrompt' | 'makerMemoryEnabled'>,
+    assertStartupCurrent?: () => void,
+  ): Promise<void>;
   prewarmSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
   /**
    * Main-side senders that reach an idle live session without this transaction (Orca
@@ -1011,6 +1017,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   async function lazyCreateSession(
     sessionId: string,
     createOpts: CreateOpts,
+    assertStartupCurrent?: () => void,
   ): Promise<ResolveSessionResult> {
     const okLazy = await ensureWorkDirWithDbFallback(sessionId, createOpts, {
       preferDbWorkingDir: true,
@@ -1028,13 +1035,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     }
     await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
     await loadExtraDirsIfNeeded(sessionId, createOpts, 'lazy-create');
+    assertStartupCurrent?.();
     try {
       createOpts.preserveStartupStoppedError = true;
       const {
         session: lazySess,
         didInjectOrcaInstructions,
         didInjectProjectContext,
-      } = await deps.bootstrapSession(createOpts);
+      } = await (assertStartupCurrent ? deps.bootstrapSession(createOpts, assertStartupCurrent) : deps.bootstrapSession(createOpts));
       await deps.markOrcaRoleIfNeeded(lazySess.id, createOpts.orcaRole);
       deps.broadcastSessionCreated(lazySess.id);
       deps.log.info('send: lazy create-session', {
@@ -1048,6 +1056,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       });
       return { kind: 'session', session: lazySess };
     } catch (startupError) {
+      assertStartupCurrent?.();
       // Preserve the old error shape for other failures. Only an explicitly
       // stopped bootstrap proves this input never reached native execution.
       const err = startupError instanceof AgentStartupStoppedError ? startupError.cause : startupError;
@@ -1098,8 +1107,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   return {
-    async preparePiSkillRuntime(sessionId, workingDir, preferences) {
+    async preparePiSkillRuntime(sessionId, workingDir, preferences, assertStartupCurrent) {
       const opts = await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
+      assertStartupCurrent?.();
       if (opts.agentKind !== 'pi' || opts.workingDir !== workingDir) {
         throwIpcError('PRECONDITION_FAILED', 'Session engine or working directory changed');
       }
@@ -1113,7 +1123,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         return;
       }
       const co = deps.buildCreateOptsWithStderr({ ...opts, ...preferences, id: sessionId });
-      const result = await lazyCreateSession(sessionId, co);
+      const result = await lazyCreateSession(sessionId, co, assertStartupCurrent);
       if (result.kind === 'failure') {
         const outcome = result.result.outcome;
         throwIpcError('PRECONDITION_FAILED', outcome?.kind === 'host-send' ? outcome.message : 'Pi startup failed');
@@ -1160,12 +1170,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         (sendOrigin as { kind?: unknown }).kind === 'scheduler';
       const rawClientId = requestedSendOpts.persistUserMessage?.clientId;
       const clientId = typeof rawClientId === 'string' ? rawClientId : undefined;
+      const nextInput = typeof message === 'string' ? message
+        : message && typeof message === 'object' && 'content' in message ? message.content : undefined;
+      const nextInputChars = (typeof nextInput === 'string' ? nextInput : extractPlainText(nextInput)).length;
       await deps.applyPendingAgentSwitch?.(
         sessionId,
-        requestedSendOpts.signal || scheduled || clientId ? {
+        requestedSendOpts.signal || scheduled || clientId || nextInputChars > 0 ? {
           ...(requestedSendOpts.signal ? { signal: requestedSendOpts.signal } : {}),
           ...(scheduled ? { scheduled: true } : {}),
           ...(clientId ? { clientId } : {}),
+          ...(nextInputChars > 0 ? { nextInputChars } : {}),
         } : undefined,
       );
       try {
@@ -1568,7 +1582,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ? ((await deps.readReplyQuoteNote?.(sessionId, typeof reconcilePersistContent === 'string' ? reconcilePersistContent : undefined).catch(() => null)) ?? null)
         : null;
       const withReplyQuoteNote = replyQuoteNote
-        ? prependNoteToWireUserMessage(withGoalInactiveNote as HandoffWireMessage, replyQuoteNote)
+        ? await prependPrivateChatContext(withGoalInactiveNote as HandoffWireMessage, replyQuoteNote, sessionId, deps.prepareSendUserMessage)
         : withGoalInactiveNote;
       const withSourceNote = messageSourceNote
         ? prependNoteToWireUserMessage(withReplyQuoteNote as HandoffWireMessage, messageSourceNote)
@@ -1612,7 +1626,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const repeatableNotes: RepeatableWireNotes = {
         'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
           ? SIDE_CHAT_CONTEXT : null,
-        'bot-thread': botThreadNote,
+        // Use both text and image identity to detect edits to a topic root.
+        'bot-thread': botThreadNote ? JSON.stringify([botThreadNote.text, botThreadNote.imageUrls]) : null,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
       };
@@ -1633,8 +1648,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (plannedNotes['side-chat']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
       }
-      if (plannedNotes['bot-thread']) {
-        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);
+      if (plannedNotes['bot-thread'] && botThreadNote) {
+        outgoing = await prependPrivateChatContext(outgoing as HandoffWireMessage, botThreadNote, sessionId, deps.prepareSendUserMessage);
       }
       // The note belongs to the message that closed the card. A native command (a slash input) keeps its
       // first characters, so it carries no note and the note is dropped rather than left for the next message.

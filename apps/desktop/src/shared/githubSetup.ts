@@ -20,7 +20,7 @@ export interface GithubSetupState {
   download?: DownloadProgress;
   userCode?: string;
   verificationUrl?: 'https://github.com/login/device';
-  error?: 'unsupported' | 'install' | 'login' | 'timeout';
+  error?: 'unsupported' | 'install' | 'login' | 'timeout' | 'network';
 }
 
 /** Public connection state only; OAuth credentials remain in main, never renderer. */

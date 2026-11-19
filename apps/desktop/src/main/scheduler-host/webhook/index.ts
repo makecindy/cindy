@@ -20,6 +20,7 @@ import {
   type Scheduler,
 } from '@cindy/maker-scheduler';
 import { ownerScopedUserDataPath } from '../../appSessionState.js';
+import { runTaskActionRequest } from '../../maker-ipc/taskActionAuthorization.js';
 import { oauthSecureStorageAvailable } from '../../plugin-oauth/identityStore.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../../utils/atomicWriteFile.js';
 import { createWebhookIngress, type WebhookDeliveryOutcome } from './ingress.js';
@@ -180,7 +181,11 @@ export class ScheduleWebhookHost {
           if (!this.remote.canDeliver(id)) return { deferred: true };
         }
         if (this.stopped) return { deferred: true };
-        return scheduler.runNow(id, { deferToCaller: true, webhook, onRunCreated });
+        // 接收连接是在某次创建/更新任务的工具调用里打开的，回调会带上那次调用的
+        // 授权上下文。Webhook 帧是独立触发（与 cron、手动立即运行相同），不能拿
+        // 一个已经结束、当时会话还在跑的工具调用去判定现在这次投递（#11370）。
+        return runTaskActionRequest(() =>
+          scheduler.runNow(id, { deferToCaller: true, webhook, onRunCreated }));
       },
       now: () => Date.now(),
       onError: (message, detail) => logger.warn?.(`[schedule-webhook] ${message}`, detail),

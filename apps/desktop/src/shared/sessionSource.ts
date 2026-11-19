@@ -127,7 +127,7 @@ export function normalizeSessionSource(source: unknown): SessionSource {
 
 /** Standalone teammate work requested in the task list; main chats and private threads keep their own entries. */
 export function isTeammateTaskSession(session: { source?: unknown; companion?: { role?: unknown; taskProjectDir?: string } | null }): boolean {
-  return session.source === 'bot' && (session.companion?.role === 'routine' || session.companion?.role === 'channel' || (session.companion?.role === 'group' && !!session.companion.taskProjectDir));
+  return session.source === 'bot' && (session.companion?.role === 'routine' || session.companion?.role === 'channel' || session.companion?.role === 'group');
 }
 
 export function isOrdinaryTaskListSession(session: { source?: unknown; companion?: { role?: unknown; taskProjectDir?: string } | null }): boolean {

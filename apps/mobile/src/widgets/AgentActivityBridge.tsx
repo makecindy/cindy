@@ -110,6 +110,7 @@ export function AgentActivityBridge() {
         (registered?.key !== registrationKey || registered.hasActivity))
     )
       return;
+    const readRegistration = native.getPushRegistration?.bind(native);
     const controller = createAgentActivitySync(() => {
       // DeviceLinkProvider clears this store and its subscription ACKs on account
       // changes. Desktop rows carry userId: '' because their database is scoped
@@ -161,7 +162,10 @@ export function AgentActivityBridge() {
       )
         return undefined;
       return state ? JSON.stringify({ accountId: scope, state }) : null;
-    }, native, () => AppState.currentState === "active");
+    }, native, () => AppState.currentState === "active",
+    readRegistration
+      ? async () => (await readRegistration()).isStale === true
+      : undefined);
     const unsubscribe = remoteSessionStore.subscribeHomeStatus(() =>
       controller.sync(),
     );

@@ -23,8 +23,8 @@ import { resolveGhBinary as resolveSharedGhBinary, systemGhBinary } from './ghBi
 
 const log = createLogger('git-context/gh-cli');
 // Check the active credential without the newer auth status --active flag.
-// --silent discards the account response; callers only consume the exit code.
-export const GH_AUTH_CHECK_ARGS = ['api', '--hostname', 'github.com', 'user', '--silent'];
+// --silent discards the account response. Never expose process output.
+const GH_AUTH_CHECK_ARGS = ['api', '--hostname', 'github.com', 'user', '--silent'];
 
 /** Host account flows use gh's saved login, never a terminal token override. */
 export function ghAccountEnv(): NodeJS.ProcessEnv {
@@ -38,14 +38,14 @@ export function ghAccountEnv(): NodeJS.ProcessEnv {
 const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_NEGATIVE_CACHE_TTL_MS = 30_000;
 const GH_TIMEOUT_MS = 3_000;
-const GH_PROBE_TIMEOUT_MS = 800;
+const GH_PROBE_TIMEOUT_MS = 15_000;
 
 export interface GhCliTokenSourceDeps {
   resolveBinary?: () => Promise<string>;
   execFileFn?: (
     file: string,
     args: string[],
-    opts: { timeout: number; env: NodeJS.ProcessEnv },
+    opts: { timeout: number; env: NodeJS.ProcessEnv; windowsHide?: boolean },
     cb: (err: Error | null, stdout: string, stderr: string) => void,
   ) => void;
   existsFn?: (p: string) => boolean;
@@ -54,6 +54,22 @@ export interface GhCliTokenSourceDeps {
   /** 未拿到 token(未安装/未登录)时的缓存时长,默认 30s。 */
   negativeCacheTtlMs?: number;
   now?: () => number;
+}
+
+/** Only an absent login or a rejected credential is a reason to authorize again. */
+export function checkGhAccount(
+  binary: string,
+  run: NonNullable<GhCliTokenSourceDeps['execFileFn']> = execFile,
+): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    run(binary, GH_AUTH_CHECK_ARGS, { timeout: GH_PROBE_TIMEOUT_MS, env: ghAccountEnv(), windowsHide: true },
+      (error, _stdout, stderr) => {
+        if (!error) return resolve(true);
+        const { code, killed } = error as Error & { code?: string | number; killed?: boolean };
+        if (!killed && (code === 4 || code === 'ENOENT' || /\(HTTP 401\)/.test(stderr))) return resolve(false);
+        reject(new Error('network'));
+      });
+  });
 }
 
 /**
@@ -155,26 +171,27 @@ export function createGhCliTokenSource(deps: GhCliTokenSourceDeps = {}): GhCliTo
     return inFlight;
   }
 
+  // The legacy settings contract exposes a boolean. A transient failure can reuse
+  // a recent confirmation for display only; authorization never consults this value.
+  let lastConfirmedUntil = 0;
+  let probeGeneration = 0;
   async function probeAvailability(): Promise<boolean> {
+    const request = ++probeGeneration;
     const bin = deps.resolveBinary ? await deps.resolveBinary() : resolveGhBinary();
-    return new Promise<boolean>((resolve) => {
-      try {
-        // stdout/stderr 都不进入日志；该调用只消费退出码，绝不取得 token。
-        execFileFn(
-          bin,
-          GH_AUTH_CHECK_ARGS,
-          { timeout: GH_PROBE_TIMEOUT_MS, env: ghAccountEnv() },
-          (err) => resolve(err === null),
-        );
-      } catch {
-        resolve(false);
-      }
-    });
+    try {
+      const available = await checkGhAccount(bin, execFileFn);
+      if (request === probeGeneration) lastConfirmedUntil = available ? now() + ttl : 0;
+      return available;
+    } catch {
+      return now() < lastConfirmedUntil;
+    }
   }
 
   return {
     invalidate() {
       generation += 1;
+      probeGeneration++;
+      lastConfirmedUntil = 0;
       cached = null;
       inFlight = null;
     },

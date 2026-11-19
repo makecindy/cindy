@@ -204,6 +204,66 @@ describe('host transport policy', () => {
 });
 
 describe('outbound invoke admission', () => {
+  // Unit regression #11345: catalog/capability preloads still occupied all 12
+  // ordinary slots after controls gained headroom. Hold 12 metadata replies at
+  // the real client boundary: navigation/model writes must still reach the wire,
+  // while metadata uses the existing four-slot background budget. No UI fixture
+  // or earlier control-only saturation test covered ordinary user operations.
+  it('keeps catalog preloads from saturating navigation and model changes', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const pending: Promise<unknown>[] = [];
+    const metadata = ['maker:provider:list', 'maker:get-capabilities', 'maker:list-available-agents', 'maker:agent:status'];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      for (let n = 0; n < 12; n++) pending.push(h.client.invoke('dev-b', {
+        channel: metadata[n % metadata.length], args: [],
+      }).catch(error => error));
+      const visible = ['local-db:sessions:list', 'maker:set-model'].map(channel => h.client.invoke('dev-b', { channel, args: [] }));
+      pending.push(...visible.map(request => request.catch(error => error)));
+      await vi.advanceTimersByTimeAsync(0);
+      const frames = h.current().sent.filter(frame => frame.kind === 'invoke');
+      expect(frames.filter(frame => metadata.includes((frame.payload as InvokePayload).channel))).toHaveLength(4);
+      for (const channel of ['local-db:sessions:list', 'maker:set-model']) {
+        const frame = frames.find(frame => (frame.payload as InvokePayload).channel === channel);
+        expect(frame).toBeDefined();
+        h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: frame!.id, src: 'dev-b', payload: { ok: true, result: [] } });
+      }
+      await expect(Promise.all(visible)).resolves.toEqual([{ ok: true, result: [] }, { ok: true, result: [] }]);
+      expect(h.current().sent.filter(frame => frame.kind === 'invoke')).toHaveLength(6);
+    } finally { h.client.stop(); await Promise.allSettled(pending); vi.useRealTimers(); }
+  });
+
+  // Unit regression: remote-agent control shares a channel with long polls/uploads.
+  // Twelve pending bulk requests must not delay Stop, or deliver an extra copy.
+  it('dispatches remote-agent Stop ahead of saturated ordinary invokes', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness();
+    const requests: Promise<unknown>[] = [];
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      for (let n = 0; n < 12; n++) requests.push(h.client.invoke('dev-b', {
+        channel: REMOTE_AGENT_CHANNEL, args: [{ op: 'poll', runs: [{ runId: `run-${n}`, cursor: 0 }] }],
+      }).catch(error => error));
+      const queued = h.client.invoke('dev-b', { channel: REMOTE_AGENT_CHANNEL,
+        args: [{ op: 'upload', uploadId: 'bulk', index: 0, data: 'eA==' }] }).catch(error => error);
+      requests.push(queued);
+      const stop = h.client.invoke('dev-b', { channel: REMOTE_AGENT_CHANNEL,
+        args: [{ op: 'call', runId: 'run-0', callId: 'stop', method: 'abort', payload: { json: [] } }] });
+      requests.push(stop.catch(error => error));
+      await vi.advanceTimersByTimeAsync(0);
+      const frames = h.current().sent.filter(frame => frame.kind === 'invoke');
+      expect(frames).toHaveLength(13);
+      expect(frames.at(-1)?.payload).toMatchObject({ args: [{ callId: 'stop' }] });
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: frames.at(-1)!.id,
+        src: 'dev-b', payload: { ok: true, result: {} } });
+      await expect(stop).resolves.toMatchObject({ ok: true });
+      h.client.stop();
+      await Promise.all(requests);
+      expect(h.current().sent.filter(frame => frame.kind === 'invoke')).toHaveLength(13);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   // Unit, PR #9153: resource actions share one channel. Valid parsed actionId
   // values must survive in actual INFO request evidence, while unknown IDs and
   // input remain private. Previous diagnostics tests covered channels only.
@@ -8612,7 +8672,10 @@ describe('DeviceLinkClient', () => {
 // queued listings. Prior coverage cancelled only a joining consumer, not the first.
 // Minimal input: fill admission, enqueue two identical reads, cancel either one.
 describe('remote recovery regression', () => {
-  it.each([0, 1])('keeps identical queued listings independent when consumer %i cancels', async (cancelIndex) => {
+  // #11345: dispatch-only cancellation uses the same queue boundary, but an
+  // accepted result must survive cancellation after the physical send.
+  it.each([[0, 'preSend'], [1, 'preSend'], [0, 'beforeDispatch'], [1, 'beforeDispatch']] as const)(
+    'keeps identical queued listings independent when consumer %i cancels via %s', async (cancelIndex, guard) => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
     const pending: Promise<unknown>[] = [];
@@ -8628,7 +8691,7 @@ describe('remote recovery regression', () => {
       const cancelled = [false, false];
       const reads = cancelled.map((_, i) => h.client.invoke('a', {
         channel: 'local-db:sessions:list', args: [],
-      }, undefined, { preSend: () => {
+      }, undefined, { [guard]: () => {
         if (cancelled[i]) throw new Error('cancelled consumer');
       } }).catch(error => error));
       pending.push(...reads);
@@ -8637,6 +8700,7 @@ describe('remote recovery regression', () => {
       sent().forEach(reply);
       await vi.advanceTimersByTimeAsync(0);
       expect(sent()).toHaveLength(13); // Only the valid caller reaches the wire.
+      cancelled[1 - cancelIndex] = true; // Already dispatched: retain its acknowledgement.
       reply(sent().at(-1)!);
       expect(await reads[cancelIndex]).toMatchObject({ message: 'cancelled consumer' });
       expect(await reads[1 - cancelIndex]).toEqual({ ok: true, result: 'ok' });
@@ -8791,6 +8855,127 @@ describe('DeviceLinkClient relay restart recovery', () => {
 });
 
 describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
+  // Unit regression: production send/ACK entry points must keep the shared relay
+  // budget across the default 15-minute boundary. Existing pacing tests stop
+  // within seconds; one 24-result burst shortly before that boundary suffices.
+  it.each([false, true])('keeps pacing after 15 minutes with a recent burst (drained=%s)', async drained => {
+    vi.useFakeTimers();
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 3_600_000, requestTimeoutMs: 5_000,
+      congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50); h.current().ack();
+      await vi.advanceTimersByTimeAsync(15 * 60_000 - 1_000);
+      const opened = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await opened;
+      const other = establishInboundReliableLink(h, 'stream-b', 1, 'b');
+      await vi.advanceTimersByTimeAsync(0); await other;
+      const socket = h.current();
+      const reliable = () => socket.sent.filter(env => parseTransportPayload(env.payload));
+      const ackAll = (peer = 'a') => {
+        const last = reliable().filter(env => env.dst === peer).at(-1);
+        if (!last) return;
+        const { streamId, seq } = parseTransportPayload(last.payload)!.meta;
+        socket.push({ v: 1, kind: 'push', src: peer, payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { streamId, ackSeq: seq },
+        } });
+      };
+      socket.sent.length = 0;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('a', `burst-${i}`, { ok: true, result: i });
+      expect(reliable()).toHaveLength(8);
+      if (drained) {
+        for (let i = 0; i < 3; i++) { ackAll(); await vi.advanceTimersByTimeAsync(250); }
+        ackAll();
+        expect(h.client.getReliableSendQueueDepth('a')).toBe(0);
+        await vi.advanceTimersByTimeAsync(250);
+      } else {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      // Without the fix this burst bypasses the budget as soon as the timer fires.
+      const before = reliable().length;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('b', `after-${i}`, { ok: true, result: i });
+      expect(reliable().length - before).toBeLessThanOrEqual(8);
+      if (!drained) {
+        // a stays silent while b completes a foreground operation on this same socket.
+        const foreground = h.client.invoke('b', { channel: 'local-db:sessions:list', args: [] });
+        await vi.advanceTimersByTimeAsync(0);
+        for (let i = 0; i < 8; i++) { ackAll('b'); await vi.advanceTimersByTimeAsync(250); }
+        const command = socket.sent.find(env => env.kind === 'invoke' && env.dst === 'b')!;
+        expect(command).toBeDefined();
+        socket.push({ v: 1, kind: 'invoke-result', src: 'b', id: command.id, payload: { ok: true, result: [] } });
+        await expect(foreground).resolves.toMatchObject({ ok: true, result: [] });
+        expect(h.client.getReliableSendQueueDepth('a')).toBeGreaterThan(0);
+      }
+      // Once both queues drain and the quiet window passes, normal throughput
+      // returns (the ordinary receive window admits 16 frames immediately).
+      for (let i = 0; i < 16; i++) { ackAll(); ackAll('b'); await vi.advanceTimersByTimeAsync(250); }
+      ackAll(); ackAll('b');
+      expect(h.client.getReliableSendQueueDepth('a') + h.client.getReliableSendQueueDepth('b')).toBe(0);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      const quietBefore = reliable().length;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('b', `quiet-${i}`, { ok: true, result: i });
+      expect(reliable().length - quietBefore).toBe(16);
+      expect(h.client.getStatus()).toBe('online');
+      expect(socket.closed).toBeNull();
+    } finally { h.client.stop(); clock.mockRestore(); vi.useRealTimers(); }
+  });
+
+  // Same unit regression, but socket pressure can outlive the reliable queue.
+  it('keeps the congestion budget while the socket is still above its low watermark', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 3_600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50); h.current().ack();
+      const socket = h.current();
+      socket.bufferedAmount = 256 * 1024;
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      const opened = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await opened;
+      socket.sent.length = 0;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('a', `buffered-${i}`, { ok: true, result: i });
+      expect(socket.sent.filter(env => parseTransportPayload(env.payload))).toHaveLength(8);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // Unit, shared-link fault radius: a parked peer's retained result is not
+  // current relay demand. Otherwise one sleeping controller pins every other
+  // controller to the congestion budget forever after the first 1013.
+  it('restores normal throughput while a disconnected peer retains its result for later recovery', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 3_600_000, congestionBackoffBaseMs: 1, congestionBackoffMaxMs: 1,
+    } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      h.current().emit('close', 1013, 'inbound backpressure');
+      await vi.advanceTimersByTimeAsync(50); h.current().ack();
+      const a = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await a;
+      const socket = h.current();
+      h.client.sendInvokeResult('a', 'retained-result', { ok: true, result: 'keep' });
+      socket.push({ v: 1, kind: 'link-close', src: 'a', payload: { reason: 'transport-timeout' } });
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      const b = establishInboundReliableLink(h, 'stream-b', 1, 'b');
+      await vi.advanceTimersByTimeAsync(0); await b;
+      socket.sent.length = 0;
+      for (let i = 0; i < 24; i++) h.client.sendInvokeResult('b', `normal-${i}`, { ok: true, result: i });
+      expect(socket.sent.filter(env => env.dst === 'b' && parseTransportPayload(env.payload))).toHaveLength(16);
+      const resumed = establishInboundReliableLink(h, 'stream-a', 1, 'a');
+      await vi.advanceTimersByTimeAsync(0); await resumed;
+      expect(socket.sent.filter(env => env.dst === 'a' && env.id === 'retained-result')).toHaveLength(1);
+      expect(h.client.getStatus()).toBe('online');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('excludes idle and inbound-closed peers while admitting a new active target', async () => {
     vi.useFakeTimers();
     const h = makeHarness({ timing: {
@@ -11909,8 +12094,11 @@ describe('confirmed duplicate-open gap repair', () => {
       };
       await open(phone); await open(healthy);
       // Twelve requests are sent; two remain locally queued and must be cancelled on reconnect.
+      // This fixture exercises ordinary-slot gap repair, not metadata prefetch.
+      // Keep its original 12 sent / 2 unsent boundary after catalog reads default
+      // to background, using the existing explicit foreground caller override.
       for (let i = 0; i < 12; i++) relay.dropNext((sender, env) => sender === 'desktop' && env.dst === 'phone' && env.kind === 'invoke-result');
-      const old = Promise.all(Array.from({ length: 14 }, () => phone.invoke('desktop', { channel: 'maker:provider:list', args: [] }, 60000).catch(e => e)));
+      const old = Promise.all(Array.from({ length: 14 }, () => phone.invoke('desktop', { channel: 'maker:provider:list', args: [] }, 60000, { background: false }).catch(e => e)));
       await pump(); await vi.advanceTimersByTimeAsync(1000);
       phone.restartConnection('phone-only-reconnect');
       await vi.advanceTimersByTimeAsync(1); await pump(); await open(phone);

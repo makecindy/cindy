@@ -11,7 +11,7 @@ import { getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
-import { readDeviceLinkInvokeSourceDevice } from '../../desktop/src/main/device-link/invoke-context.ts';
+import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
 import { createHostDeviceLink } from './device-link.ts';
 import { createHostService } from './service.mjs';
 import { createEventHub } from './events.mjs';
@@ -44,7 +44,12 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
   }
-  sqlite.exec("INSERT INTO sessions(id,title,source,status,created_at,updated_at) VALUES ('task','Shared task','desktop','active',1,1)");
+  sqlite.exec(`CREATE TABLE im_bindings (target_session_id TEXT);
+    CREATE TABLE shared_task_events (shared_task_id TEXT, session_id TEXT, revision INTEGER,
+      kind TEXT, terminal INTEGER, snapshot TEXT, recorded_at INTEGER,
+      PRIMARY KEY (shared_task_id, kind, revision));
+    INSERT INTO sessions(id,title,source,status,working_dir,workspace_kind,created_at,updated_at)
+    VALUES ('task','Shared task','desktop','active','/project','project',1,1)`);
   const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
   setCurrentDbClient(db, 'test-headless-owner');
   const hub = createEventHub();
@@ -54,6 +59,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const clients = [];
   let host, hold, release, writes = 0, duplicateNext = false;
   let source;
+  const modelChoices = [];
   t.after(async () => {
     clients.forEach(client => client.stop());
     await host?.stop();
@@ -93,6 +99,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const service = createHostService({
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
+    updateSession: async (id, patch) => {
+      modelChoices.push({ id, patch, origin: readDeviceLinkModelSelectionOrigin() });
+      return { deferred: true };
+    },
     input: { enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
@@ -104,9 +114,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
+    isBusyForProjectArchive: () => false,
+    onProjectTaskStatus: (sessionId, status) => hub.publish({ type: 'session_changed', sessionId, status, patch: { status } }),
     preparePiSkillRuntime: async (id, dir, route) => {
       assert.equal(id, 'task'); assert.equal(dir, '/project');
-      if (route) assert.deepEqual(route, { model: 'pi-test' });
+      if (route) assert.deepEqual(route, { model: 'pi-test', nextInputChars: 45_000 });
     },
     createRuntimeSession: async () => { throw new Error('Not part of this transport test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
@@ -129,11 +141,42 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  // A full round trip from the desktop controller must preview and mutate the Host's project.
+  const projectArchive = input => clients[2].invoke('host', { channel: 'local-db:sessions:project-archive',
+    args: [{ directory: '/project', ...input }] });
+  const removal = await projectArchive({ action: 'archiveOnRemoval', operation: 'apply', sessionId: 'task' });
+  assert.equal(removal.ok, false, 'project removal is local to the owning desktop');
+  const preview = await projectArchive({ action: 'archive', operation: 'preview' });
+  assert.equal(preview.ok, true, JSON.stringify(preview));
+  assert.deepEqual(preview.result, [{ id: 'task', hasWorktree: false, blocked: null }]);
+  for (const [action, expected] of [['archive', 'archived'], ['unarchive', 'active']]) {
+    const result = await projectArchive({ action, operation: 'apply', sessionId: 'task' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result, 'updated');
+    assert.equal(sqlite.prepare("SELECT status FROM sessions WHERE id='task'").pluck().get(), expected);
+  }
+  // 2026-11-18: exercise the real Host registry over the existing integration relay.
+  // A positive controller window on either picker channel or Skill preparation must fail before applying it.
+  const numericSelections = [
+    { channel: 'maker:set-model', args: ['task', 'small', null, null, { effort: null, fastMode: false, confirmedContextWindow: 100 }] },
+    { channel: 'maker:switch-session-agent', args: ['task', 'claude-code', 'small', null, null, false, { confirmedContextWindow: 100 }] },
+    { channel: 'maker:session:prewarm', args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: {}, confirmedContextWindow: 100 }] },
+  ];
+  for (const selection of numericSelections) {
+    const rejected = await clients[0].invoke('host', selection);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error.message, /PRECONDITION_FAILED/);
+  }
+  assert.deepEqual(modelChoices, []);
+  const stage = await clients[0].invoke('host', { channel: 'maker:set-model', args: ['task', 'small'] });
+  assert.deepEqual(stage.result, { deferred: true });
+  assert.deepEqual(modelChoices, [{ id: 'task', patch: { model: 'small' }, origin: 'owner' }]);
+
   const prepared = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
     args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project' }] });
   assert.deepEqual(prepared.result, { accepted: true, piRuntimePrepared: true }, JSON.stringify(prepared));
   const switched = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
-    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: {} }] });
+    args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { nextInputChars: 45_000 } }] });
   assert.deepEqual(switched.result, { accepted: true, piRuntimePrepared: true, pendingRouteApplied: true });
   const unsupported = await clients[2].invoke('host', { channel: 'maker:session:prewarm',
     args: ['task', { purpose: 'pi-skill-dispatch', workingDir: '/project', model: 'pi-test', pendingPiRoute: { agentDeviceId: 'other' } }] });

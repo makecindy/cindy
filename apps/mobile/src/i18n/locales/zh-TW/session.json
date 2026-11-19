@@ -577,6 +577,7 @@
       "taskCost": "本任務費用",
       "actualCost": "實際費用",
       "estimatedValue": "估算價值",
+      "tokenUnit": "token",
       "totalTokens": "累計 Token",
       "seeDetails": "查看明細",
       "valueUnavailable": "部分任務價值暫未取得",
@@ -869,7 +870,7 @@
   },
   "providerGroupRebalance": {
     "title": "換到 {{label}} 繼續？",
-    "body": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會帶上最近幾輪對話和摘要，更早的細節可能記不全。",
+    "body": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。切換時會帶上這段對話的上下文，較早的內容可能會壓縮，原記錄仍保留。",
     "quota": "還剩 {{left}}%",
     "quotaReset": "還剩 {{left}}%，{{reset}}後重置",
     "confirm": "換過去",

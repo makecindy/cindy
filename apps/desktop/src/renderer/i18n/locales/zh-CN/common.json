@@ -444,6 +444,8 @@
     },
     "manage": {
       "createLink": "生成分享链接",
+      "exportRoster": "导出名单",
+      "exportRosterFailed": "名单保存失败",
       "loading": "正在读取分享…",
       "notReady": "分享服务暂时不可用。确认已登录、网络正常后会自动重试。",
       "loadFailed": "分享信息没有加载出来，请稍后重试。",
@@ -923,7 +925,7 @@
       "title": "换到 {{label}} 继续？",
       "fallbackTitle": "用摘要换到 {{label}} 继续？",
       "fallbackDescription": "无法完整接续原来的对话。使用摘要继续可能遗漏早期细节和工具结果；取消则留在原电脑发送。",
-      "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几条消息和摘要，更早的细节可能记不全。",
+      "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会接续对话。较早的部分可能会压缩，以适应模型的容量。",
       "quota": "还剩 {{left}}%",
       "quotaReset": "还剩 {{left}}%，{{reset}}",
       "confirm": "仅这次换过去",
@@ -1118,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正在工作",
-    "hint": "按任意键或 Touch ID 键锁屏，再用指纹或密码解锁",
+    "hint": "按任意键进入解锁界面",
     "lockFailed": {
       "status": "Cindy 没能锁住这台电脑",
       "hint": "碰一下电脑会再试一次锁屏；仍锁不上时，用 Touch ID 或密码验证后即可撤下。也可以合上屏幕或按电源键锁屏。",
       "hintWindows": "碰一下电脑会再试一次锁定；仍锁不上时，用 Windows Hello 或 PIN 验证后即可撤下。也可以按 Windows 徽标键 + L 锁定。"
     },
-    "hintWindows": "按任意键锁屏，用 Windows Hello 或密码解锁",
-    "hintLinux": "按任意键锁屏，用密码解锁",
+    "hintWindows": "按任意键进入解锁界面",
+    "hintLinux": "按任意键进入解锁界面",
     "verifyReason": "撤下隐私屏"
   },
   "appBadge": {
@@ -3440,7 +3442,7 @@
         "end": "以上是从 {{source}} 导入的记录",
         "endHandoff": "以上是从 {{source}} 导入的记录，接下来由 {{harness}} 接着做"
       },
-      "projectMenu": "导入此项目在其他工具里的任务…"
+      "projectMenu": "导入任务…"
     },
     "connections": {
       "codex": {
@@ -4072,6 +4074,7 @@
         "refreshSpeechAdded": "已更新模型，补充了 1 个语音参考型号",
         "refreshNoNew": "模型列表已是最新，无新增",
         "refreshFailed": "模型列表刷新失败，请稍后再试",
+        "refreshReconnect": "模型列表刷新失败。重新连接此供应商后再试。",
         "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
         "disableModel": "停用此模型",
         "paymentRequired": "付费",
@@ -6753,6 +6756,10 @@
         "protocol": {
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
+        },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
         },
         "onlyEncrypted": "仅使用 Agent-Net",
         "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。",
@@ -10944,6 +10951,8 @@
     "autosave": {
       "saving": "正在保存…",
       "saved": "已保存",
+      "unconfirmed": "尚未确认保存",
+      "savedModel": "已保存，下轮生效",
       "retry": "重新保存"
     },
     "retry": "重试",
@@ -11057,7 +11066,7 @@
       "discard": "放弃修改",
       "continueEditing": "继续编辑"
     },
-    "profileSaveFailed": "伙伴设置未能保存，变更没有生效。",
+    "profileSaveFailed": "伙伴设置未能保存。",
     "profileSaveOffline": "无法连接伙伴所在的电脑，请恢复连接后重新保存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（当前不可用）",
@@ -11429,7 +11438,7 @@
         "projectDirChoose": "选择",
         "projectDirChange": "更换",
         "projectDirClear": "清除",
-        "projectDirNote": "分工做事时，伙伴们在这里干活。不选也行，会用这个群自己的文件夹；选了 git 项目，每次分工会新开一个 worktree 和分支，不动你手上的代码。",
+        "projectDirNote": "可以选择这台电脑上的已有项目。留空时，优先使用仓库对应的项目，其次使用执行伙伴自己的项目。Git 项目分工使用独立 worktree。",
         "autoContinueSaveFailed": "分工交接没能保存，请再试一次",
         "projectDirSaveFailed": "项目文件夹没能保存，确认文件夹还在后再试",
         "allowMemberInvites": "允许所有成员邀请朋友",
@@ -11768,15 +11777,15 @@
           "replyModeAssistant": "Cindy 回答",
           "replyModeAssistantNote": "由群里的 Cindy 回答。",
           "work": "分工",
-          "ownFolder": "群自己的文件夹",
+          "ownFolder": "自动选择",
           "projectDirHint": "只在这台电脑上生效。",
-          "projectDirClearHint": "改用群自己的文件夹",
+          "projectDirClearHint": "恢复自动选择项目",
           "project": "项目",
           "projectCaption": "伙伴在群里回复和分工都在这个项目里做。仓库全群共享，文件夹只存在这台电脑上。",
           "githubRepo": "GitHub 仓库",
-          "githubRepoHint": "填 owner/name。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "代码仓库",
-          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等粘贴仓库链接。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
+          "repositoryHint": "GitHub 可填 owner/name，其他仓库可粘贴链接。Cindy 会在本机查找唯一匹配的已有项目。",
           "repositoryPlaceholder": "owner/name 或仓库链接",
           "githubRepoSaveFailed": "仓库没有保存，请检查后再试。",
           "folderRepoFilled": "已按这个文件夹填好仓库 {{repo}}，群里其他人的电脑也会用它。",
@@ -14035,7 +14044,7 @@
         "effortEndFast": "更快",
         "effortEndSmart": "更智能",
         "railSameEngine": "仅 {{agent}}",
-        "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容",
+        "crossEngineWarning": "下一条消息将切换引擎并接续对话，较早的部分可能会压缩",
         "favoritesSyncFailed": "收藏未能同步。请重新打开模型选择器重试；远程电脑可能需要更新。",
         "favoritesSyncFailedUnreachable": "收藏暂时没有同步：那台电脑当前连不上。恢复连接后重新打开即可。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14051,12 +14060,8 @@
         "ultrafast": "超快"
       },
       "discoveredCopy": {
-        "title": "改用「{{device}}」上的 {{provider}}？",
-        "description": "{{unavailable}}确认后由「{{device}}」运行，之后随时可以在这里换回。",
         "unavailableHere": "这台电脑上的 {{provider}} 现在用不了。",
-        "unavailableOn": "「{{device}}」上的 {{provider}} 现在用不了。",
-        "confirm": "改用",
-        "cancel": "保持不变"
+        "unavailableOn": "「{{device}}」上的 {{provider}} 现在用不了。"
       }
     },
     "permissionSelector": {
@@ -14322,33 +14327,14 @@
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",
       "modelSwitchContextGuard": {
-        "title": "这个模型装不下当前对话",
         "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
-        "overflowDescription": "这段对话已经用了 {{used}}，超过新模型能放下的 {{total}}（约 {{pct}}%）。换过去后，Cindy 会先整理一份摘要再继续；对话记录还在，只是不会整段原样带给新模型。",
-        "overflowDescriptionRemote": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。",
-        "confirmSwitch": "切换并继续",
-        "cancelSwitch": "先不换"
+        "condensedToast": "为了适应新模型，较早的对话会压缩，完整的对话记录仍可查看。",
+        "overflowDescriptionRemote": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切换，但新引擎启动失败；发送消息时会自动重试",
         "failed": "引擎切换失败，未生效",
-        "deferred": "已登记切换：下一条消息发出时将切换到 {{agent}} · {{model}}",
-        "confirmation": {
-          "title": "切换 Agent？",
-          "description": "新 Agent 引擎会通过交接摘要续接，思考内容等不能保证完美继承；切回时仍可继续原引擎会话。切换还会让 prompt 缓存中断一次，可能增加 Token 消耗。",
-          "confirm": "切换 Agent",
-          "cancel": "保留当前 Agent",
-          "dontShowAgain": "下次不再提醒"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "改回这台电脑运行 Agent？",
-        "titleOther": "改到「{{device}}」上运行 Agent？",
-        "description": "原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
-        "descriptionNativeHistory": "完整对话记录会复制过去接着用；如果恢复不了，会改用交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
-        "confirm": "换电脑运行",
-        "cancel": "保持不变",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "已登记切换：下一条消息发出时将切换到 {{agent}} · {{model}}"
       }
     },
     "agentSelect": {
@@ -14581,12 +14567,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "任务运行中发送的消息默认排队。",
-      "steerDefault": "任务运行中发送的消息默认插话到当前任务。",
+    "sendDelivery": {
+      "menuAria": "这条消息的发送方式",
+      "queueHint": "等这一轮结束",
+      "steerHint": "下一步就处理",
+      "setDefault": "设为默认",
+      "nowDefault": "已设为默认",
       "switchToSteer": "默认改为插话",
-      "switchToQueue": "默认改为排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默认改为排队"
     }
   },
   "onboarding": {
@@ -14957,6 +14945,7 @@
       "credentialSwitchBusy": "其他 Codex 任务仍在运行，暂时无法应用本任务选择的供应商（共享的 Codex 进程需要重启）。等这些任务结束后再点「重试」。",
       "accountBoundaryPending": "Cindy 正在切换账号状态，暂时无法开始这个任务。稍等片刻后点「重试」；如果一直出现，请重启 Cindy。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前任务无法继续。新建任务后即可生效。",
+      "codexSharedAuthLinkUnavailable": "本机的 Codex 已经登录，但这个任务读不到那份登录：指向它的链接建不出来（Windows 上通常是普通权限建不了）。请确认这台电脑上的 {{appName}} 有权限创建链接（Windows 上可以用管理员身份运行一次，或开启开发者模式），然后点「重试」。也可以点「重新登录 ChatGPT」，让 Cindy 用自己的一份登录来跑这个任务。",
       "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试",
       "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",
       "claudeSubscriptionOpusPlanMismatch": "当前连接的 Claude Pro 套餐不支持 Opus。请切换到套餐支持的模型；如果刚升级套餐，请在设置中重新连接 Anthropic 后重试。",
@@ -15483,6 +15472,11 @@
         "relocatedTaskComputer": "Agent 已改到任务所在的电脑上运行",
         "relocatedElsewhere": "Agent 已改到另一台电脑上运行",
         "quotaRebalance": "这个账号的配额更该先用"
+      },
+      "handoffCoverage": {
+        "complete": "已完整接续对话",
+        "condensed": "较早的对话已压缩",
+        "details": "用于接续对话的交接内容"
       },
       "contextRebuild": {
         "labelOverflow": "已整理上下文并继续",
@@ -16426,7 +16420,7 @@
       "confirmArchive": {
         "title": "归档任务",
         "description": "确定要归档这个任务吗？归档后将从列表中移除。",
-        "dirtyWorktreeWarning": "未提交的更改会在归档前保存，可在任务内恢复。",
+        "dirtyWorktreeWarning": "当前任务有尚未提交的文件更改。归档时默认保存这些更改，以后可以在任务中恢复。",
         "discardChanges": "丢弃未提交的更改",
         "discardWarning": "未提交的更改和新文件将无法恢复。",
         "discardAndArchive": "丢弃并归档",
@@ -16465,6 +16459,7 @@
         "empty": "此自动化没有可归档的任务"
       },
       "archiveAll": {
+        "projectTitle": "归档「{{name}}」下的所有任务？",
         "title": "归档全部任务",
         "confirm": "归档全部",
         "cancel": "取消",
@@ -16609,18 +16604,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」项目菜单",
+        "previewFailed": "无法读取这个项目的任务。请重试。",
+        "remotePreviewFailed": "无法读取远程项目的任务。请检查连接，并确认远程电脑上的 Cindy 已更新。",
         "rename": "重命名项目",
         "pin": "置顶项目",
         "unpin": "取消置顶项目",
-        "removeFromSidebar": "从侧栏移除项目",
-        "removeFromSidebarConfirmTitle": "移除“{{name}}”？",
-        "removeFromSidebarConfirmDescription": "这会从侧栏移除该项目。电脑上的文件不会被删除。现有任务会移到“对话”分组，仍可正常使用。",
+        "removeFromSidebar": "从 Cindy 移除项目…",
+        "removeFromSidebarConfirmTitle": "从 Cindy 移除「{{name}}」？",
+        "removeFromSidebarConfirmDescription": "未归档的 {{count}} 个任务仍可在「对话」中继续使用。",
         "removeFromSidebarConfirmAction": "移除项目",
-        "removeFromSidebarFailed": "无法从侧栏移除项目，请重试",
-        "showFiles": "查看文件",
-        "archivedAll": "全部归档",
-        "unarchiveAll": "全部恢复",
-        "openInExplorer": "在文件管理器中打开",
+        "removeFromSidebarFailed": "移除项目失败，请重试。",
+        "archiveOnRemove": "同时归档任务（{{count}} 个）",
+        "keepSkippedOnRemove": "{{skip}}的任务会留在「对话」中。",
+        "removedArchived": "{{count}} 个任务将移入「已归档」。",
+        "removeAndArchive": "移除项目并归档任务",
+        "removeKeepFiles": "项目的置顶、自定义名称和图标会清除。电脑上的文件和文件夹会保留。",
+        "showFiles": "在侧边栏查看任务文件",
+        "archivedAll": "归档所有任务",
+        "unarchiveAll": "恢复所有任务",
+        "openInFinder": "在访达中打开项目文件夹",
+        "openInExplorer": "在文件资源管理器中打开项目文件夹",
+        "openInFileManager": "在文件管理器中打开项目文件夹",
         "newInDirectory": "在此目录新建任务",
         "copyDeepLink": "复制项目链接",
         "search": "在项目内搜索任务"
@@ -16658,6 +16663,7 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下周",
+        "indefinite": "无限期",
         "custom": "自定义…",
         "wakeAt": "唤回日期和时间",
         "timeZone": "本地时间（{{zone}}）",
@@ -16841,6 +16847,7 @@
         "summaryAria": "查看 PR #{{number}} 汇总",
         "unresolvedLabel": "未解决的 review 评论",
         "checks": "检查",
+        "following": "跟进中",
         "checksTotal": "共 {{count}} 项",
         "failed": "失败",
         "passed": "通过",
@@ -19415,6 +19422,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "本轮执行失败。",
+    "blockedReasonUnknown": "未提供具体受阻原因。",
+    "blockedNextStep": "可在当前任务中补充信息；处理受阻原因后，点击“{{action}}”继续。",
     "status": {
       "active": "目标推进中",
       "paused": "已暂停",
@@ -19749,6 +19759,7 @@
         "empty": "当前没有赠送记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
         "unnamed": "赠送余额",
+        "rolloverName": "滚存额度",
         "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原始金额",
         "used": "已用",
@@ -19986,6 +19997,8 @@
       "basicModels": "可用部分模型",
       "subscription": "订阅套餐",
       "rollover": "剩余余额可留到{{period}}，最多 {{amount}}",
+      "rolloverMonthly": "剩余余额最多滚存 {{amount}}，转为赠送余额\n1 个月内有效，不再继续滚存\n优先于订阅余额和充值余额使用",
+      "rolloverMonthlySummary": "剩余余额最多滚存 {{amount}}，1 个月内有效",
       "nextPeriod": {
         "MONTH": "下月",
         "YEAR": "下一年",
@@ -21430,6 +21443,24 @@
   },
   "featureIntro": {
     "close": "关闭",
+    "project": {
+      "title": "认识项目",
+      "lead": "把一件要持续做的事交给一个项目。文件都放在你电脑上的一个文件夹里，Cindy 每次接着上次的成果做，不用重新交代背景。",
+      "files": {
+        "title": "成果都是你的文件",
+        "body": "Cindy 直接在项目文件夹里读写。做出来的东西留在你的电脑上，随时可以打开、拿走。"
+      },
+      "context": {
+        "title": "不用重新交代",
+        "body": "在项目里新开任务，Cindy 一上来就看得到这些文件，也会沿用这个项目里记下的要求。"
+      },
+      "separate": {
+        "title": "几件事各归各",
+        "body": "每个项目的任务单独排在一起，不同的事互不干扰，隔多久回来都能接着做。"
+      },
+      "start": "继续新建项目",
+      "note": "起个名字就能新建；已有的文件夹或代码仓库也可以直接用。"
+    },
     "taskInbox": {
       "title": "认识收件箱",
       "lead": "任务会按状态自动分成待处理、进行中、稍后处理和已处理。最好的习惯是随手清空收件箱：处理完点完成，不急的稍后处理。",
