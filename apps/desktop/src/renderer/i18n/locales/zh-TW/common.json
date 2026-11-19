@@ -16418,7 +16418,7 @@
       "confirmArchive": {
         "title": "歸檔任務",
         "description": "確定要歸檔這個任務嗎？歸檔後將從列表中移除。",
-        "dirtyWorktreeWarning": "未提交的變更會在歸檔前儲存，可在任務中復原。",
+        "dirtyWorktreeWarning": "目前的任務有尚未提交的檔案變更。歸檔時預設會儲存這些變更，之後可在任務中還原。",
         "discardChanges": "捨棄未提交的變更",
         "discardWarning": "未提交的變更和新檔案將無法復原。",
         "discardAndArchive": "捨棄並歸檔",

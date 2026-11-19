@@ -16648,7 +16648,7 @@
       "confirmArchive": {
         "title": "Arquivar sessão",
         "description": "Arquivar esta sessão? Ela será removida da lista.",
-        "dirtyWorktreeWarning": "As alterações sem commit serão salvas antes de arquivar. Você pode restaurá-las na tarefa.",
+        "dirtyWorktreeWarning": "Esta tarefa contém alterações em arquivos que ainda não foram incluídas em um commit. Por padrão, elas são salvas ao arquivar a tarefa e podem ser restauradas depois na própria tarefa.",
         "discardChanges": "Descartar alterações sem commit",
         "discardWarning": "As alterações sem commit e os arquivos novos serão perdidos.",
         "discardAndArchive": "Descartar e arquivar",
