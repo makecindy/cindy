@@ -76,7 +76,11 @@ void mountPage({
           },
           {
             code: 'gift_card', name: 'Cindy Gift Card', kind: 'GIFT_CARD', level: null, sortOrder: 2,
-            offers: [giftOffer('20'), giftOffer('100'), giftOffer('200')],
+            offers: [
+              giftOffer('20'), giftOffer('100'), giftOffer('200'),
+              // 买家自填面额：只有范围，没有固定面额。
+              { ...giftOffer('20'), code: 'gift_card_custom', amount: null, creditAmount: null, minAmount: '20', maxAmount: '500' },
+            ],
           },
         ],
       }),
@@ -93,7 +97,8 @@ void mountPage({
       listPaymentHistory: async () => ({ records: history, nextCursor: null }),
       getGiftCardPurchasePolicy: async () => ({
         currency: 'usd', dailyLimit: 5, windowHours: 24, remaining: ctx.case === 'limit' ? 0 : 5,
-        maxQuantityPerOrder: 5, maxOrderAmount: null, faces: ['cindy', 'cat', 'bell', 'leap'],
+        maxQuantityPerOrder: 5, maxOrderAmount: null, minFaceValue: '20', maxFaceValue: '500',
+        faces: ['cindy', 'cat', 'bell', 'leap'],
         maxSenderNameLength: 40, maxMessageLength: 120,
       }),
       listPurchasedGiftCards: async () => ({ cards, nextCursor: null }),

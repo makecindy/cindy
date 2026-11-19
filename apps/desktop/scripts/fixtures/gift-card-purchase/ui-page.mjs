@@ -10,6 +10,7 @@ export default {
     default: { about: 'Buy entry on the balance card, My Gift Cards with every card state, gift card row in order history' },
     buy: { about: 'Purchase dialog with live card preview, two cards stacked, sender and message' },
     limit: { about: 'Purchase dialog when the 24-hour limit is used up' },
+    custom: { about: 'Buyer-entered face value: out-of-range hint, then a valid amount on the card preview' },
     pay: { about: 'Existing checkout dialog with the gift card subtitle while waiting for Stripe' },
     done: { about: 'Cards-ready dialog after payment, per-card copy link and more menu' },
     redeem: { about: 'Redeeming a bought card for yourself: top-up balance, never expires' },
@@ -37,6 +38,20 @@ export default {
     if (ui.case === 'limit') {
       assert.equal(await dialog.getByRole('button', { name: await ui.t('billing.giftCardPurchase.pay'), exact: true }).isDisabled(), true);
       await ui.capture('limit');
+      return;
+    }
+    if (ui.case === 'custom') {
+      const customLabel = await ui.t('billing.amount.custom');
+      await dialog.getByRole('button', { name: customLabel, exact: true }).click();
+      const amount = dialog.getByRole('textbox', { name: customLabel, exact: true });
+      await amount.fill('5');
+      assert.equal(await amount.getAttribute('aria-invalid'), 'true');
+      assert.equal(await dialog.getByRole('button', { name: await ui.t('billing.giftCardPurchase.pay'), exact: true }).isDisabled(), true);
+      await ui.capture('custom-invalid');
+      await amount.fill('75.5');
+      await dialog.getByRole('button', { name: await ui.t('billing.giftCardPurchase.increase'), exact: true }).click();
+      assert.equal(await dialog.getByRole('button', { name: await ui.t('billing.giftCardPurchase.pay'), exact: true }).isDisabled(), false);
+      await ui.capture('custom');
       return;
     }
     await dialog.getByRole('button', { name: await ui.t('billing.giftCardPurchase.faces.cat'), exact: true }).click();
