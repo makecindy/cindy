@@ -11,6 +11,10 @@ import {
   type RegionalMoney,
 } from './regionalMoney.js';
 
+type TokenCounts = Pick<TurnUsageDetails, 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheCreateTokens'>;
+type ModelTokenUsage = TokenCounts & UsageBillingSource & { model: string };
+const tokenFields = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreateTokens'] as const;
+
 export interface TurnUsageDetails extends UsageBillingSource {
   /** Snapshot for this user round; not an incremental segment charge. */
   additionalCosts?: RegionalMoney[];
@@ -47,6 +51,8 @@ export interface TurnUsageDetails extends UsageBillingSource {
   firstUserRound?: true;
   /** 本轮主要模型；能确定时填写。 */
   model?: string;
+  /** Exact per-model, per-source token counters, independent of pricing. */
+  perModelTokens?: ModelTokenUsage[];
   /** 本轮涉及多个模型时的分桶列表。 */
   models?: string[];
   /**
@@ -72,6 +78,7 @@ export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
   stepContextTokens?: number;
   model?: string | null;
   models?: Array<string | null | undefined> | readonly (string | null | undefined)[];
+  perModelTokens?: readonly ModelTokenUsage[];
   perModelCost?: ReadonlyArray<
     | (UsageBillingSource & {
         model?: string | null;
@@ -134,6 +141,29 @@ function sanitizePerModelCost(
   }
   return rows.length ? groupUsageCostRows(rows.map(row => ({ ...row, category: 'conversation' })))
     .map(row => ({ model: row.model, money: row.money, ...normalizeUsageBillingSource(row) })) : undefined;
+}
+
+/** Only publish a breakdown when all four columns reconcile with the same receipt.
+ * Include zero-price models and keep one model on different routes separate. */
+function normalizeModelTokenRows(value: unknown, totals: TokenCounts): ModelTokenUsage[] | undefined {
+  if (!Array.isArray(value) || !value.length) return undefined;
+  const grouped = new Map<string, ModelTokenUsage>();
+  const sum = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 };
+  for (const row of value) {
+    if (!row || typeof row !== 'object') return undefined;
+    const model = sanitizeModel(row.model);
+    if (!model || !tokenFields.every(key => Number.isSafeInteger(row[key]) && row[key] >= 0)) return undefined;
+    const source = normalizeUsageBillingSource(row);
+    const key = JSON.stringify([model, source.providerId, source.billingSource, source.providerName]);
+    const entry = grouped.get(key) ?? { model, ...source, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 };
+    for (const field of tokenFields) {
+      entry[field] += row[field];
+      sum[field] += row[field];
+    }
+    grouped.set(key, entry);
+  }
+  return tokenFields.every(key => Number.isSafeInteger(sum[key]) && sum[key] === totals[key])
+    ? [...grouped.values()] : undefined;
 }
 
 /**
@@ -204,6 +234,7 @@ export function aggregateTurnUsageDetails(
     stepContextTokens,
     model: modelNames.length === 1 ? modelNames[0] : undefined,
     models: modelNames,
+    perModelTokens: details.flatMap(item => item.perModelTokens ?? []),
     perModelCost: perModel,
     additionalCosts: [...details].reverse().find(detail => detail.additionalCosts)?.additionalCosts,
     firstUserRound: details.some((detail) => detail.firstUserRound === true),
@@ -259,6 +290,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const model = sanitizeModel(input.model);
   const models = uniqueModels(input.models);
   const perModelCost = sanitizePerModelCost(input.perModelCost);
+  const perModelTokens = normalizeModelTokenRows(input.perModelTokens, { inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens });
   const trace = normalizeGenerationTrace(input.trace);
 
   return {
@@ -276,6 +308,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
     ...(model ? { model } : {}),
     ...(models ? { models } : {}),
     ...(perModelCost ? { perModelCost } : {}),
+    ...(perModelTokens ? { perModelTokens } : {}),
     ...(input.firstUserRound === true ? { firstUserRound: true as const } : {}),
     ...(trace ? { trace } : {}),
   };
@@ -304,6 +337,7 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
       stepContextTokens:
         typeof raw.stepContextTokens === 'number' ? raw.stepContextTokens : undefined,
       firstUserRound: raw.firstUserRound === true,
+      perModelTokens: Array.isArray(raw.perModelTokens) ? raw.perModelTokens : undefined,
       trace: raw.trace,
       perModelCost: Array.isArray(raw.perModelCost)
         ? raw.perModelCost.map((e) =>
