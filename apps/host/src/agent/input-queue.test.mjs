@@ -7743,7 +7743,8 @@ async function generatedImageFixture(t, id) {
   const published = [];
   const hub = { publish: event => published.push(event) };
   const persistMessage = createHostMessageStore({ getOwner: getCurrentDbClientSnapshot, publish: event => hub.publish(event) });
-  const images = createHostGeneratedImages({ createMessage: persistMessage, publish: event => hub.publish(event) });
+  const images = createHostGeneratedImages({ createMessage: persistMessage, publish: event => hub.publish(event),
+    isProfileHeld: () => h.queue.isHeldForDesktop() });
   const h = createHarness({ hub, persistMessage, getOwner: getCurrentDbClientSnapshot,
     deliverCodexGeneratedImage: images.deliverCodexGeneratedImage,
     readSession: async sid => ({ id: sid, status: 'active', agentKind: 'codex', model: 'm', workingDir: db.root,
@@ -7770,7 +7771,7 @@ async function generatedImageFixture(t, id) {
     return { session, holds, emitImage, rows, endTurn };
   };
   const first = await openTask(id);
-  return { ...first, db, h, published, refs, openTask };
+  return { ...first, db, h, images, published, refs, openTask };
 }
 const resultOf = row => JSON.parse(JSON.parse(row.content));
 
@@ -8184,6 +8185,34 @@ test('reading the history recovers a generated image whose delivery failed, once
   assert.equal(resultOf(f.rows()[1]).xdt_image_url, `cindy-media://blobs/${hash}.png`);
   await waitFor(() => f.refs().length === 1);
   assert.deepEqual(f.refs(), [{ hash, ref_kind: 'session-attachment', ref_id: 'image-recover' }]);
+});
+
+// Rule: history reads remain available during a desktop hold without writing shared images.
+// Gap: the history hook retried failed deliveries even on the read-only path. Minimal input:
+// one failed image whose source becomes available during a hold. Tier: unit with a fixture
+// owner database, the Host history reader, and the real image delivery and media stores.
+test('reading history during a desktop hold defers image recovery until release', { timeout: 30_000 }, async t => {
+  const id = 'image-recover-held';
+  const f = await generatedImageFixture(t, id);
+  const file = path.join(f.db.root, 'generated image.png');
+  f.emitImage({ path: file });
+  await f.holds[0];
+  await f.endTurn();
+  await waitFor(() => !f.h.queue.projection(id).turnInProgress);
+  const before = f.rows();
+  assert.equal(resultOf(before[1]).native_image_delivery.state, 'failed');
+  writeFileSync(file, Buffer.from(PNG_1X1, 'base64'));
+  f.h.queue.holdForDesktop('Desktop is using the profile');
+  assert.ok((await readMessagesList(id)).length > 0, 'history remains available');
+  // Join the read-side hook if it started a recovery so the write check does not race it.
+  await recoverGeneratedImagesForHistory(id);
+  assert.deepEqual(f.rows(), before);
+  assert.deepEqual(f.refs(), []);
+
+  assert.equal(await f.h.queue.releaseDesktopHold(), true);
+  await f.images.onProfileReleased();
+  assert.equal(resultOf(f.rows()[1]).native_image_delivery.state, 'stored');
+  assert.equal(f.refs().length, 1);
 });
 
 // Unit: the Host broker's clearPending only takes the dismissing task's own card (甲 12). Rule: a

@@ -8,6 +8,7 @@ import { setGeneratedImageRecovery } from '../../../desktop/src/main/cindy-media
 import { readGeneratedImageFile } from '../../../desktop/src/main/cindy-media/generatedImageBytes.js';
 import { uiText } from '../../../desktop/src/main/uiText.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
+import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.js';
 import type { Message } from '../../../desktop/src/renderer/lib/ccAgent.types.js';
 import { isDataOwnerBroadcastScopeCurrent } from '../../../desktop/src/main/device-link/broadcast-tap.js';
 import type { DataOwnerBroadcastScope } from '../../../desktop/src/main/device-link/broadcastTapCore.js';
@@ -32,6 +33,7 @@ export const hostGeneratedImageStorage = createGeneratedImageStorage({
 export function createHostGeneratedImages(deps: {
   createMessage: GeneratedImageDeliveryPlatform['createMessage'];
   publish: (event: unknown) => void;
+  isProfileHeld: () => boolean;
 }) {
   const log = createLogger('generated-images');
   const delivery = createGeneratedImageDelivery({
@@ -69,10 +71,28 @@ export function createHostGeneratedImages(deps: {
       return readGeneratedImageFile(source);
     },
   });
-  // History reads and a deleted task recover or release images (localHistoryViewReader.ts, main.ts
-  // deleteSession); the owner database's readiness runs the cleanup receipts (main.ts), as the desktop's
-  // register.ts binds them.
-  setGeneratedImageRecovery(sessionId => delivery.recover(sessionId), () => delivery.reconcile());
+  let deferred: { clientEpoch: number; sessions: Set<string> } | undefined;
+  async function recoverFromHistory(sessionId: string) {
+    if (!deps.isProfileHeld()) return delivery.recover(sessionId);
+    const owner = getCurrentDbClientSnapshot();
+    if (!owner) return;
+    if (deferred?.clientEpoch !== owner.clientEpoch) {
+      deferred = { clientEpoch: owner.clientEpoch, sessions: new Set() };
+    }
+    deferred.sessions.add(sessionId);
+  }
+  // History reads and task deletion can start writes to the image store. Resume work deferred by a
+  // hold only for the same open owner database. A new hold can defer the remaining work again.
+  async function onProfileReleased() {
+    const pending = deferred;
+    deferred = undefined;
+    if (!pending) return;
+    for (const sessionId of pending.sessions) {
+      if (getCurrentDbClientSnapshot()?.clientEpoch !== pending.clientEpoch) return;
+      await recoverFromHistory(sessionId).catch(() => undefined);
+    }
+  }
+  setGeneratedImageRecovery(recoverFromHistory, () => delivery.reconcile());
 
   /** register.ts deliverCodexGeneratedImage: the tool events published for the image, `[]` when none. */
   function deliverCodexGeneratedImage(sessionId: string, event: AgentEvent): Promise<readonly AgentEvent[]> {
@@ -87,5 +107,5 @@ export function createHostGeneratedImages(deps: {
       return Promise.resolve([]);
     }
   }
-  return { delivery, deliverCodexGeneratedImage };
+  return { delivery, deliverCodexGeneratedImage, onProfileReleased };
 }

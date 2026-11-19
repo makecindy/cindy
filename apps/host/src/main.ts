@@ -419,6 +419,7 @@ function startProfileCoexistence(dataDir: string, scan: () => Promise<number[]>)
     onInputReleased() {
       // A Pi receipt retry held while the desktop used the profile runs now (agent/usage-recording.ts).
       usageRecording.onProfileReleased();
+      void generatedImages.onProfileReleased();
       hostLog.info('the desktop left this profile; sends are accepted again');
     },
   });
@@ -1235,6 +1236,7 @@ const insertSessionMessage = createHostMessageStore({ getOwner: getCurrentDbClie
 const generatedImages = createHostGeneratedImages({
   createMessage: (sessionId, body, opts) => insertSessionMessage(sessionId, body, opts),
   publish: (event: unknown) => eventHub.publish(event),
+  isProfileHeld: () => inputQueue.isHeldForDesktop(),
 });
 
 const messageRecovery = createHostMessageRecovery({ getOwner: getCurrentDbClientSnapshot,
