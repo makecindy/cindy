@@ -60,10 +60,24 @@ export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
     && (
-      (command.scope === 'repo' && command.runtimeStatus === 'discovered')
+      command.enabled === false
+      || (command.scope === 'repo' && command.runtimeStatus === 'discovered')
       || command.runtimeStatus === 'unknown'
       || command.runtimeStatus === 'failed'
     );
+}
+
+/** Selection only writes a draft. Sending must still confirm this path in Pi's catalog. */
+export function isSlashCommandSelectable(command: UnifiedCommand): boolean {
+  return !isSlashCommandUnavailable(command) || (
+    command.kind === 'agent-skill'
+    && command.enabled !== false
+    && command.source === 'skill'
+    && command.scope === 'repo'
+    && command.runtimeStatus === 'discovered'
+    && Boolean(command.path)
+    && command.runtimeCommandName === `skill:${command.name}`
+  );
 }
 
 export function isCindyOfficialSlashCommand(command: UnifiedCommand): boolean {
@@ -71,7 +85,7 @@ export function isCindyOfficialSlashCommand(command: UnifiedCommand): boolean {
 }
 
 export function hasAvailableSlashCommand(commands: readonly UnifiedCommand[]): boolean {
-  return commands.some((command) => !isSlashCommandUnavailable(command));
+  return commands.some(isSlashCommandSelectable);
 }
 
 export function slashCommandInvocationName(command: UnifiedCommand): string {
@@ -190,11 +204,11 @@ export function rebaseInlineRangesAfterSlashCommandRewrite<T extends { start: nu
 
 /** First available command index, or 0 when nothing is available/present. */
 export function firstAvailableSlashCommandIndex(commands: readonly UnifiedCommand[]): number {
-  const index = commands.findIndex((command) => !isSlashCommandUnavailable(command));
+  const index = commands.findIndex(isSlashCommandSelectable);
   return index >= 0 ? index : 0;
 }
 
-/** Move with wraparound while skipping unavailable discovered project skills. */
+/** Move with wraparound while skipping rows that cannot be selected into a draft. */
 export function nextAvailableSlashCommandIndex(
   commands: readonly UnifiedCommand[],
   current: number,
@@ -204,7 +218,7 @@ export function nextAvailableSlashCommandIndex(
   let index = current;
   for (let step = 0; step < commands.length; step++) {
     index = (index + delta + commands.length) % commands.length;
-    if (!isSlashCommandUnavailable(commands[index])) return index;
+    if (isSlashCommandSelectable(commands[index])) return index;
   }
   return current;
 }
@@ -565,6 +579,16 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   try {
     const refreshed = await params.reload();
     const refreshedCommand = findCommand(refreshed);
+    // A cold-start preview may disappear or lose a name collision once Pi
+    // starts. Never substitute a different Skill (or Desktop command) for it.
+    // Keep the unavailable preview so the existing retry/failure path owns it.
+    if (current?.kind === 'agent-skill' && current.scope === 'repo'
+      && current.runtimeStatus === 'discovered' && current.path
+      && (refreshedCommand?.kind !== 'agent-skill'
+        || refreshedCommand.path !== current.path
+        || refreshedCommand.scope !== current.scope)) {
+      return { command: current, commands: params.commands };
+    }
     return refreshedCommand || !current
       ? { command: refreshedCommand, commands: refreshed }
       : { command: current, commands: params.commands };

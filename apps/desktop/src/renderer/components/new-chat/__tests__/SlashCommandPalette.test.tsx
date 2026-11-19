@@ -37,6 +37,21 @@ const discoveredProjectSkill: UnifiedCommand = {
 };
 
 describe('SlashCommandPalette project Skill rows', () => {
+  // #11507, unit: a real Pi preview has a path and runtime alias. Existing
+  // disabled-row coverage only exercised incomplete previews, not first input.
+  it('selects a discovered Pi project skill into the first message without claiming it is loaded', () => {
+    const command: UnifiedCommand = { ...discoveredProjectSkill,
+      path: '/repo/.agents/skills/demo/SKILL.md', runtimeCommandName: 'skill:demo' };
+    const onSelect = vi.fn();
+    render(<SlashCommandPalette query="demo" commands={[command]} focusedIndex={0}
+      onFocusedIndexChange={vi.fn()} onSelect={onSelect} onClose={vi.fn()} />);
+    const row = screen.getByRole('button', { name: 'demo' });
+    expect(row.getAttribute('aria-disabled')).toBe('false');
+    fireEvent.mouseDown(row);
+    expect(onSelect).toHaveBeenCalledWith(command);
+    expect(command.runtimeStatus).toBe('discovered');
+  });
+
   it('opens details from the portaled information panel without inserting the Skill', () => {
     const command: UnifiedCommand = { ...discoveredProjectSkill, path: '/repo/.pi/skills/demo/SKILL.md' };
     const onSelect = vi.fn();

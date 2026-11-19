@@ -286,7 +286,7 @@ import {
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
   hasUnavailableProjectSkillPreview,
-  isSlashCommandUnavailable,
+  isSlashCommandSelectable,
   isSlashCommandRosterReady,
   loadAllCommands,
   nextAvailableSlashCommandIndex,
@@ -5242,7 +5242,7 @@ export function ChatInput({
   useEffect(() => {
     setSlashFocus((current) =>
       current >= filteredCommands.length ||
-      (filteredCommands[current] && isSlashCommandUnavailable(filteredCommands[current]))
+      (filteredCommands[current] && !isSlashCommandSelectable(filteredCommands[current]))
         ? firstAvailableSlashCommandIndex(filteredCommands)
         : current,
     );
@@ -5388,7 +5388,7 @@ export function ChatInput({
                 if (trigger.kind === 'slash') setSuppressedSlashAt(trigger.from);
                 return true;
               }
-              if (isSlashCommandUnavailable(focusedCommand)) {
+              if (!isSlashCommandSelectable(focusedCommand)) {
                 setSlashFocus(firstAvailableSlashCommandIndex(filteredCommands));
                 if (!hasAvailableSlashCommand(filteredCommands) && trigger.kind === 'slash') {
                   setSuppressedSlashAt(trigger.from);
@@ -5443,7 +5443,7 @@ export function ChatInput({
         trigger.kind !== 'slash' ||
         composerMutationLockedRef.current ||
         editor.view.composing ||
-        isSlashCommandUnavailable(cmd)
+        !isSlashCommandSelectable(cmd)
       ) {
         return;
       }

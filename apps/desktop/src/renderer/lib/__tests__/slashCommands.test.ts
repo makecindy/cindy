@@ -17,6 +17,7 @@ import {
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
   reconcilePiRuntimeCommandForDispatchWithRetry,
+  reconcilePiRuntimeCommandForSessionDispatch,
   rewriteAgentSkillInvocationForDispatch,
   rewritePiSkillAliasFromCommand,
   rewritePiSkillMessageForSend,
@@ -34,6 +35,48 @@ const skill = (overrides: Partial<Extract<UnifiedCommand, { kind: 'agent-skill' 
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+// #11507, unit: production palette navigation and cold dispatch. Existing
+// tests covered unavailable previews and loaded commands separately, not a
+// selectable preview becoming a confirmed invocation on the first message.
+describe('Pi first-message project skill selection', () => {
+  const preview = skill({ scope: 'repo', runtimeStatus: 'discovered',
+    path: '/repo/.agents/skills/demo/SKILL.md', runtimeCommandName: 'skill:demo' });
+
+  it('lets keyboard focus reach the preview while dispatch still waits for Pi', async () => {
+    const failed = skill({ name: 'failed', runtimeStatus: 'failed' });
+    const commands = [failed, preview];
+    expect(firstAvailableSlashCommandIndex(commands)).toBe(1);
+    expect(nextAvailableSlashCommandIndex(commands, 0, 1)).toBe(1);
+    expect(hasAvailableSlashCommand(commands)).toBe(true);
+    expect(rewriteAgentSkillInvocationForDispatch('/demo first', preview)).toBe('/demo first');
+    let prepared = false;
+    const loaded = { ...preview, runtimeStatus: 'loaded' as const };
+    const result = await reconcilePiRuntimeCommandForSessionDispatch({
+      agentKind: 'pi', sessionId: 'new-task', commandName: 'demo', commands: [preview],
+      prepareRuntime: async () => { prepared = true; }, retryDelaysMs: [],
+      reload: async () => prepared ? [loaded] : [preview],
+      onCatalogUnavailable: () => { throw new Error('unconfirmed'); },
+    });
+    expect(rewriteAgentSkillInvocationForDispatch('/demo first', result.command)).toBe('/skill:demo first');
+  });
+
+  it.each(['missing', 'different-path', 'disabled', 'unconfirmed'] as const)(
+    'does not dispatch a %s replacement of the preview', async (state) => {
+      let prepared = false;
+      const replacement = { ...preview, runtimeStatus: 'loaded' as const,
+        ...(state === 'different-path' ? { path: '/another/demo/SKILL.md' } : {}),
+        ...(state === 'disabled' ? { enabled: false } : {}) };
+      await expect(reconcilePiRuntimeCommandForSessionDispatch({
+        agentKind: 'pi', sessionId: 'new-task', commandName: 'demo', commands: [preview],
+        prepareRuntime: async () => { prepared = true; }, retryDelaysMs: [],
+        reload: async () => !prepared || state === 'unconfirmed' ? [preview]
+          : state === 'missing' ? [] : [replacement],
+        onCatalogUnavailable: () => { throw new Error('unconfirmed'); },
+      })).rejects.toThrow('unconfirmed');
+    },
+  );
 });
 
 function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedCommand[] }) {

@@ -171,10 +171,23 @@ export default {
           const data = new DataTransfer(); data.setData('text/plain', text);
           e.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
         }, copied);
-        assert.equal(await editor.locator(`${tag} > li`).count(), texts.length);
-        await checkItems();
+        // composerListDocument.test.ts: pasted CJK ordinals deliberately stay
+        // literal; only typing the marker creates a structured CJK list.
+        // Keep the typed marker geometry above and verify the real clipboard
+        // contract here rather than expecting paste to promote that syntax.
+        let firstParagraph;
+        if (marker === '、') {
+          assert.equal(await editor.locator('ol, ul').count(), 0);
+          assert.equal(await editor.locator('p').count(), texts.length);
+          assert.equal((await editor.locator('p').allTextContents()).join('\n'), copied);
+          firstParagraph = editor.locator('p').first();
+        } else {
+          assert.equal(await editor.locator(`${tag} > li`).count(), texts.length);
+          await checkItems();
+          firstParagraph = items.first().locator('p');
+        }
         await editor.focus();
-        await items.first().locator('p').evaluate(async e => {
+        await firstParagraph.evaluate(async e => {
           const range = document.createRange(), selection = window.getSelection();
           range.setStart(e.firstChild, 0); range.collapse(true);
           selection.removeAllRanges(); selection.addRange(range);
@@ -182,8 +195,8 @@ export default {
           await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         });
         await page.keyboard.insertText('English ');
-        assert.ok((await items.first().textContent()).startsWith('English '));
-        assert.equal(await items.first().evaluate(e => getComputedStyle(e).direction), 'ltr');
+        assert.ok((await firstParagraph.textContent()).startsWith('English '));
+        assert.equal(await firstParagraph.evaluate(e => getComputedStyle(e).direction), 'ltr');
       }
       await ui.capture('restored');
       return;

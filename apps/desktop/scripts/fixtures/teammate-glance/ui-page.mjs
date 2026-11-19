@@ -15,7 +15,7 @@ export default {
     'src/renderer/features/device-link/refreshRemoteSessions': `export const refreshRemoteDeviceSessions=async()=> 'done';`,
     'src/renderer/hooks/useCCSessions': `const tasks=[{id:'task-1',title:'整理项目反馈',status:'active',updatedAt:'2026-10-28T10:00:00Z'}, {id:'task-2',title:'完善手机任务入口',status:'active',updatedAt:'2026-10-28T09:00:00Z'}];export const useCCSessions=()=>({sessions:${data}.case==='new'?[]:tasks});`,
     'src/renderer/features/bots/botFollowScopes': { partial: `export const useTaskCreatorIndex=()=>new Map(['task-1','task-2'].map(id=>[JSON.stringify([null,id]),new Set([JSON.stringify(['teammate','cindy'])])]));` },
-    'src/renderer/contexts/PrRefsContext': { partial: `export const usePrRefsForSession=()=>[]; export const usePrRefsForSessions=ids=>ids.length?[{sessionId:'task-1',owner:'example',repo:'app',prNumber:42,lastSeenAt:${now + 1}}]:[]; export const usePrStatuses=()=>({statuses:new Map([['example/app#42',{ok:true,status:'merged',title:'修复伙伴任务的跨设备入口'}]]),successfulStatuses:new Map()}); export const usePrActions=()=>({});` },
+    'src/renderer/contexts/PrRefsContext': { partial: `export const usePrRefsForSession=()=>[]; export const usePrRefsForSessions=ids=>ids.length?[{sessionId:'task-1',owner:'example',repo:'app',prNumber:42,lastSeenAt:${now + 1}}]:[]; export const usePrStatuses=()=>({statuses:new Map([['example/app#42',{ok:true,status:'merged',title:'修复伙伴任务的跨设备入口'}]]),successfulStatuses:new Map()}); export const usePrActions=()=>({registerPrConsumer:()=>()=>{}});` },
     'src/renderer/lib/sessionAttentionStore': { partial: `export const useSessionAttentionKind=id=>id==='task-1'?'done':undefined;` },
     'src/renderer/features/bots/botStore': {
       partial: `export const useBotProfiles=()=>${data}.case==='new'?[]:[{id:'cindy-default',name:'Cindy',templateId:'cindy',status:'active',sessionId:'chat-1'}];export const useBotUnreadCounts=()=>({});`,
@@ -25,7 +25,7 @@ export default {
       {id:'cindy-default',name:'Cindy',deviceId:'mbp',deviceName:'Chris-MBP-M5',online:false,sessionId:'r2',avatar:'',status:'active'},
       {id:'cindy-default',name:'Cindy',deviceId:'imac',deviceName:'Office iMac',online:false,sessionId:'r3',avatar:'',status:'active'}];`,
     'src/renderer/features/device-link/useDeviceLinkDeviceList':
-      "export const useDeviceLinkDeviceList=()=>[{deviceId:'self',name:'Mac-Studio',isSelf:true}];",
+      "export const useDeviceLinkDeviceListRequestState=()=>({status: 'ready',error: null}); export const useDeviceLinkDeviceList=()=>[{deviceId:'self',name:'Mac-Studio',isSelf:true}];",
     'src/renderer/features/bots/botDelegationHistory': `export const useBotDelegationRecords=()=>${data}.case==='new'?[]:[
       {id:'d1',requestingBotId:'cindy-default',status:'completed',title:'October growth report',childSessionId:'c1',completedAt:${now},updatedAt:${now},
        artifacts:[{path:'reports/October growth report.docx',absolutePath:'/w/reports/October growth report.docx',status:'added'},{path:'src/app.ts',status:'modified'}]},

@@ -33,6 +33,7 @@ import {
   filterSlashCommands,
   isCindyOfficialSlashCommand,
   isSlashCommandUnavailable,
+  isSlashCommandSelectable,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
 import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
@@ -283,7 +284,7 @@ export function SlashCommandPalette({
         ) : (
           filtered.map((cmd, idx) => {
             const focused = idx === focusedIndex;
-            const unavailable = isSlashCommandUnavailable(cmd);
+            const unavailable = !isSlashCommandSelectable(cmd);
             const official = isCindyOfficialSlashCommand(cmd);
             return (
               <button
