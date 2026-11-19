@@ -4387,6 +4387,7 @@
         "authorizedToast": "已登 {{name}}",
         "authorizeFailed": "{{name}} 登入未成，請再試",
         "nameLabel": "顯名",
+        "geminiImageKeyNote": "存之，此鑰通新連之問答，亦供其後 Gemini 繪圖。惟欲繪圖，可不擇問答模型。",
         "onlyAgentNote": "此供方唯支援 {{agent}}",
         "endpointLabel": "{{agent}} 基礎 URL",
         "noAuthNote": "此 Proxy 無須客戶端金鑰；Cindy 轉發前將除 CLI 之訂閱憑證。",

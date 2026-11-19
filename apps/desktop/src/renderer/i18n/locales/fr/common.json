@@ -4486,6 +4486,7 @@
         "authorizedToast": "Connecté à {{name}}",
         "authorizeFailed": "Impossible de se connecter à {{name}}. Réessayez.",
         "nameLabel": "Nom affiché",
+        "geminiImageKeyNote": "Après enregistrement, cette clé servira aux discussions de cette connexion et aux prochaines générations d’images Gemini. Pour les images seules, décochez tous les modèles de discussion.",
         "onlyAgentNote": "Ce fournisseur prend uniquement en charge {{agent}}",
         "endpointLabel": "URL de base {{agent}}",
         "noAuthNote": "Ce proxy ne nécessite aucune clé client ; Cindy retire les identifiants d'abonnement de la CLI avant de transmettre les requêtes.",

@@ -4387,6 +4387,7 @@
         "authorizedToast": "已登录 {{name}}",
         "authorizeFailed": "{{name}} 登录失败，请重试",
         "nameLabel": "显示名称",
+        "geminiImageKeyNote": "保存后，这把 Key 将用于新连接的对话和此后的 Gemini 生图。只需生图时，可以不勾选对话模型。",
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",

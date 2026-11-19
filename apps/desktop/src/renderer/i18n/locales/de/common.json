@@ -4430,6 +4430,7 @@
         "authorizedToast": "Bei {{name}} angemeldet",
         "authorizeFailed": "Anmeldung bei {{name}} fehlgeschlagen. Erneut versuchen.",
         "nameLabel": "Anzeigename",
+        "geminiImageKeyNote": "Nach dem Speichern wird dieser Schlüssel für Chats über diese Verbindung und künftig für die Bilderzeugung mit Gemini verwendet. Wenn Sie nur Bilder erzeugen möchten, wählen Sie alle Chatmodelle ab.",
         "onlyAgentNote": "Dieser Anbieter unterstützt nur {{agent}}",
         "endpointLabel": "{{agent}}-Basis-URL",
         "noAuthNote": "Dieser Proxy benötigt keinen Client-Schlüssel; Cindy entfernt die Anmeldeinformationen für das CLI-Abonnement vor der Weiterleitung.",
