@@ -1149,14 +1149,14 @@
   },
   "awayGuard": {
     "status": "Cindy está trabajando",
-    "hint": "Presiona cualquier tecla o la tecla Touch ID para bloquear y luego desbloquea con tu huella o contraseña",
+    "hint": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
     "lockFailed": {
       "status": "Cindy no pudo bloquear esta Mac",
       "hint": "Toca la computadora para volver a intentar el bloqueo. Si sigue sin bloquearse, verifícate con Touch ID o tu contraseña para quitar la pantalla. También puedes cerrar la tapa o pulsar el botón de encendido.",
       "hintWindows": "Toca la computadora para volver a intentar el bloqueo. Si sigue sin bloquearse, verifícate con Windows Hello o tu PIN para quitar la pantalla. También puedes presionar la tecla del logotipo de Windows + L."
     },
-    "hintWindows": "Presiona cualquier tecla para bloquear; desbloquea con Windows Hello o tu contraseña",
-    "hintLinux": "Presiona cualquier tecla para bloquear; desbloquea con tu contraseña",
+    "hintWindows": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
+    "hintLinux": "Pulsa cualquier tecla para ver la pantalla de desbloqueo",
     "verifyReason": "quitar la pantalla de privacidad"
   },
   "appBadge": {

@@ -1132,14 +1132,14 @@
   },
   "awayGuard": {
     "status": "Cindy is working",
-    "hint": "Press any key or the Touch ID key to lock, then unlock with your fingerprint or password",
+    "hint": "Press any key to show the unlock screen",
     "lockFailed": {
       "status": "Cindy couldn't lock this Mac",
       "hint": "Touch the computer to try locking again. If it still can’t lock, verify with Touch ID or your password to remove the cover. You can also close the lid or press the power button to lock.",
       "hintWindows": "Touch the computer to try locking again. If it still can’t lock, verify with Windows Hello or your PIN to remove the cover. You can also press the Windows logo key + L to lock."
     },
-    "hintWindows": "Press any key to lock; unlock with Windows Hello or your password",
-    "hintLinux": "Press any key to lock; unlock with your password",
+    "hintWindows": "Press any key to show the unlock screen",
+    "hintLinux": "Press any key to show the unlock screen",
     "verifyReason": "remove the privacy screen"
   },
   "appBadge": {
