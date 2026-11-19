@@ -87,6 +87,24 @@ export interface FileContentState {
   content: FileContent;
 }
 
+async function fetchRemotePreview(
+  request: Parameters<typeof window.electronAPI.fileBrowser.fetchRemote>[0],
+  fallback: FileContent,
+): Promise<FileContent> {
+  const copy = await window.electronAPI.fileBrowser.fetchRemote(request);
+  if (!copy.ok) {
+    log.warn('fetchRemote failed, falling back', { relPath: request.relPath, message: copy.message });
+    return fallback;
+  }
+  const { relPath, size, mtimeMs } = request;
+  return {
+    kind: 'cached',
+    stat: { relPath, type: 'file', size, mtimeMs },
+    cachePath: copy.cachePath,
+    stale: copy.stale === true,
+  };
+}
+
 function isContentForRelPath(content: FileContent, relPath: string): boolean {
   switch (content.kind) {
     case 'text':
@@ -142,7 +160,7 @@ export function useFileContent(
   // refresh 计数器:bump 一次触发下面 effect 重跑(包含 IPC 重读)。
   const [refreshTick, setRefreshTick] = useState(0);
   const readEpoch = useRef(0);
-  const [awaitingResumeRead, setAwaitingResumeRead] = useState(false);
+  const [awaitingVerification, setAwaitingVerification] = useState(false);
 
   // 内容缓存的作用域键:远程会话必须把传输端点编进 key——不同 SSH 主机 /
   // 被控设备可能暴露相同绝对路径 workdir,仅按 workdir|relPath 会串缓存
@@ -157,7 +175,7 @@ export function useFileContent(
   useEffect(() => {
     const epoch = ++readEpoch.current;
     if (!visible) {
-      setAwaitingResumeRead(true);
+      setAwaitingVerification(true);
       preserveViewOnRead.current = true;
       // A read-only external file may not have a tree watcher of its own.
       if (relPath && !hasFileTreeWatcher(workdir, remoteHostId, deviceId)) invalidateCachedFile(contentCacheScope, relPath);
@@ -176,7 +194,7 @@ export function useFileContent(
     const cached = getCachedFileContent(contentCacheScope, relPath);
     if (cached) {
       setState({ workdir, relPath, content: cached });
-      setAwaitingResumeRead(cached.kind !== 'text' || cached.truncated);
+      setAwaitingVerification(cached.kind !== 'text' || cached.truncated);
       return;
     }
 
@@ -223,7 +241,7 @@ export function useFileContent(
           });
           transferProgress = progress;
           try {
-            const res = await window.electronAPI.fileBrowser.fetchRemote({
+            const content = await fetchRemotePreview({
               workdir,
               relPath,
               size,
@@ -231,23 +249,8 @@ export function useFileContent(
               remoteHostId,
               deviceId,
               requestId: progress.requestId,
-            });
-            if (stale()) return;
-            if (res.ok) {
-              setState({
-                workdir,
-                relPath,
-                content: {
-                  kind: 'cached',
-                  stat: { relPath, type: 'file', size, mtimeMs },
-                  cachePath: res.cachePath,
-                  stale: res.stale === true,
-                },
-              });
-            } else {
-              log.warn('fetchRemote failed, falling back', { relPath, message: res.message });
-              setState({ workdir, relPath, content: fallback });
-            }
+            }, fallback);
+            if (!stale()) setState({ workdir, relPath, content });
           } finally {
             progress.dispose();
           }
@@ -303,7 +306,7 @@ export function useFileContent(
               resolvedPath: result.data.resolvedPath,
             },
           });
-          setAwaitingResumeRead(result.data.truncated);
+          setAwaitingVerification(result.data.truncated);
           return;
         }
         if (result.code === 'OVERSIZE' && result.stat) {
@@ -424,27 +427,45 @@ export function useFileContent(
           const targetRelPath = relPathRef.current;
           if (!targetRelPath) break;
           const epoch = readEpoch.current;
+          const stale = () => disposed || !visibleRef.current || epoch !== readEpoch.current
+            || relPathRef.current !== targetRelPath || contentCacheScopeRef.current !== contentCacheScope;
           try {
-            const result = await fileBrowserApiFor(deviceId).readFile({ workdir, relPath: targetRelPath, remoteHostId });
-            if (disposed || !visibleRef.current || epoch !== readEpoch.current || relPathRef.current !== targetRelPath
-                || contentCacheScopeRef.current !== contentCacheScope) continue;
-            if (!result.ok || (result.data.truncated && (remoteHostId || deviceId))) {
-              // The event may have superseded the initial read/large-file fetch.
-              // Restart an unfinished/placeholder preview, but never replace
-              // an existing text editor with loading/fetching: that unmounts it
-              // and discards its draft. Fetch large content on explicit reopen;
-              // saves still validate the original resolved target.
-              const kind = stateRef.current.content.kind;
-              if (kind === 'loading' || kind === 'fetching'
-                  || (kind !== 'text' && result.ok && result.data.truncated)) {
-                setRefreshTick(t => t + 1);
-              }
+            const api = fileBrowserApiFor(deviceId);
+            const request = { workdir, relPath: targetRelPath, remoteHostId };
+            const result = await api.readFile(request);
+            if (stale()) continue;
+            const remote = Boolean(remoteHostId || deviceId);
+            if (result.ok && (!result.data.truncated || !remote)) {
+              const content = { ...result.data, kind: 'text' as const };
+              setCachedFileContent(contentCacheScope, content);
+              setState({ workdir, relPath: targetRelPath, content });
+              setAwaitingVerification(content.truncated);
               continue;
             }
-            const data = { ...result.data, kind: 'text' as const };
-            setCachedFileContent(contentCacheScope, data);
-            setState({ workdir, relPath: targetRelPath, content: data });
-            setAwaitingResumeRead(data.truncated);
+
+            const displayed = getVisibleFileContentState(stateRef.current, workdir, targetRelPath);
+            if ('stat' in displayed && !result.ok && (result.code === 'BINARY_FILE' || result.code === 'OVERSIZE')) {
+              const stat = result.code === 'OVERSIZE' ? result.stat : await api.stat(request);
+              if (stale()) continue;
+              const hasCopy = !remote || (displayed.kind === 'cached' && !displayed.stale);
+              if (hasCopy && displayed.stat.mtimeMs === stat.mtimeMs && displayed.stat.size === stat.size) continue;
+              const placeholder: FileContent = { kind: result.code === 'BINARY_FILE' ? 'binary' : 'oversize', stat };
+              const content = remote
+                ? await fetchRemotePreview(
+                    { ...request, deviceId, size: stat.size, mtimeMs: stat.mtimeMs },
+                    displayed.kind === 'cached' ? { ...displayed, stale: true } : placeholder,
+                  )
+                : placeholder;
+              if (!stale()) setState({ workdir, relPath: targetRelPath, content });
+              continue;
+            }
+
+            // An event can supersede an unfinished load. Keep an open text
+            // editor and its draft intact if the replacement cannot be read as text.
+            if (displayed.kind === 'loading' || displayed.kind === 'fetching'
+                || (displayed.kind !== 'text' && result.ok && result.data.truncated)) {
+              setRefreshTick(t => t + 1);
+            }
           } catch (err) {
             log.warn('silent re-read on change failed', err);
             if (!disposed && epoch === readEpoch.current
@@ -459,6 +480,7 @@ export function useFileContent(
     };
     const scheduleRead = () => {
       if (!visibleRef.current) return;
+      setAwaitingVerification(true);
       readEpoch.current++;
       pending = true;
       queueMicrotask(() => { void reread(); });
@@ -496,14 +518,24 @@ export function useFileContent(
   }, [workdir, contentCacheScope, remoteHostId, deviceId]);
 
   const refresh = useCallback((options?: { preserveEditor?: boolean }) => {
-    // 显式 invalidate 当前文件 + bump tick 触发 effect 重跑 → 走 miss 路径。
     if (!relPath) return;
     invalidateCachedFile(contentCacheScope, relPath);
-    if (options?.preserveEditor) preserveViewOnRead.current = true;
+    if (options?.preserveEditor) {
+      // A window can miss writes while unfocused. Recheck the open editor
+      // through the same queue as watch events, even if it stayed visible.
+      const displayed = getVisibleFileContentState(stateRef.current, workdir, relPath);
+      if (displayed.kind === 'text' && visibleRef.current && lastReadScope.current === contentCacheScope && silentRead.current) {
+        silentRead.current();
+        return;
+      }
+      preserveViewOnRead.current = true;
+    }
+    setAwaitingVerification(true);
+    readEpoch.current++;
     setRefreshTick((t) => t + 1);
     // contentCacheScope 必须进 deps:同 workdir 跨端点切换时闭包若滞留旧
     // scope,invalidate/写入会落进别的端点的缓存桶(串内容 + 反向覆写)。
-  }, [contentCacheScope, relPath]);
+  }, [contentCacheScope, workdir, relPath]);
 
   const setLocal = useCallback(
     (data: { content: string; size: number; mtimeMs: number; truncated: boolean; resolvedPath?: string }) => {
@@ -535,7 +567,7 @@ export function useFileContent(
 
   return {
     content: getVisibleFileContentState(state, workdir, relPath),
-    autosaveReady: visible && !awaitingResumeRead,
+    autosaveReady: visible && !awaitingVerification,
     refresh,
     setLocal,
   };

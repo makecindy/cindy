@@ -1370,7 +1370,7 @@ function VideoFilePreview({ workdir, stat, filePath, visible, cached = false }: 
           controls
           className="min-h-0 min-w-0 max-h-full max-w-full rounded-lg bg-black"
           preload="metadata"
-          src={toLocalFileUrl(filePath)}
+          src={toLocalFileUrl(filePath, `${stat.mtimeMs}-${stat.size}`)}
           onPlay={event => { if (!visible) event.currentTarget.pause(); }}
           onError={() => setVideoFailed(true)}
         />

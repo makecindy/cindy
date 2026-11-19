@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
+import { EditorView } from '@codemirror/view';
 import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
@@ -159,10 +160,12 @@ it.each([null, 'ssh'])('pauses the video on hide and keeps its position on retur
   const relPath = 'recording.mp4';
   let mtimeMs = 1;
   const readFile = vi.fn(async () => ({ ok: false, code: 'BINARY_FILE' }));
+  const onEvent = vi.fn((_listener: (event: { workdir: string; relPath: string; type: string }) => void) => () => {});
+  const fetchRemote = vi.fn(async () => ({ ok: true, cachePath: '/cache/video.mp4' }));
   vi.stubGlobal('electronAPI', {
-    fileBrowser: { listDir: async () => [], startWatch: vi.fn(), stopWatch: vi.fn(), onEvent: () => () => {},
+    fileBrowser: { listDir: async () => [], startWatch: vi.fn(), stopWatch: vi.fn(), onEvent,
       readFile, stat: async () => ({ type: 'file', relPath, size: 1024, mtimeMs }),
-      fetchRemote: async () => ({ ok: true, cachePath: '/cache/video.mp4' }),
+      fetchRemote,
       onTransferProgress: () => () => {} },
     search: { onEvent: () => () => {} },
   });
@@ -197,8 +200,75 @@ it.each([null, 'ssh'])('pauses the video on hide and keeps its position on retur
   view.rerender(tab(false, true));
   mtimeMs++;
   await act(async () => { view.rerender(tab(true, true)); });
-  const replacement = view.container.querySelector('video');
+  const replacement = view.container.querySelector('video')!;
   expect(replacement).not.toBe(video);
-  expect(replacement?.currentTime).toBe(0);
+  expect(replacement.currentTime).toBe(0);
+  // A visible player must also see a same-path replacement. Duplicate notices
+  // with unchanged metadata leave its buffered position and cached copy intact.
+  const notify = () => {
+    for (const [listener] of onEvent.mock.calls) listener({ workdir: ctx.workdir, relPath, type: 'change' });
+  };
+  replacement.currentTime = 9;
+  const previousSrc = replacement.src;
+  fetchRemote.mockClear();
+  await act(async () => { notify(); });
+  expect(view.container.querySelector('video')).toBe(replacement);
+  expect(replacement.currentTime).toBe(9);
+  expect(fetchRemote).not.toHaveBeenCalled();
+  mtimeMs++;
+  await act(async () => { notify(); notify(); });
+  const regenerated = view.container.querySelector('video')!;
+  expect(regenerated).not.toBe(replacement);
+  expect(regenerated.currentTime).toBe(0);
+  expect(regenerated.src).not.toBe(previousSrc);
+  expect(fetchRemote).toHaveBeenCalledTimes(remoteHostId ? 1 : 0);
   view.unmount();
+});
+
+// #11392, unit: a focused, still-visible SSH editor can miss a remote write.
+// Drive the actual window event while its Markdown save and disk read overlap.
+it.each(['A', 'B'])('preserves the draft through a failed focus recheck and reconciles remote content %s', async diskAfterFocus => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const relPath = 'note.md';
+  const response = (content: string) => ({ ok: true, data: { relPath, content, size: content.length, mtimeMs: 1, truncated: false } });
+  const pending = Promise.withResolvers<unknown>();
+  const readFile = vi.fn().mockResolvedValueOnce(response('A')).mockReturnValueOnce(pending.promise)
+    .mockResolvedValue(response(diskAfterFocus));
+  const writeFile = vi.fn().mockResolvedValue({ ok: true, size: 7, mtimeMs: 2 });
+  vi.stubGlobal('electronAPI', {
+    fileBrowser: { listDir: async () => [], startWatch: vi.fn(), stopWatch: vi.fn(), onEvent: () => () => {},
+      readFile, writeFile, cachePut: vi.fn() },
+    search: { onEvent: () => () => {} }, onSelectionContextMenuAddToChat: () => () => {},
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const ctx = { sessionId: 'focus', tabId: 'files', remoteHostId: 'ssh', deviceLinkDeviceId: null,
+    workdir: '/focus-' + diskAfterFocus, patchState: vi.fn(), onVisibilityChange: vi.fn(), setCloseInterceptor: () => () => {} };
+  const view = render(<FileBrowserBody ctx={ctx} state={{ selectedFilePath: relPath }} active />);
+  try {
+    await act(async () => {});
+    const node = view.container.querySelector<HTMLElement>('.cm-editor')!;
+    const editor = EditorView.findFromDOM(node)!;
+    act(() => { editor.dispatch({ changes: { from: 1, insert: ' draft' } }); });
+    fireEvent.blur(window);
+    fireEvent.focus(window);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(readFile).toHaveBeenCalledTimes(2);
+    expect(writeFile).not.toHaveBeenCalled();
+    await act(async () => { pending.resolve({ ok: false, code: 'READ_FAILED' }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(writeFile).not.toHaveBeenCalled();
+    fireEvent.focus(window);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(view.container.querySelector('.cm-editor')).toBe(node);
+    expect(editor.state.doc.toString()).toBe('A draft');
+    if (diskAfterFocus === 'B') {
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(view.getByRole('alert').textContent).toContain(i18n.t('ccAgent.workdirBrowse.fileBody.externalChangeBlocked'));
+    } else {
+      expect(writeFile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ relPath, remoteHostId: 'ssh', content: 'A draft' }));
+    }
+  } finally {
+    view.unmount();
+    vi.useRealTimers();
+  }
 });
