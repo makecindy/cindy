@@ -449,9 +449,8 @@
         "invalidTime": "Choose a future date and time within one year."
       },
       "taskListMode": {
-        "heading": "Task mode",
-        "tasks": "Task list",
-        "inbox": "Inbox"
+        "enterInbox": "Switch to inbox",
+        "leaveInbox": "Switch to task list"
       }
     },
     "search": {
