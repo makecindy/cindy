@@ -2,12 +2,15 @@
  * 私聊话题与群聊复用 ThreadPanel 和根消息行；原文放在话题 Session 的消息滚动区内
  * （回复、工具进度、确认、停止都在里面），所以这里不另做一套消息列表。
  */
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
+import { aroundMessagesByClientIdFor } from '@/lib/makerTransport';
+import { parseUserContent } from '@/lib/imageRef';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
 import type { ComposerBotMention } from '@/lib/fileTypes';
 import type { BotChatIdentity } from './BotSessionContentHeader';
@@ -16,8 +19,26 @@ import type { ThreadPanelResize } from './useThreadPanelResize';
 import { BotGroupTimelineItem } from './BotGroupTimelineItem';
 import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { botDmThreadReadKey, markBotRead } from './botReadState';
+import type { BotGroupAttachment } from '../../../shared/botGroupChat';
 
-/** The root message as the main chat has it loaded; null while it is not among the loaded rows. */
+type RootMessage = Pick<ChatMessage, 'clientId' | 'role' | 'content' | 'createdAt' | 'images' | 'files'>;
+
+/** Keep attachment pointers intact; the shared row owns previews and missing-file states. */
+function rootAttachments(root: RootMessage): BotGroupAttachment[] {
+  return [
+    ...(root.images ?? []).map((image, index): BotGroupAttachment => ({
+      id: `${root.clientId}:image:${index}`, name: image.originalName ?? '', category: 'image',
+      mimeType: image.mimeType, size: 'size' in image ? image.size ?? 0 : 0,
+      url: 'url' in image ? image.url : `data:${image.mimeType};base64,${image.base64}`, path: null,
+    })),
+    ...(root.files ?? []).map((file, index): BotGroupAttachment => ({
+      id: `${root.clientId}:file:${index}`, name: file.name, category: 'file',
+      mimeType: 'application/octet-stream', size: 0, url: null, path: file.path,
+    })),
+  ];
+}
+
+/** Resolve the exact root even when restoring an older topic outside the main chat window. */
 function useRootMessage(rootSessionId: string, rootClientId: string) {
   const snapshot = useSyncExternalStore(
     (listener) => makerChatStore.subscribe(rootSessionId, listener),
@@ -25,7 +46,27 @@ function useRootMessage(rootSessionId: string, rootClientId: string) {
     () => makerChatStore.getSnapshot(rootSessionId),
   );
   const message = snapshot?.messages?.find((row) => row.clientId === rootClientId);
-  return message && (message.role === 'user' || message.role === 'assistant') ? message : null;
+  const [loaded, setLoaded] = useState<(RootMessage & { sessionId: string;
+    owner: ReturnType<typeof getDataOwnerGeneration> }) | null>(null);
+  useEffect(() => {
+    if (message) return;
+    let cancelled = false;
+    const owner = getDataOwnerGeneration();
+    setLoaded(null);
+    void aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 }).then(rows => {
+      if (cancelled || !isDataOwnerGenerationCurrent(owner)) return;
+      const row = rows.find(candidate => candidate.sessionId === rootSessionId && candidate.clientId === rootClientId);
+      if (row && (row.role === 'user' || row.role === 'assistant')) {
+        const parsed = parseUserContent(row.content);
+        setLoaded({ sessionId: rootSessionId, clientId: rootClientId, role: row.role,
+          content: parsed.text, images: parsed.images, files: parsed.files, createdAt: row.createdAt, owner });
+      }
+    }).catch(() => { /* Keep the existing unavailable-root presentation; never substitute another message. */ });
+    return () => { cancelled = true; };
+  }, [message, rootClientId, rootSessionId]);
+  if (message) return message.role === 'user' || message.role === 'assistant' ? message : null;
+  return loaded?.sessionId === rootSessionId && loaded.clientId === rootClientId
+    && isDataOwnerGenerationCurrent(loaded.owner) ? loaded : null;
 }
 
 export type BotDmThreadPanelState =
@@ -96,7 +137,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
               authorKind: isBot ? 'bot' : 'user', authorBotId: isBot ? bot.id : null,
               authorName: isBot ? bot.name : t('bots.dmThread.you'), content: root.content,
               mentions: { all: false, botIds: [] }, noticeCode: null, planId: null,
-              files: [], attachments: [], createdAt: root.createdAt ? Date.parse(root.createdAt) : 0,
+              files: [], attachments: rootAttachments(root), createdAt: root.createdAt ? Date.parse(root.createdAt) : 0,
             }}
             continued={false}
             authorName={isBot ? bot.name : t('bots.dmThread.you')}

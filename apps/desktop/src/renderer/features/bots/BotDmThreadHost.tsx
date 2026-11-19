@@ -53,6 +53,7 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
   const threadLayoutRef = useRef<HTMLDivElement>(null);
   const threadResize = useThreadPanelResize(threadLayoutRef, open?.rootClientId ?? null, NO_THREAD_OPEN_ANIMATION);
   const attempt = useRef(0);
+  useEffect(() => () => { attempt.current += 1; }, [bot.id, rootSessionId, enabled]);
   const ensure = useCallback((rootClientId: string) => {
     const request = ++attempt.current;
     const owner = getDataOwnerGeneration();
@@ -68,7 +69,9 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
         return;
       }
       setOpen({ rootClientId, state: { kind: 'ready', sessionId: result.sessionId } });
-      handledLink.current = result.sessionId;
+      // Keep acknowledging the URL actually rendered until navigation commits. Router
+      // transitions can lag behind setOpen; marking the destination handled here
+      // makes the old URL look new and reopens its topic over this selection.
       setSearchParams((params) => {
         const next = new URLSearchParams(params);
         next.set(BOT_DM_THREAD_PARAM, result.sessionId);
