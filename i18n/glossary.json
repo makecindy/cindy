@@ -36,7 +36,7 @@
   "terms": [
     {
       "id": "accessories",
-      "status": "decided",
+      "status": "proposed",
       "en": "Accessories",
       "translations": {
         "zh-CN": "配件",
@@ -146,7 +146,7 @@
     },
     {
       "id": "additional-fees",
-      "status": "decided",
+      "status": "proposed",
       "en": "Additional fees",
       "translations": {
         "zh-CN": "附加费用",
@@ -235,7 +235,7 @@
     },
     {
       "id": "agent-network",
-      "status": "decided",
+      "status": "proposed",
       "en": "Agent network",
       "translations": {
         "zh-CN": "Agent 网络",
@@ -395,7 +395,7 @@
     },
     {
       "id": "api-price-estimate",
-      "status": "decided",
+      "status": "proposed",
       "en": "API Price Estimate",
       "translations": {
         "zh-CN": "API 估价",
@@ -408,7 +408,7 @@
     },
     {
       "id": "archive-task",
-      "status": "decided",
+      "status": "proposed",
       "en": "Archive",
       "translations": {
         "zh-CN": "归档",
@@ -429,7 +429,7 @@
     },
     {
       "id": "auth-region-global",
-      "status": "decided",
+      "status": "proposed",
       "en": "Global region",
       "translations": {
         "zh-CN": "国际区",
@@ -442,7 +442,7 @@
     },
     {
       "id": "auth-region-mainland-china",
-      "status": "decided",
+      "status": "proposed",
       "en": "Mainland China",
       "translations": {
         "zh-CN": "中国大陆区",
@@ -584,7 +584,7 @@
     },
     {
       "id": "auto-review",
-      "status": "decided",
+      "status": "proposed",
       "en": "Auto-review",
       "translations": {
         "zh-CN": "自动审查",
@@ -604,7 +604,7 @@
     },
     {
       "id": "auto-unlock-computer",
-      "status": "decided",
+      "status": "proposed",
       "en": "Automatically unlock computer",
       "translations": {
         "zh-CN": "自动解锁电脑",
@@ -682,7 +682,7 @@
     },
     {
       "id": "automation-trigger-mode",
-      "status": "decided",
+      "status": "proposed",
       "en": "Trigger mode",
       "translations": {
         "zh-CN": "触发方式",
@@ -739,7 +739,7 @@
     },
     {
       "id": "bot-glance",
-      "status": "decided",
+      "status": "proposed",
       "en": "At a glance",
       "translations": {
         "zh-CN": "近况",
@@ -774,7 +774,7 @@
     },
     {
       "id": "bot-reply-post",
-      "status": "decided",
+      "status": "proposed",
       "en": "reply (the bot's public post on X)",
       "translations": {
         "zh-CN": "回帖",
@@ -787,7 +787,7 @@
     },
     {
       "id": "captcha",
-      "status": "decided",
+      "status": "proposed",
       "en": "Security check",
       "translations": {
         "zh-CN": "安全验证",
@@ -866,7 +866,7 @@
     },
     {
       "id": "chat-workspace",
-      "status": "decided",
+      "status": "proposed",
       "en": "Chat workspace",
       "translations": {
         "zh-CN": "对话工作区",
@@ -880,7 +880,7 @@
     },
     {
       "id": "china-model-group",
-      "status": "decided",
+      "status": "proposed",
       "en": "China",
       "translations": {
         "zh-CN": "中国",
@@ -900,7 +900,7 @@
     },
     {
       "id": "cindy-ai-free-tier",
-      "status": "decided",
+      "status": "proposed",
       "en": "Free tier",
       "translations": {
         "zh-CN": "免费版",
@@ -1003,7 +1003,7 @@
     },
     {
       "id": "cindy-make-contribution",
-      "status": "decided",
+      "status": "proposed",
       "en": "Submit to Cindy",
       "translations": {
         "zh-CN": "提交给官方",
@@ -1017,7 +1017,7 @@
     },
     {
       "id": "cindy-make-history",
-      "status": "decided",
+      "status": "proposed",
       "en": "Make history",
       "translations": {
         "zh-CN": "制作历史",
@@ -1031,7 +1031,7 @@
     },
     {
       "id": "cindy-make-reapply-integration",
-      "status": "decided",
+      "status": "proposed",
       "en": "Add back to personal version",
       "translations": {
         "zh-CN": "重新加入个人版",
@@ -1045,7 +1045,7 @@
     },
     {
       "id": "cindy-make-storage-location",
-      "status": "decided",
+      "status": "proposed",
       "en": "Saved in",
       "translations": {
         "zh-CN": "保存位置",
@@ -1059,7 +1059,7 @@
     },
     {
       "id": "cindy-make-undo-integration",
-      "status": "decided",
+      "status": "proposed",
       "en": "Remove from personal version",
       "translations": {
         "zh-CN": "从个人版移除",
@@ -1073,7 +1073,7 @@
     },
     {
       "id": "cindy-make-version-control",
-      "status": "decided",
+      "status": "proposed",
       "en": "Version Control",
       "translations": {
         "zh-CN": "版本控制",
@@ -1087,7 +1087,7 @@
     },
     {
       "id": "cindy-original-version",
-      "status": "decided",
+      "status": "proposed",
       "en": "Original Version",
       "translations": {
         "zh-CN": "原版",
@@ -1101,7 +1101,7 @@
     },
     {
       "id": "cindy-personal-version",
-      "status": "decided",
+      "status": "proposed",
       "en": "Personal Version",
       "translations": {
         "zh-CN": "个人版",
@@ -1222,7 +1222,7 @@
     },
     {
       "id": "companion-main-computer",
-      "status": "decided",
+      "status": "proposed",
       "en": "Main computer",
       "translations": {
         "zh-CN": "主力电脑",
@@ -1236,7 +1236,7 @@
     },
     {
       "id": "connection-code",
-      "status": "decided",
+      "status": "proposed",
       "en": "Connection code",
       "translations": {
         "zh-CN": "连接码",
@@ -1250,7 +1250,7 @@
     },
     {
       "id": "connection-latency",
-      "status": "decided",
+      "status": "proposed",
       "en": "Latency",
       "translations": {
         "zh-CN": "延迟",
@@ -1264,7 +1264,7 @@
     },
     {
       "id": "connection-path-direct",
-      "status": "decided",
+      "status": "proposed",
       "en": "Direct",
       "translations": {
         "zh-CN": "直连",
@@ -1279,7 +1279,7 @@
     },
     {
       "id": "connection-path-via-relay",
-      "status": "decided",
+      "status": "proposed",
       "en": "Via relay",
       "translations": {
         "zh-CN": "经中转",
@@ -1294,7 +1294,7 @@
     },
     {
       "id": "content-update",
-      "status": "decided",
+      "status": "proposed",
       "en": "Content Update",
       "translations": {
         "zh-CN": "内容更新",
@@ -1307,7 +1307,7 @@
     },
     {
       "id": "context-window",
-      "status": "decided",
+      "status": "proposed",
       "en": "Context window",
       "translations": {
         "zh-CN": "上下文窗口",
@@ -1320,7 +1320,7 @@
     },
     {
       "id": "crash",
-      "status": "decided",
+      "status": "proposed",
       "en": "Crash",
       "translations": {
         "zh-CN": "崩溃",
@@ -1430,7 +1430,7 @@
     },
     {
       "id": "custom-mcp",
-      "status": "decided",
+      "status": "proposed",
       "en": "Custom MCP",
       "translations": {
         "zh-CN": "自定义 MCP",
@@ -1450,7 +1450,7 @@
     },
     {
       "id": "database-cleanup",
-      "status": "decided",
+      "status": "proposed",
       "en": "Database cleanup",
       "translations": {
         "zh-CN": "数据库清理",
@@ -1464,7 +1464,7 @@
     },
     {
       "id": "detached-head",
-      "status": "decided",
+      "status": "proposed",
       "en": "Detached HEAD",
       "translations": {
         "zh-CN": "分离 HEAD",
@@ -1481,7 +1481,7 @@
     },
     {
       "id": "dev-server-environment-release",
-      "status": "decided",
+      "status": "proposed",
       "en": "Release",
       "translations": {
         "zh-CN": "Release",
@@ -1499,7 +1499,7 @@
     },
     {
       "id": "device",
-      "status": "decided",
+      "status": "proposed",
       "en": "Device",
       "translations": {
         "zh-CN": "设备",
@@ -1541,7 +1541,7 @@
     },
     {
       "id": "device-code",
-      "status": "decided",
+      "status": "proposed",
       "en": "Device Code",
       "translations": {
         "zh-CN": "设备码",
@@ -1575,7 +1575,7 @@
     },
     {
       "id": "device-simulator",
-      "status": "decided",
+      "status": "proposed",
       "en": "Device Simulator",
       "translations": {
         "zh-CN": "设备模拟器",
@@ -1593,7 +1593,7 @@
     },
     {
       "id": "dingtalk",
-      "status": "decided",
+      "status": "proposed",
       "en": "DingTalk",
       "translations": {
         "zh-CN": "钉钉",
@@ -1703,7 +1703,7 @@
     },
     {
       "id": "dissolve-group",
-      "status": "decided",
+      "status": "proposed",
       "en": "Dissolve group",
       "translations": {
         "zh-CN": "解散群聊",
@@ -1717,7 +1717,7 @@
     },
     {
       "id": "doubao-model-brand",
-      "status": "decided",
+      "status": "proposed",
       "en": "Doubao",
       "translations": {
         "zh-CN": "豆包",
@@ -1802,7 +1802,7 @@
     },
     {
       "id": "embedding",
-      "status": "decided",
+      "status": "proposed",
       "en": "embedding",
       "translations": {
         "zh-CN": "向量",
@@ -1817,7 +1817,7 @@
     },
     {
       "id": "end-to-end-encryption",
-      "status": "decided",
+      "status": "proposed",
       "en": "End-to-end encryption",
       "translations": {
         "zh-CN": "端到端加密",
@@ -1830,7 +1830,7 @@
     },
     {
       "id": "engine",
-      "status": "decided",
+      "status": "proposed",
       "en": "Engine",
       "translations": {
         "zh-CN": "引擎",
@@ -1845,7 +1845,7 @@
     },
     {
       "id": "face-id-verification",
-      "status": "decided",
+      "status": "proposed",
       "en": "Face ID verification",
       "translations": {
         "zh-CN": "Face ID 验证",
@@ -1859,7 +1859,7 @@
     },
     {
       "id": "feishu-link-code",
-      "status": "decided",
+      "status": "proposed",
       "en": "Link code",
       "translations": {
         "zh-CN": "关联码",
@@ -1950,7 +1950,7 @@
     },
     {
       "id": "group-admin",
-      "status": "decided",
+      "status": "proposed",
       "en": "Group Admin",
       "translations": {
         "zh-CN": "群管理员",
@@ -1964,7 +1964,7 @@
     },
     {
       "id": "group-chat",
-      "status": "decided",
+      "status": "proposed",
       "en": "Group chat",
       "translations": {
         "zh-CN": "群聊",
@@ -1978,7 +1978,7 @@
     },
     {
       "id": "group-cindy",
-      "status": "decided",
+      "status": "proposed",
       "en": "Group Cindy",
       "translations": {
         "zh-CN": "群里的 Cindy",
@@ -1992,7 +1992,7 @@
     },
     {
       "id": "group-main-chat",
-      "status": "decided",
+      "status": "proposed",
       "en": "Main Chat",
       "translations": {
         "zh-CN": "群聊",
@@ -2006,7 +2006,7 @@
     },
     {
       "id": "group-nickname",
-      "status": "decided",
+      "status": "proposed",
       "en": "Group Nickname",
       "translations": {
         "zh-CN": "群昵称",
@@ -2020,7 +2020,7 @@
     },
     {
       "id": "group-owner",
-      "status": "decided",
+      "status": "proposed",
       "en": "Group Owner",
       "translations": {
         "zh-CN": "群主",
@@ -2034,7 +2034,7 @@
     },
     {
       "id": "group-personal-mask",
-      "status": "decided",
+      "status": "proposed",
       "en": "AI reply mode",
       "translations": {
         "zh-CN": "AI 代答模式",
@@ -2048,7 +2048,7 @@
     },
     {
       "id": "group-strategy",
-      "status": "decided",
+      "status": "proposed",
       "en": "Group Strategy",
       "translations": {
         "zh-CN": "组策略",
@@ -2062,7 +2062,7 @@
     },
     {
       "id": "group-thread",
-      "status": "decided",
+      "status": "proposed",
       "en": "Thread (in a group chat)",
       "translations": {
         "zh-CN": "话题",
@@ -2097,7 +2097,7 @@
     },
     {
       "id": "hunyuan-model-brand",
-      "status": "decided",
+      "status": "proposed",
       "en": "Hunyuan",
       "translations": {
         "zh-CN": "混元",
@@ -2116,7 +2116,7 @@
     },
     {
       "id": "input-handoff",
-      "status": "decided",
+      "status": "proposed",
       "en": "Input Handoff",
       "translations": {
         "zh-CN": "代输入",
@@ -2130,7 +2130,7 @@
     },
     {
       "id": "invitation-code",
-      "status": "decided",
+      "status": "proposed",
       "en": "Invitation Code",
       "translations": {
         "zh-CN": "邀请码",
@@ -2300,7 +2300,7 @@
     },
     {
       "id": "left-navigation",
-      "status": "decided",
+      "status": "proposed",
       "en": "Left navigation",
       "translations": {
         "zh-CN": "左侧导航",
@@ -2314,7 +2314,7 @@
     },
     {
       "id": "local-model",
-      "status": "decided",
+      "status": "proposed",
       "en": "Local model",
       "translations": {
         "zh-CN": "本机模型",
@@ -2328,7 +2328,7 @@
     },
     {
       "id": "local-session-scope",
-      "status": "decided",
+      "status": "proposed",
       "en": "Local",
       "translations": {
         "zh-CN": "本机任务",
@@ -2375,7 +2375,7 @@
     },
     {
       "id": "mac-login-password",
-      "status": "decided",
+      "status": "proposed",
       "en": "Mac Login Password",
       "translations": {
         "zh-CN": "Mac 登录密码",
@@ -2389,7 +2389,7 @@
     },
     {
       "id": "macos-dynamic-island",
-      "status": "decided",
+      "status": "proposed",
       "en": "Dynamic Island",
       "translations": {
         "zh-CN": "灵动岛",
@@ -2408,7 +2408,7 @@
     },
     {
       "id": "macos-live-activities",
-      "status": "decided",
+      "status": "proposed",
       "en": "Live Activities",
       "translations": {
         "zh-CN": "实时活动",
@@ -2422,7 +2422,7 @@
     },
     {
       "id": "mascot-black-cat",
-      "status": "decided",
+      "status": "proposed",
       "en": "Black Cat",
       "translations": {
         "zh-CN": "黑猫",
@@ -2459,7 +2459,7 @@
     },
     {
       "id": "mcp-app",
-      "status": "decided",
+      "status": "proposed",
       "en": "MCP App",
       "translations": {
         "zh-CN": "MCP App",
@@ -2477,7 +2477,7 @@
     },
     {
       "id": "merge-conflict",
-      "status": "decided",
+      "status": "proposed",
       "en": "Merge conflict",
       "translations": {
         "zh-CN": "合并冲突",
@@ -2552,7 +2552,7 @@
     },
     {
       "id": "message-read",
-      "status": "decided",
+      "status": "proposed",
       "en": "Read",
       "translations": {
         "zh-CN": "已读",
@@ -2573,7 +2573,7 @@
     },
     {
       "id": "migration-assistant",
-      "status": "decided",
+      "status": "proposed",
       "en": "Migration Assistant",
       "translations": {
         "zh-CN": "迁移助理",
@@ -2587,7 +2587,7 @@
     },
     {
       "id": "mivo-library",
-      "status": "decided",
+      "status": "proposed",
       "en": "Mivo Library",
       "translations": {
         "zh-CN": "Mivo 作品库",
@@ -2601,7 +2601,7 @@
     },
     {
       "id": "model-category-audio",
-      "status": "decided",
+      "status": "proposed",
       "en": "Audio Generation",
       "translations": {
         "zh-CN": "音频生成",
@@ -2615,7 +2615,7 @@
     },
     {
       "id": "model-category-compression",
-      "status": "decided",
+      "status": "proposed",
       "en": "Compression",
       "translations": {
         "zh-CN": "压缩",
@@ -2629,7 +2629,7 @@
     },
     {
       "id": "model-category-decision",
-      "status": "decided",
+      "status": "proposed",
       "en": "Decision",
       "translations": {
         "zh-CN": "决策",
@@ -2643,7 +2643,7 @@
     },
     {
       "id": "model-category-realtime",
-      "status": "decided",
+      "status": "proposed",
       "en": "Realtime Audio",
       "translations": {
         "zh-CN": "实时语音",
@@ -2677,7 +2677,7 @@
     },
     {
       "id": "model-category-stt",
-      "status": "decided",
+      "status": "proposed",
       "en": "Speech to Text",
       "translations": {
         "zh-CN": "语音转写",
@@ -2690,7 +2690,7 @@
     },
     {
       "id": "model-category-tts",
-      "status": "decided",
+      "status": "proposed",
       "en": "Text to Speech",
       "translations": {
         "zh-CN": "语音合成",
@@ -2703,7 +2703,7 @@
     },
     {
       "id": "model-group",
-      "status": "decided",
+      "status": "proposed",
       "en": "Model Group",
       "translations": {
         "zh-CN": "模型组",
@@ -2733,7 +2733,7 @@
     },
     {
       "id": "model-native-api",
-      "status": "decided",
+      "status": "proposed",
       "en": "Native API",
       "translations": {
         "zh-CN": "原生协议",
@@ -2748,7 +2748,7 @@
     },
     {
       "id": "model-upstream-apis",
-      "status": "decided",
+      "status": "proposed",
       "en": "Upstream APIs",
       "translations": {
         "zh-CN": "上游接口",
@@ -2762,7 +2762,7 @@
     },
     {
       "id": "my-plugins",
-      "status": "decided",
+      "status": "proposed",
       "en": "Publish Plugin",
       "translations": {
         "zh-CN": "发布插件",
@@ -2789,7 +2789,7 @@
     },
     {
       "id": "new-project-location",
-      "status": "decided",
+      "status": "proposed",
       "en": "New project location",
       "translations": {
         "zh-CN": "新项目存放位置",
@@ -2803,7 +2803,7 @@
     },
     {
       "id": "nightly-learning",
-      "status": "decided",
+      "status": "proposed",
       "en": "Nightly learning",
       "translations": {
         "zh-CN": "夜间学习",
@@ -2817,7 +2817,7 @@
     },
     {
       "id": "not-signed-in",
-      "status": "decided",
+      "status": "proposed",
       "en": "Not signed in",
       "translations": {
         "zh-CN": "未登录",
@@ -2914,7 +2914,7 @@
     },
     {
       "id": "organizer",
-      "status": "decided",
+      "status": "proposed",
       "en": "Organizer",
       "translations": {
         "zh-CN": "负责人",
@@ -2928,7 +2928,7 @@
     },
     {
       "id": "overview",
-      "status": "decided",
+      "status": "proposed",
       "en": "Overview",
       "translations": {
         "zh-CN": "概览",
@@ -2942,7 +2942,7 @@
     },
     {
       "id": "pairing-code",
-      "status": "decided",
+      "status": "proposed",
       "en": "Pairing Code",
       "translations": {
         "zh-CN": "配对码",
@@ -2968,7 +2968,7 @@
     },
     {
       "id": "performance-trace",
-      "status": "decided",
+      "status": "proposed",
       "en": "Performance Trace",
       "translations": {
         "zh-CN": "性能跟踪",
@@ -2982,7 +2982,7 @@
     },
     {
       "id": "personal-wechat",
-      "status": "decided",
+      "status": "proposed",
       "en": "Personal WeChat",
       "translations": {
         "zh-CN": "个人微信",
@@ -2996,7 +2996,7 @@
     },
     {
       "id": "pin",
-      "status": "decided",
+      "status": "proposed",
       "en": "Pin",
       "translations": {
         "zh-CN": "钉住",
@@ -3066,7 +3066,7 @@
     },
     {
       "id": "plugin-anonymous-publishing",
-      "status": "decided",
+      "status": "proposed",
       "en": "Publish anonymously",
       "translations": {
         "zh-CN": "匿名发布",
@@ -3080,7 +3080,7 @@
     },
     {
       "id": "plugin-community",
-      "status": "decided",
+      "status": "proposed",
       "en": "Community",
       "translations": {
         "zh-CN": "社区",
@@ -3101,7 +3101,7 @@
     },
     {
       "id": "plugin-main-view",
-      "status": "decided",
+      "status": "proposed",
       "en": "Main view",
       "translations": {
         "zh-CN": "主视图",
@@ -3115,7 +3115,7 @@
     },
     {
       "id": "plugin-manual",
-      "status": "decided",
+      "status": "proposed",
       "en": "Manual",
       "translations": {
         "zh-CN": "手册",
@@ -3131,7 +3131,7 @@
     },
     {
       "id": "plugin-source-local",
-      "status": "decided",
+      "status": "proposed",
       "en": "Locally installed",
       "translations": {
         "zh-CN": "本地安装",
@@ -3151,7 +3151,7 @@
     },
     {
       "id": "plugin-source-third-party",
-      "status": "decided",
+      "status": "proposed",
       "en": "Third-party source",
       "translations": {
         "zh-CN": "第三方来源",
@@ -3171,7 +3171,7 @@
     },
     {
       "id": "plugin-source-unknown",
-      "status": "decided",
+      "status": "proposed",
       "en": "Unknown source",
       "translations": {
         "zh-CN": "来源未知",
@@ -3191,7 +3191,7 @@
     },
     {
       "id": "pricing-component-audio",
-      "status": "decided",
+      "status": "proposed",
       "en": "Audio",
       "translations": {
         "zh-CN": "音频",
@@ -3208,7 +3208,7 @@
     },
     {
       "id": "pricing-component-image",
-      "status": "decided",
+      "status": "proposed",
       "en": "Image",
       "translations": {
         "zh-CN": "图片",
@@ -3226,7 +3226,7 @@
     },
     {
       "id": "pricing-component-text",
-      "status": "decided",
+      "status": "proposed",
       "en": "Text",
       "translations": {
         "zh-CN": "文字",
@@ -3241,7 +3241,7 @@
     },
     {
       "id": "pricing-component-video",
-      "status": "decided",
+      "status": "proposed",
       "en": "Video",
       "translations": {
         "zh-CN": "视频",
@@ -3257,7 +3257,7 @@
     },
     {
       "id": "pricing-duration",
-      "status": "decided",
+      "status": "proposed",
       "en": "Duration",
       "translations": {
         "zh-CN": "时长",
@@ -3307,7 +3307,7 @@
     },
     {
       "id": "privacy-screen",
-      "status": "decided",
+      "status": "proposed",
       "en": "Privacy screen",
       "translations": {
         "zh-CN": "隐私屏",
@@ -3321,7 +3321,7 @@
     },
     {
       "id": "process",
-      "status": "decided",
+      "status": "proposed",
       "en": "Process",
       "translations": {
         "zh-CN": "进程",
@@ -3477,7 +3477,7 @@
     },
     {
       "id": "provider-group",
-      "status": "decided",
+      "status": "proposed",
       "en": "Provider Group",
       "translations": {
         "zh-CN": "供应商组",
@@ -3491,7 +3491,7 @@
     },
     {
       "id": "provider-sharing",
-      "status": "decided",
+      "status": "proposed",
       "en": "Provider Sharing",
       "translations": {
         "zh-CN": "供应商分享",
@@ -3640,7 +3640,7 @@
     },
     {
       "id": "quote-reply",
-      "status": "decided",
+      "status": "proposed",
       "en": "Quote reply",
       "translations": {
         "zh-CN": "引用回复",
@@ -3675,7 +3675,7 @@
     },
     {
       "id": "read-by-sentence",
-      "status": "decided",
+      "status": "proposed",
       "en": "Read by sentence",
       "translations": {
         "zh-CN": "按句朗读",
@@ -3791,7 +3791,7 @@
     },
     {
       "id": "remote-computer",
-      "status": "decided",
+      "status": "proposed",
       "en": "Remote computer",
       "translations": {
         "zh-CN": "远程电脑",
@@ -3805,7 +3805,7 @@
     },
     {
       "id": "remote-desktop",
-      "status": "decided",
+      "status": "proposed",
       "en": "Remote desktop",
       "translations": {
         "zh-CN": "远程桌面",
@@ -3819,7 +3819,7 @@
     },
     {
       "id": "remote-desktop-background-running",
-      "status": "decided",
+      "status": "proposed",
       "en": "Run in background",
       "translations": {
         "zh-CN": "后台运行",
@@ -3833,7 +3833,7 @@
     },
     {
       "id": "remote-desktop-direct",
-      "status": "decided",
+      "status": "proposed",
       "en": "Direct to computer",
       "translations": {
         "zh-CN": "电脑直连",
@@ -3847,7 +3847,7 @@
     },
     {
       "id": "remote-desktop-display-sound",
-      "status": "decided",
+      "status": "proposed",
       "en": "Display & Sound",
       "translations": {
         "zh-CN": "影音",
@@ -3861,7 +3861,7 @@
     },
     {
       "id": "remote-desktop-lock-screen-control",
-      "status": "decided",
+      "status": "proposed",
       "en": "Lock screen control",
       "translations": {
         "zh-CN": "锁屏控制",
@@ -3875,7 +3875,7 @@
     },
     {
       "id": "remote-desktop-native-resolution",
-      "status": "decided",
+      "status": "proposed",
       "en": "Native resolution",
       "translations": {
         "zh-CN": "原生分辨率",
@@ -3889,7 +3889,7 @@
     },
     {
       "id": "remote-desktop-pip",
-      "status": "decided",
+      "status": "proposed",
       "en": "Picture in picture",
       "translations": {
         "zh-CN": "小窗模式",
@@ -3903,7 +3903,7 @@
     },
     {
       "id": "remote-desktop-resolution",
-      "status": "decided",
+      "status": "proposed",
       "en": "Computer resolution",
       "translations": {
         "zh-CN": "电脑分辨率",
@@ -3917,7 +3917,7 @@
     },
     {
       "id": "remote-desktop-screenshot-relay",
-      "status": "decided",
+      "status": "proposed",
       "en": "Server screenshot relay",
       "translations": {
         "zh-CN": "服务器截图中转",
@@ -3931,7 +3931,7 @@
     },
     {
       "id": "remote-desktop-takeover",
-      "status": "decided",
+      "status": "proposed",
       "en": "Take over connection",
       "translations": {
         "zh-CN": "接管连接",
@@ -3945,7 +3945,7 @@
     },
     {
       "id": "remote-desktop-video-relay",
-      "status": "decided",
+      "status": "proposed",
       "en": "Server video relay",
       "translations": {
         "zh-CN": "服务器视频中转",
@@ -3959,7 +3959,7 @@
     },
     {
       "id": "remote-device",
-      "status": "decided",
+      "status": "proposed",
       "en": "Remote device",
       "translations": {
         "zh-CN": "远程设备",
@@ -3994,7 +3994,7 @@
     },
     {
       "id": "resource-usage",
-      "status": "decided",
+      "status": "proposed",
       "en": "Activity Monitor",
       "translations": {
         "zh-CN": "资源监视器",
@@ -4007,7 +4007,7 @@
     },
     {
       "id": "role-name",
-      "status": "decided",
+      "status": "proposed",
       "en": "Role name",
       "translations": {
         "zh-CN": "角色名",
@@ -4021,7 +4021,7 @@
     },
     {
       "id": "routine",
-      "status": "decided",
+      "status": "proposed",
       "en": "Routine",
       "translations": {
         "zh-CN": "例行任务",
@@ -4037,7 +4037,7 @@
     },
     {
       "id": "routine-trigger",
-      "status": "decided",
+      "status": "proposed",
       "en": "Trigger",
       "translations": {
         "zh-CN": "触发器",
@@ -4058,7 +4058,7 @@
     },
     {
       "id": "run-records",
-      "status": "decided",
+      "status": "proposed",
       "en": "Run records",
       "translations": {
         "zh-CN": "运行记录",
@@ -4179,7 +4179,7 @@
     },
     {
       "id": "scrolling-screenshot",
-      "status": "decided",
+      "status": "proposed",
       "en": "Scrolling Screenshot",
       "translations": {
         "zh-CN": "滚动截图",
@@ -4193,7 +4193,7 @@
     },
     {
       "id": "self-hosted-relay-service",
-      "status": "decided",
+      "status": "proposed",
       "en": "Relay service",
       "translations": {
         "zh-CN": "中转服务",
@@ -4328,7 +4328,7 @@
     },
     {
       "id": "session-notification-mute",
-      "status": "decided",
+      "status": "proposed",
       "en": "Mute notifications",
       "translations": {
         "zh-CN": "消息免打扰",
@@ -4342,7 +4342,7 @@
     },
     {
       "id": "share-link",
-      "status": "decided",
+      "status": "proposed",
       "en": "Share Link",
       "translations": {
         "zh-CN": "分享链接",
@@ -4356,7 +4356,7 @@
     },
     {
       "id": "share-request",
-      "status": "decided",
+      "status": "proposed",
       "en": "Share Request",
       "translations": {
         "zh-CN": "分享申请",
@@ -4370,7 +4370,7 @@
     },
     {
       "id": "shared-session",
-      "status": "decided",
+      "status": "proposed",
       "en": "Shared Session",
       "translations": {
         "zh-CN": "共享任务",
@@ -4384,7 +4384,7 @@
     },
     {
       "id": "shortcut-listener-permission",
-      "status": "decided",
+      "status": "proposed",
       "en": "shortcut listener permission",
       "translations": {
         "zh-CN": "监听权限",
@@ -4417,7 +4417,7 @@
     },
     {
       "id": "side-chat",
-      "status": "decided",
+      "status": "proposed",
       "en": "Side chat",
       "translations": {
         "zh-CN": "侧边追问",
@@ -4431,7 +4431,7 @@
     },
     {
       "id": "sign-in",
-      "status": "decided",
+      "status": "proposed",
       "en": "Sign-in",
       "translations": {
         "zh-CN": "登录",
@@ -4533,7 +4533,7 @@
     },
     {
       "id": "skip-sign-in",
-      "status": "decided",
+      "status": "proposed",
       "en": "Skip Sign-In",
       "translations": {
         "zh-CN": "跳过登录",
@@ -4546,7 +4546,7 @@
     },
     {
       "id": "smart-subagent-routing",
-      "status": "decided",
+      "status": "proposed",
       "en": "Smart routing",
       "translations": {
         "zh-CN": "智能调配",
@@ -4560,7 +4560,7 @@
     },
     {
       "id": "speech-speed",
-      "status": "decided",
+      "status": "proposed",
       "en": "Speech speed",
       "translations": {
         "zh-CN": "语速",
@@ -4667,7 +4667,7 @@
     },
     {
       "id": "task-header",
-      "status": "decided",
+      "status": "proposed",
       "en": "Header",
       "translations": {
         "zh-CN": "顶栏",
@@ -4688,7 +4688,7 @@
     },
     {
       "id": "task-inbox",
-      "status": "decided",
+      "status": "proposed",
       "en": "Inbox",
       "translations": {
         "zh-CN": "收件箱",
@@ -4708,7 +4708,7 @@
     },
     {
       "id": "task-pending",
-      "status": "decided",
+      "status": "proposed",
       "en": "Pending",
       "translations": {
         "zh-CN": "待处理",
@@ -4729,7 +4729,7 @@
     },
     {
       "id": "task-processed",
-      "status": "decided",
+      "status": "proposed",
       "en": "Processed",
       "translations": {
         "zh-CN": "已处理",
@@ -4749,7 +4749,7 @@
     },
     {
       "id": "task-snoozed",
-      "status": "decided",
+      "status": "proposed",
       "en": "Snoozed",
       "translations": {
         "zh-CN": "稍后处理",
@@ -4769,7 +4769,7 @@
     },
     {
       "id": "task-tag",
-      "status": "decided",
+      "status": "proposed",
       "en": "Tag",
       "translations": {
         "zh-CN": "标签",
@@ -4852,7 +4852,7 @@
     },
     {
       "id": "teammate-core-skill",
-      "status": "decided",
+      "status": "proposed",
       "en": "Core skill",
       "translations": {
         "zh-CN": "核心技能",
@@ -4880,7 +4880,7 @@
     },
     {
       "id": "teammate-todo",
-      "status": "decided",
+      "status": "proposed",
       "en": "Todo",
       "translations": {
         "zh-CN": "待办",
@@ -4897,7 +4897,7 @@
     },
     {
       "id": "terms-of-service",
-      "status": "decided",
+      "status": "proposed",
       "en": "Terms of Service",
       "translations": {
         "zh-CN": "服务条款",
@@ -4916,7 +4916,7 @@
     },
     {
       "id": "thread",
-      "status": "decided",
+      "status": "proposed",
       "en": "Thread",
       "translations": {
         "zh-CN": "任务",
@@ -5096,7 +5096,7 @@
     },
     {
       "id": "ungrouped",
-      "status": "decided",
+      "status": "proposed",
       "en": "Ungrouped",
       "translations": {
         "zh-CN": "未分组",
@@ -5110,7 +5110,7 @@
     },
     {
       "id": "upload-code",
-      "status": "decided",
+      "status": "proposed",
       "en": "Upload code",
       "translations": {
         "zh-CN": "上传编号",
@@ -5204,7 +5204,7 @@
     },
     {
       "id": "use-my-browser-logins",
-      "status": "decided",
+      "status": "proposed",
       "en": "Use my browser logins",
       "translations": {
         "zh-CN": "使用我的浏览器登录态",
@@ -5218,7 +5218,7 @@
     },
     {
       "id": "voice-dictionary",
-      "status": "decided",
+      "status": "proposed",
       "en": "Voice dictionary",
       "translations": {
         "zh-CN": "语音词典",
@@ -5231,7 +5231,7 @@
     },
     {
       "id": "voice-mode",
-      "status": "decided",
+      "status": "proposed",
       "en": "Voice Mode",
       "translations": {
         "zh-CN": "语音模式",
@@ -5245,7 +5245,7 @@
     },
     {
       "id": "voiceprint",
-      "status": "decided",
+      "status": "proposed",
       "en": "Voiceprint",
       "translations": {
         "zh-CN": "声纹",
@@ -5259,7 +5259,7 @@
     },
     {
       "id": "wallpaper",
-      "status": "decided",
+      "status": "proposed",
       "en": "Wallpaper",
       "translations": {
         "zh-CN": "壁纸",
@@ -5273,7 +5273,7 @@
     },
     {
       "id": "wallpaper-blur",
-      "status": "decided",
+      "status": "proposed",
       "en": "Wallpaper Blur",
       "translations": {
         "zh-CN": "壁纸模糊",
@@ -5287,7 +5287,7 @@
     },
     {
       "id": "wallpaper-visibility",
-      "status": "decided",
+      "status": "proposed",
       "en": "Wallpaper Visibility",
       "translations": {
         "zh-CN": "壁纸可见度",
@@ -5301,7 +5301,7 @@
     },
     {
       "id": "wechat",
-      "status": "decided",
+      "status": "proposed",
       "en": "WeChat",
       "translations": {
         "zh-CN": "微信",
@@ -5319,7 +5319,7 @@
     },
     {
       "id": "wecom",
-      "status": "decided",
+      "status": "proposed",
       "en": "WeCom",
       "translations": {
         "zh-CN": "企业微信",
@@ -5338,7 +5338,7 @@
     },
     {
       "id": "wecom-group-bot",
-      "status": "decided",
+      "status": "proposed",
       "en": "WeCom group bot",
       "translations": {
         "zh-CN": "企微群机器人",
@@ -5351,7 +5351,7 @@
     },
     {
       "id": "wecom-intelligent-bot",
-      "status": "decided",
+      "status": "proposed",
       "en": "WeCom Intelligent Bot",
       "translations": {
         "zh-CN": "企业微信智能机器人",
@@ -5364,7 +5364,7 @@
     },
     {
       "id": "withdraw-reply",
-      "status": "decided",
+      "status": "proposed",
       "en": "withdraw (a reply)",
       "translations": {
         "zh-CN": "撤回",
@@ -5377,7 +5377,7 @@
     },
     {
       "id": "work-split",
-      "status": "decided",
+      "status": "proposed",
       "en": "Work split",
       "translations": {
         "zh-CN": "分工",

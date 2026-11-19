@@ -25,228 +25,65 @@
 
 | 英文 | zh-CN | zh-TW | ja | ko | fr | es | de | pt-PT | pt-BR | zh-Hant-x-lzh | zh-Hans-x-lzh | id | 禁用译法 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Accessories** | 配件 | 配件 | アクセサリ | 액세서리 | — | — | — | — | — | — | — | Aksesori | — |
 | **Active** | 活跃 | 活躍 | アクティブ | 활성 | actif | Activo | Aktiv | Ativo | Ativo | 活躍 | 活跃 | Aktif | zh-CN: 活动（仅当英文含 Active）；zh-TW: 活動（仅当英文含 Active） |
-| **Additional fees** | 附加费用 | 附加費用 | 追加費用 | 추가 비용 | — | — | — | — | — | — | — | Biaya tambahan | — |
 | **Agent** | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | zh-CN: 智能体；zh-CN: 代理（仅当英文含 Agent）；zh-TW: 智能體；zh-TW: 代理（仅当英文含 Agent）；zh-Hant-x-lzh: 智能體；zh-Hant-x-lzh: 代理（仅当英文含 Agent）；zh-Hans-x-lzh: 智能体；zh-Hans-x-lzh: 代理（仅当英文含 Agent） |
 | **Agent-Net** | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | `Agent-Net`（保留英文） | — |
-| **Agent network** | Agent 网络 | Agent 網路 | Agent ネットワーク | Agent 네트워크 | — | — | — | — | — | — | — | Jaringan Agent | — |
 | **Agent Notch** | 任务胶囊 | 任務膠囊 | `Agent Notch`（保留英文） | `Agent Notch`（保留英文） | `Agent Notch`（保留英文） | `Agent Notch`（保留英文） | `Agent Notch`（保留英文） | `Agent Notch`（保留英文） | `Agent Notch`（保留英文） | 任務膠囊 | 任务胶囊 | `Agent Notch`（保留英文） | — |
 | **Agent session** | Agent 会话 | Agent 會話 | Agent セッション | Agent 세션 | session Agent | Sesión de Agent | Agent-Sitzung | Sessão do Agent | Sessão do Agent | Agent 會話 | Agent 会话 | Sesi Agent | zh-CN: 任务（仅当英文含 agent session）；zh-TW: 任務（仅当英文含 agent session） |
 | **Anthropic Messages** | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | `Anthropic Messages`（保留英文） | — |
-| **API Price Estimate** | API 估价 | — | API 料金見積もり | API 가격 추정치 | — | — | — | — | — | — | — | Estimasi harga API | — |
-| **Archive** | 归档 | 歸檔 | アーカイブ | 보관 | Archiver | Archivar | Archivieren | Arquivar | Arquivar | 歸檔 | 归档 | Arsipkan | — |
-| **Global region** | 国际区 | — | グローバルリージョン | 글로벌 지역 | — | — | — | — | — | — | — | Wilayah global | — |
-| **Mainland China** | 中国大陆区 | — | 中国本土リージョン | 중국 본토 지역 | — | — | — | — | — | — | — | Tiongkok Daratan | — |
 | **Author** | 作者 | 作者 | 作成者 | 작성자 | auteur | Autor | Autor | Autor | Autor | 作者 | 作者 | Penulis | zh-CN: 提交者（仅当英文含 Author）；zh-CN: 提出者（仅当英文含 Author）；zh-TW: 提交者（仅当英文含 Author）；zh-TW: 提出者（仅当英文含 Author） |
 | **Auto-added** | 自动添加 | 自動新增 | 自動追加 | 자동 추가 | Ajouté automatiquement | Añadido automáticamente | Automatisch hinzugefügt | Adicionado automaticamente | Adicionado automaticamente | 自動新增 | 自动添加 | Ditambahkan otomatis | — |
 | **Auto-connect** | 自动连接 | 自動連線 | 自動接続 | 자동 연결 | Connexion automatique | Conexión automática | Automatisch verbinden | Ligação automática | Conexão automática | 自動連線 | 自动连接 | Sambungkan otomatis | — |
 | **Auto-learning** | 自动学习 | 自動學習 | 自動学習 | 자동 학습 | Apprentissage automatique | Aprendizaje automático | Automatisches Lernen | Aprendizagem automática | Aprendizado automático | 自動學習 | 自动学习 | Pembelajaran otomatis | — |
-| **Auto-review** | 自动审查 | 自動審查 | 自動レビュー | 자동 검토 | Révision automatique | Revisión automática | Auto-Review | Revisión automática | Revisión automática | 自動審查 | 自动审查 | Tinjauan otomatis | — |
-| **Automatically unlock computer** | 自动解锁电脑 | 自動解鎖電腦 | コンピューターを自動ロック解除 | 컴퓨터 자동 잠금 해제 | — | — | — | — | — | — | — | Buka kunci komputer secara otomatis | — |
 | **Automation** | 自动化 | 自動化 | 自動化 | 자동화 | automatisation | Automatización | Automatisierung | Automatização | Automação | 自運 | 自运 | Otomasi | ja: オートメーション；ko: 오토메이션 |
-| **Trigger mode** | 触发方式 | 觸發方式 | トリガー方式 | 트리거 방식 | — | — | — | — | — | — | — | Cara pemicu | — |
 | **Balance** | 余额 | 餘額 | 残高 | 잔액 | solde | Saldo | Guthaben | Saldo | Saldo | 餘資 | 余资 | Saldo | zh-CN: 额度（仅当英文含 Balance）；zh-TW: 額度（仅当英文含 Balance） |
-| **At a glance** | 近况 | 近況 | 近況 | 근황 | — | — | — | — | — | — | — | Sekilas | — |
 | **Discover Buddies** | 发现伙伴 | 發現夥伴 | 仲間を探す | 동반자 찾기 | Découvrir des amis | Descubrir amigos | Freunde entdecken | Descobrir amigos | Descobrir amigos | 訪同伴 | 访同伴 | Temukan Rekan | — |
-| **reply (the bot's public post on X)** | 回帖 | — | 返信 | 답장 | — | — | — | — | — | — | — | Balasan publik | — |
-| **Security check** | 安全验证 | 安全驗證 | セキュリティチェック | 보안 확인 | — | — | — | — | — | — | — | Verifikasi keamanan | — |
 | **Chat** | 对话 | 對話 | チャット | 채팅 | conversation | Conversación | `Chat`（保留英文） | Conversa | Conversa | 言談 | 言谈 | Obrolan | zh-CN: 聊天；zh-TW: 聊天；zh-Hant-x-lzh: 聊天；zh-Hans-x-lzh: 聊天 |
-| **Chat workspace** | 对话工作区 | 對話工作區 | チャットワークスペース | 대화 작업 공간 | — | — | — | — | — | — | — | Ruang kerja obrolan | — |
-| **China** | 中国 | 中國 | 中国 | 중국 | — | `China`（保留英文） | `China`（保留英文） | `China`（保留英文） | `China`（保留英文） | 中國 | 中国 | Tiongkok | — |
-| **Free tier** | 免费版 | 免費版 | 無料版 | 무료 버전 | — | — | — | — | — | — | — | Paket gratis | — |
 | **Cindy Codex home** | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | `Cindy Codex home`（保留英文） | — |
 | **Cindy Friend** | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | `Cindy Friend`（保留英文） | — |
 | **Cindy Make** | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | `Cindy Make`（保留英文） | — |
-| **Submit to Cindy** | 提交给官方 | 提交給官方 | 公式に提出 | 공식에 제출 | — | — | — | — | — | — | — | Kirim ke Cindy | — |
-| **Make history** | 制作历史 | 製作歷史 | 制作履歴 | 제작 기록 | — | — | — | — | — | — | — | Riwayat pembuatan | — |
-| **Add back to personal version** | 重新加入个人版 | 重新加入個人版 | 個人版に再追加 | 개인 버전에 다시 추가 | — | — | — | — | — | — | — | Tambahkan lagi ke versi pribadi | — |
-| **Saved in** | 保存位置 | 儲存位置 | 保存先 | 저장 위치 | — | — | — | — | — | — | — | Disimpan di | — |
-| **Remove from personal version** | 从个人版移除 | 從個人版移除 | 個人版から削除 | 개인 버전에서 제거 | — | — | — | — | — | — | — | Hapus dari versi pribadi | — |
-| **Version Control** | 版本控制 | 版本控制 | バージョン管理 | 버전 관리 | — | — | — | — | — | — | — | Kontrol versi | — |
-| **Original Version** | 原版 | 原版 | オリジナル版 | 기본 버전 | — | — | — | — | — | — | — | Versi asli | — |
-| **Personal Version** | 个人版 | 個人版 | 個人版 | 개인 버전 | — | — | — | — | — | — | — | Versi pribadi | — |
 | **Collaboration** | 协同 | 協同 | 協同 | 협업 | collaboration | Colaboración | Zusammenarbeit | Colaboração | Colaboração | 協同 | 协同 | Kolaborasi | zh-CN: 协作（仅当英文含 Collaboration）；zh-TW: 協作（仅当英文含 Collaboration） |
 | **Collapse** | 收起 | 收起 | 折りたたむ | 접기 | Réduire | Contraer | Einklappen | Recolher | Recolher | 收 | 收 | Ciutkan | zh-CN: 折叠（仅当英文含 Collapse）；zh-TW: 折疊（仅当英文含 Collapse） |
-| **Main computer** | 主力电脑 | 主力電腦 | メインのパソコン | 주 컴퓨터 | — | — | — | — | — | — | — | Komputer utama | — |
-| **Connection code** | 连接码 | 連線碼 | 接続コード | 연결 코드 | — | — | — | — | — | — | — | Kode koneksi | — |
-| **Latency** | 延迟 | 延遲 | 遅延 | 지연 | — | — | — | — | — | — | — | Latensi | — |
-| **Direct** | 直连 | 直連 | 直接 | 직접 | `Direct`（保留英文） | — | — | — | — | — | — | Langsung | — |
-| **Via relay** | 经中转 | 經中轉 | 中継経由 | 중계 경유 | — | — | — | Através do relay | — | — | — | Lewat relay | — |
-| **Content Update** | 内容更新 | — | コンテンツ更新 | 콘텐츠 업데이트 | — | — | — | — | — | — | — | Pembaruan konten | — |
-| **Context window** | 上下文窗口 | — | コンテキストウィンドウ | 컨텍스트 윈도우 | — | — | — | — | — | — | — | Jendela konteks | — |
-| **Crash** | 崩溃 | — | クラッシュ | 크래시 | — | — | — | — | — | — | — | `Crash`（保留英文） | — |
 | **Credits** | 点数 | 點數 | クレジット | 크레딧 | crédits | Créditos | `Credits`（保留英文） | Créditos | Créditos | 籌 | 筹 | Kredit | zh-CN: 额度（仅当英文含 Credit）；zh-TW: 額度（仅当英文含 Credit） |
-| **Custom MCP** | 自定义 MCP | 自訂 MCP | カスタム MCP | 사용자 지정 MCP | MCP personnalisé | MCP personalizado | Benutzerdefiniertes MCP | MCP personalizado | MCP personalizado | 自訂 MCP | 自定 MCP | — | — |
-| **Database cleanup** | 数据库清理 | 資料庫清理 | データベースのクリーンアップ | 데이터베이스 정리 | — | — | — | — | — | — | — | Pembersihan basis data | — |
-| **Detached HEAD** | 分离 HEAD | 分離 HEAD | `Detached HEAD`（保留英文） | `Detached HEAD`（保留英文） | — | — | `Detached HEAD`（保留英文） | — | — | 分離 HEAD | 分离 HEAD | `Detached HEAD`（保留英文） | — |
-| **Release** | `Release`（保留英文） | `Release`（保留英文） | `Release`（保留英文） | `Release`（保留英文） | `Release`（保留英文） | — | `Release`（保留英文） | — | — | `Release`（保留英文） | `Release`（保留英文） | `Release`（保留英文） | — |
-| **Device** | 设备 | 裝置 | デバイス | 기기 | Appareil | Dispositivo | Gerät | Dispositivo | Dispositivo | 裝置 | 设备 | Perangkat | — |
-| **Device Code** | 设备码 | — | デバイスコード | 기기 코드 | — | — | — | — | — | — | — | Kode perangkat | — |
 | **Device Link** | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | `Device Link`（保留英文） | — |
-| **Device Simulator** | 设备模拟器 | 裝置模擬器 | デバイスシミュレータ | 기기 시뮬레이터 | — | Simulador de dispositivos | Gerätesimulator | Simulador de dispositivo | Simulador de dispositivos | — | — | Simulator perangkat | — |
-| **DingTalk** | 钉钉 | — | `DingTalk`（保留英文） | `DingTalk`（保留英文） | `DingTalk`（保留英文） | `DingTalk`（保留英文） | `DingTalk`（保留英文） | `DingTalk`（保留英文） | `DingTalk`（保留英文） | `DingTalk`（保留英文） | — | `DingTalk`（保留英文） | — |
 | **Directory** | 目录 | 目錄 | ディレクトリ | 디렉터리 | répertoire | Directorio | Verzeichnis | Diretório | Diretório | 目錄 | 目录 | Direktori | — |
 | **Dismiss** | 关闭 | 關閉 | 閉じる | 닫기 | Fermer | Cerrar | Schließen | Fechar | Fechar | 闔 | 阖 | Tutup | zh-CN: 忽略（仅当英文含 Dismiss）；zh-CN: 知道了（仅当英文含 Dismiss）；zh-TW: 忽略（仅当英文含 Dismiss）；zh-TW: 知道了（仅当英文含 Dismiss） |
-| **Dissolve group** | 解散群聊 | 解散群聊 | グループを解散 | 그룹 해산 | — | — | — | — | — | — | — | Bubarkan grup | — |
-| **Doubao** | 豆包 | 豆包 | `Doubao`（保留英文） | `Doubao`（保留英文） | `Doubao`（保留英文） | `Doubao`（保留英文） | `Doubao`（保留英文） | `Doubao`（保留英文） | `Doubao`（保留英文） | — | — | `Doubao`（保留英文） | — |
 | **Effort** | 推理强度 | 推理強度 | 推論強度 | 추론 강도 | effort de raisonnement | Intensidad de razonamiento | Denkintensität | Esforço de raciocínio | Esforço de raciocínio | 思之深淺 | 思之深浅 | Tingkat penalaran | zh-CN: 思考强度；zh-CN: 思考深度；zh-CN: 推理深度；zh-CN: 努力程度；zh-CN: 推理力度；zh-TW: 思考強度；zh-TW: 思考深度；zh-TW: 推理深度；zh-TW: 努力程度；zh-TW: 推理力度；ja: 推論レベル；ja: 推論の強度 |
-| **embedding** | 向量 | — | ベクトル | 벡터 | Vecteur | — | Vektor | — | — | — | — | Embedding | — |
-| **End-to-end encryption** | 端到端加密 | — | エンドツーエンド暗号化 | 종단 간 암호화 | — | — | — | — | — | — | — | Enkripsi ujung ke ujung | — |
-| **Engine** | 引擎 | 引擎 | エンジン | 엔진 | — | — | `Engine`（保留英文） | — | — | — | — | `Engine`（保留英文） | — |
-| **Face ID verification** | Face ID 验证 | Face ID 驗證 | Face ID 認証 | Face ID 인증 | — | — | — | — | — | — | — | Verifikasi Face ID | — |
-| **Link code** | 关联码 | 關聯碼 | 連携コード | 연동 코드 | — | — | — | — | — | — | — | Kode penghubung | — |
 | **Organization app** | 组织自建应用 | 組織自建應用程式 | 組織のカスタムアプリ | 조직 자체 앱 | Application de l’organisation | Aplicación de la organización | Organisations-App | Aplicação da organização | Aplicativo da organização | 組織自建應用 | 组织自建应用 | Aplikasi organisasi | — |
 | **Store app** | 商店应用 | 商店應用程式 | ストアアプリ | 스토어 앱 | Application de la boutique | Aplicación de la tienda | Store-App | Aplicação da loja | Aplicativo da loja | 商店應用 | 商店应用 | Aplikasi toko | — |
 | **MR** | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | `MR`（保留英文） | — |
-| **Group Admin** | 群管理员 | 群管理員 | グループ管理者 | 그룹 관리자 | — | — | — | — | — | — | — | Admin grup | — |
-| **Group chat** | 群聊 | 群聊 | グループチャット | 그룹 채팅 | — | — | — | — | — | — | — | Obrolan utama | — |
-| **Group Cindy** | 群里的 Cindy | 群裡的 Cindy | グループの Cindy | 그룹의 Cindy | — | — | — | — | — | — | — | Cindy di grup | — |
-| **Main Chat** | 群聊 | 群聊 | メインチャット | 메인 채팅 | — | — | — | — | — | — | — | Obrolan utama | — |
-| **Group Nickname** | 群昵称 | 群暱稱 | グループ内の名前 | 그룹에서의 이름 | — | — | — | — | — | — | — | Nama panggilan grup | — |
-| **Group Owner** | 群主 | 群主 | グループオーナー | 그룹 소유자 | — | — | — | — | — | — | — | Pemilik grup | — |
-| **AI reply mode** | AI 代答模式 | AI 代答模式 | AI代理返信モード | AI 대신 답장 모드 | — | — | — | — | — | — | — | Mode balas AI | — |
-| **Group Strategy** | 组策略 | 組策略 | グループの割り当て方式 | 그룹 배정 방식 | — | — | — | — | — | — | — | Strategi grup | — |
-| **Thread (in a group chat)** | 话题 | 話題 | スレッド | 스레드 | — | — | — | — | — | — | — | Topik | — |
-| **Hunyuan** | 混元 | 混元 | `Hunyuan`（保留英文） | `Hunyuan`（保留英文） | `Hunyuan`（保留英文） | `Hunyuan`（保留英文） | `Hunyuan`（保留英文） | `Hunyuan`（保留英文） | `Hunyuan`（保留英文） | — | — | `Hunyuan`（保留英文） | — |
-| **Input Handoff** | 代输入 | 代輸入 | 代理入力 | 대리 입력 | — | — | — | — | — | — | — | Serah terima input | — |
-| **Invitation Code** | 邀请码 | 邀請碼 | 招待コード | 초대 코드 | — | — | — | — | — | — | — | Kode undangan | — |
 | **Subtle reminders** | 轻提醒 | 輕提醒 | 控えめな通知 | 은은한 알림 | Alertes discrètes | Avisos discretos | Dezente Hinweise | Avisos discretos | Avisos discretos | 輕提醒 | 轻提醒 | Pengingat halus | — |
 | **Issue** | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | 이슈 | issue | Incidencia | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | zh-CN: 工单；zh-CN: 议题；zh-TW: 工單；zh-TW: 議題；zh-Hant-x-lzh: 工單；zh-Hant-x-lzh: 議題；zh-Hans-x-lzh: 工单；zh-Hans-x-lzh: 议题；ja: 課題（仅当英文含 Issue） |
 | **Lark** | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | `Lark`（保留英文） | — |
-| **Left navigation** | 左侧导航 | 左側導航 | 左側ナビゲーション | 왼쪽 내비게이션 | — | — | — | — | — | — | — | Navigasi kiri | — |
-| **Local model** | 本机模型 | 本機模型 | ローカルモデル | 로컬 모델 | — | — | — | — | — | — | — | Model lokal | — |
-| **Local** | 本机任务 | 本機任務 | このデバイスのセッション | 이 기기의 세션 | `Local`（保留英文） | `Local`（保留英文） | Lokal | `Local`（保留英文） | `Local`（保留英文） | 本機任務 | 本机任务 | Lokal | — |
-| **Mac Login Password** | Mac 登录密码 | Mac 登入密碼 | Mac のログインパスワード | Mac 로그인 암호 | — | — | — | — | — | — | — | Kata sandi login Mac | — |
-| **Dynamic Island** | 灵动岛 | 動態島 | `Dynamic Island`（保留英文） | `Dynamic Island`（保留英文） | `Dynamic Island`（保留英文） | `Dynamic Island`（保留英文） | `Dynamic Island`（保留英文） | `Dynamic Island`（保留英文） | `Dynamic Island`（保留英文） | — | — | `Dynamic Island`（保留英文） | — |
-| **Live Activities** | 实时活动 | 即時動態 | ライブアクティビティ | 실시간 현황 | — | — | — | — | — | — | — | `Live Activities`（保留英文） | — |
-| **Black Cat** | 黑猫 | — | 黒猫 | 검은 고양이 | — | — | Schwarze Katze | Gato Preto | Gato Preto | — | — | Kucing Hitam | — |
 | **Erika** | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | `Erika`（保留英文） | — |
-| **MCP App** | `MCP App`（保留英文） | `MCP App`（保留英文） | `MCP App`（保留英文） | `MCP App`（保留英文） | `MCP App`（保留英文） | — | `MCP App`（保留英文） | — | — | `MCP App`（保留英文） | `MCP App`（保留英文） | `MCP App`（保留英文） | — |
-| **Merge conflict** | 合并冲突 | 合併衝突 | マージコンフリクト | 병합 충돌 | — | — | — | — | — | — | — | Konflik merge | — |
 | **Message** | 消息 | 訊息 | メッセージ | 메시지 | message | Mensaje | Nachricht | Mensagem | Mensagem | 訊 | 讯 | Pesan | zh-CN: 条对话（仅当英文含 Message）；zh-TW: 條對話（仅当英文含 Message） |
-| **Read** | 已读 | 已讀 | 既読 | 읽음 | Lu | Leído | Gelesen | Lido | Lido | 已讀 | 已读 | Dibaca | — |
-| **Migration Assistant** | 迁移助理 | 遷移助理 | 移行アシスタント | 마이그레이션 지원 | — | — | — | — | — | — | — | Asisten migrasi | — |
-| **Mivo Library** | Mivo 作品库 | Mivo 作品庫 | Mivo ライブラリ | Mivo 라이브러리 | — | — | — | — | — | — | — | `Mivo Library`（保留英文） | — |
-| **Audio Generation** | 音频生成 | 音訊生成 | 音声生成 | 오디오 생성 | — | — | — | — | — | — | — | Pembuatan audio | — |
-| **Compression** | 压缩 | — | 圧縮 | 압축 | `Compression`（保留英文） | — | — | — | — | — | — | Kompresi | — |
-| **Decision** | 决策 | 決策 | 意思決定 | 의사결정 | — | — | — | — | — | — | — | Keputusan | — |
-| **Realtime Audio** | 实时语音 | — | リアルタイム音声 | 실시간 음성 | — | — | — | — | — | — | — | Audio real-time | — |
 | **Rerank** | 重排 | 重排 | リランキング | 재순위화 | Reclassement | Reordenación | Neusortierung | Reordenação | Reordenação | 重排 | 重排 | `Rerank`（保留英文） | — |
-| **Speech to Text** | 语音转写 | — | 音声認識 | 음성 인식 | — | — | — | — | — | — | — | Ucapan ke teks | — |
-| **Text to Speech** | 语音合成 | — | 音声合成 | 음성 합성 | — | — | — | — | — | — | — | Teks ke ucapan | — |
-| **Model Group** | 模型组 | 模型組 | モデルグループ | 모델 그룹 | — | — | — | — | — | — | — | Grup model | — |
-| **Native API** | 原生协议 | 原生協定 | ネイティブAPI | 기본 API | — | — | `Native API`（保留英文） | — | — | — | — | API native | — |
-| **Upstream APIs** | 上游接口 | 上游介面 | 上流 API | 업스트림 API | — | — | — | — | — | — | — | API hulu | — |
-| **Publish Plugin** | 发布插件 | 發佈插件 | プラグインを公開 | 플러그인 게시 | — | — | — | — | — | — | — | Terbitkan Plugin | — |
-| **New project location** | 新项目存放位置 | 新專案存放位置 | 新規プロジェクトの保存先 | 새 프로젝트 저장 위치 | — | — | — | — | — | — | — | Lokasi proyek baru | — |
-| **Nightly learning** | 夜间学习 | 夜間學習 | 夜間の学習 | 야간 학습 | — | — | — | — | — | — | — | Pembelajaran malam | — |
-| **Not signed in** | 未登录 | — | 未ログイン | 로그인하지 않음 | — | — | — | — | — | — | — | Belum masuk | — |
 | **Working computer** | 工作电脑 | 工作電腦 | 作業用パソコン | 작업 컴퓨터 | Ordinateur de travail | Ordenador de trabajo | Arbeitscomputer | Computador de trabalho | Computador de trabalho | 工作電腦 | 工作电脑 | Komputer kerja | — |
 | **Chat Completions** | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | `Chat Completions`（保留英文） | — |
 | **Responses** | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | `Responses`（保留英文） | — |
 | **OpenClaw** | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | `OpenClaw`（保留英文） | — |
-| **Organizer** | 负责人 | 負責人 | まとめ役 | 담당자 | — | — | — | — | — | — | — | Koordinator | — |
-| **Overview** | 概览 | 總覽 | 概要 | 개요 | — | — | — | — | — | — | — | Ringkasan | — |
-| **Pairing Code** | 配对码 | 配對碼 | ペアリングコード | 페어링 코드 | — | — | — | — | — | — | — | Kode pemasangan | — |
-| **Performance Trace** | 性能跟踪 | 效能追蹤 | パフォーマンスの記録 | 성능 기록 | — | — | — | — | — | — | — | Jejak performa | — |
-| **Personal WeChat** | 个人微信 | — | 個人 WeChat | 개인 WeChat | — | WeChat personal | — | — | — | — | — | WeChat Pribadi | — |
-| **Pin** | 钉住 | 釘選 | ピン留め | 고정 | Épingler | Fijar | Anpinnen | Fixar | Fixar | 釘選 | — | Sematkan | — |
 | **Plugin** | 插件 | 插件 | プラグイン | 플러그인 | plugin | Complemento | `Plugin`（保留英文） | plugin | plugin | 法器 | 法器 | `Plugin`（保留英文） | zh-CN: Plugin；zh-CN: plugin；zh-TW: Plugin；zh-TW: plugin；zh-TW: 外掛；zh-Hant-x-lzh: 外掛；zh-Hans-x-lzh: 插件 |
-| **Publish anonymously** | 匿名发布 | 匿名發布 | 匿名で公開 | 익명으로 게시 | — | — | — | — | — | — | — | Terbitkan secara anonim | — |
-| **Community** | 社区 | 社群 | コミュニティ | 커뮤니티 | Communauté | Comunidad | `Community`（保留英文） | Comunidade | Comunidade | 社群 | 社区 | Komunitas | — |
-| **Main view** | 主视图 | 主視圖 | メインビュー | 메인 보기 | — | — | — | — | — | — | — | Tampilan utama | — |
-| **Manual** | 手册 | — | マニュアル | 매뉴얼 | — | `Manual`（保留英文） | — | `Manual`（保留英文） | `Manual`（保留英文） | — | — | Panduan | — |
-| **Locally installed** | 本地安装 | 本機安裝 | ローカルインストール | 로컬 설치 | Installation locale | Instalación local | Lokal installiert | Instalação local | Instalação local | 本機裝入 | 本机装入 | — | — |
-| **Third-party source** | 第三方来源 | 第三方來源 | サードパーティの提供元 | 타사 출처 | Source tierce | Fuente de terceros | Drittanbieterquelle | Origem de terceiros | Origem de terceiros | 他方來源 | 他方来源 | — | — |
-| **Unknown source** | 来源未知 | 來源未知 | 提供元不明 | 알 수 없는 출처 | Source inconnue | Fuente desconocida | Unbekannte Quelle | Origem desconhecida | Origem desconhecida | 來源未詳 | 来源未详 | — | — |
-| **Audio** | 音频 | 音訊 | 音声 | 오디오 | `Audio`（保留英文） | `Audio`（保留英文） | `Audio`（保留英文） | — | — | — | — | `Audio`（保留英文） | — |
-| **Image** | 图片 | 圖片 | 画像 | 이미지 | `Image`（保留英文） | — | Bild | — | — | 圖片 | 图片 | Gambar | — |
-| **Text** | 文字 | 文字 | テキスト | 텍스트 | — | — | `Text`（保留英文） | — | — | — | — | Teks | — |
-| **Video** | 视频 | 影片 | 動画 | 동영상 | — | Vídeo | `Video`（保留英文） | — | — | — | — | `Video`（保留英文） | — |
-| **Duration** | 时长 | 時長 | 時間 | 길이 | Durée | Duración | Dauer | Duração | Duração | 時長 | 时长 | Durasi | — |
 | **Privacy Policy** | 隐私政策 | 隱私政策 | プライバシーポリシー | 개인정보 처리방침 | Politique de confidentialité | Política de privacidad | Datenschutzerklärung | Política de Privacidade | Política de Privacidade | 隱私政策 | 隐私政策 | Kebijakan Privasi | zh-TW: 隱私協議（仅当英文含 Privacy Policy） |
-| **Privacy screen** | 隐私屏 | 隱私畫面 | プライバシースクリーン | 프라이버시 화면 | — | — | — | — | — | — | — | Layar privasi | — |
-| **Process** | 进程 | — | プロセス | 프로세스 | — | — | — | Processo | Processo | — | — | Proses | — |
 | **Project** | 项目 | 專案 | プロジェクト | 프로젝트 | projet | Proyecto | Projekt | Projeto | Projeto | 案 | 案 | Proyek | zh-CN: Project；zh-TW: Project |
 | **Provider** | 供应商 | 供應商 | プロバイダー | 제공자 | fournisseur | Proveedor | Anbieter | Fornecedor | Provedor | 供方 | 供方 | Penyedia | zh-CN: 提供方；zh-CN: 提供商；zh-TW: 提供方；zh-TW: 提供商；ja: 提供元（仅当英文含 Provider）；ja: 事業者（仅当英文含 Provider）；ko: 공급자；ko: 제공업체 |
-| **Provider Group** | 供应商组 | 供應商組 | プロバイダーグループ | 제공자 그룹 | — | — | — | — | — | — | — | Grup penyedia | — |
-| **Provider Sharing** | 供应商分享 | 供應商分享 | プロバイダー共有 | 제공자 공유 | — | — | — | — | — | — | — | Berbagi penyedia | — |
 | **Provider transaction ID** | 渠道交易号 | 渠道交易號 | 決済取引ID | 결제 거래 ID | Identifiant de transaction du prestataire | ID de transacción del proveedor | Transaktions-ID des Zahlungsanbieters | ID de transação do prestador | ID da transação do provedor | 渠道交易號 | 渠道交易号 | ID transaksi penyedia | — |
 | **Proxy** | `Proxy`（保留英文） | `Proxy`（保留英文） | プロキシ | 프록시 | proxy | proxy | `Proxy`（保留英文） | proxy | proxy | `Proxy`（保留英文） | `Proxy`（保留英文） | `Proxy`（保留英文） | zh-CN: 代理（仅当英文含 Proxy）；zh-TW: 代理（仅当英文含 Proxy）；zh-Hant-x-lzh: 代理（仅当英文含 Proxy）；zh-Hans-x-lzh: 代理（仅当英文含 Proxy） |
 | **Quota** | 配额 | 配額 | クォータ | 할당량 | quota | Cuota | Kontingent | `Quota`（保留英文） | Cota | 限額 | 限额 | Kuota | ja: 残量；zh-CN: 额度（仅当英文含 Quota）；zh-TW: 額度（仅当英文含 Quota） |
-| **Quote reply** | 引用回复 | 引用回覆 | 引用して返信 | 인용 답글 | — | — | — | — | — | — | — | Balasan kutipan | — |
 | **Qwen** | 千问 | 千問 | `Qwen`（保留英文） | `Qwen`（保留英文） | `Qwen`（保留英文） | `Qwen`（保留英文） | `Qwen`（保留英文） | `Qwen`（保留英文） | `Qwen`（保留英文） | 千問 | 千问 | `Qwen`（保留英文） | — |
-| **Read by sentence** | 按句朗读 | 逐句朗讀 | 文ごとに読み上げ | 문장별로 읽기 | — | — | — | — | — | — | — | Baca per kalimat | — |
 | **CN** | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | `CN`（保留英文） | zh-CN: 中国版（仅当英文含 CN）；zh-CN: 国内版（仅当英文含 CN）；ja: 中国版（仅当英文含 CN）；ko: 중국판（仅当英文含 CN） |
 | **Dev** | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | `Dev`（保留英文） | zh-CN: 开发版（仅当英文含 Dev）；ja: 開発版（仅当英文含 Dev）；ko: 개발판（仅当英文含 Dev） |
-| **Remote computer** | 远程电脑 | 遠端電腦 | リモートのパソコン | 원격 컴퓨터 | — | — | — | — | — | — | — | Komputer jarak jauh | — |
-| **Remote desktop** | 远程桌面 | 遠端桌面 | リモートデスクトップ | 원격 데스크톱 | — | — | — | — | — | — | — | Desktop jarak jauh | — |
-| **Run in background** | 后台运行 | 背景執行 | バックグラウンド実行 | 백그라운드 실행 | — | — | — | — | — | — | — | Jalankan di latar belakang | — |
-| **Direct to computer** | 电脑直连 | 電腦直連 | パソコンに直接接続 | 컴퓨터에 직접 연결 | — | — | — | — | — | — | — | Langsung ke komputer | — |
-| **Display & Sound** | 影音 | 影音 | 画面とサウンド | 화면 및 소리 | — | — | — | — | — | — | — | Tampilan & suara | — |
-| **Lock screen control** | 锁屏控制 | 鎖定畫面控制 | ロック画面の操作 | 잠금 화면 제어 | — | — | — | — | — | — | — | Kontrol layar kunci | — |
-| **Native resolution** | 原生分辨率 | 原生解析度 | ネイティブ解像度 | 기본 해상도 | — | — | — | — | — | — | — | Resolusi asli | — |
-| **Picture in picture** | 小窗模式 | 小窗模式 | ピクチャインピクチャ | 화면 속 화면 | — | — | — | — | — | — | — | Gambar dalam gambar | — |
-| **Computer resolution** | 电脑分辨率 | 電腦解析度 | パソコンの解像度 | 컴퓨터 해상도 | — | — | — | — | — | — | — | Resolusi komputer | — |
-| **Server screenshot relay** | 服务器截图中转 | 伺服器截圖中繼 | サーバー経由のスクリーンショット | 서버 스크린샷 중계 | — | — | — | — | — | — | — | Relay tangkapan layar server | — |
-| **Take over connection** | 接管连接 | 接管連線 | 接続を引き継ぐ | 연결 넘겨받기 | — | — | — | — | — | — | — | Ambil alih koneksi | — |
-| **Server video relay** | 服务器视频中转 | 伺服器影片中繼 | サーバー経由の映像 | 서버 영상 중계 | — | — | — | — | — | — | — | Relay video server | — |
-| **Remote device** | 远程设备 | 遠端裝置 | リモートデバイス | 원격 기기 | — | — | — | — | — | — | — | Perangkat jarak jauh | — |
 | **Request Refund** | 申请退款 | 申請退款 | 返金を申請 | 환불 신청 | Demander un remboursement | Solicitar reembolso | Rückerstattung anfordern | Pedir reembolso | Solicitar reembolso | 請退款 | 请退款 | Ajukan pengembalian dana | — |
-| **Activity Monitor** | 资源监视器 | — | アクティビティモニタ | 활성 상태 보기 | — | — | — | — | — | — | — | Monitor Aktivitas | — |
-| **Role name** | 角色名 | 角色名 | ロール名 | 역할 이름 | — | — | — | — | — | — | — | Nama peran | — |
-| **Routine** | 例行任务 | 例行任務 | ルーティン | 루틴 | `Routine`（保留英文） | — | `Routine`（保留英文） | — | — | — | — | Rutinitas | — |
-| **Trigger** | 触发器 | 觸發器 | トリガー | 트리거 | Déclencheur | Activador | `Trigger`（保留英文） | Acionador | Acionador | 觸發器 | 触发器 | Pemicu | — |
-| **Run records** | 运行记录 | — | 動作記録 | 실행 기록 | — | — | — | — | — | — | — | Catatan operasi | — |
 | **Running** | 运行中 | 執行中 | 実行中 | 실행 중 | en cours d'exécution | En ejecución | Wird ausgeführt | Em execução | Em execução | 方行 | 方行 | Berjalan | zh-CN: 执行中（仅当英文含 Running）；zh-CN: 进行中（仅当英文含 Running）；zh-TW: 進行中（仅当英文含 Running） |
-| **Scrolling Screenshot** | 滚动截图 | 捲動截圖 | スクロールスクリーンショット | 스크롤 스크린샷 | — | — | — | — | — | — | — | Tangkapan layar bergulir | — |
-| **Relay service** | 中转服务 | 中繼服務 | リレーサービス | 중계 서비스 | — | — | — | — | — | — | — | Layanan relay | — |
 | **Session** | 任务 | 任務 | セッション | 세션 | session | Sesión | Sitzung | Sessão | Sessão | 差事 | 差事 | Sesi | zh-CN: 会话；zh-TW: 會話；zh-Hant-x-lzh: 會話；zh-Hans-x-lzh: 会话 |
-| **Mute notifications** | 消息免打扰 | 訊息免打擾 | 通知をミュート | 알림 끄기 | — | — | — | — | — | — | — | Bisukan notifikasi | — |
-| **Share Link** | 分享链接 | 分享連結 | 共有リンク | 공유 링크 | — | — | — | — | — | — | — | Tautan berbagi | — |
-| **Share Request** | 分享申请 | 分享申請 | 共有の申請 | 공유 요청 | — | — | — | — | — | — | — | Permintaan berbagi | — |
-| **Shared Session** | 共享任务 | 共享任務 | 共有セッション | 공유 세션 | — | — | — | — | — | — | — | Sesi bersama | — |
-| **shortcut listener permission** | 监听权限 | — | ショートカット監視の許可 | 단축키 감지 권한 | — | — | — | — | — | — | — | （待定） | zh-CN: 输入监控（仅当英文含 shortcut listener permission）；ja: 入力監視（仅当英文含 shortcut listener permission）；ko: 입력 모니터링（仅当英文含 shortcut listener permission） |
-| **Side chat** | 侧边追问 | 側邊追問 | サイドチャット | 사이드 채팅 | — | — | — | — | — | — | — | Obrolan samping | — |
-| **Sign-in** | 登录 | 登入 | サインイン | 로그인 | Connexion | Inicio de sesión | Anmeldung | Início de sessão | Login | 登入 | 登录 | Masuk | — |
 | **Skill** | 技能 | 技能 | スキル | 스킬 | skill | Habilidad | `Skill`（保留英文） | `Skill`（保留英文） | `Skill`（保留英文） | 技藝 | 技艺 | `Skill`（保留英文） | ja: 技能；ko: 기술 |
 | **SkillHub** | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | ja: スキルハブ；ko: 스킬 허브 |
-| **Skip Sign-In** | 跳过登录 | — | ログインをスキップ | 로그인 건너뛰기 | — | — | — | — | — | — | — | Lewati masuk | — |
-| **Smart routing** | 智能调配 | 智慧調配 | スマートルーティング | 스마트 라우팅 | — | — | — | — | — | — | — | Perutean pintar | — |
-| **Speech speed** | 语速 | 語速 | 読み上げ速度 | 읽기 속도 | — | — | — | — | — | — | — | Kecepatan bicara | — |
 | **Subagent** | `Subagent`（保留英文） | `Subagent`（保留英文） | サブエージェント | 하위 에이전트 | sous-Agent | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | zh-CN: 代理（仅当英文含 Subagent）；zh-TW: 代理（仅当英文含 Subagent）；zh-Hant-x-lzh: 代理（仅当英文含 Subagent）；zh-Hans-x-lzh: 代理（仅当英文含 Subagent） |
 | **Task** | 任务 | 任務 | タスク | 작업 | tâche | Tarea | Aufgabe | Tarefa | Tarefa | 差事 | 差事 | Tugas | — |
-| **Header** | 顶栏 | 頂列 | 上部 | 상단 | en-tête | encabezado | Kopfzeile | cabeçalho | cabeçalho | 頂列 | 顶列 | Bilah atas | — |
-| **Inbox** | 收件箱 | 收件匣 | 受信トレイ | 받은 편지함 | Boîte de réception | Bandeja de entrada | Posteingang | Caixa de entrada | Caixa de entrada | 收件匣 | 收件箱 | — | — |
-| **Pending** | 待处理 | 待處理 | 未処理 | 처리 대기 | À traiter | Pendientes | Offen | Pendentes | Pendentes | 待處理 | 待处理 | Menunggu | — |
-| **Processed** | 已处理 | 已處理 | 処理済み | 처리됨 | Traitées | Procesadas | Erledigt | Tratadas | Tratadas | 已處理 | 已处理 | — | — |
-| **Snoozed** | 稍后处理 | 稍後處理 | 後で処理 | 나중에 처리 | Reportées | Pospuestas | Zurückgestellt | Adiadas | Adiadas | 待後處理 | 待后处理 | — | — |
-| **Tag** | 标签 | 標籤 | タグ | 태그 | Étiquette | — | `Tag`（保留英文） | Etiqueta | Etiqueta | 標籤 | 标签 | Label | — |
 | **Buddy** | 伙伴 | 夥伴 | 仲間 | 동반자 | Ami | Amigo | Freund | Amigo | Amigo | 同伴 | 同伴 | Rekan | — |
-| **Core skill** | 核心技能 | 核心技能 | コアスキル | 핵심 스킬 | — | — | — | — | — | — | — | Skill inti | — |
-| **Todo** | 待办 | 待辦 | `Todo`（保留英文） | 할 일 | — | Pendiente | — | A hacer | A hacer | — | — | To-do | — |
-| **Terms of Service** | 服务条款 | 服務條款 | 利用規約 | 서비스 이용약관 | Conditions d'utilisation | Términos del servicio | Nutzungsbedingungen | Termos de Serviço | Termos de Serviço | — | — | Ketentuan Layanan | — |
-| **Thread** | 任务 | 任務 | スレッド | 스레드 | fil | Hilo | `Thread`（保留英文） | Tópico | Tópico | 話題 | 话题 | `Thread`（保留英文） | zh-CN: 线程；zh-TW: 執行緒 |
 | **Token Plan** | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | `Token Plan`（保留英文） | — |
 | **Turn** | 轮 | 輪 | ターン | 턴 | tour | Turno | Runde | Turno | Turno | 輪 | 轮 | Giliran | — |
 | **Ultrafast** | 超快 | 超快 | 超高速 | 초고속 | Ultra-rapide | Ultra rápido | Ultraschnell | Ultra rápido | Ultra rápido | 超快 | 超快 | Sangat cepat | — |
-| **Ungrouped** | 未分组 | 未分組 | 未分類 | 미분류 | — | — | — | — | — | — | — | Tanpa grup | — |
-| **Upload code** | 上传编号 | — | アップロード番号 | 업로드 번호 | — | — | — | — | — | — | — | Kode unggahan | — |
 | **Usage** | 用量 | 用量 | 使用量 | 사용량 | consommation | Uso | Nutzung | Utilização | Uso | 耗用 | 耗用 | Penggunaan | zh-CN: 使用情况；zh-CN: 使用表现；zh-TW: 使用情況；zh-TW: 使用表現；ja: 使用状況；ja: 利用状況；ko: 사용 현황 |
-| **Use my browser logins** | 使用我的浏览器登录态 | 使用我的瀏覽器登入態 | ブラウザのログイン状態を使う | 내 브라우저 로그인 사용 | — | — | — | — | — | — | — | Gunakan login browser saya | — |
-| **Voice dictionary** | 语音词典 | — | 音声辞書 | 음성 사전 | — | — | — | — | — | — | — | Kamus suara | — |
-| **Voice Mode** | 语音模式 | 語音模式 | 音声モード | 음성 모드 | — | — | — | — | — | — | — | Mode suara | — |
-| **Voiceprint** | 声纹 | 聲紋 | 声紋 | 성문 | — | — | — | — | — | — | — | Sidik suara | — |
-| **Wallpaper** | 壁纸 | 桌布 | 壁紙 | 배경화면 | — | — | — | — | — | — | — | `Wallpaper`（保留英文） | — |
-| **Wallpaper Blur** | 壁纸模糊 | 桌布模糊 | 壁紙のぼかし | 배경화면 흐림 | — | — | — | — | — | — | — | Buram wallpaper | — |
-| **Wallpaper Visibility** | 壁纸可见度 | 桌布可見度 | 壁紙の表示濃度 | 배경화면 표시 강도 | — | — | — | — | — | — | — | Visibilitas wallpaper | — |
-| **WeChat** | 微信 | — | `WeChat`（保留英文） | `WeChat`（保留英文） | `WeChat`（保留英文） | `WeChat`（保留英文） | `WeChat`（保留英文） | `WeChat`（保留英文） | `WeChat`（保留英文） | — | — | `WeChat`（保留英文） | — |
-| **WeCom** | 企业微信 | — | `WeCom`（保留英文） | `WeCom`（保留英文） | `WeCom`（保留英文） | `WeCom`（保留英文） | `WeCom`（保留英文） | `WeCom`（保留英文） | `WeCom`（保留英文） | `WeCom`（保留英文） | — | `WeCom`（保留英文） | — |
-| **WeCom group bot** | 企微群机器人 | — | WeCom グループボット | WeCom 그룹 봇 | — | — | — | — | — | — | — | Bot grup WeCom | — |
-| **WeCom Intelligent Bot** | 企业微信智能机器人 | — | WeCom インテリジェントボット | WeCom 지능형 봇 | — | — | — | — | — | — | — | Bot Cerdas WeCom | — |
-| **withdraw (a reply)** | 撤回 | — | 取り消す | 철회 | — | — | — | — | — | — | — | Tarik kembali | — |
-| **Work split** | 分工 | 分工 | 役割分担 | 역할 분담 | — | — | — | — | — | — | — | Pembagian kerja | — |
 | **Worker** | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | — |
 | **Working directory** | 工作目录 | 工作目錄 | 作業ディレクトリ | 작업 디렉터리 | répertoire de travail | Directorio de trabajo | Arbeitsverzeichnis | Diretório de trabalho | Diretório de trabalho | 工作目錄 | 工作目录 | Direktori kerja | zh-CN: 任务空间；zh-CN: 工作空间；zh-TW: 任務空間；zh-TW: 工作空間 |
 | **Worktree** | worktree | worktree | worktree | worktree | worktree | worktree | `Worktree`（保留英文） | `Worktree`（保留英文） | `Worktree`（保留英文） | worktree | worktree | worktree | zh-CN: 工作树（仅当英文含 Worktree）；zh-CN: 工作区（仅当英文含 Worktree）；zh-TW: 工作樹（仅当英文含 Worktree）；zh-TW: 工作區（仅当英文含 Worktree）；zh-Hant-x-lzh: 工作樹（仅当英文含 Worktree）；zh-Hans-x-lzh: 工作树（仅当英文含 Worktree） |
@@ -349,12 +186,6 @@
 | Credits | pt-BR | créditos | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Credits** | id | Kredit | 默认 |
 | Credits | id | kredit | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
-| **Device** | zh-CN | 设备 | 默认 |
-| Device | zh-CN | 电脑 | 指代桌面端那台物理机本身而非「可选目标」这一维度（「在电脑上安装并打开 Cindy」「正在从电脑导出…」「电脑端正在等待确认」） |
-| **Device** | ja | デバイス | 默认 |
-| Device | ja | パソコン | 同上 —— デスクトップ実機そのものを指す場合 |
-| **Device** | ko | 기기 | 默认 |
-| Device | ko | 컴퓨터 | 同上 —— 데스크톱 실물 기기 자체를 가리키는 경우 |
 | **Directory** | es | Directorio | 默认 |
 | Directory | es | directorio | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Directory** | pt-PT | Diretório | 默认 |
@@ -379,14 +210,6 @@
 | Issue | pt-PT | Problema | 泛指问题的句首或状态标签，不是 GitHub Issue 类型。 |
 | **Issue** | pt-BR | Issue | 默认 |
 | Issue | pt-BR | issue | 句中使用小写首字母；标题仍可使用大写首字母。 |
-| **Local** | zh-CN | 本机任务 | 默认 |
-| Local | zh-CN | 本机 | 设备标签：ccAgent.sidebar.machineSwitcher.localMachine（设备菜单与新建任务按钮）、ccAgent.sidebar.deviceGroup.local（设备分组标题） |
-| **Local** | zh-TW | 本機任務 | 默认 |
-| Local | zh-TW | 本機 | 设备标签：ccAgent.sidebar.machineSwitcher.localMachine、ccAgent.sidebar.deviceGroup.local |
-| **Local** | ja | このデバイスのセッション | 默认 |
-| Local | ja | このデバイス | 设备标签：ccAgent.sidebar.machineSwitcher.localMachine、ccAgent.sidebar.deviceGroup.local |
-| **Local** | ko | 이 기기의 세션 | 默认 |
-| Local | ko | 이 기기 | 设备标签：ccAgent.sidebar.machineSwitcher.localMachine、ccAgent.sidebar.deviceGroup.local |
 | **Message** | es | Mensaje | 默认 |
 | Message | es | mensaje | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Message** | pt-PT | Mensagem | 默认 |
@@ -483,20 +306,6 @@
 | **Buddy** | pt-BR | Amigo | 默认 |
 | Buddy | pt-BR | amigo | 句中使用小写首字母。 |
 | Buddy | pt-BR | amigos | 按语法使用复数形式。 |
-| **Thread** | zh-CN | 任务 | 默认 |
-| Thread | zh-CN | thread | 指 Codex 的 thread 这一外部系统概念时（导入历史、thread 上下文），保留英文 |
-| Thread | zh-CN | 评论 | 指 GitHub PR 的 review thread 时，用「review 评论」 |
-| **Thread** | zh-TW | 任務 | 默认 |
-| Thread | zh-TW | thread | 指 Codex 的 thread 這一外部系統概念時（匯入歷史、thread 上下文），保留英文 |
-| Thread | zh-TW | 評論 | 指 GitHub PR 的 review thread 時，用「review 評論」 |
-| **Thread** | es | Hilo | 默认 |
-| Thread | es | hilo | 句中使用小写首字母；标题仍可使用大写首字母。 |
-| **Thread** | pt-PT | Tópico | 默认 |
-| Thread | pt-PT | tópico | 句中使用小写首字母；标题仍可使用大写首字母。 |
-| **Thread** | pt-BR | Tópico | 默认 |
-| Thread | pt-BR | tópico | 句中使用小写首字母；标题仍可使用大写首字母。 |
-| **Thread** | id | Thread | 默认 |
-| Thread | id | thread | 印尼语 sentence case：该词在句中（非句首）出现时为小写。 |
 | **Turn** | es | Turno | 默认 |
 | Turn | es | turno | 句中使用小写首字母；标题仍可使用大写首字母。 |
 | **Turn** | pt-PT | Turno | 默认 |
@@ -530,240 +339,77 @@
 
 ### 裁决理由
 
-- **Accessories** — 设置 → 键盘快捷键里，尚未检测到的硬件输入设备（Work Louder 键盘、Xbox 手柄等）收在这一栏。已插入的设备单独成卡，不进这一栏。与 device-link 的「设备／设备互联」不是同一概念。
 - **Active** — 对话 / 设备状态用「活跃」（现状 21:7）。mobile/devices 同一屏上筛选 chip 写「活跃」、指标磁贴写「活动」。条件禁用：「活动」是 Activity 的正确译法，无条件禁会误伤「活动记录」这类。豁免 Windows Computer Use 提示：那里的 active desktop 指「当前接收输入、显示目标应用的 Windows 桌面」，是 OS 概念，中文既定说法为「当前活动桌面」，与产品的活跃度无关。
   - 豁免范围：`desktop:settings.computerUse.directControl.permissions.windowsHint`
-- **Additional fees** — 任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。
 - **Agent** — 产品一级概念，五语统一保留英文原词。zh-CN 现状 44:5 已是主流；zh-TW 沿用同一裁决；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故四个目标语言一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 "Agent"→「代理」的 4 处和 "Subagent models" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 "SSH agent" / "probe agent"），是与产品 Agent 同形的另一个概念。
   - 豁免范围：`desktop:settings.remote.`、`desktop:ipcError.SSH_AGENT_UNAVAILABLE`
 - **Agent-Net** — 端到端加密的 V2 设备链路名称；各语言保留品牌拼写。拓扑只在已协商的实际连接上标注。
-- **Agent network** — agent-net 的产品名：所有用 Cindy 登录的 App 和硬件组成的互联网络。代码与文档里的 agent-net 是工程名，不出现在 UI 文案。
 - **Agent Notch** — Cindy 在屏幕顶部显示任务的面板（原名灵动岛 / Agent Island）。苹果在新款 MacBook Pro 上推出灵动岛后改名，避免与 Apple 的灵动岛混同；中文不直译 notch（「刘海」易联想发型），用户于 2026-11-07 选定。设置页搜索保留旧名作别名。
 - **Agent session** — Agent / 引擎的**运行时**会话（SDK Query 的生命周期），不是 session 条目说的那个产品条目。中文必须叫「Agent 会话」而不是「任务」——两者的区别是用户会不会因此做一个多余的动作：记忆、MCP、内置工具、LSP、权限开关这类设置都在「下一个 Agent 会话」生效，而同一条任务里 /clear、rewind、重启都会开新的 Agent 会话，说「新建任务才生效」会让用户白开一条任务、还割裂上下文。forbidden 规则只覆盖英文源字面写了 agent session 的 key（精确、无误报）；英文只写 session 的那批（`The Codex session state` / `Session is inactive` / `in-flight sessions`）**机器判不出来**——英语本身不区分这两个意思，同一句里两个所指并存也是合法的（`The historical agent session ... so a new session can't be started`：前半指运行时、后半指条目，已登记 exempt）。所以这批只能靠人读英文源判断，判据与全部踩坑记录见 docs/product-rules/task-and-conversation-naming.md §6.0.2。session 条目的 exempt 里另有三类同样叫 session 的东西：登录/绑定校验会话、SSH 远程与传输会话、操作系统桌面会话，以及 mobile 的语音连接会话——它们各自稳定、极少改动，故未单独立条目。
   - 豁免范围：`desktop:chat.userMessage.forkErrors.unsupportedHistory`
 - **Anthropic Messages** — Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。
-- **API Price Estimate** — 用户为自有 API、OAuth 或订阅通道维护的本地 token 单价估算；只影响 Cindy 的用量价值估算，不代表供应商实际账单，也不覆盖 Cindy AI Gateway 的服务端实售价。先登记为 proposed，待产品术语评审后固化。
-- **Archive** — 任务归档动作。灵动岛完成卡按钮沿用既有任务归档确认框的译法，避免同一操作链路混用存档／归档或封存／歸檔；不在此条目裁决或批量修改其它语境。
-- **Global region** — 企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到 Global 服务区域时的确认文案；它描述连接的服务区域，不是对当前安装版本的标签，也不同于项目配置里的 generic global scope。先按现有四语文案登记为 proposed。
-- **Mainland China** — 企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到中国大陆服务区域时的确认文案；它描述连接的服务区域，不代表当前安装的是中国大陆版。先按现有四语文案登记为 proposed，避免后续出现“中国区／国内区／China region”等多套说法。
 - **Author** — 中文用「作者」（现状 9:4）。典型的同模块自相矛盾：issueTracker 同一个页面里，assignee.labelAuthor 写「提交者」、list.filterAuthor 写「提出者」、visibility.onlyAuthorCanChange 写「作者」——同一个字段三种叫法。条件禁用避免误伤 Committer / Reporter 等其它英文词的正确译法。
 - **Auto-added** — Auto-* 家族；数据源 settings.voiceInput.refinement.dictionary.filters.automatic。
 - **Auto-connect** — Auto-* 家族；数据源 settings.remote.button.autoConnect。
 - **Auto-learning** — Auto-* 家族；数据源 settings.voiceInput.refinement.dictionary.autoLearning.label。
-- **Auto-review** — Auto-* 前缀家族合并裁决（与 Auto-connect / Auto-added / Auto-learning 一并）：形态钉死「Auto- 大写 A + 连字符」。数据源 settings.auxiliaryModels。
-- **Automatically unlock computer** — 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
 - **Automation** — scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。
   - 豁免范围：`desktop:settings.contacts.import.permissionDenied`、`desktop:settings.contacts.ipcError.PERMISSION_DENIED`
-- **Trigger mode** — 自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。
 - **Balance** — 账户余额用「余额」。原先被并入「额度」（可用额度 / 额度更新于 / 剩余额度），与 Credits、Quota 混同。Balance 是「账上还剩多少」，Credits 是「可购买消耗的计数单位」，Quota 是「周期内上限」——三者是不同层面的量，中文必须分开。
-- **At a glance** — 伙伴聊天头部网格按钮打开的浮层：电脑、近期任务、输出内容三块（2026-11-08 起待办块随伙伴 V2 移除；docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
 - **Discover Buddies** — 预制伙伴目录与邀请入口；使用 Buddy 对应的本地化产品术语。
-- **reply (the bot's public post on X)** — Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。
-- **Security check** — 登录邮箱发码前的 CAPTCHA(Cloudflare Turnstile)挑战。中文用「安全验证」(腾讯/阿里系产品的通行叫法,2026-08-19 用户反馈弃用「人机验证」;与「验证码」= verification code 消歧——后者已被 login.codePlaceholder 占用指 6 位数字码);en 用 Security check 而非品牌词 Turnstile 或缩写 CAPTCHA。消费处:login.captcha.* 与 login.errors.CAPTCHA_*(desktop 五语 + mobile 影子 catalog)。
 - **Chat** — Chat 专指任务内人与 AI 交流的过程与内容（对话区 / 对话正文 / 对话记录 / 继续对话），中文「对话」。指那个可打开可删除的条目时用 Session（中文「任务」）——此前 Chat 与 Session 混用同一个中文词的问题已随 2026-07-31 的改名解决：英文侧指容器的 Chat 已改为 Session。「聊天」一律禁用。ja / ko 保留各自既有译法。
-- **Chat workspace** — 用户于 2026-09-18 明确指定的存储设置名称，表示未绑定项目的新任务工作目录的分配位置。单个任务的 working directory 仍称工作目录，不改其术语。
-- **China** — 模型目录中由服务端显式 group:"china" 标记的来源分组。它描述模型或供应商来自中国，不表示相对于当前用户或发行区域的‘国内’；英文词条保持自然大小写 China，设置页分组头由统一 uppercase 样式显示为 CHINA。
-- **Free tier** — Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。
 - **Cindy Codex home** — 远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。
 - **Cindy Friend** — Agent-Net App name supplied by the product request; preserve the brand in every locale.
 - **Cindy Make** — 用户通过 /cindy-make 显式开启的本机定制流程。输入区承接准备与每轮完成选择；修改时使用普通输入框。完成后可继续修改、启动隔离测试或生成个人版，版本切换由原生客户端处理。Doctor 自身只检查。
-- **Submit to Cindy** — 把 Cindy Make 的一项修改整理成 Pull Request 提交到官方仓库。面向普通用户写「提交给官方」，对话框说明里才出现 Pull Request；状态写「等待审核 / 已被官方采纳 / 官方未采纳」，不写 open / merged / closed。
-- **Make history** — Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；结束制作及清理工作目录后仍可回看。
-- **Add back to personal version** — 重新应用之前明确撤销的制作改动，区别于把尚未合入的新修改首次加入个人源码。
-- **Saved in** — Cindy Make 版本控制概览中的一行，说明个人版保存在哪里：只在这台电脑，或用户自己 GitHub 上官方仓库的公开副本（fork）。面向普通用户不写 fork，写「你的 GitHub」。
-- **Remove from personal version** — 从个人版移除单次制作已经加入的全部改动，保留其他制作与已有应用成品；底层通过新的反向提交实现，不改写 Git 历史。
-- **Version Control** — Cindy Make 设置中用户指定的页签名称，汇总我的版本与制作历史，并提供本地合入、撤销和生成入口。
-- **Original Version** — Cindy Make 中与个人版对应的来源应用。用户明确要求 Dev 和正式安装版属于同一个类型；Dev 只影响底层启动方式，不作为第三类版本。
-- **Personal Version** — Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。
 - **Collaboration** — Orca 多 Agent 功能名，中文用「协同」（现状 21:2）。可见 bug：设置导航项写「协作」，点进去页面标题写「协同」。条件禁用：settings.contacts 里的「协作经历」是 collaboration history，属另一个语义，英文源不含独立 Collaboration 一词时不判违规。
   - 豁免范围：`desktop:settings.contacts.`
 - **Collapse** — 中文用「收起」（现状 29:7），与反义词「展开」（Expand，29/30 已统一）配对。ccAgent 与 rightSidebar 内部各自「收起 / 折叠」混用，是同模块自相矛盾。条件禁用：「折叠」在别处可能是正常中文，只在英文源含 Collapse 时判违规。
-- **Main computer** — 云端伙伴运行的那台电脑（docs/product-rules/cloud-companions.md §3）：伙伴的 Agent、工作目录与连接只在这台电脑上，其他电脑与手机是查看和发消息的入口。手机与桌面同一叫法，伙伴设置行名、离线横幅与侧栏状态共用。英文行名用 Title Case（Main Computer），句中小写 main computer，故 checkCase 为 false。不要写成「主设备」「宿主机」或 home device（代码字段 homeDeviceId 不是界面用语）。先登记为 proposed，待桌面与手机实机走查后再定。
-- **Connection code** — 本机应用临时连接的端点定位文本，不是授权令牌；连接仍需目标 Cindy 原生确认。
-- **Latency** — 远程连接拓扑与浮层里的往返时间（ms）。
-- **Direct** — 远程连接拓扑里两台设备之间的数据路径不经中转。只用于路径，不用于「电脑直连」（remote-desktop-direct）那种连接方式名。
-- **Via relay** — 远程连接拓扑里两台设备之间的数据经中转服务转发。与「中转服务」（self-hosted-relay-service）是同一个「中转」。
-- **Content Update** — 指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。
-- **Context window** — 模型一次请求可容纳的 token 上限。自定义 Provider 的窗口编辑字段(#386)与用量/压缩相关文案使用;空间紧的 placeholder 可缩写为「上下文 / Context / コンテキスト / 컨텍스트」+ (tokens)。
-- **Crash** — 应用异常终止。此前只出现在内部日志里, 随日志上报进入用户可见文案, 因此登记。ko 取音译「크래시」而非「충돌」——后者在韩语里更常指冲突/碰撞(如合并冲突), 会与 merge conflict 语境混读。proposed。
 - **Credits** — 计费点数用「点数」。清理前中文「额度」同时对应 Balance / Credits / Quota 三个英文概念，是计费面板里最容易误导用户的一处：同一个 billing 页面里「点数」和「额度」并存，而「额度」在别处又指配额。裁决把三者拆开——Credits =「点数」、Quota =「配额」、Balance =「余额」，「额度」整体退出。「额度」的禁用按英文源拆成三条条件禁用,分别挂在 credits / quota / balance 下。不能无条件禁:同一个「额度」在不同 key 里分别对应 Credits / Quota / Balance,目标译法不唯一,无条件禁只会让自动替换随机挑一个——xAI 的 subscription quota 就是这样被改成「订阅点数」的。第三方原生 credits 与 reset credits 属不同概念，走 alsoAllowed。whenEn 写单数 Credit:匹配本来就带可选复数 s,单数能同时覆盖 Credit / Credits,写成复数反而漏掉全部单数用法(Promotional Credit Details、credit snapshot 等 8 个 key 原先完全不受约束)。(2026-07-30 更新:Desktop billing 界面弃用「点数」概念(PR #1053),计费文案与金额直接挂钩——新增计费文案一律用金额/余额(Balance=余额)措辞,en 源不再引入 Credit/Credits 用词,因此本条的 Credits→点数 映射不再适用于计费界面;裁决继续约束的只剩 alsoAllowed 覆盖的第三方原生 credits(Codex / ChatGPT 订阅余量)与 reset credits 语境。后续给计费界面添加文案时不要恢复「点数」。)
-- **Custom MCP** — 插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
-- **Database cleanup** — 设置 → 存储空间内主动备份、清理任务消息并压缩本地数据库的功能名称。默认只清理非活跃任务；用户确认开启可选项后，也会清理活跃任务的历史。先登记为 proposed，待实际使用后再固化。
-- **Detached HEAD** — 沿用会话顶栏分支徽标现有译法
-- **Release** — CindyDev 内部设置中的正式业务服务器环境标签，五语固定保留英文 Release。它表示 App 当前连接哪套服务，不代表安装包发行版本、OTA 通道或 cn / global 区域；因 release 也是普通英文单词，关闭全局大小写扫描，具体 UI key 由 Mobile 定向测试约束。
-- **Device** — device-link 里「可以选择在哪台机器上运行」这一维度，两端统一叫「设备」。desktop 的 machineSwitcher 本来就是 This device / このデバイス / 이 기기，mobile 原先用 computer 系（选择电脑 / パソコンを選択 / 컴퓨터 선택），2026-07 裁决为向 device 系对齐，与既有 device-code（设备码 / デバイスコード / 기기 코드）同口径。alsoAllowed 保留「电脑」系：指代桌面端物理机的文案（安装、导出、等待确认）换成「设备」反而不通中文，那是 desktop/PC 的意思，不是这里的目标维度。
-- **Device Code** — OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。
 - **Device Link** — 兼容设备所用的旧版链路名称；与 Agent-Net 的协议标识并列，直连或经中转另行展示。
-- **Device Simulator** — 官方插件 cindy-simulator 的用户可见名称。2026-10-23 用户确认中文「设备模拟器」与英文 Device Simulator，为后续设备和平台扩展保留命名空间；名称不代表未发布的平台支持。原内置 iOS 模拟器的历史称呼不变。其余语言随迁移提示同步登记，译法整体暂保留 proposed。
-- **DingTalk** — 钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
 - **Directory** — Directory 用「目录」（现状 96:4），Folder 用「文件夹」（37:20），两个英文词在中文里也分开。**本条刻意不设 forbidden**：英文侧自己就在一句话里混用二者（"not a folder. Choose a project directory."、"re-select the working directory and wait for the folder badge"），而条件禁用是句子级匹配，区分不了句内哪个中文词对应哪个英文词——实测 4 处命中全是假阳性，那 4 条中文其实译得完全正确。要真正管住这对词，得先清理英文侧的 path / folder / directory 混用。此条目保留为文档指引，供人查阅。
 - **Dismiss** — 中文用「关闭」（现状 6:4）。同一个 chat 模块里，errorBanner 写「关闭错误提示」、interruptedBanner 写「忽略此中断提示」。条件禁用：「忽略」是 Ignore 的正确译法、「知道了」是 Got it 的正确译法，只在英文源为 Dismiss 时才算违规。
-- **Dissolve group** — Irreversible group termination, distinct from archive, leave and personal list removal.
-- **Doubao** — 模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
 - **Effort** — 模型的推理投入档位（low/medium/high/…）。用「推理强度」有三重依据：①同类工具 i18n 里断层第一（GitHub 代码搜索共现量级 1452，第二名「思考强度」431）；②OpenAI 简中帮助中心即用此词；③跨 provider 中立——Cindy 的 create_worker 用一个 effort 同时映射 Codex reasoning effort 与 Claude thinking 预算，而 Anthropic 官方简中叫「努力程度」、OpenAI 叫「推理强度」，需要不偏向任一方的词。禁用项各有硬理由：「思考深度」「推理深度」会与国内产品普遍的「深度思考」开关撞车，且语义错误（低 effort 是想得少，不是想得浅）；「努力程度」在中文里强烈指向人的绩效评价；「推理等级/级别」未入禁用但不推荐——Cindy 已有 model tier 概念，「等级」易被读成模型档位。
-- **embedding** — 文本转成的数值向量，用于语义检索。zh-CN 用「向量」而非「嵌入」——设置页的模型分组、UnifiedModelList 的能力分类既有注释都已用「向量」，「嵌入」在中文里更容易被读成动作。指模型本身时说「向量模型」，不说「嵌入模型」。插件 cindy.embed 能力与 embedding-client 的四语文案使用。
-- **End-to-end encryption** — 设备间数据在发送端加密、接收端解密，中转服务只搬运密文。当前先按四语言常用安全术语登记为待讨论，避免 E2EE、端对端加密、End-to-End 暗号化等多套可见说法并存。
-- **Engine** — 伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。
-- **Face ID verification** — 远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
-- **Link code** — 官方飞书 / Lark 机器人关联时的一次性短码：网页授权不可用的用户把它私聊发给机器人完成关联，只在关联进行中出现，过期作废，不是密钥。与供应商分享的「配对码」(Pairing Code)、本机应用的「连接码」(Connection code) 是不同概念；ko 取「연동 코드」以免与「연결 코드」(Connection code) 撞名。
 - **Organization app** — 飞书应用类型标识，供组织切换提示识别新旧机器人；不同于 Cindy 个人/组织身份。用户确认不展示 App ID。
 - **Store app** — 飞书应用类型标识，供组织切换提示识别新旧机器人；不同于 Cindy 个人/组织身份。用户确认不展示 App ID。
 - **MR** — GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 GitHub PR。
-- **Group Admin** — 可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。
-- **Group chat** — 伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。
-- **Group Cindy** — 每个服务器群自带的那位 Cindy 成员（docs/product-rules/bot-group-chat.md 第 9 节，2026-11-12）：谁 @ 它就在谁自己的电脑上替他做事，不属于任何人，也不是个人伙伴。名字各语言都叫 Cindy，群管理开关与说明里用这个称呼；不叫「群助手」「群伙伴」「默认伙伴」。先登记为 proposed，等 UI 走查后再定。
-- **Main Chat** — 伙伴群聊的主时间线（产品规则里也称「主群」），与话题相对。中文 UI 写「群聊」（如「同时发到群聊」「贴回群聊」），不写「主聊天」——「聊天」是 Chat 条目的禁用译法。贴回指把话题回复以引用形式发到这里，原回复不移动。
-- **Group Nickname** — 仅在单个群中显示的名字。为空时使用账号显示名；不覆盖个人资料名字或稳定身份。
-- **Group Owner** — Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或分工负责人混同。群设置成员行英文可简写 Owner。
-- **AI reply mode** — A teammate replies on behalf of a group member. Chinese name approved as AI 代答模式 on 2026-10-29; internal personal-mask identifiers remain unchanged.
-- **Group Strategy** — 供应商组为新任务选择组内电脑的规则：最少占用、轮询、按顺序、按权重。读得到 Claude Code 或 OpenAI 订阅用量时先按配额筛（2026-10-21 起比「剩下的配额 ÷ 剩下的时间」，最急的先用），组策略只在差不多急的几台里挑。只决定新任务分到哪台，正常运行的任务不因均衡迁移。
-- **Thread (in a group chat)** — 伙伴群聊里挂在某条消息下的子讨论（服务器的 Thread）。zh 取「话题」：入口叫「创建话题」，有回复后叫「查看话题」，面板标题「话题」；话题里的单条发言仍叫「回复」（回复这条消息、发送回复），不要全局替换。它不是任务：已裁决的 Thread→任务 指产品内的 session，这里是群消息的分支讨论，与「引用回复」（quote-reply）不同——引用回复留在当前时间线。2026-10-13 Dash 提出「现在的回复改名叫创建话题」，先登记为 proposed 待走查后定。
-- **Hunyuan** — 模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
-- **Input Handoff** — Agent 遇到需要主人填写的界面（选择、文本、密码、验证码、授权）时，由宿主读出当前一步，主人在本机或远程设备上填写，值只交给宿主、不进模型与记录。不是远程控制。
-- **Invitation Code** — 共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。
 - **Subtle reminders** — 灵动岛设置：新消息、待回复和错误通过图标变化提示，不向下弹出通知卡片；手动点击展开完整任务列表保持不变。
 - **Issue** — 保留英文（2026-07 裁决）。现状「工单」32 /「议题」4 是既有 bug 的来源：列表按钮写「新建议题」、点进去页面标题写「新建工单」。「问题」不入 forbidden——它在「修复问题和失败」这类泛指语境下是正常中文，不是 Issue 的误译。checkCase 关闭：issue 同时是常用英语单词，prompt 模板里的 "fix the issue" 是正常用法，做大小写约束会制造 9 处假阳性。（2026-07 修正：ko 原声明 Issue 仅 3 处，实测 이슈 45 处才是主流，改随本语言主流；ja 的 Issue 43:2 保持不变。）ja 的「課題」同样是多义词（问题 / 课题），按 whenEn=Issue 条件禁用——插件创建 prompt 里的 "define the problem" 用「課題」是正确的。豁免两个 Jira capability:那里指的是 Jira 自己的记录类型,日文 UI 的既定叫法是「課題」,保留英文反而与用户实际看到的 Jira 界面对不上。产品自身的 Issue 不受影响。 菜单入口(titleBar.menuItems.issues 与系统菜单 labels.issues)刻意不用术语:那里回答的是「点这里能干什么」,邻居全是动作短语(帮助 / 检查更新 / 最新更新介绍),夹一个英文名词既断风格,也让不熟悉 GitHub 的用户不知道该不该点 —— zh-CN 用「问题反馈」、ja 用「フィードバック」(ja 同级项同样全是日文,原先的 Issue 一样孤立)。这不是把 Issue 译成那些词:指代该类对象的位置(页面标题、正文、提示)仍写 Issue,因为点进去就跳 GitHub,名字必须对得上 —— 判据与 ja 的 Jira 豁免同源(跟用户实际看到的外部界面一致)。en 保持 Issues、ko 保持 이슈(各自在本语言里本就是自然的入口词)。
   - 豁免范围：`desktop:scheduler.editor.script.capabilityDescs.jira_comment`、`desktop:scheduler.editor.script.capabilityDescs.jira_read`
 - **Lark** — Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
-- **Left navigation** — 主窗口左侧放任务与「自动化」「插件」「伙伴」等一级入口的那一栏。插件主视图入口的开关称「导航入口」（Navigation Entry），用来与右侧放插件面板、浏览器、终端的「右侧栏」（right sidebar）区分，所以涉及这个入口的文案写左侧导航，不再写笼统的「侧边栏」。韩语依国立国语院标准外来语表记写 내비게이션，不写 네비게이션。英文句中小写 left navigation，故 checkCase 为 false。先登记为 proposed：其他位置仍有「侧边栏」泛指左栏的存量文案，待统一清理时再裁决。
-- **Local model** — 用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。
-- **Local** — 用于 Desktop 本机范围标签。translations 中带任务／セッション／세션 的译法仅用于侧栏任务范围标题 ccAgent.sidebar.scopeLocalSessions；设备菜单、新建任务按钮和设备分组标题使用 alsoAllowed 中不带任务的设备标签译法，不可互换。英文统一使用 Local，表示当前电脑或其上的任务；其他语言保留各位置现有表达。不表示本地模型、离线模式或未登录状态，也不约束其他语境中的 local。
-- **Mac Login Password** — 远程桌面原生密码表单中的 macOS 系统账户密码，区别于 Cindy 账号密码；密码不经过 JavaScript。
-- **Dynamic Island** — Apple 的灵动岛（新款 MacBook Pro 摄像头挖孔处），沿用 Apple 各地区用语，繁中按 Apple 台湾用语作「動態島」。Cindy 自己的顶部任务面板已改名为任务胶囊 / Agent Notch（见 agent-notch），「灵动岛」只指 Apple 的；设置页分区标题也用这个词，统称两者所在的一页。
-- **Live Activities** — Apple 的实时活动（ActivityKit）。沿用 Apple 各地区官方译名；Cindy 只以此展示任务状态，不作为自有功能名。
-- **Black Cat** — 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。
 - **Erika** — 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。
-- **MCP App** — 标准 MCP Apps 协议提供的交互应用；卡片标题与消息来源沿用协议名称，各语言保留 MCP App，待术语评审后固化。
-- **Merge conflict** — GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。
 - **Message** — 对话里的一条往来，用户看到的最小单元。此前有 42 处英文是 message、中文却译成「对话」（如 "Delete this message" → 「删除本条对话」），2026-07-31 一并修正。AI 在一轮里的思考与工具调用最终折叠成一条消息呈现，所以消息与轮次是同粒度的两种切法，不是包含关系。（门禁只精确拦「条对话」这种错译形式，不拦「对话历史 / 对话上下文」——同句里既有 message 又有合法「对话X」时机器无法区分对应关系。）
-- **Read** — 群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。
-- **Migration Assistant** — 新电脑从同账号的其他电脑复制插件、技能与设置的功能名（设置 → 通用），用户 2026-10-20 定名「迁移助理」。ja / ko 参照系统同类功能的常见叫法；登记为 proposed，待术语评审。
-- **Mivo Library** — #5929：引用目录系统项沿用 Mivo 品牌，仅本地化展示；通用 library 能力的品牌命名仍待维护者裁决。
-- **Audio Generation** — V4 模型类型 audio_generation，包含通用声音生成；与 audio_speech 语音合成分别展示。
-- **Compression** — issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。
-- **Decision** — 模型分类 evaluation 对应 Decisions 接口，不进入 Agent 对话模型清单。日文沿用 Jev 开发者项目中的意思決定モデル，韩文沿用 IBM 韩文文档与 KAIST 文献中的 의사결정 모델，分类标签省略模型。
-- **Realtime Audio** — issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。
 - **Rerank** — 模型分类 rerank，对查询的候选文档重新排序，不进入对话模型清单。
-- **Speech to Text** — issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。
-- **Text to Speech** — issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。
-- **Model Group** — 用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。
-- **Native API** — 模型目录维护的权威协议；独立于各 Harness 的实际接入配置。设置面板用于简短对比原生支持与兼容模式。
-- **Upstream APIs** — 模型设置「引擎支持」顶部只读列出当前来源为该模型提供的全部接口（Messages / Responses / Chat Completions / Google Gemini），替代旧的单值「原生协议」。上游提供的接口按原生使用，只有 Cindy 本地转换才标兼容模式（2026-10-30）。
-- **Publish Plugin** — 当前登录账号向公开市场发布插件、查看发布情况与发布记录的页面，个人和组织成员均可使用；区别于本机已安装插件和旧企业我的发布。
-- **New project location** — 存储设置名称（#8259）：在任务里「新建项目…」时项目文件夹的上级目录。未设置时按已登记项目最常见的父目录推荐，否则为 ~/Projects。与「对话工作区」（不绑项目任务的工作目录分配位置）是两个设置。
-- **Nightly learning** — （2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
-- **Not signed in** — 跳过登录后应用内的账号状态名（侧边栏账号胶囊、设置页资料卡、语音服务提示，以及 main 侧不走 locale 的 model-visible 文案——已知 mcp-integrations/ghost.ts 的 GHOST_NOT_FOUND tool result，它会被模型读到并可能回显进对话，#907 review 补上）。**约束范围不限于 locale JSON**：guard 只扫 locale 文件，这类硬编码文案要人工找（见 engineering-conventions §5.1「Slack / IM 侧的文案不在任何 locale 文件里」同类问题）。2026-07-29 产品口径：面向用户只说「未登录」，不再叫「本地模式」——后者听起来像另一种服务端连接方式，实际只是没有登录 Cindy 账号。「本地」仅用于描述数据落在本机（如资料卡副文案「数据仅保存在本机」），不作为状态名。代码内部标识（AuthState mode='local'、authEnterLocal IPC、data owner）不受本条约束，仍用 local。en 侧统一走 not signed in 一种说法（含 settings.userProfile.local 的 exit / exitFailed 两条当前无引用的文案：the not-signed-in state），不与 unauthenticated 混用——PR #907 review 指出过同一状态两种英文说法会让日后启用这些文案时 UI 自相矛盾。status 仍为 proposed：Not signed in 作为状态名尚未与设计侧正式过一遍。
 - **Working computer** — 官方飞书 / Lark 机器人中接收新消息的已关联电脑；每个应用和飞书账号独立选择，默认最新关联的电脑。
 - **Chat Completions** — 模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。
 - **Responses** — 模型协议对比中的 OpenAI API 官方名称。保留英文以区别普通消息或回答。
 - **OpenClaw** — 腾讯授权页可能展示的外部产品名称，客户端仅按原品牌名展示；先登记为 proposed，待产品术语评审后再决定是否固化。
-- **Organizer** — 伙伴群聊里负责出安排、改安排的那位成员（docs/product-rules/bot-group-chat.md §7.1）：群设置里指定，未指定或已不可用时由成员顺序里第一位可用的伙伴担任。英文**不得**写作 Lead——Lead 是 Orca 协同的角色名（见 lead 条目）。标签与按钮用 Title Case（Organizer、Make Organizer），句中用小写 organizer，故 checkCase 为 false。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。
-- **Overview** — 插件页二级 tab 的总览入口，承载已安装与推荐内容，与「我的发布」并列。该词不重复页面标题「插件」，并保持弱于一级 Plugin / Skill pill 的层级。
-- **Pairing Code** — 供应商分享申请的 4 位数字，只在受邀者「等待同意」界面与分享者审批弹窗 / 管理页待处理一栏出现，供双方核对是同一个人；不是密钥，不参与鉴权。与 OAuth 的 Device Code（设备码）是不同概念。
-- **Performance Trace** — 用户按需录制 Cindy 性能现场的诊断入口；完整轨迹留在本地，结构化报告经用户提交。
-- **Personal WeChat** — 个人微信连接在设置页中的产品名称；先登记为 proposed，待产品术语评审后再决定是否固化。
-- **Pin** — 右侧栏插件面板页签的图钉:钉住 = 面板在所有对话中保留。动词对:Pin=钉住 / Unpin=取消钉住。2026-07-31 随图钉功能提出,待裁决。
 - **Plugin** — 中文一律「插件」，不保留英文原词（现状 94:4）。历史上 Ghost / Plugin 两种叫法并存，对外统一为「插件」。
   - 豁免范围：`desktop:settings.ghosts.market.sources.sourcePlaceholder`、`desktop:settings.ghosts.market.sources.sparsePlaceholder`
-- **Publish anonymously** — 个人插件的公开署名开关，默认开启，原作者可随时修改；不改变固定账号归属，关闭后展示提审时保存的昵称。
-- **Community** — 插件公开来源下的社区发布者身份标识，与官方并列；用户于 2026-11-09 确认设计。社区作者继续不公开署名；不表示个人私有市场或运行时信任。
-- **Main view** — Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。
-- **Manual** — 插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
-- **Locally installed** — 插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
-- **Third-party source** — 插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
-- **Unknown source** — 插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
-- **Audio** — 模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
-- **Image** — 模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
-- **Text** — 模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
-- **Video** — 模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
-- **Duration** — 模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。
 - **Privacy Policy** — Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。
-- **Privacy screen** — Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。
-- **Process** — OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。
 - **Project** — 中文一律「项目」（现状 119:15）。同一个侧边栏里筛选叫「项目」、批量操作提示叫「Project」是既有 bug。小写 project 不入 forbidden——它常出现在路径与文件名里（project.json）。
 - **Provider** — 中文用「供应商」（现状 36:18 领先简称）。全称「模型供应商」在需要消歧的位置仍可用。「提供商」「提供方」是同义漂移，禁用——设置页标题写「模型供应商」、它自己的表单写「提供商」是既有 bug。豁免 ssoVerificationSubtitle：那里的「身份提供方」是 SSO / SAML 领域 Identity Provider 的标准中文术语，与模型供应商是两个概念。该文案在 desktop locale 与 mobile 影子 catalog 各有一份副本，两处都要豁免。（2026-07 修正：ko 原声明 제공업체 仅 6 处，实测 제공자 32 处为主流，改随主流。）ja 的「提供元」是多义词——同时表示 "source"（来源），因此按 whenEn=Provider 条件禁用；无条件禁会把「共有元の提供元を信頼できるか」这类 source 语境一并换掉。豁免 creditParity 两条:那里的 third-party providers 指支付渠道/收单机构,不是模型供应商——ja 用「事業者」、zh-CN 用「第三方渠道」都对,套上「プロバイダー」反而会让用户以为是模型服务商在收钱。(2026-07 更新:billing 弃用「点数」概念改用金额/余额,creditParityCny/Usd 两条文案已删除,对应豁免一并移除。)
   - 豁免范围：`desktop:login.ssoVerificationSubtitle`、`mobile/loginMessages:ssoVerificationSubtitle`
-- **Provider Group** — 某台电脑上某个供应商的一组运行位置：本机、我的其他电脑、通过分享链接加入的电脑（docs/product-rules/provider-groups.md）。这个供应商的使用都按组策略选一台组内电脑运行 Agent。中文用「供应商组」，不单用「分组」，避免与模型列表和设置页的模型分组混淆；组里的电脑称「组内电脑」。
-- **Provider Sharing** — 把自己电脑上的某个供应商分享给其他 Cindy 账号使用(docs/product-rules/provider-sharing.md)。中文一律用「分享」，不用「共享」——「共享」留给共享任务，两者是独立的授权关系；ja / ko 两个功能都自然译作「共有 / 공유」，靠「プロバイダー / 제공자」与「セッション / 세션」区分。界面上「管理分享」「分享 {供应商}」「分享给我的供应商」都属于本词。
 - **Provider transaction ID** — 支付渠道记录的交易号，用于开票弹窗和邮件；支付宝为实际交易号，Stripe 为 PaymentIntent ID 或 Charge ID，不是本地订单号或商户订单号。
 - **Proxy** — 网络代理，中文保留英文原词（2026-07 裁决：Agent 与 Proxy 都不叫「代理」）。本条只管英文源为 Proxy 的那些——Agent / Subagent 的「代理」误译各自登记在自己条目下。ja / ko 沿用既有音译。whenEn 的匹配走 makeSourceTermMatcher,复数按英语真实形态展开:Proxy 的复数是 proxies,原先只认「加 s」,英文源写 system proxies 时这条条件禁用会整个跳过。
 - **Quota** — 周期内的使用上限用「配额」（现状已有 3 处这么写）。与 credits 条目一起裁决：「额度」原先同时表示 Balance / Credits / Quota，三个概念在计费与限额提示里互相污染。「额度」的 forbidden 统一登记在 credits 条目下，不在这里重复——一个词只归属一个术语，否则同一处违规会被两个术语各报一次。（2026-07 修正：ko 原声明 쿼터 在全仓零出现，属凭空造词；ja 原声明 クォータ 仅 desktop 用、mobile 用 残量。定为 ja クォータ / ko 할당량——残量 语义偏 Balance 会与 残高 混淆，而 ko 的 사용량 正是 Usage 的标准词，让 Quota 占用它会重演 zh「额度」三义合一的错误。）
-- **Quote reply** — 伙伴群聊消息操作：在当前时间线发一条带被引用者与原消息摘要的新消息，不创建话题（group-thread）；被引用的原消息作者是仍在群中的伙伴时，宿主自动将该伙伴加入接收人，与显式点名去重。引用正文中的名字不产生额外接收人。输入框上方的待发引用用「引用 {name}」，取消叫「取消引用」。与任务里「选中文字引用」（chat quote）是不同功能。
 - **Qwen** — 模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
-- **Read by sentence** — 伙伴语音设置：默认在最终答复生成过程中按完整句子提前朗读；关闭后等待完整回复。需要回复后处理或无法识别最终答复阶段时延后。
 - **CN** — 中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`）与侧栏用户卡片版本行（`sidebar.user.regionCodeCn`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。
 - **Dev** — dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。2026-08-26 起 CindyDev 内部的业务服务器环境切换也沿用 Dev 标签；这里只表示所连接的服务环境，不能据此改变安装包区域或身份。
   - 豁免范围：`desktop:settings.about.debugLogDescription`、`desktop:settings.voiceInput.permissions.inputMonitoring.tooltip`
-- **Remote computer** — 用户可见文案用具体对象说明连接与操作，避免被控端、被控电脑等实现术语；指当前电脑时用这台电脑，指保存密码的位置时用此设备。
-- **Remote desktop** — 同账号手机查看和操作电脑真实桌面，独立于 Cindy 内部设备控制授权。
-- **Run in background** — 远程桌面的持续开关，用户已确认中文名。离开页面或切到后台时以小窗继续显示，回到全屏后仍保持开启；不是任意后台任务或强制退出后继续运行的承诺。其他语言译名登记为 proposed。
-- **Direct to computer** — 远程桌面传输状态，桌面端沿用手机端现有用语。表示画面不经过中转服务器；直连也可能穿过公网 NAT，不能据此标成内网直连。
-- **Display & Sound** — Remote desktop panel containing picture and audio settings; icon-only toolbar trigger.
-- **Lock screen control** — Windows 远程桌面设置中的系统服务授权能力；不表示支持开机前解密或无人登录。
-- **Native resolution** — Remote display mode reported as native by the host OS; distinct from current and recommended. Compact option badge: Native / 原生.
-- **Picture in picture** — Remote desktop display controls; resolution changes the host display, small window uses system picture in picture.
-- **Computer resolution** — Remote desktop display controls; resolution changes the host display, small window uses system picture in picture.
-- **Server screenshot relay** — 远程桌面退回通过现有设备连接逐张传送截图的方式，桌面端沿用手机端现有用语，避免仅写兼容模式而隐藏实际传输方式。
-- **Take over connection** — Explicit user action that replaces the current remote desktop viewer; never used for automatic recovery.
-- **Server video relay** — 远程桌面使用服务器中转实时视频，桌面与手机沿用同一用语；区别于逐张截图传输。
-- **Remote device** — 远程连接、任务与设备列表中的另一台设备；明确是电脑时优先说远程电脑。不要把本地浏览器内部控制器称为远程设备。
 - **Request Refund** — 订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。
-- **Activity Monitor** — 独立窗口/兼容页签,展示本机进程 CPU/内存并可终止 Agent 进程。不可叫「任务管理器」——Session→任务 已 decided,会被读成管理左侧任务列表。不叫「用量」——会和 token / 账号 Usage→用量 混淆(#3183)。「资源监视器」是窗口标题,看的是本机资源占用,不是输入监控;输入监控权限仍用「监听权限」。
-- **Role name** — Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改变 Agent、模型、权限或能力。先登记为 proposed，避免「角色 / 名称 / Role」多套说法并存。
-- **Routine** — 伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。2026-11-08 起伙伴 V2 的定时工作改为项目里的普通自动化，例行任务的管理界面已下线；条目保留以核对存量文案与 V1 运行任务的历史显示，新文案用「自动化」。
-- **Trigger** — 例行任务的时间或事件触发条件（例行任务 2026-11-08 起随伙伴 V2 下线，见 Routine 条目）。
-- **Run records** — 日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。
 - **Running** — 状态标签用「运行中」（现状 16:9）。条件禁用是必需的——「进行中」是 In Progress 的正确译法、「执行中」在别处也可能对，无条件禁会大面积误伤。mobile/devices 的自动化面板上「运行中 / 执行中 / 重跑中」三种写法同屏出现。
-- **Scrolling Screenshot** — 2026-10-26 用户指定截图功能统一称为滚动截图，突出滚动操作，不再使用长截图作为功能名称。
-- **Relay service** — 远程连接设置里选择设备之间经 Cindy 官方中转，还是用户自己的中转（这台电脑当中转 / 加入别的中转）。官方一侧称「Cindy 官方中转」（Cindy relay）。方案见 docs/self-hosted-relay-plan.md。
 - **Session** — 面向用户叫「任务」——它是左侧列表里可单独打开/删除/分享的条目，有自己的独立空间、可以同时跑多个；「对话」表达不出这个并行性（2026-07-31 裁决，替代此前的「对话」）。任务内人与 AI 交流的过程与内容仍叫「对话」，见 alsoAllowed 与 chat 条目。「会话」继续禁用于产品概念。但英文的 session 在本仓实际承载**五个**不同概念，其中最容易译错、也最影响用户行为的是 Agent 运行时会话——已单独立为 agent-session 条目，中文叫「Agent 会话」，务必先读它再改这类文案；余下三类（登录/绑定校验、SSH 远程与传输、操作系统桌面）与 mobile 语音连接会话都与产品无关，存量译法不在本条约束内，见本条 exempt。代码与内部标识仍用 Session，本条只约束 UI 文案。ja / ko 用音译 `セッション` / `세션`，本次一并收敛：改名前这两种语言就在混用（音译 271 / 277 处 vs `会話`・`대화` 16 / 11 处），改完英文后不一致放大到 133 处，2026-07-31 逐条判断后统一到音译（详见 docs/product-rules/task-and-conversation-naming.md §5.1）。日韩不存在中文那种一词多义问题，所以 `タスク` / `작업`（task）无需像中文那样改写成「自动化」。交流过程仍用 `会話` / `대화`，chat history 仍用 `チャット履歴` / `채팅 기록`。概念分层与判定规则见 docs/product-rules/task-and-conversation-naming.md。
   - 豁免范围：`desktop:settings.providers.custom.fields.modelSupportsReasoningHelp`、`desktop:chat.backgroundActivity.stopBashTitle`、`desktop:chat.remoteError.REMOTE_COMPAT_MODE_UNSUPPORTED`、`desktop:chat.rewind.errors.remoteNotSupported`、`desktop:chat.systemCard.context.noLiveSession`、`desktop:chat.userMessage.forkErrors.codexStateUnavailable`、`desktop:chat.rewind.errors.noLiveQuery`、`desktop:chat.userMessage.forkErrors.unsupportedHistory`、`desktop:login.errors.INVALID_BIND_TICKET`、`desktop:login.errors.INVALID_LOGIN_TICKET`、`desktop:newChat.atMention.typeToSearchFiles`、`desktop:newChat.collaboration.archiveWorkerConfirmDesc`、`desktop:newChat.collaboration.stopConfirmDesc`、`desktop:settings.about.debugLogDescription`、`desktop:settings.builtinTools.toast.disabled`、`desktop:settings.builtinTools.toast.enabled`、`desktop:settings.builtinTools.toggleHint`、`desktop:settings.builtinTools.description`、`desktop:settings.builtinTools.scopePicker.userDefault`、`desktop:settings.builtinTools.scopePicker.userDefaultDescription`、`desktop:settings.builtinTools.source.userTooltip`、`desktop:settings.computerUse.android.toggleHint`、`desktop:settings.computerUse.browser.toggleHint`、`desktop:settings.computerUse.codexRefreshDeferred`、`desktop:settings.computerUse.directControl.permissions.linuxHint`、`desktop:settings.computerUse.directControl.toggleHint`、`desktop:settings.lspMode.toast.disabled`、`desktop:settings.memory.agent.toast.takesEffectSuffix`、`desktop:settings.sessionImport.description`、`desktop:settings.sessionImport.summary.filteredHint`、`desktop:settings.mcp.dialog.desc`、`desktop:settings.mcp.deleteConfirm.message`、`desktop:settings.memory.description`、`desktop:settings.lspMode.toast.enabled`、`desktop:settings.personalization.placeholder`、`desktop:settings.subagentModels.hint`、`desktop:newChat.modelSelector.subscriptionDirectDisabled.chatgpt`、`desktop:newChat.modelSelector.subscriptionDirectDisabled.xai`、`desktop:newChat.modelSelector.subscriptionDirectDisabled.generic`、`desktop:ccAgent.draft.remoteProviderUnsupported`、`desktop:ipcError.REMOTE_PROVIDER_UNSUPPORTED`、`mobile/composer:voice.invalidSession`、`mobile/composer:voice.missingConnectionProvider`、`mobile/composer:voice.missingRefinerTargetProvider`、`mobile/composer:voice.sessionExpiredOrForbidden`、`mobile/composer:voice.sessionNotConnected`
-- **Mute notifications** — 任务右键菜单里的通知开关，是普通句子不是品牌词，故 checkCase 为 false。开关两态成对出现：未静音时显示「消息免打扰」（点了就静音），已静音时显示「允许消息通知」（点了就恢复）；英文对为 Mute notifications / Allow notifications。与设置里的全局通知开关（ccAgent.settings.notifications）区分：这个是单个任务的。中文不用「免打扰模式」「静音」。「允许消息通知」是反面文案，未列入 translations，待五语用例变多后一并裁决。
-- **Share Link** — 供应商分享的一次性链接：生成后 5 分钟内有效、只能使用一次。与共享任务的「邀请链接 / 邀请码」是不同的东西，不要混用。
-- **Share Request** — 受邀者打开分享链接、确认后发给分享者的请求；分享者「同意分享 / 拒绝申请」。受邀者可以「撤回申请」。
-- **Shared Session** — 远程连接的多人版本，按单个任务共享完整上下文和同一 Agent，不作为独立会议产品。
-- **shortcut listener permission** — macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Cindy 内的对外称法。产品侧只按用途讲: 这个权限只服务语音输入快捷键的监听, 不讲系统实现, 所以 zh-CN 沿用设置页权限项已有的「监听权限」(settings.voiceInput.permissions.inputMonitoring.label), 不引入「输入监控」这个直译——后者听起来像 Cindy 在监控用户的全部输入, 与实际能力(只识别快捷键按键组合)不符, 反而制造隐私误解。禁用项都挂 whenEn 条件: 要引用 macOS 系统设置面板名本身时那是 OS 的 UI 名称, 不受本条约束。四语的比喻不统一(en listener / ja 監視 / ko 감지)是现状登记而非裁决——各语言内部一致但跨语言不同, 保持 proposed 等产品拍板, 先把清单摆出来防止继续在 listener / monitoring / detection 之间漂移。
-- **Side chat** — 在右侧独立提问，继承主任务已完成的上下文；追问不自动写回主任务。
-- **Sign-in** — 家族合并条目：涵盖 sign-in（名词形）/ signed-in（状态形）/ Sign-ins（复数形）。一致性核对：en 语料 142 键，非英语种均已自然翻译。id 用 Masuk / 已登录。
 - **Skill** — 中文用「技能」（现状 32:26 领先），偶尔保留英文 Skill 也允许，故 zh-CN 不设 forbidden——硬性禁用会逼出别扭的中文。ja / ko 则禁用 技能 / 기술：那是与 スキル / 스킬 并存的同义漂移，且只出现在 skillhub 内部（3 / 3 处）。ko 的 기술 是多义词（技术 / 记述 / 技能），两处非 Skill 义已按 key 豁免。SkillHub 作为产品名单独登记在 skillhub 条目。(2026-07 补充:alsoAllowed 允许保留英文,那就必须是规范形态 Skill——caseStandardFor 会把这类条目一并纳入大小写检查,skillhub 里原有 10 处小写 skill 已统一。) 葡萄牙葡语和巴西葡语沿用现有界面技术名 Skill（含复数 Skills），与文件、SkillHub 和引擎资源名称一致；不另造 Competência / Habilidade 作为资源名称。
   - 豁免范围：`desktop:bots.homeFolder.contents`、`desktop:localDbFatal.details`、`desktop:issueTracker.create.descriptionPlaceholder`
 - **SkillHub** — 产品名，五语一律保留英文原样（暂定保留，未来若做中文名再改）。注意与 skill 条目区分：侧边栏 tab 现在叫「技能」但实际指 SkillHub，创建面板的「技能」指 Skills——这是既有 bug，两者不是一个东西不该同名，清理存量时需一并处理。
-- **Skip Sign-In** — 登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。
-- **Smart routing** — Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 Sol/Terra 调配；开启后允许 Codex 从 Cindy 已连接的更多模型中按任务选择。
-- **Speech speed** — 伙伴语音设置的合成语速；按伙伴保存，通话朗读、消息朗读和试听共用。区别于播放器倍速和语音输入停顿时间。
 - **Subagent** — Agent 的派生概念，中文跟随 Agent 保留英文原词，不译「子代理」。「代理」在此条下按 whenEn=Subagent 登记：同一个中文词在 Agent / Subagent / Proxy 三处各有来源，只有按英文源区分，自动替换才知道该换成哪个词。ja / ko 沿用既有音译。
 - **Task** — 指 Agent 正在执行的一件活，与 Session（也叫「任务」）同名。**同一句里同时出现两者时必须消解歧义**：task 一侧优先动词化（"当前任务正在运行" / "执行完成"），确需名词时用「执行」或「作业」——"当前任务正在执行任务" 这类写法一律不可接受。不同句、语境清晰时沿用「任务」（现状 104 处）。定时任务（Schedule）与后台作业各有限定词，不歧义。判定规则见 docs/product-rules/task-and-conversation-naming.md §3。
-- **Header** — 任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。
-- **Inbox** — 按状态整理任务的列表模式，由任务栏右上角按钮切换；分区为待处理、进行中、稍后处理、已处理。
-- **Pending** — 收件箱模式的第一个分区：需要用户处理的任务（新结果、等待回复、未归档的普通任务）。
-- **Processed** — 任务列表底部已归档任务分区的名称，沿用归档生命周期。
-- **Snoozed** — 任务暂时收起，到期回到当前执行状态对应的分区，不停止 Agent。
-- **Tag** — 任务列表的 Finder 式颜色标签；仅标识任务，不改变运行状态。用户已确认显示为重叠色球，整合现有任务菜单，当前不增加筛选入口。
 - **Buddy** — Cindy 的持久 AI 伙伴。英文单数 Buddy、复数 Buddies，句中小写；V2 默认项目名为 Buddy <名字>。其它语言按本表自然变格。内部 teammate/bot 标识保持兼容。Telegram Bot、Discord Bot 等平台机器人不使用本术语。
-- **Core skill** — 伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」；2026-11-08 起 V2 伙伴的主人对话不再挂载它）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。
-- **Todo** — （2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。V2 把未完成事项写进伙伴项目的 CARRYOVER.md；旧消息里的 Todo 引用照常渲染。
-- **Terms of Service** — 与 privacy-policy 成对的法律文件名，取自现有 termsOfServiceLabel 与 login.consentDialog.body。登录协议行与协议弹窗标题是单行槽（DESIGN.md §16.2），带两个全称的句子超出预算，所以这两处只缩写本条（privacy-policy 保持已裁决全称）：协议行 fr「CGU」；弹窗标题 es「Términos」、fr「CGU」、de「Bedingungen」、pt「Termos」（#8188 / #8181）。弹窗正文与设置页仍用全称。待裁决：这些单行槽简称（尤其 fr 用「CGU」还是其他写法）。
-- **Thread** — 按语境分四类：①指产品内那个条目 → 跟随 session 叫「任务」（2026-07-31 随 session 改名一并更新）；②Codex 外部概念 → 保留 thread；③GitHub PR review thread →「review 评论」；④比喻用法 "persistent work thread" → 改写为「持续推进的工作」。「线程」一律禁用。
 - **Token Plan** — 阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。
 - **Turn** — 一次提问到一次回答结束。**内部概念，不作为界面术语**：面向用户一律说「消息」，只在确实要强调一次完整往返时说「一轮」（如「上一轮」）。不要引入「轮次」作为界面用词。
 - **Ultrafast** — Codex 模型的第三档速度；与推理深度 Ultra 独立。标准、快速、超快分别对应默认、Fast、Ultrafast。
-- **Ungrouped** — 模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话、沿用原短名称的 Other（其它）分开。
-- **Upload code** — 客户端日志上报后返回给用户的短标识, 用户报障时口述给我们。zh-CN 取「编号」而不是「码」——它是一次上报的检索标识, 不是验证码或错误码, 「上传码」容易被读成验证码。proposed: 日志上报是新链路, 等实际排障流程跑一段后再固化。
 - **Usage** — 中文用「用量」（现状 37:6 压倒性）。「使用情况」「使用表现」是同义漂移，禁用。注意 usage 在英文里也有「用法」义（如 CLI usage），那属于另一个概念，不在本条约束范围。豁免遥测说明两处:那里的 usage 指「启动与留存情况」这类使用行为,不是计费口径的用量指标。硬套成「用量」会写出「启动与留存用量」这种不通的话——zh-CN 用的是「留存情况」+「使用环境」,ja/ko 的「継続利用状況」「지속 사용 현황」同理。
   - 豁免范围：`desktop:settings.about.analyticsDescription`、`mobile/settings:legal.analyticsHint`
-- **Use my browser logins** — 设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。
-- **Voice dictionary** — 语音输入的用户自定义术语表(人名、产品名、代号与其常见误识别写法),在同账号的电脑之间自动同步、手机只读查看。当前先采用四语直译并登记为待讨论术语,避免与「自定义词典」「术语表」「用户词库」等说法混用。
-- **Voice Mode** — 桌面伙伴一对一的连续语音交互方式；停顿发送、最终回复朗读和插话，沿用伙伴主任务。
-- **Voiceprint** — 语音输入「识别我的声音」录入的本人声音特征，只存在本机、不同步。可写「录入声纹」「删除声纹」；不要写成声音指纹、声音模板。
-- **Wallpaper** — Desktop appearance setting for an in-app visual background layer.
-- **Wallpaper Blur** — 仅使应用壁纸柔化，不模糊文字或控件；0 为关闭，按用户选择应用于静态图片和视频。
-- **Wallpaper Visibility** — 壁纸背景层的实际可见程度，0% 隐藏，100% 原样显示；不改变文字或控件的不透明度。
-- **WeChat** — 个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
-- **WeCom** — 企业微信官方英文品牌名，用于智能机器人和群机器人能力；先登记为 proposed，待产品术语评审后再决定是否固化。
-- **WeCom group bot** — 企业微信群 Webhook 单向通知能力的名称；先登记为 proposed。
-- **WeCom Intelligent Bot** — 企业微信 WebSocket 长连接双向 IM 能力在设置页中的名称；先登记为 proposed。
-- **withdraw (a reply)** — 用户在 X 上让 Cindy 删掉它那条公开回帖的动作：原提问者在目标回帖下回复 `@askmycindy /delete`，正文中须手动带上 @askmycindy。中文说明也可展示 `/删除`，但命令本身不翻译为 `/刪除`。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 五语只有这一处用例, 等更多用例出现后再定 decided。
-- **Work split** — 伙伴群聊第二阶段：负责人把一件事分成几步派给群里的伙伴，用户点「开始」后伙伴一位接一位做，每做完一步停下等用户点「继续」（docs/product-rules/bot-group-chat.md §7）。英文动作说法 split the work（输入框「+」菜单「安排分工」= Split the Work），名词 work split；句中小写，故 checkCase 为 false。**不得**译作「协同 / 協同 / Collaboration」（Orca 多 Agent 协同的功能名，见 collaboration 条目）、「协作」（共享任务）或「接力」。分工里的每一步叫「一步 / step」，不叫「任务」（见 task-and-conversation-naming）；负责人出的方案叫「安排 / plan」。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。
 - **Worker** — Orca 协同角色名，五语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。
 - **Working directory** — Agent 干活所在的那个目录，中文一律「工作目录」（现状 43:0，五语唯一译法）。**不绑项目的任务也有工作目录**：Cindy 在 userData/dialogues/<日期>/<sessionId>/ 下自动分配一个空目录，用来存 Agent 产出的文件；对话消息存在数据库里，与该目录无关。这个目录不要另起名字——「独立任务空间」「任务空间」「工作空间」一类新造说法一并禁用（2026-07-31 裁决），免得同一个东西攒出多套称呼。「工作区」不入 forbidden：它是 Workspace 的合法译法，见 worktree 条目 note（那里已裁定「工作区」只留给 Workspace、working directory 用「工作目录」，本条把该裁决提为独立条目并加上门禁）。
 - **Worktree** — Git worktree 是外部工具的既定概念，五语一律保留英文小写原词（现状 21 处最多）。desktop:chat 一个模块里就有 worktree / 工作区 / 工作树 三种写法。特别要紧的是「工作区」——它同时被用于 worktree、Workspace、working tree 三个不同英文概念，必须让出来只表示 Workspace；working directory 用「工作目录」。条件禁用只在英文源含 Worktree 时生效，不影响 Workspace 的正常翻译。豁免导入提示那一句：英文原文同时出现 worktree 与 main workspace，条件禁用是按整句英文判定的，无法区分句内两个概念——那里的「主工作区」正是 Workspace，必须保留，否则会把「不影响主工作区」这条安全边界说成「不影响主 worktree」。
@@ -775,6 +421,70 @@
 
 **注意别指望 `--update-baseline` 帮你收尾。** `proposed` 存在的理由正是「已知有存量不一致」，改成 `decided` 的那一刻这些告警会变成阻断违规；而 `--update-baseline` 只删不加，遇到 baseline 里没有的指纹会直接拒绝。所以裁决时只有两条路：要么把命中逐条读语境改掉，要么先人工把已 review 过的指纹写进 `i18n/glossary-baseline.json` 冻结存量，之后再用 `--update-baseline` 做修剪。
 
+### Accessories
+
+设置 → 键盘快捷键里，尚未检测到的硬件输入设备（Work Louder 键盘、Xbox 手柄等）收在这一栏。已插入的设备单独成卡，不进这一栏。与 device-link 的「设备／设备互联」不是同一概念。
+
+### Additional fees
+
+任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。
+
+### Agent network
+
+agent-net 的产品名：所有用 Cindy 登录的 App 和硬件组成的互联网络。代码与文档里的 agent-net 是工程名，不出现在 UI 文案。
+
+### API Price Estimate
+
+用户为自有 API、OAuth 或订阅通道维护的本地 token 单价估算；只影响 Cindy 的用量价值估算，不代表供应商实际账单，也不覆盖 Cindy AI Gateway 的服务端实售价。先登记为 proposed，待产品术语评审后固化。
+
+### Archive
+
+任务归档动作。灵动岛完成卡按钮沿用既有任务归档确认框的译法，避免同一操作链路混用存档／归档或封存／歸檔；不在此条目裁决或批量修改其它语境。
+
+### Global region
+
+企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到 Global 服务区域时的确认文案；它描述连接的服务区域，不是对当前安装版本的标签，也不同于项目配置里的 generic global scope。先按现有四语文案登记为 proposed。
+
+### Mainland China
+
+企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到中国大陆服务区域时的确认文案；它描述连接的服务区域，不代表当前安装的是中国大陆版。先按现有四语文案登记为 proposed，避免后续出现“中国区／国内区／China region”等多套说法。
+
+### Auto-review
+
+Auto-* 前缀家族合并裁决（与 Auto-connect / Auto-added / Auto-learning 一并）：形态钉死「Auto- 大写 A + 连字符」。数据源 settings.auxiliaryModels。
+
+### Automatically unlock computer
+
+远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
+
+### Trigger mode
+
+自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。
+
+### At a glance
+
+伙伴聊天头部网格按钮打开的浮层：电脑、近期任务、输出内容三块（2026-11-08 起待办块随伙伴 V2 移除；docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。
+
+### reply (the bot's public post on X)
+
+Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。
+
+### Security check
+
+登录邮箱发码前的 CAPTCHA(Cloudflare Turnstile)挑战。中文用「安全验证」(腾讯/阿里系产品的通行叫法,2026-08-19 用户反馈弃用「人机验证」;与「验证码」= verification code 消歧——后者已被 login.codePlaceholder 占用指 6 位数字码);en 用 Security check 而非品牌词 Turnstile 或缩写 CAPTCHA。消费处:login.captcha.* 与 login.errors.CAPTCHA_*(desktop 五语 + mobile 影子 catalog)。
+
+### Chat workspace
+
+用户于 2026-09-18 明确指定的存储设置名称，表示未绑定项目的新任务工作目录的分配位置。单个任务的 working directory 仍称工作目录，不改其术语。
+
+### China
+
+模型目录中由服务端显式 group:"china" 标记的来源分组。它描述模型或供应商来自中国，不表示相对于当前用户或发行区域的‘国内’；英文词条保持自然大小写 China，设置页分组头由统一 uppercase 样式显示为 CHINA。
+
+### Free tier
+
+Cindy AI 个人账号的免费会员身份标签。只在服务端明确下发 accountTier=free 时显示；paid、not_applicable 与未知状态不显示标签。
+
 ### Cindy AI · Personal
 
 个人身份使用的 Cindy AI 显示名。按模型来源电脑的登录身份生成；不改变供应商 ID、路由或 Auto 模型名。
@@ -783,13 +493,185 @@
 
 心动企业身份使用的 Cindy AI 显示名。其他企业使用 Cindy AI · 企业名称；与 Nova 或新版网关后端无关。身份未知时只显示 Cindy AI，不猜测归属。
 
+### Submit to Cindy
+
+把 Cindy Make 的一项修改整理成 Pull Request 提交到官方仓库。面向普通用户写「提交给官方」，对话框说明里才出现 Pull Request；状态写「等待审核 / 已被官方采纳 / 官方未采纳」，不写 open / merged / closed。
+
+### Make history
+
+Cindy Make 设置中保留全部制作、修改轮次与合入记录的列表；结束制作及清理工作目录后仍可回看。
+
+### Add back to personal version
+
+重新应用之前明确撤销的制作改动，区别于把尚未合入的新修改首次加入个人源码。
+
+### Saved in
+
+Cindy Make 版本控制概览中的一行，说明个人版保存在哪里：只在这台电脑，或用户自己 GitHub 上官方仓库的公开副本（fork）。面向普通用户不写 fork，写「你的 GitHub」。
+
+### Remove from personal version
+
+从个人版移除单次制作已经加入的全部改动，保留其他制作与已有应用成品；底层通过新的反向提交实现，不改写 Git 历史。
+
+### Version Control
+
+Cindy Make 设置中用户指定的页签名称，汇总我的版本与制作历史，并提供本地合入、撤销和生成入口。
+
+### Original Version
+
+Cindy Make 中与个人版对应的来源应用。用户明确要求 Dev 和正式安装版属于同一个类型；Dev 只影响底层启动方式，不作为第三类版本。
+
+### Personal Version
+
+Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。
+
+### Main computer
+
+云端伙伴运行的那台电脑（docs/product-rules/cloud-companions.md §3）：伙伴的 Agent、工作目录与连接只在这台电脑上，其他电脑与手机是查看和发消息的入口。手机与桌面同一叫法，伙伴设置行名、离线横幅与侧栏状态共用。英文行名用 Title Case（Main Computer），句中小写 main computer，故 checkCase 为 false。不要写成「主设备」「宿主机」或 home device（代码字段 homeDeviceId 不是界面用语）。先登记为 proposed，待桌面与手机实机走查后再定。
+
+### Connection code
+
+本机应用临时连接的端点定位文本，不是授权令牌；连接仍需目标 Cindy 原生确认。
+
+### Latency
+
+远程连接拓扑与浮层里的往返时间（ms）。
+
+### Direct
+
+远程连接拓扑里两台设备之间的数据路径不经中转。只用于路径，不用于「电脑直连」（remote-desktop-direct）那种连接方式名。
+
+### Via relay
+
+远程连接拓扑里两台设备之间的数据经中转服务转发。与「中转服务」（self-hosted-relay-service）是同一个「中转」。
+
+### Content Update
+
+指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。
+
+### Context window
+
+模型一次请求可容纳的 token 上限。自定义 Provider 的窗口编辑字段(#386)与用量/压缩相关文案使用;空间紧的 placeholder 可缩写为「上下文 / Context / コンテキスト / 컨텍스트」+ (tokens)。
+
+### Crash
+
+应用异常终止。此前只出现在内部日志里, 随日志上报进入用户可见文案, 因此登记。ko 取音译「크래시」而非「충돌」——后者在韩语里更常指冲突/碰撞(如合并冲突), 会与 merge conflict 语境混读。proposed。
+
+### Custom MCP
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
+### Database cleanup
+
+设置 → 存储空间内主动备份、清理任务消息并压缩本地数据库的功能名称。默认只清理非活跃任务；用户确认开启可选项后，也会清理活跃任务的历史。先登记为 proposed，待实际使用后再固化。
+
+### Detached HEAD
+
+沿用会话顶栏分支徽标现有译法
+
+### Release
+
+CindyDev 内部设置中的正式业务服务器环境标签，五语固定保留英文 Release。它表示 App 当前连接哪套服务，不代表安装包发行版本、OTA 通道或 cn / global 区域；因 release 也是普通英文单词，关闭全局大小写扫描，具体 UI key 由 Mobile 定向测试约束。
+
+### Device
+
+device-link 里「可以选择在哪台机器上运行」这一维度，两端统一叫「设备」。desktop 的 machineSwitcher 本来就是 This device / このデバイス / 이 기기，mobile 原先用 computer 系（选择电脑 / パソコンを選択 / 컴퓨터 선택），2026-07 裁决为向 device 系对齐，与既有 device-code（设备码 / デバイスコード / 기기 코드）同口径。alsoAllowed 保留「电脑」系：指代桌面端物理机的文案（安装、导出、等待确认）换成「设备」反而不通中文，那是 desktop/PC 的意思，不是这里的目标维度。
+
+### Device Code
+
+OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。
+
+### Device Simulator
+
+官方插件 cindy-simulator 的用户可见名称。2026-10-23 用户确认中文「设备模拟器」与英文 Device Simulator，为后续设备和平台扩展保留命名空间；名称不代表未发布的平台支持。原内置 iOS 模拟器的历史称呼不变。其余语言随迁移提示同步登记，译法整体暂保留 proposed。
+
+### DingTalk
+
+钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
+
+### Dissolve group
+
+Irreversible group termination, distinct from archive, leave and personal list removal.
+
+### Doubao
+
+模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
+
+### embedding
+
+文本转成的数值向量，用于语义检索。zh-CN 用「向量」而非「嵌入」——设置页的模型分组、UnifiedModelList 的能力分类既有注释都已用「向量」，「嵌入」在中文里更容易被读成动作。指模型本身时说「向量模型」，不说「嵌入模型」。插件 cindy.embed 能力与 embedding-client 的四语文案使用。
+
+### End-to-end encryption
+
+设备间数据在发送端加密、接收端解密，中转服务只搬运密文。当前先按四语言常用安全术语登记为待讨论，避免 E2EE、端对端加密、End-to-End 暗号化等多套可见说法并存。
+
+### Engine
+
+伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。
+
+### Face ID verification
+
+远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。
+
+### Link code
+
+官方飞书 / Lark 机器人关联时的一次性短码：网页授权不可用的用户把它私聊发给机器人完成关联，只在关联进行中出现，过期作废，不是密钥。与供应商分享的「配对码」(Pairing Code)、本机应用的「连接码」(Connection code) 是不同概念；ko 取「연동 코드」以免与「연결 코드」(Connection code) 撞名。
+
 ### Follow Up on All Sessions
 
 （2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。
 
+### Group Admin
+
+可管理群资料和成员，但不能替伙伴主人授权工具或私人资料。群设置内可简称管理员 / Admin。
+
+### Group chat
+
+伙伴群聊：用户把 2–6 位伙伴放进一个群，用户说一句，伙伴们按规则接话（docs/product-rules/bot-group-chat.md）。群是独立对象，不是任务，也不是某位伙伴的主任务；群里的单条往来仍叫「消息」（见 task-and-conversation-naming）。英文分两层：侧栏标题与按钮用 Title Case（Group Chats、New Group Chat），句中用小写 group chat——故 checkCase 为 false。zh-CN 短句里可简称「群」（群名称、群设置）。与企业微信「群机器人」（wecom-group-bot）等 IM 平台的群概念无关。先登记为 proposed：第一阶段刚落地，等 UI 走查后再定。
+
+### Group Cindy
+
+每个服务器群自带的那位 Cindy 成员（docs/product-rules/bot-group-chat.md 第 9 节，2026-11-12）：谁 @ 它就在谁自己的电脑上替他做事，不属于任何人，也不是个人伙伴。名字各语言都叫 Cindy，群管理开关与说明里用这个称呼；不叫「群助手」「群伙伴」「默认伙伴」。先登记为 proposed，等 UI 走查后再定。
+
+### Main Chat
+
+伙伴群聊的主时间线（产品规则里也称「主群」），与话题相对。中文 UI 写「群聊」（如「同时发到群聊」「贴回群聊」），不写「主聊天」——「聊天」是 Chat 条目的禁用译法。贴回指把话题回复以引用形式发到这里，原回复不移动。
+
+### Group Nickname
+
+仅在单个群中显示的名字。为空时使用账号显示名；不覆盖个人资料名字或稳定身份。
+
+### Group Owner
+
+Chat Server 的群角色，可由人或伙伴担任；不要与伙伴主人或分工负责人混同。群设置成员行英文可简写 Owner。
+
+### AI reply mode
+
+A teammate replies on behalf of a group member. Chinese name approved as AI 代答模式 on 2026-10-29; internal personal-mask identifiers remain unchanged.
+
+### Group Strategy
+
+供应商组为新任务选择组内电脑的规则：最少占用、轮询、按顺序、按权重。读得到 Claude Code 或 OpenAI 订阅用量时先按配额筛（2026-10-21 起比「剩下的配额 ÷ 剩下的时间」，最急的先用），组策略只在差不多急的几台里挑。只决定新任务分到哪台，正常运行的任务不因均衡迁移。
+
+### Thread (in a group chat)
+
+伙伴群聊里挂在某条消息下的子讨论（服务器的 Thread）。zh 取「话题」：入口叫「创建话题」，有回复后叫「查看话题」，面板标题「话题」；话题里的单条发言仍叫「回复」（回复这条消息、发送回复），不要全局替换。它不是任务：已裁决的 Thread→任务 指产品内的 session，这里是群消息的分支讨论，与「引用回复」（quote-reply）不同——引用回复留在当前时间线。2026-10-13 Dash 提出「现在的回复改名叫创建话题」，先登记为 proposed 待走查后定。
+
 ### Harness
 
 用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。
+
+### Hunyuan
+
+模型显示品牌采用官方中文名称，版本号和变体原样保留；仅用于展示与搜索，不改模型 ID 或用户保存的名称。
+
+### Input Handoff
+
+Agent 遇到需要主人填写的界面（选择、文本、密码、验证码、授权）时，由宿主读出当前一步，主人在本机或远程设备上填写，值只交给宿主、不进模型与记录。不是远程控制。
+
+### Invitation Code
+
+共享任务加入表单中由房主提供、访客输入的代码；用户要求明确称为邀请码，避免被理解为任意邀请文本。
 
 ### iOS Simulator
 
@@ -799,29 +681,449 @@ Apple Simulator 的用户可见名称，也用于原内置 iOS 模拟器的历�
 
 Orca 协同角色名，与 Worker 成对。五语统一保留英文 Lead，不译成 Leader / 主控 / 主导 / 队长。这里只钉大小写形态：首字母大写 Lead。存量文案里仍有小写 lead（如 lead session），先登记为 proposed，待与 Worker 一并固化。
 
+### Left navigation
+
+主窗口左侧放任务与「自动化」「插件」「伙伴」等一级入口的那一栏。插件主视图入口的开关称「导航入口」（Navigation Entry），用来与右侧放插件面板、浏览器、终端的「右侧栏」（right sidebar）区分，所以涉及这个入口的文案写左侧导航，不再写笼统的「侧边栏」。韩语依国立国语院标准外来语表记写 내비게이션，不写 네비게이션。英文句中小写 left navigation，故 checkCase 为 false。先登记为 proposed：其他位置仍有「侧边栏」泛指左栏的存量文案，待统一清理时再裁决。
+
+### Local model
+
+用户机器上运行的开源权重模型（经 Ollama / LM Studio 等本机 runtime）。刻意不用「本地模型」——「本地模式」已废弃，指未登录 Cindy 账号；「本机」强调权重和推理都在用户这台电脑上。设置页本机模型分组、Ollama 详情副标题使用。proposed：等本机模型入口上线后再固化。
+
+### Local
+
+用于 Desktop 本机范围标签。translations 中带任务／セッション／세션 的译法仅用于侧栏任务范围标题 ccAgent.sidebar.scopeLocalSessions；设备菜单、新建任务按钮和设备分组标题使用 alsoAllowed 中不带任务的设备标签译法，不可互换。英文统一使用 Local，表示当前电脑或其上的任务；其他语言保留各位置现有表达。不表示本地模型、离线模式或未登录状态，也不约束其他语境中的 local。
+
+### Mac Login Password
+
+远程桌面原生密码表单中的 macOS 系统账户密码，区别于 Cindy 账号密码；密码不经过 JavaScript。
+
+### Dynamic Island
+
+Apple 的灵动岛（新款 MacBook Pro 摄像头挖孔处），沿用 Apple 各地区用语，繁中按 Apple 台湾用语作「動態島」。Cindy 自己的顶部任务面板已改名为任务胶囊 / Agent Notch（见 agent-notch），「灵动岛」只指 Apple 的；设置页分区标题也用这个词，统称两者所在的一页。
+
+### Live Activities
+
+Apple 的实时活动（ActivityKit）。沿用 Apple 各地区官方译名；Cindy 只以此展示任务状态，不作为自有功能名。
+
+### Black Cat
+
+灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色本体是黑猫形象,四语先采用直译并登记为待讨论,避免后续界面出现「ブラックキャット / 블랙캣」等音译与直译混用。
+
+### MCP App
+
+标准 MCP Apps 协议提供的交互应用；卡片标题与消息来源沿用协议名称，各语言保留 MCP App，待术语评审后固化。
+
+### Merge conflict
+
+GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。
+
+### Read
+
+群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。
+
+### Migration Assistant
+
+新电脑从同账号的其他电脑复制插件、技能与设置的功能名（设置 → 通用），用户 2026-10-20 定名「迁移助理」。ja / ko 参照系统同类功能的常见叫法；登记为 proposed，待术语评审。
+
+### Mivo Library
+
+#5929：引用目录系统项沿用 Mivo 品牌，仅本地化展示；通用 library 能力的品牌命名仍待维护者裁决。
+
+### Audio Generation
+
+V4 模型类型 audio_generation，包含通用声音生成；与 audio_speech 语音合成分别展示。
+
+### Compression
+
+issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。
+
+### Decision
+
+模型分类 evaluation 对应 Decisions 接口，不进入 Agent 对话模型清单。日文沿用 Jev 开发者项目中的意思決定モデル，韩文沿用 IBM 韩文文档与 KAIST 文献中的 의사결정 모델，分类标签省略模型。
+
+### Realtime Audio
+
+issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。
+
+### Speech to Text
+
+issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。
+
+### Text to Speech
+
+issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。
+
+### Model Group
+
+用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。
+
 ### Model ID
 
 用户确认并公开提交 Issue 时展示本轮在 Cindy 中冻结的模型标识。五语暂统一保留技术名称 Model ID，避免与可翻译的模型显示名混淆。
+
+### Native API
+
+模型目录维护的权威协议；独立于各 Harness 的实际接入配置。设置面板用于简短对比原生支持与兼容模式。
+
+### Upstream APIs
+
+模型设置「引擎支持」顶部只读列出当前来源为该模型提供的全部接口（Messages / Responses / Chat Completions / Google Gemini），替代旧的单值「原生协议」。上游提供的接口按原生使用，只有 Cindy 本地转换才标兼容模式（2026-10-30）。
+
+### Publish Plugin
+
+当前登录账号向公开市场发布插件、查看发布情况与发布记录的页面，个人和组织成员均可使用；区别于本机已安装插件和旧企业我的发布。
 
 ### New connection view
 
 「远程连接」页里切换到拓扑形态的开关名；按设备保存、默认关。
 
+### New project location
+
+存储设置名称（#8259）：在任务里「新建项目…」时项目文件夹的上级目录。未设置时按已登记项目最常见的父目录推荐，否则为 ~/Projects。与「对话工作区」（不绑项目任务的工作目录分配位置）是两个设置。
+
+### Nightly learning
+
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。
+
+### Not signed in
+
+跳过登录后应用内的账号状态名（侧边栏账号胶囊、设置页资料卡、语音服务提示，以及 main 侧不走 locale 的 model-visible 文案——已知 mcp-integrations/ghost.ts 的 GHOST_NOT_FOUND tool result，它会被模型读到并可能回显进对话，#907 review 补上）。**约束范围不限于 locale JSON**：guard 只扫 locale 文件，这类硬编码文案要人工找（见 engineering-conventions §5.1「Slack / IM 侧的文案不在任何 locale 文件里」同类问题）。2026-07-29 产品口径：面向用户只说「未登录」，不再叫「本地模式」——后者听起来像另一种服务端连接方式，实际只是没有登录 Cindy 账号。「本地」仅用于描述数据落在本机（如资料卡副文案「数据仅保存在本机」），不作为状态名。代码内部标识（AuthState mode='local'、authEnterLocal IPC、data owner）不受本条约束，仍用 local。en 侧统一走 not signed in 一种说法（含 settings.userProfile.local 的 exit / exitFailed 两条当前无引用的文案：the not-signed-in state），不与 unauthenticated 混用——PR #907 review 指出过同一状态两种英文说法会让日后启用这些文案时 UI 自相矛盾。status 仍为 proposed：Not signed in 作为状态名尚未与设计侧正式过一遍。
+
+### Organizer
+
+伙伴群聊里负责出安排、改安排的那位成员（docs/product-rules/bot-group-chat.md §7.1）：群设置里指定，未指定或已不可用时由成员顺序里第一位可用的伙伴担任。英文**不得**写作 Lead——Lead 是 Orca 协同的角色名（见 lead 条目）。标签与按钮用 Title Case（Organizer、Make Organizer），句中用小写 organizer，故 checkCase 为 false。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。
+
+### Overview
+
+插件页二级 tab 的总览入口，承载已安装与推荐内容，与「我的发布」并列。该词不重复页面标题「插件」，并保持弱于一级 Plugin / Skill pill 的层级。
+
+### Pairing Code
+
+供应商分享申请的 4 位数字，只在受邀者「等待同意」界面与分享者审批弹窗 / 管理页待处理一栏出现，供双方核对是同一个人；不是密钥，不参与鉴权。与 OAuth 的 Device Code（设备码）是不同概念。
+
 ### Passkey
 
 WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Microsoft 平台常见译法；先登记为 proposed，待产品术语评审后固化。
+
+### Performance Trace
+
+用户按需录制 Cindy 性能现场的诊断入口；完整轨迹留在本地，结构化报告经用户提交。
+
+### Personal WeChat
+
+个人微信连接在设置页中的产品名称；先登记为 proposed，待产品术语评审后再决定是否固化。
+
+### Pin
+
+右侧栏插件面板页签的图钉:钉住 = 面板在所有对话中保留。动词对:Pin=钉住 / Unpin=取消钉住。2026-07-31 随图钉功能提出,待裁决。
+
+### Publish anonymously
+
+个人插件的公开署名开关，默认开启，原作者可随时修改；不改变固定账号归属，关闭后展示提审时保存的昵称。
+
+### Community
+
+插件公开来源下的社区发布者身份标识，与官方并列；用户于 2026-11-09 确认设计。社区作者继续不公开署名；不表示个人私有市场或运行时信任。
+
+### Main view
+
+Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。
+
+### Manual
+
+插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。
+
+### Locally installed
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
+### Third-party source
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
+### Unknown source
+
+插件安装来源的展示文案，独立于签名与运行权限；由宿主安装事实生成。
+
+### Audio
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Image
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Text
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Video
+
+模型报价中的收费项类别，不是计价单位；用于类别名及类别与输入、输出、缓存读写的组合名称。
+
+### Duration
+
+模型价目表的时长收费项：Duration Input / Duration Output；不是请求耗时。
+
+### Privacy screen
+
+Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转系统锁屏，AI 在后面继续工作。用于离开时、远程控制中和远程结束后三种场景（docs/product-rules/privacy-screen.md）。取代旧称「电脑防窥」「防窥遮罩」「黑色遮罩」；不是系统自带的锁屏，也不是显示器防窥膜。
+
+### Process
+
+OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。
+
+### Provider Group
+
+某台电脑上某个供应商的一组运行位置：本机、我的其他电脑、通过分享链接加入的电脑（docs/product-rules/provider-groups.md）。这个供应商的使用都按组策略选一台组内电脑运行 Agent。中文用「供应商组」，不单用「分组」，避免与模型列表和设置页的模型分组混淆；组里的电脑称「组内电脑」。
+
+### Provider Sharing
+
+把自己电脑上的某个供应商分享给其他 Cindy 账号使用(docs/product-rules/provider-sharing.md)。中文一律用「分享」，不用「共享」——「共享」留给共享任务，两者是独立的授权关系；ja / ko 两个功能都自然译作「共有 / 공유」，靠「プロバイダー / 제공자」与「セッション / 세션」区分。界面上「管理分享」「分享 {供应商}」「分享给我的供应商」都属于本词。
+
+### Quote reply
+
+伙伴群聊消息操作：在当前时间线发一条带被引用者与原消息摘要的新消息，不创建话题（group-thread）；被引用的原消息作者是仍在群中的伙伴时，宿主自动将该伙伴加入接收人，与显式点名去重。引用正文中的名字不产生额外接收人。输入框上方的待发引用用「引用 {name}」，取消叫「取消引用」。与任务里「选中文字引用」（chat quote）是不同功能。
+
+### Read by sentence
+
+伙伴语音设置：默认在最终答复生成过程中按完整句子提前朗读；关闭后等待完整回复。需要回复后处理或无法识别最终答复阶段时延后。
 
 ### Region badge
 
 桌面登录页标题旁的品牌红胶囊（DESIGN.md §16.3），指徽标这个 UI 元素本身。徽标上的标签值另立条目（region-code-cn / region-code-dev）——本条 en 为 Region badge、各语言译文均非英文原词，caseStandardFor 天然返回 null，所以本条约束不到标签值，也无需写 checkCase。作为待产品裁决术语登记：尚未拍板是否改为可译文案（如「中国大陆版 / Mainland China」），先登记以免后续界面自造“国内版／中国版／开发版”等多套说法。
 
+### Remote computer
+
+用户可见文案用具体对象说明连接与操作，避免被控端、被控电脑等实现术语；指当前电脑时用这台电脑，指保存密码的位置时用此设备。
+
+### Remote desktop
+
+同账号手机查看和操作电脑真实桌面，独立于 Cindy 内部设备控制授权。
+
+### Run in background
+
+远程桌面的持续开关，用户已确认中文名。离开页面或切到后台时以小窗继续显示，回到全屏后仍保持开启；不是任意后台任务或强制退出后继续运行的承诺。其他语言译名登记为 proposed。
+
+### Direct to computer
+
+远程桌面传输状态，桌面端沿用手机端现有用语。表示画面不经过中转服务器；直连也可能穿过公网 NAT，不能据此标成内网直连。
+
+### Display & Sound
+
+Remote desktop panel containing picture and audio settings; icon-only toolbar trigger.
+
+### Lock screen control
+
+Windows 远程桌面设置中的系统服务授权能力；不表示支持开机前解密或无人登录。
+
+### Native resolution
+
+Remote display mode reported as native by the host OS; distinct from current and recommended. Compact option badge: Native / 原生.
+
+### Picture in picture
+
+Remote desktop display controls; resolution changes the host display, small window uses system picture in picture.
+
+### Computer resolution
+
+Remote desktop display controls; resolution changes the host display, small window uses system picture in picture.
+
+### Server screenshot relay
+
+远程桌面退回通过现有设备连接逐张传送截图的方式，桌面端沿用手机端现有用语，避免仅写兼容模式而隐藏实际传输方式。
+
+### Take over connection
+
+Explicit user action that replaces the current remote desktop viewer; never used for automatic recovery.
+
+### Server video relay
+
+远程桌面使用服务器中转实时视频，桌面与手机沿用同一用语；区别于逐张截图传输。
+
+### Remote device
+
+远程连接、任务与设备列表中的另一台设备；明确是电脑时优先说远程电脑。不要把本地浏览器内部控制器称为远程设备。
+
+### Activity Monitor
+
+独立窗口/兼容页签,展示本机进程 CPU/内存并可终止 Agent 进程。不可叫「任务管理器」——Session→任务 已 decided,会被读成管理左侧任务列表。不叫「用量」——会和 token / 账号 Usage→用量 混淆(#3183)。「资源监视器」是窗口标题,看的是本机资源占用,不是输入监控;输入监控权限仍用「监听权限」。
+
+### Role name
+
+Orca Worker 创建卡上的命名字段。它只是派活用的名字，不改变 Agent、模型、权限或能力。先登记为 proposed，避免「角色 / 名称 / Role」多套说法并存。
+
+### Routine
+
+伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。2026-11-08 起伙伴 V2 的定时工作改为项目里的普通自动化，例行任务的管理界面已下线；条目保留以核对存量文案与 V1 运行任务的历史显示，新文案用「自动化」。
+
+### Trigger
+
+例行任务的时间或事件触发条件（例行任务 2026-11-08 起随伙伴 V2 下线，见 Routine 条目）。
+
+### Run records
+
+日志上报文案里对「App 自身运行日志」的用户可见说法。刻意不直接叫「日志」: 设置页同屏已有「日志目录」「Debug 日志」两处指本地文件, 而这里要表达的是被上报的那部分内容(基础设施运行记录, 不含对话)。proposed: 与「日志」的分工尚未产品裁决。
+
+### Scrolling Screenshot
+
+2026-10-26 用户指定截图功能统一称为滚动截图，突出滚动操作，不再使用长截图作为功能名称。
+
+### Relay service
+
+远程连接设置里选择设备之间经 Cindy 官方中转，还是用户自己的中转（这台电脑当中转 / 加入别的中转）。官方一侧称「Cindy 官方中转」（Cindy relay）。方案见 docs/self-hosted-relay-plan.md。
+
+### Mute notifications
+
+任务右键菜单里的通知开关，是普通句子不是品牌词，故 checkCase 为 false。开关两态成对出现：未静音时显示「消息免打扰」（点了就静音），已静音时显示「允许消息通知」（点了就恢复）；英文对为 Mute notifications / Allow notifications。与设置里的全局通知开关（ccAgent.settings.notifications）区分：这个是单个任务的。中文不用「免打扰模式」「静音」。「允许消息通知」是反面文案，未列入 translations，待五语用例变多后一并裁决。
+
+### Share Link
+
+供应商分享的一次性链接：生成后 5 分钟内有效、只能使用一次。与共享任务的「邀请链接 / 邀请码」是不同的东西，不要混用。
+
+### Share Request
+
+受邀者打开分享链接、确认后发给分享者的请求；分享者「同意分享 / 拒绝申请」。受邀者可以「撤回申请」。
+
+### Shared Session
+
+远程连接的多人版本，按单个任务共享完整上下文和同一 Agent，不作为独立会议产品。
+
+### shortcut listener permission
+
+macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Cindy 内的对外称法。产品侧只按用途讲: 这个权限只服务语音输入快捷键的监听, 不讲系统实现, 所以 zh-CN 沿用设置页权限项已有的「监听权限」(settings.voiceInput.permissions.inputMonitoring.label), 不引入「输入监控」这个直译——后者听起来像 Cindy 在监控用户的全部输入, 与实际能力(只识别快捷键按键组合)不符, 反而制造隐私误解。禁用项都挂 whenEn 条件: 要引用 macOS 系统设置面板名本身时那是 OS 的 UI 名称, 不受本条约束。四语的比喻不统一(en listener / ja 監視 / ko 감지)是现状登记而非裁决——各语言内部一致但跨语言不同, 保持 proposed 等产品拍板, 先把清单摆出来防止继续在 listener / monitoring / detection 之间漂移。
+
+已确定禁用：`输入监控（仅当英文含 shortcut listener permission）`（zh-CN）、`入力監視（仅当英文含 shortcut listener permission）`（ja）、`입력 모니터링（仅当英文含 shortcut listener permission）`（ko）
+
+### Side chat
+
+在右侧独立提问，继承主任务已完成的上下文；追问不自动写回主任务。
+
+### Sign-in
+
+家族合并条目：涵盖 sign-in（名词形）/ signed-in（状态形）/ Sign-ins（复数形）。一致性核对：en 语料 142 键，非英语种均已自然翻译。id 用 Masuk / 已登录。
+
+### Skip Sign-In
+
+登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。
+
+### Smart routing
+
+Codex Subagent 的可选扩展调配开关。默认关闭以保留 Codex 原生 Sol/Terra 调配；开启后允许 Codex 从 Cindy 已连接的更多模型中按任务选择。
+
+### Speech speed
+
+伙伴语音设置的合成语速；按伙伴保存，通话朗读、消息朗读和试听共用。区别于播放器倍速和语音输入停顿时间。
+
+### Header
+
+任务 PR/MR 关联展示的顶栏。沿用 ccAgent.gitContext.pr.manage.pin/hint 的既有译法；区别于系统窗口标题栏。
+
+### Inbox
+
+按状态整理任务的列表模式，由任务栏右上角按钮切换；分区为待处理、进行中、稍后处理、已处理。
+
+### Pending
+
+收件箱模式的第一个分区：需要用户处理的任务（新结果、等待回复、未归档的普通任务）。
+
+### Processed
+
+任务列表底部已归档任务分区的名称，沿用归档生命周期。
+
+### Snoozed
+
+任务暂时收起，到期回到当前执行状态对应的分区，不停止 Agent。
+
+### Tag
+
+任务列表的 Finder 式颜色标签；仅标识任务，不改变运行状态。用户已确认显示为重叠色球，整合现有任务菜单，当前不增加筛选入口。
+
+### Core skill
+
+伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」；2026-11-08 起 V2 伙伴的主人对话不再挂载它）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。
+
 ### System skills
 
 （2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。
 
+### Todo
+
+（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。V2 把未完成事项写进伙伴项目的 CARRYOVER.md；旧消息里的 Todo 引用照常渲染。
+
+### Terms of Service
+
+与 privacy-policy 成对的法律文件名，取自现有 termsOfServiceLabel 与 login.consentDialog.body。登录协议行与协议弹窗标题是单行槽（DESIGN.md §16.2），带两个全称的句子超出预算，所以这两处只缩写本条（privacy-policy 保持已裁决全称）：协议行 fr「CGU」；弹窗标题 es「Términos」、fr「CGU」、de「Bedingungen」、pt「Termos」（#8188 / #8181）。弹窗正文与设置页仍用全称。待裁决：这些单行槽简称（尤其 fr 用「CGU」还是其他写法）。
+
+### Thread
+
+按语境分四类：①指产品内那个条目 → 跟随 session 叫「任务」（2026-07-31 随 session 改名一并更新）；②Codex 外部概念 → 保留 thread；③GitHub PR review thread →「review 评论」；④比喻用法 "persistent work thread" → 改写为「持续推进的工作」。「线程」一律禁用。
+
+已确定禁用：`线程`（zh-CN）、`執行緒`（zh-TW）
+
+### Ungrouped
+
+模型目录中没有可信厂商 group、但仍可用于对话的兜底分组。它不推断产地或厂商；服务端补充明确 group 后模型会自动归入对应分组。与不能用于对话、沿用原短名称的 Other（其它）分开。
+
+### Upload code
+
+客户端日志上报后返回给用户的短标识, 用户报障时口述给我们。zh-CN 取「编号」而不是「码」——它是一次上报的检索标识, 不是验证码或错误码, 「上传码」容易被读成验证码。proposed: 日志上报是新链路, 等实际排障流程跑一段后再固化。
+
 ### Usage Balancing
 
 原 Claude 订阅供应商组的分配策略。2026-10-15 起配额排序对所有组策略生效（2026-10-21 起比「剩下的配额 ÷ 剩下的时间」，最急的先用），设置里不再单列此选项，旧组存的此值按最少占用挑；不迁移正常运行的任务。
+
+### Use my browser logins
+
+设置 → 自动操作里，把系统 Chrome / Edge / Brave 当前 profile 的 cookie 与保存的密码快照到 Agent 专用浏览器。不是接管日常窗口。不要译成 real profile / 真实配置文件。
+
+### Voice dictionary
+
+语音输入的用户自定义术语表(人名、产品名、代号与其常见误识别写法),在同账号的电脑之间自动同步、手机只读查看。当前先采用四语直译并登记为待讨论术语,避免与「自定义词典」「术语表」「用户词库」等说法混用。
+
+### Voice Mode
+
+桌面伙伴一对一的连续语音交互方式；停顿发送、最终回复朗读和插话，沿用伙伴主任务。
+
+### Voiceprint
+
+语音输入「识别我的声音」录入的本人声音特征，只存在本机、不同步。可写「录入声纹」「删除声纹」；不要写成声音指纹、声音模板。
+
+### Wallpaper
+
+Desktop appearance setting for an in-app visual background layer.
+
+### Wallpaper Blur
+
+仅使应用壁纸柔化，不模糊文字或控件；0 为关闭，按用户选择应用于静态图片和视频。
+
+### Wallpaper Visibility
+
+壁纸背景层的实际可见程度，0% 隐藏，100% 原样显示；不改变文字或控件的不透明度。
+
+### WeChat
+
+个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
+
+### WeCom
+
+企业微信官方英文品牌名，用于智能机器人和群机器人能力；先登记为 proposed，待产品术语评审后再决定是否固化。
+
+### WeCom group bot
+
+企业微信群 Webhook 单向通知能力的名称；先登记为 proposed。
+
+### WeCom Intelligent Bot
+
+企业微信 WebSocket 长连接双向 IM 能力在设置页中的名称；先登记为 proposed。
+
+### withdraw (a reply)
+
+用户在 X 上让 Cindy 删掉它那条公开回帖的动作：原提问者在目标回帖下回复 `@askmycindy /delete`，正文中须手动带上 @askmycindy。中文说明也可展示 `/删除`，但命令本身不翻译为 `/刪除`。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 五语只有这一处用例, 等更多用例出现后再定 decided。
+
+### Work split
+
+伙伴群聊第二阶段：负责人把一件事分成几步派给群里的伙伴，用户点「开始」后伙伴一位接一位做，每做完一步停下等用户点「继续」（docs/product-rules/bot-group-chat.md §7）。英文动作说法 split the work（输入框「+」菜单「安排分工」= Split the Work），名词 work split；句中小写，故 checkCase 为 false。**不得**译作「协同 / 協同 / Collaboration」（Orca 多 Agent 协同的功能名，见 collaboration 条目）、「协作」（共享任务）或「接力」。分工里的每一步叫「一步 / step」，不叫「任务」（见 task-and-conversation-naming）；负责人出的方案叫「安排 / plan」。先登记为 proposed：第二阶段刚落地，等 UI 走查后再定。
 
 ## 怎么加一条术语
 
