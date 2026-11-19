@@ -8147,6 +8147,7 @@
         "cindyEmbedText": "可將文字送算為向量（用於語義檢索）",
         "cindyModelsDecisions": "可用決策模型（耗模型額度）",
         "cindyModelsRerank": "可用重排模型（耗模型額度）",
+        "cindyModelsMediaRequest": "可直用 Cindy AI 生圖、影片、語音合成及轉寫（耗模型額度）",
         "cindyEmbedTextDetail": "文字將送至系統之向量模型算為一串數字，每次至多 {{max}} 條，或生模型費用。所得向量僅交法器自存，不寫入君之資料庫。",
         "cindySearchWeb": "可用 Cindy AI 搜尋公網",
         "cindySearchWebDetail": "查詢將存取公網，或耗 Cindy AI 限額。",

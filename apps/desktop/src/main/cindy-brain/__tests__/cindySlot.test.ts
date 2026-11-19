@@ -2935,3 +2935,29 @@ it('requires declared model API and shares the existing inflight limit', async (
   expect(await busy.slot.handleModelRequest('art', { kind: 'rerank', query: 'q', documents: ['d'] })).toMatchObject({ ok: false, errorCode: 'BUSY' });
   expect(evaluate).toHaveBeenCalledTimes(1);
 });
+
+describe('plugin direct media request', () => {
+  const request = {
+    kind: 'media_request',
+    operation: 'image.generate',
+    model: 'test-image',
+    body: { prompt: 'a square' },
+  };
+
+  it('requires the recorded media-request permission before dispatch', async () => {
+    const ghost = fakeGhost({ model: { models: ['media_request'] } });
+    const dispatchMediaRequest = vi.fn(async () => ({
+      ok: true as const, status: 200, contentType: 'application/json', body: '{}', encoding: 'utf8' as const,
+    }));
+    const { slot } = makeSlot({ getGhost: () => ghost, dispatchMediaRequest });
+    expect(await slot.handleModelRequest('art', request)).toMatchObject({
+      ok: false, errorCode: 'PERMISSION_DENIED',
+    });
+    expect(dispatchMediaRequest).not.toHaveBeenCalled();
+
+    ghost.approvedCindyModelActions = ['media_request'];
+    expect(await slot.handleModelRequest('art', request)).toMatchObject({ ok: true, status: 200 });
+    expect(dispatchMediaRequest).toHaveBeenCalledTimes(1);
+    expect(dispatchMediaRequest).toHaveBeenCalledWith(request, expect.objectContaining({ instance: 'art' }));
+  });
+});

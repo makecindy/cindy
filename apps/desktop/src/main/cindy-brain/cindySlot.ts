@@ -1,3 +1,4 @@
+import type { PluginMediaRequestContext } from '../model-access/pluginMediaRequest.js';
 import { EvaluationError } from '../cindy-evaluate/errors.js';
 import type { EvaluationContext } from '../cindy-evaluate/service.js';
 import type { CindyEvaluateToolRequest } from 'cindy-tools';
@@ -6,8 +7,8 @@ import type { CindyEvaluateToolRequest } from 'cindy-tools';
  * ---------------------------------------------------------------------------
  * 意识沙箱零网络零文件,
  * 想用 AI 只能经管子请主机代办。本模块处理存量上行 cindy-request
- * (旧名 model-request 兼容)。新的通用媒体模型调用由当前 Agent 使用 Cindy Core
- * media 工具发起，不再从插件沙箱或面板进入本链：
+ * (旧名 model-request 兼容)。获准的 media_request 直接调用 Cindy AI 网关；
+ * 以下是存量媒体生成代办：
  *
  *   电子脑 cindy.send({type:'cindy-request', kind:'gen_image'|'edit_image'|'gen_video'|'edit_video', …})
  *     → 资格审(声明了 'cindy' 卡槽 + 能力详单?按类目.动作粒度)
@@ -73,6 +74,7 @@ import {
   GHOST_VIDEO_REF_MODES,
   GHOST_VIDEO_RESOLUTIONS,
   type GhostCindyEmbedInputType,
+  type GhostDirectMediaResponse,
   type GhostImageAspectRatio,
   type GhostModelTier,
   type GhostPipeModelResult,
@@ -148,6 +150,7 @@ export interface CindySlotDeps {
   getOwnerScopeKey(): string;
   /** true 表示账号运行时正在 teardown / replacement，所有新旧任务均 fail closed。 */
   isOwnerBoundaryPending(): boolean;
+  dispatchMediaRequest?(request: unknown, context: PluginMediaRequestContext): Promise<GhostDirectMediaResponse | { ok: false; errorCode: string; message: string }>;
   /** 原校验通过后，宿主把旧入参适配到 Core；只返回已入仓的媒体。 */
   invokeMedia(params: {
     kind: LegacyMediaKind;
@@ -607,6 +610,45 @@ export class GhostCindySlot {
     return atStart || this.isModelAccessTransient();
   }
 
+  private async handleDirectMediaRequest(ghostId: string, payload: unknown): Promise<GhostPipeModelResult> {
+    const ghost = this.deps.getGhost(ghostId);
+    const owner = this.deps.getOwnerScopeKey();
+    const isCurrent = () => {
+      const current = this.deps.getGhost(ghostId);
+      return !this.deps.isOwnerBoundaryPending() && this.deps.getOwnerScopeKey() === owner
+        && current?.instanceKey === ghost?.instanceKey && current?.dir === ghost?.dir
+        && ghostCindyModelActionApproved(current, 'media_request');
+    };
+    const forbidden = { ok: false as const, errorCode: 'PERMISSION_DENIED', message: '插件或账号未获准直接调用 Cindy AI 媒体能力' };
+    if (!isCurrent()) return forbidden;
+    if (!this.deps.dispatchMediaRequest) return { ok: false, errorCode: 'UNAVAILABLE', message: '宿主不支持媒体直调' };
+
+    const count = this.inflight.get(ghostId) ?? 0;
+    const limit = this.deps.getInflightLimit?.(ghostId) ?? null;
+    if (limit !== null && count >= limit) {
+      return { ok: false, errorCode: 'BUSY', message: '同时进行的代办已达上限' };
+    }
+    this.inflight.set(ghostId, count + 1);
+    try {
+      const result = await this.deps.dispatchMediaRequest(payload, {
+        owner, instance: ghost?.instanceKey ?? ghostId, isCurrent,
+        resolveAudio: async hash => {
+          const media = await this.deps.resolveOwnedMedia(ghostId, hash, owner);
+          return isCurrent() ? media?.absPath : undefined;
+        },
+      });
+      return isCurrent() ? result : forbidden;
+    } catch {
+      return isCurrent()
+        ? { ok: false, errorCode: 'INTERNAL', message: '媒体请求未完成' }
+        : forbidden;
+    } finally {
+      const remaining = (this.inflight.get(ghostId) ?? 1) - 1;
+      if (remaining > 0) this.inflight.set(ghostId, remaining);
+      else this.inflight.delete(ghostId);
+    }
+  }
+
   /**
    * 处理一条 cindy-request(ghost-pipe:send 的 invoke 返回值即本结果)。
    * 永不 reject——一切失败折叠成 { ok:false, message },沙箱拿到的是
@@ -638,6 +680,9 @@ export class GhostCindySlot {
       provider?: unknown;
       callerTool?: unknown;
     };
+    if (p?.kind === 'media_request') {
+      return this.handleDirectMediaRequest(ghostId, payload);
+    }
     if (p?.kind === 'decisions' || p?.kind === 'rerank' || p?.kind === 'list_models') {
       const input = payload as Record<string, unknown>;
       const api = p.kind === 'list_models' ? input.api : p.kind;

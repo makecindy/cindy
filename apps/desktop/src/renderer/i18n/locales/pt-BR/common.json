@@ -8276,6 +8276,7 @@
         "cindyEmbedText": "Pode enviar texto para ser convertido em vetores (para busca semântica)",
         "cindyModelsDecisions": "Pode usar modelos de decisão (consome sua cota de modelos)",
         "cindyModelsRerank": "Pode usar modelos de reordenação (consome sua cota de modelos)",
+        "cindyModelsMediaRequest": "Pode gerar imagens e vídeos, sintetizar voz e transcrever áudio com Cindy AI (consome sua cota de modelos)",
         "cindyEmbedTextDetail": "O texto é enviado ao modelo de embeddings do sistema e convertido em números, com até {{max}} itens por chamada. Pode haver cobrança pelo uso do modelo. Os vetores vão apenas para o plugin — nada é gravado na sua biblioteca.",
         "cindySearchWeb": "Pode pesquisar na web pública com Cindy AI",
         "cindySearchWebDetail": "As solicitações de pesquisa acessam a web pública e podem consumir a cota do Cindy AI.",

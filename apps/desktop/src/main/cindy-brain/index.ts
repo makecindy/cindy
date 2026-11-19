@@ -816,8 +816,11 @@ import { resolveGhostMediaHandoverTarget } from './ghostMediaHandoverTargetTrack
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
 import { assessPluginSetup, pluginSetupProbes, pluginOauthReauthSuggestion } from './pluginSetupService.js';
+import { resolveGatewayConnection } from '../model-access/gatewayConnection.js';
+import { createPluginMediaRequester } from '../model-access/pluginMediaRequest.js';
 import { isModelAccessReady, isModelAccessTransientlyUnavailable } from '../model-access/readiness.js';
 import {
+  fetchMediaInvocationGuide,
   filterEnabledGatewayMediaModels,
   isMediaModelExecutable,
   isMediaModelExecutableForLegacyInput,
@@ -6069,6 +6072,26 @@ export function getGhostCindySlot(): GhostCindySlot {
       getGhost: findGhostForInstanceId,
       getOwnerScopeKey: () => activeOwnerScopeKey(),
       isOwnerBoundaryPending: () => isGhostBoundaryPending(),
+      dispatchMediaRequest: createPluginMediaRequester({
+        getConnection: () => resolveGatewayConnection('xd'),
+        allowsModel: (model, operation) => {
+          const models = getXdGatewayModels();
+          const access = readModelDisableOverrides();
+          if (operation === 'audio.speech' || operation === 'audio.transcribe') {
+            const mode = operation === 'audio.speech' ? 'audio_speech' : 'audio_transcription';
+            const audioModels = models.filter(candidate => candidate.mode === mode);
+            return !isProviderDisabled(access, 'xd')
+              && audioModels.some(candidate => candidate.id === model && candidate.availability === 'available')
+              && !isModelDisabledWithUniqueLegacyBasename(access, 'xd', model, audioModels.map(candidate => candidate.id));
+          }
+          const kind = operation === 'image.generate' ? 'image' : 'video';
+          const capability = kind === 'image' ? 'image.generate' : 'video.generate';
+          return filterEnabledGatewayMediaModels(models, capability, access).some(candidate =>
+            candidate.id === model && isCatalogMediaModelVisible('xd', model, candidate.defaultEnabled, undefined, kind));
+        },
+        getGuide: model => fetchMediaInvocationGuide(model),
+        send: outboundFetch,
+      }),
       // 旧协议只适配参数/结果；付费提交、轮询和入仓全部复用 Core。
       evaluate: (...args) => callEvaluate(...args),
       readEvaluationImage: (...args) => readEvaluationImageFile(...args),

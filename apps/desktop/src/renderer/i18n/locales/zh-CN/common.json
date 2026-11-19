@@ -8161,6 +8161,7 @@
         "cindyEmbedText": "可把文字送去算成向量（用于语义检索）",
         "cindyModelsDecisions": "可调用决策模型（使用你的模型配额）",
         "cindyModelsRerank": "可调用重排模型（使用你的模型配额）",
+        "cindyModelsMediaRequest": "可直接调用 Cindy AI 生图、生视频、语音合成和转写（使用你的模型配额）",
         "cindyEmbedTextDetail": "文字会送到系统的向量模型算成一串数字，单次最多 {{max}} 条，可能产生模型费用。算出的向量只交给插件自己保管，不写入你的资料库。",
         "cindySearchWeb": "可使用 Cindy AI 搜索公网",
         "cindySearchWebDetail": "查询会访问公网，并可能消耗 Cindy AI 配额。",

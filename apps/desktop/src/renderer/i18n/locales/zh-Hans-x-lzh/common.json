@@ -8147,6 +8147,7 @@
         "cindyEmbedText": "可将文字送算为矢量（用于语义检索）",
         "cindyModelsDecisions": "可用决策模型（耗模型额度）",
         "cindyModelsRerank": "可用重排模型（耗模型额度）",
+        "cindyModelsMediaRequest": "可直用 Cindy AI 生图、影片、语音合成及转写（耗模型额度）",
         "cindyEmbedTextDetail": "文字将送至系统之矢量模型算为一串数字，每次至多 {{max}} 条，或生模型费用。所得矢量仅交法器自存，不写入君之数据库。",
         "cindySearchWeb": "可用 Cindy AI 搜索公网",
         "cindySearchWebDetail": "查找将访问公网，或耗 Cindy AI 限额。",

@@ -8276,6 +8276,7 @@
         "cindyEmbedText": "Puede enviar texto para convertirlo en vectores (para búsqueda semántica)",
         "cindyModelsDecisions": "Puede usar modelos de decisión (consume tu cuota de modelos)",
         "cindyModelsRerank": "Puede usar modelos de reordenación (consume tu cuota de modelos)",
+        "cindyModelsMediaRequest": "Puede generar imágenes y vídeos, sintetizar voz y transcribir audio con Cindy AI (consume tu cuota de modelos)",
         "cindyEmbedTextDetail": "El texto se envía al modelo de embeddings del sistema y se convierte en números, hasta {{max}} elementos por llamada. Pueden aplicarse cargos por uso del modelo. Los vectores van solo al complemento; no se escribe nada en tu propia biblioteca.",
         "cindySearchWeb": "Puede buscar en la web pública con Cindy AI",
         "cindySearchWebDetail": "Las solicitudes de búsqueda acceden a la web pública y pueden consumir la cuota de Cindy AI.",
