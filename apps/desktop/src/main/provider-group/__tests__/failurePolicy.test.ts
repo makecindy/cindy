@@ -35,6 +35,9 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
     ['HTTP 429', { errorStatus: 429, message: 'rate limited' }, switchTo('usage-limit')],
     ['signed out (tag)', { sdkError: 'authentication_failed' }, switchTo('auth')],
     ['signed out (401)', { errorStatus: 401 }, switchTo('auth')],
+    // #11484 unit: the new explicit account rejection uses the existing account
+    // fallback/cooling policy, never generic transport failure or same-source retry.
+    ['upstream account denied', { reason: 'account_access_denied', message: 'Access denied' }, switchTo('auth')],
     ['signed out (Codex)', { codexErrorInfo: 'unauthorized' }, switchTo('auth')],
     ['invalid API key text', { message: 'Invalid API key provided' }, switchTo('auth')],
     ['agent not authenticated at start', { message: 'Claude Code is not authenticated' }, switchTo('auth')],

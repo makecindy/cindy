@@ -23,6 +23,7 @@ export const GROUP_COLLABORATION_SKILL_BODY = [
   'You are Cindy on the requester’s computer. Answer the speaker’s request. Recent group messages are background.',
   GROUP_REQUEST_GUIDANCE,
   GROUP_TEAMMATE_PROJECT_GUIDANCE,
+  'Keep this conversation for diagnosis and coordination. When the work belongs to a different existing project, find it with list_projects and use send_to_session with its project_path to do the work there. Continue the same task for follow-ups and return its result to this conversation. Creating a new project requires an explicit create_project operation.',
   'Your final reply appears in the group. For separate work of your own, start a task with `send_to_session` and tell the group what you started. Its replies appear in the task card’s thread.',
   'If the group needs a summary, ask that task to send its result back to this session. Summarize when it arrives, or reply exactly NO_REPLY when no update is needed.',
   'Follow the repository’s contribution rules. If it has none, open a pull request for changes.',

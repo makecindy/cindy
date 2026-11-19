@@ -24,6 +24,7 @@ import ts from 'typescript';
 
 import { describe, expect, it, vi } from 'vitest';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
@@ -123,6 +124,7 @@ function botTaskDispatchSlice(): string {
   return ts.transpileModule(
     `${sendWithBaseline}
 ${sendToSessionInternal}
+${slice('const toTaskFile = (attachment:', '  const dispatchBotSessionMessage =')}
 ${dispatchBotSessionMessage}
 ${pluginSource}
 ${sendToSession};
@@ -189,6 +191,7 @@ function botTaskDispatchHarness(
     where: () => dbChain,
     limit: async () => [],
   };
+  const dbClient = { drizzle: { select: () => dbChain } };
   const stubs: Record<string, unknown> = {
     getPluginHostToolCaller: () => undefined,
     sanitizeSourceName,
@@ -229,7 +232,10 @@ function botTaskDispatchHarness(
       rows[id]
         ? { status: 'active', title: id, userSendAt: null, providerId: 'fixture-provider', ...rows[id] }
         : null,
-    getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+    getDbClient: () => dbClient,
+    getCurrentDbClientSnapshot: () => dbClient,
+    normalizeAutoTitle,
+    refineCreatedTaskTitle: asyncNoop,
     messages: {},
     sessions: {},
     // 云端伙伴副本门:合成库里没有关联行,目标不是被接管的副本。
@@ -628,6 +634,7 @@ describe('idle forwarded request authorization', () => {
   // an existing one; direct send previously left its next handoff without a source.
   it('queues the first verified request of a newly created task', async () => {
     const broadcast = vi.fn();
+    const refineTitle = vi.fn();
     const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false };
     const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => { await input.onAccepted?.(); });
     const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
@@ -635,6 +642,7 @@ describe('idle forwarded request authorization', () => {
         ({ row, value: await create(row, async () => {}) }),
       enqueueSendToSessionMessage: enqueue,
       broadcastSessionCreated: broadcast,
+      refineCreatedTaskTitle: refineTitle,
     });
     const receipt = { kind: 'agent-request', request: {
       userText: 'Inspect fixtures', sessionId: 'owner', clientId: 'u1', ownerVerified: true } };
@@ -642,6 +650,7 @@ describe('idle forwarded request authorization', () => {
       createDefaults: { agentKind: 'codex', model: 'fixture', workingDir: '/tmp/fixture', permissionMode: 'auto' },
     })).toMatchObject({ ok: true, targetSessionId: 'new-child', wakeKind: 'created' });
     expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'new-child', autoReviewUserText: receipt }));
+    expect(refineTitle).toHaveBeenCalledExactlyOnceWith('new-child', 'envelope', { initialTitle: 'envelope' });
     expect(h.sendOptions).toHaveLength(0);
     expect(broadcast).toHaveBeenCalledWith('new-child');
     expect(broadcast).toHaveBeenCalledTimes(1);

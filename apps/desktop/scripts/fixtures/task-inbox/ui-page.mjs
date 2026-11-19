@@ -33,8 +33,8 @@ export default {
       await working.locator('> button').click();
       await page.locator('[data-session-id="ready"]').click();
       await scroller.evaluate((node) => { node.scrollTop = 0; });
-      // Move the pointer off the list so the hover freeze does not hold the row.
-      await page.mouse.move(310, 630);
+      // Reading a row inside the list must allow it to change sections.
+      await page.locator('[data-session-id="ready"]').hover({ position: { x: 30, y: 10 } });
       await page.evaluate(() => window.__replyToReady());
       await working.locator('[data-session-id="ready"]').waitFor();
       await page.waitForTimeout(400);
@@ -175,6 +175,11 @@ export default {
       previewedUntil,
     );
     const later = page.locator('[data-session-id="later"]');
+    await later.getByRole('button', { name: snoozeLabel, exact: true }).click();
+    const indefinite = page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.indefinite'), exact: true });
+    assert.equal(await indefinite.locator('time').count(), 0);
+    await indefinite.click();
+    await page.waitForFunction(() => document.documentElement.dataset.snoozedUntil === '9999-12-31T23:59:59.999Z');
     await later.click({ button: 'right' });
     await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).click();
     await page

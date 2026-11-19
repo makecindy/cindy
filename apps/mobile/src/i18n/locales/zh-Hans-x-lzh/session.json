@@ -577,6 +577,7 @@
       "taskCost": "本差事费用",
       "actualCost": "实费",
       "estimatedValue": "估值",
+      "tokenUnit": "token",
       "totalTokens": "累计 Token",
       "seeDetails": "察明细",
       "valueUnavailable": "部分差事价值暂未取得",

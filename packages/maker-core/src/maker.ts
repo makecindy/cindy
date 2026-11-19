@@ -1572,6 +1572,17 @@ export class Maker {
     return this.closeFacts.get(session) ?? { reason: 'unexpected', transient: false };
   }
 
+  /** Reserve app exit synchronously, without aborting any process before the host reaper. */
+  prepareForAppQuit(): void {
+    this.shutdownStarted = true;
+    for (const session of [...this.activeSessions.values(), ...this.localAgentSessions]) {
+      if (!this.closeFacts.has(session)) {
+        this.closeFacts.set(session, { reason: 'requested', transient: false });
+      }
+      session.prepareForHostShutdown();
+    }
+  }
+
   /**
    * Maker 进程级 shutdown — app.before-quit / 信号 / 崩溃 hook 调一次。
    *
@@ -1593,6 +1604,7 @@ export class Maker {
    * 失败一律 swallow + 聚合日志, 不抛 (before-quit 阶段不能阻断退出流程)。
    */
   async shutdown(opts?: { reason?: AgentSessionTeardownReason }): Promise<MakerShutdownReport> {
+    if (opts?.reason === 'app-quit') this.prepareForAppQuit();
     this.shutdownStarted = true;
     // Fail closed: a caller that cannot name its boundary is treated as an
     // account boundary, so adapters with detached, credential-holding children

@@ -866,8 +866,7 @@
         "loading": "方读限额…",
         "unavailable": "此机之限额暂读不得",
         "none": "此供方无限额信息",
-        "offline": "此机不在线，读不得限额",
-        "share": "他人分享之机不示限额"
+        "offline": "此机不在线，读不得限额"
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之并行上限",
@@ -970,8 +969,8 @@
       "loading": "方载图…"
     },
     "moveToolbar": "左右拖移工具列",
-    "hint": "点击择窗口或元素，拖曳框选 · 滚轮易范围 · 空白键全屏幕 · C 录颜色 · Esc 终",
-    "hintWithLast": "点击择窗口或元素，拖曳框选 · 滚轮易范围 · 空白键全屏幕 · R 前次区域 · C 录颜色 · Esc 终",
+    "hint": "点击择窗口或元素，拖曳框选 · 滚轮易范围 · 空白键择全窗 · C 录颜色 · Esc 终",
+    "hintWithLast": "点击择窗口或元素，拖曳框选 · 滚轮易范围 · 空白键择全窗 · R 前次区域 · C 录颜色 · Esc 终",
     "copy": "录之",
     "cancel": "终截屏",
     "captureFailed": "不能截取屏幕",
@@ -1120,14 +1119,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正劳作",
-    "hint": "按任一键或 Touch ID 键即锁屏，再以指纹或密码解之",
+    "hint": "按任一键，乃可解锁",
     "lockFailed": {
       "status": "Cindy 未能锁此机",
       "hint": "触机则再试锁屏；仍不能锁，以 Touch ID 或密码验之，乃可撤。亦可合盖或按电源键以锁。",
       "hintWindows": "触机则再试锁屏；仍不能锁，以 Windows Hello 或 PIN 验之，乃可撤。亦可按 Windows 徽键 + L 以锁。"
     },
-    "hintWindows": "按任一键即锁屏，以 Windows Hello 或密码解之",
-    "hintLinux": "按任一键即锁屏，以密码解之",
+    "hintWindows": "按任一键，乃可解锁",
+    "hintLinux": "按任一键，乃可解锁",
     "verifyReason": "撤隐私画面"
   },
   "appBadge": {
@@ -6032,7 +6031,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "差事模型自降",
-        "description": "连接或容量之故障连发时，先切至同名模型之他处已连来源，再试当前 Agent 明确所荐之模型；不换 Agent，亦不改君所存之选择。常例为阖。"
+        "description": "模型组遇故，试组内可用之余模。更换引擎，依旧法交接，存其新选。寻常差事屡败，方于本引擎另试来源或所荐模型。初设为关。"
       },
       "toggleAria": "切换差事模型自降",
       "toast": {
@@ -6760,6 +6759,9 @@
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
+        },
+        "linkTransport": {
+          "webrtc": "WebRTC"
         },
         "onlyEncrypted": "唯用 Agent-Net",
         "onlyEncryptedHint": "启之则旧版设备及仍循旧路之分享不可用。常例为阖。",
@@ -8147,6 +8149,7 @@
         "cindyEmbedText": "可将文字送算为矢量（用于语义检索）",
         "cindyModelsDecisions": "可用决策模型（耗模型额度）",
         "cindyModelsRerank": "可用重排模型（耗模型额度）",
+        "cindyModelsMediaRequest": "可直用 Cindy AI 生图、影片、语音合成及转写（耗模型额度）",
         "cindyEmbedTextDetail": "文字将送至系统之矢量模型算为一串数字，每次至多 {{max}} 条，或生模型费用。所得矢量仅交法器自存，不写入君之数据库。",
         "cindySearchWeb": "可用 Cindy AI 搜索公网",
         "cindySearchWebDetail": "查找将访问公网，或耗 Cindy AI 限额。",
@@ -9458,6 +9461,31 @@
     "preparing": "方连登录服务",
     "preparingSubtitle": "将为君载当前区域可用之登录方式",
     "unavailable": "暂不能登录",
+    "hostUnavailable": {
+      "title": "Cindy 后台服务没有启动",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "这份数据属于另一个账号，和 Cindy 后台服务保存的登录不一致。",
+          "action": "请用原来的账号运行 cindy-host login，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "另一个 Cindy 程序正在使用这份数据。",
+          "action": "请先关掉它，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "这个账号的数据打不开。",
+          "action": "如果最近用过更新版本的 Cindy，请先把这台电脑上的 Cindy 更新到最新版本，再重新启动 Cindy 后台服务，然后重新打开 Cindy；否则运行 cindy-host status 查看原因。"
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Cindy 后台服务启动时连不上登录服务。",
+          "action": "请检查网络，再重新启动 Cindy 后台服务，然后重新打开 Cindy。"
+        },
+        "HOST_START_FAILED": {
+          "body": "Cindy 后台服务启动时出错。",
+          "action": "请重新启动 Cindy 后台服务，然后重新打开 Cindy。如果还是出错，运行 cindy-host status 查看原因。"
+        }
+      }
+    },
     "retry": "再试",
     "browserWaiting": "请于浏览器中完成验证",
     "browserCallback": {
@@ -9728,6 +9756,10 @@
     "cacheLine": "缓存分项：读 {{read}} · 写 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "缓存分项：读 {{read}} · 写 {{create}}",
     "stepsLine": "本轮共请 {{steps}} 次 · 每请约 {{context}} 上下文",
+    "traceChartLabel": "本轮生成之速与每请所思",
+    "traceRequests": "本轮共请 {{requests}} 次",
+    "traceThinkingShare": "思占所出 {{share}}",
+    "traceThinkingTokens": "思耗 {{thinking}} tokens",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 个模型",
     "costBreakdownHeader": "依模型分之：",
@@ -11438,7 +11470,7 @@
         "projectDirChoose": "择",
         "projectDirChange": "易",
         "projectDirClear": "清",
-        "projectDirNote": "分工行事时，同伴于此劳作。不择亦可，将用此群议自有之卷匣；若择 git 项目，每次分工将新开一 worktree 与分支，不动君手中之代码。",
+        "projectDirNote": "可择本机既有之项目。未择，则先取仓库所系，次取行事同伴之项目。Git 分工另辟 worktree。",
         "autoContinueSaveFailed": "分工交接未能存，请再试",
         "projectDirSaveFailed": "案之卷匣未能存，确其尚存后再试",
         "allowMemberInvites": "许诸成员邀友",
@@ -11766,15 +11798,15 @@
           "replyModeAssistant": "Cindy 答之",
           "replyModeAssistantNote": "群中 Cindy 答之。",
           "work": "分职",
-          "ownFolder": "群自有之卷匣",
+          "ownFolder": "自动择取",
           "projectDirHint": "唯此机有效。",
-          "projectDirClearHint": "改用群自有之卷匣",
+          "projectDirClearHint": "复为自动择项",
           "project": "案",
           "projectCaption": "同伴于群中应答、分工，皆于此案行之。库为全群所共，文件夹唯存此机。",
           "githubRepo": "GitHub 库",
-          "githubRepoHint": "书 owner/name。未择文件夹之机，用本机此案；无之，则自取一份。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "代码之库",
-          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等，贴库之链接。未择夹之机，用本机此项目，无则自取一份。",
+          "repositoryHint": "GitHub 可书 owner/name，余库可贴其址。此机既有之项，独一相合者用之。",
           "repositoryPlaceholder": "owner/name 或库之链接",
           "githubRepoSaveFailed": "库未存，请察而再试。",
           "folderRepoFilled": "已依此夹填库 {{repo}}，群中他人之机亦用之。",
@@ -13525,6 +13557,8 @@
         },
         "reply": {
           "unsupportedMedia": "今版尚不能理此类微信媒体。",
+          "delayedReply": "此复迟至，成于 {{createdAt}}，答 {{receivedAt}} 所收旧讯，所述或已过时。",
+          "delayedReplyQuestion": "原讯：{{question}}",
           "stillProcessing": "差事犹在理中…",
           "ownerOnlyCommands": "唯主人可用机器人之令。",
           "companionManagedCommand": "请于 Cindy 开此同伴：模型于同伴之设中调之，权柄于言谈输入框下易之。",
@@ -14567,12 +14601,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "差事行中所遣之讯，默从排队。",
-      "steerDefault": "差事行中所遣之讯，默为插话于今之差事。",
+    "sendDelivery": {
+      "menuAria": "此讯遣法",
+      "queueHint": "待此轮毕",
+      "steerHint": "次步即理",
+      "setDefault": "立为默",
+      "nowDefault": "已立为默",
       "switchToSteer": "默改插话",
-      "switchToQueue": "默改排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默改排队"
     }
   },
   "onboarding": {
@@ -14890,6 +14926,7 @@
       "rateHistory": "生成速率史",
       "outputTotal": "累出",
       "observedPeak": "至高",
+      "thinkingShare": "思占所出",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "近一段生成之速，不计器具运行与等候。",
@@ -16418,7 +16455,7 @@
       "confirmArchive": {
         "title": "封存差事",
         "description": "确欲封存此差事乎？封存后将自录中除去。",
-        "dirtyWorktreeWarning": "未提交之改动，归档前先存之，日后可于任务中复原。",
+        "dirtyWorktreeWarning": "此差事有文件改动尚未提交。封存时照例存之，日后可于差事中复原。",
         "discardChanges": "弃未提交之改动",
         "discardWarning": "未提交之改动及新档，将不可复原。",
         "discardAndArchive": "弃而归档",
@@ -16661,6 +16698,7 @@
         "thisEvening": "今夕",
         "tomorrow": "明日",
         "nextWeek": "下周",
+        "indefinite": "无期",
         "custom": "自定…",
         "wakeAt": "唤回日期时辰",
         "timeZone": "本地时辰（{{zone}}）",
@@ -19116,6 +19154,9 @@
     },
     "errors": {
       "piStartupCloudFile": "发现仅在云端的指令文件：{{path}}。它可能使 Pi 启动等待。请在访达中下载该文件，确认已保存在本机后重试；超时也可能另有原因。",
+      "hostProfileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
+      "hostProfileInUseByDesktopAtStart": "这份数据正被单独运行的 Cindy 电脑端使用，Cindy 后台服务没有启动。请先退出它，重新启动 Cindy 后台服务，然后重新打开当前这个 Cindy 窗口。",
+      "hostProfileInUseByDesktopRetry": "这份数据正被单独运行的 Cindy 电脑端使用，暂时不能修改。请先退出它，再试一次。",
       "openFileFailed": "无从于系统中启此卷",
       "emptyResponse": "模型无所答。请再试；上下文甚长者，亦可易一模型。",
       "turnFailed": "差事行之未成（模型未报谬误详情），请再试。",
@@ -19403,6 +19444,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "此轮未成。",
+    "blockedReasonUnknown": "受阻之由未详。",
+    "blockedNextStep": "可于此任务补述详情；解其阻后，按“{{action}}”续行。",
     "status": {
       "active": "方趋目标",
       "paused": "已暂止",
@@ -19701,7 +19745,8 @@
         "validity": "有效期",
         "validityValue_other": "领取后 {{count}} 天",
         "claimBy": "领取截止",
-        "destination": "存入"
+        "destination": "存入",
+        "validityPermanent": "永久有效"
       },
       "doneTitle": "{{amount}} 已到账",
       "doneDescription": "已存入赠予余资，{{date}} 前有效。",
@@ -19717,10 +19762,13 @@
         "alreadyClaimed": "这张礼品卡已被领取。",
         "expired": "这张礼品卡已过领取期限。",
         "voided": "这张礼品卡已作废。",
+        "voidedPurchased": "这张礼品卡目前不能领取。",
         "rateLimited": "尝试次数过多，请稍后再试。",
         "failed": "暂时无法兑换，请稍后重试。",
         "personalRequired": "礼品卡仅限个人用户领取。"
-      }
+      },
+      "doneDescriptionPurchased": "已存入储值余资，永久有效。",
+      "pendingDescriptionPurchased": "{{amount}} 正在入账，稍后会出现在储值余资中，无需再次领取。"
     },
     "usage": {
       "title": "余资耗用",
@@ -19737,6 +19785,7 @@
         "empty": "今无赠予之记。",
         "incomplete": "赠予之记甚多，今唯示最近 {{count}} 笔。",
         "unnamed": "赠予余资",
+        "rolloverName": "滚存额度",
         "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原额",
         "used": "已用",
@@ -19765,7 +19814,8 @@
         "noPayment": "无需付款",
         "page": "第 {{page}} 页",
         "previous": "上一页",
-        "next": "下一页"
+        "next": "下一页",
+        "giftCard_other": "礼品卡 × {{count}}"
       },
       "count": "{{count}} 笔",
       "orderId": "NO. {{id}}",
@@ -19974,6 +20024,8 @@
       "basicModels": "可用若干模型",
       "subscription": "订阅之约",
       "rollover": "所余可留至{{period}}，至多 {{amount}}",
+      "rolloverMonthly": "剩余余额最多滚存 {{amount}}，转为赠送余额\n1 个月内有效，不再继续滚存\n优先于订阅余资和储值余资使用",
+      "rolloverMonthlySummary": "剩余余额最多滚存 {{amount}}，1 个月内有效",
       "nextPeriod": {
         "MONTH": "次月",
         "YEAR": "次年",
@@ -19992,6 +20044,115 @@
         "MONTH": "每月含 {{amount}}",
         "YEAR": "每年含 {{amount}}",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "购买礼品卡",
+      "title": "购买礼品卡",
+      "subtitle": "送给朋友，或者留给自己。兑换后存入储值余资，永久有效。",
+      "previewLabel": "对方收到的样子",
+      "sameCards_other": "共 {{count}} 张，卡面、面额、留言相同，每张一个兑换码",
+      "fields": {
+        "face": "卡面",
+        "amount": "面额",
+        "quantity": "数量",
+        "sender": "署名",
+        "senderHint": "显示为「来自 {{sender}}」",
+        "senderPlaceholder": "你的名字",
+        "message": "留言（可选）",
+        "messagePlaceholder": "写一句给对方的话",
+        "tooLong": "最多 {{max}} 个字",
+        "paymentMethod": "支付方式"
+      },
+      "decrease": "少一张",
+      "increase": "多一张",
+      "quantityHint": "{{hours}} 小时内最多买 {{limit}} 张，现在还能买 {{remaining}} 张",
+      "quantityLimitReached": "{{hours}} 小时内最多买 {{limit}} 张，已经买满，请稍后再来",
+      "orderAmountCap": "单笔订单最多 {{amount}}",
+      "totalDetail_other": "{{count}} 张 × {{amount}}",
+      "pay": "去支付",
+      "refundNote": "礼品卡不能兑换现金。卡被领取或兑换后不退款；未领取的卡如需退款，请联系支持人员。",
+      "cancel": "取消",
+      "loadFailed": "暂时无法读取购买限制，请稍后重试。",
+      "checkoutSubtitle_other": "礼品卡 {{amount}} × {{count}} · 付款成功后立即生成",
+      "faces": {
+        "cindy": "Cindy · 品牌红",
+        "cat": "黑猫 · 夜色",
+        "bell": "铃铛 · 节日",
+        "leap": "跃 · 象牙白"
+      },
+      "errors": {
+        "limitReached": "购买的礼品卡已达上限，请稍后再试。",
+        "amountTooLarge": "这笔订单超过单笔支付上限，请减少张数后再试。"
+      },
+      "done": {
+        "title_other": "{{count}} 张礼品卡已备好",
+        "pendingTitle": "礼品卡已付款",
+        "loading": "正在取回这一单的礼品卡…",
+        "description": "把领取链接发给朋友，对方打开就能领取；也可以留一张兑换给自己。",
+        "missing": "付款已完成，礼品卡稍后会出现在「我买的礼品卡」里。",
+        "cardTitle": "第 {{index}} 张 · {{amount}}",
+        "cardMeta": "尾号 {{tail}} · {{status}}",
+        "linkHint": "领取链接就是这张卡：谁先打开领取就归谁，请只发给要送的人。",
+        "viewAll": "查看我买的礼品卡",
+        "finish": "完成"
+      },
+      "list": {
+        "title": "我买的礼品卡",
+        "description": "把领取链接发给朋友，对方打开就能领取；没送出去的卡不会过期，也可以兑换给自己。兑换后存入储值余资。",
+        "count_other": "{{count}} 张",
+        "loadMore": "加载更多",
+        "loadFailed": "礼品卡列表未能加载",
+        "retry": "重新加载",
+        "status": {
+          "unclaimed": "未领取",
+          "claimedBy": "{{name}} 已领取",
+          "claimed": "已被领取",
+          "redeemedByYou": "已兑换给自己",
+          "refunded": "已退款",
+          "onHold": "处理中，暂不可用"
+        },
+        "meta": {
+          "purchased": "{{date}} 购买 · 尾号 {{tail}}",
+          "claimed": "{{date}} 领取 · 尾号 {{tail}}",
+          "redeemed": "{{date}} 兑换 · 尾号 {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "复制领取链接",
+        "copied": "已复制",
+        "more": "更多操作",
+        "copyCode": "复制兑换码",
+        "redeemSelf": "兑换给自己",
+        "sendEmail": "发送到邮箱"
+      },
+      "toasts": {
+        "linkCopied": "领取链接已复制",
+        "codeCopied": "兑换码已复制",
+        "copyFailed": "复制失败，请重试",
+        "unavailable": "这张卡已被领取或已退款",
+        "revealFailed": "暂时无法取回兑换码，请稍后重试",
+        "emailQueued": "正在发送到 {{email}}"
+      },
+      "email": {
+        "title": "发送到邮箱",
+        "description": "把这张卡的领取链接发到对方邮箱，邮件里会带上你的署名和留言。",
+        "previewLabel": "对方会收到",
+        "previewWithMessage": "「{{message}}」，附领取链接和兑换码",
+        "previewLinkOnly": "附领取链接和兑换码",
+        "recipient": "收件邮箱",
+        "placeholder": "name@example.com",
+        "hint": "可以发到任何邮箱；领取链接谁先打开就归谁。",
+        "cooldown": "{{seconds}} 秒后可以再发送",
+        "invalid": "邮箱格式不正确",
+        "failed": "暂时无法发送，请稍后重试",
+        "send": "发送",
+        "status": {
+          "sending": "正在发送到 {{email}}",
+          "sent": "已发送到 {{email}}",
+          "failed": "发送到 {{email}} 失败",
+          "failedRetry": "发送到 {{email}} 失败，可以重新发送"
+        }
       }
     }
   },
@@ -21567,14 +21728,14 @@
     },
     "taskInbox": {
       "title": "识收件箱",
-      "lead": "任务依其状自分为待处理、进行中、待后处理、已处理。善用之道，在常清其箱：事毕者点「毕」，未及者待后处理。",
+      "lead": "数事并行，收件箱依其状而分类。凡有新报或待君答者，皆列于待处理。",
       "pending": {
         "title": "待处理",
         "body": "任务事竣有果，或待君答，则现于此。"
       },
       "done": {
         "title": "毕",
-        "body": "事毕点「毕」，任务移入已处理；后有新进，自返其处。"
+        "body": "宜常清其箱，事毕即点「毕」。"
       },
       "snooze": {
         "title": "待后处理",
@@ -21780,14 +21941,14 @@
     "openFailed": "未能开启 GitHub"
   },
   "hostConnection": {
-    "connecting": "正连 Cindy 后台…",
+    "connecting": "正连 Cindy 后台服务…",
     "restoring": "正复差事之态…",
     "retrying": "差事之态未同步，正重试…",
     "pairing": "连接须再授权",
-    "pairingHelp": "请留此页。于启动 Cindy 后台之终端重行打开网页之命令，于新页配对毕，再返此页。",
+    "pairingHelp": "请留此页。于启动 Cindy 后台服务之终端重行打开网页之命令，于新页配对毕，再返此页。",
     "keepDraft": "草稿仍存。连接复通，差事之态将自同步。",
     "retry": "重试连接",
-    "desktopAuthHelp": "请于启动终端更新后台连接设置，再启此实验客户端。"
+    "desktopAuthHelp": "请于启动终端更新 Cindy 后台服务之连接设置，再启此实验客户端。"
   },
   "remoteControlConsent": {
     "title": "许远控此机乎？",

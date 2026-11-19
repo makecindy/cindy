@@ -1,3 +1,4 @@
+import { companionDragProps } from './companionDragProps';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import { TeammateRowStatus } from './TeammateStatusDot';
 import { groupTeammateStatus } from './teammateRosterStatus';
@@ -230,7 +231,7 @@ export function BotGroupSidebarRow({
       )}
     >
       {/* Sibling hit targets avoid nesting the topic button inside the whole-row button. */}
-      <button type="button" onContextMenu={onContextMenu} onKeyDown={onKeyDown} aria-label={group.name} aria-describedby={subtitleId} aria-current={selected ? 'page' : undefined}
+      <button type="button" {...companionDragProps(`/bots/groups/${encodeURIComponent(group.id)}`, group.name)} onContextMenu={onContextMenu} onKeyDown={onKeyDown} aria-label={group.name} aria-describedby={subtitleId} aria-current={selected ? 'page' : undefined}
         aria-haspopup={onContextMenu ? 'menu' : undefined}
         className="absolute inset-0 w-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" />
       <span className="pointer-events-none relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} />
@@ -249,9 +250,10 @@ export function BotGroupSidebarRow({
             {timestamp}
           </span>
         </span>
-        <span id={subtitleId} className="flex min-w-0 items-center gap-2">
+        {/* 未读数字/状态点占自己的列：副标题横贯整行，绝对定位的角标会压在预览文字上。 */}
+        <span id={subtitleId} className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2">
           {renderSubtitle(group, mutedClass)}
-          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} />
+          <TeammateRowStatus status={groupTeammateStatus(group, bots, islandActivity, unread > 0)} groupUnread={unread} mentioned={unread > 0 && group.serverUnread?.mentioned === true} inline />
         </span>
       </span>
     </div>

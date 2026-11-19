@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const context = vi.hoisted(() => ({ root: '', owner: null as string | null }));
 vi.mock('electron', () => ({ app: { getPath: () => context.root } }));
-vi.mock('../userDataPath.js', () => ({ userDataPath: (...parts: string[]) => path.join(context.root, ...parts) }));
+vi.mock('../userDataPath.js', () => ({
+  userDataPath: (...parts: string[]) => path.join(context.root, ...parts),
+  getUserDataDir: () => context.root,
+}));
 vi.mock('../ownerContext.js', () => ({
   activeDataOwnerId: () => context.owner,
   isOwnerBoundaryPending: () => false,

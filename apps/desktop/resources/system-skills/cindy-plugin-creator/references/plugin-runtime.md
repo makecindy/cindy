@@ -456,3 +456,5 @@ const ranked = await cindy.send({
 `{ ok: false, errorCode, message }`；模型提交的失败还带 `retryable` 和 `outcomeKnown`。
 超时或断网后的 `SUBMISSION_OUTCOME_UNKNOWN`，以及 HTTP 5xx 返回的 `outcomeKnown: false`，
 表示请求可能已执行，不得自动重提付费请求。HTTP 429 表示明确限流，可稍后重试。
+
+`media_request`：见 [§4.0.4](plugin-media.md)。

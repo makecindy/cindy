@@ -291,4 +291,28 @@ describe('useComposerSendShortcutPreference', () => {
       ).toBe(expected);
     });
   });
+
+  // The Send button's delivery tip names modifier+Enter as the key for the other
+  // mode; the key must deliver what the tip says, and only where the tip exists.
+  describe('resolveComposerEnterIntent where one message can go either way', () => {
+    const cmd = { metaKey: true };
+    const cases: Array<[ComposerSendShortcutPreference, 'queue' | 'steer', boolean, string, KeyboardEvent, string | null]> = [
+      ['enter', 'queue', true, 'Enter', enterEvent(), 'queue'],
+      ['enter', 'queue', true, 'Cmd+Enter', enterEvent(cmd), 'steer'],
+      ['enter', 'steer', true, 'Enter', enterEvent(), 'steer'],
+      ['enter', 'steer', true, 'Cmd+Enter', enterEvent(cmd), 'queue'],
+      ['enter', 'queue', false, 'Cmd+Enter (idle)', enterEvent(cmd), 'queue'],
+      ['modifier-enter', 'queue', true, 'Cmd+Enter', enterEvent(cmd), 'queue'],
+      ['modifier-enter', 'steer', true, 'Cmd+Enter', enterEvent(cmd), 'steer'],
+      ['enter', 'queue', true, 'repeated Cmd+Enter', enterEvent({ metaKey: true, repeat: true }), 'ignore'],
+    ];
+
+    it.each(cases)('%s / %s default, running=%s: %s', (preference, followUpBehavior, turnRunning, _label, event, expected) => {
+      expect(
+        resolveComposerEnterIntent(event, preference, {
+          turnRunning, platform: 'darwin', followUpBehavior, alternateOnModifier: true,
+        }),
+      ).toBe(expected);
+    });
+  });
 });
