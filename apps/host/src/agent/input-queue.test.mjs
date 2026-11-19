@@ -7645,6 +7645,37 @@ test('turn seal: the Host seals the last reply of a turn as the desktop does', {
   }
 });
 
+// Rule: the desktop terminal pipeline seals a cancelled done as failed without an error row.
+// Gap: the Host only checked Codex's raw status and treated Pi and Claude cancellation as success.
+// Minimal input: one partial reply followed by done with status cancelled. Tier: unit through
+// the Host input queue and turn executor with a fixture owner database.
+for (const [source, status] of [['pi', 'cancelled'], ['claude-code', 'cancelled'], ['claude-code', 'completed']]) {
+  test(`turn seal: a ${status} ${source} done records the correct completion`, { timeout: 30_000 }, async t => {
+    t = lifoCleanup(t);
+    const db = await recoveryDatabase(t);
+    const id = 'seal-reply';
+    await db.createTask(id);
+    if (source === 'pi') db.db.prepare("UPDATE sessions SET agent_kind = 'pi' WHERE id = ?").run(id);
+    const { h } = assembledRuntime(t, db, {
+      readSession: async id => ({ id, status: 'active', agentKind: source, model: 'stored-model',
+        workingDir: db.root, providerId: 'xd', permissionMode: 'ask', planModeEnabled: false }),
+    });
+    await h.queue.enqueue(id, { clientId: 'seal-input', text: 'work' });
+    await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
+    const session = h.maker.getSession(id);
+    const stamp = { sessionTurnGeneration: session.generation, sessionInstanceId: session.instanceId };
+    session.emit({ type: 'text', source, data: { text: 'reply so far' }, ...stamp });
+    session.emit({ type: 'done', source, data: { status }, ...stamp });
+    await waitFor(() => !h.queue.projection(id).turnInProgress);
+
+    const [reply] = db.db.prepare("SELECT agent_meta FROM messages WHERE session_id = ? AND role = 'assistant'").all(id);
+    const meta = JSON.parse(reply.agent_meta);
+    assert.equal(meta.turnCompleted, status === 'completed');
+    assert.equal(meta.nativeForkAnchor, undefined);
+    assert.deepEqual(db.errorRows(id), [], 'a cancelled done adds no error row');
+  });
+}
+
 // The same seal at the boundaries that do not end the Host's turn (release table 甲 9): the desktop's
 // terminal stage runs on every done and terminal error, so a continuation boundary of the foreground turn
 // and a background turn's terminal each write their reply and seal it. Gap: the Host sealed only at its

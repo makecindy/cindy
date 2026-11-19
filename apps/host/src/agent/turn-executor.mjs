@@ -203,8 +203,8 @@ export function createTurnExecutor(deps) {
 
   // As the desktop's terminal stage (sessionEventTerminal.ts), in the same write queue and before an
   // error row: the last top-level reply since the previous seal gets its seal. A successful done (for
-  // Codex, raw status completed) seals it completed, with the native fork anchor; a terminal error, or a
-  // Codex done that was interrupted or failed, seals it failed, so later history reads neither take a
+  // Codex, also requiring raw status completed) seals it completed, with the native fork anchor. A
+  // terminal error or an unsuccessful done seals it failed, so later history reads neither take a
   // progress note for the final answer nor a stopped plan for a finished one. Teammate result ids are not
   // passed: the Host refuses teammate tasks. Without a terminal event nothing is sealed; the id is
   // consumed either way so it cannot seal a later turn. A paused write queue keeps the seal for its retry
@@ -213,6 +213,7 @@ export function createTurnExecutor(deps) {
     const sealId = history.consumeLastTopLevelAssistantPersistId(sessionId);
     if (!sealId || (!failed && !event)) return;
     const succeeded = !failed && event?.type === 'done'
+      && isSuccessfulAssistantReplyDoneData(event.data)
       && (event.source !== 'codex' || history.isSuccessfulCodexDoneEventData(event.data));
     const nativeForkAnchor = succeeded ? event.agentMeta?.nativeForkAnchor : undefined;
     void (succeeded
