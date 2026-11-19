@@ -311,6 +311,11 @@ export interface SchedulerOptions {
   instanceId?: string;
   /** 可选宿主进程标识；package 本身不读取 process，保持运行环境解耦。 */
   processId?: number;
+  /**
+   * 预闸门 storage await 的硬上限(见 DEFAULT_PRE_GATE_STORAGE_TIMEOUT_MS 与
+   * tick() 各阶段的 withStorageTimeout 包裹)。测试注入小值;非法值回落缺省。
+   */
+  preGateStorageTimeoutMs?: number;
 }
 
 const DEFAULT_TICK_MS = 1_000;
@@ -329,6 +334,59 @@ export const DEFAULT_MAX_CONCURRENT_RUNS = 8;
 
 /** 并发闸门「有任务在排队」日志的节流间隔 —— tick 每秒一次,不节流会刷屏。 */
 const GATE_LOG_THROTTLE_MS = 30_000;
+
+/**
+ * 预闸门存储等待的缺省上限(#11490):DB 同步 / 僵尸清扫 / 补排重试这些发生在
+ * 并发闸门**之前**的 storage await 卡死时,不再无限等 —— 放弃该阶段、让 tick
+ * 用内存状态继续走 due-fire,并打一条节流的独立告警。存储正常是毫秒级,5 秒
+ * 已是宽裕余量;卡死事故里每阶段最多拖 5 秒,而不是整段静默数小时。
+ */
+const DEFAULT_PRE_GATE_STORAGE_TIMEOUT_MS = 5_000;
+
+/** 预闸门超时告警的节流间隔 —— 与并发闸门日志同档,tick 每秒重试不刷屏。 */
+const PRE_GATE_TIMEOUT_LOG_THROTTLE_MS = 30_000;
+
+/** 预闸门阶段等待 storage 超时的信号;由 withStorageTimeout 抛出。 */
+class StorageAwaitTimeoutError extends Error {
+  constructor(readonly phase: string) {
+    super(`storage await timed out in pre-gate phase: ${phase}`);
+    this.name = 'StorageAwaitTimeoutError';
+  }
+}
+
+/**
+ * 给 storage await 加硬上限。永不 settle 的 storage promise 会把调用方挂死,
+ * try/catch 帮不上忙(#11490:预闸门阶段挂死让并发闸门数小时不放行)。
+ *
+ * 超时抛 StorageAwaitTimeoutError;原 promise 此后才 settle 的结果(含拒绝)
+ * 被静默吞掉 —— 阶段已经放弃,迟到的结果没有消费者,拒绝也绝不能变成
+ * unhandled rejection。未能取消的底层调用照常在后台跑完。
+ */
+async function withStorageTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  phase: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // 先挂处理器再 race:无论谁赢,迟到的拒绝都已被消化。
+    const guarded = promise.then(
+      (value) => ({ ok: true as const, value }),
+      (error) => ({ ok: false as const, error }),
+    );
+    const outcome = await Promise.race([
+      guarded,
+      new Promise<{ timedOut: true }>((resolve) => {
+        timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+      }),
+    ]);
+    if ('timedOut' in outcome) throw new StorageAwaitTimeoutError(phase);
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 /** 单条执行超过该时长后输出周期性长跑诊断。 */
 const LONG_RUNNING_DIAGNOSTIC_MS = 10 * 60_000;
@@ -507,6 +565,8 @@ export class Scheduler extends EventEmitter {
   private readonly suspendGapMs: number;
   private readonly schedulerInstanceId: string;
   private readonly processId?: number;
+  private readonly preGateStorageTimeoutMs: number;
+  private lastPreGateTimeoutLogAt = 0;
   private readonly inflightAttempts = new Map<string, InflightAttempt>();
   // Keep deadline edits visible while an automatic run is preparing/queued,
   // including edits that remove it from activeSchedules by expiring it.
@@ -559,6 +619,12 @@ export class Scheduler extends EventEmitter {
     this.suspendGapMs = Math.max(0, opts.suspendGapMs ?? SUSPEND_GAP_MS);
     this.schedulerInstanceId = opts.instanceId ?? `scheduler-${defaultGenerateId()}`;
     this.processId = opts.processId;
+    this.preGateStorageTimeoutMs =
+      typeof opts.preGateStorageTimeoutMs === 'number' &&
+      Number.isFinite(opts.preGateStorageTimeoutMs) &&
+      opts.preGateStorageTimeoutMs > 0
+        ? Math.floor(opts.preGateStorageTimeoutMs)
+        : DEFAULT_PRE_GATE_STORAGE_TIMEOUT_MS;
   }
 
   /**
@@ -772,7 +838,13 @@ export class Scheduler extends EventEmitter {
       this.lastDbSyncAt = now;
       try {
         const dispatchSnapshots = new Map(this.automaticDispatchSchedules);
-        const actives = await this.storage.listActive();
+        // 超时 → StorageAwaitTimeoutError → 走下面 catch 的独立告警,内存里的
+        // activeSchedules 原样保留(due-fire 继续用它,不因同步卡死而停摆)。
+        const actives = await withStorageTimeout(
+          this.storage.listActive(),
+          this.preGateStorageTimeoutMs,
+          'listActive',
+        );
         if (this.tickHandle !== tickHandle) return;
         const previousSchedules = new Map(this.activeSchedules);
         this.activeSchedules.clear();
@@ -795,7 +867,12 @@ export class Scheduler extends EventEmitter {
         // its runner. Include rows that have just left listActive after expiry.
         const currentById = new Map(actives.map((sch) => [sch.id, sch]));
         for (const [runId, previous] of dispatchSnapshots) {
-          const current = currentById.get(previous.id) ?? await this.storage.get(previous.id);
+          const current = currentById.get(previous.id) ??
+            await withStorageTimeout(
+              this.storage.get(previous.id),
+              this.preGateStorageTimeoutMs,
+              'dispatchSnapshotGet',
+            );
           if (this.tickHandle !== tickHandle) return;
           // An awaited read must not overwrite a newer local edit or reinsert
           // a dispatch guard whose attempt has already finished.
@@ -804,18 +881,19 @@ export class Scheduler extends EventEmitter {
           }
         }
       } catch (err) {
-        this.logger?.warn?.('scheduler: active-schedule DB sync failed', err);
+        if (err instanceof StorageAwaitTimeoutError) this.logPreGateTimeout(err.phase);
+        else this.logger?.warn?.('scheduler: active-schedule DB sync failed', err);
       }
       // 顺路做运行期僵尸清扫:另一实例崩溃留下的 'running' 行不再等谁重启才收尾,
       // 本实例在心跳过期后就地改写 interrupted 并广播 'changed' 刷 UI。
       // excludeRunIds 兜底排除本进程 in-flight(即使自家心跳续期停摆也绝不自伤)。
       if (this.tickHandle !== tickHandle) return;
-      await this.sweepStaleRunningRuns(now);
+      await this.runPreGatePhase('sweep', () => this.sweepStaleRunningRuns(now));
     }
     if (this.tickHandle !== tickHandle) return;
     // 补排重试要排在挑选 due 之前:本次刚补上的 nextFireAt 若已到期,同一个 tick 就能
     // 把它捞进 due,不必再等一整个 tick 间隔。
-    await this.retryPendingReplans(now);
+    await this.runPreGatePhase('retryPendingReplans', () => this.retryPendingReplans(now));
     if (this.tickHandle !== tickHandle) return;
     const due: Schedule[] = [];
     for (const sch of this.activeSchedules.values()) {
@@ -869,20 +947,71 @@ export class Scheduler extends EventEmitter {
     await Promise.all(firePromises);
   }
 
+  /**
+   * 预闸门阶段的统一兜底(#11490):超时 → 节流独立告警并放弃本阶段,due-fire
+   * 继续用内存状态跑;其它错误照旧上抛给调用方(行为与未包裹时一致)。
+   */
+  private async runPreGatePhase(phase: string, work: () => Promise<void>): Promise<void> {
+    try {
+      await withStorageTimeout(work(), this.preGateStorageTimeoutMs, phase);
+    } catch (err) {
+      if (err instanceof StorageAwaitTimeoutError) {
+        this.logPreGateTimeout(phase);
+        return;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * 预闸门 storage 等待超时的节流告警。与「storage await appears wedged」
+   * (logStorageStall,run 终态持久化卡死)是两条独立信号:那条说某个 run 收不了口,
+   * 这条说 tick 的预闸门阶段被卡住、已放弃该阶段以保住 due-fire(#11490 事故里
+   * 闸门数小时不放行却无任何「调度器不能触发」的信号)。
+   */
+  private logPreGateTimeout(phase: string): void {
+    const now = this.clock.now();
+    if (now - this.lastPreGateTimeoutLogAt < PRE_GATE_TIMEOUT_LOG_THROTTLE_MS) return;
+    this.lastPreGateTimeoutLogAt = now;
+    this.logger?.warn?.(
+      'scheduler: pre-gate storage await timed out — skipping phase so due-fire can proceed',
+      {
+        schedulerInstanceId: this.schedulerInstanceId,
+        processId: this.processId,
+        phase,
+        timeoutMs: this.preGateStorageTimeoutMs,
+      },
+    );
+  }
+
   /** Deadline expiry never aborts an already running turn. Match the persisted
    * snapshot so another instance extending the deadline wins over this scan. */
   private async expireSchedule(schedule: Schedule, now: number): Promise<boolean> {
     if (!hasExpired(schedule, now)) return false;
     try {
-      const updated = await this.storage.update(schedule.id, {
-        status: 'expired', nextFireAt: undefined,
-      }, schedule);
-      const current = updated ?? await this.storage.get(schedule.id);
+      const updated = await withStorageTimeout(
+        this.storage.update(schedule.id, {
+          status: 'expired', nextFireAt: undefined,
+        }, schedule),
+        this.preGateStorageTimeoutMs,
+        'expireSchedule',
+      );
+      const current = updated ?? await withStorageTimeout(
+        this.storage.get(schedule.id),
+        this.preGateStorageTimeoutMs,
+        'expireSchedule',
+      );
       if (current) this.refreshAutomaticDispatchSchedules(current);
       if (current?.status === 'active') this.activeSchedules.set(current.id, current);
       else this.activeSchedules.delete(schedule.id);
       if (updated) this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     } catch (err) {
+      if (err instanceof StorageAwaitTimeoutError) {
+        // 与真实异常同向:过期任务本轮绝不派发(见方法注释),排期原样留在内存里,
+        // 持久化下轮重试 —— 只是不再为它无限等一个卡死的 storage。
+        this.logPreGateTimeout(err.phase);
+        return true;
+      }
       // Keep it available for persistence retry, but never dispatch past deadline.
       this.activeSchedules.set(schedule.id, schedule);
       this.logger?.warn?.('scheduler: could not persist deadline expiry', { scheduleId: schedule.id, error: String(err) });

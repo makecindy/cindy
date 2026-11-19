@@ -640,6 +640,8 @@ function makeHarness(opts?: {
   runStallAbortGraceMs?: number;
   /** 默认 0(关闭挂起吸收):假时钟跳表与真实睡眠在壁钟上同形,见 SchedulerOptions.suspendGapMs。 */
   suspendGapMs?: number;
+  /** 预闸门 storage 等待上限;卡死用例注入小值,让超时在测试壁钟内发生。 */
+  preGateStorageTimeoutMs?: number;
   logger?: Logger;
   resolvePreRunPlugin?: (pluginId: string) => string;
 }): Harness {
@@ -670,6 +672,7 @@ function makeHarness(opts?: {
     runStallMs: opts?.runStallMs,
     runStallAbortGraceMs: opts?.runStallAbortGraceMs,
     suspendGapMs: opts?.suspendGapMs ?? 0,
+    preGateStorageTimeoutMs: opts?.preGateStorageTimeoutMs,
     logger: opts?.logger,
     resolvePreRunPlugin: opts?.resolvePreRunPlugin,
     instanceId: 'test-scheduler',
@@ -682,6 +685,53 @@ describe('Scheduler', () => {
   let h: Harness;
   beforeEach(() => {
     h = makeHarness();
+  });
+
+  // #11490: 预闸门 storage await 永不 settle 时,tick 必须放弃该阶段并继续
+  // due-fire —— 事故里 DB 同步/清扫/补排卡死让并发闸门数小时不放行,六个空槽
+  // 却无任何「调度器不能触发」的信号。race 1s 哨兵让旧代码干净地红在断言上,
+  // 而不是挂满测试超时。
+  it('keeps due-fire alive when the pre-gate DB sync never settles', async () => {
+    const warn = vi.fn();
+    const local = makeHarness({ logger: { warn }, preGateStorageTimeoutMs: 20 });
+    const schedule = await local.scheduler.create(baseInput);
+    vi.spyOn(local.storage, 'listActive').mockImplementation(
+      () => new Promise<Schedule[]>(() => {}),
+    );
+    local.clock.setTo(schedule.nextFireAt!);
+    const settled = await Promise.race([
+      local.scheduler.tick().then(() => 'tick' as const),
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
+    ]);
+    expect(settled).toBe('tick');
+    expect(local.fireCalls).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(
+      'scheduler: pre-gate storage await timed out — skipping phase so due-fire can proceed',
+      expect.objectContaining({ phase: 'listActive' }),
+    );
+  });
+
+  // expireSchedule 超时的语义与 DB 同步相反:过期任务本轮**绝不**派发(与真实
+  // 异常同向),只放弃等待、下轮重试持久化;tick 本身仍须完成。
+  it('skips dispatch of an expired schedule when its persist await never settles', async () => {
+    const warn = vi.fn();
+    const local = makeHarness({ logger: { warn }, preGateStorageTimeoutMs: 20 });
+    const expireAt = local.clock.now() + 60_000;
+    await local.scheduler.create({ ...baseInput, expireAt });
+    vi.spyOn(local.storage, 'update').mockImplementation(
+      () => new Promise<Schedule | null>(() => {}),
+    );
+    local.clock.setTo(expireAt + 1);
+    const settled = await Promise.race([
+      local.scheduler.tick().then(() => 'tick' as const),
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
+    ]);
+    expect(settled).toBe('tick');
+    expect(local.fireCalls).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(
+      'scheduler: pre-gate storage await timed out — skipping phase so due-fire can proceed',
+      expect.objectContaining({ phase: 'expireSchedule' }),
+    );
   });
 
 
