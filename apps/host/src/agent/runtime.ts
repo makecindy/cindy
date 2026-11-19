@@ -1,3 +1,5 @@
+import { applyProjectDirectoriesForTurn } from '../../../desktop/src/main/projectDirectoryRuntime.js';
+import { createOneShotUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
 import { createHostClaudeSubagentModelAccess } from './subagent-model-access.js';
@@ -9,6 +11,7 @@ import { CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from '../../../desktop/src/main/
 import os from 'node:os';
 import path from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
 import { CodexAgent } from '@cindy/maker-core/agents/codex';
@@ -18,6 +21,7 @@ import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOp
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { createMakerLogger } from '../../../desktop/src/main/maker-host/logger-adapter.js';
 import { readCodexLocalAuthState } from '../../../desktop/src/main/maker-host/codex-local-auth-state.js';
+import { codexSharedAuthLinkUnavailableReason } from '../../../desktop/src/shared/codexAuthReason.js';
 import { commitHostCodexDisconnectBoundary, readHostCodexInvalidation, readHostCodexRecoveryRequirement } from './codex-invalidation.js';
 import { createHostCodexSystemLogin, detectHostCodexCredentialScope, resolveHostSystemCodexAuthPath } from './codex-system-login.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from '../../../desktop/src/main/maker-host/claude-gateway-config.js';
@@ -54,7 +58,6 @@ import { createReadImageHook } from '../../../desktop/src/main/maker-host/claude
 import { createDesktopInputShellGuardHooks } from '../../../desktop/src/main/maker-host/claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from '../../../desktop/src/main/maker-host/agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from '../../../desktop/src/main/maker-host/command-concurrency-gate.js';
-import { createHostVisionBridge, type VisionBridgeNotice } from './vision-bridge.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/src/main/turn-change-set/store.js';
 import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
 import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
@@ -103,8 +106,6 @@ export interface HostAgentGraphOptions {
   getManagedSkills?: AgentDeps['getManagedSkills'];
   /** Directory holding the bundled harnesses, including `ripgrep-bin`. Defaults to the Host layout. */
   harnessRoot?: string;
-  /** The Host event hub, for the vision-bridge notices the desktop sends its windows. */
-  publishVisionBridgeNotice?: (notice: VisionBridgeNotice) => void;
   /** The account gateway's rejected-key report (model-access.ts), for the one-shot review requests. */
   reportGatewayKeyRejected?: (key: string) => void;
   /** The account realm (main.ts), as the desktop's getActiveAuthRealm for the Codex token reader. */
@@ -406,6 +407,12 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
       if (invalidated) return { authenticated: false, errorReason: invalidated.reason, credentialScope: invalidated.credentialScope };
       // Then the reconciliation with the system login, as readState does before reading auth.json.
       await systemLogin.reconcile();
+      // The desktop's codexSharedAuthLinkUnavailableReason: the system login is signed in but
+      // this runtime could not link to it, so the credential is unreachable, not absent.
+      const sharedLinkReason = codexSharedAuthLinkUnavailableReason({
+        linkUnavailable: systemLogin.sharedAuthLinkUnavailable(),
+        systemAuthPresent: !!systemAuthPath && existsSync(systemAuthPath),
+      });
       const recovery = readHostCodexRecoveryRequirement(codexHome, systemAuthPath);
       const local = await readCodexLocalAuthState(codexHome);
       // The desktop reads the token through getAccessToken, which reconciles again before its
@@ -417,15 +424,39 @@ export function createCodexLocalCliAuth(gateway: HostGateway | null | undefined,
         // The desktop's withCodexRecoveryRequirement.
         return recovery ? { ...scoped, recoveryRequiredReason: recovery.reason, credentialScope: recovery.credentialScope } : scoped;
       }
+      // The desktop's binding gate (auth-adapters.ts:1560-1567), narrowed to the one state where
+      // the two reasons would otherwise invert: the shared link just failed AND the profile still
+      // holds a readable OAuth file that is not bound to this owner. That is a binding problem —
+      // a credential left behind by another owner — so report it as one instead of blaming link
+      // privileges the user cannot fix by reconnecting. The desktop's own oauth-bearer branch
+      // returns before its binding gate, so this must sit after it; the default path below also
+      // needs it, because otherwise it would fall back to the generic gateway reason
+      // (codex-code-review P1).
+      if (opts?.credentialMode !== 'oauth-bearer' && sharedLinkReason
+        && local.authenticated && local.authSource === 'oauth' && !isNativeProviderAuthBound('openai')) {
+        return gatewayState.authenticated ? gatewayState : { authenticated: false, errorReason: 'oauth_not_bound' };
+      }
       if (opts?.providerId === 'openai' || opts?.credentialMode === 'oauth-bearer') {
         // The desktop's codexRecoveryRequiredErrorState.
         if (recovery) return { authenticated: false, errorReason: recovery.reason, credentialScope: recovery.credentialScope };
         if (opts?.credentialMode === 'oauth-bearer') {
-          // As the desktop's oauth-bearer readState: the local file's own reason, else no_oauth.
+          // As the desktop's oauth-bearer readState: the local file's own reason, else the
+          // shared-link reason when the system login is signed in but unreachable, else no_oauth.
           const local = native ?? await readCodexLocalAuthState(codexHome);
-          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? 'no_oauth' };
+          return { authenticated: false, errorReason: (local.authenticated ? undefined : local.errorReason) ?? sharedLinkReason ?? 'no_oauth' };
         }
-        return { authenticated: false, errorReason: native?.errorReason ?? 'oauth_not_bound' };
+        return { authenticated: false, errorReason: native?.errorReason ?? sharedLinkReason ?? 'oauth_not_bound' };
+      }
+      // As the desktop's default readState (auth-adapters.ts:1589-1590): with neither a gateway
+      // credential nor an OAuth login, say the signed-in system login is unreachable instead of
+      // "no gateway key" — the generic reason sends users to enter a key they never had. A valid
+      // gateway credential keeps winning, exactly as readClaudeApiKey() does on the desktop, so
+      // only the unauthenticated fallback changes. `getState()` with no arguments is the entry
+      // BaseAgent.getAuthState() uses, so this is the branch that decides what a failing implicit
+      // session reports (codex-code-review P1). A readable local file (the desktop's
+      // withCodexRecoveryRequirement path above) keeps its own outcome.
+      if (!gatewayState.authenticated && !local.authenticated && sharedLinkReason) {
+        return { ...local, errorReason: sharedLinkReason };
       }
       return gatewayState;
     },
@@ -590,16 +621,6 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // As the desktop's getPluginRegistry(): the owner's registry, read at each check.
     createDesktopInputShellGuardHooks(() => createPluginRegistry().isEnabled('computer'), LOGGER),
   );
-  // The desktop's vision bridge (maker-host/index.ts): the Maker hook, the Pi env and, once Maker
-  // exists, the process-wide controller the loopback proxies read (vision-bridge.ts).
-  const visionBridge = createHostVisionBridge({
-    userDataDir: options.userDataDir,
-    getMaker: () => maker,
-    readCustomProviderKey: config.readKey,
-    readGatewayKey: () => options.gateway?.credential ?? null,
-    publish: notice => options.publishVisionBridgeNotice?.(notice),
-    logger: LOGGER,
-  });
   const agent = options.binaryPath ? new ClaudeCodeAgent({
     ...(options.resolveLocalMcpDuplicateChoices ? { resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices } : {}),
     claudeHooks,
@@ -787,8 +808,6 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
             remove: t('settings.piPackages.success.remove'),
           },
         }),
-        // Only for Pi models the vision bridge targets (layer C), as on the desktop.
-        resolvePiVisionBridgeEnv: visionBridge.resolvePiVisionBridgeEnv,
       })
     : null;
   const agents = {
@@ -804,9 +823,11 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     Object.entries(agents).map(([kind, instance]) => [kind, instance.capabilities]),
   );
   const maker = new Maker({
+    createOneShotUsageRecorder,
     agents,
     storage: options.storage,
     lifecycleHooks: {
+      beforeTurn: applyProjectDirectoriesForTurn,
       prepareStartOptions: startOptions.prepareStartOptions,
       onBeforeStart: startOptions.onBeforeStart,
       onStartFailed: startOptions.onStartFailed,
@@ -826,9 +847,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // Pi and Codex sessions read the tool-loop reviewer from Maker, as on the desktop.
     toolLoopReviewer: autoReview.toolLoopReviewer,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
-    visionBridge: visionBridge.hook,
   });
-  visionBridge.activate();
   // As the desktop (register.ts): when the loopback proxy sees Claude's native Auto classifier
   // fail, the task stays on Auto and its later approvals go to the Cindy reviewer above.
   // The latest graph owns the process-wide listener.
@@ -855,11 +874,20 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   });
   piPackages.attachMaker(maker);
   // What context recovery reads from this graph (context-recovery-assembly.ts): the configured
-  // window of a route, as the desktop's resolveVerifiedWindow (register.ts); the learned Pi cache
+  // verified window of a route, as in Desktop; the learned Pi cache
   // compatibility of this profile; and the Codex runtime's native history.
   const contextRecovery = {
     resolveVerifiedWindow: (agentKind: string, modelId: string, providerId: string | null | undefined) =>
-      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId),
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId, undefined, 'required'),
+    async resolveHandoffWindow(sessionId: string, route: {
+      agentKind: string; model: string; providerId: string | null; agentDeviceId?: string | null;
+    }) {
+      if (route.agentDeviceId) return null;
+      return startOptions.resolveConfiguredContextWindow(
+        getActiveCatalog(), dbToMakerAgentKind(route.agentKind), route.providerId, route.model,
+        await startOptions.readStoredSessionContextWindowBudget(sessionId), 'required',
+      );
+    },
     piCompat: {
       read: piNativeCompatOverrides.readPiNativeCompatOverride,
       record: piNativeCompatOverrides.recordPiNativeCompatOverride,
@@ -869,11 +897,11 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // A model change's window gate (model-window-gate.ts): a route's configured window with the task's
   // window budget, as the desktop's change of model reads it (register.ts resolveWindowForRoute).
   const modelWindow = {
-    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null) =>
-      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget),
+    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null, verification?: 'required') =>
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget, verification),
     readSessionBudget: (sessionId: string) => startOptions.readStoredSessionContextWindowBudget(sessionId),
   };
-  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge, piPackages,
+  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, piPackages,
     contextRecovery, modelWindow,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };

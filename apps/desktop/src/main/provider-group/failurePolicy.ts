@@ -20,6 +20,7 @@ import { AgentNotAuthenticatedError, SESSION_CLOSED_MID_TURN_MESSAGE } from '@ci
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
+import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 import { classifyTurnOverload, classifyTurnUsageLimit } from '../goal-host/usageLimit.js';
 import { isContextOverflowErrorData, isOversizedHistoryErrorData } from '../maker-ipc/contextOverflowRollover.js';
@@ -78,10 +79,13 @@ export const PROVIDER_GROUP_SUPERSEDED_ERROR = 'provider group: superseded by us
 export const PROVIDER_GROUP_UNAVAILABLE_ERROR =
   '[REMOTE_AGENT_GROUP_UNAVAILABLE] no computer in the provider group can run this task right now';
 
+const PROVIDER_GROUP_USAGE_LIMIT_MESSAGE =
+  '[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached: the available accounts for this model have reached their usage limit';
+
 /** Created before dispatch, from the group's verified quota result (not provider error text). */
 export class ProviderGroupUsageLimitError extends Error {
   constructor(readonly limit: ProviderGroupUsageLimit) {
-    super('[REMOTE_AGENT_GROUP_USAGE_LIMIT] usage_limit_reached: the available accounts for this model have reached their usage limit'
+    super(PROVIDER_GROUP_USAGE_LIMIT_MESSAGE
       + (limit.resetAtMs === null ? '' : `; resets_at: ${limit.resetAtMs}`));
   }
 }
@@ -93,6 +97,16 @@ export const PROVIDER_GROUP_FULL_ERROR =
 export function providerGroupUnavailableError(pick: { usageLimit?: ProviderGroupUsageLimit; full?: true }): Error {
   if (pick.full) return new Error(PROVIDER_GROUP_FULL_ERROR);
   return pick.usageLimit ? new ProviderGroupUsageLimitError(pick.usageLimit) : new Error(PROVIDER_GROUP_UNAVAILABLE_ERROR);
+}
+
+/** Restore the quota signal from the remote startup error envelope. */
+export function readRemoteProviderGroupUsageLimit(error: unknown): ProviderGroupUsageLimitError | undefined {
+  if (!(error instanceof Error) || !error.message.startsWith(PROVIDER_GROUP_USAGE_LIMIT_MESSAGE)) return undefined;
+  const match = /^(?:; resets_at: (\d{1,16}))?$/.exec(error.message.slice(PROVIDER_GROUP_USAGE_LIMIT_MESSAGE.length));
+  if (!match) return undefined;
+  const resetAtMs = match[1] === undefined ? null : Number(match[1]);
+  if (resetAtMs !== null && (!Number.isSafeInteger(resetAtMs) || resetAtMs <= 0)) return undefined;
+  return new ProviderGroupUsageLimitError({ resetAtMs });
 }
 
 /** 远程 Agent 任务结束时本机给的 reason(remote-agent/controller/proxyHandle)：lost = 连续拉不到那台，closed = 那台那边结束了。 */
@@ -275,6 +289,7 @@ export function decideProviderGroupFailure(
   if (signals.sdkError === 'max_output_tokens') return { action: 'stay', why: 'context' };
   if (signals.toolLoop) return { action: 'stay', why: 'tool-loop' };
   if (USER_DECISION_TEXT.test(message)) return { action: 'stay', why: 'user' };
+  if (message.includes(SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE)) return { action: 'stay', why: 'policy' };
   if (TOOL_FAILURE_TEXT.test(message)) return { action: 'stay', why: 'local' };
   if (isContextOverflowErrorData(signals) || isOversizedHistoryErrorData(signals)) return { action: 'stay', why: 'context' };
   const codexStay = signals.codexErrorInfo ? STAY_CODEX_ERRORS.get(signals.codexErrorInfo) : undefined;

@@ -142,6 +142,10 @@
     "message": "Cindy がこの添付ファイルを読み取れません。元のファイルを選択すると、このメッセージの送信を続行します。キャンセルすると下書きが保持されます。",
     "button": "元のファイルを使用"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "タスクまたはウィンドウが変更されたため、この送信は取り消されました。",
+    "invalid": "この送信は現在のセッションに対して無効です。"
+  },
   "mailReader": {
     "showExternalImages": "外部画像を表示",
     "markReadFailed": "既読状態を同期できませんでした。メールボックスの認証を確認して開き直してください。",
@@ -428,7 +432,8 @@
       "loading": "モデルの利用範囲を読み込み中…",
       "loadFailed": "モデルの利用範囲を読み込めませんでした。設定を開き直してください。",
       "saveFailed": "モデルの利用範囲を保存できませんでした。再試行してください。",
-      "needsUpdate": "モデルの利用範囲を設定するには、プロバイダーのコンピューターの Cindy を更新してください。"
+      "needsUpdate": "モデルの利用範囲を設定するには、プロバイダーのコンピューターの Cindy を更新してください。",
+      "followsPool": "この接続は「{{pool}}」に統合されたため、リモートで使えるモデルは「{{pool}}」に従います。そちらで変更してください。下の各メンバーの制限はここで設定できます。"
     },
     "entry": {
       "label": "リモートと共有",
@@ -439,6 +444,8 @@
     },
     "manage": {
       "createLink": "共有リンクを作成",
+      "exportRoster": "メンバー一覧をエクスポート",
+      "exportRosterFailed": "メンバー一覧を保存できませんでした。",
       "loading": "共有を読み込み中…",
       "notReady": "共有は現在利用できません。ログインしてネットワークに接続していることを確認してください。自動的に再試行します。",
       "loadFailed": "共有情報を読み込めませんでした。しばらくしてからもう一度お試しください。",
@@ -918,7 +925,7 @@
       "title": "{{label}} に切り替えて続けますか？",
       "fallbackTitle": "要約を使って {{label}} で続けますか？",
       "fallbackDescription": "元の会話を完全に復元できませんでした。要約では以前の詳細やツールの結果が省略される場合があります。キャンセルすると元のパソコンで送信します。",
-      "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。直近数回のやり取りと要約は引き継がれますが、それより前の細部は失われることがあります。",
+      "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。会話は引き継がれます。モデルの容量に合わせて以前のやり取りが圧縮される場合があります。",
       "quota": "残り {{left}}%",
       "quotaReset": "残り {{left}}%・{{reset}}",
       "confirm": "今回だけ切り替える",
@@ -1328,10 +1335,11 @@
         "body": "このタスクは別のコンピュータで {{device}} を開いています。このコンピュータで「{{plugin}}」プラグインを有効にすると、右サイドバーで表示・操作できます。",
         "action": "有効にする"
       },
-      "update": {
-        "title": "「{{plugin}}」プラグインの更新が必要です",
-        "body": "このタスクは別のコンピュータで {{device}} を開いています。このコンピュータの「{{plugin}}」プラグインを新しいバージョンに更新すると、右サイドバーで表示・操作できます。",
-        "action": "更新"
+      "unsupported": {
+        "title": "「{{plugin}}」はリモート表示に対応していません",
+        "body": "インストール済みのプラグインでは、別のコンピューターの {{device}} を表示できません。対応する更新を確認するか、このセッションを実行しているコンピューターでデバイスを使用できます。",
+        "action": "対応する更新を確認",
+        "unavailable": "このプラグインの配布元には、リモート表示に対応する更新がありません。このセッションを実行しているコンピューターでデバイスを使用できます。"
       }
     },
     "lockOnExitHintPrivacy": "終了時にプライバシースクリーンを表示し、AI は作業を続けられます。パソコンに触れるとロックされます。",
@@ -1866,7 +1874,6 @@
       "memory": "メモリ",
       "subagentModels": "サブエージェント",
       "auxiliaryModels": "補助モデル",
-      "visionBridge": "ビジョンブリッジ",
       "compaction": "コンテキスト圧縮",
       "terminalShell": "デフォルトターミナルシェル",
       "composer": "メッセージ入力",
@@ -3435,7 +3442,7 @@
         "end": "ここまでは {{source}} からインポートした記録です",
         "endHandoff": "ここまでは {{source}} からインポートした記録です。ここから {{harness}} が続けます。"
       },
-      "projectMenu": "このプロジェクトのほかのツールのセッションをインポート…"
+      "projectMenu": "タスクをインポート…"
     },
     "connections": {
       "codex": {
@@ -4067,6 +4074,7 @@
         "refreshSpeechAdded": "モデルを更新し、参考の音声モデルを 1 件追加しました",
         "refreshNoNew": "モデル一覧は最新です。新規はありません",
         "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください",
+        "refreshReconnect": "モデル一覧を更新できませんでした。このプロバイダーに再接続してから、もう一度お試しください。",
         "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
         "disableModel": "このモデルを無効にする",
         "paymentRequired": "有料",
@@ -4295,7 +4303,8 @@
           "description": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はこのパソコン上で、このパソコンのログインとクォータを使って実行されます。",
           "descriptionGroup": "オンにすると、あなたの他のパソコンと共有相手がこのプロバイダーのモデルを使えます。Agent はプロバイダーグループが選んだパソコンで実行されます。",
           "ariaLabel": "他のパソコンと共有相手にこのプロバイダーの利用を許可",
-          "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。"
+          "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。",
+          "followsPool": "この接続は「{{pool}}」に統合され、その「リモート利用を許可」に従います。「{{pool}}」で変更してください。"
         },
         "ownComputersCanUse": "自分の他のパソコンで利用可",
         "moreActionsAria": "その他の操作",
@@ -5371,37 +5380,6 @@
       "title": "ヒント",
       "description": "機能のオン/オフ設定です。一部は新しいセッションを開始すると反映されます（各項目の説明を参照）。"
     },
-    "visionBridge": {
-      "title": "ビジョンブリッジ",
-      "description": "テキスト専用モデルに画像認識能力を与えます。別のマルチモーダルモデルが画像をテキストに変換してから渡します。",
-      "enableLabel": "ビジョンブリッジを有効化",
-      "enableHint": "オフのときはすべてのモデルが以前と同じ動作をします。オンのとき、下で選択したモデルの画像はビジョンバックエンドでテキストに変換されます。有効にすると、これらのモデルに送信される画像と、フォーカスヒントとして使われる近くのテキストが、選択したビジョンバックエンドに送信されます。",
-      "enableAria": "ビジョンブリッジを切り替え",
-      "toast": {
-        "saved": "ビジョンブリッジ設定を保存しました",
-        "saveFailed": "ビジョンブリッジ設定の保存に失敗しました"
-      },
-      "capability": {
-        "vision": "画像対応と判明",
-        "noVision": "テキスト専用と判明",
-        "unknown": "画像対応不明"
-      },
-      "targetModels": {
-        "label": "ビジョンブリッジを使うモデル",
-        "hint": "テキスト専用モデル（DeepSeek など）はデフォルトで選択済みです。画像対応モデルも選択できます（例: 安価な説明モデルでトークンを節約）。",
-        "empty": "利用可能なモデルがありません。",
-        "toggleAria": "{{model}} のビジョンブリッジを切り替え"
-      },
-      "backends": {
-        "label": "ビジョンバックエンドモデル",
-        "hint": "画像をテキストに変換するマルチモーダルモデルを最大2つ選択します。2つ目（バックアップ）は任意です。",
-        "primary": "プライマリ",
-        "fallback": "バックアップ",
-        "unset": "未選択",
-        "noBackup": "バックアップなし",
-        "hintSecondary": "プライマリを優先します。失敗してバックアップがあれば切り替えます。両方失敗した場合は画像を認識できず、テキストのお知らせに置き換えて通知します。"
-      }
-    },
     "terminalShell": {
       "title": "デフォルトターミナルシェル",
       "description": "サイドバーに新しいターミナルタブを開くときに使用するシェルです。",
@@ -5418,8 +5396,19 @@
       "title": "メッセージ入力",
       "sendShortcut": {
         "label": "{{shortcut}}で送信",
-        "hint": "オンにすると{{shortcut}}でメッセージを送信します。オフにするとEnterで送信し、Shift+Enterで改行します。",
-        "ariaLabel": "{{shortcut}}でメッセージを送信"
+        "hint": "Enterで送信、Shift+Enterで改行します。",
+        "ariaLabel": "{{shortcut}}でメッセージを送信",
+        "hintModifierEnter": "{{shortcut}}で送信、Enterで改行します。"
+      },
+      "followUp": {
+        "label": "実行中の送信方法",
+        "hintQueue": "タスクの実行中は、送信ボタンと{{send}}でキューに追加します。",
+        "hintSteer": "タスクの実行中は、送信ボタンと{{send}}で実行中のタスクに割り込みます。",
+        "ariaLabel": "タスク実行中の送信方法",
+        "options": {
+          "queue": "キューに追加",
+          "steer": "割り込み"
+        }
       }
     },
     "defaultNewTaskWorkingDir": {
@@ -6396,18 +6385,13 @@
         "allowInboundAria": "{{name}} に本機の操作を許可するか切り替え",
         "peerControlOff": "相手側が操作を許可していません",
         "masterOffHint": "先に上のメインスイッチをオンにしてください",
-        "controllingThisMac": "Cindy に接続中",
-        "useThisDeviceModels": "このPCのモデルを使う",
-        "allowModelUseAria": "{{name}} にこのコンピュータのモデルの使用を許可"
+        "controllingThisMac": "Cindy に接続中"
       },
       "toast": {
         "revoked": "このデバイスのアクセス権を撤回しました",
         "revokeFailed": "撤回に失敗しました",
         "restored": "このデバイスのアクセス権を復元しました",
-        "restoreFailed": "復元に失敗しました",
-        "modelUseRestored": "このコンピュータのモデルを再び使えるようにしました",
-        "modelUseRevoked": "このコンピュータのモデルを使えないようにしました",
-        "modelUseFailed": "「このPCのモデルを使う」を保存できませんでした。もう一度お試しください。"
+        "restoreFailed": "復元に失敗しました"
       },
       "sections": {
         "myDevices": "マイデバイス",
@@ -6773,6 +6757,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "Agent-Net のみ使用",
         "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。",
         "peerSwitch": {
@@ -6907,11 +6895,6 @@
       "description": "同じ Feishu アカウントでログインしたデバイス同士が相互に検出できます。「操作を許可」をオンにすると、他のデバイスからこのマシンの {{appName}} をリモート操作できます。",
       "allowControl": "同一アカウントのデバイスによる操作を許可",
       "allowControlHint": "オンにすると、同じアカウントでログインした他のデバイスは毎回の承認なしでこのマシンを操作できます。被操作中はインジケーターが表示され、いつでも切断できます。",
-      "ownModelAccess": {
-        "title": "自分の他のパソコンでこのパソコンのモデルを使う",
-        "hint": "オンにすると、あなたの他のパソコンがこのパソコンのプロバイダーを使えます。Agent はこのパソコン上で、このパソコンのサインインとクォータを使って実行されます。ほかの人には共有されません。",
-        "writeFailed": "設定を保存できませんでした。もう一度お試しください。"
-      },
       "keepAwake": "パソコンをスリープさせない",
       "keepAwakeHint": "オンにするとこのマシンはスリープせず、バックグラウンドの Agent やスケジュールタスクが動作し続けます（ディスプレイのオフや画面ロックは可能です）。",
       "linkStatus": {
@@ -7825,6 +7808,18 @@
         "overviewTab": "概要",
         "addPlugin": "プラグインを追加",
         "addPluginAria": "プラグイン追加オプション",
+        "githubInstall": {
+          "label": "GitHub Release からインストール…",
+          "title": "GitHub Release からインストール",
+          "description": "リポジトリまたは Release の URL を貼り付けてください。非公開リポジトリにはアクセス権のある GitHub アカウントが必要です。",
+          "url": "GitHub URL",
+          "submit": "プラグインを探す",
+          "loading": "検索してダウンロード中…",
+          "invalid": "GitHub のリポジトリまたは Release タグの URL を入力してください。",
+          "not-found": "このバージョンを利用できません。URL とアクセス権を確認してください。",
+          "ambiguous": "複数のプラグインがあります。パッケージが一つの Release を指定するか、ファイルからインストールしてください。",
+          "installedAlready": "このプラグインはインストール済みです。設定から更新できます。"
+        },
         "installedSection": "インストール済み",
         "installedExpand": "インストール済みプラグイン {{count}} 件をすべて表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",
@@ -8194,7 +8189,7 @@
         "hostTools_handoff": "タスクへの送信",
         "hostTools_handoffDetail": "Cindy のタスクツールで既存のタスクにメッセージを送信できます。現在のタスク情報が必要な操作では、対象のタスクを明示する必要があります。",
         "hostTools_usage": "使用量とプロバイダーグループの状態を読み取る",
-        "hostTools_usageDetail": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、プロバイダーグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。",
+        "hostTools_usageDetail": "現在の Cindy アカウントに接続された、このコンピューター上の Claude/Codex のアカウント ID、プラン、クォータ期間、更新時刻を読み取ります。このコンピューターと、同じアカウントで許可された他のコンピューターの記録済みの日別・モデル別使用量、推定費用、プロバイダーグループの設定と状態、表示可能なメンバー・デバイスの ID、名前、アバターも読み取ります。サブスクリプションのログインメール、アカウントのディレクトリ、内部フィンガープリント、認証情報、ファイルの読み取りや、アカウント・設定の変更はできません。アクセス権のあるタスクのクォータも読み取ります。同じアカウントで許可された別のコンピューターや、クォータの閲覧が許可された共有プロバイダーも対象です。",
         "hostTools_settings": "アプリ設定",
         "hostTools_settingsDetail": "Cindy の設定ツールでアプリの設定を読み取り、変更できます。秘密情報は返されず、機密情報の入力は本人が行います。",
         "hostTools_scheduler": "自動化の管理",
@@ -8254,6 +8249,8 @@
         "subscribeMessageDetail": "保存済みのユーザーメッセージと AI の返信を受信します。添付ファイルは別の読み取りと受け渡しで取得します。",
         "subscribeToolExecution": "ツール実行イベント",
         "subscribeToolExecutionDetail": "ツール名、入力、結果、エラーを受信します。実行は変更せず、監視のみ行います。",
+        "subscribeNativeRecovery": "ネイティブ復旧イベント",
+        "subscribeNativeRecoveryDetail": "再試行、コンテキストの圧縮、タスクの停止に関するエンジンの状態を受信します。",
         "subscribeTaskState": "タスク状態のイベント",
         "subscribeTaskStateDetail": "タスクの実行、待機、完了、アーカイブ、非表示の状態変更を受信します。",
         "subscribeActivity": "AI が思考中のタイミングと、あなたの操作を待っているタイミングを把握",
@@ -8469,6 +8466,24 @@
         "openInSidebar": "サイドバーで開く",
         "panelPageHosted": "プラグインページから開く · 離れると自動的に閉じます",
         "panelNone": "このプラグインにパネルはありません",
+        "githubRelease": {
+          "title": "プラグインの更新",
+          "installed": "インストール済み {{version}}",
+          "upstream": "配布元 {{version}}",
+          "prerelease": "プレリリース",
+          "check": "更新を確認",
+          "update": "ダウンロードしてインストール",
+          "connect": "GitHub にログイン",
+          "checking": "更新を確認しています…",
+          "updating": "ダウンロードしてインストールしています…",
+          "available": "新しいバージョンがあります。",
+          "current": "最新バージョンです。",
+          "updated": "プラグインを更新しました。",
+          "empty": "インストールできるリリースはありません。",
+          "sign-in": "更新を確認するには GitHub にログインしてください。",
+          "forbidden": "この GitHub アカウントには非公開リポジトリの読み取り権限がありません。",
+          "unavailable": "更新を確認またはインストールできませんでした。もう一度お試しください。"
+        },
         "customSlotTitle": "プラグインのカスタム設定エリア",
         "dangerTitle": "プラグインをアンインストール",
         "infoContents": "内容",
@@ -8698,6 +8713,10 @@
       "panelHost": {
         "close": "パネルを閉じる"
       },
+      "installProgress": {
+        "awaitingConsent": "確認待ち…",
+        "installFailed": "インストールに失敗"
+      },
       "updateAll": {
         "title": "すべて更新 · {{count}} 件",
         "collapseDiff": "折りたたむ",
@@ -8708,6 +8727,7 @@
         "statusDone": "更新済み",
         "statusSkipped": "スキップ済み",
         "statusFailed": "更新に失敗",
+        "progressCount": "{{total}} 件中 {{done}} 件を更新済み",
         "background": "バックグラウンドで続行",
         "doneAction": "完了",
         "doneToast": "一括更新が完了:{{done}} 件更新、{{rest}} 件未完了",
@@ -9819,6 +9839,41 @@
       },
       "providerTooltip": "セッションで現在選択されているプロバイダー。未指定の場合は空欄です。",
       "tokensTooltip": "このセッションが{{range}}に使用したトークンのみを集計します。"
+    },
+    "auxiliary": {
+      "title": "補助モデルの使用量",
+      "label": "補助リクエスト",
+      "purpose": "用途",
+      "requests": "記録済みリクエスト",
+      "description": "合計トークンに含まれます。プロバイダーが返した使用量のみ記録し、未報告の使用量や過去のリクエストは推定しません。",
+      "sources": {
+        "title": "タイトル生成",
+        "task-summary": "タスクの要約",
+        "prompt-prediction": "入力候補",
+        "working-status": "作業状況",
+        "help": "ヘルプ",
+        "bot-creation": "コンパニオン作成",
+        "bot-opening": "コンパニオンの挨拶",
+        "group-planning": "グループの計画",
+        "ambient-reply": "返信の判断",
+        "auto-review": "自動レビュー",
+        "tool-loop-review": "ツールループの確認",
+        "memory-review": "メモリの確認",
+        "git-summary": "変更の要約",
+        "hook-generation": "自動化スクリプト",
+        "automation-verification": "インポートの検証",
+        "plugin-text": "プラグインのテキスト",
+        "voice-dialogue": "音声会話",
+        "voice-exit": "音声終了の判断",
+        "voice-refinement": "音声テキストの推敲",
+        "dictionary-learning": "辞書学習",
+        "embedding-query": "ベクトル検索",
+        "embedding-index": "ベクトル索引",
+        "web-search": "ウェブ検索",
+        "provider-probe": "接続テスト",
+        "vision-bridge": "ビジョンブリッジ",
+        "auxiliary": "その他の補助リクエスト"
+      }
     }
   },
   "usageDashboard": {
@@ -10760,6 +10815,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "仲間一覧を読み込めませんでした",
+    "rosterReload": "仲間を再読み込み",
     "avatarStatus": {
       "awaiting": "確認待ち",
       "error": "要確認",
@@ -10894,6 +10951,8 @@
     "autosave": {
       "saving": "保存中…",
       "saved": "保存しました",
+      "unconfirmed": "保存を確認できません",
+      "savedModel": "保存済み・次のターンから適用",
       "retry": "再保存"
     },
     "retry": "再試行",
@@ -11007,7 +11066,7 @@
       "discard": "変更を破棄",
       "continueEditing": "編集を続ける"
     },
-    "profileSaveFailed": "仲間設定を保存できませんでした。変更は適用されていません。",
+    "profileSaveFailed": "仲間設定を保存できませんでした。",
     "profileSaveOffline": "仲間がいるパソコンに接続できません。再接続してから、もう一度保存してください。",
     "modelLabel": "モデル",
     "modelUnavailable": "{{model}}（現在利用できません）",
@@ -11327,7 +11386,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}は返信できません：この仲間のデバイスのリモートセッション数が上限に達しました。\n仲間の所有者に不要なセッションのアーカイブを依頼するか、リモートのパソコンの所有者に「リモートと共有」で上限の変更を依頼してください。",
           "REMOTE_TOTAL_LIMIT": "{{name}}は返信できません：リモートのパソコンのセッション総数が上限に達しました。\nそのパソコンの所有者に不要なセッションの解放、または「リモートと共有」での上限変更を依頼してください。",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}}は返信できませんでした。現在のモデルは画像に対応していません。\n画像対応モデルに切り替えるか、「設定 → パーソナライズ → ビジョンブリッジ」を有効にして視覚モデルを設定し、メッセージを再送してください。",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}は返信できませんでした。現在のモデルは画像に対応していません。\n画像対応のモデルに切り替えてください。",
           "MODEL_UNAVAILABLE": "{{name}}は返信できませんでした。利用可能なモデルがありません。\n仲間の設定で接続済みの利用可能なモデルを選び、メッセージを再送してください。",
           "AUTH_REQUIRED": "{{name}}は返信できませんでした。モデルの接続に再認証が必要です。\n設定でモデルのプロバイダーに再接続し、メッセージを再送してください。",
           "RATE_LIMITED": "{{name}}は返信できませんでした。モデルへのリクエストが多すぎます。\nしばらく待ってメッセージを再送するか、別の利用可能なモデルを選んでください。",
@@ -13638,9 +13697,8 @@
     "sendButton": {
       "send": "メッセージを送信",
       "queue": "キューに追加",
-      "queueTooltip": "クリックでキューに追加。{{shortcut}} でタスクを中断せずに割り込み送信",
-      "queueTooltipSendMode": "クリックでキューに追加、{{shortcut}}でこのメッセージを送信",
-      "stop": "生成を停止"
+      "stop": "生成を停止",
+      "steer": "実行中のタスクに割り込む"
     },
     "pluginSetup": {
       "account": {
@@ -13986,7 +14044,7 @@
         "effortEndFast": "高速",
         "effortEndSmart": "高精度",
         "railSameEngine": "{{agent}} のみ",
-        "crossEngineWarning": "エンジンを切り替えるとコンテキストが再構築され、内容が失われる場合があります",
+        "crossEngineWarning": "次のメッセージでエンジンが切り替わり、会話を引き継ぎます。以前のやり取りは圧縮される場合があります。",
         "favoritesSyncFailed": "お気に入りを同期できません。選択画面を開き直してください。接続先の更新が必要な場合があります。",
         "favoritesSyncFailedUnreachable": "お気に入りはまだ同期されていません。そのパソコンに現在接続できません。接続が戻ってから開き直してください。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14002,12 +14060,8 @@
         "ultrafast": "超高速"
       },
       "discoveredCopy": {
-        "title": "「{{device}}」の {{provider}} を使いますか？",
-        "description": "{{unavailable}}続けると「{{device}}」で実行します。ここからいつでも戻せます。",
         "unavailableHere": "このパソコンの {{provider}} は現在使えません。",
-        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。",
-        "confirm": "使う",
-        "cancel": "このままにする"
+        "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。"
       }
     },
     "permissionSelector": {
@@ -14273,33 +14327,14 @@
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "credentialSwitchFailed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
       "modelSwitchContextGuard": {
-        "title": "このモデルには今の会話が収まりません",
         "warnToast": "この会話はすでに {{used}} 使っています。切替後は新しいモデルの容量（{{total}}）の約 {{pct}}% になります",
-        "overflowDescription": "この会話はすでに {{used}} 使っており、新しいモデルが扱える {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy が要約してから続けます。チャット履歴は残りますが、全文をそのままは渡しません。",
-        "overflowDescriptionRemote": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。",
-        "confirmSwitch": "切り替えて続ける",
-        "cancelSwitch": "今は切り替えない"
+        "condensedToast": "新しいモデルに合わせて以前のやり取りを圧縮します。会話履歴はすべて引き続き確認できます。",
+        "overflowDescriptionRemote": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。"
       },
       "agentSwitch": {
         "engineNotReady": "エンジンは切り替わりましたが、新しいエンジンの起動に失敗しました。メッセージ送信時に自動的に再試行されます",
         "failed": "エンジンの切り替えに失敗しました(未適用)",
-        "deferred": "切り替えを予約しました:次のメッセージ送信時に {{agent}} · {{model}} に切り替わります",
-        "confirmation": {
-          "title": "Agent を切り替えますか？",
-          "description": "新しい Agent エンジンは引き継ぎ要約を通じて続行するため、思考内容などが完全に引き継がれる保証はありません。元に戻せば、元のエンジンのセッションを引き続き利用できます。切り替えによってプロンプトキャッシュも一度中断され、トークン消費が増える可能性があります。",
-          "confirm": "Agent を切り替える",
-          "cancel": "現在の Agent を維持",
-          "dontShowAgain": "次回から表示しない"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Agent をこのパソコンで実行し直しますか？",
-        "titleOther": "Agent を「{{device}}」で実行しますか？",
-        "description": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-        "descriptionNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-        "confirm": "パソコンを切り替える",
-        "cancel": "このままにする",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "切り替えを予約しました:次のメッセージ送信時に {{agent}} · {{model}} に切り替わります"
       }
     },
     "agentSelect": {
@@ -14531,6 +14566,13 @@
       "runningWithWorktree_one": "完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
+    },
+    "followUpHint": {
+      "queueDefault": "タスクの実行中に送信したメッセージは、デフォルトでキューに追加されます。",
+      "steerDefault": "タスクの実行中に送信したメッセージは、デフォルトで実行中のタスクに割り込みます。",
+      "switchToSteer": "デフォルトを割り込みにする",
+      "switchToQueue": "デフォルトをキューに追加にする",
+      "dismiss": "ヒントを閉じる"
     }
   },
   "onboarding": {
@@ -14803,11 +14845,6 @@
       "unavailable": "画像を表示できません",
       "loading": "画像を読み込み中…"
     },
-    "visionBridge": {
-      "analyzing": "画像を認識中…（{{count}}枚）",
-      "fallback": "ビジョンブリッジは予備のビジョンバックエンドを使用しました（プライマリが利用不可）。画像認識に影響する可能性があります",
-      "unavailable": "ビジョンブリッジは現在利用できません。画像を認識できず、テキストのお知らせに置き換えました"
-    },
     "newMessageIndicator": {
       "aria": "下部に戻り、{{count}} 件の新着メッセージを表示",
       "label_one": "{{count}} 件の新着",
@@ -14906,6 +14943,7 @@
       "credentialSwitchBusy": "他の Codex タスクが実行中のため、このセッションで選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
       "accountBoundaryPending": "Cindy がアカウント状態を切り替え中のため、まだこのタスクを開始できません。少し待ってから「再試行」を押してください。繰り返し表示される場合は Cindy を再起動してください。",
       "codexThreadStale": "Codex の認証モードが切り替わりました。このセッションは続行できません。新しいセッションを開始してください。",
+      "codexSharedAuthLinkUnavailable": "このコンピューターでは Codex にログイン済みですが、このセッションはそのログイン情報を読み取れません。そのログイン情報へのリンクを作成できないためです（Windows の標準アカウントでは通常作成できません）。このコンピューターで {{appName}} がリンクを作成できる権限があるか確認してください（Windows では管理者として一度実行するか、開発者モードを有効にしてください）。その後「再試行」を押してください。「ChatGPT に再ログイン」を押して、Cindy がこのセッション用に独自のログイン情報を使うようにすることもできます。",
       "codexResumeNotReady": "Codex は現在このタスクを再開できません。しばらくしてからもう一度お試しください。",
       "claudeGatewayOpusPlanMismatch": "この Opus リクエストは Claude.ai サブスクリプションではなく、XD Gateway 経由で送信され、このモデルが拒否されました。Claude.ai サブスクリプションに切り替えて再試行するか、別のモデルを選択してください。",
       "claudeSubscriptionOpusPlanMismatch": "接続中の Claude Pro プランでは Opus を利用できません。プランに含まれるモデルに切り替えてください。最近プランを変更した場合は、設定で Anthropic を再接続してから再試行してください。",
@@ -15000,6 +15038,9 @@
       "continueFailed_other": "{{count}} 件のセッションを再開できませんでした。セッションを開いて再試行してください。"
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "この操作に対するセッションの許可が失効しました。次の実行は予定されています。",
+      "actionExpired": "この操作に対するセッションの許可が失効しました。自動化の直近の実行結果を確認してください。",
+      "actionRecovered": "この操作の許可は失効しましたが、その後、同じ自動化が正常に実行されました。",
       "text": "自動実行に失敗した記録があります。",
       "precheck": "自動チェックが一時的に停止しています。",
       "rateLimited": "リクエスト制限により自動チェックが一時的に停止しています。",
@@ -15430,6 +15471,11 @@
         "relocatedElsewhere": "Agent を別のパソコンで実行するようにしました",
         "quotaRebalance": "こちらのクォータを先に使うため"
       },
+      "handoffCoverage": {
+        "complete": "会話をすべて引き継ぎました",
+        "condensed": "以前のやり取りを圧縮しました",
+        "details": "会話の引き継ぎ内容"
+      },
       "contextRebuild": {
         "labelOverflow": "コンテキストを整理して続行しました",
         "labelTimeout": "直前の応答がなかったため、整理して続行しました",
@@ -15708,7 +15754,7 @@
       "REMOTE_AGENT_INVALID": "Agent を実行しているパソコンとの通信でエラーが発生しました。もう一度お試しください。続く場合は両方のパソコンの Cindy を最新版に更新してください。",
       "REMOTE_AGENT_RESUME_REJECTED": "モデルを実行しているコンピューターでは、このセッションを再開できません。セッション一覧から新しいセッションを作成し、続行に必要な内容をコピーしてください。元のセッションと送信待ちのメッセージは保持されます。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "このモデルは共有者が設定したモデル使用割合の上限に達しました。別の利用可能なモデルで続行してください。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーまたは選択したモデルの利用が許可されていません。自分のパソコンなら、そのパソコンの「リモート接続」で「自分の他のパソコンでこのパソコンのモデルを使う」をオンにしてください。共有を受けたものなら、所有者に「リモートと共有」で利用範囲を変更してもらってください。別のモデルを選ぶこともできます。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーまたは選択したモデルの利用が許可されていません。自分のパソコンなら、そのパソコンでこのプロバイダーの「リモート利用を許可」をオンにしてください。共有を受けたものなら、所有者に「リモートと共有」で利用範囲を変更してもらってください。別のモデルを選ぶこともできます。",
       "REMOTE_AGENT_FORK_FAILED": "Agent を実行しているパソコンで、ここから新しいセッションを始められませんでした。もう一度試すか、別のメッセージでお試しください。",
       "REMOTE_AGENT_SHARE_PAUSED": "共有した人があなたへの共有を一時停止したため、再開されるまでこれらのモデルは使えません。別のモデルに切り替えて続けられます。",
       "REMOTE_AGENT_SHARE_REMOVED": "この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルに切り替えて続けられます。",
@@ -16372,7 +16418,10 @@
       "confirmArchive": {
         "title": "セッションをアーカイブ",
         "description": "このセッションをアーカイブしますか？アーカイブ後はリストから消えます。",
-        "dirtyWorktreeWarning": "このセッションの worktree には未コミットの変更があります。アーカイブ前に git スナップショットとして自動保存され、後でセッションから復元できます。",
+        "dirtyWorktreeWarning": "このタスクには未コミットのファイル変更があります。アーカイブ時には既定で変更が保存され、後からタスク内で復元できます。",
+        "discardChanges": "未コミットの変更を破棄",
+        "discardWarning": "未コミットの変更と新しいファイルは復元できなくなります。",
+        "discardAndArchive": "破棄してアーカイブ",
         "scheduleWarning_one": "関連する自動化{{names}}は引き続き実行され、その際にこのセッションを復元します。",
         "scheduleWarning_other": "関連する自動化{{names}}は引き続き実行され、その際にこのセッションを復元します。",
         "scheduleWarningMany_one": "{{count}} 件のセッションに自動化が紐づいており、次回実行時にセッションが復元されます。",
@@ -16408,6 +16457,7 @@
         "empty": "この自動化にはアーカイブできるセッションがありません"
       },
       "archiveAll": {
+        "projectTitle": "「{{name}}」のすべてのタスクをアーカイブしますか？",
         "title": "すべてのセッションをアーカイブ",
         "confirm": "すべてアーカイブ",
         "cancel": "キャンセル",
@@ -16552,18 +16602,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」のプロジェクトメニュー",
+        "previewFailed": "このプロジェクトのタスクを読み込めませんでした。もう一度お試しください。",
+        "remotePreviewFailed": "リモートプロジェクトのタスクを読み込めません。接続を確認し、リモート側の Cindy を最新版にしてください。",
         "rename": "プロジェクト名を変更",
         "pin": "プロジェクトをピン留め",
         "unpin": "プロジェクトのピン留めを解除",
-        "removeFromSidebar": "サイドバーからプロジェクトを削除",
-        "removeFromSidebarConfirmTitle": "「{{name}}」を削除しますか？",
-        "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「会話」セクションに移動し、引き続き利用できます。",
+        "removeFromSidebar": "Cindy からプロジェクトを削除…",
+        "removeFromSidebarConfirmTitle": "Cindy から「{{name}}」を削除しますか？",
+        "removeFromSidebarConfirmDescription": "未アーカイブのタスク {{count}} 件は「会話」で引き続き使用できます。",
         "removeFromSidebarConfirmAction": "プロジェクトを削除",
-        "removeFromSidebarFailed": "サイドバーからプロジェクトを削除できませんでした。もう一度お試しください。",
-        "showFiles": "ファイルを表示",
-        "archivedAll": "すべてアーカイブ",
-        "unarchiveAll": "すべてアーカイブ解除",
-        "openInExplorer": "ファイルマネージャーで開く",
+        "removeFromSidebarFailed": "プロジェクトを削除できませんでした。",
+        "archiveOnRemove": "タスクもアーカイブ（{{count}} 件）",
+        "keepSkippedOnRemove": "対象外のタスク（{{skip}}）は「会話」に残ります。",
+        "removedArchived": "{{count}} 件のタスクをアーカイブに移動します。",
+        "removeAndArchive": "プロジェクトを削除してタスクをアーカイブ",
+        "removeKeepFiles": "プロジェクトのピン留め、カスタム名、アイコンは解除されます。ファイルとフォルダーは保持されます。",
+        "showFiles": "サイドバーでタスクのファイルを表示",
+        "archivedAll": "すべてのタスクをアーカイブ",
+        "unarchiveAll": "すべてのタスクのアーカイブを解除",
+        "openInFinder": "Finder でプロジェクトフォルダを開く",
+        "openInExplorer": "エクスプローラーでプロジェクトフォルダーを開く",
+        "openInFileManager": "ファイルマネージャーでプロジェクトフォルダーを開く",
         "newInDirectory": "このディレクトリで新規セッション",
         "copyDeepLink": "プロジェクトリンクをコピー",
         "search": "このプロジェクト内のセッションを検索"
@@ -16596,6 +16656,36 @@
         "priority": "優先度",
         "activity": "最近のアクティビティ",
         "created": "作成日時"
+      },
+      "inbox": {
+        "thisEvening": "今夜",
+        "tomorrow": "明日",
+        "nextWeek": "来週",
+        "custom": "カスタム…",
+        "wakeAt": "再表示する日時",
+        "timeZone": "現地時間（{{zone}}）",
+        "invalidTime": "1年以内の未来の日時を選択してください。",
+        "inbox": "未処理",
+        "working": "実行中",
+        "snoozed": "後で処理",
+        "archived": "処理済み",
+        "snooze": "後で処理する",
+        "complete": "完了",
+        "wake": "今すぐ戻す",
+        "restore": "タスクを復元",
+        "process": "処理済みにする（アーカイブ）",
+        "empty": "受信トレイは空です",
+        "snoozeFailed": "後で処理する時刻を保存できませんでした。接続を確認し、タスクがあるコンピューターを更新してください。",
+        "hours": "{{count}} 時間後",
+        "hours_one": "{{count}} 時間後",
+        "hours_other": "{{count}} 時間後"
+      },
+      "taskListMode": {
+        "heading": "タスクモード",
+        "tasks": "タスク一覧",
+        "inbox": "受信トレイ",
+        "enterInbox": "受信トレイモードに切り替え",
+        "leaveInbox": "タスク一覧モードに切り替え"
       }
     },
     "rename": {
@@ -16738,6 +16828,7 @@
         "summaryAria": "PR #{{number}} の概要を表示",
         "unresolvedLabel": "未解決のレビューコメント",
         "checks": "チェック",
+        "following": "フォロー中",
         "checksTotal": "全 {{count}} 件",
         "failed": "失敗",
         "passed": "成功",
@@ -16888,6 +16979,7 @@
         "menuSave": "保存",
         "menuInsertTable": "表を挿入",
         "externalChangeBlocked": "ファイルが外部で変更されました。自動保存を停止しました。手動保存で上書きできます。",
+        "targetChanged": "ファイルの参照先が変わりました。下書きはエディターに残っています。下書きをコピーしてから、ファイルを開き直してください。",
         "tableMenu": {
           "addRowAbove": "上に行を追加",
           "addRowBelow": "下に行を追加",
@@ -17004,6 +17096,18 @@
     "ultra": "究極"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "GitHub App の通知を受け取れない間も定期チェックは続きます。",
+      "label": "PR",
+      "url": "PR の URL",
+      "condition": "実行条件",
+      "any": "PR の更新",
+      "merged": "マージ時",
+      "review": "レビューの更新",
+      "ci": "CI 状態の変更",
+      "timed": "定期的にも確認",
+      "invalid": "GitHub PR の URL を入力してください。"
+    },
     "presentation": {
       "status": {
         "active": "有効",
@@ -19633,6 +19737,7 @@
         "empty": "特典の付与履歴はありません。",
         "incomplete": "付与履歴が多いため、最新の{{count}}件のみ表示しています。",
         "unnamed": "特典残高",
+        "rolloverName": "繰り越し分",
         "giftCard": "ギフトカード · {{sender}} より",
         "original": "付与額",
         "used": "使用済み",
@@ -19644,7 +19749,8 @@
           "expired": "期限切れ",
           "voided": "無効"
         }
-      }
+      },
+      "viewUsage": "使用量を見る"
     },
     "orders": {
       "title": "注文履歴",
@@ -19869,6 +19975,8 @@
       "basicModels": "一部のモデルを利用",
       "subscription": "サブスクリプション",
       "rollover": "未使用残高は{{period}}も利用可能（最大 {{amount}}）",
+      "rolloverMonthly": "未使用残高を最大{{amount}}まで繰り越し、特典残高に\n1か月間有効、再繰り越し不可\nプラン残高とチャージ残高より先に使用",
+      "rolloverMonthlySummary": "未使用残高を最大{{amount}}まで繰り越し、1か月間有効",
       "nextPeriod": {
         "MONTH": "翌月",
         "YEAR": "翌年",
@@ -21271,7 +21379,6 @@
       "sessionRuntimeFallback": "タスクモデルの自動フォールバック",
       "subagentModels": "サブエージェント",
       "auxiliaryModels": "補助モデル",
-      "visionBridge": "ビジョンブリッジ",
       "modelVisibility": "モデルの表示と非表示",
       "providerOrder": "プロバイダーの順序",
       "modelCatalogOverrides": "モデルパラメータの調整",
@@ -21310,6 +21417,45 @@
         "allow": "許可",
         "deny": "拒否"
       }
+    }
+  },
+  "featureIntro": {
+    "close": "閉じる",
+    "project": {
+      "title": "プロジェクトの使い方",
+      "lead": "続けて取り組む作業は、プロジェクトにまとめましょう。ファイルはパソコン上のフォルダに置かれ、Cindy は毎回前回の成果の続きから作業するので、背景を説明し直す必要がありません。",
+      "files": {
+        "title": "成果は手元に残る",
+        "body": "Cindy はプロジェクトのフォルダで直接読み書きします。成果はパソコンに残ります。"
+      },
+      "context": {
+        "title": "説明し直しは不要",
+        "body": "プロジェクトの新しいタスクは、最初からファイルと決めておいた内容を把握しています。"
+      },
+      "separate": {
+        "title": "作業ごとに整理",
+        "body": "タスクはプロジェクトごとにまとまり、別の作業と混ざりません。"
+      },
+      "start": "新規プロジェクトへ進む",
+      "note": "名前を付けるだけで作成できます。既存のフォルダやコードリポジトリも使えます。"
+    },
+    "taskInbox": {
+      "title": "受信トレイの使い方",
+      "lead": "タスクは状態に応じて「未処理」「実行中」「後で処理」「処理済み」に自動で分かれます。おすすめは受信トレイをこまめに空にすること。済んだら完了、今やらないものは後で処理にしましょう。",
+      "pending": {
+        "title": "未処理",
+        "body": "結果が出たタスクや、あなたの回答を待っているタスクがここに入ります。"
+      },
+      "done": {
+        "title": "完了",
+        "body": "対応が済んだら完了を 1 回押すと処理済みへ。新しい動きがあれば自動で戻ってきます。"
+      },
+      "snooze": {
+        "title": "後で処理",
+        "body": "今は手が回らないときは時刻を選ぶと、その時刻に未処理へ戻ります。"
+      },
+      "start": "使い始める",
+      "note": "サイドバー上部のボタンでいつでもタスク一覧に戻せます。"
     }
   },
   "firstRunGuide": {
@@ -21788,6 +21934,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "このリポジトリをこのコンピューターにダウンロードしますか？",
+    "credentialNotice": "非公開リポジトリの場合、Cindy はこのコンピューターでログイン中のアカウントを使用することがあります。",
+    "saveTo": "保存先",
+    "confirmImport": "インポートする",
+    "confirmSshTitle": "このプロジェクトに次の SSH ディレクトリへのアクセスを許可しますか？",
+    "sshHost": "SSH ホスト",
+    "readWriteAccess": "読み書き",
+    "readAccess": "読み取り専用",
+    "confirmAccess": "アクセスを許可",
     "autoLoading": "アイコンを検索中…",
     "autoNone": "プロジェクト名から生成した文字アイコンを使用します。",
     "autoSource": "取得元",
@@ -21827,7 +21982,42 @@
     "discard": "破棄",
     "colors": {
       "default": "標準色（テーマに合わせる）"
-    }
+    },
+    "directories": "プロジェクトのディレクトリ",
+    "directoriesHint": "このプロジェクトの全タスクに次のターンから適用されます。タスク固有の既存ディレクトリは保持されます。",
+    "removeDirectory": "ディレクトリを削除",
+    "directoryPath": "ディレクトリのフルパス",
+    "addDirectory": "ディレクトリを追加",
+    "browseDirectory": "ディレクトリを参照",
+    "mainDirectory": "メインディレクトリ",
+    "createTitle": "新規プロジェクト",
+    "createAction": "プロジェクトを作成",
+    "repository": "リポジトリURL",
+    "repositoryHint": "GitHub、GitLab、その他の Git リポジトリの HTTPS / SSH リンクに対応しています。",
+    "autoDirectory": "ディレクトリ未選択時は {{path}} に作成します。同名の場合は番号を付けます。",
+    "cloning": "リポジトリをクローン中…",
+    "invalidRepository": "有効なGitHub、GitLab、GitリポジトリのURLを入力してください。",
+    "createFailed": "作成できませんでした。書き込み権限、URL、このコンピュータのGitアクセス権を確認してください。クローン先は空の必要があります。",
+    "createNamePlaceholder": "プロジェクト名",
+    "createNameHint": "プロジェクトに名前を付けて始めましょう。",
+    "createFromRepository": "コードリポジトリから作成",
+    "createBlank": "空のプロジェクトに切り替え",
+    "source_blank": "空のプロジェクト",
+    "source_existing": "既存フォルダを開く",
+    "source_repository": "リポジトリからインポート",
+    "sourceHint_blank": "名前を入力するとフォルダが自動作成されます。",
+    "sourceHint_existing": "このコンピュータの既存フォルダを選択します。",
+    "sourceHint_repository": "リンクを貼り付けてこのコンピュータにダウンロードします。",
+    "source": "作成方法",
+    "sourceShort_blank": "新規",
+    "sourceShort_existing": "フォルダ",
+    "sourceShort_repository": "リポジトリ",
+    "automaticMain": "メイン · 自動作成",
+    "source_local": "ローカルフォルダ",
+    "sourceShort_local": "ローカルフォルダ",
+    "sourceHint_local": "名前を入力して作成するか、既存のフォルダを選択します。",
+    "chooseExistingFolder": "既存フォルダを選択",
+    "changeMainDirectory": "変更"
   },
   "taskManagement": {
     "scope": "このコンピューターの現在のアカウントにのみ適用されます。",

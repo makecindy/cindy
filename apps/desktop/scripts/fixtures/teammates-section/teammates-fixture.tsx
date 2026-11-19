@@ -17,17 +17,30 @@ if (ctx.data.showPinned) addSessionAttention('pinned-2', 'awaiting');
 const noop = () => {};
 function Sections() {
   const [sortBy, setSortBy] = useState(loadPinnedSortBy);
+  const [manualPins, setManualPins] = useState(pinned);
+  const [reorderCount, setReorderCount] = useState(0);
   const changeSort = (next: PinnedSortBy) => { setSortBy(next); persistPinnedSortBy(next); };
-  return <><TeammatesSection />{ctx.data.showPinned === true && <PinnedSection
+  return <><TeammatesSection />{ctx.data.showPinned === true && <div data-pinned-reorder-count={reorderCount}><PinnedSection
     sortBy={sortBy} onSortByChange={changeSort}
-    entries={sortPinnedSidebarEntries(pinned.map(session => ({ kind: 'session', id: session.id, session })), sortBy)}
+    entries={sortPinnedSidebarEntries(manualPins.map(session => ({ kind: 'session', id: session.id, session })), sortBy)}
     allKnownProjects={[]} renderProject={() => null} runningSessionIds={new Set()}
     attachedSessionIds={new Set()} notifications={new Set(['pinned-1', 'pinned-2'])}
-    onSessionClick={noop} onAction={noop} onRename={noop} onTogglePin={noop} onReorder={noop}
-  />}</>;
+    onSessionClick={noop} onAction={noop} onRename={noop} onTogglePin={noop}
+    onReorder={order => {
+      setReorderCount(count => count + 1);
+      setManualPins(previous => order.map(id => previous.find(session => session.id === id)!));
+    }}
+  /></div>}</>;
 }
 // The production sidebar lives in the shell, outside child route elements.
 mountPage({
   route: ctx.data.route as string,
-  render: () => <AppFrame header={false} sidebar={<Sections />} />,
+  // Pointer-down prefetch stays real; only its local database reads use fixture data.
+  host: () => ({
+    localDb: {
+      sessions: { get: async (id: string) => pinned.find(session => session.id === id) },
+      messages: { list: async () => [] },
+    },
+  }),
+  render: () => <AppFrame header={false} sidebarWidth={Number(ctx.data.sidebarWidth) || 260} sidebar={<Sections />} />,
 });

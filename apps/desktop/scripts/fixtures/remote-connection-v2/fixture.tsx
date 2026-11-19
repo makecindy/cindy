@@ -97,6 +97,18 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
       relayRttMs: 21,
     };
   }
+  if (name === 'split-direct') {
+    // 直连多到拆成两组:第二组直连在左边上方,中转组排在它下面,中转站整个落在这台电脑的名字下面。
+    const devices: Device[] = [SELF];
+    const links: Link[] = [];
+    for (let i = 0; i < 9; i++) {
+      devices.push(device({ deviceId: `dir${i}`, name: `Desk ${i + 1}`, platform: i % 2 ? 'win32' : 'darwin' }));
+      links.push(link(`dir${i}`, 'direct', 3 + i));
+    }
+    devices.push(device({ deviceId: 'rel0', name: 'Office PC', platform: 'win32' }), device({ deviceId: 'idle', name: 'Studio mini' }), device({ deviceId: 'attention', name: 'Lab PC', remoteControlEnabled: false }));
+    links.push(link('rel0', 'relay', 64));
+    return { devices, links, relayRttMs: 25 };
+  }
   if (name === 'many') {
     const devices: Device[] = [SELF];
     const links: Link[] = [];
@@ -143,6 +155,11 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
 }
 
 const data = scenario(ctx.case);
+const agentNetRoutes: DeviceLinkPeerLinksSnapshot['agentNetRoutes'] = ctx.case === 'default' ? [
+  { deviceId: 'mini', path: 'direct', rttMs: 1 },
+  { deviceId: 'pixel', path: 'connecting', rttMs: null },
+] : undefined;
+if (agentNetRoutes) data.links = data.links.filter((link) => link.deviceId !== 'mini');
 if (ctx.case === 'remote-switch-controller-strict') data.links = data.links.filter((l) => l.encrypted);
 /**
  * 这台电脑实际用的连接方式(拓扑中间名字下面):打开 Agent-Net 后通常就是 Agent-Net;self-device-link 是开着开关、
@@ -223,7 +240,10 @@ void mountPage({
       }),
       getPeerLinks: async () => ({
         links: data.links,
+        agentNetRoutes,
         relayProtocol: selfEncrypted ? 'agent-net' : 'device-link',
+        // Agent-Net 经中转的数据走 UDP;fleet 演示 UDP 不通退回 WebSocket。Device Link 只有 WebSocket。
+        relayTransport: selfEncrypted && ctx.case !== 'fleet' ? 'udp' : 'websocket',
         relayRttMs: data.relayRttMs,
       }),
       onPeerLinksChanged: subscription('peerLinks'),
@@ -269,8 +289,6 @@ void mountPage({
     },
     openRemoteDesktop: forbid('openRemoteDesktop'),
     maker: {
-      getOwnComputerModelUse: async () => ({ enabled: ctx.case === 'model-access-on' }),
-      setOwnComputerModelUse: async ({ enabled }: { enabled: boolean }) => ({ ok: true, enabled }),
     },
   },
   render: () => (

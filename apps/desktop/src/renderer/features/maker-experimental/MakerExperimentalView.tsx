@@ -259,7 +259,7 @@ export function MakerExperimentalView(): ReactElement {
           ) : (
             <Button
               variant="secondary"
-              tone="danger-solid"
+              tone="danger"
               size="md"
               compact
               type="button"

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Platform, Pressable, StyleSheet, View } from "react-native";
 import {
   Archive,
+  Clock,
   ArchiveRestore,
   Folder,
   Pencil,
@@ -38,6 +39,8 @@ import {
 
 const ACTION_ICONS: Record<SessionSwipeAction, LucideIcon> = {
   archive: Archive,
+  snooze: Clock,
+  wake: Clock,
   delete: Trash2,
   pin: Pin,
   rename: Pencil,
@@ -47,6 +50,7 @@ const ACTION_ICONS: Record<SessionSwipeAction, LucideIcon> = {
 
 export function SessionActionSheet({
   session,
+  inboxMode = false,
   onAction,
   onMove,
   onClose,
@@ -56,6 +60,7 @@ export function SessionActionSheet({
   visible,
 }: {
   session?: RemoteSession | null;
+  inboxMode?: boolean;
   /** 点菜单项:父级负责关 sheet 并串后续(删除 Alert / 重命名弹窗 / 直接执行)。 */
   onAction(action: SessionSwipeAction): void;
   onMove?(): void;
@@ -74,7 +79,7 @@ export function SessionActionSheet({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const nativeSheet = Platform.OS === "android";
-  const menu = buildSessionActionMenu(pinnedAt, status);
+  const menu = buildSessionActionMenu(pinnedAt, status, inboxMode ? session ?? undefined : undefined);
 
   return (
     <SessionActionSheetFrame

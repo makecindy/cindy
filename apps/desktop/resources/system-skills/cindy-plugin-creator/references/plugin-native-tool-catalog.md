@@ -1,8 +1,11 @@
 # 原生工具目录
 
 通过既有 `agent.hostTools: ["control"]` 和 `cindy.host.call('cindy_helper', …)` 调用。
-插件没有当前任务，须显式传本机 `session_id`。先用 `list_tools({query:"原生工具目录"})`
-发现工具，再读取其参数。宿主不启动任务，不添加原生 Pi 扩展或自建工具执行器。
+插件须显式传本机 `session_id`，可按下文参数直接调用 `get_session_tool_catalog` 或
+`set_session_tool_catalog`。如插件也已声明并获准使用 `agent.hostTools` 的 `discovery` 组，
+可先调用 `cindy.host.call('cindy_helper', 'host_services', {})`，在 `control` 服务的
+`tools` 中查看方法是否可用。`list_tools` 是 Agent 的 MCP 入口，插件应使用上述入口。
+宿主不启动任务，不添加原生 Pi 扩展或自建工具执行器。
 
 ## 引擎支持
 

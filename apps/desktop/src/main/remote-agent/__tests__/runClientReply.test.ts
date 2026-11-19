@@ -8,8 +8,8 @@ import { parseRemoteAgentRequest, type RemoteAgentPayload } from '@cindy/device-
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeviceUnresponsiveError } from '../../device-link/responsivenessTracker';
-import type { RemoteAgentPoller } from '../controller/poller';
-import { remoteAgentLinkError, RemoteAgentRunClient } from '../controller/runClient';
+import { RemoteAgentPoller } from '../controller/poller';
+import { remoteAgentInvoker, remoteAgentLinkError, RemoteAgentRunClient } from '../controller/runClient';
 
 afterEach(() => vi.useRealTimers());
 
@@ -19,6 +19,46 @@ afterEach(() => vi.useRealTimers());
 // chunk-count ceiling. The link below models 16 KiB/s + 1s RTT without waiting;
 // gzip, request parsing and complete payload reconstruction remain real.
 describe('RemoteAgentRunClient slow payload delivery', () => {
+  // Unit: preparation guards did not cover time in Device Link admission. Stop
+  // could overtake that queue and the old send would start afterwards. Exercise
+  // the real run client + production invoker, delaying only the wire boundary.
+  it.each(['stop', 'signal', 'ended'] as const)('never dispatches a queued send after %s', async mode => {
+    const oldId = randomUUID(), stopId = randomUUID(), freshId = randomUUID();
+    let release!: () => void;
+    let queued!: () => void;
+    const admitted = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { queued = resolve; });
+    const delivered: string[] = [];
+    const invoke = remoteAgentInvoker('host', async (_device, _channel, args, options) => {
+      const request = parseRemoteAgentRequest(args[0]);
+      if (request.op === 'call') {
+        if (request.callId === oldId) { queued(); await admitted; }
+        options?.beforeDispatch?.();
+        delivered.push(request.callId);
+        client.onData(Buffer.from(`${JSON.stringify({ t: 'result', callId: request.callId, ok: true, value: null })}\n`), false);
+      }
+      return { ok: true, result: {} };
+    });
+    const client = new RemoteAgentRunClient(randomUUID(), { invoke, unregister() {} } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    const abort = new AbortController();
+    const old = client.callWithId(oldId, 'send', ['hello'], abort.signal);
+    const rejected = expect(old).rejects.toThrow(mode === 'ended' ? 'ended' : 'cancelled');
+    await waiting;
+    if (mode === 'stop') await client.callWithId(stopId, 'abort', []);
+    else if (mode === 'signal') abort.abort();
+    else client.abandon('ended');
+    release(); await rejected;
+    expect(delivered).toEqual(mode === 'stop' ? [stopId] : []);
+    if (mode !== 'ended') {
+      await client.callWithId(freshId, 'send', ['fresh']);
+      expect(delivered.filter(id => id === freshId)).toHaveLength(1);
+    }
+    client.abandon('fixture-complete');
+  });
+
   it.each(['small', 'inline', 'utf8', 'upload', 'large-compatible'] as const)(
     'starts exactly once with an intact %s payload over the bounded link', async kind => {
       const text = kind === 'small' ? 'hello'
@@ -173,10 +213,132 @@ describe('RemoteAgentRunClient slow payload delivery', () => {
 });
 
 describe('RemoteAgentRunClient delivery', () => {
+  // Unit, #11329: the old per-run timers replayed twenty locally unsent
+  // deliveries together at 500/1500/3500ms. Real clients share one peer poller;
+  // verify physical invoke admission, a separate peer and normal throughput.
+  it('probes shared send pressure once per peer and drains original deliveries on recovery', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'] }); vi.setSystemTime(0);
+    const calls: Array<{ time: number; runId: string; seq: number }> = [];
+    let active = 0, maxActive = 0;
+    const invoke = async (args: unknown[]) => {
+      const request = args[0] as { runId: string; seq: number };
+      calls.push({ time: Date.now(), runId: request.runId, seq: request.seq });
+      if (performance.now() < 3_500) throw Object.assign(new Error('local send queue full'), { code: 'BACKPRESSURE', inFlight: false });
+      active++; maxActive = Math.max(maxActive, active);
+      await new Promise<void>(resolve => setTimeout(resolve, 10)); // Fake transport acknowledgement.
+      active--;
+      return {};
+    };
+    const poller = new RemoteAgentPoller(invoke);
+    const handlers = { onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback' as const, value: null }) };
+    const clients = Array.from({ length: 20 }, (_, index) => new RemoteAgentRunClient(`run-${index}`, poller, handlers, randomUUID));
+    const otherInvoke = vi.fn(async () => ({}));
+    const other = new RemoteAgentRunClient('other-peer', new RemoteAgentPoller(otherInvoke), handlers, randomUUID);
+    const frames = [{ connId: 'connection', kind: 'message' as const, data: 'frame' }];
+    const deliveries = clients.map(client => client.push(frames));
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(20);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(calls).toHaveLength(21);
+      await other.push(frames);
+      expect(otherInvoke).toHaveBeenCalledOnce();
+      vi.setSystemTime(-60_000); // Wall-clock correction must not extend the pressure cooldown.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(calls).toHaveLength(22);
+      await vi.advanceTimersByTimeAsync(3_000);
+      await Promise.all(deliveries);
+      expect(calls).toHaveLength(42);
+      expect(maxActive).toBe(1);
+      expect(new Set(calls.map(call => call.runId)).size).toBe(20);
+      expect(calls.every(call => call.seq === 1)).toBe(true);
+      // Once the pressured backlog drains, normal first sends remain concurrent.
+      const normal = clients.map(client => client.push(frames));
+      expect(active).toBe(20);
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.all(normal);
+    } finally {
+      clients.forEach(client => client.abandon('fixture-complete')); other.abandon('fixture-complete');
+      await vi.advanceTimersByTimeAsync(5_000);
+      await Promise.allSettled(deliveries);
+    }
+  });
+
+  // Unit, #11329: cancelling a reverse request after its handler completed,
+  // or closing a run while it waits for peer capacity, must cancel admission.
+  it.each(['cancel-reply', 'close-push'] as const)('removes queued delivery after %s', async mode => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'] });
+    const invoke = vi.fn(async () => { throw Object.assign(new Error('send queue full'), { code: 'BACKPRESSURE', inFlight: false }); });
+    const onRequest = vi.fn(async () => ({ type: 'callback' as const, value: 'answer' }));
+    const client = new RemoteAgentRunClient('run', new RemoteAgentPoller(invoke), {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {}, onRequest,
+    }, randomUUID);
+    const requestId = '11111111-2222-4333-8444-555555555555';
+    const delivery = mode === 'close-push'
+      ? client.push([{ connId: 'connection', kind: 'message', data: 'frame' }])
+      : (client.onData(Buffer.from(`${JSON.stringify({ t: 'request', requestId,
+        request: { type: 'callback', name: 'onTranscriptUserEntry', args: ['call', 'entry'] } })}\n`), false), Promise.resolve());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(invoke).toHaveBeenCalledOnce();
+    if (mode === 'close-push') client.abandon('account-boundary');
+    else client.onData(Buffer.from(`${JSON.stringify({ t: 'cancel', requestId })}\n`), false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await delivery;
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(client.hasPendingWork).toBe(false);
+    client.abandon('fixture-complete');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Unit, #11329: shared admission is not shared cancellation. A cancelled
+  // tool reply must leave a neighbour's original push queued for the next probe.
+  it('shares reply and push pressure while cancelling only the requesting run', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'] });
+    const invoke = vi.fn(async (_args: unknown[]) => ({})).mockRejectedValueOnce(Object.assign(new Error('send queue full'), { code: 'BACKPRESSURE' }));
+    const poller = new RemoteAgentPoller(invoke);
+    const handlers = { onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback' as const, value: 'answer' }) };
+    const reply = new RemoteAgentRunClient('reply', poller, handlers, randomUUID);
+    const push = new RemoteAgentRunClient('push', poller, handlers, randomUUID);
+    const requestId = '11111111-2222-4333-8444-555555555555';
+    reply.onData(Buffer.from(`${JSON.stringify({ t: 'request', requestId,
+      request: { type: 'callback', name: 'onTranscriptUserEntry', args: ['call', 'entry'] } })}\n`), false);
+    await vi.advanceTimersByTimeAsync(0);
+    const sending = push.push([{ connId: 'connection', kind: 'message', data: 'frame' }]);
+    expect(invoke).toHaveBeenCalledOnce();
+    reply.onData(Buffer.from(`${JSON.stringify({ t: 'cancel', requestId })}\n`), false);
+    await vi.advanceTimersByTimeAsync(500);
+    await sending;
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1][0]).toMatchObject([{ op: 'push', runId: 'push', seq: 1 }]);
+    expect(reply.hasPendingWork).toBe(false);
+    reply.abandon('fixture-complete'); push.abandon('fixture-complete');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Unit, #11329: gate waiting never fabricates attempts or defeats the
+  // existing delivery ceiling; persistent pressure still terminates at 30.
+  it('retains the bounded delivery attempt budget under persistent peer pressure', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'] });
+    const invoke = vi.fn(async () => { throw Object.assign(new Error('send queue full'), { code: 'BACKPRESSURE' }); });
+    const client = new RemoteAgentRunClient('bounded', new RemoteAgentPoller(invoke), {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    const failed = expect(client.push([{ connId: 'connection', kind: 'message', data: 'frame' }])).rejects.toMatchObject({ code: 'BACKPRESSURE' });
+    await vi.advanceTimersByTimeAsync(200_000);
+    await failed;
+    expect(invoke).toHaveBeenCalledTimes(30);
+    expect(client.hasPendingWork).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    client.abandon('fixture-complete');
+  });
+
   // Unit regression: the shared retry classifier also protects idempotent replies.
   // The existing timeout fixture did not cover a circuit-open rejection with Error.code.
-  it.each(['TIMEOUT', 'DEVICE_UNRESPONSIVE'])('retries a reply after %s without repeating the request handler', async code => {
-    vi.useFakeTimers();
+  it.each(['TIMEOUT', 'DEVICE_UNRESPONSIVE', 'BACKPRESSURE'])('retries a reply after %s without repeating the request handler', async code => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'] });
     const replyAttempts: number[] = [];
     const replyPayloads: unknown[] = [];
     let failuresLeft = 2;
@@ -189,7 +351,9 @@ describe('RemoteAgentRunClient delivery', () => {
           failuresLeft -= 1;
           throw code === 'DEVICE_UNRESPONSIVE'
             ? remoteAgentLinkError(createDeviceUnresponsiveError('host'))
-            : new Error('TIMEOUT: link dropped mid-reply');
+            : code === 'BACKPRESSURE'
+              ? remoteAgentLinkError(Object.assign(new Error('send queue full'), { code, inFlight: false }))
+              : new Error('TIMEOUT: link dropped mid-reply');
         }
       }
       return {};

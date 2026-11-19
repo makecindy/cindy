@@ -46,9 +46,9 @@ const sqliteFactory = (filePath) => {
 };
 
 /**
- * @param {{ userDataDir: string, ownerId: string }} options
+ * @param {{ userDataDir: string, ownerId: string, getMaker?: () => import('@cindy/maker-core').Maker | null }} options
  */
-export function createHostMemoryManager({ userDataDir, ownerId }) {
+export function createHostMemoryManager({ userDataDir, ownerId, getMaker }) {
   const scope = getActiveAppSession();
   if (scope.dataOwnerId !== ownerId || isAppSessionBoundaryPending()) throw new Error('Memory owner is not ready');
   return createMakerMemoryManagerForHost({
@@ -64,6 +64,11 @@ export function createHostMemoryManager({ userDataDir, ownerId }) {
     sqliteFactory,
     logger: LOGGER.child('maker-memory'),
     reviewAgent: 'claude-code',
+    ...(getMaker ? { reviewAgentOneShot: (agentKind, prompt, options) => {
+      const maker = getMaker();
+      if (!maker) throw new Error('Memory review agent is not ready');
+      return maker.oneShot(agentKind, prompt, { ...options, source: 'memory-review' });
+    } } : {}),
   });
 }
 

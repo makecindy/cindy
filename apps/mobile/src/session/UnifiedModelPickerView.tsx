@@ -107,6 +107,7 @@ function Row({
   title,
   subtitle,
   subtitleLines = 1,
+  notice,
   value,
   leading,
   trailing,
@@ -119,6 +120,7 @@ function Row({
   title: string;
   subtitle?: string | null;
   subtitleLines?: number;
+  notice?: string;
   value?: string | null;
   leading?: ReactNode;
   trailing?: ReactNode;
@@ -134,7 +136,7 @@ function Row({
     <Pressable
       accessibilityLabel={
         accessibilityLabel ??
-        [title, subtitle, value].filter(Boolean).join(", ")
+        [title, subtitle, notice, value].filter(Boolean).join(", ")
       }
       accessibilityRole="button"
       accessibilityState={{ selected: !!selected, disabled: !!disabled }}
@@ -157,6 +159,7 @@ function Row({
             {subtitle}
           </Text>
         ) : null}
+        {notice ? <Text style={styles.rowNotice}>{notice}</Text> : null}
       </View>
       {value ? (
         <Text numberOfLines={1} style={styles.rowValue}>
@@ -382,6 +385,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
       selected={p.filter === item.id}
       subtitle={item.quota?.label}
       subtitleLines={item.quota?.members?.length ? 0 : 1}
+      notice={item.sourceUnavailableReason}
       testID={`${p.testID}.source.${item.id}`}
       title={item.remote?.providerLabel ?? item.label}
     />
@@ -682,6 +686,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
             row.remoteDevice?.name,
             agentLabel,
             row.subtitle,
+            row.sourceUnavailableReason,
             row.config.fast ? t("models.options.fastMode") : null,
             row.quotaLabel,
           ]
@@ -738,6 +743,9 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
               <Text numberOfLines={1} style={styles.rowSubtitle}>
                 {row.subtitle}
               </Text>
+            ) : null}
+            {row.sourceUnavailableReason ? (
+              <Text style={styles.rowNotice}>{row.sourceUnavailableReason}</Text>
             ) : null}
             {row.quotaLabel ? (
               <Text numberOfLines={1} style={styles.quotaText}>
@@ -1050,6 +1058,12 @@ function makeStyles(colors: ThemeColors) {
     rowSubtitle: {
       color: colors.textSecondary,
       fontSize: typeScale.caption,
+      fontWeight: fontWeight.regular,
+      lineHeight: lineHeight.caption,
+    },
+    rowNotice: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
       fontWeight: fontWeight.regular,
       lineHeight: lineHeight.caption,
     },

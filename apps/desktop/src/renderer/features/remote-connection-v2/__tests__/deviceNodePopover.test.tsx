@@ -41,6 +41,7 @@ function node(partial: Partial<TopologyNode> = {}): TopologyNode {
     isMobile: false,
     status: 'direct',
     path: 'direct',
+    controlLinkOpen: true,
     rttMs: 3,
     flow: null,
     flowText: null,
@@ -229,6 +230,22 @@ describe('HubNodePopover', () => {
     render(<HubNodePopover model={{ ...model, relay: { ...model.relay, protocol: 'device-link' } }} linkStatus="connecting" issue={null} standby={false} />);
     expect(screen.queryByText('settings.remoteControl.v2.popover.protocol')).toBeNull();
     expect(screen.queryByText('settings.remoteControl.v2.protocol.deviceLink')).toBeNull();
+    expect(screen.getByText('settings.devices.linkStatus.connecting')).toBeTruthy();
+  });
+
+  // 2026-11-18 用户要求：看得出中转走的是 Agent-Net 的 UDP 还是 WS,往返是那条路的。原来这一行只有状态和心跳往返。
+  // 最小失败输入:Agent-Net 主连接、transport 为 udp / websocket;连接中不写走法。tier: unit。
+  it('与中转那一行写经中转的数据走 UDP 还是 WS,连接中不写', () => {
+    const relay = { ...model.relay, protocol: 'agent-net' as const };
+    const udp = render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'udp', rttMs: 9 } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.online · settings.remoteControl.v2.relayTransport.udp · 9 ms')).toBeTruthy();
+    udp.unmount();
+
+    const ws = render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'websocket' } }} linkStatus="online" issue={null} standby={false} />);
+    expect(screen.getByText('settings.devices.linkStatus.online · settings.remoteControl.v2.relayTransport.websocket · 20 ms')).toBeTruthy();
+    ws.unmount();
+
+    render(<HubNodePopover model={{ ...model, relay: { ...relay, transport: 'udp' } }} linkStatus="connecting" issue={null} standby={false} />);
     expect(screen.getByText('settings.devices.linkStatus.connecting')).toBeTruthy();
   });
 });

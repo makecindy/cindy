@@ -61,13 +61,13 @@ describe('mobileHomeListCache', () => {
     vi.useRealTimers();
   });
 
-  it('retains lane ownership and creator avatars across cold starts', async () => {
+  it('retains lane ownership, creator avatars and snooze deadlines across cold starts', async () => {
     const { getCachedHomeListSnapshot, cacheHomeListSnapshot } = await import('@/session/mobileHomeListCache');
     const companion = { id: 'cindy-default', role: 'routine' };
     const taskTeammate = { id: 'cindy-default', name: 'Cindy', avatar: { kind: 'asset', value: 'cindy://avatar/preset/cindy', fallbackText: 'C' } };
-    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate })]);
+    await cacheHomeListSnapshot(USER_ID, [makeSession('routine', 'mac', { source: 'bot', companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) })]);
     const [cached] = await getCachedHomeListSnapshot(USER_ID);
-    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate });
+    expect(cached.sessions[0]).toMatchObject({ companion, taskTeammate, snoozedUntil: isoAt(5), snoozedAt: isoAt(3) });
   });
 
   it('round-trips a grouped device snapshot from a flat stamped session list', async () => {

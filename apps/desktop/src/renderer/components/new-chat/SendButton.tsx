@@ -1,4 +1,4 @@
-import { forwardRef, useRef } from 'react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AudioLines, Check } from 'lucide-react';
 
@@ -30,10 +30,19 @@ export function CreateAgentSendIcon() {
 }
 
 /**
- * Send / Stop button
+ * Covers the settle choreography in globals.css (`.composer-send[data-settling]`): the stop
+ * square leaves, the plane glides back after --motion-instant, the button dims after
+ * --motion-enter, and the working glow keeps turning while it fades out.
+ */
+const SETTLE_MS = 700;
+
+/**
+ * Send / Stop button — 30×30 circle (DESIGN.md §14.4「Desktop composer send / stop」).
  *
- * Send (idle): 28×28 圆形（9999）, bg #262626/#fff, arrow-up icon 白/黑
- * Stop (streaming):复用 Send 壳样式,仅把内容换成 10×10 圆角 1.5 的停止方块
+ * Send: filled paper plane on the neutral-inverse fill; nothing to send keeps 40% opacity.
+ * Stop (streaming): the plane flies out, a 10×10 square lands, and the registered working
+ * glow (`.composer-send-beam`) turns around the edge. When work ends the button settles back.
+ * Motion lives in globals.css so durations stay on the motion tokens.
  */
 export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(function SendButton(
   {
@@ -44,26 +53,41 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
     ariaLabel,
     action = 'send',
     companionVoice = false,
-    visualVariant = 'default',
   },
   ref,
 ) {
   const { t } = useTranslation();
-  const isCreateAgentVariant = visualVariant === 'create-agent';
   const isVoice = action === 'voice' && !isStreaming;
   const currentAction = isStreaming ? 'stop' : action;
   const pressedAction = useRef<typeof currentAction | null>(null);
-  const iconTransition = companionVoice
-    ? 'transition-[opacity,transform] duration-[var(--motion-enter)] ease-[var(--motion-ease-move)] motion-reduce:transform-none'
-    : 'transition-[opacity,transform] duration-[var(--motion-fast,150ms)] ease-[var(--motion-ease-out)]';
-  const hiddenIcon = companionVoice ? 'scale-[0.55] opacity-0' : 'scale-75 opacity-0';
+  // Derived during render so data-settling lands in the same commit that clears
+  // streaming: the glow's animation must not detach for a frame and jump.
+  const [prevStreaming, setPrevStreaming] = useState(isStreaming);
+  const [settling, setSettling] = useState(false);
+  if (prevStreaming !== isStreaming) {
+    setPrevStreaming(isStreaming);
+    setSettling(prevStreaming && !isStreaming);
+  }
+  useEffect(() => {
+    if (!settling) return undefined;
+    const timer = window.setTimeout(() => setSettling(false), SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [settling]);
+  const iconTransition =
+    'transition-[opacity,transform] duration-[var(--motion-enter)] ease-[var(--motion-ease-move)] motion-reduce:transform-none';
+  const hiddenIcon = 'scale-[0.55] opacity-0';
   return (
     <button
       ref={ref}
       type="button"
       disabled={disabled}
-      // A draft can change between press and release (ASR, attachments or keyboard).
-      // Never turn that press into a different action, especially Send -> Start call.
+      data-send-action={currentAction}
+      data-companion={companionVoice ? 'true' : undefined}
+      data-settling={settling ? 'true' : undefined}
+      data-release={highlighted && !disabled && !isStreaming ? 'true' : undefined}
+      // A draft can change between press and release (ASR, attachments, keyboard or
+      // the turn ending). Never turn that press into a different action, such as
+      // Stop -> Send or Send -> Start call.
       onPointerDown={() => {
         pressedAction.current = currentAction;
       }}
@@ -72,9 +96,10 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
       }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
-          // Holding Enter across a successful send must not start a call when the
-          // now-empty composer changes the focused button back to its idle action.
-          if (companionVoice && event.repeat) {
+          // Holding Enter across a successful send must not fire the action the shared button
+          // turns into (start a call, or Stop a turn the press just started or queued) when
+          // the composer state changes the focused button's action under the key.
+          if (event.repeat) {
             event.preventDefault();
             return;
           }
@@ -87,25 +112,15 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
       onClick={() => {
         const initialAction = pressedAction.current;
         pressedAction.current = null;
-        if (companionVoice && initialAction !== null && initialAction !== currentAction) return;
+        if (initialAction !== null && initialAction !== currentAction) return;
         onClick();
       }}
       className={cn(
-        // transform 进过渡集:承载 active 按压缩放(DESIGN.md §14.4 按压原型)。
-        'relative flex shrink-0 items-center justify-center rounded-full transition-[color,background-color,transform]',
+        'composer-send relative flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--chat-input-bg)]',
-        !disabled && !companionVoice && 'active:scale-[0.98]',
-        // create-agent(新建对话框)send 与会话内共用 send-btn-* token,三态(hover/pressed/disabled)一致;
-        // 仅尺寸随所在工具条密度不同(新建对话框行高 30px,会话内 28px)。
-        isCreateAgentVariant || companionVoice ? 'h-[30px] w-[30px]' : 'h-7 w-7',
-        companionVoice
-          ? 'group/composer-action'
-          : 'bg-[var(--send-btn-bg)] text-[var(--send-btn-icon)]',
-        !disabled &&
-          !companionVoice &&
-          'hover:bg-[var(--send-btn-hover-bg)] active:bg-[var(--send-btn-pressed-bg)]',
-        highlighted && !disabled && !isStreaming && 'opacity-85',
-        disabled && !isStreaming && 'cursor-not-allowed opacity-40',
+        companionVoice && 'group/composer-action',
+        disabled && 'cursor-not-allowed',
+        disabled && !isStreaming && 'opacity-40',
       )}
       aria-label={
         ariaLabel ??
@@ -116,7 +131,7 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
             : t('newChat.sendButton.send'))
       }
     >
-      {companionVoice && (
+      {companionVoice ? (
         <>
           <span
             aria-hidden
@@ -138,9 +153,21 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
             )}
           />
         </>
+      ) : (
+        // Press retracts only this fill by 1px; icon and hit region stay (§4 Button feedback).
+        <span aria-hidden className="composer-send-face" />
       )}
-      {/* Stable HTML layers keep transitions interruptible. The approved companion
-          call/send swap uses 250ms and 55% → 100%; ordinary send/stop stays 150ms. */}
+      <span aria-hidden className="composer-send-beam" data-active={isStreaming ? 'true' : undefined}>
+        <span className="composer-send-beam-glow">
+          <span className="composer-send-beam-counter" />
+        </span>
+        <span className="composer-send-beam-rim">
+          <span className="composer-send-beam-counter" />
+          <span className="composer-send-beam-highlight" />
+        </span>
+        <span className="composer-send-beam-bloom" />
+      </span>
+      <span aria-hidden className="composer-send-ring" />
       <span className="relative grid h-3.5 w-3.5 place-items-center" aria-hidden>
         {companionVoice && (
           <span
@@ -154,11 +181,8 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
           </span>
         )}
         <span
-          className={cn(
-            'col-start-1 row-start-1 flex items-center justify-center text-[var(--send-btn-icon)]',
-            iconTransition,
-            isStreaming || isVoice ? hiddenIcon : 'scale-100 opacity-100',
-          )}
+          data-send-icon="plane"
+          className="col-start-1 row-start-1 flex items-center justify-center text-[var(--send-btn-icon)]"
         >
           {action === 'save' ? (
             <Check className="h-4 w-4" strokeWidth={2.4} />
@@ -167,11 +191,9 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
           )}
         </span>
         <span
-          className={cn(
-            'col-start-1 row-start-1 block h-[10px] w-[10px] rounded-[1.5px] bg-[var(--send-btn-icon)]',
-            iconTransition,
-            isStreaming ? 'scale-100 opacity-100' : hiddenIcon,
-          )}
+          // design: intrinsic-geometry — the stop glyph's softened corner, not a control frame
+          data-send-icon="stop"
+          className="col-start-1 row-start-1 block h-[10px] w-[10px] rounded-[1.5px] bg-[var(--send-btn-icon)]"
         />
       </span>
     </button>

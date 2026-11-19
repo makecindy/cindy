@@ -19,9 +19,9 @@ const invoke = vi.fn();
 const payload = (states: unknown[] | null = ['available', 'needs-update']) => ({
   providers: [{ id: 'anthropic', groupSize: 2, ...(states ? { groupStatus: states } : {}) }],
 });
-const element = (deviceId = 'share:one') => (
+const element = (deviceId = 'share:one', compact = false) => (
   <I18nextProvider i18n={i18n}>
-    <SharedProviderGroupStatus key={deviceId} deviceId={deviceId} providerId="anthropic" initialSize={2} />
+    <SharedProviderGroupStatus key={deviceId} deviceId={deviceId} providerId="anthropic" initialSize={2} compact={compact} />
   </I18nextProvider>
 );
 
@@ -71,6 +71,14 @@ describe('received provider group status', () => {
     expect(screen.getByText('忙碌，仍可接任务')).toBeTruthy();
     expect(screen.getByText('状态未知')).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/SECRET NAME|777/);
+  });
+
+  it('does not promise capacity or poll while browsing a busy shared group in the picker', async () => {
+    invoke.mockResolvedValue(payload(['busy', 'cooling']));
+    await act(async () => { render(element('share:one', true)); });
+    expect(screen.getByRole('status').textContent).toBe(zhCN.providerShare.received.groupStatus.unconfirmed);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it('clears stale availability after a failed refresh and allows a retry', async () => {

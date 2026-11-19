@@ -55,6 +55,7 @@ import type { TabKindHostContext } from '../../types';
 import { BrowserChrome, type BrowserChromeHandle } from './BrowserChrome';
 import { BrowserCommentPopover } from './BrowserCommentPopover';
 import { useBrowserComment } from './useBrowserComment';
+import { useHiddenPageAudioMute } from './useHiddenPageAudioMute';
 import { useLocalHtmlAutoReload } from './useLocalHtmlAutoReload';
 import type { WebBrowserState } from './index';
 
@@ -121,6 +122,8 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     nativeFocusRequest,
   );
   const browser = isNativePopup ? nativeBrowser : webviewBrowser;
+  // 页面看不见（切走页签／任务、收起侧栏、最小化窗口）时静音，重新可见时恢复（#9308）。
+  useHiddenPageAudioMute(webviewBrowser.webview, tabVisible);
   const lastNavigatedWrapperRef = useRef<HTMLDivElement | null>(null);
   const stateUrlRef = useRef(state.url);
   const browserUrlRef = useRef(browser.url);

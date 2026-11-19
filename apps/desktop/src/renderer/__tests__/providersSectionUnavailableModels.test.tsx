@@ -674,6 +674,71 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(screen.queryByRole('switch', { name: 'Custom model' })).toBeNull();
   });
 
+  // #9619: saved connection refresh must consume structured failures instead of
+  // losing them in continue. Real component/button, in-memory IPC responses (unit).
+  // Minimal failure: all configured runtimes reject discovery. Existing coverage
+  // checked retry/saving but not the reason or OAuth recovery shown to the user.
+  it.each([
+    ['oauth', 'AUTH_INVALID', 'settings.providers.models.refreshReconnect'],
+    ['apiKey', 'AUTH_INVALID', 'providerError.AUTH_INVALID'],
+    ['oauth', 'UPSTREAM_ERROR', 'providerError.UPSTREAM_ERROR'],
+    ['oauth', 'UPSTREAM_UNREACHABLE', 'providerError.UPSTREAM_UNREACHABLE'],
+  ] as const)('explains %s refresh failure %s and allows recovery', async (method, code, message) => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    providerSnapshotState.customOverride = {
+      id: 'copilot-saved', name: 'Copilot', source: 'user', agents: ['codex'], connected: true,
+      auth: method === 'oauth' ? { method, oauth } : { method },
+      routing: { codex: { upstream: 'https://api.enterprise.githubcopilot.com', authStrategy: 'oauth-token' } },
+      models: { codex: [{ id: 'old-model', name: 'Old', contextWindow: 64000, efforts: [], defaultEffort: null, defaultEnabled: false }] },
+    };
+    providerSnapshotState.order = ['copilot-saved', 'xd'];
+    const fetchModels = vi.fn().mockResolvedValueOnce({ ok: false, code, status: 401, detail: 'synthetic-secret' })
+      .mockResolvedValue({ ok: true, models: [{ id: 'new-model', name: 'New' }] });
+    Object.assign(window.electronAPI.maker, { fetchProviderModels: fetchModels });
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    expect(toast.error).toHaveBeenCalledWith(message);
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain('synthetic-secret');
+    const refresh = screen.getByRole('button', { name: 'settings.providers.models.refreshAria' });
+    expect(refresh.hasAttribute('disabled')).toBe(false);
+    await act(async () => { fireEvent.click(refresh); });
+    expect(updateCustomProvider).toHaveBeenCalledOnce();
+    expect(vi.mocked(updateCustomProvider).mock.calls[0][0].runtimes.codex!.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'old-model', defaultEnabled: false }), expect.objectContaining({ id: 'new-model' }),
+    ]));
+    expect(toast.success).toHaveBeenCalledWith('settings.providers.models.refreshAdded');
+  });
+
+  it.each([false, true])('preserves multi-runtime refresh semantics (partial success: %s)', async partialSuccess => {
+    const oauth = providerPresetOAuth('github-copilot')!;
+    const model = { id: 'old-model', name: 'Old', contextWindow: 64000, efforts: [], defaultEffort: null, defaultEnabled: false };
+    const route = { upstream: 'https://api.enterprise.githubcopilot.com', authStrategy: 'oauth-token' as const };
+    providerSnapshotState.customOverride = {
+      id: 'copilot-mixed', name: 'Copilot', source: 'user', agents: ['codex', 'pi'], connected: true,
+      auth: { method: 'oauth', oauth }, routing: { codex: route, pi: route },
+      models: { codex: [model], pi: [model] },
+    };
+    providerSnapshotState.order = ['copilot-mixed', 'xd'];
+    Object.assign(window.electronAPI.maker, { fetchProviderModels: vi.fn()
+      .mockResolvedValueOnce({ ok: false, code: 'UPSTREAM_ERROR', status: 503 })
+      .mockResolvedValueOnce(partialSuccess ? { ok: true, models: [{ id: 'new-model', name: 'New' }] }
+        : { ok: false, code: 'AUTH_INVALID', status: 401 }) });
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    if (partialSuccess) {
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(toast.success).toHaveBeenCalledWith('settings.providers.models.refreshAdded');
+      expect(updateCustomProvider).toHaveBeenCalledOnce();
+      const saved = vi.mocked(updateCustomProvider).mock.calls[0][0];
+      expect(saved.runtimes.codex!.models).toEqual([expect.objectContaining({ id: 'old-model', defaultEnabled: false })]);
+      expect(saved.runtimes.pi!.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'new-model' })]));
+    } else {
+      expect(toast.error).toHaveBeenCalledWith('settings.providers.models.refreshReconnect');
+      expect(updateCustomProvider).not.toHaveBeenCalled();
+    }
+  });
+
   it.each([
     ['openrouter-existing', 'oauth', true],
     ['openrouter-new', 'oauth', false],
