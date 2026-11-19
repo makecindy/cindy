@@ -19403,6 +19403,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "このターンの実行に失敗しました。",
+    "blockedReasonUnknown": "停止した具体的な理由は示されていません。",
+    "blockedNextStep": "このタスクで情報を補足できます。原因に対処した後、「{{action}}」で続行できます。",
     "status": {
       "active": "目標を推進中",
       "paused": "一時停止",

@@ -19403,6 +19403,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "此輪未成。",
+    "blockedReasonUnknown": "受阻之由未詳。",
+    "blockedNextStep": "可於此任務補述詳情；解其阻後，按「{{action}}」續行。",
     "status": {
       "active": "方趨目標",
       "paused": "已暫止",

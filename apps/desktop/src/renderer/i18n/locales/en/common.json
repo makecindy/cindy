@@ -19479,6 +19479,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "This turn failed.",
+    "blockedReasonUnknown": "No specific reason was provided for this block.",
+    "blockedNextStep": "You can add information in this task. After addressing the cause, click “{{action}}” to continue.",
     "status": {
       "active": "Advancing goal",
       "paused": "Paused",

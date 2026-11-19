@@ -19403,6 +19403,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "本轮执行失败。",
+    "blockedReasonUnknown": "未提供具体受阻原因。",
+    "blockedNextStep": "可在当前任务中补充信息；处理受阻原因后，点击“{{action}}”继续。",
     "status": {
       "active": "目标推进中",
       "paused": "已暂停",
