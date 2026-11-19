@@ -6635,6 +6635,8 @@ for (const outcome of ['deferred', 'failed']) {
     const h = await waitForOtherTasksCredentials(t, { onSessionSettled: hooks.onSessionSettled, afterTurnSettled: hooks.afterTurnSettled });
     await finishCredentialBlocker(h);
     assert.deepEqual(notifications, ['blocker']);
+    // The notification only schedules dispatch. The retry still checks its working directory.
+    await settleUntil(() => h.maker.getSession('waiter')?.sent.length, 'the waiting input reaches its engine');
     assert.deepEqual(h.maker.getSession('waiter')?.sent, ['needs the switch']);
   });
 }
@@ -8536,6 +8538,7 @@ async function finishCredentialBlocker(h) {
 test('credential switch: a task waiting for another task\'s turn sends once that turn ends', async t => {
   const h = await waitForOtherTasksCredentials(t);
   await finishCredentialBlocker(h);
+  await settleUntil(() => h.maker.getSession('waiter')?.sent.length, 'the waiting input reaches its engine');
   assert.equal(h.maker.getSession('waiter')?.sent.length, 1, 'the waiting input reaches its engine when the blocking turn ends');
 });
 
