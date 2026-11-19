@@ -49,6 +49,7 @@ export function GiftCardSheet({ visible, code, invalidLink, onClose, onClosed, o
   const problemText = !problem ? null
     : problem.reason === 'WRONG_REGION'
       ? t((problem.code ? giftCardCodeRegion(problem.code) : null) === 'cn' ? 'giftCard.errors.wrongRegionCn' : 'giftCard.errors.wrongRegionGlobal')
+      : problem.reason === 'VOIDED' && problem.purchased ? t('giftCard.errors.voidedPurchased')
       : t(PROBLEM_KEYS[problem.reason]);
 
   const title = step.kind === 'confirm' || step.kind === 'redeeming' ? t('giftCard.confirmTitle')

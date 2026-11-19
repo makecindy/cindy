@@ -19801,6 +19801,7 @@
         "alreadyClaimed": "Diese Geschenkkarte wurde bereits eingelöst.",
         "expired": "Diese Geschenkkarte kann nicht mehr eingelöst werden. Die Frist ist abgelaufen.",
         "voided": "Diese Geschenkkarte wurde für ungültig erklärt.",
+        "voidedPurchased": "Diese Geschenkkarte kann derzeit nicht eingelöst werden.",
         "rateLimited": "Zu viele Versuche. Versuche es später erneut.",
         "failed": "Die Geschenkkarte konnte nicht eingelöst werden. Versuche es später erneut.",
         "personalRequired": "Geschenkkarten können nur mit einem persönlichen Konto eingelöst werden."
@@ -20152,7 +20153,8 @@
           "claimedBy": "Von {{name}} eingelöst",
           "claimed": "Eingelöst",
           "redeemedByYou": "Von dir eingelöst",
-          "refunded": "Erstattet"
+          "refunded": "Erstattet",
+          "onHold": "In Bearbeitung, derzeit nicht verfügbar"
         },
         "meta": {
           "purchased": "Gekauft am {{date}} · endet auf {{tail}}",

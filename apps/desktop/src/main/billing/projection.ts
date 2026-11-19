@@ -800,6 +800,7 @@ const PURCHASED_GIFT_CARD_STATUSES = new Set<BillingPurchasedGiftCardStatus>([
   'CLAIMED',
   'REDEEMED_BY_YOU',
   'REFUNDED',
+  'ON_HOLD',
 ]);
 
 /** 礼品卡接口与 Preview DTO 一致用大写币种（CNY / USD），计费接口用小写；客户端统一成小写。 */

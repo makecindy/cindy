@@ -19986,6 +19986,7 @@
         "alreadyClaimed": "Esta tarjeta de regalo ya se ha canjeado.",
         "expired": "Esta tarjeta de regalo ya no se puede canjear porque venció su plazo.",
         "voided": "Esta tarjeta de regalo se ha anulado.",
+        "voidedPurchased": "Esta tarjeta de regalo no se puede canjear por ahora.",
         "rateLimited": "Demasiados intentos. Inténtalo de nuevo más tarde.",
         "failed": "No se pudo canjear la tarjeta de regalo. Inténtalo de nuevo más tarde.",
         "personalRequired": "Las tarjetas de regalo solo se pueden canjear con una cuenta personal."
@@ -20343,7 +20344,8 @@
           "claimedBy": "Canjeada por {{name}}",
           "claimed": "Canjeada",
           "redeemedByYou": "Canjeada por ti",
-          "refunded": "Reembolsada"
+          "refunded": "Reembolsada",
+          "onHold": "En proceso, no disponible por ahora"
         },
         "meta": {
           "purchased": "Comprada el {{date}} · termina en {{tail}}",

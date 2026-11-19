@@ -38,6 +38,7 @@ const cards: BillingPurchasedGiftCard[] = [
   card('card_3', { orderId: 'order_bell', faceCode: 'bell', amount: '100', codeTail: 'Q8TR', status: 'CLAIMED', claimedAt: '2026-11-16T09:30:00.000Z', claimedByName: 'Alex', purchasedAt: '2026-11-15T09:30:00.000Z' }),
   card('card_4', { orderId: 'order_leap', faceCode: 'leap', codeTail: '2HNW', status: 'REDEEMED_BY_YOU', claimedAt: '2026-11-12T09:30:00.000Z', purchasedAt: '2026-11-12T09:00:00.000Z' }),
   card('card_5', { orderId: 'order_cindy', faceCode: 'cindy', amount: '200', codeTail: 'Z7PA', status: 'REFUNDED', purchasedAt: '2026-11-10T09:00:00.000Z' }),
+  card('card_6', { orderId: 'order_held', faceCode: 'bell', amount: '50', codeTail: 'K4RV', status: 'ON_HOLD', purchasedAt: '2026-11-09T09:00:00.000Z' }),
 ];
 const history: BillingPaymentHistoryRecord[] = [{
   recordId: 'GIFT_CARD:order_new', sourceType: 'GIFT_CARD', quantity: 2, sourceId: 'order_new',

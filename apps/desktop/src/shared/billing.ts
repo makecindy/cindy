@@ -374,10 +374,11 @@ export type BillingGiftCardPurchasePolicy = {
 
 /**
  * 我买的卡的状态。CLAIMED：被别人领走；REDEEMED_BY_YOU：买家自己兑换了；
- * REFUNDED：因退款作废。
+ * REFUNDED：钱已退回（退款成功或拒付败诉），卡作废；ON_HOLD：退款或拒付还在处理，卡暂时
+ * 不能用，之后可能恢复。
  */
 export type BillingPurchasedGiftCardStatus =
-  'UNCLAIMED' | 'CLAIMED' | 'REDEEMED_BY_YOU' | 'REFUNDED';
+  'UNCLAIMED' | 'CLAIMED' | 'REDEEMED_BY_YOU' | 'REFUNDED' | 'ON_HOLD';
 
 export type BillingPurchasedGiftCard = {
   cardId: string;

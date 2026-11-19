@@ -19724,6 +19724,7 @@
         "alreadyClaimed": "이미 다른 사람이 받은 기프트 카드입니다.",
         "expired": "이 기프트 카드는 받기 기한이 지났습니다.",
         "voided": "이 기프트 카드는 무효화되었습니다.",
+        "voidedPurchased": "이 기프트 카드는 지금 받을 수 없습니다.",
         "rateLimited": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도하세요.",
         "failed": "기프트 카드를 받지 못했습니다. 잠시 후 다시 시도하세요.",
         "personalRequired": "기프트 카드는 개인 계정으로만 받을 수 있습니다."
@@ -20069,7 +20070,8 @@
           "claimedBy": "{{name}} 님이 받음",
           "claimed": "받음",
           "redeemedByYou": "직접 사용함",
-          "refunded": "환불됨"
+          "refunded": "환불됨",
+          "onHold": "처리 중, 지금은 사용할 수 없음"
         },
         "meta": {
           "purchased": "{{date}} 구매 · 끝자리 {{tail}}",

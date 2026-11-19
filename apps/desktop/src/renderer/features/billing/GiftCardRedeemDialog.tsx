@@ -24,8 +24,11 @@ type Step =
   /** credit 为 null 表示这张卡早先已被当前账号领取，本次没有新入账。 */
   | { kind: 'done'; card: BillingGiftCard; credit: BillingGiftCardCredit | null };
 
-/** FAILED 是网络或服务故障；其余是服务端给出的卡片状态。 */
-type Failure = { reason: BillingGiftCardFailure | 'FAILED'; code: string | null };
+/**
+ * FAILED 是网络或服务故障；其余是服务端给出的卡片状态。purchased：已知这是用户买的卡——它作废
+ * 可能只是退款或拒付还在处理，之后还会恢复，所以只说目前不能领取。
+ */
+type Failure = { reason: BillingGiftCardFailure | 'FAILED'; code: string | null; purchased?: boolean };
 
 interface GiftCardRedeemDialogProps {
   open: boolean;
@@ -88,7 +91,9 @@ export function GiftCardRedeemDialog({
         return;
       }
       const unavailable = cardFailure(result.card);
-      if (unavailable) setFailure({ reason: unavailable, code });
+      if (unavailable) {
+        setFailure({ reason: unavailable, code, purchased: result.card.destination === 'PURCHASED' });
+      }
       else setStep({ kind: 'confirm', code, card: result.card });
     } catch {
       if (request === requestRef.current) setFailure({ reason: 'FAILED', code });
@@ -125,7 +130,7 @@ export function GiftCardRedeemDialog({
       if (!result.ok) {
         // 确认期间卡片状态变了（被别人领走、作废或过期）：回到输入并说明原因。
         setStep({ kind: 'input' });
-        setFailure({ reason: result.reason, code });
+        setFailure({ reason: result.reason, code, purchased: card.destination === 'PURCHASED' });
         return;
       }
       setStep({ kind: 'done', card: result.card, credit: result.credit });
@@ -161,6 +166,9 @@ export function GiftCardRedeemDialog({
       PERSONAL_REQUIRED: 'billing.giftCard.errors.personalRequired',
       FAILED: 'billing.giftCard.errors.failed',
     };
+    if (failure.reason === 'VOIDED' && failure.purchased) {
+      return t('billing.giftCard.errors.voidedPurchased');
+    }
     return t(keys[failure.reason]);
   })();
 

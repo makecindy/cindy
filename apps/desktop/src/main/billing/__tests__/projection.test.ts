@@ -1139,6 +1139,9 @@ describe('gift card purchase projection', () => {
     ]);
     expect(list.nextCursor).toBe('next.page_1');
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'SOLD' })], nextCursor: null })).toThrow();
+    // 退款或拒付还在处理的卡（ON_HOLD）照常读出。
+    expect(projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'ON_HOLD' })], nextCursor: null })
+      .cards.map((card) => card.status)).toEqual(['ON_HOLD']);
   });
 
   // 支持发信的服务端每张卡都带 email 字段（没发过为 null），旧服务端没有这个字段时界面不提供

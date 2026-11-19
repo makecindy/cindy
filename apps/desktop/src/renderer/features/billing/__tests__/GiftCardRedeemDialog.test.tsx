@@ -108,6 +108,28 @@ describe('GiftCardRedeemDialog', () => {
     await screen.findByText('billing.giftCard.doneDescriptionPurchased');
   });
 
+  // 买来的卡作废可能只是退款或拒付还在处理，之后还会恢复：只说目前不能领取，不说已作废。
+  it('tells the recipient a voided bought card cannot be redeemed right now', async () => {
+    const purchased: BillingGiftCard = {
+      ...card, destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+    };
+    api.previewGiftCard.mockResolvedValue({ ok: true, card: { ...purchased, status: 'VOIDED' } });
+    open(CODE);
+    await screen.findByText('billing.giftCard.errors.voidedPurchased');
+    expect(screen.queryByText('billing.giftCard.errors.voided')).toBeNull();
+  });
+
+  it('says so when a bought card is voided while the recipient confirms', async () => {
+    api.previewGiftCard.mockResolvedValue({
+      ok: true, card: { ...card, destination: 'PURCHASED', claimDeadline: null, validityDays: null },
+    });
+    api.redeemGiftCard.mockResolvedValue({ ok: false, reason: 'VOIDED' });
+    open(CODE);
+    await screen.findByText('billing.giftCard.confirmTitle');
+    click('billing.giftCard.confirmAction');
+    await screen.findByText('billing.giftCard.errors.voidedPurchased');
+  });
+
   it('goes straight to confirmation for a code handed over by an app link', async () => {
     api.previewGiftCard.mockResolvedValue({ ok: true, card });
     open(CODE);

@@ -19986,6 +19986,7 @@
         "alreadyClaimed": "Cette carte cadeau a déjà été utilisée.",
         "expired": "Cette carte cadeau ne peut plus être utilisée : sa date limite est dépassée.",
         "voided": "Cette carte cadeau a été annulée.",
+        "voidedPurchased": "Cette carte cadeau ne peut pas être utilisée pour le moment.",
         "rateLimited": "Trop de tentatives. Réessayez plus tard.",
         "failed": "Impossible d’utiliser la carte cadeau. Réessayez plus tard.",
         "personalRequired": "Les cartes cadeaux ne peuvent être utilisées qu’avec un compte personnel."
@@ -20343,7 +20344,8 @@
           "claimedBy": "Récupérée par {{name}}",
           "claimed": "Récupérée",
           "redeemedByYou": "Utilisée par vous",
-          "refunded": "Remboursée"
+          "refunded": "Remboursée",
+          "onHold": "En cours de traitement, indisponible pour le moment"
         },
         "meta": {
           "purchased": "Achetée le {{date}} · se termine par {{tail}}",

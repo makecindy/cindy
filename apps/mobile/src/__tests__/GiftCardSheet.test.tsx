@@ -172,6 +172,23 @@ it('names the state of a card that can no longer be redeemed', async () => {
   }
 });
 
+// 买来的卡作废可能只是退款或拒付还在处理，之后还会恢复：只说目前不能领取，不说已作废。
+it('tells the recipient a voided bought card cannot be redeemed right now', async () => {
+  const bought = { ...card, destination: 'PURCHASED' as const, claimDeadline: null, validityDays: null };
+  h.preview.mockResolvedValue({ ok: true, card: { ...bought, status: 'VOIDED' } });
+  props = { ...props, code: CODE, visible: false }; await render();
+  props = { ...props, visible: true }; await render();
+  expect(node('problem')!.textContent).toBe('giftCard.errors.voidedPurchased');
+
+  // 确认期间被作废也一样。
+  h.preview.mockResolvedValue({ ok: true, card: bought });
+  h.redeem.mockResolvedValue({ ok: false, reason: 'VOIDED' });
+  props = { ...props, visible: false }; await render();
+  props = { ...props, visible: true }; await render();
+  await click('primary');
+  expect(node('problem')!.textContent).toBe('giftCard.errors.voidedPurchased');
+});
+
 it('stays on confirmation when the redeem outcome is unknown, so retrying is safe', async () => {
   h.preview.mockResolvedValue({ ok: true, card });
   h.redeem.mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce({

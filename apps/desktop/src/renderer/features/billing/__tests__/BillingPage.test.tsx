@@ -1151,6 +1151,23 @@ describe('BillingPage remote catalog rendering', () => {
     }
   });
 
+  // 退款或拒付还在处理的卡（ON_HOLD）之后可能恢复：显示「处理中，暂不可用」，不给取码、发信等操作，
+  // 也不说已退款。
+  it('shows a card held by a pending refund or chargeback as processing, without actions', async () => {
+    const held = {
+      cardId: 'card_held', orderId: 'order_gift', faceCode: 'cat', amount: '100', currency: 'cny',
+      senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'ON_HOLD' as const, claimedAt: null,
+      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
+    };
+    window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => ({
+      cards: [held], nextCursor: null, emailSupported: true,
+    }));
+    render(<BillingPage />);
+    expect(await screen.findByText(/billing\.giftCardPurchase\.list\.status\.onHold/)).toBeTruthy();
+    expect(screen.queryByText(/billing\.giftCardPurchase\.list\.status\.refunded/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /billing\.giftCardPurchase\.actions\./ })).toBeNull();
+  });
+
   // 付款成功后发卡结果可能还没读到（列表请求失败，或先于发卡可见）：按退避有限次重读，读到这一单的卡
   // 就显示；一直没有才说「稍后会出现在我买的礼品卡」。关闭弹窗后不再读。
   it.each([

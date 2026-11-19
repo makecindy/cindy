@@ -19986,6 +19986,7 @@
         "alreadyClaimed": "Este cartão de oferta já foi utilizado.",
         "expired": "Este cartão de oferta já não pode ser utilizado porque o prazo terminou.",
         "voided": "Este cartão de oferta foi anulado.",
+        "voidedPurchased": "Este cartão de oferta não pode ser utilizado de momento.",
         "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
         "failed": "Não foi possível utilizar o cartão de oferta. Tente novamente mais tarde.",
         "personalRequired": "Os cartões de oferta só podem ser utilizados com uma conta pessoal."
@@ -20343,7 +20344,8 @@
           "claimedBy": "Utilizado por {{name}}",
           "claimed": "Utilizado",
           "redeemedByYou": "Utilizado por si",
-          "refunded": "Reembolsado"
+          "refunded": "Reembolsado",
+          "onHold": "Em processamento, indisponível de momento"
         },
         "meta": {
           "purchased": "Comprado a {{date}} · termina em {{tail}}",
