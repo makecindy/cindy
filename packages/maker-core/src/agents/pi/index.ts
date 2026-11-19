@@ -912,13 +912,18 @@ function gatewayThinkingLevelMap(
   if (supported.size === 0) {
     return bundled && Object.keys(bundled).length > 0 ? { ...bundled } : undefined;
   }
-  return Object.fromEntries(
-    PI_THINKING_LEVEL_MAP_KEYS.map((level) => {
-      if (!supported.has(level)) return [level, null];
-      const bundledValue = bundled?.[level];
-      return [level, typeof bundledValue === 'string' ? bundledValue : level];
-    }),
-  );
+  return {
+    // Off is a separate capability, not an effort. Pi treats a missing off as
+    // supported, so dropping explicit null can produce an invalid budget=0.
+    ...(bundled?.off !== undefined ? { off: bundled.off } : {}),
+    ...Object.fromEntries(
+      PI_THINKING_LEVEL_MAP_KEYS.map((level) => {
+        if (!supported.has(level)) return [level, null];
+        const bundledValue = bundled?.[level];
+        return [level, typeof bundledValue === 'string' ? bundledValue : level];
+      }),
+    ),
+  };
 }
 
 /**
