@@ -7190,6 +7190,12 @@ export class ClaudeCodeAgent extends BaseAgent {
             throw new Error('Claude input queue is closed');
           }
           workerDispatchInputEpoch += 1;
+          // Old SDK work can arrive during asynchronous content preparation,
+          // after beginNewTurn cleared these fields. Acceptance owns the new
+          // input, so discard that speculative dispatch state once more.
+          turnState.completedWorkerDispatch = false;
+          turnState.workerDispatchNeedsReport = false;
+          turnState.workerDispatchTurnToolUseIds?.clear();
           userInputAccepted = true;
           rollbackUnacceptedFork = undefined;
           if (unacceptedForks.delete(q) && sdkSessionId) {

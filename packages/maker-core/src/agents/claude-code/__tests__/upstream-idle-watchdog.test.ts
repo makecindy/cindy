@@ -32,6 +32,15 @@ const sdkMock = vi.hoisted(() => ({
   query: vi.fn(),
 }));
 
+const imageResizerMock = vi.hoisted(() => ({
+  process: vi.fn(async (p: string) => p),
+  validateBuffer: vi.fn(async () => true),
+}));
+
+vi.mock('../../shared/image-resizer.js', () => ({
+  getDefaultImageResizer: () => imageResizerMock,
+}));
+
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   forkSession: sdkMock.forkSession,
   query: sdkMock.query,
@@ -695,6 +704,53 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
       await session.handle.close();
       await session.collected;
       vi.useRealTimers();
+    }
+  });
+
+  // #9221: old tool events may arrive after beginNewTurn while attachment
+  // preparation suspends send. Verify successful input acceptance clears them,
+  // while a genuinely fresh handoff after acceptance still ends normally.
+  it.each(['during-preparation', 'after-acceptance'] as const)('owns dispatch state at send acceptance (%s)', async (timing) => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let releaseResize!: (value: string) => void;
+    let sending: Promise<void> | undefined;
+    const emitDispatch = () => {
+      session.stream.emit({ type: 'assistant', message: { content: [{
+        type: 'tool_use', id: 'send-preparation-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      session.stream.emit(userToolResult('send-preparation-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+    };
+    try {
+      await session.handle.send({ type: 'user', content: 'old task' });
+      await session.handle.abort();
+      imageResizerMock.process.mockImplementationOnce(() => new Promise<string>(resolve => { releaseResize = resolve; }));
+      const image = path.join(os.tmpdir(), 'nonexistent-9221-send-input.png');
+      sending = session.handle.send({ type: 'user', content: [{ type: 'image', path: image }] });
+      await pumpUntil(() => typeof releaseResize === 'function', 'new send content preparation pending');
+      if (timing === 'during-preparation') {
+        emitDispatch();
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_result_full'), 'old dispatch repopulated during preparation');
+      }
+      releaseResize(image);
+      await sending;
+      session.stream.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      if (timing === 'after-acceptance') emitDispatch();
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'accepted-send' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'accepted send ended');
+      const done = session.events.find(e => e.type === 'done');
+      expect((done?.data as { silentStop?: boolean }).silentStop).toBe(timing === 'during-preparation' ? true : undefined);
+    } finally {
+      releaseResize?.(path.join(os.tmpdir(), 'nonexistent-9221-send-input.png'));
+      await sending?.catch(() => undefined);
+      session.stream.end();
+      await session.handle.close();
+      await session.collected;
     }
   });
 
