@@ -20356,14 +20356,36 @@
         "copied": "Copiado",
         "more": "Mais ações",
         "copyCode": "Copiar código",
-        "redeemSelf": "Utilizar eu"
+        "redeemSelf": "Utilizar eu",
+        "sendEmail": "Enviar por email"
       },
       "toasts": {
         "linkCopied": "Ligação de resgate copiada",
         "codeCopied": "Código copiado",
         "copyFailed": "Não foi possível copiar. Tente novamente.",
         "unavailable": "Este cartão já foi utilizado ou reembolsado",
-        "revealFailed": "Não foi possível obter o código. Tente novamente mais tarde."
+        "revealFailed": "Não foi possível obter o código. Tente novamente mais tarde.",
+        "emailQueued": "A enviar para {{email}}"
+      },
+      "email": {
+        "title": "Enviar por email",
+        "description": "Envie a ligação para resgatar este cartão para o email da pessoa a quem o oferece. O email inclui o seu nome e a sua mensagem.",
+        "previewLabel": "A pessoa vai receber",
+        "previewWithMessage": "“{{message}}” · com a ligação e o código de resgate",
+        "previewLinkOnly": "A ligação e o código de resgate",
+        "recipient": "Email do destinatário",
+        "placeholder": "nome@exemplo.com",
+        "hint": "Pode enviar para qualquer endereço. Quem abrir a ligação primeiro fica com o cartão.",
+        "cooldown": "Pode voltar a enviar dentro de {{seconds}} s",
+        "invalid": "Introduza um email válido",
+        "failed": "Não foi possível enviar. Tente mais tarde.",
+        "send": "Enviar",
+        "status": {
+          "sending": "A enviar para {{email}}",
+          "sent": "Enviado para {{email}}",
+          "failed": "Não foi possível enviar para {{email}}",
+          "failedRetry": "Não foi possível enviar para {{email}}. Pode voltar a enviar."
+        }
       }
     }
   },

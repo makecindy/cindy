@@ -20082,14 +20082,36 @@
         "copied": "복사됨",
         "more": "더 보기",
         "copyCode": "코드 복사",
-        "redeemSelf": "직접 사용"
+        "redeemSelf": "직접 사용",
+        "sendEmail": "이메일로 보내기"
       },
       "toasts": {
         "linkCopied": "받기 링크를 복사했습니다",
         "codeCopied": "코드를 복사했습니다",
         "copyFailed": "복사하지 못했습니다. 다시 시도하세요",
         "unavailable": "이미 받았거나 환불된 카드입니다",
-        "revealFailed": "코드를 가져오지 못했습니다. 잠시 후 다시 시도하세요"
+        "revealFailed": "코드를 가져오지 못했습니다. 잠시 후 다시 시도하세요",
+        "emailQueued": "{{email}}(으)로 보내는 중"
+      },
+      "email": {
+        "title": "이메일로 보내기",
+        "description": "이 카드의 받기 링크를 상대방 이메일로 보냅니다. 메일에는 보내는 사람 이름과 메시지가 함께 들어갑니다.",
+        "previewLabel": "상대방이 받는 내용",
+        "previewWithMessage": "“{{message}}” · 받기 링크와 코드 포함",
+        "previewLinkOnly": "받기 링크와 코드",
+        "recipient": "받는 사람 이메일",
+        "placeholder": "name@example.com",
+        "hint": "어떤 이메일로든 보낼 수 있습니다. 받기 링크는 먼저 연 사람이 받습니다.",
+        "cooldown": "{{seconds}}초 후에 다시 보낼 수 있습니다",
+        "invalid": "이메일 형식이 올바르지 않습니다",
+        "failed": "보내지 못했습니다. 잠시 후 다시 시도하세요.",
+        "send": "보내기",
+        "status": {
+          "sending": "{{email}}(으)로 보내는 중",
+          "sent": "{{email}}(으)로 보냄",
+          "failed": "{{email}}(으)로 보내지 못함",
+          "failedRetry": "{{email}}(으)로 보내지 못했습니다. 다시 보낼 수 있습니다"
+        }
       }
     }
   },

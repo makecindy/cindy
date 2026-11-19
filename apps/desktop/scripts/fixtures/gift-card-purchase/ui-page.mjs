@@ -11,6 +11,7 @@ export default {
     buy: { about: 'Purchase dialog with live card preview, two cards stacked, sender and message' },
     limit: { about: 'Purchase dialog when the 24-hour limit is used up' },
     custom: { about: 'Buyer-entered face value: out-of-range hint, then a valid amount on the card preview' },
+    email: { about: 'Send a bought card by email from My Gift Cards: recipient and what they receive, then the sending status' },
     pay: { about: 'Existing checkout dialog with the gift card subtitle while waiting for Stripe' },
     done: { about: 'Cards-ready dialog after payment, per-card copy link and more menu' },
     redeem: { about: 'Redeeming a bought card for yourself: top-up balance, never expires' },
@@ -22,6 +23,20 @@ export default {
     if (ui.case === 'default') {
       assert.equal(await page.getByRole('button', { name: await ui.t('billing.giftCardPurchase.actions.copyLink'), exact: true }).count(), 2);
       await ui.capture('section');
+      return;
+    }
+    if (ui.case === 'email') {
+      await page.getByRole('button', { name: await ui.t('billing.giftCardPurchase.actions.more'), exact: true }).first().click();
+      await page.getByRole('menuitem', { name: await ui.t('billing.giftCardPurchase.actions.sendEmail'), exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByText(await ui.t('billing.giftCardPurchase.email.previewLabel'), { exact: true }).first().waitFor();
+      await dialog.getByLabel(await ui.t('billing.giftCardPurchase.email.recipient'), { exact: true }).fill('friend@example.com');
+      await ui.capture('email-dialog');
+      await dialog.getByRole('button', { name: await ui.t('billing.giftCardPurchase.email.send'), exact: true }).click();
+      // 同一句话也出现在提示条里；这里等的是卡片列表里的状态行。
+      await page.getByRole('listitem').getByText(await ui.t('billing.giftCardPurchase.email.status.sending', { email: 'friend@example.com' }), { exact: true }).waitFor();
+      assert.equal(await page.getByRole('dialog').count(), 0);
+      await ui.capture('email-sending');
       return;
     }
     if (ui.case === 'redeem') {

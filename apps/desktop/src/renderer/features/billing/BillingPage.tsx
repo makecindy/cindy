@@ -66,6 +66,7 @@ import {
 } from './purchaseSupport';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
 import { GiftCardPurchaseDialog } from './GiftCardPurchaseDialog';
+import { GiftCardEmailDialog } from './GiftCardEmailDialog';
 import { GiftCardPurchasedDialog } from './GiftCardPurchasedDialog';
 import { GiftCardRedeemDialog } from './GiftCardRedeemDialog';
 import { giftCardOffersOf } from './giftCardPurchase';
@@ -342,6 +343,19 @@ export function BillingSettingsSection({
   }>({ open: false, orderId: null, cards: null });
   const giftCards = usePurchasedGiftCards();
   const giftCardsSectionRef = useRef<HTMLDivElement>(null);
+  /** 正在发到邮箱的那张卡（弹窗打开）；按 cardId 记，弹窗里始终显示列表里的最新状态。 */
+  const [emailCardId, setEmailCardId] = useState<string | null>(null);
+  const openGiftCardEmail = giftCards.state.emailSupported
+    ? (card: BillingPurchasedGiftCard) => setEmailCardId(card.cardId)
+    : undefined;
+  const latestGiftCard = (card: BillingPurchasedGiftCard) =>
+    giftCards.state.cards.find((item) => item.cardId === card.cardId) ?? card;
+  const emailCard =
+    emailCardId === null
+      ? null
+      : (giftCards.state.cards.find((card) => card.cardId === emailCardId) ??
+        purchasedDialog.cards?.find((card) => card.cardId === emailCardId) ??
+        null);
   const [planChangeTargetOpen, setPlanChangeTargetOpen] = useState(false);
   const [selectedProductCode, setSelectedProductCode] = useState<string | null>(null);
   const [selectedOfferCode, setSelectedOfferCode] = useState<string | null>(null);
@@ -1244,6 +1258,7 @@ export function BillingSettingsSection({
                 <PurchasedGiftCardsCard
                   giftCards={giftCards}
                   onRedeemSelf={(card) => void redeemPurchasedGiftCard(card)}
+                  onSendEmail={openGiftCardEmail}
                 />
               </BillingGroup>
             </div>
@@ -1404,9 +1419,11 @@ export function BillingSettingsSection({
 
       <GiftCardPurchasedDialog
         open={purchasedDialog.open}
-        cards={purchasedDialog.cards}
+        // 这一单的卡按列表里的最新状态显示（发到邮箱后的状态随列表刷新）。
+        cards={purchasedDialog.cards?.map(latestGiftCard) ?? null}
         giftCards={giftCards}
         onRedeemSelf={(card) => void redeemPurchasedGiftCard(card)}
+        onSendEmail={openGiftCardEmail}
         onViewAll={() => {
           setPurchasedDialog({ open: false, orderId: null, cards: null });
           window.requestAnimationFrame(() =>
@@ -1414,6 +1431,18 @@ export function BillingSettingsSection({
           );
         }}
         onClose={() => setPurchasedDialog({ open: false, orderId: null, cards: null })}
+      />
+
+      <GiftCardEmailDialog
+        card={emailCard}
+        onClose={() => setEmailCardId(null)}
+        onSend={async (card, email) => {
+          const result = await giftCards.sendEmail(card, email);
+          if (result.ok) {
+            toast.success(t('billing.giftCardPurchase.toasts.emailQueued', { email: result.card.email?.recipient ?? email }));
+          }
+          return result;
+        }}
       />
 
       <BillingCheckoutDialog

@@ -68,6 +68,7 @@ const policy: BillingGiftCardPurchasePolicy = {
   maxOrderAmount: '1000',
   minFaceValue: '100',
   maxFaceValue: '1000',
+  emailCooldownSeconds: 60,
   faces: ['cindy', 'cat', 'bell', 'leap'],
   maxSenderNameLength: 40,
   maxMessageLength: 120,

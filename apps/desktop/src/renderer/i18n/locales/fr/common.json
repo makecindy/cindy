@@ -20356,14 +20356,36 @@
         "copied": "Copié",
         "more": "Plus d’actions",
         "copyCode": "Copier le code",
-        "redeemSelf": "L’utiliser moi-même"
+        "redeemSelf": "L’utiliser moi-même",
+        "sendEmail": "Envoyer par e-mail"
       },
       "toasts": {
         "linkCopied": "Lien de récupération copié",
         "codeCopied": "Code copié",
         "copyFailed": "Impossible de copier. Réessayez.",
         "unavailable": "Cette carte a déjà été récupérée ou remboursée",
-        "revealFailed": "Impossible de récupérer le code. Réessayez plus tard."
+        "revealFailed": "Impossible de récupérer le code. Réessayez plus tard.",
+        "emailQueued": "Envoi à {{email}} en cours"
+      },
+      "email": {
+        "title": "Envoyer par e-mail",
+        "description": "Envoyez le lien de récupération de cette carte à la personne à qui vous l’offrez. L’e-mail contient votre nom et votre message.",
+        "previewLabel": "Ce qu’elle recevra",
+        "previewWithMessage": "« {{message}} » · avec le lien de récupération et le code",
+        "previewLinkOnly": "Le lien de récupération et le code",
+        "recipient": "E-mail du destinataire",
+        "placeholder": "nom@exemple.com",
+        "hint": "Vous pouvez l’envoyer à n’importe quelle adresse. La première personne qui ouvre le lien récupère la carte.",
+        "cooldown": "Nouvel envoi possible dans {{seconds}} s",
+        "invalid": "Saisissez une adresse e-mail valide",
+        "failed": "Envoi impossible. Réessayez plus tard.",
+        "send": "Envoyer",
+        "status": {
+          "sending": "Envoi à {{email}} en cours",
+          "sent": "Envoyée à {{email}}",
+          "failed": "Échec de l’envoi à {{email}}",
+          "failedRetry": "Échec de l’envoi à {{email}}. Vous pouvez la renvoyer."
+        }
       }
     }
   },

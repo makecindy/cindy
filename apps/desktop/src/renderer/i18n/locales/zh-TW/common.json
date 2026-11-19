@@ -20082,14 +20082,36 @@
         "copied": "已複製",
         "more": "更多操作",
         "copyCode": "複製兌換碼",
-        "redeemSelf": "兌換給自己"
+        "redeemSelf": "兌換給自己",
+        "sendEmail": "傳送到電子郵件"
       },
       "toasts": {
         "linkCopied": "領取連結已複製",
         "codeCopied": "兌換碼已複製",
         "copyFailed": "複製失敗，請重試",
         "unavailable": "這張卡已被領取或已退款",
-        "revealFailed": "暫時無法取回兌換碼，請稍後重試"
+        "revealFailed": "暫時無法取回兌換碼，請稍後重試",
+        "emailQueued": "正在傳送到 {{email}}"
+      },
+      "email": {
+        "title": "傳送到電子郵件",
+        "description": "把這張卡的領取連結傳到對方的電子郵件，郵件裡會附上你的署名和留言。",
+        "previewLabel": "對方會收到",
+        "previewWithMessage": "「{{message}}」，附領取連結和兌換碼",
+        "previewLinkOnly": "附領取連結和兌換碼",
+        "recipient": "收件電子郵件",
+        "placeholder": "name@example.com",
+        "hint": "可以傳到任何電子郵件；領取連結誰先打開就歸誰。",
+        "cooldown": "{{seconds}} 秒後可以再傳送",
+        "invalid": "電子郵件格式不正確",
+        "failed": "暫時無法傳送，請稍後重試",
+        "send": "傳送",
+        "status": {
+          "sending": "正在傳送到 {{email}}",
+          "sent": "已傳送到 {{email}}",
+          "failed": "傳送到 {{email}} 失敗",
+          "failedRetry": "傳送到 {{email}} 失敗，可以重新傳送"
+        }
       }
     }
   },

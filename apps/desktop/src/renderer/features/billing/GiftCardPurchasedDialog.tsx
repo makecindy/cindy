@@ -8,7 +8,11 @@ import { cn } from '@/lib/utils';
 import type { BillingPurchasedGiftCard } from '../../../shared/billing';
 import { GiftCardStack } from './GiftCardStack';
 import { formatGiftCardAmount } from './giftCardPurchase';
-import { PurchasedGiftCardActions, purchasedGiftCardStatusText } from './PurchasedGiftCardsCard';
+import {
+  PurchasedGiftCardActions,
+  PurchasedGiftCardEmailLine,
+  purchasedGiftCardStatusText,
+} from './PurchasedGiftCardsCard';
 import type { PurchasedGiftCards } from './usePurchasedGiftCards';
 
 interface GiftCardPurchasedDialogProps {
@@ -17,12 +21,14 @@ interface GiftCardPurchasedDialogProps {
   cards: BillingPurchasedGiftCard[] | null;
   giftCards: Pick<PurchasedGiftCards, 'copy'>;
   onRedeemSelf: (card: BillingPurchasedGiftCard) => void;
+  /** 服务端支持发信时传入：「⋯」里多一项「发送到邮箱」。 */
+  onSendEmail?: (card: BillingPurchasedGiftCard) => void;
   onViewAll: () => void;
   onClose: () => void;
 }
 
 /**
- * 付款成功后：这一单的卡叠放展示，逐张复制领取链接，「⋯」里复制兑换码或兑换给自己。
+ * 付款成功后：这一单的卡叠放展示，逐张复制领取链接，「⋯」里发送到邮箱、复制兑换码或兑换给自己。
  * 关掉也不会丢，卡一直在「我买的礼品卡」里。
  */
 export function GiftCardPurchasedDialog({
@@ -30,6 +36,7 @@ export function GiftCardPurchasedDialog({
   cards,
   giftCards,
   onRedeemSelf,
+  onSendEmail,
   onViewAll,
   onClose,
 }: GiftCardPurchasedDialogProps) {
@@ -114,9 +121,15 @@ export function GiftCardPurchasedDialog({
                             status: purchasedGiftCardStatusText(card, t),
                           })}
                         </p>
+                        <PurchasedGiftCardEmailLine card={card} />
                       </div>
                       {card.status === 'UNCLAIMED' && (
-                        <PurchasedGiftCardActions card={card} giftCards={giftCards} onRedeemSelf={onRedeemSelf} />
+                        <PurchasedGiftCardActions
+                          card={card}
+                          giftCards={giftCards}
+                          onRedeemSelf={onRedeemSelf}
+                          onSendEmail={onSendEmail}
+                        />
                       )}
                     </li>
                   ))}

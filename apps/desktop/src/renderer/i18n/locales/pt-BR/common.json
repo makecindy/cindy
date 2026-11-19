@@ -20356,14 +20356,36 @@
         "copied": "Copiado",
         "more": "Mais ações",
         "copyCode": "Copiar código de resgate",
-        "redeemSelf": "Resgatar para mim"
+        "redeemSelf": "Resgatar para mim",
+        "sendEmail": "Enviar por e-mail"
       },
       "toasts": {
         "linkCopied": "Link de resgate copiado",
         "codeCopied": "Código de resgate copiado",
         "copyFailed": "Não foi possível copiar. Tente novamente.",
         "unavailable": "Este cartão já foi resgatado ou reembolsado",
-        "revealFailed": "Não foi possível obter o código de resgate. Tente novamente mais tarde."
+        "revealFailed": "Não foi possível obter o código de resgate. Tente novamente mais tarde.",
+        "emailQueued": "Enviando para {{email}}"
+      },
+      "email": {
+        "title": "Enviar por e-mail",
+        "description": "Envie o link para resgatar este cartão para o e-mail da pessoa que vai ganhá-lo. O e-mail inclui seu nome e sua mensagem.",
+        "previewLabel": "A pessoa vai receber",
+        "previewWithMessage": "“{{message}}” · com o link e o código de resgate",
+        "previewLinkOnly": "O link e o código de resgate",
+        "recipient": "E-mail do destinatário",
+        "placeholder": "nome@exemplo.com",
+        "hint": "Você pode enviar para qualquer endereço. Quem abrir o link primeiro fica com o cartão.",
+        "cooldown": "Você pode enviar de novo em {{seconds}} s",
+        "invalid": "Digite um e-mail válido",
+        "failed": "Não foi possível enviar. Tente novamente mais tarde.",
+        "send": "Enviar",
+        "status": {
+          "sending": "Enviando para {{email}}",
+          "sent": "Enviado para {{email}}",
+          "failed": "Não foi possível enviar para {{email}}",
+          "failedRetry": "Não foi possível enviar para {{email}}. Você pode enviar de novo."
+        }
       }
     }
   },

@@ -87,6 +87,7 @@ export const BILLING_INVOKE = {
   CREATE_GIFT_CARD_ORDER: 'billing:create-gift-card-order',
   LIST_PURCHASED_GIFT_CARDS: 'billing:list-purchased-gift-cards',
   REVEAL_PURCHASED_GIFT_CARD: 'billing:reveal-purchased-gift-card',
+  SEND_PURCHASED_GIFT_CARD_EMAIL: 'billing:send-purchased-gift-card-email',
 } as const;
 
 /**
@@ -364,6 +365,11 @@ export type BillingGiftCardPurchasePolicy = {
   faces: string[];
   maxSenderNameLength: number;
   maxMessageLength: number;
+  /**
+   * 同一张卡两次发到邮箱之间至少隔多少秒（不限次数，可以换邮箱）。旧服务端没有发信接口时
+   * 为 null，界面不提供「发送到邮箱」。
+   */
+  emailCooldownSeconds: number | null;
 };
 
 /**
@@ -387,11 +393,38 @@ export type BillingPurchasedGiftCard = {
   /** 领取人领取时的昵称；只在 CLAIMED 时可能有值。 */
   claimedByName: string | null;
   purchasedAt: string;
+  /** 最近一次发到邮箱的情况；没发过（或旧服务端）为 null。 */
+  email: BillingPurchasedGiftCardEmail | null;
 };
+
+/**
+ * 发到邮箱是异步的：PENDING 排队 → SENDING 交给发信方 → SENT / FAILED。
+ * `nextAvailableAt` 之前这张卡不能再发（冷却），之后可以发到任何邮箱。
+ */
+export type BillingPurchasedGiftCardEmail = {
+  recipient: string;
+  status: 'PENDING' | 'SENDING' | 'SENT' | 'FAILED';
+  updatedAt: string;
+  nextAvailableAt: string;
+};
+
+/**
+ * 发到邮箱的结果。服务端明确拒绝的几种情况作为结果返回，由界面就地说明：
+ * 邮箱不合法、卡已被领取或已退款、还在冷却（`retryAt` 为可以再发的时间戳，拿不到时为 null）。
+ */
+export type BillingSendGiftCardEmailResult =
+  | { ok: true; card: BillingPurchasedGiftCard }
+  | { ok: false; reason: 'INVALID_EMAIL' | 'NOT_AVAILABLE' }
+  | { ok: false; reason: 'COOLDOWN'; retryAt: number | null };
 
 export type BillingPurchasedGiftCardList = {
   cards: BillingPurchasedGiftCard[];
   nextCursor: string | null;
+  /**
+   * 服务端是否支持把卡发到邮箱：支持发信的服务端每张卡都带 `email` 字段（没发过为 null），
+   * 旧服务端没有这个字段，界面不提供「发送到邮箱」。
+   */
+  emailSupported: boolean;
 };
 
 /**
@@ -460,4 +493,8 @@ export interface BillingRendererApi {
     /** 只决定领取链接用哪张卡面图；兑换码由服务端按 cardId 给出。 */
     faceCode: string;
   }) => Promise<BillingPurchasedGiftCardCode>;
+  sendPurchasedGiftCardEmail: (payload: {
+    cardId: string;
+    email: string;
+  }) => Promise<BillingSendGiftCardEmailResult>;
 }

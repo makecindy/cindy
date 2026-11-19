@@ -3270,6 +3270,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(BILLING_INVOKE.LIST_PURCHASED_GIFT_CARDS, payload),
     revealPurchasedGiftCard: (payload) =>
       ipcRenderer.invoke(BILLING_INVOKE.REVEAL_PURCHASED_GIFT_CARD, payload),
+    sendPurchasedGiftCardEmail: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.SEND_PURCHASED_GIFT_CARD_EMAIL, payload),
   } satisfies BillingRendererApi,
 
   // ── Workdir File Browser (vscode-style file tree + content viewer) ──

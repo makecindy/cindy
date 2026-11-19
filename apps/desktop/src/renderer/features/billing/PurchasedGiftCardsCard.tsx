@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Link2, MoreHorizontal, Wallet } from 'lucide-react';
+import { Check, Copy, Link2, Mail, MoreHorizontal, Wallet } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -42,17 +42,65 @@ export function purchasedGiftCardStatusText(
 }
 
 /**
- * 一张没送出去的卡的操作：主按钮复制领取链接，「⋯」里是复制兑换码与兑换给自己。
- * 复制成功后主按钮短暂显示「已复制」，便于逐张发给不同的人。
+ * 最近一次发到邮箱的情况，写在卡片的说明行下面。已领取或已退款的卡不会再发出，
+ * 不再显示「正在发送」；发送失败且卡仍未领取时提示可以重新发送。
+ */
+export function purchasedGiftCardEmailLine(
+  card: BillingPurchasedGiftCard,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): { text: string; failed: boolean } | null {
+  const email = card.email;
+  if (!email) return null;
+  const values = { email: email.recipient };
+  if (email.status === 'SENT') {
+    return { text: t('billing.giftCardPurchase.email.status.sent', values), failed: false };
+  }
+  if (email.status === 'FAILED') {
+    return {
+      text: t(
+        card.status === 'UNCLAIMED'
+          ? 'billing.giftCardPurchase.email.status.failedRetry'
+          : 'billing.giftCardPurchase.email.status.failed',
+        values,
+      ),
+      failed: true,
+    };
+  }
+  if (card.status !== 'UNCLAIMED') return null;
+  return { text: t('billing.giftCardPurchase.email.status.sending', values), failed: false };
+}
+
+export function PurchasedGiftCardEmailLine({ card }: { card: BillingPurchasedGiftCard }) {
+  const { t } = useTranslation();
+  const line = purchasedGiftCardEmailLine(card, t);
+  if (!line) return null;
+  return (
+    <p
+      className={cn(
+        'mt-0.5 truncate text-12',
+        line.failed ? 'text-[var(--error-fg)]' : 'text-[var(--text-tertiary)]',
+      )}
+    >
+      {line.text}
+    </p>
+  );
+}
+
+/**
+ * 一张没送出去的卡的操作：主按钮复制领取链接，「⋯」里是发送到邮箱、复制兑换码与兑换给自己。
+ * 复制成功后主按钮短暂显示「已复制」，便于逐张发给不同的人。服务端不支持发信时不出现
+ * 「发送到邮箱」（onSendEmail 不传）。
  */
 export function PurchasedGiftCardActions({
   card,
   giftCards,
   onRedeemSelf,
+  onSendEmail,
 }: {
   card: BillingPurchasedGiftCard;
   giftCards: Pick<PurchasedGiftCards, 'copy'>;
   onRedeemSelf: (card: BillingPurchasedGiftCard) => void;
+  onSendEmail?: (card: BillingPurchasedGiftCard) => void;
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState<'link' | 'code' | null>(null);
@@ -105,6 +153,12 @@ export function PurchasedGiftCardActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={6} className="z-[10002] min-w-[168px] p-1">
+          {onSendEmail && (
+            <DropdownMenuItem onSelect={() => onSendEmail(card)}>
+              <Mail size={14} aria-hidden className="text-[var(--text-secondary)]" />
+              {t('billing.giftCardPurchase.actions.sendEmail')}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onSelect={() => void copy('code')}>
             <Copy size={14} aria-hidden className="text-[var(--text-secondary)]" />
             {t('billing.giftCardPurchase.actions.copyCode')}
@@ -123,9 +177,11 @@ export function PurchasedGiftCardActions({
 export function PurchasedGiftCardsCard({
   giftCards,
   onRedeemSelf,
+  onSendEmail,
 }: {
   giftCards: PurchasedGiftCards;
   onRedeemSelf: (card: BillingPurchasedGiftCard) => void;
+  onSendEmail?: (card: BillingPurchasedGiftCard) => void;
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
@@ -169,9 +225,15 @@ export function PurchasedGiftCardsCard({
                   </span>
                 </p>
                 <p className="mt-0.5 truncate text-12 text-[var(--text-tertiary)]">{meta}</p>
+                <PurchasedGiftCardEmailLine card={card} />
               </div>
               {card.status === 'UNCLAIMED' && (
-                <PurchasedGiftCardActions card={card} giftCards={giftCards} onRedeemSelf={onRedeemSelf} />
+                <PurchasedGiftCardActions
+                  card={card}
+                  giftCards={giftCards}
+                  onRedeemSelf={onRedeemSelf}
+                  onSendEmail={onSendEmail}
+                />
               )}
             </li>
           );

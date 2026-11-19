@@ -3,6 +3,7 @@ import { ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'ele
 import {
   BILLING_INVOKE,
   type BillingPurchasedGiftCardCode,
+  type BillingSendGiftCardEmailResult,
   type BillingSubscriptionPortalResult,
   type CreateBillingGiftCardOrderRequest,
   type CreateBillingSubscriptionRequest,
@@ -25,6 +26,7 @@ import {
   projectGiftCardPurchasePolicy,
   projectPurchasedGiftCardCode,
   projectPurchasedGiftCardList,
+  projectSentPurchasedGiftCard,
   projectBillingOrderList,
   projectBillingPaymentHistory,
   projectBillingPortalSession,
@@ -44,6 +46,16 @@ const FACE_CODE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const GIFT_CARD_AMOUNT_PATTERN = /^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/;
 const RESOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const OPAQUE_CURSOR_PATTERN = /^[A-Za-z0-9_.~-]{1,1024}$/;
+const CARD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** 收件邮箱只挡明显不是单个地址的输入（空白、逗号分隔的多个地址等）；服务端按自己的规则再校验。 */
+const SINGLE_EMAIL_PATTERN = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
+const MAX_EMAIL_LENGTH = 254;
+const GIFT_CARD_EMAIL_ERROR_CODES = [
+  'GIFT_CARD_RECIPIENT_INVALID',
+  'GIFT_CARD_NOT_FOUND',
+  'GIFT_CARD_NOT_AVAILABLE',
+  'GIFT_CARD_EMAIL_COOLDOWN',
+] as const;
 // 服务端按自己的上限校验署名、留言与张数；这里只挡住明显越界的输入，不复制业务规则。
 const MAX_GIFT_SENDER_LENGTH = 80;
 const MAX_GIFT_MESSAGE_LENGTH = 240;
@@ -710,6 +722,58 @@ export function createBillingHandlers(
         code,
         claimUrl: giftCardClaimUrl(getShareBaseUrl, payload.faceCode, code),
       } satisfies BillingPurchasedGiftCardCode;
+    }),
+    /**
+     * 把一张未领取的卡发到买家填的邮箱（发信异步进行）。邮箱不合法、卡已不可发、还在冷却
+     * 作为结果返回，由界面就地说明；其它失败沿用计费请求的统一错误。
+     */
+    [BILLING_INVOKE.SEND_PURCHASED_GIFT_CARD_EMAIL]: protect(async (raw) => {
+      const payload = requireObject(raw);
+      assertOnlyKeys(payload, ['cardId', 'email'], 'payload');
+      if (typeof payload.cardId !== 'string' || !CARD_ID_PATTERN.test(payload.cardId)) {
+        throwIpcError('INVALID_PARAMS', 'cardId is invalid');
+      }
+      if (typeof payload.email !== 'string') throwIpcError('INVALID_PARAMS', 'email is invalid');
+      const email = payload.email.trim();
+      if (email.length > MAX_EMAIL_LENGTH || !SINGLE_EMAIL_PATTERN.test(email)) {
+        return { ok: false, reason: 'INVALID_EMAIL' } satisfies BillingSendGiftCardEmailResult;
+      }
+      let response: unknown;
+      try {
+        response = await fetch<unknown>(
+          `/api/gift-cards/purchased/${encodeURIComponent(payload.cardId)}/email`,
+          {
+            method: 'POST',
+            body: { email },
+            timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
+            redactErrorDetails: true,
+            allowedRedactedErrorCodes: GIFT_CARD_EMAIL_ERROR_CODES,
+            expectedErrors: [{ status: 400 }, { status: 404 }, { status: 409 }, { status: 429 }],
+            baseUrl: getBaseUrl,
+          },
+        );
+      } catch (error) {
+        if (error instanceof ServerApiError) {
+          if (error.code === 'GIFT_CARD_RECIPIENT_INVALID') {
+            return { ok: false, reason: 'INVALID_EMAIL' } satisfies BillingSendGiftCardEmailResult;
+          }
+          if (error.code === 'GIFT_CARD_NOT_AVAILABLE' || error.code === 'GIFT_CARD_NOT_FOUND') {
+            return { ok: false, reason: 'NOT_AVAILABLE' } satisfies BillingSendGiftCardEmailResult;
+          }
+          if (error.code === 'GIFT_CARD_EMAIL_COOLDOWN') {
+            return {
+              ok: false,
+              reason: 'COOLDOWN',
+              retryAt: typeof error.retryAt === 'number' && Number.isFinite(error.retryAt) ? error.retryAt : null,
+            } satisfies BillingSendGiftCardEmailResult;
+          }
+        }
+        throwBillingFetchError(error);
+      }
+      return {
+        ok: true,
+        card: projectResponse(response, projectSentPurchasedGiftCard),
+      } satisfies BillingSendGiftCardEmailResult;
     }),
   };
 }

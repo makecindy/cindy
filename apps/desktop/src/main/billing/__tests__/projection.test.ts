@@ -1092,13 +1092,17 @@ describe('gift card purchase projection', () => {
     })).toEqual({
       currency: 'cny', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
       maxOrderAmount: '1000', minFaceValue: '100', maxFaceValue: '1000',
-      faces: ['cindy', 'cat'], maxSenderNameLength: 40, maxMessageLength: 120,
+      faces: ['cindy', 'cat'], maxSenderNameLength: 40, maxMessageLength: 120, emailCooldownSeconds: null,
     });
     // 旧服务端没有单张面额范围：照常读出其余限制，范围为 null。
     expect(projectGiftCardPurchasePolicy({
       currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
       maxOrderAmount: '1000', faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
-    })).toMatchObject({ minFaceValue: null, maxFaceValue: null });
+    })).toMatchObject({ minFaceValue: null, maxFaceValue: null, emailCooldownSeconds: null });
+    expect(projectGiftCardPurchasePolicy({
+      currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', emailCooldownSeconds: 60, faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
+    })).toMatchObject({ emailCooldownSeconds: 60 });
     expect(() => projectGiftCardPurchasePolicy({ currency: 'USD', dailyLimit: 5 })).toThrow();
   });
 
@@ -1124,6 +1128,29 @@ describe('gift card purchase projection', () => {
     ]);
     expect(list.nextCursor).toBe('next.page_1');
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'SOLD' })], nextCursor: null })).toThrow();
+  });
+
+  // 发信情况只是展示：不合法时当作没发过，不连累整张卡；支持发信的服务端每张卡都带 email 字段，
+  // 旧服务端没有这个字段时界面不提供「发送到邮箱」。
+  it('reads the email delivery leniently and tells whether the server can send by email', () => {
+    const email = {
+      recipient: 'friend@example.com', status: 'SENT',
+      updatedAt: '2026-11-19T08:05:00.000Z', nextAvailableAt: '2026-11-19T08:06:00.000Z',
+    };
+    const list = projectPurchasedGiftCardList({
+      cards: [
+        purchasedCard({ email }),
+        purchasedCard({ cardId: 'card_2', email: { ...email, status: 'BOUNCED' } }),
+        purchasedCard({ cardId: 'card_3', email: { ...email, nextAvailableAt: 'soon' } }),
+        purchasedCard({ cardId: 'card_4', email: null }),
+      ],
+      nextCursor: null,
+    });
+    expect(list.cards.map((card) => card.email?.status ?? null)).toEqual(['SENT', null, null, null]);
+    expect(list.emailSupported).toBe(true);
+    expect(projectPurchasedGiftCardList({ cards: [purchasedCard()], nextCursor: null }))
+      .toMatchObject({ emailSupported: false, cards: [{ email: null }] });
+    expect(projectPurchasedGiftCardList({ cards: [], nextCursor: null }).emailSupported).toBe(false);
   });
 
   it('accepts only a well-formed redeem code and returns it in display form', () => {

@@ -12,6 +12,8 @@ vi.mock('../../serverApiClient.desktop.js', () => {
       public readonly code: string,
       public readonly statusCode: number,
       message: string,
+      // 与真实 ServerApiError 一致：429 时带 Retry-After 换算出的时间戳。
+      public readonly retryAt?: number,
     ) {
       super(message);
     }
@@ -862,6 +864,74 @@ describe('gift card purchase IPC', () => {
       request: bad, idempotencyKey: 'desktop:gift-card:12345678',
     })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // 发到邮箱：只把收件邮箱放进请求体；服务端明确拒绝的几种情况作为结果交给界面就地说明
+  // （冷却带上可以再发的时间），其它失败沿用统一错误。明显不是单个地址的输入不发请求。
+  describe('send a purchased gift card by email', () => {
+    const cardId = '1f0c2a4e-5b6d-4e7f-8a9b-0c1d2e3f4a5b';
+    const sentCard = {
+      cardId, orderId: 'order_9', faceCode: 'cat', amount: '100', currency: 'CNY', senderName: '小鱼',
+      message: null, codeTail: '7KQ2', status: 'UNCLAIMED', claimedAt: null, claimedByName: null,
+      purchasedAt: '2026-11-19T08:00:00.000Z',
+      email: {
+        recipient: 'friend@example.com', status: 'PENDING',
+        updatedAt: '2026-11-19T08:05:00.000Z', nextAvailableAt: '2026-11-19T08:06:00.000Z',
+      },
+    };
+
+    it('posts the trimmed address and returns the updated card', async () => {
+      const { call, fetch } = harness();
+      fetch.mockResolvedValueOnce({ card: sentCard });
+      await expect(call(BILLING_INVOKE.SEND_PURCHASED_GIFT_CARD_EMAIL, { cardId, email: '  friend@example.com ' }))
+        .resolves.toMatchObject({ ok: true, card: { cardId, email: { recipient: 'friend@example.com', status: 'PENDING' } } });
+      expect(fetch).toHaveBeenCalledWith(`/api/gift-cards/purchased/${cardId}/email`, expect.objectContaining({
+        method: 'POST',
+        body: { email: 'friend@example.com' },
+        allowedRedactedErrorCodes: expect.arrayContaining(['GIFT_CARD_EMAIL_COOLDOWN']),
+      }));
+    });
+
+    it.each([
+      [new ServerApiError('GIFT_CARD_RECIPIENT_INVALID', 400, 'redacted'), { ok: false, reason: 'INVALID_EMAIL' }],
+      [new ServerApiError('GIFT_CARD_NOT_AVAILABLE', 409, 'redacted'), { ok: false, reason: 'NOT_AVAILABLE' }],
+      [new ServerApiError('GIFT_CARD_NOT_FOUND', 404, 'redacted'), { ok: false, reason: 'NOT_AVAILABLE' }],
+      [new ServerApiError('GIFT_CARD_EMAIL_COOLDOWN', 429, 'redacted', 1_795_000_060_000), { ok: false, reason: 'COOLDOWN', retryAt: 1_795_000_060_000 }],
+      [new ServerApiError('GIFT_CARD_EMAIL_COOLDOWN', 429, 'redacted'), { ok: false, reason: 'COOLDOWN', retryAt: null }],
+    ])('turns %s into a result the dialog can explain', async (error, expected) => {
+      const { call, fetch } = harness();
+      fetch.mockRejectedValueOnce(error);
+      await expect(call(BILLING_INVOKE.SEND_PURCHASED_GIFT_CARD_EMAIL, { cardId, email: 'friend@example.com' }))
+        .resolves.toEqual(expected);
+    });
+
+    it('keeps other failures as billing errors', async () => {
+      const { call, fetch } = harness();
+      fetch.mockRejectedValueOnce(new ServerApiError('INTERNAL', 500, 'redacted'));
+      await expect(call(BILLING_INVOKE.SEND_PURCHASED_GIFT_CARD_EMAIL, { cardId, email: 'friend@example.com' }))
+        .rejects.toMatchObject({ code: 'INTERNAL' });
+    });
+
+    it.each(['', 'friend', 'a@b.com, c@d.com', 'a b@example.com', `${'x'.repeat(250)}@example.com`])(
+      'answers %j as an invalid address without calling the server',
+      async (email) => {
+        const { call, fetch } = harness();
+        const calls = fetch.mock.calls.length;
+        await expect(call(BILLING_INVOKE.SEND_PURCHASED_GIFT_CARD_EMAIL, { cardId, email }))
+          .resolves.toEqual({ ok: false, reason: 'INVALID_EMAIL' });
+        expect(fetch.mock.calls.length).toBe(calls);
+      },
+    );
+
+    it.each([
+      { cardId: 'card_1', email: 'friend@example.com' },
+      { cardId, email: 42 },
+      { cardId, email: 'friend@example.com', membershipId: 'someone-else' },
+    ])('rejects a malformed request %j', async (payload) => {
+      const { call } = harness();
+      await expect(call(BILLING_INVOKE.SEND_PURCHASED_GIFT_CARD_EMAIL, payload))
+        .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    });
   });
 
   // 购买上限是明确的业务结果，要让界面说清楚，而不是当成「请求失败」。

@@ -20082,14 +20082,36 @@
         "copied": "コピーしました",
         "more": "その他の操作",
         "copyCode": "コードをコピー",
-        "redeemSelf": "自分で使う"
+        "redeemSelf": "自分で使う",
+        "sendEmail": "メールで送る"
       },
       "toasts": {
         "linkCopied": "受け取りリンクをコピーしました",
         "codeCopied": "コードをコピーしました",
         "copyFailed": "コピーできませんでした。もう一度お試しください",
         "unavailable": "このカードは受け取り済みか返金済みです",
-        "revealFailed": "コードを取得できませんでした。しばらくしてからお試しください"
+        "revealFailed": "コードを取得できませんでした。しばらくしてからお試しください",
+        "emailQueued": "{{email}} に送信しています"
+      },
+      "email": {
+        "title": "メールで送る",
+        "description": "このカードの受け取りリンクを相手のメールアドレスに送ります。メールには差出人名とメッセージが入ります。",
+        "previewLabel": "相手に届く内容",
+        "previewWithMessage": "「{{message}}」・受け取りリンクとコード付き",
+        "previewLinkOnly": "受け取りリンクとコード",
+        "recipient": "送信先メールアドレス",
+        "placeholder": "name@example.com",
+        "hint": "どのメールアドレスにも送れます。受け取りリンクは最初に開いた人が受け取れます。",
+        "cooldown": "{{seconds}} 秒後にもう一度送れます",
+        "invalid": "メールアドレスの形式が正しくありません",
+        "failed": "送信できませんでした。しばらくしてからお試しください。",
+        "send": "送信",
+        "status": {
+          "sending": "{{email}} に送信中",
+          "sent": "{{email}} に送信済み",
+          "failed": "{{email}} への送信に失敗しました",
+          "failedRetry": "{{email}} への送信に失敗しました。もう一度送れます"
+        }
       }
     }
   },

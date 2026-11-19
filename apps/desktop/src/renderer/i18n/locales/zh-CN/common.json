@@ -20082,14 +20082,36 @@
         "copied": "已复制",
         "more": "更多操作",
         "copyCode": "复制兑换码",
-        "redeemSelf": "兑换给自己"
+        "redeemSelf": "兑换给自己",
+        "sendEmail": "发送到邮箱"
       },
       "toasts": {
         "linkCopied": "领取链接已复制",
         "codeCopied": "兑换码已复制",
         "copyFailed": "复制失败，请重试",
         "unavailable": "这张卡已被领取或已退款",
-        "revealFailed": "暂时无法取回兑换码，请稍后重试"
+        "revealFailed": "暂时无法取回兑换码，请稍后重试",
+        "emailQueued": "正在发送到 {{email}}"
+      },
+      "email": {
+        "title": "发送到邮箱",
+        "description": "把这张卡的领取链接发到对方邮箱，邮件里会带上你的署名和留言。",
+        "previewLabel": "对方会收到",
+        "previewWithMessage": "「{{message}}」，附领取链接和兑换码",
+        "previewLinkOnly": "附领取链接和兑换码",
+        "recipient": "收件邮箱",
+        "placeholder": "name@example.com",
+        "hint": "可以发到任何邮箱；领取链接谁先打开就归谁。",
+        "cooldown": "{{seconds}} 秒后可以再发送",
+        "invalid": "邮箱格式不正确",
+        "failed": "暂时无法发送，请稍后重试",
+        "send": "发送",
+        "status": {
+          "sending": "正在发送到 {{email}}",
+          "sent": "已发送到 {{email}}",
+          "failed": "发送到 {{email}} 失败",
+          "failedRetry": "发送到 {{email}} 失败，可以重新发送"
+        }
       }
     }
   },

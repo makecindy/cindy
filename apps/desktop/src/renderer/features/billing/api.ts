@@ -9,6 +9,7 @@ import type {
   BillingPaymentOrder,
   BillingPlanChange,
   BillingPurchasedGiftCardCode,
+  BillingSendGiftCardEmailResult,
   BillingPurchasedGiftCardList,
   BillingSubscriptionPortalResult,
   BillingSubscription,
@@ -108,5 +109,8 @@ export const billingApi = {
   },
   revealPurchasedGiftCard(cardId: string, faceCode: string): Promise<BillingPurchasedGiftCardCode> {
     return window.electronAPI.billing.revealPurchasedGiftCard({ cardId, faceCode });
+  },
+  sendPurchasedGiftCardEmail(cardId: string, email: string): Promise<BillingSendGiftCardEmailResult> {
+    return window.electronAPI.billing.sendPurchasedGiftCardEmail({ cardId, email });
   },
 };

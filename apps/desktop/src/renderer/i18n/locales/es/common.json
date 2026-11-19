@@ -20356,14 +20356,36 @@
         "copied": "Copiado",
         "more": "Más acciones",
         "copyCode": "Copiar código de canje",
-        "redeemSelf": "Canjearla yo"
+        "redeemSelf": "Canjearla yo",
+        "sendEmail": "Enviar por correo"
       },
       "toasts": {
         "linkCopied": "Enlace de canje copiado",
         "codeCopied": "Código de canje copiado",
         "copyFailed": "No se pudo copiar. Inténtalo de nuevo.",
         "unavailable": "Esta tarjeta ya se canjeó o se reembolsó",
-        "revealFailed": "No se pudo obtener el código de canje. Vuelve a intentarlo más tarde."
+        "revealFailed": "No se pudo obtener el código de canje. Vuelve a intentarlo más tarde.",
+        "emailQueued": "Enviando a {{email}}"
+      },
+      "email": {
+        "title": "Enviar por correo",
+        "description": "Envía el enlace para canjear esta tarjeta al correo de la persona a la que se la regalas. El correo incluye tu nombre y tu mensaje.",
+        "previewLabel": "Recibirá",
+        "previewWithMessage": "“{{message}}” · con el enlace y el código de canje",
+        "previewLinkOnly": "El enlace y el código de canje",
+        "recipient": "Correo del destinatario",
+        "placeholder": "nombre@ejemplo.com",
+        "hint": "Puedes enviarla a cualquier dirección. Quien abra primero el enlace se queda con la tarjeta.",
+        "cooldown": "Podrás volver a enviarla en {{seconds}} s",
+        "invalid": "Escribe un correo válido",
+        "failed": "No se pudo enviar. Inténtalo más tarde.",
+        "send": "Enviar",
+        "status": {
+          "sending": "Enviando a {{email}}",
+          "sent": "Enviada a {{email}}",
+          "failed": "No se pudo enviar a {{email}}",
+          "failedRetry": "No se pudo enviar a {{email}}. Puedes volver a enviarla."
+        }
       }
     }
   },

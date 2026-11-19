@@ -20165,14 +20165,36 @@
         "copied": "Copied",
         "more": "More actions",
         "copyCode": "Copy Redeem Code",
-        "redeemSelf": "Redeem for Myself"
+        "redeemSelf": "Redeem for Myself",
+        "sendEmail": "Send by Email"
       },
       "toasts": {
         "linkCopied": "Claim link copied",
         "codeCopied": "Redeem code copied",
         "copyFailed": "Couldn’t copy. Try again.",
         "unavailable": "This card has already been claimed or refunded",
-        "revealFailed": "Couldn’t get the redeem code. Try again later."
+        "revealFailed": "Couldn’t get the redeem code. Try again later.",
+        "emailQueued": "Sending to {{email}}"
+      },
+      "email": {
+        "title": "Send by Email",
+        "description": "Email this card’s claim link to the person you’re giving it to. The email includes your name and message.",
+        "previewLabel": "They’ll receive",
+        "previewWithMessage": "“{{message}}” · with the claim link and redeem code",
+        "previewLinkOnly": "The claim link and redeem code",
+        "recipient": "Recipient email",
+        "placeholder": "name@example.com",
+        "hint": "You can send it to any address. Whoever opens the claim link first gets the card.",
+        "cooldown": "You can send again in {{seconds}} s",
+        "invalid": "Enter a valid email address",
+        "failed": "Couldn’t send the email. Try again later.",
+        "send": "Send Email",
+        "status": {
+          "sending": "Sending to {{email}}",
+          "sent": "Sent to {{email}}",
+          "failed": "Couldn’t send to {{email}}",
+          "failedRetry": "Couldn’t send to {{email}}. You can send it again."
+        }
       }
     }
   },

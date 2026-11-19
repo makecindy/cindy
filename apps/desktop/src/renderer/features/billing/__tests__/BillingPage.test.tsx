@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import type {
   BillingPaymentOrder,
+  BillingPurchasedGiftCard,
   BillingSubscription,
   BillingSubscriptionPortalResult,
 } from '../../../../shared/billing';
@@ -151,6 +152,11 @@ vi.mock('qrcode', () => ({
 }));
 
 import { BillingPage } from '../BillingPage';
+import {
+  EMAIL_REFRESH_DELAY_MS,
+  EMAIL_REFRESH_MAX_ROUNDS,
+  usePurchasedGiftCards,
+} from '../usePurchasedGiftCards';
 import * as QRCode from 'qrcode';
 
 beforeEach(async () => {
@@ -1078,7 +1084,7 @@ describe('BillingPage remote catalog rendering', () => {
     const purchased = (cardId: string, orderId: string, codeTail: string) => ({
       cardId, orderId, faceCode: 'cat', amount: '100', currency: 'cny', senderName: '小鱼',
       message: '生日快乐', codeTail, status: 'UNCLAIMED' as const, claimedAt: null,
-      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z',
+      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
     });
     const listPurchasedGiftCards = vi.fn(async () => ({
       cards: [
@@ -1087,6 +1093,7 @@ describe('BillingPage remote catalog rendering', () => {
         purchased('card_old', 'order_old', 'Q8TR'),
       ],
       nextCursor: null,
+      emailSupported: false,
     }));
     window.electronAPI.billing.listPurchasedGiftCards = listPurchasedGiftCards;
     window.electronAPI.billing.revealPurchasedGiftCard = vi.fn(async () => ({
@@ -1119,6 +1126,118 @@ describe('BillingPage remote catalog rendering', () => {
     await waitFor(() => expect(uiMocks.clipboardWriteText)
       .toHaveBeenCalledWith('https://share.example.test/gift?face=cat#C012-3456-789A-BCDE'));
     expect(window.electronAPI.billing.revealPurchasedGiftCard).toHaveBeenCalledWith({ cardId: 'card_1', faceCode: 'cat' });
+  });
+
+  describe('sending a bought card by email', () => {
+    const later = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
+    const card = (overrides: Partial<BillingPurchasedGiftCard> = {}): BillingPurchasedGiftCard => ({
+      cardId: 'card_mail', orderId: 'order_gift', faceCode: 'cat', amount: '100', currency: 'cny',
+      senderName: '小鱼', message: '生日快乐', codeTail: '7KQ2', status: 'UNCLAIMED', claimedAt: null,
+      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null, ...overrides,
+    });
+    const delivery = (
+      status: NonNullable<BillingPurchasedGiftCard['email']>['status'],
+      nextInSeconds = 60,
+    ): BillingPurchasedGiftCard['email'] => ({
+      recipient: 'friend@example.com', status, updatedAt: '2026-11-19T08:05:00.000Z',
+      nextAvailableAt: later(nextInSeconds),
+    });
+    const page = (cards: BillingPurchasedGiftCard[], emailSupported = true) =>
+      ({ cards, nextCursor: null, emailSupported });
+
+    async function openEmailDialog() {
+      const more = await screen.findByRole('button', { name: 'billing.giftCardPurchase.actions.more' });
+      fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'billing.giftCardPurchase.actions.sendEmail' }));
+      return screen.findByLabelText('billing.giftCardPurchase.email.recipient') as Promise<HTMLInputElement>;
+    }
+
+    // 生产入口：计费页「我买的礼品卡」→「⋯」→ 发送到邮箱。发出后就地显示正在发送，不重读整页。
+    it('sends an unclaimed card to the address the buyer typed and shows it as sending', async () => {
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()]));
+      const send = vi.fn(async () => ({ ok: true as const, card: card({ email: delivery('PENDING') }) }));
+      window.electronAPI.billing.sendPurchasedGiftCardEmail = send;
+      render(<BillingPage />);
+
+      const input = await openEmailDialog();
+      expect(input.value).toBe('');
+      fireEvent.change(input, { target: { value: ' friend@example.com ' } });
+      fireEvent.click(screen.getByRole('button', { name: 'billing.giftCardPurchase.email.send' }));
+
+      await waitFor(() => expect(send).toHaveBeenCalledWith({ cardId: 'card_mail', email: 'friend@example.com' }));
+      expect(uiMocks.toastSuccess).toHaveBeenCalledWith('billing.giftCardPurchase.toasts.emailQueued:{"email":"friend@example.com"}');
+      expect(await screen.findByText('billing.giftCardPurchase.email.status.sending:{"email":"friend@example.com"}')).toBeTruthy();
+      expect(screen.queryByLabelText('billing.giftCardPurchase.email.recipient')).toBeNull();
+      expect(window.electronAPI.billing.listPurchasedGiftCards).toHaveBeenCalledTimes(1);
+    });
+
+    // 服务端明确拒绝时就地说明，不关弹窗；冷却中的卡写明还要等几秒，可以换邮箱。
+    it.each([
+      [{ ok: false as const, reason: 'INVALID_EMAIL' as const }, 'billing.giftCardPurchase.email.invalid'],
+      [{ ok: false as const, reason: 'NOT_AVAILABLE' as const }, 'billing.giftCardPurchase.toasts.unavailable'],
+      [{ ok: false as const, reason: 'COOLDOWN' as const, retryAt: Date.now() + 42_000 }, /billing\.giftCardPurchase\.email\.cooldown:\{"seconds":4[12]\}/],
+    ])('explains %o in the dialog', async (result, message) => {
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()]));
+      window.electronAPI.billing.sendPurchasedGiftCardEmail = vi.fn(async () => result);
+      render(<BillingPage />);
+      const input = await openEmailDialog();
+      fireEvent.change(input, { target: { value: 'friend@example.com' } });
+      fireEvent.click(screen.getByRole('button', { name: 'billing.giftCardPurchase.email.send' }));
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(screen.getByLabelText('billing.giftCardPurchase.email.recipient')).toBeTruthy();
+      expect(uiMocks.toastSuccess).not.toHaveBeenCalled();
+    });
+
+    it('starts from the last recipient and waits out the cooldown before sending again', async () => {
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () =>
+        page([card({ email: delivery('SENT', 30) })]));
+      render(<BillingPage />);
+      expect(await screen.findByText('billing.giftCardPurchase.email.status.sent:{"email":"friend@example.com"}')).toBeTruthy();
+      const input = await openEmailDialog();
+      expect(input.value).toBe('friend@example.com');
+      expect(screen.getByText(/billing\.giftCardPurchase\.email\.cooldown:\{"seconds":(29|30)\}/)).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'billing.giftCardPurchase.email.send' }).hasAttribute('disabled')).toBe(true);
+    });
+
+    // 旧服务端的列表不带 email 字段：没有发信接口，不出现「发送到邮箱」。
+    it('does not offer sending by email when the server cannot send', async () => {
+      window.electronAPI.billing.listPurchasedGiftCards = vi.fn(async () => page([card()], false));
+      render(<BillingPage />);
+      const more = await screen.findByRole('button', { name: 'billing.giftCardPurchase.actions.more' });
+      fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+      await screen.findByRole('menuitem', { name: 'billing.giftCardPurchase.actions.copyCode' });
+      expect(screen.queryByRole('menuitem', { name: 'billing.giftCardPurchase.actions.sendEmail' })).toBeNull();
+    });
+
+    // 邮件异步发出：仍在排队或发送中时每 5 秒重读第一页，最多 6 次；发出或窗口隐藏时不再读。
+    it.each([
+      ['keeps waiting', () => delivery('SENDING'), 'visible', 1 + EMAIL_REFRESH_MAX_ROUNDS],
+      ['stops once sent', () => delivery('SENT'), 'visible', 2],
+      ['pauses while hidden', () => delivery('SENDING'), 'hidden', 1],
+    ] as const)('re-reads delivery status at most a few times (%s)', async (_label, next, visibility, reads) => {
+      vi.useFakeTimers();
+      const visibilityState = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(visibility);
+      try {
+        const list = vi.fn()
+          .mockResolvedValueOnce(page([card({ email: delivery('PENDING') })]))
+          .mockResolvedValue(page([card({ email: next() })]));
+        window.electronAPI.billing.listPurchasedGiftCards = list;
+        const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+        await act(async () => {
+          await result.current.reload();
+        });
+        for (let round = 0; round < EMAIL_REFRESH_MAX_ROUNDS + 2; round += 1) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(EMAIL_REFRESH_DELAY_MS);
+          });
+        }
+        expect(list).toHaveBeenCalledTimes(reads);
+        unmount();
+      } finally {
+        visibilityState.mockRestore();
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('refreshes the balance and XD models once a gift card is redeemed', async () => {

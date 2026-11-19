@@ -17,6 +17,7 @@ import type {
   BillingPlanChangeTargetPlan,
   BillingPurchaseOption,
   BillingPurchasedGiftCard,
+  BillingPurchasedGiftCardEmail,
   BillingPurchasedGiftCardList,
   BillingPurchasedGiftCardStatus,
   BillingSubscription,
@@ -843,6 +844,8 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
     faces: [...new Set(faces)],
     maxSenderNameLength,
     maxMessageLength,
+    // 旧服务端没有发信接口：null 表示不提供「发送到邮箱」。
+    emailCooldownSeconds: boundedCount(value.emailCooldownSeconds, 24 * 3_600),
   };
 }
 
@@ -904,7 +907,37 @@ function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
     // 领取人昵称只属于「被别人领走」这一种状态，其它状态即使带了也不展示。
     claimedByName: status === 'CLAIMED' ? claimedByName : null,
     purchasedAt,
+    email: projectPurchasedGiftCardEmail(value.email),
   };
+}
+
+const GIFT_CARD_EMAIL_STATUSES = new Set<BillingPurchasedGiftCardEmail['status']>([
+  'PENDING',
+  'SENDING',
+  'SENT',
+  'FAILED',
+]);
+const MAX_EMAIL_LENGTH = 254;
+
+/** 发信情况只用于展示：旧服务端没有、或任何字段不合法时当作没发过，不让整张卡失效。 */
+function projectPurchasedGiftCardEmail(value: unknown): BillingPurchasedGiftCardEmail | null {
+  if (!isRecord(value)) return null;
+  const recipient = boundedString(value.recipient, MAX_EMAIL_LENGTH);
+  const status =
+    typeof value.status === 'string' &&
+    GIFT_CARD_EMAIL_STATUSES.has(value.status as BillingPurchasedGiftCardEmail['status'])
+      ? (value.status as BillingPurchasedGiftCardEmail['status'])
+      : null;
+  const updatedAt = isoTime(value.updatedAt);
+  const nextAvailableAt = isoTime(value.nextAvailableAt);
+  if (!recipient || !recipient.includes('@') || !status || !updatedAt || !nextAvailableAt) return null;
+  return { recipient, status, updatedAt, nextAvailableAt };
+}
+
+/** 发到邮箱成功后服务端返回这张卡的最新样子。 */
+export function projectSentPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
+  if (!isRecord(value)) invalidResponse();
+  return projectPurchasedGiftCard(value.card);
 }
 
 export function projectPurchasedGiftCardList(value: unknown): BillingPurchasedGiftCardList {
@@ -926,7 +959,9 @@ export function projectPurchasedGiftCardList(value: unknown): BillingPurchasedGi
     cardIds.add(card.cardId);
     cards.push(card);
   }
-  return { cards, nextCursor };
+  const emailSupported =
+    value.cards.length > 0 && value.cards.every((raw) => isRecord(raw) && 'email' in raw);
+  return { cards, nextCursor, emailSupported };
 }
 
 /**

@@ -26,11 +26,15 @@ const card = (
 ): BillingPurchasedGiftCard => ({
   cardId, orderId: 'order_new', faceCode: 'cat', amount: '20', currency: 'usd', senderName: 'Yu',
   message: 'Happy birthday! Use Cindy more, work late less.', codeTail: '7KQ2', status: 'UNCLAIMED',
-  claimedAt: null, claimedByName: null, purchasedAt: now, ...overrides,
+  claimedAt: null, claimedByName: null, purchasedAt: now, email: null, ...overrides,
 });
+const inAMinute = () => new Date(Date.now() + 60_000).toISOString();
 const cards: BillingPurchasedGiftCard[] = [
   card('card_1'),
-  card('card_2', { codeTail: 'M3XD' }),
+  card('card_2', {
+    codeTail: 'M3XD',
+    email: { recipient: 'alex@example.com', status: 'SENT', updatedAt: now, nextAvailableAt: now },
+  }),
   card('card_3', { orderId: 'order_bell', faceCode: 'bell', amount: '100', codeTail: 'Q8TR', status: 'CLAIMED', claimedAt: '2026-11-16T09:30:00.000Z', claimedByName: 'Alex', purchasedAt: '2026-11-15T09:30:00.000Z' }),
   card('card_4', { orderId: 'order_leap', faceCode: 'leap', codeTail: '2HNW', status: 'REDEEMED_BY_YOU', claimedAt: '2026-11-12T09:30:00.000Z', purchasedAt: '2026-11-12T09:00:00.000Z' }),
   card('card_5', { orderId: 'order_cindy', faceCode: 'cindy', amount: '200', codeTail: 'Z7PA', status: 'REFUNDED', purchasedAt: '2026-11-10T09:00:00.000Z' }),
@@ -99,9 +103,18 @@ void mountPage({
         currency: 'usd', dailyLimit: 5, windowHours: 24, remaining: ctx.case === 'limit' ? 0 : 5,
         maxQuantityPerOrder: 5, maxOrderAmount: null, minFaceValue: '20', maxFaceValue: '500',
         faces: ['cindy', 'cat', 'bell', 'leap'],
-        maxSenderNameLength: 40, maxMessageLength: 120,
+        maxSenderNameLength: 40, maxMessageLength: 120, emailCooldownSeconds: 60,
       }),
-      listPurchasedGiftCards: async () => ({ cards, nextCursor: null }),
+      listPurchasedGiftCards: async () => ({ cards, nextCursor: null, emailSupported: true }),
+      // 发到邮箱：记在内存列表里，状态刷新读回同一份。
+      sendPurchasedGiftCardEmail: async ({ cardId, email }: { cardId: string; email: string }) => {
+        const index = cards.findIndex((item) => item.cardId === cardId);
+        cards[index] = {
+          ...cards[index]!,
+          email: { recipient: email, status: 'SENDING', updatedAt: new Date().toISOString(), nextAvailableAt: inAMinute() },
+        };
+        return { ok: true as const, card: cards[index]! };
+      },
       revealPurchasedGiftCard: async () => ({
         code: 'G012-3456-789A-BCDE',
         claimUrl: 'https://share.cindy.app/gift?face=cat#G012-3456-789A-BCDE',

@@ -20165,14 +20165,36 @@
         "copied": "Kopiert",
         "more": "Weitere Aktionen",
         "copyCode": "Einlösecode kopieren",
-        "redeemSelf": "Selbst einlösen"
+        "redeemSelf": "Selbst einlösen",
+        "sendEmail": "Per E-Mail senden"
       },
       "toasts": {
         "linkCopied": "Einlöselink kopiert",
         "codeCopied": "Einlösecode kopiert",
         "copyFailed": "Kopieren fehlgeschlagen. Bitte erneut versuchen.",
         "unavailable": "Diese Karte wurde bereits eingelöst oder erstattet",
-        "revealFailed": "Der Einlösecode konnte nicht abgerufen werden. Bitte versuche es später erneut."
+        "revealFailed": "Der Einlösecode konnte nicht abgerufen werden. Bitte versuche es später erneut.",
+        "emailQueued": "Wird an {{email}} gesendet"
+      },
+      "email": {
+        "title": "Per E-Mail senden",
+        "description": "Sende den Einlöselink dieser Karte an die Person, der du sie schenkst. Die E-Mail enthält deinen Namen und deine Nachricht.",
+        "previewLabel": "Empfänger erhält",
+        "previewWithMessage": "„{{message}}“ · mit Einlöselink und Code",
+        "previewLinkOnly": "Einlöselink und Code",
+        "recipient": "E-Mail des Empfängers",
+        "placeholder": "name@beispiel.de",
+        "hint": "Du kannst sie an jede Adresse senden. Wer den Einlöselink zuerst öffnet, erhält die Karte.",
+        "cooldown": "Erneutes Senden in {{seconds}} s möglich",
+        "invalid": "Gib eine gültige E-Mail-Adresse ein",
+        "failed": "Senden nicht möglich. Versuche es später erneut.",
+        "send": "Senden",
+        "status": {
+          "sending": "Wird an {{email}} gesendet",
+          "sent": "An {{email}} gesendet",
+          "failed": "Senden an {{email}} fehlgeschlagen",
+          "failedRetry": "Senden an {{email}} fehlgeschlagen. Du kannst sie erneut senden."
+        }
       }
     }
   },
