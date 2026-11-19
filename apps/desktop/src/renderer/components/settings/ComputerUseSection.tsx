@@ -1,3 +1,4 @@
+import { usePluginInPlace } from '@/features/plugin/lib/pluginInPlace';
 import { computerUseSettings } from './ComputerUseSection.settings-search';
 /**
  * ComputerUseSection — Settings →「电脑使用 / Computer Use」面板。
@@ -49,9 +50,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { createLogger } from '@/lib/logger';
-import { extractIpcError } from '@/utils/ipcError';
-import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
-import { pluginMarketErrorKey } from '@/features/plugin/lib/pluginMarketErrorKey';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
 import { useAutomationSettingsRead } from './useAutomationSettingsRead';
 import { ComputerPermissionRow } from './ComputerPermissionRow';
@@ -61,7 +59,6 @@ import {
   REAL_PROFILE_READ_DENIED,
   type BrowserBackendHealth,
 } from '../../../shared/browserBackend';
-import { ghostInstallApprovalToken } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import {
   browserOpenForLoginErrorCode,
@@ -466,6 +463,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   );
   const navigate = useNavigate();
   const installedGhosts = useInstalledGhosts();
+  const { run: runPluginInPlace } = usePluginInPlace();
   const userBrowserPlugin =
     // Only the root instance can provide My browser (an organization copy with the same id cannot),
     // so that is the one the setup steps install, enable and open.
@@ -538,40 +536,13 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     }
     setUserBrowserSetupBusy(true);
     try {
-      if (userBrowserPlugin) {
-        await window.electronAPI.ghosts.setEnabled(
-          installedGhostStoragePart(userBrowserPlugin),
-          true,
-          ghostInstallApprovalToken(userBrowserPlugin.approval),
-        );
-      } else {
-        // Market ids are opaque; the plugin is found by the ghost id it installs as.
-        const item = (await window.electronAPI.pluginMarket.lookup([RECOMMENDED_PAGE_CONTROL_PLUGIN_ID])).items.find(
-          (entry) => entry.ghostId === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
-        );
-        const detail = item ? await window.electronAPI.pluginMarket.detail(item.pluginId) : null;
-        if (detail?.installState !== 'not-installed') {
-          openPluginPage();
-          return;
-        }
-        const result = await window.electronAPI.pluginMarket.install(detail.pluginId, {
-          expectedReleaseId: detail.releaseId,
-          expectedManifest: detail.manifest,
-          allowSourceReplacement: false,
-        });
-        toast.success(t('settings.ghosts.toast.installed', { name: result.ghost.manifest.name }));
-      }
-      await refreshUserBrowserHealth();
-    } catch (error) {
-      const code = extractIpcError(error)?.code;
-      // Cancelling the install confirmation is not a failure.
-      if (code !== 'MUTATION_CANCELLED') {
-        toast.error(t(userBrowserPlugin ? ghostInstallErrorKey(code) : pluginMarketErrorKey(error)));
-      }
+      await runPluginInPlace({ ghostId: RECOMMENDED_PAGE_CONTROL_PLUGIN_ID, namespace: null }, {
+        onReady: refreshUserBrowserHealth,
+      });
     } finally {
       setUserBrowserSetupBusy(false);
     }
-  }, [browserBackendHealth?.reason, installedGhosts, navigate, refreshUserBrowserHealth, t, userBrowserPlugin]);
+  }, [browserBackendHealth?.reason, installedGhosts, navigate, refreshUserBrowserHealth, runPluginInPlace, t, userBrowserPlugin]);
   // While "My browser" still lacks its plugin or extension, check again every few seconds so the
   // guidance turns into "connected" as soon as the user finishes a step elsewhere.
   useEffect(() => {
