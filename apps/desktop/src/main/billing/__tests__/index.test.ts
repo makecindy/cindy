@@ -830,7 +830,27 @@ describe('gift card purchase IPC', () => {
     }));
   });
 
+  // 自填面额的方案把单张面额带给服务端；固定面额方案的请求不带这个字段（上一条用例）。
+  it('forwards a buyer-entered face value', async () => {
+    const { call, fetch } = harness();
+    fetch.mockResolvedValueOnce({
+      orderId: 'order_10', productCode: 'gift_card', offerCode: 'gift_card_custom', amount: '466.5',
+      currency: 'cny', status: 'PENDING', paymentAction: null, productKind: 'GIFT_CARD', quantity: 2,
+      createdAt: '2026-11-19T08:00:00.000Z', updatedAt: '2026-11-19T08:00:00.000Z',
+    });
+    await call(BILLING_INVOKE.CREATE_GIFT_CARD_ORDER, {
+      request: { ...request, offerCode: 'gift_card_custom', amount: '233.25' },
+      idempotencyKey: 'desktop:gift-card:12345678',
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/billing/gift-card/orders', expect.objectContaining({
+      body: expect.objectContaining({ offerCode: 'gift_card_custom', amount: '233.25' }),
+    }));
+  });
+
   it.each([
+    { ...request, amount: '100.555' },
+    { ...request, amount: 100 },
+    { ...request, amount: '-5' },
     { ...request, quantity: 0 },
     { ...request, quantity: 1.5 },
     { ...request, faceCode: '../face' },

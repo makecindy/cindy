@@ -475,7 +475,7 @@ function projectOffer(
     minAmount !== null &&
     maxAmount !== null &&
     rolloverCap === null;
-  // 礼品卡只有固定面额：面额印在卡面上，到账金额必须与它一致。
+  // 礼品卡的固定面额印在卡面上，到账金额必须与它一致；自填面额由买家在范围内填，到账等于所填面额。
   const isFixedGiftCard =
     productKind === 'GIFT_CARD' &&
     interval === null &&
@@ -484,7 +484,23 @@ function projectOffer(
     minAmount === null &&
     maxAmount === null &&
     rolloverCap === null;
-  if (!isSubscription && !isFixedTopup && !isCustomTopup && !isFixedGiftCard) return null;
+  const isCustomGiftCard =
+    productKind === 'GIFT_CARD' &&
+    interval === null &&
+    amount === null &&
+    creditAmount === null &&
+    minAmount !== null &&
+    maxAmount !== null &&
+    rolloverCap === null;
+  if (
+    !isSubscription &&
+    !isFixedTopup &&
+    !isCustomTopup &&
+    !isFixedGiftCard &&
+    !isCustomGiftCard
+  ) {
+    return null;
+  }
 
   const optionIds = new Set<string>();
   const purchaseOptions = value.purchaseOptions
@@ -821,6 +837,9 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
     remaining: Math.min(remaining, dailyLimit),
     maxQuantityPerOrder,
     maxOrderAmount,
+    // 旧服务端没有单张面额范围：不当成坏响应，自填面额只按价格方案范围限制。
+    minFaceValue: decimal(value.minFaceValue),
+    maxFaceValue: decimal(value.maxFaceValue),
     faces: [...new Set(faces)],
     maxSenderNameLength,
     maxMessageLength,

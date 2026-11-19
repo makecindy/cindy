@@ -40,6 +40,8 @@ const CODE_PATTERN = /^[a-z][a-z0-9_]{1,63}$/;
 const DECIMAL_PATTERN = /^(0|[1-9]\d{0,14})(?:\.\d{1,9})?$/;
 const ID_MAX_LENGTH = 128;
 const FACE_CODE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+/** 礼品卡单张面额：正数、最多两位小数（与卡面和兑换入账精度一致）。 */
+const GIFT_CARD_AMOUNT_PATTERN = /^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/;
 const RESOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const OPAQUE_CURSOR_PATTERN = /^[A-Za-z0-9_.~-]{1,1024}$/;
 // 服务端按自己的上限校验署名、留言与张数；这里只挡住明显越界的输入，不复制业务规则。
@@ -241,9 +243,16 @@ function parseCreateGiftCardOrder(raw: unknown): {
   const request = requireObject(payload.request, 'request');
   assertOnlyKeys(
     request,
-    ['offerCode', 'quantity', 'faceCode', 'senderName', 'message', 'purchaseOptionId'],
+    ['offerCode', 'amount', 'quantity', 'faceCode', 'senderName', 'message', 'purchaseOptionId'],
     'request',
   );
+  // 自填面额：正数、最多两位小数；是否在范围内由服务端按价格方案校验。
+  if (
+    request.amount !== undefined &&
+    (typeof request.amount !== 'string' || !GIFT_CARD_AMOUNT_PATTERN.test(request.amount))
+  ) {
+    throwIpcError('INVALID_PARAMS', 'amount is invalid');
+  }
   const { quantity, faceCode } = request;
   if (
     typeof quantity !== 'number' ||
@@ -265,6 +274,7 @@ function parseCreateGiftCardOrder(raw: unknown): {
   return {
     request: {
       offerCode: requireCode(request.offerCode, 'offerCode'),
+      ...(request.amount === undefined ? {} : { amount: request.amount as string }),
       quantity,
       faceCode,
       senderName,

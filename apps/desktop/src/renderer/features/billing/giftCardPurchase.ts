@@ -9,18 +9,27 @@ import { isSupportedPurchaseOption, type SupportedPurchaseOption } from './purch
 /** 卡面的展示顺序；与分享网页、Platform 后台同一组成品图。 */
 export const GIFT_CARD_FACES = ['cindy', 'cat', 'bell', 'leap'] as const;
 
-export type GiftCardOfferEntry = {
-  offer: BillingCatalogOffer & { amount: string };
-  purchaseOptions: SupportedPurchaseOption[];
-};
+/** 一个可买的礼品卡价格方案：固定面额，或买家在 minAmount..maxAmount 内自填单张面额。 */
+export type GiftCardOfferEntry =
+  | {
+      kind: 'fixed';
+      offer: BillingCatalogOffer & { amount: string };
+      purchaseOptions: SupportedPurchaseOption[];
+    }
+  | {
+      kind: 'custom';
+      offer: BillingCatalogOffer & { amount: null; minAmount: string; maxAmount: string };
+      purchaseOptions: SupportedPurchaseOption[];
+    };
 
 /**
- * 目录里能买的礼品卡面额：固定面额、当前可售、且至少有一个 Desktop 接得住的支付渠道。
+ * 目录里能买的礼品卡面额：当前可售、且至少有一个 Desktop 接得住的支付渠道。固定面额按目录
+ * 顺序在前；自填面额只取第一个，排在最后（界面上是一个「自定义」选项）。
  * 旧服务端没有 GIFT_CARD 商品时返回空数组，「购买礼品卡」入口就不出现。
  */
 export function giftCardOffersOf(catalog: BillingCatalog | null): GiftCardOfferEntry[] {
   if (!catalog) return [];
-  return catalog.products
+  const entries = catalog.products
     .filter((product) => product.kind === 'GIFT_CARD')
     .flatMap((product) =>
       product.offers.map((offer) => ({
@@ -30,11 +39,61 @@ export function giftCardOffersOf(catalog: BillingCatalog | null): GiftCardOfferE
         ),
       })),
     )
-    .filter((entry): entry is GiftCardOfferEntry =>
-      entry.offer.amount !== null &&
-      entry.offer.purchasable !== false &&
-      entry.purchaseOptions.length > 0,
-    );
+    .filter((entry) => entry.offer.purchasable !== false && entry.purchaseOptions.length > 0);
+  const fixed: GiftCardOfferEntry[] = [];
+  let custom: GiftCardOfferEntry | null = null;
+  for (const { offer, purchaseOptions } of entries) {
+    if (offer.amount !== null) {
+      fixed.push({ kind: 'fixed', offer: { ...offer, amount: offer.amount }, purchaseOptions });
+    } else if (!custom && offer.minAmount !== null && offer.maxAmount !== null) {
+      custom = {
+        kind: 'custom',
+        offer: { ...offer, amount: null, minAmount: offer.minAmount, maxAmount: offer.maxAmount },
+        purchaseOptions,
+      };
+    }
+  }
+  return custom ? [...fixed, custom] : fixed;
+}
+
+/**
+ * 自填面额实际可填的范围：价格方案范围与服务端给的单张面额范围取交集（存量方案比当前限额宽时
+ * 以限额为准）。服务端下单时同样按交集校验。
+ */
+export function customGiftCardRange(
+  offer: { minAmount: string; maxAmount: string },
+  policy: Pick<BillingGiftCardPurchasePolicy, 'minFaceValue' | 'maxFaceValue'> | null,
+): { min: string; max: string } {
+  const pick = (a: string, b: string | null | undefined, larger: boolean) => {
+    const left = cents(a);
+    const right = b ? cents(b) : null;
+    if (left === null || right === null) return a;
+    return (larger ? right > left : right < left) ? b! : a;
+  };
+  return {
+    min: pick(offer.minAmount, policy?.minFaceValue, true),
+    max: pick(offer.maxAmount, policy?.maxFaceValue, false),
+  };
+}
+
+/**
+ * 买家填的面额：合法时返回规范写法（去掉多余的 0，如 0100 → 100、100.50 → 100.5），否则返回问题。
+ * 面额最多两位小数，与卡面和兑换入账的精度一致。
+ */
+export function parseCustomGiftCardAmount(
+  input: string,
+  range: { min: string; max: string },
+): { amount: string } | { issue: 'empty' | 'format' | 'range' } {
+  const value = input.trim();
+  if (!value) return { issue: 'empty' };
+  const unit = cents(value);
+  if (unit === null || unit === 0) return { issue: unit === 0 ? 'range' : 'format' };
+  const min = cents(range.min);
+  const max = cents(range.max);
+  if ((min !== null && unit < min) || (max !== null && unit > max)) return { issue: 'range' };
+  const whole = Math.floor(unit / 100);
+  const fraction = String(unit % 100).padStart(2, '0').replace(/0+$/, '');
+  return { amount: fraction ? `${whole}.${fraction}` : String(whole) };
 }
 
 /** 十进制金额转成分（两位小数以内）；礼品卡面额最多两位小数。 */

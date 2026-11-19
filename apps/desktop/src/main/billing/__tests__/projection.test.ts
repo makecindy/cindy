@@ -1058,18 +1058,21 @@ describe('gift card purchase projection', () => {
     ...overrides,
   });
 
-  // 面额印在卡面上：到账金额与面额不一致、或者是任意金额的礼品卡，都不能拿来卖。
-  it('keeps fixed gift card amounts and drops offers whose credit differs from the face value', () => {
+  // 面额印在卡面上：固定面额的到账金额必须等于面额；买家自填面额只带范围，到账随所填面额，
+  // 带了固定到账额度的「自填」方案对不上卡面，不能拿来卖。
+  it('keeps fixed and buyer-entered gift card amounts and drops offers whose credit differs from the face value', () => {
     const catalog = projectBillingCatalog({
       products: [giftCardProduct([
         giftOffer(),
         giftOffer({ code: 'gift_card_odd', creditAmount: '120' }),
-        giftOffer({ code: 'gift_card_custom', amount: null, creditAmount: null, minAmount: '1', maxAmount: '500' }),
+        giftOffer({ code: 'gift_card_custom', amount: null, creditAmount: null, minAmount: '100', maxAmount: '500' }),
+        giftOffer({ code: 'gift_card_custom_odd', amount: null, creditAmount: '100', minAmount: '100', maxAmount: '500' }),
       ])],
     });
     expect(catalog.products).toHaveLength(1);
     expect(catalog.products[0]).toMatchObject({ kind: 'GIFT_CARD', level: null });
-    expect(catalog.products[0]!.offers.map((offer) => offer.code)).toEqual(['gift_card_100']);
+    expect(catalog.products[0]!.offers.map((offer) => offer.code)).toEqual(['gift_card_100', 'gift_card_custom']);
+    expect(catalog.products[0]!.offers[1]).toMatchObject({ amount: null, minAmount: '100', maxAmount: '500' });
     expect(catalog.products[0]!.offers[0]!.purchaseOptions[0]).toMatchObject({ capability: 'ONE_TIME_PAYMENT' });
   });
 
@@ -1084,11 +1087,18 @@ describe('gift card purchase projection', () => {
   it('reads the purchase limits with the gift card currency casing and never offers more than the window allows', () => {
     expect(projectGiftCardPurchasePolicy({
       currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 9, maxQuantityPerOrder: 5,
-      maxOrderAmount: '1000', faces: ['cindy', 'cat', '../x'], maxSenderNameLength: 40, maxMessageLength: 120,
+      maxOrderAmount: '1000', minFaceValue: '100', maxFaceValue: '1000',
+      faces: ['cindy', 'cat', '../x'], maxSenderNameLength: 40, maxMessageLength: 120,
     })).toEqual({
       currency: 'cny', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
-      maxOrderAmount: '1000', faces: ['cindy', 'cat'], maxSenderNameLength: 40, maxMessageLength: 120,
+      maxOrderAmount: '1000', minFaceValue: '100', maxFaceValue: '1000',
+      faces: ['cindy', 'cat'], maxSenderNameLength: 40, maxMessageLength: 120,
     });
+    // 旧服务端没有单张面额范围：照常读出其余限制，范围为 null。
+    expect(projectGiftCardPurchasePolicy({
+      currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
+    })).toMatchObject({ minFaceValue: null, maxFaceValue: null });
     expect(() => projectGiftCardPurchasePolicy({ currency: 'USD', dailyLimit: 5 })).toThrow();
   });
 

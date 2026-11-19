@@ -338,6 +338,8 @@ export type CreateBillingTopupRequest = {
 
 export type CreateBillingGiftCardOrderRequest = {
   offerCode: string;
+  /** 只有自填面额的价格方案带：单张面额（最多两位小数）；固定面额方案不带。 */
+  amount?: string;
   /** 1–5 张；同一单的卡面、面额、署名与留言相同，每张一个兑换码。 */
   quantity: number;
   faceCode: string;
@@ -356,6 +358,9 @@ export type BillingGiftCardPurchasePolicy = {
   maxQuantityPerOrder: number;
   /** 单笔订单总额上限（如国内支付宝）；null 表示不限。 */
   maxOrderAmount: string | null;
+  /** 单张面额范围；自填面额只能在这个范围内。旧服务端没有这两个字段时为 null。 */
+  minFaceValue: string | null;
+  maxFaceValue: string | null;
   faces: string[];
   maxSenderNameLength: number;
   maxMessageLength: number;

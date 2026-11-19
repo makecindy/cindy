@@ -17,10 +17,12 @@ import { GiftCardFace } from './GiftCardFace';
 import { GiftCardStack } from './GiftCardStack';
 import {
   GIFT_CARD_FACES,
+  customGiftCardRange,
   defaultGiftCardSender,
   formatGiftCardAmount,
   giftCardOrderTotal,
   maxGiftCardQuantity,
+  parseCustomGiftCardAmount,
   type GiftCardOfferEntry,
 } from './giftCardPurchase';
 import { BILLING_CURRENCY } from './money';
@@ -41,7 +43,7 @@ interface GiftCardPurchaseDialogProps {
 
 /**
  * 购买礼品卡：左边始终是对方收到的样子（卡面、印在卡上的金额、署名与留言），右边选卡面、
- * 面额、张数并填写署名与留言。付款交给计费页已有的支付弹窗。
+ * 面额（固定面额，或在后台给的范围内自己填）、张数并填写署名与留言。付款交给计费页已有的支付弹窗。
  */
 export function GiftCardPurchaseDialog({
   open,
@@ -59,6 +61,9 @@ export function GiftCardPurchaseDialog({
   const [sender, setSender] = useState('');
   const [message, setMessage] = useState('');
   const [purchaseOptionId, setPurchaseOptionId] = useState<string | null>(null);
+  const [customAmount, setCustomAmount] = useState('');
+  const customInputRef = useRef<HTMLInputElement>(null);
+  const focusCustomRef = useRef(false);
   const requestRef = useRef(0);
 
   const policy = policyState.kind === 'ready' ? policyState.policy : null;
@@ -90,6 +95,7 @@ export function GiftCardPurchaseDialog({
     setQuantity(1);
     setMessage('');
     setPurchaseOptionId(null);
+    setCustomAmount('');
     void loadPolicy();
     // 只在打开时初始化；loadPolicy 只读写本组件状态。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -99,7 +105,15 @@ export function GiftCardPurchaseDialog({
     if (open && policy) setSender(defaultGiftCardSender(accountName, policy.maxSenderNameLength));
   }, [accountName, open, policy]);
 
-  const capOf = (entry: GiftCardOfferEntry) => (policy ? maxGiftCardQuantity(policy, entry.offer.amount) : 0);
+  const customEntry = offers.find((entry) => entry.kind === 'custom') ?? null;
+  const customRange = customEntry ? customGiftCardRange(customEntry.offer, policy) : null;
+  const customParsed = customRange ? parseCustomGiftCardAmount(customAmount, customRange) : null;
+  const customValue = customParsed && 'amount' in customParsed ? customParsed.amount : null;
+  /** 单张面额；自填还没填好时为 null。张数上限按已填的面额算，没填好时按可填的最低面额算。 */
+  const unitOf = (entry: GiftCardOfferEntry) =>
+    entry.kind === 'fixed' ? entry.offer.amount : customValue;
+  const capOf = (entry: GiftCardOfferEntry) =>
+    policy ? maxGiftCardQuantity(policy, unitOf(entry) ?? customRange?.min ?? entry.offer.minAmount ?? '0') : 0;
   const selected =
     offers.find((entry) => entry.offer.code === offerCode) ??
     offers.find((entry) => capOf(entry) > 0) ??
@@ -112,24 +126,48 @@ export function GiftCardPurchaseDialog({
     selected?.purchaseOptions[0] ??
     null;
   const senderName = sender.trim();
-  const unitAmount = selected?.offer.amount ?? '0';
-  const total = giftCardOrderTotal(unitAmount, effectiveQuantity);
+  const unitAmount = selected ? unitOf(selected) : null;
+  const total = unitAmount === null ? null : giftCardOrderTotal(unitAmount, effectiveQuantity);
   const amountOf = (value: string) => formatGiftCardAmount(value, BILLING_CURRENCY, locale);
-  const canPay = Boolean(policy && selected && option && senderName && maxQuantity >= effectiveQuantity && maxQuantity > 0);
+  const canPay = Boolean(
+    policy && selected && option && senderName && unitAmount !== null &&
+    maxQuantity >= effectiveQuantity && maxQuantity > 0,
+  );
+  const customIssue =
+    selected?.kind === 'custom' && customParsed && 'issue' in customParsed && customParsed.issue !== 'empty'
+      ? customParsed.issue
+      : null;
+  const customHint = customRange
+    ? customIssue === 'format'
+      ? t('billing.amount.formatError', { digits: 2 })
+      : t(customIssue === 'range' ? 'billing.amount.rangeError' : 'billing.amount.rangeHint', {
+          min: amountOf(customRange.min),
+          max: amountOf(customRange.max),
+        })
+    : null;
+
+  // 点「自定义」后把光标放进金额输入框；只在用户点选时移动焦点，打开弹窗时不抢。
+  useEffect(() => {
+    if (focusCustomRef.current && selected?.kind === 'custom') {
+      focusCustomRef.current = false;
+      customInputRef.current?.focus();
+    }
+  });
 
   const submit = () => {
-    if (!canPay || !selected || !option) return;
+    if (!canPay || !selected || !option || unitAmount === null) return;
     const text = message.trim();
     onSubmit(
       {
         offerCode: selected.offer.code,
+        ...(selected.kind === 'custom' ? { amount: unitAmount } : {}),
         quantity: effectiveQuantity,
         faceCode,
         senderName,
         message: text ? text : null,
         purchaseOptionId: option.id,
       },
-      selected.offer.amount,
+      unitAmount,
     );
   };
 
@@ -159,7 +197,9 @@ export function GiftCardPurchaseDialog({
 
   const faceName = (face: string) =>
     t(`billing.giftCardPurchase.faces.${face}`, { defaultValue: face });
-  const cardLabel = t('billing.giftCard.cardLabel', { amount: amountOf(unitAmount) });
+  const cardLabel = unitAmount === null
+    ? t('billing.giftCardPurchase.previewLabel')
+    : t('billing.giftCard.cardLabel', { amount: amountOf(unitAmount) });
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
@@ -203,7 +243,7 @@ export function GiftCardPurchaseDialog({
               <GiftCardStack
                 className="mt-2.5"
                 faceCode={faceCode}
-                amount={unitAmount}
+                amount={unitAmount ?? ''}
                 currency={BILLING_CURRENCY}
                 count={effectiveQuantity}
                 label={cardLabel}
@@ -270,11 +310,15 @@ export function GiftCardPurchaseDialog({
                         aria-pressed={active}
                         disabled={unavailable}
                         onClick={() => {
+                          if (entry.kind === 'custom') focusCustomRef.current = true;
                           setOfferCode(entry.offer.code);
                           setPurchaseOptionId(null);
                         }}
                         className={cn(
-                          'h-[52px] rounded-lg text-16 font-semibold tabular-nums tracking-[-0.01em] transition-colors',
+                          'h-[52px] rounded-lg transition-colors',
+                          entry.kind === 'fixed'
+                            ? 'text-16 font-semibold tabular-nums tracking-[-0.01em]'
+                            : 'px-2 text-13 font-medium leading-[1.25]',
                           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                           active
                             ? 'border-[1.5px] border-[var(--text-primary)] bg-[var(--surface-chip)]'
@@ -282,11 +326,44 @@ export function GiftCardPurchaseDialog({
                           'disabled:cursor-not-allowed disabled:opacity-50',
                         )}
                       >
-                        {amountOf(entry.offer.amount)}
+                        {entry.kind === 'fixed' ? amountOf(entry.offer.amount) : t('billing.amount.custom')}
                       </button>
                     );
                   })}
                 </div>
+                {selected?.kind === 'custom' && (
+                  <div className="mt-2.5">
+                    <Input
+                      inputRef={customInputRef}
+                      size="lg"
+                      value={customAmount}
+                      onChange={setCustomAmount}
+                      inputMode="decimal"
+                      autoComplete="off"
+                      ariaLabel={t('billing.amount.custom')}
+                      aria-describedby="gift-card-custom-amount-hint"
+                      placeholder={t('billing.amount.placeholder')}
+                      error={customIssue !== null}
+                      inputClassName="pr-14 text-14 tabular-nums"
+                      trailing={
+                        <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-12 text-[var(--text-tertiary)]">
+                          {BILLING_CURRENCY.toUpperCase()}
+                        </span>
+                      }
+                    />
+                    {customHint && (
+                      <p
+                        id="gift-card-custom-amount-hint"
+                        className={cn(
+                          'mt-1.5 text-12 leading-[1.667]',
+                          customIssue ? 'text-[var(--error-fg)]' : 'text-[var(--text-tertiary)]',
+                        )}
+                      >
+                        {customHint}
+                      </p>
+                    )}
+                  </div>
+                )}
               </section>
 
               <section aria-labelledby="gift-card-quantity-label">
@@ -418,13 +495,22 @@ export function GiftCardPurchaseDialog({
 
           <div className="flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-t border-[var(--border-default)] px-6 py-3">
             <div className="flex items-baseline gap-2.5" aria-live="polite">
-              <span className="text-24 font-semibold tracking-[-0.02em] tabular-nums">{amountOf(total)}</span>
-              <span className="text-12 text-[var(--text-secondary)]">
-                {t('billing.giftCardPurchase.totalDetail', {
-                  count: effectiveQuantity,
-                  amount: amountOf(unitAmount),
-                })}
+              <span
+                className={cn(
+                  'text-24 font-semibold tracking-[-0.02em] tabular-nums',
+                  total === null && 'text-[var(--text-tertiary)]',
+                )}
+              >
+                {total === null ? '—' : amountOf(total)}
               </span>
+              {unitAmount !== null && (
+                <span className="text-12 text-[var(--text-secondary)]">
+                  {t('billing.giftCardPurchase.totalDetail', {
+                    count: effectiveQuantity,
+                    amount: amountOf(unitAmount),
+                  })}
+                </span>
+              )}
             </div>
             <div className="flex gap-2.5">
               <Button variant="secondary" size="lg" onClick={onClose}>
