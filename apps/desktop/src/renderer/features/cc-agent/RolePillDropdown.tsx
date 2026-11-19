@@ -28,6 +28,7 @@ import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import type { AttentionKind } from '@/lib/sessionAttentionStore';
 import { isLocalOrcaWorkerTask, localOrcaWorkerSessionIds, useOrcaWorkerTaskAttentionKinds } from './lib/orcaWorkerTaskAttention';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
+import { findPluginEngine, usePluginEngines } from '@/hooks/usePluginEngines';
 import type { WorkerInfo } from './hooks/useWorkers';
 import type { WorkerExecutionDevice } from './hooks/workerProjectionStore';
 import { shouldShowWorkerLabel } from './workerLabel';
@@ -162,12 +163,15 @@ function WorkerModelLine({
 //     (点=有新结果可看); 只有 error 不该用点
 function WorkerAvatar({
   agent,
+  providerId,
   status,
   attentionKind,
   selected = false,
   remote = false,
 }: {
   agent: WorkerInfo['agent'];
+  /** 仅插件引擎 Worker：画该引擎插件自己的图标。 */
+  providerId?: string;
   status: WorkerInfo['status'];
   attentionKind?: AttentionKind;
   selected?: boolean;
@@ -175,7 +179,9 @@ function WorkerAvatar({
   remote?: boolean;
 }) {
   const { t } = useTranslation();
-  const vendor = agentKindToVendor(agent);
+  // 只有插件引擎 Worker 才读引擎列表；内置 Worker 不订阅。
+  const pluginEngineIcon = findPluginEngine(usePluginEngines(agent === 'acp'), providerId)?.iconDataUrl;
+  const vendor = agent === 'acp' ? 'acp' : agentKindToVendor(agent);
   const isError = attentionKind === 'error';
   const dotTone =
     !isError && (attentionKind === 'awaiting' || attentionKind === 'done')
@@ -194,6 +200,7 @@ function WorkerAvatar({
         // 右上角正显示未读点时由未读点占位，波纹暂不画(与侧栏任务图标同规则)。
         remote={remote && !dotTone}
         className={isError ? 'text-[var(--error-flat)]' : selectedIdleClassName}
+        {...(pluginEngineIcon ? { iconDataUrl: pluginEngineIcon } : {})}
       />
       {dotTone && (
         <span
@@ -348,6 +355,7 @@ function WorkerSummary({
       <div className={cn('flex items-center gap-2 leading-snug', compact ? 'text-11' : 'text-13')}>
         <WorkerAvatar
           agent={worker.agent}
+          providerId={worker.providerId}
           status={worker.status}
           attentionKind={attentionKind}
           selected={selected}
@@ -714,6 +722,7 @@ function WorkerLayoutMenu({
                         <div className="flex items-center gap-2 text-13 leading-snug">
                           <WorkerAvatar
                             agent={w.agent}
+                            providerId={w.providerId}
                             status={w.status}
                             attentionKind={attentionKind}
                             remote={Boolean(w.agentDeviceId)}
@@ -1390,6 +1399,7 @@ export function RolePillDropdown({
       >
         <WorkerAvatar
           agent={worker.agent}
+          providerId={worker.providerId}
           status={worker.status}
           attentionKind={avatarAttention}
           remote={Boolean(worker.agentDeviceId)}
@@ -1472,6 +1482,7 @@ export function RolePillDropdown({
                     <div className="flex items-center gap-2 text-13 leading-snug">
                       <WorkerAvatar
                         agent={w.agent}
+                        providerId={w.providerId}
                         status={w.status}
                         attentionKind={attentionKind}
                         remote={Boolean(w.agentDeviceId)}

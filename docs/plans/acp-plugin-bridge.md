@@ -260,14 +260,14 @@ export interface PluginHarnessRegistry {
 
 ## 第一期明确不支持（遇到即明确拒绝，不回落到内置引擎）
 
-（换引擎已在第二期支持，见下节。）分叉、回退、移到另一台电脑或 SSH、Orca 协同、定时任务、IM 渠道、伙伴、共享任务、
+（换引擎、定时任务与协同 Worker 已在第二期支持，见下面几节。）分叉、回退、移到另一台电脑或 SSH、插件引擎当协同 Lead、IM 渠道、伙伴、共享任务、
 其他任务经 send_to_session 向插件引擎任务发消息、/learn 捕获、上下文溢出后的重放、Cindy 生成标题、
 Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'` 落库，不带供应商元信息。
 
 ## 第二期：任务里换引擎（2026-11-19）
 
 用户要求插件引擎与内置引擎在任务里能做的事一样。第二期按顺序做：任务中换引擎 → 手机 → 定时任务 → 多 Agent 协同；
-插件 worker 的顶层会话视为已确认的调用方，可中途向 lead 汇报。本节记录第一项。
+插件 worker 的顶层会话视为已确认的调用方，可中途向 lead 汇报。本节记录第一项，后几项见下面两节。
 
 - **入口**：内置任务的模型选择器列出插件引擎；插件引擎任务的选择器与内置任务相同，列出内置模型与全部插件引擎。
   同一个插件引擎内换模型照旧立即生效；换到另一个引擎（内置 ↔ 插件、插件 ↔ 插件）与内置引擎之间一样登记意图，
@@ -295,6 +295,29 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
   Agent 自动任务；绑定任务、持续会话、worktree、另一台电脑、脚本执行与项目自动化不提供。保存与每次运行前都按本机此刻
   提供的引擎准入，插件停用或不可用时保存或本次运行明确失败，不回落内置模型。权限与内置引擎的自动任务一样默认「全部允许」；
   插件 Agent 自己不请求确认的操作，Cindy 拦不住。
+
+## 第二期：多 Agent 协同（2026-11-19）
+
+- **能做什么**：本机 Lead 的 Worker 可以放在插件引擎上——开启协同时的第一个 Worker、之后再加的 Worker，以及 Lead
+  用 `create_worker` / `create_workers`（`agent = acp` + `provider_id`，引擎从 `list_available_models` 的
+  `plugin_engines` 取）。插件引擎 Worker 能收 Lead 的派活与插话（不支持同轮插话的按排队处理），能用 `send_to_lead`
+  回报、改写或撤回排队的回报。Worker 页签与手机上的团队列表显示插件引擎，不显示成 Claude Code。
+- **范围**：Worker 只在 Lead 所在的这台电脑运行；SSH Lead、另一台工作电脑、Agent 在另一台电脑、worktree 都明确拒绝
+  （创建面板选了 worktree 时直接提示，不能提交）。插件引擎任务暂不能当 Lead：开启协同、`start_team`、新建 Worker 的
+  所有入口统一拒绝（`PLUGIN_ENGINE_CANNOT_LEAD`）。Lead 不能用 `set_worker_runtime` 改插件引擎 Worker 的模型，需在它
+  自己的任务窗口里改。
+- **准入与唤醒**：创建时与在插件引擎上新建任务同一准入（停用、卸载或不可用时创建失败，不回落内置引擎）；休眠后再唤醒
+  按它自己的引擎与 `provider_id` 启动。
+- **角色说明**：插件引擎不收 Cindy system prompt。Worker 不知道自己要用 `send_to_lead` 回报就没法协作，所以把内置
+  Worker 已在用的那段 Worker 说明（原文不改）放在它**新开会话的第一条消息前**一起发送（`pluginEngineBriefing`）；
+  恢复的会话里已有，不重复。内置引擎的提示词与路径不变。
+- **调用方身份**：Cindy 分不清插件 Agent 自己与它内部的子 Agent。按用户决定（整体信任插件 Agent），协同 Worker 的
+  插件引擎会话把工具调用视为任务本身发起（`pluginEngineTrustedCaller`），因此能回报 Lead；它内部的子 Agent 同样能
+  回报。非协同的插件引擎任务仍是「来源未知」。
+- **兼容**：Worker 列表里插件引擎 Worker 的 `session.agentKind = acp` 并带 `session.providerId`；手机经共享解析器读
+  `pluginEngineProviderId`，`agentKind` 仍给旧端可用的占位值。`maker:session:enable-orca` 的 `workerAgent` 与
+  `maker:worker:create` 的 `agent` 新增取值 `acp`，只由本机新版电脑的面板发起（远程控制与手机不列插件引擎），
+  旧端从不发送。
 
 ## 已知限制
 

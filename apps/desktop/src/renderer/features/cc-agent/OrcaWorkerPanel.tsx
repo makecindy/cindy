@@ -174,8 +174,10 @@ export function OrcaWorkerPanel({
   // 声明支持 maker:worker:update(旧被控端 allowlist 不认该 channel)。
   // 归属未解析(undefined)与「设置」入口同口径 fail closed。
   const editingRemote = typeof deviceId === 'string';
+  const editWorkerAgent = (selectedWorkerRecord ?? focusedWorker)?.agent;
+  // 这里只读整台电脑的协议位；插件引擎不是内置 Agent，按默认的 Codex 读。
   const editCapabilities = useAgentCapabilities(
-    (selectedWorkerRecord ?? focusedWorker)?.agent ?? 'codex',
+    editWorkerAgent && editWorkerAgent !== 'acp' ? editWorkerAgent : 'codex',
     editingRemote ? deviceId : undefined,
   );
   const canEditWorker =
@@ -332,6 +334,8 @@ export function OrcaWorkerPanel({
         leadAgentDeviceId={workerAgentDevices.leadAgentDeviceId}
         remoteAgentDevices={workerAgentDevices.devices}
         catalogHostDeviceId={workerAgentDevices.catalogHostDeviceId}
+        // 本机 Lead 可以把 Worker 放在插件引擎上(docs/plans/acp-plugin-bridge.md)。
+        pluginEnginesEnabled={deviceId === null && !sshRemote}
       />
       <EditWorkerPopover
         open={!!editWorker}

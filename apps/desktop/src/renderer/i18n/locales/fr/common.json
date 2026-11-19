@@ -19599,6 +19599,7 @@
       "permissionLabel": "Mode d'autorisation",
       "noAvailableModels": "Aucun modèle {{agent}} disponible. Vérifiez la connexion au fournisseur et les identifiants dans les Paramètres.",
       "savedModelUnavailable": "Le modèle enregistré ou sa source est indisponible.",
+      "pluginEngineNoWorktree": "Les Workers avec un moteur de plugin ne peuvent pas utiliser de worktree. Désactivez l'option worktree pour créer ce Worker.",
       "reselectModel": "Choisir un modèle",
       "effortLabel": "Effort de raisonnement",
       "initialTaskLabel": "Tâche initiale",

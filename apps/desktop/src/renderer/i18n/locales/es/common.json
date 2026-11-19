@@ -19599,6 +19599,7 @@
       "permissionLabel": "Modo de permisos",
       "noAvailableModels": "No hay ningún modelo de {{agent}} disponible. Revisa la conexión del proveedor y las credenciales en Configuración.",
       "savedModelUnavailable": "El modelo guardado o su fuente no están disponibles.",
+      "pluginEngineNoWorktree": "Los Workers con motor de complemento no pueden usar un worktree. Desactiva la opción de worktree para crear este Worker.",
       "reselectModel": "Elegir un modelo",
       "effortLabel": "Intensidad de razonamiento",
       "initialTaskLabel": "Tarea inicial",

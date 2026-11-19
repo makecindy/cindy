@@ -7038,6 +7038,8 @@ function CCAgentSessionContent({
         leadAgentDeviceId={agentDeviceId ?? controlledAgentDeviceId ?? null}
         remoteAgentDevices={remoteAgentDevices}
         catalogHostDeviceId={controlledModelRoute.catalogHostDeviceId}
+        // 本机 Lead 的第一个 Worker 也可以放在插件引擎上(docs/plans/acp-plugin-bridge.md)。
+        pluginEnginesEnabled={!remoteDeviceId && !session?.remoteHostId}
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，
