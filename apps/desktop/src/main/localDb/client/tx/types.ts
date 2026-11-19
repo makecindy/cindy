@@ -793,11 +793,8 @@ export interface BotGroupsCreateLaneArgs {
   groupId: string;
   routeKey: string;
   session: BotsReplaceCanonicalSessionArgs['session'];
-  /**
-   * The lane must work in `session.workingDir` (the group's project folder, or back in the
-   * Home workspace): an active lane elsewhere is archived and replaced by this one.
-   */
-  replaceOtherWorkingDir?: boolean;
+  /** Only archive the lane the caller inspected, even when requests arrive concurrently. */
+  replaceSessionId?: string;
 }
 
 export interface BotGroupsCreateLaneResult {
