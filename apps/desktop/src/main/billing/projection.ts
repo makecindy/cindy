@@ -126,6 +126,15 @@ function sameDecimal(left: string, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
+/**
+ * 礼品卡金额（面额、自填范围、单张面额范围）：去掉小数末尾的 0 后最多两位小数，与卡面和兑换入账
+ * 精度一致。更细的值购买弹窗无法按分比较，必须在读响应时挡掉，不能让界面跳过范围校验。
+ */
+function isGiftCardMoney(value: string): boolean {
+  const fraction = value.split('.')[1] ?? '';
+  return fraction.replace(/0+$/, '').length <= 2;
+}
+
 function ledgerDecimal(value: unknown): { source: string; scaled: bigint } | null {
   if (typeof value !== 'string' || !LEDGER_DECIMAL_PATTERN.test(value)) return null;
   const negative = value.startsWith('-');
@@ -499,6 +508,7 @@ function projectOffer(
     productKind === 'GIFT_CARD' &&
     interval === null &&
     amount !== null &&
+    isGiftCardMoney(amount) &&
     creditAmount !== null &&
     sameDecimal(creditAmount, amount) &&
     minAmount === null &&
@@ -510,7 +520,9 @@ function projectOffer(
     amount === null &&
     creditAmount === null &&
     minAmount !== null &&
+    isGiftCardMoney(minAmount) &&
     maxAmount !== null &&
+    isGiftCardMoney(maxAmount) &&
     rolloverCap === null;
   if (
     !isSubscription &&
@@ -838,8 +850,12 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
   const faces = value.faces.filter(
     (face): face is string => typeof face === 'string' && FACE_CODE_PATTERN.test(face),
   );
-  const minFaceValue = optional(value.minFaceValue, decimal);
-  const maxFaceValue = optional(value.maxFaceValue, decimal);
+  const giftCardMoney = (input: unknown) => {
+    const parsed = decimal(input);
+    return parsed !== null && isGiftCardMoney(parsed) ? parsed : null;
+  };
+  const minFaceValue = optional(value.minFaceValue, giftCardMoney);
+  const maxFaceValue = optional(value.maxFaceValue, giftCardMoney);
   // 0 是合法的「不冷却」；null 或缺省才表示服务端不支持发到邮箱。
   const emailCooldownSeconds = optional(value.emailCooldownSeconds, (input) =>
     boundedCount(input, 24 * 3_600),

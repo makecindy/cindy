@@ -1070,12 +1070,16 @@ describe('gift card purchase projection', () => {
         giftOffer({ code: 'gift_card_odd', creditAmount: '120' }),
         giftOffer({ code: 'gift_card_custom', amount: null, creditAmount: null, minAmount: '100', maxAmount: '500' }),
         giftOffer({ code: 'gift_card_custom_odd', amount: null, creditAmount: '100', minAmount: '100', maxAmount: '500' }),
+        // 面额精度是分：去掉末尾 0 后仍超过两位小数的面额或范围对不上卡面，界面也无法按分校验，不卖。
+        giftOffer({ code: 'gift_card_sub_cent', amount: '20.001', creditAmount: '20.001' }),
+        giftOffer({ code: 'gift_card_custom_sub_cent', amount: null, creditAmount: null, minAmount: '1.005', maxAmount: '500' }),
+        giftOffer({ code: 'gift_card_custom_long', amount: null, creditAmount: null, minAmount: '100.500000000', maxAmount: '500' }),
       ])],
     });
     expect(catalog.products).toHaveLength(1);
     expect(catalog.products[0]).toMatchObject({ kind: 'GIFT_CARD', level: null });
     expect(catalog.products[0]!.offers.map((offer) => offer.code))
-      .toEqual(['gift_card_100', 'gift_card_200', 'gift_card_custom']);
+      .toEqual(['gift_card_100', 'gift_card_200', 'gift_card_custom', 'gift_card_custom_long']);
     expect(catalog.products[0]!.offers[2]).toMatchObject({ amount: null, minAmount: '100', maxAmount: '500' });
     expect(catalog.products[0]!.offers[0]!.purchaseOptions[0]).toMatchObject({ capability: 'ONE_TIME_PAYMENT' });
   });
@@ -1114,7 +1118,9 @@ describe('gift card purchase projection', () => {
       currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
       maxOrderAmount: '1000', faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
     };
-    for (const malformed of [{ minFaceValue: 'abc' }, { maxFaceValue: 100 }, { emailCooldownSeconds: -1 }, { emailCooldownSeconds: 1.5 }]) {
+    for (const malformed of [
+      { minFaceValue: 'abc' }, { maxFaceValue: 100 }, { minFaceValue: '1.005' }, { emailCooldownSeconds: -1 }, { emailCooldownSeconds: 1.5 },
+    ]) {
       expect(() => projectGiftCardPurchasePolicy({ ...base, ...malformed })).toThrow();
     }
     // 冷却 0 秒是合法的「不冷却」，不能当成不支持发信，更不能让整份购买设置读取失败。

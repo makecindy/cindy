@@ -132,6 +132,8 @@ describe('gift card amounts written at a longer scale', () => {
     expect(parseCustomGiftCardAmount('250.50', range)).toEqual({ amount: '250.5' });
     expect(parseCustomGiftCardAmount('250.505', range)).toEqual({ issue: 'format' });
     expect(maxGiftCardQuantity({ ...policy, maxOrderAmount: '1000' }, '100.001')).toBe(0);
+    // 范围读不出来（比分还细）时不放行，不能跳过下限去下单。
+    expect(parseCustomGiftCardAmount('1.00', { min: '1.005', max: '500' })).toEqual({ issue: 'range' });
   });
 });
 

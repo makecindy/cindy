@@ -90,7 +90,8 @@ export function parseCustomGiftCardAmount(
   if (unit === null || unit === 0) return { issue: unit === 0 ? 'range' : 'format' };
   const min = cents(range.min);
   const max = cents(range.max);
-  if ((min !== null && unit < min) || (max !== null && unit > max)) return { issue: 'range' };
+  // 范围读不出来时不放行：宁可这次填不了，也不让低于下限或高于上限的面额去下单。
+  if (min === null || max === null || unit < min || unit > max) return { issue: 'range' };
   const whole = Math.floor(unit / 100);
   const fraction = String(unit % 100).padStart(2, '0').replace(/0+$/, '');
   return { amount: fraction ? `${whole}.${fraction}` : String(whole) };
