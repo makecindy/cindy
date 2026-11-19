@@ -736,6 +736,70 @@ describe('Scheduler', () => {
     );
   });
 
+  // Greptile P1 on #11577:逐条各给全量上限时,10 条过期任务的串行写入能推迟
+  // due-fire 数十秒。共享预算让整轮过期扫描封顶,预算耗尽后纯同步判定
+  // (hasExpired)照做 —— 过期任务不派发,健康到期任务照常触发。
+  it('bounds the whole expire scan so healthy due schedules still fire', async () => {
+    const warn = vi.fn();
+    const local = makeHarness({ logger: { warn }, preGateStorageTimeoutMs: 60 });
+    // expireAt 必须建在未来:create() 会按当时的 now 判定,已过期的输入直接建成
+    // 'expired' 且没有 nextFireAt,那种行永远进不了过期扫描。过期要靠跳表实现。
+    const expireAt = local.clock.now() + 60_000;
+    for (let i = 0; i < 3; i++) {
+      await local.scheduler.create({ ...baseInput, name: `expired-${i}`, expireAt });
+    }
+    await local.scheduler.create({ ...baseInput, name: 'healthy-due' });
+    const realUpdate = local.storage.update.bind(local.storage);
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) =>
+      patch.status === 'expired'
+        ? new Promise<Schedule | null>(() => {})
+        : realUpdate(id, patch, expected),
+    );
+    local.clock.setTo(expireAt + 1);
+    const settled = await Promise.race([
+      local.scheduler.tick().then(() => 'tick' as const),
+      // real-wait: 挂死哨兵 —— 必须显著大于共享预算(60ms),让旧代码的无界 await 稳定判 hung
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
+    ]);
+    expect(settled).toBe('tick');
+    expect(local.fireCalls).toHaveLength(1);
+    expect(local.fireCalls[0]!.schedule.name).toBe('healthy-due');
+    expect(warn).toHaveBeenCalledWith(
+      'scheduler: pre-gate storage await timed out — skipping phase so due-fire can proceed',
+      expect.objectContaining({ phase: 'expireSchedule' }),
+    );
+  });
+
+  // Codex P2 on #11577:过期写入已提交但回包晚于上限时,迟到结果不能被吞 ——
+  // 唯一的 CAS 胜者必须补发 changed,否则界面把已过期任务一直显示成 active。
+  it('emits changed when the expiry write commits after the timeout', async () => {
+    const local = makeHarness({ preGateStorageTimeoutMs: 30 });
+    // 同上:expireAt 建在未来,过期由跳表触发,否则 create() 直接建成 'expired'。
+    const expireAt = local.clock.now() + 60_000;
+    const schedule = await local.scheduler.create({ ...baseInput, expireAt });
+    const realUpdate = local.storage.update.bind(local.storage);
+    let releaseUpdate!: (value: Schedule | null) => void;
+    vi.spyOn(local.storage, 'update').mockImplementation((id, patch, expected) =>
+      patch.status === 'expired'
+        ? new Promise<Schedule | null>((resolve) => { releaseUpdate = resolve; })
+        : realUpdate(id, patch, expected),
+    );
+    const changed: string[] = [];
+    local.scheduler.on('changed', (e: { scheduleId: string }) => changed.push(e.scheduleId));
+    local.clock.setTo(expireAt + 1);
+    const settled = await Promise.race([
+      local.scheduler.tick().then(() => 'tick' as const),
+      // real-wait: 挂死哨兵 —— 修复路径 30ms 内完成,旧代码的无界 await 稳定判 hung
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1000)),
+    ]);
+    expect(settled).toBe('tick');
+    expect(changed).not.toContain(schedule.id);
+    // 迟到提交:回包在超时之后才到,收口必须补发 changed 并把缓存对齐成 expired。
+    releaseUpdate(await realUpdate(schedule.id, { status: 'expired', nextFireAt: undefined }, schedule));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(changed).toContain(schedule.id);
+  });
+
 
   it('preserves the primary binding on edits and recognizes a Contacts draft returned by an older mobile client', async () => {
     const prompt = '整理我的通讯录（cindy-contacts 插件）。maintenance begin run_id';
