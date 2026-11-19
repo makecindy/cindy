@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { GitBranch } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { CCAgentSessionView } from '@/features/cc-agent/CCAgentSessionView';
@@ -160,7 +161,13 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
   if (unavailableChild && unavailableChild === childId) return null;
   const content = <SidebarHostSessionProvider sessionId={ctx.sessionId}>
     <div className="chat-rail-compact flex h-full min-h-0 flex-col">
-      <p className="px-4 py-3 text-xs leading-5 text-muted-foreground">{t('chat.sideChat.context')}{' '}{t('chat.sideChat.workerPromotionNotice')}</p>
+      <div className="mx-4 border-b border-[var(--border-default)] py-3">
+        <p className="text-13 leading-5 text-[var(--text-primary)]">{t('chat.sideChat.context')}</p>
+        <p className="mt-1 flex items-start gap-2 text-12 leading-5 text-[var(--text-secondary)]">
+          <GitBranch aria-hidden="true" size={14} className="mt-[3px] shrink-0" />
+          <span>{t('chat.sideChat.workerPromotionNotice')}</span>
+        </p>
+      </div>
       <div className="min-h-0 flex-1">
         {state.deviceId && (loadFailed || remoteSession?.id !== childId) ? <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
           <p className="text-sm leading-5 text-muted-foreground">{t(loadFailed ? 'chat.sideChat.failed' : 'chat.sideChat.opening')}</p>

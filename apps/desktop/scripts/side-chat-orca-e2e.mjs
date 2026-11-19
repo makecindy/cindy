@@ -178,6 +178,15 @@ async function verifyCdp(pid, port) {
   }
 }
 
+async function captureNotice(ui, evidenceDir, name) {
+  for (const mode of ['light', 'dark']) {
+    await ui.cli('set', 'media', mode);
+    await until(mode + ' appearance', () => ui.evaluate(expected =>
+      document.documentElement.style.colorScheme === expected, mode));
+    await ui.cli('screenshot', path.join(evidenceDir, name + '-' + mode + '.png'));
+  }
+}
+
 async function exercise(ui, baseUrl, workdir, evidenceDir) {
   const { cli, evaluate, clickControl } = ui;
   const setup = await evaluate(async ({ baseUrl, workdir, providerId, model, fakeKey, parentRequest }) => {
@@ -226,12 +235,14 @@ async function exercise(ui, baseUrl, workdir, evidenceDir) {
   assert.ok(side.sdkId, 'The native fork was not created');
   assert.equal(await evaluate(() => location.hash), `#/cc-agent/${parentId}`);
 
+  await captureNotice(ui, evidenceDir, 'side-chat');
   await clickControl('side-chat composer actions', /button "(操作菜单|Composer actions)"/, { last: true });
   await clickControl('turn on collaboration in side chat', /menuitemcheckbox "(协同模式|Collaboration)"/);
   await until('promotion notice is visible before starting collaboration', () => evaluate(() => {
     const dialog = document.querySelector('[role="dialog"]');
-    return /创建第一个 Worker 后，这条追问会移出侧栏|Once the first worker is created, this follow-up moves from the sidebar/.test(dialog?.innerText ?? '');
+    return /追问会从侧栏移到任务列表。对话记录会保留|moves this follow-up and its conversation history from the sidebar/.test(dialog?.innerText ?? '');
   }));
+  await captureNotice(ui, evidenceDir, 'before-collaboration');
   await until('dialog uses the loopback model and automatic approval', async () => {
     const snapshot = await ui.snapshot();
     return snapshot.includes(`当前：${model}`) || snapshot.includes(`Current: ${model}`)

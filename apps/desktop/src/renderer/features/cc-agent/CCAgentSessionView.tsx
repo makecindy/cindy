@@ -7020,7 +7020,7 @@ function CCAgentSessionContent({
         open={createWorkerOpen}
         onClose={() => setCreateWorkerOpen(false)}
         onCreate={requestEnableCollab}
-        title={t('orca.createWorker.enableCollabTitle')}
+        title={session?.source === 'side-chat' ? t('chat.sideChat.collaborationTitle') : t('orca.createWorker.enableCollabTitle')}
         description={session?.source === 'side-chat'
           ? t('chat.sideChat.workerPromotionNotice')
           : t('orca.createWorker.enableCollabDescription')}
