@@ -62,7 +62,7 @@ void mountPage({
       orcaWorkflows: { getCollaborationSettings: read({ workerSoftLimit: 4, workerHardLimit: 16, isCustomized: false }) },
       sessions: { list: read([]) },
       maintenance: { getLastResult: read(null) },
-      databaseSizeWarning: { getSettings: read({ thresholdGiB: 10, disabled: false, isCustomized: false, defaultThresholdGiB: 10 }), getStatus: read({ databaseBytes: 0 }), onChanged: subscription('database-size') },
+      databaseSizeWarning: { getSettings: read({ thresholdGiB: 10, disabled: false, isCustomized: false, defaultThresholdGiB: 10 }), getStatus: read({ databaseBytes: ctx.data.fullDatabase ? 10 * 1024 ** 3 : 0 }), onChanged: subscription('database-size') },
       sessionImport: { status: read(null), scan: read({ candidates: [], sources: [], sourceErrors: [], hiddenCounts: { cindy: 0, temp: 0, internal: 0, imported: 0 }, scannedAt: 0 }), onProgress: subscription('import') },
       recentWorkdirs: { list: read([]) },
     },

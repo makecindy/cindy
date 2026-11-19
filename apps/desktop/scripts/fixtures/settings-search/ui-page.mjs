@@ -23,8 +23,8 @@ export default {
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: (window.__uiPage.ctx.data.cloud || window.__uiPage.ctx.data.tab === 'billing') ? 'cloud' : 'local', dataOwnerId: 'fixture-account', user: { id: 'fixture-account', name: 'Preview', membershipKind: 'personal' } });` },
   },
   cases: {
-    'page-search-highlight': { about: 'Search briefly fills the background of a single navigation option or setting', data: { tab: 'general' } },
-    'page-search-highlight-motion': { about: 'The highlighted background returns smoothly to its resting color', data: { tab: 'general', highlightMotion: true } },
+    'page-search-highlight': { about: 'Search briefly fills the background of a single navigation option or setting', data: { tab: 'general', fullDatabase: true } },
+    'page-search-highlight-motion': { about: 'The highlighted background returns smoothly to its resting color', data: { tab: 'general', highlightMotion: true, fullDatabase: true } },
     'model-tokens': { about: 'A signed-in profile can opt in to and stop sharing model totals', data: {tab: 'about', modelTokens: true} },
     'archive-search': { about: 'Searching for auto archive or idle days opens the inline controls inside Storage', data: { tab: 'general', archiveEnabled: true } },
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
@@ -59,12 +59,21 @@ export default {
         ['mcp.duplicates', null, 'settings-mcp-duplicates'],
         ['settings.appearance.wallpaper.customChoose', 'settings.appearance.wallpaper.options.custom', 'settings-search-settings-appearance-wallpaper-custom'],
         ['personalization.instructions', 'settings.personalization.subtitle', 'settings-user-instructions'],
+        ['settings.about.storage.databaseSectionTitle', 'settings.about.storage.databaseSectionTitle', 'settings-search-settings-about-storage-databaseSectionTitle'],
       ]) {
         await search.fill(titleKey ? await ui.t(titleKey) : 'MCP');
         await page.locator(`[id="settings-search-result-${id}"]`).click();
         const highlight = highlights.and(page.locator(`[id="${targetId}"]`));
         await highlight.waitFor();
         assert.equal(await highlights.count(), 1);
+        if (id === 'settings.about.storage.databaseSectionTitle') {
+          // A full progress track clips the outset and completely covers an in-track tint.
+          const fullTrack = highlight.getByRole('progressbar', { name: await ui.t(titleKey) }).and(
+            page.locator('[aria-valuenow="100"]'),
+          );
+          await fullTrack.waitFor();
+          assert.equal(await highlight.evaluate(el => getComputedStyle(el).overflow), 'visible');
+        }
         if (targetId.startsWith('settings-tab-')) {
           assert.ok(await highlight.evaluate(el => {
             const sidebar = el.closest('aside').getBoundingClientRect();
@@ -91,8 +100,9 @@ export default {
           };
           const animation = el.getAnimations({ subtree: true })
             .find(candidate => candidate.animationName === (nativeField ? 'settings-search-field-feedback' : 'settings-search-feedback'));
+          const duration = animation.effect.getComputedTiming().duration;
           const sample = (progress) => {
-            animation.currentTime = animation.effect.getComputedTiming().duration * progress;
+            animation.currentTime = duration * progress;
             return brightness(getComputedStyle(el, face));
           };
           const peak = sample(0);
@@ -102,12 +112,13 @@ export default {
           const end = sample(0.999);
           animation.currentTime = 0;
           const fill = getComputedStyle(el, face);
-          return { peak, early, middle, late, end, dark, outline: fill.outlineStyle,
+          return { peak, early, middle, late, end, dark, duration, outline: fill.outlineStyle,
             outlineColor: fill.outlineColor,
             radius: parseFloat(fill.borderTopLeftRadius), top: parseFloat(fill.top), left: parseFloat(fill.left),
             fieldShadow: nativeField && fill.boxShadow };
         });
         const distance = frame => Math.abs(style[frame] - style.end);
+        assert.equal(style.duration, ui.data.highlightMotion ? 2200 : 550);
         assert.ok(style.dark ? style.peak > style.end : style.peak < style.end);
         assert.ok(distance('peak') > distance('early') && distance('early') > distance('middle'));
         assert.ok(distance('middle') > distance('late') && distance('late') > 0);

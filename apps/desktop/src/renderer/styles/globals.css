@@ -2297,6 +2297,8 @@ mark.doc-search-mark [class] {
 
 /* Settings navigation uses a transient tint derived from the target's theme. */
 .settings-search-target-highlight {
+  --motion-settings-search-feedback: 2200ms;
+  --settings-search-feedback-duration: var(--motion-settings-search-feedback);
   --settings-search-feedback-bg: color-mix(in srgb, var(--text-primary) 12%, transparent);
 }
 
@@ -2324,7 +2326,7 @@ mark.doc-search-mark [class] {
   border-radius: 12px;
   pointer-events: none;
   background-color: var(--settings-search-feedback-bg);
-  animation: settings-search-feedback 2200ms linear both;
+  animation: settings-search-feedback var(--settings-search-feedback-duration) linear both;
 }
 
 .settings-search-target-highlight:is(.cindy-button-frame, [role='tab'])::after {
@@ -2333,7 +2335,13 @@ mark.doc-search-mark [class] {
 
 /* Form controls that cannot paint an ::after layer use their existing rounded frame. */
 .settings-search-target-highlight:is(input, textarea, select) {
-  animation: settings-search-field-feedback 2200ms linear;
+  animation: settings-search-field-feedback var(--settings-search-feedback-duration) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-search-target-highlight {
+    --settings-search-feedback-duration: calc(var(--motion-settings-search-feedback) / 4);
+  }
 }
 
 @keyframes settings-search-feedback {
