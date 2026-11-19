@@ -3,11 +3,14 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import { useOptionalDataOwnerGeneration } from '@/contexts/AuthContext';
 import { billingApi } from '@/features/billing/api';
 import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
 import { useModelAccessCreditUsageResult } from '@/hooks/useModelAccessCreditUsage';
 import { useUsageHistory } from '@/hooks/useUsageHistory';
 import { formatCompactTokens } from '@/lib/usageFormat';
+
+const pendingFallbackBalances = new Map<string, ReturnType<typeof billingApi.getBalance>>();
 
 interface SidebarAccountUsageProps {
   ownerId: string | null;
@@ -27,19 +30,26 @@ interface UsageMenuRow {
 /** The dropdown mounts these rows together with Settings, including during its exit animation. */
 export function SidebarAccountUsage({ ownerId, showBilling, onSelect }: SidebarAccountUsageProps) {
   const { t, i18n } = useTranslation();
+  const ownerGeneration = useOptionalDataOwnerGeneration();
+  const accountScope = ownerId ? `${ownerGeneration}:${ownerId}` : null;
   const { history } = useUsageHistory({ userId: ownerId, days: 1, modelDays: 1, paused: true, allowPendingEstimates: true });
   const { usage, loading } = useModelAccessCreditUsageResult(showBilling, { poll: false });
-  const [fallbackBalance, setFallbackBalance] = useState<{ ownerId: string; available: string } | null>(null);
+  const [fallbackBalance, setFallbackBalance] = useState<{ accountScope: string; available: string } | null>(null);
   useEffect(() => {
-    if (!showBilling || !ownerId || loading || usage) return;
+    if (!showBilling || !accountScope || loading || usage) return;
     let cancelled = false;
-    // Match the billing page for accounts where only the basic balance API is available.
-    void billingApi.getBalance().then(({ available }) => {
-      if (!cancelled) setFallbackBalance({ ownerId, available });
+    // Reopening the menu can rejoin the same login's pending basic-balance read.
+    let request = pendingFallbackBalances.get(accountScope);
+    if (!request) {
+      request = billingApi.getBalance().finally(() => pendingFallbackBalances.delete(accountScope));
+      pendingFallbackBalances.set(accountScope, request);
+    }
+    void request.then(({ available }) => {
+      if (!cancelled) setFallbackBalance({ accountScope, available });
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [showBilling, ownerId, loading, usage]);
-  const balance = usage?.available ?? (fallbackBalance?.ownerId === ownerId ? fallbackBalance?.available : null);
+  }, [showBilling, accountScope, loading, usage]);
+  const balance = usage?.available ?? (fallbackBalance?.accountScope === accountScope ? fallbackBalance.available : null);
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const today = new Date().toLocaleDateString('sv-SE');
   const todayTokens = history?.todayKey === today ? history.totals.todayTokens : undefined;
