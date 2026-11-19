@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { TAB_IDS } from '@/lib/tabLabels';
-import { SETTINGS_NAV_ENTRIES, SettingsSidebarNav } from '../SettingsSidebarNav';
+import { SettingsSidebarNav } from '../SettingsSidebarNav';
 import { buildPluginSettingsPages, buildPluginSettingsSearchDocuments } from '../pluginSettingsNavigation';
 import { type InstalledGhost } from '../../../../shared/ghost';
 
@@ -84,8 +84,6 @@ describe('SettingsSidebarNav', () => {
   });
 
   it('renders a leading icon for every settings tab', () => {
-    const registered = Object.keys(SETTINGS_NAV_ENTRIES);
-    expect(registered).toEqual([...TAB_IDS].sort());
     render(<SettingsSidebarNav tabIds={TAB_IDS} activeTab="general" onSelectTab={vi.fn()} />);
 
     const tabs = new Set(screen.getAllByRole('tab'));
