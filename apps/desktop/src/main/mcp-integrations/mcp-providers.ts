@@ -150,7 +150,8 @@ import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.j
 import { forkTaskAtMessage } from '../maker-ipc/fork.js';
 import { commitTaskRewind } from '../maker-ipc/rewind.js';
 import { authorizeGroupTool, reportGroupTaskCreated } from '../maker-ipc/botGroupToolAuthorization.js';
-import { createSharedTaskTools } from './sharedTaskTools.js';
+import { createSharedTaskTools, type SharedTaskCallerAccess } from './sharedTaskTools.js';
+import { createSharedTaskProgressReader } from './sharedTaskProgress.js';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
@@ -411,6 +412,29 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   };
 
   const sessionShare = createDesktopSessionShareCallbacks();
+  const sharedTaskCallerAccess: SharedTaskCallerAccess = {
+    caller: context => {
+      const sessionId = context.sessionId ?? '';
+      const session = getTaskActionSession(sessionId);
+      const input = getTaskActionInputState(sessionId);
+      const lane = readChannelToolScope({ sessionId, sessionInstanceId: context.sessionInstanceId });
+      return {
+        key: JSON.stringify([activeOwnerScopeKey(), getCurrentDbClientSnapshot()?.clientEpoch, input.key, input.boundary,
+          lane?.channel, lane?.botId, lane?.chatId, lane?.inputClientId,
+          session?.stablePermissionModeState, session?.stablePlanModeState]),
+        accountScoped: lane ? lane.requesterIsOwner : isActiveInputAccountScoped(sessionId),
+        current: !isAppSessionBoundaryPending() && !!tryGetDbClient() &&
+          !!context.sessionInstanceId && session?.instanceId === context.sessionInstanceId &&
+          input.permission?.isCurrent?.() === true,
+        planMode: input.permission?.planModeEnabled !== false || input.permission?.permissionMode === 'plan',
+      };
+    },
+    captureGroupAccess: async context => {
+      const [link] = await getDbClient().drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
+        .from(botSessionLinks).where(eq(botSessionLinks.sessionId, context.sessionId!)).limit(1);
+      return link?.role === 'group' ? authorizeGroupTool(context.sessionId!, link.botId, 'owner-action') : null;
+    },
+  };
   const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
     const dbClient = tryGetDbClient();
     const plugin = !sessionId ? getPluginHostToolCaller() : undefined;
@@ -1524,6 +1548,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       }),
       history: {
         ...createHistoryToolCallbacks({ authorizeCall: authorizeTaskToolCall, invokeRemote: deps.invokeRemote }),
+        readSharedTaskProgress: createSharedTaskProgressReader({ ...sharedTaskCallerAccess, invoke: deps.invokeRemote }),
         readSessionAttachment: (args, context) => withAccountDataAccess(context?.sessionId, async assertCurrent => {
           const result = await readDesktopHistoryAttachment(args, context);
           await assertCurrent();
@@ -1553,27 +1578,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       mcpSetup: (context, proposal) => requestMcpSetupForSession(
         context.sessionId!, context.sessionInstanceId!, proposal),
       ...(deps.captureSharedTaskCommand ? { sharedTask: createSharedTaskTools({
-        caller: context => {
-          const sessionId = context.sessionId ?? '';
-          const session = getTaskActionSession(sessionId);
-          const input = getTaskActionInputState(sessionId);
-          const lane = readChannelToolScope({ sessionId, sessionInstanceId: context.sessionInstanceId });
-          return {
-            key: JSON.stringify([activeOwnerScopeKey(), getCurrentDbClientSnapshot()?.clientEpoch, input.key, input.boundary,
-              lane?.channel, lane?.botId, lane?.chatId, lane?.inputClientId,
-              session?.stablePermissionModeState, session?.stablePlanModeState]),
-            accountScoped: lane ? lane.requesterIsOwner : isActiveInputAccountScoped(sessionId),
-            current: !isAppSessionBoundaryPending() && !!tryGetDbClient() &&
-              !!context.sessionInstanceId && session?.instanceId === context.sessionInstanceId &&
-              input.permission?.isCurrent?.() === true,
-            planMode: input.permission?.planModeEnabled !== false || input.permission?.permissionMode === 'plan',
-          };
-        },
-        captureGroupAccess: async context => {
-          const [link] = await getDbClient().drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role })
-            .from(botSessionLinks).where(eq(botSessionLinks.sessionId, context.sessionId!)).limit(1);
-          return link?.role === 'group' ? authorizeGroupTool(context.sessionId!, link.botId, 'owner-action') : null;
-        },
+        ...sharedTaskCallerAccess,
         assertActionCurrent: assertTaskActionCurrent,
         captureCommand: deps.captureSharedTaskCommand,
       }) } : {}),

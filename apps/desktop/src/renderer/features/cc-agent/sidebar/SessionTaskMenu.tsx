@@ -286,9 +286,9 @@ function ActiveSessionTaskMenu({
               {t('runtimePlugins.title')}
             </DropdownMenuItem>}
             {separator}
-            {copy}
           </>
         )}
+        {copy}
         {session.status === 'active' &&
           (hosted && !guest ? (
             <DropdownMenuSub>
