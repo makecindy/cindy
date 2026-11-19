@@ -60,13 +60,13 @@ export function SidebarAccountUsage({ ownerId, showBilling, onSelect }: SidebarA
 
   return rows.map(({ tab, label, Icon, caption, value, exactValue }) => (
     <DropdownMenuItem key={tab} textValue={label} onSelect={() => onSelect(tab)}
-      onPointerUp={(event) => event.preventDefault()} className="gap-2.5 py-2">
-      <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+      onPointerUp={(event) => event.preventDefault()} className="gap-2 py-2">
+      <Icon className="mr-2 h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate" title={label}>{label}</span>
         <span className="truncate text-12 text-[var(--text-secondary)]" title={caption}>{caption}</span>
       </span>
-      <span className="w-[9ch] shrink-0 truncate text-right text-13 font-medium tabular-nums"
+      <span className="w-[8ch] shrink-0 truncate text-right text-13 font-medium tabular-nums"
         title={exactValue ?? value ?? undefined}>
         {value ?? '—'}
       </span>

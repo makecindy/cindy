@@ -1525,6 +1525,8 @@ long duration to leak into any other hover or transition.
 
 #### Semantics → motion prototypes (one semantic, one motion, app-wide)
 
+The sidebar account menu uses a spring entrance on the whole panel. It scales from 0.88 to 1.05, settles through 0.987 to 1 on `--motion-enter`, and uses the dropdown's collision-aware transform origin. Dismissal uses the shared opacity-only exit. The motion duration token respects Reduce Motion and the app's motion setting.
+
 | Semantic                                    | Spec                                                                                                                                                                                                                                                                                         | Reference implementation                        |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | Light overlay (menu / popover / tooltip)    | In: `animate-float-in` (opacity + scale 0.97→1, fast/ease-out; pure-opacity tooltips use `animate-fade-in`). Out: `animate-float-out` (opacity only, instant/ease-in). **Exit is always faster than enter, and never scales** (a scaling exit reads as "sucked away" — paper fades in place) | `components/ui/dropdown-menu.tsx`               |

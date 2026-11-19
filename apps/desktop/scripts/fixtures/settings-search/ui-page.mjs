@@ -46,6 +46,8 @@ export default {
     'sidebar-usage-local': { about: 'Local accounts can reach usage history and are not offered a billing entry', data: { accountUsage: true, previewUsage: true } },
     'sidebar-usage-org': { about: 'Organization accounts can reach usage history without attempting personal billing reads', data: { accountUsage: true, cloud: true, organization: true, previewUsage: true } },
     'sidebar-usage-legacy': { about: 'An account with only the basic balance API still sees its available balance', data: { accountUsage: true, cloud: true, legacyBalance: true, previewUsage: true } },
+    'settings-layout-general': { about: 'General settings organize related controls into cards beneath the grouped sidebar', data: { tab: 'general', layoutPreview: true, interactivePreview: true } },
+    'settings-layout-appearance': { about: 'The grouped sidebar and appearance controls share the wallpaper and theme', data: { tab: 'appearance', layoutPreview: true, interactivePreview: true } },
     ...Object.fromEntries([
     'general', 'appearance', 'personalization', 'voice-input', 'shortcuts',
     'remote-control', 'import', 'builtin-tools', 'storage', 'help', 'about', 'agent-island', 'usage', 'billing', 'shared-tasks', 'ghosts',
@@ -63,6 +65,8 @@ export default {
       const usage = menu.getByRole('menuitem').filter({ hasText: await ui.t('settings.tabs.usage') });
       const billing = menu.getByRole('menuitem').filter({ hasText: await ui.t('settings.tabs.billing') });
       const settings = menu.getByRole('menuitem', { name: await ui.t('sidebar.user.menuSettings'), exact: true });
+      const cardBox = await account.locator('..').boundingBox();
+      const accountLabel = await account.getByText('Preview', { exact: true }).boundingBox();
       const hasBilling = ui.data.cloud && !ui.data.organization;
       const checkMotion = ui.case === 'sidebar-usage';
       if (checkMotion) {
@@ -91,12 +95,20 @@ export default {
         assert.equal(await page.evaluate(() => window.usageReads.billing), 0);
         assert.equal(await page.evaluate(() => window.usageReads.balance), 0);
       }
+      await menu.evaluate(el => Promise.allSettled(el.getAnimations().map(animation => animation.finished)));
+      const menuBox = await menu.boundingBox();
+      const menuLabel = await usage.getByText(await ui.t('settings.tabs.usage'), { exact: true }).boundingBox();
+      assert.ok(Math.abs(menuBox.x - cardBox.x) <= 1 && Math.abs(menuBox.width - cardBox.width) <= 1,
+        JSON.stringify({ menuBox, cardBox }));
+      assert.ok(Math.abs(menuLabel.x - accountLabel.x) <= 1, JSON.stringify({ menuLabel, accountLabel }));
+      const usageCaption = `${await ui.t('usageHistory.stats.todayTokens')} · ${await ui.t('usageHistory.device.self')}`;
+      assert.ok(await usage.getByText(usageCaption, { exact: true }).evaluate(el => el.scrollWidth <= el.clientWidth));
       await ui.capture('account-usage');
       await page.keyboard.press('Escape');
       await menu.waitFor({ state: 'hidden' });
       if (checkMotion) {
         const frames = await page.evaluate(() => window.accountMenuFrames);
-        assert.ok(frames.some(frame => frame.state === 'open' && frame.animation === 'float-in'));
+        assert.ok(frames.some(frame => frame.state === 'open' && frame.animation === 'account-menu-in'));
         assert.ok(frames.some(frame => frame.state === 'closed' && frame.animation === 'float-out'));
         assert.ok(frames.every(frame => frame.items === 3), JSON.stringify(frames));
         await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -124,6 +136,16 @@ export default {
     }
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    if (ui.data.layoutPreview) {
+      const expected = ui.data.tab === 'general' ? 'settings.contentGroups.work' : 'settings.appearance.wallpaper.title';
+      await panel.getByRole('heading', { name: await ui.t(expected), exact: true }).waitFor();
+      if (ui.data.tab === 'general' && ui.platform === 'win32') {
+        const startup = panel.getByRole('switch', { name: await ui.t('settings.windowBehavior.loginItem.label') });
+        await startup.locator('xpath=self::*[not(@disabled)]').waitFor();
+      }
+      await ui.capture('settings-layout');
+      return;
+    }
     // Product regression: the opt-in must remain off until selected. Exercise the
     // real setting, search and local override; existing cases only read controls.
     if (ui.data.worktreeModelNaming) {

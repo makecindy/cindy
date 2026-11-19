@@ -108,7 +108,10 @@ void mountPage({
     clientEndpoints: { websiteUrl: 'https://example.invalid' },
     taskManagement: { read: read({ enabled: ctx.data.tab === 'storage' || !!ctx.data.archiveEnabled, days: 7 }),
       onChanged: subscription('task-management'), onArchived: subscription('task-archive-notice') },
-    windowBehavior: { getWindowsCloseBehavior: read('minimize'), getLinuxCloseBehavior: read('minimize') },
+    windowBehavior: {
+      getWindowsCloseBehavior: read('tray'), getLinuxCloseBehavior: read('minimize'),
+      getLoginItem: read({ available: true, enabled: false, requiresApproval: false }),
+    },
     onUpdateChannelSettings: subscription('update-channel'),
     getUpdateChannelSettings: read({ channel: 'stable', isCustomized: false }),
     getAutoUpdateSettings: read({ autoRelaunchOnIdle: false, isCustomized: false, defaultAutoRelaunchOnIdle: false }),
