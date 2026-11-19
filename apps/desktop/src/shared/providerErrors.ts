@@ -151,19 +151,17 @@ export function classifyProviderError(input: ProviderErrorInput): ProviderErrorC
     return { code: 'ENDPOINT_NOT_FOUND', retryable: false, detail };
   }
   if (status === 400 || status === 422) {
+    // Google reports rejected field names in a list. A field called `model`
+    // must not let the broad model regex consume the next field's "Unknown".
+    const modelErrorBody = /\binvalid json payload received\.\s+unknown name\s+\\?"[^"\\\r\n]+\\?"/i.test(body)
+      ? body.replace(/\bunknown name\s+\\?"[^"\\\r\n]+\\?"/gi, '')
+      : body;
+    if (MODEL_NOT_FOUND_RE.test(modelErrorBody)) return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
     if (isContextOverflowErrorMessage(body)) return { code: 'CONTEXT_TOO_LONG', retryable: false, detail };
     if (matchesDeterministicUsageExhaustionText(body)) {
       return { code: 'QUOTA_EXCEEDED', retryable: false, detail };
     }
     if (AUTH_RE.test(body)) return { code: 'AUTH_INVALID', retryable: false, detail };
-    // Explicit payload-field rejections must win over the broad model regex only when
-    // the rejected field itself is `model`; preserve genuine "invalid model" messages.
-    if (MODEL_NOT_FOUND_RE.test(body)) {
-      if (/invalid json payload received\.\s+unknown name\s+\\?"model\\?"/i.test(body)) {
-        return { code: 'WIRE_INCOMPATIBLE', retryable: false, detail };
-      }
-      return { code: 'MODEL_NOT_FOUND', retryable: false, detail };
-    }
     if (WIRE_RE.test(body)) return { code: 'WIRE_INCOMPATIBLE', retryable: false, detail };
     return { code: 'UNKNOWN', retryable: false, detail };
   }

@@ -137,12 +137,18 @@ describe('classifyProviderError', () => {
     }
   });
 
-  it('prioritizes explicit payload rejection when one unknown field is named model', () => {
-    const body = 'Invalid JSON payload received. Unknown name "model": Cannot find field. '
-      + 'Unknown name "messages": Cannot find field.';
-    expect(classifyProviderError({ status: 400, bodyText: body })).toMatchObject({
-      code: 'WIRE_INCOMPATIBLE', retryable: false,
-    });
+  // #9470 P2: unit, real classifier; field order and JSON escaping must not
+  // turn a rejected request field into a missing model (no live gateway covered).
+  it.each([400, 422])('%i ignores rejected field names when matching model errors', (status) => {
+    for (const fields of [['model', 'messages'], ['anthropic_version', 'model', 'messages']]) {
+      const message = 'Invalid JSON payload received. '
+        + fields.map((field) => `Unknown name "${field}": Cannot find field.`).join(' ');
+      for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+        expect(classifyProviderError({ status, bodyText })).toMatchObject({
+          code: 'WIRE_INCOMPATIBLE', retryable: false,
+        });
+      }
+    }
   });
 
   it.each([
