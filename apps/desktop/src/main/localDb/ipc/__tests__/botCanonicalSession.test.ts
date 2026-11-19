@@ -3377,8 +3377,8 @@ describe('Bot canonical Session lifecycle', () => {
       },
     }, { persistSnapshot: false });
 
-    // 读不出自己的技能架子不是「用户配的 Skill 有一条不可用」,不该稀释降级信号。
-    expect(snapshot?.resolutionStatus).toBe('applied');
+    // The session starts with a degraded snapshot. No individual skill was identified as missing.
+    expect(snapshot?.resolutionStatus).toBe('degraded');
     expect(snapshot?.unavailableSkills).toEqual([]);
     expect(opts.botRuntimeProfile?.skillPolicy.ownSkills).toBeUndefined();
   });

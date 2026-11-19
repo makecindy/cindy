@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-/** Added-line design audit. Report first, then block only the mature colour scope.
+/** Added-line design audit. Report first, then block only the mature colour scope;
+ * the same check also blocks off-scale corner radii (DESIGN.md §5 Guard, governance §8).
  * Explicit refs are compared directly; --worktree includes staged, unstaged and
  * untracked source files. No shell interpolation, index writes or commits. */
 import { execFileSync } from 'node:child_process';

@@ -3442,7 +3442,7 @@
         "end": "以上為自 {{source}} 納入之記錄",
         "endHandoff": "以上為自 {{source}} 納入之記錄，此後由 {{harness}} 接續"
       },
-      "projectMenu": "納此案於他器中之差事…"
+      "projectMenu": "匯入差事…"
     },
     "connections": {
       "codex": {
@@ -4074,6 +4074,7 @@
         "refreshSpeechAdded": "模型已更，補 1 個語音參考型號",
         "refreshNoNew": "模型清單已是最新，無所增",
         "refreshFailed": "模型清單重整未成，請稍後再試",
+        "refreshReconnect": "模型清單重整未成。請重連此供方，再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟，已略重整",
         "disableModel": "停此模型",
         "paymentRequired": "付費",
@@ -16480,6 +16481,7 @@
         "empty": "此自運無可封存之差事"
       },
       "archiveAll": {
+        "projectTitle": "盡封存「{{name}}」諸差事乎？",
         "title": "盡封存差事",
         "confirm": "盡封存",
         "cancel": "罷",
@@ -16624,18 +16626,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」專案之目",
+        "previewFailed": "未能讀取此專案諸務，請再試。",
+        "remotePreviewFailed": "遠機專案之差事未得讀取。請察連線，並核遠機 Cindy 是否為新版。",
         "rename": "案易名",
         "pin": "置頂此案",
         "unpin": "解置頂此案",
-        "removeFromSidebar": "自側欄除案",
-        "removeFromSidebarConfirmTitle": "除“{{name}}”？",
-        "removeFromSidebarConfirmDescription": "此舉將自側欄除此案。機上之卷不刪。現有差事將移至“言談”分組，仍可如常使用。",
-        "removeFromSidebarConfirmAction": "除此案",
-        "removeFromSidebarFailed": "不能自側欄除案，請再試",
-        "showFiles": "覽卷",
-        "archivedAll": "盡封存",
-        "unarchiveAll": "盡解封存",
-        "openInExplorer": "於卷管理器中啟",
+        "removeFromSidebar": "自 Cindy 移除此案…",
+        "removeFromSidebarConfirmTitle": "自 Cindy 移除「{{name}}」乎？",
+        "removeFromSidebarConfirmDescription": "未歸檔之差事凡 {{count}}，仍可於「對話」續辦。",
+        "removeFromSidebarConfirmAction": "移除此案",
+        "removeFromSidebarFailed": "移案未成，請重試。",
+        "archiveOnRemove": "並歸檔差事（{{count}}）",
+        "keepSkippedOnRemove": "{{skip}}之差事仍留於「對話」。",
+        "removedArchived": "差事 {{count}} 將入歸檔。",
+        "removeAndArchive": "移案並歸檔差事",
+        "removeKeepFiles": "案之置頂、別名、圖記皆除。機中卷冊與卷夾俱留。",
+        "showFiles": "於側欄覽差事之卷",
+        "archivedAll": "盡歸檔諸差事",
+        "unarchiveAll": "盡復諸差事",
+        "openInFinder": "於 Finder 中啟案之卷夾",
+        "openInExplorer": "於檔案總管中啟案之卷夾",
+        "openInFileManager": "於卷管理器中啟案之卷夾",
         "newInDirectory": "於此目錄新開差事",
         "copyDeepLink": "錄案之連結",
         "search": "於案內尋差事"

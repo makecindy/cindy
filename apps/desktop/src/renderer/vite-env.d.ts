@@ -5177,6 +5177,8 @@ interface ElectronAPI {
       resolveReferences: (
         sessionIds: string[],
       ) => Promise<import('../shared/sessionReference').SessionReference[]>;
+      projectArchive: (request: import('../shared/projectArchive').ProjectArchiveRequest) =>
+        Promise<import('../shared/projectArchive').ProjectArchiveMember[] | import('../shared/projectArchive').ProjectArchiveReceipt>;
       restoreIfArchived: (
         id: string,
         expected: {

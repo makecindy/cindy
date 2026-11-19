@@ -3442,7 +3442,7 @@
         "end": "ここまでは {{source}} からインポートした記録です",
         "endHandoff": "ここまでは {{source}} からインポートした記録です。ここから {{harness}} が続けます。"
       },
-      "projectMenu": "このプロジェクトのほかのツールのセッションをインポート…"
+      "projectMenu": "タスクをインポート…"
     },
     "connections": {
       "codex": {
@@ -4074,6 +4074,7 @@
         "refreshSpeechAdded": "モデルを更新し、参考の音声モデルを 1 件追加しました",
         "refreshNoNew": "モデル一覧は最新です。新規はありません",
         "refreshFailed": "モデル一覧を更新できませんでした。しばらくしてから再試行してください",
+        "refreshReconnect": "モデル一覧を更新できませんでした。このプロバイダーに再接続してから、もう一度お試しください。",
         "refreshFetchDisabled": "モデルカタログのリモート取得が無効のため、更新をスキップしました",
         "disableModel": "このモデルを無効にする",
         "paymentRequired": "有料",
@@ -16480,6 +16481,7 @@
         "empty": "この自動化にはアーカイブできるセッションがありません"
       },
       "archiveAll": {
+        "projectTitle": "「{{name}}」のすべてのタスクをアーカイブしますか？",
         "title": "すべてのセッションをアーカイブ",
         "confirm": "すべてアーカイブ",
         "cancel": "キャンセル",
@@ -16624,18 +16626,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」のプロジェクトメニュー",
+        "previewFailed": "このプロジェクトのタスクを読み込めませんでした。もう一度お試しください。",
+        "remotePreviewFailed": "リモートプロジェクトのタスクを読み込めません。接続を確認し、リモート側の Cindy を最新版にしてください。",
         "rename": "プロジェクト名を変更",
         "pin": "プロジェクトをピン留め",
         "unpin": "プロジェクトのピン留めを解除",
-        "removeFromSidebar": "サイドバーからプロジェクトを削除",
-        "removeFromSidebarConfirmTitle": "「{{name}}」を削除しますか？",
-        "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「会話」セクションに移動し、引き続き利用できます。",
+        "removeFromSidebar": "Cindy からプロジェクトを削除…",
+        "removeFromSidebarConfirmTitle": "Cindy から「{{name}}」を削除しますか？",
+        "removeFromSidebarConfirmDescription": "未アーカイブのタスク {{count}} 件は「会話」で引き続き使用できます。",
         "removeFromSidebarConfirmAction": "プロジェクトを削除",
-        "removeFromSidebarFailed": "サイドバーからプロジェクトを削除できませんでした。もう一度お試しください。",
-        "showFiles": "ファイルを表示",
-        "archivedAll": "すべてアーカイブ",
-        "unarchiveAll": "すべてアーカイブ解除",
-        "openInExplorer": "ファイルマネージャーで開く",
+        "removeFromSidebarFailed": "プロジェクトを削除できませんでした。",
+        "archiveOnRemove": "タスクもアーカイブ（{{count}} 件）",
+        "keepSkippedOnRemove": "対象外のタスク（{{skip}}）は「会話」に残ります。",
+        "removedArchived": "{{count}} 件のタスクをアーカイブに移動します。",
+        "removeAndArchive": "プロジェクトを削除してタスクをアーカイブ",
+        "removeKeepFiles": "プロジェクトのピン留め、カスタム名、アイコンは解除されます。ファイルとフォルダーは保持されます。",
+        "showFiles": "サイドバーでタスクのファイルを表示",
+        "archivedAll": "すべてのタスクをアーカイブ",
+        "unarchiveAll": "すべてのタスクのアーカイブを解除",
+        "openInFinder": "Finder でプロジェクトフォルダを開く",
+        "openInExplorer": "エクスプローラーでプロジェクトフォルダーを開く",
+        "openInFileManager": "ファイルマネージャーでプロジェクトフォルダーを開く",
         "newInDirectory": "このディレクトリで新規セッション",
         "copyDeepLink": "プロジェクトリンクをコピー",
         "search": "このプロジェクト内のセッションを検索"
