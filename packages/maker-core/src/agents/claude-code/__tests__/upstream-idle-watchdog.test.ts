@@ -656,6 +656,41 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
     }
   });
 
+  // #9221: start/send/abort/send through the real adapter. A Stop may never
+  // receive the old SDK result before the next send. Its late error is dropped
+  // by the generation guard without resetting turn state, so reset at the next
+  // send is essential. Unit tier, controlled SDK only.
+  it('clears Worker dispatch before a late interrupted result is dropped in the next turn', async () => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await session.handle.send({ type: 'user', content: 'delegate a task' });
+      session.stream.emit({ type: 'assistant', message: { content: [{
+        type: 'tool_use', id: 'dispatch-before-stop', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      session.stream.emit(userToolResult('dispatch-before-stop', '{"ok":true,"wake_kind":"resumed"}'));
+      await pumpUntil(() => session.events.some(e => e.type === 'tool_result_full'), 'dispatch receipt processed');
+      await session.handle.abort();
+      await session.handle.send({ type: 'user', content: 'ordinary follow-up' });
+      // The real generation guard consumes the old interrupt marker but must
+      // not reset the new turn or accidentally be the dispatch-state cleanup.
+      session.stream.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'next-turn' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'
+        && (e.data as { silentStop?: boolean }).silentStop === true), 'next turn retains silent-stop recovery');
+    } finally {
+      session.stream.end();
+      await session.handle.close();
+      await session.collected;
+      vi.useRealTimers();
+    }
+  });
+
   it('a remote approval callback throwing releases its idle pause', async () => {
     const session = await startPendingRemoteApproval();
     try {
