@@ -1092,11 +1092,16 @@ describe('gift card purchase projection', () => {
   });
 
   it('carries the product kind and card count on orders and fails closed on an unknown kind', () => {
-    expect(projectBillingPaymentOrder(order({ productKind: 'GIFT_CARD', quantity: 3 })))
+    const giftOrder = (overrides: Record<string, unknown> = {}) =>
+      order({ productKind: 'GIFT_CARD', quantity: 3, currency: BILLING_CURRENCY, ...overrides });
+    expect(projectBillingPaymentOrder(giftOrder()))
       .toMatchObject({ productKind: 'GIFT_CARD', quantity: 3 });
     expect(projectBillingPaymentOrder(order())).not.toHaveProperty('productKind');
     expect(() => projectBillingPaymentOrder(order({ productKind: 'VOUCHER' }))).toThrow();
-    expect(() => projectBillingPaymentOrder(order({ productKind: 'GIFT_CARD', quantity: 0 }))).toThrow();
+    expect(() => projectBillingPaymentOrder(giftOrder({ quantity: 0 }))).toThrow();
+    // 礼品卡订单缺张数不能当成一张；币种必须是本区域余额币种，不能按本币说外币的价。
+    expect(() => projectBillingPaymentOrder(giftOrder({ quantity: undefined }))).toThrow();
+    expect(() => projectBillingPaymentOrder(giftOrder({ currency: BILLING_CURRENCY === 'usd' ? 'eur' : 'usd' }))).toThrow();
   });
 
   it('reads the purchase limits with the gift card currency casing and never offers more than the window allows', () => {

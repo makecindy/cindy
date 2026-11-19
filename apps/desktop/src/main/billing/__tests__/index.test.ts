@@ -151,6 +151,21 @@ describe('billing IPC', () => {
     ]);
   });
 
+  // 评审发现（PR #11412）：别的 400（比如游标过期）回退也会失败，不能因此记成「暂不支持」、10 分钟
+  // 都不带 includeGiftCards。只有不带参数的请求成功了才记下。
+  it('only remembers the legacy server once the plain request succeeds', async () => {
+    const { call, fetch } = harness();
+    fetch.mockRejectedValueOnce(new ServerApiError('INVALID_PARAMS', 400, 'redacted'))
+      .mockRejectedValueOnce(new ServerApiError('INVALID_PARAMS', 400, 'redacted'));
+    await expect(call('billing:list-payment-history', { limit: 10, cursor: 'expired_page' })).rejects.toBeTruthy();
+    await call('billing:list-payment-history', { limit: 10 });
+    expect(fetch.mock.calls.map(([path]) => path)).toEqual([
+      '/api/billing/payment-history?limit=10&cursor=expired_page&includeGiftCards=true',
+      '/api/billing/payment-history?limit=10&cursor=expired_page',
+      '/api/billing/payment-history?limit=10&includeGiftCards=true',
+    ]);
+  });
+
   // 评审发现（PR #11412）：旧服务端每次读付款记录都要先白跑一趟必然 400 的请求。记下这个地址暂不支持，
   // 期间直接走原来的请求；过一段时间再试，服务端升级后自动恢复。
   it('remembers for a while that the server does not know gift cards yet', async () => {
@@ -840,7 +855,7 @@ describe('gift card purchase IPC', () => {
     const { call, fetch } = harness();
     fetch.mockResolvedValueOnce({
       orderId: 'order_9', productCode: 'gift_card', offerCode: 'gift_card_100', amount: '200',
-      currency: 'cny', status: 'PENDING', paymentAction: null, productKind: 'GIFT_CARD', quantity: 2,
+      currency: BILLING_CURRENCY, status: 'PENDING', paymentAction: null, productKind: 'GIFT_CARD', quantity: 2,
       createdAt: '2026-11-19T08:00:00.000Z', updatedAt: '2026-11-19T08:00:00.000Z',
     });
 
@@ -861,7 +876,7 @@ describe('gift card purchase IPC', () => {
     const { call, fetch } = harness();
     fetch.mockResolvedValueOnce({
       orderId: 'order_10', productCode: 'gift_card', offerCode: 'gift_card_custom', amount: '466.5',
-      currency: 'cny', status: 'PENDING', paymentAction: null, productKind: 'GIFT_CARD', quantity: 2,
+      currency: BILLING_CURRENCY, status: 'PENDING', paymentAction: null, productKind: 'GIFT_CARD', quantity: 2,
       createdAt: '2026-11-19T08:00:00.000Z', updatedAt: '2026-11-19T08:00:00.000Z',
     });
     await call(BILLING_INVOKE.CREATE_GIFT_CARD_ORDER, {

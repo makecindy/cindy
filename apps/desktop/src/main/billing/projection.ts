@@ -749,6 +749,9 @@ function projectPaymentOrder(value: unknown): BillingPaymentOrder {
         : null;
   const quantity = value.quantity === undefined ? undefined : orderQuantity(value.quantity);
   if (productKind === null || quantity === null) invalidResponse();
+  // 礼品卡订单：张数必填（付款弹窗与订单记录按「面额 × 张数」说），币种必须是本区域余额币种（卡按它
+  // 发与入账，弹窗也按它展示）；缺张数或币种不对按坏响应处理，不当成一张、也不按本币说外币的价。
+  if (productKind === 'GIFT_CARD' && (quantity === undefined || orderCurrency !== BILLING_CURRENCY)) invalidResponse();
   return {
     orderId,
     productCode,

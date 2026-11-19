@@ -462,10 +462,11 @@ export function createBillingHandlers(
           baseUrl: getBaseUrl,
         });
       } catch (error) {
-        // 服务端还没上线礼品卡时不认识这个参数（400）：退回原来的请求，订单记录照常显示。
+        // 服务端还没上线礼品卡时不认识这个参数（400）：退回原来的请求，订单记录照常显示。不带参数的
+        // 请求成功了才记下「暂不支持」——别的 400（比如游标过期）回退也会失败，不能因此 10 分钟不带参数。
         if (!(error instanceof ServerApiError) || error.statusCode !== 400) throwBillingFetchError(error);
-        legacyPaymentHistoryUntil.set(baseUrl, now() + LEGACY_PAYMENT_HISTORY_RETRY_MS);
         response = await invoke<unknown>(`/api/billing/payment-history?${query}`);
+        legacyPaymentHistoryUntil.set(baseUrl, now() + LEGACY_PAYMENT_HISTORY_RETRY_MS);
       }
       return projectResponse(response, projectBillingPaymentHistory);
     }),
