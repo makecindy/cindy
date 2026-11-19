@@ -2836,6 +2836,78 @@ describe('usage through the production event pipeline', () => {
     await h.dispose();
   });
 
+  // #11540 review regression, unit: the production done/account_usage entries
+  // must retain model cost attribution and per-receipt subscription overrides.
+  // Existing tests use one selected/served model and one billing route only.
+  // Minimal failures: two served models, or one direct subscription receipt in
+  // a gateway batch. No filesystem/network or extra module loads are needed.
+  // Standalone file wall-clock: 6.69s (284 cases, shared fixture collection).
+  it.each(['test-model', 'codex/gpt-5.5'])(
+    'keeps Codex money with served-model token rows (selected %s)', async selected => {
+      const h = harness();
+      pricing(false);
+      h.emit(event('done', { usage: {
+        promptTokens: 200, completionTokens: 40, cachedTokens: 20,
+        execution: { model: selected, providerId: 'xd', credentialMode: 'gateway-key' },
+        segments: [{ ...segment, model: 'served-a' }, { ...segment, model: 'served-b' }],
+      } }));
+      await microtasks();
+      for (const model of ['served-a', 'served-b']) {
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: `${model}#billing=api`, inputTokensDelta: 100,
+        }));
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+          model: `${model}#billing=api`, inputTokensDelta: 0,
+          money: expect.objectContaining({ amount: 0.000141 }),
+        }));
+        expect(effects.fn('getModelPriceQuote')).toHaveBeenCalledWith(expect.anything(), 'xd',
+          selected.startsWith('codex/') ? selected : model);
+      }
+      expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+        money: expect.objectContaining({ amount: 0.000282 }),
+        turnUsageDetails: expect.objectContaining({ perModelCost: [
+          expect.objectContaining({ model: 'served-a' }), expect.objectContaining({ model: 'served-b' }),
+        ] }),
+      }));
+      await h.dispose();
+    },
+  );
+
+  it.each(['live', 'replay'] as const)('uses reference overrides for direct Pi subscriptions (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    const reference = { override: true };
+    effects.fn('getReferenceModelPricing').mockReturnValue(reference);
+    effects.fn('getCodexProviderSubscriptionValuePrice').mockImplementation((_provider, _model, catalog) => ({
+      providerId: 'openai', modelId: 'chatgpt/gpt-5.5', currency: 'USD',
+      source: 'user-override', approximate: true, inputPerMtok: catalog === reference ? 10 : 1,
+      outputPerMtok: 2, cacheReadPerMtok: 0.1,
+    }));
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    if (mode === 'replay') effects.fn('isLedgerCurrencyKnown').mockReturnValue(false);
+    h.emit(event('account_usage', { usage: { settlementId: 'mixed-turn', receipts: [
+      { ...segment, id: 'pi:gateway', recordedAt: Date.now() },
+      { ...segment, model: 'chatgpt/gpt-5.5', id: 'pi:subscription', recordedAt: Date.now() },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    if (mode === 'replay') {
+      const saved = writes.mock.calls[0][1][1];
+      const db = { tx: writes, queryOne: async () => null,
+        query: vi.fn(async (_sql, params) => params[0] === 0 ? [{ rowId: 1, sessionId: 'task',
+          settlementId: 'mixed-turn', receiptId: saved.receiptId, payload: saved.pricingPayload }] : []),
+      } as unknown as DbClient;
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
+      effects.fn('getGatewayModelPricing').mockResolvedValue({ xd: {} });
+      setCurrentDbClient(db, 'mixed-replay');
+      try { await retryPendingPiUsageReceipts(); } finally { clearCurrentDbClient(db); }
+    }
+    expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', expect.arrayContaining([
+      expect.objectContaining({ receiptId: 'pi:subscription', amount: 0.001041, actualCost: false }),
+    ]));
+    await h.dispose();
+  });
+
   it.each(['codex', 'pi'] as const)(
     'retains %s token facts when pricing rejects',
     async (source) => {

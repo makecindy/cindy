@@ -79,18 +79,23 @@ def export(database, key=None):
         # Do not fill it by guessing from the model name or the current account.
         # Auxiliary request IDs are already unique. Their counters are independent
         # of conversation turns and their original billing method may be absent.
-        query = """
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        queries = []
+        if "daily_token_attribution" in tables:
+            queries.append("""
             SELECT day, provider, billing_source, model,
                    input_tokens, output_tokens, cache_read_tokens, cache_create_tokens
             FROM daily_token_attribution
-            UNION ALL
+            """)
+        if "auxiliary_usage_receipts" in tables:
+            queries.append("""
             SELECT date(recorded_at / 1000, 'unixepoch'), provider_id,
                    CASE WHEN provider_id = 'xd' THEN 'cindy-ai' ELSE 'unknown' END, model,
                    coalesce(input_tokens, 0), coalesce(output_tokens, 0),
                    coalesce(cache_read_tokens, 0), coalesce(cache_create_tokens, 0)
             FROM auxiliary_usage_receipts
-        """
-        for day, provider, billing, model, *counts in db.execute(query):
+            """)
+        for day, provider, billing, model, *counts in (db.execute(" UNION ALL ".join(queries)) if queries else []):
             source = providers.get(provider, "未记录" if provider in ("", "unknown") else "自定义接入")
             label = public_model(model, names)
             if source == "自定义接入":

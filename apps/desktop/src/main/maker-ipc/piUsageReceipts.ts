@@ -112,14 +112,16 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
     void rebroadcastTodaySpend(scope);
   }
   if (!receipts.some(r => r.needsPricing)) return;
-  const pricing = recovery ? recovery.pricing
-    : receipts.some(r => r.route === 'xd-gateway') ? await getGatewayModelPricingForModel() : getReferenceModelPricing();
+  const gatewayPricing = recovery ? recovery.pricing
+    : receipts.some(r => r.route === 'xd-gateway') ? await getGatewayModelPricingForModel() : null;
   if (recovery && !recovery.current()) return;
   // DB/pricing awaits may have allowed this account's currency to recover.
   // Keep token facts, but never finalize money using an unknown USD fallback.
   const currency = confirmedOwnerCurrency(owner);
   if (!currency) return;
+  const referencePricing = getReferenceModelPricing();
   const priced = receipts.filter(r => r.needsPricing).map(({ row, segment, model, route, subscription, unpriced }) => {
+    const pricing = route === 'xd-gateway' ? gatewayPricing : referencePricing;
     const segments = unpriced ? [] : [{ ...segment,
       priceVariant: segment.priceVariant ?? (segment.id?.startsWith('pi:') && context.piFastMode ? 'priority' : 'standard'),
     }];
@@ -190,7 +192,6 @@ export function retryPendingPiUsageReceipts(): Promise<void> {
         // Cache reads only: never wait once per receipt for the same model sync.
         const gatewayPricing = await getGatewayModelPricing();
         if (!current()) return;
-        const referencePricing = getReferenceModelPricing();
         const changedSessions = new Set<string>();
         let changed = false;
         for (const row of rows) {
@@ -201,11 +202,10 @@ export function retryPendingPiUsageReceipts(): Promise<void> {
             if (saved.version !== 1 || saved.receipt?.id !== row.receiptId || !saved.context
                 || typeof saved.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(saved.day)) continue;
             if (!owner.currency && (saved.currency === 'USD' || saved.currency === 'CNY')) owner.currency = saved.currency;
-            const subscription = saved.context.subscriptionKind !== null || saved.context.accessKind === 'subscription';
             await persistPiUsageReceipts(owner, row.sessionId,
               { settlementId: row.settlementId, receipts: [saved.receipt] }, saved.context, false, {
                 day: saved.day, current,
-                pricing: subscription || saved.context.isUserProviderRoute ? referencePricing : gatewayPricing,
+                pricing: gatewayPricing,
                 changed: hasCost => { changed = true; if (hasCost) changedSessions.add(row.sessionId); },
               });
           } catch (error) {

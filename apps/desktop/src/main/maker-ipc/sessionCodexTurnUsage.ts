@@ -7,7 +7,6 @@ import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getCodexProxyAuthInjection } from '../maker-host/codex-proxy-host.desktop.js';
 import { recordSessionTurnSpend, recordSessionTurnTokens } from '../sessionSpendBroadcaster.js';
 import {
-  codexUsageToTokens,
   recordSchedulerTurnCost,
   recordTurnUsageOnMessage,
 } from '../turnCostBroadcaster.js';
@@ -27,7 +26,7 @@ import {
 } from '../usage/turnCostCalculator.js';
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { isCodexGatewayWireModel } from '@cindy/model-providers';
-import { type RegionalMoney } from '../../shared/regionalMoney.js';
+import { addRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './usage.js';
 import { isClaudeSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
@@ -160,11 +159,6 @@ export function recordSessionCodexTurnUsage(
           Boolean(sessionProvider && sessionProvider !== 'xd');
         // Keep unknown remote routes token-only, without a billing suffix that
         // would classify them as API spend or trigger subscription revaluation.
-        const modelUsageKey = isRemoteCodexSession
-          ? pricingModel
-          : isSubscriptionValue
-            ? codexSubscriptionUsageModelKey(pricingModel)
-            : codexApiUsageModelKey(pricingModel);
         const billing = turnBillingSource(turnContext, isSubscriptionValue ? 'subscription' : hasEffectiveGatewayRoute ? 'xd-gateway' : usesReferencePriceEstimate ? 'provider-api' : 'unknown');
         if (isSubscriptionValue && !billing.providerId) billing.providerId = isCodexXaiProviderRoute ? 'xai' : 'openai';
         const turnUsageDetails = buildTurnUsageDetails({
@@ -221,43 +215,50 @@ export function recordSessionCodexTurnUsage(
           // registry 参考价(含 codex 侧价格覆盖),默认/openai 保持 OpenAI 价表。
           const subscriptionValueProviderId =
             isCodexSubscriptionAccessRoute && sessionProvider != null ? sessionProvider : 'openai';
-          const price = isSubscriptionValue && isCodexXaiProviderRoute
-            ? getSubscriptionDirectValuePrice(pricingModel, 'codex', pricing)
-            : isSubscriptionValue
-              ? getCodexProviderSubscriptionValuePrice(
-                  subscriptionValueProviderId,
-                  pricingModel,
-                  pricing,
-                )
-              : hasEffectiveGatewayRoute
-                ? getModelPriceQuote(pricing, 'xd', pricingModel)
-                : usesReferencePriceEstimate
-                  ? getModelPriceQuote(pricing, sessionProvider, pricingModel, 'codex')
-                  : undefined;
-          const money = computePriceQuoteTurnMoney(
-            codexUsageToTokens(u),
-            price ?? undefined,
-            currentLedgerCurrency(),
-            u.segments !== undefined && codexSegmentsReliable ? codexUsageSegments : [],
-          );
-          // Only Gateway sale prices are actual API spend. Third-party/user reference quotes
-          // are value estimates and daily_model_usage cannot preserve RegionalMoney.kind, so
-          // writing them into #billing=api would later reconstruct an estimate as actual cost.
-          if (money && (isSubscriptionValue || price?.source === 'gateway')) {
-            await recordModelTurnUsage({
-              sessionId: session.id,
-              agentKind: 'codex',
-              model: modelUsageKey,
-              money,
-              inputTokensDelta: 0,
-              outputTokensDelta: 0,
-              cacheReadTokensDelta: 0,
-              cacheCreateTokensDelta: 0,
-            });
+          const perModelCost = [];
+          for (const row of tokenRows) {
+            // Gateway SKUs carry the sale-price identity even when the response
+            // reports a bare upstream model. Ledger attribution follows the row.
+            const rowModel = normalizeModelIdForPricing(row.model);
+            const quoteModel = isCodexBudgetRoute ? pricingModel : rowModel;
+            const price = isSubscriptionValue && isCodexXaiProviderRoute
+              ? getSubscriptionDirectValuePrice(quoteModel, 'codex', pricing)
+              : isSubscriptionValue
+                ? getCodexProviderSubscriptionValuePrice(subscriptionValueProviderId, quoteModel, pricing)
+                : hasEffectiveGatewayRoute
+                  ? getModelPriceQuote(pricing, 'xd', quoteModel)
+                  : usesReferencePriceEstimate
+                    ? getModelPriceQuote(pricing, sessionProvider, quoteModel, 'codex')
+                    : undefined;
+            const segments = codexSegmentsReliable
+              ? execution
+                ? codexUsageSegments.filter(segment => (segment.model ?? turnModel) === row.model)
+                : codexUsageSegments
+              : [];
+            const money = computePriceQuoteTurnMoney(row, price, currentLedgerCurrency(), segments);
+            if (!money) continue;
+            // Only gateway sale prices are actual API spend. Reference quotes
+            // remain message-only estimates so history cannot reclassify them.
+            if (isSubscriptionValue || price?.source === 'gateway') {
+              await recordModelTurnUsage({
+                sessionId: session.id,
+                agentKind: 'codex',
+                model: isSubscriptionValue ? codexSubscriptionUsageModelKey(rowModel)
+                  : codexApiUsageModelKey(rowModel),
+                recordedAt,
+                money,
+                inputTokensDelta: 0,
+                outputTokensDelta: 0,
+                cacheReadTokensDelta: 0,
+                cacheCreateTokensDelta: 0,
+              });
+            }
+            perModelCost.push({ ...billing, model: row.model, money });
           }
+          const money = perModelCost.length ? addRegionalMoney(perModelCost.map(row => row.money)) : null;
           if (money && money.amount > 0) {
-            if (turnUsageDetails) turnUsageDetails.perModelCost = [{ model: turnModel, money }];
-            const isActualApiCost = !isSubscriptionValue && price?.source === 'gateway';
+            if (turnUsageDetails) turnUsageDetails.perModelCost = perModelCost;
+            const isActualApiCost = !isSubscriptionValue && money.kind === 'actual-cost';
             if (isActualApiCost) {
               void recordTurnSpend(money);
               void recordSessionTurnSpend(session.id, money);
