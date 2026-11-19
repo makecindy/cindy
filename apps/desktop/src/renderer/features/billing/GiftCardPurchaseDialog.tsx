@@ -124,8 +124,12 @@ export function GiftCardPurchaseDialog({
   /** 单张面额；自填还没填好时为 null。张数上限按已填的面额算，没填好时按可填的最低面额算。 */
   const unitOf = (entry: GiftCardOfferEntry) =>
     entry.kind === 'fixed' ? entry.offer.amount : customValue;
-  const capOf = (entry: GiftCardOfferEntry) =>
-    policy ? maxGiftCardQuantity(policy, unitOf(entry) ?? customRange?.min ?? entry.offer.minAmount ?? '0') : 0;
+  const capOf = (entry: GiftCardOfferEntry) => {
+    if (!policy) return 0;
+    // 自填范围与单张面额范围不重叠：没有能填的面额，这个方案不可用（按钮置灰、不默认选中）。
+    if (entry.kind === 'custom' && !customRange) return 0;
+    return maxGiftCardQuantity(policy, unitOf(entry) ?? customRange?.min ?? entry.offer.minAmount ?? '0');
+  };
   const selected =
     offers.find((entry) => entry.offer.code === offerCode) ??
     offers.find((entry) => capOf(entry) > 0) ??

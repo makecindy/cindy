@@ -63,22 +63,25 @@ export function giftCardOffersOf(catalog: BillingCatalog | null): GiftCardOfferE
 
 /**
  * 自填面额实际可填的范围：价格方案范围与服务端给的单张面额范围取交集（存量方案比当前限额宽时
- * 以限额为准）。服务端下单时同样按交集校验。
+ * 以限额为准）。服务端下单时同样按交集校验。两段范围不重叠（如方案 20–100、限额 200–500）时
+ * 没有能填的面额，返回 null，这个方案不可用。
  */
 export function customGiftCardRange(
   offer: { minAmount: string; maxAmount: string },
   policy: Pick<BillingGiftCardPurchasePolicy, 'minFaceValue' | 'maxFaceValue'> | null,
-): { min: string; max: string } {
+): { min: string; max: string } | null {
   const pick = (a: string, b: string | null | undefined, larger: boolean) => {
     const left = cents(a);
     const right = b ? cents(b) : null;
     if (left === null || right === null) return a;
     return (larger ? right > left : right < left) ? b! : a;
   };
-  return {
-    min: pick(offer.minAmount, policy?.minFaceValue, true),
-    max: pick(offer.maxAmount, policy?.maxFaceValue, false),
-  };
+  const min = pick(offer.minAmount, policy?.minFaceValue, true);
+  const max = pick(offer.maxAmount, policy?.maxFaceValue, false);
+  const low = cents(min);
+  const high = cents(max);
+  if (low !== null && high !== null && low > high) return null;
+  return { min, max };
 }
 
 /**

@@ -135,6 +135,7 @@ describe('gift card amounts written at a longer scale', () => {
       { minFaceValue: '100.000000000', maxFaceValue: '1000.000000000' },
     );
     expect(range).toEqual({ min: '100.000000000', max: '500.000000000' });
+    if (!range) throw new Error('range expected');
     expect(parseCustomGiftCardAmount('99', range)).toEqual({ issue: 'range' });
     expect(parseCustomGiftCardAmount('250.50', range)).toEqual({ amount: '250.5' });
     expect(parseCustomGiftCardAmount('250.505', range)).toEqual({ issue: 'format' });
@@ -179,6 +180,19 @@ describe('GiftCardPurchaseDialog', () => {
     fireEvent.click(button('billing.giftCardPurchase.increase'));
     expect(button('billing.giftCardPurchase.increase').hasAttribute('disabled')).toBe(true);
     expect(screen.getByText(/billing\.giftCardPurchase\.orderAmountCap/)).toBeTruthy();
+  });
+
+  // 评审发现（PR #11412）：方案范围与单张面额范围不重叠时没有能填的面额，「自定义」不能看起来可选、
+  // 实际怎么填都不能付款。
+  it('disables a buyer-entered offer whose range does not overlap the allowed face values', async () => {
+    expect(customGiftCardRange({ minAmount: '20', maxAmount: '100' }, { minFaceValue: '200', maxFaceValue: '500' })).toBeNull();
+    expect(customGiftCardRange({ minAmount: '20', maxAmount: '300' }, { minFaceValue: '200', maxFaceValue: '500' }))
+      .toEqual({ min: '200', max: '300' });
+
+    api.getGiftCardPurchasePolicy.mockResolvedValue({ ...policy, minFaceValue: '900', maxFaceValue: '1000' });
+    open('小鱼', [customOffer]);
+    await waitFor(() => expect(button('billing.amount.custom').hasAttribute('disabled')).toBe(true));
+    expect(button('billing.giftCardPurchase.pay').hasAttribute('disabled')).toBe(true);
   });
 
   it('submits a buyer-entered face value inside the allowed range', async () => {
