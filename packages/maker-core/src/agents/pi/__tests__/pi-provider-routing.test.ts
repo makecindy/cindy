@@ -4160,6 +4160,31 @@ describe("Pi provider-aware model routing", () => {
     },
   );
 
+  it('does not carry ultra onto a gateway tier that only declares max', async () => {
+    // codex P1：ultra→max 只对 native Pi 快照成立（Pi 没有 ultra）。网关快照是
+    // Server/XD 下放的权威能力表：只声明 max 的模型不得因为映射而"接受" ultra，
+    // 否则切过去仍记着 ultra，getEffort() 报出目标并不支持的档位。
+    const handle = await new PiAgent(byomDeps(undefined, [
+      { id: 'ultra-model', displayName: 'Ultra', contextWindow: 200_000, efforts: ['low', 'max', 'ultra'], defaultEffort: 'low' },
+      { id: 'max-model', displayName: 'Max', contextWindow: 200_000, efforts: ['low', 'max'], defaultEffort: 'low' },
+    ])).startSession({
+      sessionId: 'gateway-max-from-ultra', workingDir: cwd, model: 'ultra-model', effort: 'ultra',
+    });
+    try {
+      expect(handle.getEffort!()).toBe('ultra');
+      const before = captured.requests.length;
+      await handle.setModel!('max-model');
+      const levels = captured.requests.slice(before)
+        .filter((request) => request.type === 'set_thinking_level')
+        .map((request) => String(request.level));
+      // 不能把 ultra 下发成 max 并继续记着 ultra；按目标默认档收敛。
+      expect(levels).toEqual(['low']);
+      expect(handle.getEffort!()).toBe('low');
+    } finally {
+      await handle.close();
+    }
+  });
+
   it("freezes active BYOM effort selection to the startup models.json snapshot", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({

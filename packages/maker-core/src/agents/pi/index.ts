@@ -894,11 +894,6 @@ function effortToPiThinkingLevel(effort: Effort): Exclude<Effort, 'ultra'> {
   return effort === 'ultra' ? 'max' : effort;
 }
 
-/** Keep Cindy's selected tier while checking the level Pi can actually apply (#9037). */
-function supportsPiEffort(snapshot: readonly Effort[], effort: Effort): boolean {
-  return snapshot.includes(effort) || snapshot.includes(effortToPiThinkingLevel(effort));
-}
-
 const PI_THINKING_LEVEL_MAP_KEYS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 /**
@@ -953,15 +948,26 @@ export function pickSupportedEffort(
 ): Effort | null {
   for (const candidate of candidates) {
     if (!candidate) continue;
-    if (snapshot === undefined || supportsPiEffort(snapshot, candidate)) return candidate;
+    if (snapshot === undefined || snapshot.includes(candidate)) return candidate;
   }
   return null;
 }
 
-/** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
+/**
+ * 从本次启动写入 models.json 的 native model 快照提取可用 effort。
+ *
+ * 快照在这里翻译回 **Cindy 档位空间**：Pi 没有 ultra，能落 `max` 的 native 模型就是
+ * Cindy 的 ultra（见 `effortToPiThinkingLevel`），所以补一个 ultra 让调用方直接
+ * `includes` 判断即可。
+ *
+ * 这层别名只对 native 快照成立：网关快照是 Server/XD 下放的 Cindy efforts，本身就是
+ * 权威能力表，只声明 `max` 不声明 `ultra` 的模型不得被当成支持 ultra——否则恢复/收敛
+ * 会下发 `max` 却把 `mutableEffort` 记成 ultra，`getEffort()` 报出目标并不支持的档位。
+ */
 function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
   if (!model) return undefined;
-  return piSupportedEfforts(model);
+  const efforts = piSupportedEfforts(model);
+  return efforts.includes('max') ? [...efforts, 'ultra'] : efforts;
 }
 
 /**
@@ -3184,7 +3190,7 @@ export class PiAgent extends BaseAgent {
       // efforts:[] 仍可能收到 resolveEffort 的 UI 占位值 low；它代表“不支持切换”，
       // 只需跳过 RPC。其它档位必须拒绝，避免热刷目录后的新 effort 绕过启动快照。
       if (!snapshot || (snapshot.length === 0 && effort === 'low')) return;
-      if (supportsPiEffort(snapshot, effort)) return;
+      if (snapshot.includes(effort)) return;
       throw new Error(
         `pi set_thinking_level refused: effort '${effort}' is not in Pi's applied model catalog.`,
       );
@@ -7794,7 +7800,7 @@ export class PiAgent extends BaseAgent {
         !keepThinkingOff &&
         restoredEffort &&
         nextEffortSnapshot && nextEffortSnapshot.length > 0 &&
-        supportsPiEffort(nextEffortSnapshot, restoredEffort)
+        nextEffortSnapshot.includes(restoredEffort)
       ) {
         // 恢复请求失败（被拒或超时/链路抛错）都不能让 setModel 失败：模型路由此刻已确认,
         // 抛错只会跳过下面的子代理快照收尾（pending 卡死委派），档位本身却救不回来。
@@ -7890,12 +7896,12 @@ export class PiAgent extends BaseAgent {
               this.deps.resolvePiRuntimeModelDescriptor?.(mutableProviderId ?? null, model)
                 ?.defaultEffort ?? null;
             const reconciled =
-              requestedEffort && supportsPiEffort(usable, requestedEffort)
+              requestedEffort && usable.includes(requestedEffort)
                 ? requestedEffort
-                : preferredDefault && supportsPiEffort(usable, preferredDefault)
+                : preferredDefault && usable.includes(preferredDefault)
                   ? preferredDefault
                   : usable[0];
-            if (requestedEffort && !supportsPiEffort(usable, requestedEffort)) {
+            if (requestedEffort && !usable.includes(requestedEffort)) {
               // 启动快照（本次 spawn 冻结）与活跃目录可能漂移：此时 Pi 实际跑的档位与
               // main 持久化/UI 显示的档位不一致，留一条日志便于排障。
               deps.logger.warn('pi: thinking effort reconciled after model switch', {
