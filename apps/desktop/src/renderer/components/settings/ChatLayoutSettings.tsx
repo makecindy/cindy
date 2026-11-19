@@ -62,7 +62,7 @@ export function ChatLayoutSettings() {
   return (
     <>
       <SettingsRow
-        id={layout.targetId}
+        id={appearanceSettings.chatLayout.targetId}
         className="cindy-segmented-row"
         wrap
         title={t(layout.titleKey)}
@@ -78,7 +78,7 @@ export function ChatLayoutSettings() {
       />
       {mode === 'wide' && (
         <SettingsRow
-          id={contentWidth.targetId}
+          id={appearanceSettings.chatWidth.targetId}
           wrap
           title={<span id={`${contentWidth.targetId}-label`}>{t(contentWidth.titleKey)}</span>}
           hint={<span id={hintId}>{t(contentWidth.descriptionKey)}</span>}
