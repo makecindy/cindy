@@ -1104,6 +1104,17 @@ describe('gift card purchase projection', () => {
       maxOrderAmount: '1000', emailCooldownSeconds: 60, faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
     })).toMatchObject({ emailCooldownSeconds: 60 });
     expect(() => projectGiftCardPurchasePolicy({ currency: 'USD', dailyLimit: 5 })).toThrow();
+    // 新服务端给了面额范围或发信冷却却不合法：按坏响应处理，不当成旧服务端（否则自填面额只按价格方案
+    // 范围校验，下单才被拒）。服务端明确给 null（本区域不支持礼品卡）照常读出。
+    const base = {
+      currency: 'CNY', dailyLimit: 5, windowHours: 24, remaining: 5, maxQuantityPerOrder: 5,
+      maxOrderAmount: '1000', faces: ['cindy'], maxSenderNameLength: 40, maxMessageLength: 120,
+    };
+    for (const malformed of [{ minFaceValue: 'abc' }, { maxFaceValue: 100 }, { emailCooldownSeconds: -1 }, { emailCooldownSeconds: 0 }]) {
+      expect(() => projectGiftCardPurchasePolicy({ ...base, ...malformed })).toThrow();
+    }
+    expect(projectGiftCardPurchasePolicy({ ...base, minFaceValue: null, maxFaceValue: null }))
+      .toMatchObject({ minFaceValue: null, maxFaceValue: null });
   });
 
   const purchasedCard = (overrides: Record<string, unknown> = {}) => ({
@@ -1130,9 +1141,9 @@ describe('gift card purchase projection', () => {
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'SOLD' })], nextCursor: null })).toThrow();
   });
 
-  // 发信情况只是展示：不合法时当作没发过，不连累整张卡；支持发信的服务端每张卡都带 email 字段，
-  // 旧服务端没有这个字段时界面不提供「发送到邮箱」。
-  it('reads the email delivery leniently and tells whether the server can send by email', () => {
+  // 支持发信的服务端每张卡都带 email 字段（没发过为 null），旧服务端没有这个字段时界面不提供
+  // 「发送到邮箱」；新服务端给了却不合法时按坏响应处理，不悄悄当成没发过。
+  it('reads the email delivery, tells whether the server can send by email, and rejects a malformed one', () => {
     const email = {
       recipient: 'friend@example.com', status: 'SENT',
       updatedAt: '2026-11-19T08:05:00.000Z', nextAvailableAt: '2026-11-19T08:06:00.000Z',
@@ -1140,14 +1151,16 @@ describe('gift card purchase projection', () => {
     const list = projectPurchasedGiftCardList({
       cards: [
         purchasedCard({ email }),
-        purchasedCard({ cardId: 'card_2', email: { ...email, status: 'BOUNCED' } }),
-        purchasedCard({ cardId: 'card_3', email: { ...email, nextAvailableAt: 'soon' } }),
         purchasedCard({ cardId: 'card_4', email: null }),
       ],
       nextCursor: null,
     });
-    expect(list.cards.map((card) => card.email?.status ?? null)).toEqual(['SENT', null, null, null]);
+    expect(list.cards.map((card) => card.email?.status ?? null)).toEqual(['SENT', null]);
     expect(list.emailSupported).toBe(true);
+    for (const malformed of [{ ...email, status: 'BOUNCED' }, { ...email, nextAvailableAt: 'soon' }, 'sent']) {
+      expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ email: malformed })], nextCursor: null }))
+        .toThrow();
+    }
     expect(projectPurchasedGiftCardList({ cards: [purchasedCard()], nextCursor: null }))
       .toMatchObject({ emailSupported: false, cards: [{ email: null }] });
     expect(projectPurchasedGiftCardList({ cards: [], nextCursor: null }).emailSupported).toBe(false);

@@ -134,6 +134,14 @@ function nullable<T>(value: unknown, parse: (input: unknown) => T | null): T | n
   return value === null ? null : (parse(value) ?? undefined);
 }
 
+/**
+ * 新增的可选字段：旧服务端没有（undefined）当 null；新服务端给了就必须合法，不合法返回
+ * undefined，由调用方按坏响应处理，不能悄悄当成旧服务端。
+ */
+function optional<T>(value: unknown, parse: (input: unknown) => T | null): T | null | undefined {
+  return value === undefined ? null : nullable(value, parse);
+}
+
 function isoTime(value: unknown): string | null {
   if (typeof value !== 'string' || !ISO_TIME_PATTERN.test(value)) return null;
   const timestamp = Date.parse(value);
@@ -818,8 +826,16 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
   const faces = value.faces.filter(
     (face): face is string => typeof face === 'string' && FACE_CODE_PATTERN.test(face),
   );
+  const minFaceValue = optional(value.minFaceValue, decimal);
+  const maxFaceValue = optional(value.maxFaceValue, decimal);
+  const emailCooldownSeconds = optional(value.emailCooldownSeconds, (input) =>
+    boundedCount(input, 24 * 3_600) || null,
+  );
   if (
     !policyCurrency ||
+    minFaceValue === undefined ||
+    maxFaceValue === undefined ||
+    emailCooldownSeconds === undefined ||
     dailyLimit === null ||
     !windowHours ||
     remaining === null ||
@@ -838,14 +854,14 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
     remaining: Math.min(remaining, dailyLimit),
     maxQuantityPerOrder,
     maxOrderAmount,
-    // 旧服务端没有单张面额范围：不当成坏响应，自填面额只按价格方案范围限制。
-    minFaceValue: decimal(value.minFaceValue),
-    maxFaceValue: decimal(value.maxFaceValue),
+    // 旧服务端没有单张面额范围：当作没有，自填面额只按价格方案范围限制；给了但不合法按坏响应处理。
+    minFaceValue,
+    maxFaceValue,
     faces: [...new Set(faces)],
     maxSenderNameLength,
     maxMessageLength,
     // 旧服务端没有发信接口：null 表示不提供「发送到邮箱」。
-    emailCooldownSeconds: boundedCount(value.emailCooldownSeconds, 24 * 3_600),
+    emailCooldownSeconds,
   };
 }
 
@@ -877,7 +893,9 @@ function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
     boundedString(input, MAX_GIFT_SENDER_LENGTH),
   );
   const purchasedAt = isoTime(value.purchasedAt);
+  const email = optional(value.email, projectPurchasedGiftCardEmail);
   if (
+    email === undefined ||
     !cardId ||
     !orderId ||
     !faceCode ||
@@ -907,7 +925,7 @@ function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
     // 领取人昵称只属于「被别人领走」这一种状态，其它状态即使带了也不展示。
     claimedByName: status === 'CLAIMED' ? claimedByName : null,
     purchasedAt,
-    email: projectPurchasedGiftCardEmail(value.email),
+    email,
   };
 }
 
@@ -919,7 +937,10 @@ const GIFT_CARD_EMAIL_STATUSES = new Set<BillingPurchasedGiftCardEmail['status']
 ]);
 const MAX_EMAIL_LENGTH = 254;
 
-/** 发信情况只用于展示：旧服务端没有、或任何字段不合法时当作没发过，不让整张卡失效。 */
+/**
+ * 最近一次发到邮箱的情况。旧服务端没有这个字段时当作没发过（见 optional）；给了但不合法时
+ * 返回 null，由调用方按坏响应处理，不悄悄当成没发过。
+ */
 function projectPurchasedGiftCardEmail(value: unknown): BillingPurchasedGiftCardEmail | null {
   if (!isRecord(value)) return null;
   const recipient = boundedString(value.recipient, MAX_EMAIL_LENGTH);

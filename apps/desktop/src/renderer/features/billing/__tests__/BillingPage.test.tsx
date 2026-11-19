@@ -6,6 +6,7 @@ import { createInstance } from 'i18next';
 import type {
   BillingPaymentOrder,
   BillingPurchasedGiftCard,
+  BillingPurchasedGiftCardCode,
   BillingSubscription,
   BillingSubscriptionPortalResult,
 } from '../../../../shared/billing';
@@ -151,7 +152,7 @@ vi.mock('qrcode', () => ({
   toDataURL: vi.fn(async () => 'data:image/png;base64,fixture'),
 }));
 
-import { BillingPage } from '../BillingPage';
+import { BillingPage, PURCHASED_CARDS_RETRY_DELAYS_MS } from '../BillingPage';
 import {
   EMAIL_REFRESH_DELAY_MS,
   EMAIL_REFRESH_MAX_ROUNDS,
@@ -446,6 +447,8 @@ describe('BillingPage remote catalog rendering', () => {
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
           listPaymentHistory: vi.fn(async () => ({ records: [], nextCursor: null })),
+          // 没买过卡：成功读到空列表时不显示「我买的礼品卡」。
+          listPurchasedGiftCards: vi.fn(async () => ({ cards: [], nextCursor: null, emailSupported: false })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
         maker: {
@@ -1128,6 +1131,132 @@ describe('BillingPage remote catalog rendering', () => {
     expect(window.electronAPI.billing.revealPurchasedGiftCard).toHaveBeenCalledWith({ cardId: 'card_1', faceCode: 'cat' });
   });
 
+  // 「我买的礼品卡」读取失败要显示错误与重试；只有成功读到空列表或旧服务端没有这个接口时才不显示。
+  it.each([
+    ['an outage', () => new Error('timeout'), true],
+    ['an old server', () => Object.assign(new Error('[NOT_FOUND] no route'), { code: 'NOT_FOUND' as const }), false],
+  ])('shows the purchased-card load failure after %s only when it is real', async (_label, failure, shown) => {
+    const list = vi.fn(async () => {
+      throw failure();
+    });
+    window.electronAPI.billing.listPurchasedGiftCards = list;
+    render(<BillingPage />);
+    await waitFor(() => expect(list).toHaveBeenCalled());
+    if (shown) {
+      expect(await screen.findByText('billing.giftCardPurchase.list.loadFailed')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'billing.giftCardPurchase.list.retry' })).toBeTruthy();
+    } else {
+      await waitFor(() => expect(screen.queryByText('billing.giftCardPurchase.list.loadFailed')).toBeNull());
+      expect(screen.queryByText('billing.giftCardPurchase.list.title')).toBeNull();
+    }
+  });
+
+  // 付款成功后发卡结果可能还没读到（列表请求失败，或先于发卡可见）：按退避有限次重读，读到这一单的卡
+  // 就显示；一直没有才说「稍后会出现在我买的礼品卡」。关闭弹窗后不再读。
+  it.each([
+    ['shows the cards once they appear', 3, 'billing.giftCardPurchase.done.title:{"count":1}'],
+    ['gives up after a bounded wait', 1 + PURCHASED_CARDS_RETRY_DELAYS_MS.length, 'billing.giftCardPurchase.done.missing'],
+  ])('keeps fetching a paid order\'s cards (%s)', async (_label, reads, text) => {
+    vi.useFakeTimers();
+    try {
+      const issued = {
+        cardId: 'card_new', orderId: 'order_gift', faceCode: 'cat', amount: '100', currency: 'cny',
+        senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'UNCLAIMED' as const, claimedAt: null,
+        claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
+      };
+      const empty = { cards: [], nextCursor: null, emailSupported: false };
+      // 第 1 次是进入计费页时的读取，之后是付款成功后的重读。
+      const list = vi.fn()
+        .mockResolvedValueOnce(empty)
+        .mockRejectedValueOnce(new Error('timeout'))
+        .mockResolvedValue(reads === 3 ? { ...empty, cards: [issued] } : empty);
+      window.electronAPI.billing.listPurchasedGiftCards = list;
+      const giftOrder = {
+        orderId: 'order_gift', productCode: 'gift_card', offerCode: 'gift_card_100', amount: '100',
+        currency: 'cny', status: 'PENDING' as const, paymentAction: null, productKind: 'GIFT_CARD' as const,
+        quantity: 1, createdAt: '2026-11-19T08:00:00.000Z', updatedAt: '2026-11-19T08:00:00.000Z',
+      };
+      Object.assign(checkout.state, { open: true, kind: 'TOPUP', phase: 'AWAITING_PAYMENT', order: giftOrder });
+      const view = render(<BillingPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(list).toHaveBeenCalledTimes(1);
+      Object.assign(checkout.state, { phase: 'COMPLETED', order: { ...giftOrder, status: 'SUCCEEDED' } });
+      view.rerender(<BillingPage />);
+      for (const delay of [...PURCHASED_CARDS_RETRY_DELAYS_MS, 30_000]) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(delay);
+        });
+      }
+      expect(list).toHaveBeenCalledTimes(reads);
+      expect(screen.getByText(text)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops fetching a paid order\'s cards once the dialog is closed', async () => {
+    vi.useFakeTimers();
+    try {
+      const list = vi.fn(async () => ({ cards: [], nextCursor: null, emailSupported: false }));
+      window.electronAPI.billing.listPurchasedGiftCards = list;
+      const giftOrder = {
+        orderId: 'order_gift', productCode: 'gift_card', offerCode: 'gift_card_100', amount: '100',
+        currency: 'cny', status: 'PENDING' as const, paymentAction: null, productKind: 'GIFT_CARD' as const,
+        quantity: 1, createdAt: '2026-11-19T08:00:00.000Z', updatedAt: '2026-11-19T08:00:00.000Z',
+      };
+      Object.assign(checkout.state, { open: true, kind: 'TOPUP', phase: 'AWAITING_PAYMENT', order: giftOrder });
+      const view = render(<BillingPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      Object.assign(checkout.state, { phase: 'COMPLETED', order: { ...giftOrder, status: 'SUCCEEDED' } });
+      view.rerender(<BillingPage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(list).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole('button', { name: 'billing.actions.close' }));
+      for (const delay of PURCHASED_CARDS_RETRY_DELAYS_MS) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(delay);
+        });
+      }
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // 取码请求在离开计费页（含切换账号）之后才返回：不提示、不复制、不再读列表。
+  it.each([
+    ['rejected', 'reject'],
+    ['resolved', 'resolve'],
+  ])('does nothing once unmounted when a code request comes back %s', async (_label, outcome) => {
+    const list = vi.fn(async () => ({ cards: [], nextCursor: null, emailSupported: false }));
+    window.electronAPI.billing.listPurchasedGiftCards = list;
+    let settle: (ok: boolean) => void = () => undefined;
+    window.electronAPI.billing.revealPurchasedGiftCard = vi.fn(() => new Promise<BillingPurchasedGiftCardCode>((resolve, reject) => {
+      settle = (ok) => (ok
+        ? resolve({ code: 'C012-3456-789A-BCDE', claimUrl: null })
+        : reject(Object.assign(new Error('[PRECONDITION_FAILED] claimed'), { code: 'PRECONDITION_FAILED' as const })));
+    }));
+    const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+    const copied = result.current.copy({
+      cardId: 'card_1', orderId: 'order_gift', faceCode: 'cat', amount: '100', currency: 'cny',
+      senderName: '小鱼', message: null, codeTail: '7KQ2', status: 'UNCLAIMED', claimedAt: null,
+      claimedByName: null, purchasedAt: '2026-11-19T08:01:00.000Z', email: null,
+    }, 'code');
+    unmount();
+    settle(outcome === 'resolve');
+    await expect(copied).resolves.toBe(false);
+    expect(uiMocks.toastError).not.toHaveBeenCalled();
+    expect(uiMocks.toastSuccess).not.toHaveBeenCalled();
+    expect(uiMocks.clipboardWriteText).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+  });
+
   describe('sending a bought card by email', () => {
     // 冷却倒计时按 Date.now 计算：冷却用例只冻结时钟（定时器照常），剩余秒数不随 CI 上用例的先后与耗时漂移。
     const freezeClock = () => {
@@ -1246,6 +1375,33 @@ describe('BillingPage remote catalog rendering', () => {
         unmount();
       } finally {
         visibilityState.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    // 「加载更多」载入的卡发信后，刷新要读它所在的那一页；只读第一页时这张卡一直停在「发送中」。
+    it('re-reads the page that holds an emailed card loaded through "load more"', async () => {
+      vi.useFakeTimers();
+      try {
+        const older = card({ cardId: 'card_older', email: delivery('PENDING') });
+        const list = vi.fn(async (payload: { limit: number; cursor?: string }) => payload.cursor === 'cursor_2'
+          ? page([list.mock.calls.length > 2 ? { ...older, email: delivery('SENT') } : older])
+          : { ...page([card()]), nextCursor: 'cursor_2' });
+        window.electronAPI.billing.listPurchasedGiftCards = list;
+        const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+        await act(async () => {
+          await result.current.reload();
+        });
+        await act(async () => {
+          await result.current.loadMore();
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(EMAIL_REFRESH_DELAY_MS);
+        });
+        expect(list).toHaveBeenLastCalledWith({ limit: 20, cursor: 'cursor_2' });
+        expect(result.current.state.cards.find((item) => item.cardId === 'card_older')?.email?.status).toBe('SENT');
+        unmount();
+      } finally {
         vi.useRealTimers();
       }
     });
@@ -3728,6 +3884,7 @@ describe('BillingPage order history', () => {
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
           listOrders,
           listPaymentHistory,
+          listPurchasedGiftCards: vi.fn(async () => ({ cards: [], nextCursor: null, emailSupported: false })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
         maker: {

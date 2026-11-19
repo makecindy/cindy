@@ -184,6 +184,28 @@ describe('GiftCardPurchaseDialog', () => {
     );
   });
 
+  // 服务端没允许默认的 cindy 卡面：改用第一张允许的卡面下单；只允许本版本不认识的卡面时不能付款，
+  // 不退回全部本地卡面（否则提交的卡面会被服务端拒绝）。
+  it.each([
+    [['cat', 'bell'], 'cat'],
+    [['snow'], null],
+  ])('only submits a card face the server allows (%j)', async (faces, submitted) => {
+    api.getGiftCardPurchasePolicy.mockResolvedValue({ ...policy, faces });
+    const { onSubmit } = open();
+    await screen.findByText(/billing\.giftCardPurchase\.quantityHint/);
+    // 署名默认值在读到规则后才填上：等它到位，付款按钮的状态只取决于卡面。
+    const sender = screen.getByPlaceholderText('billing.giftCardPurchase.fields.senderPlaceholder') as HTMLInputElement;
+    await waitFor(() => expect(sender.value).toBe('小鱼'));
+    expect(screen.queryByRole('button', { name: /billing\.giftCardPurchase\.faces\.cindy/ })).toBeNull();
+    const pay = button('billing.giftCardPurchase.pay');
+    if (submitted === null) {
+      expect(pay.hasAttribute('disabled')).toBe(true);
+      return;
+    }
+    fireEvent.click(pay);
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ faceCode: submitted }), '100');
+  });
+
   it('states the refund rule before payment', async () => {
     api.getGiftCardPurchasePolicy.mockResolvedValue(policy);
     open();

@@ -278,6 +278,9 @@ function balanceIssue(error: unknown): Exclude<BalanceIssue, null> {
   return 'UNAVAILABLE';
 }
 
+/** 付款成功后取回这一单礼品卡的间隔（毫秒）：首读立即进行，之后逐次退避，最多 5 次。 */
+export const PURCHASED_CARDS_RETRY_DELAYS_MS = [0, 2_000, 4_000, 8_000, 16_000] as const;
+
 /**
  * Kept as a compatibility export for focused tests and old imports.
  * The actual product entry now lives in Settings.
@@ -547,6 +550,37 @@ export function BillingSettingsSection({
     void loadOrders();
   }, [checkout, loadOrders, loadSubscription]);
 
+  // 付款成功后取回这一单的卡。发卡与支付成功同事务，但列表请求可能失败，或在发卡结果可见之前
+  // 就到了：按 0、2、4、8、16 秒最多读 5 次（共约 30 秒），读到这一单的卡就停；仍没有才显示
+  // 「稍后会出现在我买的礼品卡」。弹窗关闭、计费页卸载（含切换账号）即停，不再读取。
+  const purchasedWaitRef = useRef(0);
+  useEffect(() => {
+    if (!purchasedDialog.open) purchasedWaitRef.current += 1;
+  }, [purchasedDialog.open]);
+  const waitForOrderCards = useCallback(
+    async (orderId: string | null) => {
+      const token = ++purchasedWaitRef.current;
+      const live = () => sectionMountedRef.current && purchasedWaitRef.current === token;
+      for (const delay of PURCHASED_CARDS_RETRY_DELAYS_MS) {
+        if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay));
+        if (!live()) return;
+        const cards = await giftCards.reload();
+        if (!live()) return;
+        const mine = (cards ?? []).filter((card) => card.orderId === orderId);
+        if (mine.length > 0 || orderId === null) {
+          setPurchasedDialog((current) =>
+            current.open && current.orderId === orderId ? { ...current, cards: mine } : current,
+          );
+          return;
+        }
+      }
+      setPurchasedDialog((current) =>
+        current.open && current.orderId === orderId ? { ...current, cards: [] } : current,
+      );
+    },
+    [giftCards.reload],
+  );
+
   useEffect(() => {
     const previousPhase = previousCheckoutPhaseRef.current;
     previousCheckoutPhaseRef.current = checkout.state.phase;
@@ -567,13 +601,7 @@ export function BillingSettingsSection({
         const orderId = checkout.state.order?.orderId ?? null;
         checkout.close();
         setPurchasedDialog({ open: true, orderId, cards: null });
-        void giftCards.reload().then((cards) => {
-          setPurchasedDialog((current) =>
-            current.open && current.orderId === orderId
-              ? { ...current, cards: (cards ?? []).filter((card) => card.orderId === orderId) }
-              : current,
-          );
-        });
+        void waitForOrderCards(orderId);
         return;
       }
       void loadBalance();
@@ -592,11 +620,11 @@ export function BillingSettingsSection({
     checkout.state.kind,
     checkout.state.phase,
     checkout.state.subscription,
-    giftCards.reload,
     loadBalance,
     loadOrders,
     loadSubscription,
     refreshXdModelsAfterEntitlementChange,
+    waitForOrderCards,
   ]);
 
   const handlePlanChangeSettled = useCallback(
@@ -1241,7 +1269,8 @@ export function BillingSettingsSection({
             />
           </BillingGroup>
 
-          {giftCards.state.cards.length > 0 && (
+          {/* 没买过卡（成功读到空列表，或旧服务端没有这个接口）才不显示；读取失败要显示错误与重试。 */}
+          {(giftCards.state.cards.length > 0 || giftCards.state.error) && (
             <div ref={giftCardsSectionRef}>
               <BillingGroup
                 titleId="billing-gift-cards-title"
@@ -1438,7 +1467,8 @@ export function BillingSettingsSection({
         onClose={() => setEmailCardId(null)}
         onSend={async (card, email) => {
           const result = await giftCards.sendEmail(card, email);
-          if (result.ok) {
+          // 已离开计费页（含切换账号）就不再提示。
+          if (result.ok && sectionMountedRef.current) {
             toast.success(t('billing.giftCardPurchase.toasts.emailQueued', { email: result.card.email?.recipient ?? email }));
           }
           return result;

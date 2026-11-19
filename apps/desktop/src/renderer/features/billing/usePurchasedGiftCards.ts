@@ -12,7 +12,7 @@ import type {
 import { billingApi } from './api';
 
 const PAGE_SIZE = 20;
-/** 发到邮箱是异步的：还在排队或发送中的卡，隔一会儿重读一次第一页，最多几次，窗口隐藏时暂停。 */
+/** 发到邮箱是异步的：还在排队或发送中的卡，隔一会儿重读它所在的那一页，最多几次，窗口隐藏时暂停。 */
 export const EMAIL_REFRESH_DELAY_MS = 5_000;
 export const EMAIL_REFRESH_MAX_ROUNDS = 6;
 
@@ -47,7 +47,8 @@ const INITIAL: PurchasedGiftCardsState = {
 /**
  * 我买的礼品卡：进入计费页、买完、兑换后各读一次第一页。兑换码只在复制或兑换时向服务端取，
  * 按卡在内存里留到页面卸载，同一张卡反复复制不再请求。发到邮箱后，有邮件仍在发送的卡时
- * 隔 5 秒重读第一页并合并进列表，最多 6 次，窗口隐藏时不读。
+ * 隔 5 秒重读这些卡所在的分页（「加载更多」载入的卡读它那一页）并合并进列表，最多 6 次，
+ * 窗口隐藏时不读。
  */
 export function usePurchasedGiftCards() {
   const { t } = useTranslation();
@@ -55,6 +56,8 @@ export function usePurchasedGiftCards() {
   const generationRef = useRef(0);
   const codesRef = useRef(new Map<string, BillingPurchasedGiftCardCode>());
   const mountedRef = useRef(true);
+  // 每张卡来自哪一页：那一页请求用的游标，第一页为 null。刷新发信状态时只重读这些页。
+  const pageOfCardRef = useRef(new Map<string, string | null>());
 
   useEffect(() => {
     mountedRef.current = true;
@@ -66,11 +69,14 @@ export function usePurchasedGiftCards() {
   }, []);
 
   const reload = useCallback(async (): Promise<BillingPurchasedGiftCard[] | null> => {
+    // 卸载后不再发起读取（迟到的取码、发信结果可能在离开页面后才回来）。
+    if (!mountedRef.current) return null;
     const generation = ++generationRef.current;
     setState((current) => ({ ...current, loading: true, error: false }));
     try {
       const page = await billingApi.listPurchasedGiftCards(PAGE_SIZE);
       if (!mountedRef.current || generation !== generationRef.current) return null;
+      pageOfCardRef.current = new Map(page.cards.map((card) => [card.cardId, null]));
       setState({
         cards: page.cards,
         nextCursor: page.nextCursor,
@@ -97,6 +103,9 @@ export function usePurchasedGiftCards() {
     try {
       const page = await billingApi.listPurchasedGiftCards(PAGE_SIZE, cursor);
       if (!mountedRef.current || generation !== generationRef.current) return;
+      for (const card of page.cards) {
+        if (!pageOfCardRef.current.has(card.cardId)) pageOfCardRef.current.set(card.cardId, cursor);
+      }
       setState((current) => {
         const seen = new Set(current.cards.map((card) => card.cardId));
         return {
@@ -122,9 +131,12 @@ export function usePurchasedGiftCards() {
       if (cached) return cached;
       try {
         const result = await billingApi.revealPurchasedGiftCard(card.cardId, card.faceCode);
+        // 页面已离开（含切换账号，计费页按账号重新挂载）：不缓存、不提示、不复制。
+        if (!mountedRef.current) return null;
         codesRef.current.set(card.cardId, result);
         return result;
       } catch (error) {
+        if (!mountedRef.current) return null;
         const code = extractIpcError(error)?.code;
         if (code === 'PRECONDITION_FAILED' || code === 'NOT_FOUND') {
           toast.error(t('billing.giftCardPurchase.toasts.unavailable'));
@@ -147,9 +159,10 @@ export function usePurchasedGiftCards() {
       try {
         await navigator.clipboard.writeText(value);
       } catch {
-        toast.error(t('billing.giftCardPurchase.toasts.copyFailed'));
+        if (mountedRef.current) toast.error(t('billing.giftCardPurchase.toasts.copyFailed'));
         return false;
       }
+      if (!mountedRef.current) return false;
       toast.success(
         t(
           kind === 'link' && result.claimUrl
@@ -204,11 +217,15 @@ export function usePurchasedGiftCards() {
       if (refreshingRef.current || !mountedRef.current) return;
       refreshingRef.current = true;
       emailRoundsRef.current += 1;
-      // 只合并第一页里的最新状态，不重置用户已经加载的后续分页。
-      void billingApi
-        .listPurchasedGiftCards(PAGE_SIZE)
-        .then((page) => {
-          if (mountedRef.current) mergeCards(page.cards);
+      // 只重读发送中的卡所在的那几页并合并最新状态，不重置用户已经加载的后续分页。
+      const cursors = [...new Set(
+        state.cards
+          .filter(isGiftCardEmailInFlight)
+          .map((card) => pageOfCardRef.current.get(card.cardId) ?? null),
+      )];
+      void Promise.all(cursors.map((cursor) => billingApi.listPurchasedGiftCards(PAGE_SIZE, cursor ?? undefined)))
+        .then((pages) => {
+          if (mountedRef.current) mergeCards(pages.flatMap((page) => page.cards));
         })
         .catch(() => {
           // 状态刷新失败不打扰用户；下次进入计费页或手动刷新时再读。

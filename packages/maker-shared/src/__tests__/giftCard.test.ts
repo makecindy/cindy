@@ -86,6 +86,23 @@ describe('gift card server responses', () => {
     expect(() => projectGiftCardRedemption({ card, credit: { state: 'DONE', amount: '20', expiresAt: null } })).toThrow();
   });
 
+  // 用户买的卡进充值余额、永久有效：两端都直接这样告诉用户，所以带了领取截止、有效天数或到账
+  // 过期时间的「买来的卡」是自相矛盾的响应，拒绝，不悄悄隐去条款。
+  it.each([
+    ['a claim deadline', { claimDeadline: '2026-12-31T16:00:00.000Z' }, null],
+    ['validity days', { validityDays: 90 }, null],
+    ['a missing claim deadline', { claimDeadline: undefined }, null],
+    ['an expiring credit', {}, '2027-01-01T00:00:00.000Z'],
+  ])('rejects a purchased card that comes with %s', (_label, terms, creditExpiresAt) => {
+    const purchased = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null, ...terms,
+    };
+    const claimed = { ...purchased, status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z' };
+    const credit = { state: 'APPLIED', amount: '20', expiresAt: creditExpiresAt };
+    expect(() => projectGiftCardRedemption({ card: claimed, credit })).toThrow();
+    if (creditExpiresAt === null) expect(() => projectGiftCardPreview({ card: purchased })).toThrow();
+  });
+
   // 用户买的卡进充值余额、永久有效：没有领取截止，也没有有效天数。
   it('accepts a purchased card without a claim deadline or validity days', () => {
     const purchased = {

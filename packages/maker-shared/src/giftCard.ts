@@ -207,6 +207,9 @@ function projectCard(value: unknown): GiftCard {
   }
   const destination = destinationOf(value);
   const purchased = destination === 'PURCHASED';
+  // 买来的卡永久有效、没有领取截止，两端都直接这样告诉用户：带了截止或有效天数的「买来的卡」
+  // 是自相矛盾的响应，拒绝，不能悄悄隐去条款。
+  if (purchased && (value.claimDeadline !== null || value.validityDays !== null)) invalid();
   return {
     status: status as GiftCardStatus,
     amount: amount(value.amount),
@@ -214,8 +217,8 @@ function projectCard(value: unknown): GiftCard {
     senderName,
     message: message === null ? null : message,
     destination,
-    claimDeadline: purchased ? nullableTime(value.claimDeadline) : time(value.claimDeadline),
-    validityDays: purchased && value.validityDays === null ? null : validityDaysOf(value.validityDays),
+    claimDeadline: purchased ? null : time(value.claimDeadline),
+    validityDays: purchased ? null : validityDaysOf(value.validityDays),
     claimedAt: nullableTime(value.claimedAt),
   };
 }
@@ -238,5 +241,9 @@ export function projectGiftCardPreview(value: unknown): { card: GiftCard } {
 /** `POST /api/gift-cards/redeem` 的响应；结构不符时抛错，调用方按结果未知处理。 */
 export function projectGiftCardRedemption(value: unknown): { card: GiftCard; credit: GiftCardCredit } {
   if (!isRecord(value)) invalid();
-  return { card: projectCard(value.card), credit: projectCredit(value.credit) };
+  const card = projectCard(value.card);
+  const credit = projectCredit(value.credit);
+  // 买来的卡进充值余额、永久有效：到账额度带过期时间同样自相矛盾，拒绝。
+  if (card.destination === 'PURCHASED' && credit.expiresAt !== null) invalid();
+  return { card, credit };
 }

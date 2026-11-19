@@ -67,11 +67,16 @@ export function GiftCardPurchaseDialog({
   const requestRef = useRef(0);
 
   const policy = policyState.kind === 'ready' ? policyState.policy : null;
-  const faces = useMemo(() => {
-    const allowed = policy ? new Set(policy.faces) : null;
-    const known = GIFT_CARD_FACES.filter((face) => !allowed || allowed.has(face));
-    return known.length > 0 ? known : [...GIFT_CARD_FACES];
+  // 只给出服务端允许、本版本也认识的卡面。规则还没读到时先列出本地卡面（此时不能付款）；
+  // 服务端只允许本版本不认识的卡面时一个都不给，也不能付款，不退回全部本地卡面。
+  const faces = useMemo<string[]>(() => {
+    if (!policy) return [...GIFT_CARD_FACES];
+    const allowed = new Set(policy.faces);
+    return GIFT_CARD_FACES.filter((face) => allowed.has(face));
   }, [policy]);
+  // 选中的卡面不在允许范围内（如默认的 cindy 被服务端排除）时，改用第一张允许的卡面。
+  const selectedFace = faces.includes(faceCode) ? faceCode : faces[0] ?? null;
+  const previewFace = selectedFace ?? GIFT_CARD_FACES[0];
 
   const loadPolicy = async () => {
     const request = ++requestRef.current;
@@ -130,7 +135,7 @@ export function GiftCardPurchaseDialog({
   const total = unitAmount === null ? null : giftCardOrderTotal(unitAmount, effectiveQuantity);
   const amountOf = (value: string) => formatGiftCardAmount(value, BILLING_CURRENCY, locale);
   const canPay = Boolean(
-    policy && selected && option && senderName && unitAmount !== null &&
+    policy && selected && option && senderName && unitAmount !== null && selectedFace !== null &&
     maxQuantity >= effectiveQuantity && maxQuantity > 0,
   );
   const customIssue =
@@ -155,14 +160,14 @@ export function GiftCardPurchaseDialog({
   });
 
   const submit = () => {
-    if (!canPay || !selected || !option || unitAmount === null) return;
+    if (!canPay || !selected || !option || unitAmount === null || selectedFace === null) return;
     const text = message.trim();
     onSubmit(
       {
         offerCode: selected.offer.code,
         ...(selected.kind === 'custom' ? { amount: unitAmount } : {}),
         quantity: effectiveQuantity,
-        faceCode,
+        faceCode: selectedFace,
         senderName,
         message: text ? text : null,
         purchaseOptionId: option.id,
@@ -242,7 +247,7 @@ export function GiftCardPurchaseDialog({
               </p>
               <GiftCardStack
                 className="mt-2.5"
-                faceCode={faceCode}
+                faceCode={previewFace}
                 amount={unitAmount ?? ''}
                 currency={BILLING_CURRENCY}
                 count={effectiveQuantity}
@@ -271,20 +276,20 @@ export function GiftCardPurchaseDialog({
                   <p id="gift-card-face-label" className="text-12 text-[var(--text-secondary)]">
                     {t('billing.giftCardPurchase.fields.face')}
                   </p>
-                  <span className="text-12 text-[var(--text-tertiary)]">{faceName(faceCode)}</span>
+                  <span className="text-12 text-[var(--text-tertiary)]">{faceName(previewFace)}</span>
                 </div>
                 <div className="mt-2 grid grid-cols-4 gap-2.5" role="group" aria-labelledby="gift-card-face-label">
                   {faces.map((face) => (
                     <button
                       key={face}
                       type="button"
-                      aria-pressed={face === faceCode}
+                      aria-pressed={face === selectedFace}
                       aria-label={faceName(face)}
                       onClick={() => setFaceCode(face)}
                       className={cn(
                         'rounded-xl border-[1.5px] p-0.5 transition-colors',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                        face === faceCode
+                        face === selectedFace
                           ? 'border-[var(--text-primary)]'
                           : 'border-transparent hover:border-[var(--border-default)]',
                       )}
