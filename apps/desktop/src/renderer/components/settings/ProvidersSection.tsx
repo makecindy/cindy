@@ -3539,6 +3539,7 @@ export function ProvidersSection() {
     return (
       <div data-provider-rail-group={group} role="group" aria-label={label} className="flex flex-col gap-0.5">
         <button
+          data-settings-search-action="Expand or collapse the hidden or suspended provider navigation group"
           type="button"
           aria-expanded={open}
           onClick={() => setRailGroupOpen(current => ({ ...current, [group]: !current[group] }))}

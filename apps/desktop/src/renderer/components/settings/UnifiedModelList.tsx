@@ -36,6 +36,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Tip } from '@/components/ui/tooltip';
 import { Switch } from '@/components/ui/switch';
+import { providersSettings } from './ProvidersSection.settings-search';
 import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
@@ -997,6 +998,7 @@ export function UnifiedModelList({
   const rowAdvancedButton = (row: UnionModelRow) => (
     <Tip text={t('settings.providers.models.advanced.open')}>
       <button
+        data-settings-search-action="Open advanced settings for this model"
         type="button"
         aria-label={t('settings.providers.models.advanced.openAria', {
           name: localizedModelName(row.name, t),
@@ -1112,6 +1114,7 @@ export function UnifiedModelList({
         {capNote && (
           <Tip text={capNote}>
             <button
+              data-settings-search-action="Open model capability information"
               type="button"
               aria-label={capNote}
               onClick={() => openAdvanced(row)}
@@ -1150,6 +1153,7 @@ export function UnifiedModelList({
         {capability ? (
           <Switch
             data-capability-enable-switch
+            data-setting-id={providersSettings.providers.id}
             disabled={
               paymentRequired ||
               (!capabilityOn &&
@@ -1161,6 +1165,7 @@ export function UnifiedModelList({
           />
         ) : (
           <Switch
+            data-setting-id={providersSettings.providers.id}
             disabled={!state.canSelect}
             checked={anyOn}
             onCheckedChange={() => toggleRow(row)}
@@ -1205,6 +1210,7 @@ export function UnifiedModelList({
             </div>
             {onRefresh && (
               <button
+                data-settings-search-action="Refresh the provider model catalog"
                 type="button"
                 onClick={onRefresh}
                 disabled={refreshing || refreshDisabled}
@@ -1239,7 +1245,7 @@ export function UnifiedModelList({
             {(unionRows.length > 0 || onAddSpeechModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="secondary" size="sm" compact type="button" className="shrink-0">
+                  <Button data-settings-search-action="Open the model management menu" variant="secondary" size="sm" compact type="button" className="shrink-0">
                     {t('settings.providers.models.manage.menu')}
                     <ChevronDown size={12} aria-hidden />
                   </Button>
@@ -1286,6 +1292,7 @@ export function UnifiedModelList({
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               {showKindFilter && (
                 <SegmentedControl
+                  data-settings-search-action="Filter the model list by capability"
                   aria-label={t('settings.providers.models.kindFilter.aria')}
                   value={kindFilter}
                   onValueChange={setKindFilter}
@@ -1322,6 +1329,7 @@ export function UnifiedModelList({
                     style={{ color: 'var(--text-tertiary)' }}
                   />
                   <input
+                    data-settings-search-action="Search the provider model list"
                     type="text"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
@@ -1367,6 +1375,7 @@ export function UnifiedModelList({
                 <div key={g.key} className="flex flex-col">
                   {showGroupHeaders && (
                     <button
+                      data-settings-search-action="Expand or collapse the model category"
                       type="button"
                       onClick={() => toggleCollapsed(g.key)}
                       aria-expanded={!collapsed}
@@ -1448,6 +1457,7 @@ export function UnifiedModelList({
                 <div className="flex flex-col">
                   <div className="flex items-center gap-2 pb-0.5">
                     <button
+                      data-settings-search-action="Expand or collapse disabled models"
                       type="button"
                       onClick={() => toggleCollapsed(DISABLED_GROUP_KEY)}
                       aria-expanded={!collapsed}
@@ -1481,6 +1491,7 @@ export function UnifiedModelList({
                     </button>
                     {!hasLockedDisabledRow && (
                       <Button
+                        data-setting-id={providersSettings.providers.id}
                         variant="secondary"
                         size="xxs"
                         compact
@@ -1538,6 +1549,7 @@ export function UnifiedModelList({
                           )}
                           {!paymentRequired && (
                             <Button
+                              data-setting-id={providersSettings.providers.id}
                               variant="secondary"
                               size="xs"
                               compact
@@ -1551,6 +1563,7 @@ export function UnifiedModelList({
                           )}
                           {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
                             <Button
+                              data-settings-search-action="Delete the installed local model"
                               variant="secondary"
                               size="xs"
                               tone="danger"
