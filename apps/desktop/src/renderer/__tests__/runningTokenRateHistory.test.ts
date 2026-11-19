@@ -417,7 +417,7 @@ describe('host token speed (Pi extension algorithm)', () => {
     ]);
   });
 
-  it('clears latestRate while a new same-turn request warms up without dropping samples or peak', () => {
+  it('preserves the last measurement and its expiry during same-turn request warm-up', () => {
     let history = recordTokenSpeed(emptyRateHistory(null), {
       startedAt: 1,
       speed: { rate: 80, average: 75, tokens: 300, elapsedMs: 4_000, streaming: true, peak: 90 },
@@ -431,7 +431,8 @@ describe('host token speed (Pi extension algorithm)', () => {
       speed: { rate: 0, average: 75, tokens: 310, elapsedMs: 4_200, streaming: true, peak: 90 },
       now: 200,
     });
-    expect(history.latestRate).toBeNull();
+    expect(history.latestRate).toBe(80);
+    expect(history.latestSampleAt).toBe(100);
     expect(history.samples).toHaveLength(1);
     expect(history.peak).toBe(90);
 
