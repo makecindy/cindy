@@ -66,6 +66,8 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   let source;
   // Coexistence plan A: the refusal while a desktop uses the profile (null: not held).
   let held = null;
+  const projectHold = 'HOST_PROFILE_IN_USE_BY_DESKTOP: project profile held for this test';
+  let holdBeforeProjectWrite = false;
   let created = 0, appCalls = 0, oauthCalls = 0, piPrewarms = 0;
   const oauthCancelled = [];
   const modelChoices = [];
@@ -129,7 +131,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   host = createHostDeviceLink({ profileDir: profile, version: 'test', getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: service, subscribe: hub.subscribe,
-    isBusyForProjectArchive: () => false,
+    isBusyForProjectArchive: () => {
+      if (holdBeforeProjectWrite) held = projectHold;
+      return false;
+    },
     onProjectTaskStatus: (sessionId, status) => hub.publish({ type: 'session_changed', sessionId, status, patch: { status } }),
     preparePiSkillRuntime: async (id, dir, route) => {
       piPrewarms++;
@@ -176,6 +181,33 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     assert.equal(result.result, 'updated');
     assert.equal(sqlite.prepare("SELECT status FROM sessions WHERE id='task'").pluck().get(), expected);
   }
+  // Device Link integration: unlike the upstream round trip above, the Host can
+  // share a profile with Desktop. §3.2: guard the read/write split and the race
+  // after entry using the existing remote dispatcher and a byte-for-byte DB check.
+  await t.test('project archive allows previews while held and refuses writes at entry and after preflight', async () => {
+    const before = sqlite.serialize();
+    const assertRefused = async action => {
+      const reply = await projectArchive({ action, operation: 'apply', sessionId: 'task' });
+      assert.equal(reply.ok, false, JSON.stringify(reply));
+      assert.match(JSON.stringify(reply.error), /PRECONDITION_FAILED.*HOST_PROFILE_IN_USE_BY_DESKTOP/);
+      assert.deepEqual(sqlite.serialize(), before);
+    };
+    try {
+      held = projectHold;
+      const whileHeld = await projectArchive({ action: 'archive', operation: 'preview' });
+      assert.equal(whileHeld.ok, true, JSON.stringify(whileHeld));
+      assert.deepEqual(whileHeld.result, preview.result);
+      await assertRefused('archive');
+      await assertRefused('unarchive');
+      held = null;
+      // Discover occupation during the shared membership check inside the task lock.
+      holdBeforeProjectWrite = true;
+      await assertRefused('archive');
+    } finally {
+      holdBeforeProjectWrite = false;
+      held = null;
+    }
+  });
   // 2026-11-18: exercise the real Host registry over the existing integration relay.
   // A positive controller window on either picker channel or Skill preparation must fail before applying it.
   const numericSelections = [
