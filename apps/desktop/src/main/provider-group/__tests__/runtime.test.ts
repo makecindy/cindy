@@ -915,7 +915,9 @@ describe('provider group runtime quota account selection', () => {
     const devices = ['busy', 'healthy'];
     io.devices.mockResolvedValue({ devices: devices.map(deviceId => ({ deviceId, online: true,
       remoteControlEnabled: true, controlEnabled: true, platform: 'darwin' })) });
-    io.catalog.mockImplementation(async (_invoke, deviceId) => [provider(providerId, deviceId === 'busy' ? 2 : 0)]);
+    // Healthy runs more tasks: only its readable quota puts it ahead. Since 2026-11-19 an unreadable member stays a
+    // candidate (provider-groups.md §5), so a timed-out read must fall back to load, i.e. the less loaded busy one.
+    io.catalog.mockImplementation(async (_invoke, deviceId) => [provider(providerId, deviceId === 'busy' ? 2 : 3)]);
     h.config.members = normalizeProviderGroupConfig({ strategy: 'least', members: devices.map(agentDeviceId => ({
       kind: 'device', agentDeviceId, providerId,
     })) }, h.localId)!.members;
