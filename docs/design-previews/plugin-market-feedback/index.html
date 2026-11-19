@@ -25,6 +25,7 @@
  --focus-ring: #417CDD;
  --focus-ring-soft: rgba(65, 124, 221, 0.5);
  --overlay-modal: rgba(0, 0, 0, 0.5);
+ --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.15);
  --error-fg: #DC2626;
 }
 @media (prefers-color-scheme: dark) {
@@ -42,6 +43,7 @@
   --confirm-btn-primary-text: #151515;
   --confirm-btn-secondary-hover: rgba(255, 255, 255, 0.08);
   --overlay-modal: rgba(0, 0, 0, 0.7);
+  --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.5);
   --error-fg: #F87171;
  }
 }* { box-sizing: border-box; }
@@ -106,8 +108,9 @@ h2 { font-size:16px; line-height:1.2; }
 .result { margin:0 0 20px; color:var(--text-primary); }
 .result:empty { display:none; }
 .body-copy { overflow-wrap:anywhere; white-space:pre-wrap; }
-dialog { width:min(460px, calc(100% - 32px)); max-height:calc(100% - 32px); border:1px solid var(--border-default); border-radius:12px; background:var(--surface-elevated); color:var(--text-primary); padding:20px; }
-dialog::backdrop { background:var(--overlay-modal); }
+dialog { width:min(460px, calc(100% - 32px)); max-height:calc(100% - 32px); border:1px solid var(--border-default); border-radius:12px; background:var(--surface-elevated); color:var(--text-primary); padding:20px; box-shadow:var(--shadow-menu); }
+dialog::backdrop { background:var(--overlay-modal); -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+[data-platform="win32"] dialog::backdrop { -webkit-backdrop-filter:none; backdrop-filter:none; }
 label { display:block; font-size:13px; font-weight:500; }
 textarea { display:block; font-size:14px; font-weight:400; width:100%; min-height:128px; resize:vertical; background:var(--background); border:1px solid var(--border-default); border-radius:8px; padding:10px; margin-top:7px; }
 .error { color:var(--error-fg); }
@@ -228,6 +231,9 @@ textarea { display:block; font-size:14px; font-weight:400; width:100%; min-heigh
 
 <script>
 'use strict';
+if (navigator.userAgentData?.platform === 'Windows' || /^Win/.test(navigator.platform)) {
+  document.documentElement.dataset.platform = 'win32';
+}
 const byId = id => document.getElementById(id);
 const feedback = [];
 const date = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
