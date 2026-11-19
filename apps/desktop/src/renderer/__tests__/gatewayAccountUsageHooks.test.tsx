@@ -41,6 +41,31 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// Unit, PR #11473: the status chip and a rapidly reopened menu must share
+// one IPC read while a cold account's ledger is pending. Warm-cache tests
+// cannot reproduce the overlap before the first response arrives.
+it('shares a pending credit read across active consumers and a reopened menu', async () => {
+  state.owner = 'credit-shared';
+  let complete!: (value: ReturnType<typeof credit>) => void;
+  state.credit.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+  const status = renderHook(() => useModelAccessCreditUsageResult(true));
+  const menu = renderHook(() => useModelAccessCreditUsageResult(true, { poll: false }));
+  menu.unmount();
+  const reopened = renderHook(() => useModelAccessCreditUsageResult(true, { poll: false }));
+  expect(state.credit).toHaveBeenCalledTimes(1);
+  await act(async () => complete(credit('18')));
+  expect(status.result.current.usage?.available).toBe('18');
+  expect(reopened.result.current.usage?.available).toBe('18');
+
+  // A sign-out/sign-in of the same owner advances the auth scope.
+  state.generation++;
+  reopened.rerender();
+  expect(reopened.result.current.usage).toBeNull();
+  expect(state.credit).toHaveBeenCalledTimes(2);
+  await act(async () => complete(credit('7')));
+  expect(reopened.result.current.usage?.available).toBe('7');
+});
+
 it('settles failed credit loading, retries, and ignores the previous account’s late response', async () => {
   state.credit.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(credit('18'));
   const view = renderHook(() => useModelAccessCreditUsageResult(true));

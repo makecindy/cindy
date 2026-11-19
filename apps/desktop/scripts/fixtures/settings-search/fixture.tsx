@@ -14,6 +14,7 @@ import { refreshLocalCatalogSnapshot } from '../../../src/renderer/lib/localCata
 import type { ProviderView } from '@cindy/model-providers';
 import { Route, Routes } from 'react-router-dom';
 import { UserInfoSection } from '../../../src/renderer/components/sidebar/UserInfoSection';
+import { SettingsLinkChip } from '../../../src/renderer/components/chat/SettingsLinkChip';
 
 const read = <T,>(value: T) => async () => value;
 const state = <T extends object>(defaults: T) => ({ ...defaults, defaults, isCustomized: false, customizedKeys: [] });
@@ -46,7 +47,7 @@ const usageHistory: UsageHistoryPayload = {
     last30DaysTokens: dailyUsage.reduce((total, day) => total + day.tokens, 0) },
   anomaly: { isAnomalous: false, trailing7DayAvg: null },
 };
-const balance = previewUsage ? '18.42' : '0';
+const balance = ctx.data.largeBalance ? '123456.78' : previewUsage ? '18.42' : '0';
 const botIdle = { status: { kind: 'idle' }, hasSecret: false, hasToken: false, lifecycleAnnouncement: false };
 const sampleProvider: ProviderView = {
   id: 'fixture-models', name: '示例供应商', source: 'user', agents: ['codex'], auth: { method: 'apiKey' },
@@ -54,7 +55,12 @@ const sampleProvider: ProviderView = {
 };
 function PreviewSettings() {
   useEffect(() => { if (ctx.data.interactivePreview || ctx.data.tab === 'providers') void refreshLocalCatalogSnapshot(); }, []);
-  return <div className="h-screen"><SettingsView /></div>;
+  return <div className="h-screen">
+    <SettingsView />
+    {ctx.data.groupDeepLink ? <div id="settings-fixture-deep-link" className="fixed right-4 bottom-4">
+      <SettingsLinkChip target={{ tab: 'remote-control', deviceId: 'fixture-pc', section: 'devices' }} />
+    </div> : null}
+  </div>;
 }
 let modelGroups: ModelGroupsConfig = { routes: ctx.data.sampleModels ? [
   { id: 'fixture-daily', name: '日常任务', strategy: 'order', candidates: [{ agentKind: 'codex', providerId: 'fixture-models', model: 'gpt-5-mini' }] },
@@ -69,7 +75,12 @@ const relayState = {
 const emptyDirectory = { bytes: 0, fileCount: 0 };
 const visibilityWrites: unknown[] = [];
 Object.assign(window, { visibilityWrites });
-let appearance: AppearanceSettings = { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'silent-orbits', wallpaperVisibility: 0.55 };
+let appearance: AppearanceSettings = {
+  ...DEFAULT_APPEARANCE_SETTINGS,
+  wallpaperId: 'silent-orbits',
+  wallpaperVisibility: 0.55,
+  ...(ctx.data.largeUiFont ? { uiFamily: '"Courier New"', uiSize: 24 } : {}),
+};
 const appearanceListeners = new Set<(settings: AppearanceSettings) => void>();
 const updateAppearance = (patch: Partial<AppearanceSettings>) => {
   appearance = { ...appearance, ...patch };
@@ -80,6 +91,7 @@ const updateAppearance = (patch: Partial<AppearanceSettings>) => {
 void mountPage({
   route: ctx.data.accountUsage && !ctx.data.routeTab ? '/' : `/settings?tab=${ctx.data.routeTab ?? ctx.data.tab}`,
   host: {
+    ...(ctx.data.groupDeepLink ? { getDeviceId: read('fixture-pc') } : {}),
     ...(ctx.data.interactivePreview ? {
       appearanceSettings: {
         getSync: () => appearance,

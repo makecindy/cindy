@@ -42,12 +42,20 @@ export default {
     'worktree-model-naming': { about: 'Model naming defaults off, can be found in search, and clears its override on reset', data: { tab: 'personalization', worktreeModelNaming: true } },
     'tab-switch': { about: 'Committed settings tabs paint at full opacity with normal motion enabled', data: { tab: 'personalization', tabSwitch: true } },
     'remote-signed-in': { about: 'Signed-in device controls and relay section with searchable targets', data: { tab: 'remote-control', cloud: true } },
+    'group-deep-link': { about: 'A device settings link reopens its collapsed group without changing tabs', data: { tab: 'remote-control', cloud: true, groupDeepLink: true } },
+    'advanced-disclosure': { about: 'Advanced settings collapse with the shared transition and reopen for search', data: { tab: 'general' } },
     'sidebar-usage': { about: 'Clicking the sidebar account once reveals local usage and available balance above Settings', data: { accountUsage: true, cloud: true, previewUsage: true } },
+    'sidebar-usage-large-balance': { about: 'Localized balances with grouped digits remain readable in the account menu', data: { accountUsage: true, cloud: true, previewUsage: true, largeBalance: true } },
     'sidebar-usage-local': { about: 'Local accounts can reach usage history and are not offered a billing entry', data: { accountUsage: true, previewUsage: true } },
     'sidebar-usage-org': { about: 'Organization accounts can reach usage history without attempting personal billing reads', data: { accountUsage: true, cloud: true, organization: true, previewUsage: true } },
     'sidebar-usage-legacy': { about: 'An account with only the basic balance API still sees its available balance', data: { accountUsage: true, cloud: true, legacyBalance: true, previewUsage: true } },
     'settings-layout-general': { about: 'General settings organize related controls into cards beneath the grouped sidebar', data: { tab: 'general', layoutPreview: true, interactivePreview: true } },
     'settings-layout-appearance': { about: 'The grouped sidebar and appearance controls share the wallpaper and theme', data: { tab: 'appearance', layoutPreview: true, interactivePreview: true } },
+    ...Object.fromEntries(['general', 'billing'].map(tab => [`settings-large-font-${tab}`, {
+      about: `Actions on the ${tab} page stay in view at the smallest window width with a large UI font`,
+      viewport: { width: 800, height: 900 },
+      data: { tab, cloud: true, interactivePreview: true, largeUiFont: true, previewUsage: true },
+    }])),
     ...Object.fromEntries([
     'general', 'appearance', 'personalization', 'voice-input', 'shortcuts',
     'remote-control', 'import', 'builtin-tools', 'storage', 'help', 'about', 'agent-island', 'usage', 'billing', 'shared-tasks', 'ghosts',
@@ -57,6 +65,101 @@ export default {
   },
   async check(page, ui) {
     const panel = page.getByRole('tabpanel');
+    // Browser regression for PR #11473: a 24px UI font and the 800px window
+    // can push translated account or billing actions past the edge of the card.
+    if (ui.data.largeUiFont) {
+      const actionKey = ui.data.tab === 'general' ? 'sidebar.user.menuAddAccount' : 'billing.settings.topupCard.action';
+      const action = panel.getByRole('button', { name: await ui.t(actionKey), exact: true });
+      await action.waitFor();
+      assert.equal(await page.locator('html').evaluate(el => getComputedStyle(el).getPropertyValue('--app-ui-font-size')), '24px');
+      assert.ok(await panel.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'Settings panel must fit horizontally');
+      assert.ok(await page.locator('aside h1').evaluate(el =>
+        el.scrollWidth <= el.clientWidth + 1 &&
+        el.getBoundingClientRect().right <= el.closest('aside').getBoundingClientRect().right), 'Settings title must fit in the sidebar');
+      if (ui.data.tab === 'general') {
+        assert.ok(await panel.locator('#settings-language').evaluate(el => {
+          const label = el.firstElementChild;
+          const control = el.querySelector('[role="combobox"]');
+          return Boolean(label && control && label.scrollWidth <= label.clientWidth + 1);
+        }), 'Display language text must fit beside or above its selector');
+      }
+      await ui.capture('large-font-actions');
+      return;
+    }
+    // Browser regression for PR #11473: a native details element skipped the
+    // motion frame. The unit search test checks scrolling, not real disclosure.
+    if (ui.case === 'advanced-disclosure') {
+      const trigger = panel.locator('button[aria-controls="settings-general-advanced"]');
+      const content = page.locator('#settings-general-advanced');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await trigger.click();
+      await content.evaluate(el => Promise.allSettled(el.getAnimations().map(animation => animation.finished)));
+      const expandedHeight = (await content.boundingBox()).height;
+      assert.ok(expandedHeight > 0);
+      await trigger.click();
+      assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
+      assert.equal(await content.getAttribute('inert'), '');
+      const closing = await content.evaluate(el => {
+        const animation = el.getAnimations().find(item => item.transitionProperty === 'grid-template-rows');
+        if (!animation) return null;
+        animation.currentTime = Number(animation.effect.getTiming().duration) / 2;
+        return el.getBoundingClientRect().height;
+      });
+      assert.ok(closing > 0 && closing < expandedHeight, `Expected an intermediate height, got ${closing} / ${expandedHeight}`);
+      await content.evaluate(el => Promise.allSettled(el.getAnimations().map(animation => animation.finished)));
+      const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
+      await search.fill(await ui.t('settings.sections.gitSafety'));
+      await page.locator('[id="settings-search-result-general.gitSafety"]').click();
+      await page.waitForFunction(() => {
+        const target = document.getElementById('settings-search-target-general-git-safety');
+        const top = target?.getBoundingClientRect().top;
+        return target?.classList.contains('settings-search-target-highlight') && top >= 0 && top < innerHeight;
+      });
+      assert.equal(await trigger.getAttribute('aria-expanded'), 'true');
+      assert.equal(await content.getAttribute('inert'), null);
+      await ui.capture('advanced-search-target');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await trigger.click();
+      assert.equal(await content.evaluate(el => getComputedStyle(el).transitionDuration), '0s');
+      assert.equal(await content.evaluate(el => el.offsetHeight), 0);
+      return;
+    }
+    // Browser regression for PR #11473: a SettingsLinkChip to the current tab
+    // must reopen the group. Nav unit tests inject a route key and cannot prove
+    // SettingsView forwards it or that the real collapse renders in-between frames.
+    if (ui.data.groupDeepLink) {
+      const group = page.locator('#settings-nav-connections');
+      const tabs = page.locator('#settings-nav-connections-tabs');
+      const remote = page.locator('#settings-tab-remote-control');
+      const link = page.locator('#settings-fixture-deep-link').getByRole('button');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await remote.waitFor();
+      const expandedHeight = (await tabs.boundingBox()).height;
+      await group.click();
+      assert.equal(await group.getAttribute('aria-expanded'), 'false');
+      assert.equal(await remote.evaluate((el) => { el.focus(); return document.activeElement === el; }), false);
+      const closing = await tabs.evaluate((el) => {
+        const animation = el.getAnimations().find((item) => item.transitionProperty === 'grid-template-rows');
+        if (!animation) return null;
+        animation.currentTime = Number(animation.effect.getTiming().duration) / 2;
+        return el.getBoundingClientRect().height;
+      });
+      assert.ok(closing > 0 && closing < expandedHeight, `Expected an intermediate height, got ${closing} / ${expandedHeight}`);
+      await page.waitForFunction(() => document.getElementById('settings-nav-connections-tabs')?.offsetHeight === 0);
+      await link.click();
+      await page.waitForFunction(() => document.getElementById('settings-search-target-remote-devices')
+        ?.classList.contains('settings-search-target-highlight'));
+      await remote.waitFor();
+      assert.equal(await group.getAttribute('aria-expanded'), 'true');
+      assert.equal(await remote.getAttribute('aria-selected'), 'true');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await group.click();
+      assert.equal(await tabs.evaluate((el) => getComputedStyle(el).transitionDuration), '0s');
+      await link.click();
+      await remote.waitFor();
+      assert.equal(await group.getAttribute('aria-expanded'), 'true');
+      return;
+    }
     if (ui.data.accountUsage) {
       // The normal account trigger is the entry point, including keyboard navigation.
       // Merely showing the main sidebar must not read usage or the billing ledger.
@@ -87,7 +190,9 @@ export default {
       await usage.getByText(/24[.,]9k/i).waitFor();
       assert.ok((await usage.boundingBox()).y < (await settings.boundingBox()).y);
       if (hasBilling) {
-        await billing.getByText(/18[.,]42/).waitFor();
+        const balance = billing.getByText(ui.data.largeBalance ? /123\D?456[.,]78/ : /18[.,]42/);
+        await balance.waitFor();
+        assert.ok(await balance.evaluate(el => el.scrollWidth <= el.clientWidth), 'Available balance must fit in its column');
         assert.ok((await billing.boundingBox()).y < (await settings.boundingBox()).y);
         assert.equal(await page.evaluate(() => window.usageReads.balance), ui.data.legacyBalance ? 1 : 0);
       } else {
@@ -300,6 +405,12 @@ export default {
         assert.equal(await trigger.count(), 1);
         assert.equal(await trigger.getAttribute('aria-haspopup'), 'listbox');
       }
+    }
+    if (ui.data.tab === 'voice-input') {
+      const breakdown = panel.getByText(await ui.t('settings.voiceInput.usage.costBreakdown', {
+        asr: '$0.00', refine: '$0.00',
+      }), { exact: true });
+      assert.ok(await breakdown.evaluate(el => el.scrollWidth <= el.clientWidth), 'Voice input cost breakdown must fit');
     }
     // Expand actual disclosure buttons without opening selects or write actions.
     for (let i = 0; i < 20; i++) {

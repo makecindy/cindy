@@ -38,7 +38,8 @@ import type { SettingsSearchDocument } from './settingsSearchCatalog';
 import type { PluginSettingsPage } from './pluginSettingsNavigation';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 
-const NAV_ITEM_CLASS = 'flex h-9 items-center gap-2.5 rounded-full pr-3 text-left text-sm transition-colors';
+const NAV_ITEM_CLASS = 'flex min-h-9 items-center gap-2.5 rounded-full py-1.5 pr-3 text-left text-sm transition-colors';
+const NAV_LABEL_CLASS = 'min-w-0 [overflow-wrap:anywhere] leading-tight';
 const NAV_GROUP_TABS_CLASS =
   'relative flex flex-col gap-0.5 pl-1.5 before:pointer-events-none before:absolute before:inset-y-1.5 before:left-0.5 before:w-px before:bg-[var(--border-default)]';
 const NAV_ITEM_IDLE_CLASS =
@@ -166,7 +167,7 @@ export function SettingsSidebarNav({
         className={cn(NAV_ITEM_CLASS, grouped ? 'pl-1.5' : 'pl-3', selected ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}
       >
         <Icon size={15} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
-        <span className="truncate leading-none" title={label}>{label}</span>
+        <span className={NAV_LABEL_CLASS}>{label}</span>
       </button>
     );
   };
@@ -223,7 +224,7 @@ export function SettingsSidebarNav({
                     )}
                   >
                     <Icon size={15} strokeWidth={1.8} aria-hidden="true" className="shrink-0" />
-                    <span className="truncate leading-none" title={label}>{label}</span>
+                    <span className={NAV_LABEL_CLASS}>{label}</span>
                     <span aria-hidden="true" className={cn('ml-auto shrink-0 transition-transform duration-[var(--motion-base,200ms)] ease-[var(--motion-ease-move)] motion-reduce:transition-none', expanded && 'rotate-90')}>
                       <ChevronRight size={15} strokeWidth={1.8} />
                     </span>

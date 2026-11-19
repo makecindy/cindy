@@ -27,7 +27,7 @@ export function SettingsPageOutline({ contentRef, scrollRef }: {
         .filter((heading) => {
           const closed = heading.closest('details:not([open])');
           const summary = heading.tagName === 'SUMMARY' && heading.parentElement === closed;
-          return (!closed || summary) && heading.getClientRects().length > 0;
+          return !heading.closest('[inert]') && (!closed || summary) && heading.getClientRects().length > 0;
         })
         .map((heading) => ({ heading, label: heading.textContent?.trim() ?? '' }))
         .filter(({ label }) => label.length > 0);
@@ -45,7 +45,7 @@ export function SettingsPageOutline({ contentRef, scrollRef }: {
           Array.from(addedNodes).some(containsSectionHeading) || Array.from(removedNodes).some(containsSectionHeading);
       })) collect();
     });
-    observer.observe(page, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'open'] });
+    observer.observe(page, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'inert', 'open'] });
     return () => observer.disconnect();
   }, [contentRef]);
 

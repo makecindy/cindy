@@ -6,6 +6,7 @@ export function useSettingsSectionTarget(
   scrollRef: RefObject<HTMLDivElement | null>,
   navigationKey: string,
   fallbackTargetId?: string,
+  onRevealTarget?: (target: HTMLElement) => void,
 ) {
   useEffect(() => {
     const container = scrollRef.current;
@@ -18,6 +19,7 @@ export function useSettingsSectionTarget(
     let stopped = false;
     let lastTop: number | undefined;
     let lastScrollHeight = 0;
+    let revealedTarget: HTMLElement | null = null;
     const stopFollowing = () => {
       stopped = true;
       observer?.disconnect();
@@ -27,10 +29,12 @@ export function useSettingsSectionTarget(
     const reveal = () => {
       if (stopped) return;
       const exact = document.getElementById(targetId);
-      const disclosure = exact?.closest<HTMLDetailsElement>('details[data-settings-search-open]:not([open])');
-      if (disclosure && container.contains(disclosure)) disclosure.open = true;
+      if (exact && exact !== revealedTarget && container.contains(exact)) {
+        revealedTarget = exact;
+        onRevealTarget?.(exact);
+      }
       // 关闭分区后明细仍挂载但 hidden；搜索应落到可见的总开关，而不是隐藏锚点。
-      const next = exact?.getClientRects().length
+      const next = exact?.getClientRects().length && !exact.closest('[inert]')
         ? exact
         : (fallbackTargetId ? document.getElementById(fallbackTargetId) : null);
       if (!next || !container.contains(next)) return;
@@ -59,7 +63,7 @@ export function useSettingsSectionTarget(
       // IPC may insert a target or expand cards above an existing target. Follow
       // only this navigation briefly; direct user interaction always takes over.
       observer = new MutationObserver(reveal);
-      observer.observe(container, { childList: true, subtree: true });
+      observer.observe(container, { childList: true, subtree: true, attributes: true, attributeFilter: ['inert'] });
       resizeObserver = new ResizeObserver(reveal);
       for (const child of container.children) resizeObserver.observe(child);
       expiry = window.setTimeout(stopFollowing, 5000);
@@ -73,5 +77,5 @@ export function useSettingsSectionTarget(
       if (timer !== undefined) window.clearTimeout(timer);
       target?.classList.remove('settings-search-target-highlight');
     };
-  }, [targetId, fallbackTargetId, navigationKey, scrollRef]);
+  }, [targetId, fallbackTargetId, navigationKey, scrollRef, onRevealTarget]);
 }

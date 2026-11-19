@@ -63,10 +63,10 @@ export function SidebarAccountUsage({ ownerId, showBilling, onSelect }: SidebarA
       onPointerUp={(event) => event.preventDefault()} className="gap-2 py-2">
       <Icon className="mr-2 h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate" title={label}>{label}</span>
-        <span className="truncate text-12 text-[var(--text-secondary)]" title={caption}>{caption}</span>
+        <span className="[overflow-wrap:anywhere] leading-tight">{label}</span>
+        <span className="[overflow-wrap:anywhere] text-12 leading-tight text-[var(--text-secondary)]">{caption}</span>
       </span>
-      <span className="w-[8ch] shrink-0 truncate text-right text-13 font-medium tabular-nums"
+      <span className="min-w-[5ch] max-w-[50%] shrink-0 [overflow-wrap:anywhere] text-right text-13 font-medium tabular-nums"
         title={exactValue ?? value ?? undefined}>
         {value ?? '—'}
       </span>

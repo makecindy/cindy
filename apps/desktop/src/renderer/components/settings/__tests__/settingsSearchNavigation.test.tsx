@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSettingsSectionTarget } from '../useSettingsSectionTarget';
@@ -76,26 +76,27 @@ afterEach(() => {
 
 describe('settings definition and navigation', () => {
   // Unit: a deep link into an opted-in fold must open it before scrolling.
-  // A mounted target in a closed details element is the minimum failing input.
-  it('opens an advanced disclosure before highlighting its target', () => {
+  // A mounted target inside an inert disclosure is the minimum failing input.
+  it('opens an advanced disclosure before highlighting its target', async () => {
     function DisclosurePage() {
       const ref = useRef<HTMLDivElement>(null);
-      useSettingsSectionTarget('settings-browser-target', ref, 'advanced');
+      const [open, setOpen] = useState(false);
+      const revealTarget = useCallback(() => setOpen(true), []);
+      useSettingsSectionTarget('settings-browser-target', ref, 'advanced', undefined, revealTarget);
       return <div ref={ref}>
-        <details data-settings-search-open>
-          <summary>Advanced settings</summary>
+        <div inert={!open}>
           <div id="settings-browser-target">Browser target</div>
-        </details>
+        </div>
       </div>;
     }
 
     const view = render(<DisclosurePage />);
-    const disclosure = view.getByText('Advanced settings').closest('details');
-    expect(disclosure?.open).toBe(false);
-    act(() => { vi.advanceTimersByTime(0); });
-    expect(disclosure?.open).toBe(true);
+    const target = view.getByText('Browser target');
+    expect(target.closest('[inert]')).not.toBeNull();
+    await act(async () => { vi.advanceTimersByTime(0); });
+    expect(target.closest('[inert]')).toBeNull();
     expect(scrollTo).toHaveBeenLastCalledWith({ top: 92, behavior: 'auto' });
-    expect(view.getByText('Browser target').classList.contains('settings-search-target-highlight')).toBe(true);
+    expect(target.classList.contains('settings-search-target-highlight')).toBe(true);
   });
 
   it('gives the two link preferences distinct targets while retaining their selected defaults', () => {

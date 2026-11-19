@@ -44,15 +44,25 @@ const REFRESH_INTERVAL_MS = 60_000;
  * 那样会被新账号的广播覆盖，因此必须自己做这层隔离。
  */
 interface CreditUsageSnapshot {
-  accountId: string;
+  accountScope: string;
   cachedAt: number;
   usage: ModelAccessCreditUsage;
 }
 
 let cache: CreditUsageSnapshot | null = null;
+const pendingReads = new Map<string, Promise<ModelAccessCreditUsage>>();
 
-function readCache(accountId: string | null): CreditUsageSnapshot | null {
-  if (!accountId || cache?.accountId !== accountId) return null;
+function readCreditUsage(accountScope: string): Promise<ModelAccessCreditUsage> {
+  const pending = pendingReads.get(accountScope);
+  if (pending) return pending;
+  // A menu can unmount while the status chip still needs the same response.
+  const request = billingApi.getCreditUsage().finally(() => pendingReads.delete(accountScope));
+  pendingReads.set(accountScope, request);
+  return request;
+}
+
+function readCache(accountScope: string | null): CreditUsageSnapshot | null {
+  if (!accountScope || cache?.accountScope !== accountScope) return null;
   return cache;
 }
 
@@ -78,61 +88,61 @@ function isCreditUsage(v: unknown): v is ModelAccessCreditUsage {
 }
 
 export function useModelAccessCreditUsageResult(enabled: boolean, { poll = true }: { poll?: boolean } = {}) {
-  const { dataOwnerId, mode, user } = useAuth();
+  const { dataOwnerId, dataOwnerGeneration, mode, user } = useAuth();
   const creditEnabled = enabled && mode === 'cloud' && user?.membershipKind === 'personal';
-  // state 连账号 id 一起存，隔离在**渲染期**完成而不是 effect 里:effect 要等本轮渲染
+  const accountScope = dataOwnerId ? `${dataOwnerGeneration}:${dataOwnerId}` : null;
+  // state 连账号和登录代次一起存，隔离在**渲染期**完成而不是 effect 里:effect 要等本轮渲染
   // 提交后才执行，靠它清空会让切号后的首帧仍把上一个账号的额度渲染出去。
   const [snapshot, setSnapshot] = useState<CreditUsageSnapshot | null>(() =>
-    readCache(dataOwnerId),
+    readCache(accountScope),
   );
 
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
-  const [request, setRequest] = useState<{ accountId: string; loading: boolean } | null>(null);
+  const [request, setRequest] = useState<{ accountScope: string; loading: boolean } | null>(null);
   useEffect(() => {
-    if (!creditEnabled || !dataOwnerId) return;
-    const cached = readCache(dataOwnerId);
+    if (!creditEnabled || !accountScope) return;
+    const cached = readCache(accountScope);
     if (cached) setSnapshot(cached);
     let cancelled = false;
 
     const load = () => {
-      setRequest({ accountId: dataOwnerId, loading: true });
-      void billingApi
-        .getCreditUsage()
+      setRequest({ accountScope, loading: true });
+      void readCreditUsage(accountScope)
         .then((res) => {
           if (cancelled) return;
           if (!isCreditUsage(res)) return;
-          cache = { accountId: dataOwnerId, cachedAt: Date.now(), usage: res };
+          cache = { accountScope, cachedAt: Date.now(), usage: res };
           setSnapshot(cache);
         })
         .catch(() => {
           /* Preserve this account’s last successful value, never invent zero. */
         })
         .finally(() => {
-          if (!cancelled) setRequest({ accountId: dataOwnerId, loading: false });
+          if (!cancelled) setRequest({ accountScope, loading: false });
         });
     };
 
     if (revision > 0 || !cached || Date.now() - cached.cachedAt >= REFRESH_INTERVAL_MS) load();
-    else setRequest({ accountId: dataOwnerId, loading: false });
+    else setRequest({ accountScope, loading: false });
     const timer = poll ? setInterval(load, REFRESH_INTERVAL_MS) : undefined;
     return () => {
       cancelled = true;
       if (timer !== undefined) clearInterval(timer);
     };
-  }, [creditEnabled, dataOwnerId, poll, revision]);
+  }, [creditEnabled, accountScope, poll, revision]);
 
   // 账号不匹配 / 未启用 → 当作没有数据。切号当帧即生效。
-  const currentSnapshot = readCache(dataOwnerId) ?? snapshot;
+  const currentSnapshot = readCache(accountScope) ?? snapshot;
   const usage =
-    creditEnabled && dataOwnerId && currentSnapshot?.accountId === dataOwnerId
+    creditEnabled && accountScope && currentSnapshot?.accountScope === accountScope
       ? currentSnapshot.usage
       : null;
   return {
     usage,
     refresh,
     loading: Boolean(
-      creditEnabled && dataOwnerId && (request?.accountId !== dataOwnerId || request.loading),
+      creditEnabled && accountScope && (request?.accountScope !== accountScope || request.loading),
     ),
   };
 }

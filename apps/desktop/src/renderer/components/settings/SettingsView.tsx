@@ -30,6 +30,7 @@ import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { SettingsPageOutline } from './SettingsPageOutline';
+import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { buildPluginSettingsPages, buildPluginSettingsSearchDocuments, type PluginSettingsPage } from './pluginSettingsNavigation';
 import { getApprovedGhostHostUi, type InstalledGhost } from '../../../shared/ghost';
 import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
@@ -249,11 +250,19 @@ function SettingsViewContent() {
   // 长页滚到底再切短页会停在中段(review 反馈)。瞬时回顶,不做平滑。
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const contentBodyRef = useRef<HTMLDivElement | null>(null);
+  const advancedContentRef = useRef<HTMLDivElement>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const revealAdvancedTarget = useCallback((target: HTMLElement) => {
+    if (advancedContentRef.current?.contains(target)) setAdvancedOpen(true);
+  }, []);
   const workspacePanel = activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers';
   const widePanel = workspacePanel || activeTab === 'usage' || activeTab === 'billing';
   useEffect(() => {
     contentScrollRef.current?.scrollTo({ top: 0 });
   }, [activeTab, piExtensionsPanelOpen, selectedPluginPage?.id]);
+  useEffect(() => {
+    if (activeTab !== 'general' || piExtensionsPanelOpen) setAdvancedOpen(false);
+  }, [activeTab, piExtensionsPanelOpen]);
 
   const handleSelectTab = useCallback(
     (tab: SettingsTab) => {
@@ -383,7 +392,13 @@ function SettingsViewContent() {
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;
   const searchNavigation = useMemo(() => ({ entry: searchEntry, activation: searchActivation }), [searchEntry, searchActivation]);
-  useSettingsSectionTarget(searchEntry?.targetId ?? null, contentScrollRef, searchParams.toString() + ':' + searchActivation, searchEntry?.fallbackTargetId);
+  useSettingsSectionTarget(
+    searchEntry?.targetId ?? null,
+    contentScrollRef,
+    `${navigationKey}:${searchActivation}`,
+    searchEntry?.fallbackTargetId,
+    revealAdvancedTarget,
+  );
 
   // 旧「工具密钥」「第三方平台」深链落到设置里的插件分区,不再离开设置。
   if (shouldRedirectLegacyPluginTabs) {
@@ -419,7 +434,7 @@ function SettingsViewContent() {
                 <ArrowLeft size={20} />
               </button>
             </Tip>
-            <h1 className="text-24 font-medium leading-[1.1] text-[var(--settings-back-text)]">
+            <h1 className="min-w-0 [overflow-wrap:anywhere] text-24 font-medium leading-[1.1] text-[var(--settings-back-text)]">
               {t('settings.title')}
             </h1>
           </div>
@@ -548,45 +563,51 @@ function SettingsViewContent() {
                       <CollaborationSection />
                     </section>
 
-                    <details className="group" data-settings-search-open>
-                      <summary data-settings-section-heading className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-full px-3 text-16 font-medium text-[var(--settings-section-title)] hover:bg-sidebar-item-hover focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden">
+                    <div>
+                      <button type="button" aria-expanded={advancedOpen} aria-controls="settings-general-advanced"
+                        onClick={() => setAdvancedOpen(open => !open)}
+                        data-settings-search-action="Expand or collapse advanced settings"
+                        data-settings-section-heading
+                        className="flex min-h-9 w-full items-center justify-between gap-3 rounded-full px-3 text-left text-16 font-medium text-[var(--settings-section-title)] hover:bg-sidebar-item-hover focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                         {t('settings.contentGroups.advanced')}
-                        <ChevronDown size={16} className="shrink-0 group-open:rotate-180" aria-hidden />
-                      </summary>
-                      <div className="mt-3.5 flex flex-col gap-9 [&>section:empty]:hidden">
-                        {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。 */}
-                        <section
-                          id={generalSettings.agentResource.targetId}
-                          aria-label={t(generalSettings.agentResource.titleKey)}
-                        >
-                          <AgentResourceSection />
-                        </section>
+                        <ChevronDown size={16} className={cn('shrink-0', advancedOpen && 'rotate-180')} aria-hidden />
+                      </button>
+                      <SectionCollapse id="settings-general-advanced" collapsed={!advancedOpen} inert={!advancedOpen} keepMounted>
+                        <div ref={advancedContentRef} className="flex flex-col gap-9 pt-3.5 [&>section:empty]:hidden">
+                          {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。 */}
+                          <section
+                            id={generalSettings.agentResource.targetId}
+                            aria-label={t(generalSettings.agentResource.titleKey)}
+                          >
+                            <AgentResourceSection />
+                          </section>
 
-                        {/* Section — Git safety savepoints (formal setting, not experimental). */}
-                        <section id={generalSettings.gitSafety.targetId} aria-label={t(generalSettings.gitSafety.titleKey)}>
-                          <GitSafetySection />
-                        </section>
+                          {/* Section — Git safety savepoints (formal setting, not experimental). */}
+                          <section id={generalSettings.gitSafety.targetId} aria-label={t(generalSettings.gitSafety.titleKey)}>
+                            <GitSafetySection />
+                          </section>
 
-                        {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单；与 Agent 相关设置放在一起。 */}
-                        <section id={generalSettings.piExtensions.targetId} aria-label={t('settings.piPackages.title')}>
-                          <SettingsSection title={t('settings.piPackages.title')}>
-                            <SettingsCard>
-                              <SettingsRow data-setting-id={generalSettings.piExtensions.id}
-                                title={t('settings.piPackages.manageLabel')}
-                                hint={t('settings.piPackages.entryDescription')}
-                                chevron
-                                onClick={handleOpenPiExtensions}
-                              />
-                            </SettingsCard>
-                          </SettingsSection>
-                        </section>
+                          {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单；与 Agent 相关设置放在一起。 */}
+                          <section id={generalSettings.piExtensions.targetId} aria-label={t('settings.piPackages.title')}>
+                            <SettingsSection title={t('settings.piPackages.title')}>
+                              <SettingsCard>
+                                <SettingsRow data-setting-id={generalSettings.piExtensions.id}
+                                  title={t('settings.piPackages.manageLabel')}
+                                  hint={t('settings.piPackages.entryDescription')}
+                                  chevron
+                                  onClick={handleOpenPiExtensions}
+                                />
+                              </SettingsCard>
+                            </SettingsSection>
+                          </section>
 
-                        {/* Section — Experimental. */}
-                        <section id={generalSettings.experimental.targetId} aria-label={t(generalSettings.experimental.titleKey)}>
-                          <ExperimentalSection />
-                        </section>
-                      </div>
-                    </details>
+                          {/* Section — Experimental. */}
+                          <section id={generalSettings.experimental.targetId} aria-label={t(generalSettings.experimental.titleKey)}>
+                            <ExperimentalSection />
+                          </section>
+                        </div>
+                      </SectionCollapse>
+                    </div>
 
                     <SettingsSection title={t('settings.contentGroups.getStarted')}>
                       <SettingsCard>
