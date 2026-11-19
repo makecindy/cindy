@@ -62,6 +62,22 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  it('keeps confirmed parent lookups scoped through duplicate receipts and a failed echo', async () => {
+    const f = await fixture(null, undefined, true, undefined, true);
+    const receipts = new BlueBubblesReceipts(f.storage, 1_000);
+    const sent = { chatId: f.chat.guid, state: 'sent' as const, messageId: 'confirmed-parent' };
+    receipts.outgoing('first', sent);
+    receipts.outgoing('second', sent);
+    const restored = new BlueBubblesReceipts(f.storage, 1_000);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(true);
+    expect(restored.hasSentMessage(f.otherChat.guid, sent.messageId)).toBe(false);
+    restored.recordEcho(f.chat.guid, sent.messageId, 'first', true);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(true);
+    restored.recordEcho(f.chat.guid, sent.messageId, 'second', true);
+    expect(restored.hasSentMessage(f.chat.guid, sent.messageId)).toBe(false);
+    expect(new BlueBubblesReceipts(f.storage, 1_000).hasSentMessage(f.chat.guid, sent.messageId)).toBe(false);
+  });
+
   it('loads selected history and the inline reply from the connected chat, including image-only messages', async () => {
     const cacheImage = vi.fn(async ({ token }: { token: string }) => ({ absPath: `/media/${token}`, url: `cindy-media://${token}` }));
     const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, true);
