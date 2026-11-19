@@ -151,7 +151,11 @@ slots:[...root.querySelectorAll('[data-copy-slot]')].map(el=>({id:el.dataset.cop
 // A layout read runs before paint. Give the covered WebView a rendering frame before promotion.
 const queue=()=>{if(!pending){pending=true;requestAnimationFrame(()=>requestAnimationFrame(report));}};
 const updateLinks=()=>{root.querySelectorAll('[data-chat-link]').forEach(el=>{const state=links[el.dataset.chatLink];if(!state)return;
-if(el.textContent!==state.text){getSelection()?.removeAllRanges();el.textContent=state.text;}el.classList.toggle('doc-inline-code',!!state.code);el.toggleAttribute('data-long-press',!!state.longPress);
+if(el.textContent!==state.text){
+  const selection=getSelection();
+  if(selection?.rangeCount&&selection.getRangeAt(0).intersectsNode(el))selection.removeAllRanges();
+  el.textContent=state.text;
+}el.classList.toggle('doc-inline-code',!!state.code);el.toggleAttribute('data-long-press',!!state.longPress);
 if(state.lit){el.setAttribute('role','link');el.tabIndex=0;}else{el.removeAttribute('role');el.removeAttribute('tabindex');}});};
 window.__cindyTableMessageUpdate=next=>{if(next.revision!==revision){revision=next.revision;}
 document.getElementById('chat-style').textContent=next.css;

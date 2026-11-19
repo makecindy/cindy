@@ -168,6 +168,25 @@ describe('trusted shell updates', () => {
     expect(getComputedStyle(body).whiteSpace).toBe('pre-wrap');
     expect(getComputedStyle(body.querySelector('pre')!).whiteSpace).toBe('pre-wrap');
   });
+  it('keeps a table range when a link outside it receives a new title', () => {
+    const result = build('[旧任务标题](https://example.test)\n\n' + markdown);
+    const payload: TableMessageDocument = { revision: 'title', css: '', html: result.html, selectable: true,
+      links: { '0': { text: '旧任务标题', lit: true } } };
+    window.eval(tableMessageUpdateScript(payload));
+    const link = document.querySelector('[data-chat-link]')!;
+    const cell = document.querySelector('tbody td')!;
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    window.eval(tableMessageUpdateScript({ ...payload, links: { '0': { text: '新任务标题', lit: true } } }));
+    expect(link.textContent).toBe('新任务标题');
+    expect(selection.rangeCount).toBe(1);
+    expect(selection.getRangeAt(0)).toBe(range);
+    expect(String(selection)).toBe('甲');
+  });
   it('preserves an existing selected text node during style/link updates and treats author JS as data', () => {
     const result = build('[中文 空格](https://example.test)\n\n' + markdown);
     const payload: TableMessageDocument = { revision: '1', css: '', html: result.html, selectable: true,
@@ -183,6 +202,7 @@ describe('trusted shell updates', () => {
       '0': { text: '</span><script>window.pwned=true</script>', lit: true },
     } }));
     expect(el.textContent).toBe('</span><script>window.pwned=true</script>');
+    expect(window.getSelection()?.rangeCount).toBe(0);
     expect((window as any).pwned).toBeUndefined();
     el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     const messages = (window as any).ReactNativeWebView.postMessage.mock.calls.map(([value]: [string]) => JSON.parse(value));
