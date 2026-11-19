@@ -39,7 +39,7 @@ import type { PluginSettingsPage } from './pluginSettingsNavigation';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 
 const NAV_ITEM_CLASS = 'flex min-h-9 items-center gap-2.5 rounded-full py-1.5 pr-3 text-left text-sm transition-colors';
-const NAV_LABEL_CLASS = 'min-w-0 [overflow-wrap:anywhere] leading-tight';
+const NAV_LABEL_CLASS = 'min-w-0 flex-1 hyphens-auto [overflow-wrap:break-word] [text-wrap:pretty] leading-tight';
 const NAV_GROUP_TABS_CLASS =
   'relative flex flex-col gap-0.5 pl-1.5 before:pointer-events-none before:absolute before:inset-y-1.5 before:left-0.5 before:w-px before:bg-[var(--border-default)]';
 const NAV_ITEM_IDLE_CLASS =

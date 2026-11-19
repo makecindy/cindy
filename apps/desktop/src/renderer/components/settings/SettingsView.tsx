@@ -434,9 +434,14 @@ function SettingsViewContent() {
                 <ArrowLeft size={20} />
               </button>
             </Tip>
-            <h1 className="min-w-0 [overflow-wrap:anywhere] text-24 font-medium leading-[1.1] text-[var(--settings-back-text)]">
-              {t('settings.title')}
-            </h1>
+            <div className="min-w-0 flex-1 [container-type:inline-size]">
+              <h1
+                className="hyphens-auto [overflow-wrap:break-word] text-24 font-medium leading-[1.1] text-[var(--settings-back-text)]"
+                style={{ fontSize: 'min(var(--text-24), 12cqi)' }}
+              >
+                {t('settings.title')}
+              </h1>
+            </div>
           </div>
 
           <SettingsSidebarNav

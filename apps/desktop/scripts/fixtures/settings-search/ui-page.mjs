@@ -74,9 +74,12 @@ export default {
       await action.waitFor();
       assert.equal(await page.locator('html').evaluate(el => getComputedStyle(el).getPropertyValue('--app-ui-font-size')), '24px');
       assert.ok(await panel.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'Settings panel must fit horizontally');
-      assert.ok(await page.locator('aside h1').evaluate(el =>
-        el.scrollWidth <= el.clientWidth + 1 &&
-        el.getBoundingClientRect().right <= el.closest('aside').getBoundingClientRect().right), 'Settings title must fit in the sidebar');
+      assert.ok(await page.locator('aside h1').evaluate(el => {
+        const title = document.createRange();
+        title.selectNodeContents(el);
+        return title.getClientRects().length === 1 && el.scrollWidth <= el.clientWidth + 1 &&
+          el.getBoundingClientRect().right <= el.closest('aside').getBoundingClientRect().right;
+      }), 'Settings title must fit on one line in the sidebar');
       if (ui.data.tab === 'general') {
         assert.ok(await panel.locator('#settings-language').evaluate(el => {
           const label = el.firstElementChild;
