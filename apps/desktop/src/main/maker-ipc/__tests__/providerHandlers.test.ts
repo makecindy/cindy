@@ -1673,6 +1673,48 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(deps.broadcastChanged).toHaveBeenCalledOnce();
   });
 
+  it('preserves legacy Gemini keys until an explicit save, then rotates and disconnects only the selected connection', async () => {
+    mountDb();
+    const binding = await import('../../maker-host/gemini-image-connection.js');
+    let selected: string | null = null;
+    const readBinding = vi.spyOn(binding, 'geminiImageConnectionId').mockImplementation(() => selected);
+    const bind = vi.spyOn(binding, 'bindGeminiImageConnection').mockImplementation(async id => { selected = id; });
+    const keys = new Map<string, string>();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      readCustomProviderKeyForMutation: (id, agent) => keys.get(id + agent) ?? null,
+      storeCustomProviderKey: (id, agent, key) => { keys.set(id + agent, key); return true; },
+      removeCustomProviderKey: (id, agent) => { keys.delete(id + agent); return { success: true }; },
+    });
+    registerProviderHandlers(harness, deps);
+    const rt = { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat' as const, models: [] };
+    const old = { id: 'google-gemini-api', name: 'Google Gemini API', runtimes: { codex: rt, pi: rt } };
+    const fresh = { ...old, id: 'new-google' };
+    const imageKey = () => binding.resolveGeminiImageKey(selected,
+      id => buildUserProvider(id === old.id ? old : fresh),
+      (id, agent) => keys.get(id + agent) ?? null, () => 'fake-legacy-image');
+    try {
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, old, { codex: 'fake-legacy-chat' });
+      expect(imageKey()).toBe('fake-legacy-image');
+      const both = { codex: 'fake-new-key', pi: 'fake-new-key' };
+      bind.mockRejectedValueOnce(new Error('disk unavailable'));
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, fresh, both, { bindGeminiImages: true })).rejects.toThrow();
+      expect(await getCustomProvider(fresh.id)).toBeNull();
+      expect(keys.get(fresh.id + 'pi')).toBeUndefined();
+      expect(imageKey()).toBe('fake-legacy-image');
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, fresh, both, { bindGeminiImages: true });
+      expect(imageKey()).toBe('fake-new-key');
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, fresh, { pi: 'fake-rotated' });
+      expect(imageKey()).toBe('fake-rotated');
+      expect(keys.get(old.id + 'codex')).toBe('fake-legacy-chat');
+      await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, fresh.id);
+      expect(imageKey()).toBeNull();
+    } finally {
+      readBinding.mockRestore();
+      bind.mockRestore();
+    }
+  });
+
   it('requires confirmation before a busy manual create and persists nothing when cancelled', async () => {
     mountDb();
     const harness = new IpcHarness();

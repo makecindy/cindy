@@ -1,3 +1,5 @@
+import { isGeminiChatEndpoint } from '../../shared/geminiApiConnection.js';
+import { bindGeminiImageConnection, geminiImageConnectionId } from '../maker-host/gemini-image-connection.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { remoteProviderDisableKey } from '@cindy/model-providers';
 import { withoutProviderHeaderCredentials } from '../maker-host/provider-public-view.js';
@@ -219,9 +221,12 @@ function parseRuntimeKeys(input: unknown): RuntimeKeys | null {
   return Object.fromEntries(entries) as RuntimeKeys;
 }
 
-function parseCustomProviderUpdateOptions(input: unknown): CustomProviderUpdateOptions | null {
+function parseCustomProviderUpdateOptions(input: unknown, creating = false): CustomProviderUpdateOptions | null {
   if (input === undefined) return {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  if ('bindGeminiImages' in input) {
+    return creating && Object.keys(input).length === 1 && input.bindGeminiImages === true ? { bindGeminiImages: true } : null;
+  }
   const entries = Object.entries(input as Record<string, unknown>);
   if (entries.some(([key]) => key !== 'source' && key !== 'codexImageGenerationRestartPolicy' && key !== 'appendSpeechModelsOnly' && key !== 'speechReferenceRefreshAgents'))
     return null;
@@ -2369,9 +2374,17 @@ export function registerProviderHandlers(
     if (!v.ok) throwIpcError(v.code, v.message);
     const keys = parseRuntimeKeys(keyInput);
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
-    const options = parseCustomProviderUpdateOptions(optionsInput);
+    const options = parseCustomProviderUpdateOptions(optionsInput, true);
     if (!options) throwIpcError('INVALID_PARAMS', 'invalid custom provider create options');
     const config = input as CustomProviderConfig;
+    if (options.bindGeminiImages) {
+      const routes = Object.entries(config.runtimes);
+      if (config.auth && config.auth.method !== 'apiKey' || !routes.length || routes.some(([agent, route]) =>
+        !isGeminiChatEndpoint(route?.baseUrl) || !keys[agent as AgentKind]?.trim())
+        || new Set(Object.values(keys).map(key => key.trim())).size !== 1) {
+        throwIpcError('INVALID_PARAMS', 'Gemini image generation requires one Google AI Studio key');
+      }
+    }
     if (isByokProviderId(config.id) || deps.isOrganizationManagedProviderId(config.id)) {
       throwIpcError('PERMISSION_DENIED', 'Enterprise connections are managed by your organization');
     }
@@ -2415,6 +2428,15 @@ export function registerProviderHandlers(
         try {
           await createCustomProvider(separated.config);
           assertProviderMutationOwner(ownerAtIngress);
+          if (options.bindGeminiImages) {
+            try {
+              await bindGeminiImageConnection(config.id);
+            } catch (error) {
+              assertProviderMutationOwner(ownerAtIngress);
+              await deleteCustomProvider(config.id);
+              throw error;
+            }
+          }
         } catch (error) {
           // 换号后不在 B 的 secret store 执行 A 的回滚。
           assertProviderMutationOwner(ownerAtIngress);
@@ -2539,6 +2561,16 @@ export function registerProviderHandlers(
         // 用原值回滚，确保并发窗口不能把另一份配置和密钥拼在一起。
         // key/header 的 storage key 按当前 owner 动态解析，写入前必须仍是发起方。
         assertProviderMutationOwner(ownerAtIngress);
+        // Only the explicitly bound connection shares rotations between its official
+        // Google routes. An independently configured proxy always keeps its own key.
+        const googleAgents = (VALID_AGENTS as readonly AgentKind[]).filter(agent =>
+          isGeminiChatEndpoint(config.runtimes[agent]?.baseUrl));
+        if (googleAgents.some(agent => keys[agent]?.trim()) &&
+          googleAgents.length > 1 && geminiImageConnectionId() === config.id) {
+          const replacements = new Set(googleAgents.map(agent => keys[agent]?.trim()).filter(Boolean));
+          if (replacements.size > 1) throwIpcError('INVALID_PARAMS', 'Use one Google Gemini API key');
+          for (const agent of googleAgents) keys[agent] = [...replacements][0];
+        }
         const keyMutations = effectiveProviderKeyMutations(
           config.id,
           planProviderKeyMutations(config, keys, 'update', previous),

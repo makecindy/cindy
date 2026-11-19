@@ -4463,6 +4463,7 @@
         "authorizedToast": "Login realizado em {{name}}",
         "authorizeFailed": "Não foi possível entrar em {{name}}. Tente novamente.",
         "nameLabel": "Nome de exibição",
+        "geminiImageKeyNote": "Ao salvar, esta chave será usada nas conversas desta conexão e nas próximas imagens geradas pelo Gemini. Para gerar apenas imagens, desmarque todos os modelos de conversa.",
         "onlyAgentNote": "Este provedor só oferece suporte a {{agent}}",
         "endpointLabel": "URL base de {{agent}}",
         "noAuthNote": "Este proxy não exige chave de cliente; Cindy remove as credenciais de assinatura da CLI antes de encaminhar.",

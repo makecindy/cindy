@@ -4364,6 +4364,7 @@
         "authorizedToast": "{{name}} にログインしました",
         "authorizeFailed": "{{name}} にログインできませんでした。再試行してください。",
         "nameLabel": "表示名",
+        "geminiImageKeyNote": "保存すると、このキーが新しい接続でのチャットと今後の Gemini 画像生成に使われます。画像生成のみの場合は、チャットモデルの選択をすべて外してください。",
         "onlyAgentNote": "このプロバイダーは {{agent}} のみ対応です",
         "endpointLabel": "{{agent}} ベース URL",
         "noAuthNote": "このプロキシにクライアントキーは不要です。Cindy は転送前に CLI のサブスクリプション認証情報を削除します。",

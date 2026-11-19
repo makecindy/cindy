@@ -4364,6 +4364,7 @@
         "authorizedToast": "已登入 {{name}}",
         "authorizeFailed": "{{name}} 登入失敗，請重試",
         "nameLabel": "顯示名稱",
+        "geminiImageKeyNote": "儲存後，這把 Key 將用於新連線的對話和之後的 Gemini 圖片生成。只需生成圖片時，可以不勾選對話模型。",
         "onlyAgentNote": "此供應商僅支援 {{agent}}",
         "endpointLabel": "{{agent}} 基礎 URL",
         "noAuthNote": "此 Proxy 無需用戶端金鑰；Cindy 會在轉發前移除 CLI 的訂閱憑證。",

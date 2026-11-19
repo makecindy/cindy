@@ -30,6 +30,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, deleteCustomProvider, updateCustomProvider, providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
+import { GEMINI_API_PRESET_ID, newGeminiConnectionId } from '../../../shared/geminiApiConnection';
 import { isWizardOAuthChoice, isWizardApiKeyChoice, presetChoiceMeta, builtinChoiceMeta, type ProviderSearchTarget } from './providerSearch';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
@@ -497,8 +498,9 @@ export function AddProviderWizard({
   // 已添加（包括断开后保留）的连接不再进向导；声明了媒体清单才展示。
   const builtinApiKeyChoices = useMemo(
     () =>
-      providers.filter(isWizardApiKeyChoice),
-    [providers],
+      providers.filter(p => isWizardApiKeyChoice(p) &&
+        (p.id !== 'gemini' || !presets.some(preset => preset.id === GEMINI_API_PRESET_ID))),
+    [providers, presets],
   );
   const sortedPresets = useMemo(
     () => sortPresetsForRegion(presets, CURRENT_CINDY_REGION),
@@ -1342,8 +1344,9 @@ export function AddProviderWizard({
     }
   }, [sel, apiKey, onDone, t]);
 
+  const bindGeminiImages = sel?.kind === 'preset' && sel.preset.id === GEMINI_API_PRESET_ID && !detected && !(entry?.kind === 'preset' && entry.speechOnly);
   const handleFinish = useCallback(async () => {
-    if (!sel || sel.kind !== 'preset') return;
+    if (savingRef.current || !sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
     const selected = [...picks.entries()]
       .filter(([, value]) => !value.speechReference || value.checked)
@@ -1362,7 +1365,7 @@ export function AddProviderWizard({
         interfaceIds: v.interfaceIds,
         manualSpeech: v.manualSpeech,
       }));
-    if (!selected.some(model => model.checked)) {
+    if (!bindGeminiImages && !selected.some(model => model.checked)) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
       return;
     }
@@ -1372,7 +1375,7 @@ export function AddProviderWizard({
     setSaving(true);
     try {
       const existing = new Set(providers.map((p) => p.id));
-      const id = oauthDraft?.id ?? (
+      const id = bindGeminiImages ? newGeminiConnectionId() : oauthDraft?.id ?? (
         preset.id === 'lmstudio' && !detected
           ? MANAGED_LMSTUDIO_PROVIDER_ID
           : uniqueCustomProviderId(
@@ -1426,7 +1429,7 @@ export function AddProviderWizard({
                 : {}),
             };
           });
-        if (agentModels.length === 0) continue;
+        if (agentModels.length === 0 && !bindGeminiImages) continue;
         runtimes[agent] = {
           ...presetConnectionRuntime(preset, agent, agentModels, rt.baseUrl),
           ...(detected?.config.runtimes[agent]?.imageApi ? { imageApi: detected.config.runtimes[agent]!.imageApi } : {}),
@@ -1453,16 +1456,19 @@ export function AddProviderWizard({
         if (oauthDraft) oauthDraftRef.current = oauthDraft;
         return;
       }
-      await (oauthDraft ? updateCustomProvider : createCustomProvider)(
-        {
-          ...(oauthDraft ?? {}),
-          id,
-          name: name.trim() || presetDisplayName(preset, i18n.language),
-          ...(preset.authMethod === 'none' ? { auth: { method: 'none' as const } } : {}),
-          runtimes,
-        },
-        keys,
-      );
+      const config: CustomProviderConfig = {
+        ...(oauthDraft ?? {}),
+        id,
+        name: name.trim() || presetDisplayName(preset, i18n.language),
+        ...(preset.authMethod === 'none' ? { auth: { method: 'none' as const } } : {}),
+        runtimes,
+      };
+      if (bindGeminiImages) {
+        const result = await createCustomProvider(config, keys, { bindGeminiImages: true });
+        if (!result.ok) throw new Error('Gemini connection was not saved');
+      } else {
+        await (oauthDraft ? updateCustomProvider : createCustomProvider)(config, keys);
+      }
       toast.success(
         t('settings.providers.wizard.createdToast', {
           name: name.trim() || presetDisplayName(preset, i18n.language),
@@ -1476,7 +1482,7 @@ export function AddProviderWizard({
       savingRef.current = false;
       setSaving(false);
     }
-  }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language, detected]);
+  }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language, detected, bindGeminiImages]);
 
   // ── 步骤指示 ─────────────────────────────────────────────────────────
   // 目录步默认按完整路径显示三步(选择供应商 → 连接 → 选择模型);选中真的
@@ -2026,6 +2032,7 @@ export function AddProviderWizard({
                     secret
                     secretTipContentClassName="z-[10001]"
                   />
+                  {bindGeminiImages && <InfoLine text={t('settings.providers.wizard.geminiImageKeyNote')} />}
                   {isMimoTokenPlanPreset(sel.preset) && (
                     <InfoLine text={t('settings.providers.wizard.mimoTokenPlanNote')} />
                   )}
@@ -2357,7 +2364,7 @@ export function AddProviderWizard({
                 loading={saving}
                 type="button"
                 onClick={() => void handleFinish()}
-                disabled={saving || fetchState.status === 'fetching' || checkedCount === 0}
+                disabled={saving || fetchState.status === 'fetching' || (!bindGeminiImages && checkedCount === 0)}
               >
                 {t('settings.providers.wizard.finish')}
               </Button>
