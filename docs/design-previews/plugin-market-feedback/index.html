@@ -48,7 +48,7 @@
 [hidden] { display: none !important; }
 body { margin:0; background:var(--background); color:var(--text-primary); font:15px/1.55 Inter, "Microsoft YaHei", system-ui, sans-serif; }
 button, textarea { font: inherit; color:inherit; }
-button { border:1px solid var(--border-default); background:var(--surface-elevated); border-radius:100px; padding:8px 15px; cursor:pointer; min-height:40px; }
+button { font-size:13px; font-weight:500; border:1px solid var(--border-default); background:var(--surface-elevated); border-radius:100px; padding:8px 15px; cursor:pointer; min-height:40px; }
 button:hover { background:var(--surface-chip); }
 button:focus-visible { outline:none; box-shadow:0 0 0 2px var(--focus-ring); }
 .primary { background:var(--confirm-btn-primary-bg); color:var(--confirm-btn-primary-text); border-color:transparent; font-weight:500; }
@@ -67,7 +67,7 @@ button:disabled { color:var(--text-secondary); cursor:default; }
 main { min-width:0; padding-block:42px 48px; }
 .pill { display:inline-flex; gap:2px; border-radius:100px; padding:3px; background:var(--segmented-track); }
 .pill button { background:transparent; border:1px solid transparent; min-height:32px; padding:3px 15px; white-space:nowrap; }
-.pill button[aria-pressed="true"] { background:var(--segmented-selected-bg); border-color:var(--segmented-selected-border); font-weight:620; }
+.pill button[aria-pressed="true"] { background:var(--segmented-selected-bg); border-color:var(--segmented-selected-border); font-weight:500; }
 .catalog-title { margin-bottom:32px; }
 .catalog-title p { margin-top:10px; }
 .catalog-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
@@ -84,10 +84,15 @@ main { min-width:0; padding-block:42px 48px; }
 #feedback-detail { margin-top:14px; }
 .card { background:var(--surface-elevated); border:1px solid var(--border-default); border-radius:12px; padding:19px; }
 .hero { display:flex; gap:15px; align-items:center; margin-bottom:24px; }
-.tile { flex:none; width:53px; height:53px; display:grid; place-items:center; border-radius:12px; background:var(--surface-chip); color:var(--text-primary); font-weight:750; font-size:20px; }
+.tile { flex:none; width:53px; height:53px; display:grid; place-items:center; border-radius:12px; background:var(--surface-chip); color:var(--text-primary); font-weight:500; font-size:20px; }
 h1,h2,p { margin:0; }
-h1 { font-size:27px; font-weight:680; line-height:1.25; margin-bottom:5px; }
-h2 { font-size:17px; font-weight:650; line-height:1.4; }
+h1, h2, strong { font-weight:500; }
+h1 { font-size:28px; line-height:1.25; margin-bottom:5px; }
+#author-title { font-size:24px; line-height:1.3; }
+h2 { font-size:16px; line-height:1.2; }
+#recommendations h2 { font-size:20px; line-height:1.3; }
+#market h2, #form-title { font-size:18px; line-height:1.3; }
+.card-head strong { font-size:15px; }
 .intro { margin:0 0 23px; }
 .actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
 .hero .actions { margin-left:auto; }
@@ -95,15 +100,15 @@ h2 { font-size:17px; font-weight:650; line-height:1.4; }
 .spread { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
 .row { display:block; width:100%; text-align:left; border-radius:8px; padding:13px 14px; }
 .row[aria-expanded=true] { background:var(--surface-chip); }
-.row-title { display:block; font-weight:650; overflow-wrap:anywhere; }
+.row-title { display:block; font-weight:500; overflow-wrap:anywhere; }
 .dot { display:inline-block; width:7px; height:7px; background:var(--text-primary); border-radius:50%; margin-right:8px; vertical-align:2px; }
 .result { margin:0 0 20px; color:var(--text-primary); }
 .result:empty { display:none; }
 .body-copy { overflow-wrap:anywhere; white-space:pre-wrap; }
 dialog { width:min(460px, calc(100% - 32px)); max-height:calc(100% - 32px); border:1px solid var(--border-default); border-radius:12px; background:var(--surface-elevated); color:var(--text-primary); padding:20px; }
 dialog::backdrop { background:var(--overlay-modal); }
-label { display:block; font-weight:650; }
-textarea { display:block; width:100%; min-height:128px; resize:vertical; background:var(--background); border:1px solid var(--border-default); border-radius:8px; padding:10px; margin-top:7px; }
+label { display:block; font-size:13px; font-weight:500; }
+textarea { display:block; font-size:14px; font-weight:400; width:100%; min-height:128px; resize:vertical; background:var(--background); border:1px solid var(--border-default); border-radius:8px; padding:10px; margin-top:7px; }
 .error { color:var(--error-fg); }
 @media (max-width:640px) {
  .shell { padding:0 14px; }
