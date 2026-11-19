@@ -95,8 +95,13 @@ test('a Codex thread whose backend is unreachable reports the outbound path its 
   const runtime = createHostCodexRuntime({ profileDir: profile, binaryPath: path.join(root, 'no-codex-binary'), config, modelAccess, mcp,
     availabilityPolicy: createAvailabilityPolicy(async () => { throw new Error('Unexpected share mutation'); }), publish: () => {} });
   t.after(() => runtime.close());
+  const harnessRoot = path.join(root, 'harnesses');
+  const ripgrepDir = path.join(harnessRoot, 'ripgrep-bin', `${process.platform}-${process.arch}`);
+  await fs.mkdir(ripgrepDir, { recursive: true });
+  // Pi resolves the search binary during assembly. No engine or search binary runs in this test.
+  await fs.writeFile(path.join(ripgrepDir, process.platform === 'win32' ? 'rg.exe' : 'rg'), '');
   const graph = createHostAgentGraph({ userDataDir: profile, providerConfig: config, mcpRuntime: mcp, codexRuntime: runtime, storage: {},
-    gateway: null, mcpProviders: [],
+    gateway: null, mcpProviders: [], harnessRoot,
     // Never spawned: only the constructed Codex agent's dependency is called.
     binaryPath: path.join(root, 'claude'), codexBinaryPath: path.join(root, 'codex'), piBinaryPath: path.join(root, 'pi') });
   const getOutboundPathFact = graph.codex.deps.getOutboundPathFact;
