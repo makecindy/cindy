@@ -133,10 +133,18 @@
     {
       "file": "extension/src/browser/ssrf-policy-helpers.ts",
       "desc": "one-off hostname grants must also pass a strict hostnameAllowlist (else the loopback CDP endpoint is blocked by proxyAllowedHostnames and every proxied navigation fails)"
+    },
+    {
+      "file": "packages/net-policy/ip.ts",
+      "desc": "support explicit RFC 5180 benchmark fake-IP policy without allowing private networks"
+    },
+    {
+      "file": "leaf/src/infra/net/ssrf.ts",
+      "desc": "support explicit RFC 5180 benchmark fake-IP policy without allowing private networks"
     }
   ],
   "fileCount": 335,
-  "contentHash": "cc9e212a67fa75a3d5fc8de5a5146c4bd46fd9670a9b6518f643f94a56421a39",
+  "contentHash": "cf2f3fa3db0b3497df2e05d67c36a8c01dcf87b29db23a78bbabeb5e386117ef",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

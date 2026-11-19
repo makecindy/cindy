@@ -35,10 +35,12 @@ import { DeviceNodePopover, HubNodePopover } from './DeviceNodePopover';
 import { PlatformGlyph } from './PlatformGlyph';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
 import { groupLines, layoutTopology, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
-import type { TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
+import type { LinkTransport, TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
 import {
   formatRtt,
+  linkTransportLabel,
+  peerTransport,
   protocolKind,
   protocolKindLabel,
   protocolLabel,
@@ -61,6 +63,7 @@ const PHONE_H = 38;
 const HUB_NAME_GAP = 14;
 const HUB_NAME_H = 18;
 const HUB_PROTOCOL_H = 16;
+const HUB_TEXT_W = 180;
 const HUB_TEXT_BOTTOM = HUB_NAME_GAP + HUB_NAME_H + HUB_PROTOCOL_H / 2;
 /**
  * 中转站的字从圆点中心朝扇出那一侧最多伸多远:扇出的线离开圆点后拐上去(或拐下去),
@@ -102,6 +105,7 @@ export interface RemoteConnectionTopologyProps {
   standby?: boolean;
   /** 点折叠的离线行:展开 / 收起离线设备(折叠与否由 model 决定)。 */
   onToggleOffline: () => void;
+  onDelete?: (node: TopologyNode, restoreFocus: () => HTMLElement | null) => void;
   onRemoteDesktop: (node: TopologyNode) => void;
   /** 深链要打开哪台设备的卡片;设备还没画出来(离线折叠)时等它出现 */
   focusDeviceId?: string | null;
@@ -192,37 +196,61 @@ function lineAttrs(kind: LineKind, emphasis: LineEmphasis) {
   return { strokeDasharray: dash, style: { ...look, transition: LINE_TRANSITION } };
 }
 
-const PILL_W = 72;
+const PILL_W = 116;
+const PILL_H = 16;
+const INLINE_PILL_MIN_W = 92;
+const STACKED_PILL_MIN_W = 52;
+const PILL_COLUMN_GAP = 4;
+/** Keep at least 2px of the usual 14px clearance next to a computer tile. */
+const PILL_MAX_SHIFT = 12;
 
-/** 延迟标签:at 是靠图块的那条边,标签朝中间排开;同一边的标签因此贴着图块对齐成一列。 */
+/** 链路标签(底层传输协议 · 延迟):at 是靠图块的那条边,标签朝中间排开;同一边的标签因此贴着图块对齐成一列。 */
 function LatencyPill({
   at,
   side,
+  maxWidth,
+  transport,
   ms,
   strong,
   animate,
 }: {
   at: Point;
   side: 1 | -1;
+  maxWidth: number;
+  transport: LinkTransport | null;
   ms: number | null;
   strong: boolean;
   animate: boolean;
 }) {
   const { t } = useTranslation();
-  if (ms === null) return null;
+  const transportLabel = linkTransportLabel(transport, t);
+  const latency = ms === null ? null : formatRtt(ms, t);
+  if (!transportLabel && !latency) return null;
+  // WebRTC is wider than UDP or WS and needs more room beside the latency.
+  const inlineWidth = transport === 'webrtc' ? PILL_W : INLINE_PILL_MIN_W;
+  const compact = maxWidth < inlineWidth;
+  const stacked = compact && transportLabel !== null && latency !== null;
   return (
     <div
       className={cn('pointer-events-none flex items-center', side === 1 ? 'justify-end' : 'justify-start')}
-      style={placed(at.x - (side * PILL_W) / 2, at.y, PILL_W, 16, animate)}
+      style={placed(at.x - (side * PILL_W) / 2, at.y, PILL_W, PILL_H, animate)}
       aria-hidden
     >
       <span
         className={cn(
-          'rounded-full bg-[var(--settings-theme-card-bg)] px-1.5 py-0.5 text-11 leading-none tabular-nums',
+          'truncate rounded-full bg-[var(--settings-theme-card-bg)] py-0.5 text-11 leading-none tabular-nums',
+          compact ? 'px-px' : 'px-1.5',
+          stacked && 'flex flex-col items-center gap-0.5',
           strong ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
         )}
+        style={{ maxWidth }}
       >
-        {formatRtt(ms, t)}
+        {stacked ? (
+          <>
+            <span>{transportLabel}</span>
+            <span className="max-w-full truncate">{latency}</span>
+          </>
+        ) : [transportLabel, latency].filter(Boolean).join(' · ')}
       </span>
     </div>
   );
@@ -289,6 +317,7 @@ export function RemoteConnectionTopology({
   issue = null,
   standby = false,
   onToggleOffline,
+  onDelete,
   onRemoteDesktop,
   focusDeviceId = null,
   focusRequestKey = null,
@@ -301,9 +330,9 @@ export function RemoteConnectionTopology({
   const [ref, measured] = useMeasuredWidth();
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  // 深链打开卡片前要滚到的图块(看得见的那一层)。
-  const tiles = useRef(new Map<string, HTMLElement>());
-  const tileRef = (id: string) => (el: HTMLElement | null) => {
+  const hubButton = useRef<HTMLButtonElement>(null);
+  const tiles = useRef(new Map<string, HTMLButtonElement>());
+  const tileRef = (id: string) => (el: HTMLButtonElement | null) => {
     if (el) tiles.current.set(id, el);
     else tiles.current.delete(id);
   };
@@ -319,7 +348,8 @@ export function RemoteConnectionTopology({
   const animate = !reduced && settled;
   const layout = layoutTopology(model.groups, width, model.dense);
   const { m, hub } = layout;
-  const selfName = model.self?.name ?? t('settings.remoteControl.v2.node.thisComputer');
+  const relaySide = layout.groups.find((group) => group.relay)?.side;
+  const selfName = model.self?.name || t('settings.devices.thisDevice');
   const selfProtocol = selfProtocolKind(model, linkStatus);
   const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
   const selfDescription = selfProtocolLabel ? `${selfName} · ${selfProtocolLabel}` : selfName;
@@ -363,6 +393,8 @@ export function RemoteConnectionTopology({
   for (const group of model.groups) {
     const g = layout.groups.find((x) => x.id === group.id);
     if (!g) continue;
+    // Keep the entire column outside the hub text and the relay caption on this side.
+    const captionEdge = Math.max(HUB_TEXT_W / 2, group.side === relaySide ? m.relay + RELAY_LABEL_OUTER : 0);
     const { toRelay, rows } = groupLines(layout, group, (id) => (isPhone(id) ? PHONE_W / 2 : m.half));
     if (toRelay && g.relay) {
       const emphasis = emphasisFor(group.ids, model.relay.flow !== null);
@@ -504,13 +536,18 @@ export function RemoteConnectionTopology({
       const protocol = running
         ? t(running.target === 'agent-net' ? 'settings.remoteControl.v2.peerSwitch.row.toAgentNet' : 'settings.remoteControl.v2.peerSwitch.row.toDeviceLink')
         : protocolLabel(node, t);
+      const transport = reconnecting ? null : peerTransport(node);
       const displayName = deviceLabel(node, t);
-      const description = [displayName, protocol, sub.text].filter(Boolean).join(' · ');
+      const description = [displayName, protocol, linkTransportLabel(transport, t), sub.text].filter(Boolean).join(' · ');
+      const pillRoom = Math.abs(row.at.x - hub.x) - captionEdge - PILL_COLUMN_GAP;
+      const shift = Math.min(PILL_MAX_SHIFT, Math.max(0, STACKED_PILL_MIN_W - pillRoom));
       pills.push(
         <LatencyPill
           key={`${row.id}:pill`}
-          at={row.at}
+          at={{ ...row.at, x: row.at.x + group.side * shift }}
           side={group.side}
+          maxWidth={Math.min(PILL_W, pillRoom + shift)}
+          transport={transport}
           ms={node.rttMs}
           strong={emphasis !== 'rest' && emphasis !== 'dim'}
           animate={animate}
@@ -522,6 +559,7 @@ export function RemoteConnectionTopology({
             {/* 外层按钮只管位置与点击(定位用 transform),里层是看得见的图块 */}
             <button
               type="button"
+              ref={tileRef(node.id)}
               // design: intrinsic-geometry — 手机图块是竖着的窄条,外层点击区与看得见的那层(.rcv2-tile[data-form=phone])同一外形
               className={cn('rcv2-hit', phone ? 'rounded-[7px]' : 'rounded-lg')}
               style={placed(p.x, p.y, phone ? PHONE_W : TILE, phone ? PHONE_H : TILE, animate)}
@@ -531,7 +569,6 @@ export function RemoteConnectionTopology({
               onPointerLeave={() => setHoverId((cur) => (cur === node.id ? null : cur))}
             >
               <span
-                ref={tileRef(node.id)}
                 className="rcv2-tile relative flex h-full w-full items-center justify-center rounded-lg border"
                 data-form={phone ? 'phone' : undefined}
                 data-dim={node.status === 'offline' ? 'true' : undefined}
@@ -555,6 +592,10 @@ export function RemoteConnectionTopology({
               node={node}
               relayName={model.relay.name}
               onRemoteDesktop={onRemoteDesktop}
+              onDelete={onDelete && (() => {
+                setOpenId(null);
+                onDelete(node, () => tiles.current.get(node.id) ?? hubButton.current);
+              })}
               switchEntry={switchEntry}
               onSwitch={onSwitch}
             />
@@ -597,6 +638,7 @@ export function RemoteConnectionTopology({
           <button
             type="button"
             className="rcv2-hub flex items-center justify-center rounded-full border"
+            ref={hubButton}
             style={placed(hub.x, hub.y, HUB, HUB, animate)}
             aria-label={selfDescription}
           >
@@ -614,7 +656,7 @@ export function RemoteConnectionTopology({
       </Popover>
       <div
         className="pointer-events-none flex items-center justify-center"
-        style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP, 180, HUB_NAME_H, animate)}
+        style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP, HUB_TEXT_W, HUB_NAME_H, animate)}
         aria-hidden
       >
         <span className="max-w-full truncate rounded bg-[var(--settings-theme-card-bg)] px-1.5 text-12 font-medium leading-[1.5] text-[var(--text-primary)]">
@@ -625,7 +667,7 @@ export function RemoteConnectionTopology({
       {selfProtocol && selfProtocolLabel ? (
         <div
           className="pointer-events-none flex items-center justify-center"
-          style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP + HUB_NAME_H, 180, HUB_PROTOCOL_H, animate)}
+          style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP + HUB_NAME_H, HUB_TEXT_W, HUB_PROTOCOL_H, animate)}
           aria-hidden
         >
           <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1.5">

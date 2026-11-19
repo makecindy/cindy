@@ -166,6 +166,10 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
         if (isReviewSessionSource(row?.source)) {
           throw new Error('Review tasks cannot be targets of scheduled automations');
         }
+        // 插件引擎只用于每次新建任务的自动任务(docs/plans/acp-plugin-bridge.md)，不能绑定已有任务。
+        if (selection.modelAgentKind === 'acp') {
+          throw new Error('A plugin engine schedule starts a new task each run');
+        }
         assertScheduledHarnessSupported(row ? {
           ...row, agentKind: dbToMakerAgentKind(row.agentKind),
         } : null, selection.modelAgentKind, selection.modelAgentDeviceId === undefined

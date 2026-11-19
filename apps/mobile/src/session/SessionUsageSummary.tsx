@@ -72,7 +72,7 @@ export function SessionUsageSummary({
   const sourceLabel = providerName?.trim() || (
     !account?.accountOnly &&
     source &&
-    source !== "api" &&
+    source !== "api" && source !== "plugin" &&
     source !== "unavailable"
       ? t(`session.menu.usage.source.${source}`)
       : null);
