@@ -2553,6 +2553,41 @@ describe('reference definition boundaries', () => {
     expect(parseMobileMarkdownDocument(valid).blocks.some(block => block.type === 'math')).toBe(true);
   });
 
+  // #9440 / review 4624401097: autolinks are ordinary paragraph input, not
+  // raw HTML openers. Unit production entry; prior HTML cases used real tags.
+  it('recognizes definition boundaries after autolinks without treating them as HTML', () => {
+    for (const autolink of ['<a@example.com>', '<https://example.com/>']) {
+      const source = '[site][s]\n\n' + autolink + '\n# heading\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+      expect(mobileMarkdownPreviewText(source)).not.toContain('[s]:');
+      const paragraph = '[site][s]\n\n' + autolink + '\n[s]: https://example.com/';
+      expect(inlines(paragraph).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+    const html = '[site][s]\n\n<div>\n# heading\n[s]: https://example.com/\n</div>';
+    expect(inlines(html).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+  });
+
+  // #9440 / review 4624401108: an excluded comment can leave a list too.
+  // Unit production entry; prior comment cases did not dedent the closer.
+  it('unwinds list scopes on dedented comment lines and retains nested ancestors', () => {
+    for (const close of ['-->', '  -->']) {
+      const source = '[site][s]\n\n- item\n  <!--\n' + close + '\n\n  [s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual(close.startsWith(' ') ? [] : [link]);
+      let result = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const value = source.slice(0, end);
+        result = parseMobileMarkdownIncremental(value, result);
+        expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+      }
+    }
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);

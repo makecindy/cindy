@@ -210,6 +210,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
     const startsInComment = comment;
     comment = advanceHtmlCommentState(line, comment);
     if (startsInComment || comment || line.includes('<!--')) {
+      if (startsInComment && line.trim()) leaveListScopes(leadingIndentColumns(line));
       // An inline comment does not close the paragraph it belongs to.
       if (!startsInComment) paragraph = !/^(?: {0,3}<!--|#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s)/.test(line);
       continue;
@@ -222,7 +223,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       paragraph = false;
       continue;
     }
-    if (/^ {0,3}<\/?[A-Za-z!]/.test(line)) html = true;
+    if (/^ {0,3}<(?:\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])|!)/.test(line)) html = true;
     if (html) continue;
     const definition = !paragraph && listContentIndents.length === 0
       ? readMarkdownReferenceDefinition(lines, index) : null;
