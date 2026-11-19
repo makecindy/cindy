@@ -46,7 +46,13 @@ export default {
       assert.match(await footer.innerText(), /12%/);
       assert.match(await trigger.innerText(), ui.data.usage === 'balance' ? /CNY\s*0[.,]00/ : /Claude\/GPT[\s\S]*0%/);
       await ui.capture('entry', { locator: footer });
-      await trigger.hover();
+      if (ui.data.usage === 'balance') {
+        await page.keyboard.press('Tab');
+        assert.ok(await trigger.evaluate(button => button.matches(':focus-visible') && getComputedStyle(button).boxShadow !== 'none'));
+        await page.keyboard.press('Enter');
+      } else {
+        await trigger.hover();
+      }
       const card = page.getByTestId('quota-hover-card');
       await card.waitFor();
       if (ui.data.usage === 'quotas') {
