@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>插件市场反馈 · Cindy 网页预览</title>
+<style>
+:root { color-scheme: light dark; --bg: #f7f7f2; --panel: #fff; --ink: #242621; --muted: #60645b; --line: #dedfd6; --wash: #efefe9; --accent: #365232; --on-accent: #fff; --tint: #e7efe2; --focus: #547b4d; --error: #a42d28; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1c1e1b; --panel:#252723; --ink:#f1f2e9; --muted:#b8bcb1; --line:#42463d; --wash:#30342d; --accent:#c8dec0; --on-accent:#22311f; --tint:#2d402a; --focus:#b4d3a9; --error:#ffa19a; } }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 Inter, "Microsoft YaHei", system-ui, sans-serif; }
+button, textarea { font: inherit; color:inherit; }
+button { border:1px solid var(--line); background:var(--panel); border-radius:100px; padding:8px 15px; cursor:pointer; min-height:40px; }
+button:hover { background:var(--wash); }
+button:focus-visible, textarea:focus-visible { outline:2px solid var(--focus); outline-offset:3px; }
+.primary { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:650; }
+.primary:hover { background:var(--accent); filter:brightness(1.1); }
+.shell { max-width:1100px; margin:0 auto; padding:0 28px; }
+.top { border-bottom:1px solid var(--line); background:var(--panel); }
+.top .shell { min-height:62px; display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.brand { font-size:19px; font-weight:750; letter-spacing:-.6px; }
+.small, small, .muted { color:var(--muted); }
+.small, small { font-size:13px; }
+.frame { display:grid; grid-template-columns:185px 1fr; min-height:calc(100vh - 63px); }
+nav { padding:28px 16px 24px 0; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:6px; }
+nav p { margin:0 0 5px 11px; font-size:12px; font-weight:650; color:var(--muted); }
+nav button { border:0; background:transparent; border-radius:8px; text-align:left; white-space:nowrap; }
+nav button[aria-current="page"] { background:var(--tint); font-weight:650; }
+nav button:last-child { margin-top:12px; }
+.count { display:inline-block; min-width:20px; padding:0 5px; margin-left:4px; text-align:center; color:var(--accent); background:var(--tint); border-radius:100px; font-size:12px; }
+main { min-width:0; padding:32px 0 48px 30px; }
+.crumb { margin:0 0 19px; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:19px; }
+.hero { display:flex; gap:15px; align-items:center; margin-bottom:24px; }
+.tile { flex:none; width:53px; height:53px; display:grid; place-items:center; border-radius:12px; background:var(--tint); color:var(--accent); font-weight:750; font-size:20px; }
+h1,h2,h3,p { margin:0; }
+h1 { font-size:27px; font-weight:680; line-height:1.25; margin-bottom:5px; }
+h2 { font-size:17px; font-weight:650; line-height:1.4; }
+h3 { font-size:15px; font-weight:650; }
+.intro { margin:0 0 23px; }
+.actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+.hero .actions { margin-left:auto; }
+.stack { display:grid; gap:14px; }
+.spread { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.row { display:block; width:100%; text-align:left; border-radius:8px; padding:13px 14px; }
+.row[aria-expanded=true] { border-color:var(--focus); }
+.row-title { display:block; font-weight:650; }
+.dot { display:inline-block; width:7px; height:7px; background:var(--accent); border-radius:50%; margin-right:8px; vertical-align:2px; }
+.result { margin:0 0 20px; color:var(--accent); }
+.result:empty { display:none; }
+.body-copy { overflow-wrap:anywhere; white-space:pre-wrap; }
+.meta { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:8px 14px; margin:0; }
+.meta dt { color:var(--muted); }
+.meta dd { margin:0; overflow-wrap:anywhere; }
+dialog { width:min(460px, calc(100% - 32px)); max-height:calc(100% - 32px); border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--ink); padding:20px; }
+dialog::backdrop { background:rgba(0,0,0,.53); }
+label { display:block; font-weight:650; }
+textarea { display:block; width:100%; min-height:128px; resize:vertical; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; margin-top:7px; }
+.error { color:var(--error); }
+@media (max-width:640px) {
+ .shell { padding:0 14px; }
+ .frame { display:block; }
+ nav { padding:9px 0; flex-direction:row; flex-wrap:wrap; border-right:0; border-bottom:1px solid var(--line); gap:2px; }
+ nav p { display:none; }
+ nav button { font-size:13px; padding-inline:9px; }
+ nav button:last-child { margin-top:0; }
+ main { padding:23px 0 30px; }
+ .hero { flex-wrap:wrap; }
+ .hero .actions { width:100%; justify-content:flex-start; }
+}
+</style>
+</head>
+<body>
+<header class="top"><div class="shell"><span class="brand">Cindy</span><span class="small">插件市场反馈 · 网页预览</span></div></header>
+<div class="shell frame">
+  <nav aria-label="演示页面">
+    <p>插件</p>
+    <button type="button" data-view="market" aria-current="page">插件市场</button>
+    <button type="button" data-view="inbox">我的插件 <span id="inbox-count" class="count" hidden></span></button>
+    <button type="button" data-view="mail">作者邮箱 <span id="mail-count" class="count" hidden></span></button>
+  </nav>
+  <main>
+    <section id="market" aria-labelledby="market-title">
+      <p class="crumb small">插件市场 / 插件详情</p>
+      <header class="hero">
+        <div class="tile" aria-hidden="true">桌</div>
+        <div><h1 id="market-title" tabindex="-1">桌面伙伴</h1><p class="small">社区插件 · v1.3.11</p></div>
+        <div class="actions"><button type="button" id="open-form">反馈问题</button></div>
+      </header>
+      <p class="result" id="send-result" role="status"></p>
+      <div class="card stack">
+        <h2>关于插件</h2>
+        <p class="muted">桌面上的像素伙伴。可以快速向 Cindy 提问、语音输入，以及回到最近的任务。</p>
+      </div>
+    </section>
+    <section id="inbox" aria-labelledby="inbox-title" hidden>
+      <p class="crumb small">插件 / 我的插件</p>
+      <div class="intro"><h1 id="inbox-title" tabindex="-1">收到的反馈</h1><p class="muted">查看用户提交到你名下插件的反馈。</p></div>
+      <div class="card stack">
+        <div class="spread"><h2>桌面伙伴</h2><span class="small" id="inbox-summary"></span></div>
+        <div class="stack" id="feedback-list"></div>
+        <p class="muted" id="inbox-empty">暂无反馈。先从插件市场提交一条示例。</p>
+      </div>
+      <article id="feedback-detail" class="card stack" style="margin-top:14px" hidden>
+        <div class="spread"><h2>反馈详情</h2><button type="button" id="mark-read">标为已读</button></div>
+        <p class="small" id="feedback-meta"></p>
+        <p class="body-copy" id="feedback-body"></p>
+      </article>
+    </section>
+    <section id="mail" aria-labelledby="mail-title" hidden>
+      <p class="crumb small">作者邮箱 / 收件箱</p>
+      <div class="intro"><h1 id="mail-title" tabindex="-1">邮件通知</h1><p class="muted">收件地址来自作者登录账号的已验证邮箱。</p></div>
+      <div class="card stack">
+        <dl class="meta"><dt>收件地址</dt><dd>author@example.com</dd></dl>
+        <p class="muted" id="mail-empty">暂无到件通知。提交反馈后会在这里看到邮件示例。</p>
+        <div id="mail-list" class="stack"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="form-dialog" aria-labelledby="form-title">
+  <form class="stack" id="feedback-form">
+    <h2 id="form-title">反馈问题</h2>
+    <p class="small">桌面伙伴 · v1.3.11 · 发送给插件作者</p>
+    <label for="message">问题描述
+      <textarea id="message" required maxlength="2000" rows="5" autofocus placeholder="例如，切换显示器后，桌面伙伴停在了屏幕外。"></textarea>
+    </label>
+    <div class="spread"><span class="small">请勿填写密码或个人资料。</span><span id="characters" class="small">0 / 2000</span></div>
+    <p class="error" id="form-error" role="alert" hidden>请填写问题描述。</p>
+    <div class="actions"><button type="button" id="cancel-form">取消</button><button type="submit" class="primary">提交反馈</button></div>
+  </form>
+</dialog>
+
+<template id="feedback-row">
+  <button type="button" class="row" aria-controls="feedback-detail"><span class="row-title"><span class="dot" aria-hidden="true"></span><span class="snippet"></span></span><span class="small row-meta"></span></button>
+</template>
+
+<template id="mail-row">
+  <article class="card stack"><h3>你的插件「桌面伙伴」收到了一条新反馈</h3><p class="small mail-date"></p><p>登录 Cindy，前往「收到的反馈」查看问题详情。</p><div><button type="button">在 Cindy 查看</button></div></article>
+</template>
+
+<script>
+'use strict';
+const byId = id => document.getElementById(id);
+const navigation = [...document.querySelectorAll('[data-view]')];
+const feedback = [];
+const date = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
+let selectedId = null;
+const dialog = byId('form-dialog');
+const message = byId('message');
+const formError = byId('form-error');
+
+function showView(view) {
+  for (const button of navigation) {
+    const active = button.dataset.view === view;
+    byId(button.dataset.view).hidden = !active;
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+  byId(view + '-title').focus();
+}
+
+function renderFeedback() {
+  const unread = feedback.filter(item => !item.read).length;
+  byId('inbox-count').hidden = unread === 0;
+  byId('inbox-count').textContent = unread;
+  byId('inbox-summary').textContent = feedback.length + ' 条反馈 · ' + unread + ' 条未读';
+  byId('inbox-empty').hidden = feedback.length > 0;
+  const list = byId('feedback-list');
+  list.replaceChildren();
+  for (const item of feedback) {
+    const row = byId('feedback-row').content.firstElementChild.cloneNode(true);
+    row.dataset.id = item.id;
+    row.setAttribute('aria-expanded', item.id === selectedId);
+    row.querySelector('.dot').hidden = item.read;
+    row.querySelector('.snippet').textContent = item.body.slice(0, 55) + (item.body.length > 55 ? '…' : '');
+    row.querySelector('.row-meta').textContent = (item.read ? '已读' : '未读') + ' · ' + date.format(item.createdAt);
+    row.addEventListener('click', () => {
+      selectedId = item.id === selectedId ? null : item.id;
+      renderFeedback();
+      list.querySelector('[data-id="' + item.id + '"]').focus();
+    });
+    list.append(row);
+  }
+  const selected = feedback.find(item => item.id === selectedId);
+  byId('feedback-detail').hidden = !selected;
+  if (selected) {
+    byId('mark-read').hidden = selected.read;
+    byId('feedback-meta').textContent = '桌面伙伴 · v1.3.11 · ' + date.format(selected.createdAt);
+    byId('feedback-body').textContent = selected.body;
+  }
+}
+
+function renderMail() {
+  byId('mail-count').hidden = feedback.length === 0;
+  byId('mail-count').textContent = feedback.length;
+  byId('mail-empty').hidden = feedback.length > 0;
+  const list = byId('mail-list');
+  list.replaceChildren();
+  for (const item of feedback) {
+    const mail = byId('mail-row').content.firstElementChild.cloneNode(true);
+    mail.querySelector('.mail-date').textContent = date.format(item.createdAt);
+    mail.querySelector('button').addEventListener('click', () => {
+      selectedId = item.id;
+      renderFeedback();
+      showView('inbox');
+    });
+    list.append(mail);
+  }
+}
+
+for (const button of navigation) button.addEventListener('click', () => showView(button.dataset.view));
+byId('open-form').addEventListener('click', () => dialog.showModal());
+byId('cancel-form').addEventListener('click', () => dialog.close());
+message.addEventListener('input', () => {
+  byId('characters').textContent = message.value.length + ' / 2000';
+  formError.hidden = true;
+  message.removeAttribute('aria-invalid');
+});
+byId('feedback-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const body = message.value.trim();
+  if (!body) {
+    formError.hidden = false;
+    message.setAttribute('aria-invalid', 'true');
+    message.focus();
+    return;
+  }
+  feedback.unshift({ id: feedback.length + 1, body, createdAt: new Date(), read: false });
+  message.value = '';
+  byId('characters').textContent = '0 / 2000';
+  dialog.close();
+  byId('send-result').textContent = '反馈已提交。你可以切换到「我的插件」查看作者收到的反馈。';
+  renderFeedback();
+  renderMail();
+});
+byId('mark-read').addEventListener('click', () => {
+  const selected = feedback.find(item => item.id === selectedId);
+  if (selected) {
+    selected.read = true;
+    renderFeedback();
+    byId('feedback-list').querySelector('[data-id="' + selected.id + '"]').focus();
+  }
+});
+renderFeedback();
+renderMail();
+</script>
+</body>
+</html>
