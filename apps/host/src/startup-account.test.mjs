@@ -820,7 +820,7 @@ test('a refresh after a failed start keeps the start-failure reason (no saved se
       HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', NODE_USE_ENV_PROXY: '1' }),
   });
   let stderr = '';
-  child.stderr.on('data', chunk => { stderr += chunk; });
+  child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
   t.after(async () => {
     if (child.exitCode === null) { child.kill('SIGTERM'); await once(child, 'exit'); }
     lease.release();
@@ -833,7 +833,8 @@ test('a refresh after a failed start keeps the start-failure reason (no saved se
       if (value) return value;
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    assert.fail(`timed out waiting for ${what}`);
+    const stderrTail = stderr.slice(-8192).trimEnd() || '(empty)';
+    assert.fail(`timed out waiting for ${what}\ncindy-host stderr tail:\n${stderrTail}`);
   };
   const { baseUrl } = await until(async () => JSON.parse(readFileSync(path.join(profile, 'host-endpoint.json'), 'utf8')), 'the endpoint');
   const token = readFileSync(path.join(profile, 'host-api-token'), 'utf8').trim();
