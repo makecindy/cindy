@@ -14,14 +14,23 @@ export default {
     mobile: { about: 'Paragraph navigation and answer form at 390px', viewport: { width: 390, height: 850 } },
     readonly: { about: 'History without a send port cannot submit' },
     invalid: { about: 'An unsupported wire version falls back without hiding adjacent Markdown or cindy-ui' },
+    nested: { about: 'A list-nested A2UI example stays code, without an active form' },
   },
-  async ready(page) { await page.locator('.cindy-a2ui, .cindy-a2ui-fallback').waitFor(); },
+  async ready(page) { await page.getByText('普通 Markdown 继续显示。', { exact: true }).waitFor(); },
   async check(page, ui) {
     const submit = page.getByRole('button', { name: '提交主旨', exact: true });
     assert.equal(await page.getByTestId('received').innerText(), '');
     assert.equal(await page.getByText('普通 Markdown 继续显示。', { exact: true }).count(), 1);
     assert.equal(await page.getByText('现有 cindy-ui 继续显示。', { exact: true }).count(), 1);
+    if (ui.case === 'nested') {
+      await page.locator('pre').filter({ hasText: 'createSurface' }).waitFor();
+      assert.equal(await page.locator('.cindy-a2ui').count(), 0);
+      assert.equal(await page.getByLabel('中文主旨', { exact: true }).count(), 0);
+      assert.equal(await submit.count(), 0);
+      return;
+    }
     if (ui.case === 'invalid') {
+      await page.locator('.cindy-a2ui-fallback').waitFor();
       assert.equal(await page.getByRole('status').textContent(), await ui.t('richAnswer.incomplete'));
       assert.equal(await submit.count(), 0);
       return;

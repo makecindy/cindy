@@ -1,4 +1,6 @@
 import type { ProcessableMessage } from '@cindy/a2ui-renderer/core';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
 
 /** The wire version and the SDK release are deliberately separate identifiers. */
 export const A2UI_SDK_VERSION = '0.15.0';
@@ -12,27 +14,32 @@ export interface A2uiMessagePart {
   complete: boolean;
 }
 
-/** Only top-level fenced blocks opt in; code quoted inside other fences stays code. */
+const markdownParser = unified().use(remarkParse);
+
+/** Only root-level Markdown code nodes opt in; lists, quotes and HTML stay inert. */
 export function splitA2uiMessage(source: string): A2uiMessagePart[] {
+  // Ordinary chat messages do not need an additional Markdown parse.
+  if (!/(?:^|\n) {0,3}(?:`{3,}|~{3,})[ \t]*a2ui[ \t]*(?:\r?\n|$)/.test(source)) {
+    return source ? [{ kind: 'markdown', source, key: 0, complete: false }] : [];
+  }
   const parts: A2uiMessagePart[] = [];
-  const lines = source.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-  let offset = 0, start = 0;
-  let fence: { char: string; length: number; a2ui: boolean; start: number; body: number } | undefined;
-  for (const line of lines) {
-    const match = /^( {0,3})(`{3,}|~{3,})([^\r\n]*)\r?\n?$/.exec(line);
-    if (match) {
-      if (!fence) {
-        fence = { char: match[2][0], length: match[2].length, a2ui: match[3].trim() === 'a2ui', start: offset, body: offset + line.length };
-      } else if (match[2][0] === fence.char && match[2].length >= fence.length && !match[3].trim()) {
-        if (fence.a2ui) {
-          if (fence.start > start) parts.push({ kind: 'markdown', source: source.slice(start, fence.start), key: start, complete: true });
-          parts.push({ kind: 'a2ui', source: source.slice(fence.body, offset), key: fence.start, complete: true });
-          start = offset + line.length;
-        }
-        fence = undefined;
-      }
-    }
-    offset += line.length;
+  let start = 0;
+  for (const node of markdownParser.parse(source).children) {
+    if (node.type !== 'code' || node.lang !== 'a2ui' || node.meta) continue;
+    const offset = node.position?.start.offset;
+    const to = node.position?.end.offset;
+    if (offset === undefined || to === undefined) continue;
+    // Include root-fence indentation, preserving the historical fragment key.
+    const from = offset - (node.position!.start.column - 1);
+    const raw = source.slice(from, to);
+    const opening = /^ {0,3}(`{3,}|~{3,})[ \t]*a2ui[ \t]*\r?\n/.exec(raw);
+    if (!opening) continue;
+    // CommonMark also produces a code node for an unfinished streaming fence.
+    const closing = raw.slice(raw.lastIndexOf('\n') + 1);
+    if (!new RegExp(`^ {0,3}${opening[1][0]}{${opening[1].length},}[ \\t]*\\r?$`).test(closing)) continue;
+    if (from > start) parts.push({ kind: 'markdown', source: source.slice(start, from), key: start, complete: true });
+    parts.push({ kind: 'a2ui', source: node.value, key: from, complete: true });
+    start = to;
   }
   // Do not enable controls from a partial stream, even if its prefix parses.
   if (start < source.length) parts.push({ kind: 'markdown', source: source.slice(start), key: start, complete: false });

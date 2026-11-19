@@ -124,5 +124,21 @@ it('keeps quoted/unfinished fences as ordinary markdown and rejects executable r
   expect(splitA2uiMessage('````text\n```a2ui\n{}\n```\n````').every(part => part.kind === 'markdown')).toBe(true);
   expect(splitA2uiMessage('```a2ui\n{}').every(part => part.kind === 'markdown')).toBe(true);
   expect(splitA2uiMessage('before\n```a2ui\n{}\n```\nafter').map(part => part.kind)).toEqual(['markdown', 'a2ui', 'markdown']);
+  expect(splitA2uiMessage('   ~~~a2ui\r\n   {}\r\n   ~~~').map(part => part.kind)).toEqual(['a2ui']);
+  expect(splitA2uiMessage('``` a2ui\n{}\n```').map(part => part.kind)).toEqual(['a2ui']);
   expect(() => readA2uiMessages(message([{ id: 'root', component: 'Text', text: { '@call': 'openUrl', args: { url: 'https://example.invalid' } } }]))).toThrow('executable');
+});
+
+// Review #11587: two-space list examples previously became live submit controls.
+// Assert the production boundary preserves the whole Markdown container verbatim.
+it.each([
+  `- 格式示例\n\n  \`\`\`a2ui\n  ${form}\n  \`\`\``,
+  `1. 格式示例\n\n   \`\`\`a2ui\n   ${form}\n   \`\`\``,
+  `> 格式示例\n> \`\`\`a2ui\n> ${form}\n> \`\`\``,
+  `<div>\n\`\`\`a2ui\n${form}\n\`\`\`\n</div>`,
+])('does not activate an A2UI example nested in Markdown containers', source => {
+  expect(splitA2uiMessage(source)).toEqual([{ kind: 'markdown', source, key: 0, complete: false }]);
+  const mixed = splitA2uiMessage(`${source}\n\n后续正文\n\n\`\`\`a2ui\n${form}\n\`\`\``);
+  expect(mixed.map(part => part.kind)).toEqual(['markdown', 'a2ui']);
+  expect(mixed[0].source).toBe(`${source}\n\n后续正文\n\n`);
 });
