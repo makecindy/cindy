@@ -9460,6 +9460,13 @@ export function registerGhostIpc(): void {
     uiLocale: () => currentGhostAppContext().context.uiLocale,
     spawn: (ghostId, harnessId) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId),
     requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
+    readUsage: async (ghostId, harnessId) => {
+      const owner = captureDataOwnerBroadcastScope();
+      const response = await getGhostNodeRuntimeBroker().handleRequest(ghostId, {
+        type: 'node-request', method: 'usage', params: { harnessId }, timeoutMs: 26000,
+      });
+      return response.ok && isDataOwnerBroadcastScopeCurrent(owner) ? response.result : null;
+    },
     log,
   });
   // /secrets 只写通道(network user 与 node.secretBindings 凭证一律由意识

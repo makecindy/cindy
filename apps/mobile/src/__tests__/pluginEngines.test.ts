@@ -17,6 +17,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import { sharedTaskHostPeer } from '@cindy/device-link';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { createMobileMakerTransport, type RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { applyPluginEnginePick, buildRemoteCreateSessionOptions, type NewSessionDraft } from '@/session/newSession';
@@ -65,6 +66,17 @@ describe('reading the engines of the controlled computer', () => {
     })]);
   });
 
+  it('reads usage from the named computer only and keeps it out of shared tasks', async () => {
+    const data = { updatedAt: 1234, balances: [{ currency: 'USD', amount: '0' }] };
+    const invoke = vi.fn(async () => ({ ...data, identity: 'private' })) as unknown as RemoteInvoke;
+    const maker = createMobileMakerTransport({ deviceId: 'desk', invoke });
+    expect(await maker.getPluginEngineUsage('demo:engine')).toEqual(data);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('desk', 'maker:get-plugin-engine-usage', ['demo:engine']);
+    const guest = createMobileMakerTransport({ deviceId: sharedTaskHostPeer('task', 'desk'), invoke });
+    expect(await guest.getPluginEngineUsage('demo:engine')).toBeNull();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   it('treats an older computer without the channel as having no engines', async () => {
     const invoke = vi.fn(async () => {
       throw Object.assign(new Error('[CHANNEL_NOT_ALLOWED] maker:list-plugin-engines'), { code: 'CHANNEL_NOT_ALLOWED' });
@@ -72,6 +84,7 @@ describe('reading the engines of the controlled computer', () => {
     const maker = createMobileMakerTransport({ deviceId: 'old-desk', invoke });
     await expect(maker.listPluginEngines()).resolves.toEqual([]);
     await expect(maker.refreshPluginEngines()).resolves.toBeUndefined();
+    await expect(maker.getPluginEngineUsage("demo:engine")).resolves.toBeNull();
   });
 
   // The catalogue may contain private model names and plugin metadata. An old account's

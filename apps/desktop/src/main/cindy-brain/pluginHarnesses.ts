@@ -17,13 +17,21 @@
  * getGhost 同一身份,不会把同名的组织实例与 root 实例混为一谈;实例键不含 `:`,所以
  * `key = ${ghostId}:${harnessId}` 无歧义。
  */
-import { ghostHarnessText, storedGhostHarnessAvailability, type GhostHarnessMode, type GhostHarnessModel } from '@cindy/plugin-protocol';
+import {
+  ghostHarnessText,
+  parseGhostHarnessUsage,
+  storedGhostHarnessAvailability,
+  type GhostHarnessMode,
+  type GhostHarnessModel,
+  type GhostHarnessUsage,
+} from '@cindy/plugin-protocol';
 
 import { approvedGhostHarnesses, type InstalledGhost } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { NodeWorkerProcess } from './nodeRuntimeBroker.js';
 
 export interface PluginHarness {
+  reportsUsage?: true;
   /** `${ghostId}:${harnessId}`,任务记录里的稳定标识。 */
   key: string;
   ghostId: string;
@@ -67,10 +75,13 @@ export interface PluginHarnessRegistryDeps {
    * 逻辑页不在线时返回 false。缺省 = 不支持刷新。
    */
   requestRefresh?(ghostId: string): boolean;
+  /** Call only the approved plugin's main worker, with a fixed method and harness id. */
+  readUsage?(ghostId: string, harnessId: string): Promise<unknown>;
   log?: { warn(message: string, meta?: Record<string, unknown>): void };
 }
 
 export interface ReconcilablePluginHarnessRegistry extends PluginHarnessRegistry {
+  readUsage(key: string): Promise<GhostHarnessUsage | null>;
   /** 重算列表;内容变化才通知。`ghosts` 缺省时现读 deps.listGhosts()。 */
   reconcile(ghosts?: InstalledGhost[]): void;
   /** 丢弃缓存(不通知);下一次 list 现算。 */
@@ -113,6 +124,7 @@ function projectHarnesses(deps: PluginHarnessRegistryDeps, ghosts: InstalledGhos
           }
           : { state: 'unknown' },
         ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
+        ...(status?.reportsUsage && ghost.manifest.node?.protocol === 'json-rpc-stdio' ? { reportsUsage: true } : {}),
         ...(status?.models ? { models: status.models.map((model) => ({ ...model, ...(model.efforts ? { efforts: [...model.efforts] } : {}) })) } : {}),
         ...(status?.modes ? { modes: [...status.modes] } : {}),
         ...(status?.defaultMode ? { defaultMode: status.defaultMode } : {}),
@@ -156,6 +168,20 @@ export function createPluginHarnessRegistry(deps: PluginHarnessRegistryDeps): Re
         listeners.delete(listener);
       };
     },
+    async readUsage(key) {
+      const read = deps.readUsage;
+      const separator = key.lastIndexOf(':');
+      if (!read || separator < 1 || key.length > 256) return null;
+      const ghostId = key.slice(0, separator);
+      const find = () => {
+        const ghost = deps.listGhosts().find(item => installedGhostStoragePart(item) === ghostId);
+        return ghost && projectHarnesses(deps, [ghost]).find(item => item.key === key && item.reportsUsage);
+      };
+      const harness = find();
+      if (!harness) return null;
+      const raw = await read(ghostId, harness.harnessId);
+      return find() ? parseGhostHarnessUsage(raw) ?? null : null;
+    },
     async spawn(key) {
       // 现算而不是读缓存:停用、撤权或刚发布的不可用状态都必须在启动这一刻生效。
       const fresh = compute();
@@ -190,6 +216,7 @@ const registry = createPluginHarnessRegistry({
   readAvailability: (ghostId) => registryDeps.readAvailability(ghostId),
   uiLocale: () => registryDeps.uiLocale(),
   spawn: (ghostId, harnessId) => registryDeps.spawn(ghostId, harnessId),
+  readUsage: async (ghostId, harnessId) => registryDeps.readUsage?.(ghostId, harnessId),
   log: { warn: (message, meta) => registryDeps.log?.warn(message, meta) },
 });
 
@@ -205,6 +232,10 @@ export function configurePluginHarnessRegistry(deps: PluginHarnessRegistryDeps):
 /** 花名册广播、语言切换与可用状态发布后调用;内容不变时不通知。 */
 export function reconcilePluginHarnesses(ghosts?: InstalledGhost[]): void {
   registry.reconcile(ghosts);
+}
+
+export function readPluginHarnessUsage(key: string): Promise<GhostHarnessUsage | null> {
+  return registry.readUsage(key);
 }
 
 export function getPluginHarnessRegistry(): PluginHarnessRegistry {

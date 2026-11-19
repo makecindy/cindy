@@ -4,12 +4,15 @@ export default {
   name: 'context-capacity',
   entry: './context-capacity-fixture.tsx',
   viewport: { width: 560, height: 650 },
-  real: 'ContextCapacityRing, ContextWindowBudgetChip, real Popover and context/pricing hooks',
+  real: 'PluginEngineUsageChip, QuotaHoverCard, ContextCapacityRing, ContextWindowBudgetChip and their real popovers',
   notCovered: 'Real model settings, remote writes and compaction. Uses fixture host data.',
   stubs: {
     'src/renderer/lib/modelDefinitions': 'export const getModelsForVendor = () => [];',
   },
   cases: {
+    'plugin-quotas': { about: 'ACP account quotas beside its reported context window', data: { usage: 'quotas' }, viewport: { width: 320, height: 420 } },
+    'plugin-balance': { about: 'Zero available balance', data: { usage: 'balance' } },
+    'plugin-missing': { about: 'Engine provides neither account nor context data', data: { usage: 'missing' } },
     default: { about: 'One ring opens usage, manual compaction and window choices' },
     high: { about: 'Context nearly full', data: { high: true } },
     codex: { about: 'Native Codex details above window choices', data: { codex: true } },
@@ -28,9 +31,32 @@ export default {
     },
   },
   async ready(page) {
-    await page.locator('[data-context-window-budget-chip]').waitFor();
+    await page.getByTestId('context-footer').waitFor();
   },
   async check(page, ui) {
+    if (ui.data.usage) {
+      const footer = page.getByTestId('context-footer');
+      assert.equal(await footer.locator('[data-context-window-budget-chip]').count(), 0);
+      if (ui.data.usage === 'missing') {
+        assert.equal(await footer.innerText(), '—');
+        return;
+      }
+      const trigger = footer.getByRole('button');
+      await trigger.waitFor();
+      assert.match(await footer.innerText(), /12%/);
+      assert.match(await trigger.innerText(), ui.data.usage === 'balance' ? /CNY\s*0[.,]00/ : /Claude\/GPT[\s\S]*0%/);
+      await ui.capture('entry', { locator: footer });
+      await trigger.hover();
+      const card = page.getByTestId('quota-hover-card');
+      await card.waitFor();
+      if (ui.data.usage === 'quotas') {
+        assert.match(await card.innerText(), /Gemini/);
+        assert.match(await card.innerText(), /Archive/);
+        assert.doesNotMatch(await card.innerText(), /91%/);
+      }
+      await ui.capture('details', { locator: card });
+      return;
+    }
     const ring = page.locator('[data-context-window-budget-chip]');
     assert.equal(await ring.textContent(), ui.data.high ? '92%' : '12%');
     assert.equal(await page.getByRole('radiogroup').count(), 0);

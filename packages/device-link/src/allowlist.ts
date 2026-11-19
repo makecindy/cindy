@@ -288,6 +288,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // CHANNEL_NOT_ALLOWED → 控制端按「没有插件引擎」隐藏入口。
   'maker:list-plugin-engines',
   'maker:refresh-plugin-engines',
+  'maker:get-plugin-engine-usage',
   // device-link 远程草稿镜像(只读):控制端为被控设备新建项目草稿时,读被控端**当前 New Maker
   // 草稿**在该 vendor 的完整选择(model/effort/fast/permission/source),1:1 seed 控制端草稿。
   // 数据真相在被控端(其 renderer 草稿),无 sender 依赖、无本机副作用 → 准入。老被控端无此 handler

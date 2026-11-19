@@ -144,6 +144,8 @@ export function ghostHarnessText(
 /* ── Runtime availability (`PUT /harnesses`) ─────────────────────────────── */
 
 export interface GhostHarnessAvailability {
+  /** The main JSON-RPC worker can answer usage({harnessId}) for this engine. */
+  reportsUsage?: true;
   id: string;
   available: boolean;
   /** Short machine-readable slug, e.g. `not-installed`. */
@@ -171,8 +173,49 @@ export interface GhostHarnessAvailability {
 
 /** Cindy permission modes an agent's own mode can stand for (Full access is always Cindy's). */
 export const GHOST_HARNESS_MODES = ['default', 'acceptEdits', 'auto', 'plan'] as const;
+
 export type GhostHarnessMode = (typeof GHOST_HARNESS_MODES)[number];
 const HARNESS_MODES_MAX = 16;
+
+/** A private account snapshot returned on demand by the plugin worker. */
+export interface GhostHarnessUsage {
+  /** Unix epoch milliseconds at which the source was checked. */
+  updatedAt: number;
+  windows?: { label: string; remainingPercent: number; resetsAt?: number }[];
+  balances?: { currency: string; amount: string }[];
+}
+
+function validTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value <= 8.64e15;
+}
+
+/** Only normalized display values may cross the worker, IPC or device-link boundary. */
+export function parseGhostHarnessUsage(raw: unknown): GhostHarnessUsage | undefined {
+  if (!isRecord(raw) || !validTimestamp(raw.updatedAt)) return undefined;
+  const usage: GhostHarnessUsage = { updatedAt: raw.updatedAt };
+  if (raw.windows !== undefined) {
+    if (!Array.isArray(raw.windows) || raw.windows.length > 24) return undefined;
+    usage.windows = [];
+    for (const row of raw.windows) {
+      if (!isRecord(row) || !plainText(row.label, 120)
+        || typeof row.remainingPercent !== 'number' || !Number.isFinite(row.remainingPercent)
+        || row.remainingPercent < 0 || row.remainingPercent > 100
+        || (row.resetsAt !== undefined && !validTimestamp(row.resetsAt))) return undefined;
+      usage.windows.push({ label: row.label, remainingPercent: row.remainingPercent,
+        ...(row.resetsAt !== undefined ? { resetsAt: row.resetsAt as number } : {}) });
+    }
+  }
+  if (raw.balances !== undefined) {
+    if (!Array.isArray(raw.balances) || raw.balances.length > 8) return undefined;
+    usage.balances = [];
+    for (const row of raw.balances) {
+      if (!isRecord(row) || typeof row.currency !== 'string' || !/^[A-Z]{3}$/.test(row.currency)
+        || typeof row.amount !== 'string' || !/^-?\d{1,15}(?:\.\d{1,12})?$/.test(row.amount)) return undefined;
+      usage.balances.push({ currency: row.currency, amount: row.amount });
+    }
+  }
+  return usage.windows?.length || usage.balances?.length ? usage : undefined;
+}
 
 export interface GhostHarnessModel {
   id: string;
@@ -252,6 +295,7 @@ export function parseGhostHarnessAvailability(
     if (!modes.ok) return { ok: false, reason: `Harness ${id} ${modes.reason}` };
     harnesses.push({
       id,
+      ...(item.available && item.reportsUsage === true ? { reportsUsage: true } : {}),
       available: item.available as boolean,
       ...(item.reason !== undefined ? { reason: item.reason as string } : {}),
       ...(item.message !== undefined ? { message: item.message as string } : {}),

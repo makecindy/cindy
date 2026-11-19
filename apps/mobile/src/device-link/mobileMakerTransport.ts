@@ -1,3 +1,4 @@
+import { parseGhostHarnessUsage, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { ComposerSlashCommand } from '@cindy/maker-shared/composer-palette';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import {
@@ -506,6 +507,7 @@ export interface MobileMakerTransport {
    * 返回空列表：手机按「没有插件引擎」隐藏入口。
    */
   listPluginEngines(): Promise<MobilePluginEngine[]>;
+  getPluginEngineUsage(key: string): Promise<GhostHarnessUsage | null>;
   /** 请被控电脑的引擎插件重新上报模型(那台按插件冷却)；不回结果，失败忽略。 */
   refreshPluginEngines(): Promise<void>;
   getSessionTree(sessionId: string): Promise<unknown | null>;
@@ -1249,6 +1251,11 @@ export function createMobileMakerTransport({
       call<unknown>("maker:list-plugin-engines", [])
         .then(normalizePluginEngines)
         .catch(() => []),
+    getPluginEngineUsage: async key => {
+      if (isSharedTaskPeer(deviceId) || !isCurrent()) return null;
+      const raw = await call<unknown>("maker:get-plugin-engine-usage", [key]).catch(() => null);
+      return isCurrent() ? parseGhostHarnessUsage(raw) ?? null : null;
+    },
     refreshPluginEngines: () =>
       call<unknown>("maker:refresh-plugin-engines", []).then(() => undefined, () => undefined),
     // Pi 原生分支树通过 device-link 复用桌面端 runtime；移动会话页只在当前会话
