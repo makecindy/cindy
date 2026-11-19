@@ -223,7 +223,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       paragraph = false;
       continue;
     }
-    if (/^ {0,3}<(?:\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])|!)/.test(line)) html = true;
+    if (/^ {0,3}<(?:\/?(?:address|article|aside|blockquote|body|caption|center|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|legend|li|link|main|menu|nav|ol|p|pre|script|section|summary|style|table|tbody|td|tfoot|th|thead|title|tr|track|textarea|ul)(?=[\s/>])|!)/i.test(line)) html = true;
     if (html) continue;
     const definition = !paragraph && listContentIndents.length === 0
       ? readMarkdownReferenceDefinition(lines, index) : null;

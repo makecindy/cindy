@@ -2623,6 +2623,22 @@ describe('reference definition boundaries', () => {
     expect(inlines(paragraph).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
   });
 
+  // #9440 / review 4624662216: inline HTML does not interrupt an open
+  // paragraph. Unit production entry; prior HTML cases used block tags.
+  it('keeps definitions visible after inline HTML but excludes block HTML', () => {
+    const inline = '[site][s]\n\ntext\n<span>inline</span>\n# heading\n[s]: https://example.com/';
+    expect(inlines(inline).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    expect(mobileMarkdownPreviewText(inline)).not.toContain('[s]:');
+    const block = '[site][s]\n\ntext\n<pre>\n[s]: https://wrong.example/\n</pre>\n# heading';
+    expect(inlines(block).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+    let result = parseMobileMarkdownIncremental('');
+    for (let end = 1; end <= inline.length; end++) {
+      const value = inline.slice(0, end);
+      result = parseMobileMarkdownIncremental(value, result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(value).blocks);
+    }
+  });
+
   it('does not let nested definitions change root references', () => {
     const source = '[site][s]\n\n- parent\n\n  [s]: https://wrong.example/\n\n[s]: https://example.com/';
     expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
