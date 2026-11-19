@@ -130,7 +130,7 @@ export function DrawerUsage({ onOpen }: { onOpen(): void }) {
           {staleNotice && <Text style={s.stale} numberOfLines={1}>{staleNotice}</Text>}
           {accounts.length > preview.length && <Text style={s.meta}>+{accounts.length - preview.length}</Text>}
         </View></View>
-      <UsageQuotaColumns sources={preview} strings={snapshot.strings} compact stale={!!staleNotice} />
+      <UsageQuotaColumns sources={preview} strings={snapshot.strings} compact stale={!!staleNotice} palette="panel" />
     </View> : null}
     {day && state?.kind === 'snapshot' ? <View style={preview.length > 0 ? s.usageDivider : undefined}>
       <View style={s.between}>

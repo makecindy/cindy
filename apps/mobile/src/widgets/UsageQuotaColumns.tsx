@@ -27,15 +27,19 @@ function resetLabel(source: Source, now: number, strings: Strings, compact: bool
   return !compact && duration && strings.resetsIn ? strings.resetsIn.replace('{{duration}}', duration) : duration;
 }
 
-function QuotaTube({ source, small, stale }: { source: Source; small: boolean; stale: boolean }) {
-  const { colors } = useTheme();
+function QuotaTube({ source, small, stale, panel }: { source: Source; small: boolean; stale: boolean; panel: boolean }) {
+  const { colors, mode } = useTheme();
   const id = useId().replace(/[^a-zA-Z0-9]/g, '');
   const width = small ? 22 : 30, height = small ? 46 : 74;
   const inset = 3, innerHeight = height - 2 * inset, innerWidth = width - 2 * inset;
   const corner = Math.min(13, width / 2);
   const fill = Math.min(1, Math.max(0, source.fill));
   const liquid = fill === 0 ? 0 : Math.max(3, innerHeight * fill);
-  const tint = source.level === 'error' ? colors.quotaBarCrit : source.level === 'warn' ? colors.quotaBarWarn : colors.quotaWidgetPlenty;
+  const alert = source.level === 'error' ? colors.quotaBarCrit : source.level === 'warn' ? colors.quotaBarWarn : null;
+  // With plenty left the widget's liquid is teal. The menu bar panel's is its ink at an
+  // opacity, so the well shows through and only a low level brings color.
+  const tint = alert ?? (panel ? colors.textPrimary : colors.quotaWidgetPlenty);
+  const tintOpacity = alert || !panel ? 1 : mode === 'dark' ? 0.72 : 0.46;
   return <Svg width={width} height={height} accessible={false} opacity={stale ? 0.45 : 1}>
     <Defs>
       <LinearGradient id={'well' + id} x1="0%" y1="0%" x2="0%" y2="100%">
@@ -49,14 +53,17 @@ function QuotaTube({ source, small, stale }: { source: Source; small: boolean; s
     <G clipPath={'url(#clip' + id + ')'}>
       {source.reserve && <Path d={Array.from({ length: Math.ceil((height + width) / 7) }, (_, i) =>
         `M${i * 7 - height},${height} l${height},-${height}`).join(' ')} stroke={colors.borderTranslucent} strokeWidth={iconStroke.regular} />}
-      {liquid > 0 && <Rect x={inset} y={height - inset - liquid} width={innerWidth} height={liquid + 4} rx={Math.min(4, liquid / 2)} fill={tint} />}
+      {liquid > 0 && <Rect x={inset} y={height - inset - liquid} width={innerWidth} height={liquid + 4} rx={Math.min(4, liquid / 2)} fill={tint} fillOpacity={tintOpacity} />}
     </G>
   </Svg>;
 }
 
-/** `stale` dims every tube: the whole snapshot is old, not only the sources the computer marked. */
-export function UsageQuotaColumns({ sources, strings, compact = false, stale = false }: {
-  sources: Source[]; strings: Strings; compact?: boolean; stale?: boolean;
+/**
+ * `stale` dims every tube: the whole snapshot is old, not only the sources the computer marked.
+ * `palette` picks whose colors the tubes wear: the Home Screen widget's or the menu bar panel's.
+ */
+export function UsageQuotaColumns({ sources, strings, compact = false, stale = false, palette = 'widget' }: {
+  sources: Source[]; strings: Strings; compact?: boolean; stale?: boolean; palette?: 'widget' | 'panel';
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -88,7 +95,7 @@ export function UsageQuotaColumns({ sources, strings, compact = false, stale = f
           {value}{unit && !source.reserve && <Text style={s.unit}>{unit}</Text>}
         </Text>
         {hasCreditUnit && <Text numberOfLines={1} style={s.unit}>{source.reserve ? unit : ' '}</Text>}
-        <QuotaTube source={source} small={compact} stale={stale || !!source.stale} />
+        <QuotaTube source={source} small={compact} stale={stale || !!source.stale} panel={palette === 'panel'} />
         <View style={[s.identity, compact && s.stackedIdentity]}>
           <MobileProviderMark name={source.monogram || source.name} color={colors.textPrimary}
             logoKind={source.logo ? providerMarks[source.logo] : undefined} providerId={source.logo === 'kimi' ? 'kimi-coding' : undefined} />

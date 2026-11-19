@@ -14,8 +14,11 @@ vi.mock('@/widgets/usageWidgetSync', () => ({
 }));
 vi.mock('@/session/MobileProviderMark', () => ({ MobileProviderMark: () => null }));
 vi.mock('react-native-svg', () => ({
-  default: ({ opacity }: { opacity?: number }) => <i data-tube-opacity={opacity} />, Defs: () => null, ClipPath: () => null, Rect: () => null, Path: () => null,
-  LinearGradient: () => null, G: () => null, Stop: () => null,
+  default: ({ opacity, children }: { opacity?: number; children?: ReactNode }) => <i data-tube-opacity={opacity}>{children}</i>,
+  G: ({ children }: { children?: ReactNode }) => children,
+  // The well and the liquid are both Rects; the liquid is drawn last.
+  Rect: ({ fill, fillOpacity }: { fill?: string; fillOpacity?: number }) => <b data-liquid={fill} data-liquid-opacity={fillOpacity} />,
+  Defs: () => null, ClipPath: () => null, Path: () => null, LinearGradient: () => null, Stop: () => null,
 }));
 vi.mock('lucide-react-native', () => ({ ChevronRight: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }) }));
@@ -140,5 +143,26 @@ describe('model shares', () => {
     const { text, fills } = page(['A', 'B', 'C'], [50, 40, 30, 20]);
     expect(new Set(fills)).toEqual(new Set(['taskTagTeal', 'taskTagPink', 'taskTagPurple', 'taskTagGray']));
     expect(text).toContain('14% · 20');
+  });
+});
+
+// Rendered drawer card and details page (unit): which palette the tubes wear is decided by the
+// surface, so it is checked where each surface asks for it.
+describe('tube liquid by surface', () => {
+  function liquids(level: Source['level']) {
+    const snapshot = snapshotOf([{ ...subscription, level }]);
+    sync.state = { kind: 'snapshot', snapshot, deviceName: 'Studio' };
+    return [<DrawerUsage onOpen={() => {}} />, <UsageDashboard snapshot={snapshot} />].map(view => {
+      const rects = new DOMParser().parseFromString(renderToStaticMarkup(view), 'text/html').querySelectorAll('[data-liquid]');
+      const liquid = rects[rects.length - 1]!;
+      return [liquid.getAttribute('data-liquid'), liquid.getAttribute('data-liquid-opacity')];
+    });
+  }
+  it('keeps the drawer neutral like the menu bar panel and the details page teal like the widget', () => {
+    expect(liquids('normal')).toEqual([['textPrimary', '0.46'], ['quotaWidgetPlenty', '1']]);
+  });
+  it('shows a low level in the quota color on both', () => {
+    expect(liquids('warn')).toEqual([['quotaBarWarn', '1'], ['quotaBarWarn', '1']]);
+    expect(liquids('error')).toEqual([['quotaBarCrit', '1'], ['quotaBarCrit', '1']]);
   });
 });
