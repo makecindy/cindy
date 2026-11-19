@@ -164,8 +164,25 @@ export default {
       await ui.capture('sidebar-collapsed');
     }
     const scroll = page.locator('[data-scroll-container]').first();
-    await scroll.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    const box = await scroll.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, Math.min(box.y + box.height / 2, ui.viewport.height - 150));
+    // Use actual user scroll intent; assigning scrollTop can be reconciled back
+    // to MessageStream's saved viewport anchor before the next screenshot.
+    await page.mouse.wheel(0, 10000);
+    console.log('TASK_SCROLL', JSON.stringify(await scroll.evaluate(el => {
+      const pre = el.querySelector('pre').getBoundingClientRect();
+      return { top: el.scrollTop, height: el.clientHeight, total: el.scrollHeight, codeTop: pre.top, codeBottom: pre.bottom };
+    })));
+    await page.waitForFunction(() => {
+      const pane = document.querySelector('[data-task-pane]');
+      const scroll = pane.querySelector('[data-scroll-container]');
+      const pre = scroll.querySelector('pre').getBoundingClientRect();
+      const composer = pane.querySelector('[data-width-composer]').getBoundingClientRect();
+      return pre.top < composer.top && pre.bottom > scroll.getBoundingClientRect().top
+        && (scroll.scrollHeight <= scroll.clientHeight + 1 || scroll.scrollTop > 0);
+    });
     await ui.capture('code-and-composer');
-    await scroll.evaluate(el => { el.scrollTop = 0; });
+    await page.mouse.wheel(0, -10000);
+    await page.waitForFunction(() => document.querySelector('[data-scroll-container]').scrollTop < 1);
   },
 };
