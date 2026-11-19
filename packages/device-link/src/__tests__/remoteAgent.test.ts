@@ -21,6 +21,27 @@ import {
 const runId = '0f9c4a2e-6d1b-4c3a-9e8f-1a2b3c4d5e6f';
 const otherId = '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d';
 
+describe('shared image request', () => {
+  const request = {
+    op: 'shared-image', action: 'start', requestId: runId, providerId: 'openai',
+    model: 'openai/gpt-image-2', prompt: 'A blue square', size: '1024x1024',
+  };
+
+  it('projects only text-to-image input fields', () => {
+    expect(parseRemoteAgentRequest({ ...request, imagePaths: ['/owner/private.png'], nativeParameters: { n: 20 } }))
+      .toEqual(request);
+    expect(() => parseRemoteAgentRequest({ ...request, prompt: 'a'.repeat(32769) })).toThrow('REMOTE_AGENT_INVALID');
+    expect(() => parseRemoteAgentRequest({ ...request, reshareKey: 'a'.repeat(32) })).toThrow('REMOTE_AGENT_INVALID');
+  });
+
+  it('requires a request id and a nonnegative offset to read image bytes', () => {
+    const read = { op: 'shared-image', action: 'read', requestId: runId, offset: 0 };
+    expect(parseRemoteAgentRequest(read)).toEqual(read);
+    expect(() => parseRemoteAgentRequest({ ...read, offset: -1 })).toThrow('REMOTE_AGENT_INVALID');
+    expect(() => parseRemoteAgentRequest({ ...read, requestId: '../owner' })).toThrow('REMOTE_AGENT_INVALID');
+  });
+});
+
 // Unit: direct-switch's optional generation must survive the production parser
 // so an old startup cannot authorize recovery of a replacement allocation.
 it('preserves optional direct-switch generations and accepts legacy requests', () => {
