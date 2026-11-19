@@ -1,7 +1,9 @@
 import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import { makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { clearAllSessionProviders } from '../maker-host/session-provider-store.js';
+import { clearAllSessionRuntimeAxes } from '../maker-host/session-effort-store.js';
 import {
   connectedProvidersForAgent,
   isModelSelectableForNewRoute,
@@ -413,6 +415,30 @@ export function getPendingSessionRuntimeMutation(
   return states.get(sessionId)?.pending ?? null;
 }
 
+/**
+ * A task runtime starts on its accepted, not deferred runtime mutation (an automatic route fallback,
+ * a change applied to a live runtime) rather than the stored route; the provider stays the caller's
+ * when a provider group decides the source. Called before the start admission (the desktop's
+ * bootstrapSession; the Node Host's runtime starts, which pass false: it refuses provider-group tasks).
+ * Returns the task's accepted built-in route override, which the start then reads again: a
+ * started runtime keeps the saved provider baseline and takes its effort and Fast axes from it.
+ */
+export function applySessionRuntimeOverrideForStart(
+  o: { id?: string; agentKind: EngineKind; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
+  groupDecidesSource: boolean,
+): SessionRuntimeProfile | null {
+  if (o.agentKind === 'acp') return null;
+  const runtimeOverride =
+    typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
+  if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {
+    o.model = runtimeOverride.model;
+    if (!groupDecidesSource) o.providerId = runtimeOverride.providerId;
+    o.effort = runtimeOverride.effort ?? undefined;
+    o.fastMode = runtimeOverride.fastMode;
+  }
+  return runtimeOverride;
+}
+
 export function getSessionRuntimeControlSnapshot(sessionId: string): SessionRuntimeControlSnapshot {
   const state = states.get(sessionId);
   if (!state) {
@@ -440,6 +466,17 @@ export function clearSessionRuntimeControlState(sessionId: string): void {
 export function clearAllSessionRuntimeControlStates(): void {
   ownerEpoch += 1;
   states.clear();
+}
+
+/**
+ * The owner-scoped runtime selection a committed account change drops (the app session commit
+ * boundary): every task's provider, its runtime axes, and the runtime control states (which also
+ * advance the owner epoch). The desktop's boundary hook and the Node Host's both call it.
+ */
+export function clearOwnerScopedSessionRuntimeSelection(): void {
+  clearAllSessionProviders();
+  clearAllSessionRuntimeAxes();
+  clearAllSessionRuntimeControlStates();
 }
 
 export function captureSessionRuntimeControlOwnerEpoch(): string {

@@ -112,5 +112,12 @@
     "quotaResetIn": "Se restablece en {{duration}}",
     "quotaAverageHint": "Cuota semanal · Mismo peso por cuenta",
     "quotaResetHint": "Al ritmo actual, puede quedar cuota al restablecerse: amarillo si faltan hasta 24 horas y rojo si faltan hasta 6 horas."
+  },
+  "pluginEngines": {
+    "genericName": "Motor de complemento",
+    "defaultModel": "Modelo predeterminado",
+    "unavailable": "{{engine}} no está disponible",
+    "unavailableWithHint": "{{engine}} no está disponible: {{hint}}",
+    "worktreeUnsupported": "Los motores de complementos aún no pueden iniciar tareas en un worktree. Desactiva worktree para enviar."
   }
 }

@@ -6,6 +6,7 @@ import { runPluginUsageTransaction } from './pluginUsageTx.js';
 import { runSessionImportTransaction } from './sessionImportTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
+import { writeModelUsage, type ModelUsageWrite } from './modelUsageTx.js';
 import { recordPiUsage } from './piUsageTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
 import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
@@ -75,6 +76,8 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const txArgs = payload.args;
 
   switch (name) {
+    case 'usage.recordModelUsage':
+      return db.transaction(() => writeModelUsage(db, txArgs as ModelUsageWrite))();
     case 'usage.recordPiUsage':
       return recordPiUsage(db, txArgs as import('./piUsageTx.js').PiUsageWrite[]);
     case 'chatCache.execute':
@@ -902,7 +905,7 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
       WHERE l.bot_id = ? AND l.role = 'group' AND l.route_key = ? AND l.archived_at IS NULL
         AND s.source = 'bot' AND s.status = 'active'
       LIMIT 1`).get(botId, routeKey) as { sessionId: string; workingDir: string | null } | undefined;
-    const replace = existing && p.replaceOtherWorkingDir === true && existing.workingDir !== (s.workingDir ?? null);
+    const replace = existing && existing.sessionId === p.replaceSessionId;
     if (existing && !replace) return { sessionId: existing.sessionId, created: false };
     if (existing) {
       // The group's project folder changed on this computer: the lane moves with it.

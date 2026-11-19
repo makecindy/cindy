@@ -1801,7 +1801,7 @@ describe('花名册 / ghost_list 过滤', () => {
     await expect(makeDeps().getAwakeGhost('missing')).resolves.toEqual({
       ok: false,
       errorCode: 'GHOST_NOT_FOUND',
-      message: t('newChat.pluginSetup.targetNotFound'),
+      message: expect.stringContaining('Plugins settings link for the task computer'),
     });
   });
 
@@ -2046,7 +2046,7 @@ describe('ghost_call 兜底拒绝', () => {
     ).resolves.toEqual({
       ok: false,
       errorCode: 'GHOST_NOT_FOUND',
-      message: t('newChat.pluginSetup.targetNotFound'),
+      message: expect.stringContaining('Plugins settings link for the task computer'),
     });
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -3646,6 +3646,7 @@ describe('market install live authority', () => {
   ) {
     const ghost = { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true };
     const market = {
+      lookup: vi.fn(async () => ({ items: [{ pluginId: 'p1', ghostId: 'mail-suite', namespace: null, releaseId: 'r1', installState: 'not-installed' }], unavailableCustomSourceNames: [] })),
       snapshot: vi.fn(async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       query: vi.fn(async () => ({ items: [], nextCursor: null, counts: null, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       detail: vi.fn(async () => ({ ghostId: 'mail-suite', releaseId: 'r1', manifest: ghost.manifest })),
@@ -3654,6 +3655,24 @@ describe('market install live authority', () => {
     const deps = makeDeps(agentKind, 's1', 's1-instance', {}, market as unknown as CindyGhostsHostDeps['pluginMarket'], requestHostPermission);
     return { deps, market };
   }
+
+  // A missing PR plugin used to end the task with only a generic not-found error.
+  it('guides missing-plugin discovery without eager market I/O from info, manual or call', async () => {
+    const { deps, market } = marketHarness();
+    for (const result of [
+      await deps.getAwakeGhost('mail-suite', null),
+      await deps.readGhostManual({ ghostId: 'mail-suite', namespace: null }),
+      await deps.callGhostTool({ ghostId: 'mail-suite', namespace: null, tool: 'pr_card', args: {} }),
+    ]) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_NOT_FOUND',
+        message: expect.stringContaining('match the exact identity {"ghost_id":"mail-suite","namespace":null}') });
+    }
+    expect(market.lookup).not.toHaveBeenCalled();
+    expect(market.query).not.toHaveBeenCalled();
+    expect(market.install).not.toHaveBeenCalled();
+    const mismatch = await deps.getAwakeGhost('mail-suite', 'acme');
+    expect(mismatch).toMatchObject({ ok: false, message: expect.stringContaining('{"ghost_id":"mail-suite","namespace":"acme"}') });
+  });
 
   it.each(['claude-code', 'codex', 'pi'] as const)('uses the live %s task and does not connect on install', async (kind) => {
     liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', isCurrent: () => true });

@@ -206,6 +206,8 @@ v3 直接用顶层字段声明插件贡献项与自主 Host 能力，不再有 `
 `agent`、`panel`、`mainView`、`taskView`、`card`、`subscribe`、`network`、`node`、`preview`、
 `browserExtension`、`skill`、`systemPrompt`；布尔能力写成字面量 `true`：`notify`、`badge`、`confirm`、`fs`、
 `library`、`deviceSync`、`sessionContext`、`pick`、`workspace`、`liveScreen`(需同时声明 `node`,见 [§4.22.1](plugin-task-view.md#4221-在手机上查看与操作设备画面livescreen-能力))。不用的字段直接省略。
+`harnesses` 声明插件提供的任务执行引擎(ACP Agent),每项指向 `node.entries` 里的一个入口,见
+[§4.6.4](plugin-harnesses.md)。
 `deviceSync` 的声明与调用约定见 [§4.10.2 资料同步](plugin-files-and-library.md#4102-同账号电脑间的插件资料同步)。
 邮件插件声明 `mail: true`，调用 Cindy 内置 `cindyMail.register(adapter)`
 （version 1），不生成卡片 HTML、不打包公共流程；纯邮件插件不需要 `card`。
@@ -423,14 +425,15 @@ UI 保留。检查、字段绑定、保存状态和恢复都在主机
 
 ### 决策与重排声明
 
-`cindy.models` 是可选的模型能力类目，动作支持 `decisions` 和 `rerank`：
+`cindy.models` 是可选的模型能力类目，支持 `decisions`、`rerank` 和 `media_request`：
 
 ```json
-{ "cindy": { "models": ["decisions", "rerank"] } }
+{ "cindy": { "models": ["media_request"] } }
 ```
 
 只声明实际需要的动作。主机会展示模型额度使用说明，未声明的调用和模型查询会被拒绝。
-调用协议见 `plugin-runtime.md` 的「决策与重排模型」。使用此能力时通过
+调用协议见 `plugin-runtime.md` 的「决策与重排模型」和 [§4.0.4 媒体直调](plugin-media.md)。新增
+`media_request` 要走现有安装或更新审批。使用此能力时通过
 `minCindyVersion` 声明已验证的最低版本；运行时仍须处理旧版不支持响应，不能把权限拒绝
 或账号失效当成不支持而绕过。
 

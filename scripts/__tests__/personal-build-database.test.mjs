@@ -143,6 +143,11 @@ test('real SQLite migration and process failure preserve backup; repaired proces
       },
     }),/fixture startup exit 7/);
     assert.equal(store.read().phase,'blocked');assert.deepEqual(phases,['database-preflight','database-applying','database-applied','launching','failed']);
+    assert.equal(action('verify-applied').ready,true);
+    const originalId=plan.candidate.id;
+    plan.candidate.id='different';
+    assert.throws(()=>action('verify-applied'),/receipt does not match/);
+    plan.candidate.id=originalId;
     const migrated=new Database(file,{readonly:true});assert.equal(m.checkMigrationCompatibility(migrated,newDir,file).compatible,true);assert.equal(migrated.prepare('SELECT count(*) n FROM sessions').get().n,1);migrated.close();
     const backup=path.join(plan.backupDir,'cindy-test.db'),saved=new Database(backup,{readonly:true});assert.equal(m.checkMigrationCompatibility(saved,oldDir,backup).compatible,true);saved.close();
     assert.throws(()=>store.reconcileRunning(release,{healthy:true}),/current database/);

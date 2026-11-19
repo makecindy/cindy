@@ -6,6 +6,7 @@ import {
   installedGhostStoragePart,
   resolvePluginInstanceQuery,
 } from '../../../../shared/pluginIdentity';
+import { uniquePluginInstallCandidate } from '../../../../shared/pluginMarket';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
@@ -89,7 +90,7 @@ export async function makePluginUsableInPlace(target: PluginInPlaceTarget): Prom
         const item = marketItemForInstalledGhost(market.items, ghost);
         if (target.requireRemoteTaskView && !item && (
           market.unavailableReason || market.organizationAccessError || market.unavailableCustomSourceNames?.length
-        )) return { status: 'failed', messageKey: 'settings.ghosts.market.errors.generic' };
+        )) return { status: 'page', route: installedRoute(ghost) };
         const detail = item?.installState === 'update-available'
           ? await window.electronAPI.pluginMarket.detail(item.pluginId)
           : null;
@@ -135,25 +136,15 @@ export async function makePluginUsableInPlace(target: PluginInPlaceTarget): Prom
 
   try {
     const market = await window.electronAPI.pluginMarket.lookup([target.ghostId]);
-    const matches = market.items.filter(
-      (item) =>
-        item.ghostId === target.ghostId &&
-        item.installState !== 'conflict' &&
-        (!target.marketPluginId || item.pluginId === target.marketPluginId) &&
-        // A missing namespace is unknown, never an implicit root match.
-        (target.namespace === undefined || item.namespace === target.namespace),
-    );
-    if (matches.length !== 1) {
-      if (target.requireRemoteTaskView && matches.length === 0 && (
-        market.unavailableReason || market.organizationAccessError || market.unavailableCustomSourceNames?.length
-      )) return { status: 'failed', messageKey: 'settings.ghosts.market.errors.generic' };
+    const candidate = uniquePluginInstallCandidate(market, target);
+    if (!candidate) {
+      if (market.unavailableReason || market.organizationAccessError || market.unavailableCustomSourceNames?.length)
+        return { status: 'page', route: target.marketPluginId ? marketRoute(target.marketPluginId) : '/plugins' };
       return target.marketPluginId ? { status: 'page', route: marketRoute(target.marketPluginId) } : { status: 'unavailable' };
     }
-    const detail = await window.electronAPI.pluginMarket.detail(matches[0].pluginId);
-    if (target.requireRemoteTaskView && (
-      detail.ghostId !== target.ghostId || detail.namespace !== target.namespace ||
-      detail.manifest.taskView?.remote !== true
-    )) return { status: 'unavailable' };
+    const detail = await window.electronAPI.pluginMarket.detail(candidate.pluginId);
+    if (detail.ghostId !== candidate.ghostId || detail.namespace !== candidate.namespace ||
+        (target.requireRemoteTaskView && detail.manifest.taskView?.remote !== true)) return { status: 'unavailable' };
     if (detail.installState !== 'not-installed') return { status: 'page', route: marketRoute(detail.pluginId) };
     const { ghost } = await window.electronAPI.pluginMarket.install(detail.pluginId, {
       expectedReleaseId: detail.releaseId,

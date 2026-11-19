@@ -180,7 +180,7 @@ export interface BotImConnectionListPayload {
 }
 
 export type BotImConnectionAddInput =
-  | { botId: string; channel: 'imessage'; groupAliases?: string[]; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
+  | { botId: string; channel: 'imessage'; groupAliases?: string[]; selfAccountAddresses?: Record<string, string>; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
   | { botId: string; channel: 'telegram'; token: string; ownerUserId: string }
   | {
       botId: string;

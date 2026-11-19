@@ -84,6 +84,7 @@ import {
   normalizeManualProjectOrder,
   mergeVisibleReorder,
   snapshotManualProjectOrder,
+  sidebarContentFilterCount,
   loadDeviceGroupCollapsedKeys,
   persistDeviceGroupCollapsedKeys,
   loadDialogueGroupCollapsedKeys,
@@ -1401,6 +1402,7 @@ export function ProjectsSection({
       {taskListMode === 'inbox' && inboxSessions && (
         <TaskInbox
           sessions={inboxSessions}
+          contentFiltered={sidebarContentFilterCount(filter) > 0}
           isTeammateTask={isInboxTeammateTask}
           priorityContext={priorityContext}
           activeSessionId={activeSessionId}

@@ -124,8 +124,11 @@ function normalizeScriptConfig(
   return { command, capabilities, ...(timeoutMs ? { timeoutMs } : {}) };
 }
 
+/** Plugin-engine route id prefix; same value as maker-core ACP_PLUGIN_PROVIDER_PREFIX. */
+const PLUGIN_ENGINE_PROVIDER_PREFIX = 'acp-plugin:';
+
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'prTrigger' | 'recurring' | 'manual'>,
+  schedule: Pick<Schedule, 'agentKind' | 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'prTrigger' | 'recurring' | 'manual'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
   // 一次事件就会把定时的一次性任务用完。手动任务的 recurring 不参与调度，不受此限。
@@ -146,8 +149,32 @@ function validateScheduleExecutionShape(
       !schedule.modelAgentKind || !schedule.model?.trim() || !schedule.providerId?.trim()))
   )) throw new Error('Scheduled remote model selection requires a device, Harness, model and provider');
   if (schedule.modelAgentKind != null) {
-    if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
+    if (!['claude-code', 'codex', 'pi', 'acp'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
+    }
+  }
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)只在自动任务所在电脑上、每次新建任务运行：必须指出是
+  // 哪个引擎，不绑定已有任务、不换电脑、不用 worktree、不走脚本执行。旧端只改了其中一半(例如把
+  // agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
+  if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
+    if (schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp') {
+      throw new Error('A plugin engine schedule must choose the plugin engine as its model');
+    }
+    if (!schedule.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
+      || schedule.providerId.length <= PLUGIN_ENGINE_PROVIDER_PREFIX.length) {
+      throw new Error('A plugin engine schedule needs providerId acp-plugin:<plugin>:<harness>');
+    }
+    if ((schedule.executionMode ?? 'agent') !== 'agent') {
+      throw new Error('Script schedules cannot use a plugin engine');
+    }
+    if (schedule.targetSessionId || schedule.persistentSession) {
+      throw new Error('A plugin engine schedule starts a new task each run');
+    }
+    if (schedule.agentDeviceId || schedule.modelAgentDeviceId) {
+      throw new Error('Plugin engines run on the automation host only');
+    }
+    if (schedule.useWorktree) {
+      throw new Error('Plugin engine schedules cannot use a worktree');
     }
   }
   if (schedule.agentDeviceId !== undefined) {

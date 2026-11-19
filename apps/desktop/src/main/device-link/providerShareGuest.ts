@@ -49,6 +49,7 @@ import {
 } from './providerShareCrossRegion.js';
 import { captureProviderShareGuestPrefsRemoval, pruneProviderShareGuestPrefs } from './providerShareGuestPrefs.js';
 import { invalidateProviderMetadataContinuity } from './providerMetadataContinuity.js';
+import { hasAgentNetProviderGuestRoute } from './agentNetSharing.js';
 
 const log = createLogger('provider-share:guest');
 
@@ -91,6 +92,7 @@ interface Runtime {
   authorityIncomplete: boolean;
   fetchedAt: number;
   viewAnchor: ViewAnchor | null;
+  confirmedShareViews: ReadonlyMap<string, ViewAnchor>;
   timer: ReturnType<typeof setTimeout> | null;
   refreshing: Promise<void> | null;
   pending: Map<string, PendingRequest>;
@@ -282,6 +284,22 @@ export function findReceivedShare(shareId: string): ProviderShareReceived | null
   return allReceived(runtime).find((share) => share.shareId === shareId) ?? null;
 }
 
+/** Only existing Agent Net task execution can use a confirmed transport while the catalog is unavailable. */
+export function findReceivedShareForExecution(shareId: string): ProviderShareReceived | null {
+  const rt = runtime;
+  if (!rt || !current(rt)) return null;
+  const share = findReceivedShare(shareId);
+  if (share) return share;
+  if (!rt.unavailable.has(shareId)) return null;
+  const retained = allReceived(rt).find(row => row.shareId === shareId && row.status === 'active');
+  if (!retained) return null;
+  const anchor = rt.confirmedShareViews.get(shareViewKey(retained));
+  return anchor && viewAnchorBudget(anchor).remainingMs > 0
+    && hasAgentNetProviderGuestRoute(shareId, retained.memberId, retained.hostDeviceId) ? retained : null;
+}
+
+const shareViewKey = (share: ProviderShareReceived) => JSON.stringify([share.shareId, share.memberId, share.hostDeviceId]);
+
 /**
  * 远程 Agent 的请求目标：同账号电脑原样返回；`share:<id>` 换成分享者电脑的本地 peer key。
  * 分享已不在(被删除或已退出)或已暂停时抛出带原因的错误，由任务提示并提供换模型。
@@ -371,6 +389,7 @@ export function startProviderShareGuest(events: ProviderShareGuestEvents, option
     received: [],
     fetchedAt: 0,
     viewAnchor: null,
+    confirmedShareViews: new Map(),
     unavailable: new Set(), authorityIncomplete: false,
     timer: null,
     refreshing: null,
@@ -421,6 +440,13 @@ export function refreshReceivedShares(reason: string): Promise<void> {
           rt.authorityIncomplete = received.authorityIncomplete === true;
           rt.fetchedAt = Date.now();
           rt.viewAnchor = makeViewAnchor(requestedRegion, requestedAt, requestedMono);
+          const confirmed = new Map<string, ViewAnchor>();
+          for (const share of received) {
+            const key = shareViewKey(share);
+            const anchor = rt.unavailable.has(share.shareId) ? rt.confirmedShareViews.get(key) : rt.viewAnchor;
+            if (anchor) confirmed.set(key, anchor);
+          }
+          rt.confirmedShareViews = confirmed;
           before = received;
           const changed = emitChanged(rt);
           if (changed) await changed;
@@ -432,6 +458,7 @@ export function refreshReceivedShares(reason: string): Promise<void> {
               // A refusal is authoritative for this account/device: drop the old
               // rows, mark this region as confirmed empty and fence their metadata.
               rt.received = [];
+              rt.confirmedShareViews = new Map();
               if (rt.fetchedAt === 0) rt.fetchedAt = Date.now();
               void emitChanged(rt);
             }
@@ -508,11 +535,12 @@ export function getReceivedSharesSnapshot(recovery?: ProviderShareFavoriteRecove
   const localBudget = valid && rt.viewAnchor && rt.viewAnchor.region === getActiveAuthRealm()
     && rt.fetchedAt > 0 ? { [rt.viewAnchor.region]: viewAnchorBudget(rt.viewAnchor) } : {};
   const regionBudget = valid ? { ...localBudget, ...getConfirmedCrossRegionRegionBudgets() } : {};
+  const unavailableShareIds = valid ? [...rt.unavailable].filter(shareId => !findReceivedShareForExecution(shareId)) : [];
   return {
     ownerStamp,
     confirmedRegions: loadedRegions,
     received: valid ? allReceived(rt) : [],
-    ...(valid && rt.unavailable.size ? { unavailableShareIds: [...rt.unavailable] } : {}),
+    ...(unavailableShareIds.length ? { unavailableShareIds } : {}),
     active: valid,
     ...(Object.keys(regionBudget).length > 0 ? { regionBudget } : {}),
   };

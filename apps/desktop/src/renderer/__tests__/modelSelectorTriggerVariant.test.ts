@@ -456,7 +456,7 @@ const ModelSelector = (props: React.ComponentProps<typeof SharedModelSelector>) 
   React.createElement(SharedModelSelector, { unifiedPanel: false, ...props });
 const ModelSelectorContent = (props: React.ComponentProps<typeof SharedModelSelectorContent>) =>
   React.createElement(SharedModelSelectorContent, { unifiedPanel: false, ...props });
-import { makerChatStore } from '@/lib/makerChatStore';
+import { builtinAgentSwitchIntent, makerChatStore } from '@/lib/makerChatStore';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
@@ -649,6 +649,79 @@ describe('ModelSelector trigger variants', () => {
       agentCapabilitiesRef.capabilities = originalCapabilities;
       agentCapabilitiesRef.error = null;
       visibleModelsRef.models = originalModels;
+    }
+  });
+
+  // Unit regression: a failed directory read used to put an error on the confirmed
+  // task model even though its remote capability still identifies it and sends can proceed.
+  it('keeps a remote catalog failure in the picker when the current task model is known', async () => {
+    deviceProvidersRef.error = '[DEVICE_LINK_TIMEOUT] directory read timed out';
+    const props: React.ComponentProps<typeof SharedModelSelector> = {
+      remoteAgent: { devices: [], selectedDeviceId: null, homeDeviceId: 'dev-a' },
+      deviceId: 'dev-a',
+      actualRoute: true,
+      agentIdentity: { vendorKey: 'cc', state: 'current' },
+      modelId: 'claude-opus-4-8',
+      effort: 'high',
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+    };
+    const view = render(React.createElement(SharedModelSelector, props));
+    try {
+      const trigger = screen.getByRole('button', { name: /Opus 4\.8/ });
+      expect(trigger.getAttribute('aria-label')).not.toContain('模型读取失败');
+      expect(trigger.querySelector('.lucide-circle-alert')).toBeNull();
+      await act(async () => { fireEvent.click(trigger); });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '重新读取模型' }));
+      });
+      expect(deviceProvidersRef.prefetch).toHaveBeenCalledWith('dev-a');
+
+      deviceProvidersRef.error = '[REMOTE_AGENT_SHARE_UNAVAILABLE] share revoked';
+      view.rerender(React.createElement(SharedModelSelector, props));
+      expect(trigger.querySelector('.lucide-circle-alert')).toBeTruthy();
+    } finally {
+      view.unmount();
+      deviceProvidersRef.error = null;
+    }
+  });
+
+  // Unit regression: the saved route's model can remain in the provider catalog
+  // when the host cannot start the task's engine.
+  it('warns when the current remote engine is unavailable despite a known provider model', () => {
+    const originalCapabilities = agentCapabilitiesRef.capabilities;
+    const originalModels = visibleModelsRef.models;
+    agentCapabilitiesRef.capabilities = null;
+    agentCapabilitiesRef.error = "Agent 'pi' is not registered";
+    visibleModelsRef.models = [];
+    deviceProvidersRef.providers = [{
+      id: 'test-provider',
+      name: 'Test provider',
+      connected: true,
+      agents: ['pi'],
+      routing: { pi: {} },
+      models: { pi: [{ id: 'saved-model', name: 'Saved model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' }] },
+    }];
+    try {
+      render(React.createElement(SharedModelSelector, {
+        remoteAgent: undefined,
+        deviceId: 'dev-a',
+        actualRoute: true,
+        agentIdentity: { vendorKey: 'pi', state: 'current' },
+        currentProviderId: 'test-provider',
+        modelId: 'saved-model',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+      }));
+      const trigger = screen.getByRole('button', { name: /Saved model/ });
+      expect(trigger.getAttribute('aria-label')).toContain('模型读取失败');
+      expect(trigger.querySelector('.lucide-circle-alert')).toBeTruthy();
+    } finally {
+      agentCapabilitiesRef.capabilities = originalCapabilities;
+      agentCapabilitiesRef.error = null;
+      visibleModelsRef.models = originalModels;
+      deviceProvidersRef.providers = [];
     }
   });
 
@@ -1454,7 +1527,7 @@ describe('ModelSelector trigger variants', () => {
         onEffortChange: vi.fn(),
         vendorKey: displayAgent === 'codex' ? 'codex' : 'cc',
         // 稳态来自已加载的真实 runtime；intent 是下一条消息的明确目标，不能写成 Current。
-        agentIdentity: resolveModelSelectorAgentIdentity('claude-code', intent?.target),
+        agentIdentity: resolveModelSelectorAgentIdentity('claude-code', builtinAgentSwitchIntent(intent)?.target),
         currentProviderId: intent?.providerId ?? null,
         onProviderChange: vi.fn(),
         onNavigateToProviders: vi.fn(),

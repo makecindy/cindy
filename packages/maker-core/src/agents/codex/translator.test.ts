@@ -1049,6 +1049,30 @@ describe('translateErrorNotification', () => {
     expect(classifyCodexError(error as Parameters<typeof classifyCodexError>[0]).reason).not.toBe('model_unavailable');
   });
 
+  // #11484 unit: existing 403 fixtures do not cover JSON nested in gateway messages.
+  // Exercise the production classifier, including safe projection and status precedence.
+  it('classifies only the nested account-denial envelope and preserves its safe explanation', () => {
+    const body = JSON.stringify({ error: { code: '407', message: 'NovaException - ' + JSON.stringify({ error: {
+      code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply',
+      privateDetail: 'PRIVATE_RESPONSE',
+    } }) } });
+    const error = { message: 'Reconnecting... 1/5', additionalDetails: `unexpected status 407: ${body}`,
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 407 } } } as const;
+    const classified = classifyCodexError(error);
+    expect(classified.data).toEqual({ reason: 'account_access_denied', willRetry: false,
+      message: JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply' } }),
+    });
+    expect(JSON.stringify(classified)).not.toMatch(/PRIVATE_RESPONSE|httpConnectionFailed|Reconnecting/);
+    for (const status of [401, 408, 429, 500, 503]) {
+      expect(classifyCodexError({ ...error, codexErrorInfo: { httpConnectionFailed: { httpStatusCode: status } } }).reason)
+        .not.toBe('account_access_denied');
+    }
+    for (const message of ['HTTP 407: Proxy Authentication Required', 'HTTP 403: Forbidden',
+      'HTTP 407: ACCOUNT_SHARING_ACCESS_DENIED', 'HTTP 407: {"metadata":{"code":"ACCOUNT_SHARING_ACCESS_DENIED"}}']) {
+      expect(classifyCodexError({ message }).reason).not.toBe('account_access_denied');
+    }
+  });
+
   it('does not interpret a generic HTTP 404 or reconnect notice as an unavailable model', () => {
     expect(classifyCodexError({ message: 'unexpected status 404 Not Found' }).reason).toBeUndefined();
     expect(classifyCodexError({ message: 'Reconnecting... 1/5' }).reason).toBeUndefined();
@@ -2909,6 +2933,57 @@ it('counts the streamed answer while it arrives and stops the clock while a comm
     rt.tokenSpeed.stop();
     // The response's real 20 tokens over the second between its first item and the command.
     expect(rt.tokenSpeed.snapshot()).toMatchObject({ streaming: false, tokens: 20, elapsedMs: 1_000, average: 20 });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// 生产入口：settleCodexSpeedUsage → 测速器的 snapshot().request 与 trace()（随轮末 usage 落到消息上）。
+// 规则依据：每次模型请求的推理 token 要能在速度图上逐次看到；「上报 0」是事实（没推理就回答），
+// 不能与未上报混为一谈；长轮次的轨迹必须限长，否则每条消息的用量明细随请求数无限增长。unit。
+it('marks each finished request with its reasoning tokens and keeps a bounded turn trace', () => {
+  vi.useFakeTimers();
+  try {
+    const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+    vi.setSystemTime(0);
+    beginCodexGenerationTurn(rt, 'turn', 0);
+    expect(rt.tokenSpeed.trace()).toBeUndefined();
+    const request = (n: number, reasoningOutputTokens?: number) => {
+      const startedAt = Date.now();
+      translateItemNotification('started', { threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id: `m${n}`, text: '' } }, q, ctx);
+      vi.setSystemTime(startedAt + 2_000);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: `m${n}`, delta: 'w '.repeat(100) }, q, ctx);
+      // Reasoning is part of the output: 1,000 tokens leave room for the 516 below.
+      settleCodexSpeedUsage(rt, { outputTokens: 1_000, ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }) });
+      vi.setSystemTime(startedAt + 3_000);
+    };
+    request(1, 516);
+    expect(rt.tokenSpeed.snapshot()?.request).toMatchObject({ index: 1, thinkingTokens: 516 });
+    request(2, 0);
+    expect(rt.tokenSpeed.snapshot()?.request).toMatchObject({ index: 2, thinkingTokens: 0 });
+    request(3);
+    expect(rt.tokenSpeed.snapshot()?.request).toEqual({ index: 3, atMs: expect.any(Number), outputTokens: 1_000 });
+    expect(rt.tokenSpeed.trace()).toMatchObject({
+      requests: 3,
+      marks: [[expect.any(Number), 516, 1], [expect.any(Number), 0, 1], [expect.any(Number), -1, 1]],
+      // The third request reported no split: its output stays out of what the reasoning is a share of.
+      reportedOutputTokens: 2_000,
+    });
+    for (let n = 4; n <= 140; n += 1) request(n, 10);
+    const trace = rt.tokenSpeed.trace()!;
+    expect(trace.requests).toBe(140);
+    expect(trace.marks.length).toBeLessThanOrEqual(48);
+    expect(trace.speed.length).toBeLessThanOrEqual(48);
+    // Merging loses no request and no reasoning.
+    expect(trace.marks.reduce((sum, mark) => sum + mark[2], 0)).toBe(140);
+    expect(trace.marks.reduce((sum, mark) => sum + Math.max(0, mark[1]), 0)).toBe(516 + 137 * 10);
+    expect(trace.reportedOutputTokens).toBe(139 * 1_000);
+    // Regression #11543: an absent view must recover the entire turn, and compacting
+    // a long trace must leave marks near its beginning instead of shifting them right.
+    expect(rt.tokenSpeed.snapshot()?.trace).toEqual(trace);
+    expect(trace.marks[0][0]).toBeLessThan(trace.durationMs / 28);
+
+    expect(trace.marks.map((mark) => mark[0])).toEqual([...trace.marks.map((mark) => mark[0])].sort((a, b) => a - b));
   } finally {
     vi.useRealTimers();
   }

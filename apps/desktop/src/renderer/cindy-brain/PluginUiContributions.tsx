@@ -363,8 +363,8 @@ function PluginUiSidebarSection({ entry, sessionId }: { entry: PluginUiEntry; se
       {expanded ? <ChevronDown size={13} className="shrink-0" /> : <ChevronRight size={13} className="shrink-0" />}
       <span className="truncate">{title}</span>
     </button>
-    <SectionCollapse collapsed={!expanded}>
-      {expanded && visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" ghost={entry.ghost}
+    <SectionCollapse collapsed={!expanded} inert={!expanded}>
+      {visible && available && <Suspense fallback={<Spinner size={16} />}><PluginUiView chrome="panel" sizing="sidebar-section" ghost={entry.ghost}
         viewId={view!.id} sessionId={view!.scope === 'task' ? sessionId : null} input={entry.contribution.arguments} /></Suspense>}
     </SectionCollapse>
   </div>;
