@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { createLogger } from '@/lib/logger';
-import { observeFileTransferProgress } from '@/lib/fileTransferProgress';
+import { observeFileTransferProgress, type FileTransferProgress } from '@/lib/fileTransferProgress';
 import { fileBrowserApiFor, onFileTreeEventFor } from '@/lib/fileBrowserTransport';
 import { fileTreeEventPaths, hasFileTreeWatcher, onDirectoryAliasChange } from './useFileTree';
 import { isVideoPath } from '../lib/videoExt';
@@ -38,6 +38,14 @@ interface FileStat {
   mtimeMs: number;
 }
 
+type PreviewTransfer = {
+  kind: 'fetching';
+  requestId: string;
+  received: number;
+  total: number;
+  phase?: 'upload' | 'download';
+};
+
 export type FileContent =
   | {
       kind: 'text';
@@ -52,10 +60,10 @@ export type FileContent =
   /** 远程文本文件超出传输上限(device-link 帧限预判):渲染"文件过大"占位卡。 */
   | { kind: 'oversize'; stat: FileStat }
   /** 大文件取回进行中(SSH 分片 / device OSS):渲染进度。 */
-  | { kind: 'fetching'; received: number; total: number; phase?: 'upload' | 'download' }
+  | PreviewTransfer
   /** 大文件已取回到本地缓存:占位卡 + 「在系统中打开」(cachePath 是本地文件)。
    *  stale = 实时取回失败后回落的历史副本(可能不是远端最新版),UI 需标注。 */
-  | { kind: 'cached'; stat: FileStat; cachePath: string; stale?: boolean }
+  | { kind: 'cached'; stat: FileStat; cachePath: string; stale?: boolean; progress?: PreviewTransfer }
   | { kind: 'error'; message: string }
   | { kind: 'loading' }
   | { kind: 'empty' };
@@ -85,24 +93,6 @@ export interface FileContentState {
   workdir: string;
   relPath: string | null;
   content: FileContent;
-}
-
-async function fetchRemotePreview(
-  request: Parameters<typeof window.electronAPI.fileBrowser.fetchRemote>[0],
-  fallback: FileContent,
-): Promise<FileContent> {
-  const copy = await window.electronAPI.fileBrowser.fetchRemote(request);
-  if (!copy.ok) {
-    log.warn('fetchRemote failed, falling back', { relPath: request.relPath, message: copy.message });
-    return fallback;
-  }
-  const { relPath, size, mtimeMs } = request;
-  return {
-    kind: 'cached',
-    stat: { relPath, type: 'file', size, mtimeMs },
-    cachePath: copy.cachePath,
-    stale: copy.stale === true,
-  };
 }
 
 function isContentForRelPath(content: FileContent, relPath: string): boolean {
@@ -171,6 +161,54 @@ export function useFileContent(
   const lastReadScope = useRef<string | null>(null);
   const silentRead = useRef<(() => void) | null>(null);
   const preserveViewOnRead = useRef(false);
+  const transferObserver = useRef<ReturnType<typeof observeFileTransferProgress> | null>(null);
+  const [transfer, setTransfer] = useState<{
+    scope: string; relPath: string; progress: PreviewTransfer;
+  } | null>(null);
+
+  useEffect(() => () => {
+    transferObserver.current?.dispose();
+    transferObserver.current = null;
+  }, [contentCacheScope, relPath, visible, refreshTick]);
+
+  const fetchRemotePreview = useCallback(async (
+    file: Pick<FileStat, 'relPath' | 'size' | 'mtimeMs'>,
+    fallback: FileContent,
+    showPreparing = true,
+  ): Promise<FileContent> => {
+    transferObserver.current?.dispose();
+    const report = ({ received, total, phase }: FileTransferProgress) => {
+      if (!visibleRef.current || phase === 'pack' || phase === 'extract') return;
+      setTransfer({
+        scope: contentCacheScope, relPath: file.relPath,
+        progress: { kind: 'fetching', requestId: observer.requestId, received, total, phase },
+      });
+    };
+    const observer = observeFileTransferProgress(report);
+    transferObserver.current = observer;
+    try {
+      if (showPreparing) report({ received: 0, total: file.size });
+      const copy = await window.electronAPI.fileBrowser.fetchRemote({
+        ...file, workdir, remoteHostId, deviceId, requestId: observer.requestId,
+      });
+      if (!copy.ok) {
+        log.warn('fetchRemote failed, falling back', { relPath: file.relPath, message: copy.message });
+        return fallback;
+      }
+      if (copy.stale && fallback.kind === 'cached' && copy.cachePath === fallback.cachePath) return fallback;
+      return { kind: 'cached', stat: { ...file, type: 'file' }, cachePath: copy.cachePath, stale: copy.stale === true };
+    } catch (error) {
+      if (fallback.kind !== 'cached') throw error;
+      log.warn('fetchRemote failed, retaining cached preview', error);
+      return fallback;
+    } finally {
+      observer.dispose();
+      if (transferObserver.current === observer) {
+        transferObserver.current = null;
+        setTransfer(null);
+      }
+    }
+  }, [contentCacheScope, workdir, remoteHostId, deviceId]);
 
   useEffect(() => {
     const epoch = ++readEpoch.current;
@@ -209,7 +247,6 @@ export function useFileContent(
 
     let cancelled = false;
     const stale = () => cancelled || epoch !== readEpoch.current;
-    let transferProgress: ReturnType<typeof observeFileTransferProgress> | undefined;
     // Recheck the file without replacing a paused player and losing its playhead.
     const retainedVideo = resumingFile && isVideoPath(relPath)
       && (previous.content.kind === 'binary' || previous.content.kind === 'cached') ? previous.content : null;
@@ -224,36 +261,12 @@ export function useFileContent(
           mtimeMs: number,
           fallback: FileContent,
         ): Promise<void> => {
-          const sameCachedVideo = retainedVideo?.kind === 'cached' && retainedVideo.stat.size === size
-            && retainedVideo.stat.mtimeMs === mtimeMs;
-          if (!sameCachedVideo) {
-            setState({ workdir, relPath, content: { kind: 'fetching', received: 0, total: size } });
-          }
-          const progress = observeFileTransferProgress((e) => {
-            if (stale() || sameCachedVideo) return;
-            // 打包 / 解包阶段只出现在文件夹下载(relPath 键为远端绝对路径),这里收不到。
-            if (e.phase === 'pack' || e.phase === 'extract') return;
-            setState({
-              workdir,
-              relPath,
-              content: { kind: 'fetching', received: e.received, total: e.total, phase: e.phase },
-            });
-          });
-          transferProgress = progress;
-          try {
-            const content = await fetchRemotePreview({
-              workdir,
-              relPath,
-              size,
-              mtimeMs,
-              remoteHostId,
-              deviceId,
-              requestId: progress.requestId,
-            }, fallback);
-            if (!stale()) setState({ workdir, relPath, content });
-          } finally {
-            progress.dispose();
-          }
+          const retained = retainedVideo?.kind === 'cached' ? retainedVideo : null;
+          const sameCopy = retained && !retained.stale && retained.stat.size === size && retained.stat.mtimeMs === mtimeMs;
+          const content = await fetchRemotePreview(
+            { relPath, size, mtimeMs }, retained ? { ...retained, stale: true } : fallback, !sameCopy,
+          );
+          if (!stale()) setState({ workdir, relPath, content });
         };
 
         const result = await fileBrowserApiFor(deviceId).readFile({ workdir, relPath, remoteHostId });
@@ -382,9 +395,8 @@ export function useFileContent(
 
     return () => {
       cancelled = true;
-      transferProgress?.dispose();
     };
-  }, [workdir, relPath, remoteHostId, deviceId, contentCacheScope, refreshTick, visible]);
+  }, [workdir, relPath, remoteHostId, deviceId, contentCacheScope, refreshTick, visible, fetchRemotePreview]);
 
   // listener 拿当前 relPath 的最新值, 但不进 effect deps —— 不能因为切文件就
   // 重新订阅 chokidar(那会丢掉订阅期间的事件)。
@@ -452,7 +464,7 @@ export function useFileContent(
               const placeholder: FileContent = { kind: result.code === 'BINARY_FILE' ? 'binary' : 'oversize', stat };
               const content = remote
                 ? await fetchRemotePreview(
-                    { ...request, deviceId, size: stat.size, mtimeMs: stat.mtimeMs },
+                    { relPath: targetRelPath, size: stat.size, mtimeMs: stat.mtimeMs },
                     displayed.kind === 'cached' ? { ...displayed, stale: true } : placeholder,
                   )
                 : placeholder;
@@ -462,14 +474,12 @@ export function useFileContent(
 
             // An event can supersede an unfinished load. Keep an open text
             // editor and its draft intact if the replacement cannot be read as text.
-            if (displayed.kind === 'loading' || displayed.kind === 'fetching'
-                || (displayed.kind !== 'text' && result.ok && result.data.truncated)) {
+            if (displayed.kind === 'loading' || (displayed.kind !== 'text' && result.ok && result.data.truncated)) {
               setRefreshTick(t => t + 1);
             }
           } catch (err) {
             log.warn('silent re-read on change failed', err);
-            if (!disposed && epoch === readEpoch.current
-                && (stateRef.current.content.kind === 'loading' || stateRef.current.content.kind === 'fetching')) {
+            if (!disposed && epoch === readEpoch.current && stateRef.current.content.kind === 'loading') {
               setRefreshTick(t => t + 1);
             }
           }
@@ -505,7 +515,7 @@ export function useFileContent(
       if (event.remoteHostId === remoteHostId && event.deviceId === deviceId) changed(event);
     });
     return () => { disposed = true; silentRead.current = null; off(); offAlias(); };
-  }, [workdir, remoteHostId, deviceId, contentCacheScope]);
+  }, [workdir, remoteHostId, deviceId, contentCacheScope, fetchRemotePreview]);
 
   // workdir 切换 → 旧 workdir 的 entry 一次性扔掉, 防长期累积。
   // 注意 cleanup 才扔: 当前 workdir 可能和上一渲染相等(Strict Mode 双调用),
@@ -565,8 +575,14 @@ export function useFileContent(
     [contentCacheScope, workdir, relPath],
   );
 
+  let content = getVisibleFileContentState(state, workdir, relPath);
+  if (visible && transfer?.scope === contentCacheScope && transfer.relPath === relPath
+      && transfer.progress.requestId === transferObserver.current?.requestId) {
+    // Keep the last complete copy playable while its replacement is in flight.
+    content = content.kind === 'cached' ? { ...content, progress: transfer.progress } : transfer.progress;
+  }
   return {
-    content: getVisibleFileContentState(state, workdir, relPath),
+    content,
     autosaveReady: visible && !awaitingVerification,
     refresh,
     setLocal,

@@ -4,6 +4,7 @@ import { EditorView } from '@codemirror/view';
 import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { FileBrowserBody } from '../FileBrowserBody';
 import type { FileBrowserState } from '../index';
 import '../index';
@@ -223,6 +224,112 @@ it.each([null, 'ssh'])('pauses the video on hide and keeps its position on retur
   expect(regenerated.src).not.toBe(previousSrc);
   expect(fetchRemote).toHaveBeenCalledTimes(remoteHostId ? 1 : 0);
   view.unmount();
+});
+
+// #11392, unit: transport progress for a regenerated video must reach its
+// visible sidebar without replacing the player until the new copy is ready.
+it.each(['ssh', 'device'])('shows only the replacement transfer beside the playing %s video', async source => {
+  const workdir = '/progress-' + source;
+  const relPath = 'recording.mp4';
+  const deviceId = source === 'device' ? 'video-peer' : null;
+  const owner = getDataOwnerGeneration();
+  setDataOwnerGeneration('preview-test');
+  let mtimeMs = 1;
+  const stat = () => ({ type: 'file', relPath, size: 8 * 1024 * 1024, mtimeMs });
+  const binary = { ok: false, code: 'BINARY_FILE' };
+  const change = { workdir, relPath, type: 'change' };
+  const onEvent = vi.fn((_cb: (event: typeof change) => void) => () => {});
+  const push = { deviceId, channel: 'maker:file-browser:event', payload: change };
+  const onRemotePush = vi.fn((_cb: (event: typeof push) => void) => () => {});
+  type Progress = { requestId: string; received: number; total: number; phase: 'upload' | 'download' };
+  const listeners = new Set<(event: Progress) => void>();
+  const emit = (event: Progress) => listeners.forEach(listener => listener(event));
+  const copy = { ok: true, cachePath: '/cache/recording.mp4' };
+  const initial = Promise.withResolvers<typeof copy>();
+  const replacement = Promise.withResolvers<typeof copy>();
+  const upload = { received: stat().size / 2, total: stat().size, phase: 'upload' as const };
+  const fetchRemote = vi.fn(async ({ requestId }: { requestId: string }) => {
+    if (mtimeMs === 1) {
+      emit({ ...upload, phase: 'download', requestId });
+      return initial.promise;
+    }
+    emit({ ...upload, requestId });
+    return replacement.promise;
+  });
+  vi.stubGlobal('electronAPI', {
+    fileBrowser: { listDir: async () => [], startWatch: vi.fn(), stopWatch: vi.fn(), onEvent,
+      readFile: async () => binary, stat, fetchRemote, onTransferProgress: (cb: (event: Progress) => void) => {
+        listeners.add(cb);
+        return () => listeners.delete(cb);
+      } },
+    deviceLink: { subscribe: vi.fn(), unsubscribe: vi.fn(), onRemotePush,
+      onPresenceChanged: () => () => {}, onStatusChanged: () => () => {},
+      invoke: async (_id: string, _channel: string, [{ op }]: [{ op: string }]) => {
+        if (op === 'readFile') return binary;
+        if (op === 'stat') return stat();
+        return [];
+      } },
+    search: { onEvent: () => () => {} },
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const ctx = { sessionId: '', tabId: 'video', remoteHostId: deviceId ? null : 'ssh', deviceLinkDeviceId: deviceId,
+    workdir, patchState: vi.fn(), onVisibilityChange: vi.fn(), setCloseInterceptor: () => () => {} };
+  const view = render(<FileBrowserBody ctx={ctx} state={{ selectedFilePath: relPath }} active />);
+  const notify = () => {
+    if (deviceId) onRemotePush.mock.calls.forEach(([cb]) => cb(push));
+    else onEvent.mock.calls.forEach(([cb]) => cb(change));
+  };
+  try {
+    await view.findByText(i18n.t('ccAgent.workdirBrowse.fileBody.fetchingRemote', {
+      percent: 50, received: '4.0 MB', total: '8.0 MB', speed: '—',
+    }));
+    expect(view.container.querySelector('video')).toBeNull();
+    await act(async () => { initial.resolve(copy); });
+    const player = await waitFor(() => {
+      const node = view.container.querySelector('video');
+      expect(node).not.toBeNull();
+      return node!;
+    });
+    player.currentTime = 9;
+    mtimeMs++;
+    await act(async () => { notify(); });
+    const meter = view.getByRole('progressbar');
+    expect(meter.getAttribute('aria-valuenow')).toBe('50');
+    const firstId = fetchRemote.mock.calls[0][0].requestId;
+    const newId = fetchRemote.mock.lastCall![0].requestId;
+    expect(newId).toBeTruthy();
+    expect(newId).not.toBe(firstId);
+    act(() => emit({ ...upload, received: 0, requestId: firstId }));
+    expect(meter.getAttribute('aria-valuenow')).toBe('50');
+    await act(async () => { notify(); });
+    act(() => emit({ requestId: newId, phase: 'download', received: 4096, total: 0 }));
+    expect(meter.hasAttribute('aria-valuenow')).toBe(false);
+    expect(meter.textContent).toContain('4.0 KB');
+    expect(view.container.querySelector('video')).toBe(player);
+    expect(player.currentTime).toBe(9);
+    await act(async () => { replacement.resolve(copy); });
+    expect(view.queryByRole('progressbar')).toBeNull();
+    expect(view.container.querySelector('video')).not.toBe(player);
+    expect(listeners.size).toBe(0);
+    const lastGood = view.container.querySelector('video');
+    fetchRemote.mockRejectedValueOnce(new Error('offline'));
+    mtimeMs++;
+    await act(async () => { notify(); });
+    expect(view.getByText(i18n.t('ccAgent.workdirBrowse.fileBody.cachedStaleNotice'))).toBeTruthy();
+    expect(view.queryByRole('progressbar')).toBeNull();
+    expect(view.container.querySelector('video')).toBe(lastGood);
+    expect(listeners.size).toBe(0);
+    // Hide the tab with another transfer in flight.
+    fetchRemote.mockImplementationOnce(() => new Promise(() => {}));
+    await act(async () => { notify(); });
+    expect(listeners.size).toBe(1);
+    view.rerender(<FileBrowserBody ctx={ctx} state={{ selectedFilePath: relPath }} active={false} />);
+    expect(listeners.size).toBe(0);
+  } finally {
+    view.unmount();
+    setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+  }
+  expect(listeners.size).toBe(0);
 });
 
 // #11392, unit: a focused, still-visible SSH editor can miss a remote write.

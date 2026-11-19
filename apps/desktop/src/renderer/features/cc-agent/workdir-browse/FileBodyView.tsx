@@ -1,4 +1,5 @@
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { DownloadRing } from '@/components/ui/download-meter';
 /**
  * FileBodyView — middle pane of the workdir-browse view.
  *
@@ -827,9 +828,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
   }
 
   if (content.kind === 'fetching') {
-    return (
-      <FetchingProgress received={content.received} total={content.total} phase={content.phase} />
-    );
+    return <FetchingProgress key={content.requestId} {...content} />;
   }
 
   if (content.kind === 'cached') {
@@ -841,6 +840,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
         stat={content.stat}
         cachePath={content.cachePath}
         stale={content.stale === true}
+        progress={content.progress}
         visible={visible}
       />
     );
@@ -1303,6 +1303,7 @@ function CachedFileView({
   stat,
   cachePath,
   stale,
+  progress,
   visible,
 }: {
   workdir: string;
@@ -1311,23 +1312,25 @@ function CachedFileView({
   visible: boolean;
   /** true = 实时取回失败后回落的历史副本(可能非远端最新),顶部标注提示。 */
   stale?: boolean;
+  progress?: Extract<FileContent, { kind: 'fetching' }>;
 }) {
   const { t } = useTranslation();
-  const body = <CachedFileBody workdir={workdir} stat={stat} cachePath={cachePath} visible={visible} />;
-  if (!stale) return body;
-  // stale 副本:顶部一条 amber 标注(与本文件 EditingChip 同用 upgrade-banner
-  // 警示 token,语义豁免色),正文照常预览。
   return (
-    <div className="flex h-full w-full flex-col">
-      <div
-        className={cn(
-          'shrink-0 border-b px-4 py-1.5 text-center text-12',
-          'border-[var(--upgrade-banner-border)] bg-[var(--upgrade-banner-bg)] text-[var(--upgrade-banner-fg)]',
-        )}
-      >
-        {t('ccAgent.workdirBrowse.fileBody.cachedStaleNotice')}
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
+      {progress && <FetchingProgress key={progress.requestId} {...progress} compact />}
+      {stale && (
+        <div
+          className={cn(
+            'shrink-0 border-b px-4 py-1.5 text-center text-12',
+            'border-[var(--upgrade-banner-border)] bg-[var(--upgrade-banner-bg)] text-[var(--upgrade-banner-fg)]',
+          )}
+        >
+          {t('ccAgent.workdirBrowse.fileBody.cachedStaleNotice')}
+        </div>
+      )}
+      <div className="min-h-0 flex-1">
+        <CachedFileBody workdir={workdir} stat={stat} cachePath={cachePath} visible={visible} />
       </div>
-      <div className="min-h-0 flex-1">{body}</div>
     </div>
   );
 }
@@ -1516,30 +1519,47 @@ function FetchingProgress({
   received,
   total,
   phase,
+  compact = false,
 }: {
   received: number;
   total: number;
   phase?: 'upload' | 'download';
+  compact?: boolean;
 }) {
   const { t } = useTranslation();
   const sample = useRef(createFileTransferProgressValues());
   const values = sample.current({ received, total, phase });
+  const status = t(
+    values.preparing
+      ? 'chat.remoteFile.fetching'
+      : total <= 0
+        ? phase === 'upload'
+          ? 'chat.remoteFile.uploadProgressUnknown'
+          : 'chat.remoteFile.downloadProgressUnknown'
+        : phase === 'upload'
+          ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
+          : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
+    values,
+  );
+  if (compact) {
+    return (
+      <div className="flex shrink-0 border-b border-[var(--cmd-palette-border)] px-3 py-1.5">
+        <DownloadRing
+          label={t('chat.remoteFile.fetching')}
+          status={status}
+          progress={{
+            phase: values.preparing ? 'preparing' : 'downloading', loaded: received, total: total > 0 ? total : null,
+            percent: values.percent ?? null, speedBps: 0, etaSeconds: null,
+          }}
+        />
+      </div>
+    );
+  }
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-3">
       <Spinner size={18} className="text-[var(--cmd-palette-item-meta)]" />
       <span className="text-13 text-[var(--cmd-palette-item-meta)]">
-        {t(
-          values.preparing
-            ? 'chat.remoteFile.fetching'
-            : total <= 0
-              ? phase === 'upload'
-                ? 'chat.remoteFile.uploadProgressUnknown'
-                : 'chat.remoteFile.downloadProgressUnknown'
-              : phase === 'upload'
-                ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
-                : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
-          values,
-        )}
+        {status}
       </span>
     </div>
   );
