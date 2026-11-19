@@ -111,6 +111,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
     if (!hasAccountCard || !card) return;
     const measure = () => setAccountCardWidth(card.getBoundingClientRect().width);
     measure();
+    if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(measure);
     observer.observe(card);
     return () => observer.disconnect();
