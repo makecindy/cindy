@@ -6761,6 +6761,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Agent-Net만 사용",
         "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다.",
         "peerSwitch": {
