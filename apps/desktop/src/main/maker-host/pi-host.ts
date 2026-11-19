@@ -1,4 +1,7 @@
 import { createPiAuthAdapter } from './pi-auth.js';
+import { hasProxyEnvConfig } from '@cindy/anthropic-compat-proxy';
+import { ensureCliProxyBridge } from './cli-proxy-bridge.js';
+import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { piNativeKeyEnvVar, wireProtocolToPiApi, resolvePiBundledModelById, urlOrigin, officialPiRouteMatches, piModelCatalog, anthropicRootForV1Endpoint, type PiCatalogModel } from './pi-native-catalog.js';
 export { buildPiNativeProvidersFromConfigs, type PiBundledModelCatalog, type PiBundledModelInfo, piNativeKeyEnvVar, resolvePiBundledModelById } from './pi-native-catalog.js';
 import { listCindyManagedSkills } from './managed-skills.js';
@@ -234,6 +237,11 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   }
   log.info('pi agent enabled', { binaryPath });
   return new PiAgent({
+    // Pi can switch providers without respawning. Let each new HTTPS tunnel
+    // resolve its own destination, even if the first model used a direct route.
+    getLocalPiHttpsProxy: async env => hasProxyEnvConfig(env)
+      ? undefined
+      : ensureCliProxyBridge(resolveDesktopOutboundProxy),
     resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
     // 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。

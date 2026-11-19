@@ -1043,9 +1043,14 @@ impl Bbr {
         p + p / 4 + EXCESS_LOSS_PPM + 2 * standard_error
     }
 
+    /// 估计值不超过 [`MAX_RANDOM_LOSS_PPM`]：补偿本来就只补到这里，再高也不是随机丢包能解释的。
+    /// 令牌桶放行的突发把带宽估计抬高以后，一阵数据的尾巴（重传）和降速阶段的包仍按估计在发，被限速器成片挡下，
+    /// 记成随机丢包能把估计值推到 98%。不封顶的话判限速的门槛（[`Self::excess_loss_threshold`]）跟着超过 100%，
+    /// 丢得比送达的多也认不出限速，一直按估计超发：模拟器里往返 90 毫秒、64 KB 令牌的限速器上 1 MiB 在线路上发了 11 倍，
+    /// 封顶后 4 倍多（2026-11-19，对照 xdt-server：往返 10 毫秒、出口约 0.7 MB/s）。
     fn update_random_loss(&mut self) {
         let samples = self.calm_samples.max(CALM_SAMPLE_FLOOR) as u64;
-        self.random_loss_ppm = (self.calm_losses as u64 * 1_000_000 / samples) as u32;
+        self.random_loss_ppm = ((self.calm_losses as u64 * 1_000_000 / samples) as u32).min(MAX_RANDOM_LOSS_PPM);
     }
 
     /// 打开让路模式。`packet_bytes` 是一个分片的大小。
@@ -1223,6 +1228,11 @@ impl Bbr {
         } else {
             rate
         }
+    }
+
+    /// 建立连接时的拥塞窗口（字节）。
+    pub(crate) fn initial_window_bytes(&self) -> u64 {
+        self.initial_cwnd
     }
 
     pub(crate) fn bandwidth_estimate(&self) -> u64 {

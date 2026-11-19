@@ -39,9 +39,10 @@ import {
 import {
   getActiveAppSession,
   isAppSessionBoundaryPending,
-  dataOwnerStorageKey,
   LOCAL_DATA_OWNER_ID,
 } from '../appSessionState.js';
+import { ownerStoragePrefix, resolveOwnerScopedSecretStorageKey } from './providerSecretOwnerKey.js';
+export { resolveOwnerScopedSecretStorageKey } from './providerSecretOwnerKey.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 
 const log = createLogger('providerSecretStore');
@@ -109,17 +110,6 @@ function isManagedSecretStorageKey(key: string): boolean {
     PROVIDER_SECRET_IDS.some((id) => providerSecretStorageKey(id) === key) ||
     DYNAMIC_SECRET_PREFIXES.some((prefix) => key.startsWith(prefix))
   );
-}
-
-function ownerStoragePrefix(ownerId: string): string {
-  return `owner_${dataOwnerStorageKey(ownerId)}_`;
-}
-
-/** Resolve a renderer/main logical provider-secret key into the active owner's key. */
-export function resolveOwnerScopedSecretStorageKey(storageKey: string): string | null {
-  const ownerId = getActiveAppSession().dataOwnerId;
-  if (!ownerId) return null;
-  return `${ownerStoragePrefix(ownerId)}${storageKey}`;
 }
 
 function readPhysical(storageKey: string): string | null {

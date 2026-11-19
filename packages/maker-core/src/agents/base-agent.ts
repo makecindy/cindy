@@ -1281,6 +1281,9 @@ export interface AgentDeps {
    */
   getRemotePiAgentProxyEnv?: (remoteHostId: string) => Promise<Record<string, string> | null>;
 
+  /** Local CLI's HTTPS bridge, when provided by a desktop with system proxy support. */
+  getLocalPiHttpsProxy?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
+
   /**
    * Pi 专用:远端 agentHome 文件操作原语。
    *

@@ -1,3 +1,4 @@
+import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
 import { captureImContext } from '../../../shared/imMessageSource';
 /**
  * main/im/feishu/adapter.ts
@@ -16,7 +17,7 @@ import { captureImContext } from '../../../shared/imMessageSource';
  *     群轮次挂「非只读即确认」策略 + 触发时按页回翻群历史(50/页, 最多 1 页,
  *     确定性预算选择), 图片/文件下载后进上下文, 统一防注入包裹
  *     (见 ./groupContext.ts)。
- *     话题会话标题 = [飞书·{群名}·{话题简介}] {threadId 后 6 位}。
+ *     话题任务显示「飞书 · 主题 · 群名」。
  *     (飞书有拉历史 API, 不需要 telegram 那样的本地群消息池)。
  */
 
@@ -149,7 +150,8 @@ export function buildFeishuAdapter(
 ): ImChannelAdapter {
   const companion = Boolean(options.companionBotId);
   const isLark = () => feishuIm.getService() === 'lark';
-  const conversationPrefix = () => (isLark() ? '[Lark·DM] ' : '[飞书·DM] ');
+  const channelLabel = () => isLark() ? 'Lark' : '飞书';
+  const conversationPrefix = () => channelLabel() + ' · ';
   const groupPrefix = (threadId: string) =>
     isLark()
       ? threadId
@@ -185,12 +187,11 @@ export function buildFeishuAdapter(
       sessionIdFor: (botAppId, userId) => `feishu_${botAppId}_${sessionSafeUserId(userId)}`,
       defaultTitle: (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
-        if (!lane) return `${conversationPrefix()}${userId.slice(-6)}`;
+        if (!lane) return `[${channelLabel()}·DM] ${userId.slice(-6)}`;
         const anchor = lane.threadId || lane.chatId;
         return `${groupPrefix(lane.threadId)}${anchor.slice(-6)}`;
       },
-      // 首条消息(含每次 /new 后的首条)oneshot 起名的前缀 —— 与 hook Slack 的
-      // `[Slack·DM]` 同款视觉, 在「对话」分组里一眼认出渠道
+      // 个人机器人和官方机器人使用同一种渠道前缀。
       generatedTitlePrefix: conversationPrefix,
       // 飞书 bot 私聊会话进侧边栏「对话」分组; workingDir 是 app 托管的
       // im-working-dir, 不该以它聚成假项目组
@@ -218,40 +219,25 @@ export function buildFeishuAdapter(
         decodeFeishuLaneUserId(userId) === null
           ? null
           : readImDefaultSettings('feishu').groupPermissionMode,
-      // 群/话题 lane 建行后异步拉群名把标题升级为 [飞书·群] {群名} /
-      // [飞书·话题] {群名}; 拉不到(无「获取群基本信息」权限)保持后缀回落。
-      // 只对新建行生效(sessionRepo 侧保证), 复活行保留自己的历史标题。
+      // Main groups keep their native name. A thread's first words provide its subject.
       resolveSessionTitle: async (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
-        if (!lane) return null;
+        if (!lane || lane.threadId) return null;
         const name = await resolveChatName(feishuIm, lane.chatId);
-        if (!name) return null;
-        return `${groupPrefix(lane.threadId)}${name}`;
+        return name ? formatTaskTopicTitle(name, channelLabel()) : null;
       },
-      // 群主流 lane 标题是稳定的群名, 不参与首条消息
-      // oneshot 起名; 话题 lane 需要 oneshot 出「话题简介」, 照常参与。
       skipOneshotTitleFor: (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
         return lane !== null && lane.threadId === '';
       },
-      // 话题 lane 的 oneshot 标题拼装: [飞书·{群名}·{话题简介}] {threadId 后 6 位}
-      // — 群名拉不到时退化为 [飞书·话题·{简介}]。DM 返回 null, 回落默认
-      // generatedTitlePrefix 路径(DM → [飞书·DM] {简介})。
-      // 群主流 lane 拼固定名 [飞书·群] {群名|chatId 后 6 位}, 与 defaultTitle /
-      // resolveSessionTitle 同族 — 非 ctr 群主流会话不参与 oneshot
-      // (skipOneshotTitleFor), 只有 /ctr 新建的接管会话走到这里, 命名与
-      // 群会话族对齐(oneshot 文本用不上, 有意忽略)。
       composeGeneratedTitle: async (userId, _scopeKey, generated) => {
         const lane = decodeFeishuLaneUserId(userId);
         if (!lane) return null;
-        const label = isLark() ? 'Lark' : '飞书';
-        if (!lane.threadId) {
-          const name = await resolveChatName(feishuIm, lane.chatId);
-          return `[${label}·群] ${name ?? lane.chatId.slice(-6)}`;
-        }
+        const label = channelLabel();
         const name = await resolveChatName(feishuIm, lane.chatId);
-        const mid = name ? `${label}·${name}·${generated}` : `${label}·话题·${generated}`;
-        return `[${mid}] ${lane.threadId.slice(-6)}`;
+        return lane.threadId
+          ? formatTaskTopicTitle(generated, label, name ? { context: name } : undefined)
+          : formatTaskTopicTitle(name || lane.chatId.slice(-6), label);
       },
     },
     processingEmoji: REACTION_PROCESSING,

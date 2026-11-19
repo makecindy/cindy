@@ -99,6 +99,8 @@ vi.mock('../../usage/modelPricing.js', () => ({
   getGatewayModelPricingForModel: effects.fn('getGatewayModelPricingForModel'),
   getModelPriceQuote: effects.fn('getModelPriceQuote'),
 }));
+// The recorders read the reference pricing core the wrapper below re-exports (3c): the same mock.
+vi.mock('../../usage/referenceModelPricingCore.js', async () => await import('../../usage/referenceModelPricing.js'));
 vi.mock('../../usage/referenceModelPricing.js', () => ({
   readModelPriceOverridesSnapshot: effects.fn('readModelPriceOverridesSnapshot'),
   getClaudeSubscriptionValuePrice: effects.fn('getClaudeSubscriptionValuePrice'),
@@ -734,6 +736,42 @@ describe('production Session event pipeline', () => {
       }));
       h.emit(event('text', { text: 'Recovery requires attention' }, { runtimeRecovery: true }));
       expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    } finally { await h.dispose(); }
+  });
+
+  it('hands the coordinator the terminal error message and only bounded structured signals', async () => {
+    // Auto-resume and the usage-limit wait decide on these signals (isInterruptedTurnError,
+    // usageLimitAutoResume), and the Node Host must hand over the same ones; provider data stays bounded.
+    const h = harness();
+    h.deps.redactEventForRenderer.mockImplementation(value => value);
+    try {
+      h.emit(event('error', {
+        message: 'Upstream stream ended',
+        sdkError: 'stream_closed',
+        reason: 'upstream',
+        errorStatus: 529,
+        toolLoop: { kind: 'pingpong', count: 4, detail: 'provider text' },
+        outputLimit: { outputTokens: 64, reasoningTokens: 65 },
+        usageLimit: true,
+        usageResetAt: 1_800_000_000_000,
+        codexErrorInfo: 'usageLimitExceeded',
+        extra: 'dropped',
+      }));
+      h.emit(event('error', { message: 'Second failure', usageResetAt: Number.POSITIVE_INFINITY, toolLoop: { kind: 'other', count: 1 } }));
+      const calls = h.deps.agentInputCoordinatorHolder.onTurnEvent.mock.calls.filter(call => call[1] === 'error');
+      expect(calls.map(call => call.slice(0, 4))).toEqual([
+        ['task', 'error', 'Upstream stream ended', {
+          sdkError: 'stream_closed',
+          reason: 'upstream',
+          errorStatus: 529,
+          toolLoop: { kind: 'pingpong', count: 4 },
+          outputLimit: { outputTokens: 64 },
+          usageLimit: true,
+          usageResetAt: 1_800_000_000_000,
+          codexErrorInfo: 'usageLimitExceeded',
+        }],
+        ['task', 'error', 'Second failure', {}],
+      ]);
     } finally { await h.dispose(); }
   });
 

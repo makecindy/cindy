@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   executableModels: vi.fn(),
   providerModel: vi.fn(),
   providerInvoke: vi.fn(),
+  sharedImageSource: vi.fn(),
+  remoteInvoke: vi.fn(),
   videoConnection: vi.fn(),
   httpConnection: vi.fn(),
   resolvedGuide: vi.fn(),
@@ -135,6 +137,10 @@ vi.mock('../providerMediaRuntime.js', async (importOriginal) => ({
   resolveProviderHttpConnection: mocks.httpConnection,
 }));
 vi.mock('../ingest.js', () => ({ ingestMedia: mocks.ingestMedia }));
+vi.mock('../sharedImageCatalog.js', () => ({
+  resolveSharedImageSource: mocks.sharedImageSource,
+  invokeSharedImageSource: mocks.remoteInvoke,
+}));
 vi.mock('../blobStore.desktop.js', () => ({
   readFile: mocks.readBlob,
   parseBlobUrl: (url: string) => {
@@ -371,6 +377,8 @@ describe('Cindy Core media invocation state and security boundary', () => {
     });
     mocks.providerModel.mockReset();
     mocks.providerInvoke.mockReset();
+    mocks.sharedImageSource.mockReset();
+    mocks.remoteInvoke.mockReset();
     mocks.videoConnection.mockReset();
     mocks.httpConnection.mockReset();
     mocks.resolvedGuide.mockReset();
@@ -1742,6 +1750,29 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.rows.get(invocationId)?.modelId).toBe(fullModelId);
     const [, init] = mocks.outboundFetch.mock.calls[0];
     expect(JSON.parse(init.body)).toMatchObject({ model: fullModelId });
+  });
+
+  it('uses the selected incoming OpenAI share and ingests the returned image without local credentials', async () => {
+    const providerId = 'share:image-account';
+    const modelId = 'openai/gpt-image-2';
+    mocks.models.mockResolvedValue([{ id: modelId, providerId, name: 'GPT Image 2', mode: 'image_generation' }]);
+    mocks.sharedImageSource.mockReturnValue({ memberId: 'member', providerId: 'openai', hostDeviceId: 'host' });
+    mocks.remoteInvoke.mockImplementation(async (_providerId, command) =>
+      command.action === 'start' ? { accepted: true } : {
+        state: 'complete', mimeType: 'image/png', size: PNG.length, data: PNG.toString('base64'),
+      });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId, modelId, capability: 'image.generate' });
+    expect(prepared).toMatchObject({ ok: true, provider_id: providerId, model_id: modelId });
+    expect(mocks.models).toHaveBeenCalledWith('image.generate', expect.objectContaining({ providerId }));
+    const invocationId = prepared.invocation_id as string;
+    const nativeParameters = { rendering: { seed: 7 } };
+    const result = await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'a cat', ...nativeParameters } });
+    expect(result).toMatchObject({ ok: true });
+    expect(mocks.remoteInvoke).toHaveBeenCalledWith(providerId,
+      expect.objectContaining({ action: 'start', providerId: 'openai', model: modelId, requestId: invocationId, nativeParameters }),
+      expect.any(Function));
+    expect(mocks.ingestMedia).toHaveBeenCalledWith(expect.objectContaining({ buffer: PNG }), mocks.db.drizzle);
+    expect(mocks.providerInvoke).not.toHaveBeenCalled();
   });
 
   it.each([

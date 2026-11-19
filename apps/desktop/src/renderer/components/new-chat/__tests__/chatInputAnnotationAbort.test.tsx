@@ -21,7 +21,7 @@ import type { scanAtResources } from '@/lib/atResourceService';
 import type { ExtraDirsButton } from '../ExtraDirsButton';
 import type { PermissionSelector } from '../PermissionSelector';
 import type { ModelSelector } from '../ModelSelector';
-import type { UseVoiceInputResult } from '@/voice-input/useVoiceInput';
+import type { UseVoiceInputOptions, UseVoiceInputResult } from '@/voice-input/useVoiceInput';
 import { useAttachments } from '@/hooks/useAttachments';
 import { dispatchInputDeviceAction } from '@/lib/inputDeviceActions';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   atPanel: null as ComponentProps<typeof AtMentionPanel> | null,
   documentChanged: vi.fn(),
   voiceState: null as UseVoiceInputResult['state'] | null,
+  onSamples: undefined as UseVoiceInputOptions['onSamples'],
   draftText: '',
   draftSource: null as UseVoiceInputResult['draftSource'],
   draftRange: null as UseVoiceInputResult['draftRange'],
@@ -112,7 +113,8 @@ vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ query, comman
   <div data-testid="test-slash-palette" data-query={query} data-commands={commands.map(command => command.name).join(',')} /> }));
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
-vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null) => {
+vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null, _disabled: boolean, _messages: unknown, options: UseVoiceInputOptions) => {
+  h.onSamples = options?.onSamples;
   // Attach before ChatInput's first hydration effect so an empty-document
   // replacement on initial mount cannot hide from the regression assertion.
   if (editor && editor !== h.editor) editor.on('transaction', ({ transaction }) => { if (transaction.docChanged) h.documentChanged(); });
@@ -205,6 +207,22 @@ function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}, t
   const view = render(taskRoster ? <TaskComposer {...props} /> : <ChatInput {...props} />);
   return { ...view, props };
 }
+
+// Unit, project-settings.md: the panel-only tests cannot catch the project
+// shortcut replacing the task picker when a local task supports both.
+it('offers the task directory picker just before project settings in the + menu', async () => {
+  const openSettings = vi.fn();
+  renderComposer({ writableGrantScope: 'composer-regression', onWritableDirsChange: vi.fn(),
+    onOpenProjectSettings: openSettings });
+  fireEvent.click(screen.getByRole('button', { name: 'test-suggestions' }));
+  await waitFor(() => expect(h.atPanel?.embedded).toBe(true));
+  expect(h.atPanel!.entries.slice(-2)).toMatchObject([
+    { kind: 'action', action: { label: 'extraDirs.add', opensPanelPage: true } },
+    { kind: 'action', action: { label: 'projectSettings.title' } },
+  ]);
+  await act(async () => h.atPanel!.onSelect(h.atPanel!.entries.at(-1)!));
+  expect(openSettings).toHaveBeenCalledOnce();
+});
 
 // #8941 / #10257 mentions subscope. Unit: the shared production roster hook and
 // real ChatInput/Tiptap must offer a buddy beside its same-name task through both
@@ -644,6 +662,32 @@ it('keeps the voice button anchored beside the main action through its lifecycle
         .toBe('newChat.sendButton.stop');
     }
   }
+});
+
+// Unit: the position test cannot detect a decorative recording loop. One loud
+// PCM window should advance through the button and disappear after silence.
+it('shows recent microphone levels on the recording button and clears them on stop', async () => {
+  h.voiceState = 'listening';
+  const view = renderComposer();
+  const levels = () => [...view.container.querySelectorAll<HTMLElement>('.composer-recording-bar')]
+    .map((bar) => bar.style.transform);
+  const startingBars = () => view.container.querySelectorAll('.composer-recording-bar[data-starting]');
+  expect(startingBars()).toHaveLength(3);
+  const quiet = levels();
+  expect(quiet).toHaveLength(3);
+  const loud = new Int16Array(640).fill(24000).buffer;
+  const silent = new Int16Array(640).buffer;
+  await act(() => h.onSamples!(loud));
+  expect(startingBars()).toHaveLength(0);
+  const raised = levels()[2];
+  expect(raised).not.toBe(quiet[2]);
+  await act(() => h.onSamples!(silent));
+  expect(levels()).toEqual([quiet[0], raised, quiet[2]]);
+  h.voiceState = 'submitting';
+  await act(() => view.rerender(<ChatInput {...view.props} />));
+  expect(levels()).toEqual(quiet);
+  await act(() => h.onSamples!(loud));
+  expect(levels()).toEqual(quiet);
 });
 
 // 9bc20cf894 / composerMorphScope: choosing a model used to drop focus to body.

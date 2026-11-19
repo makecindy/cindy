@@ -76,7 +76,10 @@ describe('discord channel access store (phase 1: owner only)', () => {
     });
 
     expect(discordChannelAccessStore.write({ channels: [] })).toEqual({ channels: [] });
-    expect(fs.existsSync(file())).toBe(false);
+    // The retired grant generation remains host-local so revoke/regrant cannot publish an older result.
+    // No active guild/channel survives in either the public projection or stored configuration.
+    expect(JSON.parse(fs.readFileSync(file(), 'utf8'))).not.toHaveProperty('guilds');
+    expect(JSON.parse(fs.readFileSync(file(), 'utf8'))).not.toHaveProperty('channels');
     expect(discordChannelAccessStore.read()).toEqual({ channels: [] });
   });
 

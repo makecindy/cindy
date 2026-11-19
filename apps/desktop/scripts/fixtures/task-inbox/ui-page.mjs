@@ -35,8 +35,8 @@ export default {
       await working.locator('> button').click();
       await page.locator('[data-session-id="ready"]').click();
       await scroller.evaluate((node) => { node.scrollTop = 0; });
-      // Move the pointer off the list so the hover freeze does not hold the row.
-      await page.mouse.move(310, 630);
+      // Reading a row inside the list must allow it to change sections.
+      await page.locator('[data-session-id="ready"]').hover({ position: { x: 30, y: 10 } });
       await page.evaluate(() => window.__replyToReady());
       await working.locator('[data-session-id="ready"]').waitFor();
       await page.waitForTimeout(400);
