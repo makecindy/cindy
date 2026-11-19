@@ -93,9 +93,10 @@ export interface ResolvedMediaInvocationGuide {
 
 /** Local execution state, never supplied by the protocol Guide. */
 export type MediaInvocationBinding =
-  | { providerId: string; executor: 'gateway' | 'provider-image' }
+  | { providerId: string; executor: 'gateway' }
+  | { providerId: string; executor: 'provider-image'; guideSource?: 'custom' | 'official' }
   | { providerId: string; executor: 'provider-http'; connectionRevision: string; sourceAgent: 'claude-code' | 'codex' | 'pi'; guideSource: 'custom' | 'official' }
-  | { providerId: string; executor: 'provider-video'; connectionRevision: string; videoProtocol?: ProviderVideoApi; sourceAgent?: 'claude-code' | 'codex' | 'pi' };
+  | { providerId: string; executor: 'provider-video'; connectionRevision: string; videoProtocol?: ProviderVideoApi; sourceAgent?: 'claude-code' | 'codex' | 'pi'; guideSource?: 'custom' | 'official' };
 
 /** Persisted operation snapshot plus the independently selected local binding. */
 export type PreparedMediaInvocationGuide = Omit<MediaInvocationGuide, 'operations'> &
@@ -594,7 +595,8 @@ export function parsePreparedMediaInvocationGuide(
   if (!isPlainObject(binding)) return fail('guide.binding must be an object');
   const bindingFields = binding.executor === 'provider-http'
     ? ['providerId', 'executor', 'connectionRevision', 'sourceAgent', 'guideSource'] : binding.executor === 'provider-video'
-    ? ['providerId', 'executor', 'connectionRevision', 'videoProtocol', 'sourceAgent'] : ['providerId', 'executor'];
+    ? ['providerId', 'executor', 'connectionRevision', 'videoProtocol', 'sourceAgent', 'guideSource']
+    : binding.executor === 'provider-image' ? ['providerId', 'executor', 'guideSource'] : ['providerId', 'executor'];
   const bindingError = unknownField(binding, bindingFields, 'guide.binding');
   if (bindingError) return fail(bindingError);
   if (!boundedString(binding.providerId, 128) || !/^[a-zA-Z0-9_-]+$/.test(binding.providerId)) {
@@ -614,6 +616,8 @@ export function parsePreparedMediaInvocationGuide(
   if (binding.executor === 'provider-http' &&
       (binding.sourceAgent === undefined || !['custom', 'official'].includes(binding.guideSource as string)))
     return fail('guide.binding must identify the selected runtime and Guide source');
+  if (binding.guideSource !== undefined && !['custom', 'official'].includes(binding.guideSource as string))
+    return fail('guide.binding.guideSource must be supported');
   const { connection: _legacyConnection, ...snapshot } = value;
   return ok({ ...snapshot, binding } as unknown as PreparedMediaInvocationGuide);
 }
