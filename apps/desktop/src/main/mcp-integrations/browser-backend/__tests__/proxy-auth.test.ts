@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 import { resetBrowserProxyDnsVerdictCache } from '@cindy/browser-control-runtime';
+import { ExternalChromeBackend } from '../external-chrome-backend.js';
 
 import {
   BrowserProxyAuthCoordinator,
   closeAdoptedManagedBrowser,
+  isManagedBrowserGone,
   commandLineHasArgumentValue,
   commandLineHasExactArgument,
   readWindowsProcessCommandLine,
@@ -394,6 +396,35 @@ describe('terminateManagedChromePortOwner', () => {
 });
 
 describe('BrowserProxyAuthCoordinator', () => {
+  // #8992: use the real default liveness probe against the existing loopback
+  // fixture, not an immediate injected verdict. HTTP can answer while the
+  // runtime's WebSocket readiness is false. Two 10s exit-confirmation probes
+  // then exhaust Desktop's 16s quit budget before ownership cleanup begins.
+  // Integration fixture in this existing CDP suite; no real browser/profile.
+  it('cleans an unused HTTP-responsive browser before the Desktop quit budget', async () => {
+    const cdp = await createFakeCdp();
+    const closeAdoptedBrowser = vi.fn(async () => true);
+    const warn = vi.fn();
+    const backend = new ExternalChromeBackend({
+      call: async request => ({
+        ok: true, action: request.action, status: 200,
+        data: request.action === 'status' ? { running: false } : { stopped: false },
+      }),
+    }, { warn }, {
+      cdpHttpUrl: cdp.cdpUrl,
+      managedUserDataDir: '/managed/browser/Cindy/user-data',
+      closeAdoptedBrowser,
+    });
+
+    await backend.dispose();
+
+    expect(closeAdoptedBrowser).toHaveBeenCalledWith(cdp.cdpUrl, '/managed/browser/Cindy/user-data');
+    expect(warn).not.toHaveBeenCalled();
+    // The endpoint is still listening: the cleanup receipt above is a seam,
+    // while both presence decisions exercise the production TCP/CDP probe.
+    await expect(isManagedBrowserGone(cdp.cdpUrl)).resolves.toBe(false);
+  }, 16_000);
+
   beforeEach(() => {
     // DNS verdicts are cached per hostname across coordinators, so one test's
     // resolver would otherwise decide the next test's verdict for the same host.

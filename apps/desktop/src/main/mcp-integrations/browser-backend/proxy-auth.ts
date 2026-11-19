@@ -386,6 +386,10 @@ async function confirmCdpGone(cdpHttpUrl: string): Promise<boolean> {
  * ownership by actually closing the browser.
  */
 export async function isManagedBrowserGone(cdpHttpUrl: string): Promise<boolean> {
+  // A listening port already disproves absence, even when HTTP/WebSocket
+  // readiness is broken. Do not spend an exit-confirmation window waiting for
+  // a live browser before its caller has had a chance to request cleanup.
+  if (await isCdpPortListening(cdpHttpUrl)) return false;
   return await confirmCdpGone(cdpHttpUrl);
 }
 
