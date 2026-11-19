@@ -16598,6 +16598,7 @@
       },
       "filterCreatorsHeading": "Amigos",
       "filterCreatorsAny": "Todo",
+      "filterHideAutomations": "Ocultar tareas automatizadas",
       "filterCreatorsNone": "Ocultar todo",
       "filterSelectedCreators": "Seleccionados: {{count}}",
       "filterProjectsHeading": "Proyectos",

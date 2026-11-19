@@ -440,6 +440,7 @@
       "filterEmptyCopy": "表示設定の「フィルター」で調整またはリセットできます。",
       "filterTeammatesHeading": "パートナー",
       "filterAnySource": "すべて",
+      "filterHideAutomations": "自動化タスクを非表示",
       "filterHideAllTeammates": "すべて非表示",
       "filterSelectedTeammates": "{{count}} 人を選択",
       "inbox": {

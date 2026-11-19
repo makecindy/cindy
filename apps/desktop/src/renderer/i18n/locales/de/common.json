@@ -16442,6 +16442,7 @@
       },
       "filterCreatorsHeading": "Freunde",
       "filterCreatorsAny": "Alle",
+      "filterHideAutomations": "Automatisierte Aufgaben ausblenden",
       "filterCreatorsNone": "Alle ausblenden",
       "filterSelectedCreators": "{{count}} ausgewählt",
       "filterProjectsHeading": "Projekte",

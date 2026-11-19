@@ -440,6 +440,7 @@
       "filterEmptyCopy": "可在顯示設定的「篩選」中調整或重設。",
       "filterTeammatesHeading": "夥伴",
       "filterAnySource": "全部",
+      "filterHideAutomations": "隱藏自動化任務",
       "filterHideAllTeammates": "都不顯示",
       "filterSelectedTeammates": "已選 {{count}} 位",
       "inbox": {
