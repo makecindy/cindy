@@ -652,6 +652,37 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
+  // Unit regression: a failed directory read used to put an error on the confirmed
+  // task model even though its remote capability still identifies it and sends can proceed.
+  it('keeps a remote catalog failure in the picker when the current task model is known', async () => {
+    deviceProvidersRef.error = '[DEVICE_LINK_TIMEOUT] directory read timed out';
+    const props: React.ComponentProps<typeof ModelSelector> = {
+      remoteAgent: { devices: [], selectedDeviceId: null, homeDeviceId: 'dev-a' },
+      deviceId: 'dev-a',
+      actualRoute: true,
+      agentIdentity: { vendorKey: 'cc', state: 'current' },
+      modelId: 'claude-opus-4-8',
+      effort: 'high',
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+    };
+    const view = render(React.createElement(ModelSelector, props));
+    try {
+      const trigger = screen.getByRole('button', { name: /Opus 4\.8/ });
+      expect(trigger.getAttribute('aria-label')).not.toContain('模型读取失败');
+      expect(trigger.querySelector('.lucide-circle-alert')).toBeNull();
+      await act(async () => { fireEvent.click(trigger); });
+      expect(screen.getByRole('button', { name: '重新读取模型' })).toBeTruthy();
+
+      deviceProvidersRef.error = '[REMOTE_AGENT_SHARE_UNAVAILABLE] share revoked';
+      view.rerender(React.createElement(ModelSelector, props));
+      expect(trigger.querySelector('.lucide-circle-alert')).toBeTruthy();
+    } finally {
+      view.unmount();
+      deviceProvidersRef.error = null;
+    }
+  });
+
   it('unified panel remote failures show retry instead of no matching models', async () => {
     const originalCapabilities = agentCapabilitiesRef.capabilities;
     const originalModels = visibleModelsRef.models;
