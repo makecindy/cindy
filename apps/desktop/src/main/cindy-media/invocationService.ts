@@ -1243,6 +1243,7 @@ async function prepareInvocation(
   assertAuthScope(scope);
   const models = await listAvailableMediaModels(capability, {
     skipGateway: !getAppCapabilities().canUseCindyGateway,
+    providerId,
   });
   assertAuthScope(scope);
   let matchingModels = models.filter(
@@ -1565,6 +1566,7 @@ async function submitInvocation(
   // Gateway 清单和客户端停用状态，避免模型/供应商刚被停用后仍发出新请求。
   const models = await listAvailableMediaModels(invocation.capability, {
     skipGateway: !getAppCapabilities().canUseCindyGateway,
+    providerId: invocation.guide.binding.providerId,
   });
   assertAuthScope(scope, invocation.owner);
   if (!models.some((model) => model.providerId === invocation.guide.binding.providerId && model.id === invocation.modelId)) {

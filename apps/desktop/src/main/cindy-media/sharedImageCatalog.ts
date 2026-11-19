@@ -21,12 +21,16 @@ export function configureSharedImageAccess(next: SharedImageAccess): void {
   access = next;
 }
 
-export async function listSharedImageModels(): Promise<ProviderMediaRuntimeModel[]> {
+export async function listSharedImageModels(sourceId?: string): Promise<ProviderMediaRuntimeModel[]> {
+  const shareId = providerShareIdOfAgentDeviceId(sourceId);
+  if (sourceId !== undefined && !shareId) return [];
   const ports = access;
   if (!ports) return [];
   const isCurrent = ports.captureOwner();
   if (!isCurrent()) return [];
-  const shares = ports.getReceivedShares().filter(share => share.status === 'active' && share.hostOnline);
+  const shares = ports.getReceivedShares().filter(share =>
+    (!shareId || share.shareId === shareId) && share.status === 'active' && share.hostOnline,
+  );
   const entries = await Promise.all(shares.map(async share => {
     const providerId = `${PROVIDER_SHARE_AGENT_DEVICE_PREFIX}${share.shareId}`;
     let timer: ReturnType<typeof setTimeout> | undefined;

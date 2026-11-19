@@ -16,6 +16,10 @@ describe('shared OpenAI media catalog', () => {
   it('projects current text-to-image models under the share identity and ignores older hosts', async () => {
     const share = mocks.share as ProviderShareReceived;
     configureSharedImageAccess({ captureOwner: () => () => true, getReceivedShares: () => [share], findReceivedShare: () => share, invoke: mocks.invoke });
+    expect(await listSharedImageModels('openai')).toEqual([]);
+    expect(await listSharedImageModels('share:another')).toEqual([]);
+    expect(mocks.catalog).not.toHaveBeenCalled();
+    expect(mocks.invoke).not.toHaveBeenCalled();
     mocks.catalog.mockResolvedValue({
       views: [{ id: 'openai', auth: { native: 'codex' }, connected: true, imageModels: [
         { id: 'openai/gpt-image-2', name: 'GPT Image 2' },

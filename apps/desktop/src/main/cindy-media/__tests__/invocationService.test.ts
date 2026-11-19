@@ -1763,6 +1763,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
       });
     const prepared = await callCindyMedia({ action: 'prepare', providerId, modelId, capability: 'image.generate' });
     expect(prepared).toMatchObject({ ok: true, provider_id: providerId, model_id: modelId });
+    expect(mocks.models).toHaveBeenCalledWith('image.generate', expect.objectContaining({ providerId }));
     const invocationId = prepared.invocation_id as string;
     const nativeParameters = { rendering: { seed: 7 } };
     const result = await callCindyMedia({ action: 'request', invocationId, body: { prompt: 'a cat', ...nativeParameters } });
