@@ -2218,6 +2218,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Chat-Layout",
+        "standard": "Standard",
+        "wide": "Breit",
+        "width": "Inhaltsbreite",
+        "hint": "Richtet sich nach dem verfügbaren Platz im Chat. Wenn genug Platz vorhanden ist, bleibt mindestens die Standardbreite erhalten. Schmale Bereiche passen sich an."
+      },
       "title": "Darstellung",
       "modeLabel": "Darstellungsmodus",
       "appIcon": {

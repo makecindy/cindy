@@ -2256,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Disposition du chat",
+        "standard": "Standard",
+        "wide": "Large",
+        "width": "Largeur du contenu",
+        "hint": "Utilise l’espace disponible dans le volet de chat. La largeur standard est conservée si l’espace le permet, et le contenu rétrécit dans les volets étroits."
+      },
       "title": "Apparence",
       "modeLabel": "Mode d'apparence",
       "appIcon": {

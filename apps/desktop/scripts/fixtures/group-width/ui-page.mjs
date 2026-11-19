@@ -12,6 +12,7 @@ const tables = [
   '', '| 项目 | 状态 |', '|---|---|', '| 验证 | 完成 |',
 ].join('\n');
 const data = { name: '群聊统一宽度检查', members: [{ botId: 'a', name: 'Aster' }], messages: 2, sidebar: false };
+const widePreference = ratio => ({ 'chat.layoutMode': 'wide', 'chat.layoutWidthPercent': String(ratio) });
 export default {
   ...group,
   name: 'group-width',
@@ -23,11 +24,12 @@ export default {
     about: 'Long messages from another human retain the shared reading cap with the sidebar expanded',
     viewport: { width, height: 900 }, data: { ...data, sidebar: true },
   }])), ...Object.fromEntries([1860, 3440].map(width => [`table-${width}`, {
-    about: 'Group reading column and input cap with long and short tables',
-    viewport: { width, height: 1080 }, data: { ...data, sidebar: true, wideTables: tables },
+    about: 'Opt-in wide group conversation with long and short tables',
+    viewport: { width, height: 1080 }, storage: widePreference(75), data: { ...data, sidebar: true, wideTables: tables, ratio: 75 },
   }])), ...Object.fromEntries([1568, 960, 800, 660, 400].map(width => [`split-${width}`, {
     about: 'Sidebar and real topic splitter at both limits, with long content and independent drafts',
-    viewport: { width, height: 900 }, data: { ...data, sidebar: width !== 400, bubbles: true, threadPanel: true },
+    viewport: { width, height: 900 }, storage: widePreference(100),
+    data: { ...data, sidebar: width !== 400, bubbles: true, threadPanel: true, ratio: 100 },
   }])), private: {
     about: 'The shared group renderer uses the same bounded reading column for direct conversations',
     viewport: { width: 1920, height: 900 }, data: { ...data, direct: true },
@@ -85,8 +87,8 @@ export default {
     });
     const check = async () => {
       const m = await measure();
-      const progress = Math.min(1, Math.max(0, (m.main.width - 1200) / 400));
-      const column = Math.min(914 + 206 * progress, m.main.width - (m.main.width < 700 ? 40 : 100));
+      const available = m.main.width - (m.main.width < 700 ? 40 : 100);
+      const column = Math.max(Math.min(914, available), available * (ui.data.ratio ?? 0) / 100);
       const close = (actual, expected, label) => assert.ok(Math.abs(actual - expected) <= 1,
         `${label}: expected ${expected}px, got ${actual}px`);
       close(m.column.width, column, 'message column');
@@ -107,8 +109,8 @@ export default {
     if (ui.data.wideTables) {
       const { main, column, composer, tables } = await measure();
       assert.ok(main.width >= 1600);
-      assert.equal(column.width, 1120);
-      assert.equal(composer.width, 1140);
+      assert.ok(Math.abs(column.width - (main.width - 100) * 0.75) <= 1);
+      assert.ok(Math.abs(composer.width - column.width - 20) <= 1);
       assert.ok(tables.length === 2 && tables.every(table => table.width <= table.viewport + 1));
       assert.ok(tables[0].width > tables[1].width * 2 && tables[1].width < 240, JSON.stringify(tables));
       console.log('GROUP_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, main, column, composer, tables }));

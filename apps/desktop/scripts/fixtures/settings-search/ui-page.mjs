@@ -28,6 +28,7 @@ export default {
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
     'visibility-desktop-commit': { about: 'Desktop visibility previews during a real pointer drag and commits once', data: { tab: 'appearance', previewBackground: 'none', visibility: 0.4 } },
     'visibility-wallpaper-commit': { about: 'Wallpaper visibility has the same preview/commit behavior', data: { tab: 'appearance', previewBackground: 'cindy-window', visibility: 0.4 } },
+    'chat-layout': { about: 'Find the chat layout, choose Wide, preview and keep a custom width', data: { tab: 'appearance', chatLayout: true } },
     ...Object.fromEntries(['none', 'cindy-window'].flatMap(background => [0.5, 1].map(visibility => [
       `glass-${background}-${visibility * 100}`, { about: 'Background sources share readable translucent cards', data: { tab: 'appearance', glassBackground: background, visibility } },
     ]))),
@@ -46,6 +47,59 @@ export default {
     const panel = page.getByRole('tabpanel');
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    if (ui.data.chatLayout) {
+      const row = panel.locator('#settings-chat-layout');
+      const slider = panel.getByRole('slider', { name: await ui.t('settings.appearance.chatLayout.width'), exact: true });
+      const previewColumn = panel.getByTestId('chat-layout-preview-column');
+      const standard = row.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.standard'), exact: true });
+      const wide = row.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.wide'), exact: true });
+      const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
+      const savedWidth = () => page.evaluate(() => localStorage.getItem('chat.layoutWidthPercent'));
+      await row.scrollIntoViewIfNeeded();
+      assert.equal(await standard.getAttribute('aria-checked'), 'true');
+      assert.equal(await slider.count(), 0);
+      await ui.capture('standard');
+      await standard.press('ArrowRight');
+      await slider.waitFor();
+      assert.equal(await wide.getAttribute('aria-checked'), 'true');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '75%');
+      assert.equal(await savedWidth(), null);
+      const defaultPreviewWidth = (await previewColumn.boundingBox()).width;
+      await ui.capture('wide-default');
+
+      const track = await slider.locator('xpath=ancestor::*[contains(@class,"cindy-slider")][1]').boundingBox();
+      const thumb = await slider.boundingBox();
+      await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(track.x + track.width * 0.87, track.y + track.height / 2, { steps: 8 });
+      const preview = Number(await slider.getAttribute('aria-valuenow'));
+      assert.equal(preview, 90);
+      assert.equal(await savedWidth(), null);
+      assert.ok((await previewColumn.boundingBox()).width > defaultPreviewWidth);
+      await page.mouse.up();
+      assert.equal(await savedWidth(), String(preview));
+      await slider.press('Home');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '25%');
+      await slider.press('End');
+      assert.equal(await slider.getAttribute('aria-valuetext'), '100%');
+      assert.equal(await savedWidth(), '100');
+      await standard.click();
+      assert.equal(await slider.count(), 0);
+      assert.equal(await savedWidth(), '100');
+      await wide.click();
+      assert.equal(await slider.getAttribute('aria-valuetext'), '100%');
+      assert.equal(await page.evaluate(() => localStorage.getItem('chat.layoutMode')), 'wide');
+      await ui.capture('wide-maximum');
+      const findWidth = async target => {
+        await search.fill(await ui.t('settings.appearance.chatLayout.width'));
+        await page.locator('[id="settings-search-result-appearance.chatWidth"]').click();
+        await page.waitForFunction(id => document.getElementById(id)?.classList.contains('settings-search-target-highlight'), target);
+      };
+      await findWidth('settings-chat-width');
+      await standard.click();
+      await findWidth('settings-chat-layout');
+      return;
+    }
     // Product regression: the opt-in must remain off until selected. Exercise the
     // real setting, search and local override; existing cases only read controls.
     if (ui.data.modelTokens) {

@@ -3,8 +3,9 @@ import { AppFrame, ctx, forbid, mountPage, subscription } from '../../ui-page/ha
 import { MessageStream } from '../../../src/renderer/components/chat/MessageStream';
 import { MarkdownRenderer } from '../../../src/renderer/components/chat/MarkdownRenderer';
 import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
+import { ChatLayoutSettings } from '../../../src/renderer/components/settings/ChatLayoutSettings';
 import { PluginUiProvider } from '../../../src/renderer/cindy-brain/PluginUiContributions';
-import * as proportionalWidth from '../../../src/renderer/hooks/useProportionalWidth';
+import { useProportionalWidth } from '../../../src/renderer/hooks/useProportionalWidth';
 import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
 import { SplitGroup } from '../../../src/renderer/features/cc-agent/SplitGroup';
 import { splitGroupStore } from '../../../src/renderer/features/cc-agent/splitGroupStore';
@@ -35,14 +36,10 @@ if (layout.content.type === 'split') layout.content.children.forEach(child => { 
 if (ctx.data.splitWidth) splitGroupStore.addSession('width-b', 'width-a', 'right');
 
 export function Task({ sessionIdProp, compactToolbar }: { sessionIdProp?: string; compactToolbar?: boolean } = {}) {
-  // Namespace lookup keeps --compare runnable against the original hook,
-  // which has no wide-pane export/option; its unchanged914px behavior is replayed.
-  const wideCap = Reflect.get(proportionalWidth, 'CHAT_MESSAGE_MAX_WIDTH')
-    ?? Reflect.get(proportionalWidth, 'TASK_MESSAGE_MAX_WIDTH') ?? 914;
-  const width = proportionalWidth.useProportionalWidth(914, { expandTo: ctx.data.legacy ? undefined : wideCap });
+  const width = useProportionalWidth(914);
   const attachmentState = useAttachments(`fixture-task-width-${sessionIdProp ?? 'main'}`);
   return <main className={`flex-1 h-full ${ctx.data.splitWidth ? 'min-w-0' : 'min-w-[400px]'}`} data-task-pane>
-    <div ref={width.containerRef} className={`relative h-full w-full${width.isCompact ? ' chat-rail-compact' : ''}`} data-task-width data-wide-cap={wideCap}>
+    <div ref={width.containerRef} className={`relative h-full w-full${width.isCompact ? ' chat-rail-compact' : ''}`} data-task-width>
       <MessageStream workingDir="" historyLoaded simplifiedBotConversation={Boolean(ctx.data.companion)} messages={messages.map(message => message.clientId === 'answer'
         ? { ...message, content: ctx.data.textOnly ? textContent : ctx.data.shortTable ? `${content}\n\n${shortTable}` : content,
           ...(ctx.data.streaming ? { isStreaming: true, turnCompleted: false } : {}) }
@@ -78,6 +75,11 @@ function Fixture() {
       <button data-testid="toggle-sidebar" onClick={() => setSidebar(value => !value)}>Toggle sidebar</button>
       <button data-testid="toggle-panel" onClick={() => setPanel(value => !value)}>Toggle panel</button>
     </div>
+    {ctx.data.interactive && (
+      <div data-ui-page-control className="fixed bottom-32 left-4 z-50 w-64">
+        <ChatLayoutSettings />
+      </div>
+    )}
     <AppFrame sidebar={sidebar ? <div className="p-5 text-14">Cindy<br /><br />宽屏工作区</div> : undefined}>
       <BuiltinPanelBridgeProvider value={{ sessionList: null, chatMain: ctx.data.splitWidth ? <SplitGroup activeSessionId="width-a"><Task /></SplitGroup> : <Task />, rightTabs: <ReferencePanel /> }}>
         <LayoutRoot suppressNonChatPanels={!panel} rightTabsCollapsed={!panel} sidebarExpansionReady={false} />

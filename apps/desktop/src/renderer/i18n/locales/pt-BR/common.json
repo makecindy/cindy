@@ -2256,6 +2256,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Layout do chat",
+        "standard": "Padrão",
+        "wide": "Amplo",
+        "width": "Largura do conteúdo",
+        "hint": "Usa o espaço disponível no chat. Mantém pelo menos a largura padrão quando há espaço e se ajusta em painéis estreitos."
+      },
       "title": "Aparência",
       "modeLabel": "Modo de aparência",
       "appIcon": {

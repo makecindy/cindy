@@ -2218,6 +2218,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "Chat layout",
+        "standard": "Standard",
+        "wide": "Wide",
+        "width": "Content width",
+        "hint": "Uses the available space in the chat pane. Keeps the Standard width when it fits and shrinks in narrow panes."
+      },
       "title": "Appearance",
       "modeLabel": "Appearance Mode",
       "appIcon": {

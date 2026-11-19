@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import composer from '../companion-composer/ui-page.mjs';
 
+const widePreference = ratio => ({ 'chat.layoutMode': 'wide', 'chat.layoutWidthPercent': String(ratio) });
+
 export default {
   name: 'task-content-width', entry: './fixture.tsx', viewport: { width: 1920, height: 1080 },
   real: 'MessageStream, AssistantMessage, MarkdownRenderer, ChatInput, useProportionalWidth, LayoutRoot, SplitGroup and their production draggable dividers; AppFrame header, fonts and themes',
@@ -18,7 +20,8 @@ export default {
   cases: {
     ...Object.fromEntries([280, 320, 360, 400].map(width => [`width-split-${width}`, {
       about: 'Real task splitter at a narrow pane width within the supported800px window',
-      viewport: { width: 800, height: 900 }, data: { splitWidth: width, collapsed: true },
+      viewport: { width: 800, height: 900 }, storage: widePreference(100),
+      data: { splitWidth: width, collapsed: true, ratio: 100 },
     }])),
     'width-min-window': { about: 'Native minimum800px window with the expanded260px sidebar', viewport: { width: 800, height: 700 } },
     default: { about: 'Large desktop, sidebar expanded' },
@@ -26,11 +29,17 @@ export default {
     'width-large': { about: 'Large desktop, sidebar expanded' },
     ...Object.fromEntries([1860, 3440].flatMap(width => [false, true].map(companion => [
       companion ? `companion-wide-${width}` : width === 3440 ? 'width-ultrawide' : 'width-cap',
-      { about: 'Wide pane cap and compact short tables for a task or companion', viewport: { width, height: 1080 }, data: { companion, shortTable: true } },
+      { about: 'Opt-in wide pane and compact short tables for a task or companion',
+        viewport: { width, height: 1080 }, storage: widePreference(75), data: { companion, shortTable: true, ratio: 75 } },
     ]))),
+    'width-live': { about: 'Adjust real settings controls against the mounted task without navigating away',
+      viewport: { width: 1860, height: 1080 }, data: { shortTable: true, interactive: true } },
+    'width-maximum': { about: '100% of the ultrawide pane retains normal margins',
+      viewport: { width: 3440, height: 1080 }, storage: widePreference(100), data: { shortTable: true, ratio: 100 } },
     'width-collapsed': { about: 'Large desktop, sidebar collapsed', data: { collapsed: true } },
-    'width-panel': { about: 'Reference panel at 50/50 and divider extremes', data: { panel: true } },
-    'width-legacy': { about: 'Original 914px width for design comparison', data: { legacy: true } },
+    'width-panel': { about: 'Reference panel at 50/50 and divider extremes with 100% selected',
+      storage: widePreference(100), data: { panel: true, ratio: 100 } },
+    'width-legacy': { about: 'Default standard layout retains the original 914px limit' },
     'width-streaming': { about: 'Live Markdown prose retains the completed reply reading width', data: { streaming: true } },
     'width-notebook': { about: '1440px effective laptop width retains the mature914px column', viewport: { width: 1440, height: 900 } },
     'width-scale125': { about: '1536px effective width, equivalent to1920px at125% system scale', viewport: { width: 1536, height: 864 } },
@@ -70,7 +79,6 @@ export default {
       })) : undefined;
       const lineHeight = parseFloat(getComputedStyle(paragraph).lineHeight);
       return { pane: pane.width, column: column.width, composer: composer.width, prose: prose.width,
-        supportedWideCap: Number(paneElement.querySelector('[data-task-width]').dataset.wideCap),
         proseLines: Math.round(prose.height / lineHeight),
         table: table?.getBoundingClientRect().width, tableViewport: tableViewport?.clientWidth, headerLines,
         bubble: bubble?.getBoundingClientRect().width,
@@ -81,18 +89,20 @@ export default {
         overflow: document.documentElement.scrollWidth - innerWidth,
         withinPane: composer.left >= pane.left && composer.right <= pane.right };
     }, index);
-    const verify = async (index = 0) => {
-      await page.waitForFunction(index => {
+    const verify = async (index = 0, ratio = ui.data.ratio) => {
+      await page.waitForFunction(({ index, ratio }) => {
         const pane = document.querySelectorAll('[data-task-pane]')[index];
         const el = pane.querySelector('[data-task-width]');
-        return parseFloat(el.style.getPropertyValue('--cindy-message-width')) <= pane.getBoundingClientRect().width;
-      }, index);
+        const width = pane.getBoundingClientRect().width;
+        const available = width - (width < 700 ? 40 : 100);
+        const expected = Math.max(Math.min(914, available), available * (ratio ?? 0) / 100);
+        return Math.abs(parseFloat(el.style.getPropertyValue('--cindy-message-width')) - expected) <= 1;
+      }, { index, ratio });
       const m = await measure(index);
-      // --compare loads the original production hook, with no wide-cap export.
-      // Preserve its known6px one-sided gutter in before evidence; the new
-      // ordinary-task layout must share the composer's exact center axis.
-      const original = m.supportedWideCap === 914;
-      assert.ok(m.withinPane && m.overflow <= 1 && Math.abs(m.centerDelta) <= (original ? 6.1 : 1), JSON.stringify(m));
+      const available = m.pane - (m.pane < 700 ? 40 : 100);
+      const expected = Math.max(Math.min(914, available), available * (ratio ?? 0) / 100);
+      assert.ok(Math.abs(m.column - expected) <= 1, JSON.stringify({ ratio, expected, ...m }));
+      assert.ok(m.withinPane && m.overflow <= 1 && Math.abs(m.centerDelta) <= 1, JSON.stringify(m));
       assert.ok(Math.abs(m.composer - m.column - 20) <= 1, JSON.stringify(m));
       if (ui.data.companion) {
         assert.ok(m.bubble > 0 && m.bubble <= 721 && m.prose < m.bubble, JSON.stringify(m));
@@ -114,13 +124,7 @@ export default {
           `Short table columns stay adjacent: ${JSON.stringify(m)}`);
       }
       assert.equal(m.pageScale, 1, 'Effective widths use100% page zoom');
-      if (!original && !ui.data.legacy && m.pane >= 1600) {
-        assert.ok(Math.abs(m.column - 1120) <= 1, `Pure text and wide blocks use the bounded wide column: ${JSON.stringify(m)}`);
-      }
-      if (m.pane >= 1014 && m.pane <= 1200) {
-        assert.ok(Math.abs(m.column - 914) <= 1, `Laptop reading width remains unchanged: ${JSON.stringify(m)}`);
-      }
-      console.log('TASK_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, paneIndex: index, ...m }));
+      console.log('TASK_WIDTH', JSON.stringify({ case: ui.case, theme: ui.theme, paneIndex: index, ratio, ...m }));
     };
     if (ui.data.splitWidth) {
       // User requested extremely narrow views. Top-level task panes stop at400,
@@ -156,6 +160,26 @@ export default {
       }
     }
     await verify();
+    if (ui.data.interactive) {
+      await ui.capture('standard');
+      await page.getByRole('radio', { name: await ui.t('settings.appearance.chatLayout.wide'), exact: true }).click();
+      const slider = page.getByRole('slider', { name: await ui.t('settings.appearance.chatLayout.width'), exact: true });
+      await slider.waitFor();
+      await verify(0, 75);
+      await ui.capture('wide-75');
+      const thumb = await slider.boundingBox();
+      const track = await page.locator('[data-setting-id="appearance.chatWidth"]').boundingBox();
+      await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(track.x + track.width - 1, track.y + track.height / 2, { steps: 8 });
+      await verify(0, 100);
+      assert.equal(await page.evaluate(() => localStorage.getItem('chat.layoutWidthPercent')), null);
+      await page.mouse.up();
+      await ui.capture('wide-100');
+      await slider.press('Home');
+      await verify(0, 25);
+      return;
+    }
     const process = page.locator('[data-scroll-disclosure-header][aria-expanded="false"]').first();
     if (await process.count()) {
       await process.click();
@@ -177,6 +201,7 @@ export default {
       await verify();
       await ui.capture('sidebar-collapsed');
     }
+    if (ui.data.textOnly) return;
     const scroll = page.locator('[data-scroll-container]').first();
     const box = await scroll.boundingBox();
     await page.mouse.move(box.x + box.width / 2, Math.min(box.y + box.height / 2, ui.viewport.height - 150));
