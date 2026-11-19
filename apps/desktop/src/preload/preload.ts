@@ -6191,8 +6191,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }),
     ensureReady: (
       userId: string,
+      recovery?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
     ): Promise<{ ready: true } | { ready: false; error: { code: string; message: string } }> =>
-      ipcRenderer.invoke('local-db:ensure-ready', userId),
+      ipcRenderer.invoke('local-db:ensure-ready', userId, recovery),
     databaseSizeWarning: {
       // Settings and the startup capacity snapshot are local to this device's
       // shared Electron userData profile; they are not synced across devices

@@ -57,6 +57,7 @@ export function LocalDbGate() {
   }, [dataOwnerId, dataOwnerGeneration]);
   const [retryNonce, setRetryNonce] = useState(0);
   const retryCountRef = useRef(0);
+  const recoveryRequestRef = useRef<import('../../../shared/dataOwnerPush').DataOwnerPushStamp | undefined>(undefined);
   const previousOwnerRef = useRef<{ id: string | null; generation: number } | null>(null);
 
   useEffect(() => {
@@ -77,6 +78,7 @@ export function LocalDbGate() {
     // user 变化 = 一次全新决策,重试额度整体归零;只有 retryNonce 驱动的重跑才
     // 继承计数(否则重试永远数不满,fatal 不可达)。
     if (ownerChanged) {
+      recoveryRequestRef.current = undefined;
       retryCountRef.current = 0;
       setDecision({ phase: 'checking' });
     }
@@ -91,7 +93,11 @@ export function LocalDbGate() {
      const attemptStartedAt = performance.now();
      try {
       // ensureReady（按 userId 切换 db；失败 main 已弹对话框）
-      const ready = await window.electronAPI.localDb.ensureReady(ownerId);
+      const recovery = recoveryRequestRef.current;
+      recoveryRequestRef.current = undefined;
+      const ready = await (recovery
+        ? window.electronAPI.localDb.ensureReady(ownerId, recovery)
+        : window.electronAPI.localDb.ensureReady(ownerId));
       if (cancelled || runtimeCorrupted) return;
       if (!ready.ready) {
         log.error('ensureReady failed', ready.error);
@@ -196,6 +202,8 @@ export function LocalDbGate() {
         code={decision.code}
         message={decision.message}
         onRetry={() => {
+          recoveryRequestRef.current = decision.code === 'DB_RUNTIME_CORRUPT'
+            ? { dataOwnerId, ownerGeneration: dataOwnerGeneration } : undefined;
           retryCountRef.current = 0;
           setDecision({ phase: 'checking' });
           setRetryNonce((n) => n + 1);

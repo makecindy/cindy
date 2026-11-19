@@ -188,7 +188,7 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(migrationHelper).toContain('if (isPassiveSharedUserDataInstance()) return;');
 
     const beforeEnsureReadyStart = bootstrapSource.indexOf(
-      'beforeEnsureReady: async (userId) => {',
+      'beforeEnsureReady: async (userId, recovery) => {',
     );
     const beforeEnsureReadyEnd = bootstrapSource.indexOf(
       '\n    },\n    onReady:',

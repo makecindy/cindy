@@ -14,7 +14,7 @@ describe('lifecycle DbClient manager', () => {
     if (mode === 'inproc-fallback') worker.query.mockRejectedValueOnce(new Error('worker unavailable'));
     const clearCurrent = vi.fn();
     const manager = createLifecycleDbClientManager({
-      getCurrentDbPath: () => '/tmp/owner-a.db',
+      closeMainDb: vi.fn(), getCurrentDbPath: () => '/tmp/owner-a.db',
       createWorkerClient: vi.fn(async () => worker),
       createInprocClient: vi.fn(async () => fallback),
       setCurrentDbClient: vi.fn(),
@@ -46,7 +46,7 @@ describe('lifecycle DbClient manager', () => {
     const setCurrent = vi.fn();
 
     const manager = createLifecycleDbClientManager({
-      getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
+      closeMainDb: vi.fn(), getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
       createWorkerClient: vi.fn(async () => worker),
       createInprocClient: vi.fn(async () => fallback),
       setCurrentDbClient: setCurrent,
@@ -80,7 +80,7 @@ describe('lifecycle DbClient manager', () => {
     const setCurrent = vi.fn();
 
     const manager = createLifecycleDbClientManager({
-      getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
+      closeMainDb: vi.fn(), getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
       createWorkerClient: vi.fn(async () => worker),
       createInprocClient: vi.fn(),
       setCurrentDbClient: setCurrent,
@@ -105,7 +105,7 @@ describe('lifecycle DbClient manager', () => {
     const createWorkerClient = vi.fn(async () => worker);
 
     const manager = createLifecycleDbClientManager({
-      getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
+      closeMainDb: vi.fn(), getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
       createWorkerClient,
       createInprocClient: vi.fn(),
       setCurrentDbClient: vi.fn(),
@@ -135,7 +135,7 @@ describe('lifecycle DbClient manager', () => {
     const createWorkerClient = vi.fn(async () => worker);
 
     const manager = createLifecycleDbClientManager({
-      getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
+      closeMainDb: vi.fn(), getCurrentDbPath: () => 'C:/Users/test/xdt-maker.db',
       createWorkerClient,
       createInprocClient: vi.fn(async () => fallback),
       setCurrentDbClient: vi.fn(),
@@ -157,13 +157,13 @@ describe('lifecycle DbClient manager', () => {
     });
     expect(createWorkerClient).toHaveBeenCalledTimes(1);
   });
-  it('recreates a corrupt client only on readiness retry and ignores retired callbacks', async () => {
+  it('requires explicit recovery for a corrupt client and ignores retired callbacks', async () => {
     const clients = [makeClient('a'), makeClient('retry'), makeClient('b')];
     const callbacks: Array<() => void> = [];
     const report = vi.fn();
     let index = 0;
     const manager = createLifecycleDbClientManager({
-      getCurrentDbPath: () => 'synthetic.db',
+      closeMainDb: vi.fn(), getCurrentDbPath: () => 'synthetic.db',
       createWorkerClient: vi.fn(async (options) => {
         callbacks.push(() => options.onCorruption?.(Object.assign(new Error('corrupt'), { code: 'SQLITE_CORRUPT' })));
         return clients[index++];
@@ -180,6 +180,8 @@ describe('lifecycle DbClient manager', () => {
     expect(report).not.toHaveBeenCalled();
     expect(currentGenerationReport).toHaveBeenCalledOnce();
     Object.defineProperty(clients[0], 'corruptionError', { value: new Error('corrupt') });
+    await expect(manager.ensure('owner-a', {})).rejects.toThrow('corrupt');
+    await manager.prepareForEnsure('owner-a', true);
     await manager.ensure('owner-a', {});
     expect(clients[0].dispose).toHaveBeenCalledOnce();
     report.mockClear();
@@ -190,15 +192,66 @@ describe('lifecycle DbClient manager', () => {
     expect(report).not.toHaveBeenCalled();
     await manager.dispose('test-end');
   });
+  // #9555 / unit: a failed native close must not turn the next passive ensure
+  // into a recovery attempt, even after the worker has released main's dbPath.
+  it('preserves quarantine when native closure fails and does not close a new owner during retained work', async () => {
+    const worker = makeClient('corrupt');
+    const corruption = Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' });
+    const closeMainDb = vi.fn(() => { throw new Error('native close failed'); });
+    const manager = createLifecycleDbClientManager({
+      getCurrentDbPath: () => 'synthetic.db', closeMainDb,
+      createWorkerClient: async () => worker, createInprocClient: vi.fn(),
+      setCurrentDbClient: vi.fn(), clearCurrentDbClient: vi.fn(), log: makeLog(),
+    });
+    await manager.ensure('owner-a', {});
+    Object.defineProperty(worker, 'corruptionError', { value: corruption });
+    await expect(manager.prepareForEnsure('owner-a', true)).rejects.toThrow('native close failed');
+    await expect(manager.ensure('owner-a', {})).rejects.toBe(corruption);
+    const release = retainDbClient(worker);
+    const recovering = manager.prepareForEnsure('owner-a', true);
+    const outgoing = manager.dispose('owner-switch');
+    release();
+    await Promise.all([recovering, outgoing]);
+    expect(closeMainDb).toHaveBeenCalledOnce();
+  });
+
+  it('leaves the quarantined handle untouched when recovery becomes stale while work is retained', async () => {
+    const worker = makeClient('corrupt');
+    const closeMainDb = vi.fn();
+    const manager = createLifecycleDbClientManager({
+      getCurrentDbPath: () => 'synthetic.db', closeMainDb,
+      createWorkerClient: async () => worker, createInprocClient: vi.fn(),
+      setCurrentDbClient: vi.fn(), clearCurrentDbClient: vi.fn(), log: makeLog(),
+    });
+    await manager.ensure('owner-a', {});
+    const corruption = Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' });
+    Object.defineProperty(worker, 'corruptionError', { value: corruption });
+    const release = retainDbClient(worker);
+    let current = true;
+    const recovering = manager.prepareForEnsure('owner-a', true, () => current);
+    current = false;
+    release();
+    await recovering;
+    expect(closeMainDb).not.toHaveBeenCalled();
+    expect(worker.dispose).not.toHaveBeenCalled();
+    await expect(manager.ensure('owner-a', {})).rejects.toBe(corruption);
+    await manager.dispose('test-end');
+  });
+
   it('never retries a corrupt worker through the inproc fallback', async () => {
     const worker = makeClient('corrupt');
-    worker.query.mockRejectedValue(Object.assign(new Error('corrupt'), { code: 'SQLITE_CORRUPT' }));
+    const corruption = Object.assign(new Error('corrupt'), { code: 'SQLITE_CORRUPT' });
+    Object.defineProperty(worker, 'corruptionError', { value: corruption });
+    worker.query.mockRejectedValue(corruption);
     const fallback = vi.fn();
-    const manager = createLifecycleDbClientManager({ getCurrentDbPath: () => 'synthetic.db',
+    const manager = createLifecycleDbClientManager({ closeMainDb: vi.fn(), getCurrentDbPath: () => 'synthetic.db',
       createWorkerClient: vi.fn(async () => worker), createInprocClient: fallback,
       setCurrentDbClient: vi.fn(), clearCurrentDbClient: vi.fn(), log: makeLog() });
     await expect(manager.ensure('owner-a', {})).rejects.toMatchObject({ code: 'SQLITE_CORRUPT' });
     expect(fallback).not.toHaveBeenCalled();
+    expect(worker.dispose).not.toHaveBeenCalled();
+    await expect(manager.ensure('owner-a', {})).rejects.toMatchObject({ code: 'SQLITE_CORRUPT' });
+    await manager.dispose('test-end');
     expect(worker.dispose).toHaveBeenCalledOnce();
   });
 

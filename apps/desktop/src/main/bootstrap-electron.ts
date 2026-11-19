@@ -513,6 +513,7 @@ import {
   getRawDb as localDbGetRawDb,
   closeDb as localDbCloseDb,
   getCurrentDbPath as localDbGetCurrentDbPath,
+  getCurrentUserId as localDbGetCurrentUserId,
   getDbPathForUser,
 } from './localDb/index';
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
@@ -2135,6 +2136,9 @@ const piSubagentLog = createLogger('pi-subagent');
 let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
+  closeMainDb: (userId) => {
+    if (localDbGetCurrentUserId() === userId) localDbCloseDb({ skipOptimize: true });
+  },
   getCurrentDbPath: localDbGetCurrentDbPath,
   createWorkerClient: createDbClient,
   createInprocClient: (options) => createInprocDbClient(options),
@@ -10174,12 +10178,23 @@ app.on('ready', async () => {
         return false;
       }
     },
-    isOwnerCurrent: (userId) =>
-      isLocalDbOwnerCurrent(authManager.getAuthState(), userId, isAppSessionBoundaryPending()),
+    isOwnerCurrent: (userId, recovery) => {
+      const current = getActiveDataOwnerPushStamp();
+      return isLocalDbOwnerCurrent(authManager.getAuthState(), userId, isAppSessionBoundaryPending())
+        && (!recovery || (recovery.dataOwnerId === userId
+          && recovery.ownerGeneration === current.ownerGeneration));
+    },
     discardStaleOwner: (userId) =>
       lifecycleDbClientManager.dispose(`stale-owner-after-ready:${userId}`),
-    beforeEnsureReady: async (userId) => {
+    beforeEnsureReady: async (userId, recovery) => {
       if (hostClientMode) return;
+      // Readiness from another window must not clear a corrupt instance. Only
+      // the explicit, current-generation recovery request retires its handles.
+      await lifecycleDbClientManager.prepareForEnsure(userId, recovery !== undefined, () => {
+        const current = getActiveDataOwnerPushStamp();
+        return isLocalDbOwnerCurrent(authManager.getAuthState(), userId, isAppSessionBoundaryPending())
+          && (!recovery || recovery.ownerGeneration === current.ownerGeneration);
+      });
       // Provider discovery is detached from DB read readiness for the same owner, but a
       // different owner must not replace the DB while the previous account task can still
       // update owner-scoped catalogs or agent environments.

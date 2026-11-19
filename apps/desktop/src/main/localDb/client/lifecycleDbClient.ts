@@ -22,6 +22,8 @@ export interface LifecycleDbClientLog {
 
 export interface LifecycleDbClientManagerDeps {
   getCurrentDbPath(): string | null;
+  /** Close the main-owned native singleton without further SQL. */
+  closeMainDb(userId: string): void;
   createWorkerClient(opts: CreateDbClientOptions): Promise<DbClient>;
   createInprocClient(options?: Pick<CreateDbClientOptions, 'onCorruption'>): Promise<DbClient>;
   setCurrentDbClient(client: DbClient, userId: string): void;
@@ -30,6 +32,8 @@ export interface LifecycleDbClientManagerDeps {
 }
 
 export interface LifecycleDbClientManager {
+  /** Called before localDb.ensureReady, including when main has released its handle. */
+  prepareForEnsure(userId: string, recoverCorruption?: boolean, isCurrent?: () => boolean): Promise<void>;
   ensure(
     userId: string,
     workerOptions: Omit<CreateDbClientOptions, 'userId' | 'dbPath'>,
@@ -68,19 +72,36 @@ export function createLifecycleDbClientManager(
     }
   }
 
+  async function prepareForEnsure(userId: string, recoverCorruption = false, isCurrent = () => true): Promise<void> {
+    const client = lifecycleDbClient;
+    if (!client?.corruptionError || lifecycleDbClientUserId !== userId) return;
+    if (!recoverCorruption) throw client.corruptionError;
+    // Keep the latch/current identity until both owned connections are closed.
+    // A failed close must not let a later passive ensure create a new boundary.
+    await waitForRetainedDbClient(client);
+    if (lifecycleDbClient !== client || !isCurrent()) return;
+    await client.dispose();
+    if (lifecycleDbClient !== client || !isCurrent()) return;
+    deps.closeMainDb(userId);
+    if (lifecycleDbClient !== client || !isCurrent()) return;
+    lifecycleDbClient = null;
+    lifecycleDbClientUserId = null;
+    notifyCurrentCorruption = undefined;
+    lifecycleDbClientMode = null;
+    deps.clearCurrentDbClient(client);
+  }
+
   async function ensure(
     userId: string,
     workerOptions: Omit<CreateDbClientOptions, 'userId' | 'dbPath'>,
   ): Promise<LifecycleDbClientEnsureResult> {
+    await prepareForEnsure(userId);
     const dbPath = deps.getCurrentDbPath();
     if (!dbPath) {
       deps.log.warn('[DbClient] skip lifecycle start: localDb path unavailable', { userId });
       return { mode: 'skipped', shouldReleaseMainDb: false };
     }
 
-    if (lifecycleDbClient?.corruptionError && lifecycleDbClientUserId === userId) {
-      await dispose('retry-after-corruption');
-    }
     if (lifecycleDbClient && lifecycleDbClientUserId === userId) {
       // The live connection may survive a same-owner generation change. Use
       // the latest readiness callback, not the stamp from its initial creation.
@@ -128,6 +149,14 @@ export function createLifecycleDbClientManager(
         dbPath,
         error: err instanceof Error ? err.message : String(err),
       });
+      if (workerClient && isSqliteCorruption(err)) {
+        lifecycleDbClient = workerClient;
+        lifecycleDbClientUserId = userId;
+        notifyCurrentCorruption = workerOptions.onCorruption;
+        lifecycleDbClientMode = 'worker';
+        deps.setCurrentDbClient(workerClient, userId);
+        throw err;
+      }
       if (workerClient) {
         try {
           await workerClient.dispose();
@@ -176,5 +205,5 @@ export function createLifecycleDbClientManager(
     }
   }
 
-  return { ensure, dispose };
+  return { prepareForEnsure, ensure, dispose };
 }

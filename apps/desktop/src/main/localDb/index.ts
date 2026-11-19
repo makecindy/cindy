@@ -549,16 +549,20 @@ function stopOptimizeSchedule(): void {
 export interface CloseDbOptions {
   /** worker takeover 只关闭 main 连接；schema reader lease 仍由本 app 生命周期持有。 */
   preserveSchemaMigrationLease?: boolean;
+  /** Quarantined native handles must close without issuing another SQL operation. */
+  skipOptimize?: boolean;
 }
 
 export function closeDb(options: CloseDbOptions = {}): void {
   // 关连接前再跑一次 optimize, 把会话期内积累的统计变化落盘 (官方推荐)
   stopOptimizeSchedule();
-  runOptimize();
+  if (!options.skipOptimize) runOptimize();
   try {
     _db?.close();
-  } catch {
-    /* noop */
+  } catch (error) {
+    // Recovery must prove the quarantined native connection is closed before
+    // clearing the singleton; leave it latched if native close fails.
+    if (options.skipOptimize) throw error;
   }
   _db = null;
   _drizzle = null;

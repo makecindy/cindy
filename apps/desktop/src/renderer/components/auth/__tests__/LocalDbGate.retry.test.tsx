@@ -260,6 +260,7 @@ describe('LocalDbGate 有限重试', () => {
     act(() => report({ dataOwnerId: 'other', ownerGeneration: 1 }));
     act(() => report({ dataOwnerId: 'user-1', ownerGeneration: 0 }));
     expect(screen.getByTestId('main-content')).toBeTruthy();
+    expect(api.localDb.ensureReady).toHaveBeenCalledWith('user-1');
     act(() => report({ dataOwnerId: 'user-1', ownerGeneration: 1 }));
     await flushAsync();
     expect(screen.queryByTestId('main-content')).toBeNull();
@@ -268,6 +269,7 @@ describe('LocalDbGate 有限重试', () => {
     expect(api.copyTextToClipboard).toHaveBeenCalledWith({ text: 'DB_RUNTIME_CORRUPT' });
     fireEvent.click(screen.getByRole('button', { name: 'localDbFatal.schemaLease.retry' }));
     await flushAsync();
+    expect(api.localDb.ensureReady).toHaveBeenNthCalledWith(2, 'user-1', { dataOwnerId: 'user-1', ownerGeneration: 1 });
     expect(screen.getByTestId('main-content')).toBeTruthy();
     view.unmount();
     expect(unsubscribe).toHaveBeenCalled();

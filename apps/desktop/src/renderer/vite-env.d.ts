@@ -5070,12 +5070,12 @@ interface ElectronAPI {
   localDb: {
     onRuntimeCorruption?: (callback: (stamp: import('../shared/dataOwnerPush').DataOwnerPushStamp) => void) => () => void;
     /** Open / migrate the per-user db file. Failure → fatal dialog + ready:false. */
-    ensureReady: (userId: string) => Promise<
+    ensureReady: (userId: string, recovery?: import('../shared/dataOwnerPush').DataOwnerPushStamp) => Promise<
       | { ready: true }
       | {
           ready: false;
           error: {
-            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED' | 'DB_SCHEMA_LOCKED';
+            code: 'DB_INIT_FAILED' | 'DB_CORRUPT_NO_BACKUP' | 'MIGRATE_FAILED' | 'DB_SCHEMA_LOCKED' | 'DB_RUNTIME_CORRUPT';
             message: string;
           };
         }

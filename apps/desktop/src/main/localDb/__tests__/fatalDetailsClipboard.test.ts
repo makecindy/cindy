@@ -39,6 +39,14 @@ describe('local-db fatal details clipboard', () => {
     await replyToEnsureReady('u1', { run: async () => { throw new Error('boom'); }, record, log });
     await copyable('DB_INIT_FAILED\nboom');
 
+    // #9555 / unit: passive readiness must preserve the runtime-corrupt error
+    // so the fatal screen offers the explicit recovery action, without auto retry.
+    const corrupt = await replyToEnsureReady('u1', { run: async () => {
+      throw Object.assign(new Error('bad page'), { code: 'SQLITE_CORRUPT' });
+    }, record, log });
+    expect(corrupt).toMatchObject({ ready: false, error: { code: 'DB_RUNTIME_CORRUPT' } });
+    await copyable('DB_RUNTIME_CORRUPT\nbad page');
+
     await replyToEnsureReady(undefined, { run: async () => ({ ready: true }), record, log });
     await copyable('DB_INIT_FAILED\ninvalid userId');
   });
