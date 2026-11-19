@@ -123,6 +123,7 @@ function botTaskDispatchSlice(): string {
   return ts.transpileModule(
     `${sendWithBaseline}
 ${sendToSessionInternal}
+${slice('const toTaskFile = (attachment:', '  const dispatchBotSessionMessage =')}
 ${dispatchBotSessionMessage}
 ${pluginSource}
 ${sendToSession};

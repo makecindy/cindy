@@ -724,6 +724,308 @@ html:lang(ko) {
     opacity: 1;
   }
 }
+/* The same 1.1s wave on the composer dictation button's recording bars
+   (HTML spans in ChatInput VoiceInputButton): composited transform / opacity,
+   so the SVG paint-box concern above does not apply there. */
+
+/* ── Desktop composer send / stop (DESIGN.md §14.4「Desktop composer send / stop」,
+   owner-approved Design Lab send-button v5, 2026-11-18). SendButton only sets
+   data attributes; every duration here is a motion token. ── */
+.composer-send {
+  transition:
+    opacity var(--motion-fast) var(--motion-ease-out),
+    transform var(--motion-base) var(--motion-ease-out);
+}
+/* Work ended: the stop square leaves, the plane glides back, the button dims last. */
+.composer-send[data-settling='true']:disabled {
+  transition:
+    opacity var(--motion-enter) var(--motion-ease-out) var(--motion-enter),
+    transform var(--motion-base) var(--motion-ease-out);
+}
+.composer-send-face {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--send-btn-bg);
+  pointer-events: none;
+  transition:
+    inset var(--motion-instant) var(--motion-ease-out),
+    background-color var(--motion-fast) var(--motion-ease-out);
+}
+.composer-send:enabled:hover .composer-send-face {
+  background: var(--send-btn-hover-bg);
+}
+.composer-send:enabled:active .composer-send-face {
+  inset: 1px;
+  background: var(--send-btn-pressed-bg);
+}
+/* Voice long-press hovering Send as the release target. */
+.composer-send[data-release='true'] {
+  transform: scale(1.06);
+}
+.composer-send-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  border: 1.5px solid var(--text-secondary);
+  opacity: 0;
+  transform: scale(0.85);
+  pointer-events: none;
+  transition:
+    opacity var(--motion-fast) var(--motion-ease-out),
+    transform var(--motion-base) var(--motion-ease-out);
+}
+.composer-send[data-release='true'] .composer-send-ring {
+  opacity: 1;
+  transform: none;
+}
+.composer-send [data-send-icon] {
+  transition:
+    opacity var(--motion-fast) var(--motion-ease-out),
+    transform var(--motion-fast) var(--motion-ease-out);
+}
+/* Companion call ↔ send keeps its approved 250ms / ease-move swap. */
+.composer-send[data-companion='true'] [data-send-icon='plane'] {
+  transition-duration: var(--motion-enter);
+  transition-timing-function: var(--motion-ease-move);
+}
+.composer-send[data-send-action='voice'] [data-send-icon='plane'] {
+  opacity: 0;
+  transform: scale(0.55);
+}
+/* Delivery tip points at the other mode (SendDeliveryTip, §14.6): the plane gives way to
+   that mode's glyph and comes back when the pointer or modifier lets go. */
+.composer-send [data-send-icon='alternate'],
+.composer-send[data-send-alternate='true'] [data-send-icon='plane'] {
+  opacity: 0;
+  transform: scale(0.55);
+}
+.composer-send[data-send-alternate='true'] [data-send-icon='alternate'] {
+  opacity: 1;
+  transform: none;
+}
+/* Send → Stop: the plane flies out up-right, then the square lands. */
+.composer-send[data-send-action='stop'] [data-send-icon='plane'] {
+  opacity: 0;
+  transform: translate(7px, -7px) scale(0.6);
+  transition:
+    opacity var(--motion-fast) var(--motion-ease-in),
+    transform var(--motion-fast) var(--motion-ease-in);
+}
+.composer-send [data-send-icon='stop'] {
+  opacity: 0;
+  transform: scale(0.55);
+  transition:
+    opacity var(--motion-fast) var(--motion-ease-in),
+    transform var(--motion-fast) var(--motion-ease-in);
+}
+.composer-send[data-send-action='stop'] [data-send-icon='stop'] {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--motion-enter) var(--motion-ease-move) var(--motion-instant),
+    transform var(--motion-enter) var(--motion-ease-move) var(--motion-instant);
+}
+.composer-send[data-settling='true']:is([data-send-action='send'], [data-send-action='save'])
+  [data-send-icon='plane'] {
+  animation: composer-send-plane-return var(--motion-enter) var(--motion-ease-out)
+    var(--motion-instant) both;
+}
+@keyframes composer-send-plane-return {
+  from {
+    opacity: 0;
+    transform: translate(-6px, 6px) scale(0.6);
+  }
+}
+/* Secondary Stop (left of dictation) opens from zero width; neighbours stay put. */
+.composer-send-slot {
+  display: inline-flex;
+  flex: none;
+  width: 30px;
+  animation: composer-send-slot-in var(--motion-base) var(--motion-ease-move) both;
+}
+/* Clipped to its growing box so the opening Stop never paints over dictation;
+   the clip relaxes by the end so the focus ring is not cut. */
+@keyframes composer-send-slot-in {
+  from {
+    width: 0;
+    margin-inline-end: calc(-1 * var(--composer-actions-gap, 8px));
+    opacity: 0;
+    transform: scale(0.55);
+    clip-path: inset(0);
+  }
+  to {
+    clip-path: inset(-8px);
+  }
+}
+
+/* AI working glow on Stop — registered loop (DESIGN.md §14.4, §2). Port of the
+   open-source border-beam 1.4.1 size "sm" (MIT): a rim beam, an inner glow and a
+   blurred bloom, clipped to the button. Compositor-only: each layer rotates by
+   transform, and its colour child counter-rotates so the colours stay in place
+   while the beam travels over them. A dark disc uses the package's dark-surface
+   values, a light disc (Dark mode) its light-surface values. */
+.composer-send-beam {
+  --beam-green: #32c850;
+  --beam-teal: #1eb9aa;
+  --beam-orange: #ff7828;
+  --beam-violet: #6446ff;
+  --beam-pink: #f032b4;
+  --beam-purple: #b428f0;
+  --beam-blue: #288cff;
+  --beam-red: #ff3264;
+  --beam-light: #ffffff;
+  --beam-stroke: 0.46;
+  --beam-inner: 0.24;
+  --beam-bloom: 0.38;
+  --beam-saturate: 1.2;
+  --beam-highlight: conic-gradient(
+    from 0deg,
+    transparent 0% 54%,
+    color-mix(in srgb, var(--beam-light) 10%, transparent) 57%,
+    color-mix(in srgb, var(--beam-light) 30%, transparent) 60%,
+    color-mix(in srgb, var(--beam-light) 60%, transparent) 63%,
+    color-mix(in srgb, var(--beam-light) 75%, transparent) 66%,
+    color-mix(in srgb, var(--beam-light) 60%, transparent) 69%,
+    color-mix(in srgb, var(--beam-light) 30%, transparent) 72%,
+    color-mix(in srgb, var(--beam-light) 10%, transparent) 75%,
+    transparent 78% 100%
+  );
+  --beam-bloom-fill: conic-gradient(
+    from 0deg,
+    transparent 0% 58%,
+    color-mix(in srgb, var(--beam-light) 3%, transparent) 62%,
+    color-mix(in srgb, var(--beam-light) 8%, transparent) 65%,
+    color-mix(in srgb, var(--beam-light) 20%, transparent) 67%,
+    color-mix(in srgb, var(--beam-light) 45%, transparent) 69%,
+    color-mix(in srgb, var(--beam-light) 85%, transparent) 70% 70.5%,
+    color-mix(in srgb, var(--beam-light) 45%, transparent) 71.5%,
+    color-mix(in srgb, var(--beam-light) 20%, transparent) 73%,
+    color-mix(in srgb, var(--beam-light) 8%, transparent) 75%,
+    color-mix(in srgb, var(--beam-light) 3%, transparent) 78%,
+    transparent 82%
+  );
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity calc(var(--motion-base) * 2) var(--motion-ease-out);
+}
+.dark .composer-send-beam {
+  --beam-light: #000000;
+  --beam-stroke: 0.12;
+  --beam-inner: 0.3;
+  --beam-bloom: 0.16;
+  --beam-saturate: 1.8;
+}
+.composer-send-beam[data-active='true'] {
+  opacity: 1;
+  transition: opacity calc(var(--motion-enter) * 2) var(--motion-ease-out) var(--motion-fast);
+}
+.composer-send-beam-glow,
+.composer-send-beam-rim,
+.composer-send-beam-bloom,
+.composer-send-beam-counter,
+.composer-send-beam-highlight {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+/* Attached only while working or settling (SendButton sets data-settling in the same
+   render that clears data-active), so the beam keeps turning while it fades out and
+   idle buttons carry no infinite animation. */
+.composer-send-beam[data-active='true'] .composer-send-beam-glow,
+.composer-send-beam[data-active='true'] .composer-send-beam-rim,
+.composer-send-beam[data-active='true'] .composer-send-beam-bloom,
+.composer-send[data-settling='true'] .composer-send-beam-glow,
+.composer-send[data-settling='true'] .composer-send-beam-rim,
+.composer-send[data-settling='true'] .composer-send-beam-bloom {
+  animation: composer-send-beam-spin 5s linear infinite;
+}
+.composer-send-beam[data-active='true'] .composer-send-beam-counter,
+.composer-send[data-settling='true'] .composer-send-beam-counter {
+  animation: composer-send-beam-counter 5s linear infinite;
+}
+.composer-send-beam-glow {
+  opacity: var(--beam-inner);
+  filter: brightness(1.3) saturate(var(--beam-saturate));
+  mask-image: conic-gradient(
+    from 0deg,
+    transparent 0% 22%,
+    color-mix(in srgb, black 12%, transparent) 28%,
+    color-mix(in srgb, black 40%, transparent) 36%,
+    black 46% 82%,
+    color-mix(in srgb, black 40%, transparent) 88%,
+    color-mix(in srgb, black 12%, transparent) 94%,
+    transparent 97% 100%
+  );
+}
+.composer-send-beam-glow > .composer-send-beam-counter {
+  background:
+    radial-gradient(ellipse 9px 18px at 2% 68%, color-mix(in srgb, var(--beam-green) 50%, transparent), transparent),
+    radial-gradient(ellipse 4px 8px at 2% 68%, color-mix(in srgb, var(--beam-teal) 45%, transparent), transparent),
+    radial-gradient(ellipse 59px 9px at 72% -3%, color-mix(in srgb, var(--beam-orange) 35%, transparent), transparent),
+    radial-gradient(ellipse 42px 7px at 74% 100%, color-mix(in srgb, var(--beam-violet) 35%, transparent), transparent),
+    radial-gradient(ellipse 10px 17px at 100% 27%, color-mix(in srgb, var(--beam-pink) 30%, transparent), transparent),
+    radial-gradient(ellipse 10px 18px at 100% 27%, color-mix(in srgb, var(--beam-purple) 40%, transparent), transparent),
+    radial-gradient(ellipse 5px 10px at 100% 27%, color-mix(in srgb, var(--beam-blue) 30%, transparent), transparent),
+    radial-gradient(ellipse 11px 12px at 100% 27%, color-mix(in srgb, var(--beam-red) 30%, transparent), transparent);
+}
+.composer-send-beam-rim {
+  padding: 1px;
+  opacity: var(--beam-stroke);
+  filter: brightness(1.3) saturate(var(--beam-saturate));
+  mask:
+    conic-gradient(
+      from 0deg,
+      transparent 0% 30%,
+      color-mix(in srgb, black 10%, transparent) 36%,
+      color-mix(in srgb, black 35%, transparent) 44%,
+      black 52% 80%,
+      color-mix(in srgb, black 35%, transparent) 86%,
+      color-mix(in srgb, black 10%, transparent) 92%,
+      transparent 95% 100%
+    ),
+    linear-gradient(black 0 0) content-box,
+    linear-gradient(black 0 0);
+  mask-composite: intersect, exclude;
+}
+.composer-send-beam-rim > .composer-send-beam-counter {
+  background:
+    radial-gradient(ellipse 9px 18px at 2% 68%, var(--beam-green), transparent),
+    radial-gradient(ellipse 4px 8px at 2% 68%, var(--beam-teal), transparent),
+    radial-gradient(ellipse 59px 9px at 72% -3%, var(--beam-orange), transparent),
+    radial-gradient(ellipse 42px 7px at 74% 100%, var(--beam-violet), transparent),
+    radial-gradient(ellipse 10px 17px at 100% 27%, var(--beam-pink), transparent),
+    radial-gradient(ellipse 10px 18px at 100% 27%, var(--beam-purple), transparent),
+    radial-gradient(ellipse 5px 10px at 100% 27%, var(--beam-blue), transparent),
+    radial-gradient(ellipse 11px 12px at 100% 27%, var(--beam-red), transparent);
+}
+.composer-send-beam-highlight {
+  background: var(--beam-highlight);
+}
+.composer-send-beam-bloom {
+  padding: 1px;
+  background: var(--beam-bloom-fill);
+  mask:
+    linear-gradient(black 0 0) content-box,
+    linear-gradient(black 0 0);
+  mask-composite: exclude;
+  filter: blur(8px) brightness(1.3) saturate(var(--beam-saturate));
+  opacity: var(--beam-bloom);
+}
+@keyframes composer-send-beam-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes composer-send-beam-counter {
+  to {
+    transform: rotate(-360deg);
+  }
+}
 .ProseMirror :is([data-mention-chip], [data-pasted-text-chip], [data-composer-quote]) {
   /* Small vertical lift so every atomic chip aligns with the inline text
      caret; the pills are a tad taller than 1em because of padding + border. */
@@ -1055,6 +1357,12 @@ body.resizing-pane [data-ghost-webview] {
 
 @media (prefers-reduced-motion: reduce) {
   [data-voice-mic-active='true'] [data-voice-mic-bar],
+  .composer-send [data-send-icon],
+  .composer-send-slot,
+  .composer-send-beam-glow,
+  .composer-send-beam-rim,
+  .composer-send-beam-bloom,
+  .composer-send-beam-counter,
   .status-bar-shimmer,
   .status-bar-done,
   .session-status-breathing,
@@ -1101,6 +1409,10 @@ body.resizing-pane [data-ghost-webview] {
    循环动画必然带 infinite 字面量,而一次性的 animate-[xxx_200ms_ease-out] 不会。 */
 [data-app-hidden='true'] [data-voice-spinner-arc],
 [data-app-hidden='true'] [data-voice-mic-bar],
+[data-app-hidden='true'] .composer-send-beam-glow,
+[data-app-hidden='true'] .composer-send-beam-rim,
+[data-app-hidden='true'] .composer-send-beam-bloom,
+[data-app-hidden='true'] .composer-send-beam-counter,
 /* .status-bar-shimmer 已 cadenced 化为一次性动画(2026-08-07),按「一次性动画
    不得纳入冻结清单」原则移出 —— 冻在中途帧会让状态栏停在半暗。 */
 [data-app-hidden='true'] .session-status-breathing,

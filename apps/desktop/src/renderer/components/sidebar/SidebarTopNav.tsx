@@ -438,7 +438,6 @@ export function SidebarTopNav({
     setSearchOpenSignal((signal) => signal + 1);
   });
 
-  // 通用新建继承当前任务的电脑，由草稿页集中迁移；同机保留已选项目。
   const handleNew = () => {
     navigate('/cc-agent/new', { state: makeGenericNewMakerRouteState(location.pathname) });
   };
