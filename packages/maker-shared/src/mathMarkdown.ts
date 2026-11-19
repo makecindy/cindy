@@ -92,10 +92,13 @@ function findLinkDestinationRanges(text: string): Array<[number, number]> {
   for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
     let lineEnd = text.indexOf('\n', match.index);
     // An empty definition header can put its destination on the next line.
-    // Protect that physical line as URL syntax, but never cross a blank line.
+    // Protect only its destination token, so malformed definitions cannot
+    // suppress math in following prose (for example a heading on this line).
     if (lineEnd !== -1 && !text.slice(match.index + match[0].length, lineEnd).trim()) {
       const nextEnd = text.indexOf('\n', lineEnd + 1);
-      if (text.slice(lineEnd + 1, nextEnd === -1 ? text.length : nextEnd).trim()) lineEnd = nextEnd;
+      const continuation = text.slice(lineEnd + 1, nextEnd === -1 ? text.length : nextEnd);
+      const destination = /^[ \t]*(?:<(?:\\[^\n]|[^<>\\\n])*>|(?:\\[\s\S]|[^\s\\])+)/.exec(continuation);
+      if (destination) lineEnd += 1 + destination[0].length;
     }
     ranges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);
   }
