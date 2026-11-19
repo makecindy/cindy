@@ -3371,6 +3371,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 跨消息累积:一个 turn 内 SDK 会发多个 assistant message,这里把 text 拼起来,
     // 在 result 缺少正文时作为 finalText 兜底。
     let workerDispatchInputEpoch = 0;
+    const workerDispatchInputUuids = new Map<string, number>();
+    const rememberDispatchInput = (uuid: string | undefined): void => {
+      if (!uuid) return;
+      workerDispatchInputUuids.set(uuid, workerDispatchInputEpoch);
+      if (workerDispatchInputUuids.size > 64) workerDispatchInputUuids.delete(workerDispatchInputUuids.keys().next().value!);
+    };
     let workerDispatchRequest: { inputEpoch: number; pending: boolean; retryFromResponse?: number } = { inputEpoch: 0, pending: false };
     const turnState: TurnState = {
       text: '',
@@ -5884,7 +5890,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           const requestOwnership: typeof workerDispatchRequest = { inputEpoch: workerDispatchInputEpoch, pending: turnInFlight };
           workerDispatchRequest = requestOwnership;
           const sdkInput = observeSdkInputEpoch(currentQ, () => workerDispatchInputEpoch, requestOwnership,
-            () => Boolean(turnState.interruptRequested && turnState.generation !== turnState.interruptGeneration));
+            () => Boolean(turnState.interruptRequested && turnState.generation !== turnState.interruptGeneration),
+            uuid => workerDispatchInputUuids.get(uuid));
           for await (const rawMsg of sdkInput.messages) {
             const inputEpoch = sdkInput.inputEpoch(rawMsg);
             if (closed) break;
@@ -7198,6 +7205,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             throw new Error('Claude input queue is closed');
           }
           workerDispatchInputEpoch += 1;
+          rememberDispatchInput(sendOpts?.messageUuid);
           workerDispatchRequest.inputEpoch = workerDispatchInputEpoch;
           workerDispatchRequest.pending = true;
           workerDispatchRequest.retryFromResponse = undefined;
@@ -7308,6 +7316,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // the steered response from silent-stop recovery. Rejected steers above
         // leave the existing handoff untouched.
         workerDispatchInputEpoch += 1;
+        rememberDispatchInput(sendOpts?.messageUuid);
         if (!workerDispatchRequest.pending) {
           workerDispatchRequest.inputEpoch = workerDispatchInputEpoch;
           workerDispatchRequest.pending = true;
@@ -8666,7 +8675,8 @@ export class ClaudeCodeAgent extends BaseAgent {
 
 /** Observe ownership without adding an async hop to the normal SDK stream. */
 function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpoch: () => number,
-  providerRequest: { inputEpoch: number; pending: boolean; retryFromResponse?: number }, isInterruptedResultStale: () => boolean) {
+  providerRequest: { inputEpoch: number; pending: boolean; retryFromResponse?: number }, isInterruptedResultStale: () => boolean,
+  inputUuidEpoch: (uuid: string) => number | undefined) {
   const iterator = source[Symbol.asyncIterator]();
   const receivedEpochs = new WeakMap<T, number>();
   let pending: Promise<IteratorResult<T>> | undefined;
@@ -8691,35 +8701,68 @@ function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpo
   };
   let request: { id: string; inputEpoch: number } | undefined;
   const toolOwners = new Map<string, number>();
+  const responseOwners = new Map<string, number>();
+  let nativeInputEpoch: number | undefined;
   const observeOwnership = (message: T): number => {
     const raw = message as { type?: string; subtype?: string; error?: unknown; is_error?: unknown; parent_tool_use_id?: unknown;
-      message?: { id?: unknown; content?: unknown }; event?: { type?: string; message?: { id?: unknown } } };
+      user_message_uuid?: unknown; user_message_uuids?: unknown;
+      message?: { id?: unknown; content?: unknown; stop_reason?: unknown }; event?: { type?: string; message?: { id?: unknown } } };
     if (typeof raw.parent_tool_use_id === 'string' && raw.parent_tool_use_id.length > 0) return getEpoch();
     let epoch = providerRequest.pending ? providerRequest.inputEpoch : getEpoch();
+    // Native echoes identify consumed inputs, unlike the arrival of a tool
+    // result. Older producers omit them and keep the lifecycle fallback.
+    const echoes = [raw.user_message_uuid, ...(Array.isArray(raw.user_message_uuids) ? raw.user_message_uuids : [])];
+    const owners = echoes.flatMap(uuid => typeof uuid === 'string' && inputUuidEpoch(uuid) !== undefined
+      ? [inputUuidEpoch(uuid)!] : []);
+    const responseId = raw.type === 'assistant' ? raw.message?.id : raw.event?.message?.id;
+    if (owners.length > 0) {
+      epoch = Math.max(...owners);
+      nativeInputEpoch = Math.max(nativeInputEpoch ?? epoch, epoch);
+      // A full-only producer may never send message_start. Native consumption
+      // evidence can correct speculative send ownership, but never a newer
+      // input already confirmed by the producer.
+      if (epoch >= nativeInputEpoch) {
+        providerRequest.inputEpoch = epoch;
+        providerRequest.pending = true;
+        providerRequest.retryFromResponse = undefined;
+      }
+    }
+    else if (typeof responseId === 'string') epoch = responseOwners.get(responseId) ?? epoch;
+    if (typeof responseId === 'string' && (raw.type === 'assistant' || raw.event?.type === 'message_start')) {
+      responseOwners.set(responseId, epoch);
+      if (responseOwners.size > 64) responseOwners.delete(responseOwners.keys().next().value!);
+    }
     if ((raw.type === 'assistant' && typeof raw.error === 'string')
       || (raw.type === 'system' && raw.subtype === 'api_retry')) {
       // SDK error envelopes are provisional. Even after message_stop, retry
       // belongs to that failed response, not a steer accepted in the gap.
-      epoch = providerRequest.retryFromResponse ?? providerRequest.inputEpoch;
-      providerRequest.inputEpoch = epoch;
-      providerRequest.pending = true;
-      providerRequest.retryFromResponse = undefined;
+      epoch = owners.length > 0 ? epoch : (providerRequest.retryFromResponse ?? providerRequest.inputEpoch);
+      if (nativeInputEpoch === undefined || epoch >= nativeInputEpoch) {
+        providerRequest.inputEpoch = epoch;
+        providerRequest.pending = true;
+        providerRequest.retryFromResponse = undefined;
+      }
       return epoch;
     }
     if (raw.type === 'stream_event' && raw.event?.type === 'message_start') {
-      providerRequest.retryFromResponse = undefined;
-      providerRequest.inputEpoch = epoch;
-      providerRequest.pending = true;
+      if (nativeInputEpoch === undefined || epoch >= nativeInputEpoch) {
+        providerRequest.retryFromResponse = undefined;
+        providerRequest.inputEpoch = epoch;
+        providerRequest.pending = true;
+      }
       if (typeof raw.event.message?.id === 'string') request = { id: raw.event.message.id, inputEpoch: epoch };
     } else if (raw.type === 'assistant') {
-      if (request && raw.message?.id === request.id) epoch = request.inputEpoch;
+      if (request && raw.message?.id === request.id && owners.length === 0) epoch = request.inputEpoch;
+      if (typeof raw.message?.id === 'string') request = { id: raw.message.id, inputEpoch: epoch };
       if (Array.isArray(raw.message?.content)) for (const block of raw.message.content) {
         if (block?.type === 'tool_use' && typeof block.id === 'string') toolOwners.set(block.id, epoch);
       }
-      if (epoch >= providerRequest.inputEpoch) providerRequest.pending = false;
-      // A normal full envelope proves this response completed successfully;
-      // only the message_stop → provisional-error gap can still be retried.
-      if (providerRequest.retryFromResponse === epoch) providerRequest.retryFromResponse = undefined;
+      // One assistant frame may contain just a completed content block.
+      // Only an explicit stop reason proves this is a completed response.
+      if (typeof raw.message?.stop_reason === 'string' && raw.message.stop_reason.length > 0) {
+        if (epoch >= providerRequest.inputEpoch) providerRequest.pending = false;
+        if (providerRequest.retryFromResponse === epoch) providerRequest.retryFromResponse = undefined;
+      }
     } else if (raw.type === 'stream_event' && raw.event?.type === 'message_stop') {
       const responseEpoch = request?.inputEpoch ?? epoch;
       if (responseEpoch >= providerRequest.inputEpoch) {
@@ -8735,8 +8778,12 @@ function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpo
         if (block.tool_use_id) toolOwners.delete(block.tool_use_id);
         return owner === undefined ? [] : [owner];
       });
-      if (owners.some(owner => owner >= providerRequest.inputEpoch)) {
-        epoch = getEpoch();
+      const owner = owners.length > 0 ? Math.max(...owners) : undefined;
+      if (owner !== undefined) epoch = owner;
+      if (owner !== undefined && owner >= providerRequest.inputEpoch) {
+        // Native-confirmed old work remains old across every tool round.
+        // Arrival alone cannot prove that a queued replacement was consumed.
+        epoch = nativeInputEpoch !== undefined && owner <= nativeInputEpoch ? owner : getEpoch();
         providerRequest.inputEpoch = epoch;
         providerRequest.pending = true;
         providerRequest.retryFromResponse = undefined;
@@ -8746,6 +8793,7 @@ function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpo
       providerRequest.retryFromResponse = undefined;
       request = undefined;
       toolOwners.clear();
+      responseOwners.clear();
     }
     return epoch;
   };

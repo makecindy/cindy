@@ -823,7 +823,7 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
       if (kind === 'new-request' || kind === 'retry-new-request') {
         session.stream.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'old-request' } } });
         session.stream.emit({ type: 'stream_event', event: { type: 'message_stop' } });
-        session.stream.emit({ type: 'assistant', message: { id: 'old-request', content: [{ type: 'thinking', thinking: '', signature: 'old' }] } });
+        session.stream.emit({ type: 'assistant', message: { id: 'old-request', stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '', signature: 'old' }] } });
         await vi.advanceTimersByTimeAsync(1);
       }
       if (kind.startsWith('retry-') && kind !== 'retry-new-request') {
@@ -852,6 +852,71 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
       await pumpUntil(() => session.events.some(e => e.type === 'done'), 'request ended');
       expect((session.events.find(e => e.type === 'done')?.data as { silentStop?: boolean }).silentStop)
         .toBe(kind === 'new-request' || kind === 'retry-new-request' ? undefined : true);
+    } finally { session.stream.end(); await session.handle.close(); await session.collected; }
+  });
+
+  // #9221: SDK assistant frames can be completed content blocks, not
+  // completed responses. Native input UUID echoes are authoritative when
+  // available; a late old tool result alone proves no new request ownership.
+  // Real adapter/done; unit tier, no live CLI/model request.
+  it.each(['partial-block', 'old-input-echo', 'replacement-input-echo', 'batched-input-echo', 'old-error-echo', 'replacement-error-echo', 'full-only-old-echo', 'full-only-replacement-echo', 'full-only-old-two-rounds', 'replacement-then-late-old-full'] as const)('preserves native response ownership (%s)', async (kind) => {
+    const session = await startSessionWithStream();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await session.handle.send({ type: 'user', content: 'initial work' }, { messageUuid: '11111111-1111-4111-8111-111111111111' });
+      if (kind === 'partial-block') {
+        // Partial messages may be disabled: full block frames still share an ID.
+        session.stream.emit({ type: 'assistant', message: { id: 'owned-response', stop_reason: null, content: [
+          { type: 'thinking', thinking: 'still generating', signature: 'partial-block' },
+        ] } });
+        await vi.advanceTimersByTimeAsync(1);
+        await session.handle.steer!({ type: 'user', content: 'new work' });
+      } else {
+        session.stream.emit({ type: 'assistant', message: { id: 'old-response', content: [
+          { type: 'tool_use', id: 'unfinished-read', name: 'Read', input: {} },
+        ] } });
+        await pumpUntil(() => session.events.some(e => e.type === 'tool_use'), 'old tool observed');
+        await session.handle.abort();
+        await session.handle.send({ type: 'user', content: 'replacement work' }, { messageUuid: '22222222-2222-4222-8222-222222222222' });
+        session.stream.emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+          total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+        session.stream.emit(userToolResult('unfinished-read'));
+        const echo = kind.includes('old') && kind !== 'replacement-then-late-old-full' ? '11111111-1111-4111-8111-111111111111'
+          : '22222222-2222-4222-8222-222222222222';
+        if (kind.includes('error-echo')) session.stream.emit({ type: 'assistant', error: 'unknown',
+          user_message_uuid: echo, message: { content: [{ type: 'text', text: 'API Error: timed out' }] } });
+        if (kind.startsWith('full-only')) session.stream.emit({ type: 'assistant', user_message_uuid: echo,
+          message: { id: 'owned-response', stop_reason: null, content: [{ type: 'thinking', thinking: 'working', signature: 'first-block' }] } });
+        else session.stream.emit({ type: 'stream_event',
+          ...(!kind.includes('error-echo') ? { user_message_uuid: echo } : {}),
+          ...(kind === 'batched-input-echo' ? { user_message_uuids: [
+            '11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222',
+          ] } : {}), event: { type: 'message_start', message: { id: 'owned-response' } } });
+      }
+      if (kind === 'replacement-then-late-old-full') session.stream.emit({ type: 'assistant',
+        user_message_uuid: '11111111-1111-4111-8111-111111111111', message: { id: 'old-response',
+          stop_reason: null, content: [{ type: 'thinking', thinking: 'late old block', signature: 'old' }] } });
+      session.stream.emit({ type: 'assistant', message: { id: 'owned-response', stop_reason: null, content: [
+        { type: 'tool_use', id: 'owned-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {} },
+      ] } });
+      session.stream.emit(userToolResult('owned-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+      if (kind === 'full-only-old-two-rounds') {
+        // The CLI stamps the consumed input once per frame kind, not once
+        // for each provider/tool round in that same input's turn.
+        session.stream.emit({ type: 'assistant', message: { id: 'next-old-response', stop_reason: null, content: [
+          { type: 'tool_use', id: 'next-old-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {} },
+        ] } });
+        session.stream.emit(userToolResult('next-old-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+      }
+
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'replacement-ending' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'replacement ended');
+      expect((session.events.find(e => e.type === 'done')?.data as { silentStop?: boolean }).silentStop)
+        .toBe(kind === 'partial-block' || (kind.includes('old') && kind !== 'replacement-then-late-old-full') ? true : undefined);
     } finally { session.stream.end(); await session.handle.close(); await session.collected; }
   });
 

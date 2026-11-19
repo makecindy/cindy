@@ -479,6 +479,28 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     expect(silentStopWarned(ctx)).toBe(false);
   });
 
+  // #9221: serialized role dispatches still owe the combined failure report.
+  // Unlike a corrected Read error, an unscheduled role cannot silently vanish.
+  // Real translator/done; unit tier. Visible reporting is the normal control.
+  it.each([
+    ['send-error', 'send_to_worker', { ok: false, errorCode: 'BUSY' }, true, false],
+    ['send-no-signal', 'send_to_worker', { ok: true }, false, false],
+    ['create-error', 'create_worker', { ok: false, errorCode: 'DENIED' }, true, false],
+    ['create-no-signal', 'create_worker', { ok: true, worker_id: 'unstarted' }, false, false],
+    ['reported', 'send_to_worker', { ok: false, errorCode: 'BUSY' }, true, true],
+  ] as const)('retains serialized dispatch failure reports (%s)', async (_label, tool, payload, isError, reported) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker());
+    pushWorkerToolResult(queue, ctx, { id: 'failed-role', name: `mcp__cindy_orca__${tool}`, payload, isError });
+    pushWorkerToolResult(queue, ctx, { id: 'successful-role', name: 'mcp__cindy_orca__send_to_worker',
+      payload: { ok: true, wake_kind: 'resumed' } });
+    if (reported) translateSdkMessage({ type: 'assistant', message: { content: [
+      { type: 'text', text: 'One role was dispatched; the other failed with BUSY.' },
+    ] } }, queue, ctx);
+    finishWithEmptyThinking(queue, ctx);
+    expect(doneSilentStopFlag(await drain(queue))).toBe(reported ? undefined : true);
+  });
+
   it('keeps the zero-body exemption when a non-dispatch tool in the batch succeeded', async () => {
     // 对照: 非 Orca 工具成功完成时不改变豁免判定 —— 干净派发批次仍可零正文收口。
     const tracker = new UsageTracker();

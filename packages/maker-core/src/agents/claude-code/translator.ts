@@ -71,7 +71,7 @@ export interface TurnState {
    * 或要求逐项汇报的 create_workers 批量）。存在时即使派发成功也不能零正文收口。
    */
   workerDispatchNeedsReport?: boolean;
-  /** Mandatory create_workers report survives later tool batches. */
+  /** Mandatory Orca outcomes (including serialized failures) survive later tool batches. */
   workerDispatchBatchReportPending?: boolean;
   /** Globally unique queued messages awaiting required steer promotion. */
   workerDispatchPendingPromotions?: Set<string>;
@@ -501,6 +501,7 @@ function observeWorkerDispatchBatch(
     }
     if (result.isError) {
       turn.workerDispatchNeedsReport = true;
+      turn.workerDispatchBatchReportPending = true;
       continue;
     }
     const payload = readOrcaPayload(result.payloadText);
@@ -512,6 +513,11 @@ function observeWorkerDispatchBatch(
     // 解析不出回执就当作无法确认派发：宁可多一次续跑，也不要静默停在没人干活的 turn 上。
     if (!payload || !hasOrcaDispatchSignal(tool.name, payload)) {
       turn.workerDispatchNeedsReport = true;
+      // A queued steer fallback is pending work, not an unscheduled role:
+      // matching successful promotion can still complete that handoff.
+      if (!(tool.name === 'send_to_worker' && payload?.ok === true
+        && payload.wake_kind === 'queued' && hasIdentifier(payload.steer_fallback_reason)
+        && hasIdentifier(payload.queued_message_id))) turn.workerDispatchBatchReportPending = true;
       continue;
     }
     turn.completedWorkerDispatch = true;
