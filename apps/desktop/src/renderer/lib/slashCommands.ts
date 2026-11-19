@@ -20,7 +20,7 @@ import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 import { leadingSlashInvocation } from '@cindy/maker-shared';
 import type { PiPackageCommandRuntimeStatus } from '@/../shared/piPackages';
 import { isCindyBuiltInSkillMetadata } from '@/../shared/cindyBuiltInSkills';
-import type { BuiltInSkillDraftIntent } from './composerDraftStore';
+import type { BuiltInSkillDraftIntent, PiProjectSkillDraftIntent } from './composerDraftStore';
 
 export { leadingSlashInvocation };
 
@@ -138,7 +138,13 @@ export async function rewritePiSkillMessageForSend(params: {
   message: string;
   workingDir?: string | null;
   sessionId?: string;
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
+  onCatalogUnavailable?: () => never;
 }): Promise<string> {
+  if (params.piProjectSkillIntent && params.agentKind !== 'pi') {
+    params.onCatalogUnavailable?.();
+    throw new Error('Selected project skill is unavailable');
+  }
   if (params.agentKind !== 'pi' && params.agentKind !== 'claude-code') return params.message;
   const leading = leadingSlashInvocation(params.message);
   if (!leading) return params.message;
@@ -146,6 +152,11 @@ export async function rewritePiSkillMessageForSend(params: {
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
   });
   const hit = commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
+  if (params.piProjectSkillIntent && (!matchesPiProjectSkillIntent(hit, params.piProjectSkillIntent)
+    || hit?.kind !== 'agent-skill' || hit.runtimeStatus !== 'loaded' || isSlashCommandUnavailable(hit))) {
+    params.onCatalogUnavailable?.();
+    throw new Error('Selected project skill is unavailable');
+  }
   return params.agentKind === 'pi' ? rewritePiSkillAliasFromCommand(params.message, hit)
     : rewriteAgentSkillInvocationForDispatch(params.message, hit);
 }
@@ -554,6 +565,15 @@ export async function loadAllCommands(
   return mergeCommands(desktop, agentBuiltin, agentSkill);
 }
 
+export function matchesPiProjectSkillIntent(
+  command: UnifiedCommand | undefined,
+  intent: PiProjectSkillDraftIntent,
+): boolean {
+  return command?.kind === 'agent-skill' && command.source === 'skill' && command.scope === 'repo'
+    && command.name === intent.commandName && command.path === intent.path
+    && command.runtimeCommandName === intent.runtimeCommandName;
+}
+
 /**
  * A Pi runtime catalog may finish after the palette/dispatch snapshot was
  * created. Recheck desktop hits before executing them so a newly loaded
@@ -564,12 +584,19 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
   sessionId?: string;
   commandName: string;
   commands: UnifiedCommand[];
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
   reload: () => Promise<UnifiedCommand[]>;
 }): Promise<{ command: UnifiedCommand | undefined; commands: UnifiedCommand[] }> {
   const findCommand = (commands: UnifiedCommand[]) => commands.find(
     (command) => command.name.toLowerCase() === params.commandName.toLowerCase(),
   );
-  const current = findCommand(params.commands);
+  const selected = params.piProjectSkillIntent;
+  // The selected identity survives the draft/route handoff. The latest catalog
+  // may already contain a different same-name skill before this function runs.
+  const current: UnifiedCommand | undefined = selected ? {
+    kind: 'agent-skill', source: 'skill', scope: 'repo', runtimeStatus: 'discovered',
+    name: selected.commandName, path: selected.path, runtimeCommandName: selected.runtimeCommandName,
+  } : findCommand(params.commands);
   const shouldReload = !current
     || current.kind === 'desktop'
     || isSlashCommandUnavailable(current);
@@ -586,8 +613,10 @@ export async function reconcilePiRuntimeCommandForDispatch(params: {
       && current.runtimeStatus === 'discovered' && current.path
       && (refreshedCommand?.kind !== 'agent-skill'
         || refreshedCommand.path !== current.path
-        || refreshedCommand.scope !== current.scope)) {
-      return { command: current, commands: params.commands };
+        || refreshedCommand.scope !== current.scope
+        || refreshedCommand.runtimeCommandName !== current.runtimeCommandName
+        || (selected && refreshedCommand.runtimeStatus !== 'loaded'))) {
+      return { command: current, commands: [current, ...params.commands.filter(command => command.name !== current.name)] };
     }
     return refreshedCommand || !current
       ? { command: refreshedCommand, commands: refreshed }
@@ -628,6 +657,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   sessionId?: string;
   commandName: string;
   commands: UnifiedCommand[];
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
   reload: () => Promise<UnifiedCommand[]>;
   prepareRuntime?: () => Promise<void>;
   retryDelaysMs?: readonly number[];
@@ -646,7 +676,7 @@ export async function reconcilePiRuntimeCommandForDispatchWithRetry(params: {
   );
   const mayStillBeLoading = params.prepareRuntime !== undefined
     || (current !== undefined && isSlashCommandUnavailable(current));
-  const shouldPrepareRuntime = !current
+  const shouldPrepareRuntime = params.piProjectSkillIntent !== undefined || !current
     || current.kind === 'desktop'
     || isSlashCommandUnavailable(current);
   if (

@@ -367,6 +367,7 @@ import {
   plainTextToTiptapDoc,
   restoreRemoteOptimisticDraft,
   type BuiltInSkillDraftIntent,
+  type PiProjectSkillDraftIntent,
 } from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
 import { consumeComposerMentionDrop } from '@/lib/composerDrop';
@@ -1872,6 +1873,7 @@ function CCAgentSessionContent({
   const pendingSendRef = useRef<{
     deliveryMode: MessageDeliveryMode;
     builtInSkillIntent?: BuiltInSkillDraftIntent;
+    piProjectSkillIntent?: PiProjectSkillDraftIntent;
     message: string;
     model: string;
     effort: Effort;
@@ -3745,6 +3747,7 @@ function CCAgentSessionContent({
       options?: {
         allowDesktopDispatch?: boolean;
         builtInSkillIntent?: BuiltInSkillDraftIntent;
+        piProjectSkillIntent?: PiProjectSkillDraftIntent;
         piRuntimeRetryDelaysMs?: readonly number[];
         workingDirOverride?: string;
         preparePiRuntime?: () => Promise<void>;
@@ -3770,6 +3773,10 @@ function CCAgentSessionContent({
           return { handled: true, accepted: false, message };
         }
         return { handled: false, accepted: false, message: rewritten };
+      }
+      if (options?.piProjectSkillIntent && (agentKind !== 'pi' || isRemoteSession)) {
+        toast.error(t('richAnswer.sendFailed'));
+        return { handled: true, accepted: false, message };
       }
       const slashMatch = message.match(/^\/(\S+)(?:\s+(.*))?$/s);
       const leading =
@@ -3798,6 +3805,7 @@ function CCAgentSessionContent({
         agentKind,
         sessionId: session?.id,
         commandName: cmdName,
+        piProjectSkillIntent: options?.piProjectSkillIntent,
         commands,
         reload: () =>
           loadAllCommands(
@@ -4018,6 +4026,7 @@ function CCAgentSessionContent({
                   piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
                   workingDirOverride: newDir,
                   builtInSkillIntent: pending.builtInSkillIntent,
+                  piProjectSkillIntent: pending.piProjectSkillIntent,
                   pendingRoute: pending.deliveryMode !== 'steer' ? agentSwitchIntent ?? undefined : undefined,
                   preparePiRuntime: async () => {
                     if (sessionId && session?.status === 'archived') {
@@ -4234,6 +4243,7 @@ function CCAgentSessionContent({
         beforeEnqueue?: () => Promise<boolean>;
         onInputCreated?: (clientId: string) => void;
         builtInSkillIntent?: BuiltInSkillDraftIntent;
+        piProjectSkillIntent?: PiProjectSkillDraftIntent;
         quotesEncoded?: boolean;
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
@@ -4330,6 +4340,7 @@ function CCAgentSessionContent({
               // Command ownership is resolved here after loading the catalog;
               // the composer's delivery preference applies only to model input.
               piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+              piProjectSkillIntent: opts?.piProjectSkillIntent,
               pendingRoute,
               preparePiRuntime: () => {
                 if (deferPreparation) throw needsActiveSession;
@@ -4462,6 +4473,7 @@ function CCAgentSessionContent({
         pendingSendRef.current = {
           deliveryMode,
           builtInSkillIntent: opts?.builtInSkillIntent,
+          piProjectSkillIntent: opts?.piProjectSkillIntent,
           literalText: opts?.literalText,
           resolveSubmission,
           message,
@@ -5153,12 +5165,13 @@ function CCAgentSessionContent({
       // 会抢在草稿提交的首条之前。远程交接才上锁 —— 本机交接没有远程等待。
       const holdComposer = !!pending.remoteCollab;
       if (holdComposer) setRemoteHandoffPreparing(true);
-      const restoreBuiltInHandoff = async () => {
-        if (!pending.builtInSkillIntent || !isDataOwnerGenerationCurrent(handoffOwner)) return;
+      const restoreSelectedSkillHandoff = async () => {
+        if ((!pending.builtInSkillIntent && !pending.piProjectSkillIntent) || !isDataOwnerGenerationCurrent(handoffOwner)) return;
         restoreRemoteOptimisticDraft(sessionId, {
           clientId: `pending-built-in:${pending.createdAt}`,
           text: plainTextToTiptapDoc(pending.text),
           builtInSkillIntent: pending.builtInSkillIntent,
+          piProjectSkillIntent: pending.piProjectSkillIntent,
           attachments: pending.files ?? [],
           browserComments: [],
         });
@@ -5192,6 +5205,7 @@ function CCAgentSessionContent({
         let pendingText = pending.text;
         const slashDispatch = await maybeDispatchDesktopSlashCommand(pending.text, pending.files, {
           builtInSkillIntent: pending.builtInSkillIntent,
+          piProjectSkillIntent: pending.piProjectSkillIntent,
           piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
         });
         if (!isDataOwnerGenerationCurrent(handoffOwner)) return;
@@ -5206,6 +5220,7 @@ function CCAgentSessionContent({
               clientId: `pending-review:${pending.createdAt}`,
               text: plainTextToTiptapDoc(pending.text),
               builtInSkillIntent: pending.builtInSkillIntent,
+              piProjectSkillIntent: pending.piProjectSkillIntent,
               attachments: pending.files ?? [],
               browserComments: [],
             });
@@ -5291,11 +5306,11 @@ function CCAgentSessionContent({
             toast.error(t('newChat.collaboration.assignmentFailed'));
           });
         } else {
-          await restoreBuiltInHandoff();
+          await restoreSelectedSkillHandoff();
           if (deferredUiAssignment) toast.error(t('newChat.collaboration.assignmentFailed'));
         }
       } catch (err) {
-        await restoreBuiltInHandoff();
+        await restoreSelectedSkillHandoff();
         throw err;
       } finally {
         if (holdComposer) setRemoteHandoffPreparing(false);

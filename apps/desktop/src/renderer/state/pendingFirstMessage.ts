@@ -29,7 +29,7 @@ import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { DeferredUiAssignment } from '@/features/cc-agent/deferredUiAssignment';
-import type { BuiltInSkillDraftIntent } from '@/lib/composerDraftStore';
+import type { BuiltInSkillDraftIntent, PiProjectSkillDraftIntent } from '@/lib/composerDraftStore';
 
 /**
  * device-link 草稿开了协同时,把「开协同」这件事一起交接给 SessionView(issue #1170)。
@@ -52,6 +52,7 @@ export interface PendingRemoteCollab {
 export interface PendingPayload {
   text: string;
   builtInSkillIntent?: BuiltInSkillDraftIntent;
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
   files?: AttachedFile[];
   mentions?: MentionedResource[];
   vendorOptions?: Record<string, unknown>;

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { setPending, consumePending } from '@/state/pendingFirstMessage';
+import { reconcilePiRuntimeCommandForSessionDispatch, rewriteAgentSkillInvocationForDispatch, type UnifiedCommand } from '@/lib/slashCommands';
 import type { JSONContent } from '@tiptap/core';
 
 import type { AttachedFile } from '@/lib/fileTypes';
@@ -1081,4 +1083,45 @@ describe('quickStartTextToTiptapDoc', () => {
       expect(tn.marks).toEqual(expect.arrayContaining([{ type: 'quickStartPill' }]));
     }
   });
+});
+
+// #11507, unit: selection survives editor saves and the real first-message
+// handoff. The previous dispatch tests began with the old catalog, missing
+// replacement/removal before SessionView's first snapshot. No I/O or waits.
+it('keeps the selected Pi identity across first-message handoff and failure recovery', async () => {
+  vi.useFakeTimers();
+  const key = 'pi-selection-source';
+  const target = 'pi-selection-target';
+  const intent = { commandName: 'demo', path: '/repo/.agents/skills/demo/SKILL.md', runtimeCommandName: 'skill:demo' };
+  const selected: UnifiedCommand = { kind: 'agent-skill', source: 'skill', scope: 'repo', name: 'demo',
+    path: intent.path, runtimeCommandName: intent.runtimeCommandName, runtimeStatus: 'loaded' };
+  try {
+    saveDraft(key, { text: plainTextToTiptapDoc('/demo'), attachments: [], piProjectSkillIntent: intent });
+    saveDraft(key, { text: plainTextToTiptapDoc('/demo first'), attachments: [] }, { silent: true });
+    setPending(target, { text: '/demo first', piProjectSkillIntent: getDraft(key)?.piProjectSkillIntent });
+    clearDraft(key);
+    const pending = consumePending(target)!;
+    expect(pending.piProjectSkillIntent).toEqual(intent);
+    const dispatch = (commands: UnifiedCommand[]) => reconcilePiRuntimeCommandForSessionDispatch({
+      agentKind: 'pi', sessionId: target, commandName: 'demo', commands,
+      piProjectSkillIntent: pending.piProjectSkillIntent,
+      reload: async () => commands, retryDelaysMs: [],
+      onCatalogUnavailable: () => { throw new Error('unconfirmed selection'); },
+    });
+    for (const commands of [[], [{ ...selected, path: '/other/SKILL.md' }],
+      [{ ...selected, enabled: false }], [{ ...selected, runtimeStatus: 'discovered' as const }]]) {
+      await expect(dispatch(commands)).rejects.toThrow('unconfirmed selection');
+    }
+    restoreRemoteOptimisticDraft(target, { clientId: 'first-send', text: plainTextToTiptapDoc(pending.text),
+      piProjectSkillIntent: pending.piProjectSkillIntent, attachments: [], browserComments: [] });
+    expect(getDraft(target)?.piProjectSkillIntent).toEqual(intent);
+    expect(getDraft(target)?.text).toEqual(recoveredTextDoc(['/demo first']));
+    const result = await dispatch([selected]);
+    expect(rewriteAgentSkillInvocationForDispatch(pending.text, result.command)).toBe('/skill:demo first');
+    saveDraft(target, { text: plainTextToTiptapDoc('/different'), attachments: [] }, { silent: true });
+    expect(getDraft(target)?.piProjectSkillIntent).toBeUndefined();
+  } finally {
+    clearDraft(key); clearDraft(target); consumePending(target);
+    vi.clearAllTimers(); vi.useRealTimers();
+  }
 });

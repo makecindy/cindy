@@ -1,3 +1,5 @@
+import type { PiProjectSkillDraftIntent } from '@/lib/composerDraftStore';
+
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { ProjectSettingsDialog } from './sidebar/ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './sidebar/ResolvedProjectIcon';
@@ -4398,6 +4400,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       mentions?: MentionedResource[],
       opts?: {
         providerId?: string | null;
+        piProjectSkillIntent?: PiProjectSkillDraftIntent;
         quotesEncoded?: boolean;
         agentReferences?: AgentInputReference[];
         pastedTextRanges?: PastedTextRange[];
@@ -4553,6 +4556,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
       const sourceDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
       const targetDraft = getDraft();
       const builtInSkillIntent = sourceDraft?.builtInSkillIntent;
+      const piProjectSkillIntent = opts?.piProjectSkillIntent ?? sourceDraft?.piProjectSkillIntent;
       const isCurrentDataOwner = () =>
         dataOwnerAtSend.dataOwnerId === dataOwnerId &&
         isDataOwnerGenerationCurrent(dataOwnerAtSend);
@@ -4781,6 +4785,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               attachments: excludeCommentScreenshots(files, sourceDraft?.browserComments ?? []),
               browserComments: sourceDraft?.browserComments ?? [],
               builtInSkillIntent,
+              piProjectSkillIntent,
             };
             if (!isCurrentDataOwner()) return;
             previewRemoteCreation({
@@ -5137,6 +5142,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
             setPending(remoteSessionId, {
               text: message,
               builtInSkillIntent: currentBuiltInSkillIntent(),
+              piProjectSkillIntent,
               files: rehydratedFiles,
               mentions,
               ...(shouldEnableCollab
@@ -5302,6 +5308,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
                 saveComposerDraft(newSession.id, {
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(builtInSkillIntent ? builtInSkillDraftMessage : message),
                   ...(builtInSkillIntent ? { builtInSkillIntent } : {}),
+                  piProjectSkillIntent,
                   attachments: excludeCommentScreenshots(rehomedFiles, rehomedComments),
                   browserComments: rehomedComments,
                 });
@@ -5443,6 +5450,8 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
 
                 const dispatchedMessage = builtInSkillIntent ? message : await rewritePiSkillMessageForSend({
                   agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
+                  piProjectSkillIntent,
+                  onCatalogUnavailable: () => { throw new Error(t('richAnswer.sendFailed')); },
                   message,
                   workingDir: newDir,
                   sessionId: newSession.id,
@@ -5668,6 +5677,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
               setPending(newSession.id, {
                 text: message,
                 builtInSkillIntent: currentBuiltInSkillIntent(),
+                piProjectSkillIntent,
                 files: rehydratedFiles,
                 mentions,
                 ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),

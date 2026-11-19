@@ -112,6 +112,7 @@ import {
   removeRemoteOptimisticDraftFragment,
   type RemoteOptimisticTransitionCheckpoint,
   type BuiltInSkillDraftIntent,
+  type PiProjectSkillDraftIntent,
   saveDraft as saveComposerDraft,
   saveComposerTextAfterAsyncTransition,
   clearDraft as clearComposerDraft,
@@ -554,6 +555,7 @@ interface ChatInputProps {
     opts?: {
       deliveryMode?: MessageDeliveryMode;
       builtInSkillIntent?: BuiltInSkillDraftIntent;
+      piProjectSkillIntent?: PiProjectSkillDraftIntent;
       providerId?: string | null;
       baselineRecovery?: boolean;
       /** chat-text-quote:message 开头的 blockquote 为引用功能拼接产出。 */
@@ -4491,6 +4493,7 @@ export function ChatInput({
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
             ...(existing?.builtInSkillIntent ? { builtInSkillIntent: existing.builtInSkillIntent } : {}),
+            piProjectSkillIntent: existing?.piProjectSkillIntent,
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
@@ -5502,11 +5505,27 @@ export function ChatInput({
           return true;
         })
         .run();
+      const draftKey = storageKeyForDraftRef.current;
+      if (applied && !planModeCommandConsumed && trigger.sigil === '/' && draftKey
+        && editor.state.doc.textBetween(1, from).trim() === '') {
+        draftSaveSchedulerRef.current?.flush();
+        const draft = getComposerDraft(draftKey);
+        saveComposerDraft(draftKey, {
+          ...draft,
+          text: editor.getJSON(),
+          attachments: draft?.attachments ?? [],
+          builtInSkillIntent: undefined,
+          piProjectSkillIntent: currentModelAgentKind === 'pi' && cmd.kind === 'agent-skill'
+            && cmd.source === 'skill' && cmd.scope === 'repo' && cmd.path && cmd.runtimeCommandName
+            ? { commandName: cmd.name, path: cmd.path, runtimeCommandName: cmd.runtimeCommandName }
+            : undefined,
+        });
+      }
       if (applied && planModeCommandConsumed) {
         planModeEntry?.onToggle(!planModeEntry.enabled);
       }
     },
-    [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger, pluginSlashChoices, pluginCompletionKey],
+    [editor, currentModelAgentKind, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger, pluginSlashChoices, pluginCompletionKey],
   );
 
   const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
@@ -5840,6 +5859,7 @@ export function ChatInput({
       if (!finishAgentSendDispatch) return;
       draftSaveSchedulerRef.current?.flush();
       const builtInSkillIntent = sourceStorageKey ? getComposerDraft(sourceStorageKey)?.builtInSkillIntent : undefined;
+      const piProjectSkillIntent = sourceStorageKey ? getComposerDraft(sourceStorageKey)?.piProjectSkillIntent : undefined;
       dispatchSendInFlightKeysRef.current.add(sendInFlightKey);
       // 发送新消息时立即递增 turnGen，并在任何 await / clearContent 前消费来源 session
       // 的推荐：旧 Promise 不能落地，正文程序化清空时也不会闪回上一轮推荐。
@@ -6423,6 +6443,7 @@ export function ChatInput({
             {
               clientId,
               ...(builtInSkillIntent ? { builtInSkillIntent } : {}),
+              piProjectSkillIntent,
               text: tiptapDocHasContent(documentBeforeOptimisticClear)
                 ? documentBeforeOptimisticClear
                 : null,
@@ -6606,6 +6627,7 @@ export function ChatInput({
               deliveryMode,
               providerId: sendProviderId,
               ...(canAttemptBaselineRecovery ? { baselineRecovery: true } : {}),
+              piProjectSkillIntent,
               ...(builtInSkillIntent
                 ? {
                     builtInSkillIntent: {

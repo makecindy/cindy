@@ -62,6 +62,13 @@ export interface BuiltInSkillDraftIntent {
   commandName: string;
 }
 
+/** Menu selection identity; only retained in the owner-scoped in-memory draft. */
+export interface PiProjectSkillDraftIntent {
+  commandName: string;
+  path: string;
+  runtimeCommandName: string;
+}
+
 export interface ComposerDraft {
   /** Tiptap JSON document. `null` means "no text draft saved" (treat as empty). */
   text: JSONContent | null;
@@ -78,6 +85,7 @@ export interface ComposerDraft {
   pendingGhostId?: string;
   /** Routed built-in identity; re-resolve in the final task environment before sending. */
   builtInSkillIntent?: BuiltInSkillDraftIntent;
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
   /**
    * One-shot routed-entry intent: hydrate this draft, then place the caret at
    * the final editable position. ChatInput consumes and clears the flag so a
@@ -101,6 +109,7 @@ export interface ComposerDraft {
 
 export interface RemoteOptimisticDraftFragment {
   builtInSkillIntent?: BuiltInSkillDraftIntent;
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
   clientId: string;
   text: JSONContent | null;
   attachments: readonly AttachedFile[];
@@ -109,6 +118,7 @@ export interface RemoteOptimisticDraftFragment {
 
 export interface RemoteOptimisticDraftSnapshot {
   builtInSkillIntent?: BuiltInSkillDraftIntent;
+  piProjectSkillIntent?: PiProjectSkillDraftIntent;
   text: JSONContent | null;
   attachments: readonly AttachedFile[];
   browserComments: readonly BrowserCommentDraftItem[];
@@ -528,14 +538,19 @@ function saveDraftAtKey(
   // an explicit replacement draft or an edited command drops that intent.
   const intent = withQuotes.builtInSkillIntent
     ?? (opts?.silent ? drafts.get(key)?.builtInSkillIntent : undefined);
+  const piIntent = withQuotes.piProjectSkillIntent
+    ?? (opts?.silent ? drafts.get(key)?.piProjectSkillIntent : undefined);
   const firstBlock = withQuotes.text?.content?.[0];
   const leadingText = firstBlock?.type === 'paragraph'
     ? (firstBlock.content ?? []).map((node) => node.type === 'text' ? node.text ?? '' : '\uFFFC').join('')
     : '';
-  const { builtInSkillIntent: _previousIntent, ...withoutIntent } = withQuotes;
-  drafts.set(key, intent && leadingSlashInvocation(leadingText)?.name === intent.commandName
-    ? { ...withoutIntent, builtInSkillIntent: intent }
-    : withoutIntent);
+  const { builtInSkillIntent: _previousIntent, piProjectSkillIntent: _previousPiIntent, ...withoutIntent } = withQuotes;
+  const commandName = leadingSlashInvocation(leadingText)?.name;
+  drafts.set(key, {
+    ...withoutIntent,
+    ...(intent && commandName === intent.commandName ? { builtInSkillIntent: intent } : {}),
+    ...(piIntent && commandName === piIntent.commandName ? { piProjectSkillIntent: piIntent } : {}),
+  });
   if (!opts?.silent) {
     const set = listeners.get(key);
     if (set)
@@ -757,6 +772,7 @@ export function restoreRemoteOptimisticDraft(
   ];
   const baseDraft: ComposerDraft = {
     builtInSkillIntent: effectiveOverride?.builtInSkillIntent ?? existing?.builtInSkillIntent,
+    piProjectSkillIntent: effectiveOverride?.piProjectSkillIntent ?? existing?.piProjectSkillIntent,
     text: currentText,
     attachments: currentAttachments,
     quotes: [],
@@ -767,6 +783,7 @@ export function restoreRemoteOptimisticDraft(
   const rememberBatchSnapshot = (draft: ComposerDraft): void => {
     batchSnapshots?.set(key, {
       builtInSkillIntent: draft.builtInSkillIntent,
+      piProjectSkillIntent: draft.piProjectSkillIntent,
       text: draft.text,
       attachments: draft.attachments,
       browserComments: draft.browserComments ?? [],
@@ -800,9 +817,13 @@ export function restoreRemoteOptimisticDraft(
 
   let restoredText = currentText;
   let restoredIntent = baseDraft.builtInSkillIntent;
+  let restoredPiIntent = baseDraft.piProjectSkillIntent;
   if (tiptapDocHasContent(fragment.text)) {
     // Identity belongs to the leading restored message, not a later FIFO fragment.
-    if (recovery.textPrefix.length === 0) restoredIntent = fragment.builtInSkillIntent;
+    if (recovery.textPrefix.length === 0) {
+      restoredIntent = fragment.builtInSkillIntent;
+      restoredPiIntent = fragment.piProjectSkillIntent;
+    }
     const insertion = insertComposerDocumentForRestore(
       fragment.text!,
       currentText ?? { type: 'doc', content: [] },
@@ -837,6 +858,7 @@ export function restoreRemoteOptimisticDraft(
   const restored: ComposerDraft = {
     ...baseDraft,
     builtInSkillIntent: restoredIntent,
+    piProjectSkillIntent: restoredPiIntent,
     text: restoredText,
     attachments: restoredAttachments,
     browserComments: restoredComments,
