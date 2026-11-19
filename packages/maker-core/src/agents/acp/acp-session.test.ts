@@ -263,11 +263,18 @@ describe('AcpSession turns', () => {
     agent.update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Look at ' } });
     agent.update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'main.ts' } });
     agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Editing.' } });
-    agent.update({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Edit main.ts', kind: 'edit', status: 'pending', rawInput: { path: 'main.ts' } });
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Edit main.ts', kind: 'edit', status: 'pending' });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 't1',
+      status: 'in_progress',
+      rawInput: { path: 'main.ts' },
+    });
     agent.update({
       sessionUpdate: 'tool_call_update',
       toolCallId: 't1',
       status: 'completed',
+      rawInput: { path: 'main.ts' },
       content: [{ type: 'diff', path: 'main.ts', oldText: 'a\n', newText: 'b\n' }],
     });
     agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } });
@@ -282,13 +289,16 @@ describe('AcpSession turns', () => {
       'status:',
       'thinking:start', 'thinking:delta', 'thinking:delta', 'thinking:final',
       'text:delta', 'text:final',
-      'tool_use:', 'tool_result_full:', 'tool_result:done',
+      'tool_use:', 'tool_use:', 'tool_result_full:', 'tool_result:done',
       'text:delta', 'text:final',
       'done:',
     ]);
     expect(events.find((event) => event.type === 'thinking' && (event.data as AcpRecord).stage === 'final')?.data)
       .toMatchObject({ text: 'Look at main.ts' });
-    expect(events.find((event) => event.type === 'tool_use')?.data).toMatchObject({ toolUseId: 't1', toolName: 'Edit main.ts', input: { path: 'main.ts' } });
+    expect(events.filter((event) => event.type === 'tool_use').map((event) => event.data)).toMatchObject([
+      { toolUseId: 't1', toolName: 'Edit main.ts', input: {} },
+      { toolUseId: 't1', toolName: 'Edit main.ts', input: { path: 'main.ts' }, acpInputPatch: true },
+    ]);
     expect((events.find((event) => event.type === 'tool_result_full')?.data as AcpRecord).fullText).toContain('-a\n+b');
     expect(events.at(-1)?.data).toMatchObject({ status: 'completed', result: 'Done.', stopReason: 'end_turn' });
     expect(events.every((event) => event.turnScope === undefined)).toBe(true);

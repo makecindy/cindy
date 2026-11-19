@@ -50,14 +50,16 @@ import { useCindyMakeActivity } from './useCindyMakeActivity';
  */
 function PluginEngineVendorIcon({
   providerId,
+  deviceId,
   ...iconProps
 }: {
   providerId: string | null | undefined;
+  deviceId?: string;
   size: number;
   running: boolean;
   colorClassName?: string;
 }) {
-  const { name, iconDataUrl } = usePluginEngineIdentity(providerId);
+  const { name, iconDataUrl } = usePluginEngineIdentity(providerId, deviceId);
   return <VendorIcon {...iconProps} vendor="acp" title={name} {...(iconDataUrl ? { iconDataUrl } : {})} />;
 }
 
@@ -235,8 +237,8 @@ export function SessionStatusIcon({
         </span>
       ) : vendor === 'acp' ? (
         <PluginEngineVendorIcon
-          // 引擎列表只有本机的；另一台电脑上的任务只写通用名，不拿本机同名插件冒充。
-          providerId={session.deviceLinkDeviceId ? null : session.providerId}
+          providerId={session.providerId}
+          deviceId={session.deviceLinkDeviceId ?? undefined}
           size={size ?? 12}
           running={isRunning}
           colorClassName={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}

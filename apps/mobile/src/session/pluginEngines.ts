@@ -93,8 +93,9 @@ function text(value: unknown, max: number): string | undefined {
 function normalizeModel(raw: unknown): MobilePluginEngineModel | null {
   if (!raw || typeof raw !== 'object') return null;
   const item = raw as Record<string, unknown>;
-  const id = text(item.id, 256);
-  if (!id) return null;
+  const { id } = item;
+  // IDs are protocol values. Apply the host's size bound without trimming or shortening them.
+  if (typeof id !== 'string' || id.length > 256 || !id.trim()) return null;
   const efforts = Array.isArray(item.efforts)
     ? PLUGIN_ENGINE_EFFORTS.filter((effort) => (item.efforts as unknown[]).includes(effort))
     : [];
@@ -104,7 +105,7 @@ function normalizeModel(raw: unknown): MobilePluginEngineModel | null {
   const description = text(item.description, 200);
   return {
     id,
-    displayName: text(item.displayName, 200) ?? id,
+    displayName: text(item.displayName, 200) ?? id.slice(0, 200),
     ...(description ? { description } : {}),
     efforts,
     ...(defaultEffort ? { defaultEffort } : {}),

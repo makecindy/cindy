@@ -46,7 +46,7 @@ export function admitPluginEngineSession(
     const hint = harness.availability.message?.trim();
     throw new Error(hint ? `${harness.name} 当前不可用：${hint}` : `${harness.name} 当前不可用。`);
   }
-  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : PLUGIN_ENGINE_DEFAULT_MODEL;
+  const model = typeof body.model === 'string' && body.model.trim() ? body.model : PLUGIN_ENGINE_DEFAULT_MODEL;
   const requested = body.effort;
   const offered = modelsOf(harness).find((item) => item.id === model)?.efforts ?? [];
   const effort = isPluginEngineEffort(requested) && offered.includes(requested) ? requested : '';
@@ -83,7 +83,7 @@ export function admitPluginEngineSwitchTarget(
     const hint = engine.availability.message?.trim();
     throw new Error(hint ? `${engine.name} 当前不可用：${hint}` : `${engine.name} 当前不可用。`);
   }
-  const model = target.model.trim() || PLUGIN_ENGINE_DEFAULT_MODEL;
+  const model = target.model.trim() ? target.model : PLUGIN_ENGINE_DEFAULT_MODEL;
   const offered = engine.models.find((item) => item.id === model)?.efforts ?? [];
   const effort = isPluginEngineEffort(target.effort) && offered.includes(target.effort) ? target.effort : '';
   const permissionMode = engine.permissionModes.find((mode) => mode.id === target.permissionMode)?.id

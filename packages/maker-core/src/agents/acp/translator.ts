@@ -11,13 +11,14 @@
  * no ACP-specific branch:
  *  - text:      `{ text, isFinal: false }` deltas, then `{ text, isFinal: true, isFullText: true }` per segment
  *  - thinking:  `stage: 'start' | 'delta' | 'final'` with a stable `blockId`
- *  - tools:     `tool_use`, then `tool_result_full` + `tool_result` when the call settles
+ *  - tools:     `tool_use` (including input patches), then paired results when the call settles
  *  - turn end:  `done` with `result` = last non-empty assistant segment
  *
  * Usage, configuration and session-info updates are session state and are
  * handled by `AcpSession`, not here.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { createTwoFilesPatch } from 'diff';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
@@ -241,24 +242,7 @@ export class AcpUpdateTranslator {
     if (!tool) {
       tool = { ...fields, settled: false };
       this.tools.set(fields.toolCallId, tool);
-      events.push({
-        type: 'tool_use',
-        data: {
-          toolUseId: fields.toolCallId,
-          ...parseMessageToolUse({
-            role: 'tool_use',
-            content: {
-              toolName: acpToolDisplayName(fields),
-              input: fields.rawInput !== undefined && fields.rawInput !== null && typeof fields.rawInput === 'object'
-                ? fields.rawInput
-                : fields.rawInput === undefined ? {} : { value: fields.rawInput },
-            },
-            toolUseId: fields.toolCallId,
-          }),
-          ...(fields.kind ? { acpKind: fields.kind } : {}),
-          ...(fields.locations?.length ? { acpLocations: fields.locations } : {}),
-        },
-      });
+      this.emitToolUse(tool, events);
     } else {
       // Later updates replace only the fields they carry.
       if (fields.title !== undefined) tool.title = fields.title;
@@ -267,12 +251,35 @@ export class AcpUpdateTranslator {
       if (fields.status !== undefined) tool.status = fields.status;
       if (fields.content !== undefined) tool.content = fields.content;
       if (fields.locations !== undefined) tool.locations = fields.locations;
-      if (fields.rawInput !== undefined) tool.rawInput = fields.rawInput;
       if (fields.rawOutput !== undefined) tool.rawOutput = fields.rawOutput;
+      if (!tool.settled && fields.rawInput !== undefined && !isDeepStrictEqual(fields.rawInput, tool.rawInput)) {
+        tool.rawInput = fields.rawInput;
+        this.emitToolUse(tool, events, true);
+      }
     }
     if (!tool.settled && (tool.status === 'completed' || tool.status === 'failed')) {
       this.settleTool(tool, events, tool.status === 'failed' ? 'failed' : 'done');
     }
+  }
+
+  private emitToolUse(tool: ToolState, events: AgentEvent[], inputPatch = false): void {
+    const input = tool.rawInput !== null && typeof tool.rawInput === 'object'
+      ? tool.rawInput
+      : tool.rawInput === undefined ? {} : { value: tool.rawInput };
+    events.push({
+      type: 'tool_use',
+      data: {
+        ...parseMessageToolUse({
+          role: 'tool_use',
+          content: { toolName: acpToolDisplayName(tool), input },
+          toolUseId: tool.toolCallId,
+        }),
+        toolUseId: tool.toolCallId,
+        ...(tool.kind ? { acpKind: tool.kind } : {}),
+        ...(tool.locations?.length ? { acpLocations: tool.locations } : {}),
+        ...(inputPatch ? { acpInputPatch: true } : {}),
+      },
+    });
   }
 
   private settleTool(tool: ToolState, events: AgentEvent[], result: 'done' | 'failed' | 'interrupted'): void {

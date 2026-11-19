@@ -57,7 +57,7 @@ import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { isPluginEngineEffort, isPluginEngineKind } from '../../../shared/pluginEngines';
-import { findPluginEngine, usePluginEngines } from '@/hooks/usePluginEngines';
+import { findPluginEngine, usePluginEngines, useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import type { PluginEngineSessionPickerProps, PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
 import { useTranslation } from 'react-i18next';
@@ -446,6 +446,7 @@ import {
   ackInterruptedTurnFor,
   goalApiFor,
   makerApiFor,
+  makerApiForDevice,
   orcaWorkflowsFor,
 } from '@/lib/makerTransport';
 // 协同 mutation 的归属取粘滞值:瞬断窗口内误判本机会在控制端建出/销毁 team,
@@ -2252,14 +2253,22 @@ function CCAgentSessionContent({
   const isCodex = displayAgentKind === 'codex';
   // 插件引擎任务(agent_kind = 'acp',docs/plans/acp-plugin-bridge.md)：上面两个映射会回落成
   // Claude Code，所以凡是按内置 Harness 取能力、做登录检查、改模型或压缩的地方都先看这一位。
-  // 引擎列表只有本机的(远程任务不会是插件引擎任务)。
   const pluginEngineTask = isPluginEngineKind(session?.agentKind);
-  // 任务里换到 / 换出插件引擎：只限本机的普通任务，与主进程的切换准入一致(插件引擎只在本机运行；
-  // 远程、SSH、Agent 在另一台电脑、协同、IM、伙伴、定时与共享任务暂不支持)。
-  const pluginEngineSwitchEligible = !!session && !!sessionId && !readOnly && !remoteDeviceId
-    && !session.remoteHostId && !session.agentDeviceId && !session.orcaRole && !session.orcaRemoteLead
+  const pluginEngineDeviceId = rightSidebarDeviceLinkDeviceId ?? undefined;
+  // Agent 在任务所属电脑上运行。Device Link 控制端使用该电脑的目录与现有的切换通道。
+  const pluginEngineOnTaskComputer = !!session && !isSharedTaskPeer(pluginEngineDeviceId)
+    && !session.remoteHostId && !session.agentDeviceId;
+  const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
+    && !session.orcaRole && !session.orcaRemoteLead
     && (session.source ?? 'desktop') === 'desktop' && session.status !== 'archived';
-  const pluginEngines = usePluginEngines(pluginEngineTask || pluginEngineSwitchEligible);
+  const localPluginEngines = usePluginEngines(!pluginEngineDeviceId && (pluginEngineTask || pluginEngineSwitchEligible));
+  const remotePluginCatalogue = useRemotePluginEngines(
+    pluginEngineOnTaskComputer && !readOnly && (pluginEngineTask || pluginEngineSwitchEligible)
+      && !remoteSessionUnavailable && !awaitingCreation ? pluginEngineDeviceId : undefined,
+    pluginEngineTask && viewVisible,
+  );
+  const readPluginEngineCatalogue = pluginEngineDeviceId ? remotePluginCatalogue.read : undefined;
+  const pluginEngines = remotePluginCatalogue.engines ?? localPluginEngines;
   const pluginEngine = pluginEngineTask ? findPluginEngine(pluginEngines, session?.providerId) : null;
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
   // 其余 agent 声明 manualCompact.supported(Pi / Codex)→ maker:compact-session;其余无入口。
@@ -3642,16 +3651,17 @@ function CCAgentSessionContent({
     ],
   );
 
-  // 插件引擎任务换模型：只在该引擎自己的模型之间换，经既有 set-model 通道交给主进程(它直接转给
-  // 引擎并落库；来源不变，所以不传 providerId)。失败时选择器留在原地。
+  // 同引擎换模型走任务所属电脑。带当前 providerId，由主进程核对所选模型仍属于此引擎。
   const handlePluginEngineModelSelect = useCallback(
-    async (modelId: string, effort?: string): Promise<boolean> => {
-      if (!sessionId) return false;
+    async (modelId: string, effort?: string, expectedRevision?: number): Promise<boolean> => {
+      if (!sessionId || !session?.providerId || !pluginEngineOnTaskComputer || readOnly || remoteWritesBlocked) return false;
       try {
-        // A level travels with the model like a built-in selection; plugin engines have no Fast.
-        await window.electronAPI.maker.setModel(
-          sessionId, modelId, undefined, undefined, effort ? { effort, fastMode: false } : undefined);
-        refreshServerSession();
+        const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
+        const result = await api.setModel(
+          sessionId, modelId, session.providerId, expectedRevision, effort ? { effort, fastMode: false } : undefined);
+        if (result?.superseded) return false;
+        // Device Link publishes the authoritative task patch from the controlled computer.
+        if (!pluginEngineDeviceId) void refreshServerSession();
         return true;
       } catch (err) {
         log.warn('plugin engine set-model failed', err);
@@ -3659,7 +3669,8 @@ function CCAgentSessionContent({
         return false;
       }
     },
-    [sessionId, refreshServerSession, t],
+    [sessionId, session?.providerId, pluginEngineOnTaskComputer, readOnly, remoteWritesBlocked,
+      pluginEngineDeviceId, refreshServerSession, t],
   );
   const pluginEngineSessionPicker = useMemo<PluginEngineSessionPickerProps | undefined>(
     () =>
@@ -3671,28 +3682,35 @@ function CCAgentSessionContent({
             modelId: session.model || PLUGIN_ENGINE_DEFAULT_MODEL,
             effort: session.effort,
             onSelectModel: handlePluginEngineModelSelect,
+            readCatalogue: readPluginEngineCatalogue,
+            catalogueUnknown: !!pluginEngineDeviceId && remotePluginCatalogue.engines === null,
           }
         : undefined,
-    [pluginEngineTask, session, pluginEngine, handlePluginEngineModelSelect, t],
+    [pluginEngineTask, session, pluginEngine, handlePluginEngineModelSelect, readPluginEngineCatalogue,
+      pluginEngineDeviceId, remotePluginCatalogue.engines, t],
   );
 
   // 任务里选中插件引擎的一行(docs/plans/acp-plugin-bridge.md)：同一个引擎内换模型立即生效(上面的
   // set-model)；换到另一个引擎——从内置引擎或别的插件引擎——与内置引擎之间的切换一样登记意图，
   // 下一条消息发送时带着对话交接过去。和在选择器里点一行同一个顺序保证：已经点了发送就不再换。
   const handlePluginEngineSwitchSelect = useCallback(async (selection: PluginEngineSelection) => {
-    if (!sessionId || !session) return;
+    if (!sessionId || !session || !pluginEngineSwitchEligible || remoteWritesBlocked) return;
     if (hasPendingAgentSendDispatch(sessionId)) return;
     const finishSwitch = beginAgentSwitchOperation(sessionId);
-    const switchTo = () => window.electronAPI.maker.switchSessionAgent(
+    const api = pluginEngineDeviceId ? makerApiForDevice(pluginEngineDeviceId) : makerApiFor(sessionId);
+    const switchTo = () => api.switchSessionAgent(
       sessionId, 'acp', selection.modelId, selection.providerId, selection.effort ?? '', false);
     try {
       if (pluginEngineTask && selection.providerId === session.providerId) {
         // 选回当前引擎 = 撤销已登记的切换(主进程按同引擎处理，只清意图)，再按普通换模型处理。
+        let revision: number | undefined;
         if (makerChatStore.getAgentSwitchIntent(sessionId)) {
-          await switchTo();
-          makerChatStore.clearAgentSwitchIntent(sessionId);
+          const result = await switchTo();
+          if (result.sameEngineSuperseded) return;
+          revision = result.sameEngineRevision;
+          if (!pluginEngineDeviceId) makerChatStore.clearAgentSwitchIntent(sessionId);
         }
-        await handlePluginEngineModelSelect(selection.modelId, selection.effort);
+        await handlePluginEngineModelSelect(selection.modelId, selection.effort, revision);
         return;
       }
       // 主进程先广播意图(sessions:patched)再回包，选择器随广播显示「下条：」。
@@ -3713,11 +3731,13 @@ function CCAgentSessionContent({
     } finally {
       finishSwitch();
     }
-  }, [sessionId, session, pluginEngineTask, pluginEngines, handlePluginEngineModelSelect, t]);
-  // 本机普通任务的选择器里列出插件引擎：当前选中的是待切到的引擎，或插件引擎任务自己的引擎；
+  }, [sessionId, session, pluginEngineSwitchEligible, remoteWritesBlocked, pluginEngineDeviceId,
+    pluginEngineTask, pluginEngines, handlePluginEngineModelSelect, t]);
+  // 普通任务的选择器列出任务所属电脑的引擎：当前选中的是待切到的引擎，或任务自己的引擎；
   // 插件引擎任务待切到内置引擎时不选中任何引擎(内置那一行显示为下一条消息的选择)。
   const pluginEngineSwitchPicker = useMemo<PluginEnginesPickerProps | undefined>(() => {
-    if (!pluginEngineSwitchEligible || !session || (!pluginEngineTask && pluginEngines.length === 0)) return undefined;
+    if (!pluginEngineSwitchEligible || !session
+      || (!pluginEngineTask && !pluginEngineDeviceId && pluginEngines.length === 0)) return undefined;
     const active = pluginEngineSwitchIntent?.providerId
       ? {
           providerId: pluginEngineSwitchIntent.providerId,
@@ -3735,9 +3755,10 @@ function CCAgentSessionContent({
       engines: pluginEngines,
       active,
       onSelect: (selection) => { void handlePluginEngineSwitchSelect(selection); },
+      readCatalogue: readPluginEngineCatalogue,
     };
-  }, [pluginEngineSwitchEligible, pluginEngines, session, pluginEngineSwitchIntent, pluginEngineTask, agentSwitchIntent,
-    handlePluginEngineSwitchSelect]);
+  }, [pluginEngineSwitchEligible, pluginEngineDeviceId, pluginEngines, session, pluginEngineSwitchIntent,
+    pluginEngineTask, agentSwitchIntent, handlePluginEngineSwitchSelect, readPluginEngineCatalogue]);
 
   // effort 已在 ChatInput 中落库成功；直接 merge 确切值回 SSoT，避免额外 GET
   // 读取到旧快照后把菜单选中态反向覆盖。ChatInput 不维护第二条 local state。

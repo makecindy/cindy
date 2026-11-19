@@ -37,6 +37,7 @@ Main 内部接口（不跨端）：`cindy-brain/pluginHarnesses.ts` 的注册表
 utilityProcess 原样 stdio 模式，stdin 为 base64 字节帧、stdout 为原始字节，wire 不变。实现与回归见
 `runtime/ghostHarnessesEndpoint.ts`、`ghostInstallConsent.ts`、`ghostInstallReceipt.ts` 及 `ghostHarnessesEndpoint.test.ts`、
 `pluginHarnesses.test.ts`、`nodeRuntimeBroker.test.ts`、`ghostLocalInstallIdentity.test.ts`。
+ACP 工具晚到的输入参数更新原有历史行，控制端通过既有消息行广播收到，重复上报同一参数不重复写入。
 
 任务中换引擎（2026-11-19，第二期）：`sessions:patched` 的 `agentSwitchIntent`（`PublicAgentSwitchIntent`）与
 `maker:get-session-agent-switch-intent` 的 `targetAgentKind` 新增取值 `acp`（此时 `providerId` 必为 `acp-plugin:<插件>:<引擎>`）。
@@ -46,11 +47,13 @@ utilityProcess 原样 stdio 模式，stdin 为 base64 字节帧、stdout 为原�
 追加可选 `fromEngineName` / `toEngineName`；旧端把 `acp` 显示为 Claude Code，停泊会话查找只匹配内置引擎，不会误续接。
 回归见 `pluginEngineSessionSwitch.test.ts`、`pluginEngineSessionAdmission.test.ts` 与 renderer `sessionAgentSwitchRemoteRouting.test.ts`。
 
-手机读插件引擎（2026-11-19，第二期）：device-link allowlist 新增只读 `maker:list-plugin-engines`（返回 `PluginEngineView[]`，与本机
+手机和桌面控制端读插件引擎（2026-11-19，第二期）：device-link allowlist 新增只读 `maker:list-plugin-engines`（返回 `PluginEngineView[]`，与本机
 Renderer 读到的字段相同；图标数据 URL 单个最多 64 KiB、一次列表合计最多 512 KiB，超出预算的图标显示通用标志）与 `maker:refresh-plugin-engines`（请那台的
 插件重新上报模型，插件各自冷却），两者都进后台 invoke 档。变更推送 `maker:plugin-engines-changed` 仍只发本机窗口，控制端打开选择器时
 按需读取。旧被控端没有这两条准入 → `CHANNEL_NOT_ALLOWED`，控制端按「没有插件引擎」隐藏入口；旧控制端不调用。走既有 invoke 帧，
-自建中转无需改动。
+自建中转无需改动。桌面控制端按账号和任务所属电脑共享目录，打开插件任务或模型选择器时读取，任务列表复用已有结果。
+同引擎模型变更沿用 `maker:set-model`，按稳定设备归属发往被控端并使用该端的任务变更推送回显。引擎提供的模型标识在 256 字符
+以内原样缓存，超限项目不进入目录，展示名称另行限长。
 
 定时任务（2026-11-19，第二期）：`Schedule` / `CreateScheduleInput` 的 `agentKind`、`modelAgentKind` 新增取值 `acp`（`providerId` 必为
 `acp-plugin:…`），只用于每次新建任务、在自动任务所在电脑运行的 Agent 任务；保存时拒绝绑定任务、持续会话、worktree、运行位置、

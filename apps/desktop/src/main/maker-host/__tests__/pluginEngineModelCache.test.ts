@@ -9,6 +9,7 @@
  *   credentials-and-local-storage.md 的账号隔离、原子写入、损坏按空读取。
  * - 现有覆盖缺口：2026-11-18 实机重启开发版后 DSH 的模型列表消失(只缓存在内存)。
  * - 最小失败输入：报告过模型后清空内存读到空列表；另一个账号读到本账号的列表；损坏文件抛错。
+ *   PR #11549：两个模型 ID 的前 200 字符相同，重启后仍应按各自完整 ID 提供选择。
  * - tier：unit(真实文件读写在临时目录，账号目录由替身给出)。
  */
 import fs from 'node:fs';
@@ -63,6 +64,20 @@ describe('plugin engine model list', () => {
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).harnesses[KEY]).toEqual([
       { id: 'v4-pro', displayName: 'DeepSeek-V4-Pro', description: 'Stronger agentic coding', group: 'DeepSeek' },
     ]);
+  });
+
+  it('keeps complete model IDs and omits oversized IDs from the persisted picker list', () => {
+    const prefix = 'x'.repeat(255);
+    const models = [
+      { id: prefix + 'a', displayName: 'First model' },
+      { id: prefix + 'b', displayName: 'Second model' },
+    ];
+    cache.rememberPluginHarnessModels(KEY, [
+      ...models,
+      { id: prefix + 'ab', displayName: 'Oversized model' },
+    ]);
+    cache.resetPluginHarnessModelCacheForTests();
+    expect(cache.getCachedPluginHarnessModels(KEY)).toEqual(models);
   });
 
   it('notifies only when an engine’s list actually changes', () => {

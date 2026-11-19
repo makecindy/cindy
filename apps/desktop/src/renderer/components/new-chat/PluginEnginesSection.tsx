@@ -50,6 +50,8 @@ export interface PluginEnginesPickerProps {
   /** Current engine choice (already resolved against the list); null = a built-in model is used. */
   active: PluginEngineSelection | null;
   onSelect(selection: PluginEngineSelection): void;
+  /** Device Link picker reloads its own computer's list when opened. */
+  readCatalogue?(): void;
 }
 
 /** A task already running on a plugin engine: only that engine's models are offered. */
@@ -62,6 +64,9 @@ export interface PluginEngineSessionPickerProps {
   modelId: string;
   /** The task's stored reasoning level ('' / null = the engine's own). */
   effort?: string | null;
+  readCatalogue?(): void;
+  /** The remote computer has yet to answer with an authoritative catalogue. */
+  catalogueUnknown?: boolean;
   /**
    * Applies a model of this engine (and a level it offers) to the task; false = not applied
    * (picker stays open). Without a level the engine keeps its own.
@@ -405,8 +410,8 @@ export function PluginEngineSessionPanel({
   const listLabel = t('newChat.modelSelector.modelListAria');
   // Opening the task's model menu refreshes the engine's models like a provider's (cooldown in main).
   useEffect(() => {
-    requestPluginEnginesRefresh();
-  }, []);
+    (picker.readCatalogue ?? requestPluginEnginesRefresh)();
+  }, [picker.readCatalogue]);
   if (!picker.engine) {
     return (
       <div role="status" data-plugin-engine-missing className="w-[280px] max-w-full px-3 py-3 text-13 leading-[1.5] text-[var(--text-secondary)]">
@@ -414,7 +419,7 @@ export function PluginEngineSessionPanel({
           <PluginEngineIcon size={15} />
           <span className="min-w-0 truncate">{picker.engineName}</span>
         </div>
-        {t('newChat.pluginEngines.engineMissing')}
+        {t(picker.catalogueUnknown ? 'newChat.pluginEngines.unavailable' : 'newChat.pluginEngines.engineMissing')}
       </div>
     );
   }
