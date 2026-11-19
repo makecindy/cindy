@@ -179,7 +179,7 @@ import {
 import { projectDisplayLabelWithMachine } from './lib/remoteProjectIdentity';
 import { useSessionGroupArchive } from './hooks/useSessionGroupArchive';
 import { useBulkSessionArchive } from './hooks/useBulkSessionArchive';
-import { sessionActivityMs } from './lib/dateSessionGrouping';
+import { cutoffForLastActivity, filterSidebarTasks } from './lib/sidebarTaskFilters';
 import { matchesSidebarSessionStatus } from './lib/sidebarSessionStatusFilter';
 import { observeSidebarTaskChanges } from './lib/sidebarTaskObserver';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
@@ -356,18 +356,6 @@ function basenameOfPath(p: string): string {
   return slash < 0 ? norm : norm.slice(slash + 1);
 }
 
-const LAST_ACTIVITY_DAY_COUNTS: Record<
-  Exclude<UseSidebarFilterReturn['lastActivity'], 'all'>,
-  number
-> = {
-  '1d': 1,
-  '3d': 3,
-  '7d': 7,
-  '30d': 30,
-};
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 type BulkSessionAction = 'archive' | 'delete';
 
 function RemoteSidebarLoadNotice({
@@ -437,13 +425,6 @@ function sameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean 
     if (!b.has(value)) return false;
   }
   return true;
-}
-
-function cutoffForLastActivity(
-  lastActivity: UseSidebarFilterReturn['lastActivity'],
-): number | null {
-  if (lastActivity === 'all') return null;
-  return Date.now() - LAST_ACTIVITY_DAY_COUNTS[lastActivity] * DAY_MS;
 }
 
 /* ============================== Root ============================== */
@@ -1640,12 +1621,14 @@ function ExpandedView({
   );
 
   const taskCreatorIndex = useTaskCreatorIndex();
-  const activityFilteredSessions = useMemo(() => {
-    const cutoff = cutoffForLastActivity(filter.lastActivity);
-    if (cutoff === null && filter.creators === 'all') return sidebarSessions;
-    return sidebarSessions.filter((s) => (cutoff === null || sessionActivityMs(s) >= cutoff)
-      && matchesTaskCreators(s, filter.creators, taskCreatorIndex));
-  }, [sidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  const { hideAutomations, creators, lastActivity } = filter;
+  const filterTaskSessions = useCallback(
+    (source: Session[]) => filterSidebarTasks(source, { hideAutomations, creators, lastActivity }, taskCreatorIndex),
+    [hideAutomations, creators, lastActivity, taskCreatorIndex],
+  );
+  const activityFilteredSessions = useMemo(
+    () => filterTaskSessions(sidebarSessions), [filterTaskSessions, sidebarSessions],
+  );
   const statusIndependentSidebarSessions = useMemo(() => {
     const scoped = selectVisibleSessions(allSessionsForAttention, remoteProjectSessions, selectedMachineId)
       .filter(session => !isOrcaWorkerSession(session)
@@ -1653,11 +1636,9 @@ function ExpandedView({
         && (!session.deviceLinkDeviceId || !isSharedTaskPeer(session.deviceLinkDeviceId)));
     return sidebarSessionsWithHiddenProjectsAsDialogues(scoped, hiddenProjectKeys, localPlatform);
   }, [allSessionsForAttention, remoteProjectSessions, selectedMachineId, hiddenProjectKeys, localPlatform]);
-  const inboxSourceSessions = useMemo(() => {
-    const cutoff = cutoffForLastActivity(filter.lastActivity);
-    return statusIndependentSidebarSessions.filter(session => (cutoff === null || sessionActivityMs(session) >= cutoff)
-      && matchesTaskCreators(session, filter.creators, taskCreatorIndex));
-  }, [statusIndependentSidebarSessions, filter.lastActivity, filter.creators, taskCreatorIndex]);
+  const inboxSourceSessions = useMemo(
+    () => filterTaskSessions(statusIndependentSidebarSessions), [filterTaskSessions, statusIndependentSidebarSessions],
+  );
   // The inbox counts a task as a teammate's by the same test as the teammate filter.
   const isInboxTeammateTask = useCallback(
     (session: Session) => !matchesTaskCreators(session, 'none', taskCreatorIndex),
@@ -1740,8 +1721,10 @@ function ExpandedView({
   // 并非不存在;codex)。collapse 仍用机器过滤后的 activeWorkingDirs(collapseAll / isAllCollapsed
   // 针对当前可见项目),渲染也仍走机器过滤后的 allGroups / groups。
   const unfilteredProjectSessions = useMemo(
-    () => [...sessions, ...remoteProjectSessions].filter(passesOrcaAndStatus),
-    [sessions, remoteProjectSessions, passesOrcaAndStatus],
+    () => taskListMode === 'inbox'
+      ? projectAliasMembers.filter(s => !isOrcaWorkerSession(s) && s.status !== 'deleted')
+      : [...sessions, ...remoteProjectSessions].filter(passesOrcaAndStatus),
+    [taskListMode, projectAliasMembers, sessions, remoteProjectSessions, passesOrcaAndStatus],
   );
   const projectUniverse = useProjectGroups(
     unfilteredProjectSessions,
@@ -2283,7 +2266,7 @@ function ExpandedView({
       (device) => device.deviceId,
     ),
   );
-  const hasVisibleSidebarContent =
+  const hasTaskListContent =
     (deviceGroupingAvailable &&
       filter.groupDevice &&
       hasSettledOnlineDeviceSection(
@@ -2291,10 +2274,11 @@ function ExpandedView({
         selectedMachineId,
         unsettledRemoteDeviceIds,
       )) ||
-    visiblePinnedEntries.length > 0 ||
     visibleUnclassified.length > 0 ||
     visibleProjectsWithVendor.length > 0 ||
     visibleDialogues.length > 0;
+  const hasVisibleSidebarContent = visiblePinnedEntries.length > 0
+    || (taskListMode === 'inbox' ? inboxSessions.length > 0 : hasTaskListContent);
 
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorSessionId, setSelectionAnchorSessionId] = useState<string | null>(null);

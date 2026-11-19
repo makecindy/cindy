@@ -16332,6 +16332,7 @@
       },
       "filterCreatorsHeading": "仲間",
       "filterCreatorsAny": "すべて",
+      "filterHideAutomations": "自動化タスクを非表示",
       "filterCreatorsNone": "すべて非表示",
       "filterSelectedCreators": "{{count}} 人を選択",
       "filterProjectsHeading": "プロジェクト",

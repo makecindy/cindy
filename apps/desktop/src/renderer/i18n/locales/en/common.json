@@ -16406,6 +16406,7 @@
       },
       "filterCreatorsHeading": "Buddies",
       "filterCreatorsAny": "All",
+      "filterHideAutomations": "Hide automation tasks",
       "filterCreatorsNone": "Hide all",
       "filterSelectedCreators": "{{count}} selected",
       "filterProjectsHeading": "Projects",

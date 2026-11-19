@@ -28,6 +28,7 @@ import { sidebarPriorityContext } from '../lib/sidebarPriorityContext';
 
 type Props = Omit<SessionEntryRowsProps, 'entries'> & {
   sessions: readonly Session[];
+  contentFiltered?: boolean;
   priorityContext: MainListPriorityContext;
   /** A teammate's task is listed only while it needs the user or runs. */
   isTeammateTask?: (session: Session) => boolean;
@@ -35,7 +36,7 @@ type Props = Omit<SessionEntryRowsProps, 'entries'> & {
 const SECTIONS: TaskInboxSection[] = ['inbox', 'working', 'snoozed', 'archived'];
 
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
-export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }: Props) {
+export function TaskInbox({ sessions, contentFiltered, priorityContext, isTeammateTask, ...rows }: Props) {
   const { t, i18n } = useTranslation();
   const followingSessions = useActiveFollowUpSessions(sessions);
   // The inbox spans more tasks than the regular list (e.g. outside its status filter), so remote
@@ -195,7 +196,7 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
             <SectionCollapse collapsed={closed}>
               {section === 'inbox' && items.length === 0 && (
                 <p className="px-3 py-3 text-xs text-[var(--sidebar-list-muted)]">
-                  {t('ccAgent.sidebar.inbox.empty')}
+                  {t(contentFiltered ? 'ccAgent.search.noResults' : 'ccAgent.sidebar.inbox.empty')}
                 </p>
               )}
               {visible.map((session) => (

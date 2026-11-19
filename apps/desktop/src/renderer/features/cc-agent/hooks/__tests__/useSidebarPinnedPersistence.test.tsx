@@ -8,6 +8,7 @@ import {
   setDataOwnerGeneration,
   __testing as dataOwnerTesting,
 } from '@/contexts/dataOwnerGeneration';
+import { useTaskListMode } from '@/hooks/useTaskListMode';
 import { __testing as sidebarOwnerTesting } from '@/lib/sidebarOwnerStorage';
 import { MANUAL_PINNED_ORDER_KEY, useSidebarFilter } from '../useSidebarFilter';
 import { PINNED_SORT_BY_KEY } from '../helpers/sidebarFilterCore';
@@ -121,6 +122,44 @@ beforeEach(() => {
 function renderFilter() {
   return renderHook(() => useSidebarFilter(new Set(), SNAPSHOT));
 }
+
+// Regression: mode switches used to reuse one saved set of project, creator, harness and time filters.
+it('restores separate sidebar filters across mode switches, resets and remounts', () => {
+  const mode = renderHook(useTaskListMode);
+  act(() => mode.result.current.setMode('tasks'));
+  const view = renderFilter();
+  act(() => {
+    view.result.current.toggleProject('/ordinary');
+    view.result.current.toggleCreator('teammate-a');
+    view.result.current.setVendor('pi');
+    view.result.current.setLastActivity('30d');
+    view.result.current.setHideAutomations(true);
+  });
+  const ordinary = { projects: ['local:/ordinary'], creators: ['teammate-a'], vendor: 'pi', lastActivity: '30d', hideAutomations: true };
+  const unrestricted = { projects: 'all', creators: 'all', vendor: 'all', lastActivity: 'all', hideAutomations: false };
+  act(() => mode.result.current.setMode('inbox'));
+  expect(view.result.current).toMatchObject(unrestricted);
+  act(() => {
+    view.result.current.toggleProject('/triage');
+    view.result.current.setCreatorsNone();
+    view.result.current.setVendor('codex');
+    view.result.current.setLastActivity('7d');
+    view.result.current.setHideAutomations(true);
+  });
+  const inbox = { projects: ['local:/triage'], creators: 'none', vendor: 'codex', lastActivity: '7d', hideAutomations: true };
+  view.unmount();
+  const reopened = renderFilter();
+  expect(reopened.result.current).toMatchObject(inbox);
+  act(() => mode.result.current.setMode('tasks'));
+  expect(reopened.result.current).toMatchObject(ordinary);
+  act(() => reopened.result.current.resetContentFilters());
+  act(() => mode.result.current.setMode('inbox'));
+  expect(reopened.result.current).toMatchObject(inbox);
+  act(() => reopened.result.current.resetContentFilters());
+  expect(reopened.result.current).toMatchObject(unrestricted);
+  act(() => mode.result.current.setMode('tasks'));
+  expect(reopened.result.current).toMatchObject(unrestricted);
+});
 
 describe('pinned sidebar persistence', () => {
   // 用户回归：最近活动下拖拽把显示顺序写成手动顺序。现有用例只测切换偏好，
