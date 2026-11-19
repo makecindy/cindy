@@ -6,6 +6,7 @@ import {
   sharedTaskHostPeer,
 } from '@cindy/device-link';
 import { i18n } from '@/i18n';
+import { buildMobileSessionDeepLink } from '@/session/sessionLinks';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import {
   estimateMobileReferenceTokens,
@@ -173,6 +174,15 @@ describe('mobile session-reference links', () => {
       'cindy://session/source?message=anchor&device=host-device',
       () => peer,
     )).toEqual([{ sessionId: 'source', messageClientId: 'anchor', deviceId: peer }]);
+  });
+
+  // Unit through send preparation: preserve the entire guest link when a different device lists the same ID.
+  it('sends the copied guest link intact for a fresh progress read without fetching same-account history', async () => {
+    const peer = sharedTaskHostPeer('shared-task', "host (QA)");
+    const text = buildMobileSessionDeepLink('task.1', { deviceId: peer });
+    const invoke = vi.fn();
+    expect(await prepareMobileQueuedSessionReferences({ text }, invoke, () => 'other-device', 'mine')).toEqual({ text });
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it('clears stale refs and trusted snapshots when an edit removes the link', async () => {

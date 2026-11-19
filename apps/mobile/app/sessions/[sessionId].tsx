@@ -10137,7 +10137,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const openSessionLink = useCallback((url: string) => {
     const target = parseSessionDeepLinkUrl(url);
     if (!target) return;
-    if (target.sessionId === sessionId) {
+    const sharedPeer = isSharedTaskPeer(target.deviceId) ? target.deviceId : null;
+    if (target.sessionId === sessionId && (!sharedPeer || sharedPeer === deviceId)) {
       if (target.messageClientId) {
         router.setParams({
           focusClientId: target.messageClientId,
@@ -10148,7 +10149,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
     // 设备口径与 devices/index openSession 一致:可达优先(canonical → 物理 → 注册表);
     // 列表里没有的(已归档 / 尚未同步)退回深链冻结设备、当前任务所在设备。
-    const targetSession = remoteSessionStore.getSessions().find((item) => item.id === target.sessionId);
+    const targetSession = remoteSessionStore.getSessions().find((item) =>
+      item.id === target.sessionId && (!sharedPeer || item.deviceLinkDeviceId === sharedPeer));
     const targetDeviceId = resolveSessionLinkDeviceId({
       listedDeviceId: targetSession?.canonicalDeviceId
         ?? targetSession?.deviceLinkDeviceId
@@ -10167,7 +10169,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         deviceId: targetDeviceId,
         deviceName: targetSession?.deviceLinkDeviceName
           ?? (targetDeviceId === deviceId ? deviceName : undefined)
-          ?? targetDeviceId,
+          ?? (sharedPeer ? t('sharedTask.hostDevice') : targetDeviceId),
         ...(target.messageClientId
           ? {
               focusClientId: target.messageClientId,
@@ -10188,7 +10190,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const resolvePastedSessionLinkLabel = useCallback(async (href: string) => {
     const target = parseSessionDeepLinkUrl(href);
     if (!target) return null;
-    const targetSession = remoteSessionStore.getSessions().find((item) => item.id === target.sessionId);
+    const sharedPeer = isSharedTaskPeer(target.deviceId) ? target.deviceId : null;
+    const targetSession = remoteSessionStore.getSessions().find((item) =>
+      item.id === target.sessionId && (!sharedPeer || item.deviceLinkDeviceId === sharedPeer));
     const targetDeviceId = resolveSessionLinkDeviceId({
       listedDeviceId: targetSession?.canonicalDeviceId
         ?? targetSession?.deviceLinkDeviceId
