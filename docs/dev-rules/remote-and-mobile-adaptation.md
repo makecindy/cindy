@@ -1124,6 +1124,9 @@ Desktop 向曾协商可靠传输、当前发送链路未就绪的设备发起新
 耗尽排队预算；从未建链或显式关闭后回退到 legacy 的设备继续使用原路径。等待前后复验
 取消与禁用状态，自动探测另查撤权和 owner；建链成功本身不算业务恢复。故障与动作都限于
 单 peer，不重启共享 relay、不重放已发出的写操作；回归覆盖另一 peer 与 legacy 请求继续工作。
+Mobile 的 invoke 与订阅发送遵守同一规则，复用该设备的建链单飞缓存；跨过用户断开或换账号的
+请求不发送。Desktop 订阅在等待中遇到用户断开时直接按断开失败，不再复验控制权限、二次拆链。
+协议影响与故障半径见 [`protocol-compatibility/device-link-pre-send-link-recovery.md`](protocol-compatibility/device-link-pre-send-link-recovery.md)。
 
 普通出站 invoke 在共享 `InvokeScheduler` 中按目标设备排队：每台最多 12 个在途，
 其中 PR 引用／状态、定时任务侧栏、用量同步和轮后提示预测等后台查询最多 4 个。
