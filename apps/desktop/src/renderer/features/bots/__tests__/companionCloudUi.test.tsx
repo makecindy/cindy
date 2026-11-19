@@ -23,6 +23,10 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div> }));
 vi.mock('../BotSessionContentHeader', () => ({ BotSessionContentHeaderRegistration: () => null }));
 vi.mock('../BotAvatar', () => ({ BotAvatar: () => <span /> }));
+const recoveryModel = { harness: 'pi', providerId: 'fixture-provider', model: 'fixture-model', effort: '', fastMode: false } as const;
+vi.mock('../BotModelChainEditor', () => ({ BotModelChainEditor: ({ onChange }: {
+  onChange: (routes: Array<typeof recoveryModel>) => void;
+}) => <button type="button" onClick={() => onChange([recoveryModel])}>Fixture model</button> }));
 vi.mock('../BotGroupMessageAttachments', () => ({
   BotGroupMessageAttachments: ({ attachments }: { attachments: Array<{ name: string; state?: string; url?: string | null }> }) =>
     <ul>{attachments.map((file) => <li key={file.name}>{`${file.name}:${file.state ?? file.url}`}</li>)}</ul>,
@@ -45,6 +49,7 @@ const maker = {
   getCompanionAttachment: vi.fn(),
   takeOverCompanion: vi.fn(),
   repairCompanionProfile: vi.fn(),
+  saveCompanionRecoveryModel: vi.fn(),
   getCompanionHomeChoices: vi.fn(),
   switchCompanionHome: vi.fn(),
 };
@@ -220,17 +225,30 @@ describe('CloudCompanionOfflineView', () => {
   ] };
   const renderView = () => render(<CloudCompanionOfflineView botId="mia" deviceId="laptop" name="Mia" deviceName="Laptop" />);
 
-  it('shows read-only history and model settings while local recovery is incomplete', async () => {
+  it('saves an explicit model for the recovering companion and keeps its history read-only', async () => {
     maker.getCompanionTranscript.mockResolvedValue(page);
-    render(<CloudCompanionOfflineView botId="mia" deviceId="desk" name="Mia" deviceName="Desk" recovery />);
+    maker.saveCompanionRecoveryModel.mockResolvedValueOnce({ ok: false, code: 'BUSY' }).mockResolvedValueOnce({ ok: true });
+    const props = { botId: 'mia', deviceId: 'desk', name: 'Mia', deviceName: 'Desk', recovery: true };
+    const view = render(<CloudCompanionOfflineView {...props} />);
     expect(screen.getByText('bots.cloud.recoveryNotReady')).toBeTruthy();
-    expect(screen.getByText('bots.globalSettings.defaultModelHint')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'bots.settingsTabs.model' })).toBeNull();
+    view.rerender(<CloudCompanionOfflineView {...props} recoveryModelActorId="actor-mia" />);
     expect(await screen.findByText('hi there')).toBeTruthy();
     expect(screen.getByText('bots.cloud.readOnlyNote')).toBeTruthy();
     expect(screen.queryByText('bots.retry')).toBeNull();
     expect(screen.queryByText('bots.cloud.continueHere')).toBeNull();
-    fireEvent.click(screen.getByText('bots.globalSettings.defaultModel'));
-    expect(h.navigate).toHaveBeenCalledWith('/settings?tab=general&section=general.botModel');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    const save = screen.getByRole('button', { name: 'bots.save' });
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(await screen.findByRole('button', { name: 'Fixture model' }));
+    fireEvent.click(save);
+    await screen.findByText('bots.memory.saveFailed');
+    fireEvent.click(save);
+    await screen.findByText('bots.autosave.saved');
+    expect(maker.saveCompanionRecoveryModel).toHaveBeenCalledTimes(2);
+    expect(maker.saveCompanionRecoveryModel).toHaveBeenLastCalledWith('mia', 'actor-mia', recoveryModel);
+    expect(screen.getByText('bots.cloud.readOnlyNote')).toBeTruthy();
+    expect(h.navigate).not.toHaveBeenCalled();
     expect(maker.takeOverCompanion).not.toHaveBeenCalled();
   });
 

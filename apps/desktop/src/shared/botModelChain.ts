@@ -1,6 +1,7 @@
 import { normalizeModelRoute, modelRouteLocationKey, type ModelRoute } from '@cindy/maker-shared/model-route';
 
 export const BOT_MODEL_CHAIN_MAX = 5;
+export const BOT_CANONICAL_MODEL_REQUIRED = 'BOT_CANONICAL_MODEL_REQUIRED';
 
 export type BotHarness = 'claude' | 'codex' | 'pi';
 

@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import sidebar from '../teammates-section/ui-page.mjs';
 
 const profile = { id: 'mia', name: 'Mia', description: 'Synthetic companion', avatar: '', avatarColor: 'violet', channel: 'local', status: 'active', enabled: true, skills: [], capabilities: { harness: 'claude', model: 'synthetic-model', effort: 'medium', fastMode: false }, createdAt: 1, sessions: [] };
-const cloud = { enabled: true, selfDeviceId: 'fixture-desk', demotedBotIds: ['mia'], actors: [{ id: 'fixture-actor', externalId: 'mia', name: 'Mia', avatar: null, homeDeviceId: 'fixture-desk', homeDevice: { deviceId: 'fixture-desk', name: 'Example computer', online: false, isSelf: true } }] };
+const cloud = { enabled: true, selfDeviceId: 'fixture-desk', demotedBotIds: ['mia'], actors: [{ id: 'fixture-actor', externalId: 'mia', name: 'Mia', avatar: null, homeDeviceId: 'fixture-desk', needsRecoveryModel: true, homeDevice: { deviceId: 'fixture-desk', name: 'Example computer', online: false, isSelf: true } }] };
 export default {
   name: 'companion-recovery', entry: './fixture.tsx', viewport: { width: 1040, height: 720 },
   real: 'TeammatesSection, search results, RemoteBotSessionView and CloudCompanionOfflineView with synthetic host responses',
   notCovered: 'Full search shell, real accounts, cloud, device connections, persistence, model settings contents, recovery execution and ownership',
   stubs: { ...sidebar.stubs,
+    'src/renderer/hooks/useModelRouteDevices': 'export const useModelRouteDevices = () => ({ leadAgentDeviceId: null });',
     'src/renderer/features/device-link/useDeviceLinkDeviceList': `
       export const useDeviceLinkDeviceList = () => [];
       export const useDeviceLinkDeviceListRequestState = () => ({ status: 'ready', error: null });`,
@@ -33,9 +34,19 @@ export default {
     await page.waitForFunction(() => document.querySelector('[data-testid="fixture-route"]')?.textContent === '/bots');
     await result.click();
     await page.waitForFunction(expected => document.querySelector('[data-testid="fixture-route"]')?.textContent === expected, route);
-    await page.getByRole('button', { name: await ui.t('bots.globalSettings.defaultModel'), exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('[data-testid="fixture-route"]')?.textContent === '/settings?tab=general&section=general.botModel');
-    await page.getByRole('button', { name: 'Fixture back' }).click();
+    await page.getByRole('button', { name: await ui.t('bots.settingsTabs.model'), exact: true }).click();
+    const save = page.getByRole('button', { name: await ui.t('bots.save'), exact: true });
+    assert.equal(await save.isDisabled(), true);
+    await page.locator('[data-testid="cloud-companion-offline"] form button[aria-haspopup="listbox"]').click();
+    await page.getByRole('listbox').getByText('Fixture model', { exact: true }).click();
+    await ui.capture('model-selected');
+    await save.click();
+    await page.getByText(await ui.t('bots.autosave.saved'), { exact: true }).waitFor();
+    const saved = await page.evaluate(() => window.fixtureRecovery.saved);
+    assert.equal(saved.botId, 'mia');
+    assert.equal(saved.actorId, 'fixture-actor');
+    assert.equal(saved.route.model, 'fixture-model');
+    assert.equal(saved.route.providerId, 'openai');
     await page.getByTestId('cloud-companion-offline').getByText(await ui.t('bots.cloud.recoveryNotReady'), { exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: await ui.t('bots.retry'), exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: await ui.t('bots.cloud.continueHere'), exact: true }).count(), 0);

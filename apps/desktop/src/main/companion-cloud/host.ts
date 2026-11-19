@@ -23,7 +23,7 @@ import { inferBotTemplatePresetId } from '../../shared/botTemplatePreset.js';
 import { resolveBotCanonicalSession } from '../maker-ipc/botCanonicalSessionRegistry.js';
 import { readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
-import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.js';
+import { resolveAvailableTaskModels, validateTaskModel } from '../maker-ipc/appDefaultModelControl.js';
 import { botProfileDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
@@ -265,20 +265,25 @@ function createMaterializer(input: {
         }
       }
     },
-    applyCapabilities: async (botId, value, fence) => {
+    applyCapabilities: async (botId, value, fence, recoveryModel) => {
       // Only the same provider + model that this computer can use is kept (no credential travels);
       // otherwise the companion follows this computer's default model.
       const usable = async (routes: BotModelRoute[]) => (await resolveAvailableTaskModels(routes))
         .filter((route): route is BotModelRoute => route !== null);
-      const chain = value.modelChain ? await usable(value.modelChain) : [];
+      const chain = recoveryModel ? [recoveryModel] : value.modelChain ? await usable(value.modelChain) : [];
       fence.assertCurrent();
-      const patch = companionCapabilitiesPatch(value, { chain });
+      const patch = companionCapabilitiesPatch(recoveryModel ? { ...value, modelChain: chain } : value, { chain });
       if (Object.keys(patch).length || value.gender) {
-        await updateBotProfile({ id: botId, capabilities: patch, ...(value.gender ? { gender: value.gender } : {}) });
+        await updateBotProfile({ id: botId, capabilities: patch, ...(value.gender ? { gender: value.gender } : {}) },
+          undefined, undefined, { allowMissingModel: true });
       }
       const notices: CompanionArrivalNotice[] = [];
-      if (value.modelChain && chain.length < value.modelChain.length) notices.push('model');
+      if (!recoveryModel && value.modelChain && chain.length < value.modelChain.length) notices.push('model');
       return notices;
+    },
+    applyRecoveryModel: async (botId, route, fence) => {
+      fence.assertCurrent();
+      await updateBotProfile({ id: botId, capabilities: { modelChainOverride: [route] } });
     },
     writeSystemPrompt: async (botId, text, fence) => {
       const root = ownerScopedUserDataPath();
@@ -468,6 +473,7 @@ export function createCompanionCloudHost(input: {
       current, log: input.log,
     }),
     readValues: botId => readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    validateRecoveryModel: validateTaskModel,
     repairProfileSources: async (botId, fields, values, fence) => {
       fence.assertCurrent();
       const userDataDir = ownerScopedUserDataPath();

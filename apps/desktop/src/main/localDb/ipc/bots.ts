@@ -42,7 +42,7 @@ import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import { collectPresentBotRemoteResourceSources } from './botRemoteResourceAbsence.js';
-import { isIpcError } from '../../../shared/ipc-errors.js';
+import { createIpcError, isIpcError } from '../../../shared/ipc-errors.js';
 import { isBotVisibleRemotely } from './botRemoteVisibility.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from './botRemoteSessionAccess.js';
 import { setRemoteBotSessionLookup } from '../../device-link/remoteBotSessionBoundary.js';
@@ -84,7 +84,7 @@ import {
   NEW_BOT_DEFAULT_PI_MODEL,
   NEW_BOT_DEFAULT_PI_PROVIDER,
 } from '../../../shared/botDefaults.js';
-import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
+import { BOT_CANONICAL_MODEL_REQUIRED, normalizeBotModelChain } from '../../../shared/botModelChain.js';
 import { validateTaskModel } from '../../maker-ipc/appDefaultModelControl.js';
 import {
   activeOwnerScopeKey,
@@ -1921,7 +1921,7 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
  * Never reachable from a renderer or model body. The stand-in marker lives in
  * the profile transaction, not in disposable companion sync bookkeeping.
  */
-export interface RestoredBotOrigin { templateId?: unknown; avatarFallback?: boolean; replacesUnfinishedMeeting?: true; allowSameName?: true }
+export interface RestoredBotOrigin { templateId?: unknown; avatarFallback?: boolean; replacesUnfinishedMeeting?: true; allowSameName?: true; allowMissingModel?: true }
 
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
 export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin) {
@@ -2253,7 +2253,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   if (acceptsModelSelection) {
     const primary = (await readEffectiveBotModelChain(normalizedNextConfig))[0];
     owner.assertCurrent();
-    if (!primary || !await validateTaskModel(primary)) {
+    if (primary ? !await validateTaskModel(primary) : !restored?.allowMissingModel) {
       throwIpcError('INVALID_PARAMS', 'Model route unavailable');
     }
     owner.assertCurrent();
@@ -2720,7 +2720,11 @@ export function registerBotIpc(): void {
     if (invitation && invitation.stage !== 'ready' && invitation.stage !== 'welcome')
       throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面');
     const primaryRoute = (await readEffectiveBotModelChain(config))[0] ?? null;
-    if (!primaryRoute) throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
+    if (!primaryRoute) {
+      throw Object.assign(createIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型'), {
+        cause: BOT_CANONICAL_MODEL_REQUIRED,
+      });
+    }
     const workspaceKind = 'dialogue' as const;
     const workingDir = await ensureBotWorkspaceDir(
       owner.userDataDir,

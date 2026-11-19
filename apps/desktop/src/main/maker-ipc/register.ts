@@ -14026,6 +14026,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     currentCompanionHomes();
     return activeCompanionCloud()?.takeOver(id) ?? companionNotEnabled;
   });
+  ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_RECOVERY_MODEL, async (event, botId: unknown, actorId: unknown, route: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const id = companionBotId(botId);
+    if (typeof actorId !== 'string' || !actorId || actorId.length > 200) throwIpcError('INVALID_PARAMS', 'actorId required');
+    currentCompanionHomes();
+    return activeCompanionCloud()?.saveRecoveryModel(id, actorId, route) ?? companionNotEnabled;
+  });
   ipcMain.handle(MAKER_INVOKE.COMPANION_CLOUD_REPAIR_PROFILE, async (event, botId: unknown, request: unknown) => {
     assertTrustedAppRendererEvent(event);
     const id = companionBotId(botId);

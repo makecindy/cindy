@@ -213,6 +213,7 @@ function RemoteBotSessionGate({ cloud }: { cloud: ReturnType<typeof useCompanion
         controlOff={controlOff}
         profileFailure={offlineActor.profileFailure}
         recovery={recovering}
+        recoveryModelActorId={recovering && offlineActor.needsRecoveryModel ? offlineActor.id : undefined}
       />
       </Suspense>
     );

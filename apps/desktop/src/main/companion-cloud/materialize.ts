@@ -9,6 +9,7 @@
 import type { CompanionMirrorCursor, CompanionMirrorRow } from './mirror.js';
 import { correctedProfile, CompanionProfileRepairError, type ProfileCorrection } from './profileRepair.js';
 import { validateCompanionProfileSources } from '../../shared/botProfileSources.js';
+import { BOT_CANONICAL_MODEL_REQUIRED, normalizeBotModelRoute, type BotModelRoute } from '../../shared/botModelChain.js';
 import { COMPANION_HISTORY_CLIENT_PREFIX } from './mirror.js';
 import { parseCompanionCapabilities, type CompanionArrivalNotice, type CompanionCapabilitiesValue } from './capabilities.js';
 import { directRoomSourceId } from './directRoom.js';
@@ -59,7 +60,9 @@ export interface CompanionMaterializeHost {
    * this computer lacks them, a model chain that is not usable here falls back to the default.
    * Returns what could not be kept, for the one-line notice.
    */
-  applyCapabilities?: (botId: string, value: CompanionCapabilitiesValue, fence: CompanionWriteFence) => Promise<CompanionArrivalNotice[]>;
+  applyCapabilities?: (botId: string, value: CompanionCapabilitiesValue, fence: CompanionWriteFence,
+    recoveryModel?: BotModelRoute) => Promise<CompanionArrivalNotice[]>;
+  applyRecoveryModel?: (botId: string, route: BotModelRoute, fence: CompanionWriteFence) => Promise<void>;
   writeSystemPrompt: (botId: string, text: string, fence: CompanionWriteFence) => Promise<void>;
   /** Copy the companion's Home (identity, prompt, user file, memories, skills) aside; returns where. */
   backupHome?: (botId: string, fence: CompanionWriteFence) => Promise<string | null>;
@@ -339,13 +342,20 @@ export async function materializeCompanion(input: {
   if (!local && !notices.includes('permissions')) notices.push('permissions');
   const capabilitiesRow = prefs.get(COMPANION_CAPABILITIES_KEY);
   const capabilities = capabilitiesRow ? parseCompanionCapabilities(capabilitiesRow.value) : null;
-  if (capabilitiesRow && capabilities && host.applyCapabilities) {
+  const recoveryModel = known?.actorId === actor.id ? normalizeBotModelRoute(known.modelRecovery?.route) : null;
+  const restoreCapabilities = host.applyCapabilities;
+  if (capabilitiesRow && capabilities && restoreCapabilities) {
     await apply('capabilities', async () => {
-      for (const notice of await step(() => host.applyCapabilities!(botId, capabilities, fence))) {
+      const restoredNotices = await step(() => recoveryModel
+        ? restoreCapabilities(botId, capabilities, fence, recoveryModel)
+        : restoreCapabilities(botId, capabilities, fence));
+      for (const notice of restoredNotices) {
         if (!notices.includes(notice)) notices.push(notice);
       }
       applied.set(COMPANION_CAPABILITIES_KEY, { hash: valueHash(capabilitiesRow.value), revision: capabilitiesRow.revision });
     });
+  } else if (recoveryModel && host.applyRecoveryModel) {
+    await apply('model', () => step(() => host.applyRecoveryModel!(botId, recoveryModel, fence)));
   }
 
   // Routines an older computer uploaded move with the companion, applied in one batch. Teammates no
@@ -415,7 +425,13 @@ export async function materializeCompanion(input: {
     throw new Error('RESTORE_INCOMPLETE');
   }
 
-  const sessionId = await step(() => host.ensureCanonicalSession(botId, fence));
+  const sessionId = await step(() => host.ensureCanonicalSession(botId, fence)).catch(error => {
+    fence.assertCurrent();
+    if (error instanceof Error && error.cause === BOT_CANONICAL_MODEL_REQUIRED) {
+      state.update(botId, actor.id, entry => { entry.modelRecovery ??= {}; });
+    }
+    throw error;
+  });
   const roomId = await step(() => input.roomId());
   const inserted = await importCloudHistory({ api, host, sessionId, botActorId: actor.id, roomId, fence,
     ...(input.download ? { download: input.download } : {}), ...(log ? { log } : {}) });
@@ -443,6 +459,7 @@ export async function materializeCompanion(input: {
   fence.assertCurrent();
   state.update(botId, actor.id, entry => {
     delete entry.demoted;
+    delete entry.modelRecovery;
     // The next take-over (after this copy hands the companion away again) backs it up anew.
     delete entry.backedUp;
 
