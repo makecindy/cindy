@@ -76,7 +76,6 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const navigate = useNavigate();
   const location = useLocation();
   const [avatarError, setAvatarError] = useState(false);
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mobileDownloadOpen, setMobileDownloadOpen] = useState(false);
   const [savedAccounts, setSavedAccounts] = useState<DesktopSavedAccount[]>([]);
   const [savedAccountsOwnerKey, setSavedAccountsOwnerKey] = useState<string | null>(null);
@@ -298,10 +297,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   };
 
   const renderMoreMenu = (trigger: ReactNode) => (
-    <DropdownMenu open={moreMenuOpen} onOpenChange={(open) => {
-      setMoreMenuOpen(open);
-      if (open) void refreshSavedAccounts();
-    }}>
+    <DropdownMenu onOpenChange={(open) => open && void refreshSavedAccounts()}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" sideOffset={8}
         className="min-w-[220px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto">
@@ -330,7 +326,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
             {addingAccount ? t('sidebar.accountSwitcher.adding') : t('login.signIn')}
           </DropdownMenuItem>
         ) : null}
-        {moreMenuOpen && canAccessUsageSettings({ mode }) && (
+        {canAccessUsageSettings({ mode }) && (
           <SidebarAccountUsage ownerId={dataOwnerId}
             showBilling={canAccessBillingSettings({ mode, membershipKind: user?.membershipKind ?? null })}
             onSelect={(tab) => navigate(`/settings?tab=${tab}`)} />

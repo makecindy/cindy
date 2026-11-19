@@ -24,7 +24,7 @@ interface UsageMenuRow {
   exactValue?: string;
 }
 
-/** Mounted only while the account menu is open. */
+/** The dropdown mounts these rows together with Settings, including during its exit animation. */
 export function SidebarAccountUsage({ ownerId, showBilling, onSelect }: SidebarAccountUsageProps) {
   const { t, i18n } = useTranslation();
   const { history } = useUsageHistory({ userId: ownerId, days: 1, modelDays: 1, paused: true, allowPendingEstimates: true });
@@ -66,7 +66,7 @@ export function SidebarAccountUsage({ ownerId, showBilling, onSelect }: SidebarA
         <span className="truncate" title={label}>{label}</span>
         <span className="truncate text-12 text-[var(--text-secondary)]" title={caption}>{caption}</span>
       </span>
-      <span className="max-w-[45%] truncate text-right text-13 font-medium tabular-nums"
+      <span className="w-[9ch] shrink-0 truncate text-right text-13 font-medium tabular-nums"
         title={exactValue ?? value ?? undefined}>
         {value ?? '—'}
       </span>

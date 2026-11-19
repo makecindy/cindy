@@ -64,6 +64,20 @@ export default {
       const billing = menu.getByRole('menuitem').filter({ hasText: await ui.t('settings.tabs.billing') });
       const settings = menu.getByRole('menuitem', { name: await ui.t('sidebar.user.menuSettings'), exact: true });
       const hasBilling = ui.data.cloud && !ui.data.organization;
+      const checkMotion = ui.case === 'sidebar-usage';
+      if (checkMotion) {
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        await page.evaluate(() => {
+          const frames = [];
+          window.accountMenuFrames = frames;
+          // Radix positions the panel before enabling its animation.
+          new MutationObserver(() => {
+            const menu = document.querySelector('[role="menu"]');
+            if (menu) frames.push({ state: menu.getAttribute('data-state'), animation: getComputedStyle(menu).animationName,
+              items: menu.querySelectorAll('[role="menuitem"]').length });
+          }).observe(document.body, { attributes: true, attributeFilter: ['data-state', 'style'], childList: true, subtree: true });
+        });
+      }
       assert.deepEqual(await page.evaluate(() => window.usageReads), { history: 0, billing: 0, balance: 0 });
       await account.click();
       await usage.getByText(/24[.,]9k/i).waitFor();
@@ -80,6 +94,13 @@ export default {
       await ui.capture('account-usage');
       await page.keyboard.press('Escape');
       await menu.waitFor({ state: 'hidden' });
+      if (checkMotion) {
+        const frames = await page.evaluate(() => window.accountMenuFrames);
+        assert.ok(frames.some(frame => frame.state === 'open' && frame.animation === 'float-in'));
+        assert.ok(frames.some(frame => frame.state === 'closed' && frame.animation === 'float-out'));
+        assert.ok(frames.every(frame => frame.items === 3), JSON.stringify(frames));
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+      }
       await account.press('Enter');
       await usage.click();
       await page.locator('#settings-panel-usage').waitFor();
