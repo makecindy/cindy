@@ -85,7 +85,9 @@ export function GiftCardPurchaseDialog({
     setPolicyState({ kind: 'loading' });
     try {
       const next = await billingApi.getGiftCardPurchasePolicy();
-      if (request === requestRef.current) setPolicyState({ kind: 'ready', policy: next });
+      if (request !== requestRef.current) return;
+      // 弹窗里的金额与上限都按本区域余额币种展示和换算：规则的币种对不上就不能拿来付款。
+      setPolicyState(next.currency.toLowerCase() === BILLING_CURRENCY ? { kind: 'ready', policy: next } : { kind: 'error' });
     } catch {
       if (request === requestRef.current) setPolicyState({ kind: 'error' });
     }

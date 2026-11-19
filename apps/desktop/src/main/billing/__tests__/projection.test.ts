@@ -1157,6 +1157,10 @@ describe('gift card purchase projection', () => {
       expect(isPurchasedGiftCardCursor(cursor)).toBe(false);
     }
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'SOLD' })], nextCursor: null })).toThrow();
+    // 面额印在卡面上：比分更细的金额按坏响应处理；只是小数位写得更长的照常读出。
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '1.005' })], nextCursor: null })).toThrow();
+    expect(projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '100.500000000' })], nextCursor: null })
+      .cards.map((card) => card.amount)).toEqual(['100.500000000']);
     // 退款或拒付还在处理的卡（ON_HOLD）照常读出。
     expect(projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'ON_HOLD' })], nextCursor: null })
       .cards.map((card) => card.status)).toEqual(['ON_HOLD']);

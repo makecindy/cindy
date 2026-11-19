@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({ getGiftCardPurchasePolicy: vi.fn() }));
 vi.mock('../api', () => ({ billingApi: api }));
 
 import type { BillingGiftCardPurchasePolicy } from '../../../../shared/billing';
+import { BILLING_CURRENCY } from '../money';
 import { GiftCardPurchaseDialog } from '../GiftCardPurchaseDialog';
 import {
   customGiftCardRange,
@@ -31,7 +32,7 @@ const offer = (amount: string): GiftCardOfferEntry => ({
   offer: {
     code: `gift_card_${amount}`,
     interval: null,
-    currency: 'cny',
+    currency: BILLING_CURRENCY,
     amount,
     minAmount: null,
     maxAmount: null,
@@ -51,7 +52,7 @@ const customOffer: GiftCardOfferEntry = {
   offer: {
     code: 'gift_card_custom',
     interval: null,
-    currency: 'cny',
+    currency: BILLING_CURRENCY,
     amount: null,
     minAmount: '50',
     maxAmount: '800',
@@ -67,7 +68,7 @@ const customOffer: GiftCardOfferEntry = {
 
 // 国内支付宝单笔订单总额上限 ¥1000：¥500 面额一单最多 2 张，¥1000 面额只能 1 张。
 const policy: BillingGiftCardPurchasePolicy = {
-  currency: 'cny',
+  currency: BILLING_CURRENCY,
   dailyLimit: 5,
   windowHours: 24,
   remaining: 5,
@@ -106,7 +107,13 @@ describe('giftCardOffersOf', () => {
   it('lists fixed face values first and only one buyer-entered option', () => {
     const product = {
       code: 'gift_card', name: 'Cindy 礼品卡', kind: 'GIFT_CARD' as const, level: null, sortOrder: 3,
-      offers: [customOffer.offer, offer('100').offer, { ...customOffer.offer, code: 'gift_card_custom_2' }],
+      offers: [
+        customOffer.offer,
+        offer('100').offer,
+        { ...customOffer.offer, code: 'gift_card_custom_2' },
+        // 卡按本区域余额币种发与入账：其它币种的方案不卖，免得按本币显示、按方案币种扣款。
+        { ...offer('200').offer, code: 'gift_card_foreign', currency: BILLING_CURRENCY === 'usd' ? 'eur' : 'usd' },
+      ],
     };
     const entries = giftCardOffersOf({ products: [product] } as never);
     expect(entries.map((entry) => [entry.kind, entry.offer.code])).toEqual([
@@ -302,6 +309,14 @@ describe('GiftCardPurchaseDialog', () => {
     fireEvent.change(message, { target: { value: '生日快乐' } });
     await waitFor(() => expect(button('billing.giftCardPurchase.pay').hasAttribute('disabled')).toBe(false));
     expect(screen.queryByText(/billing\.giftCardPurchase\.fields\.tooLong/)).toBeNull();
+  });
+
+  // 评审发现（PR #11412）：弹窗按本区域余额币种展示与换算，规则币种对不上时不能拿来付款。
+  it('does not take payment when the limits are in another currency', async () => {
+    api.getGiftCardPurchasePolicy.mockResolvedValue({ ...policy, currency: BILLING_CURRENCY === 'usd' ? 'eur' : 'usd' });
+    open();
+    await screen.findByText('billing.giftCardPurchase.loadFailed');
+    expect(button('billing.giftCardPurchase.pay').hasAttribute('disabled')).toBe(true);
   });
 
   it('keeps payment unavailable and offers a retry when the limits cannot be read', async () => {

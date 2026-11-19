@@ -135,6 +135,12 @@ function isGiftCardMoney(value: string): boolean {
   return fraction.replace(/0+$/, '').length <= 2;
 }
 
+/** 读礼品卡金额字段：合法十进制且满足 isGiftCardMoney，否则为 null。 */
+function giftCardMoney(input: unknown): string | null {
+  const parsed = decimal(input);
+  return parsed !== null && isGiftCardMoney(parsed) ? parsed : null;
+}
+
 function ledgerDecimal(value: unknown): { source: string; scaled: bigint } | null {
   if (typeof value !== 'string' || !LEDGER_DECIMAL_PATTERN.test(value)) return null;
   const negative = value.startsWith('-');
@@ -850,10 +856,6 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
   const faces = value.faces.filter(
     (face): face is string => typeof face === 'string' && FACE_CODE_PATTERN.test(face),
   );
-  const giftCardMoney = (input: unknown) => {
-    const parsed = decimal(input);
-    return parsed !== null && isGiftCardMoney(parsed) ? parsed : null;
-  };
   const minFaceValue = optional(value.minFaceValue, giftCardMoney);
   const maxFaceValue = optional(value.maxFaceValue, giftCardMoney);
   // 0 是合法的「不冷却」；null 或缺省才表示服务端不支持发到邮箱。
@@ -902,7 +904,8 @@ function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
     typeof value.faceCode === 'string' && FACE_CODE_PATTERN.test(value.faceCode)
       ? value.faceCode
       : null;
-  const amount = decimal(value.amount);
+  // 面额印在卡面上：比分更细的金额卡面与文字会对不上，按坏响应处理。
+  const amount = giftCardMoney(value.amount);
   const cardCurrency = giftCardCurrency(value.currency);
   const senderName = boundedString(value.senderName, MAX_GIFT_SENDER_LENGTH);
   const message = nullable(value.message, (input) =>

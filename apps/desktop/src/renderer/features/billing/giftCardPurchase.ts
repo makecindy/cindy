@@ -3,7 +3,7 @@ import type {
   BillingCatalogOffer,
   BillingGiftCardPurchasePolicy,
 } from '../../../shared/billing';
-import { formatBillingAmount } from './money';
+import { BILLING_CURRENCY, formatBillingAmount } from './money';
 import { isSupportedPurchaseOption, type SupportedPurchaseOption } from './purchaseSupport';
 
 /** 卡面的展示顺序；与分享网页、Platform 后台同一组成品图。 */
@@ -39,7 +39,12 @@ export function giftCardOffersOf(catalog: BillingCatalog | null): GiftCardOfferE
         ),
       })),
     )
-    .filter((entry) => entry.offer.purchasable !== false && entry.purchaseOptions.length > 0);
+    // 卡按本区域余额币种发、按它入账，弹窗也按它展示；其它币种的方案（服务端本不允许）不卖，
+    // 免得按本币显示、却按方案币种扣款。
+    .filter((entry) =>
+      entry.offer.purchasable !== false &&
+      entry.purchaseOptions.length > 0 &&
+      entry.offer.currency.toLowerCase() === BILLING_CURRENCY);
   const fixed: GiftCardOfferEntry[] = [];
   let custom: GiftCardOfferEntry | null = null;
   for (const { offer, purchaseOptions } of entries) {
