@@ -109,6 +109,7 @@ export function recordSessionClaudeTurnUsage(
           modelUsage?: Record<string, unknown>;
           usageSegments?: unknown;
           usageSegmentsComplete?: unknown;
+          generationTrace?: unknown;
           modelUsageCumulativeStartsAtZero?: unknown;
           assistant_message_id?: unknown;
           is_error?: unknown;
@@ -343,6 +344,7 @@ export function recordSessionClaudeTurnUsage(
             claudeGenerationDurationMs,
             claudeTurnDurationMs,
             billing,
+            doneData?.generationTrace,
           );
           recordTurnSpend(turnMoney);
           recordSessionTurnSpend(session.id, turnMoney);
@@ -378,6 +380,7 @@ export function recordSessionClaudeTurnUsage(
             claudeGenerationDurationMs,
             claudeTurnDurationMs,
             billing,
+            doneData?.generationTrace,
           );
           if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
             const changedScheduleId = await recordSchedulerTurnCost({
@@ -425,6 +428,8 @@ export function recordSessionClaudeTurnUsage(
           undefined,
           claudeGenerationDurationMs,
           claudeTurnDurationMs,
+          undefined,
+          doneData?.generationTrace,
         );
         // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 非明确
         // provider-api 路由)。只保留可证明的模型与时长；进程累计 usage 不能冒充本轮 token。

@@ -1024,6 +1024,21 @@ describe('hook session 精确接管边界', () => {
     await expect(runner.inspect('session-under-test')).rejects.toThrow('metadata unavailable');
   });
 
+  it.each([
+    { status: 'archived', workDir: process.cwd(), canResume: true },
+    { status: 'archived', workDir: path.join(process.cwd(), 'package.json'), canResume: false },
+    { status: 'deleted', workDir: process.cwd(), canResume: false },
+  ])('归档绑定能否续聊取决于任务状态和目录 ($status, $canResume)', async ({ status, workDir, canResume }) => {
+    const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
+    vi.mocked(getSessionRowSnapshotStrict).mockResolvedValueOnce({
+      status, workingDir: workDir, title: null, userSendAt: null, workspaceKind: 'project', providerId: null,
+    });
+    fakeMaker.getSessionMeta.mockResolvedValueOnce({ ...await fakeMaker.getSessionMeta(), workDir });
+    const info = await createMakerHookSessionRunner({ log }).inspect('previous', () => true);
+    expect(info?.usable).toBe(false);
+    expect(info?.resumableArchive === true).toBe(canResume);
+  });
+
   it('拒绝接管 SSH 远程会话和内部 worker 会话', async () => {
     const { getSessionRowSnapshot } = await import('../../localDb/ipc/sessions.js');
     vi.mocked(getSessionRowSnapshot)

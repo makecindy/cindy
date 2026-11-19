@@ -1247,6 +1247,7 @@ function translatePiEventInternal(
       // so `unreportedEstimatedOutput` never double counts a reported message.
       settlePiRun(ctx);
       const calibratedElapsedMs = ctx.tokenSpeed.snapshot()?.elapsedMs;
+      const generationTrace = ctx.tokenSpeed.trace();
       const usageDurationMs =
         typeof calibratedElapsedMs === 'number' && Number.isFinite(calibratedElapsedMs) && calibratedElapsedMs > 0
           ? Math.round(calibratedElapsedMs)
@@ -1269,6 +1270,8 @@ function translatePiEventInternal(
         ...(ctx.turnWallClockStartedAt > 0
           ? { turnDurationMs: Math.max(0, Date.now() - ctx.turnWallClockStartedAt) }
           : {}),
+        // Display only: lets the finished message show the chart the turn ran with.
+        ...(ctx.generationTimingReliable && generationTrace ? { generationTrace } : {}),
       };
       const terminalError = pendingAssistantError ?? (outputLimited ? {
         message: 'Pi reached the model output limit. The response may be incomplete.',

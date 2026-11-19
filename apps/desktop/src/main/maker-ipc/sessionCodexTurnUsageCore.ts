@@ -94,6 +94,7 @@ export function recordSessionCodexTurnUsage(
         segments?: unknown;
         durationMs?: number;
         turnDurationMs?: number;
+        generationTrace?: unknown;
       };
       const promptTokens = Number(u.promptTokens) || 0;
       const completionTokens = Number(u.completionTokens) || 0;
@@ -173,6 +174,7 @@ export function recordSessionCodexTurnUsage(
           model: turnModel,
           durationMs: u.durationMs,
           turnDurationMs: u.turnDurationMs,
+          trace: u.generationTrace,
         });
         const tokenRows = turnUsageDetails?.perModelTokens ?? [];
         await Promise.all(tokenRows.map(row => recordModelTurnUsage({
