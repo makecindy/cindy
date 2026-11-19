@@ -87,11 +87,14 @@ export function taskInboxSignalsFromRank(
   };
 }
 
+/** Reserved ISO value so older inbox clients still classify the task as snoozed. */
+export const INDEFINITE_SNOOZE_UNTIL = '9999-12-31T23:59:59.999Z';
+
 /** A new input (including an automation trigger) returns the task to its live section. */
 export function taskSnoozeUntil(task: TaskInboxState): number {
   const until = Date.parse(task.snoozedUntil ?? '');
   const at = Date.parse(task.snoozedAt ?? '');
   const sent = Date.parse(task.userSendAt ?? '');
   if (!Number.isFinite(until) || (Number.isFinite(at) && sent > at)) return 0;
-  return until;
+  return task.snoozedUntil === INDEFINITE_SNOOZE_UNTIL ? Infinity : until;
 }

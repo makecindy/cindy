@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -32,6 +32,10 @@ describe('passive shared-userData instance auth isolation', () => {
   ).replace(/\r\n/g, '\n');
   const authAdapterSource = readFileSync(
     resolve(process.cwd(), 'src/main/maker-host/auth-adapters.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+  const sharedSkillsCoreSource = readFileSync(
+    resolve(process.cwd(), 'src/main/maker-host/sharedGlobalSkillsPreparationCore.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
 
@@ -242,9 +246,12 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(bootstrapSource).not.toContain('await prepareSharedGlobalSkillLinks();');
     expect(bootstrapSource).not.toContain('refreshBuiltInSharedSkillLinks');
 
-    const start = authAdapterSource.indexOf('private async runEnsureSharedGlobalSkills(ownerId:');
-    const end = authAdapterSource.indexOf('\n  async getState(', start);
-    const body = authAdapterSource.slice(start, end);
+    // The body moved unchanged into the shared core (release table row 25, 25b); the adapter delegates.
+    expect(authAdapterSource).toContain('await this.sharedGlobalSkills.ensureSharedGlobalSkills();');
+    const start = sharedSkillsCoreSource.indexOf('async function runEnsureSharedGlobalSkills(ownerId:');
+    const end = sharedSkillsCoreSource.indexOf('\n  return { ensureSharedGlobalSkills };', start);
+    expect(start).toBeGreaterThan(-1);
+    const body = sharedSkillsCoreSource.slice(start, end);
     const ownerBoundary = body.indexOf('withSharedGlobalSkillProjectionMutation(ownerId');
     expect(ownerBoundary).toBeGreaterThan(-1);
     expect(body.indexOf('prepareBuiltInSkills({')).toBeGreaterThan(ownerBoundary);
@@ -425,6 +432,61 @@ describe('passive shared-userData instance auth isolation', () => {
     // 但这条分支里不得出现任何删除或 marker 消费。
     expect(passiveBranch).not.toContain('removeSafe(');
     expect(passiveBranch).not.toContain('clearReloginFlag();');
+  });
+
+  /**
+   * Release table row 25 (25b): the owner-commit gate defaults to allowed, and only the Node Host's
+   * resident process injects a refusal. If any desktop main-process file injected it, the desktop's
+   * sign-in, logout and projection repair would stop publishing the owner and every Skill projection
+   * would stay refused. Minimal failure: a configureProjectionBoundaryOwnerCommit( call in src/main.
+   */
+  it('Skill projection boundary: the desktop never injects the owner-commit gate', () => {
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) { if (entry.name !== '__tests__') walk(full); continue; }
+        if (!/\.(ts|tsx|mts|cts)$/.test(entry.name) || /\.test\.|\.d\.ts$/.test(entry.name)) continue;
+        const text = readFileSync(full, 'utf8');
+        const calls = text.match(/configureProjectionBoundaryOwnerCommit\(/g)?.length ?? 0;
+        const definitions = text.match(/export function configureProjectionBoundaryOwnerCommit\(/g)?.length ?? 0;
+        if (calls > definitions) offenders.push(full);
+      }
+    };
+    walk(resolve(process.cwd(), 'src/main'));
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * Skill projection boundary (release table row 25, step 25a). authBoundaryQuarantine.ts no
+   * longer reads Electron, so it can load in the Node Host. Its passive test is injected, and the
+   * default is "not passive". If the desktop stops injecting it, or injects after
+   * bootstrap-electron loads the first reader, a passive dev instance sharing another process's
+   * userData acts as a primary and writes the shared Skill roots and the owner boundary. Its
+   * unit test injects the predicate itself and cannot see this, hence a guard.
+   * Minimal failure: delete the configureProjectionBoundaryPassive line from index.ts, or move it
+   * below dispatch().
+   */
+  it('Skill projection boundary: the passive check is injected before bootstrap-electron loads', () => {
+    const indexSource = readFileSync(resolve(process.cwd(), 'src/main/index.ts'), 'utf8').replace(
+      /\r\n/g,
+      '\n',
+    );
+    const injection =
+      "configureProjectionBoundaryPassive(() => !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1');";
+    const injectionIdx = indexSource.indexOf(injection);
+    expect(injectionIdx).toBeGreaterThan(-1);
+    expect(indexSource.indexOf(injection, injectionIdx + 1)).toBe(-1);
+    // After the last userData override is pinned (the boundary file path follows getUserDataDir).
+    const pinIdx = indexSource.indexOf("configureUserDataDir(app.getPath('userData'));");
+    expect(pinIdx).toBeGreaterThan(-1);
+    expect(injectionIdx).toBeGreaterThan(pinIdx);
+    // A top-level statement that runs before dispatch(), so before the bootstrap import.
+    expect(injectionIdx).toBeLessThan(indexSource.indexOf('async function dispatch(): Promise<void> {'));
+    expect(indexSource.indexOf("await import('./bootstrap-electron.js')")).toBeGreaterThan(injectionIdx);
+    expect(indexSource).toContain(
+      "import { configureProjectionBoundaryPassive } from './authBoundaryQuarantine.js';",
+    );
   });
 
   it('keeps a renderer fail-closed when it initializes during an owner boundary', () => {

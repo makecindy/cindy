@@ -30,7 +30,7 @@ import {
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   leadingSlashInvocation,
   reconcilePiRuntimeCommandForDispatch,
-  reconcilePiRuntimeCommandForDispatchWithRetry,
+  reconcilePiRuntimeCommandForSessionDispatch,
   rewriteAgentSkillInvocationForDispatch,
   type UnifiedCommand,
 } from '../../../lib/slashCommands';
@@ -147,7 +147,7 @@ function setup(options: {
     allCommandsRef: { current: [] as UnifiedCommand[] }, setAllCommands: vi.fn(),
     loadAllCommands: vi.fn(async () => await (options.slashCatalog ?? Promise.resolve([]))),
     PI_RUNTIME_SKILL_RETRY_DELAYS_MS, leadingSlashInvocation,
-    reconcilePiRuntimeCommandForDispatch, reconcilePiRuntimeCommandForDispatchWithRetry,
+    reconcilePiRuntimeCommandForDispatch, reconcilePiRuntimeCommandForSessionDispatch,
     rewriteAgentSkillInvocationForDispatch, dispatchCommand,
     matchNavigationCommandName, tryHandleNavigationCommand, navigate,
     sessionNavigationVersionRef: { current: 0 }, canNavigateSession: true, navigationMode: 'route',

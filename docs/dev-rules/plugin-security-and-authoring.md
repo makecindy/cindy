@@ -49,6 +49,10 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 跨账号切换和插件撤权后的迟到回包不交付。原有插件未声明该组时行为与批准不变。
 manifest 新增 `usage` 声明走原整体安装确认；已有该组批准调用新增组内读取不补批。
 beta 存量同意范围扩展及维护者确认要求见[平台契约的授权记录](protocol-compatibility/plugin-host-tools-platform.md#usage-组范围扩展的维护确认)。
+
+`get_session_quota` 沿用 `usage` 组的安装批准。目标任务从当前账号任务库解析，
+异机和分享额度沿现有通道判权。额度结果不含任务正文、设备标识或账号标识；
+无法确认归属或授权已经失效时不可用。
 实现与回归见 `subscription-accounts/runtime.ts` 及其测试、`hostToolSlot.test.ts`、
 `ghostInstallConsent.test.ts`；作者用法见随包 `plugin-host-tools.md`「读取订阅用量」。
 
@@ -319,6 +323,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
   旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
 - `agent.companions` 是独立能力，不依赖 tasks/targets/observe，单列 `agent:companions` 权限并要求 Host receipt 的 `companionsCapabilityApproved` 显式批准。
+  `list` 可返回当前桌面侧栏的布尔未读标记 `unread`。宿主按当前账号读取已提交的伙伴已读位置。订阅只发送原有的刷新通知，不传伙伴 ID、未读值、阅读时间或消息内容。
   只读返回账号下全部伙伴（含主人其他电脑上的伙伴，从其主力电脑读取）的名单、状态、工作阶段（公开类别）、等待主人处理的请求标题、最新一条回复正文（≤8000 字）
   与最近对话（≤50 条主人消息和伙伴回复，同云端镜像的 `mirrorMessageText` 投影，不含工具过程、进度说明、思考与子 Agent 输出；产品决定 2026-11-04），
   并可在主窗口打开伙伴对话或请求所在任务；`interaction` 按对话卡片的内容给出单条请求（工具输入与手机端同样脱敏，代输入的值不出宿主）。回复正文与请求内容不进推送、不写日志。
@@ -802,6 +807,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   不新增 manifest 字段、凭证库、授权账本或跨调用批准缓存，手机端建立引用尚未开放。
   来源卸载复用已有 journal：先撤批准并隔离，再清理指向它的账号／已保存凭证引用，最后删除包。
   消费方锁或 vault 失败保留原 journal 与包，重试／既有启动恢复成功前不能重装；同物理键重装不能继承旧复用。
+  桌面确认 OAuth 账号清单无法解密时，在消费方变更锁内将原密文移入同 owner 的主进程隔离键，再继续卸载。
+  隔离记录不参与授权、枚举或自动恢复，随 owner 凭证清理回收。锁内读取成功时只撤销实际命中的复用引用。
   Desktop 和 Node Host 接同一管理器回调；只读 Host 清单没有凭证端口时保留隔离，不提前清掉 journal。
   真正换源时，引用的来源键随既有用户数据归档改指不可运行的 archive 键，详情按既有失效状态展示，
   可停止使用或重新选用；换源失败／重启恢复沿原逆向归档还原。普通同来源更新、凭证轮换继续有效。
@@ -964,8 +971,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `modalities`、Guide operation 与当前客户端协议支持度，只投影当前可执行模型。单模型
   Guide 失败必须局部隔离，不能阻断其余模型或插件面板。响应仍只把归一化后的
   `modalities.input/output` 原样交给插件，不得包含 Guide、endpoint、凭证或内部兼容判定；
-  付费请求前 Core 必须再次校验。新媒体生成请求只能由当前 Agent 调用永久 Core `media`
-  工具发起，插件沙箱和 panel 不得直接提交、轮询或下载。存量 `cindy-request` 媒体代办保留
+  付费请求前 Core 必须再次校验。当前 Agent 可通过永久 Core `media` 工具生成媒体。
+  获准插件也可通过下述 Cindy AI 专用入口直接发起请求。存量 `cindy-request` 媒体代办保留
   原接口：Host 完成原有权限、配额、参考图归属与账号校验后，将旧参数适配到已有 Core
   `prepare/request/poll`；可用模型由 Server operation 的输入是否可表达决定，不按 Guide ID
   筛选。兼容入口不向插件开放任意 Core 操作，不另起 Agent，也不重复入仓。插件工具通过现有 `tool-result` 返回普通 JSON，
@@ -974,6 +981,21 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
   `args.attachments`，绝不把本地绝对路径暴露给插件。插件自行保存业务状态和更新 UI。
   Host 不自动回调插件，也不得新增画廊等插件业务语义。
+- Cindy AI 媒体直调复用 `cindy-request`。插件声明 `"cindy": { "models": ["media_request"] }`，
+  经现有安装或更新流程批准后，调用 `cindy.send({ type: 'cindy-request', kind: 'media_request',
+  operation, model, ...args })`。Host 只用当前账号的 Cindy AI 连接，校验实际模型和操作后代发。
+  插件提供该模型的请求参数，Host 掌握 URL、方法、认证和路由头。此入口无需 Agent 会话。
+  - `image.generate`、`video.generate`、`audio.speech` 使用 `body` 对象。
+    图像和视频走该模型官方 Guide 中的 JSON 接口。Host 写入协议指定的模型字段。
+  - `audio.transcribe` 使用文本字段组成的 `body`，并通过 `audioHash` 提供该插件有权使用的
+    受管音频指纹。可先通过 `deposit_media` 寄存已有音频。Host 构造文件表单。
+  - 异步视频的成功提交响应在可识别任务 ID 时附带 `jobRef`。用相同 `model` 和该引用请求
+    `video.poll`。仅当协议提供独立下载接口时可以请求 `video.content`。引用绑定账号和插件，
+    保留 30 分钟，Host 重启或引用容量淘汰后失效。插件管理查询时机和结果。
+  - `ok: true` 表示收到网关响应，包括 HTTP 错误。检查 `status` 后按 `contentType` 和
+    `encoding` 解读 `body`，二进制使用 base64。Host 限制输入和响应体积（最多 32 MiB，
+    Guide 可设更低限制）。Host 拒绝或无法取得响应时返回 `ok: false`。提交结果未知时，
+    插件应避免自动重提。旧宿主请按不支持此操作处理。
 - 回环嵌入是第二个、也是更窄的页面网络例外：插件同时声明一种自绘页面（`panel`、`mainView`
   或 `taskView`）、`node` 工作进程和 `preview.hosts` 中的 `localhost` / `127.0.0.1` 时
   （`ghostPanelLoopbackEmbedAllowed`），

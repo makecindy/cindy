@@ -28,6 +28,34 @@ const request = { operation: 'mediaGuide' as const, target };
 // Unit integration through the real settings entry, resolver and owner-scoped
 // disk store: saving a Guide must not call a model or bypass the write guard.
 describe('media Guide settings operations', () => {
+  // Native media catalogs have no per-harness declaration. The supported settings
+  // entry must save/read their override without asking to configure another API (unit).
+  it.each(['openai', 'gemini', 'xai', 'codex-account'])('saves a native %s Guide without a chat model declaration', async (providerId) => {
+    const nativeTarget = { ...target, providerId, agent: 'codex' as const };
+    configureProviderMediaRuntime({ listModels: () => [], guideScope: () => 'native-1', guideTarget: candidate => ({ ...candidate, agent: 'pi' }),
+      invoke: async () => { throw new Error('must not generate'); } });
+    configureModelSettingsActions({ owner: () => ({ dataOwnerId: 'owner', ownerGeneration: state.generation }),
+      list: async () => ({ providers: [{ id: providerId, source: 'builtin', auth: { method: 'oauth' }, models: {},
+        imageModels: [{ id: target.modelId, modalities: { input: ['text'], output: ['image'] } }] }] }),
+    } as unknown as Parameters<typeof configureModelSettingsActions>[0]);
+    const saved = await manageAppModels({ ...request, target: nativeTarget, change: { action: 'save', guide, expectedRevision: null } }, async () => {});
+    expect(saved).toMatchObject({ saved: true, source: 'custom' });
+    expect(await manageAppModels({ ...request, target: { ...nativeTarget, agent: 'pi' }, change: { action: 'get' } }, async () => {}))
+      .toMatchObject({ source: 'custom', guide: { revision: saved.customRevision } });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps Cindy AI official-only without suggesting connection configuration', async () => {
+    expect(await manageAppModels({ ...request, target: { ...target, providerId: 'xd' }, change: { action: 'save', guide, expectedRevision: null } }, async () => {}))
+      .toMatchObject({ ok: false, errorCode: 'GUIDE_OVERRIDE_NOT_SUPPORTED' });
+    expect(fs.readdirSync(state.root)).toEqual([]);
+  });
+  it('allows reading the official Cindy AI Guide without creating an override', async () => {
+    fetch.mockResolvedValueOnce({ modelId: target.modelId, guide });
+    expect(await manageAppModels({ ...request, target: { ...target, providerId: 'xd' }, change: { action: 'get' } }, async () => {}))
+      .toMatchObject({ source: 'official', status: 'available', customRevision: null });
+    expect(fs.readdirSync(state.root)).toEqual([]);
+  });
   beforeEach(() => {
     state.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-guide-settings-'));
     fetch.mockReset().mockRejectedValue(new ServerApiError('MEDIA_INVOCATION_GUIDE_NOT_FOUND', 404, 'missing'));

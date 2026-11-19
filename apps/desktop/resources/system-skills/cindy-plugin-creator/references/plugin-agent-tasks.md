@@ -520,6 +520,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
     `workingPhase` 只在工作中出现，是公开类别：`thinking` 思考、`replying` 写回复、`reading-file` / `saving-file` / `searching` / `searching-files` / `reading-web` / `testing` / `checking` 等执行工具，`compacting` 整理上下文，`processing` 其他；不含命令、参数、网址或思考原文。`summary` 是宿主写的粗粒度说明。
   - `interactions` 是伙伴正在等主人处理的请求 `[{ref, kind, title}]`。`kind` 为 `question`（提问）、`permission`（工具确认）、`plan`（计划审阅）或 `other`（Cindy 自己的确认，如安装插件、更新、任务操作、代输入，只能用 `open` 去 Cindy 里处理）。`title` 为问题或待确认的工具名，其他为 null；名单里不含工具输入、计划正文，主人在宿主步骤里输入的值任何时候都不给插件。`ref` 不透明，只能传回 `interaction` / `answer` / `open`。伙伴的主对话和它委派的任务同时等主人时，两边的请求都在这里。
   - `lastReplyAt` 是最新一条完成回复的持久化时间。一轮工作结束（`phase` 由 `running` 变为 `completed` 或 `lastReplyAt` 变化）时读一次 `reply`，即可拿到这一轮的最后一条消息。
+  - 可选的 `unread` 是当前桌面侧栏的伙伴未读标记。读取快照只返回布尔值。旧客户端或状态不可用时该字段缺省。状态灯可优先显示运行状态，闲时用 `unread === true` 点亮绿灯。
 - `avatar({companionId})`：返回 `{src, fallback}`。`src` 为 `data:image/jpeg` 头像或 null（伙伴用表情做头像时）；`fallback` 是可直接画的单个字形。
 - `reply({companionId})`：返回 `{reply:null | {text, createdAt, truncated}}`：伙伴主对话里最新一条可见回复的文字（其他电脑上的伙伴从它的主力电脑读取），最多 8000 字，超出时 `truncated=true`；不含更早的消息、附件、私密内容或子 Agent 输出。回复可能含个人或工作信息，插件不得外传或长期保存。
 - `history({companionId, limit?})`：返回 `{history:null | {messages, more}}`：伙伴主对话里最近的 `limit` 条消息（默认 20，最多 50），从旧到新，每条 `{role:'user'|'assistant', text, createdAt, truncated}`，单条最多 2000 字。
@@ -538,7 +539,7 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
   - 允许：`{kind:'permission', decision:'allow'}` / `{kind:'plan', decision:'allow'}` 只用于 `allowHere` 为 true 的请求，会弹出 Cindy 自己的确认框，完整显示真实请求；主人在框里点允许才生效，取消时返回 `{answered:false}`。`allowHere` 为 false 时返回 `ALLOW_IN_CINDY`，请用 `open` 让主人在 Cindy 里允许。插件页面画不出、也点不到这个框，不要自己再做一层「确认允许」。同一时间只开一个框，再请求返回 `TASK_BUSY`；框打开期间请求变了或已在别处处理，返回 `TARGET_UNAVAILABLE`。
   - 只能回答 `interaction` 给出的内容，不能改写工具输入，也不能「本会话一直允许」。其他电脑上的伙伴经它的主力电脑作答（需那台电脑在线并开启远程控制）。
   - 回答后请求会从 `interactions` 里消失；主人在 Cindy、手机或其他插件里先处理了，同样消失，插件据此关掉自己的界面。
-- `watch()` / `unwatch({subscriptionId})`：每插件一个订阅，再次 `watch` 会替换旧订阅。变化时经 `cindy.onHostMessage` 收到 `{type:'companions-changed', subscriptionId, seq}`，不带内容，插件收到后重新 `list`；其他电脑上伙伴的变化也会通知；每插件最快 1 秒一次，订阅期间另有约 5 秒一次的心跳。逻辑页关闭、撤权或卸载后订阅自动结束。
+- `watch()` / `unwatch({subscriptionId})`：每插件一个订阅，再次 `watch` 会替换旧订阅。伙伴活动、新回复和用户阅读后提交的已读变化沿用 `cindy.onHostMessage` 的 `{type:'companions-changed', subscriptionId, seq}` 通知。插件收到后重新 `list` 即可读取 `unread`。其他电脑上伙伴的变化也会通知。每插件最快 1 秒一次，订阅期间另有约 5 秒一次的心跳。逻辑页关闭、撤权或卸载后订阅自动结束。
 - 不存在、已归档、不可见、请求已不在等待，或主力电脑当前连不上的伙伴返回 `TARGET_UNAVAILABLE`；参数或回答不对返回 `INVALID_PARAMS`；要允许确认框显示不全的请求返回 `ALLOW_IN_CINDY`；宿主未就绪返回 `HOST_NOT_READY`。不能发消息、改伙伴设置或停止伙伴；派活请改用 `cindy.targets` 并声明对应权限。
 
 ```js

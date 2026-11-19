@@ -33,8 +33,8 @@ export default {
       await working.locator('> button').click();
       await page.locator('[data-session-id="ready"]').click();
       await scroller.evaluate((node) => { node.scrollTop = 0; });
-      // Move the pointer off the list so the hover freeze does not hold the row.
-      await page.mouse.move(310, 630);
+      // Reading a row inside the list must allow it to change sections.
+      await page.locator('[data-session-id="ready"]').hover({ position: { x: 30, y: 10 } });
       await page.evaluate(() => window.__replyToReady());
       await working.locator('[data-session-id="ready"]').waitFor();
       await page.waitForTimeout(400);
@@ -129,6 +129,8 @@ export default {
     await ui.capture('row-actions');
     await ready.click({ button: 'right' });
     await page.getByRole('menu').waitFor();
+    const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
+    await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).waitFor();
     await ui.capture('context-menu');
     await page.keyboard.press('Escape');
     // One click on Done archives at once (even for the open task). The list holds still while
@@ -141,6 +143,10 @@ export default {
     assert.equal(await ready.getByRole('button', {
       name: await ui.t('ccAgent.sidebar.sessionMenu.archived'), exact: true,
     }).count(), 0);
+    await ready.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.sessionMenu.unarchive'), exact: true }).waitFor();
+    assert.equal(await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).count(), 0);
+    await page.keyboard.press('Escape');
     await ready.hover();
     await ready
       .getByRole('button', {
@@ -169,10 +175,13 @@ export default {
       previewedUntil,
     );
     const later = page.locator('[data-session-id="later"]');
-    await later.hover();
-    await later
-      .getByRole('button', { name: await ui.t('ccAgent.sidebar.inbox.snooze'), exact: true })
-      .click();
+    await later.getByRole('button', { name: snoozeLabel, exact: true }).click();
+    const indefinite = page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.indefinite'), exact: true });
+    assert.equal(await indefinite.locator('time').count(), 0);
+    await indefinite.click();
+    await page.waitForFunction(() => document.documentElement.dataset.snoozedUntil === '9999-12-31T23:59:59.999Z');
+    await later.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).click();
     await page
       .getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.custom'), exact: true })
       .click();

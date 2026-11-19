@@ -36,7 +36,6 @@ import {
   type RoutingDecision,
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
-import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
@@ -66,6 +65,7 @@ import {
 import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
 import { shouldApplyExclusiveProviderReroute } from './model-route-guard.js';
 import { getSessionProvider, hasHostedSessionModelAccess } from './session-provider-store.js';
+import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import {
   GUEST_ROUTE_HEADER,
   guestProviderOffersModel,
@@ -674,6 +674,7 @@ function createModelRoutingTransform(): RoutingTransform {
       ? isPiProxySubagentRoute(piSessionId, claimedPiSessionToken)
       : false;
     const selectedPiProviderId = piSessionId ? getSessionProvider(piSessionId) : null;
+    const piGuest = piSessionId ? guestProviderRouteForSession(piSessionId) : null;
     if (
       piSessionId
       && (
@@ -700,7 +701,8 @@ function createModelRoutingTransform(): RoutingTransform {
             error: {
               type: 'authorization_error',
               code: 'pi_provider_mismatch',
-              message: 'PI proxy provider does not match the session provider.',
+              message: piGuest ? SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE
+                : 'PI proxy provider does not match the session provider.',
             },
           });
           res.writeHead(403, {
@@ -712,9 +714,8 @@ function createModelRoutingTransform(): RoutingTransform {
       };
     }
     // 供应商分享受邀者的 Pi 会话：令牌只为分享的供应商签发，这里按登记再复核一次(含子代理令牌)。
-    const piGuest = piSessionId ? guestProviderRouteForSession(piSessionId) : null;
     if (piGuest && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
-      return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+      return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
     }
     // Pi's native ChatGPT transport sends zstd JSON. The generic proxy keeps
     // those bytes opaque; the native handler decodes and checks the live grant
@@ -809,7 +810,9 @@ function createModelRoutingTransform(): RoutingTransform {
       !piSessionId && !hostedProviderOffersModel(sessionId, providerId, 'claude-code', model)
         ? refuseGuestProviderRoute(403, 'remote_model_not_allowed', 'This model is not available for this remote task.')
         : null;
-    if (guest && selectedProviderId !== guest.providerId) return refuseGuestForeignRoute(wireModel);
+    if (guest && selectedProviderId !== guest.providerId) {
+      return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
+    }
     const applyExclusiveReroute = shouldApplyExclusiveProviderReroute(
       selectedProviderId,
       getActiveCatalog().providers,
@@ -846,7 +849,7 @@ function createModelRoutingTransform(): RoutingTransform {
     ) {
       // 受邀者只能走分享给它的那份订阅，不能凭模型前缀用到本机用户的其它订阅。
       if (guest && !isOpenAiSubscriptionProviderId(selectedProviderId) && !isXaiSubscriptionProviderId(selectedProviderId)) {
-        return refuseGuestForeignRoute(wireModel);
+        return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
       }
       const bridgeProviderId = isExclusiveXaiModelId(wireModel)
         ? (isXaiSubscriptionProviderId(selectedProviderId) ? selectedProviderId : 'xai')
@@ -1166,12 +1169,12 @@ function createModelRoutingTransform(): RoutingTransform {
         return refuseGuestProviderRoute(401, 'invalid_guest_route', 'Invalid or expired shared-provider session.');
       }
       if (hasInternalPiHeader) {
-        return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+        return refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
       }
       if (!isPlainObject(body)) {
         return guest.providerId === 'xd'
           ? route(body, ctx, guest)
-          : refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
+          : refuseGuestProviderRoute(403, 'shared_provider_only', SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE);
       }
       const wireModel = typeof body.model === 'string' ? body.model : '';
       if (!await guestProviderOffersModel(guest.providerId, 'claude-code', wireModel, guest.sessionId)) {
@@ -1326,15 +1329,7 @@ async function startAnthropicCompatProxy(generation: number): Promise<void> {
         // LiteLLM/provider adapter 可能把 provider_specific_fields(null) 挂到 tool_use 上，
         // 严格 Anthropic 入站 schema 不接受该扩展字段。
         stripToolUseProviderSpecificFields,
-        // 视觉桥透明替换（层 A）：controller 未注入时短路透传，零干扰；注入后把纯文本
-        // 模型请求里的图转成文字描述。放在 stripNonAnthropicFields 之前——否则旧 #794 的
-        // tool_result 图片省略逻辑（如 glm-5.2 的 stripGlm52）会先吃掉 tool_result 内嵌图，
-        // A 层无图可转描述，文档承诺的「A 层覆盖 tool_result 内嵌」落空。视觉桥只替换
-        // image block、不碰 tool_use 结构，位于 repair/dedupe 之后安全；未命中时返回 null，
-        // 旧 #794 strip 继续兜底。
-        // 供应商分享受邀者的请求不走视觉桥：视觉后端是本机用户自己配的其它供应商，
-        // 受邀者只能用分享给它的那一个(图片照原样交给分享的模型)。
-        buildVisionBridgeProxyTransform(log, isGuestProviderShareRequest),
+
         createXdToolResultImageNoticeTransform(claudeUpstreamEndpoint),
         // PI / Claude 走本 proxy 的 /responses 时（Gateway grok、自定义 LiteLLM）
         // 不会经过 Codex 的 xAI 订阅 transform，必须在这里洗 ModelInput。

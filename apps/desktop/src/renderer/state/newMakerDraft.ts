@@ -1,5 +1,5 @@
 import {
-  markRemoteDraftEngineManuallySelected, persistedDraftVendor, resetRemoteDraftEngineFollow,
+  markRemoteDraftEngineManuallySelected, persistedDraftVendor, resetRemoteDraftEngineFollow, vendorAfterRemotePreferenceWrite,
 } from '@/features/cc-agent/remoteDraftEngineFollow';
 /**
  * newMakerDraft —— "/cc-agent/new" 草稿状态 + vendor 偏好的 localStorage 持久化。
@@ -322,7 +322,8 @@ function sanitize(raw: unknown): NewMakerDraft {
   // F-COLLAB (2026-05): 'orca' 不在表内,历史 localStorage 残留会走同一条回退路径
   // 迁到 'cc'(它已被 ChatInput 底部的协同 toggle 取代),避免空白入口。
   const vendor: MakerVendor = isSelectableVendor(r.vendor) ? r.vendor : def.vendor;
-  const workingDir = normalizeDraftWorkingDir(r.workingDir);
+  // Device-link identity is transient in an unfinished draft. Never reload its path as local.
+  const workingDir = r.deviceLinkDeviceId ? null : normalizeDraftWorkingDir(r.workingDir);
   const remoteHostId =
     typeof r.remoteHostId === 'string' && r.remoteHostId.trim().length > 0
       ? r.remoteHostId.trim()
@@ -1195,7 +1196,7 @@ export function clearDefaultTupleTuningCustomization(args: {
 function patchVendorPrefsInternal(
   vendor: MakerVendor,
   patch: Partial<VendorPrefs>,
-  opts: { markModelChoice: boolean },
+  opts: { markModelChoice: boolean; selectVendor?: boolean },
 ): void {
   rebaseStoredDefaultTuplePreference();
   const marksSelection = opts.markModelChoice && ('model' in patch || 'providerId' in patch);
@@ -1230,6 +1231,7 @@ function patchVendorPrefsInternal(
   }
   currentDraft = {
     ...currentDraft,
+    vendor: opts.selectVendor ? vendorAfterRemotePreferenceWrite(activeDataOwnerId, vendor) : currentDraft.vendor,
     defaultTupleCustomized: currentDraft.defaultTupleCustomized || marksDefaultTuple,
     defaultTupleSelectionCustomized:
       currentDraft.defaultTupleSelectionCustomized || marksSelection,
@@ -1243,8 +1245,12 @@ function patchVendorPrefsInternal(
   emit();
 }
 
-export function patchVendorPrefs(vendor: MakerVendor, patch: Partial<VendorPrefs>): void {
-  patchVendorPrefsInternal(vendor, patch, { markModelChoice: true });
+export function patchVendorPrefs(
+  vendor: MakerVendor,
+  patch: Partial<VendorPrefs>,
+  options?: { selectVendor?: boolean },
+): void {
+  patchVendorPrefsInternal(vendor, patch, { markModelChoice: true, selectVendor: options?.selectVendor });
 }
 
 /**

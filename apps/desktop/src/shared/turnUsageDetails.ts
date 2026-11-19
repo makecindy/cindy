@@ -4,6 +4,7 @@
  */
 
 import { groupUsageCostRows, normalizeUsageBillingSource, type UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
+import { normalizeGenerationTrace, type GenerationTrace } from '@cindy/maker-shared/usage-format';
 import {
   legacyUsdMoney,
   normalizeRegionalMoney,
@@ -54,6 +55,11 @@ export interface TurnUsageDetails extends UsageBillingSource {
    * 跑的 Haiku) —— tooltip 据此展示「按模型成本明细」。老消息无此字段。
    */
   perModelCost?: Array<{ model: string; money: RegionalMoney } & UsageBillingSource>;
+  /**
+   * 本轮的生成速度与逐次模型请求的推理用量，用来在结束后重现运行时的速度图；仅展示用。
+   * 由各引擎的测速器在轮末给出（已限长），老消息与测速不可靠的轮次无此字段。
+   */
+  trace?: GenerationTrace;
 }
 
 export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
@@ -79,6 +85,8 @@ export interface BuildTurnUsageDetailsInput extends UsageBillingSource {
   durationMs?: number;
   turnDurationMs?: number;
   firstUserRound?: boolean;
+  /** 引擎轮末事件或已落库的原始值；格式不对整体丢弃。 */
+  trace?: unknown;
 }
 
 function sanitizeToken(value: unknown): number {
@@ -199,6 +207,8 @@ export function aggregateTurnUsageDetails(
     perModelCost: perModel,
     additionalCosts: [...details].reverse().find(detail => detail.additionalCosts)?.additionalCosts,
     firstUserRound: details.some((detail) => detail.firstUserRound === true),
+    // 各段各有自己的时间轴，无法拼接：保留最近一段的图。
+    trace: [...details].reverse().find(detail => detail.trace)?.trace,
   });
 }
 
@@ -249,6 +259,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
   const model = sanitizeModel(input.model);
   const models = uniqueModels(input.models);
   const perModelCost = sanitizePerModelCost(input.perModelCost);
+  const trace = normalizeGenerationTrace(input.trace);
 
   return {
     ...normalizeUsageBillingSource(input),
@@ -266,6 +277,7 @@ export function buildTurnUsageDetails(input: BuildTurnUsageDetailsInput): TurnUs
     ...(models ? { models } : {}),
     ...(perModelCost ? { perModelCost } : {}),
     ...(input.firstUserRound === true ? { firstUserRound: true as const } : {}),
+    ...(trace ? { trace } : {}),
   };
 }
 
@@ -292,6 +304,7 @@ export function normalizeTurnUsageDetails(value: unknown): TurnUsageDetails | un
       stepContextTokens:
         typeof raw.stepContextTokens === 'number' ? raw.stepContextTokens : undefined,
       firstUserRound: raw.firstUserRound === true,
+      trace: raw.trace,
       perModelCost: Array.isArray(raw.perModelCost)
         ? raw.perModelCost.map((e) =>
             e && typeof e === 'object'

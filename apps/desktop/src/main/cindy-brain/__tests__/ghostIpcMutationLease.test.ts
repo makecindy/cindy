@@ -22,7 +22,6 @@ import { describe, expect, it } from 'vitest';
  */
 
 const MUTATING_GHOST_CHANNELS = [
-  'ghosts:install',
   'ghosts:restore-builtin',
 ] as const;
 
@@ -50,6 +49,17 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
       );
     });
   }
+
+  it('file and GitHub first installs share the owner lease', () => {
+    expect(handlerBlock(source, 'ghosts:install')).toContain('installLocalFile(event.sender, captureGhostMutationOwner(),');
+    const github = handlerBlock(source, 'ghosts:install-github-release');
+    expect(github).toContain('installLocalFile(event.sender, owner, file,');
+    expect(github.indexOf('captureGhostMutationOwner()')).toBeGreaterThan(-1);
+    expect(github.indexOf('captureGhostMutationOwner()')).toBeLessThan(github.indexOf('await '));
+    const start = source.indexOf('const installLocalFile = async (');
+    expect(start).toBeGreaterThan(-1);
+    expect(source.slice(start, source.indexOf('\n  };', start))).toContain('beginGhostMutation(mutationOwner)');
+  });
 
   it('file and GitHub release updates share the owner lease and capture the owner before async work', () => {
     const update = handlerBlock(source, 'ghosts:update');

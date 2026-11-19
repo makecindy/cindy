@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "Adicionar widget",
+  "widgetGuideIntro": "Widgets são pequenos cartões na tela inicial. Veja a cota restante e os tokens usados hoje sem abrir o Cindy.",
+  "widgetGuideExample": "Um widget do Cindy ao lado dos ícones de apps na tela inicial.",
+  "widgetGuidePicker": "Editar → Adicionar Widget",
+  "widgetGuideIOS": "Mantenha pressionada uma área vazia da Tela de Início e toque em {{picker}}.\n\nBusque Cindy, escolha “Cota das assinaturas” ou “Uso diário” e toque em “Adicionar Widget”.",
+  "widgetGuideAndroid": "Mantenha pressionada uma área vazia da tela inicial e toque em “Widgets”.\n\nEncontre Cindy e arraste “Cota das assinaturas” ou “Uso diário” para a tela inicial.",
+  "widgetGuideHome": "Tela de Início",
+  "widgetGuideLock": "Tela Bloqueada",
+  "widgetGuideLockIOS": "Também na Tela Bloqueada: mantenha-a pressionada e toque em “Personalizar”.",
+  "widgetGuideDismiss": "Entendi",
+  "usageOther": "Outros",
+  "usageTitle": "Resumo de uso",
+  "usageOnlyDevice": "Somente {{name}}",
+  "usagePlans": "Cotas disponíveis",
+  "usageBudget": "Orçamento restante do período",
   "management": {
     "title": "Gerenciamento de dispositivos",
     "openDevice": "Ver detalhes de {{name}}",
@@ -449,13 +464,13 @@
         "thisEvening": "Hoje à noite",
         "tomorrow": "Amanhã",
         "nextWeek": "Na próxima semana",
+        "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
         "invalidTime": "Escolha uma data e hora futuras dentro de um ano."
       },
       "taskListMode": {
-        "heading": "Modo de tarefas",
-        "tasks": "Lista de tarefas",
-        "inbox": "Caixa de entrada"
+        "enterInbox": "Caixa de entrada",
+        "leaveInbox": "Lista de tarefas"
       }
     },
     "search": {

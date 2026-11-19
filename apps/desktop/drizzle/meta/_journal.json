@@ -1065,6 +1065,20 @@
       "when": 1794981740308,
       "tag": "0151_opposite_nightcrawler",
       "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "6",
+      "when": 1794990451308,
+      "tag": "0152_schedule_pr_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "6",
+      "when": 1795070787385,
+      "tag": "0153_schedule_inherited_project",
+      "breakpoints": true
     }
   ]
 }

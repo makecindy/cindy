@@ -368,6 +368,7 @@ import {
 import { sessionCollaborationLabel } from '@/session/collaboration';
 import {
   agentKindForSession,
+  composerSlashInvocationName,
   detectComposerTrigger,
   filterAtResources,
   filterSlashCommands,
@@ -428,11 +429,8 @@ import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-sha
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import {
-  confirmAgentLocationForPick,
-  confirmMobileSessionAgentSwitch,
-} from '@/session/sessionAgentSwitchConfirmation';
-import {
   effectiveAgentDeviceId,
+  resolveAgentLocationPick,
   intentChangesAgentLocation,
   mobileAgentLabel,
   normalizeSessionAgentSwitchIntent,
@@ -457,6 +455,7 @@ import {
 } from '@/session/composerAttachmentInbox';
 import {
   buildQueuedTextMessage,
+  buildQueuedMessageForEngine,
   buildQueueRowPresentation,
   createQueueEditTextState,
   queuedMessageHasEncodedQuotes,
@@ -2792,10 +2791,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const composerSwitchesAgent = composerDisplayAgentKind !== sessionAgentKind;
   const sessionAgentSwitchSupported = !!currentSession
     && supportsMobileSessionAgentSwitch(currentSession, capabilities);
+  const hostSupportsRemoteModelWindowRebuild = !!deviceId && !isScopedPeer(deviceId) &&
+    !currentSession?.remoteHostId && !isProviderShareAgentDeviceId(currentSession?.agentDeviceId) &&
+    !(currentSession?.agentDeviceId && sessionAgentKind === 'pi') &&
+    capabilities?.supportsRemoteModelWindowRebuild === true;
+
+  const modelSelectionUsesWindowIntent = hostSupportsRemoteModelWindowRebuild && sessionAgentSwitchSupported;
   // Orca 的同引擎模型选择也只登记意图，保留当前执行单元直到下一次发送。
   const orcaModelSelectionUsesIntent = !!currentSession?.orcaRole && sessionAgentSwitchSupported;
   // 远程 Agent:模型列表在被控电脑自己的供应商之外,另列同账号其他电脑上开放了远程调用的供应商
-  // (与桌面同一套,2026-10-07 产品裁决)。选另一台电脑的模型 = 把 Agent 挪过去,先二次确认;
+  // (与桌面同一套,2026-10-07 产品裁决)。选另一台电脑的模型 = 下一条消息把 Agent 挪过去;
   // 同一台电脑内换模型直接切。共享任务访客不能换电脑，SSH 不支持切换;
   // 旧被控端不投影 agentDeviceId 字段、也不认换位置参数,这些情况维持原有调用与展示。
   // Orca Lead / 本机 Worker 要被控电脑声明 supportsOrcaAgentRelocation 才能换电脑(旧版会拒绝)；
@@ -3136,16 +3141,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const composerRuntimeAccessibilityLabel = nextAgentDeviceName && nextAgentDeviceName !== nextAgentDeviceId
     ? [composerRuntimeAccessibilitySummary, nextAgentDeviceName].filter(Boolean).join(', ')
     : composerRuntimeAccessibilitySummary;
-  // 换电脑确认里的被控电脑名;路由参数缺设备名时会以 deviceId 兜底,那不是给人看的名字。
+  // 选择器说明里使用被控电脑的展示名，缺名时不显示设备 ID。
   const controlledComputerName = (() => {
     const name = currentSession?.deviceLinkDeviceName?.trim();
     return name && name !== deviceId ? name : null;
   })();
-  const remoteAgentDeviceName = useCallback(
-    (agentDeviceId: string) =>
-      deviceDisplayName(agentDeviceId, undefined, remoteAgentCatalogs),
-    [remoteAgentCatalogs],
-  );
   const paneLayout = useSessionPaneLayout();
   const horizontalSystemHeader = Platform.OS === 'ios' && adaptiveWindow.barEdge === 'none'
     && !paneLayout.persistent && !shareSelectionActive;
@@ -5592,7 +5592,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       composerDocumentRef.current,
       trigger.from,
       draftRef.current.length,
-      [slashCommandTextNode(command.name), { type: 'text', text: ' ' }],
+      [slashCommandTextNode(composerSlashInvocationName(command)), { type: 'text', text: ' ' }],
     );
     applyComposerDocument(
       nextDocument,
@@ -7133,21 +7133,21 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           cancelQueueEdit();
           return;
         }
-        const updatedDraft = {
-          ...buildQueuedTextMessage(sessionAtSend, text, new Date(), editingQueueItem.clientId, {
-            attachments: sendAttachments,
-            quotesEncoded: queueEditPreservesEncodedQuotes,
-            agentReferences: agentReferencesAtSend,
-            pastedTextRanges: pastedTextRangesAtSend,
-            slashCommandRanges: slashCommandRangesAtSend,
-            replyQuote: queuedMessageReplyQuote(original),
-          }),
-          ...(original.sessionRefs && original.sessionRefs.length > 0
-            ? { sessionRefs: [...original.sessionRefs] }
-            : {}),
-        };
         let updated: QueuedRemoteMessage;
         try {
+          const updatedDraft = {
+            ...await buildQueuedMessageForEngine(maker, sessionAtSend, text, new Date(), editingQueueItem.clientId, {
+              attachments: sendAttachments,
+              quotesEncoded: queueEditPreservesEncodedQuotes,
+              agentReferences: agentReferencesAtSend,
+              pastedTextRanges: pastedTextRangesAtSend,
+              slashCommandRanges: slashCommandRangesAtSend,
+              replyQuote: queuedMessageReplyQuote(original),
+            }),
+            ...(original.sessionRefs && original.sessionRefs.length > 0
+              ? { sessionRefs: [...original.sessionRefs] }
+              : {}),
+          };
           updated = await prepareMobileQueuedSessionReferences(
             updatedDraft,
             invoke,
@@ -7350,16 +7350,20 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         requestMessageListFollowLatest();
         return;
       }
-      const queuedDraft = buildQueuedTextMessage(sessionAtSend, text, new Date(), undefined, {
-        attachments: sendAttachments,
-        quotesEncoded: quotesEncodedAtSend,
-        agentReferences: agentReferencesAtSend,
-        pastedTextRanges: pastedTextRangesAtSend,
-        slashCommandRanges: slashCommandRangesAtSend,
-        replyQuote: replyQuoteAtSend,
-      });
       let queued: QueuedRemoteMessage;
       try {
+        const queuedDraft = await buildQueuedMessageForEngine(maker, sessionAtSend, text, new Date(), undefined, {
+          attachments: sendAttachments,
+          quotesEncoded: quotesEncodedAtSend,
+          agentReferences: agentReferencesAtSend,
+          pastedTextRanges: pastedTextRangesAtSend,
+          slashCommandRanges: slashCommandRangesAtSend,
+          replyQuote: replyQuoteAtSend,
+        });
+        if (!sendScopeStillAlive()) {
+          recoverCapturedDraftForScopeExit();
+          return;
+        }
         queued = await prepareMobileQueuedSessionReferences(
           queuedDraft,
           invoke,
@@ -9141,25 +9145,25 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ]);
   }, [currentSession?.contextTokens, t]);
 
-  // Staging cannot rely on SET_MODEL reporting a window error: the actual switch
-  // runs on a later send. Reject a known pressured shrink before writing intent,
-  // and retain the legacy-host guard for unknown windows and Pi.
-  const canStageOrcaModelSelection = useCallback((
+  const canStageModelWindowSelection = useCallback((
     targetAgentKind: MobileSessionAgentKind,
     targetContextWindow: number | undefined,
     hostGuardSupported: boolean,
     relocates: boolean,
   ): boolean => {
-    // 换电脑是在新位置重建会话再交接，旧窗口带不过去，不做原地缩窗检查(与桌面同一口径)。
-    if (relocates || !orcaModelSelectionUsesIntent || targetAgentKind !== sessionAgentKind) return true;
+    if (relocates || targetAgentKind !== sessionAgentKind) return true;
     const contextTokens = currentSession?.contextTokens;
     const currentContextWindow = currentSession?.contextWindow;
-    const pressuredShrink =
+    const pressuredShrink = targetAgentKind !== 'codex' &&
       typeof contextTokens === 'number' && Number.isFinite(contextTokens) &&
       typeof targetContextWindow === 'number' && Number.isFinite(targetContextWindow) &&
       targetContextWindow > 0 && contextTokens / targetContextWindow >= 0.9 &&
       !(typeof currentContextWindow === 'number' && Number.isFinite(currentContextWindow) &&
         currentContextWindow > 0 && targetContextWindow >= currentContextWindow);
+    if (pressuredShrink && hostSupportsRemoteModelWindowRebuild) {
+      showTransientNotice(t('models.contextWindowSwitch.condensedToast'));
+      return true;
+    }
     if (pressuredShrink || shouldBlockLegacyRemoteModelWindowSwitch({
       hostGuardSupported, agentKind: targetAgentKind, contextTokens,
       currentContextWindow, targetContextWindow,
@@ -9168,8 +9172,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return false;
     }
     return true;
-  }, [orcaModelSelectionUsesIntent, sessionAgentKind, currentSession?.contextTokens,
-    currentSession?.contextWindow, showRemoteModelWindowUnsupported]);
+  }, [sessionAgentKind, currentSession?.contextTokens, currentSession?.contextWindow,
+    hostSupportsRemoteModelWindowRebuild, showRemoteModelWindowUnsupported, showTransientNotice, t]);
 
   const setComposerModel = useCallback(async (args: {
     model: string;
@@ -9178,16 +9182,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     selection?: { effort: string | null; fastMode: boolean | 'ultrafast' };
   }): Promise<boolean> => {
     if (!canConfigureSessionModel) return false;
-    if (shouldBlockLegacyRemoteModelWindowSwitch({
-      hostGuardSupported: modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
-      agentKind: sessionAgentKind,
-      contextTokens: currentSession?.contextTokens,
-      currentContextWindow: currentSession?.contextWindow,
-      targetContextWindow: args.targetContextWindow,
-    })) {
-      showRemoteModelWindowUnsupported(args.targetContextWindow);
-      return false;
-    }
+    if (!canStageModelWindowSelection(sessionAgentKind, args.targetContextWindow,
+      modelSheetCapabilities?.supportsModelWindowSwitchGuard === true, false)) return false;
     try {
       await maker.setModel(sessionId, args.model, args.providerId, args.selection);
       return true;
@@ -9207,8 +9203,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
   }, [
     canConfigureSessionModel,
-    currentSession?.contextTokens,
-    currentSession?.contextWindow,
+    canStageModelWindowSelection,
     maker,
     modelSheetCapabilities?.supportsModelWindowSwitchGuard,
     sessionAgentKind,
@@ -9234,20 +9229,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? { effort: next.effort || null, fastMode: next.fastMode }
       : undefined;
     void (async () => {
-      // 这份列表只有被控电脑的目录:Agent 在另一台电脑运行时,选中 = 改回被控电脑运行(先确认)。
-      const location = await confirmAgentLocationForPick({
+      // 这份列表只有被控电脑的目录:Agent 在另一台电脑运行时,选中 = 改回被控电脑运行。
+      const location = resolveAgentLocationPick({
         movable: agentLocationMovable,
         session: currentSession,
-        intent: agentSwitchIntent,
-        sourceAgentKind: sessionAgentKind,
-        targetAgentKind: modelSheetAgentKind,
         catalogDeviceId: null,
-        deviceName: remoteAgentDeviceName,
-        hostName: controlledComputerName,
       });
       if (!location) return;
-      if (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || location.agentDeviceId !== undefined) {
-        if (!canStageOrcaModelSelection(modelSheetAgentKind, row.model.contextWindow,
+      if (modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || location.agentDeviceId !== undefined) {
+        if (!canStageModelWindowSelection(modelSheetAgentKind, row.model.contextWindow,
           modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
           location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
@@ -9292,15 +9282,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     agentLocationMovable,
     agentSwitchIntent,
     canUseRemoteSessionControls,
-    controlledComputerName,
     currentSession,
     maker,
     modelSheetAgentKind,
     modelSheetCapabilities,
     modelSheetSelection,
+    modelSelectionUsesWindowIntent,
     orcaModelSelectionUsesIntent,
-    canStageOrcaModelSelection,
-    remoteAgentDeviceName,
+    canStageModelWindowSelection,
     runControlAction,
     sessionAgentKind,
     sessionId,
@@ -9325,33 +9314,25 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       await loadComposerAgentCapabilities(config.agent, catalogDeviceId));
     if (!targetCapabilities || deviceIdRef.current !== deviceId) return false;
     if (config.fast && (!capability.supportsFastMode || !targetCapabilities.hasFastMode)) return false;
-    // 与任务当前所在电脑不同 = 连 Agent 的运行位置一起换(先确认,下一条消息生效);
+    // 与任务当前所在电脑不同 = 连 Agent 的运行位置一起换(下一条消息生效);
     // 同一台电脑内换模型直接切。
-    const location = await confirmAgentLocationForPick({
+    const location = resolveAgentLocationPick({
       movable: agentLocationMovable,
       session: currentSession,
-      intent: agentSwitchIntent,
-      sourceAgentKind: sessionAgentKind,
-      targetAgentKind: config.agent,
       catalogDeviceId,
-      deviceName: remoteAgentDeviceName,
-      hostName: controlledComputerName,
     });
-    if (!location || deviceIdRef.current !== deviceId) return false;
+    if (!location) return false;
     const relocates = location.agentDeviceId !== undefined;
     if (config.agent !== sessionAgentKind) {
       if (!sessionAgentSwitchSupported) return false;
-      // 换电脑与换引擎是同一份交接风险:换电脑那一步已经确认过,不再叠一层换引擎确认。
-      if (!relocates && agentSwitchIntent?.targetAgentKind !== config.agent && !(await confirmMobileSessionAgentSwitch(config.agent, !!agentSwitchIntent,
-          ))) return false;
       const applied = await writeSessionAgentSwitchIntent({targetAgentKind:config.agent,model:config.modelId,
         providerId:config.providerId,effort:config.effort,fastMode:config.fast,...location});
       if (applied) setModelSheetAgentKind(config.agent);
       return applied;
     }
-    if (relocates || orcaModelSelectionUsesIntent) {
+    if (relocates || modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent) {
       // 同引擎换电脑或 Orca 换模型均走下一条消息生效的切换意图。
-      if (!canStageOrcaModelSelection(config.agent, capability.contextWindow,
+      if (!canStageModelWindowSelection(config.agent, capability.contextWindow,
         targetCapabilities.supportsModelWindowSwitchGuard === true, relocates)) return false;
       const applied = await writeSessionAgentSwitchIntent({
         targetAgentKind: config.agent,
@@ -9380,7 +9361,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [canUseRemoteSessionControls,currentSession,controlBusy,composerDeviceProviders.providers,maker,
     sessionAgentKind,sessionAgentSwitchSupported,agentSwitchIntent,writeSessionAgentSwitchIntent,
     runControlAction,setComposerModel,sessionId,deviceId,agentLocationMovable,remoteAgentCatalogs,
-    remoteAgentDeviceName,controlledComputerName,orcaModelSelectionUsesIntent,canStageOrcaModelSelection,loadComposerAgentCapabilities]);
+    modelSelectionUsesWindowIntent,
+    orcaModelSelectionUsesIntent,canStageModelWindowSelection,loadComposerAgentCapabilities]);
 
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
@@ -9395,21 +9377,15 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ? { effort: next.effort || null, fastMode: next.fastMode }
       : undefined;
     void (async () => {
-      // 扁平目录同样是被控电脑的:Agent 在另一台电脑运行时,换模型 = 改回被控电脑运行(先确认,
-      // 不带来源 = 默认路由)。
-      const location = await confirmAgentLocationForPick({
+      // 扁平目录来自被控电脑，选中后 Agent 改回被控电脑运行，来源走默认路由。
+      const location = resolveAgentLocationPick({
         movable: agentLocationMovable,
         session: currentSession,
-        intent: agentSwitchIntent,
-        sourceAgentKind: sessionAgentKind,
-        targetAgentKind: sessionAgentKind,
         catalogDeviceId: null,
-        deviceName: remoteAgentDeviceName,
-        hostName: controlledComputerName,
       });
       if (!location) return;
-      if (location.agentDeviceId !== undefined || orcaModelSelectionUsesIntent) {
-        if (!canStageOrcaModelSelection(sessionAgentKind, option.contextWindow,
+      if (location.agentDeviceId !== undefined || modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent) {
+        if (!canStageModelWindowSelection(sessionAgentKind, option.contextWindow,
           modelSheetCapabilities?.supportsModelWindowSwitchGuard === true,
           location.agentDeviceId !== undefined)) return;
         await writeSessionAgentSwitchIntent({
@@ -9436,23 +9412,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         },
       );
     })();
-  }, [agentLocationMovable, agentSwitchIntent, canUseRemoteSessionControls, controlledComputerName, currentSession, modelSheetAgentKind, modelSheetCapabilities, modelSheetSelection?.effort, modelSheetSelection?.fastMode, orcaModelSelectionUsesIntent, remoteAgentDeviceName, runControlAction, sessionAgentKind, setComposerModel, writeSessionAgentSwitchIntent, canStageOrcaModelSelection]);
-  const browseComposerModelAgent = useCallback(async (next: MobileSessionAgentKind) => {
+  }, [agentLocationMovable, agentSwitchIntent, canUseRemoteSessionControls, currentSession, modelSheetAgentKind, modelSheetCapabilities, modelSheetSelection?.effort, modelSheetSelection?.fastMode, modelSelectionUsesWindowIntent, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, setComposerModel, writeSessionAgentSwitchIntent, canStageModelWindowSelection]);
+  const browseComposerModelAgent = useCallback((next: MobileSessionAgentKind) => {
     if (next === modelSheetAgentKind) return true;
-    if (next !== sessionAgentKind) {
-      if (!sessionAgentSwitchSupported) return false;
-      const confirmed = await confirmMobileSessionAgentSwitch(next, !!agentSwitchIntent);
-      if (!confirmed) return false;
-    }
+    if (next !== sessionAgentKind && !sessionAgentSwitchSupported) return false;
     setModelSheetAgentKind(next);
     return true;
-  }, [agentSwitchIntent, modelSheetAgentKind, sessionAgentKind, sessionAgentSwitchSupported]);
+  }, [modelSheetAgentKind, sessionAgentKind, sessionAgentSwitchSupported]);
   const changeComposerSelectedEffort = useCallback((effort: string) => {
     if (!canConfigureSessionModel) return;
     // 跨引擎、换位置或 Orca 同引擎 intent:改 intent 本身(保留已有位置),
     // 否则 setEffort 的值会在发送时被 intent 里的旧值盖回。
     if (
-      (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || intentChangesAgentLocation(agentSwitchIntent))
+      (modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || intentChangesAgentLocation(agentSwitchIntent))
       && agentSwitchIntent?.targetAgentKind === modelSheetAgentKind
     ) {
       void writeSessionAgentSwitchIntent({ ...agentSwitchIntent, effort });
@@ -9461,11 +9433,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (modelSheetAgentKind === sessionAgentKind) {
       void runControlAction(() => maker.setEffort(sessionId, effort), { effort });
     }
-  }, [agentSwitchIntent, canConfigureSessionModel, maker, modelSheetAgentKind, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, sessionId, writeSessionAgentSwitchIntent]);
+  }, [agentSwitchIntent, canConfigureSessionModel, maker, modelSheetAgentKind, modelSelectionUsesWindowIntent, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, sessionId, writeSessionAgentSwitchIntent]);
   const changeComposerSelectedFastMode = useCallback((enabled: boolean) => {
     if (!canConfigureSessionModel) return;
     if (
-      (orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || intentChangesAgentLocation(agentSwitchIntent))
+      (modelSelectionUsesWindowIntent || orcaModelSelectionUsesIntent || modelSheetAgentKind !== sessionAgentKind || intentChangesAgentLocation(agentSwitchIntent))
       && agentSwitchIntent?.targetAgentKind === modelSheetAgentKind
     ) {
       void writeSessionAgentSwitchIntent({ ...agentSwitchIntent, fastMode: enabled });
@@ -9474,7 +9446,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (modelSheetAgentKind === sessionAgentKind) {
       void runControlAction(() => maker.setFastMode(sessionId, enabled), { fastMode: enabled });
     }
-  }, [agentSwitchIntent, canConfigureSessionModel, maker, modelSheetAgentKind, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, sessionId, writeSessionAgentSwitchIntent]);
+  }, [agentSwitchIntent, canConfigureSessionModel, maker, modelSheetAgentKind, modelSelectionUsesWindowIntent, orcaModelSelectionUsesIntent, runControlAction, sessionAgentKind, sessionId, writeSessionAgentSwitchIntent]);
   const toggleComposerModelPicker = useCallback(() => {
     if (!canConfigureSessionModel) {
       setModelSheetOpen(false);
@@ -10165,7 +10137,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const openSessionLink = useCallback((url: string) => {
     const target = parseSessionDeepLinkUrl(url);
     if (!target) return;
-    if (target.sessionId === sessionId) {
+    const sharedPeer = isSharedTaskPeer(target.deviceId) ? target.deviceId : null;
+    if (target.sessionId === sessionId && (!sharedPeer || sharedPeer === deviceId)) {
       if (target.messageClientId) {
         router.setParams({
           focusClientId: target.messageClientId,
@@ -10176,7 +10149,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
     // 设备口径与 devices/index openSession 一致:可达优先(canonical → 物理 → 注册表);
     // 列表里没有的(已归档 / 尚未同步)退回深链冻结设备、当前任务所在设备。
-    const targetSession = remoteSessionStore.getSessions().find((item) => item.id === target.sessionId);
+    const targetSession = remoteSessionStore.getSessions().find((item) =>
+      item.id === target.sessionId && (!sharedPeer || item.deviceLinkDeviceId === sharedPeer));
     const targetDeviceId = resolveSessionLinkDeviceId({
       listedDeviceId: targetSession?.canonicalDeviceId
         ?? targetSession?.deviceLinkDeviceId
@@ -10195,7 +10169,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         deviceId: targetDeviceId,
         deviceName: targetSession?.deviceLinkDeviceName
           ?? (targetDeviceId === deviceId ? deviceName : undefined)
-          ?? targetDeviceId,
+          ?? (sharedPeer ? t('sharedTask.hostDevice') : targetDeviceId),
         ...(target.messageClientId
           ? {
               focusClientId: target.messageClientId,
@@ -10216,7 +10190,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const resolvePastedSessionLinkLabel = useCallback(async (href: string) => {
     const target = parseSessionDeepLinkUrl(href);
     if (!target) return null;
-    const targetSession = remoteSessionStore.getSessions().find((item) => item.id === target.sessionId);
+    const sharedPeer = isSharedTaskPeer(target.deviceId) ? target.deviceId : null;
+    const targetSession = remoteSessionStore.getSessions().find((item) =>
+      item.id === target.sessionId && (!sharedPeer || item.deviceLinkDeviceId === sharedPeer));
     const targetDeviceId = resolveSessionLinkDeviceId({
       listedDeviceId: targetSession?.canonicalDeviceId
         ?? targetSession?.deviceLinkDeviceId
@@ -10376,6 +10352,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     }
   }, [applyComposerDocument, deviceId, maker, messageActionBusy, requestSync, rewindState, sessionId]);
 
+  const pinPermissionActions = activePendingKind === 'permission' && !activePendingCollapsed;
+  const expandedPendingSurface = pendingInteractionFullHeight && activePendingKind !== 'issue_confirm';
   const pendingInteractionDock = sessionOperationLayout.composerSlot === 'pending-interaction';
   const dockKeyboardFollow = Platform.OS === 'ios' && composerDock.enabled && nativeComposerFrameAvailable
     && adaptiveWindow.regions.length === 0
@@ -10893,6 +10871,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   remote: {
                     catalogs: modelSheetRemoteCatalogs,
                     selectedDeviceId: nextAgentDeviceId,
+                    hostDeviceName: controlledComputerName,
                     // 供应商组:组里其他电脑收进组那一项;归组的任务在组那一项里选模型留在此刻运行的那台。
                     hostDeviceId: deviceId,
                     providerGroup: remoteProviderGroup,
@@ -11274,6 +11253,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             adaptiveWindow.regions.length > 0 && {
               maxHeight: composerRegion.height,
             },
+            // Bound the whole dock, including the goal bar above the permission card.
+            pendingInteractionDock && pinPermissionActions && {
+              maxHeight: Math.max(0, composerRegion.y + composerRegion.height
+                - Math.max(composerRegion.y, topChromeHeight + spacing.sm)),
+            },
             nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
               && styles.sessionBottomFloating,
             shareSelectionActive && { overflow: 'visible' },
@@ -11298,6 +11282,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             pointerEvents="box-none"
             style={[
               styles.sessionBottomContent,
+              pendingInteractionDock && pinPermissionActions && styles.shrinkToDock,
               // 待处理面板把 safe-area 收进自身 root，让问答 surface 延伸到
               // 屏幕底部且内容仍避开 home indicator；composer 继续由外层留 inset。
               {
@@ -11409,7 +11394,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             <View
               style={[
                 styles.pendingInteractionSurface,
-                pendingInteractionFullHeight && activePendingKind !== 'issue_confirm'
+                pinPermissionActions && styles.shrinkToDock,
+                expandedPendingSurface
                   ? {
                     height: Math.min(nativeShellLayout.pendingSurfaceExpandedHeight, composerRegion.height),
                     maxHeight: Math.min(nativeShellLayout.pendingSurfaceExpandedHeight, composerRegion.height),
@@ -11418,13 +11404,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               ]}
               testID="interaction.bottomSurface"
             >
-              {pendingInteractionFullHeight ? (
+              {pendingInteractionFullHeight || pinPermissionActions ? (
                 <View
                   style={[
                     styles.pendingInteractionFullContent,
                     // The native control region can be shorter than the screen-derived
                     // sheet height. Keep the pinned footer inside that clipping boundary.
-                    activePendingKind === 'issue_confirm'
+                    !expandedPendingSurface
                       ? { flexGrow: 0, flexShrink: 1, maxHeight: Math.min(nativeShellLayout.pendingSurfaceMaxHeight, composerRegion.height) }
                       : { height: Math.min(nativeShellLayout.pendingSurfaceExpandedHeight, composerRegion.height) },
                   ]}
@@ -11437,7 +11423,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     safeAreaBottomInset={insets.bottom}
                     collapse={pendingInteractionCollapse}
                     deviceId={deviceId}
-                    fillAvailableHeight={activePendingKind !== 'issue_confirm'}
+                    fillAvailableHeight={expandedPendingSurface}
+                    pinPermissionActions={pinPermissionActions}
                     sessionId={sessionId}
                     interactions={pending}
                     activeRequestId={pendingInteractionActiveRequestId}
@@ -13768,6 +13755,7 @@ function ComposerActivityStatus({
         startedAt={samplerStartedAt}
         history={rateHistory}
         outputTokens={outputTokens}
+        totalOutputTokens={tokenSpeed?.totalOutputTokens}
         generationDurationMs={generationDurationMs}
         generationReliable={generationReliable && !showElapsedOnly}
         label={showUsageMeta ? `${elapsedText} · ${rateText ?? tokenA11yText}` : elapsedText}
@@ -14199,6 +14187,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexShrink: 0,
     maxHeight: '62%',
   },
+  shrinkToDock: { flexShrink: 1, minHeight: 0 },
   pendingInteractionFullContent: {
     flexGrow: 1,
     minHeight: 0,

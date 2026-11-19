@@ -638,6 +638,8 @@ export interface BotGroupSummary {
    * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
    */
   singleSpeaker?: boolean;
+  /** Ordinary group messages start independent replies, including while a legacy plan is open. */
+  independentReplies?: boolean;
   /** A single-speaker group whose computer arranges 「安排分工」 (older computers answered it as a queue). */
   supportsDivision?: boolean;
   selfActorId?: string;
@@ -988,6 +990,11 @@ export function isChatOnlyGroupLane(routeKey: string | null | undefined): boolea
   return /^group:[^:]+:access:chat:[1-9][0-9]*(?::mask:[^:]+)?(?::plan:[^:]+|:thread:[^:]+|:talk:[^:]+|:personal-digest)?$/.test(routeKey ?? '');
 }
 
+/** Only an explicit member mask can use a tools grant in a group. */
+export function groupLaneUsesChatWorkspace(routeKey: string): boolean {
+  return isChatOnlyGroupLane(routeKey) || /^group:[^:]+:access:tools:[1-9][0-9]*(?::(?:plan|thread|talk):[^:]+|:personal-digest)?$/.test(routeKey);
+}
+
 /**
  * A queue's own lane (bot-group-chat.md §7.0): one hidden Session per queue, grant and teammate,
  * so each turn reads only its card. It talks in the group lane's place, never a project folder.
@@ -1036,7 +1043,7 @@ export function parseBotGroupIdFromRouteKey(routeKey: string | null | undefined)
 
 /** Plan id of a 分工 Session route key, or null for lanes and other routes. */
 export function parseBotGroupPlanRouteKey(routeKey: string | null | undefined): { groupId: string; planId: string } | null {
-  const match = typeof routeKey === 'string' ? /^group:([^:]+)(?::access:(?:owner|tools|chat):[1-9][0-9]*)?:plan:([^:]+)$/.exec(routeKey) : null;
+  const match = typeof routeKey === 'string' ? /^group:([^:]+)(?::access:(?:owner|tools|chat):[1-9][0-9]*(?::mask:[^:]+)?)?:plan:([^:]+)$/.exec(routeKey) : null;
   return match ? { groupId: match[1]!, planId: match[2]! } : null;
 }
 

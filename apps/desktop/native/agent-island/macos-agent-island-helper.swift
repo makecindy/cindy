@@ -7534,8 +7534,9 @@ final class AgentIslandAppDelegate: NSObject, NSApplicationDelegate {
         }
         return
       }
-      let frames = message.frames ?? message.frame.map { [$0] } ?? []
-      guard message.type == "update", let state = message.state, !frames.isEmpty else {
+      // An explicit empty list closes panels when the selected display disconnects.
+      guard message.type == "update", let state = message.state,
+            let frames = message.frames ?? message.frame.map({ [$0] }) else {
         return
       }
       DispatchQueue.main.async { [controllerManager] in

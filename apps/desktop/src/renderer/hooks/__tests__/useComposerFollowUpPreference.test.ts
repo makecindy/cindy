@@ -4,11 +4,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 
 import {
-  COMPOSER_FOLLOW_UP_HINT_DISMISSED_STORAGE_KEY,
   COMPOSER_FOLLOW_UP_STORAGE_KEY as KEY,
   _resetComposerFollowUpPreferenceForTests,
   getComposerFollowUpBehavior,
-  useComposerFollowUpHintDismissed,
   useComposerFollowUpPreference,
 } from '../useComposerFollowUpPreference';
 
@@ -55,21 +53,5 @@ describe('useComposerFollowUpPreference', () => {
       window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: null }));
     });
     expect(result.current.preference).toBe('queue');
-  });
-
-  it('remembers a dismissed hint separately from the preference', () => {
-    const { result } = renderHook(() => ({
-      hint: useComposerFollowUpHintDismissed(),
-      preference: useComposerFollowUpPreference(),
-    }));
-    expect(result.current.hint.dismissed).toBe(false);
-
-    act(() => result.current.hint.dismiss());
-    expect(result.current.hint.dismissed).toBe(true);
-    expect(localStorage.getItem(COMPOSER_FOLLOW_UP_HINT_DISMISSED_STORAGE_KEY)).toBe('1');
-    expect(localStorage.getItem(KEY)).toBeNull();
-
-    _resetComposerFollowUpPreferenceForTests();
-    expect(renderHook(() => useComposerFollowUpHintDismissed()).result.current.dismissed).toBe(true);
   });
 });

@@ -300,7 +300,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     directory,
     readPoolScheduling: async (member, model, options) => {
       if (!isCurrent() || !hasPool(member.providerId, member.agentDeviceId ?? '') || member.kind === 'share') return null;
-      const route = JSON.stringify(['scheduling-v1', model, options.remote, options.ownComputer === true]);
+      const route = JSON.stringify(['scheduling-v1', model, options.remote, options.ownComputer === true, options.capability]);
       return readPoolRequest(member.agentDeviceId ?? '', member.providerId, route, async () => {
         if (member.kind === 'local') return readSubscriptionPoolScheduling(member.providerId, model, options);
         if (!member.agentDeviceId) return null;
@@ -308,7 +308,8 @@ function runtimeForActiveOwner(): OwnerRuntime {
         // Old peers receive no extra per-pick probes and never imply extra accounts.
         if (poolScheduling.get(JSON.stringify([member.agentDeviceId, member.providerId]))?.() !== true) return null;
         const result = await remoteBackgroundInvoke(member.agentDeviceId, 'maker:subscription-pool:quota',
-          [member.providerId, model, { scheduling: 1, ownComputer: options.ownComputer === true }], {
+          [member.providerId, model, { scheduling: 1, ownComputer: options.ownComputer === true,
+            ...(options.capability ? { capability: options.capability } : {}) }], {
             preSend: () => { if (!isCurrent()) throw new Error('provider group account changed'); },
           });
         if (!isCurrent() || !result.ok) return null;
