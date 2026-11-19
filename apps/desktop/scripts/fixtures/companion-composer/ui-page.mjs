@@ -207,6 +207,19 @@ export default {
       await ui.capture('swapped');
       await (await sendButton(other)).click();
       await sent(other + ':Fifth note');
+
+      // Swapping again restores the original default; the run ends on the resting tip.
+      await draft('Sixth note');
+      await (await sendButton(other)).hover();
+      await tip.waitFor();
+      await tip.getByRole('menuitem', {
+        name: await ui.t('newChat.sendDelivery.' + (mode === 'steer' ? 'switchToSteer' : 'switchToQueue')), exact: true,
+      }).click();
+      await page.waitForFunction(
+        (expected) => localStorage.getItem('chat.followUpBehavior') === expected, mode === 'steer' ? 'steer' : null);
+      await (await sendButton(mode)).hover();
+      await tip.locator('[data-row="default"][data-active]:not([data-note])').waitFor();
+      assert.equal(await tip.locator('[data-row="default"]').getAttribute('data-mode'), mode);
       return;
     }
     if (ui.data.recommendation) {
