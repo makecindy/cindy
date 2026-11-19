@@ -13,6 +13,10 @@ const state = vi.hoisted(() => ({
   userDataPath: '',
 }));
 
+vi.mock('../cli-proxy-bridge.js', () => ({
+  ensureCliProxyBridge: async () => 'http://127.0.0.1:9876',
+}));
+
 // Skill discovery is covered by managed-skills.test.ts, not this runtime/auth fixture.
 vi.mock('../managed-skills.js', () => ({
   listCindyManagedSkills: async () => [],
@@ -187,6 +191,27 @@ describe('buildPiAgent roster prompt assembly', () => {
     vi.restoreAllMocks();
     setXdGatewayModels([]);
     rmSync(root, { recursive: true, force: true });
+  });
+
+  // GUI launch has no shell proxy. The bridge transport tests cover PAC/CONNECT;
+  // this unit test checks the environment that actually reaches the Pi executable.
+  it.each([undefined, 'http://explicit.example:3128'])('starts Pi with the system or explicit HTTPS proxy (%s)', async explicit => {
+    for (const key of ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy']) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv('HTTPS_PROXY', explicit);
+    vi.stubEnv('NO_PROXY', 'intranet.example');
+    const agent = buildPiAgent({ logger });
+    const handle = await agent!.startSession({ sessionId: 'proxy-session', workingDir, model: 'm' });
+    try {
+      expect(state.env.HTTPS_PROXY).toBe(explicit ?? 'http://127.0.0.1:9876');
+      if (!explicit) expect(state.env.https_proxy).toBe(state.env.HTTPS_PROXY);
+      expect(state.env.NO_PROXY?.split(',')).toEqual(expect.arrayContaining(['intranet.example', 'localhost', '127.0.0.1', '::1']));
+      expect(state.env.HTTP_PROXY).toBeUndefined();
+      expect(process.env.HTTPS_PROXY).toBe(explicit);
+    } finally {
+      await handle.close();
+    }
   });
 
   it.each(['default', 'override', 'tilde'])('forwards roster and %s user context through real PiAgent startup', async (source) => {

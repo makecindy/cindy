@@ -5851,6 +5851,13 @@ export class PiAgent extends BaseAgent {
         if (taskSystemPrompt) promptHash.update('\0task\0').update(taskSystemPrompt);
         spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = promptHash.digest('hex').slice(0, 16);
       }
+      if (!remote && this.deps.getLocalPiHttpsProxy) {
+        const proxy = await this.deps.getLocalPiHttpsProxy(spawnEnv);
+        if (proxy) {
+          spawnEnv.HTTPS_PROXY = proxy;
+          spawnEnv.https_proxy = proxy;
+        }
+      }
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
       const initialHostProxyForward = nativeProviderById.get(initialProvider)?.hostProxyForward;

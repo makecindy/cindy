@@ -36,7 +36,7 @@ vi.mock('@cindy/anthropic-compat-proxy', async (original) => ({
   ...(await original<typeof import('@cindy/anthropic-compat-proxy')>()),
   hasProxyEnvConfig: () => h.envProxy,
 }));
-vi.mock('../claude-cli-proxy-bridge.js', () => ({ ensureClaudeCliProxyBridge: h.bridge }));
+vi.mock('../cli-proxy-bridge.js', () => ({ ensureCliProxyBridge: h.bridge }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
 vi.mock('node:worker_threads', () => ({
   Worker: class extends EventEmitter {
