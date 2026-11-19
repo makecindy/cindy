@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import i18n from '@/i18n';
+import { commitEditAndResendWithRunningRetry } from '@/lib/editLastUserMessage';
 import HookTaskCard from '@/components/chat/HookTaskCard';
 import { UserMessage } from '@/components/chat/UserMessage';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -18,6 +19,11 @@ import { createPluginRelayImSource } from '../../shared/imMessageSource';
 
 // Keep the real Collapse component; reduced motion makes mounting deterministic.
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
+
+vi.mock('@/lib/editLastUserMessage', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/editLastUserMessage')>(),
+  commitEditAndResendWithRunningRetry: vi.fn(async () => true),
+}));
 
 // Only replace the host preview request; the message, action bar and edit box stay real.
 vi.mock('@/lib/sessionService', async (importOriginal) => ({
@@ -49,6 +55,64 @@ describe('HookTaskCard attached context', () => {
       />,
     );
     expect(screen.getByText('Alex · 来自 iMessage 私聊')).toBeTruthy();
+  });
+
+  it('projects only paragraph-wrapped Feishu/Lark text and keeps literal native input', () => {
+    const content = '<p>演示 &amp; &lt;p&gt;<br>第二行 <strong>正文</strong><script>隐藏内容</script></p>';
+    expect(resolveUserDisplayText({ content })).toBe(content);
+    expect(resolveUserDisplayText({ content, hookSource: { im: 'slack' } })).toBe(content);
+    expect(resolveUserDisplayText({ content, hookSource: { im: 'lark' } })).toBe('演示 & <p>\n第二行 正文');
+    const plain = '查看 <p> 的用途';
+    expect(resolveUserDisplayText({ content: plain, hookSource: { im: 'feishu' } })).toBe(plain);
+  });
+
+  it('keeps the saved Feishu quote attribution, attachment note and count', () => {
+    render(<HookTaskCard im="feishu" userText="演示问题"
+      replyContext={'[演示成员] 2026-11-19 00:00 UTC <p>第一行<br>第二行</p>\n(被引消息的 1 个附件已随本轮一并提供)'}
+      replyMessageCount={1} />);
+    const toggle = screen.getByRole('button', { name: '本条附带的上下文（1）' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    const quote = screen.getByRole('region', { name: '引用消息（1）' });
+    expect(quote.textContent).toContain('[演示成员] 2026-11-19 00:00 UTC 第一行\n第二行\n(被引消息的 1 个附件已随本轮一并提供)');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it.each(['feishu', 'lark'])('projects saved rich context for %s without changing its attribution or file contents', (im) => {
+    const groupContext = [
+      '[… 更早的消息已省略 …]',
+      '[林] 11-19 09:12 <p>历史 &amp; 备注</p><p>第二段</p> [文件: 样例.pdf]',
+      '[陈] 2025-11-19 09:13 (UTC+08:00) <p>下一条历史</p> [图片]',
+      '[周] 11-19 09:14 <p>一条很长的消息[…已截断]',
+      '[历史消息 fixture，文件 example.html 的内容]',
+      '[示例] 11-19 10:00 <p>文件原文</p>',
+    ].join('\n');
+    const replyContext = [
+      '[林] [时间未知] [合并转发消息]',
+      '[陈] <p>内层<br>第一条</p>',
+      '[图片]',
+      '[周] <p>内层第二条</p>',
+      '[文件: 样例.pdf]',
+      '(被引消息的 2 个附件已随本轮一并提供)',
+    ].join('\n');
+    render(<HookTaskCard im={im} userText="演示请求"
+      groupContext={groupContext} groupMessageCount={3} replyContext={replyContext} replyMessageCount={1} />);
+    fireEvent.click(screen.getByRole('button', { name: '本条附带的上下文（4）' }));
+    const replies = screen.getByRole('region', { name: '引用消息（1）' });
+    expect(replies.textContent).toContain(replyContext.replace('<p>内层<br>第一条</p>', '内层\n第一条').replace('<p>内层第二条</p>', '内层第二条'));
+    const group = screen.getByRole('region', { name: '群聊背景（3）' });
+    expect(group.textContent).toContain('[林] 11-19 09:12 历史 & 备注\n\n第二段 [文件: 样例.pdf]');
+    expect(group.textContent).toContain('[陈] 2025-11-19 09:13 (UTC+08:00) 下一条历史 [图片]');
+    expect(group.textContent).toContain('[周] 11-19 09:14 一条很长的消息[…已截断]');
+    expect(group.textContent).toContain('[示例] 11-19 10:00 <p>文件原文</p>');
+  });
+
+  it('preserves literal HTML examples from another IM channel', () => {
+    const context = '[演示成员] 11-19 09:12 <p>字面段落</p>';
+    render(<HookTaskCard im="slack" userText="演示请求" groupContext={context} groupMessageCount={1} />);
+    fireEvent.click(screen.getByRole('button', { name: '本条附带的上下文（1）' }));
+    expect(screen.getByRole('region').textContent).toContain(context);
   });
 
   it.each(['telegram', 'feishu', 'slack', 'discord', 'wechat', 'wecom', 'dingtalk', 'x', 'future'])(
@@ -238,6 +302,7 @@ describe('HookTaskCard attached context', () => {
         ['x', 'X'],
         ['discord', 'Discord'],
         ['lark', 'Lark'],
+        ['imessage', 'iMessage'],
         ['feishu', feishu],
         ['wechat', wechat],
         ['wecom', wecom],
@@ -346,26 +411,29 @@ describe('HookTaskCard attached context', () => {
   // Existing card/edit-box tests mount those children separately and miss this transition.
   // Minimal unit input: the last, non-first user-text IM message in an idle task.
   // Standalone file: 6.69s Vitest / 7.64s command wall, including real message/editor imports.
-  it('opens the real inline editor from a clean IM message action', async () => {
+  it.each([
+    ['slack', 'Slack', 'Please check the error'],
+    ['feishu', '飞书', '<p>Please check the error</p>'],
+  ])('opens the inline editor for %s and preserves the wire text on unchanged resend', async (im, channel, sourceText) => {
     render(
       <MemoryRouter>
         <ConfirmDialogProvider>
           <Tooltip.Provider>
             <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
-              content="Please check the error"
+              content={sourceText}
               workingDir=""
               sessionId="clean-im-edit-session"
               messageClientId="clean-im-edit-message"
               isFirstUserMessage={false}
               isLastUserMessage
               sessionRunning={false}
-              hookSource={{ im: 'slack', contentFormat: 'user-text', userText: 'Please check the error' }}
+              hookSource={{ im, contentFormat: 'user-text', userText: sourceText }}
             />
           </Tooltip.Provider>
         </ConfirmDialogProvider>
       </MemoryRouter>,
     );
-    expect(screen.getByText('Cindy · 来自 Slack')).toBeTruthy();
+    expect(screen.getByText(`Cindy · 来自 ${channel}`)).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
     fireEvent.mouseEnter(screen.getByText('Please check the error').closest('[data-user-msg-id]')!);
     await act(async () => {
@@ -373,6 +441,10 @@ describe('HookTaskCard attached context', () => {
     });
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Please check the error');
     expect(screen.getByRole('button', { name: i18n.t('chat.userMessage.editCancel') })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.userMessage.editSend') }));
+    });
+    expect(commitEditAndResendWithRunningRetry).toHaveBeenLastCalledWith(expect.objectContaining({ text: sourceText }));
   });
 
   // Value: real UserMessage with the card view model the store derives from a plugin relay
