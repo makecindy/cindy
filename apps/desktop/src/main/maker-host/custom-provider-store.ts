@@ -256,6 +256,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
         !['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) || typeof value !== 'number' || !Number.isFinite(value) || value < 0)
     )) return invalid(`runtime '${agent}' discoveredCost invalid`);
     if (mm.opaqueModelId !== undefined && mm.opaqueModelId !== true) return invalid(`runtime '${agent}' opaqueModelId invalid`);
+    if (mm.listedUpstream !== undefined && mm.listedUpstream !== true) return invalid(`runtime '${agent}' listedUpstream invalid`);
     if (mm.discoveredSource !== undefined && !validDiscoveredModelSource(mm.discoveredSource)) return invalid(`runtime '${agent}' discoveredSource invalid`);
     if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
       return invalid(`runtime '${agent}' discoveredMetadata invalid`);
@@ -601,6 +602,7 @@ function normalizeRuntime(
       ...pickModelMetadata({ ...m, name: m.name.trim() }),
       ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
       ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
+      ...(m.listedUpstream === true ? { listedUpstream: true as const } : {}),
       ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
       ...(typeof m.supportsUltrafastMode === 'boolean'
         ? { supportsUltrafastMode: m.supportsUltrafastMode } : {}),
@@ -730,7 +732,9 @@ function invalidateEditedProviderMetadata(
       JSON.stringify([runtime.baseUrl, runtime.modelsUrl, runtime.headers, runtime.wireProtocol, runtime.requestPath,
         auth?.method === 'apiKey' || !auth ? null : auth]);
     if (context(before, previous.auth) !== context(after, next.auth)) {
-      after.models = after.models.map(({ discoveredSource: _source, ...model }) => model);
+      // A different endpoint is a different catalog: drop source receipts and the
+      // #11298 upstream-listing marker so its absences are never offered as withdrawals.
+      after.models = after.models.map(({ discoveredSource: _source, listedUpstream: _listed, ...model }) => model);
     }
     after.models = after.models.map(model => {
       const old = before.models.find(row => row.id === model.id);
@@ -754,11 +758,18 @@ function invalidateEditedProviderMetadata(
   )
     return next;
   const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
+  // Removing some models (e.g. confirmed withdrawals, #11298) leaves the remaining
+  // catalog-backed rows untouched; official metadata is looked up per remaining ID.
+  // Replacements, additions alongside removals and emptying the list still clear it.
+  const previousPiIds = new Set(previousPi.models.map((model) => model.id));
+  const nextPiIds = new Set(nextPi.models.map((model) => model.id));
+  const onlyRemoved = nextPiIds.size > 0 && [...nextPiIds].every((id) => previousPiIds.has(id))
+    && preservesPiCatalogModels(previousPi.models.filter((model) => nextPiIds.has(model.id)), nextPi.models);
   const unchanged =
     normalizeBaseUrl(previousPi.baseUrl) === normalizeBaseUrl(nextPi.baseUrl) &&
     effectivePiWireProtocol(previousPi.wireProtocol) ===
       effectivePiWireProtocol(nextPi.wireProtocol) &&
-    preservesPiCatalogModels(previousPi.models, nextPi.models);
+    (preservesPiCatalogModels(previousPi.models, nextPi.models) || onlyRemoved);
   if (unchanged) return next;
   const pi = { ...nextPi };
   delete pi.piCatalogProviderId;
@@ -866,6 +877,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
                   ['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0)) }
                 : {}),
               ...(m.opaqueModelId === true ? { opaqueModelId: true as const } : {}),
+              ...(m.listedUpstream === true ? { listedUpstream: true as const } : {}),
               ...(validDiscoveredModelSource(m.discoveredSource) ? { discoveredSource: m.discoveredSource } : {}),
               ...(validModelMetadata(m.discoveredMetadata)
                 ? { discoveredMetadata: m.discoveredMetadata }

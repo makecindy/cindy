@@ -78,10 +78,15 @@ import {
   appendDiscoveredCustomProviderModels,
   deleteCustomProvider,
   fetchCustomProviderModelsForRefresh,
+  findWithdrawnCustomProviderModels,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
+  removeCustomProviderModels,
   updateCustomProvider,
 } from '@/lib/customProviders';
+import { resetModelVisibilities } from '@/state/modelVisibilityPrefs';
+import { WithdrawnModelsDialog, type WithdrawnModelsReview } from './WithdrawnModelsDialog';
+import { createLogger } from '@/lib/logger';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
@@ -449,6 +454,13 @@ function BetaTag({ label }: { label: string }) {
 // 详情头部 —— avatar + 标题(+计数/订阅/自定义 tag)/副标题 + 右侧鉴权操作区。
 // (重构前的 ProviderCell 去掉展开逻辑;模型列表由详情容器统一渲染。)
 // ---------------------------------------------------------------------------
+
+const withdrawnLog = createLogger('ProvidersWithdrawnModels');
+/** A withdrawn-model review belongs to the account snapshot that produced it. */
+type WithdrawnModelsOwnedReview = WithdrawnModelsReview & {
+  dataOwnerId: string | null;
+  ownerGeneration: number | null;
+};
 
 type ProviderOwnerScope = { dataOwnerId: string | null; ownerGeneration: number };
 function supportsBuiltinConnectionManagement(provider: ProviderView): boolean {
@@ -2768,6 +2780,11 @@ export function ProvidersSection() {
     refreshingProviderIdRef.current = null;
     setRefreshingProviderId(null);
   }, []);
+  // #11298: models a complete refresh no longer found upstream, awaiting the user's choice.
+  const [withdrawnReview, setWithdrawnReview] = useState<WithdrawnModelsOwnedReview | null>(null);
+  const [removingWithdrawn, setRemovingWithdrawn] = useState(false);
+  // A newer refresh supersedes the previous prompt; its list may already be stale.
+  const withdrawnToastIdRef = useRef<string | null>(null);
 
   // 进入「模型供应商」页时只上报一个静默刷新提示。是否真正访问上游由 Main
   // 根据连接状态、30 分钟冷却和全局 in-flight 决定，失败不打扰用户。
@@ -3188,11 +3205,19 @@ export function ProvidersSection() {
   const handleRefreshModels = useCallback(
     async (p: ProviderView) => {
       if (!beginProviderRefresh(p.id)) return;
+      if (withdrawnToastIdRef.current) toast.dismiss(withdrawnToastIdRef.current);
+      withdrawnToastIdRef.current = null;
+      setWithdrawnReview(null);
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
         let failureCode: ProviderErrorCode | undefined;
         const refreshedAgents = new Set<AgentKind>();
+        // Withdrawal is only judged for API key connections when every configured runtime
+        // returned a complete catalog; OAuth discovery stays additions-only.
+        let catalogsComplete = p.auth.method === 'apiKey';
+        let withdrawnSuspicious = false;
+        const withdrawn = new Map<string, { id: string; name: string; agents: AgentKind[] }>();
         const batch = await fetchCustomProviderModelsForRefresh(p, config);
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
@@ -3215,6 +3240,7 @@ export function ProvidersSection() {
             // Prefer actionable authentication recovery when every runtime fails.
             // Partial success still follows the existing merge/save path below.
             if (!failureCode || failureCode === 'UNKNOWN' || r.code === 'AUTH_INVALID') failureCode = r.code;
+            catalogsComplete = false;
             continue;
           }
           if (p.auth.native) {
@@ -3233,6 +3259,17 @@ export function ProvidersSection() {
           );
           rt.models = merged.models;
           added += merged.addedIds.length;
+          if (r.complete !== true) {
+            catalogsComplete = false;
+          } else {
+            const result = findWithdrawnCustomProviderModels(merged.models, r.models);
+            withdrawnSuspicious ||= result.suspicious;
+            for (const model of result.withdrawn) {
+              const entry = withdrawn.get(model.id);
+              if (entry) entry.agents.push(agent);
+              else withdrawn.set(model.id, { id: model.id, name: model.name || model.id, agents: [agent] });
+            }
+          }
         }
         if (!refreshedAgents.size) {
           toast.error(t(failureCode === 'AUTH_INVALID' && p.auth.method === 'oauth'
@@ -3254,7 +3291,33 @@ export function ProvidersSection() {
           return result;
         });
         if (!saved) return;
-        if (speechReferenceAdded) {
+        if (catalogsComplete && withdrawn.size > 0) {
+          const review: WithdrawnModelsOwnedReview = {
+            providerId: p.id,
+            providerName: providerDisplayName(p, t),
+            models: [...withdrawn.values()],
+            suspicious: withdrawnSuspicious,
+            dataOwnerId,
+            ownerGeneration,
+          };
+          if (speechReferenceAdded) toast.success(t('settings.providers.models.refreshSpeechAdded'));
+          withdrawnToastIdRef.current = toast.info(
+            withdrawnSuspicious
+              ? added > 0
+                ? t('settings.providers.models.withdrawn.refreshAddedSuspicious', { added, count: withdrawn.size })
+                : t('settings.providers.models.withdrawn.refreshSuspicious', { count: withdrawn.size })
+              : added > 0
+                ? t('settings.providers.models.withdrawn.refreshAdded', { added, count: withdrawn.size })
+                : t('settings.providers.models.withdrawn.refreshFound', { count: withdrawn.size }),
+            {
+              duration: 10_000,
+              action: {
+                label: t('settings.providers.models.withdrawn.review'),
+                onClick: () => setWithdrawnReview(review),
+              },
+            },
+          );
+        } else if (speechReferenceAdded) {
           toast.success(t('settings.providers.models.refreshSpeechAdded'));
         } else if (added > 0) {
           toast.success(t('settings.providers.models.refreshAdded', { count: added }));
@@ -3268,7 +3331,65 @@ export function ProvidersSection() {
         finishProviderRefresh(p.id);
       }
     },
-    [beginProviderRefresh, confirmProviderChange, finishProviderRefresh, refetch, t],
+    [beginProviderRefresh, confirmProviderChange, dataOwnerId, finishProviderRefresh, ownerGeneration, refetch, t],
+  );
+
+  /**
+   * Remove the user-confirmed withdrawn models from every runtime in one save, then
+   * clear their per-model visibility and disable choices so a model that returns
+   * later follows defaults instead of a stale hidden/disabled state.
+   */
+  const removeWithdrawnModels = useCallback(
+    async (modelIds: string[]) => {
+      const review = withdrawnReview;
+      // A refresh in flight will save a newer model list; never race it with this snapshot.
+      if (!review || removingWithdrawn || refreshingProviderIdRef.current === review.providerId) return;
+      const provider = providers.find((candidate) => candidate.id === review.providerId);
+      if (!provider || review.dataOwnerId !== dataOwnerId || review.ownerGeneration !== ownerGeneration) {
+        setWithdrawnReview(null);
+        toast.error(t('settings.providers.models.withdrawn.removeFailed'));
+        return;
+      }
+      setRemovingWithdrawn(true);
+      try {
+        const chosen = new Set(modelIds);
+        const { config, removed, goneIds } = removeCustomProviderModels(
+          providerViewToCustomProviderConfig(provider),
+          review.models.filter((model) => chosen.has(model.id))
+            .flatMap((model) => model.agents.map((agent) => ({ agent, modelId: model.id }))),
+        );
+        if (removed.length === 0) {
+          setWithdrawnReview(null);
+          return;
+        }
+        const saved = await confirmProviderChange((options) => updateCustomProvider(config, {}, options));
+        if (!saved) return;
+        const removedIds = [...new Set(removed.map(({ modelId }) => modelId))];
+        // Visibility is per runtime; the disable choice is provider-wide, so only clear
+        // it for models no runtime still offers.
+        const cleanup = await Promise.allSettled([
+          resetModelVisibilities(provider.id, removed),
+          ...(goneIds.length ? [window.electronAPI.maker.setModelDisable({
+            kind: 'model', providerId: provider.id, modelIds: goneIds, disabled: false,
+          })] : []),
+        ]);
+        const cleanupIncomplete = cleanup.some((result) => result.status === 'rejected' || result.value === false);
+        setWithdrawnReview(null);
+        if (cleanupIncomplete) {
+          withdrawnLog.warn('withdrawn model settings cleanup incomplete', { count: removedIds.length });
+          toast.warning(t('settings.providers.models.withdrawn.cleanupIncomplete', { count: removedIds.length }));
+        } else {
+          toast.success(t('settings.providers.models.withdrawn.removed', { count: removedIds.length }));
+        }
+        refetch();
+      } catch (error) {
+        withdrawnLog.warn('withdrawn model removal failed', { error: error instanceof Error ? error.name : 'unknown' });
+        toast.error(t('settings.providers.models.withdrawn.removeFailed'));
+      } finally {
+        setRemovingWithdrawn(false);
+      }
+    },
+    [confirmProviderChange, dataOwnerId, ownerGeneration, providers, refetch, removingWithdrawn, t, withdrawnReview],
   );
 
   /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
@@ -3854,6 +3975,13 @@ export function ProvidersSection() {
 
       </>)}
 
+      <WithdrawnModelsDialog
+        review={withdrawnReview && withdrawnReview.dataOwnerId === dataOwnerId
+          && withdrawnReview.ownerGeneration === ownerGeneration ? withdrawnReview : null}
+        removing={removingWithdrawn}
+        onCancel={() => setWithdrawnReview(null)}
+        onRemove={(modelIds) => void removeWithdrawnModels(modelIds)}
+      />
       {speechProvider && speechProvider.owner === dataOwnerId && speechProvider.generation === ownerGeneration && (
         <AddSpeechModelsDialog key={`${dataOwnerId}:${ownerGeneration}:${speechProvider.provider.id}`}
           provider={speechProvider.provider} onClose={() => setSpeechProvider(null)}

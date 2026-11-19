@@ -6032,6 +6032,8 @@ interface ElectronAPI {
     }) => Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
+      /** true only when every catalog page was read; absent = unknown. */
+      complete?: boolean;
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;

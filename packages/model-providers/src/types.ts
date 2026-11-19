@@ -678,6 +678,12 @@ export interface Provider {
  */
 export interface ProviderRuntimeModelConfig extends ModelMetadata {
   opaqueModelId?: true;
+  /**
+   * Set only when a manual Settings refresh found this ID in the runtime's own catalog.
+   * Only such models may later be offered as withdrawn (#11298); manual, preset, import
+   * and pre-upgrade rows stay unmarked and are never offered for removal.
+   */
+  listedUpstream?: true;
   /** Transient discovery receipt; normalization excludes it from persistent configuration. */
   discoverySnapshotId?: string;
   discoveredSource?: import("./modelSource.js").DiscoveredModelSource;

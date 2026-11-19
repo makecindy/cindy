@@ -188,12 +188,65 @@ export function appendDiscoveredCustomProviderModels(
     }
     prior = [...normalized.values()];
   }
-  const models = mergeDiscoveredRuntimeModels(prior, discovered);
+  // #11298: remember which saved IDs this runtime's own catalog listed. Manual rows
+  // (nameExplicit) and routed extra-catalog rows are never marked, so they can never
+  // be offered as withdrawn later.
+  const listed = new Set(discovered.map((model) => model.id));
+  const models = mergeDiscoveredRuntimeModels(prior, discovered).map((model) =>
+    listed.has(model.id) && !model.nameExplicit && !model.route && !model.listedUpstream
+      ? { ...model, listedUpstream: true as const }
+      : model);
   const known = new Set(existing.map((model) => model.id));
   return {
     models,
     addedIds: models.filter((model) => !known.has(model.id)).map((model) => model.id),
   };
+}
+
+/**
+ * Models an earlier Settings refresh saw in this runtime's own catalog (`listedUpstream`)
+ * that a complete, fresh catalog no longer lists (#11298). Only offered for
+ * user-confirmed removal; refresh itself never deletes. Unmarked rows (manual, preset,
+ * speech reference, import, pre-upgrade) and routed rows are never candidates.
+ * `suspicious`: an empty catalog, or at least half of the marked models missing.
+ */
+export function findWithdrawnCustomProviderModels(
+  models: readonly ProviderRuntimeModelConfig[],
+  discovered: readonly DiscoveredModel[],
+): { withdrawn: ProviderRuntimeModelConfig[]; suspicious: boolean } {
+  const current = new Set(discovered.map((model) => model.id));
+  const eligible = models.filter((model) => model.listedUpstream === true && !model.nameExplicit && !model.route);
+  const withdrawn = eligible.filter((model) => !current.has(model.id));
+  const suspicious = withdrawn.length > 0
+    && (current.size === 0 || withdrawn.length * 2 >= eligible.length);
+  return { withdrawn, suspicious };
+}
+
+/**
+ * Drop confirmed models only from the runtimes whose catalog stopped listing them;
+ * runtimes can use different endpoints, so one runtime's withdrawal is not another's.
+ * `goneIds` are models no runtime keeps any more (safe to clear provider-wide choices).
+ */
+export function removeCustomProviderModels(
+  config: CustomProviderConfig,
+  targets: readonly { agent: AgentKind; modelId: string }[],
+): { config: CustomProviderConfig; removed: { agent: AgentKind; modelId: string }[]; goneIds: string[] } {
+  const removed: { agent: AgentKind; modelId: string }[] = [];
+  const runtimes = { ...config.runtimes };
+  for (const agent of Object.keys(runtimes) as AgentKind[]) {
+    const runtime = runtimes[agent];
+    if (!runtime) continue;
+    const ids = new Set(targets.filter((target) => target.agent === agent).map((target) => target.modelId));
+    const kept = runtime.models.filter((model) => {
+      if (!ids.has(model.id)) return true;
+      removed.push({ agent, modelId: model.id });
+      return false;
+    });
+    if (kept.length !== runtime.models.length) runtimes[agent] = { ...runtime, models: kept };
+  }
+  const remaining = new Set(Object.values(runtimes).flatMap((runtime) => runtime?.models.map((model) => model.id) ?? []));
+  const goneIds = [...new Set(removed.map(({ modelId }) => modelId))].filter((id) => !remaining.has(id));
+  return { config: { ...config, runtimes }, removed, goneIds };
 }
 
 /**

@@ -1810,6 +1810,36 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(finalize).toHaveBeenCalledTimes(2);
   });
 
+  // #11298 review P1: editors that rebuild model rows field by field dropped the
+  // upstream-listing marker, silently disabling withdrawal review. Main inherits it
+  // for an unchanged route/credential and drops it when the key or endpoint changes.
+  it('keeps the upstream listing marker across saves and drops it on a key or endpoint change', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: vi.fn(() => 'old-key'),
+      storeCustomProviderKey: vi.fn(() => true),
+    }));
+    const config = (listed: boolean, baseUrl = 'https://gw.example.test/v1'): CustomProviderConfig => ({
+      id: 'listed-gw', name: 'Gateway', runtimes: { codex: { baseUrl, models: [
+        { id: 'listed', name: 'Listed', discoveredMetadata: {}, ...(listed ? { listedUpstream: true as const } : {}) },
+        { id: 'manual', name: 'Manual' },
+      ] } },
+    });
+    const marked = async () => (await getCustomProvider('listed-gw'))?.runtimes.codex?.models
+      .filter(model => model.listedUpstream).map(model => model.id);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config(false), { codex: 'old-key' });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true));
+    expect(await marked()).toEqual(['listed']);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(false));
+    expect(await marked()).toEqual(['listed']);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(false), { codex: 'new-key' });
+    expect(await marked()).toEqual([]);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true));
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, config(true, 'https://other.example.test/v1'));
+    expect(await marked()).toEqual([]);
+  });
+
   it('hard-cuts config and credential changes, but skips display-only edits', async () => {
     mountDb();
     const harness = new IpcHarness();

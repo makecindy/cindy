@@ -131,7 +131,8 @@ function compatibleModels(models: readonly CatalogModel[]): boolean {
     const { id, name, description, group, sortOrder, icon, discoveredMetadata,
       userModelConfig, ...facts } = model;
     const explicit = userModelConfig && Object.fromEntries(Object.entries(userModelConfig)
-      .filter(([key]) => !['id', 'name', 'discoveredMetadata', 'discoveredCost'].includes(key)));
+      // listedUpstream is refresh bookkeeping (#11298), not a user setting.
+      .filter(([key]) => !['id', 'name', 'discoveredMetadata', 'discoveredCost', 'listedUpstream'].includes(key)));
     // A removed obsolete quote is missing metadata, not evidence of another tariff. Compare
     // it with the already-present verified reference band; never rewrite runtime costs.
     const comparedCost = model.cost ?? (model.selectionAliasKey === 'deepseek-flash' &&
