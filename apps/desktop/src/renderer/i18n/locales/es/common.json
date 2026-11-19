@@ -17550,6 +17550,7 @@
       "promote": {
         "menu": "Convertir en automatización del proyecto",
         "noWorkingDir": "No se puede convertir una programación sin directorio de trabajo",
+        "pluginEngine": "Los motores de complemento solo funcionan en este equipo; esta programación no se puede convertir en automatización del proyecto",
         "success": "Se convirtió en automatización del proyecto"
       },
       "editProject": {
@@ -17826,6 +17827,7 @@
         "selectThread": "Selecciona una sesión de destino",
         "selectProject": "Selecciona un directorio de proyecto",
         "modelUnavailable": "El modelo {{model}} ya no está disponible. Selecciona otro modelo.",
+        "pluginEngineUnavailable": "El motor de complemento seleccionado no está disponible ahora. Selecciona otro modelo.",
         "reasoningInvalid": "La intensidad de razonamiento debe ser uno de estos valores: {{values}}",
         "preRunHookCommandRequired": "Ingresa el comando de comprobación previa",
         "preRunPluginRequired": "Elige un complemento para la comprobación previa",

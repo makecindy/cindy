@@ -63,7 +63,8 @@ describe('session Agent switch UI wiring', () => {
     const source = readSource('app/sessions/[sessionId].tsx');
     expect(source).toContain('maker.getSessionAgentSwitchIntent(sessionId)');
     expect(source).toContain('maker.switchSessionAgent(');
-    expect(source).toContain('agentSwitchIntent: normalizeSessionAgentSwitchIntent(result)');
+    // 回读的权威意图拆成内置 / 插件引擎两个字段(sessionAgentSwitchIntentPatch)。
+    expect(source).toContain('remoteSessionStore.applySessionPatch(deviceId, sessionId, sessionAgentSwitchIntentPatch(result))');
     expect(source).toContain('agentSwitch={sessionAgentSwitchSupported ? {');
     expect(source).toContain('targetAgentKind: modelSheetAgentKind');
     expect(source).toContain('...(agentSwitchIntent ? { agentSwitchIntent: null } : {})');

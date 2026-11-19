@@ -17310,6 +17310,7 @@
       "promote": {
         "menu": "升為案之自運",
         "noWorkingDir": "無 workingDir 之差事，不可升",
+        "pluginEngine": "法器引擎唯行於此機，不可升為項目之差事",
         "success": "已升為案之自運"
       },
       "editProject": {
@@ -17567,6 +17568,7 @@
         "selectThread": "請擇所向差事",
         "selectProject": "請擇案之目錄",
         "modelUnavailable": "模型 {{model}} 已不可用，請另擇",
+        "pluginEngineUnavailable": "所擇法器引擎今不可用，請另擇模型",
         "reasoningInvalid": "Reasoning 須為 {{values}} 之一",
         "preRunHookCommandRequired": "請填預檢指令碼命令",
         "templateParamRequired": "請填{{label}}",

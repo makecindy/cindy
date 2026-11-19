@@ -17550,6 +17550,7 @@
       "promote": {
         "menu": "Promover a automatização de projeto",
         "noWorkingDir": "Não é possível promover um agendamento sem diretório de trabalho",
+        "pluginEngine": "Os motores de plugin só funcionam neste computador; não é possível promover este agendamento a automação do projeto",
         "success": "Promovido a automatização de projeto"
       },
       "editProject": {
@@ -17826,6 +17827,7 @@
         "selectThread": "Selecione uma sessão de destino",
         "selectProject": "Selecione um diretório de projeto",
         "modelUnavailable": "O modelo {{model}} já não está disponível. Selecione outro modelo.",
+        "pluginEngineUnavailable": "O motor de plugin selecionado não está disponível de momento. Selecione outro modelo.",
         "reasoningInvalid": "O raciocínio tem de ser um de {{values}}",
         "preRunHookCommandRequired": "Introduza o comando de verificação prévia",
         "preRunPluginRequired": "Escolha um plugin para a verificação prévia",

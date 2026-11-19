@@ -191,9 +191,9 @@ export const QUEUED_DISPATCH_SUSPEND_GAP_MS = 30_000;
 const INTERRUPTED_ERROR_DONE_FALLBACK_MS = 250;
 
 /**
- * Schedules do not run plugin-engine tasks in phase 1 (docs/plans/acp-plugin-bridge.md).
- * A bound plugin-engine target is refused at fire entry; the narrowing below keeps every
- * later engine-specific step refusing it too, never treating it as a built-in engine.
+ * Plugin engines (docs/plans/acp-plugin-bridge.md) run only as a new task each run on this
+ * computer (phase 2). A bound plugin-engine target is still refused at fire entry; the narrowing
+ * below keeps every built-in-only step refusing a plugin engine, never treating it as built-in.
  */
 const SCHEDULED_TASKS_FEATURE = 'Scheduled tasks';
 
@@ -223,7 +223,8 @@ function legacyCrossHarnessModelAgentKind(
   currentAgentKind: AgentKind | undefined,
 ): AgentKind | undefined {
   if (schedule.modelAgentKind || !schedule.model?.trim() || !currentAgentKind) return undefined;
-  return currentAgentKind !== schedule.agentKind ? schedule.agentKind : undefined;
+  // Bound schedules never use a plugin engine (refused on save); refuse rather than reinterpret one.
+  return currentAgentKind !== schedule.agentKind ? scheduledBuiltinAgentKind(schedule.agentKind) : undefined;
 }
 
 /**
@@ -401,6 +402,15 @@ export interface MakerScheduleRunnerDeps {
     preferredProviderId?: string | null,
     modelId?: string,
   ) => Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null>;
+  /**
+   * 插件引擎(docs/plans/acp-plugin-bridge.md)的准入，规则与在它上面新建任务相同：引擎此刻由本机提供
+   * 且可用，返回该引擎下实际使用的模型与思考深度('' = 引擎自己决定)；不可用时抛错。缺省 = 自动任务
+   * 不支持插件引擎。
+   */
+  admitPluginEngine?: (route: { providerId: string | null; model: string; effort?: string | null }) => {
+    model: string;
+    effort: string;
+  };
 }
 
 /**
@@ -594,6 +604,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const routeKeys = ['executionMode', 'targetSessionId', 'agentDeviceId', 'modelAgentDeviceId',
       'modelAgentKind', 'model', 'providerId'] as const;
     if (previous && routeKeys.every(key => schedule[key] === previous[key])) return;
+    if (schedule.modelAgentKind === 'acp') {
+      // 插件引擎在保存时就确认本机此刻提供它(停用 / 卸载 / 不可用都明确拒绝)。
+      this.admitScheduledPluginEngine(schedule);
+      return;
+    }
     const target = schedule.targetSessionId
       ? await this.runtime.getSessionRowSnapshot(schedule.targetSessionId) : null;
     const resumesTarget = target && (target.status === 'active' ||
@@ -639,6 +654,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
       return { kind: 'pass' };
     }
     return this.deps.checkModelRoute!(agent, model, providerId);
+  }
+
+  /** 插件引擎自动任务的准入(见 deps.admitPluginEngine)；不可用时抛错，本次运行或保存明确失败。 */
+  private admitScheduledPluginEngine(schedule: Schedule): { model: string; effort: string } {
+    if (!this.deps.admitPluginEngine) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+    try {
+      return this.deps.admitPluginEngine({
+        providerId: schedule.providerId?.trim() || null,
+        model: schedule.model?.trim() || 'default',
+        effort: schedule.effort ?? null,
+      });
+    } catch (error) {
+      throw new Error(`schedule route unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** Re-read the execution computer's catalog after dispatch preparation. */
@@ -1214,7 +1243,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
       const selection: ScheduledModelSelection | undefined =
         schedule.modelAgentKind && schedule.model?.trim()
           ? {
-              agentKind: schedule.modelAgentKind,
+              // Bound runs never use a plugin engine (refused on save).
+              agentKind: scheduledBuiltinAgentKind(schedule.modelAgentKind),
               agentDeviceId: schedule.modelAgentDeviceId === undefined ? undefined : schedule.modelAgentDeviceId || null,
               model: schedule.model,
               providerId: schedule.providerId?.trim() || null,
@@ -1454,11 +1484,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 都空时按新建任务口径实时解析默认模型(resolveDefaultModelRoute 不带模型)，
     // 不写死型号;一个可用来源都没有就让本次运行明确失败。
     // 普通 schedule 沿用既有默认权限；伙伴例行任务继承当前伙伴的权限和计划模式。
-    const effectiveAgentKind =
+    const effectiveAgentKind: EngineKind =
       resolvedSelection?.agentKind ??
       (isHeartbeat
         ? (heartbeatAgentKind ?? schedule.agentKind)
         : (schedule.modelAgentKind ?? schedule.agentKind));
+    // 插件引擎(docs/plans/acp-plugin-bridge.md)只用于每次新建任务、在本机运行的自动任务(保存时已校验)。
+    // 它不在内置模型目录里：只属于内置引擎的步骤一律经 builtinKind()，插件引擎万一走到会明确拒绝，
+    // 绝不被当成内置引擎；插件引擎改按本机此刻提供的引擎准入，不可用时本次运行明确失败。
+    const pluginEngineRun = effectiveAgentKind === 'acp';
+    if (pluginEngineRun && isHeartbeat) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
+    const builtinKind = (): AgentKind => scheduledBuiltinAgentKind(effectiveAgentKind);
+    const pluginEngineRoute = pluginEngineRun ? this.admitScheduledPluginEngine(schedule) : null;
     const rawModel = schedule.model?.trim()
       ? schedule.model
       : isHeartbeat
@@ -1466,7 +1503,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         : undefined;
     const explicitProviderId = schedule.providerId?.trim() ? schedule.providerId.trim() : null;
     const defaultRouteProviderId = explicitProviderId ?? (isHeartbeat ? heartbeatProviderId : null);
-    const followsNewTaskDefault = !rawModel?.trim();
+    const followsNewTaskDefault = !pluginEngineRun && !rawModel?.trim();
     // 新建任务的 Agent 在另一台电脑运行:模型与来源属于那台的已授权目录,本机的默认路由、
     // 停用轴与能力表都不适用,统一交给 resolveModelSelection 按那台目录解析。绑定的任务
     // 仍存在时运行位置跟随它(heartbeat 分支由 acquirePendingAgentSwitch 按任务所在位置解析)。
@@ -1487,17 +1524,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
     } | null = null;
     if (followsNewTaskDefault) {
       dynamicDefaultRoute =
-        (await this.deps.resolveDefaultModelRoute?.(effectiveAgentKind, defaultRouteProviderId)) ??
+        (await this.deps.resolveDefaultModelRoute?.(builtinKind(), defaultRouteProviderId)) ??
         null;
     } else if (shouldMaterializeFreshClaudeProvider) {
       dynamicDefaultRoute =
         (await this.deps.resolveDefaultModelRoute?.(
-          effectiveAgentKind,
+          builtinKind(),
           defaultRouteProviderId,
           rawModel,
         )) ?? null;
     }
-    const model = followsNewTaskDefault ? (dynamicDefaultRoute?.model ?? '') : rawModel!;
+    const model = pluginEngineRoute
+      ? pluginEngineRoute.model
+      : followsNewTaskDefault ? (dynamicDefaultRoute?.model ?? '') : rawModel!;
     if (!model) {
       throw new Error(
         `schedule route unavailable: ${effectiveAgentKind} has no connected model source`,
@@ -1545,8 +1584,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 不打断」豁免 —— 保存过的路由被用户停用后,本次 run 必须以明确错误失败(run 历史
     // 可见),不能继续经停用路由扣费;隐式默认落点被停用而有启用替代拷贝时改路由过去。
     let reroutedProviderId: string | null = null;
-    if (this.deps.checkModelRoute && !agentDeviceId) {
-      const verdict = await this.checkRouteFor(isHeartbeat ? sessionId : undefined, effectiveAgentKind, model, createProviderId);
+    if (this.deps.checkModelRoute && !agentDeviceId && !pluginEngineRun) {
+      const verdict = await this.checkRouteFor(isHeartbeat ? sessionId : undefined, builtinKind(), model, createProviderId);
       if (verdict.kind === 'reject') {
         throw new Error(
           `schedule route unavailable: ${describeModelRouteRejection(verdict.reason, model, createProviderId)} (${verdict.reason})`,
@@ -1557,11 +1596,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
         reroutedProviderId = verdict.providerId;
       }
     }
-    if (!isHeartbeat && (schedule.modelAgentKind || freshAgentDeviceId) && !resolvedSelection) {
+    if (!isHeartbeat && !pluginEngineRun && (schedule.modelAgentKind || freshAgentDeviceId) && !resolvedSelection) {
       if (!this.deps.resolveModelSelection)
         throw new Error('Scheduled model selection is not available');
       const selection: ScheduledModelSelection = {
-        agentKind: effectiveAgentKind,
+        agentKind: builtinKind(),
         agentDeviceId,
         model,
         providerId: createProviderId,
@@ -1594,7 +1633,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     let reconciledEffort = resolvedSelection
       ? (resolvedSelection.effort ?? undefined)
-      : this.reconcileEffortForModel(effectiveAgentKind, model, schedule.effort || heartbeatEffort, schedule.id);
+      : pluginEngineRoute
+        // 插件引擎只保留它为该模型列出的档位；'' = 引擎自己决定。
+        ? ((pluginEngineRoute.effort || undefined) as Effort | undefined)
+        : this.reconcileEffortForModel(builtinKind(), model, schedule.effort || heartbeatEffort, schedule.id);
     // 隐式改道后的来源级 reconcile(PR #744 review 第二十七轮):上面的 clamp 用的是
     // merged capability,分辨不出来源差异 —— 改道后的落地拷贝 effort 支持可能更窄、
     // 可能不支持 Fast,原样透传会被上游拒。按 (verdict.providerId, model) 的拷贝重查:
@@ -1603,7 +1645,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (!resolvedSelection && reroutedProviderId && this.deps.resolveRouteCopyCapabilities) {
       try {
         const copy = await this.deps.resolveRouteCopyCapabilities(
-          effectiveAgentKind,
+          builtinKind(),
           reroutedProviderId,
           model,
         );
@@ -1930,10 +1972,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // runtimeModel===model 且未走 follow(desiredEffort===schedule.effort)时直接复用上方
     // createSession 已算好的 reconciledEffort,不重复 lookup / 不重复打 reconcile 日志。
     const runtimeReconciledEffort =
-      resolvedSelection || (runtimeModel === model && desiredEffort === schedule.effort)
+      pluginEngineRun || resolvedSelection || (runtimeModel === model && desiredEffort === schedule.effort)
         ? reconciledEffort
         : this.reconcileEffortForModel(
-            effectiveAgentKind,
+            builtinKind(),
             runtimeModel,
             desiredEffort,
             schedule.id,
@@ -2251,11 +2293,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 凭证切换 / createSession / 模型同步 / 交接准备等多个长 await,期间路由可能
       // 刚被停用 —— 按**实际将运行的路由**(runtimeModel + 会话此刻的来源)再判一次,
       // reject 即失败收口,不发出这次新的付费调用。
-      if (!agentDeviceId && this.deps.checkModelRoute) {
+      // 插件引擎：派发前按本机此刻提供的引擎再准入一次(插件可能在准备期间被停用)。
+      if (pluginEngineRun) this.admitScheduledPluginEngine(schedule);
+      if (!agentDeviceId && this.deps.checkModelRoute && !pluginEngineRun) {
         const dispatchProviderId = getSessionProvider(session.id);
         const verdict = await this.checkRouteFor(
           session.id,
-          effectiveAgentKind,
+          builtinKind(),
           runtimeModel,
           dispatchProviderId,
         );
@@ -2342,8 +2386,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
                 }
                 // Session invokes this after accepted preparation and the vision
                 // bridge, immediately before its synchronous dispatch boundary.
-                await this.assertRemoteDispatchRoute(
-                  session.agentDeviceId ?? agentDeviceId, effectiveAgentKind, runtimeModel,
+                if (!pluginEngineRun) await this.assertRemoteDispatchRoute(
+                  session.agentDeviceId ?? agentDeviceId, builtinKind(), runtimeModel,
                   getSessionProvider(session.id),
                 );
                 return intent;

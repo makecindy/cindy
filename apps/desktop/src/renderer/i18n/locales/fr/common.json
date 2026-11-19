@@ -17550,6 +17550,7 @@
       "promote": {
         "menu": "Convertir en automatisation de projet",
         "noWorkingDir": "Impossible de convertir une planification sans répertoire de travail",
+        "pluginEngine": "Les moteurs de plugin ne fonctionnent que sur cet ordinateur : impossible de convertir cette planification en automatisation de projet",
         "success": "Convertie en automatisation de projet"
       },
       "editProject": {
@@ -17826,6 +17827,7 @@
         "selectThread": "Sélectionnez une session cible",
         "selectProject": "Sélectionnez un répertoire de projet",
         "modelUnavailable": "Le modèle {{model}} n'est plus disponible. Sélectionnez un autre modèle.",
+        "pluginEngineUnavailable": "Le moteur de plugin sélectionné n’est pas disponible pour le moment. Sélectionnez un autre modèle.",
         "reasoningInvalid": "Le raisonnement doit être l'une des valeurs suivantes : {{values}}",
         "preRunHookCommandRequired": "Saisissez la commande de vérification préalable",
         "preRunPluginRequired": "Choisissez un plugin pour la vérification préalable",

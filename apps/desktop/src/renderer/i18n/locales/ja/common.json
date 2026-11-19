@@ -17310,6 +17310,7 @@
       "promote": {
         "menu": "プロジェクト自動化に昇格",
         "noWorkingDir": "作業ディレクトリのないスケジュールは昇格できません",
+        "pluginEngine": "プラグインエンジンはこのコンピューターでのみ動作するため、プロジェクトの自動化に昇格できません",
         "success": "プロジェクト自動化に昇格しました"
       },
       "editProject": {
@@ -17586,6 +17587,7 @@
         "selectThread": "対象セッションを選択してください",
         "selectProject": "プロジェクトディレクトリを選択してください",
         "modelUnavailable": "モデル {{model}} は利用できません。別のモデルを選択してください",
+        "pluginEngineUnavailable": "選択したプラグインエンジンは現在利用できません。別のモデルを選択してください",
         "reasoningInvalid": "Reasoning は {{values}} のいずれかである必要があります",
         "preRunHookCommandRequired": "事前チェックスクリプトのコマンドを入力してください",
         "preRunPluginRequired": "事前チェックのプラグインを選んでください",

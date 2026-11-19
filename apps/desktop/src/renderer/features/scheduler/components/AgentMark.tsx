@@ -12,15 +12,18 @@
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { PiMark } from '@/components/icons/PiMark';
-import type { AgentKind } from '@cindy/maker-scheduler';
+import type { ScheduleAgentKind } from '@cindy/maker-scheduler';
+import { PluginEngineIcon } from '@/components/new-chat/PluginEnginesSection';
 
 interface Props {
-  agentKind: AgentKind;
+  /** 'acp' = 插件引擎：显示通用的引擎标志(颜色跟父级，与其他 mark 一致)。 */
+  agentKind: ScheduleAgentKind;
   size?: number;
   className?: string;
 }
 
 export function AgentMark({ agentKind, size = 14, className }: Props) {
+  if (agentKind === 'acp') return <PluginEngineIcon size={size} className={className ?? 'text-current'} />;
   if (agentKind === 'codex') return <CodexMark size={size} className={className} />;
   // Pi 运行历史此前落到 ClaudeMark 兜底,显示成 Claude 身份(codex review)。
   if (agentKind === 'pi') return <PiMark size={size} className={className} />;

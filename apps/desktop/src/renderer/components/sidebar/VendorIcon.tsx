@@ -112,7 +112,7 @@ function PluginIdentityMark({
         height={size}
         data-plugin-icon="original"
         style={{ width: size, height: size }}
-        className="shrink-0 rounded-[3px] object-contain"
+        className="shrink-0 object-contain"
       />
     );
   }
@@ -149,7 +149,7 @@ function PluginIdentityMark({
       height={size}
       data-plugin-icon="greyscale"
       style={{ width: size, height: size }}
-      className="shrink-0 rounded-[3px] object-contain opacity-80 grayscale"
+      className="shrink-0 object-contain opacity-80 grayscale"
     />
   );
 }

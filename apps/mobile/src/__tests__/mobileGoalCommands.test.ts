@@ -61,6 +61,8 @@ function newHarness(text = '/goal target') {
     setCreating: noop, setGoalBusy: noop, auth: { user: { id: 'test-user' } },
     getMobileAuthOwner, isMobileAuthOwnerCurrent, captureNewSessionOwner,
     agentAuthVerdict: 'ready', applyRemoteAgentPick: (value: unknown) => value,
+    // Built-in drafts only: no plugin engine picked.
+    pluginEnginePick: null, applyPluginEnginePick: (value: unknown) => value,
     createNewSessionId: () => 'new-goal-task', saveNewSessionPreferences: noop,
     getDeviceProvidersGen: () => 1, reconcileNewSessionSubmitDraft, targetAgentHasFast: () => false,
     withTransientRemoteRetry: (fn: () => Promise<unknown>) => fn(), openLink: noop, subscribe: vi.fn(async () => {}),

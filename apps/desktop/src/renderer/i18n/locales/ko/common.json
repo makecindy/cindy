@@ -17310,6 +17310,7 @@
       "promote": {
         "menu": "프로젝트 자동화로 승격",
         "noWorkingDir": "작업 디렉터리가 없는 일정은 승격할 수 없습니다",
+        "pluginEngine": "플러그인 엔진은 이 컴퓨터에서만 실행되므로 프로젝트 자동화로 승격할 수 없습니다",
         "success": "프로젝트 자동화로 승격되었습니다"
       },
       "editProject": {
@@ -17586,6 +17587,7 @@
         "selectThread": "대상 세션을 선택하세요",
         "selectProject": "프로젝트 디렉터리를 선택하세요",
         "modelUnavailable": "{{model}} 모델을 더 이상 사용할 수 없습니다. 다른 모델을 선택하세요.",
+        "pluginEngineUnavailable": "선택한 플러그인 엔진을 지금 사용할 수 없습니다. 다른 모델을 선택하세요.",
         "reasoningInvalid": "Reasoning은 {{values}} 중 하나여야 합니다",
         "preRunHookCommandRequired": "사전 검사 스크립트 명령을 입력하세요",
         "preRunPluginRequired": "사전 검사에 쓸 플러그인을 선택하세요",

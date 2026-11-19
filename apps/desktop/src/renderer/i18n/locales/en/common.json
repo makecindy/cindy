@@ -17384,6 +17384,7 @@
       "promote": {
         "menu": "Promote to project automation",
         "noWorkingDir": "Can’t promote an automation without a working directory",
+        "pluginEngine": "Plugin engines only run on this computer, so this automation can’t become a project automation",
         "success": "Promoted to project automation"
       },
       "editProject": {
@@ -17660,6 +17661,7 @@
         "selectThread": "Select a target session",
         "selectProject": "Select a project directory",
         "modelUnavailable": "Model {{model}} is no longer available. Select another model.",
+        "pluginEngineUnavailable": "The selected plugin engine isn’t available right now. Select another model.",
         "reasoningInvalid": "Reasoning must be one of {{values}}",
         "preRunHookCommandRequired": "Enter the pre-run check command",
         "preRunPluginRequired": "Choose a plugin for the pre-run check",

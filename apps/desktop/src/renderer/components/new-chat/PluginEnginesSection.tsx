@@ -101,7 +101,7 @@ export function PluginEngineIcon({
         width={size}
         height={size}
         style={{ width: size, height: size }}
-        className="shrink-0 rounded-[3px] object-contain"
+        className="shrink-0 object-contain"
       />
     );
   }
@@ -274,7 +274,7 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
                   title={t('newChat.modelSelector.unified.customize')}
                   aria-label={t('newChat.modelSelector.unified.customize')}
                   className={cn(
-                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
+                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity',
                     open
                       ? 'text-[var(--text-secondary)] opacity-100'
                       : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--text-secondary)]',
@@ -352,7 +352,7 @@ function PluginEngineModelConfig({
       <span title={label} className="line-clamp-2 min-w-0 text-14 font-semibold leading-[1.35] text-[var(--model-item-text)]">
         {label}
       </span>
-      <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-[3px] text-12 text-[var(--text-tertiary)]">
+      <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-1 text-12 text-[var(--text-tertiary)]">
         {engine.name}
       </div>
       <div className="flex items-center gap-2 pt-3.5">

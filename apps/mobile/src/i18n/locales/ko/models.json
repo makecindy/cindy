@@ -109,5 +109,12 @@
     "quotaResetIn": "{{duration}} 후 초기화",
     "quotaAverageHint": "주간 할당량 · 계정별 동일 가중 평균",
     "quotaResetHint": "현재 사용 속도라면 초기화 시 할당량이 남을 수 있습니다. 24시간 이내는 노란색, 6시간 이내는 빨간색입니다."
+  },
+  "pluginEngines": {
+    "genericName": "플러그인 엔진",
+    "defaultModel": "기본 모델",
+    "unavailable": "{{engine}}을(를) 사용할 수 없음",
+    "unavailableWithHint": "{{engine}}을(를) 사용할 수 없음: {{hint}}",
+    "worktreeUnsupported": "플러그인 엔진은 아직 worktree에서 작업을 시작할 수 없습니다. worktree를 끈 뒤 보내세요"
   }
 }

@@ -1,6 +1,7 @@
 /**
  * Plugin-provided task engines as the Desktop renderer sees them
- * (docs/plans/acp-plugin-bridge.md). Local only: never part of device-link.
+ * (docs/plans/acp-plugin-bridge.md). The engines run on the computer that has the plugin; a
+ * phone controlling it reads the same list through the LIST invoke on the device-link allowlist.
  */
 
 export const PLUGIN_ENGINE_AGENT_KIND = 'acp' as const;

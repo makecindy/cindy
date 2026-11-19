@@ -241,7 +241,7 @@ import {
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import { redactEventForRenderer } from './rendererEventRedaction.js';
-import { listPluginEngineViews, pluginEngineModelsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
+import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
 import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
 import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
 import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
@@ -6688,6 +6688,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     handle: (channel, listener) => ipcMain.handle(channel, listener),
     assertTrusted: (event) => assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
     broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
+    isDeviceLinkInvoke,
   });
 
   ipcMain.handle(MAKER_INVOKE.TURN_CHANGE_SETS_LIST, async (event, sessionId: unknown) => {
@@ -17691,7 +17692,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             a,
           );
         }
-        return { ok: true, agentDeviceId: null, ...(locations ? { locations } : {}), ...result };
+        // 插件引擎(docs/plans/acp-plugin-bridge.md)只在本机运行：不按 agent 过滤时列本机此刻提供的引擎；
+        // SSH Lead 的 Worker 在 SSH 主机上运行，不列。
+        const pluginEngines = !agent && !sshLead ? pluginEngineDescriptors() : [];
+        return {
+          ok: true, agentDeviceId: null, ...(locations ? { locations } : {}), ...result,
+          ...(pluginEngines.length ? { pluginEngines } : {}),
+        };
       } catch (err) {
         return orcaModelDiscoveryFailure(err, Boolean(executionDeviceId));
       }

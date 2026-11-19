@@ -17384,6 +17384,7 @@
       "promote": {
         "menu": "In Projektautomatisierung umwandeln",
         "noWorkingDir": "Zeitplan kann ohne Arbeitsverzeichnis nicht zur Projektautomatisierung gemacht werden",
+        "pluginEngine": "Plugin-Engines laufen nur auf diesem Computer und können nicht zur Projektautomatisierung gemacht werden",
         "success": "Zur Projektautomatisierung gemacht"
       },
       "editProject": {
@@ -17660,6 +17661,7 @@
         "selectThread": "Wähle eine Zielsitzung",
         "selectProject": "Wähle ein Projektverzeichnis",
         "modelUnavailable": "Modell {{model}} ist nicht mehr verfügbar. Wähle ein anderes Modell.",
+        "pluginEngineUnavailable": "Die ausgewählte Plugin-Engine ist gerade nicht verfügbar. Wähle ein anderes Modell.",
         "reasoningInvalid": "Denkintensität muss einer der Werte {{values}} sein",
         "preRunHookCommandRequired": "Gib den Befehl für die Vorabprüfung ein",
         "preRunPluginRequired": "Wähle ein Plugin für die Vorabprüfung",

@@ -17310,6 +17310,7 @@
       "promote": {
         "menu": "提升為專案自動化",
         "noWorkingDir": "沒有工作目錄的自動化無法提升",
+        "pluginEngine": "插件引擎只在這台電腦上可用，無法提升為專案自動化",
         "success": "已提升為專案自動化"
       },
       "editProject": {
@@ -17586,6 +17587,7 @@
         "selectThread": "請選擇目標任務",
         "selectProject": "請選擇專案目錄",
         "modelUnavailable": "模型 {{model}} 已不可用，請重新選擇",
+        "pluginEngineUnavailable": "所選插件引擎目前無法使用，請重新選擇模型",
         "reasoningInvalid": "Reasoning 必須是 {{values}} 之一",
         "preRunHookCommandRequired": "請填寫前置檢查指令碼命令",
         "preRunPluginRequired": "請為前置檢查選擇插件",

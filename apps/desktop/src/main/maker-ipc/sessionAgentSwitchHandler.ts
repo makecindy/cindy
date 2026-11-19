@@ -34,7 +34,8 @@
  */
 
 import type { AgentKind, EngineKind } from '@cindy/maker-core';
-import { getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1 } from '@cindy/device-link';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { createSharedTaskPendingSelectionGuard, createSharedTaskSettingGuard } from './sharedTaskSetting.js';
@@ -1905,7 +1906,12 @@ export function registerMakerSessionAgentSwitchHandler(
       if (typeof sessionId !== 'string' || sessionId.length === 0) {
         throwIpcError('INVALID_PARAMS', 'sessionId required');
       }
-      return projectPendingAgentSwitchIntent(deps.pendingSwitches?.get(sessionId));
+      const intent = projectPendingAgentSwitchIntent(deps.pendingSwitches?.get(sessionId));
+      if (intent?.targetAgentKind === 'acp' && isDeviceLinkInvoke()
+        && !deviceLinkInvokeControllerSupports(CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1)) {
+        return null;
+      }
+      return intent;
     },
   );
 }

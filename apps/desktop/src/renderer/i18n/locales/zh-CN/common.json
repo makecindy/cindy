@@ -17310,6 +17310,7 @@
       "promote": {
         "menu": "提升为项目自动化",
         "noWorkingDir": "未设置工作目录的自动化无法提升为项目自动化",
+        "pluginEngine": "插件引擎只在这台电脑上可用，不能提升为项目自动化",
         "success": "已提升为项目自动化"
       },
       "editProject": {
@@ -17586,6 +17587,7 @@
         "selectThread": "请选择目标任务",
         "selectProject": "请选择项目目录",
         "modelUnavailable": "模型 {{model}} 已不可用，请重新选择",
+        "pluginEngineUnavailable": "所选插件引擎当前不可用，请重新选择模型",
         "reasoningInvalid": "推理强度必须是 {{values}} 之一",
         "preRunHookCommandRequired": "请填写前置检查脚本命令",
         "preRunPluginRequired": "请为前置检查选择插件",
