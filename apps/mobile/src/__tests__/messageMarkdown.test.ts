@@ -2829,3 +2829,63 @@ describe('user review reference compatibility', () => {
     expect(next.blocks[0]).toMatchObject({ inlines: [{ type: 'link', text: 'normal text', url: 'https://example.com/' }] });
   });
 });
+
+
+// #9440 current review: definitions win over loose tables; complete generic
+// HTML blocks and invalid labels retain the same production parsing boundaries.
+describe('final reference review boundaries', () => {
+  it('resolves legal definition destinations containing pipes before loose tables', () => {
+    const source = '[site][s]\n\n[s]: <https://example.com/a|b>\n[t]: <https://example.com/c|d>';
+    expect(inlines(source).filter(value => value.type === 'link')).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/a|b' }]);
+    expect(parseMobileMarkdownDocument(source).blocks.some(block => block.type === 'table')).toBe(false);
+    expect(parseMobileMarkdownDocument('a | b\nc | d').blocks.some(block => block.type === 'table')).toBe(true);
+    let streamed = parseMobileMarkdownIncremental('');
+    for (let end = 1; end <= source.length; end++) {
+      const prefix = source.slice(0, end);
+      streamed = parseMobileMarkdownIncremental(prefix, streamed);
+      expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+    }
+  });
+
+  it('excludes complete standalone generic HTML tags only outside an open paragraph', () => {
+    for (const tag of ['<span>', '</span>', '<custom-tag data-x="a > b">', "<span title='x' />", '<SPAN disabled>']) {
+      const source = '[site][s]\n\n' + tag + '\n# hidden\n[s]: https://wrong.example/';
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(inlines(source + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+    for (const tag of ['<span>inline</span>', '<https://example.com/>', '<a@example.com>', '<span bad@attr>', '<span value=>']) {
+      const source = '[site][s]\n\n' + tag + '\n# heading\n[s]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+    const source = '[site][s]\n\ntext\n<span>\n# heading\n[s]: https://example.com/';
+    expect(inlines(source).filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+  });
+
+  it('preserves complete continuation definition titles containing display delimiters', () => {
+    for (const separator of [' ', '\n ']) {
+      const source = '[f]:\n docs/a\\(1\\).md' + separator + '"\\[x\\]"\n\n[file][f]';
+      for (const srcLines of [false, true]) {
+        expect(inlines(source).filter(value => value.type === 'link')).toEqual([{ type: 'link', text: 'file', url: 'docs/a(1).md' }]);
+        expect(parseMobileMarkdownDocument(source, { srcLines }).source).toBe(source);
+      }
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+  });
+
+  it('does not protect math following empty reference labels', () => {
+    for (const label of ['', ' ', '^1']) {
+      expect(parseMobileMarkdownDocument('[' + label + ']:\n\\(x\\)').source).toBe('[' + label + ']:\n$x$');
+    }
+  });
+});

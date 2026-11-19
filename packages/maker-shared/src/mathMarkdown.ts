@@ -57,10 +57,10 @@ export interface NormalizeMathDelimitersOptions {
 // reference 式链接定义行:≤3 空格缩进 + [label]:(单字符类 + 行锚点,线性)。
 // 整行(destination + 可选 title)纳入保护——定义行不是 prose,行上不存在
 // 合法的数学公式场景,整行保护安全且省去 destination/title 的精细切分。
-const LINK_REFERENCE_DEFINITION_RE = /^ {0,3}\[[^\]\n]*\]:/gm;
+const LINK_REFERENCE_DEFINITION_RE = /^ {0,3}\[(?!\^)((?:\\[^\n]|[^\[\]\\\n]){1,999})\]:/gm;
 
-/** Protect continuation URLs only when their destination/title syntax is complete. */
-function continuationDestinationEnd(text: string, start: number): number | null {
+/** Protect complete destinations and titles; invalid continuation prose stays math. */
+function continuationDefinitionEnd(text: string, start: number): number | null {
   const newline = text.indexOf('\n', start);
   const lineEnd = newline === -1 ? text.length : newline;
   const line = text.slice(start, lineEnd);
@@ -79,21 +79,29 @@ function continuationDestinationEnd(text: string, start: number): number | null 
   }
   const end = start + match[0].length;
   const suffix = line.slice(match[0].length);
-  if (!suffix.trim()) return end;
-  if (!/^\s/.test(suffix)) return null;
-  const title = suffix.trimStart();
-  if (!['"', "'", '('].includes(title[0])) return null;
+  let titleStart = end + suffix.length - suffix.trimStart().length;
+  let title = suffix.trimStart();
+  let titleOnNextLine = false;
+  if (!title) {
+    if (newline === -1) return end;
+    const following = /^[ \t]*(["'(])/.exec(text.slice(newline + 1));
+    if (!following) return end;
+    titleStart = newline + 1 + following[0].length - 1;
+    title = text.slice(titleStart);
+    titleOnNextLine = true;
+  } else if (!/^\s/.test(suffix)) return null;
+  const invalidTitleEnd = titleOnNextLine ? end : null;
+  if (!['"', "'", '('].includes(title[0])) return invalidTitleEnd;
   const close = title[0] === '(' ? ')' : title[0];
-  const titleStart = end + suffix.length - title.length;
   for (let at = titleStart + 1; at < text.length && at - titleStart <= 10_000; at++) {
     if (text[at] === '\\') { at++; continue; }
-    if (text[at] === '\n' && /^[ \t]*(?:\n|$)/.test(text.slice(at + 1))) return null;
+    if (text[at] === '\n' && /^[ \t]*(?:\n|$)/.test(text.slice(at + 1))) return invalidTitleEnd;
     if (text[at] === close) {
       const nextEnd = text.indexOf('\n', at + 1);
-      return text.slice(at + 1, nextEnd === -1 ? text.length : nextEnd).trim() ? null : end;
+      return text.slice(at + 1, nextEnd === -1 ? text.length : nextEnd).trim() ? invalidTitleEnd : at + 1;
     }
   }
-  return null;
+  return invalidTitleEnd;
 }
 
 /**
@@ -127,12 +135,13 @@ function findLinkDestinationRanges(text: string): Array<[number, number]> {
     i = Math.max(open + 2, j);
   }
   for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
+    if (!match[1].trim()) continue;
     let lineEnd = text.indexOf('\n', match.index);
     // An empty definition header can put its destination on the next line.
-    // Protect only its destination token, so malformed definitions cannot
-    // suppress math in following prose (for example a heading on this line).
+    // Include a valid optional title, whose escaped delimiters are not prose.
+    // Invalid definitions must not suppress math on the following line.
     if (lineEnd !== -1 && !text.slice(match.index + match[0].length, lineEnd).trim()) {
-      const destinationEnd = continuationDestinationEnd(text, lineEnd + 1);
+      const destinationEnd = continuationDefinitionEnd(text, lineEnd + 1);
       if (destinationEnd !== null) lineEnd = destinationEnd;
     }
     ranges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);

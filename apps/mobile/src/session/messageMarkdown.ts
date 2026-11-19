@@ -126,6 +126,11 @@ function isClosingMathFence(line: string): boolean {
     || (trimmed.endsWith('$$') && !trimmed.endsWith('\\$$') && !trimmed.slice(0, -2).includes('$$'));
 }
 
+// CommonMark type-7 HTML: a complete single tag at a block boundary.
+// Attribute values may contain > or |, but autolinks and inline tag pairs
+// are not standalone tags. Type 7 never interrupts an open paragraph.
+const COMPLETE_HTML_TAG_LINE = /^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t"'=<>`]+|'[^']*'|"[^"]*"))?)*[ \t]*\/?>|<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$/;
+
 function collectMarkdownReferences(source: string): MarkdownReferenceContext {
   const definitions = new Map<string, string>();
   const definitionLines = new Set<number>();
@@ -186,6 +191,17 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       if (rawHtmlEnd.test(line)) rawHtmlEnd = undefined;
       continue;
     }
+    // A legal root definition wins over the body's deliberately loose table
+    // heuristic. Excluded containers/comments and open paragraphs still win.
+    const rootDefinition = !html && !comment && !paragraph && listContentIndents.length === 0
+      ? readMarkdownReferenceDefinition(lines, index) : null;
+    if (rootDefinition) {
+      if (!definitions.has(rootDefinition.label)) definitions.set(rootDefinition.label, rootDefinition.url);
+      for (; index <= rootDefinition.endLine; index++) definitionLines.add(index);
+      index--;
+      continue;
+    }
+    if (!paragraph && !comment && COMPLETE_HTML_TAG_LINE.test(line)) html = true;
     if (!html && line.trim()) {
       const table = parseTableBlock(lines, index);
       if (table && !/^(?:#{1,6}\s|\s*>)/.test(line)) {
@@ -244,14 +260,6 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
     }
     if (/^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hgroup|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|summary|style|table|tbody|td|tfoot|th|thead|title|tr|track|textarea|ul)(?=[\s/>])/i.test(line)) html = true;
     if (html) continue;
-    const definition = !paragraph && listContentIndents.length === 0
-      ? readMarkdownReferenceDefinition(lines, index) : null;
-    if (definition) {
-      if (!definitions.has(definition.label)) definitions.set(definition.label, definition.url);
-      for (; index <= definition.endLine; index++) definitionLines.add(index);
-      index--;
-      continue;
-    }
     paragraph = !/^(?:#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(line);
   }
   return { definitions, definitionLines, signature: definitions.size ? JSON.stringify([[...definitions], [...definitionLines]]) : '', candidateFree: false };

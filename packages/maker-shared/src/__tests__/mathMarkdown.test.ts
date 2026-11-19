@@ -399,3 +399,18 @@ describe('tokenizeInlineMath', () => {
     expect(plain('2^{n_1+n_2}')).toBe('2^(n₁+n₂)');
   });
 });
+
+
+// #9440 final reviewer: titles belong to the complete definition protection;
+// malformed headers remain prose and must not suppress shared math conversion.
+it('protects valid continuation titles and rejects empty or footnote labels', () => {
+  for (const separator of [' ', '\n ']) {
+    const source = '[f]:\n docs/a\\(1\\).md' + separator + '"\\[x\\]"\n\n[file][f]';
+    for (const preserveLineCount of [false, true]) {
+      expect(normalizeMathDelimiters(source, { preserveLineCount })).toBe(source);
+    }
+  }
+  for (const label of ['', ' ', '^1']) {
+    expect(normalizeMathDelimiters('[' + label + ']:\n\\(x\\)')).toBe('[' + label + ']:\n$x$');
+  }
+});
