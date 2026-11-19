@@ -1020,7 +1020,7 @@ describe('SessionCard visual cases', () => {
     for (const action of [listMore, listArchive]) {
       expect(action.className).toContain('cindy-button-frame');
       expect(action.className).toContain('size-5');
-      expect(action.className).toContain('rounded-md');
+      expect(action.className).toContain('rounded-full');
       expect(action.className).toContain('text-sidebar-action-icon');
       expect(action.className).not.toMatch(/(?:^|\s)bg-sidebar(?:\s|$)/);
       expect(action.className).not.toContain('size-6');

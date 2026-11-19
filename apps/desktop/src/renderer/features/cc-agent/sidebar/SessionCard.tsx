@@ -1442,14 +1442,14 @@ function CardAction({
         className={cn(
           variant === 'list'
             ? cn(
-                'shrink-0 size-5 p-0 flex items-center justify-center rounded-md',
+                'shrink-0 size-5 p-0 flex items-center justify-center',
                 'focus:outline-none',
                 isActive
                   ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
                   : 'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground',
               )
             : cn(
-                'flex size-6 p-0 items-center justify-center rounded-[7px]',
+                'flex size-6 p-0 items-center justify-center',
                 '[--button-face-bg:var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
                 '[--button-face-border:hsl(var(--sidebar-border))]',
                 'enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground focus:outline-none',

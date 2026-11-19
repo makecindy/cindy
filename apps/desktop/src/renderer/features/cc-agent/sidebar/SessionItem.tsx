@@ -1376,7 +1376,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
 });
 
 /** SessionItem 右侧 hover action 图标按钮 —— 尺寸/视觉与 Project Header 的
- *  ProjectAction 基本一致(size-5 / icon 14×14 / strokeWidth 2 / 圆角 md /
+ *  ProjectAction 基本一致(size-5 / icon 14×14 / strokeWidth 2 / 标准按钮圆角 /
  *  普通行 hover 用 sidebar-item-hover + foreground；选中行保持 active foreground,
  *  hover 只叠一层同色半透明高光)。 */
 function SessionAction({
@@ -1406,7 +1406,7 @@ function SessionAction({
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
         className={cn(
-          'shrink-0 size-5 p-0 flex items-center justify-center rounded-md',
+          'shrink-0 size-5 p-0 flex items-center justify-center',
           'focus:outline-none',
           isActive
             ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
