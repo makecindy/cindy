@@ -4564,11 +4564,12 @@ export function ModelSelector({
   const currentModel = routeModel
     ? { ...routeModel, displayName: routeModel.name, id: modelId }
     : visibleModels.find((m) => m.id === modelId);
-  // An existing device-link task sends on its confirmed route even if the picker
-  // cannot refresh the directory. Keep directory diagnostics in the open picker.
+  // Keep directory refresh errors in the picker when the task model is known
+  // and the selected engine still reports its capabilities.
   const agentCapabilities = agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : pi;
   const confirmedRemoteModel = actualRoute && agentIdentity?.state === 'current' && !!currentModel &&
-    !isProviderAccessDeniedError(remoteProviders.error) && !isProviderAccessDeniedError(agentCapabilities.error);
+    agentCapabilities.capabilities != null && !agentCapabilities.error &&
+    !isProviderAccessDeniedError(remoteProviders.error);
   const remoteModelLoadFailed = providersOverrideState?.status === 'error' ||
     (sshCodexCurrent && sshCodex?.status === 'error') ||
     (!!deviceId && remoteModelListStatus === 'error' && !confirmedRemoteModel);
