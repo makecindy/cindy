@@ -58,6 +58,8 @@ const ROOT_SOURCE_CONTRACTS = new Map([
   ['scripts/__tests__/host-skill-projection-owner.test.mjs', 'Host projection owner-commit injection'],
   // Host hands maker-core engines only dependency keys maker-core reads (spreads escape tsc's excess-key check).
   ['scripts/__tests__/host-agent-deps-contract.test.mjs', 'Host engine wiring and maker-core dependency keys'],
+  // Every path the Host's server.mjs answers outside the service gate is classified for a desktop hold.
+  ['scripts/__tests__/host-server-hold-classification.test.mjs', 'Host server paths classified for a desktop hold'],
   // Packaged notice generation and both application entry points must stay wired.
   ['scripts/__tests__/third-party-notices.test.mjs', 'cross-platform bundled license contracts'],
 ]);
