@@ -29,6 +29,17 @@ final class EphemeralProvider: NSItemProvider {
     try? FileManager.default.removeItem(at: url)
   }
 }
+// A modern provider can vend bytes without implementing legacy loadItem
+// or supplying a temporary file for loadFileRepresentation.
+final class BytesProvider: NSItemProvider {
+  override func loadItem(forTypeIdentifier identifier: String, options: [AnyHashable: Any]? = nil, completionHandler: NSItemProvider.CompletionHandler? = nil) {
+    completionHandler?(nil, CocoaError(.fileReadUnsupportedScheme))
+  }
+  override func loadFileRepresentation(forTypeIdentifier identifier: String, completionHandler: @escaping (URL?, Error?) -> Void) -> Progress {
+    completionHandler(nil, CocoaError(.fileReadUnsupportedScheme))
+    return Progress(totalUnitCount: 0)
+  }
+}
 enum ShareType { case text, url, image, video, audio, file }
 struct SharePayload { let type: ShareType; let value: String; let mimeType: String?; let metadata: String? }
 final class Adapter {
@@ -58,6 +69,23 @@ final class Adapter {
     // The file URL owns the bytes; a separate image representation may be only
     // its thumbnail. Extensionless originals must not inherit that preview type.
     let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")!
+    for (type, bytes, expected) in [(UTType.utf8PlainText, Data("备忘录文字".utf8), ShareType.text),
+                                    (.png, png, .image), (.pdf, Data("%PDF-test".utf8), .file)] {
+      let provider = BytesProvider()
+      provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { done in
+        done(bytes, nil); return nil
+      }
+      guard let payload = await adapter.parse(provider), payload.type == expected else {
+        fatalError("Missing data representation for " + type.identifier)
+      }
+      if expected == .text {
+        precondition(payload.value == "备忘录文字")
+      } else {
+        let file = URL(string: payload.value)!
+        precondition(try! Data(contentsOf: file) == bytes)
+      }
+    }
+    print("PASS: text, photos and documents available only as data representations")
     if selected != "raw-image" {
       let url = root.appendingPathComponent("data encoded document.pdf")
       let bytes = Data("original file URL document".utf8)
