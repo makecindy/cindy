@@ -833,6 +833,19 @@ describe('newMakerDraft store', () => {
     expect(m2.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
   });
 
+  it('restores the remotely selected engine and model on the next draft', async () => {
+    const store = await loadModule();
+    store.patchVendorPrefs('codex', { model: 'old-model' });
+    store.switchVendor('pi');
+    store.patchVendorPrefs('codex', { model: 'chosen-model', providerId: 'chosen-source' }, { selectVendor: true });
+    store.patchVendorPrefsPreservingModelChoice('codex', { model: 'old-model', effort: 'high' });
+
+    const reopened = (await reloadModule()).getDraft();
+    expect(reopened.vendor).toBe('codex');
+    expect(reopened.lastByVendor.codex).toMatchObject({ model: 'chosen-model', providerId: 'chosen-source' });
+    expect(reopened.modelChosenByVendor.codex).toBe(true);
+  });
+
   it('patchVendorPrefsFromTaskModelSwitch:新建默认在另一个来源上时,任务内只换模型不改写', async () => {
     const m1 = await loadModule();
     m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'high' });
@@ -2146,6 +2159,16 @@ describe('remote engine is a window-local choice', () => {
     expect(draftStore.getDraftForPreferenceSync().vendor).toBe('pi');
     draftStore.__reloadForTest();
     expect(draftStore.getDraft().vendor).toBe('pi');
+  });
+  it('remembers a controller choice while this window is following another computer', () => {
+    followRemote();
+    draftStore.patchVendorPrefs('codex', { model: 'chosen' }, { selectVendor: true });
+    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('codex');
+    expect(engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: null, currentVendor: 'cc',
+      defaultsReady: false, selectedAgentKind: undefined,
+    })).toBe('codex');
   });
   it('preserves manual selection even after selecting the followed engine again', () => {
     followRemote();

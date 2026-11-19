@@ -142,6 +142,10 @@
     "message": "O Cindy não consegue ler este anexo. Selecione o ficheiro original para continuar a enviar esta mensagem. Se cancelar, o rascunho será mantido.",
     "button": "Usar ficheiro original"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "Este envio foi cancelado porque a tarefa ou a janela mudou.",
+    "invalid": "Este envio já não é válido para a sessão atual."
+  },
   "mailReader": {
     "showExternalImages": "Mostrar imagens externas",
     "markReadFailed": "Não foi possível sincronizar o estado de leitura. Verifique a autorização da caixa de correio e volte a abrir este e-mail.",
@@ -433,7 +437,8 @@
       "loading": "A carregar o acesso aos modelos…",
       "loadFailed": "Não foi possível carregar o acesso aos modelos. Volte a abrir estas definições.",
       "saveFailed": "Não foi possível guardar o acesso aos modelos. Tente novamente.",
-      "needsUpdate": "Atualize o Cindy no computador do fornecedor para gerir o acesso aos modelos."
+      "needsUpdate": "Atualize o Cindy no computador do fornecedor para gerir o acesso aos modelos.",
+      "followsPool": "Esta ligação foi integrada em “{{pool}}”, por isso os modelos remotos seguem “{{pool}}”. Altere lá. Os limites de membros abaixo continuam a poder ser definidos aqui."
     },
     "entry": {
       "label": "Acesso remoto e partilha",
@@ -446,6 +451,8 @@
     },
     "manage": {
       "createLink": "Criar ligação de partilha",
+      "exportRoster": "Exportar lista de membros",
+      "exportRosterFailed": "Não foi possível guardar a lista de membros.",
       "loading": "A carregar a partilha…",
       "notReady": "A partilha não está disponível de momento. Certifique-se de que tem sessão iniciada e está online; será efetuada uma nova tentativa automaticamente.",
       "loadFailed": "Não foi possível carregar os detalhes da partilha. Tente novamente dentro de momentos.",
@@ -943,7 +950,7 @@
       "title": "Continuar em {{label}}?",
       "fallbackTitle": "Continuar em {{label}} com um resumo?",
       "fallbackDescription": "Não foi possível restaurar totalmente a conversa original. Um resumo pode omitir detalhes anteriores e resultados de ferramentas. Cancele para enviar no computador original.",
-      "description": "Para usar a quota de todas as contas de forma equilibrada, envie esta mensagem a partir de {{label}} ({{quota}}). As últimas mensagens e um resumo são transferidos; os detalhes mais antigos podem perder-se.",
+      "description": "Para usar a quota de todas as contas de forma equilibrada, envie esta mensagem a partir de {{label}} ({{quota}}). A conversa é retomada. As partes anteriores podem ser condensadas para caber no modelo.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
       "confirm": "Mudar só desta vez",
@@ -1359,10 +1366,11 @@
         "body": "Esta tarefa tem {{device}} aberto noutro computador. Ative o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
         "action": "Ativar"
       },
-      "update": {
-        "title": "Atualize o plugin “{{plugin}}”",
-        "body": "Esta tarefa tem {{device}} aberto noutro computador. Atualize o plugin “{{plugin}}” neste computador para ver e operar o dispositivo na barra lateral direita.",
-        "action": "Atualizar"
+      "unsupported": {
+        "title": "O plugin «{{plugin}}» não suporta a visualização remota",
+        "body": "O plugin instalado não consegue mostrar {{device}} a partir de outro computador. Procure uma atualização compatível ou utilize o dispositivo no computador que executa esta sessão.",
+        "action": "Procurar atualização compatível",
+        "unavailable": "Não há nenhuma atualização compatível na origem deste plugin. Utilize o dispositivo no computador que executa esta sessão."
       }
     },
     "lockOnExitHintPrivacy": "Mostra o ecrã de privacidade ao sair, para a IA continuar a trabalhar; tocar no computador bloqueia-o.",
@@ -1934,7 +1942,6 @@
       "memory": "Memória",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Modelos auxiliares",
-      "visionBridge": "Vision Bridge",
       "compaction": "Compactação de contexto",
       "terminalShell": "Shell predefinida do terminal",
       "composer": "Introdução de mensagens",
@@ -3521,7 +3528,7 @@
         "end": "Tudo acima foi importado de {{source}}",
         "endHandoff": "Tudo acima foi importado de {{source}}. {{harness}} continua a partir daqui."
       },
-      "projectMenu": "Importar sessões deste projeto de outras ferramentas…",
+      "projectMenu": "Importar tarefas…",
       "hiddenCount_many": "{{count}} ocultas",
       "groupTasks_many": "{{count}} sessões",
       "selectedSummary_many": "{{count}} selecionadas · {{size}}",
@@ -4163,6 +4170,7 @@
         "refreshSpeechAdded": "Modelos atualizados; adicionado 1 modelo de voz sugerido",
         "refreshNoNew": "A lista de modelos está atualizada — sem novidades",
         "refreshFailed": "Não foi possível atualizar a lista de modelos — tente novamente mais tarde",
+        "refreshReconnect": "Não foi possível atualizar a lista de modelos. Volte a ligar este fornecedor e tente novamente.",
         "refreshFetchDisabled": "A obtenção do catálogo remoto de modelos está desativada — atualização ignorada",
         "disableModel": "Desativar este modelo",
         "paymentRequired": "Pago",
@@ -4394,7 +4402,8 @@
           "description": "Quando ativo, os seus outros computadores e as pessoas com quem partilha podem usar os modelos deste fornecedor. O Agent é executado neste computador, usando a sessão e a quota deste computador.",
           "descriptionGroup": "Quando ativo, os seus outros computadores e as pessoas com quem partilha podem usar os modelos deste fornecedor. O grupo de fornecedores escolhe o computador que executa o Agent.",
           "ariaLabel": "Permitir que os seus outros computadores e as pessoas com quem partilha usem este fornecedor",
-          "writeFailed": "Não foi possível guardar a definição de acesso remoto. Tente novamente."
+          "writeFailed": "Não foi possível guardar a definição de acesso remoto. Tente novamente.",
+          "followsPool": "Esta ligação foi integrada em “{{pool}}” e segue o “Permitir utilização remota” dele. Altere lá."
         },
         "ownComputersCanUse": "Disponível para os meus outros computadores",
         "moreActionsAria": "Mais ações",
@@ -5472,37 +5481,6 @@
       "title": "Dicas",
       "description": "Opções funcionais. Algumas exigem uma nova sessão para entrar em vigor (consulte as descrições de cada célula)."
     },
-    "visionBridge": {
-      "title": "Vision Bridge",
-      "description": "Permitir que modelos apenas de texto leiam imagens, encaminhando-as para um modelo multimodal separado que as converte em descrições textuais.",
-      "enableLabel": "Ativar Vision Bridge",
-      "enableHint": "Quando desativado, todos os modelos funcionam exatamente como antes. Quando ativado, os modelos selecionados abaixo encaminham as imagens através do backend de visão. As imagens enviadas para estes modelos e o texto próximo usado como indicação de foco são enviados para o backend de visão escolhido.",
-      "enableAria": "Ativar/desativar Vision Bridge",
-      "toast": {
-        "saved": "Definições de Vision Bridge guardadas",
-        "saveFailed": "Não foi possível guardar as definições de Vision Bridge"
-      },
-      "capability": {
-        "vision": "Com capacidade de visão conhecida",
-        "noVision": "Apenas de texto confirmado",
-        "unknown": "Capacidade de visão desconhecida"
-      },
-      "targetModels": {
-        "label": "Modelos encaminhados através de Vision Bridge",
-        "hint": "Os modelos apenas de texto (por exemplo, DeepSeek) estão selecionados por predefinição. Também pode selecionar modelos com capacidade de visão — por exemplo, para usar um modelo de descrição mais barato e poupar tokens.",
-        "empty": "Nenhum modelo disponível.",
-        "toggleAria": "Ativar/desativar Vision Bridge para {{model}}"
-      },
-      "backends": {
-        "label": "Modelos do backend de visão",
-        "hint": "Escolha até dois modelos multimodais que convertam imagens em texto. O segundo (de reserva) é opcional.",
-        "primary": "Principal",
-        "fallback": "Reserva",
-        "unset": "Nenhum selecionado",
-        "noBackup": "Sem reserva",
-        "hintSecondary": "O backend principal é usado primeiro. Se falhar e existir um de reserva, este é usado. Se ambos falharem, não é possível descrever a imagem e esta é substituída por um aviso de texto."
-      }
-    },
     "terminalShell": {
       "title": "Shell predefinida do terminal",
       "description": "Usar esta shell ao abrir um novo separador de terminal na barra lateral.",
@@ -6513,18 +6491,13 @@
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controlo remoto não ativado nesse dispositivo",
         "masterOffHint": "Ative primeiro o interruptor principal acima",
-        "controllingThisMac": "Ligado à Cindy",
-        "useThisDeviceModels": "Usar os modelos deste dispositivo",
-        "allowModelUseAria": "Permitir que {{name}} use os modelos deste computador"
+        "controllingThisMac": "Ligado à Cindy"
       },
       "toast": {
         "revoked": "Acesso revogado para este dispositivo",
         "revokeFailed": "Falha ao revogar o acesso",
         "restored": "Acesso restaurado para este dispositivo",
-        "restoreFailed": "Falha ao restaurar o acesso",
-        "modelUseRestored": "Esse computador pode voltar a usar os modelos deste",
-        "modelUseRevoked": "Esse computador já não pode usar os modelos deste",
-        "modelUseFailed": "Não foi possível guardar “Usar os modelos daqui”. Tente novamente."
+        "restoreFailed": "Falha ao restaurar o acesso"
       },
       "sections": {
         "myDevices": "Os meus dispositivos",
@@ -6894,6 +6867,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Os dispositivos antigos e as partilhas que usam a ligação anterior ficarão indisponíveis. Desativado por predefinição.",
         "peerSwitch": {
@@ -7028,11 +7005,6 @@
       "description": "Os dispositivos com sessão iniciada na mesma conta Feishu podem detetar-se mutuamente. Quando «Permitir controlo» está ativado, os seus outros dispositivos podem controlar remotamente o {{appName}} nesta máquina.",
       "allowControl": "Permitir que dispositivos da mesma conta controlem esta máquina",
       "allowControlHint": "Quando ativado, outros dispositivos com sessão iniciada na mesma conta podem controlar esta máquina sem aprovação por ligação. É apresentado um indicador visível durante o controlo, e pode desligar a qualquer momento.",
-      "ownModelAccess": {
-        "title": "Permitir que os meus outros computadores usem os modelos deste",
-        "hint": "Quando ativado, os seus outros computadores podem usar os fornecedores deste computador. O Agent é executado aqui, com a sessão e a quota deste computador. Nada é partilhado com outras pessoas.",
-        "writeFailed": "Não foi possível guardar esta definição. Tente novamente."
-      },
       "keepAwake": "Manter o computador ativo",
       "keepAwakeHint": "Quando ativado, esta máquina não entra em suspensão, para que os Agents em segundo plano e as tarefas agendadas continuem a ser executados (pode continuar a desligar o monitor ou bloquear o ecrã).",
       "linkStatus": {
@@ -7946,6 +7918,18 @@
         "overviewTab": "Visão geral",
         "addPlugin": "Adicionar plugin",
         "addPluginAria": "Opções de adição de plugins",
+        "githubInstall": {
+          "label": "Instalar a partir de uma release do GitHub…",
+          "title": "Instalar a partir de uma release do GitHub",
+          "description": "Cole a ligação de um repositório ou de uma release. Para um repositório privado, inicie sessão com uma conta GitHub com acesso.",
+          "url": "Endereço do GitHub",
+          "submit": "Procurar plugin",
+          "loading": "A procurar e transferir…",
+          "invalid": "Introduza o URL do repositório ou da etiqueta da release do GitHub.",
+          "not-found": "Esta versão não está disponível. Verifique a ligação e o acesso ao repositório.",
+          "ambiguous": "Esta ligação contém vários plugins. Escolha uma release com um único pacote ou instale o ficheiro diretamente.",
+          "installedAlready": "Este plugin já está instalado. Pode atualizá-lo nas respetivas definições."
+        },
         "installedSection": "Instalados",
         "installedExpand": "Mostrar os {{count}} plugins instalados",
         "installedCollapse": "Ocultar plugins instalados adicionais",
@@ -8320,7 +8304,7 @@
         "hostTools_handoff": "Mensagens para tarefas",
         "hostTools_handoffDetail": "Usar as ferramentas da Cindy para enviar mensagens para tarefas existentes. As operações que precisam da tarefa atual exigem um destino explícito.",
         "hostTools_usage": "Ler a utilização e o estado dos grupos de fornecedores",
-        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições.",
+        "hostTools_usageDetail": "Lê os identificadores, planos, períodos de quota e horas de atualização das contas locais de Claude/Codex ligadas à tua conta Cindy. Lê a utilização registada por dia e modelo, os custos estimados, a configuração e o estado dos grupos de fornecedores e os identificadores, nomes e avatares visíveis de membros e dispositivos neste computador ou noutros computadores autorizados da mesma conta. Não permite ler e-mails de início de sessão das subscrições, diretórios de contas, impressões de identidade internas, credenciais ou ficheiros, nem alterar contas ou definições. Também lê a quota de tarefas acessíveis, incluindo noutro computador autorizado da mesma conta ou num fornecedor partilhado que permita ver a quota.",
         "hostTools_settings": "Definições da aplicação",
         "hostTools_settingsDetail": "Usar as ferramentas da Cindy para ler e alterar a configuração. Os segredos não são devolvidos e os dados confidenciais são introduzidos por si.",
         "hostTools_scheduler": "Gestão de automatizações",
@@ -8844,6 +8828,10 @@
       "panelHost": {
         "close": "Fechar painel"
       },
+      "installProgress": {
+        "awaitingConsent": "A aguardar confirmação…",
+        "installFailed": "Falha na instalação"
+      },
       "updateAll": {
         "title": "Atualizar todos · {{count}} plugins",
         "collapseDiff": "Recolher",
@@ -8854,6 +8842,7 @@
         "statusDone": "Atualizado",
         "statusSkipped": "Ignorado",
         "statusFailed": "Falha na atualização",
+        "progressCount": "{{done}} de {{total}} atualizados",
         "background": "Continuar em segundo plano",
         "doneAction": "Concluído",
         "doneToast": "Atualização em lote concluída: {{done}} atualizados, {{rest}} por concluir",
@@ -10955,6 +10944,8 @@
     }
   },
   "bots": {
+    "rosterLoadFailed": "Não foi possível carregar os amigos",
+    "rosterReload": "Recarregar amigos",
     "avatarStatus": {
       "awaiting": "Precisa da sua confirmação",
       "error": "Precisa de atenção",
@@ -11093,6 +11084,8 @@
     "autosave": {
       "saving": "A guardar…",
       "saved": "Guardado",
+      "unconfirmed": "Gravação não confirmada",
+      "savedModel": "Guardado · a partir do próximo turno",
       "retry": "Guardar novamente"
     },
     "retry": "Tentar novamente",
@@ -11206,7 +11199,7 @@
       "discard": "Descartar alterações",
       "continueEditing": "Continuar a editar"
     },
-    "profileSaveFailed": "Não foi possível guardar as definições do amigo. Não foram aplicadas alterações.",
+    "profileSaveFailed": "Não foi possível guardar as definições do amigo.",
     "profileSaveOffline": "Não é possível ligar ao computador do amigo. Restabeleça a ligação e volte a guardar.",
     "modelLabel": "Modelo",
     "modelUnavailable": "{{model}} (atualmente indisponível)",
@@ -11531,7 +11524,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do amigo atingiu o limite de sessões remotas.\nPeça ao proprietário do amigo para arquivar sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e partilha.",
           "REMOTE_TOTAL_LIMIT": "{{name}} não pode responder: o computador remoto atingiu o limite total de sessões remotas.\nPeça ao proprietário desse computador para libertar sessões não utilizadas ou aumentar o limite em Acesso remoto e partilha.",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}} não conseguiu responder: o modelo atual não suporta imagens.\nEscolha um modelo compatível com imagens ou ative e configure Vision Bridge em Definições → Personalização e volte a enviar a mensagem.",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}} não conseguiu responder: o modelo atual não suporta imagens.\nEscolha um modelo que suporte imagens.",
           "MODEL_UNAVAILABLE": "{{name}} não conseguiu responder: não há nenhum modelo disponível.\nEscolha um modelo ligado e disponível nas definições do amigo e volte a enviar a mensagem.",
           "AUTH_REQUIRED": "{{name}} não conseguiu responder: a ligação ao modelo requer autenticação.\nVolte a ligar o fornecedor do modelo nas Definições e volte a enviar a mensagem.",
           "RATE_LIMITED": "{{name}} não conseguiu responder: demasiados pedidos ao modelo.\nVolte a enviar a mensagem mais tarde ou escolha outro modelo disponível.",
@@ -14224,7 +14217,7 @@
         "effortEndFast": "Mais rápido",
         "effortEndSmart": "Mais inteligente",
         "railSameEngine": "Apenas {{agent}}",
-        "crossEngineWarning": "Mudar de motor reconstrói o contexto e pode causar perda de conteúdo",
+        "crossEngineWarning": "O motor muda na próxima mensagem e retoma a conversa. As partes anteriores podem ser condensadas.",
         "favoritesSyncFailed": "Não foi possível sincronizar os favoritos. Volte a abrir o seletor para tentar novamente; o computador remoto poderá precisar de uma atualização.",
         "favoritesSyncFailedUnreachable": "Os favoritos ainda não estão sincronizados: esse computador está inacessível. Volte a abrir o seletor quando a ligação for restabelecida.",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14240,12 +14233,8 @@
         "ultrafast": "Ultrarrápido"
       },
       "discoveredCopy": {
-        "title": "Usar {{provider}} em «{{device}}»?",
-        "description": "{{unavailable}} Se continuar, será executado em «{{device}}». Pode voltar aqui quando quiser.",
         "unavailableHere": "{{provider}} neste computador não está disponível de momento.",
-        "unavailableOn": "{{provider}} em «{{device}}» não está disponível de momento.",
-        "confirm": "Usar",
-        "cancel": "Manter como está"
+        "unavailableOn": "{{provider}} em «{{device}}» não está disponível de momento."
       }
     },
     "permissionSelector": {
@@ -14512,33 +14501,14 @@
       "credentialSwitchApplied": "A mudança de fornecedor de modelos já está em vigor.",
       "credentialSwitchFailed": "A mudança de fornecedor de modelos falhou. Escolha novamente o modelo.",
       "modelSwitchContextGuard": {
-        "title": "Este modelo não comporta a conversa atual",
         "warnToast": "Esta conversa já utiliza {{used}} — cerca de {{pct}}% da capacidade de {{total}} do novo modelo",
-        "overflowDescription": "Esta conversa já utiliza {{used}}, mais do que o novo modelo comporta ({{total}}, cerca de {{pct}}%). Se mudar, Cindy fará um breve resumo e continuará. O histórico da conversa mantém-se; apenas não será transmitido integralmente palavra por palavra.",
-        "overflowDescriptionRemote": "Esta tarefa remota já utiliza {{used}} / {{total}} do contexto do modelo mais pequeno (cerca de {{pct}}%), pelo que Cindy não pode mudar em segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo.",
-        "confirmSwitch": "Mudar e continuar",
-        "cancelSwitch": "Manter este modelo"
+        "condensedToast": "As partes anteriores da conversa serão condensadas para caber no novo modelo. O histórico completo continua disponível.",
+        "overflowDescriptionRemote": "Esta tarefa remota já utiliza {{used}} / {{total}} do contexto do modelo mais pequeno (cerca de {{pct}}%), pelo que Cindy não pode mudar em segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo."
       },
       "agentSwitch": {
         "engineNotReady": "Motor alterado, mas o novo motor não arrancou; voltará a tentar quando enviar uma mensagem",
         "failed": "Falha ao alterar o motor; alteração não aplicada",
-        "deferred": "Alteração agendada: mudará para {{agent}} · {{model}} quando enviar a próxima mensagem",
-        "confirmation": {
-          "title": "Mudar de Agent?",
-          "description": "O novo motor do Agent continua através de um resumo de transição, pelo que não é possível garantir a transferência integral do raciocínio e de outros conteúdos; voltar ao motor anterior permite continuar a sessão original desse motor. A mudança também interrompe a cache de prompts uma vez e pode aumentar o consumo de tokens.",
-          "confirm": "Mudar de Agent",
-          "cancel": "Manter Agent atual",
-          "dontShowAgain": "Não voltar a lembrar"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "Voltar a executar o Agent neste computador?",
-        "titleOther": "Executar o Agent em «{{device}}»?",
-        "description": "O registo da conversa no outro computador não pode ser transferido, pelo que a conversa continua a partir de um resumo de transição. O raciocínio e detalhes semelhantes podem não ser transferidos na íntegra. Entra em vigor quando enviar a próxima mensagem.",
-        "descriptionNativeHistory": "O registo completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, a conversa continua a partir de um resumo de transição, e o raciocínio e detalhes semelhantes podem não ser transferidos na íntegra. Entra em vigor quando enviar a próxima mensagem.",
-        "confirm": "Mudar de computador",
-        "cancel": "Manter como está",
-        "discoveredDescription": "{{reason}} {{description}}"
+        "deferred": "Alteração agendada: mudará para {{agent}} · {{model}} quando enviar a próxima mensagem"
       }
     },
     "agentSelect": {
@@ -15029,11 +14999,6 @@
       "unavailable": "Imagem indisponível",
       "loading": "A carregar imagem…"
     },
-    "visionBridge": {
-      "analyzing": "A analisar {{count}} imagem(ns)…",
-      "fallback": "A ponte de visão recorreu a um backend de visão de reserva (principal indisponível); o reconhecimento de imagens poderá ser afetado",
-      "unavailable": "A ponte de visão está indisponível; não foi possível descrever a imagem, que foi substituída por um aviso de texto"
-    },
     "newMessageIndicator": {
       "aria": "Voltar ao fundo, ver {{count}} novas mensagens",
       "label_one": "{{count}} nova mensagem",
@@ -15143,6 +15108,7 @@
       "credentialSwitchBusy": "Ainda está outra tarefa Codex em execução, pelo que ainda não é possível aplicar o fornecedor desta sessão (o processo Codex partilhado precisa de ser reiniciado). Tente novamente quando essas tarefas terminarem.",
       "accountBoundaryPending": "O Cindy ainda está a alterar o estado da conta, pelo que esta tarefa ainda não pode começar. Aguarde um momento e prima Tentar novamente. Se isto persistir, reinicie o Cindy.",
       "codexThreadStale": "O modo de autenticação do Codex mudou — esta sessão não pode continuar. Inicie uma nova sessão para o aplicar.",
+      "codexSharedAuthLinkUnavailable": "Neste computador o Codex já tem um início de sessão ativo, mas esta sessão não o consegue usar: não é possível criar a ligação a essa conta (com uma conta padrão do Windows, normalmente não é). Verifique se o {{appName}} neste computador tem permissão para criar essa ligação (no Windows, execute-o uma vez como administrador ou ative o modo de programador) e clique em «Tentar novamente». Também pode clicar em «Iniciar sessão novamente no ChatGPT» para que a Cindy use um início de sessão próprio para esta sessão.",
       "codexResumeNotReady": "O Codex não consegue retomar esta tarefa neste momento. Tente novamente daqui a pouco.",
       "claudeGatewayOpusPlanMismatch": "Este pedido Opus passou pelo XD Gateway, não pela sua subscrição Claude.ai. Essa rota do gateway rejeitou o modelo. Mude para a sua subscrição Claude.ai e tente novamente ou escolha outro modelo.",
       "claudeSubscriptionOpusPlanMismatch": "O Opus não está disponível no plano Claude Pro ligado. Mude para um modelo incluído no seu plano. Se atualizou o plano recentemente, volte a ligar a Anthropic nas Definições e tente novamente.",
@@ -15242,6 +15208,9 @@
       "continueFailed_many": "Não foi possível retomar {{count}} sessões. Abra-as para tentar novamente."
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "A autorização para esta ação expirou. A próxima execução continua agendada.",
+      "actionExpired": "A autorização da sessão para esta ação expirou. Consulte a execução mais recente da automatização.",
+      "actionRecovered": "A autorização para esta ação expirou. A mesma automatização foi executada com sucesso mais tarde.",
       "text": "Uma execução automática falhou.",
       "precheck": "As verificações automáticas estão temporariamente bloqueadas.",
       "rateLimited": "As verificações automáticas estão temporariamente bloqueadas por um limite de frequência de pedidos.",
@@ -15675,6 +15644,11 @@
         "relocatedElsewhere": "O Agent está agora em execução noutro computador",
         "quotaRebalance": "a respetiva quota deve ser utilizada primeiro"
       },
+      "handoffCoverage": {
+        "complete": "Conversa retomada na íntegra",
+        "condensed": "Partes anteriores condensadas",
+        "details": "Conteúdo transferido para retomar a conversa"
+      },
       "contextRebuild": {
         "labelOverflow": "Contexto reorganizado, a continuar",
         "labelTimeout": "O último turno não respondeu; contexto reorganizado para continuar",
@@ -15953,7 +15927,7 @@
       "REMOTE_AGENT_INVALID": "Ocorreu um erro na comunicação com o computador que executa o Agent. Tente novamente; se o problema persistir, atualize o Cindy em ambos os computadores.",
       "REMOTE_AGENT_RESUME_REJECTED": "O computador que executa o modelo não consegue retomar esta sessão. Cria uma nova sessão a partir da lista de sessões e copia o conteúdo necessário para continuar. A sessão original e as mensagens em fila são mantidas.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo atingiu o limite de partilha definido pelo proprietário. Escolha outro modelo disponível para continuar.",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não lhe abriu este fornecedor ou o modelo selecionado. Se for o seu próprio computador, ative “Permitir que os meus outros computadores usem os modelos deste” na ligação remota dele. Se alguém o partilhou consigo, peça ao proprietário para ajustar o acesso em Acesso remoto e partilha. Também pode escolher outro modelo.",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não lhe abriu este fornecedor ou o modelo selecionado. Se for o seu próprio computador, ative “Permitir utilização remota” neste fornecedor nesse computador. Se alguém o partilhou consigo, peça ao proprietário para ajustar o acesso em Acesso remoto e partilha. Também pode escolher outro modelo.",
       "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tenta novamente ou tenta uma mensagem diferente.",
       "REMOTE_AGENT_SHARE_PAUSED": "O proprietário colocou esta partilha em pausa para si, pelo que estes modelos não podem ser usados até ser retomada. Mude para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Esta partilha já não está disponível (o proprietário removeu-a ou o utilizador saiu dela). Mude para outro modelo para continuar.",
@@ -16678,7 +16652,10 @@
       "confirmArchive": {
         "title": "Arquivar sessão",
         "description": "Arquivar esta sessão? Será removida da lista.",
-        "dirtyWorktreeWarning": "O worktree desta sessão tem alterações sem commit; serão guardadas como um snapshot git antes de arquivar e poderão ser restauradas a partir da sessão mais tarde.",
+        "dirtyWorktreeWarning": "As alterações sem commit serão guardadas antes de arquivar. Pode restaurá-las a partir da tarefa.",
+        "discardChanges": "Descartar alterações sem commit",
+        "discardWarning": "As alterações sem commit e os ficheiros novos serão perdidos.",
+        "discardAndArchive": "Descartar e arquivar",
         "scheduleWarning_one": "A automatização associada {{names}} continuará em execução e restaurará esta sessão.",
         "scheduleWarning_other": "As automatizações associadas {{names}} continuarão em execução e restaurarão esta sessão.",
         "scheduleWarningMany_one": "{{count}} destas sessões tem automatizações associadas que a restaurarão quando forem executadas.",
@@ -16716,6 +16693,7 @@
         "empty": "Esta automatização não tem sessões para arquivar."
       },
       "archiveAll": {
+        "projectTitle": "Arquivar todas as tarefas de «{{name}}»?",
         "title": "Arquivar todas as sessões",
         "confirm": "Arquivar todas",
         "cancel": "Cancelar",
@@ -16864,18 +16842,28 @@
         }
       },
       "projectAction": {
+        "menu": "Menu do projeto {{name}}",
+        "previewFailed": "Não foi possível carregar as tarefas deste projeto. Tente novamente.",
+        "remotePreviewFailed": "Não foi possível ler as tarefas do projeto remoto. Verifique a ligação e a versão do Cindy no computador remoto.",
         "rename": "Mudar nome do projeto",
         "pin": "Fixar projeto",
         "unpin": "Desafixar projeto",
-        "removeFromSidebar": "Remover projeto da barra lateral",
-        "removeFromSidebarConfirmTitle": "Remover {{name}}?",
-        "removeFromSidebarConfirmDescription": "Esta ação remove o projeto da barra lateral. Os ficheiros no seu computador não serão eliminados. As sessões existentes serão movidas para a secção Conversas e continuarão disponíveis.",
+        "removeFromSidebar": "Remover projeto do Cindy…",
+        "removeFromSidebarConfirmTitle": "Remover {{name}} do Cindy?",
+        "removeFromSidebarConfirmDescription": "Tarefas ativas: {{count}}. Pode continuá-las em Conversas.",
         "removeFromSidebarConfirmAction": "Remover projeto",
-        "removeFromSidebarFailed": "Não foi possível remover o projeto da barra lateral — tente novamente.",
-        "showFiles": "Mostrar ficheiros",
-        "archivedAll": "Arquivar todas",
-        "unarchiveAll": "Restaurar todas",
-        "openInExplorer": "Abrir no gestor de ficheiros",
+        "removeFromSidebarFailed": "Não foi possível remover o projeto.",
+        "archiveOnRemove": "Arquivar também as tarefas ({{count}})",
+        "keepSkippedOnRemove": "Estas tarefas permanecerão em Conversas ({{skip}}).",
+        "removedArchived": "Tarefas que serão movidas para o arquivo: {{count}}.",
+        "removeAndArchive": "Remover projeto e arquivar tarefas",
+        "removeKeepFiles": "A fixação, o nome personalizado e o ícone do projeto serão removidos. Os ficheiros e pastas serão mantidos.",
+        "showFiles": "Ver ficheiros da tarefa na barra lateral",
+        "archivedAll": "Arquivar todas as tarefas",
+        "unarchiveAll": "Restaurar todas as tarefas",
+        "openInFinder": "Abrir pasta do projeto no Finder",
+        "openInExplorer": "Abrir pasta do projeto no Explorador de Ficheiros",
+        "openInFileManager": "Abrir pasta do projeto no gestor de ficheiros",
         "newInDirectory": "Nova sessão neste diretório",
         "copyDeepLink": "Copiar ligação do projeto",
         "search": "Pesquisar sessões neste projeto"
@@ -17081,6 +17069,7 @@
         "summaryAria": "Ver resumo do PR #{{number}}",
         "unresolvedLabel": "Discussões de revisão por resolver",
         "checks": "Verificações",
+        "following": "A acompanhar",
         "checksTotal": "{{count}} no total",
         "failed": "Falhas",
         "passed": "Aprovadas",
@@ -17351,6 +17340,18 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "As verificações agendadas continuam sem notificações da GitHub App.",
+      "label": "PR",
+      "url": "URL do pull request",
+      "condition": "Executar quando",
+      "any": "Atividade no PR",
+      "merged": "Integração",
+      "review": "Atividade de revisão",
+      "ci": "Alterações na CI",
+      "timed": "Verificar também periodicamente",
+      "invalid": "Introduza o URL de um pull request do GitHub."
+    },
     "presentation": {
       "status": {
         "active": "Ativo",
@@ -21666,7 +21667,6 @@
       "sessionRuntimeFallback": "Troca automática do modelo das tarefas",
       "subagentModels": "Subagents",
       "auxiliaryModels": "Modelos auxiliares",
-      "visionBridge": "Vision Bridge",
       "modelVisibility": "Modelos exibidos e ocultos",
       "providerOrder": "Ordem dos fornecedores",
       "modelCatalogOverrides": "Parâmetros de modelo alterados",
@@ -21710,6 +21710,24 @@
   },
   "featureIntro": {
     "close": "Fechar",
+    "project": {
+      "title": "Conheça os projetos",
+      "lead": "Dê um projeto a cada trabalho contínuo. Os ficheiros ficam numa pasta do seu computador e o Cindy retoma sempre a partir do último resultado, sem ter de explicar o contexto outra vez.",
+      "files": {
+        "title": "Resultados são seus",
+        "body": "O Cindy lê e edita diretamente na pasta do projeto. O que cria fica no seu computador."
+      },
+      "context": {
+        "title": "Sem repetir contexto",
+        "body": "Uma tarefa nova no projeto já vê estes ficheiros e segue o que o projeto anotou."
+      },
+      "separate": {
+        "title": "Cada coisa no lugar",
+        "body": "Cada projeto reúne as suas tarefas, e trabalhos diferentes não se misturam."
+      },
+      "start": "Continuar para o novo projeto",
+      "note": "Basta dar um nome. Uma pasta existente ou um repositório de código também servem."
+    },
     "taskInbox": {
       "title": "Conheça a caixa de entrada",
       "lead": "As tarefas organizam-se sozinhas em Pendentes, Em curso, Adiadas e Tratadas. O melhor hábito é manter a caixa de entrada vazia: clique em Concluído quando terminar uma tarefa e adie o que pode esperar.",
@@ -22207,6 +22225,15 @@
     }
   },
   "projectSettings": {
+    "confirmImportTitle": "Transferir este repositório para este computador?",
+    "credentialNotice": "Se o repositório for privado, a Cindy poderá usar a conta com sessão iniciada neste computador.",
+    "saveTo": "Guardar em",
+    "confirmImport": "Confirmar importação",
+    "confirmSshTitle": "Permitir que este projeto aceda aos seguintes diretórios SSH?",
+    "sshHost": "Anfitrião SSH",
+    "readWriteAccess": "Leitura e escrita",
+    "readAccess": "Só de leitura",
+    "confirmAccess": "Permitir acesso",
     "autoLoading": "A procurar ícone…",
     "autoNone": "A utilizar as iniciais do nome do projeto.",
     "autoSource": "Origem",
@@ -22246,7 +22273,42 @@
     "discard": "Descartar",
     "colors": {
       "default": "Predefinida (seguir tema)"
-    }
+    },
+    "directories": "Diretórios do projeto",
+    "directoriesHint": "Aplica-se a todas as tarefas deste projeto a partir do próximo turno. Os diretórios específicos de cada tarefa são mantidos.",
+    "removeDirectory": "Remover diretório",
+    "directoryPath": "Caminho completo do diretório",
+    "addDirectory": "Adicionar diretório",
+    "browseDirectory": "Procurar diretórios",
+    "mainDirectory": "Diretório principal",
+    "createTitle": "Novo projeto",
+    "createAction": "Criar projeto",
+    "repository": "URL do repositório",
+    "repositoryHint": "Compatível com GitHub, GitLab e outros repositórios Git por HTTPS ou SSH.",
+    "autoDirectory": "Sem selecionar diretório, será criado em {{path}}. Nomes repetidos recebem um número.",
+    "cloning": "A clonar repositório…",
+    "invalidRepository": "Introduza uma URL válida de repositório GitHub, GitLab ou Git.",
+    "createFailed": "Não foi possível criar o projeto. Verifique a permissão de escrita, a URL e o acesso Git deste computador. O destino da clonagem deve estar vazio.",
+    "createNamePlaceholder": "Nome do projeto",
+    "createNameHint": "Dê um nome ao projeto para começar.",
+    "createFromRepository": "Criar a partir de um repositório de código",
+    "createBlank": "Mudar para um projeto vazio",
+    "source_blank": "Projeto vazio",
+    "source_existing": "Abrir pasta existente",
+    "source_repository": "Importar repositório",
+    "sourceHint_blank": "Introduza um nome. A pasta será criada automaticamente.",
+    "sourceHint_existing": "Escolha uma pasta de projeto neste computador.",
+    "sourceHint_repository": "Cole a ligação do repositório para transferir para este computador.",
+    "source": "Origem do projeto",
+    "sourceShort_blank": "Novo",
+    "sourceShort_existing": "Pasta",
+    "sourceShort_repository": "Repositório",
+    "automaticMain": "Principal · Automático",
+    "source_local": "Pasta local",
+    "sourceShort_local": "Pasta local",
+    "sourceHint_local": "Introduza um nome para criar uma pasta ou escolha uma existente.",
+    "chooseExistingFolder": "Escolher pasta existente",
+    "changeMainDirectory": "Alterar"
   },
   "taskManagement": {
     "scope": "Apenas para esta conta neste computador.",

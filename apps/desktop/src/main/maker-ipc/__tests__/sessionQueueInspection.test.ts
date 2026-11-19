@@ -48,6 +48,14 @@ function inspectionEntry(queuedMessageId: string): SessionQueueInspectionEntry {
 }
 
 describe('projectSessionQueueForInspection', () => {
+  // Unit / real queue output contract: a plugin-edited row keeps lifecycle origin,
+  // but history callers must see the attested plugin rather than the former sender.
+  it('reports plugin provenance before the original lifecycle origin', () => {
+    expect(projectSessionQueueForInspection([queuedItem('edited', {
+      sourcePlugin: { pluginId: 'editor' },
+      origin: { kind: 'session', senderSessionId: 'old', displayText: 'new body' },
+    })], [])).toMatchObject([{ source: 'plugin', sourceLabel: 'editor', content: 'new body', consuming: false }]);
+  });
   it('projects user, Orca, scheduler and session entries without leaking unrelated queue fields', () => {
     const result = projectSessionQueueForInspection(
       [

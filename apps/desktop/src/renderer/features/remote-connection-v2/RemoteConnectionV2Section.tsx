@@ -119,6 +119,7 @@ export function RemoteConnectionV2Section({
         agentNetRoutes: peerLinks.agentNetRoutes,
         relayRttMs: peerLinks.relayRttMs,
         relayProtocol: peerLinks.relayProtocol,
+        relayTransport: peerLinks.relayTransport,
         relayName,
         selfHosted: relay.state?.mode === 'self-hosted',
         controlledBy: s.controlledBy.map((c) => c.deviceId),

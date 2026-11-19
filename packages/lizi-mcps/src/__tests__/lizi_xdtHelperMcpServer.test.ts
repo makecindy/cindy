@@ -209,6 +209,22 @@ it('exposes read-only subscription usage to the common validated tool registry',
   } finally { await server.close(); }
 });
 
+// #11274: only the target task ID is accepted and the existing usage group admits the read.
+it('exposes session quota without accepting caller-supplied routing', async () => {
+  const readSession = vi.fn(async () => ({ status: 'unavailable' }));
+  const hostCaller = { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 };
+  const server = createXdtHelperMcpServer({ subscriptionUsage: { read: vi.fn(), readSession } },
+    { agentKind: 'codex', workingDir: '', hostCaller });
+  try {
+    expect(server.hostTools.describe('get_session_quota')).toMatchObject({ category: 'usage' });
+    expect(parsePayload(await server.hostTools.call('get_session_quota', { sessionId: 'target' })))
+      .toMatchObject({ ok: true, status: 'unavailable' });
+    expect(parsePayload(await server.hostTools.call('get_session_quota', { sessionId: 'target', deviceId: 'other' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(readSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hostCaller }), 'target');
+  } finally { await server.close(); }
+});
+
 // Unit, #9801 / 4537273680: external-history scan/status callbacks also recover
 // interrupted imports. Existing task tests did not cover a plugin caller. The
 // real shared dispatcher must reject all three tools before any callback (and

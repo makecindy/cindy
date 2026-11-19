@@ -19,3 +19,7 @@ export interface GithubPluginReleaseProgress {
   instanceId: string;
   progress: DownloadProgress;
 }
+
+export type GithubPluginReleaseInstallResult =
+  | { status: 'installed'; instanceId: string; version: string }
+  | { status: 'invalid' | 'empty' | 'ambiguous' | 'sign-in' | 'forbidden' | 'not-found' | 'unavailable' };

@@ -1,3 +1,4 @@
+import type { DownloadProgress } from './downloadProgress';
 import type { GhostManifest, InstalledGhost } from './ghost';
 import type { GhostReadmeContent, PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
 
@@ -155,6 +156,18 @@ export interface PluginMarketInstallOptions {
 /** 市场安装成功后返回已落位插件。 */
 export interface PluginMarketInstallResult {
   ghost: InstalledGhost;
+}
+
+/**
+ * Pushed on `plugin-market:install-progress` to the window that started an install or update.
+ * Display only: the install's outcome is still the `plugin-market:install` result. Local IPC,
+ * not part of the device-link or plugin wire contracts.
+ */
+export interface PluginMarketInstallProgress {
+  pluginId: string;
+  download: DownloadProgress;
+  /** The verified package is waiting for the user to confirm its permissions. */
+  awaitingConsent?: true;
 }
 
 /* ------------------------------------------------------------------------ */

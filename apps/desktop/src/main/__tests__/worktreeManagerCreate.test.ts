@@ -206,11 +206,15 @@ describe('createWorktree naming authority', () => {
     const setup = new Promise<void>(resolve => { reachedSetup = resolve; });
     gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
       if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
-      if (args.includes('core.hooksPath')) {
-        reachedSetup();
-        if (failSetup) return Promise.reject(new Error('hooks failed'));
-      }
       return previousGit(args, ...rest);
+    });
+    // #11157 removes the hooks write; keep exercising failure compensation at
+    // the remaining fatal metadata-persistence boundary (unit tier).
+    const previousSet = storeSetMock.getMockImplementation()!;
+    storeSetMock.mockImplementation((...args: unknown[]) => {
+      reachedSetup();
+      if (failSetup) return Promise.reject(new Error('metadata failed'));
+      return previousSet(...args);
     });
     const sessionId = `tracked-${failSetup}`;
     const creating = manager.createWorktree({sessionId, baseRepo, name: 'tracked', sourceBranch: 'main'}, {trackBackgroundCheckout: true});
@@ -449,9 +453,9 @@ describe('createWorktree naming authority', () => {
     // worktree whose ignored file differs from base) nor be compared byte by byte.
     it('rolls back a failed setup with multibox remove --wait, without force, despite carried caches', async () => {
       useMultiboxRepo();
+      storeSetMock.mockRejectedValueOnce(new Error('metadata failed'));
       const previousGit = gitExecMock.getMockImplementation()!;
       gitExecMock.mockImplementation(async (args: string[], ...rest: unknown[]) => {
-        if (args.includes('core.hooksPath')) throw new Error('hooks failed');
         if (args[0] === 'ls-files' && args.includes('--ignored')) {
           return { stdout: 'client/Library/ArtifactDB\0', stderr: '' };
         }

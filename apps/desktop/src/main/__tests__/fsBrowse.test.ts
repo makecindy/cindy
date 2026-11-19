@@ -14,13 +14,14 @@ const homePath = (...parts: string[]) => path.join(HOME, ...parts);
 
 const h = vi.hoisted(() => ({
   readdir: vi.fn(),
+  realpath: vi.fn(),
   stat: vi.fn(),
   mkdir: vi.fn(),
   homedir: vi.fn(() => HOME),
 }));
 
 vi.mock('node:fs', () => ({
-  promises: { readdir: h.readdir, stat: h.stat, mkdir: h.mkdir },
+  promises: { realpath: h.realpath, readdir: h.readdir, stat: h.stat, mkdir: h.mkdir },
 }));
 vi.mock('node:os', () => ({ homedir: h.homedir }));
 vi.mock('../logger.js', () => ({
@@ -172,4 +173,15 @@ describe('mkdirP', () => {
     h.mkdir.mockRejectedValueOnce(new Error('EROFS'));
     await expect(mkdirP('/readonly/x')).rejects.toThrow('[FS_BROWSE_FAILED]');
   });
+});
+
+// Unit: phone browsing and desktop selection must both return the host's actual project folder.
+it('shows the canonical directory to project pickers while keeping ordinary browsing lexical', async () => {
+  const target = homePath('Art');
+  h.realpath.mockResolvedValue(target);
+  h.readdir.mockResolvedValue([]);
+  h.stat.mockResolvedValue({ isDirectory: () => true });
+  expect((await listDir('~/link', { canonicalDirectory: true, platform: 'linux' })).resolvedPath).toBe(target);
+  expect((await statPath('~/link', true)).resolvedPath).toBe(target);
+  expect((await statPath('~/link')).resolvedPath).toBe(homePath('link'));
 });

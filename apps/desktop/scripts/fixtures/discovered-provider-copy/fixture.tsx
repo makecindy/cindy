@@ -1,13 +1,7 @@
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { BUNDLED_CATALOG, type ProviderView } from '@cindy/model-providers';
 import { ModelSelector, type UnifiedSelectionAgentDevice } from '../../../src/renderer/components/new-chat/ModelSelector';
-import {
-  confirmAgentSwitchRisk,
-  discoveredCopyReason,
-  relocationDescriptionKey,
-} from '../../../src/renderer/components/new-chat/agentSwitchConfirmation';
-import { ConfirmDialogProvider, useConfirmDialog } from '../../../src/renderer/components/ui/confirm-dialog-provider';
+import { ConfirmDialogProvider } from '../../../src/renderer/components/ui/confirm-dialog-provider';
 import { mountPage, subscription, ctx } from '../../ui-page/harness';
 
 // This computer's Anthropic is signed out right now; ROG has the same login. A share of the same
@@ -32,8 +26,6 @@ Object.assign(window, { listingFixture: { snapshot, devices, catalogs } });
 type Route = { providerId: string; modelId: string; device: { deviceId: string; name: string } | null };
 
 function Composer() {
-  const { t } = useTranslation();
-  const { confirm } = useConfirmDialog();
   const [route, setRoute] = useState<Route>({ providerId: 'anthropic', modelId: 'claude-fable', device: null });
   const running = ctx.case === 'running-task';
   const apply = (selection: { providerId: string; modelId: string; agentDevice?: UnifiedSelectionAgentDevice }) => {
@@ -45,30 +37,12 @@ function Composer() {
     <div data-composer data-route={`${route.device?.deviceId ?? 'local'}:${route.providerId}`}
       className="flex w-full max-w-[640px] items-center rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2">
       <ModelSelector modelId={route.modelId} currentProviderId={route.providerId} agentKind="claude-code" effort="high"
-        onModelChange={() => {}} onEffortChange={() => {}} 
+        onModelChange={() => {}} onEffortChange={() => {}}
         {...(running ? {} : { onUnifiedSelect: apply })}
         remoteAgent={{
           devices: devices.map(({ deviceId, name }) => ({ deviceId, name })),
           selectedDeviceId: route.device?.deviceId ?? null,
-          // A running task asks in its one relocation dialog, built from the same helpers as ChatInput.
-          ...(running ? {
-            onRelocate: async (selection) => {
-              const target = selection.agentDevice;
-              const description = t(relocationDescriptionKey({ fromAgent: 'claude-code', toAgent: selection.agent, fromAgentDeviceId: null, toAgentDeviceId: target?.deviceId }));
-              const ask = target?.askBeforeUse;
-              const ok = await confirmAgentSwitchRisk({
-                hasSwitchIntent: false, alwaysAsk: !!ask, confirm,
-                copy: {
-                  title: t('newChat.chatInput.agentRelocation.titleOther', { device: target?.name ?? '' }),
-                  description: ask ? t('newChat.chatInput.agentRelocation.discoveredDescription', { reason: discoveredCopyReason(t, ask), description }) : description,
-                  confirmText: t('newChat.chatInput.agentRelocation.confirm'),
-                  cancelText: t('newChat.chatInput.agentRelocation.cancel'),
-                  dontShowAgainLabel: t('newChat.chatInput.agentSwitch.confirmation.dontShowAgain'),
-                },
-              });
-              return ok && apply(selection);
-            },
-          } : {}),
+          ...(running ? { onRelocate: apply } : {}),
         }} />
     </div>
   );

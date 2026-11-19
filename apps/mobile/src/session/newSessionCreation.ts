@@ -45,6 +45,7 @@ import {
   buildRemoteCreateSessionOptions,
   normalizeCreateSessionResult,
   resolveStartedDowngradeOrCommit,
+  resolveNewSessionSkillDraft,
   sessionFromCreateResult,
   type NewSessionDraft,
 } from '@/session/newSession';
@@ -308,6 +309,7 @@ function synthesizeSession(params: NewSessionCreationParams, draftOverride?: New
       ...draft,
       attachments: params.attachments,
     }),
+    ...(params.precreatedWorktree ? { projectDir: params.precreatedWorktree.originalWorkingDir } : {}),
     pendingLocalCreation: true,
   };
 }
@@ -996,7 +998,7 @@ async function createSessionIdempotent(
   // 状态(UI 快照保持提交时语义)。precreated 分支在 persist started 后重验并
   // 重建(见下),其余路径直接使用本初值。
   let createOpts = {
-    ...buildRemoteCreateSessionOptions(effectiveDraft),
+    ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
     id: task.sessionId,
   };
 
@@ -1073,7 +1075,7 @@ async function createSessionIdempotent(
         if (patch) {
           effectiveDraft = { ...effectiveDraft, ...patch };
           createOpts = {
-            ...buildRemoteCreateSessionOptions(effectiveDraft),
+            ...buildRemoteCreateSessionOptions(effectiveDraft, task.precreatedWorktree?.originalWorkingDir),
             id: task.sessionId,
           };
         }
@@ -1312,7 +1314,12 @@ async function runPipeline(task: InternalTask): Promise<void> {
     const finalDraft: NewSessionDraft = draftPatch ? { ...task.draft, ...draftPatch } : task.draft;
 
     phase('creating');
-    const createOutcome = await createSessionIdempotent(task, finalDraft);
+    // The durable outbox resolves when preparing delivery, including cold recovery.
+    // Direct enqueue resolves after openLink, before creating any host session.
+    const creationDraft = params.transport.handoffFirstMessage ? finalDraft
+      : await resolveNewSessionSkillDraft(finalDraft, params.deviceId, maker);
+    assertTaskOwnerCurrent(task);
+    const createOutcome = await createSessionIdempotent(task, creationDraft);
     // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
     // 草稿传给排队消息)——createOpts 用修正版创建,排队消息合成也必须用同一
     // 修正版:否则 getSession 弱网失败时 sessionForQueue 按旧 finalDraft 合成,

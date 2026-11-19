@@ -122,7 +122,7 @@ Linux 用户可参考 [Ubuntu、Arch Linux 与 Omarchy 安装指南](docs/linux.
 | `apps/desktop` | Electron 桌面客户端 |
 | `apps/mobile` | Expo / React Native 手机客户端 |
 | `packages/*` | 客户端共享能力（鉴权、device-link、agent 编排、模型供应商等） |
-| `apps/*-bin` | 桌面端附带的工具二进制，均不入库；claude-code / codex / ripgrep 由 `pnpm install` 按平台自动下载，Android platform-tools 在 Windows 打包前按 pin 版本下载并校验 sha256 |
+| `apps/*-bin` | 桌面端附带的工具二进制，均不入库；claude-code / codex / ripgrep / pi 由 `pnpm install` 按平台自动下载，Android platform-tools 在 Windows 打包前按 pin 版本下载并校验 sha256 |
 
 **服务端不在本仓库：** 服务端位于独立仓库，不属于本 monorepo。
 
@@ -133,8 +133,8 @@ Linux 用户可参考 [Ubuntu、Arch Linux 与 Omarchy 安装指南](docs/linux.
 
 ### 前置要求
 
-- **Node.js** 22.x
-- **pnpm** 10.x（暂不支持 v11）
+- **Node.js** >= 22.13（以根 `package.json` 的 `engines.node` 为准）
+- **pnpm** 11.x（`>=11.25 <12`，以根 `package.json` 的 `engines.pnpm` 与 `packageManager` 为准）
 - **Git LFS**
 
 ### 开始开发

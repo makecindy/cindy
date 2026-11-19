@@ -32,6 +32,62 @@ vi.mock('../logger', () => ({
 const exec = promisify(execFile);
 let fixture: string | undefined;
 
+// #11157: createWorktree must preserve repository/inherited hooks and Git's unset
+// default. Mocked creation tests cannot observe shared config or hook execution.
+// Minimal failure: a repo with core.hooksPath=.custom-hooks, then one creation.
+// Real Git config + main/sibling/new-checkout commits belong in git-integration.
+it.each(['relative', 'absolute', 'inherited', 'unset'] as const)(
+  'preserves hooks configuration and execution when creating a worktree: %s',
+  async (mode) => {
+    fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-create-hooks-'));
+    vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+    const repo = path.join(fixture, 'repo');
+    await fs.mkdir(repo);
+    const globalConfig = path.join(fixture, 'global-config');
+    await fs.writeFile(globalConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig);
+    const git = async (cwd: string, ...args: string[]) =>
+      (await exec('git', args, { cwd, windowsHide: true, timeout: 10_000 })).stdout.trim();
+    await git(repo, 'init', '--initial-branch=main');
+    await git(repo, 'config', 'user.name', 'Test');
+    await git(repo, 'config', 'user.email', 'test@example.invalid');
+    await fs.writeFile(path.join(repo, 'tracked.txt'), 'fixture');
+    await git(repo, 'add', 'tracked.txt');
+    const hooks = mode === 'unset' ? path.join(repo, '.git', 'hooks')
+      : mode === 'relative' ? path.join(repo, '.custom-hooks') : path.join(fixture, 'custom hooks');
+    await fs.mkdir(hooks, { recursive: true });
+    await fs.writeFile(path.join(hooks, 'pre-commit'), '#!/bin/sh\nprintf ran > hook-ran\n', { mode: 0o755 });
+    if (mode !== 'unset') {
+      await git(repo, 'config', mode === 'inherited' ? '--global' : '--local',
+        'core.hooksPath', mode === 'relative' ? '.custom-hooks' : hooks);
+    }
+    if (mode === 'relative') {
+      await git(repo, 'add', '.custom-hooks/pre-commit');
+      await git(repo, 'update-index', '--chmod=+x', '.custom-hooks/pre-commit');
+    }
+    await git(repo, 'commit', '--allow-empty', '-m', 'fixture');
+    expect(await fs.readFile(path.join(repo, 'hook-ran'), 'utf8')).toBe('ran');
+    await fs.unlink(path.join(repo, 'hook-ran'));
+    const sibling = path.join(fixture, 'sibling');
+    await git(repo, 'worktree', 'add', '-b', 'sibling', sibling);
+    const configBefore = await fs.readFile(path.join(repo, '.git', 'config'), 'utf8');
+    const globalBefore = await fs.readFile(globalConfig, 'utf8');
+    const created = await createWorktree(
+      { sessionId: `hooks-${mode}`, baseRepo: repo, name: `hooks-${mode}`, sourceBranch: 'main' },
+      { awaitFullCheckout: true },
+    );
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    if (!created.ok) return;
+    expect(await fs.readFile(path.join(repo, '.git', 'config'), 'utf8')).toBe(configBefore);
+    expect(await fs.readFile(globalConfig, 'utf8')).toBe(globalBefore);
+    for (const cwd of [repo, sibling, created.meta.path]) {
+      await git(cwd, 'commit', '--allow-empty', '-m', 'verify hook');
+      expect(await fs.readFile(path.join(cwd, 'hook-ran'), 'utf8')).toBe('ran');
+    }
+  },
+  30_000,
+);
+
 afterEach(async () => {
   vi.restoreAllMocks();
   metadata.clear();

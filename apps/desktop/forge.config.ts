@@ -2130,6 +2130,12 @@ const config: ForgeConfig = {
         );
         if (desktopBlurBuild.error || desktopBlurBuild.status !== 0)
           throw new Error('Native desktop blur build failed');
+        const loginItemBuild = spawnSync(process.execPath, [
+          path.join(__dirname, 'native/login-item/build.mjs'),
+          path.join(__dirname, 'resources/tools/login-item/cindy-login-item.node'), arch,
+        ], { stdio: 'inherit' });
+        if (loginItemBuild.error || loginItemBuild.status !== 0)
+          throw new Error('Native login item build failed');
         const trackpadBuild = spawnSync(
           process.execPath,
           [
@@ -2232,6 +2238,11 @@ const config: ForgeConfig = {
           entry: 'src/main/voice-input/speaker/speakerGateWorker.ts',
           config: 'vite.speaker-gate-worker.config.ts',
           // 声纹过滤的 ONNX 推理是同步 CPU 计算，隔离在线程中，避免阻塞 Electron main。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/im/imessage/archiveWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
@@ -2365,6 +2376,11 @@ const config: ForgeConfig = {
         {
           // 资源用量独立窗不加载主应用的通用 bridge 与模块级同步初始化。
           entry: 'src/preload/resourceUsagePreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload/quotaTrayPreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
         },

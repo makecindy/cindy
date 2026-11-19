@@ -16,7 +16,7 @@ export async function listMessagesForAgentHandoff(
   sessionId: string,
   limit: number | null = 400,
   after?: { createdAt: number; rowid: number },
-  role?: 'user' | 'authorization',
+  role?: 'user' | 'authorization' | 'replay',
 ): Promise<
   Array<{
     clientId: string;
@@ -73,7 +73,9 @@ export async function listMessagesForAgentHandoff(
         // A copied parent instruction is context, never authorization for a side task.
         role === 'authorization' && sessRow?.source === 'side-chat' ? gte(messages.createdAt, sessRow.createdAt) : undefined,
         role === 'authorization' ? and(inArray(messages.role, ['user', 'ask_user', 'plan_review']), notScheduledExecution)
-          : role ? eq(messages.role, role) : undefined),
+          : role === 'replay'
+            ? inArray(messages.role, ['user', 'assistant', 'thinking', 'tool_use', 'tool_result', 'error', 'ask_user', 'plan_review'])
+            : role ? eq(messages.role, role) : undefined),
     )
     .orderBy(desc(role === 'authorization' ? authorityTime : messages.createdAt), desc(messageRowid));
   // Authority replay must start at the clear/rewind boundary: the shared intent

@@ -1,3 +1,5 @@
+import { useProjectInfo } from './hooks/useProjectInfo';
+import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
 import { getLiveErrorMessageClientId, type ChatMessage } from '@/lib/makerChatStore';
 import { findErrorTailMessage } from '@/lib/errorTailMessage';
@@ -256,7 +258,7 @@ import {
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
   rebaseInlineRangesAfterSlashCommandRewrite,
   reconcilePiRuntimeCommandForDispatch,
-  reconcilePiRuntimeCommandForDispatchWithRetry,
+  reconcilePiRuntimeCommandForSessionDispatch,
   rewriteAgentSkillInvocationForDispatch,
   rewriteBuiltInSkillDraftForSend,
   type UnifiedCommand,
@@ -1626,6 +1628,8 @@ function CCAgentSessionContent({
 
   // F2: controlled folder picker open state
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const projectInfo = useProjectInfo(session?.deviceLinkDeviceId ?? null);
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
 
   // ── Full-area drag-and-drop (F-FI-1 enhancement) ──
   // Attachments are managed here so the entire content area can act as a drop zone.
@@ -2259,7 +2263,7 @@ function CCAgentSessionContent({
   // live 供应商目录(含内置 + 自定义,按 agent 挂模型)—— vendor↔model 一致性校验的真源,
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
-  const { providers: localProviders } = useProviders();
+  const { providers: localProviders, loading: localProvidersLoading, error: localProvidersError } = useProviders();
   const { mode: authMode, user: authUser, dataOwnerId, deviceId: selfDeviceId } = useAuth();
   const {
     begin: beginHistoryRecovery,
@@ -2428,12 +2432,21 @@ function CCAgentSessionContent({
   );
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
+  const taskAccountCatalog = useDeviceProviders(taskAccountDeviceId ?? undefined);
   const taskAccountProviderId = usageAccount.kind === 'unreadable' ? null
     : sessionSubscriptionPoolProvider(normalizeDbAgentKind(displayAgentKind), usageChipProviderId,
-        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId));
+        session?.remoteHostId, providers.find(provider => provider.id === usageChipProviderId),
+        !agentSwitchIntent && session?.providerId == null, {
+          modelId: session?.model,
+          providers: taskAccountDeviceId ? taskAccountCatalog.providers : localProviders,
+          catalogReady: taskAccountDeviceId
+            ? !taskAccountCatalog.loading && !taskAccountCatalog.error
+            : !localProvidersLoading && !localProvidersError,
+        });
   const canSwitchToClaudeSubscription = useMemo(() => {
     if (
       remoteDeviceId ||
+      session?.deviceLinkDeviceId ||
       agentDeviceId ||
       session?.remoteHostId ||
       session?.agentKind !== 'cc' ||
@@ -2445,7 +2458,7 @@ function CCAgentSessionContent({
       (provider) =>
         provider.id === 'anthropic' && providerOffersModel(provider, session.model, 'claude-code'),
     );
-  }, [localProviders, remoteDeviceId, agentDeviceId, session?.agentKind, session?.model, session?.remoteHostId]);
+  }, [localProviders, remoteDeviceId, agentDeviceId, session?.agentKind, session?.model, session?.remoteHostId, session?.deviceLinkDeviceId]);
   /**
    * 余额不足横幅的「查看余额」出口 —— 只在计费面对当前账号可见时提供（cloud +
    * personal，与设置页「用量和计费」同一判据）。org / local / 未登录账号在 Cindy 里
@@ -3695,6 +3708,34 @@ function CCAgentSessionContent({
   // dispatch 前于 renderer 侧快照,待 main 广播 DESKTOP_COMMAND_TRIGGERED 回流时取用。
   const pendingIssueFilesRef = useRef<AttachedFile[] | undefined>(undefined);
 
+  const preparePiRuntimeForDispatch = useCallback(async (
+    workingDir: string | null | undefined = session?.workingDir,
+    model = session?.model,
+    effort = session?.effort,
+    permissionMode = session?.permissionMode,
+    pendingPiRoute?: { agentDeviceId?: string | null; nextInputChars: number },
+  ) => {
+    if (!sessionId || !workingDir || !model || !permissionMode
+      || (!pendingPiRoute && dbToMakerAgentKind(session?.agentKind) !== 'pi')) return;
+    const request = {
+      ...buildCreateOptsForCurrentSession(sessionId, model, effort ?? '', permissionMode, workingDir),
+      purpose: 'pi-skill-dispatch',
+      ...(pendingPiRoute ? { pendingPiRoute } : {}),
+    };
+    try {
+      const result = remoteDeviceId
+        ? await window.electronAPI.deviceLink.invoke(remoteDeviceId, 'maker:session:prewarm', [sessionId, request])
+        : await window.electronAPI.maker.prewarmSession?.(sessionId, request);
+      const receipt = result as { piRuntimePrepared?: true; pendingRouteApplied?: true } | undefined;
+      if (!receipt?.piRuntimePrepared || (pendingPiRoute && !receipt.pendingRouteApplied)) throw new Error(t('richAnswer.sendFailed'));
+    } catch (error) {
+      const detail = extractIpcError(error)?.message ?? (error instanceof Error ? error.message : String(error));
+      toast.error(detail || t('richAnswer.sendFailed'));
+      throw error;
+    }
+  }, [sessionId, session?.workingDir, session?.model, session?.effort,
+    session?.permissionMode, session?.agentKind, remoteDeviceId, t]);
+
   const maybeDispatchDesktopSlashCommand = useCallback(
     async (
       message: string,
@@ -3705,9 +3746,10 @@ function CCAgentSessionContent({
         piRuntimeRetryDelaysMs?: readonly number[];
         workingDirOverride?: string;
         preparePiRuntime?: () => Promise<void>;
+        pendingRoute?: NonNullable<typeof agentSwitchIntent>;
       },
     ): Promise<{ handled: boolean; accepted: boolean; message: string }> => {
-      const agentKind = dbToMakerAgentKind(session?.agentKind);
+      const agentKind = options?.pendingRoute?.target ?? dbToMakerAgentKind(session?.agentKind);
       if (options?.builtInSkillIntent) {
         // Recheck the identity after handoff/collaboration/authentication waits.
         // Never feed its alias back through the generic name-based dispatcher.
@@ -3741,11 +3783,15 @@ function CCAgentSessionContent({
       const cached = allCommandsRef.current;
       // A newly selected project changes command ownership, so do not let a
       // pre-selection global hit suppress the forced project catalog refresh.
-      const commands = options?.workingDirOverride
+      const commands = options?.pendingRoute
+        ? await loadAllCommands(agentKind, workingDir, { skipAgentSkills: isRemoteSession, forceReload: true }, remoteDeviceId)
+        : options?.workingDirOverride
         ? []
         : cached.length > 0
           ? cached
           : await getHelpCommandsSnapshot();
+      let runtimeCatalogSettled = false;
+      let readTargetRuntime = !options?.pendingRoute;
       const reconcileParams = {
         agentKind,
         sessionId: session?.id,
@@ -3757,20 +3803,31 @@ function CCAgentSessionContent({
             workingDir,
             {
               skipAgentSkills: isRemoteSession,
-              sessionId: session?.id,
+              sessionId: readTargetRuntime ? session?.id : undefined,
               forceReload: true,
+              onPiRuntimeStatus: status => { runtimeCatalogSettled = status === 'loaded'; },
             },
             remoteDeviceId,
           ),
       };
       const reconciled = options?.piRuntimeRetryDelaysMs
-        ? await reconcilePiRuntimeCommandForDispatchWithRetry({
+        ? await reconcilePiRuntimeCommandForSessionDispatch({
             ...reconcileParams,
-            prepareRuntime: options.preparePiRuntime,
+            prepareMissing: Boolean(options.workingDirOverride),
+            onCatalogUnavailable: () => {
+              const detail = t('richAnswer.sendFailed');
+              toast.error(detail);
+              throw new Error(detail);
+            },
+            runtimeCatalogSettled: () => runtimeCatalogSettled,
+            prepareRuntime: async () => {
+              await (options.preparePiRuntime ?? (() => preparePiRuntimeForDispatch(workingDir)))();
+              readTargetRuntime = true;
+            },
             retryDelaysMs: options.piRuntimeRetryDelaysMs,
           })
         : await reconcilePiRuntimeCommandForDispatch(reconcileParams);
-      if (reconciled.commands !== commands) {
+      if (!options?.pendingRoute && reconciled.commands !== commands) {
         allCommandsRef.current = reconciled.commands;
         setAllCommands(reconciled.commands);
       }
@@ -3855,6 +3912,7 @@ function CCAgentSessionContent({
       return { handled: true, accepted: true, message };
     },
     [
+      preparePiRuntimeForDispatch,
       getHelpCommandsSnapshot,
       isRemoteSession,
       agentDeviceId,
@@ -3958,31 +4016,17 @@ function CCAgentSessionContent({
                   piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
                   workingDirOverride: newDir,
                   builtInSkillIntent: pending.builtInSkillIntent,
+                  pendingRoute: pending.deliveryMode !== 'steer' ? agentSwitchIntent ?? undefined : undefined,
                   preparePiRuntime: async () => {
-                    if (!sessionId || dbToMakerAgentKind(session?.agentKind) !== 'pi') return;
-                    const createOpts = {
-                      id: sessionId,
-                      ...buildCreateOptsForCurrentSession(
-                        sessionId,
-                        pending.model,
-                        pending.effort,
-                        pending.permissionMode,
-                        newDir,
-                        pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : undefined,
-                      ),
-                      agentKind: 'pi' as const,
-                      workingDir: newDir,
-                      orcaRole: session?.orcaRole ?? null,
-                    };
-                    if (remoteDeviceId) {
-                      await window.electronAPI.deviceLink.invoke(
-                        remoteDeviceId,
-                        'maker:create-session',
-                        [createOpts],
-                      );
-                    } else {
-                      await window.electronAPI.maker.createSession(createOpts);
+                    if (sessionId && session?.status === 'archived') {
+                      await sessionService.setStatus(sessionId, 'active', remoteDeviceId
+                        ? { kind: 'device-link', deviceId: remoteDeviceId } : { kind: 'local' });
+                      emitRefresh();
                     }
+                    await preparePiRuntimeForDispatch(newDir, pending.model, pending.effort, pending.permissionMode,
+                      pending.deliveryMode !== 'steer' && agentSwitchIntent?.target === 'pi'
+                        ? { agentDeviceId: agentSwitchIntent.agentDeviceId, nextInputChars: pending.message.length + 'skill:'.length }
+                        : undefined);
                   },
                 },
               );
@@ -4090,8 +4134,11 @@ function CCAgentSessionContent({
     },
     [
       maybeDispatchDesktopSlashCommand,
+      preparePiRuntimeForDispatch,
       refreshServerSession,
       remoteDeviceId,
+      agentSwitchIntent,
+      session?.status,
       session?.agentKind,
       session?.orcaRole,
       sessionId,
@@ -4270,63 +4317,86 @@ function CCAgentSessionContent({
       //     广播回 renderer (上面 useEffect 订阅), 不发给 agent。
       //   - agent-builtin / agent-skill / 没命中任何已知命令 → 走默认 send,
       //     原文(含前导 `/`)直接送 agent, 由 SDK 自己识别 (/compact 等)。
-      const slashDispatch = opts?.literalText || opts?.builtInSkillIntent
-        ? { handled: false, accepted: false, message }
-        : await maybeDispatchDesktopSlashCommand(message, files, {
-            // Command ownership is resolved here after loading the catalog;
-            // the composer's delivery preference applies only to model input.
-            piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
-          });
-      if (slashDispatch.handled) {
-        if (slashDispatch.accepted) {
-          // Desktop commands can wait in Main long enough for draft hydration to
-          // restore the click-time command. Re-consume only that snapshot after
-          // acceptance; the callback preserves anything typed in the meantime.
-          opts?.onDeferredAccepted?.();
-          if (sessionId) {
-            requestFollowLatest(sessionId, readSendFollowCancelGeneration(sessionId));
-            void dispatchDeferredUiAssignment(sessionId, undefined, {
-              waitForLeadHistory: false,
-            }).catch((err) => {
-              log.error('recover deferred Worker assignment after slash command failed', err);
-              toast.error(t('newChat.collaboration.assignmentFailed'));
+      // Pure Desktop commands do not activate an archived task. Defer only a
+      // runtime-dependent Skill until the ordinary send gates have admitted it.
+      const needsActiveSession = Symbol('archived Pi skill preparation');
+      const pendingRoute = deliveryMode === 'steer' ? undefined : agentSwitchIntent ?? undefined;
+      const dispatchSlash = async (deferPreparation: boolean) => {
+        const slashDispatch = opts?.literalText || opts?.builtInSkillIntent
+          ? { handled: false, accepted: false, message }
+          : await maybeDispatchDesktopSlashCommand(message, files, {
+              // Command ownership is resolved here after loading the catalog;
+              // the composer's delivery preference applies only to model input.
+              piRuntimeRetryDelaysMs: PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+              pendingRoute,
+              preparePiRuntime: () => {
+                if (deferPreparation) throw needsActiveSession;
+                return preparePiRuntimeForDispatch(session?.workingDir, model, effort, permissionMode,
+                  pendingRoute?.target === 'pi'
+                    ? { agentDeviceId: pendingRoute.agentDeviceId, nextInputChars: message.length + 'skill:'.length }
+                    : undefined);
+              },
             });
+        if (slashDispatch.handled) {
+          if (slashDispatch.accepted) {
+            // Desktop commands can wait in Main long enough for draft hydration to
+            // restore the click-time command. Re-consume only that snapshot after
+            // acceptance; the callback preserves anything typed in the meantime.
+            opts?.onDeferredAccepted?.();
+            if (sessionId) {
+              requestFollowLatest(sessionId, readSendFollowCancelGeneration(sessionId));
+              void dispatchDeferredUiAssignment(sessionId, undefined, {
+                waitForLeadHistory: false,
+              }).catch((err) => {
+                log.error('recover deferred Worker assignment after slash command failed', err);
+                toast.error(t('newChat.collaboration.assignmentFailed'));
+              });
+            }
           }
+          return { accepted: slashDispatch.accepted };
         }
-        return slashDispatch.accepted;
-      }
-      message = slashDispatch.message;
-      if (message !== originalMessage && opts) {
-        opts = {
-          ...opts,
-          ...(opts.agentReferences
-            ? {
-                agentReferences: rebaseInlineRangesAfterSlashCommandRewrite(
-                  opts.agentReferences,
-                  originalMessage,
-                  message,
-                ),
-              }
-            : {}),
-          ...(opts.pastedTextRanges
-            ? {
-                pastedTextRanges: rebaseInlineRangesAfterSlashCommandRewrite(
-                  opts.pastedTextRanges,
-                  originalMessage,
-                  message,
-                ),
-              }
-            : {}),
-          ...(opts.slashCommandRanges !== undefined
-            ? {
-                slashCommandRanges: rebaseInlineRangesAfterSlashCommandRewrite(
-                  opts.slashCommandRanges,
-                  originalMessage,
-                  message,
-                ),
-              }
-            : {}),
-        };
+        message = slashDispatch.message;
+        if (message !== originalMessage && opts) {
+          opts = {
+            ...opts,
+            ...(opts.agentReferences
+              ? {
+                  agentReferences: rebaseInlineRangesAfterSlashCommandRewrite(
+                    opts.agentReferences,
+                    originalMessage,
+                    message,
+                  ),
+                }
+              : {}),
+            ...(opts.pastedTextRanges
+              ? {
+                  pastedTextRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                    opts.pastedTextRanges,
+                    originalMessage,
+                    message,
+                  ),
+                }
+              : {}),
+            ...(opts.slashCommandRanges !== undefined
+              ? {
+                  slashCommandRanges: rebaseInlineRangesAfterSlashCommandRewrite(
+                    opts.slashCommandRanges,
+                    originalMessage,
+                    message,
+                  ),
+                }
+              : {}),
+          };
+        }
+        return null;
+      };
+      let deferredSkill = false;
+      try {
+        const dispatched = await dispatchSlash(session?.status === 'archived' || pendingRoute?.target === 'pi');
+        if (dispatched) return dispatched.accepted;
+      } catch (err) {
+        if (err !== needsActiveSession) throw err;
+        deferredSkill = true;
       }
 
       // ① 本机会话维持既有 readiness gate。device-link 已建任务不把视图生命周期内
@@ -4360,7 +4430,7 @@ function CCAgentSessionContent({
       // 续发)、本地插话和内置技能分派不经过 store 的乐观插入,仍在这里先查。
       // 归档任务也先查,避免认证拒绝后仍留下自动取消归档的副作用。
       const deferVendorAuthGate = Boolean(session?.workingDir) && !opts?.builtInSkillIntent &&
-        deliveryMode !== 'steer' && session?.status !== 'archived';
+        deliveryMode !== 'steer' && session?.status !== 'archived' && !deferredSkill;
       if (!remoteDeviceId && !recoveringBaseline && !deferVendorAuthGate) {
         if (!(await passesVendorAuthGate())) return false;
       }
@@ -4426,9 +4496,14 @@ function CCAgentSessionContent({
       //         —— patchLocal 是 hook 实例级 state 不跨实例，sidebar filter='active'
       //         的列表里压根没这条 archived session，emitPatch 也无效，必须 refresh。
       if (sessionId && session?.status === 'archived') {
+        if (deferredSkill) {
+          await sessionService.setStatus(sessionId, 'active', remoteDeviceId
+            ? { kind: 'device-link', deviceId: remoteDeviceId } : { kind: 'local' });
+          emitRefresh();
+        }
         setServerSession((prev) => (prev ? { ...prev, status: 'active' } : prev));
         patchLocalSession(sessionId, { status: 'active' });
-        sessionService
+        if (!deferredSkill) sessionService
           .setStatus(sessionId, 'active')
           .then(() => emitRefresh())
           .catch((err) => {
@@ -4437,6 +4512,10 @@ function CCAgentSessionContent({
           });
       }
 
+      if (deferredSkill) {
+        const dispatched = await dispatchSlash(false);
+        if (dispatched) return dispatched.accepted;
+      }
       if (opts?.builtInSkillIntent) {
         const finalDispatch = await maybeDispatchDesktopSlashCommand(message, files, {
           builtInSkillIntent: opts.builtInSkillIntent,
@@ -4546,6 +4625,7 @@ function CCAgentSessionContent({
     },
     [
       maybeDispatchDesktopSlashCommand,
+      preparePiRuntimeForDispatch,
       maybeShowContextUsage,
       invalidateHistoryRecoveryNavigation,
       folderPickerOpen,
@@ -4833,11 +4913,6 @@ function CCAgentSessionContent({
       (EFFORT_VALUES as readonly string[]).includes(session.effort)
         ? session.effort
         : null;
-    const fmtTokens = (value: number): string =>
-      value >= 1_000_000
-        ? `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
-        : `${Math.round(value / 1000)}K`;
-
     const switched = await setModelWithWindowConfirmation({
       invoke: (confirmedContextWindow) =>
         window.electronAPI.maker.setModel(
@@ -4853,17 +4928,7 @@ function CCAgentSessionContent({
               } as { effort: string; fastMode: boolean | 'ultrafast' })
             : undefined,
         ),
-      confirm: ({ contextWindow, contextTokens }) =>
-        confirmDialog({
-          title: t('newChat.chatInput.modelSwitchContextGuard.title'),
-          description: t('newChat.chatInput.modelSwitchContextGuard.overflowDescription', {
-            used: fmtTokens(contextTokens),
-            total: fmtTokens(contextWindow),
-            pct: Math.round((contextTokens / contextWindow) * 100),
-          }),
-          confirmText: t('newChat.chatInput.modelSwitchContextGuard.confirmSwitch'),
-          cancelText: t('newChat.chatInput.modelSwitchContextGuard.cancelSwitch'),
-        }),
+      onWindowRebuild: () => toast.warning(t('newChat.chatInput.modelSwitchContextGuard.condensedToast'), { duration: 4000 }),
     });
     if (!switched) return;
     if (switched === 'applied') {
@@ -4888,7 +4953,6 @@ function CCAgentSessionContent({
     await retryLastError();
   }, [
     canSwitchToClaudeSubscription,
-    confirmDialog,
     fastMode,
     refreshServerSession,
     retryLastError,
@@ -6318,7 +6382,7 @@ function CCAgentSessionContent({
               pendingPermission ||
               (pendingAskUser && askUserViewerState !== 'minimized') ||
               pendingPluginSetup ||
-              pendingIssueConfirm ||
+              (pendingIssueConfirm && !remoteDeviceId) ||
               pendingRenameSessionsConfirm ||
               pendingGhostGrantConfirm) ? null : sessionBinding.attached && sessionId ? (
                 <TakeoverMask
@@ -6363,7 +6427,14 @@ function CCAgentSessionContent({
                   inert={voiceModeOpen && voiceSurfaceAvailable}
                   aria-hidden={voiceModeOpen && voiceSurfaceAvailable ? true : undefined}
                 >
+                {projectSettingsOpen && session && (
+                  <SessionProjectSettingsDialog key={session.id} session={session}
+                    onClose={() => setProjectSettingsOpen(false)} />
+                )}
                 <ChatInput
+                  onOpenProjectSettings={(projectInfo?.settingsVersion ?? 0) >= 6 && session?.workspaceKind === 'project' &&
+                    !isSharedTaskPeer(session.deviceLinkDeviceId ?? '')
+                    ? () => setProjectSettingsOpen(true) : undefined}
                   sessionModelPickRef={sessionModelPickRef}
                   {...(taskModelGroups ? { modelGroups: taskModelGroups } : {})}
                   modelPickerRequest={sharedTaskRecovery.modelPickerRequest}
@@ -7227,7 +7298,7 @@ export function RunningStatusBar({
                 }
                 tokenUsage={displayTokens}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
-                outputTokens={rateOutputTokens}
+                outputTokens={tokenSpeed?.totalOutputTokens ?? rateOutputTokens}
                 history={rateHistory}
                 onPinnedChange={setRatePanelPinned}
               />

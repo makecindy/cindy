@@ -671,10 +671,12 @@ describe('sendToSession ordering', () => {
       'selection,',
     );
     expect(source).toContain('withSessionLock: withSendToSessionLock,');
-    expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);');
+    // Keep the ordering contract and cancellation-signal wiring together;
+    // orcaModelSelectionIntent covers the actual waiting/preparation aborts.
+    expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId, undefined, () => stage, signal);');
     expectOrder(
       directSendSwitchBlock,
-      'const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);',
+      'const release = await acquireSendToSessionLock(sessionId, undefined, () => stage, signal);',
       'applyPendingAgentSwitchIfIdle(',
     );
     for (const [operation, call] of [
