@@ -1,7 +1,35 @@
 import { describe, expect, it, vi } from 'vitest';
+import { generateSharedImage } from '../sharedImageClient';
 import { createSharedImageJobs } from '../sharedImageJobs';
 
 describe('shared image result delivery', () => {
+  it('releases the accepted job when the start acknowledgement is lost', async () => {
+    const jobs = createSharedImageJobs();
+    const allow = () => undefined;
+    const generate = async () => ({ buffer: Buffer.from('image'), mimeType: 'image/png' });
+    const invoke = vi.fn<Parameters<typeof generateSharedImage>[0]>(async (command) => {
+      if (command.action === 'start') {
+        jobs.start('guest', command.requestId, allow, generate);
+        throw new Error('start acknowledgement timed out');
+      }
+      if (command.action === 'release') {
+        jobs.release('guest', command.requestId);
+        return {};
+      }
+      throw new Error('unexpected result read');
+    });
+    try {
+      await expect(generateSharedImage(invoke, {
+        op: 'shared-image', action: 'start', requestId: 'first',
+        providerId: 'openai', model: 'openai/gpt-image-2', prompt: 'blue square',
+      }, new AbortController().signal)).rejects.toThrow('start acknowledgement timed out');
+      expect(invoke.mock.calls.map(([command]) => command.action)).toEqual(['start', 'release']);
+      expect(() => jobs.start('guest', 'second', allow, generate)).not.toThrow();
+    } finally {
+      jobs.dispose();
+    }
+  });
+
   it('isolates concurrent relayed guests and keeps released records from blocking new jobs', () => {
     const jobs = createSharedImageJobs();
     const allow = () => undefined;

@@ -13,11 +13,11 @@ export async function generateSharedImage(
 ): Promise<{ buffer: Buffer; mimeType: string }> {
   const { requestId } = request;
   signal.throwIfAborted();
-  const start = await invoke(request);
-  if (!start || typeof start !== 'object' || (start as { accepted?: unknown }).accepted !== true) {
-    throw new Error('SHARED_IMAGE_UNAVAILABLE');
-  }
   try {
+    const start = await invoke(request);
+    if (!start || typeof start !== 'object' || (start as { accepted?: unknown }).accepted !== true) {
+      throw new Error('SHARED_IMAGE_UNAVAILABLE');
+    }
     let offset = 0;
     let image: Buffer | undefined;
     let mimeType: string | undefined;
@@ -51,6 +51,8 @@ export async function generateSharedImage(
       }
     }
   } finally {
-    void invoke({ op: 'shared-image', action: 'release', requestId }).catch(() => undefined);
+    void Promise.resolve()
+      .then(() => invoke({ op: 'shared-image', action: 'release', requestId }))
+      .catch(() => undefined);
   }
 }
