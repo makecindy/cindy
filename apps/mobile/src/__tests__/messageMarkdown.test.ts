@@ -2779,3 +2779,53 @@ describe('review reference boundary regressions', () => {
     expect(collectMobileMarkdownImages('![picture][s]' + definition)).toHaveLength(1);
   });
 });
+
+// User review of #9440: preserve unsupported footnotes/prose and list scope;
+// real parser results and counted full-source passes, not a timing threshold.
+describe('user review reference compatibility', () => {
+  it('keeps footnote definitions visible rather than treating them as link definitions', () => {
+    for (const label of ['1', '中文']) {
+      const source = 'Text[^' + label + ']\n\n[^' + label + ']: important';
+      expect(mobileMarkdownPreviewText(source)).toContain('[^' + label + ']: important');
+      expect(parseMobileMarkdownDocument(source, { srcLines: true }).blocks.map(block => block.srcLine)).toEqual([0, 2]);
+    }
+  });
+
+  it('normalizes prose math after an invalid next-line reference definition', () => {
+    const source = '[note]:\n \\(x\\) plus text';
+    expect(parseMobileMarkdownDocument(source).source).toBe('[note]:\n $x$ plus text');
+  });
+
+  it('does not collect nested definitions after plus list markers', () => {
+    const source = '[ok]\n\n+ item\n\n  [ok]: https://example.com/';
+    expect(inlines(source).some(value => value.type === 'link' && value.text === 'ok')).toBe(false);
+    expect(mobileMarkdownPreviewText(source)).toContain('[ok]:');
+    expect(inlines(source + '\n\n[ok]: https://example.org/').find(value => value.type === 'link' && value.text === 'ok')).toEqual({ type: 'link', text: 'ok', url: 'https://example.org/' });
+  });
+
+  it('avoids full-source definition scans on ordinary append-only messages with bracket prose', () => {
+    const source = '[normal text]\n\n' + 'ordinary paragraph\n\n'.repeat(1500);
+    const split = String.prototype.split;
+    let fullSourceSplits = 0;
+    const spy = vi.spyOn(String.prototype, 'split').mockImplementation(function (this: string, ...args: Parameters<typeof split>) {
+      const separator: unknown = args[0];
+      if (String(this).length >= source.length && separator === '\n') fullSourceSplits++;
+      return Reflect.apply(split, this, args);
+    });
+    let input = source;
+    let previous;
+    try {
+      previous = parseMobileMarkdownIncremental(input);
+      for (let count = 0; count < 100; count++) {
+        input += ' appended';
+        previous = parseMobileMarkdownIncremental(input, previous);
+      }
+      expect(fullSourceSplits).toBeLessThanOrEqual(2);
+    } finally { spy.mockRestore(); }
+    expect(previous!.blocks).toEqual(parseMobileMarkdownDocument(input).blocks);
+    const defined = input + '\n\n[normal text]: https://example.com/';
+    const next = parseMobileMarkdownIncremental(defined, previous);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(defined).blocks);
+    expect(next.blocks[0]).toMatchObject({ inlines: [{ type: 'link', text: 'normal text', url: 'https://example.com/' }] });
+  });
+});

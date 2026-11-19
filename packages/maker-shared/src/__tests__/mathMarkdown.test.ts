@@ -114,6 +114,22 @@ describe('normalizeMathDelimiters — link destination 保护', () => {
     expect(normalizeMathDelimiters('[f]:\n# heading \\(x\\)')).toBe('[f]:\n# heading $x$');
   });
 
+  // #9440 user review: a destination-shaped token followed by prose is not
+  // a definition. Actual normalizer result, both source-line modes, unit tier.
+  it('does not protect prose math as an incomplete continuation definition', () => {
+    for (const preserveLineCount of [false, true]) {
+      expect(normalizeMathDelimiters('[note]:\n \\(x\\) plus text', { preserveLineCount }))
+        .toBe('[note]:\n $x$ plus text');
+      for (const title of ['"caption"', '"first\nsecond"']) {
+        const source = '[f]:\n docs/a\\(1\\).md ' + title + '\n\n\\(x\\)';
+        expect(normalizeMathDelimiters(source, { preserveLineCount }))
+          .toBe('[f]:\n docs/a\\(1\\).md ' + title + '\n\n$x$');
+      }
+      expect(normalizeMathDelimiters('[f]:\n \\(x\\) "unfinished\n\ntext', { preserveLineCount }))
+        .toBe('[f]:\n $x$ "unfinished\n\ntext');
+    }
+  });
+
   it('reference 定义在文末无换行同样保护', () => {
     const src = '公式 \\(x\\)\n[img]: ./a\\[1\\].png';
     expect(normalizeMathDelimiters(src)).toBe('公式 $x$\n[img]: ./a\\[1\\].png');

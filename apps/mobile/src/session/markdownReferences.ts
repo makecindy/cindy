@@ -42,7 +42,7 @@ export function readMarkdownReferenceDefinition(lines: readonly string[], start:
   const indent = /^ {0,3}(?=\[)/.exec(line)?.[0].length;
   if (indent === undefined) return null;
   const label = bracket(line, indent);
-  if (!label || line[label.end] !== ':' || !label.text.trim()) return null;
+  if (!label || line[label.end] !== ':' || !label.text.trim() || label.text.startsWith('^')) return null;
   let endLine = start;
   let rest = line.slice(label.end + 1).trimStart();
   if (!rest && lines[start + 1]?.trim()) {

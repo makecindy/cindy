@@ -105,8 +105,10 @@ interface MarkdownReferenceContext {
   definitions: MarkdownReferenceDefinitions;
   definitionLines: ReadonlySet<number>;
   signature: string;
+  candidateFree: boolean;
 }
 const referenceContexts = new WeakMap<MobileMarkdownParseResult, MarkdownReferenceContext>();
+const REFERENCE_DEFINITION_CANDIDATE = /^ {0,3}\[(?!\^)[^\n]*\]:/m;
 
 function singleLineMathBody(line: string): string | null {
   const match = line.trim().match(/^\$\$((?:(?!\$\$).)+)\$\$$/);
@@ -127,7 +129,7 @@ function isClosingMathFence(line: string): boolean {
 function collectMarkdownReferences(source: string): MarkdownReferenceContext {
   const definitions = new Map<string, string>();
   const definitionLines = new Set<number>();
-  if (!/^ {0,3}\[/m.test(source)) return { definitions, definitionLines, signature: '' };
+  if (!REFERENCE_DEFINITION_CANDIDATE.test(source)) return { definitions, definitionLines, signature: '', candidateFree: true };
   const lines = source.split('\n');
   let fence: CodeFenceState | null = null;
   let comment = false;
@@ -202,7 +204,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
         paragraph = false;
         continue;
       }
-      const list = /^(\s*)(?:[-*]|\d+[.)])(\s+)/.exec(line);
+      const list = /^(\s*)(?:[-*+]|\d+[.)])(\s+)/.exec(line);
       // Retain enclosing items, but replace siblings: marker width can change
       // (for example 9. to 10.) and therefore changes the content column.
       if (list) {
@@ -217,7 +219,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
     comment = advanceHtmlCommentState(line, comment);
     if (startsInComment || comment || line.includes('<!--')) {
       // Body headings/quotes/lists interrupt even a comment continuation.
-      if (/^(?:#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s)/.test(line)) paragraph = false;
+      if (/^(?:#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(line)) paragraph = false;
       else if (!startsInComment) paragraph = !/^ {0,3}<!--/.test(line);
       continue;
     }
@@ -250,9 +252,9 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       index--;
       continue;
     }
-    paragraph = !/^(?:#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s)/.test(line);
+    paragraph = !/^(?:#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(line);
   }
-  return { definitions, definitionLines, signature: definitions.size ? JSON.stringify([[...definitions], [...definitionLines]]) : '' };
+  return { definitions, definitionLines, signature: definitions.size ? JSON.stringify([[...definitions], [...definitionLines]]) : '', candidateFree: false };
 }
 
 export interface MobileMarkdownBlockRange {
@@ -669,7 +671,7 @@ export function parseMobileMarkdownDocument(
       continue;
     }
 
-    const list = line.match(/^(\s*)([-*]|\d+[.)])\s+(.+)$/);
+    const list = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.+)$/);
     if (list) {
       flushParagraph(index);
       // Use observed indentation levels rather than assuming two/four spaces:
@@ -749,8 +751,13 @@ export function parseMobileMarkdownIncremental(
     return parseMobileMarkdownDocument(input);
   }
 
-  const references = collectMarkdownReferences(normalizedInput);
   const priorReferences = referenceContexts.get(previous) ?? collectMarkdownReferences(previous.source);
+  // Without an earlier definition-shaped line, only the former last physical
+  // line and appended text can introduce one. Reuse the known empty context.
+  const references = priorReferences.candidateFree
+    && !REFERENCE_DEFINITION_CANDIDATE.test(normalizedInput.slice(previous.source.lastIndexOf('\n') + 1))
+    ? priorReferences
+    : collectMarkdownReferences(normalizedInput);
   // A definition appended at the end can resolve references in any earlier block.
   if (references.signature !== priorReferences.signature) return parseMobileMarkdownDocument(input);
 
