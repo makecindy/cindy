@@ -390,6 +390,7 @@ export interface RemoteAgentGroupRelayDeps {
     kind: RemoteAgentKind;
     model: string;
     providerId: string;
+    capability?: 'image.generate';
     exclude: ReadonlySet<string>;
     reserve?: boolean;
     /**

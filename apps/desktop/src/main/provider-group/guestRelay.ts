@@ -90,7 +90,7 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
 
     noteReshareDenied: (agentDeviceId, reshareKey) => deps.noteReshareDenied?.(agentDeviceId, reshareKey),
 
-    async plan({ kind, model, providerId, exclude, reserve, reshareKey }) {
+    async plan({ kind, model, providerId, capability, exclude, reserve, reshareKey }) {
       const config = deps.readGroup(providerId);
       if (!config) return null;
       const skip = new Set(exclude);
@@ -105,6 +105,7 @@ export function createProviderGroupGuestRelay(deps: ProviderGroupGuestRelayDeps)
         providerId,
         agentKind: kind as AgentKind,
         model,
+        ...(capability ? { capability } : {}),
         exclude: skip,
         // 这一轮试过不行的再来选：现读最新状态(状态以本机为准，2026-10-11)。
         ...(exclude.size > 0 ? { fresh: true } : {}),
