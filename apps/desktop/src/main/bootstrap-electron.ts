@@ -3039,9 +3039,8 @@ registerLayoutIpc();
 // 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
 // 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
 setCodexImageAuthBinding({
-  async acquireRemoteAuth(providerId) {
-    // Image IDs are not members of the pool's Codex chat catalog.
-    const lease = await acquireSubscriptionAccount(providerId, undefined, [], false, { remote: true });
+  async acquireRemoteAuth(providerId, modelId) {
+    const lease = await acquireSubscriptionAccount(providerId, modelId, [], false, { remote: true, capability: 'image.generate' });
     let proof: (() => boolean) | undefined;
     return {
       async getAuth() {
@@ -3054,7 +3053,7 @@ setCodexImageAuthBinding({
         if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
       },
       async onAuthFailure(failure) {
-        lease?.observeFailure({ errorStatus: failure.status, message: failure.body }, undefined, 'run');
+        lease?.observeFailure({ errorStatus: failure.status, message: failure.body }, modelId, 'run');
         await invalidateChatgptBridgeAuth(failure, providerId, lease?.account);
       },
       release() { lease?.release(); },

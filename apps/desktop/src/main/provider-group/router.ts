@@ -368,10 +368,13 @@ export function createProviderGroupRouter(deps: ProviderGroupRouterDeps): Provid
           && offersModel(r, input) && coolingUntil(input.providerId, r.member.key, input.model) === null
           && !paused(r) && !input.exclude?.has(r.member.key))
         .map(async r => {
+          const model = input.capability === 'image.generate' && r.view
+            ? providerGroupImageModelId(r.view, input.providerId, input.model) : input.model;
+          if (!model) return;
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
             const summary = await Promise.race([
-              deps.readPoolScheduling!(r.member, input.model, {
+              deps.readPoolScheduling!(r.member, model, {
                 ...poolReadOptions(input, r.member),
                 ...(input.capability ? { capability: input.capability } : {}),
               }).catch(() => null),

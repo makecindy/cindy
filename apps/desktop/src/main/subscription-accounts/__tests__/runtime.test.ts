@@ -838,6 +838,26 @@ describe('duplicate subscription account profiles', () => {
       .toMatchObject({ accounts: 2, totalRunning: 0 });
   });
 
+  it('uses the image model for remote legacy account authorization without chat catalog membership', async () => {
+    const model = 'openai/gpt-image-2';
+    const options = { remote: true, capability: 'image.generate' as const };
+    h.pools.openai = { strategy: 'order', accounts: [account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' } };
+    let allowed = true;
+    h.accountAllowed.mockImplementation((_id, requested) => allowed && requested === model);
+
+    expect(await readSubscriptionPoolScheduling('openai', model, options)).toMatchObject({ accounts: 1 });
+    const lease = await acquireSubscriptionAccount('openai', model, [], false, options);
+    expect(lease?.accountId).toBe('imported');
+    try {
+      expect(() => lease?.assertDispatchable()).not.toThrow();
+      allowed = false;
+      expect(() => lease?.assertDispatchable()).toThrow('Subscription account remote access was revoked');
+    } finally {
+      lease?.release();
+    }
+  });
+
   it('merges into two accounts, empties the source and retains the old task directory', async () => {
     const source = 'openai-sub-duplicate';
     h.created[source] = { kind: 'openai', name: 'Original', account: 'duplicate' };

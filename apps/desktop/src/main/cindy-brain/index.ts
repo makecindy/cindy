@@ -5957,7 +5957,7 @@ configureProviderMediaRuntime({
       }
     };
     beforeDispatch();
-    const remoteAuth = await getCodexImageAuthBinding().acquireRemoteAuth?.(providerId);
+    const remoteAuth = await getCodexImageAuthBinding().acquireRemoteAuth?.(providerId, model);
     if (!remoteAuth) throw new Error('SHARED_IMAGE_UNAVAILABLE');
     try {
       const channel = createCodexImageChannel({

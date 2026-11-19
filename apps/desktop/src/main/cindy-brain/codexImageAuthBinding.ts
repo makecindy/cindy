@@ -8,7 +8,7 @@
  */
 
 export interface CodexImageAuthBinding {
-  acquireRemoteAuth?(providerId: string): Promise<{
+  acquireRemoteAuth?(providerId: string, modelId: string): Promise<{
     getAuth: CodexImageAuthBinding['getAuth'];
     assertDispatchable(): void;
     onAuthFailure: CodexImageAuthBinding['onAuthFailure'];

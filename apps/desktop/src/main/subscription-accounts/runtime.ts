@@ -2051,9 +2051,8 @@ export async function readSubscriptionPoolScheduling(
   options: { remote?: boolean; ownComputer?: boolean; capability?: 'image.generate' } = {},
 ): Promise<SubscriptionPoolScheduling | null> {
   let summary: SubscriptionPoolScheduling | null = null;
-  const { capability, ...admission } = options;
-  await acquireSubscriptionAccount(providerId, capability === 'image.generate' ? undefined : model, [], false, {
-    ...admission, resuming: false, dryRun: true,
+  await acquireSubscriptionAccount(providerId, model, [], false, {
+    ...options, resuming: false, dryRun: true,
     reportScheduling: value => { summary = value; },
   });
   return summary;
@@ -2067,6 +2066,8 @@ export async function acquireSubscriptionAccount(
   control = false,
   options: {
     remote?: boolean;
+    /** Images use the media catalog, but still require an exact model ID for remote grants. */
+    capability?: 'image.generate';
     /** 远程调用来自自己的其他电脑(不是受邀者)。 */
     ownComputer?: boolean;
     accountId?: string;
@@ -2114,7 +2115,8 @@ export async function acquireSubscriptionAccount(
   const selectionProvider = pinnedTarget ? accountProviderId(provider, pinnedTarget) : ref.providerId;
   if (pool.disconnected && selectionProvider === provider) throw new Error('Subscription provider was disconnected');
   const scoped = providerAccounts(provider, pool.accounts, selectionProvider);
-  const needsModelMembership = provider === 'openai' && !control && !!model && options.resuming !== true;
+  const needsModelMembership = provider === 'openai' && !control && !!model
+    && options.resuming !== true && options.capability !== 'image.generate';
   // A task resumes only its own home. For fresh assignment each profile completes its own
   // auth + model discovery; one slow sibling must not put a barrier in front of healthy peers.
   const snapshots = new Map<string, AccountSnapshot>();

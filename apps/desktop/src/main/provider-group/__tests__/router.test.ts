@@ -150,7 +150,7 @@ function harness(
 
 it('routes a shared image model only to a group member that offers it', async () => {
   const model = 'openai/gpt-image-2';
-  const remote = { ...SHARE_A, providerId: 'openai-independent' };
+  const remote = { ...member('remote', 'device', 'remote'), providerId: 'openai-independent' };
   const local = { ...LOCAL, providerId: 'openai' };
   const directory: ProviderGroupDirectory = {
     async resolveMembers(_providerId, config) {
@@ -172,6 +172,10 @@ it('routes a shared image model only to a group member that offers it', async ()
   };
   const router = harness({}, {}, [], undefined, {
     directory,
+    readPoolScheduling: async (_member, modelId) => ({
+      version: 1, accounts: modelId === 'openai-independent/gpt-image-2' ? 1 : 0,
+      running: 0, totalRunning: 0, full: false, urgency: null, fiveHourTight: false,
+    }),
     readGroup: () => ({ strategy: 'least', autoSwitch: true, members: [local, remote] }),
   });
   expect(await router.pick({
