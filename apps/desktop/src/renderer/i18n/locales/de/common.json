@@ -982,8 +982,8 @@
       "loading": "Bild wird geladen…"
     },
     "moveToolbar": "Symbolleiste nach links oder rechts verschieben",
-    "hint": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: Vollbild · C: Farbe kopieren · Esc: Beenden",
-    "hintWithLast": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: Vollbild · R: letzter Bereich · C: Farbe kopieren · Esc: Beenden",
+    "hint": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: ganzes Fenster auswählen · C: Farbe kopieren · Esc: Beenden",
+    "hintWithLast": "Klicken, um ein Fenster oder Element auszuwählen, oder ziehen, um einen Bereich auszuwählen · Scrollen: Auswahlumfang ändern · Leertaste: ganzes Fenster auswählen · R: letzter Bereich · C: Farbe kopieren · Esc: Beenden",
     "copy": "Kopieren",
     "cancel": "Screenshot-Modus verlassen",
     "captureFailed": "Bildschirm konnte nicht aufgenommen werden",
