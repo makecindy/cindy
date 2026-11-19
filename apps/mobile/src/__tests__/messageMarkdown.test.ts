@@ -2954,3 +2954,39 @@ describe('reference comment checkpoint and markup scanning regressions', () => {
     expect(guarded.flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toHaveLength(2);
   });
 });
+
+
+describe('unresolved references and raw declaration regressions', () => {
+  it('does not rescan unresolved labels for each intervening inline code token', () => {
+    const source = '[ok]: https://example.com/\n\n' + '[missing] `x` '.repeat(200) + '[ok]';
+    const original = RegExp.prototype.exec;
+    let scans = 0;
+    const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+      if (this.source === '!?\\[') scans++;
+      return original.call(this, input);
+    });
+    let blocks: ReturnType<typeof parseMobileMarkdown>;
+    try { blocks = parseMobileMarkdown(source); } finally { spy.mockRestore(); }
+    const inlines = blocks.flatMap(block => 'inlines' in block ? block.inlines : []);
+    expect(inlines.filter(inline => inline.type === 'code')).toHaveLength(200);
+    expect(inlines.filter(inline => inline.type === 'link')).toEqual([{ type: 'link', text: 'ok', url: 'https://example.com/' }]);
+    expect(scans).toBeLessThan(2000);
+  });
+
+  it('keeps references inside raw declarations, processing instructions and CDATA literal', () => {
+    for (const markup of ['<!DOCTYPE [site][s]>', '<?xml [site][s]?>', '<![CDATA[[site][s]]]>', '<!DOCTYPE root [ <!ENTITY x "a > [site][s]"> ]>', '<!DOCTYPE "a > [site][s]">']) {
+      const source = '[s]: https://example.com/\n\n' + markup + ' [site][s]';
+      const links = parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link');
+      expect(links).toEqual([{ type: 'link', text: 'site', url: 'https://example.com/' }]);
+    }
+    const literal = '[s]: https://example.com/\n\n`<?` [site][s] <!-- <? --> [site][s]';
+    expect(parseMobileMarkdown(literal).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toHaveLength(2);
+  });
+
+  it('keeps accepted continuation destinations after tables unchanged', () => {
+    for (const table of ['name | value\n--- | ---', '| name | value |\n| one | two |', 'a\\|b | value\n--- | ---']) {
+      const source = table + '\n[f]:\n docs/a\\(1\\).md\n\n[file][f]';
+      expect(parseMobileMarkdown(source).flatMap(block => 'inlines' in block ? block.inlines : []).filter(inline => inline.type === 'link')).toEqual([{ type: 'link', text: 'file', url: 'docs/a(1).md' }]);
+    }
+  });
+});

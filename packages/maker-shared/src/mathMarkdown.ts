@@ -1,3 +1,18 @@
+import {
+  parseMarkdownTableBlock,
+  advanceMarkdownHtmlCommentState,
+  COMPLETE_MARKDOWN_HTML_TAG_LINE,
+  MARKDOWN_BLOCK_HTML_LINE,
+  markdownRawHtmlEnd,
+} from './markdownBlocks';
+export {
+  parseMarkdownTableBlock,
+  advanceMarkdownHtmlCommentState,
+  COMPLETE_MARKDOWN_HTML_TAG_LINE,
+  MARKDOWN_BLOCK_HTML_LINE,
+  markdownRawHtmlEnd,
+} from './markdownBlocks';
+
 /**
  * mathMarkdown — LaTeX 数学公式在 markdown 消息里的共用纯逻辑层。
  * desktop(react-markdown + remark-math/KaTeX)与 mobile(自研 parser +
@@ -110,6 +125,11 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
   let lineCursor = 0;
   let paragraph = false;
   let fence: string | null = null;
+  let html = false;
+  let comment = false;
+  let rawHtmlEnd: RegExp | undefined;
+  const lines = text.split('\n');
+  let lineIndex = 0;
   for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_RE)) {
     // A definition cannot interrupt prose. Advance through physical lines once
     // so a header in an open paragraph cannot claim the following math line.
@@ -118,17 +138,56 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
       const end = newline === -1 ? text.length : newline;
       const line = text.slice(lineCursor, end);
       const marker = line.match(FENCE_OPEN_RE)?.[1];
+      lineCursor = end + 1;
+      const currentLine = lineIndex++;
       if (fence) {
         if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = null;
         paragraph = false;
-      } else if (marker) {
-        fence = marker;
-        paragraph = false;
-      } else {
-        paragraph = !!line.trim() && !/^(?: {0,3}#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s| {0,3}(?:[-*_]\s*){3,}$)/.test(line);
+        continue;
       }
-      lineCursor = end + 1;
+      if (marker) {
+        fence = marker;
+        html = false;
+        rawHtmlEnd = undefined;
+        paragraph = false;
+        continue;
+      }
+      if (rawHtmlEnd) {
+        if (rawHtmlEnd.test(line)) rawHtmlEnd = undefined;
+        paragraph = false;
+        continue;
+      }
+      if (!paragraph && !comment && COMPLETE_MARKDOWN_HTML_TAG_LINE.test(line)) html = true;
+      const table = !html && !comment && !/^(?:#{1,6}\s|\s*>)/.test(line)
+        ? parseMarkdownTableBlock(lines, currentLine) : null;
+      if (table) {
+        for (let row = currentLine; row <= table.endIndex; row++) {
+          comment = advanceMarkdownHtmlCommentState(lines[row], comment);
+          if (row > currentLine) lineCursor += lines[row].length + 1;
+        }
+        lineIndex = table.endIndex + 1;
+        paragraph = false;
+        continue;
+      }
+      const startsInComment = comment;
+      comment = advanceMarkdownHtmlCommentState(line, comment);
+      if (startsInComment || comment || line.includes('<!--')) {
+        if (/^(?:#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(line)) paragraph = false;
+        else if (!startsInComment) paragraph = !/^ {0,3}<!--/.test(line);
+        continue;
+      }
+      if (!line.trim()) { html = false; paragraph = false; continue; }
+      const rawEnd = markdownRawHtmlEnd(line);
+      if (rawEnd) {
+        if (!rawEnd.test(line)) rawHtmlEnd = rawEnd;
+        paragraph = false;
+        continue;
+      }
+      if (MARKDOWN_BLOCK_HTML_LINE.test(line)) html = true;
+      if (html) continue;
+      paragraph = !/^(?: {0,3}#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s| {0,3}(?:[-*_]\s*){3,}$)/.test(line);
     }
+    if (lineCursor > match.index) continue;
     if (!match[1].trim() || (ranges.length && match.index < ranges[ranges.length - 1][1])) continue;
     let lineEnd = text.indexOf('\n', match.index);
     // An empty definition header can put its destination on the next line.
@@ -136,14 +195,18 @@ function findReferenceDefinitionRanges(text: string, completeOnly = false): Arra
     // Invalid definitions must not suppress math on the following line.
     const headerEnd = match.index + match[0].length;
     const destinationStart = lineEnd !== -1 && !text.slice(headerEnd, lineEnd).trim() ? lineEnd + 1 : headerEnd;
-    const destinationEnd = !paragraph && !fence ? continuationDefinitionEnd(text, destinationStart) : null;
+    const destinationEnd = !paragraph && !fence && !html && !comment && !rawHtmlEnd ? continuationDefinitionEnd(text, destinationStart) : null;
     // Coarse header shielding can protect URL-shaped text, but only complete
     // definitions may take precedence over real code spans or fence lines.
     if (completeOnly && destinationEnd === null) continue;
     if (destinationEnd !== null) lineEnd = Math.max(lineEnd, destinationEnd);
     ranges.push([match.index, lineEnd === -1 ? text.length : lineEnd]);
     if (destinationEnd !== null) {
-      lineCursor = (lineEnd === -1 ? text.length : lineEnd) + 1;
+      while (lineCursor <= (lineEnd === -1 ? text.length : lineEnd)) {
+        const newline = text.indexOf('\n', lineCursor);
+        lineCursor = newline === -1 ? text.length + 1 : newline + 1;
+        lineIndex++;
+      }
       paragraph = false;
     }
   }

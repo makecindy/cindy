@@ -1,5 +1,12 @@
 import { richAnswerText } from '@cindy/maker-shared/rich-answer';
-import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
+import {
+  normalizeMathDelimiters,
+  parseMarkdownTableBlock as parseTableBlock,
+  advanceMarkdownHtmlCommentState as advanceHtmlCommentState,
+  COMPLETE_MARKDOWN_HTML_TAG_LINE as COMPLETE_HTML_TAG_LINE,
+  MARKDOWN_BLOCK_HTML_LINE,
+  markdownRawHtmlEnd,
+} from '@cindy/maker-shared/math-markdown';
 import {
   BARE_HTTP_URL_RE_SOURCE,
   clipBareHttpAutolinkText,
@@ -129,7 +136,6 @@ function isClosingMathFence(line: string): boolean {
 // CommonMark type-7 HTML: a complete single tag at a block boundary.
 // Attribute values may contain > or |, but autolinks and inline tag pairs
 // are not standalone tags. Type 7 never interrupts an open paragraph.
-const COMPLETE_HTML_TAG_LINE = /^ {0,3}(?:<[A-Za-z][A-Za-z0-9-]*(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t"'=<>`]+|'[^']*'|"[^"]*"))?)*[ \t]*\/?>|<\/[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$/;
 
 function collectMarkdownReferences(source: string): MarkdownReferenceContext {
   const definitions = new Map<string, string>();
@@ -240,25 +246,13 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       continue;
     }
     if (!line.trim()) { html = false; paragraph = false; continue; }
-    const rawDeclaration = /^ {0,3}(?:<![A-Z]|<\?|<!\[CDATA\[)/.test(line);
-    if (rawDeclaration) {
-      const end = line.trimStart().startsWith('<?')
-        ? /\?>/
-        : line.trimStart().startsWith('<![CDATA[')
-          ? /\]\]>/
-          : />/;
-      if (!end.test(line)) rawHtmlEnd = end;
+    const rawEnd = markdownRawHtmlEnd(line);
+    if (rawEnd) {
+      if (!rawEnd.test(line)) rawHtmlEnd = rawEnd;
       paragraph = false;
       continue;
     }
-    const rawTag = /^ {0,3}<(script|pre|style|textarea)(?=[\s>])/i.exec(line);
-    if (rawTag) {
-      const end = new RegExp(`</${rawTag[1]}\\s*>`, 'i');
-      if (!end.test(line)) rawHtmlEnd = end;
-      paragraph = false;
-      continue;
-    }
-    if (/^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hgroup|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|summary|style|table|tbody|td|tfoot|th|thead|title|tr|track|textarea|ul)(?=[\s/>])/i.test(line)) html = true;
+    if (MARKDOWN_BLOCK_HTML_LINE.test(line)) html = true;
     if (html) continue;
     paragraph = !/^(?:#{1,6}\s|\s*>|\s*(?:[-*+]|\d+[.)])\s)/.test(line);
   }
@@ -324,12 +318,6 @@ function joinParagraphInlines(left: MobileMarkdownInline[], right: MobileMarkdow
     return [...left.slice(0, -1), { type: 'text', text: end.text + start.text }, ...right.slice(1)];
   }
   return [...left, ...right];
-}
-
-interface ParsedTableBlock {
-  header: string[];
-  rows: Array<{ lineIndex: number; cells: string[] }>;
-  endIndex: number;
 }
 
 interface CodeFenceState {
@@ -1484,6 +1472,8 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
   let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
   let tagSpans: Array<[number, number]> | undefined;
   let commentSpans: Array<[number, number]> | undefined;
+  let declarationSpans: Array<[number, number]> | undefined;
+  let reference: ReturnType<typeof nextMarkdownReference> | undefined;
   const contains = (spans: Array<[number, number]>, index: number) => {
     let low = 0;
     let high = spans.length;
@@ -1504,6 +1494,14 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
     hasMarkdownImage: input.includes('!['),
     hasHtmlImage: HTML_IMG_HINT_RE.test(input),
     commentProbe,
+    nextReference: (from: number) => {
+      // An unresolved label is immutable too. Keep the next resolved candidate
+      // (or terminal miss) while other inline grammars consume earlier tokens.
+      if (reference === undefined || (reference !== null && reference.index < from)) {
+        reference = nextMarkdownReference(input, from, references, regex => regex.exec(input));
+      }
+      return reference;
+    },
     referenceInsideMarkup: (index: number) => {
       if (!tagSpans) {
         tagSpans = [];
@@ -1514,6 +1512,35 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
         }
       }
       if (contains(tagSpans, index)) return true;
+      if (!declarationSpans) {
+        declarationSpans = [];
+        const text = blankHtmlComments(commentProbe(), startsInsideHtmlComment);
+        const opening = /<!\[CDATA\[|<!(?!--)|<\?/g;
+        let match: RegExpExecArray | null;
+        while ((match = opening.exec(text)) !== null) {
+          if (contains(tagSpans, match.index)) continue;
+          let end = text.length;
+          if (match[0] === '<?' || match[0] === '<![CDATA[') {
+            const close = match[0] === '<?' ? '?>' : ']]>';
+            const at = text.indexOf(close, opening.lastIndex);
+            if (at !== -1) end = at + close.length;
+          } else {
+            let quote = '';
+            let brackets = 0;
+            for (let at = opening.lastIndex; at < text.length; at++) {
+              const char = text[at];
+              if (quote) { if (char === quote) quote = ''; continue; }
+              if (char === '"' || char === "'") quote = char;
+              else if (char === '[') brackets++;
+              else if (char === ']') brackets = Math.max(0, brackets - 1);
+              else if (char === '>' && brackets === 0) { end = at + 1; break; }
+            }
+          }
+          declarationSpans.push([match.index, end]);
+          opening.lastIndex = end;
+        }
+      }
+      if (contains(declarationSpans, index)) return true;
       if (!needsCommentCheck) return false;
       if (!commentSpans) {
         commentSpans = [];
@@ -1558,7 +1585,7 @@ function matchMarkdownReference(input: string, from: number, context: InlinePars
 } | null {
   let cursor = from;
   while (cursor < input.length) {
-    const reference = nextMarkdownReference(input, cursor, context.references, context.search.exec);
+    const reference = context.nextReference(cursor);
     if (!reference) return null;
     cursor = reference.end;
     if (reference.image && isBackslashEscaped(input, reference.index)) {
@@ -1595,7 +1622,7 @@ function findNextInlineToken(
     // 靠 image 的起点(`!`)更靠前在排序里胜出,这里的顺序只是可读性上的强调。
     context.search.next('MarkdownImage', from, () => matchMarkdownImage(input, from, context)),
     context.search.next('HtmlImage', from, () => matchHtmlImage(input, from, context)),
-    context.search.next('Reference', from, () => matchMarkdownReference(input, from, context)),
+    matchMarkdownReference(input, from, context),
     // 链接语法:http(s) 之外放行 Cindy 深链(双 scheme:cindy 主 + xdt-maker
     // 兼容存量消息)session|project/(session 渲染成会话 chip;project 在
     // renderInline 里显示 label 纯文本,不落 Linking.openURL——桌面端粘贴
@@ -1843,26 +1870,6 @@ const HTML_IMG_HINT_RE = /<img/i;
 // 与 inline matcher 同口径,标记检测在 code-span 空白填充的副本上做:文档文本里的字面 `<!--`
 // 不能把状态卡在"注释内"、吞掉后续段落的图片(review 实捉)。取舍:注释内部文本里的反引号
 // 本无 code-span 语义,填充可能漏掉恰好被反引号夹住的 -->,该形态远罕于字面 `<!--` 的文档场景。
-function advanceHtmlCommentState(line: string, inComment: boolean): boolean {
-  const scan = blankCodeSpans(line);
-  let pos = 0;
-  let state = inComment;
-  while (pos < scan.length) {
-    if (state) {
-      const close = scan.indexOf('-->', pos);
-      if (close === -1) return true;
-      state = false;
-      pos = close + 3;
-    } else {
-      const open = scan.indexOf('<!--', pos);
-      if (open === -1) return false;
-      state = true;
-      pos = open + 4;
-    }
-  }
-  return state;
-}
-
 // code span 以等长空白填充(偏移保持):`<div>` / `<!--` 这类行内代码里的字面标记是代码文本、
 // 不是任意 HTML,不参与拒转判定;等长填充让注释 span 的位置与原串上的匹配位置对齐。
 function blankCodeSpans(input: string): string {
@@ -2153,103 +2160,4 @@ function pushText(out: MobileMarkdownInline[], text: string): void {
 
 function trimUrlPunctuation(url: string): string {
   return url.replace(/[),.;:!?]+$/g, '');
-}
-
-function parseTableBlock(lines: readonly string[], index: number): ParsedTableBlock | null {
-  const header = parseTableRow(lines[index]);
-  if (!isTableDataRow(lines[index]) || header.length < 2) return null;
-
-  if (isTableSeparator(lines[index + 1] ?? '')) {
-    const rows: ParsedTableBlock['rows'] = [];
-    let rowIndex = index + 2;
-    while (rowIndex < lines.length && isTableDataRow(lines[rowIndex])) {
-      rows.push({
-        lineIndex: rowIndex,
-        cells: parseTableRow(lines[rowIndex]),
-      });
-      rowIndex += 1;
-    }
-    return {
-      header,
-      rows,
-      endIndex: rowIndex - 1,
-    };
-  }
-
-  return parseLooseTableBlock(lines, index, header);
-}
-
-function parseLooseTableBlock(
-  lines: readonly string[],
-  index: number,
-  header: string[],
-): ParsedTableBlock | null {
-  if (!isLooseTableDataRow(lines[index])) return null;
-  const columnCount = header.length;
-  const rows: ParsedTableBlock['rows'] = [];
-  let rowIndex = index + 1;
-  while (rowIndex < lines.length && isLooseTableDataRow(lines[rowIndex])) {
-    const cells = parseTableRow(lines[rowIndex]);
-    if (cells.length !== columnCount) break;
-    rows.push({
-      lineIndex: rowIndex,
-      cells,
-    });
-    rowIndex += 1;
-  }
-  if (rows.length === 0) return null;
-  return {
-    header,
-    rows,
-    endIndex: rowIndex - 1,
-  };
-}
-
-function isTableDataRow(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.includes('|') && !isTableSeparator(trimmed);
-}
-
-function isLooseTableDataRow(line: string): boolean {
-  const cells = parseTableRow(line);
-  return isTableDataRow(line) && cells.length >= 2 && cells.every((cell) => cell.length > 0);
-}
-
-function isTableSeparator(line: string): boolean {
-  const cells = parseTableRow(line);
-  if (cells.length < 2) return false;
-  return cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
-}
-
-function parseTableRow(line: string): string[] {
-  let trimmed = line.trim();
-  if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
-  if (endsWithUnescapedPipe(trimmed)) trimmed = trimmed.slice(0, -1);
-  const cells: string[] = [];
-  let cell = '';
-  for (let index = 0; index < trimmed.length; index++) {
-    const char = trimmed[index];
-    if (char === '\\' && trimmed[index + 1] === '|') {
-      cell += '|';
-      index += 1;
-      continue;
-    }
-    if (char === '|') {
-      cells.push(cell.trim());
-      cell = '';
-      continue;
-    }
-    cell += char;
-  }
-  cells.push(cell.trim());
-  return cells;
-}
-
-function endsWithUnescapedPipe(value: string): boolean {
-  if (!value.endsWith('|')) return false;
-  let backslashCount = 0;
-  for (let index = value.length - 2; index >= 0 && value[index] === '\\'; index--) {
-    backslashCount += 1;
-  }
-  return backslashCount % 2 === 0;
 }
