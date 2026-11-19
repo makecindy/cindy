@@ -83,12 +83,15 @@ try {
       const child = spawn(electron, [script, ...TEST_ARGS], { stdio: ['pipe', 'pipe', 'ignore'], env });
       const answers = [];
       let readyAt = null;
-      createInterface({ input: child.stdout }).on('line', (line) => {
-        const value = JSON.parse(line);
-        if (value.ready) readyAt = answers.length;
-        else answers.push(value);
-      });
       let id = 0;
+      createInterface({ input: child.stdout }).on('line', (line) => {
+        // Electron's stdout can also contain lines outside the worker protocol.
+        let value;
+        try { value = JSON.parse(line); } catch { return; }
+        if (!value || typeof value !== 'object') return;
+        if (value.ready === true && value.pid === child.pid) readyAt = answers.length;
+        else if (Number.isSafeInteger(value.id) && value.id > 0 && value.id <= id) answers.push(value);
+      });
       const ask = setInterval(() => child.stdin.write(`${JSON.stringify({ id: ++id, method: 'resolve', url: 'https://api.example.test/v1' })}\n`), 20);
       const until = Date.now() + 15_000;
       while (Date.now() < until && !(readyAt !== null && answers.slice(readyAt).some(a => a.result))) await delay(20);

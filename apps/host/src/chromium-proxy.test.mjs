@@ -120,6 +120,23 @@ test('never an answer before the helper is ready: the resolution waits, within i
   assert.equal(helper.state(), 'ready');
 });
 
+// Rule: stdout outside the JSON protocol cannot interrupt proxy resolution. Gap: the Windows
+// acceptance run saw an empty line before a reply. Minimal input: CRLF and a non-JSON line before
+// ready and before a reply. Tier: unit through the production client's child stream.
+test('the proxy helper client ignores unrelated stdout before ready and a reply', async () => {
+  const noise = child => child.stdout.write('\r\nChromium startup output\r\n');
+  const { spawnImpl } = standIn({
+    onSpawn(child) { noise(child); ready(child); },
+    onRequest(child, message) { noise(child); answer('PROXY 127.0.0.1:9')(child, message); },
+  });
+  const helper = helperFor(spawnImpl);
+  try {
+    assert.equal(await helper.resolveProxy('https://api.example.test/'), 'PROXY 127.0.0.1:9');
+  } finally {
+    await helper.close();
+  }
+});
+
 test('started on demand: not with proxy environment variables, not for static macOS settings, at the first need on Windows', async () => {
   const { spawned, spawnImpl } = standIn({ onSpawn: ready, onRequest: answer('PROXY 10.9.9.9:8080') });
   const helper = helperFor(spawnImpl);
