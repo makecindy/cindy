@@ -188,6 +188,7 @@ function InteractionPanelContent({
   collapse,
   deviceId,
   fillAvailableHeight = false,
+  pinPermissionActions = false,
   sessionId,
   interactions,
   activeRequestId: controlledActiveRequestId,
@@ -212,6 +213,7 @@ function InteractionPanelContent({
   };
   deviceId: string;
   fillAvailableHeight?: boolean;
+  pinPermissionActions?: boolean;
   sessionId: string;
   interactions: PendingInteraction[];
   activeRequestId?: string | null;
@@ -389,6 +391,7 @@ function InteractionPanelContent({
         sessionId={sessionId}
         item={activeInteraction}
         embedded={embedded}
+        pinPermissionActions={pinPermissionActions}
         planViewerState={planViewerState}
         onPlanViewerStateChange={onPlanViewerStateChange}
         onError={onError}
@@ -537,6 +540,7 @@ function InteractionItem({
   sessionId,
   item,
   embedded,
+  pinPermissionActions,
   planViewerState,
   onPlanViewerStateChange,
   onError,
@@ -547,6 +551,7 @@ function InteractionItem({
   sessionId: string;
   item: PendingInteraction;
   embedded: boolean;
+  pinPermissionActions: boolean;
   planViewerState?: MobilePlanViewerState;
   onPlanViewerStateChange?(state: MobilePlanViewerState): void;
   onError(message: string | null): void;
@@ -686,6 +691,7 @@ function InteractionItem({
   if (kind === 'permission') {
     return (
       <PermissionCard
+        pinActions={pinPermissionActions}
         key={readRequestId(item)}
         busy={busy}
         item={item}
@@ -811,12 +817,14 @@ function PermissionCard({
   busy,
   item,
   onDecision,
+  pinActions,
   touchLayout,
 }: {
   onError(message: string | null): void;
   busy: boolean;
   item: PendingInteraction;
   onDecision(decision: Record<string, unknown>): void;
+  pinActions: boolean;
   touchLayout: InteractionTouchLayout;
 }) {
   const styles = useInteractionStyles();
@@ -895,8 +903,8 @@ function PermissionCard({
       variant="primary"
     />
   );
-  return (
-    <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.permission.card">
+  const details = (
+    <>
       {companion ? <>
         <View style={styles.companionCaption} testID="interaction.permission.requester">
           {!hung ? companionIdentity?.avatar : null}
@@ -928,6 +936,21 @@ function PermissionCard({
         disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}>
         <Text style={styles.companionDetailsText}>{t('interaction.companion.details')}</Text>
       </InteractionTouchButton>}
+    </>
+  );
+  return (
+    <View style={[cardStyle(styles, touchLayout, companion), pinActions && styles.permissionScrollable]} testID="interaction.permission.card">
+      {pinActions ? (
+        <ScrollView
+          style={styles.permissionScrollable}
+          contentContainerStyle={{ gap: companion ? spacing.sm : touchLayout.cardGap }}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          testID="interaction.permission.scroll"
+        >
+          {details}
+        </ScrollView>
+      ) : details}
       <InteractionActions touchLayout={touchLayout}>
         {[denyButton, alwaysButton, allowButton]}
       </InteractionActions>
@@ -2504,6 +2527,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
   },
+  permissionScrollable: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
   permissionEvidence: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
