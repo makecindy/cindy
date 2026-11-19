@@ -1,34 +1,14 @@
 import type { AgentKind, CustomProviderConfig } from '@cindy/model-providers';
 import { UNRECOVERABLE_PROVIDER_CREDENTIAL } from '../secrets/providerCredentialState.js';
 
-/** Preserve Desktop's encrypted migration and rollback on every launcher. */
-export function createCustomProviderHeaderService(ports: {
-  readCustomProviderHeadersForMutation: typeof import('../secrets/providerSecretStore.js').readCustomProviderHeadersForMutation;
-  removeCustomProviderHeaders: typeof import('../secrets/providerSecretStore.js').removeCustomProviderHeaders;
-  storeCustomProviderHeaders: typeof import('../secrets/providerSecretStore.js').storeCustomProviderHeaders;
-  listCustomProviders: typeof import('./custom-provider-store.js').listCustomProviders;
-  updateCustomProvider: typeof import('./custom-provider-store.js').updateCustomProvider;
-  getCurrentDbClientUserId: typeof import('../localDb/client/current.js').getCurrentDbClientUserId;
-}) {
-const { readCustomProviderHeadersForMutation, removeCustomProviderHeaders, storeCustomProviderHeaders, listCustomProviders, updateCustomProvider, getCurrentDbClientUserId } = ports;
-
-
-
-
-
-
-const CUSTOM_PROVIDER_RUNTIME_AGENTS: readonly AgentKind[] = [
+export const CUSTOM_PROVIDER_RUNTIME_AGENTS: readonly AgentKind[] = [
   'claude-code',
   'codex',
   'pi',
 ];
 
-type CustomProviderHeaderSecrets = Partial<
-  Record<AgentKind, Record<string, string>>
->;
-
 /** Return a clone safe to persist plus the header values that must be encrypted. */
-function splitCustomProviderHeaders(config: CustomProviderConfig): {
+export function splitCustomProviderHeaders(config: CustomProviderConfig): {
   config: CustomProviderConfig;
   headers: CustomProviderHeaderSecrets;
 } {
@@ -46,6 +26,22 @@ function splitCustomProviderHeaders(config: CustomProviderConfig): {
   }
   return { config: { ...config, runtimes }, headers };
 }
+
+/** Preserve Desktop's encrypted migration and rollback on every launcher. */
+export function createCustomProviderHeaderService(ports: {
+  readCustomProviderHeadersForMutation: typeof import('../secrets/providerSecretStore.js').readCustomProviderHeadersForMutation;
+  removeCustomProviderHeaders: typeof import('../secrets/providerSecretStore.js').removeCustomProviderHeaders;
+  storeCustomProviderHeaders: typeof import('../secrets/providerSecretStore.js').storeCustomProviderHeaders;
+  listCustomProviders: typeof import('./custom-provider-store.js').listCustomProviders;
+  updateCustomProvider: typeof import('./custom-provider-store.js').updateCustomProvider;
+  getCurrentDbClientUserId: typeof import('../localDb/client/current.js').getCurrentDbClientUserId;
+}) {
+const { readCustomProviderHeadersForMutation, removeCustomProviderHeaders, storeCustomProviderHeaders, listCustomProviders, updateCustomProvider, getCurrentDbClientUserId } = ports;
+
+
+
+
+
 
 /** Hydrate safeStorage-only runtime headers into a config used by routing/UI/Pi. */
 function hydrateCustomProviderHeaders(

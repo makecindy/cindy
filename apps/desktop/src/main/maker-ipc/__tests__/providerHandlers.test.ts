@@ -43,7 +43,7 @@ import {
 } from '../../provider-import/providerImport.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
-import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
+import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.desktop.js';
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
 import * as providerPresentation from '../../maker-host/provider-presentation-store.js';

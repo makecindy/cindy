@@ -173,6 +173,18 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: () => null,
   },
   {
+    desktopChannel: 'maker:provider:custom:create',
+    webPath: 'maker.createCustomProvider',
+    hostPath: '/api/providers/custom/create',
+    body: ([config, keys, options]) => ({ config, keys, options }),
+  },
+  {
+    desktopChannel: 'maker:provider:models-fetch',
+    webPath: 'maker.fetchProviderModels',
+    hostPath: '/api/providers/models-fetch',
+    body: ([input]) => ({ input }),
+  },
+  {
     desktopChannel: 'maker:auth:get-state',
     webPath: 'maker.auth.getState',
     hostPath: '/api/agents/auth-state',
