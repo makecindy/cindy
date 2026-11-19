@@ -6,7 +6,7 @@ import {
   isLocalSessionBusy,
   prepareLocalSessionCredentialModeSwitch,
 } from '../maker-host/codex-credential-switch.js';
-import { setSessionProvider } from '../maker-host/session-provider-store.js';
+import { getSessionProvider, setSessionProvider } from '../maker-host/session-provider-store.js';
 
 /**
  * PendingCredentialSwitchService —— 会话凭证形态切换的「延迟生效」登记表。
@@ -61,7 +61,14 @@ interface PendingSwitchSession {
   isTurnRunning?: () => boolean;
 }
 
+/** A Host can temporarily lose ownership of its profile while a switch is in flight. */
+export interface CredentialSettlementPermit {
+  registered(sessionId: string, target: PendingCredentialSwitch): void;
+  allows(sessionId: string, target: PendingCredentialSwitch): boolean;
+}
+
 export interface PendingCredentialSwitchDeps {
+  settlementPermit?: CredentialSettlementPermit;
   maker: {
     listActiveSessions: () => PendingSwitchSession[];
     closeSession: (sessionId: string, reason?: 'runtime-refresh') => Promise<void>;
@@ -132,6 +139,7 @@ export class PendingCredentialSwitchService {
   private readonly applying = new Set<string>();
   /** 自愈兜底定时器(per session,pending 收口即清)。 */
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly idleWaiters = new Map<string, Set<() => void>>();
   private readonly failedPiTargets = new WeakSet<PendingCredentialSwitch>();
 
   constructor(private readonly deps: PendingCredentialSwitchDeps) {}
@@ -148,7 +156,7 @@ export class PendingCredentialSwitchService {
       ownerEpoch?: string;
     },
   ): void {
-    this.pending.set(sessionId, {
+    const registered: PendingCredentialSwitch = {
       model: target.model,
       providerId: target.providerId,
       ...(target.forceSessionRebuild ? { forceSessionRebuild: true } : {}),
@@ -157,13 +165,47 @@ export class PendingCredentialSwitchService {
       ...(target.previousRoute ? { previousRoute: target.previousRoute } : {}),
       requestedAt: Date.now(),
       ...(target.ownerEpoch ? { ownerEpoch: target.ownerEpoch } : {}),
-    });
+    };
+    this.deps.settlementPermit?.registered(sessionId, registered);
+    this.pending.set(sessionId, registered);
     this.scheduleRetry(sessionId);
     this.deps.logger?.info('pending credential switch registered', {
       sessionId,
       model: target.model,
       providerId: target.providerId,
     });
+  }
+
+  entries() { return this.pending.entries(); }
+
+  /** A profile rebuild must drain an older close or timer before admitting a new settlement. */
+  waitForIdle(sessionId: string): Promise<void> | undefined {
+    if (!this.applying.has(sessionId)) return;
+    return new Promise(resolve => {
+      const waiters = this.idleWaiters.get(sessionId) ?? new Set();
+      waiters.add(resolve);
+      this.idleWaiters.set(sessionId, waiters);
+    });
+  }
+
+  private finishApplying(sessionId: string): void {
+    this.applying.delete(sessionId);
+    this.idleWaiters.get(sessionId)?.forEach(resolve => resolve());
+    this.idleWaiters.delete(sessionId);
+  }
+
+  /** Discard only this registration. Rolling back would overwrite the desktop's newer route. */
+  discard(sessionId: string, target: PendingCredentialSwitch, sameOwner: boolean): void {
+    if (this.pending.get(sessionId) !== target) return;
+    this.clear(sessionId);
+    this.deps.logger?.warn('stale pending credential switch discarded', { sessionId });
+    if (sameOwner && target.agentKind === 'pi') {
+      this.deps.broadcastFailed?.({ sessionId, reason: 'apply-failed' });
+    }
+  }
+
+  private permitted(sessionId: string, target: PendingCredentialSwitch): boolean {
+    return this.deps.settlementPermit?.allows(sessionId, target) !== false;
   }
 
   has(sessionId: string): boolean {
@@ -187,7 +229,7 @@ export class PendingCredentialSwitchService {
   async onTurnSettled(sessionId: string): Promise<void> {
     const target = this.pending.get(sessionId);
     if (!target) return;
-    if (this.failedPiTargets.has(target)) return;
+    if (this.failedPiTargets.has(target) || !this.permitted(sessionId, target)) return;
     if (target.agentKind === 'pi' && target.ownerEpoch &&
         this.deps.isPiOwnerCurrent?.(target.ownerEpoch) === false) {
       this.pending.delete(sessionId);
@@ -204,7 +246,7 @@ export class PendingCredentialSwitchService {
     try {
       if ((session?.agentKind ?? target.agentKind) === 'pi' && this.deps.applyPiPending) {
         const resolved = await this.resolveApplyRoute(target);
-        if (this.pending.get(sessionId) !== target) return;
+        if (this.pending.get(sessionId) !== target || !this.permitted(sessionId, target)) return;
         if (!resolved.apply) {
           await this.failPiPending(sessionId, target, new Error('Pi model route could not be revalidated'));
           return;
@@ -213,8 +255,8 @@ export class PendingCredentialSwitchService {
           const outcome = await this.deps.applyPiPending(sessionId, target, {
             model: resolved.model ?? target.model,
             providerId: resolved.providerId,
-          }, () => this.pending.get(sessionId) === target && this.piOwnerCurrent(target));
-          if (outcome === 'deferred' || this.pending.get(sessionId) !== target || !this.piOwnerCurrent(target)) return;
+          }, () => this.pending.get(sessionId) === target && this.piOwnerCurrent(target) && this.permitted(sessionId, target));
+          if (outcome === 'deferred' || this.pending.get(sessionId) !== target || !this.piOwnerCurrent(target) || !this.permitted(sessionId, target)) return;
           this.pending.delete(sessionId);
           this.clearRetry(sessionId);
           try { this.deps.onApplied?.(sessionId); } catch (error) {
@@ -269,15 +311,15 @@ export class PendingCredentialSwitchService {
       // await close 期间用户可能又 register(改选)或 clear(取消):以**当前**登记为准
       // 收口,不能用进入函数时捕获的 stale target 覆盖后选(后选覆盖先选)。
       const latest = this.pending.get(sessionId);
-      if (!latest) return;
+      if (!latest || !this.permitted(sessionId, latest)) return;
       await this.finalizeApplyChecked(sessionId, latest, 'turn end');
     } finally {
-      this.applying.delete(sessionId);
+      this.finishApplying(sessionId);
     }
   }
 
   private async failPiPending(sessionId: string, target: PendingCredentialSwitch, error: unknown): Promise<void> {
-    if (this.pending.get(sessionId) !== target) return;
+    if (this.pending.get(sessionId) !== target || !this.permitted(sessionId, target)) return;
     if (!this.piOwnerCurrent(target)) {
       this.pending.delete(sessionId);
       this.clearRetry(sessionId);
@@ -291,11 +333,11 @@ export class PendingCredentialSwitchService {
     let restored = false;
     try {
       const rollback = async () => {
-        if (this.pending.get(sessionId) !== target || !this.piOwnerCurrent(target)) return;
+        if (this.pending.get(sessionId) !== target || !this.piOwnerCurrent(target) || !this.permitted(sessionId, target)) return;
         if (target.previousRoute && this.deps.persistRoute) {
           await this.deps.persistRoute(sessionId, target.previousRoute);
         }
-        if (this.pending.get(sessionId) !== target || !this.piOwnerCurrent(target)) return;
+        if (this.pending.get(sessionId) !== target || !this.piOwnerCurrent(target) || !this.permitted(sessionId, target)) return;
         if (target.previousRoute) setSessionProvider(sessionId, target.previousRoute.providerId);
         this.pending.delete(sessionId);
         restored = true;
@@ -303,10 +345,18 @@ export class PendingCredentialSwitchService {
       if (this.deps.withPiSessionLock) await this.deps.withPiSessionLock(sessionId, rollback);
       else await rollback();
     } catch (rollbackError) {
+      if (!this.permitted(sessionId, target)) {
+        this.failedPiTargets.delete(target);
+        return;
+      }
       rollbackFailed = true;
       this.deps.logger?.error?.('pending Pi model switch rollback failed; queue remains gated', {
         sessionId, error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
       });
+    }
+    if (!this.permitted(sessionId, target)) {
+      this.failedPiTargets.delete(target);
+      return;
     }
     if ((!restored && !rollbackFailed) ||
         (this.pending.has(sessionId) && this.pending.get(sessionId) !== target)) return;
@@ -343,7 +393,7 @@ export class PendingCredentialSwitchService {
     if (this.applying.has(sessionId)) return;
     const target = this.pending.get(sessionId);
     if (!target) return;
-    if (this.failedPiTargets.has(target)) return;
+    if (this.failedPiTargets.has(target) || !this.permitted(sessionId, target)) return;
     if (target.agentKind === 'pi' && this.deps.applyPiPending) {
       // A crashed or externally closed Pi turn still has native history in the
       // persisted task. Re-enter the same cold model-window transaction.
@@ -352,7 +402,7 @@ export class PendingCredentialSwitchService {
     }
     this.applying.add(sessionId);
     void this.finalizeApplyChecked(sessionId, target, 'session close').finally(() => {
-      this.applying.delete(sessionId);
+      this.finishApplying(sessionId);
     });
   }
 
@@ -460,7 +510,7 @@ export class PendingCredentialSwitchService {
       return;
     }
     const resolved = await this.resolveApplyRoute(target);
-    if (this.pending.get(sessionId) !== target) return;
+    if (this.pending.get(sessionId) !== target || !this.permitted(sessionId, target)) return;
     await this.finalizeApply(sessionId, target, resolved, reason);
   }
 
@@ -477,7 +527,9 @@ export class PendingCredentialSwitchService {
     reason: string,
   ): Promise<void> {
     if (resolved.apply) {
-      setSessionProvider(sessionId, resolved.providerId);
+      // Desktop publishes the provider to memory before persistence. With a permit,
+      // the assembly commits it alongside the SQLite write so a hold cannot split them.
+      if (!this.deps.settlementPermit) setSessionProvider(sessionId, resolved.providerId);
       // 裁决改了落地路由(reroute / 丢弃停用显式来源 / 全停换模型或清空):回写 DB
       // —— renderer 在 deferred 接受时已按请求值落盘 sessions 行,不纠正的话下一次
       // 懒 resume 按停用路由重建(resume 免裁决)。回写必须 **await 且先于**删登记 /
@@ -509,6 +561,7 @@ export class PendingCredentialSwitchService {
               : {}),
           });
         } catch (err) {
+          if (!this.permitted(sessionId, target)) return;
           // fail-closed(PR #744 review 第十六轮):DB 里躺着 renderer 预写的停用
           // 目标,回写失败就唤醒队列 = 排队消息立刻按停用路由懒 resume。保留登记
           // (pending 门继续挡住派发)+ 自愈定时器重试整个收口(重新裁决 + 回写);
@@ -523,7 +576,10 @@ export class PendingCredentialSwitchService {
           return;
         }
         // await 期间用户可能改选 / 取消:本次让位,新登记有自己的收口路径。
-        if (this.pending.get(sessionId) !== target) return;
+        if (this.pending.get(sessionId) !== target || !this.permitted(sessionId, target)) return;
+      }
+      if (this.deps.settlementPermit && getSessionProvider(sessionId) !== resolved.providerId) {
+        setSessionProvider(sessionId, resolved.providerId);
       }
       this.deps.logger?.info(`pending credential switch applied on ${reason}`, {
         sessionId,

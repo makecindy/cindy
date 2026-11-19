@@ -2,10 +2,12 @@ import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 import { messageRowid } from './retriedUserTurnSupersede.js';
-import { persistableSessionEffort, projectSessionRuntimeFields } from './mapper.js';
+import { messageToCamel, persistableSessionEffort, projectSessionRuntimeFields } from './mapper.js';
 import { normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+
+type OwnerBroadcastScope = ReturnType<typeof import('../device-link/broadcast-tap.js').captureDataOwnerBroadcastScope>;
 
 /** The agent-switch row patch (applyAgentSwitchToSessionRow). */
 export type AgentSwitchRowPatch = {
@@ -262,4 +264,26 @@ export async function findParkedEngineSession(
     };
   }
   return null;
+}
+
+/** messages.ts's rebroadcastAgentSwitchBoundary, with its owner check and broadcast passed in. */
+export async function rebroadcastAgentSwitchBoundaryWith(
+  ports: {
+    isOwnerBroadcastScopeCurrent: (scope: OwnerBroadcastScope | null | undefined) => boolean;
+    broadcastMessageRow: (sessionId: string, message: ReturnType<typeof messageToCamel>, ownerScope?: OwnerBroadcastScope | null) => void;
+  },
+  sessionId: string,
+  boundaryClientId: string,
+  ownerScope: OwnerBroadcastScope | null,
+): Promise<void> {
+  const { isOwnerBroadcastScopeCurrent, broadcastMessageRow } = ports;
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select()
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, boundaryClientId)))
+    .limit(1);
+  if (row && isOwnerBroadcastScopeCurrent(ownerScope)) {
+    broadcastMessageRow(sessionId, messageToCamel(row), ownerScope);
+  }
 }

@@ -56,6 +56,7 @@ type VoiceInputCaptureSessionOptions = {
   onCaptureReady?: () => void;
   /** Fires once when captured PCM contains sound, even before cloud startup. */
   onSoundDetected?: () => void;
+  onSamples?: (pcm: ArrayBuffer) => void;
   timeline?: VoiceInputStartupTimeline;
   appendAudioChunk: (chunk: PcmChunk) => void;
   onInterrupted: (message: string) => void;
@@ -98,6 +99,7 @@ export async function startVoiceInputCaptureSession(
     next.onPcm16k((chunk) => {
       if (options.isCurrentEngine && !options.isCurrentEngine(next)) return;
       if (chunk.pcm16k.byteLength === 0) return;
+      options.onSamples?.(chunk.pcm16k);
       if (!soundDetected && hasPcmSound(chunk.pcm16k)) {
         soundDetected = true;
         options.onSoundDetected?.();

@@ -1451,7 +1451,8 @@ button for send, stop and call so these transitions can play and focus survives.
 Stop opens from zero width (`--motion-base`) without moving dictation or Send. While a
 dictation long-press hovers Send as its release target, Send scales to 106% with a 1.5px
 `--text-secondary` ring. The dictation button records with three `--settings-badge-error` level
-bars (the registered D-05 wave) and a timer; its width uses `--motion-base` / ease-move and the
+bars and a timer. On recording start the bars ripple once (except in reduced motion), then settle
+at the quiet baseline. Live microphone levels (40 ms windows) take over as soon as sound arrives; its width uses `--motion-base` / ease-move and the
 mic, bars and refining spinner cross-fade (`--motion-fast`); busy states are not dimmed.
 All motion lives in `globals.css` (`.composer-send*`) on motion tokens; reduced motion switches
 instantly and keeps the glow still.
@@ -1490,7 +1491,7 @@ not interaction tiers; do not reuse them.
 
 | Indicator | Where | Motion | Reduced motion |
 | --- | --- | --- | --- |
-| Voice "refining" caret and microphone level bars (D-05, **SVG exception**) | `[data-voice-spinner-arc]` / `[data-voice-mic-bar]` in `globals.css`, used by the composer voice caret, `VoiceInputMicWaveIcon` and (as HTML spans) the composer dictation button's recording bars | The caret arc rotates inside its fixed `<svg>` on `--motion-spinner-cycle` (1000ms, linear; was 0.9s). The three bars scale (0.4 ↔ 1) and fade (0.5 ↔ 1) over 1.1s ease-in-out, staggered 0.18s. The arc turns only while refining, the bars only while listening. | Static |
+| Voice "refining" caret and microphone level bars (D-05, **SVG exception**) | `[data-voice-spinner-arc]` / `[data-voice-mic-bar]` in `globals.css`, used by the composer voice caret and `VoiceInputMicWaveIcon` | The caret arc rotates inside its fixed `<svg>` on `--motion-spinner-cycle` (1000ms, linear; was 0.9s). The three bars scale (0.4 ↔ 1) and fade (0.5 ↔ 1) over 1.1s ease-in-out, staggered 0.18s. The arc turns only while refining, the bars only while listening. | Static |
 | Composer Stop working glow (owner-approved 2026-11-18) | `.composer-send-beam*` in `globals.css`, inside `SendButton` while an AI turn runs (main or secondary Stop) | A rim beam, inner glow and blurred bloom clipped to the button turn once every 5s, linear; each layer rotates by `transform` and its colour layer counter-rotates, so the beam travels over fixed colours (compositor-only). Fades in over 2 × `--motion-enter` after `--motion-fast`; when the turn ends it keeps turning while fading out over 2 × `--motion-base`. Colours in §2 | Static glow |
 | Thinking dots (D-06) | `.thinking-dot` in `ThinkingCard` (Mobile mirrors it in `ThinkingDots.tsx`) | Three dots brighten in turn, `thinking-dot-wave` 1.2s ease-in-out, opacity 0.25 ↔ 1, staggered 0.2s | Static |
 | GhostTool running sweep (D-06) | `.ghost-card-sweep` in `GhostToolCard` while a plugin call runs | One diagonal neutral band crosses the card, `ghost-card-sweep` 2.2s ease-in-out, transform only; color exemption in §15.4 | Animation removed |

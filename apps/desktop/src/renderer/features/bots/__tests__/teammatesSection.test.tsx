@@ -186,6 +186,20 @@ beforeEach(() => {
   });
 });
 
+// Unit regression: dragging the name inside a companion button must carry
+// that chat to the split/window receiver without producing a bogus task link.
+it('starts a task-style window drag from the companion name', async () => {
+  mocks.profiles = [bot({ id: 'mate', name: 'Mate' })];
+  const { getByText } = await renderSidebar();
+  const data = new Map<string, string>();
+  const name = getByText('Mate');
+  const row = name.closest('button')!;
+  expect(row.draggable).toBe(true);
+  fireEvent.dragStart(name, { dataTransfer: { setData: (key: string, value: string) => data.set(key, value) } });
+  expect([...data.values()]).toEqual(['/bots/mate']);
+  fireEvent.dragEnd(row);
+});
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
