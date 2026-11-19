@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
+  INDEFINITE_SNOOZE_UNTIL,
   taskInboxSection,
   taskInboxSignalsFromRank,
   taskSnoozeUntil,
@@ -209,7 +210,9 @@ export function TaskInbox({ sessions, priorityContext, isTeammateTask, ...rows }
                     />
                     {section === 'snoozed' && (
                       <div className="px-3 pb-1 text-11 text-[var(--sidebar-list-muted)]">
-                        {new Date(taskSnoozeUntil(session)).toLocaleString(i18n.language)}
+                        {session.snoozedUntil === INDEFINITE_SNOOZE_UNTIL
+                          ? t('ccAgent.sidebar.inbox.indefinite')
+                          : new Date(taskSnoozeUntil(session)).toLocaleString(i18n.language)}
                       </div>
                     )}
                   </div>

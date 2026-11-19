@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "加入小工具",
+  "widgetGuideIntro": "小工具是放在主畫面上的小卡片。不用打開 Cindy，就能查看訂閱餘量和今天的 Token 用量。",
+  "widgetGuideExample": "主畫面上，Cindy 小工具和 App 圖示排在一起。",
+  "widgetGuidePicker": "「編輯」→「加入小工具」",
+  "widgetGuideIOS": "按住主畫面空白處，點{{picker}}。\n\n搜尋 Cindy，選擇「訂閱餘量」或「每日用量」，點「加入小工具」。",
+  "widgetGuideAndroid": "按住主畫面空白處，開啟「小工具」。\n\n找到 Cindy，將「訂閱餘量」或「每日用量」拖曳到主畫面。",
+  "widgetGuideHome": "主畫面",
+  "widgetGuideLock": "鎖定畫面",
+  "widgetGuideLockIOS": "鎖定畫面也能加入：按住鎖定畫面，點「自訂」。",
+  "widgetGuideDismiss": "知道了",
+  "usageOther": "其他",
+  "usageTitle": "用量概覽",
+  "usageOnlyDevice": "僅 {{name}}",
+  "usagePlans": "方案剩餘額度",
+  "usageBudget": "本期剩餘預算",
   "management": {
     "title": "裝置管理",
     "openDevice": "查看 {{name}} 的裝置詳細資訊",
@@ -445,13 +460,13 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下週",
+        "indefinite": "無限期",
         "custom": "自訂…",
         "invalidTime": "請選擇未來一年內的日期與時間。"
       },
       "taskListMode": {
-        "heading": "任務模式",
-        "tasks": "任務列表",
-        "inbox": "收件匣"
+        "enterInbox": "切換到收件匣",
+        "leaveInbox": "切換到任務列表"
       }
     },
     "search": {

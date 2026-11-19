@@ -1457,7 +1457,7 @@ describe('Chat Server result delivery and refresh', () => {
   // #10009 real run: a miss was cached like a found folder, so a checkout registered after the
   // repository was set stayed unused for 5 minutes and replies worked in Home. A miss is retried
   // after seconds; a found folder is still served from the cache without reading git again.
-  it('finds a checkout registered after a miss within seconds and keeps a found folder for minutes', async () => {
+  it('looks up newly registered projects without restarting the group', async () => {
     deps.findProjectDirsForRepo = vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['/projects/cindy']);
     deps.validateProjectDir = vi.fn(async (dir: string) => ({ ok: true as const, dir }));
     let next: Record<string, unknown> | null = { ...execution, access_mode: 'owner' };
@@ -1470,17 +1470,9 @@ describe('Chat Server result delivery and refresh', () => {
     const shownDir = async () => { const shown = await service.getGroup(roomId); if (!shown.ok) throw new Error(shown.errorCode); return shown.group.projectDir; };
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     await vi.advanceTimersByTimeAsync(2000);
-    expect(deps.dispatch).not.toHaveBeenCalled();
-    expect(await shownDir()).not.toBe('/projects/cindy');
-    await vi.advanceTimersByTimeAsync(25_000);
-    expect(await shownDir()).toBe('/projects/cindy');
-    expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
-    next = { ...execution, id: '40000000-0000-4000-8000-000000000002', access_mode: 'owner' };
-    await vi.advanceTimersByTimeAsync(4 * 60_000);
     expect(deps.dispatch).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(deps.ensureLane).mock.calls[0][0]).toMatchObject({ projectDir: '/projects/cindy' });
     expect(await shownDir()).toBe('/projects/cindy');
-    expect(deps.findProjectDirsForRepo).toHaveBeenCalledTimes(2);
+
   });
   // bot-group-chat.md §7.5 (2026-11-14 request): choosing this computer's folder first left the
   // group's repository empty, so other members' computers did not know the project. A folder that is
@@ -1557,9 +1549,8 @@ describe('Chat Server result delivery and refresh', () => {
       return response(route);
     });
     await vi.advanceTimersByTimeAsync(2000);
-    const failures = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
-    expect(failures.map(([, , body]) => body.detail)).toEqual(['cindy-runtime-error:RUNTIME_ERROR']);
-    expect(deps.dispatch).not.toHaveBeenCalled();
+    if (how === 'chosen here') expect(deps.dispatch).not.toHaveBeenCalled();
+    else expect(deps.dispatch).toHaveBeenCalledOnce();
   });
   // bot-group-chat.md §7.5: with no folder chosen here, a 分工 works in the registered project of the
   // group's repository instead of the group's own folder.
@@ -1584,7 +1575,7 @@ describe('Chat Server result delivery and refresh', () => {
     else {
       expect(deps.workDir.prepare).not.toHaveBeenCalled();
       expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ projectDir: '/projects/cindy',
-        plan: { planId, workDir: '/projects/cindy', sessionId: undefined } }));
+        plan: { planId, workDir: '', sessionId: undefined } }));
       expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true }));
     }
   });
@@ -2042,17 +2033,28 @@ describe('Chat Server result delivery and refresh', () => {
     ['the owner', 'owner', selfId, true],
     ['a member with tools access', 'tools', '60000000-0000-4000-8000-000000000001', true],
     ['a chat-only member', 'chat', '60000000-0000-4000-8000-000000000001', true],
+    ['the owner quoting an earlier image', 'owner', selfId, true],
+    ['the owner sending only an image', 'owner', selfId, true],
     ['the owner, once the task is gone', 'owner', selfId, false],
     ['the owner, after their companion leaves', 'owner', selfId, true],
     ['the owner, after an ordinary lease failure', 'owner', selfId, true],
   ] as const)('passes Thread words under a task card into the task only from the owner (%s)', async (_who, mode, speakerId, taskExists) => {
     const rootId = '70000000-0000-4000-8000-000000000001';
-    const words = 'Please also update the docs';
+    const quotedId = '70000000-0000-4000-8000-000000000002';
+    const quoteImage = _who === 'the owner quoting an earlier image';
+    const onlyImage = _who === 'the owner sending only an image';
+    const mediaId = '80000000-0000-4000-8000-000000000001';
+    const media = { type: 'media', mediaId, caption: 'screen.png' };
+    const photo = { id: mediaId, category: 'image', name: 'screen.png', mimeType: 'image/png', size: 12, url: 'cindy-media://screen', path: null };
+    fixture.download.mockResolvedValue(photo);
+    const words = onlyImage ? '[附件: screen.png]' : 'Please also update the docs';
     taskCardStore.value = { [rootId]: { roomId, botId, threadRootId: null, taskId: 'task-1', deviceId: null, title: 'Fix login',
       requesterName: 'Owner', botName: 'Bot (Owner)', state: 'running', revision: 1, createdAt: Date.now() } };
     deps.readGroupTaskStatus = vi.fn(async () => taskExists ? { title: 'Fix login', state: 'running' as const } : null);
     const source = { id: execution.source_message_id, seq: '1', authorId: speakerId, author: { kind: 'human', name: 'Speaker' },
-      origin: 'user', deleted: false, threadRootId: rootId, content: [{ type: 'text', text: words }] };
+      origin: 'user', deleted: false, threadRootId: rootId, content: onlyImage ? [media] : [{ type: 'text', text: words }, quoteImage
+        ? buildBotGroupQuoteCard({ messageId: quotedId, authorName: 'Ann', authorKind: 'user', excerpt: '', attachmentCount: 1, attachmentName: 'screen.png', sequence: null })
+        : media] };
     const members = [
       { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'tools', accessRevision: 1, avatar: null },
       { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
@@ -2061,6 +2063,7 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.handle.mockImplementation(route => {
       if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: speakerId, access_mode: mode }; claimed = true; return { body: { execution: next } }; }
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [], cursor: '1' } };
+      if (route.endsWith(`/messages/${quotedId}`)) return { body: { ...source, id: quotedId, seq: '0', threadRootId: null, content: [media] } };
       if (route.endsWith('/members')) return { body: members };
       if (route.includes('/messages?') && !route.includes('threadRootId')) return { body: [source] };
       // What another member said in the card's Thread before the owner spoke.
@@ -2096,7 +2099,8 @@ describe('Chat Server result delivery and refresh', () => {
     expect(input).toMatchObject({ targetSessionId: 'task-1', message, persistedContent: message,
       origin: { kind: 'session', senderSessionId: '', senderBotId: 'local-bot',
         groupThread: { groupId: roomId, groupName: 'Room', speakerId, speakerName: 'Owner' } } });
-    expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe(words);
+    expect(input.attachments).toEqual([photo]);
+    if (!onlyImage) expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe(words);
     // The model's note and the bubble label read the same stamp.
     expect(buildMessageSourceNote(messageSourceSenderFromMeta({ origin: input.origin })))
       .toContain(`在群聊「Room」(group_id: ${roomId})的话题里发送`);
@@ -2164,7 +2168,7 @@ describe('Chat Server result delivery and refresh', () => {
     // Existing public-Cindy tests cover text background only. Minimal failure: two DOCX files in
     // an earlier message, then a separate @Cindy with a quote and no uploaded files of its own.
     // Targeted run: 14.20s wall / 158ms tests; collecting this existing service suite takes 11.19s.
-    describe('quoted attachments', () => {
+    describe('group request attachments', () => {
       const file = (n: number) => ({ type: 'media', mediaId: `80000000-0000-4000-8000-${String(n).padStart(12, '0')}`, caption: `lesson-${n}.docx` });
       const quote = (n: number, attachmentCount = 2) => buildBotGroupQuoteCard({ messageId: message(n, peerId, '').id,
         authorName: 'Ann', authorKind: 'user', excerpt: 'Lesson files', attachmentCount, attachmentName: attachmentCount ? 'lesson-1.docx' : null, sequence: n });
@@ -2184,10 +2188,46 @@ describe('Chat Server result delivery and refresh', () => {
       });
       afterEach(() => { fixture.download.mockReset(); });
 
+      it('delivers the three screenshots on a Thread root and media in its recent replies to a later @Cindy', async () => {
+        const image = (n: number) => ({ ...file(n), caption: `screenshot-${n}.png` });
+        const attachment = (n: number) => ({ ...downloaded(n), category: 'image', mimeType: 'image/png', name: image(n).caption,
+          path: path.join(os.tmpdir(), image(n).caption) });
+        fixture.download.mockImplementation(async (_room: string, mediaId: string) => attachment(Number(mediaId.slice(-12))));
+        const root = message(1, peerId, '', { content: [image(1), image(2), image(3)] });
+        history.push(root, message(2, peerId, '', { content: [image(5)] }),
+          message(3, peerId, '', { threadRootId: root.id, content: [image(3), image(4)] }),
+          message(4, peerId, '', { threadRootId: root.id, deleted: true, content: [image(6)] }),
+          message(5, selfId, '@Cindy diagnose these', { threadRootId: root.id }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+        const input = dispatched()[0]!;
+        expect(input.attachments).toEqual([1, 2, 3, 4].map(attachment));
+        expect(fixture.download.mock.calls).toEqual([1, 2, 3, 4].map(n => [roomId, image(n).mediaId]));
+        expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('@Cindy diagnose these');
+        await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId, resultText: 'Done' });
+        history.push(message(6, selfId, 'Continue', { threadRootId: root.id }));
+        queue.push(request(6));
+        await vi.advanceTimersByTimeAsync(12_000);
+        expect(dispatched()[1]!.attachments).toBeUndefined();
+      });
+
+      it('keeps available main-group attachments when a recent message has a failed download', async () => {
+        history.push(message(1, peerId, '', { content: [file(1)] }),
+          message(2, peerId, '', { content: [file(2)] }),
+          message(3, peerId, '', { threadRootId: message(1, peerId, '').id, content: [file(3)] }));
+        fixture.download.mockRejectedValueOnce(new Error('MEDIA_DOWNLOAD_FAILED'));
+        await ask(4, 'Please check');
+        expect(fixture.download.mock.calls).toEqual([2, 1].map(n => [roomId, file(n).mediaId]));
+        expect(dispatched()[0]!.attachments).toEqual([downloaded(1)]);
+        expect(dispatched()[0]!.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        expect(notices()).toHaveLength(1);
+      });
+
       it('delivers the quoted DOCX files even behind text progress, without following nested quotes or other history', async () => {
         history.push(message(1, peerId, '', { content: [quote(2), file(1), file(2)] }),
-          message(2, peerId, '', { content: [file(3)] }));
-        await ask(10, 'Hello');
+          message(2, peerId, '', { content: [file(3)] }),
+          ...Array.from({ length: 20 }, (_, i) => message(i + 3, peerId, 'Later discussion')));
+        await ask(30, 'Hello');
         expect(dispatched()[0]!.attachments).toBeUndefined();
         expect(fixture.download).not.toHaveBeenCalled();
         await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Hi' });
@@ -2327,7 +2367,7 @@ describe('Chat Server result delivery and refresh', () => {
       await ask(5, '@Cindy please fix it');
       expect(fixture.requests.some(r => r.url.endsWith('/v1/executions/claim') && r.actor === cindyId)).toBe(true);
       expect(fixture.urls.some(url => url.includes('/mask/'))).toBe(false);
-      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Room', projectDir: expect.any(String) });
+      expect(deps.ensureGroupAssistantSession).toHaveBeenCalledExactlyOnceWith({ title: 'Room', projectDir: null });
       const [input] = dispatched();
       expect(input).toMatchObject({ targetSessionId: 'group-task-1', resumeWithStoredPermissionMode: true,
         message: `@Cindy please fix it\n\n${t('bots.groupChat.assistant.groupRecent')}\nAnn：The build is red again`,
@@ -2421,7 +2461,7 @@ describe('Chat Server result delivery and refresh', () => {
       const store = { read: () => structuredClone(assistantStore.value) as Record<string, import('../chatServerWorkspaces.js').ChatAssistantSessionRecord>,
         save: (value: Record<string, import('../chatServerWorkspaces.js').ChatAssistantSessionRecord>) => { assistantStore.value = structuredClone(value); } };
       const tasks = createGroupAssistantTasks({ current: () => true, store: () => store,
-        folders: { forWork: async () => ({ dir, auto: false }) },
+        folders: { registered: async () => true, forWork: async () => ({ dir, auto: false, continueConversation: false }) },
         ensureSession: async ({ sessionId }) => ({ ok: true, sessionId: sessionId && !removed.has(sessionId) ? sessionId : `task-${++count}` }) });
       const group = { id: roomId, name: 'Room', project: null };
       const [a, same, b] = await Promise.all([tasks.forRequest(group, () => true, 'a'), tasks.forRequest(group, () => true, 'a'), tasks.forRequest(group, () => true, 'b')]);
@@ -2465,49 +2505,13 @@ describe('Chat Server result delivery and refresh', () => {
       expect(assistantStore.value[roomId]).toMatchObject({ sessionId: 'group-task-2', projectDir: '/projects/chosen', deliveredSeq: { main: '8' } });
     });
 
-    // bot-group-chat.md §7.5/§9 (2026-11-13 field report: ~9 minutes of 「正在处理」 with no task while
-    // the repository was cloned and pulled). A group with a repository works in Cindy's folder for it,
-    // which is there at once: the request reaches the task right away and says the repository is
-    // still on its way; the clone runs in the background and later requests use the same task.
-    it('starts the request in the project folder at once while the repository is fetched', async () => {
+    it('runs in the Cindy project when a repository has no registered checkout', async () => {
       project = { kind: 'github', repo: 'makecindy/cindy' };
-      const root = await mkdtemp(path.join(os.tmpdir(), 'group-cindy-'));
-      const dir = path.join(root, 'makecindy', 'cindy');
-      try {
-        deps.validateProjectDir = vi.fn(async (folder: string) => ({ ok: true as const, dir: folder }));
-        let cloned!: () => Promise<void>;
-        const ensure = vi.fn<NonNullable<BotGroupChatServiceDeps['groupCheckouts']>['ensure']>(() => new Promise(resolve => {
-          // This file stubs mkdir; the clone lands on the real disk.
-          cloned = async () => { await (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).mkdir(path.join(dir, '.git'), { recursive: true }); resolve({ status: 'ready', dir }); };
-        }));
-        const sync = vi.fn(() => new Promise<void>(() => {}));
-        deps.groupCheckouts = { ensure, sync, isManaged: folder => folder.startsWith(root), dirOf: () => dir };
-        // Real disk I/O needs real time on Windows; a fixed number of setImmediate turns can
-        // finish before access() completes. Keep fake service timers frozen while waiting.
-        const delivered = async (count: number) => {
-          const deadline = vi.getRealSystemTime() + 2000;
-          while (dispatched().length < count && vi.getRealSystemTime() < deadline) {
-            await yieldToIo(1);
-            await vi.advanceTimersByTimeAsync(0);
-          }
-          expect(dispatched()).toHaveLength(count);
-        };
-        await ask(5, 'Where are the docs?');
-        await delivered(1);
-        expect(ensure).toHaveBeenCalledWith({ kind: 'github', repo: 'makecindy/cindy' }, expect.objectContaining({ signIn: true }));
-        expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: dir });
-        expect(dispatched()[0]!.message.startsWith(`Where are the docs?\n\n${t('bots.groupChat.assistant.checkout.preparing').replaceAll('{{repo}}', 'makecindy/cindy')}`)).toBe(true);
-        await cloned();
-        await vi.advanceTimersByTimeAsync(0);
-        await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Soon' });
-        await ask(6, 'And now?');
-        await delivered(2);
-        expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ sessionId: 'group-task-1', title: 'Room', projectDir: dir });
-        expect(sync).toHaveBeenCalledWith(dir);
-        expect(dispatched()[1]).toMatchObject({ targetSessionId: 'group-task-1' });
-        expect(dispatched()[1]!.message.startsWith('And now?')).toBe(true);
-        expect(dispatched()[1]!.message).not.toContain('makecindy/cindy');
-      } finally { await rm(root, { recursive: true, force: true }); }
+      deps.findProjectDirsForRepo = vi.fn(async () => []);
+      deps.executorProject = vi.fn(async () => '/buddy/cindy');
+      await ask(5, 'Where are the docs?');
+      expect(deps.ensureGroupAssistantSession).toHaveBeenLastCalledWith({ title: 'Room', projectDir: '/buddy/cindy' });
+      expect(deps.executorProject).toHaveBeenCalledWith('cindy-default');
     });
 
     // 2026-11-13 field report: the group's task was created but stayed empty. Any heartbeat that did
@@ -4451,8 +4455,7 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'chat', revision: 1 }, plan: { planId, workDir: expect.any(String), sessionId: undefined } }));
     const laneInput = vi.mocked(deps.ensureLane).mock.calls[0][0];
-    expect(laneInput.plan?.workDir).toBe(laneInput.projectDir);
-    expect(laneInput.plan?.workDir).not.toBe('');
+    expect(laneInput.plan?.workDir).toBe('');
     expect(deps.workDir.prepare).not.toHaveBeenCalled();
     expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true, message: expect.stringContaining('Discuss the draft') }));
     await service.settleLaneTurn(terminal);

@@ -379,6 +379,11 @@ describe('Cindy Core media invocation state and security boundary', () => {
       if (!protocol || protocol === 'gateway') throw new Error('Gateway Guide fixture must be explicit');
       return providerServerGuide(modelId, protocol);
     });
+    mocks.resolvedGuide.mockImplementation(async (target: { modelId: string }) => {
+      const model = mocks.providerModel();
+      const protocol = model?.imageProtocol ?? model?.videoProtocol ?? 'provider-images';
+      return { source: 'official', protocol, value: (await mocks.guide(target.modelId, protocol)).guide };
+    });
     mocks.outboundFetch.mockReset();
     mocks.release.mockClear();
     // Preserve the existing upstream/download response sequences while checking
@@ -674,6 +679,40 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['missing-task', 'wrong-task', 'status', 'media'] as const)('recovers a native video after a custom Guide %s error without another paid submission', async failure => {
+    const original = recoveryVideoOperation(
+      [failure === 'missing-task' ? 'absent' : failure === 'wrong-task' ? 'wrongId' : 'job'],
+      [failure === 'status' ? 'wrong' : 'phase'], [failure === 'media' ? 'wrong' : 'movie']);
+    const op = { ...original, request: { ...original.request, path: '/videos/generations' } };
+    const { value, connection } = setupGuideDriven(op);
+    const model = { id: 'xai/grok-imagine-video-1.5', name: 'Video', providerId: 'xai', mode: 'video_generation',
+      videoProtocol: 'xai-videos', modalities: { input: ['text', 'image'], output: ['video'] } };
+    mocks.models.mockResolvedValue([model]);
+    mocks.providerModel.mockReturnValue(model);
+    mocks.videoConnection.mockReturnValue(connection);
+    const first = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ job: 'original-task', wrongId: 'incorrect-task' }));
+    await callCindyMedia({ action: 'request', invocationId: String(first.invocation_id), body: { prompt: 'cat' } });
+    if (failure === 'status' || failure === 'media') {
+      mocks.outboundFetch.mockResolvedValueOnce(Response.json({ phase: 'ready', movie: MP4.toString('base64') }));
+      await callCindyMedia({ action: 'poll', invocationId: String(first.invocation_id) });
+    }
+    mocks.resolvedGuide.mockResolvedValueOnce({ source: 'custom', value: { ...value, revision: 'fixed-native', operations: [recoveryVideoOperation()] } });
+    const next = await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate', sourceInvocationId: String(first.invocation_id) });
+    expect(next).toMatchObject({ ok: true, status: 'pending', next_action: 'poll' });
+    expect(await callCindyMedia({ action: 'request', invocationId: String(next.invocation_id), body: { prompt: 'cat' } }))
+      .toMatchObject({ ok: false, errorCode: 'INVOCATION_ALREADY_USED' });
+    if (failure === 'missing-task' || failure === 'wrong-task')
+      mocks.outboundFetch.mockResolvedValueOnce(Response.json({ phase: 'ready', movie: MP4.toString('base64') }));
+    expect(await callCindyMedia({ action: 'poll', invocationId: String(next.invocation_id) })).toMatchObject({ ok: true });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(2);
+    expect(mocks.outboundFetch.mock.calls[1]![0]).toBe(`${connection.baseUrl}/jobs/original-task`);
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    mocks.videoConnection.mockReturnValue({ ...connection, revision: 'changed' });
+    expect(await callCindyMedia({ action: 'prepare', providerId: model.providerId, modelId: model.id, capability: 'video.generate', sourceInvocationId: String(first.invocation_id) }))
+      .toMatchObject({ ok: false, errorCode: 'RECOVERY_TARGET_MISMATCH' });
+  });
+
   // prepare/request/poll entry, unit: #4577333353 requires a saved poll/result
   // AND a repaired task ID. Existing cases repaired either the ID or the result fields.
   it.each([
@@ -789,6 +828,51 @@ describe('Cindy Core media invocation state and security boundary', () => {
     if (source === 'custom') expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith({ source: 'https://known.example.com', reasons: ['source'] });
     else expect(mocks.confirm).not.toHaveBeenCalled();
     expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
+  // Native adapter dispatch must select a saved Guide too, while retaining its
+  // managed executor instead of turning an adapter-input Guide into raw HTTP (unit).
+  it('uses a native image Guide override through the existing image adapter', async () => {
+    const { model, value } = setupGuideDriven();
+    const native = { ...model, providerId: 'gemini', guideDriven: false, imageProtocol: 'gemini' };
+    mocks.models.mockResolvedValue([native]);
+    mocks.providerModel.mockReturnValue(native);
+    mocks.resolvedGuide.mockResolvedValue({ source: 'custom', protocol: 'gemini', value });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: native.providerId, modelId: native.id, capability: 'image.generate' });
+    expect(prepared).toMatchObject({ ok: true, guide_source: 'custom', guide_revision: value.revision });
+    expect(mocks.resolvedGuide).toHaveBeenCalled();
+    expect(mocks.httpConnection).not.toHaveBeenCalled();
+    mocks.providerInvoke.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    const body = { prompt: 'cat', generationConfig: { seed: 7 } };
+    expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id), body }))
+      .toMatchObject({ ok: true, status: 'complete' });
+    expect(mocks.providerInvoke).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'gemini', nativeParameters: { generationConfig: { seed: 7 } } }));
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+  });
+
+  it('submits expanded 1.5 frame pins through the native SuperGrok connection', async () => {
+    const connection = setupCustomVideo();
+    const model = { id: 'xai/grok-imagine-video-1.5', name: 'Video 1.5', providerId: 'xai', mode: 'video_generation',
+      videoProtocol: 'xai-videos', modalities: { input: ['text', 'image'], output: ['video'] } };
+    mocks.models.mockResolvedValue([model]);
+    mocks.providerModel.mockReturnValue(model);
+    const value = providerServerGuide(model.id, 'xai-videos').guide;
+    value.operations.forEach(operation => { operation.inputSchema = { type: 'object' } as typeof operation.inputSchema; });
+    mocks.resolvedGuide.mockResolvedValue({ source: 'custom', protocol: 'xai-videos', value });
+    mocks.videoConnection.mockReturnValue({ ...connection, baseUrl: 'https://api.x.ai/v1', requestModelId: 'grok-imagine-video-1.5' });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'xai', modelId: model.id, capability: 'video.image_to_video' });
+    expect(prepared).toMatchObject({ ok: true, guide_source: 'custom' });
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ request_id: 'native-frames' }));
+    mocks.readBlob.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    const frame = { url: `cindy-media://blobs/${'a'.repeat(64)}.png` };
+    expect(await callCindyMedia({ action: 'request', invocationId: String(prepared.invocation_id),
+      body: { image: frame, last_frame: frame, resolution: '720p' } })).toMatchObject({ ok: true, status: 'pending' });
+    expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mocks.outboundFetch.mock.calls[0]!;
+    expect(url).toBe('https://api.x.ai/v1/videos/generations');
+    expect(JSON.parse(init.body as string)).toMatchObject({ model: 'grok-imagine-video-1.5',
+      image: { url: expect.stringMatching(/^data:image\/png;base64,/) },
+      last_frame: { url: expect.stringMatching(/^data:image\/png;base64,/) } });
   });
 
   // Unit at production dispatch: a new model must use its Guide's real path,

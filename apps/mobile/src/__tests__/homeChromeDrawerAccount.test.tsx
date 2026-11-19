@@ -22,7 +22,7 @@ vi.mock('react-native', async () => {
     return createElement('div', { 'data-testid': testID, onClick: onPress }, children);
   };
   return {
-    View, Pressable: View,
+    View, ScrollView: View, Pressable: View,
     Image: ({ source }: { source: { uri: string } }) => createElement('img', { src: source.uri }),
     AccessibilityInfo: { setAccessibilityFocus: vi.fn() },
     BackHandler: { addEventListener: () => ({ remove() {} }) },

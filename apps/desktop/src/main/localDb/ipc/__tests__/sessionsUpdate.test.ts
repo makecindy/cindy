@@ -79,7 +79,7 @@ const h = vi.hoisted(() => ({
     task(),
   ),
   setPinnedSectionCardMode: vi.fn(),
-  upsertRecentWorkdir: vi.fn(
+  touchRecentWorkdir: vi.fn(
     async (
       _path: string | null | undefined,
       _atMs?: number,
@@ -146,7 +146,7 @@ vi.mock('../../../device-link/sharedTaskRuntime.js', () => ({
   rollbackPreparedSharedTaskClosure: h.rollbackSharedTaskClosure,
   finalizePreparedSharedTaskClosure: h.finalizeSharedTaskClosure,
 }));
-vi.mock('../recentWorkdirs', () => ({ upsertRecentWorkdir: h.upsertRecentWorkdir }));
+vi.mock('../recentWorkdirs', () => ({ touchRecentWorkdir: h.touchRecentWorkdir }));
 vi.mock('../../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: vi.fn(() =>
     h.captureOwnerScope ? { ownerStamp: { dataOwnerId: 'owner-a', generation: 1 } } : null,
@@ -392,7 +392,7 @@ beforeEach(() => {
   h.commitBotProfileDeletion.mockResolvedValue({ status: 'archived', sessionIds: [] });
   h.closeSession.mockClear();
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
-  h.upsertRecentWorkdir.mockImplementation(async () => true);
+  h.touchRecentWorkdir.mockImplementation(async () => true);
   h.captureOwnerScope = false;
   h.ownerCurrent = true;
   h.requestRecycle.mockResolvedValue(undefined);
@@ -1289,7 +1289,10 @@ describe('local-db:sessions:update handler wiring', () => {
     h.sqlite!.prepare("UPDATE sessions SET workspace_kind = 'project', project_dir = '/product', working_dir = '/tmp/checkout' WHERE id = ?")
       .run('codex-local');
     const real = await vi.importActual<typeof import('../recentWorkdirs')>('../recentWorkdirs');
-    h.upsertRecentWorkdir.mockImplementation(async (dir, atMs, platform) => real.upsertRecentWorkdir(dir, atMs, platform));
+    h.touchRecentWorkdir.mockImplementation(async (dir, atMs, platform) => real.touchRecentWorkdir(dir, atMs, platform));
+    await touchUserSendInDb('codex-local', 50);
+    expect(h.sqlite!.prepare('SELECT path FROM recent_workdirs').all()).toEqual([]);
+    h.sqlite!.prepare('INSERT INTO recent_workdirs VALUES (?, ?)').run('/product', 1);
     await touchUserSendInDb('codex-local', 100);
     await touchUserSendInDb('codex-local', 200);
     expect(h.sqlite!.prepare('SELECT path FROM recent_workdirs').all()).toEqual([{ path: '/product' }]);
@@ -1344,17 +1347,18 @@ describe('local-db:sessions:update handler wiring', () => {
     ).run('codex-local');
     // Exercise the real upsert against this test's isolated SQLite database.
     const real = await vi.importActual<typeof import('../recentWorkdirs')>('../recentWorkdirs');
-    h.upsertRecentWorkdir.mockImplementation(async (dir, atMs, platform) =>
-      real.upsertRecentWorkdir(dir, atMs, platform),
+    h.touchRecentWorkdir.mockImplementation(async (dir, atMs, platform) =>
+      real.touchRecentWorkdir(dir, atMs, platform),
     );
+    h.sqlite!.prepare('INSERT INTO recent_workdirs VALUES (?, ?)').run('/old/dir', 1);
     const sentAt = 1_786_500_050_000;
     await touchUserSendInDb('codex-local', sentAt);
-    h.upsertRecentWorkdir.mockClear();
+    h.touchRecentWorkdir.mockClear();
 
     if (writer === 'generic') await invokeUpdate('codex-local', { status });
     else await invokePatchMeta('codex-local', { status });
 
-    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
     expect(h.sqlite!.prepare('SELECT * FROM recent_workdirs').all()).toEqual([
       { path: '/old/dir', last_used_at: sentAt },
     ]);
@@ -1374,7 +1378,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
       await invokeUpdate('codex-local', { status });
 
-      expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+      expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
     },
   );
 
@@ -1383,7 +1387,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     await invokeUpdate('codex-local', { workingDir: '/worker/dir', workspaceKind: 'project' });
 
-    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
   });
 
   it('suppresses the recent-project refresh after an owner switch', async () => {
@@ -1400,7 +1404,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     await invokeUpdate('codex-local', { workspaceKind: 'project' });
 
-    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+    expect(h.touchRecentWorkdir).toHaveBeenCalledWith(
       '/old/dir',
       expect.any(Number),
       process.platform,
@@ -1661,10 +1665,10 @@ describe('local-db:sessions:update handler wiring', () => {
   // 竞态收敛(review on #3225 第二轮):读行与广播之间还有 await(摘要清理 /
   // recent-workdir / 转录迁移),期间另一窗口可删除并先广播 deleted;本 handler
   // 恢复后若用旧快照广播 archived,该广播是最后一条,镜像不会自愈——已删任务
-  // 持久复活。upsertRecentWorkdir 是已 mock 的依赖:在其 await 期间模拟删除落库,
+  // 持久复活。touchRecentWorkdir 是已 mock 的依赖:在其 await 期间模拟删除落库,
   // 断言广播前重读了状态。
   it('re-reads status before broadcasting when an await intervenes after the row read', async () => {
-    h.upsertRecentWorkdir.mockImplementationOnce(async () => {
+    h.touchRecentWorkdir.mockImplementationOnce(async () => {
       h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run('cc-local');
       return true;
     });
@@ -1896,7 +1900,7 @@ describe('local-db:sessions:update handler wiring', () => {
       ).rejects.toThrow('account changed');
       expect(h.relocate).toHaveBeenCalledOnce();
       expect(readCwd()).toBe(phase === 'after commit' ? '/new/dir' : '/old/dir');
-      expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+      expect(h.touchRecentWorkdir).not.toHaveBeenCalled();
       expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
     },
   );
@@ -2439,7 +2443,9 @@ describe('task snooze persistence', () => {
     }));
     expect(h.runtimeCleanup).not.toHaveBeenCalled();
     await expect(invoke('codex-local', { snoozedUntil: null })).resolves.toMatchObject({ snoozedUntil: null, snoozedAt: null });
-    await invoke('codex-local', { snoozedUntil });
+    await expect(invoke('codex-local', { snoozedUntil: '9999-12-31T23:59:59.999Z' })).resolves.toMatchObject({
+      snoozedUntil: '9999-12-31T23:59:59.999Z', snoozedAt: expect.any(String),
+    });
     await invoke('codex-local', { status: 'archived' });
     await expect(invoke('codex-local', { status: 'active' })).resolves.toMatchObject({ status: 'active', snoozedUntil: null, snoozedAt: null });
   });

@@ -309,7 +309,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
           {group.supportsGroupProject && <SettingsRow wrap title={t(key(group.supportsGroupProjectGit ? 'repository' : 'githubRepo'))} hint={t(key(group.supportsGroupProjectGit ? 'repositoryHint' : 'githubRepoHint'))}
             trailing={<RepositoryField repo={group.project ? groupRepositoryLabel(group.project) : ''} anyHost={group.supportsGroupProjectGit === true} busy={busy}
               onSave={repository => void updateWorkSettings({ repository })} />} />}
-          <SettingsRow wrap title={t(key('projectFolder'))} hint={t(key(group.projectDirAuto ? 'projectDirAutoHint' : 'projectDirHint'))}
+          <SettingsRow wrap title={t(key('projectFolder'))} hint={t(group.projectDirAuto ? key('projectDirAutoHint') : 'bots.groupChat.settings.projectDirNote')}
             trailing={<ProjectFolder dir={group.projectDir} auto={group.projectDirAuto === true} busy={busy} onChoose={() => void chooseProjectDir()} onClear={() => void updateWorkSettings({ projectDir: null })} />} />
         </SettingsCard>
         {projectNotice && <div className="mt-2"><SettingsNotice>{projectNotice}</SettingsNotice></div>}

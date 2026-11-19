@@ -1120,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy가 작업 중입니다",
-    "hint": "아무 키나 Touch ID 키를 눌러 잠근 뒤, 지문이나 암호로 잠금을 해제합니다",
+    "hint": "아무 키나 누르면 잠금 해제 화면이 열립니다",
     "lockFailed": {
       "status": "Cindy가 이 Mac을 잠그지 못했습니다",
       "hint": "컴퓨터를 건드리면 다시 잠금을 시도합니다. 그래도 잠기지 않으면 Touch ID나 암호로 확인한 뒤 내릴 수 있습니다. 덮개를 닫거나 전원 버튼을 눌러 잠글 수도 있습니다.",
       "hintWindows": "컴퓨터를 건드리면 다시 잠금을 시도합니다. 그래도 잠기지 않으면 Windows Hello나 PIN으로 확인한 뒤 내릴 수 있습니다. Windows 로고 키 + L을 눌러 잠글 수도 있습니다."
     },
-    "hintWindows": "아무 키나 누르면 잠기며, Windows Hello나 암호로 잠금을 해제합니다",
-    "hintLinux": "아무 키나 누르면 잠기며, 암호로 잠금을 해제합니다",
+    "hintWindows": "아무 키나 누르면 잠금 해제 화면이 열립니다",
+    "hintLinux": "아무 키나 누르면 잠금 해제 화면이 열립니다",
     "verifyReason": "프라이버시 화면 내리기"
   },
   "appBadge": {
@@ -11463,7 +11463,7 @@
         "projectDirChoose": "폴더 선택",
         "projectDirChange": "폴더 변경",
         "projectDirClear": "지우기",
-        "projectDirNote": "역할 분담으로 일할 때 동반자들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
+        "projectDirNote": "이 컴퓨터에 있는 기존 프로젝트를 선택하세요. 비워 두면 저장소에 해당하는 프로젝트를 먼저 사용하고, 없으면 작업을 맡은 동료의 프로젝트를 사용합니다. Git 분업에는 별도 워크트리를 사용합니다.",
         "autoContinueSaveFailed": "단계 넘기기를 저장하지 못했습니다. 다시 시도해 주세요.",
         "projectDirSaveFailed": "프로젝트 폴더를 저장하지 못했습니다. 폴더가 아직 있는지 확인한 뒤 다시 시도하세요",
         "allowMemberInvites": "모든 멤버의 친구 초대 허용",
@@ -11802,15 +11802,15 @@
           "replyModeAssistant": "Cindy가 답함",
           "replyModeAssistantNote": "그룹의 Cindy가 답해요.",
           "work": "역할 분담",
-          "ownFolder": "그룹 전용 폴더",
+          "ownFolder": "자동 선택",
           "projectDirHint": "이 컴퓨터에서만 적용돼요.",
-          "projectDirClearHint": "그룹 전용 폴더를 대신 사용해요",
+          "projectDirClearHint": "프로젝트 자동 선택으로 돌아가기",
           "project": "프로젝트",
           "projectCaption": "동반자는 그룹에서 답장하거나 역할을 분담할 때 이 프로젝트에서 작업해요. 저장소는 그룹 전체가 공유하고, 폴더는 이 컴퓨터에만 저장돼요.",
           "githubRepo": "GitHub 저장소",
-          "githubRepoHint": "owner/name 형식으로 입력하세요. 폴더를 고르지 않은 컴퓨터는 그 컴퓨터의 이 프로젝트를 쓰고, 없으면 내려받아요.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "저장소",
-          "repositoryHint": "GitHub는 owner/name을, GitLab(자체 구축 포함)·CNB 등은 저장소 링크를 붙여 넣으세요. 폴더를 고르지 않은 컴퓨터는 그 컴퓨터의 이 프로젝트를 쓰고, 없으면 내려받아요.",
+          "repositoryHint": "GitHub는 owner/name을 입력하거나 저장소 URL을 붙여 넣으세요. 이 컴퓨터에서 일치하는 프로젝트가 하나이면 사용합니다.",
           "repositoryPlaceholder": "owner/name 또는 저장소 링크",
           "githubRepoSaveFailed": "저장소를 저장하지 못했어요. 확인 후 다시 시도하세요.",
           "folderRepoFilled": "이 폴더에서 저장소 {{repo}}를 채웠어요. 그룹의 다른 멤버 컴퓨터도 이 저장소를 사용해요.",
@@ -14592,12 +14592,14 @@
       "runningWithWorktree_other": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다.",
       "runningWithWorktree_many": "모두 완료되기 전에는 브랜치를 전환할 수 없습니다. worktree를 사용하면 서로 영향을 주지 않고 별도 복사본에서 바로 시작할 수 있습니다."
     },
-    "followUpHint": {
-      "queueDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 대기열에 추가됩니다.",
-      "steerDefault": "작업이 실행 중일 때 보낸 메시지는 기본적으로 실행 중인 작업에 끼어듭니다.",
+    "sendDelivery": {
+      "menuAria": "이 메시지를 보내는 방법",
+      "queueHint": "이번 응답이 끝난 후",
+      "steerHint": "다음 단계에서 처리",
+      "setDefault": "기본값으로 설정",
+      "nowDefault": "기본값으로 설정됨",
       "switchToSteer": "기본값을 끼어들기로",
-      "switchToQueue": "기본값을 대기열 추가로",
-      "dismiss": "안내 닫기"
+      "switchToQueue": "기본값을 대기열 추가로"
     }
   },
   "onboarding": {
@@ -14968,6 +14970,7 @@
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘다시 시도’를 눌러 주세요.",
       "accountBoundaryPending": "Cindy가 계정 상태를 전환하는 중이라 아직 이 작업을 시작할 수 없습니다. 잠시 후 ‘다시 시도’를 눌러 주세요. 계속 표시되면 Cindy를 다시 시작해 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 세션은 계속할 수 없습니다. 새 세션을 시작하세요.",
+      "codexSharedAuthLinkUnavailable": "이 컴퓨터에서 Codex에 로그인되어 있지만 이 세션은 해당 로그인을 사용할 수 없습니다. 그 로그인으로 가는 링크를 만들 수 없기 때문입니다(Windows 표준 계정에서는 보통 만들 수 없습니다). 이 컴퓨터의 {{appName}}이 링크를 만들 수 있는 권한이 있는지 확인해 주세요(Windows에서는 관리자 권한으로 한 번 실행하거나 개발자 모드를 켜면 됩니다). 이후 ‘다시 시도’를 눌러 주세요. ‘ChatGPT 다시 로그인’을 눌러 Cindy가 이 세션을 위해 자체 로그인을 사용하도록 할 수도 있습니다.",
       "codexResumeNotReady": "Codex에서 현재 이 작업을 재개할 수 없습니다. 잠시 후 다시 시도해 주세요.",
       "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",
       "claudeSubscriptionOpusPlanMismatch": "현재 연결된 Claude Pro 요금제에서는 Opus를 사용할 수 없습니다. 요금제에 포함된 모델로 전환하세요. 최근 요금제를 업그레이드했다면 설정에서 Anthropic을 다시 연결한 후 재시도하세요.",
@@ -16442,7 +16445,7 @@
       "confirmArchive": {
         "title": "세션 보관",
         "description": "이 세션을 보관하시겠습니까? 보관 후 목록에서 사라집니다.",
-        "dirtyWorktreeWarning": "보관하기 전에 커밋하지 않은 변경 사항을 저장합니다. 나중에 작업에서 복원할 수 있습니다.",
+        "dirtyWorktreeWarning": "이 작업에는 아직 커밋하지 않은 파일 변경 사항이 있습니다. 보관할 때 기본적으로 변경 사항이 저장되며, 나중에 작업에서 복원할 수 있습니다.",
         "discardChanges": "커밋하지 않은 변경 사항 삭제",
         "discardWarning": "커밋하지 않은 변경 사항과 새 파일은 복원할 수 없습니다.",
         "discardAndArchive": "삭제하고 보관",
@@ -16685,6 +16688,7 @@
         "thisEvening": "오늘 저녁",
         "tomorrow": "내일",
         "nextWeek": "다음 주",
+        "indefinite": "무기한",
         "custom": "직접 설정…",
         "wakeAt": "다시 표시할 날짜와 시간",
         "timeZone": "현지 시간 ({{zone}})",
@@ -19430,6 +19434,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "이번 턴을 실행하지 못했습니다.",
+    "blockedReasonUnknown": "진행이 막힌 구체적인 이유가 제공되지 않았습니다.",
+    "blockedNextStep": "현재 작업에 정보를 추가할 수 있습니다. 원인을 해결한 후 “{{action}}” 버튼을 눌러 계속할 수 있습니다.",
     "status": {
       "active": "목표 추진 중",
       "paused": "일시중지",
@@ -19764,6 +19771,7 @@
         "empty": "프로모션 지급 내역이 없습니다.",
         "incomplete": "지급 내역이 많아 최근 {{count}}건만 표시합니다.",
         "unnamed": "프로모션 잔액",
+        "rolloverName": "이월분",
         "giftCard": "기프트 카드 · {{sender}} 님이 보냄",
         "original": "지급액",
         "used": "사용",
@@ -20001,6 +20009,8 @@
       "basicModels": "일부 모델 사용",
       "subscription": "구독 요금제",
       "rollover": "남은 잔액은 {{period}}에 최대 {{amount}}까지 사용 가능",
+      "rolloverMonthly": "미사용 잔액을 최대 {{amount}}까지 프로모션 잔액으로 이월\n1개월간 유효하며 다시 이월되지 않음\n요금제 잔액과 충전 잔액보다 먼저 사용",
+      "rolloverMonthlySummary": "미사용 잔액은 최대 {{amount}}까지 이월되며 1개월간 유효",
       "nextPeriod": {
         "MONTH": "다음 달",
         "YEAR": "다음 해",

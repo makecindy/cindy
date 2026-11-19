@@ -16,7 +16,7 @@ import type { sessionPatchToRow } from '../mapper';
 import { sessions } from '../schema';
 import { withSessionRouteLock } from '../sessionRouteLock.js';
 import { withWorktreeMutation } from './createUserSession.js';
-import type { upsertRecentWorkdir as upsertRecentWorkdirInDb } from './recentWorkdirsCore.js';
+import type { touchRecentWorkdir as touchRecentWorkdirInDb } from './recentWorkdirsCore.js';
 import { throwIpcError } from '../../utils/ipcValidate';
 import { managedWorktreeRoot } from '../../worktree/managedResourcePath.js';
 import { isRetainableProjectSession } from '../../../shared/sessionSource.js';
@@ -251,7 +251,7 @@ export async function recordRecentWorkdirForMove<OwnerScope>({
   row,
   dbClient,
   ownerScope,
-  upsertRecentWorkdir,
+  touchRecentWorkdir,
   broadcastRecentWorkdirsChanged,
 }: {
   projectTargetChanged: boolean;
@@ -265,7 +265,7 @@ export async function recordRecentWorkdirForMove<OwnerScope>({
   };
   dbClient: DbClient;
   ownerScope: OwnerScope;
-  upsertRecentWorkdir: typeof upsertRecentWorkdirInDb;
+  touchRecentWorkdir: typeof touchRecentWorkdirInDb;
   broadcastRecentWorkdirsChanged: (path: string, ownerScope: OwnerScope) => void;
 }): Promise<void> {
   if (
@@ -275,7 +275,7 @@ export async function recordRecentWorkdirForMove<OwnerScope>({
     !row.remoteHostId &&
     isRetainableProjectSession(row)
   ) {
-    const touched = await upsertRecentWorkdir(
+    const touched = await touchRecentWorkdir(
       row.projectDir ?? row.workingDir,
       Date.now(),
       process.platform,
