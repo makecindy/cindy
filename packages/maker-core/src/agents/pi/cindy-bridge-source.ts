@@ -4511,6 +4511,31 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+// Pi clamps a large output allowance using an estimated prompt size and a fixed
+// 4096-token reserve. On long requests, the upstream tokenizer can count more
+// prompt tokens than Pi estimated. Add headroom only when Pi has already
+// clamped a large output allowance; small response ceilings stay untouched.
+function reserveLargeCompletionHeadroom(payload, model) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  if (model?.api !== 'openai-completions') return undefined;
+  const contextWindow = model.contextWindow;
+  const modelMaxTokens = model.maxTokens;
+  const field = Number.isSafeInteger(payload.max_tokens) ? 'max_tokens'
+    : Number.isSafeInteger(payload.max_completion_tokens) ? 'max_completion_tokens' : undefined;
+  const requested = field ? payload[field] : undefined;
+  if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0
+      || !Number.isSafeInteger(modelMaxTokens) || modelMaxTokens <= 0
+      || !Number.isSafeInteger(requested) || requested <= 65_536
+      || requested >= modelMaxTokens) return undefined;
+  // Recover Pi's estimated prompt from its context clamp. If another extension
+  // changed the request, leave that request alone instead of inferring a budget.
+  const estimatedPrompt = contextWindow - requested - 4096;
+  if (estimatedPrompt < 0) return undefined;
+  const reserve = Math.max(16_384, Math.ceil(estimatedPrompt * 0.1));
+  // Keep enough response space for a useful answer even close to compaction.
+  return { ...payload, [field]: Math.max(16_384, requested - reserve) };
+}
+
 // Chat gateways can carry Gemini thought signatures inside tool IDs, then route
 // the same history to a backend with a 64-character limit. Change only the wire
 // projection: Gemini still needs those signatures, and Responses has its own
@@ -4853,6 +4878,7 @@ export default async function cindyBridge(piApi: any) {
         model: model.id, request: next });
       next = response.request ?? next;
     }
+    next = reserveLargeCompletionHeadroom(next, model) ?? next;
     next = boundedChatToolIds(next, model);
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.
