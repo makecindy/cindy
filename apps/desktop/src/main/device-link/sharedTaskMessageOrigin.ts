@@ -167,9 +167,28 @@ export function redactInputProjectionForSharedGuest<T>(projection: T): T {
   return changed ? (next as T) : projection;
 }
 
+function withoutOriginSession<T>(value: T): T {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !('originSession' in value)) return value;
+  const { originSession: _hidden, ...rest } = value as Record<string, unknown>;
+  return rest as T;
+}
+
+/**
+ * 任务行上的「由哪个任务发起」指向房主的其它任务：与消息来源同口径，访客不接收来源任务的
+ * id 与标题。整段移除即可——访客端没有可跳转的来源任务，也就不显示标记。
+ */
+export function redactSessionRowForSharedGuest<T>(session: T): T {
+  return withoutOriginSession(session);
+}
+
 /** 推往共享任务访客的单帧 payload：按 channel 套用对应的来源脱敏。 */
 export function redactSharedGuestPush(channel: string, payload: unknown): unknown {
   if (channel === 'maker:input:projection') return redactInputProjectionForSharedGuest(payload);
+  if (channel === 'local-db:sessions:patched' && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const patch = (payload as { patch?: unknown }).patch;
+    const redacted = withoutOriginSession(patch);
+    return redacted === patch ? payload : { ...(payload as Record<string, unknown>), patch: redacted };
+  }
   if (
     channel !== 'local-db:messages:created' ||
     !payload ||

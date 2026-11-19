@@ -97,6 +97,20 @@ Agent 用 `send_to_session` 把消息发给另一台电脑上的任务时（包�
 对端，按不可信文本清洗。它同样只用于归属展示，不是权限判据。
 桌面与手机的来源标签可点击：把 `deviceId::sessionId` 拆成设备与任务，按来源设备打开；来源在查看者本机时打开本机任务，尚未同步的远程任务沿既有任务加载流程读取。没有设备前缀的来源仍按当前任务所在设备打开。脱敏后没有任务 ID 的标签保持不可点击。
 
+## 由另一个任务新建的任务（#11610，2026-11-19 原型）
+
+`send_to_session` 不带 `target_session_id` 新建任务时（含伙伴开的任务、另一台电脑上的任务远程创建），宿主把首条消息
+`agentMeta.origin` 里的来源任务同时记到任务这一行：`sessions.origin_session`（JSON `{sessionId, title?}`，见
+`apps/desktop/src/shared/sessionOrigin.ts`）。侧栏与标题区据此显示，不逐行查首条消息。
+
+- 只记「由任务发送」：插件派发以插件为准，群话题 / 群请求没有来源任务，都不记。跨电脑来源沿用 `deviceId::sessionId`。
+- 与 `parent_session_id`（分叉）、`orca_role` / `orca_remote_lead`（Orca 协同）互不相干；Orca Worker 不进侧栏，不受影响。
+- 新增可空列，不回填历史；写入失败只少一个标记，消息上的来源标签照常。只用于归属展示，不是权限判据。
+- 桌面侧栏行在标题前显示小标记，悬停「由「X」发起」，点这一行仍打开它自己；标题区常驻「来自「X」」入口，点击回到
+  来源任务（跳转与消息来源标签共用 `useSourceSessionOpener`）。标题优先取来源任务的实时标题，取不到用快照。
+- 共享任务访客：`local-db:sessions:get` 结果与 `local-db:sessions:patched` 推送里整段移除 `originSession`。
+- 手机端暂未跟进（旧端忽略新字段）。
+
 ## 任务做完的回传（2026-11-09）
 
 宿主不替任务回传结果（`notify_when_done`、`report_task_delivery` 与群结果代发已删除）。需要结果时，发起方在消息里

@@ -45,6 +45,7 @@ import { cn } from '@/lib/utils';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
 import { AutomationSessionButton } from './AutomationSessionButton';
+import { SessionOriginRowMark } from '../SessionOriginMark';
 import { SessionOrdinalBadgeKbd, useSessionOrdinalBadge } from './sessionOrdinalBadges';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -172,7 +173,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const { t } = useTranslation();
   const followers = useSessionFollowers(session);
   // 标题后常显的标记:任务标签色球与「伙伴在跟进」头像。浮出操作钮与归档确认胶囊按它让位。
-  const hasTitleMarks = !!session.tags?.length || followers.length > 0;
+  const hasTitleMarks = !!session.tags?.length || followers.length > 0 || !!session.originSession;
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
@@ -822,6 +823,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   {/* 任务标签常显、紧跟标题，不属于任务信息复选。 */}
                   <TaskTagDots tags={session.tags} />
                   <BotFollowMark followers={followers} />
+                  <SessionOriginRowMark session={session} activeForeground={isActive} />
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
@@ -1048,6 +1050,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               <span className="flex h-[1.22em] shrink-0 items-center gap-1.5 text-12">
                 <TaskTagDots tags={session.tags} />
                 <BotFollowMark followers={followers} />
+                <SessionOriginRowMark session={session} activeForeground={isActive} />
               </span>
             ) : null}
             {/* 归档确认胶囊的隐形同款占位:与胶囊同文案同样式,按实际宽度让位。

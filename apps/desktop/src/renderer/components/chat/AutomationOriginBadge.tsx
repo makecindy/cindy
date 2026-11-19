@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { MessageSquare, Send, Timer } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -6,11 +6,6 @@ import { useTranslation } from 'react-i18next';
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import { useBotProfiles } from '@/features/bots/botStore';
 import { useSessionNavigationMode } from '@/features/cc-agent/embeddedSessionNavigation';
-import {
-  remoteProjectsStore,
-  useRemoteSessionTitle,
-} from '@/features/device-link/remoteProjectsStore';
-import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import type { MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import {
@@ -18,28 +13,11 @@ import {
   isHookSchedulerOrigin,
 } from '@/lib/messageAutomationOrigin';
 import { joinSourceTooltip } from '@/lib/messageSourceLabel';
-import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
-import { sessionsStore } from '@/lib/sessionsStore';
 import { cn } from '@/lib/utils';
-import { toast } from '@/lib/toast';
 
-import { buildSessionDeepLink } from '@/lib/deepLink';
-import { useSessionLinkTarget } from './SessionLinkChip';
+import { useSourceSessionOpener } from './useSourceSessionOpener';
 
 import { imLabel } from './HookTaskCard';
-
-/**
- * 来源任务的实时标题：远程任务查所在设备的任务镜像，本机任务查本机任务列表，
- * 都按 id 索引取值（不随无关任务变化逐条扫描）；拿不到返回 null，由调用方回退快照。
- */
-function useLiveSessionTitle(sessionId: string | undefined, remote: boolean): string | null {
-  const localTitle = useSyncExternalStore(
-    (onChange) => sessionsStore.subscribe(onChange),
-    () => (sessionId && !remote ? sessionsStore.getTitleById(sessionId) : null),
-  );
-  const remoteTitle = useRemoteSessionTitle(remote ? sessionId : undefined);
-  return remote ? remoteTitle : localTitle;
-}
 
 const sourceLabelClassName =
   'inline-flex max-w-full items-center gap-1 text-11 text-[var(--cmd-palette-item-meta)]';
@@ -118,16 +96,14 @@ export function AutomationOriginBadge({
   const navigationMode = useSessionNavigationMode();
   const senderSessionId =
     automationOrigin.kind === 'session' ? automationOrigin.senderSessionId : undefined;
-  const sourceTarget = parseSourceSessionTarget(senderSessionId);
-  const { openTarget: openCrossDeviceTarget } = useSessionLinkTarget(
-    sourceTarget?.deviceId ? buildSessionDeepLink(sourceTarget.sessionId, { deviceId: sourceTarget.deviceId }) : '',
-  );
+  const {
+    sourceTarget,
+    hostDeviceId,
+    liveTitle: liveSenderTitle,
+    open: openSourceSession,
+  } = useSourceSessionOpener(senderSessionId, hostSessionId);
   const botProfiles = useBotProfiles();
   // 远程任务的来源任务与伙伴资料都在那台设备上，本机同 id 资料不可信（与 BotDirectMessageCard 同口径）。
-  // 粘滞归属：relay 瞬时重连会清空镜像索引，此窗口内仍要把远程任务当远程处理，
-  // 否则来源任务会被当成本机任务打开。
-  const hostDeviceId = getStickySessionDeviceId(hostSessionId);
-  const liveSenderTitle = useLiveSessionTitle(sourceTarget?.deviceId ? undefined : senderSessionId, Boolean(hostDeviceId));
   const senderBot =
     automationOrigin.kind === 'session' && automationOrigin.senderBotId
       ? (() => {
@@ -214,17 +190,7 @@ export function AutomationOriginBadge({
       idLines.push(t('chat.userMessage.sourceIds.session', { id: targetSessionId }));
     }
     // 带设备的来源复用任务深链导航，支持返回本机及打开尚未同步的远程任务。
-    open = sourceTarget?.deviceId
-      ? () => {
-          void openCrossDeviceTarget(false).catch(() => toast.error(t('chat.markdownRenderer.openLinkFailed')));
-        }
-      : targetSessionId && sourceTarget
-      ? () => {
-          // 其余来源任务与当前任务在同一台设备上：远程任务的来源任务也在那台设备上。
-          if (hostDeviceId) remoteProjectsStore.pinSessionOrigin(hostDeviceId, targetSessionId);
-          navigate(`/cc-agent/${encodeURIComponent(targetSessionId)}`);
-        }
-      : null;
+    open = openSourceSession;
   } else {
     const scheduleId = automationOrigin.scheduleId?.trim();
     label = automationOrigin.scheduleName

@@ -45,6 +45,7 @@ import { cn } from '@/lib/utils';
 import type { Session } from '@/lib/ccAgent.types';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { SessionStatusIcon } from './SessionStatusIcon';
+import { SessionOriginRowMark } from '../SessionOriginMark';
 import { SessionRenameInput } from '../SessionRenameInput';
 import { usePrActions, usePrRefsForSession } from '@/contexts/PrRefsContext';
 import { SessionTooltip } from './SessionTooltip';
@@ -1112,6 +1113,8 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           ) : isAutomationGenerated ? (
             <AutomationSessionButton sessionId={session.id} size={10} activeForeground={isActive} />
           ) : null}
+          {/* 由另一个任务发起：小标记 + 悬停说明来源；点这一行仍打开它自己。 */}
+          <SessionOriginRowMark session={session} activeForeground={isActive} />
           <SidebarTitleMarquee
             title={displayTitle}
             className={isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground'}

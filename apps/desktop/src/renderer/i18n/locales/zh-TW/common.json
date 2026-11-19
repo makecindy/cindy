@@ -16821,6 +16821,13 @@
       "orcaRemoteLeadUnknownDevice": "另一臺電腦",
       "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。"
     },
+    "sessionOrigin": {
+      "startedBy": "由其他任務發起",
+      "startedByNamed": "由「{{name}}」發起",
+      "from": "來自其他任務",
+      "fromNamed": "來自「{{name}}」",
+      "openSource": "回到來源任務"
+    },
     "gitContext": {
       "detached": "分離 HEAD",
       "branchAria": "當前分支 {{branch}}",

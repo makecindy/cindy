@@ -66,6 +66,7 @@ import { isOrcaLeadSession, resolveSessionRoute } from '@/lib/orcaSessionIdentit
 import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
 import { GitContextBadge } from './GitContextBadge';
 import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
+import { SessionOriginChip } from './SessionOriginMark';
 import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
@@ -657,6 +658,8 @@ export function SessionContentHeader({
       )}
 
       {!isEditing && <OrcaRemoteLeadBadge session={session} />}
+
+      {!isEditing && <SessionOriginChip session={session} />}
 
       {!isEditing && <BotTaskOwnerChip session={session} />}
 
