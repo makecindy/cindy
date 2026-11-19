@@ -22,6 +22,8 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type A
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
 import { isBotCandidateUnavailable } from '../botCandidateRecovery.js';
+import { computeModelGroupSwitchOffer } from '../../model-groups/switchOffer.js';
+import { modelGroupCandidateKey, type ModelGroupCandidate } from '../../../shared/modelGroups.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
 import { canRecoverUndeliveredOrcaReport } from '../../../shared/sharedTaskRecovery.js';
 import { AutoResumeBookkeeping } from '../autoResumeBookkeeping.js';
@@ -15270,7 +15272,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     let durableToolResult = false;
     h.setHasAssistantProgressAfter(async () => durableToolResult);
     const logger: Logger = { ...mocks.logger, trace: vi.fn(), fatal: vi.fn(), child: () => logger };
-    async function fail(sid: string, opts: { toolResult?: boolean; nativeExhausted?: boolean } = {}) {
+    async function fail(sid: string, opts: { toolResult?: boolean; nativeExhausted?: boolean; errorMessage?: string } = {}) {
       const ctx = createPiTranslateContext(logger);
       const events: AgentEvent[] = [];
       const queue = { push: (event: AgentEvent) => { events.push(event); }, end: () => {} } as unknown as Parameters<typeof translatePiEvent>[1];
@@ -15283,7 +15285,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
           expect(events.some(event => event.type === 'tool_result')).toBe(true);
           durableToolResult = true;
         }
-        emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: availabilityError } });
+        emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: opts.errorMessage ?? availabilityError } });
         emit({ type: 'agent_end', messages: [] });
         expect(events.filter(event => event.type === 'error' || event.type === 'done')).toHaveLength(0);
         if (opts.nativeExhausted) emit({ type: 'auto_retry_end', success: false, finalError: availabilityError });
@@ -15300,6 +15302,68 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     }
     return { h, guard, fail };
   }
+
+  // #11578 / unit: exercise a native Pi terminal through the ordinary model-group
+  // recovery hook and input queue. Another Grok model exposes account-wide exclusion.
+  it('resends the original input to GPT after the xAI billing 403', async () => {
+    const { h, guard, fail } = availabilityHarness();
+    const sid = 'pi-billing';
+    const item = availabilityInput();
+    const candidates: ModelGroupCandidate[] = [
+      { agentKind: 'pi', providerId: 'xai', model: 'grok-4.7' },
+      { agentKind: 'pi', providerId: 'xai', model: 'grok-other' },
+      { agentKind: 'codex', providerId: 'openai', model: 'gpt-6.1-terra' },
+    ];
+    let current = candidates[0];
+    const visited = new Set<string>();
+    const book = new AutoResumeBookkeeping({
+      persistSuppressedError: vi.fn(), markOutcome: vi.fn(), rollbackGuardPendingResume: vi.fn(), abandonTakeover: vi.fn(),
+    });
+    const hooks = createInterruptedTurnAutoResumeHooks<Session>({
+      inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
+      botFallbackInputs: new WeakSet(), modelGroupInputs: new WeakSet([item.createOpts]),
+      saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(), getStableSessionForTurnBoundary: () => null,
+      pendingContinuationOnlyAutoResumeRebuilds: new Map(), pendingSessionRuntimeFallbackRebuilds: new Set(),
+      providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
+      pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
+      autoResumeAttemptToken: () => null, log: mocks.logger,
+      maybeApplySessionRuntimeFallback: async (id, _episode, _token, _required, _isCurrent, recovery) => {
+        const offer = await computeModelGroupSwitchOffer({
+          readBinding: () => ({ pickedKey: modelGroupCandidateKey(current), selection: { type: 'route', id: 'group' }, at: 1 }),
+          readSession: async () => ({ ...current, source: 'desktop' }), isShared: () => false, hasGoal: async () => false,
+          now: Date.now, config: () => ({ routes: [{ id: 'group', name: 'group', strategy: 'order', candidates }] }),
+          candidateFacts: async () => candidates.map(c => ({ available: true, modelName: c.model, sourceName: c.providerId, windows: null })),
+        }, id, { ...recovery!, current, visited, recordUnavailable: c => visited.add(modelGroupCandidateKey(c)) });
+        if (!offer) return { session: null, outcome: 'exhausted' };
+        current = offer;
+        h.setAgentKind(current.agentKind === 'cc' ? 'claude-code' : current.agentKind);
+        return { session: null, outcome: 'switched' };
+      },
+    });
+    h.isResumableTurnErrorCandidate.mockImplementation(hooks.canRecoverTurn);
+    h.onResumableTurnError.mockImplementation(hooks.onResumableTurnError);
+    h.setAgentKind('pi');
+    const dispatched: string[] = [];
+    const send = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementation((...args) => {
+      dispatched.push(current.model);
+      return send(...args);
+    });
+    vi.useFakeTimers();
+    try {
+      h.coordinator.enqueue(sid, item);
+      await flush();
+      await fail(sid, { errorMessage: 'HTTP 403: You have run out of credits or need a Grok subscription. Add credits at x.ai.' });
+      await vi.advanceTimersByTimeAsync(3_000);
+      await flush();
+      expect(dispatched).toEqual(['grok-4.7', 'gpt-6.1-terra']);
+      expect(h.sendToAgent.mock.calls[1].slice(0, 2)).toEqual(h.sendToAgent.mock.calls[0].slice(0, 2));
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      expect(h.coordinator.getProjection(sid).error).toBeNull();
+      expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
 
   // PR #6936 review: the generated continuation carries originalSyntheticTrigger='continue'.
   // It keeps the owner's authorship for teammate task actions, never as fresh owner input.
