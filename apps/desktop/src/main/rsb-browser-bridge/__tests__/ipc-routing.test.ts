@@ -18,6 +18,7 @@ vi.mock('electron', () => {
 import { ipcMain, webContents, type WebContents } from 'electron';
 import {
   RSB_BROWSER_BRIDGE_PIN_CHANNEL,
+  RSB_BROWSER_BRIDGE_UNPIN_CHANNEL,
   RSB_BROWSER_BRIDGE_RELEASE_CHANNEL,
   RSB_FILE_PREVIEW_OPENER_CHANNEL,
 } from '../../../shared/rsbBrowserBridge.js';
@@ -80,7 +81,8 @@ describe('RSB browser bridge ownership routing', () => {
   // #11392, unit: preview links need task attribution without exposing local
   // documents as browser automation targets. Exercise the real IPC and registry.
   it('attributes preview links to their host for the lifetime of the guest', () => {
-    const mockGuest = fakeGuest(7);
+    const owner = { id: 7, send: vi.fn(), isDestroyed: () => false };
+    const mockGuest = { ...fakeGuest(7), hostWebContents: owner, once: vi.fn() };
     const guest = mockGuest as unknown as WebContents;
     vi.mocked(webContents.fromId).mockReturnValue(guest);
     const registry = new TabRegistry({ lookupWebContents: webContents.fromId, logger: { info: vi.fn(), warn: vi.fn() } });
@@ -96,7 +98,13 @@ describe('RSB browser bridge ownership routing', () => {
     expect(registry.findByWebContentsId(101)).toEqual(record);
     expect(registry.listBySession('source-task')).toEqual([]);
     expect(registry.getWebContentsByTabId('file-preview')).toBeNull();
+    // Native child windows keep their opener alive via an ordinary pin lease.
+    const closeChild = registry.acquirePinLease(record.tabId);
+    expect(owner.send).toHaveBeenCalledWith(RSB_BROWSER_BRIDGE_PIN_CHANNEL, { tabId: record.tabId });
+    closeChild();
+    expect(owner.send).toHaveBeenCalledWith(RSB_BROWSER_BRIDGE_UNPIN_CHANNEL, { tabId: record.tabId });
     mockGuest.isDestroyed = () => true;
+    mockGuest.once.mock.calls.find(([event]) => event === 'destroyed')![1]();
     expect(registry.findByWebContentsId(101)).toBeNull();
     vi.mocked(webContents.fromId).mockReset();
   });

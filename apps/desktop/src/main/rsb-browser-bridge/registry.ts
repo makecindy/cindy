@@ -57,6 +57,8 @@ export type PinChangeListener = (tabId: string, pinned: boolean) => void;
  */
 export class TabRegistry {
   private readonly previewOpeners = new WeakMap<WebContents, TabRecord>();
+  /** The current file guest for a pin broadcast, including detached-window handoff. */
+  private readonly previewPinTargets = new Map<string, number>();
   private readonly records = new Map<string, TabRecord>(); // tabId → record
   /** tabId set of automation-active tabs that must not be LRU-evicted. */
   private readonly pinned = new Set<string>();
@@ -94,6 +96,14 @@ export class TabRegistry {
 
   reportPreviewOpener(record: TabRecord, guest: WebContents): void {
     this.previewOpeners.set(guest, record);
+    if (this.previewPinTargets.get(record.tabId) !== record.webContentsId) {
+      this.previewPinTargets.set(record.tabId, record.webContentsId);
+      guest.once('destroyed', () => {
+        if (this.previewPinTargets.get(record.tabId) === record.webContentsId) {
+          this.previewPinTargets.delete(record.tabId);
+        }
+      });
+    }
     this.notifyReport(record);
   }
 
@@ -196,6 +206,16 @@ export class TabRegistry {
     }
     const guest = this.opts.lookupWebContents(webContentsId);
     return guest && !guest.isDestroyed() ? this.previewOpeners.get(guest) ?? null : null;
+  }
+
+  /** Additional routing target for popup pin broadcasts, outside automation lookups. */
+  getPreviewGuestForPin(tabId: string): WebContents | null {
+    const id = this.previewPinTargets.get(tabId);
+    if (id === undefined) return null;
+    const guest = this.opts.lookupWebContents(id);
+    if (guest && !guest.isDestroyed() && this.previewOpeners.get(guest)?.tabId === tabId) return guest;
+    this.previewPinTargets.delete(tabId);
+    return null;
   }
 
   /** Read by tab id. Returns null if unknown OR if the webContents is dead. */

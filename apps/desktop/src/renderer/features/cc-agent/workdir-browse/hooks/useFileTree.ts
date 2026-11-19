@@ -54,6 +54,7 @@ import {
   stopWatchFor,
 } from '@/lib/fileBrowserTransport';
 import { loadExpandedSet, saveExpandedSet } from '../lib/expandedStore';
+import { fileContentScope, invalidateWorkdirCache } from '../lib/fileContentCache';
 import {
   BUILTIN_IGNORE_ALWAYS,
   BUILTIN_IGNORE_REVEALABLE,
@@ -267,6 +268,15 @@ interface DirectoryRefresh {
 
 /** 全局 stores 表。key 由 storeKey() 算,同 (workdir, options) 共享同一份。 */
 const stores = new Map<string, FileTreeStore>();
+
+export function hasFileTreeWatcher(workdir: string, remoteHostId: string | null, deviceId: string | null): boolean {
+  for (const tree of stores.values()) {
+    if (tree.refCount > 0 && tree.workdir === workdir && tree.remoteHostId === remoteHostId && tree.deviceId === deviceId) {
+      return true;
+    }
+  }
+  return false;
+}
 
 type AliasChange = { workdir: string; remoteHostId: string | null; deviceId: string | null; relPath: string };
 const aliasChangeListeners = new Set<(change: AliasChange) => void>();
@@ -900,6 +910,11 @@ function disposeStore(store: FileTreeStore): void {
     remoteHostId: store.remoteHostId,
   }).catch(() => {});
   stores.delete(store.key);
+  // Missed events after the last watcher stops also invalidate other cached
+  // files in this workdir that the user might open after switching back.
+  if (!hasFileTreeWatcher(store.workdir, store.remoteHostId, store.deviceId)) {
+    invalidateWorkdirCache(fileContentScope(store.workdir, store.remoteHostId, store.deviceId));
+  }
 }
 
 // ── Public actions (store-level,跟 UseFileTreeReturn 的同名方法对应) ────────

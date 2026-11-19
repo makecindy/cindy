@@ -137,6 +137,37 @@ describe('useFileTree refresh scheduling', () => {
     second.unmount();
   });
 
+  // #11392, unit: the old content cache survived the last directory watcher.
+  // No event is delivered for edits made after the last watcher stops.
+  it('revalidates text and sibling cache entries after a gap in workdir watching', async () => {
+    const workdir = '/watch-gap';
+    let version = 'old';
+    mocks.listDir.mockResolvedValue([]);
+    mocks.readFile.mockImplementation(async ({ relPath }) => ({ ok: true,
+      data: { relPath, content: version, size: 3, mtimeMs: 1, truncated: false } }));
+    const view = renderHook(({ file, visible }) => {
+      useFileTree({ workdir, enabled: visible });
+      return useFileContent(workdir, file, null, null, visible);
+    }, { initialProps: { file: 'other.txt', visible: true } });
+    await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'old' }));
+    view.rerender({ file: 'open.txt', visible: true });
+    await waitFor(() => expect(view.result.current.content).toMatchObject({ relPath: 'open.txt', content: 'old' }));
+    const otherWatcher = renderHook(() => useFileTree({ workdir }));
+    mocks.readFile.mockClear();
+    view.rerender({ file: 'open.txt', visible: false });
+    view.rerender({ file: 'open.txt', visible: true });
+    expect(mocks.readFile).not.toHaveBeenCalled();
+    otherWatcher.unmount();
+    view.rerender({ file: 'open.txt', visible: false });
+    version = 'new';
+    view.rerender({ file: 'open.txt', visible: true });
+    await waitFor(() => expect(view.result.current.content).toMatchObject({ content: 'new' }));
+    expect(mocks.readFile).toHaveBeenCalledTimes(1);
+    view.rerender({ file: 'other.txt', visible: true });
+    await waitFor(() => expect(view.result.current.content).toMatchObject({ relPath: 'other.txt', content: 'new' }));
+    view.unmount();
+  });
+
   // #11392, unit: a renamed ancestor or a missing-path read must invalidate the
   // visible directory, including previously cached nested entries.
   it.each(['parent event', 'missing path'])('drops stale directory listings after a %s', async (signal) => {

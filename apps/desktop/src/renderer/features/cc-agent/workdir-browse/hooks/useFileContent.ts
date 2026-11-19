@@ -19,8 +19,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createLogger } from '@/lib/logger';
 import { observeFileTransferProgress } from '@/lib/fileTransferProgress';
 import { fileBrowserApiFor, onFileTreeEventFor } from '@/lib/fileBrowserTransport';
-import { fileTreeEventPaths, onDirectoryAliasChange } from './useFileTree';
+import { fileTreeEventPaths, hasFileTreeWatcher, onDirectoryAliasChange } from './useFileTree';
 import {
+  fileContentScope,
   getCachedFileContent,
   invalidateCachedFile,
   invalidateWorkdirCache,
@@ -61,7 +62,7 @@ export type FileContent =
 export interface UseFileContentReturn {
   content: FileContent;
   /** Force a refetch of the current (workdir, relPath). Used after save. */
-  refresh: () => void;
+  refresh: (options?: { preserveEditor?: boolean }) => void;
   /**
    * 用调用方已经握有的 fresh content 同步把 cache + state 推到 text 分支,
    * 不发 IPC、不进 loading 中间态。专为 save-after 场景:editor 里的 next
@@ -126,6 +127,7 @@ export function useFileContent(
   relPath: string | null,
   remoteHostId: string | null = null,
   deviceId: string | null = null,
+  visible = true,
 ): UseFileContentReturn {
   const [state, setState] = useState<FileContentState>({
     workdir: '',
@@ -141,14 +143,24 @@ export function useFileContent(
   // 内容缓存的作用域键:远程会话必须把传输端点编进 key——不同 SSH 主机 /
   // 被控设备可能暴露相同绝对路径 workdir,仅按 workdir|relPath 会串缓存
   // (A 机的内容渲染成 B 机的文件,保存时反向覆写)。本地会话保持裸 workdir。
-  const contentCacheScope = deviceId
-    ? `dev:${deviceId}|${workdir}`
-    : remoteHostId
-      ? `ssh:${remoteHostId}|${workdir}`
-      : workdir;
+  const contentCacheScope = fileContentScope(workdir, remoteHostId, deviceId);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const lastReadScope = useRef<string | null>(null);
+  const silentRead = useRef<(() => void) | null>(null);
+  const preserveEditorOnRead = useRef(false);
 
   useEffect(() => {
     const epoch = ++readEpoch.current;
+    if (!visible) {
+      preserveEditorOnRead.current = true;
+      // A read-only external file may not have a tree watcher of its own.
+      if (relPath && !hasFileTreeWatcher(workdir, remoteHostId, deviceId)) invalidateCachedFile(contentCacheScope, relPath);
+      return;
+    }
+    const resumeEditor = preserveEditorOnRead.current && lastReadScope.current === contentCacheScope;
+    preserveEditorOnRead.current = false;
+    lastReadScope.current = contentCacheScope;
     if (!workdir || !relPath) {
       setState({ workdir, relPath: null, content: { kind: 'empty' } });
       return;
@@ -159,6 +171,15 @@ export function useFileContent(
     const cached = getCachedFileContent(contentCacheScope, relPath);
     if (cached) {
       setState({ workdir, relPath, content: cached });
+      return;
+    }
+
+    // Keep the editor mounted when refreshing an already displayed document.
+    // The same silent path as watcher edits preserves its draft and selection.
+    const previous = stateRef.current;
+    if (resumeEditor && previous.workdir === workdir && previous.relPath === relPath
+        && previous.content.kind === 'text' && silentRead.current) {
+      silentRead.current();
       return;
     }
 
@@ -346,7 +367,7 @@ export function useFileContent(
       cancelled = true;
       transferProgress?.dispose();
     };
-  }, [workdir, relPath, remoteHostId, deviceId, refreshTick]);
+  }, [workdir, relPath, remoteHostId, deviceId, contentCacheScope, refreshTick, visible]);
 
   // listener 拿当前 relPath 的最新值, 但不进 effect deps —— 不能因为切文件就
   // 重新订阅 chokidar(那会丢掉订阅期间的事件)。
@@ -384,14 +405,14 @@ export function useFileContent(
       if (running || disposed) return;
       running = true;
       try {
-        while (pending && !disposed) {
+        while (pending && !disposed && visibleRef.current) {
           pending = false;
           const targetRelPath = relPathRef.current;
           if (!targetRelPath) break;
           const epoch = readEpoch.current;
           try {
             const result = await fileBrowserApiFor(deviceId).readFile({ workdir, relPath: targetRelPath, remoteHostId });
-            if (disposed || epoch !== readEpoch.current || relPathRef.current !== targetRelPath
+            if (disposed || !visibleRef.current || epoch !== readEpoch.current || relPathRef.current !== targetRelPath
                 || contentCacheScopeRef.current !== contentCacheScope) continue;
             if (!result.ok || (result.data.truncated && (remoteHostId || deviceId))) {
               // The event may have superseded the initial read/large-file fetch.
@@ -421,6 +442,13 @@ export function useFileContent(
         running = false;
       }
     };
+    const scheduleRead = () => {
+      if (!visibleRef.current) return;
+      readEpoch.current++;
+      pending = true;
+      queueMicrotask(() => { void reread(); });
+    };
+    silentRead.current = scheduleRead;
     const changed = (event: { workdir: string; relPath: string }) => {
       if (event.workdir !== workdir) return;
       const changedPaths = fileTreeEventPaths(workdir, event.relPath, remoteHostId, deviceId);
@@ -432,16 +460,14 @@ export function useFileContent(
       if (current && [...changedPaths].some(p => p === '' || current === p || current.startsWith(`${p}/`))) {
         // Invalidate in-flight reads synchronously; an A response must not
         // repopulate the cache after the directory has changed to B.
-        readEpoch.current++;
-        pending = true;
-        queueMicrotask(() => { void reread(); });
+        scheduleRead();
       }
     };
     const off = onFileTreeEventFor(deviceId, changed);
     const offAlias = onDirectoryAliasChange(event => {
       if (event.remoteHostId === remoteHostId && event.deviceId === deviceId) changed(event);
     });
-    return () => { disposed = true; off(); offAlias(); };
+    return () => { disposed = true; silentRead.current = null; off(); offAlias(); };
   }, [workdir, remoteHostId, deviceId, contentCacheScope]);
 
   // workdir 切换 → 旧 workdir 的 entry 一次性扔掉, 防长期累积。
@@ -449,12 +475,16 @@ export function useFileContent(
   // 仅在 effect 真正卸载 (workdir 变了 / 组件 unmount) 时清, 不会误伤。
   useEffect(() => {
     if (!workdir) return;
-    return () => invalidateWorkdirCache(contentCacheScope);
-  }, [workdir, contentCacheScope]);
+    return () => {
+      if (!hasFileTreeWatcher(workdir, remoteHostId, deviceId)) invalidateWorkdirCache(contentCacheScope);
+    };
+  }, [workdir, contentCacheScope, remoteHostId, deviceId]);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((options?: { preserveEditor?: boolean }) => {
     // 显式 invalidate 当前文件 + bump tick 触发 effect 重跑 → 走 miss 路径。
-    if (relPath) invalidateCachedFile(contentCacheScope, relPath);
+    if (!relPath) return;
+    invalidateCachedFile(contentCacheScope, relPath);
+    if (options?.preserveEditor) preserveEditorOnRead.current = true;
     setRefreshTick((t) => t + 1);
     // contentCacheScope 必须进 deps:同 workdir 跨端点切换时闭包若滞留旧
     // scope,invalidate/写入会落进别的端点的缓存桶(串内容 + 反向覆写)。

@@ -165,14 +165,14 @@ function FileBrowserBodyWithWorkdir({
   });
   const renderingHtml = !!state.selectedFilePath && state.previewHtmlPath === state.selectedFilePath
     && isHtmlFilePath(state.selectedFilePath);
-  const fileContent = useFileContent(workdir, renderingHtml ? null : state.selectedFilePath, remoteHostId, deviceId);
+  const fileContent = useFileContent(workdir, renderingHtml ? null : state.selectedFilePath, remoteHostId, deviceId, visible);
   const [treeOpen, setTreeOpen] = useState(false);
   const [previousEntry, setPreviousEntry] = useState<string | null>(null);
   const [directoryFilter, setDirectoryFilter] = useState('');
   const [grid, setGrid] = useState(false);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
   const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
-  const externalFileContent = useFileContent(externalFile?.workdir ?? workdir, externalFile?.relPath ?? null);
+  const externalFileContent = useFileContent(externalFile?.workdir ?? workdir, externalFile?.relPath ?? null, null, null, visible);
   const fileDragDepthRef = useRef(0);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const confirmSwitchAway = useConfirmSwitchAwayIfDirty();
@@ -578,7 +578,7 @@ function FileBrowserBodyWithWorkdir({
     if (!visible || !isRemote) return;
     const onFocus = () => {
       void tree.refresh();
-      fileContent.refresh();
+      fileContent.refresh({ preserveEditor: true });
     };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);

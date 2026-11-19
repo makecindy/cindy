@@ -370,7 +370,7 @@ export function registerRsbBrowserBridgeIpc(opts: RegisterRsbBrowserBridgeOption
     // Pin state belongs to the renderer hosting this tab, not necessarily the
     // currently visible RSB window (the detached window may be hidden or the
     // tab may have migrated between hosts).
-    const target = registry.getWebContentsByTabId(tabId);
+    const target = registry.getWebContentsByTabId(tabId) ?? registry.getPreviewGuestForPin(tabId);
     const wc = target ? resolveOwner(target) : null;
     if (!wc || wc.isDestroyed()) return;
     wc.send(pinned ? RSB_BROWSER_BRIDGE_PIN_CHANNEL : RSB_BROWSER_BRIDGE_UNPIN_CHANNEL, {
