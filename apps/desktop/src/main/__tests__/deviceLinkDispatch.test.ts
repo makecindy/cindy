@@ -22,6 +22,7 @@ vi.mock('electron', () => ({
 // boundary isolated; delegated guest admission is exercised in providerShareRuntime.test.ts.
 vi.mock('../device-link/providerShareDelegatedAccess.js', () => ({
   delegatedProviderShareGuestAccess: () => null,
+  locallyProvenProviderShareDelegation: () => false,
   delegatedProviderShareLeases: () => [], invalidateProviderShareDelegation: vi.fn(),
 }));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.

@@ -216,6 +216,46 @@ describe('guest shadow workspace', () => {
     } finally { host.dispose(); }
   });
 
+  // Unit: a second send and Stop can both arrive while the first turn is still
+  // claiming capacity. Observe engine calls and the protocol results.
+  it('rejects overlapping standby admission and honors Stop before dispatch', async () => {
+    const started: Started[] = [];
+    const complete = vi.fn(async () => {});
+    let finishAdmission!: () => void;
+    const admission = new Promise<void>((resolve) => { finishAdmission = resolve; });
+    const begin = vi.fn(
+      async (_controller: string, _session: string, _execution: string, capture: (complete: () => Promise<void>) => void) => {
+        capture(complete);
+        await admission;
+      },
+    );
+    const host = makeHost(started, { directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true, beginDelegatedTurn: begin,
+      allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    const send = (callId: string) => host.handle(GUEST, { op: 'call', runId: RUN_1, callId, method: 'send',
+      payload: { json: [{ content: 'fake turn', attachments: [] }] } });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('standby-task') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      await send(CALL_1);
+      await vi.waitFor(() => expect(begin).toHaveBeenCalledTimes(1));
+      await send(RUN_2);
+      await host.handle(GUEST, { op: 'call', runId: RUN_1, callId: '44444444-4444-4444-8444-444444444444',
+        method: 'abort', payload: { json: [] } });
+      finishAdmission();
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+      const poll = await host.handle(GUEST, { op: 'poll', runs: [{ runId: RUN_1, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data?: string }> };
+      const events = Buffer.from(poll.runs[0]?.data ?? '', 'base64').toString('utf8');
+      for (const callId of [CALL_1, RUN_2]) {
+        expect(events).toContain(`"t":"result","callId":"${callId}","ok":false`);
+      }
+      expect(begin).toHaveBeenCalledTimes(1);
+      expect(started[0].sends).toHaveLength(0);
+    } finally { finishAdmission(); host.dispose(); }
+  });
+
   // Unit: 4505241080; existing coverage rejected before capturing a reservation.
   // Accept commits but its response is lost; even a failed first completion must
   // retain the receipt for the existing retry path without executing the model.
@@ -277,12 +317,14 @@ describe('guest shadow workspace', () => {
     const started: Started[] = [];
     const accept = vi.fn(async (): Promise<void> => { throw new Error('revoked assignment'); });
     const host = makeHost(started, { directGuestExecution: {
-      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true,
+      ownerScope: () => 'fake-owner', sessionAllowed: (_controller, _session, kind) => kind === 'claude-code', sessionDelegated: () => true,
       acceptDelegated: accept, allocate: async () => null, status: () => {}, release: async () => {},
       switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
     } });
     const request = { op: 'open' as const, runId: RUN_1, agentKind: 'claude-code' as const, payload: { json: openPayload('standby-task') } };
     try {
+      await expect(host.handle(GUEST, { ...request, agentKind: 'codex' })).rejects.toThrow('not authorized');
+      expect(accept).not.toHaveBeenCalled();
       await expect(host.handle(GUEST, request)).rejects.toThrow('revoked assignment');
       expect(started).toHaveLength(0);
       accept.mockImplementation(async () => undefined);

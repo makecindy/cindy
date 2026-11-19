@@ -1210,7 +1210,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       lastUser = (await deps.findLatestUser?.(sessionId)) ?? undefined;
       lastUserIndex = -1;
     }
-    if (!lastUser && !accountHandoff) return false;
+    if (!lastUser && (!accountHandoff || (!sessionRow.sdkSessionId && usedTokens === 0 && source.length === 0))) return false;
     const rebuildReason: ContextRebuildReason = accountHandoff ? 'native-session-recovery' : isPiPromptRpcTimeoutError(lastError)
       ? 'pi-prompt-timeout'
       : 'context-overflow';
@@ -1303,6 +1303,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             source = (await listReplay(sessionId)).filter((message) => message.role !== 'error');
             assertReady();
           }
+          // A first dispatch may change accounts before a native thread or transcript exists.
+          if (target === 'retain-route' && !row.sdkSessionId && row.contextTokens === 0 && source.length === 0) return;
           // 显式重启(target=null)对伙伴的每段对话一视同仁: 主任务与 IM / 群专线按空闲间隔
           // 刷新同一口径写交接(isBotChatContext)。换路由恢复仍只认主任务。
           const companionChat = target ? isCanonicalBotContext(row) : isBotChatContext(row);

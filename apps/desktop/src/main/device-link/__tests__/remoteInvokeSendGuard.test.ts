@@ -29,7 +29,9 @@ function loadAdapters(overrides: Record<string, unknown>) {
   const epochs = overrides.openLinkCloseEpochs as Map<string, number> ?? new Map<string, number>();
   const dependencies = {
     DeviceLinkError, ServerApiError, FILE_PEER_CHANNEL, ensureInvokeLinkReady, invokeWithClosedLinkRecovery,
-    parseProviderSharePeer,
+    parseProviderSharePeer, providerShareHostPeer,
+    parseProviderShareAgentDeviceId: (id: string) => id.startsWith('share:') ? id.slice(6) : null,
+    findReceivedShareForExecution: () => null,
     activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false,
     getRemoteLinkCloseEpoch: (id: string) => epochs.get(id) ?? 0,
     invokeProviderMetadataContinuity: (_target: string, _channel: string, _args: unknown[], read: () => unknown) => read(),

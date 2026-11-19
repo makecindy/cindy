@@ -106,19 +106,21 @@ export async function resolveModelGroup(
  * 沿用原模型也提交选择记录；撞配额提议没有选路凭据，只更新绑定。
  * 失败只记日志：没有记录时撞配额就不提议换来源，其余一切照旧。
  */
-export function bindModelGroupSession(
+export function commitModelGroupDecision(result: ModelGroupResolveResult | null): void {
+  if (result?.decisionId) void window.electronAPI.modelGroups.commit(result.decisionId)
+    .catch((err: unknown) => log.warn('model group decision commit failed', err));
+}
+
+export async function bindModelGroupSession(
   sessionId: string,
   selection: ModelGroupSelection,
   result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model'> | null,
-): void {
+): Promise<void> {
   const route: { agentKind: ModelGroupCandidate['agentKind']; providerId: string; model: string; agentDeviceId?: string } | null =
     !result ? null : 'outcome' in result ? (result.outcome === 'routed' ? result.route : null) : result;
-  if (result && 'outcome' in result && result.decisionId) {
-    void window.electronAPI.modelGroups.commit(result.decisionId)
-      .catch((err: unknown) => log.warn('model group decision commit failed', err));
-  }
+  if (result && 'outcome' in result) commitModelGroupDecision(result);
   if (!route) return;
-  void window.electronAPI.modelGroups.bindSession({
+  await window.electronAPI.modelGroups.bindSession({
     sessionId,
     selection,
     route: {
