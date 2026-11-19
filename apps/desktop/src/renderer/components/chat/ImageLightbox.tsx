@@ -320,18 +320,24 @@ function isDirectCacheable(src: string): boolean {
 /** 左右翻页圆形按钮的内联样式。lightbox overlay 不走 Tailwind,这里同样用内联。 */
 export function ImageLightbox(props: ImageLightboxProps) {
   const source = props.annotationFallbackSrc ?? props.src;
-  const collectionItems = useOpeningCollection(source);
+  // 集合身份也在打开时固定:查看期间新到的附件不能让查看器换一种组件。
+  const openingCollection = useOpeningCollection(source);
+  const [collectionItems] = useState(() => openingCollection);
   const sessionImages = useContext(ImageGalleryContext);
   // 图片优先走任务内画廊：同一条消息里的附件集合可能只包含其中一张，
   // 逐条发送的图片更是各成一组；两者都会把翻页限制在局部。
-  const preferSessionGallery =
-    props.enableGallery === true &&
-    (sessionImages?.length ?? 0) > 1 &&
-    (sessionImages?.some(
-      (image) =>
-        image.src === source ||
-        (props.galleryId !== undefined && image.galleryId === props.galleryId),
-    ) ?? false);
+  // 这个选择在打开时定死：查看期间新到的图片不能让组件从集合查看器切成
+  // 画廊查看器,否则未保存的标注会随卸载丢失。
+  const [preferSessionGallery] = useState(
+    () =>
+      props.enableGallery === true &&
+      (sessionImages?.length ?? 0) > 1 &&
+      (sessionImages?.some(
+        (image) =>
+          image.src === source ||
+          (props.galleryId !== undefined && image.galleryId === props.galleryId),
+      ) ?? false),
+  );
   const items = preferSessionGallery ? null : collectionItems;
   return items ? (
     <AttachmentCollectionPreview
@@ -429,6 +435,11 @@ function ImageLightboxContent({
     !failedAnnotationSources.has(currentItem.annotationSourceUrl)
       ? currentItem.annotationSourceUrl
       : currentItem.src;
+  // 翻页后标题跟随当前图片;第一项仍优先用入口传入的原始文件名。
+  const currentName =
+    index === gallery.start && filename
+      ? filename
+      : (currentItem.name ?? previewSourceName(currentItem.src, t('attachmentPreview.image')));
   const isClosingRef = useRef(false);
   // 右键菜单位置；行为与 LightboxImage 缩略图保持一致。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -1472,7 +1483,7 @@ function ImageLightboxContent({
       }}
     >
         <PreviewHeader
-          name={filename ?? previewSourceName(currentSrc, t('attachmentPreview.image'))}
+          name={currentName}
           detail={
             currentNaturalSize ? `${currentNaturalSize.w} × ${currentNaturalSize.h}` : undefined
           }
@@ -1852,7 +1863,7 @@ function ImageLightboxContent({
                       key={item.galleryId ?? `${itemIndex}:${item.src}`}
                       onClick={() => setIndex(itemIndex)}
                     >
-                      {itemIndex + 1}. {previewSourceName(item.src, t('attachmentPreview.image'))}
+                      {itemIndex + 1}. {item.name ?? previewSourceName(item.src, t('attachmentPreview.image'))}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>

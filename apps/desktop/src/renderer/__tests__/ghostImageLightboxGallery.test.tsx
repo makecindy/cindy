@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import '@/i18n';
+import { i18n } from '@/i18n';
 import { AttachmentCollectionContext } from '@/components/chat/AttachmentCollection';
 import { ImageGalleryContext } from '@/components/chat/ImageGalleryContext';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
@@ -39,6 +39,52 @@ describe('Ghost card ImageLightbox gallery positioning', () => {
     );
 
     expect(screen.getByText('1 / 3')).toBeTruthy();
+  });
+
+  // 测试价值：同一图片地址可能在多条消息重复出现，翻页起点必须是用户点的那一次。
+  // 现有覆盖缺口：相邻用例只覆盖重复 src 的插件卡定位，未覆盖普通消息画廊。
+  // 最小失败输入 = A、B、A，点击最后一张；旧实现落到 1 / 3 而非 3 / 3。
+  it('opens the clicked occurrence of a repeated image', () => {
+    const repeated = 'xdt-image://gallery/a.png';
+    render(
+      <ImageGalleryContext.Provider
+        value={[
+          { src: repeated, galleryId: 'message:m1:image:0' },
+          { src: 'xdt-image://gallery/b.png', galleryId: 'message:m1:image:1' },
+          { src: repeated, galleryId: 'message:m2:image:0' },
+        ]}
+      >
+        <ImageLightbox
+          src={repeated}
+          galleryId="message:m2:image:0"
+          enableGallery
+          onClose={vi.fn()}
+        />
+      </ImageGalleryContext.Provider>,
+    );
+
+    expect(screen.getByText('3 / 3')).toBeTruthy();
+  });
+
+  // 测试价值：任务内翻页后，顶部标题必须跟随当前图片，而不是停在打开时那张。
+  // 最小失败输入 = 画廊 A、B，打开 A 后翻到 B；旧实现标题仍显示打开时的文件名。
+  it('updates the title when paging through the task gallery', () => {
+    const first = 'xdt-image://gallery/first.png';
+    const second = 'xdt-image://gallery/second.png';
+    render(
+      <ImageGalleryContext.Provider
+        value={[
+          { src: first, name: 'first.png' },
+          { src: second, name: 'second.png' },
+        ]}
+      >
+        <ImageLightbox src={first} filename="opened.png" enableGallery onClose={vi.fn()} />
+      </ImageGalleryContext.Provider>,
+    );
+
+    expect(screen.getByText('opened.png')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.media.nextImage') }));
+    expect(screen.getByText('second.png')).toBeTruthy();
   });
 
   it('opens the exact duplicate image selected inside a plugin card iframe', () => {
