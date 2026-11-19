@@ -14,6 +14,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ProviderView } from '@cindy/model-providers';
+import { followedAccountSourceProvider } from '../components/new-chat/sourceSwitch';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => null }));
@@ -363,6 +365,31 @@ describe('model selector display identity during switches', () => {
     models: { codex: [{ id: 'gpt-6', name: 'GPT-6', efforts: ['high'] }] },
   };
   const trigger = () => screen.getByRole('button');
+
+  // PR #10560, unit: the composer fixture mocks this picker. Exercise its real trigger and
+  // popup with an emptied source and a disabled current model; other models stay on the owner.
+  it('keeps only the existing task model on a followed source in the real picker', async () => {
+    const source = { ...provider, connected: false, models: { codex: [{ id: 'gpt-6', name: 'Saved GPT', disabled: true }] } };
+    const owner = { ...provider, id: 'openai-sub-1a2b3c4d', name: 'Split account', models: { codex: [
+      { id: 'gpt-6', name: 'Owner GPT' }, { id: 'other-model', name: 'Other model' },
+    ] } };
+    providersRef.providers = [source, owner];
+    const taskSourceProvider = followedAccountSourceProvider({
+      providers: providersRef.providers as unknown as ProviderView[], providerId: 'openai', agent: 'codex', modelId: 'gpt-6',
+      account: { state: 'bound', account: { paused: false, status: 'ready', ownerProviderId: owner.id } },
+    });
+    const onProviderChange = vi.fn();
+    render(<ModelSelector remoteAgent={undefined} {...props} modelId="gpt-6"
+      taskSourceProvider={taskSourceProvider!} onProviderChange={onProviderChange} />);
+    expect(trigger().textContent).toContain('Saved GPT');
+    expect(trigger().textContent).not.toContain('已断开');
+    await openDropdown();
+    const selected = screen.getAllByRole('option').filter(row => row.getAttribute('aria-selected') === 'true');
+    expect(selected.some(row => row.textContent?.includes('Saved GPT'))).toBe(true);
+    const other = screen.getByRole('option', { name: /Other model/ });
+    await act(async () => { fireEvent.click(other); });
+    expect(onProviderChange.mock.calls[0]?.[0]).toBe(owner.id);
+  });
 
   it.each([false, true])('resolves implicit aliases using the eligible default source (session=%s)', (actualRoute) => {
     const gateway = { ...provider, id: 'xd', models: { codex: [{ id: 'gpt-6', name: 'Gateway GPT' }] } };

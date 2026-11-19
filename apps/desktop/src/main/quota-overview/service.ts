@@ -10,8 +10,10 @@
  * Rebuilds are debounced and coalesced. They run on usage broadcasts, running-task
  * transitions, settings and locale changes and a slow timer. A panel on screen
  * (`setInteractive`) shortens every cadence and asks each subscription reader to refresh.
- * Everything here reads caches Cindy already keeps; the only extra network calls are the
- * Cindy balance (at most once a minute), other computers and Codex reset credits.
+ * Subscription pools reuse their runtime's cached, coalesced account reads; other local
+ * usage comes from existing caches. Additional reads cover the Cindy balance (at most once
+ * a minute), other computers, received shares the sharer lets this account see, and Codex
+ * reset credits.
  */
 
 import { isSessionActivityRunning } from '@cindy/maker-shared/session-activity';
@@ -30,14 +32,17 @@ import type {
 } from '../../shared/menubarQuota.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { providerWeeklyQuotaSource } from '../../shared/providerQuotaSource.js';
+import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getAppCapabilities, requireAppCapability } from '../appCapabilities.js';
-import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 import * as authManager from '../authManager.js';
 import { projectModelAccessBalance, projectModelAccessCreditUsage } from '../billing/projection.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
+import { getReceivedShares, onProviderShareReceivedChanged, providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
+import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.desktop.js';
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
@@ -57,6 +62,8 @@ import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { observeClaudeAccountUsage, readClaudeAccountUsageRevision, readClaudeAccountUsageSnapshot, triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { readUsageHistory, type UsageHistoryPayload } from '../usage/usageHistory.js';
+import { onSubscriptionAccountsChanged, readSubscriptionPool, refreshSubscriptionPool } from '../subscription-accounts/runtime.js';
+import { readPool } from '../subscription-accounts/store.js';
 import { observeUsageChanges, readCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 import { CreditSampleStore, estimateDailyBurn, largestCreditSample } from '../menubar/creditSamples.js';
 import {
@@ -70,10 +77,12 @@ import { MENUBAR_HARNESS_LOGOS } from '../menubar/logos.js';
 import { OwnedInFlight } from '../menubar/ownedInFlight.js';
 import { readRemoteSubscriptions, retainRemoteSubscriptions, type RemoteSeen } from '../menubar/remoteSubscriptions.js';
 import { readMenubarSettings, writeMenubarSettings } from '../menubar/settingsStore.js';
+import { SharedQuotaReader } from '../menubar/sharedSubscriptions.js';
 import {
   buildMenubarView,
   type MenubarBuildInput,
   type MenubarResetCredits,
+  type MenubarSourceInput,
   type MenubarSubscriptionInput,
 } from '../menubar/snapshot.js';
 import { buildMenubarUiStrings, createMenubarTranslate } from '../menubar/strings.js';
@@ -170,6 +179,10 @@ export class QuotaOverviewService {
   private remoteSeen: TimedCache<Map<string, RemoteSeen>> | null = null;
   private readonly remoteInFlight = new OwnedInFlight<MenubarSubscriptionInput[]>();
   private readonly resets = new Map<string, TimedCache<MenubarResetCredits | null>>();
+  /** Received shares' quotas, read only through each share's own authorization. */
+  private sharedReader: SharedQuotaReader | null = null;
+  /** The reader's latest result and the owner generation it was read for. */
+  private shared: { scope: string; sources: MenubarSubscriptionInput[] } | null = null;
 
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
   private remoteRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -178,6 +191,7 @@ export class QuotaOverviewService {
   private rebuildQueued = false;
   private forceNext = false;
   private staleFollowUps = 0;
+  private accountsRevision = 0;
   private disposers: (() => void)[] = [];
 
   get settings(): MenubarSettings {
@@ -236,10 +250,16 @@ export class QuotaOverviewService {
     this.updateRunning();
   }
 
-  /** A panel is on screen: shorter cadences, and opening it refreshes every source. */
-  setInteractive(open: boolean): void {
+  /**
+   * A panel is on screen: shorter cadences, and opening it refreshes every source. A panel that
+   * opens on mere hover passes `refresh: false` when it refreshed a moment ago; the rebuild then
+   * re-reads only what has outlived its while-open cadence.
+   */
+  setInteractive(open: boolean, refresh = true): void {
     this.interactive = open;
-    if (open) this.refresh(false);
+    this.sharedReader?.repace();
+    if (open && refresh) this.refresh(false);
+    else if (open) this.scheduleRebuild(0);
   }
 
   /** Locale or presentation changed; rebuild from the caches. */
@@ -247,8 +267,25 @@ export class QuotaOverviewService {
     this.scheduleRebuild(0);
   }
 
-  /** A recent settled build, building one if needed; resolves with whatever exists after `timeoutMs`. */
+  /**
+   * A recent settled build, building one if needed; resolves with whatever exists after `timeoutMs`.
+   * Received shares are read apart from the collection, so the same wait also covers the share batch
+   * in flight (the first one when collection has just started) rather than answering without it.
+   */
   async fresh(timeoutMs: number): Promise<QuotaOverviewBuild | null> {
+    const deadline = Date.now() + timeoutMs;
+    const build = await this.freshCollection(timeoutMs);
+    const shared = this.sharedReader?.settled();
+    const remaining = deadline - Date.now();
+    if (!build || !shared || remaining <= 0) return build;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([shared, new Promise<void>((resolve) => { timer = setTimeout(resolve, remaining); })]);
+    clearTimeout(timer);
+    // The share batch republishes the build it lands in; an owner switch meanwhile yields nothing.
+    return this.currentBuild();
+  }
+
+  private async freshCollection(timeoutMs: number): Promise<QuotaOverviewBuild | null> {
     const build = this.currentBuild();
     if (build && !build.stale && Date.now() - build.builtAtMs < FRESH_BUILD_MS) return build;
     if (!this.started) return null;
@@ -269,6 +306,8 @@ export class QuotaOverviewService {
   /** Asks every subscription reader to refresh; their broadcasts trigger the rebuild. */
   refresh(force: boolean): void {
     if (!this.started) return;
+    // Received shares refresh through their own reader; same-identity calls join its read.
+    this.sharedReader?.refresh();
     // Behind the sign-in gate nothing is read, so there is nothing to refresh either.
     if (!hasDataOwner()) {
       this.scheduleRebuild(0, force);
@@ -279,6 +318,10 @@ export class QuotaOverviewService {
       .then((providers) => {
         for (const provider of providers) {
           if (!provider.connected || provider.suspended || provider.removed) continue;
+          // Pool reads below own their refresh; the legacy readers update a
+          // different cache and may refer to a migrated provider alias.
+          if (provider.subscriptionPoolAlias || provider.subscriptionPool || provider.subscriptionAccountPool
+            || (isSubscriptionProvider(provider.id) && readPool(provider.id))) continue;
           const kind = providerWeeklyQuotaSource(provider);
           if (kind === 'codex') triggerCodexAccountUsageRefresh(provider.id);
           else if (kind === 'claude') triggerClaudeSubscriptionUsageRefresh(provider.id);
@@ -302,6 +345,10 @@ export class QuotaOverviewService {
     this.usageOwnerId = getActiveAppSession().dataOwnerId;
     this.disposers.push(
       observeUsageChanges(() => this.scheduleRebuild()),
+      onSubscriptionAccountsChanged(() => {
+        this.accountsRevision += 1;
+        this.scheduleRebuild();
+      }),
       observeClaudeAccountUsage(() => {
         if (!this.balanceAccountKey()?.startsWith('quota:')) return;
         this.balance = null;
@@ -332,6 +379,22 @@ export class QuotaOverviewService {
       );
     }
     this.periodicTimer = setInterval(() => this.scheduleRebuild(), PERIODIC_REBUILD_MS);
+    this.sharedReader ??= new SharedQuotaReader({
+      scope: sharedQuotaScope,
+      shares: getReceivedShares,
+      accessEpoch: providerShareAccessEpoch,
+      read: readReceivedProviderShareQuota,
+      subscribe: (changed) => {
+        const offShares = onProviderShareReceivedChanged(changed);
+        const offAuth = authManager.onAuthStateChange(changed);
+        const offSession = onAppSessionInvalidated(changed);
+        return () => { offShares(); offAuth(); offSession(); };
+      },
+      publish: (sources) => this.updateShared(sources),
+      // Same cadence as the user's other computers: both are background device-link reads.
+      pollMs: () => (this.interactive ? REMOTE_FRESH_WHILE_OPEN_MS : REMOTE_FRESH_WHILE_CLOSED_MS),
+    });
+    this.sharedReader.setOpen(true);
     this.scheduleRebuild(0);
   }
 
@@ -352,10 +415,45 @@ export class QuotaOverviewService {
     if (this.remoteRetryTimer) clearTimeout(this.remoteRetryTimer);
     this.remoteRetryTimer = null;
     this.interactive = false;
+    this.sharedReader?.setOpen(false);
+    this.shared = null;
     this.lastBuild = null;
     this.usageCache.clear();
     this.remote = null;
     this.resets.clear();
+  }
+
+  /**
+   * A share was read, revoked, refused or its window expired: show it now from the last build
+   * rather than waiting for a full collection, so a removed quota disappears at once.
+   */
+  private updateShared(sources: MenubarSubscriptionInput[]): void {
+    const scope = sharedQuotaScope();
+    this.shared = scope ? { scope, sources } : null;
+    if (!this.started) return;
+    const build = this.currentBuild();
+    if (!build || build.input.gate) return;
+    this.publish({
+      sources: build.input.sources.filter((source) => !isSharedSource(source)),
+      tasks: build.input.tasks,
+      usage: build.usage,
+      updatedAtMs: build.input.updatedAtMs,
+    }, Date.now(), build.stale);
+  }
+
+  /** Received shares for the current owner, labelled in the panel's language. */
+  private sharedSources(t: MenubarBuildInput['t']): MenubarSubscriptionInput[] {
+    const shared = this.shared;
+    if (!shared || shared.scope !== sharedQuotaScope()) return [];
+    return shared.sources.map((source) => ({
+      ...source,
+      plan: t(source.shared?.highestWeekly ? 'shared.highestWeekly' : 'shared.label'),
+      shared: {
+        ...source.shared,
+        label: source.shared?.label ?? source.brand,
+        note: t(source.shared?.highestWeekly ? 'shared.highestWeeklyNote' : 'shared.note'),
+      },
+    }));
   }
 
   private scheduleRebuild(delayMs = REBUILD_DEBOUNCE_MS, force = false): void {
@@ -413,11 +511,13 @@ export class QuotaOverviewService {
 
   private async collectAndPublish(nowMs: number, force: boolean, markStale: () => void): Promise<void> {
     const generation = getActiveAppSession().generation;
+    const accountsRevision = this.accountsRevision;
     const quotaRevision = readClaudeAccountUsageRevision();
     let stale = false;
     const collected = await collectMenubarInputs({
       nowMs,
       listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
+      readSubscriptionPool: (providerId) => force ? refreshSubscriptionPool(providerId, true) : readSubscriptionPool(providerId),
       readKimi: (providerId) => readKimiCodingAccountUsage({ providerId, forceRefresh: force }),
       readOpenCodeGo: (providerId) => readOpenCodeGoAccountUsage({ providerId, forceRefresh: force }),
       readCodex: (providerId) => readCodexAccountUsageSnapshot(providerId),
@@ -454,7 +554,7 @@ export class QuotaOverviewService {
     // An owner switch that started during the reads makes them the old owner's data.
     const after = getActiveAppSession();
     if (!this.started || isAppSessionBoundaryPending() || after.generation !== generation) return;
-    if (readClaudeAccountUsageRevision() !== quotaRevision) {
+    if (readClaudeAccountUsageRevision() !== quotaRevision || this.accountsRevision !== accountsRevision) {
       this.scheduleRebuild(0);
       return;
     }
@@ -464,18 +564,20 @@ export class QuotaOverviewService {
   private publish(collected: MenubarCollected, nowMs: number, stale: boolean, gate?: MenubarGate): void {
     const locale = getResolvedMainLocale();
     const raw = (key: string) => rawMainString(key, locale);
+    const t = createMenubarTranslate(locale, raw);
     const input: MenubarBuildInput = {
       nowMs,
       locale,
       moneySymbol: currentLedgerCurrency() === 'CNY' ? '¥' : '$',
       settings: this.currentSettings,
-      sources: collected.sources,
+      // Shares have no disclosed account identity, so they are never merged with other accounts.
+      sources: gate ? collected.sources : [...collected.sources, ...this.sharedSources(t)],
       tasks: collected.tasks,
       usage: collected.usage,
       updatedAtMs: collected.updatedAtMs,
       harnessLogos: MENUBAR_HARNESS_LOGOS,
       uiStrings: buildMenubarUiStrings(mainStringKeysUnder('menubar.ui'), raw, locale),
-      t: createMenubarTranslate(locale, raw),
+      t,
       ...(gate ? { gate } : {}),
     };
     const build: QuotaOverviewBuild = { view: buildMenubarView(input), input, usage: collected.usage, stale, builtAtMs: Date.now(), ownerId: getActiveAppSession().dataOwnerId };
@@ -708,6 +810,16 @@ export async function readUsageWidgetSnapshot(): Promise<MobileUsageWidgetSnapsh
   const series = build.usage.scopes[build.view.settings.scope]?.modelSeries;
   const snapshot = buildUsageWidgetSnapshot(build.view, Date.now(), key => rawMainString(key, locale), series);
   return snapshot ? { ok: true, snapshot } : { ok: false, reason: 'unavailable' };
+}
+
+/** Owner generation a share reading belongs to; null while there is none or it is changing. */
+function sharedQuotaScope(): string | null {
+  const session = getActiveAppSession();
+  return isAppSessionBoundaryPending() || !session.dataOwnerId ? null : `${session.dataOwnerId}:${session.generation}`;
+}
+
+function isSharedSource(source: MenubarSourceInput): boolean {
+  return source.kind === 'subscription' && !!source.shared;
 }
 
 /** Signed in or sign-in skipped: there is an owner whose data may be read. */

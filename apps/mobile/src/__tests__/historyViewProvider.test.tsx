@@ -15,12 +15,19 @@ import {
 } from '@cindy/device-link';
 import { isHistoryViewUnavailable } from '@cindy/maker-shared/message-window';
 import { DeviceLinkProvider, useDeviceLink, type DeviceLinkContextValue } from '../device-link/DeviceLinkContext';
-import { waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
+import { setMobileAgentNetPreferences, waitForMobileAgentNetPreferences } from '../device-link/agentNetPreferences';
 // Platform process lifecycle is covered in fileWebViewTermination.test.tsx.
 const directTransport = vi.hoisted(() => ({ enabled: false, owner: '' }));
 vi.mock('../device-link/DirectLinkTransport', () => ({ DirectLinkTransport: (props: typeof directTransport) => {
   Object.assign(directTransport, props); return null;
 } }));
+const peerSession = vi.hoisted(() => ({ current: null as null | {
+  closedReason: null; open: ReturnType<typeof vi.fn>; request: ReturnType<typeof vi.fn>;
+} }));
+vi.mock('../device-link/agentNetRuntime', async original => ({
+  ...await original<typeof import('../device-link/agentNetRuntime')>(),
+  mobileAgentNetSession: (peer: string) => peer === 'host' ? peerSession.current : null,
+}));
 // The existing V1 provider path has no Agent-Net binary or OS notification bridge.
 vi.mock('../../modules/cindy-agent-net/src', () => ({ agentNetNative: null }));
 vi.mock('@/notifications/nativeNotifications', () => ({ default: {} }));
@@ -107,6 +114,12 @@ const transport = vi.hoisted(() => {
     notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
     getConnectionIssue = () => null;
+    getConnectionEpoch = () => 1;
+    needsLinkRecovery = () => false;
+    getReliableSendQueueDepth = () => 0;
+    onPeerRouteStateChanged = () => () => {};
+    onPeerStreamAccepted = () => () => {};
+    onInboundPeerReleased = () => () => {};
     hasOnlineConnection = () => this.status === 'online' || this.separate?.status === 'online';
     separate: Client | null = null;
     scopedPeers = new Set<string>();
@@ -533,6 +546,30 @@ describe('Provider retained foreground direct paths', () => {
     expect(context.getPresenceAvailability('host')).toBe(false);
     expect(directTransport.enabled).toBe(false);
     expect(client.restartConnection).not.toHaveBeenCalled();
+  });
+
+  /** 测试价值：手机自己的中继断线后直连也断开，不是电脑离线的证据。
+   * 生产入口：Provider 的 onPeerPathChanged → getPresenceAvailability / invoke。
+   * Bug 依据：2026-11-16 回到 App 或网络抖动时电脑被标成离线、请求按 DEVICE_OFFLINE 失败，
+   * 稍后才恢复。覆盖缺口：上一条只覆盖中继已明确通知离线的情况。
+   * 最小失败输入：中继 connecting、未收到离线 presence、直连回落 relay。tier：unit。 */
+  it('does not declare the computer offline when the phone loses its relay and then the direct path', async () => {
+    const client = transport.clients[0];
+    client.openLink.mockResolvedValue(accepted(supported));
+    scopedPeer = 'host';
+    await act(async () => { render(); await context.invoke('host', historyChannel); });
+    await act(async () => {
+      client.retainedPeers.add('host');
+      client.status = 'connecting'; client.statusChanged('connecting');
+    });
+    expect(scopedContext.status).toBe('online');
+    await act(async () => { client.retainedPeers.clear(); client.peerPath({ deviceId: 'host', path: 'relay' }); });
+    expect(scopedContext.status).toBe('connecting');
+    expect(context.getPresenceAvailability('host')).not.toBe(false);
+    expect(directTransport.enabled).toBe(false);
+    // The request waits for the phone's own reconnect instead of blaming the computer.
+    const { result } = await readHistory();
+    expect(await result).toMatchObject({ code: 'NOT_CONNECTED' });
   });
 
   it('keeps a disabled verdict across relay restart and masked offline presence until online enabled', async () => {
@@ -1308,6 +1345,35 @@ describe('Provider network recovery priority', () => {
     else expect(client.notifyNetworkChanged).not.toHaveBeenCalled();
     expect(client.stop).not.toHaveBeenCalled();
   });
+});
+
+// Production Provider, real session router and a fake peer. A background stay
+// longer than the grace period used to disable session routing until remount.
+// Unit tier. Existing Provider lifecycle cases exercise the legacy route only.
+it('uses the new session after a background suspension with Agent-Net enabled', async () => {
+  vi.useFakeTimers();
+  try {
+    await act(async () => { await setMobileAgentNetPreferences({ enabled: true }); });
+    const client = transport.clients.at(-1)!;
+    client.openLink.mockResolvedValue(accepted(supported));
+    await act(async () => {
+      networkEvents.state = 'background';
+      networkEvents.app('background');
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    expect(client.stop).toHaveBeenCalled();
+    const session = { closedReason: null, open: vi.fn(async () => accepted(supported)),
+      request: vi.fn(async () => ({ ok: true, result: { ok: true, result: 'after foreground' } })) };
+    peerSession.current = session;
+    await act(async () => { networkEvents.state = 'active'; networkEvents.app('active'); });
+    await expect((await readHistory()).result).resolves.toBe('after foreground');
+    expect(session.request).toHaveBeenCalled();
+    expect(client.invoke).not.toHaveBeenCalled();
+  } finally {
+    peerSession.current = null;
+    await act(async () => { await setMobileAgentNetPreferences({ enabled: false }); });
+    vi.useRealTimers();
+  }
 });
 
 describe('Provider history handshake lifetime', () => {

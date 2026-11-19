@@ -6,7 +6,8 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
-import { DownloadMeter } from '@/components/settings/DownloadMeter';
+import { DownloadMeter } from '@/components/ui/download-meter';
+import { initialDownloadProgress } from '../../../shared/downloadProgress';
 import type { GithubSetupState } from '../../../shared/githubSetup';
 
 const isRunning = (phase: GithubSetupState['phase']) =>
@@ -130,7 +131,7 @@ export function GithubSetupDialog({
         : state.phase;
   const description =
     stage === 'error'
-      ? copy('errors.' + (state.error ?? 'login'))
+      ? copy(state.error === 'network' ? 'account.network' : 'errors.' + (state.error ?? 'login'))
       : copy('stages.' + stage + '.description');
   const readyToAuthorize = stage === 'authorizing' && Boolean(state.userCode);
   const completed = stage === 'connected';
@@ -166,8 +167,11 @@ export function GithubSetupDialog({
           <Dialog.Description className="text-13 leading-relaxed text-[var(--confirm-desc)]">
             {description}
           </Dialog.Description>
-          {stage === 'downloading' && (
-            <DownloadMeter progress={{ label: 'GitHub CLI', percent: state.percent }} />
+          {(stage === 'downloading' || (stage === 'installing' && state.download)) && (
+            <DownloadMeter
+              label="GitHub CLI"
+              progress={state.download ?? initialDownloadProgress('downloading')}
+            />
           )}
           {readyToAuthorize && (
             <div className="flex flex-col gap-3">
@@ -184,7 +188,7 @@ export function GithubSetupDialog({
                       type="button"
                       onClick={() => void copyCode()}
                       aria-label={copyLabel}
-                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+                      className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     >
                       {copiedCode === state.userCode ? <Check size={16} /> : <Copy size={16} />}
                     </button>

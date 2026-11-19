@@ -66,6 +66,11 @@ type VoiceInputCaptureSessionOptions = {
   elapsedMs?: () => number;
 };
 
+function hasNonZeroSample(pcm: ArrayBuffer): boolean {
+  if (pcm.byteLength % 2 !== 0) return true;
+  return new Int16Array(pcm).some((sample) => sample !== 0);
+}
+
 function message(label: string, text: string): string {
   return label ? `${label} ${text}` : text;
 }
@@ -76,6 +81,7 @@ export async function startVoiceInputCaptureSession(
   const pendingChunks: PcmChunk[] = [];
   let pendingOverflowWarnedAt = 0;
   let firstChunkLogged = false;
+  let nonSilentChunkLogged = false;
   let captureReady = false;
   let soundDetected = false;
   let engine: WebMicAudioEngine;
@@ -99,6 +105,13 @@ export async function startVoiceInputCaptureSession(
       if (!firstChunkLogged) {
         firstChunkLogged = true;
         options.timeline?.mark('first_pcm');
+      }
+      // A microphone can hand back a stream well before its hardware delivers
+      // samples: until then every frame is exact digital silence. first_pcm
+      // alone therefore overstates how early speech is really being captured.
+      if (!nonSilentChunkLogged && options.timeline && hasNonZeroSample(chunk.pcm16k)) {
+        nonSilentChunkLogged = true;
+        options.timeline.mark('first_nonsilent_pcm');
       }
       if (!options.getRunId()) {
         if (pendingChunks.length >= MAX_PENDING_AUDIO_CHUNKS) {

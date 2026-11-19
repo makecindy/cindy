@@ -110,6 +110,7 @@ export function isLaneTurnScopeChannel(channel: string): channel is LaneTurnScop
 
 export interface IMessageToolScope {
   channel: 'imessage';
+  readArchive?: (query: string | undefined, before: number | undefined, limit: number) => Promise<unknown>;
   im: Pick<BlueBubblesIM, 'sendText' | 'sendFile' | 'readHistory' | 'listChats' | 'health'>;
   botId: string;
   laneUserId: string;
@@ -165,4 +166,38 @@ export function readChannelToolScope(args: {
 /** 测试/进程级 teardown;生产授权仍必须通过租约 release 收口。 */
 export function resetChannelToolScopeForTests(): void {
   activeBySession.clear();
+  replyMediaBySession.clear();
+}
+
+/** Output-only lease: deliberately separate from requester / channel API authority. */
+export type TelegramReplyMediaScope = Pick<TelegramToolScope, 'im' | 'laneUserId'> & {
+  /** Present for replies continuing a specific requester's question. */
+  requesterIsOwner?: boolean;
+};
+const replyMediaBySession = new Map<string, {
+  sessionInstanceId: string;
+  scope: TelegramReplyMediaScope;
+  isActive: () => boolean;
+}>();
+
+export function beginTelegramReplyMediaScope(args: {
+  sessionId: string;
+  sessionInstanceId: string;
+  scope: TelegramReplyMediaScope;
+  isActive: () => boolean;
+}): () => void {
+  if (!args.sessionId || !args.sessionInstanceId) throw new Error('reply media scope requires a live session instance');
+  replyMediaBySession.set(args.sessionId, args);
+  return () => {
+    if (replyMediaBySession.get(args.sessionId) === args) replyMediaBySession.delete(args.sessionId);
+  };
+}
+
+export function readTelegramReplyMediaScope(args: {
+  sessionId?: string;
+  sessionInstanceId?: string;
+}): TelegramReplyMediaScope | null {
+  if (!args.sessionId || !args.sessionInstanceId) return null;
+  const entry = replyMediaBySession.get(args.sessionId);
+  return entry && entry.sessionInstanceId === args.sessionInstanceId && entry.isActive() ? entry.scope : null;
 }

@@ -43,7 +43,8 @@ export function ExtraDirsButton({
   open,
   onOpenChange,
   panel,
-  maxContentHeight,
+  // 默认聊天沿用建议面板原来的 400px 上限；新建任务页可传更小值。
+  maxContentHeight = 400,
   disabled,
   dense = false,
   visualVariant = 'default',
@@ -60,7 +61,10 @@ export function ExtraDirsButton({
       maxContentHeight={maxContentHeight}
       panelClassName="p-0"
       panelAriaLabel={t('extraDirs.menuAria')}
-      wrapperClassName="shrink-0"
+      wrapperClassName={cn(
+        'max-w-full shrink',
+        count > 0 && hasReferenceDirs ? 'min-w-[36px]' : 'min-w-[30px]',
+      )}
       trigger={
         <Tip
           text={count === 0 ? t('extraDirs.tooltipEmpty') : t('extraDirs.tooltipCount', { count })}
@@ -76,15 +80,13 @@ export function ExtraDirsButton({
             data-composer-suggestion-trigger
             className={cn(
               'flex h-[30px] shrink-0 items-center rounded-full border border-transparent',
-              'bg-transparent text-[var(--composer-pill-icon,#3C3F43)]',
-              'transition-colors dark:text-[var(--composer-pill-icon,#D9D9D9)]',
-              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg,#FCFCFC)]',
-              'dark:hover:bg-[var(--composer-pill-bg,#393838)]',
+              'bg-transparent text-[var(--composer-pill-icon)] transition-colors',
+              'hover:border-[var(--border-default)] hover:bg-[var(--composer-pill-bg)]',
               'disabled:cursor-not-allowed disabled:opacity-50',
               open &&
-                'border-[var(--border-default)] bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
+                'border-[var(--border-default)] bg-[var(--composer-pill-bg)]',
               count > 0 && hasReferenceDirs
-                ? 'min-w-max justify-center gap-1 px-2.5'
+                ? 'min-w-[36px] max-w-full shrink justify-center gap-1 overflow-hidden px-2.5'
                 : 'w-[30px] justify-center p-0',
             )}
             aria-label={t('extraDirs.menuAria')}
@@ -93,7 +95,7 @@ export function ExtraDirsButton({
             {count > 0 && hasReferenceDirs && (
               <span
                 className={cn(
-                  'font-normal tabular-nums',
+                  'min-w-0 truncate font-normal tabular-nums',
                   dense ? 'text-12' : 'text-13',
                 )}
               >

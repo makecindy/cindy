@@ -11,8 +11,30 @@ const host = vi.hoisted(() => ({ packaged: false, endpoint: 'http://127.0.0.1:43
 vi.mock('electron', () => ({ app: { get isPackaged() { return host.packaged; } } }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => host.endpoint }));
 vi.mock('../../downloader/http', () => ({ requestResponse: fetchMock }));
+// Exercise the real retry controller and attempt limits without waiting for network backoff.
+vi.mock('../../downloader/retry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../downloader/retry')>();
+  const withRetry: typeof actual.withRetry = (operation, options) =>
+    actual.withRetry(operation, { ...options, config: { ...options.config, baseDelayMs: 0 } });
+  return { ...actual, withRetry };
+});
 
 import { downloadVerifiedPlugin } from '../download';
+
+const realSetTimeout = globalThis.setTimeout;
+/** Fake-time driver for retrying downloads: lets real file I/O finish between timer steps. */
+async function settle(result: Promise<unknown>, maxMs: number): Promise<void> {
+  let done = false;
+  void result.then(
+    () => (done = true),
+    () => (done = true),
+  );
+  for (let elapsed = 0; elapsed < maxMs && !done; elapsed += 2_500) {
+    await vi.advanceTimersByTimeAsync(2_500);
+    await new Promise((resolve) => realSetTimeout(resolve, 1));
+  }
+  await result;
+}
 
 const files: string[] = [];
 beforeEach(() => { host.packaged = false; host.endpoint = 'http://127.0.0.1:43340'; });
@@ -79,8 +101,9 @@ describe('downloadVerifiedPlugin', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('allows the exact archive limit to reach the download boundary', async () => {
-    fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
+  // Retry decision 2026-11-17: market packages get up to 3 tries instead of failing on one blip.
+  it('allows the exact archive limit to reach the download boundary and retries a busy server', async () => {
+    fetchMock.mockImplementation(async () => new Response(null, { status: 503 }));
     await expect(
       downloadVerifiedPlugin(
         'https://downloads.example.test/a',
@@ -91,7 +114,17 @@ describe('downloadVerifiedPlugin', () => {
         target(),
       ),
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_FAILED' });
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('recovers when a retry succeeds', async () => {
+    const bytes = Buffer.from('fixture');
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(bytes));
+    const file = target();
+    await downloadVerifiedPlugin('https://downloads.example.test/a', expected(bytes), file);
+    expect(fs.readFileSync(file).equals(bytes)).toBe(true);
   });
 
   it.each([0, -1, NaN, 1.5])('rejects invalid release size %s', async (sizeBytes) => {
@@ -157,8 +190,8 @@ describe('downloadVerifiedPlugin', () => {
       downloadVerifiedPlugin('https://downloads.example.test/a', expected(Buffer.from('a')), file),
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_TIMEOUT' });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(60_000);
-    await result;
+    // Each try waits 60s for headers; retries stop at the 120s total budget.
+    await settle(result, 125_000);
     expect(fs.existsSync(file)).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -190,8 +223,7 @@ describe('downloadVerifiedPlugin', () => {
       downloadVerifiedPlugin('https://downloads.example.test/a', expected(Buffer.from('ab')), file),
     ).rejects.toMatchObject({ code: 'GHOST_DOWNLOAD_TIMEOUT' });
     await vi.waitFor(() => expect(pulls).toBe(2));
-    await vi.advanceTimersByTimeAsync(60_000);
-    await result;
+    await settle(result, 125_000);
     expect(fs.existsSync(file)).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });

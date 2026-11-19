@@ -48,7 +48,7 @@ const SUPPORTED_TEXT_EXTS = new Set([
   '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java',
   '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh', '.cs', '.rb', '.php',
   '.swift', '.kt', '.kts', '.scala', '.groovy', '.coffee',
-  '.lua', '.dart', '.r', '.pl', '.pm', '.ex', '.exs', '.elm',
+  '.sol', '.lua', '.dart', '.r', '.pl', '.pm', '.ex', '.exs', '.elm',
   '.clj', '.cljs', '.cljc', '.fs', '.fsi', '.fsx', '.ml', '.mli',
   '.hs', '.erl', '.hrl', '.zig', '.nim', '.vim', '.applescript',
   '.sh', '.bash', '.zsh', '.fish', '.ps1', '.psm1', '.bat', '.cmd',
@@ -64,6 +64,15 @@ const SUPPORTED_TEXT_EXTS = new Set([
   '.srt', '.vtt',
   '.po', '.pot',
   '.sln', '.csproj', '.vbproj', '.fsproj', '.gemspec', '.podspec', '.cabal',
+  // .NET project/configuration sources and related schema formats (text only).
+  '.vbhtml', '.vb', '.csx', '.cake', '.linq', '.props',
+  '.targets', '.slnx', '.slnf', '.config', '.resx', '.settings',
+  '.manifest', '.nuspec', '.runsettings', '.globalconfig', '.http', '.rest',
+  '.xaml', '.axaml', '.resw', '.rdlc', '.rdl', '.pubxml',
+  '.ruleset', '.dotsettings', '.testsettings', '.filters', '.gql', '.graphqls',
+  '.psd1', '.ps1xml', '.psql', '.bicep', '.fbs', '.thrift',
+  '.capnp', '.avsc', '.csproj.user', '.fsproj.user', '.vbproj.user',
+  '.razor', '.cshtml',
   '.sql', '.graphql', '.proto', '.dockerfile',
   '.rss', '.atom',
   '.gitignore', '.gitattributes', '.gitconfig', '.gitmodules', '.gitkeep',
@@ -74,7 +83,7 @@ const SUPPORTED_TEXT_EXTS = new Set([
   '.nvmrc', '.node-version', '.python-version', '.ruby-version', '.tool-versions',
 ]);
 
-const COMPOUND_EXTS = ['.env.example', '.env.local', '.env.development', '.env.production'];
+const COMPOUND_EXTS = ['.env.example', '.env.local', '.env.development', '.env.production', '.csproj.user', '.fsproj.user', '.vbproj.user'];
 const KNOWN_TEXT_FILENAMES = new Set([
   'dockerfile',
   'makefile',

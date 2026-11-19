@@ -876,6 +876,25 @@ export function catalogSurfaces() {
       rendererEntryModules: { regionScreenshotPin: './region-screenshot-pin-entry' },
     },
     {
+      id: 'desktop.window.quota-tray',
+      platform: 'desktop',
+      title: 'Windows 托盘额度卡片',
+      productionEntry: '`?quotaTray=1` → renderer/quota-tray-entry.tsx（不走 router.tsx）',
+      reachableComponents: ['QuotaTray'],
+      // 卡片与 macOS 菜单栏面板共用 quotaPanelDesign 的尺寸和颜色，不加载 globals.css。
+      styleRoots: [
+        'apps/desktop/src/renderer/quota-tray-entry.tsx',
+        'apps/desktop/src/renderer/quota-tray-panel.tsx',
+        'apps/desktop/src/renderer/quota-tray-pages.tsx',
+        'apps/desktop/src/renderer/quota-tray-tube.tsx',
+        'apps/desktop/src/renderer/styles/quota-tray.css',
+        'apps/desktop/src/shared/quotaPanelDesign.ts',
+        'apps/desktop/src/main/quota-overview/windowsPanel.ts',
+      ],
+      routerPaths: [],
+      rendererEntryModules: { quotaTray: './quota-tray-entry' },
+    },
+    {
       id: 'desktop.window.remote-desktop',
       platform: 'desktop',
       title: '远程桌面独立窗口',
@@ -1511,7 +1530,7 @@ export function compareGenerated(existingMarkdown, nextGeneratedBlock) {
  * files are not surfaces. New route files require an explicit family assignment. */
 export function mobileCatalogSurfaces() {
   const rows = [
-    ['home', '主机与资源首页', ['index.tsx', 'devices/index.tsx']],
+    ['home', '主机与资源首页；用量概览', ['index.tsx', 'devices/index.tsx', 'usage.tsx']],
     ['devices', '主机详情', ['devices/[deviceId].tsx']],
     ['device-management', '设备管理', ['devices/manage.tsx', 'devices/manage/[deviceId].tsx']],
     ['remote-desktop', '远程桌面', ['devices/desktop/[deviceId].tsx']],
@@ -1556,6 +1575,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     ['splash-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED preview; not production UI'],
     ['group-execution-preview.tsx', 'MOBILE_VISUAL_MOCK_ENABLED group execution fixture; not production UI'],
     ['plugin-management-preview.tsx', 'gated plugin settings visual fixture; not production UI'],
+    ['plugin-preview-regression.tsx', 'MOBILE_VISUAL_MOCK_ENABLED card preview fixture; not production UI'],
     ['listperf.tsx', '__DEV__ list performance harness; not production UI'],
   ]);
   const owners = new Map(catalog.flatMap(s => (s.mobileRoutes ?? []).map(r => [r, s.id])));
@@ -1565,7 +1585,7 @@ export function mobileRouteCoverage(repoRoot, catalog = mobileCatalogSurfaces())
     const source = stripJsComments(fs.readFileSync(path.join(repoRoot, ...file.split('/')), 'utf8'));
     if (excluded.has(route)) {
       // Keep dev exclusions honest: removing their gate cannot silently hide a screen.
-      if ((route === 'splash-preview.tsx' || route === 'group-execution-preview.tsx') &&
+      if ((route === 'splash-preview.tsx' || route === 'group-execution-preview.tsx' || route === 'plugin-preview-regression.tsx') &&
         !source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED)')) missing.push(file);
       if (route === 'plugin-management-preview.tsx' &&
         (!source.includes('if (!MOBILE_VISUAL_MOCK_ENABLED && !demosEnabled)') ||

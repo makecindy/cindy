@@ -14,6 +14,7 @@ import { getPendingQueueRowPresentation } from '../new-chat/pendingQueueRowPrese
 import { UserMessage } from './UserMessage';
 
 export interface PendingQueueBubbleProps {
+  pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   entry: QueuedMessage;
   /** Owning task: remote images in a device-linked task resolve through it. */
   sessionId?: string;
@@ -34,6 +35,7 @@ export interface PendingQueueBubbleProps {
 
 /** Same full-content bubble as delivered input, with mobile's single queue menu. */
 export function PendingQueueBubble({
+  pluginUi,
   entry,
   sessionId,
   index,
@@ -85,16 +87,15 @@ export function PendingQueueBubble({
       : presentation.isPlugin
         ? t('newChat.pendingQueue.pluginSenderFallback')
         : null);
+  // Plugin attribution can also be stamped by an edit of a composer item. Its
+  // chatMessage already has the display body, including ranges for UserMessage.
   const body = presentation.isSyntheticTrigger
     ? t(
         presentation.syntheticKind === 'continue'
           ? 'newChat.pendingQueue.syntheticContinueLabel'
           : 'newChat.pendingQueue.syntheticTriggerLabel',
       )
-    : presentation.isOrca ||
-        presentation.isScheduler ||
-        presentation.isSession ||
-        presentation.isPlugin
+    : presentation.isOrca || presentation.isScheduler || presentation.isSession
       ? (presentation.rangedSourceText ?? presentation.displayText)
       : entry.chatMessage.content;
   const status = (
@@ -185,6 +186,7 @@ export function PendingQueueBubble({
         <div className="mb-1 text-right text-12 text-[var(--text-secondary)]">{senderLabel}</div>
       )}
       <UserMessage
+        pluginUi={pluginUi}
         {...entry.chatMessage}
         {...(presentation.isSyntheticTrigger
           ? {

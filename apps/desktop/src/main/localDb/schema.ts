@@ -179,6 +179,8 @@ export const sessions = sqliteTable(
     planModeEnabled: integer('plan_mode_enabled', { mode: 'boolean' }).notNull().default(false),
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
+    snoozedUntil: integer('snoozed_until'), // unix ms; presentation only
+    snoozedAt: integer('snoozed_at'), // host time of the explicit snooze
     /**
      * 后台隐藏时刻（unix ms）。非 NULL = 插件以 `agent.hiddenTasks` 声明创建或切换为
      * 隐藏的后台任务：不进入任务列表、搜索、未结束提示与新任务通知；用户仍可在插件
@@ -966,6 +968,16 @@ export const messages = sqliteTable(
   }),
 );
 
+export const mcpAppViewStates = sqliteTable('mcp_app_view_states', {
+  messageId: text('message_id').primaryKey().references(() => messages.id, { onDelete: 'cascade' }),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  serverId: text('server_id').notNull(),
+  serverRevision: text('server_revision').notNull(),
+  pluginInstance: text('plugin_instance'),
+  stateJson: text('state_json').notNull(),
+  byteLength: integer('byte_length').notNull(),
+}, t => ({ bySession: index('idx_mcp_app_view_states_session').on(t.sessionId) }));
+
 /**
  * messages_fts 的稳定整数行号映射。
  *
@@ -1555,6 +1567,7 @@ export const schedules = sqliteTable(
      * exit 0 放行 / exit 2 跳过本轮(run 记 'skipped') / 其它、超时阻止本轮并记 failed。
      * 内存对象里与 timeout 合成 `Schedule.preRunHook` 嵌套对象(同 notify 的拆列模式)。
      */
+    prTrigger: text('pr_trigger'),
     preRunHookCommand: text('pre_run_hook_command'),
     /** 前置检查脚本超时毫秒。NULL = 不限时。仅 command 非空时有意义。 */
     preRunHookTimeoutMs: integer('pre_run_hook_timeout_ms'),
@@ -1916,6 +1929,22 @@ export const dailySpend = sqliteTable(
   }),
 );
 
+/** Auxiliary requests are independent of task turns and retain their own attribution. */
+export const auxiliaryUsageReceipts = sqliteTable('auxiliary_usage_receipts', {
+  receiptId: text('receipt_id').primaryKey(),
+  providerId: text('provider_id').notNull(),
+  model: text('model').notNull(),
+  source: text('source').notNull(),
+  sessionId: text('session_id'),
+  transport: text('transport').notNull(),
+  day: text('day').notNull(),
+  recordedAt: integer('recorded_at').notNull(),
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  cacheReadTokens: integer('cache_read_tokens'),
+  cacheCreateTokens: integer('cache_create_tokens'),
+}, t => ({ dayIndex: index('auxiliary_usage_receipts_day_idx').on(t.day) }));
+
 /** Immutable request receipts; insertion and aggregate increments share one transaction. */
 export const piUsageReceipts = sqliteTable('pi_usage_receipts', {
   sessionId: text('session_id').notNull(),
@@ -2222,7 +2251,7 @@ export const rightSidebarTabs = sqliteTable(
  * 覆盖写(队列空则删行),重启后打开会话时懒恢复为「暂停中的队列」。
  *
  * 设计要点:
- *   - payload 是 `AgentInputQueuedMessage[]` 的 JSON.stringify;读侧逐条做形状
+ *   - payload 是排队消息与可选 Main 停止元数据组成的 JSON 数组；读侧逐条做形状
  *     校验,坏行整体丢弃(尽力而为的恢复信号,不做跨版本迁移)。
  *   - 单行覆盖写而非逐条行:队列通常只有个位数条目,整体快照避免"逐条 CRUD 与
  *     内存态漂移"一族一致性问题;体量上限与超限降级在写入模块做。
@@ -2232,7 +2261,7 @@ export const agentInputQueueSnapshots = sqliteTable('agent_input_queue_snapshots
   sessionId: text('session_id')
     .primaryKey()
     .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
-  /** AgentInputQueuedMessage[] 的 JSON 字符串。 */
+  /** 队列消息与可选 Main 停止元数据的 JSON 数组；元数据不是消息。 */
   payload: text('payload').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
@@ -2501,7 +2530,8 @@ export const sessionTaskTags = sqliteTable(
 export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   id: text('id').primaryKey(),
   pluginId: text('plugin_id').notNull(),
-  operation: text('operation', { enum: ['create', 'send', 'target'] }).notNull(),
+  // imPermission: a looser IM-project permission the user allowed in Cindy (TypeScript-only enum).
+  operation: text('operation', { enum: ['create', 'send', 'target', 'imPermission'] }).notNull(),
   targetId: text('target_id').notNull(),
   requestKey: text('request_key').notNull(),
   fingerprint: text('fingerprint').notNull(),

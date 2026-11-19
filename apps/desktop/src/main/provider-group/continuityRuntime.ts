@@ -66,6 +66,7 @@ export function createGroupContinuityRuntime(readRunning: () => Promise<Readonly
       assertOwner();
       const provider = providers.find(candidate => candidate.id === grant.providerId);
       const found = provider ? findCatalogModel(provider, grant.model, grant.agentKind) : null;
+      // 续用只发给同账号控制端(grant 不收受邀者)，与直接启动任务用同一条判断。
       if (!provider?.connected || provider.suspended || !isRemoteProviderInvocationAllowed(grant.providerId)
         || !found || !isModelSelectableForNewRoute(found, { userProvider: provider.source === 'user' })) {
         throw new Error('[ACCESS_REVOKED] The executor no longer offers this provider/model');

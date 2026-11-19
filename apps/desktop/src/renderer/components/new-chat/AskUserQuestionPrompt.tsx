@@ -1,5 +1,6 @@
 import { askAnswerError, askQuestionOptions, answerKey } from "@cindy/maker-shared";
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Spinner } from '@/components/ui/spinner';
 /**
  * AskUserQuestionPrompt
@@ -46,10 +47,12 @@ import { formatVoiceInputShortcut, isVoiceInputShortcutMatch } from '@/voice-inp
 import { createComposerLongPressVoiceGesture, isComposerLongPressVoiceReady } from '@/voice-input/composerLongPressGesture';
 import { nextAskUserVoiceShortcutOrder, registerAskUserVoiceShortcutCard } from './askUserVoiceShortcutOwner';
 import { CreateAgentSendIcon } from './SendButton';
+import { useAnswerComposerExpanded } from './useAnswerComposerExpanded';
 import { useAskUserDictation } from './useAskUserDictation';
 import { parseVoiceQuestionSelection, type VoiceQuestionBridge, type VoiceQuestionTarget } from './voiceQuestionSelection';
 
 const ASK_USER_ANSWER_MAX_HEIGHT_PX = 148;
+const askAnswerMaxHeight = () => ASK_USER_ANSWER_MAX_HEIGHT_PX;
 
 interface AutoGrowingAnswerTextareaProps extends Omit<
   TextareaHTMLAttributes<HTMLTextAreaElement>,
@@ -343,6 +346,7 @@ function AskUserQuestionForm({
   // mount order is the order in which cards appeared.
   const [voiceShortcutOrder] = useState(nextAskUserVoiceShortcutOrder);
   const answerValue = dictation.liveText ?? customInput;
+  const composerExpanded = useAnswerComposerExpanded(inputRef, answerValue, askAnswerMaxHeight);
   const voiceShortcutLabel = formatVoiceInputShortcut(getVoiceInputSettings().shortcut);
   const voiceProcessing = dictation.state === 'submitting' || dictation.state === 'refining';
   const voiceButtonLabel = voiceProcessing ? voiceSubmitLabel : dictation.isBusy
@@ -987,7 +991,13 @@ function AskUserQuestionForm({
     options.length > 0 && !currentQ?.answerConstraints?.choices ? (
       <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
         {showCustomInput ? (
-          <div data-testid="interaction-answer-composer" className="flex w-full min-w-0 flex-col gap-2 p-3">
+          <div
+            data-testid="interaction-answer-composer"
+            className={cn(
+              'flex w-full min-w-0 gap-2',
+              composerExpanded ? 'flex-col p-3' : 'items-end px-[16px] py-[8px]',
+            )}
+          >
             <AutoGrowingAnswerTextarea
               textareaRef={inputRef}
               voice={voiceBridge ? undefined : dictation}
@@ -1012,15 +1022,16 @@ function AskUserQuestionForm({
               }}
               placeholder={t('chat.askUserQuestion.answerPlaceholder')}
               className={cn(
-                'min-h-[44px] w-full min-w-0 bg-transparent text-14 font-normal leading-[1.571] outline-none',
+                'min-h-[22px] min-w-0 bg-transparent text-14 font-normal leading-[1.571] outline-none',
+                // One line beside the 32px actions; centred on them by the margin.
+                composerExpanded ? 'w-full' : 'my-[5px] flex-1',
                 'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
                 'select-text',
               )}
             />
-            {/* Voice and submit stay in one bottom-pinned cluster: as the answer
-                grows, both keep the same center line instead of the mic drifting
-                up to the top of the box. */}
-            <div className="flex w-full items-center justify-end gap-2">
+            {/* Voice and submit stay in one cluster: beside a single-line answer,
+                then below the full-width text once it wraps. */}
+            <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
               {!voiceBridge && (<AskUserVoiceButton
                 size="md"
                 label={voiceButtonLabel}
@@ -1073,7 +1084,15 @@ function AskUserQuestionForm({
               onClick={handleCustomOptionClick}
             >
               {isMultiSelect && (
-                <div className="h-[18px] w-[18px] shrink-0 rounded-[4px] border-[1.5px] border-[var(--ask-checkbox-border)]" />
+                // Visual cue only, aligned with the option checkboxes above: the row
+                // button opens the answer field, so this box takes no focus or clicks.
+                <Checkbox
+                  checked={false}
+                  readOnly
+                  tabIndex={-1}
+                  aria-hidden
+                  className="pointer-events-none"
+                />
               )}
               <span className="text-14 italic text-[var(--ask-option-custom)]">
                 {t('chat.askUserQuestion.customAnswer')}
@@ -1171,68 +1190,66 @@ function AskUserQuestionForm({
         {/* Options Container */}
         {options.length > 0 && (
           <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
-            {options.map((opt, idx) => (
-              <div key={opt.label}>
-                {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
-                <button
-                  type="button"
-                  disabled={voiceLocked}
-                  className={cn(
-                    'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
-                    'transition-colors hover:bg-[var(--ask-option-hover)]',
-                    // Highlight selected option when revisiting single-select via Back
-                    !isMultiSelect &&
-                      existingAnswer === opt.label &&
-                      'bg-[var(--ask-option-hover)]',
-                  )}
-                  onClick={() =>
-                    isMultiSelect ? handleToggle(opt.label) : handleSingleSelect(opt.label)
-                  }
-                >
-                  <div className="flex items-center gap-3">
-                    {/* Checkbox for multi-select */}
-                    {isMultiSelect && (
-                      <div
-                        className={cn(
-                          'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
-                          selectedLabels.has(opt.label)
-                            ? 'bg-[var(--ask-checkbox-checked-bg)]'
-                            : 'border-[1.5px] border-[var(--ask-checkbox-border)]',
-                        )}
-                      >
-                        {selectedLabels.has(opt.label) && (
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="var(--ask-checkbox-checked-icon)"
-                            strokeWidth="3"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="text-14 font-medium text-[var(--ask-option-label)]">
-                        {opt.label}
-                      </div>
-                      {opt.description && (
-                        <div className="mt-1 text-13 text-[var(--ask-option-desc)]">
-                          {opt.description}
-                        </div>
-                      )}
+            {options.map((opt, idx) => {
+              const rowClassName = cn(
+                'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
+                'transition-colors hover:bg-[var(--ask-option-hover)]',
+              );
+              const optionText = (
+                <div className="min-w-0 flex-1">
+                  <div className="text-14 font-medium text-[var(--ask-option-label)]">
+                    {opt.label}
+                  </div>
+                  {opt.description && (
+                    <div className="mt-1 text-13 text-[var(--ask-option-desc)]">
+                      {opt.description}
                     </div>
-                  </div>
-                  <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
-                    {idx + 1}
-                  </div>
-                </button>
-              </div>
-            ))}
+                  )}
+                </div>
+              );
+              const numberBadge = (
+                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
+                  {idx + 1}
+                </div>
+              );
+              return (
+                <div key={opt.label}>
+                  {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
+                  {isMultiSelect ? (
+                    // Multi-select rows are real checkboxes (shared Checkbox, DESIGN.md §4);
+                    // the label keeps the whole row clickable.
+                    <label
+                      className={cn(rowClassName, voiceLocked ? 'cursor-not-allowed' : 'cursor-pointer')}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Checkbox
+                          checked={selectedLabels.has(opt.label)}
+                          disabled={voiceLocked}
+                          onChange={() => handleToggle(opt.label)}
+                          className="disabled:opacity-100"
+                        />
+                        {optionText}
+                      </div>
+                      {numberBadge}
+                    </label>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={voiceLocked}
+                      className={cn(
+                        rowClassName,
+                        // Highlight selected option when revisiting single-select via Back
+                        existingAnswer === opt.label && 'bg-[var(--ask-option-hover)]',
+                      )}
+                      onClick={() => handleSingleSelect(opt.label)}
+                    >
+                      <div className="flex items-center gap-3">{optionText}</div>
+                      {numberBadge}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -1240,7 +1257,13 @@ function AskUserQuestionForm({
 
         {/* Free-text input when no options */}
         {options.length === 0 && (
-          <div data-testid="interaction-answer-composer" className="flex w-full min-w-0 flex-col gap-2 rounded-[8px] border border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] p-3 focus-within:border-[var(--chat-input-border-focus)]">
+          <div
+            data-testid="interaction-answer-composer"
+            className={cn(
+              'flex w-full min-w-0 gap-2 rounded-[8px] border border-[var(--ask-input-border)] bg-[var(--ask-input-bg)] focus-within:border-[var(--chat-input-border-focus)]',
+              composerExpanded ? 'flex-col p-3' : 'items-end py-2 pl-3 pr-2',
+            )}
+          >
             <AutoGrowingAnswerTextarea
               textareaRef={inputRef}
               voice={voiceBridge ? undefined : dictation}
@@ -1262,12 +1285,13 @@ function AskUserQuestionForm({
               placeholder={t('chat.askUserQuestion.answerPlaceholder')}
               autoFocus
               className={cn(
-                'min-h-[44px] w-full min-w-0 bg-transparent text-14 leading-[1.571] outline-none',
+                'min-h-[22px] min-w-0 bg-transparent text-14 leading-[1.571] outline-none',
+                composerExpanded ? 'w-full' : 'my-[5px] flex-1',
                 'text-[var(--ask-input-text)]',
                 'placeholder:text-[var(--ask-input-placeholder)]',
               )}
             />
-            <div className="flex w-full items-center justify-end gap-2">
+            <div className={cn('flex items-center justify-end gap-2', composerExpanded ? 'w-full' : 'shrink-0')}>
               {!voiceBridge && (<AskUserVoiceButton
                 size="md"
                 label={voiceButtonLabel}

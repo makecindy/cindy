@@ -27,8 +27,19 @@ export const USAGE_LIMIT_RESUME_JITTER_MS = 30_000;
 export const USAGE_LIMIT_MAX_WAIT_MS = 8 * 24 * 60 * 60 * 1000;
 /** 两次实质产出之间最多自动继续几次。 */
 export const USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES = 3;
+/**
+ * 同一供应商里另一个账号此刻能接时不等重置(与供应商组撞上限立即换电脑一致)：短暂停顿后续跑，
+ * 续跑的发送前检查换到那个账号。
+ */
+export const USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS = 2_000;
 
 export type UsageLimitContinueOutcome = 'resumed' | 'superseded' | 'no-progress' | 'capacity-wait';
+
+/** Host-only evidence for this error, never persisted or read from provider signals. */
+export interface UsageLimitRecoveryOptions {
+  /** The group already checked accounts without changing the task's route/runtime. */
+  accountSwitchChecked?: true;
+}
 
 export interface UsageLimitAutoResumeDeps {
   now(): number;
@@ -39,6 +50,8 @@ export interface UsageLimitAutoResumeDeps {
   isEligible(sessionId: string): Promise<boolean>;
   /** 会话所用账号的重置时刻（unix ms）：结构化错误 → 订阅窗口 → 报错原文；拿不到为 null。 */
   resolveResetAt(sessionId: string, signals: InterruptedTurnErrorSignals): Promise<number | null>;
+  /** 同一供应商里另一个订阅账号此刻能接这个任务：不等重置，短暂停顿后续跑并在发送前换号。 */
+  canSwitchAccount?(sessionId: string): Promise<boolean>;
   /** 用终态错误时 coordinator 下发的候选令牌挂上等待；false = 那次错误已不是当前状态。 */
   arm(sessionId: string, token: number, resumeAt: number): boolean;
   isCurrent(sessionId: string, token: number): boolean;
@@ -71,6 +84,7 @@ export class UsageLimitAutoResume {
     sessionId: string,
     signals: InterruptedTurnErrorSignals,
     candidateToken: number,
+    options: UsageLimitRecoveryOptions = {},
   ): Promise<boolean> {
     if (this.disposed || !isAccountUsageLimitError(signals)) return false;
     const used = this.consecutive.get(sessionId) ?? 0;
@@ -81,7 +95,7 @@ export class UsageLimitAutoResume {
     }
     const generation = this.bumpGeneration(sessionId);
     try {
-      const armed = await this.schedule(sessionId, signals, candidateToken, generation);
+      const armed = await this.schedule(sessionId, signals, candidateToken, generation, options);
       if (!armed) this.deps.cancel(sessionId, candidateToken);
       return armed;
     } catch (err) {
@@ -105,12 +119,17 @@ export class UsageLimitAutoResume {
     signals: InterruptedTurnErrorSignals,
     token: number,
     generation: number,
+    options: UsageLimitRecoveryOptions,
   ): Promise<boolean> {
     if (!(await this.deps.isEligible(sessionId))) return false;
-    const resetAt = await this.deps.resolveResetAt(sessionId, signals);
+    // A group-verified limit already covers every member; only an ordinary account task switches here.
+    const switchAccount = signals.providerGroupUsageLimit === undefined
+      && !options.accountSwitchChecked
+      && (await this.deps.canSwitchAccount?.(sessionId).catch(() => false) ?? false);
+    const resetAt = switchAccount ? null : await this.deps.resolveResetAt(sessionId, signals);
     if (this.disposed || this.generations.get(sessionId) !== generation) return false;
     const now = this.deps.now();
-    if (resetAt === null || resetAt - now > USAGE_LIMIT_MAX_WAIT_MS) {
+    if (!switchAccount && (resetAt === null || resetAt - now > USAGE_LIMIT_MAX_WAIT_MS)) {
       this.deps.log('usage-limit auto-resume skipped: no usable reset time', {
         sessionId,
         hasResetAt: resetAt !== null,
@@ -118,10 +137,11 @@ export class UsageLimitAutoResume {
       return false;
     }
     // 已过点（错误到达时额度刚好重置）也按最短缓冲继续。
-    const resumeAt =
-      Math.max(resetAt, now) +
-      USAGE_LIMIT_RESUME_BUFFER_MS +
-      Math.floor(this.deps.random() * USAGE_LIMIT_RESUME_JITTER_MS);
+    const resumeAt = switchAccount || resetAt === null
+      ? now + USAGE_LIMIT_ACCOUNT_SWITCH_DELAY_MS
+      : Math.max(resetAt, now) +
+        USAGE_LIMIT_RESUME_BUFFER_MS +
+        Math.floor(this.deps.random() * USAGE_LIMIT_RESUME_JITTER_MS);
     if (!this.deps.arm(sessionId, token, resumeAt)) return false;
     if (this.deps.saveWait && !await this.deps.saveWait(sessionId, token, resumeAt, this.consecutive.get(sessionId) ?? 0, signals.providerGroupUsageLimit !== undefined)) return false;
     if (this.disposed || this.generations.get(sessionId) !== generation || !this.deps.isCurrent(sessionId, token)) return false;

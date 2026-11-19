@@ -69,7 +69,6 @@ export function ProviderImportFileButton({ onImported }: { onImported: (id: stri
         {t('settings.providers.import.fromFile')}
       </Button>
       <ConfirmDialog
-        presentation="standard"
         open={open}
         onOpenChange={(next) => { if (!busyRef.current) setOpen(next); }}
         maxWidth={560}
@@ -93,14 +92,14 @@ export function ProviderImportFileButton({ onImported }: { onImported: (id: stri
                     <a
                       href={`data:application/json;charset=utf-8,${encodeURIComponent(PROVIDER_IMPORT_EXAMPLE_JSON)}`}
                       download="cindy-provider-example.json"
-                      className="inline-flex min-h-9 items-center gap-1.5 text-13 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring-soft)]"
+                      className="inline-flex min-h-9 items-center gap-1.5 text-13 underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                     >
                       <Download size={15} aria-hidden="true" />
                       {t('settings.providers.import.downloadExample')}
                     </a>
                     <a href={`data:application/json;charset=utf-8,${encodeURIComponent(PROVIDER_IMPORT_BATCH_EXAMPLE_JSON)}`}
                       download="cindy-providers-example.json"
-                      className="inline-flex min-h-9 items-center gap-1.5 text-13 underline underline-offset-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring-soft)]">
+                      className="inline-flex min-h-9 items-center gap-1.5 text-13 underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
                       <Download size={15} aria-hidden="true" />{t('settings.providers.import.downloadBatchExample')}
                     </a>
                     </div>
@@ -318,7 +317,6 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
   return (
     <>
       <ConfirmDialog
-        presentation="standard"
         open={busyCount === null}
         maxWidth={600}
         onOpenChange={(open) => {
@@ -430,7 +428,6 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
         }
       />
       <ConfirmDialog
-        presentation="standard"
         open={busyCount !== null}
         zIndex={10002}
         onOpenChange={(open) => {
@@ -450,7 +447,7 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
   );
 }
 
-type BatchStatus = 'loading' | 'ready' | 'saving' | 'saved' | 'modelsPending' | 'failed' | 'manual' | 'invalid' | 'skipped' | 'authorizationPending';
+type BatchStatus = 'loading' | 'ready' | 'saving' | 'saved' | 'modelsPending' | 'failed' | 'manual' | 'invalid' | 'skipped' | 'authorizationPending' | 'sourceChanged';
 interface BatchRow {
   id: string;
   preview?: ProviderImportPreview;
@@ -535,8 +532,8 @@ export function ProviderImportBatchDialog({ importIds, onClose, onDone }: {
             lastSavedId.current = result.providerId;
             patchRow(row.id, { status: result.modelsPending ? 'modelsPending' : 'saved', selected: false });
           } else patchRow(row.id, { status: 'manual', selected: false });
-        } catch {
-          if (alive.current) patchRow(row.id, { status: 'failed' });
+        } catch (error) {
+          if (alive.current) patchRow(row.id, { status: row.preview?.localSource && extractIpcError(error)?.code === 'PRECONDITION_FAILED' ? 'sourceChanged' : 'failed', ...(row.preview?.localSource && extractIpcError(error)?.code === 'PRECONDITION_FAILED' ? { selected: false } : {}) });
         } finally {
           if (!alive.current) void window.electronAPI.maker.cancelProviderImport(row.id).catch(() => undefined);
         }
@@ -555,7 +552,6 @@ export function ProviderImportBatchDialog({ importIds, onClose, onDone }: {
   />;
 
   return <ConfirmDialog
-    presentation="standard"
     open
     maxWidth={600}
     title={t('settings.providers.import.batchTitle', { count: rows.length })}
@@ -593,7 +589,7 @@ export function ProviderImportBatchDialog({ importIds, onClose, onDone }: {
               {runtime.headerNames.length > 0 && <p>{t('settings.providers.import.headers', { names: runtime.headerNames.join(', ') })}</p>}
             </div>)}
           </>}
-          {row.status !== 'ready' && <p className="text-[var(--text-secondary)]" role="status">{t(`settings.providers.import.batchStatus.${row.status}`)}</p>}
+          {row.status !== 'ready' && <p className="text-[var(--text-secondary)]" role="status">{t(row.status === 'sourceChanged' ? 'settings.providers.import.local.status.changed' : `settings.providers.import.batchStatus.${row.status}`)}</p>}
         </li>)}
       </ul>
     </div>}

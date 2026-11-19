@@ -11,9 +11,13 @@
  *
  * 项目 vitest env=node,无 window。这里用 vi.stubGlobal 注入最小 localStorage
  * 实现,避免新增 jsdom/happy-dom 依赖。
+ *
+ * 模块只加载一次:每例用 __reloadForTest 从新的空 localStorage 复位;「app 重启」
+ * 同样用它从持久值重新加载。两个 Electron renderer 的场景另用一个文件开始时加载的
+ * 独立模块实例(secondWindow),两者只共享 localStorage。
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 class MemLocalStorage {
   private store = new Map<string, string>();
@@ -31,17 +35,58 @@ class MemLocalStorage {
   }
 }
 
-let memStorage: MemLocalStorage;
+type DraftModule = typeof import('@/state/newMakerDraft');
+
+let memStorage = new MemLocalStorage();
+const storageListeners: Array<(event: StorageEvent) => void> = [];
+const testWindow = {
+  localStorage: memStorage,
+  addEventListener(type: string, listener: EventListenerOrEventListenerObject) {
+    if (type === 'storage' && typeof listener === 'function') {
+      storageListeners.push(listener as (event: StorageEvent) => void);
+    }
+  },
+  removeEventListener() {},
+};
+let engineFollow: typeof import('../features/cc-agent/remoteDraftEngineFollow');
+let draftStore: DraftModule;
+let secondWindow: DraftModule;
+let onStorage: ((event: StorageEvent) => void) | undefined;
+
+beforeAll(async () => {
+  vi.stubGlobal('window', testWindow);
+  vi.stubGlobal('localStorage', memStorage);
+  secondWindow = await import('@/state/newMakerDraft');
+  // reset-modules: 第二个 renderer 窗口需要独立的模块内存,只在文件开始时加载一次
+  vi.resetModules();
+  storageListeners.length = 0;
+  draftStore = await import('@/state/newMakerDraft');
+  engineFollow = await import('../features/cc-agent/remoteDraftEngineFollow');
+  onStorage = storageListeners.at(-1);
+});
 
 beforeEach(() => {
   memStorage = new MemLocalStorage();
-  vi.stubGlobal('window', { localStorage: memStorage });
+  testWindow.localStorage = memStorage;
   vi.stubGlobal('localStorage', memStorage);
-  vi.resetModules();
+  draftStore.__reloadForTest();
+  engineFollow.resetRemoteDraftEngineFollow();
 });
 
 async function loadModule() {
-  return await import('@/state/newMakerDraft');
+  return draftStore;
+}
+
+/** 模拟 app 重启:丢弃内存态,从 localStorage 重新加载。 */
+async function reloadModule() {
+  draftStore.__reloadForTest();
+  return draftStore;
+}
+
+/** 另一个 renderer 窗口此刻打开:独立内存,从共享 localStorage 加载。 */
+async function openSecondWindow() {
+  secondWindow.__reloadForTest();
+  return secondWindow;
 }
 
 describe('newMakerDraft store', () => {
@@ -93,8 +138,7 @@ describe('newMakerDraft store', () => {
     });
     expect(getDraft().modelChosenByVendor.codex).toBeUndefined();
 
-    vi.resetModules();
-    const reloaded = await loadModule();
+    const reloaded = await reloadModule();
     expect(reloaded.getDraft().defaultTupleCustomized).toBe(false);
   });
 
@@ -161,7 +205,7 @@ describe('newMakerDraft store', () => {
     expect(getDraft().vendor).toBe('cc');
     sources.push({ ...sources[0]!, id: 'openai', agents: ['codex'],
       access: { kind: 'subscription', product: 'ChatGPT' },
-      models: { codex: [{ id: 'gpt-6.1-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
+      models: { codex: [{ id: 'gpt-6.2-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
     });
     expect(applySuggestedDefaultTuple(resolve())).toBe(!customized);
     const draft = getDraft();
@@ -240,8 +284,7 @@ describe('newMakerDraft store', () => {
         }),
       ).toBe(true);
 
-      vi.resetModules();
-      const reloaded = await loadModule();
+      const reloaded = await reloadModule();
       expect(reloaded.getDraft()).toMatchObject({
         defaultTupleCustomized: false,
         effortByModel: {},
@@ -292,8 +335,7 @@ describe('newMakerDraft store', () => {
       { vendor: 'cc', fastModeByModel: { 'claude-opus-5': true } },
     ]) {
       memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify(saved));
-      vi.resetModules();
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       expect(getDraft().defaultTupleCustomized).toBe(true);
     }
   });
@@ -303,8 +345,7 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'cc', lastByVendor: { cc: { model: 'claude-opus-4-8' } } }),
     );
-    vi.resetModules();
-    const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+    const { applySuggestedDefaultTuple, getDraft } = await reloadModule();
     expect(getDraft().defaultTupleCustomized).toBe(true);
     expect(
       applySuggestedDefaultTuple({
@@ -338,8 +379,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+    const { applySuggestedDefaultTuple, getDraft } = await reloadModule();
     expect(getDraft()).toMatchObject({
       vendor: 'cc',
       defaultTupleCustomized: true,
@@ -371,8 +411,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+    const { applySuggestedDefaultTuple, getDraft } = await reloadModule();
     expect(getDraft().defaultTupleCustomized).toBe(false);
     expect(
       applySuggestedDefaultTuple({
@@ -402,8 +441,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft()).toMatchObject({
       defaultTupleCustomized: false,
       defaultTupleSelectionCustomized: false,
@@ -420,8 +458,7 @@ describe('newMakerDraft store', () => {
         lastByVendor: { cc: { model: 'claude-opus-4-8' } },
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft()).toMatchObject({
       defaultTupleCustomized: true,
       defaultTupleSelectionCustomized: true,
@@ -443,8 +480,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { clearDefaultTupleTuningCustomization, getDraft } = await loadModule();
+    const { clearDefaultTupleTuningCustomization, getDraft } = await reloadModule();
     expect(getDraft()).toMatchObject({
       defaultTupleCustomized: true,
       defaultTupleSelectionCustomized: false,
@@ -470,8 +506,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { clearDefaultTupleTuningCustomization, getDraft } = await loadModule();
+    const { clearDefaultTupleTuningCustomization, getDraft } = await reloadModule();
     expect(getDraft()).toMatchObject({
       defaultTupleCustomized: true,
       defaultTupleSelectionCustomized: true,
@@ -486,8 +521,7 @@ describe('newMakerDraft store', () => {
   it('旧版系统可用性 fallback 不迁移成用户自定义', async () => {
     for (const vendor of ['codex', 'pi'] as const) {
       memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
-      vi.resetModules();
-      const { applySuggestedDefaultTuple, getDraft } = await loadModule();
+      const { applySuggestedDefaultTuple, getDraft } = await reloadModule();
       expect(getDraft().defaultTupleCustomized).toBe(false);
       expect(
         applySuggestedDefaultTuple({
@@ -533,8 +567,7 @@ describe('newMakerDraft store', () => {
   it('persists an explicit Pi model choice across reload', async () => {
     const m1 = await loadModule();
     m1.patchVendorPrefs('pi', { model: 'chatgpt/gpt-5.6' });
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().modelChosenByVendor.pi).toBe(true);
     expect(m2.getPersistedVendorModel('pi')).toBe('chatgpt/gpt-5.6');
   });
@@ -557,8 +590,7 @@ describe('newMakerDraft store', () => {
     expect(m1.getEffortForModel('claude-opus-4-7')).toBe('xhigh');
 
     // 模拟 app 重启 → 仍按模型恢复
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getEffortForModel('claude-opus-4-7')).toBe('xhigh');
     expect(m2.getEffortForModel('claude-haiku-4-5')).toBe('low');
     expect(m2.getEffortForModel('not-recorded')).toBeUndefined();
@@ -569,8 +601,7 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'cc' /* 无 effortByModel */ }),
     );
-    vi.resetModules();
-    const { getDraft, getEffortForModel } = await loadModule();
+    const { getDraft, getEffortForModel } = await reloadModule();
     expect(getDraft().effortByModel).toEqual({});
     expect(getEffortForModel('claude-opus-4-7')).toBeUndefined();
   });
@@ -588,8 +619,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft().effortByModel).toEqual({ 'claude-opus-4-7': 'high' });
   });
 
@@ -600,8 +630,7 @@ describe('newMakerDraft store', () => {
     expect(memStorage.getItem(m1.__STORAGE_KEY)).not.toBeNull();
 
     // 模拟"app 重启"——重置 module cache,重新 import 后从 localStorage 恢复
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().workingDir).toBe('E:/projects/foo');
   });
 
@@ -612,8 +641,7 @@ describe('newMakerDraft store', () => {
     expect(m1.getDraft().extraDirs).toEqual(['E:/projects/shared-lib']);
 
     // 模拟 app 重启 → workingDir 等偏好保留,extraDirs 清空(sanitize 一律置空)
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().workingDir).toBe('E:/projects/foo');
     expect(m2.getDraft().extraDirs).toEqual([]);
   });
@@ -641,8 +669,7 @@ describe('newMakerDraft store', () => {
     // 模拟 app 重启:耐久选择(role/model/effort/fast)恢复,一次性任务不复活——
     // 否则重启后 Send 会静默把过期任务当 delegateTask 派给 Worker,而收起态
     // pill 无从看见/编辑。
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     const wc = m2.getDraft().collab.workerConfig;
     expect(wc).toMatchObject({
       role: 'developer',
@@ -706,8 +733,7 @@ describe('newMakerDraft store', () => {
         workingDir: 'E:/projects/foo/.xdt-worktrees/auto-abc/src',
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft().workingDir).toBe('E:/projects/foo');
   });
 
@@ -744,8 +770,7 @@ describe('newMakerDraft store', () => {
     m1.switchVendor('codex');
     expect(m1.getDraft().vendor).toBe('codex');
 
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().vendor).toBe('codex');
   });
 
@@ -753,8 +778,7 @@ describe('newMakerDraft store', () => {
     const { SELECTABLE_VENDORS } = await import('@/lib/agentVendors');
     for (const vendor of SELECTABLE_VENDORS) {
       memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
-      vi.resetModules();
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       // 逐个写死白名单时,新上线的引擎在这里会被静默重置回 'cc' —— 用户选中后重启就丢。
       expect(getDraft().vendor).toBe(vendor);
     }
@@ -763,8 +787,7 @@ describe('newMakerDraft store', () => {
   it("sanitize:表外的引擎值(历史 'orca' / 未知 / 非字符串)回退默认", async () => {
     for (const vendor of ['orca', 'unknown-engine', '', 42, null]) {
       memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
-      vi.resetModules();
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       expect(getDraft().vendor).toBe('cc');
     }
   });
@@ -805,10 +828,22 @@ describe('newMakerDraft store', () => {
     expect(m1.getPersistedVendorModel('codex')).toBe('');
 
     // 模拟 app 重启 → 标记与值都恢复
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getDraft().modelChosenByVendor).toEqual({ cc: true });
     expect(m2.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
+  });
+
+  it('restores the remotely selected engine and model on the next draft', async () => {
+    const store = await loadModule();
+    store.patchVendorPrefs('codex', { model: 'old-model' });
+    store.switchVendor('pi');
+    store.patchVendorPrefs('codex', { model: 'chosen-model', providerId: 'chosen-source' }, { selectVendor: true });
+    store.patchVendorPrefsPreservingModelChoice('codex', { model: 'old-model', effort: 'high' });
+
+    const reopened = (await reloadModule()).getDraft();
+    expect(reopened.vendor).toBe('codex');
+    expect(reopened.lastByVendor.codex).toMatchObject({ model: 'chosen-model', providerId: 'chosen-source' });
+    expect(reopened.modelChosenByVendor.codex).toBe(true);
   });
 
   it('patchVendorPrefsFromTaskModelSwitch:新建默认在另一个来源上时,任务内只换模型不改写', async () => {
@@ -1158,16 +1193,14 @@ describe('newMakerDraft store', () => {
     const m1 = await loadModule();
     m1.setFastModeForModel('gpt-5.5', true);
 
-    vi.resetModules();
-    const m2 = await loadModule();
+    const m2 = await reloadModule();
     expect(m2.getFastModeForModel('gpt-5.5')).toBe(true);
     expect(m2.getFastModeForModel('claude-opus-4-7')).toBe(false);
   });
 
   it('schema 损坏的 localStorage 入参 → 静默回退默认,不抛错', async () => {
     memStorage.setItem('xdt:newMakerDraft:v1', '{"vendor":"unknown","oops":true,broken json');
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     const d = getDraft();
     expect(d.vendor).toBe('cc');
     expect(d.workingDir).toBeNull();
@@ -1184,8 +1217,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     const d = getDraft();
     // legacy 'plan' 档 → planMode 开关 + 回落该 vendor 默认权限档(与 DB 迁移同语义)
     expect(d.lastByVendor.cc.permissionMode).toBe('auto');
@@ -1200,8 +1232,7 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'codex' /* workingDir / lastByVendor 都缺 */ }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     const d = getDraft();
     expect(d.vendor).toBe('codex');
     expect(d.workingDir).toBeNull();
@@ -1225,8 +1256,7 @@ describe('newMakerDraft store', () => {
         wtBaseRepo: '/x',
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     const d = getDraft();
     expect(d).not.toHaveProperty('wtEnabled');
     expect(d).not.toHaveProperty('wtName');
@@ -1237,18 +1267,16 @@ describe('newMakerDraft store', () => {
 
   it('schema:worktree 偏好以显式 override 持久化,脏值/缺字段跟随系统默认', async () => {
     // 勾选记忆是「工作端一份」的显式 override:专用 setter 写入 → 重载后恢复。
-    vi.resetModules();
     {
-      const { getDraft, setWorktreePreference } = await loadModule();
+      const { getDraft, setWorktreePreference } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(false); // 出厂默认不勾选(防误操作)
       expect(getDraft().worktreePreferenceCustomized).toBe(false);
       setWorktreePreference(true);
       expect(getDraft().worktreeEnabled).toBe(true);
       expect(getDraft().worktreePreferenceCustomized).toBe(true);
     }
-    vi.resetModules();
     {
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(true);
       expect(getDraft().worktreePreferenceCustomized).toBe(true);
     }
@@ -1257,17 +1285,15 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'cc', worktreeEnabled: 'yes' }),
     );
-    vi.resetModules();
     {
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(false);
       expect(getDraft().worktreePreferenceCustomized).toBe(false);
     }
   });
 
   it('通用草稿 patch 不能改动 worktree 偏好', async () => {
-    vi.resetModules();
-    const { getDraft, patchDraft, setWorktreePreference } = await loadModule();
+    const { getDraft, patchDraft, setWorktreePreference } = await reloadModule();
 
     patchDraft({ worktreeEnabled: true, worktreePreferenceCustomized: true });
     expect(getDraft().worktreeEnabled).toBe(false);
@@ -1284,9 +1310,8 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'cc', worktreeEnabled: false }),
     );
-    vi.resetModules();
     {
-      const { getDraft, patchDraft } = await loadModule();
+      const { getDraft, patchDraft } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(false);
       expect(getDraft().worktreePreferenceCustomized).toBe(false);
       patchDraft({ workingDir: '/projects/default-following' });
@@ -1302,9 +1327,8 @@ describe('newMakerDraft store', () => {
       'xdt:newMakerDraft:v1',
       JSON.stringify({ vendor: 'cc', worktreeEnabled: true }),
     );
-    vi.resetModules();
     {
-      const { getDraft } = await loadModule();
+      const { getDraft } = await reloadModule();
       expect(getDraft().worktreeEnabled).toBe(true);
       expect(getDraft().worktreePreferenceCustomized).toBe(true);
     }
@@ -1319,8 +1343,7 @@ describe('newMakerDraft store', () => {
         worktreePreferenceCustomized: false,
       }),
     );
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft().worktreeEnabled).toBe(false);
     expect(getDraft().worktreePreferenceCustomized).toBe(false);
   });
@@ -1328,8 +1351,7 @@ describe('newMakerDraft store', () => {
   it('附属窗口的过期草稿写入不会覆盖另一个窗口刚保存的 worktree 偏好', async () => {
     // 两次 import 模拟两个 Electron renderer:模块内存独立,localStorage 共享。
     const staleWindow = await loadModule();
-    vi.resetModules();
-    const activeWindow = await loadModule();
+    const activeWindow = await openSecondWindow();
 
     activeWindow.setWorktreePreference(true);
     expect(staleWindow.getDraft().worktreeEnabled).toBe(false);
@@ -1350,8 +1372,7 @@ describe('newMakerDraft store', () => {
   it('旧窗口的完整草稿写入不会覆盖另一窗口刚保存的默认模型组合', async () => {
     // 两个 renderer 的模块内存独立；旧窗口仍停在未自定义的 cc 草稿。
     const staleWindow = await loadModule();
-    vi.resetModules();
-    const activeWindow = await loadModule();
+    const activeWindow = await openSecondWindow();
 
     activeWindow.markDefaultTupleCustomized();
     activeWindow.switchVendor('pi');
@@ -1394,8 +1415,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
     activeWindow.setEffortForModel('legacy-model', 'high');
     activeWindow.markDefaultTupleCustomized(false);
-    vi.resetModules();
-    const staleWindow = await loadModule();
+    const staleWindow = await openSecondWindow();
     expect(staleWindow.getDraft().defaultTupleCustomized).toBe(true);
 
     activeWindow.clearDefaultTupleTuningCustomization({
@@ -1425,8 +1445,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
     activeWindow.setEffortForModel('legacy-model', 'high');
     activeWindow.markDefaultTupleCustomized(false);
-    vi.resetModules();
-    const staleWindow = await loadModule();
+    const staleWindow = await openSecondWindow();
 
     activeWindow.clearDefaultTupleTuningCustomization({
       modelId: 'legacy-model',
@@ -1458,8 +1477,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
     activeWindow.setEffortForModel('legacy-model', 'high');
     activeWindow.markDefaultTupleCustomized(false);
-    vi.resetModules();
-    const staleWindow = await loadModule();
+    const staleWindow = await openSecondWindow();
 
     activeWindow.clearDefaultTupleTuningCustomization({
       modelId: 'legacy-model',
@@ -1498,8 +1516,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
     activeWindow.setEffortForModel('legacy-model', 'high');
     activeWindow.markDefaultTupleCustomized(false);
-    vi.resetModules();
-    const staleWindow = await loadModule();
+    const staleWindow = await openSecondWindow();
     expect(staleWindow.getDraft().vendor).toBe('cc');
 
     activeWindow.clearDefaultTupleTuningCustomization({
@@ -1543,8 +1560,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
     activeWindow.setEffortForModel('legacy-model', 'high');
     activeWindow.markDefaultTupleCustomized(false);
-    vi.resetModules();
-    const staleWindow = await loadModule();
+    const staleWindow = await openSecondWindow();
     const renderedVendor = staleWindow.getDraft().vendor;
     expect(renderedVendor).toBe('cc');
 
@@ -1592,8 +1608,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
     activeWindow.setEffortForModel('legacy-model', 'high');
     activeWindow.markDefaultTupleCustomized(false);
-    vi.resetModules();
-    const staleWindow = await loadModule();
+    const staleWindow = await openSecondWindow();
     const renderedVendor = staleWindow.getDraft().vendor;
 
     activeWindow.clearDefaultTupleTuningCustomization({
@@ -1629,8 +1644,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
     activeWindow.setEffortForModel('legacy-model', 'high');
     activeWindow.markDefaultTupleCustomized(false);
-    vi.resetModules();
-    const staleWindow = await loadModule();
+    const staleWindow = await openSecondWindow();
 
     activeWindow.clearDefaultTupleTuningCustomization({
       modelId: 'legacy-model',
@@ -1662,8 +1676,7 @@ describe('newMakerDraft store', () => {
     const activeWindow = await loadModule();
     activeWindow.setEffortForModel('legacy-model', 'high');
     activeWindow.markDefaultTupleCustomized(false);
-    vi.resetModules();
-    const staleWindow = await loadModule();
+    const staleWindow = await openSecondWindow();
 
     activeWindow.clearDefaultTupleTuningCustomization({
       modelId: 'legacy-model',
@@ -1686,8 +1699,7 @@ describe('newMakerDraft store', () => {
   it('旧窗口只清调档但未解锁时仍保住另一窗口的新默认组合', async () => {
     const staleWindow = await loadModule();
     staleWindow.setEffortForModel('legacy-model', 'high');
-    vi.resetModules();
-    const activeWindow = await loadModule();
+    const activeWindow = await openSecondWindow();
 
     activeWindow.markDefaultTupleCustomized();
     activeWindow.switchVendor('pi');
@@ -1720,8 +1732,7 @@ describe('newMakerDraft store', () => {
     staleWindow.patchDraft({ workingDir: '/projects/stale' });
     staleWindow.patchVendorPrefs('cc', { model: 'claude-stale' });
 
-    vi.resetModules();
-    const activeWindow = await loadModule();
+    const activeWindow = await openSecondWindow();
     activeWindow.patchDraft({ workingDir: '/projects/current' });
     activeWindow.patchVendorPrefs('cc', { model: 'claude-current' });
 
@@ -1762,8 +1773,7 @@ describe('newMakerDraft store', () => {
     staleWindow.patchDraft({ workingDir: '/projects/stale' });
     staleWindow.patchVendorPrefs('cc', { model: 'claude-stale' });
 
-    vi.resetModules();
-    const activeWindow = await loadModule();
+    const activeWindow = await openSecondWindow();
     activeWindow.patchDraft({ workingDir: '/projects/current' });
     activeWindow.patchVendorPrefs('cc', { model: 'claude-current' });
 
@@ -1781,22 +1791,8 @@ describe('newMakerDraft store', () => {
   });
 
   it('storage event 会把其它窗口保存的 worktree 偏好同步进当前 store 并通知订阅者', async () => {
-    let onStorage: ((event: StorageEvent) => void) | undefined;
-    const removeEventListener = vi.fn();
-    vi.stubGlobal('window', {
-      localStorage: memStorage,
-      addEventListener: (
-        type: string,
-        listener: EventListenerOrEventListenerObject,
-      ) => {
-        if (type === 'storage' && typeof listener === 'function') {
-          onStorage = listener as (event: StorageEvent) => void;
-        }
-      },
-      removeEventListener,
-    });
-    vi.resetModules();
-
+    // onStorage 是模块加载时向 window 注册的 storage 监听。
+    expect(onStorage).toBeTypeOf('function');
     const draftStore = await loadModule();
     const subscriber = vi.fn();
     draftStore.subscribeDraft(subscriber);
@@ -1862,8 +1858,7 @@ describe('newMakerDraft store', () => {
 
   it('vendor 字段非合法值(非 cc/codex)→ 回退 cc', async () => {
     memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor: 'gemini' }));
-    vi.resetModules();
-    const { getDraft } = await loadModule();
+    const { getDraft } = await reloadModule();
     expect(getDraft().vendor).toBe('cc');
   });
 
@@ -1878,8 +1873,7 @@ describe('newMakerDraft store', () => {
         },
       }),
     );
-    vi.resetModules();
-    const { getDraft, getFastModeForModel } = await loadModule();
+    const { getDraft, getFastModeForModel } = await reloadModule();
     expect(getFastModeForModel('gpt-5.5')).toBe(true);
     expect(getFastModeForModel('gpt-5.4')).toBe(false);
     expect(getFastModeForModel('claude-opus-4-7')).toBe(false);
@@ -2056,8 +2050,7 @@ describe('Bot default model write-through', () => {
   it('persists the same default used by new tasks and survives reloading', async () => {
     const { store, selection } = await setup();
     expect(store.applyAppDefaultModelSelection(selection)).toBe(true);
-    vi.resetModules();
-    const reloaded = await loadModule();
+    const reloaded = await reloadModule();
     reloaded.setNewMakerDraftOwner('bot-owner');
     expect(reloaded.getDraft().lastByVendor.codex).toMatchObject({ model: 'luna', effort: 'low', providerId: 'openai' });
     expect(reloaded.getDraft().vendor).toBe('codex');
@@ -2121,9 +2114,7 @@ describe('newMakerDraft agent computer', () => {
   it('does not restore the agent computer after a restart', async () => {
     let mod = await loadModule();
     mod.patchDraft({ workingDir: '/local/proj', agentDeviceId: 'dev-b', agentDeviceName: 'Office Mac' });
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    vi.resetModules();
-    mod = await loadModule();
+    mod = await reloadModule();
     expect(mod.getDraft()).toMatchObject({ workingDir: '/local/proj', agentDeviceId: null, agentDeviceName: null });
   });
 });
@@ -2147,4 +2138,47 @@ it('persists the default, preserves explicit permissions, isolates owners and re
   m.setNewMakerDraftOwner('permission-owner');
   expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
   expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+});
+
+// #10731 review: unit，真实 store + 内存存储。旧覆盖缺少临时引擎、无关写入与重启的组合。
+// 最小失败输入：本机 Pi → 远程 Claude → 改目录 → 重启，应仍用本机 Pi。
+describe('remote engine is a window-local choice', () => {
+  function followRemote() {
+    draftStore.switchVendor('pi');
+    const next = engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: 'remote', currentVendor: 'pi',
+      defaultsReady: true, selectedAgentKind: 'claude-code',
+    });
+    expect(next).toBe('cc');
+    draftStore.switchVendor(next!, { remoteFollow: true });
+  }
+  it('keeps the local engine on disk and in preference sync through unrelated writes and restart', () => {
+    followRemote();
+    draftStore.patchDraft({ extraDirs: ['/extra'] });
+    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('pi');
+    draftStore.__reloadForTest();
+    expect(draftStore.getDraft().vendor).toBe('pi');
+  });
+  it('remembers a controller choice while this window is following another computer', () => {
+    followRemote();
+    draftStore.patchVendorPrefs('codex', { model: 'chosen' }, { selectVendor: true });
+    expect(draftStore.getDraft().vendor).toBe('cc');
+    expect(draftStore.getDraftForPreferenceSync().vendor).toBe('codex');
+    expect(engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: null, currentVendor: 'cc',
+      defaultsReady: false, selectedAgentKind: undefined,
+    })).toBe('codex');
+  });
+  it('preserves manual selection even after selecting the followed engine again', () => {
+    followRemote();
+    draftStore.switchVendor('codex', { userSelected: true });
+    draftStore.switchVendor('cc', { userSelected: true });
+    expect(engineFollow.nextRemoteDraftEngine({
+      ownerId: null, deviceId: null, currentVendor: 'cc',
+      defaultsReady: false, selectedAgentKind: undefined,
+    })).toBeNull();
+    draftStore.__reloadForTest();
+    expect(draftStore.getDraft().vendor).toBe('cc');
+  });
 });

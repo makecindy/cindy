@@ -12,6 +12,26 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 const probeLog = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+const usageLog = vi.hoisted(() => ({
+  record: vi.fn(async (_tokens: unknown, _route: unknown) => {}),
+}));
+vi.mock('../../usage/auxiliaryUsage.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../usage/auxiliaryUsage.js')>();
+  const create = (attribution: Record<string, unknown> = {}) =>
+    Object.assign(
+      async (tokens: unknown, route: Record<string, unknown> = {}) =>
+        usageLog.record(tokens, { ...attribution, ...route }),
+      { close: () => {} },
+    );
+  return {
+    ...actual,
+    createAuxiliaryUsageRecorder: create,
+    withAuxiliaryUsage: async (
+      attribution: Record<string, unknown>,
+      run: (record: ReturnType<typeof create>) => Promise<unknown>,
+    ) => run(create(attribution)),
+  };
+});
 vi.mock('../logger-adapter', () => ({
   createMakerLogger: () => ({ ...probeLog, child: () => probeLog }),
 }));
@@ -40,6 +60,8 @@ afterEach(() => {
   setDiagnosticsKeyReader(() => null);
   __resetModelVisibilityMirrorForTest();
   probeLog.warn.mockClear();
+  usageLog.record.mockClear();
+  setDiagnosticsOAuthTokenReader(() => null);
 });
 
 describe('classifyProviderError', () => {
@@ -101,6 +123,46 @@ describe('classifyProviderError', () => {
         code: 'CONTEXT_TOO_LONG', retryable: false,
       });
     }
+  });
+
+  // #9470: unit, real classifier. Existing field-pattern coverage missed Google's
+  // quoted Unknown name rejection; raw and JSON-escaped messages reach consumers.
+  it.each([400, 422])('%i recognizes explicit Unknown name payload rejections', (status) => {
+    const message = 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field. '
+      + 'Unknown name "messages": Cannot find field. Unknown name "max_tokens": Cannot find field.';
+    for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+      expect(classifyProviderError({ status, bodyText })).toMatchObject({
+        code: 'WIRE_INCOMPATIBLE', retryable: false,
+      });
+    }
+  });
+
+  // #9470 P2: unit, real classifier; field order and JSON escaping must not
+  // turn a rejected request field into a missing model (no live gateway covered).
+  it.each([400, 422])('%i ignores rejected field names when matching model errors', (status) => {
+    for (const fields of [['model', 'messages'], ['anthropic_version', 'model', 'messages']]) {
+      const message = 'Invalid JSON payload received. '
+        + fields.map((field) => `Unknown name "${field}": Cannot find field.`).join(' ');
+      for (const bodyText of [message, JSON.stringify({ error: { message } })]) {
+        expect(classifyProviderError({ status, bodyText })).toMatchObject({
+          code: 'WIRE_INCOMPATIBLE', retryable: false,
+        });
+      }
+    }
+  });
+
+  it.each([
+    [400, 'Invalid JSON payload received: malformed JSON', 'UNKNOWN'],
+    [422, 'Invalid JSON payload received. Unknown name', 'UNKNOWN'],
+    [400, 'Unknown name "customer"', 'UNKNOWN'],
+    [401, 'Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid API key. Invalid JSON payload received. Unknown name "messages"', 'AUTH_INVALID'],
+    [400, 'Invalid model name. Invalid JSON payload received. Unknown name "messages"', 'MODEL_NOT_FOUND'],
+    [400, 'insufficient_quota. Invalid JSON payload received. Unknown name "messages"', 'QUOTA_EXCEEDED'],
+    [400, 'prompt is too long. Invalid JSON payload received. Unknown name "messages"', 'CONTEXT_TOO_LONG'],
+    [500, 'Invalid JSON payload received. Unknown name "messages"', 'UPSTREAM_ERROR'],
+  ] as const)('preserves classification for %i / %s', (status, bodyText, code) => {
+    expect(classifyProviderError({ status, bodyText }).code).toBe(code);
   });
 
   it.each([
@@ -371,6 +433,20 @@ function fakeResponse(status: number, body = ''): Response {
 }
 
 describe('runProviderProbe（注入 fetch，不联网）', () => {
+  // #9470: production probe result and log must carry the classifier's code.
+  it('reports an Unknown name field rejection as wire incompatible', async () => {
+    const r = await runProviderProbe(
+      { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
+      async () => fakeResponse(400, JSON.stringify({ error: {
+        message: 'Invalid JSON payload received. Unknown name "anthropic_version": Cannot find field.',
+      } })),
+    );
+    expect(r).toMatchObject({ ok: false, code: 'WIRE_INCOMPATIBLE', status: 400 });
+    expect(probeLog.warn.mock.calls[0]?.[1]).toMatchObject({
+      code: 'WIRE_INCOMPATIBLE', model: 'm', status: 400,
+    });
+  });
+
   it('2xx → ok + latency', async () => {
     const r = await runProviderProbe(
       { agent: 'claude-code', baseUrl: 'https://x.example', modelId: 'm', apiKey: 'k' },
@@ -449,6 +525,64 @@ describe('runProviderProbe（注入 fetch，不联网）', () => {
     );
     expect(probeLog.warn).toHaveBeenCalledTimes(1);
     expect(probeLog.warn.mock.calls[0][1]).toMatchObject({ code: 'UPSTREAM_UNREACHABLE', upstream: 'https://nope.example', status: undefined });
+  });
+
+  it('records trailing usage from a later network chunk and keeps the served model', async () => {
+    const frames = [
+      { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+      {
+        model: 'served-model',
+        choices: [],
+        usage: {
+          prompt_tokens: 100,
+          prompt_tokens_details: { cached_tokens: 40 },
+          completion_tokens: 2,
+        },
+      },
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encode = new TextEncoder();
+        for (const frame of frames)
+          controller.enqueue(encode.encode(`data: ${JSON.stringify(frame)}\n\n`));
+        controller.enqueue(encode.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    const result = await runProviderProbe(
+      {
+        agent: 'codex',
+        baseUrl: 'https://x.example',
+        modelId: 'requested-alias',
+        wireProtocol: 'openai-chat',
+        apiKey: 'fake',
+      },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }),
+    );
+    expect(result.ok).toBe(true);
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
+
+  it('keeps observed usage when a probe stream disconnects after its first payload', async () => {
+    let step = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const frames = [
+          { model: 'served-model', choices: [{ delta: { content: 'OK' } }] },
+          { model: 'served-model', usage: { prompt_tokens: 100, completion_tokens: 2 } },
+        ];
+        if (step === frames.length) { controller.error(new Error('socket disconnected')); return; }
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frames[step++])}\n\n`));
+      },
+    });
+    await expect(runProviderProbe({ agent: 'codex', baseUrl: 'https://x.example', modelId: 'alias', wireProtocol: 'openai-chat', apiKey: 'fake' },
+      async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }))).rejects.toThrow('socket disconnected');
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 100, outputTokens: 2 }), expect.objectContaining({ model: 'served-model' }));
   });
 
   it('openai-chat 探测:200 text/event-stream → ok', async () => {
@@ -550,12 +684,12 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     },
   };
 
-  it('从 active-catalog 解析 user 供应商 + 注入 key reader 读 key', () => {
+  it('从 active-catalog 解析 user 供应商 + 注入 key reader 读 key', async () => {
     setCustomProviders([buildUserProvider(config)]);
     setDiagnosticsKeyReader((id, agent) =>
       id === 'my-relay' && agent === 'claude-code' ? 'sk-saved' : null,
     );
-    const spec = resolveSavedProbeSpec('my-relay', 'claude-code');
+    const spec = await resolveSavedProbeSpec('my-relay', 'claude-code');
     expect(spec).toMatchObject({
       baseUrl: 'https://relay.example/anthropic',
       modelId: 'glm-5.2',
@@ -564,11 +698,11 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     });
   });
 
-  it('safeStorage 尚无 key 时保留 legacy header-only 凭证', () => {
+  it('safeStorage 尚无 key 时保留 legacy header-only 凭证', async () => {
     setCustomProviders([buildUserProvider(config)]);
     setDiagnosticsKeyReader(() => null);
 
-    const spec = resolveSavedProbeSpec('my-relay', 'claude-code');
+    const spec = await resolveSavedProbeSpec('my-relay', 'claude-code');
     expect(spec.apiKey).toBeNull();
     expect(spec.headers).toEqual({
       'x-tenant': 't1',
@@ -598,7 +732,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     setCustomProviders([buildUserProvider(chatConfig)]);
     setDiagnosticsKeyReader(() => 'sk-ds');
     // resolveSavedProbeSpec 必须回带 wireProtocol，否则 buildProbeRequest 回落原生 /responses。
-    expect(resolveSavedProbeSpec('ds-chat', 'codex').wireProtocol).toBe('openai-chat');
+    expect((await resolveSavedProbeSpec('ds-chat', 'codex')).wireProtocol).toBe('openai-chat');
     let seenUrl = '';
     await testProviderConnection(
       { kind: 'saved', providerId: 'ds-chat', agent: 'codex' },
@@ -626,7 +760,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'pi-chat-key');
 
-    expect(resolveSavedProbeSpec('pi-chat', 'pi').wireProtocol).toBe('openai-chat');
+    expect((await resolveSavedProbeSpec('pi-chat', 'pi')).wireProtocol).toBe('openai-chat');
     let seenUrl = '';
     await testProviderConnection(
       { kind: 'saved', providerId: 'pi-chat', agent: 'pi' },
@@ -641,7 +775,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(seenUrl).toBe('https://pi-chat.example/v1/chat/completions');
   });
 
-  it('Pi saved 探测优先使用单模型协议覆盖', () => {
+  it('Pi saved 探测优先使用单模型协议覆盖', async () => {
     setCustomProviders([
       buildUserProvider({
         id: 'pi-model-override',
@@ -662,7 +796,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       }),
     ]);
 
-    expect(resolveSavedProbeSpec('pi-model-override', 'pi')).toMatchObject({
+    expect((await resolveSavedProbeSpec('pi-model-override', 'pi'))).toMatchObject({
       baseUrl: 'https://pi-override.example/v1',
       modelId: 'messages-model',
       wireProtocol: 'anthropic-messages',
@@ -695,7 +829,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'glm-key');
 
-    expect(resolveSavedProbeSpec('glm-responses-only', 'codex')).toMatchObject({
+    expect((await resolveSavedProbeSpec('glm-responses-only', 'codex'))).toMatchObject({
       baseUrl: 'https://open.bigmodel.cn/api/v1',
       modelId: 'glm-5.3',
       wireProtocol: 'openai-responses',
@@ -729,7 +863,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'glm-key');
 
-    expect(resolveSavedProbeSpec('glm-chat-only', 'codex')).toMatchObject({
+    expect((await resolveSavedProbeSpec('glm-chat-only', 'codex'))).toMatchObject({
       baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
       modelId: 'glm-5.2',
       wireProtocol: 'openai-chat',
@@ -761,17 +895,17 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       }),
     ]);
     setDiagnosticsKeyReader(() => 'sk-exact');
-    expect(resolveSavedProbeSpec('exact-path', 'codex').requestPath).toBe('/tenant/acme/infer');
+    expect((await resolveSavedProbeSpec('exact-path', 'codex')).requestPath).toBe('/tenant/acme/infer');
   });
 
-  it('不存在 / 非 user 供应商 / 无该 runtime → 抛错（handler 映射 INVALID_PARAMS）', () => {
+  it('不存在 / 非 user 供应商 / 无该 runtime → 抛错（handler 映射 INVALID_PARAMS）', async () => {
     setCustomProviders([buildUserProvider(config)]);
-    expect(() => resolveSavedProbeSpec('nope', 'claude-code')).toThrow(/not found/);
-    expect(() => resolveSavedProbeSpec('xd', 'claude-code')).toThrow(/not a custom provider/);
-    expect(() => resolveSavedProbeSpec('my-relay', 'codex')).toThrow(/no runtime/);
+    await expect(resolveSavedProbeSpec('nope', 'claude-code')).rejects.toThrow(/not found/);
+    await expect(resolveSavedProbeSpec('xd', 'claude-code')).rejects.toThrow(/not a custom provider/);
+    await expect(resolveSavedProbeSpec('my-relay', 'codex')).rejects.toThrow(/no runtime/);
   });
 
-  it('跳过非聊天模型挑第一个聊天模型探测(issue #882 第 3 点,2026-07 review):探测发的是聊天形状请求,挑到 embedding/image 模型会得到与配置无关的假失败结论', () => {
+  it('跳过非聊天模型挑第一个聊天模型探测(issue #882 第 3 点,2026-07 review):探测发的是聊天形状请求,挑到 embedding/image 模型会得到与配置无关的假失败结论', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -799,10 +933,10 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       },
     ]);
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
   });
 
-  it('用户明确开启的不是列表第一个聊天模型时,探测用该可见模型(issue #9470)', () => {
+  it('用户明确开启的不是列表第一个聊天模型时,探测用该可见模型(issue #9470)', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -830,14 +964,14 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setModelVisibilityMirror({ 'claude-code:my-relay:glm-4.5': true });
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-4.5');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-4.5');
   });
 
   // 测试价值:生产入口 resolveSavedProbeSpec,可观察结果是探测请求用的 modelId。
   // Bug #9470 / PR #9571 P1:镜像只存显式开关,关掉写 false、没拨过无条目。
   // 原兜底只认 === true,会把显式隐藏的第一个坏模型当成探测目标。
   // 最小失败输入:候选 [glm-5.2, glm-4.5],只把 glm-5.2 标成 false。tier: unit。
-  it('显式隐藏第一个聊天模型、第二个未拨过时,探测跳过隐藏项选第二个', () => {
+  it('显式隐藏第一个聊天模型、第二个未拨过时,探测跳过隐藏项选第二个', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -865,11 +999,11 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setModelVisibilityMirror({ 'claude-code:my-relay:glm-5.2': false });
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-4.5');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-4.5');
   });
 
   // 全部显式隐藏时仍要能测连接:退回第一个可选模型,不要因为没有可见模型而抛空。
-  it('全部聊天模型都被显式隐藏时,探测仍退回第一个可选模型', () => {
+  it('全部聊天模型都被显式隐藏时,探测仍退回第一个可选模型', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -900,12 +1034,12 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       'claude-code:my-relay:glm-4.5': false,
     });
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
   });
 
   // 镜像未就绪时 getModelVisibilityOverride 抛 MODEL_VISIBILITY_NOT_READY。
   // 探测不能因此失败,必须走原来的第一个可选模型。
-  it('可见性镜像未就绪时走兜底且不抛错', () => {
+  it('可见性镜像未就绪时走兜底且不抛错', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -933,10 +1067,10 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     clearModelVisibilityMirror();
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
   });
 
-  it('没有显式可见偏好时,探测仍退回第一个聊天模型', () => {
+  it('没有显式可见偏好时,探测仍退回第一个聊天模型', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -964,10 +1098,10 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setModelVisibilityMirror({});
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+    expect((await resolveSavedProbeSpec('my-relay', 'claude-code')).modelId).toBe('glm-5.2');
   });
 
-  it('全是非聊天模型时抛「无聊天模型」错误,而不是静默探测一个 embedding 模型', () => {
+  it('全是非聊天模型时抛「无聊天模型」错误,而不是静默探测一个 embedding 模型', async () => {
     const provider = buildUserProvider(config);
     setCustomProviders([
       {
@@ -988,7 +1122,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
       },
     ]);
     setDiagnosticsKeyReader(() => 'sk-saved');
-    expect(() => resolveSavedProbeSpec('my-relay', 'claude-code')).toThrow(/no chat models/);
+    await expect(resolveSavedProbeSpec('my-relay', 'claude-code')).rejects.toThrow(/no chat models/);
   });
 
   it('testProviderConnection(saved) 端到端（注入 fetch 断言 URL 与 key）', async () => {
@@ -1009,6 +1143,23 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(seenAuth).toBe('sk-saved');
   });
 
+  // #8679: saved providers probe the first chat model, which the user never picks in the test button's
+  // context. A bare "upstream 5xx" made a failure on that model read like the whole provider (or the model
+  // that just answered) was broken, so the result must say which model was tested.
+  it('testProviderConnection(saved) 失败时仍带回被测模型 ID', async () => {
+    setCustomProviders([buildUserProvider({
+      ...config,
+      runtimes: { 'claude-code': { ...config.runtimes['claude-code'],
+        models: [{ id: 'glm-5.2', name: 'GLM' }, { id: 'glm-5.2-air', name: 'GLM Air' }] } },
+    })]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    const r = await testProviderConnection(
+      { kind: 'saved', providerId: 'my-relay', agent: 'claude-code' },
+      async () => fakeResponse(500, '{}'),
+    );
+    expect(r).toMatchObject({ ok: false, modelId: 'glm-5.2' });
+  });
+
   it('oauth-token 供应商:探测 token 走 authorization 头,绝不发 x-api-key(与真实路由同口径)', async () => {
     const oauthConfig = {
       ...config,
@@ -1027,7 +1178,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     setDiagnosticsKeyReader(() => 'sk-should-not-be-used');
     setDiagnosticsOAuthTokenReader((id) => (id === 'my-sub' ? 'at-77' : null));
 
-    const spec = resolveSavedProbeSpec('my-sub', 'claude-code');
+    const spec = await resolveSavedProbeSpec('my-sub', 'claude-code');
     expect(spec.apiKey).toBeNull();
     expect(spec.headers).toMatchObject({ authorization: 'Bearer at-77', 'x-tenant': 't1' });
 
@@ -1037,7 +1188,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(headers['x-api-key']).toBeUndefined();
   });
 
-  it('none 供应商:saved 探测不读取旧 key,并剥掉配置里残留的鉴权头', () => {
+  it('none 供应商:saved 探测不读取旧 key,并剥掉配置里残留的鉴权头', async () => {
     setCustomProviders([
       buildUserProvider({
         ...config,
@@ -1058,7 +1209,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ]);
     setDiagnosticsKeyReader(() => 'stale-safe-storage-key');
 
-    const spec = resolveSavedProbeSpec('local-proxy', 'claude-code');
+    const spec = await resolveSavedProbeSpec('local-proxy', 'claude-code');
     expect(spec.apiKey).toBeNull();
     expect(spec.headers).toEqual({ 'x-tenant': 't1' });
   });
@@ -1093,7 +1244,7 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
 });
 
 
-it('probes Google using generateContent instead of falling through to Responses', () => {
+it('probes Google using generateContent instead of falling through to Responses', async () => {
   const request = buildProbeRequest({ agent: 'codex', wireProtocol: 'google-generative-ai',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta', modelId: 'new-gemini', apiKey: 'fixture-key' });
   expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/new-gemini:generateContent');
@@ -1145,7 +1296,7 @@ describe('native SDK connection probes', () => {
 });
 
 
-it('keeps the Copilot SDK identity but uses the assigned enterprise host for connection tests', () => {
+it('keeps the Copilot SDK identity but uses the assigned enterprise host for connection tests', async () => {
   const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
   setCustomProviders([buildUserProvider({ id: 'copilot-probe', name: 'Copilot',
     auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
@@ -1154,7 +1305,7 @@ it('keeps the Copilot SDK identity but uses the assigned enterprise host for con
   })]);
   setDiagnosticsOAuthTokenReader(() => 'fixture;proxy-ep=proxy.enterprise.githubcopilot.com;');
   try {
-    expect(resolveSavedProbeSpec('copilot-probe', 'codex')).toMatchObject({
+    expect((await resolveSavedProbeSpec('copilot-probe', 'codex'))).toMatchObject({
       baseUrl: 'https://api.enterprise.githubcopilot.com', api: 'openai-responses',
       nativeModel: { upstream: row.upstream, execution: { pi: { headers: expect.objectContaining({ 'Copilot-Integration-Id': 'vscode-chat' }) } } },
     });
@@ -1230,6 +1381,39 @@ describe('automatic Pi protocol connection test', () => {
     { id: 'chat-test', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
   ]);
   const unsupported = () => new Response(JSON.stringify({ error: { code: 'unsupported_protocol', message: 'protocol not supported' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+
+  it('does not overcount cumulative prompt/cache snapshots in native probing', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      sse([
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'OK' }, finish_reason: null }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 20 },
+            completion_tokens: 1,
+          },
+        },
+        {
+          id: 'probe',
+          model: 'served-model',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 100,
+            prompt_tokens_details: { cached_tokens: 40 },
+            completion_tokens: 2,
+          },
+        },
+      ]),
+    );
+    expect(await probeProviderProtocols(spec, false, fetcher)).toMatchObject({ ok: true });
+    expect(usageLog.record).toHaveBeenCalledOnce();
+    expect(usageLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 60, cacheReadTokens: 40, outputTokens: 2 }),
+      expect.objectContaining({ model: 'served-model' }),
+    );
+  });
 
   it('uses native streaming and stops on the first successful generation', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => chat());
@@ -1441,4 +1625,51 @@ describe('automatic Pi protocol connection test', () => {
     expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
     expect(JSON.stringify(result)).not.toContain(secret);
   });
+});
+
+// #7942: 真实连接探测入口等待凭证，失败时不访问推理端点；假 reader/fetch，无外网。
+it.each(['claude-code', 'codex', 'pi'] as const)('awaits refreshed OAuth credentials for saved connection diagnostics on %s', async agent => {
+  setCustomProviders([buildUserProvider({ id: 'refresh-probe', name: 'Refresh probe',
+    auth: { method: 'oauth', oauth: providerPresetOAuth('moonshot-kimi-code')! },
+    runtimes: { [agent]: { baseUrl: 'https://api.kimi.com/coding', wireProtocol: 'anthropic-messages',
+      models: [{ id: 'fake-model', name: 'Fake model' }] } },
+  })]);
+  let release!: (token: string) => void;
+  setDiagnosticsOAuthTokenReader(() => new Promise<string>(resolve => { release = resolve; }));
+  const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    expect(init?.headers).toMatchObject({ authorization: 'Bearer fake-refreshed' });
+    return new Response('{}');
+  });
+  const pending = testProviderConnection({ kind: 'saved', providerId: 'refresh-probe', agent }, fetchMock);
+  await Promise.resolve();
+  expect(fetchMock).not.toHaveBeenCalled();
+  release('fake-refreshed');
+  expect(await pending).toMatchObject({ ok: true });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  fetchMock.mockClear();
+  setDiagnosticsOAuthTokenReader(async () => { throw new Error('provider_oauth_refresh_failed'); });
+  expect(await testProviderConnection({ kind: 'saved', providerId: 'refresh-probe', agent }, fetchMock))
+    .toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+// #7942 / PR review: a catalog rebuild is not an OAuth identity change. The
+// production saved probe must still send after an unrelated connection edit,
+// while a changed destination must prevent dispatch. Unit tier, injected I/O.
+it.each([false, true])('checks connection values across catalog rebuilds (target changed=%s)', async targetChanged => {
+  const oauth = { authorizeUrl: 'https://auth.example/authorize', tokenUrl: 'https://auth.example/token', clientId: 'fixture', scopes: 'openid' };
+  const provider = (id: string, baseUrl: string) => buildUserProvider({ id, name: id,
+    auth: { method: 'oauth', oauth }, runtimes: { codex: { baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'fixture-model', name: 'Fixture' }] } },
+  });
+  setCustomProviders([provider('probe-rebuild', 'https://provider.example/v1'), provider('other', 'https://other.example/v1')]);
+  let release!: (value: string) => void;
+  setDiagnosticsOAuthTokenReader(() => new Promise<string>(resolve => { release = resolve; }));
+  const fetcher = vi.fn<typeof fetch>(async () => new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+  const pending = testProviderConnection({ kind: 'saved', providerId: 'probe-rebuild', agent: 'codex' }, fetcher);
+  await Promise.resolve();
+  setCustomProviders([provider('probe-rebuild', targetChanged ? 'https://changed.example/v1' : 'https://provider.example/v1'), provider('other', 'https://other-updated.example/v1')]);
+  release('fake-refreshed');
+  expect(await pending).toMatchObject(targetChanged ? { ok: false, code: 'AUTH_INVALID' } : { ok: true });
+  expect(fetcher).toHaveBeenCalledTimes(targetChanged ? 0 : 1);
 });

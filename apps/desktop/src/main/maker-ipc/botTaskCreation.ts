@@ -104,7 +104,9 @@ async function resolveBotTaskCreator(callerSessionId: string): Promise<string | 
 }
 
 /** Capture the creator before a generic create-mode handoff crosses async boundaries. */
-export async function captureBotCreatedTaskResponsibility(callerSessionId?: string) {
+export async function captureBotCreatedTaskResponsibility(callerSessionId?: string,
+  options?: { remoteDeviceId: string },
+) {
   if (!callerSessionId || isAppSessionBoundaryPending()) return null;
   const scope = activeOwnerScopeKey();
   const root = ownerScopedUserDataPath();
@@ -116,8 +118,15 @@ export async function captureBotCreatedTaskResponsibility(callerSessionId?: stri
   assertCurrent();
   return async (sessionId: string) => {
     assertCurrent();
-    const target = await readWorkbenchTarget(sessionId);
-    if (!target || target.status !== 'active' || target.botLinked || target.remoteHostId || target.orcaRole === 'worker') return;
+    if (options?.remoteDeviceId) {
+      // Only the host's successful ordinary-create receipt calls this recorder.
+      // Its qualified ID is stored in the existing responsibility map, never as a local row.
+      const prefix = `${options.remoteDeviceId}::`;
+      if (!sessionId.startsWith(prefix) || !sessionId.slice(prefix.length) || sessionId.slice(prefix.length).includes('::')) return;
+    } else {
+      const target = await readWorkbenchTarget(sessionId);
+      if (!target || target.status !== 'active' || target.botLinked || target.remoteHostId || target.orcaRole === 'worker') return;
+    }
     assertCurrent();
     await setTaskResponsibility(root, botId, sessionId, true, assertCurrent, { created: true });
     // The desktop sidebar re-reads the follow scopes on the same push.

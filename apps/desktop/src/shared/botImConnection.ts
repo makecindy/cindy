@@ -180,7 +180,7 @@ export interface BotImConnectionListPayload {
 }
 
 export type BotImConnectionAddInput =
-  | { botId: string; channel: 'imessage'; groupAliases?: string[]; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
+  | { botId: string; channel: 'imessage'; groupAliases?: string[]; selfAccountAddresses?: Record<string, string>; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
   | { botId: string; channel: 'telegram'; token: string; ownerUserId: string }
   | {
       botId: string;
@@ -255,3 +255,7 @@ export interface BotImConnectionLanesPayload {
 }
 
 export const BOT_IM_CONNECTION_CHANGED_EVENT = 'botImConnection:changed';
+
+/** Local-only settings: passwords are write-only and an empty value retains the saved password. */
+export type BotIMessageConfig = Omit<Extract<BotImConnectionAddInput, { channel: 'imessage' }>, 'botId' | 'channel' | 'password'>;
+export type BotIMessageUpdateInput = BotIMessageConfig & { password?: string };

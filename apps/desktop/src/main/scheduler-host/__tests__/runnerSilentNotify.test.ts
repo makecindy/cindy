@@ -425,6 +425,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
         expect.objectContaining({
           clientId: 'schedule-result:run-1',
           content: 'Final answer',
+          agentMeta: expect.objectContaining({ turnCompleted: true }),
         }),
         expect.anything(),
       );

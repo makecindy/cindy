@@ -79,7 +79,7 @@ function installApi(macos = false) {
     updateDriver: vi.fn().mockResolvedValue(installed(macos)),
     onPermissionGuideStatusChanged: vi.fn(() => () => {}),
     onPermissionGuideCancelled: vi.fn(() => () => {}),
-    onUpdateProgress: vi.fn(() => () => {}),
+    onUpdateProgress: vi.fn((_callback: (progress: unknown) => void) => () => {}),
     cancelPermissionGrant: vi.fn(async () => {}),
   };
   const setEnabled = vi.fn(async () => ({ codexMcpRefreshed: true }));
@@ -303,6 +303,41 @@ describe('ComputerUseSection driver update completion', () => {
     await screen.findByText(`${versionKey}: ${newVersion}`);
     expect(computer.updateDriver).toHaveBeenCalledExactlyOnceWith({ joinOnly: true });
     expect(screen.queryByRole('button', { name: `${updateKey}.action` })).toBeNull();
+  });
+
+  // Shared download progress replaced the bare 2px edge bar: speed and time left are visible.
+  it('shows the shared download meter while the update downloads', async () => {
+    const { computer } = installApi(true);
+    const install = deferred<ComputerDriverInstallResult>();
+    computer.updateDriver.mockReturnValue(install.promise);
+    let push: (progress: unknown) => void = () => {};
+    computer.onUpdateProgress.mockImplementation((callback: typeof push) => {
+      push = callback;
+      return () => {};
+    });
+    render(<ComputerUseSection />);
+    await clickUpdate();
+    await waitFor(() => expect(computer.onUpdateProgress).toHaveBeenCalled());
+    act(() =>
+      push({
+        phase: 'downloading',
+        downloadedBytes: 4 * 1024 * 1024,
+        totalBytes: 10 * 1024 * 1024,
+        download: {
+          phase: 'downloading',
+          loaded: 4 * 1024 * 1024,
+          total: 10 * 1024 * 1024,
+          percent: 40,
+          speedBps: 1024 * 1024,
+          etaSeconds: 6,
+        },
+      }),
+    );
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('40');
+    expect(screen.getByText(/1\.0 MB\/s/)).toBeTruthy();
+    act(() => push({ phase: 'done', downloadedBytes: null, totalBytes: null }));
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    await act(async () => install.resolve(installed(true)));
   });
 
   it('shows the installed version and clears the offer on success', async () => {

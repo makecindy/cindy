@@ -21,3 +21,28 @@ Chrome 仍是 `my-browser`）。Native Messaging 的注册文件布局（`<App S
 应答里恒给「全部允许」，旧扩展照常解析；旧插件推送的 `setPolicy` 应答成功但不生效；宿主缓存文件
 只保存配对，旧版本存下的名单读到即忽略。事件 `browser-extension-policy-request` 沿用原名，现在只
 在没有配对缓存时用来索要配对。
+
+Native Messaging 临时注册失败由宿主按 5 秒、15 秒、30 秒、1 分钟、2 分钟、5 分钟退避，
+之后保持每 5 分钟重试，不依赖打开插件面板或点击刷新。注册冲突、路径安全校验失败及
+确认插件自带程序缺失时停止自动重试；通用 `ENOENT`、`EPERM` 等错误不直接判为永久失败。
+停用后重新启用、更新安装或明确选择激活时重新尝试；自动恢复不会替用户接管其他注册。
+自动重试与既有状态请求的恢复共用同一个在途安装和退避，状态查询不能提前重试，成功后停止计时。
+重试前复核账号、插件安装版本、批准和启用状态，停用／卸载／更新／退出时取消旧实例的重试，
+在途安装结束后才撤销注册。自动恢复不请求接管其他插件的注册，不改变配对、授权或线协议。
+实现与回归见 `browserExtensionSlot.ts` 及其同名单测。
+
+侧边栏模型选择器（2026-11-17，未发布）：`/learning/start` 的转交白名单新增 `models`（只读模型目录与
+收藏、最近使用）和 `model-favorite`（收藏的增删改，形状同 `ModelFavoriteMutation`）；
+`conversation` 在 `scenario: 'webpage-chat'` 时可带 `route`（只限本机，不含 `agentDeviceId`），
+宿主按插件 learning-core 的同一判据校验后原样转交，插件与执行前的路由核验仍各自再查一次。
+旧宿主对这两类请求返回 400 `INVALID_OPERATION`，并丢弃 `route` 字段：扩展侧须把前者显示为
+「需要更新 Cindy」，不得当作空名单；旧宿主上网页问答回到插件默认模型，扩展线协议版本不变。
+实现见 `main/browser-extension/relay-protocol.ts`，回归见 `bridge.test.ts`。
+
+侧边栏流式回答（2026-11-17，未发布）：插件经管子 `relayProgress` 上报的进度在阶段属于白名单时
+可另带 `text`（到目前为止的部分回答，≤32768 个 UTF-16 字符；超长整段丢弃、不截断，阶段照常
+更新）；每次上报整体替换，`/learning/result` 未完成时返回 `progress: {stage, …, text?}`。
+未知阶段仍整条忽略，结果大小上限不变。旧扩展忽略多出的字段，旧插件不发送，旧宿主丢弃该字段，
+扩展只显示阶段；线协议版本不变。插件侧来源为 `tasks.getRun().preview`（见
+[插件任务流式预览](plugin-task-run-preview.md)）。实现见 `bridge.ts` `relayProgress`，回归见
+`bridge.test.ts`。

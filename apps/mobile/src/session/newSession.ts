@@ -1,3 +1,5 @@
+import { composerSlashInvocationName, leadingSlashInvocation } from '@cindy/maker-shared/composer-palette';
+import { buildComposerPaletteCacheKey } from './composerPaletteCache';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
@@ -13,6 +15,7 @@ import {
 import { i18n } from '@/i18n';
 import type {
   CreateSessionOptions,
+  MobileMakerTransport,
   RemoteDirectoryDrive,
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
@@ -61,6 +64,7 @@ export interface NewSessionDraft {
   permissionMode: string;
   fastMode: boolean | 'ultrafast';
   firstMessage: string;
+  selectedSkill?: { name: string; invocation: string; context: string } | null;
   extraDirs?: string[];
   /**
    * 远程 Agent:Agent 在哪台电脑运行——同账号另一台电脑的 deviceId,或别人分享给被控电脑的
@@ -68,6 +72,45 @@ export interface NewSessionDraft {
    * (见 applyRemoteAgentPick),模型与来源随之属于那台电脑的目录。
    */
   agentDeviceId?: string | null;
+}
+
+export async function lookupMobileSkillInvocation(
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+  agentKind: NewSessionAgentKind,
+  workingDir: string,
+  name: string,
+): Promise<string> {
+  const result = await maker.listAgentSkills(agentKind, { ...(workingDir ? { workingDir } : {}) });
+  if (!result.success) throw new Error(result.error || 'Skill list unavailable');
+  const match = result.skills?.find(item => item.kind === 'agent-skill' && item.name === name && item.enabled !== false);
+  return match ? composerSlashInvocationName(match) : name;
+}
+
+/** Resolve a menu choice against the final engine when preparing delivery. */
+export async function resolveNewSessionSkillDraft(
+  draft: NewSessionDraft,
+  deviceId: string,
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+): Promise<NewSessionDraft> {
+  const skill = draft.selectedSkill;
+  if (!skill) return draft;
+  const token = leadingSlashInvocation(draft.firstMessage);
+  if (!token || (token.name !== skill.name && token.name !== skill.invocation)) return draft;
+  const workingDir = draft.workspaceKind === 'project' ? draft.workingDir.trim() : '';
+  const context = buildComposerPaletteCacheKey(draft.agentDeviceId || deviceId, draft.agentKind, workingDir);
+  let invocation = skill.invocation;
+  if (context !== skill.context) {
+    // The controlled computer's catalog describes only its own engine.
+    invocation = skill.name;
+    if (!draft.agentDeviceId) {
+      invocation = await lookupMobileSkillInvocation(maker, draft.agentKind, workingDir, skill.name);
+    }
+  }
+  return {
+    ...draft,
+    firstMessage: draft.firstMessage.slice(0, token.start) + '/' + invocation + draft.firstMessage.slice(token.end),
+    selectedSkill: { ...skill, context, invocation },
+  };
 }
 
 /**
@@ -482,8 +525,8 @@ export function validateModelProviderId(
  *   3) 没有任何来源提供该模型 → 落目录首项(连同其 provider);
  *   4) 目录为空 → 模型留空 + 默认路由,由用户自己选;
  * catalogReady=false 时不评判,维持信任语义(见 validateModelProviderId)。
- * 通用于「跟随最近会话」的自动默认与「提交点 / 目录就绪」的草稿终检(codex review P2:
- * 提交终检时同样联合回退)。
+ * 自动默认可以推荐替代来源；已有草稿的终检必须 preserveExplicitProvider，
+ * 来源不可用时保留选择，由提交入口要求用户重选，不能按同名模型替换账号。
  */
 export function resolveRecentModelAndProvider(
   modelRows: readonly ProviderModelRow[],
@@ -492,6 +535,7 @@ export function resolveRecentModelAndProvider(
   catalogReady: boolean,
   providers: readonly ProviderView[],
   visibilityOverrides?: Record<string, boolean> | null,
+  options: { preserveExplicitProvider?: boolean } = {},
 ): { model: string; providerId: string | null } {
   if (!catalogReady || modelNeedsReselection(visibilityOverrides, agentKind, recent.model, recent.providerId)) {
     return { model: recent.model, providerId: recent.providerId };
@@ -533,6 +577,7 @@ export function resolveRecentModelAndProvider(
   }
   const valid = validateModelProviderId(modelRows, recent.providerId, recent.model, true);
   if (valid) return { model: recent.model, providerId: valid };
+  if (options.preserveExplicitProvider) return recent;
   // 显式来源失效的替代选择:与 null 分支同口径(codex review P2:按 Agent 默认
   // 规则选择失效来源的替代项)——同名模型多来源时**不得取目录首行**(目录顺序
   // ≠ Agent 原生默认顺序,如 Codex 候选 [custom, xd] 会被首行绑定到 custom,
@@ -1089,7 +1134,7 @@ export function pickInitialNewSessionWorkspace(
   return recentWorkspaces[0]?.workingDir ?? null;
 }
 
-export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateSessionOptions {
+export function buildRemoteCreateSessionOptions(draft: NewSessionDraft, projectDir?: string): CreateSessionOptions {
   const extraDirs = normalizeExtraDirs(draft.extraDirs);
   const effort = draft.effort.trim();
   const providerId = draft.providerId?.trim();
@@ -1109,6 +1154,7 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateS
   return {
     ...base,
     workingDir: draft.workingDir.trim(),
+    ...(projectDir ? { projectDir } : {}),
     ...(extraDirs.length > 0 ? { extraDirs } : {}),
   };
 }

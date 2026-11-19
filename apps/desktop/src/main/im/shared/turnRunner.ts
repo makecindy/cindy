@@ -1,3 +1,6 @@
+import { beginTemporaryImPermission } from './temporaryTurnPermission';
+import { imText } from './imText';
+import { getSessionRuntimeStartOverride } from '../../maker-ipc/sessionRuntimeControl';
 import { readImRemoteProviderRoute } from '../remoteProviderRoute';
 import {
   createLocalImSource,
@@ -40,10 +43,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { isImAccountScopeClosedError } from '../accountBoundary';
 import { bindRuntimeRecoveryNotice } from './runtimeRecoveryNotice';
+import { presentImQuestion, IM_QUESTION_TIMEOUT_MS } from './questionPresentation';
 import { bindInputHandoffChannelNotice } from './inputHandoffChannelNotice';
 import { isImSubagentEvent } from './agentEventScope';
 import { isExpiredPermissionDecision, type SharedPermission } from '../../maker-ipc/sharedPermission';
-import { presentSharedPermissionCard } from './permissionPresentation';
+import { permissionExpiredText, presentSharedPermissionCard } from './permissionPresentation';
 import { describeInteractionSource } from './interactionSource';
 import { hasSessionPermissionUpdates } from '@cindy/maker-core';
 
@@ -51,11 +55,11 @@ import { hasSessionPermissionUpdates } from '@cindy/maker-core';
  * 群里的授权卡改投宿主私聊时, 加在卡片正文顶部的说明。
  *
  * 放在这一层(desktop main)而不是 @cindy/im: 传输层没有 locale、也不该持有产品措辞。
- * 与个人 bot 其它 bot 侧文案(im/telegram/uiText.ts)同口径 —— 那一整套目前是单语中文,
- * 见该文件头部说明; 若要做多语言应连同整套一起改, 不在这一句上开特例。
+ * 与个人 bot 其它控制文案同口径, 跟随界面语言, 发送时现取。
  */
-const GROUP_APPROVAL_OWNER_DM_NOTE =
-  '🔐 群聊里的任务需要你授权。授权卡不会发到群里，在这里确认即可。';
+function groupApprovalOwnerDmNote(): string {
+  return imText('imBot.text.shared.turn.groupApprovalOwnerDm');
+}
 
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
@@ -84,8 +88,10 @@ import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import {
+  createSessionUnavailableError,
   isTerminalAgentErrorEvent,
   MAIN_OWNED_SEND_CONTEXT,
+  SessionCreationCleanupPendingError,
   TurnPermissionPolicyUnsupportedError,
 } from '@cindy/maker-core';
 import type {
@@ -128,12 +134,14 @@ import {
   type InteractionRouteLease,
 } from '../../maker-ipc/interactionRouter';
 import { beginGroupHistoryAccess, type GroupHistoryAccessScope } from './groupHistoryAccess';
-import { beginChannelToolScope, type ChannelToolScope } from './channelToolScope';
+import { beginTelegramReplyMediaScope, beginChannelToolScope, type ChannelToolScope } from './channelToolScope';
 import { agentHandoffPending } from '../../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../../maker-ipc/agentHandoff';
 import { buildPlanReconcileNote, summarizeOpenPlan } from '../../maker-ipc/planReconcile';
 import { peekGoalInactiveNote } from '../../goal-host/inactiveNote';
 import { isSilencedSchedulerTurn } from '../../scheduler-host/silent-output';
+import { captureImAccountGeneration, isImAccountGenerationCurrent } from '../accountBoundary';
+import { telegramQuestionOrigin } from '../../maker-ipc/telegramQuestionReply.js';
 import { isRelayedChannelTurnSource, type ChannelTurnSource } from '../../maker-ipc/channelTurnSignal';
 import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
@@ -230,6 +238,8 @@ function resolveTurnFileRoots(
 interface TurnState {
   /** Stable identity used by the central interaction router for this turn. */
   turnId: string;
+  /** Direct Stop cancels this exact turn, independently of session disposal. */
+  stopRequested?: boolean;
   userId: string;
   /** thread = session 模型的会话维度键(slack thread root ts);feishu undefined。 */
   scopeKey?: string;
@@ -350,6 +360,7 @@ interface QueuedSend {
   turnPermissionPolicy?: TurnPermissionPolicy;
   /** Main-verified owner sender (see ImRunAgentTurnArgs.requesterIsOwner). */
   requesterIsOwner?: boolean;
+  questionRespondentId?: string;
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
@@ -366,6 +377,8 @@ type DetachDrainOutcome = 'rewire' | 'cancelled';
 interface SessionState {
   /** Keep the original session configuration even when no persistent takeover exists. */
   preserveSessionConfig: boolean;
+  /** Both cancel this channel's turn; only runtime disposal retires late replacements. */
+  disposalIntent?: 'runtime' | 'observation';
   /** Maker session (in-process). */
   makerSession: MakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
@@ -422,6 +435,8 @@ interface SessionState {
    * 桌面输入等其它来源不回传；在该轮终态清除，避免沿用到下一轮。
    */
   relayedTurn: boolean;
+  replyRequesterIsOwner?: boolean;
+  replyMediaRelease?: () => void;
 }
 
 /**
@@ -529,6 +544,7 @@ export interface ImRunAgentTurnArgs {
    * group speaker.isOwner). Only this unlocks owner-only Host actions; omitted = not owner.
    */
   requesterIsOwner?: boolean;
+  questionRespondentId?: string;
   /**
    * 这一轮的触发消息来自「禁止保存内容」的群。
    *
@@ -591,7 +607,7 @@ export interface ImTurnRunner {
   attachSessionOutput(
     session: MakerSession,
     userId: string,
-    route?: { attached: boolean; scopeKey?: string },
+    route?: { attached: boolean; scopeKey?: string; companionChannel?: boolean },
     source?: ChannelTurnSource,
   ): void;
   /**
@@ -774,13 +790,15 @@ export function createTurnRunner(
    *  the cache, both spawn a maker session, and the second clobbers the first
    *  in `sessionStates`. */
   const wiringInFlight = new Map<string, Promise<SessionState>>();
+  // New wiring must not adopt a replacement that a disposed preparation owns.
+  const runtimePreparations = new Map<string, Promise<void>>();
+  // Maker bounds its wait, not native teardown. Keep exact old-close ownership
+  // until the actual event, without retaining failed runtimes strongly.
+  const rebuildingRuntimeCloses = new WeakSet<MakerSession>();
   /** 接线前跟随切换期间, 切换重建会话要用的渠道 vendorOptions(见 vendorOptionsForSession)。 */
   const coldWiringVendorOptions = new Map<string, Record<string, unknown>>();
-  /**
-   * agent switch 主动 close 的旧 Session。只有对象身份和 close reason 都匹配才
-   * 忽略；同一业务 sessionId 下的用户关闭或新引擎关闭必须照常清缓存。
-   */
-  const agentSwitchCloseSuppressed = new Map<string, { expectedSession: MakerSession }>();
+  /** Agent-switch close suppression is scoped to its guarded preparation. */
+  const expectedSessionCloses = new Map<string, { expectedSession: MakerSession }>();
   type MakerInstance = ReturnType<typeof getMaker>;
   let subscribedMaker: MakerInstance | null = null;
   let unsubscribeMakerEvents: (() => void) | null = null;
@@ -791,6 +809,7 @@ export function createTurnRunner(
     subscribedMaker = maker;
     unsubscribeMakerEvents = maker.on((event) => {
       if (event.type !== 'session:closed') return;
+      if (rebuildingRuntimeCloses.delete(event.session)) return;
       const state = sessionStates.get(event.sessionId);
       // A retired instance must not clear a replacement already wired to this task.
       if (
@@ -803,8 +822,11 @@ export function createTurnRunner(
         state && event.reason === 'runtime-refresh' &&
         deps.acquirePendingAgentSwitch
       ) return;
-      const suppression = agentSwitchCloseSuppressed.get(event.sessionId);
-      if (suppression?.expectedSession === event.session && event.reason === 'agent-switch') return;
+      const suppression = expectedSessionCloses.get(event.sessionId);
+      if (
+        suppression?.expectedSession === event.session &&
+        event.reason === 'agent-switch'
+      ) return;
       forgetClosedSession(event.sessionId, 'maker session closed');
     });
   }
@@ -1118,7 +1140,62 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'companion_unavailable' };
       }
     }
+    // Only an actual incoming turn prepares a cold runtime. The existing lock bridge applies
+    // pending choices and subscription recovery before an exhausted old source can block startup.
+    const cold = deps.prepareUnhealthySession && deps.acquirePendingAgentSwitch
+      && !sessionStates.has(target.row.id) && !wiringInFlight.has(target.row.id)
+      && !getMaker().getSession(target.row.id);
+    if (cold && deps.acquirePendingAgentSwitch) {
+      let release: (() => void) | undefined;
+      const releaseOnce = () => { const held = release; release = undefined; held?.(); };
+      const id = target.row.id;
+      try {
+        let refreshed: ImSessionRow;
+        try {
+          if ((!target.attached && !target.notificationReply && !target.botOwned) || target.botOwned?.lane === 'channel')
+            coldWiringVendorOptions.set(id, adapter.buildVendorOptions(userId, target.scopeKey));
+          release = await deps.acquirePendingAgentSwitch(id, {
+            channelOwned: !target.attached && !target.notificationReply && !target.botOwned,
+          });
+          const current = await repo.peekSessionById(id);
+          if (!current) throw new Error(`session ${id} missing after cold route preparation`);
+          refreshed = current;
+        } catch (err) {
+          if (isImAccountScopeClosedError(err)) throw err;
+          const normalized = normalizeSendError(err);
+          await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
+          if (args.queueMode === 'internal') {
+            try {
+              const text = ui.agent.sendInternalError(normalized.reason);
+              const consumed = (await args.onEarlyReject?.(normalized.reason, text)) ?? false;
+              if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+            } catch { /* Keep the definite pre-dispatch rejection if its notice fails. */ }
+          }
+          return { kind: 'rejected', reason: normalized.reason };
+        }
+        return await dispatchPreparedAgentTurn(args, { ...target, authChecked: false }, {
+          row: refreshed, release: releaseOnce,
+        });
+      } finally {
+        releaseOnce();
+        coldWiringVendorOptions.delete(id);
+      }
+    }
+    return dispatchPreparedAgentTurn(args, target);
+  }
+
+  async function dispatchPreparedAgentTurn(
+    args: Parameters<typeof dispatchAgentTurnInternal>[0],
+    target: RouteTarget,
+    cold?: { row: ImSessionRow; release(): void },
+  ): Promise<ImTurnDispatch> {
+    const { botContextId, userId, userMessageId, text, attachments, scopeKey } = args;
+    // Keep the entry row for title/new-conversation decisions; use the refreshed execution
+    // row for authentication and wiring after a recovery clears its native id.
     const row = target.row;
+    const routeRow = effectiveRuntimeAuthRow(cold?.row ?? row);
+    const coldCompanion = target.botOwned && (!!cold || (!sessionStates.has(row.id)
+      && !wiringInFlight.has(row.id) && !getMaker().getSession(row.id)));
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
     let followTarget: ImDefaultRoute | null | undefined = null;
     // 伙伴任务(主任务 / channel 专线)用伙伴自己的模型链, 不跟随渠道默认。
@@ -1132,18 +1209,18 @@ export function createTurnRunner(
       // 渠道默认跟随: 本条消息会在 send 锁内切到新默认时, 按新路由检查授权 ——
       // 否则旧默认坏掉(如供应商断开)时, 消息会先被「缺授权」挡掉, 永远换不过去。
       followTarget =
-        !target.attached && !target.notificationReply && !target.botOwned
+        !cold && !target.attached && !target.notificationReply && !target.botOwned
           ? await deps.channelDefaultRoute?.previewSwitchTarget(row.id)
           : null;
       const authRow = followTarget
         ? {
-            ...row,
+            ...routeRow,
             agentKind: followTarget.agentKind,
             model: followTarget.model,
             providerId: followTarget.providerId,
             agentDeviceId: followTarget.agentDeviceId ?? null,
           }
-        : row;
+        : routeRow;
       const auth = await checkImRouteAuthDetailed(authRow, undefined, authCheckDeps());
       if (!auth.ok) {
         if (args.queueMode === 'internal') {
@@ -1248,9 +1325,9 @@ export function createTurnRunner(
     // 未接线的任务(如重启后)要跟随新默认: 接线前先对齐, 不先用可能已坏的旧路由
     // 起一次进程。只换接线用的路由; `row` 保持入口读到的值(标题等逻辑按它判断,
     // 跨引擎切换清掉的原生会话 id 不应被当成「新对话」)。
-    let wireTarget = target;
+    let wireTarget = cold ? { ...target, row: cold.row } : target;
     if (
-      followTarget &&
+      !cold && followTarget &&
       deps.channelDefaultRoute &&
       !sessionStates.has(row.id) &&
       !wiringInFlight.has(row.id) &&
@@ -1268,7 +1345,7 @@ export function createTurnRunner(
         // 授权检查只验过新默认路由 —— 按实际路由补一次, 旧供应商断开时在这里给出
         // 缺授权提示, 而不是进旧路由的发送流程运行时失败(PR #5155 review P2)。
         if (!sameImDefaultRoute(routeOfRow(refreshed), followTarget)) {
-          const auth = await checkImRouteAuthDetailed(refreshed, undefined, authCheckDeps());
+          const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(refreshed), undefined, authCheckDeps());
           if (!auth.ok) {
             const authStatus = { ...auth, agentKind: refreshed.agentKind, model: refreshed.model };
             if (args.queueMode === 'internal') {
@@ -1317,6 +1394,9 @@ export function createTurnRunner(
       throw err;
     }
 
+    // The regular dispatch path takes the same lock again; release the cold-start lease
+    // only after wiring has consumed the refreshed route, including on all early exits.
+    cold?.release();
     await repoTouchUserSent(row.id);
 
     // 接管 session 首条消息自动改 title — 对齐 desktop new maker (makerChatStore
@@ -1409,6 +1489,7 @@ export function createTurnRunner(
         && args.requesterIsOwner === true && target.botOwned)
         ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
       ...(args.requesterIsOwner === true ? { requesterIsOwner: true } : {}),
+      questionRespondentId: args.questionRespondentId,
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
@@ -1523,6 +1604,7 @@ export function createTurnRunner(
     );
     let acceptedAt = 0;
     let turnChangeSetStarted = false;
+    let failureSource = 'session.prepare';
 
     let releaseAgentSwitchLock = (): void => {};
     try {
@@ -1541,14 +1623,16 @@ export function createTurnRunner(
         // 后面的 refreshSessionAfterPendingAgentSwitch 原地换绑。
         let blocked: string | null;
         if (deps.acquirePendingAgentSwitch) {
-          agentSwitchCloseSuppressed.set(rowId, { expectedSession: state.makerSession });
+          expectedSessionCloses.set(rowId, { expectedSession: state.makerSession });
           try {
             blocked = await deps.companion.prepareSend(rowId);
           } finally {
-            agentSwitchCloseSuppressed.delete(rowId);
+            expectedSessionCloses.delete(rowId);
           }
           if (sessionStates.get(rowId) !== state) {
-            throw new Error(`session ${rowId} closed while preparing the bot send`);
+            throw createSessionUnavailableError(
+              'SESSION_CLOSED', `session ${rowId} closed while preparing the bot send`,
+            );
           }
         } else {
           blocked = await deps.companion.prepareSend(rowId);
@@ -1583,7 +1667,9 @@ export function createTurnRunner(
       if (deps.prepareUnhealthySession) {
         await deps.prepareUnhealthySession(rowId);
         if (sessionStates.get(rowId) !== state) {
-          throw new Error(`session ${rowId} closed while checking its context before send`);
+          throw createSessionUnavailableError(
+            'SESSION_CLOSED', `session ${rowId} closed while checking its context before send`,
+          );
         }
       }
       // deferred 切换会关闭旧 session。apply 成功后重新读取 maker 里的 live
@@ -1592,21 +1678,30 @@ export function createTurnRunner(
         const suppression = {
           expectedSession: state.makerSession,
         };
-        agentSwitchCloseSuppressed.set(rowId, suppression);
+        expectedSessionCloses.set(rowId, suppression);
         try {
           releaseAgentSwitchLock = await deps.acquirePendingAgentSwitch(rowId, {
             // 伙伴任务跟随伙伴模型链, 不对齐渠道默认。
             channelOwned: !state.attached && !item.turn.notificationReply && !state.botLane,
           });
         } finally {
-          agentSwitchCloseSuppressed.delete(rowId);
+          expectedSessionCloses.delete(rowId);
         }
         if (sessionStates.get(rowId) !== state) {
-          throw new Error(`session ${rowId} closed while refreshing deferred agent switch`);
+          throw createSessionUnavailableError(
+            'SESSION_CLOSED', `session ${rowId} closed while refreshing deferred agent switch`,
+          );
         }
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
       } else {
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
+      }
+      // 重建/换绑期间 state 仍可能被别的路径清掉（用户关任务、账号边界…）。新运行时若没有
+      // 观察者，继续 send 只会把这一轮的输出丢在没人收的地方；宁可明确失败并留下 code。
+      if (sessionStates.get(rowId) !== state) {
+        throw createSessionUnavailableError(
+          'SESSION_CLOSED', `session ${rowId} closed while preparing the runtime for send`,
+        );
       }
       // 发送时刻的实际路由兜底: 授权检查只验过「将要切到」的新默认路由, 跟随切换
       // 失败被吞后这条消息会按旧路由发送 —— 按实际路由补一次授权检查, 旧供应商断开
@@ -1620,7 +1715,7 @@ export function createTurnRunner(
           throw new Error(`companion session ${rowId} missing before route authentication`);
         }
         if (landed && (state.botLane || (followAuthRoute && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)))) {
-          const auth = await checkImRouteAuthDetailed(landed, undefined, authCheckDeps());
+          const auth = await checkImRouteAuthDetailed(effectiveRuntimeAuthRow(landed), undefined, authCheckDeps());
           if (!auth.ok) {
             const attached = state.attached || !!state.botLane;
             const authStatus = { ...auth, agentKind: landed.agentKind, model: landed.model };
@@ -1763,10 +1858,12 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'aborted' };
       }
 
+      failureSource = 'session.send';
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
-        origin: { kind: 'user', surface: 'im' },
+        origin: channel === 'telegram' && ownsChannelOutput(state) && !item.turn.notificationReply
+          ? telegramOriginForTurn(state, userId, item.turn.scopeKey, item.requesterIsOwner === true, effectiveTurnPolicy) : { kind: 'user', surface: 'im' },
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
         // fabricated by Renderer/device-link structured-clone input.
@@ -1778,35 +1875,11 @@ export function createTurnRunner(
         ...(effectiveTurnPolicy ? { turnPermissionPolicy: effectiveTurnPolicy } : {}),
         afterTurnReserved: async () => {
           if (!effectiveTurnPolicy) return;
-          const session = state.makerSession;
-          const previous = session.stablePermissionModeState;
-          // A retained policy is mandatory, regardless of channel or whether its
-          // requester is known. Explicit channel/companion exemptions were resolved
-          // above; never remove a mandatory policy just to admit Full access.
-          if (previous?.mode !== 'bypassPermissions') return;
-          if (!session.capabilities.setPermissionModeMidSession?.supported
-              || !session.capabilities.permissionModes?.some((mode) => mode.id === 'auto')
-              || !session.capabilities.turnPermissionPolicy?.supported?.supported
-              || session.capabilities.turnPermissionPolicy.unsupportedPermissionModes?.includes('auto')) return;
-
-          // Reservation prevents stealing another turn's runtime. Keep the existing
-          // host lease through background continuation AND asynchronous restoration.
-          // CAS protects user changes; the persisted task preference is never changed.
-          const release = session.acquireTurnLease();
-          const switching = session.setPermissionModeIfUnchanged(previous, 'auto');
-          const originalMode = previous.mode;
-          item.turn.hostTurnLeaseRelease = () => {
-            void switching.then(async (changed) => {
-              if (changed) {
-                await session.setPermissionModeIfUnchanged(
-                  { mode: 'auto', generation: previous.generation + 1 }, originalMode,
-                );
-              }
-            }).catch((err) => {
-              log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
-            }).finally(release);
-          };
-          await switching;
+          await beginTemporaryImPermission(state.makerSession, cleanup => {
+            item.turn.hostTurnLeaseRelease = cleanup;
+          }, err => {
+            log.warn(`temporary IM permission cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
         },
         beforeProviderStart: async () => {
           const noticeSession = state.makerSession;
@@ -1841,12 +1914,24 @@ export function createTurnRunner(
               scope: item.channelToolScope,
             });
           }
+          const questionPresentation = item.questionRespondentId ? {
+            questionTimeoutMs: IM_QUESTION_TIMEOUT_MS,
+            presentQuestion: async (question: Extract<InteractionRequest, { kind: 'ask_user_question' }>, controls: import('../../maker-ipc/interactionRouter').QuestionControls) => {
+              if (question.delivery !== 'async') await finalizeActiveStream(rowId);
+              await presentImQuestion({ output, lane: userId, respondent: item.questionRespondentId!,
+                scope: noticeScope, request: question, controls,
+                current: () => sessionStates.get(rowId)?.makerSession === noticeSession,
+                warn: () => log.warn('IM question update failed'),
+              });
+            },
+          } : {};
           item.turn.interactionRouteLease =
             effectiveTurnPolicy?.confirmationSurface === 'desktop'
               ? beginInteractionRoute(state.makerSession, {
                   route: {
                     sessionId: rowId,
                     turnId: item.turn.turnId,
+                    ...questionPresentation,
                     origin: effectiveTurnPolicy.origin,
                     interactionSurface: 'desktop',
                     requesterAuthority: item.requesterIsOwner === true ? 'owner' : 'unknown',
@@ -1866,6 +1951,7 @@ export function createTurnRunner(
                   route: {
                     sessionId: rowId,
                     turnId: item.turn.turnId,
+                    ...questionPresentation,
                     origin: effectiveTurnPolicy?.origin ?? { kind: 'im', channel },
                     interactionSurface: 'channel-card',
                     sourceDescription: item.turn.sourceDescription,
@@ -1988,6 +2074,24 @@ export function createTurnRunner(
         if (index >= 0) state.queue.splice(index, 1);
         throw err;
       }
+      // Disposal already settled this turn as aborted. A late preparation result
+      // must not turn the explicit cancellation into another channel reply.
+      if ((state.disposalIntent || item.turn.stopRequested) && item.turn.terminalKind === 'aborted') {
+        if (err instanceof SessionCreationCleanupPendingError) {
+          log.warn('session cleanup pending after cancelled dispatch', {
+            source: 'session-cleanup',
+            sessionId: hashLogSessionId(rowId),
+            reason: 'SESSION_CLEANUP_PENDING',
+            error: sanitizeSendOutcomeError(err),
+          });
+        }
+        const index = state.queue.indexOf(item.turn);
+        if (index >= 0) state.queue.splice(index, 1);
+        await completeTurnCallbackAfterAck(item.turn);
+        settleTurnTerminal(item.turn);
+        if (!finishDeferredDetachIfIdle(state)) armDispatchRetry(state, userId);
+        return { kind: 'rejected', reason: 'aborted' };
+      }
       const turnPolicyFailureReason = classifyTurnPermissionPolicySendFailure(err, item, state);
       if (turnPolicyFailureReason) {
         await handleSendPreDispatchFailure(state, userId, {
@@ -1999,7 +2103,7 @@ export function createTurnRunner(
         });
         return { kind: 'rejected', reason: turnPolicyFailureReason };
       }
-      const normalized = normalizeSendError(err);
+      const normalized = normalizeSendError(err, failureSource);
       if (normalized.reason === 'SESSION_RUNNING') {
         releaseTurnInteractionRoute(item.turn, 'session_running_race');
         const i = state.queue.indexOf(item.turn);
@@ -2085,7 +2189,27 @@ export function createTurnRunner(
     }
   }
 
+  function effectiveRuntimeAuthRow(row: ImSessionRow): ImSessionRow {
+    const profile = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
+    return { ...row, model: profile.model ?? row.model,
+      providerId: profile.providerId === undefined ? row.providerId : profile.providerId };
+  }
+
   async function refreshSessionAfterPendingAgentSwitch(
+    state: SessionState,
+    sessionId: string,
+    userId: string,
+  ): Promise<void> {
+    const preparation = prepareSessionRuntime(state, sessionId, userId);
+    runtimePreparations.set(sessionId, preparation);
+    try {
+      await preparation;
+    } finally {
+      if (runtimePreparations.get(sessionId) === preparation) runtimePreparations.delete(sessionId);
+    }
+  }
+
+  async function prepareSessionRuntime(
     state: SessionState,
     sessionId: string,
     userId: string,
@@ -2103,19 +2227,27 @@ export function createTurnRunner(
         sessionId,
         `session became ${row?.status ?? 'missing'} during route refresh`,
       );
-      throw new Error(`session ${sessionId} is not active after deferred agent switch`);
+      throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} is not active after deferred agent switch`);
     }
     let current = maker.getSession(sessionId);
     // apply 已提交 DB 但 bootstrap 失败时,直发路径也要像 makerSendTransaction 的
     // lazy-create 一样按最新 DB 行自愈,不能退回已关闭的 previous.send()。
-    if (!current) {
+    const unusable = describeUnusableRuntime(current);
+    if (unusable) {
+      log.info(`rebuilding ${unusable} runtime before send session=${sessionId.slice(-8)}`);
+    }
+    if (!current || unusable) {
       if (!row.workingDir) {
-        throw new Error(`session ${sessionId} missing after deferred agent switch`);
+        throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} missing after deferred agent switch`);
       }
       const agentKind = toCoreAgentKind(row.agentKind);
-      hydrateSessionProvider(sessionId, row.providerId ?? null);
-      if (row.effort) setSessionEffort(sessionId, row.effort);
-      setSessionFastMode(sessionId, (row.fastMode ?? false));
+      const startOverride = getSessionRuntimeStartOverride(sessionId, agentKind, row.agentDeviceId);
+      hydrateSessionProvider(sessionId, startOverride.providerId === undefined ? row.providerId ?? null : startOverride.providerId);
+      setSessionEffort(sessionId, startOverride.model ? startOverride.effort : row.effort);
+      setSessionFastMode(sessionId, startOverride.fastMode ?? row.fastMode ?? false);
+      // Maker retries the retired instance's close before publishing its replacement.
+      // Keep this turn's observer alive across that exact instance's close event.
+      rebuildingRuntimeCloses.add(current ?? previous);
       current = await maker.createSession({
         id: sessionId,
         agentKind,
@@ -2129,15 +2261,68 @@ export function createTurnRunner(
         agentDeviceId: row.agentDeviceId ?? undefined,
         remoteHostId: row.remoteHostId ?? undefined,
         resumeSessionId: row.sdkSessionId ?? undefined,
+        ...startOverride,
         vendorOptions: ownsChannelOutput(state)
           ? adapter.buildVendorOptions(userId, state.scopeKey)
           : undefined,
       });
+      // A user archive/delete during the await still cancels this message.
+      const [latest] = await getDbClient().drizzle.select().from(sessionsTable)
+        .where(eq(sessionsTable.id, sessionId)).limit(1);
+      if (!latest || latest.status === 'archived' || latest.status === 'deleted') {
+        // Terminal cleanup may have run before startup published this instance.
+        // Retire only this replacement, never a later runtime for the same id.
+        try {
+          await retirePreparedRuntime(maker, current);
+        } finally {
+          // Failed native exit keeps Maker's ownership barrier, but terminal IM
+          // state and observers must be removed even when no close event arrives.
+          if (sessionStates.get(sessionId) === state) {
+            forgetClosedSession(sessionId, 'session closed while rebuilding its runtime');
+          }
+        }
+        throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} closed while rebuilding its runtime`);
+      }
+    }
+    // Disposal may finish during either await above. Do not install an observer
+    // after its owner has cleaned up: it could observe a later wiring of this id.
+    if (sessionStates.get(sessionId) !== state) {
+      if (state.disposalIntent === 'runtime' && sessionStates.get(sessionId)?.makerSession !== current) {
+        await retirePreparedRuntime(maker, current);
+      }
+      throw createSessionUnavailableError('SESSION_CLOSED', `session ${sessionId} detached while preparing its runtime`);
     }
     if (current === previous) return;
 
     rebindSessionOutput(state, current, userId);
     wireSessionToIpcExternal(current);
+  }
+
+  async function retirePreparedRuntime(maker: MakerInstance, session: MakerSession): Promise<void> {
+    try {
+      await maker.closeSessionIfCurrent(session);
+    } catch (cause) {
+      // Only a confirmed teardown boundary gets the cleanup category. Never
+      // remove Maker ownership while native exit is unconfirmed or start again.
+      throw cause instanceof SessionCreationCleanupPendingError
+        ? cause : new SessionCreationCleanupPendingError({ cause });
+    }
+  }
+
+  function telegramOriginForTurn(state: SessionState, userId: string, scopeKey: string | undefined, requesterIsOwner: boolean, policy?: TurnPermissionPolicy) {
+    const session = state.makerSession;
+    const account = captureImAccountGeneration();
+    const connected = im.getStatus?.();
+    return telegramQuestionOrigin((answerSession) => {
+      const status = im.getStatus();
+      if (account === null || !isImAccountGenerationCurrent(account) ||
+          answerSession !== session || state.makerSession !== session || sessionStates.get(session.id) !== state ||
+          !ownsChannelOutput(state) || state.userId !== userId || state.scopeKey !== scopeKey ||
+          connected?.kind !== 'connected' || status.kind !== 'connected' || status.appId !== connected.appId) return;
+      state.replyRequesterIsOwner = requesterIsOwner;
+      state.relayedTurn = true;
+      updateReplyMediaScope(state);
+    }, policy ? { session, policy } : undefined);
   }
 
   /**
@@ -2146,6 +2331,24 @@ export function createTurnRunner(
    */
   function ownsChannelOutput(state: SessionState): boolean {
     return !state.preserveSessionConfig || state.botLane === 'channel';
+  }
+
+  function updateReplyMediaScope(state: SessionState): void {
+    state.replyMediaRelease?.();
+    state.replyMediaRelease = undefined;
+    if (!state.relayedTurn || !ownsChannelOutput(state) || state.queue.length ||
+        state.makerSession.remoteHostId || !adapter.replyMediaScopeFor) return;
+    const session = state.makerSession;
+    const scope = adapter.replyMediaScopeFor(state.userId);
+    const botId = scope.im.getBotId();
+    state.replyMediaRelease = beginTelegramReplyMediaScope({
+      sessionId: session.id,
+      sessionInstanceId: session.instanceId,
+      scope: { ...scope, requesterIsOwner: state.replyRequesterIsOwner },
+      isActive: () => sessionStates.get(session.id) === state &&
+        state.makerSession === session && state.relayedTurn && state.queue.length === 0 &&
+        im.getStatus().kind === 'connected' && scope.im.getBotId() === botId,
+    });
   }
 
   /** Rebind observation without discarding accepted or queued IM messages. */
@@ -2220,13 +2423,31 @@ export function createTurnRunner(
 
   // ── per-session wiring (idempotent) ─────────────────────────────────────────
 
+  /**
+   * 缓存里的运行时还能不能收新输入。`null` = 可以继续用；否则返回不可用原因（写日志）。
+   *
+   * 只看对象身份不够：Maker 只在 status === 'closed' 时才把会话移出 activeSessions，
+   * 拆除已开始（`hasStartedClosing()`，含 close 失败停住的实例）或 close 刚失败的
+   * error 态仍是同一个实例，`session.send` 会直接抛「is closing / is in error state」。
+   * `'aborting'` 不算不可用：那是同一轮 Stop 的瞬态，不应该为它重建运行时。
+   */
+  function describeUnusableRuntime(session: MakerSession | undefined): string | null {
+    if (!session) return 'missing';
+    // status 比「拆除已开始」更具体：close 失败停住的实例两者都成立，日志要写 error。
+    const status = session.getStatus();
+    if (status === 'closed' || status === 'error') return `status=${status}`;
+    return session.hasStartedClosing() ? 'closing' : null;
+  }
+
   async function ensureSessionWired(target: RouteTarget, userId: string): Promise<SessionState> {
     const existing = sessionStates.get(target.row.id);
     if (existing) {
       if (existing.detachDrainPromise) {
         const outcome = await existing.detachDrainPromise;
         if (outcome === 'cancelled') {
-          throw new Error(`session wiring cancelled during cleanup: ${target.row.id}`);
+          throw createSessionUnavailableError(
+            'SESSION_CLOSING', `session wiring cancelled during cleanup: ${target.row.id}`,
+          );
         }
         return ensureSessionWired(target, userId);
       }
@@ -2244,6 +2465,15 @@ export function createTurnRunner(
         existing.preserveSessionConfig = true;
       }
       return existing;
+    }
+    const preparation = runtimePreparations.get(target.row.id);
+    if (preparation) {
+      // The old owner may have been disposed after reading pre-switch config.
+      // Let it retire its exact result before creating with the latest task row.
+      await preparation.catch(() => {});
+      const latest = await repo.peekSessionById(target.row.id);
+      if (!latest) throw createSessionUnavailableError('SESSION_CLOSED', `session ${target.row.id} unavailable after runtime preparation`);
+      return ensureSessionWired({ ...target, row: latest }, userId);
     }
     const inFlight = wiringInFlight.get(target.row.id);
     if (inFlight) return inFlight;
@@ -2369,11 +2599,12 @@ export function createTurnRunner(
     // routingTransform)读它决定走哪个供应商上游/钥匙。进程重启后 IM turn 首次起会话时,
     // 内存 store 是空的;不 hydrate 的话 /model 选过的供应商会丢、回落默认路由。对齐
     // renderer 开会话(register.ts)与 scheduler(runner.ts)的 hydrate 时机。
-    hydrateSessionProvider(row.id, row.providerId);
+    const startOverride = getSessionRuntimeStartOverride(row.id, row.agentKind, row.agentDeviceId);
+    hydrateSessionProvider(row.id, startOverride.providerId === undefined ? row.providerId : startOverride.providerId);
     // bridge 会话态(effort / fast)同点 hydrate —— chatgpt/ / xai/ 模型经 IM 触发 turn 时,
     // compat-proxy 路由决策从这两个 store 读出闭包进订阅 handler(与 register.ts bootstrapSession 对齐)。
-    if (row.effort) setSessionEffort(row.id, row.effort);
-    setSessionFastMode(row.id, (row.fastMode ?? false));
+    setSessionEffort(row.id, startOverride.model ? startOverride.effort : row.effort);
+    setSessionFastMode(row.id, startOverride.fastMode ?? row.fastMode ?? false);
     // 接管路径: 必须传 resumeSessionId 让 Claude SDK 用 desktop 留下的 sdkSessionId
     // resume, 否则 maker.activeSessions 没该 row.id 时会 spawn 全新空会话——oneshot
     // "总结当前状态" 就变成总结空会话, agent 输出短促/无内容; 用户看到渠道卡片
@@ -2391,6 +2622,7 @@ export function createTurnRunner(
       providerId: row.providerId,
       agentDeviceId: row.agentDeviceId ?? undefined,
       remoteHostId: row.remoteHostId ?? undefined,
+      ...startOverride,
       // 行总是先由 repo 建好, maker 复用已有 row 时该 title 不会生效 —
       // 仅作防御兜底(原 feishu 实现传 '飞书会话' 字面量, 语义等价)。
       title: preserveSessionConfig ? undefined : adapter.sessions.defaultTitle(userId),
@@ -2566,7 +2798,7 @@ export function createTurnRunner(
         ...(req.kind === 'permission'
           ? {
               deliverToOwnerDm: true,
-              ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+              ownerDmNote: groupApprovalOwnerDmNote(),
               // 迁移路径同样按业务 turn 取来源消息(可能没有进行中的 turn)。
               ...(migratedSourceMessageId !== undefined
                 ? { ownerDmSourceMessageId: migratedSourceMessageId }
@@ -2906,6 +3138,7 @@ export function createTurnRunner(
         // 下一条撞上 SESSION_RUNNING）。
         if (isProductTurnDoneEvent(event) || isTerminalAgentErrorEvent(event)) {
           state.relayedTurn = false;
+          updateReplyMediaScope(state);
           maybeDispatchNextQueued(state, userId);
           return;
         }
@@ -3360,6 +3593,14 @@ export function createTurnRunner(
         return;
       }
       if (silenced && !t.streamingHandlePromise) return;
+      if (!errMsg && output.kind === 'chunked-text' && t.origin?.kind === 'scheduler') {
+        const notification = adapter.scheduledNotificationText?.(t.buffer);
+        if (notification === null) return;
+        if (notification !== undefined) {
+          t.buffer = notification;
+          t.header = null;
+        }
+      }
       // Component images become Markdown only after projection. Collect from the
       // outbound copy so the text channel cannot strip an uncollected image.
       const projectedBody = composeOutboundBody(t.buffer, true);
@@ -3614,7 +3855,7 @@ export function createTurnRunner(
             ? typeof unsupportedCopy === 'function'
               ? unsupportedCopy(rejectedMode)
               : unsupportedCopy
-            : `❌ 启动 agent 失败：${failure.reason}`;
+            : imText('imBot.text.shared.turn.agentStartFailed', { reason: failure.reason });
         // 早期拒绝终态交调用方消费(群主流 @ 开话题时 patch 开场白卡),
         // 消费了就不再另发。
         const consumed =
@@ -3690,7 +3931,7 @@ export function createTurnRunner(
     return `session:${createHash('sha256').update(sessionId).digest('hex').slice(0, 12)}`;
   }
 
-  function normalizeSendError(err: unknown): {
+  function normalizeSendError(err: unknown, source = 'session.prepare'): {
     source: string;
     reason: string;
     error: SanitizedSendOutcomeError;
@@ -3704,7 +3945,7 @@ export function createTurnRunner(
       };
     }
     return {
-      source: 'session.send',
+      source: err instanceof SessionCreationCleanupPendingError ? 'session-cleanup' : source,
       reason: error.safeMessage ?? error.errorName ?? error.errorKind ?? 'unknown',
       error,
     };
@@ -4039,7 +4280,7 @@ export function createTurnRunner(
       isQuotaExhaustionFailure(errData) ? {
         ...(await resolveSessionErrorContext(state.makerSession.id)),
         botLabel: [
-          channel === 'telegram' ? 'Telegram 个人 bot' : `${channel} 个人 bot`,
+          imText('imBot.text.shared.turn.personalBotLabel', { channel: channel === 'telegram' ? 'Telegram' : channel }),
           adapter.getBotDisplayName?.(),
         ].filter(Boolean).join(' · '),
         surface: 'personal',
@@ -4048,21 +4289,22 @@ export function createTurnRunner(
     );
     if (turn?.streamingHandle) {
       const view = composeStreamingView(turn, true);
-      const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
+      const errorLine = imText('imBot.text.shared.turn.error', { message: msg });
+      const body = view ? `${view}\n\n${errorLine}` : errorLine;
       await finalizeTurnStream(turn, body);
     } else if (!turn.streamingOutputInvalidated) {
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({
             userId,
-            text: `❌ 错误：${msg}`,
+            text: imText('imBot.text.shared.turn.error', { message: msg }),
             terminal: 'error',
             threadTs: turn.scopeKey,
             errorCode: turn?.terminalErrorCode ?? 'agent_turn_error',
             ...(turn && turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
           });
         } else {
-          const errorText = `❌ 错误：${msg}`;
+          const errorText = imText('imBot.text.shared.turn.error', { message: msg });
           const triggerId = output.im.getPendingOpenerTrigger?.(userId);
           const isMyOpener = triggerId === turn?.userMessageId;
           const consumed =
@@ -4271,7 +4513,7 @@ export function createTurnRunner(
             { title: permissionSpec.title ?? '', body: permissionSpec.body },
             decision.kind === 'permission' && decision.behavior === 'allow'
               ? hasSessionPermissionUpdates(decision) ? permissionUi.resolvedAllowAlways : permissionUi.resolvedAllowOnce
-              : isExpiredPermissionDecision(decision) ? '⌛ 本次确认已失效' : permissionUi.resolvedDeny,
+              : isExpiredPermissionDecision(decision) ? permissionExpiredText() : permissionUi.resolvedDeny,
           ),
           update: (messageId, card) => output.im.updateInteractiveCard(messageId, card),
           onError: () => log.warn('shared permission card delivery/update failed'),
@@ -4297,7 +4539,7 @@ export function createTurnRunner(
           ...(req.kind === 'permission'
             ? {
                 deliverToOwnerDm: true,
-                ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+                ownerDmNote: groupApprovalOwnerDmNote(),
                 ...(ownerDmSourceMessageId !== undefined ? { ownerDmSourceMessageId } : {}),
               }
             : {}),
@@ -4414,6 +4656,8 @@ export function createTurnRunner(
   /** detach / dispose 路径: 清掉 in-flight turn 的过程区 ticker 与 silent-stop
    *  settle 订阅, 防定时器 / 陈旧回调泄漏。 */
   function clearQueuedTurnTimers(state: SessionState): void {
+    state.replyMediaRelease?.();
+    state.replyMediaRelease = undefined;
     for (const turn of state.queue) {
       releaseAttachedImTurnHeadless(turn);
       clearActivityTicker(turn);
@@ -4475,6 +4719,7 @@ export function createTurnRunner(
       // attached desktop-originated turn may make isTurnRunning() true while
       // queue stays empty; logout must not abort that desktop-owned work.
       const hasImTurnInFlight = state.queue.length > 0;
+      state.disposalIntent = 'observation';
       cleanupSessionState(state);
       settleDetachDrain(state, 'cancelled');
       if (hasImTurnInFlight) {
@@ -4587,6 +4832,7 @@ export function createTurnRunner(
       }
       const active = state.queue[0];
       if (!active || !matches(active)) return { stopped: removed.length > 0, droppedQueued: removed.length };
+      active.stopRequested = true;
       active.terminalKind = 'aborted';
       // 与桌面 Stop 同一套清理(撤续跑 / 取消恢复 / 暂停 Goal / 停输入队列并中止当前一轮)。
       await stopSessionTurnExplicitly(state.makerSession.id);
@@ -4599,7 +4845,10 @@ export function createTurnRunner(
     // 先清排队再 abort — abort 触发的 done/error 会走 maybeDispatchNextQueued,
     // 队列不清空的话下一条排队消息会在中止后立刻自动派发。
     clearPendingSends(state);
-    if (state.queue[0]) state.queue[0].terminalKind = 'aborted';
+    if (state.queue[0]) {
+      state.queue[0].stopRequested = true;
+      state.queue[0].terminalKind = 'aborted';
+    }
     // 与桌面 Stop 同一套清理(docs/dev-rules/im-turn-flow.md 不变量 9): 撤 silent-stop /
     // 中断续跑守卫(turn 若正挂在 silentStop 的决策窗里, abort 对早已收尾的 SDK turn 是
     // no-op, 不重置的话守卫照样自动续跑, 用户喊停后 agent 原地复活)、取消上下文溢出恢复、
@@ -4619,6 +4868,7 @@ export function createTurnRunner(
   async function disposeOneSession(sessionId: string): Promise<void> {
     const state = sessionStates.get(sessionId);
     if (!state) return;
+    state.disposalIntent = 'runtime';
     sessionStates.delete(sessionId);
     cleanupSessionState(state);
     settleDetachDrain(state, 'cancelled');
@@ -4667,8 +4917,13 @@ export function createTurnRunner(
     attachSessionOutput: (session, userId, route, source) => {
       const existing = sessionStates.get(session.id);
       if (existing) {
+        existing.replyRequesterIsOwner = undefined;
         existing.relayedTurn = isRelayedChannelTurnSource(source);
         const userChanged = existing.userId !== userId;
+        if (route?.companionChannel) {
+          existing.botLane = 'channel';
+          existing.preserveSessionConfig = true;
+        }
         if (route?.attached) {
           existing.attached = true;
           existing.preserveSessionConfig = true;
@@ -4676,12 +4931,13 @@ export function createTurnRunner(
           existing.scopeKey = route.scopeKey;
         }
         if (existing.makerSession !== session || userChanged) rebindSessionOutput(existing, session, userId);
+        updateReplyMediaScope(existing);
         return;
       }
       ensureMakerCloseSubscription(getMaker());
       const state: SessionState = {
         makerSession: session,
-        preserveSessionConfig: route?.attached === true,
+        preserveSessionConfig: route?.attached === true || route?.companionChannel === true,
         userId,
         scopeKey: route?.scopeKey,
         workingDir: session.workDir,
@@ -4692,7 +4948,7 @@ export function createTurnRunner(
         detachDrainPromise: null,
         resolveDetachDrain: null,
         attached: route?.attached === true,
-        botLane: null,
+        botLane: route?.companionChannel ? 'channel' : null,
         scheduledTranspond: null,
         pendingTranspondTokenRate: null,
         pendingTranspondFinals: 0,
@@ -4700,12 +4956,15 @@ export function createTurnRunner(
       };
       sessionStates.set(session.id, state);
       state.unsubscribers.push(session.onEvent(handleEventFor(session.id, userId)));
+      updateReplyMediaScope(state);
     },
     noteChannelTurnSource: (session, source) => {
       const state = sessionStates.get(session.id);
       // An IM turn still in the queue owns whatever runs now; it is delivered once, as itself.
       if (state?.makerSession !== session || state.queue.length > 0) return;
+      if (source !== 'provider-wake') state.replyRequesterIsOwner = undefined;
       state.relayedTurn = isRelayedChannelTurnSource(source);
+      updateReplyMediaScope(state);
     },
     runAgentTurn,
     persistInboundUserMessageEarly,

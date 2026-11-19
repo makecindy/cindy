@@ -1,3 +1,5 @@
+import { isTaskBusyForArchive } from '../../task-management/service.js';
+import { reconcileDeletedTaskViewState } from '../../mcp-apps/viewStateStore.js';
 import { registerCompanionImport } from '../../bot-import/registration.js';
 import { registerTaskTagsIpc } from './taskTags';
 /**
@@ -17,6 +19,7 @@ import { getCurrentDbClientUserId, tryGetDbClient } from '../client/current';
 import {
   registerSessionIpc,
   type RegisterSessionIpcOpts,
+  type SessionWorktreeRecycle,
   setSessionWorktreeBindingLookup,
   setSessionWorktreeRecycle,
 } from './sessions';
@@ -26,7 +29,7 @@ import { registerSessionImportIpc } from '../../session-import/ipc';
 import { registerSessionShareIpc } from './session-share';
 import { registerRecentWorkdirsIpc } from './recentWorkdirs';
 import { registerProjectAliasesIpc } from './projectAliases';
-import { registerRightSidebarTabsIpc } from './rightSidebarTabs';
+import { registerRightSidebarTabsIpc } from './rightSidebarTabs.desktop';
 import { registerSubagentRunsIpc } from './subagentRuns';
 import { enqueueDurableWrite } from '../../messagePersistBroadcaster.desktop';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
@@ -96,7 +99,7 @@ export interface RegisterLocalDbIpcOpts {
   /** ensureReady 打开/创建目标库前执行；失败时阻断，避免跳过认领后创建空库。 */
   beforeEnsureReady?: (userId: string) => void | Promise<void>;
   /** Record worktree recycle intent before a terminal session status is persisted. */
-  requestWorktreeRecycle?: (sessionId: string, resources?: readonly string[]) => Promise<void>;
+  requestWorktreeRecycle?: SessionWorktreeRecycle;
   /** 当前 worktree 绑定（worktreeStore 是 source of truth，DB 只存反范式快照）。 */
   lookupSessionWorktreeBinding?: (sessionId: string) => string | null;
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
@@ -165,6 +168,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       // Resume saved invitations after the database and account boundary are ready.
       await recoverActiveTeammateInvitations();
       if (!isReadyOwnerCurrent()) return;
+      void reconcileDeletedTaskViewState(client, isReadyOwnerCurrent);
       startMediaRefCompensationReconcile(userId, client, isReadyOwnerCurrent);
       const withSessionLock = opts.withSessionLock;
       const db = client.drizzle;
@@ -212,6 +216,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     }));
 
   registerSessionIpc(getCurrentDbClientUserId, {
+    isBusyForProjectArchive: isTaskBusyForArchive,
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
     applyContextWindowBudget: opts.applyContextWindowBudget,

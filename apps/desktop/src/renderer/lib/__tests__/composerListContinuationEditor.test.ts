@@ -11,7 +11,9 @@ import {
   ComposerListItem,
   ComposerOrderedList,
   handleComposerListEnter,
+  handleComposerListTab,
 } from '@/components/new-chat/ComposerListNodes';
+import { ComposerLineEdgeKeymap } from '@/components/new-chat/ComposerLineEdgeKeymap';
 import { serializeEditorContent } from '@/components/new-chat/composerContentSerialization';
 
 /**
@@ -75,6 +77,33 @@ describe('composer list newline keys', () => {
     const event = new KeyboardEvent('keydown', { key: 'Enter' });
     expect(handleComposerListEnter(ed.view, event, 'modifier-enter')).toBe(true);
     expect(serializeEditorContent(ed).text).toBe(expected);
+  });
+
+  // A pasted zero-width space made an empty item continue to the next ordinal.
+  // Existing empty-item tests cover only ordinary whitespace. Unit-tier editor
+  // transactions prove the next text starts a paragraph outside either list form.
+  it.each([
+    { name: 'plain', lines: ['2、内容', '3、\u200B'], html: null },
+    {
+      name: 'structured',
+      lines: [''],
+      html: '<ol start="2" data-marker="、"><li><p>内容</p></li><li><p>\u200B</p></li></ol>',
+    },
+    {
+      name: 'structured task',
+      lines: [''],
+      html: '<ol start="2" data-marker="、"><li><p>内容</p></li><li><p>[ ] \u200B</p></li></ol>',
+    },
+  ])('exits a $name item with only a zero-width body on Shift+Enter', ({ lines, html }) => {
+    const ed = makeEditor(lines);
+    if (html) {
+      ed.commands.setContent(html);
+      ed.commands.setTextSelection(ed.state.doc.content.size - 3);
+    }
+    const event = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true });
+    expect(handleComposerListEnter(ed.view, event, 'enter')).toBe(true);
+    ed.commands.insertContent('段落');
+    expect(serializeEditorContent(ed).text).toBe('2、内容\n段落');
   });
 
   it.each([
@@ -166,6 +195,138 @@ describe('applyListContinuation on a real editor', () => {
     expect(applyListContinuation(ed.view)).toBe(true);
     expect(docText(ed)).toBe('1. abc\n2. def');
   });
+
+  /**
+   * User report (2026-11-17): a comment typed under a `> ` quote shared the
+   * quote's paragraph, so composing the comment re-laid out the quote. Quote
+   * continuation now starts its own top-level paragraph; the sent Markdown is
+   * unchanged. Minimal failure: `> 引用` + Shift+Enter left one paragraph.
+   */
+  it('continues a top-level quote into its own paragraph without changing the sent text', () => {
+    const ed = makeEditor(['> 引用']);
+    expect(applyListContinuation(ed.view)).toBe(true);
+    expect(ed.state.doc.childCount).toBe(2);
+    expect(docText(ed)).toBe('> 引用\n> ');
+
+    expect(applyListBackspace(ed.view)).toBe(true);
+    ed.commands.insertContent('评论');
+    expect(ed.state.doc.childCount).toBe(2);
+    expect(serializeEditorContent(ed).text).toBe('> 引用\n评论');
+  });
+});
+
+function caretAfterText(ed: Editor, text: string): void {
+  let caret = -1;
+  ed.state.doc.descendants((node, pos) => {
+    if (node.isText && node.text === text) caret = pos + node.nodeSize;
+  });
+  ed.commands.setTextSelection(caret);
+}
+
+/**
+ * User report (2026-11-17): structured lists had no outline shortcuts, and
+ * Shift+Tab always cycled the permission mode. ChatInput routes Tab through
+ * handleComposerListTab before its own Tab / Shift+Tab shortcuts. Minimal
+ * failure: Tab on the second bullet returned false and the list stayed flat.
+ */
+describe('composer list Tab keys', () => {
+  it.each([
+    {
+      name: 'Tab nests an item under its previous sibling',
+      html: '<ul><li><p>a</p></li><li><p>b</p></li></ul>',
+      shiftKey: false,
+      expected: '- a\n  - b',
+    },
+    {
+      name: 'Shift+Tab moves a nested item up one level',
+      html: '<ul><li><p>a</p><ul><li><p>b</p></li></ul></li></ul>',
+      shiftKey: true,
+      expected: '- a\n- b',
+    },
+    {
+      name: 'Shift+Tab keeps a top-level item in the list',
+      html: '<ul><li><p>a</p></li><li><p>b</p></li></ul>',
+      shiftKey: true,
+      expected: '- a\n- b',
+    },
+    {
+      name: 'Tab keeps the first item in place',
+      html: '<ol><li><p>b</p></li></ol>',
+      shiftKey: false,
+      expected: '1. b',
+    },
+  ])('$name', ({ html, shiftKey, expected }) => {
+    const ed = makeEditor(['']);
+    ed.commands.setContent(html);
+    caretAfterText(ed, 'b');
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey });
+    expect(handleComposerListTab(ed.view, event)).toBe(true);
+    expect(serializeEditorContent(ed).text).toBe(expected);
+  });
+
+  // The composer's listItem is in the `block` group, so the library lift left a
+  // nested item inside its parent item and the serializer dropped its text.
+  // Enter on an empty nested item shares that lift.
+  it('outdents an empty nested item on Enter and keeps text typed into it', () => {
+    const ed = makeEditor(['']);
+    ed.commands.setContent('<ul><li><p>a</p><ul><li><p>b</p></li><li><p></p></li></ul></li></ul>');
+    let emptyParagraph = -1;
+    ed.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'paragraph' && node.content.size === 0) emptyParagraph = pos + 1;
+    });
+    ed.commands.setTextSelection(emptyParagraph);
+    const event = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true });
+    expect(handleComposerListEnter(ed.view, event, 'enter')).toBe(true);
+    ed.commands.insertContent('c');
+    expect(serializeEditorContent(ed).text).toBe('- a\n  - b\n- c');
+  });
+
+  it('leaves Tab outside lists to the composer', () => {
+    const ed = makeEditor(['plain']);
+    const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true });
+    expect(handleComposerListTab(ed.view, event)).toBe(false);
+  });
+});
+
+/**
+ * User report (2026-11-17): on macOS Ctrl+A / Ctrl+E jumped to the start / end
+ * of the whole input, because Shift+Enter rows share one paragraph and Tiptap
+ * binds these keys to the paragraph edges. Minimal failure: caret inside the
+ * second hardBreak row, Ctrl+A landed at position 1. Unit tier, real keymap.
+ */
+describe('composer Ctrl+A / Ctrl+E line edges', () => {
+  it.each([
+    { key: 'a', expected: 5 },
+    { key: 'e', expected: 10 },
+  ])('Ctrl+$key stays on the caret row', ({ key, expected }) => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document, Paragraph, Text, HardBreak,
+        ComposerLineEdgeKeymap.configure({ enabled: true }),
+      ],
+      content: {
+        type: 'doc',
+        content: [{
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '第一行' },
+            { type: 'hardBreak' },
+            { type: 'text', text: '第二行内容' },
+            { type: 'hardBreak' },
+            { type: 'text', text: '第三行' },
+          ],
+        }],
+      },
+    });
+    // pos 7 = inside "第二|行内容"; that row spans 5..10.
+    editor.commands.setTextSelection(7);
+    const event = new KeyboardEvent('keydown', { key, ctrlKey: true });
+    const handled = editor.view.someProp('handleKeyDown', (handle) => handle(editor!.view, event));
+    expect(handled).toBe(true);
+    expect(editor.state.selection.empty).toBe(true);
+    expect(editor.state.selection.from).toBe(expected);
+  });
 });
 
 describe('applyListBackspace on a real editor', () => {
@@ -208,6 +369,12 @@ describe('applyListBackspace on a real editor', () => {
   it('returns false on a plain text line', () => {
     const ed = makeEditor(['hello', 'world']);
     expect(applyListBackspace(ed.view)).toBe(false);
+  });
+
+  it('returns false on a long digit run before the CJK comma', () => {
+    const ed = makeEditor(['324325、']);
+    expect(applyListBackspace(ed.view)).toBe(false);
+    expect(docText(ed)).toBe('324325、');
   });
 
   it('triggers at end of an empty item even when a later line exists (caret before hardBreak)', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
 import * as Linking from "expo-linking";
 import { useTranslation } from "react-i18next";
@@ -11,6 +11,7 @@ import {
   agentActivityNative as native,
   activityAccountScope,
   startActivityPushSync,
+  type ActivityRecoveryState,
 } from "./agentActivityPush";
 
 /** Local mirroring remains the fallback for old services and self-hosted relays. */
@@ -40,6 +41,10 @@ export function AgentActivityBridge() {
     hasActivity: boolean;
   } | null>(null);
   const registrationKey = `${scope}:${accountGeneration}`;
+  const recovery = useMemo<ActivityRecoveryState>(() => ({}), [registrationKey]);
+  // A reconnect rebuilds the syncer; it must inherit a confirmed server takeover.
+  const registeredRef = useRef(registered);
+  registeredRef.current = registered;
   useEffect(() => {
     if (!native || !initialized) return;
     if (native.configureAccount) {
@@ -56,6 +61,7 @@ export function AgentActivityBridge() {
     if (!native?.configureAccount || !initialized || !isAuthenticated || !scope)
       return;
     const sync = startActivityPushSync({
+      recovery,
       accountScope: scope,
       getAccessToken,
       urlScheme: Linking.createURL("/").split(":")[0],
@@ -64,8 +70,11 @@ export function AgentActivityBridge() {
         running: t("devices.companions.avatarStatus.running"),
         completed: t("devices.companions.avatarStatus.done"),
         error: t("devices.companions.avatarStatus.error"),
-        stale: t("devices.companions.stale"),
+        stale: t("devices.liveActivity.waitingForUpdate"),
       },
+      initiallyRegistered:
+        registeredRef.current?.key === registrationKey &&
+        registeredRef.current.hasActivity,
       onRegistered: (hasActivity) =>
         setRegistered((previous) =>
           previous?.key === registrationKey &&
@@ -75,7 +84,7 @@ export function AgentActivityBridge() {
         ),
     });
     const listener = AppState.addEventListener("change", (state) => {
-      if (state === "active") sync.sync();
+      if (state === "active") sync.sync(true);
     });
     return () => {
       listener.remove();
@@ -86,6 +95,7 @@ export function AgentActivityBridge() {
     isAuthenticated,
     scope,
     registrationKey,
+    recovery,
     getAccessToken,
     t,
     status,
@@ -100,6 +110,7 @@ export function AgentActivityBridge() {
         (registered?.key !== registrationKey || registered.hasActivity))
     )
       return;
+    const readRegistration = native.getPushRegistration?.bind(native);
     const controller = createAgentActivitySync(() => {
       // DeviceLinkProvider clears this store and its subscription ACKs on account
       // changes. Desktop rows carry userId: '' because their database is scoped
@@ -133,7 +144,7 @@ export function AgentActivityBridge() {
           Linking.createURL(`/sessions/${encodeURIComponent(session.id)}`, {
             queryParams: { deviceId: session.deviceLinkDeviceId! },
           }),
-        t("devices.companions.stale"),
+        t("devices.liveActivity.waitingForUpdate"),
       );
       // An idle online peer cannot attest that an unreachable peer has finished.
       // Prefer a displayable live activity; otherwise retain the last stale one.
@@ -151,7 +162,10 @@ export function AgentActivityBridge() {
       )
         return undefined;
       return state ? JSON.stringify({ accountId: scope, state }) : null;
-    }, native);
+    }, native, () => AppState.currentState === "active",
+    readRegistration
+      ? async () => (await readRegistration()).isStale === true
+      : undefined);
     const unsubscribe = remoteSessionStore.subscribeHomeStatus(() =>
       controller.sync(),
     );
@@ -164,7 +178,6 @@ export function AgentActivityBridge() {
       heartbeat = setInterval(() => controller.sync(), 60_000);
     };
     resume();
-    if (AppState.currentState !== "active") controller.sync();
     const listener = AppState.addEventListener("change", (state) => {
       if (state === "active") resume();
       else {

@@ -19,6 +19,11 @@ const mocks = vi.hoisted(() => ({
   removeWallpaper: vi.fn(),
   ensureVideo: vi.fn(),
   fromWebContents: vi.fn(),
+  refreshTheme: vi.fn(),
+  selectTheme: vi.fn(),
+  themeOn: vi.fn(),
+  themeOff: vi.fn(),
+  systemDark: false,
 }));
 
 vi.mock('../appSessionState.js', () => ({
@@ -35,6 +40,7 @@ vi.mock('../wallpaper-video.js', () => ({
 }));
 
 vi.mock('electron', () => ({
+  nativeTheme: { on: mocks.themeOn, removeListener: mocks.themeOff, get shouldUseDarkColors() { return mocks.systemDark; } },
   app: { on: mocks.appOn },
   BrowserWindow: { getAllWindows: () => mocks.allWindows, fromWebContents: mocks.fromWebContents },
   ipcMain: { on: mocks.ipcOn, handle: mocks.ipcHandle },
@@ -55,9 +61,12 @@ vi.mock('../appearance-settings-store.js', () => ({
   writeAppearanceSettingsPatch: mocks.writeAppearanceSettingsPatch,
   resetAppearanceSettings: mocks.resetAppearanceSettings,
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
+  appearanceService: { select: mocks.selectTheme, refresh: mocks.refreshTheme },
+  readSelectedThemeFont: vi.fn(() => null),
 }));
 
-import { registerAppearanceSettingsIpc, installWindowZoomRestoration, __testing } from '../appearance-settings-ipc.js';
+import { registerAppearanceSettingsIpc, installWindowZoomRestoration, updateAppearanceFromSettings, refreshAppearanceTheme, publishAppearanceFromOwner, __testing } from '../appearance-settings-ipc.js';
+import { pluginAppearanceRevision } from '../cindy-brain/pluginAppearanceRevision.js';
 import {
   normalizeAppearanceSettings,
   WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL,
@@ -75,6 +84,82 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  // Unit performance contract: no default refresh publication/subscription;
+  // package refresh publishes once per changed window, with no new OS listener.
+  it('keeps refresh inactive without a package and publishes only changed package defaults', async () => {
+    const windows = Array.from({ length: 4 }, () => ({ isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: vi.fn() } }));
+    mocks.allWindows.push(...windows); mocks.trustedReadWindow.mockReturnValue(true);
+    mocks.refreshTheme.mockReturnValue(undefined);
+    expect(refreshAppearanceTheme()).toBeUndefined();
+    expect(mocks.themeOn).not.toHaveBeenCalled();
+    expect(windows.every(win => win.webContents.send.mock.calls.length === 0)).toBe(true);
+    const selected = normalizeAppearanceSettings({ uiSize: 18 });
+    mocks.readAppearanceSettings.mockReturnValue(selected);
+    mocks.refreshTheme.mockResolvedValue(selected);
+    await refreshAppearanceTheme();
+    expect(windows.every(win => win.webContents.send.mock.calls.length === 0)).toBe(true);
+    const changed = normalizeAppearanceSettings({ ...selected, uiSize: 19 });
+    mocks.refreshTheme.mockResolvedValue(changed);
+    await refreshAppearanceTheme();
+    const { customWallpaperUrl: _privateUrl, ...publicSettings } = changed;
+    for (const win of windows) expect(win.webContents.send).toHaveBeenCalledExactlyOnceWith('appearance-settings:changed', publicSettings);
+    expect(mocks.themeOn).not.toHaveBeenCalled();
+    expect(mocks.themeOff).not.toHaveBeenCalled();
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
+  // Unit: the package-only preparation endpoint must never become another
+  // builtin selection owner; returning to builtin uses its existing null form.
+  it('prepares only local packages and clears their in-memory layer without writing selection', async () => {
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:select-theme')![1];
+    for (const selection of [{ mode: 'dark', familyId: 'cindy' }, { mode: 'invalid', familyId: 'paper-local' }]) {
+      await expect(handler({}, selection)).rejects.toThrow('Invalid theme package selection');
+    }
+    expect(mocks.selectTheme).not.toHaveBeenCalled();
+    mocks.selectTheme.mockResolvedValue(persisted);
+    const selection = { mode: 'dark', familyId: 'paper-local' };
+    await expect(handler({}, selection)).resolves.toEqual(persisted);
+    expect(mocks.selectTheme).toHaveBeenLastCalledWith(selection);
+    await expect(handler({}, null)).resolves.toEqual(persisted);
+    expect(mocks.selectTheme).toHaveBeenLastCalledWith(null);
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+    expect(mocks.ipcHandle.mock.calls.some(([name]) => name === 'appearance-settings:migrate-theme')).toBe(false);
+  });
+  // Theme defaults must survive a single-row reset. Unit: the real trusted IPC
+  // deletes only the named overrides, while unknown or state-owner fields fail.
+  it('resets individual font and wallpaper overrides without pinning static defaults', async () => {
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:reset-fields')![1];
+    mocks.writeAppearanceSettingsPatch.mockResolvedValue(persisted);
+    await expect(handler({}, ['terminalFamily', 'terminalFontResource'])).resolves.toEqual(persisted);
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledExactlyOnceWith({
+      terminalFamily: undefined, terminalFontResource: undefined,
+    });
+    for (const field of ['themeSelection', 'customWallpaperUrl', 'unknown']) {
+      await expect(handler({}, [field])).rejects.toThrow('Invalid appearance reset');
+    }
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledTimes(1);
+  });
+  it.each(['select-theme', 'reset-fields'])('keeps %s unavailable to untrusted windows', async channel => {
+    mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted app renderer'); });
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === `appearance-settings:${channel}`)?.[1];
+    await expect(handler({}, { mode: 'dark', familyId: 'cindy' })).rejects.toThrow('untrusted app renderer');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
+  // PR #9496: the legacy parameter format skipped ifRevision. Exercise the real
+  // settings owner with a newer value appearing while its atomic update waits. tier: unit.
+  it('rejects a stale plugin revision inside the original settings write lock', async () => {
+    const previous = normalizeAppearanceSettings({ uiSize: 15 });
+    const latest = normalizeAppearanceSettings({ uiSize: 20 });
+    mocks.readAppearanceSettings.mockReturnValue(previous);
+    mocks.updateAppearanceSettingsAtomic.mockImplementation(async updater => {
+      mocks.readAppearanceSettings.mockReturnValue(latest);
+      return { ...latest, ...updater(latest) };
+    });
+    await expect(updateAppearanceFromSettings({ uiSize: 18 }, { ifRevision: pluginAppearanceRevision(previous) }))
+      .rejects.toThrow('MCP_APP_APPEARANCE_CHANGED');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+    expect(mocks.readAppearanceSettings()).toEqual(latest);
+  });
   it('validates literal visibility and accepts null only to reset its override', () => {
     for (const wallpaperBlur of [0, 8, 20, null]) {
       expect(__testing.parsePatch({ wallpaperBlur })).toEqual({ wallpaperBlur });
@@ -212,6 +297,7 @@ describe('appearance settings IPC authorization', () => {
   });
 
   beforeEach(() => {
+    mocks.refreshTheme.mockReset(); mocks.selectTheme.mockReset(); mocks.themeOn.mockClear(); mocks.themeOff.mockClear(); mocks.systemDark = false;
     mocks.owner = 'owner-a:1';
     mocks.boundaryPending = false;
     mocks.importWallpaper.mockReset();
@@ -478,7 +564,7 @@ describe('appearance settings IPC authorization', () => {
   it.each([
     { terminalFamily: 1 }, { terminalFamily: 'x'.repeat(257) },
     { terminalSize: '13' }, { terminalSize: NaN }, { terminalSize: Infinity },
-    { terminalTheme: 'dark' }, null, [],
+    { terminalTheme: 'dark' }, { customizedKeys: ['terminalFamily'] }, null, [],
   ])('rejects malformed or unapproved terminal appearance patch %j before writing', async (patch) => {
     await expect(getSetHandler()({}, patch)).rejects.toThrow('[INVALID_PARAMS]');
     expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();

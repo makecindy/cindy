@@ -1,3 +1,8 @@
+import { createMessageClearRecovery } from '../../desktop/src/main/localDb/messageClearRecovery.js';
+import { readVisiblePiUserEntry, patchMessageAgentMetaWithResultRow } from '../../desktop/src/main/localDb/messageMutations.js';
+import { removeRefs as removeMediaRefs, removeSessionAttachmentRefIfUnreferencedByLiveMessage } from '../../desktop/src/main/cindy-media/ledger.js';
+import { recomputePrRefsForSession } from '../../desktop/src/main/git-context/prRefsStore.js';
+import { createLogger } from '../../desktop/src/main/logger.js';
 import { messageToCamel } from "../../desktop/src/main/localDb/mapper.js";
 import {
   writeMessageRow,
@@ -89,5 +94,51 @@ export function createHostMessageStore(deps: {
     }
     pending.delete(row.id);
     return message;
+  };
+}
+
+/** Recovery uses the same row mutations as Desktop, with the initiating
+ * account captured for every cleanup and publication after asynchronous IO. */
+export function createHostMessageRecovery(deps: {
+  getOwner: () => CurrentDbClientSnapshot | null;
+  publish: (event: unknown) => void;
+}) {
+  const capture = () => {
+    const owner = deps.getOwner();
+    if (!owner) throw new Error("DbClient not ready");
+    return owner;
+  };
+  const isCurrent = (owner: CurrentDbClientSnapshot) => deps.getOwner() === owner;
+  const rewindPersistedUserMessageAfterClear = createMessageClearRecovery({
+    captureOwnerBroadcastScope: capture,
+    isOwnerBroadcastScopeCurrent: isCurrent,
+    getDbClient: owner => owner.client,
+    removeMediaRefs: (params, owner) => isCurrent(owner)
+      ? removeMediaRefs(params, owner.client.drizzle) : Promise.resolve(0),
+    collectCindyMediaHashes: hostChatAttachments.collectCindyMediaHashes,
+    removeSessionAttachmentRefIfUnreferencedByLiveMessage: (params, owner) => isCurrent(owner)
+      ? removeSessionAttachmentRefIfUnreferencedByLiveMessage(params, owner.client.drizzle) : Promise.resolve(0),
+    broadcastMessageDeleted: (payload, owner) => {
+      if (isCurrent(owner)) deps.publish({ type: 'message_deleted', ...payload });
+    },
+    recomputePrRefsForSession: (id, owner) => recomputePrRefsForSession(id, {
+      dbClient: owner.client, isCurrent: () => isCurrent(owner),
+    }),
+    log: createLogger('localDb/messages'),
+  });
+  return {
+    rewindPersistedUserMessageAfterClear,
+    async readPiUserEntry(sessionId: string, clientId: string) {
+      const owner = capture();
+      const id = await readVisiblePiUserEntry(owner.client, sessionId, clientId);
+      if (!isCurrent(owner)) throw new Error('message owner changed');
+      return id;
+    },
+    async linkPiUserEntry(sessionId: string, clientId: string, piEntryId: string) {
+      const owner = capture();
+      const result = await patchMessageAgentMetaWithResultRow(owner.client, sessionId, clientId, { piEntryId });
+      if (!isCurrent(owner)) throw new Error('message owner changed');
+      return result !== null;
+    },
   };
 }

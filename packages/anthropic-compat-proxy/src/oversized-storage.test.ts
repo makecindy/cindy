@@ -4,6 +4,7 @@ import type { IncomingMessage } from 'node:http';
 import { afterEach, expect, it, vi } from 'vitest';
 import { collectRecoverableBody } from './oversized-attachments.js';
 import { createAnthropicCompatProxy } from './server.js';
+import { closeTestConnections, fetchOverTestConnections as fetch } from './test-loopback-server.js';
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -12,8 +13,32 @@ vi.mock('node:fs/promises', async importOriginal => {
 const disk = vi.mocked(statfs);
 const reserve = 256 * 1024 * 1024;
 const free = (bytes: number) => ({ bavail: reserve + bytes, bsize: 1 }) as Awaited<ReturnType<typeof statfs>>;
-afterEach(() => { disk.mockReset(); });
+afterEach(async () => { disk.mockReset(); await closeTestConnections(); });
 const request = (chunks: Buffer[]) => Readable.from(chunks) as IncomingMessage;
+
+// Unit regression: recovery failure formerly lost receivedBytes and reported >0.
+// Existing storage tests asserted status only. Two 100-byte chunks exceed 100.
+it.each([null, Buffer.alloc(101)])('reports received bytes when recovery returns %s', async recovered => {
+  disk.mockResolvedValue(free(10000));
+  await expect(collectRecoverableBody(request([Buffer.alloc(100), Buffer.alloc(100)]), 100,
+    async () => recovered, new AbortController().signal)).rejects.toMatchObject({
+    message: 'REQUEST_TOO_LARGE', receivedBytes: 200,
+    recoveryReason: recovered ? 'recovered_body_too_large' : 'attachment_recovery_unavailable',
+  });
+});
+
+it('returns the actual received size and recovery reason through HTTP', async () => {
+  disk.mockResolvedValue(free(10000));
+  const raw = JSON.stringify({ input: 'x'.repeat(200) });
+  const proxy = await createAnthropicCompatProxy({ upstream: 'http://127.0.0.1:1', maxRequestBodyBytes: 100,
+    oversizedRequestRecovery: () => async () => null });
+  try {
+    const response = await fetch(`${proxy.url}/v1/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: { reason: 'attachment_recovery_unavailable',
+      message: expect.stringContaining(`>${Buffer.byteLength(raw)} bytes`) } });
+  } finally { await proxy.dispose(); }
+});
 
 it('does not check disk or change normal requests on a full disk', async () => {
   disk.mockResolvedValue(free(0));

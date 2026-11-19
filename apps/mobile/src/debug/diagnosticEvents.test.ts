@@ -40,6 +40,36 @@ describe("local diagnostic privacy boundary", () => {
       },
     });
   });
+  // Rule: the journal keeps known names, enums and bounded numbers only (diagnosticEvents header).
+  // A JS error is the one event whose raw input is an Error, so its message, stack text and any
+  // extra field must be dropped while the class name and bundle positions survive a reload.
+  it("keeps a JS error's class and bundle positions, never its text", () => {
+    const projected = projectDiagnostic(
+      [
+        "js error",
+        {
+          kind: "render",
+          name: "TypeError",
+          line1: 1,
+          column1: 2345678,
+          line2: 1,
+          column2: -5,
+          message: "Cannot read property 'title' of secret chat",
+          stack: "at render (address at index.ios.bundle:1:2345678)",
+        },
+      ],
+      30,
+    );
+    expect(projected).toEqual({
+      at: 30,
+      event: "js error",
+      fields: { kind: "render", name: "TypeError", line1: 1, column1: 2345678, line2: 1 },
+    });
+    expect(restoreDiagnosticEvents([projected])).toEqual([projected]);
+    expect(
+      projectDiagnostic(["js error", { kind: "elsewhere", name: "SecretError" }], 31),
+    ).toEqual({ at: 31, event: "js error", fields: {} });
+  });
   it("never stores interpolated close reasons or request identifiers", () => {
     const events = [
       projectDiagnostic(

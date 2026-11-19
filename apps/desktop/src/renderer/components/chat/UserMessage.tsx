@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import { BotChatQuoteInBubble } from '@/features/bots/BotChatQuoteViews';
 import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
 import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
@@ -23,7 +24,7 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
  */
 
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   ChevronDown,
@@ -87,6 +88,7 @@ import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
+import { renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
@@ -116,7 +118,11 @@ import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MENTION_TOKEN_SPLIT, parseMentionToken } from '@/lib/mentionRefFormat';
 import { ghostCommandTokenLength, parseGhostCommandToken, splitGhostDirective } from '@/cindy-brain/ghostCommand';
 import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
-import { GhostSummonCard } from './GhostSummonCard';
+import {
+  GhostFulfillmentContext,
+  GhostSummonCard,
+  type GhostSummonDisplay,
+} from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
 import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
@@ -146,6 +152,7 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  pluginUi: PluginUiMessageCandidates;
   /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
   pendingActions?: ReactNode;
   pendingEditing?: boolean;
@@ -827,6 +834,7 @@ export function renderContent(
 // 老 UserImageItemView 已迁出,见 ChatImageView.tsx。
 
 export function UserMessage({
+  pluginUi,
   pendingActions,
   pendingEditing,
   pendingIndicator,
@@ -980,9 +988,29 @@ export function UserMessage({
   // 触发符恒为 1 个字符($ 或全角变体),token = 触发符 + 指令词。
   const ghostCmdToken = ghostCmd ? bubbleBody.slice(0, 1 + ghostCommandTokenLength(ghostCmd)) : null;
   const ghostPromptBody = ghostCmdToken ? bubbleBody.slice(ghostCmdToken.length).trim() : '';
-  // A user's bubble records their selection, never the assistant's later calls.
-  const ghostPillForm = ghostDirective?.kind === 'mention';
-  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostDirective;
+  // 本条消息出现真实调用时,用标注行展示完整调用摘要,原软提示保留在展开区。
+  // 判据来自 GhostFulfillmentContext
+  // (MessageStream 从会话历史现算,重启幂等)。
+  const ghostFulfillment = useContext(GhostFulfillmentContext);
+  const ghostCalls = messageClientId ? ghostFulfillment.get(messageClientId) : undefined;
+  const ghostFulfilledIds = ghostCalls?.ghostIds;
+  // 语义自主召唤:消息一个触发词都没命中(无任何追加段),AI 本轮仍真调了
+  // ghost_call → 合成 semantic 展示数据,渲染同一行召唤标注(与硬指令/兑现
+  // 软提示渲染一致)。orca / hook 消息不参与(它们本就不经意识展开)。
+  const ghostSemanticDisplay: GhostSummonDisplay | null =
+    !ghostDirective &&
+    !orcaCommunication &&
+    !hookSource &&
+    ghostFulfilledIds &&
+    ghostFulfilledIds.size > 0
+      ? { kind: 'semantic', ghostIds: [...ghostFulfilledIds] }
+      : null;
+  // 召唤展示数据(追加段解析优先;没有追加段才可能是 semantic),按形态分流:
+  // - 标注行(chip):硬指令 / 软提示已兑现 / semantic → 嵌进气泡顶部;
+  // - 胶囊(pill):软提示未兑现 → 保持原低调形态,留在气泡下方。
+  const ghostCardDisplay: GhostSummonDisplay | null = ghostDirective ?? ghostSemanticDisplay;
+  const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostFulfilledIds?.size;
+  const ghostChipDisplay = simplifiedBotConversation || ghostPillForm ? null : ghostCardDisplay;
   const ghostPillDisplay = !simplifiedBotConversation && ghostPillForm ? ghostDirective : null;
   // 气泡实际显示的正文与其在原始 content 中的起点(粘贴块/斜杠命令高亮的
   // 偏移投影用):硬指令剥 $token,其余原样。
@@ -1247,12 +1275,15 @@ export function UserMessage({
 
   const orcaWorkerRole =
     automationOrigin?.kind === 'session' ? automationOrigin.orcaSenderLabel : undefined;
+  const orcaBatchCount = automationOrigin?.kind === 'session' ? automationOrigin.orcaAutoBridgeBatchCount : undefined;
   const orcaCardTitle =
-    orcaCommunication?.orcaSource === 'lead'
-      ? t('chat.userMessage.orcaFromLead')
-      : orcaWorkerRole
-        ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
-        : t('chat.userMessage.orcaFromWorker');
+    orcaBatchCount
+      ? t('chat.userMessage.orcaFromWorkerBatch', { count: orcaBatchCount })
+      : orcaCommunication?.orcaSource === 'lead'
+        ? t('chat.userMessage.orcaFromLead')
+        : orcaWorkerRole
+          ? t('chat.userMessage.orcaFromWorkerNamed', { role: orcaWorkerRole })
+          : t('chat.userMessage.orcaFromWorker');
 
   // 伙伴对话：其他任务转来的消息不占主人在右侧的位置，收成左侧一行来信，点开看全文
   // （2026-11-10 主人裁决；普通任务页不变）。
@@ -1276,6 +1307,7 @@ export function UserMessage({
   // Attachments belong to the user message independently of its visual shell.
   const messageActions = pendingActions ?? (
     <MessageActionBar
+      pluginUi={pluginUi}
       createdAt={createdAt}
       copyText={copyText}
       copyLinkText={messageDeepLink}
@@ -1357,6 +1389,7 @@ export function UserMessage({
         'flex w-full',
         orcaCommunication || hookSource || botLetter ? 'justify-start' : 'justify-end',
         bubbleActions && 'group/message',
+        simplifiedBotConversation && 'chat-bubble-layout',
         // 与伙伴回复的气泡对齐：头像 28px + 间距 10px。
         botLetter && 'group/letter pl-[38px]',
       )}
@@ -1432,7 +1465,7 @@ export function UserMessage({
               </button>
               {orcaExpanded && (
                 <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
-                  <pre data-selection-quote-body="" className="m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
+                  <pre data-selection-quote-body="" className="chat-content-text m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
                     {displayContent}
                   </pre>
                 </div>
@@ -1451,7 +1484,7 @@ export function UserMessage({
             />
             {letterExpanded && (
               <div className="flex w-full flex-col items-start gap-1.5 border-l-2 border-[var(--border-default)] pl-3">
-                <div className="w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                <div className="chat-content-text w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
                   {displayContent}
                 </div>
                 <BotTaskLetterOpen
@@ -1572,6 +1605,8 @@ export function UserMessage({
             无余文时气泡只剩标注行。 */}
                 {(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble) && (
                   <ChatBubble
+                    data-plugin-appearance-region
+                    data-plugin-appearance-speaker="user"
                     speaker="user"
                     // 只剩插件标注行的气泡:分享图会剥掉标注,整泡一起去掉,不留空壳。
                     // 伙伴私聊里附件也在气泡内,有附件就不是空壳。
@@ -1581,9 +1616,15 @@ export function UserMessage({
                     className={cn("select-text", pendingEditing && "opacity-40 transition-opacity motion-reduce:transition-none")}
                   >
                     {ghostChipDisplay && (
+                      /* ghost-summon-chip:标注行(法阵 + 意识名 + 状态 + 展开
+                 caret)。running 由本条消息的真实未返回调用决定;
+                 调用结果全部返回就结束,不等待助手整轮回答。
+                 下方有正文/引用时加分隔线,单独成泡时不加。 */
                       <GhostSummonCard
                         directive={ghostChipDisplay}
                         commandNamespace={ghostCmd?.namespace ?? undefined}
+                        running={ghostCalls?.running ?? false}
+                        {...(messageClientId ? { messageClientId } : {})}
                         className={
                           inlineQuoteCount > 0 || displayBubbleBody.trim()
                             ? 'mb-2.5 border-b border-[var(--msg-user-border)] pb-2.5'
@@ -1605,7 +1646,7 @@ export function UserMessage({
                         aria-hidden="true"
                         className={cn(
                           'invisible absolute inset-x-4 top-0 max-h-0 overflow-hidden',
-                          'whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text whitespace-pre-wrap [overflow-wrap:anywhere]',
                         )}
                       >
                         {collapseMeasureBody}
@@ -1615,7 +1656,7 @@ export function UserMessage({
                       <div
                         data-selection-quote-body=""
                         className={cn(
-                          'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
                             (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
@@ -1690,10 +1731,13 @@ export function UserMessage({
                         )}
                       </div>
                     ) : displayBubbleBody.trim() ? (
+                      renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'user', sessionId,
+                        disabled: isRemoteFileOrigin(sessionFileCtx.origin), plugin: sourcePlugin?.pluginId,
+                        context: () => ({ message: { clientId: messageClientId, role: 'user', content } }) } : undefined,
                       <div
                         data-selection-quote-body=""
                         className={cn(
-                          'whitespace-pre-wrap [overflow-wrap:anywhere]',
+                          'chat-content-text whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
                             (isScheduledAutomation ? 'line-clamp-3' : 'line-clamp-10'),
                         )}
@@ -1751,6 +1795,7 @@ export function UserMessage({
                               bubbleAgentReferences,
                             )}
                       </div>
+                      )
                     ) : null}
                     {shouldCollapseLongMessage && (
                       <button
@@ -1783,10 +1828,13 @@ export function UserMessage({
                     )}
                   </ChatBubble>
                 )}
-                {/* ghost-summon-pill:历史提及保持低调胶囊,留在气泡下方
+                {/* ghost-summon-pill:未兑现的软提示保持低调胶囊,留在气泡下方
             (chip 标注行形态见气泡内部;提示原文仍可点开查看)。 */}
                 {ghostPillDisplay && (
-                  <GhostSummonCard directive={ghostPillDisplay} />
+                  <GhostSummonCard
+                    directive={ghostPillDisplay}
+                    {...(messageClientId ? { messageClientId } : {})}
+                  />
                 )}
                 {/* 订阅槽①:被意识钩子拦下 —— 气泡照常显示(未发出),下方渲一条
             error 红条,内容 = 意识返回的文本(直接显示,主机不加框不署名);

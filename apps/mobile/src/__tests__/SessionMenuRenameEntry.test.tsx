@@ -6,6 +6,7 @@ vi.mock('@/session/SessionProjectMoveSheet', () => ({
 }));
 vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => <div data-testid="session.testTags" /> }));
 vi.mock('@/session/SessionPrLinks', () => ({ SessionPrLinks: () => null }));
+vi.mock('@/session/SessionMenuPrLinks', () => ({ SessionMenuPrLinks: () => null }));
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
@@ -275,3 +276,6 @@ it('opens project moving from task details after the menu closes', async () => {
     await act(async () => root.unmount());
   }
 });
+
+// These menu tests exercise the entry only; the project form owns native media dependencies.
+vi.mock('../session/ProjectSettingsSheet', () => ({ ProjectSettingsSheet: () => null }));

@@ -11,9 +11,9 @@
  */
 
 import { createLogger } from '../../logger';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { getDbClient } from '../../localDb/client/current';
-import { sessions } from '../../localDb/schema';
+import { botSessionLinks, sessions } from '../../localDb/schema';
 import { onChannelTurn } from '../../maker-ipc/channelTurnSignal';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from '../accountBoundary';
 import { bindingStore } from '../binding';
@@ -71,7 +71,10 @@ const registry = new Map<string, ImOrchestrator>();
 // Background sends can be the first activity after restart: restore only output
 // routing from the saved channel identity, without creating/resuming a session.
 onChannelTurn(async (session, phase, source) => {
-  if (phase !== 'starting') return;
+  if (phase !== 'starting') {
+    for (const orchestrator of registry.values()) orchestrator.turnRunner.noteChannelTurnSource(session, undefined);
+    return;
+  }
   if (source === 'provider-wake' || source === 'provider-wake-local') {
     // No send precedes a harness wake-up: its first event fans out right after this synchronous
     // call. Only output already wired for a channel can be marked in time; a cold route restored
@@ -89,13 +92,20 @@ onChannelTurn(async (session, phase, source) => {
     .where(eq(sessions.id, session.id)).limit(1);
   if (!row || row.status === 'deleted' || row.status === 'archived' || !isImAccountGenerationCurrent(generation)) return;
   if (row.source === 'bot') {
-    // 伙伴任务没有渠道身份列: 只标记已接好输出的伙伴专线(连接交给伙伴后的群 /
-    // 话题), 是否回传由 turnRunner 按专线 / 主任务判定。冷路径(重启后先来的后台
-    // 结果)不恢复, 下一条渠道消息接线后照常。
-    for (const orchestrator of registry.values()) {
-      if (orchestrator.adapter.im.getStatus().kind === 'connected') {
-        orchestrator.turnRunner.noteChannelTurnSource(session, source);
-      }
+    // The canonical session can span many channels. Only a dedicated, active
+    // session link can restore a cold route before the first incoming message.
+    const hasColdRoutes = [...registry.values()].some(({ adapter }) =>
+      adapter.connectedChatForLane && adapter.im.getStatus().kind === 'connected');
+    const [link] = hasColdRoutes ? await getDbClient().drizzle
+      .select({ botId: botSessionLinks.botId, routeKey: botSessionLinks.routeKey })
+      .from(botSessionLinks).where(and(eq(botSessionLinks.sessionId, session.id),
+        eq(botSessionLinks.role, 'channel'), isNull(botSessionLinks.archivedAt))).limit(1) : [];
+    if (!isImAccountGenerationCurrent(generation)) return;
+    for (const { adapter, turnRunner } of registry.values()) {
+      if (adapter.im.getStatus().kind !== 'connected') continue;
+      const chat = link?.routeKey && adapter.connectedChatForLane?.(link.botId, link.routeKey);
+      if (chat) turnRunner.attachSessionOutput(session, chat, { attached: false, companionChannel: true }, source);
+      else turnRunner.noteChannelTurnSource(session, source);
     }
     return;
   }
@@ -168,7 +178,7 @@ export function createImOrchestrator(
         : acquirePendingAgentSwitchForDirectSend(sessionId),
     channelDefaultRoute: defaultRouteSync,
     // 发送前故障恢复与桌面直发同源；健康上下文交给 Session 原生压缩。
-    prepareUnhealthySession: (sessionId) => prepareUnhealthySessionForSend(sessionId),
+    prepareUnhealthySession: async (sessionId) => { await prepareUnhealthySessionForSend(sessionId); },
     // 伙伴自有连接: 消息落在伙伴的主任务 / 隐藏专线上。
     ...(options.companionBotId
       ? { companion: createImCompanionRouteDeps(options.companionBotId) }

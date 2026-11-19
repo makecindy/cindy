@@ -81,8 +81,15 @@ describe('learned cache compatibility', () => {
   });
   it('allows precise reset by removing an entry and observes file replacement', async () => {
     await record('a', 'model', fix, a);
+    // Writers replace this file by rename, often within one filesystem mtime
+    // tick. Pin both mtimes and match the size so the replacement differs only
+    // by file identity.
+    const tick = new Date(Math.floor(Date.now() / 1000) * 1000);
+    fs.utimesSync(file, tick, tick);
+    expect(read('a', 'model', a)).toEqual(fix);
     const replacement = file + '.replacement';
-    fs.writeFileSync(replacement, JSON.stringify({ routes: {} }));
+    fs.writeFileSync(replacement, JSON.stringify({ routes: {} }).padEnd(fs.statSync(file).size));
+    fs.utimesSync(replacement, tick, tick);
     fs.renameSync(replacement, file);
     expect(read('a', 'model', a)).toBeUndefined();
   });
@@ -276,6 +283,14 @@ describe('native and Desktop cache writers share one lock', () => {
         expect(fs.existsSync(file)).toBe(false);
       });
       expect(await record('desktop', 'other', fix, b)).toBe(true);
+      // Native retries the lock for 1s, then keeps the learning in memory for
+      // the next user message. This lock was held until the parent observed
+      // success, which a loaded runner can delay past that budget, so let the
+      // bounded attempt settle and start the next message: either path must
+      // merge with Desktop's record rather than replace it.
+      await native.event('persistence-idle');
+      native.send('next');
+      expect((await native.event('next')).sent).toEqual([{ model: 'waiting' }]);
       await vi.waitFor(() => expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).routes)).toHaveLength(2));
     } finally { await native.stop(); }
   });

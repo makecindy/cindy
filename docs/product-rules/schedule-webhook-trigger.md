@@ -1,6 +1,14 @@
 # 自动化任务的 Webhook 触发
 
-> **读取时机**：修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前。
+> **读取时机**：新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前。
+> **适用路径**：`apps/desktop/src/main/scheduler-host/webhook/**`、`packages/maker-scheduler/src/**/webhook-*`、
+> `packages/lizi-mcps/src/scheduler/*webhook*`、
+> `apps/desktop/src/renderer/features/scheduler/components/**/Webhook*`、
+> `apps/desktop/src/renderer/features/scheduler/lib/webhookEventOptions.ts`、
+> `apps/desktop/src/shared/webhookAccount.ts`、
+> `apps/desktop/scripts/fixtures/{webhook-detail,webhook-account}/**`、
+> `packages/lizi-mcps/src/scheduler/{create,update}.ts`
+> **要点**：事件只是门铃，正文不进任务，密钥不进任务记录。
 
 ## 用户行为
 
@@ -17,6 +25,18 @@ Webhook 表单沿用自动化编辑器的「内容与触发 / 运行选项」分
 事件筛选使用按发送方分组、可搜索的多选列表，默认明确显示「全部事件」，已选事件以可移除标签呈现。取消最后一项不自动扩大为全部：须在选择器中明确选择「全部事件」或另选事件后应用；取消选择器保留原配置。常用目录不是白名单，未收录的已有值原样保留，自定义名称通过高级入口逐项添加并校验。Standard Webhooks 和自定义格式没有固定目录，明确说明后提供相同高级入口。
 
 存储仍是 `event` 或 `event.action` 列表，例如 `check_suite`、`pull_request.closed`、`pullrequest:created`；空列表响应全部。界面不改变接收协议，不收集事件正文。预设目录与交互见 `webhookEventOptions.ts`、`WebhookEventSelect.tsx`，保存行为回归在 `ScheduleFormDialog.test.tsx`。更细的判断交给前置检查脚本，它和脚本模式任务都能收到事件元数据。
+
+## Agent 工具的触发方式
+
+Agent 工具 `schedule_create` / `schedule_update` 接受可选布尔字段 `manual`。
+`manual: true` 关闭定时并清空 `nextFireAt`，保留立即运行；与 `webhookTrigger` 同用即仅事件触发，
+适用于 Agent 和脚本执行方式。`manual: false` 按保存的 cron／间隔恢复定时。
+创建时省略沿用默认 `false`，更新时省略不修改；创建仍须提供合法 `cronExpr` 和 `timezone`。
+定时的一次性任务与 Webhook 不兼容的校验保持不变，已有组合触发不自动改写。
+本机和跨电脑沿用原调用链；跨电脑更新不得同时带 `cronExpr`、`manual`、`notify`，
+否则可能命中目标电脑的旧手机全量表单兼容逻辑。工具在发送前明确报错，可单独更新 `manual`；
+不自动拆分写入，也不先读后复制未修改字段。实现及回归见 `packages/lizi-mcps/src/scheduler/{create,update}.ts`
+与 `cindy_schedulerMcpServer.test.ts`、`schedulerDevices.test.ts`。
 
 ## 账号接收地址管理（2026-11-04）
 
@@ -70,6 +90,8 @@ Webhook 配置和详情提供「接收地址 已用 / 上限 · 管理」，管�
 
 每个账号每天有 3000 次 Webhook 接收次数。通过验签的投递都算，只有 ping 不算：被筛选和重复的投递一样要读请求体、验签，所以 Cindy 里的事件筛选不省次数，要在发送方只勾选需要的事件，表单里有这条说明。
 
+上述计次仅用于用户创建的普通 Webhook 地址。内置 GitHub App 的受控 PR 通知独立投递，不消耗这 3000 次；普通 Webhook 耗尽也不影响新版 GitHub App 通知。旧服务的能力兼容与 PR 合并策略见 [GitHub 状态共享](github-status-and-associations.md#github-app-事件可选服务能力)。
+
 次数用完后，发送方收到 429。这个 429 用户看不到，所以服务器会告诉账号的所有在线电脑：任务详情显示恢复时间，并发一次系统通知，`schedule_get` 的 `webhookStatus` 也能读到 `problem: "quota"`。文案说“Webhook 接收次数”，不说“配额”，并写明定时运行和模型额度不受影响，否则用户会以为是模型用量用完了。
 
 恢复时刻是下一个 UTC 0 点，界面按本地时间显示。
@@ -86,6 +108,52 @@ Webhook 配置和详情提供「接收地址 已用 / 上限 · 管理」，管�
 - 暂停或过期的任务不运行，事件计入“已忽略”；恢复时不补跑。队列在准备执行前和持久交接前都读取任务状态，避免等待服务器刷新或运行记录写入期间暂停／到期仍启动；最后复核已失效时，持久记录该批次为已忽略，拒绝交接且不重试旧批次。关闭触发条件或删除任务同样拒绝交接。
 - 排队事件持久记录本机触发路由 ID，准备与交接时都须匹配当前配置；关闭再开启后，旧路由的待执行、准备中及重试批次不得进入新配置。清空队列同时取消尚未完成的交接／顺延，迟到结果不能把旧事件重新塞入队列。旧版未记录路由 ID 的队列沿用当前配置恢复，后续落盘补齐 ID。
 - GitHub 不会自动重投失败的投递，超过配额或离线超过 24 小时的事件会丢。需要不漏事件的任务应保留低频定时条件兜底。
+
+## GitHub App 触发（2026-11-11，测试）
+
+发送方仅显示一个 **GitHub**，其下用「通过 Cindy 连接（推荐）」和「手动配置 Webhook」区分接入方式。
+新建表单默认通过 Cindy 连接；已有任务（包括未显式保存 source 的旧任务）保留原连接方式，不自动迁移。
+通过 Cindy 连接按账号状态、仓库、事件排列，复用现有 GitHub App 连接与仓库授权入口；手动方式提示
+保存后到任务详情获取地址和密钥。账号已连接不代表任务订阅已就绪，详情只有接收状态确认可投递才显示等待事件。
+连接选择及其说明始终可见，详情沿用「GitHub · 通过 Cindy 连接／手动 Webhook」名称。切换方式不清空仓库输入。
+编辑弹窗打开时卸载背景详情中的账号连接卡，由表单独占账号读取与授权操作；关闭后详情重新挂载并复核状态。
+账号状态仅在挂载和返回窗口时复核，合并在途读取；不因输入仓库名发请求，不新增后台轮询。
+
+任意普通自动任务（Agent 或脚本）都可选择 **通过 Cindy 连接**，填写一至五十个
+`owner/repository` 并选择事件或 `event.action`。这些仓库须已安装 App，且运行任务的电脑上已在
+GitHub 插件连接账号并通过仓库权限复核。不为每个任务另建公网地址或密钥。
+
+连接或选择仓库会打开 GitHub；打开浏览器不表示安装已完成。用户返回 Cindy 时重新核验本次安装后的
+仓库权限，即使跟进的 PR 和仓库列表没有变化，也同步一次订阅。同步期间显示进度，不展示旧的仓库数量
+或缺少权限提示；完成后显示实际数量。如果这次返回时仍有仓库未获得权限，保留待复核标记，
+下次返回时继续检查，不能把提前返回的一次成功读取当作授权完成。普通状态读取在权限确认后恢复
+订阅去重；后台刷新始终复用已确认的订阅，避免重复提交。
+
+支持 PR、评审、评审评论／讨论、Issue／PR 评论、检查、提交状态、Issues、push、workflow_run
+和 release。普通 `github` 来源继续代表用户自行配置的仓库 Webhook，不自动转换成 App。
+只设置事件而不设置定时条件时沿用 `manual:true`；也可保留定时检查兜底。
+
+设备只维护一个 App 接收地址，订阅为显式任务的整仓库范围与已有 PR 跟进的精确范围之并集。
+服务端只发送固定元数据，客户端按当前仓库、事件筛选及任务状态再次校验，然后进入已有持久队列：
+15 秒合并、同一任务两轮至少五分钟、忙时等待、重复 delivery 去重，沿用脚本／Agent 的执行权限。
+显式选了 App 来源的 PR 跟进不会再由隐式 PR watcher 重复启动；定时计划仍按用户设置保留。
+普通脚本命令里出现 PR URL 不会自动开启事件触发；需要在任务中显式选择 GitHub App 仓库和事件。
+已有通过前置检查配置的 PR 跟进继续接收状态与评论唤醒，订阅与执行共用前置检查的范围判断。
+暂停／删除或修改 App 仓库、事件范围会丢弃旧范围的待执行事件，修改范围同时更换本地队列身份，
+包括已经准备但尚未交付执行的一轮。App 来源不支持普通地址的密钥或轮换操作。
+
+仓库与事件列表按集合判断范围是否变化；仅重排、重复项或仓库名大小写归一不更换队列身份，也不清空已接收事件。调度器与 Host 共用同一范围判据；真正增删仓库／事件或切换来源仍使旧范围失效。
+
+若服务端报告暂存溢出，只有仍保留且匹配当前仓库及事件／action 的明细可触发自动任务，
+遗漏计数附在该次运行中；仅有未注明范围的遗漏计数不能授权运行其它任务。旧测试版落盘的
+无范围 `github.reconcile` 标记在恢复队列时也会被当前筛选拒绝。仅事件触发不保证捕获入口离线期间的变化，
+重要任务仍应保留低频定时核对。GitHub 原始正文、标题、代码不进入事件提示或脚本输入。
+
+`schedule_create/update` 同样支持
+`webhookTrigger: {source: {preset: "github-app", repositories: ["owner/repository"]}, events: ["issue_comment.created"]}`。
+使用目标电脑的连接；旧执行端不认识来源时明确拒绝，不回退为普通 Webhook。服务端必须声明
+`automationSubscriptions:true` 才同步此类订阅；旧版 PR 跟进协议保留。
+手机／旧控制端编辑时省略未知来源会保留配置，新增来源的表单入口当前在 Desktop。
 
 ## 服务器通道
 
@@ -124,3 +192,10 @@ Webhook 配置和详情提供「接收地址 已用 / 上限 · 管理」，管�
 ## 回归重点
 
 `packages/maker-scheduler/src/__tests__/webhook-queue.test.ts` 覆盖合并、顺延、重启和忽略；`apps/desktop/src/main/scheduler-host/webhook/__tests__/` 覆盖验签、字段提取、本机 HTTP 生命周期和落盘内容，`remote.test.ts` 用与合同相同的假服务器覆盖未登录、确认时机、重连、封停、发送方同步、粘贴和生成密钥、关闭签名、更换地址，以及认不出的发送方不覆盖服务器；`scheduler.test.ts` 覆盖路由保持、省略发送方时沿用原值和 resume 不启动手动任务的占位 cron；`scheduleFormLogic.test.ts` 覆盖表单保存发送方。各预设的实际验签由 cindy-server 的 `webhook.test.ts` 和真实服务器联调覆盖。
+
+## 单条 GitHub PR
+
+普通脚本和 Agent 自动化均可设置 `prTrigger: { url, change }`，指定一条完整的 GitHub PR 链接。
+`any` 跟进状态和评论，`merged` 只认核实的合并，`review` 接受评审事件和评审汇总变化，`ci` 接受检查汇总变化。
+事件和前台观察沿用已有 PR 跟进调度与忙时顺延。仅事件模式不设时间计划；添加定时检查后，宿主按计划复核状态，普通变化检查已有的前置命令保留原节奏。首次读取建立基线，补查只能发现可观察到的变化。
+旧任务的前置检查链接仍按原方式解释；显式规则优先，显式 null 停止旧链接唤醒。PR 卡片使用相同的配置和前置检查入口。

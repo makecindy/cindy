@@ -4,8 +4,9 @@
 
 产品规则见 [`provider-groups.md`](../../product-rules/provider-groups.md) §8、§9.7、§10。
 
-- 受邀者读现有 `maker:provider:list` 时可在 `args[0]` 加 `includeSharedGroupStatus: true`。只在分享详情使用；
+- 受邀者读现有 `maker:provider:list` 时可在 `args[0]` 加 `includeSharedGroupStatus: true`。分享详情和桌面选模面板当前浏览的单个分享组可使用；选模面板不定时轮询。
   普通目录读取不探测组员，避免组之间相互读取目录时递归。供应商始终取实际分享授权，不信任请求中指定的供应商。
+  桌面远控从任务所在电脑转发这一只读选项，仅允许任务所在电脑当前可见的分享来源。旧版任务所在电脑可能拒绝该选项，模型目录仍可正常读取。
 - 新分享者在这一条供应商上附加可选 `groupStatus`：长度与 `groupSize` 一致的状态数组，只允许
   `available / busy / cooling / offline / paused / unavailable / needs-update / unknown`。序号由界面按数组位置生成，
   不传组员名称、标识、来源、任务数或用量；不扩展 `provider-group:remote` 的受邀者权限。

@@ -25,10 +25,18 @@ export function createHostMcpRuntime(ports: { appServerIds(): string[]; getRemot
     prepareCodexMcpToolCancellation: codex.prepareCodexMcpToolCancellation,
     withCodexMcpDiscoveryContext: (context, run) => codex.withCodexMcpDiscoveryContext({ ...context, agentKind: 'codex' }, run),
   };
+  // PiAgent calls (providers, ctx); the shared environment also takes the logger.
+  const piDeps: Pick<AgentDeps, 'preparePiExtraSpawnConfig'> = {
+    preparePiExtraSpawnConfig: (providers, ctx) => pi.getPiExtraSpawnConfig(providers, logger, ctx),
+  };
   return {
     codexDeps,
+    piDeps,
     prepareCodexMcp: codex.getCodexExtraSpawnConfig,
-    preparePiMcpBridge: pi.getPiExtraSpawnConfig,
+    /** Server names of the applied Codex MCP bridge (desktop capability routing reads the same). */
+    getActiveCodexBridgeServerNames: codex.getActiveCodexBridgeServerNames,
+    /** Auth boundaries drop the Pi bridge built with the previous credentials (desktop: maker-host/index.ts). */
+    invalidatePiEnvironment: pi.invalidatePiEnvironment,
     async close() {
       const settled = await Promise.allSettled([codex.shutdownCodexEnvironment(), pi.shutdownPiEnvironment()]);
       const errors = settled.flatMap(result => result.status === 'rejected' ? [result.reason] : []);

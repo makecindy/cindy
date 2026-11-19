@@ -46,34 +46,25 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "Este modelo não comporta a conversa atual",
+    "condensedToast": "As partes anteriores da conversa serão condensadas para caber no novo modelo. O histórico completo continua disponível.",
     "remoteTitle": "Esta mudança de modelo remoto não é suportada",
-    "description": "Esta conversa já utiliza {{used}}, mais do que o novo modelo comporta ({{total}}, cerca de {{pct}}%). Se mudar, Cindy fará um breve resumo e continuará. O histórico da conversa mantém-se; apenas não será transmitido integralmente palavra por palavra.",
     "remoteDescription": "Esta tarefa remota já utiliza {{used}} / {{total}} do contexto do modelo mais pequeno (cerca de {{pct}}%), pelo que Cindy não pode mudar em segurança. Mantenha o modelo atual ou inicie uma nova tarefa antes de escolher este modelo.",
-    "cancel": "Manter este modelo",
-    "confirm": "Mudar e continuar"
+    "cancel": "Manter este modelo"
   },
   "switchOutcome": {
     "applied": "A mudança de fornecedor de modelos já está em vigor.",
     "failed": "A mudança de fornecedor de modelos falhou. Escolha novamente o modelo."
   },
   "agentSwitch": {
-    "browseAccessibility": "Explorar modelos de {{agent}}",
-    "confirmTitle": "Mudar para {{agent}}?",
-    "confirmMessage": "Quando enviar a próxima mensagem, {{appName}} transfere a sessão atual para {{agent}}. Os dois Agents podem interpretar o contexto e as ferramentas de forma diferente, por isso confirme antes de escolher o modelo de destino.",
-    "cancel": "Cancelar",
-    "confirm": "Continuar"
-  },
-  "agentRelocation": {
-    "titleOther": "Executar o Agent em «{{device}}»?",
-    "titleHost": "Executar novamente o Agent em «{{host}}»?",
-    "titleHostUnnamed": "Executar novamente o Agent no computador da sessão?",
-    "message": "O registo da conversa no outro computador não pode ser transferido, pelo que a conversa continua a partir de um resumo de transição. O raciocínio e detalhes semelhantes podem não ser transferidos na íntegra. Entra em vigor quando enviar a próxima mensagem.",
-    "messageNativeHistory": "O registo completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, a conversa continua a partir de um resumo de transição, e o raciocínio e detalhes semelhantes podem não ser transferidos na íntegra. Entra em vigor quando enviar a próxima mensagem.",
-    "confirm": "Mudar de computador",
-    "cancel": "Manter como está"
+    "browseAccessibility": "Explorar modelos de {{agent}}"
   },
   "unified": {
+    "remoteCopyUnavailableOn": "«{{device}}» não consegue usar {{provider}} neste momento.",
+    "remoteCopyUnavailableOnTaskComputer": "O computador da tarefa não consegue usar {{provider}} neste momento.",
+    "accountCount_one": "{{count}} conta",
+    "accountCount_other": "{{count}} contas",
+    "accountFallback": "Conta {{index}}",
+    "accountCount_many": "{{count}} contas",
     "favoriteConfiguration": "Adicionar esta configuração aos favoritos",
     "savedConfiguration": "Nos favoritos · Toque para remover",
     "currentConfiguration": "Configuração atual",
@@ -114,6 +105,12 @@
       "minute": "m",
       "second": "s"
     },
-    "groupBadge_many": "Grupo de fornecedores · {{count}} computadores"
+    "groupBadge_many": "Grupo de fornecedores · {{count}} computadores",
+    "quotaAverage": "Média restante {{percent}}%",
+    "quotaUpdating": "Quota a aguardar atualização",
+    "quotaResetSoon": "Reposição em breve",
+    "quotaResetIn": "Reposição dentro de {{duration}}",
+    "quotaAverageHint": "Quota semanal · Peso igual por conta",
+    "quotaResetHint": "Ao ritmo atual, pode restar quota na reposição: amarelo até 24 horas, vermelho até 6 horas."
   }
 }

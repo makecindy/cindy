@@ -8,6 +8,11 @@
 卡片省掉这一项而不是猜测。不改握手、白名单、relay 或服务端，无数据库迁移。
 回归入口：`gitContextPrStatusService.test.ts`、`ghostCardPrStatus.test.ts`。
 
+`git-context:pr-status` / `git-context:mr-status` 的回答不再带可选 `metadata`（PR 正文、作者与审阅人对象）。
+任何控制端与本机界面都不读它，只有宿主内的 GitHub 读取工具（`get_pr_changes`）需要，它们直接调用状态服务，不经这条通道。
+远程日志里每次回答平均约 11 KB，是仅次于 Agent 事件的第二大回包流。旧宿主仍会带上，新旧控制端都忽略；不改握手、
+白名单、relay 或服务端。回归入口：`gitContextPrStatusService.test.ts`。
+
 插件卡片可在 `div` / `span` / `button` 上标 `data-ghost-pr-open-only="owner/repo#N"`：标题栏同源状态为已合并或已关闭时，
 电脑端藏起这些元素，手机投影在宿主侧把它们连同文字、`live` 与按钮一起去掉，所以新旧手机都无需改动；查不到状态时照常显示。
 手机只对含 PR 状态位或 PR 链接的卡片定时重读，带该标记的卡片需保留其中之一（GitHub 插件的 PR 卡片标题始终链接到 PR）。旧宿主的净化器丢掉这个属性，卡片维持原快照。不改握手、白名单、relay 或服务端，无数据库迁移。

@@ -44,6 +44,15 @@ private func openAppURL() -> URL? {
   return URL(string: "\(scheme)://")
 }
 
+/// The Mac desktop has no lock screen accessories.
+#if os(iOS)
+private let usageWidgetFamilies: [WidgetFamily] = [
+  .systemSmall, .systemMedium, .systemLarge, .accessoryCircular, .accessoryRectangular, .accessoryInline,
+]
+#else
+private let usageWidgetFamilies: [WidgetFamily] = [.systemSmall, .systemMedium, .systemLarge]
+#endif
+
 struct QuotaWidget: Widget {
   var body: some WidgetConfiguration {
     AppIntentConfiguration(kind: "CindyQuotaWidget", intent: QuotaWidgetIntent.self, provider: UsageProvider()) { entry in
@@ -52,7 +61,7 @@ struct QuotaWidget: Widget {
     }
     .configurationDisplayName(WidgetText.text("quotaName"))
     .description(WidgetText.text("quotaDescription"))
-    .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryCircular, .accessoryRectangular, .accessoryInline])
+    .supportedFamilies(usageWidgetFamilies)
     .contentMarginsDisabled()
   }
 }
@@ -65,7 +74,7 @@ struct DailyUsageWidget: Widget {
     }
     .configurationDisplayName(WidgetText.text("usageName"))
     .description(WidgetText.text("usageDescription"))
-    .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryCircular, .accessoryRectangular, .accessoryInline])
+    .supportedFamilies(usageWidgetFamilies)
     .contentMarginsDisabled()
   }
 }
@@ -77,14 +86,20 @@ struct UsageWidgetRoot: View {
   @Environment(\.widgetFamily) private var family
 
   private var accessory: Bool {
+    #if os(iOS)
     [.accessoryCircular, .accessoryRectangular, .accessoryInline].contains(family)
+    #else
+    false
+    #endif
   }
 
   var body: some View {
     Group {
       if accessory {
+        #if os(iOS)
         UsageAccessoryView(state: entry.state, now: entry.date, quota: quota, family: family, pinnedCount: entry.pinnedCount)
           .privacySensitive()
+        #endif
       } else if quota {
         QuotaWidgetView(state: entry.state, now: entry.date, pinnedCount: entry.pinnedCount)
       } else {
@@ -97,6 +112,7 @@ struct UsageWidgetRoot: View {
   }
 }
 
+#if os(iOS)
 /// Lock-screen quota keeps compact tubes; daily usage pairs a seven-day trend with its total.
 struct UsageAccessoryView: View {
   let state: WidgetState
@@ -440,8 +456,9 @@ struct AccessoryQuotaTube: View {
     .opacity(faded ? 0.45 : 1)
   }
 }
+#endif
 
-@main
+#if os(iOS)
 struct CindyUsageWidgetsBundle: WidgetBundle {
   var body: some Widget {
     QuotaWidget()
@@ -449,6 +466,30 @@ struct CindyUsageWidgetsBundle: WidgetBundle {
     CindyAgentActivityWidget()
   }
 }
+
+@available(iOS 18.0, *)
+struct CindyUsageWidgetsGlanceBundle: WidgetBundle {
+  var body: some Widget {
+    QuotaWidget()
+    DailyUsageWidget()
+    CindyAgentActivityGlanceWidget()
+  }
+}
+
+/// A widget bundle's body cannot branch on availability, and the small activity
+/// family only exists from iOS 18, so the entry point picks the bundle.
+@main
+enum CindyUsageWidgetsEntry {
+  @MainActor
+  static func main() {
+    if #available(iOS 18.0, *) {
+      CindyUsageWidgetsGlanceBundle.main()
+    } else {
+      CindyUsageWidgetsBundle.main()
+    }
+  }
+}
+#endif
 
 extension WidgetState {
   /// Gallery and placeholder content: shape only, never real account data.

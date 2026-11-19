@@ -15,7 +15,11 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
 import { usageRankOf } from '@/components/new-chat/usagePalette';
-import { type AgentTokenRow, type ModelTokenRow } from './usageHistoryStats';
+import {
+  type AgentTokenRow,
+  type ModelTokenRow,
+  type AuxiliaryTokenRow,
+} from './usageHistoryStats';
 import { usageHistoryAgentColor, usageHistoryModelColor } from './usageHistoryColors';
 import { formatUsagePercent } from './formatUsagePercent';
 
@@ -75,9 +79,12 @@ export function UsageAgentTable({
         {rows.map((row) => (
           <div
             key={row.agentKind}
-            title={`${row.agentKind} · ${t('usageDashboard.tokensOnly', {
-              tokens: formatCompactTokens(row.tokens),
-            })}`}
+            title={`${row.agentKind === 'auxiliary' ? t('usageHistory.auxiliary.label') : row.agentKind} · ${t(
+              'usageDashboard.tokensOnly',
+              {
+                tokens: formatCompactTokens(row.tokens),
+              },
+            )}`}
             style={{
               width: `${total > 0 ? (row.tokens / total) * 100 : 0}%`,
               backgroundColor: usageHistoryAgentColor(row.agentKind),
@@ -112,8 +119,17 @@ export function UsageAgentTable({
                 <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
                   <span className="flex min-w-0 items-center gap-2">
                     <Swatch color={color} />
-                    <span className="truncate font-medium" title={row.agentKind}>
-                      {row.agentKind}
+                    <span
+                      className="truncate font-medium"
+                      title={
+                        row.agentKind === 'auxiliary'
+                          ? t('usageHistory.auxiliary.label')
+                          : row.agentKind
+                      }
+                    >
+                      {row.agentKind === 'auxiliary'
+                        ? t('usageHistory.auxiliary.label')
+                        : row.agentKind}
                     </span>
                   </span>
                 </td>
@@ -180,7 +196,9 @@ export function UsageModelTable({
                   </span>
                   {/* 同一模型 id 可能跨 agent 撞名, 标签让两行区分得开 */}
                   <span className="shrink-0 rounded border border-[var(--border-default)] px-1 py-px text-11 leading-[1.4] text-[var(--text-tertiary)]">
-                    {row.agentKind}
+                    {row.agentKind === 'auxiliary'
+                      ? t('usageHistory.auxiliary.label')
+                      : row.agentKind}
                   </span>
                 </span>
               </td>
@@ -194,6 +212,46 @@ export function UsageModelTable({
             </tr>
           );
         })}
+      </tbody>
+    </table>
+  );
+}
+
+export function UsageAuxiliaryTable({ rows }: { rows: AuxiliaryTokenRow[] }): React.JSX.Element {
+  const { t } = useTranslation();
+  return (
+    <table className="w-full border-collapse">
+      <thead>
+        <tr>
+          <th className={cn(TH_CLASS, FIRST_COL_CLASS, 'text-left')}>
+            {t('usageHistory.auxiliary.purpose')}
+          </th>
+          <th className={TH_CLASS}>{t('usageHistory.auxiliary.requests')}</th>
+          <th className={TH_CLASS}>Token</th>
+          <th className={TH_CLASS}>{t('usageHistory.byAgent.col.share')}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.source}>
+            <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
+              <div className="truncate font-medium">
+                {t(`usageHistory.auxiliary.sources.${row.source}`, {
+                  defaultValue: t('usageHistory.auxiliary.sources.auxiliary'),
+                })}
+              </div>
+              <div
+                className="truncate text-11 text-[var(--text-tertiary)]"
+                title={row.models.join(' · ')}
+              >
+                {row.models.join(' · ')}
+              </div>
+            </td>
+            <td className={TD_CLASS}>{row.requests.toLocaleString()}</td>
+            <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
+            <td className={TD_CLASS}>{formatUsagePercent(row.share)}</td>
+          </tr>
+        ))}
       </tbody>
     </table>
   );

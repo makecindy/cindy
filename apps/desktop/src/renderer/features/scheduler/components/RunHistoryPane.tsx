@@ -1,3 +1,5 @@
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
+import { schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../../shared/openPathResult';
 /**
@@ -30,13 +32,14 @@ import { clearSessionAttentionMany } from '@/lib/sessionAttentionStore';
 
 import { useRuns } from '../hooks/useRuns';
 import { useSessionReferences } from '../hooks/useSessionReferences';
-import { cronToConfig, summarizeConfig } from '../lib/cronCodexPreset';
+import { cronToConfig, formatIntervalDuration, summarizeConfig } from '../lib/cronCodexPreset';
 import { describeDestination, humanizeAgentKind } from '../lib/formatters';
 import { useProjectLabel } from '../hooks/useProjectLabel';
 import { groupRunsForHistory } from '../lib/runHistoryGrouping';
 
 import { RunHistoryCard } from './RunHistoryCard';
 import { WebhookTriggerPanel } from './WebhookTriggerPanel';
+import appI18n from 'i18next';
 
 const PERSISTENT_SESSION_PREVIEW_LIMIT = 3;
 
@@ -52,6 +55,8 @@ interface Props {
    * 此时 detail pane 的 Run Now 按钮也应禁用，防止双发。
    */
   runNowBusy?: boolean;
+  /** The editor owns connection setup while its modal covers this pane. */
+  connectionSetupVisible?: boolean;
 }
 
 export function RunHistoryPane({
@@ -61,6 +66,7 @@ export function RunHistoryPane({
   onEdit,
   onDelete,
   runNowBusy = false,
+  connectionSetupVisible = true,
 }: Props) {
   const { t } = useTranslation();
   const projectLabel = useProjectLabel();
@@ -213,8 +219,10 @@ export function RunHistoryPane({
   // manual schedule 不参与 cron，cron 字段是占位 → header 显示 "Manual trigger"。
   const timingText = s.manual
     ? t('scheduler.detail.manualTrigger')
-    : summarizeConfig(cronToConfig(s.cronExpr), t);
-  const cronText = s.webhookTrigger
+    : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeConfig(cronToConfig(s.cronExpr), t);
+  const rules = schedulePrTriggers(s);
+  const prText = rules.map(rule => `${rule.url.replace('https://github.com/', '').replace('/pull/', '#')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  const cronText = prText ? (s.manual ? prText : `${timingText} · ${prText}`) : s.webhookTrigger
     ? s.manual ? t('scheduler.webhook.title') : `${timingText} · ${t('scheduler.webhook.title')}`
     : timingText;
   const agentText = humanizeAgentKind(s.agentKind);
@@ -243,7 +251,7 @@ export function RunHistoryPane({
           </h2>
           {s.expireAt != null && (
             <p className="text-xs text-[var(--text-secondary)]">
-              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString()} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
+              {t('scheduler.deadline.label')} · {new Date(s.expireAt).toLocaleString(appI18n.language)} · {Intl.DateTimeFormat().resolvedOptions().timeZone}
               {isExpired && s.expireAt <= Date.now() && <> · {t('scheduler.deadline.expired')}</>}
             </p>
           )}
@@ -310,7 +318,8 @@ export function RunHistoryPane({
 
       {/* 连接引导与执行结果一起滚动，较小窗口仍能看完密钥和测试步骤。 */}
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-        {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} />}
+        {rules.length > 0 && connectionSetupVisible && <GithubAppCard automation timedPrCheck={!s.manual} repositories={rules.map(rule => rule.url.split('/').slice(3, 5).join('/'))} />}
+        {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} connectionSetupVisible={connectionSetupVisible} />}
 
         {hasLoaded && (
           <div className="pb-3 pt-5 text-13 font-medium text-[var(--text-primary)]">

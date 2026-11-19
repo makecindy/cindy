@@ -46,54 +46,43 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "このモデルには現在の会話が収まりません",
+    "condensedToast": "新しいモデルに合わせて以前のやり取りを圧縮します。会話履歴はすべて引き続き確認できます。",
     "remoteTitle": "このリモートタスクではモデルを安全に切り替えられません",
-    "description": "現在の会話はすでに {{used}} を使用しており、新しいモデルの上限 {{total}}（約 {{pct}}%）を超えています。切り替えると、Cindy は短い要約を作成して続行します。会話履歴は残りますが、すべてがそのまま新しいモデルに渡されるわけではありません。",
     "remoteDescription": "このリモートタスクのコンテキストは、小さいモデルの {{total}} に対して {{used}}（約 {{pct}}%）を使用しているため、安全に切り替えられません。現在のモデルを維持するか、新しいタスクを作成してからこのモデルを選択してください。",
-    "cancel": "現在のモデルを維持",
-    "confirm": "切り替えて続行"
+    "cancel": "現在のモデルを維持"
   },
   "switchOutcome": {
     "applied": "モデルプロバイダーの切り替えが有効になりました。",
     "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。"
   },
   "agentSwitch": {
-    "browseAccessibility": "{{agent}} のモデルを表示",
-    "confirmTitle": "{{agent}} に切り替えますか?",
-    "confirmMessage": "次のメッセージを送信すると、{{appName}} は現在のセッションを {{agent}} に引き継ぎます。2つのエージェントはコンテキストやツールの理解が異なる場合があります。確認してから対象のモデルを選択してください。",
-    "cancel": "キャンセル",
-    "confirm": "続けて選択"
-  },
-  "agentRelocation": {
-    "titleOther": "Agent を「{{device}}」で実行しますか？",
-    "titleHost": "Agent を「{{host}}」で実行し直しますか？",
-    "titleHostUnnamed": "Agent をセッションのあるパソコンで実行し直しますか？",
-    "message": "元のパソコンにある会話の記録は移せないため、引き継ぎの要約から続けます。思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-    "messageNativeHistory": "会話の記録をすべてコピーして、続きから再開します。復元できない場合は引き継ぎの要約から続けるため、思考内容などは完全には引き継がれない場合があります。次のメッセージを送信したときに反映されます。",
-    "confirm": "パソコンを切り替える",
-    "cancel": "このままにする"
+    "browseAccessibility": "{{agent}} のモデルを表示"
   },
   "unified": {
-      "favoriteConfiguration": "この設定をお気に入りに追加",
-      "savedConfiguration": "登録済み · タップして解除",
-      "currentConfiguration": "現在の設定",
-      "usingRecommended": "推奨設定を使用中",
-      "customized": "カスタマイズ済み",
-      "resetScopeHint": "推奨設定に戻すと、ハーネス、推論強度、Fast がリセットされます。既存のお気に入りは変わりません。",
-      "saveFavoriteHint": "この設定を保存して、次回からお気に入りですぐに選べます。",
-      "removeFavoriteHint": "お気に入りを解除しても、現在の設定は変わりません。",
-      "editFavorite": "元のお気に入りを編集",
-      "editFavoriteHint": "このお気に入りだけを編集し、保存後に反映します。使用中の設定は変わりません。",
-      "saveFavorite": "お気に入りを保存",
-      "cancelEdit": "編集をキャンセル",
-      "originalFavoriteKept": "設定を変更しました。元のお気に入りは保持されています。",
-      "parametersSaved": "設定を保存しました。",
-      "restoredHint": "推奨設定に戻しました。既存のお気に入りは変わりません。",
-      "favoriteRemoved": "お気に入りを解除しました。現在の設定は変わりません。",
-      "favoriteSaved": "この設定をお気に入りに追加しました。",
-      "favoriteUpdated": "お気に入りを更新しました。使用中の設定は変わりません。",
-      "favoriteChanged": "このお気に入りは変更または削除されました。編集をキャンセルし、開き直してお試しください。",
-      "favoriteExists": "同じ設定がすでにお気に入りにあります。編集をキャンセルして使用できます。",
+    "remoteCopyUnavailableOn": "「{{device}}」の {{provider}} は現在利用できません。",
+    "remoteCopyUnavailableOnTaskComputer": "タスクがあるパソコンの {{provider}} は現在利用できません。",
+    "accountCount_other": "{{count}} 個のアカウント",
+    "accountFallback": "アカウント {{index}}",
+    "favoriteConfiguration": "この設定をお気に入りに追加",
+    "savedConfiguration": "登録済み · タップして解除",
+    "currentConfiguration": "現在の設定",
+    "usingRecommended": "推奨設定を使用中",
+    "customized": "カスタマイズ済み",
+    "resetScopeHint": "推奨設定に戻すと、Harness、推論強度、Fast がリセットされます。既存のお気に入りは変わりません。",
+    "saveFavoriteHint": "この設定を保存して、次回からお気に入りですぐに選べます。",
+    "removeFavoriteHint": "お気に入りを解除しても、現在の設定は変わりません。",
+    "editFavorite": "元のお気に入りを編集",
+    "editFavoriteHint": "このお気に入りだけを編集し、保存後に反映します。使用中の設定は変わりません。",
+    "saveFavorite": "お気に入りを保存",
+    "cancelEdit": "編集をキャンセル",
+    "originalFavoriteKept": "設定を変更しました。元のお気に入りは保持されています。",
+    "parametersSaved": "設定を保存しました。",
+    "restoredHint": "推奨設定に戻しました。既存のお気に入りは変わりません。",
+    "favoriteRemoved": "お気に入りを解除しました。現在の設定は変わりません。",
+    "favoriteSaved": "この設定をお気に入りに追加しました。",
+    "favoriteUpdated": "お気に入りを更新しました。使用中の設定は変わりません。",
+    "favoriteChanged": "このお気に入りは変更または削除されました。編集をキャンセルし、開き直してお試しください。",
+    "favoriteExists": "同じ設定がすでにお気に入りにあります。編集をキャンセルして使用できます。",
     "favorites": "お気に入り",
     "all": "すべてのモデル",
     "recommended": "おすすめ",
@@ -113,6 +102,12 @@
       "hour": "時間",
       "minute": "分",
       "second": "秒"
-    }
+    },
+    "quotaAverage": "クォータ残り {{percent}}%（平均）",
+    "quotaUpdating": "クォータ更新待ち",
+    "quotaResetSoon": "まもなくリセット",
+    "quotaResetIn": "{{duration}}後にリセット",
+    "quotaAverageHint": "週間クォータ · アカウントごとの単純平均",
+    "quotaResetHint": "現在の利用ペースではリセット時にクォータが残る見込みです。24時間以内は黄色、6時間以内は赤色で表示します。"
   }
 }

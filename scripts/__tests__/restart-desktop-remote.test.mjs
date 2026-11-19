@@ -23,6 +23,7 @@ import {
 	isRepositoryDesktopDevProcess,
 	officialProductionUserDataDirs,
 	resolveRestartTargetUserDataDir,
+	retainHostClientTargetForIsolated,
 	sanitizeIsolationName,
 	canonicalizeUserDataDir,
 	formatDesktopStartupFailure,
@@ -42,6 +43,7 @@ import {
 	darwinTerminalSourceCommand,
 	prepareDarwinTerminalLaunch,
 	currentDarwinTerminal,
+	resolveDesktopLaunchPolicy,
 	waitForDesktopStartup,
 	shouldRefuseHostedRestart,
 	commandContainsPath,
@@ -966,6 +968,52 @@ test("local restart keeps --local on both process-control stages", () => {
 	]);
 });
 
+// Exercise the flags and redirected output of the supervisor, which differ from an interactive smoke.
+const supervisedEnv = { CINDY_PERSONAL_FIXED_APP: '/fixture/Cindy.app',
+	CINDY_PERSONAL_GENERATION: 'test', CINDY_PERSONAL_MONITOR_DIR: '/fixture/launch' };
+const sharedArgs = ['--shared', '--wait-ready', '--reuse-terminal'];
+const sharedPolicy = resolveDesktopLaunchPolicy(sharedArgs, { env: supervisedEnv, platform: 'darwin', stdoutIsTTY: false });
+
+test('only a supervised fixed app with redirected output gives Forge a separate Terminal', () => {
+	assert.deepEqual(sharedPolicy, { reuseTerminal: false, coldBuildTimeoutMs: 600_000 });
+	const resolve = (args, env, stdoutIsTTY = false) =>
+		resolveDesktopLaunchPolicy(args, { env, platform: 'darwin', stdoutIsTTY });
+	assert.equal(resolve(sharedArgs, supervisedEnv, true).reuseTerminal, true);
+	assert.deepEqual(resolve(sharedArgs, {}), { reuseTerminal: true, coldBuildTimeoutMs: null });
+	assert.deepEqual(resolve(['--isolated=smoke', '--mock', '--reuse-terminal'], supervisedEnv),
+		{ reuseTerminal: true, coldBuildTimeoutMs: 600_000 });
+	assert.deepEqual(resolve(['--shared'], supervisedEnv), { reuseTerminal: false, coldBuildTimeoutMs: null });
+});
+
+test('cold start waits for Forge, then bounds auth/database from the first window', async t => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-cold-start-'));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const file = path.join(dir, 'status.json');
+	// Use real status files with a virtual clock; polling must neither repeat the window
+	// extension nor discard a concrete failure reported during a slow build.
+	async function simulate(events, policy = sharedPolicy) {
+		let time = 0;
+		const write = status => fs.writeFileSync(file, JSON.stringify(status));
+		write({ state: 'pending' });
+		return waitForDesktopStartup(file, 180_000, { ...policy, now: () => time, wait: async () => {
+			const next = events.shift();
+			assert.ok(next, 'waiter outlived its deadline');
+			time = next.at;
+			if (next.state) write(next);
+		} });
+	}
+	const window = { at: 570_000, state: 'window-ready' };
+	const ready = { at: 720_000, state: 'ready', pid: 123 };
+	assert.deepEqual(await simulate([{ at: 200_000 }, window, ready]), ready);
+	await assert.rejects(simulate([window, { at: 700_000 }, { at: 750_000 }]), /after window-ready within 180s/);
+	assert.deepEqual(readDesktopStartupStatus(file), { state: 'abandoned', at: 750_000 });
+	await assert.rejects(simulate([{ at: 600_000 }]), /cold build and first window within 600s/);
+	await assert.rejects(simulate([{ at: 200_000, state: 'failed', code: 'MIGRATE_FAILED', message: 'fixture' }]),
+		error => error.startupStatus?.code === 'MIGRATE_FAILED');
+	assert.equal(fs.existsSync(file), false);
+	await assert.rejects(simulate([{ at: 180_000 }], { coldBuildTimeoutMs: null }), /window\/auth\/database startup within 180s/);
+});
+
 test("desktop readiness status is parsed only after an atomic status file appears", () => {
 	const statusPath = new URL(`./startup-${process.pid}.json`, import.meta.url);
 	try {
@@ -1198,6 +1246,23 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 	);
 });
 
+test("CINDY_HOST_API reaches the desktop only for an isolated restart", () => {
+	const target = "http://127.0.0.1:3456";
+	const isolated = { CINDY_HOST_API: target };
+	assert.equal(retainHostClientTargetForIsolated(isolated, true), "kept");
+	assert.ok(devEnvPrefix(isolated, "darwin").includes(`CINDY_HOST_API='${target}'`));
+	assert.ok(devEnvPrefix(isolated, "win32").includes(`set "CINDY_HOST_API=${target}"`));
+
+	// A shared/production restart drops it from every launch path: the spawned
+	// runner inherits process.env, and a reused macOS Terminal gets it unset.
+	const shared = { CINDY_HOST_API: target };
+	assert.equal(retainHostClientTargetForIsolated(shared, false), "dropped");
+	assert.equal(shared.CINDY_HOST_API, undefined);
+	assert.ok(!devEnvPrefix(shared, "darwin").includes("CINDY_HOST_API"));
+	assert.ok(darwinStaleDevEnvUnset(shared).includes("CINDY_HOST_API"));
+	assert.equal(retainHostClientTargetForIsolated({}, false), "absent");
+});
+
 test("devEnvPrefix forwards only the requested local relay override and unsets stale macOS values", () => {
 	const env = { XDT_DEVICE_LINK_LOCAL_URL: "http://127.0.0.1:33355", XDT_DEVICE_LINK_CN_LOCAL_URL: "http://127.0.0.1:33355", XDT_DEVICE_LINK_GLOBAL_LOCAL_URL: "http://127.0.0.1:33356" };
 	assert.ok(devEnvPrefix(env, "darwin").includes("XDT_DEVICE_LINK_LOCAL_URL='http://127.0.0.1:33355'"));
@@ -1220,7 +1285,16 @@ test("devEnvPrefix carries the Cindy Make test-window marker through restart", (
 });
 
 test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell", () => {
-	for (const value of [undefined, "", "0", "1", "cursor-goal", "invalid"]) {
+	for (const value of [
+		undefined,
+		"",
+		"0",
+		"1",
+		"cursor-goal",
+		"desktop-pointer",
+		"folder-picker",
+		"invalid",
+	]) {
 		const env = value === undefined ? {} : { CINDY_CUA_SMOKE: value };
 		const node = process.platform === "win32" ? "%CINDY_TEST_NODE%" : "$CINDY_TEST_NODE";
 		const result = spawnSync(
@@ -1233,7 +1307,12 @@ test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell
 			},
 		);
 		assert.equal(result.status, 0, result.stderr);
-		assert.equal(result.stdout.trim(), ["1", "cursor-goal"].includes(value) ? value : "0", `caller value: ${value}`);
+		assert.equal(result.stdout.trim(), [
+			"1",
+			"cursor-goal",
+			"desktop-pointer",
+			"folder-picker",
+		].includes(value) ? value : "0", `caller value: ${value}`);
 	}
 });
 
@@ -1855,7 +1934,7 @@ test("reusing a terminal refuses headless input instead of opening a window", ()
 	}
 });
 
-test("personal coordinator reuses its input terminal with redirected output and drains after ready", {
+test("explicit terminal reuse drains redirected output after ready", {
 	skip: process.platform !== "darwin", timeout: 30_000,
 }, (t) => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-one-terminal-"));
@@ -1933,6 +2012,10 @@ test("readDesktopDevLogTail strips terminal control sequences and keeps the last
 // Shared signed runtimes must still identify each release/profile independently;
 // otherwise an upgrade can overlook a running instance or claim another release ready.
 // Minimal input: two releases sharing one binary; only one has a live renderer. Tier: unit + temp receipt.
+// PR #10066 regression: the existing no-argument input missed whitespace after
+// apps/desktop; one trailing --user-data-dir argument made both instances vanish.
+// Production identifyDesktopProcesses must retain checkout ownership/readiness
+// without accepting desktop-other. Unit fixture; full file runs in about 1 second.
 test('whoami attributes a shared personal shell to its business checkout', { skip: process.platform !== 'darwin' && 'macOS-only fixed app runtime' }, () => {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'shared-shell-whoami-'));
  try {
@@ -1945,8 +2028,17 @@ test('whoami attributes a shared personal shell to its business checkout', { ski
   const processes=[{pid:11,ppid:1,command:`${binary} ${roots[0]}/apps/desktop`},
    {pid:12,ppid:11,command:`helper --type=renderer --app-path=${roots[0]}/apps/desktop --user-data-dir=${dir}/sandbox`},
    {pid:21,ppid:1,command:`${fixed}/Contents/MacOS/Electron ${roots[1]}/apps/desktop`}];
-  const found=identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null})));
-  assert.deepEqual(found.map(i=>[i.pid,i.rootDir,i.ready]),[[11,roots[0],true],[21,roots[1],false]]);
+  for (const separator of ['', ' ', '\t']) {
+   const suffix = separator ? `${separator}--user-data-dir=${dir}/sandbox --enable-logging` : '';
+   const candidates = processes.map(proc => ({ ...proc, command: proc.command + suffix }));
+   candidates.push(
+    {pid:31,ppid:1,command:`${binary} ${roots[0]}/apps/desktop-other${suffix}`},
+    {pid:41,ppid:1,command:`${fixed}/Contents/MacOS/Electron ${roots[1]}/apps/desktop-other${suffix}`},
+   );
+   const found=identifyDesktopProcesses(candidates,roots.map(rootDir=>({rootDir,branch:null})));
+   assert.deepEqual(found.map(i=>[i.pid,i.rootDir,i.ready]),[[11,roots[0],true],[21,roots[1],false]],
+    `shared and fixed runtimes with separator ${JSON.stringify(separator)}`);
+  }
   assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[0]],999),true);
   assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[1]],999),false);
   assert.equal(isRepositoryDesktopDevProcess(processes[2],[roots[1]],999),true);

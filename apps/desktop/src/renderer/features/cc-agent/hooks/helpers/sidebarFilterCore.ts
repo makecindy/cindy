@@ -35,10 +35,13 @@ export type FilterCreators = 'all' | 'none' | string[];
 export const VENDOR_KEY = 'cc-agent.sidebar.filter.vendor';
 export const GROUP_BY_KEY = 'cc-agent.sidebar.filter.groupBy';
 export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
+export const GROUP_AUTOMATION_KEY = 'cc-agent.sidebar.filter.groupAutomation';
 export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
 export const DEVICE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.deviceGroupCollapsed';
 export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
 export const PINNED_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.pinnedSectionCollapsed';
+export const PINNED_SORT_BY_KEY = 'cc-agent.sidebar.pinnedSortBy';
+export type PinnedSortBy = 'manual' | 'recency';
 /** 单一混排列表(未按设备切段)里唯一对话组的折叠状态 key。 */
 export const DIALOGUE_GROUP_ALL_KEY = 'all';
 export const LAST_ACTIVITY_KEY = 'cc-agent.sidebar.filter.lastActivity';
@@ -396,6 +399,33 @@ export function persistGroupDialogue(groupDialogue: boolean): void {
   }
 }
 
+/* ============================== groupAutomation load/persist ============================== */
+
+/**
+ * 「自动化归为一组」开关:true = 自动化运行出来的任务(含项目里的)收进「自动化」组;
+ * false = 留在各自项目 / 散排。默认开,与「对话」同一默认、新老用户一致(2026-11-17 用户裁决)。
+ */
+export function loadGroupAutomation(): boolean {
+  const storage = safeStorage();
+  if (!storage) return true;
+  try {
+    return storage.getItem(GROUP_AUTOMATION_KEY) !== 'false';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read groupAutomation:', err);
+    return true;
+  }
+}
+
+export function persistGroupAutomation(groupAutomation: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(GROUP_AUTOMATION_KEY, String(groupAutomation));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist groupAutomation:', err);
+  }
+}
+
 /* ============================== groupDevice load/persist ============================== */
 
 /**
@@ -558,6 +588,26 @@ const PROJECT_ORDER_VALUES: ReadonlySet<string> = new Set<FilterProjectOrder>([
   'activity',
   'custom',
 ]);
+
+/** Display preference only: never rewrites the durable mixed pinned order. */
+export function loadPinnedSortBy(): PinnedSortBy {
+  try {
+    return safeStorage()?.getItem(PINNED_SORT_BY_KEY) === 'recency' ? 'recency' : 'manual';
+  } catch (err) {
+    log.warn('failed to read pinned sort preference', err);
+    return 'manual';
+  }
+}
+
+export function persistPinnedSortBy(sortBy: PinnedSortBy): void {
+  try {
+    const storage = safeStorage();
+    if (sortBy === 'manual') storage?.removeItem(PINNED_SORT_BY_KEY);
+    else storage?.setItem(PINNED_SORT_BY_KEY, sortBy);
+  } catch (err) {
+    log.warn('failed to persist pinned sort preference', err);
+  }
+}
 
 /**
  * 读 sortBy。已删除的 'alphabetic' / 'time' / 'manual' 存量值不在合法集合内，

@@ -75,7 +75,7 @@ export class StunClient {
   }
 }
 
-function splitHostPort(server: string): [string, number] {
+export function splitHostPort(server: string): [string, number] {
   const index = server.lastIndexOf(':');
   return [server.slice(0, index), Number(server.slice(index + 1))];
 }

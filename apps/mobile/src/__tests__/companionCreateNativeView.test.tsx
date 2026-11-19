@@ -65,18 +65,19 @@ const avatar = 'base64-portrait';
 let cleanup: Array<() => void> = [];
 afterEach(() => { cleanup.splice(0).forEach(fn => fn()); bridge.field = null; bridge.writes = []; });
 
-function mount(values: Props['values']) {
-  const root = createRoot(document.createElement('div'));
+function mount(values: Props['values'], hint?: string) {
+  const element = document.createElement('div');
+  const root = createRoot(element);
   const onChange = vi.fn();
   const panel = { id: 'create', text: '', action: { label: 'create' }, values: {} } as any;
   const render = (next: Props['values']) => act(() => root.render(
-    <CompanionCreateNativeView panel={panel} values={next} onChange={onChange} visible online
+    <CompanionCreateNativeView panel={panel} values={next} onChange={onChange} visible online hint={hint}
       deviceName="Mac" nameTaken={false} busy={false} loading={false} error={false} dirty={false}
       onSubmit={() => {}} onRetry={() => {}} onClose={() => {}} />,
   ));
   render(values);
   cleanup.push(() => act(() => root.unmount()));
-  return { render, onChange };
+  return { render, onChange, element };
 }
 
 it('打字和组字期间不回写原生控件，未上屏的字母不会被提交', () => {
@@ -109,4 +110,11 @@ it('上报的草稿始终是原生控件的当前文本', () => {
   act(() => { bridge.field.text.value = '还'; bridge.field.onTextChange('还'); });
   render({ name: '还', avatarImageBase64: avatar });
   expect(onChange).toHaveBeenLastCalledWith({ name: '还', avatarImageBase64: avatar });
+});
+
+// #10448: the native form disabled Create without saying why. The sheet now passes the reason down
+// and the form renders it as an explanatory line, like its offline / duplicate notices.
+it('shows the reason the confirm button is disabled', () => {
+  const { element } = mount({ name: '', avatarImageBase64: '' }, 'devices.companionProfile.createNeedsDetails');
+  expect(element.textContent).toContain('devices.companionProfile.createNeedsDetails');
 });

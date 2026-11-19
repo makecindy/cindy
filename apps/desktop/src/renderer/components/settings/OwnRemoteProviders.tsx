@@ -1,3 +1,7 @@
+import { useRemoteProviderDisable } from '@/lib/remoteProviderDisable';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Power, MoreHorizontal } from 'lucide-react';
+import { toast } from '@/lib/toast';
 /**
  * 设置 → 模型供应商里「自己其他电脑上能用的供应商」：同账号、在线、允许远程控制的电脑上，
  * 打开了「允许被远程调用」且已连接的供应商——也就是模型列表里能选的那些远程供应商。
@@ -13,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { ProviderView } from '@cindy/model-providers';
 import { remoteInvocationModels } from '@cindy/model-providers';
+import { isProviderLogoKind } from '@cindy/model-providers/branding';
 
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
@@ -21,6 +26,7 @@ import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
 import { Tip } from '@/components/ui/tooltip';
 import { RemoteProviderGroupMembers } from '@/features/provider-group/RemoteProviderGroupMembers';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
+import { useOwnedProviderShares } from '@/features/provider-share/useOwnedProviderShares';
 import { useLocalProviderGroups } from '@/features/provider-group/useLocalProviderGroups';
 import { useControllableDevices } from '@/hooks/useControllableDevices';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
@@ -51,6 +57,7 @@ export function ownRemoteProviderKey(deviceId: string, providerId: string): stri
 
 export interface OwnRemoteProviderList {
   entries: readonly OwnRemoteProvider[];
+  ownedShares: ReturnType<typeof useOwnedProviderShares>;
   /** 被其他电脑的供应商组收进去的分享(「分享给我的供应商」里不再单独列出)。 */
   hiddenShareIds: ReadonlySet<string>;
 }
@@ -65,7 +72,7 @@ export function useOwnRemoteProviderList(): OwnRemoteProviderList {
   const catalogs = useDevicesProviders(deviceIds, { retainDisplaySnapshot: true });
   // 本机自己建的组：组那一项就是本机的供应商(在上面本机那一段)，组里的远程供应商与分享同样收起。
   const localGroups = useLocalProviderGroups();
-  return useMemo(() => {
+  const { entries, hiddenShareIds } = useMemo(() => {
     const groups = collectRemoteProviderGroups(
       devices.flatMap((device) => {
         const catalog = catalogs.get(device.deviceId);
@@ -112,6 +119,14 @@ export function useOwnRemoteProviderList(): OwnRemoteProviderList {
     }
     return { entries, hiddenShareIds };
   }, [catalogs, devices, localGroups]);
+  const ownedShares = useOwnedProviderShares(entries.map(entry => entry.deviceId));
+  const visibleEntries = useMemo(
+    // Merged entries still exist for saved routes. Keep management rows for shares and groups.
+    () => entries.filter(({ deviceId, provider, group }) =>
+      !provider.subscriptionPoolAlias || group || ownedShares.get(deviceId)?.has(provider.id)),
+    [entries, ownedShares],
+  );
+  return { entries: visibleEntries, hiddenShareIds, ownedShares };
 }
 
 export function useOwnRemoteProviders(): readonly OwnRemoteProvider[] {
@@ -121,7 +136,7 @@ export function useOwnRemoteProviders(): readonly OwnRemoteProvider[] {
 function RemoteProviderIcon({ provider, size }: { provider: ProviderView; size: number }) {
   return (
     <RemoteSourceMark markSize={size}>
-      {hasProviderLogo(provider.id, provider.routing) ? (
+      {isProviderLogoKind(provider.logoKind) || hasProviderLogo(provider.id, provider.routing) ? (
         <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={provider.logoKind} size={size} />
       ) : (
         <span className="text-15 font-medium leading-none">{providerMonogram(provider.name)}</span>
@@ -156,6 +171,8 @@ export function OwnRemoteProviderRows({
             <button
               type="button"
               data-testid="own-remote-provider-row"
+              data-settings-search-action="Open the detail of a provider on another of your computers"
+              data-listed-source={`${entry.deviceId}:${entry.provider.id}`}
               aria-current={selected}
               aria-label={label}
               onClick={() => onSelect(entry.key)}
@@ -178,12 +195,12 @@ export function OwnRemoteProviderRows({
               </span>
               <span
                 className="min-w-0 flex-1 truncate text-13 font-medium"
-                style={{ color: 'var(--settings-section-title)' }}
+                style={{ color: entry.provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)' }}
               >
                 {name}
               </span>
               <span className="shrink-0 select-none text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
-                {entry.group
+                {entry.provider.suspended ? t('settings.providers.pill.suspended') : entry.group
                   ? t('settings.providers.remote.groupBadge', { count: providerGroupDeviceCount(entry.group.members) })
                   : t('settings.providers.models.modelCount', {
                       count: readOnlyProviderModels(entry.provider, entry.modelVisibilityOverrides).length,
@@ -192,7 +209,7 @@ export function OwnRemoteProviderRows({
               <span
                 aria-hidden="true"
                 className="h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{ backgroundColor: 'var(--remote-status-ready)' }}
+                style={{ backgroundColor: entry.provider.suspended ? 'var(--text-tertiary)' : 'var(--remote-status-ready)' }}
               />
             </button>
           </Tip>
@@ -212,6 +229,7 @@ export function OwnRemoteProviderDetail({ entry, pendingShareRequests = 0, onMan
   onManage?: () => void;
 }) {
   const { t } = useTranslation();
+  const disable = useRemoteProviderDisable();
   const name = providerDisplayName(entry.provider, t);
   const models = useMemo(
     () => readOnlyProviderModels(entry.provider, entry.modelVisibilityOverrides),
@@ -235,7 +253,7 @@ export function OwnRemoteProviderDetail({ entry, pendingShareRequests = 0, onMan
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span
                 className="min-w-0 truncate text-14 font-medium leading-tight"
-                style={{ color: 'var(--settings-section-title)' }}
+                style={{ color: entry.provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)' }}
               >
                 {name}
               </span>
@@ -251,13 +269,34 @@ export function OwnRemoteProviderDetail({ entry, pendingShareRequests = 0, onMan
             <span
               aria-hidden="true"
               className="h-1.5 w-1.5 shrink-0 rounded-full"
-              style={{ backgroundColor: 'var(--remote-status-ready)' }}
+              style={{ backgroundColor: entry.provider.suspended ? 'var(--text-tertiary)' : 'var(--remote-status-ready)' }}
             />
-            {t('settings.providers.remote.statusReady')}
+            {t(entry.provider.suspended ? 'settings.providers.pill.suspended' : 'settings.providers.remote.statusReady')}
           </span>
           {entry.group && onManage && (
             <ProviderShareEntryButton groupSize={entry.group.members.length} pendingCount={pendingShareRequests} onOpen={onManage} />
           )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Tip text={t('settings.providers.detail.moreActionsAria')}>
+                <button type="button" aria-label={t('settings.providers.detail.moreActionsAria')}
+                  data-settings-search-action="Open the remote provider actions menu"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
+                  style={{ color: 'var(--text-tertiary)' }}>
+                  <MoreHorizontal size={18} />
+                </button>
+              </Tip>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem disabled={!disable.available} onClick={() => {
+                void disable.setDisabled(entry.deviceId, entry.provider.id, !disable.isDisabled(entry.deviceId, entry.provider.id))
+                  .catch(() => toast.error(t('settings.providers.models.accessWriteFailed')));
+              }}>
+                <Power size={18} className="mr-2.5" />
+                {t(disable.isDisabled(entry.deviceId, entry.provider.id) ? 'settings.providers.menu.enableProvider' : 'settings.providers.menu.disableProvider')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -265,7 +304,7 @@ export function OwnRemoteProviderDetail({ entry, pendingShareRequests = 0, onMan
         data-testid="provider-detail-scroll"
         className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
       >
-        <div
+        {!entry.provider.suspended && <div
           className="shrink-0 border-t px-5 py-3"
           style={{ borderColor: 'var(--settings-theme-card-border)' }}
         >
@@ -274,20 +313,25 @@ export function OwnRemoteProviderDetail({ entry, pendingShareRequests = 0, onMan
               device: entry.deviceName,
             })}
           </p>
-        </div>
+        </div>}
 
-        {!entry.group && <OwnRemoteProviderQuota key={entry.key} entry={entry} />}
+        {entry.provider.suspended && (
+          <div className="border-t px-5 py-3 text-13 text-[var(--text-tertiary)]" style={{ borderColor: 'var(--settings-theme-card-border)' }}>
+            {t('settings.providers.detail.suspendedBanner')}
+          </div>
+        )}
+        {!entry.provider.suspended && !entry.group && <OwnRemoteProviderQuota key={entry.key} entry={entry} />}
 
         {entry.group && (
           <RemoteProviderGroupMembers deviceId={entry.deviceId} providerId={entry.provider.id} config={entry.group} />
         )}
 
-        <ReadOnlyProviderModelSection
+        {!entry.provider.suspended && <ReadOnlyProviderModelSection
           title={t('settings.providers.remote.modelsTitle')}
           models={models}
           note={models.length === 0 ? t('settings.providers.remote.modelsEmpty') : null}
           testId="own-remote-provider-models"
-        />
+        />}
       </div>
     </div>
   );

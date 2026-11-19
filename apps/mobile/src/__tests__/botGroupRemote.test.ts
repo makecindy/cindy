@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { groupExecutionVisualFixture } from '@/debug/groupExecutionVisualFixture';
 import { getRemoteResource } from '@/device-link/remoteResources';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
-import { botGroupComposerPlanState, chatGroupMembership, openBotGroupPlan } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupComposerPlanState, botGroupPlanStepState, chatGroupMembership, openBotGroupPlan } from '@cindy/maker-shared/botGroupPresentation';
+import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
 import {
   botGroupChatDataFromResource,
   botGroupErrorCode,
@@ -49,6 +50,19 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  // Unit regression: exercise the real wire parser and stop predicate. Existing member
+  // fixtures omitted public Cindy; losing assistant hid the requester's valid stop control.
+  it.each([[true, true, true], [true, false, false], [undefined, true, false], ['true', true, false]])(
+    'preserves public Cindy stop ownership through remote parsing (assistant=%s, mine=%s)', (assistant, isSelfRequested, allowed) => {
+      const parsed = parseBotGroupChatData(chatData({ serverBacked: true, supportsOwnedStop: true,
+        members: [{ botId: 'public-cindy', name: 'Cindy', assistant, isOwned: false }],
+        round: { status: 'running', canStop: true, canContinue: false, speakers: [
+          { botId: 'public-cindy', sessionId: null, executionId: 'public-run', activity: 'reply', isSelfRequested },
+        ] },
+      }))!;
+      expect(canStopBotGroupSpeaker(parsed, parsed.round.speakers[0]!)).toBe(allowed);
+    });
+
   it.each([
     ['RUNTIME_TIMEOUT', 'unclaimed_timeout', 'unclaimed_timeout'],
     ['RUNTIME_TIMEOUT', 'future-reason', undefined],
@@ -60,6 +74,13 @@ describe('parseBotGroupChatData', () => {
       runtimeFailureCode: code, runtimeFailureReason: reason }] }))!;
     expect(parsed.messages[0].runtimeFailureReason).toBe(expected);
   });
+  // Unit regression: Host's optional permission affordance was dropped by the real resource
+  // parser, hiding own-companion removal. Old/malformed hosts must not authorize the entry.
+  it.each([true, undefined, 'true'])('preserves own-companion removal capability only for explicit true (%s)', flag => {
+    const parsed = parseBotGroupChatData(chatData({ supportsOwnBotRemoval: flag }));
+    expect(parsed?.supportsOwnBotRemoval).toBe(flag === true);
+  });
+
   it('preserves skip permissions, pending-skip support, execution identity and skipped rows from the computer', () => {
     const base = chatData().plans[0];
     const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true, canSetAutoContinue: true,
@@ -75,6 +96,16 @@ describe('parseBotGroupChatData', () => {
     expect(legacy.plans[0].canManage).toBeUndefined();
     expect(legacy.plans[0].supportsPendingSkip).toBe(false);
     expect(legacy.plans[0].canSetAutoContinue).toBe(false);
+    // #9909: an explicit null says the turn published nothing; a missing field is an older
+    // projection. Only the former reads as skipped, so the null must survive the computer's
+    // projection instead of collapsing into "not reported".
+    const reported = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', steps: [
+      { ...base.steps[0], status: 'done', resultMessageId: null },
+      { ...base.steps[1], status: 'done' },
+    ] }] }))!;
+    expect(reported.plans[0]!.steps.map(step => step.resultMessageId)).toEqual([null, undefined]);
+    expect(botGroupPlanStepState(reported.plans[0]!, reported.plans[0]!.steps[0]!)).toBe('skipped');
+    expect(botGroupPlanStepState(reported.plans[0]!, reported.plans[0]!.steps[1]!)).toBe('done');
   });
   // The remote resource must preserve the queue semantics before choosing composer copy.
   it.each([
@@ -217,13 +248,26 @@ describe('parseBotGroupChatData', () => {
     expect(parsed.hasMoreBefore).toBe(true);
   });
 
+  it.each([true, false, undefined, 'true'])('retains requester permission without granting it to old or malformed hosts (%s)', isSelfRequested => {
+    const parsed = parseBotGroupChatData(chatData({ round: { status: 'running', speakers: [{
+      botId: 'mimi', sessionId: null, activity: 'reply', executionId: 'work', timelineAt: 123, sourceMessageId: 'source', requesterName: 'Ann', isSelfRequested,
+    }] } }))!;
+    expect(parsed.round.speakers[0]).toMatchObject({ timelineAt: 123, sourceMessageId: 'source', requesterName: 'Ann' });
+    expect(parsed.round.speakers[0]?.isSelfRequested === true).toBe(isSelfRequested === true);
+  });
+
   // Unit/protocol: old hosts silently ignore scope, so only literal capabilities permit all.
-  it.each([true, false, undefined, 'true'])('preserves stop permission separately from scope support (%s)', supportsScopedStop => {
-    const parsed = parseBotGroupChatData(chatData({ canStopAll: true, supportsScopedStop,
-      round: { status: 'running', speakers: [], othersActive: true },
+  it.each([true, false, undefined, 'true'])('ignores legacy stop-all and reads literal ownership support (%s)', supportsScopedStop => {
+    const parsed = parseBotGroupChatData(chatData({ serverBacked: true, canStopAll: true, supportsScopedStop, supportsOwnedStop: supportsScopedStop,
+      plans: [{ ...chatData().plans[0], canStop: true, steps: chatData().plans[0].steps.map(step => ({ ...step, canStop: true })) }],
+      round: { status: 'running', speakers: [], othersActive: true, canStop: false },
     }))!;
-    expect(parsed.canStopAll).toBe(true);
+    expect(parsed.canStopAll).toBe(false);
+    expect(parsed.supportsOwnedStop).toBe(supportsScopedStop === true);
+    expect(parsed.plans[0]?.canStop).toBe(supportsScopedStop === true);
+    expect(parsed.plans[0]?.steps.every(step => step.canStop)).toBe(supportsScopedStop === true);
     expect(parsed.round.othersActive).toBe(true);
+    expect(parsed.round.canStop).toBe(false);
     expect(parsed.supportsScopedStop).toBe(supportsScopedStop === true);
   });
 
@@ -390,6 +434,24 @@ it('retains notification capability and confirmed mode from a computer', () => {
   expect(parseBotGroupChatData(chatData({ notificationMode: 'unknown' }))?.notificationMode).toBeUndefined();
 });
 
+// Wire: remote group management must retain the host's invitation capability and value.
+it('retains the invitation setting from a computer without enabling it on old hosts', () => {
+  expect(parseBotGroupChatData(chatData({ supportsMemberInvites: true, allowMemberInvites: true })))
+    .toMatchObject({ supportsMemberInvites: true, allowMemberInvites: true });
+  expect(parseBotGroupChatData(chatData()))
+    .toMatchObject({ supportsMemberInvites: false, allowMemberInvites: false });
+});
+
+// Unit / #10345: remote-host parsing must retain the stable anchor, never confuse it with elapsed work.
+it('retains a remote execution timeline anchor independently of elapsed start', () => {
+  for (const startedAt of [undefined, 60_000]) {
+    const parsed = parseBotGroupChatData(chatData({ round: { status: 'running', canContinue: false,
+      speakers: [{ botId: 'abu', sessionId: null, executionId: 'run', activity: 'reply', timelineAt: 40_000, startedAt }] } }))!;
+    expect(parsed.round.speakers[0]).toMatchObject({ timelineAt: 40_000 });
+    expect(parsed.round.speakers[0]?.startedAt).toBe(startedAt);
+  }
+});
+
 // Unit/protocol: missing fallbackMarkdown discarded the new native fixture's rich block.
 // Existing fixtures bypassed getRemoteResource; validate this scene via the real resource normalizer.
 it('opens the execution acceptance scene through the actual remote resource reader', async () => {
@@ -397,4 +459,14 @@ it('opens the execution acceptance scene through the actual remote resource read
   const resource = await getRemoteResource(async <T,>(_device: string, channel: string, args?: unknown[]) =>
     groupExecutionVisualFixture(channel, args ?? []) as T, { deviceId: 'mock', deviceName: 'Mock' }, ref, 'zh-CN', ['bot-group-chat']);
   expect(botGroupChatDataFromResource(resource)?.round.speakers).toHaveLength(4);
+});
+
+// Unit: the remote resource previously discarded execution source/thread routing.
+it('preserves topic ownership and unresolved sources across the computer bridge', () => {
+  const round = { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's1', activity: 'reply', sourceMessageId: 'reply', threadRootId: 'topic' },
+    { botId: 'abu', sessionId: 's2', activity: 'reply', sourceMessageId: 'main', threadRootId: null },
+    { botId: 'abu', sessionId: 's3', activity: 'reply', sourceMessageId: 'unknown' },
+  ] };
+  expect(parseBotGroupChatData({ ...chatData(), round })?.round.speakers).toEqual(round.speakers);
 });

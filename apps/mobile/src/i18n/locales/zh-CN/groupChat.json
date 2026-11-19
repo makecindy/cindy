@@ -1,4 +1,7 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · 替 {{person}}"
+  },
   "progress": {
     "stop": "停止",
     "stopMine": "停止我发起的",
@@ -124,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}无法回复：当前模型不支持图片。",
         "advice": "请切换到支持图片的模型。",
-        "details": "请切换到支持图片的模型，或在「设置 → 个性化 → 视觉桥」开启并配置视觉模型后重新发送。"
+        "details": "请切换到支持图片的模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}无法回复：当前没有可用模型。",
@@ -133,8 +136,8 @@
       },
       "AUTH_REQUIRED": {
         "summary": "{{name}}无法回复：模型连接需要重新认证。",
-        "advice": "请重新连接对应的模型来源。",
-        "details": "请在设置中重新连接对应模型来源后重新发送。"
+        "advice": "请重新连接对应的模型供应商。",
+        "details": "请在设置中重新连接对应模型供应商后重新发送。"
       },
       "RATE_LIMITED": {
         "summary": "{{name}}无法回复：模型请求过于频繁。",
@@ -149,11 +152,11 @@
       "QUOTA_EXCEEDED": {
         "summary": "{{name}}无法回复：模型用量已达上限。",
         "advice": "请检查配额或选择其他模型。",
-        "details": "请检查对应来源的配额，或选择其他可用模型。"
+        "details": "请检查对应供应商的配额，或选择其他可用模型。"
       },
       "NETWORK_ERROR": {
         "summary": "{{name}}无法回复：网络连接失败。",
-        "advice": "请检查网络或Proxy。",
+        "advice": "请检查网络或 Proxy。",
         "details": "请检查网络或 Proxy 后重新发送。"
       },
       "RUNTIME_TIMEOUT": {
@@ -171,7 +174,8 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
-      "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。"
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。"
     }
   },
   "plan": {
@@ -287,7 +291,7 @@
     "organizerSaveFailed": "负责人没能更换，请再试一次",
     "projectDir": "项目文件夹",
     "projectDirNone": "没选",
-    "projectDirNote": "分工做事时，伙伴们在这里干活。不选也行，会用这个群自己的文件夹；选了 git 项目，每次分工会新开一个 worktree 和分支，不动你手上的代码。",
+    "projectDirNote": "可以选择这台电脑上的已有项目。留空时，优先使用仓库对应的项目，其次使用执行伙伴自己的项目。Git 项目分工使用独立 worktree。",
     "add": "添加伙伴",
     "projectDirOnComputer": "在电脑上选择或更换",
     "memberActions": "{{name}} 的操作",
@@ -305,6 +309,8 @@
       "loading": "正在读取群设置…",
       "unavailable": "群设置读取失败，请重试"
     },
+    "allowMemberInvites": "允许所有成员邀请朋友",
+    "allowMemberInvitesHint": "开启后，已加入的所有成员都可邀请朋友。仅群主和管理员可更改。",
     "allowMentionAllBots": "允许 @所有伙伴",
     "allowMentionAllBotsHint": "仅群主可更改。伙伴可能都会回复，大群请谨慎开启。此开关不影响 AI 代答。"
   },
@@ -312,6 +318,7 @@
     "memberLimit": "一个群需要 2–6 位伙伴",
     "memberUnavailable": "有伙伴现在不可用，换一位再试",
     "mentionUnavailable": "点名的成员已不可用，请重新选择后发送",
+    "mentionAmbiguous": "有多位成员叫「{{name}}」，请从 @ 列表里选择要找的那位",
     "notFound": "这个群聊已不存在",
     "hostNotReady": "Cindy 还在准备中，请稍后重试",
     "planOpen": "正在分工，做完或停止后才能安排新的",
@@ -373,7 +380,7 @@
   "thread": {
     "openFailed": "无法打开话题，请重试。",
     "title": "话题",
-    "root": "原问题",
+    "root": "原消息",
     "replies": "回复",
     "placeholder": "回复这个话题…",
     "create": "创建话题",
@@ -467,7 +474,7 @@
       "offline": "代答已暂停 · 电脑离线",
       "waiting": "等待手动开启",
       "unbound": "尚未选择伙伴",
-      "enabled": "伙伴正在为你待答"
+      "enabled": "伙伴已准备好为你代答"
     },
     "trigger": {
       "always": "永久触发",
@@ -540,7 +547,7 @@
     "replyModeMentionedNote": "不 @ 人时，伙伴不会接话。",
     "work": "分工",
     "organizerHint": "安排谁做哪一步；默认是第一位伙伴。",
-    "ownFolder": "群自己的文件夹",
+    "ownFolder": "自动选择",
     "archive": "归档群",
     "unarchive": "取消归档",
     "archiveHint": "归档会对所有成员停用本群，停止新消息和伙伴执行。历史记录保留，之后可通过搜索找到本群、查看历史并取消归档。",
@@ -576,19 +583,24 @@
     "transferHint": "对方成为群主，你将成为管理员。",
     "removeTitle": "将 {{name}} 移出群？",
     "removeHint": "该成员将无法继续查看或发消息；如果是伙伴的主人，其伙伴也会退出。",
+    "removeOwn": "移出群聊",
+    "removeOwnScope": "移出仅影响这个群，伙伴仍保留在你的账号中。",
+    "removeOwnHint": "{{name}} 将不再接收「{{group}}」的消息。历史消息会保留，其他群和私聊不受影响。",
+    "removeOwnActiveHint": "移出会停止它在本群的活跃请求。已独立开启的任务继续运行。",
+    "stopAndRemove": "停止并移出",
     "confirm": "确认",
     "inviteTitle": "邀请加入群聊",
     "reusableLink": "长期有效 · 多人可重复使用",
     "singleUseUntil": "只能使用一次 · {{date}} 到期",
     "copyFailed": "复制失败，请选中链接手动复制。",
-    "changeAvatar": "更换本群头像",
+    "changeAvatar": "更换我在本群的头像",
     "resetAvatar": "恢复默认头像",
-    "avatarFailed": "本群头像没能更换，请再试一次。",
+    "avatarFailed": "没能更换你在本群的头像，请再试一次。",
     "inviteLinkNote": "把链接发给朋友，对方确认后加入。",
     "copy": "复制",
     "close": "关闭",
     "copied": "已复制邀请链接",
-    "projectDirOnComputer": "项目文件夹在电脑上选择或更换。",
+    "projectDirOnComputer": "请在电脑上选择或更换项目文件夹。",
     "saveFailed": "没能保存，请再试一次。",
     "authorizeTitle": "授权本群使用 {{name}} 的工具与资料？",
     "toolsHint": "本群成员可以使用伙伴已有的工具与私人资料，结果对全群可见。原有操作审批仍有效；撤回会停止进行中的请求，已执行的操作无法撤销。",

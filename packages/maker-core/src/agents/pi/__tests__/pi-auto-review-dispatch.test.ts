@@ -53,6 +53,7 @@ const captured = vi.hoisted(() => ({
   failSetModel: false,
   rejectSetModel: false,
   failPrompt: false,
+  failSwitchSession: false,
   failSteer: false,
   failNextGetState: false,
   commandCatalog: null as null | Array<Record<string, unknown>>,
@@ -60,6 +61,7 @@ const captured = vi.hoisted(() => ({
   onAfterSetModel: null as null | (() => void),
   // 卡住 set_model 的回包,让测试能在"RPC 在飞"的那一刻观察盘上的路由快照。
   holdSetModel: null as null | Promise<void>,
+  holdAbort: null as null | Promise<{ success: boolean }>,
   launchProvider: null as string | null,
   launchModel: null as string | null,
   runtimeProvider: null as string | null,
@@ -125,6 +127,7 @@ vi.mock('../rpc-client.js', () => ({
       cmd: Record<string, unknown> & { type: string },
     ): Promise<{ success: boolean; command?: string; data?: unknown; error?: string }> {
       captured.requests.push(cmd);
+      if (cmd.type === 'abort' && captured.holdAbort) return captured.holdAbort;
       if (cmd.type === 'refresh_models' || cmd.type === 'set_compaction_reserve_tokens') {
         return { success: false, error: `Unknown command: ${cmd.type}` };
       }
@@ -144,6 +147,7 @@ vi.mock('../rpc-client.js', () => ({
         return { success: true, data: { contextWindow: 200_000 } };
       }
       if (cmd.type === 'switch_session') {
+        if (captured.failSwitchSession) return { success: false, error: 'history unavailable' };
         captured.runtimeProvider = captured.launchProvider;
         captured.runtimeModel = captured.launchModel;
         return { success: true, data: {} };
@@ -163,8 +167,9 @@ vi.mock('../rpc-client.js', () => ({
         const snapshot = JSON.parse(String(response?.value ?? '{}'));
         this.onEvent({ type: 'extension_ui_request', method: 'input',
           title: 'cindy:provider-refresh-ack', id: `${nonce}-ack`, placeholder: JSON.stringify({
-            nonce, ok: snapshot.nonce === nonce && snapshot.operation === 'inspect',
-            runtimeSettings: { version: '1.0.0', compaction: this.nativeSettings.compaction ?? {} },
+            nonce, ok: snapshot.nonce === nonce && ['inspect', 'tool-catalog'].includes(snapshot.operation),
+            runtimeSettings: snapshot.operation === 'tool-catalog' ? snapshot.toolRequest
+              : { version: '1.0.0', compaction: this.nativeSettings.compaction ?? {} },
           }) });
         return { command: 'prompt', success: true };
       }
@@ -211,6 +216,7 @@ import {
   MAIN_OWNED_SEND_CONTEXT,
   PiManagedPackageMutationCancelledError,
   PiManagedPackageMutationFailedError,
+  projectPiManagedCommandFailure,
   type TurnPermissionPolicy,
 } from '../../base-agent.js';
 import {
@@ -273,6 +279,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.onPrompt = null;
     captured.onAfterSetModel = null;
     captured.holdSetModel = null;
+    captured.holdAbort = null;
     captured.launchProvider = null;
     captured.launchModel = null;
     captured.runtimeProvider = null;
@@ -813,6 +820,37 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  // #10787: exercise the actual refresh dispatcher, not just the owner helper.
+  // No pending Host approval means no external identity query. Unit tier.
+  it.each([false, true])('skips owner queries without a host approval (extension owned: %s)', async (extensionOwned) => {
+    const scope = vi.spyOn(subagentRuns, 'piSubagentApprovalScope').mockResolvedValue('refused');
+    let scansFinished = 0;
+    const scan = vi.spyOn(subagentRuns, 'scanPiSubagentRuns').mockImplementation(async function* () {
+      yield {
+        version: 1, runId: '123e4567-e89b-42d3-a456-4266141740e2', taskId: 'no-host-approval',
+        parentSessionId: 's1', runtimeOwnerId: '900001.1700000000:foreign',
+        runnerInstanceId: 'test-runner', state: 'running', startedAt: Date.now(), updatedAt: Date.now(),
+        ...(extensionOwned ? { interactiveOwner: 'extension' as const } : {}),
+        tasks: [{ childId: 'child', sessionId: 'child', agent: 'scout', status: 'running',
+          ...(extensionOwned ? { pendingApproval: { id: 'permission', method: 'confirm' as const, title: 'cindy:permission' } } : {}),
+        }],
+      };
+      scansFinished++;
+    });
+    let handle: PiTestSessionHandle | undefined;
+    try {
+      handle = await start('ask');
+      await vi.waitFor(() => expect(scansFinished).toBeGreaterThan(0));
+      expect(handle.listBackgroundTasks?.()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ taskId: 'no-host-approval' }),
+      ]));
+      expect(scope).not.toHaveBeenCalled();
+    } finally {
+      scan.mockRestore(); scope.mockRestore();
+      await handle?.close();
+    }
+  });
+
   it.each([false, true])('backs off an empty root and wakes a launch (scan in flight: %s)', async (inFlight) => {
     const realInterval = globalThis.setInterval;
     let tick: (() => void) | undefined;
@@ -1085,6 +1123,39 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(deps.onPiManagedPackageMutationSettled).not.toHaveBeenCalled();
       expect(captured.closed).toBe(false);
     } finally { await handle.close(); }
+  });
+
+  // A host that cannot update the Pi core (the Node Host until it manages engine binaries) reports
+  // hostStage 'unsupported'; the caller reads that the core update is unavailable, without a retry.
+  it.each(['desktop', 'tool'] as const)('tells the %s caller a Pi core update is unavailable, without a retry', async origin => {
+    const deps = buildDeps();
+    const details = { phase: 'host-binary-update', hostStage: 'unsupported', packagesUpdated: false,
+      recovery: 'check-host-update-and-retry-core' } as const;
+    deps.mutatePiManagedPackage = vi.fn(async () => { throw new PiManagedPackageMutationFailedError(false, 'native-command-failed', details); });
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'unsupported-' + origin, workingDir: cwd, model: 'm', permissionMode: 'bypassPermissions' });
+    try {
+      let receipt;
+      if (origin === 'desktop') {
+        await handle.send({ type: 'user', content: 'pi update --self' }, desktopCommandOptions('pi update --self'));
+        const message = String(captured.requests.find(request => request.type === 'prompt')?.message ?? '');
+        receipt = JSON.parse(message.split('\n')[0].replace('[Cindy Pi command receipt] ', ''));
+      } else {
+        captured.onEvent?.({ type: 'extension_ui_request', id: 'unsupported-tool', method: 'input',
+          title: 'cindy:pi-package', placeholder: JSON.stringify({ args: ['update', '--self'], token: captured.env.CINDY_PI_PACKAGE_MANAGEMENT }) });
+        receipt = JSON.parse(String((await waitForResponse('unsupported-tool')).value));
+      }
+      const error = String(receipt.error ?? receipt.result?.error);
+      expect(error).toBe('Updating the Pi core is not available here yet; package install, update and remove still work.');
+      expect(error).not.toMatch(/retry/i);
+      expect(receipt.commandFailure ?? receipt.result?.commandFailure).toMatchObject({ hostStage: 'unsupported' });
+    } finally { await handle.close(); }
+  });
+
+  it('accepts the known host update stages, including unsupported, and drops unknown ones', () => {
+    const base = { phase: 'host-binary-update', packagesUpdated: false, recovery: 'check-host-update-and-retry-core' };
+    expect(projectPiManagedCommandFailure({ ...base, hostStage: 'unsupported' })).toEqual({ ...base, hostStage: 'unsupported' });
+    expect(projectPiManagedCommandFailure({ ...base, hostStage: 'download' })).toEqual({ ...base, hostStage: 'download' });
+    expect(projectPiManagedCommandFailure({ ...base, hostStage: 'not-a-stage' })).toEqual(base);
   });
 
   it.each([['ask', 'send', '--self'], ['auto', 'send', '--all'], ['ask', 'steer', '--self'], ['auto', 'steer', '--all']] as const)('routes exact IM updates through channel confirmation in %s/%s/%s', async (permissionMode, method, target) => {
@@ -1744,6 +1815,33 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     } finally {
       await handle.close();
     }
+  });
+
+  // Native catalog requests reuse the production nonce/ack bridge. No catalog
+  // RPC is sent during startup, and unknown commands must never become prompts.
+  it('queries the native tool catalog only on demand through the existing bridge', async () => {
+    const handle = await start();
+    try {
+      expect(captured.sent.some(message => typeof message.value === 'string' && message.value.includes('tool-catalog'))).toBe(false);
+      captured.requests = [];
+      expect(captured.requests).toHaveLength(0);
+      expect(await handle.callNativeToolCatalog!('setActiveTools', [['read']]))
+        .toEqual({ method: 'setActiveTools', args: [['read']] });
+      expect(captured.requests.map(request => request.type)).toEqual(['get_commands', 'prompt']);
+      const payload = captured.sent.findLast(message => typeof message.value === 'string' && message.value.includes('tool-catalog'));
+      expect(JSON.parse(String(payload?.value))).toMatchObject({ operation: 'tool-catalog',
+        toolRequest: { method: 'setActiveTools', args: [['read']] } });
+    } finally { await handle.close(); }
+  });
+
+  it('rejects a missing native catalog command without sending it to the model', async () => {
+    const handle = await start();
+    try {
+      captured.commandCatalog = [];
+      captured.requests = [];
+      await expect(handle.callNativeToolCatalog!('getAllTools', [])).rejects.toThrow('UNSUPPORTED_CAPABILITY');
+      expect(captured.requests.map(request => request.type)).toEqual(['get_commands']);
+    } finally { await handle.close(); }
   });
 
   it('closes a synchronous managed extension command after its visible notification', async () => {
@@ -3721,6 +3819,25 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.close();
   });
 
+  // Unit regression at the real Pi startup entry. Missing/switch-failed native
+  // history previously cleared the persisted id and silently created an empty task.
+  it.each(['missing', 'switch-failed'])('strict history resume preserves the binding on %s', async (failure) => {
+    const agent = new PiAgent(buildDeps());
+    const resumeFile = path.join(agentHome, 'strict-history.jsonl');
+    if (failure === 'switch-failed') writeFileSync(resumeFile, '{}\n');
+    captured.failSwitchSession = failure === 'switch-failed';
+    const invalidResume = vi.fn(async () => true);
+    try {
+      await expect(agent.startSession({ sessionId: 'strict-history', workingDir: cwd,
+        model: 'm', providerId: 'openai', resumeSessionId: resumeFile,
+        onInvalidResumeSession: invalidResume,
+        vendorOptions: { _cindyRequireNativeResume: true },
+      })).rejects.toThrow('Native Pi history');
+      expect(invalidResume).not.toHaveBeenCalled();
+      expect(captured.closed).toBe(true);
+    } finally { captured.failSwitchSession = false; }
+  });
+
   it('resume 模型同时缺少公开与 retained 描述符时不会在来源初始化前访问 resolver', async () => {
     const deps = buildDeps();
     deps.resolvePiRuntimeModelDescriptor = vi.fn(() => null);
@@ -4531,7 +4648,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.close();
   });
 
-  it.each(['owner', 'desktop'] as const)('does not carry guest authorization into a later %s turn', async (source) => {
+  it.each([
+    ['owner', false], ['desktop', false], ['owner', true], ['desktop', true],
+  ] as const)('does not carry guest authorization into a later %s turn (retry exhausted: %s)', async (source, exhausted) => {
     const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
     const handle = await start('auto', review);
     const policy = (requesterAuthority: 'owner' | 'guest') => ({
@@ -4542,13 +4661,93 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     firePermissionRequest('guest-send', 'unknown_sender', { action: 'send' });
     await waitForResponse('guest-send');
     expect(review.mock.calls[0]?.[0].authorizationContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
-    captured.onEvent?.({ type: 'agent_settled' });
+    captured.onEvent?.(exhausted
+      ? { type: 'auto_retry_end', success: false, finalError: '429 budget exceeded' }
+      : { type: 'agent_settled' });
+    // #10277: the old optional terminal can arrive after the next send has
+    // installed its policy but before its native agent_start. It must not erase
+    // that policy or retain the previous guest authority (unit, real PiAgent).
+    captured.onPrompt = () => {
+      if (exhausted) captured.onEvent?.({ type: 'agent_settled' });
+      captured.onEvent?.({ type: 'agent_start' });
+    };
     await handle.send({ type: 'user', content: 'Owner: inspect the status.' }, source === 'owner' ? { turnPermissionPolicy: policy('owner') } : undefined);
     firePermissionRequest('owner-inspect', 'unknown_status', { action: 'inspect' });
     await waitForResponse('owner-inspect');
     expect(review.mock.calls[1]?.[0].authorizationContext).toEqual(source === 'owner' ? { requesterAuthority: 'owner', source: 'group' } : undefined);
     expect(review.mock.calls[1]?.[0].userIntent).toBe('Owner: inspect the status.');
     await handle.close();
+  });
+
+  // PR #10326: PiAgent Stop -> retry cancellation -> next send -> old abort ACK.
+  // Existing terminal-frame tests never delayed the Stop RPC response. Unit
+  // coverage uses the real approval entry and asserts denial, not policy state;
+  // the same policy object is deliberately reused before/after agent_start.
+  it.each([
+    ['abort', false], ['abort', true],
+    ['requestGracefulStop', false], ['requestGracefulStop', true],
+  ] as const)('preserves the next policy after late %s ACK (next started: %s)', async (method, nextStarted) => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    const forceConfirmToolCall = vi.fn(() => true);
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat' },
+      confirmationSurface: 'channel', forceConfirmToolCall,
+    };
+    let acknowledge!: (response: { success: boolean }) => void;
+    captured.holdAbort = new Promise(resolve => { acknowledge = resolve; });
+    try {
+      await handle.send({ type: 'user', content: 'First channel request.' }, { turnPermissionPolicy: policy });
+      captured.onEvent?.({ type: 'agent_start' });
+      const stopping = handle[method]!();
+      expect(captured.requests.at(-1)?.type).toBe('abort');
+      captured.onEvent?.({ type: 'auto_retry_end', success: false });
+      expect(handle.isTurnRunning?.()).toBe(false);
+
+      await handle.send({ type: 'user', content: 'Next channel request.' }, { turnPermissionPolicy: policy });
+      if (nextStarted) captured.onEvent?.({ type: 'agent_start' });
+      acknowledge({ success: true });
+      await stopping;
+      if (!nextStarted) captured.onEvent?.({ type: 'agent_start' });
+
+      const input = { path: path.join(cwd, 'after-stop.txt'), content: 'restricted' };
+      firePermissionRequest('after-late-stop', 'write', input);
+      expect(await waitForResponse('after-late-stop')).toMatchObject({ confirmed: false });
+      expect(forceConfirmToolCall).toHaveBeenCalledWith('write', input);
+      expect(review).toHaveBeenCalledOnce();
+    } finally {
+      acknowledge({ success: true });
+      await handle.close();
+    }
+  });
+
+  // The ownership guard must still clear the stopped turn on acceptance and
+  // retain its restriction when Pi rejects Stop without a terminal frame.
+  it.each([
+    ['abort', true], ['abort', false],
+    ['requestGracefulStop', true], ['requestGracefulStop', false],
+  ] as const)('%s clears only an accepted current-turn policy (success: %s)', async (method, success) => {
+    const review = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+    const handle = await start('auto', review);
+    try {
+      await handle.send({ type: 'user', content: 'Channel request.' }, {
+        turnPermissionPolicy: { origin: { kind: 'im', channel: 'wechat' },
+          confirmationSurface: 'channel', forceConfirmToolCall: () => true },
+      });
+      captured.onEvent?.({ type: 'agent_start' });
+      captured.holdAbort = Promise.resolve({ success });
+      const stopping = handle[method]!();
+      if (method === 'requestGracefulStop' && !success) {
+        await expect(stopping).rejects.toThrow('Pi graceful stop rejected');
+      } else {
+        await stopping;
+      }
+      firePermissionRequest('after-current-stop', 'write', { path: path.join(cwd, 'current-stop.txt'), content: 'restricted' });
+      expect(await waitForResponse('after-current-stop')).toMatchObject({ confirmed: success });
+      expect(review).toHaveBeenCalledTimes(success ? 0 : 1);
+    } finally {
+      await handle.close();
+    }
   });
 
   it.each(['prompt', 'prompt-each-time'] as const)('MCP %s honors all AI verdicts', async (policy) => {

@@ -28,13 +28,15 @@ import { sessionToCamel } from '../localDb/mapper';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
 import { commitContextRebuild, createMessage } from '../localDb/ipc/messages.js';
 import { getMaker } from '../maker-host/index.js';
+import { resolveDesktopHandoffWindow } from '../maker-host/model-context-settings.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { copySessionContextWindowBudget, pruneSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
 import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
-import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
+import { buildHandoff, handoffPreviewText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
+import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 import {
   type ClaudeTranscriptAnchorIndex,
   loadClaudeTranscriptAnchorIndex,
@@ -56,12 +58,7 @@ export type ForkErrorCode =
 
 const STRIP_FORK_TITLE_PREFIX = '[Fork·已剥离]';
 
-export async function listSideChats(sourceSessionId: string): Promise<Array<{ id: string }>> {
-  return getDbClient().drizzle.select({ id: sessions.id }).from(sessions).where(and(
-    eq(sessions.parentSessionId, sourceSessionId), eq(sessions.source, 'side-chat'),
-    or(eq(sessions.status, 'active'), eq(sessions.status, 'archived')),
-  )).orderBy(asc(sessions.createdAt));
-}
+export { listSideChats } from './side-chat-list.js';
 
 /** Snapshot completed history without waiting for or stopping the parent turn. */
 export async function createSideChat(sourceSessionId: string): Promise<Session> {
@@ -164,10 +161,24 @@ function parseJsonContent(content: string): unknown {
 function buildCodexForkRecoveryMarker(opts: {
   source: { model: string; providerId: string | null; sdkSessionId: string | null };
   rows: Array<Pick<ForkTimelineMessage, 'clientId' | 'role' | 'content' | 'createdAt' | 'toolUseId' | 'agentMeta' | 'agentKind'>>;
+  targetContextWindow?: number | null;
   newMessageIds: Array<{ clientId: string }>;
   sessionId: string;
   now: number;
 }) {
+  const replay = buildHandoff(opts.rows.filter((row) => row.role !== 'error').map((row) => ({
+    role: row.role,
+    content: parseJsonContent(row.content),
+    createdAt: row.createdAt,
+    toolUseId: row.toolUseId,
+    agentMeta: row.agentMeta,
+  })), {
+    fromLabel: 'Codex',
+    toLabel: 'Codex',
+    targetContextWindow: opts.targetContextWindow,
+    sessionId: opts.sessionId,
+    reason: 'native-session-recovery',
+  });
   return {
     id: createId(),
     clientId: createId(),
@@ -186,18 +197,8 @@ function buildCodexForkRecoveryMarker(opts: {
       sourceProviderId: opts.source.providerId,
       sourceSdkSessionId: opts.source.sdkSessionId,
       sourceUserClientId: opts.newMessageIds[opts.rows.findLastIndex((row) => row.role === 'user')]?.clientId ?? null,
-      handoff: buildHandoffText(opts.rows.filter((row) => row.role !== 'error').map((row) => ({
-        role: row.role,
-        content: parseJsonContent(row.content),
-        createdAt: row.createdAt,
-        toolUseId: row.toolUseId,
-        agentMeta: row.agentMeta,
-      })), {
-        fromLabel: 'Codex',
-        toLabel: 'Codex',
-        sessionId: opts.sessionId,
-        reason: 'native-session-recovery',
-      }),
+      ...replay,
+      handoffPreview: handoffPreviewText(replay.handoff),
     }),
   };
 }
@@ -208,6 +209,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   agentKind: DbAgentKind;
   model: string;
   providerId: string | null;
+  targetContextWindow?: number | null;
   reason: 'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery' | 'idle-gap';
 }): Promise<void> {
   const handoffMessages: HandoffSourceMessage[] = opts.rows
@@ -225,7 +227,8 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   const lastUser = [...opts.rows].reverse().find((row) => row.role === 'user');
   const label =
     opts.agentKind === 'codex' ? 'Codex' : opts.agentKind === 'pi' ? 'Pi' : 'Claude Code';
-  const handoff = buildHandoffText(handoffMessages, {
+  const { handoff, handoffCoverage } = buildHandoff(handoffMessages, {
+    targetContextWindow: opts.targetContextWindow,
     fromLabel: label,
     toLabel: label,
     sessionId: opts.sessionId,
@@ -234,6 +237,7 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
   });
   await commitContextRebuild(opts.sessionId, handoff, {
     reason: opts.reason,
+    handoffCoverage,
     sourceUserClientId: lastUser?.clientId ?? null,
     sourceAgentKind: opts.agentKind,
     sourceModel: opts.model,
@@ -247,7 +251,8 @@ async function seedForkHandoffAfterSameEngineRebuild(opts: {
     agentMeta: {
       contextRebuild: {
         reason: opts.reason,
-        handoff,
+        handoff: handoffPreviewText(handoff),
+        handoffCoverage,
       },
     } as AgentMeta,
   });
@@ -835,7 +840,9 @@ export async function forkSessionAtMessage(
   messageClientId: string,
   options: { sideChat?: boolean } = {},
 ): Promise<Session> {
-  const db = getDbClient().drizzle;
+  await assertTaskActionCurrent();
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
 
   // 1. 读 source session
   const [source] = await db
@@ -992,6 +999,7 @@ export async function forkSessionAtMessage(
   // assistant 锚点：保留 pending handoff、让新会话首次发送时 lazy-create 即可。
   const newTitle = source.title.startsWith('[Fork') ? source.title : `[Fork] ${source.title}`;
   const newSessionId = createBusinessSessionId();
+  await assertTaskActionCurrent();
   let newSdkSessionId: string | null = null;
   let uuidMap = new Map<string, string>();
   let initialContextTokens: number | undefined;
@@ -1082,6 +1090,9 @@ export async function forkSessionAtMessage(
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
   const recoveryMarker = needsHistoryRecovery ? buildCodexForkRecoveryMarker({
     source: forkSource, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
+    targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, {
+      ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
+    }),
   }) : undefined;
   // pi 与 codex 一样:uuidMap 空、无 Claude transcript 锚点,跳过 Claude 专用的
   // synthetic uuid 补全 / parentUuid 采集(只有 Claude cc 需要)。
@@ -1101,9 +1112,10 @@ export async function forkSessionAtMessage(
   // 写在事务**之前**：写失败时调用方拿到的失败与「任务还没建出来」是一致的
   // （否则 DB 已提交、调用方却认为整体失败，会留下一个“报了错但存在”的任务）；
   // 事务失败则把刚写的条目撤掉，不留指向不存在任务的孤儿条目。
+  await assertTaskActionCurrent();
   const inheritedBudget = copySessionContextWindowBudget(sourceSessionId, newSessionId);
   try {
-    await getDbClient().tx('fork.session', {
+    await dbClient.tx('fork.session', {
       sourceSessionId,
       sourceClearedAt: source.clearedAt,
       targetCreatedAt: copyBoundary.createdAt,
@@ -1174,12 +1186,16 @@ export async function forkSessionAtMessage(
     throw new Error('Fork session 创建后查询失败');
   }
   if (!needsHistoryRecovery && !forkSource.reuseVendorSession && forkSource.rebuildReason) {
+    await assertTaskActionCurrent();
     await seedForkHandoffAfterSameEngineRebuild({
       sessionId: newSessionId,
       rows: sourceMessages,
       agentKind: forkSource.agentKind,
       model: forkSource.model,
       providerId: forkSource.providerId,
+      targetContextWindow: await resolveDesktopHandoffWindow(newSessionId, {
+        ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
+      }),
       reason: forkSource.rebuildReason,
     });
   }
@@ -1303,6 +1319,7 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
   const recoveryMarker = newSdkSessionId === null ? buildCodexForkRecoveryMarker({
     source, rows: sourceMessages, newMessageIds, sessionId: newSessionId, now,
+    targetContextWindow: await resolveDesktopHandoffWindow(sourceSessionId, { ...source, agentKind: 'codex' }),
   }) : undefined;
   // 任务级窗口档位与普通 fork 同口径继承（同一条任务意图）；这是偏好文件里的条目，
   // 与普通 fork 一样先写后提交：写失败时任务还没建出来，事务失败则撤掉条目。

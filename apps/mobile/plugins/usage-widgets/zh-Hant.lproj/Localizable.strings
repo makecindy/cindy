@@ -7,3 +7,13 @@
 "Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order." = "選擇這個小工具顯示哪台電腦的資料、哪些帳號排在前面、哪些隱藏。其餘帳號（包括以後新加的）按那台電腦上的順序排在後面。";
 "Accounts first" = "排在前面的帳號";
 "Hidden accounts" = "隱藏的帳號";
+"Accounts" = "帳號";
+"Choose which accounts come first and which to hide. Other accounts, including ones added later, follow in the menu bar's order." = "選擇哪些帳號排在前面、哪些隱藏。其餘帳號（包括以後新加的）按選單列裡的順序跟在後面。";
+
+"activity.waitingForUpdate" = "等待更新";
+"activity.lastUpdated" = "上次更新";
+
+"activity.toReview" = "待查看";
+"activity.inProgress" = "進行中";
+"activity.pendingCount %lld" = "等你處理 %lld";
+"activity.unreadCount %lld" = "未讀結果 %lld";

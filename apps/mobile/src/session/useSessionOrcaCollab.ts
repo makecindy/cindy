@@ -15,7 +15,6 @@ import type { ProviderView } from '@cindy/model-providers/registry';
 import type { AgentKind } from '@cindy/model-providers/types';
 import type { OrcaExecutionDeviceView } from '@cindy/device-link';
 import type { MobileModelOption } from '@/session/agentCapabilities';
-import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import {
   archiveOrcaWorker,
   buildOrcaEnableOptions,
@@ -874,11 +873,10 @@ export function useOrcaWorkerForm(params: {
     }
   }, [executionDevices, params.agentLocationSelectable]);
 
-  const changePermission = useCallback(async (mode: OrcaWorkerPermissionMode) => {
+  const changePermission = useCallback((mode: OrcaWorkerPermissionMode) => {
     touchedRef.current = true;
-    if (!await confirmFullAccessChange(form.permissionMode, mode)) return;
     setForm((current) => ({ ...current, permissionMode: mode }));
-  }, [form.permissionMode]);
+  }, []);
 
   const openPicker = useCallback(() => {
     setSheetOpen(false);

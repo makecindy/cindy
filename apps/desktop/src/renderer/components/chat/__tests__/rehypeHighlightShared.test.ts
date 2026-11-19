@@ -9,8 +9,8 @@ const calls = vi.hoisted(() => ({ highlighted: 0 }));
 vi.mock('rehype-highlight', async (importOriginal) => {
   const original = await importOriginal<typeof import('rehype-highlight')>();
   return {
-    default: () => {
-      const transform = original.default();
+    default: (...options: Parameters<typeof original.default>) => {
+      const transform = original.default(...options);
       return (...args: Parameters<typeof transform>) => {
         const visit = (node: Root | Element) => {
           if (
@@ -36,6 +36,13 @@ const render = (markdown: string) =>
   );
 
 describe('rehypeHighlightShared', () => {
+  // #9479: real Markdown/SkillHub consumer, beyond CodeMirror parser coverage.
+  it.each(['solidity', 'sol'])('highlights Solidity fence %s', lang => {
+    const html = render('```' + lang + '\ncontract Example { string public message = "hello"; /* note */ }\n```');
+    expect(html).toContain('hljs-keyword');
+    expect(html).toContain('hljs-string');
+    expect(html).toContain('hljs-comment');
+  });
   it('reuses one transformer (one lowlight registry) for every processor', () => {
     expect(rehypeHighlightShared()).toBe(rehypeHighlightShared());
   });
@@ -46,6 +53,16 @@ describe('rehypeHighlightShared', () => {
     expect(render('```unknown-lang\nx\n```')).toContain(
       '<pre><code class="hljs language-unknown-lang">x',
     );
+  });
+
+  // #10143: mapped non-common languages must also highlight fenced previews.
+  it.each([
+    ['protobuf', 'syntax = "proto3"; message Item { string name = 1; }'],
+    ['powershell', 'function Get-Item { return $true }'],
+    ['fsharp', 'let answer = 42'],
+    ['http', 'GET /items HTTP/1.1'],
+  ])('highlights %s outside the editor', (lang, code) => {
+    expect(render(`\`\`\`${lang}\n${code}\n\`\`\``)).toContain('<span class="hljs-');
   });
 
   // Unit: full-document streaming reparses stable code; the upstream highlighter

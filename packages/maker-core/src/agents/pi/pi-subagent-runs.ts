@@ -870,14 +870,14 @@ export const PI_SUBAGENT_IDLE_POLL_MS = 2_000;
 /** Background polling consumes one bounded status at a time, not Promise.all(history). */
 export async function* scanPiSubagentRuns(
   root: string,
-  options: { latestPerTask?: boolean } = {},
+  options: { latestPerTask?: boolean; onRead?: (status: PiSubagentRunStatus) => void | Promise<void> } = {},
 ): AsyncGenerator<PiSubagentRunStatus> {
   if (options.latestPerTask) {
     // Directory order is not generation order. Select using small identities
     // first so an old run cannot publish a result/approval before its successor.
     // Re-read only the selected payloads instead of retaining every output.
     const newest = new Map<string, { runId: string; startedAt: number }>();
-    for await (const status of scanPiSubagentRuns(root)) {
+    for await (const status of scanPiSubagentRuns(root, { onRead: options.onRead })) {
       const previous = newest.get(status.taskId);
       if (!previous || status.startedAt > previous.startedAt
         || (status.startedAt === previous.startedAt && status.runId.localeCompare(previous.runId) > 0)) {
@@ -890,7 +890,7 @@ export async function* scanPiSubagentRuns(
         status = parseStatus(await readSmallJson(path.join(root, selected.runId, 'status.json')), selected.runId);
       } catch { continue; }
       if (status?.taskId === taskId && status.startedAt === selected.startedAt
-        && !isPiSubagentRunStale(status, Date.now())) yield status;
+        && !await isPiSubagentRunStaleAsync(status, Date.now())) yield status;
     }
     return;
   }
@@ -905,7 +905,11 @@ export async function* scanPiSubagentRuns(
     try {
       status = parseStatus(await readSmallJson(path.join(root, entry.name, 'status.json')), entry.name);
     } catch { continue; }
-    if (status && !isPiSubagentRunStale(status, Date.now())) yield status;
+    if (status && !await isPiSubagentRunStaleAsync(status, Date.now())) {
+      // Accounting can observe all generations without exposing old results or approvals.
+      await options.onRead?.(status);
+      yield status;
+    }
   }
 }
 
@@ -1287,17 +1291,19 @@ export function piSubagentControlOwnership(
  */
 export type PiSubagentApprovalScope = 'own' | 'adopted' | 'refused';
 
-export function piSubagentApprovalScope(
+export async function piSubagentApprovalScope(
   status: PiSubagentRunStatus,
   runtimeOwnerId: string,
   hostPid: number,
   parentSessionId: string | undefined,
-): PiSubagentApprovalScope {
+): Promise<PiSubagentApprovalScope> {
   if (status.runtimeOwnerId === runtimeOwnerId) return 'own';
   if (!status.runtimeOwnerId) return 'refused';
   if (!parentSessionId || status.parentSessionId !== parentSessionId) return 'refused';
-  const ownership = piSubagentControlOwnership(status, hostPid);
-  return ownership === 'self' || ownership === 'orphaned' ? 'adopted' : 'refused';
+  const identity = piSubagentOwnerIdentity(status.runtimeOwnerId);
+  if (identity === null) return 'refused';
+  const alive = await isOwnerInstanceAliveAsync(identity);
+  return identity.pid === hostPid || !alive ? 'adopted' : 'refused';
 }
 
 /** True when this host may write control requests for the run. */
@@ -1389,6 +1395,52 @@ function probeProcessStartTimeSec(pid: number, now: number): number | null {
  */
 type ProcessStartTimeMemo = Map<number, number | null>;
 
+// Only share work while the OS query is in flight. Retaining completed answers
+// across polls would let a recycled PID keep proving the previous owner's id.
+const pendingProcessStartTimes = new Map<number, Promise<number | null>>();
+
+function readProcessStartTimeSecAsync(pid: number): Promise<number | null> {
+  const pending = pendingProcessStartTimes.get(pid);
+  if (pending) return pending;
+  const probe = (async (): Promise<number | null> => {
+    try {
+      if (process.platform === 'win32') {
+        const { stdout } = await execFileAsync('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-Command',
+          `[int64]((Get-Process -Id ${pid}).StartTime.ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds`,
+        ], { encoding: 'utf8', timeout: 15_000, windowsHide: true });
+        const match = stdout.match(/-?\d+/);
+        const seconds = match ? Number(match[0]) : NaN;
+        return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : null;
+      }
+      // ps reports elapsed seconds, so take the clock sample after the query.
+      const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'etime='], {
+        encoding: 'utf8', timeout: 5_000,
+      });
+      const elapsed = parseElapsedSeconds(stdout);
+      return elapsed === null ? null : Math.round(Date.now() / 1_000 - elapsed);
+    } catch {
+      return null;
+    }
+  })();
+  pendingProcessStartTimes.set(pid, probe);
+  void probe.finally(() => {
+    if (pendingProcessStartTimes.get(pid) === probe) pendingProcessStartTimes.delete(pid);
+  });
+  return probe;
+}
+
+async function isOwnerInstanceAliveAsync(identity: PiSubagentOwnerIdentity): Promise<boolean> {
+  if (isProcessAlive(identity.pid) === false) return false;
+  if (identity.startTimeSec === undefined) return true;
+  const startTimeSec = identity.pid === process.pid
+    ? ownProcessStartTimeSec()
+    : await readProcessStartTimeSecAsync(identity.pid);
+  if (isProcessAlive(identity.pid) === false) return false;
+  return startTimeSec === null
+    || Math.abs(startTimeSec - identity.startTimeSec) <= OWNER_START_TIME_TOLERANCE_SEC;
+}
+
 function readProcessStartTimeSec(pid: number, memo?: ProcessStartTimeMemo): number | null {
   const cached = memo?.get(pid);
   if (cached !== undefined) return cached;
@@ -1449,6 +1501,17 @@ function isProcessAlive(pid: number | undefined): boolean | null {
 const RUNNER_IDENTITY_TTL_MS = 10_000;
 const RUNNER_IDENTITY_CACHE_MAX = 64;
 const runnerIdentityCache = new Map<string, { at: number; presence: PiSubagentRunnerPresence }>();
+const pendingRunnerIdentities = new Map<string, Promise<PiSubagentRunnerPresence>>();
+
+function rememberRunnerPresence(key: string, presence: PiSubagentRunnerPresence): void {
+  runnerIdentityCache.delete(key);
+  runnerIdentityCache.set(key, { at: Date.now(), presence });
+  while (runnerIdentityCache.size > RUNNER_IDENTITY_CACHE_MAX) {
+    const oldest = runnerIdentityCache.keys().next().value;
+    if (oldest === undefined) break;
+    runnerIdentityCache.delete(oldest);
+  }
+}
 
 function runnerPresenceForStale(status: PiSubagentRunStatus): PiSubagentRunnerPresence {
   const key = `${status.runnerPid}:${status.runnerScript}`;
@@ -1460,19 +1523,39 @@ function runnerPresenceForStale(status: PiSubagentRunStatus): PiSubagentRunnerPr
   // outlived its process is what makes a sweep count work that is already over.
   // A signal-0 syscall, no spawn, and only on the expired-heartbeat path.
   if (isProcessAlive(status.runnerPid) === false) {
-    runnerIdentityCache.set(key, { at: now, presence: 'gone' });
+    rememberRunnerPresence(key, 'gone');
     return 'gone';
   }
   const cached = runnerIdentityCache.get(key);
   if (cached && now - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.presence;
   const presence = classifyRunnerPresenceSync(status);
-  runnerIdentityCache.set(key, { at: now, presence });
-  if (runnerIdentityCache.size > RUNNER_IDENTITY_CACHE_MAX) {
-    for (const [entryKey, entry] of runnerIdentityCache) {
-      if (now - entry.at >= RUNNER_IDENTITY_TTL_MS) runnerIdentityCache.delete(entryKey);
-    }
-  }
+  rememberRunnerPresence(key, presence);
   return presence;
+}
+
+/** Reuse runner classifications only for stale display, never for owner/control authority. */
+async function runnerPresenceForStaleAsync(status: PiSubagentRunStatus): Promise<PiSubagentRunnerPresence> {
+  const key = `${status.runnerPid}:${status.runnerScript}`;
+  // A completed "running" answer must not hide an exit inside its TTL.
+  if (isProcessAlive(status.runnerPid) === false) {
+    rememberRunnerPresence(key, 'gone');
+    return 'gone';
+  }
+  const cached = runnerIdentityCache.get(key);
+  if (cached && Date.now() - cached.at < RUNNER_IDENTITY_TTL_MS) return cached.presence;
+  const pending = pendingRunnerIdentities.get(key);
+  if (pending) return pending;
+  const probe = (async () => {
+    const classified = await classifyRunnerPresence(status);
+    const presence = isProcessAlive(status.runnerPid) === false ? 'gone' : classified;
+    rememberRunnerPresence(key, presence);
+    return presence;
+  })();
+  pendingRunnerIdentities.set(key, probe);
+  try { return await probe; }
+  finally {
+    if (pendingRunnerIdentities.get(key) === probe) pendingRunnerIdentities.delete(key);
+  }
 }
 
 export function isPiSubagentRunStale(
@@ -1512,6 +1595,20 @@ export function isPiSubagentRunStale(
   //    costs an honest failure at the boundary — the kill path answers
   //    `unverifiable` with a refusal too, so the two stay consistent.
   return runnerPresenceForStale(status) === 'gone';
+}
+
+/** Polling must not invoke the synchronous force-quit process probes. */
+async function isPiSubagentRunStaleAsync(
+  status: PiSubagentRunStatus,
+  now: number,
+): Promise<boolean> {
+  if (isPiSubagentTerminal(status.state) || now - status.updatedAt <= STALE_HEARTBEAT_MS) return false;
+  if (status.state === 'queued' && status.runnerInstanceId.startsWith('launch-pending-')
+    && !Number.isSafeInteger(status.runnerPid)) {
+    const identity = piSubagentOwnerIdentity(status.runtimeOwnerId);
+    if (identity !== null && await isOwnerInstanceAliveAsync(identity)) return false;
+  }
+  return await runnerPresenceForStaleAsync(status) === 'gone';
 }
 
 async function listRunDirectoryIds(root: string): Promise<string[]> {
@@ -1555,7 +1652,7 @@ export async function listPiSubagentRunDiagnostics(root: string): Promise<PiSuba
     let parsedStatus: PiSubagentRunStatus | null = null;
     try {
       parsedStatus = parseStatus(await readSmallJson(path.join(root, runId, 'status.json')), runId);
-      if (parsedStatus && !isPiSubagentRunStale(parsedStatus)) continue;
+      if (parsedStatus && !await isPiSubagentRunStaleAsync(parsedStatus, Date.now())) continue;
     } catch {
       // Fall through to the immutable config snapshot for safe display metadata.
     }
@@ -2293,6 +2390,7 @@ interface PiSubagentResumeLaunch {
     bridgeSource: Buffer;
     runnerSource: Buffer;
     cacheRulesJson?: Buffer;
+    settingsJson?: Buffer;
   };
 }
 
@@ -2745,6 +2843,30 @@ async function resumeClaimedPiSubagentRun(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
+  // Older snapshots may lack settings; new launches freeze only native shell keys.
+  let settingsJson = launch.runtimeSnapshot?.settingsJson;
+  if (settingsJson === undefined) {
+    const sourceSettingsFile = path.join(sourceConfigHome, 'settings.json');
+    try {
+      const [info, canonical] = await Promise.all([fs.lstat(sourceSettingsFile), fs.realpath(sourceSettingsFile)]);
+      if (info.isSymbolicLink() || !info.isFile() || info.size > MAX_STATUS_BYTES
+        || path.dirname(canonical) !== canonicalConfigHome) {
+        throw new Error('PI Subagent resume settings escaped their source run');
+      }
+      settingsJson = await fs.readFile(sourceSettingsFile);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  if (settingsJson && settingsJson.byteLength > MAX_STATUS_BYTES) {
+    throw new Error('PI Subagent resume settings escaped their source run');
+  }
+  const settings = settingsJson ? JSON.parse(settingsJson.toString('utf8')) : {};
+  const shellSettings: Record<string, string> = {};
+  for (const key of ['shellPath', 'shellCommandPrefix']) {
+    const value = settings && settings[key];
+    if (typeof value === 'string' && value.trim()) shellSettings[key] = value;
+  }
   const runId = randomUUID();
   const runDir = path.join(root, runId);
   const childConfigHome = path.join(runDir, 'pi-home');
@@ -2814,6 +2936,7 @@ async function resumeClaimedPiSubagentRun(
     }
     await fs.mkdir(childConfigHome, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(childConfigHome, 'models.json'), modelsJson, { mode: 0o600, flag: 'wx' });
+    await fs.writeFile(path.join(childConfigHome, 'settings.json'), JSON.stringify(shellSettings) + '\n', { mode: 0o600, flag: 'wx' });
     if (cacheRules) await fs.writeFile(path.join(childConfigHome, 'pi-cache-compatibility.json'), cacheRules, { mode: 0o600, flag: 'wx' });
     await copyStagedRipgrep(
       sourceConfigHome,
@@ -3167,24 +3290,6 @@ async function terminalResultProcessIdentities(
     return null;
   }
 }
-
-/**
- * Inventory only for receipt recovery; never a source of PIDs to signal.
- * Empty stdout, a failed probe, or `complete: false` are unknown, not proof of
- * absence. A finished Windows probe may return no command lines: that means
- * the current user had no process left to read, which is absence.
- * Windows can omit command lines for protected processes in other accounts.
- * Use the OS user filter first (tasklist /FI USERNAME, like POSIX ps -u), then
- * require a readable command line or independent exit confirmation for every
- * selected PID, except OS-confirmed antimalware PPL processes (which cannot be
- * our ordinary Node/Electron/Pi runtimes). Other inaccessible live processes
- * keep recovery closed; PID discovery never authorizes a kill.
- *
- * The Windows probe has to finish inside the kill budget. Enumerating every
- * Win32_Process property, plus compiling a protection helper before checking
- * which PIDs are still alive, exceeded that budget on hosted runners (8238ms
- * against an 8000ms cap) and failed a dead child closed.
- */
 /** Full Linux argv, or null if that pid is already gone. `'unknown'` is fail-closed. */
 async function readLinuxProcArgs(
   pid: string,
@@ -3273,6 +3378,14 @@ async function supplementLinuxProcCommandLines(
   return commands;
 }
 
+/**
+ * Inventory only for receipt recovery; never a source of PIDs to signal.
+ * Failed/incomplete probes are unknown. Windows compares WTS primary-token
+ * SIDs before reading PID/command-line fields, with a limited native fallback.
+ * Unreadable live processes stay unknown except OS-confirmed antimalware PPL.
+ * Confirm exits before compiling that helper to stay within the kill budget.
+ * Linux supplements ps with full /proc argv; no command-line clipping proves absence.
+ */
 async function readRecoveryProcessInventory(deadline: number): Promise<string[] | null> {
   try {
     const remaining = Math.floor(deadline - Date.now());
@@ -3280,71 +3393,99 @@ async function readRecoveryProcessInventory(deadline: number): Promise<string[] 
     if (process.platform === 'win32') {
       const script = [
         "$ErrorActionPreference = 'Stop'",
-        '$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name',
-        // tasklist reports itself, then exits before CIM runs. Track only our
-        // own probe PID so that its expected exit cannot block every recovery.
-        '$probe = [System.Diagnostics.Process]::new()',
-        '$probe.StartInfo.FileName = "$env:SystemRoot\\System32\\tasklist.exe"',
-        // /V adds a window title per process and is not needed for the user
-        // filter. PID and image name are the only columns this probe reads.
-        '$probe.StartInfo.Arguments = \'/FO CSV /NH /FI "USERNAME eq \' + $user + \'"\'',
-        '$probe.StartInfo.UseShellExecute = $false',
-        '$probe.StartInfo.CreateNoWindow = $true',
-        '$probe.StartInfo.RedirectStandardOutput = $true',
-        '$probe.StartInfo.RedirectStandardError = $true',
-        'if (-not $probe.Start()) { throw "tasklist did not start" }',
-        '$probeId = $probe.Id',
-        // Drain both pipes before WaitForExit. Reading only stdout while stderr
-        // fills its pipe deadlocks until the outer timeout kills the probe.
-        '$csv = $probe.StandardOutput.ReadToEnd()',
-        '$null = $probe.StandardError.ReadToEnd()',
-        '$probe.WaitForExit()',
-        '$probeExitCode = $probe.ExitCode',
-        '$probe.Dispose()',
-        'if ($probeExitCode -ne 0) { throw "tasklist failed" }',
-        // Without /V the columns are Image Name, PID, Session Name, Session#, Mem Usage.
-        '$owned = @($csv | ConvertFrom-Csv -Header Name,ProcessId,SessionName,SessionNumber,Memory)',
+        // Compare token SIDs without tasklist's per-process account-name/window
+        // lookup, which can block past the entire recovery deadline on Windows.
+        // WTS enumerates the caller's processes without administrator rights;
+        // foreign-user entries do not extend this account's recovery scope.
+        // https://learn.microsoft.com/windows/win32/api/wtsapi32/nf-wtsapi32-wtsenumerateprocessesw
+        "Add-Type -TypeDefinition @'",
+        'using System;',
+        'using System.Collections.Generic;',
+        'using System.ComponentModel;',
+        'using System.Runtime.InteropServices;',
+        'using System.Security.Principal;',
+        'public static class CindyRecoveryProcessOwners {',
+        '  [StructLayout(LayoutKind.Sequential)]',
+        '  private struct Info { public uint SessionId; public uint ProcessId; public IntPtr Name; public IntPtr UserSid; }',
+        '  [DllImport("wtsapi32.dll", EntryPoint = "WTSEnumerateProcessesW", SetLastError = true)]',
+        '  private static extern bool Enumerate(IntPtr server, uint reserved, uint version, out IntPtr buffer, out uint count);',
+        '  [DllImport("wtsapi32.dll")]',
+        '  private static extern void WTSFreeMemory(IntPtr buffer);',
+        '  [StructLayout(LayoutKind.Sequential)]',
+        '  private struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }',
+        '  [DllImport("kernel32.dll", SetLastError = true)]',
+        '  private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);',
+        '  [DllImport("kernel32.dll")]',
+        '  private static extern bool CloseHandle(IntPtr handle);',
+        '  [DllImport("ntdll.dll")]',
+        '  private static extern int NtQueryInformationProcess(IntPtr handle, int kind, IntPtr buffer, uint size, out uint needed);',
+        // CIM can omit command lines for elevated processes of the same user
+        // even though PROCESS_QUERY_LIMITED_INFORMATION can read them. A failed
+        // native query still leaves the PID unknown, never presumed exited.
+        '  public static string CommandLine(uint pid) {',
+        '    IntPtr handle = OpenProcess(0x1000, false, pid);',
+        '    if (handle == IntPtr.Zero) return null;',
+        '    try {',
+        '      uint needed;',
+        '      NtQueryInformationProcess(handle, 60, IntPtr.Zero, 0, out needed); // ProcessCommandLineInformation',
+        '      if (needed < Marshal.SizeOf(typeof(UnicodeString)) || needed > 1024 * 1024) return null;',
+        '      uint size = needed;',
+        '      IntPtr buffer = Marshal.AllocHGlobal(checked((int)size));',
+        '      try {',
+        '        if (NtQueryInformationProcess(handle, 60, buffer, size, out needed) != 0 || needed > size) return null;',
+        '        var value = (UnicodeString)Marshal.PtrToStructure(buffer, typeof(UnicodeString));',
+        '        long offset = value.Buffer.ToInt64() - buffer.ToInt64();',
+        '        if (value.Length == 0 || value.Length % 2 != 0 || value.Length > value.MaximumLength || value.Length > size',
+        '          || offset < Marshal.SizeOf(typeof(UnicodeString)) || offset > size - value.Length) return null;',
+        '        return Marshal.PtrToStringUni(value.Buffer, value.Length / 2);',
+        '      } finally { Marshal.FreeHGlobal(buffer); }',
+        '    } finally { CloseHandle(handle); }',
+        '  }',
+        '  public static int[] CurrentUser() {',
+        '    IntPtr buffer; uint count;',
+        '    if (!Enumerate(IntPtr.Zero, 0, 1, out buffer, out count)) throw new Win32Exception(Marshal.GetLastWin32Error());',
+        '    try {',
+        '      using (var identity = WindowsIdentity.GetCurrent()) {',
+        '        if (identity.User == null || buffer == IntPtr.Zero || count == 0) throw new InvalidOperationException("Missing process inventory");',
+        '        var owned = new List<int>();',
+        '        int size = Marshal.SizeOf(typeof(Info));',
+        '        for (int i = 0; i < count; i++) {',
+        '          var row = (Info)Marshal.PtrToStructure(IntPtr.Add(buffer, checked(i * size)), typeof(Info));',
+        '          if (row.UserSid != IntPtr.Zero && identity.User.Equals(new SecurityIdentifier(row.UserSid))) {',
+        '            owned.Add(checked((int)row.ProcessId));',
+        '          }',
+        '        }',
+        '        if (!owned.Contains(System.Diagnostics.Process.GetCurrentProcess().Id)) throw new InvalidOperationException("Incomplete user inventory");',
+        '        return owned.ToArray();',
+        '      }',
+        '    } finally { WTSFreeMemory(buffer); }',
+        '  }',
+        '}',
+        "'@",
         '$processIds = @{}',
-        '$names = @{}',
-        'foreach ($row in $owned) {',
-        '  $number = 0',
-        '  if (-not [int]::TryParse($row.ProcessId, [ref]$number) -or $number -le 0) { throw "invalid process inventory" }',
-        '  if ($number -eq $probeId) { continue }',
+        'foreach ($number in [CindyRecoveryProcessOwners]::CurrentUser()) {',
+        '  if ($number -le 0) { throw "invalid process inventory" }',
         '  $processIds[$number] = $true',
-        '  $name = [string]$row.Name',
-        '  if (-not [string]::IsNullOrWhiteSpace($name)) { $names[$name] = $true }',
         '}',
         '$count = $processIds.Count',
         '$commands = [System.Collections.Generic.List[string]]::new()',
         '$complete = $true',
-        'if ($names.Count -gt 0) {',
-        // A short name filter uses the indexed Name column. A long OR list can
-        // be rejected by WQL; fall back to the same two fields without a filter
-        // rather than failing the whole probe closed.
-        '  $items = $null',
-        '  if ($names.Count -le 32) {',
-        '    try {',
-        '      $clauses = @(foreach ($name in @($names.Keys)) { "Name=\'" + ($name -replace "\'", "\'\'" ) + "\'" })',
-        '      $filter = $clauses -join \' OR \'',
-        '      $items = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -Filter $filter -ErrorAction Stop)',
-        '    } catch { $items = $null }',
-        '  }',
-        '  if ($null -eq $items) {',
-        '    $items = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -ErrorAction Stop)',
-        '  }',
-        '  foreach ($item in $items) {',
-        '    $number = [int]$item.ProcessId',
-        '    if (-not $processIds.ContainsKey($number)) { continue }',
-        '    if ([string]::IsNullOrWhiteSpace($item.CommandLine)) { continue }',
-        '    $commands.Add($item.CommandLine)',
-        '    $processIds.Remove($number)',
-        '  }',
+        '$items = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,CommandLine -ErrorAction Stop)',
+        'foreach ($item in $items) {',
+        '  $number = [int]$item.ProcessId',
+        '  if (-not $processIds.ContainsKey($number)) { continue }',
+        '  if ([string]::IsNullOrWhiteSpace($item.CommandLine)) { continue }',
+        '  $commands.Add($item.CommandLine)',
+        '  $processIds.Remove($number)',
         '}',
-        // Confirm exits before compiling the protection helper. csc.exe is
-        // another multi-second startup, and PIDs that have already vanished
-        // do not need it.
+        // Try the limited native query, then retire confirmed exits before compiling PPL support.
         '$stillLive = New-Object System.Collections.Generic.List[int]',
         'foreach ($number in @($processIds.Keys)) {',
+        '  $command = [CindyRecoveryProcessOwners]::CommandLine($number)',
+        '  if (-not [string]::IsNullOrWhiteSpace($command)) {',
+        '    $commands.Add($command)',
+        '    continue',
+        '  }',
         '  $unreadable = $null',
         '  try {',
         '    $unreadable = [System.Diagnostics.Process]::GetProcessById($number)',

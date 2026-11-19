@@ -1,9 +1,14 @@
+import { remoteProviderDisableKey } from '@cindy/model-providers';
 import * as customProviderStore from '../../maker-host/custom-provider-store.js';
 import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createXdtHelperMcpServer } from '@cindy/mcps';
+import { resolveCustomMediaConnection } from '../../cindy-brain/customMediaConnection.js';
 import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { mkdtemp, writeFile, rm, truncate } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -20,6 +25,7 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/c
 import * as schema from '../../localDb/schema.js';
 import { createCustomProvider, getCustomProvider, listCustomProviders, mergeDiscoveredModelsIntoConfig, updateCustomProviderIfUnchanged, revokeCodexAccountUltrafast } from '../../maker-host/custom-provider-store.js';
 import { issueModelSourceSnapshot } from '../../maker-host/model-source-snapshots.js';
+import { fetchProviderModels } from '../../maker-host/provider-model-fetch.js';
 import { deriveModelsDiscoveryUrl } from '../../maker-host/generic-oauth.desktop.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
 import {
@@ -315,6 +321,81 @@ describe('provider file import IPC', () => {
     finish(join(tmpdir(), 'must-not-be-read.json'));
     await expect(pending).rejects.toThrow(/active account changed/);
     expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('local API configuration import IPC', () => {
+  async function setup(source = { env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-LOCAL-KEY' } }) {
+    mountDb();
+    importDirectory = await mkdtemp(join(tmpdir(), 'cindy-local-provider-ipc-'));
+    await mkdir(join(importDirectory, '.claude'));
+    const path = join(importDirectory, '.claude', 'settings.json');
+    await writeFile(path, JSON.stringify(source));
+    const keys = new Map<string, string>();
+    const deps = makeDeps({
+      localProviderSourceContext: () => ({ home: importDirectory!, platform: 'linux', env: {} }),
+      readCustomProviderKeyForMutation: vi.fn((id, agent) => keys.get(`${id}:${agent}`) ?? null),
+      storeCustomProviderKey: vi.fn((id, agent, key) => { keys.set(`${id}:${agent}`, key); return true; }),
+      removeCustomProviderKey: vi.fn((id, agent) => { keys.delete(`${id}:${agent}`); return { success: true }; }),
+    });
+    const harness = new IpcHarness(); registerProviderHandlers(harness, deps);
+    return { harness, deps, path, keys };
+  }
+  async function scan(harness: IpcHarness) {
+    return harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_SCAN) as Promise<import('../../../shared/localProviderImport.js').LocalProviderImportScan>;
+  }
+  it('scans fake source configs and saves through the ordinary provider CRUD and model discovery', async () => {
+    const { harness, deps } = await setup();
+    const result = await scan(harness);
+    expect(result.items).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain('FAKE-LOCAL-KEY');
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+    const item = result.items[0];
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+    expect(preview.updateTargets).toEqual([]);
+    const saved = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId);
+    expect(saved).toMatchObject({ ok: true, providerId: preview.providerId });
+    expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ agent: 'claude-code', apiKey: 'FAKE-LOCAL-KEY', redirect: 'error' }));
+    const stored = await getCustomProvider(preview.providerId);
+    expect(stored?.runtimes['claude-code']?.baseUrl).toBe('https://relay.test/prefix');
+    expect(stored?.runtimes.codex).toBeUndefined();
+    expect(deps.broadcastChanged).toHaveBeenCalled();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toEqual(saved);
+    expect(await listCustomProviders()).toHaveLength(1);
+  });
+  it('repeated scans/parallel confirmations do not create equivalent accounts twice', async () => {
+    const { harness } = await setup();
+    const a = (await scan(harness)).items[0], b = (await scan(harness)).items[0];
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, a.importId);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, b.importId);
+    const [one, two] = await Promise.all([harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, a.importId), harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, b.importId)]);
+    expect(one).toMatchObject({ ok: true }); expect(two).toEqual(one);
+    expect(await listCustomProviders()).toHaveLength(1);
+    expect((await scan(harness)).items[0].issue).toBe('duplicate');
+  });
+  it('source key rotation requires a fresh scan instead of saving an unseen credential', async () => {
+    const { harness, path, deps } = await setup();
+    const item = (await scan(harness)).items[0];
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId);
+    await writeFile(path, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-ROTATED' } }));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/PRECONDITION_FAILED/);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(await listCustomProviders()).toHaveLength(0);
+  });
+  it('trusted local sender is required and paths cannot be supplied by renderer', async () => {
+    const { harness, deps } = await setup();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_SCAN, '/fake/path')).rejects.toThrow(/INVALID_PARAMS/);
+    vi.mocked(deps.assertTrustedSender!).mockImplementation(() => { throwIpcError('PERMISSION_DENIED', 'untrusted'); });
+    await expect(scan(harness)).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+  it('keeps a saved connection if post-commit refresh fails, and retries remain idempotent', async () => {
+    const { harness, deps } = await setup();
+    vi.mocked(deps.broadcastChanged).mockImplementationOnce(() => { throw new Error('broadcast failed'); });
+    const item = (await scan(harness)).items[0];
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toMatchObject({ ok: true });
+    expect(await listCustomProviders()).toHaveLength(1);
   });
 });
 
@@ -668,7 +749,7 @@ describe('model-disable:set handler', () => {
     expect(deps.setModelsDisabled).toHaveBeenCalledWith('xd', ['seedream-5', 'seedance-2'], true);
   });
 
-  it.each(['audioModels', 'embeddingModels'] as const)(
+  it.each(['audioModels', 'embeddingModels', 'evaluationModels'] as const)(
     'accepts media-only members in %s and rejects unknown IDs',
     async (field) => {
       const harness = new IpcHarness();
@@ -4031,7 +4112,62 @@ describe('provider:test-connection handler', () => {
   });
 });
 
+// #9619: exercise the real IPC + fetch classification. Existing cases did not inspect
+// failure diagnostics. Synthetic upstream text contains secrets to catch accidental
+// logging of detail, headers, connection IDs, or URL parameters. Unit tier, no socket.
+const modelRefreshDiagnostics = vi.hoisted(() => vi.fn());
+vi.mock('../../logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../logger.js')>();
+  return { ...actual, createLogger: (scope: string) => ({
+    ...actual.createLogger(scope), warn: (...args: unknown[]) => modelRefreshDiagnostics(scope, ...args),
+  }) };
+});
+
 describe('provider:models-fetch handler', () => {
+  it.each([401, 503])('records safe saved-refresh diagnostics for HTTP %s', async status => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      fetchModels: spec => fetchProviderModels(spec, async () => new Response(
+        'synthetic-secret-response', { status })),
+    }));
+    modelRefreshDiagnostics.mockClear();
+    const result = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: 'synthetic-secret-connection',
+      baseUrl: 'https://provider.example/v1?key=synthetic-secret-query',
+      modelsUrl: 'https://provider.example/models?key=synthetic-secret-query',
+      authMethod: 'oauth', apiKey: 'synthetic-secret-token',
+      headers: { 'X-Secret': 'synthetic-secret-header' },
+    });
+    expect(result).toMatchObject({ ok: false, status, code: status === 401 ? 'AUTH_INVALID' : 'UPSTREAM_ERROR' });
+    expect(modelRefreshDiagnostics.mock.calls).toEqual([[
+      'maker-ipc:provider', 'saved provider model refresh failed',
+      { agent: 'codex', code: status === 401 ? 'AUTH_INVALID' : 'UPSTREAM_ERROR', status },
+    ]]);
+    expect(JSON.stringify(modelRefreshDiagnostics.mock.calls)).not.toContain('synthetic-secret');
+  });
+
+  it('records a local authentication failure without inventing an HTTP status', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({ fetchModels: async () => ({ ok: false, code: 'AUTH_INVALID' }) }));
+    modelRefreshDiagnostics.mockClear();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'pi', savedProviderId: 'saved', baseUrl: 'https://provider.example/v1', authMethod: 'oauth',
+    });
+    expect(modelRefreshDiagnostics.mock.calls).toEqual([[
+      'maker-ipc:provider', 'saved provider model refresh failed', { agent: 'pi', code: 'AUTH_INVALID' },
+    ]]);
+  });
+
+  it('does not report successful discovery as a failure', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    modelRefreshDiagnostics.mockClear();
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: 'saved', baseUrl: 'https://provider.example/v1', authMethod: 'apiKey',
+    })).toMatchObject({ ok: true, models: [{ id: 'm1' }] });
+    expect(modelRefreshDiagnostics).not.toHaveBeenCalled();
+  });
+
   it('rejects an untrusted sender before issuing a credentialed model request', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {
@@ -5716,6 +5852,60 @@ describe('Magpie discovery source lifecycle through real IPC and persistence', (
     expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource?.providerId).toBe('Old');
   });
 
+  it.each([undefined, 'https://relay.example/v1/models?client_version=0.147.0'])
+  ('keeps the discovered source when a Codex manifest falls back (%s)', async modelsUrl => {
+    mountDb();
+    const config: CustomProviderConfig = { id: 'codex-fallback-source', name: 'Gateway',
+      auth: { method: 'apiKey' },
+      runtimes: { codex: { baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-responses',
+        modelsUrl,
+        models: [{ id: 'vendor/gpt-6.1-sol-oneai', name: 'GPT', opaqueModelId: true }] } } };
+    await createCustomProvider(config);
+    const { fetchProviderModels } = await import('../../maker-host/provider-model-fetch');
+    let calls = 0;
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps({
+      readCustomProviderKeyForMutation: () => 'fixture-key',
+      readSavedProviderRoute: () => ({ baseUrl: config.runtimes.codex!.baseUrl, modelsUrl: config.runtimes.codex!.modelsUrl ?? null }),
+      fetchModels: spec => fetchProviderModels(spec, async () => {
+        calls++;
+        if (calls === 1) return new Response('{}', { status: 404 });
+        return new Response(JSON.stringify({ data: [{ id: 'vendor/gpt-6.1-sol-oneai',
+          display_name: 'GPT', owned_by: 'New account', magpie_label: 'GPT · New account' }] }));
+      }),
+    }));
+    const fetched = await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex', savedProviderId: config.id, baseUrl: config.runtimes.codex!.baseUrl,
+      authMethod: 'apiKey', apiKey: 'fixture-key', wireProtocol: 'openai-responses', modelsUrl,
+    }) as { ok: boolean; models: DiscoveredModel[] };
+    expect(fetched.ok).toBe(true);
+    expect(calls).toBe(2);
+    expect(fetched.models[0].discoveredSource?.providerId).toBe('New account');
+    const updated = structuredClone(config);
+    updated.runtimes.codex!.models = mergeDiscoveredRuntimeModels(config.runtimes.codex!.models, fetched.models);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, updated, { codex: 'fixture-key' });
+    expect((await getCustomProvider(config.id))!.runtimes.codex!.models[0].discoveredSource?.providerId)
+      .toBe('New account');
+  });
+
+  it('rejects an OAuth source without a live discovery receipt', async () => {
+    mountDb();
+    const config: CustomProviderConfig = { id: 'oauth-forged-source', name: 'OAuth Gateway',
+      auth: { method: 'oauth', oauth: { authorizeUrl: 'https://oauth.example/authorize',
+        tokenUrl: 'https://oauth.example/token', clientId: 'fixture-client', scopes: 'openid' } },
+      runtimes: { pi: { baseUrl: 'https://oauth.example/v1', wireProtocol: 'openai-chat',
+        models: [{ id: 'vendor/gpt-6.1', name: 'GPT', opaqueModelId: true }] } } };
+    await createCustomProvider(config);
+    const harness = new IpcHarness();
+    registerProviderHandlers(harness, makeDeps());
+    const forged = structuredClone(config);
+    forged.runtimes.pi!.models[0].discoveredSource = {
+      kind: 'magpie', providerId: 'Forged', label: 'Forged', snapshotId: 'deadbeef:deadbeef',
+    };
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, forged);
+    expect((await getCustomProvider(config.id))!.runtimes.pi!.models[0].discoveredSource).toBeUndefined();
+  });
+
   it('commits a current source and clears it on a successful response that omits source fields', async () => {
     mountDb();
     const config = configFor(); await createCustomProvider(config);
@@ -5827,6 +6017,70 @@ describe('Agent API connection configuration', () => {
     configureModelSettingsActions(registerProviderHandlers(new IpcHarness(), deps));
     return deps;
   }
+  // #10147, unit: real MCP -> Settings transaction -> in-memory SQLite -> media route.
+  // Existing tests bypassed the MCP schema and never read imageApi/mode back or
+  // selected a Guide connection. One image ID shared by Codex/Pi is sufficient.
+  it('configures Images through MCP without losing other connections or borrowing their credentials', async () => {
+    let active: ReturnType<typeof buildUserProvider> | undefined;
+    const deps = setup({ refreshCatalog: async () => {
+      const [saved] = await listCustomProviders();
+      active = saved ? buildUserProvider(saved) : undefined;
+    } });
+    const ask = vi.fn(async () => 'synthetic-key');
+    const server = createXdtHelperMcpServer({ modelSettings: { call: (input, signal) =>
+      manageAppModels(input, async () => {}, ask, signal) } },
+    { agentKind: 'pi', workingDir: '/fixture', sessionId: 'media-settings-owner' });
+    const client = new Client({ name: 'media-settings-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = async (change: Record<string, unknown>) => {
+      const result = await client.callTool({ name: 'call_tool', arguments: {
+        name: 'configure_model_connection', args: { change },
+      } });
+      return JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
+    };
+    try {
+      const imageRuntime = { ...runtime, imageApi: 'openai-images',
+        models: [{ id: 'image-model', mode: 'image_generation' }] };
+      const created = await call({ action: 'create', name: 'Images', runtimes: {
+        codex: { ...imageRuntime, wireProtocol: 'openai-responses', supportsImageGeneration: true },
+        pi: { ...runtime, baseUrl: 'https://pi.example.test/v1', models: [{ id: 'image-model' }] },
+      } });
+      expect(created).toMatchObject({ ok: true, saved: true });
+      const providerId = created.providerId as string;
+      expect(await call({ action: 'read', providerId })).toMatchObject({ runtimes: {
+        codex: { imageApi: 'openai-images', supportsImageGeneration: true,
+          models: [{ id: 'image-model', mode: 'image_generation' }] },
+      } });
+      expect(active?.imageModels?.[0]?.sourceAgent).toBe('codex');
+      expect(await call({ action: 'setModels', providerId, agent: 'pi',
+        models: [{ id: 'image-model', mode: 'image_generation' }] })).toMatchObject({ saved: true });
+      // Declaring a media mode alone must not borrow a different runtime's Images API.
+      expect(active?.imageModels?.[0]?.sourceAgent).toBe('codex');
+      ask.mockClear();
+      vi.mocked(deps.storeCustomProviderKey).mockClear();
+      expect(await call({ action: 'setRuntime', providerId, agent: 'pi',
+        runtime: { ...imageRuntime, baseUrl: 'https://pi.example.test/v1' } })).toMatchObject({ saved: true });
+      expect(ask).not.toHaveBeenCalled();
+      expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+      const readback = await call({ action: 'read', providerId });
+      expect(readback.runtimes.codex.imageApi).toBe('openai-images');
+      expect(readback.runtimes.codex.supportsImageGeneration).toBe(true);
+      expect(readback.runtimes.pi).toMatchObject({ imageApi: 'openai-images',
+        models: [{ id: 'image-model', mode: 'image_generation' }] });
+      const saved = await getCustomProvider(storedCustomProviderId(providerId));
+      expect(saved?.runtimes.pi?.imageApi).toBe('openai-images');
+      expect(saved?.runtimes.codex?.imageApi).toBe('openai-images');
+      expect(active?.imageModels?.[0]?.sourceAgents).toEqual(['codex', 'pi']);
+      const readApiKey = vi.fn((agent: AgentKind) => agent === 'pi' ? 'invalid-pi-key' : 'invalid-codex-key');
+      expect(resolveCustomMediaConnection({ getProvider: () => active, readApiKey,
+        isOwnerBoundaryPending: () => false }, 'image-model', 'image', { guideDriven: true, agent: 'pi' })).toMatchObject({
+        agent: 'pi', baseUrl: 'https://pi.example.test/v1', headers: { authorization: 'Bearer invalid-pi-key' },
+      });
+      expect(readApiKey).toHaveBeenCalledExactlyOnceWith('pi');
+      expect(JSON.stringify(readback)).not.toContain('synthetic-key');
+    } finally { await client.close(); await server.close(); }
+  });
   it('creates, discovers, edits and tests through Settings without returning credentials or upstream bodies', async () => {
     const deps = setup({ testConnection: vi.fn(async () => ({ ok: false, code: 'AUTH_INVALID' as const, latencyMs: 1, detail: 'synthetic-key' })) });
     const ask = vi.fn(async () => 'synthetic-key');
@@ -6013,5 +6267,50 @@ describe('Agent API connection configuration', () => {
     await actions.connections.fetch(config, 'pi');
     expect(deps.fetchModels).toHaveBeenCalledTimes(1);
     expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'https://new.test/v1', apiKey: 'new-key' }));
+  });
+});
+
+// Orca review 2026-11-18: a merged connection follows its pool's switch, so a write to its own hidden key
+// from a page opened before the merge must fail visibly instead of reporting success with no effect.
+describe('remote provider access writes', () => {
+  it('refuses a merged connection and accepts the pool', async () => {
+    const harness = new IpcHarness();
+    const setRemoteProviderInvocationEnabled = vi.fn();
+    const deps = makeDeps({
+      listProviders: async () => [catalogView('openai', {}), { ...catalogView('old-openai', {}), subscriptionPoolAlias: true }],
+      getRemoteProviderInvocationEnabled: () => false,
+      setRemoteProviderInvocationEnabled,
+    });
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, { providerId: 'old-openai', enabled: false }))
+      .rejects.toThrow('PRECONDITION_FAILED');
+    expect(setRemoteProviderInvocationEnabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_REMOTE_ACCESS_SET, { providerId: 'openai', enabled: true });
+    expect(setRemoteProviderInvocationEnabled).toHaveBeenCalledExactlyOnceWith('openai', true);
+  });
+});
+
+describe('receiving-client remote provider disable', () => {
+  it('reuses provider overrides with a device-scoped key and never changes host sharing', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listRemoteProviders: vi.fn(async () => [catalogView('openai', {})]), setRemoteProviderInvocationEnabled: vi.fn() });
+    registerProviderHandlers(harness, deps);
+    const command = { kind: 'provider', providerId: 'openai', remoteDeviceId: 'peer', disabled: true };
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, command);
+    expect(deps.setProviderDisabled).toHaveBeenCalledWith(remoteProviderDisableKey('peer', 'openai'), true);
+    expect(deps.setRemoteProviderInvocationEnabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { ...command, disabled: false });
+    expect(deps.setProviderDisabled).toHaveBeenLastCalledWith(remoteProviderDisableKey('peer', 'openai'), false);
+    expect(deps.listRemoteProviders).toHaveBeenCalledOnce();
+  });
+  it('rejects unknown remote providers but permits clearing a stale stop while offline', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listRemoteProviders: async () => [] });
+    registerProviderHandlers(harness, deps);
+    const command = { kind: 'provider', providerId: 'missing', remoteDeviceId: 'peer', disabled: true };
+    await expect(harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, command)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    await harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { ...command, disabled: false });
+    expect(deps.setProviderDisabled).toHaveBeenCalledWith(remoteProviderDisableKey('peer', 'missing'), false);
   });
 });

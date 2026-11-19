@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useState } from 'react';
 import { mountPage } from '../../ui-page/harness';
 import { BotGroupTimelineItem } from '../../../src/renderer/features/bots/BotGroupTimelineItem';
@@ -18,7 +19,7 @@ function Example({ readOnly }: { readOnly: boolean }) {
   ];
   const content = '把时间留给真正想做的事。\n\n```cindy-ui\n' + nodes.map((node, i) => JSON.stringify({ version: 1, seq: i + 1, op: 'create', ...node })).join('\n') + '\n```';
   return <main style={{ padding: 16, width: '100%', maxWidth: 800, margin: '0 auto' }}>
-    <BotGroupTimelineItem message={{ id: 'answer', sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'aster', authorName: 'Aster', content,
+    <BotGroupTimelineItem pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} message={{ id: 'answer', sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'aster', authorName: 'Aster', content,
       mentions: { all: false, botIds: [] }, noticeCode: null, planId: null, files: [], attachments: [], createdAt: 1700000000000 }}
       continued={false} authorName="Aster" avatar={{ name: 'Aster', avatar: null, avatarColor: null }} members={[]}
       mentionLabels={[]} locale="zh-CN" shareScope="group-rich-answer" sharing={false} showActions={false} onChanged={() => {}}

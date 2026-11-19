@@ -7,6 +7,7 @@ async function prepareChannel() {
   await Notifications.setNotificationChannelAsync('chat-messages', {
     name: 'Cindy', importance: Notifications.AndroidImportance.HIGH,
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+    showBadge: true,
   });
 }
 // A missing/unreachable Google service must not keep settings and the registration queue waiting.

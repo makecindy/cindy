@@ -1423,4 +1423,121 @@ describe('SplitGroup', () => {
     expect(view.container.querySelectorAll('[data-split-pane-key]')).toHaveLength(8);
     expect(resolveSessionRouteMock).not.toHaveBeenCalled();
   });
+
+  // 回归保护（follow-up to #9311/#9310）：防止 macOS 常驻滚动条 + 亚像素取整引发的
+  // ResizeObserver 死循环、双轴滚动条互锁死锁以及奇数像素下的 0.5px 接缝偏移。
+  it('亚像素取整、经典滚动条级联与回宽解耦均保持确定性整像素布局', () => {
+    let resizeCallback: ResizeObserverCallback | null = null;
+    const originalResizeObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class MockResizeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        resizeCallback = cb;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+
+    try {
+      act(() => {
+        splitGroupStore.addSession('session-b', 'session-a', 'right');
+      });
+      const view = renderSplitGroup('session-a');
+      const canvas = view.container.querySelector('[data-split-canvas]') as HTMLElement;
+      const viewport = canvas?.parentElement as HTMLElement;
+      expect(viewport).toBeTruthy();
+
+      const getPaneWrappers = () =>
+        Array.from(canvas.children).filter(
+          (node): node is HTMLElement =>
+            node instanceof HTMLElement && !node.hasAttribute('data-split-branch'),
+        );
+      const getSeparator = () => view.container.querySelector('[role="separator"]') as HTMLElement;
+
+      // 1. 视口含小数（clientWidth 向上进位为 1040），向下取整后为奇数 1039px（axisSize=1033 -> 半宽 516.5px）。
+      Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 1040 });
+      Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 728 });
+      vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({
+        left: 0,
+        top: 0,
+        right: 1039.4,
+        bottom: 727.4,
+        width: 1039.4,
+        height: 727.4,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      });
+
+      act(() => {
+        resizeCallback?.([], {} as ResizeObserver);
+      });
+
+      expect(viewport.className).toContain('overflow-x-hidden');
+      expect(viewport.className).toContain('overflow-y-hidden');
+      expect(canvas.style.width).toBe('100%');
+      expect(canvas.style.height).toBe('100%');
+      const panes1 = getPaneWrappers();
+      expect(panes1).toHaveLength(2);
+      expect(panes1[0]?.style.width).toBe('517px');
+      expect(getSeparator().style.left).toBe('517px');
+      expect(panes1[1]?.style.left).toBe('523px');
+      expect(panes1[1]?.style.width).toBe('516px');
+
+      // 2. 单轴高度不足（215 < 220）导致 15px 纵向经典滚动条挤占宽度（560 < 566）时，双轴同步开启滚动。
+      Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 560 });
+      Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 200 });
+      vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({
+        left: 0,
+        top: 0,
+        right: 575,
+        bottom: 215,
+        width: 575,
+        height: 215,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      });
+
+      act(() => {
+        resizeCallback?.([], {} as ResizeObserver);
+      });
+
+      expect(viewport.className).toContain('overflow-x-auto');
+      expect(viewport.className).toContain('overflow-y-auto');
+      expect(canvas.style.width).toBe('566px');
+      expect(canvas.style.height).toBe('220px');
+
+      // 3. 外框回宽到 575×225（已可容纳 566×220）且上一帧滚动条仍使 clientWidth=560/clientHeight=210 时立即解锁隐藏滚动条。
+      Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 560 });
+      Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 210 });
+      vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({
+        left: 0,
+        top: 0,
+        right: 575,
+        bottom: 225,
+        width: 575,
+        height: 225,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      });
+
+      act(() => {
+        resizeCallback?.([], {} as ResizeObserver);
+      });
+
+      expect(viewport.className).toContain('overflow-x-hidden');
+      expect(viewport.className).toContain('overflow-y-hidden');
+      expect(canvas.style.width).toBe('100%');
+      expect(canvas.style.height).toBe('100%');
+      const panes3 = getPaneWrappers();
+      expect(panes3[0]?.style.width).toBe('285px');
+      expect(getSeparator().style.left).toBe('285px');
+      expect(panes3[1]?.style.left).toBe('291px');
+      expect(panes3[1]?.style.width).toBe('284px');
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver;
+    }
+  });
 });

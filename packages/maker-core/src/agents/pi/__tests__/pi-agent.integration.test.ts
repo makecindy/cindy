@@ -10,6 +10,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import {
   chmodSync,
@@ -32,7 +33,7 @@ import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
 import { providerCatalogForPi, providerModelGenerationRecord, providerPresetModelRecord, BUNDLED_CATALOG } from '@cindy/model-providers';
-import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
+import { assembleSystemPromptSections, MODEL_REQUEST_CONTROL, TASK_SYSTEM_PROMPT, TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
@@ -104,7 +105,7 @@ function sse(events: Array<{ event: string; data: unknown }>): string {
 }
 
 /** 最小合法的 Anthropic Messages SSE 流:一段 text + usage。 */
-function anthropicStreamBody(text: string): string {
+function anthropicStreamBody(text: string, model = 'pi-test-model'): string {
   return sse([
     {
       event: 'message_start',
@@ -114,7 +115,7 @@ function anthropicStreamBody(text: string): string {
           id: 'msg_test_1',
           type: 'message',
           role: 'assistant',
-          model: 'pi-test-model',
+          model,
           content: [],
           stop_reason: null,
           usage: { input_tokens: 42, output_tokens: 0 },
@@ -297,7 +298,11 @@ function chatCompletionsStreamBody(text: string, model: string): string {
 }
 
 /** 让"模型"发起一次工具调用的 SSE 流(stop_reason=tool_use)。 */
-function anthropicToolUseBody(toolName: string, input: Record<string, unknown>): string {
+function anthropicToolUseBody(
+  toolName: string,
+  input: Record<string, unknown>,
+  options: { inputTokens?: number; toolCallId?: string } = {},
+): string {
   return sse([
     {
       event: 'message_start',
@@ -310,7 +315,7 @@ function anthropicToolUseBody(toolName: string, input: Record<string, unknown>):
           model: 'pi-test-model',
           content: [],
           stop_reason: null,
-          usage: { input_tokens: 42, output_tokens: 0 },
+          usage: { input_tokens: options.inputTokens ?? 42, output_tokens: 0 },
         },
       },
     },
@@ -319,7 +324,7 @@ function anthropicToolUseBody(toolName: string, input: Record<string, unknown>):
       data: {
         type: 'content_block_start',
         index: 0,
-        content_block: { type: 'tool_use', id: 'toolu_itest_1', name: toolName, input: {} },
+        content_block: { type: 'tool_use', id: options.toolCallId ?? 'toolu_itest_1', name: toolName, input: {} },
       },
     },
     {
@@ -441,6 +446,304 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     };
   }
 
+  // Integration: execute the public ExtensionAPI through the real shipped
+  // bridge, not a replacement RPC or a host-side approximation of active tools.
+  it('reads and changes the native tool catalog through the existing bridge command', { timeout: 30_000 }, async () => {
+    const handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'native-tool-catalog', workingDir: agentHome,
+      model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+    try {
+      const tools = await handle.callNativeToolCatalog!('getAllTools', []) as Array<{ name: string; parameters?: unknown; sourceInfo?: unknown }>;
+      expect(tools.find(tool => tool.name === 'read')?.parameters).toBeDefined();
+      expect(tools.some(tool => tool.sourceInfo !== undefined)).toBe(false);
+      const active = await handle.callNativeToolCatalog!('getActiveTools', []) as string[];
+      expect(active).toContain('read');
+      expect(await handle.callNativeToolCatalog!('setActiveTools', [['read', 'not-a-native-tool']])).toEqual(['read']);
+      expect(await handle.callNativeToolCatalog!('setActiveTools', [active])).toEqual(active);
+      await expect(handle.callNativeToolCatalog!('registerTool', [])).rejects.toThrow('UNSUPPORTED_CAPABILITY');
+    } finally { await handle.close(); }
+  });
+
+  // Tool lifecycle contract, integration: injected input must execute through
+  // native permissions, then the supported result replacement reaches the model.
+  // Existing model-request tests cannot prove either native tool hook is wired.
+  // Minimal failure: read the original path instead of the transformed path.
+  it.each(['transform', 'deny', 'post-deny', 'prototype-input'] as const)('native plugin tool hooks: %s', { timeout: 20_000 }, async mode => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-tool-lifecycle-'));
+    const fixture = path.join(workingDir, 'actual.txt');
+    writeFileSync(fixture, 'native-tool-result');
+    const credential = path.join(workingDir, '.ssh', 'id_rsa');
+    if (mode === 'prototype-input') {
+      mkdirSync(path.dirname(credential));
+      writeFileSync(credential, 'FAKE_CREDENTIAL_CONTENT_FOR_HOOK_TEST');
+    }
+    const before = seenRequests.length;
+    const calls: Array<{ phase: string; input: unknown; result?: unknown }> = [];
+    const deps = buildDeps();
+    deps.toolLifecycleControl = { enabled: () => true, run: async (_sessionId, event) => {
+      calls.push(event);
+      if (mode === 'prototype-input') return event.phase === 'call'
+        ? { input: JSON.parse('{"__proto__":' + JSON.stringify({ path: credential }) + '}') } : {};
+      return event.phase === 'call' ? mode === 'deny' ? { decision: 'deny', reason: 'plugin-tool-denied' } : { input: { path: fixture } }
+        : mode === 'post-deny' ? { decision: 'deny', reason: 'plugin-stopped-continuation' }
+          : { result: { content: [{ type: 'text', text: 'plugin-tool-result' }] } };
+    } };
+    try {
+      scriptedResponses.push(anthropicToolUseBody('read', { path: path.join(workingDir, 'missing.txt') }), anthropicStreamBody('done'));
+      await runPermissionTurn({ sessionId: 'native-tool-hooks', workingDir,
+        permissionMode: mode === 'prototype-input' ? 'ask' : 'bypassPermissions', resolverBehavior: 'deny', deps });
+      const last = seenRequests.slice(before).at(-1)?.body ?? '';
+      expect(calls[0]).toMatchObject({ phase: 'call', input: { path: path.join(workingDir, 'missing.txt') } });
+      if (mode === 'prototype-input') {
+        expect(JSON.stringify(calls)).not.toContain('FAKE_CREDENTIAL_CONTENT_FOR_HOOK_TEST');
+        expect(last).not.toContain('FAKE_CREDENTIAL_CONTENT_FOR_HOOK_TEST');
+      } else if (mode === 'transform') {
+        expect(calls[1]).toMatchObject({ phase: 'result', input: { path: fixture } });
+        expect(JSON.stringify(calls[1].result)).toContain('native-tool-result');
+        expect(last).toContain('plugin-tool-result');
+      } else if (mode === 'post-deny') {
+        expect(calls).toHaveLength(2);
+        expect(seenRequests.slice(before)).toHaveLength(1);
+      } else {
+        expect(calls).toHaveLength(1);
+        expect(last).toContain('plugin-tool-denied');
+      }
+    } finally { rmSync(workingDir, { recursive: true, force: true }); scriptedResponses.length = 0; }
+  });
+  // Runtime control contract, integration: tool continuations must route again;
+  // payload changes reach HTTP, and a later unselected send preserves the baseline.
+  it('routes and transforms each selected model request across a real tool continuation', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-request-control-'));
+    const fixtureFile = path.join(workingDir, 'fixture.txt');
+    writeFileSync(fixtureFile, 'fixture');
+    const before = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    let selections = 0;
+    let payloads = 0;
+    try {
+      scriptedResponses.push(anthropicToolUseBody('read', { path: fixtureFile }), anthropicStreamBody('controlled', 'pi-test-small-model'));
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'request-control', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      const send = async (selected: boolean) => {
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return event;
+        } })();
+        await handle!.send({ type: 'user', content: 'Read fixture.txt and reply.' }, selected ? {
+          [MODEL_REQUEST_CONTROL]: async input => {
+            if (input.phase === 'select') {
+              selections++;
+              return { route: { providerId: 'xd', model: selections === 1 ? 'pi-test-model' : 'pi-test-small-model' } };
+            }
+            payloads++;
+            return { request: { ...input.request, max_tokens: 1234,
+              messages: [...input.request!.messages as unknown[], { role: 'user', content: 'Plugin reference material' }] } };
+          },
+        } : undefined);
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+      };
+      await send(true);
+      expect(selections).toBe(2);
+      expect(payloads).toBe(2);
+      await send(false);
+      const bodies = seenRequests.slice(before).map(row => JSON.parse(row.body));
+      expect(bodies.map(body => body.model)).toEqual(['pi-test-model', 'pi-test-small-model', 'pi-test-model']);
+      expect(JSON.stringify(bodies[1].messages)).toContain('"type":"tool_result"');
+      expect(bodies.map(body => body.system)).toEqual([bodies[0].system, bodies[0].system, bodies[0].system]);
+      expect(bodies.map(body => body.tools)).toEqual([bodies[0].tools, bodies[0].tools, bodies[0].tools]);
+      expect(bodies.slice(0, 2).every(body => body.max_tokens === 1234 &&
+        body.messages.at(-1).content === 'Plugin reference material')).toBe(true);
+      expect(bodies[2].max_tokens).not.toBe(1234);
+      expect(selections).toBe(2);
+      expect(JSON.stringify(bodies)).not.toContain('CINDY_MODEL_REQUEST');
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Review regression, integration: a selected task must preserve later effort
+  // changes and thinking-off, including the first send after deselection. The
+  // existing routing case only used a non-reasoning model with unchanged effort.
+  it('preserves current thinking preferences across selected and unselected requests', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-control-thinking-'));
+    const deps = buildDeps();
+    const model = 'deepseek/deepseek-v4-flash';
+    deps.capabilityAdditions = { availableModels: [{ id: model, displayName: 'Thinking fixture',
+      contextWindow: 200_000, efforts: ['low', 'high'], defaultEffort: 'high' }] };
+    deps.resolvePiGatewayModelApi = () => 'openai-completions';
+    deps.resolvePiGatewayModelSpec = () => ({ api: 'openai-completions',
+      compat: { thinkingFormat: 'deepseek', maxTokensField: 'max_tokens' },
+      thinkingLevelMap: { low: 'low', high: 'high' } });
+    let handle: AgentSessionHandle | undefined;
+    const before = seenRequests.length;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'control-thinking', workingDir,
+        model, providerId: 'xd', effort: 'high', permissionMode: 'bypassPermissions' });
+      const send = async (selected: boolean) => {
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return event;
+        } })();
+        await handle!.send({ type: 'user', content: 'Reply briefly.' }, selected
+          ? { [MODEL_REQUEST_CONTROL]: async () => ({}) } : undefined);
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+      };
+      await send(true);
+      await handle.setEffort!('low');
+      await send(true);
+      await handle.setThinkingEnabled!(false);
+      await send(true);
+      await send(false);
+      const bodies = seenRequests.slice(before).map(row => JSON.parse(row.body));
+      expect(bodies).toHaveLength(4);
+      expect(bodies.slice(0, 2).map(body => body.reasoning_effort)).toEqual(['high', 'low']);
+      expect(bodies.slice(2).map(body => body.thinking?.type)).toEqual(['disabled', 'disabled']);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Review regression, integration: valid large history exceeds the outbound
+  // JSONL frame limit. The host must receive a bounded failure and settle using
+  // task policy; the former small-body fixture could not observe the lost frame.
+  it('handles oversized selected request bodies without waiting on a discarded RPC frame', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-control-large-'));
+    const deps = buildDeps();
+    deps.capabilityAdditions = { availableModels: [{ id: 'pi-test-model', displayName: 'Large fixture',
+      contextWindow: 20_000_000, efforts: [], defaultEffort: null }] };
+    let handle: AgentSessionHandle | undefined;
+    const before = seenRequests.length;
+    const payloads: unknown[] = [];
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: 'control-large', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      const done = (async () => { for await (const event of handle!.events()) {
+        if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+        if (event.type === 'done') return event;
+      } })();
+      await handle.send({ type: 'user', content: 'x'.repeat(17 * 1024 * 1024) }, {
+        [MODEL_REQUEST_CONTROL]: async input => {
+          if (input.phase === 'payload') payloads.push(input);
+          return {};
+        },
+      });
+      expect((await done)?.data).toMatchObject({ status: 'completed' });
+      expect(payloads).toEqual([expect.objectContaining({ phase: 'payload', failure: 'request-too-large' })]);
+      expect(JSON.stringify(payloads).length).toBeLessThan(1024);
+      expect(seenRequests.slice(before)).toHaveLength(1);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Runtime skip, integration: cancel native dispatch rather than emitting a
+  // successful answer or a retryable provider error. The gateway sees no HTTP.
+  it('settles a selected request skip as cancelled without dispatching HTTP', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-request-skip-'));
+    const before = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'request-skip', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      const events: AgentEvent[] = [];
+      const done = (async () => { for await (const event of handle!.events()) {
+        events.push(event);
+        if (event.type === 'done') return event;
+      } })();
+      await handle.send({ type: 'user', content: 'Skip this reply.' }, { [MODEL_REQUEST_CONTROL]: async () => ({ skip: true }) });
+      expect((await done)?.data).toMatchObject({ status: 'cancelled' });
+      expect(events.filter(event => event.type === 'error')).toHaveLength(0);
+      expect(seenRequests.length).toBe(before);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Integration: the native before_agent_start tail preserves the exact prefix.
+  // A near-budget fragment also exercises file handoff instead of inline argv/env.
+  it('appends selected static fragments to the actual system request with the fixed prefix intact', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-static-prompt-'));
+    const systems: string[] = [];
+    const early = 'EARLY {{literal}} FRAGMENT ' + 'x'.repeat(32_000);
+    try {
+      for (const selected of [false, true]) {
+        const taskPrompt = assembleSystemPromptSections('', selected
+          ? [{ name: 'late', order: 20, text: 'LATE FRAGMENT' }, { name: 'early', order: 10, text: early }] : []);
+        const handle = await new PiAgent(buildDeps()).startSession({ sessionId: `static-prompt-${selected}`, workingDir,
+          model: 'pi-test-model', permissionMode: 'bypassPermissions', userPrompt: 'Original task instructions',
+          ...(taskPrompt ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {}) });
+        const before = seenRequests.length;
+        try {
+          const done = (async () => { for await (const event of handle.events()) {
+            if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+            if (event.type === 'done') return;
+          } })();
+          await handle.send({ type: 'user', content: 'Reply briefly.' });
+          await done;
+          const body = JSON.parse(seenRequests[before].body);
+          systems.push(typeof body.system === 'string' ? body.system : body.system.map((block: { text: string }) => block.text).join('\n\n'));
+          expect(JSON.stringify(body.messages)).not.toContain('EARLY {{literal}} FRAGMENT');
+        } finally { await handle.close(); }
+      }
+      expect(systems[1]).toBe(systems[0] + '\n\n' + early + '\n\nLATE FRAGMENT');
+    } finally { rmSync(workingDir, { recursive: true, force: true }); }
+  });
+
+  // #9803 regression, integration: App rebuilds the native session when the
+  // selected static fragments change. Fresh-only coverage misses switch_session
+  // reinitializing extensions before the next real provider request.
+  it('restores static fragments after selecting, deselecting and reselecting on resumed history', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-static-prompt-reselect-'));
+    const runtimeHome = path.join(workingDir, 'runtime');
+    const agent = new PiAgent({ ...buildDeps(), resolvePiAgentHome: () => runtimeHome });
+    const fragment = 'SELECTED_TASK_SYSTEM_FRAGMENT';
+    const systems: string[] = [];
+    let resumeSessionId: string | undefined;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      for (const selected of [true, false, true]) {
+        handle = await agent.startSession({ sessionId: 'static-prompt-reselect', workingDir,
+          model: 'pi-test-model', permissionMode: 'bypassPermissions', userPrompt: 'Original task instructions',
+          resumeSessionId, ...(selected ? { [TASK_SYSTEM_PROMPT]: fragment } : {}) });
+        const configHomes = readdirSync(path.join(runtimeHome, 'run-tmp'));
+        expect(configHomes).toHaveLength(1);
+        const configHome = path.join(runtimeHome, 'run-tmp', configHomes[0]);
+        const promptFile = path.join(configHome, 'task-system-prompt.md');
+        expect(existsSync(promptFile)).toBe(selected);
+        if (selected) expect(readFileSync(promptFile, 'utf8')).toBe(fragment);
+        const before = seenRequests.length;
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return;
+        } })();
+        await handle.send({ type: 'user', content: 'Reply briefly.' });
+        await done;
+        const body = JSON.parse(seenRequests[before].body);
+        const system = typeof body.system === 'string' ? body.system
+          : body.system.map((block: { text: string }) => block.text).join('\n\n');
+        systems.push(system);
+        expect(system.includes(fragment), 'turn ' + systems.length).toBe(selected);
+        expect(JSON.stringify(body.messages)).not.toContain(fragment);
+        // Resume must retain the earlier turns rather than silently starting fresh.
+        expect(body.messages.filter((message: { role: string }) => message.role === 'user')).toHaveLength(systems.length);
+        resumeSessionId = handle.id;
+        await handle.close();
+        expect(existsSync(configHome)).toBe(false);
+        expect(existsSync(promptFile)).toBe(false);
+        handle = undefined;
+      }
+      expect(systems[0]).toBe(systems[1] + '\n\n' + fragment);
+      expect(systems[2]).toBe(systems[0]);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
   // #8887, integration: the real runtime generates the retry lifecycle after
   // a completed tool request, a real HTTP 502 and successful recovery.
   it('preserves paid request usage across a real native 502 retry', { timeout: 60_000 }, async () => {
@@ -516,6 +819,89 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       rmSync(workingDir, { recursive: true, force: true });
     }
   });
+
+  // #10198, integration: PiAgent's real native compactor must publish a lower
+  // running watermark before the next tool, and resume from its compacted history.
+  // Translator fixtures inject compaction_end; the existing native tests only
+  // cover policy changes/no-op compaction. Two history spans allow a native cut
+  // outside its default keep-recent budget; a tool turn then exceeds the threshold.
+  it('publishes native automatic compaction usage before continuing tools and resumes compacted history',
+    { timeout: 30_000 }, async () => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-compact-usage-'));
+      const fixtureFile = path.join(workingDir, 'fixture.txt');
+      const outputFile = path.join(workingDir, 'continued.txt');
+      writeFileSync(fixtureFile, 'tool payload '.repeat(3_600));
+      const deps = buildDeps();
+      deps.resolveModelContextLimit = () => 32_000;
+      deps.runtimeConfig.piAutoCompactThresholdPct = 85;
+      const agent = new PiAgent(deps);
+      let handle: AgentSessionHandle | undefined;
+      const options = { sessionId: 'native-compact-usage', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' as const };
+      const send = async (content: string) => {
+        const events: AgentEvent[] = [];
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'done') break;
+          }
+        })();
+        await handle!.send({ type: 'user', content });
+        await done;
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.at(-1)).toMatchObject({ type: 'done', data: { status: 'completed' } });
+        return events;
+      };
+      try {
+        handle = await agent.startSession(options);
+        await send('OLD_HISTORY_TO_SUMMARIZE '.repeat(1_920));
+        await send('RECENT_HISTORY '.repeat(3_200));
+        const summary = '## Goal\nCOMPACT_HISTORY_CANARY: read fixture.txt, then write continued.txt.';
+        const before = seenRequests.length;
+        scriptedResponses.push(
+          anthropicToolUseBody('read', { path: fixtureFile }, { inputTokens: 579_216 }),
+          anthropicStreamBody(summary),
+          anthropicToolUseBody('write', { path: outputFile, content: 'continued after compaction' },
+            { toolCallId: 'toolu_after_compaction' }),
+          anthropicStreamBody('finished after compaction'),
+        );
+        const events = await send('Read fixture.txt, then write continued.txt.');
+        const boundaryIndex = events.findIndex(event => event.type === 'compact_boundary');
+        expect(boundaryIndex).toBeGreaterThanOrEqual(0);
+        const boundary = events[boundaryIndex]!;
+        expect(boundary).toMatchObject({ type: 'compact_boundary', data: { trigger: 'auto' } });
+        const { preTokens, postTokens } = boundary.data as { preTokens: number; postTokens: number };
+        expect(postTokens).toBeGreaterThan(0);
+        expect(postTokens).toBeLessThan(preTokens);
+        expect(postTokens).toBeLessThan(32_000);
+        expect(events[boundaryIndex + 1]).toMatchObject({ type: 'status', data: {
+          isRunning: true, contextTokens: postTokens, contextWindow: 32_000,
+          contextSnapshotAuthoritative: true,
+        } });
+        const continuedTool = events.findIndex(event => event.type === 'tool_use'
+          && (event.data as { toolUseId?: string }).toolUseId === 'toolu_after_compaction');
+        expect(continuedTool).toBeGreaterThan(boundaryIndex + 1);
+        expect(events.slice(boundaryIndex, continuedTool).some(event => event.type === 'status'
+          && (event.data as { isRunning?: boolean }).isRunning === false)).toBe(false);
+        expect(readFileSync(outputFile, 'utf8')).toBe('continued after compaction');
+        expect(seenRequests.slice(before).some(request => request.body.includes('COMPACT_HISTORY_CANARY'))).toBe(true);
+        expect(scriptedResponses).toHaveLength(0);
+
+        const nativeId = handle.id;
+        await handle.close();
+        handle = await agent.startSession({ ...options, resumeSessionId: nativeId });
+        expect(handle.id).toBe(nativeId);
+        expect(handle.getUsageSnapshot().contextWindow).toBe(32_000);
+        const resumedRequest = seenRequests.length;
+        await send('Continue using the saved summary.');
+        expect(seenRequests[resumedRequest]!.body).toContain('COMPACT_HISTORY_CANARY');
+        expect(seenRequests[resumedRequest]!.body).not.toContain('OLD_HISTORY_TO_SUMMARIZE');
+      } finally {
+        await handle?.close();
+        scriptedResponses.length = 0;
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    });
 
   it('applies configured windows on creation and same-history resume, then restores the default',
     { timeout: 60_000 }, async () => {
@@ -644,6 +1030,156 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     },
   );
+
+  // #11102, integration: real Pi serializes Gemini tool history when switching
+  // models. Existing routing tests lack signed/oversized IDs and call/result pairs.
+  // Minimal failure: one >64-character Chat tool ID reused by a non-Gemini model.
+  it('keeps Gemini signatures in history but bounds Chat fallback tool IDs', { timeout: 60_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-call-id-'));
+    const fixture = path.join(workingDir, 'fixture.txt');
+    writeFileSync(fixture, 'fixture');
+    const ids = ['call_' + 'a'.repeat(2000), 'call_' + 'a'.repeat(1999) + 'b', 'short_call'];
+    // A short upstream ID deliberately collides with the first hash candidate.
+    ids.push('call_' + createHash('sha256').update(ids[0]).digest('hex').slice(0, 48));
+    const deps = buildDeps();
+    deps.resolvePiNativeProviders = async () => ({
+      providers: [{ id: 'call-id-gateway', name: 'Test gateway', baseUrl: endpoint,
+        api: 'openai-completions', apiKeyEnvVar: 'CINDY_PI_CALL_ID_TEST_KEY',
+        models: [...['gemini-test', 'gpt-test', 'vendor/gemini-test', 'production-chat',
+          'production-flash', 'gemini', 'gpt-unknown'].map(id => ({
+          id, name: id, reasoning: false, contextWindow: 200_000,
+          compat: { supportsStore: false,
+            ...(['gpt-test', 'production-chat'].includes(id) ? { maxToolCallIdLength: 64 } : {}) },
+        })), { id: 'gpt-responses-test', name: 'Responses', api: 'openai-responses' as const,
+          reasoning: false, contextWindow: 200_000 }],
+      }], env: { CINDY_PI_CALL_ID_TEST_KEY: 'test-only-key' },
+    });
+    let handle: AgentSessionHandle | undefined;
+    const start = seenRequests.length;
+    try {
+      const chunks = [
+        { choices: [{ index: 0, delta: { role: 'assistant', tool_calls: ids.map((id, index) => ({
+          index, id, type: 'function', function: { name: 'read', arguments: JSON.stringify({ path: fixture }) },
+        })) }, finish_reason: null }] },
+        { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+      ].map(chunk => `data: ${JSON.stringify({ id: 'signed-calls', object: 'chat.completion.chunk',
+        created: 1, model: 'gemini-test', ...chunk })}\n\n`).join('') + 'data: [DONE]\n\n';
+      scriptedResponses.push(chunks, chatCompletionsStreamBody('read complete', 'gemini-test'));
+      handle = await new PiAgent(deps).startSession({ sessionId: 'call-id-switch', workingDir,
+        model: 'gemini-test', providerId: 'call-id-gateway', permissionMode: 'bypassPermissions' });
+      const send = async () => {
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return;
+        } })();
+        await handle!.send({ type: 'user', content: 'Read the fixture and reply.' });
+        await done;
+      };
+      await send();
+      await handle.setModel?.('gpt-test', { providerId: 'call-id-gateway' });
+      await send();
+      await handle.setModel?.('vendor/gemini-test', { providerId: 'call-id-gateway' });
+      await send();
+      await handle.setModel?.('production-chat', { providerId: 'call-id-gateway' });
+      await send();
+      // Review #11108: wire IDs are deployment aliases, not model capabilities.
+      // Minimal regression: an aliased Gemini request with a signed long ID.
+      for (const model of ['production-flash', 'gemini', 'gpt-unknown']) {
+        await handle.setModel?.(model, { providerId: 'call-id-gateway' });
+        await send();
+      }
+      await handle.setModel?.('gpt-responses-test', { providerId: 'call-id-gateway' });
+      await send();
+      const requests = seenRequests.slice(start).map(request => JSON.parse(request.body));
+      const calls = (request: any): string[] => request.messages.flatMap((message: any) =>
+        (message.tool_calls ?? []).map((call: any) => call.id));
+      const results = (request: any): string[] => request.messages.filter((message: any) =>
+        message.role === 'tool').map((message: any) => message.tool_call_id);
+      expect(requests).toHaveLength(9);
+      expect(calls(requests[1])).toEqual(ids);
+      expect(results(requests[1])).toEqual(ids);
+      expect(calls(requests[3])).toEqual(ids);
+      expect(results(requests[3])).toEqual(ids);
+      const fallbackIds = calls(requests[2]);
+      expect(fallbackIds).toHaveLength(4);
+      expect(fallbackIds.every(id => id.length <= 64)).toBe(true);
+      expect(new Set(fallbackIds).size).toBe(4);
+      expect(fallbackIds[2]).toBe(ids[2]);
+      expect(fallbackIds[3]).toBe(ids[3]);
+      expect(results(requests[2])).toEqual(fallbackIds);
+      expect(calls(requests[4])).toEqual(fallbackIds);
+      expect(results(requests[4])).toEqual(fallbackIds);
+      for (const request of requests.slice(5, 8)) {
+        expect(calls(request)).toEqual(ids);
+        expect(results(request)).toEqual(ids);
+      }
+      expect(requests.slice(0, 8).every(request => !('store' in request))).toBe(true);
+      expect(requests.every(request => !('maxToolCallIdLength' in request))).toBe(true);
+      const responseCalls = requests[8].input.filter((item: any) => item.type === 'function_call');
+      const responseResults = requests[8].input.filter((item: any) => item.type === 'function_call_output');
+      expect(responseCalls).toHaveLength(4);
+      expect(responseCalls.every((item: any) => item.call_id.length <= 64)).toBe(true);
+      expect(responseResults.map((item: any) => item.call_id)).toEqual(responseCalls.map((item: any) => item.call_id));
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // #11102: existing subagent routing coverage uses Anthropic, which cannot prove
+  // Chat compat survives --no-extensions and the durable resume snapshot.
+  it('inherits supportsStore false in real Chat subagents and resumed children', { timeout: 60_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-child-chat-'));
+    const deps = buildDeps();
+    const launches: string[] = [];
+    const spawnRunner = deps.spawnPiSubagentRunner!;
+    deps.spawnPiSubagentRunner = request => {
+      launches.push(request.configFile);
+      return spawnRunner(request);
+    };
+    deps.resolvePiNativeProviders = async () => ({ providers: [{
+      id: 'child-chat', name: 'Child Chat', baseUrl: endpoint, api: 'openai-completions',
+      apiKeyEnvVar: 'CINDY_PI_CHILD_CHAT_TEST_KEY', models: [{ id: 'gemini-child-test', name: 'Child',
+        reasoning: false, contextWindow: 200_000, compat: { supportsStore: false } }],
+    }], env: { CINDY_PI_CHILD_CHAT_TEST_KEY: 'test-only-key' } });
+    const start = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      scriptedResponses.push([
+        { choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'child-call',
+          type: 'function', function: { name: 'subagent', arguments: JSON.stringify({ agent: 'scout', task: 'reply briefly' }) },
+        }] }, finish_reason: null }] },
+        { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+      ].map(chunk => `data: ${JSON.stringify({ id: 'child-dispatch', object: 'chat.completion.chunk',
+        created: 1, model: 'gemini-child-test', ...chunk })}\n\n`).join('') + 'data: [DONE]\n\n');
+      handle = await new PiAgent(deps).startSession({ sessionId: 'child-chat-compat', workingDir,
+        model: 'gemini-child-test', providerId: 'child-chat', permissionMode: 'bypassPermissions' });
+      const done = (async () => { for await (const event of handle!.events()) {
+        if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+        if (event.type === 'done') return;
+      } })();
+      await handle.send({ type: 'user', content: 'delegate' });
+      await done;
+      expect(launches).toHaveLength(1);
+      const first = JSON.parse(readFileSync(launches[0], 'utf8'));
+      await handle.resumeBackgroundTask!(first.runId, 'continue briefly');
+      expect(launches).toHaveLength(2);
+      // Real Pi/runner completion, not a unit-test timing assumption.
+      await vi.waitFor(() => {
+        const status = JSON.parse(readFileSync(path.join(path.dirname(launches[1]), 'status.json'), 'utf8'));
+        expect(status.state).toBe('completed');
+      }, { timeout: 15_000, interval: 50 });
+      const requests = seenRequests.slice(start).map(request => JSON.parse(request.body));
+      const children = requests.filter(request => JSON.stringify(request.messages).includes('You are a scout subagent.'));
+      expect(children).toHaveLength(2);
+      expect(requests.every(request => !('store' in request))).toBe(true);
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   it('reports reasoning exhaustion from the real Pi OpenAI-compatible runtime', { timeout: 60_000 }, async () => {
     const deps = buildDeps();
@@ -2239,6 +2775,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
 
   // #9630, integration: catalog inheritance -> models.json -> real Pi HTTP.
   // Existing effort coverage used Gateway Chat, not native Anthropic relays.
+  // Pi 1.5.0 fixes the cached top-level effort at low (upstream #10063), not
+  // high, to respect organization caps. The per-reply markers are authoritative:
+  // medium -> low -> high must preserve history, not rewrite it at the new level.
   it.each([
     ['claude-opus-5', 'relay'],
     ['claude-opus-5-5', 'relay'],
@@ -2272,7 +2811,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     try {
       handle = await new PiAgent(deps).startSession({ sessionId: `effort-${source}-${id}`,
         workingDir, model: id, providerId: 'effort-relay', effort: 'medium' });
+      const expectedEfforts: string[] = [];
       for (const effort of ['medium', 'low', 'high'] as const) {
+        expectedEfforts.push(effort);
         await handle.setEffort!(effort);
         const before = seenRequests.length;
         const done = (async () => {
@@ -2285,11 +2826,14 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(new URL(requests[0]!.url, endpoint).pathname).toBe('/v1/messages');
         const body = JSON.parse(requests[0]!.body);
         const messageScoped = source === 'official' || source === 'explicit';
-        expect(body.output_config.effort).toBe(messageScoped ? 'high' : effort);
+        expect(body.output_config.effort).toBe(messageScoped ? 'low' : effort);
         const effortMessages = body.messages.filter((message: { role: string; output_config?: unknown }) =>
           message.role === 'system' && message.output_config);
-        if (messageScoped) expect(effortMessages.at(-1).output_config.effort).toBe(effort);
-        else expect(effortMessages).toEqual([]);
+        if (messageScoped) {
+          expect(effortMessages.map((message: { output_config: { effort: string } }) =>
+            message.output_config.effort)).toEqual(expectedEfforts);
+          expect(body.messages.at(-1)).toMatchObject({ role: 'system', output_config: { effort } });
+        } else expect(effortMessages).toEqual([]);
       }
     } finally {
       await handle?.close();
@@ -2719,6 +3263,42 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     },
   );
+
+  // #9705, integration: settings passthrough alone did not prove that Cindy's
+  // replacement tool consumed the configuration. Use a real Pi/bridge/shell.
+  it.skipIf(process.platform === 'win32').each([false, true])('executes bash with the saved shell path and command prefix (delegated: %s)', { timeout: 120_000 }, async delegated => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-shell-settings-'));
+    const home = path.join(root, 'agent');
+    mkdirSync(home);
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({
+      shellPath: '/bin/sh', shellCommandPrefix: 'export CINDY_SHELL_PREFIX=prefix_applied',
+    }));
+    const deps = buildDeps();
+    deps.resolvePiAgentHome = () => home;
+    try {
+      scriptedResponses.length = 0;
+      scriptedResponses.push(
+        ...(delegated ? [anthropicToolUseBody('subagent', { agent: 'worker', task: 'check the shell configuration' })] : []),
+        anthropicToolUseBody('bash', { command: 'printf "PREFIX=%s EXEC_SHELL=%s" "$CINDY_SHELL_PREFIX" "$0"' }),
+        anthropicStreamBody('shell settings finished'),
+        ...(delegated ? [anthropicStreamBody('parent settings finished')] : []),
+      );
+      const before = seenRequests.length;
+      const result = await runPermissionTurn({ sessionId: 'shell-settings', workingDir: root,
+        permissionMode: 'bypassPermissions', resolverBehavior: 'deny', deps });
+      const followUp = seenRequests.slice(before).flatMap(request => {
+        const body = JSON.parse(request.body);
+        return (body.messages ?? []).flatMap((message: { content?: unknown }) => Array.isArray(message.content)
+          ? message.content.filter(block => block.type === 'tool_result').map(block => JSON.stringify(block.content)) : []);
+      }).join('\n');
+      expect(followUp).toContain('PREFIX=prefix_applied');
+      expect(followUp).toContain('EXEC_SHELL=/bin/sh');
+      expect(result.finalText).toContain(delegated ? 'parent settings finished' : 'shell settings finished');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      scriptedResponses.length = 0;
+    }
+  });
 
   it(
     'explicit bash timeout returns Pi native timeout error and continues the turn',

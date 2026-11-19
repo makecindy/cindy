@@ -1,4 +1,4 @@
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { requireOptionalNativeModule } from "expo-modules-core";
 import type { ClientEndpointRegion } from "@cindy/maker-shared/client-endpoints";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/auth/authOwnerGeneration";
 import { resolvePushAppVariant } from "@/notifications/pushRegistrationModel";
 import { readIosPushEnvironment } from "@/notifications/nativePushEnvironment";
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import type { AgentActivitySink } from "./agentActivitySync";
 
 export interface ActivityPushRegistration {
@@ -23,6 +24,18 @@ export interface ActivityPushRegistration {
   activityId: string | null;
   dismissed: boolean;
   supportsInputPushToken: boolean;
+  /** Local observation only; never added to the registration wire payload. */
+  isStale?: boolean;
+  confirmedAt?: number | null;
+  staleAt?: number | null;
+}
+/** In-memory continuity owned by the bridge, never persisted or sent. */
+export interface ActivityRecoveryState {
+  identity?: string;
+  lastRefreshAt?: number;
+  wasStale?: boolean;
+  contentKey?: string;
+  expiryDeadline?: number;
 }
 export interface AgentActivityNative extends AgentActivitySink {
   configureAccount?(accountScope: string | null): Promise<void>;
@@ -37,6 +50,8 @@ export const agentActivityNative =
     ? requireOptionalNativeModule<AgentActivityNative>("CindyAgentActivity")
     : null;
 const path = "/api/device-link/live-activity";
+// Long enough for a recovery request to come back as an update or an end.
+const EXPIRED_GRACE_MS = 20_000;
 let generation = 0;
 const requests = new Set<Promise<void>>();
 
@@ -95,11 +110,15 @@ export function startActivityPushSync(options: {
   >;
   urlScheme: string;
   onRegistered(hasActivity: boolean): void;
+  /** The service already owns this account's activity (known from an earlier
+   * syncer before a reconnect); a failed later attempt must not hand it back. */
+  initiallyRegistered?: boolean;
+  recovery?: ActivityRecoveryState;
 }) {
   const native = agentActivityNative;
   if (!native?.getPushRegistration || getActiveSelfHostedRelay()) {
     options.onRegistered(false);
-    return { sync() {}, dispose() {} };
+    return { sync(_refresh = false) {}, dispose() {} };
   }
   const captured = generation;
   const owner = getMobileAuthOwner();
@@ -108,7 +127,45 @@ export function startActivityPushSync(options: {
   const controller = new AbortController();
   let tail = Promise.resolve();
   let last: string | undefined;
+  let accepted = options.initiallyRegistered === true;
   let unsupported = false;
+  let expiry: { activityId: string | null; timer: ReturnType<typeof setTimeout> } | undefined;
+  const recovery = options.recovery ?? {};
+  // An expired activity gets one chance to recover (the service answers a
+  // recovery request with fresh content or by ending it). If it is still expired
+  // after that, remove it here: offline, or with a service that cannot confirm,
+  // nothing else would, and outdated content must not stay on the Lock Screen.
+  const watchExpiry = (activityId: string | null, expired: boolean) => {
+    if (expiry && (!expired || expiry.activityId !== activityId)) {
+      clearTimeout(expiry.timer);
+      expiry = undefined;
+    }
+    if (!expired) recovery.expiryDeadline = undefined;
+    if (!expired || expiry) return;
+    // Disposing a syncer cancels its timer, not this activity's recovery window.
+    const deadline = recovery.expiryDeadline ??= Date.now() + EXPIRED_GRACE_MS;
+    const timer = setTimeout(() => {
+      expiry = undefined;
+      void (async () => {
+        try {
+          assertCurrent();
+          const latest = await native.getPushRegistration!();
+          assertCurrent();
+          if (latest.accountScope !== options.accountScope ||
+              latest.activityId !== activityId) return;
+          if (latest.isStale !== true) {
+            recovery.expiryDeadline = undefined;
+            return;
+          }
+          native.setState(null);
+          mobileDebugLog("info", "lifecycle", "activity-expired");
+        } catch {
+          /* disposed, previous account or native module unavailable */
+        }
+      })();
+    }, Math.max(0, deadline - Date.now()));
+    expiry = { activityId, timer };
+  };
   const assertCurrent = () => {
     if (
       controller.signal.aborted ||
@@ -118,7 +175,7 @@ export function startActivityPushSync(options: {
     )
       throw new Error("stale-activity-owner");
   };
-  const sync = () => {
+  const sync = (refresh = false) => {
     tail = tail
       .then(async () => {
         assertCurrent();
@@ -138,8 +195,36 @@ export function startActivityPushSync(options: {
         }
         // A native token is not evidence that the service received it. The
         // bridge keeps its initial discovery pending until this attempt settles.
+        const { isStale, confirmedAt, staleAt, ...wireRegistration } = registration;
+        const identity = JSON.stringify([captured, owner.generation, options.accountScope,
+          registration.activityId, registration.updateToken]);
+        if (recovery.identity !== identity) {
+          watchExpiry(registration.activityId, false);
+          recovery.identity = identity;
+          recovery.lastRefreshAt = -Infinity;
+          recovery.wasStale = false;
+          recovery.contentKey = undefined;
+        }
+        const becameStale = isStale === true && !recovery.wasStale;
+        if (becameStale) mobileDebugLog("info", "lifecycle", "activity-stale");
+        if (isStale === false && recovery.wasStale)
+          mobileDebugLog("info", "lifecycle", "activity-recovered");
+        recovery.wasStale = isStale === true;
+        watchExpiry(registration.activityId, isStale === true && !!registration.updateToken);
+        const times = {
+          confirmedAt: typeof confirmedAt === "number" && Number.isFinite(confirmedAt) ? confirmedAt : null,
+          staleAt: typeof staleAt === "number" && Number.isFinite(staleAt) ? staleAt : null,
+        };
+        const contentKey = JSON.stringify([isStale, times]);
+        if (contentKey !== recovery.contentKey) {
+          recovery.contentKey = contentKey;
+          mobileDebugLog("debug", "lifecycle", "activity-content", { ...times, stale: isStale === true });
+        }
+        const shouldRefresh = (refresh || becameStale) && isStale !== false &&
+          registration.enabled && !registration.dismissed && !!registration.updateToken &&
+          AppState.currentState === "active" && Date.now() - (recovery.lastRefreshAt ?? -Infinity) >= 30_000;
         const body = {
-          ...registration,
+          ...wireRegistration,
           schemaVersion: 1,
           labels: options.labels,
           urlScheme: options.urlScheme,
@@ -147,7 +232,7 @@ export function startActivityPushSync(options: {
           apnsEnv: environment === "development" ? "sandbox" : "prod",
         };
         const key = JSON.stringify(body);
-        if (key === last) return;
+        if (key === last && !shouldRefresh) return;
         if (
           registration.enabled &&
           !registration.startToken &&
@@ -159,17 +244,32 @@ export function startActivityPushSync(options: {
         const token = await options.getAccessToken();
         assertCurrent();
         if (!token) {
-          options.onRegistered(false);
+          if (!accepted) options.onRegistered(false);
           return;
         }
+        // Auth acquisition may span backgrounding; don't send a recovery that
+        // was only eligible while foreground. Token changes still register normally.
+        const refreshStale = shouldRefresh && AppState.currentState === "active";
+        if (key === last && !refreshStale) return;
+        if (refreshStale) recovery.lastRefreshAt = Date.now();
         await sendRegistration(
           baseUrl,
           token,
           registration.enabled ? "PUT" : "DELETE",
-          registration.enabled ? body : undefined,
+          // staleAt tells the service when this content lapses. It changes with
+          // every update, so it stays out of the deduplication key above.
+          registration.enabled ? {
+            ...body,
+            ...(registration.updateToken && times.staleAt !== null ? { staleAt: times.staleAt } : {}),
+            ...(refreshStale ? { refreshStale: true } : {}),
+          } : undefined,
         );
         assertCurrent();
         last = key;
+        accepted = true;
+        mobileDebugLog("info", "lifecycle", "activity-registration", {
+          outcome: "accepted", refresh: refreshStale, hasActivity: !!registration.updateToken,
+        });
         // A start token is permission to try, not proof that APNs created an
         // activity. Keep foreground creation until an actual update token exists.
         options.onRegistered(
@@ -188,20 +288,30 @@ export function startActivityPushSync(options: {
           unsupported = true;
         try {
           assertCurrent();
-          options.onRegistered(false);
+          mobileDebugLog("warn", "lifecycle", "activity-registration", {
+            outcome: "failed",
+            category: error instanceof TypeError ? "network" : error instanceof Error && error.name === "AbortError" ? "timeout" : "request",
+            status: error && typeof error === "object" && "status" in error && typeof error.status === "number"
+              ? error.status : undefined,
+          });
+          // A failed refresh of an already registered activity must not transfer
+          // ownership to the partial Home projection. Initial discovery still falls back.
+          if (!accepted) options.onRegistered(false);
         } catch {
           /* disposed or previous account */
         }
       });
     return tail;
   };
-  const listener = native.addListener?.("pushRegistrationChanged", sync);
-  sync();
+  const listener = native.addListener?.("pushRegistrationChanged", () => { void sync(); });
+  sync(true);
   return {
     sync,
     dispose() {
       controller.abort();
       listener?.remove();
+      if (expiry) clearTimeout(expiry.timer);
+      expiry = undefined;
     },
   };
 }

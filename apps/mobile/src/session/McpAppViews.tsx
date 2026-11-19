@@ -3,6 +3,7 @@ import { AppState, Linking, Platform, StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { mcpAppFrameUrlAllowed } from '@cindy/maker-shared/mcp-apps';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { useTheme } from '@/theme';
 import { NativeMcpAppHost, NativeMcpAppSlot, mcpAppSurfaceAvailable } from './NativeMcpAppSurface';
 import { McpAppView } from './mcpAppView';
@@ -30,7 +31,7 @@ export function McpAppViewsProvider({ children }: { children: ReactNode }) {
         if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password)
           throw new Error('MCP_APP_INVALID_LINK');
         await Linking.openURL(parsed.href);
-      });
+      }, getMobileAuthOwner().generation);
     views.current.add(view);
     changed();
     void view.open(context);
@@ -73,6 +74,11 @@ function McpAppWebView({ view }: { view: McpAppView }) {
   if (!document || !nativeDocument) return null;
   return <WebView ref={bind} source={nativeDocument.source}
     style={{ height: view.state.height, backgroundColor: colors.surface }}
+    // size-changed owns the viewport height; the message list owns scrolling.
+    // In particular, keyboard insets must not turn an inline card into a scroller.
+    scrollEnabled={false} bounces={false}
+    automaticallyAdjustContentInsets={false} contentInsetAdjustmentBehavior="never"
+    showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false}
     originWhitelist={['*']} allowFileAccess={false} allowUniversalAccessFromFileURLs={false}
     sharedCookiesEnabled={false} thirdPartyCookiesEnabled={false}
     incognito={Platform.OS === 'ios'} cacheEnabled={false} domStorageEnabled

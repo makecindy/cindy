@@ -5,13 +5,16 @@ import { parseKimiUsageRequest, isKimiCodingProvider } from '../../shared/kimiCo
 import { isOpenCodeGoProvider, parseOpenCodeGoUsageRequest } from '../../shared/opencodeGoUsage.js';
 import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
+import { sharedTaskRecoveryError } from '../../shared/sharedTaskRecovery.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
 import type { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
 import { encodeMessageBodies, versionMessageBody } from './sessionMessageReuse.js';
 import type { TaskTagRequest } from '@cindy/maker-shared';
 import {
+  AGENT_NET_SWITCH_CHANNEL,
   FILE_PEER_CHANNEL,
+  isFilePeerStreamTransfer,
   REMOTE_AGENT_CHANNEL,
   SETUP_SNAPSHOT_CHANNEL,
   SETUP_TRANSFER_CHANNEL,
@@ -61,9 +64,9 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
  * 本地 settings(第二道),server 缓存陈旧 / 被绕过时兜底。
  */
 
-import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from '@cindy/device-link';
+import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef, invokeIntendedHoldMs } from '@cindy/device-link';
 import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
-import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
+import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation, locallyProvenProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
 import {
   computeAllowlistHash,
@@ -126,12 +129,15 @@ import type { app } from 'electron';
 import type { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
-import type { DeviceLinkClient } from '@cindy/device-link';
+import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinks } from '@cindy/agent-net';
 import { isDeferredHistoryPush, deferredToolBoundary, buildHistoryWorkPatch, thinkingDeltaUpdatesWorkLine } from './historyViewPush';
+import { clearHistoryViewDeltas, withoutHistoryViewDeltaToken } from './historyViewDelta';
 import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
 import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
 import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
+import { createToolBodyPushProjector } from './toolBodyProjection';
+import { createToolResultLiveLimiter } from './toolResultLiveLimit';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import type { readDeviceLinkSettings } from './settings-store.desktop';
 import type { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
@@ -165,6 +171,7 @@ import type {
 import type * as broadcastTap from './broadcast-tap';
 import { createOfflinePushQueue } from './offlinePushQueue';
 import { SessionPatchStage, type SessionPatch } from './sessionPatchStage';
+import { LatestStatePushStage, latestStatePushKey } from './latestStatePushStage';
 import { createPushFailureLog } from './pushFailureLog';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
@@ -258,6 +265,14 @@ export interface SetupSnapshotRemoteHandler {
  */
 export interface SetupTransferRemoteHandler {
   handle(raw: unknown, controllerDeviceId: string): Promise<unknown>;
+}
+
+/**
+ * 远程切换连接方式(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」):同账号电脑问这台电脑
+ * 能不能打开 Agent-Net、请它打开 / 关闭。Main 在 bootstrap 注入，未就绪时明确拒绝。
+ */
+export interface AgentNetSwitchRemoteHandler {
+  handle(raw: unknown, controllerDeviceId: string, controllerName: string): Promise<unknown>;
 }
 
 // Local renderer IPC keeps its sender guard; remote mutations enter the shared action here.
@@ -431,6 +446,7 @@ export interface InboundDispatchPorts {
   stopFilePeers?: typeof stopFilePeers;
   requestTaskMigration?: typeof requestTaskMigration;
   delegatedProviderShareGuestAccess?: typeof delegatedProviderShareGuestAccess;
+  locallyProvenProviderShareDelegation?: typeof locallyProvenProviderShareDelegation;
   delegatedProviderShareLeases?: typeof delegatedProviderShareLeases;
   invalidateProviderShareDelegation?: typeof invalidateProviderShareDelegation;
   app: Pick<typeof app, "getVersion">;
@@ -489,6 +505,7 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     stopFilePeers,
     requestTaskMigration = unavailable('requestTaskMigration'),
     delegatedProviderShareGuestAccess,
+    locallyProvenProviderShareDelegation,
     delegatedProviderShareLeases,
     invalidateProviderShareDelegation,
     app,
@@ -728,6 +745,7 @@ const PATH_GUARDED_CHANNELS: ReadonlyMap<string, 'workingDir' | 'baseRepo'> = ne
   [ORCA_REMOTE_WORKER_OPEN_CHANNEL, 'workingDir'],
   ['worktree:create', 'baseRepo'],
   ['worktree:sync-branch', 'baseRepo'],
+  ['worktree:checkout', 'baseRepo'],
 ]);
 
 /** host 注入的 workingDir 校验器(null = 未注入,放行;布尔返回值仅作旧测试兼容) */
@@ -805,6 +823,11 @@ let setupTransferRemoteHandler: SetupTransferRemoteHandler | null = null;
 
 function setSetupTransferRemoteHandler(handler: SetupTransferRemoteHandler | null): void {
   setupTransferRemoteHandler = handler;
+}
+let agentNetSwitchRemoteHandler: AgentNetSwitchRemoteHandler | null = null;
+
+function setAgentNetSwitchRemoteHandler(handler: AgentNetSwitchRemoteHandler | null): void {
+  agentNetSwitchRemoteHandler = handler;
 }
 
 /** 组摘要只给同账号电脑：分享受邀者与共享任务访客是其他账号，看不到组内电脑。 */
@@ -1046,6 +1069,7 @@ function projectInvokeResultForTunnel(
   result: unknown,
   supportsFullLogoKinds = false,
   args: readonly unknown[] = [],
+  sameAccountController = false,
 ): unknown {
   result = encodeModelSpeedPayload(channel, result);
   // Opt-in only: legacy/desktop controllers still receive complete runtime capabilities.
@@ -1120,15 +1144,28 @@ function projectInvokeResultForTunnel(
     : {};
   const providers = (r.providers as Record<string, unknown>[]).map((p) => {
     const rest = { ...p };
+    if (!sameAccountController) {
+      delete rest.subscriptionPoolTarget;
+      delete rest.subscriptionAccountKeys;
+      if (rest.openAiAccount && typeof rest.openAiAccount === 'object') {
+        const { accountKey: _key, ...account } = rest.openAiAccount as Record<string, unknown>;
+        rest.openAiAccount = account;
+      }
+    }
     // 「允许被远程调用」只是标记、不裁剪目录：远程控制与手机仍要看到全部供应商，
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
     if (typeof p.remoteInvocationEnabled === 'boolean') rest.remoteInvocationEnabled = p.remoteInvocationEnabled;
     // 「运行于」是这台电脑自己的偏好，不给其他电脑。
     delete rest.runLocation;
-    // Only the host's narrow Cindy AI identity override may supersede brand inference.
+    // Only narrow host overrides may supersede brand inference: Cindy AI's identity glyph and,
+    // for this account's own devices only, the enterprise artwork set by the main process
+    // (organizationProviderLogo.ts). Shared-task guests and provider-share guests are other
+    // accounts; the artwork would reveal the owner's organization.
     const logoKind = p.id === 'xd' && p.logoKind === 'xd'
       ? 'xd'
+      : sameAccountController && p.source === 'organization' && p.logoKind === 'openai-spectrum'
+      ? 'openai-spectrum'
       : typeof p.id === 'string'
         ? resolveProviderLogoKind(p.id, p.routing as ProviderLogoRouting | undefined)
         : null;
@@ -1177,7 +1214,7 @@ function projectInvokeResultForTunnel(
 }
 
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
-let activeClient: DeviceLinkClient | null = null;
+let activeClient: PeerLinks | null = null;
 
 /**
  * presence「显式离线」判据(index.ts 接线,那里持有权威 presence 视图):返回 true
@@ -1262,6 +1299,13 @@ const REMOTE_INVOKE_INTERACTIVE_EXTRA_PER_CONTROLLER = 2;
 const REMOTE_INVOKE_INTERACTIVE_EXTRA_GLOBAL = 4;
 const REMOTE_INVOKE_IN_FLIGHT_BYTES = 16 * 1024 * 1024;
 const REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_BYTES = 4 * 1024 * 1024;
+/**
+ * File blocks on the Agent-Net session (`stream-rpc` uploads, `stream-read`, see isFilePeerStreamTransfer) may exceed the
+ * per-controller byte slice by this much. An upload keeps PEER_ATTACHMENT_STREAM_WINDOW (3) blocks of 1 MiB in flight, each
+ * about 1.4 MB as base64: the third one alone crossed 4 MiB and the whole upload failed with BACKPRESSURE (2026-11-17 review).
+ * One upload per peer connection at a time, so this stays bounded; the global byte limit is unchanged.
+ */
+const REMOTE_INVOKE_FILE_BLOCK_EXTRA_PER_CONTROLLER_BYTES = 4 * 1024 * 1024;
 const REMOTE_INVOKE_RESULT_CACHE_LIMIT = 128;
 const REMOTE_INVOKE_RESULT_CACHE_BYTES = 16 * 1024 * 1024;
 /** 本地发送背压时保留已执行结果；与 transport pending 分层且同样严格有界。 */
@@ -1332,6 +1376,17 @@ let remoteInvokeResultOutboxBytes = 0;
 let remoteInvokeResultOutboxTimer: ReturnType<typeof setTimeout> | null = null;
 /** 显式 link-close/撤权世代；旧世代仍在执行的 IPC 完成后不得把结果送进新链路。 */
 const remoteInvokeLinkEpoch = new Map<string, number>();
+/** 这个分发器（进程里的这一份）与整体清空的次数：见 remoteInvokeEpoch。 */
+const remoteInvokeInstance = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+let remoteInvokeClearGeneration = 0;
+/**
+ * 这台对这个控制端的请求去重记忆是哪一份：进程重启、整体清空（登出、关远程控制）、对它的清空（永久关链、撤权）都会变。Agent-Net
+ * 会话的链路回复带上它（packages/agent-net/src/session/sessionLinks.ts），控制端断线后用原请求号再发之前比一下：变了就说明这里已经不记得那次请求，
+ * 再发可能重复执行，不再发（和原来一样报「可能已执行」）。Device Link 的链路回复不带。
+ */
+function remoteInvokeEpoch(deviceId: string): string {
+  return `${remoteInvokeInstance}.${remoteInvokeClearGeneration}.${remoteInvokeLinkEpoch.get(deviceId) ?? 0}`;
+}
 /** Controllers that have demonstrated topic-subscription support in this process/account epoch. */
 const topicSubscriptionControllers = new Set<string>();
 /** 已成功 accept、尚未显式 close 的控制端；可无 active topic(现代重连等待 subscribe)。 */
@@ -1402,27 +1457,27 @@ function clearReportedControllerName(deviceId: string): void {
 }
 
 /** 承载这个控制端的连接:跨账号控制端可能在独立的官方连接上,状态不能看主连接。 */
-function connectionOf(client: DeviceLinkClient, peer: string): DeviceLinkClient {
+function connectionOf(client: PeerLinks, peer: string): PeerLinks {
   return client.connectionFor?.(peer) ?? client;
 }
 
 /** Data only: an existing authenticated direct path can outlive its signaling socket. */
-function canUsePeerDataPath(client: DeviceLinkClient, peer: string): boolean {
+function canUsePeerDataPath(client: PeerLinks, peer: string): boolean {
   return connectionOf(client, peer).getStatus() === 'online'
     || client.hasOfflineDirectPath?.(peer) === true;
 }
 
-function readConnectionEpoch(client: DeviceLinkClient): number | undefined {
-  const candidate = client as DeviceLinkClient & {
+function readConnectionEpoch(client: PeerLinks): number | undefined {
+  const candidate = client as PeerLinks & {
     getConnectionEpoch?: () => number;
   };
   return candidate.getConnectionEpoch?.();
 }
 
-function markControllerLinkActive(client: DeviceLinkClient, deviceId: string): void {
+function markControllerLinkActive(client: PeerLinks, deviceId: string): void {
   const epoch = readConnectionEpoch(connectionOf(client, deviceId));
   if (epoch !== undefined) controllerConnectionEpochByDevice.set(deviceId, epoch);
-  const candidate = client as DeviceLinkClient & {
+  const candidate = client as PeerLinks & {
     getPeerLinkGeneration?: (peerDeviceId: string) => number;
   };
   const linkGeneration = candidate.getPeerLinkGeneration?.(deviceId);
@@ -2079,6 +2134,57 @@ function clearAllMakerEventBatchStages(): void {
 }
 const sessionActivityStages = new Map<string, SessionActivityStage>();
 const sessionPatchStages = new Map<string, SessionPatchStage>();
+const latestStatePushStages = new Map<string, LatestStatePushStage>();
+
+function clearLatestStatePushStage(dst: string): void {
+  latestStatePushStages.get(dst)?.dispose();
+  latestStatePushStages.delete(dst);
+}
+
+/**
+ * 账号级状态镜像(调度运行诊断、用量快照)的 latest-wins 暂存,见
+ * latestStatePushStage.ts。这些推送都在 sessions topic 上;窗口占用超过
+ * SESSION_ACTIVITY_WINDOW_SOFT_CAP 时不再灌入,同键新值替换旧值,剩余窗口留给
+ * invoke-result 与不可合并的推送。
+ */
+function stageLatestStatePush(
+  dst: string,
+  key: string,
+  channel: string,
+  payload: unknown,
+  ownerStamp?: PushOwnerStamp,
+): void {
+  let stage = latestStatePushStages.get(dst);
+  if (stage && !makerEventBatchOwnerStampEquals(stage.ownerStamp, ownerStamp)) {
+    clearLatestStatePushStage(dst);
+    stage = undefined;
+  }
+  if (!stage) {
+    const owner = broadcastTap.captureDataOwnerBroadcastScope();
+    const subscribed = () => broadcastTap.isDataOwnerBroadcastScopeCurrent(owner)
+      && subscriptions.getControllersForTopic('sessions').includes(dst);
+    const created: LatestStatePushStage = new LatestStatePushStage(ownerStamp,
+      () => {
+        if (!subscribed()) {
+          if (latestStatePushStages.get(dst) === created) clearLatestStatePushStage(dst);
+          return false;
+        }
+        return canSendSessionState(dst);
+      },
+      async (item, isCurrent) => {
+        let failure: unknown;
+        await sendBotCheckedPush(dst, item.channel, item.payload, (projected) => {
+          if (!isCurrent() || !subscribed()) return;
+          sendSessionState(dst, item.channel, projected, ownerStamp);
+          observeRemoteSendPush(item.channel, projected);
+        }, (error) => { failure = error; });
+        if (failure) throw failure;
+      }, (item, error) => reportPushFailure(dst, item.channel, error));
+    stage = created;
+    latestStatePushStages.set(dst, stage);
+  }
+  stage.enqueue(key, { channel, payload });
+}
 
 function clearSessionPatchStage(dst: string): void {
   sessionPatchStages.get(dst)?.dispose();
@@ -2230,6 +2336,7 @@ function clearAllSessionActivityStages(): void {
   for (const dst of historyNoticeStages.keys()) clearHistoryNotices(dst);
   for (const dst of [...sessionActivityStages.keys()]) clearSessionActivityStage(dst);
   for (const dst of [...sessionPatchStages.keys()]) clearSessionPatchStage(dst);
+  for (const dst of [...latestStatePushStages.keys()]) clearLatestStatePushStage(dst);
 }
 
 /**
@@ -2408,15 +2515,20 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     : null;
   // Project lazily once, before batching/offline queueing. Another Desktop or old Mobile
   // on the same relay must still receive its unchanged payload.
-  let mobilePayload: unknown;
-  let mobilePayloadReady = false;
+  // Tool-body rules follow each controller's own declaration; guests keep their existing path.
+  // The Mobile projection follows and sees the already projected event.
+  const projectToolBodies = createToolBodyPushProjector(channel, remotePayload);
+  // tool-result-live-limit-v1: an ordinary live result over 256 KB keeps its head and a marker.
+  const limitLiveResult = createToolResultLiveLimiter(channel, remotePayload,
+    (sessionId, toolUseId) => readHistoryToolName(sessionId, toolUseId));
+  const mobilePayloads = new Map<unknown, unknown>();
   const projectedPayloadFor = (dst: string): unknown => {
-    if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return remotePayload;
-    if (!mobilePayloadReady) {
-      mobilePayload = projectMobileToolPush(channel, remotePayload);
-      mobilePayloadReady = true;
-    }
-    return mobilePayload;
+    const supports = (capability: string) => subscriptions.controllerSupports(dst, capability);
+    const base = isSharedTaskPeer(dst) || isProviderSharePeer(dst) ? remotePayload
+      : limitLiveResult(projectToolBodies(supports), supports);
+    if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return base;
+    if (!mobilePayloads.has(base)) mobilePayloads.set(base, projectMobileToolPush(channel, base));
+    return mobilePayloads.get(base);
   };
   // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
   const payloadFor = (dst: string): unknown => {
@@ -2431,13 +2543,18 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     return isSharedTaskPeer(dst) ? redactSharedGuestPush(channel, projected) : projected;
   };
   const historySessionId = readPushSessionId(remotePayload);
+  // 账号级状态快照:同键 latest-wins,不逐帧冲可靠窗口(见 stageLatestStatePush)。
+  const latestStateKey = latestStatePushKey(channel, remotePayload);
   const deferred = historySessionId !== null && isDeferredHistoryPush(channel, remotePayload,
     (id) => readHistoryToolName(historySessionId, id));
   const thinkingLine = deferred && historySessionId !== null && thinkingDeltaUpdatesWorkLine(historySessionId, remotePayload);
   const offlineTargets = targetsFor(true)
     .filter((dst) => !liveTargets.includes(dst));
+  // Kept folded across a link change until the controller re-reads (history-relink-folded-v1).
+  const keptFolded = (dst: string) => deferred && historySessionId !== null
+    && subscriptions.keepsFoldedAcrossLink(dst, historySessionId);
   for (const dst of offlineTargets) {
-    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId)) continue;
+    if (deferred && historySessionId && (subscriptions.hasHistoryView(dst, historySessionId) || keptFolded(dst))) continue;
     const sharedMetadata = isSharedTaskPeer(dst) && sharedTaskTopic !== null;
     if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel) || sharedMetadata) {
       offlinePushQueue.enqueue(dst, {
@@ -2452,9 +2569,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   for (const dst of liveTargets) {
     let targetPayload = payloadFor(dst);
     // A pending read also needs notices: its sampled rows can precede this push.
-    // Filtering still requires ready in projectsHistoryDetails, so raw survives.
-    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId, true)) {
-      const folded = subscriptions.projectsHistoryDetails(dst, historySessionId);
+    // Filtering still requires ready in projectsHistoryDetails, so raw survives, except for a
+    // session kept folded across a link change (history-relink-folded-v1) until it is re-read.
+    const kept = keptFolded(dst);
+    if (deferred && historySessionId && (kept || subscriptions.hasHistoryView(dst, historySessionId, true))) {
+      const folded = kept || subscriptions.projectsHistoryDetails(dst, historySessionId);
       const event = (remotePayload as { event?: { type?: string; data?: { stage?: string } } })?.event;
       // A folded duration ticks locally. Token deltas do not change its summary.
       if (!folded || event?.type !== 'thinking' || event.data?.stage !== 'delta'
@@ -2505,6 +2624,10 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
         sendPushBestEffort(dst, channel, older
           ? { ...item, patch: { ...older.patch, ...item.patch } } : targetPayload, ownerStamp);
       }
+      continue;
+    }
+    if (latestStateKey !== null && !isSharedTaskPeer(dst) && !isProviderSharePeer(dst)) {
+      stageLatestStatePush(dst, latestStateKey, channel, targetPayload, ownerStamp);
       continue;
     }
     // agent 事件流是本条链路的帧数大头:对声明了微批能力的控制端合并成
@@ -2690,7 +2813,7 @@ function syncForwarding(): void {
 
 /** 把所有订阅控制端踢掉(被控开关关闭 / 用户一键断开 / 退出时调用) */
 function dropAllControllers(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
   stopFilePeers?.();
@@ -2716,6 +2839,9 @@ function dropAllControllers(
     }
     clearReportedControllerName(dst);
   }
+  // 登出 / 失去持有权：随后的 client.stop() 清空全部列表增量基准，历史页增量基页也一并全部释放，
+  // 包括此前普通断线、为重连保留的控制端（它们不在上面的 controllerIds 里）。
+  if (reason === 'shutdown') clearHistoryViewDeltas();
   clearAllRemoteInvokeState();
   subscriptions.clearAll();
   topicSubscriptionControllers.clear();
@@ -2772,6 +2898,7 @@ function deactivateControllerState(
   clearReportedControllerName(deviceId);
   clearSessionActivityStage(deviceId);
   clearSessionPatchStage(deviceId);
+  clearLatestStatePushStage(deviceId);
   clearSessionSyncStage(deviceId);
   clearMakerEventBatchStage(deviceId);
   cancelLinkAcceptRetry(deviceId, preservePendingOpen);
@@ -2876,9 +3003,11 @@ function purgeRevokedController(deviceId: string, preservePendingOpen = false): 
  * 接线被控端隧道。在 device-link host init 时调用一次。
  * 返回 unsubscribe(测试/重置用)。
  */
-function wireInboundDispatch(client: DeviceLinkClient): () => void {
+function wireInboundDispatch(client: PeerLinks): () => void {
   activeClient = client;
-  return client.onFrame((env: Envelope) => {
+  // 历史页增量的被控端基页与列表增量基准同时释放：控制端被主动关掉时，普通断线保留。
+  const offReleased = client.onInboundPeerReleased((peer) => clearHistoryViewDeltas(peer));
+  const offFrame = client.onFrame((env: Envelope) => {
     // 可靠传输的 ACK 边界是“已进入本地执行状态机”，不是“耗时 IPC 已执行完成”。
     // handleInvoke 会在第一次 await 前登记 in-flight requestId 去重；这里不把它的
     // Promise 交回 transport，避免一个慢查询把后续 stop/steer/push 全部堵在队头。
@@ -2886,9 +3015,13 @@ function wireInboundDispatch(client: DeviceLinkClient): () => void {
       log.error('inbound frame handling failed', err);
     });
   });
+  return () => {
+    offReleased();
+    offFrame();
+  };
 }
 
-async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<void> {
+async function handleFrame(client: PeerLinks, env: Envelope): Promise<void> {
   const src = env.src;
   switch (env.kind) {
     case 'link-open':
@@ -2970,7 +3103,7 @@ function cancelAllLinkAcceptRetries(): void {
 
 /** @param failedAttempts 已失败的发送次数(≥1);第 n 次失败用 delays[n-1] 档退避。 */
 function scheduleLinkAcceptRetry(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   src: string,
   requestId: string,
   payload: LinkOpenPayload | undefined,
@@ -2995,7 +3128,7 @@ function scheduleLinkAcceptRetry(
 }
 
 function handleLinkOpen(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   src: string,
   requestId: string,
   payload: LinkOpenPayload | undefined,
@@ -3166,10 +3299,10 @@ function handleLinkOpen(
 }
 
 async function handleInvoke(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   src: string,
   requestId: string,
-  payload: InvokePayload | undefined,
+  payload: PeerInvokePayload | undefined,
 ): Promise<void> {
   const cacheKey = `${src}\u0000${requestId}`;
   const invokeLinkEpoch = remoteInvokeLinkEpoch.get(src) ?? 0;
@@ -3249,6 +3382,16 @@ async function handleInvoke(
     }
     return;
   }
+  if (payload?.[SESSION_INVOKE_REPLAY]) {
+    // The original might already have run and its result have been evicted. Only a known invocation can resume.
+    const result: InvokeResultPayload = { ok: false, error: {
+      code: 'INVOKE_TIMEOUT', message: 'The previous invocation may have executed; its result is no longer available',
+    } };
+    if (!await sendAuthorizedInvokeResultSafe(client, src, requestId, result, payload.channel, payload.args)) {
+      throw new DeviceLinkError('BACKPRESSURE', 'resume outcome could not be queued');
+    }
+    return;
+  }
   if (payload && (payload.channel === DL_SUBSCRIBE_CHANNEL || payload.channel === DL_UNSUBSCRIBE_CHANNEL)) {
     // Only a shared-task workdir watch awaits; every other frame stays synchronous.
     const admitting = admitSharedTaskSubscription(src, payload);
@@ -3280,11 +3423,13 @@ async function handleInvoke(
   const joiningExisting = !!(existingListing && existingListing.linkEpoch === invokeLinkEpoch);
 
   const controllerAdmission = remoteInvokeAdmissionState(src);
-  const interactive = !!payload?.channel && isInteractiveInvoke(payload.channel);
+  const interactive = !!payload?.channel && isInteractiveInvoke(payload.channel, payload.args);
+  const fileBlock = !!payload && isFilePeerStreamTransfer(payload);
   const controllerAtLimit = (
     controllerAdmission.messages >= REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT
       + (interactive ? REMOTE_INVOKE_INTERACTIVE_EXTRA_PER_CONTROLLER : 0)
     || controllerAdmission.bytes + invokeBytes > REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_BYTES
+      + (fileBlock ? REMOTE_INVOKE_FILE_BLOCK_EXTRA_PER_CONTROLLER_BYTES : 0)
   );
   const globalAtLimit = (
     inFlightRemoteInvokeResults.size + remoteInvokeResultOutbox.size >= REMOTE_INVOKE_IN_FLIGHT_LIMIT
@@ -3377,10 +3522,12 @@ async function handleInvoke(
     : () => undefined;
   const handlerStartedAt = performance.now();
   const timing = new RemoteInvokeTiming();
+  // 长轮询(远程 Agent poll)按协议挂起的时长不算慢执行。
+  const intendedHoldMs = payload ? invokeIntendedHoldMs(payload.channel, payload.args) : 0;
   const finishDiagnostic = observeRemoteInvoke(timing, fields => executionDiagnostics.record('execution', {
     request: diagnosticRef(requestId), src: diagnosticRef(src), channel: diagnosticChannel(payload?.channel ?? 'unknown'),
     operation: payload ? diagnosticOperation(payload) : 'unknown', ...fields,
-  }));
+  }), undefined, intendedHoldMs);
   const executionPromise = Promise.resolve()
     .then(() => executeInvoke(src, payload, timing))
     .catch((err): InvokeResultPayload => {
@@ -3419,16 +3566,23 @@ async function handleInvoke(
   inFlightRemoteInvokeBytes += invokeBytes;
   if (listingKey) remoteListingFlights.set(listingKey, inFlightEntry);
   let result: InvokeResultPayload;
+  // Slow results are the ones most likely to outlive the controller's wait; record
+  // how each one left this host so a controller timeout can be matched to it.
+  let slowResultLabel: string | undefined;
   try {
     result = normalizeInvokeResultForWire(await resultPromise);
     const executionWaitMs = Math.round(performance.now() - handlerStartedAt);
     // debug only: 300ms already shows up as a visible send delay over the relay.
-    if (executionWaitMs >= 300) {
-      log.debug(`remote invoke slow execution request=${shortId(requestId)} from=${shortId(src)}`
-        + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`
+    if (executionWaitMs >= 300 + intendedHoldMs) {
+      slowResultLabel = `request=${shortId(requestId)} from=${shortId(src)}`
+        + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`;
+      log.debug(`remote invoke slow execution ${slowResultLabel}`
         + ` executionWaitMs=${executionWaitMs} ok=${result.ok} stagesMs=${JSON.stringify(timing.stages)}`);
     }
-    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
+    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) {
+      if (slowResultLabel) log.debug(`remote invoke slow result dropped ${slowResultLabel} reason=link-reset`);
+      return;
+    }
   } finally {
     if (inFlightRemoteInvokeResults.get(cacheKey) === inFlightEntry) {
       inFlightRemoteInvokeResults.delete(cacheKey);
@@ -3440,7 +3594,7 @@ async function handleInvoke(
   }
   // Fresh execution already includes the DB checks in runInvoke, within its
   // orphan deadline and busy lease. Only replayed replies need a new async check.
-  if (!sendInvokeResultSafe(
+  const accepted = sendInvokeResultSafe(
     client,
     src,
     requestId,
@@ -3448,7 +3602,9 @@ async function handleInvoke(
     payload?.channel,
     payload?.args,
     fingerprint,
-  )) {
+  );
+  if (slowResultLabel) log.debug(`remote invoke slow result handed off ${slowResultLabel} accepted=${accepted}`);
+  if (!accepted) {
     throw new DeviceLinkError('BACKPRESSURE', 'invoke-result could not be queued');
   }
 }
@@ -3497,7 +3653,7 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
   if (isProviderSharePeer(src)) {
     if (providerShareGuestAccess(src)) return null;
     logProviderShareDenial(src, 'admission');
-    return PROVIDER_SHARE_ACCESS_FAILURE;
+    return providerShareInvokeAccessFailure(src);
   }
   if (isSharedTaskPeer(src)) return captureSharedTaskPeer(src) ? null : sharedTaskAccessFailure(src);
   if (!readDeviceLinkSettings().remoteControlEnabled) {
@@ -3546,7 +3702,7 @@ function hasRemoteInvokeWorkForPeer(src: string): boolean {
 }
 
 function sendRequestIdReuseError(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   src: string,
   requestId: string,
   payload: InvokePayload | undefined,
@@ -3622,6 +3778,7 @@ function clearRemoteInvokeStateFor(deviceId: string): void {
 }
 
 function clearAllRemoteInvokeState(): void {
+  remoteInvokeClearGeneration++;
   const deviceIds = new Set<string>();
   for (const key of completedRemoteInvokeResults.keys()) {
     deviceIds.add(key.slice(0, key.indexOf('\u0000')));
@@ -3734,7 +3891,7 @@ async function sendAuthorizedInvokeResultSafe(
  * 执行的 mutation 改写成 BACKPRESSURE error，否则控制端重试会重复副作用。
  */
 function sendInvokeResultSafe(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   src: string,
   requestId: string,
   result: InvokeResultPayload,
@@ -3774,8 +3931,14 @@ function sendInvokeResultSafe(
   // 以真正能上 wire 的结果作为去重真相：超限原结果若被 compact/改成结构化错误，
   // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
   // 远程 Agent 的每个 op 自带幂等(poll 按游标、其余按各自 id 去重)，高频的事件流结果不进
-  // 全局去重缓存，免得冲掉其它控制端非幂等调用的去重记录。
-  if (fingerprint !== undefined && channel !== REMOTE_AGENT_CHANNEL && channel !== PROVIDER_SHARE_INSIGHTS_CHANNEL) {
+  // 全局去重缓存，免得冲掉其它控制端非幂等调用的去重记录。Agent-Net 会话上的文件块
+  // (stream-read / stream-rpc)同理：会话不重发，块又多又大，不进这份缓存。
+  if (
+    fingerprint !== undefined
+    && channel !== REMOTE_AGENT_CHANNEL
+    && channel !== PROVIDER_SHARE_INSIGHTS_CHANNEL
+    && !isFilePeerStreamTransfer({ channel, args })
+  ) {
     rememberRemoteInvokeResult(key, fingerprint, attempt.result);
   }
   if (attempt.sent) {
@@ -3795,7 +3958,7 @@ function sendInvokeResultSafe(
 }
 
 function trySendInvokeResult(
-  client: DeviceLinkClient,
+  client: PeerLinks,
   src: string,
   requestId: string,
   result: InvokeResultPayload,
@@ -3813,7 +3976,7 @@ function trySendInvokeResult(
     }
   }
   // 撤权后迟到的结果(含 outbox 重发)不再带出数据。
-  if (isProviderSharePeer(src) && !providerShareGuestAccess(src)) result = PROVIDER_SHARE_ACCESS_FAILURE;
+  if (isProviderSharePeer(src) && !providerShareGuestAccess(src)) result = providerShareInvokeAccessFailure(src);
   // 开关撤销和关后重开都使旧投影失效；关系仍有效不代表可继续发送旧额度。
   if (isProviderSharePeer(src) && channel === PROVIDER_SHARE_INSIGHTS_CHANNEL && result.ok
     && !providerShareAccess?.insightsCurrent?.(src, result.result)) result = PROVIDER_SHARE_ACCESS_FAILURE;
@@ -3896,7 +4059,7 @@ function enqueueRemoteInvokeResult(entry: QueuedRemoteInvokeResult): boolean {
   // Admission lets an interactive request run beyond the message limits; its reply
   // must have a slot too, or the controller times out on a write that already took
   // effect. Reserve exactly the admission headroom (bytes stay unrelaxed).
-  const interactive = !!entry.channel && isInteractiveInvoke(entry.channel);
+  const interactive = !!entry.channel && isInteractiveInvoke(entry.channel, entry.args);
   if (
     entry.bytes <= 0
     || controllerOutbox.messages
@@ -3976,7 +4139,7 @@ function flushMakerEventBatchesOnReconnect(): void {
 }
 
 const botInvokeOutboxChecks = new Set<string>();
-function flushAuthorizedBotOutboxEntry(key: string, queued: QueuedRemoteInvokeResult, client: DeviceLinkClient): void {
+function flushAuthorizedBotOutboxEntry(key: string, queued: QueuedRemoteInvokeResult, client: PeerLinks): void {
   if (botInvokeOutboxChecks.has(key)) return;
   botInvokeOutboxChecks.add(key);
   const owner = broadcastTap.captureDataOwnerBroadcastScope();
@@ -4066,7 +4229,7 @@ function compactInvokeResultForDeviceLink(
   }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')
     && result.result && typeof result.result === 'object') {
-    const page = result.result as Record<string, unknown>;
+    const page = withoutHistoryViewDeltaToken(result.result as Record<string, unknown>);
     const mapPage = (map: (row: unknown) => unknown): InvokeResultPayload => ({ ok: true, result: {
       ...page,
       ...(Array.isArray(page.messages) ? { messages: page.messages.map(map) } : {}),
@@ -4456,6 +4619,7 @@ function handleSubscriptionFrame(
     if (topics.includes('sessions')) {
       clearSessionActivityStage(src);
       clearSessionPatchStage(src);
+      clearLatestStatePushStage(src);
     }
     // 退订 session:<id> 后该会话的待发事件批同样不应再投递(控制端已不要这条流)。
     for (const topic of topics) {
@@ -4531,6 +4695,18 @@ const PROVIDER_SHARE_ACCESS_FAILURE: InvokeResultPayload = {
   ok: false,
   error: { code: 'ACCESS_REVOKED', message: 'provider share is not available' },
 };
+
+function providerShareInvokeAccessFailure(src: string): InvokeResultPayload {
+  // These two local verdicts mean access is not yet confirmed, not revoked.
+  // Still refuse the invoke/result, exposing only the existing bounded marker.
+  const denial = providerShareAccess?.denial?.(src);
+  if (denial === 'snapshot-not-loaded' || denial === 'member-cleanup-pending') {
+    return { ok: false, error: {
+      code: 'IPC_ERROR', message: sharedTaskRecoveryError('owner', 'authorization').message,
+    } };
+  }
+  return PROVIDER_SHARE_ACCESS_FAILURE;
+}
 /**
  * The only channels a provider-share guest may invoke: the remote agent, and the read-only
  * catalog reads its model picker and send gate need (provider list, agent capabilities,
@@ -4677,7 +4853,7 @@ function projectProviderListForShare(
             agent, Array.isArray(models) ? models.filter(allowed) : [],
           ]));
         }
-        for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels']) {
+        for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels', 'evaluationModels']) {
           if (Array.isArray(scrubbed[field])) scrubbed[field] = (scrubbed[field] as unknown[]).filter(allowed);
         }
       }
@@ -4704,15 +4880,16 @@ function projectProviderListForShare(
 async function runProviderShareInvoke(
   src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming,
 ): Promise<InvokeResultPayload> {
-  if (payload?.channel === REMOTE_AGENT_CHANNEL && Array.isArray(payload.args)
-    && payload.args.some((value: unknown) => !!value && typeof value === 'object' && 'op' in value && value.op === 'open')
-    && delegatedProviderShareGuestAccess?.(src)) {
-    try { await prepareShareAvailability(src); } catch { /* Normal O-issued grants do not require this endpoint. */ }
+  if (payload?.channel === REMOTE_AGENT_CHANNEL && Array.isArray(payload.args)) {
+    const request = payload.args[0] as { op?: unknown } | undefined;
+    if (request?.op === 'open' && delegatedProviderShareGuestAccess?.(src) && !locallyProvenProviderShareDelegation?.(src)) {
+      try { await prepareShareAvailability(src); } catch { /* Normal O-issued grants do not require this endpoint. */ }
+    }
   }
   const access = providerShareGuestAccess(src);
   if (!access) {
     logProviderShareDenial(src, `invoke ${typeof payload?.channel === 'string' ? payload.channel : '?'}`);
-    return PROVIDER_SHARE_ACCESS_FAILURE;
+    return providerShareInvokeAccessFailure(src);
   }
   if (!payload || typeof payload.channel !== 'string') return PROVIDER_SHARE_ACCESS_FAILURE;
   // An executor's short lease authorizes only remote Agent execution, never the share owner's catalog or management reads.
@@ -4727,7 +4904,7 @@ async function runProviderShareInvoke(
     try {
       if (args.length !== 1) throw new Error('[INVALID_PARAMS] Expected one insights request');
       const result = await providerShareAccess.insights(src, args[0]);
-      if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
+      if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
       return { ok: true, result };
     } catch {
       return { ok: false, error: { code: 'IPC_ERROR', message: '[PERMISSION_DENIED] Provider share insights are unavailable or access changed' } };
@@ -4737,42 +4914,11 @@ async function runProviderShareInvoke(
     return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] unknown agent' } };
   }
   const result = await runAuthorizedInvoke(src, payload, timing);
-  if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
+  if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
   if (payload.channel === REMOTE_AGENT_CHANNEL || !result.ok) return result;
   const projected = await projectProviderShareRead(src, payload.channel, args, result.result, access.providerId);
-  if (!providerShareGuestAccess(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
+  if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
   return projected.ok ? { ...result, result: projected.value } : projected;
-}
-
-/**
- * 「用本机模型」被单独关掉的同账号电脑：目录照常给(远程控制与手机仍要看全部供应商)，只是不再标成
- * 可远程调用，它的模型列表与「运行于」里就不出现这台电脑。
- */
-function withoutModelUseForRevokedController(src: string, result: unknown): unknown {
-  if (!(readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(src)) return result;
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
-  const value = result as { providers?: unknown };
-  if (!Array.isArray(value.providers)) return result;
-  return {
-    ...value,
-    providers: value.providers.map((provider) => provider && typeof provider === 'object' && !Array.isArray(provider)
-      ? { ...(provider as Record<string, unknown>), remoteInvocationEnabled: false }
-      : provider),
-  };
-}
-
-/**
- * 同账号电脑的「用本机模型」被关掉：结束它在本机的远程 Agent 任务，并通知它重读目录。
- * 只匹配同账号控制端，分享来的受邀者另有撤权路径。
- */
-async function revokeControllerModelUse(deviceId: string): Promise<void> {
-  await remoteAgentHandler?.abortControllers?.((controller) => controller === deviceId && !isProviderSharePeer(controller));
-  sendPushBestEffort(deviceId, 'maker:provider:changed', {});
-}
-
-/** 「用本机模型」恢复：通知那台电脑重读目录。 */
-function notifyControllerModelUseRestored(deviceId: string): void {
-  sendPushBestEffort(deviceId, 'maker:provider:changed', {});
 }
 
 /** For diagnostics: whether any provider share is currently known on this computer. */
@@ -4920,6 +5066,26 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       const message = error instanceof Error ? error.message : '';
       const code = /\bSETUP_[A-Z_]+\b/.exec(message)?.[0] ?? 'SETUP_SOURCE_UNAVAILABLE';
       return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] setup transfer unavailable` } };
+    }
+  }
+  if (payload.channel === AGENT_NET_SWITCH_CHANNEL) {
+    // 只给同账号电脑：共享任务访客与供应商分享受邀者是其他账号，不能改这台电脑的连接方式。
+    if (!isSameAccountController(src)) {
+      return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${payload.channel}' not allowed` } };
+    }
+    const handler = agentNetSwitchRemoteHandler;
+    if (!handler) return { ok: false, error: { code: 'IPC_ERROR', message: '[AGENT_NET_SWITCH_UNAVAILABLE] not ready yet' } };
+    try {
+      const name = resolveControllerName(src, undefined) ?? src.slice(0, 8);
+      const result = await runDeviceLinkInvokeContext(
+        { controllerDeviceId: src, channel: payload.channel },
+        () => timing.measure('handler', () => handler.handle(payload.args?.[0], src, name)),
+      );
+      return { ok: true, result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      const code = /\bAGENT_NET_SWITCH_[A-Z_]+\b/.exec(message)?.[0] ?? 'AGENT_NET_SWITCH_UNAVAILABLE';
+      return { ok: false, error: { code: 'IPC_ERROR', message: `[${code}] agent-net switch failed` } };
     }
   }
   if (payload.channel === PLUGIN_OAUTH_CHANNEL) {
@@ -5186,6 +5352,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
 
     const historyView = (payload.channel === 'local-db:messages:view' || payload.channel === 'local-db:messages:view-intent')
       && typeof args[0] === 'string' ? subscriptions.prepareHistoryView(src, args[0]) : undefined;
+    // history-relink-folded-v1: a raw list read means the controller renders raw rows for this
+    // session, so it gets full pushes again until its next page read.
+    if (payload.channel === 'local-db:messages:list' && typeof args[0] === 'string') subscriptions.forgetFoldedAcrossLink(src, args[0]);
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));
     const listingCapabilities = payload.channel === 'maker:provider:list'
       ? invokeControllerCapabilities(payload)
@@ -5243,17 +5412,19 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
         )
         || listingCapabilities.includes(CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2),
         args,
+        isSameAccountController(src),
       ));
     // 供应商组摘要与运行数只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
-    const grouped = payload.channel === 'maker:provider:list' && isSameAccountController(src) && providerGroupRemoteHandler
+    const ownList = payload.channel === 'maker:provider:list' && isSameAccountController(src);
+    const decorated = ownList && providerGroupRemoteHandler
       ? await providerGroupRemoteHandler.decorateProviderList(projected)
       : projected;
-    const decorated = payload.channel === 'maker:provider:list' && isSameAccountController(src)
-      ? withoutModelUseForRevokedController(src, grouped)
-      : grouped;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };
   } catch (err) {
+    // A failed page read releases a session kept folded across a link change.
+    const failedSessionId = payload.channel === 'local-db:messages:view' ? payload.args?.[0] : undefined;
+    if (typeof failedSessionId === 'string') subscriptions.forgetFoldedAcrossLink(src, failedSessionId);
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
     const message = err instanceof Error ? err.message : String(err);
@@ -5323,7 +5494,7 @@ function readOptionalString(record: unknown, key: string): string | undefined {
 }
 
 function shortId(deviceId: string): string {
-  return deviceId.slice(0, 8);
+  return shortDeviceRef(deviceId);
 }
 
 const __testing = {
@@ -5401,6 +5572,9 @@ const __testing = {
   sessionActivityStageSize(deviceId: string): number {
     return sessionActivityStages.get(deviceId)?.queue.size ?? 0;
   },
+  latestStatePushStageSize(deviceId: string): number {
+    return latestStatePushStages.get(deviceId)?.size ?? 0;
+  },
   sessionActivityWindowSoftCap: SESSION_ACTIVITY_WINDOW_SOFT_CAP,
   sessionActivityStageMaxKeys: SESSION_ACTIVITY_STAGE_MAX_KEYS,
   sessionActivityDrainRetryMs: SESSION_ACTIVITY_DRAIN_RETRY_MS,
@@ -5408,7 +5582,7 @@ const __testing = {
   handleInvoke,
   handleSubscriptionFrame,
   purgeRevokedController,
-  setActiveClient(c: DeviceLinkClient | null): void {
+  setActiveClient(c: PeerLinks | null): void {
     activeClient = c;
   },
 };
@@ -5438,6 +5612,7 @@ return {
   setProviderGroupRemoteHandler,
   setSetupSnapshotRemoteHandler,
   setSetupTransferRemoteHandler,
+  setAgentNetSwitchRemoteHandler,
   setRemoteTurnChangeAction,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,
@@ -5467,14 +5642,13 @@ return {
   purgeRevokedController,
   wireInboundDispatch,
   hasRemoteInvokeWorkForPeer,
+  remoteInvokeEpoch,
   flushRemoteInvokeResultOutboxOnReconnect,
   flushMakerEventBatchesOnReconnect,
   runInvoke,
   hasProviderShares,
   providerShareActiveControllers,
   revokeProviderShareControllers,
-  revokeControllerModelUse,
-  notifyControllerModelUseRestored,
   abortProviderShareReshareRuns,
   __testing,
   remoteAgentLimitUsage

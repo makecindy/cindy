@@ -108,6 +108,24 @@ export function urlOrigin(value: string | undefined): string | null {
   }
 }
 
+function isOfficialGoogleChatEndpoint(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.origin === 'https://generativelanguage.googleapis.com' &&
+      /^\/v1(?:beta)?\/openai\/*$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isOfficialOpenAIChatEndpoint(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.origin === 'https://api.openai.com' && /^\/v1\/?$/.test(url.pathname)
+      && !url.search && !url.hash;
+  } catch { return false; }
+}
+
 export function resolvePiBundledModelById(
   catalog: PiBundledModelCatalog | undefined,
   modelId: string,
@@ -483,7 +501,15 @@ export function buildPiNativeProvidersFromConfigs(
           ...(m.supportsImageInput !== undefined
             ? { input: (m.supportsImageInput ? ['text', 'image'] : ['text']) as Array<'text' | 'image'> }
             : bundledModel?.input ? { input: [...bundledModel.input] } : {}),
-          ...(m.reasoning !== undefined || m.reasoningEfforts !== undefined
+          ...(resolved?.thinkingToggle && resolved.efforts.length === 0 && bundledModel?.reasoning
+            ? {
+                // A switch has no UI intensity ladder. Preserve Pi's native
+                // enabled level and off mapping instead of disabling reasoning.
+                reasoning: true,
+                ...(bundledModel.thinkingLevelMap
+                  ? { thinkingLevelMap: { ...bundledModel.thinkingLevelMap } } : {}),
+              }
+            : m.reasoning !== undefined || m.reasoningEfforts !== undefined
             ? {
                 reasoning: m.reasoning ?? (m.reasoningEfforts?.length ?? 0) > 0,
                 ...(m.reasoningEfforts !== undefined
@@ -526,6 +552,31 @@ export function buildPiNativeProvidersFromConfigs(
             ? { samplingParams: structuredClone(bundledModel.samplingParams) }
             : {}),
         };
+        // Google's Chat endpoint rejects even store:false (#10200). Dynamic
+        // models may have no bundled compat; apply this to the final endpoint,
+        // without changing the selected API, other compat, or custom proxies.
+        // A discarded legacy route must not suppress the effective endpoint's compat.
+        if (modelApi === 'openai-completions' && !explicitRoute?.requestPath && !rt.requestPath &&
+          isOfficialGoogleChatEndpoint(modelBaseUrl ?? rt.baseUrl)) {
+          spec.compat = { ...spec.compat, supportsStore: false };
+        }
+        // A user-confirmed connection/model capability is more precise than an
+        // endpoint heuristic (#11023). Never infer a gateway's downstream API
+        // from its name or a Gemini model ID; absent overrides retain Pi defaults.
+        if (modelApi === 'openai-completions' && resolved?.supportsStore !== undefined) {
+          spec.compat = { ...spec.compat, supportsStore: resolved.supportsStore };
+        }
+        // Declare the wire constraint on the actual official endpoint, never on
+        // a GPT-looking alias or a saved preset pointing at an unrelated relay.
+        if (modelApi === 'openai-completions') {
+          if (!explicitRoute?.requestPath && !rt.requestPath &&
+            isOfficialOpenAIChatEndpoint(modelBaseUrl ?? rt.baseUrl)) {
+            spec.compat = { ...spec.compat, maxToolCallIdLength: 64 };
+          }
+          if (resolved?.maxToolCallIdLength !== undefined) {
+            spec.compat = { ...spec.compat, maxToolCallIdLength: resolved.maxToolCallIdLength };
+          }
+        }
         return managedOllama && shouldApplyQwen38Overlay(m.id)
           ? applyQwen38NativeOverlay(spec)
           : spec;

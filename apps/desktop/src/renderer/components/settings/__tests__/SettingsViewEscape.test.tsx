@@ -63,13 +63,13 @@ vi.mock('../AppearanceSection', () => ({ AppearanceSection: () => {
 } }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
-vi.mock('../VisionBridgeSection', () => ({ VisionBridgeSection: Stub }));
 vi.mock('../ProvidersSection', () => ({ ProvidersSection: Stub }));
 vi.mock('../McpServersSection', () => ({ McpServersSection: Stub }));
 vi.mock('../RemoteControlSection', () => ({ RemoteControlSection: Stub }));
 vi.mock('@/features/device-link/SharedTaskDialog', () => ({ SharedTaskDialog: Stub }));
 vi.mock('../NotificationSection', () => ({ NotificationSection: Stub }));
 vi.mock('../WindowBehaviorSection', () => ({ WindowBehaviorSection: Stub }));
+vi.mock('../AwayFromComputerSection', () => ({ AwayFromComputerSection: Stub }));
 vi.mock('../ComposerSendShortcutSection', () => ({ ComposerSendShortcutSection: Stub }));
 vi.mock('../KeyboardShortcutsSection', () => ({ KeyboardShortcutsSection: Stub }));
 vi.mock('../AgentIslandSection', () => ({ AgentIslandSection: Stub }));

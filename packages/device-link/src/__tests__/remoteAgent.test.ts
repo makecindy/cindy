@@ -21,6 +21,15 @@ import {
 const runId = '0f9c4a2e-6d1b-4c3a-9e8f-1a2b3c4d5e6f';
 const otherId = '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d';
 
+// Unit: direct-switch's optional generation must survive the production parser
+// so an old startup cannot authorize recovery of a replacement allocation.
+it('preserves optional direct-switch generations and accepts legacy requests', () => {
+  const request = { op: 'direct-switch', sessionId: 'task' };
+  expect(parseRemoteAgentRequest(request)).toEqual(request);
+  expect(parseRemoteAgentRequest({ ...request, generation: runId })).toEqual({ ...request, generation: runId });
+  expect(() => parseRemoteAgentRequest({ ...request, generation: 'invalid' })).toThrow();
+});
+
 describe('subscription Fast policy wire compatibility', () => {
   it('advertises support only with an explicit capability', () => {
     const caps = { version: 1, maxRuns: 10, uploadChunkBytes: 1024, maxPayloadBytes: 8192 };
@@ -390,6 +399,9 @@ it('negotiates native-history transfer without making mutations retryable on old
   expect(parseRemoteAgentCaps(caps).nativeHistoryTransfer).toBeUndefined();
   expect(parseRemoteAgentCaps({ ...caps, nativeHistoryTransfer: true }).nativeHistoryTransfer).toBe(true);
   expect(parseRemoteAgentCaps({ ...caps, nativeHistoryTransfer: 'yes' }).nativeHistoryTransfer).toBeUndefined();
+  expect(parseRemoteAgentCaps({ ...caps, nativeHistoryTransfer: true }).nativeHistoryBackup).toBeUndefined();
+  expect(parseRemoteAgentCaps({ ...caps, nativeHistoryBackup: true }).nativeHistoryBackup).toBe(true);
+  expect(parseRemoteAgentCaps({ ...caps, nativeHistoryBackup: 'yes' }).nativeHistoryBackup).toBeUndefined();
   const request = { op: 'native-history', sessionId: 'task', command: { action: 'export', kind: 'codex', nativeId: runId } };
   expect(parseRemoteAgentRequest({ ...request, workingDir: '/owner' })).toEqual(request);
   expect(() => parseRemoteAgentRequest({ ...request, sessionId: '../task' })).toThrow('REMOTE_AGENT_INVALID');

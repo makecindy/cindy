@@ -11,6 +11,7 @@ export const appPreferenceSchema = z.strictObject({
   language: z.enum(['system', ...SUPPORTED_LOCALES]).optional(),
   notifications: z.boolean().optional(),
   sendShortcut: z.enum(['enter', 'modifier-enter']).optional(),
+  followUpBehavior: z.enum(['queue', 'steer']).optional(),
   webLinks: z.enum(['external', 'sidebar']).optional(),
   localLinks: z.enum(['external', 'sidebar']).optional(),
   streamFade: z.enum(['on', 'off']).optional(),
@@ -18,13 +19,14 @@ export const appPreferenceSchema = z.strictObject({
   showIgnoredDirectories: z.boolean().optional(),
   homeUsageDashboard: z.boolean().optional(),
   promptRecommendations: z.boolean().optional(),
+  worktreeModelNaming: z.boolean().optional(),
 });
 export type AppPreferencePatch = z.infer<typeof appPreferenceSchema>;
 export interface AppPreferenceRequest {
   requestId: string;
   ownerStamp: DataOwnerPushStamp;
   expiresAt: number;
-  operation: 'get' | 'update' | 'reset' | 'model-visibility';
+  operation: 'get' | 'update' | 'reset' | 'model-visibility' | 'refresh-themes';
   modelVisibility?: { target: { providerId: string; agent: 'claude-code' | 'codex' | 'pi'; modelId: string }; visible: boolean | null; defaultEnabled?: boolean };
   patch?: AppPreferencePatch;
 }

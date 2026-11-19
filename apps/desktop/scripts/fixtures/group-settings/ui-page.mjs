@@ -16,15 +16,19 @@ export default {
     'src/renderer/features/bots/BotRosterView': 'export const BotRosterView = () => null;',
   },
   cases: {
+    'member-invites': { about: 'Owner manages friend invitations; members can still invite their own teammates', data: { role: 'owner', memberInvites: true } },
     default: { about: 'Owner: 群管理 with 解散, member menus, invite menu with both items', data: { role: 'owner' } },
     dismissal: { about: 'Scrim and × close, nested layers stay isolated, Escape backs out of subpages, reopening clears route state', data: { role: 'owner' } },
     admin: { about: 'Admin: 群管理 without 解散, cannot manage the owner', data: { role: 'admin' } },
     member: { about: 'Member: no 群管理, read-only 群介绍, 邀请朋友 locked', data: { role: 'member' } },
+    'member-active': { about: 'Ordinary member withdrawing own companion with active group requests', data: { role: 'member', activeRemoval: true } },
     'member-no-about': { about: 'Member of a group without 群介绍: the section is hidden', data: { role: 'member', noAbout: true } },
     alone: { about: 'Only the owner is left: notice, no 退出群聊', data: { role: 'owner', alone: true } },
     archived: { about: 'Archived group seen by its owner', data: { role: 'owner', archived: true } },
     dissolved: { about: 'Dissolved group: no invite, no personal sections', data: { role: 'member', dissolved: true } },
     'many-teammates': { about: '邀请伙伴 with 30 spare teammates: search and scrolling', data: { role: 'owner', spare: 30 } },
+    'group-cindy': { about: 'Server with the group Cindy, on: its switch, 「Cindy 回答」, organizer under 分工, Cindy in 成员 without a menu', data: { role: 'owner', assistant: 'on' } },
+    'group-cindy-off': { about: 'The group Cindy switched off: 没有 @ 人的时候 reads as before', data: { role: 'owner', assistant: 'off' } },
   },
   async ready(page) { await page.getByRole('dialog').waitFor(); },
   async check(page, ui) {
@@ -32,6 +36,14 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'member-invites') {
+      await manage.click();
+      const toggle = dialog.getByRole('switch', { name: await ui.t('bots.groupChat.settings.allowMemberInvites') });
+      await toggle.waitFor();
+      assert.equal(await toggle.getAttribute('aria-checked'), 'true');
+      await ui.capture('member-invites');
+      return;
+    }
     if (ui.case === 'dismissal') {
       const scrimPoint = { x: 80, y: 340 }; // Directly over the background action: detect click-through.
       const clickScrim = () => page.mouse.click(scrimPoint.x, scrimPoint.y);
@@ -125,6 +137,26 @@ export default {
       await ui.capture('archived-manage');
       return;
     }
+    if (ui.case === 'group-cindy' || ui.case === 'group-cindy-off') {
+      const on = ui.case === 'group-cindy';
+      await manage.click();
+      const toggle = dialog.getByTestId('bot-group-assistant');
+      await toggle.waitFor();
+      assert.equal(await toggle.getAttribute('aria-checked'), String(on));
+      const replyHint = on ? await t('replyModeAssistantNote') : await ui.t('bots.groupChat.settings.replyModeNote');
+      await dialog.getByText(replyHint, { exact: true }).waitFor();
+      // The organizer stays under 分工; the project section holds only the repository and the folder.
+      const organizer = dialog.getByRole('combobox', { name: await ui.t('bots.groupChat.organizer') });
+      assert.equal(await organizer.evaluate(el => el.closest('section')?.querySelector('h2, h3')?.textContent), await t('work'));
+      await ui.capture('manage-group-cindy');
+      await dialog.getByRole('button', { name: await t('back'), exact: true }).click();
+      await dialog.getByRole('tab', { name: new RegExp(escape(await ui.t('bots.groupChat.settings.members'))) }).click();
+      const members = page.getByTestId('chat-group-members');
+      await members.getByText('Cindy', { exact: true }).waitFor();
+      assert.equal(await members.getByRole('button', { name: 'Cindy', exact: true }).count(), 0, 'the group Cindy has no member menu');
+      await ui.capture('members-group-cindy');
+      return;
+    }
     if (ui.case === 'member-no-about') {
       assert.equal(await dialog.getByRole('heading', { name: await t('about') }).count(), 0, 'an empty 群介绍 is hidden from members');
       return;
@@ -214,6 +246,11 @@ export default {
     await (await row(page, 'Aster')).click();
     await dialog.getByRole('radiogroup').waitFor();
     await ui.capture('companion');
+    await (await row(page, await t('removeOwn'))).click();
+    const withdrawal = page.getByRole('alertdialog');
+    await withdrawal.waitFor();
+    await ui.capture('companion-remove-confirm');
+    await withdrawal.getByRole('button', { name: await ui.t('bots.cancel'), exact: true }).click();
     await back.click();
 
     // 本群资料: nickname and the group-only avatar, without account profile controls.

@@ -12,12 +12,19 @@ import { AnimationVisibilityProvider } from '../hooks/useLoopingAnimation';
 
 const state = vi.hoisted(() => ({
   appState: 'active', appListeners: new Set<(value: string) => void>(), loops: new Set<object>(),
-  pan: {} as Record<string, (...args: any[]) => any>, divider: null as any,
+  pan: { handlers: {}, config: {} } as { handlers: Record<string, (...args: any[]) => any>; config: Record<string, any> }, divider: null as any,
   deferMeasure: false, measurements: [] as (() => void)[],
   platform: 'android', reduceMotion: true as boolean | null, segments: ['devices'], width: 1000, anchorWidth: 1000, mounts: 0, unmounts: 0,
 }));
 vi.mock('expo-constants', () => ({ default: { executionEnvironment: 'standalone' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
-vi.mock('@/platform/gestureHandler', () => ({ Gesture: {}, GestureDetector: ({ children }: any) => children }));
+vi.mock('@/platform/gestureHandler', () => ({ GestureDetector: ({ children }: any) => children, Gesture: { Pan: () => {
+  const pan = state.pan = { handlers: {}, config: {} } as typeof state.pan;
+  const chain: any = new Proxy({}, { get: (_target, key: string) => (value: any) => {
+    if (key.startsWith('on')) pan.handlers[key] = value; else pan.config[key] = value;
+    return chain;
+  } });
+  return chain;
+} } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/theme', async () => ({
   ...await import('../theme/tokens'),
@@ -62,7 +69,6 @@ vi.mock('react-native', async () => {
     },
     StyleSheet: { create: (v: any) => v },
     Platform: { get OS() { return state.platform; } },
-    PanResponder: { create: (handlers: any) => { state.pan = handlers; return { panHandlers: {} }; } },
     View: React.forwardRef(({ children, onLayout, ...props }: any, ref) => {
       if (props.testID === 'session.paneDivider') state.divider = props;
       React.useImperativeHandle(ref, () => ({
@@ -77,7 +83,7 @@ vi.mock('react-native', async () => {
     }),
   };
 });
-vi.mock('react-native-reanimated', () => ({ default: { View: ({ children, pointerEvents, style }: any) =>
+vi.mock('react-native-reanimated', () => ({ runOnJS: (fn: unknown) => fn, default: { View: ({ children, pointerEvents, style }: any) =>
   <div data-host data-pointer={pointerEvents} data-opacity={Object.assign({}, ...[style].flat()).opacity}>{children}</div> } }));
 const roots: ReturnType<typeof createRoot>[] = [];
 it('keeps a native-docked drawer list local when the surrounding pane changes width', () => {
@@ -101,7 +107,7 @@ afterEach(() => {
   state.platform = 'android'; state.reduceMotion = true; state.segments = ['devices']; state.width = 1000; state.anchorWidth = 1000;
   state.mounts = 0; state.unmounts = 0;
   state.deferMeasure = false; state.measurements = [];
-  state.divider = null; state.pan = {};
+  state.divider = null; state.pan = { handlers: {}, config: {} };
   state.appState = 'active';
   expect(state.loops.size).toBe(0);
   expect(state.appListeners.size).toBe(0);
@@ -173,24 +179,34 @@ it('drags both panes together, clamps the bounds and retains width through route
   render('task-a');
   const list = host.querySelector('[data-select]');
   act(() => (host.querySelector('[data-scroll]') as HTMLButtonElement).click());
-  expect(state.pan.onMoveShouldSetPanResponder(null, { dx: 2, dy: 20 })).toBe(false);
-  expect(state.pan.onMoveShouldSetPanResponder(null, { dx: 8, dy: 1 })).toBe(true);
+  // User decision 2026-11-12: the edge has no visible grip and must not swallow
+  // taps on either pane (a back arrow ~20pt right of it, row trailing times).
+  // The drag lives on the root as a 48pt band and the a11y element ignores touches.
+  const { handlers, config } = state.pan;
   const start = layout!.sidebarWidth;
-  act(() => state.pan.onPanResponderGrant());
-  act(() => state.pan.onPanResponderMove(null, { dx: 360 - start }));
+  expect(config.enabled).toBe(true);
+  expect(config.hitSlop).toEqual({ left: -(start - 24), width: 48, top: -0, bottom: -0 });
+  expect(state.divider.pointerEvents).toBe('none');
+  act(() => handlers.onStart());
+  act(() => handlers.onUpdate({ translationX: 360 - start }));
   expect(layout!.sidebarWidth).toBe(360);
   expect(layout!.detail.x).toBe(360);
-  act(() => state.pan.onPanResponderRelease(null, { dx: 1000 }));
+  // The band stays where the drag began until it ends, then follows the edge.
+  expect(state.pan.config.hitSlop.left).toBe(-(start - 24));
+  act(() => handlers.onEnd({ translationX: 1000 }));
+  act(() => handlers.onFinalize({}, true));
+  expect(state.pan.config.hitSlop.left).toBe(-(420 - 24));
   expect(layout!.sidebarWidth).toBe(420);
   render('task-b'); expect(layout!.sidebarWidth).toBe(420);
   state.width = 669; render('task-b');
   expect(layout!.persistent).toBe(false);
   expect(host.querySelector('[data-testid="session.paneDivider"]')).toBeNull();
+  expect(state.pan.config.enabled).toBe(false);
   state.width = 1000; render('task-b'); expect(layout!.sidebarWidth).toBe(420);
-  act(() => state.pan.onPanResponderGrant());
-  act(() => state.pan.onPanResponderMove(null, { dx: -1000 }));
+  act(() => state.pan.handlers.onStart());
+  act(() => state.pan.handlers.onUpdate({ translationX: -1000 }));
   expect(layout!.sidebarWidth).toBe(300);
-  act(() => state.pan.onPanResponderTerminate());
+  act(() => state.pan.handlers.onFinalize({}, false));
   expect(layout!.sidebarWidth).toBe(420);
   act(() => state.divider.onAccessibilityAction({ nativeEvent: { actionName: 'decrement' } }));
   expect(layout!.sidebarWidth).toBe(396);
@@ -216,8 +232,8 @@ it('shares one task-list width between the side column and the floating drawer',
   render();
   expect(preference!.width).toBeNull();
   const start = layout!.sidebarWidth;
-  act(() => state.pan.onPanResponderGrant());
-  act(() => state.pan.onPanResponderRelease(null, { dx: 380 - start }));
+  act(() => state.pan.handlers.onStart());
+  act(() => state.pan.handlers.onEnd({ translationX: 380 - start }));
   expect(preference!.width).toBe(380);
   // A pre-upgrade out-of-range preference is clamped identically on both sides.
   state.width = 744; render();

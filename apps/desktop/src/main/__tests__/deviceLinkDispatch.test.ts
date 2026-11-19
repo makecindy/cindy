@@ -9,9 +9,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let remoteControlEnabled = true;
 let revokedControllers: string[] = [];
-let modelUseRevokedControllers: string[] = [];
 vi.mock('../device-link/settings-store.desktop', () => ({
-  readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers, modelUseRevokedControllers }),
+  readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers }),
 }));
 const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock('../logger', () => ({ createLogger: () => diagnosticLog }));
@@ -23,6 +22,7 @@ vi.mock('electron', () => ({
 // boundary isolated; delegated guest admission is exercised in providerShareRuntime.test.ts.
 vi.mock('../device-link/providerShareDelegatedAccess.js', () => ({
   delegatedProviderShareGuestAccess: () => null,
+  locallyProvenProviderShareDelegation: () => false,
   delegatedProviderShareLeases: () => [], invalidateProviderShareDelegation: vi.fn(),
 }));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
@@ -37,6 +37,13 @@ const adviseAndRecordVoiceInputDictionaryLearningMock = vi.hoisted(() => vi.fn()
 vi.mock('../voice-input/index.js', () => ({
   adviseAndRecordVoiceInputDictionaryLearning: adviseAndRecordVoiceInputDictionaryLearningMock,
 }));
+// Admission of file blocks only: a test may hold the file peer's answer open; every other test reaches the real one.
+const filePeerOverride = vi.hoisted(() => ({ request: null as null | ((...args: unknown[]) => Promise<unknown>) }));
+vi.mock('../device-link/filePeer', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../device-link/filePeer')>();
+  return { ...actual, requestFilePeer: (...args: Parameters<typeof actual.requestFilePeer>) =>
+    (filePeerOverride.request ? filePeerOverride.request(...args) : actual.requestFilePeer(...args)) as ReturnType<typeof actual.requestFilePeer> };
+});
 
 import {
   markRemoteSettingPersistedInsideHandler,
@@ -67,7 +74,6 @@ import { authenticateOauthController } from '../plugin-oauth/authentication';
 beforeEach(() => {
   remoteControlEnabled = true;
   revokedControllers = [];
-  modelUseRevokedControllers = [];
   registry.reset();
   dispatchTesting.reset(); // 清订阅 registry / tap / onControllersChanged / activeClient
   setRemoteWorkingDirGuard(null); // 默认不注入,行为同生产未就绪态(放行)
@@ -519,6 +525,7 @@ import {
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
   pushSessionActivityToController,
+  remoteInvokeEpoch,
 } from '../device-link/dispatch.desktop';
 import {
   applyControllerDisplayNameDirectorySnapshot,
@@ -535,6 +542,7 @@ import {
 } from '@cindy/device-link';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
+import { SESSION_INVOKE_REPLAY } from '@cindy/agent-net';
 import { createGroupContinuityExecutor } from '../provider-group/continuityExecutor';
 import { deviceAccessGeneration, isControllerAccessAllowed, remoteControlAccessGeneration,
   syncRemoteControlAccessGeneration } from '../device-link/remoteControlAccess';
@@ -557,6 +565,7 @@ function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'on
       frameHandler = cb;
       return () => {};
     },
+    onInboundPeerReleased: () => () => {},
     sendLinkAccept: (dst: string, requestId: string) => calls.linkAccept.push({ dst, requestId }),
     closeLink: (dst: string, reason: string) => calls.closed.push({ dst, reason }),
     sendPush: (dst: string, channel: string, payload: unknown) => {
@@ -903,21 +912,27 @@ describe('被控端控制链路生命周期', () => {
     expect(hasBroadcastTapListener()).toBe(false);
   });
 
-  it('a computer whose "use models here" is off still reads the catalog but sees nothing it can borrow', async () => {
+  // 2026-11-18 user decision (Dash): 「允许被远程调用」 is the only switch. Every own computer reads the same
+  // marks, and an old connection merged into a pool stays behind it, as in this computer's Settings.
+  it('gives every own computer the provider switches as they are, with merged connections behind their pool', async () => {
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
     registry.register('maker:provider:list', () => ({
-      providers: [{ id: 'openai', name: 'OpenAI', remoteInvocationEnabled: true }],
+      providers: [
+        { id: 'anthropic', name: 'Anthropic', agents: [], models: {}, remoteInvocationEnabled: false },
+        { id: 'openai', name: 'OpenAI', agents: [], models: {}, remoteInvocationEnabled: false },
+        { id: 'old-openai', name: 'Old OpenAI', agents: [], models: {}, remoteInvocationEnabled: true, subscriptionPoolAlias: true },
+      ],
     }));
-    for (const src of ['ctrl-borrow', 'ctrl-no-models']) {
+    for (const src of ['ctrl-own-a', 'ctrl-own-b']) {
       feed({ v: 1, kind: 'link-open', id: `open-${src}`, src, payload: { controllerName: src, protocolVersion: 1, appVersion: '2.0.0' } });
+      const listed = await runInvoke(src, { channel: 'maker:provider:list', args: [] }) as { result: { providers: Record<string, unknown>[] } };
+      expect(listed.result.providers).toEqual([
+        expect.objectContaining({ id: 'anthropic', remoteInvocationEnabled: false }),
+        expect.objectContaining({ id: 'openai', remoteInvocationEnabled: false }),
+        expect.objectContaining({ id: 'old-openai', subscriptionPoolAlias: true }),
+      ]);
     }
-    modelUseRevokedControllers = ['ctrl-no-models'];
-
-    const allowed = await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] });
-    const denied = await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] });
-    expect(allowed).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: true }] } });
-    expect(denied).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: false }] } });
   });
 
   it('link-open capability controls whether provider projection includes new logo kinds', async () => {
@@ -1019,6 +1034,51 @@ describe('被控端控制链路生命周期', () => {
       'ctrl-malformed-cap',
       'provider-logo-kinds-v2',
     )).toBe(false);
+  });
+
+  // 2026-11-17：Agent-Net 会话断了以后，控制端在重开的链路上比对这个标记再决定能不能用原请求号再发（agentNetSessionLinks.ts）。
+  // 普通断开（对方离线）时这里还记得它的请求，标记不变；永久关链、整体清空以后不记得了，标记必须变，否则再发会重复执行。
+  it('keeps the invoke memory marker across a disconnect and changes it once the memory is cleared', () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-epoch', SUB, ['session:s1'], 'E'));
+    const before = remoteInvokeEpoch('ctrl-epoch');
+    handleControllerOffline('ctrl-epoch');
+    expect(remoteInvokeEpoch('ctrl-epoch')).toBe(before);
+    feed({ v: 1, kind: 'link-close', src: 'ctrl-epoch', payload: { reason: 'user' } });
+    const afterClose = remoteInvokeEpoch('ctrl-epoch');
+    expect(afterClose).not.toBe(before);
+    dropAllControllers(client, 'toggle-off');
+    expect(remoteInvokeEpoch('ctrl-epoch')).not.toBe(afterClose);
+  });
+
+  // A bounded reply cache may evict the original write during an ordinary network interruption.
+  it('responds to a replay after cache eviction without running the accepted write again', async () => {
+    remoteControlEnabled = true;
+    const handler = vi.fn(() => ({ accepted: true }));
+    registry.register('maker:send', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const observedClient = client as { sendInvokeResult: (...args: [string, string, unknown]) => void };
+    const send = observedClient.sendInvokeResult;
+    let onResult: () => void;
+    observedClient.sendInvokeResult = (...args) => { send(...args); onResult(); };
+    const request = (frame: Envelope) => new Promise<void>((resolve) => { onResult = resolve; feed(frame); });
+    const payload = { channel: 'maker:send', args: ['s1', 'hello'] };
+    const original: Envelope = { v: 1, kind: 'invoke', id: 'original', src: 'ctrl-a', payload };
+    await request(original);
+    const resume = { ...original, payload: { ...payload, [SESSION_INVOKE_REPLAY]: true } };
+    await request(resume);
+    expect(handler).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 128; index++) {
+      await request({ ...original, src: 'ctrl-b', id: 'other-' + index });
+    }
+    await request(resume);
+    expect(calls.invokeResult.at(-1)).toMatchObject({
+      requestId: 'original', payload: { ok: false, error: { code: 'INVOKE_TIMEOUT' } },
+    });
+    expect(handler).toHaveBeenCalledTimes(129);
   });
 
   it('link-close clears remembered routing and queued pushes', () => {
@@ -1314,14 +1374,18 @@ describe('被控端控制链路生命周期', () => {
 
   // 控制端把 16 个名额填满历史 / 列表读取后,用户正在等的发送以前会被 BACKPRESSURE 打回、
   // 再等 ≥2s 重试;交互类写入另有少量名额,读取仍按原上限拒绝。
-  it('交互类 invoke 在 per-controller 名额用满后仍被执行,读取照旧 BACKPRESSURE', async () => {
+  it.each([false, true])('交互类 invoke 在 per-controller 名额用满后仍被执行,读取照旧 BACKPRESSURE (remoteAgent=%s)', async remoteAgent => {
     remoteControlEnabled = true;
-    let resolveList: ((value: unknown[]) => void) | undefined;
+    const releaseLists: Array<() => void> = [];
     registry.register('local-db:sessions:list', vi.fn(() => new Promise<unknown[]>((resolve) => {
-      resolveList = resolve;
+      releaseLists.push(() => resolve([]));
     })));
-    const enqueue = vi.fn(() => ({ accepted: true }));
-    registry.register('maker:input:enqueue', enqueue);
+    const releaseControls: Array<() => void> = [];
+    const enqueue = vi.fn(() => new Promise(resolve => {
+      releaseControls.push(() => resolve({ accepted: true }));
+    }));
+    if (remoteAgent) setRemoteAgentHandler({ handle: enqueue, abortAll: vi.fn() });
+    else registry.register('maker:input:enqueue', enqueue);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
     const limit = dispatchTesting.remoteInvokeInFlightPerControllerLimit;
@@ -1333,7 +1397,9 @@ describe('被控端控制链路生命周期', () => {
     }
     for (let index = 0; index < extra + 1; index += 1) {
       feed({ v: 1, kind: 'invoke', id: `send-${index}`, src: 'ctrl-a', payload: {
-        channel: 'maker:input:enqueue', args: ['s1', { text: `hello ${index}` }],
+        ...(remoteAgent ? { channel: 'maker:remote-agent:v1', args: [{ op: 'call', runId: 'run',
+          callId: `stop-${index}`, method: 'abort', payload: { json: [] } }] }
+          : { channel: 'maker:input:enqueue', args: ['s1', { text: `hello ${index}` }] }),
       } });
     }
     await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(extra));
@@ -1343,7 +1409,33 @@ describe('被控端控制链路生命周期', () => {
       channel: 'local-db:sessions:list', args: [20, 'all', { fresh: true, index: 'late' }],
     } });
     await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({ dst: 'ctrl-a', requestId: 'list-late', payload: busy }));
-    resolveList?.([]);
+    releaseLists.forEach(release => release());
+    releaseControls.forEach(release => release());
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(limit + extra + 2));
+    if (remoteAgent) setRemoteAgentHandler(null);
+  });
+
+  // 2026-11-17 review：经 Agent-Net 会话上传附件时一次在途 3 块、每块 1 MiB（base64 约 1.4 MB），第三块单独就超过每个控制端
+  // 4 MiB 的在途字节，整个上传因 BACKPRESSURE 失败。文件块另有一份字节额度；普通请求的字节上限不变。
+  it('会话上的文件块整窗在途时都被执行，不因每个控制端的字节上限被打回', async () => {
+    remoteControlEnabled = true;
+    const held: Array<() => void> = [];
+    filePeerOverride.request = () => new Promise((resolve) => { held.push(() => resolve('{"ok":true,"result":{}}')); });
+    try {
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      const body = 'A'.repeat(Math.ceil((1024 * 1024) / 3) * 4); // one 1 MiB block as base64
+      for (let index = 0; index < 3; index += 1) {
+        feed({ v: 1, kind: 'invoke', id: `block-${index}`, src: 'ctrl-a', payload: { channel: 'device-link:file-peer',
+          args: [{ action: 'stream-rpc', connection: '00000000-0000-4000-8000-000000000000', payload: `{"offset":${index}}`, body }] } });
+      }
+      await vi.waitFor(() => expect(held).toHaveLength(3));
+      expect(calls.invokeResult.filter((call) => (call.payload as { ok?: boolean }).ok === false)).toEqual([]);
+      for (const release of held) release();
+      await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(3));
+    } finally {
+      filePeerOverride.request = null;
+    }
   });
 
   it('sessions:list fresh 请求不并入已有 listing 单飞', async () => {
@@ -1553,7 +1645,10 @@ describe('被控端控制链路生命周期', () => {
 
   // 准入给交互类请求多放了名额,它们的回包也得有位置:否则已生效的发送因回包入不了 outbox
   // 而让控制端超时、用户重试。
-  it('交互类 invoke 的结果在 per-controller outbox 用满后仍有预留位置,读取结果照旧被拒', () => {
+  it.each([
+    ['maker:input:enqueue', undefined],
+    ['maker:remote-agent:v1', [{ op: 'reply', runId: 'run', requestId: 'answer', payload: { json: { type: 'interaction', result: {} } } }]],
+  ] as const)('交互类 %s 的结果在 per-controller outbox 用满后仍有预留位置,读取结果照旧被拒', (channel, args) => {
     const client = {
       sendInvokeResult: () => {
         throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
@@ -1571,11 +1666,11 @@ describe('被控端控制链路生命周期', () => {
     )).toBe(false);
     for (let index = 0; index < extra; index++) {
       expect(dispatchTesting.sendInvokeResultSafe(
-        client, 'ctrl-a', `invoke-reserve-send-${index}`, { ok: true, result: index }, 'maker:input:enqueue',
+        client, 'ctrl-a', `invoke-reserve-send-${index}`, { ok: true, result: index }, channel, args ? [...args] : undefined,
       )).toBe(true);
     }
     expect(dispatchTesting.sendInvokeResultSafe(
-      client, 'ctrl-a', 'invoke-reserve-send-over', { ok: true, result: 'x' }, 'maker:input:enqueue',
+      client, 'ctrl-a', 'invoke-reserve-send-over', { ok: true, result: 'x' }, channel, args ? [...args] : undefined,
     )).toBe(false);
   });
 

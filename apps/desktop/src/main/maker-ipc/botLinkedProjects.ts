@@ -68,7 +68,7 @@ export async function botLinkedProjectAccess(botId: string) {
         assertCurrent();
         const settings = await getBotRemoteSettingsSource(botId);
         assertCurrent();
-        if (settings.source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Teammate is not active');
+        if (settings.source.status !== 'active') throwIpcError('PRECONDITION_FAILED', 'Buddy is not active');
         const project = (await read()).find(item => item.id === id);
         if (!project || linked && !project.linked && !project.available) throwIpcError('NOT_FOUND', 'Project unavailable');
         const guard = () => { assertCurrent(); actionGuard(); };

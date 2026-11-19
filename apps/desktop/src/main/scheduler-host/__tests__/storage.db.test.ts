@@ -134,6 +134,7 @@ const SCHEDULER_DDL = [
       execution_mode TEXT NOT NULL DEFAULT 'agent',
       script_config TEXT,
       webhook_trigger TEXT,
+      pr_trigger TEXT,
       source TEXT DEFAULT 'user',
       project_config_id TEXT,
       legacy_session_fallback INTEGER NOT NULL DEFAULT 0,
@@ -200,6 +201,8 @@ const SCHEDULER_DDL = [
     )
   `,
   'CREATE INDEX idx_schedule_runs_schedule ON schedule_runs(schedule_id, fired_at)',
+  `CREATE INDEX idx_schedule_runs_unread_terminal ON schedule_runs(schedule_id, status, fired_at)
+    WHERE read_at IS NULL AND status IN ('success', 'failed', 'aborted', 'interrupted')`,
   `
     CREATE TABLE schedule_session_latest_runs (
       session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
@@ -633,6 +636,54 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  // #10011, DB tier: the existing cap test only checks returned rows. One extra
+  // eligible row must not have its hook parsed by listSidebarIndexRuns. Delegate
+  // the instrumented function to native SQLite so JSON semantics stay unchanged.
+  it('limits hook evaluation to the newest eligible unread runs across schedules', async () => {
+    const harness = createStorageHarness();
+    const nativeJson = new Database(':memory:');
+    try {
+      for (const [id, source] of [
+        ['public', 'user'], ['project', 'project'], ['legacy', 'user'], ['routine', 'bot'],
+      ] as const) {
+        await harness.storage.insert(baseSchedule({ id, source }));
+      }
+      harness.sqlite.prepare("UPDATE schedules SET source = NULL WHERE id = 'legacy'").run();
+      const insert = harness.sqlite.prepare(`INSERT INTO schedule_runs
+        (id, schedule_id, fired_at, status, read_at, pre_run_hook_result) VALUES (?, ?, ?, ?, ?, ?)`);
+      const runIds = Array.from({ length: 201 }, (_, i) => `bounded-${String(i).padStart(3, '0')}`);
+      const statuses = ['success', 'failed', 'aborted', 'interrupted'] as const;
+      harness.sqlite.transaction(() => {
+        for (const [i, id] of runIds.entries()) {
+          insert.run(id, ['public', 'project', 'legacy'][i % 3], Math.floor(i / 2),
+            statuses[i % 4], null, JSON.stringify({ runId: id, decision: 'allow' }));
+          // Newer private history must not consume the public 200-row budget.
+          insert.run(`routine-${i}`, 'routine', 1000 + i, 'success', null, null);
+        }
+        insert.run('read', 'public', 2000, 'success', 2001, null);
+        insert.run('skipped', 'public', 2002, 'skipped', null, null);
+      })();
+      const evaluatedHooks = new Set<string>();
+      const jsonValid = nativeJson.prepare<[string | null], { valid: number }>('SELECT json_valid(?) AS valid');
+      harness.sqlite.function('json_valid', { deterministic: true }, (value: string | null) => {
+        if (value !== null) evaluatedHooks.add(value);
+        return jsonValid.get(value)!.valid;
+      });
+
+      const runs = await harness.storage.listSidebarIndexRuns();
+      // Equal fired_at values at the cutoff are resolved by id, not insertion or
+      // schedule order. The returned unread rows remain oldest first.
+      expect(runs.map((run) => run.runId)).toEqual(runIds.slice(1));
+      expect(new Set(runs.map((run) => run.status))).toEqual(new Set(statuses));
+      expect(new Set(runs.map((run) => run.scheduleId))).toEqual(new Set(['public', 'project', 'legacy']));
+      expect(evaluatedHooks).toEqual(new Set(runIds.slice(1).map((runId) =>
+        JSON.stringify({ runId, decision: 'allow' }))));
+    } finally {
+      harness.close();
+      nativeJson.close();
+    }
+  });
+
   // The in-task banner reads this projection; without missingPlugin it can only say
   // "checks blocked" when a plugin uninstall removed the check script.
   it('projects the missing plugin of a blocked check into the sidebar index', async () => {
@@ -740,9 +791,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         stderrTruncated: false, timedOut: false, aborted: false } as const;
       const insert = (id: string, scheduleId: string, firedAt: number, status: ScheduleRun['status'], extra: Partial<ScheduleRun> = {}) =>
         harness.storage.insertRun({ id, scheduleId, firedAt, status, sessionId: 'recovery-session', ...extra });
-      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2, errorMsg: 'provider mismatch' });
+      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2, errorMsg: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
       expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'execution-a'))
-        .toMatchObject({ errorMsg: 'provider mismatch' });
+        .toMatchObject({ errorMsg: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
       await insert('check-b', 'recovery-b', 3, 'failed', { preRunHookResult: hook });
       const before = await harness.storage.listSidebarIndexRuns();
       expect(before.find((r) => r.runId === 'check-b')).toMatchObject({ failureKind: 'rate-limit', failureRecovered: false });
@@ -754,9 +805,15 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(recovered.find((r) => r.runId === 'execution-a')?.failureRecovered).toBe(false);
       await insert('healthy-a', 'recovery-a', 6, 'skipped', { preRunHookResult: { ...hook, status: 'skipped', decision: 'skip', exitCode: 2, checkSucceeded: true } });
       expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'execution-a')).toBeDefined();
+      const previousFailure = { firedAt: 1, errorCode: 'TASK_ACTION_AUTHORIZATION_EXPIRED', laterRunSucceeded: false };
+      expect(await harness.storage.latestClosureFailure('recovery-a', 'recovery-session')).toEqual(previousFailure);
+      expect(await harness.storage.latestClosureFailure('recovery-a', 'another-session')).toBeUndefined();
       await insert('success-a', 'recovery-a', 7, 'success', { readAt: 8 });
       expect((await harness.storage.listSidebarIndexRuns()).some((r) => r.runId === 'execution-a')).toBe(false);
-      expect((await harness.storage.listRuns('recovery-a', 50)).some((r) => r.id === 'execution-a')).toBe(true);
+      expect((await harness.storage.listRuns('recovery-a', 50)).find((r) => r.id === 'execution-a'))
+        .toMatchObject({ status: 'failed', failureRecovered: true });
+      expect(await harness.storage.latestClosureFailure('recovery-a', 'recovery-session'))
+        .toEqual({ ...previousFailure, laterRunSucceeded: true });
       await insert('new-a', 'recovery-a', 9, 'failed');
       expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'new-a')).toMatchObject({ failureRecovered: false, failureKind: 'execution' });
     } finally { harness.close(); }
@@ -2077,6 +2134,20 @@ it('bounds history chunk reads while preserving run costs and schedule totals', 
 });
 
 
+// #11309, database: recovery must distinguish a completed PR execution from a later timed lookup.
+it('only counts successful PR-triggered runs since the merge when reconciling', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    await h.storage.insertRun({ id: 'check', scheduleId: 'sch-1', firedAt: 30, status: 'failed', triggerSource: 'pr-check' });
+    await h.storage.insertRun({ id: 'skipped', scheduleId: 'sch-1', firedAt: 40, status: 'skipped', triggerSource: 'pr-check' });
+    expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 20)).toBe(false);
+    await h.storage.insertRun({ id: 'watch', scheduleId: 'sch-1', firedAt: 50, status: 'success', triggerSource: 'pr-status' });
+    expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 20)).toBe(true);
+    expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 51)).toBe(false);
+  } finally { h.close(); }
+});
+
 it('deduplicates only identical unrecovered failures across persistent history', async () => {
   const h = createStorageHarness();
   try {
@@ -2098,6 +2169,46 @@ it('deduplicates only identical unrecovered failures across persistent history',
     await h.storage.insertRun({ ...failed, id: 'execution', firedAt: 67, errorMsg: 'model unavailable' });
     await h.storage.insertRun({ id: 'recovered', scheduleId: 'sch-1', firedAt: 68, status: 'success' });
     expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next, errorMsg: 'model unavailable' })).toBe(false);
+  } finally { h.close(); }
+});
+
+it('deduplicates continuation cancellation by reason without losing per-run IDs (#10547)', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    const error = (reason: string, id: string) =>
+      `Scheduled turn continuation was cancelled (reason: ${reason}, continuationId: ${id})`;
+    const first: ScheduleRun = { id: 'cancel-1', scheduleId: 'sch-1', firedAt: 1,
+      status: 'failed', errorMsg: error('wake_contract_unfulfilled', '1') };
+    await h.storage.insertRun(first);
+    const next = { ...first, id: 'cancel-2', firedAt: 2,
+      errorMsg: error('wake_contract_unfulfilled', '2') };
+    expect(await h.storage.hasUnrecoveredMatchingFailure(next)).toBe(true);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('user_stop', '2') })).toBe(false);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('wake_contract_unfulfilled', 'unknown') })).toBe(true);
+    for (const id of ['0', '-1', '1.5', '9007199254740992', '1) private']) {
+      expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+        errorMsg: error('wake_contract_unfulfilled', id) })).toBe(false);
+    }
+    // Historical malformed IDs must not match a valid cancellation either.
+    for (const [index, id] of ['0', '-1', '1.5', '9007199254740992', '1) private', '01', ''].entries()) {
+      await h.storage.insertRun({ ...first, id: `malformed-${index}`, errorMsg: error('user_stop', id) });
+    }
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('user_stop', '2') })).toBe(false);
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: error('wake_contract_unfulfilled', '9007199254740991') })).toBe(true);
+    // An ordinary error containing an ID remains an exact match only.
+    await h.storage.insertRun({ ...first, id: 'ordinary', errorMsg: 'other continuationId: 1' });
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next,
+      errorMsg: 'other continuationId: 2' })).toBe(false);
+    await h.storage.insertRun(next);
+    expect((await h.storage.listRuns('sch-1')).find(run => run.id === next.id)?.errorMsg)
+      .toBe(error('wake_contract_unfulfilled', '2'));
+    await h.storage.insertRun({ id: 'recovered-cancel', scheduleId: 'sch-1', firedAt: 3, status: 'success' });
+    expect(await h.storage.hasUnrecoveredMatchingFailure({ ...next, id: 'cancel-3', firedAt: 4 })).toBe(false);
   } finally { h.close(); }
 });
 

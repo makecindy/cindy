@@ -208,6 +208,7 @@ export function mapLoginProvidersLoadFailure(error: unknown): LoginProvidersLoad
   const state = loginPreparingErrorState(
     code,
     error instanceof AuthApiError ? error.retryAt : undefined,
+    error instanceof AuthApiError ? error.statusCode : undefined,
   );
   return {
     success: false,

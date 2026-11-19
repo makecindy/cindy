@@ -43,6 +43,7 @@ it('uploads a V2 teammate\'s project memories, with not-yet-copied earlier ones 
   expect(project).toBe(path.join(workspace, '.cindy', 'memory'));
   await put(project, 'user_tea.md', 'project version');
   await put(project, 'MEMORY.md', 'index');
+  await put(project, 'README.md', 'portable memory format guide');
   const outside = await legacyTeammateProjectMemoryDir(root, workspace);
   await put(outside, 'user_tea.md', 'outside version');
   await put(outside, 'feedback_tone.md', 'not moved yet');

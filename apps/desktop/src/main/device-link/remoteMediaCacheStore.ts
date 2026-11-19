@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto';
 
 import { createLogger } from '../logger';
-import { removeRemote } from './mediaTransfer';
+import { removeRemote } from './mediaTransfer.desktop';
 import { activeOwnerScopeKey } from '../appSessionState';
 
 const log = createLogger('device-link:remoteMediaCache');

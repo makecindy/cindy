@@ -46,34 +46,25 @@
     }
   },
   "contextWindowSwitch": {
-    "title": "Ce modèle ne peut pas contenir la conversation actuelle",
+    "condensedToast": "Les parties précédentes de la conversation seront condensées pour le nouveau modèle. L’historique complet reste consultable.",
     "remoteTitle": "Ce changement de modèle distant n'est pas pris en charge",
-    "description": "Cette conversation utilise déjà {{used}}, plus que ce que le nouveau modèle peut contenir ({{total}}, environ {{pct}} %). Si vous changez, Cindy rédigera un court résumé et poursuivra. Votre historique de conversation est conservé ; il ne sera simplement pas transmis intégralement mot pour mot.",
     "remoteDescription": "Cette tâche distante utilise déjà {{used}} / {{total}} du contexte du modèle plus petit (environ {{pct}} %) : Cindy ne peut donc pas changer de modèle en toute sécurité. Conservez le modèle actuel ou démarrez une nouvelle tâche avant de choisir ce modèle.",
-    "cancel": "Conserver ce modèle",
-    "confirm": "Changer et continuer"
+    "cancel": "Conserver ce modèle"
   },
   "switchOutcome": {
     "applied": "Le changement de fournisseur de modèles est désormais effectif.",
     "failed": "Échec du changement de fournisseur de modèles. Choisissez à nouveau le modèle."
   },
   "agentSwitch": {
-    "browseAccessibility": "Parcourir les modèles {{agent}}",
-    "confirmTitle": "Passer à {{agent}} ?",
-    "confirmMessage": "À l'envoi du prochain message, {{appName}} transmettra la session actuelle à {{agent}}. Les deux Agents peuvent interpréter différemment le contexte et les outils : confirmez avant de choisir le modèle cible.",
-    "cancel": "Annuler",
-    "confirm": "Continuer"
-  },
-  "agentRelocation": {
-    "titleOther": "Exécuter l'Agent sur « {{device}} » ?",
-    "titleHost": "Exécuter à nouveau l'Agent sur « {{host}} » ?",
-    "titleHostUnnamed": "Exécuter à nouveau l'Agent sur l'ordinateur de la session ?",
-    "message": "L'historique de la conversation sur l'autre ordinateur ne peut pas être transféré : elle reprend donc à partir d'un résumé de transfert. La réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
-    "messageNativeHistory": "L'historique complet de la conversation est copié et elle reprend là où elle en était. S'il ne peut pas être restauré, elle reprend à partir d'un résumé de transfert, et la réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
-    "confirm": "Changer d'ordinateur",
-    "cancel": "Ne rien changer"
+    "browseAccessibility": "Parcourir les modèles {{agent}}"
   },
   "unified": {
+    "remoteCopyUnavailableOn": "« {{device}} » ne peut pas utiliser {{provider}} pour le moment.",
+    "remoteCopyUnavailableOnTaskComputer": "L’ordinateur de la tâche ne peut pas utiliser {{provider}} pour le moment.",
+    "accountCount_one": "{{count}} compte",
+    "accountCount_other": "{{count}} comptes",
+    "accountFallback": "Compte {{index}}",
+    "accountCount_many": "{{count}} comptes",
     "favoriteConfiguration": "Ajouter cette configuration aux favoris",
     "savedConfiguration": "En favori · Touchez pour retirer",
     "currentConfiguration": "Configuration actuelle",
@@ -105,7 +96,7 @@
     "groupBadge_other": "Groupe de fournisseurs · {{count}} ordinateurs",
     "harness": "Harness",
     "restoreRecommended": "Rétablir les paramètres recommandés",
-    "saveFailed": "Impossible d'enregistrer. Veuillez réessayer.",
+    "saveFailed": "Impossible d'enregistrer. Réessayez.",
     "configure": "Configurer",
     "syncFailed": "Impossible de synchroniser les favoris. Rouvrez le sélecteur pour réessayer ; l'ordinateur distant a peut-être besoin d'une mise à jour.",
     "timeUnit": {
@@ -114,6 +105,12 @@
       "minute": "min",
       "second": "s"
     },
-    "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs"
+    "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs",
+    "quotaAverage": "Moyenne restante : {{percent}} %",
+    "quotaUpdating": "Quota en attente de mise à jour",
+    "quotaResetSoon": "Réinitialisation proche",
+    "quotaResetIn": "Réinitialisation dans {{duration}}",
+    "quotaAverageHint": "Quota hebdomadaire · Poids égal par compte",
+    "quotaResetHint": "Au rythme actuel, il pourrait rester du quota au moment de la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
   }
 }

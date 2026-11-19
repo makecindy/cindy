@@ -123,6 +123,8 @@ describe('billing response projection', () => {
     ).toThrow();
   });
 
+  // D17: the real credit-usage projector must retain nullable source for localized
+  // rollover names; its old allowlist dropped the field before renderer received it (unit).
   it('projects exact pool usage and independent promotional grant states', () => {
     expect(
       projectModelAccessCreditUsage({
@@ -134,6 +136,7 @@ describe('billing response projection', () => {
           {
             grantId: 'welcome',
             displayName: 'Welcome',
+            source: { type: 'subscription_rollover' },
             originalAmount: '2',
             usedAmount: '1',
             remainingAmount: '1',
@@ -144,6 +147,7 @@ describe('billing response projection', () => {
           {
             grantId: 'expired',
             displayName: null,
+            source: null,
             originalAmount: '5',
             usedAmount: '1.25',
             remainingAmount: '0',
@@ -176,6 +180,7 @@ describe('billing response projection', () => {
         {
           grantId: 'welcome',
           displayName: 'Welcome',
+          source: { type: 'subscription_rollover' },
           originalAmount: '2',
           usedAmount: '1',
           remainingAmount: '1',
@@ -185,6 +190,7 @@ describe('billing response projection', () => {
         {
           grantId: 'expired',
           displayName: null,
+          source: null,
           originalAmount: '5',
           usedAmount: '1.25',
           remainingAmount: '0',
@@ -207,6 +213,57 @@ describe('billing response projection', () => {
       scale: 9,
       observedAt: '2026-07-23T12:00:00.123456789Z',
     });
+  });
+
+  // 人工审查后的来源契约（unit）：同一真实投影接受滚存/礼品卡对象和 null，
+  // 旧覆盖只验证字符串滚存；最小失败输入是滚存对象，以及必须忽略的旧字符串。
+  it('keeps rollover and gift card objects while dropping string and malformed sources', () => {
+    const grant = (grantId: string, source: unknown) => ({
+      grantId,
+      displayName: null,
+      originalAmount: '1',
+      usedAmount: '0',
+      remainingAmount: '1',
+      expiresAt: '2026-08-01T00:00:00Z',
+      state: 'active',
+      ...(source === undefined ? {} : { source }),
+    });
+    const sources: unknown[] = [
+      { type: 'gift_card', senderName: 'Cindy Team', cardId: 'internal' },
+      undefined,
+      null,
+      { type: 'coupon', senderName: 'Someone' },
+      { type: 'gift_card', senderName: '' },
+      { type: 'gift_card', senderName: 'x'.repeat(81) },
+      { type: 'gift_card' },
+      'gift_card',
+      'subscription_rollover',
+      { type: 'subscription_rollover', cardId: 'internal' },
+      'x'.repeat(4096),
+    ];
+    const usage = projectModelAccessCreditUsage({
+      available: String(sources.length),
+      plan: { remaining: '0', used: '0', total: '0' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: String(sources.length), used: '0', total: String(sources.length) },
+      promotionalGrants: sources.map((source, index) => grant(`grant-${index}`, source)),
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED',
+      ledgerUpdatedAt: null,
+      scale: 9,
+      observedAt: '2026-07-23T12:00:00Z',
+    });
+
+    expect(usage.promotionalGrants[0].source).toEqual({ type: 'gift_card', senderName: 'Cindy Team' });
+    expect(usage.promotionalGrants[2].source).toBeNull();
+    expect(usage.promotionalGrants[9].source).toEqual({ type: 'subscription_rollover' });
+    for (const projected of [
+      usage.promotionalGrants[1],
+      ...usage.promotionalGrants.slice(3, 9),
+      usage.promotionalGrants[10],
+    ]) {
+      expect(projected).not.toHaveProperty('source');
+    }
   });
 
   it('rejects inconsistent pool identities and dishonest promotional histories', () => {

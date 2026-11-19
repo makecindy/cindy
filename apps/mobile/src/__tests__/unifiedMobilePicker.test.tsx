@@ -28,7 +28,7 @@ const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:
   // 按传入的目录派生(供应商组用例:每台电脑的供应商各有自己的行与正在用的来源);缺省用上面的固定值。
   entriesFor: null as null | ((providers: any[]) => any[]), activeSource: null as null | ((input: any) => string | null) }));
 vi.mock('@/session/UnifiedModelPickerView', () => ({ UnifiedModelPickerView: (p:any) => {test.view=p;return null;} }));
-vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0})}));
+vi.mock('@/session/useMobileModelQuotas',()=>({useMobileModelQuotas:()=>({quotas:test.quotas,now:0,quotaOf:(device:string,id:string)=>test.quotas[JSON.stringify([device,id])]})}));
 vi.mock('@/session/mobileModelPreferences', async () => {
   const {useReducer} = await import('react');
   return {useMobileModelPreferences:()=>{
@@ -42,7 +42,8 @@ vi.mock('@/session/draftModelMemory',()=>({useDraftModelMemoryVersion:()=>0}));
 vi.mock('@/session/sessionModelMirror',()=>({useSessionModelMirrorVersion:()=>0}));
 vi.mock('@/session/modelPickerRows',()=>({budgetRowDisabled:()=>false,presentPickerPrice:()=>null}));
 vi.mock('@/session/unifiedMobileModels',async importOriginal=>({...await importOriginal<any>(),mobileUnifiedEntries:(providers:any[])=>test.entriesFor?test.entriesFor(providers):test.entries}));
-vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string)=>key})}));
+vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string, options?: { provider?: string; device?: string }) =>
+  key === 'models.unified.remoteCopyUnavailableOn' ? `${options?.provider} on ${options?.device} is unavailable` : key})}));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;
 let root:ReturnType<typeof createRoot>;
 beforeEach(async ()=>{
@@ -122,9 +123,41 @@ it('attaches account remaining quota only to the matching source filter',async()
   expect(test.view.filters.find((item:any)=>item.id==='account').quota).toMatchObject({remaining:37});
   expect(test.view.filters.filter((item:any)=>item.id==='all'||item.id==='favorites').every((item:any)=>item.quota===undefined)).toBe(true);
 });
+// Unit: one account snapshot must label both the source choice and the model
+// row; equal provider ids on different computers must not share identity/quota.
+it('uses the same account identity in source choices and rows for each computer',async()=>{
+  test.quotas={account:{accountIdentity:'local-second@example.test',remaining:80,source:'claude',raw:{sevenDay:{utilization:20}}},
+    '["device-studio-mac","account"]':{accountIdentity:'remote-second@example.test',remaining:60,source:'claude',raw:{sevenDay:{utilization:40}}}};
+  await mountRemote(null,undefined,{...studioCatalog,providers:[{...studioCatalog.providers[0],subscriptionAccount:{identity:'old-default@example.test'}}]});
+  const local=test.view.groups.flatMap((group:any)=>group.rows).find((row:any)=>!row.remoteDevice);
+  const remote=test.view.groups.flatMap((group:any)=>group.rows).find((row:any)=>row.remoteDevice);
+  expect(local.subtitle).toContain('local-second@example.test');
+  expect(remote.subtitle).toContain('remote-second@example.test');
+  expect(remote.subtitle).not.toContain('old-default');
+  expect(remote.quotaLabel).toBe('60%');
+  expect(test.view.filters.find((item:any)=>item.id==='account').label).toContain('local-second@example.test');
+  expect(test.view.filters.find((item:any)=>item.id===remoteId)).toMatchObject({
+    quota:{remaining:60},remote:{providerLabel:'Studio Provider · remote-second@example.test'},
+  });
+});
 it('does not show an empty or full quota bar when account quota is unknown',async()=>{
   await mount();
   expect(test.view.filters.find((item:any)=>item.id==='account').quota).toBeUndefined();
+});
+it('shows one pool average above models and separate source details',async()=>{
+  test.quotas={account:{accountIdentity:null,source:'claude',raw:null,members:[
+    {accountIdentity:'first@example.test',source:'claude',raw:{sevenDay:{utilization:66}},remaining:34},
+    {accountIdentity:'second@example.test',source:'claude',raw:{sevenDay:{utilization:20}},remaining:80},
+  ]}};
+  await mount();
+  expect(test.view.groups[0].rows[0].quotaLabel).toBeNull();
+  expect(test.view.groups[0].quota).toMatchObject({remaining:57,summary:'models.unified.quotaAverage',resetSoon:false});
+  const source=test.view.filters.find((item:any)=>item.id==='account');
+  expect(source.quota.remaining).toBe(57);
+  expect(source.quota.members.map((member:any)=>member.remaining)).toEqual([34,80]);
+  expect(source.quota.label).toContain('first@example.test');
+  expect(source.quota.label).toContain('second@example.test');
+  expect(source.label).toContain('models.unified.accountCount');
 });
 
 it('silences background favorite sync failures',async()=>{
@@ -657,7 +690,8 @@ it('explains a closed current model without changing it and still allows choosin
 // 远程 Agent:其他电脑上开放了远程调用的供应商接在被控电脑自己的之后,每个供应商一段、标题带电脑名。
 const studioCatalog = {
   deviceId:'device-studio-mac', name:'Studio Mac', status:'ready',
-  providers:[{id:'account',name:'Studio Provider',models:{},connected:true,logoKind:'anthropic'}],
+  // A different verified login from the host's: listed on its own (the shared rule folds equal sources).
+  providers:[{id:'account',name:'Studio Provider',models:{},connected:true,logoKind:'anthropic',subscriptionAccountKeys:['studio-login']}],
 };
 const remoteId = 'remote:["device-studio-mac","account"]';
 async function mountRemote(selectedDeviceId:string|null,onSelect=vi.fn(async()=>true),catalog:any=studioCatalog,visible=true) {
@@ -696,6 +730,67 @@ it('passes the computer of the picked row with the selection',async()=>{
   const {onSelect}=await mountRemote(null);
   await act(async()=>test.view.onSelect(test.view.groups[1].rows[0]));
   expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({providerId:'account',agent:'codex'}),{deviceId:'device-studio-mac'});
+});
+// Unit, 2026-11-18 decision. An unavailable home provider with an equal remote
+// copy must present the reason and keep the task home until the copy is picked.
+// Existing remote rows use different logins and never exercise this fold.
+it('labels an available copy without automatically selecting it', async () => {
+  const onSelect = vi.fn(async () => true);
+  await mount(onSelect, {
+    providers: [{ ...studioCatalog.providers[0], name: 'Home Provider', connected: false }],
+    unified: {
+      scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({ hasFastMode: true }), onSelect,
+      remote: { catalogs: [studioCatalog], selectedDeviceId: null, hostDeviceName: 'Home Mac' },
+    },
+  });
+  const remoteRow = test.view.groups.find((group: any) => group.key === remoteId).rows[0];
+  const reason = 'Home Provider on Home Mac is unavailable';
+  expect(test.view.filters.find((filter: any) => filter.id === remoteId)?.sourceUnavailableReason).toBe(reason);
+  expect(remoteRow).toMatchObject({ selected: false, sourceUnavailableReason: reason });
+  expect(onSelect).not.toHaveBeenCalled();
+  await act(async () => test.view.onSelect(remoteRow));
+  expect(onSelect).toHaveBeenCalledOnce();
+  expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'account' }), { deviceId: studioCatalog.deviceId });
+});
+it.each([false, true])('uses the running provider to explain a third computer’s row (connected: %s)', async connected => {
+  const otherDeviceId = 'office';
+  const other = { ...studioCatalog, deviceId: otherDeviceId, name: 'Office PC' };
+  const running = {
+    ...studioCatalog,
+    providers: [{ ...studioCatalog.providers[0], connected,
+      subscriptionAccountKeys: connected ? ['different-login'] : ['studio-login'] }],
+  };
+  await mount(undefined, {
+    providers: connected ? [{ ...studioCatalog.providers[0], name: 'Home Provider', connected: false }] : [],
+    unified: {
+      scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      remote: {
+        catalogs: [running, other], selectedDeviceId: studioCatalog.deviceId, hostDeviceName: 'Home Mac',
+        providerGroup: { bound: null, running: { deviceId: studioCatalog.deviceId, providerId: 'account' } },
+      },
+    },
+  });
+  await act(async () => test.view.onFilter('all'));
+  const remoteRow = test.view.groups.flatMap((group: any) => group.rows)
+    .find((row: any) => row.remoteDevice?.deviceId === otherDeviceId);
+  expect(remoteRow).toBeDefined();
+  expect(remoteRow?.sourceUnavailableReason).toBe(connected ? undefined : 'Studio Provider on Studio Mac is unavailable');
+});
+it('keeps the unavailable-source reason on a pending selection before the move applies', async () => {
+  await mount(undefined, {
+    providers: [{ ...studioCatalog.providers[0], name: 'Home Provider', connected: false }],
+    unified: {
+      scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({ hasFastMode: true }),
+      onSelect: vi.fn(async () => true),
+      remote: {
+        catalogs: [studioCatalog], selectedDeviceId: studioCatalog.deviceId, hostDeviceName: 'Home Mac',
+        providerGroup: { bound: null, running: { deviceId: null, providerId: 'account' } },
+      },
+    },
+  });
+  const remoteRow = test.view.groups.find((group: any) => group.key === remoteId).rows[0];
+  expect(remoteRow).toMatchObject({ selected: true, sourceUnavailableReason: 'Home Provider on Home Mac is unavailable' });
 });
 it('opens on the Agent\'s computer and marks the current model there',async()=>{
   await mountRemote('device-studio-mac');
@@ -1063,4 +1158,42 @@ it('saves and edits a Mobile gateway shortcut without downgrading its exact stor
   await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'high' }));
   await act(async () => test.view.options.onSaveEdit());
   expect(test.prefs.favorites[0]).toMatchObject({ modelId: '["magpie-route","foo"]', effort: 'high' });
+});
+
+it('keeps a reset warning when another account makes the pool average unknown', async()=>{
+  test.quotas={account:{accountIdentity:null,source:'claude',raw:null,members:[
+    {accountIdentity:'unknown@example.test',source:'claude',raw:null},
+    {accountIdentity:'soon@example.test',source:'claude',raw:null,remaining:80,resetsAt:21600},
+  ]}};
+  await mount();
+  const quota=test.view.groups[0].quota;
+  expect(quota.remaining).toBeUndefined();
+  expect(quota.summary).toBe('models.unified.quotaUpdating');
+  expect(quota.resetDescription).toBe('models.unified.quotaResetIn · session.menu.usage.remaining');
+  expect(quota.reset).toEqual({remaining:80,time:'6h',level:'crit'});
+  expect(quota.resetSoon).toBe(true);
+  expect(quota.label).toContain('soon@example.test');
+  expect(quota.label).toContain('models.unified.quotaResetSoon');
+  expect(test.view.groups[0].rows[0].quotaLabel).toBeNull();
+});
+
+// Unit: phone source rows share desktop's verified account identity, while saved routes survive.
+it('folds own duplicate subscriptions but keeps different workspaces and third-party shares', async () => {
+  const base = { id: 'account', name: 'Primary', connected: true, agents: ['codex'], models: { codex: [{ id: 'model', name: 'Model' }] }, subscriptionAccountKeys: ['verified-a'] };
+  const duplicate = { ...base, id: 'second', name: 'Duplicate' };
+  const other = { ...base, id: 'different', name: 'Other workspace', subscriptionAccountKeys: ['verified-b'] };
+  const entry = test.entries[0];
+  test.entriesFor = providers => providers.map(provider => ({ ...entry, providerId: provider.id }));
+  test.activeSource = input => input.selectedProviderId;
+  await mount(undefined, { providers: [base, duplicate, other], existingSessionRoute: false,
+    unified: { scope: 'user-device', agents: ['codex'], loadCapabilities: async () => ({ hasFastMode: true }), onSelect: vi.fn(),
+      remote: { hostDeviceId: 'host', selectedDeviceId: null, catalogs: [
+        { deviceId: 'peer', name: 'Other computer', status: 'ready', providers: [{ ...duplicate, remoteInvocationEnabled: true }] },
+        { deviceId: 'share:friend', name: 'Friend', status: 'ready', providers: [{ ...duplicate, remoteInvocationEnabled: true }] },
+      ] } } });
+  expect(test.view.filters.map((filter: any) => filter.id)).toContain('account');
+  expect(test.view.filters.map((filter: any) => filter.id)).toContain('different');
+  expect(test.view.filters.map((filter: any) => filter.id)).not.toContain('second');
+  expect(test.view.filters.some((filter: any) => filter.remote?.deviceId === 'peer')).toBe(false);
+  expect(test.view.filters.some((filter: any) => filter.remote?.deviceId === 'share:friend')).toBe(true);
 });

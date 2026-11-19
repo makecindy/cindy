@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { REMOTE_RESOURCE_LIST_CHANNEL } from '@cindy/device-link';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { readTeammateTasks } from '@/session/readTeammateTasks';
-import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from '@/session/teammateTaskSource';
+import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions, parseTaskCompanion, isTeammateTask } from '@/session/teammateTaskSource';
 import type { RemoteSession } from '@/session/types';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 
@@ -96,4 +96,21 @@ it('publishes ordinary rows and cached lane ownership before optional history co
   await reading;
   expect(initial?.map((row: RemoteSession) => row.id)).toEqual(['ordinary', 'lane']);
   expect(initial?.[0].taskTeammate?.id).toBe('cindy-default');
+});
+
+// Unit: wire/cache parsing must preserve group membership without guessing missing ownership.
+it('keeps owner-project membership across mobile parsing and rejects unresolved ownership', () => {
+  const companion = parseTaskCompanion({ id: 'buddy', role: 'group', taskProjectDir: '/buddy/workspace' });
+  expect(companion?.taskProjectDir).toBe('/buddy/workspace');
+  expect(isTeammateTask(task('group', { source: 'bot', companion }))).toBe(true);
+  expect(isTeammateTask(task('dialogue', { source: 'bot', companion: { id: 'buddy', role: 'group' } }))).toBe(true);
+});
+
+it('keeps the legacy routine identity through mobile parsing so routine runs can be grouped', async () => {
+  const { automationGroupKey } = await import('@cindy/maker-shared/session-list');
+  const companion = parseTaskCompanion({ id: 'cindy', role: 'routine', routineId: 'memory' });
+  expect(companion).toEqual({ id: 'cindy', role: 'routine', routineId: 'memory' });
+  const item = { session: { id: 'r1', source: 'bot', companion }, title: 'Review memory' } as never;
+  expect(automationGroupKey(item)).toBe('routine:cindy:memory');
+  expect(parseTaskCompanion({ id: 'cindy', role: 'routine', routineId: '' })).toEqual({ id: 'cindy', role: 'routine' });
 });

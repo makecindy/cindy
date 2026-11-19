@@ -1,3 +1,8 @@
+import { createRemoteSessionOpener, createRemoteSessionExecutionResolver } from '../remoteSessionCreation.js';
+import { validateHandoffWorkingDir } from '../handoffWorkingDir.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { captureAgentRequest } from '../forwardedRequest.js';
 import { createRemoteSessionHandoff } from '../../mcp-integrations/sessionHandoffRemote.js';
 import { validateRemoteTaskActionReceipt } from '../remoteTaskActionReceipt.js';
@@ -50,7 +55,146 @@ const request = {
   sender: { sessionId: 'sender-1', title: 'PR 跟进' },
 };
 
+function creationFixture() {
+  const id = '22222222-2222-4222-8222-222222222222';
+  const rows = new Map<string, Record<string, unknown>>();
+  const insert = vi.fn(async row => { rows.set(row.id, row); });
+  const deps: Parameters<typeof createRemoteSessionOpener>[0] = {
+    captureOwner: () => () => {}, withSessionLock: async (_id, run) => run(),
+    sessionExists: async id => rows.has(id),
+    resolveProject: async () => ({ ok: true, projectDir: '/destination/project' }),
+    validateDirectory: async directory => ({ ok: true, dir: directory }),
+    resolveExecution: async () => ({ agentKind: 'codex', model: 'destination-default', fastMode: false }),
+    prepareWorktree: vi.fn(), discardWorktree: vi.fn(), broadcastCreated: vi.fn(),
+    openSessionCommit: insert,
+    // Persistence port only: the opener owns the creation choices and final guard.
+    openSession: (async (input, commit) => {
+      input.onPersistenceStarted?.();
+      const row = { ...input.body, id: input.id };
+      await commit!(row as never, () => {});
+      return { row, value: undefined };
+    }) as Parameters<typeof createRemoteSessionOpener>[0]['openSession'],
+  };
+  return { id, rows, insert, deps };
+}
+
 describe('maker:session:handoff (receiving computer)', () => {
+  // Unit: exercise the receiving production handler and opener together. Replay/validation
+  // failures must not create twice, and source authority is checked immediately before commit.
+  it('creates an ordinary destination task once, then uses the existing message queue', async () => {
+    const { id, rows, insert, deps } = creationFixture();
+    const send = vi.fn(async () => ({ ok: true as const, agentKind: 'codex', wakeKind: 'queued' as const,
+      targetTitle: 'Work', targetLastUserSendAt: null }));
+    const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
+    const wire = { ...request, sessionId: id, action: 'create', create: { permissionMode: 'ask' } };
+    expect(await handle('source-device', wire)).toMatchObject({ ok: true, wakeKind: 'created', targetSessionId: id,
+      model: 'destination-default', projectDir: '/destination/project' });
+    expect(rows.get(id)).toMatchObject({ permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
+      workingDir: '/destination/project', workspaceKind: 'project' });
+    expect(rows.get(id)).not.toHaveProperty('orcaRemoteLead');
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: id, forceQueue: true,
+      origin: expect.objectContaining({ senderSessionId: 'source-device::sender-1' }) }));
+    expect(await handle('source-device', wire)).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN' });
+    expect(await handle('source-device', { ...wire, taskActionReceipt: 'new-receipt' }))
+      .toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN' });
+    expect(insert).toHaveBeenCalledOnce(); expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('keeps creation out of unsupported or revoked receivers', async () => {
+    const create = vi.fn(); const send = vi.fn();
+    const wire = { ...request, sessionId: '22222222-2222-4222-8222-222222222222', action: 'create', create: { permissionMode: 'ask' } };
+    expect(await createSessionHandoffHandler({ send, validate: async () => true })('source', wire))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(await createSessionHandoffHandler({ create, send, validate: async () => false })('source', wire))
+      .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(create).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+  });
+
+  // Unit regression: execution in an existing managed worktree is valid even though
+  // that path cannot be registered as a project. Use the same real validator as local creation.
+  it('creates in an existing worktree while retaining its registered repository project', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-remote-cwd-'));
+    try {
+      const repository = path.join(root, 'repo');
+      const worktree = path.join(repository, '.cindy-worktrees', 'task');
+      await fs.mkdir(worktree, { recursive: true });
+      const { id, rows, deps } = creationFixture();
+      deps.resolveProject = async () => ({ ok: true, projectDir: repository });
+      deps.validateDirectory = validateHandoffWorkingDir;
+      const send = vi.fn(async () => ({ ok: true as const, agentKind: 'codex', wakeKind: 'queued' as const,
+        targetTitle: null, targetLastUserSendAt: null }));
+      const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
+      expect(await handle('source-device', { ...request, sessionId: id, action: 'create', create: {
+        permissionMode: 'ask', projectDir: repository, workingDir: worktree,
+      } })).toMatchObject({ ok: true, wakeKind: 'created', workingDir: await fs.realpath(worktree), projectDir: repository });
+      expect(rows.get(id)).toMatchObject({ workingDir: await fs.realpath(worktree), projectDir: repository, workspaceKind: 'project' });
+      expect(deps.prepareWorktree).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledOnce();
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+  // Unit regression: openSession's early persistence callback precedes the final async
+  // guard. Revocation there must clean a prepared worktree; a failed write must retain it.
+  it.each(['authorization', 'write'] as const)('cleans only before persistence after a %s failure', async failure => {
+    const { id, deps, insert, rows } = creationFixture();
+    let authorized = true;
+    const open = deps.openSession;
+    deps.prepareWorktree = vi.fn(async () => ({ ok: true as const, path: '/destination/worktree' }));
+    deps.openSession = (async (input, commit) => {
+      if (failure === 'authorization') authorized = false;
+      return open(input, commit);
+    }) as typeof deps.openSession;
+    if (failure === 'write') insert.mockRejectedValueOnce(new Error('database reply lost'));
+    const guard = async () => { if (!authorized) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    expect(await createRemoteSessionOpener(deps)(id, { permissionMode: 'ask', useWorktree: true }, guard))
+      .toMatchObject({ ok: false, errorCode: failure === 'write' ? 'DELIVERY_UNKNOWN' : 'INVALID_ARGS' });
+    expect(insert).toHaveBeenCalledTimes(failure === 'write' ? 1 : 0);
+    expect(deps.discardWorktree).toHaveBeenCalledTimes(failure === 'authorization' ? 1 : 0);
+    if (failure === 'authorization') expect(deps.discardWorktree).toHaveBeenCalledWith(id);
+    expect(rows.size).toBe(0);
+  });
+
+  // Unit regression: run the destination model resolver through the production
+  // create receiver/opener, so both persisted tuning and public error categories are checked.
+  it.each(['defaults', 'changed-model', 'override', 'offline', 'missing-model', 'invalid-tuning'] as const)(
+    'resolves the chosen provider with target %s semantics', async scenario => {
+      const { id, deps, insert, rows } = creationFixture();
+      const models = ['saved-model', 'other-model'].map(id => ({ id, efforts: ['medium', 'high'],
+        defaultEffort: 'medium', supportsFastMode: true }));
+      const readRemoteRouting = vi.fn(async () => {
+        if (scenario === 'offline') throw Object.assign(new Error('Device offline'), { code: 'DEVICE_OFFLINE' });
+        return { availability: { 'claude-code': [], pi: [], codex: [{ id: 'remote-provider', name: 'Remote', models: models.map(m => m.id),
+          fastModels: models.map(m => m.id) }] }, remoteCodexModels: models,
+          resolveDefaultProviderIdForModel: () => 'remote-provider' };
+      });
+      deps.resolveExecution = createRemoteSessionExecutionResolver({
+        isSelfDeviceId: () => false, resolveLocal: vi.fn(), readRemoteRouting,
+        readDefault: () => ({ agentKind: 'codex', model: 'saved-model', providerId: 'target-local-provider', effort: 'high', fastMode: true }),
+      });
+      const send = vi.fn(async () => ({ ok: true as const, agentKind: 'codex', wakeKind: 'queued' as const,
+        targetTitle: null, targetLastUserSendAt: null }));
+      const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
+      const result = await handle('source-device', { ...request, sessionId: id, action: 'create', create: {
+        permissionMode: 'ask', agentDeviceId: 'provider-computer',
+        ...(scenario === 'changed-model' ? { model: 'other-model' } : {}),
+        ...(scenario === 'missing-model' ? { model: 'withdrawn-model' } : {}),
+        ...(scenario === 'override' ? { effort: 'medium', fast: false } : {}),
+        ...(scenario === 'invalid-tuning' ? { effort: 'ultra' } : {}),
+      } });
+      expect(readRemoteRouting).toHaveBeenCalledWith('provider-computer', 'codex');
+      if (['offline', 'missing-model', 'invalid-tuning'].includes(scenario)) {
+        expect(result).toMatchObject({ ok: false, errorCode: scenario === 'invalid-tuning' ? 'INVALID_ARGS' : 'PROVIDER_ROUTE_UNAVAILABLE' });
+        expect(insert).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({ ok: true, wakeKind: 'created' });
+        expect(rows.get(id)).toMatchObject({ providerId: 'remote-provider', agentDeviceId: 'provider-computer',
+          model: scenario === 'changed-model' ? 'other-model' : 'saved-model',
+          effort: scenario === 'defaults' ? 'high' : 'medium', fastMode: scenario === 'defaults' });
+        expect(send).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   // unit/protocol: a same-account peer receipt must match the exact reserved body.
   it.each([...SUPPORTED_LOCALES, 'legacy'] as const)('retains %s peer-host originals and rejects a changed source before dispatch', async locale => {
     const s = setup();
@@ -70,7 +214,7 @@ describe('maker:session:handoff (receiving computer)', () => {
   // this host advertises that so newer senders stop quoting. Unit/protocol.
   it('accepts a plain checked hand-off only with its exact text and advertises the capability', async () => {
     const s = setup();
-    expect(SESSION_HANDOFF_CAPABILITY).toEqual({ taskActionVersion: 1, plainRequestBody: 1 });
+    expect(SESSION_HANDOFF_CAPABILITY).toEqual({ taskActionVersion: 1, plainRequestBody: 1, pluginCaller: 1 });
     const source = { sessionId: 'source', clientId: 'human', plainBody: true, delegatedText: 'Fix #12 and merge it.' };
     await s.handle('device-A', { ...request, message: 'Fix #12 and merge it.', requestSource: source });
     expect(s.send).toHaveBeenCalledWith(expect.objectContaining({ message: 'Fix #12 and merge it.',
@@ -224,6 +368,43 @@ describe('maker:session:handoff (receiving computer)', () => {
 
 // Review regression, unit/protocol: successful queued deliveries used to exhaust
 // the pending-receipt limit. Exercise both real transport ends, body binding and cleanup.
+// Unit/protocol: both production transport ends and the existing receipt validator.
+// A plugin has no sender task, old peers receive no body, and queued input remains revocable.
+it.each(['delivered', 'old-peer', 'revoked'] as const)('uses an explicit plugin actor across computers (%s)', async scenario => {
+  let current = true;
+  let queued: Parameters<Parameters<typeof createSessionHandoffHandler>[0]['send']>[0] | undefined;
+  let wire: unknown;
+  const handle = createSessionHandoffHandler({
+    validate: (_source, input) => validateRemoteTaskActionReceipt('target-device', input),
+    send: async params => { queued = params; return { ok: true, agentKind: 'codex', wakeKind: 'queued', targetTitle: null, targetLastUserSendAt: null }; },
+  });
+  const send = createRemoteSessionHandoff({ captureAccess: () => () => { if (!current) throw new Error('PERMISSION_DENIED'); },
+    invoke: async (_device, _channel, args) => {
+      if ((args[0] as { action?: string }).action === 'task-action-capability') return { ok: true, result: {
+        taskActionVersion: 1, plainRequestBody: 1, ...(scenario !== 'old-peer' ? { pluginCaller: 1 } : {}),
+      } };
+      wire = args[0]; return { ok: true, result: await handle('source-device', wire) };
+    },
+  });
+  const result = await send({ deviceId: 'target-device', sessionId: 'target' }, { message: 'Continue',
+    sender: async () => ({ kind: 'plugin', pluginId: 'dashboard', name: 'Dashboard' }) });
+  if (scenario === 'old-peer') {
+    expect(result).toMatchObject({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' });
+    expect(wire).toBeUndefined(); expect(queued).toBeUndefined(); return;
+  }
+  expect(result).toMatchObject({ ok: true });
+  expect(queued).toMatchObject({ sourcePlugin: { pluginId: 'source-device::dashboard', name: 'Dashboard' },
+    autoReviewUserText: 'Continue', resumeWithStoredPermissionMode: true, inheritTargetPlanMode: true });
+  expect(queued).not.toHaveProperty('origin');
+  const receiptId = (wire as { taskActionReceipt: string }).taskActionReceipt;
+  expect(await validateRemoteTaskActionReceipt('target-device', { receiptId, sessionId: 'dashboard', targetSessionId: 'target', message: 'Continue' })).toBe(false);
+  expect(await validateRemoteTaskActionReceipt('target-device', { receiptId, pluginId: 'other', targetSessionId: 'target', message: 'Continue' })).toBe(false);
+  expect(buildMessageSourceNote(messageSourceSenderFromMeta(queued))).toContain('source-device::dashboard');
+  expect(await handle('source-device', wire)).toMatchObject({ ok: false });
+  if (scenario === 'revoked') { current = false; await expect(queued!.taskActionDeliveryGuard!()).rejects.toThrow('AUTHORIZATION_EXPIRED'); }
+  else { await queued!.taskActionDeliveryGuard!(); await queued!.taskActionDeliveryGuard!.onSettled?.(); }
+});
+
 it('releases consumed receipts without allowing replay for quoted owner requests and plain automation', async () => {
   let includeOriginal = true;
   let lastWire: unknown;

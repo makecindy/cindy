@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
 import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
 import { isLocalDevice, runOnDevice, writeDeviceShape } from './_devices.js';
-import { assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
+import { schedulePrTriggerSchema, assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
@@ -41,10 +41,14 @@ export function registerScheduleUpdateTool(
         .describe('相对间隔毫秒。设置后优先于 cronExpr。省略 = 不修改（真 partial：只改 prompt / cronExpr 不会动它）；传 null = 清空，调度回到 cronExpr 壁钟槽位语义。'),
       timezone: z.string().min(1).optional(),
       recurring: z.boolean().optional(),
+      manual: z
+        .boolean()
+        .optional()
+        .describe('true=停止按时间触发并清空 nextFireAt，保留 cronExpr / intervalMs，仍可立即运行；已有 webhookTrigger 时仅由事件触发。false=按保存的 cronExpr / intervalMs 恢复定时；省略=不修改。适用于 agent 和 script。本机可与其它字段一起改；跨电脑请勿同时传 cronExpr、manual、notify（会与旧手机全量表单混淆），可单独修改 manual。'),
       agentKind: z.enum(AGENT_KIND).optional(),
       modelAgentKind: z.enum(AGENT_KIND).nullable().optional().describe('显式模型选择的引擎；null 清除覆盖'),
       fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('模型速度：false 标准、true 快速、ultrafast 超快；省略不修改'),
-      modelAgentDeviceId: z.string().nullable().optional().describe('模型运行位置：远程或分享供应商的 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），null=恢复沿用绑定任务及首次新建的 agentDeviceId 默认位置，省略=不修改。远程选择须同时指定 modelAgentKind、model、providerId；绑定任务或持续模式切回本机也须有 modelAgentKind 和 model，可沿用已保存的完整选择'),
+      modelAgentDeviceId: z.string().nullable().optional().describe('模型运行位置必须与所选模型来源配套：明确选择本机模型时也要传空字符串，不能省略后误用绑定任务的远程电脑；远程或分享供应商传其 agentDeviceId；空字符串=自动化所在电脑（schedule_list_models 的 local 在此须转为空字符串），null=恢复沿用绑定任务及首次新建的 agentDeviceId 默认位置，省略=不修改。远程选择须同时指定 modelAgentKind、model、providerId；绑定任务或持续模式切回本机也须有 modelAgentKind 和 model，可沿用已保存的完整选择'),
       kind: z.literal('cron').optional(),
       model: z
         .string()
@@ -109,6 +113,7 @@ export function registerScheduleUpdateTool(
         .nullable()
         .optional()
         .describe('插件前置检查，语义见 schedule_create 同名字段。传 null = 关闭；省略 = 不修改。只支持本机的定时任务。'),
+      prTrigger: schedulePrTriggerSchema,
       webhookTrigger: z
         .strictObject({
           events: z
@@ -147,6 +152,17 @@ export function registerScheduleUpdateTool(
     handler: async ({ id, bindToCurrentSession, device, ...patch }) => {
       const expected = deps.getApprovedScheduleGuard?.();
       if (!isLocalDevice(device)) {
+        // The target's legacy Mobile normalizers identify full forms by these
+        // three fields, clearing omitted interval/model settings. Keep MCP
+        // patches unambiguous even on old targets; never read/copy stale fields
+        // or split one requested write into multiple partially applied writes.
+        if (patch.cronExpr !== undefined && patch.manual !== undefined && patch.notify !== undefined) {
+          return buildJsonResult({
+            ok: false,
+            code: 'INVALID_PARAMS',
+            message: 'invalid request: 跨电脑更新不能同时传 cronExpr、manual、notify；目标电脑可能将其视为旧手机全量表单并清除未传的间隔或模型设置。请单独修改 manual，其它字段另行更新。',
+          }, true);
+        }
         // 对方电脑的 IPC 入口自己做校验与 hook 路径稳定化;这里只拦跨 JSON 边界
         // 表达不了、或只对本机有意义的写法,明确报错而不是写出与意图不符的任务。
         // 绑定任务 id 只在那台电脑上有效：带本设备前缀的去掉前缀，指向别的电脑的拒绝。
@@ -175,7 +191,7 @@ export function registerScheduleUpdateTool(
           : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
             ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
           : Object.entries(patch).some(([key, value]) => value === null
-              && !['intervalMs', 'expireAt', 'webhookTrigger', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
+              && !['intervalMs', 'expireAt', 'prTrigger', 'webhookTrigger', 'modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort'].includes(key))
             ? '其它电脑上的定时任务只支持用 null 清空间隔、截止时间、Webhook 和模型选择字段'
             : null;
         if (unsupported) {

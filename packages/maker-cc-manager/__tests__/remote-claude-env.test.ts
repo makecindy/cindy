@@ -45,6 +45,7 @@ describe('remote Claude environment', () => {
       ANTHROPIC_BASE_URL: 'https://stale.example',
       ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer stale',
       CLAUDE_CONFIG_DIR: '/home/remote/.claude',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: '',
       CLAUDE_CODE_ENTRYPOINT: 'sdk-ts',
     };
     const remoteEnv = buildRemoteClaudeSdkEnv({
@@ -70,11 +71,13 @@ describe('remote Claude environment', () => {
       PATH: '/usr/bin',
       ANTHROPIC_API_KEY: 'stale-key',
       CINDY_CLAUDE_ACCOUNT_PROVIDER_ID: 'stale-account',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: '/home/remote/.claude-other',
       CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
     };
     expect(stripSensitiveAnthropicEnv(daemonEnv)).toEqual([
       'ANTHROPIC_API_KEY',
       'CINDY_CLAUDE_ACCOUNT_PROVIDER_ID',
+      'CLAUDE_SECURESTORAGE_CONFIG_DIR',
       'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
     ]);
     expect(daemonEnv).toEqual({ HOME: '/home/remote', PATH: '/usr/bin' });

@@ -1,21 +1,37 @@
 import { EventEmitter } from 'node:events';
-import { createCipheriv, createDecipheriv, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, type KeyObject } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createPublicKey, diffieHellman, generateKeyPairSync, hkdfSync, randomBytes, type KeyObject } from 'node:crypto';
 import WebSocket from 'ws';
 import {
   API, MAX_FRAME_BYTES, MAX_CONTROL_BYTES, MAX_MEDIA_BINARY_CHUNK_BYTES, decodeDatagrams, encodeDatagrams, enrollmentPayload, transportModePayload,
   guestRequestPath, delegationVisibleTo, delegationPrincipalMatches, delegationPayload, stripTrailingSlashes,
+  MEDIA_TRANSFER_DIRECT, MEDIA_TRANSFER_HEADER, directMediaRequestValid, type DirectMediaRequest,
   type Delegation, type DeviceCertificate, type DeviceView, type JoinRequest, type EnrollmentRequest, type TransportModeProof,
 } from '@cindy/agent-net-protocol';
 import { createDelegation, createRequestProof, sha256, signature, verifySignature, verifyCertificate, verifyDelegation, type Identity, type TenantJoinRequest } from './identity.js';
 import { delegationRequestPolicyValid, type DelegationRequest } from '@cindy/agent-net-protocol';
+import { UDP_RELAY_HEADER, UDP_RELAY_KEY_BYTES, UDP_RELAY_SESSION_BYTES, UDP_RELAY_VERSION, type UdpRelayCredentials } from './udpRelay.js';
 export { generateIdentity, publicBytes, issueCertificate, createJoinRequest, approveJoin, createDelegation,
   createTenantJoinRequest, verifyTenantJoinRequest, verifyTenantPairingProof, tenantVerifyCode } from './identity.js';
 export type { Identity, TenantJoinRequest } from './identity.js';
 export { createPrivateNetwork } from './bootstrap.js';
 export { uploadEncryptedMedia, openEncryptedMedia } from './media.js';
 export { sealNotification } from './notification.js';
+export { UDP_RELAY_HEADER, UDP_RELAY_REGISTER_ACK, UDP_RELAY_DOWN, UDP_RELAY_UP_OVERHEAD, encodeUdpRegister, encodeUdpUp, isUdpRelayPacket, udpRelayPeerHash,
+  verifyUdpDown, verifyUdpRegisterAck, type UdpRelayCredentials } from './udpRelay.js';
+/**
+ * Whether this relay WebSocket URL may carry UDP credentials: they are a reusable secret, so only over TLS or on this
+ * machine. Owner-pinned private relays on plain http stay on the WebSocket (2026-11-17 review: the key travelled in clear).
+ */
+export function udpCredentialsAllowed(wsUrl: string): boolean {
+  const url = new URL(wsUrl);
+  return url.protocol === 'wss:' || (url.protocol === 'ws:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname));
+}
 export class AgentNetClientError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
+}
+// This Node client is also type-checked by React Native consumers of its types.
+function unrefTimer(timer: number | { unref(): void }): void {
+  if (typeof timer !== 'number') timer.unref();
 }
 export interface AgentNetClientTransport {
   /** Private relay selected by the owner: signed controls + pinned device certificates, encrypted business payloads. */
@@ -83,8 +99,16 @@ export async function pollTenantJoin(base: string, requestId: string, pollToken:
   const result = await responseBody(await (transport.fetch ?? fetch)(checkBase(base, transport) + API + '/tenant-join/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId, pollToken }), redirect: 'error', signal: AbortSignal.timeout(10_000) })) as { status?: unknown };
   return { status: typeof result.status === 'string' ? result.status : 'pending' };
 }
+/** How long a client whose network could not reach the attachment storage keeps using the relay for media. */
+const DIRECT_STORAGE_RETRY_MS = 10 * 60_000;
 export class AgentNetClient {
   readonly base: string;
+  /** Uploads the relay granted direct transfer for (until complete). */
+  private readonly directUploads = new Set<string>();
+  /** Presigned storage reads, reused until shortly before they expire. */
+  private readonly directReads = new Map<string, { request: DirectMediaRequest; until: number }>();
+  /** Until then this client's network could not reach the storage, so media goes through the relay. */
+  private directUnreachableUntil = 0;
   constructor(base: string, readonly identity: Identity, readonly certificate: DeviceCertificate, readonly rootPublicKey: string, readonly delegation?: Delegation, readonly transport: AgentNetClientTransport = {}) {
     this.base = checkBase(base, transport);
     if (!delegation && (!verifyCertificate(rootPublicKey, certificate) || certificate.deviceId !== identity.deviceId || certificate.signingKey !== identity.signingKey || certificate.transportKey !== identity.transportKey)) throw new Error('IDENTITY_CERTIFICATE_MISMATCH');
@@ -127,8 +151,14 @@ export class AgentNetClient {
       return result as T;
     } finally { clearTimeout(timer); options?.signal?.removeEventListener('abort', abort); }
   }
-  async directory(): Promise<DeviceView[]> {
-    const result = await this.request<{ rootPublicKey: string; devices: DeviceView[] }>('GET', '/directory');
+  /**
+   * Read the encrypted directory. `signal` carries the caller's own deadline so a
+   * bounded read does not leave this request running past it: the next retry would
+   * otherwise start a second physical directory read while this one is still in
+   * flight (Codex review #9360).
+   */
+  async directory(signal?: AbortSignal): Promise<DeviceView[]> {
+    const result = await this.request<{ rootPublicKey: string; devices: DeviceView[] }>('GET', '/directory', undefined, signal ? { signal } : undefined);
     if (result.rootPublicKey !== this.rootPublicKey || !Array.isArray(result.devices)
       || result.devices.some((d) => !this.trustedDirectoryEntry(d))) throw new Error('UNTRUSTED_DIRECTORY');
     return result.devices;
@@ -183,8 +213,55 @@ export class AgentNetClient {
   async downloadMedia(id: string): Promise<Uint8Array> {
     return new Uint8Array(await (await this.mediaResponse(id)).arrayBuffer());
   }
+  /**
+   * Starts an encrypted upload and offers direct transfer. A relay whose storage clients can reach grants it, and
+   * the chunks then go to the storage itself; any other relay ignores the offer and receives them as before.
+   */
+  async createMedia(recipient: string, size: number, signal?: AbortSignal): Promise<{ id: string; chunkBytes: number }> {
+    const created = await this.request<{ id: string; chunkBytes: number; transfer?: unknown }>('POST', '/media',
+      { recipient, size, chunkFormat: 'binary-v1', ...(this.directReachable() ? { transfer: MEDIA_TRANSFER_DIRECT } : {}) }, { signal });
+    if (created.transfer === MEDIA_TRANSFER_DIRECT) {
+      if (this.directUploads.size >= 64) this.directUploads.delete(this.directUploads.values().next().value!);
+      this.directUploads.add(created.id);
+    }
+    return { id: created.id, chunkBytes: created.chunkBytes };
+  }
+  private directReachable(): boolean { return Date.now() >= this.directUnreachableUntil; }
+  /** A network that reaches the relay but not the storage (a firewall that allows only the relay, say) keeps
+   * working through the relay, which reads and writes the same storage. */
+  private directUnreachable(): void { this.directUnreachableUntil = Date.now() + DIRECT_STORAGE_RETRY_MS; this.directReads.clear(); }
+  /** A storage request from the relay; plain HTTP only when the relay itself is reached over plain HTTP (local/test). */
+  private directRequest(value: unknown): DirectMediaRequest {
+    if (!directMediaRequestValid(value)) throw new Error('INVALID_DIRECT_MEDIA_REQUEST');
+    if (new URL(value.url).protocol !== 'https:' && new URL(this.base).protocol !== 'http:') throw new Error('INSECURE_DIRECT_MEDIA_REQUEST');
+    return value;
+  }
+  private async putDirectMediaChunk(id: string, offset: number, body: Uint8Array, signal?: AbortSignal): Promise<{ received: number; complete: boolean }> {
+    const resource = '/media/' + encodeURIComponent(id);
+    const md5 = createHash('md5').update(body).digest('base64');
+    const target = this.directRequest((await this.request<{ request: unknown }>('POST', resource + '/upload', { offset, size: body.length, md5 }, { signal })).request);
+    // A lost reply does not mean a lost write: whether the chunk landed is asked from the relay, which reads the
+    // stored length from the storage.
+    let rejected: number | undefined, unreachable = false;
+    try {
+      const response = await (this.transport.fetch ?? fetch)(target.url, { method: target.method, headers: target.headers, body: new Uint8Array(body),
+        redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(600_000)]) : AbortSignal.timeout(600_000) });
+      await response.body?.cancel().catch(() => undefined);
+      if (!response.ok) rejected = response.status;
+    } catch (error) { if (signal?.aborted) throw error; unreachable = true; }
+    const result = await this.request<{ received: number; complete: boolean }>('POST', resource + '/commit', undefined, { signal });
+    if (unreachable && result.received === offset) {
+      // Nothing landed: the rest of this upload goes through the relay.
+      this.directUploads.delete(id); this.directUnreachable();
+      return this.putMediaChunk(id, offset, body, signal);
+    }
+    if (result.received !== offset + body.length) throw new AgentNetClientError(rejected ?? 0, rejected ? 'MEDIA_STORAGE_REJECTED' : 'MEDIA_OFFSET_MISMATCH');
+    if (result.complete) this.directUploads.delete(id);
+    return result;
+  }
   async putMediaChunk(id: string, offset: number, body: Uint8Array, signal?: AbortSignal): Promise<{ received: number; complete: boolean }> {
     if (!Number.isSafeInteger(offset) || offset < 0 || body.length === 0 || body.length > MAX_MEDIA_BINARY_CHUNK_BYTES) throw new Error('INVALID_MEDIA_CHUNK');
+    if (this.directUploads.has(id)) return this.putDirectMediaChunk(id, offset, body, signal);
     const path = this.path('/media/' + encodeURIComponent(id) + '?offset=' + offset);
     return responseBody(await (this.transport.fetch ?? fetch)(this.base + path, {
       method: 'PUT', headers: { authorization: this.header('PUT', path, body), 'content-type': 'application/octet-stream', 'x-agent-net-content-sha256': sha256(body) },
@@ -193,21 +270,70 @@ export class AgentNetClient {
   }
   /** Stream encrypted bytes (or a byte range) without buffering a multi-gigabyte object. */
   async mediaResponse(id: string, range?: string, signal?: AbortSignal): Promise<Response> {
+    const cached = this.directReachable() ? this.directReads.get(id) : undefined;
+    if (cached && cached.until > Date.now()) {
+      const response = await this.directRead(cached.request, range, signal);
+      if (response && response.status !== 403) return response;
+      // Revoked or expired early: ask the relay again, which re-checks access.
+      await response?.body?.cancel().catch(() => undefined); this.directReads.delete(id);
+    }
+    const direct = this.directReachable();
     const path = this.path('/media/' + encodeURIComponent(id));
     const deadline = new AbortController();
-    const timer = setTimeout(() => deadline.abort(), 30_000); timer.unref();
+    const timer = setTimeout(() => deadline.abort(), 30_000); unrefTimer(timer);
     let response: Response;
-    try { response = await (this.transport.fetch ?? fetch)(this.base + path, { headers: { authorization: this.header('GET', path), ...(range ? { range } : {}) }, redirect: 'error', signal: signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal }); }
-    finally { clearTimeout(timer); }
+    try {
+      response = await (this.transport.fetch ?? fetch)(this.base + path, { headers: { authorization: this.header('GET', path),
+        ...(direct ? { [MEDIA_TRANSFER_HEADER]: MEDIA_TRANSFER_DIRECT } : {}), ...(range ? { range } : {}) }, redirect: 'error', signal: signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal });
+      if (response.ok && response.headers.get(MEDIA_TRANSFER_HEADER) === MEDIA_TRANSFER_DIRECT) {
+        const target = this.directRequest(((await response.json()) as { request?: unknown }).request);
+        if (this.directReads.size >= 64) this.directReads.delete(this.directReads.keys().next().value!);
+        this.directReads.set(id, { request: target, until: Math.min(target.expiresAt - 30_000, Date.now() + 10 * 60_000) });
+        clearTimeout(timer);
+        const read = await this.directRead(target, range, signal);
+        // Unreachable storage: the relay serves this read (and the next ones for a while) itself.
+        if (!read) return await this.mediaResponse(id, range, signal);
+        if (read.status === 403) {
+          // Refused although just granted: an error, never media (only a cached grant is retried).
+          await read.body?.cancel().catch(() => undefined); this.directReads.delete(id);
+          throw new AgentNetClientError(403, 'MEDIA_STORAGE_READ_FAILED');
+        }
+        return read;
+      }
+    } finally { clearTimeout(timer); }
     if (!response.ok) await responseBody(response);
     return response;
   }
-  /** Native media reads are bounded ranges; retain their deadline until consumed. */
-  async withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000); timer.unref();
+  private async directRead(target: DirectMediaRequest, range: string | undefined, signal?: AbortSignal): Promise<Response | undefined> {
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), 30_000); unrefTimer(timer);
+    try {
+      let response: Response;
+      try {
+        response = await (this.transport.fetch ?? fetch)(target.url, { method: target.method, headers: { ...target.headers, ...(range ? { range } : {}) },
+          redirect: 'error', signal: signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal });
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        this.directUnreachable(); return undefined;
+      }
+      if (!response.ok && response.status !== 403) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new AgentNetClientError(response.status, response.status === 416 ? 'INVALID_MEDIA_RANGE' : 'MEDIA_STORAGE_READ_FAILED');
+      }
+      return response;
+    } finally { clearTimeout(timer); }
+  }
+  /** Native media reads retain an idle deadline through body consumption. */
+  async withMediaResponse<T>(id: string, range: string, consume: (response: Response, onByteProgress?: (bytes: number) => void) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const controller = new AbortController();
+    let timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+    const onByteProgress = (bytes: number) => {
+      if (controller.signal.aborted || signal?.aborted || !Number.isFinite(bytes) || bytes <= 0) return;
+      clearTimeout(timer); timer = setTimeout(() => controller.abort(), 60_000); unrefTimer(timer);
+    };
     try {
       const response = await this.mediaResponse(id, range, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
-      return await consume(response);
+      return await consume(response, onByteProgress);
     } finally { clearTimeout(timer); controller.abort(); }
   }
 }
@@ -239,7 +365,7 @@ export function createDelegationApprover(client: AgentNetClient, assertCurrent: 
           const timer = setTimeout(() => {
             timers.delete(timer);
             if (!closed && latest.get(request.id) === request) { attempted.delete(key); pending.set(key, request); drain(); }
-          }, 1000); timer.unref(); timers.add(timer);
+          }, 1000); unrefTimer(timer); timers.add(timer);
         } else onError(error instanceof Error && /^[A-Z0-9_]{1,80}$/.test(error.message) ? error.message : 'SHARING_AUTHORIZATION_FAILED');
       }).finally(() => { running.delete(key); drain(); });
     }
@@ -266,6 +392,14 @@ export function createDelegationApprover(client: AgentNetClient, assertCurrent: 
     },
   };
 }
+/** A malformed credential only disables UDP for this session; it never fails the WebSocket handshake. */
+function udpCredentials(value: unknown): UdpRelayCredentials | null {
+  if (!value || typeof value !== 'object') return null;
+  const { session, key } = value as { session?: unknown; key?: unknown };
+  if (typeof session !== 'string' || typeof key !== 'string') return null;
+  const sessionBytes = Buffer.from(session, 'base64url'), keyBytes = Buffer.from(key, 'base64url');
+  return sessionBytes.length === UDP_RELAY_SESSION_BYTES && keyBytes.length === UDP_RELAY_KEY_BYTES ? { session: sessionBytes, key: keyBytes } : null;
+}
 export class AgentNetUplink extends EventEmitter {
   readonly kind = 'agent-net' as const;
   sent = 0;
@@ -274,6 +408,8 @@ export class AgentNetUplink extends EventEmitter {
   notifications = false;
   delegations: Delegation[] = [];
   delegationRequests: DelegationRequest[] = [];
+  /** UDP credentials for this session when the relay supports UDP forwarding (udpRelay.ts); null keeps the WebSocket path. */
+  udp: UdpRelayCredentials | null = null;
   private receiver: ((deviceId: string, packet: Uint8Array) => void) | null = null;
   private pending: Array<[string, Uint8Array]> = [];
   private pendingBytes = 0;
@@ -282,12 +418,16 @@ export class AgentNetUplink extends EventEmitter {
   private scheduled = false;
   private constructor(private readonly ws: WebSocket) { super(); }
   static async open(url: string, header: string, verifyDirectory: (devices: DeviceView[], delegations: Delegation[], requests: DelegationRequest[]) => void, factory?: AgentNetClientTransport['createWebSocket']): Promise<AgentNetUplink> {
-    const socketOptions = { headers: { authorization: header }, maxPayload: MAX_CONTROL_BYTES };
+    // Asking for UDP credentials is harmless on an older relay: it ignores the header and the session stays on WebSocket.
+    // Never asked over plain http to another machine (udpCredentialsAllowed).
+    const askUdp = udpCredentialsAllowed(url);
+    const socketOptions = { headers: { authorization: header, ...(askUdp ? { [UDP_RELAY_HEADER]: UDP_RELAY_VERSION } : {}) },
+      maxPayload: MAX_CONTROL_BYTES };
     const ws = factory ? await factory(url, socketOptions) : new WebSocket(url, socketOptions);
     const uplink = new AgentNetUplink(ws);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { ws.terminate(); reject(new Error('AGENT_NET_HANDSHAKE_TIMEOUT')); }, 10_000);
-      timer.unref();
+      unrefTimer(timer);
       let established = false;
       const fail = (error: Error) => { clearTimeout(timer); if (!established) reject(error); ws.terminate(); };
       ws.on('error', fail);
@@ -320,6 +460,7 @@ export class AgentNetUplink extends EventEmitter {
             if (message.protocolVersion !== 2 || established) throw new Error('INVALID_HELLO');
             uplink.deviceId = message.deviceId;
             uplink.notifications = message.notifications === true;
+            uplink.udp = askUdp ? udpCredentials((message as { udp?: unknown }).udp) : null;
             established = true; clearTimeout(timer); resolve(uplink);
           } else uplink.emit('directory', message.devices);
         } catch (error) { fail(error instanceof Error ? error : new Error('INVALID_CONTROL')); }
@@ -358,7 +499,7 @@ export class AgentNetUplink extends EventEmitter {
   }
   presence(remoteControlEnabled: boolean, capabilities: string[], metadata: import('@cindy/agent-net-protocol').DeviceMetadata = {}): void {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'presence', remoteControlEnabled, capabilities,
-      platform: metadata.platform, appVersion: metadata.appVersion, busy: metadata.busy, deviceName: metadata.deviceName }));
+      platform: metadata.platform, app: metadata.app, appVersion: metadata.appVersion, busy: metadata.busy, deviceName: metadata.deviceName }));
   }
   close(): void { this.pending = []; this.queues.clear(); this.ws.terminate(); }
 }

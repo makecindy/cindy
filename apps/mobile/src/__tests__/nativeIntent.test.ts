@@ -15,6 +15,7 @@ import {
 import { clearRelayJoinIntent, getPendingRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { redirectSystemPath } from '../../app/+native-intent';
 import { closeChatInvite, getChatInviteIntent, openManualChatInvite, setManualChatInviteLink } from '@/chat/chatInviteIntent';
+import { closeGiftCard, getGiftCardIntent } from '@/gift-card/giftCardIntent';
 
 const invitation = 'A'.repeat(43);
 const incoming = 'cindy://shared-session?invitation=' + invitation + '&server=https%3A%2F%2Frelay.example.test';
@@ -30,10 +31,29 @@ function clearChatInvite() {
   const pending = getChatInviteIntent();
   if (pending) closeChatInvite(pending.id);
 }
-beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); setMobileAuthOwner(null); });
-afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); vi.useRealTimers(); });
+function clearGiftCard() {
+  const pending = getGiftCardIntent();
+  if (pending) closeGiftCard(pending.id);
+}
+beforeEach(() => { vi.useFakeTimers(); clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); clearGiftCard(); setMobileAuthOwner(null); });
+afterEach(() => { clearSharedTaskInvitationIntent(); clearProviderShareLinkIntent(); clearRelayJoinIntent(); clearChatInvite(); clearGiftCard(); vi.useRealTimers(); });
 
 describe('mobile native deep-link redirects', () => {
+  // 契约：礼品卡兑换码等同于余额，原生入口必须在交给路由前把它收进内存。此前没有任何用例
+  // 覆盖 gift 链接；单元层即可验证（一条原生 URL，无网络、存储或原生运行时）。
+  it.each([true, false])('receives gift card links without routing their redeem code (initial=%s)', initial => {
+    for (const path of ['cindy://gift/G0123456789ABCDE', 'cindycn://gift/G012-3456-789A-BCDE', '/gift/G0123456789ABCDE']) {
+      const route = redirectSystemPath({ path, initial });
+      expect(route).toBe(initial ? '/' : null);
+      expect(getGiftCardIntent()).toMatchObject({ code: 'G0123456789ABCDE' });
+      expect(getChatInviteIntent()).toBeNull();
+      clearGiftCard();
+    }
+    // 残缺的链接也不落到 404 页：面板里提示兑换码无效。
+    expect(redirectSystemPath({ path: 'cindy://gift/oops', initial })).toBe(initial ? '/' : null);
+    expect(getGiftCardIntent()).toMatchObject({ invalidLink: true });
+  });
+
   // A2 contract: the actual native entry must redact the invite before routing,
   // preserve it across login, and never replace an active confirmation. Existing
   // shared-task/provider tests do not cover group invitations. Unit tier: one

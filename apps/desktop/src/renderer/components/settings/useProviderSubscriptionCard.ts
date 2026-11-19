@@ -27,6 +27,8 @@ import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLin
 import {
   selectRemoteCodexAccountUsage,
   useRemoteCodexAccountUsage,
+  useRemoteCodexRefreshState,
+  requestRemoteCodexLiveRefresh,
   useRemoteCodexRateLimits,
   useRemoteXaiSubscriptionUsage,
   requestRemoteCodexAccountRefresh,
@@ -109,7 +111,7 @@ export function useProviderSubscriptionCard(
   // Suspension only disables routing; settings must still show the saved account.
   const source = provider ? providerWeeklyQuotaSource({ ...provider, suspended: false }) : null;
   const providerId = provider?.id ?? 'openai';
-  const { snapshot } = useCodexRateLimits(source === 'codex', providerId, options);
+  const { snapshot, failed, refreshing, refresh } = useCodexRateLimits(source === 'codex', providerId, options);
   const account = useAccountUsage(
     undefined,
     source === 'codex' ? 'codex' : undefined,
@@ -129,14 +131,17 @@ export function useProviderSubscriptionCard(
   useEffect(() => {
     if (!options.live && source === 'xai' && !isXaiWeeklyUsageCurrent(xai, nowMs)) requestXaiSubscriptionRefresh(providerId);
   }, [source, xai, nowMs, providerId, options.live]);
-  if (source === 'codex' && (snapshot || account))
-    return buildSettingsCodexUsageCard(
+  if (source === 'codex' && (snapshot || account || failed)) {
+    const card = buildSettingsCodexUsageCard(
       snapshot,
       account,
       t,
       nowMs,
       i18n?.resolvedLanguage ?? i18n?.language,
     );
+    if (failed) card.refreshFailure = { retry: refresh, retrying: refreshing };
+    return card;
+  }
   if (source === 'claude' && claude) return buildClaudeUsageCard(claude, t);
   if (source === 'xai' && xai) return buildXaiUsageCard(xai, null, t, nowMs);
   return null;
@@ -159,6 +164,7 @@ function useRemoteProviderSubscriptionCard(
   // Ordinary cards keep the upstream shared minute reader; expanded group cards
   // retain their native result + legacy mirror and explicit recovery/15s refresh.
   const codex = useRemoteCodexAccountUsage(source === 'codex' ? deviceId : null, providerId, { live: !groupLive, groupLive, refreshEpoch });
+  const codexRefresh = useRemoteCodexRefreshState(source === 'codex' && !groupLive ? deviceId : null, providerId);
   const limits = useRemoteCodexRateLimits(groupLive && source === 'codex' ? deviceId : null, providerId);
   const claude = useRemoteClaudeSubscriptionUsage(source === 'claude' ? deviceId : null, providerId, liveObservation);
   const xai = useRemoteXaiSubscriptionUsage(source === 'xai' ? deviceId : null, providerId, liveObservation);
@@ -170,9 +176,14 @@ function useRemoteProviderSubscriptionCard(
   }, [source]);
   if (source === 'codex') {
     const account = selectRemoteCodexAccountUsage(codex, 'app-server');
-    if (!groupLive) return account
-      ? buildCodexUsageCard(account, null, t, nowMs, i18n?.resolvedLanguage ?? i18n?.language)
-      : null;
+    if (!groupLive) {
+      if (!account && !codexRefresh.failed) return null;
+      const card = buildCodexUsageCard(account, null, t, nowMs, i18n?.resolvedLanguage ?? i18n?.language);
+      if (codexRefresh.failed && deviceId) card.refreshFailure = {
+        retry: () => requestRemoteCodexLiveRefresh(deviceId, providerId), retrying: codexRefresh.refreshing,
+      };
+      return card;
+    }
     return limits || account
       ? buildSettingsCodexUsageCard(limits, account, t, nowMs, i18n?.resolvedLanguage ?? i18n?.language)
       : null;

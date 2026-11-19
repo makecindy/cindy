@@ -26,7 +26,7 @@ import { showConfirm } from '@/platform/chrome';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { BOT_GROUP_ROW_AVATAR_SIZE, BotGroupAvatar, useBotGroupIdentities } from './BotGroupAvatars';
-import { BotGroupOrganizerTag, type BotGroupIdentityLookup } from './BotGroupPlan';
+import { type BotGroupIdentityLookup } from './BotGroupPlan';
 import { botGroupActionErrorText } from './botGroupCopy';
 import { ChatGroupSettingsSheet } from './ChatGroupSettingsSheet';
 import { CompanionSheet } from './CompanionSheet';
@@ -35,7 +35,7 @@ import { BotGroupMenu } from './BotGroupMenu';
 import { useBotGroupSettingsManagement } from './useBotGroupSettingsManagement';
 import type { GroupPersonalMask } from './useGroupPersonalMask';
 
-type Busy = 'name' | 'members' | 'organizer' | 'replyMode' | 'speakingMode' | 'delete' | null;
+type Busy = 'name' | 'members' | 'replyMode' | 'speakingMode' | 'delete' | null;
 type Act = (actionId: BotGroupRemoteActionId, input?: Record<string, unknown>) => Promise<unknown>;
 
 type SettingsProps = {
@@ -68,7 +68,8 @@ export function BotGroupSettingsSheet(props: SettingsProps) {
 /** Direct server groups use the same account connection for chat and settings. */
 function DirectGroupSettings(props: SettingsProps) {
   const management = useBotGroupSettingsManagement(props.group, props.visible);
-  const group = management.group ?? props.group;
+  // Settings reads contain metadata only; execution activity stays with the live chat subscription.
+  const group = management.group ? { ...management.group, round: props.group.round } : props.group;
   const lookup = useBotGroupIdentities('');
   // Settings writes refresh the chat like lifecycle actions do.
   const refreshing = { ...management, act: async (...args: Parameters<typeof management.act>) => {
@@ -191,22 +192,19 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
           {group.members.map((member) => {
             const identity = identityFor(member.botId, member.name);
             const active = isActiveBotGroupMember(member);
-            const organizer = member.botId === group.organizerBotId;
             const options = [
-              ...(!organizer && active ? [{ id: `organizer:${member.botId}`, title: t('groupChat.settings.setOrganizer') }] : []),
               {
                 id: `remove:${member.botId}`, title: t('groupChat.settings.remove'), destructive: true, disabled: !canRemove,
                 ...(canRemove ? {} : { subtitle: t('groupChat.settings.minMembers', { min: BOT_GROUP_MIN_MEMBERS }) }),
               },
             ];
-            const rowBusy = busy === 'organizer' || busy === 'members';
+            const rowBusy = busy === 'members';
             return <BotGroupMenu key={member.botId} title={identity.name} disabled={locked}
               accessibilityLabel={t('groupChat.settings.memberActions', { name: identity.name })}
               testID={`botGroup.settings.memberMenu.${member.botId}`}
               sections={[{ id: 'member', options }]}
               onSelect={(id) => {
-                if (id.startsWith('organizer:')) void run('organizer', 'update', { organizerBotId: member.botId }, 'groupChat.settings.organizerSaveFailed');
-                else if (id.startsWith('remove:')) void setMembers(memberIds.filter((botId) => botId !== member.botId));
+                if (id.startsWith('remove:')) void setMembers(memberIds.filter((botId) => botId !== member.botId));
               }}>
               {(open) => <Pressable accessibilityRole="button" accessibilityLabel={t('groupChat.settings.memberActions', { name: identity.name })}
                 disabled={locked} onPress={open}
@@ -217,7 +215,6 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
                 </View>
                 <View style={styles.memberName}>
                   <Text numberOfLines={1} style={styles.rowTitle}>{identity.name}</Text>
-                  {organizer ? <BotGroupOrganizerTag /> : null}
                   {!active ? <Text numberOfLines={1} style={styles.rowMeta}>
                     {t(member.status === 'paused' ? 'groupChat.memberStatus.paused' : 'groupChat.memberStatus.unavailable')}
                   </Text> : null}
@@ -254,9 +251,7 @@ function BotGroupSettingsContent({ visible, group, host, identityFor, online, ac
             </Pressable>)}
           </View> : null}
         </View>
-        <Text style={styles.note}>{t('groupChat.settings.organizerNote')}</Text>
         {error('members')}
-        {error('organizer')}
       </View>
 
       <View style={styles.section}>

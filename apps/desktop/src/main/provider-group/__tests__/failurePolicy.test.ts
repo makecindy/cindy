@@ -35,6 +35,9 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
     ['HTTP 429', { errorStatus: 429, message: 'rate limited' }, switchTo('usage-limit')],
     ['signed out (tag)', { sdkError: 'authentication_failed' }, switchTo('auth')],
     ['signed out (401)', { errorStatus: 401 }, switchTo('auth')],
+    // #11484 unit: the new explicit account rejection uses the existing account
+    // fallback/cooling policy, never generic transport failure or same-source retry.
+    ['upstream account denied', { reason: 'account_access_denied', message: 'Access denied' }, switchTo('auth')],
     ['signed out (Codex)', { codexErrorInfo: 'unauthorized' }, switchTo('auth')],
     ['invalid API key text', { message: 'Invalid API key provided' }, switchTo('auth')],
     ['agent not authenticated at start', { message: 'Claude Code is not authenticated' }, switchTo('auth')],
@@ -43,6 +46,61 @@ describe('decideProviderGroupFailure — the account on that computer', () => {
   ])('%s → switch and record it in the group (cool)', (_name, signals, expected) => {
     for (const phase of PHASES) expect(decideProviderGroupFailure(signals, phase)).toEqual(expected);
   });
+});
+
+/**
+ * 任务绑定账号不可用：按宿主给出的稳定码判，不按给用户看的文案。
+ * 2026-11-12 实测回归：旧文案「requires login or quota reset」里的 quota 让「读不到账号状态」
+ * 被当成用量上限，整台电脑冷却 30 分钟；组里只有本机时无处可换，重启后所有新任务被拒。
+ * 改成结构化码后又反过来漏判了真正的额度耗尽与登录失效。冷却口径：provider-groups.md §6.1
+ * 「记不记进组的状态」——只有账号的问题记进组，其余只在这一轮不再试。
+ * 失效后果：用户可见文案一旦改词就重新决定要不要把整台电脑封半小时。
+ * 最小失败输入：LIMITED / LOGIN_REQUIRED 的真实错误串(修前落到 failed、cool:false)。tier：默认 unit。
+ */
+describe('decideProviderGroupFailure — the task’s bound subscription account', () => {
+  it.each<[string, InterruptedTurnErrorSignals, ReturnType<typeof switchTo>]>([
+    ['usage window exhausted', {
+      message: '[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset',
+    }, switchTo('usage-limit')],
+    ['usage window exhausted, with its reset time', {
+      message: '[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset\nresetAtMs=1900000000000',
+    }, switchTo('usage-limit')],
+    ['login required', {
+      message: '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login',
+    }, switchTo('auth')],
+    ['host send wrapper', {
+      message: 'LAZY_CREATE_FAILED: [SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset',
+    }, switchTo('usage-limit')],
+    // 一次读取抖动 / 正在登录不是账号故障：换下一台，但不能把整台电脑记进冷却。
+    ['account state unreadable', {
+      message: '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable',
+    }, switchTo('failed')],
+    ['unrelated login wording is not the known executor rejection', {
+      message: 'Another service requires login',
+    }, switchTo('failed')],
+    ['account cannot serve this request', {
+      message: '[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account cannot be used for this request',
+    }, switchTo('failed')],
+    ['signing in there', {
+      message: '[SUBSCRIPTION_ACCOUNT_SIGNING_IN] The task subscription account is signing in',
+    }, switchTo('failed')],
+    // 并发上限满不是账号故障，也不得因为文案里有 limit 就被当成用量上限。
+    ['every account at its concurrency limit', {
+      message: '[SUBSCRIPTION_ACCOUNTS_FULL] every available subscription account has reached its concurrency limit',
+    }, switchTo('failed')],
+  ])('%s', (_name, signals, expected) => {
+    for (const phase of PHASES) expect(decideProviderGroupFailure(signals, phase)).toEqual(expected);
+  });
+});
+
+// The old bridge used the same message for a provider-id mismatch, a missing
+// reader and a signed-out account. The log alone must not cool a healthy member.
+it.each([
+  'The selected OpenAI subscription account requires login',
+  'OpenAI/ChatGPT upstream request failed: The selected OpenAI subscription account requires login',
+])('keeps an ambiguous old Pi rejection out of auth cooling: %s', message => {
+  for (const phase of PHASES)
+    expect(decideProviderGroupFailure({ message, sdkError: message }, phase)).toEqual(switchTo('failed'));
 });
 
 describe('decideProviderGroupFailure — that computer cannot be reached or cannot take the task', () => {
@@ -108,6 +166,10 @@ describe('decideProviderGroupFailure — any computer would fail the same way (s
     ['HTTP 413', { errorStatus: 413, message: 'too large' }, 'invalid-request'],
     ['Codex bad request', { codexErrorInfo: 'badRequest', message: 'x' }, 'invalid-request'],
     ['content policy', { codexErrorInfo: 'cyberPolicy', message: 'x' }, 'policy'],
+    // Unit, provider-groups §6.1: relocating cannot repair the shared proxy's
+    // explicit scope refusal. Existing stay inputs did not cover this message.
+    ['shared provider scope', { message: 'unexpected status 403 Forbidden: [SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.' }, 'policy'],
+    ['shared scope with SDK auth wrapper', { errorStatus: 403, sdkError: 'authentication_failed', message: '[SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.' }, 'policy'],
     ['tool loop', { reason: 'tool_use_loop_detected', message: 'loop' }, 'tool-loop'],
     ['permission denied by user', { message: 'Permission denied by user' }, 'user'],
     ['tool execution failed', { reason: 'turn-failed', message: 'Tool execution failed' }, 'local'],
@@ -119,6 +181,17 @@ describe('decideProviderGroupFailure — any computer would fail the same way (s
   it('does not count usage limits wrapped as invalid_request as a request problem', () => {
     expect(decideProviderGroupFailure({ sdkError: 'invalid_request', errorStatus: 429, message: 'rate limited' }, 'run'))
       .toEqual(switchTo('usage-limit'));
+  });
+
+  it('keeps ambiguous upstream 403s eligible for the existing group recovery', () => {
+    for (const phase of PHASES) {
+      expect(decideProviderGroupFailure({ errorStatus: 403, message: 'Forbidden' }, phase)).toEqual(switchTo('failed'));
+      // Older proxies also used this sentence when their model catalog went
+      // empty. Without the new producer marker it is not proof of scope denial.
+      expect(decideProviderGroupFailure({ errorStatus: 403, message: 'This request is outside the provider shared with you.' }, phase))
+        .toEqual(switchTo('failed'));
+      expect(decideProviderGroupFailure({ errorStatus: 403, sdkError: 'authentication_failed' }, phase)).toEqual(switchTo('auth'));
+    }
   });
 });
 

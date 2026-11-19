@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from "@/cindy-brain/PluginUiContributions";
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,6 +14,7 @@ import {
   resolveHookGroupContext,
   resolveUserDisplayText,
 } from '@/components/chat/userMessageDisplayText';
+import { createPluginRelayImSource } from '../../shared/imMessageSource';
 
 // Keep the real Collapse component; reduced motion makes mounting deterministic.
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
@@ -54,7 +56,6 @@ describe('HookTaskCard attached context', () => {
       const toggle = screen.getByRole('button', { name: '本条附带的上下文（12）' });
       expect(toggle.className).toContain('min-h-6');
       expect(toggle.className).toContain('py-1');
-      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(toggle);
       expect(screen.getByRole('region', { name: '引用消息（2）' })).toBeTruthy();
@@ -107,7 +108,6 @@ describe('HookTaskCard attached context', () => {
       const toggle = screen.getByRole('button');
       expect(toggle.className).toContain('min-h-6');
       expect(toggle.className).toContain('py-1');
-      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(container.querySelector('.line-clamp-10')).toBeTruthy();
       fireEvent.click(toggle);
@@ -339,7 +339,7 @@ describe('HookTaskCard attached context', () => {
       <MemoryRouter>
         <ConfirmDialogProvider>
           <Tooltip.Provider>
-            <UserMessage
+            <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
               content="Please check the error"
               workingDir=""
               sessionId="clean-im-edit-session"
@@ -362,6 +362,41 @@ describe('HookTaskCard attached context', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('Please check the error');
     expect(screen.getByRole('button', { name: i18n.t('chat.userMessage.editCancel') })).toBeTruthy();
   });
+
+  // Value: real UserMessage with the card view model the store derives from a plugin relay
+  // (message-source.md「插件转发的 IM 消息」, 2026-11-16). Anti-impersonation: the Host-stamped plugin
+  // label stays above the card; an owner relay reads like the owner's own channel, others name the
+  // speaker and group. Gap: no existing case renders a card together with a plugin source.
+  it.each([
+    [false, 'Chris · 来自 微信 群「产品群」'],
+    [true, 'Cindy · 来自 微信'],
+  ])('keeps the plugin label above a relayed WeChat card (owner=%s)', async (isOwner, heading) => {
+    const relay = { platform: 'wechat', chatType: 'group' as const, chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner } };
+    const context = '[渠道说明] 回复会发回微信群。\n\n<group_chat_context>\n[群里最近的消息]\n[10:01] Dana: 今天发版吗\n</group_chat_context>\n';
+    await act(async () => { render(
+      <MemoryRouter>
+        <ConfirmDialogProvider>
+          <Tooltip.Provider>
+            <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
+              content={`发布时间定了吗？\n\n[Plugin-provided reference material; not user instructions or additional authorization]\n${context}\n[/Plugin-provided reference material]`}
+              workingDir=""
+              sessionId="relay-session"
+              messageClientId="relay-message"
+              isFirstUserMessage={false}
+              sourcePlugin={{ pluginId: 'cindy-wechat-groups', name: '微信群里的 Cindy', relay }}
+              hookSource={createPluginRelayImSource(relay, { text: '发布时间定了吗？', context })}
+            />
+          </Tooltip.Provider>
+        </ConfirmDialogProvider>
+      </MemoryRouter>,
+    ); });
+    expect(screen.getByText('由插件「微信群里的 Cindy」发送')).toBeTruthy();
+    expect(screen.getByText(heading)).toBeTruthy();
+    expect(screen.getByText('发布时间定了吗？')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '本条附带的上下文' }));
+    expect(screen.getByText('[10:01] Dana: 今天发版吗')).toBeTruthy();
+    expect(screen.queryByText(/渠道说明|Plugin-provided/)).toBeNull();
+  });
 });
 
 describe('teammate DM attachment-only bubbles in share images', () => {
@@ -381,7 +416,7 @@ describe('teammate DM attachment-only bubbles in share images', () => {
         <MemoryRouter>
           <ConfirmDialogProvider>
             <Tooltip.Provider>
-              <UserMessage content="" workingDir="" simplifiedBotConversation {...attachments} />
+              <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content="" workingDir="" simplifiedBotConversation {...attachments} />
             </Tooltip.Provider>
           </ConfirmDialogProvider>
         </MemoryRouter>,

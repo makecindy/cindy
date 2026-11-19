@@ -24,7 +24,7 @@
   },
   "connectStep1": "Installiere und öffne {{appName}} auf deinem Computer",
   "connectStep2": "Melde dich mit demselben Konto wie auf deinem Smartphone an",
-  "connectStep3": "Aktiviere unter Einstellungen → Fernverbindung die Option „Geräten mit demselben Konto erlauben, diesen Computer zu steuern“",
+  "connectStep3": "Aktiviere unter Einstellungen → Remote-Verbindung die Option „Geräten mit demselben Konto die Steuerung dieses Computers erlauben“",
   "brandEyebrow": "Cindy Mobile",
   "cloudTeaserTitle": "{{appName}} in der Cloud – demnächst verfügbar",
   "cloudTeaserCopy": "Nach dem Start funktioniert die mobile App eigenständig, ganz ohne Computer.",
@@ -65,6 +65,7 @@
     "noCredentials": "{{agent}} kann nicht verwendet werden, da auf dem Computer keine Anmeldung vorliegt. Melde dich in {{appName}} auf dem Computer unter Einstellungen → Modellanbieter an und versuch es erneut.",
     "noEncryption": "{{agent}} kann nicht verwendet werden, da der sichere Systemspeicher auf dem Computer nicht verfügbar ist. Prüfe die Schlüsselbundverwaltung unter macOS oder die Kontoverschlüsselung unter Windows und starte {{appName}} auf dem Computer neu.",
     "proxyNotReady": "{{agent}} ist auf dem Computer noch nicht bereit. Versuch es gleich erneut. Falls das Problem weiterhin besteht, starte {{appName}} auf dem Computer neu.",
+    "sharedLinkUnavailable": "{{agent}} kann momentan nicht verwendet werden: Codex ist auf dem Computer angemeldet, aber {{appName}} kann diese Anmeldung nicht erreichen (der Link darauf lässt sich nicht erstellen; unter einem Windows-Standardkonto geht das in der Regel nicht). Sorge dafür, dass {{appName}} auf dem Computer den Link erstellen darf (unter Windows einmal als Administrator ausführen oder den Entwicklermodus aktivieren) und versuch es erneut.",
     "default": "{{agent}} kann nicht verwendet werden, da die Anmeldung auf dem Computer nicht verfügbar ist. Melde dich auf dem Computer in {{appName}} unter Einstellungen → Modellanbieter erneut an. ({{reason}})"
   },
   "remoteError": {

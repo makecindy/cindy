@@ -16,9 +16,11 @@ import {
   REMOTE_AGENT_CHANNEL,
   REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS,
   REMOTE_AGENT_MAX_PAYLOAD_BYTES,
+  REMOTE_AGENT_MAX_UPLOAD_CHUNKS,
   REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
   parseRemoteAgentCaps,
   parseRemoteAgentStreamItem,
+  shortDeviceRef,
   type RemoteAgentCaps,
   type RemoteAgentErrorInfo,
   type RemoteAgentKind,
@@ -34,10 +36,18 @@ import {
 import { LineSplitter } from '../eventLog';
 import { remoteAgentStartupTiming } from '../startupTiming';
 import { isRetryableLinkError, RemoteAgentPoller, type PolledRun, type RemoteAgentInvoke } from './poller';
+import { isDeliveryBackpressure, RemoteAgentDeliveryGate } from './deliveryPressure';
 
 export { isRetryableLinkError, RemoteAgentPoller, type RemoteAgentInvoke } from './poller';
 
 const gzipAsync = promisify(gzip);
+
+// These are sender preferences, not protocol limits. A 512 KiB upload becomes
+// roughly 683 KiB on the wire and can exceed the 30s invoke deadline on relay.
+// Keep ordinary uploads within one transport fragment, and compress large
+// inline values too; character counts alone understate UTF-8 delivery cost.
+const INLINE_PAYLOAD_BYTES = 64 * 1024;
+const PREFERRED_UPLOAD_CHUNK_BYTES = 64 * 1024;
 
 /** 单行事件上限(大工具结果)。 */
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
@@ -47,9 +57,11 @@ const CLOSE_DRAIN_MS = 5_000;
 const MAX_REPLY_DELIVER_ATTEMPTS = 30;
 /** push 帧批次交付重试上限(对方按 seq 去重，同序号重试不会重复投递)。 */
 const MAX_PUSH_DELIVER_ATTEMPTS = 30;
+/** Pollers are already shared per executor/transport; never coordinate unrelated peers. */
+const deliveryGates = new WeakMap<RemoteAgentPoller, RemoteAgentDeliveryGate>();
 
 export class RemoteAgentRemoteError extends Error {
-  constructor(readonly info: RemoteAgentErrorInfo) {
+  constructor(readonly info: RemoteAgentErrorInfo, readonly phase?: 'start') {
     super(info.message || info.code);
     this.name = info.name ?? 'RemoteAgentRemoteError';
   }
@@ -77,6 +89,8 @@ export class RemoteAgentRunClient implements PolledRun {
   private readonly drained: Promise<void>;
   private markDrained!: () => void;
   private pushSeq = 0;
+  /** Stop invalidates unsent calls, including those waiting for link admission. */
+  private sendGeneration = 0;
   /** 在途的 push 批次(含重试中的)。 */
   private pushing = 0;
   /** 正在回答的反向请求(从收到到回包交付完)。 */
@@ -85,6 +99,8 @@ export class RemoteAgentRunClient implements PolledRun {
   private started: { resolve(handle: Record<string, unknown>): void; reject(error: Error): void } | null = null;
   private readonly splitter = new LineSplitter(MAX_LINE_BYTES);
   private readonly inflight = new Map<string, AbortController>();
+  private readonly deliveryAbort = new AbortController();
+  private readonly deliveryGate: RemoteAgentDeliveryGate;
 
   private readonly invoke: RemoteAgentInvoke;
 
@@ -99,6 +115,9 @@ export class RemoteAgentRunClient implements PolledRun {
     },
   ) {
     this.invoke = poller.invoke;
+    let gate = deliveryGates.get(poller);
+    if (!gate) { gate = new RemoteAgentDeliveryGate(); deliveryGates.set(poller, gate); }
+    this.deliveryGate = gate;
     this.drained = new Promise<void>((resolve) => {
       this.markDrained = resolve;
     });
@@ -113,21 +132,29 @@ export class RemoteAgentRunClient implements PolledRun {
   }
 
   /** 把一个 JSON 值做成载荷：小的内联，大的 gzip 后分段上传。 */
-  async payload(value: unknown, uploadId = this.newId()): Promise<RemoteAgentPayload> {
+  async payload(value: unknown, uploadId = this.newId(), requireActive?: () => void,
+    invoke: RemoteAgentInvoke = this.invoke): Promise<RemoteAgentPayload> {
     const requireOpen = () => {
       if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+      requireActive?.();
     };
     requireOpen();
     const text = JSON.stringify(value ?? null);
-    if (text.length <= REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS) return { json: JSON.parse(text) as unknown };
+    if (text.length <= REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS && Buffer.byteLength(text, 'utf8') <= INLINE_PAYLOAD_BYTES) {
+      return { json: JSON.parse(text) as unknown };
+    }
     const gz = await gzipAsync(Buffer.from(text, 'utf8'));
     requireOpen();
     if (gz.length > REMOTE_AGENT_MAX_PAYLOAD_BYTES) throw new Error('The request is too large to send to the other computer.');
-    const chunks = Math.max(1, Math.ceil(gz.length / REMOTE_AGENT_UPLOAD_CHUNK_BYTES));
+    // Older receivers accept at most MAX_UPLOAD_CHUNKS. Grow the slice only
+    // when necessary to retain the full existing payload capacity.
+    const chunkBytes = Math.min(REMOTE_AGENT_UPLOAD_CHUNK_BYTES,
+      Math.max(PREFERRED_UPLOAD_CHUNK_BYTES, Math.ceil(gz.length / REMOTE_AGENT_MAX_UPLOAD_CHUNKS)));
+    const chunks = Math.max(1, Math.ceil(gz.length / chunkBytes));
     for (let index = 0; index < chunks; index += 1) {
       requireOpen();
-      const data = gz.subarray(index * REMOTE_AGENT_UPLOAD_CHUNK_BYTES, (index + 1) * REMOTE_AGENT_UPLOAD_CHUNK_BYTES);
-      await this.invoke([{ op: 'upload', uploadId, index, data: data.toString('base64') }]);
+      const data = gz.subarray(index * chunkBytes, (index + 1) * chunkBytes);
+      await invoke([{ op: 'upload', uploadId, index, data: data.toString('base64') }]);
       // An in-flight chunk can finish after cancellation, but no next chunk or open may start.
       requireOpen();
     }
@@ -138,8 +165,10 @@ export class RemoteAgentRunClient implements PolledRun {
    * 打开任务：等对方启动 Agent 成功(返回会话描述)或失败(抛出对方的错误)。已关闭的连接不能再打开：本机这边的
    * 任务已经结束(撤权、用户关闭)，再打开会在对方留下一个没人拉取、没人关闭的任务。
    */
-  async open(agentKind: RemoteAgentKind, openPayload: unknown): Promise<Record<string, unknown>> {
+  async open(agentKind: RemoteAgentKind, openPayload: unknown, requireActive?: () => void,
+    onOpenRequest?: () => void): Promise<Record<string, unknown>> {
     if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+    requireActive?.();
     const sessionId =
       openPayload &&
       typeof openPayload === 'object' &&
@@ -155,15 +184,17 @@ export class RemoteAgentRunClient implements PolledRun {
     });
     let status: 'ok' | 'failed' = 'failed';
     try {
-      const payload = await timing.measure('payload-upload', () => this.payload(openPayload));
+      const payload = await timing.measure('payload-upload', () => this.payload(openPayload, this.newId(), requireActive));
       if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+      requireActive?.();
       const started = new Promise<Record<string, unknown>>((resolve, reject) => {
         this.started = { resolve, reject };
       });
       try {
-        await timing.measure('open-request', () =>
-          this.invoke([{ op: 'open', runId: this.runId, agentKind, payload }]),
-        );
+        await timing.measure('open-request', () => {
+          onOpenRequest?.();
+          return this.invoke([{ op: 'open', runId: this.runId, agentKind, payload }]);
+        });
       } catch (error) {
         this.started = null;
         throw error;
@@ -190,14 +221,28 @@ export class RemoteAgentRunClient implements PolledRun {
   }
 
   /** 预先分配的 callId(需要先把回调登记到 callId 上时用)。 */
-  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[]): Promise<unknown> {
+  async callWithId(callId: string, method: RemoteAgentMethod, args: unknown[], signal?: AbortSignal): Promise<unknown> {
     if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on the other computer.');
+    if (method === 'abort' || method === 'requestGracefulStop') this.sendGeneration += 1;
+    const generation = this.sendGeneration;
+    const requireActive = () => {
+      if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+      if (signal?.aborted || ((method === 'send' || method === 'steer') && generation !== this.sendGeneration)) {
+        throw new DOMException('The message was cancelled before delivery to the other computer.', 'AbortError');
+      }
+    };
     const result = new Promise<unknown>((resolve, reject) => {
       this.pendingCalls.set(callId, { resolve, reject });
     });
+    // finish() can reject this while payload preparation is still awaiting.
+    // Observe it now; the public call still returns the original result below.
+    void result.catch(() => undefined);
     try {
-      const payload = await this.payload(args);
-      await this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }]);
+      const payload = await this.payload(args, this.newId(), requireActive);
+      // Stop can overtake gzip or a chunk acknowledgement, including the final
+      // await before dispatch. Never deliver that old send after Stop.
+      requireActive();
+      await this.invoke([{ op: 'call', runId: this.runId, callId, method, payload }], { beforeDispatch: requireActive });
     } catch (error) {
       this.pendingCalls.delete(callId);
       throw error;
@@ -219,9 +264,11 @@ export class RemoteAgentRunClient implements PolledRun {
       for (let attempt = 1; ; attempt += 1) {
         if (this.closed) return;
         try {
-          await this.invoke([{ op: 'push', runId: this.runId, seq, frames, ...(this.holdsRemote() ? { hold: true } : {}) }]);
+          await this.deliveryGate.invoke(() => this.invoke([{ op: 'push', runId: this.runId, seq, frames,
+            ...(this.holdsRemote() ? { hold: true } : {}) }]), this.deliveryAbort.signal);
           return;
         } catch (error) {
+          if (this.closed) return;
           const retryable = isRetryableLinkError(error) && attempt < MAX_PUSH_DELIVER_ATTEMPTS;
           this.log?.warn(retryable ? 'remote agent: push failed; retrying' : 'remote agent: push failed', {
             runId: this.runId,
@@ -230,7 +277,9 @@ export class RemoteAgentRunClient implements PolledRun {
             error: String(error),
           });
           if (!retryable) throw error;
-          await sleep(delay);
+          // Peer pressure owns one shared probe timer; per-run timers would
+          // put the entire failed batch back into the send queue together.
+          if (!isDeliveryBackpressure(error)) await sleep(delay);
           delay = Math.min(delay * 2, 5_000);
         }
       }
@@ -273,6 +322,7 @@ export class RemoteAgentRunClient implements PolledRun {
   private finish(reason: string, error?: RemoteAgentErrorInfo, idleReclaimed = false): void {
     if (this.closed) return;
     this.closed = true;
+    this.deliveryAbort.abort();
     this.poller.unregister(this.runId);
     this.markDrained();
     const failure = new Error(error?.message ?? `[REMOTE_AGENT_EXPIRED] The task ended on the other computer (${reason}).`);
@@ -323,7 +373,7 @@ export class RemoteAgentRunClient implements PolledRun {
         this.started = null;
         return;
       case 'start-failed':
-        this.started?.reject(new RemoteAgentRemoteError(item.error));
+        this.started?.reject(new RemoteAgentRemoteError(item.error, 'start'));
         this.started = null;
         return;
       case 'event':
@@ -366,12 +416,11 @@ export class RemoteAgentRunClient implements PolledRun {
         reply = await this.handlers.onRequest(request, abort.signal);
       } catch (error) {
         reply = { type: 'error', error: { code: 'CONTROLLER_ERROR', message: error instanceof Error ? error.message : String(error) } };
-      } finally {
-        this.inflight.delete(requestId);
       }
       if (this.closed || abort.signal.aborted) return;
-      await this.deliverReply(requestId, reply);
+      await this.deliverReply(requestId, reply, abort.signal);
     } finally {
+      if (this.inflight.get(requestId) === abort) this.inflight.delete(requestId);
       this.answering -= 1;
     }
   }
@@ -386,17 +435,21 @@ export class RemoteAgentRunClient implements PolledRun {
    * 白白占住对方的 staging 缓冲；若首份上传已被消费、只是响应丢了，复用同一载荷还能直接
    * 命中幂等返回。上传中途失败后同一 uploadId 重传，也不会多留半份暂存载荷。
    */
-  private async deliverReply(requestId: string, reply: RemoteAgentReply): Promise<void> {
+  private async deliverReply(requestId: string, reply: RemoteAgentReply, signal: AbortSignal): Promise<void> {
     const uploadId = this.newId();
     let payload: RemoteAgentPayload | undefined;
     let delay = 500;
     for (let attempt = 1; ; attempt += 1) {
-      if (this.closed) return;
+      if (this.closed || signal.aborted) return;
       try {
-        payload ??= await this.payload(reply, uploadId);
-        await this.invoke([{ op: 'reply', runId: this.runId, requestId, payload }]);
+        const requireActive = () => { if (signal.aborted) throw signal.reason; };
+        const invoke: RemoteAgentInvoke = args => this.deliveryGate.invoke(() => this.invoke(args), signal);
+        payload ??= await this.payload(reply, uploadId, requireActive, invoke);
+        requireActive();
+        await invoke([{ op: 'reply', runId: this.runId, requestId, payload }]);
         return;
       } catch (error) {
+        if (this.closed || signal.aborted) return;
         const retryable = isRetryableLinkError(error) && attempt < MAX_REPLY_DELIVER_ATTEMPTS;
         this.log?.warn(retryable ? 'remote agent: reply failed; retrying' : 'remote agent: reply failed', {
           runId: this.runId,
@@ -405,7 +458,7 @@ export class RemoteAgentRunClient implements PolledRun {
           error: String(error),
         });
         if (!retryable) return;
-        await sleep(delay);
+        if (!isDeliveryBackpressure(error)) await sleep(delay);
         delay = Math.min(delay * 2, 5_000);
       }
     }
@@ -416,7 +469,7 @@ export class RemoteAgentRunClient implements PolledRun {
  * 把设备互联的失败换成带 `[REMOTE_AGENT_*]` 前缀的错误(界面按前缀给出对应文案)，保留原 `code`
  * 供重试判断。对方版本过旧(没有这个通道)单独标出，提示去那台电脑更新。
  */
-export function remoteAgentLinkError(error: { code?: string; message?: string } | unknown): Error {
+export function remoteAgentLinkError(error: { code?: string; message?: string } | unknown, target?: string): Error {
   const code = (error as { code?: unknown })?.code;
   const message = error instanceof Error
     ? error.message
@@ -429,23 +482,49 @@ export function remoteAgentLinkError(error: { code?: string; message?: string } 
       { code: 'REMOTE_AGENT_PEER_TOO_OLD' },
     );
   }
-  const wrapped = new Error(/^\[REMOTE_[A-Z_]+\]/.test(message) ? message : `[REMOTE_AGENT_UNAVAILABLE] ${message}`);
+  // Only refine presentation. Error.code remains the transport's retry/permission
+  // decision, and an existing remote business error keeps its original envelope.
+  const envelopeCode = /^\[([A-Z_]+)\]/.exec(message)?.[1];
+  const causeCode = typeof code === 'string' && code !== 'IPC_ERROR' ? code : envelopeCode;
+  const displayCode = remoteAgentLinkGuidanceCode(causeCode);
+  const diagnostic = displayCode && causeCode && envelopeCode !== causeCode ? `[${causeCode}] ${message}` : message;
+  const keepRemoteError = !displayCode && /^\[REMOTE_[A-Z_]+\]/.test(message);
+  // The requested route may be a share/group rather than a resolved computer.
+  // Report only this known reference and channel, not a guessed name or status.
+  const context = target ? `\nrequestedTarget=${shortDeviceRef(target)}; channel=${REMOTE_AGENT_CHANNEL}` : '';
+  const wrapped = new Error(keepRemoteError
+    ? message : `[${displayCode ?? 'REMOTE_AGENT_UNAVAILABLE'}] ${diagnostic}${context}`);
   return typeof code === 'string' ? Object.assign(wrapped, { code }) : wrapped;
+}
+
+function remoteAgentLinkGuidanceCode(code: string | undefined): string | undefined {
+  switch (code) {
+    case 'TIMEOUT': case 'INVOKE_TIMEOUT': case 'DEVICE_LINK_TIMEOUT': return 'REMOTE_AGENT_TIMEOUT';
+    case 'BACKPRESSURE': case 'DEVICE_LINK_BUSY': return 'REMOTE_AGENT_LINK_BUSY';
+    case 'DEVICE_UNRESPONSIVE': case 'DEVICE_LINK_DEVICE_UNRESPONSIVE': return 'REMOTE_AGENT_UNRESPONSIVE';
+    case 'DEVICE_OFFLINE': case 'DEVICE_LINK_DEVICE_OFFLINE': return 'REMOTE_AGENT_OFFLINE';
+    case 'ACCESS_REVOKED': case 'REMOTE_DISABLED':
+    case 'DEVICE_LINK_ACCESS_REVOKED': case 'DEVICE_LINK_REMOTE_DISABLED': return 'REMOTE_AGENT_ACCESS_DENIED';
+    default: return undefined;
+  }
 }
 
 /** 生产接线：经设备互联后台链路调用某台电脑的远程 Agent 通道。 */
 export function remoteAgentInvoker(
   deviceId: string,
-  invoke: (deviceId: string, channel: string, args: unknown[]) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>,
+  invoke: (deviceId: string, channel: string, args: unknown[], options?: { beforeDispatch?: () => void }) => Promise<{ ok: boolean; result?: unknown; error?: { code?: string; message?: string } }>,
 ): RemoteAgentInvoke {
-  return async (args) => {
+  return async (args, options) => {
     let result: Awaited<ReturnType<typeof invoke>>;
     try {
-      result = await invoke(deviceId, REMOTE_AGENT_CHANNEL, args);
+      result = options ? await invoke(deviceId, REMOTE_AGENT_CHANNEL, args, options)
+        : await invoke(deviceId, REMOTE_AGENT_CHANNEL, args);
     } catch (error) {
-      throw remoteAgentLinkError(error);
+      // Cancellation before wire dispatch is not a remote failure or retry hint.
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      throw remoteAgentLinkError(error, deviceId);
     }
     if (result.ok) return result.result;
-    throw remoteAgentLinkError(result.error ?? {});
+    throw remoteAgentLinkError(result.error ?? {}, deviceId);
   };
 }

@@ -1,3 +1,4 @@
+import { pluginSourceWarningKey } from '@cindy/maker-shared/mcp-apps';
 import { toast } from '@/lib/toast';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -96,9 +97,9 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
               description: directory.target?.name ?? deviceId,
               content: (
                 <>
-                  <p className="text-13 text-[var(--text-secondary)]">
-                    {t(`mcpApps.pluginTrust.${consent.trust ?? 'unverified'}`)}
-                  </p>
+                  {pluginSourceWarningKey(consent.installationSource) && <p className="text-13 text-[var(--warning-fg)]">
+                    {t(pluginSourceWarningKey(consent.installationSource)!)}
+                  </p>}
                   <GhostInstallConsentContent facts={consent.facts} capabilityOnly />
                 </>
               ),

@@ -14,6 +14,7 @@ import { initTapdb } from './analytics/tapdbClient';
 import { createAuthService } from './lib/authService';
 import { createLogger } from './lib/logger';
 import { installScrollbarAutoHide } from './lib/scrollbarAutoHide';
+import { installIpcErrorToastText } from './lib/ipcErrorToastText';
 import { bootstrapMemorySettingsFromMain } from './lib/memorySettingsStore';
 import {
   getVoiceInputSettings,
@@ -44,12 +45,13 @@ import { installSwallowActivationClick } from './lib/swallowActivationClick';
 import { installEarlyKeyDownCapture } from './lib/earlyKeyDownCapture';
 import { getSwallowActivationClickEnabled } from './hooks/useSwallowActivationClickSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
-import { themeService } from './themes/theme-service';
+import { installAppearancePresenter, presentTheme } from './appearance/AppearancePresenter';
 import './styles/globals.css';
 import './styles/sortable.css';
 
 const disposeEarlyKeyDownCapture = installEarlyKeyDownCapture();
 installScrollbarAutoHide();
+installIpcErrorToastText();
 const disposeForegroundRecoveryDiagnostics = installForegroundRecoveryDiagnostics();
 // 睡醒白屏取证:主线程阻塞漂移 + 可见无帧探针,只记日志(见模块头注释)。
 const disposeRenderLoopWatchdog = installRenderLoopWatchdog();
@@ -75,8 +77,6 @@ const isVoiceInputDictionaryToast = view === 'voice-input-dictionary-toast';
 const isComputerPermissionGuide = view === 'computer-permission-guide';
 const isComputerPermissionBackdrop = view === 'computer-permission-backdrop';
 const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissionBackdrop;
-const isAppearanceUtilityView =
-  isVoiceInputOverlay || isVoiceInputDictionaryToast || isComputerPermissionView;
 document.documentElement.dataset.platform = window.electronAPI.platform;
 document.documentElement.dataset.windowBackdropMaterial =
   window.electronAPI.windowBackdropMaterial ?? 'none';
@@ -132,12 +132,8 @@ if (import.meta.env.DEV) {
 }
 
 bootstrapLocalThemesSync();
-themeService.applyTheme(getInitialThemeVariant().theme);
+presentTheme(getInitialThemeVariant().theme, false);
 applyFontSettings(getInitialFontSettings());
-const disposeUtilityAppearanceSettingsSync = isAppearanceUtilityView
-  ? (window.electronAPI.appearanceSettings?.onChanged?.(applyFontSettings) ?? (() => {}))
-  : (): void => {};
-import.meta.hot?.dispose(disposeUtilityAppearanceSettingsSync);
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -146,6 +142,9 @@ if (!rootElement) {
 const root = createRoot(rootElement);
 
 void (async () => {
+  const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings,
+    isComputerPermissionView || isVoiceInputOverlay || isVoiceInputDictionaryToast);
+  import.meta.hot?.dispose(disposeAppearancePresenter);
   if (isComputerPermissionBackdrop) {
     const { ComputerPermissionBackdrop } = await import(
       './components/settings/ComputerPermissionGuideWindow'

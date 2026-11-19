@@ -1,6 +1,4 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { ScriptTarget, transpileModule } from 'typescript';
 
 import { TurnDispatchUnconfirmedError } from '@cindy/maker-core';
 import type { AgentEvent, SessionSendResult } from '@cindy/maker-core';
@@ -18,7 +16,9 @@ import {
 import { buildContinuationDirective, buildFirstTurnDirective } from '../directive';
 import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
 import { publishUiSessionIntervention, resetUiContinuationListenersForTest } from '../../maker-ipc/uiContinuationSignal';
-import { isOwnerOwnMessage } from '../../input-handoff/ownerMessage';
+import { createMakerSteerTransaction, type MakerSteerTransactionDeps } from '../../maker-ipc/makerSteerTransaction';
+import { createWireNoteMemory } from '../../maker-ipc/wireNoteMemory';
+import { DEFAULT_CLASSICAL_REPLY_STYLE } from '@cindy/maker-shared/classical-reply';
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import type {
   AccountLimitInfo,
@@ -31,69 +31,40 @@ import type {
   SessionLike,
 } from '../types';
 
-// Execute the shared production steer closure with in-memory host dependencies.
-// This covers INPUT_STEER and the legacy STEER path without booting Electron.
-const registerSource = readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8');
-const steerSource = registerSource.slice(
-  registerSource.indexOf('  const steerToAgentAccepted = async ('),
-  registerSource.indexOf('  const trustedDesktopSteerText ='),
-);
-const compiledSteer = transpileModule(`${steerSource}\nreturn steerToAgentAccepted;`, {
-  compilerOptions: { target: ScriptTarget.ES2022 },
-}).outputText;
-
+// Execute the same production factory used by Desktop with in-memory IO.
 function productionSteer(
   session: FakeSession,
   deliver: (payload?: unknown) => Promise<void>,
   rejectBeforeDelivery = false,
   overrides: Record<string, unknown> = {},
 ) {
-  const query = { from: () => query, leftJoin: () => query, where: () => query, limit: async () => [] };
+  const live = {
+    ...session,
+    capabilities: { sameTurnSteer: { supported: true } },
+    isTurnRunning: () => session.running,
+    getTurnGeneration: () => session.generation,
+    steer: deliver,
+  };
   const deps = {
-    maker: {
-      getSession: () => ({
-        ...session,
-        capabilities: { sameTurnSteer: { supported: true } },
-        isTurnRunning: () => session.running,
-        getTurnGeneration: () => session.generation,
-        steer: deliver,
-      }),
-      getSessionMeta: async () => null,
-    },
-    getDbClient: () => ({ drizzle: { select: () => query } }),
-    sessions: {}, botSessionLinks: {}, botProfiles: {}, eq: () => undefined,
-    assertReviewExternalInputAllowed: async () => {},
-    botSessionInputBlockReason: () => null,
+    maker: { getSession: () => live, getSessionMeta: async () => null },
+    assertInputAllowed: async () => {},
+    assertInputCurrent: () => { if (rejectBeforeDelivery) throw new Error('stale input generation'); },
     prepareUserMessageForAgent: async (_id: string, message: unknown) => message,
-    restoreAutoReviewSteerIntent: async () => undefined,
-    shouldPrependMobileClientPromptNote: () => false,
+    readReplyQuoteNote: async () => null,
+    readAutoReviewHistory: async () => [],
+    readSessionSource: async () => null,
+    getHostSourceDevice: () => ({ deviceId: 'fixture', platform: 'desktop' }),
+    getResolvedMainLocale: () => null,
+    getMainClassicalStyle: () => DEFAULT_CLASSICAL_REPLY_STYLE,
+    wireNoteMemory: createWireNoteMemory(),
     inputHandoffSteerNote: () => null,
     inputHandoffNoteDelivered: () => {},
-    isOwnerOwnMessage,
-    readWireSourceDevice: () => null,
-    isDeviceLinkInvoke: () => false,
-    assertRemoteInputClearNotInFlight: () => {},
-    readRemoteInputClearBoundaryPrecondition: () => ({ present: false }),
-    readExpectedInputGeneration: () => undefined,
-    assertCurrentInputGeneration: () => {
-      if (rejectBeforeDelivery) throw new Error('stale input generation');
-    },
-    MAIN_OWNED_SEND_CONTEXT: Symbol(), AUTO_REVIEW_SOURCE_CONTENT: Symbol(),
-    AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), AUTO_REVIEW_USER_INTENT: Symbol(),
-    ASYNC_QUESTION_ANSWER: Symbol(), SUPERSEDE_ASYNC_QUESTIONS: Symbol(),
-    MCP_APP_MESSAGE_GUARD,
+    mcpAppModelContext: async () => ({ text: '', assertCurrent: async () => {}, consume() {} }),
     publishUiSessionIntervention,
-    noteInteractionRouteSteer: () => {},
-    summarizeIpcUserMessage: () => ({}),
-    log: { info: () => {}, warn: () => {}, debug: () => {} },
-    throwIpcError: (code: string, message: string) => { throw new Error(`${code}: ${message}`); },
+    log: { info() {}, warn() {}, debug() {} },
     ...overrides,
   };
-  // Keep Session identity stable across the production preflight checks.
-  const live = deps.maker.getSession();
-  deps.maker.getSession = () => live;
-  return new Function(...Object.keys(deps), compiledSteer)(...Object.values(deps)) as
-    (sessionId: string, message: string, sendOpts?: Record<string, unknown>) => Promise<void>;
+  return createMakerSteerTransaction(deps as unknown as MakerSteerTransactionDeps);
 }
 
 // ── decideNextGoalState (pure) ───────────────────────────────────────────────
@@ -2213,7 +2184,6 @@ describe('GoalController', () => {
     const steer = productionSteer(h.session, async (payload) => { payloads.push(payload); }, false, {
       inputHandoffSteerNote: () => '[Card closed]',
       inputHandoffNoteDelivered: delivered,
-      shouldPrependMobileClientPromptNote: () => false,
     });
     await steer('s1', '/compact');
     expect(String(payloads[0])).not.toContain('[Card closed]');
@@ -2230,7 +2200,6 @@ describe('GoalController', () => {
     const steer = productionSteer(h.session, async () => {}, false, {
       inputHandoffSteerNote: noteFor,
       inputHandoffNoteDelivered: delivered,
-      shouldPrependMobileClientPromptNote: () => false,
     });
     await steer('s1', 'hello from someone else', sendOpts);
     // Neither closes the card nor claims a note was handled for this message.
@@ -2243,7 +2212,6 @@ describe('GoalController', () => {
     h.session.running = true;
     const steer = productionSteer(h.session, async () => {}, false, {
       inputHandoffSteerNote: noteFor,
-      shouldPrependMobileClientPromptNote: () => false,
     });
     await steer('s1', 'my own message');
     expect(noteFor).toHaveBeenCalledOnce();

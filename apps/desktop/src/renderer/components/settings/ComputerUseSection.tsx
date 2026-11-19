@@ -1,3 +1,4 @@
+import { usePluginInPlace } from '@/features/plugin/lib/pluginInPlace';
 import { computerUseSettings } from './ComputerUseSection.settings-search';
 /**
  * ComputerUseSection — Settings →「电脑使用 / Computer Use」面板。
@@ -39,6 +40,7 @@ import screenRecordingPermissionIcon from '@/assets/system-settings/screen-recor
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
+import { DownloadMeter } from '@/components/ui/download-meter';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -48,9 +50,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { createLogger } from '@/lib/logger';
-import { extractIpcError } from '@/utils/ipcError';
-import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
-import { pluginMarketErrorKey } from '@/features/plugin/lib/pluginMarketErrorKey';
 import { BrowserBackendSubsection } from './BrowserBackendSubsection';
 import { useAutomationSettingsRead } from './useAutomationSettingsRead';
 import { ComputerPermissionRow } from './ComputerPermissionRow';
@@ -60,7 +59,6 @@ import {
   REAL_PROFILE_READ_DENIED,
   type BrowserBackendHealth,
 } from '../../../shared/browserBackend';
-import { ghostInstallApprovalToken } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import {
   browserOpenForLoginErrorCode,
@@ -233,7 +231,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const [driverUpdate, setDriverUpdate] = useState<ComputerDriverUpdateCheck | null>(null);
   const [driverCheckPending, setDriverCheckPending] = useState(false);
   const [driverCheckFailed, setDriverCheckFailed] = useState(false);
-  // GitHub 未鉴权限额打满时 main 会标注原因:这种失败等配额重置就好,和真的要用户
+  // 上游/CDN 限流时 main 会标注原因:这种失败等一会儿重试就好,和真的要用户
   // 排查的网络故障分开说。旧版本 main 不下发 checkError,继续按普通失败处理。
   const driverCheckRateLimited =
     driverCheckFailed && driverUpdate?.checkError?.kind === 'rate_limited';
@@ -465,6 +463,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   );
   const navigate = useNavigate();
   const installedGhosts = useInstalledGhosts();
+  const { run: runPluginInPlace } = usePluginInPlace();
   const userBrowserPlugin =
     // Only the root instance can provide My browser (an organization copy with the same id cannot),
     // so that is the one the setup steps install, enable and open.
@@ -500,6 +499,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(userBrowserPlugin))}`
           : '/plugins',
       );
+    if (browserBackendHealth?.reason === 'browser-missing') {
+      // No Chrome / Edge yet: get Chrome first; the poll below moves on once it is installed.
+      void window.electronAPI.openExternal(CHROME_DOWNLOAD_URL);
+      return;
+    }
     if (browserBackendHealth?.reason === 'extension-disconnected') {
       // Open the store page in the user's own browser; the page polls and turns connected once the
       // extension is added. Without a Chromium browser, the plugin page explains the other routes.
@@ -532,40 +536,13 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     }
     setUserBrowserSetupBusy(true);
     try {
-      if (userBrowserPlugin) {
-        await window.electronAPI.ghosts.setEnabled(
-          installedGhostStoragePart(userBrowserPlugin),
-          true,
-          ghostInstallApprovalToken(userBrowserPlugin.approval),
-        );
-      } else {
-        // Market ids are opaque; the plugin is found by the ghost id it installs as.
-        const item = (await window.electronAPI.pluginMarket.lookup([RECOMMENDED_PAGE_CONTROL_PLUGIN_ID])).items.find(
-          (entry) => entry.ghostId === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
-        );
-        const detail = item ? await window.electronAPI.pluginMarket.detail(item.pluginId) : null;
-        if (detail?.installState !== 'not-installed') {
-          openPluginPage();
-          return;
-        }
-        const result = await window.electronAPI.pluginMarket.install(detail.pluginId, {
-          expectedReleaseId: detail.releaseId,
-          expectedManifest: detail.manifest,
-          allowSourceReplacement: false,
-        });
-        toast.success(t('settings.ghosts.toast.installed', { name: result.ghost.manifest.name }));
-      }
-      await refreshUserBrowserHealth();
-    } catch (error) {
-      const code = extractIpcError(error)?.code;
-      // Cancelling the install confirmation is not a failure.
-      if (code !== 'MUTATION_CANCELLED') {
-        toast.error(t(userBrowserPlugin ? ghostInstallErrorKey(code) : pluginMarketErrorKey(error)));
-      }
+      await runPluginInPlace({ ghostId: RECOMMENDED_PAGE_CONTROL_PLUGIN_ID, namespace: null }, {
+        onReady: refreshUserBrowserHealth,
+      });
     } finally {
       setUserBrowserSetupBusy(false);
     }
-  }, [browserBackendHealth?.reason, installedGhosts, navigate, refreshUserBrowserHealth, t, userBrowserPlugin]);
+  }, [browserBackendHealth?.reason, installedGhosts, navigate, refreshUserBrowserHealth, runPluginInPlace, t, userBrowserPlugin]);
   // While "My browser" still lacks its plugin or extension, check again every few seconds so the
   // guidance turns into "connected" as soon as the user finishes a step elsewhere.
   useEffect(() => {
@@ -1939,20 +1916,10 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   </button>
                 </div>
                 {driverUpdatePending &&
-                driverUpdateProgress?.phase === 'downloading' &&
-                driverUpdateProgress.downloadedBytes !== null &&
-                driverUpdateProgress.totalBytes ? (
-                  <div className="absolute inset-x-0 bottom-0 h-[2px] bg-[var(--settings-input-bg)]">
-                    <div
-                      className="h-full bg-[var(--settings-section-title)] transition-[width] duration-500"
-                      style={{
-                        width: `${Math.min(
-                          100,
-                          (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) *
-                            100,
-                        )}%`,
-                      }}
-                    />
+                driverUpdateProgress?.phase !== 'done' &&
+                driverUpdateProgress?.download ? (
+                  <div className="mt-3">
+                    <DownloadMeter label="cua-driver" progress={driverUpdateProgress.download} />
                   </div>
                 ) : null}
               </SettingsBlock>

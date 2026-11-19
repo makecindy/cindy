@@ -69,6 +69,9 @@ export interface ProviderShareDirectReceiptRoute {
   revokedAt?: number;
   /** Exact server membership incarnation, never compared with a local clock. */
   memberJoinedAt?: string;
+  /** A prepared executor can account for admitted tasks, but its own ID has no task history. */
+  standbyOnly?: true;
+  standbyLimit?: number | null;
 }
 
 export interface ProviderShareMemberGeneration {
@@ -251,6 +254,9 @@ function parseDirectReceiptRoute(value: unknown): ProviderShareDirectReceiptRout
       || (route.committedAt as number) <= 0))
     || (route.revokedAt !== undefined && (!Number.isSafeInteger(route.revokedAt)
       || (route.revokedAt as number) <= 0))
+    || (route.standbyLimit !== null && route.standbyLimit !== undefined && (!Number.isInteger(route.standbyLimit)
+      || Number(route.standbyLimit) < 1 || Number(route.standbyLimit) > 16))
+    || (route.standbyOnly === true && route.standbyLimit === undefined)
     || (route.memberJoinedAt !== undefined && !bounded('memberJoinedAt', 128))) return null;
   return {
     ownerScope: route.ownerScope as string, ownerDeviceId: route.ownerDeviceId as string,
@@ -264,6 +270,8 @@ function parseDirectReceiptRoute(value: unknown): ProviderShareDirectReceiptRout
     ...(route.committedAt !== undefined ? { committedAt: route.committedAt as number } : {}),
     ...(route.revokedAt !== undefined ? { revokedAt: route.revokedAt as number } : {}),
     ...(route.memberJoinedAt !== undefined ? { memberJoinedAt: route.memberJoinedAt as string } : {}),
+    ...(route.standbyOnly === true ? { standbyOnly: true as const } : {}),
+    ...(route.standbyLimit === null || typeof route.standbyLimit === 'number' ? { standbyLimit: route.standbyLimit } : {}),
   };
 }
 
@@ -476,7 +484,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
     for (const [key] of oldest.slice(0, map.size - MAX_ROWS)) map.delete(key);
   }
 
-  async function writeNow(commit?: { route: ProviderShareDirectReceiptRoute; location: ProviderShareDirectTaskLocation }): Promise<void> {
+  async function writeNow(commit?: { route: ProviderShareDirectReceiptRoute; location?: ProviderShareDirectTaskLocation }): Promise<void> {
     const map = load();
     if (timer) {
       clearTimeout(timer);
@@ -488,11 +496,10 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
     for (const [key, route] of directReceiptRoutes) {
       if (route.expiresAt + DIRECT_RECEIPT_GRACE_MS <= now()) directReceiptRoutes.delete(key);
     }
-    // A committing location is staged only in the disk image. Synchronous lookups
-    // and receipts cannot observe it until the atomic replacement has succeeded.
+    // Synchronous lookups and receipts can see a commit only after the atomic replacement succeeds.
     const receiptRoutes = commit
       ? new Map(directReceiptRoutes).set(directReceiptRouteKey(commit.route), commit.route) : directReceiptRoutes;
-    const taskLocations = commit
+    const taskLocations = commit?.location
       ? new Map(directTaskLocations).set(directTaskLocationKey(commit.location), commit.location) : directTaskLocations;
     const body = JSON.stringify({ version: FILE_VERSION, rows: [...map.values()], recentUsageIds: [...recentUsageIds],
       directReceiptRoutes: [...receiptRoutes.values()], directCleanupTargets: [...directCleanupTargets.values()],
@@ -771,7 +778,7 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
         if (!route || route.expiresAt <= now()) throw new Error('Invalid direct receipt route');
         load();
         if (!memberGenerationReady(route, route.memberJoinedAt)) throw new Error('Provider share member cleanup is pending');
-        if (!directTaskLocations.has(directTaskLocationKey(route)) && directTaskLocations.size >= MAX_DIRECT_TASK_LOCATIONS) {
+        if (!route.standbyOnly && !directTaskLocations.has(directTaskLocationKey(route)) && directTaskLocations.size >= MAX_DIRECT_TASK_LOCATIONS) {
           throw new Error('Direct task location ledger is full');
         }
         for (const [key, saved] of directReceiptRoutes) {
@@ -827,14 +834,14 @@ export function createProviderShareUsageStore(filePath: string, options: { now?:
         if (route.committedAt !== undefined) return;
         const locationKey = directTaskLocationKey(route);
         const previousLocation = directTaskLocations.get(locationKey);
-        if (!previousLocation && directTaskLocations.size >= MAX_DIRECT_TASK_LOCATIONS) {
+        if (!route.standbyOnly && !previousLocation && directTaskLocations.size >= MAX_DIRECT_TASK_LOCATIONS) {
           throw new Error('Direct task location ledger is full');
         }
         const updated = { ...route, committedAt: now() };
-        const location = parseDirectTaskLocation(updated)!;
+        const location = updated.standbyOnly ? undefined : parseDirectTaskLocation(updated)!;
         await writeNow({ route: updated, location });
         directReceiptRoutes.set(key, updated);
-        directTaskLocations.set(locationKey, location);
+        if (location) directTaskLocations.set(locationKey, location);
       });
     },
     async recordDirectReceipt(ownerScope: string, ownerDeviceId: string, executorDeviceId: string,

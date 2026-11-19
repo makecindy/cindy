@@ -37,7 +37,12 @@ const RETRY_AFTER_SECONDS_KEYS = new Set([
   'retry_after_seconds',
 ]);
 const PLAN_TYPE_KEYS = new Set(['plantype', 'plan_type']);
-const EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN = /\busage_limit_reached\b|\busageLimitExceeded\b/;
+const EXPLICIT_ACCOUNT_USAGE_LIMIT_PATTERN = /\busage_limit_reached\b|\busageLimitExceeded\b|\[SUBSCRIPTION_ACCOUNT_LIMITED\]/;
+
+/** Claude may expose only its human-readable limit message, without SDK tags. */
+export function isClaudeUsageLimitMessage(message: string): boolean {
+  return /\byou(?:'|’)ve\s+hit\s+your\s+(?:(?:session|weekly|5[- ]hour)\s+)?limit\b/i.test(message);
+}
 
 function asRecord(value: unknown): UnknownRecord | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -351,7 +356,8 @@ export function extractUsageLimitRecoveryHint(
     isAccountUsageLimit ||
     root.usageLimit === true ||
     status === 429 ||
-    /\b(?:rate.?limit|usage.?limit|too\s+many\s+requests|quota\s+(?:exceeded|exhausted)|you(?:'|’)ve\s+hit\s+your\s+(?:(?:session|weekly)\s+)?limit)\b/i.test(
+    isClaudeUsageLimitMessage(text) ||
+    /\b(?:rate.?limit|usage.?limit|too\s+many\s+requests|quota\s+(?:exceeded|exhausted))\b/i.test(
       text,
     );
   if (!isUsageLimit) return null;

@@ -16,9 +16,10 @@ export default {
       `export const useSessionGitContext=()=>({head:null,branchSource:null,prRefs:[{id:'ref',sessionId:'pr-task',owner:'makecindy',repo:'cindy',prNumber:9261}],prStatuses:statuses});`,
     'src/renderer/contexts/PrRefsContext':
       state +
-      `export const usePrStatuses=()=>({statuses}); export const useTaskPrArchiveEligibility=()=>({eligible:false}); export const usePrActions=()=>({});`,
+      `export const usePrRefsForSession=()=>[]; export const usePrStatuses=()=>({statuses}); export const useTaskPrArchiveEligibility=()=>({eligible:false}); export const usePrActions=()=>({});`,
   },
   cases: {
+    click: { about: 'Click and keyboard open a persistent summary; only its link navigates' },
     default: { about: 'Compact PR footer and separate settings with real plugin HTML' },
     idle: {
       about: 'Following, pointer outside the follow row',
@@ -31,7 +32,8 @@ export default {
   },
   async ready(page) {
     const name = await page.evaluate(() => window.__uiPage.ctx.case);
-    await page.locator('[data-pr-chip]').hover();
+    if (name === 'click') await page.locator('[data-pr-chip]').click();
+    else await page.locator('[data-pr-chip]').hover();
     await page.locator('[data-pr-manage]').waitFor();
     if (name !== 'uninstalled')
       await page
@@ -40,6 +42,34 @@ export default {
         .waitFor();
   },
   async check(page, ui) {
+    if ((await page.evaluate(() => window.__uiPage.ctx.case)) === 'click') {
+      const chip = page.locator('[data-pr-chip]');
+      const panel = page.getByRole('dialog');
+      await page.mouse.move(800, 800);
+      // real-wait: browser-level check that pointer leave cannot expire a clicked summary.
+      await page.waitForTimeout(400);
+      assert.equal(await panel.isVisible(), true);
+      assert.deepEqual(await page.evaluate(() => window.__prOpenedUrls), []);
+      await panel.getByRole('link').click();
+      assert.deepEqual(await page.evaluate(() => window.__prOpenedUrls), [
+        'https://github.com/makecindy/cindy/pull/9261',
+      ]);
+      await page.mouse.click(800, 800);
+      await panel.waitFor({ state: 'hidden' });
+      await chip.focus();
+      await chip.press('Enter');
+      await chip.press('Tab');
+      assert.equal(
+        await panel.getByRole('link').evaluate((el) => el === document.activeElement),
+        true,
+      );
+      await page.keyboard.press('Escape');
+      await panel.waitFor({ state: 'hidden' });
+      await chip.press('Space');
+      await panel.waitFor();
+      await ui.capture('clicked-summary');
+      return;
+    }
     if ((await page.evaluate(() => window.__uiPage.ctx.case)) === 'reference') {
       const frame = page.frameLocator('iframe');
       await frame.getByText('其他任务正在跟进', { exact: true }).waitFor();
@@ -66,6 +96,7 @@ export default {
     await ui.capture('not-following');
     await act('pr:follow').click();
     await frame.locator('[data-ghost-live-label]').waitFor();
+    assert.equal(await frame.locator('[data-ghost-live-label]').innerText(), await ui.t('ccAgent.gitContext.pr.following'));
     const waitForStopOpacity = (opacity) =>
       page.waitForFunction((value) => {
         const doc = document.querySelector('iframe')?.contentDocument;

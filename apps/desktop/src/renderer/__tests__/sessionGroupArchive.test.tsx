@@ -13,6 +13,7 @@ import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { toast } from '@/lib/toast';
+import { discardDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
 import type { AutomationScheduleSessionInfo } from '@/features/cc-agent/lib/automationSidebarGrouping';
 
@@ -37,12 +38,12 @@ vi.mock('@/lib/makerChatStore', () => ({
     getRunningSnapshot: () => liveRunning,
   },
 }));
-vi.mock('@/lib/composerDraftStore', () => ({ discardDraft: vi.fn() }));
 vi.mock('@/lib/sessionsBus', () => ({ emitRefresh: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ toast: { warning: vi.fn(), success: vi.fn(), error: vi.fn() } }));
 
 const worktreeRemovalPreview = vi.fn();
 const resolveSession = vi.fn();
+const cleanupStagedChatAttachments = vi.fn();
 
 function automationScope(members: Session[]) {
   return {
@@ -116,7 +117,12 @@ beforeEach(() => {
   vi.mocked(sessionService.resolveStatusWriteTarget).mockResolvedValue({ kind: 'local' });
   resolveSession.mockReset().mockResolvedValue({ attached: false });
   worktreeRemovalPreview.mockReset().mockResolvedValue({ hasWorktree: true, dirty: false });
-  vi.stubGlobal('electronAPI', { worktreeRemovalPreview, binding: { resolveSession } });
+  cleanupStagedChatAttachments.mockReset().mockResolvedValue(undefined);
+  vi.stubGlobal('electronAPI', {
+    worktreeRemovalPreview,
+    binding: { resolveSession },
+    cleanupStagedChatAttachments,
+  });
 });
 afterEach(() => {
   cleanup();
@@ -377,6 +383,32 @@ describe('session group bulk lifecycle', () => {
     expect(view.options.navigate).toHaveBeenCalledWith('/cc-agent');
   });
 
+  // Regression: group archive discarded each member's unsent composer draft and
+  // its staged attachment copy, so Restore brought the history back without it.
+  // Real composerDraftStore; minimal input: one archived member with a draft.
+  it('keeps an archived member unsent draft and staged attachment for restore', async () => {
+    const stagedPath = 'C:/cache/chat-attachments/notes.bin';
+    saveDraft('eligible', {
+      text: plainTextToTiptapDoc('unsent'),
+      attachments: [{
+        id: 'att-1', name: 'notes.txt', path: stagedPath, ext: 'txt', size: 5,
+        category: 'text', mimeType: 'text/plain',
+      }],
+    });
+    try {
+      const view = mount([session('eligible')]);
+      await act(async () => {
+        await view.result.current({ kind: 'dialogue', sessions: [session('eligible')] });
+      });
+      expect(view.writes.get('eligible')?.status).toBe('archived');
+      expect(getDraft('eligible')?.text).toEqual(plainTextToTiptapDoc('unsent'));
+      expect(getDraft('eligible')?.attachments.map((file) => file.path)).toEqual([stagedPath]);
+      expect(cleanupStagedChatAttachments).not.toHaveBeenCalled();
+    } finally {
+      discardDraft('eligible');
+    }
+  });
+
   it('rejects an automation owned by another computer before confirming or writing', async () => {
     const runs = [session('eligible')];
     const view = mount(runs);
@@ -520,25 +552,83 @@ describe('session group bulk lifecycle', () => {
     },
   );
 
+  // Unit: a remote project and a local task share an ID. Confirming (or cancelling)
+  // the remote preview must never send a local status write or archive a newly added ID.
+  it.each([false, true])('honours remote project confirmation (%s) on the selected device', async confirmed => {
+    const view = mount([session('same')]);
+    const project = { scope: 'remote', projectKey: 'device:studio:/repo', workingDir: '/repo',
+      displayName: 'Demo', deviceLinkDeviceId: 'studio', deviceLinkDeviceName: 'Studio',
+      remoteMachineIdentity: { kind: 'device-link', label: 'Studio', displayLabel: 'Studio' },
+    } as ProjectNode;
+    const apply = vi.fn();
+    const invoke = vi.fn(async (device, channel, [request]) => {
+      expect(device).toBe('studio');
+      if (channel === 'maker:schedule:list') return [];
+      expect(channel).toBe('local-db:sessions:project-archive');
+      expect(request.directory).toBe('/repo');
+      if (request.operation === 'preview') return [
+        { id: 'same', blocked: null, hasWorktree: false },
+        { id: 'protected', blocked: 'running', hasWorktree: false },
+      ];
+      apply(request.sessionId);
+      return 'updated';
+    });
+    vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+    view.options.confirmDialog.mockResolvedValue(confirmed);
+    await act(async () => { await view.result.current({ kind: 'project', project }); });
+    expect(view.options.confirmDialog).toHaveBeenCalledOnce();
+    expect(view.options.confirmDialog.mock.calls[0][0].title).toContain('Demo (Studio)');
+    expect(view.options.confirmDialog.mock.calls[0][0].description).toContain('descriptionWithSkip');
+    expect(apply.mock.calls).toEqual(confirmed ? [['same']] : []);
+    expect(sessionService.setStatus).not.toHaveBeenCalled();
+    expect(view.options.patchLocal).not.toHaveBeenCalled();
+  });
+
   it('retains project scope and project wording through the shared lifecycle', async () => {
     const projectTask = session('project', { workspaceKind: 'project', workingDir: '/repo' });
     const view = mount([projectTask, session('dialogue')]);
     const project = {
+      scope: 'local', displayName: 'repo', workingDir: '/repo', remoteHostId: null,
       projectKey: projectIdentityKeyForSession(projectTask),
       sessions: [projectTask],
     } as ProjectNode;
-    worktreeRemovalPreview.mockResolvedValue({ hasWorktree: true, dirty: true });
-    await act(async () => {
-      await view.result.current({ kind: 'project', project });
+    const apply = vi.fn();
+    Object.assign(window.electronAPI, { localDb: { sessions: { projectArchive: async (request: { operation: string; sessionId?: string }) => {
+      if (request.operation === 'preview') return [
+        { id: 'project', hasWorktree: true, blocked: null }, { id: 'beyond-sidebar', hasWorktree: false, blocked: null },
+      ];
+      apply(request.sessionId);
+      return 'updated';
+    } } } });
+    worktreeRemovalPreview.mockImplementation(async (id) => ({ hasWorktree: id === 'project', dirty: id === 'project' }));
+    // Project archive uses its own host receipt path. Preserve the real draft and
+    // staged file here too, including when restoring this task later.
+    saveDraft('project', {
+      text: plainTextToTiptapDoc('unsent project notes'),
+      attachments: [{
+        id: 'project-notes', name: 'project.txt', path: 'C:/cache/chat-attachments/project.txt',
+        ext: 'txt', size: 5, category: 'text', mimeType: 'text/plain',
+      }],
     });
-    expect(view.writes.get('project')?.status).toBe('archived');
-    expect(view.writes.get('dialogue')?.status).toBe('active');
-    expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
-      'ccAgent.sidebar.archiveAll.description',
-    );
-    expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
-      'ccAgent.sidebar.bulkSelection.confirmArchive.dirtyWorktreeWarning:{"count":1}',
-    );
-    expect(worktreeRemovalPreview).toHaveBeenCalledExactlyOnceWith('project');
+    try {
+      await act(async () => {
+        await view.result.current({ kind: 'project', project });
+      });
+      expect(getDraft('project')?.text).toEqual(plainTextToTiptapDoc('unsent project notes'));
+      expect(getDraft('project')?.attachments[0]?.path).toBe('C:/cache/chat-attachments/project.txt');
+      expect(cleanupStagedChatAttachments).not.toHaveBeenCalled();
+      expect(apply.mock.calls).toEqual([['project'], ['beyond-sidebar']]);
+      expect(view.options.patchLocal).toHaveBeenCalledWith('project', { status: 'archived' });
+      expect(view.writes.get('dialogue')?.status).toBe('active');
+      expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
+        'ccAgent.sidebar.archiveAll.description',
+      );
+      expect(view.options.confirmDialog.mock.calls[0][0].description).toContain(
+        'ccAgent.sidebar.bulkSelection.confirmArchive.dirtyWorktreeWarning:{"count":1}',
+      );
+      expect(worktreeRemovalPreview).toHaveBeenCalledWith('project');
+    } finally {
+      discardDraft('project');
+    }
   });
 });

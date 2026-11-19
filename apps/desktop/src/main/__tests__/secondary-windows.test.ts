@@ -9,6 +9,7 @@ vi.mock('electron', () => ({
   BrowserWindow: class {
     webContents = { on: vi.fn(), once: vi.fn(), setWindowOpenHandler: vi.fn() };
     once = vi.fn();
+    hookWindowMessage = vi.fn();
     loadURL = mocks.loadURL;
     loadFile = mocks.loadFile;
   },
@@ -28,7 +29,6 @@ vi.mock('../windowFocusClassifier.js', () => ({
 vi.mock('../window-behavior-settings-store.js', () => ({
   readWindowBehaviorSettings: () => ({ swallowActivationClick: false }),
 }));
-vi.mock('../vibrancyConfig.js', () => ({ resolveVibrancyConfig: () => ({}) }));
 vi.mock('../selection-context-menu.js', () => ({ installSelectionContextMenu: vi.fn() }));
 vi.mock('../appearance-settings-ipc.js', () => ({
   applyAppearanceToWindow: vi.fn(),

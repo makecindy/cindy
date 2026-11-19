@@ -163,21 +163,33 @@ describe('createWorktree naming authority', () => {
   // A caller that hands the directory to a running agent must not get it before the tree is complete.
   it('awaitFullCheckout returns only after the full checkout, and fails with a rollback if it fails', async () => {
     const previousGit = gitExecMock.getMockImplementation()!;
+    let enteredCheckout!: () => void;
+    const checkoutStarted = new Promise<void>((resolve) => { enteredCheckout = resolve; });
     let finishCheckout!: (fail: boolean) => void;
     const checkout = new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
       finishCheckout = (fail) => (fail ? reject(new Error('checkout failed')) : resolve({ stdout: '', stderr: '' }));
     });
     gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
-      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
+      if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) {
+        enteredCheckout();
+        return checkout;
+      }
       return previousGit(args, ...rest);
     });
     let settled = false;
     const creating = manager.createWorktree({ sessionId: 'full-checkout', baseRepo, name: 'full', sourceBranch: 'main' }, { awaitFullCheckout: true })
       .finally(() => { settled = true; });
-    await vi.waitFor(() => expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'checkout' && args.includes(':(exclude).sivi'))).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(settled).toBe(false);
-    finishCheckout(true);
+    try {
+      // Reaching checkout includes real temporary-directory I/O. Its latency
+      // is not the wait/rollback contract; synchronize on the actual Git edge.
+      await checkoutStarted;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(settled).toBe(false);
+    } finally {
+      // Do not leak the writer into the next test if an assertion fails.
+      finishCheckout(true);
+      await creating;
+    }
     await expect(creating).resolves.toMatchObject({ ok: false });
     expect(gitExecMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(true);
   });
@@ -194,11 +206,15 @@ describe('createWorktree naming authority', () => {
     const setup = new Promise<void>(resolve => { reachedSetup = resolve; });
     gitExecMock.mockImplementation((args: string[], ...rest: unknown[]) => {
       if (args[0] === 'checkout' && args.includes(':(exclude).sivi')) return checkout;
-      if (args.includes('core.hooksPath')) {
-        reachedSetup();
-        if (failSetup) return Promise.reject(new Error('hooks failed'));
-      }
       return previousGit(args, ...rest);
+    });
+    // #11157 removes the hooks write; keep exercising failure compensation at
+    // the remaining fatal metadata-persistence boundary (unit tier).
+    const previousSet = storeSetMock.getMockImplementation()!;
+    storeSetMock.mockImplementation((...args: unknown[]) => {
+      reachedSetup();
+      if (failSetup) return Promise.reject(new Error('metadata failed'));
+      return previousSet(...args);
     });
     const sessionId = `tracked-${failSetup}`;
     const creating = manager.createWorktree({sessionId, baseRepo, name: 'tracked', sourceBranch: 'main'}, {trackBackgroundCheckout: true});
@@ -364,5 +380,93 @@ describe('createWorktree naming authority', () => {
     expect(storeSetMock).not.toHaveBeenCalled();
     expect(storeMap.has('cancel-during-setup')).toBe(false);
     expect(gitExecMock).toHaveBeenCalledWith(['worktree', 'remove', path.join(baseRepo, '.cindy-worktrees', 'cancelled')], baseRepo);
+  });
+
+  // Multibox backend (worktree/multibox.ts). Rule: use `git multibox add` only when the repo
+  // has .multibox.toml AND the command is installed; it must not carry --no-checkout (multibox
+  // then silently degrades to a plain worktree without caches) and must not be followed by the
+  // deferred checkout. Existing tests only cover the native path. Unit tier, Git faked.
+  describe('multibox backend', () => {
+    const isMultiboxAdd = (args: string[]) => args.includes('multibox') && args.includes('add');
+    const isWorktreeAdd = (args: string[]) => args[0] === '-c' && args[2] === 'worktree' && args[3] === 'add';
+
+    function useMultiboxRepo({ config = true, installed = true, addError }: { config?: boolean; installed?: boolean; addError?: string } = {}) {
+      if (config) fs.writeFileSync(path.join(baseRepo, '.multibox.toml'), '[carry]\n');
+      const previousGit = gitExecMock.getMockImplementation()!;
+      gitExecMock.mockImplementation(async (args: string[], ...rest: unknown[]) => {
+        if (args[0] === 'multibox' && args[1] === '--version') {
+          if (!installed) throw new Error("git: 'multibox' is not a git command");
+          return { stdout: 'git-multibox 0.1.3\n', stderr: '' };
+        }
+        if (isMultiboxAdd(args)) {
+          if (addError) throw new Error(addError);
+          return { stdout: '{"method":"reflink","seconds":1.5,"environment":{"UNITY_PROJECT_PATH":"x"},"warnings":[]}\n', stderr: '' };
+        }
+        return previousGit(args, ...rest);
+      });
+    }
+
+    it.each([
+      { config: true, installed: true, expected: 'multibox' },
+      { config: true, installed: false, expected: 'worktree' },
+      { config: false, installed: true, expected: 'worktree' },
+    ])('config=$config installed=$installed creates with git $expected', async ({ config, installed, expected }) => {
+      useMultiboxRepo({ config, installed });
+
+      await expect(create('mb')).resolves.toMatchObject({ ok: true, meta: { branch: 'cindy/mb' } });
+
+      const calls = gitExecMock.mock.calls.map(([args]) => args as string[]);
+      const worktreePath = path.join(baseRepo, '.cindy-worktrees', 'mb');
+      if (expected === 'multibox') {
+        expect(calls.filter(isMultiboxAdd)).toEqual([[
+          '-c', 'core.longpaths=true', 'multibox', 'add', '--json', '--no-track', '-b', 'cindy/mb', worktreePath, 'main',
+        ]]);
+        expect(calls.some(isWorktreeAdd)).toBe(false);
+        // Multibox returns a complete tree: no staged or background checkout afterwards.
+        expect(calls.some((args) => args[0] === 'checkout')).toBe(false);
+        expect(includeMock).toHaveBeenCalledWith(baseRepo, worktreePath, { overwriteExisting: false });
+      } else {
+        expect(calls.some(isMultiboxAdd)).toBe(false);
+        expect(calls.filter(isWorktreeAdd)[0]).toContain('--no-checkout');
+        // Ordinary repositories (no config file) pay no extra Git process for the probe.
+        if (!config) expect(calls.some((args) => args[0] === 'multibox')).toBe(false);
+      }
+    });
+
+    // Choose by "enabled", not by "failed": a -b retry through plain git would hit the
+    // branch multibox may already have created and hide the real error from the user.
+    it('returns the multibox error as-is without retrying through git worktree add', async () => {
+      useMultiboxRepo({ addError: 'is on another volume' });
+
+      await expect(create('mb-fail')).resolves.toMatchObject({
+        ok: false,
+        error: { kind: 'unknown', rawStderr: expect.stringContaining('is on another volume') },
+      });
+      const calls = gitExecMock.mock.calls.map(([args]) => args as string[]);
+      expect(calls.some(isWorktreeAdd)).toBe(false);
+      expect(storeSetMock).not.toHaveBeenCalled();
+    });
+
+    // Compensation after a later setup failure must keep the dirty check (no -f) and wait
+    // for the deletion (--wait). The carried engine caches came from the base checkout in
+    // this same create, so they must not block it (the native rollback would preserve a
+    // worktree whose ignored file differs from base) nor be compared byte by byte.
+    it('rolls back a failed setup with multibox remove --wait, without force, despite carried caches', async () => {
+      useMultiboxRepo();
+      storeSetMock.mockRejectedValueOnce(new Error('metadata failed'));
+      const previousGit = gitExecMock.getMockImplementation()!;
+      gitExecMock.mockImplementation(async (args: string[], ...rest: unknown[]) => {
+        if (args[0] === 'ls-files' && args.includes('--ignored')) {
+          return { stdout: 'client/Library/ArtifactDB\0', stderr: '' };
+        }
+        return previousGit(args, ...rest);
+      });
+
+      await expect(create('mb-rollback')).resolves.toMatchObject({ ok: false });
+      expect(gitExecMock).toHaveBeenCalledWith(
+        ['-c', 'core.longpaths=true', 'multibox', 'remove', '--wait', path.join(baseRepo, '.cindy-worktrees', 'mb-rollback')],
+        baseRepo,
+      );
+    });
   });
 });

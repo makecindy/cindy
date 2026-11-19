@@ -43,7 +43,7 @@ function browser(respond = () => ({}), script = source, openEvents = (_url, { si
   calls.length = 0; // Ignore the independent plugin-list boot read.
   const close = () => listeners.get('pagehide')?.({ persisted: false });
   cleanups.push(close);
-  return { api: window.electronAPI, calls, redirects, opened, focus: () => listeners.get('focus')?.(), close };
+  return { api: window.electronAPI, window, calls, redirects, opened, focus: () => listeners.get('focus')?.(), close };
 }
 
 // Browser Files have no local filesystem authority, and opening a task must
@@ -55,6 +55,21 @@ test('browser-only task actions preserve synchronous paths and same-origin navig
   assert.deepEqual(b.opened, [['http://127.0.0.1:1234/#/cc-agent/task%2Fa', '_blank', 'noopener,noreferrer']]);
   await assert.rejects(b.api.maker.openSessionInNewWindow('task', 'another-device'), /HOST_CHANNEL_UNSUPPORTED/);
   assert.equal(b.opened.length, 1);
+});
+
+// Regression: a release built with `--harnesses pi-bin` has no Claude Code or
+// Codex, and the startup check required both, so the web client stayed on its
+// startup failure screen. Minimal inputs: Pi only passes; no ready agent fails.
+test('the startup check passes when any bundled agent is ready', async () => {
+  const b = browser();
+  for (const [harness, passed] of [
+    [{ 'claude-code': false, codex: false, pi: true }, true],
+    [{ 'claude-code': true, codex: true, pi: false }, true],
+    [{ 'claude-code': false, codex: false, pi: false }, false],
+  ]) {
+    b.window.__cindyBoot = { harness };
+    assert.equal((await b.api.checkEnvironment()).allPassed, passed, JSON.stringify(harness));
+  }
 });
 
 test('both auth API shapes use the same Host routes', async () => {
@@ -69,13 +84,32 @@ test('both auth API shapes use the same Host routes', async () => {
   assert.ok(b.calls.every(c => c.credentials === 'same-origin'));
 });
 
-test('entering the app preserves the actual Host auth verdict', async () => {
+test('installation and business confirmations use the authenticated Host routes', async () => {
+  const b = browser(() => ({ granted: true, handled: true }));
+  await b.api.ghosts.resolveInstallConsent('group-request', true);
+  await b.api.ghosts.resolveConfirm('command-request', false);
+  assert.deepEqual(b.calls.map(call => ({ url: call.url, body: call.body })), [
+    { url: '/api/ghosts/install-consent/resolve', body: { requestId: 'group-request', confirmed: true } },
+    { url: '/api/ghosts/confirm/resolve', body: { requestId: 'command-request', confirmed: false } },
+  ]);
+});
+
+// #10601: a state query silently accepted local entry. Unit: public shim API;
+// no Host identity exists, so entry must reject without querying signed-out auth.
+test('browser local entry is unavailable without querying Host auth', async () => {
+  const b = browser();
+  assert.equal(b.api.hostConnection.client, 'browser');
+  await assert.rejects(b.api.authEnterLocal(), /HOST_CHANNEL_UNSUPPORTED/);
+  assert.equal(b.calls.length, 0);
+});
+
+test('initializing auth preserves the actual Host auth verdict', async () => {
   for (const state of [
     { user: { id: 'test-user' }, mode: 'cloud', canEnterApp: true },
     { user: null, mode: 'signed-out', canEnterApp: false },
   ]) {
     const b = browser(() => state);
-    assert.deepEqual(JSON.parse(JSON.stringify(await b.api.authEnterLocal())), state);
+    assert.deepEqual(JSON.parse(JSON.stringify(await b.api.authInitialize())), state);
   }
 });
 
@@ -94,11 +128,15 @@ test('history events reach the browser preload subscribers exactly once', async 
     { seq: 2, type: 'error_persisted', sessionId: 'task', persistId: 'err' },
     { seq: 3, type: 'subagent_runs_changed', sessionId: 'task' },
     { seq: 4, type: 'task_tags_changed', payload: { tags: [{ id: 'tag', name: 'Review', color: 'blue' }] }, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 } },
+    { seq: 5, type: 'input_receipt', sessionId: 'task', inputClientId: 'stopped', clientId: 'stopped', status: 'interrupted' },
+    { seq: 6, type: 'text', sessionId: 'task', inputClientId: 'next', data: { text: 'next reply' } },
   ];
   const b = browser(() => ({}), source, () => new Response(new ReadableStream({ start(controller) {
     controller.enqueue(new TextEncoder().encode(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
   } })));
   const received = [];
+  const agentEvents = [];
+  b.api.maker.onEvent(event => agentEvents.push(event));
   b.api.localDb.messages.onDeleted(event => received.push(event));
   b.api.localDb.messages.onErrorPersisted(event => received.push(event));
   b.api.localDb.subagentRuns.onChanged(event => received.push(event));
@@ -108,6 +146,11 @@ test('history events reach the browser preload subscribers exactly once', async 
     frames[0], { sessionId: 'task', persistId: 'err' }, frames[2],
     { payload: frames[3].payload, ownerStamp: frames[3].ownerStamp },
   ]);
+  // Host stop receipts belong to /chat, not the Agent timeline. A real text
+  // event must still reach the renderer exactly once after that receipt.
+  assert.equal(agentEvents.length, 1);
+  assert.equal(agentEvents[0].event.type, 'text');
+  assert.equal(agentEvents[0].event.data.text, 'next reply');
   b.close();
 });
 
@@ -155,6 +198,15 @@ test('unsupported web actions cannot report a successful save or execution', asy
   ]) {
     await assert.rejects(action(), { code: 'HOST_CHANNEL_UNSUPPORTED' });
   }
+  assert.equal(b.calls.length, 0);
+});
+
+// Regression: the generic read fallback answered `modelGroups.get()` with `null`;
+// the renderer stored it as the model group config and the model picker crashed
+// reading `config.routes`. Minimal input: one call, which must reject.
+test('the model groups read rejects instead of answering a null config', async () => {
+  const b = browser();
+  await assert.rejects(b.api.modelGroups.get(), { code: 'HOST_CHANNEL_UNSUPPORTED' });
   assert.equal(b.calls.length, 0);
 });
 

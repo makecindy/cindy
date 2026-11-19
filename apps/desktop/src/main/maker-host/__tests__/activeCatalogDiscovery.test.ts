@@ -410,6 +410,8 @@ describe('active-catalog discovered augment', () => {
     openai.models.pi = [
       {
         ...fake('chatgpt/gpt-5.7'),
+        // Parsed server windows are verified by parseCatalog/withVerifiedStaticWindows.
+        contextWindowVerified: true,
         piApi: 'openai-responses',
       },
     ];
@@ -805,7 +807,8 @@ describe('active-catalog discovered augment', () => {
 
   it('legacy v1 远端目录的静态段被忽略(清单来源唯一化:注册表快照就是全部)', () => {
     setActiveCatalog(legacyCatalog());
-    setDiscoveredCodexModels([fake('gpt-5.5')]);
+    // Match mapCodexModelsCache: an explicitly reported context_window is verified.
+    setDiscoveredCodexModels([{ ...fake('gpt-5.5'), contextWindowVerified: true }]);
     const ids = openaiIds('codex');
     expect(ids).toEqual(['gpt-5.5']);
     const openai = getActiveCatalog().providers.find((p) => p.id === 'openai');

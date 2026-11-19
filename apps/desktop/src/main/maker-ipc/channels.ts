@@ -439,10 +439,6 @@ export const MAKER_INVOKE = {
   /** Global exact-model choices for short host-generated text tasks. */
   AUXILIARY_MODEL_SETTINGS_GET: 'maker:auxiliary-model-settings:get',
   AUXILIARY_MODEL_SETTINGS_SET: 'maker:auxiliary-model-settings:set',
-  /** 视觉桥设置（两个清单：目标模型 + 视觉后端）。 */
-  VISION_BRIDGE_SETTINGS_GET: 'maker:vision-bridge-settings:get',
-  VISION_BRIDGE_SETTINGS_SET: 'maker:vision-bridge-settings:set',
-  VISION_BRIDGE_SETTINGS_RESET: 'maker:vision-bridge-settings:reset',
   SILENT_ENCRYPTED_RETRY_GET: 'maker:silent-encrypted-retry:get',
   SILENT_ENCRYPTED_RETRY_SET: 'maker:silent-encrypted-retry:set',
   SILENT_ENCRYPTED_RETRY_RESET: 'maker:silent-encrypted-retry:reset',
@@ -457,6 +453,9 @@ export const MAKER_INVOKE = {
   COMPACTION_GET_STATE: 'maker:compaction:get-state',
   COMPACTION_SET_PCT: 'maker:compaction:set-pct',
   COMPACTION_RESET_PCT: 'maker:compaction:reset-pct',
+  // Codex 原生压缩方式（本机 owner 设置）。
+  CODEX_COMPACTION_GET: 'maker:codex-compaction:get',
+  CODEX_COMPACTION_SET: 'maker:codex-compaction:set',
   /** Pi 原生自动上下文压缩触发阈值。下次 startSession / 恢复任务时读取。 */
   PI_COMPACTION_GET_PCT: 'maker:pi-compaction:get-pct',
   PI_COMPACTION_GET_STATE: 'maker:pi-compaction:get-state',
@@ -563,6 +562,8 @@ export const MAKER_INVOKE = {
   LLAMACPP_CANCEL: 'maker:llamacpp:cancel',
   PROVIDER_IMPORT_PREVIEW: 'maker:provider:import:preview',
   PROVIDER_IMPORT_FILE: 'maker:provider:import:file',
+  PROVIDER_IMPORT_LOCAL_SCAN: 'maker:provider:import:local-scan',
+  PROVIDER_IMPORT_LOCAL_EDIT: 'maker:provider:import:local-edit',
   PROVIDER_IMPORT_CONFIRM: 'maker:provider:import:confirm',
   PROVIDER_IMPORT_CANCEL: 'maker:provider:import:cancel',
   /**
@@ -854,6 +855,7 @@ export const MAKER_INVOKE = {
   COMPANION_CLOUD_STATE: 'maker:companion-cloud:state',
   /** Make this computer the companion's home (cloud-companions.md §3.1). */
   COMPANION_CLOUD_TAKE_OVER: 'maker:companion-cloud:take-over',
+  COMPANION_CLOUD_REPAIR_PROFILE: 'maker:companion-cloud:repair-profile',
   /** Move the companion to another computer from any computer (hand over, ask its home, or take over). */
   COMPANION_CLOUD_SWITCH_HOME: 'maker:companion-cloud:switch-home',
   /** Read the companion's 1:1 room (works while its home is offline). */

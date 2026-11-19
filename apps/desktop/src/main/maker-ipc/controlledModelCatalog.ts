@@ -1,4 +1,4 @@
-import { scrubSharedProviderCatalog, type InvokeResultPayload } from '@cindy/device-link';
+import { PROVIDER_SHARE_GROUP_STATUS_REQUEST, scrubSharedProviderCatalog, type InvokeResultPayload } from '@cindy/device-link';
 import { MODEL_CATALOG_READ_CHANNELS, type ControlledModelLocation } from '../../shared/controlledModelCatalog.js';
 import { extractIpcError } from '../../shared/ipcError.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -34,13 +34,18 @@ export function createControlledModelCatalogReader(deps: ControlledModelCatalogD
     }
     const agentRead = request.channel === 'maker:get-capabilities' || request.channel === 'maker:agent:status';
     const providerOptions = request.args[0];
+    const shareStatusRead = isProviderShareAgentDeviceId(request.agentDeviceId) && !!providerOptions
+      && typeof providerOptions === 'object' && !Array.isArray(providerOptions)
+      && Object.keys(providerOptions).length === 1
+      && PROVIDER_SHARE_GROUP_STATUS_REQUEST in providerOptions
+      && providerOptions[PROVIDER_SHARE_GROUP_STATUS_REQUEST] === true;
     const validProviderOptions = request.args.length === 0 || (!!providerOptions
       && typeof providerOptions === 'object' && !Array.isArray(providerOptions)
       && Object.keys(providerOptions).every(key => key === 'capabilities')
       && Array.isArray(providerOptions.capabilities)
       && providerOptions.capabilities.every((value: unknown) => typeof value === 'string'));
     if (agentRead ? request.args.length !== 1 || !['claude-code', 'codex', 'pi'].includes(request.args[0] as string)
-      : request.channel === 'maker:provider:list' ? !validProviderOptions : request.args.length !== 0) {
+      : request.channel === 'maker:provider:list' ? !validProviderOptions && !shareStatusRead : request.args.length !== 0) {
       throwIpcError('INVALID_PARAMS', 'Invalid model catalog arguments');
     }
     const snapshot = await deps.locations();

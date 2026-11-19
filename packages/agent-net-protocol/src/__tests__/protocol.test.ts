@@ -4,7 +4,7 @@
  * 实测耗时：2026-11-07 独立 workspace 运行约 0.3–0.9 秒。
  */
 import { expect, it } from 'vitest';
-import { encodeDatagrams, decodeDatagrams, MAX_FRAME_BYTES, buildAgentNetMediaKey, parseAgentNetMediaKey, isAgentNetMediaReference } from '../index.js';
+import { encodeDatagrams, decodeDatagrams, MAX_FRAME_BYTES, buildAgentNetMediaKey, parseAgentNetMediaKey, isAgentNetMediaReference, agentNetStunServer } from '../index.js';
 it('round trips an addressed batch and rejects every incomplete boundary before delivering anything', () => {
   const packets = [Uint8Array.of(3, 4), Uint8Array.of(5, 6, 7)];
   const frame = encodeDatagrams('peer', packets);
@@ -37,4 +37,19 @@ it.each([false, true])('preserves encrypted attachment receipts and their task s
     expect(isAgentNetMediaReference(encoded + 'z')).toBe(true);
     expect(parseAgentNetMediaKey(encoded.replace('/task-a/', '/../'))).toBeNull();
   } else expect(encoded.startsWith('agent-net-v3/')).toBe(true);
+});
+// Unit: HTTPS and UDP may be published on different load balancers. Clients must
+// use only a bare host from /info and keep the API host for relays without one.
+it('builds the STUN target from a valid stunHost and falls back to the API host', () => {
+  const base = 'https://agent-net.example.test';
+  expect(agentNetStunServer(base, { udpPort: 3479, stunHost: 'agent-net-stun.example.test' })).toBe('agent-net-stun.example.test:3479');
+  expect(agentNetStunServer(base, { udpPort: 3479, stunHost: '203.0.113.7' })).toBe('203.0.113.7:3479');
+  expect(agentNetStunServer(base, { udpPort: 3479 })).toBe('agent-net.example.test:3479');
+  for (const stunHost of ['', 'stun.example.test:3479', 'https://stun.example.test', 'user@stun.example.test', 'stun.example.test/path',
+    '::1', '[::1]', '-stun.example.test', 'stun..example.test', '256.0.0.1', '010.0.0.1', '12345', ' stun.example.test', 'a'.repeat(254), 7])
+    expect(agentNetStunServer(base, { udpPort: 3479, stunHost })).toBe('agent-net.example.test:3479');
+  for (const udpPort of [undefined, null, 0, 65_536, 3479.5, '3479'])
+    expect(agentNetStunServer(base, { udpPort, stunHost: 'agent-net-stun.example.test' })).toBeNull();
+  expect(agentNetStunServer(base, null)).toBeNull();
+  expect(agentNetStunServer('not a url', { udpPort: 3479 })).toBeNull();
 });

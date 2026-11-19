@@ -105,10 +105,11 @@ vi.mock('@cindy/device-link', async (importOriginal) => ({
     hasOfflineDirectPath() { return false; }
     isLinkReady() { return false; }
     async openLink() {}
-    async invoke(target: string, request: { channel: string }, _timeout?: number, options?: { preSend?: () => void }) {
+    async invoke(target: string, request: { channel: string }, _timeout?: number, options?: { preSend?: () => void; beforeDispatch?: () => void }) {
       state.invokeEntered?.();
       await state.invokeGate;
       options?.preSend?.();
+      options?.beforeDispatch?.();
       state.invokes.push({ target, channel: request.channel });
       if (state.invokeError) throw state.invokeError;
       return state.invokeResult ?? { ok: true, result: { providers: [{ id: 'openai' }], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } };
@@ -120,6 +121,7 @@ import {
   __testing,
   crossRegionOfIntent,
   crossRegionInvoke,
+  crossRegionLeave,
   crossRegionSendRequest,
   getCrossRegionReceived,
   getConfirmedCrossRegionRegionBudgets,
@@ -212,6 +214,43 @@ afterEach(() => {
 });
 
 describe('cross-region provider share', () => {
+  // Unit: leave must fence an earlier /session response without closing another
+  // share's client. Prior coverage only fenced new applications/account changes.
+  it.each([
+    { fails: false, hasNeighbour: true },
+    { fails: true, hasNeighbour: true },
+    { fails: true, hasNeighbour: false },
+  ])('retires a departed share despite a stale session reply ($fails, $hasNeighbour)', async ({ fails, hasNeighbour }) => {
+    const neighbour = { ...share, shareId: 'share-y', memberId: 'member-y' };
+    const remaining = hasNeighbour ? [neighbour] : [];
+    const old = { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share, ...remaining] };
+    state.responses.set('/session', old);
+    startProviderShareCrossRegion({ changed: vi.fn() }, { userDataDir: dir });
+    await refreshProviderShareCrossRegion('global');
+    const client = state.clients[0];
+    const response = deferred<unknown>();
+    state.responses.set('/session', response.promise);
+    const polling = refreshProviderShareCrossRegion('global');
+    await vi.waitFor(() => expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(2));
+    state.responses.set('/received/member-x/leave', {});
+    state.responses.set('/session', fails ? new Error('temporarily unavailable') : { ...old, shares: remaining });
+    const leaving = crossRegionLeave('member-x');
+    try {
+      await vi.waitFor(() => expect(getCrossRegionReceived()).toEqual(remaining));
+      response.resolve(old);
+      await Promise.all([polling, leaving]);
+      expect(getCrossRegionReceived()).toEqual(remaining);
+      expect(state.calls.filter(call => call.path.endsWith('/session'))).toHaveLength(3);
+      expect(client.stopped).toBe(!hasNeighbour);
+      await expect(crossRegionInvoke(providerShareHostPeer('share-x', 'owner-pc'), 'maker:provider:list', []))
+        .rejects.toThrow();
+      if (hasNeighbour) {
+        await expect(crossRegionInvoke(providerShareHostPeer('share-y', 'owner-pc'), 'maker:provider:list', []))
+          .resolves.toMatchObject({ ok: true });
+      }
+    } finally { response.resolve(old); await Promise.all([polling, leaving]); }
+  });
+
   // Regression 2026-10-30, provider-sharing.md §8: membership belongs to the
   // account, not the accepting computer. Unit: real guest startup must publish
   // existing peer shares without an invitation, a group or a local region marker.
@@ -565,7 +604,9 @@ describe('cross-region provider share', () => {
 
   // Unit: the same wrapper is used by reads, metadata mirrors and the remote
   // agent; a caller close or a known pause must stop it before any physical send.
-  it('applies caller and share revocation guards at every cross-region send boundary', async () => {
+  // #11345: the cross-region adapter must forward dispatch-only cancellation too;
+  // existing preSend-only coverage missed a dropped optional callback.
+  it.each(['preSend', 'beforeDispatch'] as const)('applies %s and share revocation guards at the cross-region send boundary', async guard => {
     state.responses.set('/session', { credential: CREDENTIAL, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), shares: [share] });
     startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() }, { userDataDir: dir });
     await refreshReceivedShares('test');
@@ -573,11 +614,11 @@ describe('cross-region provider share', () => {
     let checks = 0;
     const preSend = vi.fn(() => {
       checks += 1;
-      if (checks > 1) throw new Error('closed during wait');
+      if (checks > (guard === 'preSend' ? 1 : 0)) throw new Error('closed during wait');
     });
-    await expect(crossRegionInvoke(target, 'maker:provider:list', [{ capabilities: ['send-boundary'] }], undefined, { preSend }))
+    await expect(crossRegionInvoke(target, 'maker:provider:list', [{ capabilities: ['send-boundary'] }], undefined, { [guard]: preSend }))
       .rejects.toThrow();
-    expect(preSend.mock.calls.length).toBeGreaterThan(1);
+    expect(preSend.mock.calls.length).toBeGreaterThan(guard === 'preSend' ? 1 : 0);
     expect(state.invokes).toEqual([]);
 
     await crossRegionInvoke(target, 'maker:provider:list', [{ capabilities: ['cached-boundary'] }]);

@@ -107,11 +107,11 @@ describe('selectVisibleSessions', () => {
     },
   );
 
-  it('includes local routine and remote channel tasks with exact ownership, excluding private lanes', () => {
+  it('includes projectless group tasks with routine and channel tasks while excluding private lanes', () => {
     const lane = (role: string, device?: string): Session => ({ ...mkSession(role, device), source: 'bot', companion: { id: 'owner', role } });
     expect(selectVisibleSessions([lane('routine'), lane('canonical')],
-      [lane('channel', 'dev-a'), lane('group', 'dev-a'), lane('thread', 'dev-a')], MACHINE_ALL)
-      .map(row => row.id)).toEqual(['routine', 'channel']);
+      [lane('channel', 'dev-a'), { ...lane('group', 'dev-a'), workspaceKind: 'dialogue', projectDir: null }, lane('thread', 'dev-a')], MACHINE_ALL)
+      .map(row => row.id)).toEqual(['routine', 'channel', 'group']);
   });
 
   it('所有(默认)→ 本机 + 全部远程合并(顺序:本地在前)', () => {
@@ -305,6 +305,14 @@ describe('机器选择持久化(serialize / parse 往返)', () => {
 });
 
 describe('buildSwitcherDevices', () => {
+  // App routing, unit: a stale synced/rejected shard must not put a controller App
+  // back into the computer switcher. Existing cases excluded only mobile platforms.
+  it.each(['cindy-friend', 'other-app'])('excludes app=%s even with cached projects or a rejected row', app => {
+    expect(buildSwitcherDevices({ fullList: [mkDevice('friend', { app, platform: 'darwin' })],
+      syncedDevices: [{ deviceId: 'friend', deviceName: 'Mac', sessionCount: 1, connected: true }],
+      revoked: new Set(['friend']),
+    })).toEqual([]);
+  });
   it('已连接(已同步)/ 连接中(在线可控未同步)/ 被拒(已撤销)三态分类', () => {
     const result = buildSwitcherDevices({
       fullList: [mkDevice('dev-connected'), mkDevice('dev-connecting'), mkDevice('dev-rejected')],

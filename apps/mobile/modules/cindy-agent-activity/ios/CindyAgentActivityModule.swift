@@ -1,6 +1,7 @@
 import ActivityKit
 import ExpoModulesCore
 import UIKit
+import OSLog
 
 private struct ActivitySnapshot: Decodable {
   var accountId: String
@@ -10,6 +11,7 @@ private struct ActivitySnapshot: Decodable {
 @MainActor
 private final class AgentActivityController {
   static let shared = AgentActivityController()
+  private let log = Logger(subsystem: "app.cindy.activity", category: "freshness")
   private var tail: Task<Void, Never>?
   private var observed: Activity<CindyAgentActivityAttributes>?
   private var dismissedAccount: String? {
@@ -22,6 +24,9 @@ private final class AgentActivityController {
   private var startToken: Data?
   private var watches: [String: [Task<Void, Never>]] = [:]
   private var observers: [Task<Void, Never>] = []
+  // The system reports .dismissed for the app's own immediate end exactly as it
+  // does for a swipe. Only an end the app did not ask for counts as a removal.
+  private var endedByApp = Set<String>()
 
   private init() {
     account = UserDefaults.standard.string(forKey: ownerKey)
@@ -44,6 +49,11 @@ private final class AgentActivityController {
     }
   }
 
+  private func end(_ activity: Activity<CindyAgentActivityAttributes>) async {
+    endedByApp.insert(activity.id)
+    await activity.end(nil, dismissalPolicy: .immediate)
+  }
+
   func configureAccount(_ next: String?) async {
     if account != next { dismissedAccount = nil; observed = nil }
     account = next
@@ -52,7 +62,7 @@ private final class AgentActivityController {
     UserDefaults.standard.set(next, forKey: ownerKey)
     for activity in Activity<CindyAgentActivityAttributes>.activities {
       guard account == next else { return }
-      if activity.attributes.accountId != next { await activity.end(nil, dismissalPolicy: .immediate) }
+      if activity.attributes.accountId != next { await end(activity) }
       else { observe(activity) }
     }
     registrationChanged?()
@@ -71,6 +81,9 @@ private final class AgentActivityController {
     return ["accountScope": account as Any? ?? NSNull(),
             "supportsInputPushToken": supportsInputPushToken,
             "enabled": ActivityAuthorizationInfo().areActivitiesEnabled,
+            "isStale": current?.activityState == .stale,
+            "confirmedAt": current?.content.state.confirmedAt as Any? ?? NSNull(),
+            "staleAt": current?.content.staleDate?.timeIntervalSince1970 as Any? ?? NSNull(),
             "startToken": hex(startToken), "updateToken": hex(current?.pushToken),
             "activityId": current?.id as Any? ?? NSNull(),
             "dismissed": account != nil && dismissedAccount == account]
@@ -78,23 +91,35 @@ private final class AgentActivityController {
 
   private func observe(_ activity: Activity<CindyAgentActivityAttributes>) {
     guard activity.attributes.accountId == account else {
-      Task { await activity.end(nil, dismissalPolicy: .immediate) }
+      Task { await end(activity) }
       return
     }
     // A foreground request may race push-to-start. Keep one account activity.
     if let current = observed, current.id != activity.id,
        current.activityState == .active || current.activityState == .stale {
-      Task { await activity.end(nil, dismissalPolicy: .immediate) }
+      Task { await end(activity) }
       return
     }
     guard watches[activity.id] == nil else { return }
     observed = activity
+    // An activity that exists supersedes an earlier removal; keeping the flag
+    // would go on reporting it and block the next local activity.
+    if dismissedAccount == account { dismissedAccount = nil }
     watches[activity.id] = [Task {
+      for await content in activity.contentUpdates {
+        log.debug("content observed; expiry: \(content.staleDate?.timeIntervalSince1970 ?? 0)")
+        // Let the phone-local diagnostic recorder observe content arrival. JS
+        // strips these dates before comparing/sending registration payloads.
+        registrationChanged?()
+      }
+    }, Task {
       for await _ in activity.pushTokenUpdates { registrationChanged?() }
     }, Task {
       for await state in activity.activityStateUpdates {
+        if state == .stale { log.info("activity became stale") }
         if state == .dismissed || state == .ended {
-          if state == .dismissed && activity.attributes.accountId == account {
+          let byApp = endedByApp.remove(activity.id) != nil
+          if state == .dismissed && !byApp && activity.attributes.accountId == account {
             dismissedAccount = activity.attributes.accountId
           }
           if observed?.id == activity.id { observed = nil }
@@ -126,6 +151,7 @@ private final class AgentActivityController {
         guard account == owner else { return }
         guard activity.attributes.accountId == owner else { continue }
         guard activity.activityState == .active else { continue }
+        log.info("activity marked stale: connection unverified")
         await activity.update(ActivityContent(state: activity.content.state, staleDate: .distantPast))
       }
     }
@@ -137,14 +163,14 @@ private final class AgentActivityController {
     guard let snapshot else {
       observed = nil
       dismissedAccount = nil
-      for activity in activities { await activity.end(nil, dismissalPolicy: .immediate) }
+      for activity in activities { await end(activity) }
       registrationChanged?()
       return
     }
     guard snapshot.accountId == account else { return }
     // Activity.activities no longer contains a dismissed activity. Retain its
     // handle so a store update cannot immediately recreate what the user hid.
-    if let observed, observed.activityState == .dismissed {
+    if let observed, observed.activityState == .dismissed, !endedByApp.contains(observed.id) {
       dismissedAccount = observed.attributes.accountId
       self.observed = nil
     }
@@ -157,11 +183,15 @@ private final class AgentActivityController {
          current == nil {
         current = activity
       } else {
-        await activity.end(nil, dismissalPolicy: .immediate)
+        await end(activity)
       }
     }
     guard snapshot.accountId == account else { return }
-    let content = ActivityContent(state: snapshot.state, staleDate: Date().addingTimeInterval(120))
+    let now = Date()
+    var state = snapshot.state
+    state.confirmedAt = now.timeIntervalSince1970
+    let content = ActivityContent(state: state, staleDate: now.addingTimeInterval(state.freshnessInterval))
+    log.debug("local content confirmed; freshness seconds: \(state.freshnessInterval)")
     if let current {
       observed = current
       observe(current)

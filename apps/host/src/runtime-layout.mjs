@@ -30,7 +30,12 @@ export function hostRuntimeLayout() {
     atomicRenameBinary: release ? resource('tools', 'windows-atomic-rename', 'cindy-windows-atomic-rename.exe') : null,
     atomicRenameSource: release ? null : path.join(desktop, 'native', 'windows-atomic-rename', 'main.rs'),
     nodeWorker: release ? path.join(root, 'bin', 'node-worker.cjs') : null,
+    piSubagentRunner: release ? path.join(root, 'bin', 'pi-subagent-runner.cjs') : path.join(root, 'apps', 'host', 'src', 'agent', 'pi-subagent-runner-process.cts'),
     pluginBridge: release ? resource('plugin-bridge.js') : null,
+    powerWorker: release ? path.join(root, 'bin', 'power-worker.cjs') : null,
+    // Agent-Net node: the encrypted core runs in this worker beside its wasm (docs/agent-net-session-plan.md 阶段 5).
+    agentNetWorker: release ? path.join(root, 'bin', 'agent-net-worker.mjs') : path.join(root, 'packages', 'agent-net', 'dist', 'node-worker.mjs'),
+    agentNetCore: release ? resource('agent-net', 'core.wasm') : path.join(root, 'packages', 'agent-net-core', 'dist', 'core.wasm'),
     credentialScript: release ? path.join(root, 'bin', 'electron-codec.cjs') : path.join(root, 'apps', 'host', 'src', 'credentials', 'electron-codec.cjs'),
     electronBinary: release?.electronBinary ? path.join(root, release.electronBinary) : null,
     chromiumExecutable: release?.chromiumExecutable ? path.join(root, release.chromiumExecutable) : null,

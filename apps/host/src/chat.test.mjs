@@ -67,6 +67,21 @@ test('a dispatch that fails after admission releases the stream and keeps the in
   assert.equal(h.events.size(), 0);
 });
 
+// Native Codex can settle abort without publishing done. The queue's settled
+// receipt must release only this input's stream, without inventing success.
+// Unit transport regression for the isolated native stop timeout.
+test('an interrupted input receipt releases its stream without a provider done', async () => {
+  const h = harness();
+  await h.handler(request({ sessionId: 's1', clientId: 'c1', prompt: 'hello' }), h.response);
+  h.events.publish({ type: 'input_receipt', sessionId: 's1', inputClientId: 'other', clientId: 'other', status: 'interrupted' });
+  assert.equal(h.response.writableEnded, false);
+  h.events.publish({ type: 'input_receipt', sessionId: 's1', inputClientId: 'c1', clientId: 'c1', status: 'interrupted' });
+  assert.equal(h.response.writableEnded, true);
+  assert.match(h.writes.join(''), /"status":"interrupted"/);
+  assert.doesNotMatch(h.writes.join(''), /"type":"done"/);
+  assert.equal(h.events.size(), 0);
+});
+
 test('invalid input never creates a task or enters the queue', async () => {
   for (const body of [{ prompt: '' }, { prompt: 'x', extra: 1 }, 'not json', { nope: true },
     { prompt: 'x', sessionId: '../other' }, { prompt: 'x', sessionId: 'a\\b' },
