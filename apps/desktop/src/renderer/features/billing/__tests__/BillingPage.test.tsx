@@ -94,6 +94,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
       if (
         [
           'billing.settings.supportHint',
+          'billing.usage.promotionalDetails.rolloverName',
           'billing.orders.invoice.personalInvoicePolicy',
           'billing.orders.invoice.invoiceTitleHint',
           'billing.orders.invoice.emailSubject',
@@ -672,12 +673,19 @@ describe('BillingPage remote catalog rendering', () => {
     expect(screen.queryByText((text) => text.startsWith('billing.recovery'))).toBeNull();
   });
 
-  it('shows usage progress and each promotional grant with its own state and expiry', async () => {
+  // D20 replaces D19 (unit): exercise the real BillingPage header controls and
+  // visible rows. Previous coverage only grouped/collapsed history. Mixed states and expiry
+  // dates, 21/30 records and 0/9/10 records expose sorting, page boundaries,
+  // partial last pages and empty/single-page behavior without changing the API.
+  // 人工审查后的排序契约：active 优先，各组按到期时间排序；旧测试把未到期的
+  // depleted/voided 排在 active 前。五条乱序状态通过真实页面验证顺序和金额（unit）。
+  it('sorts active grants first and each group by expiry while preserving usage details', async () => {
+    const now = Date.now();
     window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
-      available: '66',
+      available: '68',
       plan: { remaining: '40', used: '60', total: '100' },
       purchased: { remaining: '20', used: '30', total: '50' },
-      promotional: { remaining: '6', used: '6', total: '12' },
+      promotional: { remaining: '8', used: '6', total: '14' },
       promotionalGrants: [
         {
           grantId: 'welcome',
@@ -685,7 +693,7 @@ describe('BillingPage remote catalog rendering', () => {
           originalAmount: '10',
           usedAmount: '4',
           remainingAmount: '6',
-          expiresAt: '2026-08-01T00:00:00Z',
+          expiresAt: new Date(now + 3 * 86_400_000).toISOString(),
           state: 'active' as const,
         },
         {
@@ -694,7 +702,7 @@ describe('BillingPage remote catalog rendering', () => {
           originalAmount: '2',
           usedAmount: '2',
           remainingAmount: '0',
-          expiresAt: '2026-08-02T00:00:00Z',
+          expiresAt: new Date(now + 86_400_000).toISOString(),
           state: 'depleted' as const,
         },
         {
@@ -703,7 +711,7 @@ describe('BillingPage remote catalog rendering', () => {
           originalAmount: '5',
           usedAmount: '1.25',
           remainingAmount: '0',
-          expiresAt: '2026-07-01T00:00:00Z',
+          expiresAt: new Date(now).toISOString(),
           state: 'expired' as const,
         },
         {
@@ -712,8 +720,17 @@ describe('BillingPage remote catalog rendering', () => {
           originalAmount: '3',
           usedAmount: '0.5',
           remainingAmount: '0',
-          expiresAt: '2026-08-03T00:00:00Z',
+          expiresAt: new Date(now + 2 * 86_400_000).toISOString(),
           state: 'voided' as const,
+        },
+        {
+          grantId: 'active-sooner',
+          displayName: 'Active sooner',
+          originalAmount: '2',
+          usedAmount: '0',
+          remainingAmount: '2',
+          expiresAt: new Date(now + 2 * 86_400_000).toISOString(),
+          state: 'active' as const,
         },
       ],
       promotionalGrantsComplete: true,
@@ -726,19 +743,29 @@ describe('BillingPage remote catalog rendering', () => {
     render(<BillingPage />);
 
     expect(await screen.findByText('Welcome grant')).toBeTruthy();
+    expect(screen.getByText('Depleted grant')).toBeTruthy();
+    expect(screen.getByText('Voided grant')).toBeTruthy();
+    expect(screen.getAllByRole('listitem')).toHaveLength(5);
     expect(screen.getByText('billing.usage.promotionalDetails.unnamed')).toBeTruthy();
-    expect(screen.getByText('billing.usage.promotionalDetails.states.active')).toBeTruthy();
+    expect(screen.getAllByText('billing.usage.promotionalDetails.states.active')).toHaveLength(2);
     expect(screen.getByText('billing.usage.promotionalDetails.states.depleted')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.expired')).toBeTruthy();
     expect(screen.getByText('billing.usage.promotionalDetails.states.voided')).toBeTruthy();
 
-    const grantRows = within(screen.getByRole('list')).getAllByRole('listitem');
+    const grantRows = screen.getAllByRole('listitem');
+    for (const [index, name] of [
+      'Active sooner', 'Welcome grant', 'billing.usage.promotionalDetails.unnamed',
+      'Depleted grant', 'Voided grant',
+    ].entries()) {
+      expect(within(grantRows[index]).getByText(name)).toBeTruthy();
+    }
     const formatter = new Intl.NumberFormat('en', { style: 'currency', currency: 'CNY' });
     for (const [row, usedAmount] of [
-      [grantRows[0], 4],
-      [grantRows[1], 2],
+      [grantRows[0], 0],
+      [grantRows[1], 4],
       [grantRows[2], 1.25],
-      [grantRows[3], 0.5],
+      [grantRows[3], 2],
+      [grantRows[4], 0.5],
     ] as const) {
       const usedLabel = within(row).getByText('billing.usage.promotionalDetails.used');
       expect(usedLabel.nextElementSibling?.textContent).toBe(formatter.format(usedAmount));
@@ -750,6 +777,144 @@ describe('BillingPage remote catalog rendering', () => {
     expect(screen.queryByText(legacyWarningKey)).toBeNull();
     expect(screen.getAllByRole('progressbar')).toHaveLength(3);
     expect(window.electronAPI.billing.getBalance).not.toHaveBeenCalled();
+  });
+
+  it.each([21, 30])('pages %s grants from the title with disabled boundary buttons and no extra requests', async (count) => {
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '0',
+      plan: { remaining: '0', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '0', used: null, total: null },
+      promotionalGrants: Array.from({ length: count }, (_, index) => ({
+        grantId: `history-${index}`, displayName: `Past grant ${index + 1}`,
+        originalAmount: '1', usedAmount: '0', remainingAmount: '0',
+        expiresAt: '2020-01-01T00:00:00Z', state: 'expired' as const,
+      })),
+      promotionalGrantsComplete: false, promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null, scale: 9 as const, observedAt: '2026-11-17T00:00:00Z',
+    }));
+    render(<BillingPage />);
+    await screen.findByText('Past grant 1');
+    const header = within(screen.getByRole('heading', {
+      name: 'billing.usage.promotionalDetails.title',
+    }).parentElement!);
+    const previous = header.getByRole('button', { name: 'billing.orders.history.previous' });
+    const next = header.getByRole('button', { name: 'billing.orders.history.next' });
+    expect(header.getByText(`billing.usage.promotionalDetails.count:{"count":${count}}`)).toBeTruthy();
+    expect(header.getByText('1/3')).toBeTruthy();
+    expect(previous.hasAttribute('disabled')).toBe(true);
+    expect(next.hasAttribute('disabled')).toBe(false);
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
+    expect(screen.getByText('Past grant 10')).toBeTruthy();
+    expect(screen.queryByText('Past grant 11')).toBeNull();
+    fireEvent.click(previous);
+    expect(header.getByText('1/3')).toBeTruthy();
+    fireEvent.click(next);
+    expect(header.getByText('2/3')).toBeTruthy();
+    expect(screen.getByText('Past grant 11')).toBeTruthy();
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
+    expect(previous.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(next);
+    expect(header.getByText('3/3')).toBeTruthy();
+    expect(next.hasAttribute('disabled')).toBe(true);
+    expect(previous.hasAttribute('disabled')).toBe(false);
+    expect(screen.getAllByRole('listitem')).toHaveLength(count - 20);
+    expect(screen.getByText(`Past grant ${count}`)).toBeTruthy();
+    expect(screen.queryByText('Past grant 20')).toBeNull();
+    fireEvent.click(next);
+    expect(header.getByText('3/3')).toBeTruthy();
+    fireEvent.click(previous);
+    expect(header.getByText('2/3')).toBeTruthy();
+    expect(screen.getByText('Past grant 11')).toBeTruthy();
+    expect(screen.getByText(`billing.usage.promotionalDetails.incomplete:{"count":${count}}`)).toBeTruthy();
+    expect(window.electronAPI.billing.getCreditUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 9, 10])('shows %s grants without pagination and retains the empty state', async (count) => {
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '0',
+      plan: { remaining: '0', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '0', used: '0', total: '0' },
+      promotionalGrants: Array.from({ length: count }, (_, index) => ({
+        grantId: `past-${index}`, displayName: `Past grant ${index + 1}`, originalAmount: '1',
+        usedAmount: '0', remainingAmount: '0', expiresAt: '2020-01-01T00:00:00Z',
+        state: 'expired' as const,
+      })),
+      promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null, scale: 9 as const, observedAt: '2026-11-17T00:00:00Z',
+    }));
+    render(<BillingPage />);
+    expect(await screen.findByText(count > 0
+      ? 'Past grant 1' : 'billing.usage.promotionalDetails.empty')).toBeTruthy();
+    expect(screen.queryAllByRole('listitem')).toHaveLength(count);
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.previous' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'billing.orders.history.next' })).toBeNull();
+  });
+
+  // D17: render the server's stable source as a localized name, without guessing
+  // from displayName. Existing grant coverage only exercised source-less records (unit).
+  it.each([
+    ['en', 'Rollover grant'],
+    ['zh-CN', '滚存额度'],
+  ])('localizes rollover grants in %s and preserves other grant names', async (locale, name) => {
+    await i18n.changeLanguage(locale);
+    const grant = {
+      originalAmount: '10', usedAmount: '0', remainingAmount: '10',
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(), state: 'active' as const,
+    };
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '30',
+      plan: { remaining: '0', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '30', used: '0', total: '30' },
+      promotionalGrants: [
+        { ...grant, grantId: 'rollover', displayName: 'Server fallback',
+          source: { type: 'subscription_rollover' as const } },
+        { ...grant, grantId: 'other', displayName: '滚存额度' },
+        { ...grant, grantId: 'null-source', displayName: 'Other gift', source: null },
+      ],
+      promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null, scale: 9 as const, observedAt: '2026-11-17T00:00:00Z',
+    }));
+    render(<BillingPage />);
+    const rows = within(await screen.findByRole('list')).getAllByRole('listitem');
+    expect(within(rows[0]).getByText(name)).toBeTruthy();
+    expect(screen.queryByText('Server fallback')).toBeNull();
+    expect(within(rows[1]).getByText('滚存额度')).toBeTruthy();
+    expect(within(rows[2]).getByText('Other gift')).toBeTruthy();
+  });
+
+  // Server contract (unit): gift_card/rollover objects and null can share
+  // one usage response. Earlier cases rendered these origins separately; this
+  // checks the real BillingPage keeps both localized names and the null fallback.
+  it('shows gift card and localized rollover names from the same usage response', async () => {
+    const grant = {
+      originalAmount: '10', usedAmount: '0', remainingAmount: '10',
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(), state: 'active' as const,
+    };
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '30',
+      plan: { remaining: '0', used: '0', total: '0' },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '30', used: '0', total: '30' },
+      promotionalGrants: [
+        { ...grant, grantId: 'gift', displayName: 'Server gift fallback',
+          source: { type: 'gift_card' as const, senderName: 'Sample sender' } },
+        { ...grant, grantId: 'rollover', displayName: 'Server rollover fallback',
+          source: { type: 'subscription_rollover' as const } },
+        { ...grant, grantId: 'other', displayName: 'Other grant', source: null },
+      ],
+      promotionalGrantsComplete: true, promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null, scale: 9 as const, observedAt: '2026-11-17T00:00:00Z',
+    }));
+    render(<BillingPage />);
+    const rows = within(await screen.findByRole('list')).getAllByRole('listitem');
+    expect(within(rows[0]).getByText('billing.usage.promotionalDetails.giftCard:{"sender":"Sample sender"}')).toBeTruthy();
+    expect(within(rows[1]).getByText('Rollover grant')).toBeTruthy();
+    expect(within(rows[2]).getByText('Other grant')).toBeTruthy();
+    expect(screen.queryByText('Server gift fallback')).toBeNull();
+    expect(screen.queryByText('Server rollover fallback')).toBeNull();
   });
 
   // 契约：礼品卡到账的赠送在明细里要认得出来。此前这一行只显示通用名称，和其它赠送无法区分。
@@ -1138,11 +1303,16 @@ describe('BillingPage remote catalog rendering', () => {
     await waitFor(() => expect(screen.queryByText('Configured top-up')).toBeNull());
 
     fireEvent.click(screen.getByText('billing.settings.subscriptionCard.action'));
+    await screen.findByText('Configured subscription');
+    // D1/D2/U6: the monthly purchase flow must keep the grant expiry explanation
+    // visible in both comparison and confirmation; older coverage only checked payment (unit).
+    expect(screen.getByText(/^billing\.comparison\.rolloverMonthlySummary:/)).toBeTruthy();
     fireEvent.click(
       (await screen.findByText('Configured subscription'))
         .closest('section')!
         .querySelector('button')!,
     );
+    expect(screen.getByText(/^billing\.comparison\.rolloverMonthly:/)).toBeTruthy();
     expect(screen.getByText('stripe')).toBeTruthy();
     expect(screen.queryByText('alipay')).toBeNull();
     fireEvent.click(screen.getByText('stripe').closest('button')!);
@@ -1681,7 +1851,7 @@ describe('BillingPage remote catalog rendering', () => {
         ).toBeTruthy();
         expect(
           within(currentColumn).getByText(
-            `billing.comparison.rollover:{"amount":"$${(Number(expectedAmount) * 5).toFixed(2)}","period":"billing.comparison.nextPeriod.MONTH"}`,
+            `billing.comparison.rolloverMonthlySummary:{"amount":"$${(Number(expectedAmount) * 5).toFixed(2)}","period":"billing.comparison.nextPeriod.MONTH"}`,
           ),
         ).toBeTruthy();
       };

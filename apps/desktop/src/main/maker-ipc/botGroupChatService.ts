@@ -141,8 +141,9 @@ export interface BotGroupChatServiceDeps {
     threadRootId?: string;
     talkPlanId?: string;
     personalDigest?: boolean;
-    /** The group's project folder on this computer; a V2 teammate's replies work there (§7.5). */
+    /** Project selected on the executing device (§7.5); chat-only lanes use a separate cwd. */
     projectDir?: string;
+    continueConversation?: boolean;
   }) => Promise<LaneResult>;
   /** Live native context identity; absent/unknown means background must be restored. */
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
@@ -213,11 +214,10 @@ export interface BotGroupChatServiceDeps {
   findProjectDirsForRepo?: (repository: GroupRepository) => Promise<string[]>;
   /** Repositories a folder's git remotes point at, best guess first (`folderRepositories`). */
   repositoriesOfFolder?: (dir: string) => Promise<GroupRepository[]>;
-  /**
-   * Cindy's own checkouts of a group's GitHub repository (`groupProjectCheckout.ts`): cloned on
-   * first need when no registered project is that repository, fast-forwarded when clean.
-   */
-  groupCheckouts?: Pick<import('./groupProjectCheckout.js').GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged' | 'dirOf'>;
+  projectOfWorkDir?: (dir: string) => Promise<string | null>;
+  isLegacyGroupFolder?: (groupId: string, dir: string) => boolean;
+  localExecutionProject?: (groupId: string, botId: string) => Promise<string | null>;
+  executorProject?: (botId: string) => Promise<string | null>;
   /**
    * A 分工 step stopped for the user: finished (继续, or the whole plan is done) or not
    * finished (重试). Phones are notified from here (bot-group-chat.md §8.3).
@@ -1591,7 +1591,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       let ownerSessionId: string | undefined;
       if (!workDir) {
         const prepared = deps.workDir
-          ? await deps.workDir.prepare({ groupId, projectDir: group.projectDir })
+          ? await deps.workDir.prepare({ groupId, projectDir: await deps.localExecutionProject?.(groupId, step.botId) ?? null })
             .catch((error: unknown) => ({ ok: false as const, message: String(error) }))
           : ({ ok: false as const, message: 'work directory service unavailable' });
         if (!live()) return;

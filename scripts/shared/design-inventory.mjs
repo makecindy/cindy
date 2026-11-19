@@ -1530,7 +1530,7 @@ export function compareGenerated(existingMarkdown, nextGeneratedBlock) {
  * files are not surfaces. New route files require an explicit family assignment. */
 export function mobileCatalogSurfaces() {
   const rows = [
-    ['home', '主机与资源首页', ['index.tsx', 'devices/index.tsx']],
+    ['home', '主机与资源首页；用量概览', ['index.tsx', 'devices/index.tsx', 'usage.tsx']],
     ['devices', '主机详情', ['devices/[deviceId].tsx']],
     ['device-management', '设备管理', ['devices/manage.tsx', 'devices/manage/[deviceId].tsx']],
     ['remote-desktop', '远程桌面', ['devices/desktop/[deviceId].tsx']],

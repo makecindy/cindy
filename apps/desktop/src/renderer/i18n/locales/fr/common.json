@@ -1149,14 +1149,14 @@
   },
   "awayGuard": {
     "status": "Cindy travaille",
-    "hint": "Appuyez sur une touche ou sur la touche Touch ID pour verrouiller, puis déverrouillez avec votre empreinte ou votre mot de passe",
+    "hint": "Appuyez sur une touche pour afficher l’écran de déverrouillage",
     "lockFailed": {
       "status": "Cindy n'a pas pu verrouiller ce Mac",
       "hint": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Touch ID ou votre mot de passe pour retirer l'écran. Vous pouvez aussi fermer le capot ou appuyer sur le bouton d'alimentation.",
       "hintWindows": "Touchez l'ordinateur pour réessayer de le verrouiller. S'il ne se verrouille toujours pas, confirmez votre identité avec Windows Hello ou votre code PIN pour retirer l'écran. Vous pouvez aussi appuyer sur la touche du logo Windows + L."
     },
-    "hintWindows": "Appuyez sur une touche pour verrouiller ; déverrouillez avec Windows Hello ou votre mot de passe",
-    "hintLinux": "Appuyez sur une touche pour verrouiller ; déverrouillez avec votre mot de passe",
+    "hintWindows": "Appuyez sur une touche pour afficher l’écran de déverrouillage",
+    "hintLinux": "Appuyez sur une touche pour afficher l’écran de déverrouillage",
     "verifyReason": "retirer l'écran de confidentialité"
   },
   "appBadge": {
@@ -11597,7 +11597,7 @@
         "projectDirChoose": "Choisir un dossier",
         "projectDirChange": "Changer de dossier",
         "projectDirClear": "Effacer le dossier",
-        "projectDirNote": "Les amis travaillent ici lorsqu'ils se répartissent le travail. Vous pouvez laisser ce champ vide : ils utiliseront alors le dossier propre à cette conversation de groupe. Si vous choisissez un projet git, chaque répartition du travail obtient un nouveau worktree et une nouvelle branche, afin que votre propre code reste intact.",
+        "projectDirNote": "Choisissez un projet existant sur cet ordinateur. Sans sélection, le projet associé au dépôt est utilisé, puis celui du compagnon chargé du travail. Les tâches réparties dans Git utilisent un arbre de travail distinct.",
         "autoContinueSaveFailed": "Impossible d'enregistrer le passage entre étapes. Réessayez.",
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
         "allowMemberInvites": "Tous les membres peuvent inviter des amis",
@@ -11931,15 +11931,15 @@
           "replyModeAssistant": "Cindy répond",
           "replyModeAssistantNote": "La Cindy du groupe répond.",
           "work": "Répartitions du travail",
-          "ownFolder": "Dossier propre au groupe",
+          "ownFolder": "Automatique",
           "projectDirHint": "S’applique uniquement sur cet ordinateur.",
-          "projectDirClearHint": "Utiliser plutôt le dossier propre au groupe",
+          "projectDirClearHint": "Revenir au choix automatique du projet",
           "project": "Projet",
           "projectCaption": "Les amis répondent et effectuent les répartitions du travail dans ce projet. Le dépôt est partagé avec le groupe ; le dossier reste sur cet ordinateur.",
           "githubRepo": "Dépôt GitHub",
-          "githubRepoHint": "Saisissez owner/name. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet ou en téléchargent une.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Dépôt",
-          "repositoryHint": "GitHub : saisissez owner/name. GitLab (y compris auto-hébergé), CNB et autres : collez le lien du dépôt. Les ordinateurs sans dossier choisi utilisent leur propre copie de ce projet, ou en téléchargent une.",
+          "repositoryHint": "Pour GitHub, saisissez owner/name ou collez l’URL du dépôt. Cindy cherche un projet correspondant sans ambiguïté sur cet ordinateur.",
           "repositoryPlaceholder": "owner/name ou lien du dépôt",
           "githubRepoSaveFailed": "Le dépôt n’a pas été enregistré. Vérifiez-le et réessayez.",
           "folderRepoFilled": "Le dépôt {{repo}} a été renseigné à partir de ce dossier. Les ordinateurs des autres membres l’utiliseront aussi.",
@@ -14774,12 +14774,14 @@
       "runningWithWorktree_other": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences.",
       "runningWithWorktree_many": "Attendez leur fin pour changer de branche. Avec worktree, démarrez maintenant dans une copie séparée, sans interférences."
     },
-    "followUpHint": {
-      "queueDefault": "Les messages envoyés pendant l'exécution de la tâche sont mis en file d'attente.",
-      "steerDefault": "Les messages envoyés pendant l'exécution de la tâche réorientent la tâche en cours.",
+    "sendDelivery": {
+      "menuAria": "Comment envoyer ce message",
+      "queueHint": "Après cette réponse",
+      "steerHint": "À la prochaine étape",
+      "setDefault": "Définir par défaut",
+      "nowDefault": "Désormais par défaut",
       "switchToSteer": "Réorienter par défaut",
-      "switchToQueue": "File d'attente par défaut",
-      "dismiss": "Fermer l'astuce"
+      "switchToQueue": "File d'attente par défaut"
     }
   },
   "onboarding": {
@@ -15129,6 +15131,7 @@
       "credentialSwitchBusy": "Une autre tâche Codex est toujours en cours d'exécution : le fournisseur de cette session ne peut donc pas encore être appliqué (le processus Codex partagé doit redémarrer). Réessayez une fois ces tâches terminées.",
       "accountBoundaryPending": "Cindy est encore en train de changer l'état du compte : cette tâche ne peut donc pas encore démarrer. Patientez un instant, puis cliquez sur Réessayer. Si le problème persiste, redémarrez Cindy.",
       "codexThreadStale": "Le mode d'authentification Codex a changé : cette session ne peut pas continuer. Démarrez une nouvelle session pour l'appliquer.",
+      "codexSharedAuthLinkUnavailable": "Codex est connecté sur cet ordinateur, mais cette session ne peut pas l’utiliser : le lien vers ce compte ne peut pas être créé (avec un profil Windows standard, c’est généralement impossible). Vérifiez que {{appName}} a le droit de créer ce lien sur cet ordinateur (sous Windows, exécutez-le une fois en tant qu’administrateur ou activez le mode développeur), puis cliquez sur « Réessayer ». Vous pouvez aussi cliquer sur « Se reconnecter à ChatGPT » pour que Cindy utilise sa propre connexion pour cette session.",
       "codexResumeNotReady": "Codex ne peut pas reprendre cette tâche pour le moment. Réessayez dans un instant.",
       "claudeGatewayOpusPlanMismatch": "Cette requête Opus est passée par XD Gateway, et non par votre abonnement Claude.ai. Cette route de la passerelle a refusé le modèle. Passez à votre abonnement Claude.ai et réessayez, ou choisissez un autre modèle.",
       "claudeSubscriptionOpusPlanMismatch": "Opus n'est pas disponible avec l'offre Claude Pro connectée. Passez à un modèle inclus dans votre offre. Si vous avez récemment changé d'offre, reconnectez Anthropic dans les paramètres, puis réessayez.",
@@ -16672,7 +16675,7 @@
       "confirmArchive": {
         "title": "Archiver la session",
         "description": "Archiver cette session ? Elle sera retirée de la liste.",
-        "dirtyWorktreeWarning": "Les modifications non validées seront enregistrées avant l’archivage. Vous pourrez les restaurer depuis la tâche.",
+        "dirtyWorktreeWarning": "Cette tâche contient des modifications de fichiers non validées. Par défaut, elles sont enregistrées lors de l’archivage. Vous pourrez les restaurer depuis la tâche.",
         "discardChanges": "Ignorer les modifications non validées",
         "discardWarning": "Les modifications non validées et les nouveaux fichiers seront perdus.",
         "discardAndArchive": "Ignorer et archiver",
@@ -16921,6 +16924,7 @@
         "thisEvening": "Ce soir",
         "tomorrow": "Demain",
         "nextWeek": "La semaine prochaine",
+        "indefinite": "Indéfiniment",
         "custom": "Personnaliser…",
         "wakeAt": "Date et heure de rappel",
         "timeZone": "Heure locale ({{zone}})",
@@ -19690,6 +19694,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "L’exécution de ce tour a échoué.",
+    "blockedReasonUnknown": "Aucune raison précise du blocage n’a été fournie.",
+    "blockedNextStep": "Vous pouvez ajouter des informations dans cette tâche. Une fois la cause résolue, cliquez sur « {{action}} » pour continuer.",
     "status": {
       "active": "Objectif en cours",
       "paused": "En pause",
@@ -20026,6 +20033,7 @@
         "empty": "Aucune attribution promotionnelle disponible.",
         "incomplete": "Il existe de nombreuses attributions. Seules les {{count}} plus récentes sont affichées.",
         "unnamed": "Attribution promotionnelle",
+        "rolloverName": "Report",
         "giftCard": "Carte cadeau · de la part de {{sender}}",
         "original": "Initial",
         "used": "Utilisé",
@@ -20263,6 +20271,8 @@
       "basicModels": "Accès à certains modèles",
       "subscription": "Forfait d'abonnement",
       "rollover": "Conservez jusqu'à {{amount}} de solde inutilisé pour {{period}}",
+      "rolloverMonthly": "Reportez jusqu’à {{amount}} de solde inutilisé en solde promotionnel\nValable 1 mois, sans nouveau report\nUtilisé avant le Solde du forfait et le Solde rechargé",
+      "rolloverMonthlySummary": "Reportez jusqu’à {{amount}} de solde inutilisé, valable 1 mois",
       "nextPeriod": {
         "MONTH": "le mois suivant",
         "YEAR": "l'année suivante",

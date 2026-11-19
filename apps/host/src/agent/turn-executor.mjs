@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { createMakerSteerTransaction } from '../../../desktop/src/main/maker-ipc/makerSteerTransaction.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
+import { readBotDmThreadContextNote } from '../../../desktop/src/main/maker-ipc/botDmThreadContext.ts';
 import { readReplyQuoteNote } from '../../../desktop/src/main/maker-ipc/chatReplyQuoteNote.ts';
 import { publishUiSessionIntervention } from '../../../desktop/src/main/maker-ipc/uiContinuationSignal.ts';
 import { extractPlainText } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
@@ -343,6 +344,8 @@ export function createTurnExecutor(deps) {
     },
     // Runtime creation updates an existing task; it does not create another row.
     broadcastSessionCreated: id => deps.hub.publish({ type: 'session_changed', sessionId: id }),
+    readReplyQuoteNote,
+    readBotThreadNote: readBotDmThreadContextNote,
     prepareSendUserMessage: deps.prepareUserMessage ?? prepareHostUserMessage,
     // The trusted /learn Skill of a persisted user turn, as on the desktop (learn-capture.ts).
     captureCindyLearnInvocation: deps.captureCindyLearnInvocation ?? createHostLearnInvocationCapture({ getMaker: deps.getMaker }),

@@ -1149,14 +1149,14 @@
   },
   "awayGuard": {
     "status": "O Cindy está a trabalhar",
-    "hint": "Prima qualquer tecla ou a tecla Touch ID para bloquear e depois desbloqueie com a impressão digital ou a palavra-passe",
+    "hint": "Prima qualquer tecla para abrir o ecrã de desbloqueio",
     "lockFailed": {
       "status": "O Cindy não conseguiu bloquear este Mac",
       "hint": "Toque no computador para tentar bloquear novamente. Se continuar sem bloquear, confirme com Touch ID ou a sua palavra-passe para retirar o ecrã. Também pode fechar a tampa ou premir o botão de energia.",
       "hintWindows": "Toque no computador para tentar bloquear novamente. Se continuar sem bloquear, confirme com o Windows Hello ou o seu PIN para retirar o ecrã. Também pode premir a tecla do logótipo do Windows + L."
     },
-    "hintWindows": "Prima qualquer tecla para bloquear; desbloqueie com o Windows Hello ou a sua palavra-passe",
-    "hintLinux": "Prima qualquer tecla para bloquear; desbloqueie com a sua palavra-passe",
+    "hintWindows": "Prima qualquer tecla para abrir o ecrã de desbloqueio",
+    "hintLinux": "Prima qualquer tecla para abrir o ecrã de desbloqueio",
     "verifyReason": "retirar o ecrã de privacidade"
   },
   "appBadge": {
@@ -11597,7 +11597,7 @@
         "projectDirChoose": "Escolher pasta",
         "projectDirChange": "Alterar pasta",
         "projectDirClear": "Limpar pasta",
-        "projectDirNote": "Os amigos trabalham aqui quando dividem o trabalho. Pode deixar este campo vazio para usarem a pasta da própria conversa de grupo. Se escolher um projeto git, cada divisão de trabalho recebe um novo worktree e uma nova branch, para que o seu código permaneça intacto.",
+        "projectDirNote": "Escolha um projeto existente neste computador. Sem seleção, será usado o projeto do repositório ou o do companheiro que executar a tarefa. A divisão de trabalho em Git usa uma árvore de trabalho própria.",
         "autoContinueSaveFailed": "Não foi possível guardar as transições entre passos. Tente novamente.",
         "projectDirSaveFailed": "Não foi possível guardar a pasta do projeto. Certifique-se de que a pasta ainda existe e tente novamente.",
         "allowMemberInvites": "Permitir que todos convidem amigos",
@@ -11931,15 +11931,15 @@
           "replyModeAssistant": "A Cindy responde",
           "replyModeAssistantNote": "A Cindy do grupo responde.",
           "work": "Divisão do trabalho",
-          "ownFolder": "Pasta própria do grupo",
+          "ownFolder": "Automático",
           "projectDirHint": "Aplica-se apenas neste computador.",
-          "projectDirClearHint": "Usar antes a pasta própria do grupo",
+          "projectDirClearHint": "Voltar à seleção automática do projeto",
           "project": "Projeto",
           "projectCaption": "Os amigos respondem e fazem as divisões do trabalho neste projeto. O repositório é partilhado com o grupo; a pasta fica neste computador.",
           "githubRepo": "Repositório do GitHub",
-          "githubRepoHint": "Introduza owner/name. Os computadores sem pasta escolhida usam a sua própria cópia deste projeto ou transferem uma.",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "Repositório",
-          "repositoryHint": "GitHub: escreva owner/name. GitLab (incluindo da própria empresa), CNB e outros: cole a ligação do repositório. Os computadores sem pasta escolhida usam a sua própria cópia deste projeto ou transferem uma.",
+          "repositoryHint": "Para o GitHub, introduza owner/name ou cole o URL do repositório. A Cindy procura um único projeto correspondente neste computador.",
           "repositoryPlaceholder": "owner/name ou ligação do repositório",
           "githubRepoSaveFailed": "O repositório não foi guardado. Verifique e tente novamente.",
           "folderRepoFilled": "O repositório {{repo}} foi preenchido a partir desta pasta. Os computadores dos outros membros também o vão usar.",
@@ -14774,12 +14774,14 @@
       "runningWithWorktree_other": "Espere todas terminarem para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências.",
       "runningWithWorktree_many": "Espere todas terminarem para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências."
     },
-    "followUpHint": {
-      "queueDefault": "As mensagens enviadas enquanto a tarefa decorre ficam em fila.",
-      "steerDefault": "As mensagens enviadas enquanto a tarefa decorre orientam a tarefa em curso.",
+    "sendDelivery": {
+      "menuAria": "Como enviar esta mensagem",
+      "queueHint": "Após esta resposta",
+      "steerHint": "No passo seguinte",
+      "setDefault": "Tornar predefinição",
+      "nowDefault": "Já é a predefinição",
       "switchToSteer": "Orientar por predefinição",
-      "switchToQueue": "Colocar em fila por predefinição",
-      "dismiss": "Fechar sugestão"
+      "switchToQueue": "Colocar em fila por predefinição"
     }
   },
   "onboarding": {
@@ -15129,6 +15131,7 @@
       "credentialSwitchBusy": "Ainda está outra tarefa Codex em execução, pelo que ainda não é possível aplicar o fornecedor desta sessão (o processo Codex partilhado precisa de ser reiniciado). Tente novamente quando essas tarefas terminarem.",
       "accountBoundaryPending": "O Cindy ainda está a alterar o estado da conta, pelo que esta tarefa ainda não pode começar. Aguarde um momento e prima Tentar novamente. Se isto persistir, reinicie o Cindy.",
       "codexThreadStale": "O modo de autenticação do Codex mudou — esta sessão não pode continuar. Inicie uma nova sessão para o aplicar.",
+      "codexSharedAuthLinkUnavailable": "Neste computador o Codex já tem um início de sessão ativo, mas esta sessão não o consegue usar: não é possível criar a ligação a essa conta (com uma conta padrão do Windows, normalmente não é). Verifique se o {{appName}} neste computador tem permissão para criar essa ligação (no Windows, execute-o uma vez como administrador ou ative o modo de programador) e clique em «Tentar novamente». Também pode clicar em «Iniciar sessão novamente no ChatGPT» para que a Cindy use um início de sessão próprio para esta sessão.",
       "codexResumeNotReady": "O Codex não consegue retomar esta tarefa neste momento. Tente novamente daqui a pouco.",
       "claudeGatewayOpusPlanMismatch": "Este pedido Opus passou pelo XD Gateway, não pela sua subscrição Claude.ai. Essa rota do gateway rejeitou o modelo. Mude para a sua subscrição Claude.ai e tente novamente ou escolha outro modelo.",
       "claudeSubscriptionOpusPlanMismatch": "O Opus não está disponível no plano Claude Pro ligado. Mude para um modelo incluído no seu plano. Se atualizou o plano recentemente, volte a ligar a Anthropic nas Definições e tente novamente.",
@@ -16672,7 +16675,7 @@
       "confirmArchive": {
         "title": "Arquivar sessão",
         "description": "Arquivar esta sessão? Será removida da lista.",
-        "dirtyWorktreeWarning": "As alterações sem commit serão guardadas antes de arquivar. Pode restaurá-las a partir da tarefa.",
+        "dirtyWorktreeWarning": "Esta tarefa contém alterações em ficheiros que ainda não foram incluídas num commit. Por predefinição, são guardadas ao arquivar a tarefa e podem ser restauradas mais tarde na própria tarefa.",
         "discardChanges": "Descartar alterações sem commit",
         "discardWarning": "As alterações sem commit e os ficheiros novos serão perdidos.",
         "discardAndArchive": "Descartar e arquivar",
@@ -16921,6 +16924,7 @@
         "thisEvening": "Esta tarde",
         "tomorrow": "Amanhã",
         "nextWeek": "Na próxima semana",
+        "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
         "wakeAt": "Data e hora de regresso",
         "timeZone": "Hora local ({{zone}})",
@@ -19690,6 +19694,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "A execução deste turno falhou.",
+    "blockedReasonUnknown": "Não foi indicado um motivo específico para o bloqueio.",
+    "blockedNextStep": "Podes acrescentar informações nesta tarefa. Após resolveres a causa, clica em «{{action}}» para continuar.",
     "status": {
       "active": "A avançar para o objetivo",
       "paused": "Em pausa",
@@ -20026,6 +20033,7 @@
         "empty": "Não existem atribuições promocionais disponíveis.",
         "incomplete": "Existem muitos registos de atribuições. Apenas são apresentados os {{count}} mais recentes.",
         "unnamed": "Atribuição promocional",
+        "rolloverName": "Saldo acumulado",
         "giftCard": "Cartão de oferta · de {{sender}}",
         "original": "Original",
         "used": "Utilizado",
@@ -20263,6 +20271,8 @@
       "basicModels": "Acesso a alguns modelos",
       "subscription": "Plano de subscrição",
       "rollover": "Acumule até {{amount}} de saldo não utilizado para {{period}}",
+      "rolloverMonthly": "Acumule até {{amount}} de saldo não utilizado como saldo promocional\nVálido por 1 mês, sem nova acumulação\nUtilizado antes do Saldo do plano e do Saldo de carregamentos",
+      "rolloverMonthlySummary": "Acumule até {{amount}} de saldo não utilizado, válido por 1 mês",
       "nextPeriod": {
         "MONTH": "o próximo mês",
         "YEAR": "o próximo ano",

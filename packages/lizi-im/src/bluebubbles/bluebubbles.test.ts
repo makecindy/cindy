@@ -61,6 +61,75 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  it('loads selected history and the inline reply from the connected chat, including image-only messages', async () => {
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => ({ absPath: `/media/${token}`, url: `cindy-media://${token}` }));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, true);
+    const photo = (guid: string) => ({ guid, transferName: guid + '.png', mimeType: 'image/png' });
+    f.message('a', { text: '', attachments: [photo('one'), photo('two')] });
+    f.message('b', { attachments: [photo('two'), photo('missing'), photo('three')] });
+    f.message('elsewhere', { chats: [f.otherChat], attachments: [photo('private')] });
+    f.message('question', { threadOriginatorGuid: 'a' });
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async id => {
+      if (id === 'missing') throw new Error('unavailable');
+      return new Uint8Array([1]);
+    });
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const event = f.received[0]!;
+    expect(event.imessageReplyGuid).toBe('a');
+    const result = await f.im.contextMedia(event, ['elsewhere', 'a', 'b']);
+    expect(result.reply?.messageId).toBe('a');
+    expect(result.attachments.map(file => [file.kind, file.originalName])).toEqual([
+      ['image', 'one.png'], ['image', 'two.png'], ['image', 'three.png']]);
+    expect(result.unavailable).toEqual(['missing.png', '原消息不可用']);
+    expect(download.mock.calls.map(([id]) => id)).toEqual(['one', 'two', 'missing', 'three']);
+  });
+
+  it.each(['image', 'file'] as const)('counts only delivered %s history attachments toward the remaining slot', async kind => {
+    const stored = (id: string) => ({ absPath: `/media/${id}`, url: `cindy-media://${id}`, mimeType: 'image/png', discard: async () => {} });
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => stored(token.endsWith(':duplicate') ? 'current' : 'new'));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, false,
+      { stage: async ({ fileName }) => stored(fileName === 'duplicate.txt' ? 'current' : 'new') });
+    const ext = kind === 'image' ? 'png' : 'txt';
+    f.message('root', { attachments: ['duplicate', 'failed', 'new'].map(guid =>
+      ({ guid, transferName: `${guid}.${ext}`, mimeType: kind === 'image' ? 'image/png' : 'text/plain' })) });
+    f.message('question', { threadOriginatorGuid: 'root' });
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async guid => {
+      if (guid === 'failed') throw new Error('temporary failure');
+      return new Uint8Array([1]);
+    });
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const event = { ...f.received[0]!, attachments: Array.from({ length: kind === 'image' ? 5 : 3 }, (_, index) =>
+      ({ ...stored(index === 0 ? 'current' : `current-${index}`), kind, originalName: `current.${ext}` })) };
+    const result = await f.im.contextMedia(event, []);
+    expect(result.attachments.map(item => item.originalName)).toEqual([`new.${ext}`]);
+    expect(result.unavailable).toEqual([`failed.${ext}`]);
+    expect(download.mock.calls.map(([id]) => id)).toEqual(['duplicate', 'failed', 'new']);
+  });
+
+  it('reuses cached reply images after chat validation without pinning or downloading again', async () => {
+    const cached = { absPath: '/media/cached.png', url: 'cindy-media://cached', mimeType: 'image/png' };
+    const getCachedImage = vi.fn(async () => cached);
+    const cacheImage = vi.fn();
+    const f = await fixture(null, { getCachedImage, cacheImage, resolveMediaUrl: () => null }, true);
+    const image = { guid: 'photo', transferName: 'cached.png', mimeType: 'image/png' };
+    f.message('root', { attachments: [image] });
+    f.message('private', { chats: [f.otherChat], attachments: [image] });
+    f.message('question', { threadOriginatorGuid: 'root' });
+    const download = vi.spyOn(f.api, 'download').mockRejectedValue(new Error('offline'));
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const result = await f.im.contextMedia(f.received[0]!, ['private']);
+    expect(result.attachments).toEqual([{ ...cached, kind: 'image', originalName: 'cached.png' }]);
+    expect(result.unavailable).toEqual(['原消息不可用']);
+    expect(getCachedImage).toHaveBeenCalledOnce();
+    expect(getCachedImage).toHaveBeenCalledWith('imessage', `${f.im.botContextId}:photo`,
+      { staging: true, shouldReuse: expect.any(Function) });
+    expect(download).not.toHaveBeenCalled();
+    expect(cacheImage).not.toHaveBeenCalled();
+  });
+
   // Tier 1, PR #10241/r4556881876: a failed candidate edit used to permanently
   // ignore excluded pending inputs before restoring the old chat allowlist.
   it.each([false, true])('finalizes excluded pending receipts only after the edit commits (write fails: %s)', async failWrite => {

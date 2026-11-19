@@ -241,7 +241,9 @@ function projectCreditPool(
  * 不因此丢掉整份余额。
  */
 function projectPromotionalGrantSource(value: unknown): ModelAccessPromotionalGrantSource | null {
-  if (!isRecord(value) || value.type !== 'gift_card') return null;
+  if (!isRecord(value)) return null;
+  if (value.type === 'subscription_rollover') return { type: 'subscription_rollover' };
+  if (value.type !== 'gift_card') return null;
   const senderName = boundedString(value.senderName, MAX_GIFT_SENDER_LENGTH);
   return senderName ? { type: 'gift_card', senderName } : null;
 }
@@ -287,7 +289,7 @@ function projectPromotionalGrant(value: unknown): ModelAccessPromotionalGrantUsa
   return {
     grantId,
     displayName,
-    ...(source ? { source } : {}),
+    ...(source ? { source } : value.source === null ? { source: null } : {}),
     originalAmount: originalAmount.source,
     usedAmount: usedAmount.source,
     remainingAmount: remainingAmount.source,

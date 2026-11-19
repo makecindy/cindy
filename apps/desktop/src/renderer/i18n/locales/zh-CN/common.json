@@ -1120,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正在工作",
-    "hint": "按任意键或 Touch ID 键锁屏，再用指纹或密码解锁",
+    "hint": "按任意键进入解锁界面",
     "lockFailed": {
       "status": "Cindy 没能锁住这台电脑",
       "hint": "碰一下电脑会再试一次锁屏；仍锁不上时，用 Touch ID 或密码验证后即可撤下。也可以合上屏幕或按电源键锁屏。",
       "hintWindows": "碰一下电脑会再试一次锁定；仍锁不上时，用 Windows Hello 或 PIN 验证后即可撤下。也可以按 Windows 徽标键 + L 锁定。"
     },
-    "hintWindows": "按任意键锁屏，用 Windows Hello 或密码解锁",
-    "hintLinux": "按任意键锁屏，用密码解锁",
+    "hintWindows": "按任意键进入解锁界面",
+    "hintLinux": "按任意键进入解锁界面",
     "verifyReason": "撤下隐私屏"
   },
   "appBadge": {
@@ -11463,7 +11463,7 @@
         "projectDirChoose": "选择",
         "projectDirChange": "更换",
         "projectDirClear": "清除",
-        "projectDirNote": "分工做事时，伙伴们在这里干活。不选也行，会用这个群自己的文件夹；选了 git 项目，每次分工会新开一个 worktree 和分支，不动你手上的代码。",
+        "projectDirNote": "可以选择这台电脑上的已有项目。留空时，优先使用仓库对应的项目，其次使用执行伙伴自己的项目。Git 项目分工使用独立 worktree。",
         "autoContinueSaveFailed": "分工交接没能保存，请再试一次",
         "projectDirSaveFailed": "项目文件夹没能保存，确认文件夹还在后再试",
         "allowMemberInvites": "允许所有成员邀请朋友",
@@ -11802,15 +11802,15 @@
           "replyModeAssistant": "Cindy 回答",
           "replyModeAssistantNote": "由群里的 Cindy 回答。",
           "work": "分工",
-          "ownFolder": "群自己的文件夹",
+          "ownFolder": "自动选择",
           "projectDirHint": "只在这台电脑上生效。",
-          "projectDirClearHint": "改用群自己的文件夹",
+          "projectDirClearHint": "恢复自动选择项目",
           "project": "项目",
           "projectCaption": "伙伴在群里回复和分工都在这个项目里做。仓库全群共享，文件夹只存在这台电脑上。",
           "githubRepo": "GitHub 仓库",
-          "githubRepoHint": "填 owner/name。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "代码仓库",
-          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等粘贴仓库链接。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
+          "repositoryHint": "GitHub 可填 owner/name，其他仓库可粘贴链接。Cindy 会在本机查找唯一匹配的已有项目。",
           "repositoryPlaceholder": "owner/name 或仓库链接",
           "githubRepoSaveFailed": "仓库没有保存，请检查后再试。",
           "folderRepoFilled": "已按这个文件夹填好仓库 {{repo}}，群里其他人的电脑也会用它。",
@@ -14592,12 +14592,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "任务运行中发送的消息默认排队。",
-      "steerDefault": "任务运行中发送的消息默认插话到当前任务。",
+    "sendDelivery": {
+      "menuAria": "这条消息的发送方式",
+      "queueHint": "等这一轮结束",
+      "steerHint": "下一步就处理",
+      "setDefault": "设为默认",
+      "nowDefault": "已设为默认",
       "switchToSteer": "默认改为插话",
-      "switchToQueue": "默认改为排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默认改为排队"
     }
   },
   "onboarding": {
@@ -14968,6 +14970,7 @@
       "credentialSwitchBusy": "其他 Codex 任务仍在运行，暂时无法应用本任务选择的供应商（共享的 Codex 进程需要重启）。等这些任务结束后再点「重试」。",
       "accountBoundaryPending": "Cindy 正在切换账号状态，暂时无法开始这个任务。稍等片刻后点「重试」；如果一直出现，请重启 Cindy。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前任务无法继续。新建任务后即可生效。",
+      "codexSharedAuthLinkUnavailable": "本机的 Codex 已经登录，但这个任务读不到那份登录：指向它的链接建不出来（Windows 上通常是普通权限建不了）。请确认这台电脑上的 {{appName}} 有权限创建链接（Windows 上可以用管理员身份运行一次，或开启开发者模式），然后点「重试」。也可以点「重新登录 ChatGPT」，让 Cindy 用自己的一份登录来跑这个任务。",
       "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试",
       "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",
       "claudeSubscriptionOpusPlanMismatch": "当前连接的 Claude Pro 套餐不支持 Opus。请切换到套餐支持的模型；如果刚升级套餐，请在设置中重新连接 Anthropic 后重试。",
@@ -16442,7 +16445,7 @@
       "confirmArchive": {
         "title": "归档任务",
         "description": "确定要归档这个任务吗？归档后将从列表中移除。",
-        "dirtyWorktreeWarning": "未提交的更改会在归档前保存，可在任务内恢复。",
+        "dirtyWorktreeWarning": "当前任务有尚未提交的文件更改。归档时默认保存这些更改，以后可以在任务中恢复。",
         "discardChanges": "丢弃未提交的更改",
         "discardWarning": "未提交的更改和新文件将无法恢复。",
         "discardAndArchive": "丢弃并归档",
@@ -16685,6 +16688,7 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下周",
+        "indefinite": "无限期",
         "custom": "自定义…",
         "wakeAt": "唤回日期和时间",
         "timeZone": "本地时间（{{zone}}）",
@@ -19430,6 +19434,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "本轮执行失败。",
+    "blockedReasonUnknown": "未提供具体受阻原因。",
+    "blockedNextStep": "可在当前任务中补充信息；处理受阻原因后，点击“{{action}}”继续。",
     "status": {
       "active": "目标推进中",
       "paused": "已暂停",
@@ -19764,6 +19771,7 @@
         "empty": "当前没有赠送记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
         "unnamed": "赠送余额",
+        "rolloverName": "滚存额度",
         "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原始金额",
         "used": "已用",
@@ -20001,6 +20009,8 @@
       "basicModels": "可用部分模型",
       "subscription": "订阅套餐",
       "rollover": "剩余余额可留到{{period}}，最多 {{amount}}",
+      "rolloverMonthly": "剩余余额最多滚存 {{amount}}，转为赠送余额\n1 个月内有效，不再继续滚存\n优先于订阅余额和充值余额使用",
+      "rolloverMonthlySummary": "剩余余额最多滚存 {{amount}}，1 个月内有效",
       "nextPeriod": {
         "MONTH": "下月",
         "YEAR": "下一年",

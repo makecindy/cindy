@@ -19,7 +19,7 @@ import {
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
 import { supportsLegacyMediaInput } from '../cindy-media/legacyMediaInvocation.js';
-import { listProviderMediaModels, providerMediaGuideScope, providerMediaGuideProtocol } from '../cindy-media/providerMediaRuntime.js';
+import { listProviderMediaModels, providerMediaGuideScope, providerMediaGuideProtocol, providerMediaGuideTarget } from '../cindy-media/providerMediaRuntime.js';
 import { resolveMediaGuide, type MediaGuideSource } from '../cindy-media/guideResolver.js';
 import { createLocalGuideStore, type MediaGuideTarget } from '../cindy-media/localGuideStore.js';
 import { activeDataOwnerId, isOwnerBoundaryPending, ownerScopedPath } from '../ownerContext.js';
@@ -48,6 +48,7 @@ async function readPublicGuide(modelId: string, protocol: string) {
 
 /** Shared by management get and prepare; public lookup never changes the target. */
 export async function getMediaGuide(target: MediaGuideTarget, source: MediaGuideSource = 'auto') {
+  target = providerMediaGuideTarget(target);
   const connectionScope = providerMediaGuideScope(target);
   if (!connectionScope) throw new Error('MEDIA_DECLARATION_REQUIRED');
   const protocol = providerMediaGuideProtocol(target) ?? 'gateway';

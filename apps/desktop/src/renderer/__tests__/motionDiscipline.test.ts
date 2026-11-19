@@ -61,7 +61,6 @@ const MOTION_LITERAL_DEBT: Record<string, number> = {
   'components/layout/FadeSwitcher.tsx': 2,
   'components/login/LoginCaptchaOverlay.tsx': 1,
   'components/markdown/codemirrorGithubTheme.ts': 2,
-  'components/new-chat/ChatInput.tsx': 3,
   'components/new-chat/FastModeToggle.tsx': 2,
   'components/new-chat/HomeUsageDashboard.tsx': 1,
   'components/new-chat/ModelSelector.tsx': 2,

@@ -57,6 +57,7 @@ it.each(['other-computer', 'share:provider'])('forwards %s from the production t
   const declaration = tree.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createPluginTaskSession')!;
   const openSession = vi.fn(async ({ body }: { body: object }) => ({ row: body }));
   const create = compile(`return (${declaration.getText(tree).replace(/^export\s+/, '')});`, {
+    getCurrentDbClientSnapshot: () => 'owner', projectForNewTask: async () => ({ projectDir: null, workspaceKind: 'dialogue' }),
     openSession, normalizeWorkingDirForStorage: (value: string) => value, log: { info: vi.fn() },
   });
   await create({ ghostId: 'p', sessionId: 'task', title: 'Remote', agentKind: 'codex', providerId: 'same', model: 'model',

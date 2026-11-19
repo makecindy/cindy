@@ -1120,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正劳作",
-    "hint": "按任一键或 Touch ID 键即锁屏，再以指纹或密码解之",
+    "hint": "按任一键，乃可解锁",
     "lockFailed": {
       "status": "Cindy 未能锁此机",
       "hint": "触机则再试锁屏；仍不能锁，以 Touch ID 或密码验之，乃可撤。亦可合盖或按电源键以锁。",
       "hintWindows": "触机则再试锁屏；仍不能锁，以 Windows Hello 或 PIN 验之，乃可撤。亦可按 Windows 徽键 + L 以锁。"
     },
-    "hintWindows": "按任一键即锁屏，以 Windows Hello 或密码解之",
-    "hintLinux": "按任一键即锁屏，以密码解之",
+    "hintWindows": "按任一键，乃可解锁",
+    "hintLinux": "按任一键，乃可解锁",
     "verifyReason": "撤隐私画面"
   },
   "appBadge": {
@@ -11463,7 +11463,7 @@
         "projectDirChoose": "择",
         "projectDirChange": "易",
         "projectDirClear": "清",
-        "projectDirNote": "分工行事时，同伴于此劳作。不择亦可，将用此群议自有之卷匣；若择 git 项目，每次分工将新开一 worktree 与分支，不动君手中之代码。",
+        "projectDirNote": "可择本机既有之项目。未择，则先取仓库所系，次取行事同伴之项目。Git 分工另辟 worktree。",
         "autoContinueSaveFailed": "分工交接未能存，请再试",
         "projectDirSaveFailed": "案之卷匣未能存，确其尚存后再试",
         "allowMemberInvites": "许诸成员邀友",
@@ -11791,15 +11791,15 @@
           "replyModeAssistant": "Cindy 答之",
           "replyModeAssistantNote": "群中 Cindy 答之。",
           "work": "分职",
-          "ownFolder": "群自有之卷匣",
+          "ownFolder": "自动择取",
           "projectDirHint": "唯此机有效。",
-          "projectDirClearHint": "改用群自有之卷匣",
+          "projectDirClearHint": "复为自动择项",
           "project": "案",
           "projectCaption": "同僚于群中应答、分工，皆于此案行之。库为全群所共，文件夹唯存此机。",
           "githubRepo": "GitHub 库",
-          "githubRepoHint": "书 owner/name。未择文件夹之机，用本机此案；无之，则自取一份。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "代码之库",
-          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等，贴库之链接。未择夹之机，用本机此项目，无则自取一份。",
+          "repositoryHint": "GitHub 可书 owner/name，余库可贴其址。此机既有之项，独一相合者用之。",
           "repositoryPlaceholder": "owner/name 或库之链接",
           "githubRepoSaveFailed": "库未存，请察而再试。",
           "folderRepoFilled": "已依此夹填库 {{repo}}，群中他人之机亦用之。",
@@ -14592,12 +14592,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "差事行中所遣之讯，默从排队。",
-      "steerDefault": "差事行中所遣之讯，默为插话于今之差事。",
+    "sendDelivery": {
+      "menuAria": "此讯遣法",
+      "queueHint": "待此轮毕",
+      "steerHint": "次步即理",
+      "setDefault": "立为默",
+      "nowDefault": "已立为默",
       "switchToSteer": "默改插话",
-      "switchToQueue": "默改排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默改排队"
     }
   },
   "onboarding": {
@@ -14959,6 +14961,7 @@
       "credentialSwitchBusy": "Codex 方行于他差事，暂不能依此差事所择之模型来源而易（须重启共用之 Codex 后台进程）。俟其毕，点「再试」即可。",
       "accountBoundaryPending": "Cindy 方易名籍之态，暂不能始此差事。稍候片刻，点「再试」；若屡见之，请重启 Cindy。",
       "codexThreadStale": "Codex 鉴权之式已易，此差事不能续 —— 请新开差事，方生效。",
+      "codexSharedAuthLinkUnavailable": "本机之 Codex 已登入，而此差事不能读其登入：指向其之链接建不出来（Windows 常权之下，通常建不了）。请确认此电脑之 {{appName}} 有权建立链接（Windows 上可以管理员之身执行一次，或开启开发人员模式），而后点「再试」。亦可点「重登 ChatGPT」，使 Cindy 以自有之一份登入行此差事。",
       "codexResumeNotReady": "Codex 暂不能复此差事，请稍后再试",
       "claudeGatewayOpusPlanMismatch": "此番 Opus 请求实经 XD Gateway，非君之 Claude.ai 订阅；该闸道路由拒此模型。可易为 Claude.ai 订阅再试，或另择模型。",
       "claudeSubscriptionOpusPlanMismatch": "今所连之 Claude Pro 方案不支持 Opus。请易为方案所支持之模型；若方升级方案，请于规制中重连 Anthropic，再试。",
@@ -16442,7 +16445,7 @@
       "confirmArchive": {
         "title": "封存差事",
         "description": "确欲封存此差事乎？封存后将自录中除去。",
-        "dirtyWorktreeWarning": "未提交之改动，归档前先存之，日后可于任务中复原。",
+        "dirtyWorktreeWarning": "此差事有文件改动尚未提交。封存时照例存之，日后可于差事中复原。",
         "discardChanges": "弃未提交之改动",
         "discardWarning": "未提交之改动及新档，将不可复原。",
         "discardAndArchive": "弃而归档",
@@ -16685,6 +16688,7 @@
         "thisEvening": "今夕",
         "tomorrow": "明日",
         "nextWeek": "下周",
+        "indefinite": "无期",
         "custom": "自定…",
         "wakeAt": "唤回日期时辰",
         "timeZone": "本地时辰（{{zone}}）",
@@ -19430,6 +19434,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "此轮未成。",
+    "blockedReasonUnknown": "受阻之由未详。",
+    "blockedNextStep": "可于此任务补述详情；解其阻后，按“{{action}}”续行。",
     "status": {
       "active": "方趋目标",
       "paused": "已暂止",
@@ -19764,6 +19771,7 @@
         "empty": "今无赠予之记。",
         "incomplete": "赠予之记甚多，今唯示最近 {{count}} 笔。",
         "unnamed": "赠予余资",
+        "rolloverName": "滚存额度",
         "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原额",
         "used": "已用",
@@ -20001,6 +20009,8 @@
       "basicModels": "可用若干模型",
       "subscription": "订阅之约",
       "rollover": "所余可留至{{period}}，至多 {{amount}}",
+      "rolloverMonthly": "剩余余额最多滚存 {{amount}}，转为赠送余额\n1 个月内有效，不再继续滚存\n优先于订阅余资和储值余资使用",
+      "rolloverMonthlySummary": "剩余余额最多滚存 {{amount}}，1 个月内有效",
       "nextPeriod": {
         "MONTH": "次月",
         "YEAR": "次年",

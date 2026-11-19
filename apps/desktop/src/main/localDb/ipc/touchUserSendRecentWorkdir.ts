@@ -5,7 +5,7 @@
  */
 import type { DbClient } from '../client/DbClient';
 import type { touchUserSendRow } from '../sessionQueries.js';
-import type { upsertRecentWorkdir as upsertRecentWorkdirInDb } from './recentWorkdirsCore.js';
+import type { touchRecentWorkdir as touchRecentWorkdirInDb } from './recentWorkdirsCore.js';
 import { isRetainableProjectSession } from '../../../shared/sessionSource.js';
 import { normalizeWorkingDirForProjectSettings } from '../../../shared/workingDir.js';
 
@@ -18,14 +18,14 @@ export async function recordRecentWorkdirForSend<OwnerScope>({
   ts,
   dbClient,
   ownerScope,
-  upsertRecentWorkdir,
+  touchRecentWorkdir,
   broadcastRecentWorkdirsChanged,
 }: {
   updated: Awaited<ReturnType<typeof touchUserSendRow>>;
   ts: number;
   dbClient: DbClient;
   ownerScope: OwnerScope;
-  upsertRecentWorkdir: typeof upsertRecentWorkdirInDb;
+  touchRecentWorkdir: typeof touchRecentWorkdirInDb;
   broadcastRecentWorkdirsChanged: (path: string, ownerScope: OwnerScope) => void;
 }): Promise<void> {
   // 项目独立保留真实使用时间；不能等归档/删除时再取清理时间，也不能从剩余任务重算。
@@ -38,7 +38,7 @@ export async function recordRecentWorkdirForSend<OwnerScope>({
     isRetainableProjectSession(row)
   ) {
     const projectDir = normalizeWorkingDirForProjectSettings(row.projectDir ?? row.workingDir);
-    const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
+    const touched = await touchRecentWorkdir(projectDir, ts, process.platform, dbClient);
     if (touched && projectDir) broadcastRecentWorkdirsChanged(projectDir, ownerScope);
   }
 }
