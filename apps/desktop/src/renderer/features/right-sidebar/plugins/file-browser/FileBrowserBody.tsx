@@ -1,4 +1,6 @@
 import { Tip } from '@/components/ui/tooltip';
+import { useDocumentVisible } from '@/hooks/useWindowVisible';
+import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { Button } from '@/components/ui/button';
 /**
  * FileBrowserBody — file-browser plugin 的 TabBody 实现。
@@ -148,6 +150,10 @@ function FileBrowserBodyWithWorkdir({
   const deviceId = ctx.deviceLinkDeviceId !== undefined ? ctx.deviceLinkDeviceId : registeredDeviceId ?? undefined;
   const remoteHostId = deviceId ? null : ctx.remoteHostId;
   const isRemote = Boolean(remoteHostId) || Boolean(deviceId);
+  const documentVisible = useDocumentVisible();
+  const [windowHidden, setWindowHidden] = useState(isWindowHidden);
+  useEffect(() => window.electronAPI?.onWindowHiddenChange?.(setWindowHidden), []);
+  const visible = active !== false && shellVisible !== false && documentVisible && !windowHidden;
   // 设置页「显示被忽略的目录」开关(默认关)。进 useFileTree 的 store key →
   // 切换开关会换一份 store,listDir 与 watcher 都用新 matcher 重建,
   // 目录列表立即重新拉取(不需要用户手动刷新)。
@@ -155,7 +161,7 @@ function FileBrowserBodyWithWorkdir({
   const directory = state.currentDirectory ?? dirname(state.selectedFilePath ?? '');
   const tree = useFileTree({
     workdir, hideMetaFiles: true, remoteHostId, deviceId, showIgnoredDirs,
-    displayedDirectory: state.selectedFilePath ? undefined : directory,
+    displayedDirectory: state.selectedFilePath ? undefined : directory, enabled: visible,
   });
   const renderingHtml = !!state.selectedFilePath && state.previewHtmlPath === state.selectedFilePath
     && isHtmlFilePath(state.selectedFilePath);
@@ -186,7 +192,7 @@ function FileBrowserBodyWithWorkdir({
   // 不再为用不上的索引付 rg + IPC + 建索引的主线程成本。trim 与 filterFiles
   // 的匹配语义对齐:纯空格 query 结果必为空,不值得为它扫描。
   const projectFiles = useProjectFileList(workdir, remoteHostId, deviceId, {
-    enabled: filterQuery.trim() !== '',
+    enabled: visible && filterQuery.trim() !== '',
   });
   const filteredFiles = useMemo(
     () => filterFiles(filterQuery, projectFiles.files),
@@ -196,7 +202,7 @@ function FileBrowserBodyWithWorkdir({
     workdir,
     remoteHostId,
     deviceId,
-    query: searchQuery,
+    query: visible ? searchQuery : '',
     caseSensitive: searchCaseSensitive,
     maxMatches: SEARCH_MAX_MATCHES,
   });
@@ -275,7 +281,7 @@ function FileBrowserBodyWithWorkdir({
   const revealDirPath = state.revealDirPath ?? null;
   const revealDirNonce = state.revealDirNonce ?? 0;
   useEffect(() => {
-    if (!revealDirPath) return;
+    if (!visible || !revealDirPath) return;
     let cancelled = false;
     void (async () => {
       setMode('tree');
@@ -294,7 +300,7 @@ function FileBrowserBodyWithWorkdir({
       cancelled = true;
     };
     // tree/ctx 引用变化不该重放已消费的请求。
-  }, [revealDirPath, revealDirNonce]);
+  }, [visible, revealDirPath, revealDirNonce]);
 
   // 聊天文件 chip → openFileInSidebarFileBrowser 写入的一次性定位请求:
   // 选中文件,切回 tree 视图,展开父目录并把文件行滚到视口中部。切换前仍走
@@ -302,7 +308,7 @@ function FileBrowserBodyWithWorkdir({
   const revealFilePath = state.revealFilePath ?? null;
   const revealFileNonce = state.revealFileNonce ?? 0;
   useEffect(() => {
-    if (!revealFilePath) return;
+    if (!visible || !revealFilePath) return;
     let cancelled = false;
     void (async () => {
       const ok = await confirmSwitchAway(state.selectedFilePath, revealFilePath);
@@ -323,7 +329,7 @@ function FileBrowserBodyWithWorkdir({
       cancelled = true;
     };
     // state/ctx/tree 引用变化不该重放已消费的请求。
-  }, [revealFilePath, revealFileNonce]);
+  }, [visible, revealFilePath, revealFileNonce]);
 
   // refresh 按钮:文件树 + 项目文件索引一起 invalidate。
   const handleRefresh = useCallback(() => {
@@ -459,7 +465,7 @@ function FileBrowserBodyWithWorkdir({
   const externalFilePath = state.externalFilePath ?? null;
   const externalFileNonce = state.externalFileNonce ?? 0;
   useEffect(() => {
-    if (!externalFilePath) return;
+    if (!visible || !externalFilePath) return;
     let cancelled = false;
     void runExternalFileOpenRequest({
       absPath: externalFilePath,
@@ -471,7 +477,7 @@ function FileBrowserBodyWithWorkdir({
       cancelled = true;
     };
     // ctx / handler 引用变化不应重放已消费的请求；path / nonce 更新会取消旧请求。
-  }, [externalFilePath, externalFileNonce]);
+  }, [visible, externalFilePath, externalFileNonce]);
 
   const handleDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
@@ -569,14 +575,14 @@ function FileBrowserBodyWithWorkdir({
   // 但 SSH 断链重连的间隙里 daemon 换代、事件会漏,窗口重新聚焦时静默刷新
   // 文件树 + 当前文件作为兜底,保证"断链期间远端改了文件 → 用户切回来能看到"。
   useEffect(() => {
-    if (!isRemote) return;
+    if (!visible || !isRemote) return;
     const onFocus = () => {
       void tree.refresh();
       fileContent.refresh();
     };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [isRemote, tree, fileContent]);
+  }, [visible, isRemote, tree, fileContent]);
 
   const handleToggleSearch = useCallback(() => {
     setMode((m) => (m === 'search' ? 'tree' : 'search'));
@@ -666,7 +672,7 @@ function FileBrowserBodyWithWorkdir({
               key={JSON.stringify([activeRelPath, deviceId, remoteHostId])}
               workdir={workdir} relPath={activeRelPath} remoteHostId={remoteHostId}
               deviceId={deviceId}
-              sessionId={ctx.sessionId} tabId={ctx.tabId} active={active !== false && shellVisible !== false}
+              sessionId={ctx.sessionId} tabId={ctx.tabId} active={visible}
             /> : <FileBodyView
               key={externalFile?.absPath ?? 'project-file-browser'}
               workdir={activeWorkdir}
@@ -753,7 +759,7 @@ function FileBrowserBodyWithWorkdir({
                   ref={fileTreeRef}
                   tree={tree}
                   scrollScope={ctx.tabId}
-                  active={active !== false && treeOpen}
+                  active={visible && treeOpen}
                   selectedPath={state.selectedFilePath ?? directory}
                   onSelectFolder={browseDirectory}
                   onSelectFile={openFile}

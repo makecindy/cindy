@@ -70,6 +70,43 @@ it('reloads the edited local page and closes only its focused file tab', async (
   expect(closeTab).toHaveBeenCalledExactlyOnceWith('session', 'files');
 });
 
+// A retained page can miss several completed turns. Only its own edits should
+// replace the live document, once, when the user comes back (PR #11392, unit).
+it('defers edits to a hidden local preview and leaves an unchanged page alone', () => {
+  const listeners = new Set<() => void>();
+  chat.subscribe.mockImplementation((_id?: string, cb?: () => void) => {
+    listeners.add(cb!);
+    return () => { listeners.delete(cb!); };
+  });
+  chat.getSnapshot.mockReturnValue({ agentStatus: { isRunning: false }, messages: [] });
+  vi.stubGlobal('electronAPI', { onRsbBrowserCommand: () => () => {} });
+  const preview = { ...tab, workdir: '/notes', relPath: 'draft.html', deviceId: null };
+  const view = render(<InlineHtmlPreview {...preview} />);
+  const guest = view.container.querySelector('webview')!;
+  const reload = vi.fn();
+  Object.assign(guest, { reload });
+  fireEvent(guest, new Event('did-finish-load'));
+  const messages: { clientId: string; role: string; toolName: string; toolInput: { file_path: string } }[] = [];
+  function edit(name: string) {
+    for (const running of [true, false]) {
+      if (!running) messages.push({ clientId: String(messages.length), role: 'tool_use', toolName: 'Write', toolInput: { file_path: `/notes/${name}` } });
+      chat.getSnapshot.mockReturnValue({ agentStatus: { isRunning: running }, messages: [...messages] });
+      act(() => { for (const notify of listeners) notify(); });
+    }
+  }
+  view.rerender(<InlineHtmlPreview {...preview} active={false} />);
+  edit('other.html');
+  view.rerender(<InlineHtmlPreview {...preview} />);
+  expect(reload).not.toHaveBeenCalled();
+  view.rerender(<InlineHtmlPreview {...preview} active={false} />);
+  edit('draft.html');
+  edit('draft.html');
+  expect(reload).not.toHaveBeenCalled();
+  view.rerender(<InlineHtmlPreview {...preview} />);
+  expect(view.container.querySelector('webview')).toBe(guest);
+  expect(reload).toHaveBeenCalledTimes(1);
+});
+
 // #11392, unit: the host intercepts these keys even for the inline webview.
 it('sends reload and available history navigation only to the focused preview', () => {
   const onCommand = vi.fn<typeof window.electronAPI.onRsbBrowserCommand>(() => () => {});

@@ -73,6 +73,8 @@ export interface DirEntry {
 
 interface UseFileTreeOptions {
   workdir: string;
+  /** Hidden consumers release their share of the directory reader and its watcher. */
+  enabled?: boolean;
   /** Directory displayed by this subscriber independently of the tree's expanded rows. */
   displayedDirectory?: string;
   /**
@@ -106,7 +108,7 @@ interface UseFileTreeOptions {
   showIgnoredDirs?: boolean;
 }
 
-type FileTreeStoreOptions = Required<Omit<UseFileTreeOptions, 'displayedDirectory'>>;
+type FileTreeStoreOptions = Required<Omit<UseFileTreeOptions, 'displayedDirectory' | 'enabled'>>;
 
 export interface UseFileTreeReturn {
   /** Entries per folder, keyed by relPath ('' = root). */
@@ -240,6 +242,14 @@ interface FileTreeStore {
   restoreQueue: DirectoryRestoreQueue | null;
   listeners: Map<() => void, string>;
 }
+
+const EMPTY_TREE: FileTreeStore['snapshot'] = {
+  entries: new Map(),
+  expanded: new Set([ROOT_KEY]),
+  loadingPaths: new Set(),
+  initialLoading: true,
+  loadError: null,
+};
 
 interface DirectoryRestoreQueue {
   /** Refresh retries precede untouched restoration paths without adding workers. */
@@ -515,13 +525,7 @@ function getOrCreateStore(opts: FileTreeStoreOptions): FileTreeStore {
             // 错误态一并继承:首帧直接是错误占位,而不是先闪一帧空树再变错误。
             loadError: seed.loadError,
           }
-        : {
-            entries: new Map(),
-            expanded: new Set([ROOT_KEY]),
-            loadingPaths: new Set(),
-            initialLoading: true,
-            loadError: null,
-          },
+        : EMPTY_TREE,
     seeded: seedDisplayable && !!seed,
     persistedExpanded,
     tokens: new Map(),
@@ -884,7 +888,9 @@ function disposeStore(store: FileTreeStore): void {
   if (store.eventFlushTimer) clearTimeout(store.eventFlushTimer);
   store.eventFlushTimer = null;
   store.pendingEventPaths.clear();
+  for (const request of store.inFlight.values()) request.trailing = false;
   store.inFlight.clear();
+  store.tokens.clear(); // Results from the released endpoint must not repopulate the snapshot.
   if (store.watcherOff) {
     store.watcherOff();
     store.watcherOff = null;
@@ -1009,6 +1015,7 @@ async function expandToPath(store: FileTreeStore, relPath: string, kind: 'file' 
 export function useFileTree({
   workdir,
   displayedDirectory = ROOT_KEY,
+  enabled = true,
   remoteHostId = null,
   deviceId = null,
   hideMetaFiles = true,
@@ -1024,11 +1031,12 @@ export function useFileTree({
   // 瞬态失败(隧道不可达 / 重连中)保持「未知」而不是落定成 false:把一次网络抖动
   // 显示成「对方版本过旧」并把开关禁掉,连接恢复后也不会自愈。重探由
   // reconnectEpoch 驱动 —— relay 或目标设备恢复 online 时它自增。
-  const revealReconnectEpoch = useDeviceLinkReconnectEpoch(deviceId ?? undefined);
+  const revealReconnectEpoch = useDeviceLinkReconnectEpoch(enabled ? deviceId ?? undefined : undefined);
   const [deviceRevealSupported, setDeviceRevealSupported] = useState<boolean | null>(null);
   /** 上次探测结论归属的设备;换设备不留用旧结论(重连不清,避免开关闪一下)。 */
   const revealProbedDeviceRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     if (!deviceId) {
       revealProbedDeviceRef.current = null;
       setDeviceRevealSupported(null);
@@ -1051,7 +1059,7 @@ export function useFileTree({
     return () => {
       cancelled = true;
     };
-  }, [deviceId, workdir, revealReconnectEpoch]);
+  }, [enabled, deviceId, workdir, revealReconnectEpoch]);
 
   // 探测未返回时(device 首帧)沿用用户偏好:猜错只多一次重建,不会发出无法
   // 兑现的用户可见承诺。
@@ -1059,21 +1067,15 @@ export function useFileTree({
 
   // store 实例按 (workdir + options) 共享 —— 多个 hook 实例订阅同一份。
   // memo 用 dep 化 options,确保 workdir 切换会换 store。
-  const store = useMemo(
-    () => getOrCreateStore({
-      workdir,
-      remoteHostId,
-      deviceId,
-      hideMetaFiles,
-      docMode,
-      showIgnoredDirs: effectiveShowIgnoredDirs,
-    }),
-    [workdir, remoteHostId, deviceId, hideMetaFiles, docMode, effectiveShowIgnoredDirs],
-  );
+  const options = useMemo(() => ({
+    workdir, remoteHostId, deviceId, hideMetaFiles, docMode, showIgnoredDirs: effectiveShowIgnoredDirs,
+  }), [workdir, remoteHostId, deviceId, hideMetaFiles, docMode, effectiveShowIgnoredDirs]);
+  const store = useMemo(() => enabled ? getOrCreateStore(options) : null, [enabled, options]);
 
   // ref-count 生命周期:首挂触发 init(initial fetch + start watch),最后离开
   // 触发 dispose(stop watch + 从 stores 表移除)。
   useEffect(() => {
+    if (!store) return;
     store.refCount += 1;
     if (store.refCount === 1) {
       void initStore(store);
@@ -1091,19 +1093,20 @@ export function useFileTree({
   const snapshot = useSyncExternalStore(
     useCallback(
       (cb) => {
+        if (!store) return () => {};
         store.listeners.set(cb, displayedDirectory);
         return () => store.listeners.delete(cb);
       },
       [store, displayedDirectory],
     ),
-    () => store.snapshot,
-    () => store.snapshot,
+    () => store?.snapshot ?? EMPTY_TREE,
+    () => store?.snapshot ?? EMPTY_TREE,
   );
 
   // Restoring a tab's directory must also work with a collapsed tree. Share
   // the bounded restore workers, and leave the user's expanded rows untouched.
   useEffect(() => {
-    if (!displayedDirectory) return;
+    if (!store || !displayedDirectory) return;
     const missing = displayedDirectoryPaths(store);
     for (const path of missing) {
       if (store.snapshot.entries.has(path) || store.snapshot.loadingPaths.has(path)) missing.delete(path);
@@ -1112,11 +1115,16 @@ export function useFileTree({
   }, [store, displayedDirectory]);
 
   // 把 store-level actions wrap 成跟 store 绑死的稳定引用。
-  const toggleFolderCb = useCallback((relPath: string) => toggleFolder(store, relPath), [store]);
-  const collapseAllCb = useCallback(() => collapseAll(store), [store]);
-  const refreshCb = useCallback(() => refresh(store), [store]);
+  const toggleFolderCb = useCallback((relPath: string) => {
+    if (store) toggleFolder(store, relPath);
+  }, [store]);
+  const collapseAllCb = useCallback(() => {
+    if (store) collapseAll(store);
+  }, [store]);
+  const refreshCb = useCallback(() => store ? refresh(store) : Promise.resolve(), [store]);
   const expandToPathCb = useCallback(
-    (relPath: string, kind?: 'file' | 'directory', refreshTarget?: boolean) => expandToPath(store, relPath, kind, refreshTarget),
+    (relPath: string, kind?: 'file' | 'directory', refreshTarget?: boolean) =>
+      store ? expandToPath(store, relPath, kind, refreshTarget) : Promise.resolve(),
     [store],
   );
 
@@ -1129,13 +1137,13 @@ export function useFileTree({
       loadError: snapshot.loadError,
       // 非 device 会话恒 true;device 会话见上面探测注释。
       showIgnoredDirsSupported: deviceId ? deviceRevealSupported : true,
-      storeKey: store.key,
+      storeKey: storeKey(options),
       treeIdentityKey: treeIdentityKey(workdir, remoteHostId, deviceId),
       toggleFolder: toggleFolderCb,
       collapseAll: collapseAllCb,
       refresh: refreshCb,
       expandToPath: expandToPathCb,
     }),
-    [snapshot, deviceId, deviceRevealSupported, store, toggleFolderCb, collapseAllCb, refreshCb, expandToPathCb, workdir, remoteHostId],
+    [snapshot, deviceId, deviceRevealSupported, options, toggleFolderCb, collapseAllCb, refreshCb, expandToPathCb, workdir, remoteHostId],
   );
 }

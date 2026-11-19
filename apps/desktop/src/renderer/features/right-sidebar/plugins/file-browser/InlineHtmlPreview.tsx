@@ -18,6 +18,7 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
 }) {
   const host = useRef<HTMLDivElement>(null);
   const reloadGuest = useRef<(() => void) | null>(null);
+  const editedWhileHidden = useRef(false);
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
   const { t } = useTranslation();
   const origin = useMemo(() => deviceId === undefined && !remoteHostId ? null :
@@ -36,8 +37,20 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
   }, [wrapper, tabId]);
   useHiddenPageAudioMute(webview, active);
   useLocalHtmlAutoReload({
-    sessionId, workdir, url: localUrl, enabled: active && !!localUrl, reload: () => reloadGuest.current?.(),
+    sessionId, workdir, url: localUrl, enabled: !!webview && !!localUrl,
+    // The chat store reports edits in memory. Keep watching the live guest's
+    // file while hidden and defer the actual navigation until it is visible.
+    reload: () => {
+      if (active) reloadGuest.current?.();
+      else editedWhileHidden.current = true;
+    },
   });
+  useEffect(() => {
+    if (active && editedWhileHidden.current) {
+      editedWhileHidden.current = false;
+      reloadGuest.current?.();
+    }
+  }, [active]);
   useEffect(() => {
     if (!active || !webview) return;
     return window.electronAPI.onRsbBrowserCommand(({ command }) => {
@@ -112,6 +125,7 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
     })().catch(() => { if (!disposed) setStatus('failed'); });
     return () => {
       disposed = true;
+      editedWhileHidden.current = false;
       reloadGuest.current = null;
       guest.removeEventListener('did-finish-load', ready);
       guest.removeEventListener('did-fail-load', failed);

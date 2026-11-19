@@ -115,3 +115,41 @@ it('restores the selected HTML view after the preview must be recreated', async 
   expect(hydrate(save.mock.lastCall![0])).not.toHaveProperty('previewHtmlPath');
   reopened.unmount();
 });
+
+// PR #11392, unit: a retained SSH preview must not keep the remote tree busy
+// on file events or window focus. Exercise the mounted plugin and its transport.
+it('pauses remote directory reads while the sidebar preview is hidden', async () => {
+  const workdir = '/remote/notes';
+  type Notice = { workdir: string; relPath: string; type: string };
+  const listeners = new Set<(event: Notice) => void>();
+  const listDir = vi.fn(async () => []);
+  vi.stubGlobal('electronAPI', {
+    fileBrowser: { listDir, startWatch: vi.fn(), stopWatch: vi.fn(),
+      onEvent: (fn: (event: Notice) => void) => { listeners.add(fn); return () => listeners.delete(fn); },
+      previewHtml: vi.fn().mockResolvedValue({ url: 'http://localhost/draft.html' }),
+      cancelHtmlPreview: vi.fn().mockResolvedValue({ ok: true }),
+    }, search: { onEvent: () => () => {} }, onRsbBrowserCommand: () => () => {},
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  const ctx = { sessionId: 'ssh-notes', tabId: 'remote-preview', remoteHostId: 'ssh', deviceLinkDeviceId: null,
+    workdir, patchState: vi.fn(), onVisibilityChange: vi.fn(), setCloseInterceptor: () => () => {} };
+  const state = { selectedFilePath: 'draft.html', previewHtmlPath: 'draft.html' };
+  const view = render(<FileBrowserBody ctx={ctx} state={state} active={false} />);
+  expect(listDir).not.toHaveBeenCalled();
+  view.rerender(<FileBrowserBody ctx={ctx} state={state} active />);
+  await waitFor(() => expect(listDir).toHaveBeenCalledTimes(1));
+  const guest = view.container.querySelector('webview');
+  expect(guest).not.toBeNull();
+  view.rerender(<FileBrowserBody ctx={ctx} state={state} active shellVisible={false} />);
+  listDir.mockClear();
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'));
+    for (const notify of listeners) notify({ workdir, relPath: 'new.txt', type: 'add' });
+    await new Promise(resolve => setTimeout(resolve, 75));
+  });
+  expect(listDir).not.toHaveBeenCalled();
+  view.rerender(<FileBrowserBody ctx={ctx} state={state} active />);
+  await waitFor(() => expect(listDir).toHaveBeenCalledTimes(1));
+  expect(view.container.querySelector('webview')).toBe(guest);
+  view.unmount();
+});

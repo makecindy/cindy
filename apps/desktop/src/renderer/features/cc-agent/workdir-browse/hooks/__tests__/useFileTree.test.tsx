@@ -112,6 +112,31 @@ describe('useFileTree refresh scheduling', () => {
     src.unmount();
   });
 
+  // PR #11392, unit: releasing a hidden consumer must not stop a visible
+  // sibling. The final release must also cancel any queued trailing read.
+  it('lets only visible tabs own a shared remote directory read', async () => {
+    const pending = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementationOnce(() => pending.promise).mockResolvedValue([]);
+    const opts = { workdir: '/shared-visible', remoteHostId: 'ssh' };
+    const first = renderHook(({ enabled }) => useFileTree({ ...opts, enabled }), { initialProps: { enabled: true } });
+    const second = renderHook(({ enabled }) => useFileTree({ ...opts, enabled }), { initialProps: { enabled: true } });
+    expect(mocks.listDir).toHaveBeenCalledTimes(1);
+    first.rerender({ enabled: false });
+    expect(mocks.stopWatchFor).not.toHaveBeenCalled();
+    let refresh!: Promise<void>;
+    act(() => { refresh = second.result.current.refresh(); });
+    second.rerender({ enabled: false });
+    expect(mocks.stopWatchFor).toHaveBeenCalledTimes(1);
+    await act(async () => { pending.resolve([]); await refresh; });
+    expect(mocks.listDir).toHaveBeenCalledTimes(1);
+    first.rerender({ enabled: true });
+    await waitFor(() => expect(first.result.current.initialLoading).toBe(false));
+    second.rerender({ enabled: true });
+    expect(mocks.listDir).toHaveBeenCalledTimes(2);
+    first.unmount();
+    second.unmount();
+  });
+
   // #11392, unit: a renamed ancestor or a missing-path read must invalidate the
   // visible directory, including previously cached nested entries.
   it.each(['parent event', 'missing path'])('drops stale directory listings after a %s', async (signal) => {
