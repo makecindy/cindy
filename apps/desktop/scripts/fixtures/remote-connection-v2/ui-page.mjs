@@ -35,6 +35,11 @@ export default {
       storage: V2_ON,
       viewport: { width: 520, height: 900 },
     },
+    'narrow-fleet': {
+      about: 'Seven relay peers at the minimum Settings content width; their transport and RTT stay clear of the relay caption',
+      storage: V2_ON,
+      viewport: { width: 520, height: 900 },
+    },
     empty: { about: 'Only this computer, master switch off', storage: V2_ON },
     'legacy-off': { about: 'Agent-Net off: no topology; 我的设备 and the relay route are unchanged' },
     'remote-switch': {
@@ -180,7 +185,7 @@ export default {
     // 往返是那条路的。三行：名字 / 协议 /「UDP · 25 ms」;读屏名字是「名字 · 协议 · 走法 · 往返」。
     const relayName = await ui.t('settings.remoteControl.v2.relay.official');
     const relayRtt = await ui.t('settings.remoteControl.v2.ms', { value: ui.case === 'many' ? 22 : 25 });
-    const relayTransport = await ui.t(ui.case === 'self-device-link' || ui.case === 'fleet'
+    const relayTransport = await ui.t(ui.case === 'self-device-link' || ui.case === 'fleet' || ui.case === 'narrow-fleet'
       ? 'settings.remoteControl.v2.relayTransport.websocket' : 'settings.remoteControl.v2.relayTransport.udp');
     const relayRoute = `${selfProtocol} · ${relayTransport}`;
     if (ui.case !== 'empty') {
@@ -198,16 +203,6 @@ export default {
       };
       const dotBox = await relayDot.boundingBox();
       const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-      // The full-size cases miss the overlap between one relay peer's link label and the relay point.
-      // Use the production topology in Electron with one peer at the minimum Settings content width.
-      if (ui.case === 'narrow-relay') {
-        const peerRtt = await ui.t('settings.remoteControl.v2.ms', { value: 24 });
-        const pill = page.getByText(new RegExp(`^${relayTransport}[\\s·]*${peerRtt}$`));
-        await pill.waitFor();
-        const pillBox = await pill.boundingBox();
-        assert.ok(pillBox && !overlaps(pillBox, dotBox), 'peer link label overlaps the relay point');
-        return;
-      }
       const dotX = dotBox.x + dotBox.width / 2;
       const labels = [];
       for (const el of await page.getByText(relayName, { exact: true }).all()) {
@@ -223,6 +218,28 @@ export default {
       }
       assert.equal(labels.length, 1, 'relay station label');
       const [{ box: relayLabel, lines }] = labels;
+      // The full-size cases miss overlaps at the minimum Settings content width.
+      // One relay peer exercises the point; the narrow fleet exercises the station caption beside a neighboring peer.
+      if (ui.case === 'narrow-relay' || ui.case === 'narrow-fleet') {
+        const expected = ui.case === 'narrow-relay'
+          ? [[relayTransport, 24]]
+          : [[relayTransport, 194], [await ui.t('settings.remoteControl.v2.linkTransport.webrtc'), 38], ['', 316]];
+        for (const [transport, value] of expected) {
+          const peerRtt = await ui.t('settings.remoteControl.v2.ms', { value });
+          const pill = page.getByText(new RegExp(`^${transport}[\\s·]*${peerRtt}$`));
+          await pill.waitFor();
+          const pillBox = await pill.boundingBox();
+          assert.ok(pillBox && !overlaps(pillBox, dotBox), 'peer link label overlaps the relay point');
+          for (const line of lines) {
+            assert.ok(line && !overlaps(pillBox, line), 'peer link label overlaps the relay caption');
+          }
+          assert.ok(
+            await pill.evaluate((el) => [el, ...el.children].every((part) => part.scrollWidth <= part.clientWidth)),
+            `peer link label is truncated (${transport} ${peerRtt})`,
+          );
+        }
+        return;
+      }
       // 名字、连接方式、往返三行都在，从上到下排着、不互相压住。
       for (const [i, line] of lines.entries()) {
         assert.ok(line, `relay label line ${i} is missing`);
