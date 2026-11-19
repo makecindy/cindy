@@ -92,6 +92,7 @@ export function SendDeliveryTip({
 
   const [openReason, setOpenReason] = useState<OpenReason | null>(null);
   const [touch, setTouch] = useState(false);
+  const [anchorHovered, setAnchorHovered] = useState(false);
   const [pointerRow, setPointerRow] = useState<Row | null>(null);
   const [focusRow, setFocusRow] = useState<Row | null>(null);
   const [modifierHeld, setModifierHeld] = useState(false);
@@ -120,6 +121,7 @@ export function SendDeliveryTip({
     window.clearTimeout(timers.current.close);
     window.clearTimeout(timers.current.note);
     setOpenReason(null);
+    setAnchorHovered(false);
     setTouch(false);
     setPointerRow(null);
     setFocusRow(null);
@@ -156,9 +158,9 @@ export function SendDeliveryTip({
     };
   }, []);
 
-  // 打开期间跟随修饰键；窗口失活时没有 pointerleave / keyup 能收到，直接收起。
+  // 悬停等待和打开期间都跟随修饰键；窗口失活时直接收起。
   useEffect(() => {
-    if (!open) return undefined;
+    if (!enabled || (!anchorHovered && !open)) return undefined;
     const syncModifier = (event: globalThis.KeyboardEvent) => setModifierHeld(hasComposerModifier(event, platform));
     window.addEventListener('keydown', syncModifier, true);
     window.addEventListener('keyup', syncModifier, true);
@@ -168,7 +170,7 @@ export function SendDeliveryTip({
       window.removeEventListener('keyup', syncModifier, true);
       window.removeEventListener('blur', close);
     };
-  }, [open, platform, close]);
+  }, [enabled, anchorHovered, open, platform, close]);
 
   useEffect(() => {
     onAlternatePreviewChange(previewAlternate);
@@ -196,9 +198,12 @@ export function SendDeliveryTip({
         const from = previous.tops[mode];
         const to = tops[mode];
         if (!row || from === undefined || to === undefined || from === to || typeof row.animate !== 'function') continue;
+        const motionStyle = getComputedStyle(row);
+        const durationToken = motionStyle.getPropertyValue('--motion-enter').trim();
+        const duration = parseFloat(durationToken) * (durationToken.endsWith('ms') ? 1 : 1000);
         row.animate([{ transform: `translateY(${from - to}px)` }, { transform: 'none' }], {
-          duration: 250,
-          easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+          duration: Number.isFinite(duration) ? duration : 0,
+          easing: motionStyle.getPropertyValue('--motion-ease-out').trim() || 'linear',
         });
       }
     }
@@ -221,11 +226,13 @@ export function SendDeliveryTip({
     window.clearTimeout(timers.current.close);
     // 按着键拖进来的是语音长按「松手发送」，不是悬停。
     if (!enabled || openReason || event.pointerType !== 'mouse' || event.buttons !== 0) return;
+    setAnchorHovered(true);
     setModifierHeld(hasComposerModifier(event, platform));
     window.clearTimeout(timers.current.hover);
     timers.current.hover = window.setTimeout(() => openAs('hover'), HOVER_OPEN_MS);
   };
   const onAnchorPointerLeave = (event: PointerEvent<HTMLElement>) => {
+    setAnchorHovered(false);
     window.clearTimeout(timers.current.hover);
     if (event.pointerType === 'mouse') scheduleHoverClose();
   };

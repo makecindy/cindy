@@ -146,6 +146,22 @@ export default {
       assert.equal(await tip.count(), 0, 'nothing appears while typing');
       await ui.capture('typing');
 
+      // Regression: both press and release during the 500ms hover delay must be reflected
+      // when the tip opens (DESIGN.md §14.6 modifier preview). Existing checks only press
+      // after opening, missing the stale-state window reported in review.
+      if (!modifierIsSendKey) {
+        for (const heldAtEntry of [false, true]) {
+          if (heldAtEntry) await page.keyboard.down('Control');
+          await (await sendButton(mode)).hover();
+          await page.keyboard[heldAtEntry ? 'up' : 'down']('Control');
+          await tip.waitFor();
+          await tip.locator('[data-row="' + (heldAtEntry ? 'default' : 'alternate') + '"][data-active]').waitFor({ timeout: 2000 });
+          await page.keyboard.up('Control');
+          await page.mouse.move(0, 0);
+          await tip.waitFor({ state: 'hidden' });
+        }
+      }
+
       // Resting on Send opens the tip: the lit row next to the button is the default.
       await openTip();
       assert.equal(await tip.locator('[data-row="default"]').getAttribute('data-mode'), mode);
