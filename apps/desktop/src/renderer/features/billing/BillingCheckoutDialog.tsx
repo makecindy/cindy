@@ -9,7 +9,7 @@ import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { billingApi } from './api';
-import { formatGiftCardAmount } from './giftCardPurchase';
+import { formatGiftCardAmount, giftCardCheckoutLine } from './giftCardPurchase';
 import { BILLING_CURRENCY } from './money';
 import { isGiftCardCheckout, type BillingCheckoutState } from './useBillingCheckout';
 
@@ -24,16 +24,13 @@ function actionOf(state: BillingCheckoutState) {
   return state.order?.paymentAction ?? state.subscription?.paymentAction ?? null;
 }
 
-/** 礼品卡订单的「面额 × 张数」：优先取本次意图；重试换了订单后按订单总额折算。 */
+/** 礼品卡订单的「面额 × 张数」：订单创建后以订单为准（见 giftCardCheckoutLine）。 */
 function giftCardLine(state: BillingCheckoutState): { unitAmount: string; quantity: number } | null {
   if (!isGiftCardCheckout(state)) return null;
-  if (state.intent?.kind === 'GIFT_CARD') {
-    return { unitAmount: state.intent.unitAmount, quantity: state.intent.request.quantity };
-  }
-  const quantity = state.order?.quantity ?? 1;
-  const total = state.order ? Number(state.order.amount) : Number.NaN;
-  if (!Number.isFinite(total) || quantity < 1) return null;
-  return { unitAmount: String(Math.round((total / quantity) * 100) / 100), quantity };
+  const intent = state.intent?.kind === 'GIFT_CARD'
+    ? { unitAmount: state.intent.unitAmount, quantity: state.intent.request.quantity }
+    : null;
+  return giftCardCheckoutLine(intent, state.order ?? null);
 }
 
 export function BillingCheckoutDialog({

@@ -142,6 +142,9 @@ describe('gift card server responses', () => {
       card: { ...redeemed, amount }, credit: { state: 'APPLIED', amount, expiresAt: null },
     });
     expect(() => redeem('1.005')).toThrow();
+    // 0 元的卡或「成功兑换 0 元」同样自相矛盾。
+    expect(() => redeem('0')).toThrow();
+    expect(() => projectGiftCardPreview({ card: { ...card, amount: '0.00' } })).toThrow();
     expect(() => projectGiftCardPreview({ card: { ...card, amount: '1.005' } })).toThrow();
     expect(redeem('1.500000000').card.amount).toBe('1.500000000');
   });

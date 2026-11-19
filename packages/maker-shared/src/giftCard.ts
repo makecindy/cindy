@@ -170,12 +170,14 @@ function trimTrailingZeros(value: string): string {
 }
 
 /**
- * 礼品卡金额（卡面与到账额度）：十进制，去掉小数末尾的 0 后最多两位小数。服务端发卡也限两位，
+ * 礼品卡金额（卡面与到账额度）：大于 0 的十进制，去掉小数末尾的 0 后最多两位小数。服务端发卡也限两位，
  * 卡面按分印；比分更细的金额卡面与文字会对不上，按坏响应处理。
  */
 function amount(value: unknown): string {
   if (typeof value !== 'string' || !DECIMAL_PATTERN.test(value)) invalid();
   if (trimTrailingZeros(value.split('.')[1] ?? '').length > 2) invalid();
+  // 卡面与到账额度必须大于 0：0 元的卡或「成功兑换 0 元」是自相矛盾的响应。
+  if (!/[1-9]/.test(value)) invalid();
   return value;
 }
 

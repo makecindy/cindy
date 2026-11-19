@@ -20,6 +20,7 @@ import { BILLING_CURRENCY } from '../money';
 import { GiftCardPurchaseDialog } from '../GiftCardPurchaseDialog';
 import {
   customGiftCardRange,
+  giftCardCheckoutLine,
   giftCardOffersOf,
   giftCardOrderTotal,
   maxGiftCardQuantity,
@@ -185,7 +186,21 @@ describe('GiftCardPurchaseDialog', () => {
     expect(screen.getByText(/billing\.giftCardPurchase\.orderAmountCap/)).toBeTruthy();
   });
 
-  // 评审发现（PR #11412）：方案范围与单张面额范围不重叠时没有能填的面额，「自定义」不能看起来可选、
+  // 评审发现（PR #11412）：订单创建后二维码 / 跳转属于这张订单，付款弹窗的「面额 × 张数」要以订单为准，
+// 不能沿用下单前的意图（比如价格刚变了）；摊不成整分时不说面额。
+describe('giftCardCheckoutLine', () => {
+  const intent = { unitAmount: '100', quantity: 2 };
+  it('describes the created order, not the intent it came from', () => {
+    expect(giftCardCheckoutLine(intent, null)).toEqual(intent);
+    expect(giftCardCheckoutLine(intent, { amount: '200.00', quantity: 2 })).toEqual(intent);
+    expect(giftCardCheckoutLine(intent, { amount: '240', quantity: 2 })).toEqual({ unitAmount: '120', quantity: 2 });
+    expect(giftCardCheckoutLine(intent, { amount: '300', quantity: 3 })).toEqual({ unitAmount: '100', quantity: 3 });
+    expect(giftCardCheckoutLine(null, { amount: '901.00', quantity: 2 })).toEqual({ unitAmount: '450.5', quantity: 2 });
+    expect(giftCardCheckoutLine(intent, { amount: '100.01', quantity: 2 })).toBeNull();
+  });
+});
+
+// 评审发现（PR #11412）：方案范围与单张面额范围不重叠时没有能填的面额，「自定义」不能看起来可选、
   // 实际怎么填都不能付款。
   it('disables a buyer-entered offer whose range does not overlap the allowed face values', async () => {
     expect(customGiftCardRange({ minAmount: '20', maxAmount: '100' }, { minFaceValue: '200', maxFaceValue: '500' })).toBeNull();

@@ -146,6 +146,29 @@ export function maxGiftCardQuantity(
   return Math.max(0, max);
 }
 
+/**
+ * 付款弹窗上的「面额 × 张数」。订单还没创建时取本次下单的意图；订单创建后二维码 / 跳转属于这张
+ * 订单，按订单的总额与张数说：意图的面额 × 张数恰好等于订单总额时沿用意图的面额，否则用订单总额
+ * 按分精确均摊；摊不成整分时返回 null（弹窗改用通用说明，不说一个不准的面额）。
+ */
+export function giftCardCheckoutLine(
+  intent: { unitAmount: string; quantity: number } | null,
+  order: { amount: string; quantity?: number } | null,
+): { unitAmount: string; quantity: number } | null {
+  if (!order) return intent;
+  const quantity = order.quantity ?? 1;
+  const total = cents(order.amount);
+  if (total === null || !Number.isInteger(quantity) || quantity < 1) return null;
+  if (intent && intent.quantity === quantity && cents(intent.unitAmount) !== null &&
+    cents(intent.unitAmount)! * BigInt(quantity) === total) {
+    return intent;
+  }
+  if (total % BigInt(quantity) !== 0n) return null;
+  const unit = total / BigInt(quantity);
+  const fraction = trimTrailingZeros(String(unit % 100n).padStart(2, '0'));
+  return { unitAmount: fraction ? `${unit / 100n}.${fraction}` : String(unit / 100n), quantity };
+}
+
 /** 面额 × 张数，返回十进制字符串（两位小数以内）；按分用 bigint 精确计算。 */
 export function giftCardOrderTotal(unitAmount: string, quantity: number): string {
   const unit = cents(unitAmount);
