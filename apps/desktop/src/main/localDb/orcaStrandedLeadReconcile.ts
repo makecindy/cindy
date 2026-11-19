@@ -17,7 +17,8 @@
  *  - 归档「属于非 active team」且尚未归档的 worker session(`orca_role` 保留 `'worker'` 作历史)。
  *  - 把非 active team 的 `orca_workers` 收敛 `'done'`(对齐 `markWorkersStatusByTeam`)。
  *  - 清掉「`orca_role='lead'` 且无 active team」的悬空 Lead。
- * 三者都只命中非 active team;有 active team 的健康协同会话原样保留。幂等:已收敛的行不会再被
+ * 另补齐已创建 worker、但进程在提升追问前退出的任务。
+ * 前三项都只命中非 active team;有 active team 的健康协同会话原样保留。幂等:已收敛的行不会再被
  * 命中,重复跑是 no-op。跑挂了不阻塞启动,只 log。
  *
  * 注意:本进程内通过 UI / MCP 关闭协同的**实时**修复由 `disableOrcaInternal` 自身完成(其
@@ -33,7 +34,7 @@ const log = createLogger('orca-stranded-lead-reconcile');
 
 /**
  * 同步执行:在 `ensureReady` 的 runMigrations + schemaDriftRepair + cleanupStaleOrcaLeadIndex
- * 之后调用(此时 schema 已是 HEAD,`orca_teams` / `orca_workers` 表一定存在)。三步写包在一个
+ * 之后调用(此时 schema 已是 HEAD,`orca_teams` / `orca_workers` 表一定存在)。修复包在一个
  * 事务里,保证要么全成、要么全不动。不抛错 —— 任何异常都吞掉记日志,不让兜底修复把启动卡死。
  */
 export function reconcileStrandedOrcaLeads(db: Database.Database): void {
@@ -74,17 +75,27 @@ export function reconcileStrandedOrcaLeads(db: Database.Database): void {
         )
         .run().changes;
 
-      return { archivedWorkerSessions, doneWorkers, clearedLeads };
+      // A worker may already be durable when the process exits before its lead is promoted.
+      const promotedLeads = db.prepare(`
+        UPDATE sessions SET side_chat_promoted = 1
+        WHERE source = 'side-chat' AND side_chat_promoted = 0 AND status <> 'deleted'
+          AND id IN (
+            SELECT team.lead_session_id FROM orca_teams team
+            WHERE team.status IN ('active', 'completed', 'cancelled')
+              AND EXISTS (SELECT 1 FROM orca_workers worker WHERE worker.team_id = team.id)
+          )
+      `).run().changes;
+      return { archivedWorkerSessions, doneWorkers, clearedLeads, promotedLeads };
     });
 
     const res = run();
-    if (res.archivedWorkerSessions > 0 || res.doneWorkers > 0 || res.clearedLeads > 0) {
+    if (res.archivedWorkerSessions > 0 || res.doneWorkers > 0 || res.clearedLeads > 0 || res.promotedLeads > 0) {
       log.warn(
         JSON.stringify({
           event: 'localDb.reconcile.strandedOrcaState.cleared',
           ...res,
           reason:
-            'an interrupted disableOrcaInternal left a stranded lead and/or orphaned workers from a non-active team; reconciled to a clean state',
+            'repaired an interrupted Orca lifecycle change',
         }),
       );
     }

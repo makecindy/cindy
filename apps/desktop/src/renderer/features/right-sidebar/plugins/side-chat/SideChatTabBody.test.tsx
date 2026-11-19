@@ -37,7 +37,7 @@ describe('side chat panel lifecycle', () => {
     mocks.invoke.mockResolvedValue({ id: 'child', parentSessionId: 'parent', source: 'side-chat', model: 'old-model' });
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
       deviceLink: { invoke: mocks.invoke, onRemotePush: mocks.subscribe },
-      localDb: { sessionsPush: { onPatched: mocks.subscribe } },
+      localDb: { sessions: { get: vi.fn().mockResolvedValue({ id: 'child', parentSessionId: 'parent', source: 'side-chat' }) }, sessionsPush: { onPatched: mocks.subscribe } },
     } });
   });
   afterEach(cleanup);
@@ -76,6 +76,16 @@ describe('side chat panel lifecycle', () => {
     expect(JSON.parse(editor.textContent!)).toMatchObject({ viewVisible: false, chatRealtime: false });
     expect(mocks.invoke).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  // Unit: a restored local tab cannot rely on receiving the promotion push again.
+  it('retires a restored local tab when the persisted child is already independent', async () => {
+    vi.mocked(window.electronAPI.localDb.sessions.get).mockResolvedValueOnce({
+      id: 'child', parentSessionId: 'parent', source: 'desktop', sideChatPromoted: true,
+    } as Awaited<ReturnType<typeof window.electronAPI.localDb.sessions.get>>);
+    await act(async () => { render(<SideChatTabBody state={{ sessionId: 'child', deviceId: null }} ctx={ctx} active />); });
+    expect(mocks.closeTab).toHaveBeenCalledWith('parent', 'tab', { skipBeforeClose: true });
+    expect(mocks.status).not.toHaveBeenCalled();
   });
 
   it('opens the editor after retrying a failed metadata read', async () => {

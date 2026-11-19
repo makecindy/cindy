@@ -28,7 +28,8 @@ describe('remote session archive status', () => {
     const send = vi.fn();
     const setStatus = createRemoteSessionsStatusSetter({
       captureAccess: () => () => {},
-      invoke: async (_device, _channel, args, options) => {
+      invoke: async (_device, channel, args, options) => {
+        if (channel === 'local-db:sessions:get') return { ok: true, result: { id: args[0] } };
         if (args[0] === 's2') current = false; // connection wait completed after input replacement
         options?.preSend?.();
         send(args[0]);
@@ -62,6 +63,17 @@ describe('remote session archive status', () => {
       failedSessionId: 's2', remainingSessionIds: ['s3'],
     });
     expect(s.invoke).toHaveBeenCalledOnce();
+  });
+
+  // Unit: the remote delete tool must distinguish a promoted task while older
+  // hosts, which omit the flag, keep receiving the original deletion payload.
+  it.each([true, undefined])('deletes the inspected remote task (promotion=%s)', async promoted => {
+    const s = setup({ ok: true, result: { id: 's1', status: 'deleted' } });
+    s.invoke.mockResolvedValueOnce({ ok: true, result: { id: 's1', sideChatPromoted: promoted } });
+    expect(await s.setStatus({ ...request, sessionIds: ['s1'], status: 'deleted' })).toMatchObject({ ok: true });
+    expect(s.invoke).toHaveBeenLastCalledWith('studio', 'local-db:sessions:patch-meta',
+      ['s1', promoted ? { status: 'deleted', deleteTarget: 'task' } : { status: 'deleted' }],
+      { preSend: expect.any(Function) });
   });
 
   it('uses only the existing patch-meta channel with the stripped id and status', async () => {

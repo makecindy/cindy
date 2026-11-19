@@ -28,11 +28,11 @@ function makeDb(opts: { changesBySql?: (sql: string) => number; throwOnRun?: boo
 }
 
 describe('reconcileStrandedOrcaLeads', () => {
-  it('runs three reconcile statements, each scoped to NON-active teams only', () => {
+  it('repairs inactive teams and separately restores visibility to side-chat leads', () => {
     const { db, runSqls } = makeDb({ changesBySql: () => 1 });
     reconcileStrandedOrcaLeads(db);
 
-    expect(runSqls).toHaveLength(3);
+    expect(runSqls).toHaveLength(4);
     const [archiveWorkers, doneWorkers, clearLeads] = runSqls;
 
     // 1) archive ONLY still-active orphan worker sessions of non-active teams — must not touch
@@ -60,7 +60,7 @@ describe('reconcileStrandedOrcaLeads', () => {
   it('still runs the idempotent statements when nothing is stranded (changes=0, no throw)', () => {
     const { db, runSqls } = makeDb({ changesBySql: () => 0 });
     expect(() => reconcileStrandedOrcaLeads(db)).not.toThrow();
-    expect(runSqls).toHaveLength(3);
+    expect(runSqls).toHaveLength(4);
   });
 
   it('does not propagate errors (must not block ensureReady)', () => {

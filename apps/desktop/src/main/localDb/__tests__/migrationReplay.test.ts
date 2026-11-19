@@ -12,6 +12,7 @@ import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { listMigrations, runMigrationReplay } from '../migrationRunner';
+import { reconcileStrandedOrcaLeads } from '../orcaStrandedLeadReconcile';
 import { initializeTaskTagPresets } from '../taskTagPresets';
 
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
@@ -100,10 +101,24 @@ describeMigrationReplay('existing side-chat teams', () => {
       runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 154 });
       const reopened = createBetterSqliteDatabase(db.name);
       try {
+        expect(reopened.prepare("SELECT side_chat_promoted FROM sessions WHERE id = 'live'").pluck().get()).toBe(1);
+        // DB recovery tier: a second worker committed after migration, before the
+        // process could publish its lead. Reopening must repair only that lead.
+        reopened.exec(`
+          ALTER TABLE sessions ADD orca_role TEXT;
+          ALTER TABLE orca_workers ADD session_id TEXT;
+          ALTER TABLE orca_workers ADD status TEXT;
+          INSERT INTO sessions (id, source, status, sdk_session_id)
+            VALUES ('interrupted', 'side-chat', 'active', 'native-interrupted');
+          INSERT INTO orca_teams VALUES ('team-interrupted', 'interrupted', 'active');
+          INSERT INTO orca_workers (id, team_id) VALUES ('worker-interrupted', 'team-interrupted');
+        `);
+        reconcileStrandedOrcaLeads(reopened);
         expect(reopened.prepare('SELECT id, source, sdk_session_id, side_chat_promoted FROM sessions ORDER BY id').all())
           .toEqual([
             { id: 'empty', source: 'side-chat', sdk_session_id: 'native-empty', side_chat_promoted: 0 },
             { id: 'failed', source: 'side-chat', sdk_session_id: 'native-failed', side_chat_promoted: 0 },
+            { id: 'interrupted', source: 'side-chat', sdk_session_id: 'native-interrupted', side_chat_promoted: 1 },
             { id: 'live', source: 'side-chat', sdk_session_id: 'native-live', side_chat_promoted: 1 },
           ]);
       } finally {

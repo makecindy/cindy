@@ -111,8 +111,10 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
     });
     setLoadFailed(false);
     const read = async () => {
-      if (!deviceId || !active) return;
-      const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [childId]) as Session;
+      if (!active) return;
+      const value = (deviceId
+        ? await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:get', [childId])
+        : await window.electronAPI.localDb.sessions.get(childId)) as Session | null;
       if (!valid() || unavailable) return;
       if (!value) { dismiss(); return; }
       if (value.id !== childId || value.parentSessionId !== ctx.sessionId) {
@@ -121,6 +123,7 @@ function AttachedSideChat({ state, ctx, active, shellVisible = true }: TabKindBo
       if (value.status === 'deleted') { dismiss(); return; }
       if (value.sideChatPromoted) { dismiss(true); return; }
       if (value.source !== 'side-chat') throw new Error('Side chat owner mismatch');
+      if (!deviceId) return;
       const snapshot: Session = { ...value, ...bufferedPatch, id: childId, source: 'side-chat', deviceLinkDeviceId: deviceId };
       if (snapshot.status === 'deleted') { dismiss(); return; }
       // The shared editor also reads metadata from the remote task store. Restore
