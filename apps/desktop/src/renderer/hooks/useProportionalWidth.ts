@@ -1,14 +1,32 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
+/** Wide-pane ceiling shared by prose, blocks and the new/running task composers. */
+export const TASK_MESSAGE_MAX_WIDTH = 1120;
+
 /**
  * 主区域内容宽度 hook
  *
- * 消息保留 maxWidth 阅读上限；inputWidth 默认比消息每侧多10px。
- * 普通任务启用 paneLayout：消息工作列锚在 pane 起始边，输入区填满扣除边距后的
- * 可用空间。借鉴 Telegram Desktop 的“pane 布局与单条消息阅读宽度分离”，不通过
- * 加长正文行宽填满大屏。消息、过程、表格及代码仍共用原内容列。
- * 不传 paneLayout 的伙伴、群聊和嵌入 rail 保持原居中与输入宽度。
- * 宽度由 ResizeObserver 实测 pane 决定，与显示器分辨率、侧栏状态无关。
+ * 同时返回两个宽度：
+ *   messageWidth = min(maxWidth, containerWidth - sidePadding*2)   // 普通模式 50px/侧
+ *   inputWidth   = messageWidth + INPUT_OUTSET (输入框每侧少 10px)
+ *
+ * maxWidth 为内容封顶宽（首参）：容器再宽,内容列也不超过它,超出部分靠 mx-auto
+ * 居中留白。不传时回落到 MAX_MESSAGE_WIDTH(1200) 的历史默认。新建对话页与进行中
+ * 对话页以914为基线，expandTo 共用 TASK_MESSAGE_MAX_WIDTH：pane<=1200 保留
+ * 笔记本行宽，1200→1600 渐进展开，之后封顶。正文与表格、代码使用同一列，
+ * 纯文字也获得空间，不产生两个内容右边界。新建和进行中页沿用同一计算。
+ *
+ * - 消息流侧 (50px)：MessageStream 是 overflow-y-auto 的原生滚动容器,占满
+ *   全宽 containerWidth，内部 contentRef `mx-auto` + `maxWidth=messageWidth`
+ *   自然得到左右各 50px 的边距 ((containerWidth - messageWidth) / 2 = 50)。
+ *   原生 scrollbar 由 globals.css `.is-scrolling` 体系自动隐藏(默认透明,
+ *   滚动/hover 时显形,2s 无活动后淡出),布局不受 scrollbar 影响。
+ * - 输入框侧 (40px)：overlay 用 left-[40px]/right-[40px]，内层 ChatInput
+ *   用 inputWidth 完整填满
+ *
+ * 关系：inputWidth = messageWidth + 20，即输入框始终比消息流每侧多出 10px
+ *   （padding 更小 = 更宽）。容器够宽时两者都封顶，超出部分由 mx-auto
+ *   居中留白。
  *
  * compact 模式 (messagePad 50→20 / inputPad 40→10):
  *   - workdir-browse 右侧 chat rail:容器只有 340 宽时,默认 padding 会让
@@ -22,6 +40,8 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  */
 // 内容封顶宽的历史默认值:调用方不传首参时回落到它(旧行为)。
 const MAX_MESSAGE_WIDTH = 1200;
+const WIDE_PANE_START = 1200;
+const WIDE_PANE_END = 1600;
 const INPUT_OUTSET = 20; // 输入框比消息流每侧宽 10px（共 20px）
 const DEFAULT_MESSAGE_PAD = 50;
 // compact 之前用 10/0 太贴边了,input 完全没呼吸空间。20/10 仍比默认紧凑 60%,
@@ -37,8 +57,8 @@ const AUTO_COMPACT_THRESHOLD = 700;
 export interface UseProportionalWidthOptions {
   /** 紧凑模式 (workdir-browse rail / 主会话右栏打开等窄容器场景),两侧 padding 由 50→20。 */
   compact?: boolean;
-  /** Anchor the bounded message column at the pane start and let the composer use the available pane. */
-  paneLayout?: boolean;
+  /** Optional wide-pane cap: preserve maxWidth through 1200px, expand to this cap at 1600px. */
+  expandTo?: number;
   /**
    * 内容宽度下限(px)。给"填满可用宽 + 封顶 1200"的自适应再补一个地板:容器
    * 足够宽时 inputWidth 不低于该值。为避免窄窗溢出,地板本身再夹到实测容器宽
@@ -76,11 +96,15 @@ export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWid
       const nextInputPad = Math.max(0, messagePad - INPUT_OUTSET / 2);
       const messageAvailable = Math.max(0, containerWidth - messagePad * 2);
       // 首参 maxWidth 为内容封顶宽;非法/未传时回落到历史默认 1200。
-      const cap = maxWidth && maxWidth > 0 ? maxWidth : MAX_MESSAGE_WIDTH;
+      const baseCap = maxWidth && maxWidth > 0 ? maxWidth : MAX_MESSAGE_WIDTH;
+      const progress = Math.max(0, Math.min(1,
+        (containerWidth - WIDE_PANE_START) / (WIDE_PANE_END - WIDE_PANE_START),
+      ));
+      const cap = opts.expandTo && opts.expandTo > baseCap
+        ? baseCap + (opts.expandTo - baseCap) * progress
+        : baseCap;
       const nextMessage = Math.min(cap, messageAvailable);
-      let nextInput = opts.paneLayout
-        ? Math.max(0, containerWidth - nextInputPad * 2)
-        : nextMessage + INPUT_OUTSET;
+      let nextInput = nextMessage + INPUT_OUTSET;
       if (opts.minWidth && opts.minWidth > nextInput) {
         // 地板夹到实测容器宽以内:窄窗仍是"填满容器",不会溢出/裁切。
         nextInput = Math.min(opts.minWidth, containerWidth);
@@ -93,7 +117,6 @@ export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWid
       const el = containerRef.current;
       if (el) {
         el.style.setProperty('--cindy-message-width', `${nextMessage}px`);
-        el.style.setProperty('--cindy-message-margin-start', opts.paneLayout ? `${messagePad}px` : 'auto');
         el.style.setProperty('--cindy-input-width', `${nextInput}px`);
         el.style.setProperty('--cindy-input-pad', `${nextInputPad}px`);
         el.style.setProperty(
@@ -110,7 +133,7 @@ export function useProportionalWidth(maxWidth?: number, opts: UseProportionalWid
           : { isCompact: useCompact, inputWidthBand: resolvedBand },
       );
     },
-    [maxWidth, opts.compact, opts.paneLayout, opts.minWidth, opts.responsiveBreakpoints],
+    [maxWidth, opts.compact, opts.expandTo, opts.minWidth, opts.responsiveBreakpoints],
   );
 
   // useLayoutEffect + 同步量一次:在首次 paint 前写好 CSS 变量，消除 width=0 的坏帧。

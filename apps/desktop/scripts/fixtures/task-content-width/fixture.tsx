@@ -31,12 +31,13 @@ let layout = createDefaultLayout();
 if (layout.content.type === 'split') layout.content.children.forEach(child => { child.fraction = 0.5; });
 
 function Task() {
-  // The original hook ignores paneLayout, so --compare replays the actual
-  // centered baseline without copying the production layout.
-  const width = proportionalWidth.useProportionalWidth(914, { paneLayout: !ctx.data.legacy });
+  // Namespace lookup keeps --compare runnable against the original hook,
+  // which has no wide-pane export/option; its unchanged914px behavior is replayed.
+  const wideCap = Reflect.get(proportionalWidth, 'TASK_MESSAGE_MAX_WIDTH') ?? 914;
+  const width = proportionalWidth.useProportionalWidth(914, { expandTo: ctx.data.legacy ? undefined : wideCap });
   const attachmentState = useAttachments('fixture-task-width');
   return <main className="min-w-[400px] flex-1 h-full" data-task-pane>
-    <div ref={width.containerRef} className="relative h-full w-full" data-task-width>
+    <div ref={width.containerRef} className="relative h-full w-full" data-task-width data-wide-cap={wideCap}>
       <MessageStream workingDir="" historyLoaded messages={messages.map(message => message.clientId === 'answer'
         ? { ...message, content: ctx.data.textOnly ? textContent : content,
           ...(ctx.data.streaming ? { isStreaming: true, turnCompleted: false } : {}) }

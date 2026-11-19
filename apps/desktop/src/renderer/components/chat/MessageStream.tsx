@@ -6670,13 +6670,18 @@ export function MessageStream({
           (lib/scrollbarAutoHide.ts 全局 capture 阶段自动加类)。
         - data-scroll-container 给 ImageLightbox/TextLightbox/MermaidLightbox/
           ToolPayloadLightbox 的全局 querySelector('[data-scroll-container]') 找锚点。
-        - 普通任务的起始边距由 hook 继承变量提供；其他聊天保留 mx-auto 居中。
+        - 50px 视觉边距由 contentRef 的 mx-auto + maxWidth 自然产生。
       */}
             <div
               ref={scrollRef}
               data-scroll-container=""
               onCopy={copyChatSelection}
-              className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
+              className={cn(
+                'h-full w-full overflow-y-auto overflow-x-hidden',
+                // Task content and composer share a center axis. A one-sided
+                // stable gutter shifts the message column by half a scrollbar.
+                simplifiedBotConversation ? '[scrollbar-gutter:stable]' : '[scrollbar-gutter:stable_both-edges]',
+              )}
               onScroll={handleScroll}
               onPointerDownCapture={() => refreshViewportAnchor()}
               onKeyDownCapture={() => refreshViewportAnchor()}
@@ -6686,10 +6691,10 @@ export function MessageStream({
                 className="relative mx-auto w-full pt-7"
                 style={{
                   paddingBottom: resolvedBottomPadding,
-                  // Message reading width is independent of the pane-wide composer.
-                  // Callers without the pane layout retain centered margins.
+                  // Match the input overlay's width so chat content + input box
+                  // share the same horizontal bounds. Falls back to 880 only if
+                  // the parent forgot to pass contentWidth.
                   maxWidth: contentWidth ?? 880,
-                  marginInlineStart: 'var(--cindy-message-margin-start, auto)',
                 }}
               >
                 {header ? <div className="mb-3.5">{header}</div> : null}
