@@ -13056,6 +13056,12 @@ assertRouteCurrent();
             generation: usageExecutionGeneration,
             total: { ...cumulativeTotal },
           });
+          const observed = opts.resolveUsagePriceVariant?.({
+            threadId: params.threadId,
+            inputTokens: totalInput,
+            outputTokens: last.outputTokens ?? 0,
+            cacheReadTokens: cached,
+          });
           usageTracker.ingestApiCallUsage({
             inputTokens: uncachedInput,
             // outputTokens already includes the reasoning subset. Adding
@@ -13064,13 +13070,9 @@ assertRouteCurrent();
             cacheReadTokens: cached,
             cacheCreateTokens: cacheWrite,
             reasoningTokens: last.reasoningOutputTokens ?? 0,
-            model: turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
-            priceVariant: opts.resolveUsagePriceVariant?.({
-              threadId: params.threadId,
-              inputTokens: totalInput,
-              outputTokens: last.outputTokens ?? 0,
-              cacheReadTokens: cached,
-            }) ?? ((turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value) === 'ultrafast'
+            model: (typeof observed === 'object' ? observed.model : undefined)
+              ?? turnOriginByTurnId.get(params.turnId)?.model ?? activeTurnModel ?? mutableModel,
+            priceVariant: (typeof observed === 'object' ? observed.priceVariant : observed) ?? ((turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value) === 'ultrafast'
               ? 'ultrafast'
               : fastModeFromServiceTier(turnServiceTier !== undefined ? turnServiceTier : serviceTierState.value)
                 ? 'priority'

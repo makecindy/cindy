@@ -7383,7 +7383,8 @@ describe('CodexAgent fast mode service tier', () => {
   it.each(['standard', 'priority'] as const)('prices the actual proxy execution (%s) without clearing Fast', async priceVariant => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, method => method === Method.TurnStart ? { turn: { id: 'turn-1' } } : undefined);
-    const resolveUsagePriceVariant = vi.fn(() => priceVariant);
+    const reportedModel = priceVariant === 'priority' ? 'served-model' : undefined;
+    const resolveUsagePriceVariant = vi.fn(() => reportedModel ? { priceVariant, model: reportedModel } : priceVariant);
     const handle = await agent.startSession({ sessionId: 'session-xai-pricing', model: 'xai/grok-4.7',
       fastMode: true, workingDir: '/repo', resolveUsagePriceVariant });
     const handlers = host.getThreadHandlers()!;
@@ -7404,7 +7405,7 @@ describe('CodexAgent fast mode service tier', () => {
     });
     expect(resolveUsagePriceVariant).toHaveBeenCalledWith({ threadId: 'start-thread-id', inputTokens: 30, outputTokens: 5, cacheReadTokens: 10 });
     expect((events.find(e => e.type === 'done')?.data as { usage: { segments: unknown[] } }).usage.segments)
-      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant })]);
+      .toEqual([expect.objectContaining({ inputTokens: 20, outputTokens: 5, cacheReadTokens: 10, priceVariant, model: reportedModel ?? 'xai/grok-4.7' })]);
     expect(handle.getFastMode?.()).toBe(true);
     await handle.close();
   });
