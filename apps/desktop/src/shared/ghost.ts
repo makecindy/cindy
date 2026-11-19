@@ -677,7 +677,7 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
  * (轻量任务模型链 vs embedding 模型),合成一档就没法只授权其中一样。信任面同 oneshot —— 只花额度,拿不到任何宿主
  * 能力,不进会话。
  */
-export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank'] as const;
+export const GHOST_CINDY_MODELS_ACTIONS = ['decisions', 'rerank', 'media_request'] as const;
 export type GhostCindyModelsAction = (typeof GHOST_CINDY_MODELS_ACTIONS)[number];
 
 export function declaredGhostCindyModelActions(manifest: GhostManifest): GhostCindyModelsAction[] {
@@ -2252,6 +2252,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'embed.text': 'cindyEmbedText',
   'models.decisions': 'cindyModelsDecisions',
   'models.rerank': 'cindyModelsRerank',
+  'models.media_request': 'cindyModelsMediaRequest',
   'search.web': 'cindySearchWeb',
 };
 
@@ -8621,7 +8622,33 @@ export const GHOST_CINDY_EMBED_TIMEOUT_MS = 60_000;
  *   白名单外一律拒。意识自己**不要**替用户做选型。
  * 两者都给时 model 优先。意识永远不经手 key,也决定不了白名单之外的路由。
  */
+export const GHOST_DIRECT_MEDIA_OPERATIONS = [
+  'image.generate', 'video.generate', 'video.poll', 'video.content',
+  'audio.speech', 'audio.transcribe',
+] as const;
+export type GhostDirectMediaOperation = (typeof GHOST_DIRECT_MEDIA_OPERATIONS)[number];
+
+export type GhostDirectMediaRequest = {
+  type: 'cindy-request';
+  kind: 'media_request';
+  model: string;
+} & (
+  | { operation: 'image.generate' | 'video.generate' | 'audio.speech'; body: Record<string, unknown> }
+  | { operation: 'audio.transcribe'; body: Record<string, string>; audioHash: string }
+  | { operation: 'video.poll' | 'video.content'; jobRef: string }
+);
+
+export interface GhostDirectMediaResponse {
+  ok: true;
+  status: number;
+  contentType: string;
+  body: string;
+  encoding: 'utf8' | 'base64';
+  jobRef?: string;
+}
+
 export type GhostPipeCindyRequest =
+  | GhostDirectMediaRequest
   | {
       type: 'cindy-request';
       kind: 'gen_image';
@@ -8967,6 +8994,7 @@ interface GhostCindyEmbedResultMeta {
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */
 export type GhostPipeModelResult =
+  | GhostDirectMediaResponse
   | { ok: true; models: Array<{ model: string; providerId: string; name: string }> }
   | { ok: true; model: string; answers?: unknown; results?: Array<{ index: number; relevance_score: number }>;
       usage: unknown; estimatedCost: { amount: number; currency: 'USD' | 'CNY' } | null }

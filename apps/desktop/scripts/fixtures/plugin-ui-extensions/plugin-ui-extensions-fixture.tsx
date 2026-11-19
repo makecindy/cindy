@@ -29,6 +29,31 @@ const pages = buildPluginSettingsPages([ghost]);
 const documents = buildPluginSettingsSearchDocuments(pages, '插件设置');
 const session = { id: 'fixture-task', title: '示例任务', status: 'active', messagesCount: 3 } as Session;
 const noOp = () => {};
+
+if (ctx.case === 'sidebar-section') {
+  // Exercise the real host presenter with a local stand-in for the sandbox document.
+  const src = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src')!;
+  Object.defineProperty(HTMLIFrameElement.prototype, 'src', {
+    ...src,
+    set(this: HTMLIFrameElement, value: string) {
+      if (value !== 'cindy-mcp-app://sidebar-fixture/sandbox') {
+        src.set!.call(this, value);
+        return;
+      }
+      this.addEventListener('load', () => {
+        const body = this.contentDocument!.body;
+        body.style.cssText = 'margin:8px;font:14px system-ui;color:CanvasText';
+        body.style.colorScheme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+        body.textContent = '示例插件页面';
+        window.dispatchEvent(new MessageEvent('message', {
+          source: this.contentWindow,
+          data: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-handshake-started' },
+        }));
+      }, { once: true });
+    },
+  });
+}
+
 function InputScene() {
   const tray = useAttachments(undefined, 'fixture-draft');
   const [completion, setCompletion] = useState<PluginUiCompletionResult | null>(null);
@@ -87,6 +112,9 @@ void mountPage({ host: {
   getFileThumbnail: async () => null,
   cleanupStagedChatAttachments: async () => {},
   maker: { mcpApps: async (_session, input) => {
+    if (input.op === 'open-resource' && ctx.case === 'sidebar-section') {
+      return { viewId: 'sidebar-fixture', transport: 'sandbox', prefersBorder: true };
+    }
     if (input.op === 'plugin-settings') {
       if (input.operation === 'update') value = { ...value, ...input.patch };
       if (input.operation === 'reset') value = { ...defaults };

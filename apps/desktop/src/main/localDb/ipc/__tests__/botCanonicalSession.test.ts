@@ -2606,6 +2606,8 @@ describe('Bot canonical Session lifecycle', () => {
       .resolves.toMatchObject({ ok: false, errorCode: 'ROOT_UNAVAILABLE' });
     const first = await topicInvoke('local-db:bots:dm-thread:ensure', { ...root, title: 'Plan the launch post' });
     expect(first).toMatchObject({ ok: true, created: true });
+    expect(h.sqlite!.prepare('SELECT title FROM sessions WHERE id = ?').get(first.sessionId))
+      .toEqual({ title: 'Plan the launch post' });
     await expect(topicInvoke('local-db:bots:dm-thread:ensure', root))
       .resolves.toEqual({ ok: true, sessionId: first.sessionId, created: false });
     const canonical = h.sqlite!.prepare('SELECT working_dir AS workingDir, permission_mode AS permissionMode FROM sessions WHERE id = ?')

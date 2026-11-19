@@ -447,6 +447,48 @@ describe.runIf(posix)('Claude Code style Bash', () => {
 });
 
 describe('raw operations for Pi', () => {
+  // #11497: existing shell tests use Git Bash/POSIX and miss cmd's disabled cwd search.
+  // Unit smoke through production exec.run/Bash: real Windows cmd must execute the
+  // wrapper with NoDefaultCurrentDirectoryInExePath set, preserving cwd and status.
+  it.runIf(process.platform === 'win32')('runs cmd wrappers when current-directory executable search is disabled', async () => {
+    const exists = fs.existsSync.bind(fs);
+    const probe = vi.spyOn(fs, 'existsSync').mockImplementation((file) =>
+      /[/\\]bash\.exe$/i.test(String(file)) ? false : exists(file));
+    vi.stubEnv('NoDefaultCurrentDirectoryInExePath', '1');
+    const spaced = path.join(project, 'with spaces');
+    fs.mkdirSync(spaced);
+    fs.writeFileSync(path.join(spaced, 'marker.txt'), 'target-cwd');
+    const { executor } = makeExecutor('normal', { aliases: [{ from: '/agent/project', to: project }] });
+    try {
+      const hello = await executor.handle('exec.run', { command: 'echo hello', cwd: '/agent/project/with spaces' }) as { output: string; exitCode: number };
+      expect(Buffer.from(hello.output, 'base64').toString().trim()).toBe('hello');
+      expect(hello.exitCode).toBe(0);
+      const failed = await executor.handle('exec.run', {
+        command: 'type marker.txt\r\necho %NoDefaultCurrentDirectoryInExePath%\r\nexit /b 7', cwd: '/agent/project/with spaces',
+      }) as { output: string; exitCode: number };
+      expect(Buffer.from(failed.output, 'base64').toString().trim()).toBe('target-cwd1');
+      expect(failed.exitCode).toBe(7);
+      const foreground = await executor.callTool('Bash', { command: 'echo foreground' });
+      expect(foreground.isError).toBeFalsy();
+      expect(text(foreground)).toBe('foreground');
+      const started = await executor.callTool('Bash', { command: 'echo background\r\nexit /b 7', run_in_background: true });
+      expect(started.isError).toBeFalsy();
+      const id = /ID: (bash_[0-9a-f]+)/.exec(text(started))?.[1];
+      expect(id).toBeTruthy();
+      let output = '';
+      await vi.waitFor(async () => {
+        const result = await executor.callTool('BashOutput', { bash_id: id });
+        output += text(result);
+        expect(text(result)).toContain('<status>completed</status>');
+        expect(text(result)).toContain('<exit_code>7</exit_code>');
+      });
+      expect(output).toContain('background');
+    } finally {
+      await executor.close();
+      probe.mockRestore();
+    }
+  });
+
   it('reads, writes, lists, stats and detects image types', async () => {
     const { executor } = makeExecutor();
     await executor.handle('fs.mkdir', { path: 'src' });

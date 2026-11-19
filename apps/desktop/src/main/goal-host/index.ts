@@ -10,6 +10,11 @@ import { randomUUID } from 'node:crypto';
 
 import type { Maker } from '@cindy/maker-core';
 
+import { accountUsageLimitFromExhaustedResets } from '../../shared/accountUsageLimit.js';
+import { isOpenCodeGoProvider, opencodeGoUsageEndpoint } from '../../shared/opencodeGoUsage.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import { providerRoutingForModel } from '../maker-host/provider-route.js';
 import { createLogger } from '../logger.js';
 import {
   hasRestoredCodexQuota,
@@ -119,6 +124,18 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     getAccountLimit: async (agentKind, sessionId, turnError) => {
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
+      const provider = providerId && getActiveCatalog().providers.find(p => p.id === providerId);
+      if (provider && isOpenCodeGoProvider(provider, agentKind)) {
+        // Go uses an API key for its subscription. A rejected turn can consult
+        // the official allowance for this runtime; successful turns carry on.
+        if (turnError === undefined || !row || sessionUsesOtherMachineAccount(row)) return null;
+        const route = providerRoutingForModel(provider, agentKind, modelId ?? undefined);
+        if (!route || !opencodeGoUsageEndpoint(route.upstream)) return null;
+        const result = await readOpenCodeGoAccountUsage({ providerId: provider.id, agent: agentKind }, 'after-limit');
+        if (result.status !== 'ready' || result.stale || result.snapshot.kind !== 'opencode-go-quota') return null;
+        const exhausted = result.snapshot.windows.filter(w => w.limited);
+        return accountUsageLimitFromExhaustedResets(exhausted.map(w => w.resetsAt), Date.now());
+      }
       const family = subscriptionFamilyOf(agentKind, providerId);
       // ChatGPT windows do not establish credit-backed admission, and cached credits
       // may be stale or unknown. Let the next normal turn reach the provider; retain

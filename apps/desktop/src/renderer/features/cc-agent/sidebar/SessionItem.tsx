@@ -912,9 +912,10 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           <Undo size={14} strokeWidth={2} />
         </SessionAction>
       ) : canQuickArchive && inboxMode ? (
-        // 收件箱：「完成」单击生效；鼠标在列表上时排列冻结（TaskInbox），不会点到跳动的行。
+        // 收件箱：「完成」单击生效；鼠标悬停在完成按钮上时排列冻结（TaskInbox），不会点到跳动的行。
         // 未提交改动的确认仍保留，见 handleActionClick。
         <SessionAction
+          inboxComplete
           label={t('ccAgent.sidebar.inbox.complete')}
           onClick={() => {
             prefetchRemovalPreflight();
@@ -1375,15 +1376,17 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
 });
 
 /** SessionItem 右侧 hover action 图标按钮 —— 尺寸/视觉与 Project Header 的
- *  ProjectAction 基本一致(size-5 / icon 14×14 / strokeWidth 2 / 圆角 md /
+ *  ProjectAction 基本一致(size-5 / icon 14×14 / strokeWidth 2 / 标准按钮圆角 /
  *  普通行 hover 用 sidebar-item-hover + foreground；选中行保持 active foreground,
  *  hover 只叠一层同色半透明高光)。 */
 function SessionAction({
+  inboxComplete,
   label,
   onClick,
   isActive,
   children,
 }: {
+  inboxComplete?: boolean;
   label: string;
   onClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   isActive: boolean;
@@ -1391,8 +1394,10 @@ function SessionAction({
 }) {
   return (
     <Tip text={label}>
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        tone="quiet"
+        data-inbox-complete={inboxComplete}
         aria-label={label}
         onClick={(e) => {
           e.stopPropagation();
@@ -1401,15 +1406,15 @@ function SessionAction({
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
         className={cn(
-          'shrink-0 size-5 flex items-center justify-center rounded-md',
+          'shrink-0 size-5 p-0 flex items-center justify-center',
           'focus:outline-none',
           isActive
-            ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
-            : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+            ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+            : 'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground',
         )}
       >
         {children}
-      </button>
+      </Button>
     </Tip>
   );
 }

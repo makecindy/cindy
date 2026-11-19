@@ -6032,7 +6032,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "작업 모델 자동 대체",
-        "description": "연결 또는 용량 오류가 반복되면 같은 모델의 다른 연결된 제공자를 먼저 시도하고, 이어서 현재 Agent에 명시적으로 추천된 모델을 시도합니다. Agent나 저장된 선택은 바꾸지 않습니다. 기본값은 꺼짐입니다."
+        "description": "오류가 발생하면 그룹 내 다른 사용 가능한 모델을 시도합니다. 에이전트가 바뀌면 작업을 인계하고 새 선택을 저장합니다. 일반 작업은 오류가 반복되면 같은 에이전트의 다른 공급처나 추천 모델을 시도합니다. 기본값은 꺼짐입니다."
       },
       "toggleAria": "작업 모델 자동 대체 전환",
       "toast": {
@@ -8161,6 +8161,7 @@
         "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
         "cindyModelsDecisions": "의사결정 모델 호출 가능(모델 사용 한도 사용)",
         "cindyModelsRerank": "재순위화 모델 호출 가능(모델 사용 한도 사용)",
+        "cindyModelsMediaRequest": "Cindy AI로 이미지 및 동영상 생성, 음성 합성, 음성 전사를 요청할 수 있음(모델 사용 한도 사용)",
         "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
         "cindySearchWeb": "Cindy AI로 공개 웹을 검색할 수 있음",
         "cindySearchWebDetail": "검색 요청은 공개 웹에 접근하며 Cindy AI 할당량을 소모할 수 있습니다.",
@@ -9458,6 +9459,31 @@
     "preparing": "로그인 서비스에 연결 중",
     "preparingSubtitle": "이 지역에서 사용 가능한 방법을 불러오고 있습니다",
     "unavailable": "일시적으로 로그인할 수 없습니다",
+    "hostUnavailable": {
+      "title": "Cindy 백그라운드 서비스가 시작되지 않았습니다",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "이 데이터는 Cindy 백그라운드 서비스에 저장된 로그인과 다른 계정의 데이터입니다.",
+          "action": "원래 계정으로 cindy-host login을 실행하고 Cindy 백그라운드 서비스를 다시 시작한 후 Cindy를 다시 여세요."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "다른 Cindy 프로그램이 이 데이터를 사용하고 있습니다.",
+          "action": "그 프로그램을 종료하고 Cindy 백그라운드 서비스를 다시 시작한 후 Cindy를 다시 여세요."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "이 계정의 데이터를 열 수 없습니다.",
+          "action": "최근에 더 새로운 버전의 Cindy를 사용했다면 먼저 이 컴퓨터의 Cindy를 최신 버전으로 업데이트하고 Cindy 백그라운드 서비스를 다시 시작한 후 Cindy를 다시 여세요. 그렇지 않다면 cindy-host status를 실행해 원인을 확인하세요."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Cindy 백그라운드 서비스가 시작하는 동안 로그인 서비스에 연결하지 못했습니다.",
+          "action": "네트워크를 확인하고 Cindy 백그라운드 서비스를 다시 시작한 후 Cindy를 다시 여세요."
+        },
+        "HOST_START_FAILED": {
+          "body": "Cindy 백그라운드 서비스를 시작하는 중에 오류가 발생했습니다.",
+          "action": "Cindy 백그라운드 서비스를 다시 시작한 후 Cindy를 다시 여세요. 다시 발생하면 cindy-host status를 실행해 원인을 확인하세요."
+        }
+      }
+    },
     "retry": "다시 시도",
     "browserWaiting": "브라우저에서 인증을 완료하세요",
     "browserCallback": {
@@ -19135,6 +19161,9 @@
     },
     "errors": {
       "piStartupCloudFile": "클라우드에만 있는 지침 파일 때문에 Pi 시작이 지연될 수 있습니다: {{path}}. Finder에서 이 파일을 다운로드하고 로컬에서 사용할 수 있는지 확인한 후 다시 시도하세요. 시간 초과의 원인이 다를 수도 있습니다.",
+      "hostProfileInUseByDesktop": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있습니다. 앱을 종료한 후 다시 보내세요.",
+      "hostProfileInUseByDesktopAtStart": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있어 Cindy 백그라운드 서비스가 시작되지 않았습니다. 그 앱을 종료하고 Cindy 백그라운드 서비스를 다시 시작한 후 지금 이 Cindy 창을 다시 여세요.",
+      "hostProfileInUseByDesktopRetry": "이 데이터는 단독으로 실행 중인 Cindy 데스크톱 앱이 사용하고 있어 지금은 변경할 수 없습니다. 앱을 종료한 후 다시 시도하세요.",
       "openFileFailed": "시스템에서 파일을 열 수 없습니다",
       "emptyResponse": "모델이 내용을 반환하지 않았습니다. 다시 시도해 주세요. 컨텍스트가 길면 모델을 바꿔 보세요.",
       "turnFailed": "작업 실행에 실패했습니다(모델이 오류 상세 정보를 반환하지 않았습니다). 다시 시도해 주세요.",
@@ -21463,14 +21492,14 @@
     },
     "taskInbox": {
       "title": "받은 편지함 사용법",
-      "lead": "작업은 상태에 따라 처리 대기, 진행 중, 나중에 처리, 처리됨으로 자동 분류됩니다. 받은 편지함을 그때그때 비우는 습관을 가장 추천합니다. 끝난 작업은 완료, 지금 처리하지 않을 작업은 나중에 처리하세요.",
+      "lead": "여러 작업을 동시에 진행할 때는 받은 편지함이 작업을 상태별로 정리해 줍니다. 새 결과나 답변을 기다리는 작업은 처리 대기에서 확인하세요.",
       "pending": {
         "title": "처리 대기",
         "body": "결과가 나왔거나 답변을 기다리는 작업이 여기에 나타납니다."
       },
       "done": {
         "title": "완료",
-        "body": "처리가 끝나면 완료를 한 번 누르면 처리됨으로 이동합니다. 새 소식이 있으면 자동으로 돌아옵니다."
+        "body": "받은 편지함을 비우는 습관을 들여 보세요. 작업을 처리했으면 완료를 누르세요."
       },
       "snooze": {
         "title": "나중에 처리",
@@ -21805,14 +21834,14 @@
     "openFailed": "GitHub를 열지 못했습니다."
   },
   "hostConnection": {
-    "connecting": "Cindy에 연결 중…",
+    "connecting": "Cindy 백그라운드 서비스에 연결 중…",
     "restoring": "작업 상태 복원 중…",
     "retrying": "작업 상태를 다시 동기화하는 중…",
     "pairing": "연결 인증이 필요합니다",
-    "pairingHelp": "이 페이지를 열어 두세요. Cindy Host를 시작한 터미널에서 웹 화면을 여는 명령을 다시 실행하고 새 페이지에서 페어링한 후 돌아오세요.",
+    "pairingHelp": "이 페이지를 열어 두세요. Cindy 백그라운드 서비스를 시작한 터미널에서 웹 화면을 여는 명령을 다시 실행하고 새 페이지에서 페어링한 후 돌아오세요.",
     "keepDraft": "작성 중인 초안은 유지됩니다. 연결이 복구되면 작업 상태가 동기화됩니다.",
     "retry": "다시 연결",
-    "desktopAuthHelp": "시작 터미널에서 Host 연결 설정을 업데이트한 후 이 실험용 클라이언트를 다시 여세요."
+    "desktopAuthHelp": "시작 터미널에서 Cindy 백그라운드 서비스 연결 설정을 업데이트한 후 이 실험용 클라이언트를 다시 여세요."
   },
   "remoteControlConsent": {
     "title": "이 컴퓨터의 원격 제어를 허용할까요?",

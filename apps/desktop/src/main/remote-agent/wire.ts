@@ -281,6 +281,8 @@ export interface RemoteAgentOpenPayload {
   acceptsGroupSwitch?: boolean;
   /** 自动交接后重新打开时带回的那张一次性凭证：组所在电脑据此避开出问题的那台。 */
   groupSwitchToken?: string;
+  /** The owner must confirm the current direct assignment was handed off before opening. */
+  requireGroupSwitchToken?: true;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;
   projectFiles: RemoteAgentWireFile[];
@@ -464,6 +466,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
     ...(typeof value.groupSwitchToken === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.groupSwitchToken)
       ? { groupSwitchToken: value.groupSwitchToken }
       : {}),
+    ...(value.requireGroupSwitchToken === true ? { requireGroupSwitchToken: true as const } : {}),
     options: decodeStartOptions(value.options),
     workspace: decodeWorkspace(value.workspace),
     projectFiles,

@@ -6133,7 +6133,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "Modelo alternativo automático para tareas",
-        "description": "Tras varios fallos de conexión o capacidad, prueba otra fuente conectada para el mismo modelo y, después, un modelo recomendado explícitamente para el Agent actual. Nunca cambia de Agent ni modifica tu selección guardada. Desactivado de forma predeterminada."
+        "description": "Si hay un fallo, el grupo prueba otros modelos disponibles del grupo. Al cambiar de agente se transfiere la tarea y se guarda la nueva selección. Las demás tareas prueban otra fuente o un modelo recomendado del mismo agente tras fallos repetidos. Desactivado de forma predeterminada."
       },
       "toggleAria": "Activar o desactivar el modelo alternativo automático para tareas",
       "toast": {
@@ -8276,6 +8276,7 @@
         "cindyEmbedText": "Puede enviar texto para convertirlo en vectores (para búsqueda semántica)",
         "cindyModelsDecisions": "Puede usar modelos de decisión (consume tu cuota de modelos)",
         "cindyModelsRerank": "Puede usar modelos de reordenación (consume tu cuota de modelos)",
+        "cindyModelsMediaRequest": "Puede generar imágenes y vídeos, sintetizar voz y transcribir audio con Cindy AI (consume tu cuota de modelos)",
         "cindyEmbedTextDetail": "El texto se envía al modelo de embeddings del sistema y se convierte en números, hasta {{max}} elementos por llamada. Pueden aplicarse cargos por uso del modelo. Los vectores van solo al complemento; no se escribe nada en tu propia biblioteca.",
         "cindySearchWeb": "Puede buscar en la web pública con Cindy AI",
         "cindySearchWebDetail": "Las solicitudes de búsqueda acceden a la web pública y pueden consumir la cuota de Cindy AI.",
@@ -9573,6 +9574,31 @@
     "preparing": "Preparando el inicio de sesión",
     "preparingSubtitle": "Cargando los métodos disponibles para esta región",
     "unavailable": "Inicio de sesión no disponible ahora",
+    "hostUnavailable": {
+      "title": "Servicio en segundo plano de Cindy",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Estos datos pertenecen a una cuenta distinta del inicio de sesión guardado por el servicio en segundo plano de Cindy.",
+          "action": "Ejecuta cindy-host login con la cuenta original, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Otra aplicación de Cindy está usando estos datos.",
+          "action": "Ciérrala, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "No se pueden abrir los datos de esta cuenta.",
+          "action": "Si has usado hace poco una versión más reciente de Cindy, actualiza primero Cindy en este ordenador a la última versión, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy. Si no, ejecuta cindy-host status para ver el motivo."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "El servicio en segundo plano de Cindy no pudo conectar con el servicio de inicio de sesión al iniciarse.",
+          "action": "Comprueba tu red, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy."
+        },
+        "HOST_START_FAILED": {
+          "body": "El servicio en segundo plano de Cindy encontró un error al iniciarse.",
+          "action": "Reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy. Si vuelve a ocurrir, ejecuta cindy-host status para ver el motivo."
+        }
+      }
+    },
     "retry": "Reintentar",
     "browserWaiting": "Completa la verificación en tu navegador",
     "browserCallback": {
@@ -19393,6 +19419,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Un archivo de instrucciones que solo está en la nube podría estar retrasando el inicio de Pi: {{path}}. Descarga este archivo en Finder, espera a que esté disponible localmente y vuelve a intentarlo. El tiempo de espera agotado podría tener otra causa.",
+      "hostProfileInUseByDesktop": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos. Ciérrala y vuelve a enviar.",
+      "hostProfileInUseByDesktopAtStart": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos, así que el servicio en segundo plano de Cindy no se ha iniciado. Ciérrala, reinicia el servicio en segundo plano de Cindy y vuelve a abrir esta ventana de Cindy.",
+      "hostProfileInUseByDesktopRetry": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos, así que ahora no se puede cambiar. Ciérrala y vuelve a intentarlo.",
       "openFileFailed": "No se puede abrir el archivo en el sistema",
       "emptyResponse": "El modelo no devolvió contenido. Inténtalo de nuevo. Si el contexto es muy largo, cambia de modelo.",
       "turnFailed": "La tarea falló (el modelo no devolvió detalles del error); inténtalo de nuevo.",
@@ -21751,14 +21780,14 @@
     },
     "taskInbox": {
       "title": "Conoce la bandeja de entrada",
-      "lead": "Las tareas se ordenan solas en Pendientes, En curso, Pospuestas y Procesadas. El mejor hábito es mantener la bandeja vacía: haz clic en Hecho cuando termines una tarea y pospón lo que pueda esperar.",
+      "lead": "Si llevas varias tareas a la vez, la bandeja de entrada las agrupa por estado. En Pendientes verás los nuevos resultados y lo que espera tu respuesta.",
       "pending": {
         "title": "Pendientes",
         "body": "Las tareas aparecen aquí cuando tienen un resultado o esperan tu respuesta."
       },
       "done": {
         "title": "Hecho",
-        "body": "¿Listo? Un clic en Hecho la pasa a Procesadas. Vuelve sola si hay novedades."
+        "body": "Acostúmbrate a vaciar la bandeja de entrada. Pulsa Hecho cuando hayas atendido una tarea."
       },
       "snooze": {
         "title": "Pospuestas",
@@ -22093,14 +22122,14 @@
     "openFailed": "No se pudo abrir GitHub."
   },
   "hostConnection": {
-    "connecting": "Conectando con Cindy…",
+    "connecting": "Conectando con el servicio en segundo plano de Cindy…",
     "restoring": "Restaurando el estado de las tareas…",
     "retrying": "Las tareas aún no están sincronizadas. Reintentando…",
     "pairing": "Se necesita autorizar la conexión",
-    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste Cindy Host, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
+    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste el servicio en segundo plano de Cindy, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
     "keepDraft": "Tu borrador se conserva. Las tareas se sincronizarán cuando se restablezca la conexión.",
     "retry": "Reconectar",
-    "desktopAuthHelp": "Actualiza la configuración de conexión del Host en el terminal de inicio y vuelve a abrir este cliente experimental."
+    "desktopAuthHelp": "Actualiza la configuración de conexión del servicio en segundo plano de Cindy en el terminal de inicio y vuelve a abrir este cliente experimental."
   },
   "remoteControlConsent": {
     "title": "¿Permitir el control remoto de esta computadora?",

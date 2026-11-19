@@ -15,10 +15,10 @@ import { createGhostProductionCallbacks } from '../../cindy-brain/__tests__/ghos
 import { clampPluginTaskPermissionMode } from '../../cindy-brain/pluginTaskPrefsStore.js';
 import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
 import { readDeviceProviderViews } from '../../remote-agent/controller/deviceCatalog.js';
-import { setSessionRuntimeHarness } from '../sessionRuntimeHarnessSelection.js';
-import { resolveSessionRuntimeAxes } from '../sessionRuntimeControl.js';
-import { findCatalogModel } from '@cindy/model-providers';
+import * as sessionAgentSwitch from '../sessionAgentSwitchHandler.js';
+import { getSessionRuntimeControlSnapshot } from '../sessionRuntimeControl.js';
 import { createSessionControlService, type SessionControlServiceDeps } from '../sessionControlService.js';
+import { createSessionControlRuntimeWriter } from '../sessionControlRuntimeWriter.js';
 
 const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
 
@@ -78,42 +78,41 @@ function handler(kind: string, next: string, deps: Record<string, unknown>) {
   return compile(`return async function(pluginId,request){switch(request.kind){${branch}}}`, deps);
 }
 
-// Unlike the existing helper fixture, this runs register's actual runtime adapter.
+// Unlike the existing helper fixture, this runs the production runtime writer.
 // A remote-only model and an unavailable local catalog must still stage the exact source.
 it.each(['other-computer', 'share:provider'])('uses the %s catalog in the production runtime controller', async agentDeviceId => {
-  const start = source.indexOf('    setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) =>');
-  const property = source.slice(start, source.indexOf('    assertExternalInputAllowed:', start)).trim().replace(/,$/, '');
   const remote = vi.fn(async () => [{ id: 'remote-only', name: 'Remote', source: 'user', connected: true,
     agents: ['codex'], routing: { codex: {} }, models: { codex: [{ id: 'model', efforts: ['high'] }] } }]);
   const local = vi.fn(() => { throw Error('Local catalog must not be used'); });
   let pending: Record<string, unknown> | undefined;
-  const stage = vi.fn(async (_deps: unknown, selection: {
-    targetAgentKind: string; model: string; providerId: string; effort: string; fastMode: boolean; agentDeviceId: string;
-  }) => {
+  const stage = vi.fn<typeof sessionAgentSwitch.performSessionAgentSwitch>(async (_deps, selection) => {
     pending = { runtimeSource: 'agent', targetAgentKind: selection.targetAgentKind, model: selection.model,
       providerId: selection.providerId, effort: selection.effort, fastMode: selection.fastMode,
       targetAgentDeviceId: selection.agentDeviceId };
-    return { deferred: true };
+    return { switched: false, agentKind: 'codex', model: 'old', engineReady: false, deferred: true };
   });
-  const run = compile(`return ({${property}}).setSessionRuntime;`, {
-    setSessionRuntimeHarness, withSendToSessionLock: async (_id: string, work: () => Promise<unknown>) => work(),
-    captureSessionRuntimeControlOwnerEpoch: () => 'owner', getSessionRuntimeControlSnapshot: () => ({ generation: 4 }),
+  const ports = {
     agentSwitchPending: { revision: () => 0, get: () => pending },
     readSessionRuntimeProfiles: async () => ({ effective: { agentKind: 'codex', model: 'old', effort: null, fastMode: false } }),
     readUsableAgentDeviceProviders: remote, getDesktopProviderService: local, assertModelRouteUsable: local,
-    findCatalogModel, resolveSessionRuntimeAxes, performSessionAgentSwitch: stage, agentSwitchDeps: {},
-    throwIpcError: (code: string, message: string) => { throw Object.assign(new Error(message), { code }); },
+    agentSwitchDeps: {},
     updateScheduledPreference: async () => true, reconcileBotModelRoute: { acceptTaskChoice: async () => {} },
-  });
-  const request = { targetSessionId: 'task', expectedGeneration: 4,
-    patch: { harness: 'codex', agentDeviceId, model: 'model', providerId: 'remote-only', effort: 'high', fastMode: false } };
-  expect(await run(request)).toMatchObject({ ok: true, pendingMutation: { profile: { agentDeviceId, model: 'model' } } });
-  expect(remote).toHaveBeenCalledWith(agentDeviceId, 'codex', 'model', 'remote-only');
-  expect(stage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentDeviceId, providerId: 'remote-only' }));
-  expect(local).not.toHaveBeenCalled();
-  remote.mockResolvedValueOnce([]);
-  expect(await run(request)).toMatchObject({ ok: false, errorCode: 'ROUTE_UNAVAILABLE' });
-  expect(stage).toHaveBeenCalledTimes(1);
+  };
+  const run = createSessionControlRuntimeWriter(ports as unknown as Parameters<typeof createSessionControlRuntimeWriter>[0]);
+  const request = { targetSessionId: 'task', expectedGeneration: getSessionRuntimeControlSnapshot('task').generation,
+    patch: { harness: 'codex' as const, agentDeviceId, model: 'model', providerId: 'remote-only', effort: 'high' as const, fastMode: false } };
+  const switchRoute = vi.spyOn(sessionAgentSwitch, 'performSessionAgentSwitch').mockImplementation(stage);
+  try {
+    expect(await run(request)).toMatchObject({ ok: true, pendingMutation: { profile: { agentDeviceId, model: 'model' } } });
+    expect(remote).toHaveBeenCalledWith(agentDeviceId, 'codex', 'model', 'remote-only');
+    expect(stage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ agentDeviceId, providerId: 'remote-only' }));
+    expect(local).not.toHaveBeenCalled();
+    remote.mockResolvedValueOnce([]);
+    expect(await run(request)).toMatchObject({ ok: false, errorCode: 'ROUTE_UNAVAILABLE' });
+    expect(stage).toHaveBeenCalledTimes(1);
+  } finally {
+    switchRoute.mockRestore();
+  }
 });
 
 // Remote output is persisted on the task computer. Read the production history
