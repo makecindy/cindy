@@ -51,8 +51,9 @@ it('captures ownership before storage, emits only successful write and consolida
   expect(receipt).not.toHaveBeenCalled();
 });
 
-// 改另一个项目的记忆是整理, 不是这轮对话学到了什么: 不出保存回执 (回执点开只认当前任务的项目)。
-it('emits no receipt when a write targets another project', async () => {
+// 整理别的项目的记忆同样出回执 (cindy-memory.md §8)。回执里的 `project` 指当前任务的项目,
+// 所以写进另一个项目时不带 scope (点开到记忆页, 而不是没有这条记忆的那一页); 并进「关于你」照常带。
+it('emits a receipt for a write to another project, without claiming it is the task\'s own project', async () => {
   const receipt = vi.fn();
   const beginWrite = vi.fn(() => receipt);
   const store = {
@@ -78,9 +79,13 @@ it('emits no receipt when a write targets another project', async () => {
 
   expect((await registry.call('memory_write', { ...args, project: '/other' })).isError).not.toBe(true);
   expect((await registry.call('memory_consolidate', { sources: ['feedback_old.md'], target: args, scope: 'project', project: '/other' })).isError).not.toBe(true);
-  expect(beginWrite).not.toHaveBeenCalled();
-
-  // 当前项目的写入照旧出回执。
+  expect((await registry.call('memory_consolidate', { sources: ['feedback_old.md'], target: args, scope: 'user', project: '/other' })).isError).not.toBe(true);
   expect((await registry.call('memory_write', args)).isError).not.toBe(true);
-  expect(receipt).toHaveBeenCalledTimes(1);
+
+  expect(receipt.mock.calls.map(([sent]) => sent)).toEqual([
+    { key: 'feedback_test.md', title: 'Preference', action: 'created' },
+    { key: 'feedback_test.md', title: 'Preference', action: 'updated' },
+    { key: 'feedback_test.md', title: 'Preference', action: 'updated', scope: 'user' },
+    { key: 'feedback_test.md', title: 'Preference', action: 'created', scope: 'project' },
+  ]);
 });

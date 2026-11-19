@@ -73,8 +73,7 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
       project: memoryProjectArg,
     },
     handler: async ({ scope, project, ...args }) => {
-      // 改另一个项目的记忆是整理, 不是这轮对话学到了什么: 不出保存回执 (回执只认当前任务的项目)。
-      const saved = project ? undefined : deps.beginWrite?.(deps.getSessionContext?.());
+      const saved = deps.beginWrite?.(deps.getSessionContext?.());
       let written: WriteResult | undefined;
       let writtenScope: MemoryScopeName | undefined;
       const result = await withStore(deps, async (_store, ctx) => {
@@ -83,8 +82,10 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
           ? await storeHolding(ctx, args.name as string, scope as MemoryScopeName | undefined, args.type as WriteOptions['type'])
           : await storeForNew(ctx, scope as MemoryScopeName | undefined, args.type as string);
         written = await target.store.write(args as WriteOptions);
-        // 伙伴只有一份记忆, 回执不带 scope; Cindy 记忆才分账号级和项目。
-        if (ctx.scopes.user) writtenScope = target.scope;
+        // 伙伴只有一份记忆, 回执不带 scope; Cindy 记忆才分账号级和项目。写进另一个项目
+        // (`project` 参数) 时也不带: 回执里的 `project` 指的是当前任务的项目, 带上会把用户
+        // 领到没有这条记忆的那一页; 回执不存路径, 所以只领到记忆页。
+        if (ctx.scopes.user && !(project && target.scope === 'project')) writtenScope = target.scope;
         // 索引是任务启动时的快照: 别的任务 (或本任务更早) 刚存下的条目模型看不到, 实际数据里
         // 同一天存出过两条说同一件事的记忆。新建时把这份记忆里刚存的其它条目告诉它, 由它判断
         // 是否重复 —— 宿主不做相似度判断 (标题相近的常常是两件事)。
