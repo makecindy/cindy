@@ -34,6 +34,9 @@ const unavailable: ArchiveProtection = {
   drafts: new Set(),
   remoteUnknown: false,
 };
+export function isTaskBusyForArchive(id: string): boolean {
+  return !runtime || runtime.busy(id) || isProvisionalSession(id);
+}
 export const taskArchiveEngine = createTaskArchiveEngine({
   scope: () => {
     const scope = taskManagementScope();
@@ -61,7 +64,7 @@ export const taskArchiveEngine = createTaskArchiveEngine({
   read: (id) =>
     getDbClient().queryOne<ArchiveCandidateRow>(`${ARCHIVE_CANDIDATE_SELECT} WHERE s.id = ?`, [id]),
   protection: () => (runtime && platform ? platform.protection() : unavailable),
-  busy: (id) => isProvisionalSession(id) || !runtime || runtime.busy(id),
+  busy: isTaskBusyForArchive,
   waiting: (id) => runtime?.waiting(id) ?? false,
   pending: (id) => (runtime ? runtime.pending(id) : Promise.resolve(true)),
   withLock: withSessionRouteLock,

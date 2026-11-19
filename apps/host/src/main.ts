@@ -2220,6 +2220,11 @@ function startDeviceLink(): void {
     canRegister: () => remoteIdentityReady && account.authenticated && !authClosed,
     agentNet: hostAgentNetPorts(),
     invoke: service, subscribe: eventHub.subscribe,
+    isBusyForProjectArchive: id => !agentGraph || inputQueue.isTurnRunning(id)
+      || !!agentGraph.maker.getSession(id)?.isTurnRunning() || isProvisionalSession(id),
+    onProjectTaskStatus: (sessionId, status) => {
+      eventHub.publish({ type: 'session_changed', sessionId, status, patch: { status } });
+    },
     preparePiSkillRuntime: (id, workingDir, route) => {
       const assertPreparationCurrent = inputQueue.capturePiSkillPreparation(id);
       return withSendToSessionLock(id, () => inputQueue.preparePiSkillRuntime(id, workingDir, {

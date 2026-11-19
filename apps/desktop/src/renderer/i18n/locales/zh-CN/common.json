@@ -3442,7 +3442,7 @@
         "end": "以上是从 {{source}} 导入的记录",
         "endHandoff": "以上是从 {{source}} 导入的记录，接下来由 {{harness}} 接着做"
       },
-      "projectMenu": "导入此项目在其他工具里的任务…"
+      "projectMenu": "导入任务…"
     },
     "connections": {
       "codex": {
@@ -4074,6 +4074,7 @@
         "refreshSpeechAdded": "已更新模型，补充了 1 个语音参考型号",
         "refreshNoNew": "模型列表已是最新，无新增",
         "refreshFailed": "模型列表刷新失败，请稍后再试",
+        "refreshReconnect": "模型列表刷新失败。重新连接此供应商后再试。",
         "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
         "disableModel": "停用此模型",
         "paymentRequired": "付费",
@@ -16480,6 +16481,7 @@
         "empty": "此自动化没有可归档的任务"
       },
       "archiveAll": {
+        "projectTitle": "归档「{{name}}」下的所有任务？",
         "title": "归档全部任务",
         "confirm": "归档全部",
         "cancel": "取消",
@@ -16624,18 +16626,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」项目菜单",
+        "previewFailed": "无法读取这个项目的任务。请重试。",
+        "remotePreviewFailed": "无法读取远程项目的任务。请检查连接，并确认远程电脑上的 Cindy 已更新。",
         "rename": "重命名项目",
         "pin": "置顶项目",
         "unpin": "取消置顶项目",
-        "removeFromSidebar": "从侧栏移除项目",
-        "removeFromSidebarConfirmTitle": "移除“{{name}}”？",
-        "removeFromSidebarConfirmDescription": "这会从侧栏移除该项目。电脑上的文件不会被删除。现有任务会移到“对话”分组，仍可正常使用。",
+        "removeFromSidebar": "从 Cindy 移除项目…",
+        "removeFromSidebarConfirmTitle": "从 Cindy 移除「{{name}}」？",
+        "removeFromSidebarConfirmDescription": "未归档的 {{count}} 个任务仍可在「对话」中继续使用。",
         "removeFromSidebarConfirmAction": "移除项目",
-        "removeFromSidebarFailed": "无法从侧栏移除项目，请重试",
-        "showFiles": "查看文件",
-        "archivedAll": "全部归档",
-        "unarchiveAll": "全部恢复",
-        "openInExplorer": "在文件管理器中打开",
+        "removeFromSidebarFailed": "移除项目失败，请重试。",
+        "archiveOnRemove": "同时归档任务（{{count}} 个）",
+        "keepSkippedOnRemove": "{{skip}}的任务会留在「对话」中。",
+        "removedArchived": "{{count}} 个任务将移入「已归档」。",
+        "removeAndArchive": "移除项目并归档任务",
+        "removeKeepFiles": "项目的置顶、自定义名称和图标会清除。电脑上的文件和文件夹会保留。",
+        "showFiles": "在侧边栏查看任务文件",
+        "archivedAll": "归档所有任务",
+        "unarchiveAll": "恢复所有任务",
+        "openInFinder": "在访达中打开项目文件夹",
+        "openInExplorer": "在文件资源管理器中打开项目文件夹",
+        "openInFileManager": "在文件管理器中打开项目文件夹",
         "newInDirectory": "在此目录新建任务",
         "copyDeepLink": "复制项目链接",
         "search": "在项目内搜索任务"

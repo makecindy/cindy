@@ -20,6 +20,7 @@ import { AgentNotAuthenticatedError, SESSION_CLOSED_MID_TURN_MESSAGE } from '@ci
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
+import { SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE } from '../../shared/providerShare.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 import { classifyTurnOverload, classifyTurnUsageLimit } from '../goal-host/usageLimit.js';
 import { isContextOverflowErrorData, isOversizedHistoryErrorData } from '../maker-ipc/contextOverflowRollover.js';
@@ -288,6 +289,7 @@ export function decideProviderGroupFailure(
   if (signals.sdkError === 'max_output_tokens') return { action: 'stay', why: 'context' };
   if (signals.toolLoop) return { action: 'stay', why: 'tool-loop' };
   if (USER_DECISION_TEXT.test(message)) return { action: 'stay', why: 'user' };
+  if (message.includes(SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE)) return { action: 'stay', why: 'policy' };
   if (TOOL_FAILURE_TEXT.test(message)) return { action: 'stay', why: 'local' };
   if (isContextOverflowErrorData(signals) || isOversizedHistoryErrorData(signals)) return { action: 'stay', why: 'context' };
   const codexStay = signals.codexErrorInfo ? STAY_CODEX_ERRORS.get(signals.codexErrorInfo) : undefined;

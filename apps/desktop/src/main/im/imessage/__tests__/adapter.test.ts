@@ -67,6 +67,25 @@ it.each(['send-failed', 'group-only'])('keeps Desktop permission available when 
   } finally { lease.release(); await im.dispose(); }
 });
 
+// Tier 1, PR #11402: transport tests cover verified speakers once a reply is owner-scoped.
+// Exercise the adapter that selects the audience and destination for a group-originated plan.
+it('routes plan review to the verified owner and dismisses it when the owner chat is unavailable', async () => {
+  const im = new BlueBubblesIM({} as never, {} as never);
+  const owner = vi.spyOn(im, 'getOwnerUserId').mockReturnValue('owner');
+  const reply = vi.spyOn(im, 'requestTextReply').mockImplementation(async (_chat, _prompt, parse) => parse('deny')!);
+  const adapter = wireIMessageOrchestrator(im, {} as never, {
+    instanceKey: 'test', companionBotId: 'bot-test', connectionId: 'connection-test',
+  }) as unknown as ImChannelAdapter;
+  const plan = { kind: 'plan_review', requestId: 'plan', plan: 'Example plan' } as const;
+  try {
+    await expect(adapter.handleTextInteraction!('group', plan)).resolves.toMatchObject({ kind: 'plan_review', behavior: 'deny' });
+    expect(reply).toHaveBeenCalledWith('owner', expect.any(String), expect.any(Function), undefined, undefined, expect.any(String), 'owner');
+    owner.mockReturnValue(null);
+    await expect(adapter.handleTextInteraction!('group', plan)).resolves.toMatchObject({ kind: 'plan_review', behavior: 'deny', dismissed: true });
+    expect(reply).toHaveBeenCalledTimes(1);
+  } finally { await im.dispose(); }
+});
+
 // Tier 1, #9250: the real router must notify the adapter on route teardown.
 // Existing shared-permission tests do not cancel non-shared multi-question text requests.
 it.each(['abort', 'release'])('clears the matching question waiter on host %s', async action => {
