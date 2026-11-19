@@ -93,6 +93,57 @@ describe('Ghost manifest contract', () => {
     expect(stored).toMatchObject({ ok: true, manifest: { cindy: { image: ['generate'] } } });
     if (stored.ok) expect(stored.manifest.cindy?.models).toEqual(models);
   });
+  /*
+   * 测试价值
+   * - 生产入口与可观察结果：validateGhostManifest / validateStoredGhostManifest 对 `harnesses` 的
+   *   接受、拒绝与规范化结果（作者打包、服务端上架与已存 Release 都读这一份）。
+   * - Bug／规则依据：plugin-security-and-authoring.md §1.2 / §5（v3 未知字段保留、存量不因新校验失效）；
+   *   docs/plans/acp-plugin-bridge.md「接口约定」的清单字段。
+   * - 现有覆盖缺口：新字段，此前作为未知字段原样保留。
+   * - 最小失败输入：entry 写成 node.entry 主入口；已存 Release 里不合规的历史 harnesses。
+   * - tier：unit（纯函数矩阵）。实测耗时：随本文件整体 < 1s。
+   */
+  describe('harnesses', () => {
+    const node = { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] };
+    const harness = { id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'engine.js' };
+    const v3 = (extra: Record<string, unknown>) => ({ ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined, node, ...extra });
+
+    it('keeps a valid declaration, its locales, unknown protocols and extension fields', () => {
+      const declared = [
+        { ...harness, description: 'Local agent', icon: 'dsh.png', locales: { 'zh-CN': { name: '深度求索' } } },
+        { id: 'future', name: 'Future', protocol: 'acp/2', entry: 'engine.js' },
+      ];
+      expect(validateGhostManifest(v3({ harnesses: declared }))).toMatchObject({ ok: true, manifest: { harnesses: declared } });
+    });
+
+    it.each([
+      ['not an array', { harnesses: harness }],
+      ['empty', { harnesses: [] }],
+      ['more than four', { harnesses: ['a', 'b', 'c', 'd', 'e'].map(id => ({ ...harness, id })) }],
+      ['bad id', { harnesses: [{ ...harness, id: 'DSH' }] }],
+      ['duplicate id', { harnesses: [harness, harness] }],
+      ['empty name', { harnesses: [{ ...harness, name: ' ' }] }],
+      ['long name', { harnesses: [{ ...harness, name: 'x'.repeat(65) }] }],
+      ['long description', { harnesses: [{ ...harness, description: 'x'.repeat(201) }] }],
+      ['missing protocol', { harnesses: [{ ...harness, protocol: undefined }] }],
+      ['main entry', { harnesses: [{ ...harness, entry: 'worker.js' }] }],
+      ['undeclared entry', { harnesses: [{ ...harness, entry: 'other.js' }] }],
+      ['bad locale text', { harnesses: [{ ...harness, locales: { 'zh-CN': { name: '' } } }] }],
+      ['no node', { node: undefined, harnesses: [harness] }],
+    ])('rejects %s for a new package but drops it from a stored release', (_label, extra) => {
+      expect(validateGhostManifest(v3(extra)).ok).toBe(false);
+      const stored = validateStoredGhostManifest(v3(extra));
+      expect(stored.ok).toBe(true);
+      if (stored.ok) expect(stored.manifest.harnesses).toBeUndefined();
+    });
+
+    it('does not map a v2 manifest', () => {
+      const v2 = validateGhostManifest({ ...validManifest, slots: ['tool', 'node'], node, harnesses: [harness] });
+      expect(v2.ok).toBe(true);
+      if (v2.ok) expect(v2.manifest.harnesses).toBeUndefined();
+    });
+  });
+
   it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
     const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
     expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });

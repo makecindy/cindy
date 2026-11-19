@@ -388,6 +388,7 @@ import {
   setGhostConnectionsHandler,
   setGhostKvStore,
   setGhostModelsHandler,
+  setGhostHarnessesHandler,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
   setGhostModelPreferencesProvider,
@@ -400,6 +401,8 @@ import {
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
+import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
+import { configurePluginHarnessRegistry, reconcilePluginHarnesses } from './pluginHarnesses.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
 import {
   handleGhostSetupStatusRequest,
@@ -578,6 +581,7 @@ import {
   confirmedAutoTools,
   confirmedCindyModelActions,
   confirmedControlPoints,
+  confirmedHarnesses,
   confirmedUiCapability,
   obtainGhostInstallConsent,
   type GhostInstallConsentDecision,
@@ -3167,6 +3171,15 @@ export const ghostNativeRecoveryObserver: NonNullable<AgentDeps['nativeRecoveryO
 /** 插件发布的模型单独成文件：不进插件自己的 /kv，插件不能绕过校验改它，卸载时一起清。 */
 const publishedModelsStore = () => createGhostKvStore({
   getRootDir: () => ownerScopedUserDataPath('ghost-published-models'),
+  log,
+});
+
+/**
+ * 插件发布的执行引擎可用状态(`PUT /harnesses`)：同 /models 单独成文件、按 owner 隔离；
+ * 停用时保留(注册表不列停用插件)，卸载时一起清。读时按当前清单重新校验。
+ */
+const publishedHarnessesStore = () => createGhostKvStore({
+  getRootDir: () => ownerScopedUserDataPath('ghost-published-harnesses'),
   log,
 });
 
@@ -7848,6 +7861,7 @@ async function installAndDockLocked(
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedCindyModelActions: confirmedCindyModelActions(opts.consent.decision, installedBefore, opts.consent.manifest),
+    approvedHarnesses: confirmedHarnesses(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
@@ -8046,6 +8060,7 @@ async function updateLocalGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(consent, previousGhost, inspected.manifest),
+          approvedHarnesses: confirmedHarnesses(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
@@ -8649,6 +8664,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           approvedCindyModelActions: confirmedCindyModelActions(expected.consent, installed, inspected.manifest),
+          approvedHarnesses: confirmedHarnesses(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
@@ -8808,6 +8824,7 @@ async function uninstallGhostAndCleanupLocked(
       log,
     );
     removeGhostKvBestEffort(publishedModelsStore(), storagePart, log);
+    removeGhostKvBestEffort(publishedHarnessesStore(), storagePart, log);
     if (storagePart) {
       try {
         await fs.promises.rm(ownerScopedUserDataPath('ghost-fs', storagePart), {
@@ -8930,6 +8947,12 @@ export function builtinSeedYieldsToStoreVersion(id: string, storeVersion: string
  * spawn 幂等,重复调用零成本;失败走熔断记账,不抛出(fire-and-forget)。
  */
 function spawnIfResident(ghost: InstalledGhost, allowPendingLegacy = false): void {
+  // 同一「该在场了」入口解除 stop() 留下的执行引擎启动闸：停用、更新、卸载进行中不起引擎，
+  // 启用、更新／回滚完成后才放行(回滚失败的路径不会走到这里，闸保持关闭)。
+  const storagePart = installedGhostStoragePart(ghost);
+  if (ghost.enabled && isGhostAvailableForActiveSession(storagePart)) {
+    nodeRuntimeBrokerSingleton?.resumeHarnesses(storagePart);
+  }
   spawnResidentGhost(ghost, {
     isAvailable: isGhostAvailableForActiveSession,
     allowPendingLegacy,
@@ -9419,6 +9442,25 @@ export function registerGhostIpc(): void {
       store: publishedModelsStore(),
       onChanged: () => broadcastGhostsChanged(getGhostManager().list()),
     });
+  });
+  // /harnesses：执行引擎可用状态。内容变化只重算执行引擎注册表，不触发花名册侧效应。
+  setGhostHarnessesHandler(({ ghostId, method, readBodyText, isCurrent }) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    return handleGhostHarnessesRequest({
+      ghostId, method, readBodyText, isCurrent,
+      declared: () => (ghost ? ghost.manifest.harnesses : null),
+      store: publishedHarnessesStore(),
+      onChanged: () => reconcilePluginHarnesses(),
+    });
+  });
+  configurePluginHarnessRegistry({
+    listGhosts: availableGhosts,
+    isAvailable: isGhostAvailableForActiveSession,
+    readAvailability: (ghostId) => publishedHarnessesStore().read(ghostId),
+    uiLocale: () => currentGhostAppContext().context.uiLocale,
+    spawn: (ghostId, harnessId) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId),
+    requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
+    log,
   });
   // /secrets 只写通道(network user 与 node.secretBindings 凭证一律由意识
   // settingsHtml 收单入库——宿主凭证渲染 2026-07-13 整体退役):现查在装
@@ -11882,6 +11924,8 @@ function broadcastGhostsChanged(
     sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
     // 浏览器扩展桥接跟着花名册走:启用即开、停用/卸载/换版即关。
     getGhostBrowserExtensionSlot().reconcile(ghosts);
+    // 执行引擎注册表同一对账点:启停、装卸、换版与批准变化后重算,内容不变不通知。
+    reconcilePluginHarnesses(ghosts);
   }
   const visible = ghosts
     .filter((ghost) => isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)))
@@ -12021,6 +12065,8 @@ export function refreshGhostLocalization(previousLocale: SupportedLocale): void 
       // App configs retain localized titles/tool descriptions used by newly published cards.
       refreshPluginApps(ghosts, { find: findGhostForInstanceId,
         evidence: id => manager.approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });
+      // 执行引擎名称按界面语言选取，语言变了要重算(只重投影，不是花名册对账)。
+      reconcilePluginHarnesses(ghosts);
       broadcastGhostsChanged(ghosts, false, { projectionOnly: true });
     },
     sendContextChanged: (ghost, message) => sendToGhostLogic(installedGhostStoragePart(ghost), message),

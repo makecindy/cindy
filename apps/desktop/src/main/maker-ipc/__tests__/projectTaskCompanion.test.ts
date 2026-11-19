@@ -68,6 +68,7 @@ describe('project task conversation partner', () => {
 
   it('rejects shared, paused and moved partners before loading their identity', async () => {
     const opts = { id: 'task' } as MakerSessionCreateOpts;
+    await expect(hydrateProjectCompanion({ ...opts, agentKind: 'acp' }, 'task')).rejects.toThrow(/PRECONDITION_FAILED/);
     sqlite.exec("INSERT INTO shared_task_events VALUES ('task','shared',0)");
     await expect(hydrateProjectCompanion(opts, 'task')).rejects.toThrow();
     sqlite.exec("INSERT INTO shared_task_events VALUES ('task','shared',1); UPDATE bot_profiles SET status = 'paused'");

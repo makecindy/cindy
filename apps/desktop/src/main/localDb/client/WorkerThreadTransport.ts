@@ -7,6 +7,7 @@ import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportT
 import { openProjectCompanionSession } from '../worker/opHandlers/openProjectCompanionSession.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
 import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
+import { writeModelUsage } from '../worker/opHandlers/modelUsageTx.js';
 import { recordPiUsage } from '../worker/opHandlers/piUsageTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
 import { batchAutoReviewProjection, readAutoReviewProjection } from '../autoReviewProjection.js';
@@ -49,6 +50,7 @@ const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const openProjectCompanionSession = ${openProjectCompanionSession.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
+const writeModelUsage = ${writeModelUsage.toString()};
 const recordPiUsage = ${recordPiUsage.toString()};
 const fastModeToStorage = ${fastModeToStorage.toString()};
 // 旧版 inline worker fallback。默认运行时走 .vite/build/dbWorker.js；
@@ -449,8 +451,10 @@ function dispatchTransaction(readyDb, payload) {
   switch (name) {
     case 'usage.recordMediaSpend':
       return recordMediaSpend(readyDb, request.args);
+    case 'usage.recordModelUsage':
+      return readyDb.transaction(() => writeModelUsage(readyDb, request.args))();
     case 'usage.recordPiUsage':
-      return recordPiUsage(readyDb, request.args);
+      return recordPiUsage(readyDb, request.args, writeModelUsage);
     case 'authorization.readProjection':
       return readAutoReviewProjection(readyDb, request.args, createAutoReviewIntentProjection);
     case 'rewind.commit':

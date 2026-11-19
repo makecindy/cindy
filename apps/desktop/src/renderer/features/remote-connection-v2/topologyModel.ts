@@ -11,6 +11,7 @@
  */
 
 import { isCindyApp, isMobilePlatform } from '@cindy/maker-shared/device-list';
+import { selfDeviceName } from '@/components/settings/deviceLabels';
 import type { DeviceLinkAgentNetPeerRouteView } from '../../../shared/deviceLinkIpc';
 
 export type TopologyStatus = 'direct' | 'relay' | 'connecting' | 'unlinked' | 'attention' | 'offline';
@@ -306,7 +307,10 @@ export function buildTopology(input: BuildTopologyInput): TopologyModel {
   };
 
   return {
-    self: self ? { name: self.selfName?.trim() || self.name, platform: self.platform } : null,
+    self: self ? {
+      name: selfDeviceName(self),
+      platform: self.platform,
+    } : null,
     nodes,
     byId,
     groups,

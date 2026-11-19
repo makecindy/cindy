@@ -14,6 +14,7 @@ import {
   confirmedControlPoints,
   confirmedAutoTools,
   confirmedCindyModelActions,
+  confirmedHarnesses,
   confirmedTaskCapability,
   confirmedUiCapability,
   type GhostInstallConsentPrompt,
@@ -169,6 +170,49 @@ it('requires confirmation for predeclared model APIs without re-confirming exist
   expect(await obtainGhostInstallConsent(policy, { ...old, approvedCindyModelActions: ['rerank'] }, next, reviewedDigest))
     .toEqual({ mode: 'unprompted' });
 });
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：obtainGhostInstallConsent 弹出的确认事实（install permissions / update added）
+ *   与 confirmedHarnesses 写入 receipt 的批准 id。
+ * - Bug／规则依据：plugin-security-and-authoring.md §3.1（独立 key，更新新增即「权限变多」）与 §5 红线
+ *   （Host 认识字段前就声明的引擎不得随升级静默生效）；docs/plans/acp-plugin-bridge.md 第二节。
+ * - 现有覆盖缺口：控制节点 / 模型 API 已有同类用例，执行引擎是新权限项。
+ * - 最小失败输入：同一份声明 harnesses 的 manifest，已装实例 receipt 没有 approvedHarnesses。
+ * - tier：unit。实测耗时：随本文件整体约 1s。
+ */
+it('asks for task engines as their own permission and records only the engines the user saw', async () => {
+  const withNode = (harnesses: unknown[]) => {
+    const result = validateGhostManifest({ schemaVersion: 3, minCindyVersion: '0.1.61', id: 'weather-chip', name: 'Weather',
+      version: '1.0.0', entry: 'main.js', node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] }, harnesses });
+    if (!result.ok) throw new Error(result.reason);
+    return result.manifest;
+  };
+  const dsh = { id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'engine.js' };
+  const next = withNode([dsh]);
+  const prompt = vi.fn<GhostInstallConsentPrompt>(async () => true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const fresh = await obtainGhostInstallConsent(policy, null, next, reviewedDigest);
+  expect(prompt.mock.calls[0][0].facts).toMatchObject({ kind: 'install',
+    permissions: expect.arrayContaining([expect.objectContaining({ key: 'harnesses', labelArgs: expect.objectContaining({ names: 'DeepSeek Harness' }) })]) });
+  expect(confirmedHarnesses(fresh, null, next)).toEqual(['dsh']);
+  expect(confirmedHarnesses({ mode: 'unprompted' }, null, next)).toEqual([]);
+  expect(confirmedHarnesses({ mode: 'exempt', reason: 'server-default-install' }, null, next)).toEqual(['dsh']);
+  // Installed by a Host that did not know `harnesses`: the next update shows the engine as new.
+  const preDeclared = installed(next);
+  prompt.mockClear();
+  const upgrade = await obtainGhostInstallConsent(policy, preDeclared, next, reviewedDigest);
+  expect(prompt.mock.calls[0][0].facts).toMatchObject({ kind: 'update', added: [expect.objectContaining({ key: 'harnesses' })] });
+  expect(confirmedHarnesses(upgrade, preDeclared, next)).toEqual(['dsh']);
+  // Approved before: an identical update needs nothing, an added engine counts as more permissions.
+  const approved = { ...installed(next), approvedHarnesses: ['dsh'] };
+  expect(await obtainGhostInstallConsent(policy, approved, next, reviewedDigest)).toEqual({ mode: 'unprompted' });
+  const grown = withNode([dsh, { ...dsh, id: 'dsh-fast', name: 'DeepSeek Fast' }]);
+  await expect(obtainGhostInstallConsent({ mode: 'automatic' }, approved, grown, reviewedDigest)).rejects.toSatisfy(isGhostInstallConsentRequiredError);
+  // An engine whose protocol this Host cannot run is kept as data and asks for nothing.
+  const inactive = withNode([{ ...dsh, protocol: 'acp/2' }]);
+  expect(confirmedHarnesses(await obtainGhostInstallConsent({ ...policy, prompt: userPrompt(true) }, null, inactive, reviewedDigest), null, inactive)).toEqual([]);
+});
+
 const replacedDigest = 'b'.repeat(64);
 
 describe('obtainGhostInstallConsent', () => {

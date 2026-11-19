@@ -6,6 +6,7 @@ export interface ProjectTaskCompanionSelection {
 
 export function supportsProjectTaskCompanion(task: {
   source?: string | null;
+  agentKind?: string | null;
   workspaceKind?: string | null;
   workingDir?: string | null;
   status: string;
@@ -14,7 +15,7 @@ export function supportsProjectTaskCompanion(task: {
   deviceLinkDeviceId?: string | null;
   orcaRole?: string | null;
 }): boolean {
-  return task.source === 'desktop' && task.workspaceKind === 'project' && !!task.workingDir
+  return task.agentKind !== 'acp' && task.source === 'desktop' && task.workspaceKind === 'project' && !!task.workingDir
     && task.status === 'active' && !task.remoteHostId && !task.agentDeviceId
     && !task.deviceLinkDeviceId && !task.orcaRole;
 }

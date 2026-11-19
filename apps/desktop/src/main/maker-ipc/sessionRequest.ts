@@ -1,7 +1,7 @@
 import { isSafeSessionPathSegment } from '../sessionIds.js';
 import { isLibraryExtraDirSlot } from './extraDirsValidator.js';
 
-import type { AgentKind, CreateSessionOptions, WorkspaceKind } from '@cindy/maker-core';
+import { acpHarnessKeyFromProviderId, type CreateSessionOptions, type EngineKind, type WorkspaceKind } from '@cindy/maker-core';
 
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 
@@ -57,7 +57,7 @@ export interface MakerSessionCreateOpts extends CreateSessionOptions {
   [key: string]: unknown;
 }
 
-type StderrLogger = (agentKind: AgentKind, line: string) => void;
+type StderrLogger = (agentKind: EngineKind, line: string) => void;
 
 export interface ReadCreateSessionOptsDeps {
   allocateDialogueWorkspace?: (sessionId: string, nowMs: number) => string;
@@ -65,8 +65,10 @@ export interface ReadCreateSessionOptsDeps {
   now?: () => number;
 }
 
-function readAgentKind(value: unknown): AgentKind {
+function readAgentKind(value: unknown): EngineKind {
   if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  // Plugin ACP engine (docs/plans/acp-plugin-bridge.md); further checks in readCreateSessionOpts.
+  if (value === 'acp') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -143,6 +145,15 @@ export function readCreateSessionOpts(
     }
     if (typeof body.remoteHostId === 'string' && body.remoteHostId.trim()) {
       throwIpcError('INVALID_PARAMS', 'agentDeviceId cannot be combined with remoteHostId');
+    }
+  }
+  if (agentKind === 'acp') {
+    // Plugin engines run on this computer and are chosen through their harness id.
+    if (!acpHarnessKeyFromProviderId(typeof body.providerId === 'string' ? body.providerId : null)) {
+      throwIpcError('INVALID_PARAMS', 'a plugin engine task needs providerId acp-plugin:<plugin>:<harness>');
+    }
+    if ((typeof body.remoteHostId === 'string' && body.remoteHostId.trim()) || body.agentDeviceId) {
+      throwIpcError('INVALID_PARAMS', 'plugin engine tasks run on this computer only');
     }
   }
   // Only the host may attach a conversation partner after resolving the owning database.

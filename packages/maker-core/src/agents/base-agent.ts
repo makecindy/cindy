@@ -30,7 +30,7 @@ import {
   hasSessionPermissionUpdates,
   type SessionPermissionUpdate,
 } from '../types/permissions.js';
-import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
+import type { AgentKind, EngineKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -2065,7 +2065,7 @@ export interface StartSessionOptions {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
-  }) => 'standard' | 'priority' | undefined;
+  }) => 'standard' | 'priority' | { priceVariant: 'standard' | 'priority'; model?: string } | undefined;
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**
@@ -2554,7 +2554,13 @@ export interface AgentSessionHandle {
   readonly id: string;
   /** Transient native request identity; hosts must not persist it as a resume id. */
   readonly requestSessionId?: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
+  /**
+   * Capabilities this session negotiated with its engine. Set only by engines whose
+   * abilities differ per session (the plugin ACP engine); Maker prefers it over the
+   * agent-level set. Built-in engines leave it undefined.
+   */
+  readonly negotiatedCapabilities?: Capabilities;
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
@@ -2873,7 +2879,7 @@ export interface AgentSessionHandle {
 }
 
 export abstract class BaseAgent {
-  abstract readonly kind: AgentKind;
+  abstract readonly kind: EngineKind;
   abstract readonly capabilities: Capabilities;
 
   /**

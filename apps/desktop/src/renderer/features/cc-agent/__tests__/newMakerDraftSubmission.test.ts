@@ -317,6 +317,8 @@ async function submit(options: {
     resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
     bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
+    // 这些用例都走内置 Harness；插件引擎的新建路径由 newMakerDraft.test.ts 覆盖。
+    activePluginEngine: null,
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
     sshCodexDraftHostId: agentKind === 'codex' ? options.remoteHostId : null,

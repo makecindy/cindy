@@ -88,6 +88,7 @@ import {
   type UnifiedAnchor,
   type UnifiedListRow,
   type UnifiedEngine,
+  type PluginEngineRailTab,
   type UnifiedRailFilter,
   type UnifiedRailItem,
   type UnifiedRowConfig,
@@ -130,6 +131,12 @@ export interface UnifiedModelPanelProps {
   pinnedTopHasRows?: boolean;
   /** 左侧栏「模型组」一格及其内容；不传就没有这一格。 */
   modelGroupsView?: ReactNode;
+  /**
+   * 插件提供的执行引擎：每个引擎在左侧栏单独一格(名字 + 插件图标)，选中时列表区显示
+   * `renderPluginEngine(providerId)`。不传 / 空数组就没有这些格(没装任何引擎时)。
+   */
+  pluginEngineTabs?: readonly PluginEngineRailTab[];
+  renderPluginEngine?: (providerId: string) => ReactNode;
   /** 「收藏」视图且没有搜索词时，列表最上方额外渲染的内容(收藏的模式)。 */
   favoritesPinned?: ReactNode;
   /** favoritesPinned 当前有内容：只有它时「收藏」不显示空态引导。 */
@@ -401,6 +408,8 @@ export function UnifiedModelPanel({
   pinnedTop,
   pinnedTopHasRows = false,
   modelGroupsView,
+  pluginEngineTabs,
+  renderPluginEngine,
   favoritesPinned,
   favoritesPinnedHasRows = false,
   providers,
@@ -603,6 +612,7 @@ export function UnifiedModelPanel({
   const localRailItems = remoteSources?.localRailItems;
   const remoteGroups = remoteSources?.groups;
   const hasModelGroupsView = modelGroupsView !== undefined;
+  const pluginEngineTabsKey = (pluginEngineTabs ?? []).map((tab) => tab.providerId).join('\n');
   const railItems = useMemo<UnifiedRailItem[]>(() => {
     // 远程 Agent:本机格按本机目录派生(此刻 entries 可能是某台电脑的目录),
     // 其后每台电脑一段远程供应商格。
@@ -618,11 +628,16 @@ export function UnifiedModelPanel({
         })),
       ),
     ];
-    if (!hasModelGroupsView) return items;
-    // 「模型组」紧跟「全部」：它和「全部」一样跨供应商，排在各供应商格之前。
+    const engineProviderIds = pluginEngineTabsKey ? pluginEngineTabsKey.split('\n') : [];
+    if (!hasModelGroupsView && engineProviderIds.length === 0) return items;
+    // 「模型组」紧跟「全部」(和「全部」一样跨供应商)；插件引擎各占一格排在它后面、各供应商格之前。
     const all = items.findIndex((item) => item.kind === 'all');
-    return [...items.slice(0, all + 1), { kind: 'model-groups' }, ...items.slice(all + 1)];
-  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, listHiddenProviderIds]);
+    const inserted: UnifiedRailItem[] = [
+      ...(hasModelGroupsView ? [{ kind: 'model-groups' as const }] : []),
+      ...engineProviderIds.map((providerId) => ({ kind: 'plugin-engine' as const, providerId })),
+    ];
+    return [...items.slice(0, all + 1), ...inserted, ...items.slice(all + 1)];
+  }, [entries, providerOrder, localRailItems, remoteGroups, hasModelGroupsView, pluginEngineTabsKey, listHiddenProviderIds]);
   // rail 上的筛选目标消失(供应商断开 / 收藏清空)时回落「全部」,避免停在空视图。
   useEffect(() => {
     if (rail.kind === 'all') return;
@@ -1438,6 +1453,7 @@ export function UnifiedModelPanel({
         providers={providers}
         providerLabel={providerHeading}
         interactionDisabled={interactionDisabled || actionPending}
+        {...(pluginEngineTabs?.length ? { pluginEngineTabs } : {})}
         {...(remoteSources
           ? {
               remoteSources: {
@@ -1543,6 +1559,8 @@ export function UnifiedModelPanel({
           {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
           {effectiveRail.kind === 'model-groups' ? (
             modelGroupsView ?? null
+          ) : effectiveRail.kind === 'plugin-engine' ? (
+            renderPluginEngine?.(effectiveRail.providerId) ?? null
           ) : remoteListPending ? (
             remoteSources?.failure ?? (
               <div

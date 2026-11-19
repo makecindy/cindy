@@ -68,6 +68,10 @@ export async function createSideChat(sourceSessionId: string): Promise<Session> 
   if (!source || source.status !== 'active') {
     throw forkError('SOURCE_NOT_FOUND', 'Source task is unavailable');
   }
+  if (source.agentKind === 'acp') {
+    // Plugin engines keep their own history; Cindy cannot fork it (docs/plans/acp-plugin-bridge.md).
+    throw forkError('UNSUPPORTED_HISTORY', 'Tasks running on a plugin engine cannot be forked');
+  }
   if (source.source === 'side-chat' || source.source === 'review' || source.source === 'bot') {
     throw forkError('UNSUPPORTED_HISTORY', 'Open a side chat from the main task');
   }
@@ -858,6 +862,10 @@ export async function forkSessionAtMessage(
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
   }
+  if (source.agentKind === 'acp') {
+    // Plugin engines keep their own history; Cindy cannot fork it (docs/plans/acp-plugin-bridge.md).
+    throw forkError('UNSUPPORTED_HISTORY', 'Tasks running on a plugin engine cannot be forked');
+  }
 
   assertCindyMakeSessionAvailable(source.source);
 
@@ -1226,6 +1234,10 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     .limit(1);
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
+  }
+  if (source.agentKind === 'acp') {
+    // Plugin engines keep their own history; Cindy cannot fork it (docs/plans/acp-plugin-bridge.md).
+    throw forkError('UNSUPPORTED_HISTORY', 'Tasks running on a plugin engine cannot be forked');
   }
 
   assertCindyMakeSessionAvailable(source.source);

@@ -12,7 +12,7 @@ import { rebroadcastTodaySpend } from './turnUsagePorts.js';
 import { broadcastSessionSpend, broadcastSessionTokens } from './turnUsagePorts.js';
 import { addRegionalMoney, legacyUsdMoney, normalizeRegionalMoney } from '../../shared/regionalMoney.js';
 import { createLogger } from '../logger.js';
-import type { TurnUsageContext } from './turnUsageContextCore.js';
+import { tokenAttribution, piModelBilling, type TurnUsageContext } from './turnUsageContextCore.js';
 import type { Session } from '@cindy/maker-core';
 
 const log = createLogger('pi-usage');
@@ -64,10 +64,10 @@ export function recordPiUsageReceipts(session: Session, usage: PiReceiptPayload,
     owner = { db: getDbClient(), scope: captureDataOwnerBroadcastScope(), contexts: new Map() };
     owners.set(session, owner);
   }
-  trackPiUsageWrite(persistPiUsageReceipts(owner, sessionId, usage, context));
+  trackPiUsageWrite(persistPiUsageReceipts(owner, sessionId, usage, context, !session.remoteHostId && !session.agentDeviceId));
 }
 
-async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, usage: PiReceiptPayload, context: TurnUsageContext,
+async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, usage: PiReceiptPayload, context: TurnUsageContext, localExecution: boolean,
   recovery?: { day: string; current: () => boolean;
     pricing: Awaited<ReturnType<typeof getGatewayModelPricing>>;
     changed: (hasCost: boolean) => void }): Promise<void> {
@@ -76,17 +76,18 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
   context = contexts.get(usage.settlementId) ?? context;
   contexts.set(usage.settlementId, context);
   if (contexts.size > 64) contexts.delete(contexts.keys().next().value!);
-  const subscription = context.subscriptionKind !== null || context.accessKind === 'subscription';
-  const route = context.isUserProviderRoute && !subscription ? 'provider-api' : subscription ? 'subscription' : 'xd-gateway';
   const receipts = usage.receipts.flatMap(raw => {
     if (!raw || typeof raw !== 'object') return [];
     const value = raw as Record<string, unknown>;
     const segment = normalizeTurnUsageSegments([raw])[0];
     if (!segment?.id || !Number.isSafeInteger(value.recordedAt) || Number(value.recordedAt) <= 0) return [];
     const model = normalizeModelIdForPricing(segment.model || 'unknown');
+    const { route, billing } = piModelBilling(context, model);
+    const subscription = route === 'subscription';
     const unpriced = value.unpriced === true;
     const needsPricing = !unpriced && (route !== 'provider-api' || context.accessKind === 'managed');
     const row: PiUsageWrite = {
+      attribution: localExecution ? tokenAttribution(billing, context) : undefined,
       sessionId, settlementId: usage.settlementId, receiptId: segment.id,
       recordedAt: Number(value.recordedAt), day: recovery?.day ?? localDayKey(Number(value.recordedAt)),
       model: subscription ? piSubscriptionUsageModelKey(model) : model, currency: tokenCurrency,
@@ -99,7 +100,7 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
         ...(owner.currency ? { currency: owner.currency } : {}),
       }) } : {}),
     };
-    return [{ row, segment, model, unpriced, needsPricing }];
+    return [{ row, segment, model, route, subscription, unpriced, needsPricing }];
   });
   if (!receipts.length) return;
   // Token facts never wait for model pricing or account refresh requests.
@@ -111,14 +112,16 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
     void rebroadcastTodaySpend(scope);
   }
   if (!receipts.some(r => r.needsPricing)) return;
-  const pricing = recovery ? recovery.pricing
-    : route === 'xd-gateway' ? await getGatewayModelPricingForModel() : getReferenceModelPricing();
+  const gatewayPricing = recovery ? recovery.pricing
+    : receipts.some(r => r.route === 'xd-gateway') ? await getGatewayModelPricingForModel() : null;
   if (recovery && !recovery.current()) return;
   // DB/pricing awaits may have allowed this account's currency to recover.
   // Keep token facts, but never finalize money using an unknown USD fallback.
   const currency = confirmedOwnerCurrency(owner);
   if (!currency) return;
-  const priced = receipts.filter(r => r.needsPricing).map(({ row, segment, model, unpriced }) => {
+  const referencePricing = getReferenceModelPricing();
+  const priced = receipts.filter(r => r.needsPricing).map(({ row, segment, model, route, subscription, unpriced }) => {
+    const pricing = route === 'xd-gateway' ? gatewayPricing : referencePricing;
     const segments = unpriced ? [] : [{ ...segment,
       priceVariant: segment.priceVariant ?? (segment.id?.startsWith('pi:') && context.piFastMode ? 'priority' : 'standard'),
     }];
@@ -189,7 +192,6 @@ export function retryPendingPiUsageReceipts(): Promise<void> {
         // Cache reads only: never wait once per receipt for the same model sync.
         const gatewayPricing = await getGatewayModelPricing();
         if (!current()) return;
-        const referencePricing = getReferenceModelPricing();
         const changedSessions = new Set<string>();
         let changed = false;
         for (const row of rows) {
@@ -200,11 +202,10 @@ export function retryPendingPiUsageReceipts(): Promise<void> {
             if (saved.version !== 1 || saved.receipt?.id !== row.receiptId || !saved.context
                 || typeof saved.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(saved.day)) continue;
             if (!owner.currency && (saved.currency === 'USD' || saved.currency === 'CNY')) owner.currency = saved.currency;
-            const subscription = saved.context.subscriptionKind !== null || saved.context.accessKind === 'subscription';
             await persistPiUsageReceipts(owner, row.sessionId,
-              { settlementId: row.settlementId, receipts: [saved.receipt] }, saved.context, {
+              { settlementId: row.settlementId, receipts: [saved.receipt] }, saved.context, false, {
                 day: saved.day, current,
-                pricing: subscription || saved.context.isUserProviderRoute ? referencePricing : gatewayPricing,
+                pricing: gatewayPricing,
                 changed: hasCost => { changed = true; if (hasCost) changedSessions.add(row.sessionId); },
               });
           } catch (error) {

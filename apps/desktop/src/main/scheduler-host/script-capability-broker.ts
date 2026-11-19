@@ -3,7 +3,7 @@ import { readGithub } from '../git-context/githubReadRuntime';
 import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 
-import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
+import type { AgentKind, Schedule, ScriptCapability } from '@cindy/maker-scheduler';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
 import { providerReadInputSchema, providerShareMembersInputSchema, providerShareModelAccessInputSchema,
   subscriptionUsageInputSchema, projectProviderReadError, projectProviderSharingError,
@@ -244,7 +244,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
   constructor(private readonly deps: {
     projectForNewTask?: ScheduleProjectLookup;
     resolveDefaultModelRoute?: (
-      agent: Schedule['agentKind'],
+      agent: AgentKind,
       preferredProviderId?: string | null,
     ) => Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null>;
   }, private readonly runtime: SchedulerScriptRuntime) {}
@@ -254,7 +254,10 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
     if (schedule.modelAgentDeviceId ?? schedule.agentDeviceId) {
       fail('PRECONDITION_FAILED', 'script execution does not support remote model sources; select a local model before switching modes');
     }
-    const agentKind = schedule.modelAgentKind ?? schedule.agentKind;
+    const scheduleAgentKind = schedule.modelAgentKind ?? schedule.agentKind;
+    // 插件引擎不用于脚本执行(保存时已拒绝)；旧数据走到这里也明确拒绝，不当成内置引擎。
+    if (scheduleAgentKind === 'acp') fail('PRECONDITION_FAILED', 'script execution does not support plugin engines');
+    const agentKind: AgentKind = scheduleAgentKind;
     const explicitProviderId = schedule.providerId?.trim() || null;
     const dynamicDefaultRoute = !schedule.model?.trim()
       ? await this.deps.resolveDefaultModelRoute?.(agentKind, explicitProviderId) ?? null

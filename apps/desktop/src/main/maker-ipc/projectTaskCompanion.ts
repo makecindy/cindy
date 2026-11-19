@@ -64,6 +64,7 @@ export async function hydrateProjectCompanion(opts: MakerSessionCreateOpts, sess
   const choice = await readProjectCompanionSelection(sessionId);
   assertCurrent();
   if (!choice.botId) return;
+  if (opts.agentKind === 'acp') throwIpcError('PRECONDITION_FAILED', 'Select the default assistant before switching to a plugin engine');
   if (opts.remoteHostId || opts.agentDeviceId) throwIpcError('PRECONDITION_FAILED', 'Conversation partner requires the local computer');
   await readProjectCompanionTask(sessionId);
   const profile = await readProjectCompanionProfile(choice.botId);

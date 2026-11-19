@@ -13,6 +13,8 @@ import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import { supportsProjectTaskCompanion } from '../../../shared/projectTaskCompanion.js';
 import { isRetainableProjectSession } from '../../../shared/sessionSource.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError } from '../../maker-ipc/writableDirectoryPickerGrant.js';
 import { forgetProvisionalSession, isProvisionalSession, markProvisionalSession } from '../provisionalSessions.js';
@@ -65,9 +67,20 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
     }
     const createBody = bodyWithoutProvisional as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
-    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
+    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi', 'acp']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
+    }
+    if (bodyObj.agentKind === 'acp') {
+      // Plugin engine tasks (docs/plans/acp-plugin-bridge.md): chosen on this computer only,
+      // through the plugin harness id, and never run remotely.
+      if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'plugin engine tasks can only be created on this computer');
+      if (!pluginEngineKeyFromProviderId(typeof bodyObj.providerId === 'string' ? bodyObj.providerId : null)) {
+        throwIpcError('INVALID_PARAMS', 'a plugin engine task needs providerId acp-plugin:<plugin>:<harness>');
+      }
+      if (bodyObj.remoteHostId || bodyObj.agentDeviceId) {
+        throwIpcError('INVALID_PARAMS', 'plugin engine tasks run on this computer only');
+      }
     }
     if (
       bodyObj.title !== undefined &&
@@ -120,7 +133,7 @@ export async function createUserSession(body: unknown, ports: UserSessionCreateP
       if (typeof projectCompanionId !== 'string' || !projectCompanionId.trim() || projectCompanionId.length > 256)
         throwIpcError('INVALID_PARAMS', 'Invalid conversation partner');
       if (!ports.validateProjectCompanion || !supportsProjectTaskCompanion({
-        status: 'active', workspaceKind, workingDir: projectWorkingDir, source: createBody?.source ?? 'desktop',
+        agentKind: createBody?.agentKind, status: 'active', workspaceKind, workingDir: projectWorkingDir, source: createBody?.source ?? 'desktop',
         remoteHostId: createBody?.remoteHostId, agentDeviceId: createBody?.agentDeviceId, orcaRole: createBody?.orcaRole,
       })) throwIpcError('PRECONDITION_FAILED', 'Conversation partners require a local project task');
       await ports.validateProjectCompanion(projectCompanionId);
