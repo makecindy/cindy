@@ -1257,6 +1257,8 @@ export function registerProviderHandlers(
       }
       assertProviderMutationOwner(ownerAtIngress);
       const providerOrder = deps.getProviderOrder();
+      const geminiImageSettingsConnectionId = trusted && providers.some(provider => provider.id === 'gemini')
+        ? geminiImageConnectionId() : null;
       const remoteAccess = deps.getRemoteProviderInvocationEnabled
         ? (providerId: string) => deps.getRemoteProviderInvocationEnabled!(providerId)
         : null;
@@ -1271,6 +1273,8 @@ export function registerProviderHandlers(
           const safe = withoutProviderHeaderCredentials(provider);
           const view = {
             ...safe,
+            ...(safe.id === 'gemini' && geminiImageSettingsConnectionId !== null
+              ? { geminiImageSettingsConnectionId } : {}),
             ...(safe.models ? {
               models: Object.fromEntries(
                 Object.entries(safe.models).map(([agent, models]) => [
