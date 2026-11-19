@@ -3138,20 +3138,24 @@ assertRouteCurrent();
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
       nativeSubscriptionAccount?.assertCurrent();
-      const authOptions = spawnCredentialMode || providerId || nativeSubscriptionAccount
-        ? { credentialMode: spawnCredentialMode, ...(providerId ? { providerId } : {}), nativeSubscriptionAccount } : undefined;
-      const state =
-        spawnCredentialMode === 'gateway-key' && requestedGatewayState
-          ? requestedGatewayState
-          : await this.deps.auth.getState(authOptions);
-      assertCurrentGeneration('auth');
-      if (!state.authenticated) {
-        throw new AgentNotAuthenticatedError('codex', `codex not authenticated: ${state.errorReason ?? 'no_credentials'}`);
+      // SSH daemons use their own isolated CODEX_HOME and authentication. Local
+      // credentials must neither gate remote discovery/startup nor be read for it.
+      if (!remoteHostId) {
+        const authOptions = spawnCredentialMode || providerId || nativeSubscriptionAccount
+          ? { credentialMode: spawnCredentialMode, ...(providerId ? { providerId } : {}), nativeSubscriptionAccount } : undefined;
+        const state =
+          spawnCredentialMode === 'gateway-key' && requestedGatewayState
+            ? requestedGatewayState
+            : await this.deps.auth.getState(authOptions);
+        assertCurrentGeneration('auth');
+        if (!state.authenticated) {
+          throw new AgentNotAuthenticatedError('codex', `codex not authenticated: ${state.errorReason ?? 'no_credentials'}`);
+        }
+        effectiveMode =
+          spawnCredentialMode ?? resolveEffectiveCredentialModeFromAuthSource(undefined, state.authSource);
+        env = await buildCodexEnv(this.deps.auth, this.deps.runtimeConfig, authOptions);
+        assertCurrentGeneration('env');
       }
-      effectiveMode =
-        spawnCredentialMode ?? resolveEffectiveCredentialModeFromAuthSource(undefined, state.authSource);
-      env = await buildCodexEnv(this.deps.auth, this.deps.runtimeConfig, authOptions);
-      assertCurrentGeneration('env');
 
       extraArgs = [...baseExtraArgs];
       codexProxyActive = false;

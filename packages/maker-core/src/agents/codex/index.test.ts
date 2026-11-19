@@ -5511,6 +5511,89 @@ describe('CodexAgent.listCustomizations', () => {
 });
 
 describe('CodexAgent.refreshLocalModels', () => {
+  // #11445: existing SSH tests authenticate locally or replace getHost, hiding
+  // the createHost gate. Unit tier: real listRemoteModels/startSession entrypoints
+  // and AppServerHost, with only the SSH protocol transport simulated in memory.
+  // Minimal regression input: no local credentials and an authenticated SSH host.
+  it.each(['catalog', 'thread'] as const)('uses SSH-owned authentication for %s without local credentials', async (operation) => {
+    const deps = createDeps();
+    const getState = vi.fn(async () => ({ authenticated: false, errorReason: 'no_credentials' }));
+    const getAuthEnv = vi.fn(async () => ({ OPENAI_API_KEY: 'invalid-local-test-key' }));
+    deps.auth = { ...deps.auth, getState, getAuthEnv };
+    const transport = new MockCodexTransport();
+    transport.setMockResponse(Method.ModelList, { result: { data: [{ model: 'remote-model' }], nextCursor: null } });
+    const getRemoteCodexTransport = vi.fn(() => transport);
+    deps.getRemoteCodexTransport = getRemoteCodexTransport;
+    const agent = new CodexAgent(deps);
+    try {
+      if (operation === 'catalog') {
+        expect(await agent.listRemoteModels('builder')).toEqual([{ model: 'remote-model' }]);
+      } else {
+        const handle = await agent.startSession({ sessionId: 'ssh-no-local-auth', remoteHostId: 'builder',
+          workingDir: '/remote/repo', model: 'remote-model', providerId: 'openai' });
+        expect(transport.lines.map(line => JSON.parse(line).method)).toContain(Method.ThreadStart);
+        await handle.close();
+      }
+      expect(getRemoteCodexTransport).toHaveBeenCalledExactlyOnceWith('builder');
+      expect(getState).not.toHaveBeenCalled();
+      expect(getAuthEnv).not.toHaveBeenCalled();
+      expect(createdStdioOptions).toHaveLength(0);
+      expect(transport.lines.join('\n')).not.toContain('invalid-local-test-key');
+    } finally { await agent.dispose(); }
+  });
+
+  it('still rejects a local thread without credentials before starting a transport', async () => {
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false, errorReason: 'no_credentials' }) };
+    const agent = new CodexAgent(deps);
+    try {
+      await expect(agent.startSession({ sessionId: 'local-no-auth', workingDir: '/repo', model: 'gpt-5.4' }))
+        .rejects.toBeInstanceOf(AgentNotAuthenticatedError);
+      expect(createdStdioOptions).toHaveLength(0);
+    } finally { await agent.dispose(); }
+  });
+
+  it('rejects superseded SSH preparation without local credentials before opening the transport', async () => {
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false, errorReason: 'no_credentials' }) };
+    const entered = deferred<void>();
+    const finish = deferred<void>();
+    deps.prepareCodexExtraSpawnConfig = async () => {
+      entered.resolve();
+      await finish.promise;
+      return { extraArgs: [], extraEnv: {} };
+    };
+    const getRemoteCodexTransport = vi.fn(() => new MockCodexTransport());
+    deps.getRemoteCodexTransport = getRemoteCodexTransport;
+    const agent = new CodexAgent(deps);
+    try {
+      const catalog = agent.listRemoteModels('builder');
+      const rejected = expect(catalog).rejects.toThrow('superseded');
+      await entered.promise;
+      const retirement = agent.disposeRemoteHostAfterRestart('builder');
+      finish.resolve();
+      await rejected;
+      await retirement;
+      expect(getRemoteCodexTransport).not.toHaveBeenCalled();
+    } finally { finish.resolve(); await agent.dispose(); }
+  });
+
+  it.each(['catalog', 'thread'] as const)('preserves remote authentication rejection for %s without local credentials', async (operation) => {
+    const deps = createDeps();
+    deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false, errorReason: 'no_credentials' }) };
+    const transport = new MockCodexTransport();
+    transport.setMockResponse(operation === 'catalog' ? Method.ModelList : Method.ThreadStart,
+      { error: { code: 401, message: 'Remote authentication required' } });
+    deps.getRemoteCodexTransport = () => transport;
+    const agent = new CodexAgent(deps);
+    try {
+      const result = operation === 'catalog' ? agent.listRemoteModels('builder')
+        : agent.startSession({ sessionId: 'remote-rejected', remoteHostId: 'builder', workingDir: '/remote/repo', model: 'remote-model' });
+      await expect(result).rejects.toThrow('Remote authentication required');
+      expect(createdStdioOptions).toHaveLength(0);
+    } finally { await agent.dispose(); }
+  });
+
   it('delivers API capabilities only to the requesting callback and keeps OAuth discovery separate', async () => {
     const publishOAuth = vi.fn();
     const publishApi = vi.fn();
@@ -8730,9 +8813,14 @@ describe('CodexAgent MCP thread context hooks', () => {
     const deps = createDeps();
     const getAuthEnv = vi.fn(async () => ({}));
     deps.auth = { ...deps.auth, getState: async () => ({ authenticated: false }), getAuthEnv };
+    // #11445: authentication failure must come from the remote runtime, not
+    // the unrelated local auth adapter; local fallback remains forbidden.
+    const transport = new MockCodexTransport();
+    transport.setMockResponse(Method.SkillsList, { error: { code: 401, message: 'Remote authentication required' } });
+    deps.getRemoteCodexTransport = () => transport;
     const agent = new CodexAgent(deps);
     try {
-      await expect(agent.listAgentSkills({ workingDir: '/remote/repo', remoteHostId: 'remote' })).resolves.toEqual({ skills: [] });
+      await expect(agent.listAgentSkills({ workingDir: '/remote/repo', remoteHostId: 'remote' })).rejects.toThrow('Remote authentication required');
       expect(createdTransports).toHaveLength(0);
       expect(getAuthEnv).not.toHaveBeenCalled();
     } finally { await agent.dispose(); }
