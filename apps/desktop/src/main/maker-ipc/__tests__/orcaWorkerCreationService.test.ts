@@ -597,7 +597,8 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
       return {
         session: {
           id: opts.id ?? WORKER_SESSION_ID,
-          agentKind: opts.agentKind,
+          // Orca workers are created on built-in engines only.
+          agentKind: opts.agentKind as AgentKind,
         },
         didInjectOrcaInstructions: true,
         didInjectProjectContext: false,
@@ -866,7 +867,7 @@ describe('OrcaWorkerCreationService', () => {
       bootstrapSession: vi.fn(async (opts: MakerSessionCreateOpts) => {
         order.push('bootstrap');
         return {
-          session: { id: opts.id ?? WORKER_SESSION_ID, agentKind: opts.agentKind },
+          session: { id: opts.id ?? WORKER_SESSION_ID, agentKind: opts.agentKind as AgentKind },
           didInjectOrcaInstructions: true,
           didInjectProjectContext: false,
         };

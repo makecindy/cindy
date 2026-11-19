@@ -242,9 +242,15 @@ import {
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import { redactEventForRenderer } from './rendererEventRedaction.js';
+import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
+import { admitPluginEngineSession, admitPluginEngineSwitchTarget } from './pluginEngineSessionAdmission.js';
+import { getPluginHarnessRegistry } from '../cindy-brain/pluginHarnesses.js';
+import { isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+import { builtinAgentKindOrNull, hasBuiltinAgentKind, PluginEngineUnsupportedError, requireBuiltinAgentKind } from '../maker-host/engineKind.js';
 import type {
   AgentEvent,
   AgentKind,
+  EngineKind,
   Effort,
   ContextUsageData,
   InteractionDecision,
@@ -1000,7 +1006,7 @@ import {
   runPiPackageListIpcBoundary,
   runPiPackageMutationIpcBoundary,
 } from './piPackageMutationIpc.js';
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, dbToMakerEngineKind, makerToDbAgentKind, makerToDbEngineKind } from '../../shared/agentKindConversion.js';
 import { normalizeSessionContextWindowBoundsRoute } from '../../shared/sessionContextWindowBounds.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { readSessionBackgroundTaskOutputTail } from '../background-task-output/reader.js';
@@ -1800,7 +1806,8 @@ async function resolveSessionUsageResetAt(
   // verified result is authoritative, including an unknown reset; never read the old account.
   if (signals.providerGroupUsageLimit) return signals.providerGroupUsageLimit.resetAtMs;
   const row = await getSessionRowSnapshot(sessionId);
-  const agentKind = row?.agentKind ? dbToMakerAgentKind(row.agentKind) : null;
+  // Usage-reset hints describe built-in engine accounts only.
+  const agentKind = row?.agentKind && row.agentKind !== 'acp' ? dbToMakerAgentKind(row.agentKind) : null;
   if (!row || !agentKind) return null;
   const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
   return resolveSessionUsageReset({ agentKind, providerId, modelId,
@@ -6266,7 +6273,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
 
   // session-agent-switch:登记本会话当前引擎,broadcaster / user 行落库据此逐行
   // stamp messages.agent_kind(切换后历史行的 agent_meta 必须按写入时引擎解析)。
-  noteSessionAgentKind(session.id, makerToDbAgentKind(session.agentKind));
+  noteSessionAgentKind(session.id, makerToDbEngineKind(session.agentKind));
 
   // 订阅槽①旁听 tap(独立监听,叠加在主转发之外互不干扰):AgentEvent →
   // did-turn-*。资格(用户主会话)与自动化轮次过滤都在 tap 内部,这里零逻辑。
@@ -6358,7 +6365,7 @@ export const wireSessionToIpcExternal = wireSessionToIpc;
 
 type SendToSessionDispatchSession = {
   id: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workDir: string;
   remoteHostId: string | null;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
@@ -6447,6 +6454,12 @@ export function registerModelVisibilitySyncIpc(): void {
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
+  // Live session for features that serve built-in engines only (Orca, learn capture, turn
+  // model attribution). Plugin-engine tasks read as absent there (docs/plans/acp-plugin-bridge.md).
+  const builtinLiveSession = (sessionId: string) => {
+    const live = maker.getSession(sessionId);
+    return live && hasBuiltinAgentKind(live) ? live : undefined;
+  };
   setImportProbeConfirmation((sessionId, request, signal) => {
     // Canonical companion tasks exist before a harness is launched. Reuse the
     // same pending resolver and remote/UI routes without starting a model turn.
@@ -6675,6 +6688,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // ── 元能力 ─────────────────────────────────────────────────────────────
   ipcMain.handle(MAKER_INVOKE.LIST_AVAILABLE_AGENTS, () => {
     return maker.listAvailableAgents();
+  });
+  registerPluginEnginesIpc({
+    handle: (channel, listener) => ipcMain.handle(channel, listener),
+    assertTrusted: (event) => assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+    broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
+    isDeviceLinkInvoke,
   });
 
   ipcMain.handle(MAKER_INVOKE.TURN_CHANGE_SETS_LIST, async (event, sessionId: unknown) => {
@@ -7887,7 +7906,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           typeof params.sessionId === 'string' && params.sessionId.trim()
             ? params.sessionId.trim()
             : undefined;
-        const sessionMeta = sessionId ? await maker.getSessionMeta(sessionId) : null;
+        const sessionMetaRaw = sessionId ? await maker.getSessionMeta(sessionId) : null;
+        // Command palettes for plugin-engine tasks have no built-in session context.
+        const sessionMeta = sessionMetaRaw && hasBuiltinAgentKind(sessionMetaRaw) ? sessionMetaRaw : null;
         const builtins = maker.listAgentCommands(kind);
         const mayListPackageCommands = shouldListPiPackageCommands(
           kind,
@@ -8745,7 +8766,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 不归组管时原样返回 null。
    */
   async function applyProviderGroupAssignment(o: CreateOpts): Promise<ProviderGroupStartContext | null> {
-    if (!providerGroupService || !o.id || o.remoteHostId) return null;
+    // Plugin engines run on this computer with their own models; provider groups do not apply.
+    if (!providerGroupService || !o.id || o.remoteHostId || o.agentKind === 'acp') return null;
     if (typeof o.model !== 'string' || !o.model) return null;
     // 本机没有建组、任务不指向同账号另一台电脑(那台可能建了组)、也没有归组时不读数据库，
     // 启动路径与没有这个功能时完全一致。
@@ -8848,7 +8870,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       displayReasoning: o.displayReasoning,
     };
     assertAccess?.();
-    await options.waitForAccountProviderModelsReady();
+    // Plugin engines bring their own models and sign-in: never wait on (or fail with) the Cindy
+    // account's provider catalog, same as the maker-host lifecycle hook.
+    if (o.agentKind !== 'acp') await options.waitForAccountProviderModelsReady();
     assertAccess?.();
     // 供应商组分配到另一台电脑(或经另一台电脑的组改到这里)时，来源由那次分配决定：选中的那台上这个
     // 供应商的 id 可能与原来不同，不让临时调整盖掉。留在本机的照旧按临时调整。
@@ -9076,11 +9100,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const hydrateProvider = getActiveCatalog().providers.find(
           (candidate) => candidate.id === hydrateProviderId,
         );
-        const hydrateModel = findCatalogModel(
-          hydrateProvider,
-          session.model,
-          o.agentKind,
-        );
+        const hydrateKind = builtinAgentKindOrNull(o.agentKind);
+        const hydrateModel = hydrateKind
+          ? findCatalogModel(hydrateProvider, session.model, hydrateKind)
+          : undefined;
         setSessionEffort(
           session.id,
           hydrateModel
@@ -9718,7 +9741,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   async function ensureRemoteReadyForSessionStart(params: {
-    session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
+    // Plugin-engine sessions resolve to no remote agent below (never remote).
+    session?: { agentKind: EngineKind; remoteHostId: string | null } | null;
     createOpts?: unknown;
   }): Promise<{ remoteCodexDaemonRebootstrapped: true } | void> {
     const ownerGeneration = getActiveAppSession().generation;
@@ -11084,6 +11108,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     assertAgentDeviceRouteUsable,
     describeAgentDevice,
+    // 任务中换到插件引擎(docs/plans/acp-plugin-bridge.md)：按本机此刻提供的引擎准入。
+    admitPluginEngineTarget: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
+    describePluginEngine: (providerId) => {
+      const key = pluginEngineKeyFromProviderId(providerId);
+      return key ? getPluginHarnessRegistry().list().find((harness) => harness.key === key)?.name ?? null : null;
+    },
     getSessionRow: readAgentSwitchSessionRow,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId, 'agent-switch'),
@@ -11386,7 +11416,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ) => applyScheduledModelSelection(await resolveScheduledExecutionSelection(sessionId, selection), {
     getTarget: async () => {
       const row = await agentSwitchDeps.getSessionRow(sessionId);
-      return row ? { agentKind: dbToMakerAgentKind(row.agentKind), status: row.status,
+      // Plugin-engine tasks cannot switch engines (docs/plans/acp-plugin-bridge.md).
+      return row && row.agentKind !== 'acp' ? { agentKind: dbToMakerAgentKind(row.agentKind), status: row.status,
         remoteHostId: row.remoteHostId, agentDeviceId: row.agentDeviceId, orcaRole: row.orcaRole } : null;
     },
     isBusy: () => isSessionInTurn(sessionId) || !!maker.getSession(sessionId)?.isTurnRunning(),
@@ -11776,8 +11807,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...opts,
           onAccepted: async (signal) => {
             await opts.onAccepted?.(signal);
-            await beginTurnChangeSetAtDispatch(session, anchorClientId);
-            turnChangeSetStarted = true;
+            // Turn change capture relies on built-in engine hooks; plugin engines have none.
+            if (hasBuiltinAgentKind(session)) {
+              await beginTurnChangeSetAtDispatch(session, anchorClientId);
+              turnChangeSetStarted = true;
+            }
             if (gitSnapshotCoordinator) {
               await gitSnapshotCoordinator.onTurnStart(session.id, signal);
               baselineStarted = true;
@@ -12077,7 +12111,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .limit(1);
           const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;
           const inheritedBase: SendToSessionCreateDefaults = {
-            agentKind: meta.agentKind,
+            agentKind: requireBuiltinAgentKind(meta.agentKind, 'Creating tasks from a plugin-engine task'),
             workingDir: resolvedWorkDir,
             workspaceKind: params.projectDir === null ? 'dialogue'
               : params.projectDir !== undefined ? 'project' : (meta.workspaceKind ?? 'project'),
@@ -12360,6 +12394,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: `session ${targetSessionId} not found`,
         };
       }
+      if (meta.agentKind === 'acp') {
+        // Agent-to-agent messages into plugin-engine tasks are not supported in phase 1
+        // (docs/plans/acp-plugin-bridge.md); the target keeps working for its owner.
+        return {
+          ok: false as const,
+          errorCode: 'UNSUPPORTED_CAPABILITY' as const,
+          message: `session ${targetSessionId} runs on a plugin engine; sending messages to it is not supported yet`,
+        };
+      }
+      const targetAgentKind: AgentKind = meta.agentKind;
       if (dbRow.status === 'archived') {
         return {
           ok: false as const,
@@ -12397,7 +12441,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           const persisted = await getPersistedInputClientIds(targetSessionId, [qClientId]);
           if (persisted.has(qClientId) || inputCoordinator.hasKnownClientId(targetSessionId, qClientId)) {
             await awaitAgentInputQueueSnapshotPersistence(targetSessionId);
-            return { ok: true as const, targetSessionId, agentKind: meta.agentKind,
+            return { ok: true as const, targetSessionId, agentKind: targetAgentKind,
               wakeKind: 'queued' as const, queuedMessageId: qClientId, targetTitle: dbRow.title,
               targetLastUserSendAt: dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null };
           }
@@ -12428,7 +12472,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return {
           ok: true as const,
           targetSessionId,
-          agentKind: meta.agentKind,
+          agentKind: targetAgentKind,
           wakeKind: 'queued' as const,
           queuedMessageId: qClientId,
           targetTitle: dbRow.title,
@@ -12441,7 +12485,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let userPromptPreviewStarted = false;
       const previewSessionMeta = {
         id: targetSessionId,
-        agentKind: meta.agentKind,
+        agentKind: targetAgentKind,
         workDir: meta.workDir,
       };
       const persistUserMessage = async (): Promise<void> => {
@@ -12513,7 +12557,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return {
             ok: true as const,
             targetSessionId,
-            agentKind: meta.agentKind,
+            agentKind: targetAgentKind,
             wakeKind: 'queued' as const,
             queuedMessageId: clientId,
             targetTitle: dbRow.title,
@@ -12616,7 +12660,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return {
             ok: true as const,
             targetSessionId,
-            agentKind: meta.agentKind,
+            agentKind: targetAgentKind,
             wakeKind: 'already-active' as const,
             targetTitle: dbRow.title,
             targetLastUserSendAt:
@@ -12649,7 +12693,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             return {
               ok: true as const,
               targetSessionId,
-              agentKind: meta.agentKind,
+              agentKind: targetAgentKind,
               wakeKind: 'queued' as const,
               queuedMessageId: clientId,
               targetTitle: dbRow.title,
@@ -12676,7 +12720,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       try {
         const createOpts = buildCreateOptsWithStderr({
           id: targetSessionId,
-          agentKind: meta.agentKind,
+          agentKind: targetAgentKind,
           workingDir: meta.workDir,
           model: meta.model,
           resumeSessionId: meta.sdkSessionId,
@@ -12749,7 +12793,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return {
           ok: true as const,
           targetSessionId,
-          agentKind: meta.agentKind,
+          agentKind: targetAgentKind,
           wakeKind: 'resumed' as const,
           targetTitle: dbRow.title,
           targetLastUserSendAt:
@@ -12782,7 +12826,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           return {
             ok: true as const,
             targetSessionId,
-            agentKind: meta.agentKind,
+            agentKind: targetAgentKind,
             wakeKind: 'queued' as const,
             queuedMessageId: clientId,
             targetTitle: dbRow.title,
@@ -13783,6 +13827,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasCindyAiApiKey: () => readClaudeApiKey() != null,
   });
   setSessionOpeningModelAdmission(async body => {
+    // 插件引擎任务不在内置模型目录里：按本机此刻提供的插件引擎准入(docs/plans/acp-plugin-bridge.md)。
+    if (isPluginEngineKind(body.agentKind)) {
+      return admitPluginEngineSession(body, getPluginHarnessRegistry().list(), pluginEngineModelsOf);
+    }
     const execution = await resolveSessionExecution({
       agentKind: body.agentKind, model: body.model, providerId: body.providerId,
       effort: body.effort, fastMode: body.fastMode,
@@ -13830,7 +13878,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     void maker.getSessionMeta(taskId).then(meta => {
       if (!meta || !snapshot || snapshot !== getCurrentDbClientSnapshot()
         || revision !== pluginTaskAuthorizationRevision(pluginId) || !isPluginTaskAuthorized(pluginId)) return;
-      scheduleSessionAutoTitle({ sessionId: taskId, text, placeholderText, agentKind: meta.agentKind, isUserText: true });
+      if (meta.agentKind !== 'acp') scheduleSessionAutoTitle({ sessionId: taskId, text, placeholderText, agentKind: meta.agentKind, isUserText: true });
     }).catch(() => log.warn('Plugin task automatic naming could not be scheduled'));
   };
   setGhostAgentTurnRunner(createGhostAgentTurnRunner({
@@ -15089,7 +15137,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
     }
     return {
-      agentKind: createOpts.agentKind,
+      agentKind: requireBuiltinAgentKind(createOpts.agentKind, 'Queued agent messages'),
       workingDir: createOpts.workingDir,
       model: createOpts.model,
       effort: createOpts.effort,
@@ -15266,7 +15314,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     createId,
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId).catch(() => null),
     getSessionRowSnapshot,
-    getLiveSession: (sessionId) => maker.getSession(sessionId),
+    getLiveSession: (sessionId) => builtinLiveSession(sessionId),
     recycleProjectResourceRuntime: async (sessionId) => {
       const current = maker.getSession(sessionId);
       if (current?.agentKind !== 'pi' || current.hasRecyclableProjectResourceDrift() !== true) return false;
@@ -15351,7 +15399,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!liveSession) {
         throw new Error('Target session became unavailable before direct turn dispatch.');
       }
-      await beginTurnChangeSetAtDispatch(liveSession, clientId);
+      if (hasBuiltinAgentKind(liveSession)) await beginTurnChangeSetAtDispatch(liveSession, clientId);
     },
     abortDirectTurnChangeSet: clearPendingTurnChangeSets,
     resolveWorkerSenderLabel: async (workerId, fallback) => {
@@ -15390,7 +15438,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // Agent 选择的排队行插话 / 排序(cindy_orca 与 cindy_helper 共用)。
   const { steerStoredControlMessage, moveStoredControlMessage } = createQueueReorderAdapter({
-    getLiveSession: (sessionId) => maker.getSession(sessionId),
+    getLiveSession: (sessionId) => builtinLiveSession(sessionId),
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     // inputCoordinator 在本函数更后面才声明,只能在调用时取用。
     getCoordinator: () => inputCoordinator,
@@ -16333,7 +16381,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ensureRemoteReadyForSessionStart: async (params) => {
       await ensureRemoteReadyForSessionStart({ createOpts: params.createOpts });
     },
-    bootstrapSession,
+    // Orca workers run on built-in engines only.
+    bootstrapSession: async (...args: Parameters<typeof bootstrapSession>) => {
+      const result = await bootstrapSession(...args);
+      if (!hasBuiltinAgentKind(result.session)) throw new PluginEngineUnsupportedError('Orca workers');
+      return { ...result, session: result.session };
+    },
     addOrUpdateWorker: async (worker) => {
       await addOrUpdateWorker(worker);
     },
@@ -16681,7 +16734,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         configStaged: true,
       });
       const intent = agentSwitchPending.get(sessionId);
-      return intent ? {
+      // 系统路由只登记内置引擎；插件引擎意图不会出现在这些任务上(切到插件引擎只限普通任务)。
+      return intent && intent.targetAgentKind !== 'acp' ? {
         ...route, agentKind: intent.targetAgentKind, model: intent.model,
         providerId: intent.providerId ?? null,
         agentDeviceId: intent.targetAgentDeviceId === undefined ? currentDeviceId : intent.targetAgentDeviceId,
@@ -16818,7 +16872,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           eq(sessions.source, 'bot'),
           eq(sessions.status, 'active'),
         )).limit(1);
-      if (!row) return null;
+      // Teammate model chains drive built-in engines only; plugin-engine rows have none.
+      if (!row || row.agentKind === 'acp') return null;
       // An old routine lane follows its teammate's model like the other lanes.
       const selection = await readEffectiveBotModelSelection(JSON.parse(row.capabilitiesJson));
       const control = getSessionRuntimeControlSnapshot(sessionId);
@@ -16830,7 +16885,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         followsCindyDefault: selection.followsCindyDefault,
         current: {
           agentDeviceId: row.agentDeviceId,
-          agentKind: live?.agentKind ?? dbToMakerAgentKind(row.agentKind),
+          agentKind: builtinAgentKindOrNull(live?.agentKind) ?? dbToMakerAgentKind(row.agentKind),
           model: live?.model ?? row.model ?? '',
           providerId: live && hasSessionProvider(sessionId)
             ? getSessionProvider(sessionId) ?? null : row.providerId,
@@ -16839,7 +16894,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         },
         // The task owns its model: a manual change sticks until the configured route itself changes.
         hasRuntimeOverride: control.effectiveOverride !== null || control.pending !== null || !!intent,
-        next: intent ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? row.agentDeviceId : intent.targetAgentDeviceId, agentKind: intent.targetAgentKind, model: intent.model,
+        // 伙伴任务不能切到插件引擎，这里的意图只会是内置引擎。
+        next: intent && intent.targetAgentKind !== 'acp' ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? row.agentDeviceId : intent.targetAgentDeviceId, agentKind: intent.targetAgentKind, model: intent.model,
           providerId: intent.providerId ?? null, effort: intent.effort ?? null, fastMode: intent.fastMode ?? false }
           : control.pending?.profile ?? control.effectiveOverride ?? undefined,
       };
@@ -16867,7 +16923,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   readPendingAgentSwitchRouteHolder = (sessionId) => {
     const intent = agentSwitchPending.get(sessionId);
-    return intent
+    // 只给 IM 默认路由同步读；IM 任务不能切到插件引擎，插件引擎意图按「没有」处理。
+    return intent && intent.targetAgentKind !== 'acp'
       ? {
           agentKind: intent.targetAgentKind,
           model: intent.model,
@@ -17642,7 +17699,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             a,
           );
         }
-        return { ok: true, agentDeviceId: null, ...(locations ? { locations } : {}), ...result };
+        // 插件引擎(docs/plans/acp-plugin-bridge.md)只在本机运行：不按 agent 过滤时列本机此刻提供的引擎；
+        // SSH Lead 的 Worker 在 SSH 主机上运行，不列。
+        const pluginEngines = !agent && !sshLead ? pluginEngineDescriptors() : [];
+        return {
+          ok: true, agentDeviceId: null, ...(locations ? { locations } : {}), ...result,
+          ...(pluginEngines.length ? { pluginEngines } : {}),
+        };
       } catch (err) {
         return orcaModelDiscoveryFailure(err, Boolean(executionDeviceId));
       }
@@ -17740,7 +17803,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertScheduledDispatchRoute: async (sessionId) => {
       const session = maker.getSession(sessionId);
       if (!session) throw new Error('Scheduled session unavailable before dispatch');
-      if (!session.agentDeviceId) return;
+      if (!session.agentDeviceId || !hasBuiltinAgentKind(session)) return;
       await readRemoteProviderRoute({
         agentDeviceId: session.agentDeviceId,
         agentKind: session.agentKind,
@@ -17777,7 +17840,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!row?.workingDir) throw new Error(`Session ${sessionId} has no working directory`);
       return {
         id: sessionId,
-        agentKind: dbToMakerAgentKind(row.agentKind),
+        agentKind: dbToMakerEngineKind(row.agentKind),
         workingDir: row.workingDir,
         workspaceKind: row.workspaceKind,
         model: row.model ?? undefined,
@@ -17862,7 +17925,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ),
     beforeDispatchDirectUserTurn: (sessionId, signal) => gitSnapshotCoordinator?.onTurnStart(sessionId, signal),
     onModelDispatched: recordDispatchedModelHolder = createTurnModelAttribution({
-      maker, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
+      maker: { getSession: (sessionId) => builtinLiveSession(sessionId) }, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
       enqueueDurableWrite, patchMessageAgentMeta, createDbMessage, log,
     }),
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
@@ -18217,7 +18280,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     listCompanionSessionIds: (sessionId) => listBotRecallSessionIds(sessionId, COMPANION_SESSION_IDS_LIMIT),
     findLatestUser: findLatestUserMessageForRebuild,
     findLatestRebuildMeta: findLatestContextRebuildMeta,
-    getLiveSession: (sessionId) => maker.getSession(sessionId),
+    getLiveSession: (sessionId) => builtinLiveSession(sessionId),
     rehydrateColdPiRuntimeForWindowVerification,
     closeSession: (sessionId) => maker.closeSession(sessionId, 'runtime-refresh'),
     drainPersistQueue,
@@ -19405,7 +19468,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');
     },
     hasPendingInteraction: hasPendingAgentInteractionForSession,
-    getAgentKind: (sessionId) => getStableSessionForTurnBoundary(sessionId)?.agentKind ?? null,
+    getAgentKind: (sessionId) => builtinAgentKindOrNull(getStableSessionForTurnBoundary(sessionId)?.agentKind),
     getSdkSessionId: async (sessionId) => {
       const meta = await maker.getSessionMeta(sessionId).catch(() => null);
       return meta?.sdkSessionId;
@@ -19716,7 +19779,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
-      if (liveSession) {
+      if (liveSession && hasBuiltinAgentKind(liveSession)) {
         await beginTurnChangeSetAtDispatch(liveSession, item.clientId);
       }
       // hook 续跑回流的**权威归属点**: 在 vendor dispatch 之前(本回调被 await), 所以
@@ -20178,7 +20241,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const [row] = await getDbClient().drizzle.select().from(sessions).where(eq(sessions.id, sid)).limit(1);
     if (!row || row.status !== 'active' || !row.workingDir) throwIpcError('NOT_FOUND', 'SharedTask task unavailable');
     return {
-      agentKind: dbToMakerAgentKind(row.agentKind), workingDir: row.workingDir,
+      // Shared tasks run on built-in engines only.
+      agentKind: requireBuiltinAgentKind(dbToMakerEngineKind(row.agentKind), 'Shared tasks'), workingDir: row.workingDir,
       model: row.model, providerId: row.providerId, effort: row.effort,
       permissionMode: row.permissionMode, fastMode: row.fastMode,
       planMode: row.planModeEnabled, remoteHostId: row.remoteHostId ?? undefined,
@@ -22282,7 +22346,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!row.workingDir) throwIpcError('NOT_FOUND', 'Task working directory is unavailable');
       const createOpts = buildCreateOptsWithStderr({
         id: sessionId,
-        agentKind: dbToMakerAgentKind(row.agentKind),
+        agentKind: dbToMakerEngineKind(row.agentKind),
         workingDir: row.workingDir,
         model: row.model ?? undefined,
         providerId: row.providerId,
@@ -23025,7 +23089,7 @@ async function findSimilarDirOnDisk(workingDir: string): Promise<string | null> 
 function emitWorkDirMissingError(
   sessionId: string,
   workingDir: string,
-  agentSource: AgentKind,
+  agentSource: AgentKind | undefined,
   reason: 'not-exist' | 'not-dir',
   similarPath?: string | null,
 ): void {
@@ -23046,7 +23110,7 @@ function emitWorkDirMissingError(
   });
   broadcastToAllWindows(MAKER_PUSH.EVENT, {
     sessionId,
-    event: { type: 'error', data: { message }, source: agentSource } satisfies AgentEvent,
+    event: { type: 'error', data: { message }, ...(agentSource ? { source: agentSource } : {}) } satisfies AgentEvent,
   });
 }
 

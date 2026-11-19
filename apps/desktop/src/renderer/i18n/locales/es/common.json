@@ -2840,6 +2840,8 @@
       "autoUpdateSaveFailed": "No se pudo guardar la configuración de actualización automática",
       "analyticsLabel": "Estadísticas de uso",
       "analyticsDescription": "Nos ayuda a comprender con qué frecuencia se inicia y se mantiene en uso Cindy. Envía información sobre el dispositivo y el entorno de uso, como el modelo de tu dispositivo, la versión del sistema operativo, la versión de la aplicación y un identificador del dispositivo, además de tu ID de cuenta una vez que hayas iniciado sesión; nunca conversaciones, archivos ni indicaciones. Al desactivarlo, el envío se detiene de inmediato.",
+      "productTokenUsage": "Compartir uso de modelos",
+      "productTokenUsageHint": "Tu región agrupa los nuevos tokens de esta cuenta en este dispositivo por origen y modelo antes de enviarlos a TapDB.",
       "analyticsEnabledToast": "Estadísticas de uso habilitadas",
       "analyticsDisabledToast": "Estadísticas de uso deshabilitadas",
       "analyticsSaveFailed": "No se pudo guardar la configuración de estadísticas de uso",
@@ -4174,6 +4176,25 @@
         "refreshFailed": "No se pudo actualizar la lista de modelos. Vuelve a intentarlo más tarde.",
         "refreshReconnect": "No se pudo actualizar la lista de modelos. Vuelve a conectar este proveedor e inténtalo de nuevo.",
         "refreshFetchDisabled": "La recuperación remota del catálogo de modelos está deshabilitada: se omitió la actualización",
+        "withdrawn": {
+          "refreshFound": "Modelos que ya no ofrece el servicio: {{count}}",
+          "refreshAdded": "Modelos nuevos: {{added}}. Ya no ofrecidos: {{count}}",
+          "refreshSuspicious": "Modelos no devueltos esta vez: {{count}}. Es posible que la lista esté incompleta",
+          "refreshAddedSuspicious": "Modelos nuevos: {{added}}. No devueltos esta vez: {{count}}. Es posible que la lista esté incompleta",
+          "review": "Revisar modelos",
+          "heading": "Modelos que ya no se ofrecen",
+          "intro": "Al actualizar {{provider}}, el servicio no devolvió estos modelos. Selecciona los que quieres quitar. Los motores que todavía los incluyen no se ven afectados.",
+          "suspicious": "Faltan muchos más modelos de lo normal. Es posible que el servicio haya devuelto una lista incompleta. Vuelve a actualizar más tarde para confirmarlo o selecciona solo los modelos que sabes que se retiraron.",
+          "selectAll": "Seleccionar todos",
+          "selected": "{{count}} de {{total}} seleccionados",
+          "consequence": "Los modelos quitados dejan de aparecer en la selección de modelos y donde se usen aparecerán como no disponibles. Si el servicio vuelve a ofrecerlos, actualiza para añadirlos de nuevo.",
+          "confirm": "Quitar modelos ({{count}})",
+          "cancel": "Conservar modelos",
+          "removed": "Modelos quitados: {{count}}",
+          "cleanupIncomplete": "Modelos quitados: {{count}}. No se pudieron borrar algunos ajustes de visibilidad o desactivación",
+          "stale": "La conexión cambió y no hay modelos para quitar. Vuelve a actualizar para revisarlos",
+          "removeFailed": "No se pudieron quitar los modelos"
+        },
         "disableModel": "Deshabilitar este modelo",
         "paymentRequired": "De pago",
         "paymentUnlock": "Pagar para desbloquear",
@@ -8024,6 +8045,7 @@
           "accessDenied": "Esta operación del complemento no está permitida o se canceló.",
           "notConfigured": "El mercado de complementos no está disponible en este entorno.",
           "invalidPackage": "Este paquete de complemento no es válido y no se puede instalar. Contacta al editor.",
+          "downloadAuthorizationExpired": "La autorización de descarga del complemento ha caducado. Comprueba la fecha y la hora del sistema antes de iniciar una nueva instalación.",
           "downloadTimeout": "Se agotó el tiempo de descarga del complemento. Inténtalo más tarde.",
           "downloadFailed": "No se pudo descargar el complemento. Revisa tu conexión e inténtalo de nuevo.",
           "brokerRedirectPortRequired": "Este complemento declara un intermediario de autorización, pero falta redirectPort en la misma configuración de OAuth, por lo que no se puede instalar desde el mercado de complementos. Contacta al editor para que agregue el campo y publique una nueva versión.",
@@ -8344,6 +8366,8 @@
         "agentHiddenTasksDetail": "Las tareas que crea este complemento pueden permanecer fuera de la lista de tareas, la búsqueda y las notificaciones. Siempre puedes verlas, abrirlas o mostrarlas en la lista de tareas desde Tareas en segundo plano en la página de este complemento; al desinstalar el complemento, vuelven a mostrarse.",
         "agentModelPreferences": "Leer y editar tus modelos favoritos, y leer tus modelos usados recientemente",
         "agentModelPreferencesDetail": "Puede leer los modelos favoritos y los usados recientemente en esta computadora, incluida la intensidad de razonamiento y Fast, y añadir, cambiar o quitar favoritos. Los cambios también aparecen en el selector de modelo de Cindy. Los modelos elegidos en el complemento no se añaden a los recientes. No incluye modelos de tus otras computadoras ni compartidos contigo, y no comparte credenciales.",
+        "harnesses": "Proporciona motores de ejecución: {{names}}",
+        "harnessesDetail": "En tus tareas, puede leer y escribir en el directorio de trabajo, ejecutar comandos y usar las mismas herramientas de Cindy que el Pi integrado.",
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",
         "agentErrandDetail": "Las tareas creadas aparecen en la lista de tareas de Cindy, donde puedes ver el progreso y continuar la conversación.",
         "agentSchedule": "Puede pedirte que crees una automatización",
@@ -14326,6 +14350,32 @@
             "label": "Acceso completo",
             "description": "Las acciones habituales se permiten directamente, incluidos archivos fuera del espacio de trabajo y comandos de red."
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "Confirmar cada vez",
+            "description": "Confirmas cuando el Agent pide permiso. Cindy no puede bloquear las acciones para las que el Agent no pide confirmación."
+          },
+          "default": {
+            "label": "Predeterminado",
+            "description": "El agente trabaja a su manera predeterminada; tú confirmas sus solicitudes de permiso."
+          },
+          "acceptEdits": {
+            "label": "Aceptar ediciones",
+            "description": "El agente edita archivos directamente; tú confirmas sus demás solicitudes de permiso."
+          },
+          "auto": {
+            "label": "Automático",
+            "description": "El agente decide qué necesita confirmación; tú confirmas las solicitudes que haga."
+          },
+          "plan": {
+            "label": "Solo planificar",
+            "description": "El agente solo analiza y planifica; no edita archivos."
+          },
+          "bypassPermissions": {
+            "label": "Permitir todo",
+            "description": "Todos los permisos que pida el Agent se conceden automáticamente."
+          }
         }
       }
     },
@@ -14800,6 +14850,16 @@
       "nowDefault": "Ya es por defecto",
       "switchToSteer": "Dar indicaciones por defecto",
       "switchToQueue": "Poner en cola por defecto"
+    },
+    "pluginEngines": {
+      "group": "Motores de complementos",
+      "genericName": "Motor de complemento",
+      "defaultModel": "Modelo predeterminado",
+      "defaultModelHint": "Usa la configuración predeterminada del motor",
+      "unavailable": "No disponible",
+      "engineMissing": "El complemento que proporciona este motor está desactivado o desinstalado.",
+      "worktreeUnsupported": "Los motores de complementos aún no pueden iniciar tareas en un worktree. Desactiva worktree para enviar.",
+      "modelChangeFailed": "No se pudo cambiar el modelo"
     }
   },
   "onboarding": {
@@ -15967,6 +16027,7 @@
       "REMOTE_AGENT_BUSY": "Se están ejecutando demasiadas sesiones en la otra computadora. Termina algunas y vuelve a intentarlo.",
       "REMOTE_AGENT_UNSUPPORTED": "Este Agent no está disponible en la otra computadora. Instálalo o inicia sesión allí, o elige otro Agent.",
       "REMOTE_AGENT_INVALID": "Se produjo un error al comunicarse con la computadora que ejecuta el Agent. Vuelve a intentarlo; si sigue ocurriendo, actualiza Cindy en ambas computadoras.",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "El motor del complemento no ha podido restaurar la conversación anterior. Tus mensajes se conservan. Elige otro motor o inicia una tarea nueva.",
       "REMOTE_AGENT_RESUME_REJECTED": "El ordenador que ejecuta el modelo no puede reanudar esta sesión. Crea una nueva sesión desde la lista de sesiones y copia el contenido que necesites para continuar. La sesión original y los mensajes en cola se conservan.",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "Este modelo ha alcanzado el límite de participación de modelo establecido por su propietario. Elige otro modelo disponible para continuar.",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esa computadora no te ha dado acceso a este proveedor o al modelo seleccionado. Si es tu propia computadora, activa «Permitir uso remoto» en ese proveedor. Si alguien te lo compartió, pídele que ajuste el acceso en Remoto y compartido. También puedes elegir otro modelo.",
@@ -16605,6 +16666,7 @@
       },
       "filterCreatorsHeading": "Amigos",
       "filterCreatorsAny": "Todo",
+      "filterHideAutomations": "Ocultar tareas automatizadas",
       "filterCreatorsNone": "Ocultar todo",
       "filterSelectedCreators": "Seleccionados: {{count}}",
       "filterProjectsHeading": "Proyectos",
@@ -17530,6 +17592,7 @@
       "promote": {
         "menu": "Convertir en automatización del proyecto",
         "noWorkingDir": "No se puede convertir una programación sin directorio de trabajo",
+        "pluginEngine": "Los motores de complemento solo funcionan en este equipo; esta programación no se puede convertir en automatización del proyecto",
         "success": "Se convirtió en automatización del proyecto"
       },
       "editProject": {
@@ -17806,6 +17869,7 @@
         "selectThread": "Selecciona una sesión de destino",
         "selectProject": "Selecciona un directorio de proyecto",
         "modelUnavailable": "El modelo {{model}} ya no está disponible. Selecciona otro modelo.",
+        "pluginEngineUnavailable": "El motor de complemento seleccionado no está disponible ahora. Selecciona otro modelo.",
         "reasoningInvalid": "La intensidad de razonamiento debe ser uno de estos valores: {{values}}",
         "preRunHookCommandRequired": "Ingresa el comando de comprobación previa",
         "preRunPluginRequired": "Elige un complemento para la comprobación previa",

@@ -24,6 +24,7 @@ import { createMessage } from '../localDb/ipc/messages.js';
 import { getDbClient } from '../localDb/client/current';
 import { and, desc, eq, isNull, inArray } from 'drizzle-orm';
 import { messages as messagesTable, sessions as sessionsTable } from '../localDb/schema';
+import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
 import { getSessionProvider, setSessionProvider } from '../maker-host/session-provider-store.js';
 import {
   resolveLenientSessionRoute,
@@ -122,6 +123,8 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
       // 停用轴准入(PR #744 review 第五轮):蒸馏会话是新的付费路由,继承的
       // model/provider 可能已被用户停用 —— 宽松降级(丢弃被停用的来源/模型,
       // 退回默认路由),不让 /learn 因停用整体失败。
+      // 插件引擎任务不能蒸馏(docs/plans/acp-plugin-bridge.md):明确拒绝,不改用内置引擎重跑。
+      if (originMeta?.agentKind === 'acp') throw new PluginEngineUnsupportedError('Learn');
       const agentKind = originMeta?.agentKind ?? 'claude-code';
       const newTaskDefault = await resolveNewTaskDefaultModelRoute(agentKind).catch(() => null);
       const desiredModel = originMeta?.model ?? newTaskDefault?.model;
