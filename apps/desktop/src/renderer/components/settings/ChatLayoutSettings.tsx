@@ -16,7 +16,7 @@ function ChatLayoutPreview({ width }: { width: number }) {
   const paneWidth = 1600;
   const { messageWidth, inputWidth } = getChatColumnWidths(paneWidth, STANDARD_CHAT_MESSAGE_WIDTH, width);
   return (
-    <div aria-hidden="true" className="w-24 shrink-0 rounded-md border border-border bg-content-area py-1">
+    <div aria-hidden="true" className="w-24 shrink-0 rounded-xl border border-border bg-content-area py-1">
       <div
         className="mx-auto flex flex-col gap-1"
         style={{ width: `${messageWidth / paneWidth * 100}%` }}
