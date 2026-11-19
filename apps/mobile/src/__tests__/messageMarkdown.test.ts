@@ -2889,3 +2889,26 @@ describe('final reference review boundaries', () => {
     }
   });
 });
+
+
+// #9440 independent final review: a supported title is literal even when it
+// contains Markdown code markers. Unit production entry and actual target.
+describe('reference title code-marker boundaries', () => {
+  for (const [name, title] of [
+    ['inline ticks', '"caption `code` \\[x\\]"'],
+    ['fence lines', '"caption\n```\n\\[x\\]\n```\nend"'],
+  ]) {
+    it('preserves reference targets and following math through ' + name, () => {
+      const source = '[f]:\n docs/a\\(1\\).md ' + title + '\n\n[file][f]\n\n\\(z\\)';
+      expect(inlines(source).filter(value => value.type === 'link')).toEqual([{ type: 'link', text: 'file', url: 'docs/a(1).md' }]);
+      expect(parseMobileMarkdownDocument(source).source).toBe(source.slice(0, -5) + '$z$');
+      expect(parseMobileMarkdownDocument(source, { srcLines: true }).source).toBe(source.slice(0, -5) + '$z$');
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    });
+  }
+});

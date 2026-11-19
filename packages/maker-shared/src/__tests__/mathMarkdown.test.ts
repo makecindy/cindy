@@ -414,3 +414,32 @@ it('protects valid continuation titles and rejects empty or footnote labels', ()
     expect(normalizeMathDelimiters('[' + label + ']:\n\\(x\\)')).toBe('[' + label + ']:\n$x$');
   }
 });
+
+
+// #9440: validate complete literal titles before code segmentation; assert
+// shared preprocessing output, including ordinary math after the definition.
+describe('reference titles containing code markers', () => {
+  for (const [name, title] of [
+    ['inline ticks', '"caption `code` \\[x\\]"'],
+    ['fence lines', '"caption\n```\n\\[x\\]\n```\nend"'],
+  ]) {
+    it('protects a complete title with ' + name, () => {
+      const source = '[f]:\n docs/a\\(1\\).md ' + title + '\n\n[file][f]\n\n\\(z\\)';
+      for (const preserveLineCount of [false, true]) {
+        expect(normalizeMathDelimiters(source, { preserveLineCount })).toBe(source.slice(0, -5) + '$z$');
+      }
+    });
+  }
+});
+
+
+it('keeps real code literal around reference-looking lines and complete titled definitions', () => {
+  for (const source of [
+    '`literal\n[f]: docs/a\\(1\\).md\n\\(x\\)`\n\n\\(z\\)',
+    '```\n[f]: docs/a\\(1\\).md "caption `code`"\n\\(x\\)\n```\n\n\\(z\\)',
+    '[f]: docs/a\\(1\\).md "caption\n```\n\\[x\\]\n```\nend"\n\n\\(z\\)',
+    '[f]:\n docs/a\\(1\\).md "caption\n[g]: path \\"open\nend"\n\n\\(z\\)',
+  ]) {
+    expect(normalizeMathDelimiters(source)).toBe(source.slice(0, -5) + '$z$');
+  }
+});
