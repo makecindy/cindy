@@ -37494,11 +37494,11 @@ describe('expected helper normal and failure boundaries', () => {
       await handle.close();
       const events = [];
       for await (const event of handle.events()) events.push(event);
-      const errors = events.filter(event => event.type === 'error');
-      expect(errors).toHaveLength(['partial', 'no-tools', 'probe-error'].includes(mode) ? 1 : 0);
+      const expectedNotices = ['partial', 'no-tools'].includes(mode) ? 1 : 0;
+      expect(events.filter(event => event.type === 'error')).toHaveLength(expectedNotices);
+      expect(events.filter(event => event.standaloneText)).toHaveLength(expectedNotices);
       if (mode === 'probe-error') {
-        expect(errors[0].data).toMatchObject({ code: 'CINDY_EXPECTED_HELPER_UNVERIFIED', message: expect.stringContaining('Could not verify') });
-        expect(JSON.stringify(errors)).not.toContain('sensitive transport details');
+        expect(warn).toHaveBeenCalledWith('Codex expected helper readiness check failed', { threadId: handle.id, state: 'unverified' });
         expect(JSON.stringify(warn.mock.calls)).not.toContain('sensitive transport details');
       }
       expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList))
@@ -37640,16 +37640,28 @@ describe('failed expected helper recovery', () => {
       resumeSessionId: threadId, model: 'gpt-5.4', workingDir: '/repo' });
     return { agent, host, handle };
   }
-  it('rechecks a transient status probe failure on the next send before recovering', async () => {
+  // A status query timed out on startup while the same task could use its helper.
+  // Exercise the next ordinary send and both task-visible notice channels.
+  it.each(['connected', 'failed'] as const)('rechecks an inconclusive probe and reports only a confirmed failure (%s)', async state => {
     let checks = 0;
     const { agent, host, handle } = await setup(() => {
       if (checks++ === 0) throw new Error('fixture transient status failure');
-      return 'failed';
+      return state;
     });
     try {
       await handle.send({ type: 'user', content: 'retry after service returned' });
-      expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(2);
+      expect(checks).toBe(2);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(state === 'failed' ? 2 : 1);
       expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+      await handle.close();
+      const events = [];
+      for await (const event of handle.events()) events.push(event);
+      const notices = events.filter(event => event.type === 'error' || event.standaloneText);
+      const unavailable = { code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE' };
+      expect(notices).toMatchObject(state === 'failed' ? [
+        { type: 'error', data: unavailable },
+        { type: 'text', standaloneText: true, data: unavailable },
+      ] : []);
     } finally { await agent.dispose(); }
   });
 
@@ -37828,8 +37840,8 @@ describe('failed expected helper recovery', () => {
 
 describe('expected helper runtime lifecycle', () => {
   // #10499 review: scheduler recovery and helper diagnostics share a cold resume.
-  // Unit tier, real Agent lifecycle; no timers/processes. One durable warning per
-  // resume must survive, without checking the same recovered catalog twice.
+  // Unit tier, real Agent lifecycle; no timers/processes. Warn once for a
+  // confirmed absence without checking the recovered catalog twice.
   it.each(['missing', 'healthy', 'unverified'] as const)(
     'checks helper once after scheduler cold recovery (%s)', async (mode) => {
       const threadId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -37861,11 +37873,10 @@ describe('expected helper runtime lifecycle', () => {
       for await (const event of handle.events()) events.push(event);
       expect(resumeCount).toBe(2);
       const notices = events.filter(event => event.standaloneText);
-      expect(notices).toHaveLength(mode === 'healthy' ? 0 : 1);
-      expect(events.filter(event => event.type === 'error')).toHaveLength(mode === 'healthy' ? 0 : 1);
-      if (mode !== 'healthy') expect(notices[0].data).toMatchObject({
-        code: mode === 'unverified' ? 'CINDY_EXPECTED_HELPER_UNVERIFIED' : 'CINDY_EXPECTED_HELPER_UNAVAILABLE',
-      });
+      const expectedNotices = mode === 'missing' ? 1 : 0;
+      expect(notices).toHaveLength(expectedNotices);
+      expect(events.filter(event => event.type === 'error')).toHaveLength(expectedNotices);
+      if (mode === 'missing') expect(notices[0].data).toMatchObject({ code: 'CINDY_EXPECTED_HELPER_UNAVAILABLE' });
       // Initial scheduler check, recovered scheduler check, then one helper check.
       expect(host.request.mock.calls.filter(([method]) => method === Method.McpServerStatusList)).toHaveLength(3);
       await agent.dispose();
