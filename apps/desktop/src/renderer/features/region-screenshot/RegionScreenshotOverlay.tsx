@@ -185,7 +185,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const longResultRef = useRef(longResult);
   longResultRef.current = longResult;
   const [selection, setSelection] = useState<RegionRect | null>(null);
-  const [hover, setHover] = useState<{ candidates: RegionRect[]; level: number; defaultRect: RegionRect; windowRect?: RegionRect } | null>(null);
+  const [hover, setHover] = useState<{ candidates: RegionRect[]; level: number; defaultRect: RegionRect } | null>(null);
   const [pointer, setPointer] = useState<RegionPoint | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [tool, setTool] = useState<AnnotationTool | null>(null);
@@ -247,6 +247,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
   const elementsRef = useRef<{
     inFlight: boolean;
     pending: RegionPoint | null;
+    selectAfterHit?: (point: RegionPoint, hit: RegionScreenshotHit | null) => void;
     cache: { point: RegionPoint; hit: RegionScreenshotHit } | null;
     defaults: Map<number, RegionRect[]>;
   }>({ inFlight: false, pending: null, cache: null, defaults: new Map() });
@@ -523,9 +524,9 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       const selected = previous && sameRegion(previous.defaultRect, defaultRect)
         ? candidates.findIndex((rect) => sameRegion(rect, previous.candidates[previous.level])) : -1;
       const level = selected >= 0 ? selected : defaultLevel;
-      const keep = previous && previous.windowRect === window?.rect && previous.level === level && previous.candidates.length === candidates.length
+      const keep = previous && previous.level === level && previous.candidates.length === candidates.length
         && previous.candidates.every((rect, index) => sameRegion(rect, candidates[index]));
-      return keep && sameRegion(previous.defaultRect, defaultRect) ? previous : { candidates, level, defaultRect, windowRect: window?.rect };
+      return keep && sameRegion(previous.defaultRect, defaultRect) ? previous : { candidates, level, defaultRect };
     });
   }, []);
 
@@ -543,8 +544,11 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       tracker.inFlight = true;
       void bridge
         .elementsAt(current.token, window.id, point.x, point.y)
+        .catch(() => null)
         .then((hit) => {
-          if (state.current.session?.token !== current.token || elementsRef.current !== tracker || !hit) return;
+          if (state.current.session?.token !== current.token || elementsRef.current !== tracker) return;
+          tracker.selectAfterHit?.(point, hit);
+          if (!hit) return;
           const latest = state.current.pointer;
           if (latest && latest.x === point.x && latest.y === point.y && !state.current.selection && !state.current.drag) {
             // Some browsers have no content HWND. Learn their document regions
@@ -966,7 +970,26 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
       if (!rect) {
         if (key === ' ' && !s.drag && !(event.target instanceof HTMLElement && event.target.closest('button, input, select, textarea'))) {
           event.preventDefault();
-          selectRegion(s.hover?.windowRect ?? { x: 0, y: 0, ...s.session.viewport });
+          const screenRect = { x: 0, y: 0, ...s.session.viewport };
+          const point = s.pointer;
+          const tracker = elementsRef.current;
+          const cache = tracker.cache;
+          if (!point || !topWindowAt(s.session.windows, point)) {
+            selectRegion(screenRect);
+          } else if (!tracker.inFlight && cache?.point.x === point.x && cache.point.y === point.y) {
+            selectRegion(cache.hit.window?.rect ?? screenRect);
+          } else {
+            // Reuse the native query for this pointer position, including a queued query.
+            tracker.selectAfterHit = (queried, hit) => {
+              if (queried.x !== point.x || queried.y !== point.y) return;
+              tracker.selectAfterHit = undefined;
+              const latest = state.current;
+              if (latest.pointer === point && !latest.drag && !latest.selection) {
+                selectRegion(hit?.window?.rect ?? screenRect);
+              }
+            };
+            if (!tracker.inFlight) requestElements(point);
+          }
         } else if (key.toLowerCase() === 'r' && !mod && s.session.lastRegion) {
           event.preventDefault();
           selectRegion(s.session.lastRegion);
@@ -1044,7 +1067,7 @@ export function RegionScreenshotOverlay({ bridge, imageEditor = false }: { bridg
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [bridge, cancel, colorAt, commitAnnotations, commitEditing, isMac, redo, runAction, selectRegion, undo]);
+  }, [bridge, cancel, colorAt, commitAnnotations, commitEditing, isMac, redo, requestElements, runAction, selectRegion, undo]);
 
   // 编辑文字时把焦点交给输入框。
   useEffect(() => {
