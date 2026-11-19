@@ -8204,6 +8204,7 @@
         "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
         "cindyModelsDecisions": "Can call decision models (uses your model quota)",
         "cindyModelsRerank": "Can call reranking models (uses your model quota)",
+        "cindyModelsMediaRequest": "Can call Cindy AI for image and video generation, speech synthesis and transcription (uses your model quota)",
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "cindySearchWeb": "Can search the public web with Cindy AI",
         "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",

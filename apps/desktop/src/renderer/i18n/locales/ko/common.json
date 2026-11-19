@@ -8161,6 +8161,7 @@
         "cindyEmbedText": "텍스트를 벡터로 변환할 수 있습니다(의미 검색용)",
         "cindyModelsDecisions": "의사결정 모델 호출 가능(모델 사용 한도 사용)",
         "cindyModelsRerank": "재순위화 모델 호출 가능(모델 사용 한도 사용)",
+        "cindyModelsMediaRequest": "Cindy AI로 이미지 및 동영상 생성, 음성 합성, 음성 전사를 요청할 수 있음(모델 사용 한도 사용)",
         "cindyEmbedTextDetail": "텍스트가 시스템 벡터 모델로 전송되어 숫자 배열로 변환됩니다. 한 번에 최대 {{max}}개이며 모델 요금이 발생할 수 있습니다. 생성된 벡터는 플러그인만 보관하며 사용자 라이브러리에는 기록되지 않습니다.",
         "cindySearchWeb": "Cindy AI로 공개 웹을 검색할 수 있음",
         "cindySearchWebDetail": "검색 요청은 공개 웹에 접근하며 Cindy AI 할당량을 소모할 수 있습니다.",

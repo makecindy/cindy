@@ -8161,6 +8161,7 @@
         "cindyEmbedText": "テキストをベクトルに変換できます（意味検索用）",
         "cindyModelsDecisions": "意思決定モデルを呼び出せます（モデル利用枠を使用）",
         "cindyModelsRerank": "リランキングモデルを呼び出せます（モデル利用枠を使用）",
+        "cindyModelsMediaRequest": "Cindy AI で画像・動画の生成、音声合成、文字起こしができます（モデル利用枠を使用）",
         "cindyEmbedTextDetail": "テキストはシステムのベクトルモデルに送られて数値列に変換されます。1 回あたり最大 {{max}} 件で、モデル料金が発生する場合があります。生成されたベクトルはプラグインだけが保持し、あなたのライブラリには書き込まれません。",
         "cindySearchWeb": "Cindy AI で公開ウェブを検索できます",
         "cindySearchWebDetail": "検索では公開ウェブにアクセスし、Cindy AI のクォータを消費する場合があります。",
