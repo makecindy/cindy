@@ -170,7 +170,10 @@ export function resetChannelToolScopeForTests(): void {
 }
 
 /** Output-only lease: deliberately separate from requester / channel API authority. */
-export type TelegramReplyMediaScope = Pick<TelegramToolScope, 'im' | 'laneUserId'>;
+export type TelegramReplyMediaScope = Pick<TelegramToolScope, 'im' | 'laneUserId'> & {
+  /** Present for replies continuing a specific requester's question. */
+  requesterIsOwner?: boolean;
+};
 const replyMediaBySession = new Map<string, {
   sessionInstanceId: string;
   scope: TelegramReplyMediaScope;

@@ -1051,7 +1051,9 @@ describe('turnRunner 渠道任务后台结果回传', () => {
   it('delivers a late question answer only to the originating Telegram account and topic', async () => {
     let appId = 'bot-1';
     runner = createTurnRunner({ ...fakeAdapter, channel: 'telegram',
-      im: { ...fakeAdapter.im, getStatus: () => ({ kind: 'connected', appId }) } }, fakeRepo, fakeCards);
+      im: { ...fakeAdapter.im, getStatus: () => ({ kind: 'connected', appId }) },
+      replyMediaScopeFor: laneUserId => ({ laneUserId, im: { getBotId: () => appId } as never }),
+    }, fakeRepo, fakeCards);
     const h = await channelAndIdle('desktop');
     const origin = h.send.mock.calls[0][1].origin;
     const stub = streamingHandleStub();
@@ -1061,6 +1063,8 @@ describe('turnRunner 渠道任务后台结果回传', () => {
       h.emit({ type: 'done', data: {} });
     };
     activateTelegramQuestionReply(origin, h.session);
+    expect(readTelegramReplyMediaScope({ sessionId: h.session.id, sessionInstanceId: h.session.instanceId }))
+      .toMatchObject({ requesterIsOwner: false });
     emitReply();
     await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith('answer result'));
     appId = 'replacement-bot';

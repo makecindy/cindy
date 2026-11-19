@@ -41,3 +41,10 @@ export function telegramQuestionAnswerOrigin(item: QueuedAnswer): SendOrigin | u
       item.mentions?.length || item.agentReferences?.length || item.contextFiles?.length || item.mergedDeliveryClientIds?.length) return;
   return routes.get(receipt.origin)?.answerOrigin;
 }
+
+// Only the coordinator's explicit retry boundary may transfer this capability
+// to a freshly generated input identity or a host-generated continuation.
+export function inheritTelegramQuestionRetry(previous: QueuedAnswer, retry: QueuedAnswer): void {
+  const origin = telegramQuestionAnswerOrigin(previous);
+  if (origin) stampTelegramQuestionAnswer(retry, origin);
+}

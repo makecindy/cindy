@@ -434,6 +434,7 @@ interface SessionState {
    * 桌面输入等其它来源不回传；在该轮终态清除，避免沿用到下一轮。
    */
   relayedTurn: boolean;
+  replyRequesterIsOwner?: boolean;
   replyMediaRelease?: () => void;
 }
 
@@ -1861,7 +1862,7 @@ export function createTurnRunner(
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.
         origin: channel === 'telegram' && ownsChannelOutput(state) && !item.turn.notificationReply
-          ? telegramOriginForTurn(state, userId, item.turn.scopeKey) : { kind: 'user', surface: 'im' },
+          ? telegramOriginForTurn(state, userId, item.turn.scopeKey, item.requesterIsOwner === true) : { kind: 'user', surface: 'im' },
         // The channel adapter and routing state live in Main. A symbol-keyed
         // context survives the in-process Session → Agent handoff but cannot be
         // fabricated by Renderer/device-link structured-clone input.
@@ -2331,16 +2332,17 @@ export function createTurnRunner(
     }
   }
 
-  function telegramOriginForTurn(state: SessionState, userId: string, scopeKey?: string) {
+  function telegramOriginForTurn(state: SessionState, userId: string, scopeKey: string | undefined, requesterIsOwner: boolean) {
     const session = state.makerSession;
     const account = captureImAccountGeneration();
-    const connected = im.getStatus();
+    const connected = im.getStatus?.();
     return telegramQuestionOrigin((answerSession) => {
       const status = im.getStatus();
       if (account === null || !isImAccountGenerationCurrent(account) ||
           answerSession !== session || state.makerSession !== session || sessionStates.get(session.id) !== state ||
           !ownsChannelOutput(state) || state.userId !== userId || state.scopeKey !== scopeKey ||
-          connected.kind !== 'connected' || status.kind !== 'connected' || status.appId !== connected.appId) return;
+          connected?.kind !== 'connected' || status.kind !== 'connected' || status.appId !== connected.appId) return;
+      state.replyRequesterIsOwner = requesterIsOwner;
       state.relayedTurn = true;
       updateReplyMediaScope(state);
     });
@@ -2365,7 +2367,7 @@ export function createTurnRunner(
     state.replyMediaRelease = beginTelegramReplyMediaScope({
       sessionId: session.id,
       sessionInstanceId: session.instanceId,
-      scope,
+      scope: { ...scope, requesterIsOwner: state.replyRequesterIsOwner },
       isActive: () => sessionStates.get(session.id) === state &&
         state.makerSession === session && state.relayedTurn && state.queue.length === 0 &&
         im.getStatus().kind === 'connected' && scope.im.getBotId() === botId,
@@ -4938,6 +4940,7 @@ export function createTurnRunner(
     attachSessionOutput: (session, userId, route, source) => {
       const existing = sessionStates.get(session.id);
       if (existing) {
+        existing.replyRequesterIsOwner = undefined;
         existing.relayedTurn = isRelayedChannelTurnSource(source);
         const userChanged = existing.userId !== userId;
         if (route?.companionChannel) {
@@ -4982,6 +4985,7 @@ export function createTurnRunner(
       const state = sessionStates.get(session.id);
       // An IM turn still in the queue owns whatever runs now; it is delivered once, as itself.
       if (state?.makerSession !== session || state.queue.length > 0) return;
+      if (source !== 'provider-wake') state.replyRequesterIsOwner = undefined;
       state.relayedTurn = isRelayedChannelTurnSource(source);
       updateReplyMediaScope(state);
     },
