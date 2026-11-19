@@ -1,6 +1,6 @@
 import type { DbClient } from '../../../desktop/src/main/localDb/client/DbClient.ts';
 import { touchUserSendRow } from '../../../desktop/src/main/localDb/sessionQueries.ts';
-import { upsertRecentWorkdir } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
+import { touchRecentWorkdir } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
 import { recordRecentWorkdirForSend } from '../../../desktop/src/main/localDb/ipc/touchUserSendRecentWorkdir.ts';
 
 /**
@@ -27,7 +27,7 @@ export function createHostTouchUserSend<Owner extends { client: DbClient }>(deps
       patch: { userSendAt: new Date(row.userSendAt!).toISOString(),
         lastActivityAt: new Date(row.lastActivityAt!).toISOString(), updatedAt: new Date(row.updatedAt).toISOString() } });
     await recordRecentWorkdirForSend({
-      updated, ts, dbClient: owner.client, ownerScope: owner, upsertRecentWorkdir,
+      updated, ts, dbClient: owner.client, ownerScope: owner, touchRecentWorkdir,
       broadcastRecentWorkdirsChanged: (path, scope) => {
         if (deps.getOwner() === scope) deps.broadcastRecentWorkdirsChanged(path);
       },

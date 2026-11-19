@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { INDEFINITE_SNOOZE_UNTIL } from '@cindy/maker-shared/live-task-priority';
 import { getDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { sessions as sessionTable } from '../../../desktop/src/main/localDb/schema.ts';
 import { sessionPatchToRow, sessionToCamel } from '../../../desktop/src/main/localDb/mapper.ts';
@@ -6,7 +7,7 @@ import type { DbClient } from '../../../desktop/src/main/localDb/client/DbClient
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { assertSessionContextWindowBudgetPatch } from '../../../desktop/src/main/localDb/sessionContextWindowBudgetPatch.js';
 import { isSessionSettingsOnlyPatch } from '../../../desktop/src/main/localDb/sessionSettingsOnlyPatch.ts';
-import { upsertRecentWorkdir } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
+import { touchRecentWorkdir } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
 import { cleanupSessionRuntimeForTerminalStatus } from '../../../desktop/src/main/localDb/sessionRuntimeCleanup.ts';
 import {
   assertReviewSessionPatchAllowed,
@@ -162,7 +163,7 @@ export function createHostSessionUpdate(deps: {
     await recordRecentWorkdirForMove({
       projectTargetChanged: patch.workspaceKind !== undefined || patch.workingDir !== undefined,
       row, dbClient, ownerScope: null,
-      upsertRecentWorkdir,
+      touchRecentWorkdir,
       broadcastRecentWorkdirsChanged: path => deps.move.broadcastRecentWorkdirsChanged(path),
     });
     // As updateSessionInDb's broadcast: the project the mapper dropped goes out with the move.
@@ -194,7 +195,7 @@ export function createHostSessionUpdate(deps: {
     }
     // The same date validation as desktop updateSessionInDb, before any row or other setting changes.
     const snoozedUntil = patch.snoozedUntil;
-    if (snoozedUntil !== undefined && snoozedUntil !== null) {
+    if (snoozedUntil !== undefined && snoozedUntil !== null && snoozedUntil !== INDEFINITE_SNOOZE_UNTIL) {
       const ms = typeof snoozedUntil === 'string' ? Date.parse(snoozedUntil) : NaN;
       if (!Number.isFinite(ms) || ms <= Date.now() || ms > Date.now() + 366 * 86_400_000) {
         throwIpcError('INVALID_PARAMS', 'snoozedUntil must be a future ISO timestamp within one year');

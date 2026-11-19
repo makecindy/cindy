@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import os from 'node:os';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
+import { INDEFINITE_SNOOZE_UNTIL } from '@cindy/maker-shared/live-task-priority';
 import { randomUUID } from 'node:crypto';
 import { createContextOverflowRollover } from '../../../desktop/src/main/maker-ipc/contextOverflowRollover.ts';
 import { commitContextRebuildWithPorts } from '../../../desktop/src/main/localDb/contextRebuildPersistence.ts';
@@ -36,7 +37,7 @@ import { lockSessionRoute } from './session-route-lock.mjs';
 import { createHostSessionMovePorts, createRecentWorkdirsChangedPush } from './session-move.ts';
 import { createHostTouchUserSend } from './touch-user-send.ts';
 import { setLiveCcSessionBridge } from '../../../desktop/src/main/maker-host/claude-transcript-relocation.ts';
-import { listRecentWorkdirs } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
+import { listRecentWorkdirs, upsertRecentWorkdir } from '../../../desktop/src/main/localDb/ipc/recentWorkdirsCore.ts';
 import { readSessionContextWindowBudget } from '../../../desktop/src/main/maker-host/session-context-budget-store.js';
 import { createSessionContextBudget } from '../../../desktop/src/main/maker-host/sessionContextBudgetCore.ts';
 import { ownerScopedPath } from '../../../desktop/src/main/ownerContext.ts';
@@ -756,6 +757,8 @@ test('move: an idle Codex task moves to a project; its runtime is closed, and th
   const f = await fixture(t);
   const from = moveDir(f, 'from');
   const to = moveDir(f, 'to');
+  // df520e3564: moving a task advances an existing project's usage time.
+  await upsertRecentWorkdir(to, 1_000);
   await f.task('move-codex', { agentKind: 'codex', workDir: from });
   await f.database.drizzle.update(sessions).set({ projectDir: from }).where(eq(sessions.id, 'move-codex'));
   f.runtime('move-codex', { agentKind: 'codex' });
@@ -770,7 +773,7 @@ test('move: an idle Codex task moves to a project; its runtime is closed, and th
   // { path }); its renderer listens on it (preload localDb.recentWorkdirs.onChanged), reached here through
   // the web shim and the client-mode window. Another channel or payload and the recent list goes stale.
   assert.deepEqual(recentPushes(f), [{ type: 'plugin_push', channel: 'local-db:recent-workdirs:changed', payload: { path: storedDir(to) } }]);
-  assert.ok((await listRecentWorkdirs()).some(entry => entry.path === storedDir(to)));
+  assert.ok((await listRecentWorkdirs()).find(entry => entry.path === storedDir(to))?.lastUsedAt > new Date(1_000).toISOString());
 });
 
 test('move: a Claude task\'s transcripts follow it, and the resume id the move persisted is in the row and the published patch', { timeout: 30_000 }, async t => {
@@ -935,7 +938,10 @@ test('updatedAt: settings-only patches leave it, a status change moves it', { ti
 
 // §3.2 DB: the upstream Inbox writes through /api/sessions/update in client mode.
 // This entry rejected snoozedUntil. A valid future deadline must save and publish both
-// timestamps without changing the task status or activity. Invalid input must write nothing.
+// timestamps without changing the task status or activity. ccda86c776 also reserves
+// one ISO value past the one-year limit. A regular date alone misses that branch.
+// Minimal failing input: the reserved value through the same service, with no other patch.
+// Invalid input must still write nothing. This DB case reuses the existing migrated fixture.
 test('task snooze: the Host update saves, rejects and clears the date like the desktop', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
   const id = 'snoozed-task';
@@ -965,6 +971,15 @@ test('task snooze: the Host update saves, rejects and clears the date like the d
   assert.deepEqual(await f.row(id), row);
   assert.equal(f.events.length, pushes);
 
+  const { status: indefiniteStatus, body: indefinite } = await update({ snoozedUntil: INDEFINITE_SNOOZE_UNTIL });
+  assert.equal(indefiniteStatus, 200);
+  assert.equal(indefinite.snoozedUntil, INDEFINITE_SNOOZE_UNTIL);
+  const indefiniteRow = await f.row(id);
+  assert.equal(indefiniteRow.snoozedUntil, Date.parse(INDEFINITE_SNOOZE_UNTIL));
+  assert.equal(indefiniteRow.updatedAt, 1);
+  assert.deepEqual(movedEvents(f, id).at(-1).patch,
+    { snoozedUntil: INDEFINITE_SNOOZE_UNTIL, snoozedAt: indefinite.snoozedAt });
+
   const { body: cancelled } = await update({ snoozedUntil: null });
   assert.deepEqual([cancelled.snoozedUntil, cancelled.snoozedAt], [null, null]);
   assert.deepEqual(movedEvents(f, id).at(-1).patch, { snoozedUntil: null, snoozedAt: null });
@@ -976,7 +991,9 @@ test('task snooze: the Host update saves, rejects and clears the date like the d
   assert.deepEqual(movedEvents(f, id).at(-1).patch, { status: 'archived', snoozedUntil: null, snoozedAt: null });
 });
 
-test('send: the project a send was made in becomes recent and is announced; an unchanged stamp or another owner announces nothing', { timeout: 30_000 }, async t => {
+// df520e3564: a send in an unregistered directory must neither add a project nor push a project refresh.
+// The existing fixture covered recency and owner checks, but not the registered/unregistered boundary.
+test('send: only a registered project becomes recent and is announced; an unchanged stamp or another owner announces nothing', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
   const project = moveDir(f, 'sent-project');
   await f.task('sent', { workDir: project });
@@ -987,9 +1004,14 @@ test('send: the project a send was made in becomes recent and is announced; an u
   let reads = 0;
   const touch = createHostTouchUserSend({ getOwner: () => (reads++ === 0 ? owner : after), publish: event => f.events.push(event),
     broadcastRecentWorkdirsChanged: createRecentWorkdirsChangedPush(event => f.events.push(event)) });
+  await touch('sent', 4_000);
+  assert.equal((await listRecentWorkdirs()).some(entry => entry.path === storedDir(project)), false);
+  assert.deepEqual(recentPushes(f), []);
+  await upsertRecentWorkdir(project, 1_000);
+
   reads = 0;
   await touch('sent', 5_000);
-  assert.ok((await listRecentWorkdirs()).some(entry => entry.path === storedDir(project)));
+  assert.equal((await listRecentWorkdirs()).find(entry => entry.path === storedDir(project))?.lastUsedAt, new Date(5_000).toISOString());
   assert.deepEqual(recentPushes(f), [{ type: 'plugin_push', channel: 'local-db:recent-workdirs:changed', payload: { path: storedDir(project) } }]);
   assert.equal(movedEvents(f, 'sent').at(-1).patch.userSendAt, new Date(5_000).toISOString());
   const events = f.events.length;
