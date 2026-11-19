@@ -3,6 +3,7 @@ import type { TaskActionDeliveryGuard } from './taskActionAuthorization.js';
 import type { RemoteSessionCreation, RemoteSessionCreated } from '../../shared/remoteSessionCreation.js';
 import { resolveSessionExecutionSelection, type SessionExecutionSelection } from './sessionExecutionSelection.js';
 import type { HandoffWorkingDirValidation } from './handoffWorkingDir.js';
+import { serializeSessionOrigin, type SessionOrigin } from '../../shared/sessionOrigin.js';
 
 type Failure = { ok: false; errorCode: string; message: string };
 type Execution = Pick<RemoteSessionCreated, 'agentKind' | 'model' | 'fastMode'>
@@ -53,7 +54,12 @@ export function createRemoteSessionOpener(deps: {
   discardWorktree(id: string): Promise<unknown>;
   broadcastCreated(id: string): void;
 }) {
-  return async (id: string, input: RemoteSessionCreation, guard: TaskActionDeliveryGuard): Promise<({ ok: true } & RemoteSessionCreated) | Failure> => {
+  /**
+   * `origin`: the sending task as stamped by this host (`deviceId::sessionId` from the authenticated
+   * controller). Stored in the same insert, before the created broadcast, so the sidebar mark and the
+   * header entry appear with the task; the first message still carries the same origin.
+   */
+  return async (id: string, input: RemoteSessionCreation, guard: TaskActionDeliveryGuard, origin?: SessionOrigin | null): Promise<({ ok: true } & RemoteSessionCreated) | Failure> => {
     const assertOwner = deps.captureOwner();
     const check = async () => { assertOwner(); await guard(); assertOwner(); };
     try { return await deps.withSessionLock(id, async () => {
@@ -100,7 +106,8 @@ export function createRemoteSessionOpener(deps: {
           // Revalidate the source after model/directory preparation and before the first write.
           await check(); assertCurrent();
           persistenceStarted = true;
-          await deps.openSessionCommit({ ...row, worktreePath }, assertCurrent);
+          await deps.openSessionCommit({ ...row, worktreePath,
+            ...(origin ? { originSession: serializeSessionOrigin(origin) } : {}) }, assertCurrent);
         });
         assertOwner();
         deps.broadcastCreated(id);

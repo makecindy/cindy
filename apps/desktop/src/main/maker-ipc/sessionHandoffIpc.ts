@@ -8,6 +8,7 @@ import { matchesForwardedRequest, readForwardedRequestSource, type AgentRequestR
 import { DL_SESSION_HANDOFF_CHANNEL } from '@cindy/device-link';
 import { sanitizeSourceName } from '@cindy/maker-shared/message-source';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { sessionOriginFromInputMeta } from '../../shared/sessionOrigin.js';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { hasRemoteBotSessionLookup } from '../device-link/remoteBotSessionBoundary.js';
 import { requireObject, throwIpcError } from '../utils/ipcValidate.js';
@@ -116,11 +117,19 @@ export function createSessionHandoffHandler(deps: {
     try { await taskActionDeliveryGuard(); } catch {
       return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task action authorization expired; no message was sent.' };
     }
+    // One host-stamped source for the task row and its first message (message-source.md).
+    const sessionOrigin: NonNullable<AgentInputQueuedMessage['origin']> | undefined = plugin ? undefined : {
+      kind: 'session',
+      senderSessionId: `${controllerDeviceId}::${senderSessionId}`,
+      displayText: message,
+      ...(senderSessionTitle ? { senderSessionTitle } : {}),
+    } as NonNullable<AgentInputQueuedMessage['origin']>;
     const titleOwner = deps.refineTitle && creation && !plugin && !creation.title?.trim() ? getCurrentDbClientSnapshot() : null;
     let created: RemoteSessionCreated | undefined;
     if (creation) {
       const initial = !plugin && !creation.title?.trim() ? { ...creation, title: normalizeAutoTitle(body) } : creation;
-      const opened = await deps.create!(targetSessionId, initial, taskActionDeliveryGuard);
+      const opened = await deps.create!(targetSessionId, initial, taskActionDeliveryGuard,
+        sessionOriginFromInputMeta(sessionOrigin ? { origin: sessionOrigin } : undefined));
       if (!opened.ok) {
         if (opened.errorCode !== 'DELIVERY_UNKNOWN') await taskActionDeliveryGuard.onSettled().catch(() => undefined);
         return opened;
@@ -135,12 +144,7 @@ export function createSessionHandoffHandler(deps: {
       targetSessionId,
       message,
       ...(plugin ? { inheritTargetPlanMode: true as const, sourcePlugin: { pluginId: `${controllerDeviceId}::${senderPluginId}`,
-        ...(senderPluginName ? { name: senderPluginName } : {}) } } : { origin: {
-        kind: 'session',
-        senderSessionId: `${controllerDeviceId}::${senderSessionId}`,
-        displayText: message,
-        ...(senderSessionTitle ? { senderSessionTitle } : {}),
-      } as NonNullable<AgentInputQueuedMessage['origin']> }),
+        ...(senderPluginName ? { name: senderPluginName } : {}) } } : { origin: sessionOrigin! }),
       resumeWithStoredPermissionMode: true,
     });
     if (!result.ok) {

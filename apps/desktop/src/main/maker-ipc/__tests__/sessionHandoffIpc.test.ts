@@ -100,6 +100,32 @@ describe('maker:session:handoff (receiving computer)', () => {
     expect(insert).toHaveBeenCalledOnce(); expect(send).toHaveBeenCalledOnce();
   });
 
+  // #11610 review: cross-computer creation inserts the row in the opener and then delivers with an
+  // existing targetSessionId, so the send_to_session create branch never ran for it. The task row must
+  // carry the same host-stamped source as the first message, already in the insert that precedes the
+  // created broadcast; a plugin sender is attributed to the plugin and records no source task.
+  it('records the stamped source task on a remotely created task before announcing it', async () => {
+    const { id, rows, insert, deps } = creationFixture();
+    const send = vi.fn(async () => ({ ok: true as const, agentKind: 'codex', wakeKind: 'queued' as const,
+      targetTitle: 'Work', targetLastUserSendAt: null }));
+    const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
+    await handle('source-device', { ...request, sender: { sessionId: 'sender-1', title: '「PR」\n跟进' },
+      sessionId: id, action: 'create', create: { permissionMode: 'ask' } });
+    const stamped = { sessionId: 'source-device::sender-1', title: '"PR" 跟进' };
+    expect(JSON.parse(rows.get(id)!.originSession as string)).toEqual(stamped);
+    expect(insert.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.broadcastCreated).mock.invocationCallOrder[0]);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      origin: expect.objectContaining({ senderSessionId: stamped.sessionId, senderSessionTitle: stamped.title }) }));
+
+    const plugin = creationFixture();
+    const pluginId = '33333333-3333-4333-8333-333333333333';
+    const pluginHandle = createSessionHandoffHandler({ create: createRemoteSessionOpener(plugin.deps), send, validate: async () => true });
+    expect(await pluginHandle('source-device', { taskActionReceipt: 'plugin-receipt', message: 'hello',
+      sender: { kind: 'plugin', pluginId: 'dashboard' }, sessionId: pluginId, action: 'create', create: { permissionMode: 'ask' } }))
+      .toMatchObject({ ok: true });
+    expect(plugin.rows.get(pluginId)).not.toHaveProperty('originSession');
+  });
+
   it('keeps creation out of unsupported or revoked receivers', async () => {
     const create = vi.fn(); const send = vi.fn();
     const wire = { ...request, sessionId: '22222222-2222-4222-8222-222222222222', action: 'create', create: { permissionMode: 'ask' } };

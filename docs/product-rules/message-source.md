@@ -105,6 +105,7 @@ Agent 用 `send_to_session` 把消息发给另一台电脑上的任务时（包�
 
 - 只记「由任务发送」：插件派发以插件为准，群话题 / 群请求没有来源任务，都不记。跨电脑来源沿用 `deviceId::sessionId`。
 - 与 `parent_session_id`（分叉）、`orca_role` / `orca_remote_lead`（Orca 协同）互不相干；Orca Worker 不进侧栏，不受影响。
+- 本机新建在 `register.ts` 的新建分支里写入；另一台电脑远程新建由接收电脑的 `createRemoteSessionOpener` 在插入任务行时一并写入（来源同首条消息，`deviceId::sessionId` 由接收方按认证的控制端设备盖章），都在「任务已创建」广播之前。
 - 新增可空列，不回填历史；写入失败只少一个标记，消息上的来源标签照常。只用于归属展示，不是权限判据。
 - 桌面侧栏行在标题前显示小标记，悬停「由「X」发起」，点这一行仍打开它自己；标题区常驻「来自「X」」入口，点击回到
   来源任务（跳转与消息来源标签共用 `useSourceSessionOpener`）。标题优先取来源任务的实时标题，取不到用快照。
