@@ -199,7 +199,9 @@ let activeCatalog = 'installed';
 function showPage(page, focusId = page + '-title') {
   for (const id of pageIds) byId(id).hidden = id !== page;
   byId('catalog-toolbar').hidden = page === 'author';
-  byId(focusId).focus();
+  const target = byId(focusId);
+  target?.focus();
+  if (document.activeElement !== target) byId(page + '-title').focus();
 }
 
 function selectPanel(buttons, attribute, panel) {
