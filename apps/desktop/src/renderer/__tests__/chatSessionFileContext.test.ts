@@ -245,6 +245,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
     expect(local).toEqual([
       {
         src: 'xdt-image://sess/burned.png',
+        galleryId: 'message:u2:image:0',
         annotationSourceUrl: 'xdt-image://sess/orig.png',
         annotationStrokes: [{ points: [{ x: 0.1, y: 0.2 }] }],
       },
@@ -316,7 +317,7 @@ describe('collectSessionImageSrcs 与渲染改写同源契约', () => {
 
     expect(createGhostCardSpawnIndex(ghostCards).get('card-1')).toHaveLength(1);
     expect(collectSessionImageSrcs(mixedItems, undefined, ghostCards)).toEqual([
-      { src: userImage },
+      { src: userImage, galleryId: 'message:u-gallery:image:0' },
       { src: rootImage, galleryId: ghostCardGalleryId('card-1', 0) },
       { src: spawnImage, galleryId: ghostCardGalleryId(spawnCallId, 0) },
       { src: anchoredImage },

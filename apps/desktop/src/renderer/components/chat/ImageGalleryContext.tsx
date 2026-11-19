@@ -10,6 +10,8 @@ import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 /** 会话画廊里的一张图:src 为渲染所用 URL(标注图 = 烧录图)。 */
 export interface GalleryImage {
   src: string;
+  /** 展示名(用户附件的原始文件名等);缺省时由 src 推导。 */
+  name?: string;
   /**
    * Optional stable identity for images rendered outside the host DOM, such as
    * plugin card iframe images. It disambiguates repeated URLs when opening the
@@ -29,7 +31,7 @@ export const ImageGalleryContext = createContext<readonly GalleryImage[] | null>
 export function galleryImagePreviewItem(image: GalleryImage, id: string): AttachmentCollectionItem {
   return {
     id: image.galleryId ?? id,
-    name: previewSourceName(image.src, 'Image'),
+    name: image.name ?? previewSourceName(image.src, 'Image'),
     source: image.src,
     kind: 'image',
     media: true,

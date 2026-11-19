@@ -54,6 +54,8 @@ interface ChatImageViewProps {
   src: string;
   filename: string;
   variant: ChatImageVariant;
+  /** 该图在任务画廊中的稳定身份；重复 src 时用于定位到被点击的那一次出现。 */
+  galleryId?: string;
   /**
    * 当这张图是一个 3D 模型任务的预览缩略图时,把对应模型文件的元数据传过来。
    * 设置后点击路由到 ModelLightbox(3D 查看器),右键菜单从默认的"复制图片 /
@@ -109,6 +111,7 @@ export function ChatImageView({
   src,
   filename,
   variant,
+  galleryId,
   modelFile,
   sessionId,
   annotationSourceUrl,
@@ -361,6 +364,7 @@ export function ChatImageView({
         ) : (
           <ImageLightbox
             filename={filename}
+            galleryId={galleryId}
             src={displaySrc} enableGallery onClose={closePreview} />
         ))}
       {lightboxOpen === 'model' && modelFile && (
