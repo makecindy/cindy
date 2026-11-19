@@ -60,6 +60,7 @@ import {
   selectSessionWithCount,
   selectSessionsByIds,
   flattenSessionReadRow,
+  projectSessionDetail,
   projectSessionReadResult,
   type SessionListRow,
 } from '../sessionQueries';
@@ -1508,7 +1509,7 @@ export function registerSessionIpc(
     const db = getDbClient().drizzle;
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return projectSessionReadResult(row, opts.resolveContextWindow);
+    return projectSessionDetail(row, opts.resolveContextWindow);
   });
 
   /**
