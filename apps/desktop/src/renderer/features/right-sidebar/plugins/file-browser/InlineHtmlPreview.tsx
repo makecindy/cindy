@@ -1,17 +1,21 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
 import { browserWebviewPool } from '../../lib/browserWebviewPool';
 import { pathToFileUrl } from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { toOsAbsolutePath } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
-import { BrowserResourceNotices } from '../web-browser/BrowserResourceNotices';
 import { useLocalHtmlAutoReload } from '../web-browser/useLocalHtmlAutoReload';
 import { useHiddenPageAudioMute } from '../web-browser/useHiddenPageAudioMute';
 import { closeTab } from '../../store';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('rightSidebar.inlineHtmlPreview');
+
+// Ordinary file previews do not need the browser tab's UI bundle.
+const BrowserResourceNotices = lazy(() =>
+  import('../web-browser/BrowserTabBody').then(module => ({ default: module.BrowserResourceNotices })),
+);
 
 export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, sessionId, tabId, active }: {
   workdir: string; relPath: string; deviceId?: string | null; remoteHostId?: string | null;
@@ -146,12 +150,21 @@ export function InlineHtmlPreview({ workdir, relPath, deviceId, remoteHostId, se
     {!browser.crash && status !== 'ready' && <div role="status" className="absolute inset-0 grid place-items-center bg-content-area p-3 text-sm text-muted-foreground">
       {t(status === 'failed' ? 'ccAgent.common.openFailed' : 'ccAgent.workdirBrowse.treeLoading')}
     </div>}
-    <BrowserResourceNotices tabId={tabId} tabVisible={active} crash={browser.crash}
-      resourceAlert={browser.resourceAlert} dismissResourceAlert={browser.dismissResourceAlert}
-      onRecover={() => {
-        const src = webview?.getAttribute('src');
-        if (browser.crash?.reason === 'unresponsive' || browser.crash?.reason === 'navigation-loop') browser.reload();
-        else if (src) browser.navigate(src);
-      }} />
+    {(browser.crash || browser.resourceAlert) && (
+      <Suspense fallback={null}>
+        <BrowserResourceNotices
+          tabId={tabId}
+          tabVisible={active}
+          crash={browser.crash}
+          resourceAlert={browser.resourceAlert}
+          dismissResourceAlert={browser.dismissResourceAlert}
+          onRecover={() => {
+            const src = webview?.getAttribute('src');
+            if (browser.crash?.reason === 'unresponsive' || browser.crash?.reason === 'navigation-loop') browser.reload();
+            else if (src) browser.navigate(src);
+          }}
+        />
+      </Suspense>
+    )}
   </div>;
 }
