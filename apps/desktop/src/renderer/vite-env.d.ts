@@ -1232,6 +1232,8 @@ interface ElectronAPI {
   appDisplayVersion: string;
   appDisplayVersionDetail: string;
   preferredSystemLocale: ApplicationMenuLocale;
+  restoreDisplayLanguage?: (legacy: import('../shared/locale').LocalePreference | null) => Promise<import('../shared/locale').LocalePreference | null>;
+  saveDisplayLanguage?: (preference: import('../shared/locale').LocalePreference, onlyIfUnset?: boolean) => Promise<boolean>;
   onLocaleChanged?: (
     cb: (locale: import('../shared/locale').SupportedLocale) => void,
   ) => () => void;

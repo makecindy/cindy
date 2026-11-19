@@ -1176,6 +1176,7 @@ import {
 } from '../shared/windowBehavior.js';
 import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './commands/index.js';
 import { registerRemoteCmdIpc } from './commands/remoteCmdIpc.js';
+import { readDisplayLanguagePreference, registerDisplayLanguagePreference } from './display-language-preference.js';
 import { resolvePreferredSystemLocale, resolveSystemLocale } from '../shared/locale.js';
 import {
   isImDefaultSettingsChannel,
@@ -3365,6 +3366,11 @@ function getPreferredApplicationLocale(): ApplicationMenuLocale {
   return resolvePreferredSystemLocale(langs.length > 0 ? langs : [app.getLocale()]);
 }
 
+function getInitialApplicationLocale(): ApplicationMenuLocale {
+  const saved = readDisplayLanguagePreference();
+  return saved && saved !== 'system' ? saved : getPreferredApplicationLocale();
+}
+
 function dispatchApplicationMenuCommand(
   menuWindow: BrowserWindow,
   command: ApplicationMenuCommand,
@@ -3462,7 +3468,7 @@ function persistedZoomMenuItems(
 
 function installApplicationMenu(
   mainWindow: BrowserWindow,
-  locale: ApplicationMenuLocale = getPreferredApplicationLocale(),
+  locale: ApplicationMenuLocale = getInitialApplicationLocale(),
 ): void {
   if (process.platform !== 'darwin') {
     Menu.setApplicationMenu(null);
@@ -3647,13 +3653,14 @@ function reinstallApplicationMenuIfPresent(): void {
   if (mainWindow) {
     installApplicationMenu(
       mainWindow,
-      currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
+      currentApplicationMenuLocale ?? getInitialApplicationLocale(),
     );
   }
 }
 getAppShortcutStore().subscribe(reinstallApplicationMenuIfPresent);
 subscribeAppShortcutRecording(reinstallApplicationMenuIfPresent);
 
+registerDisplayLanguagePreference();
 ipcMain.on('app-locale:get-preferred-system-locale-sync', (event) => {
   event.returnValue = getPreferredApplicationLocale();
 });
@@ -4802,7 +4809,7 @@ const createWindow = () => {
 
   installApplicationMenu(
     mainWindow,
-    currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
+    currentApplicationMenuLocale ?? getInitialApplicationLocale(),
   );
 
   // Windows / Linux 没有 Mac 应用菜单 accelerator。主窗口和会话副窗口都走
@@ -4881,12 +4888,12 @@ const createWindow = () => {
       resourceUsagePrewarmTimer = null;
       if (isQuitting || mainWindowRef !== mainWindow || mainWindow.isDestroyed()) return;
       resourceUsageWindowController.setLocale(
-        currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
+        currentApplicationMenuLocale ?? getInitialApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
       windowsQuotaPanel?.prewarm();
       remoteDesktopViewerWindows.setLocale(
-        currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
+        currentApplicationMenuLocale ?? getInitialApplicationLocale(),
       );
       remoteDesktopViewerWindows.prewarm();
       // 侧栏「弹出」已改为按页签弹出(sidebar tab window):预热一扇未指派的隐藏

@@ -225,7 +225,7 @@ import type {
 } from '../shared/local-themes';
 import type { LocalThemeImportResult } from '../shared/theme-import/types';
 import type { CindyFileOpenResult } from '../shared/cindyFile';
-import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from '../shared/locale';
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES, isLocalePreference, type LocalePreference, type SupportedLocale } from '../shared/locale';
 import type { RawReleaseNotes } from '../shared/releaseNotesContent';
 import {
   MODEL_ACCESS_STATUS_CHANNEL,
@@ -1304,6 +1304,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getArm64Translation: (): Promise<boolean> => ipcRenderer.invoke('app:get-arm64-translation'),
   clientEndpoints: { websiteUrl: clientEndpointsInfo?.websiteUrl ?? '' },
   preferredSystemLocale: readInitialPreferredSystemLocale(),
+  restoreDisplayLanguage: async (legacy: LocalePreference | null): Promise<LocalePreference | null> => {
+    const saved: unknown = await ipcRenderer.invoke('app-locale:preference', 'restore', legacy);
+    return isLocalePreference(saved) ? saved : null;
+  },
+  saveDisplayLanguage: async (preference: LocalePreference, onlyIfUnset?: boolean): Promise<boolean> =>
+    (await ipcRenderer.invoke('app-locale:preference', onlyIfUnset ? 'import' : 'set', preference)) === preference,
   appDisplayVersion: appDisplayVersionInfo.display,
   appDisplayVersionDetail: appDisplayVersionInfo.detail,
   getDeviceId: (): Promise<string> => ipcRenderer.invoke('get-device-id'),
