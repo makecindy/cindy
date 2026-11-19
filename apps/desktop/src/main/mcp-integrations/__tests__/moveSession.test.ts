@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   dialogueRoot: '',
+  registered: [] as Array<{ path: string }>,
   owner: { dataOwnerId: 'owner-a', ownerGeneration: 1 },
   query: vi.fn(),
   botLinks: [] as Array<{ botId: string }>,
@@ -27,11 +28,11 @@ vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../../localDb/client/current.js', async () => {
-  const { botSessionLinks } = await import('../../localDb/schema.js');
+  const { botSessionLinks, recentWorkdirs } = await import('../../localDb/schema.js');
   const client = {
     drizzle: {
       select: () => ({
-        from: (table: unknown) => ({
+        from: (table: unknown) => table === recentWorkdirs ? Promise.resolve(h.registered) : ({
           where: () => ({
             limit:
               table === botSessionLinks
@@ -52,6 +53,7 @@ vi.mock('../../localDb/ipc/recentWorkdirs.js', async (importOriginal) => {
     upsertRecentWorkdir: vi.fn(),
   };
 });
+vi.mock('../../sidebarSettingsStoreCore.js', () => ({ loadSidebarSettingsSnapshot: () => ({ hiddenProjectKeys: [] }) }));
 vi.mock('../../sidebarSettingsStore.js', () => ({ restoreLocalProjectVisibility: vi.fn() }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../../im/binding.js', () => ({
@@ -67,6 +69,7 @@ describe('moveSession host', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     directory = await mkdtemp(path.join(os.tmpdir(), 'cindy-move-session-'));
+    h.registered = [{ path: directory.replaceAll('\\', '/') }];
     h.dialogueRoot = path.join(directory, 'dialogues');
     h.owner = { dataOwnerId: 'owner-a', ownerGeneration: 1 };
     h.running = new Set();
@@ -279,6 +282,8 @@ describe('moveSession host', () => {
   );
   it('rejects missing directories, files, and relative paths without writing', async () => {
     expect(await run(path.join(directory, 'missing'))).toMatchObject({ errorCode: 'NOT_FOUND' });
+    await mkdir(path.join(directory, 'unregistered'));
+    expect(await run(path.join(directory, 'unregistered'))).toMatchObject({ errorCode: 'NOT_FOUND' });
     await writeFile(path.join(directory, 'file'), 'keep');
     expect(await run(path.join(directory, 'file'))).toMatchObject({ ok: false });
     expect(await run('relative')).toMatchObject({ errorCode: 'INVALID_ARGS' });
@@ -292,6 +297,7 @@ describe('moveSession host', () => {
     const ordinary = path.join(directory, 'ordinary');
     const managed = path.join(directory, managedName, 'task');
     const alias = path.join(directory, 'alias');
+    h.registered.push({ path: alias.replaceAll('\\', '/') });
     await mkdir(ordinary);
     await mkdir(managed, { recursive: true });
     try {

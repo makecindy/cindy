@@ -44,6 +44,7 @@ const remoteCollabHandoffSource = readSource('features', 'cc-agent', 'remoteColl
 const deviceSwitcherPillSource = readSource('components', 'new-chat', 'DeviceSwitcherPill.tsx');
 
 const controllableDevicesHookSource = readSource('hooks', 'useControllableDevices.ts');
+const deviceListSource = readSource('features', 'device-link', 'useDeviceLinkDeviceList.ts');
 
 const deviceLinkRemoteProjectsSource = readSource(
   'features',
@@ -712,10 +713,10 @@ describe('Shared create project picker', () => {
   // 列表会合法变空,若按「非空」gate,回落永远不触发,草稿会永久指着一台已消失的设备。
   it('distinguishes a loaded-empty device snapshot from a not-yet-loaded one', () => {
     expect(controllableDevicesHookSource).toContain(
-      'export function useSelectableDevices(): { devices: SelectableDevice[]; loaded: boolean }',
+      'export function useSelectableDevices(): SelectableDevicesSnapshot',
     );
     // 拉取失败(device-link 不可用)的空不作数,不得据此清掉用户选定的设备。
-    expect(controllableDevicesHookSource).toContain('setLoaded(false);');
+    expect(controllableDevicesHookSource).toContain("const loaded = status === 'ready' ||");
     expect(newMakerDraftRouteSource).toContain('if (!selectableDevicesLoaded) return;');
     expect(newMakerDraftRouteSource).not.toContain('if (selectableDevices.length === 0) return;');
   });
@@ -964,19 +965,18 @@ describe('Shared create project picker', () => {
     );
   });
 
-  // #807 review 第九轮:设备列表刷新要按请求序号丢弃过期响应。首次加载与两个监听会并发调
-  // refresh,REST 响应可能乱序 —— 更早的 listDevices 晚到会把新的权威快照覆盖掉,把刚被解除配对
-  // 的设备连同 loaded=true 一起写回来,于是回落认为目标仍有效、picker 也允许再次选中它。
+  // 创建页复用共享目录的请求代次，不得另造一份缺少重连/失败恢复的设备缓存。
+  // 乱序成功/失败与登出期间晚到响应的行为回归见 selectableDeviceRecovery.test.tsx。
   it('discards superseded device-list refreshes', () => {
     const hook = controllableDevicesHookSource.slice(
       controllableDevicesHookSource.indexOf('export function useSelectableDevices()'),
     );
     const body = hook.slice(0, hook.indexOf('export function useControllableDevices()'));
-    expect(body).toContain('const requestId = requestIdRef.current + 1;');
-    // 成功与失败两条路径都要 gate,否则过期的失败会误把 loaded 打回 false。
-    expect(
-      (body.match(/requestIdRef\.current !== requestId/g) ?? []).length,
-    ).toBeGreaterThanOrEqual(2);
+    expect(body).toContain('useDeviceLinkDeviceList()');
+    expect(body).toContain('useDeviceLinkDeviceListRequestState()');
+    expect(body).not.toContain('.listDevices(');
+    expect((deviceListSource.match(/gen !== loadGeneration/g) ?? []).length)
+      .toBeGreaterThanOrEqual(2);
   });
 
   // #807 review 第八轮:两处对称性缺口,都是前几轮修复的直接后果。
@@ -1078,12 +1078,18 @@ describe('Shared create project picker', () => {
   it('keeps the last known device rows when listDevices fails', () => {
     // 清空会造成死角:选了远程设备后一次瞬时失败就让 pill 返回 null,而回落 effect 又(正确地)
     // 因为空不权威而不动草稿 —— 草稿仍指着那台设备,UI 上却没有控件能切回本机。
-    const catchBlock = controllableDevicesHookSource.slice(
-      controllableDevicesHookSource.indexOf('**保留上次已知的设备行**'),
+    // 目录过期 / 读取失败、暂时没有列表时保留上次的行(标为离线),行为见 selectableDeviceRecovery.test.tsx。
+    expect(controllableDevicesHookSource).toContain(
+      'previous.devices.map((d) => (d.online ? { ...d, online: false } : d))',
     );
-    const untilEnd = catchBlock.slice(0, catchBlock.indexOf('};'));
-    expect(untilEnd).toContain('setLoaded(false);');
-    expect(untilEnd).not.toContain('setDevices(');
+    expect(controllableDevicesHookSource).toContain("const loaded = status === 'ready' ||");
+    const failure = deviceListSource.slice(
+      deviceListSource.indexOf('markRequestFailed(error);'),
+      deviceListSource.indexOf('finishRefresh(gen, background);',
+        deviceListSource.indexOf('markRequestFailed(error);')),
+    );
+    expect(failure).toContain('scheduleRetry();');
+    expect(failure).not.toMatch(/setDevices\(|clearDevices\(/);
   });
 
   it('gates the post-delete authoritative reload on device identity, not the shared request id', () => {
@@ -1261,12 +1267,12 @@ describe('Shared create project picker', () => {
    * 它真正依赖的那一半(设备 / 项目)。新增路径时,①会直接失败,而②保证它自动是对的。
    */
   it('routes every draft-target transition through the single action', () => {
-    // 七条路径:设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
+    // 八条路径:上次创建目标、设备 pill、设备域浏览器选项目、工作区 picker、所选设备失效后的自动回落、
     // “对话”分组导航请求，以及通用入口在导航请求后或直接挂载时预填默认目录。
     // 声明本身是 `= useCallback(` 不匹配这个模式,所以数出来的就是调用点。
     // (远程 Agent 由模型选择器选择、只在本机任务出现,不再经设备菜单转移草稿目标。)
     const calls = newMakerDraftRouteSource.match(/applyDraftTarget\(\{/g) ?? [];
-    expect(calls.length).toBe(7);
+    expect(calls.length).toBe(8);
     // 组件里不得再有任何一处手写这些副作用 —— 手写一处就等于又开了一条绕过推导的路。
     // patchDraft 仍可出现(入场清 extraDirs、发送后复位),但不得再带设备字段。
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: deviceId,');

@@ -61,6 +61,75 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  it('loads selected history and the inline reply from the connected chat, including image-only messages', async () => {
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => ({ absPath: `/media/${token}`, url: `cindy-media://${token}` }));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, true);
+    const photo = (guid: string) => ({ guid, transferName: guid + '.png', mimeType: 'image/png' });
+    f.message('a', { text: '', attachments: [photo('one'), photo('two')] });
+    f.message('b', { attachments: [photo('two'), photo('missing'), photo('three')] });
+    f.message('elsewhere', { chats: [f.otherChat], attachments: [photo('private')] });
+    f.message('question', { threadOriginatorGuid: 'a' });
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async id => {
+      if (id === 'missing') throw new Error('unavailable');
+      return new Uint8Array([1]);
+    });
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const event = f.received[0]!;
+    expect(event.imessageReplyGuid).toBe('a');
+    const result = await f.im.contextMedia(event, ['elsewhere', 'a', 'b']);
+    expect(result.reply?.messageId).toBe('a');
+    expect(result.attachments.map(file => [file.kind, file.originalName])).toEqual([
+      ['image', 'one.png'], ['image', 'two.png'], ['image', 'three.png']]);
+    expect(result.unavailable).toEqual(['missing.png', '原消息不可用']);
+    expect(download.mock.calls.map(([id]) => id)).toEqual(['one', 'two', 'missing', 'three']);
+  });
+
+  it.each(['image', 'file'] as const)('counts only delivered %s history attachments toward the remaining slot', async kind => {
+    const stored = (id: string) => ({ absPath: `/media/${id}`, url: `cindy-media://${id}`, mimeType: 'image/png', discard: async () => {} });
+    const cacheImage = vi.fn(async ({ token }: { token: string }) => stored(token.endsWith(':duplicate') ? 'current' : 'new'));
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, false,
+      { stage: async ({ fileName }) => stored(fileName === 'duplicate.txt' ? 'current' : 'new') });
+    const ext = kind === 'image' ? 'png' : 'txt';
+    f.message('root', { attachments: ['duplicate', 'failed', 'new'].map(guid =>
+      ({ guid, transferName: `${guid}.${ext}`, mimeType: kind === 'image' ? 'image/png' : 'text/plain' })) });
+    f.message('question', { threadOriginatorGuid: 'root' });
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async guid => {
+      if (guid === 'failed') throw new Error('temporary failure');
+      return new Uint8Array([1]);
+    });
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const event = { ...f.received[0]!, attachments: Array.from({ length: kind === 'image' ? 5 : 3 }, (_, index) =>
+      ({ ...stored(index === 0 ? 'current' : `current-${index}`), kind, originalName: `current.${ext}` })) };
+    const result = await f.im.contextMedia(event, []);
+    expect(result.attachments.map(item => item.originalName)).toEqual([`new.${ext}`]);
+    expect(result.unavailable).toEqual([`failed.${ext}`]);
+    expect(download.mock.calls.map(([id]) => id)).toEqual(['duplicate', 'failed', 'new']);
+  });
+
+  it('reuses cached reply images after chat validation without pinning or downloading again', async () => {
+    const cached = { absPath: '/media/cached.png', url: 'cindy-media://cached', mimeType: 'image/png' };
+    const getCachedImage = vi.fn(async () => cached);
+    const cacheImage = vi.fn();
+    const f = await fixture(null, { getCachedImage, cacheImage, resolveMediaUrl: () => null }, true);
+    const image = { guid: 'photo', transferName: 'cached.png', mimeType: 'image/png' };
+    f.message('root', { attachments: [image] });
+    f.message('private', { chats: [f.otherChat], attachments: [image] });
+    f.message('question', { threadOriginatorGuid: 'root' });
+    const download = vi.spyOn(f.api, 'download').mockRejectedValue(new Error('offline'));
+    await f.webhook('question');
+    await vi.waitFor(() => expect(f.received).toHaveLength(1));
+    const result = await f.im.contextMedia(f.received[0]!, ['private']);
+    expect(result.attachments).toEqual([{ ...cached, kind: 'image', originalName: 'cached.png' }]);
+    expect(result.unavailable).toEqual(['原消息不可用']);
+    expect(getCachedImage).toHaveBeenCalledOnce();
+    expect(getCachedImage).toHaveBeenCalledWith('imessage', `${f.im.botContextId}:photo`,
+      { staging: true, shouldReuse: expect.any(Function) });
+    expect(download).not.toHaveBeenCalled();
+    expect(cacheImage).not.toHaveBeenCalled();
+  });
+
   // Tier 1, PR #10241/r4556881876: a failed candidate edit used to permanently
   // ignore excluded pending inputs before restoring the old chat allowlist.
   it.each([false, true])('finalizes excluded pending receipts only after the edit commits (write fails: %s)', async failWrite => {
@@ -1037,6 +1106,193 @@ describe('BlueBubbles local ingress', () => {
     expect(f.received.map(row => row.messageId)).toEqual(['incoming-1', 'missed-2']);
     expect(f.state().inbox['incoming-1']?.state).toBe('accepted');
     expect(f.send).not.toHaveBeenCalled();
+  });
+
+  // Tier 1: the same Apple account can produce both manual input and bot echoes.
+  it.each([false, true])('correlates machine sends across chat associations (sending chat first: %s)', async sendingFirst => {
+    const f = await fixture(null, undefined, true);
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    await f.im.sendText(f.otherChat.guid, 'machine');
+    const chats = sendingFirst ? [f.otherChat, f.chat] : [f.chat, f.otherChat];
+    f.message('outbound', { isFromMe: true, handle: undefined, chats });
+    f.message('manual', { isFromMe: true, handle: undefined });
+    f.message('elsewhere', { isFromMe: true, handle: undefined, chats: [f.otherChat] });
+    await f.im.reconcile();
+    expect(f.received.map(e => [e.messageId, e.speaker?.id])).toEqual([['manual',config.ownerAddress]]);
+    await f.im.dispose(); await f.im.init();
+    expect(f.received).toHaveLength(1);
+  });
+
+  // Tier 1, #11402: an echo arriving without tempGuid used to leave normal send waiting
+  // in the receive-failure queue. No clock advance or second webhook after the POST.
+  it('keeps the connection healthy and rechecks parked input as soon as the send confirms', async () => {
+    const f = await fixture(null, undefined, true);
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    const statuses: string[] = [];
+    f.im.onStatusChange(status => statuses.push(status.kind));
+    let finish!: (value: { guid: string }) => void;
+    f.send.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const sending = f.im.sendText(f.otherChat.guid, 'outgoing');
+    for (const id of ['echo-without-id', 'manual-during-send']) f.message(id, { isFromMe: true, handle: undefined, chats: [f.chat, f.otherChat] });
+    await f.im.reconcile();
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.received).toHaveLength(0);
+    finish({ guid: 'echo-without-id' });
+    await sending;
+    await vi.waitFor(() => expect(f.state().inbox['manual-during-send']?.state).toBe('accepted'));
+    expect(f.state().inbox['echo-without-id']?.state).toBe('ignored');
+    expect(f.received.map(row => row.messageId)).toEqual(['manual-during-send']);
+    expect(statuses).not.toContain('error');
+  });
+
+  // Tier 1, #11402: one dropped POST response used to block all future manual
+  // input in the chat. A failed scan is insufficient; the next full scan releases it.
+  it('recovers manual input after an unknown send without resending or claiming delivery', async () => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    f.send.mockRejectedValueOnce(new Error('response lost'));
+    await expect(f.im.sendText(f.chat.guid, 'outgoing')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    // The outgoing copy lacks both a POST result and a temporary GUID. Its
+    // matching content remains ambiguous, while distinct human text can proceed.
+    f.message('late-echo', { isFromMe: true, handle: undefined, text: 'outgoing' });
+    f.message('manual', { isFromMe: true, handle: undefined });
+    await f.webhook('manual');
+    vi.mocked(f.api.history).mockRejectedValueOnce(new Error('history unavailable'));
+    await expect(f.im.reconcile()).rejects.toThrow('history unavailable');
+    expect(f.received).toHaveLength(0);
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['manual']);
+    expect(f.im.health().uncertainSends).toBe(1);
+
+    await f.im.dispose();
+    f.message('manual-after-restart', { isFromMe: true, handle: undefined });
+    await f.im.init();
+    expect(f.received.map(event => event.messageId)).toEqual(['manual', 'manual-after-restart']);
+    // Only the later positive correlation settles this pending copy.
+    expect(f.state().inbox['late-echo'].state).toBe('pending');
+    f.message('same-text-manual', { isFromMe: true, handle: undefined, text: 'outgoing' });
+    await f.im.reconcile();
+    expect(f.state().inbox['same-text-manual'].state).toBe('pending');
+    const row = await f.api.message('late-echo');
+    vi.mocked(f.api.history).mockResolvedValueOnce([{ ...row, tempGuid: f.send.mock.calls[0]![2] }]);
+    await f.im.reconcile();
+    expect(f.state().inbox['late-echo'].state).toBe('ignored');
+    await vi.waitFor(() => expect(f.received.map(event => event.messageId)).toEqual(['manual', 'manual-after-restart', 'same-text-manual']));
+    expect(f.im.health().uncertainSends).toBe(0);
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
+  // Tier 1, #11402: an uncertain attachment has no comparable text digest.
+  // Its caption or missing metadata must not release it as fresh input.
+  it('isolates a possible file echo while delivering verified plain text', async () => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-bb-send-'));
+    try {
+      const file = path.join(dir, 'sample.txt');
+      await fs.writeFile(file, 'sample');
+      vi.spyOn(f.api, 'sendFile').mockRejectedValueOnce(new Error('no response'));
+      expect((await f.im.sendFile(f.chat.guid, file)).ok).toBe(false);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+    const self = { isFromMe: true, handle: undefined };
+    f.message('file-copy', { ...self, text: 'caption', attachments: [{ guid: 'attachment' }] });
+    f.message('incomplete', { ...self, text: null });
+    f.message('plain-text', { ...self, attachments: [] });
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['plain-text']);
+    expect(f.im.health().uncertainSends).toBe(1);
+  });
+
+  // Tier 1, #11402: scans cannot recover a missing or obsolete comparison key.
+  // The journal survives restarts and still admits independently identified incoming messages.
+  it.each(['legacy', 'rotated-key'])('keeps unidentifiable self input pending with a %s receipt', async scenario => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    f.send.mockRejectedValueOnce(new Error('no response'));
+    await expect(f.im.sendText(f.chat.guid, 'sample text')).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    await f.im.dispose();
+    if (scenario === 'legacy') delete Object.values(f.state().outbox)[0]!.echoSignature;
+    else f.secrets.set('test-bluebubbles-echo-key', 'replacement-test-key');
+    f.message('ambiguous', { isFromMe: true, handle: undefined });
+    f.message('from-peer', { isFromMe: false });
+    await f.im.init();
+    expect(f.received.map(event => event.messageId)).toEqual(['from-peer']);
+    expect(f.state().inbox.ambiguous.state).toBe('pending');
+  });
+
+  // Tier 1, #11402: a verified error echo identifies the outgoing GUID before
+  // the POST returns. It must free the waiting human input without reporting success.
+  it.each(['lookup', 'callback'])('releases manual input on a correlated error echo from %s', async source => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    let reject!: (error: Error) => void;
+    f.send.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const sending = f.im.sendText(f.chat.guid, 'outgoing');
+    const tempGuid = f.send.mock.calls[0]![2];
+    f.message('manual', { isFromMe: true, handle: undefined });
+    await f.im.reconcile();
+    expect(f.received).toHaveLength(0);
+    f.message('failed-echo', { isFromMe: true, ...(source === 'lookup' && { tempGuid, error: 1 }) });
+    await fetch(f.url(), { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'new-message', data: { guid: 'failed-echo', ...(source === 'callback' && { tempGuid, error: 1 }) } }) });
+    try {
+      await vi.waitFor(() => expect(f.received.map(event => event.messageId)).toEqual(['manual']));
+    } finally {
+      reject(new Error('send failed'));
+      await expect(sending).rejects.toThrow('BLUEBUBBLES_SEND_UNKNOWN');
+    }
+    expect(f.im.health().uncertainSends).toBe(0);
+  });
+
+  // Tier 1, #11402: permission requests and ordinary questions may share a DM.
+  // Only a verified owner may consume an owner-scoped answer in that chat.
+  it('keeps an owner-scoped reply pending for the verified speaker', async () => {
+    const f = await fixture();
+    await f.im.updateCredentials({ ...f.im.getEditableConfig(),
+      selfAccountAddresses: { [f.chat.guid]: 'member@example.test' } });
+    const parse = vi.fn((text: string) => text);
+    const answer = f.im.requestTextReply(f.chat.guid, 'Owner response?', parse, undefined, undefined, 'test', 'owner');
+    f.message('member', { text: 'sample member reply', isFromMe: true, handle: undefined });
+    await f.im.reconcile();
+    expect(parse).not.toHaveBeenCalled();
+    expect(f.received[0]?.speaker?.isOwner).toBe(false);
+    f.message('owner', { text: 'sample owner reply' });
+    await f.im.reconcile();
+    await expect(answer).resolves.toBe('sample owner reply');
+  });
+
+  // Tier 1, #11402: a transport-agnostic chat GUID and missing handle cannot
+  // establish iMessage service by themselves. The authenticated chat lookup can.
+  it.each(['SMS', undefined, 'iMessage'])('checks the verified service for handle-less self input (%s)', async service => {
+    const f = await fixture();
+    const config = f.im.getEditableConfig();
+    vi.mocked(f.api.chat).mockResolvedValue({ ...f.chat, participants: [{ address: config.ownerAddress, service }] });
+    await f.im.updateCredentials({ ...config, selfAccountAddresses: { [f.chat.guid]: config.ownerAddress } });
+    f.message('mapped', { isFromMe: true, handle: undefined, chats: [{ guid: f.chat.guid }] });
+    f.message('explicit-sms', { isFromMe: true, handle: undefined, service: 'SMS', chats: [{ guid: f.chat.guid }] });
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(service === 'iMessage' ? ['mapped'] : []);
+  });
+
+  // Tier 1: a verified webhook can arrive before a failing POST returns.
+  it('retains a matching outgoing receipt after a late transport failure', async () => {
+    const f = await fixture(null, undefined, true);
+    f.send.mockImplementationOnce(async (_chat, _body, id) => {
+      f.message('echo', { isFromMe: true, chats: [f.otherChat, f.chat] });
+      await fetch(f.url(), { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'new-message', data: { guid: 'echo', tempGuid: id } }) });
+      await f.im.reconcile();
+      throw new Error('response lost');
+    });
+    await expect(f.im.sendText(f.chat.guid, 'one send')).resolves.toEqual({messageId:'echo'});
+    expect(f.received).toHaveLength(0);
+    expect(f.im.health().uncertainSends).toBe(0);
   });
 
   it('drops own echoes, unrelated chats, reactions and bad callback tokens', async () => {

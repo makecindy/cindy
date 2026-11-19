@@ -145,6 +145,24 @@ describe('createPeerLinksPushScheduler', () => {
     expect(broadcast).toHaveBeenLastCalledWith(current);
   });
 
+  // 2026-11-18 用户要求中转点写出 Agent-Net 走的是 UDP 还是 WS:只换了这条路(UDP 不通退回 WebSocket)也要马上推，
+  // 否则页面要等下一次轮询才改字。最小失败输入:同一 Agent-Net 主连接,relayTransport 从 udp 变成 websocket。
+  it('经中转的数据在 UDP 与 WebSocket 之间切换也广播', () => {
+    const links: LinkInput[] = [{ deviceId: 'a', path: 'relay', rttMs: 10, open: true }];
+    let current: DeviceLinkPeerLinksSnapshot = { ...snap(links), relayProtocol: 'agent-net', relayTransport: 'udp' };
+    const broadcast = vi.fn();
+    const s = createPeerLinksPushScheduler({ snapshot: () => current, broadcast });
+    s.schedule();
+    vi.advanceTimersByTime(250);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+
+    current = { ...snap(links, 42), relayProtocol: 'agent-net', relayTransport: 'websocket' };
+    s.schedule();
+    vi.advanceTimersByTime(250);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenLastCalledWith(current);
+  });
+
   it('结构 key 与顺序无关、忽略 rttMs 与业务收发时刻', () => {
     const a = snap([
       { deviceId: 'b', path: 'relay', rttMs: 1, open: true, sentAgoMs: 10 },

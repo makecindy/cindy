@@ -127,7 +127,7 @@
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}不能作覆：今之模型不支持图。",
         "advice": "请易以支持图之模型。",
-        "details": "请易以支持图之模型，或于「设置 → 个性化 → 视觉桥」启用并设置视觉模型后再遣。"
+        "details": "请易以支持图之模型。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}不能作覆：今无可用之模型。",
@@ -280,7 +280,7 @@
     "organizerSaveFailed": "主事未能更换，请再试",
     "projectDir": "案之卷匣",
     "projectDirNone": "未择",
-    "projectDirNote": "分职行事之时，同伴于此作业。不择亦可，将用此群议自有之卷匣；若择 git 案，每次分职新开一 worktree 与分支，不动君手中之代码。",
+    "projectDirNote": "可择本机既有之项目。未择，则先取仓库所系，次取行事同伴之项目。Git 分工另辟 worktree。",
     "add": "增同伴",
     "projectDirOnComputer": "于机上择之或更换",
     "memberActions": "{{name}} 之所为",
@@ -547,7 +547,7 @@
     "replyModeMentionedNote": "无人被 @ 时，同伴不接话。",
     "work": "分职",
     "organizerHint": "排定谁为何步；预设为首位同伴。",
-    "ownFolder": "群自有之卷匣",
+    "ownFolder": "自动择取",
     "archive": "封存此群",
     "unarchive": "解封存",
     "archiveHint": "封存将对众成员禁用此群，止新讯与同伴行事。旧录保留，日后可经搜索寻得此群、观其旧录并解封存。",

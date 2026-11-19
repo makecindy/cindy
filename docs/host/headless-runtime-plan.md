@@ -1364,7 +1364,7 @@ Host 构造三个 agent 时一个都没传，也没有启动钩子，只有 Code
 | 技能：`getDisabledSkillPaths`、`getManagedSkills`、`scanLocalCustomizations`、`prepareCodexSkills`、`resolveLocalMcpDuplicateChoices`；启动前共享项目 Skill 链接（`prepareStartOptions`、`onBeforeStart`） | 三个 | 行为不同 | 用户禁用的 Skill 仍会被加载；Cindy 内置与插件带的 Skill 不注入 |
 | 插件花名册与能力裁决：`getGhostRosterPrompt`、`capabilityRouting`、`resolveCapabilityRouting`、`capabilityAdditions` | 三个 | 行为不同 | 系统提示里没有插件花名册；与原生插件重叠的能力不做裁决 |
 | 复核：`reviewAutoPermissionAction`、`toolLoopReviewer`（agent 与 Maker 各一处） | 三个 | 行为不同 | Auto 模式在没有原生审查的路由上少一道复核；工具循环疑似时缺省放行，只保留最终上限 |
-| `visionBridge`（Maker）、`resolvePiVisionBridgeEnv` | Maker、Pi | 行为不同 | 没有视觉能力的模型配了视觉后端时，在 Host 上看不了图 |
+| 视觉桥（已退役） | Desktop、Host | 同轮移除 | 不再提供额外代读，模型原生图片输入保留 |
 | 启动钩子：订阅快速模式策略（`fastModePolicy`）、Pi 思考开关记忆、用量价格档（`resolveUsagePriceVariant`、`getPriceVariant`） | 钩子 | 行为不同 | 快速模式与思考开关按默认值；用量不区分 Fast 价格档 |
 | 回合改动记录 `turnChangeCapture` | Claude、Pi | 行为不同 | 任务里“本轮改了哪些文件”的记录缺失 |
 | Codex 历史产品提示：`getCodexHistoryHasProductPrompt`、`onCodexProductPromptDelivery` | 钩子 | 行为不同 | 恢复时按“未知”处理，倾向重新注入产品提示 |

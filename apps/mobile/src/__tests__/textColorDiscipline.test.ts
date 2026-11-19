@@ -54,6 +54,8 @@ const REGISTERED_TEXT_COLOR_USES = new Set([
   // Approved installation-source exceptions; mobile-design-guide §3.
   'src/session/McpAppCard.tsx inline warningFg',
   // DESIGN.md quota colors: model-picker reset durations share the existing pace/time rule.
+  'src/widgets/UsageQuotaColumns.tsx quotaResetWarn quotaBarWarn',
+  'src/widgets/UsageQuotaColumns.tsx quotaResetCrit quotaBarCrit',
   'src/session/UnifiedModelPickerView.tsx quotaResetWarn quotaBarWarn',
   'src/session/UnifiedModelPickerView.tsx quotaResetCrit quotaBarCrit',
   'src/session/UnifiedModelPickerView.ios.tsx foregroundStyle quotaBarWarn',

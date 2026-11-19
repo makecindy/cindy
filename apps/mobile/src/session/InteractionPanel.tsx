@@ -686,6 +686,7 @@ function InteractionItem({
   if (kind === 'permission') {
     return (
       <PermissionCard
+        key={readRequestId(item)}
         busy={busy}
         item={item}
         onDecision={(decision) => void submitDecision(decision)}
@@ -832,6 +833,10 @@ function PermissionCard({
   const suggestions = sessionScopedPermissionSuggestions(item.request.suggestions);
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
+  const isPluginInstall = item.request.toolName === 'cindy.plugin.install';
+  const isFirstInstall = isPluginInstall && (item.request.input as { operation?: unknown } | null)?.operation === 'install';
+  const [showInstallDetails, setShowInstallDetails] = useState(false);
+  const installSummary = isPluginInstall && !showInstallDetails;
   const permissionState = buildMobilePermissionCardState({ armedDecision, presentation });
   const requestDecision = (
     action: 'allow-once' | 'always-allow',
@@ -857,7 +862,7 @@ function PermissionCard({
       variant="secondary"
     />
   );
-  const alwaysButton = permissionState.canShowAlwaysAllow ? (
+  const alwaysButton = !isPluginInstall && permissionState.canShowAlwaysAllow ? (
     <ResolveButton
       key="always"
       accessibilityLabel={t('interaction.permission.alwaysAllowAccessibility')}
@@ -878,12 +883,12 @@ function PermissionCard({
   const allowButton = (
     <ResolveButton
       key="allow"
-      accessibilityLabel={t(isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
+      accessibilityLabel={t(isFirstInstall ? 'interaction.permission.install' : installSummary ? 'interaction.companion.details' : isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnceAccessibility')}
       armed={armedDecision === 'allow-once'}
       busy={busy}
       confirmLabel={t('interaction.permission.allowOnceConfirm')}
-      label={t(isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnce')}
-      onPress={() => requestDecision('allow-once', buildPermissionDecision('allow'))}
+      label={t(isFirstInstall ? 'interaction.permission.install' : installSummary ? 'interaction.companion.details' : isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnce')}
+      onPress={() => installSummary && !isFirstInstall ? setShowInstallDetails(true) : requestDecision('allow-once', buildPermissionDecision('allow'))}
       requestId={requestId}
       touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion)}
       testID="interaction.permission.allowOnceButton"
@@ -901,7 +906,7 @@ function PermissionCard({
             {!hung && companionIdentity ? <Text style={styles.kind}>{permissionState.title}</Text> : null}
           </View>
         </View>
-        {presentation.description ? <Text style={styles.companionDescription}>{presentation.description}</Text> : null}
+        {!installSummary && presentation.description ? <Text style={styles.companionDescription}>{presentation.description}</Text> : null}
       </> : <View style={styles.compactCardHeader}>
         <Text style={styles.kind}>{t('interaction.permission.kind')}</Text>
         <Text numberOfLines={1} style={styles.compactCardTitle}>{permissionState.title}</Text>
@@ -911,13 +916,18 @@ function PermissionCard({
         onPress={() => { void Linking.openURL(url).catch((error) => onError(formatRemoteError(error))); }}>
         {url}
       </Text> : null}
-      {isMcpUrl ? (!companion && presentation.description ? <Text style={styles.body}>{presentation.description}</Text> : null) : <PermissionEvidence
+      {installSummary ? <Text style={styles.body}>{presentation.description?.split('\n', 1)[0]}</Text> : isMcpUrl ? (!companion && presentation.description ? <Text style={styles.body}>{presentation.description}</Text> : null) : <PermissionEvidence
         input={item.request.input}
         armed={!!armedDecision}
         presentation={presentation}
         riskWarningText={permissionState.riskWarningText}
         touchLayout={touchLayout}
       />}
+      {isFirstInstall && <InteractionTouchButton
+        accessibilityLabel={t('interaction.companion.details')} expanded={showInstallDetails}
+        disabled={busy} onPress={() => setShowInstallDetails(open => !open)} style={styles.companionDetailsButton}>
+        <Text style={styles.companionDetailsText}>{t('interaction.companion.details')}</Text>
+      </InteractionTouchButton>}
       <InteractionActions touchLayout={touchLayout}>
         {[denyButton, alwaysButton, allowButton]}
       </InteractionActions>

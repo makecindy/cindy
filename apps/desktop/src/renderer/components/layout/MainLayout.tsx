@@ -1457,7 +1457,6 @@ export function MainLayout() {
           openPerformanceTrace();
           break;
         case 'new-maker':
-          // 与侧栏同口径：继承当前任务电脑，同机保留草稿项目。
           applicationMenuLog.info('new-maker invoked, navigating to /cc-agent/new');
           navigate('/cc-agent/new', {
             state: makeGenericNewMakerRouteState(currentPathRef.current.split('?')[0]),

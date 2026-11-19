@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock("lucide-react-native", () => ({ ListChecks: () => null }));
 import ts from 'typescript';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';

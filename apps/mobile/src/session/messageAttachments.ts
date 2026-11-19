@@ -1,3 +1,4 @@
+import { isUncPathOutsideWorkdir, resolveChatAbsPath } from '@/session/chatPathCandidate';
 import type { NormalizedAttachment } from '@/session/messageNormalize';
 import { isMobileMarkdownImageDirectUrl, mobileMarkdownImageUrlForWorkdir } from '@/session/messageMarkdown';
 
@@ -15,6 +16,8 @@ export function svgAttachmentForDisplay(
   if (mime !== 'image/svg+xml' && !/\.svg$/i.test(attachment.name)) return attachment;
   const source = attachment.path || attachment.uri;
   if (!source) return attachment;
+  // 图片附件会自动取缩略图;workdir 外的 UNC 保持文件附件,只在用户点开时访问。
+  if (workdir && isUncPathOutsideWorkdir(workdir, resolveChatAbsPath(source, workdir))) return attachment;
   const uri = mobileMarkdownImageUrlForWorkdir(source, workdir, messageKey, remoteHostId, sessionId);
   if (!uri) return attachment;
   return { ...attachment, kind: 'image', mimeType: 'image/svg+xml', uri, previewable: isMobileMarkdownImageDirectUrl(uri) };

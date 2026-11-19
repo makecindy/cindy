@@ -42,6 +42,7 @@ export type ProviderMediaRuntimeResult = {
 } | { url: string };
 
 interface ProviderMediaRuntime {
+  guideTarget?(target: { providerId: string; agent: AgentKind; modelId: string }): { providerId: string; agent: AgentKind; modelId: string };
   guideScope?(target: { providerId: string; agent: AgentKind; modelId: string }): string | null;
   guideProtocol?(target: { providerId: string; agent: AgentKind; modelId: string }): string | undefined;
   resolveHttpConnection?(providerId: string, modelId: string, capability: MediaCapability, agent: AgentKind): ProviderVideoConnection | null | Promise<ProviderVideoConnection | null>;
@@ -55,6 +56,10 @@ interface ProviderMediaRuntime {
 }
 
 let runtime: ProviderMediaRuntime | null = null;
+
+export function providerMediaGuideTarget(target: { providerId: string; agent: AgentKind; modelId: string }) {
+  return runtime?.guideTarget?.(target) ?? target;
+}
 
 export function providerMediaGuideScope(target: { providerId: string; agent: AgentKind; modelId: string }): string | null {
   return runtime?.guideScope?.(target) ?? null;

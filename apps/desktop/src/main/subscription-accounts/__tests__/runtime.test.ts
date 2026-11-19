@@ -5120,6 +5120,30 @@ describe('native account assignment on the executing computer', () => {
     expect(start).toHaveBeenCalledExactlyOnceWith(options);
     expect(h.read).not.toHaveBeenCalled();
   });
+  // #10301 回归(系统账号已登录 + 旧任务用内部 codex-home + symlink EPERM)。这条链路上
+  // lazy create 抛的是「凭证连不上」而不是「没登录」,恢复入口(到模型供应商里重新连接)
+  // 依赖这个 reason 一路活着到界面。这里同时钉住两件事:旧路由的隔离策略不被绕过(不注入
+  // 账号),以及这个 reason 不被 AgentStartupStoppedError 的包装吃掉 —— 少任何一条,
+  // 用户看到的就是一句没有出路的「回复未完成」。
+  it('keeps the shared-link reason on a legacy-home resume instead of falling back to another account', async () => {
+    h.pools.openai = { strategy: 'round', accounts: [account('default'), account('second')] };
+    const start = vi.fn(async (_options: StartSessionOptions): Promise<never> => {
+      throw new AgentNotAuthenticatedError('codex', 'codex not authenticated: codex_shared_auth_link_unavailable');
+    });
+    const agent = withSubscriptionAccounts({
+      kind: 'codex',
+      startSession: start,
+    } as unknown as BaseAgent, { getState: h.legacyRead, resolveCodexHistoryHome: async () => '/unregistered-private-home' });
+    const options = {
+      providerId: 'openai',
+      resumeSessionId: 'legacy',
+      sessionId: 'old-task',
+    } as StartSessionOptions;
+    await expect(agent.startSession(options)).rejects.toThrow('codex_shared_auth_link_unavailable');
+    // 旧路由照旧不注入账号:恢复走「重新连接」,不是换一个账号池里的账号。
+    expect(start).toHaveBeenCalledExactlyOnceWith(options);
+    expect(start.mock.calls[0]![0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+  });
 });
 
 // #10692: existing disabled-account cases persist task/native bindings first. These unit

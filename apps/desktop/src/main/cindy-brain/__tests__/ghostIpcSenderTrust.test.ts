@@ -23,6 +23,7 @@ import { isPluginInstanceKey } from '../../../shared/pluginIdentity.js';
 
 const TRUSTED_SENDER_CHANNELS = [
   'ghosts:install',
+  'ghosts:install-github-release',
   'ghosts:update',
   'ghosts:inspect',
   'ghosts:uninstall',

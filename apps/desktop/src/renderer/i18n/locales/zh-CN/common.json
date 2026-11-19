@@ -142,6 +142,10 @@
     "message": "Cindy 无法读取这个附件。请选择原文件，确认后继续发送这条消息；取消会保留草稿。",
     "button": "使用原文件"
   },
+  "deviceLinkSendScope": {
+    "cancelled": "因为任务或窗口发生变化，本次发送已取消。",
+    "invalid": "本次发送对当前任务已无效。"
+  },
   "mailReader": {
     "showExternalImages": "显示外部图片",
     "markReadFailed": "未能同步已读状态，请检查邮箱授权后重新打开。",
@@ -428,7 +432,8 @@
       "loading": "正在读取模型范围…",
       "loadFailed": "未能读取模型范围，请重新打开此设置。",
       "saveFailed": "未能保存模型范围，请重试。",
-      "needsUpdate": "请更新供应商所在电脑的 Cindy 后再设置模型范围。"
+      "needsUpdate": "请更新供应商所在电脑的 Cindy 后再设置模型范围。",
+      "followsPool": "这条连接已并进「{{pool}}」，远程可用的模型跟随「{{pool}}」，请在那里修改。下方各成员的模型限制仍可在这里设置。"
     },
     "entry": {
       "label": "远程与分享",
@@ -439,6 +444,8 @@
     },
     "manage": {
       "createLink": "生成分享链接",
+      "exportRoster": "导出名单",
+      "exportRosterFailed": "名单保存失败",
       "loading": "正在读取分享…",
       "notReady": "分享服务暂时不可用。确认已登录、网络正常后会自动重试。",
       "loadFailed": "分享信息没有加载出来，请稍后重试。",
@@ -918,7 +925,7 @@
       "title": "换到 {{label}} 继续？",
       "fallbackTitle": "用摘要换到 {{label}} 继续？",
       "fallbackDescription": "无法完整接续原来的对话。使用摘要继续可能遗漏早期细节和工具结果；取消则留在原电脑发送。",
-      "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几条消息和摘要，更早的细节可能记不全。",
+      "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会接续对话。较早的部分可能会压缩，以适应模型的容量。",
       "quota": "还剩 {{left}}%",
       "quotaReset": "还剩 {{left}}%，{{reset}}",
       "confirm": "仅这次换过去",
@@ -1113,14 +1120,14 @@
   },
   "awayGuard": {
     "status": "Cindy 正在工作",
-    "hint": "按任意键或 Touch ID 键锁屏，再用指纹或密码解锁",
+    "hint": "按任意键进入解锁界面",
     "lockFailed": {
       "status": "Cindy 没能锁住这台电脑",
       "hint": "碰一下电脑会再试一次锁屏；仍锁不上时，用 Touch ID 或密码验证后即可撤下。也可以合上屏幕或按电源键锁屏。",
       "hintWindows": "碰一下电脑会再试一次锁定；仍锁不上时，用 Windows Hello 或 PIN 验证后即可撤下。也可以按 Windows 徽标键 + L 锁定。"
     },
-    "hintWindows": "按任意键锁屏，用 Windows Hello 或密码解锁",
-    "hintLinux": "按任意键锁屏，用密码解锁",
+    "hintWindows": "按任意键进入解锁界面",
+    "hintLinux": "按任意键进入解锁界面",
     "verifyReason": "撤下隐私屏"
   },
   "appBadge": {
@@ -1328,10 +1335,11 @@
         "body": "这个任务在另一台电脑上开着 {{device}}。在这台电脑上开启「{{plugin}}」插件后，就能在右侧栏查看和操作它。",
         "action": "开启"
       },
-      "update": {
-        "title": "需要更新「{{plugin}}」插件",
-        "body": "这个任务在另一台电脑上开着 {{device}}。把这台电脑上的「{{plugin}}」插件更新到新版本后，就能在右侧栏查看和操作它。",
-        "action": "更新"
+      "unsupported": {
+        "title": "「{{plugin}}」暂不支持远程查看",
+        "body": "已安装的插件无法显示另一台电脑上的 {{device}}。可以检查兼容更新，或在运行此任务的电脑上使用设备。",
+        "action": "检查兼容更新",
+        "unavailable": "此插件的来源暂无支持远程查看的更新，可在运行此任务的电脑上使用设备"
       }
     },
     "lockOnExitHintPrivacy": "退出远程桌面后盖上隐私屏，AI 可以继续工作；有人碰电脑就会锁屏。",
@@ -1866,7 +1874,6 @@
       "memory": "记忆",
       "subagentModels": "Subagent",
       "auxiliaryModels": "辅助模型",
-      "visionBridge": "视觉桥",
       "compaction": "上下文压缩",
       "terminalShell": "默认终端 shell",
       "composer": "消息输入",
@@ -3435,7 +3442,7 @@
         "end": "以上是从 {{source}} 导入的记录",
         "endHandoff": "以上是从 {{source}} 导入的记录，接下来由 {{harness}} 接着做"
       },
-      "projectMenu": "导入此项目在其他工具里的任务…"
+      "projectMenu": "导入任务…"
     },
     "connections": {
       "codex": {
@@ -4067,6 +4074,7 @@
         "refreshSpeechAdded": "已更新模型，补充了 1 个语音参考型号",
         "refreshNoNew": "模型列表已是最新，无新增",
         "refreshFailed": "模型列表刷新失败，请稍后再试",
+        "refreshReconnect": "模型列表刷新失败。重新连接此供应商后再试。",
         "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
         "disableModel": "停用此模型",
         "paymentRequired": "付费",
@@ -4295,7 +4303,8 @@
           "description": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，Agent 在这台电脑上运行，使用这台电脑的登录和配额。",
           "descriptionGroup": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，由供应商组选一台电脑运行 Agent。",
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
-          "writeFailed": "远程调用设置未能保存，请重试"
+          "writeFailed": "远程调用设置未能保存，请重试",
+          "followsPool": "这条连接已并进「{{pool}}」，跟随它的「允许被远程调用」，请在「{{pool}}」里修改。"
         },
         "ownComputersCanUse": "我的其他电脑可用",
         "moreActionsAria": "更多操作",
@@ -5435,37 +5444,6 @@
       "title": "小技巧",
       "description": "一些功能开关，部分需要新建任务才会生效（具体见各项说明）。"
     },
-    "visionBridge": {
-      "title": "视觉桥",
-      "description": "让纯文本模型获得看图能力：用单独的多模态模型把图片转成文字描述后再交给纯文本模型。",
-      "enableLabel": "启用视觉桥",
-      "enableHint": "关闭时所有模型行为与之前完全一致。开启后，下方勾选的模型会把图片经视觉后端转成文字描述；发送给这些模型的图片，以及同条消息中用作识别提示的文字，会发送给你选择的视觉后端。",
-      "enableAria": "切换视觉桥",
-      "toast": {
-        "saved": "视觉桥设置已保存",
-        "saveFailed": "保存视觉桥设置失败"
-      },
-      "capability": {
-        "vision": "已知支持视觉",
-        "noVision": "已知纯文本",
-        "unknown": "视觉能力未知"
-      },
-      "targetModels": {
-        "label": "走视觉桥的模型",
-        "hint": "纯文本模型（如 DeepSeek）默认已勾选。也可以勾选支持视觉的模型——例如故意用更廉价的描述模型来节省 token。",
-        "empty": "暂无可用的模型。",
-        "toggleAria": "切换 {{model}} 的视觉桥"
-      },
-      "backends": {
-        "label": "视觉后端模型",
-        "hint": "选择最多两个把图片转文字的多模态模型。第二个（备用）可选。",
-        "primary": "主后端",
-        "fallback": "备用",
-        "unset": "未选择",
-        "noBackup": "无备用",
-        "hintSecondary": "优先使用主后端。主后端失败且配置了备用时切换到备用。两者都失败时图片无法识别，会以文字提示代替。"
-      }
-    },
     "chatEmbedding": {
       "cell": {
         "label": "启用对话记录语义索引",
@@ -6407,18 +6385,13 @@
         "allowInboundAria": "切换是否允许 {{name}} 控制本机",
         "peerControlOff": "对方未允许远程控制",
         "masterOffHint": "需先开启上方总开关",
-        "controllingThisMac": "已连接到 Cindy",
-        "useThisDeviceModels": "用本机模型",
-        "allowModelUseAria": "允许 {{name}} 用本机的模型"
+        "controllingThisMac": "已连接到 Cindy"
       },
       "toast": {
         "revoked": "已撤销该设备的访问权限",
         "revokeFailed": "撤销失败",
         "restored": "已恢复该设备的访问权限",
-        "restoreFailed": "恢复失败",
-        "modelUseRestored": "已允许这台电脑用本机的模型",
-        "modelUseRevoked": "这台电脑不能再用本机的模型",
-        "modelUseFailed": "「用本机模型」未能保存，请重试"
+        "restoreFailed": "恢复失败"
       },
       "sections": {
         "myDevices": "我的设备",
@@ -6784,6 +6757,10 @@
           "agentNet": "Agent-Net",
           "deviceLink": "Device Link"
         },
+        "relayTransport": {
+          "udp": "UDP",
+          "websocket": "WS"
+        },
         "onlyEncrypted": "仅使用 Agent-Net",
         "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。",
         "peerSwitch": {
@@ -6918,11 +6895,6 @@
       "description": "同一飞书账号登录的设备可以互相发现；开启「允许控制」后，你的其他设备可以远程控制本机的 {{appName}}。",
       "allowControl": "允许同账号设备控制本机",
       "allowControlHint": "开启后，使用同一账号登录的其它设备无需逐次确认即可控制本机；本机会显示远程控制提示，可随时断开。",
-      "ownModelAccess": {
-        "title": "让我的其他电脑用本机模型",
-        "hint": "开启后，你的其他电脑可以用这台电脑上的模型供应商，Agent 在这台电脑上运行，用这台电脑的登录和配额。不会分享给别人。",
-        "writeFailed": "设置未能保存，请重试"
-      },
       "keepAwake": "保持电脑唤醒",
       "keepAwakeHint": "开启后本机不会进入休眠，后台的 Agent 与定时任务可持续运行（仍可关闭显示器 / 锁屏）。",
       "linkStatus": {
@@ -7836,6 +7808,18 @@
         "overviewTab": "概览",
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
+        "githubInstall": {
+          "label": "从 GitHub Release 安装…",
+          "title": "从 GitHub Release 安装",
+          "description": "粘贴 GitHub 仓库或指定版本的 Release 链接。私有仓库需要用有访问权限的 GitHub 账号登录。",
+          "url": "GitHub 地址",
+          "submit": "查找插件",
+          "loading": "正在查找并下载…",
+          "invalid": "请输入 GitHub 仓库或 Release 标签链接。",
+          "not-found": "找不到此版本，请检查链接和仓库权限。",
+          "ambiguous": "这个链接包含多个插件。请使用只含一个插件的 Release 链接，或直接从文件安装。",
+          "installedAlready": "这个插件已安装。可以在该插件的设置里更新。"
+        },
         "installedSection": "已安装",
         "installedExpand": "展开全部 {{count}} 个已安装插件",
         "installedCollapse": "收起更多已安装插件",
@@ -8205,7 +8189,7 @@
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
         "hostTools_usage": "读取用量与供应商组状态",
-        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置",
+        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置。还可读取有权访问的任务的配额，包括同账号已授权电脑及允许查看配额的分享供应商。",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "通过 Cindy 的设置工具读取和修改应用配置；不返回密钥，不代替你完成保密输入。",
         "hostTools_scheduler": "自动化管理",
@@ -8729,6 +8713,10 @@
       "panelHost": {
         "close": "关闭面板"
       },
+      "installProgress": {
+        "awaitingConsent": "等待确认…",
+        "installFailed": "安装失败"
+      },
       "updateAll": {
         "title": "全部更新 · {{count}} 个插件",
         "collapseDiff": "收起",
@@ -8739,6 +8727,7 @@
         "statusDone": "已更新",
         "statusSkipped": "已跳过",
         "statusFailed": "更新失败",
+        "progressCount": "已更新 {{done}} / {{total}}",
         "background": "后台继续",
         "doneAction": "完成",
         "doneToast": "批量更新完成：{{done}} 个已更新，{{rest}} 个未完成",
@@ -10962,6 +10951,8 @@
     "autosave": {
       "saving": "正在保存…",
       "saved": "已保存",
+      "unconfirmed": "尚未确认保存",
+      "savedModel": "已保存，下轮生效",
       "retry": "重新保存"
     },
     "retry": "重试",
@@ -11075,7 +11066,7 @@
       "discard": "放弃修改",
       "continueEditing": "继续编辑"
     },
-    "profileSaveFailed": "伙伴设置未能保存，变更没有生效。",
+    "profileSaveFailed": "伙伴设置未能保存。",
     "profileSaveOffline": "无法连接伙伴所在的电脑，请恢复连接后重新保存。",
     "modelLabel": "模型",
     "modelUnavailable": "{{model}}（当前不可用）",
@@ -11395,7 +11386,7 @@
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}无法回复：伙伴所在设备保留的远程任务数已达上限。\n请伙伴的主人归档暂时不用的任务，或请远程电脑的主人在「远程与分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}无法回复：远程电脑保留的任务总数已达上限。\n请那台电脑的主人释放暂时不用的任务，或在「远程与分享」中提高上限。",
-          "IMAGE_INPUT_UNSUPPORTED": "{{name}}无法回复：当前模型不支持图片。\n请切换到支持图片的模型，或在「设置 → 个性化 → 视觉桥」开启并配置视觉模型后重新发送。",
+          "IMAGE_INPUT_UNSUPPORTED": "{{name}}无法回复：当前模型不支持图片。\n请切换到支持图片的模型。",
           "MODEL_UNAVAILABLE": "{{name}}无法回复：当前没有可用模型。\n请在伙伴设置中选择已连接的可用模型后重新发送。",
           "AUTH_REQUIRED": "{{name}}无法回复：模型连接需要重新认证。\n请在设置中重新连接对应的模型供应商后重新发送。",
           "RATE_LIMITED": "{{name}}无法回复：模型请求过于频繁。\n请稍后重新发送，或选择其他可用模型。",
@@ -11447,7 +11438,7 @@
         "projectDirChoose": "选择",
         "projectDirChange": "更换",
         "projectDirClear": "清除",
-        "projectDirNote": "分工做事时，伙伴们在这里干活。不选也行，会用这个群自己的文件夹；选了 git 项目，每次分工会新开一个 worktree 和分支，不动你手上的代码。",
+        "projectDirNote": "可以选择这台电脑上的已有项目。留空时，优先使用仓库对应的项目，其次使用执行伙伴自己的项目。Git 项目分工使用独立 worktree。",
         "autoContinueSaveFailed": "分工交接没能保存，请再试一次",
         "projectDirSaveFailed": "项目文件夹没能保存，确认文件夹还在后再试",
         "allowMemberInvites": "允许所有成员邀请朋友",
@@ -11786,15 +11777,15 @@
           "replyModeAssistant": "Cindy 回答",
           "replyModeAssistantNote": "由群里的 Cindy 回答。",
           "work": "分工",
-          "ownFolder": "群自己的文件夹",
+          "ownFolder": "自动选择",
           "projectDirHint": "只在这台电脑上生效。",
-          "projectDirClearHint": "改用群自己的文件夹",
+          "projectDirClearHint": "恢复自动选择项目",
           "project": "项目",
           "projectCaption": "伙伴在群里回复和分工都在这个项目里做。仓库全群共享，文件夹只存在这台电脑上。",
           "githubRepo": "GitHub 仓库",
-          "githubRepoHint": "填 owner/name。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
+          "githubRepoHint": "GitHub · owner/name",
           "repository": "代码仓库",
-          "repositoryHint": "GitHub 填 owner/name；GitLab（含公司自建）、CNB 等粘贴仓库链接。没选文件夹的电脑会用本机的这个项目，没有就自动下载一份。",
+          "repositoryHint": "GitHub 可填 owner/name，其他仓库可粘贴链接。Cindy 会在本机查找唯一匹配的已有项目。",
           "repositoryPlaceholder": "owner/name 或仓库链接",
           "githubRepoSaveFailed": "仓库没有保存，请检查后再试。",
           "folderRepoFilled": "已按这个文件夹填好仓库 {{repo}}，群里其他人的电脑也会用它。",
@@ -14053,7 +14044,7 @@
         "effortEndFast": "更快",
         "effortEndSmart": "更智能",
         "railSameEngine": "仅 {{agent}}",
-        "crossEngineWarning": "切换引擎会重建上下文，可能丢失内容",
+        "crossEngineWarning": "下一条消息将切换引擎并接续对话，较早的部分可能会压缩",
         "favoritesSyncFailed": "收藏未能同步。请重新打开模型选择器重试；远程电脑可能需要更新。",
         "favoritesSyncFailedUnreachable": "收藏暂时没有同步：那台电脑当前连不上。恢复连接后重新打开即可。",
         "railRemoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
@@ -14069,12 +14060,8 @@
         "ultrafast": "超快"
       },
       "discoveredCopy": {
-        "title": "改用「{{device}}」上的 {{provider}}？",
-        "description": "{{unavailable}}确认后由「{{device}}」运行，之后随时可以在这里换回。",
         "unavailableHere": "这台电脑上的 {{provider}} 现在用不了。",
-        "unavailableOn": "「{{device}}」上的 {{provider}} 现在用不了。",
-        "confirm": "改用",
-        "cancel": "保持不变"
+        "unavailableOn": "「{{device}}」上的 {{provider}} 现在用不了。"
       }
     },
     "permissionSelector": {
@@ -14340,33 +14327,14 @@
       "credentialSwitchApplied": "模型来源切换已生效。",
       "credentialSwitchFailed": "模型来源切换失败，请重新选择。",
       "modelSwitchContextGuard": {
-        "title": "这个模型装不下当前对话",
         "warnToast": "这段对话已经用了 {{used}}，换过去大约会占新模型容量（{{total}}）的 {{pct}}%",
-        "overflowDescription": "这段对话已经用了 {{used}}，超过新模型能放下的 {{total}}（约 {{pct}}%）。换过去后，Cindy 会先整理一份摘要再继续；对话记录还在，只是不会整段原样带给新模型。",
-        "overflowDescriptionRemote": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。",
-        "confirmSwitch": "切换并继续",
-        "cancelSwitch": "先不换"
+        "condensedToast": "为了适应新模型，较早的对话会压缩，完整的对话记录仍可查看。",
+        "overflowDescriptionRemote": "当前远程任务的上下文已用 {{used}} / {{total}}（约 {{pct}}%），无法安全切换到这个小窗口模型。请保留当前模型，或新建任务后再选择。"
       },
       "agentSwitch": {
         "engineNotReady": "引擎已切换，但新引擎启动失败；发送消息时会自动重试",
         "failed": "引擎切换失败，未生效",
-        "deferred": "已登记切换：下一条消息发出时将切换到 {{agent}} · {{model}}",
-        "confirmation": {
-          "title": "切换 Agent？",
-          "description": "新 Agent 引擎会通过交接摘要续接，思考内容等不能保证完美继承；切回时仍可继续原引擎会话。切换还会让 prompt 缓存中断一次，可能增加 Token 消耗。",
-          "confirm": "切换 Agent",
-          "cancel": "保留当前 Agent",
-          "dontShowAgain": "下次不再提醒"
-        }
-      },
-      "agentRelocation": {
-        "titleLocal": "改回这台电脑运行 Agent？",
-        "titleOther": "改到「{{device}}」上运行 Agent？",
-        "description": "原来那台电脑上的对话记录带不过来，会整理成交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
-        "descriptionNativeHistory": "完整对话记录会复制过去接着用；如果恢复不了，会改用交接摘要接上，思考内容等不能保证完美继承。下一条消息发出时生效。",
-        "confirm": "换电脑运行",
-        "cancel": "保持不变",
-        "discoveredDescription": "{{reason}}{{description}}"
+        "deferred": "已登记切换：下一条消息发出时将切换到 {{agent}} · {{model}}"
       }
     },
     "agentSelect": {
@@ -14599,12 +14567,14 @@
       "runningWithWorktree_other": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。",
       "runningWithWorktree_many": "它们跑完之前不能切换分支。用 worktree 现在就能在独立副本里开始，互不影响。"
     },
-    "followUpHint": {
-      "queueDefault": "任务运行中发送的消息默认排队。",
-      "steerDefault": "任务运行中发送的消息默认插话到当前任务。",
+    "sendDelivery": {
+      "menuAria": "这条消息的发送方式",
+      "queueHint": "等这一轮结束",
+      "steerHint": "下一步就处理",
+      "setDefault": "设为默认",
+      "nowDefault": "已设为默认",
       "switchToSteer": "默认改为插话",
-      "switchToQueue": "默认改为排队",
-      "dismiss": "关闭提示"
+      "switchToQueue": "默认改为排队"
     }
   },
   "onboarding": {
@@ -14877,11 +14847,6 @@
       "unavailable": "图片暂时无法显示",
       "loading": "正在加载图片…"
     },
-    "visionBridge": {
-      "analyzing": "正在识别 {{count}} 张图片…",
-      "fallback": "视觉桥使用了备用视觉后端（主后端不可用），图片识别可能受影响",
-      "unavailable": "视觉桥当前不可用，图片无法识别，已以文字提示代替"
-    },
     "newMessageIndicator": {
       "aria": "回到底部，查看 {{count}} 条新消息",
       "label_one": "{{count}} 条新消息",
@@ -14980,6 +14945,7 @@
       "credentialSwitchBusy": "其他 Codex 任务仍在运行，暂时无法应用本任务选择的供应商（共享的 Codex 进程需要重启）。等这些任务结束后再点「重试」。",
       "accountBoundaryPending": "Cindy 正在切换账号状态，暂时无法开始这个任务。稍等片刻后点「重试」；如果一直出现，请重启 Cindy。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前任务无法继续。新建任务后即可生效。",
+      "codexSharedAuthLinkUnavailable": "本机的 Codex 已经登录，但这个任务读不到那份登录：指向它的链接建不出来（Windows 上通常是普通权限建不了）。请确认这台电脑上的 {{appName}} 有权限创建链接（Windows 上可以用管理员身份运行一次，或开启开发者模式），然后点「重试」。也可以点「重新登录 ChatGPT」，让 Cindy 用自己的一份登录来跑这个任务。",
       "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试",
       "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",
       "claudeSubscriptionOpusPlanMismatch": "当前连接的 Claude Pro 套餐不支持 Opus。请切换到套餐支持的模型；如果刚升级套餐，请在设置中重新连接 Anthropic 后重试。",
@@ -15074,6 +15040,9 @@
       "continueFailed_other": "有 {{count}} 个任务没能继续，可以打开任务后重试。"
     },
     "unreadFailedScheduleBanner": {
+      "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
+      "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
+      "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
       "text": "此前有自动运行失败。",
       "precheck": "自动检查暂时受阻。",
       "rateLimited": "自动检查暂时受阻：请求限流。",
@@ -15504,6 +15473,11 @@
         "relocatedElsewhere": "Agent 已改到另一台电脑上运行",
         "quotaRebalance": "这个账号的配额更该先用"
       },
+      "handoffCoverage": {
+        "complete": "已完整接续对话",
+        "condensed": "较早的对话已压缩",
+        "details": "用于接续对话的交接内容"
+      },
       "contextRebuild": {
         "labelOverflow": "已整理上下文并继续",
         "labelTimeout": "上一轮没有响应，已整理上下文后继续",
@@ -15782,7 +15756,7 @@
       "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
       "REMOTE_AGENT_RESUME_REJECTED": "运行模型的电脑无法恢复这个任务。请从任务列表新建任务，将需要继续的内容复制过去。原任务和排队消息会保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
-      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。是你自己的电脑时，在那台电脑的「远程连接」里打开「让我的其他电脑用本机模型」；别人分享给你的，请对方在「远程与分享」中调整。也可以换一个模型。",
+      "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。是你自己的电脑时，在那台电脑上给这个供应商打开「允许被远程调用」；别人分享给你的，请对方在「远程与分享」中调整。也可以换一个模型。",
       "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
       "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
       "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
@@ -16446,7 +16420,10 @@
       "confirmArchive": {
         "title": "归档任务",
         "description": "确定要归档这个任务吗？归档后将从列表中移除。",
-        "dirtyWorktreeWarning": "该任务的 worktree 有未提交的更改；归档前会自动保存为 git 快照，之后可在任务内一键恢复。",
+        "dirtyWorktreeWarning": "当前任务有尚未提交的文件更改。归档时默认保存这些更改，以后可以在任务中恢复。",
+        "discardChanges": "丢弃未提交的更改",
+        "discardWarning": "未提交的更改和新文件将无法恢复。",
+        "discardAndArchive": "丢弃并归档",
         "scheduleWarning_one": "关联的自动化{{names}}仍会运行，并恢复此任务。",
         "scheduleWarning_other": "关联的自动化{{names}}仍会运行，并恢复此任务。",
         "scheduleWarningMany_one": "其中 {{count}} 个任务关联了自动化，后续运行时会恢复这些任务。",
@@ -16482,6 +16459,7 @@
         "empty": "此自动化没有可归档的任务"
       },
       "archiveAll": {
+        "projectTitle": "归档「{{name}}」下的所有任务？",
         "title": "归档全部任务",
         "confirm": "归档全部",
         "cancel": "取消",
@@ -16626,18 +16604,28 @@
         }
       },
       "projectAction": {
+        "menu": "「{{name}}」项目菜单",
+        "previewFailed": "无法读取这个项目的任务。请重试。",
+        "remotePreviewFailed": "无法读取远程项目的任务。请检查连接，并确认远程电脑上的 Cindy 已更新。",
         "rename": "重命名项目",
         "pin": "置顶项目",
         "unpin": "取消置顶项目",
-        "removeFromSidebar": "从侧栏移除项目",
-        "removeFromSidebarConfirmTitle": "移除“{{name}}”？",
-        "removeFromSidebarConfirmDescription": "这会从侧栏移除该项目。电脑上的文件不会被删除。现有任务会移到“对话”分组，仍可正常使用。",
+        "removeFromSidebar": "从 Cindy 移除项目…",
+        "removeFromSidebarConfirmTitle": "从 Cindy 移除「{{name}}」？",
+        "removeFromSidebarConfirmDescription": "未归档的 {{count}} 个任务仍可在「对话」中继续使用。",
         "removeFromSidebarConfirmAction": "移除项目",
-        "removeFromSidebarFailed": "无法从侧栏移除项目，请重试",
-        "showFiles": "查看文件",
-        "archivedAll": "全部归档",
-        "unarchiveAll": "全部恢复",
-        "openInExplorer": "在文件管理器中打开",
+        "removeFromSidebarFailed": "移除项目失败，请重试。",
+        "archiveOnRemove": "同时归档任务（{{count}} 个）",
+        "keepSkippedOnRemove": "{{skip}}的任务会留在「对话」中。",
+        "removedArchived": "{{count}} 个任务将移入「已归档」。",
+        "removeAndArchive": "移除项目并归档任务",
+        "removeKeepFiles": "项目的置顶、自定义名称和图标会清除。电脑上的文件和文件夹会保留。",
+        "showFiles": "在侧边栏查看任务文件",
+        "archivedAll": "归档所有任务",
+        "unarchiveAll": "恢复所有任务",
+        "openInFinder": "在访达中打开项目文件夹",
+        "openInExplorer": "在文件资源管理器中打开项目文件夹",
+        "openInFileManager": "在文件管理器中打开项目文件夹",
         "newInDirectory": "在此目录新建任务",
         "copyDeepLink": "复制项目链接",
         "search": "在项目内搜索任务"
@@ -16675,6 +16663,7 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下周",
+        "indefinite": "无限期",
         "custom": "自定义…",
         "wakeAt": "唤回日期和时间",
         "timeZone": "本地时间（{{zone}}）",
@@ -16842,6 +16831,7 @@
         "summaryAria": "查看 PR #{{number}} 汇总",
         "unresolvedLabel": "未解决的 review 评论",
         "checks": "检查",
+        "following": "跟进中",
         "checksTotal": "共 {{count}} 项",
         "failed": "失败",
         "passed": "通过",
@@ -17109,6 +17099,18 @@
     "ultra": "极致"
   },
   "scheduler": {
+    "prTrigger": {
+      "fallback": "未接通 GitHub App 通知，仍会按计划检查。",
+      "label": "PR",
+      "url": "PR 链接",
+      "condition": "触发条件",
+      "any": "PR 有新动态",
+      "merged": "PR 已合并",
+      "review": "评审有新动态",
+      "ci": "CI 状态变化",
+      "timed": "同时定时检查",
+      "invalid": "请输入完整的 GitHub PR 链接。"
+    },
     "presentation": {
       "status": {
         "active": "已启用",
@@ -19404,6 +19406,9 @@
     }
   },
   "goal": {
+    "blockedTurnFailed": "本轮执行失败。",
+    "blockedReasonUnknown": "未提供具体受阻原因。",
+    "blockedNextStep": "可在当前任务中补充信息；处理受阻原因后，点击“{{action}}”继续。",
     "status": {
       "active": "目标推进中",
       "paused": "已暂停",
@@ -19738,6 +19743,7 @@
         "empty": "当前没有赠送记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
         "unnamed": "赠送余额",
+        "rolloverName": "滚存额度",
         "giftCard": "礼品卡 · 来自 {{sender}}",
         "original": "原始金额",
         "used": "已用",
@@ -19975,6 +19981,8 @@
       "basicModels": "可用部分模型",
       "subscription": "订阅套餐",
       "rollover": "剩余余额可留到{{period}}，最多 {{amount}}",
+      "rolloverMonthly": "剩余余额最多滚存 {{amount}}，转为赠送余额\n1 个月内有效，不再继续滚存\n优先于订阅余额和充值余额使用",
+      "rolloverMonthlySummary": "剩余余额最多滚存 {{amount}}，1 个月内有效",
       "nextPeriod": {
         "MONTH": "下月",
         "YEAR": "下一年",
@@ -21377,7 +21385,6 @@
       "sessionRuntimeFallback": "任务模型自动降级",
       "subagentModels": "Subagent",
       "auxiliaryModels": "辅助模型",
-      "visionBridge": "视觉桥",
       "modelVisibility": "模型显示与隐藏",
       "providerOrder": "供应商顺序",
       "modelCatalogOverrides": "模型参数调整",
@@ -21420,6 +21427,24 @@
   },
   "featureIntro": {
     "close": "关闭",
+    "project": {
+      "title": "认识项目",
+      "lead": "把一件要持续做的事交给一个项目。文件都放在你电脑上的一个文件夹里，Cindy 每次接着上次的成果做，不用重新交代背景。",
+      "files": {
+        "title": "成果都是你的文件",
+        "body": "Cindy 直接在项目文件夹里读写。做出来的东西留在你的电脑上，随时可以打开、拿走。"
+      },
+      "context": {
+        "title": "不用重新交代",
+        "body": "在项目里新开任务，Cindy 一上来就看得到这些文件，也会沿用这个项目里记下的要求。"
+      },
+      "separate": {
+        "title": "几件事各归各",
+        "body": "每个项目的任务单独排在一起，不同的事互不干扰，隔多久回来都能接着做。"
+      },
+      "start": "继续新建项目",
+      "note": "起个名字就能新建；已有的文件夹或代码仓库也可以直接用。"
+    },
     "taskInbox": {
       "title": "认识收件箱",
       "lead": "任务会按状态自动分成待处理、进行中、稍后处理和已处理。最好的习惯是随手清空收件箱：处理完点完成，不急的稍后处理。",

@@ -8,7 +8,7 @@
  * Messages 透传的 `x-claude-code-session-id`、Codex 的 `session-id`、Pi 当前构建自己注入的
  * `x-opencode-session`，以及 Codex chat bridge 的 thread-id → x-opencode-session
  * 映射（#4073 / #4075）。本模块服务**由 host 从零构造请求头的出口**：辅助模型 one-shot、
- * 供应商「测试连接」探测、视觉桥，以及 Claude 本地供应商桥 → Pi SDK 原生适配器
+ * 供应商「测试连接」探测，以及 Claude 本地供应商桥 → Pi SDK 原生适配器
  * （`createPiProviderFetch`，它重建出站请求、不继承入站头；sessionId 由桥按请求传入，#5325）。
  *
  * 路由识别有三路信号：运行时供应商 id、目录预设身份（`catalogPresetId`，从预设创建后
@@ -17,7 +17,7 @@
  *
  * 取值分两种：
  * - 普通直连（host 每请求发起）：随机 UUID，一次 one-shot 即一次独立对话；
- * - spawn env 注入（层 C：Pi 视觉桥 env）：必须**确定性派生**（pi-harness §4.10
+ * - 有逻辑 sessionId 的 SDK 适配请求：必须**确定性派生**（pi-harness §4.10
  *   spawn env 稳定性）——同 sessionId + 同后端恒等，断链重连不变；用随机值会让
  *   远端 daemon 的 envHash 变化 → kill + 全新建。
  */

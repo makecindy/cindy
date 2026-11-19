@@ -1,5 +1,4 @@
 import { applyProjectDirectoriesForTurn } from '../../../desktop/src/main/projectDirectoryRuntime.js';
-import { createPiVisionUsageRecorder } from '../../../desktop/src/main/vision-bridge/piVisionUsage.js';
 import { createOneShotUsageRecorder } from '../../../desktop/src/main/usage/auxiliaryUsage.js';
 import { getDesktopClaudeReadOnlyAllowedTools, getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { claudeSubagentUsageBridge } from '../../../desktop/src/main/maker-host/claude-subagent-usage-bridge.js';
@@ -59,7 +58,6 @@ import { createReadImageHook } from '../../../desktop/src/main/maker-host/claude
 import { createDesktopInputShellGuardHooks } from '../../../desktop/src/main/maker-host/claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from '../../../desktop/src/main/maker-host/agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from '../../../desktop/src/main/maker-host/command-concurrency-gate.js';
-import { createHostVisionBridge, type VisionBridgeNotice } from './vision-bridge.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/src/main/turn-change-set/store.js';
 import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
 import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
@@ -108,8 +106,6 @@ export interface HostAgentGraphOptions {
   getManagedSkills?: AgentDeps['getManagedSkills'];
   /** Directory holding the bundled harnesses, including `ripgrep-bin`. Defaults to the Host layout. */
   harnessRoot?: string;
-  /** The Host event hub, for the vision-bridge notices the desktop sends its windows. */
-  publishVisionBridgeNotice?: (notice: VisionBridgeNotice) => void;
   /** The account gateway's rejected-key report (model-access.ts), for the one-shot review requests. */
   reportGatewayKeyRejected?: (key: string) => void;
   /** The account realm (main.ts), as the desktop's getActiveAuthRealm for the Codex token reader. */
@@ -625,16 +621,6 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // As the desktop's getPluginRegistry(): the owner's registry, read at each check.
     createDesktopInputShellGuardHooks(() => createPluginRegistry().isEnabled('computer'), LOGGER),
   );
-  // The desktop's vision bridge (maker-host/index.ts): the Maker hook, the Pi env and, once Maker
-  // exists, the process-wide controller the loopback proxies read (vision-bridge.ts).
-  const visionBridge = createHostVisionBridge({
-    userDataDir: options.userDataDir,
-    getMaker: () => maker,
-    readCustomProviderKey: config.readKey,
-    readGatewayKey: () => options.gateway?.credential ?? null,
-    publish: notice => options.publishVisionBridgeNotice?.(notice),
-    logger: LOGGER,
-  });
   const agent = options.binaryPath ? new ClaudeCodeAgent({
     ...(options.resolveLocalMcpDuplicateChoices ? { resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices } : {}),
     claudeHooks,
@@ -802,7 +788,6 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
           registerAgentProcess(pid, kind, role, sessionId),
         ...(options.getGhostRosterPrompt ? { getGhostRosterPrompt: options.getGhostRosterPrompt } : {}),
         ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
-        createPiVisionUsageRecorder,
         // As the desktop (pi-host.ts): the cloud-file startup hint and the extension dialog strings.
         formatPiStartupCloudFileHint: (file) => t('logic.errors.piStartupCloudFile').replace('{{path}}', () => file),
         getPiExtensionUiStrings: () => ({
@@ -823,8 +808,6 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
             remove: t('settings.piPackages.success.remove'),
           },
         }),
-        // Only for Pi models the vision bridge targets (layer C), as on the desktop.
-        resolvePiVisionBridgeEnv: visionBridge.resolvePiVisionBridgeEnv,
       })
     : null;
   const agents = {
@@ -864,9 +847,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     // Pi and Codex sessions read the tool-loop reviewer from Maker, as on the desktop.
     toolLoopReviewer: autoReview.toolLoopReviewer,
     ...(options.makerMemory ? { makerMemory: options.makerMemory } : {}),
-    visionBridge: visionBridge.hook,
   });
-  visionBridge.activate();
   // As the desktop (register.ts): when the loopback proxy sees Claude's native Auto classifier
   // fail, the task stays on Auto and its later approvals go to the Cindy reviewer above.
   // The latest graph owns the process-wide listener.
@@ -893,11 +874,20 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   });
   piPackages.attachMaker(maker);
   // What context recovery reads from this graph (context-recovery-assembly.ts): the configured
-  // window of a route, as the desktop's resolveVerifiedWindow (register.ts); the learned Pi cache
+  // verified window of a route, as in Desktop; the learned Pi cache
   // compatibility of this profile; and the Codex runtime's native history.
   const contextRecovery = {
     resolveVerifiedWindow: (agentKind: string, modelId: string, providerId: string | null | undefined) =>
-      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId),
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId, undefined, 'required'),
+    async resolveHandoffWindow(sessionId: string, route: {
+      agentKind: string; model: string; providerId: string | null; agentDeviceId?: string | null;
+    }) {
+      if (route.agentDeviceId) return null;
+      return startOptions.resolveConfiguredContextWindow(
+        getActiveCatalog(), dbToMakerAgentKind(route.agentKind), route.providerId, route.model,
+        await startOptions.readStoredSessionContextWindowBudget(sessionId), 'required',
+      );
+    },
     piCompat: {
       read: piNativeCompatOverrides.readPiNativeCompatOverride,
       record: piNativeCompatOverrides.recordPiNativeCompatOverride,
@@ -907,11 +897,11 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // A model change's window gate (model-window-gate.ts): a route's configured window with the task's
   // window budget, as the desktop's change of model reads it (register.ts resolveWindowForRoute).
   const modelWindow = {
-    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null) =>
-      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget),
+    resolveRouteWindow: (agentKind: string, modelId: string, providerId: string | null, budget: number | null, verification?: 'required') =>
+      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), agentKind as AgentKind, providerId, modelId, budget, verification),
     readSessionBudget: (sessionId: string) => startOptions.readStoredSessionContextWindowBudget(sessionId),
   };
-  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, visionBridge, piPackages,
+  return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, piPackages,
     contextRecovery, modelWindow,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };

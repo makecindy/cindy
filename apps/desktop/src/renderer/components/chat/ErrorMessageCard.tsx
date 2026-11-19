@@ -20,6 +20,7 @@ import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { renderProviderErrorExplanation } from './ProviderErrorExplanation';
 import { AutoReviewRecoveryActions } from './AutoReviewRecoveryActions';
 import { useTranslation } from 'react-i18next';
 import {
@@ -106,7 +107,8 @@ export function ErrorMessageCard({
       key={`${reason ?? ''}:${kind}`}
       className="p-2"
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
-      description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
+      description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
+        : kind === 'reply-error' && renderProviderErrorExplanation(message, text, t)}
       details={showRawToggle ? message : undefined}
       actions={canConfigureAutoReview && parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_NO_AVAILABLE_MODEL'
         ? <AutoReviewRecoveryActions /> : undefined}
