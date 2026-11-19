@@ -493,13 +493,15 @@ describe('durable direct task routing', () => {
     const direct = state.hostDeps!.directGuestExecution!;
     const { token } = await direct.switch(guestPeer, { op: 'direct-switch', sessionId: 'history' });
     expect(token).toBeTruthy();
+    await expect(direct.switched!(guestPeer, 'history', 'wrong-token')).resolves.toBe(false);
     expect(await locate('history')).toEqual({ deviceId: 'one' });
     const handoff = vi.spyOn(state.usage!, 'markDirectTaskRelayed')
       .mockRejectedValueOnce(Error('handoff journal write failed'));
     await expect(direct.switched!(guestPeer, 'history', token!)).rejects.toThrow('handoff journal write failed');
     expect(await locate('history')).toEqual({ deviceId: 'one' });
     handoff.mockRestore();
-    await direct.switched!(guestPeer, 'history', token!);
+    await expect(direct.switched!(guestPeer, 'history', token!)).resolves.toBe(true);
+    await expect(direct.switched!(guestPeer, 'history', token!)).resolves.toBe(true);
     disposeRemoteAgentHost();
     await state.usage!.flush();
     await installDirectHost();

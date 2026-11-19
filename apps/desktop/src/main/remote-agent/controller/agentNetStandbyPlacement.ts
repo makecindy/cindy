@@ -75,8 +75,8 @@ export async function rememberAgentNetStandbyPlacement(placement: AgentNetStandb
   assertCurrent();
 }
 
-/** Clear only the reservation proven not to have opened a task. */
-export async function forgetUnusedAgentNetStandbyPlacement(placement: AgentNetStandbyPlacement, sessionId: string,
+/** Clear only the exact reservation being released or replaced by an accepted handoff. */
+export async function clearAgentNetStandbyPlacement(placement: AgentNetStandbyPlacement, sessionId: string,
   assertCurrent: () => void): Promise<void> {
   const file = placementPath(placement.shareId, sessionId);
   if (!await readPlacement(file, placement.shareId)) return;

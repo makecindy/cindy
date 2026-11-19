@@ -393,16 +393,18 @@ it.each(['shared-task', 'provider-share'] as const)('carries %s requests with ho
   await expect(visitor.openLink('b-controller', openPayload)).rejects.toMatchObject({ code: 'FORBIDDEN' });
   if (kind === 'shared-task') await hostTasks.remove(resourceId, memberId);
   else {
-    // Integration: a fresh guest link to an already signed executor works
-    // without O's Desktop. Earlier checks use the existing online owner link.
+    // A new guest-to-executor link works after O goes offline. Observe the
+    // prepared grant on both peers before stopping O. Guest restart is covered above.
     const input = { shareId: resourceId, memberId, guestDeviceId: guest.deviceId, executorDeviceId: f.b.identity.deviceId };
-    await grantAgentNetSharingExecutor({ client: f.a, sharing: ownerBusiness, assertCurrent() {} }, input);
-    visitor.stop();
+    const prepared = await grantAgentNetSharingExecutor({ client: f.a, sharing: ownerBusiness, assertCurrent() {} }, input);
+    const executorPeer = providerShareHostPeer(resourceId, input.executorDeviceId);
+    const grant = expect.objectContaining({ generation: prepared.generation });
+    await vi.waitFor(() => {
+      expect(visitorSocket.scopedPeerTarget(executorPeer)?.delegation.executors).toContainEqual(grant);
+      expect(memberSocket.scopedPeerTarget(guestPeer)?.delegation.executors).toContainEqual(grant);
+    }, { timeout: 5_000 });
     f.host.stop();
     expect(f.host.getStatus()).toBe('stopped');
-    visitor = f.make(api, false);
-    await visitor.waitUntilOnline(3000);
-    const executorPeer = providerShareHostPeer(resourceId, input.executorDeviceId);
     await visitor.openLink(executorPeer, openPayload);
     await expect(visitor.invoke(executorPeer, { channel: 'test:echo', args: ['executor starts while owner is offline'] }))
       .resolves.toMatchObject({ ok: true, result: 'executor starts while owner is offline' });

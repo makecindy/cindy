@@ -307,7 +307,7 @@ export interface RemoteAgentHostDeps {
     release(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-release' }>): Promise<void>;
     releaseStandby?(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-release' }>): boolean;
     switch(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-switch' }>): Promise<{ token?: string; generation?: string }>;
-    switched?(controller: string, sessionId: string, token: string): Promise<void>;
+    switched?(controller: string, sessionId: string, token: string): Promise<boolean | void>;
     sessionAllowed(controller: string, sessionId: string, agentKind?: RemoteAgentKind): boolean;
     /** Unlike sessionAllowed, true only for a current, local G→M delegation. */
     sessionDelegated(controller: string, sessionId: string): boolean;
@@ -2082,7 +2082,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   function relayedOpenPayload(run: Run, payload: RemoteAgentOpenPayload, member: GroupRelayMember): RemoteAgentOpenPayload {
     // 「需要换一台」只在受邀者与本机之间：组内电脑不认识也不需要。受邀者自己填的转分享键不转发。
-    const { acceptsGroupSwitch: _accepts, groupSwitchToken: _token, reshareKey: _reshare, relayModelAccess: _modelAccess, ...rest } = payload;
+    const { acceptsGroupSwitch: _accepts, groupSwitchToken: _token, requireGroupSwitchToken: _required,
+      reshareKey: _reshare, relayModelAccess: _modelAccess, ...rest } = payload;
     // 分享来的组内电脑按这个人的转分享键核对它的主人是否同意过(provider-sharing.md §4.3)。
     const reshareKey = member.sameAccount ? undefined : reshareKeyForGuest(run.controller);
     return {
@@ -3696,6 +3697,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         const groupRouted = controllerTrust === 'guest' && !relayKey && !payload.groupAssigned
           && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)
           && !!deps.groupRelay;
+        if (payload.requireGroupSwitchToken && (!groupRouted || payload.options.resumeSessionId)) {
+          fail('REMOTE_AGENT_INVALID', 'this standby task cannot be handed off on this computer');
+        }
         // 供应商授权：来源落到本机已开放的供应商上，并以显式来源启动(核对的就是实际用的)。
         let providerId: string | undefined;
         if (deps.providerAccess) {
@@ -3730,13 +3734,19 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
               hostSessionIdFor(controller, payload.sessionId),
               payload.groupSwitchToken,
             );
+            if (payload.requireGroupSwitchToken && !switchExclusion) {
+              fail('REMOTE_AGENT_INVALID', 'the standby task handoff has expired or is no longer authorized');
+            }
             avoid = switchExclusion ?? [];
             if (switchExclusion && payload.groupSwitchToken) {
               // A valid token binds this guest and task to the move. Retire its
               // old direct assignment before planning a new executor, so a
               // failed open can retry with the token without reviving old M.
-              await deps.directGuestExecution?.switched?.(controller, payload.sessionId,
+              const confirmed = await deps.directGuestExecution?.switched?.(controller, payload.sessionId,
                 payload.groupSwitchToken);
+              if (payload.requireGroupSwitchToken && confirmed !== true) {
+                fail('REMOTE_AGENT_INVALID', 'the standby task handoff could not be confirmed');
+              }
             }
             const plan = await deps.groupRelay.plan({
               kind: request.agentKind,

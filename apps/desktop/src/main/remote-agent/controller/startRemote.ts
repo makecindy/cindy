@@ -154,7 +154,7 @@ export interface StartRemoteAgentDeps {
    * `token` 是交接后重新打开时带回的凭证；对方发来新凭证时交给 `offer`；`takeNewRound` 为 true 的那次发送告诉
    * 对方开始新的一轮(用户亲自接手过)。
    */
-  groupSwitch?: { token?: string; offer(token: string): void; takeNewRound?(): boolean };
+  groupSwitch?: { token?: string; requireToken?: true; offer(token: string): void; takeNewRound?(): boolean };
   newId(): string;
   log?: {
     debug?(message: string, meta?: Record<string, unknown>): void;
@@ -960,6 +960,7 @@ async function prepareAndStartRemoteAgentSession(
       ...(deps.groupSwitch ? { acceptsGroupSwitch: true } : {}),
       // 交接凭证只给全新打开用；连回是接着原来的会话。
       ...(!reconnect && deps.groupSwitch?.token ? { groupSwitchToken: deps.groupSwitch.token } : {}),
+      ...(!reconnect && deps.groupSwitch?.requireToken ? { requireGroupSwitchToken: true as const } : {}),
     };
   }
 
@@ -997,6 +998,9 @@ async function prepareAndStartRemoteAgentSession(
       }
       if (client && caps.localApplication !== true) {
         throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] Update Cindy on the computer providing this supplier to use it from an external application.');
+      }
+      if (!reconnect && deps.groupSwitch?.requireToken && !caps.directGuestStandby) {
+        throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] The owner does not support confirmed standby task handoff.');
       }
       deps.pool?.noteMaxRuns(caps.maxRuns);
       deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);

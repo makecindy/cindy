@@ -47,7 +47,7 @@ import type { PdfTextExtractor } from '../executor/files';
 import type { GuardedFetch } from '../executor/webFetch';
 import { RemoteConnectionPool } from './connectionPool';
 import { createDirectStatusBatcher } from './directStatusBatch.js';
-import { forgetUnusedAgentNetStandbyPlacement, readAgentNetStandbyPlacement, rememberAgentNetStandbyPlacement, type AgentNetStandbyPlacement } from './agentNetStandbyPlacement.js';
+import { clearAgentNetStandbyPlacement, readAgentNetStandbyPlacement, rememberAgentNetStandbyPlacement, type AgentNetStandbyPlacement } from './agentNetStandbyPlacement.js';
 import { isRetryableLinkError, isSharedTaskAuthorizationDenied, remoteAgentErrorFrom } from './poller';
 import { remoteAgentEventMapper } from './eventMap';
 import {
@@ -314,7 +314,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     requireCurrent();
     const sessionId = opts.sessionId;
     const groupSwitch = sessionId && deps.groupSwitch ? deps.groupSwitch : null;
-    const switchToken = groupSwitch && sessionId ? groupSwitch.takeForOpen(sessionId) : undefined;
+    const switchToken = groupSwitch && sessionId && !opts.resumeSessionId ? groupSwitch.takeForOpen(sessionId) : undefined;
     if (switchToken && sessionId) directTasks.delete(`${parseProviderShareAgentDeviceId(input.deviceId) ?? ''}:${sessionId}`);
     // 受邀者任务(分享来的供应商)：可直连组内执行电脑；不可达时由分享者的电脑中转。
     //  - Agent 自带的 WebFetch 在分享者电脑上已关闭，改由本机抓取；
@@ -329,17 +329,18 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     let prepareStandby: (() => Promise<void>) | undefined;
     let preparedAdmission: AgentNetStandbyPlacement | undefined;
     let standbyOpenRequested = false;
+    const assertSameOwner = () => {
+      if (activeOwnerScopeKey() !== ownerScope || isAppSessionBoundaryPending()) throw new Error('Standby owner changed');
+    };
     const abandonPreparedAdmission = async (placement: AgentNetStandbyPlacement) => {
       if (!sessionId || activeOwnerScopeKey() !== ownerScope || isAppSessionBoundaryPending()) return;
-      const assertSameOwner = () => {
-        if (activeOwnerScopeKey() !== ownerScope || isAppSessionBoundaryPending()) throw new Error('Standby owner changed');
-      };
+      forgetSharedTaskAuthorization(input.deviceId, sessionId, placement.admissionId);
       // Finish the exact local reservation before the caller can retry placement.
       // The unused remote reservation can also expire if M is unreachable.
       void remoteAgentInvoker(placement.target, deps.remoteInvoke)([{
         op: 'direct-release', sessionId, generation: placement.admissionId,
       }], { beforeDispatch: assertSameOwner }).catch(() => undefined);
-      await forgetUnusedAgentNetStandbyPlacement(placement, sessionId, assertSameOwner)
+      await clearAgentNetStandbyPlacement(placement, sessionId, assertSameOwner)
         .catch(error => log.warn('could not clear unused standby task location', { error: String(error) }));
     };
     const releaseFailedDirectAllocation = async (generation: string | undefined): Promise<void> => {
@@ -360,8 +361,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       }
     };
     const standbyPlacement = shareId && sessionId ? await readAgentNetStandbyPlacement(shareId, sessionId) : undefined;
+    const handoffPlacement = switchToken ? standbyPlacement : undefined;
     requireCurrent();
-    if (shareId && (opts.resumeSessionId || standbyPlacement)) {
+    if (shareId && (opts.resumeSessionId || (standbyPlacement && !switchToken))) {
       if (!sessionId) throw new Error('[REMOTE_AGENT_INVALID] shared history requires its task identity');
       const allocationStartedAt = Date.now();
       const allocationStartedMonotonic = performance.now();
@@ -385,6 +387,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         renewAt: authorization.renewAt ?? allocationStartedAt + 20 * 60_000,
         ...(authorization.generation ? { generation: authorization.generation } : {}) });
       selectedDirectRoute = directTasks.get(taskKey);
+      if (authorization.standby) {
+        const authorized = captureSharedTaskAuthorizationCheck(input.deviceId, sessionId, input.agentKind, opts.model, target);
+        startupOwnerPeer = target;
+        assertOwnerLinkCurrent = () => {
+          if (!authorized?.()) throw new Error('[ACCESS_REVOKED] Shared standby permission changed during startup');
+        };
+      }
     } else if (!skipDirect && shareId && sessionId && !deps.isGroupAssigned?.(sessionId) && !switchToken
       && findReceivedShareForExecution(shareId)?.status === 'active') {
       const taskKey = `${shareId}:${sessionId}`;
@@ -486,6 +495,9 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
               renewAt: wall + (leaseDeadline - mono) * 2 / 3,
               accessEpoch: epoch, generation: admissionId };
             directTasks.set(taskKey, selectedDirectRoute);
+            // Keep the confirmed finite grant available if the open reply is lost.
+            rememberSharedTaskAuthorization(input.deviceId, sessionId, input.agentKind, opts.model,
+              { ...selectedDirectRoute, direct: true });
             return true;
           }
           if (full) throw full;
@@ -712,12 +724,14 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       pool: poolFor(target),
       rgPath: deps.rgPath(),
       codexPath: () => deps.codexPath?.(),
-      ...(target !== input.deviceId || opts[LOCAL_AGENT_CLIENT]?.groupAssigned || (sessionId && deps.isGroupAssigned?.(sessionId))
+      ...(target !== input.deviceId
+        || (!handoffPlacement && (opts[LOCAL_AGENT_CLIENT]?.groupAssigned || (sessionId && deps.isGroupAssigned?.(sessionId))))
         ? { groupAssigned: true } : {}),
       ...(groupSwitch && sessionId
         ? {
             groupSwitch: {
               ...(switchToken ? { token: switchToken } : {}),
+              ...(handoffPlacement ? { requireToken: true as const } : {}),
               offer: (token: string) => groupSwitch.offer(sessionId, token),
               takeNewRound: () => groupSwitch.takeNewRound?.(sessionId) ?? false,
             },
@@ -828,7 +842,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const ownsDirectIdentity = !!sessionId
         && liveDirectGuestSessions.get(sessionId)?.identity === directIdentity;
       if (target !== input.deviceId && shareId && sessionId) {
-        if (opts.resumeSessionId && recoverLostHistoryGrant && !startupAbort.signal.aborted
+        if ((opts.resumeSessionId || standbyPlacement) && recoverLostHistoryGrant && !startupAbort.signal.aborted
           && isSharedTaskAuthorizationDenied(error)) {
           const original = parseProviderSharePeer(target);
           if (original?.role === 'host') {
@@ -902,13 +916,17 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             throw error;
           }
         }
+        const retainStandby = openingDirectRoute?.standby
+          && (!preparedAdmission || (standbyOpenRequested && !confirmedStoppedStartup(error)));
         clearDirectIdentity();
         if (ownsDirectIdentity && failed?.target === target && failed.generation === openingDirectGeneration) {
           directTasks.delete(taskKey);
-          if (startupAbort.signal.aborted) void releaseFailedDirectAllocation(openingDirectGeneration);
-          else await releaseFailedDirectAllocation(openingDirectGeneration);
+          if (!retainStandby) {
+            if (startupAbort.signal.aborted) void releaseFailedDirectAllocation(openingDirectGeneration);
+            else await releaseFailedDirectAllocation(openingDirectGeneration);
+          }
         }
-        if (preparedAdmission && (!standbyOpenRequested || confirmedStoppedStartup(error))) {
+        if (preparedAdmission && !retainStandby) {
           await abandonPreparedAdmission(preparedAdmission);
         }
         // A native resume ID belongs only to M, including failure after caps.
@@ -1253,7 +1271,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         }
         stop(); await close(options);
       };
-      if (permissionCurrent()) rememberSharedTaskAuthorization(input.deviceId, sessionId, input.agentKind, authorizedModel,
+      if (permissionCurrent() && (!preparedAdmission || authorizedModel !== opts.model)) rememberSharedTaskAuthorization(input.deviceId, sessionId, input.agentKind, authorizedModel,
         { ...directTasks.get(taskKey)!, direct: true });
       offPermissionChange = onProviderShareReceivedChanged(() => { if (!permissionCurrent()) expireLive?.(); });
       if (!permissionCurrent()) {
@@ -1281,8 +1299,23 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     }
     // Keep the switch intent across a failed open. O binds the token to this
     // guest and task; release it only after a usable session is returned.
-    if (cancelPreparedHandle) attempt.signal.removeEventListener('abort', cancelPreparedHandle);
-    if (switchToken && sessionId) groupSwitch?.release?.(sessionId);
+    try {
+      if (switchToken && sessionId) {
+        if (handoffPlacement) {
+          try {
+            assertSameOwner();
+            await clearAgentNetStandbyPlacement(handoffPlacement, sessionId, assertSameOwner);
+          } catch (error) {
+            await handle.close({ reason: 'navigation' }).catch(() => undefined);
+            throw new Error('[REMOTE_AGENT_UNAVAILABLE] Could not update the shared task location after handoff', { cause: error });
+          }
+          forgetSharedTaskAuthorization(input.deviceId, sessionId);
+        }
+        if (groupSwitch?.takeForOpen(sessionId) === switchToken) groupSwitch.release?.(sessionId);
+      }
+    } finally {
+      if (cancelPreparedHandle) attempt.signal.removeEventListener('abort', cancelPreparedHandle);
+    }
     if (prepareStandby) void prepareStandby().catch(() => undefined);
     return handle;
   };

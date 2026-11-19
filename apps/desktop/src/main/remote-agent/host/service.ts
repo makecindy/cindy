@@ -438,7 +438,7 @@ export function installRemoteAgentHost(options: {
     }
   };
   const directSwitchIssued = new Map<string, { generation: string; executorDeviceId: string;
-    at: number; token: string }>();
+    at: number; token: string; ownerScope: string; confirmed?: true }>();
   const directSwitchPending = new Map<string, Promise<{ token?: string; generation?: string }>>();
   const directSwitchAttempts = new Map<string, number>();
   const revokeDirectRoute = (key: string, route: NonNullable<ReturnType<typeof directRoutes.get>>): Promise<void> => {
@@ -1568,7 +1568,7 @@ export function installRemoteAgentHost(options: {
             return { token: issued.token, generation: route.generation };
           }
           for (const [id, item] of directSwitchIssued) {
-            if (Date.now() - item.at >= 2 * 60_000) directSwitchIssued.delete(id);
+            if (Date.now() - item.at >= (item.confirmed ? 10 : 2) * 60_000) directSwitchIssued.delete(id);
           }
           if (directSwitchIssued.size >= 512) return {};
           // The guest's error is only a request to move its own task. It never
@@ -1607,7 +1607,7 @@ export function installRemoteAgentHost(options: {
               const token = host?.issueDirectGroupSwitchToken(controller, request.sessionId, exclude, true);
               if (token) {
                 directSwitchIssued.set(key, { generation: route.generation,
-                  executorDeviceId: route.executorDeviceId, at: Date.now(), token });
+                  executorDeviceId: route.executorDeviceId, at: Date.now(), token, ownerScope: providerShareOwnerKey() });
                 return { token, generation: route.generation };
               }
               next = await plan(exclude);
@@ -1620,7 +1620,7 @@ export function installRemoteAgentHost(options: {
             exclude);
           if (!token) return {};
           directSwitchIssued.set(key, { generation: route.generation,
-            executorDeviceId: route.executorDeviceId, at: Date.now(), token });
+            executorDeviceId: route.executorDeviceId, at: Date.now(), token, ownerScope: providerShareOwnerKey() });
           return { token, generation: route.generation };
         })().finally(() => { directSwitchPending.delete(key); });
         directSwitchPending.set(key, work);
@@ -1635,15 +1635,15 @@ export function installRemoteAgentHost(options: {
         try {
         const peer = parseProviderSharePeer(controller);
         const issued = directSwitchIssued.get(key);
-        if (peer?.role !== 'guest' || !issued || issued.token !== token) return;
+        if (peer?.role !== 'guest' || !issued || issued.token !== token || issued.ownerScope !== providerShareOwnerKey()) return false;
         const delegation = { shareId: peer.shareId, memberId: peer.memberId,
           guestDeviceId: peer.deviceId, executorDeviceId: issued.executorDeviceId };
         const ownerScope = providerShareOwnerKey();
         const ownerDeviceId = getSelfDeviceId();
         if (!ownerDeviceId) throw new Error('Provider share owner is unavailable');
-        await withDelegationGrant(JSON.stringify([delegation.shareId, delegation.memberId,
+        return await withDelegationGrant(JSON.stringify([delegation.shareId, delegation.memberId,
           delegation.guestDeviceId, delegation.executorDeviceId]), async () => {
-          if (directSwitchIssued.get(key) !== issued) return;
+          if (directSwitchIssued.get(key) !== issued) return false;
           const sameTaskRoutes = usage.listActiveDirectReceiptRoutes(ownerScope)
             .filter((route) => route.ownerDeviceId === ownerDeviceId
               && route.shareId === delegation.shareId && route.memberId === delegation.memberId
@@ -1659,6 +1659,7 @@ export function installRemoteAgentHost(options: {
             || providerShareOwnerKey() !== ownerScope || getSelfDeviceId() !== ownerDeviceId) {
             throw new Error('Provider share direct assignment changed during switch');
           }
+          if (!live && !location && !routes.length) return issued.confirmed === true;
           // Disk is the restart boundary. A failed write leaves the token and
           // live route intact, so this open fails and can retry with the token.
           for (const route of routes) await usage.markDirectReceiptRouteRevoked(route);
@@ -1666,7 +1667,11 @@ export function installRemoteAgentHost(options: {
             throw new Error('Provider share direct assignment changed during switch');
           }
           void revokeRetiredDirectReceiptRoutes(key, routes);
+          // A lost open response or local placement write must be able to
+          // retry the same handoff after this direct route has been retired.
+          directSwitchIssued.set(key, { ...issued, confirmed: true });
           directSwitchAttempts.delete(key);
+          return true;
         });
         } finally {
           if (allocations.get(key) === turn) allocations.delete(key);
