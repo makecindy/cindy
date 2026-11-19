@@ -25,6 +25,8 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
     autoRetryLastError(sessionId: string, attemptToken: number): Promise<'resumed' | 'superseded' | 'no-progress'>;
   };
   interruptedTurnAutoResumeGuard: Pick<InterruptedTurnAutoResumeGuard, 'onInterruptedTurn' | 'noteResumeSendFailed'>;
+  /** Settle a still-current paused retry into history without a banner. Opted into by the Node Host. */
+  settlePausedResumeIntoHistory?: boolean;
   autoResumeBookkeeping: Pick<
     AutoResumeBookkeeping,
     | 'takeDeferredError' | 'surfaceSuppressedError' | 'flushSuppressedError' | 'beginAttempt' | 'schedule'
@@ -66,6 +68,7 @@ export interface InterruptedTurnAutoResumeHookPorts<RuntimeSession extends objec
  */
 export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends object>({
   inputCoordinator, interruptedTurnAutoResumeGuard, autoResumeBookkeeping, botFallbackInputs, scheduledQuotaInputs, workerInputs,
+  settlePausedResumeIntoHistory,
   saveTurnStartedAtForDeferred, beginSchedulerAutoResume, getStableSessionForTurnBoundary,
   pendingContinuationOnlyAutoResumeRebuilds, maybeApplySessionRuntimeFallback, pendingSessionRuntimeFallbackRebuilds,
   providerGroupHeldErrors, providerGroupHeldTerminals, pendingSchedulerAutoResumeRunBySession,
@@ -174,15 +177,17 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
         (attempt) => {
           return (async () => {
             let fallbackRebuildSession: RuntimeSession | null = null;
+            const isCurrent = () => attempt.isCurrent() && !inputCoordinator.isExecutionPaused(sessionId)
+              && (!startupAdmission || inputCoordinator.isAutoResumeAttemptCurrent(sessionId, decision.attemptToken) === true);
             const ownsAttempt = () => attempt.isCurrent()
               && (!startupAdmission || inputCoordinator.isAutoResumeAttemptCurrent(sessionId, decision.attemptToken) === true);
-            const mayContinue = () => {
+            const mayContinue = settlePausedResumeIntoHistory ? () => {
               if (!ownsAttempt()) return false;
               if (!inputCoordinator.isExecutionPaused(sessionId)) return true;
               interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId, decision.attemptToken);
               autoResumeBookkeeping.finalizeSuppressedError(sessionId, decision.attemptToken, { surfaceBanner: false });
               return false;
-            };
+            } : isCurrent;
             try {
               // Report retries must enter the original queue checkpoint before any
               // allocation. Runtime fallback can eagerly bootstrap a different route.
@@ -194,7 +199,9 @@ export function createInterruptedTurnAutoResumeHooks<RuntimeSession extends obje
                   decision.episodeAttempt,
                   decision.attemptToken,
                   requireRouteChange,
-                  () => ownsAttempt() && !inputCoordinator.isExecutionPaused(sessionId),
+                  settlePausedResumeIntoHistory
+                    ? () => ownsAttempt() && !inputCoordinator.isExecutionPaused(sessionId)
+                    : isCurrent,
                 );
               fallbackRebuildSession = fallback.session;
               if (!mayContinue()) return;
