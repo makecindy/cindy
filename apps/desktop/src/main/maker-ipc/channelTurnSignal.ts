@@ -1,3 +1,4 @@
+import { hasTelegramQuestionRoute } from './telegramQuestionReply.js';
 import type { Session } from '@cindy/maker-core';
 import { createLogger } from '../logger';
 
@@ -47,7 +48,8 @@ export function createChannelTurnObserver(session: Session) {
     onDispatching() {
       const origin = session.getCurrentTurnOrigin();
       rollbackRelayWake = relayWake;
-      relayWake = isRelayedChannelTurnSource(source) || origin?.surface === 'im' || origin?.kind === 'scheduler';
+      relayWake = isRelayedChannelTurnSource(source) || origin?.surface === 'im' || origin?.kind === 'scheduler'
+        || hasTelegramQuestionRoute(origin);
     },
     onUndispatched() {
       if (rollbackRelayWake !== undefined) relayWake = rollbackRelayWake;
