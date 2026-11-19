@@ -19,6 +19,8 @@ import type { AgentEvent, InteractionRequest, InteractionResolver, UsageSnapshot
 import { createAsyncQueue } from '../shared/async-queue.js';
 import {
   ACP_SUPPORTED_PERMISSION_MODES,
+  findModeOption,
+  mapModeValues,
   buildAcpCapabilities,
   currentEffort,
   findEffortOption,
@@ -229,7 +231,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       options: opts,
     });
     router.attach(session, Array.isArray(result.configOptions));
-    await session.applyInitialSelection(opts.model, opts.effort);
+    await session.applyInitialSelection(opts.model, opts.effort, opts.permissionMode);
     return session;
   } catch (error) {
     await connection.close().catch(() => {});
@@ -442,10 +444,19 @@ export class AcpSession {
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     this.applyPermissionMode(mode);
+    await this.applyAgentMode(mode);
+  }
+
+  /** Switches the agent's own mode when it offers one standing for this Cindy mode. */
+  private async applyAgentMode(mode: PermissionMode): Promise<void> {
+    const option = findModeOption(this.configOptions);
+    const mapped = mapModeValues(option).find((entry) => entry.mode === mode);
+    if (!option || !mapped || option.currentValue === mapped.value) return;
+    await this.setConfigValue(option.id, mapped.value);
   }
 
   /** @internal Applies the host's stored model / effort after the handshake; never fails the task. */
-  async applyInitialSelection(model: string | undefined, effort: Effort | undefined): Promise<void> {
+  async applyInitialSelection(model: string | undefined, effort: Effort | undefined, permissionMode?: PermissionMode): Promise<void> {
     if (model && model !== this.model) {
       try {
         await this.setModel(model);
@@ -458,6 +469,13 @@ export class AcpSession {
         await this.setEffort(effort);
       } catch (error) {
         this.logger?.debug('acp: stored effort not applied', { error: String(error) });
+      }
+    }
+    if (permissionMode) {
+      try {
+        await this.applyAgentMode(permissionMode);
+      } catch (error) {
+        this.logger?.debug('acp: stored mode not applied', { error: String(error) });
       }
     }
   }
@@ -553,7 +571,8 @@ export class AcpSession {
   private applyPermissionMode(mode: PermissionMode): void {
     // Modes Cindy cannot enforce for ACP fall back to asking, never to auto-approval.
     this.permissionMode = mode === 'bypassPermissions' ? 'bypassPermissions' : 'ask';
-    if (!ACP_SUPPORTED_PERMISSION_MODES.has(mode)) {
+    if (!ACP_SUPPORTED_PERMISSION_MODES.has(mode)
+      && !mapModeValues(findModeOption(this.configOptions)).some((entry) => entry.mode === mode)) {
       this.logger?.debug('acp: permission mode mapped to ask', { mode });
     }
   }

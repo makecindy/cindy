@@ -5,6 +5,7 @@ import { ModelSelector, ModelSelectorContent } from '../../../src/renderer/compo
 import type { PluginEngineView } from '../../../src/shared/pluginEngines';
 import type { PluginEngineSelection } from '../../../src/renderer/lib/pluginEngineSelection';
 import { VendorIcon } from '../../../src/renderer/components/sidebar/VendorIcon';
+import { PermissionSelector } from '../../../src/renderer/components/new-chat/PermissionSelector';
 
 const providers = [
   {
@@ -42,6 +43,7 @@ const engines: PluginEngineView[] = [
     availability: { state: 'available', version: '0.2.2' },
     models: [],
     permissionModes: modes,
+    defaultPermissionMode: 'ask',
   },
   {
     key: 'opencode-plugin:opencode',
@@ -57,6 +59,7 @@ const engines: PluginEngineView[] = [
       { id: 'oc-small', displayName: 'OpenCode Small' },
     ],
     permissionModes: modes,
+    defaultPermissionMode: 'ask',
   },
   {
     key: 'gemini-plugin:gemini',
@@ -71,6 +74,7 @@ const engines: PluginEngineView[] = [
     },
     models: [],
     permissionModes: modes,
+    defaultPermissionMode: 'ask',
   },
 ];
 
@@ -148,6 +152,25 @@ function TaskIcons() {
   );
 }
 
+/** The permission menu of an engine whose agent publishes its own modes (Antigravity). */
+function AgentModes() {
+  const [mode, setMode] = useState<string>('plan');
+  return (
+    <main className="flex w-full justify-start p-3 pt-[590px]">
+      <PermissionSelector
+        permissionMode={mode}
+        onPermissionModeChange={setMode}
+        useMorphPopover={false}
+        pluginEngineModes={[
+          { id: 'default', displayName: 'Default' }, { id: 'acceptEdits', displayName: 'Accept edits' },
+          { id: 'auto', displayName: 'Auto' }, { id: 'plan', displayName: 'Plan' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ]}
+      />
+    </main>
+  );
+}
+
 void mountPage({
   host: {
     maker: {
@@ -164,6 +187,8 @@ void mountPage({
   render: (ctx) =>
     ctx.case === 'task-icons'
       ? <TaskIcons />
+      : ctx.case === 'agent-modes'
+      ? <AgentModes />
       : ctx.case.startsWith('task')
       ? <TaskTrigger engineGone={ctx.case === 'task-engine-gone'} />
       : <DraftPicker selected={ctx.case === 'draft-selected' || ctx.case === 'effort-config'} />,

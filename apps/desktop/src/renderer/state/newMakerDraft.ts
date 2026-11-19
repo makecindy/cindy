@@ -22,7 +22,7 @@ import {
  */
 
 import { sanitizeModelGroupSelection, type ModelGroupSelection } from '../../shared/modelGroups';
-import { isPluginEngineEffort, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
+import { isPluginEngineEffort, isPluginEnginePermissionModeId, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines';
 import type { PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
@@ -558,7 +558,7 @@ function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
   return {
     providerId,
     modelId,
-    ...(permissionMode === 'ask' || permissionMode === 'bypassPermissions' ? { permissionMode } : {}),
+    ...(isPluginEnginePermissionModeId(permissionMode) ? { permissionMode } : {}),
     ...(isPluginEngineEffort(effort) ? { effort } : {}),
   };
 }

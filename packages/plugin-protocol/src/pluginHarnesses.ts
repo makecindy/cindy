@@ -158,7 +158,21 @@ export interface GhostHarnessAvailability {
    * does not list models; Cindy then shows what the engine reported the last time a task ran.
    */
   models?: GhostHarnessModel[];
+  /**
+   * The agent's own working modes, as Cindy permission mode ids, in the agent's order. For an ACP
+   * engine these are its `mode` option values that name a Cindy mode (`accept-edits` → acceptEdits).
+   * Cindy shows them in the permission menu followed by its own Full access. Absent = Cindy's
+   * generic Ask each time / Full access.
+   */
+  modes?: GhostHarnessMode[];
+  /** The mode the agent starts in; must be one of `modes`. */
+  defaultMode?: GhostHarnessMode;
 }
+
+/** Cindy permission modes an agent's own mode can stand for (Full access is always Cindy's). */
+export const GHOST_HARNESS_MODES = ['default', 'acceptEdits', 'auto', 'plan'] as const;
+export type GhostHarnessMode = (typeof GHOST_HARNESS_MODES)[number];
+const HARNESS_MODES_MAX = 16;
 
 export interface GhostHarnessModel {
   id: string;
@@ -234,6 +248,8 @@ export function parseGhostHarnessAvailability(
       if (!parsedModels.ok) return { ok: false, reason: `Harness ${id} models: ${parsedModels.reason}` };
       models = parsedModels.models;
     }
+    const modes = parseHarnessModes(item.modes, item.defaultMode);
+    if (!modes.ok) return { ok: false, reason: `Harness ${id} ${modes.reason}` };
     harnesses.push({
       id,
       available: item.available as boolean,
@@ -241,6 +257,7 @@ export function parseGhostHarnessAvailability(
       ...(item.message !== undefined ? { message: item.message as string } : {}),
       ...(item.version !== undefined ? { version: item.version as string } : {}),
       ...(models !== undefined ? { models } : {}),
+      ...modes.fields,
     });
   }
   return { ok: true, harnesses };
@@ -279,6 +296,35 @@ function parseHarnessModels(raw: unknown): { ok: true; models: GhostHarnessModel
     });
   }
   return { ok: true, models };
+}
+
+/**
+ * An engine's working modes: malformed values reject the report; ids this Cindy does not know are
+ * skipped (forward compatible), duplicates folded, the agent's order kept. A default that is not
+ * offered is dropped.
+ */
+function parseHarnessModes(
+  rawModes: unknown,
+  rawDefault: unknown,
+): { ok: true; fields: Pick<GhostHarnessAvailability, 'modes' | 'defaultMode'> } | { ok: false; reason: string } {
+  if (rawModes === undefined) {
+    return rawDefault === undefined ? { ok: true, fields: {} } : { ok: false, reason: 'defaultMode needs modes' };
+  }
+  if (!Array.isArray(rawModes) || rawModes.length > HARNESS_MODES_MAX
+    || !rawModes.every((value) => typeof value === 'string' && value.length > 0 && value.length <= 32)) {
+    return { ok: false, reason: `modes must be an array of at most ${HARNESS_MODES_MAX} mode ids` };
+  }
+  if (rawDefault !== undefined && (typeof rawDefault !== 'string' || rawDefault.length === 0 || rawDefault.length > 32)) {
+    return { ok: false, reason: 'defaultMode must be a mode id' };
+  }
+  const modes: GhostHarnessMode[] = [];
+  for (const value of rawModes as string[]) {
+    const known = GHOST_HARNESS_MODES.find((mode) => mode === value);
+    if (known && !modes.includes(known)) modes.push(known);
+  }
+  if (modes.length === 0) return { ok: true, fields: {} };
+  const defaultMode = modes.find((mode) => mode === rawDefault);
+  return { ok: true, fields: { modes, ...(defaultMode ? { defaultMode } : {}) } };
 }
 
 function isHarnessEffort(value: unknown): value is GhostHarnessEffort {

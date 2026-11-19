@@ -77,7 +77,7 @@ export function resolveActivePluginEngine(
   return {
     engine,
     modelId,
-    permissionMode: pluginEnginePermissionMode(selection.permissionMode),
+    permissionMode: pluginEnginePermissionMode(selection.permissionMode, engine),
     effort: resolvePluginEngineEffort(engine, modelId, selection.effort),
   };
 }
@@ -129,7 +129,7 @@ export function pluginEngineModelName(
 }
 
 /**
- * The two modes every plugin engine offers (main's ACP_PERMISSION_MODES), used when a task's engine
+ * Cindy's two modes for plugin engines (main's ACP_PERMISSION_MODES), used when a task's engine
  * is no longer listed. The picker localizes them through `newChat.permissionSelector.modes.acp.*`.
  */
 export const PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES: readonly PluginEnginePermissionMode[] = [
@@ -137,10 +137,19 @@ export const PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES: readonly PluginEnginePermi
   { id: 'bypassPermissions', displayName: 'Allow all' },
 ];
 
-/** Plugin engines offer two modes; anything else starts in 'ask' (each request goes to the user). */
+/**
+ * The permission mode a plugin engine task uses: the requested one when the engine offers it (its
+ * own modes or Cindy's two), else the engine's default. Without the engine (plugin removed) only
+ * Full access is kept; anything else asks for each request.
+ */
 export function pluginEnginePermissionMode(
   mode: PermissionMode | string | null | undefined,
+  engine?: Pick<PluginEngineView, 'permissionModes' | 'defaultPermissionMode'> | null,
 ): PluginEnginePermissionMode['id'] {
+  if (engine) {
+    const offered = engine.permissionModes.find((option) => option.id === mode);
+    return offered ? offered.id : engine.defaultPermissionMode;
+  }
   return mode === 'bypassPermissions' ? 'bypassPermissions' : 'ask';
 }
 

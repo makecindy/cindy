@@ -85,6 +85,18 @@ describe('handleGhostHarnessesRequest', () => {
     ]);
   });
 
+  // Antigravity(agy)公布 default / accept-edits / auto / plan，插件按 Cindy 权限档 id 上报(2026-11-19)。
+  it('keeps the working modes an engine offers in its own order, skipping mode ids Cindy does not know', async () => {
+    const { call } = setup(declared);
+    const put = await call('PUT', JSON.stringify({ harnesses: [{
+      ...available, modes: ['default', 'acceptEdits', 'yolo', 'auto', 'plan', 'auto'], defaultMode: 'default',
+    }] }));
+    expect(put.status).toBe(200);
+    expect(put.body.harnesses[0]).toEqual({ ...available, modes: ['default', 'acceptEdits', 'auto', 'plan'], defaultMode: 'default' });
+    const unknownDefault = await call('PUT', JSON.stringify({ harnesses: [{ ...available, modes: ['plan'], defaultMode: 'yolo' }] }));
+    expect(unknownDefault.body.harnesses[0]).toEqual({ ...available, modes: ['plan'] });
+  });
+
   it.each([
     ['not JSON', 'nope'],
     ['no list', JSON.stringify({ dsh: true })],
@@ -100,6 +112,8 @@ describe('handleGhostHarnessesRequest', () => {
     ['too many models', JSON.stringify({ harnesses: [{ ...available, models: Array.from({ length: 201 }, (_, i) => ({ id: `m${i}`, name: `M${i}` })) }] })],
     ['efforts that are not a list', JSON.stringify({ harnesses: [{ ...available, models: [{ id: 'a', name: 'A', efforts: 'high' }] }] })],
     ['an effort that is not text', JSON.stringify({ harnesses: [{ ...available, models: [{ id: 'a', name: 'A', efforts: ['high', 3] }] }] })],
+    ['modes that are not a list', JSON.stringify({ harnesses: [{ ...available, modes: 'plan' }] })],
+    ['a default mode without modes', JSON.stringify({ harnesses: [{ ...available, defaultMode: 'plan' }] })],
     ['a default without efforts', JSON.stringify({ harnesses: [{ ...available, models: [{ id: 'a', name: 'A', defaultEffort: 'high' }] }] })],
   ])('rejects %s with 400 and keeps the previous list', async (_label, body) => {
     const { call, store, onChanged } = setup(declared, { harnesses: [available] });

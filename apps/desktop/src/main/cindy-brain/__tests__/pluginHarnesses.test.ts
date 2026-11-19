@@ -86,12 +86,12 @@ describe('plugin harness registry', () => {
   });
 
   // 2026-11-18 用户要求：引擎图标由插件定义；模型列表由插件提供，获取与展示同普通供应商。
-  it('carries the plugin icon and the models the plugin publishes for its engine', () => {
-    const models = [{ id: 'v4-pro', name: 'DeepSeek-V4-Pro', group: 'DeepSeek' }];
+  it('carries the plugin icon and the models and agent modes the plugin publishes for its engine', () => {
+    const models = [{ id: 'v4-pro', name: 'DeepSeek-V4-Pro', group: 'DeepSeek', efforts: ['low', 'high', 'max'], defaultEffort: 'high' }];
     const { registry } = setup([ghost({ iconDataUrl: 'data:image/png;base64,AAAA' })], {
-      harnesses: [{ id: 'dsh', available: true, models }],
+      harnesses: [{ id: 'dsh', available: true, models, modes: ['default', 'plan'], defaultMode: 'default' }],
     });
-    expect(registry.list()).toMatchObject([{ iconDataUrl: 'data:image/png;base64,AAAA', models }]);
+    expect(registry.list()).toMatchObject([{ iconDataUrl: 'data:image/png;base64,AAAA', models, modes: ['default', 'plan'], defaultMode: 'default' }]);
   });
 
   it('asks only engine plugins to refresh when a picker opens, at most once per cooldown', () => {

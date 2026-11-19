@@ -17,7 +17,7 @@
  * getGhost 同一身份,不会把同名的组织实例与 root 实例混为一谈;实例键不含 `:`,所以
  * `key = ${ghostId}:${harnessId}` 无歧义。
  */
-import { ghostHarnessText, storedGhostHarnessAvailability, type GhostHarnessModel } from '@cindy/plugin-protocol';
+import { ghostHarnessText, storedGhostHarnessAvailability, type GhostHarnessMode, type GhostHarnessModel } from '@cindy/plugin-protocol';
 
 import { approvedGhostHarnesses, type InstalledGhost } from '../../shared/ghost.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
@@ -37,6 +37,9 @@ export interface PluginHarness {
   iconDataUrl?: string;
   /** Models the plugin lists for this engine (`PUT /harnesses`); absent = the plugin lists none. */
   models?: GhostHarnessModel[];
+  /** The agent's own working modes the plugin lists (Cindy permission mode ids); absent = none. */
+  modes?: GhostHarnessMode[];
+  defaultMode?: GhostHarnessMode;
 }
 
 export interface PluginHarnessRegistry {
@@ -111,6 +114,8 @@ function projectHarnesses(deps: PluginHarnessRegistryDeps, ghosts: InstalledGhos
           : { state: 'unknown' },
         ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
         ...(status?.models ? { models: status.models.map((model) => ({ ...model, ...(model.efforts ? { efforts: [...model.efforts] } : {}) })) } : {}),
+        ...(status?.modes ? { modes: [...status.modes] } : {}),
+        ...(status?.defaultMode ? { defaultMode: status.defaultMode } : {}),
       });
     }
   }

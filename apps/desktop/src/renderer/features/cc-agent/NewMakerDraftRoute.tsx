@@ -3619,10 +3619,13 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         setDlSel((prev) => (prev ? { ...prev, permissionMode: newMode } : prev));
         return;
       }
-      // 选着插件引擎时改的是引擎的两档之一，记在引擎选择上，不写内置 Harness 的偏好。
+      // 选着插件引擎时改的是引擎提供的档位(Agent 自己的模式或 Cindy 的两档)，记在引擎选择上，
+      // 不写内置 Harness 的偏好。
       const engineSelection = activePluginEngine ? getDraft().pluginEngine : null;
       if (engineSelection) {
-        patchDraft({ pluginEngine: { ...engineSelection, permissionMode: pluginEnginePermissionMode(newMode) } });
+        patchDraft({
+          pluginEngine: { ...engineSelection, permissionMode: pluginEnginePermissionMode(newMode, activePluginEngine?.engine) },
+        });
         return;
       }
       patchActivePrefs({ permissionMode: newMode });
@@ -4506,7 +4509,7 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
         engineDataOwnerAtSend.dataOwnerId === dataOwnerId &&
         isDataOwnerGenerationCurrent(engineDataOwnerAtSend);
       const createFields = pluginEngineSessionCreateFields(selection);
-      const enginePermissionMode = pluginEnginePermissionMode(permissionMode);
+      const enginePermissionMode = pluginEnginePermissionMode(permissionMode, selection.engine);
       markSendInFlight(true);
       let optimisticTitleSessionId: string | null = null;
       let markedStartingSessionId: string | null = null;

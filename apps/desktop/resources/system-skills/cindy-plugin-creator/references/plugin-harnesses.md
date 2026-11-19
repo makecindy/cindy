@@ -71,6 +71,7 @@ await fetch('/harnesses', {
 | `reason` | 可选,小写字母、数字、`-` 的短标识,如 `not-installed` |
 | `message` | 可选,最长 200 的纯文本,不可用时作为提示原样显示 |
 | `version` | 可选,最长 64,检测到的外部 Agent 版本 |
+| `modes` | 可选,Agent 自己的工作模式,用 Cindy 权限档 id:`default` / `acceptEdits` / `auto` / `plan`,按 Agent 的顺序;`defaultMode` 是 Agent 启动时所在的模式。对 ACP 引擎,取它 `mode` 配置项里能对上这些 id 的取值(`accept-edits` 对应 `acceptEdits`) |
 | `models` | 可选,这个引擎的模型列表,最多 200 个:`[{ id, name, description?, group?, efforts?, defaultEffort? }]`。`id` 最长 256、必须是引擎自己在任务里切换模型时接受的取值(ACP 的 `model` 配置项取值);`name` / `description` / `group` 最长 200 的纯文本;`id` 不能重复。`efforts` 是这个模型可选的思考深度,用 Cindy 的档位 id(`minimal` / `low` / `medium` / `high` / `xhigh` / `max`),`defaultEffort` 是引擎不指定时用的那一档 |
 
 只接受这些元数据,其它字段丢弃,不能借它传命令。`GET /harnesses` 读回当前状态。格式错误或写了
@@ -92,6 +93,10 @@ Cindy 存下最新状态,显示引擎列表时只读这份记录,**不调用插�
 没有对应档位、不要上报。ACP 只公布当前模型的 `thought_level`,要列出每个模型的档位,可以在插件自己的
 探测会话里逐个切换模型读取(不发提示,不会调用模型)。不认识的档位 id 会被跳过;不发 `efforts` 的模型
 没有可选档位。
+
+**工作模式**:发布了 `modes` 时,输入框的权限菜单列出这些模式,末尾固定是 Cindy 的「全部允许」;没发布时是
+「逐项确认 / 全部允许」。用户切换模式时 Cindy 让 Agent 切到对应模式(ACP 的 `mode` 配置项),Agent 请求权限时
+仍由用户逐个确认,选「全部允许」才自动同意。
 
 ### 入口进程
 

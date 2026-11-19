@@ -14148,6 +14148,22 @@
             "label": "매번 확인",
             "description": "Agent가 권한을 요청하면 직접 확인합니다. Agent가 확인을 요청하지 않는 작업은 Cindy가 막을 수 없습니다."
           },
+          "default": {
+            "label": "기본",
+            "description": "Agent의 기본 방식으로 작업합니다. 권한 요청은 직접 확인합니다."
+          },
+          "acceptEdits": {
+            "label": "편집 자동 승인",
+            "description": "Agent가 파일을 바로 수정합니다. 그 밖의 권한 요청은 직접 확인합니다."
+          },
+          "auto": {
+            "label": "자동",
+            "description": "확인이 필요한 작업은 Agent가 판단합니다. 요청된 권한은 직접 확인합니다."
+          },
+          "plan": {
+            "label": "계획만",
+            "description": "Agent가 분석과 계획만 하고 파일은 수정하지 않습니다."
+          },
           "bypassPermissions": {
             "label": "모두 허용",
             "description": "Agent가 요청하는 권한을 모두 자동으로 허용합니다."

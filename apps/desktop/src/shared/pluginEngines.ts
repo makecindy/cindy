@@ -37,8 +37,19 @@ export interface PluginEngineModel {
   defaultEffort?: PluginEngineEffort;
 }
 
+/**
+ * Permission modes of a plugin engine: Cindy's generic Ask each time / Full access, or the agent's
+ * own modes (named like Cindy's built-in ones) followed by Full access.
+ */
+export const PLUGIN_ENGINE_PERMISSION_MODE_IDS = ['ask', 'default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const;
+export type PluginEnginePermissionModeId = (typeof PLUGIN_ENGINE_PERMISSION_MODE_IDS)[number];
+
+export function isPluginEnginePermissionModeId(value: unknown): value is PluginEnginePermissionModeId {
+  return typeof value === 'string' && (PLUGIN_ENGINE_PERMISSION_MODE_IDS as readonly string[]).includes(value);
+}
+
 export interface PluginEnginePermissionMode {
-  id: 'ask' | 'bypassPermissions';
+  id: PluginEnginePermissionModeId;
   displayName: string;
   description?: string;
 }
@@ -65,6 +76,8 @@ export interface PluginEngineView {
   /** Models the agent offered the last time a task ran on it; empty until then. */
   models: PluginEngineModel[];
   permissionModes: PluginEnginePermissionMode[];
+  /** The mode a new task starts in (the agent's own default mode, else 'ask'). */
+  defaultPermissionMode: PluginEnginePermissionModeId;
 }
 
 export function pluginEngineProviderId(key: string): string {

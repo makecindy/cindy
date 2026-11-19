@@ -14148,6 +14148,22 @@
             "label": "逐項確認",
             "description": "Agent 求權時由君裁可；Agent 未求確認之舉，Cindy 無從攔阻。"
           },
+          "default": {
+            "label": "常法",
+            "description": "依 Agent 之常法行事；其請權限，由君定之。"
+          },
+          "acceptEdits": {
+            "label": "許修改",
+            "description": "Agent 逕改文件；他事請權限，由君定之。"
+          },
+          "auto": {
+            "label": "自斷",
+            "description": "Agent 自斷何事須確認；其請權限，由君定之。"
+          },
+          "plan": {
+            "label": "但謀劃",
+            "description": "Agent 唯析事謀劃，不改文件。"
+          },
           "bypassPermissions": {
             "label": "盡許",
             "description": "Agent 所求之權，一概自許。"

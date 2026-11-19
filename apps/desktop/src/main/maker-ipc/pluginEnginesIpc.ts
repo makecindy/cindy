@@ -51,6 +51,38 @@ export function pluginEngineModelsOf(harness: PluginHarness): PluginEngineView['
   return engineModels(harness);
 }
 
+/** Names of the agent modes Cindy can show (the renderer localizes them by id). */
+const AGENT_MODE_NAMES: Record<NonNullable<PluginHarness['modes']>[number], string> = {
+  default: 'Default',
+  acceptEdits: 'Accept edits',
+  auto: 'Auto',
+  plan: 'Plan',
+};
+
+function toModeView(mode: (typeof ACP_PERMISSION_MODES)[number]): PluginEnginePermissionMode {
+  return {
+    id: mode.id as PluginEnginePermissionMode['id'],
+    displayName: mode.displayName,
+    ...(mode.description ? { description: mode.description } : {}),
+  };
+}
+
+/**
+ * The permission menu of an engine: the agent's own modes the plugin lists, then Cindy's Full
+ * access (maker-core acpPermissionModes offers the same once the engine runs); else Cindy's two.
+ */
+function enginePermissionModes(harness: PluginHarness): Pick<PluginEngineView, 'permissionModes' | 'defaultPermissionMode'> {
+  const generic = ACP_PERMISSION_MODES.map(toModeView);
+  if (!harness.modes?.length) return { permissionModes: generic, defaultPermissionMode: 'ask' };
+  return {
+    permissionModes: [
+      ...harness.modes.map((id) => ({ id, displayName: AGENT_MODE_NAMES[id] })),
+      ...generic.filter((mode) => mode.id === 'bypassPermissions'),
+    ],
+    defaultPermissionMode: harness.defaultMode ?? harness.modes[0]!,
+  };
+}
+
 function toView(harness: PluginHarness): PluginEngineView {
   return {
     key: harness.key,
@@ -62,11 +94,7 @@ function toView(harness: PluginHarness): PluginEngineView {
     ...(harness.iconDataUrl ? { iconDataUrl: harness.iconDataUrl } : {}),
     availability: harness.availability,
     models: engineModels(harness),
-    permissionModes: ACP_PERMISSION_MODES.map((mode) => ({
-      id: mode.id as PluginEnginePermissionMode['id'],
-      displayName: mode.displayName,
-      ...(mode.description ? { description: mode.description } : {}),
-    })),
+    ...enginePermissionModes(harness),
   };
 }
 

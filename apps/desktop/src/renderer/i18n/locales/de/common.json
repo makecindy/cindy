@@ -14202,6 +14202,22 @@
             "label": "Jedes Mal bestätigen",
             "description": "Du bestätigst, wenn der Agent eine Berechtigung anfragt. Aktionen, für die der Agent nicht nachfragt, kann Cindy nicht blockieren."
           },
+          "default": {
+            "label": "Standard",
+            "description": "Der Agent arbeitet in seinem Standardmodus; seine Berechtigungsanfragen bestätigst du."
+          },
+          "acceptEdits": {
+            "label": "Änderungen akzeptieren",
+            "description": "Der Agent bearbeitet Dateien direkt; andere Berechtigungsanfragen bestätigst du."
+          },
+          "auto": {
+            "label": "Automatisch",
+            "description": "Der Agent entscheidet, was eine Bestätigung braucht; seine Anfragen bestätigst du."
+          },
+          "plan": {
+            "label": "Nur planen",
+            "description": "Der Agent analysiert und plant nur; er bearbeitet keine Dateien."
+          },
           "bypassPermissions": {
             "label": "Alles erlauben",
             "description": "Alle Berechtigungen, die der Agent anfragt, werden automatisch erteilt."

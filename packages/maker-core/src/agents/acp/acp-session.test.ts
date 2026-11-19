@@ -491,6 +491,52 @@ describe('AcpSession model and effort', () => {
   });
 });
 
+// 2026-11-19:Antigravity(agy 1.5.12)在 configOptions 里公布 mode = default / accept-edits / auto / plan；
+// 用户决定权限菜单显示 Agent 的模式并保留「全部允许」，插件基座通用。
+describe('AcpSession agent modes', () => {
+  const configOptions = [
+    {
+      id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' }, { value: 'accept-edits', name: 'Accept edits' },
+        { value: 'auto', name: 'Auto' }, { value: 'plan', name: 'Plan' }, { value: 'yolo-x', name: 'Agent only' },
+      ],
+    },
+  ];
+  const modeChanges = (agent: FakeAgent) => agent.sent
+    .filter((message) => message.method === 'session/set_config_option')
+    .map((message) => (message.params as AcpRecord).value);
+
+  it('offers the agent modes Cindy can name, then Full access, and switches the agent mode', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent);
+    expect(session.capabilities.permissionModes.map((mode) => [mode.id, mode.displayName])).toEqual([
+      ['default', 'Default'], ['acceptEdits', 'Accept edits'], ['auto', 'Auto'], ['plan', 'Plan'], ['bypassPermissions', 'Full access'],
+    ]);
+    await session.setPermissionMode('acceptEdits');
+    await session.setPermissionMode('plan');
+    // Full access is Cindy's own answer to permission requests; the agent keeps its mode.
+    await session.setPermissionMode('bypassPermissions');
+    expect(modeChanges(agent)).toEqual(['accept-edits', 'plan']);
+  });
+
+  it('applies the stored mode when the task starts and still asks you about permission requests', async () => {
+    const agent = createFakeAgent({ configOptions });
+    const { session } = await open(agent, { permissionMode: 'plan' });
+    expect(modeChanges(agent)).toEqual(['plan']);
+    const seen: InteractionRequest[] = [];
+    session.setInteractionResolver(async (request) => {
+      seen.push(request);
+      return { kind: 'permission', behavior: 'deny' } as InteractionDecision;
+    });
+    await session.send({ type: 'user', content: 'go' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    const answer = await agent.requestPermission({ toolCall: { toolCallId: 't1', title: 'Edit file' }, options: PERMISSION_OPTIONS });
+    expect(answer).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(seen).toHaveLength(1);
+  });
+});
+
 const silentLogger: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => silentLogger };
 
 function createAcpAgent(connect: () => FakeAgent['transport'], seen: string[] = []) {

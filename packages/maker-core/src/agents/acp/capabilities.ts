@@ -37,6 +37,51 @@ export const ACP_PERMISSION_MODES: readonly PermissionModeDescriptor[] = [
 
 export const ACP_SUPPORTED_PERMISSION_MODES: ReadonlySet<PermissionMode> = new Set(ACP_PERMISSION_MODES.map((mode) => mode.id));
 
+/**
+ * Cindy permission modes an agent's own `mode` option can stand for. A value maps when it names
+ * the same mode ignoring case, '-', '_' and spaces (`accept-edits` → acceptEdits); other values
+ * stay agent-only, like reasoning levels Cindy cannot name.
+ */
+const MAPPABLE_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
+
+function modeKey(value: string): string {
+  return value.toLowerCase().replace(/[-_\s]/g, '');
+}
+
+export function findModeOption(options: readonly AcpConfigOption[]): AcpConfigOption | undefined {
+  return options.find((option) => option.type === 'select' && option.category === 'mode')
+    ?? options.find((option) => option.type === 'select' && option.id === 'mode');
+}
+
+export interface MappedAcpMode {
+  mode: PermissionMode;
+  value: string;
+  name: string;
+}
+
+/** The agent's modes Cindy can name, in the agent's order. */
+export function mapModeValues(option: AcpConfigOption | undefined): MappedAcpMode[] {
+  if (!option) return [];
+  const out: MappedAcpMode[] = [];
+  for (const entry of option.options) {
+    const mode = MAPPABLE_MODES.find((candidate) => modeKey(candidate) === modeKey(entry.value));
+    if (mode && !out.some((mapped) => mapped.mode === mode)) out.push({ mode, value: entry.value, name: entry.name });
+  }
+  return out;
+}
+
+/**
+ * Permission modes offered for an ACP task. An agent that publishes modes Cindy can name offers
+ * those (the agent switches its own mode; Cindy still asks you about every permission request),
+ * followed by Full access; any other agent offers Ask each time / Full access.
+ */
+export function acpPermissionModes(options: readonly AcpConfigOption[]): PermissionModeDescriptor[] {
+  const agentModes = mapModeValues(findModeOption(options)).filter((mapped) => mapped.mode !== 'bypassPermissions');
+  if (agentModes.length === 0) return [...ACP_PERMISSION_MODES];
+  const fullAccess = ACP_PERMISSION_MODES.find((mode) => mode.id === 'bypassPermissions')!;
+  return [...agentModes.map((mapped) => ({ id: mapped.mode, displayName: mapped.name })), fullAccess];
+}
+
 export function findModelOption(options: readonly AcpConfigOption[]): AcpConfigOption | undefined {
   return options.find((option) => option.type === 'select' && option.category === 'model')
     ?? options.find((option) => option.type === 'select' && option.id === 'model');
@@ -110,7 +155,7 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     effort: effortLevels.length > 0 ? SUPPORTED : SDK_MISSING,
     effortLevels,
     reasoningDisplay: ['full'],
-    permissionModes: [...ACP_PERMISSION_MODES],
+    permissionModes: acpPermissionModes(options),
     setPermissionModeMidSession: SUPPORTED,
     planMode: SDK_MISSING,
     multimodal: {

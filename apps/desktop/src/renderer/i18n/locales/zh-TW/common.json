@@ -14148,6 +14148,22 @@
             "label": "逐項確認",
             "description": "Agent 請求權限時由你確認。Agent 沒有請求確認的操作，Cindy 無法攔截。"
           },
+          "default": {
+            "label": "預設",
+            "description": "依 Agent 自己的預設方式工作；它請求權限時由你確認。"
+          },
+          "acceptEdits": {
+            "label": "自動接受編輯",
+            "description": "Agent 直接修改檔案；其他請求權限的操作由你確認。"
+          },
+          "auto": {
+            "label": "自動",
+            "description": "由 Agent 自行判斷哪些操作需要確認；它請求權限時由你確認。"
+          },
+          "plan": {
+            "label": "只規劃",
+            "description": "Agent 只分析並制定計畫，不修改檔案。"
+          },
           "bypassPermissions": {
             "label": "全部允許",
             "description": "Agent 請求的權限一律自動允許。"

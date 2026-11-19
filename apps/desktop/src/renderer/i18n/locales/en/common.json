@@ -14202,6 +14202,22 @@
             "label": "Ask each time",
             "description": "You confirm when the Agent asks for permission. Cindy can’t block actions the Agent doesn’t ask about."
           },
+          "default": {
+            "label": "Default",
+            "description": "Works the agent’s default way; you confirm its permission requests."
+          },
+          "acceptEdits": {
+            "label": "Accept edits",
+            "description": "The agent edits files directly; you confirm its other permission requests."
+          },
+          "auto": {
+            "label": "Auto",
+            "description": "The agent decides what needs confirmation; you confirm the requests it makes."
+          },
+          "plan": {
+            "label": "Plan only",
+            "description": "The agent only analyzes and plans; it does not edit files."
+          },
           "bypassPermissions": {
             "label": "Allow all",
             "description": "Every permission the Agent asks for is granted automatically."

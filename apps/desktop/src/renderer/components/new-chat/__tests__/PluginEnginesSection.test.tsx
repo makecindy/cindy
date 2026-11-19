@@ -96,8 +96,10 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
 vi.mock('@/state/deviceLinkModelMirror', () => ({ useDeviceLinkModelMirrorVersion: () => 0 }));
 
 import { ModelSelector, ModelSelectorContent } from '../ModelSelector';
+import { PermissionSelector } from '../PermissionSelector';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  pluginEnginePermissionMode,
   pluginEngineSessionCreateFields,
   resolveActivePluginEngine,
 } from '@/lib/pluginEngineSelection';
@@ -117,6 +119,7 @@ const engine = (key: string, name: string, extra: Partial<PluginEngineView> = {}
   availability: { state: 'available' },
   models: [],
   permissionModes: modes,
+  defaultPermissionMode: 'ask',
   ...extra,
 });
 const DSH_ICON = 'data:image/png;base64,iVBORw0KGgo=';
@@ -135,6 +138,15 @@ const leveled = engine('dsh-plugin:dsh', 'DeepSeek Harness', {
     { id: 'flash', displayName: 'Flash', efforts: ['low', 'high'], defaultEffort: 'low' },
     { id: 'plain', displayName: 'Plain' },
   ],
+});
+// Antigravity(agy 1.5.12)公布 default / accept-edits / auto / plan；main 的引擎视图按 Agent 的顺序列出，末尾是「全部允许」。
+const agy = engine('agy-plugin:agy', 'Antigravity', {
+  permissionModes: [
+    { id: 'default', displayName: 'Default' }, { id: 'acceptEdits', displayName: 'Accept edits' },
+    { id: 'auto', displayName: 'Auto' }, { id: 'plan', displayName: 'Plan' },
+    { id: 'bypassPermissions', displayName: 'Full access' },
+  ],
+  defaultPermissionMode: 'default',
 });
 const levelOf = (row: HTMLElement) => row.querySelector('[data-plugin-engine-effort]')?.getAttribute('data-plugin-engine-effort') ?? null;
 
@@ -272,6 +284,46 @@ describe('plugin engines in the new-task picker', () => {
     ['not a plugin engine id', { providerId: 'anthropic', modelId: 'claude-opus-5' }],
   ] as const)('falls back to the built-in model when the remembered engine cannot run: %s', (_label, selection) => {
     expect(resolveActivePluginEngine([dsh, gemini, known], selection)).toBeNull();
+  });
+});
+
+// 2026-11-19 用户决定：Agent 公布了自己的模式时，权限菜单显示这些模式并在末尾保留「全部允许」(插件基座通用)。
+describe('agent working modes of a plugin engine', () => {
+  it('starts in the agent’s default mode and keeps only modes the engine offers', () => {
+    const start = (permissionMode?: 'plan' | 'ask' | 'bypassPermissions') =>
+      resolveActivePluginEngine([agy, dsh], { providerId: agy.providerId, modelId: 'default', ...(permissionMode ? { permissionMode } : {}) })!
+        .permissionMode;
+    expect(start()).toBe('default');
+    expect(start('plan')).toBe('plan');
+    expect(start('bypassPermissions')).toBe('bypassPermissions');
+    // Cindy's generic 'ask' is not one of this agent's modes: the agent's default instead.
+    expect(start('ask')).toBe('default');
+    // An engine without modes keeps Cindy's two; a removed engine keeps only Full access.
+    expect(pluginEnginePermissionMode('plan', dsh)).toBe('ask');
+    expect(pluginEnginePermissionMode('bypassPermissions', null)).toBe('bypassPermissions');
+    expect(pluginEnginePermissionMode('plan', null)).toBe('ask');
+  });
+
+  it('lists the agent’s modes in its order with Full access last in the permission menu', async () => {
+    const onPermissionModeChange = vi.fn();
+    render(React.createElement(PermissionSelector, {
+      permissionMode: 'plan', onPermissionModeChange, pluginEngineModes: agy.permissionModes, useMorphPopover: false,
+    }));
+    const trigger = screen.getByRole('button');
+    expect(trigger.textContent).toContain('Plan');
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    const labels = ['Default', 'Accept edits', 'Auto', 'Plan', 'Full access'];
+    const options = labels.map((label) => screen.getAllByText(label).at(-1)!);
+    expect(options.map((node) => labels.indexOf(node.textContent!))).toEqual([0, 1, 2, 3, 4]);
+    for (let index = 1; index < options.length; index += 1) {
+      expect(options[index - 1]!.compareDocumentPosition(options[index]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    await act(async () => {
+      fireEvent.click(options[1]!);
+    });
+    expect(onPermissionModeChange).toHaveBeenCalledWith('acceptEdits');
   });
 });
 

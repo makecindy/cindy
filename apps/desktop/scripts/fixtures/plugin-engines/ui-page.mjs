@@ -9,11 +9,20 @@ export default {
     default: { about: 'New-task picker with three engines: available (no models yet), unknown (models known) and unavailable with an install hint' },
     'draft-selected': { about: 'An engine model is the draft choice: its row carries the selected fill, no built-in model row is selected' },
     'effort-config': { about: 'A plugin engine model with reasoning levels: level at the row end and its configuration flyout with the level slider' },
+    'agent-modes': { about: 'Permission menu of an engine whose agent publishes its own modes: the agent modes in its order, then Full access', viewport: { width: 560, height: 640 } },
     'task-icons': { about: 'Sidebar task identity: the plugin icon takes the row colour (idle grey, selected, running orange) next to a built-in mark', viewport: { width: 320, height: 200 } },
     task: { about: 'Task running on a plugin engine: trigger shows engine · model · level; the panel lists only that engine' },
     'task-engine-gone': { about: 'The plugin providing the task engine was removed: generic engine label and a notice' },
   },
   async check(page, ui) {
+    if (ui.case === 'agent-modes') {
+      // 2026-11-19:Agent 公布了自己的模式时，权限菜单列出这些模式并在末尾保留「全部允许」。
+      await page.getByRole('button').first().click();
+      const labels = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
+      for (const id of labels) await page.getByText(await ui.t(`newChat.permissionSelector.modes.acp.${id}.label`), { exact: true }).last().waitFor();
+      await ui.capture('menu');
+      return;
+    }
     if (ui.case === 'task-icons') {
       // 2026-11-19:插件图标不再显示品牌色，透明底的图标按剪影用侧栏状态色。
       await page.locator('[data-plugin-icon="silhouette"]').first().waitFor();

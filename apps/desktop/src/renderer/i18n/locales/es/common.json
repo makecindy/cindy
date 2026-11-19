@@ -14317,6 +14317,22 @@
             "label": "Confirmar cada vez",
             "description": "Confirmas cuando el Agent pide permiso. Cindy no puede bloquear las acciones para las que el Agent no pide confirmación."
           },
+          "default": {
+            "label": "Predeterminado",
+            "description": "El agente trabaja a su manera predeterminada; tú confirmas sus solicitudes de permiso."
+          },
+          "acceptEdits": {
+            "label": "Aceptar ediciones",
+            "description": "El agente edita archivos directamente; tú confirmas sus demás solicitudes de permiso."
+          },
+          "auto": {
+            "label": "Automático",
+            "description": "El agente decide qué necesita confirmación; tú confirmas las solicitudes que haga."
+          },
+          "plan": {
+            "label": "Solo planificar",
+            "description": "El agente solo analiza y planifica; no edita archivos."
+          },
           "bypassPermissions": {
             "label": "Permitir todo",
             "description": "Todos los permisos que pida el Agent se conceden automáticamente."
