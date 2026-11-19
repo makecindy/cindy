@@ -2261,7 +2261,7 @@
         "standard": "Padrão",
         "wide": "Amplo",
         "width": "Largura do conteúdo",
-        "hint": "Usa o espaço disponível no chat. Mantém pelo menos a largura padrão quando há espaço e se ajusta em painéis estreitos."
+        "hint": "Usa o espaço entre as margens do chat. Painéis estreitos se ajustam automaticamente."
       },
       "title": "Aparência",
       "modeLabel": "Modo de aparência",

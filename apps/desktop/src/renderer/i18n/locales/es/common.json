@@ -2261,7 +2261,7 @@
         "standard": "Estándar",
         "wide": "Ancho",
         "width": "Ancho del contenido",
-        "hint": "Se calcula según el espacio disponible en el chat. Mantiene al menos el ancho estándar si cabe y se reduce en paneles estrechos."
+        "hint": "Se calcula sobre el espacio entre los márgenes del chat. Los paneles estrechos se ajustan automáticamente."
       },
       "title": "Apariencia",
       "modeLabel": "Modo de apariencia",

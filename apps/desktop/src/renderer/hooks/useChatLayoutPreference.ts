@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 export type ChatLayoutMode = 'standard' | 'wide';
 
-export const CHAT_WIDTH_PERCENT = { min: 25, max: 100, step: 5, defaultValue: 75 } as const;
+export const CHAT_WIDTH_PERCENT = { min: 50, max: 100, step: 5, defaultValue: 75 } as const;
 
 const MODE_KEY = 'chat.layoutMode';
 const WIDTH_KEY = 'chat.layoutWidthPercent';
@@ -64,6 +64,10 @@ function isWidthPercent(value: number): boolean {
 
 function getSavedWidth(): number {
   const value = Number(read(WIDTH_KEY, fallbackWidth));
+  // Keep the intent of a low setting saved during the earlier 25%–100% preview.
+  if (value >= 25 && value < CHAT_WIDTH_PERCENT.min && value % CHAT_WIDTH_PERCENT.step === 0) {
+    return CHAT_WIDTH_PERCENT.min;
+  }
   return isWidthPercent(value) ? value : CHAT_WIDTH_PERCENT.defaultValue;
 }
 
