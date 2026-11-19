@@ -898,7 +898,7 @@ export function projectGiftCardPurchasePolicy(value: unknown): BillingGiftCardPu
 
 function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
   if (!isRecord(value)) invalidResponse();
-  const cardId = boundedString(value.cardId);
+  const cardId = isPurchasedGiftCardId(value.cardId) ? value.cardId : null;
   const orderId = boundedString(value.orderId);
   const faceCode =
     typeof value.faceCode === 'string' && FACE_CODE_PATTERN.test(value.faceCode)
@@ -965,6 +965,14 @@ function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
  * 「我买的礼品卡」的翻页游标：服务端发的是 base64url，最长 512。读响应与「加载更多」请求（IPC 参数
  * 校验）共用这一条规则，读进来的游标一定能原样发回去；不合规则的游标在读响应时就按坏响应处理。
  */
+/**
+ * 「我买的礼品卡」的卡号：读列表与取码、发到邮箱两个 IPC 请求共用这一条规则，读进来的卡号一定能用来
+ * 取码和发信（服务端发的是 UUID，也满足）。不合规则的卡号在读响应时就按坏响应处理。
+ */
+export function isPurchasedGiftCardId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
 export function isPurchasedGiftCardCursor(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_.~-]{1,512}$/.test(value);
 }

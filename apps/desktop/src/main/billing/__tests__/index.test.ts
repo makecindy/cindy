@@ -924,7 +924,8 @@ describe('gift card purchase IPC', () => {
     );
 
     it.each([
-      { cardId: 'card_1', email: 'friend@example.com' },
+      // 卡号与读列表、取码同一条规则（isPurchasedGiftCardId）：只挡不是卡号的输入。
+      { cardId: '../card_1', email: 'friend@example.com' },
       { cardId, email: 42 },
       { cardId, email: 'friend@example.com', membershipId: 'someone-else' },
     ])('rejects a malformed request %j', async (payload) => {

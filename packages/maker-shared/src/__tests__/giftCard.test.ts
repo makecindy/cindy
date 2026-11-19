@@ -132,6 +132,20 @@ describe('gift card server responses', () => {
     else expect(project).toThrow();
   });
 
+  // 卡面按分印：比分更细的卡面或到账金额（即使两者相等）按坏响应处理，免得卡面印 1.005、文字显示 1.01。
+  it('rejects gift card amounts finer than a cent, however they are written', () => {
+    const redeemed = {
+      ...card, source: 'PURCHASE', destination: 'PURCHASED', claimDeadline: null, validityDays: null,
+      status: 'CLAIMED_BY_YOU', claimedAt: '2026-11-19T08:00:00.000Z',
+    };
+    const redeem = (amount: string) => projectGiftCardRedemption({
+      card: { ...redeemed, amount }, credit: { state: 'APPLIED', amount, expiresAt: null },
+    });
+    expect(() => redeem('1.005')).toThrow();
+    expect(() => projectGiftCardPreview({ card: { ...card, amount: '1.005' } })).toThrow();
+    expect(redeem('1.500000000').card.amount).toBe('1.500000000');
+  });
+
   // 买来的卡永久有效：预览或兑换结果里出现「已过期」同样自相矛盾，拒绝而不是告诉用户卡过期了。
   it('rejects a purchased card reported as expired', () => {
     const expired = {

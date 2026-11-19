@@ -159,8 +159,13 @@ function nullableTime(value: unknown): string | null {
   return value === null ? null : time(value);
 }
 
+/**
+ * 礼品卡金额（卡面与到账额度）：十进制，去掉小数末尾的 0 后最多两位小数。服务端发卡也限两位，
+ * 卡面按分印；比分更细的金额卡面与文字会对不上，按坏响应处理。
+ */
 function amount(value: unknown): string {
   if (typeof value !== 'string' || !DECIMAL_PATTERN.test(value)) invalid();
+  if ((value.split('.')[1] ?? '').replace(/0+$/, '').length > 2) invalid();
   return value;
 }
 

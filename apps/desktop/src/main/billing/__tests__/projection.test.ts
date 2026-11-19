@@ -12,6 +12,7 @@ import {
   projectModelAccessCreditUsage,
   projectPurchasedGiftCardCode,
   isPurchasedGiftCardCursor,
+  isPurchasedGiftCardId,
   projectPurchasedGiftCardList,
 } from '../projection.js';
 
@@ -1159,6 +1160,9 @@ describe('gift card purchase projection', () => {
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'SOLD' })], nextCursor: null })).toThrow();
     // 面额印在卡面上：比分更细的金额按坏响应处理；只是小数位写得更长的照常读出。
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '1.005' })], nextCursor: null })).toThrow();
+    // 读进来的卡号一定能用来取码和发信（与两个 IPC 请求同一条规则）；不是卡号的按坏响应处理。
+    expect(isPurchasedGiftCardId('card_1') && isPurchasedGiftCardId('3f2b8c1e-0a4d-4c55-9f1e-2b7d9c0e6a11')).toBe(true);
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ cardId: '../card_1' })], nextCursor: null })).toThrow();
     expect(projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '100.500000000' })], nextCursor: null })
       .cards.map((card) => card.amount)).toEqual(['100.500000000']);
     // 退款或拒付还在处理的卡（ON_HOLD）照常读出。
