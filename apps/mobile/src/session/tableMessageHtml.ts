@@ -99,7 +99,7 @@ export function tableMessageCss(colors: ThemeColors, scale: number, layout: Mess
     syntaxColors: { comment: colors.syntaxComment, function: colors.syntaxFunction, keyword: colors.syntaxKeyword,
       number: colors.syntaxNumber, property: colors.syntaxProperty, string: colors.syntaxString },
   }, false) + `
-  html,body{height:auto;min-height:0}#xdt-content{min-width:0}
+  html,body{height:auto;min-height:0}#xdt-content{min-width:0;white-space:pre-wrap}
   body{font-size:${typeScale.bodyLarge * scale}px;line-height:${lineHeight.bodyLarge * scale}px}
   h1{font-size:${typeScale.title * scale}px;line-height:${lineHeight.listTitle * scale}px}
   h2{font-size:${typeScale.subtitle * scale}px;line-height:${lineHeight.listTitle * scale}px}
@@ -112,7 +112,7 @@ export function tableMessageCss(colors: ThemeColors, scale: number, layout: Mess
   pre,pre code{font-size:${typeScale.bodySmall * scale}px;line-height:${lineHeight.bodySmall * scale}px}
   code,.doc-inline-code{font-family:monospace;font-size:${typeScale.bodySmall * scale}px;line-height:${lineHeight.bodySmall * scale}px;background:transparent;color:${colors.chatInlineCodeText}}
   .doc-table table{box-sizing:border-box;display:block;max-width:100%;overflow-x:auto;border-spacing:0;border-collapse:collapse;margin:0}
-  .doc-table th,.doc-table td{box-sizing:border-box;padding:${spacing.xs}px ${spacing.sm}px;border:${borderWidth}px solid ${colors.border};font-size:${typeScale.bodySmall * scale}px;line-height:${lineHeight.bodySmall * scale}px;white-space:normal;overflow-wrap:anywhere}
+  .doc-table th,.doc-table td{box-sizing:border-box;padding:${spacing.xs}px ${spacing.sm}px;border:${borderWidth}px solid ${colors.border};font-size:${typeScale.bodySmall * scale}px;line-height:${lineHeight.bodySmall * scale}px;overflow-wrap:anywhere}
   .doc-table th{background:${colors.surfaceElevated};color:${colors.textSecondary};font-weight:${fontWeight.medium}}
   .doc-table-copy{height:${spacing.xxl + spacing.xs * 2}px;user-select:none}
   [data-chat-link][role=link]{text-decoration:underline;cursor:pointer}

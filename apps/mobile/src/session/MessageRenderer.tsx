@@ -6240,12 +6240,14 @@ function MarkdownBodyBase({
   // LegendList row state throws there, so only list rows use the recycling hook.
   const useRowState = useRowStateHook();
   const [contentWidth, setContentWidth] = useRowState(0);
-  const [nativeBodyHeight, setNativeBodyHeight] = useRowState(0);
-  const [tableReadyKey, setTableReadyKey] = useRowState<string | null>(null);
+  const [nativeBodySize, setNativeBodySize] = useRowState({ width: 0, height: 0 });
+  const [tableReadyRevision, setTableReadyRevision] = useRowState<string | null>(null);
   const [tableFailedRevision, setTableFailedRevision] = useRowState<string | null>(null);
   const bodyInstance = useId();
   const documentKey = richStateKey ?? markdownImageCacheKey ?? bodyInstance;
   const documentRevision = JSON.stringify([documentKey, text]);
+  const currentDocumentRevision = useRef(documentRevision);
+  useLayoutEffect(() => { currentDocumentRevision.current = documentRevision; }, [documentRevision]);
   const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
     if (!measuresSettledWidth) return;
     const nextWidth = Math.round(event.nativeEvent.layout.width);
@@ -6278,17 +6280,29 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
-  const tableCandidate = Platform.OS === 'android' && androidTableSelection && selectionAllowed === true && !streaming
+  const measureTableBootstrap = Platform.OS === 'android' && androidTableSelection;
+  const tableCandidate = measureTableBootstrap && selectionAllowed === true && !streaming
     && blocks.some(block => block.type === 'table') && supportsTableMessageDocument(blocks);
   const tableFailed = tableFailedRevision === documentRevision;
-  const mountTableDocument = tableCandidate && !tableFailed && nativeBodyHeight > 0;
-  const showTableDocument = mountTableDocument && tableReadyKey === documentKey;
+  const mountTableDocument = tableCandidate && !tableFailed && nativeBodySize.width > 0 && nativeBodySize.height > 0;
+  const showTableDocument = mountTableDocument && tableReadyRevision === documentRevision;
+  // The WebView measures its container but has no intrinsic width for a hug bubble.
+  const tableDocumentStyle: ViewStyle | undefined = !showTableDocument
+    ? { position: 'absolute', top: 0, left: 0, right: 0, opacity: 0 }
+    : pinContentWidth ? undefined : { width: nativeBodySize.width, maxWidth: '100%' };
   // The native bootstrap remains readable until the document is ready, with
   // no selectable duplicate that could lose handles during this one promotion.
   const selectable = selectionAllowed && !(tableCandidate && !tableFailed);
-  const tableReady = useCallback(() => setTableReadyKey(documentKey), [documentKey]);
+  useLayoutEffect(() => {
+    if (!mountTableDocument && tableReadyRevision !== null) setTableReadyRevision(null);
+  }, [mountTableDocument, tableReadyRevision]);
+  const tableReady = useCallback((ready: boolean) => {
+    if (currentDocumentRevision.current !== documentRevision) return;
+    setTableReadyRevision(previous => ready ? documentRevision : previous === documentRevision ? null : previous);
+  }, [documentRevision]);
   const tableFailedToLoad = useCallback(() => {
-    setTableReadyKey(null);
+    if (currentDocumentRevision.current !== documentRevision) return;
+    setTableReadyRevision(null);
     setTableFailedRevision(documentRevision);
   }, [documentRevision]);
   const hasNestedLists = blocks.some(block => block.type === 'list_item' && (block.depth ?? 0) > 0);
@@ -6665,11 +6679,14 @@ function MarkdownBodyBase({
   return (
     <View
       collapsable={false}
-      onLayout={measuresSettledWidth || androidTableSelection && Platform.OS === 'android' ? event => {
+      onLayout={measuresSettledWidth || measureTableBootstrap ? event => {
         if (measuresSettledWidth) handleSettledWidthLayout(event);
-        if (!showTableDocument) {
-          const next = Math.ceil(event.nativeEvent.layout.height);
-          if (next > 0) setNativeBodyHeight(old => old === next ? old : next);
+        if (measureTableBootstrap && !showTableDocument) {
+          const { width, height: rawHeight } = event.nativeEvent.layout;
+          const height = Math.ceil(rawHeight);
+          if (width > 0 && height > 0) {
+            setNativeBodySize(previous => previous.width === width && previous.height === height ? previous : { width, height });
+          }
         }
       } : undefined}
       style={[
@@ -6687,12 +6704,12 @@ function MarkdownBodyBase({
       {mountTableDocument ? <View pointerEvents={showTableDocument ? 'auto' : 'none'}
         accessibilityElementsHidden={!showTableDocument}
         importantForAccessibility={showTableDocument ? 'auto' : 'no-hide-descendants'}
-        style={showTableDocument ? undefined : { position: 'absolute', top: 0, left: 0, right: 0, opacity: 0 }}>
+        style={tableDocumentStyle}>
         <TableMessageDocument documentKey={documentKey} text={text} blocks={blocks} layout={layout}
-          initialHeight={nativeBodyHeight} selectable={selectionAllowed} streaming={streaming}
+          initialHeight={nativeBodySize.height} selectable={selectionAllowed} streaming={streaming}
           codeCopyEnabled={codeCopyEnabled} onOpenSessionLink={onOpenSessionLink}
           onMeasured={onTableMeasured}
-          onReady={tableReady} onFailure={tableFailedToLoad} />
+          onReadyChange={tableReady} onFailure={tableFailedToLoad} />
       </View> : null}
       {!showTableDocument ? (
       <View

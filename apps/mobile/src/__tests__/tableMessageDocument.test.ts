@@ -8,7 +8,8 @@ import { RichContentRuntime } from '@/session/richContentRuntime';
 import { SelectionQuoteContext } from '@/session/selectionQuote';
 import { parseMobileMarkdown } from '@/session/messageMarkdown';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
-import { buildTableMessageContent, parseTableMessageObservation, supportsTableMessageDocument,
+import { lightColors } from '@/theme/tokens';
+import { buildTableMessageContent, parseTableMessageObservation, supportsTableMessageDocument, tableMessageCss,
   TABLE_MESSAGE_SHELL, tableMessageUpdateScript, type TableMessageDocument } from '@/session/tableMessageHtml';
 
 const native = vi.hoisted(() => ({ props: null as any, layout: null as any, height: 0, live: 0,
@@ -125,6 +126,18 @@ describe('trusted shell updates', () => {
       ReactNativeWebView: { postMessage: vi.fn() }, requestAnimationFrame: (run: () => void) => { run(); return 1; } });
     for (const script of document.querySelectorAll('script')) window.eval(script.textContent ?? '');
   });
+  it('preserves paragraph boundaries and spaces across inline nodes in the selectable body', () => {
+    const first = '中文  spaces **粗体**  `inline  code`  [链接](https://example.test)\n同段第二行 two  spaces。';
+    const result = build(`${first}\n\n${markdown}\n\n\`\`\`txt\na  b\n\`\`\``);
+    window.eval(tableMessageUpdateScript({ revision: 'spaces', html: result.html,
+      css: tableMessageCss(lightColors, 1, layout, 1), selectable: true, links: {} }));
+    const body = document.querySelector('#xdt-content')!;
+    const paragraph = body.querySelector('p')!;
+    expect(paragraph.textContent).toBe('中文  spaces 粗体  inline  code  链接\n同段第二行 two  spaces。');
+    expect(paragraph.querySelector('strong')?.textContent).toBe('粗体');
+    expect(getComputedStyle(body).whiteSpace).toBe('pre-wrap');
+    expect(getComputedStyle(body.querySelector('pre')!).whiteSpace).toBe('pre-wrap');
+  });
   it('preserves an existing selected text node during style/link updates and treats author JS as data', () => {
     const result = build('[中文 空格](https://example.test)\n\n' + markdown);
     const payload: TableMessageDocument = { revision: '1', css: '', html: result.html, selectable: true,
@@ -154,22 +167,25 @@ describe('trusted shell updates', () => {
 
 describe('actual message carrier lifecycle', () => {
   let root: Root, runtime: RichContentRuntime;
+  const ready = vi.fn(), fail = vi.fn();
   const source = '[外链](https://example.test)\n\n' + markdown;
   const context = { commitQuote: native.quote, askInSideChat: native.side };
   beforeEach(() => {
     vi.useFakeTimers(); native.fontScale = 1;
     native.inject.mockClear(); native.open.mockClear(); native.pin.mockClear(); native.quote.mockClear();
+    ready.mockClear(); fail.mockClear();
     runtime = new RichContentRuntime(); root = createRoot(document.createElement('div'));
   });
   afterEach(() => { act(() => root.unmount()); runtime.clear(); vi.useRealTimers(); });
-  const draw = (text = source, visible = true) => {
+  const draw = (text = source, visible = true, advance = 250) => {
     act(() => root.render(createElement(RichContentContext.Provider, { value: runtime },
       createElement(TableDocumentRowContext.Provider, { value: { key: 'row', visible, pin: native.pin } },
         createElement(SelectionQuoteContext.Provider, { value: context },
           createElement(TableView, { text, blocks: parseMobileMarkdown(text), layout,
-            documentKey: 'one-message', selectable: true, initialHeight: 120 }))))));
+            documentKey: 'one-message', selectable: true, initialHeight: 120,
+            onReadyChange: ready, onFailure: fail }))))));
     act(() => native.layout({ nativeEvent: { layout: { width: 360 } } }));
-    act(() => vi.advanceTimersByTime(250));
+    act(() => vi.advanceTimersByTime(advance));
   };
   const payload = () => {
     const script = native.inject.mock.calls.at(-1)![0] as string;
@@ -218,8 +234,22 @@ describe('actual message carrier lifecycle', () => {
     send({ kind: 'selection', revision: first.revision, active: true });
     draw(source, false);
     expect(native.live).toBe(1); expect(native.pin).toHaveBeenLastCalledWith('row', true, expect.any(String));
+    expect(ready).toHaveBeenLastCalledWith(true);
+    const previousMount = native.props;
     send({ kind: 'selection', revision: payload().revision, active: false });
     expect(native.live).toBe(0);
-    draw(); load(); expect(native.live).toBe(1); expect(native.height).toBe(430);
+    expect(ready).toHaveBeenLastCalledWith(false);
+    act(() => runtime.onScroll());
+    draw(source, true, 100);
+    expect(native.live).toBe(0);
+    expect(ready).toHaveBeenLastCalledWith(false);
+    draw(); const current = load();
+    expect(native.live).toBe(1); expect(native.height).toBe(430);
+    act(() => previousMount.onError());
+    send({ kind: 'height', revision: current.revision, height: 500, width: 360, slots: [] }, previousMount);
+    expect(fail).not.toHaveBeenCalled();
+    expect(ready).toHaveBeenLastCalledWith(false);
+    send({ kind: 'height', revision: current.revision, height: 431, width: 360, slots: [] });
+    expect(ready).toHaveBeenLastCalledWith(true);
   });
 });

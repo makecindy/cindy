@@ -126,7 +126,7 @@ const RICH_ANSWER = [
 
 // Android real-message regression: a user bubble must retain its intrinsic
 // width, and native/HTML selection must agree on spaces and line breaks.
-const TABLE_SELECTION_ANSWER = [
+export const TABLE_SELECTION_ANSWER = [
   '表前开始：中文  spaces **粗体**  `inline  code`  [链接](https://example.test)。',
   '同段第二行 two  spaces。',
   '',

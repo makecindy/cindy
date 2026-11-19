@@ -1,5 +1,6 @@
 /** Real table-body component, fixed local text, mock-only route in table-selection-preview. */
 import { Stack } from 'expo-router';
+import { TABLE_SELECTION_ANSWER } from '@cindy/maker-shared/ui-mock';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,6 +12,7 @@ import { SelectionQuoteContext } from '@/session/selectionQuote';
 import { MarkdownBody } from '@/session/MessageRenderer';
 import { ThemeOverrideProvider } from '@/theme/ThemeProvider';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
+import { messageBubbleBase, userMessageBubble } from '@/session/messageBubbleStyles';
 import { lineHeight, spacing, typeScale, useTheme } from '@/theme';
 import { TABLE_SELECTION_MARKDOWN } from './tableSelectionVisualFixture';
 
@@ -24,12 +26,15 @@ function Body({ dark, onTheme }: { dark: boolean; onTheme: () => void }) {
   const { colors } = useTheme();
   const width = useWindowWidth();
   const [streaming, setStreaming] = useState(false), [revision, setRevision] = useState(0), [code, setCode] = useState(false);
-  const text = TABLE_SELECTION_MARKDOWN.replace('中文 空格 42', '中文 🙂 空格 42')
+  const [whitespace, setWhitespace] = useState(false), [native, setNative] = useState(false);
+  const [narrow, setNarrow] = useState(false);
+  const text = (whitespace ? TABLE_SELECTION_ANSWER : TABLE_SELECTION_MARKDOWN.replace('中文 空格 42', '中文 🙂 空格 42'))
     + (revision ? `\n\n正文修订 ${revision}。` : '')
     + (code ? '\n\n```ts\nconst 文本 = "中文  空格 🙂";\nconsole.log(文本);\n```\n\n[文件](/repo/xdt-maker/README.md) · [设置](cindy://settings) · [外链](https://example.test)' : '');
-  const measurements = useRef({ native: 0, document: 0, outer: 0 });
+  const measurements = useRef({ native: 0, document: 0, outer: 0, width: 0 });
   const [receipt, setReceipt] = useState('等待实测');
-  const layout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
+  const bodyWidth = narrow ? Math.round(width * 0.73) : width;
+  const layout = useMemo(() => buildMessageContentLayout({ screenWidth: bodyWidth }), [bodyWidth]);
   const runtime = useMemo(() => new RichContentRuntime(), []);
   useEffect(() => () => runtime.clear(), [runtime]);
   const [quote, setQuote] = useState(''), [side, setSide] = useState(''), [pasted, setPasted] = useState('');
@@ -42,6 +47,9 @@ function Body({ dark, onTheme }: { dark: boolean; onTheme: () => void }) {
       {[[streaming ? '完成' : '生成', () => setStreaming(value => !value)],
         ['修订', () => setRevision(value => value + 1)], ['代码链接', () => setCode(value => !value)],
         [dark ? '浅色' : '深色', onTheme], ['测量', () => setReceipt(JSON.stringify(measurements.current))],
+        [whitespace ? '长表' : '空白对照', () => setWhitespace(value => !value)],
+        [native ? '统一正文' : '原生正文', () => setNative(value => !value)],
+        [narrow ? '宽容器' : '窄容器', () => setNarrow(value => !value)],
       ].map(([label, action]) => <Pressable key={String(label)} accessibilityRole="button"
         onPress={action as () => void} style={{ padding: spacing.sm, minHeight: 44 }}>
         <Text style={style}>{String(label)}</Text>
@@ -51,12 +59,14 @@ function Body({ dark, onTheme }: { dark: boolean; onTheme: () => void }) {
     <RichContentContext.Provider value={runtime}>
     <SelectionQuoteContext.Provider value={context}>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.lg }}>
-        <View onLayout={event => {
+        <View style={whitespace ? [messageBubbleBase, userMessageBubble(colors),
+          narrow && { maxWidth: bodyWidth - spacing.lg * 2 }] : undefined} onLayout={event => {
           measurements.current.outer = event.nativeEvent.layout.height;
-          if (streaming) measurements.current.native = event.nativeEvent.layout.height;
+          measurements.current.width = event.nativeEvent.layout.width;
+          if (streaming || native) measurements.current.native = event.nativeEvent.layout.height;
         }}>
           <MarkdownBody text={text} layout={layout} richStateKey="fixed-table-body"
-            androidTableSelection selectable={!streaming} streaming={streaming} codeCopyEnabled
+            androidTableSelection={!native} selectable={!streaming} streaming={streaming} codeCopyEnabled
             onTableMeasured={height => { measurements.current.document = height; }} />
         </View>
       </ScrollView>

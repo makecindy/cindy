@@ -61,13 +61,13 @@ type LinkAction = { onPress?: () => void; onLongPress?: () => void };
 
 /** Android single-message text carrier. Its document has no network or URL bridge. */
 export function TableMessageDocument({ text, blocks, layout, streaming, selectable, codeCopyEnabled = true,
-  documentKey, initialHeight, onOpenSessionLink, onMeasured, onReady, onFailure }: {
+  documentKey, initialHeight, onOpenSessionLink, onMeasured, onReadyChange, onFailure }: {
   text: string; blocks: readonly MobileMarkdownBlock[]; layout: MessageContentLayout;
   streaming?: boolean; selectable?: boolean; codeCopyEnabled?: boolean;
   documentKey: string; initialHeight?: number; onOpenSessionLink?: (url: string) => void;
   /** Optional local diagnostics; not exposed to the document or persisted. */
   onMeasured?: (height: number) => void;
-  onReady?: () => void;
+  onReadyChange?: (ready: boolean) => void;
   onFailure?: () => void;
 }) {
   const { colors } = useTheme();
@@ -116,9 +116,11 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
   if (layoutVersion.current.signature !== layoutSignature) {
     layoutVersion.current = { signature: layoutSignature, version: layoutVersion.current.version + 1 };
   }
-  const revision = `${contentId}:${generation.current.value}:${layoutVersion.current.version}`;
+  const mountGeneration = generation.current.value;
+  const revision = `${contentId}:${mountGeneration}:${layoutVersion.current.version}`;
   const current = useRef({ mounted, revision, contentId, heightKey, width });
   current.current = { mounted, revision, contentId, heightKey, width };
+  const isCurrentMount = () => generation.current.mounted && generation.current.value === mountGeneration;
   const payload: Document = { revision, html: content.html, css: tableMessageCss(colors, scale, layout, StyleSheet.hairlineWidth),
     selectable: selectable === true && !streaming, links: displayStates };
   const latestPayload = useRef(payload); latestPayload.current = payload;
@@ -137,6 +139,7 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
     setSelectionActive(false);
     row?.pin(row.key, false, contentId);
   }, [contentId]);
+  useLayoutEffect(() => { onReadyChange?.(false); }, [mounted, contentId, onReadyChange]);
   useEffect(() => () => { row?.pin(row.key, false, contentId); }, [row?.key, row?.pin, contentId]);
   useEffect(() => {
     if (!mounted) return;
@@ -160,7 +163,7 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
   if (menuScope.current.callback !== quote?.commitQuote) {
     menuScope.current = { callback: quote?.commitQuote, version: menuScope.current.version + 1 };
   }
-  const menuPrefix = `table:${contentId}:${menuScope.current.version}:`;
+  const menuPrefix = `table:${contentId}:${mountGeneration}:${menuScope.current.version}:`;
   const menuItems = useMemo(() => !quote || streaming ? undefined : [
     { key: menuPrefix + 'quote', label: selectionQuoteMenuLabel() },
     ...(quote.askInSideChat ? [{ key: menuPrefix + 'side-chat', label: t('session.sideChat.title') }] : []),
@@ -177,21 +180,27 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
         incognito originWhitelist={['*']} allowFileAccess={false} setSupportMultipleWindows={false}
         mediaCapturePermissionGrantType="deny" automaticallyAdjustContentInsets={false}
         onShouldStartLoadWithRequest={request => interceptHtmlNavigation(request, settled.current)}
-        onLoadStart={() => { loaded.current = false; settled.current = false; }}
-        onLoadEnd={() => { loaded.current = true; settled.current = true; update(); }}
-        onError={onFailure}
-        onRenderProcessGone={onFailure}
+        onLoadStart={() => {
+          if (!isCurrentMount()) return;
+          loaded.current = false; settled.current = false; onReadyChange?.(false);
+        }}
+        onLoadEnd={() => {
+          if (!isCurrentMount()) return;
+          loaded.current = true; settled.current = true; update();
+        }}
+        onError={() => { if (isCurrentMount() && current.current.contentId === contentId) onFailure?.(); }}
+        onRenderProcessGone={() => { if (isCurrentMount() && current.current.contentId === contentId) onFailure?.(); }}
         menuItems={menuItems}
         onCustomMenuSelection={event => {
           const now = current.current, ctx = latestQuote.current;
-          if (!now.mounted || !ctx || now.contentId !== contentId || ctx.commitQuote !== quote?.commitQuote) return;
+          if (!isCurrentMount() || !ctx || now.contentId !== contentId || ctx.commitQuote !== quote?.commitQuote) return;
           const action = event.nativeEvent.key === menuPrefix + 'quote' ? 'quote'
             : event.nativeEvent.key === menuPrefix + 'side-chat' ? 'side-chat' : null;
           if (action) commitSelectionMenuAction(action, event.nativeEvent.selectedText, ctx);
         }}
         onMessage={event => {
           const now = current.current;
-          if (!now.mounted) return;
+          if (!isCurrentMount() || now.contentId !== contentId) return;
           const value = parseTableMessageObservation(event.nativeEvent.data, now.revision, maxHeight);
           if (!value) return;
           if (value.kind === 'selection') {
@@ -211,7 +220,7 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
           setSlots(old => JSON.stringify(old) === JSON.stringify(nextSlots) ? old : nextSlots);
           runtime?.set(now.heightKey, JSON.stringify({ height: value.height, slots: nextSlots }));
           onMeasured?.(value.height);
-          onReady?.();
+          onReadyChange?.(true);
         }} />
       {content.links.map(link => <TableLinkController key={`${contentId}:${link.id}`} link={link} streaming={streaming}
         onOpenSessionLink={onOpenSessionLink} sessionLinkTitles={sessionLinkTitles} report={reportLink} />)}
