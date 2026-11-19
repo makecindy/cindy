@@ -16,27 +16,38 @@ button:hover { background:var(--wash); }
 button:focus-visible, textarea:focus-visible { outline:2px solid var(--focus); outline-offset:3px; }
 .primary { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:650; }
 .primary:hover { background:var(--accent); filter:brightness(1.1); }
-.shell { max-width:1100px; margin:0 auto; padding:0 28px; }
-.top { border-bottom:1px solid var(--line); background:var(--panel); }
-.top .shell { min-height:62px; display:flex; align-items:center; justify-content:space-between; gap:16px; }
-.brand { font-size:19px; font-weight:750; letter-spacing:-.6px; }
-.small, small, .muted { color:var(--muted); }
-.small, small { font-size:13px; }
-.frame { display:grid; grid-template-columns:185px 1fr; min-height:calc(100vh - 63px); }
-nav { padding:28px 16px 24px 0; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:6px; }
-nav p { margin:0 0 5px 11px; font-size:12px; font-weight:650; color:var(--muted); }
-nav button { border:0; background:transparent; border-radius:8px; text-align:left; white-space:nowrap; }
-nav button[aria-current="page"] { background:var(--tint); font-weight:650; }
-.count { display:inline-block; min-width:20px; padding:0 5px; margin-left:4px; text-align:center; color:var(--accent); background:var(--tint); border-radius:100px; font-size:12px; }
-main { min-width:0; padding:32px 0 48px 30px; }
-.crumb { margin:0 0 19px; }
+.shell { max-width:880px; margin:0 auto; padding:0 28px; }
+.catalog-toolbar { display:flex; align-items:center; gap:8px; padding-top:18px; flex-wrap:wrap; }
+.catalog-toolbar .search { margin-left:auto; }
+.search { width: min(260px, 100%); min-height:38px; border:1px solid var(--line); border-radius:100px; background:var(--panel); color:var(--ink); padding:7px 13px; font:inherit; }
+.search:focus-visible { outline:2px solid var(--focus); outline-offset:3px; }
+button:disabled { color:var(--muted); cursor:default; }
+.small, .muted { color:var(--muted); }
+.small { font-size:13px; }
+main { min-width:0; padding-block:42px 48px; }
+.pill { display:inline-flex; gap:2px; border-radius:100px; padding:3px; background:var(--wash); }
+.pill button { background:transparent; border:1px solid transparent; min-height:32px; padding:3px 15px; white-space:nowrap; }
+.pill button[aria-pressed="true"] { background:var(--panel); border-color:var(--line); font-weight:620; }
+.catalog-title { margin-bottom:32px; }
+.catalog-title p { margin-top:10px; }
+.catalog-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.recommended { grid-template-columns:repeat(3,minmax(0,1fr)); margin-top:15px; }
+.recommended .card { min-height:126px; }
+.card-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+.card-head .tile { width:36px; height:36px; font-size:14px; border-radius:8px; }
+.catalog-tabs { margin-block:30px 18px; padding-bottom:13px; border-bottom:1px solid var(--line); }
+.catalog-list .card { min-height:105px; }
+.link-card { border-radius:12px; padding:16px; text-align:left; }
+.link-card .card-head { margin-bottom:8px; }
+.link-card strong { display:block; }
+.go-back { margin-bottom:18px; }
+#feedback-detail { margin-top:14px; }
 .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:19px; }
 .hero { display:flex; gap:15px; align-items:center; margin-bottom:24px; }
 .tile { flex:none; width:53px; height:53px; display:grid; place-items:center; border-radius:12px; background:var(--tint); color:var(--accent); font-weight:750; font-size:20px; }
-h1,h2,h3,p { margin:0; }
+h1,h2,p { margin:0; }
 h1 { font-size:27px; font-weight:680; line-height:1.25; margin-bottom:5px; }
 h2 { font-size:17px; font-weight:650; line-height:1.4; }
-h3 { font-size:15px; font-weight:650; }
 .intro { margin:0 0 23px; }
 .actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
 .hero .actions { margin-left:auto; }
@@ -49,9 +60,6 @@ h3 { font-size:15px; font-weight:650; }
 .result { margin:0 0 20px; color:var(--accent); }
 .result:empty { display:none; }
 .body-copy { overflow-wrap:anywhere; white-space:pre-wrap; }
-.meta { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:8px 14px; margin:0; }
-.meta dt { color:var(--muted); }
-.meta dd { margin:0; overflow-wrap:anywhere; }
 dialog { width:min(460px, calc(100% - 32px)); max-height:calc(100% - 32px); border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--ink); padding:20px; }
 dialog::backdrop { background:rgba(0,0,0,.53); }
 label { display:block; font-weight:650; }
@@ -59,28 +67,59 @@ textarea { display:block; width:100%; min-height:128px; resize:vertical; backgro
 .error { color:var(--error); }
 @media (max-width:640px) {
  .shell { padding:0 14px; }
- .frame { display:block; }
- nav { padding:9px 0; flex-direction:row; flex-wrap:wrap; border-right:0; border-bottom:1px solid var(--line); gap:2px; }
- nav p { display:none; }
- nav button { font-size:13px; padding-inline:9px; }
- main { padding:23px 0 30px; }
+ .catalog-toolbar .search { order:1; width:100%; margin-left:0; }
+ main { padding-block:26px 30px; }
+ .catalog-grid { grid-template-columns:1fr; }
+ .recommended .card { min-height:0; }
  .hero { flex-wrap:wrap; }
  .hero .actions { width:100%; justify-content:flex-start; }
 }
 </style>
 </head>
 <body>
-<header class="top"><div class="shell"><span class="brand">Cindy</span><span class="small">插件市场反馈 · 网页预览</span></div></header>
-<div class="shell frame">
-  <nav aria-label="演示页面">
-    <p>插件</p>
-    <button type="button" data-view="market" aria-current="page">插件市场</button>
-    <button type="button" data-view="inbox">我的插件 <span id="inbox-count" class="count" hidden></span></button>
-    <button type="button" data-view="mail">作者邮箱 <span id="mail-count" class="count" hidden></span></button>
-  </nav>
+<div class="shell">
+  <header id="catalog-toolbar" class="catalog-toolbar">
+    <strong>插件</strong>
+    <input id="plugin-search" class="search" type="search" aria-label="搜索插件" placeholder="搜索插件">
+    <button type="button" id="my-plugins">我的插件</button>
+    <button type="button" disabled title="预览未接入安装">＋ 添加插件</button>
+  </header>
   <main>
-    <section id="market" aria-labelledby="market-title">
-      <p class="crumb small">插件市场 / 插件详情</p>
+    <section id="catalog" aria-labelledby="catalog-title">
+      <div class="catalog-title">
+        <div class="spread"><h1 id="catalog-title" tabindex="-1">插件</h1><span class="small">当前电脑 / 全局</span></div>
+        <p class="muted">扩展 Cindy 能力的工具与集成。</p>
+      </div>
+      <div id="recommendations">
+        <h2>今日推荐</h2>
+        <div class="catalog-grid recommended">
+          <article class="card"><div class="card-head"><div class="tile" aria-hidden="true">G</div><strong>Google Drive</strong></div><p class="small">快速搜索和管理云端文件。</p></article>
+          <article class="card"><div class="card-head"><div class="tile" aria-hidden="true">M</div><strong>Gmail</strong></div><p class="small">查找邮件、整理收件箱和起草回复。</p></article>
+          <article class="card"><div class="card-head"><div class="tile" aria-hidden="true">▣</div><strong>设备模拟器</strong></div><p class="small">查看并操作运行中的设备模拟器。</p></article>
+        </div>
+      </div>
+      <nav class="catalog-tabs" aria-label="插件列表">
+        <div class="pill">
+          <button type="button" data-catalog="installed" aria-pressed="true">已安装</button>
+          <button type="button" data-catalog="store" aria-pressed="false">插件市场</button>
+        </div>
+      </nav>
+      <div id="installed" class="catalog-grid catalog-list" aria-label="已安装插件">
+        <article class="card" data-plugin="Art"><div class="card-head"><div class="tile" aria-hidden="true">A</div><strong>Art</strong></div><p class="small">生成和编辑图片。</p></article>
+        <article class="card" data-plugin="GitHub"><div class="card-head"><div class="tile" aria-hidden="true">GH</div><strong>GitHub</strong></div><p class="small">管理 GitHub 仓库、Issues 和 PR。</p></article>
+        <article class="card" data-plugin="Mermaid"><div class="card-head"><div class="tile" aria-hidden="true">M</div><strong>Mermaid</strong></div><p class="small">绘制流程图和时序图。</p></article>
+        <article class="card" data-plugin="Web Search"><div class="card-head"><div class="tile" aria-hidden="true">W</div><strong>Web Search</strong></div><p class="small">搜索公开网页和资料。</p></article>
+      </div>
+      <div id="store" class="catalog-grid catalog-list" aria-label="市场插件" hidden>
+        <button type="button" id="open-plugin" class="link-card" data-plugin="桌面伙伴">
+          <span class="card-head"><span class="tile" aria-hidden="true">桌</span><span><strong>桌面伙伴</strong><small class="small">社区插件 · v1.3.11</small></span></span>
+          <span class="small">桌面上的像素伙伴，随时向 Cindy 提问。</span>
+        </button>
+      </div>
+      <p id="catalog-empty" class="muted" hidden>没有找到匹配的插件。</p>
+    </section>
+    <section id="market" aria-labelledby="market-title" hidden>
+      <button type="button" class="go-back" data-back>← 插件</button>
       <header class="hero">
         <div class="tile" aria-hidden="true">桌</div>
         <div><h1 id="market-title" tabindex="-1">桌面伙伴</h1><p class="small">社区插件 · v1.3.11</p></div>
@@ -92,27 +131,33 @@ textarea { display:block; width:100%; min-height:128px; resize:vertical; backgro
         <p class="muted">桌面上的像素伙伴。可以快速向 Cindy 提问、语音输入，以及回到最近的任务。</p>
       </div>
     </section>
-    <section id="inbox" aria-labelledby="inbox-title" hidden>
-      <p class="crumb small">插件 / 我的插件</p>
-      <div class="intro"><h1 id="inbox-title" tabindex="-1">收到的反馈</h1><p class="muted">查看用户提交到你名下插件的反馈。</p></div>
-      <div class="card stack">
-        <div class="spread"><h2>桌面伙伴</h2><span class="small" id="inbox-summary"></span></div>
-        <div class="stack" id="feedback-list"></div>
-        <p class="muted" id="inbox-empty">暂无反馈。先从插件市场提交一条示例。</p>
+    <section id="author" aria-labelledby="author-title" hidden>
+      <button type="button" class="go-back" data-back>← 插件</button>
+      <div class="spread intro">
+        <h1 id="author-title" tabindex="-1">我的插件</h1>
+        <button type="button" disabled title="预览未接入发布">发布插件</button>
       </div>
-      <article id="feedback-detail" class="card stack" style="margin-top:14px" hidden>
-        <div class="spread"><h2>反馈详情</h2><button type="button" id="mark-read">标为已读</button></div>
-        <p class="small" id="feedback-meta"></p>
-        <p class="body-copy" id="feedback-body"></p>
-      </article>
-    </section>
-    <section id="mail" aria-labelledby="mail-title" hidden>
-      <p class="crumb small">作者邮箱 / 收件箱</p>
-      <div class="intro"><h1 id="mail-title" tabindex="-1">邮件通知</h1><p class="muted">收件地址来自作者登录账号的已验证邮箱。</p></div>
-      <div class="card stack">
-        <dl class="meta"><dt>收件地址</dt><dd>author@example.com</dd></dl>
-        <p class="muted" id="mail-empty">暂无到件通知。提交反馈后会在这里看到邮件示例。</p>
-        <div id="mail-list" class="stack"></div>
+      <nav class="catalog-tabs" aria-label="作者管理">
+        <div class="pill">
+          <button type="button" data-author="published" aria-pressed="true">已发布</button>
+          <button type="button" data-author="inbox" aria-pressed="false">收到的反馈</button>
+        </div>
+      </nav>
+      <div id="published" class="card spread">
+        <div class="card-head"><div class="tile" aria-hidden="true">桌</div><div><h2>桌面伙伴</h2><p class="small">v1.3.11 · 公开市场</p></div></div>
+        <span class="small">已发布</span>
+      </div>
+      <div id="inbox" hidden>
+        <div class="card stack">
+          <div class="spread"><h2>桌面伙伴</h2><span class="small" id="inbox-summary"></span></div>
+          <div class="stack" id="feedback-list"></div>
+          <p class="muted" id="inbox-empty">暂无反馈。可以从插件市场提交一条示例。</p>
+        </div>
+        <article id="feedback-detail" class="card stack" hidden>
+          <div class="spread"><h2>反馈详情</h2><button type="button" id="mark-read">标为已读</button></div>
+          <p class="small" id="feedback-meta"></p>
+          <p class="body-copy" id="feedback-body"></p>
+        </article>
       </div>
     </section>
   </main>
@@ -135,14 +180,9 @@ textarea { display:block; width:100%; min-height:128px; resize:vertical; backgro
   <button type="button" class="row" aria-controls="feedback-detail"><span class="row-title"><span class="dot" aria-hidden="true"></span><span class="snippet"></span></span><span class="small row-meta"></span></button>
 </template>
 
-<template id="mail-row">
-  <article class="card stack"><h3>你的插件「桌面伙伴」收到了一条新反馈</h3><p class="small mail-date"></p><p>登录 Cindy，前往「收到的反馈」查看问题详情。</p><div><button type="button">在 Cindy 查看</button></div></article>
-</template>
-
 <script>
 'use strict';
 const byId = id => document.getElementById(id);
-const navigation = [...document.querySelectorAll('[data-view]')];
 const feedback = [];
 const date = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
 let selectedId = null;
@@ -150,20 +190,55 @@ const dialog = byId('form-dialog');
 const message = byId('message');
 const formError = byId('form-error');
 
-function showView(view) {
-  for (const button of navigation) {
-    const active = button.dataset.view === view;
-    byId(button.dataset.view).hidden = !active;
-    if (active) button.setAttribute('aria-current', 'page');
-    else button.removeAttribute('aria-current');
-  }
-  byId(view + '-title').focus();
+const pageIds = ['catalog', 'market', 'author'];
+const catalogButtons = [...document.querySelectorAll('[data-catalog]')];
+const authorButtons = [...document.querySelectorAll('[data-author]')];
+const search = byId('plugin-search');
+let activeCatalog = 'installed';
+
+function showPage(page) {
+  for (const id of pageIds) byId(id).hidden = id !== page;
+  byId('catalog-toolbar').hidden = page === 'author';
+  byId(page + '-title').focus();
 }
+
+function selectPanel(buttons, attribute, panel) {
+  for (const button of buttons) {
+    const id = button.dataset[attribute];
+    const active = id === panel;
+    button.setAttribute('aria-pressed', active);
+    byId(id).hidden = !active;
+  }
+}
+
+function filterCatalog() {
+  const query = search.value.trim().toLowerCase();
+  const items = [...byId(activeCatalog).querySelectorAll('[data-plugin]')];
+  for (const item of items) item.hidden = !item.dataset.plugin.toLowerCase().includes(query);
+  byId('recommendations').hidden = query.length > 0;
+  byId('catalog-empty').hidden = items.some(item => !item.hidden);
+}
+
+for (const button of catalogButtons) button.addEventListener('click', () => {
+  activeCatalog = button.dataset.catalog;
+  selectPanel(catalogButtons, 'catalog', activeCatalog);
+  filterCatalog();
+});
+for (const button of authorButtons) button.addEventListener('click', () => {
+  selectPanel(authorButtons, 'author', button.dataset.author);
+});
+for (const button of document.querySelectorAll('[data-back]')) {
+  button.addEventListener('click', () => showPage('catalog'));
+}
+search.addEventListener('input', filterCatalog);
+byId('open-plugin').addEventListener('click', () => showPage('market'));
+byId('my-plugins').addEventListener('click', () => {
+  selectPanel(authorButtons, 'author', 'published');
+  showPage('author');
+});
 
 function renderFeedback() {
   const unread = feedback.filter(item => !item.read).length;
-  byId('inbox-count').hidden = unread === 0;
-  byId('inbox-count').textContent = unread;
   byId('inbox-summary').textContent = feedback.length + ' 条反馈 · ' + unread + ' 条未读';
   byId('inbox-empty').hidden = feedback.length > 0;
   const list = byId('feedback-list');
@@ -191,25 +266,6 @@ function renderFeedback() {
   }
 }
 
-function renderMail() {
-  byId('mail-count').hidden = feedback.length === 0;
-  byId('mail-count').textContent = feedback.length;
-  byId('mail-empty').hidden = feedback.length > 0;
-  const list = byId('mail-list');
-  list.replaceChildren();
-  for (const item of feedback) {
-    const mail = byId('mail-row').content.firstElementChild.cloneNode(true);
-    mail.querySelector('.mail-date').textContent = date.format(item.createdAt);
-    mail.querySelector('button').addEventListener('click', () => {
-      selectedId = item.id;
-      renderFeedback();
-      showView('inbox');
-    });
-    list.append(mail);
-  }
-}
-
-for (const button of navigation) button.addEventListener('click', () => showView(button.dataset.view));
 byId('open-form').addEventListener('click', () => dialog.showModal());
 byId('cancel-form').addEventListener('click', () => dialog.close());
 message.addEventListener('input', () => {
@@ -232,7 +288,6 @@ byId('feedback-form').addEventListener('submit', event => {
   dialog.close();
   byId('send-result').textContent = '反馈已提交。你可以切换到「我的插件」查看作者收到的反馈。';
   renderFeedback();
-  renderMail();
 });
 byId('mark-read').addEventListener('click', () => {
   const selected = feedback.find(item => item.id === selectedId);
@@ -243,7 +298,6 @@ byId('mark-read').addEventListener('click', () => {
   }
 });
 renderFeedback();
-renderMail();
 </script>
 </body>
 </html>
