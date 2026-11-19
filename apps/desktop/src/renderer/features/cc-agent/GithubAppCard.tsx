@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { Button } from '@/components/ui/button';
@@ -26,13 +26,12 @@ export function GithubAppCard({ account, accountBusy = false, children, alternat
   const [authorizationVersion, setAuthorizationVersion] = useState(0);
   const generation = useRef(0);
   const pending = useRef<Promise<void> | null>(null);
-  const acting = useRef(false);
+  const acting = useRef<'browser' | 'local' | null>(null);
   const key = 'ccAgent.gitContext.pr.setup.app.';
   const refresh = useCallback(() => {
     // Focus events may arrive while the initial request is still in flight.
     if (pending.current) return pending.current;
     const current = ++generation.current;
-    setAwaitingBrowser(false);
     setChecking(true);
     const request = (async () => {
       try {
@@ -46,19 +45,29 @@ export function GithubAppCard({ account, accountBusy = false, children, alternat
     pending.current = request;
     return request;
   }, []);
+  const onAuthorizationChanged = useEffectEvent(() => {
+    // The OAuth callback redirects to repository installation. Read status and
+    // access when the user returns, just as for a direct repository selection.
+    if (awaitingBrowser || acting.current === 'browser') return;
+    setAuthorizationVersion(version => version + 1);
+    generation.current++;
+    pending.current = null;
+    void refresh();
+  });
   useEffect(() => {
     void refresh();
-    const onFocus = () => { if (!acting.current) void refresh(); };
+    const onFocus = () => {
+      if (acting.current) return;
+      setAwaitingBrowser(false);
+      void refresh();
+    };
     window.addEventListener('focus', onFocus);
-    const unsubscribe = window.electronAPI.gitContext.onGithubConnected?.(() => {
-      setAuthorizationVersion(version => version + 1);
-      generation.current++; pending.current = null; void refresh();
-    });
+    const unsubscribe = window.electronAPI.gitContext.onGithubConnected?.(() => onAuthorizationChanged());
     return () => { unsubscribe?.(); generation.current++; pending.current = null; window.removeEventListener('focus', onFocus); };
   }, [refresh]);
   const act = async (action: () => Promise<void>, opensBrowser = false) => {
     if (acting.current || pending.current) return;
-    acting.current = true;
+    acting.current = opensBrowser ? 'browser' : 'local';
     const current = generation.current;
     setBusy(true);
     try {
@@ -69,7 +78,7 @@ export function GithubAppCard({ account, accountBusy = false, children, alternat
         else await refresh();
       }
     } catch { if (current === generation.current) setFailed(true); }
-    finally { acting.current = false; setBusy(false); }
+    finally { acting.current = null; setBusy(false); }
   };
   const actor = account?.status === 'connected' ? account.login : undefined;
   const mismatch = actor && state?.login && actor.toLowerCase() !== state.login.toLowerCase();

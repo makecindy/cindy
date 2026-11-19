@@ -153,3 +153,39 @@ it('preserves installation access across a failed focus refresh and recovery', a
   expect(screen.getByText(accessDetails)).toBeTruthy();
   expect(githubAppAccess).toHaveBeenCalledOnce();
 });
+
+// Unit/jsdom, production settings card. The previous return test did not
+// simulate the OAuth notification that precedes repository installation.
+// An empty pre-install response would otherwise persist after browser return.
+it('waits for browser return when OAuth completes before repository installation', async () => {
+  let onConnected!: () => void;
+  let installed = false;
+  const githubAppAccess = vi.fn(async () => ({
+    status: 'ready',
+    installations: installed ? [{
+      id: 7, app: 'example-app', owner: 'example-org', selection: 'all',
+      visibleRepositories: 12, permissions: { contents: 'read' },
+    }] : [],
+  }));
+  const githubAppStatus = vi.fn<() => Promise<GithubAppConnectionState>>()
+    .mockResolvedValueOnce({ available: true })
+    .mockResolvedValue({ available: true, login: 'person', repositories: [] });
+  window.electronAPI = { gitContext: {
+    githubAppAccess, githubAppStatus, connectGithubApp: vi.fn(async () => {}),
+    onGithubConnected: (listener: () => void) => { onConnected = listener; return () => {}; },
+  } } as unknown as typeof window.electronAPI;
+  render(<GithubAppCard pluginSettings />);
+  fireEvent.click(await screen.findByText(prefix + 'connect'));
+  await screen.findByText(prefix + 'finishInBrowser');
+
+  await act(async () => { onConnected(); });
+  expect(screen.getByText(prefix + 'finishInBrowser')).toBeTruthy();
+  expect(githubAppStatus).toHaveBeenCalledOnce();
+  expect(githubAppAccess).not.toHaveBeenCalled();
+
+  installed = true;
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(screen.getByText(/example-org/)).toBeTruthy();
+  await act(async () => { fireEvent(window, new Event('focus')); });
+  expect(githubAppAccess).toHaveBeenCalledOnce();
+});
