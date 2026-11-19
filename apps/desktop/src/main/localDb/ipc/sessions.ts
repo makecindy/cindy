@@ -89,7 +89,7 @@ import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import * as imageCacheStore from '../../imageCacheStore.desktop';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
 import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
-import { upsertRecentWorkdir } from './recentWorkdirs';
+import { touchRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import {
   DESKTOP_VISIBLE_SESSION_SOURCES,
@@ -973,7 +973,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
     isRetainableProjectSession(row)
   ) {
     const projectDir = normalizeWorkingDirForProjectSettings(row.projectDir ?? row.workingDir);
-    const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
+    const touched = await touchRecentWorkdir(projectDir, ts, process.platform, dbClient);
     if (touched && projectDir) broadcastRecentWorkdirsChanged(projectDir, ownerScope);
   }
 }
@@ -2083,7 +2083,7 @@ export async function updateSessionInDb(
       !row.remoteHostId &&
       isRetainableProjectSession(row)
     ) {
-      const touched = await upsertRecentWorkdir(
+      const touched = await touchRecentWorkdir(
         row.projectDir ?? row.workingDir,
         Date.now(),
         process.platform,

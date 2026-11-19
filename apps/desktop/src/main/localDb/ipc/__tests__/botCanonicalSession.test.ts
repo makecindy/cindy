@@ -2456,6 +2456,24 @@ describe('Bot canonical Session lifecycle', () => {
     });
   });
 
+  it('continues a group task in its project, rebinds a missing project and isolates a chat grant', async () => {
+    h.sqlite!.exec("CREATE TABLE bot_group_members(group_id TEXT, bot_id TEXT); INSERT INTO bot_group_members VALUES ('room','bot-1')");
+    const lane = { botId: 'bot-1', groupId: 'room', title: 'Group', chatAccess: { mode: 'owner' as const, revision: 1 } };
+    const read = (id: string) => h.sqlite!.prepare('SELECT project_dir, working_dir, workspace_kind, status FROM sessions WHERE id = ?').get(id);
+    const first = await ensureBotGroupLaneSession({ ...lane, projectDir: '/development' });
+    if (!first.ok) throw new Error(first.message);
+    const followup = await ensureBotGroupLaneSession({ ...lane, projectDir: '/buddy', continueConversation: true }, async dir => dir);
+    expect(followup).toMatchObject({ sessionId: first.sessionId, created: false });
+    const next = await ensureBotGroupLaneSession({ ...lane, continueConversation: true }, async () => null);
+    if (!next.ok) throw new Error(next.message);
+    expect(read(first.sessionId)).toMatchObject({ status: 'archived' });
+    expect(read(next.sessionId)).toMatchObject({ workspace_kind: 'dialogue', project_dir: null });
+    const chat = await ensureBotGroupLaneSession({ ...lane, chatAccess: { mode: 'chat', revision: 2 }, projectDir: '/development' });
+    if (!chat.ok) throw new Error(chat.message);
+    expect(read(chat.sessionId)).toMatchObject({ workspace_kind: 'dialogue', project_dir: '/development',
+      working_dir: expect.stringContaining('chat-workspaces') });
+  });
+
   it('resolves Bot history ids in main and never accepts a renderer-owned search scope', async () => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1',
