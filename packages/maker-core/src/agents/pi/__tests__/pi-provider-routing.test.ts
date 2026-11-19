@@ -7682,13 +7682,16 @@ describe("Pi provider-aware model routing", () => {
   // Exercise actual PiAgent startup/configuration and model switching, not a copied gate.
   // unit tier: remote file/RPC ports are in-memory; no SSH, native Pi or HTTP is claimed.
   it.each(["explicit", "inferred"])("starts a reachable remote loopback BYOM (%s route) without forwarding it", async (route) => {
-    const probe = vi.fn(async () => true);
-    let baseUrl = "http://127.0.0.2:23425/v1";
+    const modelBaseUrl = "http://127.0.0.2:23425/v1";
+    const probe = vi.fn(async (_host: string, url: string) => url === modelBaseUrl);
+    let baseUrl = "http://127.0.0.9:23425/v1";
     let refreshedBaseUrl: string | undefined;
     const deps = byomDeps(async input => ({ providers: [{
       id: "shared-loopback", name: "Shared loopback",
       baseUrl: input.purpose === 'live-refresh' ? refreshedBaseUrl ?? baseUrl : baseUrl,
-      api: "openai-completions", models: [{ id: "local-model" }],
+      api: "openai-completions", modelIdAliases: { "local-model": "native-model" },
+      models: [{ id: "native-model", wireId: "wire-model", baseUrl: modelBaseUrl },
+        { id: "second-model", baseUrl: "http://127.0.0.3:23425/v1" }],
     }, {
       id: "other-loopback", name: "Other loopback", baseUrl: "http://127.0.0.3:23425/v1",
       api: "openai-completions", models: [{ id: "other-model", baseUrl: "http://127.0.0.5:23425/v1" }],
@@ -7720,13 +7723,14 @@ describe("Pi provider-aware model routing", () => {
       model: "local-model", ...(route === "explicit" ? { providerId: "shared-loopback" } : {}),
       remoteHostId: "shared-network-host" });
     try {
-      expect(probe).toHaveBeenCalledExactlyOnceWith("shared-network-host", baseUrl);
+      expect(probe).toHaveBeenCalledExactlyOnceWith("shared-network-host", modelBaseUrl);
       const models = JSON.parse([...captured.remoteModels].find(([file]) => file.endsWith("/models.json"))![1]);
       expect(models.providers["shared-loopback"].baseUrl).toBe(baseUrl);
+      expect(models.providers["shared-loopback"].models).toContainEqual(expect.objectContaining({ id: "wire-model", baseUrl: modelBaseUrl }));
       // #11573 P1: successful --noproxy probe must agree with the keyed Pi
       // process, for the selected alias and an initially unselected catalog route.
       expect(captured.env.NO_PROXY?.split(',')).toEqual(expect.arrayContaining([
-        '127.0.0.2', '127.0.0.3', '127.0.0.5', '127.0.0.1', 'localhost', '::1', 'corp.test',
+        '127.0.0.2', '127.0.0.3', '127.0.0.5', '127.0.0.9', '127.0.0.1', 'localhost', '::1', 'corp.test',
       ]));
       expect(captured.env.no_proxy).toBeUndefined();
       expect(captured.env.HTTP_PROXY).toBe('http://proxy.test:8080');
@@ -7738,6 +7742,10 @@ describe("Pi provider-aware model routing", () => {
       await expect(handle.setModel!("local-model", { providerId: "shared-loopback" }))
         .rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
       expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: "set_model" }));
+      expect(handle.model).toBe("local-model");
+      await expect(handle.setModel!("second-model", { providerId: "shared-loopback" }))
+        .rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
+      expect(probe).toHaveBeenLastCalledWith("shared-network-host", "http://127.0.0.3:23425/v1");
       expect(handle.model).toBe("local-model");
       const filesBeforeRefresh = [...captured.remoteModels];
       const probesBeforeRefresh = probe.mock.calls.length;
@@ -7753,7 +7761,7 @@ describe("Pi provider-aware model routing", () => {
       await expect(handle.setModel!('local-model', { providerId: 'shared-loopback' })).rejects.toThrow(/proxy bypass/);
       expect([...captured.remoteModels]).toEqual(filesBeforeRefresh);
       refreshedBaseUrl = undefined;
-      baseUrl = 'http://127.0.0.2:23425/v1';
+      baseUrl = 'http://127.0.0.9:23425/v1';
       // A late successful probe must not write a route snapshot after teardown.
       let releaseProbe!: (reachable: boolean) => void;
       let enteredProbe!: () => void;
@@ -7779,14 +7787,16 @@ describe("Pi provider-aware model routing", () => {
   it.each(["unreachable", "probe-error"])("keeps remote loopback startup fail-closed when %s", async (mode) => {
     const transport = vi.fn();
     const writeFile = vi.fn();
+    const modelBaseUrl = 'http://127.0.0.5:23425/v1?secret=invalid-test-secret';
+    const probe = vi.fn(async (_host: string, url: string) => {
+      if (mode === "probe-error") throw new Error("invalid-test-secret");
+      return url !== modelBaseUrl; // The provider default responds; the selected model does not.
+    });
     const agent = new PiAgent({
       ...byomDeps(async () => ({ providers: [{ id: "local", name: "Local",
         baseUrl: "http://127.0.0.1:23425/v1?secret=invalid-test-secret", api: "openai-completions",
-        models: [{ id: "local-model" }] }], env: {} })),
-      probeRemotePiProviderEndpoint: async () => {
-        if (mode === "probe-error") throw new Error("invalid-test-secret");
-        return false;
-      },
+        models: [{ id: "local-model", baseUrl: modelBaseUrl }] }], env: {} })),
+      probeRemotePiProviderEndpoint: probe,
       getRemotePiTransport: transport,
       getRemotePiFileOps: () => ({ mkdirp: async () => {}, writeFile, stat: async () => null,
         rm: async () => {}, listDir: async () => [], readFile: async () => "", sha256File: async () => "" }),
@@ -7796,6 +7806,7 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model", providerId: "local", remoteHostId: "remote-host" }).catch(error => error);
       expect(String(error)).toContain("[REMOTE_LOCAL_ONLY_PROVIDER]");
       expect(String(error)).not.toContain("invalid-test-secret");
+      expect(probe).toHaveBeenCalledExactlyOnceWith("remote-host", modelBaseUrl);
       expect(transport).not.toHaveBeenCalled();
       expect(writeFile).not.toHaveBeenCalled();
     } finally { await agent.dispose(); }

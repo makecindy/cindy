@@ -2904,13 +2904,18 @@ export class PiAgent extends BaseAgent {
     // the configured endpoint, so require a host-side probe rather than rejecting its name.
     // Only hostProxyForward authorizes forwarding to Desktop; never infer that ownership
     // from probe success or failure. A failed/unsupported probe keeps the old fail-closed gate.
-    const assertRemoteNativeProviderReachable = async (runtimeProviderId: string): Promise<void> => {
+    const assertRemoteNativeProviderReachable = async (runtimeProviderId: string, model: string): Promise<void> => {
       if (!opts.remoteHostId) return;
       const native = nativeProviderById.get(runtimeProviderId);
-      if (!native || !isLoopbackOnlyBaseUrl(native.baseUrl) || native.hostProxyForward) return;
+      if (!native || native.hostProxyForward) return;
+      // Match the model entry serialized to models.json, including public-id
+      // aliases and per-model endpoints, rather than probing the unused default.
+      const nativeModelId = resolveNativeModelId(runtimeProviderId, model);
+      const baseUrl = native.models.find(candidate => candidate.id === nativeModelId)?.baseUrl ?? native.baseUrl;
+      if (!isLoopbackOnlyBaseUrl(baseUrl)) return;
       let reachable = false;
       try {
-        reachable = await this.deps.probeRemotePiProviderEndpoint?.(opts.remoteHostId, native.baseUrl) === true;
+        reachable = await this.deps.probeRemotePiProviderEndpoint?.(opts.remoteHostId, baseUrl) === true;
       } catch {
         // Probe errors may contain endpoint credentials or remote command output.
       }
@@ -2934,7 +2939,7 @@ export class PiAgent extends BaseAgent {
         candidateRuntimeIds.add(initialProvider);
       }
       for (const runtimeProviderId of candidateRuntimeIds) {
-        await assertRemoteNativeProviderReachable(runtimeProviderId);
+        await assertRemoteNativeProviderReachable(runtimeProviderId, opts.model);
       }
     }
     const initialWireModel = resolveWireModel(initialProvider, opts.model);
@@ -7614,7 +7619,7 @@ export class PiAgent extends BaseAgent {
       }
       const provider = resolveProviderForModel(model, effectiveProviderId);
       const wireModel = resolveWireModel(provider, model);
-      await assertRemoteNativeProviderReachable(provider);
+      await assertRemoteNativeProviderReachable(provider, model);
       if (closed || piProcessExited || proc.isClosed) {
         throw new Error('pi: session closed while checking provider reachability');
       }
