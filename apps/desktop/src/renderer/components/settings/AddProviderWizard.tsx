@@ -2363,6 +2363,7 @@ export function AddProviderWizard({
                 size="lg"
                 loading={saving}
                 type="button"
+                data-settings-search-action="Save the provider connection configured in this wizard"
                 onClick={() => void handleFinish()}
                 disabled={saving || fetchState.status === 'fetching' || (!bindGeminiImages && checkedCount === 0)}
               >
