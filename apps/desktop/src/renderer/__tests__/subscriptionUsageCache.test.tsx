@@ -1,13 +1,51 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createInstance } from 'i18next';
+import { I18nextProvider } from 'react-i18next';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useClaudeSubscriptionUsage } from '@/hooks/useClaudeSubscriptionUsage';
 import { useXaiSubscriptionUsage } from '@/hooks/useXaiSubscriptionUsage';
 import { useXaiRateLimit } from '@/hooks/useXaiRateLimit';
 import { useAccountUsage } from '@/hooks/useAccountUsage';
+import { PluginEngineUsageChip } from '@/components/status/PluginEngineUsageChip';
 
 afterEach(() => { cleanup(); setDataOwnerGeneration(null); vi.unstubAllGlobals(); });
+
+// Unit, PR #11563: switching between two tasks unmounts the first chip while a remote
+// quota request is in flight. A new mount must reuse that request and the settled snapshot.
+it('shares plugin account usage across task switches without leaking it to a new account', async () => {
+  setDataOwnerGeneration('quota-first');
+  const snapshot = { updatedAt: 1234, windows: [{ label: 'Shared quota', remainingPercent: 42 }] };
+  let finish!: (value: unknown) => void;
+  const invoke = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue(null);
+  vi.stubGlobal('electronAPI', { deviceLink: { invoke } });
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: { en: { translation: {} } } });
+  const mount = () => render(
+    <I18nextProvider i18n={i18n}>
+      <PluginEngineUsageChip engineKey="demo:acp" deviceId="remote-desk" running={false} />
+    </I18nextProvider>,
+  );
+  const first = mount();
+  await act(async () => {});
+  first.unmount();
+  const second = mount();
+  await act(async () => finish(snapshot));
+  expect(second.getByRole('button').textContent).toContain('Shared quota');
+  second.unmount();
+  const third = mount();
+  await act(async () => {});
+  expect(third.getByRole('button').textContent).toContain('Shared quota');
+  expect(invoke).toHaveBeenCalledExactlyOnceWith('remote-desk', 'maker:get-plugin-engine-usage', ['demo:acp']);
+  third.unmount();
+  setDataOwnerGeneration('quota-second');
+  const otherAccount = mount();
+  await act(async () => {});
+  expect(otherAccount.queryByRole('button')).toBeNull();
+  expect(invoke).toHaveBeenCalledTimes(2);
+});
 
 const sources = [
   { name: 'Anthropic', hook: useClaudeSubscriptionUsage,

@@ -1,4 +1,5 @@
 import { isPluginEngineSessionKind } from './pluginEngines';
+import { PLUGIN_USAGE_READ_INTERVAL_MS } from '@cindy/plugin-protocol';
 import type { OpenAiAccountProvider } from './sessionControls';
 import { normalizeUsageCostRows, type UsageCostRow } from '@cindy/maker-shared/usage-cost-details';
 import { useCallback, useEffect, useState } from "react";
@@ -154,7 +155,7 @@ export function useSessionMenuUsage(
     void read();
     // Existing host readers refresh cached snapshots in the background. Re-read while visible
     // so their first cold response does not leave the sheet empty until it is reopened.
-    const timer = setInterval(() => void read(), isPluginEngineSessionKind(session.agentKind) ? 60_000 : 30_000);
+    const timer = setInterval(() => void read(), isPluginEngineSessionKind(session.agentKind) ? PLUGIN_USAGE_READ_INTERVAL_MS : 30_000);
     return () => {
       cancelled = true;
       clearInterval(timer);

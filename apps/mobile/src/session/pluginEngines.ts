@@ -14,6 +14,7 @@
  * 列表按电脑缓存在内存里：打开模型选择器时读一次并请那台的插件重新上报模型，不轮询。
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { createPluginHarnessUsageReader } from '@cindy/plugin-protocol';
 
 import type { MobileAgentCapabilities, MobileChoiceOption, MobileModelOption } from '@cindy/maker-shared/agent-capabilities';
 
@@ -382,10 +383,13 @@ function sameEngines(a: readonly MobilePluginEngine[], b: readonly MobilePluginE
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+export const pluginUsageReader = createPluginHarnessUsageReader();
+
 /** 读到的列表写进缓存；内容没变不通知。 */
 export function setCachedPluginEngines(deviceId: string, engines: MobilePluginEngine[], supported: boolean): void {
   const previous = cache.get(deviceId);
   if (previous && previous.supported === supported && sameEngines(previous.engines, engines)) return;
+  pluginUsageReader.invalidate(getMobileAuthOwner(), deviceId);
   cache.set(deviceId, { engines: engines.length ? engines : EMPTY_ENGINES, supported });
   publish();
 }

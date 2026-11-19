@@ -1,4 +1,4 @@
-import { parseGhostHarnessUsage, type GhostHarnessUsage } from '@cindy/plugin-protocol';
+import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
 import type { ComposerSlashCommand } from '@cindy/maker-shared/composer-palette';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import {
@@ -79,7 +79,7 @@ import {
   type NativeSubscriptionAuth,
 } from "@cindy/model-providers/types";
 import type { RewindPreviewPayload } from "@/session/rewindPreview";
-import { normalizePluginEngines, type MobilePluginEngine } from "@/session/pluginEngines";
+import { normalizePluginEngines, pluginUsageReader, type MobilePluginEngine } from "@/session/pluginEngines";
 import type {
   MobileRemoteMediaFetchOptions,
   MobileRemoteMediaFetchResult,
@@ -1253,8 +1253,10 @@ export function createMobileMakerTransport({
         .catch(() => []),
     getPluginEngineUsage: async key => {
       if (isSharedTaskPeer(deviceId) || !isCurrent()) return null;
-      const raw = await call<unknown>("maker:get-plugin-engine-usage", [key]).catch(() => null);
-      return isCurrent() ? parseGhostHarnessUsage(raw) ?? null : null;
+      const read = pluginUsageReader.read(fileOwner, deviceId, key, () =>
+        isCurrent() ? call<unknown>("maker:get-plugin-engine-usage", [key]) : undefined);
+      const snapshot = await read.result;
+      return isCurrent() ? snapshot : null;
     },
     refreshPluginEngines: () =>
       call<unknown>("maker:refresh-plugin-engines", []).then(() => undefined, () => undefined),

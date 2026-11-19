@@ -12,6 +12,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
+import { invalidateLocalPluginEngineUsage } from './pluginEngineUsage';
 
 import { createLogger } from '@/lib/logger';
 import {
@@ -67,6 +68,7 @@ function attach(): void {
   if (!api?.listPluginEngines || !api.onPluginEnginesChanged) return;
   detachPush = api.onPluginEnginesChanged((list) => {
     generation += 1;
+    invalidateLocalPluginEngineUsage();
     setEngines(sanitize(list));
   });
   const readGeneration = generation;

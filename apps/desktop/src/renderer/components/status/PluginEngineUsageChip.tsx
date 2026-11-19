@@ -1,16 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { parseGhostHarnessUsage, type GhostHarnessUsage } from '@cindy/plugin-protocol';
+import { PLUGIN_USAGE_READ_INTERVAL_MS, type GhostHarnessUsage } from '@cindy/plugin-protocol';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
 import { cn } from '@/lib/utils';
 import { useHoverOpenMenu } from '@/components/sidebar/useHoverOpenMenu';
 import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
 import { QUOTA_TEXT_COLOR_CLASSES } from './QuotaBar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { PLUGIN_ENGINES_INVOKE } from '../../../shared/pluginEngines';
 import { QuotaHoverCard } from './QuotaHoverCard';
 import { formatQuotaResetDuration, type UsageCardAccount } from './usageCardModel';
-
-const MIN_READ_INTERVAL = 60_000;
 
 /** Mounted only for the visible task. Its React key includes the account device and engine. */
 export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
@@ -24,12 +23,13 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
   const [now, setNow] = useState(Date.now);
   const refresh = useRef<() => void>(() => {});
   useEffect(() => {
+    const owner = getDataOwnerGeneration();
     let active = true;
     let pending = false;
     let nextRead = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const check = async () => {
-      if (!active || document.hidden || pending) return;
+      if (!active || document.hidden || pending || !isDataOwnerGenerationCurrent(owner)) return;
       clearTimeout(timer);
       const delay = nextRead - Date.now();
       if (delay > 0) {
@@ -37,16 +37,11 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
         return;
       }
       pending = true;
-      nextRead = Date.now() + MIN_READ_INTERVAL;
-      let snapshot: GhostHarnessUsage | null = null;
-      try {
-        const raw = deviceId
-          ? await window.electronAPI.deviceLink.invoke(deviceId, PLUGIN_ENGINES_INVOKE.USAGE, [engineKey])
-          : await window.electronAPI.maker.getPluginEngineUsage?.(engineKey);
-        snapshot = parseGhostHarnessUsage(raw) ?? null;
-      } catch { /* An older or offline host has no snapshot. */ }
+      const read = readPluginEngineUsage(owner, deviceId, engineKey);
+      const snapshot = await read.result;
+      nextRead = read.freshUntil;
       pending = false;
-      if (!active) return;
+      if (!active || !isDataOwnerGenerationCurrent(owner)) return;
       setNow(Date.now());
       setUsage(snapshot);
       // One read after the nearest reset. An already elapsed window waits for a new user event.
@@ -72,7 +67,7 @@ export function PluginEngineUsageChip({ engineKey, name, deviceId, running }: {
   }, [running]);
   useEffect(() => {
     if (!usage?.windows?.some(row => row.resetsAt)) return;
-    const timer = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, MIN_READ_INTERVAL);
+    const timer = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, PLUGIN_USAGE_READ_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [usage]);
 

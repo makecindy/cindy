@@ -27,6 +27,7 @@ import {
   loadPluginEngines,
   normalizePluginEngines,
   pluginEngineSessionCapabilities,
+  setCachedPluginEngines,
   type MobilePluginEngine,
 } from '@/session/pluginEngines';
 import { sessionAgentSwitchIntentPatch } from '@/session/sessionAgentSwitch';
@@ -75,6 +76,34 @@ describe('reading the engines of the controlled computer', () => {
     const guest = createMobileMakerTransport({ deviceId: sharedTaskHostPeer('task', 'desk'), invoke });
     expect(await guest.getPluginEngineUsage('demo:engine')).toBeNull();
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  // Reopening a menu creates a new transport. The account, computer and engine still own
+  // one request until the minute expires; expiry while hidden does not start a refresh.
+  it('shares a usage read between menus and expires it without a background invoke', async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn(async () => ({ updatedAt: 1234, balances: [{ currency: 'USD', amount: '0' }] })) as unknown as RemoteInvoke;
+      const read = (deviceId = 'menu-desk', key = 'demo:engine') =>
+        createMobileMakerTransport({ deviceId, invoke }).getPluginEngineUsage(key);
+      const [a, b] = await Promise.all([read(), read()]);
+      expect(a).toEqual(b);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(await read()).toEqual(a);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(await read()).toEqual(a);
+      expect(invoke).toHaveBeenCalledTimes(2);
+      await Promise.all([read('other-desk'), read('menu-desk', 'demo:other')]);
+      expect(invoke).toHaveBeenCalledTimes(4);
+      setCachedPluginEngines('menu-desk', [], false);
+      await read();
+      await read('other-desk');
+      expect(invoke).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('treats an older computer without the channel as having no engines', async () => {
