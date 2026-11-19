@@ -942,6 +942,14 @@ function projectPurchasedGiftCard(value: unknown): BillingPurchasedGiftCard {
   };
 }
 
+/**
+ * 「我买的礼品卡」的翻页游标：服务端发的是 base64url，最长 512。读响应与「加载更多」请求（IPC 参数
+ * 校验）共用这一条规则，读进来的游标一定能原样发回去；不合规则的游标在读响应时就按坏响应处理。
+ */
+export function isPurchasedGiftCardCursor(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_.~-]{1,512}$/.test(value);
+}
+
 const GIFT_CARD_EMAIL_STATUSES = new Set<BillingPurchasedGiftCardEmail['status']>([
   'PENDING',
   'SENDING',
@@ -982,9 +990,8 @@ export function projectPurchasedGiftCardList(value: unknown): BillingPurchasedGi
   ) {
     invalidResponse();
   }
-  const nextCursor =
-    value.nextCursor === null ? null : boundedString(value.nextCursor, MAX_CURSOR_LENGTH);
-  if (nextCursor === null && value.nextCursor !== null) invalidResponse();
+  if (value.nextCursor !== null && !isPurchasedGiftCardCursor(value.nextCursor)) invalidResponse();
+  const nextCursor = value.nextCursor as string | null;
   const cardIds = new Set<string>();
   const cards: BillingPurchasedGiftCard[] = [];
   for (const raw of value.cards) {

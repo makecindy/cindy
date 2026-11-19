@@ -11,6 +11,7 @@ import {
   projectModelAccessBalance,
   projectModelAccessCreditUsage,
   projectPurchasedGiftCardCode,
+  isPurchasedGiftCardCursor,
   projectPurchasedGiftCardList,
 } from '../projection.js';
 
@@ -1143,6 +1144,12 @@ describe('gift card purchase projection', () => {
       ['card_2', null, 'cny'],
     ]);
     expect(list.nextCursor).toBe('next.page_1');
+    // 读进来的游标要能原样发回「加载更多」（与 IPC 参数校验同一条规则）；服务端发的是 base64url。
+    expect(isPurchasedGiftCardCursor(list.nextCursor)).toBe(true);
+    for (const cursor of ['abc=', 'a/b', 'x'.repeat(513), '']) {
+      expect(() => projectPurchasedGiftCardList({ cards: [], nextCursor: cursor })).toThrow();
+      expect(isPurchasedGiftCardCursor(cursor)).toBe(false);
+    }
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'SOLD' })], nextCursor: null })).toThrow();
     // 退款或拒付还在处理的卡（ON_HOLD）照常读出。
     expect(projectPurchasedGiftCardList({ cards: [purchasedCard({ status: 'ON_HOLD' })], nextCursor: null })

@@ -25,6 +25,7 @@ import {
   projectBillingCurrentSubscription,
   projectGiftCardPurchasePolicy,
   projectPurchasedGiftCardCode,
+  isPurchasedGiftCardCursor,
   projectPurchasedGiftCardList,
   projectSentPurchasedGiftCard,
   projectBillingOrderList,
@@ -45,7 +46,6 @@ const FACE_CODE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 /** 礼品卡单张面额：正数、最多两位小数（与卡面和兑换入账精度一致）。 */
 const GIFT_CARD_AMOUNT_PATTERN = /^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/;
 const RESOURCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
-const OPAQUE_CURSOR_PATTERN = /^[A-Za-z0-9_.~-]{1,1024}$/;
 const CARD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** 收件邮箱只挡明显不是单个地址的输入（空白、逗号分隔的多个地址等）；服务端按自己的规则再校验。 */
 const SINGLE_EMAIL_PATTERN = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
@@ -686,7 +686,7 @@ export function createBillingHandlers(
       }
       if (
         payload.cursor !== undefined &&
-        (typeof payload.cursor !== 'string' || !OPAQUE_CURSOR_PATTERN.test(payload.cursor))
+        !isPurchasedGiftCardCursor(payload.cursor)
       ) {
         throwIpcError('INVALID_PARAMS', 'cursor must be a bounded page cursor');
       }
