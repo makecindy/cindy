@@ -290,7 +290,8 @@ export function CreateWorkerPopover({
   const [pluginEngine, setPluginEngine] = useState<PluginEngineSelection | null>(null);
   useEffect(() => { if (!open) setPluginEngine(null); }, [open]);
   const pluginEnginesAllowed = pluginEnginesEnabled && !leadDeviceId && !sshRemote && !executionDeviceId;
-  const pluginEngineList = usePluginEngines(pluginEnginesAllowed);
+  // 面板常驻挂载：只在打开期间订阅引擎列表，关闭即停止。
+  const pluginEngineList = usePluginEngines(open && pluginEnginesAllowed);
   const activePluginEngine = useMemo(
     () => (pluginEnginesAllowed ? resolveActivePluginEngine(pluginEngineList, pluginEngine) : null),
     [pluginEnginesAllowed, pluginEngineList, pluginEngine],
@@ -934,6 +935,8 @@ export function CreateWorkerPopover({
       if (selection) {
         modelSelectionChosenRef.current = true;
         restoredModelSelectionRef.current = true;
+        // 角色记住的是内置模型：带回它就不再停在之前选的插件引擎上。
+        setPluginEngine(null);
         setAgent(selection.agent);
         setModel(selection.model);
         setEffort(selection.effort);

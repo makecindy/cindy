@@ -272,6 +272,7 @@ export function OrcaWorkerPanel({
           onSwitchFocus={handleSwitchFocus}
           onOpenCreate={() => void handleOpenCreate()}
           onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings}
+          pluginEngineDeviceId={typeof deviceId === 'string' ? deviceId : undefined}
           onArchiveWorker={handleArchiveWorker}
           onEditWorker={canEditWorker ? handleOpenEditWorker : undefined}
           clearAttentionWhenVisible={workerConversationVisible}

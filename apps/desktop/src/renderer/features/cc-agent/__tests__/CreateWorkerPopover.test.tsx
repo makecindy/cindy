@@ -107,15 +107,20 @@ const mocks = vi.hoisted(() => ({
   directoryPath: '/Users/demo/Interviews',
   // useDeviceProviders 最近一次读的电脑(Worker 的模型目录按哪台读)。
   deviceProvidersFor: undefined as string | undefined,
+  // 每次渲染时面板是否订阅本机插件引擎列表。
+  pluginEngineSubscriptions: [] as boolean[],
 }));
 
 // 本机插件引擎(docs/plans/acp-plugin-bridge.md)：只在弹窗要读引擎列表时给出一个可用引擎。
 vi.mock('@/hooks/usePluginEngines', () => ({
-  usePluginEngines: (enabled = true) => (enabled ? [{
-    key: 'dsh-acp:dsh', providerId: 'acp-plugin:dsh-acp:dsh', ghostId: 'dsh-acp', harnessId: 'dsh', name: 'DSH',
-    availability: { state: 'available' }, models: [{ id: 'dsh-pro', displayName: 'DSH Pro' }],
-    permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }], defaultPermissionMode: 'ask',
-  }] : []),
+  usePluginEngines: (enabled = true) => {
+    mocks.pluginEngineSubscriptions.push(enabled);
+    return enabled ? [{
+      key: 'dsh-acp:dsh', providerId: 'acp-plugin:dsh-acp:dsh', ghostId: 'dsh-acp', harnessId: 'dsh', name: 'DSH',
+      availability: { state: 'available' }, models: [{ id: 'dsh-pro', displayName: 'DSH Pro' }],
+      permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }], defaultPermissionMode: 'ask',
+    }] : [];
+  },
   findPluginEngine: () => null,
   requestPluginEnginesRefresh: () => {},
 }));
@@ -344,6 +349,7 @@ describe('CreateWorkerPopover', () => {
   // 第二期「协作」(docs/plans/acp-plugin-bridge.md)：本机 Lead 的 Worker 可以放在插件引擎上。生产入口
   // CreateWorkerPopover → onCreate；缺口：此前面板根本不列引擎，选了也会按内置 Harness 提交。
   // 最小失败输入：选插件引擎后提交；再选回内置模型；不开启时不列引擎(远程控制 / SSH 的面板不变)。unit/jsdom。
+  // PR #11591 review：面板常驻挂载，关着时不订阅引擎列表；切到记过内置模型的角色时不再停在插件引擎上。
   it('submits a plugin engine Worker only when plugin engines are offered, and a built-in pick replaces it', async () => {
     const onCreate = vi.fn();
     const user = userEvent.setup();
@@ -351,7 +357,13 @@ describe('CreateWorkerPopover', () => {
     expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engines')).toBe('0');
     unmount();
 
-    render(<CreateWorkerPopover open pluginEnginesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    mocks.pluginEngineSubscriptions.length = 0;
+    const closed = render(<CreateWorkerPopover open={false} pluginEnginesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    expect(mocks.pluginEngineSubscriptions.length).toBeGreaterThan(0);
+    expect(mocks.pluginEngineSubscriptions.some(Boolean)).toBe(false);
+    closed.unmount();
+
+    const panel = render(<CreateWorkerPopover open pluginEnginesEnabled onClose={vi.fn()} onCreate={onCreate} />);
     expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engines')).toBe('1');
     await user.click(screen.getByTestId('pick-plugin-engine'));
     expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engine-active')).toBe('acp-plugin:dsh-acp:dsh');
@@ -369,6 +381,20 @@ describe('CreateWorkerPopover', () => {
     const builtIn = onCreate.mock.calls[1]![0] as Record<string, unknown>;
     expect(builtIn.agent).toBe('claude-code');
     expect(String(builtIn.providerId ?? '')).not.toContain('acp-plugin:');
+    panel.unmount();
+
+    // 「审查」记住了 Claude：先在别的角色选插件引擎，再切回「审查」，带回的是它记的内置模型。
+    render(<CreateWorkerPopover open pluginEnginesEnabled onClose={vi.fn()} onCreate={onCreate} />);
+    const role = (id: string) => screen.getByRole('radio', { name: `orca.createWorker.templates.${id}.name` });
+    expect(role('reviewer').getAttribute('aria-checked')).toBe('true');
+    await user.click(role('tester'));
+    await user.click(screen.getByTestId('pick-plugin-engine'));
+    expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engine-active')).toBe('acp-plugin:dsh-acp:dsh');
+    await user.click(role('reviewer'));
+    expect(screen.getByTestId('model-selector').getAttribute('data-plugin-engine-active')).toBe('');
+    await user.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(3));
+    expect(onCreate.mock.calls[2]![0]).toMatchObject({ role: 'reviewer', agent: 'claude-code' });
   });
 
   it('centers the setup and uses one model picker without a competing Harness control', () => {
