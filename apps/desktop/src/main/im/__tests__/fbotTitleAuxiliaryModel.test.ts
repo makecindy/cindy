@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  owner: {},
+  owner: { userId: 'account-a' },
   title: '',
   generate: vi.fn<() => Promise<string | null>>(),
-  renamed: (_id: string) => {},
+  renamed: (_id: string, _owner: { userId: string } | null) => {},
 }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => h.owner }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({
@@ -24,7 +24,7 @@ import { __resetSessionAutoTitleStateForTest, refineCreatedTaskTitle, registerSe
 import { generateAndPersistFbotTitle } from '../shared/fbotTitle.js';
 
 beforeEach(() => {
-  h.owner = {};
+  h.owner = { userId: 'account-a' };
   h.generate.mockReset();
   h.title = '飞书 · 新任务';
   __resetSessionAutoTitleStateForTest();
@@ -50,7 +50,7 @@ describe('IM task titles', () => {
   it('honors a manual save even when it matches the preview exactly', async () => {
     h.generate.mockImplementation(async () => {
       expect(h.title).toBe('飞书 · 看看登录问题');
-      h.renamed('task');
+      h.renamed('task', h.owner);
       return '修复登录';
     });
     await generateAndPersistFbotTitle('task', '看看登录问题', '飞书 · ', h.title);
@@ -59,12 +59,29 @@ describe('IM task titles', () => {
 
   it('discards a completion if the signed-in account changes while the model is running', async () => {
     h.generate.mockImplementation(async () => {
-      h.owner = {};
+      h.owner = { userId: 'account-b' };
       h.title = '飞书 · 新账号的任务';
       return '旧账号的主题';
     });
     await generateAndPersistFbotTitle('task', '旧账号的消息', '飞书 · ', h.title);
     expect(h.title).toBe('飞书 · 新账号的任务');
+  });
+
+  it('honors each account’s manual choice for the same Feishu session ID', async () => {
+    const id = 'feishu_test_app_test_user';
+    const initial = h.title;
+    const ownerA = h.owner;
+    h.generate.mockResolvedValue('修复登录');
+    h.owner = { userId: 'account-b' };
+    h.renamed(id, ownerA);
+    await generateAndPersistFbotTitle(id, '看看登录问题', '飞书 · ', initial);
+    expect(h.title).toBe('飞书 · 修复登录');
+
+    h.owner = { userId: 'account-a' };
+    h.title = initial;
+    await generateAndPersistFbotTitle(id, '另一个问题', '飞书 · ', initial);
+    expect(h.title).toBe(initial);
+    expect(h.generate).toHaveBeenCalledOnce();
   });
 
   it('uses the first actual text after an empty creation and leaves later messages alone', async () => {
