@@ -16,6 +16,10 @@ import type {
 import type { DataOwnerPushStamp } from './dataOwnerPush';
 import type { ProviderShareInsights, ProviderShareQuotaAccountResult, ProviderShareVisibility } from './providerShareInsights';
 
+/** Explicit proxy scope refusal. The legacy unmarked sentence also meant a missing member model. */
+export const SHARED_PROVIDER_SCOPE_DENIAL_MESSAGE =
+  '[SHARED_PROVIDER_SCOPE_DENIED] This request is outside the provider shared with you.';
+
 /** 本机收藏清理依据。未加载、断线和账号切换的空列表不能用于撤权清理。 */
 export interface ProviderShareReceivedSnapshot {
   ownerStamp: DataOwnerPushStamp;
@@ -51,8 +55,10 @@ export interface ProviderShareFavoriteRecovery {
 }
 
 export const PROVIDER_SHARE_IPC = {
-  /** Renderer → Main：全部操作走同一个命令通道。 */
+  /** Renderer → Main：管理命令通道。 */
   COMMAND: 'provider-share:command',
+  /** 仅本机应用窗口可请求原生另存为；不进入远程管理通道。 */
+  EXPORT_ROSTER: 'provider-share:export-roster',
   /** 分享者：分享快照变化(管理页按当前时间段重新读取)。 */
   OWNED_CHANGED: 'provider-share:owned-changed',
   /** 受邀者：已收到的分享变化(模型列表)。payload: ProviderShareReceived[] */

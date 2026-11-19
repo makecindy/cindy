@@ -23,7 +23,7 @@ import {
 } from '@/cindy-brain/ghostPanelBody';
 import { useGhostRuntimeState } from '@/cindy-brain/runtimeStates';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { MAIN_VIEW_ICONS } from '@/cindy-brain/mainViewIcons';
+import { MAIN_VIEW_ICONS, mainViewIconName } from '@/cindy-brain/mainViewIcons';
 import type { InstalledGhost } from '../../../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../../../shared/pluginIdentity';
 import {
@@ -56,7 +56,7 @@ function PluginViewTabPillIcon({ state }: { state: PluginViewTabState }) {
     // design: intrinsic-geometry — 插件品牌图沿用 plugin-task 页签同款 13px 内容裁剪（图标自身的圆角，不是控件边框）
     return <img src={ghost.iconDataUrl} alt="" width={13} height={13} className="rounded-[3px]" />;
   }
-  const Icon = MAIN_VIEW_ICONS[ghost?.manifest.mainView?.icon ?? 'puzzle'] ?? Puzzle;
+  const Icon = MAIN_VIEW_ICONS[mainViewIconName(ghost?.manifest.mainView)];
   return <Icon size={13} />;
 }
 

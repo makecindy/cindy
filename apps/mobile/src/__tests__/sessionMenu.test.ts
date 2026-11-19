@@ -168,10 +168,11 @@ describe('sessionMenu navigation', () => {
       .toBe('cindy://session/abc?device=physical');
     expect(sessionMenuCopyLink(session({ id: 'abc', canonicalDeviceId: 'canonical', deviceLinkDeviceId: 'physical' })))
       .toBe('cindy://session/abc?device=canonical');
+    const peer = sharedTaskHostPeer('shared-task', 'host-device');
     expect(sessionMenuCopyLink(session({
       id: 'abc',
-      deviceLinkDeviceId: sharedTaskHostPeer('shared-task', 'host-device'),
-    }))).toBe('cindy://session/abc');
+      deviceLinkDeviceId: peer,
+    }))).toBe(`cindy://session/abc?device=${encodeURIComponent(peer)}`);
   });
 
   it('settles back navigation in two stages', () => {

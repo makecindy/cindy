@@ -119,7 +119,7 @@ function createDb(): void {
       context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -321,7 +321,7 @@ describe('local-db:sessions:restore-if-archived', () => {
     expect(readStatus()).toBe('active');
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'target',
-      patch: { status: 'active' },
+      patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
     });
   });
 
@@ -447,7 +447,8 @@ describe('bounded reconciliation read', () => {
     const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
     const get = h.handlers.get('local-db:sessions:get')!;
     const batch = h.handlers.get('local-db:sessions:get-many')!;
-    const expected = await get({}, 'target');
+    const { turnElapsedMs, ...expected } = await get({}, 'target') as Record<string, unknown>;
+    expect(turnElapsedMs).toBeNull();
     const result = await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:get-many' },
       () => batch({}, ['target', 'missing', 'target']));
     expect(result).toEqual([expected]);

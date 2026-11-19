@@ -10,6 +10,7 @@ export function useOrcaWorkerDirectoryPicker(params: {
   maker: MobileMakerTransport;
   scope: string | null;
   formEpoch: number;
+  canonicalDirectory?: boolean;
   workingDir: string;
   setSheetOpen(open: boolean): void;
   onChoose(path: string | null): void;
@@ -78,14 +79,16 @@ export function useOrcaWorkerDirectoryPicker(params: {
     const current = () => owner.current === snapshot && request === seq.current && isCurrent(snapshot);
     setLoading(true);
     setError(null);
+    const list = (target: string) => snapshot.canonicalDirectory
+      ? snapshot.maker.fs.listDir(target, true) : snapshot.maker.fs.listDir(target);
     try {
-      let result = await withTransientRemoteRetry(() => snapshot.maker.fs.listDir(path || '~'));
+      let result = await withTransientRemoteRetry(() => list(path || '~'));
       if (!current()) return;
       setDirectory(result);
       setLoading(false);
       // Windows can deliver the folder list before its drive enumeration completes.
       for (let attempt = 0; shouldRetryRemoteBrowseDrives(result.drivesPending, attempt); attempt += 1) {
-        try { result = await snapshot.maker.fs.listDir(result.resolvedPath); }
+        try { result = await list(result.resolvedPath); }
         catch { return; }
         if (!current()) return;
         setDirectory(result);
@@ -102,7 +105,7 @@ export function useOrcaWorkerDirectoryPicker(params: {
     void load(live.current.workingDir || '~');
   }, [isCurrent, load]);
   return {
-    page, openPicker, close, closed, choose, browse, load,
+    page, openPicker, openDirectoryPicker: () => { openPicker(); browse(); }, close, closed, choose, browse, load,
     back: () => { seq.current += 1; setLoading(false); setPage('workspace'); },
     path: directory?.resolvedPath ?? '', parent: directory?.parent ?? null,
     entries: filterRemoteDirectoryEntries((directory?.entries ?? []).filter(entry => entry.kind !== 'file'), showHidden),

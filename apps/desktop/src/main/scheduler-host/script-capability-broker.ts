@@ -1,3 +1,4 @@
+import { projectForScheduledTask, type ScheduleProjectLookup } from './scheduleProject.js';
 import { readGithub } from '../git-context/githubReadRuntime';
 import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
@@ -241,6 +242,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
   private readonly activeScriptCallIds = new Map<string, Set<string>>();
 
   constructor(private readonly deps: {
+    projectForNewTask?: ScheduleProjectLookup;
     resolveDefaultModelRoute?: (
       agent: Schedule['agentKind'],
       preferredProviderId?: string | null,
@@ -266,7 +268,7 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
       effort: schedule.effort as DispatchEffort | undefined,
       fastMode: (schedule.fastMode ?? false),
       workingDir: schedule.workingDir ?? '',
-      workspaceKind: 'project' as const,
+      ...await projectForScheduledTask(schedule, this.deps.projectForNewTask),
       permissionMode: 'bypassPermissions' as const,
     };
   }

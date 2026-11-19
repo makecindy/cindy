@@ -1,3 +1,4 @@
+import { createChannelTurnObserver, onChannelTurn } from '../channelTurnSignal';
 import { withSharedSessionResumeRecovery, type SharedSessionResumeRecoveryDeps } from '../sharedSessionResumeRecovery.js';
 import { createAgentHandoffPendingRegistry } from '../agentHandoff.js';
 import { ROUTINE_TRIGGER_DATA_LEAD } from '../../../shared/botAutonomy.js';
@@ -13,6 +14,8 @@ import {
   MAIN_OWNED_SEND_CONTEXT,
   PINNED_SKILL_INVOCATION,
   type AgentKind,
+  type AgentEvent,
+  type Session,
   type SessionSendOptions,
   type SessionSendResult,
   type UserMessage,
@@ -24,6 +27,7 @@ import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
 import { describe, expect, it, vi } from 'vitest';
 import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
+import { TELEGRAM_QUESTION_ORIGIN, telegramQuestionOrigin, stampTelegramQuestionAnswer, telegramQuestionAnswerOrigin } from '../telegramQuestionReply';
 import { FORWARDED_REQUEST_RECEIPT, formatForwardedRequest } from '../../../shared/forwardedRequest.js';
 import { appMessageInput, MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import {
@@ -52,6 +56,7 @@ import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext.
 import { createTaskRuntimePlugins } from '../runtimePlugins.js';
 import * as mcpApps from '../../mcp-apps/runtime.js';
 import { createWireNoteMemory } from '../wireNoteMemory';
+import { createScheduledQuotaDispatchGuard, isQuotaScheduleCurrent } from '../automaticContinueEligibility';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -85,12 +90,32 @@ describe('local application task takeover', () => {
       expect(typeof readText).toBe('function');
       const value = providers.compose(id, readText); pending.push(value); return value;
     };
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input');
+    const prepared = vi.fn();
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Unchanged plugin-free input', undefined,
+      { onRuntimePreparation: prepared });
+    expect(prepared).not.toHaveBeenCalled();
     expect(pending).toEqual([undefined, undefined]);
     expect(readRoute).not.toHaveBeenCalled();
     expect(screen).not.toHaveBeenCalled();
     expect(session.send).toHaveBeenCalledOnce();
     expect(vi.mocked(session.send).mock.calls[0][1]?.[MODEL_REQUEST_CONTROL]).toBeUndefined();
+  });
+
+  // Welcome replay safety, unit: an awaited preparation remains observable even
+  // when its selection is removed in flight; the callback never reaches the provider.
+  it.each(['turn', 'prompt', 'context'] as const)('records %s preparation before awaiting it', async point => {
+    const { deps, session } = createDeps();
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    const observed = vi.fn(() => { finish(); });
+    if (point === 'turn') deps.prepareRuntimeTurn = () => pending.then(() => ({ options: {} }));
+    if (point === 'prompt') deps.prepareRuntimePrompt = () => pending;
+    if (point === 'context') deps.composeRuntimeContext = () => pending.then(() => 'Reference only');
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Welcome', undefined,
+      { toolsDisabled: true, onRuntimePreparation: observed });
+    expect(observed).toHaveBeenCalledOnce();
+    expect(session.send).toHaveBeenCalledOnce();
+    expect(vi.mocked(session.send).mock.calls[0][1]).not.toHaveProperty('onRuntimePreparation');
   });
 
   // Runtime context, unit: reference material reaches the normal message body,
@@ -450,11 +475,166 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
   return { deps, session };
 }
 
+// Unit regression: the actual send boundary activates the original question's route
+// and carries it forward to a second question, without relaying an ordinary App turn.
+it('keeps the Telegram answer destination across successive question turns', async () => {
+  const { deps, session } = createDeps();
+  const { sendToAgentAccepted } = createMakerSendTransaction(deps);
+  const activate = vi.fn();
+  let origin = telegramQuestionOrigin(activate);
+  for (const text of ['first answer', 'second answer']) {
+    const item = { text, clientId: text, persistedContent: text } as AgentInputQueuedMessage;
+    stampTelegramQuestionAnswer(item, origin);
+    const result = await sendToAgentAccepted(session.id, text, undefined, {
+      [TELEGRAM_QUESTION_ORIGIN]: telegramQuestionAnswerOrigin(item),
+    });
+    expect(result.accepted).toBe(true);
+    origin = vi.mocked(session.send).mock.lastCall![1]!.origin!;
+  }
+  await sendToAgentAccepted(session.id, 'local input');
+  expect(activate.mock.calls).toEqual([[session], [session]]);
+});
+
+
+
+// Unit regression: a guest answer in an idle Full Access task must receive the
+// original sealed policy and the same temporary runtime mode as its IM turn.
+it.each(['done', 'rejected', 'thrown', 'user-change'])('reapplies guest policy and cleans up on %s', async (outcome) => {
+  const { deps, session } = createDeps();
+  let mode = { mode: 'bypassPermissions', generation: 0 };
+  const listeners = new Set<(event: AgentEvent) => void>();
+  let generation = 2;
+  let terminal: { kind: 'none' | 'done'; generation?: number } = { kind: 'none' };
+  const setMode = vi.fn(async (previous: { mode: string; generation: number }, next: string) => {
+    if (mode.mode !== previous.mode || mode.generation !== previous.generation) return false;
+    mode = { mode: next, generation: mode.generation + 1 };
+    return true;
+  });
+  Object.assign(session, {
+    capabilities: { setPermissionModeMidSession: { supported: true },
+      permissionModes: [{ id: 'auto' }], turnPermissionPolicy: { supported: { supported: true } } },
+    get stablePermissionModeState() { return mode; },
+    setPermissionModeIfUnchanged: setMode,
+    acquireTurnLease: () => release,
+    getTurnGeneration: () => generation,
+    getObservedCurrentTurnTerminal: () => terminal,
+    onStatusChange: () => () => {},
+    onEvent: (listener: (event: AgentEvent) => void) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  });
+  const release = vi.fn();
+  // Object.assign materializes getters, so keep the runtime's mode snapshot live.
+  Object.defineProperty(session, 'stablePermissionModeState', { get: () => mode });
+  const policy = { origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'desktop' } as const;
+  const origin = telegramQuestionOrigin(() => {}, { session: session as unknown as Session, policy: policy as never });
+  vi.mocked(session.send).mockImplementation(async (_message, options) => {
+    await options?.afterTurnReserved?.();
+    expect(mode.mode).toBe('auto');
+    expect(options?.turnPermissionPolicy).toBe(policy);
+    if (outcome === 'thrown') throw new Error('provider refused');
+    if (outcome === 'rejected') return { accepted: false, reason: 'cancelled-before-dispatch' };
+    options?.onDispatching?.();
+    return { accepted: true };
+  });
+  const tx = createMakerSendTransaction(deps);
+  const answer = tx.sendToAgentAccepted(session.id, 'guest answer', undefined, { [TELEGRAM_QUESTION_ORIGIN]: origin });
+  if (outcome === 'thrown') await expect(answer).rejects.toThrow('provider refused');
+  else await answer;
+  if (outcome === 'done' || outcome === 'user-change') {
+    for (const listener of [...listeners]) listener({ type: 'done', data: {} } as AgentEvent);
+    expect(release).not.toHaveBeenCalled();
+    // A prior answer shares this exact origin. Neither a provider's old generation
+    // nor an event stamped current before Session verifies a terminal may restore Full access.
+    for (const listener of [...listeners]) {
+      listener({ type: 'done', data: {}, turnOrigin: origin, sessionTurnGeneration: 1, sessionInstanceId: session.instanceId });
+      listener({ type: 'done', data: {}, turnOrigin: origin, sessionTurnGeneration: 2, sessionInstanceId: session.instanceId });
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mode.mode).toBe('auto');
+    expect(release).not.toHaveBeenCalled();
+    terminal = { kind: 'done', generation: 2 };
+    generation = 3;
+    for (const listener of [...listeners]) listener({
+      type: 'done', data: {}, sessionTurnGeneration: 2, sessionInstanceId: session.instanceId,
+    });
+    expect(release).not.toHaveBeenCalled();
+    generation = 2;
+    if (outcome === 'user-change') mode = { mode: 'ask', generation: mode.generation + 1 };
+    for (const listener of [...listeners]) listener({ type: 'done', data: {}, turnOrigin: origin, sessionTurnGeneration: 2, sessionInstanceId: session.instanceId });
+  }
+  await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+  expect(mode.mode).toBe(outcome === 'user-change' ? 'ask' : 'bypassPermissions');
+});
+
+
+// Unit regression: only the host's live question route qualifies an App-looking
+// answer for the existing provider-wake delivery path.
+it('inherits provider-wake delivery from an admitted question answer and clears it on local input', async () => {
+  const { session } = createDeps();
+  const route = telegramQuestionOrigin(() => {});
+  const item = { text: 'answer', clientId: 'q', persistedContent: 'answer' } as AgentInputQueuedMessage;
+  stampTelegramQuestionAnswer(item, route);
+  let origin = telegramQuestionAnswerOrigin(item);
+  Object.assign(session, { getCurrentTurnOrigin: () => origin });
+  const observer = createChannelTurnObserver(session as unknown as Session);
+  const seen = vi.fn();
+  const unsubscribe = onChannelTurn(seen);
+  try {
+    for (const input of [origin, { ...origin! }, undefined]) {
+      origin = input;
+      await observer.beforeProviderStart();
+      observer.onDispatching();
+      observer.onProviderInitiatedTurn();
+    }
+    expect(seen.mock.calls.filter(call => call[2]?.startsWith('provider-wake')).map(call => call[2]))
+      .toEqual(['provider-wake', 'provider-wake-local', 'provider-wake-local']);
+  } finally { unsubscribe(); }
+});
+
 // Host recovery must durably mark a turn before the provider starts, or a crash
 // can replay it. Existing App guard tests cover revocation but no launcher write.
 // Production entry: sendToAgentAccepted; minimal input: one turn with an async
 // startup write that completes, rejects, or is invalidated. Unit: injected I/O.
 describe('launcher pre-provider persistence', () => {
+  // Unit: real send transaction + quota guard. A restored run has no live runner
+  // to stop it when its schedule is revoked during remote preparation.
+  it.each(['active', 'unbound', 'rebound', 'paused', 'deleted', 'takeover'] as const)('checks restored quota ownership after preparation: %s', async phase => {
+    const origin = { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'old-run' } as const;
+    let current = true;
+    let status = 'active';
+    let targetSessionId: string | null = 'session-1';
+    const succeeds = phase === 'active' || phase === 'unbound';
+    const { deps, session } = createDeps({
+      assertQuotaContinuation: createScheduledQuotaDispatchGuard({
+        origin: () => current ? origin : undefined,
+        isScheduleActive: async (_scheduleId, sessionId) => {
+          if (phase === 'takeover') current = false;
+          return isQuotaScheduleCurrent({ status, targetSessionId }, sessionId);
+        },
+        reject: () => { throw new Error('quota continuation cancelled'); },
+      }),
+    });
+    const dispatched = vi.fn();
+    vi.mocked(session.send).mockImplementation(async (_message, opts) => {
+      await opts?.beforeProviderStart?.();
+      await opts?.onAccepted?.();
+      // Match Session.send: acceptance and vision can yield after startup.
+      await Promise.resolve();
+      status = ['takeover', 'rebound', 'unbound'].includes(phase) ? 'active' : phase;
+      targetSessionId = phase === 'rebound' ? 'another-task' : phase === 'unbound' ? null : 'session-1';
+      await opts?.resolveAutoReviewUserIntent?.();
+      dispatched();
+      return { accepted: true };
+    });
+    const sending = createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'Continue', undefined, {
+      persistUserMessage: { clientId: 'quota-retry', content: 'Continue' },
+    });
+    if (succeeds) await sending;
+    else await expect(sending).rejects.toThrow('quota continuation cancelled');
+    expect(dispatched).toHaveBeenCalledTimes(succeeds ? 1 : 0);
+  });
   it.each(['ready', 'write-failed', 'cancelled', 'app-revoked'] as const)(
     'waits for the launcher fence and prevents dispatch when %s', async (phase) => {
       const controller = new AbortController();
@@ -644,7 +824,7 @@ describe('maker SEND transaction', () => {
       },
     });
     expect(applyPendingAgentSwitch).toHaveBeenCalledWith('session-1',
-      { clientId: 'model-input', ...(scheduled ? { scheduled: true } : {}) });
+      { clientId: 'model-input', nextInputChars: 'continue'.length, ...(scheduled ? { scheduled: true } : {}) });
     expect(onModelDispatched).toHaveBeenCalledExactlyOnceWith('session-1', 'model-input');
   });
 
@@ -5021,6 +5201,57 @@ describe('repeatable environment notes are sent only when they change', () => {
 });
 
 describe('Agent prewarm', () => {
+  it('rebuilds a retained failed Pi runtime before preparing a Skill', async () => {
+    const live = createSession({ agentKind: 'pi', getStatus: () => 'error' });
+    const { deps } = createDeps({
+      getSession: () => live,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved' }),
+      readSessionWorkingDirFromDb: async () => '/repo',
+    });
+    await createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+  // #11112 / unit: a switch can leave a live Pi for the same path on the old device.
+  it('only retries the catalog on the persisted execution device', async () => {
+    const retry = vi.fn();
+    const live = { ...createSession({ agentKind: 'pi', workDir: '/repo' }), agentDeviceId: 'device-a',
+      retryFailedRuntimeCapabilityCapture: retry };
+    const { deps } = createDeps({
+      getSession: () => live,
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b' }),
+    });
+    const prepare = () => createMakerSendTransaction(deps).preparePiSkillRuntime('session-1', '/repo', {});
+    await expect(prepare()).rejects.toThrow();
+    expect(retry).not.toHaveBeenCalled();
+    live.agentDeviceId = 'device-b';
+    await prepare();
+    expect(retry).toHaveBeenCalledOnce();
+  });
+  // #11112: Pi catalog preparation must use the existing task's lazy bootstrap,
+  // including Orca identity, without issuing a first user/Worker-ready message.
+  it.each(['lead', 'worker'] as const)('prepares an existing cold Pi %s from persisted settings', async role => {
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({
+        id: 'session-1', agentKind: 'pi', workingDir: '/repo', model: 'saved', agentDeviceId: 'device-b', orcaRole: role,
+      }),
+      readSessionWorkingDirFromDb: async () => '/repo',
+      synthesizeOrcaVendorOptionsFromDb: async (_id, opts) => {
+        opts.vendorOptions = { orcaRole: role, orcaWorkflowId: 'team' };
+        return true;
+      },
+      readSessionExtraDirsFromDb: vi.fn(async () => { throw new Error('busy'); }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    await transaction.preparePiSkillRuntime('session-1', '/repo', {});
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'saved', agentDeviceId: 'device-b', vendorOptions: { orcaRole: role, orcaWorkflowId: 'team' },
+    }));
+    expect(deps.readSessionExtraDirsFromDb).toHaveBeenCalledOnce();
+    await expect(transaction.preparePiSkillRuntime('session-1', '/other', {})).rejects.toThrow();
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+  });
+
   it('starts the runtime a first send would start, and the send then reuses it', async () => {
     let live: ReturnType<typeof createSession> | undefined;
     const { deps } = createDeps({

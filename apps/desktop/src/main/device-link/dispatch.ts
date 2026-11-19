@@ -37,7 +37,6 @@ import {
   messageRecord,
   MESSAGE_BODY_FORMAT,
   PROVIDER_METADATA_TRUST_MS,
-  PROVIDER_RUNNING_TURNS_FIELD,
   readProviderMetadataContinuity,
 } from '@cindy/device-link';
 import type { requestFilePeer, stopFilePeers } from './filePeer';
@@ -67,7 +66,7 @@ import { compactToolCardResult } from '../../shared/toolResultPersistCap.js';
 
 import { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef, invokeIntendedHoldMs } from '@cindy/device-link';
 import { RemoteInvokeTiming, observeRemoteInvoke } from './remoteInvokeTiming.js';
-import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation } from './providerShareDelegatedAccess.js';
+import type { delegatedProviderShareGuestAccess, delegatedProviderShareLeases, invalidateProviderShareDelegation, locallyProvenProviderShareDelegation } from './providerShareDelegatedAccess.js';
 import { observeRemoteSendPush } from './remoteSendTrace.js';
 import {
   computeAllowlistHash,
@@ -126,12 +125,11 @@ import {
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
 import { isModelVisible } from '@cindy/model-providers/sections';
-import { remoteInvocationModels, type ProviderView } from '@cindy/model-providers';
 import type { app } from 'electron';
 import type { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
 import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
-import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinks } from './peerLinks.js';
+import { SESSION_INVOKE_REPLAY, type PeerInvokePayload, type PeerLinks } from '@cindy/agent-net';
 import { isDeferredHistoryPush, deferredToolBoundary, buildHistoryWorkPatch, thinkingDeltaUpdatesWorkLine } from './historyViewPush';
 import { clearHistoryViewDeltas, withoutHistoryViewDeltaToken } from './historyViewDelta';
 import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
@@ -238,8 +236,6 @@ export interface RemoteAgentHandler {
    * 主人是否同意过这个人显示(转分享)。
    */
   sharedGroupStatus?(providerId: string, guestController?: string): Promise<ProviderShareGroupState[] | null>;
-  /** 「远程连接」里的「让我的其他电脑用本机模型」(默认关闭)。 */
-  ownComputerModelUseEnabled?(): boolean;
 }
 
 /** 供应商组(docs/product-rules/provider-groups.md)：组摘要只服务同账号电脑。 */
@@ -450,6 +446,7 @@ export interface InboundDispatchPorts {
   stopFilePeers?: typeof stopFilePeers;
   requestTaskMigration?: typeof requestTaskMigration;
   delegatedProviderShareGuestAccess?: typeof delegatedProviderShareGuestAccess;
+  locallyProvenProviderShareDelegation?: typeof locallyProvenProviderShareDelegation;
   delegatedProviderShareLeases?: typeof delegatedProviderShareLeases;
   invalidateProviderShareDelegation?: typeof invalidateProviderShareDelegation;
   app: Pick<typeof app, "getVersion">;
@@ -508,6 +505,7 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     stopFilePeers,
     requestTaskMigration = unavailable('requestTaskMigration'),
     delegatedProviderShareGuestAccess,
+    locallyProvenProviderShareDelegation,
     delegatedProviderShareLeases,
     invalidateProviderShareDelegation,
     app,
@@ -1203,7 +1201,6 @@ function projectInvokeResultForTunnel(
     rest.routing = projectRoutingForDisplay(p.routing);
     return rest;
   });
-  foldSubscriptionPoolAliases(providers);
   // New hosts advertise the optional directory budget. Consumers deduct their
   // own read time once; an existing shorter upstream remainder wins. Older
   // controllers ignore this additive field.
@@ -1214,27 +1211,6 @@ function projectInvokeResultForTunnel(
     ...(Array.isArray(r.providerOrder) ? { providerOrder: normalizeProviderOrder(r.providerOrder) } : {}),
     providerContinuity: continuity ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
   };
-}
-
-/**
- * A pool's remote switch does not imply the same per-model grant. Compare the
- * projected, authorized models before hiding any individually offered source.
- * Mutates the projected entries in place.
- */
-function foldSubscriptionPoolAliases(providers: Record<string, unknown>[]): void {
-  for (const provider of providers) {
-    if (!provider.subscriptionPoolAlias) continue;
-    const target = typeof provider.subscriptionPoolTarget === 'string' ? provider.subscriptionPoolTarget : 'openai';
-    const pool = providers.find(entry => entry.id === target && entry.remoteInvocationEnabled === true);
-    const poolModels = pool ? remoteInvocationModels(pool as unknown as ProviderView).models : undefined;
-    const models = remoteInvocationModels(provider as unknown as ProviderView).models;
-    const covered = poolModels && Object.entries(models ?? {}).every(([agent, rows]) =>
-      (rows ?? []).every(model => poolModels[agent as keyof typeof poolModels]?.some(candidate => candidate.id === model.id)));
-    if (!covered) {
-      delete provider.subscriptionPoolAlias;
-      delete provider.subscriptionPoolTarget;
-    }
-  }
 }
 
 /** 持有 client 的引用(转发 push 用);wireInboundDispatch 接入时设置。 */
@@ -1405,7 +1381,7 @@ const remoteInvokeInstance = `${Date.now().toString(36)}${Math.random().toString
 let remoteInvokeClearGeneration = 0;
 /**
  * 这台对这个控制端的请求去重记忆是哪一份：进程重启、整体清空（登出、关远程控制）、对它的清空（永久关链、撤权）都会变。Agent-Net
- * 会话的链路回复带上它（agentNetSessionLinks.ts），控制端断线后用原请求号再发之前比一下：变了就说明这里已经不记得那次请求，
+ * 会话的链路回复带上它（packages/agent-net/src/session/sessionLinks.ts），控制端断线后用原请求号再发之前比一下：变了就说明这里已经不记得那次请求，
  * 再发可能重复执行，不再发（和原来一样报「可能已执行」）。Device Link 的链路回复不带。
  */
 function remoteInvokeEpoch(deviceId: string): string {
@@ -3447,7 +3423,7 @@ async function handleInvoke(
   const joiningExisting = !!(existingListing && existingListing.linkEpoch === invokeLinkEpoch);
 
   const controllerAdmission = remoteInvokeAdmissionState(src);
-  const interactive = !!payload?.channel && isInteractiveInvoke(payload.channel);
+  const interactive = !!payload?.channel && isInteractiveInvoke(payload.channel, payload.args);
   const fileBlock = !!payload && isFilePeerStreamTransfer(payload);
   const controllerAtLimit = (
     controllerAdmission.messages >= REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT
@@ -3590,16 +3566,23 @@ async function handleInvoke(
   inFlightRemoteInvokeBytes += invokeBytes;
   if (listingKey) remoteListingFlights.set(listingKey, inFlightEntry);
   let result: InvokeResultPayload;
+  // Slow results are the ones most likely to outlive the controller's wait; record
+  // how each one left this host so a controller timeout can be matched to it.
+  let slowResultLabel: string | undefined;
   try {
     result = normalizeInvokeResultForWire(await resultPromise);
     const executionWaitMs = Math.round(performance.now() - handlerStartedAt);
     // debug only: 300ms already shows up as a visible send delay over the relay.
     if (executionWaitMs >= 300 + intendedHoldMs) {
-      log.debug(`remote invoke slow execution request=${shortId(requestId)} from=${shortId(src)}`
-        + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`
+      slowResultLabel = `request=${shortId(requestId)} from=${shortId(src)}`
+        + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`;
+      log.debug(`remote invoke slow execution ${slowResultLabel}`
         + ` executionWaitMs=${executionWaitMs} ok=${result.ok} stagesMs=${JSON.stringify(timing.stages)}`);
     }
-    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
+    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) {
+      if (slowResultLabel) log.debug(`remote invoke slow result dropped ${slowResultLabel} reason=link-reset`);
+      return;
+    }
   } finally {
     if (inFlightRemoteInvokeResults.get(cacheKey) === inFlightEntry) {
       inFlightRemoteInvokeResults.delete(cacheKey);
@@ -3611,7 +3594,7 @@ async function handleInvoke(
   }
   // Fresh execution already includes the DB checks in runInvoke, within its
   // orphan deadline and busy lease. Only replayed replies need a new async check.
-  if (!sendInvokeResultSafe(
+  const accepted = sendInvokeResultSafe(
     client,
     src,
     requestId,
@@ -3619,7 +3602,9 @@ async function handleInvoke(
     payload?.channel,
     payload?.args,
     fingerprint,
-  )) {
+  );
+  if (slowResultLabel) log.debug(`remote invoke slow result handed off ${slowResultLabel} accepted=${accepted}`);
+  if (!accepted) {
     throw new DeviceLinkError('BACKPRESSURE', 'invoke-result could not be queued');
   }
 }
@@ -4074,7 +4059,7 @@ function enqueueRemoteInvokeResult(entry: QueuedRemoteInvokeResult): boolean {
   // Admission lets an interactive request run beyond the message limits; its reply
   // must have a slot too, or the controller times out on a write that already took
   // effect. Reserve exactly the admission headroom (bytes stay unrelaxed).
-  const interactive = !!entry.channel && isInteractiveInvoke(entry.channel);
+  const interactive = !!entry.channel && isInteractiveInvoke(entry.channel, entry.args);
   if (
     entry.bytes <= 0
     || controllerOutbox.messages
@@ -4895,10 +4880,11 @@ function projectProviderListForShare(
 async function runProviderShareInvoke(
   src: string, payload: InvokePayload | undefined, timing: RemoteInvokeTiming,
 ): Promise<InvokeResultPayload> {
-  if (payload?.channel === REMOTE_AGENT_CHANNEL && Array.isArray(payload.args)
-    && payload.args.some((value: unknown) => !!value && typeof value === 'object' && 'op' in value && value.op === 'open')
-    && delegatedProviderShareGuestAccess?.(src)) {
-    try { await prepareShareAvailability(src); } catch { /* Normal O-issued grants do not require this endpoint. */ }
+  if (payload?.channel === REMOTE_AGENT_CHANNEL && Array.isArray(payload.args)) {
+    const request = payload.args[0] as { op?: unknown } | undefined;
+    if (request?.op === 'open' && delegatedProviderShareGuestAccess?.(src) && !locallyProvenProviderShareDelegation?.(src)) {
+      try { await prepareShareAvailability(src); } catch { /* Normal O-issued grants do not require this endpoint. */ }
+    }
   }
   const access = providerShareGuestAccess(src);
   if (!access) {
@@ -4933,97 +4919,6 @@ async function runProviderShareInvoke(
   const projected = await projectProviderShareRead(src, payload.channel, args, result.result, access.providerId);
   if (!providerShareGuestAccess(src)) return providerShareInvokeAccessFailure(src);
   return projected.ok ? { ...result, result: projected.value } : projected;
-}
-
-type ProviderEntry = Record<string, unknown>;
-
-function mapProviderEntries(result: unknown, map: (entry: ProviderEntry) => ProviderEntry): unknown {
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
-  const value = result as { providers?: unknown };
-  if (!Array.isArray(value.providers)) return result;
-  return {
-    ...value,
-    providers: value.providers.map((provider) => provider && typeof provider === 'object' && !Array.isArray(provider)
-      ? map(provider as ProviderEntry)
-      : provider),
-  };
-}
-
-/**
- * 同账号电脑读本机目录时的「可远程调用」标记，在补供应商组摘要与运行数之前算好，运行数才按实际开放情况给出
- * (别处的组把这台电脑当组员时据此计负载)：
- * - 「远程连接」里打开了「让我的其他电脑用本机模型」：全部供应商都标成可用(本机建了组的随后由
- *   {@link restoreGroupedOwnComputerModelUse} 还原)；
- * - 这台电脑的「用本机模型」被单独关掉：一律不标(目录照常给，远程控制与手机仍要看全部供应商)。
- * 其余照「允许被远程调用」原值。分享来的受邀者另有投影，不经这里。
- */
-function projectOwnComputerModelUse(src: string, result: unknown): unknown {
-  const revoked = (readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(src);
-  // 开关由远程 Agent 主机提供；主机没起来时本机也借不出模型，按关闭处理。
-  if (!revoked && remoteAgentHandler?.ownComputerModelUseEnabled?.() !== true) return result;
-  return mapProviderEntries(result, (entry) => ({ ...entry, remoteInvocationEnabled: !revoked }));
-}
-
-/**
- * 本机建了供应商组的供应商不随「让我的其他电脑用本机模型」打开(组内选电脑仍按逐个供应商的开关，见
- * remote-agent host 的 ownComputersMayUse)：补完组摘要后，把只因新开关而打开的这类供应商还原成原来的
- * 标记与运行数。逐台撤权得到的不可用不在此还原。
- */
-function restoreGroupedOwnComputerModelUse(original: unknown, decorated: unknown): unknown {
-  const before = new Map<string, ProviderEntry>();
-  mapProviderEntries(original, (entry) => {
-    if (typeof entry.id === 'string') before.set(entry.id, entry);
-    return entry;
-  });
-  return mapProviderEntries(decorated, (entry) => {
-    // 只撤回新开关带来的打开；逐台关掉「用本机模型」得到的不可用一律保留。
-    if (!entry.group || typeof entry.id !== 'string' || entry.remoteInvocationEnabled !== true) return entry;
-    const previous = before.get(entry.id);
-    if (!previous || previous.remoteInvocationEnabled === true) return entry;
-    const restored: ProviderEntry = { ...entry, remoteInvocationEnabled: previous.remoteInvocationEnabled };
-    if (previous.remoteInvocationEnabled !== true) delete restored[PROVIDER_RUNNING_TURNS_FIELD];
-    return restored;
-  });
-}
-
-/**
- * 账号池折叠旧 Codex 连接(subscriptionPoolAlias)要按最终的「可远程调用」判断：目录投影按原标记先折过一次，
- * 新开关或逐台撤权改了标记后，从投影前的目录取回别名再折一次。否则账号池随新开关可用时，旧连接仍单独出现，
- * 选择器出现重复入口，菜单栏还会为已在池里的账号多读一次配额。
- */
-function refoldOwnComputerPoolAliases(source: unknown, final: unknown): unknown {
-  const aliases = new Map<string, { subscriptionPoolAlias: unknown; subscriptionPoolTarget?: unknown }>();
-  mapProviderEntries(source, (entry) => {
-    if (typeof entry.id === 'string' && entry.subscriptionPoolAlias) aliases.set(entry.id, {
-      subscriptionPoolAlias: entry.subscriptionPoolAlias,
-      ...(typeof entry.subscriptionPoolTarget === 'string' ? { subscriptionPoolTarget: entry.subscriptionPoolTarget } : {}),
-    });
-    return entry;
-  });
-  if (aliases.size === 0) return final;
-  const restored = mapProviderEntries(final, (entry) => typeof entry.id === 'string' && aliases.has(entry.id)
-    ? { ...entry, ...aliases.get(entry.id) }
-    : entry);
-  const providers = (restored as { providers?: unknown }).providers;
-  if (Array.isArray(providers)) {
-    foldSubscriptionPoolAliases(providers.filter((entry): entry is Record<string, unknown> =>
-      !!entry && typeof entry === 'object' && !Array.isArray(entry)));
-  }
-  return restored;
-}
-
-/**
- * 同账号电脑的「用本机模型」被关掉：结束它在本机的远程 Agent 任务，并通知它重读目录。
- * 只匹配同账号控制端，分享来的受邀者另有撤权路径。
- */
-async function revokeControllerModelUse(deviceId: string): Promise<void> {
-  await remoteAgentHandler?.abortControllers?.((controller) => controller === deviceId && !isProviderSharePeer(controller));
-  sendPushBestEffort(deviceId, 'maker:provider:changed', {});
-}
-
-/** 「用本机模型」恢复：通知那台电脑重读目录。 */
-function notifyControllerModelUseRestored(deviceId: string): void {
-  sendPushBestEffort(deviceId, 'maker:provider:changed', {});
 }
 
 /** For diagnostics: whether any provider share is currently known on this computer. */
@@ -5508,11 +5403,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     // 远程 set-* 回流:被控端 set-* runtime-only,补一次 DB 持久化 + 广播 patched,让控制端
     // 镜像收敛到被控端真相(取代控制端乐观覆盖)。本机会话不走这条(走 renderer update)。
     await timing.measure('persist', () => persistRemoteSetting(payload.channel, payload.args ?? [], result));
-    // 投影前的目录留给同账号目录在最终授权后重新折叠账号池别名。
-    let sessionProjected: unknown;
     const projected = await timing.measure('project', async () => projectInvokeResultForTunnel(
         payload.channel,
-        sessionProjected = await projectRemoteSessionResult(payload.channel, result),
+        await projectRemoteSessionResult(payload.channel, result),
         subscriptions.controllerSupports(
           src,
           CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
@@ -5523,13 +5416,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
       ));
     // 供应商组摘要与运行数只给同账号电脑(受邀者与共享任务访客另有投影，这里不加，scrubSharedProvider 再兜一层)。
     const ownList = payload.channel === 'maker:provider:list' && isSameAccountController(src);
-    const opened = ownList ? projectOwnComputerModelUse(src, projected) : projected;
-    const grouped = ownList && providerGroupRemoteHandler
-      ? await providerGroupRemoteHandler.decorateProviderList(opened)
-      : opened;
-    const decorated = ownList && opened !== projected
-      ? refoldOwnComputerPoolAliases(sessionProjected, restoreGroupedOwnComputerModelUse(projected, grouped))
-      : grouped;
+    const decorated = ownList && providerGroupRemoteHandler
+      ? await providerGroupRemoteHandler.decorateProviderList(projected)
+      : projected;
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };
   } catch (err) {
@@ -5760,8 +5649,6 @@ return {
   hasProviderShares,
   providerShareActiveControllers,
   revokeProviderShareControllers,
-  revokeControllerModelUse,
-  notifyControllerModelUseRestored,
   abortProviderShareReshareRuns,
   __testing,
   remoteAgentLimitUsage

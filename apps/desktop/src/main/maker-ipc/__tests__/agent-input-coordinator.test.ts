@@ -4,8 +4,12 @@ import type { DbClient } from '../../localDb/client/DbClient.js';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
 import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
 import { createInputEnqueueHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
+import { runSessionExecutionAction } from '../sessionExecutionActions.js';
+import { createSharedPermission } from '../sharedPermission.js';
+import type { InteractionDecision } from '@cindy/maker-core';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
+import { telegramQuestionOrigin, stampTelegramQuestionAnswer, TELEGRAM_QUESTION_ORIGIN, hasTelegramQuestionRoute } from '../telegramQuestionReply';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
 import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
@@ -35,7 +39,10 @@ import { createProviderGroupRouter } from '../../provider-group/router.js';
 import type { ProviderGroupConfig } from '../../../shared/providerGroup.js';
 import { createAutomaticContinueEligibility } from '../automaticContinueEligibility.js';
 import { createBotModelSelectionCoordinator } from '../botModelSelectionCoordinator.js';
-import { acquireSendToSessionLock } from '../sendToSessionLock.js';
+import { acquireSendToSessionLock, withSendToSessionLock } from '../sendToSessionLock.js';
+import * as dbCurrent from '../../localDb/client/current.js';
+import { prepareBotPermissionDispatch, retryBotWelcomePermissionDispatch, withBotPermissionChangeForBot } from '../botPermissionDispatch.js';
+import { GitSnapshotCoordinator, type GitSnapshotCoordinatorDeps } from '../../git-snapshot/gitSnapshotCoordinator.js';
 import { UsageLimitAutoResume, USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES } from '../usageLimitAutoResume.js';
 import { MCP_APP_MESSAGE_CLIENT_PREFIX, MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import { runSchedulerQueuedPreparation } from '../schedulerQueuedPreparation.js';
@@ -836,9 +843,115 @@ describe('queued welcome dispatch receipts', () => {
     h.onUndispatchedUserTurn.mockImplementation((sid, item) => { receipts.settle(sid, item.clientId, false); });
     h.onDiscardedQueuedMessage.mockImplementation((sid, item) => { receipts.settle(sid, item.clientId, false); });
     const dispatch = (id: string) => receipts.dispatch('welcome-session', id, () =>
-      h.coordinator.enqueue('welcome-session', makeItem(id, `${UI_ACTION_TRIGGER_PREFIX}Say hello.`, { toolsDisabled: true })));
+      h.coordinator.enqueue('welcome-session', makeItem(id, `${UI_ACTION_TRIGGER_PREFIX}Say hello.`, { toolsDisabled: true })), true);
     return { h, receipts, dispatch };
   }
+
+  // #10021, unit: group chat-only inputs also carry toolsDisabled and an
+  // acceptance receipt. Neither is evidence that the invitation owns the input.
+  it('keeps ordinary chat-only receipts ineligible for welcome recovery', async () => {
+    const receipts = createQueuedDispatchReceipts();
+    const ordinary = receipts.dispatch('same-session', 'chat-only', () => {});
+    expect(receipts.hasWelcome('same-session', 'chat-only')).toBe(false);
+    const welcome = receipts.dispatch('same-session', 'welcome', () => {}, true);
+    expect(receipts.hasWelcome('same-session', 'welcome')).toBe(true);
+    expect(receipts.hasWelcome('other-session', 'welcome')).toBe(false);
+    receipts.settle('same-session', 'welcome', true);
+    receipts.settle('same-session', 'chat-only', true);
+    await expect(welcome).resolves.toBe(true);
+    await expect(ordinary).resolves.toBe(true);
+    expect(receipts.hasWelcome('same-session', 'welcome')).toBe(false);
+  });
+
+  // #10021, unit: persistence is not welcome acceptance. A host permission
+  // refusal must leave the same coordinator item/receipt pending until recovery;
+  // Stop during that wait must cancel it without a provider call.
+  it.each(['recover', 'stop'] as const)('keeps the welcome receipt correct when permissions race: %s', async action => {
+    const { h, receipts, dispatch } = setup();
+    const owner = { client: { query: async () => [{ botId: 'bot-1', mode: 'ask' }] } };
+    const snapshot = vi.spyOn(dbCurrent, 'getCurrentDbClientSnapshot').mockReturnValue(owner as never);
+    const writerGate = deferred<void>();
+    const recovering = deferred<void>();
+    let change: Promise<void> | undefined;
+    let attempts = 0;
+    const providerSend = vi.fn();
+    const inputIds: string[] = [];
+    let anchor = 'welcome';
+    let snapshotAttempt = 0;
+    const createSavepoint = vi.fn<GitSnapshotCoordinatorDeps['createShadowSavepoint']>(async (_repo, input) => ({
+      commit: `baseline-${input.meta?.attemptId}`, tree: 'tree', includedFiles: [], skippedFiles: [], skippedFingerprints: [],
+    }));
+    const snapshots = new GitSnapshotCoordinator({
+      readAutoSnapshotEnabled: () => true,
+      getSessionContext: async () => ({ workingDir: '/welcome-repo', agentKind: 'codex' }),
+      detectRepoRoot: async () => '/welcome-repo',
+      recordTurnAttempt: async () => ({ anchor, attemptId: `attempt-${++snapshotAttempt}` }),
+      createShadowSavepoint: createSavepoint,
+      createShadowMarker: async () => 'marker',
+      oneShot: async () => 'label',
+      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    });
+    // #10021, unit: the real snapshot FIFO must be settled between attempts,
+    // or the next ordinary turn consumes a leftover welcome baseline.
+    h.onRetryUndispatchedUserTurn.mockImplementation(sid => snapshots.onTurnAbort(sid));
+    h.onUndispatchedUserTurn.mockImplementation((sid, item) => {
+      snapshots.onTurnAbort(sid);
+      receipts.settle(sid, item.clientId, false);
+    });
+    const runtime = { id: 'welcome-session', stablePermissionModeState: { mode: 'ask' } } as unknown as Session;
+    h.beforeDispatchUserTurn.mockImplementation(async (sid, _item, signal) => {
+      await snapshots.onTurnStart(sid, signal);
+      if (attempts === 1) change = withBotPermissionChangeForBot('bot-1', () => writerGate.promise);
+    });
+    h.sendToAgent.mockImplementation(async (sid, message, _create, opts) =>
+      retryBotWelcomePermissionDispatch(sid, opts.signal, () => withSendToSessionLock(sid, async () => {
+        attempts++;
+        inputIds.push(opts.persistUserMessage!.clientId);
+        const guard = await prepareBotPermissionDispatch(runtime);
+        await persistQueuedUserMessage(sid, opts);
+        guard();
+        providerSend(message, opts);
+        return sendSuccess();
+      }), () => { recovering.resolve(); return receipts.hasWelcome(sid, opts.persistUserMessage!.clientId); }, opts.onUndispatchedRetry));
+    const settled = vi.fn();
+    const result = dispatch('welcome').then(value => { settled(value); return value; });
+    try {
+      await recovering.promise;
+      expect(providerSend).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+      expect(h.coordinator.getProjection('welcome-session').error).toBeNull();
+      if (action === 'stop') h.coordinator.stop('welcome-session');
+      writerGate.resolve();
+      await change;
+      await expect(result).resolves.toBe(action === 'recover');
+      expect(settled).toHaveBeenCalledOnce();
+      if (action === 'recover') {
+        expect(providerSend).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: 'Say hello.' }, expect.objectContaining({ toolsDisabled: true }));
+        expect(inputIds).toEqual(['welcome', 'welcome']);
+        expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+        expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
+        expect(h.coordinator.getProjection('welcome-session')).toMatchObject({ error: null, recovery: null, pendingQueue: [] });
+        await snapshots.onTurnEnd('welcome-session');
+        expect(snapshots.hasPendingTurnStart('welcome-session')).toBe(false);
+        expect(createSavepoint.mock.calls.at(-1)?.[1].meta).toMatchObject({
+          kind: 'after-edit', anchor: 'welcome', attemptId: 'attempt-2', baselineCommit: 'baseline-attempt-2',
+        });
+        h.coordinator.onTurnEvent('welcome-session', 'done');
+        anchor = 'ordinary';
+        h.coordinator.enqueue('welcome-session', makeItem('ordinary', 'next turn'));
+        await vi.waitFor(() => expect(providerSend).toHaveBeenCalledTimes(2));
+        await snapshots.onTurnEnd('welcome-session');
+        expect(createSavepoint.mock.calls.at(-1)?.[1].meta).toMatchObject({
+          kind: 'after-edit', anchor: 'ordinary', attemptId: 'attempt-3', baselineCommit: 'baseline-attempt-3',
+        });
+        expect(snapshots.hasPendingTurnStart('welcome-session')).toBe(false);
+      } else {
+        expect(providerSend).not.toHaveBeenCalled();
+        expect(attempts).toBe(1);
+        expect(snapshots.hasPendingTurnStart('welcome-session')).toBe(false);
+      }
+    } finally { writerGate.resolve(); await change; snapshots.onSessionClosed('welcome-session'); snapshot.mockRestore(); }
+  });
 
   it('does not acknowledge enqueue or persistence before vendor acceptance', async () => {
     const { h, dispatch } = setup();
@@ -967,6 +1080,158 @@ describe('discarding the welcome an unfinished meeting queued', () => {
 });
 
 describe('AgentInputCoordinator Orca priority queue transactions', () => {
+  // Unit / second-round control findings: exercise the real action transaction,
+  // coordinator and SharedPermission. Prior tests resumed only queued messages.
+  it('releases a held permission on resume and excludes paused time from its timeout', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1000);
+    const h = createHarness(), sid = 'resume-held-permission', shared = createSharedPermission();
+    const expired = vi.fn();
+    const entry = { sessionId: sid, timeoutId: setTimeout(() => { expired(); }, 1000), timeoutDeadlineAt: 2000 as number | undefined,
+      timeoutRemainingMs: undefined as number | undefined, deferredDecision: undefined as InteractionDecision | undefined };
+    const pending = new Map([['held', entry]]);
+    const deps = { coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+      interactions: { pending, resolve: (id: string, decision: InteractionDecision) => { pending.delete(id); shared.settle(decision); },
+        resumeTimeout: vi.fn() } };
+    vi.advanceTimersByTime(250);
+    const beforeMutation = async () => {};
+    await runSessionExecutionAction({ targetSessionId: sid, action: 'pause', beforeMutation }, deps);
+    vi.advanceTimersByTime(5000);
+    expect(expired).not.toHaveBeenCalled(); expect(entry.timeoutRemainingMs).toBe(750);
+    entry.deferredDecision = { kind: 'permission', behavior: 'allow' };
+    expect(shared.decision).toBeUndefined();
+    await runSessionExecutionAction({ targetSessionId: sid, action: 'resume', beforeMutation }, deps);
+    await expect(shared.result).resolves.toMatchObject({ behavior: 'allow' });
+    expect(pending.size).toBe(0); expect(entry.deferredDecision).toBeUndefined();
+    expect(deps.interactions.resumeTimeout).not.toHaveBeenCalled();
+  });
+
+  // Unit / shared Pi retry: distinguish an idle task from an admitted recovery.
+  it('does not enqueue or dispatch a Pi control retry without recoverable input', async () => {
+    const h = createHarness(), sid = 'pi-control-retry-noop';
+    h.setAgentKind('pi');
+    const result = await runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    await flush();
+    expect(result).toEqual({ ok: true, result: { executionPaused: false, queuePaused: false } });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('uses only the delivery grant after a Pi control retry has already been accepted', async () => {
+    const h = createHarness(), sid = 'retry-admitted-then-plan';
+    h.setAgentKind('pi');
+    h.coordinator.enqueue(sid, makeItem('original', 'original')); await flush();
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'error', 'failed'); await flush();
+    h.setHasAssistantProgressAfter(async () => false); h.setRunning(true);
+    let maySubmit = true;
+    const beforeMutation = async () => { if (!maySubmit) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    await runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation, beforeDelivery: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    maySubmit = false; h.setRunning(false); h.coordinator.wakeSession(sid, 'idle'); await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])('returns compact status and native counts without queued content (native=%s)', async native => {
+    const h = createHarness();
+    const result = await runSessionExecutionAction({ targetSessionId: 'compact-result', action: 'compact', beforeMutation: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => native
+        ? { tokensBefore: 200, estimatedTokensAfter: 100, noop: false }
+        : { pendingQueue: [makeItem('private', 'private queued text')], workingDir: '/private' },
+    });
+    expect(result).toEqual({ ok: true, result: native
+      ? { status: 'requested', tokensBefore: 200, estimatedTokensAfter: 100, noop: false } : { status: 'requested' } });
+  });
+
+  // Unit / compact-result regression: the real coordinator returns errors in its
+  // projection. Prior coverage only checked successful result redaction.
+  it.each(['queue-head', 'dispatch'] as const)('reports unaccepted %s compact as a tool failure without queue content', async failure => {
+    const h = createHarness(), sid = 'compact-not-accepted';
+    h.sendToAgent.mockRejectedValueOnce(new Error('compact dispatch failed'));
+    if (failure === 'queue-head') {
+      h.coordinator.enqueue(sid, makeItem('private', 'private queued text')); await flush();
+      h.sendToAgent.mockClear();
+    }
+    const result = await runSessionExecutionAction({ targetSessionId: sid, action: 'compact', beforeMutation: async () => {} }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: () => h.coordinator.compact(sid, makeItem('compact', '').createOpts),
+    });
+    expect(result).toEqual({ ok: false, errorCode: 'COMPACT_FAILED', message: failure === 'queue-head'
+      ? 'Cannot compact while the session is busy' : 'compact dispatch failed' });
+    expect(JSON.stringify(result)).not.toContain('private queued text');
+  });
+
+  // Unit / #11043: real shared retry and coordinator compact must retain the
+  // initiating call's revocation guard across history reads and queued dispatch.
+  // Prior coverage exercised owner retries only; a revoked plugin is the minimal failure.
+  it.each(['progress', 'snapshot'] as const)('rejects revoked control retry after the %s read without consuming recovery', async phase => {
+    const read = deferred<any>();
+    const h = createHarness({ getRecoveryContextSnapshot: async () => read.promise });
+    const sid = `control-retry-${phase}`;
+    h.coordinator.enqueue(sid, makeItem('original', 'original'));
+    await flush();
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'error', 'failed'); await flush();
+    h.setHasAssistantProgressAfter(async () => phase === 'progress' ? read.promise : true);
+    let current = true;
+    const beforeMutation = async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    const retry = runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    const outcome = retry.then(() => 'accepted', error => (error as Error).message);
+    await flush(); current = false;
+    read.resolve(phase === 'progress' ? false : { contextTokens: 0, contextWindow: 1, progressCount: 0, recentProgress: [] });
+    expect(await outcome).toBe('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({ recovery: { kind: 'active-turn' }, error: 'failed' });
+  });
+
+  it('discards a control retry revoked after it was queued without sending the recovery copy', async () => {
+    const h = createHarness(), sid = 'control-retry-queued';
+    h.coordinator.enqueue(sid, makeItem('original', 'original')); await flush();
+    h.setRunning(false); h.coordinator.onTurnEvent(sid, 'error', 'failed'); await flush();
+    h.setHasAssistantProgressAfter(async () => false);
+    h.setRunning(true);
+    let current = true;
+    const beforeMutation = async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    await runSessionExecutionAction({ targetSessionId: sid, action: 'retry', beforeMutation }, {
+      coordinator: h.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    current = false; h.setRunning(false); h.coordinator.wakeSession(sid, 'idle'); await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+  });
+
+  it('does not dispatch a queued compact after its initiating control call is revoked', async () => {
+    const h = createHarness(), sid = 'control-compact-queued';
+    h.setRunning(true);
+    let current = true;
+    const beforeMutation = async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); };
+    await h.coordinator.compact(sid, makeItem('compact', '').createOpts, { beforeMutation });
+    current = false; h.setRunning(false); h.coordinator.onTurnEvent(sid, 'done'); await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    h.coordinator.enqueue(sid, makeItem('owner', 'owner input')); await flush();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'owner input' });
+  });
+
+  // Unit / shared control contract: pause an empty real queue, enqueue a user message,
+  // then resume via the new production action. Existing tests only called coordinator methods directly.
+  it('shared execution actions hold new input and resume the original queue', async () => {
+    const h = createHarness();
+    const sid = 'controlled-task';
+    const deps = { coordinator: h.coordinator, persist: async () => {}, compact: async () => ({ status: 'compacted' }) };
+    const beforeMutation = async () => {};
+    expect(await runSessionExecutionAction({ targetSessionId: sid, action: 'pause', beforeMutation }, deps))
+      .toMatchObject({ ok: true, result: { executionPaused: true } });
+    h.coordinator.enqueue(sid, makeItem('queued', 'held user input'));
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(await runSessionExecutionAction({ targetSessionId: sid, action: 'resume', beforeMutation }, deps))
+      .toMatchObject({ ok: true, result: { executionPaused: false } });
+    await flush();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'held user input' });
+  });
   const orcaItem = (clientId: string, text: string) =>
     makeItem(clientId, text, {
       origin: { kind: 'orca', senderLabel: 'Lead', displayText: text },
@@ -1800,6 +2065,7 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 }
 
 function createHarness(opts?: {
+  isScheduledQuotaInput?: (item: AgentInputQueuedMessage) => boolean;
   canRestoreOrcaReport?: AgentInputCoordinatorDeps['canRestoreOrcaReport'];
   awaitQueuePersistence?: AgentInputCoordinatorDeps['awaitQueuePersistence'];
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
@@ -1844,6 +2110,7 @@ function createHarness(opts?: {
   const beforeDispatchUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['beforeDispatchUserTurn']>
   >(() => {});
+  const onRetryUndispatchedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onRetryUndispatchedUserTurn']>>();
   const onUndispatchedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onUndispatchedUserTurn']>
   >(() => {});
@@ -1994,6 +2261,7 @@ function createHarness(opts?: {
       ? { getRecoveryContextSnapshot: opts.getRecoveryContextSnapshot }
       : {}),
     beforeDispatchUserTurn,
+    onRetryUndispatchedUserTurn,
     onUndispatchedUserTurn,
     onUserMessagePersisting,
     onUserMessagePersisted,
@@ -2006,6 +2274,7 @@ function createHarness(opts?: {
     isResumableTurnErrorCandidate,
     onResumableTurnErrorDiscarded,
     onUsageLimitedTurnError,
+    isScheduledQuotaInput: opts?.isScheduledQuotaInput,
     ...(opts?.providerGroupSwitchCandidate
       ? { providerGroupSwitchCandidate: opts.providerGroupSwitchCandidate }
       : {}),
@@ -2045,6 +2314,7 @@ function createHarness(opts?: {
     getSdkSessionId,
     reconcileTurnIdle,
     beforeDispatchUserTurn,
+    onRetryUndispatchedUserTurn,
     onUndispatchedUserTurn,
     onUserMessagePersisting,
     onUserMessagePersisted,
@@ -2325,6 +2595,33 @@ describe('agent-chosen control steering', () => {
     expect(h.sendToAgent).not.toHaveBeenCalled();
     h.coordinator.resume(sid);
     expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(false);
+  });
+  // Unit / shared action parity: an uncertain ACK must not add an Agent/plugin-only
+  // refusal. Existing coverage checked automatic replay, not explicit user actions.
+  it.each(['resume', 'retry'] as const)('matches the explicit user %s transaction after an uncertain ACK', async action => {
+    const harnesses = [createHarness(), createHarness()];
+    for (const h of harnesses) {
+      h.setAgentKind('codex'); h.setRunning(true);
+      h.steerToAgent.mockImplementationOnce(async () => {
+        h.setRunning(false);
+        throw new Error('Codex turn/steer did not acknowledge within 10000ms');
+      });
+      await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'result') }, expected(h));
+      h.coordinator.onTurnEvent(sid, 'done'); await flush();
+      expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(true);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    }
+    const [user, control] = harnesses;
+    if (action === 'resume') user.coordinator.resume(sid);
+    else await user.coordinator.retryLastError(sid);
+    const result = await runSessionExecutionAction({ targetSessionId: sid, action, beforeMutation: async () => {} }, {
+      coordinator: control.coordinator, persist: async () => {}, compact: async () => {},
+    });
+    await flush();
+    expect(result).toMatchObject({ ok: true });
+    expect(control.coordinator.isPausedForUncertainDelivery(sid)).toBe(user.coordinator.isPausedForUncertainDelivery(sid));
+    expect(control.coordinator.isQueuePaused(sid)).toBe(user.coordinator.isQueuePaused(sid));
+    expect(control.sendToAgent.mock.calls.map(call => call[1])).toEqual(user.sendToAgent.mock.calls.map(call => call[1]));
   });
   it('reports screened rejection without reviving blocked content as ordinary input', async () => {
     const h = createHarness();
@@ -5190,6 +5487,24 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
   });
 
+  // Unit regression: host retry gets a new input id but must still reply to the question's channel.
+  it.each([false, true])('retains Telegram delivery on retry (progress=%s)', async (progress) => {
+    const h = createHarness();
+    const sid = 'telegram-question-retry';
+    h.setHasAssistantProgressAfter(async () => progress);
+    const item = makeItem('question-reply:answered:q1', 'answer');
+    stampTelegramQuestionAnswer(item, telegramQuestionOrigin(() => {}));
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(hasTelegramQuestionRoute(h.sendToAgent.mock.calls[1][3][TELEGRAM_QUESTION_ORIGIN])).toBe(true);
+  });
+
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
     // retry-supersede:零产出克隆重发会在历史里留下两条一模一样的 user 行
     // (旧行 + 克隆行)。克隆行落库并派发成功后必须软删旧行,且锚定的是
@@ -5562,7 +5877,20 @@ describe('AgentInputCoordinator send transaction', () => {
       clientId: 'q-head',
     });
 
-    await h.coordinator.retryLastError(sid);
+    // The device picker can still hold the ID of a previously withdrawn head.
+    await h.coordinator.retryLastError(sid, 'previous-head');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).recovery).toMatchObject({ clientId: 'q-head' });
+
+    const send = h.sendToAgent.getMockImplementation()!;
+    h.sendToAgent.mockImplementationOnce(async (...args) => {
+      expect(h.coordinator.takeRetrySwitchRevision(sid, 'previous-head')).toBeUndefined();
+      expect(h.coordinator.takeRetrySwitchRevision(sid, 'q-head')).toBe(2);
+      expect(h.coordinator.takeRetrySwitchRevision(sid, 'q-head')).toBeUndefined();
+      return send(...args);
+    });
+    await h.coordinator.retryLastError(sid, 'q-head', 2);
     await flush();
 
     // 队首消息从未送达 agent,续跑语义不成立 —— 必须原样重发。
@@ -6560,6 +6888,7 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       expect.objectContaining(first),
       'failed',
+      'turn/start failed',
     );
     expect(h.persistTerminalSendError).toHaveBeenCalledWith(sid, 'turn/start failed');
 
@@ -6753,6 +7082,7 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       expect.objectContaining(first),
       'failed',
+      projection.error,
     );
   });
 
@@ -6788,6 +7118,7 @@ describe('AgentInputCoordinator send transaction', () => {
       sid,
       expect.objectContaining(first),
       'failed',
+      projection.error,
     );
   });
 
@@ -13563,17 +13894,21 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 // Only bootstrap/native execution and route application are injected. Existing
 // turn-error tests never enter the cold, unpersisted queue-head failure boundary.
 describe('Bot subscription startup admission', () => {
-  function startupHarness(bot = true, opaque = false, rehydrate = false) {
-    const h = createHarness();
+  function startupHarness(bot = true, opaque = false, rehydrate = false, quota = false) {
+    const scheduledQuotaInputs = new WeakSet<object>();
+    const h = createHarness({ isScheduledQuotaInput: item => scheduledQuotaInputs.has(item.createOpts) });
     const attemptCurrent = vi.spyOn(h.coordinator, 'isAutoResumeAttemptCurrent');
     const sid = 'startup-admission';
     let backup = false;
     const session: MakerSendTransactionSession = {
-      id: sid, instanceId: 'backup-runtime', agentKind: 'codex', workDir: '/repo', remoteHostId: null,
+      id: sid, instanceId: 'backup-runtime', agentKind: quota ? 'claude-code' : 'codex', workDir: '/repo', remoteHostId: null,
+      stablePermissionModeState: { mode: 'ask', generation: 0 },
+      stablePlanModeState: { enabled: true, generation: 0 },
       isTurnRunning: () => false,
       send: vi.fn(async (_message, opts) => {
         await opts?.beforeProviderStart?.();
         await opts?.onAccepted?.();
+        await opts?.resolveAutoReviewUserIntent?.();
         opts?.onDispatching?.();
         h.setRunning(true);
         return { accepted: true as const };
@@ -13586,7 +13921,8 @@ describe('Bot subscription startup admission', () => {
     });
     const transaction = createMakerSendTransaction({
       getMainClassicalStyle, getResolvedMainLocale, readMcpAppModelContext: id => mcpAppModelContext(id),
-      getSession: () => rehydrate && !backup ? session : undefined,
+      getSession: () => (rehydrate && !backup) || (quota && backup) ? session : undefined,
+      readScheduledPermissions: async () => ({ permissionMode: 'ask', planModeEnabled: true }),
       closeSession: async () => {}, closeSessionIfCurrent: async () => {}, preflightBotRuntimeResources: async () => {},
       getSessionMeta: async () => ({}), ensureRemoteReadyForSessionStart: async () => {},
       checkWorkDirExists: async () => true, isOrcaMcpHydrated: () => !rehydrate,
@@ -13625,7 +13961,7 @@ describe('Bot subscription startup admission', () => {
         isAutoResumeAttemptCurrent: (id, token) => h.coordinator.isAutoResumeAttemptCurrent(id, token),
         autoRetryLastError: (id, token) => h.coordinator.autoRetryLastError(id, token),
       }, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      botFallbackInputs, scheduledQuotaInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
       getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
       maybeApplySessionRuntimeFallback: fallback, pendingSessionRuntimeFallbackRebuilds: new Set<Session>(),
@@ -13639,8 +13975,64 @@ describe('Bot subscription startup admission', () => {
       agentKind: 'claude-code', model: 'claude-opus-5-5', workingDir: '/repo', planMode: true,
     } });
     if (bot) botFallbackInputs.add(item.createOpts);
-    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent };
+    if (quota) {
+      item.origin = { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'daily-run' };
+      scheduledQuotaInputs.add(item.createOpts);
+    }
+    return { ...h, sid, item, bootstrap, session, fallback, book, failure, attemptCurrent,
+      setAvailable: () => { backup = true; } };
   }
+
+  // Unit regression: #11082's proven-stopped startup receipt bypassed the quota
+  // terminal path. Existing tests covered only running remote Schedule errors.
+  // Drive the real transaction/coordinator/guard: wait without persisting or
+  // switching routes, then send the same queued input once, or honor cancellation.
+  it.each(['resume', 'cancel', 'missing-reset', 'opaque'] as const)(
+    'keeps remote scheduled startup quota recovery bounded: %s', async mode => {
+      const h = startupHarness(true, mode === 'opaque', false, true);
+      const timers: Array<() => void> = [];
+      const guard = new UsageLimitAutoResume({
+        now: () => 1_000_000, random: () => 0,
+        setTimer: fn => { timers.push(fn); return fn; }, clearTimer: () => {},
+        isEligible: async () => true,
+        resolveResetAt: async () => mode === 'missing-reset' ? null : 9_000_000,
+        arm: (id, token, at) => h.coordinator.armUsageLimitWait(id, token, at),
+        isCurrent: (id, token) => h.coordinator.isUsageLimitWaitCurrent(id, token),
+        cancel: (id, token) => { h.coordinator.cancelUsageLimitWait(id, token); },
+        continueSession: (id, token, info) => h.coordinator.continueAfterUsageLimitReset(id, token, info),
+        log: () => {},
+      });
+      h.onUsageLimitedTurnError.mockImplementation((id, signals, _item, token) => guard.onTurnError(id, signals, token));
+      try {
+        h.coordinator.enqueue(h.sid, h.item);
+        await flush(); await h.sendToAgent.mock.results[0].value; await flush();
+        expect(h.session.send).not.toHaveBeenCalled();
+        expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+        expect(h.coordinator.getProjection(h.sid).autoResumePending).toBeUndefined();
+        if (mode === 'opaque' || mode === 'missing-reset') {
+          expect(timers).toHaveLength(0);
+          expect(h.coordinator.getProjection(h.sid)).toMatchObject({
+            error: expect.stringContaining('SUBSCRIPTION_ACCOUNT_LIMITED'), usageLimitWait: null,
+          });
+        } else {
+          expect(timers).toHaveLength(1);
+          expect(h.coordinator.getProjection(h.sid).usageLimitWait?.resumeAt).toBe(9_060_000);
+          expect(h.coordinator.scheduledQuotaOrigin(h.sid)).toEqual(h.item.origin);
+          if (mode === 'cancel') h.coordinator.stop(h.sid);
+          h.setAvailable();
+          timers.shift()!(); await flush(); await flush();
+          if (mode === 'resume') { await h.sendToAgent.mock.results[1].value; await flush(); }
+          expect(h.session.send).toHaveBeenCalledTimes(mode === 'resume' ? 1 : 0);
+          expect(h.onUserMessagePersisted).toHaveBeenCalledTimes(mode === 'resume' ? 1 : 0);
+          if (mode === 'resume') {
+            expect(h.sendToAgent.mock.calls[1][3].persistUserMessage?.clientId).toBe(h.item.clientId);
+            expect(h.sendToAgent.mock.calls[1][2]).toMatchObject(h.item.createOpts);
+          }
+        }
+        expect(h.fallback).not.toHaveBeenCalled();
+      } finally { guard.dispose(); }
+    },
+  );
 
   it.each([false, true])('switches before sending the same original input (rehydrate=%s)', async rehydrate => {
     vi.useFakeTimers();
@@ -13833,7 +14225,9 @@ describe('Orca report durable recovery', () => {
   // Exercise the real host scheduling callback with its guard and bookkeeping;
   // a hand-written retry timer would miss pending-token and retry-budget bugs.
   function wireHostReportRecovery(h: ReturnType<typeof createHarness>) {
+    const workerInputs = new WeakSet<object>();
     const botFallbackInputs = new WeakSet<object>();
+    const scheduledQuotaInputs = new WeakSet<object>();
     const runtimeFallback = vi.fn(async () => ({ session: null, outcome: 'unchanged' as const }));
     const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0.5 });
     const book = new AutoResumeBookkeeping({
@@ -13843,7 +14237,7 @@ describe('Orca report durable recovery', () => {
     });
     const host = createInterruptedTurnAutoResumeHooks<Session>({
       inputCoordinator: h.coordinator, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
-      botFallbackInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      botFallbackInputs, scheduledQuotaInputs, workerInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
       getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
       maybeApplySessionRuntimeFallback: runtimeFallback,
@@ -13853,6 +14247,7 @@ describe('Orca report durable recovery', () => {
       autoResumeAttemptToken: () => null, log: mocks.logger,
     });
     h.onResumableTurnError.mockImplementation(host.onResumableTurnError);
+    h.isResumableTurnErrorCandidate.mockImplementation(host.canRecoverTurn);
     const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
     const deps = {
       autoResumeBookkeeping: book, contextOverflowRolloverHolder: undefined, providerGroupService: undefined,
@@ -13864,8 +14259,84 @@ describe('Orca report durable recovery', () => {
       `return ({${source.slice(automaticStart, automaticEnd)}}).onAutomaticEnqueue;`,
       { compilerOptions: { target: ScriptTarget.ES2022 } },
     ).outputText)(...Object.values(deps)));
-    return { runtimeFallback, botFallbackInputs };
+    return { runtimeFallback, botFallbackInputs, scheduledQuotaInputs, workerInputs };
   }
+
+  // 2026-11-17: a worker can lose the runtime after an irreversible tool has
+  // run but before its result is persisted. Even zero observed progress must CONTINUE.
+  it.each(['direct', 'queued'] as const)('continues an unfinished %s Worker assignment on the rebuilt runtime', async mode => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const { workerInputs } = wireHostReportRecovery(h);
+      const runtime = { instanceId: 'worker-runtime' };
+      h.setTurnSessionIdentity(runtime);
+      h.setTurnGeneration(1);
+      h.setHasAssistantProgressAfter(async () => false);
+      const item = makeItem('assignment', 'publish the approved change');
+      item.createOpts.orcaRole = 'worker';
+      workerInputs.add(item.createOpts);
+      if (mode === 'queued') {
+        h.coordinator.enqueue('worker', item);
+        await flush();
+        h.setRunning(false);
+      } else {
+        h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+      }
+
+      h.coordinator.onTurnEvent('worker', 'error', 'Session event loop stopped unexpectedly without a terminal event',
+        { reason: 'session_event_loop_crashed' }, { sessionInstanceId: runtime.instanceId, sessionTurnGeneration: 1 });
+      expect(h.coordinator.isContinuationOnlyAutoResume('worker')).toBe(true);
+      h.coordinator.onSessionClosed('worker', { preserveAutoResumeIntent: true });
+      h.setTurnSessionIdentity({ instanceId: 'replacement' });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(mode === 'direct' ? 1 : 2);
+      expect(h.sendToAgent.mock.lastCall?.[1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['stopped', 'rejected', 'replaced', 'requested-close', 'ordinary-task'] as const)(
+    'does not continue an ineligible worker EOF (%s)', async boundary => {
+      const h = createHarness();
+      const { workerInputs } = wireHostReportRecovery(h);
+      const runtime = { instanceId: 'old' };
+      h.setTurnSessionIdentity(runtime);
+      h.setTurnGeneration(1);
+      const item = makeItem('old-assignment', 'apply approved change');
+      item.createOpts.orcaRole = 'worker';
+      if (boundary !== 'ordinary-task') workerInputs.add(item.createOpts);
+      const revoke = h.coordinator.rememberDirectWorkerInput(runtime, 1, item, h.coordinator.getInputAbortSignal('worker'));
+      if (boundary === 'stopped') h.coordinator.stop('worker');
+      if (boundary === 'rejected') revoke();
+      if (boundary === 'replaced') h.setTurnSessionIdentity({ instanceId: 'new' });
+      h.coordinator.onTurnEvent('worker', 'error', boundary === 'requested-close'
+        ? 'Session closed before the current turn delivered a terminal event'
+        : 'Session event loop stopped unexpectedly without a terminal event',
+        { reason: 'session_event_loop_crashed' }, { sessionInstanceId: 'old', sessionTurnGeneration: 1 });
+      expect(h.coordinator.isAutoResumePending('worker')).toBe(false);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  // Unit regression: the real coordinator must give a remote Bot Schedule quota
+  // terminal to its wait owner before candidate fallback can switch suppliers.
+  it('hands scheduled companion quota failure to waiting instead of candidate fallback', async () => {
+    const h = createHarness();
+    const recovery = wireHostReportRecovery(h);
+    const item = makeItem('daily', 'continue daily work', {
+      origin: { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'run' },
+    });
+    recovery.botFallbackInputs.add(item.createOpts);
+    recovery.scheduledQuotaInputs.add(item.createOpts);
+    h.coordinator.enqueue('bot', item);
+    await flush(); h.setRunning(false);
+    h.coordinator.onTurnEvent('bot', 'error', 'usage limit', { usageLimit: true, usageResetAt: 5_000_000 });
+    h.coordinator.onTurnEvent('bot', 'done');
+    expect(h.onUsageLimitedTurnError).toHaveBeenCalledOnce();
+    expect(h.coordinator.getProjection('bot').autoResumePending).toBeUndefined();
+    expect(recovery.runtimeFallback).not.toHaveBeenCalled();
+    expect(h.coordinator.scheduledQuotaOrigin('bot')).toEqual(item.origin);
+  });
 
   it('retries the same Bot report without eager fallback and stops at its existing budget', async () => {
     vi.useFakeTimers();
@@ -16665,7 +17136,8 @@ describe('usage-limit wait (ordinary tasks)', () => {
     const token = original.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
     const snapshot = original.coordinator.snapshotUsageLimitRecovery(sid, token)!;
     expect(snapshot.kind).toBe(kind);
-    const restarted = createHarness();
+    const groupCandidate = vi.fn(() => 'usage-limit' as const);
+    const restarted = createHarness({ providerGroupSwitchCandidate: groupCandidate });
     restarted.setHasAssistantProgressAfter(async () => true);
     // Also cover restoration when the same queued input is already in memory.
     if (kind === 'queue-head' && action === 'cancel') {
@@ -16674,6 +17146,16 @@ describe('usage-limit wait (ordinary tasks)', () => {
       await flush();
     }
     const restored = restarted.coordinator.restoreUsageLimitRecovery(sid, snapshot, restarted.coordinator.getGeneration(sid))!;
+    // The host must still validate the original schedule on restart, without
+    // sending the expired runId back to the runner. A manual retry owns no lease.
+    expect(restarted.coordinator.scheduledQuotaOrigin(sid)).toEqual(snapshot.item.origin);
+    expect(restarted.coordinator.snapshotUsageLimitRecovery(sid, restored)?.item.origin).toEqual(snapshot.item.origin);
+    const realSend = restarted.sendToAgent.getMockImplementation()!;
+    restarted.sendToAgent.mockImplementationOnce(async (...args) => {
+      expect(restarted.coordinator.scheduledQuotaOrigin(sid, args[3].persistUserMessage?.clientId))
+        .toEqual(action === 'auto' ? snapshot.item.origin : undefined);
+      return realSend(...args);
+    });
     restarted.coordinator.setInteractionLock(sid, 'restore-test', false);
     // The saved record still owns schedule deduplication until it is consumed.
     expect(snapshot.item.origin).toMatchObject({ runId: 'old-run' });
@@ -16689,10 +17171,19 @@ describe('usage-limit wait (ordinary tasks)', () => {
     expect(restarted.sendToAgent.mock.calls[0][1]).toMatchObject({ content: kind === 'active-turn' ? CONTINUE_AFTER_ERROR_PROMPT : 'work' });
     expect(await restarted.coordinator.continueAfterUsageLimitReset(sid, restored, INFO)).toBe('superseded');
     restarted.setRunning(false);
-    restarted.coordinator.onTurnEvent(sid, 'error', 'ordinary failure', { sdkError: 'authentication_failed' });
+    // Restored automatic work must retain quota classification on a second limit.
+    restarted.coordinator.onTurnEvent(sid, 'error', action === 'auto' ? 'weekly limit' : 'ordinary failure',
+      action === 'auto' ? LIMIT_SIGNALS : { sdkError: 'authentication_failed' });
     restarted.coordinator.onTurnEvent(sid, 'done');
     await flush();
     expect(restarted.coordinator.getProjection(sid).recovery?.kind).toBe('active-turn');
+    if (action === 'auto') {
+      expect(groupCandidate).not.toHaveBeenCalled();
+      expect(restarted.coordinator.getProviderGroupSwitchHoldId(sid)).toBeNull();
+      expect(restarted.coordinator.scheduledQuotaOrigin(sid)).toEqual(snapshot.item.origin);
+      const nextToken = restarted.onUsageLimitedTurnError.mock.calls.at(-1)![3];
+      expect(restarted.coordinator.snapshotUsageLimitRecovery(sid, nextToken)?.item.origin).toEqual(snapshot.item.origin);
+    }
     await restarted.coordinator.retryLastError(sid); await flush();
     expect(restarted.sendToAgent).toHaveBeenCalledTimes(2);
     expect(restarted.sendToAgent.mock.calls[0][3].origin).toBeUndefined();

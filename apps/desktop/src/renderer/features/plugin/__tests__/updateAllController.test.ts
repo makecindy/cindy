@@ -112,7 +112,12 @@ beforeEach(() => {
   vi.mocked(toast.success).mockClear();
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     appVersion: '1.0.0',
-    pluginMarket: { detail: detailMock, install: installMock },
+    pluginMarket: {
+      detail: detailMock,
+      install: installMock,
+      // The runner brackets each row for the progress ring; these tests do not push any steps.
+      onInstallProgress: () => () => undefined,
+    },
   };
 });
 

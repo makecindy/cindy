@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "添小组件",
+  "widgetGuideIntro": "小组件可置于主屏；无须开启 Cindy，即可观订阅余量及今日词元用度。",
+  "widgetGuideExample": "主屏之上，Cindy 小组件与应用图标并列。",
+  "widgetGuidePicker": "「编辑」→「添加小组件」",
+  "widgetGuideIOS": "长按主屏空处，点{{picker}}。\n\n寻 Cindy，择「订阅余量」或「每日用量」，点「添加小组件」。",
+  "widgetGuideAndroid": "长按桌面空处，开「小组件」或「微件」。\n\n寻 Cindy，拖「订阅余量」或「每日用量」至桌面。",
+  "widgetGuideHome": "主屏",
+  "widgetGuideLock": "锁屏",
+  "widgetGuideLockIOS": "锁屏亦可置之：长按锁屏，点「自定」。",
+  "widgetGuideDismiss": "已悉",
+  "usageOther": "其余",
+  "usageTitle": "用度总览",
+  "usageOnlyDevice": "唯 {{name}}",
+  "usagePlans": "诸约余量",
+  "usageBudget": "本期预算之余",
   "management": {
     "title": "器物总管",
     "openDevice": "察 {{name}} 之详情",
@@ -426,7 +441,33 @@
       "filterTeammatesHeading": "同伴",
       "filterAnySource": "全",
       "filterHideAllTeammates": "皆不示",
-      "filterSelectedTeammates": "已择 {{count}} 位"
+      "filterSelectedTeammates": "已择 {{count}} 位",
+      "inbox": {
+        "inbox": "待处理",
+        "working": "进行中",
+        "snoozed": "待后处理",
+        "archived": "已处理",
+        "snooze": "留待后办",
+        "complete": "毕",
+        "wake": "即刻取回",
+        "restore": "恢复任务",
+        "process": "标记已处理（归档）",
+        "empty": "箱中已清",
+        "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
+        "hours": "{{count}} 小时后",
+        "hours_one": "{{count}} 小时后",
+        "hours_other": "{{count}} 小时后",
+        "thisEvening": "今夕",
+        "tomorrow": "明日",
+        "nextWeek": "下周",
+        "indefinite": "无期",
+        "custom": "自定…",
+        "invalidTime": "请选择来岁以内之未来日期时辰。"
+      },
+      "taskListMode": {
+        "enterInbox": "转至收件箱",
+        "leaveInbox": "转至任务列"
+      }
     },
     "search": {
       "placeholder": "寻标题或内容…",

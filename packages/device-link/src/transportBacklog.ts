@@ -14,7 +14,7 @@ import { PUSH_FORWARD_ALLOWLIST, REMOTE_INVOKE_ALLOWLIST } from './allowlist.js'
 import type { Envelope } from './protocol.js';
 import { parseProviderSharePeer } from './providerSharePeer.js';
 import { parseSharedTaskPeer } from './sharedTaskPeer.js';
-import { shortDeviceRef } from './stallDiagnostics.js';
+import { PROVIDER_SHARE_INSIGHTS_DIAGNOSTIC_CHANNEL, shortDeviceRef } from './stallDiagnostics.js';
 
 /** Warn before the queue is full: 3/4 of the message cap, or 4 MiB pending. */
 export const BACKLOG_WARN_MESSAGES = 48;
@@ -39,7 +39,8 @@ export interface BacklogPeer {
 /** Registered channel names only; anything else is logged (and remembered) as unknown. */
 export function isBacklogChannel(channel: unknown): channel is string {
   return typeof channel === 'string'
-    && (REMOTE_INVOKE_ALLOWLIST.has(channel) || PUSH_FORWARD_ALLOWLIST.has(channel));
+    && (channel === PROVIDER_SHARE_INSIGHTS_DIAGNOSTIC_CHANNEL
+      || REMOTE_INVOKE_ALLOWLIST.has(channel) || PUSH_FORWARD_ALLOWLIST.has(channel));
 }
 
 function knownChannel(channel: unknown): string {

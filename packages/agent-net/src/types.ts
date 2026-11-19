@@ -28,6 +28,18 @@ export interface PeerChannel {
 }
 export const MAX_CHANNEL_PENDING_BYTES = 8 * 1024 * 1024;
 
+/** Declared on a connection's control stream by a node whose upper layer reads sessions (see `PeerChannel.declareSessions`). */
+export const AGENT_NET_SESSION_V1 = 'agent-net-session-v1';
+/**
+ * First byte of each session lane stream (session/lanes.ts) and the core priority it runs at. Opened only after the peer
+ * declared support: older nodes close the connection on a stream type they do not know. The same on every driver.
+ */
+export const SESSION_LANE_KINDS = { control: 0x30, normal: 0x31, background: 0x32 } as const;
+export const SESSION_LANE_PRIORITY = { control: 'interactive', normal: 'normal', background: 'background' } as const;
+export type SessionLaneName = keyof typeof SESSION_LANE_KINDS;
+/** Session bytes that may arrive before this side attached its session; beyond it the connection is closed. */
+export const MAX_EARLY_SESSION_BYTES = 16 * 1024 * 1024;
+
 /** The session's three core streams on one connection, independent of the Device Link frame stream. */
 export interface SessionWire {
   write(lane: 'control' | 'normal' | 'background', bytes: Uint8Array): void;
@@ -41,6 +53,14 @@ export interface SessionWire {
  * (`SOCKET_DATA_LOW_WATER_BYTES` in packages/device-link/src/client.ts): at or below it, any frame may be written.
  */
 export const DRAIN_LOW_WATER_BYTES = 128 * 1024;
+/**
+ * How datagrams relayed for this computer travel right now: over the relay's UDP port (relayUdp.ts) or its WebSocket,
+ * and the last round trip on that path in ms (null until measured). The remote connection page shows both on the relay.
+ */
+export interface RelayRoute {
+  via: 'udp' | 'websocket';
+  rttMs: number | null;
+}
 export interface Transport {
   readonly id: string;
   readonly dial: unknown;
@@ -48,6 +68,11 @@ export interface Transport {
   close(): Promise<void>;
   /** This computer changed networks: connections send from the new address now (the peer follows) and candidates are gathered again. */
   networkChanged?(): void;
+  /**
+   * See RelayRoute; null without a relay. Only the UDP round trip is known here (`rttMs` is null for the WebSocket):
+   * the WebSocket itself is opened and pinged by the host (workerSocket.ts).
+   */
+  relayRoute?(): RelayRoute | null;
 }
 export interface TransportOptions {
   admit(remoteId: string): boolean;

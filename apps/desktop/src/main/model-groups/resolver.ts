@@ -188,7 +188,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     };
   }
 
-  async function inspect(route: ModelGroupRoute, views: ProviderView[]): Promise<{ facts: ModelGroupCandidateFacts[]; catalogs: Catalog[] }> {
+  async function inspect(route: ModelGroupRoute, views: ProviderView[]): Promise<ModelGroupCandidateFacts[]> {
     const agents = deps.agents();
     // 远程读取与读额度同时进行，整体仍在额度等待的时限内。
     const remote = remoteReads(route);
@@ -200,15 +200,13 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       if (!candidate.agentDeviceId && !installed.has(agent)) installed.set(agent, await deps.harnessInstalled(agent));
     }
     const locations = remote ? await remote.locations : null;
-    const catalogs: Catalog[] = [];
-    const facts = await Promise.all(route.candidates.map(async (candidate, index) => {
+    return Promise.all(route.candidates.map(async (candidate) => {
       const agent = agentOf(candidate.agentKind);
       const { agentDeviceId } = candidate;
       const remoteViews = agentDeviceId ? (await remote?.views.get(agentDeviceId)) ?? null : null;
       const catalog: Catalog = agentDeviceId
         ? { views: remoteViews ?? [], agents: GHOST_REMOTE_AGENT_MODELS }
         : { views, agents };
-      catalogs[index] = catalog;
       const view = catalog.views.find((item) => item.id === candidate.providerId);
       const model = view?.models[agent]?.find((item) => item.id === candidate.model);
       const modelName = model?.name ?? candidate.model;
@@ -228,6 +226,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         : installed.get(agent) === true && isPluginModelPickerRouteAvailable(exact, views, agents);
       return {
         available,
+        ...(available && route.effort && isPluginModelPickerRouteAvailable(
+          { ...exact, effort: route.effort }, catalog.views, catalog.agents,
+        ) ? { effort: route.effort } : {}),
         modelName,
         sourceName: view?.name ?? candidate.providerId,
         windows: windows && windows.length > 0 ? windows : null,
@@ -238,7 +239,6 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
         acceptsImage: !!model && modelImageInputDefault({ ...model, imageInputDefault: undefined }, model.id) === true,
       };
     }));
-    return { facts, catalogs };
   }
 
   async function resolve(request: ModelGroupResolveRequest): Promise<ModelGroupResolveResult> {
@@ -257,11 +257,9 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
             : { ...candidate, off: true })),
         }
       : target.route;
-    // 改走了另一条路线时，用那条路线自己的推理强度。
-    const { effort } = route;
     const needsImage = request.context?.hasImages === true && !!route.exceptions?.some((item) => item.when.type === 'image');
     const views = await deps.views();
-    const { facts, catalogs } = await inspect(route, views);
+    const facts = await inspect(route, views);
     const picked = pickModelGroupCandidate(route, facts, {
       now, lastPickedKey: lastPicked.get(`${scope}\u0000${route.id}`) ?? null, needsImage,
     });
@@ -275,14 +273,13 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
     const entry = picked.trace[picked.index];
     const chosen = { agentKind: candidate.agentKind, providerId: candidate.providerId, model: candidate.model };
     // 推理强度按选中来源所在位置的目录看支不支持。
-    const catalog = catalogs[picked.index];
-    const keepEffort = !!effort && isPluginModelPickerRouteAvailable({ ...chosen, effort, fastMode: false }, catalog.views, catalog.agents);
+    const effort = facts[picked.index].effort;
     return prepare(request, scope, {
       outcome: 'routed', groupName,
       route: {
         ...chosen,
         ...(candidate.agentDeviceId ? { agentDeviceId: candidate.agentDeviceId } : {}),
-        ...(keepEffort ? { effort } : {}),
+        ...(effort ? { effort } : {}),
       },
       modelName: entry.modelName, sourceName: entry.sourceName,
       why: entry.why, quota: entry.quota, trace: picked.trace,
@@ -292,7 +289,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
 
   /** 一条路线每个候选此刻的事实(与新任务解析同一判断)；不推进「轮流」的位置。 */
   async function candidateFacts(route: ModelGroupRoute): Promise<ModelGroupCandidateFacts[]> {
-    return (await inspect(route, await deps.views())).facts;
+    return inspect(route, await deps.views());
   }
 
   return { resolve, commit, candidateFacts };

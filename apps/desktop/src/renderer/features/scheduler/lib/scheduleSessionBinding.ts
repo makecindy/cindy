@@ -17,8 +17,8 @@
  * 'changed' → schedulesStore.forceRefresh → cache 引用更新 → Map 重建。
  */
 
-import { useEffect } from 'react';
-import { useRemoteSessionScheduleBindings } from '@/features/device-link/remoteProjectsStore';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { remoteProjectsStore, useRemoteSessionScheduleBindings } from '@/features/device-link/remoteProjectsStore';
 import { buildBindingMap, type ScheduleBinding } from './scheduleBindingIndex';
 import { schedulesStore, useSchedulesSnapshot } from './schedulesStore';
 
@@ -52,4 +52,32 @@ export function useSessionBoundSchedules(
   // 显式按任务所属设备取值；远端无绑定/尚未加载时绝不回退到本机同 ID。
   if (deviceLinkDeviceId) return remoteBindings;
   return buildBindingMap(snapshot).get(sessionId) ?? EMPTY;
+}
+
+/** Bulk subscription for inbox grouping: tasks bound to an active automation now (never historical runs). */
+export function useActiveFollowUpSessions<T extends { id: string; deviceLinkDeviceId?: string | null }>(
+  sessions: readonly T[],
+): ReadonlySet<T> {
+  const snapshot = useSchedulesSnapshot();
+  const hasLocalSessions = sessions.some((session) => !session.deviceLinkDeviceId);
+  useEffect(() => {
+    if (hasLocalSessions) void schedulesStore.ensure().catch(() => {});
+  }, [hasLocalSessions]);
+  const getSnapshot = useMemo(() => {
+    const localBindings = buildBindingMap(snapshot);
+    let previous: ReadonlySet<T> = new Set();
+    return () => {
+      const next = new Set(sessions.filter((session) => {
+        const bindings = session.deviceLinkDeviceId
+          ? remoteProjectsStore.getSessionScheduleBindings(session.deviceLinkDeviceId, session.id)
+          : localBindings.get(session.id) ?? EMPTY;
+        return bindings.some((binding) => binding.status === 'active');
+      }));
+      if (next.size !== previous.size || [...next].some((session) => !previous.has(session))) {
+        previous = next;
+      }
+      return previous;
+    };
+  }, [sessions, snapshot]);
+  return useSyncExternalStore(remoteProjectsStore.subscribe, getSnapshot, getSnapshot);
 }

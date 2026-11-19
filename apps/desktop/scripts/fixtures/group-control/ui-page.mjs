@@ -36,8 +36,10 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state/topic-preview cases and is otherwise an empty frame',
   cases: {
+    'topic-preview': { about: 'Sidebar source label and independent group/reply targets, exact reply highlight and repeat navigation',
+      viewport: { width: 1000, height: 700 }, data: { ...base, name: 'Cindy 讨论', bubbles: true, topicPreview: true } },
     'reply-composer': {
       about: 'Real thread reply composer with microphone and editable draft at narrow width',
       viewport: { width: 420, height: 600 },
@@ -140,11 +142,11 @@ export default {
       data: { ...base, division: 'auto' },
     },
     settings: {
-      about: 'Single-speaker group settings: reply mode, organizer, project folder and 分工交接 (off) as before; no speaking mode',
+      about: 'Group settings retain reply mode and project folder',
       data: { ...base, arrangement: 'running', settings: true },
     },
     division: {
-      about: 'Single-speaker group: 「+」→ 安排分工 is offered again; tagged, the composer says steps may be written out',
+      about: 'The composer offers attachments without a division mode',
       data: { ...base, arrangement: 'done' },
     },
     'thread-unread': {
@@ -200,6 +202,34 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'topic-preview') {
+      const row = page.locator('[data-bot-group-id="fixture-group"]');
+      const topic = row.getByRole('button', { name: new RegExp(await ui.t('bots.groupChat.server.thread.viewThread')) });
+      const group = row.getByRole('button', { name: 'Cindy 讨论', exact: true });
+      assert.equal(await row.locator('button button').count(), 0, 'independent native buttons');
+      const originalHeight = await row.evaluate(el => el.getBoundingClientRect().height);
+      const hitArea = await topic.evaluate(el => {
+        const bounds = el.getBoundingClientRect();
+        const title = el.closest('[data-bot-group-id]').querySelector('[title="Cindy 讨论"]').getBoundingClientRect();
+        return { height: bounds.height, separate: bounds.top >= title.bottom,
+          sourceFits: el.firstElementChild.getBoundingClientRect().right <= bounds.right };
+      });
+      assert.ok(hitArea.height >= 24 && hitArea.separate && hitArea.sourceFits, 'source fits; the reply target is at least 24px and does not overlap the group title');
+      await topic.click();
+      const reply = page.locator('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]');
+      await reply.waitFor();
+      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      await ui.capture('reply-located');
+      await reply.evaluate(el => el.classList.remove('ring-2'));
+      await topic.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      await group.click();
+      await reply.waitFor({ state: 'detached' });
+      assert.equal(await row.evaluate(el => el.getBoundingClientRect().height), originalHeight, 'row geometry stays stable');
+      await ui.capture('main-chat');
+      return;
+    }
     if (definition.data.planningForeign) {
       await page.getByTestId('bot-group-speaking').waitFor();
       const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true });
@@ -686,10 +716,9 @@ export default {
       const replyMode = drawer.getByRole('combobox', { name: await ui.t('bots.groupChat.settings.replyMode'), exact: true });
       await replyMode.waitFor();
       assert.equal(await replyMode.innerText(), await ui.t('bots.groupChat.settings.replyModeAll'));
-      // Reply mode and the 分工 settings stay; one teammate at a time leaves no speaking mode (bot-group-chat.md §4.0).
-      assert.equal(await drawer.getByText(await ui.t('bots.groupChat.settings.speakingMode'), { exact: true }).count(), 0, 'speakingMode');
-      for (const key of ['bots.groupChat.organizer', 'bots.groupChat.settings.projectDir', 'bots.groupChat.plan.autoContinue'])
-        assert.ok(await drawer.getByText(await ui.t(key), { exact: true }).count() > 0, key);
+      for (const key of ['bots.groupChat.settings.speakingMode', 'bots.groupChat.organizer', 'bots.groupChat.plan.autoContinue'])
+        assert.equal(await drawer.getByText(await ui.t(key), { exact: true }).count(), 0, key);
+      await drawer.getByText(await ui.t('bots.groupChat.server.settings.projectFolder'), { exact: true }).first().waitFor();
       await ui.capture('manage');
       return;
     }
@@ -704,9 +733,10 @@ export default {
     }
     if (ui.case === 'division') {
       await page.getByRole('button', { name: '更多操作' }).click();
-      await page.getByRole('menuitem', { name: /安排分工/ }).click();
-      await page.waitForFunction(() => document.querySelector('textarea')?.getAttribute('placeholder')?.startsWith('写好谁做什么'));
-      await ui.capture('tagged');
+      await page.getByRole('menuitem').first().waitFor();
+      assert.equal(await page.getByRole('menuitem').count(), 1);
+      assert.equal(await page.getByRole('menuitem', { name: /安排分工/ }).count(), 0);
+      await ui.capture('attachments');
       return;
     }
     if (ui.case === 'work-mentioned') {

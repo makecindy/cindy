@@ -164,10 +164,10 @@ describe('SessionCard review regressions', () => {
 
   it('keeps one Timer glyph for scheduled and automation sessions', () => {
     expect(sessionCardSource).toContain(
-      'const showScheduleBindingBadge = boundSchedules.length > 0',
+      'const showScheduleBindingBadge = !inboxMode && boundSchedules.length > 0',
     );
     expect(sessionCardSource).toContain(
-      'const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated',
+      'const showAutomationTimer = !inboxMode && !showScheduleBindingBadge && isAutomationGenerated',
     );
     // schedule 绑定与普通自动化都复用 AutomationTimerIcon;绑定态优先承载更多状态。
     expect(sessionCardSource).toMatch(
@@ -309,7 +309,7 @@ describe('SessionCard review regressions', () => {
 
   it('keeps every sidebar Agent-to-Timer gap as compact as the former Clock', () => {
     expect(sessionItemSource).toContain(
-      'const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;',
+      'const hasAutomationMeta = !inboxMode && (boundSchedules.length > 0 || isAutomationGenerated);',
     );
     expect(sessionItemSource).toContain("!isEditing && hasAutomationMeta ? 'gap-1.5' : 'gap-2.5'");
     expect(automationGroupSource).toContain('className="flex min-w-0 items-center gap-1.5"');
@@ -350,10 +350,10 @@ describe('SessionCard review regressions', () => {
   it('keeps selected sidebar hover actions inside the active color system', () => {
     expect(sessionItemSource).toContain('isActive={isActive}');
     expect(sessionItemSource).toContain(
-      "'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
+      "'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
     );
     expect(sessionItemSource).toContain(
-      "'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground'",
+      "'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground'",
     );
   });
 
@@ -475,8 +475,9 @@ describe('SessionCard review regressions', () => {
   });
 
   it('shows the project source label inline in both list and text modes', () => {
-    expect(sessionCardSource).toContain('{sourceLabel ? (');
-    expect(sessionItemSource).toContain('{sourceLabel ? (');
+    // The inbox leaves the project name to the row's project icon (2026-11-18 user decision).
+    expect(sessionCardSource).toContain('{sourceLabel && !inboxMode ? (');
+    expect(sessionItemSource).toContain('{sourceLabel && !inboxMode ? (');
     expect(sessionItemSource).toContain('title={sourceLabel}');
     expect(sessionCardSource).toContain('title={sourceLabel}');
     expect(sessionItemSource).toContain("'inline-flex min-w-0 items-center gap-1 text-xs font-normal'");

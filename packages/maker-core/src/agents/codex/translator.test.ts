@@ -22,6 +22,8 @@ import {
   stableCitationBoundary,
   translateErrorNotification,
   translateAgentMessageDelta,
+  translateReasoningSummaryTextDelta,
+  translateReasoningTextDelta,
   translateAccountRateLimitsUpdated,
   translateItemNotification,
   translateOmittedItem,
@@ -34,6 +36,7 @@ import {
   resetCodexGenerationTiming,
   resumeCodexGeneration,
   codexSpeedSnapshot,
+  codexUsageRefreshDue,
   settleCodexSpeedUsage,
 } from './translator.js';
 import type { CodexRuntimeState } from './translator.js';
@@ -1044,6 +1047,30 @@ describe('translateErrorNotification', () => {
       codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } } },
   ])('preserves ambiguous, authentication and transient failures: %j', error => {
     expect(classifyCodexError(error as Parameters<typeof classifyCodexError>[0]).reason).not.toBe('model_unavailable');
+  });
+
+  // #11484 unit: existing 403 fixtures do not cover JSON nested in gateway messages.
+  // Exercise the production classifier, including safe projection and status precedence.
+  it('classifies only the nested account-denial envelope and preserves its safe explanation', () => {
+    const body = JSON.stringify({ error: { code: '407', message: 'NovaException - ' + JSON.stringify({ error: {
+      code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply',
+      privateDetail: 'PRIVATE_RESPONSE',
+    } }) } });
+    const error = { message: 'Reconnecting... 1/5', additionalDetails: `unexpected status 407: ${body}`,
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 407 } } } as const;
+    const classified = classifyCodexError(error);
+    expect(classified.data).toEqual({ reason: 'account_access_denied', willRetry: false,
+      message: JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply' } }),
+    });
+    expect(JSON.stringify(classified)).not.toMatch(/PRIVATE_RESPONSE|httpConnectionFailed|Reconnecting/);
+    for (const status of [401, 408, 429, 500, 503]) {
+      expect(classifyCodexError({ ...error, codexErrorInfo: { httpConnectionFailed: { httpStatusCode: status } } }).reason)
+        .not.toBe('account_access_denied');
+    }
+    for (const message of ['HTTP 407: Proxy Authentication Required', 'HTTP 403: Forbidden',
+      'HTTP 407: ACCOUNT_SHARING_ACCESS_DENIED', 'HTTP 407: {"metadata":{"code":"ACCOUNT_SHARING_ACCESS_DENIED"}}']) {
+      expect(classifyCodexError({ message }).reason).not.toBe('account_access_denied');
+    }
   });
 
   it('does not interpret a generic HTTP 404 or reconnect notice as an unavailable model', () => {
@@ -2991,6 +3018,40 @@ describe('codex speed around unpaired output and human waits', () => {
     }
   };
 
+  // Unit regression: a remote panel received usage and a peak but no live speed during reasoning.
+  // The recorded Codex fixtures only exercise dedicated answer deltas and silent reasoning.
+  it.each(['summary', 'content', 'snapshot'] as const)('publishes live speed for %s reasoning before usage settles', (source) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      const ids = { threadId: 't', turnId: 'turn', itemId: 'r' };
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      const item = { type: 'reasoning', id: 'r', summary: [] as string[], content: [] as string[] };
+      translateItemNotification('started', { ...ids, item }, q, ctx);
+      const chunk = 'word '.repeat(20);
+      for (let i = 1; i <= 14; i++) {
+        vi.setSystemTime(i * 1_000);
+        if (source === 'content') translateReasoningTextDelta({ ...ids, contentIndex: 0, delta: chunk }, q, ctx);
+        if (source === 'summary') translateReasoningSummaryTextDelta({ ...ids, summaryIndex: 0, delta: chunk }, q, ctx);
+        const parts = source === 'content' ? 'content' : 'summary';
+        translateItemNotification('updated', { ...ids, item: { ...item, [parts]: [chunk.repeat(i)] } }, q, ctx);
+        if (source === 'summary') translateReasoningTextDelta({ ...ids, contentIndex: 0, delta: chunk }, q, ctx);
+      }
+      const speed = codexSpeedSnapshot(rt);
+      expect(speed?.streaming).toBe(true);
+      expect(speed!.rate).toBeCloseTo(20, 0);
+      expect(speed!.tokens).toBe(280);
+      // A just-published warm-up must not hide the first reading until the next delta.
+      expect(codexUsageRefreshDue(rt, Date.now() - 1, false)).toBe(true);
+      expect(codexUsageRefreshDue(rt, Date.now() - 1, true)).toBe(false);
+      settleCodexSpeedUsage(rt, { outputTokens: 400, reasoningOutputTokens: 400 });
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 400, streaming: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('drops output that streamed while tools owned the turn instead of timing the next response with it', () => {
     vi.useFakeTimers();
     try {
@@ -3007,7 +3068,7 @@ describe('codex speed around unpaired output and human waits', () => {
       translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'a1', delta: 'w '.repeat(50) }, q, ctx);
       vi.setSystemTime(16_000);
       expect(settleCodexSpeedUsage(rt, { outputTokens: 50 })).toBeUndefined();
-      expect(codexSpeedSnapshot(rt)).toBeUndefined();
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ streaming: false, tokens: 250, totalOutputTokens: 300, elapsedMs: 5_000, average: 50 });
       translateItemNotification('completed', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
       // The next response is timed from its own first byte, at its own 50 tok/s.
       vi.setSystemTime(17_000);

@@ -79,6 +79,33 @@ describe('composer list newline keys', () => {
     expect(serializeEditorContent(ed).text).toBe(expected);
   });
 
+  // A pasted zero-width space made an empty item continue to the next ordinal.
+  // Existing empty-item tests cover only ordinary whitespace. Unit-tier editor
+  // transactions prove the next text starts a paragraph outside either list form.
+  it.each([
+    { name: 'plain', lines: ['2、内容', '3、\u200B'], html: null },
+    {
+      name: 'structured',
+      lines: [''],
+      html: '<ol start="2" data-marker="、"><li><p>内容</p></li><li><p>\u200B</p></li></ol>',
+    },
+    {
+      name: 'structured task',
+      lines: [''],
+      html: '<ol start="2" data-marker="、"><li><p>内容</p></li><li><p>[ ] \u200B</p></li></ol>',
+    },
+  ])('exits a $name item with only a zero-width body on Shift+Enter', ({ lines, html }) => {
+    const ed = makeEditor(lines);
+    if (html) {
+      ed.commands.setContent(html);
+      ed.commands.setTextSelection(ed.state.doc.content.size - 3);
+    }
+    const event = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true });
+    expect(handleComposerListEnter(ed.view, event, 'enter')).toBe(true);
+    ed.commands.insertContent('段落');
+    expect(serializeEditorContent(ed).text).toBe('2、内容\n段落');
+  });
+
   it.each([
     { name: 'default send', preference: 'enter' as const, init: {} },
     { name: 'macOS send', preference: 'modifier-enter' as const, init: { metaKey: true } },
@@ -342,6 +369,12 @@ describe('applyListBackspace on a real editor', () => {
   it('returns false on a plain text line', () => {
     const ed = makeEditor(['hello', 'world']);
     expect(applyListBackspace(ed.view)).toBe(false);
+  });
+
+  it('returns false on a long digit run before the CJK comma', () => {
+    const ed = makeEditor(['324325、']);
+    expect(applyListBackspace(ed.view)).toBe(false);
+    expect(docText(ed)).toBe('324325、');
   });
 
   it('triggers at end of an empty item even when a later line exists (caret before hardBreak)', () => {

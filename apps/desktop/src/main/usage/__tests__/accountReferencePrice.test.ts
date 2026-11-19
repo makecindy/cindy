@@ -45,7 +45,14 @@ vi.mock('../modelPriceOverrideStore.js', () => ({
 }));
 
 import { accountReferencePriceQuote } from '../accountReferencePrice.js';
-import { getReferenceModelPricing, getCodexProviderSubscriptionValuePrice } from '../referenceModelPricing.js';
+import { BrowserWindow } from 'electron';
+import type { CatalogModel } from '@cindy/model-providers';
+import { projectSubscriptionPoolCatalog } from '../../maker-host/subscriptionPoolCatalog.js';
+import {
+  broadcastReferenceModelPricing, followReferenceModelPricingAfterProviderChange,
+  getReferenceModelPricing, getCodexProviderSubscriptionValuePrice, REFERENCE_MODEL_PRICING_CHANGED_CHANNEL,
+  setReferencePricingDisplayProviders,
+} from '../referenceModelPricing.js';
 
 describe('independent subscription account reference prices', () => {
   it.each(['claude-code', 'codex', 'pi'] as const)(
@@ -176,5 +183,95 @@ it('resolves the reference catalog for a historical day with route tariffs', () 
   } finally {
     if (original === undefined) delete route.referencePrices;
     else route.referencePrices = original;
+  }
+});
+
+// Unit: an independent ChatGPT account page showed no price tier for the models its own
+// account discovery added (GPT-6.2 Sol / Astra, 2026-11-18). Those models are not in the active
+// catalog: projectSubscriptionPoolCatalog adds them for the lists the renderer shows, and the
+// broadcast must quote that same membership. Entry: the main-side broadcast the renderer
+// subscribes to, through the real pool projection.
+it('quotes models added by an account\'s own discovery, once per burst and only when prices change', async () => {
+  const sent: Array<Record<string, Record<string, unknown>>> = [];
+  const windows = vi.spyOn(BrowserWindow, 'getAllWindows').mockReturnValue([{
+    isDestroyed: () => false,
+    webContents: { send: (channel: string, pricing: never) => {
+      if (channel === REFERENCE_MODEL_PRICING_CHANGED_CHANNEL) sent.push(pricing);
+    } },
+  } as never]);
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  const known = accountCatalog.providers.find(provider => provider.id === 'openai-account')!.models.codex![0]!;
+  let discovered: CatalogModel[] = [];
+  setReferencePricingDisplayProviders(() => projectSubscriptionPoolCatalog(accountCatalog, {
+    readPool: () => ({ legacyCodexAccounts: { 'openai-account': 'pool-account' }, accounts: [{ id: 'pool-account' }] }) as never,
+    codexAccountState: () => ({ authenticated: true }),
+    readSubscriptionPoolCodexModels: providerId => providerId === 'openai-account' ? discovered : null,
+    getActiveCatalogWithCodexModels: models => ({ ...accountCatalog, providers: [{
+      ...accountCatalog.providers[0]!, id: 'openai', models: { codex: [...models] },
+    }] }),
+    readSubscriptionPoolClaudeModels: () => null,
+    getActiveCatalogWithClaudeModels: () => accountCatalog,
+    readMergedProviderAccount: () => undefined,
+    accountProviderId: () => 'openai-account',
+    readProviderBoundAccountIds: () => new Set<string>(),
+  }, true).providers);
+  const key = modelPricingKey('gpt-5.6-sol', 'codex');
+  try {
+    broadcastReferenceModelPricing();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]['openai-account'][modelPricingKey(known.id, 'codex')]).toBeDefined();
+    expect(sent[0]['openai-account'][key]).toBeUndefined();
+
+    // Provider changed, prices did not: nothing is sent.
+    followReferenceModelPricingAfterProviderChange();
+    await tick();
+    expect(sent).toHaveLength(1);
+
+    // The account discovers a model the active catalog does not list for it.
+    discovered = [{ ...known, id: 'gpt-5.6-sol', name: 'Sol' }];
+    expect(getReferenceModelPricing()['openai-account'][key]).toBeUndefined();
+    for (let i = 0; i < 5; i++) followReferenceModelPricingAfterProviderChange();
+    expect(sent).toHaveLength(1);
+    await tick();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]['openai-account'][key]).toMatchObject({ providerId: 'openai-account', modelId: 'gpt-5.6-sol' });
+
+    await tick();
+    expect(sent).toHaveLength(2);
+  } finally {
+    setReferencePricingDisplayProviders(null);
+    windows.mockRestore();
+  }
+});
+
+// Unit: the follow-up runs in setImmediate, where an escaping error becomes an
+// uncaughtException and the main process shuts down (review on #11203). A closing window
+// or a failing account read must cost one price update, not the app.
+it('keeps a failing window or account read inside the deferred follow-up', async () => {
+  const received: unknown[] = [];
+  const windows = vi.spyOn(BrowserWindow, 'getAllWindows').mockReturnValue([
+    { isDestroyed: () => false, webContents: { send: () => { throw new Error('Object has been destroyed'); } } },
+    { isDestroyed: () => false, webContents: { send: (_channel: string, pricing: unknown) => received.push(pricing) } },
+  ] as never);
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  const account = accountCatalog.providers.find(provider => provider.id === 'openai-account')!;
+  const before = account.models.codex!;
+  try {
+    broadcastReferenceModelPricing();
+    expect(received).toHaveLength(1);
+
+    account.models.codex = [...before, { ...before[0]!, id: 'gpt-5.6-sol', name: 'Sol' }];
+    followReferenceModelPricingAfterProviderChange();
+    await tick();
+    expect(received).toHaveLength(2);
+
+    setReferencePricingDisplayProviders(() => { throw new Error('pool unreadable'); });
+    followReferenceModelPricingAfterProviderChange();
+    await tick();
+    expect(received).toHaveLength(2);
+  } finally {
+    account.models.codex = before;
+    setReferencePricingDisplayProviders(null);
+    windows.mockRestore();
   }
 });

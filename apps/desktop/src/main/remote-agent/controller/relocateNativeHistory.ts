@@ -6,6 +6,8 @@ import { createNativeHistoryTransfer, transferNativeHistory, type NativeHistoryE
 import { nativeHistoryStorage } from '../nativeHistoryStorage';
 import { remoteAgentInvoker, RemoteAgentRunClient } from './runClient';
 import type { DeviceAgentServiceDeps } from './service';
+import { isRetryableLinkError } from './poller';
+import { readNativeHistoryBackupEndpoint } from './nativeHistoryBackup';
 
 export function createNativeHistoryRelocator(userDataDir: string, invoke: DeviceAgentServiceDeps['remoteInvoke']) {
   const local = createNativeHistoryTransfer(path.join(userDataDir, 'native-history-transfers'), nativeHistoryStorage(userDataDir));
@@ -32,8 +34,34 @@ export function createNativeHistoryRelocator(userDataDir: string, invoke: Device
     // Verify the destination before creating a potentially large source snapshot.
     const target = await endpoint(input.toDevice);
     if (!target) return null;
-    const source = await endpoint(input.fromDevice);
-    if (!source) return null;
-    return transferNativeHistory(source, target, input.kind, input.nativeId, assertCurrent);
+    let unavailableSource = false;
+    try {
+      const source = await endpoint(input.fromDevice).catch(error => {
+        unavailableSource = isRetryableLinkError(error);
+        throw error;
+      });
+      if (!source) return null;
+      // Only a failure of the source can select the backup. A disconnected
+      // destination or failed native restore must use the existing fallback.
+      const live: NativeHistoryEndpoint = async command => {
+        try { return await source(command); }
+        catch (error) {
+          if (command.action !== 'release') unavailableSource = isRetryableLinkError(error);
+          throw error;
+        }
+      };
+      return await transferNativeHistory(live, target, input.kind, input.nativeId, assertCurrent);
+    } catch (error) {
+      assertCurrent();
+      if (input.kind !== 'pi' || !input.fromDevice || !unavailableSource) throw error;
+      const backup = await readNativeHistoryBackupEndpoint({ ...input, fromDevice: input.fromDevice }, assertCurrent);
+      if (!backup) throw error;
+      return transferNativeHistory(backup.endpoint, async command => {
+        if (command.action === 'restore') await backup.validate();
+        const result = await target(command);
+        if (command.action === 'restore') await backup.validate();
+        return result;
+      }, input.kind, input.nativeId, assertCurrent);
+    }
   };
 }

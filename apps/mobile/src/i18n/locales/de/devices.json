@@ -1,4 +1,19 @@
 {
+  "widgetGuideAction": "Widget hinzufügen",
+  "widgetGuideIntro": "Widgets sind kleine Karten auf deinem Startbildschirm. So siehst du dein restliches Kontingent und den heutigen Tokenverbrauch, ohne Cindy zu öffnen.",
+  "widgetGuideExample": "Ein Cindy-Widget neben App-Symbolen auf dem Startbildschirm.",
+  "widgetGuidePicker": "Bearbeiten → Widget hinzufügen",
+  "widgetGuideIOS": "Halte eine freie Stelle auf dem Home-Bildschirm gedrückt und tippe auf {{picker}}.\n\nSuche nach Cindy, wähle „Abo-Kontingent“ oder „Tägliche Nutzung“ und tippe auf „Widget hinzufügen“.",
+  "widgetGuideAndroid": "Halte eine freie Stelle auf dem Startbildschirm gedrückt und tippe auf „Widgets“.\n\nSuche Cindy und ziehe „Abo-Kontingent“ oder „Tägliche Nutzung“ auf den Startbildschirm.",
+  "widgetGuideHome": "Home-Bildschirm",
+  "widgetGuideLock": "Sperrbildschirm",
+  "widgetGuideLockIOS": "Auch auf dem Sperrbildschirm: Halte ihn gedrückt und tippe auf „Anpassen“.",
+  "widgetGuideDismiss": "Verstanden",
+  "usageOther": "Sonstige",
+  "usageTitle": "Nutzungsübersicht",
+  "usageOnlyDevice": "Nur {{name}}",
+  "usagePlans": "Verbleibende Kontingente",
+  "usageBudget": "Verbleibendes Periodenbudget",
   "management": {
     "title": "Geräteverwaltung",
     "openDevice": "Details zu {{name}} anzeigen",
@@ -426,7 +441,33 @@
       "filterTeammatesHeading": "Freunde",
       "filterAnySource": "Alle",
       "filterHideAllTeammates": "Alle ausblenden",
-      "filterSelectedTeammates": "{{count}} ausgewählt"
+      "filterSelectedTeammates": "{{count}} ausgewählt",
+      "inbox": {
+        "inbox": "Offen",
+        "working": "In Arbeit",
+        "snoozed": "Zurückgestellt",
+        "archived": "Erledigt",
+        "snooze": "Aufgabe zurückstellen",
+        "complete": "Erledigt",
+        "wake": "Jetzt zurückholen",
+        "restore": "Aufgabe wiederherstellen",
+        "process": "Als erledigt markieren (archivieren)",
+        "empty": "Der Posteingang ist leer",
+        "snoozeFailed": "Die Zeit konnte nicht gespeichert werden. Prüfe die Verbindung und aktualisiere den Computer mit dieser Aufgabe.",
+        "hours": "In {{count}} Stunden",
+        "hours_one": "In {{count}} Stunde",
+        "hours_other": "In {{count}} Stunden",
+        "thisEvening": "Heute Abend",
+        "tomorrow": "Morgen",
+        "nextWeek": "Nächste Woche",
+        "indefinite": "Unbefristet",
+        "custom": "Benutzerdefiniert…",
+        "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres."
+      },
+      "taskListMode": {
+        "enterInbox": "Zum Posteingang",
+        "leaveInbox": "Zur Aufgabenliste"
+      }
     },
     "search": {
       "placeholder": "Titel oder Inhalte durchsuchen…",

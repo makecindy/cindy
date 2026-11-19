@@ -365,12 +365,14 @@ export interface UnifiedModelPanelProps {
       config: UnifiedSelectedRow;
     }) => void | boolean | Promise<void | boolean>;
     labelOf: (deviceId: string, providerId: string) => string;
+    homeUnavailableReasonOf?: (deviceId: string, providerId: string) => string | undefined;
     /** 正在浏览的远程供应商;null = 正在浏览本机目录。 */
     active: { deviceId: string; providerId: string } | null;
     /** 列表数据是否已经是 `active` 那台电脑的目录。 */
     ready: boolean;
     /** `active` 那台的目录读取失败时,列表区显示的提示(含重试)。 */
     failure?: ReactNode;
+    status?: ReactNode;
     onActivate: (target: { deviceId: string; providerId: string } | null) => void;
   };
   /**
@@ -379,6 +381,7 @@ export interface UnifiedModelPanelProps {
    * (见 widthSizerSections)。composer 的 `w-max` 面板不传 = 开启。
    */
   panelWidthFluid?: boolean;
+  readableRows?: boolean;
 }
 
 /**
@@ -447,6 +450,7 @@ export function UnifiedModelPanel({
   panelElement,
   overlayClassName,
   panelWidthFluid = false,
+  readableRows = false,
   catalogNotice,
   emptyCatalogNotice,
   remoteSources,
@@ -929,6 +933,7 @@ export function UnifiedModelPanel({
     if (el.clientHeight < 1) return; // 还没有真实布局,等下一次尺寸回调。
     const row = el.querySelector<HTMLElement>('[data-model-selected="true"]');
     if (!row) {
+      el.scrollTop = 0;
       needsEnsureVisibleRef.current = false; // 本视图没有选中行,无事可做。
       return;
     }
@@ -1316,6 +1321,7 @@ export function UnifiedModelPanel({
     const rowElement = (
       <UnifiedModelRow
         key={key}
+        readable={readableRows}
         measurementOnly={sizer}
         entry={row.entry}
         anchor={row.anchor}
@@ -1325,6 +1331,7 @@ export function UnifiedModelPanel({
             ? t('newChat.modelSelector.unified.remoteFavoriteUnavailable', { source: label })
             : label
         }
+        sourceNotice={remoteSources?.homeUnavailableReasonOf?.(rowDeviceId, row.entry.providerId)}
         selected={false}
         active={false}
         isFavoriteRow
@@ -1457,6 +1464,7 @@ export function UnifiedModelPanel({
             // 底部加宽到 12px:滚到底时最后一行不贴着面板底边/footer(Chris 2026-08-13:
             // 「最底部稍微放宽一点高度」)。
             'morph-panel-list-scroll flex min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2 pb-3 [scrollbar-gutter:stable]',
+            readableRows && 'overflow-x-hidden',
             // min-h-0 是能不能滚到底的关键:flex item 的默认 min-height:auto 会让它按内容
             // 撑开、拒绝收缩,于是超出面板的部分被外层裁掉且**滚不到**(2026-08-13 实测:
             // 列表翻不到最下面)。加上 min-h-0 后,面板高度受限时列表自己收缩并内部滚动,
@@ -1507,7 +1515,7 @@ export function UnifiedModelPanel({
               <div className="mx-1 my-1 h-px bg-[var(--cmd-palette-border)]" />
             </>
           )}
-          {/* 只在已登记跨 Harness 切换时提示有损;浏览「全部」或同 Harness 换模型不提示。 */}
+          {/* 只在已登记跨 Harness 切换时提示如何接续;浏览「全部」或同 Harness 换模型不提示。 */}
           {sessionEngineFilter?.pendingTarget && (
             <div
               role="note"
@@ -1524,7 +1532,7 @@ export function UnifiedModelPanel({
               )}
             >
               <TriangleAlert size={12} className="shrink-0" />
-              <span className="truncate">
+              <span className="min-w-0 break-words">
                 {t('newChat.modelSelector.unified.crossEngineWarning')}
               </span>
             </div>
@@ -1532,6 +1540,7 @@ export function UnifiedModelPanel({
           {favoritesListDeviceId && remoteFavorites.error ? <div role="status" className="px-3 py-2 text-13 text-[var(--text-secondary)]">{t(favoritesSyncFailureI18nKey(remoteFavorites.errorCode))}</div> : null}
           {pinnedTop && effectiveRail.kind === 'all' ? pinnedTop : null}
           {favoritesPinned && effectiveRail.kind === 'favorites' && !query.trim() ? favoritesPinned : null}
+          {!remoteListPending && remoteRail !== null ? remoteSources?.status : null}
           {effectiveRail.kind === 'model-groups' ? (
             modelGroupsView ?? null
           ) : remoteListPending ? (
@@ -1618,12 +1627,16 @@ export function UnifiedModelPanel({
                   return (
                     <UnifiedModelRow
                       key={key}
+                      readable={readableRows}
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
                       {...(showsSourceRow
                         ? { sourceLabel: aggregateSourceLabel(row.entry.providerId) }
                         : {})}
+                      sourceNotice={remoteActiveDeviceId
+                        ? remoteSources?.homeUnavailableReasonOf?.(remoteActiveDeviceId, row.entry.providerId)
+                        : undefined}
                       selected={isSelectedRow(row.anchor, row.entry)}
                       active={sameAnchor(flyAnchor, row.anchor)}
                       isFavoriteRow={!!starredFavorite}

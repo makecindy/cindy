@@ -31,6 +31,12 @@
  * Bug：2026-11-17 审查，换网的通知到不了 Agent-Net（Device Link 的探测在那条连接里由本机回答），中转连接要等 45 秒的保活才换。
  * 可观察结果：换网后中转在探测时限内不回 pong，Main 断开这条 ws 并记一条警告；常规保活此时还远没到。
  * 最小失败输入：中转 autoPong=false、常规保活设成很长，连接打开后换网一次。
+ *
+ * 经中转的数据报走 UDP 还是 WebSocket（同一生产入口，worker 的状态快照带上它，Desktop 远程连接页写在中转点上）：
+ * Bug：2026-11-18 用户反馈，拓扑看不出中转走的是 Agent-Net 的 UDP、WS 还是 Device Link，延迟一直是 WebSocket 心跳的。
+ * 可观察结果：`relayRoute()` 给出走法和那条路的往返（UDP 用 worker 报的、WebSocket 用心跳的），切换时发 `relay-route`
+ * 并记一行日志，往返刷新不算切换，中转断开后为 null。现有覆盖缺口：此前 Main 只有心跳往返。
+ * 最小失败输入：worker 先后报 UDP（两次不同往返）、WebSocket，再关掉中转。
  */
 import { afterEach, expect, it, vi } from 'vitest';
 import { once } from 'node:events';
@@ -85,7 +91,7 @@ it('discards a still-CONNECTING network socket without an uncaught error when cl
   expect(ws.readyState).toBe(WebSocket.CLOSED);
 });
 
-async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { intervalMs: number; timeoutMs: number }; networkChangeProbeMs?: number }) {
+async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { intervalMs: number; timeoutMs: number }; networkChangeProbeMs?: number; workerFile?: URL }) {
   const relay = new WebSocketServer({ host: '127.0.0.1', port: 0, autoPong: options.autoPong });
   await once(relay, 'listening');
   const accepted = once(relay, 'connection') as Promise<[WebSocket]>;
@@ -96,14 +102,16 @@ async function openAgainstRelay(options: { autoPong: boolean; keepalive?: { inte
     transport: { ownerPinnedHttp: false, createWebSocket: (url: string, opts: WebSocket.ClientOptions) => new WebSocket(url, opts) },
   } as unknown as AgentNetClient;
   const warnings: string[] = [];
+  const infos: string[] = [];
   const socket = await AgentNetWorkerSocket.open({
-    workerFile: fakeWorker, client, userId: 'unit-user', log: { info: () => {}, warn: (line: string) => { warnings.push(line); } },
+    workerFile: options.workerFile ?? fakeWorker, client, userId: 'unit-user',
+    log: { info: (line: string) => { infos.push(line); }, warn: (line: string) => { warnings.push(line); } },
     uplinkKeepalive: options.keepalive ?? { intervalMs: 10, timeoutMs: 50 },
     ...(options.networkChangeProbeMs ? { networkChangeProbeMs: options.networkChangeProbeMs } : {}),
   } as Parameters<typeof AgentNetWorkerSocket.open>[0]);
   cleanup.push(() => { socket.terminate(); for (const peer of relay.clients) peer.terminate(); relay.close(); });
   const [server] = await accepted;
-  return { server, warnings, socket };
+  return { server, warnings, infos, socket };
 }
 
 it('drops a relay connection whose pings are never answered, so the worker reconnects it (2026-11-13)', async () => {
@@ -123,6 +131,71 @@ it('reports whether its relay connection is open, and when that changes', async 
   await vi.waitFor(() => expect(changes).toEqual([false]));
   expect(socket.relayConnected()).toBe(false);
   expect(socket.relayRttMs()).toBeNull();
+});
+
+/** Like fakeWorker, and reports how relayed datagrams travel (the real worker does it in each status snapshot) when told to. */
+const relayRouteWorker = new URL('data:text/javascript,' + encodeURIComponent(`
+import { parentPort } from 'node:worker_threads';
+parentPort.on('message', (m) => {
+  if (m.type === 'init') {
+    parentPort.postMessage({ type: 'ready' });
+    parentPort.postMessage({ type: 'ws-open', id: 1, url: m.client.base.replace(/^http/, 'ws') + '/ws', headers: {} });
+  }
+  if (m.type === 'frame') {
+    parentPort.postMessage({ type: 'ack', bytes: m.bytes });
+    parentPort.postMessage({ type: 'status', queued: 0, known: [], peers: [], relayRoute: JSON.parse(m.frame) });
+  }
+});
+`));
+
+it('reports whether relayed datagrams go over the relay UDP port or the WebSocket, with that path\'s round trip (2026-11-18)', async () => {
+  const { server, socket, infos } = await openAgainstRelay({ autoPong: true, keepalive: { intervalMs: 60_000, timeoutMs: 120_000 }, workerFile: relayRouteWorker });
+  // 还没走 UDP：WebSocket，往返是心跳的。
+  await vi.waitFor(() => expect(socket.relayRoute()).toEqual({ via: 'websocket', rttMs: expect.any(Number) }));
+  const changes: string[] = [];
+  socket.on('relay-route', (via: string) => { changes.push(via); });
+  socket.send(JSON.stringify({ via: 'udp', rttMs: 7 }));
+  await vi.waitFor(() => expect(socket.relayRoute()).toEqual({ via: 'udp', rttMs: 7 }));
+  // 往返刷新不算切换。
+  socket.send(JSON.stringify({ via: 'udp', rttMs: 9 }));
+  await vi.waitFor(() => expect(socket.relayRoute()).toEqual({ via: 'udp', rttMs: 9 }));
+  // UDP 不通、退回 WebSocket：往返换回心跳的，不留 UDP 的旧值。
+  socket.send(JSON.stringify({ via: 'websocket', rttMs: null }));
+  await vi.waitFor(() => expect(socket.relayRoute()?.via).toBe('websocket'));
+  expect(socket.relayRoute()!.rttMs).toBe(socket.relayRttMs());
+  expect(changes).toEqual(['udp', 'websocket']);
+  expect(infos.filter((line) => line.startsWith('agent-net relayed datagrams'))).toEqual([
+    'agent-net relayed datagrams now go over the relay UDP port',
+    'agent-net relayed datagrams now go over the relay WebSocket',
+  ]);
+  // 中转连接断了：没有经中转的路可说。
+  server.close();
+  await vi.waitFor(() => expect(socket.relayRoute()).toBeNull());
+});
+
+// PR #11236: the cached directory can show the peer offline during a LAN dial.
+// Unit, real WorkerSocket: one cached same-account device, one pending dial,
+// no routable path. Existing live-relay tests only exercise available peers.
+// Keep the worker alive until cleanup: a once-only listener can let it exit
+// after ready and clear the route before the Windows CI assertion runs.
+it('reports a LAN handshake while the cached directory marks the peer offline', async () => {
+  // The handshake is still in progress: keep this worker alive until cleanup.
+  // A once listener let it exit just after ready, racing the route assertion.
+  const workerFile = new URL('data:text/javascript,' + encodeURIComponent(`
+import { parentPort } from 'node:worker_threads';
+parentPort.on('message', (message) => {
+  if (message.type !== 'init') return;
+  const deviceId = 'lan-peer';
+  parentPort.postMessage({ type: 'directory', directory: [{ certificate: { deviceId } }], cached: true });
+  parentPort.postMessage({ type: 'status', queued: 0, known: [deviceId],
+    peers: [[deviceId, { available: false, path: null, rttMs: null, dialing: true }]] });
+  parentPort.postMessage({ type: 'ready' });
+});
+`));
+  const client = { identity: { deviceId: 'unit-device' }, transport: {} } as unknown as AgentNetClient;
+  const socket = await AgentNetWorkerSocket.open({ workerFile, client, userId: 'unit-user' });
+  cleanup.push(() => socket.terminate());
+  expect(socket.peerRoutes()).toEqual([{ deviceId: 'lan-peer', path: 'connecting', rttMs: null }]);
 });
 
 it('replaces a relay connection that does not answer right after a network change, before the keepalive would', async () => {
