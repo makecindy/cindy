@@ -13560,6 +13560,8 @@
         },
         "reply": {
           "unsupportedMedia": "当前版本暂不支持处理这类微信媒体。",
+          "delayedReply": "这条延迟回复于 {{createdAt}} 生成，对应 {{receivedAt}} 收到的旧消息，内容可能已过时。",
+          "delayedReplyQuestion": "原消息：{{question}}",
           "stillProcessing": "任务仍在处理中…",
           "ownerOnlyCommands": "只有主人可以使用机器人命令。",
           "companionManagedCommand": "请在 Cindy 中打开这位伙伴：模型在伙伴设置中调整，权限在对话输入框下方切换。",
@@ -19785,7 +19787,8 @@
         "validity": "有效期",
         "validityValue_other": "领取后 {{count}} 天",
         "claimBy": "领取截止",
-        "destination": "存入"
+        "destination": "存入",
+        "validityPermanent": "永久有效"
       },
       "doneTitle": "{{amount}} 已到账",
       "doneDescription": "已存入赠送余额，{{date}} 前有效。",
@@ -19801,10 +19804,13 @@
         "alreadyClaimed": "这张礼品卡已被领取。",
         "expired": "这张礼品卡已过领取期限。",
         "voided": "这张礼品卡已作废。",
+        "voidedPurchased": "这张礼品卡目前不能领取。",
         "rateLimited": "尝试次数过多，请稍后再试。",
         "failed": "暂时无法兑换，请稍后重试。",
         "personalRequired": "礼品卡仅限个人用户领取。"
-      }
+      },
+      "doneDescriptionPurchased": "已存入充值余额，永久有效。",
+      "pendingDescriptionPurchased": "{{amount}} 正在入账，稍后会出现在充值余额中，无需再次领取。"
     },
     "usage": {
       "title": "余额用量",
@@ -19850,7 +19856,8 @@
         "noPayment": "无需付款",
         "page": "第 {{page}} 页",
         "previous": "上一页",
-        "next": "下一页"
+        "next": "下一页",
+        "giftCard_other": "礼品卡 × {{count}}"
       },
       "count": "{{count}} 笔",
       "orderId": "订单号 {{id}}",
@@ -20079,6 +20086,115 @@
         "MONTH": "每月包含 {{amount}}",
         "YEAR": "每年包含 {{amount}}",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "购买礼品卡",
+      "title": "购买礼品卡",
+      "subtitle": "送给朋友，或者留给自己。兑换后存入充值余额，永久有效。",
+      "previewLabel": "对方收到的样子",
+      "sameCards_other": "共 {{count}} 张，卡面、面额、留言相同，每张一个兑换码",
+      "fields": {
+        "face": "卡面",
+        "amount": "面额",
+        "quantity": "数量",
+        "sender": "署名",
+        "senderHint": "显示为「来自 {{sender}}」",
+        "senderPlaceholder": "你的名字",
+        "message": "留言（可选）",
+        "messagePlaceholder": "写一句给对方的话",
+        "tooLong": "最多 {{max}} 个字",
+        "paymentMethod": "支付方式"
+      },
+      "decrease": "少一张",
+      "increase": "多一张",
+      "quantityHint": "{{hours}} 小时内最多买 {{limit}} 张，现在还能买 {{remaining}} 张",
+      "quantityLimitReached": "{{hours}} 小时内最多买 {{limit}} 张，已经买满，请稍后再来",
+      "orderAmountCap": "单笔订单最多 {{amount}}",
+      "totalDetail_other": "{{count}} 张 × {{amount}}",
+      "pay": "去支付",
+      "refundNote": "礼品卡不能兑换现金。卡被领取或兑换后不退款；未领取的卡如需退款，请联系支持。",
+      "cancel": "取消",
+      "loadFailed": "暂时无法读取购买限制，请稍后重试。",
+      "checkoutSubtitle_other": "礼品卡 {{amount}} × {{count}} · 付款成功后立即生成",
+      "faces": {
+        "cindy": "Cindy · 品牌红",
+        "cat": "黑猫 · 夜色",
+        "bell": "铃铛 · 节日",
+        "leap": "跃 · 象牙白"
+      },
+      "errors": {
+        "limitReached": "购买的礼品卡已达上限，请稍后再试。",
+        "amountTooLarge": "这笔订单超过单笔支付上限，请减少张数后再试。"
+      },
+      "done": {
+        "title_other": "{{count}} 张礼品卡已备好",
+        "pendingTitle": "礼品卡已付款",
+        "loading": "正在取回这一单的礼品卡…",
+        "description": "把领取链接发给朋友，对方打开就能领取；也可以留一张兑换给自己。",
+        "missing": "付款已完成，礼品卡稍后会出现在「我买的礼品卡」里。",
+        "cardTitle": "第 {{index}} 张 · {{amount}}",
+        "cardMeta": "尾号 {{tail}} · {{status}}",
+        "linkHint": "领取链接就是这张卡：谁先打开领取就归谁，请只发给要送的人。",
+        "viewAll": "查看我买的礼品卡",
+        "finish": "完成"
+      },
+      "list": {
+        "title": "我买的礼品卡",
+        "description": "把领取链接发给朋友，对方打开就能领取；没送出去的卡不会过期，也可以兑换给自己。兑换后存入充值余额。",
+        "count_other": "{{count}} 张",
+        "loadMore": "加载更多",
+        "loadFailed": "礼品卡列表未能加载",
+        "retry": "重新加载",
+        "status": {
+          "unclaimed": "未领取",
+          "claimedBy": "{{name}} 已领取",
+          "claimed": "已被领取",
+          "redeemedByYou": "已兑换给自己",
+          "refunded": "已退款",
+          "onHold": "处理中，暂不可用"
+        },
+        "meta": {
+          "purchased": "{{date}} 购买 · 尾号 {{tail}}",
+          "claimed": "{{date}} 领取 · 尾号 {{tail}}",
+          "redeemed": "{{date}} 兑换 · 尾号 {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "复制领取链接",
+        "copied": "已复制",
+        "more": "更多操作",
+        "copyCode": "复制兑换码",
+        "redeemSelf": "兑换给自己",
+        "sendEmail": "发送到邮箱"
+      },
+      "toasts": {
+        "linkCopied": "领取链接已复制",
+        "codeCopied": "兑换码已复制",
+        "copyFailed": "复制失败，请重试",
+        "unavailable": "这张卡已被领取或已退款",
+        "revealFailed": "暂时无法取回兑换码，请稍后重试",
+        "emailQueued": "正在发送到 {{email}}"
+      },
+      "email": {
+        "title": "发送到邮箱",
+        "description": "把这张卡的领取链接发到对方邮箱，邮件里会带上你的署名和留言。",
+        "previewLabel": "对方会收到",
+        "previewWithMessage": "「{{message}}」，附领取链接和兑换码",
+        "previewLinkOnly": "附领取链接和兑换码",
+        "recipient": "收件邮箱",
+        "placeholder": "name@example.com",
+        "hint": "可以发到任何邮箱；领取链接谁先打开就归谁。",
+        "cooldown": "{{seconds}} 秒后可以再发送",
+        "invalid": "邮箱格式不正确",
+        "failed": "暂时无法发送，请稍后重试",
+        "send": "发送",
+        "status": {
+          "sending": "正在发送到 {{email}}",
+          "sent": "已发送到 {{email}}",
+          "failed": "发送到 {{email}} 失败",
+          "failedRetry": "发送到 {{email}} 失败，可以重新发送"
+        }
       }
     }
   },
