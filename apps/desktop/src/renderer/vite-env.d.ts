@@ -5162,7 +5162,8 @@ interface ElectronAPI {
         permissionMode?: string;
         fastMode?: boolean | 'ultrafast';
         planModeEnabled?: boolean;
-        agentKind?: 'cc' | 'codex' | 'pi';
+        /** 'acp' = plugin engine task: main requires an `acp-plugin:` providerId and no remote fields. */
+        agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
         /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
         extraDirs?: string[];
@@ -5798,6 +5799,22 @@ interface ElectronAPI {
    */
   maker: {
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
+    /**
+     * Plugin-provided task engines (docs/plans/acp-plugin-bridge.md). Local only: not
+     * tunnelled over device-link, so remote drafts and tasks never call it.
+     */
+    listPluginEngines: () => Promise<import('../shared/pluginEngines').PluginEngineView[]>;
+    /** Read the private account snapshot of one approved plugin engine. */
+    getPluginEngineUsage?: (key: string) => Promise<import('@cindy/plugin-protocol').GhostHarnessUsage | null>;
+    /**
+     * Asks engine plugins to republish their models, like the provider model refresh when the picker
+     * opens (main applies a per-plugin cooldown). Results arrive through onPluginEnginesChanged.
+     */
+    refreshPluginEngines?: () => Promise<void>;
+    /** Pushes the complete engine list whenever engines, availability or last-seen models change. */
+    onPluginEnginesChanged: (
+      cb: (engines: import('../shared/pluginEngines').PluginEngineView[]) => void,
+    ) => () => void;
     onAgentsChanged: (cb: () => void) => () => void;
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
     /** Read-only: the V1 background tasks a teammate chat started (stored rows). */
@@ -6035,6 +6052,10 @@ interface ElectronAPI {
     }) => Promise<{
       ok: boolean;
       models?: import('@cindy/model-providers').DiscoveredModel[];
+      /** true only when every catalog page was read; absent = unknown. */
+      complete?: boolean;
+      /** Saved-provider fetches only: receipt to pass back as `listingReceipts` when saving. */
+      listingReceipt?: string;
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;
@@ -6806,7 +6827,8 @@ interface ElectronAPI {
      */
     switchSessionAgent: (
       sessionId: string,
-      targetAgentKind: 'claude-code' | 'codex' | 'pi',
+      // 'acp' = 插件引擎(providerId 为 acp-plugin:<插件>:<引擎>，只限本机任务)。
+      targetAgentKind: 'claude-code' | 'codex' | 'pi' | 'acp',
       model: string,
       providerId?: string | null,
       effort?: string,
@@ -6816,7 +6838,7 @@ interface ElectronAPI {
       thinking?: boolean,
     ) => Promise<{
       switched: boolean;
-      agentKind: 'claude-code' | 'codex' | 'pi';
+      agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
       model: string;
       engineReady: boolean;
       deferred?: boolean;

@@ -16,6 +16,7 @@ import {
   declaredGhostCindyModelActions,
   type GhostCindyModelsAction,
   declaredGhostControlPoints,
+  declaredGhostHarnesses,
   GHOST_CONTROL_POINTS,
   type GhostControlPointId,
   type GhostManifest,
@@ -103,6 +104,24 @@ export function confirmedControlPoints(
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = new Set((facts?.kind === 'install' ? facts.permissions : facts?.added ?? []).map(item => item.key));
   return declared.filter(point => shown.has(GHOST_CONTROL_POINTS[point].permissionKey));
+}
+
+/**
+ * 本次确认里用户看到过的任务执行引擎。确认卡显示了 `harnesses` 权限行即批准当前声明的
+ * 全部引擎；服务端默认安装(exempt)由下发方负责，视为已批准；未确认/无需确认时返回空，
+ * 已批准项由 update 延续(按新 manifest 过滤)。
+ */
+export function confirmedHarnesses(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): string[] {
+  const declared = declaredGhostHarnesses(next).map((harness) => harness.id);
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'harnesses') ? declared : [];
 }
 
 /**

@@ -606,7 +606,13 @@ async function guardedOutboundFetch(
   url: string,
   init: RequestInit,
   beforeDispatch: () => void | Promise<void>,
-  approval?: { targetUrl: string; allowHttp?: boolean; allowPrivateNetwork?: boolean },
+  approval?: {
+    targetUrl: string;
+    allowHttp?: boolean;
+    allowPrivateNetwork?: boolean;
+    /** Host-owned benchmark-only exception; never allows ULA or private networks. */
+    allowBenchmarkFakeIp?: boolean;
+  },
 ): Promise<{ response: Response; release: () => Promise<void> }> {
   const upstream = new URL(url);
   // Host-owned, single-target exception. Never inherit it across a redirect.
@@ -622,7 +628,13 @@ async function guardedOutboundFetch(
     requireHttps: !approval?.allowHttp,
     ...(approval?.allowPrivateNetwork
       ? { policy: { dangerouslyAllowPrivateNetwork: true, hostnameAllowlist: [upstream.hostname] } }
-      : {}),
+      : approval?.allowBenchmarkFakeIp
+        ? { policy: {
+            allowRfc2544BenchmarkRange: true,
+            allowIpv6BenchmarkingRange: true,
+            hostnameAllowlist: [upstream.hostname],
+          } }
+        : {}),
     ...(proxy
       ? {
           dispatcherFactory: ({ url: guardedUrl, pinned }) =>

@@ -4078,6 +4078,25 @@
         "refreshFailed": "模型列表刷新失败，请稍后再试",
         "refreshReconnect": "模型列表刷新失败。重新连接此供应商后再试。",
         "refreshFetchDisabled": "模型目录远程拉取未启用，已跳过刷新",
+        "withdrawn": {
+          "refreshFound": "有 {{count}} 个模型上游已不再提供",
+          "refreshAdded": "新增 {{added}} 个模型，另有 {{count}} 个上游已不再提供",
+          "refreshSuspicious": "这次有 {{count}} 个模型没返回，可能是上游暂时返回不全",
+          "refreshAddedSuspicious": "新增 {{added}} 个模型，另有 {{count}} 个没返回，可能是上游暂时返回不全",
+          "review": "查看模型",
+          "heading": "上游已不再提供的模型",
+          "intro": "刷新「{{provider}}」时，上游没有再返回以下模型。勾选要移除的模型；仍返回它们的引擎不受影响。",
+          "suspicious": "这次没返回的模型数量异常多，可能是上游暂时返回不全。建议稍后再刷新一次确认，或只勾选确定已下线的模型。",
+          "selectAll": "全选",
+          "selected": "已选 {{count}} 个，共 {{total}} 个",
+          "consequence": "移除后，这些模型不再出现在模型选择中，已选用它们的地方会显示为不可用。上游重新提供时，再次刷新即可加回。",
+          "confirm": "移除 {{count}} 个模型",
+          "cancel": "暂不移除",
+          "removed": "已移除 {{count}} 个模型",
+          "cleanupIncomplete": "已移除 {{count}} 个模型，但部分显示或停用设置未能清除",
+          "stale": "连接设置已变化，没有可移除的模型。请重新刷新后再查看",
+          "removeFailed": "未能移除模型"
+        },
         "disableModel": "停用此模型",
         "paymentRequired": "付费",
         "paymentUnlock": "付费解锁",
@@ -7909,6 +7928,7 @@
           "accessDenied": "当前插件操作不被允许，或操作已取消。",
           "notConfigured": "当前环境未提供插件市场。",
           "invalidPackage": "插件安装包异常，无法安装，请联系发布者。",
+          "downloadAuthorizationExpired": "插件下载授权已过期，无法继续安装。请检查系统日期和时间后重新发起安装",
           "downloadTimeout": "插件下载超时，请稍后重试。",
           "downloadFailed": "插件下载失败，请检查网络后重试。",
           "brokerRedirectPortRequired": "该插件声明了授权 broker，但同一项 OAuth 配置缺少 redirectPort，无法从插件市场安装。请联系发布者补充该字段并重新发布。",
@@ -8225,6 +8245,8 @@
         "agentHiddenTasksDetail": "本插件创建的任务可以不出现在任务列表、搜索和通知里。你可以随时在插件详情的「后台任务」中查看、打开，或显示到任务列表；卸载插件时这些任务会恢复显示。",
         "agentModelPreferences": "读取并修改你的模型收藏，读取你最近使用的模型",
         "agentModelPreferencesDetail": "可读取这台电脑上的模型收藏和最近使用的模型（含推理强度与 Fast 设置），并添加、修改或移除收藏，改动会同步显示在 Cindy 的模型选择器里。在插件里选择的模型不会记入最近使用。不包含你其他电脑上或别人分享给你的模型，也不提供任何凭证。",
+        "harnesses": "提供执行引擎：{{names}}",
+        "harnessesDetail": "可以在你的任务里读写工作目录、执行命令，并使用与内置 Pi 相同范围的 Cindy 工具。",
         "agentErrand": "可以新建任务、执行工作并读取结果",
         "agentErrandDetail": "创建的任务会出现在 Cindy 的任务列表中，可以查看过程并继续交流。",
         "agentSchedule": "可以请你新建自动化",
@@ -14151,6 +14173,32 @@
             "label": "完全访问",
             "description": "常规操作直接允许，可访问工作区外文件和联网执行命令。"
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "逐项确认",
+            "description": "Agent 请求权限时由你确认。Agent 没有请求确认的操作，Cindy 无法拦截。"
+          },
+          "default": {
+            "label": "默认",
+            "description": "按 Agent 自己的默认方式工作；它请求权限时由你确认。"
+          },
+          "acceptEdits": {
+            "label": "自动接受编辑",
+            "description": "Agent 直接修改文件；其他请求权限的操作由你确认。"
+          },
+          "auto": {
+            "label": "自动",
+            "description": "由 Agent 自行判断哪些操作需要确认；它请求权限时由你确认。"
+          },
+          "plan": {
+            "label": "只规划",
+            "description": "Agent 只分析和制定计划，不修改文件。"
+          },
+          "bypassPermissions": {
+            "label": "全部允许",
+            "description": "Agent 请求的权限一律自动允许。"
+          }
         }
       }
     },
@@ -14612,6 +14660,16 @@
       "nowDefault": "已设为默认",
       "switchToSteer": "默认改为插话",
       "switchToQueue": "默认改为排队"
+    },
+    "pluginEngines": {
+      "group": "插件引擎",
+      "genericName": "插件引擎",
+      "defaultModel": "默认模型",
+      "defaultModelHint": "使用引擎自己的默认设置",
+      "unavailable": "暂不可用",
+      "engineMissing": "提供这个引擎的插件已停用或卸载",
+      "worktreeUnsupported": "插件引擎暂不支持在 worktree 中新建任务，请取消勾选 worktree 后再发送",
+      "modelChangeFailed": "未能切换模型"
     }
   },
   "onboarding": {
@@ -15792,6 +15850,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "这台电脑无法恢复任务原来的运行状态。请选择其他电脑或供应商的模型，通过上下文交接继续；原消息会保留。",
       "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "插件引擎未能恢复之前的对话。消息已保留。请选择其他引擎继续，或新建任务。",
       "REMOTE_AGENT_RESUME_REJECTED": "运行模型的电脑无法恢复这个任务。请从任务列表新建任务，将需要继续的内容复制过去。原任务和排队消息会保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑未向你开放这个供应商或所选模型。是你自己的电脑时，在那台电脑上给这个供应商打开「允许被远程调用」；别人分享给你的，请对方在「远程与分享」中调整。也可以换一个模型。",
@@ -16369,6 +16428,7 @@
       },
       "filterCreatorsHeading": "伙伴",
       "filterCreatorsAny": "全部",
+      "filterHideAutomations": "隐藏自动化任务",
       "filterCreatorsNone": "都不显示",
       "filterSelectedCreators": "已选 {{count}} 位",
       "filterProjectsHeading": "项目",
@@ -17284,6 +17344,7 @@
       "promote": {
         "menu": "提升为项目自动化",
         "noWorkingDir": "未设置工作目录的自动化无法提升为项目自动化",
+        "pluginEngine": "插件引擎只在这台电脑上可用，不能提升为项目自动化",
         "success": "已提升为项目自动化"
       },
       "editProject": {
@@ -17560,6 +17621,7 @@
         "selectThread": "请选择目标任务",
         "selectProject": "请选择项目目录",
         "modelUnavailable": "模型 {{model}} 已不可用，请重新选择",
+        "pluginEngineUnavailable": "所选插件引擎当前不可用，请重新选择模型",
         "reasoningInvalid": "推理强度必须是 {{values}} 之一",
         "preRunHookCommandRequired": "请填写前置检查脚本命令",
         "preRunPluginRequired": "请为前置检查选择插件",

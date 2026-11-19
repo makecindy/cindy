@@ -342,6 +342,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   安装／更新确认接受即整体授予，更新新增即「权限变多」，不另存分项批准、不补批。运行期由
   `/model-preferences` 端点按已批准、已启用且该版本 manifest 声明现查守门，见下文
   [模型收藏与最近使用](#模型收藏与最近使用新增接口尚未发布)。
+- `harnesses`（任务执行引擎，2026-11-18，未发布）是 v3 顶层字段，声明插件提供的 ACP Agent：每项指向
+  `node.entries` 里的一个包内入口，Cindy 主进程以原样 stdio 启动它，从不执行插件给的命令。单列 `harnesses`
+  权限项（列出全部可运行引擎的名称，引擎集合与名称都进权限指纹），新增、改名、换 id 即「权限变多」。批准另记
+  Host receipt 的 `approvedHarnesses`（只来自确认里显示过的这一行；服务端默认安装与随包种子视为已批准），
+  旧 receipt 缺字段 = 未批准但插件照常可用，Host 认识该字段之前声明的引擎不随升级静默生效，下一次更新按新增
+  权限复核；已装快照里不合新规则的声明只丢弃，不让插件失效。见下文[任务执行引擎](#任务执行引擎harnesses新增能力尚未发布)。
 - **Agent 在途调用不需要重复登记具体操作。** 插件工具是否执行由当前
   `ghost_call` 的 Cindy Agent 授权决定；普通网络和当前工作目录操作使用主机
   下发且仍在途的 `callId`。随包代码与 CLI 继续使用已有 Node 工作进程，顶层
@@ -1486,6 +1492,28 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
 实现见 `cindy-brain/ghostModelPreferences.ts`、`runtime/ghostPageHandler.ts`；回归见
 `electronSandboxAdapter.ownerPartition.test.ts`、`modelFavoritesSync.test.ts`、`recentModels.test.ts` 与 `ghost.tasks.test.ts`；
 作者契约见 `cindy-plugin-creator/references/plugin-agent-models.md` §4.0.3c。
+
+### 任务执行引擎（harnesses，新增能力，尚未发布）
+
+用途：插件把本机外部 ACP Agent 提供为任务执行引擎（设计见 [ACP 插件桥接层](../plans/acp-plugin-bridge.md)）。边界：
+
+- **只启动包内声明的入口**：`spawnHarness` 只接受 `harnesses[].entry`，且必须逐字命中 `node.entries`、解析后不越出安装
+  目录；没有命令、参数或 shell 面。与 childSpawn 走同一 utilityProcess「原样 stdio」通道，但由 Main 发起、不挂 worker，
+  因此不要求 `node.childSpawn`。fork 前与握手后都现查：已启用、整包批准有效、owner 代次可用、声明且协议为 `acp`、
+  receipt `approvedHarnesses` 已批准；握手期间批准版本、目录或停止代次变化即杀进程拒绝。
+- **生命周期**：引擎进程计入 broker 的真实进程账本，`stop`（停用）与 `stopAndWait`（更新、卸载、换源）先结束它们再
+  替换目录；stop 后关闭启动闸，只有「该在场了」的统一入口（`spawnIfResident`：启用、更新／回滚完成、应用启动）重新放行，
+  回滚失败路径保持关闭。启动未产生进程时直接释放本次任务的工作目录保护，已产生进程时以实际退出为准。账号切换随
+  broker 一起销毁。stderr 截断后写插件日志（单段 4096、每进程 64K 字符）。
+- **可用状态**：插件页 `PUT /harnesses` 只发布元数据（`available`、slug `reason`、≤200 `message`、≤64 `version`），整体
+  覆盖、内容不变无副作用，未声明 403、格式错 400 不改原状态；按 owner 单独落盘（`ghost-published-harnesses`），不进插件
+  `/kv`，停用保留、卸载删除，读取时按当前清单重新校验。注册表只读这份记录，不调用插件；从未发布为 `unknown`。
+- **注册表**：`cindy-brain/pluginHarnesses.ts` 只列已启用、已批准、已声明、receipt 已批准且协议已支持的引擎，名称按
+  界面语言选取；花名册广播、语言切换与状态发布后重算，内容不变不通知。`spawn` 现算列表，不在列表或已发布不可用即拒绝。
+
+存量插件影响：无。旧 Host 装下、manifest 已声明 `harnesses` 的插件升级后照常启用，只是引擎不生效；回归见
+`ghostLocalInstallIdentity.test.ts`（旧 receipt 升级）与 `ghostInstallConsent.test.ts`。协议记录见
+[插件任务执行引擎](protocol-compatibility/plugin-harnesses.md)，作者契约见 `cindy-plugin-creator/references/plugin-harnesses.md` §4.6.4。
 
 ### 宿主统一模型选择器（新增接口，尚未发布）
 
