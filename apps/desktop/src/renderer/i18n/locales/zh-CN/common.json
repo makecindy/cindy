@@ -20022,6 +20022,7 @@
       "orderAmountCap": "单笔订单最多 {{amount}}",
       "totalDetail_other": "{{count}} 张 × {{amount}}",
       "pay": "去支付",
+      "refundNote": "礼品卡不能兑换现金。卡被领取或兑换后不退款；未领取的卡如需退款，请联系支持。",
       "cancel": "取消",
       "loadFailed": "暂时无法读取购买限制，请稍后重试。",
       "checkoutSubtitle_other": "礼品卡 {{amount}} × {{count}} · 付款成功后立即生成",

@@ -20102,6 +20102,7 @@
       "totalDetail_one": "{{count}} Karte × {{amount}}",
       "totalDetail_other": "{{count}} Karten × {{amount}}",
       "pay": "Weiter zur Zahlung",
+      "refundNote": "Geschenkkarten lassen sich nicht in Bargeld umtauschen. Eingelöste Karten werden nicht erstattet. Für eine noch nicht eingelöste Karte kannst du dich wegen einer Erstattung an den Support wenden.",
       "cancel": "Abbrechen",
       "loadFailed": "Die Kauflimits für Geschenkkarten konnten nicht geladen werden. Bitte versuche es später erneut.",
       "checkoutSubtitle_one": "Geschenkkarte {{amount}} × {{count}} · wird direkt nach der Zahlung erstellt",

@@ -20022,6 +20022,7 @@
       "orderAmountCap": "1 回の注文は {{amount}} まで",
       "totalDetail_other": "{{count}} 枚 × {{amount}}",
       "pay": "支払いへ進む",
+      "refundNote": "ギフトカードは現金に交換できません。受け取り済みまたは使用済みのカードは返金できません。未受け取りのカードの返金はサポートにお問い合わせください。",
       "cancel": "キャンセル",
       "loadFailed": "購入制限を読み込めませんでした。しばらくしてからお試しください。",
       "checkoutSubtitle_other": "ギフトカード {{amount}} × {{count}}・支払いが完了するとすぐに発行されます",

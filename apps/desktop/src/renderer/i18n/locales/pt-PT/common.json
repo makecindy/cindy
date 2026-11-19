@@ -20290,6 +20290,7 @@
       "totalDetail_many": "{{count}} cartões × {{amount}}",
       "totalDetail_other": "{{count}} cartões × {{amount}}",
       "pay": "Continuar para o pagamento",
+      "refundNote": "Os cartões de oferta não podem ser trocados por dinheiro. Os cartões utilizados não são reembolsáveis. Para pedir o reembolso de um cartão por utilizar, contacte o suporte.",
       "cancel": "Cancelar",
       "loadFailed": "Não foi possível carregar os limites de compra. Tente novamente mais tarde.",
       "checkoutSubtitle_one": "Cartão de oferta {{amount}} × {{count}} · emitido assim que o pagamento for concluído",

@@ -20022,6 +20022,7 @@
       "orderAmountCap": "주문 1건당 최대 {{amount}}",
       "totalDetail_other": "{{count}}장 × {{amount}}",
       "pay": "결제하기",
+      "refundNote": "기프트 카드는 현금으로 바꿀 수 없습니다. 받았거나 사용한 카드는 환불되지 않습니다. 받지 않은 카드를 환불하려면 지원팀에 문의하세요.",
       "cancel": "취소",
       "loadFailed": "구매 한도를 불러오지 못했습니다. 잠시 후 다시 시도하세요.",
       "checkoutSubtitle_other": "기프트 카드 {{amount}} × {{count}} · 결제가 완료되면 바로 발급됩니다",

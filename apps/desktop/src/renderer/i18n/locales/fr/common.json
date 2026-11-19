@@ -20290,6 +20290,7 @@
       "totalDetail_many": "{{count}} cartes × {{amount}}",
       "totalDetail_other": "{{count}} cartes × {{amount}}",
       "pay": "Continuer vers le paiement",
+      "refundNote": "Les cartes cadeaux ne peuvent pas être échangées contre de l’argent. Une carte récupérée ou utilisée n’est pas remboursable. Pour demander le remboursement d’une carte non récupérée, contactez le support.",
       "cancel": "Annuler",
       "loadFailed": "Impossible de charger les limites d’achat. Réessayez plus tard.",
       "checkoutSubtitle_one": "Carte cadeau {{amount}} × {{count}} · émise dès le paiement réussi",

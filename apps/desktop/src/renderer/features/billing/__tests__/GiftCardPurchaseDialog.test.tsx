@@ -107,6 +107,13 @@ describe('GiftCardPurchaseDialog', () => {
     expect(screen.getByText(/billing\.giftCardPurchase\.orderAmountCap/)).toBeTruthy();
   });
 
+  it('states the refund rule before payment', async () => {
+    api.getGiftCardPurchasePolicy.mockResolvedValue(policy);
+    open();
+    await screen.findByText(/billing\.giftCardPurchase\.quantityHint/);
+    expect(screen.getByText('billing.giftCardPurchase.refundNote')).toBeTruthy();
+  });
+
   it('blocks payment once the 24-hour limit is used up', async () => {
     api.getGiftCardPurchasePolicy.mockResolvedValue({ ...policy, remaining: 0 });
     open();

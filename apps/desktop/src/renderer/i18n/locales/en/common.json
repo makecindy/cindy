@@ -20102,6 +20102,7 @@
       "totalDetail_one": "{{count}} card × {{amount}}",
       "totalDetail_other": "{{count}} cards × {{amount}}",
       "pay": "Continue to Payment",
+      "refundNote": "Gift cards can't be exchanged for cash. Claimed or redeemed cards are non-refundable. To request a refund for a card that hasn't been claimed, contact support.",
       "cancel": "Cancel",
       "loadFailed": "Couldn’t load the gift card purchase limits. Try again later.",
       "checkoutSubtitle_one": "Gift card {{amount}} × {{count}} · Issued as soon as payment succeeds",

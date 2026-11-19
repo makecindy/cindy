@@ -20022,6 +20022,7 @@
       "orderAmountCap": "單筆訂單最多 {{amount}}",
       "totalDetail_other": "{{count}} 張 × {{amount}}",
       "pay": "前往付款",
+      "refundNote": "禮品卡不能兌換現金。卡被領取或兌換後不退款；未領取的卡如需退款，請聯絡支援人員。",
       "cancel": "取消",
       "loadFailed": "暫時無法讀取購買限制，請稍後重試。",
       "checkoutSubtitle_other": "禮品卡 {{amount}} × {{count}} · 付款成功後立即產生",

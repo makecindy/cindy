@@ -20290,6 +20290,7 @@
       "totalDetail_many": "{{count}} tarjetas × {{amount}}",
       "totalDetail_other": "{{count}} tarjetas × {{amount}}",
       "pay": "Continuar al pago",
+      "refundNote": "Las tarjetas de regalo no se pueden cambiar por dinero. Las tarjetas canjeadas no se reembolsan. Para solicitar el reembolso de una tarjeta sin canjear, ponte en contacto con el soporte.",
       "cancel": "Cancelar",
       "loadFailed": "No se pudieron cargar los límites de compra. Vuelve a intentarlo más tarde.",
       "checkoutSubtitle_one": "Tarjeta de regalo {{amount}} × {{count}} · se emite en cuanto se complete el pago",

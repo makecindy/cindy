@@ -408,6 +408,11 @@ export function GiftCardPurchaseDialog({
                   </Button>
                 </div>
               )}
+
+              {/* 付款前写明退款规则：已领取或兑换的卡不退，未领取的卡由客服按规则处理（服务端不限时限）。 */}
+              <p className="text-12 text-[var(--text-secondary)]">
+                {t('billing.giftCardPurchase.refundNote')}
+              </p>
             </div>
           </div>
 
