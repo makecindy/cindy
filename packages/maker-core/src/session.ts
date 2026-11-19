@@ -1842,7 +1842,9 @@ export class Session {
     try {
       // Emit only in the async teardown phase: terminal listeners may themselves
       // close transports, so they must not run before the host's sync tree sweep.
-      if (teardown.reason === 'app-quit' && this.hasUnsettledTurn()) {
+      // Only Claude's host-reaped process needs this terminal classification.
+      // Other adapters retain their own teardown and usage-settlement contract.
+      if (teardown.reason === 'app-quit' && this.agentKind === 'claude-code' && this.hasUnsettledTurn()) {
         const usage = this.handle.getPendingTurnUsage?.();
         this.fanOutEvent({ type: 'done', source: this.agentKind,
           data: { status: 'cancelled', ...(usage ? { usage } : {}) } });

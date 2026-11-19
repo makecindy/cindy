@@ -4894,18 +4894,18 @@ it.each(['unpublished', 'published'] as const)(
 // #9323: the sync quit hook must fence persistent tasks and application
 // sessions while leaving every transport untouched for the Windows tree reaper.
 describe('Maker synchronous app quit reservation', () => {
-  it('fences both session registries before process cleanup and cancels them during shutdown', async () => {
+  it.each(['claude-code', 'codex'] as const)('fences both %s registries and preserves adapter shutdown terminals', async (agentKind) => {
     const handles: AgentSessionHandle[] = [];
     const maker = new Maker({ storage: createStorage(), logger: createLogger(),
-      agents: { codex: createAgent(async () => {
-        const handle = createHandle({ id: `quit-${handles.length}` });
+      agents: { [agentKind]: createAgent(async () => {
+        const handle = createHandle({ id: `quit-${handles.length}`, agentKind });
         handle.close = vi.fn(async () => {});
         handle.abort = vi.fn(async () => {});
         handles.push(handle);
         return handle;
-      }) } });
-    const task = await maker.createSession({ id: 'quit-task', agentKind: 'codex', workingDir: '/repo', model: 'm' });
-    const client = await maker.startLocalAgentSession('codex', { sessionId: 'quit-client', workingDir: '/repo', model: 'm',
+      }, agentKind) } });
+    const task = await maker.createSession({ id: 'quit-task', agentKind, workingDir: '/repo', model: 'm' });
+    const client = await maker.startLocalAgentSession(agentKind, { sessionId: 'quit-client', workingDir: '/repo', model: 'm',
       [LOCAL_AGENT_CLIENT]: { url: 'http://127.0.0.1:1', token: 'fixture', hostToolsOnly: true } });
     const seen: AgentEvent[] = [];
     task.onEvent(event => seen.push(event));
@@ -4919,13 +4919,13 @@ describe('Maker synchronous app quit reservation', () => {
       expect(handle.close).not.toHaveBeenCalled();
       expect(handle.abort).not.toHaveBeenCalled();
     }
-    await expect(maker.createSession({ id: 'too-late', agentKind: 'codex', workingDir: '/repo', model: 'm' }))
+    await expect(maker.createSession({ id: 'too-late', agentKind, workingDir: '/repo', model: 'm' }))
       .rejects.toThrow('shutting down');
     await maker.shutdown({ reason: 'app-quit' });
     for (const handle of handles) expect(handle.close).toHaveBeenCalledOnce();
-    expect(seen.map(event => [event.type, event.data])).toEqual([
+    expect(seen.map(event => [event.type, event.data])).toEqual(agentKind === 'claude-code' ? [
       ['done', { status: 'cancelled' }], ['done', { status: 'cancelled' }],
-    ]);
+    ] : []);
     expect(maker.listActiveSessions()).toEqual([]);
   });
 });
