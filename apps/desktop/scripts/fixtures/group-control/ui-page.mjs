@@ -142,11 +142,11 @@ export default {
       data: { ...base, division: 'auto' },
     },
     settings: {
-      about: 'Single-speaker group settings: reply mode, organizer, project folder and 分工交接 (off) as before; no speaking mode',
+      about: 'Group settings retain reply mode and project folder',
       data: { ...base, arrangement: 'running', settings: true },
     },
     division: {
-      about: 'Single-speaker group: 「+」→ 安排分工 is offered again; tagged, the composer says steps may be written out',
+      about: 'The composer offers attachments without a division mode',
       data: { ...base, arrangement: 'done' },
     },
     'thread-unread': {
@@ -716,10 +716,9 @@ export default {
       const replyMode = drawer.getByRole('combobox', { name: await ui.t('bots.groupChat.settings.replyMode'), exact: true });
       await replyMode.waitFor();
       assert.equal(await replyMode.innerText(), await ui.t('bots.groupChat.settings.replyModeAll'));
-      // Reply mode and the 分工 settings stay; one teammate at a time leaves no speaking mode (bot-group-chat.md §4.0).
-      assert.equal(await drawer.getByText(await ui.t('bots.groupChat.settings.speakingMode'), { exact: true }).count(), 0, 'speakingMode');
-      for (const key of ['bots.groupChat.organizer', 'bots.groupChat.server.settings.projectFolder', 'bots.groupChat.plan.autoContinue'])
-        assert.ok(await drawer.getByText(await ui.t(key), { exact: true }).count() > 0, key);
+      for (const key of ['bots.groupChat.settings.speakingMode', 'bots.groupChat.organizer', 'bots.groupChat.plan.autoContinue'])
+        assert.equal(await drawer.getByText(await ui.t(key), { exact: true }).count(), 0, key);
+      await drawer.getByText(await ui.t('bots.groupChat.server.settings.projectFolder'), { exact: true }).first().waitFor();
       await ui.capture('manage');
       return;
     }
@@ -734,9 +733,10 @@ export default {
     }
     if (ui.case === 'division') {
       await page.getByRole('button', { name: '更多操作' }).click();
-      await page.getByRole('menuitem', { name: /安排分工/ }).click();
-      await page.waitForFunction(() => document.querySelector('textarea')?.getAttribute('placeholder')?.startsWith('写好谁做什么'));
-      await ui.capture('tagged');
+      await page.getByRole('menuitem').first().waitFor();
+      assert.equal(await page.getByRole('menuitem').count(), 1);
+      assert.equal(await page.getByRole('menuitem', { name: /安排分工/ }).count(), 0);
+      await ui.capture('attachments');
       return;
     }
     if (ui.case === 'work-mentioned') {

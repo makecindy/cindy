@@ -875,7 +875,7 @@
   },
   "providerGroupRebalance": {
     "title": "¿Continuar en {{label}}?",
-    "body": "Para usar la cuota de cada cuenta de manera uniforme, envía este mensaje desde {{label}} ({{quota}}). Los últimos mensajes y un resumen se conservan; es posible que se pierdan detalles más antiguos.",
+    "body": "Para usar la cuota de cada cuenta de manera uniforme, envía este mensaje desde {{label}} ({{quota}}). Se trasladará contexto de esta conversación. Es posible que se condensen los mensajes anteriores, y el historial completo seguirá disponible.",
     "quota": "{{left}}% restante",
     "quotaReset": "{{left}}% restante · se reinicia en {{reset}}",
     "confirm": "Cambiar",

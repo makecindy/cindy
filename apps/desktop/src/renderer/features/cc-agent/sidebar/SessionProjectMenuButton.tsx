@@ -1,5 +1,6 @@
 import { Tip } from '@/components/ui/tooltip';
-import { useState } from 'react';
+import { setHeaderProjectMenu, useHeaderProjectMenu } from '@/state/headerProjectMenu';
+import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   projectAliasComparisonKey,
@@ -17,7 +18,7 @@ import { ProjectSettingsDialog, projectHostKey } from './ProjectSettingsDialog';
 import { ResolvedProjectIcon } from './ResolvedProjectIcon';
 
 /** Keep the task's owning project identity, including worktree and remote sessions. */
-export function SessionProjectSettingsButton({
+export function SessionProjectMenuButton({
   session,
   disabled,
 }: {
@@ -25,30 +26,35 @@ export function SessionProjectSettingsButton({
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const menu = useHeaderProjectMenu();
+  useEffect(() => () => setHeaderProjectMenu(null), [session.id]);
   const project = useSessionProjectNode(session);
   if (!project) return null;
   return (
-    <>
-      <Tip text={t('projectSettings.title')}>
-        <button
-          type="button"
-          aria-label={t('projectSettings.title')}
-          disabled={disabled}
-          onClick={() => setOpen(true)}
-          style={WINDOW_NO_DRAG_STYLE}
-          className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
-        >
-          <ResolvedProjectIcon
-            directory={project.workingDir}
-            remoteHostId={session.remoteHostId}
-            deviceId={session.deviceLinkDeviceId}
-            size={20}
-          />
-        </button>
-      </Tip>
-      {open && <ProjectSettingsDialog project={project} onClose={() => setOpen(false)} />}
-    </>
+    <Tip text={t('ccAgent.sidebar.projectAction.menu', { name: project.displayName })}>
+      <button
+        type="button"
+        aria-label={t('ccAgent.sidebar.projectAction.menu', { name: project.displayName })}
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={menu?.project.projectKey === project.projectKey}
+        onClick={(event) =>
+          setHeaderProjectMenu({
+            anchor: event.currentTarget,
+            project,
+          })
+        }
+        style={WINDOW_NO_DRAG_STYLE}
+        className="mr-1 inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50"
+      >
+        <ResolvedProjectIcon
+          directory={project.workingDir}
+          remoteHostId={session.remoteHostId}
+          deviceId={session.deviceLinkDeviceId}
+          size={20}
+        />
+      </button>
+    </Tip>
   );
 }
 

@@ -14,7 +14,7 @@ export default {
   entry: './teammates-fixture.tsx',
   viewport: { width: 800, height: 600 },
   real: 'TeammatesSection rows, PinnedSection display sorting and menu, single/multi-column SortableJS drag controls, current-chat preview, show-all/show-less controls, avatar strip, theme and translations',
-  notCovered: 'Roster loading, cloud/device connections, create/delete menus, message delivery, pinned drag persistence and collapsed RailNav',
+  notCovered: 'Real database readiness and roster reads, cloud/device connections, create/delete menus, message delivery, pinned drag persistence and collapsed RailNav',
   stubs: {
     'src/renderer/features/cc-agent/sidebar/sessionWorktreeInfo': { partial: 'export const useTaskInfoWorktree=()=>null;' },
     'src/renderer/contexts/AuthContext': { partial: 'export const useAuth=()=>({dataOwnerId:"ui-fixture"});' },
@@ -28,6 +28,10 @@ export default {
     'src/renderer/features/bots/BotDeleteDialog': 'export const BotDeleteDialog=()=>null;',
   },
   cases: {
+    'startup-read-pending': {
+      about: '#9706: initial read is pending; show loading instead of implying no buddies',
+      data: { profiles: [], remoteBots: [], route: '/bots', loadState: 'pending' },
+    },
     ...Object.fromEntries(['text', 'list', 'card', 'card-columns'].map(mode => [`pinned-sort-drag-${mode}`, {
       about: 'Recent-activity pins cannot be reordered; switching back restores the manual order and enables dragging',
       storage: { 'sidebar.cardMode': mode === 'card-columns' ? 'card' : mode },
@@ -234,6 +238,12 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'startup-read-pending') {
+      assert.equal(await page.getByRole('status').innerText(), await ui.t('ccAgent.common.loading'));
+      assert.equal(await page.getByRole('status').isVisible(), true);
+      assert.equal(await page.getByRole('alert').count(), 0);
+      return;
+    }
     if (ui.case.startsWith('pinned-sort-drag-')) {
       const subject = page.locator('[data-pinned-reorder-count]');
       if (ui.case === 'pinned-sort-drag-card') assert.equal(await subject.locator('[data-card-id]').count(), 0, 'single-column cards use SortableList');

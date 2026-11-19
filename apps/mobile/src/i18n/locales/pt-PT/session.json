@@ -875,7 +875,7 @@
   },
   "providerGroupRebalance": {
     "title": "Continuar em {{label}}?",
-    "body": "Para usar a quota de todas as contas de forma equilibrada, envie esta mensagem a partir de {{label}} ({{quota}}). As últimas mensagens e um resumo são transferidos; os detalhes mais antigos podem perder-se.",
+    "body": "Para usar a quota de todas as contas de forma equilibrada, envie esta mensagem a partir de {{label}} ({{quota}}). O contexto desta conversa será levado para o outro computador. As mensagens mais antigas poderão ser condensadas e o histórico completo continuará disponível.",
     "quota": "{{left}}% restante",
     "quotaReset": "{{left}}% restante · reposição em {{reset}}",
     "confirm": "Mudar",

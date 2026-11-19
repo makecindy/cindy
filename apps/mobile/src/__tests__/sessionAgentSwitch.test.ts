@@ -140,40 +140,20 @@ describe('remote Agent location (Agent runs on another computer)', () => {
     })).toBe('device-office-pc');
   });
 
-  it('switches directly inside the same computer', () => {
-    // 被控电脑上的任务选被控电脑的模型;另一台电脑上的任务选那台的模型。
-    expect(resolveAgentLocationPick({ session: localSession, intent: null, catalogDeviceId: null }))
-      .toEqual({ relocateTo: undefined, needsConfirm: false });
-    expect(resolveAgentLocationPick({
-      session: remoteSession, intent: null, catalogDeviceId: 'device-office-pc',
-    })).toEqual({ relocateTo: undefined, needsConfirm: false });
+  it.each([
+    { session: localSession, catalogDeviceId: null },
+    { session: remoteSession, catalogDeviceId: 'device-office-pc' },
+  ])('omits the position when selecting from the task’s current computer', (input) => {
+    expect(resolveAgentLocationPick({ ...input, movable: false })).toEqual({});
   });
 
-  it('asks before moving the Agent to another computer and carries the new location', () => {
-    expect(resolveAgentLocationPick({
-      session: localSession, intent: null, catalogDeviceId: 'device-studio-mac',
-    })).toEqual({ relocateTo: 'device-studio-mac', needsConfirm: true });
-    // 改回被控电脑同样是换电脑(null = 被控电脑)。
-    expect(resolveAgentLocationPick({ session: remoteSession, intent: null, catalogDeviceId: null }))
-      .toEqual({ relocateTo: null, needsConfirm: true });
-    expect(resolveAgentLocationPick({
-      session: remoteSession, intent: null, catalogDeviceId: 'device-studio-mac',
-    })).toEqual({ relocateTo: 'device-studio-mac', needsConfirm: true });
-  });
-
-  it('does not ask again within an already confirmed move, nor when undoing it', () => {
-    // 已确认换到工作室 Mac:在那台的目录里改选,继续带位置、不再问。
-    expect(resolveAgentLocationPick({
-      session: localSession, intent: intentTo('device-studio-mac'), catalogDeviceId: 'device-studio-mac',
-    })).toEqual({ relocateTo: 'device-studio-mac', needsConfirm: false });
-    // 选回任务当前所在电脑 = 撤销挂着的换位置:不带位置、不问。
-    expect(resolveAgentLocationPick({
-      session: localSession, intent: intentTo('device-studio-mac'), catalogDeviceId: null,
-    })).toEqual({ relocateTo: undefined, needsConfirm: false });
-    // 挂着换位置时又换到第三台电脑:要再问一次。
-    expect(resolveAgentLocationPick({
-      session: localSession, intent: intentTo('device-studio-mac'), catalogDeviceId: 'device-office-pc',
-    })).toEqual({ relocateTo: 'device-office-pc', needsConfirm: true });
+  it.each([
+    { session: localSession, catalogDeviceId: 'device-studio-mac' },
+    { session: remoteSession, catalogDeviceId: null },
+    { session: remoteSession, catalogDeviceId: 'device-studio-mac' },
+  ])('only emits a move when the task can change computers', (input) => {
+    expect(resolveAgentLocationPick({ ...input, movable: true })).toEqual({ agentDeviceId: input.catalogDeviceId });
+    expect(resolveAgentLocationPick({ ...input, movable: false })).toBeNull();
   });
 
   it('reads the boundary location only when the Agent changed computers', () => {

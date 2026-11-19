@@ -139,7 +139,7 @@ export function captureNewSessionOwner(
 export interface NewSessionDraftEditTarget {
   firstMessageRef: RefObject<string>;
   creatingRef: RefObject<boolean>;
-  editRecoveredDraft: (patch: { firstMessage: string }) => unknown;
+  editRecoveredDraft: (patch: { firstMessage: string; selectedSkill?: NewSessionDraft["selectedSkill"] }) => unknown;
   voiceDictionaryLearningTrackerRef: RefObject<{
     inspectDraft(text: string): void;
   } | null>;
@@ -153,8 +153,12 @@ export function patchNewSessionDraft(
 ): void {
   if (patch.firstMessage !== undefined) {
     target.firstMessageRef.current = patch.firstMessage;
-    if (!target.creatingRef.current)
-      target.editRecoveredDraft({ firstMessage: patch.firstMessage });
+    if (!target.creatingRef.current) {
+      target.editRecoveredDraft({
+        firstMessage: patch.firstMessage,
+        selectedSkill: patch.selectedSkill,
+      });
+    }
     target.voiceDictionaryLearningTrackerRef.current?.inspectDraft(
       patch.firstMessage,
     );

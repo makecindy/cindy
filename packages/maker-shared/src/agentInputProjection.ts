@@ -675,10 +675,14 @@ function formatReference(reference: AgentInputReference): string {
       '[/Referenced todo]',
     ].join('\n');
   }
+  // Remote project links store the sidebar identity. Its prefix identifies the
+  // host and is not part of the native working directory.
+  const scoped = /^(device|remote):([^:]+):([\s\S]+)$/.exec(reference.workingDir);
   return [
     '[Referenced project]',
     `Name: ${quotedMetadata(oneLine(reference.name))}`,
-    `Working directory: ${quotedMetadata(reference.workingDir)}`,
+    ...(scoped ? [`Project key: ${quotedMetadata(reference.workingDir)}`] : []),
+    `Working directory: ${quotedMetadata(scoped?.[3] ?? reference.workingDir)}`,
     '[/Referenced project]',
   ].join('\n');
 }

@@ -4787,8 +4787,9 @@ export default async function cindyBridge(piApi: any) {
   const runtimeRequestModel = runtimeModelRouting.requestModel;
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
-  const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
-    : (() => {
+  // Pi action APIs are unavailable while loading extensions. Reuse the launch
+  // file snapshot for bash configuration and the legacy inspection fallback.
+  const initialNativeSettings = (() => {
       try {
         return JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
       } catch (error) {
@@ -4968,6 +4969,11 @@ export default async function cindyBridge(piApi: any) {
     // PI_SESSION_FILE 会暴露 agentHome，继而让一次获批的 shell 定位并篡改
     // permission file；其余 PI_SESSION_* 元数据对完成编码任务也不是必需能力。
     exposeSessionEnvironment: false,
+    // Keep valid user values byte-for-byte, as the host settings passthrough does.
+    shellPath: typeof initialNativeSettings?.shellPath === 'string' && initialNativeSettings.shellPath.trim()
+      ? initialNativeSettings.shellPath : undefined,
+    commandPrefix: typeof initialNativeSettings?.shellCommandPrefix === 'string' && initialNativeSettings.shellCommandPrefix.trim()
+      ? initialNativeSettings.shellCommandPrefix : undefined,
     spawnHook: ({ command, cwd, env }) => ({
       command,
       cwd,

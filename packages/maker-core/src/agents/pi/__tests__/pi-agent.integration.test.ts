@@ -3264,6 +3264,42 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
+  // #9705, integration: settings passthrough alone did not prove that Cindy's
+  // replacement tool consumed the configuration. Use a real Pi/bridge/shell.
+  it.skipIf(process.platform === 'win32').each([false, true])('executes bash with the saved shell path and command prefix (delegated: %s)', { timeout: 120_000 }, async delegated => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pi-shell-settings-'));
+    const home = path.join(root, 'agent');
+    mkdirSync(home);
+    writeFileSync(path.join(home, 'settings.json'), JSON.stringify({
+      shellPath: '/bin/sh', shellCommandPrefix: 'export CINDY_SHELL_PREFIX=prefix_applied',
+    }));
+    const deps = buildDeps();
+    deps.resolvePiAgentHome = () => home;
+    try {
+      scriptedResponses.length = 0;
+      scriptedResponses.push(
+        ...(delegated ? [anthropicToolUseBody('subagent', { agent: 'worker', task: 'check the shell configuration' })] : []),
+        anthropicToolUseBody('bash', { command: 'printf "PREFIX=%s EXEC_SHELL=%s" "$CINDY_SHELL_PREFIX" "$0"' }),
+        anthropicStreamBody('shell settings finished'),
+        ...(delegated ? [anthropicStreamBody('parent settings finished')] : []),
+      );
+      const before = seenRequests.length;
+      const result = await runPermissionTurn({ sessionId: 'shell-settings', workingDir: root,
+        permissionMode: 'bypassPermissions', resolverBehavior: 'deny', deps });
+      const followUp = seenRequests.slice(before).flatMap(request => {
+        const body = JSON.parse(request.body);
+        return (body.messages ?? []).flatMap((message: { content?: unknown }) => Array.isArray(message.content)
+          ? message.content.filter(block => block.type === 'tool_result').map(block => JSON.stringify(block.content)) : []);
+      }).join('\n');
+      expect(followUp).toContain('PREFIX=prefix_applied');
+      expect(followUp).toContain('EXEC_SHELL=/bin/sh');
+      expect(result.finalText).toContain(delegated ? 'parent settings finished' : 'shell settings finished');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      scriptedResponses.length = 0;
+    }
+  });
+
   it(
     'explicit bash timeout returns Pi native timeout error and continues the turn',
     { timeout: 60_000 },

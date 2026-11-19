@@ -870,7 +870,7 @@
   },
   "providerGroupRebalance": {
     "title": "Auf {{label}} fortsetzen?",
-    "body": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",
+    "body": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Der Kontext aus diesem Chat wird übernommen. Ältere Nachrichten können verdichtet werden. Der vollständige Chatverlauf bleibt verfügbar.",
     "quota": "{{left}} % übrig",
     "quotaReset": "{{left}} % übrig · Zurücksetzung in {{reset}}",
     "confirm": "Wechseln",

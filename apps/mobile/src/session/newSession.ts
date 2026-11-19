@@ -1,3 +1,5 @@
+import { composerSlashInvocationName, leadingSlashInvocation } from '@cindy/maker-shared/composer-palette';
+import { buildComposerPaletteCacheKey } from './composerPaletteCache';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
@@ -13,6 +15,7 @@ import {
 import { i18n } from '@/i18n';
 import type {
   CreateSessionOptions,
+  MobileMakerTransport,
   RemoteDirectoryDrive,
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
@@ -61,6 +64,7 @@ export interface NewSessionDraft {
   permissionMode: string;
   fastMode: boolean | 'ultrafast';
   firstMessage: string;
+  selectedSkill?: { name: string; invocation: string; context: string } | null;
   extraDirs?: string[];
   /**
    * 远程 Agent:Agent 在哪台电脑运行——同账号另一台电脑的 deviceId,或别人分享给被控电脑的
@@ -68,6 +72,45 @@ export interface NewSessionDraft {
    * (见 applyRemoteAgentPick),模型与来源随之属于那台电脑的目录。
    */
   agentDeviceId?: string | null;
+}
+
+export async function lookupMobileSkillInvocation(
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+  agentKind: NewSessionAgentKind,
+  workingDir: string,
+  name: string,
+): Promise<string> {
+  const result = await maker.listAgentSkills(agentKind, { ...(workingDir ? { workingDir } : {}) });
+  if (!result.success) throw new Error(result.error || 'Skill list unavailable');
+  const match = result.skills?.find(item => item.kind === 'agent-skill' && item.name === name && item.enabled !== false);
+  return match ? composerSlashInvocationName(match) : name;
+}
+
+/** Resolve a menu choice against the final engine when preparing delivery. */
+export async function resolveNewSessionSkillDraft(
+  draft: NewSessionDraft,
+  deviceId: string,
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+): Promise<NewSessionDraft> {
+  const skill = draft.selectedSkill;
+  if (!skill) return draft;
+  const token = leadingSlashInvocation(draft.firstMessage);
+  if (!token || (token.name !== skill.name && token.name !== skill.invocation)) return draft;
+  const workingDir = draft.workspaceKind === 'project' ? draft.workingDir.trim() : '';
+  const context = buildComposerPaletteCacheKey(draft.agentDeviceId || deviceId, draft.agentKind, workingDir);
+  let invocation = skill.invocation;
+  if (context !== skill.context) {
+    // The controlled computer's catalog describes only its own engine.
+    invocation = skill.name;
+    if (!draft.agentDeviceId) {
+      invocation = await lookupMobileSkillInvocation(maker, draft.agentKind, workingDir, skill.name);
+    }
+  }
+  return {
+    ...draft,
+    firstMessage: draft.firstMessage.slice(0, token.start) + '/' + invocation + draft.firstMessage.slice(token.end),
+    selectedSkill: { ...skill, context, invocation },
+  };
 }
 
 /**

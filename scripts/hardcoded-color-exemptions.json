@@ -239,5 +239,63 @@
     "object": "SCREENSHOT_OVERLAY"
    }
   ]
+ },
+ {
+  "glob": "apps/desktop/src/renderer/styles/globals.css",
+  "reason": "输入框停止按钮的 AI 工作发光（移植开源 border-beam 小尺寸样式）的八个色相与高光：只表示「AI 正在工作」，不是界面语义色；DESIGN.md §2「Composer Stop working glow」与 §14.4 登记（2026-11-18 负责人确认，Design Lab send-button v5）",
+  "owner": "composer-send",
+  "reviewDate": "2027-05-18",
+  "matches": [
+   {
+    "value": "#32c850",
+    "before": "--beam-green:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#1eb9aa",
+    "before": "--beam-teal:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#ff7828",
+    "before": "--beam-orange:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#6446ff",
+    "before": "--beam-violet:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#f032b4",
+    "before": "--beam-pink:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#b428f0",
+    "before": "--beam-purple:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#288cff",
+    "before": "--beam-blue:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#ff3264",
+    "before": "--beam-red:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#ffffff",
+    "before": "--beam-light:\\s*",
+    "selector": ".composer-send-beam"
+   },
+   {
+    "value": "#000000",
+    "before": "--beam-light:\\s*",
+    "selector": ".dark .composer-send-beam"
+   }
+  ]
  }
 ]
