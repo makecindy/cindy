@@ -250,8 +250,9 @@ it('does not reuse an already fetched source after an owner change and rerender'
   let view!: ReturnType<typeof render>;
   await act(async () => { view = render(<Host />); });
   expect(screen.getByText('previous owner source')).toBeTruthy();
+  h.around.mockResolvedValue([]); // The new owner has no source row.
   setDataOwnerGeneration('another-owner');
-  view.rerender(<Host />);
+  await act(async () => { view.rerender(<Host />); });
   expect(screen.queryByText('previous owner source')).toBeNull();
 });
 
@@ -434,4 +435,65 @@ it.each(['resolve', 'reject'])('history navigation invalidates a pending topic t
   await act(async () => { fireEvent.click(screen.getByText('forward')); });
   expect(screen.getByTestId('url').textContent).toBe('');
   expect(screen.queryByTestId('session')).toBeNull();
+});
+
+// §8.6: invalidation bursts must not multiply an already pending exact-root IPC.
+it.each(['resolve', 'reject'])('coalesces history invalidations until the pending source read %ss', async outcome => {
+  h.snapshots.set('chat', { messages: [] });
+  let finish!: (rows: unknown[]) => void;
+  let fail!: (reason: Error) => void;
+  h.around.mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+  await act(async () => { render(<Host />); });
+  for (let i = 0; i < 4; i++) {
+    await act(async () => { h.historyEpoch++; h.historyListeners.forEach(fn => fn()); });
+  }
+  expect(h.around).toHaveBeenCalledTimes(1);
+  h.around.mockResolvedValueOnce([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content: 'current source' }]);
+  await act(async () => {
+    if (outcome === 'resolve') finish([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content: 'invalidated source' }]);
+    else fail(new Error('invalidated read failed'));
+  });
+  expect(h.around).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText('invalidated source')).toBeNull();
+  expect(screen.getByText('current source')).toBeTruthy();
+});
+
+it.each(['hidden', 'unmount', 'owner', 'cached'])('drops or defers a queued source refresh after %s', async event => {
+  h.snapshots.set('chat', { messages: [] });
+  let finish!: (rows: unknown[]) => void;
+  h.around.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const view = await act(async () => render(<Host />));
+  await act(async () => { h.historyEpoch++; h.historyListeners.forEach(fn => fn()); });
+  expect(h.around).toHaveBeenCalledTimes(1);
+  if (event === 'hidden') act(() => { h.hiddenListeners.forEach(fn => fn(true)); });
+  else if (event === 'unmount') view.unmount();
+  else if (event === 'owner') setDataOwnerGeneration('changed-owner');
+  else act(() => {
+    h.snapshots.set('chat', { messages: [{ clientId: 'old', role: 'assistant', content: 'cached source' }] });
+    h.historyListeners.forEach(fn => fn());
+  });
+  await act(async () => { finish([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content: 'stale source' }]); });
+  expect(h.around).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText('stale source')).toBeNull();
+  if (event === 'hidden') {
+    h.around.mockResolvedValueOnce([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content: 'visible source' }]);
+    await act(async () => { h.hiddenListeners.forEach(fn => fn(false)); });
+    expect(h.around).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('visible source')).toBeTruthy();
+  } else if (event === 'cached') expect(screen.getByText('cached source')).toBeTruthy();
+});
+
+it('does not make a new owner wait for the previous owner pending source read', async () => {
+  h.snapshots.set('chat', { messages: [] });
+  let finish!: (rows: unknown[]) => void;
+  h.around.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const view = await act(async () => render(<Host />));
+  h.around.mockResolvedValueOnce([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content: 'new owner source' }]);
+  setDataOwnerGeneration('new-owner');
+  await act(async () => { view.rerender(<Host />); });
+  expect(h.around).toHaveBeenCalledTimes(2);
+  expect(screen.getByText('new owner source')).toBeTruthy();
+  await act(async () => { finish([{ sessionId: 'chat', clientId: 'old', role: 'assistant', content: 'old owner source' }]); });
+  expect(screen.queryByText('old owner source')).toBeNull();
+  expect(screen.getByText('new owner source')).toBeTruthy();
 });

@@ -2,13 +2,14 @@
  * 私聊话题与群聊复用 ThreadPanel 和根消息行；原文放在话题 Session 的消息滚动区内
  * （回复、工具进度、确认、停止都在里面），所以这里不另做一套消息列表。
  */
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { aroundMessagesByClientIdFor } from '@/lib/makerTransport';
+import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { isWindowHidden } from '@/lib/hiddenAnimationGate';
 import { parseUserContent } from '@/lib/imageRef';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -52,22 +53,28 @@ function useRootMessage(rootSessionId: string, rootClientId: string) {
     () => makerChatStore.getMessageHistoryEpoch(rootSessionId),
   );
   const message = snapshot?.messages?.find((row) => row.clientId === rootClientId);
+  const owner = getDataOwnerGeneration();
+  // Keep the existing coordinator across history epochs, not across roots/owners.
+  const refresh = useMemo(() => createCoalescedRefresh<void>(), [rootSessionId, rootClientId, owner]);
   const [loaded, setLoaded] = useState<(RootMessage & { sessionId: string;
     owner: ReturnType<typeof getDataOwnerGeneration>; historyEpoch: number }) | null>(null);
   useEffect(() => {
     if (message) return;
     let cancelled = false;
-    const owner = getDataOwnerGeneration();
     setLoaded(null);
     let started = false;
     let windowHidden = isWindowHidden();
-    // One read per root/history generation, deferred while hidden. A completed read
-    // (including an unavailable root) survives hide/show until the history changes.
+    // Invalidate display immediately, but let the coordinator finish the active
+    // read before the latest epoch. Recheck visibility/lifecycle at actual start.
+    const canRead = () => !cancelled && !windowHidden && document.visibilityState !== 'hidden'
+      && isDataOwnerGenerationCurrent(owner)
+      && makerChatStore.getMessageHistoryEpoch(rootSessionId) === historyEpoch;
     const load = () => {
-      if (started || windowHidden || document.visibilityState === 'hidden'
-        || !isDataOwnerGenerationCurrent(owner)) return;
+      if (started || !canRead()) return;
       started = true;
-      void aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 }).then(rows => {
+      void refresh(async () => {
+        if (!canRead()) { started = false; return; }
+        const rows = await aroundMessagesByClientIdFor(rootSessionId, rootClientId, { radius: 0 });
         if (cancelled || !isDataOwnerGenerationCurrent(owner)
           || makerChatStore.getMessageHistoryEpoch(rootSessionId) !== historyEpoch) return;
         const row = rows.find(candidate => candidate.sessionId === rootSessionId && candidate.clientId === rootClientId);
@@ -92,7 +99,7 @@ function useRootMessage(rootSessionId: string, rootClientId: string) {
       document.removeEventListener('visibilitychange', load);
       offHidden?.();
     };
-  }, [message, rootClientId, rootSessionId, historyEpoch]);
+  }, [message, rootClientId, rootSessionId, historyEpoch, owner, refresh]);
   if (message) return message.role === 'user' || message.role === 'assistant' ? message : null;
   return loaded?.sessionId === rootSessionId && loaded.clientId === rootClientId
     && loaded.historyEpoch === historyEpoch
