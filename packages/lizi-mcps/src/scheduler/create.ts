@@ -306,6 +306,11 @@ export function registerScheduleCreateTool(
             stabilizeCommand: deps.hookScript.stabilizeCommand,
           });
         }
+        const caller = getSessionContext?.().sessionId;
+        if (caller && deps.getSessionProject && !input.targetSessionId && input.workingDir && input.workspaceKind !== 'dialogue') {
+          const source = await deps.getSessionProject(caller);
+          if (!source.remoteHostId && source.projectDir) input = { ...input, inheritedProjectDir: source.projectDir };
+        }
         return scheduler.create(input);
       });
     },

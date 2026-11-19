@@ -3734,6 +3734,10 @@ describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
     });
     const queue = createQueueHarness({ busy: false });
     const { runner, maker } = createRunnerHarness(harness.session, queue.deps);
+    vi.mocked(maker.createSession).mockImplementation(async options => {
+      Object.assign(saved, { workspaceKind: options.workspaceKind, projectDir: options.projectDir });
+      return harness.session;
+    });
     vi.mocked(maker.isSessionAlive).mockReturnValue(false);
     const ctx = createFireContext();
     const broadcasts: Record<string, unknown>[] = [];
@@ -3747,7 +3751,7 @@ describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
       expect(broadcasts).toEqual([]);
       release();
       await vi.waitFor(() => expect(broadcasts).toHaveLength(1));
-      expect(broadcasts[0]).toMatchObject({ source: 'scheduler', workspaceKind: 'project' });
+      expect(broadcasts[0]).toMatchObject({ source: 'scheduler', workspaceKind: 'dialogue', projectDir: null });
     } finally {
       release();
       ctx.abortController.abort();

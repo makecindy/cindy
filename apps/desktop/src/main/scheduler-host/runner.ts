@@ -1,3 +1,4 @@
+import { projectForScheduledTask, type ScheduleProjectLookup } from './scheduleProject.js';
 import { throwIpcError } from '../utils/ipcValidate';
 import { beginQuietScheduledOutput, hidesScheduledTranscript, hasVisibleScheduledOutput, isQuietScheduledOutput } from './silent-output.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
@@ -287,6 +288,7 @@ export interface SchedulerQueueDeps {
 }
 
 export interface MakerScheduleRunnerDeps {
+  projectForNewTask?: ScheduleProjectLookup;
   maker: Maker;
   /** Use the ordinary task startup funnel, including provider-group allocation.
    * The funnel may update the options to the member it actually selected. */
@@ -1750,7 +1752,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
         return this.deferFire(schedule, sessionId, 'routine-permission-unavailable');
       throwIfFireAborted(ctx.signal, 'session creation');
     }
+    const membership = isHeartbeat ? undefined : isDialogueTarget
+      ? { workspaceKind: 'dialogue' as const, projectDir: null }
+      : await projectForScheduledTask(schedule, this.deps.projectForNewTask);
+    throwIfFireAborted(ctx.signal, 'session creation');
     const createSessionOpts = {
+      ...membership,
       id: sessionId,
       agentKind: effectiveAgentKind,
       ...(agentDeviceId ? { agentDeviceId } : {}),
@@ -2012,13 +2019,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
                 ? materializedDefaultProviderId
                 : null) ??
               undefined,
-        // 回退分配了对话工作区的会话按 'dialogue' 落库 —— 侧边栏才会归入
-        // "对话"分组(覆盖存量 workspaceKind='project' 但无目录的旧任务)。
-        workspaceKind: !isHeartbeat
-          ? isDialogueTarget
-            ? 'dialogue'
-            : schedule.workspaceKind
-          : undefined,
         source: !isHeartbeat ? 'scheduler' : undefined,
       },
       this.deps.logger,

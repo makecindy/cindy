@@ -440,6 +440,7 @@
       "filterEmptyCopy": "Passe die Filter in den Anzeigeeinstellungen an oder setze sie zurück.",
       "filterTeammatesHeading": "Freunde",
       "filterAnySource": "Alle",
+      "filterHideAutomations": "Automatisierte Aufgaben ausblenden",
       "filterHideAllTeammates": "Alle ausblenden",
       "filterSelectedTeammates": "{{count}} ausgewählt",
       "inbox": {

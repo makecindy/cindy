@@ -2623,7 +2623,7 @@ export function getMaker(): Maker {
             if (thinkingEnabled !== undefined) opts.thinkingEnabled = thinkingEnabled;
           }
           if (opts.agentKind === 'codex' || opts.agentKind === 'pi') {
-            opts.resolveUsagePriceVariant = registerUsagePricing(sessionId);
+            opts.resolveUsagePriceVariant = registerUsagePricing(sessionId, true);
           }
           // 主干新增:pi 的价格档跟随会话 Fast 开关。
           if (opts.agentKind === 'pi') {

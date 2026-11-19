@@ -866,8 +866,7 @@
         "loading": "クォータを読み込み中…",
         "unavailable": "このパソコンのクォータを今は読み取れません",
         "none": "このプロバイダーにはクォータの情報がありません",
-        "offline": "このパソコンはオフラインのため、クォータを読み取れません",
-        "share": "ほかの人から共有されたパソコンのクォータは表示されません"
+        "offline": "このパソコンはオフラインのため、クォータを読み取れません"
       },
       "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
@@ -970,8 +969,8 @@
       "loading": "画像を読み込み中…"
     },
     "moveToolbar": "ツールバーを左右に移動",
-    "hint": "クリックでウィンドウや要素を選択、ドラッグで範囲を選択 · スクロールで範囲を切り替え · Space で全画面 · C で色をコピー · Esc で終了",
-    "hintWithLast": "クリックでウィンドウや要素を選択、ドラッグで範囲を選択 · スクロールで範囲を切り替え · Space で全画面 · R で前回の範囲 · C で色をコピー · Esc で終了",
+    "hint": "クリックでウィンドウや要素を選択、ドラッグで範囲を選択 · スクロールで範囲を切り替え · Space でウィンドウ全体を選択 · C で色をコピー · Esc で終了",
+    "hintWithLast": "クリックでウィンドウや要素を選択、ドラッグで範囲を選択 · スクロールで範囲を切り替え · Space でウィンドウ全体を選択 · R で前回の範囲 · C で色をコピー · Esc で終了",
     "copy": "コピー",
     "cancel": "スクリーンショットを終了",
     "captureFailed": "画面をキャプチャできませんでした",
@@ -2790,6 +2789,8 @@
       "autoUpdateSaveFailed": "自動更新設定を保存できませんでした",
       "analyticsLabel": "利用統計",
       "analyticsDescription": "Cindy の起動状況や継続利用状況の把握に使います。送信するのはデバイスの機種名、OS バージョン、アプリバージョン、デバイス識別子などのデバイス・利用環境情報と、ログイン後はアカウント ID で、会話内容・ファイル・プロンプトは一切含みません。オフにすると送信は直ちに停止します。",
+      "productTokenUsage": "モデル使用量の統計に参加",
+      "productTokenUsageHint": "この端末のアカウントで新たに使ったトークン数を地域内で接続元・モデル別に集計し、TapDB に送信します。",
       "analyticsEnabledToast": "利用統計を有効にしました",
       "analyticsDisabledToast": "利用統計を無効にしました",
       "analyticsSaveFailed": "利用統計の設定を保存できませんでした",
@@ -6049,7 +6050,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "タスクモデルの自動フォールバック",
-        "description": "接続または容量エラーが続くと、同じモデルの別の接続済みプロバイダー、次に現在の Agent で明示的に推奨されたモデルを試します。Agent や保存済みの選択は変更しません。デフォルトはオフです。"
+        "description": "障害時にはグループ内の別の利用可能なモデルを試します。エージェントが変わる場合はタスクを引き継ぎ、新しい選択を保存します。通常のタスクは失敗が続くと同じエージェント内で別の提供元や推奨モデルを試します。初期設定はオフです。"
       },
       "toggleAria": "タスクモデルの自動フォールバックを切り替え",
       "toast": {
@@ -6777,6 +6778,9 @@
         "relayTransport": {
           "udp": "UDP",
           "websocket": "WS"
+        },
+        "linkTransport": {
+          "webrtc": "WebRTC"
         },
         "onlyEncrypted": "Agent-Net のみ使用",
         "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。",
@@ -8178,6 +8182,7 @@
         "cindyEmbedText": "テキストをベクトルに変換できます（意味検索用）",
         "cindyModelsDecisions": "意思決定モデルを呼び出せます（モデル利用枠を使用）",
         "cindyModelsRerank": "リランキングモデルを呼び出せます（モデル利用枠を使用）",
+        "cindyModelsMediaRequest": "Cindy AI で画像・動画の生成、音声合成、文字起こしができます（モデル利用枠を使用）",
         "cindyEmbedTextDetail": "テキストはシステムのベクトルモデルに送られて数値列に変換されます。1 回あたり最大 {{max}} 件で、モデル料金が発生する場合があります。生成されたベクトルはプラグインだけが保持し、あなたのライブラリには書き込まれません。",
         "cindySearchWeb": "Cindy AI で公開ウェブを検索できます",
         "cindySearchWebDetail": "検索では公開ウェブにアクセスし、Cindy AI のクォータを消費する場合があります。",
@@ -9475,6 +9480,31 @@
     "preparing": "ログインサービスに接続中",
     "preparingSubtitle": "この地域で利用可能な方法を読み込んでいます",
     "unavailable": "現在ログインできません",
+    "hostUnavailable": {
+      "title": "Cindy バックグラウンドサービス未起動",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "このデータは、Cindy バックグラウンドサービスに保存されているログインとは別のアカウントのものです。",
+          "action": "元のアカウントで cindy-host login を実行し、Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。"
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "別の Cindy アプリがこのデータを使用しています。",
+          "action": "そのアプリを終了し、Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。"
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "このアカウントのデータを開けません。",
+          "action": "最近より新しいバージョンの Cindy を使った場合は、まずこのコンピュータの Cindy を最新バージョンに更新し、Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。そうでない場合は、cindy-host status を実行して原因を確認してください。"
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Cindy バックグラウンドサービスの起動時にログインサービスに接続できませんでした。",
+          "action": "ネットワークを確認し、Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。"
+        },
+        "HOST_START_FAILED": {
+          "body": "Cindy バックグラウンドサービスの起動中にエラーが発生しました。",
+          "action": "Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。それでもエラーになる場合は、cindy-host status を実行して原因を確認してください。"
+        }
+      }
+    },
     "retry": "再試行",
     "browserWaiting": "ブラウザで認証を完了してください",
     "browserCallback": {
@@ -9745,6 +9775,10 @@
     "cacheLine": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}} · ヒット率 {{rate}}",
     "cacheLineNoRate": "キャッシュ内訳: 読み取り {{read}} · 書き込み {{create}}",
     "stepsLine": "このターンのリクエスト {{steps}} 回 · 1 回あたり約 {{context}} のコンテキスト",
+    "traceChartLabel": "このターンの生成速度とリクエストごとの推論量",
+    "traceRequests": "このターンのリクエスト {{requests}} 回",
+    "traceThinkingShare": "推論は出力の {{share}}",
+    "traceThinkingTokens": "推論 {{thinking}} tokens",
     "modelLine": "モデル: {{model}}",
     "multipleModels": "{{count}} 個のモデル",
     "costBreakdownHeader": "モデル別:",
@@ -13542,6 +13576,8 @@
         },
         "reply": {
           "unsupportedMedia": "このバージョンでは、この種類の WeChat メディアにはまだ対応していません。",
+          "delayedReply": "この返信は遅れて届きました。{{receivedAt}} に受信したメッセージへの返信として、{{createdAt}} に作成されました。内容が古くなっている可能性があります。",
+          "delayedReplyQuestion": "元のメッセージ：{{question}}",
           "stillProcessing": "まだ処理中です…",
           "ownerOnlyCommands": "ボットのコマンドを使えるのはオーナーだけです。",
           "companionManagedCommand": "Cindy でこの仲間を開いてください。モデルは仲間の設定で変更し、権限は会話の入力欄の下で切り替えます。",
@@ -14918,6 +14954,7 @@
       "rateHistory": "生成速度の推移",
       "outputTotal": "累計出力",
       "observedPeak": "ピーク",
+      "thinkingShare": "推論の割合",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "直近の生成区間の速度。ツール実行と待機は除きます。",
@@ -16348,6 +16385,7 @@
       },
       "filterCreatorsHeading": "仲間",
       "filterCreatorsAny": "すべて",
+      "filterHideAutomations": "自動化タスクを非表示",
       "filterCreatorsNone": "すべて非表示",
       "filterSelectedCreators": "{{count}} 人を選択",
       "filterProjectsHeading": "プロジェクト",
@@ -19136,6 +19174,9 @@
     },
     "errors": {
       "piStartupCloudFile": "クラウド上にのみある指示ファイルが Pi の起動を遅らせている可能性があります：{{path}}。Finder でこのファイルをダウンロードし、ローカルで利用できることを確認してから再試行してください。タイムアウトには別の原因がある可能性もあります。",
+      "hostProfileInUseByDesktop": "このデータは単独で起動している Cindy デスクトップアプリが使用中です。アプリを終了してから、もう一度送信してください。",
+      "hostProfileInUseByDesktopAtStart": "このデータは単独で起動している Cindy デスクトップアプリが使用中のため、Cindy バックグラウンドサービスは起動しませんでした。そのアプリを終了し、Cindy バックグラウンドサービスを再起動してから、この Cindy ウィンドウを開き直してください。",
+      "hostProfileInUseByDesktopRetry": "このデータは単独で起動している Cindy デスクトップアプリが使用中のため、今は変更できません。アプリを終了してから、もう一度お試しください。",
       "openFileFailed": "システムでファイルを開けません",
       "emptyResponse": "モデルから内容が返りませんでした。再試行してください。文脈が長い場合は、モデルを変えてみてください。",
       "turnFailed": "タスクの実行に失敗しました（モデルからエラーの詳細が返されませんでした）。再試行してください。",
@@ -19724,7 +19765,8 @@
         "validity": "有効期間",
         "validityValue_other": "受け取りから {{count}} 日間",
         "claimBy": "受け取り期限",
-        "destination": "追加先"
+        "destination": "追加先",
+        "validityPermanent": "無期限"
       },
       "doneTitle": "{{amount}} を追加しました",
       "doneDescription": "特典残高に追加しました。{{date}} まで有効です。",
@@ -19740,10 +19782,13 @@
         "alreadyClaimed": "このギフトカードはすでに受け取られています。",
         "expired": "このギフトカードは受け取り期限を過ぎています。",
         "voided": "このギフトカードは無効になりました。",
+        "voidedPurchased": "このギフトカードは現在受け取れません。",
         "rateLimited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
         "failed": "ギフトカードを受け取れませんでした。しばらくしてからもう一度お試しください。",
         "personalRequired": "ギフトカードは個人アカウントでのみ受け取れます。"
-      }
+      },
+      "doneDescriptionPurchased": "チャージ残高に追加しました。期限はありません。",
+      "pendingDescriptionPurchased": "{{amount}} を追加中です。まもなくチャージ残高に反映されます。もう一度受け取る必要はありません。"
     },
     "usage": {
       "title": "残高使用量",
@@ -19789,7 +19834,8 @@
         "noPayment": "支払い不要",
         "page": "{{page}} ページ",
         "previous": "前のページ",
-        "next": "次のページ"
+        "next": "次のページ",
+        "giftCard_other": "ギフトカード × {{count}}"
       },
       "count": "{{count}}件",
       "orderId": "NO. {{id}}",
@@ -20018,6 +20064,115 @@
         "MONTH": "毎月 {{amount}} を含む",
         "YEAR": "毎年 {{amount}} を含む",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "ギフトカードを購入",
+      "title": "ギフトカードを購入",
+      "subtitle": "友だちに贈ることも、自分で使うこともできます。受け取るとチャージ残高に追加され、期限はありません。",
+      "previewLabel": "相手に届くカード",
+      "sameCards_other": "全 {{count}} 枚。デザイン・金額・メッセージは同じで、1 枚ごとにコードがあります",
+      "fields": {
+        "face": "デザイン",
+        "amount": "金額",
+        "quantity": "枚数",
+        "sender": "差出人",
+        "senderHint": "「{{sender}} より」と表示されます",
+        "senderPlaceholder": "あなたの名前",
+        "message": "メッセージ（任意）",
+        "messagePlaceholder": "相手へのひとこと",
+        "tooLong": "{{max}} 文字以内で入力してください",
+        "paymentMethod": "支払い方法"
+      },
+      "decrease": "1 枚減らす",
+      "increase": "1 枚増やす",
+      "quantityHint": "{{hours}} 時間で最大 {{limit}} 枚・あと {{remaining}} 枚購入できます",
+      "quantityLimitReached": "{{hours}} 時間で購入できる {{limit}} 枚に達しました。しばらくしてからお試しください",
+      "orderAmountCap": "1 回の注文は {{amount}} まで",
+      "totalDetail_other": "{{count}} 枚 × {{amount}}",
+      "pay": "支払いへ進む",
+      "refundNote": "ギフトカードは現金に交換できません。受け取り済みまたは使用済みのカードは返金できません。未受け取りのカードの返金はサポートにお問い合わせください。",
+      "cancel": "キャンセル",
+      "loadFailed": "購入制限を読み込めませんでした。しばらくしてからお試しください。",
+      "checkoutSubtitle_other": "ギフトカード {{amount}} × {{count}}・支払いが完了するとすぐに発行されます",
+      "faces": {
+        "cindy": "Cindy・ブランドレッド",
+        "cat": "黒猫・夜",
+        "bell": "ベル・お祝い",
+        "leap": "跳躍・アイボリー"
+      },
+      "errors": {
+        "limitReached": "ギフトカードの購入上限に達しました。しばらくしてからお試しください。",
+        "amountTooLarge": "この注文は 1 回の支払い上限を超えています。枚数を減らしてもう一度お試しください。"
+      },
+      "done": {
+        "title_other": "ギフトカード {{count}} 枚の準備ができました",
+        "pendingTitle": "ギフトカードの支払いが完了しました",
+        "loading": "この注文のギフトカードを取得しています…",
+        "description": "受け取りリンクを友だちに送ると、開いてすぐに受け取れます。自分で使うこともできます。",
+        "missing": "支払いは完了しました。ギフトカードはまもなく「購入したギフトカード」に表示されます。",
+        "cardTitle": "{{index}} 枚目・{{amount}}",
+        "cardMeta": "末尾 {{tail}}・{{status}}",
+        "linkHint": "受け取りリンクはカードそのものです。最初に開いた人が受け取れるので、贈りたい相手にだけ送ってください。",
+        "viewAll": "購入したギフトカードを見る",
+        "finish": "完了"
+      },
+      "list": {
+        "title": "購入したギフトカード",
+        "description": "受け取りリンクを友だちに送ると、開いてすぐに受け取れます。まだ贈っていないカードに期限はなく、自分で使うこともできます。受け取るとチャージ残高に追加されます。",
+        "count_other": "{{count}} 枚",
+        "loadMore": "さらに読み込む",
+        "loadFailed": "ギフトカードを読み込めませんでした",
+        "retry": "再読み込み",
+        "status": {
+          "unclaimed": "未受け取り",
+          "claimedBy": "{{name}} さんが受け取りました",
+          "claimed": "受け取り済み",
+          "redeemedByYou": "自分で使用済み",
+          "refunded": "返金済み",
+          "onHold": "処理中・現在は利用できません"
+        },
+        "meta": {
+          "purchased": "{{date}} 購入・末尾 {{tail}}",
+          "claimed": "{{date}} 受け取り・末尾 {{tail}}",
+          "redeemed": "{{date}} 使用・末尾 {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "受け取りリンクをコピー",
+        "copied": "コピーしました",
+        "more": "その他の操作",
+        "copyCode": "コードをコピー",
+        "redeemSelf": "自分で使う",
+        "sendEmail": "メールで送る"
+      },
+      "toasts": {
+        "linkCopied": "受け取りリンクをコピーしました",
+        "codeCopied": "コードをコピーしました",
+        "copyFailed": "コピーできませんでした。もう一度お試しください",
+        "unavailable": "このカードは受け取り済みか返金済みです",
+        "revealFailed": "コードを取得できませんでした。しばらくしてからお試しください",
+        "emailQueued": "{{email}} に送信しています"
+      },
+      "email": {
+        "title": "メールで送る",
+        "description": "このカードの受け取りリンクを相手のメールアドレスに送ります。メールには差出人名とメッセージが入ります。",
+        "previewLabel": "相手に届く内容",
+        "previewWithMessage": "「{{message}}」・受け取りリンクとコード付き",
+        "previewLinkOnly": "受け取りリンクとコード",
+        "recipient": "送信先メールアドレス",
+        "placeholder": "name@example.com",
+        "hint": "どのメールアドレスにも送れます。受け取りリンクは最初に開いた人が受け取れます。",
+        "cooldown": "{{seconds}} 秒後にもう一度送れます",
+        "invalid": "メールアドレスの形式が正しくありません",
+        "failed": "送信できませんでした。しばらくしてからお試しください。",
+        "send": "送信",
+        "status": {
+          "sending": "{{email}} に送信中",
+          "sent": "{{email}} に送信済み",
+          "failed": "{{email}} への送信に失敗しました",
+          "failedRetry": "{{email}} への送信に失敗しました。もう一度送れます"
+        }
       }
     }
   },
@@ -21464,14 +21619,14 @@
     },
     "taskInbox": {
       "title": "受信トレイの使い方",
-      "lead": "タスクは状態に応じて「未処理」「実行中」「後で処理」「処理済み」に自動で分かれます。おすすめは受信トレイをこまめに空にすること。済んだら完了、今やらないものは後で処理にしましょう。",
+      "lead": "複数のタスクを並行して進めるときは、受信トレイがタスクを状態別に整理します。新しい結果や返事を待っているタスクは「未処理」で確認できます。",
       "pending": {
         "title": "未処理",
         "body": "結果が出たタスクや、あなたの回答を待っているタスクがここに入ります。"
       },
       "done": {
         "title": "完了",
-        "body": "対応が済んだら完了を 1 回押すと処理済みへ。新しい動きがあれば自動で戻ってきます。"
+        "body": "受信トレイをこまめに空にする習慣をつけましょう。対応が済んだら「完了」を押します。"
       },
       "snooze": {
         "title": "後で処理",
@@ -21806,14 +21961,14 @@
     "openFailed": "GitHub を開けませんでした。"
   },
   "hostConnection": {
-    "connecting": "Cindy に接続中…",
+    "connecting": "Cindy バックグラウンドサービスに接続中…",
     "restoring": "タスクの状態を復元中…",
     "retrying": "タスクの状態がまだ同期されていません。再試行中…",
     "pairing": "接続の再認証が必要です",
-    "pairingHelp": "このページを開いたまま、Cindy Host を起動したターミナルでウェブ画面を開くコマンドを再実行してください。新しいページでペアリングし、このページに戻ってください。",
+    "pairingHelp": "このページを開いたまま、Cindy バックグラウンドサービスを起動したターミナルでウェブ画面を開くコマンドを再実行してください。新しいページでペアリングし、このページに戻ってください。",
     "keepDraft": "入力中の下書きは保持されます。接続が回復すると、タスクの状態が同期されます。",
     "retry": "再接続",
-    "desktopAuthHelp": "起動用ターミナルで Host の接続設定を更新してから、この実験的なクライアントを開き直してください。"
+    "desktopAuthHelp": "起動用ターミナルで Cindy バックグラウンドサービスの接続設定を更新してから、この実験的なクライアントを開き直してください。"
   },
   "remoteControlConsent": {
     "title": "このコンピューターのリモート操作を許可しますか？",

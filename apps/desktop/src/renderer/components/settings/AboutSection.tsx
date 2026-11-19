@@ -368,6 +368,7 @@ export function AboutSection() {
       <SettingsSection title={t(aboutSettings.analyticsLabel.sectionKey)}>
         <SettingsCard>
           <AnalyticsToggleRow />
+          <ProductTokensToggleRow />
           <LegalLinksRows />
         </SettingsCard>
       </SettingsSection>
@@ -589,6 +590,29 @@ export function AutoUpdateToggleRow() {
       }
     />
   );
+}
+
+function ProductTokensToggleRow() {
+  const { t } = useTranslation();
+  const { state } = useAnalyticsSettings();
+  const [saving, setSaving] = useState(false);
+  return <SettingsRow
+    title={<span id={aboutSettings.productTokenUsage.targetId}>{t(aboutSettings.productTokenUsage.titleKey)}</span>}
+    hint={t(aboutSettings.productTokenUsage.descriptionKey)}
+    trailing={<Switch data-setting-id={aboutSettings.productTokenUsage.id} checked={state.productTokensEnabled}
+      disabled={!state.allowed || state.loading || saving}
+      aria-label={t('settings.about.productTokenUsage')}
+      onCheckedChange={async (value) => {
+        setSaving(true);
+        try {
+          await window.electronAPI.setProductTokensEnabled(value);
+        } catch {
+          toast.error(t('settings.about.analyticsSaveFailed'));
+        } finally {
+          setSaving(false);
+        }
+      }} />}
+  />;
 }
 
 /**

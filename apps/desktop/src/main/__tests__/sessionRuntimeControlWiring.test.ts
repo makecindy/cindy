@@ -16,16 +16,48 @@ const registerSource = readFileSync(resolve(mainRoot, 'maker-ipc/register.ts'), 
   /\r\n?/g,
   '\n',
 );
+const runtimePluginTaskBindingsSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/runtimePluginTaskBindings.ts'), 'utf8',
+).replace(/\r\n?/g, '\n');
+const runtimeWriterSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionControlRuntimeWriter.ts'), 'utf8',
+).replace(/\r\n?/g, '\n');
+const runtimeControlSettlementSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/pendingSessionRuntimeControlSettlement.ts'), 'utf8',
+).replace(/\r\n?/g, '\n');
+const pendingCredentialSwitchAssemblySource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/pendingCredentialSwitchAssembly.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const coldPiRehydrationSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/coldPiRehydration.ts'),
   'utf8',
 );
+// register.ts's binding of the cold Pi window check moved verbatim into coldPiRehydrationBinding.ts;
+// register.ts calls createColdPiRehydrationBinding where it bound it.
+const coldPiRehydrationBindingSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/coldPiRehydrationBinding.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+// The agent switch deps' rememberThinkingIntent moved verbatim into agentSwitchDepsCore.ts;
+// register.ts passes createRememberThinkingIntent's result where it defined it.
+const agentSwitchDepsCoreSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/agentSwitchDepsCore.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 const coldPiRehydrationFailureSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/coldPiRehydrationFailure.ts'),
   'utf8',
 );
 const runtimeControlSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+// The task read projector and the archive/delete cleanup register.ts passed to
+// setSessionRuntimeProjector and setSessionRuntimeCleanup moved verbatim into sessionRuntimeProjection.ts
+// (createSessionRuntimeProjector, createSessionRuntimeCleanup); register.ts passes their results.
+const runtimeProjectionSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeProjection.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
 const deviceLinkHostSource = readFileSync(
@@ -60,12 +92,43 @@ const runtimeSelectionApplySource = readFileSync(
   resolve(mainRoot, 'maker-ipc/sessionRuntimeSelectionApply.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+// selectSameAgentModel and recoverRenamedSessionModelOnSend moved verbatim into
+// sessionRuntimeSelectionLanding.ts; register.ts calls their factories where it defined them.
+const runtimeSelectionLandingSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeSelectionLanding.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+// SET_EFFORT, SET_FAST_MODE and SET_THINKING_ENABLED's bodies after their sender check moved verbatim into
+// sessionRuntimeAxisSettings.ts; register.ts keeps each registration and its sender check and calls the
+// moved body. Slices of those handlers read register.ts with each body put back in place of that call.
+const runtimeAxisSettingsSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/sessionRuntimeAxisSettings.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+function movedHandlerBody(factory: string, params: string): string {
+  const start = runtimeAxisSettingsSource.indexOf(`export function ${factory}(`);
+  const head = `  return async (${params}) => {\n`;
+  const open = runtimeAxisSettingsSource.indexOf(head, start) + head.length;
+  const close = runtimeAxisSettingsSource.indexOf('\n  };\n}\n', open);
+  expect(start).toBeGreaterThan(-1);
+  expect(close).toBeGreaterThan(open);
+  return runtimeAxisSettingsSource.slice(open, close);
+}
+const registerWithAxisBodiesSource = registerSource
+  .replace('    return handleSetSessionEffort(sessionId, effort);',
+    movedHandlerBody('createSetSessionEffort', 'sessionId: unknown, effort: unknown'))
+  .replace('      return handleSetSessionFastMode(sessionId, requestedSpeed);',
+    movedHandlerBody('createSetSessionFastMode', 'sessionId: unknown, requestedSpeed: unknown'))
+  .replace('      return handleSetSessionThinkingEnabled(sessionId, enabled);',
+    movedHandlerBody('createSetSessionThinkingEnabled', 'sessionId: unknown, enabled: unknown'));
 // What register.ts held before handleSetModel moved out: the assertions that searched the whole of
 // register.ts for code of that function read this.
-const registerWithRuntimeSelectionSource = `${registerSource}\n${runtimeSelectionApplySource}`;
+const registerWithRuntimeSelectionSource = `${registerSource}\n${runtimeSelectionApplySource}\n${runtimeSelectionLandingSource}`;
 function setModelSource(): string {
   return handlerBody(runtimeSelectionApplySource, 'const handleSetModel = async (', '  return handleSetModel;')
-    + handlerBody(registerSource, 'const handleSetModel = createHandleSetModel(', 'const recoverRemoteRuntimeAxisPersistence');
+    + handlerBody(registerSource, 'const handleSetModel = createHandleSetModel(', 'const recoverRemoteRuntimeAxisPersistence')
+    // recoverRenamedSessionModelOnSend, which register.ts assigned in that tail (its factory call).
+    + handlerBody(runtimeSelectionLandingSource, 'export function createRecoverRenamedSessionModelOnSend(', '\n}\n');
 }
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -91,17 +154,21 @@ const isUserPendingAgentSwitchIntent = new Function(ts.transpileModule(
   `return (intent) => ${userIntentPredicate.body!.getText(switchAst)};`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText)();
-function collectAxisHandlers(node: ts.Node): void {
+function collectAxisHandlers(node: ts.Node, ast: ts.SourceFile = registerAst): void {
   if (ts.isVariableDeclaration(node) && node.initializer &&
-      ['applyEffort', 'applyFastMode', 'persistEffort', 'persistFastMode', 'stagePendingUserRuntimeAxis'].includes(node.name.getText(registerAst))) {
-    axisHandlers.set(node.name.getText(registerAst), ts.transpileModule(
-      `return ${node.initializer.getText(registerAst)};`,
+      ['applyEffort', 'applyFastMode', 'persistEffort', 'persistFastMode', 'stagePendingUserRuntimeAxis'].includes(node.name.getText(ast))) {
+    axisHandlers.set(node.name.getText(ast), ts.transpileModule(
+      `return ${node.initializer.getText(ast)};`,
       { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
     ).outputText);
   }
-  ts.forEachChild(node, collectAxisHandlers);
+  ts.forEachChild(node, child => collectAxisHandlers(child, ast));
 }
 collectAxisHandlers(registerAst);
+// stagePendingUserRuntimeAxis, applyEffort and persistEffort are in sessionRuntimeAxisSettings.ts (register.ts
+// calls their factories); walking it after register.ts takes those declarations, with the same names.
+const runtimeAxisSettingsAst = ts.createSourceFile('sessionRuntimeAxisSettings.ts', runtimeAxisSettingsSource, ts.ScriptTarget.Latest, true);
+collectAxisHandlers(runtimeAxisSettingsAst, runtimeAxisSettingsAst);
 // Cross-file persistence contract: the real Renderer adapter must leave the
 // decision to Main even before its pending-intent projection reaches this UI.
 const rendererStoreAst = ts.createSourceFile('store.ts', readFileSync(
@@ -277,7 +344,8 @@ describe('active Claude subscription Fast setting', () => {
       resolvePendingRuntimeAxisPatch: async (_id: string, patch: object) => ({ ...patch }),
       recordUserSessionRuntimeAxisMutation: vi.fn(), setSessionFastMode: vi.fn(),
       maker: { getSession: () => ({ agentKind: 'claude-code', setFastMode: handle.setFastMode, getFastMode: handle.getFastMode }) },
-      persistFastMode, commitRuntimeAxisAfterPersistence, pendingCredentialSwitchHolder: null,
+      // The moved body reads the holder through its port (sessionRuntimeAxisSettings.ts); no switch is pending.
+      persistFastMode, commitRuntimeAxisAfterPersistence, getPendingCredentialSwitchHolder: () => null,
       remoteResponse: undefined, log: { debug: vi.fn() },
     };
     const run = new Function(...Object.keys(bindings), axisHandlers.get('applyFastMode')!)(...Object.values(bindings));
@@ -367,7 +435,8 @@ describe('session runtime control wiring', () => {
       'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
     );
     expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
-    expect(registerSource).toContain(
+    expect(registerSource).toContain('broadcastGhostMessageBlocked, revokeTrustedDesktopQueueOrigin, broadcastGhostMessageRewritten,');
+    expect(runtimePluginTaskBindingsSource).toContain(
       'onUserMessageRewritten: (sessionId, item, info) => (revokeTrustedDesktopQueueOrigin(item)',
     );
     const updateText = handlerBody(
@@ -479,16 +548,24 @@ describe('session runtime control wiring', () => {
     expect(body.indexOf('clearAllSessionAttention();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
     );
-    expect(body).toContain('clearAllSessionProviders();');
-    expect(body).toContain('clearAllSessionRuntimeAxes();');
-    expect(body.indexOf('clearAllSessionProviders();')).toBeLessThan(
-      body.indexOf('clearAllSessionRuntimeControlStates();'),
-    );
-    expect(body.indexOf('clearAllSessionRuntimeAxes();')).toBeLessThan(
-      body.indexOf('clearAllSessionRuntimeControlStates();'),
-    );
-    expect(body.indexOf('clearAllSessionRuntimeControlStates();')).toBeLessThan(
+    // The owner-scoped runtime selection is cleared through the shared step (the Node Host's boundary
+    // hook calls the same one), before the post-commit task is registered.
+    expect(body).toContain('clearOwnerScopedSessionRuntimeSelection();');
+    expect(body.indexOf('clearOwnerScopedSessionRuntimeSelection();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
+    );
+    const sharedClear = handlerBody(
+      readFileSync(resolve(mainRoot, 'maker-ipc/sessionRuntimeControl.ts'), 'utf8').replace(/\r\n/g, '\n'),
+      'export function clearOwnerScopedSessionRuntimeSelection(): void {',
+      '\n}\n',
+    );
+    expect(sharedClear).toContain('clearAllSessionProviders();');
+    expect(sharedClear).toContain('clearAllSessionRuntimeAxes();');
+    expect(sharedClear.indexOf('clearAllSessionProviders();')).toBeLessThan(
+      sharedClear.indexOf('clearAllSessionRuntimeControlStates();'),
+    );
+    expect(sharedClear.indexOf('clearAllSessionRuntimeAxes();')).toBeLessThan(
+      sharedClear.indexOf('clearAllSessionRuntimeControlStates();'),
     );
     expect(registerWithRuntimeSelectionSource).toContain('effort: resolveRetainedRuntimeEffort({');
     expect(registerWithRuntimeSelectionSource).toContain('targetModelHasFixedEffort,');
@@ -499,12 +576,12 @@ describe('session runtime control wiring', () => {
 
   it('serializes user effort and Fast mutations with model route changes', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -695,8 +772,9 @@ describe('session runtime control wiring', () => {
   });
 
   it('reconciles deferred route axes before the pending gate can wake input', () => {
+    // The service's assembly moved verbatim to pendingCredentialSwitchAssembly.ts.
     const persistRoute = handlerBody(
-      registerSource,
+      pendingCredentialSwitchAssemblySource,
       'persistRoute: async (sessionId, route) => {',
       'logger: log,',
     );
@@ -941,12 +1019,12 @@ describe('session runtime control wiring', () => {
 
   it('commits user effort and Fast state only after the live runtime call succeeds', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -971,9 +1049,9 @@ describe('session runtime control wiring', () => {
 
   it('cancels and publishes a deferred runtime mutation after settlement fails', () => {
     const settlement = handlerBody(
-      registerSource,
+      runtimeControlSettlementSource,
       'const settlePendingSessionRuntimeControl =',
-      'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
+      'return settlePendingSessionRuntimeControl;',
     );
     const catchBlock = settlement.slice(settlement.indexOf('} catch (error) {'));
 
@@ -995,12 +1073,12 @@ describe('session runtime control wiring', () => {
 
   it('drops in-flight effort and Fast mutations after an owner boundary', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -1013,7 +1091,8 @@ describe('session runtime control wiring', () => {
         body.indexOf('return await apply'),
       );
     }
-    expect(registerSource).toContain(
+    // recoverRemoteRuntimeAxisPersistence, which holds this fence, moved into sessionRuntimeAxisSettings.ts.
+    expect(`${registerSource}\n${runtimeAxisSettingsSource}`).toContain(
       'if (!sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) return;',
     );
   });
@@ -1063,7 +1142,7 @@ describe('session runtime control wiring', () => {
     expect(early).toContain('{ thinking: atomicSelection.thinking }');
     // 发送回放 / deferred 结算另两条重建链也不能丢。
     expect(registerWithRuntimeSelectionSource).toContain('{ thinking: intent.thinking }');
-    expect(registerWithRuntimeSelectionSource).toContain('{ thinking: pending.thinking }');
+    expect(runtimeControlSettlementSource).toContain('{ thinking: pending.thinking }');
     expect(
       registerWithRuntimeSelectionSource.split('{ thinking: atomicSelection.thinking }').length,
     ).toBeGreaterThanOrEqual(3);
@@ -1085,9 +1164,13 @@ describe('session runtime control wiring', () => {
     );
     // 提交写入镜像后同步本机 renderer 记忆：renderer 的全量快照才会带上该选择，
     // 镜像里的钉子得以撤销（否则会长期压住被控端后来的显式改动）。
-    const rememberThinking = registerWithRuntimeSelectionSource.slice(
-      registerWithRuntimeSelectionSource.indexOf('rememberThinkingIntent: ({'),
-      registerWithRuntimeSelectionSource.indexOf('bootstrapSwitchedSession: async (sessionId, opts)'),
+    // register.ts passes the moved closure to the agent switch deps.
+    expect(handlerBody(registerSource, 'const agentSwitchDeps:', 'bootstrapSwitchedSession:'))
+      .toContain('rememberThinkingIntent: createRememberThinkingIntent({ broadcastToAllWindows }),');
+    const rememberThinking = handlerBody(
+      agentSwitchDepsCoreSource,
+      'export function createRememberThinkingIntent(',
+      '\n  };\n}',
     );
     expect(rememberThinking).toContain(
       'setThinkingEnabledInMemory(agentKind, providerId, model, thinking)',
@@ -1109,7 +1192,8 @@ describe('session runtime control wiring', () => {
     expect(body).toContain('confirmedTargetPressure:');
     expect(body).toContain('internalOptions.applyingUserSelectionOnSend === true');
     expect(body).toContain('if (atomicSelection.effort !== null)');
-    expect(registerSource).toContain(
+    // The agent switch deps' selectSameAgentModel (register.ts binds it from this file).
+    expect(runtimeSelectionLandingSource).toContain(
       'sessionLockHeld: true, applyingUserSelectionOnSend: applyNow',
     );
   });
@@ -1119,12 +1203,12 @@ describe('session runtime control wiring', () => {
   // without restoring the runtime stores cleared by archive cleanup.
   it('saves archived effort and Fast without recreating runtime state, and rejects deleted tasks', () => {
     const effort = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
       'MAKER_INVOKE.SET_PERMISSION_MODE',
     );
     const fast = handlerBody(
-      registerSource,
+      registerWithAxisBodiesSource,
       'MAKER_INVOKE.SET_FAST_MODE',
       'MAKER_INVOKE.SET_THINKING_ENABLED',
     );
@@ -1157,9 +1241,9 @@ describe('session runtime control wiring', () => {
       'export function wireSessionToIpc',
     );
     const terminalCleanup = handlerBody(
-      registerSource,
-      'setSessionRuntimeCleanup((sessionId) => {',
-      'disposePiPackagesChangedBroadcast?.();',
+      runtimeProjectionSource,
+      'export function createSessionRuntimeCleanup(',
+      '\n}\n',
     );
 
     expect(closeBoundary).not.toContain('clearSessionRuntimeControlState(session.id);');
@@ -1197,11 +1281,8 @@ describe('session runtime control wiring', () => {
   });
 
   it('fails closed when non-UI runtime selection requires model-window confirmation', () => {
-    const setRuntime = handlerBody(
-      registerSource,
-      'setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {',
-      'assertExternalInputAllowed: assertReviewExternalInputAllowed,',
-    );
+    expect(registerSource).toContain('setSessionRuntime: createSessionControlRuntimeWriter({');
+    const setRuntime = runtimeWriterSource;
     const setRuntimeGuard = setRuntime.indexOf(
       'if (runtimeSelectionRequiresModelWindowConfirmation(response))',
     );
@@ -1266,7 +1347,9 @@ describe('session runtime control wiring', () => {
   });
 
   it('clears fixed-effort overrides from lazy bootstrap and the bridge effort store', () => {
-    expect(registerWithRuntimeSelectionSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
+    // bootstrapSession starts on the override through the shared step in sessionRuntimeControl.ts.
+    expect(registerSource).toContain('const runtimeOverride = applySessionRuntimeOverrideForStart(o, groupDecidesSource);');
+    expect(runtimeControlSource).toContain('o.effort = runtimeOverride.effort ?? undefined;');
     expect(registerWithRuntimeSelectionSource).toContain('setSessionEffort(session.id, runtimeOverride.effort);');
     expect(registerWithRuntimeSelectionSource).toContain('setSessionEffort(sessionId, selectionToCommit.effort);');
   });
@@ -1275,16 +1358,17 @@ describe('session runtime control wiring', () => {
     expect(registerWithRuntimeSelectionSource).toMatch(
       /effectiveProviderId === null\s*\? null\s*: \(normalizeSessionProviderId\(effectiveProviderId\) \?\? currentProviderId\)/,
     );
-    expect(registerWithRuntimeSelectionSource).toContain('effort: pending.profile.effort,');
+    expect(runtimeControlSettlementSource).toContain('effort: pending.profile.effort,');
     expect(registerWithRuntimeSelectionSource).toContain('effort: selected.effort, fastMode: selected.fastMode');
-    expect(registerWithRuntimeSelectionSource).toContain('effort: next.effort, fastMode: next.fastMode');
+    expect(runtimeWriterSource).toContain('effort: next.effort, fastMode: next.fastMode');
   });
 
   it('projects runtime state into shared session snapshots and patch notifications', () => {
-    expect(registerSource).toContain('setSessionRuntimeProjector((session) =>');
-    expect(registerSource).toContain('setSessionRuntimeCleanup((sessionId) =>');
+    expect(registerSource).toContain('setSessionRuntimeProjector(createSessionRuntimeProjector({');
+    expect(runtimeProjectionSource).toContain('  return (session) => {');
+    expect(registerSource).toContain('setSessionRuntimeCleanup(createSessionRuntimeCleanup({');
     expect(registerSource).toContain('broadcastSessionRuntimeProjection(sessionId');
-    expect(registerSource).toContain('projectSessionRuntimeControl(session.id');
+    expect(runtimeProjectionSource).toContain('projectSessionRuntimeControl(session.id');
     expect(runtimeControlSource).toContain('runtimeEffective: effective');
     expect(runtimeControlSource).toContain('runtimePending: control.pending');
     expect(runtimeControlSource).toContain("effort: effective.effort ?? '',");
@@ -1318,15 +1402,22 @@ describe('session runtime control wiring', () => {
   });
 
   it('rehydrates a cold Pi runtime before model-window assessment', () => {
-    const rehydrate = handlerBody(
+    // register.ts still binds it before the agent switch deps; the binding's text is in the moved file.
+    expect(handlerBody(
       registerSource,
-      'const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationForWindowVerification({',
+      'const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationBinding({',
       'const agentSwitchDeps:',
+    )).toContain('readSessionExtraDirsFromDb, bootstrapSession,');
+    const rehydrate = handlerBody(
+      coldPiRehydrationBindingSource,
+      'const rehydrateColdPiRuntimeForWindowVerification = createColdPiRehydrationForWindowVerification({',
+      '  return rehydrateColdPiRuntimeForWindowVerification;',
     );
     const rolloverWiring = handlerBody(
       registerSource,
       'contextOverflowRolloverHolder = createContextOverflowRollover({',
-      'const pendingCredentialSwitchService = new PendingCredentialSwitchService({',
+      // The service is assembled through pendingCredentialSwitchAssembly.ts at the same place.
+      'const pendingCredentialSwitchService = createPendingCredentialSwitchService({',
     );
 
     // The flow itself lives in coldPiRehydration.ts so its failure paths can be executed
@@ -1676,9 +1767,9 @@ describe('session runtime control wiring', () => {
 
   it('retries deferred selection with the confirmed window instead of dropping it', () => {
     const settle = handlerBody(
-      registerSource,
+      runtimeControlSettlementSource,
       'const settlePendingSessionRuntimeControl =',
-      'settlePendingSessionRuntimeControlHolder = settlePendingSessionRuntimeControl;',
+      'return settlePendingSessionRuntimeControl;',
     );
 
     expect(settle).toContain('if (!pending) return;');
@@ -1690,22 +1781,22 @@ describe('session runtime control wiring', () => {
   });
 
   it('composes later partial runtime changes on the accepted pending profile', () => {
-    expect(registerSource).toContain(
+    expect(runtimeWriterSource).toContain(
       'const routeExplicit = patch.model !== undefined || patch.providerId !== undefined;',
     );
-    expect(registerSource).toContain(
-      'const mergeBase = routeExplicit\n        ? (profiles.control.pending?.profile ?? profiles.effective)\n        : profiles.effective;',
+    expect(runtimeWriterSource).toContain(
+      'const mergeBase = routeExplicit\n      ? (profiles.control.pending?.profile ?? profiles.effective)\n      : profiles.effective;',
     );
-    expect(registerSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
-    expect(registerSource).toContain('routeExplicit,');
-    expect(registerSource).toContain('effectiveProfile: profiles.effective,');
+    expect(runtimeWriterSource).toContain('mergeSessionRuntimeProfilePatch(mergeBase, patch)');
+    expect(runtimeWriterSource).toContain('routeExplicit,');
+    expect(runtimeWriterSource).toContain('effectiveProfile: profiles.effective,');
     const setModel = setModelSource();
     expect(setModel).toContain(
       'if (internalOptions.deferWhileRunning && isSessionInTurn(sessionId))',
     );
     expect(setModel).toContain('deferSessionRuntimeAxisMutation({');
     expect(setModel).toContain('pendingPatch: pendingAxisPatch');
-    expect(registerSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
+    expect(runtimeControlSettlementSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
     expect(setModel).toMatch(/const result(?::[^;\n]+)? = routeExplicit\s*\? await applyRuntimeSetModelChange\(/);
     expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
     expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
@@ -1719,7 +1810,7 @@ describe('session runtime control wiring', () => {
     const setModel = setModelSource();
     expect(setModel).toContain('buildDeferredRuntimeSelectionProfile({');
     expect(setModel).toContain('atomicSelection,');
-    expect(registerSource).toContain('nextDeferredModelWindowRetry(');
+    expect(runtimeControlSettlementSource).toContain('nextDeferredModelWindowRetry(');
   });
 
   it('rebuilds live Orca Workers for model routes while preserving effort-only hot updates', () => {

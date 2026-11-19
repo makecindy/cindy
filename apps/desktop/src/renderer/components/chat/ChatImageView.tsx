@@ -23,6 +23,7 @@
  * 走 ImageLightbox 的全局 scroll lock)。
  */
 
+import { DownloadImageMenuItem } from '@/components/chat/DownloadImageMenuItem';
 import { CHAT_FOCUS_CLASS } from './chatChrome';
 import { useId, useRef, useState } from 'react';
 import { Box, Copy, FolderOpen } from 'lucide-react';
@@ -293,6 +294,7 @@ export function ChatImageView({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
+            <DownloadImageMenuItem src={displaySrc} />
             {modelFile ? (
               <>
                 <DropdownMenuItem

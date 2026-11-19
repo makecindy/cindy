@@ -112,13 +112,19 @@ export type ApplySessionRuntimeSelection = (
   deferred: boolean;
   superseded: boolean;
   generation?: number;
+  persistedRoute?: true;
   effectiveProviderId?: string | null;
   effectiveModelId?: string;
   contextWindowConfirmationRequired?: number;
   contextTokensForConfirmation?: number;
 }>;
 
-/** What the body used from register.ts and from modules that load Electron (see the header). */
+/**
+ * What the body used from register.ts and from modules that load Electron (see the header). An object
+ * port is typed as the members the body calls (the provider service's listProviders, the input
+ * coordinator's refreshQueuedRoute, the bot route reconciler's acceptTaskChoice), so a binding that
+ * lacks one does not compile.
+ */
 export interface SessionRuntimeSelectionPorts {
   maker: Maker;
   agentSwitchPending: PendingAgentSwitchRegistry;
@@ -131,7 +137,7 @@ export interface SessionRuntimeSelectionPorts {
   resolvePendingRuntimeAxisPatch: (sessionId: string, patch: SessionRuntimeAxisPatch) => Promise<SessionRuntimeAxisPatch>;
   rehydrateColdPiRuntimeForWindowVerification: ReturnType<typeof createColdPiRehydrationForWindowVerification>;
   updateScheduledPreference: (sessionId: string, patch: { effort?: ScheduledModelSelection['effort']; fastMode?: ScheduledModelSelection['fastMode'] } | null, expectedBaseline?: string | null) => Promise<unknown>;
-  reconcileBotModelRoute: ReturnType<typeof createBotModelRouteReconciler>;
+  reconcileBotModelRoute: Pick<ReturnType<typeof createBotModelRouteReconciler>, 'acceptTaskChoice'>;
   log: Logger;
   localModelWindowSwitchErrorCode: (code: IpcErrorCode) => IpcErrorCode;
   wakeSessionInputAfterCredentialSwitch: (sessionId: string) => void;
@@ -142,12 +148,12 @@ export interface SessionRuntimeSelectionPorts {
   getPendingCredentialSwitchTarget: (sessionId: string) => { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' } | undefined;
   captureSharedTaskSettingGuard: (sessionId: string) => ReturnType<typeof createSharedTaskSettingGuard>;
   registerPendingCredentialSwitchForSession: (sessionId: string, target: { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' }) => Promise<void>;
-  agentInputCoordinatorHolder: AgentInputCoordinator | null;
+  agentInputCoordinatorHolder: Pick<AgentInputCoordinator, 'refreshQueuedRoute'> | null;
   getSessionDbAgentKind: typeof import('../messagePersistBroadcaster.desktop.js').getSessionDbAgentKind;
   broadcastSessionPatched: typeof import('../localDb/ipc/sessions.js').broadcastSessionPatched;
   persistSessionFields: typeof import('../localDb/ipc/sessions.js').persistSessionFields;
   markRemoteSettingPersistedInsideHandler: typeof import('../device-link/dispatch.desktop.js').markRemoteSettingPersistedInsideHandler;
-  getDesktopProviderService: typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService;
+  getDesktopProviderService: () => Pick<ReturnType<typeof import('../maker-host/createDesktopProviderService.js').getDesktopProviderService>, 'listProviders'>;
   resolveConfiguredContextWindow: typeof import('../maker-host/model-context-settings.js').resolveConfiguredContextWindow;
   readStoredSessionContextWindowBudget: typeof import('../maker-host/model-context-settings.js').readStoredSessionContextWindowBudget;
   listSshCodexProviders: typeof import('../maker-host/index.js').listSshCodexProviders;
@@ -1551,8 +1557,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             commitControlStores();
           }
         }
+        let persistedRoute = result.persistedRoute === true;
         if (
-          result.persistedRoute !== true &&
+          !persistedRoute &&
           (modelWindowRebuilt ||
             (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh)) ||
             internalOptions.persistRenamedSessionModel === true ||
@@ -1586,6 +1593,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             assertRuntimeOwnerCurrent();
             assertSharedTaskCurrent.admit();
             await persistSessionFields(sessionId, patch);
+            persistedRoute = true;
           } catch (persistenceError) {
             // The live route and host stores are applied before SQLite so the
             // harness can switch atomically. If SQLite rejects, unwind every
@@ -1785,6 +1793,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         // to dispatch and cannot be followed by a stale lock-free route write.
         return Object.assign(response, {
           generation,
+          ...(internalOptions.source === 'fallback' && persistedRoute ? { persistedRoute: true as const } : {}),
           effectiveModelId: model,
           effectiveProviderId: effectiveProviderId === undefined
             ? currentProviderId : normalizeSessionProviderId(effectiveProviderId) ?? null,

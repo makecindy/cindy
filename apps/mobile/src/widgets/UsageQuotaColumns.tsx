@@ -6,6 +6,7 @@ import type { MobileUsageWidgetSnapshot, MobileUsageWidgetSource as Source } fro
 import { resetTimeLevel } from '@cindy/maker-shared/quota-level';
 import { Text } from '@/components/AppText';
 import { MobileProviderMark } from '@/session/MobileProviderMark';
+import { CountUp, OpeningLiquid, TUBE_STAGGER } from './usageOpeningMotion';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconStroke, spacing, textStyles } from '@/theme/tokens';
 
@@ -27,15 +28,23 @@ function resetLabel(source: Source, now: number, strings: Strings, compact: bool
   return !compact && duration && strings.resetsIn ? strings.resetsIn.replace('{{duration}}', duration) : duration;
 }
 
-function QuotaTube({ source, small, stale }: { source: Source; small: boolean; stale: boolean }) {
-  const { colors } = useTheme();
+function QuotaTube({ source, small, stale, panel, opening }: {
+  source: Source; small: boolean; stale: boolean; panel: boolean;
+  /** Position in the row when the liquid plays the opening; absent, it is drawn still. */
+  opening?: number;
+}) {
+  const { colors, mode } = useTheme();
   const id = useId().replace(/[^a-zA-Z0-9]/g, '');
   const width = small ? 22 : 30, height = small ? 46 : 74;
   const inset = 3, innerHeight = height - 2 * inset, innerWidth = width - 2 * inset;
   const corner = Math.min(13, width / 2);
   const fill = Math.min(1, Math.max(0, source.fill));
   const liquid = fill === 0 ? 0 : Math.max(3, innerHeight * fill);
-  const tint = source.level === 'error' ? colors.quotaBarCrit : source.level === 'warn' ? colors.quotaBarWarn : colors.quotaWidgetPlenty;
+  const alert = source.level === 'error' ? colors.quotaBarCrit : source.level === 'warn' ? colors.quotaBarWarn : null;
+  // With plenty left the widget's liquid is teal. The menu bar panel's is its ink at an
+  // opacity, so the well shows through and only a low level brings color.
+  const tint = alert ?? (panel ? colors.textPrimary : colors.quotaWidgetPlenty);
+  const tintOpacity = alert || !panel ? 1 : mode === 'dark' ? 0.72 : 0.46;
   return <Svg width={width} height={height} accessible={false} opacity={stale ? 0.45 : 1}>
     <Defs>
       <LinearGradient id={'well' + id} x1="0%" y1="0%" x2="0%" y2="100%">
@@ -49,14 +58,21 @@ function QuotaTube({ source, small, stale }: { source: Source; small: boolean; s
     <G clipPath={'url(#clip' + id + ')'}>
       {source.reserve && <Path d={Array.from({ length: Math.ceil((height + width) / 7) }, (_, i) =>
         `M${i * 7 - height},${height} l${height},-${height}`).join(' ')} stroke={colors.borderTranslucent} strokeWidth={iconStroke.regular} />}
-      {liquid > 0 && <Rect x={inset} y={height - inset - liquid} width={innerWidth} height={liquid + 4} rx={Math.min(4, liquid / 2)} fill={tint} />}
+      {liquid > 0 && (opening == null
+        ? <Rect x={inset} y={height - inset - liquid} width={innerWidth} height={liquid + 4} rx={Math.min(4, liquid / 2)} fill={tint} fillOpacity={tintOpacity} />
+        : <OpeningLiquid x={inset} bottom={height - inset} width={innerWidth} level={liquid} fraction={fill} index={opening} fill={tint} fillOpacity={tintOpacity} />)}
     </G>
   </Svg>;
 }
 
-/** `stale` dims every tube: the whole snapshot is old, not only the sources the computer marked. */
-export function UsageQuotaColumns({ sources, strings, compact = false, stale = false }: {
-  sources: Source[]; strings: Strings; compact?: boolean; stale?: boolean;
+/**
+ * `stale` dims every tube: the whole snapshot is old, not only the sources the computer marked.
+ * `palette` picks whose colors the tubes wear: the Home Screen widget's or the menu bar panel's.
+ * `opening` plays the menu bar panel's opening once: rising liquid and numbers counting up,
+ * read in the snapshot's `locale`.
+ */
+export function UsageQuotaColumns({ sources, strings, compact = false, stale = false, palette = 'widget', opening = false, locale = 'en-US' }: {
+  sources: Source[]; strings: Strings; compact?: boolean; stale?: boolean; palette?: 'widget' | 'panel'; opening?: boolean; locale?: string;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
@@ -76,7 +92,7 @@ export function UsageQuotaColumns({ sources, strings, compact = false, stale = f
   const hasCreditUnit = sources.some(source => source.reserve && source.unit && source.value != null);
   const expired = t('session.menu.usage.awaitingRefresh');
   return <View style={s.grid} onLayout={e => setAvailableWidth(e.nativeEvent.layout.width)}>
-    {sources.map(source => {
+    {sources.map((source, index) => {
       const value = source.value ?? source.label ?? '—';
       const unit = source.value == null ? null : source.unit;
       const when = resetLabel(source, now, strings, compact, expired);
@@ -85,10 +101,11 @@ export function UsageQuotaColumns({ sources, strings, compact = false, stale = f
       return <View key={source.id} style={[s.column, { width: `${100 / columns}%` }]} accessible
         accessibilityLabel={[source.name, value + (unit ?? ''), fullWhen].filter(Boolean).join(', ')}>
         <Text style={[s.value, compact && s.smallValue]} adjustsFontSizeToFit numberOfLines={1}>
-          {value}{unit && !source.reserve && <Text style={s.unit}>{unit}</Text>}
+          {opening && source.value != null ? <CountUp text={value} locale={locale} delay={index * TUBE_STAGGER} play /> : value}
+          {unit && !source.reserve && <Text style={s.unit}>{unit}</Text>}
         </Text>
         {hasCreditUnit && <Text numberOfLines={1} style={s.unit}>{source.reserve ? unit : ' '}</Text>}
-        <QuotaTube source={source} small={compact} stale={stale || !!source.stale} />
+        <QuotaTube source={source} small={compact} stale={stale || !!source.stale} panel={palette === 'panel'} opening={opening ? index : undefined} />
         <View style={[s.identity, compact && s.stackedIdentity]}>
           <MobileProviderMark name={source.monogram || source.name} color={colors.textPrimary}
             logoKind={source.logo ? providerMarks[source.logo] : undefined} providerId={source.logo === 'kimi' ? 'kimi-coding' : undefined} />

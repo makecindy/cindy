@@ -72,6 +72,8 @@ const relayState = {
   host: { enabled: false, running: false, error: null, port: 47820, listenAll: false, externalUrl: null, suggestedUrls: [] },
   deployments: [], deployJob: null, bundledRelayVersion: '0.3.1', joinLink: null, pendingRequests: [], join: { status: 'idle' },
 };
+const analyticsState = {privacyConsentAccepted: true, analyticsEnabled: !!ctx.data.modelTokens,
+  analyticsEnabledCustomized: false, allowed: !!ctx.data.modelTokens, productTokensEnabled: false};
 const emptyDirectory = { bytes: 0, fileCount: 0 };
 const visibilityWrites: unknown[] = [];
 Object.assign(window, { visibilityWrites });
@@ -127,7 +129,12 @@ void mountPage({
     onUpdateChannelSettings: subscription('update-channel'),
     getUpdateChannelSettings: read({ channel: 'stable', isCustomized: false }),
     getAutoUpdateSettings: read({ autoRelaunchOnIdle: false, isCustomized: false, defaultAutoRelaunchOnIdle: false }),
-    getAnalyticsSettings: read({ privacyConsentAccepted: true, analyticsEnabled: false, analyticsEnabledCustomized: false, allowed: false }),
+    getAnalyticsSettings: read(analyticsState),
+    setProductTokensEnabled: async (value: boolean) => {
+      analyticsState.productTokensEnabled = value;
+      window.__uiPage.emit('analytics', {...analyticsState});
+      return {...analyticsState};
+    },
     onAnalyticsSettingsChange: subscription('analytics'),
     getLogUploadSettings: read({ enabled: false, isCustomized: false }),
     onLogUploadSettingsChange: subscription('logUpload'),

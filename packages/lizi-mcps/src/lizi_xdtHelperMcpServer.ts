@@ -14,7 +14,7 @@ import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helpe
 import { registerThemePackageTool, type ThemePackageCallbacks } from './xdt-helper/theme_packages.js';
 import { registerGithubTools, type GithubToolCallbacks } from './xdt-helper/github.js';
 import { registerMcpSetupTool, type McpSetupCallback } from './xdt-helper/mcp_setup.js';
-import { registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
+import { registerSharedTaskProgressTool, registerSharedTaskTools, type SharedTaskToolCallback } from './xdt-helper/shared_task.js';
 import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/session_tags.js';
 /**
  * lizi_xdtHelperMcpServer.ts
@@ -226,6 +226,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     'list_teammates 枚举伙伴及已保存的任务关系（含隐藏与暂停），list_sessions 包含隐藏任务并返回 hiddenAt。',
     '查询任务、工作目录、聊天记录、任务摘要与输入队列；',
     '任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。',
+    '分析或跟进同事共享给你的任务，用 get_shared_task_progress 传入复制的完整任务链接，每次查询最新进展。',
     '伙伴目录、任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
     '任务附件（read_session_attachment）仅支持已有宿主授权的本机媒体和交接引用，历史文件路径与跨电脑附件返回 UNSUPPORTED_CAPABILITY，只返回分块字节和引用，不返回宿主路径。',
     '原生任务包导出（export_session）仅本机；插件按安装授权调用，Agent 运行时遵循自身权限流程；Agent 导出由用户在原生保存对话框中选择位置，再返回最终路径，不接受 output_path。插件只收到本实例 attachment_ref。',
@@ -774,6 +775,7 @@ export function createXdtHelperMcpServer(
       ...(deps.sessionQueue ? { sessionQueue: deps.sessionQueue } : {}),
     });
     registerGetChatHistoryTool(registry, historyDeps);
+    registerSharedTaskProgressTool(registry, historyDeps);
     registerSearchChatHistoryTool(registry, historyDeps);
     registerGetTaskDigestTool(registry, historyDeps);
   }

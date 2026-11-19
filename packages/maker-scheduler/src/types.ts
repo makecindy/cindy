@@ -315,13 +315,15 @@ export interface Schedule {
   fastMode?: boolean | 'ultrafast';
   /**
    * New-session workspace semantics.
-   * - project: workingDir is a user-selected project directory.
+   * - project: workingDir selects the execution directory; membership is resolved separately.
    * - dialogue: runner allocates an app-managed dialogue cwd per fire.
    *
    * Heartbeat schedules ignore this and use the target session's existing cwd.
    */
   workspaceKind: ScheduleWorkspaceKind;
   workingDir?: string;
+  /** Project inherited from the creating local task; independent of execution cwd. */
+  inheritedProjectDir?: string;
   useWorktree: boolean;
   /** Script mode: lifecycle owner and sole dispatch target; no agent turn is started by the runner. */
   targetSessionId?: string;
@@ -490,6 +492,8 @@ export interface CreateScheduleInput {
   /** Defaults to 'project' for backwards compatibility. */
   workspaceKind?: ScheduleWorkspaceKind;
   workingDir?: string;
+  /** Project inherited from the creating local task; independent of execution cwd. */
+  inheritedProjectDir?: string;
   useWorktree: boolean;
   targetSessionId?: string;
   /** 默认 false。详见 Schedule.persistentSession。 */

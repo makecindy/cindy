@@ -1,10 +1,7 @@
 /**
- * claude-cli-proxy-bridge —— 给 Claude Code CLI 用的本机 CONNECT 代理,按目标逐条套用系统代理。
- *
- * Claude 订阅会话由 CLI 直连 Anthropic(见 claude-native-cli)。CLI 只认 HTTPS_PROXY 环境
- * 变量,不读系统代理 / PAC,也不支持 SOCKS;而环境变量对整棵进程树生效 —— 直接把「对
- * api.anthropic.com 解析出的系统代理」写进去,Bash 工具里的 git / npm 访问内网也会被强制
- * 走这个代理,系统的例外列表与 PAC 规则全部丢失。
+ * 本机 CLI 的 HTTPS CONNECT 代理。Pi 和 Claude Code 都可以经原生 SDK 访问外部端点。
+ * HTTPS_PROXY 对整棵进程树生效；为一个模型解析出的系统代理不能套到其它模型或工具，
+ * 否则内网例外与按域名分流的 PAC 规则都会丢失。
  *
  * 这里在 127.0.0.1 起一个只接受 CONNECT 的端口,每条隧道按**目标主机**重新解析出口
  * (与本地 proxy 同一个解析器:代理 env 优先,其次系统代理 / PAC):
@@ -22,19 +19,19 @@ import { parseOutboundProxyUrl, socks5Connect, type OutboundProxyTarget } from '
 
 import { createLogger } from '../logger.js';
 
-const log = createLogger('claude-cli-proxy-bridge');
+const log = createLogger('cli-proxy-bridge');
 
 /** 上游建连(直连 / CONNECT / SOCKS 握手)整体超时。 */
 const UPSTREAM_CONNECT_TIMEOUT_MS = 15_000;
 
 /** 按目标 URL 解析出口:返回代理地址(http:// / socks5://),null = 直连。 */
-export type ClaudeCliProxyResolver = (
+export type CliProxyResolver = (
   targetUrl: string,
 ) => string | null | undefined | Promise<string | null | undefined>;
 
 let server: http.Server | null = null;
 let listening: Promise<string> | null = null;
-let resolveRoute: ClaudeCliProxyResolver | null = null;
+let resolveRoute: CliProxyResolver | null = null;
 const sockets = new Set<Socket>();
 
 function parseConnectAuthority(authority: string | undefined): { host: string; port: number } | null {
@@ -166,7 +163,7 @@ function handleConnect(req: http.IncomingMessage, client: Socket, head: Buffer):
  * 确保桥已监听,返回可作为 HTTPS_PROXY 的地址(`http://127.0.0.1:<port>`)。
  * resolver 按目标解析出口;之后新建的隧道都用最近一次给的 resolver。
  */
-export function ensureClaudeCliProxyBridge(resolver: ClaudeCliProxyResolver): Promise<string> {
+export function ensureCliProxyBridge(resolver: CliProxyResolver): Promise<string> {
   resolveRoute = resolver;
   if (listening) return listening;
   const srv = http.createServer((_req, res) => {
@@ -203,7 +200,7 @@ export function ensureClaudeCliProxyBridge(resolver: ClaudeCliProxyResolver): Pr
 }
 
 /** 关闭桥与所有隧道(app 退出、单测)。 */
-export function closeClaudeCliProxyBridge(): Promise<void> {
+export function closeCliProxyBridge(): Promise<void> {
   const srv = server;
   server = null;
   listening = null;
