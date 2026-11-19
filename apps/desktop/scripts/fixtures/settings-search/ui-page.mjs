@@ -256,6 +256,23 @@ export default {
         await startup.locator('xpath=self::*[not(@disabled)]').waitFor();
       }
       await ui.capture('settings-layout');
+      if (ui.data.tab === 'general') {
+        const away = panel.locator('section#settings-away-from-computer');
+        const awayTitle = await ui.t('settings.sections.awayFromComputer');
+        const heading = away.getByRole('heading', { name: awayTitle, exact: true });
+        assert.equal(await away.evaluate(el => el.previousElementSibling?.id), 'settings-window-behavior');
+        await page.getByRole('button', { name: await ui.t('settings.contentGroups.jump'), exact: true }).click();
+        await page.getByRole('menuitem', { name: awayTitle, exact: true }).click();
+        await heading.waitFor();
+        await page.waitForFunction(() => document.activeElement ===
+          document.querySelector('#settings-away-from-computer [data-settings-section-heading]'));
+
+        const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
+        await search.fill(await ui.t('settings.devices.keepAwake'));
+        await page.locator('[id="settings-search-result-settings.devices.keepAwake"]').click();
+        await away.locator('#settings-search-settings-devices-keepAwake.settings-search-target-highlight').waitFor();
+        await ui.capture('away-from-computer');
+      }
       return;
     }
     // Product regression: the opt-in must remain off until selected. Exercise the

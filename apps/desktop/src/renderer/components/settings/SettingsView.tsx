@@ -523,17 +523,21 @@ function SettingsViewContent() {
                       <LanguageSection />
                     </section>
 
-                    <SettingsSection title={t(generalSettings.windowBehavior.titleKey)}>
+                    <SettingsSection id={generalSettings.notifications.targetId} title={t(generalSettings.notifications.titleKey)}>
                       <SettingsCard>
-                        <SettingsRowGroup id={generalSettings.notifications.targetId}>
-                          <NotificationSection embedded />
-                        </SettingsRowGroup>
-                        <SettingsRowGroup id={generalSettings.windowBehavior.targetId}>
-                          <WindowBehaviorSection embedded />
-                        </SettingsRowGroup>
-                        <SettingsRowGroup id={generalSettings.awayFromComputer.targetId}>
-                          <AwayFromComputerSection embedded />
-                        </SettingsRowGroup>
+                        <NotificationSection embedded />
+                      </SettingsCard>
+                    </SettingsSection>
+
+                    <SettingsSection id={generalSettings.windowBehavior.targetId} title={t(generalSettings.windowBehavior.titleKey)}>
+                      <SettingsCard>
+                        <WindowBehaviorSection embedded />
+                      </SettingsCard>
+                    </SettingsSection>
+
+                    <SettingsSection id={generalSettings.awayFromComputer.targetId} title={t(generalSettings.awayFromComputer.titleKey)}>
+                      <SettingsCard>
+                        <AwayFromComputerSection embedded />
                       </SettingsCard>
                     </SettingsSection>
 
