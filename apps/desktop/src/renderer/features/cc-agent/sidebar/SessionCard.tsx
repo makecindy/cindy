@@ -1386,6 +1386,7 @@ function TimeActionsSlot({
                 <CardAction
                   variant="list"
                   isActive={isActive}
+                  inboxComplete
                   label={t('ccAgent.sidebar.inbox.complete')}
                   onClick={() => onComplete()}
                 >
@@ -1413,12 +1414,14 @@ function TimeActionsSlot({
 function CardAction({
   variant = 'card',
   isActive = false,
+  inboxComplete,
   label,
   onClick,
   children,
 }: {
   variant?: 'card' | 'list';
   isActive?: boolean;
+  inboxComplete?: boolean;
   label: string;
   onClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   children: ReactNode;
@@ -1427,6 +1430,7 @@ function CardAction({
     <Tip text={label}>
       <button
         type="button"
+        data-inbox-complete={inboxComplete}
         aria-label={label}
         onClick={(e) => {
           e.stopPropagation();

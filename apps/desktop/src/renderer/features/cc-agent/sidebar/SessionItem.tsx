@@ -912,9 +912,10 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
           <Undo size={14} strokeWidth={2} />
         </SessionAction>
       ) : canQuickArchive && inboxMode ? (
-        // 收件箱：「完成」单击生效；鼠标在列表上时排列冻结（TaskInbox），不会点到跳动的行。
+        // 收件箱：「完成」单击生效；鼠标悬停在完成按钮上时排列冻结（TaskInbox），不会点到跳动的行。
         // 未提交改动的确认仍保留，见 handleActionClick。
         <SessionAction
+          inboxComplete
           label={t('ccAgent.sidebar.inbox.complete')}
           onClick={() => {
             prefetchRemovalPreflight();
@@ -1379,11 +1380,13 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
  *  普通行 hover 用 sidebar-item-hover + foreground；选中行保持 active foreground,
  *  hover 只叠一层同色半透明高光)。 */
 function SessionAction({
+  inboxComplete,
   label,
   onClick,
   isActive,
   children,
 }: {
+  inboxComplete?: boolean;
   label: string;
   onClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   isActive: boolean;
@@ -1393,6 +1396,7 @@ function SessionAction({
     <Tip text={label}>
       <button
         type="button"
+        data-inbox-complete={inboxComplete}
         aria-label={label}
         onClick={(e) => {
           e.stopPropagation();
