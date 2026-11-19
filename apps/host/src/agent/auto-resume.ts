@@ -137,6 +137,9 @@ export function createHostAutoResume(ports: HostAutoResumePorts) {
     autoResumeBookkeeping,
     // Teammate tasks are refused at admission: no input carries a Teammate route to fall back from.
     botFallbackInputs: { has: () => false },
+    // Configured model groups are bound at dispatch in the desktop only.
+    modelGroupInputs: undefined,
+    resumeQuotaWait: undefined,
     // The Host has no Orca worker dispatch or scheduled remote teammate quota waits.
     workerInputs: undefined,
     scheduledQuotaInputs: undefined,

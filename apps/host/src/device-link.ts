@@ -64,6 +64,7 @@ export const HOST_DISPATCH_PORTS_WHILE_HELD = Object.freeze({
   stopFilePeers: 'unbound',
   requestTaskMigration: 'unbound',
   delegatedProviderShareGuestAccess: 'unbound',
+  locallyProvenProviderShareDelegation: 'unbound',
   delegatedProviderShareLeases: 'unbound',
   invalidateProviderShareDelegation: 'unbound',
   app: 'read',

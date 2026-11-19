@@ -796,6 +796,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     readSessionRuntimeProfiles, canApplyAutomaticRuntimeSelection,
     // Teammate tasks are refused at Host admission: no task has a Teammate route to fall back along.
     readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
+    // The Host does not bind model groups to its dispatched inputs.
+    readModelGroupFallbackCandidate: undefined,
     // Agents on another computer are refused at Host admission (send-preflight.ts): every task runs here.
     readSessionAgentDeviceId: async () => null,
     readSessionRuntimeFallbackSettings: () => fallbackSettings.read(),
