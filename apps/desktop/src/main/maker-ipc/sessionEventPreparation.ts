@@ -307,7 +307,7 @@ export function prepareSessionEvent(
       }
       if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
         && (!wasInTurn || !deps.turnUsageContextBySession.has(session.id))) {
-        const context = captureTurnUsageContext(session.id);
+        const context = captureTurnUsageContext(session.id, undefined, event.source);
         if (!session.remoteHostId && !session.agentDeviceId) beginCompanyTurn(context, context.providerId, event.source);
         deps.turnUsageContextBySession.set(session.id, context);
       }

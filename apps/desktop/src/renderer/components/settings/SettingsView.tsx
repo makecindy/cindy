@@ -635,6 +635,7 @@ function SettingsViewContent() {
                   <BillingSettingsSection
                     key={`billing:${dataOwnerId ?? 'none'}`}
                     accountId={dataOwnerId}
+                    accountName={user?.name ?? null}
                   />
                 </section>
               </div>

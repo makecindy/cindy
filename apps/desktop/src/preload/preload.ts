@@ -2591,6 +2591,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 用户动作,不自己落盘。allowed = 已同意隐私政策 && 统计开关开启。
   getAnalyticsSettings: (): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-get'),
+  setProductTokensEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
+    ipcRenderer.invoke('analytics:product-tokens-set', enabled === true),
   setAnalyticsEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-set-enabled', enabled === true),
   /** 恢复默认:删掉开关 override,同意事实保留。 */
@@ -3266,6 +3268,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, payload),
     previewGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.PREVIEW_GIFT_CARD, payload),
     redeemGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.REDEEM_GIFT_CARD, payload),
+    getGiftCardPurchasePolicy: () =>
+      ipcRenderer.invoke(BILLING_INVOKE.GET_GIFT_CARD_PURCHASE_POLICY),
+    createGiftCardOrder: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.CREATE_GIFT_CARD_ORDER, payload),
+    listPurchasedGiftCards: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.LIST_PURCHASED_GIFT_CARDS, payload),
+    revealPurchasedGiftCard: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.REVEAL_PURCHASED_GIFT_CARD, payload),
+    sendPurchasedGiftCardEmail: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.SEND_PURCHASED_GIFT_CARD_EMAIL, payload),
   } satisfies BillingRendererApi,
 
   // ── Workdir File Browser (vscode-style file tree + content viewer) ──

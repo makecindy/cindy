@@ -853,7 +853,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     async rebalanceTarget(providerId, config, memberKey, model, agentKind, exclude) {
       const resolved = await withTimeout(deps.directory.resolveMembers(providerId, config), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
       const current = resolved?.find((r) => r.member.key === memberKey);
-      if (!resolved || current?.state !== 'ok' || current.providerContinuity?.stale
+      if (!resolved || current?.state !== 'ok' || current.member.kind === 'share' || current.providerContinuity?.stale
         || router.coolingUntil(providerId, memberKey, model) !== null) return null;
       const now = deps.now();
       const state = providerGroupMemberUsageState(current, model, now, agentKind);

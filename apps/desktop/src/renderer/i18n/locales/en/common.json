@@ -873,8 +873,7 @@
         "loading": "Reading quota…",
         "unavailable": "Can’t read this computer’s quota right now",
         "none": "This provider has no quota information",
-        "offline": "This computer is offline, so its quota can’t be read",
-        "share": "Quota isn’t shown for computers shared by others"
+        "offline": "This computer is offline, so its quota can’t be read"
       },
       "runningCount_one": "{{count}} task running",
       "runningCount_other": "{{count}} tasks running",
@@ -983,8 +982,8 @@
       "loading": "Loading image…"
     },
     "moveToolbar": "Move toolbar left or right",
-    "hint": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · C: copy color · Esc: exit",
-    "hintWithLast": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: full screen · R: last area · C: copy color · Esc: exit",
+    "hint": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: select whole window · C: copy color · Esc: exit",
+    "hintWithLast": "Click to select a window or element, or drag to select an area · Scroll to change scope · Space: select whole window · R: last area · C: copy color · Esc: exit",
     "copy": "Copy",
     "cancel": "Exit Screenshot",
     "captureFailed": "Could not capture the screen",
@@ -2804,6 +2803,8 @@
       "autoUpdateSaveFailed": "Failed to save auto-update settings",
       "analyticsLabel": "Usage statistics",
       "analyticsDescription": "Helps us understand how often Cindy is launched and kept in use. Reports device and usage-environment information — such as your device model, OS version, app version, and a device identifier — plus, once signed in, your account ID; never conversations, files, or prompts. Turning this off stops reporting immediately.",
+      "productTokenUsage": "Share model token totals",
+      "productTokenUsageHint": "Share new token counts for this account on this device. Your region combines counts by source and model before sending them to TapDB.",
       "analyticsEnabledToast": "Usage statistics enabled",
       "analyticsDisabledToast": "Usage statistics disabled",
       "analyticsSaveFailed": "Failed to save usage statistics settings",
@@ -6805,6 +6806,9 @@
           "udp": "UDP",
           "websocket": "WS"
         },
+        "linkTransport": {
+          "webrtc": "WebRTC"
+        },
         "onlyEncrypted": "Use Only Agent-Net",
         "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
         "peerSwitch": {
@@ -9798,6 +9802,10 @@
     "cacheLine": "Cache breakdown: read {{read}} · write {{create}} · hit rate {{rate}}",
     "cacheLineNoRate": "Cache breakdown: read {{read}} · write {{create}}",
     "stepsLine": "Requests this turn: {{steps}} · ~{{context}} context each",
+    "traceChartLabel": "Generation speed and reasoning per request this turn",
+    "traceRequests": "Requests this turn: {{requests}}",
+    "traceThinkingShare": "Reasoning: {{share}} of output",
+    "traceThinkingTokens": "Reasoning: {{thinking}} tokens",
     "modelLine": "Model: {{model}}",
     "multipleModels": "{{count}} models",
     "costBreakdownHeader": "By model:",
@@ -13606,6 +13614,8 @@
         },
         "reply": {
           "unsupportedMedia": "This version can't handle this type of WeChat media yet.",
+          "delayedReply": "Delayed reply prepared at {{createdAt}}, for your message received at {{receivedAt}}. The contents may be out of date.",
+          "delayedReplyQuestion": "Original message: {{question}}",
           "stillProcessing": "Still working on it…",
           "ownerOnlyCommands": "Only the owner can use bot commands.",
           "companionManagedCommand": "Open this teammate in Cindy: change the model in the teammate's settings, and switch permissions below the input box.",
@@ -14992,6 +15002,7 @@
       "rateHistory": "Generation speed history",
       "outputTotal": "Output",
       "observedPeak": "Peak",
+      "thinkingShare": "Reasoning",
       "tokenRate": "{{rate}} tok/s",
       "tokenRateUnit": "tok/s",
       "tokenRateDescription": "Latest generation interval. Excludes tools and waits.",
@@ -19814,7 +19825,8 @@
         "validityValue_one": "{{count}} day after redeeming",
         "validityValue_other": "{{count}} days after redeeming",
         "claimBy": "Redeem by",
-        "destination": "Added to"
+        "destination": "Added to",
+        "validityPermanent": "Never expires"
       },
       "doneTitle": "{{amount}} added",
       "doneDescription": "Added to your Promotional Balance. Valid until {{date}}.",
@@ -19830,10 +19842,13 @@
         "alreadyClaimed": "This gift card has already been redeemed.",
         "expired": "This gift card can no longer be redeemed. Its deadline has passed.",
         "voided": "This gift card has been voided.",
+        "voidedPurchased": "This gift card can't be redeemed right now.",
         "rateLimited": "Too many attempts. Try again later.",
         "failed": "Couldn't redeem the gift card. Try again later.",
         "personalRequired": "Gift cards can only be redeemed by personal accounts."
-      }
+      },
+      "doneDescriptionPurchased": "Added to your Top-up Balance. It never expires.",
+      "pendingDescriptionPurchased": "{{amount}} is being added and will appear in your Top-up Balance shortly. You do not need to redeem it again."
     },
     "usage": {
       "title": "Balance Usage",
@@ -19879,7 +19894,9 @@
         "noPayment": "No Payment Required",
         "page": "Page {{page}}",
         "previous": "Previous Page",
-        "next": "Next Page"
+        "next": "Next Page",
+        "giftCard_one": "Gift card × {{count}}",
+        "giftCard_other": "Gift cards × {{count}}"
       },
       "count": "{{count}} orders",
       "orderId": "NO. {{id}}",
@@ -20108,6 +20125,120 @@
         "MONTH": "Includes {{amount}} each month",
         "YEAR": "Includes {{amount}} each year",
         "OTHER": "{{amount}}"
+      }
+    },
+    "giftCardPurchase": {
+      "action": "Buy Gift Card",
+      "title": "Buy Gift Card",
+      "subtitle": "Give it to a friend or keep it for yourself. Redeemed cards go to your Top-up Balance and never expire.",
+      "previewLabel": "What they’ll receive",
+      "sameCards_one": "{{count}} card with its own redeem code",
+      "sameCards_other": "{{count}} cards with the same design, amount and message, each with its own redeem code",
+      "fields": {
+        "face": "Design",
+        "amount": "Amount",
+        "quantity": "Quantity",
+        "sender": "From",
+        "senderHint": "Shown as “From {{sender}}”",
+        "senderPlaceholder": "Your name",
+        "message": "Message (optional)",
+        "messagePlaceholder": "Add a note for them",
+        "tooLong": "Up to {{max}} characters",
+        "paymentMethod": "Payment method"
+      },
+      "decrease": "One fewer card",
+      "increase": "One more card",
+      "quantityHint": "Up to {{limit}} cards every {{hours}} hours · {{remaining}} left now",
+      "quantityLimitReached": "You’ve bought the maximum of {{limit}} cards in {{hours}} hours. Try again later.",
+      "orderAmountCap": "Up to {{amount}} per order",
+      "totalDetail_one": "{{count}} card × {{amount}}",
+      "totalDetail_other": "{{count}} cards × {{amount}}",
+      "pay": "Continue to Payment",
+      "refundNote": "Gift cards can't be exchanged for cash. Claimed or redeemed cards are non-refundable. To request a refund for a card that hasn't been claimed, contact support.",
+      "cancel": "Cancel",
+      "loadFailed": "Couldn’t load the gift card purchase limits. Try again later.",
+      "checkoutSubtitle_one": "Gift card {{amount}} × {{count}} · Issued as soon as payment succeeds",
+      "checkoutSubtitle_other": "Gift cards {{amount}} × {{count}} · Issued as soon as payment succeeds",
+      "faces": {
+        "cindy": "Cindy · Brand Red",
+        "cat": "Black Cat · Night",
+        "bell": "Bell · Festive",
+        "leap": "Leap · Ivory"
+      },
+      "errors": {
+        "limitReached": "You’ve reached the gift card purchase limit. Try again later.",
+        "amountTooLarge": "This order is over the per-order payment limit. Choose fewer cards and try again."
+      },
+      "done": {
+        "title_one": "Your gift card is ready",
+        "title_other": "Your {{count}} gift cards are ready",
+        "pendingTitle": "Gift card paid",
+        "loading": "Getting the cards from this order…",
+        "description": "Send a claim link to a friend and they can redeem it as soon as they open it. You can also keep one for yourself.",
+        "missing": "Payment is complete. Your gift cards will appear in My Gift Cards shortly.",
+        "cardTitle": "Card {{index}} · {{amount}}",
+        "cardMeta": "Ending in {{tail}} · {{status}}",
+        "linkHint": "The claim link is the card: whoever opens it first gets it. Only send it to the person you’re giving it to.",
+        "viewAll": "View My Gift Cards",
+        "finish": "Done"
+      },
+      "list": {
+        "title": "My Gift Cards",
+        "description": "Send a claim link to a friend and they can redeem it as soon as they open it. Cards you haven’t given away never expire, and you can redeem them yourself. Redeemed cards go to your Top-up Balance.",
+        "count_one": "{{count}} card",
+        "count_other": "{{count}} cards",
+        "loadMore": "Load more",
+        "loadFailed": "Couldn’t load your gift cards",
+        "retry": "Reload",
+        "status": {
+          "unclaimed": "Not claimed",
+          "claimedBy": "Claimed by {{name}}",
+          "claimed": "Claimed",
+          "redeemedByYou": "Redeemed by you",
+          "refunded": "Refunded",
+          "onHold": "Processing, unavailable for now"
+        },
+        "meta": {
+          "purchased": "Bought {{date}} · Ending in {{tail}}",
+          "claimed": "Claimed {{date}} · Ending in {{tail}}",
+          "redeemed": "Redeemed {{date}} · Ending in {{tail}}"
+        }
+      },
+      "actions": {
+        "copyLink": "Copy Claim Link",
+        "copied": "Copied",
+        "more": "More actions",
+        "copyCode": "Copy Redeem Code",
+        "redeemSelf": "Redeem for Myself",
+        "sendEmail": "Send by Email"
+      },
+      "toasts": {
+        "linkCopied": "Claim link copied",
+        "codeCopied": "Redeem code copied",
+        "copyFailed": "Couldn’t copy. Try again.",
+        "unavailable": "This card has already been claimed or refunded",
+        "revealFailed": "Couldn’t get the redeem code. Try again later.",
+        "emailQueued": "Sending to {{email}}"
+      },
+      "email": {
+        "title": "Send by Email",
+        "description": "Email this card’s claim link to the person you’re giving it to. The email includes your name and message.",
+        "previewLabel": "They’ll receive",
+        "previewWithMessage": "“{{message}}” · with the claim link and redeem code",
+        "previewLinkOnly": "The claim link and redeem code",
+        "recipient": "Recipient email",
+        "placeholder": "name@example.com",
+        "hint": "You can send it to any address. Whoever opens the claim link first gets the card.",
+        "cooldown": "You can send again in {{seconds}} s",
+        "invalid": "Enter a valid email address",
+        "failed": "Couldn’t send the email. Try again later.",
+        "send": "Send Email",
+        "status": {
+          "sending": "Sending to {{email}}",
+          "sent": "Sent to {{email}}",
+          "failed": "Couldn’t send to {{email}}",
+          "failedRetry": "Couldn’t send to {{email}}. You can send it again."
+        }
       }
     }
   },

@@ -20,7 +20,8 @@ export type GiftCardStep =
  * INVALID 是没认出兑换码（没有问过服务端）；FAILED 是网络或服务故障；
  * 其余是服务端给出的卡片状态。
  */
-export type GiftCardProblem = { reason: GiftCardFailure | 'INVALID' | 'FAILED'; code: string | null };
+/** purchased：已知这是用户买的卡——它作废可能只是退款或拒付还在处理，之后还会恢复，所以只说目前不能领取。 */
+export type GiftCardProblem = { reason: GiftCardFailure | 'INVALID' | 'FAILED'; code: string | null; purchased?: boolean };
 
 type State = { owner: string; step: GiftCardStep; problem: GiftCardProblem | null };
 
@@ -73,7 +74,8 @@ export function useGiftCardRedeem({ visible, code, invalidLink, onBusyChange }: 
     }
     const { signal, current } = begin();
     setState({ owner: api.owner, step: { kind: 'reading' }, problem: null });
-    const fail = (reason: GiftCardProblem['reason']) => setState({ owner: api.owner, step: { kind: 'input' }, problem: { reason, code: parsed } });
+    const fail = (reason: GiftCardProblem['reason'], purchased?: boolean) =>
+      setState({ owner: api.owner, step: { kind: 'input' }, problem: { reason, code: parsed, purchased } });
     try {
       const result = await api.preview(parsed, signal);
       if (!current()) return;
@@ -83,7 +85,7 @@ export function useGiftCardRedeem({ visible, code, invalidLink, onBusyChange }: 
         return;
       }
       const reason = unavailable(result.card);
-      if (reason) fail(reason);
+      if (reason) fail(reason, result.card.destination === 'PURCHASED');
       else setState({ owner: api.owner, step: { kind: 'confirm', code: parsed, card: result.card }, problem: null });
     } catch {
       if (current()) fail('FAILED');
@@ -100,8 +102,10 @@ export function useGiftCardRedeem({ visible, code, invalidLink, onBusyChange }: 
       const result = await api.redeem(step.code, signal);
       if (!current()) return;
       // 确认期间卡片状态变了（被别人领走、作废或过期）：回到输入并说明原因。
-      if (!result.ok) setState({ owner: api.owner, step: { kind: 'input' }, problem: { reason: result.reason, code: step.code } });
-      else setState({ owner: api.owner, step: { kind: 'done', card: result.card, credit: result.credit }, problem: null });
+      if (!result.ok) {
+        const purchased = step.card.destination === 'PURCHASED';
+        setState({ owner: api.owner, step: { kind: 'input' }, problem: { reason: result.reason, code: step.code, purchased } });
+      } else setState({ owner: api.owner, step: { kind: 'done', card: result.card, credit: result.credit }, problem: null });
     } catch {
       // 结果未知：留在确认步骤。领取是幂等的，再点一次不会重复入账。
       if (current()) setState({ owner: api.owner, step: { kind: 'confirm', code: step.code, card: step.card }, problem: { reason: 'FAILED', code: step.code } });

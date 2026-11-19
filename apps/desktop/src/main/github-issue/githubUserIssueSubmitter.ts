@@ -21,9 +21,8 @@ type GhostToolCallResult =
   { ok: true; result: unknown } | { ok: false; errorCode: string; message: string };
 
 export interface GithubUserIssueSubmitterDeps {
-  isGithubGhostEnabled: () => boolean;
-  isGithubCredentialSaved: () => boolean;
-  isGithubGhostDisabledForWorkdir: (workdir: string | null | undefined) => boolean;
+  /** Exact approved, enabled installation with an available declared credential source. */
+  resolveInstanceId: (workdir?: string | null, instanceId?: string) => string | null | Promise<string | null>;
   callGhostTool: (request: {
     ghostId: string;
     tool: string;
@@ -41,21 +40,6 @@ export interface GithubOperationFailure {
   ok: false;
   errorCode: string;
   message: string;
-}
-
-/**
- * 插件通道是否可用(已装、已启用、当前 workdir 未停用、且保存了凭证)。
- * 提交路径与「我的 Issue」查询路径共用这一份判定,避免两边口径漂移。
- */
-export function isCindyGithubGhostUsable(
-  deps: GithubUserIssueSubmitterDeps,
-  workdir?: string | null,
-): boolean {
-  return (
-    !deps.isGithubGhostDisabledForWorkdir(workdir) &&
-    deps.isGithubGhostEnabled() &&
-    deps.isGithubCredentialSaved()
-  );
 }
 
 /**
@@ -79,7 +63,7 @@ export function callCindyGithubOperation(
   deps: GithubUserIssueSubmitterDeps,
   name: CindyGithubReadOperation,
   args: Record<string, unknown>,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; workdir?: string | null; instanceId?: string } = {},
 ): Promise<{ ok: true; data: unknown } | GithubOperationFailure> {
   return callGithubOperation(deps, name, args, options);
 }
@@ -96,14 +80,6 @@ export async function resolveGithubIssueSubmissionChoices(
   const platformOnly: IssueSubmissionChoices = {
     platform: PLATFORM_ISSUE_SUBMISSION_IDENTITY,
   };
-  try {
-    if (!isCindyGithubGhostUsable(deps, workdir)) {
-      return platformOnly;
-    }
-  } catch (err) {
-    logOptionalIdentityUnavailable(deps, 'readiness check failed', err);
-    return platformOnly;
-  }
 
   let operation: { ok: true; data: unknown } | GithubOperationFailure;
   try {
@@ -113,6 +89,7 @@ export async function resolveGithubIssueSubmissionChoices(
       {},
       {
         timeoutMs: deps.identityProbeTimeoutMs ?? 5000,
+        workdir,
       },
     );
   } catch (err) {
@@ -140,9 +117,11 @@ export async function postGithubIssueAsUser(
   deps: GithubUserIssueSubmitterDeps,
   identity: Extract<IssueSubmissionIdentity, { kind: 'github-user' }>,
   body: GithubIssuePostBody,
+  workdir?: string | null,
 ): Promise<GithubIssuePostResponse> {
-  const currentUser = await requireGithubOperation(deps, 'get_current_user', {});
-  const currentLogin = parseGithubLogin(currentUser);
+  const currentUser = await requireGithubOperation(deps, 'get_current_user', {}, { workdir });
+  const options = { workdir, instanceId: currentUser.instanceId };
+  const currentLogin = parseGithubLogin(currentUser.data);
   if (currentLogin !== identity.login) {
     throw submissionError(
       'AUTH_NOT_READY',
@@ -150,13 +129,14 @@ export async function postGithubIssueAsUser(
     );
   }
 
-  const created = await requireGithubOperation(deps, 'create_issue', {
+  const createdOperation = await requireGithubOperation(deps, 'create_issue', {
     owner: FEEDBACK_REPOSITORY.owner,
     repo: FEEDBACK_REPOSITORY.repo,
     title: body.title,
     body: buildDirectIssueBody(body),
     labels: [body.type === 'bug' ? 'bug' : 'feature'],
-  });
+  }, options);
+  const created = createdOperation.data;
   if (
     !isRecord(created) ||
     typeof created.number !== 'number' ||
@@ -174,15 +154,16 @@ async function requireGithubOperation(
   deps: GithubUserIssueSubmitterDeps,
   name: 'get_current_user' | 'create_issue',
   args: Record<string, unknown>,
-): Promise<unknown> {
-  let operation: { ok: true; data: unknown } | GithubOperationFailure;
+  options: { workdir?: string | null; instanceId?: string },
+): Promise<{ data: unknown; instanceId: string }> {
+  let operation: { ok: true; data: unknown; instanceId: string } | GithubOperationFailure;
   try {
-    operation = await callGithubOperation(deps, name, args);
+    operation = await callGithubOperation(deps, name, args, options);
   } catch (err) {
     throw malformedResponseError(`Cindy GitHub 的 ${name} 调用失败`, err);
   }
-  if (operation.ok) return operation.data;
-  const code = isGithubAuthFailure(operation.message)
+  if (operation.ok) return operation;
+  const code = operation.errorCode === 'AUTH_NOT_READY' || isGithubAuthFailure(operation.message)
     ? 'AUTH_NOT_READY'
     : isNetworkFailure(operation.message)
       ? 'NETWORK_ERROR'
@@ -199,11 +180,15 @@ async function callGithubOperation(
   deps: GithubUserIssueSubmitterDeps,
   name: CindyGithubOperation,
   args: Record<string, unknown>,
-  options: { timeoutMs?: number } = {},
-): Promise<{ ok: true; data: unknown } | GithubOperationFailure> {
+  options: { timeoutMs?: number; workdir?: string | null; instanceId?: string } = {},
+): Promise<{ ok: true; data: unknown; instanceId: string } | GithubOperationFailure> {
+  const instanceId = await deps.resolveInstanceId(options.workdir, options.instanceId);
+  if (!instanceId || (options.instanceId !== undefined && options.instanceId !== instanceId)) {
+    return { ok: false, errorCode: 'AUTH_NOT_READY', message: 'GitHub credential or plugin instance is unavailable' };
+  }
   const result = await withOptionalTimeout(
     deps.callGhostTool({
-      ghostId: CINDY_GITHUB_GHOST_ID,
+      ghostId: instanceId,
       tool: 'call_tool',
       args: { name, args },
     }),
@@ -218,7 +203,7 @@ async function callGithubOperation(
   if (!isRecord(result.result) || !Object.prototype.hasOwnProperty.call(result.result, 'data')) {
     throw new Error('响应缺少 data');
   }
-  return { ok: true, data: result.result.data };
+  return { ok: true, data: result.result.data, instanceId };
 }
 
 function parseGithubLogin(value: unknown): string {
