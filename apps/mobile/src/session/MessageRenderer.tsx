@@ -6210,7 +6210,6 @@ function MarkdownBodyBase({
   /** Explicit ordinary-task opt-in; group/companion/iOS carriers are unchanged. */
   androidTableSelection?: boolean;
   tableFallbackBackground?: ViewStyle['backgroundColor'];
-  /** Local fixture measurement only; no document/host capability. */
   renderRichAnswers?: boolean;
   /** Shared room bodies cannot resolve task-local media from model-authored paths. */
   publicMediaOnly?: boolean;
