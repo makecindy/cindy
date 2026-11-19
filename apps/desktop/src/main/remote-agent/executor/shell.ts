@@ -86,7 +86,8 @@ export function resolveExecutorShell(): ExecutorShell {
       file: process.env.ComSpec || 'cmd.exe',
       dialect: 'cmd',
       scriptName: 'script.cmd',
-      args: ['/d', '/s', '/c', 'script.cmd'],
+      // Explicit path keeps the wrapper runnable when cmd's current-directory search is disabled.
+      args: ['/d', '/s', '/c', '.\\script.cmd'],
     };
   }
   const preferred = process.env.SHELL;
