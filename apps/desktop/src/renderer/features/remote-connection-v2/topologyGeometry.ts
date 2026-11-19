@@ -18,6 +18,7 @@ export interface Point {
 
 /** 每组上方留给组名的高度。 */
 const CAPTION_H = 18;
+export const LINK_LABEL_TILE_GAP = 14;
 
 export interface TopologyMetrics {
   /** 中间圆盘半径 */
@@ -174,7 +175,7 @@ export function groupLines(
     const p = layout.rows.get(id);
     if (!p) continue;
     const end = { x: p.x - s * (halfOf(id) + 4), y: p.y };
-    const at = { x: p.x - s * (m.half + 14), y: p.y };
+    const at = { x: p.x - s * (m.half + LINK_LABEL_TILE_GAP), y: p.y };
     if (g?.relay) {
       // 中转站扇出:离中转站越远的行拐弯越宽,扇面才是一把匀称的扇子而不是一排梳齿。
       const k = from.x + s * (20 + Math.min(44, Math.abs(end.y - from.y) * 0.22));

@@ -2442,6 +2442,53 @@ describe('shared startup lease budget', () => {
     expect(f.calls.filter(call => call.op === 'open')).toHaveLength(1);
   });
 
+  // Unit regression through the real starter and authorization path. A restarted
+  // M can remain circuit-open through a 120s cooldown and a 30s probe RPC;
+  // the old 4s probe window stranded the input.
+  // Reconnect must reuse one grant, native history and target, never replay open/send.
+  it('resumes the original native history after its executor reconnects during backoff', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 300_000;
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    let online = false;
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === f.target && !online) throw Object.assign(new Error('restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const opening = f.open('historical', f.owner, 'm', 'native-only-on-m')
+      .then(handle => ({ handle }), error => ({ error }));
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
+    online = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const outcome = await opening;
+    expect(outcome).toHaveProperty('handle');
+    if (!('handle' in outcome)) return;
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({
+      device: f.target, payload: { json: expect.objectContaining({ options: expect.objectContaining({ resumeSessionId: 'native-only-on-m' }) }) },
+    })]);
+    expect(f.calls.some(call => call.op === 'call')).toBe(false);
+    await outcome.handle.close({ reason: 'navigation' });
+  });
+
+  it.each(['cancel', 'permission', 'link-generation', 'lease-expiry'] as const)('stops a delayed executor recovery after %s', async boundary => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
+    if (boundary === 'lease-expiry') f.state.duration = 2_000;
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer === f.target) throw Object.assign(new Error('restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const opening = f.open('historical', f.owner, 'm', 'native-only-on-m').catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    if (boundary === 'cancel') cancelPendingRemoteStart('historical');
+    if (boundary === 'permission') guestPermission.epoch++;
+    if (boundary === 'link-generation') historyCloseEpoch.mockReturnValue(1);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(await opening).toBeInstanceOf(Error);
+    expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(1);
+    expect(f.calls.some(call => call.op === 'open' || call.op === 'call')).toBe(false);
+  });
+
   it('re-arms renewal after an online model change on a reused history route', async () => {
     const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
     const first = await f.open('history-renew-model'); await first.close({ reason: 'navigation' });

@@ -42,6 +42,24 @@ const reader = () => ({
 });
 
 describe("existing remote quota compatibility", () => {
+  // A plugin task with a Codex-looking model must use the plugin account on its executing device.
+  it('keeps plugin balances and reset windows on the plugin route, including on older hosts', async () => {
+    const task = { ...session, agentKind: 'acp', providerId: 'acp-plugin:demo:engine' } as unknown as RemoteSession;
+    const r = { ...reader(), getPluginEngineUsage: vi.fn(async () => ({
+      updatedAt: 2000, balances: [{ currency: 'EUR', amount: '0.00' }],
+      windows: [{ label: 'Week', remainingPercent: 0, resetsAt: 1893456000000 }],
+    })) };
+    expect(await readSessionMenuAccountUsage(task, r)).toEqual({
+      source: 'plugin', plan: null, updatedAt: 2000,
+      amounts: [{ id: 'balance', currency: 'EUR', amount: 0 }],
+      windows: [{ id: '0', minutes: null, modelLabel: 'Week', remainingPercent: 0, resetsAt: 1893456000 }],
+    });
+    expect(r.getPluginEngineUsage).toHaveBeenCalledWith('demo:engine');
+    expect(await readSessionMenuAccountUsage(task, { ...r, getPluginEngineUsage: undefined })).toMatchObject({ windows: [], amounts: [] });
+    expect(r.getCodexRateLimits).not.toHaveBeenCalled();
+    expect(r.getAccountUsage).not.toHaveBeenCalled();
+  });
+
   it('reads the selected independent account and never falls back after its read fails', async () => {
     const r = reader();
     const provider = { id: 'openai-second', auth: { method: 'oauth' as const, native: 'codex' as const } };

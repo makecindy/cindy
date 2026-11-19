@@ -173,6 +173,13 @@ export const CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1 = 'maker-event-batch-v1'
 export const CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1 = 'session-text-snapshot-v1';
 
 /**
+ * 控制端认识「待切到插件引擎」的意图(`agentSwitchIntent.targetAgentKind = 'acp'`，
+ * docs/plans/acp-plugin-bridge.md)。被控端只把这种意图推给 / 读给声明了本能力的控制端；
+ * 其余控制端看到的是「没有待切换」(旧版手机会把未知引擎显示成 Claude Code)。
+ */
+export const CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1 = 'plugin-engine-switch-intent-v1';
+
+/**
  * 后台链路(link-open / link-accept 双向声明)。控制端在本机没有订阅对端任何 topic 时建链
  * 即声明:被控端不装 legacy `'*'` 兼容订阅 —— 不亮被控横幅、不转发推送、不挡无人值守更新
  * 重启 —— 直到控制端显式 subscribe。被控端在 link-accept 声明支持;旧被控端忽略该能力,

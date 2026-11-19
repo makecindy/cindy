@@ -5,11 +5,11 @@
  * CLI host：可以写 ~/.config/lizi-maker/sessions.json 或纯内存。
  */
 
-import type { AgentKind, Effort, PermissionMode, WorkspaceKind } from '../types/common.js';
+import type { EngineKind, Effort, PermissionMode, WorkspaceKind } from '../types/common.js';
 
 export interface SessionMeta {
   id: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workDir: string;
   title: string;
   model: string;

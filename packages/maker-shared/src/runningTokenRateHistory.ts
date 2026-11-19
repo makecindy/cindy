@@ -283,6 +283,7 @@ export function recordTokenSpeed(
   // A share needs both numbers from the same request.
   const shareTokens = newMark && request.thinkingTokens !== undefined && (request.outputTokens ?? 0) > 0
     ? { thinking: request.thinkingTokens, output: request.outputTokens! } : undefined;
+  const measured = speed.streaming && speed.rate > 0;
   const next: RateHistory = {
     ...history,
     ...(newMark ? {
@@ -324,18 +325,13 @@ export function recordTokenSpeed(
     speedElapsedMs: speed.elapsedMs,
     peak: Math.max(history.startedAt !== startedAt ? 0 : history.peak, speed.peak ?? 0,
       speed.streaming ? speed.rate : 0),
-    // The final average has its own UI field. It is not a new recent-speed sample.
-    // While a new request warms up (streaming with rate 0), clear any stale previous-request rate.
-    latestRate: speed.streaming
-      ? (speed.rate > 0 ? speed.rate : null)
-      : (reset ? null : history.latestRate),
-    latestSampleAt: speed.streaming
-      ? (speed.rate > 0 ? (input.now ?? Date.now()) : undefined)
-      : (reset ? undefined : history.latestSampleAt),
+    // Neither a pause nor request warm-up is a measurement. Keep the original expiry.
+    latestRate: measured ? speed.rate : reset ? null : history.latestRate,
+    latestSampleAt: measured ? (input.now ?? Date.now()) : reset ? undefined : history.latestSampleAt,
   };
   const at = offset + speed.elapsedMs;
   const lastAt = reset ? offset : (lastSampleDuration ?? offset);
-  if (!speed.streaming || speed.rate <= 0 || at - lastAt < MIN_SAMPLE_DURATION_MS) return next;
+  if (!measured || at - lastAt < MIN_SAMPLE_DURATION_MS) return next;
   const samples = [
     ...history.samples.slice(-(MAX_RATE_SAMPLES - 1)),
     { durationMs: at, outputTokens: speed.tokens, rate: speed.rate },

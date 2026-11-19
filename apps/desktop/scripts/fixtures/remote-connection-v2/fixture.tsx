@@ -27,6 +27,12 @@ function link(deviceId: string, path: Link['path'], rttMs: number | null, sent: 
 }
 
 function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs: number | null } {
+  if (name === 'rename-self') {
+    return { devices: [
+      device({ deviceId: 'self', isSelf: true, name: 'self', selfName: 'Office desktop', platform: 'win32' }),
+      device({ deviceId: 'peer', name: 'MacBook Air' }),
+    ], links: [link('peer', 'direct', 6)], relayRttMs: 18 };
+  }
   if (name === 'app-nodes' || name === 'app-nodes-list') {
     return { devices: [SELF,
       device({ deviceId: 'friend', name: 'Friend Mac', app: 'cindy-friend', remoteControlEnabled: false }),
@@ -269,8 +275,15 @@ void mountPage({
       onControlledState: subscription('controlled'),
       onControlTargetChanged: subscription('controlTarget'),
       setEnabled: forbid('deviceLink.setEnabled'),
-      renameDevice: forbid('deviceLink.renameDevice'),
-      deleteDevice: forbid('deviceLink.deleteDevice'),
+      renameDevice: ctx.case === 'rename-self' ? async (deviceId: string, name: string) => {
+        data.devices = data.devices.map((d) => d.deviceId === deviceId ? { ...d, name } : d);
+        return { deviceId, name };
+      } : forbid('deviceLink.renameDevice'),
+      deleteDevice: async (deviceId: string) => {
+        const index = data.devices.findIndex((d) => d.deviceId === deviceId && !d.online && !d.isSelf);
+        if (index >= 0) data.devices.splice(index, 1);
+        return { deviceId, deleted: index >= 0 };
+      },
     },
     selfHostedRelay: {
       command: async (command: SelfHostedRelayCommand) => ({
@@ -308,7 +321,7 @@ void mountPage({
   },
   render: () => (
     <AppFrame>
-      <div className="mx-auto w-full max-w-[920px] px-6 py-6">
+      <div className={`mx-auto w-full px-6 py-6 ${ctx.case === 'default' ? 'max-w-[1000px]' : 'max-w-[920px]'}`}>
         <RemoteControlSection />
       </div>
     </AppFrame>

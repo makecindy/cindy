@@ -1412,6 +1412,7 @@
     "UPSTREAM_ERROR": "上游服務錯誤（5xx），請稍後重試",
     "UPSTREAM_UNREACHABLE": "無法連線到端點，請檢查網路與基礎 URL",
     "TIMEOUT": "連線逾時，請檢查網路與基礎 URL",
+    "CERT_ERROR": "憑證驗證失敗，請檢查基礎 URL 的主機名稱是否與憑證相符，以及憑證鏈和企業 CA 信任設定",
     "UNKNOWN": "未知錯誤，請檢視日誌瞭解詳情",
     "upstreamToast": "供應商「{{provider}}」請求失敗：{{message}}"
   },
@@ -1423,6 +1424,10 @@
     "details": "錯誤詳情"
   },
   "localDbFatal": {
+    "runtimeCorrupt": {
+      "title": "本機資料庫損毀",
+      "description": "偵測到本機資料庫損毀，已停止存取以保護資料。可重新開啟本機資料；若仍失敗，請複製技術詳細資料並聯絡支援人員。請勿覆寫或刪除資料庫檔案。"
+    },
     "schemaLease": {
       "title": "暫時無法開啟本機資料",
       "retry": "重新開啟本機資料",
@@ -3674,6 +3679,8 @@
           "edit": "編輯",
           "editFailed": "請檢查網址、協定與金鑰後重試。",
           "editNote": "金鑰留空會保留已讀取的憑證。變更網址或協定後，需填寫新金鑰。",
+          "useSavedCredential": "使用已儲存的憑證",
+          "confirmDestination": "要在此位址使用已儲存的 Claude Code 憑證嗎？",
           "name": "顯示名稱",
           "baseUrl": "基礎 URL",
           "protocol": "API 協定",
@@ -4075,6 +4082,25 @@
         "refreshFailed": "模型列表重新整理失敗，請稍後再試",
         "refreshReconnect": "模型列表重新整理失敗。重新連線此供應商後再試。",
         "refreshFetchDisabled": "模型目錄遠端擷取未啟用，已跳過重新整理",
+        "withdrawn": {
+          "refreshFound": "有 {{count}} 個模型上游已不再提供",
+          "refreshAdded": "新增 {{added}} 個模型，另有 {{count}} 個上游已不再提供",
+          "refreshSuspicious": "這次有 {{count}} 個模型沒回傳，可能是上游暫時回傳不完整",
+          "refreshAddedSuspicious": "新增 {{added}} 個模型，另有 {{count}} 個沒回傳，可能是上游暫時回傳不完整",
+          "review": "查看模型",
+          "heading": "上游已不再提供的模型",
+          "intro": "重新整理「{{provider}}」時，上游沒有再回傳以下模型。勾選要移除的模型；仍回傳它們的引擎不受影響。",
+          "suspicious": "這次沒回傳的模型數量異常多，可能是上游暫時回傳不完整。建議稍後再重新整理一次確認，或只勾選確定已下線的模型。",
+          "selectAll": "全選",
+          "selected": "已選 {{count}} 個，共 {{total}} 個",
+          "consequence": "移除後，這些模型不再出現在模型選擇中，已選用它們的地方會顯示為無法使用。上游重新提供時，再次重新整理即可加回。",
+          "confirm": "移除 {{count}} 個模型",
+          "cancel": "暫不移除",
+          "removed": "已移除 {{count}} 個模型",
+          "cleanupIncomplete": "已移除 {{count}} 個模型，但部分顯示或停用設定未能清除",
+          "stale": "連線設定已變更，沒有可移除的模型。請重新整理後再查看",
+          "removeFailed": "未能移除模型"
+        },
         "disableModel": "停用此模型",
         "paymentRequired": "付費",
         "paymentUnlock": "付費解鎖",
@@ -4363,6 +4389,7 @@
         "authorizedToast": "已登入 {{name}}",
         "authorizeFailed": "{{name}} 登入失敗，請重試",
         "nameLabel": "顯示名稱",
+        "geminiImageKeyNote": "儲存後，這把 Key 將用於新連線的對話和之後的 Gemini 圖片生成。只需生成圖片時，可以不勾選對話模型。",
         "onlyAgentNote": "此供應商僅支援 {{agent}}",
         "endpointLabel": "{{agent}} 基礎 URL",
         "noAuthNote": "此 Proxy 無需用戶端金鑰；Cindy 會在轉發前移除 CLI 的訂閱憑證。",
@@ -7905,6 +7932,7 @@
           "accessDenied": "此插件操作不被允許，或操作已取消。",
           "notConfigured": "目前環境未提供插件市場。",
           "invalidPackage": "插件安裝包異常，無法安裝，請聯絡發布者。",
+          "downloadAuthorizationExpired": "插件下載授權已過期，無法繼續安裝。請檢查系統日期和時間後重新發起安裝",
           "downloadTimeout": "插件下載逾時，請稍後重試。",
           "downloadFailed": "插件下載失敗，請檢查網路後重試。",
           "brokerRedirectPortRequired": "此插件宣告了授權 broker，但同一項 OAuth 設定缺少 redirectPort，無法從插件市場安裝。請聯絡釋出者補上該欄位並重新釋出。",
@@ -8222,6 +8250,8 @@
         "agentHiddenTasksDetail": "本插件建立的任務可以不出現在任務列表、搜尋和通知裡。你可以隨時在插件詳情的「背景任務」中查看、開啟，或顯示到任務列表；解除安裝插件時這些任務會恢復顯示。",
         "agentModelPreferences": "讀取並修改你的模型收藏，讀取你最近使用的模型",
         "agentModelPreferencesDetail": "可讀取這台電腦上的模型收藏和最近使用的模型（含推理強度與 Fast 設定），並新增、修改或移除收藏，變更會同步顯示在 Cindy 的模型選擇器裡。在插件裡選擇的模型不會記入最近使用。不包含你其他電腦上或別人分享給你的模型，也不提供任何憑證。",
+        "harnesses": "提供執行引擎：{{names}}",
+        "harnessesDetail": "可以在你的任務裡讀寫工作目錄、執行命令，並使用與內建 Pi 相同範圍的 Cindy 工具。",
         "agentErrand": "可建立任務、執行工作並讀取結果",
         "agentErrandDetail": "建立的任務會顯示在 Cindy 任務列表中，可查看過程並繼續交流。",
         "agentSchedule": "可以請你新建自動化",
@@ -14148,6 +14178,32 @@
             "label": "完全訪問",
             "description": "一般操作直接允許，可存取工作區外檔案及連網執行命令。"
           }
+        },
+        "acp": {
+          "ask": {
+            "label": "逐項確認",
+            "description": "Agent 請求權限時由你確認。Agent 沒有請求確認的操作，Cindy 無法攔截。"
+          },
+          "default": {
+            "label": "預設",
+            "description": "依 Agent 自己的預設方式工作；它請求權限時由你確認。"
+          },
+          "acceptEdits": {
+            "label": "自動接受編輯",
+            "description": "Agent 直接修改檔案；其他請求權限的操作由你確認。"
+          },
+          "auto": {
+            "label": "自動",
+            "description": "由 Agent 自行判斷哪些操作需要確認；它請求權限時由你確認。"
+          },
+          "plan": {
+            "label": "只規劃",
+            "description": "Agent 只分析並制定計畫，不修改檔案。"
+          },
+          "bypassPermissions": {
+            "label": "全部允許",
+            "description": "Agent 請求的權限一律自動允許。"
+          }
         }
       }
     },
@@ -14609,6 +14665,16 @@
       "nowDefault": "已設為預設",
       "switchToSteer": "預設改為插話",
       "switchToQueue": "預設改為排隊"
+    },
+    "pluginEngines": {
+      "group": "插件引擎",
+      "genericName": "插件引擎",
+      "defaultModel": "預設模型",
+      "defaultModelHint": "使用引擎自己的預設設定",
+      "unavailable": "暫時無法使用",
+      "engineMissing": "提供這個引擎的插件已停用或解除安裝",
+      "worktreeUnsupported": "插件引擎暫不支援在 worktree 中新建任務，請取消勾選 worktree 後再傳送",
+      "modelChangeFailed": "未能切換模型"
     }
   },
   "onboarding": {
@@ -15078,6 +15144,11 @@
       "actionExpired": "這次操作的任務授權已失效。請查看自動化最近一次執行的結果。",
       "actionRecovered": "這次操作的授權已失效。同一自動化後來已成功執行。",
       "text": "先前有自動執行失敗。",
+      "prCheck_dns": "{{device}} 無法解析 {{host}}。若問題持續，請檢查這台裝置的網路或 DNS。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
+      "prCheck_timeout": "{{device}} 連線至 GitHub 逾時。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
+      "prCheck_auth": "請在 {{device}} 上重新登入 GitHub。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
+      "prCheck_rate-limit": "GitHub 暫時限制了 {{device}} 的請求頻率。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
+      "prCheck_unknown": "{{device}} 上的 PR 檢查失敗，請查看執行詳情。已連續失敗 {{failures}} 次，下次自動檢查時間為 {{retry}}。",
       "precheck": "自動檢查暫時受阻。",
       "rateLimited": "自動檢查暫時受阻：請求限流。",
       "pluginMissing": "自動檢查暫時受阻：「{{name}}」插件未安裝，裝好後自動恢復。",
@@ -15788,6 +15859,7 @@
       "REMOTE_AGENT_UNSUPPORTED": "那臺電腦上這個 Agent 無法使用。在那臺電腦上安裝或登入後再試，或換一個 Agent。",
       "REMOTE_AGENT_RESUME_UNAVAILABLE": "這臺電腦無法恢復任務原來的執行狀態。請選擇其他電腦或供應商的模型，透過上下文交接繼續；原訊息會保留。",
       "REMOTE_AGENT_INVALID": "與執行 Agent 的電腦通訊時出錯。請重試；如果持續出現，請把兩臺電腦上的 Cindy 都更新到最新版。",
+      "PLUGIN_ENGINE_RESUME_UNAVAILABLE": "插件引擎未能恢復先前的對話。訊息已保留。請選擇其他引擎繼續，或建立新任務。",
       "REMOTE_AGENT_RESUME_REJECTED": "執行模型的電腦無法恢復這個任務。請從任務列表建立新任務，將需要繼續的內容複製過去。原任務和排隊訊息會保留。",
       "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已達到分享者設定的模型占比上限。請選擇其他可用模型繼續。",
       "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那臺電腦未向你開放這個供應商或所選模型。是你自己的電腦時，在那臺電腦上為這個供應商開啟「允許遠端呼叫」；別人分享給你的，請對方在「遠端與分享」中調整。也可以換一個模型。",
@@ -16366,6 +16438,7 @@
       },
       "filterCreatorsHeading": "夥伴",
       "filterCreatorsAny": "全部",
+      "filterHideAutomations": "隱藏自動化任務",
       "filterCreatorsNone": "都不顯示",
       "filterSelectedCreators": "已選 {{count}} 位",
       "filterProjectsHeading": "專案",
@@ -16915,6 +16988,12 @@
       "unspecifiedDir": "未指定目錄"
     },
     "workdirBrowse": {
+      "previewFile": "預覽",
+      "filterDirectory": "篩選目前資料夾…",
+      "projectTree": "專案檔案樹",
+      "systemPreview": "系統預覽",
+      "listView": "列表",
+      "gridView": "縮圖",
       "backToProjects": "返回專案",
       "switchProject": "切換專案",
       "activeSessionCount_one": "{{count}} 個活躍任務",
@@ -17281,6 +17360,7 @@
       "promote": {
         "menu": "提升為專案自動化",
         "noWorkingDir": "沒有工作目錄的自動化無法提升",
+        "pluginEngine": "插件引擎只在這台電腦上可用，無法提升為專案自動化",
         "success": "已提升為專案自動化"
       },
       "editProject": {
@@ -17557,6 +17637,7 @@
         "selectThread": "請選擇目標任務",
         "selectProject": "請選擇專案目錄",
         "modelUnavailable": "模型 {{model}} 已不可用，請重新選擇",
+        "pluginEngineUnavailable": "所選插件引擎目前無法使用，請重新選擇模型",
         "reasoningInvalid": "Reasoning 必須是 {{values}} 之一",
         "preRunHookCommandRequired": "請填寫前置檢查指令碼命令",
         "preRunPluginRequired": "請為前置檢查選擇插件",
@@ -19277,6 +19358,7 @@
       "permissionLabel": "權限模式",
       "noAvailableModels": "沒有可用的 {{agent}} 模型，請在設定中檢查供應商連線和憑證。",
       "savedModelUnavailable": "上次選擇的模型或來源目前無法使用。",
+      "pluginEngineNoWorktree": "插件引擎 Worker 不能使用 worktree，取消勾選 worktree 後再建立。",
       "reselectModel": "重新選擇模型",
       "effortLabel": "推理強度",
       "initialTaskLabel": "初始任務",

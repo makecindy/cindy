@@ -208,6 +208,8 @@ export interface BuildPiAgentOpts {
   resolvePiProjectTrustInput?: AgentDeps['resolvePiProjectTrustInput'];
   /** SSH remote pi 会话的 transport 工厂(host 装配;缺省 = 远端 pi 会话被拒)。 */
   getRemotePiTransport?: AgentDeps['getRemotePiTransport'];
+  /** Credential-free reachability check on the SSH execution host. */
+  probeRemotePiProviderEndpoint?: AgentDeps['probeRemotePiProviderEndpoint'];
   /** SSH remote pi 会话的 agentHome 文件操作原语(host 装配;缺省 = 远端 fs 走本地,错误语义)。 */
   getRemotePiFileOps?: AgentDeps['getRemotePiFileOps'];
   getRemoteAgentFileOps?: AgentDeps['getRemoteAgentFileOps'];
@@ -400,6 +402,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     getGhostRosterPrompt: opts.getGhostRosterPrompt,
     resolvePiProjectTrustInput: opts.resolvePiProjectTrustInput,
     getRemotePiTransport: opts.getRemotePiTransport,
+    probeRemotePiProviderEndpoint: opts.probeRemotePiProviderEndpoint,
     getRemotePiFileOps: opts.getRemotePiFileOps,
     getRemoteAgentFileOps: opts.getRemoteAgentFileOps,
     resolveRemotePiBinaryPath: opts.resolveRemotePiBinaryPath,
