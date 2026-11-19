@@ -17,7 +17,7 @@ export const aboutSettings = defineSettings({
     tab: 'about',
     targetId: 'settings-search-settings-about-appVersionLabel',
     titleKey: 'settings.about.appVersionLabel',
-    sectionKey: 'settings.tabs.about',
+    sectionKey: 'settings.contentGroups.versions',
   },
   autoUpdateLabel: {
     id: 'settings.about.autoUpdateLabel',
@@ -29,7 +29,7 @@ export const aboutSettings = defineSettings({
     descriptionKeyForContext: ({ platform }) => platform === 'linux'
       ? 'settings.about.linuxUpdateDescription' : undefined,
     aliases: ['自动更新', '自动升级', 'auto update'],
-    sectionKey: 'settings.tabs.about',
+    sectionKey: 'settings.contentGroups.versions',
   },
   analyticsLabel: {
     id: 'settings.about.analyticsLabel',
@@ -37,7 +37,7 @@ export const aboutSettings = defineSettings({
     tab: 'about',
     targetId: 'settings-search-settings-about-analyticsLabel',
     titleKey: 'settings.about.analyticsLabel',
-    sectionKey: 'settings.tabs.about',
+    sectionKey: 'settings.contentGroups.privacy',
     descriptionKey: 'settings.about.analyticsDescription',
   },
   debugLogLabel: {
@@ -46,7 +46,7 @@ export const aboutSettings = defineSettings({
     tab: 'about',
     targetId: 'settings-search-settings-about-debugLogLabel',
     titleKey: 'settings.about.debugLogLabel',
-    sectionKey: 'settings.tabs.about',
+    sectionKey: 'settings.contentGroups.diagnostics',
     descriptionKey: 'settings.about.debugLogDescription',
   },
   logsDirLabel: {
@@ -55,7 +55,7 @@ export const aboutSettings = defineSettings({
     tab: 'about',
     targetId: 'settings-search-settings-about-logsDirLabel',
     titleKey: 'settings.about.logsDirLabel',
-    sectionKey: 'settings.tabs.about',
+    sectionKey: 'settings.contentGroups.diagnostics',
   },
   logUploadCrashAutoLabel: {
     id: 'settings.about.logUpload.crashAutoLabel',
@@ -63,7 +63,7 @@ export const aboutSettings = defineSettings({
     tab: 'about',
     targetId: 'settings-search-settings-about-logUpload-crashAutoLabel',
     titleKey: 'settings.about.logUpload.crashAutoLabel',
-    sectionKey: 'settings.tabs.about',
+    sectionKey: 'settings.contentGroups.diagnostics',
   },
   logUploadUploadLabel: {
     id: 'settings.about.logUpload.uploadLabel',
@@ -71,7 +71,7 @@ export const aboutSettings = defineSettings({
     tab: 'about',
     targetId: 'settings-search-settings-about-logUpload-uploadLabel',
     titleKey: 'settings.about.logUpload.uploadLabel',
-    sectionKey: 'settings.tabs.about',
+    sectionKey: 'settings.contentGroups.diagnostics',
   },
 });
 

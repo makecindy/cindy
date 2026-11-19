@@ -14,14 +14,12 @@ import { Switch } from '@/components/ui/switch';
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useNotificationSettings } from '@/hooks/useNotificationSettings';
 
-export function NotificationSection() {
+export function NotificationSection({ embedded = false }: { embedded?: boolean }) {
   const { enabled, setEnabled } = useNotificationSettings();
   const { t } = useTranslation();
 
-  return (
-    <SettingsSection title={t('settings.notifications.title')}>
-      <SettingsCard>
-        <SettingsRow
+  const row = (
+    <SettingsRow
           title={
             <span id={notificationSettings.notificationsSessionDoneLabel.targetId}>
               {t(notificationSettings.notificationsSessionDoneLabel.titleKey)}
@@ -35,8 +33,9 @@ export function NotificationSection() {
               aria-label={t('settings.notifications.sessionDoneAria')}
             />
           }
-        />
-      </SettingsCard>
-    </SettingsSection>
+    />
+  );
+  return embedded ? row : (
+    <SettingsSection title={t('settings.notifications.title')}><SettingsCard>{row}</SettingsCard></SettingsSection>
   );
 }

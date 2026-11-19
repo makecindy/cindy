@@ -75,6 +75,29 @@ afterEach(() => {
 });
 
 describe('settings definition and navigation', () => {
+  // Unit: a deep link into an opted-in fold must open it before scrolling.
+  // A mounted target in a closed details element is the minimum failing input.
+  it('opens an advanced disclosure before highlighting its target', () => {
+    function DisclosurePage() {
+      const ref = useRef<HTMLDivElement>(null);
+      useSettingsSectionTarget('settings-browser-target', ref, 'advanced');
+      return <div ref={ref}>
+        <details data-settings-search-open>
+          <summary>Advanced settings</summary>
+          <div id="settings-browser-target">Browser target</div>
+        </details>
+      </div>;
+    }
+
+    const view = render(<DisclosurePage />);
+    const disclosure = view.getByText('Advanced settings').closest('details');
+    expect(disclosure?.open).toBe(false);
+    act(() => { vi.advanceTimersByTime(0); });
+    expect(disclosure?.open).toBe(true);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 92, behavior: 'auto' });
+    expect(view.getByText('Browser target').classList.contains('settings-search-target-highlight')).toBe(true);
+  });
+
   it('gives the two link preferences distinct targets while retaining their selected defaults', () => {
     // The migration replaces a shared section anchor with row targets. Mount the
     // production section: a duplicated ID would send both results to the first row.

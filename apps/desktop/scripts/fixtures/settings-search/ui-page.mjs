@@ -17,10 +17,16 @@ export default {
   name: 'settings-search',
   entry: './fixture.tsx',
   viewport: { width: 1280, height: 900 },
-  real: 'SettingsView, settings sidebar/search, migrated sections and their original controls, translations and themes',
+  real: 'SettingsView, settings sidebar/search, sidebar account menu, original controls, translations and themes',
   notCovered: 'Native dialogs, persistence, real accounts, downloads, device connections and macOS native behavior',
   stubs: {
-    'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: (window.__uiPage.ctx.data.cloud || window.__uiPage.ctx.data.tab === 'billing') ? 'cloud' : 'local', dataOwnerId: 'fixture-account', user: { id: 'fixture-account', name: 'Preview', membershipKind: 'personal' } });` },
+    'src/renderer/contexts/AuthContext': { partial: `
+      const accounts = async () => ({ accounts: [], mutationAllowed: true });
+      export const useAuth = () => ({
+        mode: (window.__uiPage.ctx.data.cloud || window.__uiPage.ctx.data.tab === 'billing') ? 'cloud' : 'local',
+        dataOwnerId: 'fixture-account', user: { id: 'fixture-account', name: 'Preview', membershipKind: window.__uiPage.ctx.data.organization ? 'org' : 'personal' },
+        listAccounts: accounts, syncAccounts: accounts,
+      });` },
   },
   cases: {
     'archive-search': { about: 'Searching for auto archive or idle days opens the inline controls inside Storage', data: { tab: 'general', archiveEnabled: true } },
@@ -36,13 +42,65 @@ export default {
     'worktree-model-naming': { about: 'Model naming defaults off, can be found in search, and clears its override on reset', data: { tab: 'personalization', worktreeModelNaming: true } },
     'tab-switch': { about: 'Committed settings tabs paint at full opacity with normal motion enabled', data: { tab: 'personalization', tabSwitch: true } },
     'remote-signed-in': { about: 'Signed-in device controls and relay section with searchable targets', data: { tab: 'remote-control', cloud: true } },
+    'sidebar-usage': { about: 'Clicking the sidebar account once reveals local usage and available balance above Settings', data: { accountUsage: true, cloud: true, previewUsage: true } },
+    'sidebar-usage-local': { about: 'Local accounts can reach usage history and are not offered a billing entry', data: { accountUsage: true, previewUsage: true } },
+    'sidebar-usage-org': { about: 'Organization accounts can reach usage history without attempting personal billing reads', data: { accountUsage: true, cloud: true, organization: true, previewUsage: true } },
+    'sidebar-usage-legacy': { about: 'An account with only the basic balance API still sees its available balance', data: { accountUsage: true, cloud: true, legacyBalance: true, previewUsage: true } },
     ...Object.fromEntries([
     'general', 'appearance', 'personalization', 'voice-input', 'shortcuts',
     'remote-control', 'import', 'builtin-tools', 'storage', 'help', 'about', 'agent-island', 'usage', 'billing', 'shared-tasks', 'ghosts',
-  ].map(tab => [tab === 'general' ? 'default' : tab, { about: `Real ${tab} settings and all rendered rows`, data: { tab } }])),
+    'providers', 'model-groups', 'computer-use', 'im-bot',
+  ].map(tab => [tab === 'general' ? 'default' : tab, { about: `Real ${tab} settings and all rendered rows`, data: { tab,
+    previewUsage: tab === 'usage' || tab === 'billing', sampleModels: tab === 'model-groups' } }])),
   },
   async check(page, ui) {
     const panel = page.getByRole('tabpanel');
+    if (ui.data.accountUsage) {
+      // The normal account trigger is the entry point, including keyboard navigation.
+      // Merely showing the main sidebar must not read usage or the billing ledger.
+      const account = page.getByRole('button', { name: await ui.t('sidebar.user.moreLabel', { name: 'Preview' }) });
+      const menu = page.getByRole('menu');
+      const usage = menu.getByRole('menuitem').filter({ hasText: await ui.t('settings.tabs.usage') });
+      const billing = menu.getByRole('menuitem').filter({ hasText: await ui.t('settings.tabs.billing') });
+      const settings = menu.getByRole('menuitem', { name: await ui.t('sidebar.user.menuSettings'), exact: true });
+      const hasBilling = ui.data.cloud && !ui.data.organization;
+      assert.deepEqual(await page.evaluate(() => window.usageReads), { history: 0, billing: 0, balance: 0 });
+      await account.click();
+      await usage.getByText(/24[.,]9k/i).waitFor();
+      assert.ok((await usage.boundingBox()).y < (await settings.boundingBox()).y);
+      if (hasBilling) {
+        await billing.getByText(/18[.,]42/).waitFor();
+        assert.ok((await billing.boundingBox()).y < (await settings.boundingBox()).y);
+        assert.equal(await page.evaluate(() => window.usageReads.balance), ui.data.legacyBalance ? 1 : 0);
+      } else {
+        assert.equal(await billing.count(), 0);
+        assert.equal(await page.evaluate(() => window.usageReads.billing), 0);
+        assert.equal(await page.evaluate(() => window.usageReads.balance), 0);
+      }
+      await ui.capture('account-usage');
+      await page.keyboard.press('Escape');
+      await menu.waitFor({ state: 'hidden' });
+      await account.press('Enter');
+      await usage.click();
+      await page.locator('#settings-panel-usage').waitFor();
+      await page.locator('#settings-nav-models').click();
+      await page.waitForFunction(() => document.getElementById('settings-nav-models-tabs')?.getBoundingClientRect().height === 0);
+      // A collapsed group must not remove the label of the still-open settings page.
+      await page.getByRole('tabpanel', { name: await ui.t('settings.tabs.usage'), exact: true }).waitFor();
+      assert.equal(await page.getByRole('tab', { name: await ui.t('settings.tabs.usage'), exact: true }).count(), 0);
+      const back = page.getByRole('button', { name: await ui.t('settings.back'), exact: true });
+      await back.click();
+      await account.click();
+      if (hasBilling) {
+        await billing.click();
+        await page.locator('#settings-panel-billing').waitFor();
+        await back.click();
+        await account.click();
+      }
+      await settings.click();
+      await page.locator('#settings-panel-general').waitFor();
+      return;
+    }
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
     // Product regression: the opt-in must remain off until selected. Exercise the

@@ -20,19 +20,20 @@ import { helpSettings } from './HelpSection.settings-search';
 import { aboutSettings } from './AboutSection.settings-search';
 import { storageManagementCardSettings } from './StorageManagementCard.settings-search';
 import { lazy, Suspense, useTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
+import { SettingsPageOutline } from './SettingsPageOutline';
 import { buildPluginSettingsPages, buildPluginSettingsSearchDocuments, type PluginSettingsPage } from './pluginSettingsNavigation';
 import { getApprovedGhostHostUi, type InstalledGhost } from '../../../shared/ghost';
 import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
-import { SettingsCard, SettingsPageScope, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SettingsCard, SettingsPageScope, SettingsRow, SettingsRowGroup, SettingsSection } from '@/components/ui/settings-rows';
 import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
 import type { SettingsSearchContext } from './settingsSearchTypes';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
@@ -91,7 +92,6 @@ const StorageManagementCard = lazy(() => import('./StorageManagementCard').then(
 const UserPromptSection = lazy(() => import('./UserPromptSection').then(module => ({ default: module.UserPromptSection })));
 const MemorySection = lazy(() => import('./MemorySection').then(module => ({ default: module.MemorySection })));
 const CompactionSection = lazy(() => import('./CompactionSection').then(module => ({ default: module.CompactionSection })));
-const StreamFadeSection = lazy(() => import('./StreamFadeSection').then(module => ({ default: module.StreamFadeSection })));
 const SessionImportSection = lazy(() => import('./SessionImportSection').then(module => ({ default: module.SessionImportSection })));
 const HelpSection = lazy(() => import('./HelpSection').then(module => ({ default: module.HelpSection })));
 const PiPackagesSection = lazy(() => import('./PiPackagesSection').then(module => ({ default: module.PiPackagesSection })));
@@ -148,6 +148,7 @@ function SettingsViewContent() {
     };
   }, [agentIslandSupported]);
   const navigate = useNavigate();
+  const { key: navigationKey } = useLocation();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
   const [isTabPending, startTransition] = useTransition();
@@ -247,6 +248,9 @@ function SettingsViewContent() {
   // 切分区后外层滚动容器回顶:滚动偏移是容器的、不随内层 key 重挂归零,
   // 长页滚到底再切短页会停在中段(review 反馈)。瞬时回顶,不做平滑。
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  const contentBodyRef = useRef<HTMLDivElement | null>(null);
+  const workspacePanel = activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers';
+  const widePanel = workspacePanel || activeTab === 'usage' || activeTab === 'billing';
   useEffect(() => {
     contentScrollRef.current?.scrollTo({ top: 0 });
   }, [activeTab, piExtensionsPanelOpen, selectedPluginPage?.id]);
@@ -399,7 +403,7 @@ function SettingsViewContent() {
       <div className="flex h-full min-h-0 w-full justify-start pb-5">
         {/* Inner sidebar mirrors the main sidebar width for a stable route transition. */}
         <aside
-          className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto pl-6 pr-4 pt-7"
+          className="flex h-full min-h-0 shrink-0 flex-col gap-2 pl-6 pr-4 pt-7"
           style={{ width: menuWidth }}
           aria-label={t('settings.title')}
         >
@@ -431,6 +435,7 @@ function SettingsViewContent() {
             pluginSearchDocuments={pluginSearchDocuments}
             selectedPluginPage={selectedPluginPage?.id}
             onSelectPluginPage={selectPluginPage}
+            navigationKey={navigationKey}
           />
         </aside>
 
@@ -459,14 +464,15 @@ function SettingsViewContent() {
           <Suspense fallback={<div role="status" className="py-6 text-sm text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
           <div
             key={`${activeTab}:${selectedPluginPage?.id ?? (piExtensionsPanelOpen ? 'pi-extensions' : 'root')}`}
+            ref={contentBodyRef}
             className={cn(
-              'mx-auto w-full min-w-0 max-w-[920px] px-1',
-              activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
-                ? 'h-full min-h-0'
-                : 'pb-32',
+              'mx-auto w-full min-w-0 px-1',
+              widePanel ? 'max-w-[920px]' : 'max-w-3xl',
+              workspacePanel ? 'h-full min-h-0' : 'pb-12',
               activeTab === 'ghosts' && 'max-w-none px-0',
             )}
           >
+            {!workspacePanel && !piExtensionsPanelOpen && <SettingsPageOutline contentRef={contentBodyRef} scrollRef={contentScrollRef} />}
             {activeTab === 'general' && (
               <div
                 role="tabpanel"
@@ -488,69 +494,47 @@ function SettingsViewContent() {
                     </section>
                   </>
                 ) : (
-                  <>
-                    {/* Section — User Info (pb 18) */}
-                    <section id={generalSettings.user.targetId} className="pb-[18px]" aria-label={t(generalSettings.user.titleKey)}>
+                  <div className="flex flex-col gap-9 [&>section:empty]:hidden">
+                    <section id={generalSettings.user.targetId} aria-label={t(generalSettings.user.titleKey)}>
                       <UserProfileCard />
                     </section>
 
-                    {/* Section — Language (py 18) */}
-                    <section id={generalSettings.language.targetId} className="py-[18px]" aria-label={t(generalSettings.language.titleKey)}>
+                    <section id={generalSettings.language.targetId} aria-label={t(generalSettings.language.titleKey)}>
                       <LanguageSection />
                     </section>
 
-                    {/* Section — Notifications (py 18) */}
-                    <section
-                      id={generalSettings.notifications.targetId}
-                      className="py-[18px]"
-                      aria-label={t(generalSettings.notifications.titleKey)}
-                    >
-                      <NotificationSection />
-                    </section>
+                    <SettingsSection title={t(generalSettings.windowBehavior.titleKey)}>
+                      <SettingsCard>
+                        <SettingsRowGroup id={generalSettings.notifications.targetId}>
+                          <NotificationSection embedded />
+                        </SettingsRowGroup>
+                        <SettingsRowGroup id={generalSettings.windowBehavior.targetId}>
+                          <WindowBehaviorSection embedded />
+                        </SettingsRowGroup>
+                        <SettingsRowGroup id={generalSettings.awayFromComputer.targetId}>
+                          <AwayFromComputerSection embedded />
+                        </SettingsRowGroup>
+                      </SettingsCard>
+                    </SettingsSection>
 
-                    {/* Section — App Behavior(「应用行为」)
-                        「保持电脑唤醒」跨平台生效,故 section 常驻;其中
-                        「后台窗口首次左键点击仅激活不透传」仅 mac/win 有效,由
-                        WindowBehaviorSection 内部按平台隐藏该行。 */}
-                    <section
-                      id={generalSettings.windowBehavior.targetId}
-                      className="py-[18px]"
-                      aria-label={t(generalSettings.windowBehavior.titleKey)}
-                    >
-                      <WindowBehaviorSection />
-                    </section>
-
-                    {/* Section — 离开电脑时:保持唤醒、用隐私屏代替锁屏(docs/product-rules/privacy-screen.md)。 */}
-                    <section
-                      id={generalSettings.awayFromComputer.targetId}
-                      className="py-[18px]"
-                      aria-label={t(generalSettings.awayFromComputer.titleKey)}
-                    >
-                      <AwayFromComputerSection />
-                    </section>
-
-                    {/* Section — Composer send shortcut (应用级、本地输入偏好)。 */}
-                    <section
-                      id={generalSettings.composer.targetId}
-                      className="py-[18px]"
-                      aria-label={t(generalSettings.composer.titleKey)}
-                    >
-                      <ComposerSendShortcutSection />
-                    </section>
-
-                    <section
-                      id={generalSettings.defaultNewTaskWorkingDir.targetId}
-                      className="py-[18px]"
-                      aria-label={t(generalSettings.defaultNewTaskWorkingDir.titleKey)}
-                    >
-                      <DefaultNewTaskWorkingDirSection ownerId={dataOwnerId} />
-                    </section>
+                    <SettingsSection title={t('settings.contentGroups.work')}>
+                      <SettingsCard>
+                        <SettingsRowGroup id={generalSettings.composer.targetId}>
+                          <ComposerSendShortcutSection embedded />
+                        </SettingsRowGroup>
+                        <SettingsRowGroup id={generalSettings.defaultNewTaskWorkingDir.targetId}>
+                          <DefaultNewTaskWorkingDirSection ownerId={dataOwnerId} embedded />
+                        </SettingsRowGroup>
+                        <SettingsRowGroup id={generalSettings.newChatPermission.targetId}>
+                          <NewChatDefaultPermissionSection />
+                        </SettingsRowGroup>
+                      </SettingsCard>
+                    </SettingsSection>
 
                     {/* Section — 伙伴（功能级设置：怎么提醒你 + 带走/接回一个伙伴）。
                         单个伙伴的性格、记忆、能力与日程仍在 TA 自己的设置页里。 */}
                     <section
                       id={generalSettings.bots.targetId}
-                      className="py-[18px]"
                       aria-label={t(generalSettings.bots.titleKey)}
                     >
                       <BotsGlobalSettingsSection />
@@ -559,65 +543,67 @@ function SettingsViewContent() {
                     {/* Section — Collaboration. */}
                     <section
                       id={generalSettings.collaboration.targetId}
-                      className="py-[18px]"
                       aria-label={t(generalSettings.collaboration.titleKey)}
                     >
                       <CollaborationSection />
                     </section>
 
-                    <section id={generalSettings.newChatPermission.targetId} className="py-[18px]"
-                      aria-label={t(generalSettings.newChatPermission.titleKey)}>
-                      <NewChatDefaultPermissionSection />
-                    </section>
+                    <details className="group" data-settings-search-open>
+                      <summary data-settings-section-heading className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-full px-3 text-16 font-medium text-[var(--settings-section-title)] hover:bg-sidebar-item-hover focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden">
+                        {t('settings.contentGroups.advanced')}
+                        <ChevronDown size={16} className="shrink-0 group-open:rotate-180" aria-hidden />
+                      </summary>
+                      <div className="mt-3.5 flex flex-col gap-9 [&>section:empty]:hidden">
+                        {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。 */}
+                        <section
+                          id={generalSettings.agentResource.targetId}
+                          aria-label={t(generalSettings.agentResource.titleKey)}
+                        >
+                          <AgentResourceSection />
+                        </section>
 
-                    {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。 */}
-                    <section
-                      id={generalSettings.agentResource.targetId}
-                      className="py-[18px]"
-                      aria-label={t(generalSettings.agentResource.titleKey)}
-                    >
-                      <AgentResourceSection />
-                    </section>
+                        {/* Section — Git safety savepoints (formal setting, not experimental). */}
+                        <section id={generalSettings.gitSafety.targetId} aria-label={t(generalSettings.gitSafety.titleKey)}>
+                          <GitSafetySection />
+                        </section>
 
-                    {/* Section — Git safety savepoints (formal setting, not experimental). */}
-                    <section id={generalSettings.gitSafety.targetId} className="py-[18px]" aria-label={t(generalSettings.gitSafety.titleKey)}>
-                      <GitSafetySection />
-                    </section>
+                        {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单；与 Agent 相关设置放在一起。 */}
+                        <section id={generalSettings.piExtensions.targetId} aria-label={t('settings.piPackages.title')}>
+                          <SettingsSection title={t('settings.piPackages.title')}>
+                            <SettingsCard>
+                              <SettingsRow data-setting-id={generalSettings.piExtensions.id}
+                                title={t('settings.piPackages.manageLabel')}
+                                hint={t('settings.piPackages.entryDescription')}
+                                chevron
+                                onClick={handleOpenPiExtensions}
+                              />
+                            </SettingsCard>
+                          </SettingsSection>
+                        </section>
 
-                    {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单；与 Agent 相关设置放在一起。 */}
-                    <section id={generalSettings.piExtensions.targetId} className="py-[18px]" aria-label={t('settings.piPackages.title')}>
-                      <SettingsSection title={t('settings.piPackages.title')}>
-                        <SettingsCard>
-                          <SettingsRow data-setting-id={generalSettings.piExtensions.id}
-                            title={t('settings.piPackages.manageLabel')}
-                            hint={t('settings.piPackages.entryDescription')}
-                            chevron
-                            onClick={handleOpenPiExtensions}
-                          />
-                        </SettingsCard>
-                      </SettingsSection>
-                    </section>
+                        {/* Section — Experimental. */}
+                        <section id={generalSettings.experimental.targetId} aria-label={t(generalSettings.experimental.titleKey)}>
+                          <ExperimentalSection />
+                        </section>
+                      </div>
+                    </details>
 
-                    {/* Section — 开始引导：首次登录后自动出现一次，这里可以重新打开。 */}
-                    <section id={generalSettings.firstRunGuide.targetId} className="py-[18px]" aria-label={t(generalSettings.firstRunGuide.titleKey)}>
-                      <FirstRunGuideSection />
-                    </section>
+                    <SettingsSection title={t('settings.contentGroups.getStarted')}>
+                      <SettingsCard>
+                        <SettingsRowGroup id={generalSettings.firstRunGuide.targetId}>
+                          <FirstRunGuideSection />
+                        </SettingsRowGroup>
+                        <SettingsRowGroup id={generalSettings.setupMigration.targetId}>
+                          <SetupMigrationSection embedded />
+                        </SettingsRowGroup>
+                      </SettingsCard>
+                    </SettingsSection>
 
-                    {/* Section — 迁移助理：首次登录时由开始引导按需带出，这里只留靠后的常驻入口与一次性配置清单。 */}
-                    <section id="settings-setup-migration" className="py-[18px]" aria-label={t('setupMigration.settings.title')}>
-                      <SetupMigrationSection />
-                    </section>
-
-                    {/* Section — Experimental (py 18). */}
-                    <section id={generalSettings.experimental.targetId} className="py-[18px]" aria-label={t(generalSettings.experimental.titleKey)}>
-                      <ExperimentalSection />
-                    </section>
-
-                    {/* Section — Logout (pt 18) */}
-                    <section className="pt-[18px]" aria-label={t('settings.sections.logout')}>
+                    {/* Section — Logout */}
+                    <section aria-label={t('settings.sections.logout')}>
                       <LogoutSection />
                     </section>
-                  </>
+                  </div>
                 )}
               </div>
             )}
@@ -651,12 +637,8 @@ function SettingsViewContent() {
                 id={appearanceSettings.appearance.targetId}
                 aria-labelledby="settings-tab-appearance"
               >
-                <section className="pb-[18px]" aria-label={t('settings.sections.appearance')}>
+                <section aria-label={t('settings.sections.appearance')}>
                   <AppearanceSection />
-                </section>
-                {/* 流式输出淡入动效开关(默认开;reduced-motion 时无条件关);与外观各节同为 36px 节距 */}
-                <section id={appearanceSettings.streamFade.targetId} className="pt-[18px] pb-[18px]" aria-label={t(appearanceSettings.streamFade.titleKey)}>
-                  <StreamFadeSection />
                 </section>
               </div>
             )}
@@ -874,7 +856,7 @@ function SettingsViewContent() {
                 id={storageManagementCardSettings.storage.targetId}
                 aria-labelledby="settings-tab-storage"
               >
-                <section aria-label={t(storageManagementCardSettings.storage.sectionKey)}>
+                <section className="flex flex-col gap-9" aria-label={t(storageManagementCardSettings.storage.sectionKey)}>
                   <StorageManagementCard />
                   <WorktreeRecycleCard />
                 </section>

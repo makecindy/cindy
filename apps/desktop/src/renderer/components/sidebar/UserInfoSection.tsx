@@ -32,6 +32,9 @@ import type { DesktopSavedAccount } from '@/lib/authService';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { shouldLabelRegion } from '../../../shared/regionCode';
 import { MobileDownloadDialog } from './MobileDownloadDialog';
+import { SidebarAccountUsage } from './SidebarAccountUsage';
+import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
+import { canAccessUsageSettings } from '@/components/settings/usageVisibility';
 
 interface UserInfoSectionProps {
   isCollapsed: boolean;
@@ -73,6 +76,7 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   const navigate = useNavigate();
   const location = useLocation();
   const [avatarError, setAvatarError] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [mobileDownloadOpen, setMobileDownloadOpen] = useState(false);
   const [savedAccounts, setSavedAccounts] = useState<DesktopSavedAccount[]>([]);
   const [savedAccountsOwnerKey, setSavedAccountsOwnerKey] = useState<string | null>(null);
@@ -294,9 +298,13 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   };
 
   const renderMoreMenu = (trigger: ReactNode) => (
-    <DropdownMenu onOpenChange={(open) => open && void refreshSavedAccounts()}>
+    <DropdownMenu open={moreMenuOpen} onOpenChange={(open) => {
+      setMoreMenuOpen(open);
+      if (open) void refreshSavedAccounts();
+    }}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-[190px]">
+      <DropdownMenuContent side="top" align="start" sideOffset={8}
+        className="min-w-[220px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto">
         {mode === 'cloud' && accountsReadyForOwner && !accountsMutationAllowed ? (
           <p role="status" className="max-w-[280px] px-2 py-2 text-12 text-[var(--text-secondary)]">
             {t('sidebar.accountSwitcher.sharedDataRestriction')}
@@ -322,6 +330,11 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
             {addingAccount ? t('sidebar.accountSwitcher.adding') : t('login.signIn')}
           </DropdownMenuItem>
         ) : null}
+        {moreMenuOpen && canAccessUsageSettings({ mode }) && (
+          <SidebarAccountUsage ownerId={dataOwnerId}
+            showBilling={canAccessBillingSettings({ mode, membershipKind: user?.membershipKind ?? null })}
+            onSelect={(tab) => navigate(`/settings?tab=${tab}`)} />
+        )}
         <DropdownMenuItem onSelect={openSettings} className="gap-2.5">
           <Settings className="h-4 w-4" aria-hidden="true" />
           {t('sidebar.user.menuSettings')}

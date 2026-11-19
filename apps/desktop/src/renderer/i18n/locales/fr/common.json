@@ -1897,9 +1897,18 @@
       "restored": "Paramètres par défaut rétablis",
       "restoreFailed": "Impossible de rétablir les valeurs par défaut."
     },
+    "contentGroups": {
+      "getStarted": "Premiers pas",
+      "versions": "Version et mises à jour",
+      "diagnostics": "Diagnostics et journaux",
+      "privacy": "Confidentialité et conditions",
+      "advanced": "Réglages avancés",
+      "jump": "Aller à la section",
+      "work": "Tâches et messages"
+    },
     "navGroups": {
       "preferences": "Réglages courants",
-      "models": "Modèles et utilisation",
+      "models": "Modèles",
       "interaction": "Interface et saisie",
       "connections": "Connexions et partage",
       "extensions": "Outils et plugins",

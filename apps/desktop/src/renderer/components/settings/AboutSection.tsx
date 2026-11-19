@@ -338,28 +338,39 @@ export function AboutSection() {
 
   return (
     <SettingsSection variant="page" title={t('settings.about.title')} description={t('settings.about.description')}>
-      {/* Info Card */}
-      <SettingsCard id={aboutSettings.appVersionLabel.targetId}>
-        {CURRENT_CINDY_REGION === 'cn' && (
-          <InfoRow
-            label={t(aboutSettings.appVersionLabel.titleKey)}
-            value={window.electronAPI.appDisplayVersion}
-            title={window.electronAPI.appDisplayVersionDetail}
-          />
-        )}
-        <AutoUpdateToggleRow />
-        <AnalyticsToggleRow />
-        <AgentVersionsRows />
-        <DebugLogToggleRow />
-        <SettingsBlock id={aboutSettings.logsDirLabel.targetId} className="p-0">
-          <OpenLogsRow />
-        </SettingsBlock>
-        <CrashAutoUploadToggleRow />
-        <SettingsBlock id={aboutSettings.logUploadUploadLabel.targetId} className="p-0">
-          <UploadLogsRow />
-        </SettingsBlock>
-        <LegalLinksRows />
-      </SettingsCard>
+      <SettingsSection title={t(aboutSettings.autoUpdateLabel.sectionKey)}>
+        <SettingsCard id={aboutSettings.appVersionLabel.targetId}>
+          {CURRENT_CINDY_REGION === 'cn' && (
+            <InfoRow
+              label={t(aboutSettings.appVersionLabel.titleKey)}
+              value={window.electronAPI.appDisplayVersion}
+              title={window.electronAPI.appDisplayVersionDetail}
+            />
+          )}
+          <AutoUpdateToggleRow />
+          <AgentVersionsRows />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title={t(aboutSettings.debugLogLabel.sectionKey)}>
+        <SettingsCard>
+          <DebugLogToggleRow />
+          <SettingsBlock id={aboutSettings.logsDirLabel.targetId} className="p-0">
+            <OpenLogsRow />
+          </SettingsBlock>
+          <CrashAutoUploadToggleRow />
+          <SettingsBlock id={aboutSettings.logUploadUploadLabel.targetId} className="p-0">
+            <UploadLogsRow />
+          </SettingsBlock>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title={t(aboutSettings.analyticsLabel.sectionKey)}>
+        <SettingsCard>
+          <AnalyticsToggleRow />
+          <LegalLinksRows />
+        </SettingsCard>
+      </SettingsSection>
 
       <SocialLinksPanel />
     </SettingsSection>

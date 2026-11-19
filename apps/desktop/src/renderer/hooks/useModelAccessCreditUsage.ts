@@ -77,7 +77,7 @@ function isCreditUsage(v: unknown): v is ModelAccessCreditUsage {
   );
 }
 
-export function useModelAccessCreditUsageResult(enabled: boolean) {
+export function useModelAccessCreditUsageResult(enabled: boolean, { poll = true }: { poll?: boolean } = {}) {
   const { dataOwnerId, mode, user } = useAuth();
   const creditEnabled = enabled && mode === 'cloud' && user?.membershipKind === 'personal';
   // state 连账号 id 一起存，隔离在**渲染期**完成而不是 effect 里:effect 要等本轮渲染
@@ -115,12 +115,12 @@ export function useModelAccessCreditUsageResult(enabled: boolean) {
 
     if (revision > 0 || !cached || Date.now() - cached.cachedAt >= REFRESH_INTERVAL_MS) load();
     else setRequest({ accountId: dataOwnerId, loading: false });
-    const timer = setInterval(load, REFRESH_INTERVAL_MS);
+    const timer = poll ? setInterval(load, REFRESH_INTERVAL_MS) : undefined;
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer !== undefined) clearInterval(timer);
     };
-  }, [creditEnabled, dataOwnerId, revision]);
+  }, [creditEnabled, dataOwnerId, poll, revision]);
 
   // 账号不匹配 / 未启用 → 当作没有数据。切号当帧即生效。
   const currentSnapshot = readCache(dataOwnerId) ?? snapshot;

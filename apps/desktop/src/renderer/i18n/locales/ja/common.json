@@ -1829,9 +1829,18 @@
       "restored": "デフォルト設定に戻しました",
       "restoreFailed": "デフォルトに戻せませんでした。"
     },
+    "contentGroups": {
+      "getStarted": "はじめに",
+      "versions": "バージョンと更新",
+      "diagnostics": "診断とログ",
+      "privacy": "プライバシーと利用規約",
+      "advanced": "詳細設定",
+      "jump": "セクションに移動",
+      "work": "タスクとメッセージ"
+    },
     "navGroups": {
       "preferences": "よく使う設定",
-      "models": "モデルと使用量",
+      "models": "モデル",
       "interaction": "デスクトップ操作",
       "connections": "接続と共有",
       "extensions": "ツールとプラグイン",

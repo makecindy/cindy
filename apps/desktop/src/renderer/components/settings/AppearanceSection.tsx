@@ -1,4 +1,5 @@
 import { appearanceSettings, UI_FONT_PRESETS, CODE_FONT_PRESETS, TERMINAL_FONT_PRESETS } from './AppearanceSection.settings-search';
+import { StreamFadeSection } from './StreamFadeSection';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -874,6 +875,8 @@ export function AppearanceSection() {
             </SettingsField>
           </SettingsCard>
         </SettingsSection>
+
+        <StreamFadeSection />
 
         {/* Sidebar view modes — 置顶段(三态) / 主列表(两态)分离(sidebar-redesign B 期)。
           独立卡片，沿用 NotificationSection 的 label+hint+Switch 行模式。 */}

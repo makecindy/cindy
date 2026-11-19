@@ -22,7 +22,7 @@ import type {
   SetupMigrationState,
 } from '../../../shared/setupMigration';
 
-export function SetupMigrationSection() {
+export function SetupMigrationSection({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useTranslation();
   const [state, setState] = useState<SetupMigrationState | null>(null);
 
@@ -51,12 +51,12 @@ export function SetupMigrationSection() {
   const pending = state?.lastRun?.checklist.filter((item) => !item.done) ?? [];
   const checklist = state?.lastRun?.checklist ?? [];
 
-  return (
-    <SettingsSection title={t('setupMigration.settings.title')}>
-      <SettingsCard>
-        {/* The section title already names the feature; the row carries only its one-line description. */}
+  const rows = (
+    <>
         <SettingsRow
-          title={t('setupMigration.settings.description')}
+          title={t(embedded ? 'setupMigration.settings.title' : 'setupMigration.settings.description')}
+          hint={embedded ? t('setupMigration.settings.description') : undefined}
+          wrap
           trailing={
             <Button variant="secondary" size="md" className="shrink-0" onClick={() => openSetupMigration()}>
               {t('setupMigration.settings.start')}
@@ -98,7 +98,11 @@ export function SetupMigrationSection() {
             </div>
           </>
         ) : null}
-      </SettingsCard>
+    </>
+  );
+  return embedded ? rows : (
+    <SettingsSection title={t('setupMigration.settings.title')}>
+      <SettingsCard>{rows}</SettingsCard>
     </SettingsSection>
   );
 }

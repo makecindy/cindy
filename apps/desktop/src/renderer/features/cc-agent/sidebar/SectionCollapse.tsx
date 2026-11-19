@@ -37,6 +37,8 @@ export function sectionCollapseDurationMs(): number {
 
 interface SectionCollapseProps extends React.HTMLAttributes<HTMLDivElement> {
   collapsed: boolean;
+  /** Preserve IDs referenced outside this section after the closing animation. */
+  keepMounted?: boolean;
   /** 追加在内层内容容器上的 class(外层 grid 容器用 className)。 */
   innerClassName?: string;
   children: React.ReactNode;
@@ -44,6 +46,7 @@ interface SectionCollapseProps extends React.HTMLAttributes<HTMLDivElement> {
 
 export function SectionCollapse({
   collapsed,
+  keepMounted = false,
   className,
   innerClassName,
   children,
@@ -52,6 +55,7 @@ export function SectionCollapse({
   const [keepChildren, setKeepChildren] = useState(!collapsed);
 
   useEffect(() => {
+    if (keepMounted) return undefined;
     if (!collapsed) {
       setKeepChildren(true);
       return undefined;
@@ -62,9 +66,9 @@ export function SectionCollapse({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [collapsed]);
+  }, [collapsed, keepMounted]);
 
-  const mounted = !collapsed || keepChildren;
+  const mounted = keepMounted || !collapsed || keepChildren;
 
   return (
     <div
