@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
-import { normalizeWorkingDirForStorage } from '../../../shared/workingDir';
+import { normalizeWorkingDirForStorage, workingDirEquals } from '../../../shared/workingDir';
 import { createLogger, maskPath } from '../../logger';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
 
@@ -111,13 +111,18 @@ export function resolveWechatWorkingDir(botId: string, rootPath?: string): strin
   return dir;
 }
 
+/** A reconnect may migrate an old unscoped directory, never a chosen session directory. */
+export function needsWechatDirectoryMigration(workingDir: string | null, botId: string, legacyRoot: string): boolean {
+  return !workingDir || workingDirEquals(workingDir, path.join(legacyRoot, 'im-working-dir', managedWorkingDirName(botId)));
+}
+
 function managedWorkingDirName(botId: string): string {
   if (/^[A-Za-z0-9_-]{1,128}$/.test(botId)) return `wechat-${botId}`;
   const digest = createHash('sha256').update(botId).digest('hex').slice(0, 24);
   return `wechat-external-${digest}`;
 }
 
-function normalizeSelectedDirectory(selectedPath: string): string {
+export function normalizeSelectedDirectory(selectedPath: string): string {
   if (typeof selectedPath !== 'string' || !path.isAbsolute(selectedPath)) {
     throw new Error('WECHAT_WORKING_DIR_INVALID');
   }

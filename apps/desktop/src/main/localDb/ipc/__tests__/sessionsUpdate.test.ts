@@ -16,7 +16,7 @@ import { setSessionOpeningModelAdmission, type SessionOpenBody } from '../../ses
  * 通过 mock electron ipcMain 捕获真实 handler + 内存 sqlite 全列 sessions 表做集成断言。
  */
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -118,6 +118,7 @@ vi.mock('@cindy/maker-core/pi-subagent-runs', () => ({
   writePiSubagentDeletedTombstone: h.writePiSubagentDeletedTombstone,
   clearPiSubagentDeletedTombstone: h.clearPiSubagentDeletedTombstone,
 }));
+vi.mock('../../../im/defaultSessionSettings', () => ({ getImDefaultEffortFor: () => 'high' }));
 vi.mock('../../../appSessionState', () => ({
   activeOwnerScopeKey: () => 'owner-a',
   isAppSessionBoundaryPending: () => false,
@@ -1952,6 +1953,34 @@ describe('local-db:sessions:update handler wiring', () => {
   it('does nothing when the patch has no workingDir (move back to dialogue)', async () => {
     await invokeUpdate('cc-local', { workspaceKind: 'dialogue' });
     expect(h.relocate).not.toHaveBeenCalled();
+  });
+
+  it('resumes the same personal WeChat conversation from the chosen directory', async () => {
+    const { chooseWechatSessionDirectory } = await import('../../../im/wechat/sessionWorkingDirectory');
+    const { buildWechatAdapter } = await import('../../../im/wechat/adapter');
+    const { createImSessionRepo } = await import('../../../im/shared/sessionRepo');
+    const adapter = buildWechatAdapter({} as Parameters<typeof buildWechatAdapter>[0], { agentKind: 'codex', defaultModel: 'm', defaultPermissionMode: 'ask' });
+    const bot = 'test-bot';
+    const peer = 'test-peer';
+    const id = adapter.sessions.sessionIdFor(bot, peer);
+    h.sqlite!.prepare(`INSERT INTO sessions (id, source, agent_kind, workspace_kind, working_dir,
+      im_bot_context_id, im_user_id, sdk_session_id, created_at, updated_at)
+      VALUES (?, 'wechat', 'codex', 'dialogue', ?, ?, ?, 'native-thread', 1, 1)`).run(id, h.userDataDir, bot, peer);
+    h.sqlite!.prepare("INSERT INTO messages (id,client_id,session_id,role,content,created_at) VALUES ('old','old',?,'user','first message',1)").run(id);
+    const chosen = path.join(h.userDataDir!, 'IM');
+    await mkdir(chosen);
+    await expect(chooseWechatSessionDirectory(id, async () => chosen, () => true)).rejects.toThrow('SESSION_RUNNING');
+    await expect(chooseWechatSessionDirectory(id, async () => undefined, () => false)).resolves.toBe(false);
+    expect(h.closeIdleSessionForMove).not.toHaveBeenCalled();
+    await expect(chooseWechatSessionDirectory(id, async () => chosen, () => false)).resolves.toBe(true);
+    expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith(id);
+
+    // A fresh inbound router must find the persisted row from the original bot and peer.
+    const row = await createImSessionRepo(adapter.config, adapter.sessions).findActiveSession(bot, peer);
+    expect(row).toMatchObject({ id, sdkSessionId: 'native-thread', workspaceKind: 'dialogue',
+      workingDir: normalizeWorkingDirForStorage(await realpath(chosen)) });
+    expect(h.sqlite!.prepare('SELECT content FROM messages WHERE session_id = ?').all(id)).toEqual([{ content: 'first message' }]);
+    expect(h.sqlite!.prepare("SELECT id FROM sessions WHERE im_bot_context_id = ? AND im_user_id = ?").all(bot, peer)).toEqual([{ id }]);
   });
 
   it('does nothing for codex sessions', async () => {

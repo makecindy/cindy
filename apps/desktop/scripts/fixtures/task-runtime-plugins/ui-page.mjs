@@ -12,6 +12,7 @@ export default {
     },
   },
   cases: {
+    'wechat-directory': { about: 'Local personal WeChat task offers the working-directory picker' },
     default: { about: 'No relevant plugin: original task menu without a task-plugins entry' },
     'one-control': { about: 'A context provider: only its nonempty group is shown' },
     'removed-selection': { about: 'An uninstalled selected provider remains visible and clearable' },
@@ -20,6 +21,13 @@ export default {
   },
   async check(page, ui) {
     const entry = page.getByRole('menuitem', { name: await ui.t('runtimePlugins.title'), exact: true });
+    const changeDirectory = page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.sessionMenu.changeWorkingDirectory'), exact: true });
+    if (ui.case === 'wechat-directory') {
+      await changeDirectory.waitFor();
+      assert.equal(await changeDirectory.isEnabled(), true);
+      return;
+    }
+    assert.equal(await changeDirectory.count(), 0);
     if (ui.case === 'default') {
       assert.equal(await entry.count(), 0);
       return;

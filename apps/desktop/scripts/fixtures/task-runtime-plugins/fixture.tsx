@@ -6,12 +6,12 @@ import { SessionTaskMenu } from '../../../src/renderer/features/cc-agent/sidebar
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import { forbid, mountPage, subscription } from '../../ui-page/harness';
 
-function Fixture({ removed, codex }: { removed: boolean; codex: boolean }) {
+function Fixture({ removed, codex, wechat }: { removed: boolean; codex: boolean; wechat: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(true);
   const trigger = useRef<HTMLButtonElement>(null);
   const session = { id: 'fixture-task', title: 'Fixture task', status: 'active', agentKind: codex ? 'codex' : 'pi',
-    runtimePluginsSelected: removed } as Session;
+    source: wechat ? 'wechat' : undefined, runtimePluginsSelected: removed } as Session;
   return <div className="p-8">
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger ref={trigger} data-ui-page-control>Fixture menu</DropdownMenuTrigger>
@@ -45,5 +45,5 @@ void mountPage({
     },
     sharedTask: { host: async () => ({ available: false, detail: null }) },
   }),
-  render: ctx => <Fixture removed={ctx.case === 'removed-selection'} codex={ctx.case === 'native-tools-codex'} />,
+  render: ctx => <Fixture wechat={ctx.case === 'wechat-directory'} removed={ctx.case === 'removed-selection'} codex={ctx.case === 'native-tools-codex'} />,
 });

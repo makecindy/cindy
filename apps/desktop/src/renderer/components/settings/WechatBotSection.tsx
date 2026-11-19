@@ -5,7 +5,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { useWechatBot } from '@/hooks/useWechatBot';
+import { useWechatBot, type WechatSettingsApi } from '@/hooks/useWechatBot';
 import { cn } from '@/lib/utils';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
@@ -55,7 +55,7 @@ export function WechatBotSection({
    * Set when the teammate runs on another computer: its WeChat API. Authorizing opens a browser and
    * scanning happens on that computer, so connecting stays there; assignment and release work from here.
    */
-  host?: { name: string; api: Window['electronAPI']['wechatBot'] };
+  host?: { name: string; api: WechatSettingsApi };
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();

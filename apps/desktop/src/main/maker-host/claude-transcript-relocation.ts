@@ -20,8 +20,7 @@
  *   5. 内存 id + DB 旧 id + messages agent_meta 的 DISTINCT sdkSessionId
  *      (rewind fork 历史链)三源并集交给 maker-core 复制。
  *
- * 整体 best-effort:任何失败只记日志,不阻断会话移动主流程(转录可事后手工
- * 迁移,移动失败对用户伤害更大)。
+ * 普通移动沿用 best-effort；请求保留原会话续聊时，当前转录迁移失败会中止目录变更。
  */
 import path from 'node:path';
 
@@ -129,13 +128,13 @@ export interface RelocateForSessionMoveResult {
 
 /**
  * 会话 workingDir 变更后迁移其 Claude CLI 转录(编排顺序见文件头注释)。
- * 仅限本机 cc 会话调用(调用方负责过滤 agentKind / remoteHostId)。不抛错。
+ * 仅限本机 cc 会话。默认尽力迁移；要求保留续聊的调用方在转录不可用时收到错误。
  */
 export async function relocateClaudeTranscriptsForSessionMove(
   sessionId: string,
   oldWorkingDir: string,
   newWorkingDir: string,
-  scope?: { client: DbClient; assertCurrent: () => void },
+  scope?: { client: DbClient; assertCurrent: () => void; requireResumeTranscript?: boolean },
 ): Promise<RelocateForSessionMoveResult> {
   let persistedSdkSessionId: string | null = null;
   try {
@@ -201,6 +200,11 @@ export async function relocateClaudeTranscriptsForSessionMove(
         newWorkingDir,
         projectsRoot,
       });
+      const resumeId = liveId ?? dbId;
+      if (scope?.requireResumeTranscript &&
+          (result.targetKeyInexact || (resumeId && result.missing.includes(resumeId)))) {
+        throw new Error('RESUME_TRANSCRIPT_UNAVAILABLE');
+      }
       if (result.targetKeyInexact) {
         log.warn('transcript relocation skipped: target project key inexact (path too long)', {
           sessionId,
@@ -222,6 +226,7 @@ export async function relocateClaudeTranscriptsForSessionMove(
     }
     return { persistedSdkSessionId };
   } catch (err) {
+    if (scope?.requireResumeTranscript) throw err;
     log.warn('transcript relocation failed (session move proceeds)', {
       sessionId,
       oldWorkingDir,

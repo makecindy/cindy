@@ -3,6 +3,10 @@
  * 工厂化改写)— 断言逐条保留, 用 feishu 真实文案包 + 假 adapter 注入, 行为契约
  * 与重构前一致(characterization)。
  */
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -839,6 +843,51 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
 
     expect(mocks.persistUserMessage).not.toHaveBeenCalled();
     expect(mocks.beginTurnChangeSetAtDispatch).not.toHaveBeenCalled();
+  });
+
+  it('dispatches the next WeChat message with the saved directory and resume ID', async () => {
+    const workingDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'wechat-cwd-')));
+    const id = 'wechat-existing';
+    let runtimeDirectory: string | undefined;
+    const h = createSessionHarness(async () => {
+      if (!runtimeDirectory) throw new Error('No runtime directory');
+      execFileSync(process.execPath, ['-e', "require('node:fs').writeFileSync('cwd-check.txt', process.cwd())"], {
+        cwd: runtimeDirectory,
+      });
+      return { accepted: true };
+    }, id);
+    const createSession = vi.fn(async (opts: { workingDir: string }) => {
+      runtimeDirectory = opts.workingDir;
+      return h.session;
+    });
+    mocks.getMaker.mockReturnValue({ ...createMakerHarness(h.session), createSession });
+    mocks.findActiveSession.mockResolvedValue({
+      id, agentKind: 'claude-code', workingDir, sdkSessionId: 'previous-thread',
+      model: 'claude-opus-4-7', permissionMode: 'auto', effort: 'high', fastMode: false, providerId: null,
+    });
+    const localRunner = createTurnRunner({
+      ...fakeAdapter, channel: 'wechat',
+      output: { kind: 'chunked-text', im: fakeAdapter.im, commitFinal: vi.fn() },
+    }, fakeRepo, fakeCards);
+    try {
+      await localRunner.runAgentTurn({
+        botContextId: 'original-bot', userId: 'original-peer', userMessageId: 'next-message',
+        text: 'Record the current directory in cwd-check.txt', attachments: [],
+      });
+      expect(mocks.findActiveSession.mock.calls[0]?.slice(0, 2)).toEqual(['original-bot', 'original-peer']);
+      expect(mocks.persistUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: id, text: 'Record the current directory in cwd-check.txt',
+      }));
+      expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+        id, workingDir, resumeSessionId: 'previous-thread',
+      }));
+      expect(mocks.createSession).not.toHaveBeenCalled();
+      expect(readFileSync(path.join(workingDir, 'cwd-check.txt'), 'utf8')).toBe(workingDir);
+      h.emit({ type: 'done', data: {} });
+    } finally {
+      await localRunner.disposeAllSessions();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
   });
 
   it('passes persisted null Pi providerId through cold IM session creation', async () => {

@@ -17,6 +17,7 @@ import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
+import { isWorktreeMoveBlockedError } from '../../../../shared/worktreeMoveGuardError';
 import { toast } from '@/lib/toast';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import { declaredGhostControlPoints } from '../../../../shared/ghost';
@@ -230,6 +231,18 @@ function ActiveSessionTaskMenu({
       {t(`ccAgent.sidebar.sessionMenu.${key}`)}
     </DropdownMenuItem>
   );
+  async function changeWorkingDirectory() {
+    const owner = getDataOwnerGeneration();
+    try {
+      const changed = await window.electronAPI.wechatBot.chooseSessionDirectory(session.id);
+      if (changed && isDataOwnerGenerationCurrent(owner)) toast.success(t('ccAgent.sidebar.sessionMenu.directoryChanged'));
+    } catch (error) {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      if (isWorktreeMoveBlockedError(error)) toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
+      else if (String(error).includes('SESSION_RUNNING')) toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRunningBlocked'));
+      else toast.error(t('ccAgent.sidebar.sessionMenu.changeDirectoryFailed'));
+    }
+  }
   const separator = <DropdownMenuSeparator />;
   return (
     <div
@@ -338,6 +351,9 @@ function ActiveSessionTaskMenu({
           ))}
         {!guest && (
           <>
+            {session.status === 'active' && session.source === 'wechat' && !session.remoteHostId &&
+              !session.deviceLinkDeviceId && !session.agentDeviceId &&
+              item('changeWorkingDirectory', () => void changeWorkingDirectory(), ownerActionsBlocked)}
             {!archived && !empty && !session.remoteHostId && (
               <TaskMoveSubmenu
                 session={session}

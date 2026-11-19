@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 
+import type { WechatSettingsApi } from '@/hooks/useWechatBot';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import type { BotLifecycleActionRequest, BotLifecycleActionResult } from '../../../shared/botLifecycle';
 import type { BotModelRoute } from '../../../shared/botModelChain';
@@ -22,7 +23,6 @@ export type BotCapabilityEntry = {
 type Bots = NonNullable<Window['electronAPI']['localDb']>['bots'];
 type VoiceApi = Window['electronAPI']['voiceConversation'];
 type ImConnectionApi = Window['electronAPI']['botImConnection'];
-type WechatApi = Window['electronAPI']['wechatBot'];
 
 /**
  * The computer a teammate's settings pages read from and write to. The pages are the same components for
@@ -69,7 +69,7 @@ export interface BotSettingsTarget {
     /** False for another computer: credentials are never typed into a remote page. */
     canEnterCredentials: boolean;
     /** Personal WeChat of the teammate's computer; null = this window's own API (local only). */
-    wechat: WechatApi | null;
+    wechat: WechatSettingsApi | null;
     /** The official X account of the teammate's computer (remote only). */
     x: {
       get(): Promise<{ available: boolean; /** Absent on older computers. */ visible?: boolean; enabled: boolean; connected: boolean; companionBotId: string | null }>;

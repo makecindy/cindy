@@ -58,8 +58,9 @@ import { TELEGRAM_DEFAULT_BEHAVIOR } from '@cindy/im';
 import path from 'node:path';
 
 import { ipcMain, BrowserWindow, dialog, type IpcMainEvent } from 'electron';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, isNull, ne } from 'drizzle-orm';
 
+import { getUserDataDir } from '../userDataPath';
 import { getDbClient } from '../localDb/client/current';
 import {
   captureSessionRuntimeControlOwnerEpoch,
@@ -131,6 +132,7 @@ import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { throwIpcError } from '../utils/ipcValidate';
 import {
   readWechatChannelSettings,
+  needsWechatDirectoryMigration,
   resetWechatWorkingDir,
   writeWechatWorkingDir,
 } from './wechat/channelSettings';
@@ -483,6 +485,26 @@ export function startImOrchestrators(): void {
     }
     return setWechatCompanion(botId as string | null);
   });
+  ipcMain.handle('wechatBot:choose-session-directory', async (event, sessionId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256) {
+      throwIpcError('INVALID_PARAMS', 'Invalid session ID.');
+    }
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    if (!owner || owner.isDestroyed()) throw new Error('WECHAT_SETTINGS_WINDOW_UNAVAILABLE');
+    const ownerEpoch = captureSessionRuntimeControlOwnerEpoch();
+    const { chooseWechatSessionDirectory } = await import('./wechat/sessionWorkingDirectory');
+    const { getMakerIfReady } = await import('../maker-host/index.js');
+    if (!sessionRuntimeControlOwnerEpochMatches(ownerEpoch)) throw new Error('ACCOUNT_CHANGED');
+    return chooseWechatSessionDirectory(sessionId, async () => {
+      const result = await dialog.showOpenDialog(owner, { properties: ['openDirectory', 'createDirectory'] });
+      return result.canceled ? undefined : result.filePaths[0];
+    }, () => {
+      const live = getMakerIfReady()?.getSession(sessionId);
+      return Boolean(wechatIm.hasActiveTaskForSession(sessionId) || live?.isTurnRunning() ||
+        live?.listBackgroundTasks().length);
+    });
+  });
   ipcMain.handle('wechatBot:choose-working-directory', async (event) => {
     assertTrustedAppRendererEvent(event);
     const owner = BrowserWindow.fromWebContents(event.sender);
@@ -765,10 +787,14 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
         .from(sessions)
         .where(eq(sessions.source, 'wechat'));
       for (const row of rows) {
-        if (!row.botContextId) continue;
+        if (!row.botContextId ||
+            !needsWechatDirectoryMigration(row.workingDir, row.botContextId, getUserDataDir())) continue;
         const scoped = wechatAdapter.sessions.ensureWorkingDir(row.botContextId);
         if (row.workingDir === scoped) continue;
-        await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
+        await db.update(sessions).set({ workingDir: scoped }).where(and(
+          eq(sessions.id, row.id),
+          row.workingDir === null ? isNull(sessions.workingDir) : eq(sessions.workingDir, row.workingDir),
+        ));
       }
     }
   } catch (err) {

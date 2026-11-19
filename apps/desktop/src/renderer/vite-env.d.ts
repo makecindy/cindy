@@ -2671,6 +2671,7 @@ interface ElectronAPI {
     getChannelSettings: () => Promise<WechatChannelSettingsState>;
     setCompanion: (botId: string | null) => Promise<WechatChannelSettingsState>;
     onChannelSettingsChange: (callback: (state: WechatChannelSettingsState) => void) => () => void;
+    chooseSessionDirectory: (sessionId: string) => Promise<boolean>;
     chooseWorkingDirectory: () => Promise<{
       canceled: boolean;
       state: WechatChannelSettingsState;
