@@ -141,6 +141,51 @@ describe('HookTaskCard attached context', () => {
       .replace('<p>内层第二条</p>', '内层第二条'));
   });
 
+  it.each([
+    ['feishu', 'replyContext', '```', true],
+    ['lark', 'threadContext', '~~~', true],
+    ['feishu', 'replyContext', '````', false],
+  ] as const)('preserves %s code fences from %s', (im, source, fence, closed) => {
+    const code = '<p><strong>示例原文</strong></p>';
+    const prose = '<p>后续可读正文</p>';
+    const content = [
+      fence + 'html',
+      code,
+      ...(fence.length === 4 ? ['```', code] : []),
+      ...(closed ? [fence] : []),
+      prose,
+    ].join('\r\n');
+    const attached = source === 'replyContext'
+      ? { replyContext: '[林] [时间未知] ' + content, replyMessageCount: 1 }
+      : { threadContext: [{ author: '林', text: content }] };
+    const { container } = render(<HookTaskCard im={im} userText="演示请求" {...attached} />);
+    fireEvent.click(screen.getByRole('button', { name: '本条附带的上下文（1）' }));
+    const quote = screen.getByRole('region', { name: '引用消息（1）' });
+    expect(quote.textContent?.match(/<p><strong>示例原文<\/strong><\/p>/g)).toHaveLength(fence.length === 4 ? 2 : 1);
+    if (closed) expect(quote.textContent).toContain(fence + '\r\n后续可读正文');
+    else expect(quote.textContent).toContain(prose);
+    expect(container.querySelector('p,strong')).toBeNull();
+  });
+
+  it('keeps fenced code inside a Feishu group forward and converts the next child', () => {
+    const code = '[名字] 11-19 09:12 <p>代码示例</p>';
+    const groupContext = [
+      '[林] 11-19 09:12 [合并转发消息]',
+      '[陈] ````html',
+      code,
+      '```',
+      '<p>较短围栏后的代码</p>',
+      '````',
+      '[周] <p>后续转发文字</p> [图片]',
+      '[林] 11-19 09:13 <p>下一条群消息</p>',
+    ].join('\n');
+    render(<HookTaskCard im="feishu" userText="演示请求" groupContext={groupContext} groupMessageCount={2} />);
+    fireEvent.click(screen.getByRole('button', { name: '本条附带的上下文（2）' }));
+    expect(screen.getByRole('region', { name: '群聊背景（2）' }).textContent).toContain(groupContext
+      .replace('<p>后续转发文字</p>', '后续转发文字')
+      .replace('<p>下一条群消息</p>', '下一条群消息'));
+  });
+
   it('preserves literal HTML examples from another IM channel', () => {
     const context = '[演示成员] 11-19 09:12 <p>字面段落</p>';
     render(<HookTaskCard im="slack" userText="演示请求" groupContext={context} groupMessageCount={1} />);
