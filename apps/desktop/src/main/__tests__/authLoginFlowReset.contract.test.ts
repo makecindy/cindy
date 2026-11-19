@@ -7,12 +7,21 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { ColdStartAuthFallbackRegistry, commitColdStartRefreshIfCurrent } from '../authStartupGate';
+import { AUTH_ACCOUNT_VAULT_VERSION } from '../authRefreshCommit';
 
 /** Regression guard for login progress that is intentionally owned by Electron main. */
 describe('auth login-flow reset', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/main/authManager.ts'), 'utf8').replace(
     /\r\n/g,
     '\n',
+  );
+  // The vault types and the refreshed-session commit rule moved here from authManager.ts.
+  const refreshCommitSource = readFileSync(
+    resolve(process.cwd(), 'src/main/authRefreshCommit.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+  const refreshCommitRule = refreshCommitSource.slice(
+    refreshCommitSource.indexOf('export function applyRefreshedCredentialsToVault('),
   );
   const logoutPolicySource = readFileSync(
     resolve(process.cwd(), 'src/main/authAccountLogoutPolicy.ts'),
@@ -230,7 +239,7 @@ describe('auth login-flow reset', () => {
   });
 
   it('keeps saved account metadata fresh after profile edits and Passport sync', () => {
-    expect(source).toContain('const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;');
+    expect(AUTH_ACCOUNT_VAULT_VERSION).toBe(2);
     expect(AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY).toBe('cindy_auth_account_logout_tombstones_v1');
     expect(source).toContain('const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;');
     expect(source).toContain('const logoutAuthEpoch = authStateEpoch;');
@@ -637,7 +646,8 @@ describe('auth login-flow reset', () => {
       commitStart,
     );
     const commitBody = source.slice(commitStart, commitEnd);
-    expect(commitBody).toContain('vault.resources[key]?.refreshToken === requestedRefreshToken');
+    expect(commitBody).toContain('applyRefreshedCredentialsToVault(vault');
+    expect(refreshCommitRule).toContain('vault.resources[key]?.refreshToken === requestedRefreshToken');
 
     const deadStart = source.indexOf('async function clearConfirmedDeadRefreshTokens');
     const deadEnd = source.indexOf('\n}\n\n/**\n * replacement-retry', deadStart);
@@ -666,7 +676,7 @@ describe('auth login-flow reset', () => {
   });
 
   it('keeps a durable signed-out owner across a crash between vault and session cleanup', () => {
-    expect(source).toContain('signedOutAt?: number;');
+    expect(refreshCommitSource).toContain('signedOutAt?: number;');
 
     const clearStart = source.indexOf('async function clearAuthAccountVault(');
     const clearEnd = source.indexOf('\n}\n\nfunction persistLogoutTombstoneOnly', clearStart);
@@ -710,18 +720,19 @@ describe('auth login-flow reset', () => {
       refreshCommitStart,
     );
     const refreshCommitBody = source.slice(refreshCommitStart, refreshCommitEnd);
-    expect(refreshCommitBody).toContain("typeof vault.signedOutAt !== 'number'");
-    expect(refreshCommitBody).toContain('!loggedOutAccountKeySet(vault).has(key)');
-    expect(refreshCommitBody.indexOf('!loggedOutAccountKeySet(vault).has(key)')).toBeGreaterThan(
-      refreshCommitBody.indexOf('options.allowUnclaimedVault === true'),
+    expect(refreshCommitBody).toContain('allowUnclaimedVault: options.allowUnclaimedVault');
+    expect(refreshCommitRule).toContain("typeof vault.signedOutAt !== 'number'");
+    expect(refreshCommitRule).toContain('!loggedOutAccountKeySet(vault).has(key)');
+    expect(refreshCommitRule.indexOf('!loggedOutAccountKeySet(vault).has(key)')).toBeGreaterThan(
+      refreshCommitRule.indexOf('input.allowUnclaimedVault === true'),
     );
 
-    const resourceWriteStart = source.indexOf('function writeResourceSessionToVault(');
-    const resourceWriteEnd = source.indexOf(
-      '\n}\n\nasync function rememberPassportSession',
+    const resourceWriteStart = refreshCommitSource.indexOf('export function writeResourceSessionToVault(');
+    const resourceWriteEnd = refreshCommitSource.indexOf(
+      '\n}\n\n/**\n * Commit a refreshed resource session',
       resourceWriteStart,
     );
-    const resourceWriteBody = source.slice(resourceWriteStart, resourceWriteEnd);
+    const resourceWriteBody = refreshCommitSource.slice(resourceWriteStart, resourceWriteEnd);
     expect(resourceWriteBody).toContain('if (options.markActive !== false) {');
     expect(resourceWriteBody).toContain('delete vault.signedOutAt;');
     expect(resourceWriteBody).toContain(
@@ -762,7 +773,7 @@ describe('auth login-flow reset', () => {
   });
 
   it('logs out only the current saved account and advances to the next restorable account', () => {
-    expect(source).toContain('loggedOutAccountKeys?: string[];');
+    expect(refreshCommitSource).toContain('loggedOutAccountKeys?: string[];');
 
     const removalStart = logoutPolicySource.indexOf('export function removeLoggedOutVaultAccount<');
     const removalBody = logoutPolicySource.slice(removalStart);
@@ -996,12 +1007,12 @@ describe('auth login-flow reset', () => {
     const helperStart = source.indexOf('async function commitDesktopRefreshCredentials(');
     const helperEnd = source.indexOf('\n}\n\n/** Persist a rotated Passport', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
-    expect(helperBody).toContain('vault.activeAccountKey === key');
+    expect(refreshCommitRule).toContain('vault.activeAccountKey === key');
     expect(helperBody).toContain('options.validateBeforeWrite?.()');
-    expect(helperBody).toContain('canClaimUninitializedVault');
-    expect(helperBody).toContain('Object.keys(vault.resources).length === 0');
+    expect(refreshCommitRule).toContain('canClaimUninitializedVault');
+    expect(refreshCommitRule).toContain('Object.keys(vault.resources).length === 0');
     expect(helperBody).toContain('readSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY)');
-    expect(helperBody).toContain('markActive: stillOwnsActiveSession');
+    expect(refreshCommitRule).toContain('markActive: stillOwnsActiveSession');
     expect(helperBody).toContain("if (commit === 'active') {");
     expect(helperBody).toContain('writePersistedAuthSessionOrThrow(pair.refreshToken, realm);');
   });

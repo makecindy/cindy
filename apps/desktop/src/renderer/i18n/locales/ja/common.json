@@ -9459,6 +9459,31 @@
     "preparing": "ログインサービスに接続中",
     "preparingSubtitle": "この地域で利用可能な方法を読み込んでいます",
     "unavailable": "現在ログインできません",
+    "hostUnavailable": {
+      "title": "Cindy バックグラウンドサービス未起動",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "このデータは、Cindy バックグラウンドサービスに保存されているログインとは別のアカウントのものです。",
+          "action": "元のアカウントで cindy-host login を実行し、Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。"
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "別の Cindy アプリがこのデータを使用しています。",
+          "action": "そのアプリを終了し、Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。"
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "このアカウントのデータを開けません。",
+          "action": "最近より新しいバージョンの Cindy を使った場合は、まずこのコンピュータの Cindy を最新バージョンに更新し、Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。そうでない場合は、cindy-host status を実行して原因を確認してください。"
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Cindy バックグラウンドサービスの起動時にログインサービスに接続できませんでした。",
+          "action": "ネットワークを確認し、Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。"
+        },
+        "HOST_START_FAILED": {
+          "body": "Cindy バックグラウンドサービスの起動中にエラーが発生しました。",
+          "action": "Cindy バックグラウンドサービスを再起動してから、Cindy を開き直してください。それでもエラーになる場合は、cindy-host status を実行して原因を確認してください。"
+        }
+      }
+    },
     "retry": "再試行",
     "browserWaiting": "ブラウザで認証を完了してください",
     "browserCallback": {
@@ -19125,6 +19150,9 @@
     },
     "errors": {
       "piStartupCloudFile": "クラウド上にのみある指示ファイルが Pi の起動を遅らせている可能性があります：{{path}}。Finder でこのファイルをダウンロードし、ローカルで利用できることを確認してから再試行してください。タイムアウトには別の原因がある可能性もあります。",
+      "hostProfileInUseByDesktop": "このデータは単独で起動している Cindy デスクトップアプリが使用中です。アプリを終了してから、もう一度送信してください。",
+      "hostProfileInUseByDesktopAtStart": "このデータは単独で起動している Cindy デスクトップアプリが使用中のため、Cindy バックグラウンドサービスは起動しませんでした。そのアプリを終了し、Cindy バックグラウンドサービスを再起動してから、この Cindy ウィンドウを開き直してください。",
+      "hostProfileInUseByDesktopRetry": "このデータは単独で起動している Cindy デスクトップアプリが使用中のため、今は変更できません。アプリを終了してから、もう一度お試しください。",
       "openFileFailed": "システムでファイルを開けません",
       "emptyResponse": "モデルから内容が返りませんでした。再試行してください。文脈が長い場合は、モデルを変えてみてください。",
       "turnFailed": "タスクの実行に失敗しました（モデルからエラーの詳細が返されませんでした）。再試行してください。",
@@ -21795,14 +21823,14 @@
     "openFailed": "GitHub を開けませんでした。"
   },
   "hostConnection": {
-    "connecting": "Cindy に接続中…",
+    "connecting": "Cindy バックグラウンドサービスに接続中…",
     "restoring": "タスクの状態を復元中…",
     "retrying": "タスクの状態がまだ同期されていません。再試行中…",
     "pairing": "接続の再認証が必要です",
-    "pairingHelp": "このページを開いたまま、Cindy Host を起動したターミナルでウェブ画面を開くコマンドを再実行してください。新しいページでペアリングし、このページに戻ってください。",
+    "pairingHelp": "このページを開いたまま、Cindy バックグラウンドサービスを起動したターミナルでウェブ画面を開くコマンドを再実行してください。新しいページでペアリングし、このページに戻ってください。",
     "keepDraft": "入力中の下書きは保持されます。接続が回復すると、タスクの状態が同期されます。",
     "retry": "再接続",
-    "desktopAuthHelp": "起動用ターミナルで Host の接続設定を更新してから、この実験的なクライアントを開き直してください。"
+    "desktopAuthHelp": "起動用ターミナルで Cindy バックグラウンドサービスの接続設定を更新してから、この実験的なクライアントを開き直してください。"
   },
   "remoteControlConsent": {
     "title": "このコンピューターのリモート操作を許可しますか？",

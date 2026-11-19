@@ -9574,6 +9574,31 @@
     "preparing": "Préparation de la connexion",
     "preparingSubtitle": "Chargement des méthodes disponibles pour cette région",
     "unavailable": "Connexion indisponible pour l'instant",
+    "hostUnavailable": {
+      "title": "Service d’arrière-plan Cindy arrêté",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Ces données appartiennent à un autre compte que la connexion enregistrée par le service d’arrière-plan Cindy.",
+          "action": "Exécutez cindy-host login avec le compte d’origine, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Une autre application Cindy utilise ces données.",
+          "action": "Fermez-la, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Les données de ce compte ne peuvent pas être ouvertes.",
+          "action": "Si vous avez récemment utilisé une version plus récente, mettez Cindy à jour sur ce poste, redémarrez le service d’arrière-plan Cindy et rouvrez Cindy. Sinon, lancez cindy-host status pour voir la cause."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Au démarrage, le service d’arrière-plan Cindy n’a pas pu joindre le service de connexion.",
+          "action": "Vérifiez votre réseau, redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy."
+        },
+        "HOST_START_FAILED": {
+          "body": "Le service d’arrière-plan Cindy a rencontré une erreur au démarrage.",
+          "action": "Redémarrez le service d’arrière-plan Cindy, puis rouvrez Cindy. Si cela se reproduit, exécutez cindy-host status pour en voir la raison."
+        }
+      }
+    },
     "retry": "Réessayer",
     "browserWaiting": "Terminez la vérification dans votre navigateur",
     "browserCallback": {
@@ -19383,6 +19408,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Un fichier d’instructions uniquement dans le cloud peut retarder le démarrage de Pi : {{path}}. Téléchargez ce fichier dans le Finder, attendez qu’il soit disponible en local, puis réessayez. Le délai dépassé peut avoir une autre cause.",
+      "hostProfileInUseByDesktop": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule. Quittez-la, puis renvoyez le message.",
+      "hostProfileInUseByDesktopAtStart": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; le service d’arrière-plan Cindy n’a donc pas démarré. Quittez-la, redémarrez le service d’arrière-plan Cindy, puis rouvrez cette fenêtre Cindy.",
+      "hostProfileInUseByDesktopRetry": "Ces données sont utilisées par l’application de bureau Cindy qui s’exécute seule ; cette modification n’est donc pas possible pour le moment. Quittez-la, puis réessayez.",
       "openFileFailed": "Impossible d'ouvrir le fichier dans le système",
       "emptyResponse": "Le modèle n'a renvoyé aucun contenu. Réessayez. Si le contexte est très long, changez de modèle.",
       "turnFailed": "La tâche a échoué (le modèle n'a fourni aucun détail sur l'erreur). Veuillez réessayer.",
@@ -22083,14 +22111,14 @@
     "openFailed": "Impossible d’ouvrir GitHub."
   },
   "hostConnection": {
-    "connecting": "Connexion à Cindy…",
+    "connecting": "Connexion au service d’arrière-plan Cindy…",
     "restoring": "Restauration de l’état des tâches…",
     "retrying": "État des tâches non synchronisé. Nouvelle tentative…",
     "pairing": "Autorisation de connexion requise",
-    "pairingHelp": "Gardez cette page ouverte. Dans le terminal utilisé pour lancer Cindy Host, relancez la commande d’ouverture du client web. Associez la nouvelle page, puis revenez ici.",
+    "pairingHelp": "Gardez cette page ouverte. Dans le terminal utilisé pour lancer le service d’arrière-plan Cindy, relancez la commande d’ouverture du client web. Associez la nouvelle page, puis revenez ici.",
     "keepDraft": "Votre brouillon est conservé. L’état des tâches sera synchronisé au rétablissement de la connexion.",
     "retry": "Reconnecter",
-    "desktopAuthHelp": "Mettez à jour les paramètres de connexion à Cindy Host dans le terminal de lancement, puis rouvrez ce client expérimental."
+    "desktopAuthHelp": "Mettez à jour les paramètres de connexion au service d’arrière-plan Cindy dans le terminal de lancement, puis rouvrez ce client expérimental."
   },
   "remoteControlConsent": {
     "title": "Autoriser le contrôle à distance de cet ordinateur ?",

@@ -350,10 +350,10 @@ describe('SessionCard review regressions', () => {
   it('keeps selected sidebar hover actions inside the active color system', () => {
     expect(sessionItemSource).toContain('isActive={isActive}');
     expect(sessionItemSource).toContain(
-      "'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
+      "'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'",
     );
     expect(sessionItemSource).toContain(
-      "'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground'",
+      "'text-sidebar-action-icon enabled:[&:not([aria-disabled=true])]:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] hover:text-foreground'",
     );
   });
 

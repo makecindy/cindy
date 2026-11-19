@@ -9502,6 +9502,31 @@
     "preparing": "Anmeldung wird vorbereitet",
     "preparingSubtitle": "Verfügbare Methoden für diese Region werden geladen",
     "unavailable": "Anmeldung derzeit nicht möglich",
+    "hostUnavailable": {
+      "title": "Cindy-Hintergrunddienst startet nicht",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Diese Daten gehören zu einem anderen Konto als die Anmeldung, die der Cindy-Hintergrunddienst gespeichert hat.",
+          "action": "Führe cindy-host login mit dem ursprünglichen Konto aus, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Ein anderes Cindy-Programm verwendet diese Daten.",
+          "action": "Beende es, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "Die Daten dieses Kontos lassen sich nicht öffnen.",
+          "action": "Falls du zuletzt eine neuere Cindy-Version genutzt hast, aktualisiere Cindy auf diesem Computer, starte den Cindy-Hintergrunddienst neu und öffne Cindy erneut. Sonst zeigt cindy-host status den Grund."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "Der Cindy-Hintergrunddienst konnte beim Start den Anmeldedienst nicht erreichen.",
+          "action": "Prüfe deine Netzwerkverbindung, starte dann den Cindy-Hintergrunddienst neu und öffne Cindy erneut."
+        },
+        "HOST_START_FAILED": {
+          "body": "Beim Start des Cindy-Hintergrunddienstes ist ein Fehler aufgetreten.",
+          "action": "Starte den Cindy-Hintergrunddienst neu und öffne Cindy erneut. Wenn es wieder passiert, führe cindy-host status aus, um den Grund zu sehen."
+        }
+      }
+    },
     "retry": "Erneut versuchen",
     "browserWaiting": "Bestätigung im Browser abschließen",
     "browserCallback": {
@@ -19200,6 +19225,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Eine nur in der Cloud verfügbare Anweisungsdatei verzögert möglicherweise den Start von Pi: {{path}}. Lade diese Datei im Finder herunter, warte, bis sie lokal verfügbar ist, und versuche es erneut. Die Zeitüberschreitung kann eine andere Ursache haben.",
+      "hostProfileInUseByDesktop": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet. Beende sie und sende dann erneut.",
+      "hostProfileInUseByDesktopAtStart": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher wurde der Cindy-Hintergrunddienst nicht gestartet. Beende sie, starte den Cindy-Hintergrunddienst neu und öffne dann dieses Cindy-Fenster erneut.",
+      "hostProfileInUseByDesktopRetry": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet, daher ist das gerade nicht möglich. Beende sie und versuche es dann erneut.",
       "openFileFailed": "Datei kann nicht mit dem System geöffnet werden",
       "emptyResponse": "Das Modell hat keinen Inhalt zurückgegeben. Versuche es erneut. Wechsle bei sehr langem Kontext das Modell.",
       "turnFailed": "Die Aufgabe ist fehlgeschlagen (das Modell hat keine Fehlerdetails zurückgegeben) — versuche es erneut.",
@@ -21877,14 +21905,14 @@
     "openFailed": "GitHub konnte nicht geöffnet werden."
   },
   "hostConnection": {
-    "connecting": "Verbindung mit Cindy wird hergestellt…",
+    "connecting": "Verbindung mit dem Cindy-Hintergrunddienst wird hergestellt…",
     "restoring": "Aufgabenstatus wird wiederhergestellt…",
     "retrying": "Aufgabenstatus noch nicht synchronisiert. Neuer Versuch…",
     "pairing": "Verbindung erneut autorisieren",
-    "pairingHelp": "Lass diese Seite geöffnet. Führe im Terminal, in dem du Cindy Host gestartet hast, den Befehl zum Öffnen des Webclients erneut aus. Kopple die neue Seite und kehre hierher zurück.",
+    "pairingHelp": "Lass diese Seite geöffnet. Führe im Terminal, in dem du den Cindy-Hintergrunddienst gestartet hast, den Befehl zum Öffnen des Webclients erneut aus. Kopple die neue Seite und kehre hierher zurück.",
     "keepDraft": "Dein Entwurf bleibt erhalten. Der Aufgabenstatus wird nach Wiederherstellung der Verbindung synchronisiert.",
     "retry": "Erneut verbinden",
-    "desktopAuthHelp": "Aktualisiere die Host-Verbindungseinstellungen im Startterminal und öffne diesen experimentellen Client erneut."
+    "desktopAuthHelp": "Aktualisiere die Verbindungseinstellungen für den Cindy-Hintergrunddienst im Startterminal und öffne diesen experimentellen Client erneut."
   },
   "remoteControlConsent": {
     "title": "Fernsteuerung dieses Computers erlauben?",

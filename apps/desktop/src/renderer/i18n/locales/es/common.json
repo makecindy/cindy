@@ -9574,6 +9574,31 @@
     "preparing": "Preparando el inicio de sesión",
     "preparingSubtitle": "Cargando los métodos disponibles para esta región",
     "unavailable": "Inicio de sesión no disponible ahora",
+    "hostUnavailable": {
+      "title": "Servicio en segundo plano de Cindy",
+      "reasons": {
+        "HOST_ACCOUNT_MISMATCH": {
+          "body": "Estos datos pertenecen a una cuenta distinta del inicio de sesión guardado por el servicio en segundo plano de Cindy.",
+          "action": "Ejecuta cindy-host login con la cuenta original, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy."
+        },
+        "HOST_DATABASE_LOCKED": {
+          "body": "Otra aplicación de Cindy está usando estos datos.",
+          "action": "Ciérrala, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy."
+        },
+        "HOST_DATABASE_UNAVAILABLE": {
+          "body": "No se pueden abrir los datos de esta cuenta.",
+          "action": "Si has usado hace poco una versión más reciente de Cindy, actualiza primero Cindy en este ordenador a la última versión, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy. Si no, ejecuta cindy-host status para ver el motivo."
+        },
+        "HOST_SIGN_IN_SERVICE_UNREACHABLE": {
+          "body": "El servicio en segundo plano de Cindy no pudo conectar con el servicio de inicio de sesión al iniciarse.",
+          "action": "Comprueba tu red, reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy."
+        },
+        "HOST_START_FAILED": {
+          "body": "El servicio en segundo plano de Cindy encontró un error al iniciarse.",
+          "action": "Reinicia el servicio en segundo plano de Cindy y vuelve a abrir Cindy. Si vuelve a ocurrir, ejecuta cindy-host status para ver el motivo."
+        }
+      }
+    },
     "retry": "Reintentar",
     "browserWaiting": "Completa la verificación en tu navegador",
     "browserCallback": {
@@ -19383,6 +19408,9 @@
     },
     "errors": {
       "piStartupCloudFile": "Un archivo de instrucciones que solo está en la nube podría estar retrasando el inicio de Pi: {{path}}. Descarga este archivo en Finder, espera a que esté disponible localmente y vuelve a intentarlo. El tiempo de espera agotado podría tener otra causa.",
+      "hostProfileInUseByDesktop": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos. Ciérrala y vuelve a enviar.",
+      "hostProfileInUseByDesktopAtStart": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos, así que el servicio en segundo plano de Cindy no se ha iniciado. Ciérrala, reinicia el servicio en segundo plano de Cindy y vuelve a abrir esta ventana de Cindy.",
+      "hostProfileInUseByDesktopRetry": "La aplicación de escritorio de Cindy, que se está ejecutando por su cuenta, está usando estos datos, así que ahora no se puede cambiar. Ciérrala y vuelve a intentarlo.",
       "openFileFailed": "No se puede abrir el archivo en el sistema",
       "emptyResponse": "El modelo no devolvió contenido. Inténtalo de nuevo. Si el contexto es muy largo, cambia de modelo.",
       "turnFailed": "La tarea falló (el modelo no devolvió detalles del error); inténtalo de nuevo.",
@@ -22083,14 +22111,14 @@
     "openFailed": "No se pudo abrir GitHub."
   },
   "hostConnection": {
-    "connecting": "Conectando con Cindy…",
+    "connecting": "Conectando con el servicio en segundo plano de Cindy…",
     "restoring": "Restaurando el estado de las tareas…",
     "retrying": "Las tareas aún no están sincronizadas. Reintentando…",
     "pairing": "Se necesita autorizar la conexión",
-    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste Cindy Host, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
+    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste el servicio en segundo plano de Cindy, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
     "keepDraft": "Tu borrador se conserva. Las tareas se sincronizarán cuando se restablezca la conexión.",
     "retry": "Reconectar",
-    "desktopAuthHelp": "Actualiza la configuración de conexión del Host en el terminal de inicio y vuelve a abrir este cliente experimental."
+    "desktopAuthHelp": "Actualiza la configuración de conexión del servicio en segundo plano de Cindy en el terminal de inicio y vuelve a abrir este cliente experimental."
   },
   "remoteControlConsent": {
     "title": "¿Permitir el control remoto de esta computadora?",

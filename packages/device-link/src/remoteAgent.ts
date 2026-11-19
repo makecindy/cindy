@@ -198,6 +198,12 @@ export type RemoteAgentRequest =
   /** Authenticated group owner updates only its own task speed constraints, never model grants. */
   | ({ op: 'fast-policy' } & RemoteAgentFastPolicy)
   | ({ op: 'fork' } & RemoteAgentForkRequest)
+  | { op: 'shared-image'; action: 'start'; requestId: string; providerId: string; model: string;
+      prompt: string; size?: string; aspectRatio?: string; quality?: string; resolution?: string;
+      nativeParameters?: Record<string, unknown>;
+      relay?: string; reshareKey?: string }
+  | { op: 'shared-image'; action: 'read'; requestId: string; offset: number }
+  | { op: 'shared-image'; action: 'release'; requestId: string }
   /** Native image recovery is scoped to the caller's task; never accepts file paths. */
   | { op: 'images'; sessionId: string; relay?: string; action: 'list'; offset: number }
   | { op: 'images'; sessionId: string; relay?: string; action: 'read'; imageId: string; offset: number }
@@ -332,6 +338,7 @@ export interface RemoteAgentCaps {
   nativeFork?: boolean;
   imageRecovery?: boolean;
   imageRecoveryRelay?: boolean;
+  sharedImageGeneration?: boolean;
   version: number;
   agents: Array<{ kind: RemoteAgentKind; available: boolean }>;
   maxRuns: number;
@@ -436,6 +443,11 @@ function record(value: unknown): Record<string, unknown> {
 
 function id(value: unknown): string {
   if (typeof value !== 'string' || !ID.test(value)) invalid();
+  return value;
+}
+
+function text(value: unknown, max = 4096): string {
+  if (typeof value !== 'string' || !value.length || value.length > max || value.includes('\0')) invalid();
   return value;
 }
 
@@ -669,10 +681,6 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
         revision: count(v.revision, Number.MAX_SAFE_INTEGER), ...(binding ? { binding } : {}) };
     }
     case 'fork': {
-      const text = (value: unknown, max = 4096): string => {
-        if (typeof value !== 'string' || !value.length || value.length > max || value.includes('\0')) invalid();
-        return value as string;
-      };
       const sessionId = (value: unknown): string => {
         const valueText = text(value, 128);
         if (!/^[A-Za-z0-9_-]+$/.test(valueText)) invalid();
@@ -701,6 +709,34 @@ export function parseRemoteAgentRequest(value: unknown): RemoteAgentRequest {
       if (v.acceptsForkFailed === true) result.acceptsForkFailed = true;
       if (result.sourceSessionId === result.newSessionId) invalid();
       return { op: 'fork', ...result };
+    }
+    case 'shared-image': {
+      const requestId = id(v.requestId);
+      const action = oneOf(v.action, ['start', 'read', 'release'] as const);
+      if (action === 'release') return { op: 'shared-image', action, requestId };
+      if (action === 'read') {
+        return { op: 'shared-image', action, requestId, offset: count(v.offset, Number.MAX_SAFE_INTEGER) };
+      }
+      const result: Extract<RemoteAgentRequest, { op: 'shared-image'; action: 'start' }> = {
+        op: 'shared-image', action, requestId, providerId: text(v.providerId, 512),
+        model: text(v.model, 512), prompt: text(v.prompt, 32768),
+      };
+      for (const field of ['size', 'aspectRatio', 'quality', 'resolution'] as const) {
+        if (v[field] !== undefined) result[field] = text(v[field], 64);
+      }
+      if (v.nativeParameters !== undefined) {
+        const parameters = record(v.nativeParameters);
+        if (JSON.stringify(parameters).length > 65_536) invalid();
+        result.nativeParameters = parameters;
+      }
+      for (const field of ['relay', 'reshareKey'] as const) {
+        if (v[field] === undefined) continue;
+        const key = text(v[field], 64);
+        if (!REMOTE_AGENT_RELAY_KEY_PATTERN.test(key)) invalid();
+        result[field] = key;
+      }
+      if (result.reshareKey && !result.relay) invalid();
+      return result;
     }
     case 'images': {
       // Same task-id contract as the open payload, including non-UUID internal tasks.
@@ -903,6 +939,7 @@ export function parseRemoteAgentCaps(value: unknown): RemoteAgentCaps {
     ...(v.nativeHistoryBackup === true ? { nativeHistoryBackup: true } : {}),
     ...(v.imageRecovery === true ? { imageRecovery: true } : {}),
     ...(v.imageRecoveryRelay === true ? { imageRecoveryRelay: true } : {}),
+    ...(v.sharedImageGeneration === true ? { sharedImageGeneration: true } : {}),
     ...(v.guestRelay === true ? { guestRelay: true } : {}),
     ...(v.directGuestExecution === true ? { directGuestExecution: true } : {}),
     ...(v.directGuestStandby === true ? { directGuestStandby: true as const } : {}),

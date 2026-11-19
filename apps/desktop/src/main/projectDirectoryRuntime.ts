@@ -15,7 +15,25 @@ import {
 } from './maker-ipc/extraDirsValidator.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 
-const inheritedSessions = new WeakSet<Session>();
+type LocalTurnWrites = { activeDirs: string[]; projectDirs: Set<string> };
+const inheritedSessions = new WeakMap<Session, LocalTurnWrites | null>();
+
+/** One task edit, including its rollback. Only the turn hook may add to an inherited profile. */
+export function createTaskWritableDirsUpdater(session: Session) {
+  let turn: LocalTurnWrites | null | undefined;
+  let beforeEdit: string[] = [];
+  return async (dirs: string[]) => {
+    const current = inheritedSessions.get(session);
+    if (!current) return session.setWritableDirs(dirs);
+    if (turn !== current) {
+      turn = current;
+      beforeEdit = current.activeDirs;
+    }
+    const retained = beforeEdit.filter(dir => current.projectDirs.has(dir) || dirs.includes(dir));
+    await session.setWritableDirs(retained);
+    current.activeDirs = retained;
+  };
+}
 
 const parseLegacy = (raw: string | null) => {
   try {
@@ -69,15 +87,10 @@ export async function applyProjectDirectoriesForTurn(session: Session): Promise<
       ...projectDefaults.filter((item) => item.access === 'read').map((item) => item.path),
     ]),
   ];
-  const requestedWrite = [
-    ...new Set([
-      ...legacyWrite,
-      ...projectDefaults.filter((item) => item.access === 'write').map((item) => item.path),
-    ]),
-  ];
+  const projectWrites = new Set(projectDefaults.filter(item => item.access === 'write').map(item => item.path));
   // A pre-existing read-only task override is never silently promoted by project inheritance.
   const write = row.remoteHostId
-    ? requestedWrite.filter(
+    ? [...new Set([...legacyWrite, ...projectWrites])].filter(
         (item) =>
           !read.some((blocked) => {
             const within = (parent: string, child: string) => {
@@ -92,7 +105,7 @@ export async function applyProjectDirectoriesForTurn(session: Session): Promise<
             return within(item, blocked) || within(blocked, item);
           }),
       )
-    : await excludeDirectoryGrantConflictsWithSlots(requestedWrite, read);
+    : await excludeDirectoryGrantConflictsWithSlots([...new Set(legacyWrite)], read, [...projectWrites]);
   const assertCurrent = () => {
     const current = getActiveDataOwnerPushStamp();
     if (
@@ -117,5 +130,8 @@ export async function applyProjectDirectoriesForTurn(session: Session): Promise<
       directories: read.filter(dir => projectDefaults.some(item => item.access === 'read' && item.path === dir)),
     } : undefined);
   assertCurrent();
-  inheritedSessions.add(session);
+  inheritedSessions.set(session, !row.remoteHostId && projectDefaults.length > 0 ? {
+    activeDirs: write,
+    projectDirs: projectWrites,
+  } : null);
 }
