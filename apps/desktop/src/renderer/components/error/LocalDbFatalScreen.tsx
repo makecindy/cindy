@@ -39,7 +39,7 @@ export function LocalDbFatalScreen({
   const view = resolveLocalDbFatalView(status, code);
 
   const handleConfirm = () => {
-    if (view === 'retry-local-db') {
+    if (view === 'retry-local-db' || view === 'runtime-corrupt') {
       onRetry?.();
       return;
     }
@@ -62,7 +62,9 @@ export function LocalDbFatalScreen({
   };
 
   const title =
-    view === 'retry-local-db'
+    view === 'runtime-corrupt'
+      ? t('localDbFatal.runtimeCorrupt.title')
+      : view === 'retry-local-db'
       ? t('localDbFatal.schemaLease.title')
       : view === 'corrupt'
         ? t('localDbFatal.corrupt.title')
@@ -72,7 +74,9 @@ export function LocalDbFatalScreen({
             ? t('localDbFatal.noUpdate.title')
             : t('localDbFatal.updateReady.title');
   const description =
-    view === 'retry-local-db'
+    view === 'runtime-corrupt'
+      ? t('localDbFatal.runtimeCorrupt.description')
+      : view === 'retry-local-db'
       ? (message ?? t('localDbFatal.schemaLease.lock-unreadable'))
       : view === 'corrupt'
         ? t('localDbFatal.corrupt.description')
@@ -84,7 +88,7 @@ export function LocalDbFatalScreen({
               ? t('localDbFatal.preparing.description')
               : t('localDbFatal.noUpdate.description');
   const confirmText =
-    view === 'retry-local-db'
+    view === 'retry-local-db' || view === 'runtime-corrupt'
       ? t('localDbFatal.schemaLease.retry')
       : view === 'init-failed' || view === 'corrupt'
         ? t('localDbFatal.initFailed.retry')
@@ -121,7 +125,7 @@ export function LocalDbFatalScreen({
                 </p>
               )
             )}
-            {(view === 'corrupt' || view === 'init-failed') && (message || code) && (
+            {(view === 'corrupt' || view === 'runtime-corrupt' || view === 'init-failed') && (message || code) && (
               <Button
                 variant="secondary"
                 size="sm"

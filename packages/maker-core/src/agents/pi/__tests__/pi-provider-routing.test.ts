@@ -3636,6 +3636,33 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  // #9043: startSession must preserve the native off capability independently
+  // of the server effort list. Missing off means supported in Pi, not disabled.
+  it.each([null, 'low', undefined])('preserves explicit Gateway off capability %s', async off => {
+    const handle = await new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }), logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      binaryPath: path.join(agentHome, 'pi'), logger: noopLogger,
+      capabilityAdditions: { availableModels: [{ id: 'google/gemini-4-argon', displayName: 'Argon',
+        contextWindow: 1_048_576, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' }] },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelSpec: () => ({ api: 'google-generative-ai',
+        thinkingLevelMap: { ...(off !== undefined ? { off } : {}), low: 'low', medium: 'medium', high: 'high' } }),
+    }).startSession({ sessionId: 'gateway-off-capability', workingDir: cwd,
+      model: 'google/gemini-4-argon', providerId: 'xd', thinkingEnabled: false });
+    try {
+      const models = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'));
+      const map = models.providers.cindy.models[0].thinkingLevelMap;
+      expect(map).toEqual({ ...(off !== undefined ? { off } : {}),
+        minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null });
+      expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'off' });
+    } finally { await handle.close(); }
+  });
+
   it('keeps unsupported Gateway thinking levels null when server efforts omit them', async () => {
     const deps: AgentDeps = {
       auth: {
