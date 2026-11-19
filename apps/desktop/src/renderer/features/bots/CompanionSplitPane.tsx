@@ -19,6 +19,7 @@ import {
   matchPath,
   type To,
 } from 'react-router-dom';
+import { splitGroupStore, getSplitPanes } from '../cc-agent/splitGroupStore';
 import { SplitPaneFocusContext } from '../cc-agent/splitPaneFocus';
 import { companionChatTarget } from './companionChatTarget';
 import { useBotGroupSummary } from './botGroupStore';
@@ -81,13 +82,28 @@ export default function CompanionSplitPane({
     const redirect = (to: To) => {
       const path = typeof to === 'string' ? to : createPath(to);
       const [pathname, search] = path.split('?');
-      if (companionChatTarget(pathname, search) === target) setBackground(path);
+      const nextTarget = companionChatTarget(pathname, search);
+      if (nextTarget === target) {
+        setBackground(path);
+        return;
+      }
+      // Validated companion gates may follow the same companion to its new
+      // computer, including a completed arrival on this computer.
+      const nextBotId = matchPath('/bots/remote/:deviceId/:id', nextTarget ?? '')?.params.id
+        ?? matchPath('/bots/:id', nextTarget ?? '')?.params.id;
+      if (!nextTarget || !nextBotId || nextBotId !== (remote?.id ?? botId)) return;
+      const panes = getSplitPanes(splitGroupStore.getSnapshot().root);
+      if (panes.some(pane => pane.sessionId === nextTarget)) {
+        splitGroupStore.removeSession(target);
+      } else {
+        splitGroupStore.replaceSession(target, nextTarget);
+      }
     };
     return {
       ...navigation,
       navigator: { ...navigation.navigator, go: () => {}, push: redirect, replace: redirect },
     };
-  }, [navigation, ownsLocation, target]);
+  }, [navigation, ownsLocation, target, remote?.id, botId]);
   return children(
     title,
     background,
