@@ -16407,6 +16407,7 @@
       },
       "filterCreatorsHeading": "伙伴",
       "filterCreatorsAny": "全部",
+      "filterHideAutomations": "隐藏自动化任务",
       "filterCreatorsNone": "都不显示",
       "filterSelectedCreators": "已选 {{count}} 位",
       "filterProjectsHeading": "项目",

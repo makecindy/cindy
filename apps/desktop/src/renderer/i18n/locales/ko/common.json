@@ -16407,6 +16407,7 @@
       },
       "filterCreatorsHeading": "동반자",
       "filterCreatorsAny": "전체",
+      "filterHideAutomations": "자동화 작업 숨기기",
       "filterCreatorsNone": "모두 숨기기",
       "filterSelectedCreators": "{{count}}명 선택됨",
       "filterProjectsHeading": "프로젝트",

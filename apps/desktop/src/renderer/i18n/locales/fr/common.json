@@ -16637,6 +16637,7 @@
       },
       "filterCreatorsHeading": "Amis",
       "filterCreatorsAny": "Tous",
+      "filterHideAutomations": "Masquer les tâches automatisées",
       "filterCreatorsNone": "Tout masquer",
       "filterSelectedCreators": "{{count}} sélectionnés",
       "filterProjectsHeading": "Projets",

@@ -16407,6 +16407,7 @@
       },
       "filterCreatorsHeading": "夥伴",
       "filterCreatorsAny": "全部",
+      "filterHideAutomations": "隱藏自動化任務",
       "filterCreatorsNone": "都不顯示",
       "filterSelectedCreators": "已選 {{count}} 位",
       "filterProjectsHeading": "專案",

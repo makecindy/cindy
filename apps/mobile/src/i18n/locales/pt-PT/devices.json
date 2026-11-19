@@ -443,6 +443,7 @@
       "filterEmptyCopy": "Ajuste ou reponha os filtros nas definições de visualização.",
       "filterTeammatesHeading": "Amigos",
       "filterAnySource": "Todas",
+      "filterHideAutomations": "Ocultar tarefas automatizadas",
       "filterHideAllTeammates": "Ocultar tudo",
       "filterSelectedTeammates": "{{count}} selecionados",
       "inbox": {
