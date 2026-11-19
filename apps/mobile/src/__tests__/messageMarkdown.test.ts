@@ -2742,3 +2742,40 @@ it('resolves full reference images with empty alt text like the inline control (
   expect(inlines(reference)).toEqual([{ type: 'image', alt: '', url }]);
   expect(collectMobileMarkdownImages(reference)).toEqual([{ type: 'image', alt: '', url }]);
 });
+
+// #9440 / reviews4627375220/5228/5240: unit production entry; prior cases
+// omitted oversized marker padding, hgroup and escaped image-prefix fallback.
+describe('review reference boundary regressions', () => {
+  it('keeps definitions nested after oversized list padding and tab equivalents', () => {
+    for (const item of ['-     item', '-\t  item', '1.     item', '10.     item']) {
+      const indent = item.startsWith('10.') ? '    ' : item.startsWith('1.') ? '   ' : '  ';
+      const source = '[site][s]\n\n' + item + '\n\n' + indent + '[s]: https://wrong.example/';
+      expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+      expect(mobileMarkdownPreviewText(source)).toContain('[s]:');
+      expect(inlines(source + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+    }
+  });
+
+  it('excludes hgroup definitions while accepting a following root definition', () => {
+    const source = '[site][s]\n\n<hgroup>\n# hidden\n[s]: https://wrong.example/\n</hgroup>';
+    expect(inlines(source).some(value => value.type === 'link' && value.text === 'site')).toBe(false);
+    expect(inlines(source + '\n\n[s]: https://example.com/').filter(value => value.type === 'link' && value.text === 'site')).toEqual([link]);
+  });
+
+  it('parses a reference link after an escaped image marker like the inline control', () => {
+    const definition = '\n\n[s]: https://example.com/';
+    expect(inlines('\\![site](https://example.com/)').filter(value => value.type === 'link')).toEqual([link]);
+    for (const use of ['\\![site][s]', '\\![site][]', '\\![site]']) {
+      const source = use + definition + '\n[site]: https://example.com/';
+      expect(inlines(source).filter(value => value.type === 'link')).toEqual([link]);
+      expect(collectMobileMarkdownImages(source)).toEqual([]);
+      let streamed = parseMobileMarkdownIncremental('');
+      for (let end = 1; end <= source.length; end++) {
+        const prefix = source.slice(0, end);
+        streamed = parseMobileMarkdownIncremental(prefix, streamed);
+        expect(streamed.blocks).toEqual(parseMobileMarkdownDocument(prefix).blocks);
+      }
+    }
+    expect(collectMobileMarkdownImages('![picture][s]' + definition)).toHaveLength(1);
+  });
+});

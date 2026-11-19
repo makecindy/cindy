@@ -202,10 +202,16 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
         paragraph = false;
         continue;
       }
-      const list = /^(\s*)(?:[-*]|\d+[.)])\s+/.exec(line);
+      const list = /^(\s*)(?:[-*]|\d+[.)])(\s+)/.exec(line);
       // Retain enclosing items, but replace siblings: marker width can change
       // (for example 9. to 10.) and therefore changes the content column.
-      if (list) listContentIndents.push(leadingIndentColumns(list[0].replace(/\S/g, ' ')));
+      if (list) {
+        const contentColumn = leadingIndentColumns(list[0].replace(/\S/g, ' '));
+        const markerEnd = list[0].slice(0, -list[2].length);
+        const markerColumn = leadingIndentColumns(markerEnd.replace(/\S/g, ' '));
+        // More than four columns are item content, not marker padding.
+        listContentIndents.push(contentColumn - markerColumn > 4 ? markerColumn + 1 : contentColumn);
+      }
     }
     const startsInComment = comment;
     comment = advanceHtmlCommentState(line, comment);
@@ -234,7 +240,7 @@ function collectMarkdownReferences(source: string): MarkdownReferenceContext {
       paragraph = false;
       continue;
     }
-    if (/^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|summary|style|table|tbody|td|tfoot|th|thead|title|tr|track|textarea|ul)(?=[\s/>])/i.test(line)) html = true;
+    if (/^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hgroup|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|summary|style|table|tbody|td|tfoot|th|thead|title|tr|track|textarea|ul)(?=[\s/>])/i.test(line)) html = true;
     if (html) continue;
     const definition = !paragraph && listContentIndents.length === 0
       ? readMarkdownReferenceDefinition(lines, index) : null;
@@ -1501,6 +1507,11 @@ function matchMarkdownReference(input: string, from: number, context: InlinePars
     const reference = nextMarkdownReference(input, cursor, context.references, context.search.exec);
     if (!reference) return null;
     cursor = reference.end;
+    if (reference.image && isBackslashEscaped(input, reference.index)) {
+      // Escaping ! leaves the following bracket available as a normal link.
+      cursor = reference.index + 1;
+      continue;
+    }
     if (isBackslashEscaped(input, reference.index)
       || isInsideHtmlTagMarkup(input, reference.index)
       || (context.needsCommentCheck && isInsideHtmlComment(context.commentProbe(), reference.index, context.startsInsideHtmlComment))) continue;
