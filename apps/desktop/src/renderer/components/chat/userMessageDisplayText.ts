@@ -75,8 +75,18 @@ export function isFeishuIm(im: string | undefined): boolean {
   return im === 'feishu' || im === 'lark';
 }
 
+const paragraphFormattingTags = /<\/?(?:p|strong|b|em|i|s|u|del|sub|sup|span)\s*>|<br\s*\/?>/gi;
+const remainingMarkup = /<(?:[!?]|\/?[a-z][\w:-]*(?:[\s/>]|$))/i;
+const codeWithMarkup = /```|`[^`\r\n]*<[^`\r\n]*`/;
+
 function paragraphsAsText(fragment: string): string {
-  return mailTextParagraphs(fragment).map((paragraph) => paragraph.text).join('\n\n');
+  // Old producers flatten both text and rich text, with no format marker.
+  // Only decode the paragraph compatibility subset and keep other examples intact.
+  if (codeWithMarkup.test(fragment) || remainingMarkup.test(fragment.replace(paragraphFormattingTags, ''))) {
+    return fragment;
+  }
+  const text = mailTextParagraphs(fragment).map((paragraph) => paragraph.text).join('\n\n');
+  return text.trim() ? text : fragment;
 }
 
 /** Feishu/Lark rich text can arrive as a paragraph-wrapped string. */
@@ -92,14 +102,32 @@ const contextAuthor = String.raw`\[[^\r\n]*?\][ \t]+`;
 // Do not consume a later opening paragraph when a closing tag is missing.
 const contextParagraph = String.raw`<p(?:[ \t][^>\r\n]*)?>(?:(?!<\/?p(?:\s|>))[\s\S])*?(?:<\/p>|\[…已截断\])`;
 const contextParagraphRun = String.raw`${contextParagraph}(?:\s*${contextParagraph})*`;
+const groupAuthor = String.raw`${contextAuthor}${historyTime}[ \t]+`;
+const contextParagraphEnd = String.raw`(?=\r?$|[ \t]+\[(?:图片[；\]]|文件[:：]))`;
 const groupParagraphs = new RegExp(
-  String.raw`^(${contextAuthor}${historyTime}[ \t]+)(${contextParagraphRun})(?=\r?$|[ \t]+\[(?:图片\]|文件: ))`,
+  String.raw`^(${groupAuthor})(${contextParagraphRun})${contextParagraphEnd}`,
   'gim',
 );
 const replyParagraphs = new RegExp(
-  String.raw`^((?:${contextAuthor}(?:(?:${historyTime}|\[时间未知\])[ \t]+)?)?)(${contextParagraphRun})(?=\r?$)`,
+  String.raw`^((?:${contextAuthor}(?:(?:${historyTime}|\[时间未知\])[ \t]+)?)?)(${contextParagraphRun})${contextParagraphEnd}`,
   'gim',
 );
+// The group snapshot timestamps only the outer forward, not its child messages.
+const groupForwards = new RegExp(
+  String.raw`^(${groupAuthor}\[合并转发消息\][ \t]*\r?\n)((?:(?!^${groupAuthor})[\s\S])*)`,
+  'gm',
+);
+const forwardedParagraphs = new RegExp(
+  String.raw`^(${contextAuthor})(${contextParagraphRun})${contextParagraphEnd}`,
+  'gim',
+);
+
+function replaceContextParagraphs(_matched: string, prefix: string, markup: string): string {
+  const truncation = '[…已截断]';
+  return markup.endsWith(truncation)
+    ? prefix + paragraphsAsText(markup.slice(0, -truncation.length)) + truncation
+    : prefix + paragraphsAsText(markup);
+}
 
 /** Convert paragraph runs while retaining author lines, attachments and the saved appendix. */
 export function displayImContext(im: string, text: string, kind: 'group' | 'reply'): string {
@@ -110,12 +138,12 @@ export function displayImContext(im: string, text: string, kind: 'group' | 'repl
     : -1;
   const context = appendix < 0 ? text : text.slice(0, appendix);
   const trailing = appendix < 0 ? '' : text.slice(appendix);
-  return context.replace(kind === 'group' ? groupParagraphs : replyParagraphs, (_, prefix: string, markup: string) => {
-    const truncation = '[…已截断]';
-    return markup.endsWith(truncation)
-      ? prefix + paragraphsAsText(markup.slice(0, -truncation.length)) + truncation
-      : prefix + paragraphsAsText(markup);
-  }) + trailing;
+  if (kind === 'reply') return context.replace(replyParagraphs, replaceContextParagraphs);
+  const displayed = context
+    .replace(groupForwards, (_, heading: string, children: string) =>
+      heading + children.replace(forwardedParagraphs, replaceContextParagraphs))
+    .replace(groupParagraphs, replaceContextParagraphs);
+  return displayed + trailing;
 }
 
 /**

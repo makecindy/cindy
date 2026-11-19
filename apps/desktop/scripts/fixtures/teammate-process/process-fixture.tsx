@@ -156,8 +156,12 @@ function FeishuReplyColumns({ editing }: { editing: boolean }) {
         '(被引消息的 2 个附件已随本轮一并提供)',
       ].join('\n'),
       replyMessageCount: 1,
-      groupContext: '[林岚] 11-19 08:42 <p>上一版已核对。</p><p>新版保留已确认的条目。</p> [文件: 记录.pdf]',
-      groupMessageCount: 1,
+      groupContext: [
+        '[林岚] 11-19 08:42 <p>上一版已核对。</p><p>新版保留已确认的条目。</p> [文件: 记录.pdf]',
+        '[周晴] 11-19 08:43 [合并转发消息]',
+        '[林岚] <p>两版差异已整理。</p> [图片]',
+      ].join('\n'),
+      groupMessageCount: 2,
     }) },
     ...(!editing ? [{ ...text('feishu-native', '原生输入保留字面 <p> 示例'), role: 'user' as const }] : []),
   ];

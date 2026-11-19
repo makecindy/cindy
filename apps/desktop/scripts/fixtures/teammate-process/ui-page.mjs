@@ -70,7 +70,7 @@ export default {
       const native = user('feishu-native').locator('[data-selection-quote-body]');
       assert.match(await native.textContent(), /原生输入保留字面 <p> 示例/);
       assert.ok((await native.boundingBox()).x > replyBox.x, 'Native author bubble stays on the right');
-      const toggle = user('feishu-incoming').getByRole('button', { name: await ui.t('chat.threadContext.attachedContextCount', { count: 2 }) });
+      const toggle = user('feishu-incoming').getByRole('button', { name: await ui.t('chat.threadContext.attachedContextCount', { count: 3 }) });
       assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
       await toggle.press('Enter');
       const quote = user('feishu-incoming').getByRole('region', { name: await ui.t('chat.threadContext.referencedMessages', { count: 1 }) });
@@ -83,8 +83,9 @@ export default {
       assert.match(quotedText, /\[林岚\].*\[合并转发消息\]\n\[周晴\]/);
       assert.match(quotedText, /\[图片\]\n\[文件: 演示记录.pdf\]\n\(被引消息的 2 个附件已随本轮一并提供\)/);
       assert.doesNotMatch(quotedText, /<\/?(?:p|br)\b/);
-      const group = user('feishu-incoming').getByRole('region', { name: await ui.t('chat.threadContext.groupBackgroundCount', { count: 1 }) });
+      const group = user('feishu-incoming').getByRole('region', { name: await ui.t('chat.threadContext.groupBackgroundCount', { count: 2 }) });
       assert.match(await group.textContent(), /\[林岚\] 11-19 08:42 上一版已核对。\n\n新版保留已确认的条目。 \[文件: 记录.pdf\]/);
+      assert.match(await group.textContent(), /\[周晴\] 11-19 08:43 \[合并转发消息\]\n\[林岚\] 两版差异已整理。 \[图片\]/);
       assert.doesNotMatch(await group.textContent(), /<\/?p\b/);
       await toggle.click();
       await quote.waitFor({ state: 'hidden' });
