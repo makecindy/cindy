@@ -97,8 +97,12 @@ describe('tool result diagnostics', () => {
 
   // CU-008 weekly audit: real fixed codes were reduced to {ok:false} on archive.
   // Unit: exercise extraction and persisted-marker reads, including a second pass.
-  it.each(['element_outside_target_window', 'type_text_incomplete', 'select_menu_would_raise_window'])(
-    'retains the audited input failure without retaining its private message: %s', errorCode => {
+  it.each([
+    'element_outside_target_window', 'type_text_incomplete', 'select_menu_would_raise_window',
+    'minimized_or_hidden_window', 'target_focus_unconfirmed', 'off_space_or_ax_unresolved', 'tool_invocation_failed',
+    'BROWSER_RUNTIME_NOT_CONFIGURED', 'BROWSER_RUNTIME_UNAVAILABLE', 'BROWSER_SCREENSHOT_INVALID',
+  ])(
+    'retains the audited tool failure without retaining its private message: %s', errorCode => {
       const diagnostics = extractToolResultDiagnostics({
         ok: false, errorCode, data: { message: 'PRIVATE', outcome_unknown: true },
       });
