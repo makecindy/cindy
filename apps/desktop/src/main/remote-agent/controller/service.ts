@@ -977,8 +977,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const report = (running: boolean) => {
         if (openingDirectRoute?.standby && directTasks.get(taskKey)?.standby !== false) return;
         if (statusBatch) { statusBatch.report(running); return; }
-        if (openingDirectRoute?.availability && openingDirectGeneration) {
-          void reportShareAvailabilityStatus(shareId, sessionId, openingDirectGeneration, running).catch(() => undefined);
+        if (openingDirectRoute?.availability && statusGeneration) {
+          void reportShareAvailabilityStatus(shareId, sessionId, statusGeneration, running).catch(() => undefined);
           return;
         }
         void remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
@@ -987,6 +987,13 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       };
       const statusTimer = statusBatch ? undefined : setInterval(() => report(handle.isTurnRunning?.() === true), 30_000);
       statusTimer?.unref?.();
+      const updateStatusGrant = (generation: string | undefined, canBatch: boolean) => {
+        statusGeneration = generation;
+        if (!statusBatch && canBatch && !openingDirectRoute?.availability) {
+          statusBatch = makeStatusBatch();
+          if (statusTimer) clearInterval(statusTimer);
+        }
+      };
       let authorizedUntil = openingDirectRoute?.authorizedUntil ?? Date.now();
       let authorizedAccessEpoch = initialAccessEpoch ?? providerShareAccessEpoch(shareId);
       const permissionCurrent = () => (openingDirectRoute?.standby ? findReceivedShareForExecution(shareId) : findReceivedShare(shareId))?.status === 'active'
@@ -1043,11 +1050,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         if (stopped || !isCurrent() || performance.now() >= leaseDeadline
           || providerShareAccessEpoch(shareId) !== allocationAccessEpoch) return releaseStoppedGrant();
         const nextLeaseDeadline = sharedTaskLeaseDeadline(value, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
-        statusGeneration = typeof row.generation === 'string' && DIRECT_GRANT_ID.test(row.generation) ? row.generation : undefined;
-        if (!statusBatch && openingDirectRoute?.standby && row.directStatusBatch === true) {
-          statusBatch = makeStatusBatch();
-          if (statusTimer) clearInterval(statusTimer);
-        }
+        const generation = typeof row.generation === 'string' && DIRECT_GRANT_ID.test(row.generation) ? row.generation : undefined;
+        updateStatusGrant(generation, row.directStatusBatch === true);
         directTasks.set(taskKey, { target, agentKind: input.agentKind, model, availability: selectedDirectRoute?.availability, standby: false,
           directStatusBatch: row.directStatusBatch === true,
           accessEpoch: allocationAccessEpoch,
@@ -1056,7 +1060,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           leaseDeadline: nextLeaseDeadline,
           wallDeadline: allocationStartedAt + nextLeaseDeadline - allocationStartedMonotonic,
           renewAt: allocationStartedAt + Math.min(20 * 60_000, (nextLeaseDeadline - allocationStartedMonotonic) * 2 / 3),
-          ...(statusGeneration ? { generation: statusGeneration } : {}) });
+          ...(generation ? { generation } : {}) });
         authorizedUntil = allocationStartedAt + 29 * 60_000;
         authorizedAccessEpoch = allocationAccessEpoch;
         leaseDeadline = nextLeaseDeadline;
@@ -1099,7 +1103,8 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           await releaseFailedDirectAllocation(restored.generation);
           throw new Error('[REMOTE_AGENT_UNAVAILABLE] shared task has closed');
         }
-        directTasks.set(taskKey, { ...previous, ...restored });
+        directTasks.set(taskKey, { ...previous, ...restored, standby: false, generation: restored.generation });
+        updateStatusGrant(restored.generation, restored.directStatusBatch === true);
         authorizedUntil = Math.min(authorizedUntil, restored.authorizedUntil ?? authorizedUntil);
         leaseDeadline = Math.min(leaseDeadline, restored.leaseDeadline ?? leaseDeadline);
         wallDeadline = Math.min(wallDeadline, restored.wallDeadline ?? wallDeadline);

@@ -585,7 +585,8 @@ describe('remote agent round trip', () => {
   // Unit: #7783 keeps M's grant only in memory. Restart recovery must regain
   // that task's grant through O, never use O's health as M's readiness. Existing
   // lease tests do not lose M's in-memory authorization during a poll outage.
-  it.each(['idle', 'busy', 'revoked', 'expired', 'o-offline-recovery', 'reissued-open-transient', 'unconfirmed-no-renew'] as const)('recovers the pinned direct executor after restart: %s', async mode => {
+  // Historical recovery must also send heartbeats under the replacement grant.
+  it.each(['idle', 'busy', 'revoked', 'expired', 'o-offline-recovery', 'reissued-open-transient', 'unconfirmed-no-renew', 'historical-batch'] as const)('recovers the pinned direct executor after restart: %s', async mode => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     const ownerRoute = 'share:restart-share';
     let offline = false, ownerOffline = false, granted = false, allowed = true;
@@ -593,6 +594,9 @@ describe('remote agent round trip', () => {
     const disposed: string[] = [];
     const seen: AgentEvent[] = [];
     const nativeIds: Array<string | undefined> = [];
+    const heartbeatGrants: string[] = [];
+    const initialGrant = '11111111-1111-4111-8111-111111111111';
+    const restoredGrant = '22222222-2222-4222-8222-222222222222';
     const makeMember = () => createRemoteAgentHost({
       readLimits: () => DEFAULT_REMOTE_AGENT_LIMITS, isAgentAvailable: () => true,
       startHosted: async input => {
@@ -631,8 +635,13 @@ describe('remote agent round trip', () => {
           if ((mode === 'reissued-open-transient' || mode === 'unconfirmed-no-renew') && allocations === 2) {
             failNextOpenAfterGrant = 1;
           }
-          return { ok: true, result: { deviceId: 'executor-m', generation: '11111111-1111-4111-8111-111111111111',
+          return { ok: true, result: { deviceId: 'executor-m',
+            generation: mode === 'historical-batch' && allocations > 1 ? restoredGrant : initialGrant,
+            ...(mode === 'historical-batch' ? { directStatusBatch: true } : {}),
             leaseDurationMs: mode === 'expired' ? 3_000 : 30 * 60_000 } };
+        }
+        if (request.op === 'direct-status-batch') {
+          heartbeatGrants.push(...request.statuses.map((row: { generation: string }) => row.generation));
         }
         return { ok: true, result: {} };
       }
@@ -662,7 +671,15 @@ describe('remote agent round trip', () => {
       events = (async () => { for await (const event of handle!.events()) seen.push(event); })();
       await handle.send({ type: 'user', content: 'first' });
       await vi.waitFor(() => expect(seen.some(event => event.type === 'done')).toBe(true));
-      if (mode !== 'idle') await handle.send({ type: 'user', content: 'hold' });
+      if (mode === 'historical-batch') {
+        await handle.close({ reason: 'navigation' });
+        await events;
+        handle = await start({ agentKind: 'claude-code', deviceId: ownerRoute, options: {
+          sessionId: 'restart-task', workingDir: project, model: 'm', resumeSessionId: 'native-original',
+        } });
+        events = (async () => { for await (const event of handle!.events()) seen.push(event); })();
+        expect(allocations).toBe(1);
+      } else if (mode !== 'idle') await handle.send({ type: 'user', content: 'hold' });
       offline = true;
       member.dispose();
       await vi.waitFor(() => expect(offlineReads).toBeGreaterThan(0));
@@ -728,9 +745,14 @@ describe('remote agent round trip', () => {
           ? [expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_restarted' }) })] : []);
         expect(await liveDirectGuestSession('restart-task')!.probeReconnect!()).toBe('ok');
         await handle.send({ type: 'user', content: 'continue' });
-        expect(nativeIds).toEqual([undefined, 'native-original']);
+        if (mode === 'historical-batch') {
+          expect(nativeIds).toEqual([undefined, 'native-original', 'native-original']);
+          const beforeHeartbeat = heartbeatGrants.length;
+          await vi.advanceTimersByTimeAsync(35_000);
+          expect(new Set(heartbeatGrants.slice(beforeHeartbeat))).toEqual(new Set([restoredGrant]));
+        } else expect(nativeIds).toEqual([undefined, 'native-original']);
         expect(allocations).toBeGreaterThan(1);
-        expect(sends).toBe(mode === 'idle' ? 2 : 3);
+        expect(sends).toBe(mode === 'idle' || mode === 'historical-batch' ? 2 : 3);
       }
     } finally {
       offline = false; ownerOffline = false; granted = true;
