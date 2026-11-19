@@ -37,6 +37,7 @@ import {
   flowLabel,
   formatRtt,
   pathLabel,
+  peerTransportLabel,
   platformLabel,
   protocolKind,
   protocolKindLabel,
@@ -73,7 +74,7 @@ function Row({
   );
 }
 
-/** 路径:「协议 · 怎么连」,协议用与拓扑同一个图标 + 名称(Agent-Net 紫色)。 */
+/** 路径:「协议 · 怎么连 · 传输协议」,协议用与拓扑同一个图标 + 名称(Agent-Net 紫色);长中转名只截断中间路径,不截掉末尾的 UDP / WS / WebRTC。 */
 function PathRow({ node, relayName, reconnecting }: { node: TopologyNode; relayName: string; reconnecting: boolean }) {
   const { t } = useTranslation();
   const label = t('settings.remoteControl.v2.popover.path');
@@ -81,13 +82,15 @@ function PathRow({ node, relayName, reconnecting }: { node: TopologyNode; relayN
   const kind = protocolKind(node);
   const protocol = protocolLabel(node, t);
   const path = pathLabel(routeOf(node), relayName, t);
-  const text = [protocol, path].filter(Boolean).join(' · ');
+  const transport = peerTransportLabel(node, t);
+  const text = [protocol, path, transport].filter(Boolean).join(' · ');
   if (!kind || !protocol) return <Row label={label} value={text} />;
   return (
     <Row label={label} value={text}>
       <span className="inline-flex max-w-full items-baseline justify-end gap-1">
         <ProtocolMark kind={kind} label={protocol} className="shrink-0 self-center" />
         <span className="min-w-0 truncate">· {path}</span>
+        {transport ? <span className="shrink-0">· {transport}</span> : null}
       </span>
     </Row>
   );
