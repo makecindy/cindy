@@ -48,6 +48,24 @@ function drive(observer: ReturnType<typeof createProviderUpstreamErrorObserver>,
 }
 
 describe('createProviderUpstreamErrorObserver', () => {
+  // #9470: unit, production observer and broadcaster. Existing 4xx coverage did
+  // not exercise JSON-escaped Unknown name messages; no socket or account used.
+  it('broadcasts Unknown name field rejections as WIRE_INCOMPATIBLE', () => {
+    const events: ProviderUpstreamErrorEvent[] = [];
+    setProviderUpstreamErrorBroadcaster((e) => events.push(e));
+    const observer = createProviderUpstreamErrorObserver({
+      agent: 'claude-code',
+      resolveUserProviderId: () => 'my-relay',
+    });
+    drive(observer, ctx({ status: 400 }), Buffer.from(JSON.stringify({ error: {
+      message: 'Invalid JSON payload received. Unknown name "messages": Cannot find field.',
+    } })));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      status: 400, code: 'WIRE_INCOMPATIBLE', retryable: false,
+    });
+  });
+
   it('status < 400 → null sink（不 tee）', () => {
     const observer = createProviderUpstreamErrorObserver({
       agent: 'claude-code',

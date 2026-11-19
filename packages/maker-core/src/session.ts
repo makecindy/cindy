@@ -677,12 +677,13 @@ export class Session {
     this.isHostShuttingDown = opts.isHostShuttingDown ?? (() => false);
     this.toolLoopReviewer = opts.toolLoopReviewer;
     this.asyncUserQuestions = new AsyncUserQuestions({
+      currentOrigin: () => this.currentTurnOrigin,
       isActive: (generation) => this.status === 'active' && !this.terminationStarted
         && generation === this.turnGeneration,
       isLateAnswer: (generation) => generation !== this.turnGeneration || !this.handle.isTurnRunning?.(),
       resolve: (request) => this.interactionListener!(request),
-      deliver: async (text, signal, requestId, displayText) => {
-        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText);
+      deliver: async (text, signal, requestId, displayText, origin) => {
+        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText, origin);
         const options = { signal, [ASYNC_QUESTION_ANSWER]: true as const };
         if (this.handle.isTurnRunning?.()) {
           try { await this.steer(text, options); return; } catch (error) {
@@ -885,13 +886,13 @@ export class Session {
     return snapshot;
   }
 
-  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>;
+  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>;
 
   /**
    * Hosts with a durable input queue own admission/persistence of question replies.
    * `text` is the model's copy; `displayText` is what history and queues show.
    */
-  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>): void {
+  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>): void {
     this.asyncQuestionAnswerDispatcher = dispatch;
   }
 
@@ -1040,7 +1041,7 @@ export class Session {
     const turnLifecycleObserver = this.turnLifecycleObserver;
     let turnLifecyclePrepared = false;
     const finishCancelledBeforeDispatch = (): SessionSendResult | null => {
-      if (!reservation.cancelled && this.sendReservation === reservation) return null;
+      if (!reservation.cancelled && !this.terminationStarted && this.sendReservation === reservation) return null;
       if (this.sendReservation === reservation) this.sendReservation = null;
       if (this.unacceptedSendGeneration === reservedTurnGeneration) {
         this.unacceptedSendGeneration = null;
@@ -1805,6 +1806,21 @@ export class Session {
   }
 
   /**
+   * Fence an intentional app exit before the host kills process trees. This
+   * must not close/abort the transport: Windows still needs the live parent
+   * to discover and reap its descendants. detach() owns actual cleanup later.
+   */
+  prepareForHostShutdown(): void {
+    if (this.terminationStarted || this.status === 'closed') return;
+    this.terminationStarted = true;
+    this.turnControlState?.toolLoopMonitor?.dispose();
+    this.clearTurnStallWatchdog();
+    this.clearTerminalErrorDrain();
+    // No callbacks or AbortSignal here: an in-flight send can wire its signal
+    // directly to the SDK process. detach() cancels it after the tree sweep.
+  }
+
+  /**
    * Shutdown-path teardown. The reason is *not* optional in practice: Maker
    * fails closed to `account-boundary` when its caller did not identify the
    * boundary, so an unlabelled logout can never leave detached work running
@@ -1813,6 +1829,7 @@ export class Session {
   async detach(opts?: AgentSessionTeardownOptions): Promise<void> {
     const teardown: AgentSessionTeardownOptions = opts ?? { reason: 'account-boundary' };
     if (this.status === 'closed') return;
+    if (teardown.reason === 'app-quit') this.prepareForHostShutdown();
     this.terminationStarted = true;
     this.asyncUserQuestions.expire('session_closed');
     this.releaseEventStreamHold();
@@ -1824,6 +1841,15 @@ export class Session {
     this.cancelSendReservation(this.sendReservation);
     let detachSucceeded = false;
     try {
+      // Emit only in the async teardown phase: terminal listeners may themselves
+      // close transports, so they must not run before the host's sync tree sweep.
+      // Only Claude's host-reaped process needs this terminal classification.
+      // Other adapters retain their own teardown and usage-settlement contract.
+      if (teardown.reason === 'app-quit' && this.agentKind === 'claude-code' && this.hasUnsettledTurn()) {
+        const usage = this.handle.getPendingTurnUsage?.();
+        this.fanOutEvent({ type: 'done', source: this.agentKind,
+          data: { status: 'cancelled', ...(usage ? { usage } : {}) } });
+      }
       if (this.handle.detach) {
         await this.handle.detach(teardown);
       } else {

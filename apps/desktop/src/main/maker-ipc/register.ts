@@ -1616,6 +1616,7 @@ import {
   publishUiTurnDispatching,
   publishUiTurnUndispatched,
 } from './uiContinuationSignal.js';
+import { hasTelegramQuestionRoute, stampTelegramQuestionAnswer } from './telegramQuestionReply.js';
 import { channelTurnSourceFor, noteChannelTurnSource } from './channelTurnSignal.js';
 import { readSilentStopAutoResumeSettings } from '../maker-host/silent-stop-auto-resume-store.js';
 import {
@@ -3826,7 +3827,7 @@ type BotCompactRuntimeRefreshHandler = (
  * needs the register-time Maker/bootstrap closure, so keep one narrow holder
  * and let the instance-scoped coordinator own all compact settle signals.
  */
-let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>) | undefined;
+let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>) | undefined;
 let botCompactRuntimeRefreshHandler: BotCompactRuntimeRefreshHandler | null = null;
 /**
  * 逐轮环境说明(界面语言 / 客户端设备 / 个人版制作说明)的去重记忆:同一原生上下文里内容
@@ -6250,9 +6251,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   const registration = sessionBindings.beginBinding(session);
   if (!registration) return;
 
-  session.setAsyncQuestionAnswerDispatcher((text, signal, requestId, displayText) => {
+  session.setAsyncQuestionAnswerDispatcher((...answer) => {
     if (!asyncQuestionInputDispatcher) throw new Error('Question input dispatcher is unavailable');
-    return asyncQuestionInputDispatcher(session, text, signal, requestId, displayText);
+    return asyncQuestionInputDispatcher(session, ...answer);
   });
 
   registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session));
@@ -19767,7 +19768,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
-  asyncQuestionInputDispatcher = async (session, text, signal, requestId, displayText) => {
+  asyncQuestionInputDispatcher = async (session, text, signal, requestId, displayText, origin) => {
     const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
     const pausedBeforeAnswer = inputCoordinator.getProjection(session.id).queuePaused;
     const inputGeneration = inputCoordinator.getGeneration(session.id);
@@ -19793,7 +19794,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isDeviceLinkInvoke(), readDeviceLinkInvokeSourceDevice(),
     );
     assertCurrent();
-    if (!pausedBeforeAnswer) {
+    const channelAnswer = !sharedTask && hasTelegramQuestionRoute(origin);
+    if (channelAnswer) stampTelegramQuestionAnswer(item, origin);
+    if (!pausedBeforeAnswer && (!channelAnswer || session.getCurrentTurnOrigin() === origin)) {
       const outcome = await inputCoordinator.steerControlInput(session.id, { item }, {
         session, turnGeneration: session.getTurnGeneration(), beforeMutation: async () => assertCurrent(),
       });

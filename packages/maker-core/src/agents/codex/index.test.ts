@@ -13,6 +13,7 @@ import {
 import { CodexForkError } from './fork-error.js';
 import { MANUAL_ABORT_RECOVERY_GRACE_MS, Session } from '../../session.js';
 import { withFastModePolicy } from '../shared/fast-mode-policy.js';
+import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
 import { assembleSystemPromptSections } from '../shared/system-prompt-sections.js';
 import { Method, type CodexErrorInfo, type TurnStartParams } from './app-server/protocol.js';
@@ -8934,6 +8935,78 @@ describe('CodexAgent MCP thread context hooks', () => {
       await handle.close();
     },
   );
+
+  // #9450/#7637: exercise send -> turn/start, not a copy of the slash parser.
+  // Existing bare-command coverage cannot catch host notes plus library mapping.
+  // Unit tier: in-memory app-server, synthetic paths; no model or SkillHub calls.
+  it.each([
+    { command: '/learn hub:team:aihot', notes: true, library: true },
+    { command: '/skill:learn hub:market:browser-automation', notes: true, library: true },
+    { command: '/learn 学习之前讨论的文章', notes: true, library: false },
+    { command: '/learn summarize', notes: false, library: true },
+  ])('preserves pinned command context: $command (notes=$notes, library=$library)', async ({ command, notes, library }) => {
+    const libraryRoot = path.join(os.tmpdir(), 'cindy-pinned-learn-library');
+    const pinnedPath = path.join(os.tmpdir(), 'cindy-managed-skills', 'learn', 'SKILL.md');
+    const source = `${command} library:assets/aa/${'a'.repeat(64)}/blob.md`;
+    const wire = notes ? `[UI language] 简体中文\n\n[Task delivery] Retain delivery context.\n\n${source}` : source;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-pinned-learn-context',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      ...(library ? { extraDirs: [libraryRoot], [LIBRARY_READ_ROOT]: libraryRoot } : {}),
+    });
+    try {
+      await handle.send({ type: 'user', content: wire }, {
+        [PINNED_SKILL_INVOCATION]: { name: 'learn', path: pinnedPath },
+        [AUTO_REVIEW_SOURCE_CONTENT]: source,
+      });
+      const turnStart = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as TurnStartParams;
+      const expectedWire = notes ? wire : wire.slice(wire.indexOf(' ') + 1);
+      expect(turnStart.input).toEqual([
+        { type: 'skill', name: 'learn', path: pinnedPath },
+        { type: 'text', text: withLibraryNativeReadContext(expectedWire, library ? libraryRoot : undefined, library ? [libraryRoot] : []) },
+      ]);
+      expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+      expect(host.request.mock.calls.some(([method]) => method === Method.SkillsList)).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    { source: 'Read this: /learn release flow', wire: '/learn release flow' },
+    { source: '/other release flow', wire: '[UI language] 简体中文\n\n/learn release flow' },
+    { source: undefined, wire: '[UI language] 简体中文\n\n/learn release flow' },
+  ])('rejects a pinned Skill without a matching leading source command: $source', async ({ source, wire }) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({ sessionId: 'session-pinned-source-mismatch', model: 'gpt-5.4', workingDir: '/repo' });
+    try {
+      await expect(handle.send({ type: 'user', content: wire }, {
+        [PINNED_SKILL_INVOCATION]: { name: 'learn', path: path.join(os.tmpdir(), 'learn', 'SKILL.md') },
+        ...(source === undefined ? {} : { [AUTO_REVIEW_SOURCE_CONTENT]: source }),
+      })).rejects.toThrow('The pinned Skill does not match the dispatched command');
+      expect(host.request.mock.calls.some(([method]) => method === Method.TurnStart)).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('does not treat source metadata as a Skill command without a Host pin', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({ sessionId: 'session-unpinned-source', model: 'gpt-5.4', workingDir: '/repo' });
+    const wire = '[UI language] 简体中文\n\nRead the release notes';
+    try {
+      await handle.send({ type: 'user', content: wire }, { [AUTO_REVIEW_SOURCE_CONTENT]: '/learn release flow' });
+      const turnStart = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as TurnStartParams;
+      expect(turnStart.input).toEqual([{ type: 'text', text: wire }]);
+    } finally {
+      await handle.close();
+    }
+  });
 
   it.each(['system', 'admin'] as const)(
     'keeps a palette-hidden %s Skill directly invocable',
@@ -27527,6 +27600,8 @@ describe('CodexAgent turn lifecycle', () => {
   it.each([
     { additionalDetails: "unexpected status 400 Bad Request: The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.", status: 400 },
     { additionalDetails: 'unexpected status 403 Forbidden: user not allowed to access model. This user can only access models=[qwen/synthetic]. Tried to access group/synthetic-model', status: 403 },
+    // #11484: same current-turn/late-event guards must protect the nested 407.
+    { additionalDetails: 'HTTP 407: ' + JSON.stringify({ error: { code: '407', message: 'NovaException - ' + JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply' } }) } }), status: 407 },
   ])('interrupts a retrying turn on explicit model rejection ($status)', async ({ additionalDetails, status }) => {
     const interruptAck = deferred<Record<string, never>>();
     const agent = new CodexAgent(createDeps());
@@ -27560,8 +27635,8 @@ describe('CodexAgent turn lifecycle', () => {
       expect(await nextEvent(iterator)).toMatchObject({
         type: 'error',
         data: {
-          message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
-          reason: 'model_unavailable', isTerminal: true, willRetry: false,
+          message: expect.stringContaining(status === 407 ? 'https://example.invalid/apply' : '[MODEL_SELECTION_UNAVAILABLE]'),
+          reason: status === 407 ? 'account_access_denied' : 'model_unavailable', isTerminal: true, willRetry: false,
         },
       });
       expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: false } });

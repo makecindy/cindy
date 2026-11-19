@@ -8204,6 +8204,7 @@
         "cindyEmbedText": "Kann Text zur Umwandlung in Vektoren senden (für die semantische Suche)",
         "cindyModelsDecisions": "Kann Entscheidungsmodelle aufrufen (verbraucht dein Modellkontingent)",
         "cindyModelsRerank": "Kann Neusortierungsmodelle aufrufen (verbraucht dein Modellkontingent)",
+        "cindyModelsMediaRequest": "Kann Bilder, Videos, Sprachsynthese und Transkription über Cindy AI anfordern (verbraucht dein Modellkontingent)",
         "cindyEmbedTextDetail": "Text wird an das Embedding-Modell des Systems gesendet und in Zahlen umgewandelt, bis zu {{max}} Elemente pro Aufruf. Es können Modellkosten anfallen. Die Vektoren gehen nur an das Plugin – in deiner eigenen Bibliothek wird nichts gespeichert.",
         "cindySearchWeb": "Kann mit Cindy AI das öffentliche Web durchsuchen",
         "cindySearchWebDetail": "Suchanfragen greifen auf das öffentliche Web zu und können Cindy AI-Kontingent verbrauchen.",
@@ -21557,14 +21558,14 @@
     },
     "taskInbox": {
       "title": "Der Posteingang",
-      "lead": "Aufgaben ordnen sich selbst in Offen, In Arbeit, Zurückgestellt und Erledigt ein. Am besten hältst du den Posteingang leer: Klicke auf Erledigt, wenn eine Aufgabe fertig ist, und stelle zurück, was warten kann.",
+      "lead": "Wenn du mehrere Aufgaben gleichzeitig betreust, ordnet der Posteingang sie nach Status. Unter „Offen“ findest du neue Ergebnisse und Aufgaben, die auf deine Antwort warten.",
       "pending": {
         "title": "Offen",
         "body": "Aufgaben erscheinen hier, sobald sie ein Ergebnis haben oder auf deine Antwort warten."
       },
       "done": {
         "title": "Erledigt",
-        "body": "Erledigt? Ein Klick auf Erledigt verschiebt die Aufgabe. Gibt es Neues, kommt sie von selbst zurück."
+        "body": "Leere regelmäßig deinen Posteingang. Klicke auf Erledigt, sobald du eine Aufgabe bearbeitet hast."
       },
       "snooze": {
         "title": "Zurückgestellt",

@@ -1049,6 +1049,30 @@ describe('translateErrorNotification', () => {
     expect(classifyCodexError(error as Parameters<typeof classifyCodexError>[0]).reason).not.toBe('model_unavailable');
   });
 
+  // #11484 unit: existing 403 fixtures do not cover JSON nested in gateway messages.
+  // Exercise the production classifier, including safe projection and status precedence.
+  it('classifies only the nested account-denial envelope and preserves its safe explanation', () => {
+    const body = JSON.stringify({ error: { code: '407', message: 'NovaException - ' + JSON.stringify({ error: {
+      code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply',
+      privateDetail: 'PRIVATE_RESPONSE',
+    } }) } });
+    const error = { message: 'Reconnecting... 1/5', additionalDetails: `unexpected status 407: ${body}`,
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 407 } } } as const;
+    const classified = classifyCodexError(error);
+    expect(classified.data).toEqual({ reason: 'account_access_denied', willRetry: false,
+      message: JSON.stringify({ error: { code: 'ACCOUNT_SHARING_ACCESS_DENIED', message: 'Apply: https://example.invalid/apply' } }),
+    });
+    expect(JSON.stringify(classified)).not.toMatch(/PRIVATE_RESPONSE|httpConnectionFailed|Reconnecting/);
+    for (const status of [401, 408, 429, 500, 503]) {
+      expect(classifyCodexError({ ...error, codexErrorInfo: { httpConnectionFailed: { httpStatusCode: status } } }).reason)
+        .not.toBe('account_access_denied');
+    }
+    for (const message of ['HTTP 407: Proxy Authentication Required', 'HTTP 403: Forbidden',
+      'HTTP 407: ACCOUNT_SHARING_ACCESS_DENIED', 'HTTP 407: {"metadata":{"code":"ACCOUNT_SHARING_ACCESS_DENIED"}}']) {
+      expect(classifyCodexError({ message }).reason).not.toBe('account_access_denied');
+    }
+  });
+
   it('does not interpret a generic HTTP 404 or reconnect notice as an unavailable model', () => {
     expect(classifyCodexError({ message: 'unexpected status 404 Not Found' }).reason).toBeUndefined();
     expect(classifyCodexError({ message: 'Reconnecting... 1/5' }).reason).toBeUndefined();

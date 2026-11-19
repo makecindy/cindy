@@ -1,3 +1,4 @@
+import { projectForNewTask } from '../mcp-integrations/projectManagementCore.js';
 import { app } from 'electron';
 import './pre-run-hook.desktop.js';
 import type { BrowserWindow } from 'electron';
@@ -84,6 +85,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       wecomGroupPublisher: wecomGroupNotificationService,
     });
     const promptRunner = new MakerScheduleRunner({
+      projectForNewTask,
       maker: deps.maker,
       bootstrapSession: bootstrapScheduledSession,
       getDb: deps.getDb,
@@ -141,6 +143,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
     });
     const scriptRunner = new ScriptScheduleRunner({
       broker: new SchedulerScriptCapabilityBroker({
+        projectForNewTask,
         resolveDefaultModelRoute: resolveDefaultScheduleRoute,
       }),
       logger: deps.logger,

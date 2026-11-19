@@ -827,6 +827,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     effort: row.effort ?? undefined,
     fastMode: (row.fastMode ?? false),
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
+    inheritedProjectDir: row.inheritedProjectDir ?? undefined,
     workingDir: row.workingDir ?? undefined,
     useWorktree: !!row.useWorktree,
     targetSessionId: row.targetSessionId ?? undefined,
@@ -889,6 +890,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     effort: (s.effort as ScheduleInsert['effort']) ?? null,
     fastMode: (s.fastMode ?? false),
     workspaceKind: s.workspaceKind ?? 'project',
+    inheritedProjectDir: s.inheritedProjectDir ?? null,
     workingDir: s.workingDir ?? null,
     useWorktree: s.useWorktree,
     targetSessionId: s.targetSessionId ?? null,
@@ -950,6 +952,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'effort')) out.effort = (patch.effort as ScheduleInsert['effort']) ?? null;
   if (hasKey(patch, 'fastMode')) out.fastMode = (patch.fastMode ?? false);
   if (hasKey(patch, 'workspaceKind')) out.workspaceKind = patch.workspaceKind ?? 'project';
+  if (hasKey(patch, 'inheritedProjectDir')) out.inheritedProjectDir = patch.inheritedProjectDir ?? null;
   if (hasKey(patch, 'workingDir')) out.workingDir = patch.workingDir ?? null;
   if (hasKey(patch, 'useWorktree')) out.useWorktree = patch.useWorktree as boolean;
   if (hasKey(patch, 'targetSessionId')) out.targetSessionId = patch.targetSessionId ?? null;
