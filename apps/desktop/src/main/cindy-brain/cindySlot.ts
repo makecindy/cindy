@@ -610,7 +610,7 @@ export class GhostCindySlot {
     return atStart || this.isModelAccessTransient();
   }
 
-  private async handleDirectMediaRequest(ghostId: string, payload: unknown): Promise<GhostPipeModelResult> {
+  private async handleDirectMediaRequest(ghostId: string, payload: unknown, sessionId?: string): Promise<GhostPipeModelResult> {
     const ghost = this.deps.getGhost(ghostId);
     const owner = this.deps.getOwnerScopeKey();
     const isCurrent = () => {
@@ -631,7 +631,7 @@ export class GhostCindySlot {
     this.inflight.set(ghostId, count + 1);
     try {
       const result = await this.deps.dispatchMediaRequest(payload, {
-        owner, instance: ghost?.instanceKey ?? ghostId, isCurrent,
+        owner, instance: ghost?.instanceKey ?? ghostId, sessionId, isCurrent,
         resolveAudio: async hash => {
           const media = await this.deps.resolveOwnedMedia(ghostId, hash, owner);
           return isCurrent() ? media?.absPath : undefined;
@@ -681,7 +681,7 @@ export class GhostCindySlot {
       callerTool?: unknown;
     };
     if (p?.kind === 'media_request') {
-      return this.handleDirectMediaRequest(ghostId, payload);
+      return this.handleDirectMediaRequest(ghostId, payload, sessionId);
     }
     if (p?.kind === 'decisions' || p?.kind === 'rerank' || p?.kind === 'list_models') {
       const input = payload as Record<string, unknown>;

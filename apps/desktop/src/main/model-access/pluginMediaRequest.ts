@@ -10,6 +10,7 @@ import {
 } from '../../shared/ghost.js';
 import type { MediaAsyncPollGuide, ResolvedMediaInvocationGuide } from '../../shared/mediaInvocation.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
+import type { GatewayMediaBillingRecorder } from '../usage/gatewayMediaBilling.js';
 
 const MAX_PAYLOAD_BYTES = 32 * 1024 * 1024;
 const MAX_REQUEST_MS = 180_000;
@@ -18,6 +19,7 @@ const MAX_VIDEO_REFERENCES = 128;
 export interface PluginMediaRequestContext {
   owner: string;
   instance: string;
+  sessionId?: string;
   isCurrent(): boolean;
   resolveAudio(hash: string): Promise<string | undefined>;
 }
@@ -26,6 +28,7 @@ interface Dependencies {
   getConnection(): { baseUrl: string; apiKey: string; onUnauthorized(): void };
   allowsModel(model: string, operation: GhostDirectMediaOperation): boolean;
   getGuide(model: string): Promise<ResolvedMediaInvocationGuide>;
+  prepareBilling(input: { model: string; sessionId?: string }): Promise<GatewayMediaBillingRecorder>;
   send(url: string, init: RequestInit): Promise<Response>;
 }
 
@@ -97,6 +100,73 @@ async function readResponse(response: Response, limit: number): Promise<Buffer |
   }
 }
 
+function readEbmlElement(bytes: Uint8Array, start: number, limit: number) {
+  let offset = start;
+  function readVint(maxWidth: number, isSize: boolean) {
+    if (offset >= limit) return undefined;
+    const first = bytes[offset];
+    let marker = 0x80;
+    let width = 1;
+    while (marker && !(first & marker)) {
+      marker >>= 1;
+      width++;
+    }
+    if (width > maxWidth || offset + width > limit) return undefined;
+    let value = isSize ? first & (marker - 1) : first;
+    let unknown = isSize && value === marker - 1;
+    for (let i = 1; i < width; i++) {
+      const next = bytes[offset + i];
+      value = value * 256 + next;
+      unknown = unknown && next === 0xff;
+    }
+    offset += width;
+    return unknown ? Infinity : value;
+  }
+  const id = readVint(4, false);
+  const size = readVint(8, true);
+  if (id === undefined || size === undefined) return undefined;
+  // Streaming WebM uses an unknown Segment size. Other metadata must be bounded.
+  if (size === Infinity) return id === 0x18538067 ? { id, data: offset, end: limit } : undefined;
+  if (size > limit - offset) return undefined;
+  return { id, data: offset, end: offset + size };
+}
+
+function isAudioOnlyWebm(bytes: Uint8Array): boolean {
+  const header = readEbmlElement(bytes, 0, bytes.length);
+  if (header?.id !== 0x1a45dfa3) return false;
+  let segment = readEbmlElement(bytes, header.end, bytes.length);
+  while (segment?.id === 0xec) segment = readEbmlElement(bytes, segment.end, bytes.length);
+  if (segment?.id !== 0x18538067) return false;
+
+  // Read element boundaries instead of searching payload bytes for track markers.
+  for (let offset = segment.data; offset < segment.end;) {
+    const child = readEbmlElement(bytes, offset, segment.end);
+    if (!child || child.id === 0x1f43b675) return false; // Tracks must precede media clusters.
+    offset = child.end;
+    if (child.id !== 0x1654ae6b) continue;
+    let hasAudio = false;
+    for (let entryOffset = child.data; entryOffset < child.end;) {
+      const entry = readEbmlElement(bytes, entryOffset, child.end);
+      if (!entry) return false;
+      entryOffset = entry.end;
+      if (entry.id !== 0xae) continue;
+      let audioTrack = false;
+      for (let fieldOffset = entry.data; fieldOffset < entry.end;) {
+        const field = readEbmlElement(bytes, fieldOffset, entry.end);
+        if (!field) return false;
+        fieldOffset = field.end;
+        if (field.id !== 0x83) continue;
+        if (audioTrack || field.end - field.data !== 1 || bytes[field.data] !== 2) return false;
+        audioTrack = true;
+      }
+      if (!audioTrack) return false;
+      hasAudio = true;
+    }
+    return hasAudio;
+  }
+  return false;
+}
+
 async function audioForm(body: Record<string, unknown>, hash: unknown, context: PluginMediaRequestContext): Promise<FormData | undefined> {
   if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash) || Object.hasOwn(body, 'file')) return undefined;
   const fields = Object.entries(body);
@@ -115,7 +185,8 @@ async function audioForm(body: Record<string, unknown>, hash: unknown, context: 
       if (part.bytesRead === 0) return undefined;
       offset += part.bytesRead;
     }
-    const mime = sniffMediaMime(bytes);
+    const sniffed = sniffMediaMime(bytes);
+    const mime = sniffed === 'video/webm' && isAudioOnlyWebm(bytes) ? 'audio/webm' : sniffed;
     const extension = mime === 'audio/mpeg' ? 'mp3' : mime === 'audio/mp4' ? 'm4a' : mime?.startsWith('audio/') ? mime.slice(6) : undefined;
     if (!mime || !extension) return undefined;
     const form = new FormData();
@@ -225,18 +296,28 @@ export function createPluginMediaRequester(deps: Dependencies) {
     const base = new URL(connection.baseUrl);
     const url = new URL(path.replaceAll('{model}', encodeURIComponent(model)), base.origin);
     if (url.origin !== base.origin) return denied();
-    if (!context.isCurrent() || !deps.allowsModel(model, operation)) return denied();
+    let billing: GatewayMediaBillingRecorder | undefined;
     try {
-      const currentConnection = deps.getConnection();
-      if (currentConnection.baseUrl !== connection.baseUrl) return denied();
-      connection = currentConnection;
+      if (operation === 'image.generate' || operation === 'video.generate') {
+        if (!context.isCurrent() || !deps.allowsModel(model, operation)) return denied();
+        billing = await deps.prepareBilling({ model, sessionId: context.sessionId });
+      }
     } catch {
-      return denied();
+      return context.isCurrent() ? failure('UNAVAILABLE', '无法准备媒体计费') : denied();
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
+      if (!context.isCurrent() || !deps.allowsModel(model, operation)) return denied();
+      try {
+        const currentConnection = deps.getConnection();
+        if (currentConnection.baseUrl !== connection.baseUrl) return denied();
+        connection = currentConnection;
+      } catch {
+        return denied();
+      }
+      timeout = setTimeout(() => controller.abort(), timeoutMs);
       const response = await deps.send(url.toString(), {
         method,
         headers: {
@@ -249,7 +330,13 @@ export function createPluginMediaRequester(deps: Dependencies) {
         signal: controller.signal,
       });
       if (response.status === 401) connection.onUnauthorized();
-      const bytes = await readResponse(response, maxResponseBytes);
+      const recording = response.ok ? billing?.(response) : undefined;
+      let bytes: Buffer | undefined;
+      try {
+        bytes = await readResponse(response, maxResponseBytes);
+      } finally {
+        await recording;
+      }
       if (!context.isCurrent()) return denied();
       if (!bytes) return failure('RESPONSE_TOO_LARGE', '网关响应超过媒体接口大小限制');
       const contentType = (response.headers.get('content-type') ?? '')
@@ -286,6 +373,7 @@ export function createPluginMediaRequester(deps: Dependencies) {
       return context.isCurrent() ? failure('OUTCOME_UNKNOWN', '未收到网关响应，无法确认请求是否已执行') : denied();
     } finally {
       clearTimeout(timeout);
+      billing?.finish();
     }
   };
 }

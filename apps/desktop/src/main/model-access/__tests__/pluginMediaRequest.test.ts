@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,16 +35,19 @@ function setup() {
   const send = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
   const allowsModel = vi.fn(() => true);
   const onUnauthorized = vi.fn();
+  const recordBilling = vi.fn(async (_response: Response) => {});
+  const finishBilling = vi.fn();
+  const prepareBilling = vi.fn(async () => Object.assign(recordBilling, { finish: finishBilling }));
   const dispatch = createPluginMediaRequester({
     getConnection: () => ({ baseUrl: 'https://gateway.test', apiKey: key, onUnauthorized }),
-    getGuide, allowsModel, send,
+    getGuide, allowsModel, send, prepareBilling,
   });
   const context = {
     owner: 'owner', instance: 'plugin',
     isCurrent: vi.fn(() => true),
     resolveAudio: vi.fn<() => Promise<string | undefined>>(async () => undefined),
   };
-  return { context, dispatch, getGuide, send, allowsModel, onUnauthorized };
+  return { context, dispatch, getGuide, send, allowsModel, onUnauthorized, prepareBilling, recordBilling, finishBilling };
 }
 
 describe('plugin media gateway dispatch', () => {
@@ -86,7 +89,7 @@ describe('plugin media gateway dispatch', () => {
   });
 
   it('polls a video on the original trusted route only for the submitting account and plugin', async () => {
-    const { context, dispatch, getGuide, send } = setup();
+    const { context, dispatch, getGuide, send, prepareBilling, recordBilling } = setup();
     send.mockResolvedValueOnce(Response.json({ task: { id: 'task-42' } }, { status: 202 }));
     const created = await dispatch({ operation: 'video.generate', model, body: {} }, context);
     expect(created).toMatchObject({ ok: true, status: 202, jobRef: expect.any(String) });
@@ -109,9 +112,11 @@ describe('plugin media gateway dispatch', () => {
       'https://gateway.test/video/tasks/task-42/content', expect.objectContaining({ method: 'GET' }),
     ]);
     expect(getGuide).toHaveBeenCalledOnce();
+    expect(prepareBilling).toHaveBeenCalledOnce();
+    expect(recordBilling).toHaveBeenCalledOnce();
   });
 
-  it('transcribes only a resolved audio file and returns synthesis bytes intact', async () => {
+  it('transcribes only a resolved audio file and returns synthesis bytes intact', async ({ onTestFinished }) => {
     const { context, dispatch, send, getGuide } = setup();
     const audioHash = 'a'.repeat(64);
     const request = { operation: 'audio.transcribe', model, audioHash, body: { language: 'en' } };
@@ -119,6 +124,7 @@ describe('plugin media gateway dispatch', () => {
     expect(send).not.toHaveBeenCalled();
 
     const folder = await mkdtemp(join(tmpdir(), 'plugin-media-test-'));
+    onTestFinished(() => rm(folder, { recursive: true, force: true }));
     const audio = join(folder, 'audio.mp3');
     await writeFile(audio, Buffer.from([0xff, 0xfb, 0x90, 0x64]));
     context.resolveAudio.mockResolvedValueOnce(audio);
@@ -136,6 +142,42 @@ describe('plugin media gateway dispatch', () => {
       ok: true, encoding: 'base64', body: '/9gB',
     });
     expect(getGuide).not.toHaveBeenCalled();
+  });
+
+  it('uploads audio-only WebM as audio/webm and rejects WebM with a video track', async ({ onTestFinished }) => {
+    const { context, dispatch, send } = setup();
+    const folder = await mkdtemp(join(tmpdir(), 'plugin-media-test-'));
+    onTestFinished(() => rm(folder, { recursive: true, force: true }));
+    const audio = join(folder, 'recording.webm');
+    const audioTrack = 'ae8b8381028686415f4f505553';
+    const header = '1a45dfa3874282847765626d18538067ff1654ae6b';
+    await writeFile(audio, Buffer.from(header + '8d' + audioTrack, 'hex'));
+    context.resolveAudio.mockResolvedValue(audio);
+    const request = { operation: 'audio.transcribe', model, audioHash: 'a'.repeat(64), body: {} };
+    send.mockResolvedValue(Response.json({ text: 'hello' }));
+    expect(await dispatch(request, context)).toMatchObject({ ok: true, status: 200 });
+    expect((send.mock.calls[0][1].body as FormData).get('file')).toEqual(
+      expect.objectContaining({ name: 'audio.webm', type: 'audio/webm' }),
+    );
+
+    await writeFile(audio, Buffer.from(header + '92' + audioTrack + 'ae83838101', 'hex'));
+    expect(await dispatch(request, context)).toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('records a successful submission before reading its failing response body', async () => {
+    const { context, dispatch, send, prepareBilling, recordBilling, finishBilling } = setup();
+    const response = new Response(new ReadableStream({
+      start(controller) { controller.error(new Error('response stream disconnected')); },
+    }), { headers: { 'X-Nova-AIGateway-Billing': '{"cost":0.01}' } });
+    send.mockResolvedValueOnce(response);
+    expect(await dispatch({ operation: 'image.generate', model, body: {} }, context)).toMatchObject({
+      ok: false, errorCode: 'OUTCOME_UNKNOWN',
+    });
+    expect(prepareBilling.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0]);
+    expect(recordBilling).toHaveBeenCalledExactlyOnceWith(response);
+    expect(finishBilling).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledOnce();
   });
 
   it('does not retry after a lost submission response and bounds streamed bodies', async () => {

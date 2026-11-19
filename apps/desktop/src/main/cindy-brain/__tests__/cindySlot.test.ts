@@ -2956,8 +2956,10 @@ describe('plugin direct media request', () => {
     expect(dispatchMediaRequest).not.toHaveBeenCalled();
 
     ghost.approvedCindyModelActions = ['media_request'];
-    expect(await slot.handleModelRequest('art', request)).toMatchObject({ ok: true, status: 200 });
+    expect(await slot.handleModelRequest('art', request, 'media-source-session')).toMatchObject({ ok: true, status: 200 });
     expect(dispatchMediaRequest).toHaveBeenCalledTimes(1);
-    expect(dispatchMediaRequest).toHaveBeenCalledWith(request, expect.objectContaining({ instance: 'art' }));
+    expect(dispatchMediaRequest).toHaveBeenCalledWith(request, expect.objectContaining({
+      instance: 'art', sessionId: 'media-source-session',
+    }));
   });
 });

@@ -6090,6 +6090,7 @@ export function getGhostCindySlot(): GhostCindySlot {
             candidate.id === model && isCatalogMediaModelVisible('xd', model, candidate.defaultEnabled, undefined, kind));
         },
         getGuide: model => fetchMediaInvocationGuide(model),
+        prepareBilling: async input => (await import('../usage/gatewayMediaBilling.js')).prepareGatewayMediaBilling(input),
         send: outboundFetch,
       }),
       // 旧协议只适配参数/结果；付费提交、轮询和入仓全部复用 Core。
