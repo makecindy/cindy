@@ -48,6 +48,7 @@ describe('newMakerDraft remote host identity', () => {
   it('does not use a device-link project as a local directory on reload', async () => {
     const draft = await loadModule();
     draft.patchDraft({ workingDir: '/studio/only', deviceLinkDeviceId: 'studio' });
+    // reset-modules: simulate an app restart so the draft reloads the remote path and device identity from storage.
     vi.resetModules();
     expect((await loadModule()).getDraft()).toMatchObject({ workingDir: null, deviceLinkDeviceId: null });
   });
