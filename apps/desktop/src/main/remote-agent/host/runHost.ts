@@ -3510,7 +3510,8 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             || (trust === 'guest' && request.relay && !deps.reshare?.allows(controller, request.reshareKey))
             || !deps.providerAccess?.isAllowed(request.providerId, controller, request.model)) failProviderNotAllowed();
         };
-        sharedImageJobs.start(controller, request.requestId, assertAllowed, async signal => {
+        let assertResultRoute = assertAllowed;
+        sharedImageJobs.start(controller, request.requestId, () => assertResultRoute(), async signal => {
           const reshareKey = reshareKeyForGuest(controller);
           const groupRelay = trust === 'guest' && !request.relay ? deps.groupRelay : undefined;
           if (!groupRelay) return generate(request, assertAllowed, signal);
@@ -3530,6 +3531,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             try {
               assertRoute();
               if (plan?.kind !== 'member') {
+                assertResultRoute = assertRoute;
                 plan?.load?.setRunning(true);
                 return await generate(request, assertRoute, signal);
               }
@@ -3541,6 +3543,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
                 continue;
               }
               plan.load?.setRunning(true);
+              assertResultRoute = assertRoute;
               return await generateSharedImage(command => {
                 assertRoute();
                 return invoke([command]);
@@ -3553,7 +3556,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
             }
           }
           throw signal.reason;
-        });
+        }, request.relay);
         return { accepted: true };
       }
       case 'images': {

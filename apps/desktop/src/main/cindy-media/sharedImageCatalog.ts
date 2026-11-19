@@ -1,5 +1,4 @@
 import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps, readProviderShareGroupSize, type InvokeResultPayload, type ProviderShareReceived } from '@cindy/device-link';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { PROVIDER_SHARE_AGENT_DEVICE_PREFIX, providerShareIdOfAgentDeviceId } from '../../shared/providerShare.js';
 import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
 import type { ProviderMediaRuntimeModel } from './providerMediaRuntime.js';
@@ -7,6 +6,7 @@ import type { ProviderMediaRuntimeModel } from './providerMediaRuntime.js';
 const SHARE_CATALOG_TIMEOUT_MS = 10_000;
 
 interface SharedImageAccess {
+  captureOwner(): () => boolean;
   getReceivedShares(): readonly ProviderShareReceived[];
   findReceivedShare(shareId: string): ProviderShareReceived | null;
   invoke(deviceId: string, channel: string, args: unknown[], options?: {
@@ -23,8 +23,9 @@ export function configureSharedImageAccess(next: SharedImageAccess): void {
 
 export async function listSharedImageModels(): Promise<ProviderMediaRuntimeModel[]> {
   const ports = access;
-  if (!ports || isAppSessionBoundaryPending()) return [];
-  const owner = activeOwnerScopeKey();
+  if (!ports) return [];
+  const isCurrent = ports.captureOwner();
+  if (!isCurrent()) return [];
   const shares = ports.getReceivedShares().filter(share => share.status === 'active' && share.hostOnline);
   const entries = await Promise.all(shares.map(async share => {
     const providerId = `${PROVIDER_SHARE_AGENT_DEVICE_PREFIX}${share.shareId}`;
@@ -62,7 +63,7 @@ export async function listSharedImageModels(): Promise<ProviderMediaRuntimeModel
       clearTimeout(timer);
     }
   }));
-  return !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner ? entries.flat() : [];
+  return isCurrent() ? entries.flat() : [];
 }
 
 export function resolveSharedImageSource(providerId: string) {

@@ -231,7 +231,8 @@ describe('shared image authorization and relay', () => {
       plan, connect: () => ({ invoke, poller: {} as never }), noteStartFailure: () => false,
       noteRunFailure: () => false, trackRun: () => ({ setRunning() {}, release() {} }), async forget() {},
     };
-    const host = makeHost([], { sharedImage: { generateSharedImage, groupRelay, sharedImageMemberAllowed: () => true } });
+    let memberAllowed = true;
+    const host = makeHost([], { sharedImage: { generateSharedImage, groupRelay, sharedImageMemberAllowed: () => memberAllowed } });
     try {
       await expect(host.handle(GUEST, start)).resolves.toEqual({ accepted: true });
       await vi.waitFor(async () => expect(await host.handle(GUEST, read)).toMatchObject({ state: 'complete' }));
@@ -240,6 +241,8 @@ describe('shared image authorization and relay', () => {
         action: 'start', providerId: 'openai-independent', model: 'openai-independent/gpt-image-2',
       })]);
       expect(generateSharedImage).not.toHaveBeenCalled();
+      memberAllowed = false;
+      await expect(host.handle(GUEST, read)).rejects.toThrow();
     } finally {
       await host.dispose();
     }

@@ -15,7 +15,7 @@ vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDevicePro
 describe('shared OpenAI media catalog', () => {
   it('projects current text-to-image models under the share identity and ignores older hosts', async () => {
     const share = mocks.share as ProviderShareReceived;
-    configureSharedImageAccess({ getReceivedShares: () => [share], findReceivedShare: () => share, invoke: mocks.invoke });
+    configureSharedImageAccess({ captureOwner: () => () => true, getReceivedShares: () => [share], findReceivedShare: () => share, invoke: mocks.invoke });
     mocks.catalog.mockResolvedValue({
       views: [{ id: 'openai', auth: { native: 'codex' }, connected: true, imageModels: [
         { id: 'openai/gpt-image-2', name: 'GPT Image 2' },

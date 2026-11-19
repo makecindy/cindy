@@ -5957,22 +5957,27 @@ configureProviderMediaRuntime({
       }
     };
     beforeDispatch();
-    const channel = createCodexImageChannel({
-      providerId,
-      hasOAuthLogin: () => providerId === 'openai' ? hasCodexOAuthLoginReadOnly() : getCodexImageAuthBinding().hasAuth?.(providerId) === true,
-      getAuth: () => getCodexImageAuthBinding().getAuth(providerId),
-      onAuthFailure: async failure => { await getCodexImageAuthBinding().onAuthFailure(failure, providerId); },
-      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
-      beforeDispatch,
-    });
-    if (!channel.ready()) throw new Error('SHARED_IMAGE_UNAVAILABLE');
-    const nativeParameters = {
-      ...(request.outputFormat !== undefined ? { output_format: request.outputFormat } : {}),
-      ...(request.outputCompression !== undefined ? { output_compression: request.outputCompression } : {}),
-      ...(request.background !== undefined ? { background: request.background } : {}),
-      ...(request.moderation !== undefined ? { moderation: request.moderation } : {}),
-    };
-    return decodeImageResponse(await channel.generateImage({ model, prompt, size, aspectRatio, quality, nativeParameters, signal }));
+    const remoteAuth = await getCodexImageAuthBinding().acquireRemoteAuth?.(providerId);
+    if (!remoteAuth) throw new Error('SHARED_IMAGE_UNAVAILABLE');
+    try {
+      const channel = createCodexImageChannel({
+        providerId,
+        hasOAuthLogin: () => true,
+        getAuth: remoteAuth.getAuth,
+        onAuthFailure: async failure => { await remoteAuth.onAuthFailure(failure); },
+        fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+        beforeDispatch: () => { beforeDispatch(); remoteAuth.assertDispatchable(); },
+      });
+      const nativeParameters = {
+        ...(request.outputFormat !== undefined ? { output_format: request.outputFormat } : {}),
+        ...(request.outputCompression !== undefined ? { output_compression: request.outputCompression } : {}),
+        ...(request.background !== undefined ? { background: request.background } : {}),
+        ...(request.moderation !== undefined ? { moderation: request.moderation } : {}),
+      };
+      return decodeImageResponse(await channel.generateImage({ model, prompt, size, aspectRatio, quality, nativeParameters, signal }));
+    } finally {
+      remoteAuth.release();
+    }
   },
   guideTarget: target => mediaGuideTarget(getActiveCatalog().providers.find(provider => provider.id === target.providerId), target),
   guideProtocol: target => {

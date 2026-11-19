@@ -12,6 +12,7 @@ const MAX_ACTIVE_JOBS = 4;
 export function createSharedImageJobs() {
   const jobs = new Map<string, {
     controller: string;
+    relay?: string;
     assertAllowed(): void;
     cancellation: AbortController;
     timer: ReturnType<typeof setTimeout>;
@@ -25,13 +26,21 @@ export function createSharedImageJobs() {
       requestId: string,
       assertAllowed: () => void,
       generate: (signal: AbortSignal) => Promise<Image>,
+      relay?: string,
     ): void {
       assertAllowed();
       const key = keyFor(controller, requestId);
       if (jobs.has(key)) return;
       const active = [...jobs.values()].filter((job) => job.state.status !== 'released');
-      if (jobs.size >= 64 || active.length >= MAX_ACTIVE_JOBS || active.some((job) => job.controller === controller)) {
+      if (active.length >= MAX_ACTIVE_JOBS || active.some((job) => job.controller === controller && job.relay === relay)) {
         throw new Error('SHARED_IMAGE_BUSY');
+      }
+      if (jobs.size >= 64) {
+        const released = [...jobs].find(([, job]) => job.state.status === 'released');
+        if (released) {
+          clearTimeout(released[1].timer);
+          jobs.delete(released[0]);
+        }
       }
       const cancellation = new AbortController();
       const timer = setTimeout(() => {
@@ -40,7 +49,7 @@ export function createSharedImageJobs() {
       }, RESULT_LIFETIME_MS);
       timer.unref?.();
       const job: NonNullable<ReturnType<typeof jobs.get>> = {
-        controller, cancellation, timer, assertAllowed, state: { status: 'pending' },
+        controller, relay, cancellation, timer, assertAllowed, state: { status: 'pending' },
       };
       jobs.set(key, job);
       const signal = AbortSignal.any([cancellation.signal, AbortSignal.timeout(GENERATION_TIMEOUT_MS)]);

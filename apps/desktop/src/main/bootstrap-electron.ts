@@ -716,7 +716,7 @@ import { agentNetSwitchRemoteHandler, registerSelfHostedRelayIpc } from './devic
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
 import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
 import { startUpgradeSplitRepair } from './subscription-accounts/upgradeSplitRepair.desktop.js';
-import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
+import { acquireSubscriptionAccount, attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
 import {
@@ -992,6 +992,7 @@ import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation
 import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
 import {
   getChatgptBridgeAuth,
+  getChatgptBridgeAuthForDispatch,
   invalidateChatgptBridgeAuth,
 } from './maker-host/anthropic-responses-bridge-host.js';
 import {
@@ -3038,6 +3039,27 @@ registerLayoutIpc();
 // 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
 // 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
 setCodexImageAuthBinding({
+  async acquireRemoteAuth(providerId) {
+    // Image IDs are not members of the pool's Codex chat catalog.
+    const lease = await acquireSubscriptionAccount(providerId, undefined, [], false, { remote: true });
+    let proof: (() => boolean) | undefined;
+    return {
+      async getAuth() {
+        const auth = await getChatgptBridgeAuthForDispatch(providerId, lease?.account);
+        proof = auth.canDispatch;
+        return auth;
+      },
+      assertDispatchable() {
+        lease?.assertDispatchable();
+        if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
+      },
+      async onAuthFailure(failure) {
+        if (lease) lease.observeFailure(failure, undefined, 'run');
+        else await invalidateChatgptBridgeAuth(failure, providerId);
+      },
+      release() { lease?.release(); },
+    };
+  },
   hasAuth: (providerId) => codexAccountState(providerId).authenticated,
   getAuth: getChatgptBridgeAuth,
   onAuthFailure: invalidateChatgptBridgeAuth,
@@ -10814,7 +10836,13 @@ app.on('ready', async () => {
   );
   registerSharedTaskIpc(isSharedTaskAvailable, isSharedTaskRelayOnline, waitForSharedTaskRelay);
   registerProviderShareIpc();
-  configureSharedImageAccess({ getReceivedShares, findReceivedShare, invoke: remoteBackgroundInvoke });
+  configureSharedImageAccess({
+    getReceivedShares, findReceivedShare, invoke: remoteBackgroundInvoke,
+    captureOwner: () => {
+      const owner = activeOwnerScopeKey();
+      return () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === owner;
+    },
+  });
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
   // 同账号电脑远程切换这台电脑的 Agent-Net(docs/product-rules/agent-net.md「远程切换其他电脑的连接方式」)。
