@@ -56,10 +56,15 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // in-memory DOM only; this never substitutes for real Android handle acceptance.
 const markdown = '表前 中文 空格 🙂\n\n| A | B | C |\n|---|---|---|\n| 甲 | | 右端 |\n| 乙 | 两 个 | 末列 |\n\n表后 终点';
 const layout = buildMessageContentLayout({ screenWidth: 390 });
-const build = (text = markdown) => buildTableMessageContent(parseMobileMarkdown(text),
-  { width: 340, layout, copyEnabled: true, streaming: false });
+const build = (text = markdown, width = 340) => buildTableMessageContent(parseMobileMarkdown(text),
+  { width, layout, copyEnabled: true, streaming: false });
 
 describe('table message production content', () => {
+  it('keeps spaces inside code cells when copying the complete table', () => {
+    const result = build('| A | B | C |\n|---|---|---|\n| `  padded  ` | `  ` |  plain  |');
+    expect(result.copies).toEqual([{ id: '0', kind: 'table', text: 'A\tB\tC\n  padded  \t  \tplain' }]);
+  });
+
   it('keeps before/table/after and empty cells; native copy text contains no controls', () => {
     const result = build(); const root = document.createElement('div'); root.innerHTML = result.html;
     expect(root.firstElementChild?.textContent).toBe('表前 中文 空格 🙂');
@@ -76,8 +81,14 @@ describe('table message production content', () => {
     const rows = [...root.querySelectorAll('tr')];
     expect(rows.map(row => row.children.length)).toEqual([3, 3, 3]);
     expect(rows[1].lastElementChild?.textContent).toBe('');
-    expect([...rows[2].children].map(cell => (cell as HTMLElement).style.width))
-      .toEqual([...rows[0].children].map(cell => (cell as HTMLElement).style.width));
+    const style = document.createElement('style');
+    style.textContent = result.tableStyles;
+    document.head.append(style);
+    try {
+      const widths = (row: Element) => [...row.children].map(cell => parseFloat(getComputedStyle(cell).width));
+      expect(widths(rows[0]).every(width => width > 0)).toBe(true);
+      expect(widths(rows[2])).toEqual(widths(rows[0]));
+    } finally { style.remove(); }
   });
   it('routes authored links and code paths by parser id without putting URLs into navigation', () => {
     const result = build('[外链](https://example.test/?q=secret) 和 [规则](/repo/AGENTS.md:2) 与 `src/a.ts`');
@@ -125,6 +136,25 @@ describe('trusted shell updates', () => {
     Object.assign(window, { ResizeObserver: class { observe() {} disconnect() {} },
       ReactNativeWebView: { postMessage: vi.fn() }, requestAnimationFrame: (run: () => void) => { run(); return 1; } });
     for (const script of document.querySelectorAll('script')) window.eval(script.textContent ?? '');
+  });
+  it('reflows a wider table without replacing the DOM range during a resize', () => {
+    const narrow = build(markdown, 280);
+    window.eval(tableMessageUpdateScript({ revision: 'narrow', html: narrow.html,
+      css: narrow.tableStyles, selectable: true, links: {} }));
+    const cell = document.querySelector('tbody td')!;
+    const startWidth = parseFloat(getComputedStyle(cell).width);
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const wide = build(markdown, 680);
+    window.eval(tableMessageUpdateScript({ revision: 'wide', html: wide.html,
+      css: wide.tableStyles, selectable: true, links: {} }));
+    expect(parseFloat(getComputedStyle(cell).width)).toBeGreaterThan(startWidth);
+    expect(document.querySelector('tbody td')).toBe(cell);
+    expect(String(selection)).toBe('甲');
   });
   it('preserves paragraph boundaries and spaces across inline nodes in the selectable body', () => {
     const first = '中文  spaces **粗体**  `inline  code`  [链接](https://example.test)\n同段第二行 two  spaces。';

@@ -6,6 +6,8 @@ import * as React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import ts from 'typescript';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { MarkdownLinkActivationContext } from '@/session/chatFilePathContext';
 
 const rendererTree = ts.createSourceFile('renderer.tsx', readFileSync(join(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const pathFunctions = new Set(['useChatPathInteraction', 'ChatPathChipSpan', 'LinkPathChipSpan', 'clickableInlineStyle', 'underlineDecoration']);
@@ -18,7 +20,8 @@ const verdictListeners = new Set<(key: string) => void>();
 const verifyPath = vi.fn(async () => undefined);
 const pathBindings = {
   React, useContext: React.useContext, useCallback: React.useCallback, useEffect: React.useEffect, useMemo: React.useMemo, useRef: React.useRef,
-  useRowStateHook: () => React.useState, ChatFilePathContext: pathContext,
+  useRowStateHook: () => React.useState, ChatFilePathContext: pathContext, MarkdownLinkActivationContext,
+  getMobileAuthOwner, isMobileAuthOwnerCurrent,
   resolveChatAbsPath, toWorkdirRel, canOpenChatPathChip, classifyChatPathLinkTarget, chatPathLabelReadsAsFileReference, isUncPathOutsideWorkdir,
   StyleSheet: { flatten: flattenStyle },
   peekRemotePathVerdictForRender: () => 'unknown', peekRemotePathVerdict: () => undefined,
@@ -30,6 +33,31 @@ const productionPath = new Function(...Object.keys(pathBindings), compiledPath +
 const pathStyles = { markdownLink: { textDecorationLine: 'underline' }, markdownPathChip: { textDecorationLine: 'underline' }, markdownInlineCode: { fontFamily: 'monospace' }, markdownUnderlineStrike: { textDecorationLine: 'underline line-through' } };
 
 describe('production path spans', () => {
+  // #11474: an authored link can be mid-stat during native/WebView turnover.
+  it('opens the validated file after its span was replaced within the same message', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    const open = vi.fn();
+    let finish!: (value: { kind: 'file' }) => void;
+    const statPath = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const context = { deviceId: 'd1', workdir: '/repo', statPath, onOpenPath: open };
+    const activation = { active: true, pendingMail: new Set<string>() };
+    const SpanText = ({ children, onPress }: any) => React.createElement('span', { onClick: onPress }, children);
+    const redraw = (key: string) => act(() => root.render(React.createElement(pathContext.Provider, { value: context },
+      React.createElement(MarkdownLinkActivationContext.Provider, { value: activation },
+        React.createElement(productionPath.LinkPathChipSpan, { key, url: 'src/a.ts', display: '源文件', bare: false,
+          styles: pathStyles, SpanText, baseStyle: {}, streaming: true })))));
+    try {
+      redraw('native');
+      act(() => container.querySelector('span')!.click());
+      expect(statPath).toHaveBeenCalledExactlyOnceWith('/repo/src/a.ts');
+      redraw('document');
+      await act(async () => finish({ kind: 'file' }));
+      expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'file', absPath: '/repo/src/a.ts', relPath: 'src/a.ts' });
+    } finally { act(() => root.unmount()); }
+  });
+
   it('adds the clickable signal only when a handler exists and preserves strike-through', () => {
     expect(flattenStyle(productionPath.clickableInlineStyle(pathStyles, undefined, {}))).toEqual({});
     expect(flattenStyle(productionPath.clickableInlineStyle(pathStyles, () => {}, {}))).toEqual({ textDecorationLine: 'underline' });

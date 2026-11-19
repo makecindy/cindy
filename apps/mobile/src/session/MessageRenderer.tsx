@@ -278,7 +278,7 @@ import {
   classifyChatPathLinkTarget,
   classifyInlineCodePathCandidate,
 } from '@/session/chatPathCandidate';
-import { ChatFilePathContext } from '@/session/chatFilePathContext';
+import { ChatFilePathContext, MarkdownLinkActivationContext, useMarkdownLinkActivation } from '@/session/chatFilePathContext';
 import { MailLinkSpan } from '@/session/MailLinkSpan';
 import { ChatPathChipSpan } from '@/session/ChatPathChipSpan';
 import { useMarkdownSessionLink } from '@/session/useMarkdownSessionLink';
@@ -6202,7 +6202,6 @@ function MarkdownBodyBase({
   layout,
   onOpenPayload,
   onOpenSessionLink,
-  onTableMeasured,
   pinContentWidth = false,
   selectable: selectionAllowed,
   streaming,
@@ -6212,7 +6211,6 @@ function MarkdownBodyBase({
   androidTableSelection?: boolean;
   tableFallbackBackground?: ViewStyle['backgroundColor'];
   /** Local fixture measurement only; no document/host capability. */
-  onTableMeasured?: (height: number) => void;
   renderRichAnswers?: boolean;
   /** Shared room bodies cannot resolve task-local media from model-authored paths. */
   publicMediaOnly?: boolean;
@@ -6300,14 +6298,18 @@ function MarkdownBodyBase({
   const measureTableBootstrap = Platform.OS === 'android' && androidTableSelection;
   const tableCandidate = measureTableBootstrap && selectionAllowed === true && !streaming
     && blocks.some(block => block.type === 'table') && supportsTableMessageDocument(blocks);
+  const linkActivation = useMarkdownLinkActivation(tableCandidate, documentRevision);
   const tableFailed = tableFailedRevision === documentRevision;
   const mountTableDocument = tableCandidate && !tableFailed && nativeBodySize.width > 0 && nativeBodySize.height > 0;
   const showTableDocument = mountTableDocument && tableReadyRevision === documentRevision;
   // Let Android draw the WebView behind the readable native body: alpha zero can
-  // leave an undrawn WebView when it takes over. Reserve the hug bubble's width.
+  // leave an undrawn WebView when it takes over. A promoted table still follows
+  // the available width so its hug bubble can grow after rotation or split view.
   const tableDocumentStyle: ViewStyle | undefined = !showTableDocument
     ? { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, overflow: 'hidden' }
-    : pinContentWidth ? undefined : { width: nativeBodySize.width, maxWidth: '100%' };
+    : pinContentWidth ? undefined : {
+      width: Math.max(nativeBodySize.width, layout.markdownTableAvailableWidth), maxWidth: '100%',
+    };
   // The native bootstrap remains readable until the document is ready, with
   // no selectable duplicate that could lose handles during this one promotion.
   const selectable = selectionAllowed && !(tableCandidate && !tableFailed);
@@ -6694,7 +6696,7 @@ function MarkdownBodyBase({
       </MarkdownSelectableText>
     );
   }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, streaming, styles, t]);
-  return (
+  return <MarkdownLinkActivationContext.Provider value={linkActivation}>
     <View
       collapsable={false}
       onLayout={measuresSettledWidth || measureTableBootstrap ? event => {
@@ -6726,7 +6728,6 @@ function MarkdownBodyBase({
         <TableMessageDocument documentKey={documentKey} text={text} blocks={blocks} layout={layout}
           initialHeight={nativeBodySize.height} selectable={selectionAllowed} streaming={streaming}
           codeCopyEnabled={codeCopyEnabled} onOpenSessionLink={onOpenSessionLink}
-          onMeasured={onTableMeasured}
           onReadyChange={tableReady} onFailure={tableFailedToLoad} />
       </View> : null}
       {!showTableDocument ? (
@@ -6755,7 +6756,7 @@ function MarkdownBodyBase({
       </View>
       ) : null}
     </View>
-  );
+  </MarkdownLinkActivationContext.Provider>;
 }
 
 /**

@@ -39,9 +39,10 @@ export const escapeTableMessageText = (value: string) => value.replace(/[&<>"']/
 export function buildTableMessageContent(blocks: readonly MobileMarkdownBlock[], {
   width, layout, copyEnabled, streaming,
 }: { width: number; layout: MessageContentLayout; copyEnabled: boolean; streaming?: boolean }): {
-  html: string; links: TableMessageLink[]; copies: TableMessageCopy[];
+  html: string; tableStyles: string; links: TableMessageLink[]; copies: TableMessageCopy[];
 } {
   const links: TableMessageLink[] = [], copies: TableMessageCopy[] = [];
+  const tableStyles: string[] = [];
   const renderInline = (inline: MobileMarkdownInline): string | undefined => {
     if (inline.type !== 'link' && inline.type !== 'code') return undefined;
     if (inline.type === 'code' && !classifyInlineCodePathCandidate(inline.text)) return undefined;
@@ -58,7 +59,7 @@ export function buildTableMessageContent(blocks: readonly MobileMarkdownBlock[],
     const session = inline.type === 'link' && parseSessionDeepLinkUrl(inline.url);
     return `<span data-chat-link="${id}"${session ? ' data-session' : ''}${code ? ' class="doc-inline-code"' : ''}>${escapeTableMessageText(text)}</span>`;
   };
-  const html = blocks.map(block => {
+  const html = blocks.map((block, blockIndex) => {
     const widths = block.type === 'table' ? buildMobileMarkdownTableColumnWidths({
       header: block.header, rows: block.rows, availableWidth: width, minWidth: layout.markdownTableCellMinWidth,
     }) : [];
@@ -67,7 +68,7 @@ export function buildTableMessageContent(blocks: readonly MobileMarkdownBlock[],
       header: widths.map((_, index) => block.header[index] ?? []),
       rows: block.rows.map(row => ({ ...row, cells: widths.map((_, index) => row.cells[index] ?? []) })),
     } : block;
-    let rendered = buildSelectableMarkdownBlockHtml(padded, { renderInline });
+    const rendered = buildSelectableMarkdownBlockHtml(padded, { renderInline });
     const kind = block.type === 'table' ? 'table' : block.type === 'code' ? 'code' : null;
     const copy = kind && copyEnabled && (kind !== 'table' || !streaming)
       ? kind === 'table' ? mobileMarkdownTableToTsv(block as Extract<MobileMarkdownBlock, { type: 'table' }>)
@@ -75,18 +76,16 @@ export function buildTableMessageContent(blocks: readonly MobileMarkdownBlock[],
     const id = copy.trim() ? String(copies.length) : null;
     if (id !== null) copies.push({ id, kind: kind!, text: copy });
     if (block.type === 'table') {
-      // The table itself scrolls, so native selection still spans all its cells.
-      let column = 0;
-      rendered = rendered.replace(/<(th|td)>/g, (_, tag: string) => {
-        const size = widths[column++ % widths.length];
-        return `<${tag} style="width:${size}px;min-width:${size}px;max-width:${size}px">`;
+      // Resize the grid without replacing its selected text nodes.
+      widths.forEach((width, column) => {
+        tableStyles.push(`.doc-table[data-table-index="${blockIndex}"] tr > :nth-child(${column + 1}){width:${width}px;min-width:${width}px;max-width:${width}px}`);
       });
-      return `<div class="doc-table">${rendered}${id !== null ? `<div data-copy-slot="${id}" class="doc-table-copy"></div>` : ''}</div>`;
+      return `<div class="doc-table" data-table-index="${blockIndex}">${rendered}${id !== null ? `<div data-copy-slot="${id}" class="doc-table-copy"></div>` : ''}</div>`;
     }
     if (block.type === 'code') return `<div class="doc-code${id !== null ? ' doc-code-copy' : ''}"${id !== null ? ` data-copy-slot="${id}"` : ''}>${rendered}</div>`;
     return rendered;
   }).join('');
-  return { html, links, copies };
+  return { html, tableStyles: tableStyles.join('\n'), links, copies };
 }
 
 export function tableMessageCss(colors: ThemeColors, scale: number, layout: MessageContentLayout, borderWidth: number): string {

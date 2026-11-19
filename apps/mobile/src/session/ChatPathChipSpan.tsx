@@ -1,8 +1,9 @@
 import { useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
 import { Text } from '@/components/AppText';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { canOpenChatPathChip, isUncPathOutsideWorkdir, resolveChatAbsPath, toWorkdirRel, type ChatPathCandidate } from '@/session/chatPathCandidate';
-import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
+import { ChatFilePathContext, MarkdownLinkActivationContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { useRowStateHook, type RowStateHook } from '@/session/listRowState';
 import { peekRemotePathVerdict, peekRemotePathVerdictForRender, remotePathVerdictKey, subscribeRemotePathVerdictChange, verifyRemotePathCached, type RemotePathVerdict } from '@/session/remotePathVerdict';
 
@@ -58,6 +59,7 @@ export function useChatPathInteraction({ candidate, streaming, explicitLink = fa
   explicitLink?: boolean;
   usePathState?: RowStateHook;
 }): { lit: boolean; onPress?: () => void; onLongPress?: () => void } {
+  const activation = useContext(MarkdownLinkActivationContext);
   const rowStateHook = useRowStateHook();
   const usePathState = usePathStateOverride ?? rowStateHook;
   const ctx = useContext(ChatFilePathContext);
@@ -145,6 +147,8 @@ export function useChatPathInteraction({ candidate, streaming, explicitLink = fa
     return { lit: false };
   }
   const activate = async (action: (value: ChatFilePathTarget) => void) => {
+    const owner = activation ? getMobileAuthOwner() : null;
+    if (activation && (!activation.active || owner?.switching)) return;
     let actionKind = kind;
     if (explicitLink) {
       // A visible authored link may be tapped before background verification,
@@ -158,7 +162,10 @@ export function useChatPathInteraction({ candidate, streaming, explicitLink = fa
         // Preserve the existing preview/browser failure UX and copy menu when
         // the host is unavailable; no local lookup or connection reset.
       }
-      if (actionScope.current?.ctx !== ctx || actionScope.current.target?.absPath !== target.absPath) return;
+      const isCurrentAction = activation
+        ? activation.active && owner !== null && isMobileAuthOwnerCurrent(owner)
+        : actionScope.current?.ctx === ctx && actionScope.current.target?.absPath === target.absPath;
+      if (!isCurrentAction) return;
     }
     if (!canOpenChatPathChip(actionKind, target.relPath)) return;
     action({

@@ -76,7 +76,7 @@ export function mobileMarkdownTableToTsv(table: Extract<MobileMarkdownBlock, { t
   const columns = Math.max(...rows.map(row => row.length));
   return rows.map(row => Array.from({ length: columns }, (_, index) =>
     (row[index] ?? []).map(inline => inline.type === 'image' ? inline.alt : inline.text)
-      .join('').replace(/[\t\r\n]+/g, ' ').trim(),
+      .join('').replace(/[\t\r\n]+/g, ' '),
   ).join('\t')).join('\n');
 }
 

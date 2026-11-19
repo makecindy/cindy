@@ -205,6 +205,7 @@ function MarkdownHarness({ pinContentWidth = false, androidTableSelection = fals
   const tableCandidate = false;
   const mountTableDocument = false;
   const showTableDocument = false;
+  const linkActivation = null;
   const onOpenPayload = undefined;
   const inlinesSelectable = () => true;
   const spanFor = () => undefined;
@@ -248,7 +249,8 @@ return { BubbleHarness, MarkdownHarness };
 `, {
     useContext: React.useContext, useRef: React.useRef, useMemo: React.useMemo,
     useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState, useRowStateHook: () => React.useState,
-    SelectionQuoteContext: React.createContext(null), useWindowDimensions: () => ({ fontScale: 1 }),
+    SelectionQuoteContext: React.createContext(null), MarkdownLinkActivationContext: React.createContext(null),
+    useWindowDimensions: () => ({ fontScale: 1 }),
     Platform: harnessPlatform, StyleSheet: { flatten: (style: unknown) => style },
     selectableTextVerticalOffset, MAX_FONT_SIZE_MULTIPLIER: 2, i18n,
     View: NativeView, Text, MarkdownSelectableText, ScrollView,

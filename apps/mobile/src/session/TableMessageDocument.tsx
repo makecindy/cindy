@@ -61,12 +61,10 @@ type LinkAction = { onPress?: () => void; onLongPress?: () => void };
 
 /** Android single-message text carrier. Its document has no network or URL bridge. */
 export function TableMessageDocument({ text, blocks, layout, streaming, selectable, codeCopyEnabled = true,
-  documentKey, initialHeight, onOpenSessionLink, onMeasured, onReadyChange, onFailure }: {
+  documentKey, initialHeight, onOpenSessionLink, onReadyChange, onFailure }: {
   text: string; blocks: readonly MobileMarkdownBlock[]; layout: MessageContentLayout;
   streaming?: boolean; selectable?: boolean; codeCopyEnabled?: boolean;
   documentKey: string; initialHeight?: number; onOpenSessionLink?: (url: string) => void;
-  /** Optional local diagnostics; not exposed to the document or persisted. */
-  onMeasured?: (height: number) => void;
   onReadyChange?: (ready: boolean) => void;
   onFailure?: () => void;
 }) {
@@ -121,7 +119,8 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
   const current = useRef({ mounted, revision, contentId, heightKey, width });
   current.current = { mounted, revision, contentId, heightKey, width };
   const isCurrentMount = () => generation.current.mounted && generation.current.value === mountGeneration;
-  const payload: Document = { revision, html: content.html, css: tableMessageCss(colors, scale, layout, StyleSheet.hairlineWidth),
+  const payload: Document = { revision, html: content.html,
+    css: tableMessageCss(colors, scale, layout, StyleSheet.hairlineWidth) + content.tableStyles,
     selectable: selectable === true && !streaming, links: displayStates };
   const latestPayload = useRef(payload); latestPayload.current = payload;
   const sessionLinkTitles = useMarkdownSessionLinkTitles(text);
@@ -219,7 +218,6 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
           setHeight(old => old === value.height ? old : value.height);
           setSlots(old => JSON.stringify(old) === JSON.stringify(nextSlots) ? old : nextSlots);
           runtime?.set(now.heightKey, JSON.stringify({ height: value.height, slots: nextSlots }));
-          onMeasured?.(value.height);
           onReadyChange?.(true);
         }} />
       {content.links.map(link => <TableLinkController key={`${contentId}:${link.id}`} link={link} streaming={streaming}
