@@ -866,8 +866,7 @@
         "loading": "方讀限額…",
         "unavailable": "此機之限額暫讀不得",
         "none": "此供方無限額資訊",
-        "offline": "此機不在線，讀不得限額",
-        "share": "他人分享之機不示限額"
+        "offline": "此機不在線，讀不得限額"
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之並行上限",

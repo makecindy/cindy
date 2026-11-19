@@ -882,8 +882,7 @@
         "loading": "A ler a quota…",
         "unavailable": "Não é possível ler a quota deste computador de momento",
         "none": "Este fornecedor não tem informações de quota",
-        "offline": "Este computador está offline, pelo que não é possível ler a sua quota",
-        "share": "A quota não é apresentada para computadores partilhados por outras pessoas"
+        "offline": "Este computador está offline, pelo que não é possível ler a sua quota"
       },
       "runningCount_one": "{{count}} tarefa em execução",
       "runningCount_other": "{{count}} tarefas em execução",

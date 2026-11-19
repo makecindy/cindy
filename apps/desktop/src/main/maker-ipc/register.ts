@@ -145,6 +145,7 @@ import {
   setProviderGroupLocalLoad,
   setProviderGroupClaudeUsageReader,
   setProviderGroupCodexUsageReader,
+  setProviderGroupShareQuotaReader,
   setProviderGroupSessionGroupReader,
   setProviderGroupSessionRebalance,
   setProviderGroupTurnProbe,
@@ -488,6 +489,7 @@ import { readGeneratedImageFile, MAX_GENERATED_IMAGE_BYTES } from '../cindy-medi
 import { createGeneratedImageDelivery } from '../cindy-media/generatedImageDelivery.js';
 import { authorizeSharedTaskHistory, liveSharedTaskTarget } from '../remote-agent/controller/providerShareTaskLocation.js';
 import { resolveRemoteAgentTarget } from '../device-link/providerShareGuest.js';
+import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
 import { setGeneratedImageRecovery } from '../cindy-media/generatedImageRecovery.js';
 import {
   getCurrentDbClientSnapshot,
@@ -6911,6 +6913,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setDeviceLinkRemoteClaudeSubscriptionUsageReader(readClaudeSubscriptionUsageSnapshotForDeviceLink);
   setProviderGroupClaudeUsageReader(readClaudeSubscriptionUsageSnapshotForDeviceLink);
   setProviderGroupCodexUsageReader(readCodexAccountUsageSnapshotWithWebRefresh, readCodexRateLimitsForHost);
+  // 分享来的组内电脑：只经该分享自己的授权读分享者开放的额度(provider-groups.md §5「分享边界」)。
+  setProviderGroupShareQuotaReader(readReceivedProviderShareQuota);
 
   // device-link 远程 set-* 持久化回流:effort/permission/fastMode/extraDirs 等
   // runtime-only handler 经这个注入写被控端 DB + 广播 patched。SET_MODEL 是例外:
