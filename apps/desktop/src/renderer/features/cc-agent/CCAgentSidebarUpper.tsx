@@ -160,7 +160,7 @@ import { useOrcaWorkerAttentionWatcher } from './hooks/useOrcaWorkerAttentionWat
 import { usePublishedAutomationScheduleSessionIndex } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
-import { useSidebarFilter, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
+import { useSidebarFilter, useSidebarFilterGc, type UseSidebarFilterReturn } from './hooks/useSidebarFilter';
 import { useHiddenProjects, type UseHiddenProjectsReturn } from './hooks/useHiddenProjects';
 import {
   deviceLinkProjectKey,
@@ -1835,20 +1835,9 @@ function ExpandedView({
     [collapse],
   );
 
-  /* ---- F-PJ-10: filter GC ----
-   * 等"至少 1 个 project 出现"再触发一次 filter.gc(activeWorkingDirs) 即可 ——
-   * 这一条件天然蕴含"sessions 已加载"。ref guard 保证只跑一次
-   * （ADR-6：避免循环依赖，GC 由编排层显式触发）。
-   */
-  const gcDoneRef = useRef(false);
-  useEffect(() => {
-    if (gcDoneRef.current) return;
-    if (projectUniverse.projects.length === 0) return;
-    // 用**全量**项目键 GC,不用机器过滤后的 activeWorkingDirs —— 否则某机器作用域下会把其它机器的
-    // 项目从已保存的项目过滤里误删(它们只是被隐藏、并非不存在)。
-    filter.gc(gcProjectKeys);
-    gcDoneRef.current = true;
-  }, [projectUniverse.projects.length, gcProjectKeys, filter]);
+  // GC uses the complete project catalogue for the current list mode, before
+  // machine/content filters, so temporarily hidden projects remain selected.
+  useSidebarFilterGc(taskListMode, gcProjectKeys, filter.gc);
 
   /* ---- F-PJ-10: 在 render 阶段把 filter.projects 应用到 ProjectNode 列表 ---- */
   // A teammate handed to another computer: its project here is hidden until it comes back.

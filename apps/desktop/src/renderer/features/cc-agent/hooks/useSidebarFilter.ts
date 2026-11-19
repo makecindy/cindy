@@ -21,7 +21,7 @@
  *   - localStorage key `cc-agent.sidebar.filter.projectOrder`
  *   - owner-scoped localStorage key derived from `cc-agent.sidebar.filter.manualProjectOrder`
  *
- * GC（mount 后由编排层在 sessions 首次加载完成时调用一次 `gc(activeWorkingDirs)`）：
+ * GC（由编排层在每种列表的项目集首次就绪时调用一次 `gc(activeWorkingDirs)`）：
  *   - 剔除 projects 数组中已不在 activeWorkingDirs 集合的条目
  *   - 剔除后空 → 自动回退到 'all'
  *
@@ -182,7 +182,7 @@ export interface UseSidebarFilterReturn {
   /** 切回 'all'（不取消勾选状态，是显式 reset）。 */
   setProjectsAll: () => void;
   /**
-   * 由编排层在 sessions 首次加载完成后调用一次（带去重 ref guard），
+   * 由编排层在每种列表的项目集首次就绪后调用一次（按列表去重），
    * 把 projects 数组里已不在 activeWorkingDirs 集合内的条目剔除。
    * 调用幂等。
    */
@@ -247,6 +247,20 @@ function useModeFilterState<T>(mode: TaskListMode, load: (mode: TaskListMode) =>
   const tasks = useState(() => load('tasks'));
   const inbox = useState(() => load('inbox'));
   return mode === 'inbox' ? inbox : tasks;
+}
+
+/** Run project-filter cleanup once each mode has a nonempty, unfiltered catalogue. */
+export function useSidebarFilterGc(
+  mode: TaskListMode,
+  activeProjectKeys: readonly string[],
+  gc: UseSidebarFilterReturn['gc'],
+): void {
+  const gcDoneRef = useRef<Record<TaskListMode, boolean>>({ tasks: false, inbox: false });
+  useEffect(() => {
+    if (gcDoneRef.current[mode] || activeProjectKeys.length === 0) return;
+    gc(activeProjectKeys);
+    gcDoneRef.current[mode] = true;
+  }, [mode, activeProjectKeys, gc]);
 }
 
 export function useSidebarFilter(
