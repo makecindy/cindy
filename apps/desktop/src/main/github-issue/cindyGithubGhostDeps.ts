@@ -3,7 +3,7 @@
  *
  * 提交路径(githubUserIssueSubmitter)与「我的 Issue」查询路径(myIssuesRuntime)共用
  * 同一份判定与同一条管子,保证两边看到的 GitHub 身份口径一致 —— 插件未装、未启用、
- * 当前 workdir 被停用或未配凭证时,两边都必须同样认为「不可用」。
+ * 当前 workdir 被停用或没有可用凭证来源时,两边都必须同样认为「不可用」。
  *
  * 独立成文件而不是放在 index.ts 里:index.ts 需要在提交成功后调 myIssuesRuntime
  * 让列表缓存失效,而 myIssuesRuntime 又需要这份 deps,放一起会形成循环 import。
@@ -11,8 +11,7 @@
 
 import { getGhostManager, getGhostPipeDispatcher } from '../cindy-brain';
 import { canUseGithubHostCredentials } from '../cindy-brain/GhostManager.js';
-import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
-import { ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost.js';
+import { type InstalledGhost } from '../../shared/ghost.js';
 import { findInstalledGhostByInstanceId, installedGhostStoragePart, resolveInstalledGhost } from '../../shared/pluginIdentity.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { createLogger } from '../logger.js';
@@ -70,18 +69,14 @@ function githubInstance(workdir?: string | null, instanceId?: string): Installed
 
 export function buildGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps {
   return {
-    resolveInstanceId: async (workdir, instanceId) => {
+    resolveInstanceId: (workdir, instanceId) => {
       const ghost = githubInstance(workdir, instanceId);
       if (!ghost) return null;
       const key = installedGhostStoragePart(ghost);
-      const approval = ghostInstallApprovalToken(ghost.approval);
-      if (ghostSecretSaved(key, CINDY_GITHUB_SECRET_KEY)) return key;
-      if (!canUseGithubHostCredentials(ghost) ||
-          !await getSharedGhCliTokenSource().probeAvailability()) return null;
-      // Login probing yields. Do not dispatch if the install or its directory policy changed meanwhile.
-      const current = githubInstance(workdir, key);
-      return current && installedGhostStoragePart(current) === key && current.dir === ghost.dir &&
-        ghostInstallApprovalToken(current.approval) === approval ? key : null;
+      // Host eligibility is local policy, not a short network health check. The real
+      // identity/tool request validates authentication within its existing timeout.
+      return ghostSecretSaved(key, CINDY_GITHUB_SECRET_KEY) || canUseGithubHostCredentials(ghost)
+        ? key : null;
     },
     callGhostTool: (request) => getGhostPipeDispatcher().callGhostTool(request),
     logger: log,

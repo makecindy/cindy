@@ -28,10 +28,12 @@ import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { createLogger } from '../logger.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { serverApiFetch } from '../serverApiClient.desktop';
+import { ghostSecretSaved } from '../secrets/providerSecretStore';
 import { getSharedGithubUserSubmitterDeps } from './cindyGithubGhostDeps.js';
 import { parseIssuePage } from './githubIssuePayload.js';
 import {
   callCindyGithubOperation,
+  CINDY_GITHUB_SECRET_KEY,
   type GithubUserIssueSubmitterDeps,
 } from './githubUserIssueSubmitter.js';
 import {
@@ -145,18 +147,18 @@ function mapPlatformFailure(err: unknown): MyIssuesDegradedReason {
  * 区分:凭据过期 / 被撤销 / 通道超时 / GitHub 限流时,用户直接在 GitHub 提的那些 issue
  * 静静消失,页面一个字都不说,而缩水的结果还照样覆盖了完整快照。
  *
- * 判据为同一批准实例上的 PAT 存在或已声明且可用的 Host 登录；装了插件但
- * 从未授权的用户不进入此分支。gh CLI 的独立兜底仍以 token 是否存在判定。
+ * 实例允许使用 Host 登录只表示可以尝试，不证明用户已登录。失败提示仍以
+ * 同一批准实例上的 PAT 存在或 gh CLI token 存在判定；两者都没有时静默返回 null。
  */
 async function resolveGithubEnhancement(): Promise<GithubEnhancementViewer | null> {
   const ghostDeps = getSharedGithubUserSubmitterDeps();
   // workdir 传 null:/issues 是全局页面,没有会话工作目录上下文。
   const instanceId = await ghostDeps.resolveInstanceId(null);
-  const ghostConfigured = instanceId !== null;
-  if (ghostConfigured) {
-    const login = await readGhostViewerLogin(ghostDeps, instanceId!);
+  const ghostConfigured = instanceId !== null && ghostSecretSaved(instanceId, CINDY_GITHUB_SECRET_KEY);
+  if (instanceId !== null) {
+    const login = await readGhostViewerLogin(ghostDeps, instanceId);
     // 插件问不出身份时不直接判死:gh CLI 可能有权限,下面照常再试一次。
-    if (login) return { source: 'ghost', login, instanceId: instanceId! };
+    if (login) return { source: 'ghost', login, instanceId };
   }
 
   const token = await getSharedGhCliTokenSource().readToken();

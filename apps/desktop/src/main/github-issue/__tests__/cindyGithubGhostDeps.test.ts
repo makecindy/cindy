@@ -3,6 +3,7 @@
  * Pure submitter tests inject readiness and missed physical root PAT keys / CLI-only login.
  * Minimum failure: only the root instance has a saved PAT, or approved gh-cli with no PAT.
  * unit: in-memory installation/secret/dispatcher ports; no real credentials, CLI or network.
+ * Short health-probe failure must not block a valid identity response within its real timeout.
  * Same fixture also protects legacy installs, instance isolation and revoked permissions.
  */
 import path from 'node:path';
@@ -16,6 +17,7 @@ const h = vi.hoisted(() => ({
   saved: new Set<string>(),
   disabled: new Set<string>(),
   probe: vi.fn(async () => false),
+  readToken: vi.fn(async (): Promise<string | null> => null),
   dispatch: vi.fn(),
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
@@ -34,11 +36,19 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   ghostSecretSaved: (id: string, key: string) => key === 'github_pat' && h.saved.has(id),
 }));
 vi.mock('../../git-context/ghCliTokenSource.js', () => ({
-  getSharedGhCliTokenSource: () => ({ probeAvailability: h.probe }),
+  getSharedGhCliTokenSource: () => ({ probeAvailability: h.probe, readToken: h.readToken }),
 }));
+vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyAccountServices: false }) }));
+vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'synthetic-owner' }));
+vi.mock('../../clientEndpointsService', () => ({ getClientEndpoint: vi.fn() }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../../serverApiClient.desktop', () => ({ serverApiFetch: vi.fn() }));
+vi.mock('../submittedIssueLedger.js', () => ({ listSubmittedIssues: () => [] }));
+vi.mock('../myIssuesSnapshotStore.js', () => ({ readMyIssuesSnapshot: () => null, writeMyIssuesSnapshot: vi.fn() }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), debug: vi.fn(), child: () => ({}) }) }));
 
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { getMyIssuesService } from '../myIssuesRuntime.js';
 import { buildGithubUserSubmitterDeps } from '../cindyGithubGhostDeps.js';
 import {
   PLATFORM_ISSUE_SUBMISSION_IDENTITY,
@@ -68,6 +78,7 @@ beforeEach(() => {
   h.saved.clear();
   h.disabled.clear();
   h.probe.mockResolvedValue(false);
+  h.readToken.mockResolvedValue(null);
   h.dispatch.mockResolvedValue({ ok: true, result: { data: { login: 'synthetic-user' } } });
 });
 
@@ -89,6 +100,23 @@ describe('GitHub identity wiring', () => {
     h.probe.mockResolvedValue(true);
     await expect(resolveGithubIssueSubmissionChoices(buildGithubUserSubmitterDeps())).resolves.toEqual(personal);
     expect(h.dispatch).toHaveBeenCalledWith(expect.objectContaining({ ghostId: '_root__cindy-github' }));
+  });
+
+  it('offers valid CLI identity after one second even when the short network probe fails', async () => {
+    vi.useFakeTimers();
+    try {
+      h.probe.mockResolvedValue(false);
+      h.dispatch.mockImplementationOnce(() => new Promise(resolve => {
+        setTimeout(() => resolve({ ok: true, result: { data: { login: 'synthetic-user' } } }), 1000);
+      }));
+      const choices = resolveGithubIssueSubmissionChoices(buildGithubUserSubmitterDeps(), '/repo');
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(choices).resolves.toEqual(personal);
+      expect(h.probe).not.toHaveBeenCalled();
+      expect(h.dispatch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(['_root__cindy-github', 'cindy-github'])('workdir disabled by %s never probes or dispatches', async (key) => {
@@ -124,9 +152,21 @@ describe('GitHub identity wiring', () => {
   });
 
   it('no saved PAT or host login remains a normal platform-only choice', async () => {
+    h.dispatch.mockResolvedValue({ ok: false, errorCode: 'AUTH_REQUIRED', message: 'No login' });
     await expect(resolveGithubIssueSubmissionChoices(buildGithubUserSubmitterDeps())).resolves.toEqual(platformOnly);
-    expect(h.dispatch).not.toHaveBeenCalled();
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+    expect(h.probe).not.toHaveBeenCalled();
   });
+  it.each([false, true])('My Issues distinguishes absent credentials from a saved but failing PAT (saved=%s)', async (saved) => {
+    if (saved) h.saved.add('_root__cindy-github');
+    h.dispatch.mockResolvedValue({ ok: false, errorCode: 'AUTH_REQUIRED', message: 'No login' });
+    const result = await getMyIssuesService().list({ force: true });
+    expect(result.githubEnhancement).toBeNull();
+    expect(result.githubEnhancementFailed).toBe(saved);
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+    expect(h.probe).not.toHaveBeenCalled();
+  });
+
   it('My Issues readiness and search share the root installation', async () => {
     h.saved.add('_root__cindy-github');
     const deps = buildGithubUserSubmitterDeps();
@@ -154,17 +194,8 @@ describe('GitHub identity wiring', () => {
     expect(h.dispatch).not.toHaveBeenCalled();
   });
 
-  it('revoking directory access while host login is probed prevents dispatch', async () => {
-    h.probe.mockImplementationOnce(async () => {
-      h.disabled.add('_root__cindy-github');
-      return true;
-    });
-    await expect(resolveGithubIssueSubmissionChoices(buildGithubUserSubmitterDeps(), '/repo')).resolves.toEqual(platformOnly);
-    expect(h.dispatch).not.toHaveBeenCalled();
-  });
-
-  it('rechecks directory access before create after a successful identity response', async () => {
-    h.saved.add('_root__cindy-github');
+  it.each(['PAT', 'CLI'])('rechecks directory access before create after a successful %s identity response', async (source) => {
+    if (source === 'PAT') h.saved.add('_root__cindy-github');
     h.dispatch.mockImplementationOnce(async () => {
       h.disabled.add('_root__cindy-github');
       return { ok: true, result: { data: { login: 'synthetic-user' } } };
