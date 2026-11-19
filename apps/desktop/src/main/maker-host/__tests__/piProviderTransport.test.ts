@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { classifyCodexError } from '../../../../../../packages/maker-core/src/agents/codex/translator.js';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
 import { SseTranslator } from '@cindy/anthropic-responses-bridge';
 import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison, parseModelsListResponse, mergeDiscoveredRuntimeModels } from '@cindy/model-providers';
@@ -684,6 +685,57 @@ describe('native provider failure diagnostics', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  // #8974, unit: real Pi SDK -> Responses SSE -> Codex classifier. Existing
+  // status-only tests cannot detect lost safe reasons; only exact structured
+  // context codes qualify, never arbitrary provider prose or a generic 400.
+  it.each([
+    { code: 'context_length_exceeded', type: 'invalid_request_error' },
+    { type: 'context_length_exceeded' },
+  ])('preserves explicit context rejection without forwarding private text: %j', async error => {
+    const fetchImpl = vi.fn(async () => {
+      const bytes = Buffer.from(JSON.stringify({ error: {
+        ...error, message: 'secret-fixture-key private prompt /Users/private/source.ts',
+      } }));
+      // Network chunks may split the enum; an empty chunk must not affect parsing.
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        controller.enqueue(bytes.subarray(0, 25));
+        controller.enqueue(new Uint8Array());
+        controller.enqueue(bytes.subarray(25));
+        controller.close();
+      } });
+      return new Response(body, { status: 400, headers: { 'content-type': 'application/json' } });
+    });
+    const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl });
+    const text = await (await send('https://unused.invalid', request())).text();
+    const events = text.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+    const failure = events.find(event => event.type === 'response.failed');
+    expect(failure).toBeTruthy();
+    expect(classifyCodexError({ message: failure.response.error.message }).reason).toBe('context-overflow');
+    expect(text).toContain('HTTP 400');
+    const claude = new SseTranslator(row.id);
+    const claudeEvents = events.flatMap(event => claude.push(event));
+    const claudeError = claudeEvents.find(event => event.event === 'error');
+    expect(claudeError?.data.error).toMatchObject({ message: expect.stringContaining('context_length_exceeded') });
+    expect(JSON.stringify(claudeEvents)).not.toMatch(/secret-fixture-key|private prompt|Users\/private/);
+    expect(text).not.toMatch(/secret-fixture-key|private prompt|Users\/private/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    JSON.stringify({ error: { type: 'invalid_request_error', message: 'context_length_exceeded private prompt' } }),
+    JSON.stringify({ error: { code: 'secret-fixture-key', type: 'private_type', message: 'private prompt' } }),
+    JSON.stringify({ error: [{ code: 'context_length_exceeded' }] }),
+    '{"error":{"code":"context_length_exceeded"},"private":"' + 'x'.repeat(NATIVE_ADAPTER_ERROR_BODY_LIMIT) + '"}',
+    '{"error":{"code":"context_length_exceeded"}',
+  ])('keeps unproven or incomplete rejection reasons generic (%#)', async body => {
+    const fetchImpl = vi.fn(async () => new Response(body, { status: 400, headers: { 'content-type': 'application/json' } }));
+    const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl });
+    const text = await (await send('https://unused.invalid', request())).text();
+    expect(text).toContain('category=request_rejected');
+    expect(text).not.toMatch(/context_length_exceeded|secret-fixture-key|private_type|private prompt/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps unknown transport failures unknown and allows a later request to succeed', async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockRejectedValueOnce(new Error('secret-fixture-key https://private.invalid/credential'))
@@ -711,16 +763,17 @@ describe('native provider failure diagnostics', () => {
     expect(text).not.toContain('invalid-json');
   });
 
-  it('does not reuse HTTP failure status from an earlier request', async () => {
+  it.each([401, 400])('does not reuse HTTP %s status or reason from an earlier request', async status => {
     const fetchImpl = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response('{}', { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'context_length_exceeded' } }), { status }))
       .mockRejectedValueOnce(new Error('fixture transport failure'));
     const send = createPiProviderFetch({ row, providerId: 'together', apiKey: 'fixture-key', fetchImpl });
     const first = await (await send('https://unused.invalid', request())).text();
     const second = await (await send('https://unused.invalid', request())).text();
-    expect(first).toContain('HTTP 401');
+    expect(first).toContain(`HTTP ${status}`);
+    expect(first.includes('context_length_exceeded')).toBe(status === 400);
     expect(second).toContain('category=unknown');
-    expect(second).not.toContain('HTTP 401');
+    expect(second).not.toMatch(/HTTP 40[01]|context_length_exceeded/);
   });
 });
 
