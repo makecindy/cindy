@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DeviceLinkError, providerShareHostPeer, REMOTE_AGENT_CHANNEL } from '@cindy/device-link';
+import { createResponsivenessTracker } from '../../main/device-link/responsivenessTracker';
+import { ensureInvokeLinkReady } from '../../main/device-link/linkRecovery';
 import { canRecoverUndeliveredOrcaReport, probeSharedTask, sharedTaskFailureReason, sharedTaskRecoveryError } from '../sharedTaskRecovery.js';
 
 // Unit: the actual probe runner must survive a short outage without repeating
@@ -36,24 +39,68 @@ describe('shared task report preparation recovery', () => {
     expect(read).toHaveBeenCalledTimes(calls);
   });
 
-  // #11595 review regression (unit): probeSharedTask must return the original
-  // executor after a full breaker cycle. The earlier outage matrix omitted an
-  // already-running 30s probe before the 120s cooldown, a 5s tick and a second
-  // 30s probe. Fake time exercises this boundary without network or real waits.
-  it('survives an in-flight breaker probe followed by cooldown and recovery', async () => {
+  // #11595 review regression (unit): compose the real retry runner, breaker and
+  // pre-invoke link recovery. The previous single-RPC approximation omitted
+  // serial link/caps budgets, including readiness, admission and first write.
+  // In-memory ports and fake time cover the whole cycle without network/I/O.
+  it.each([
+    { name: 'two serial RPCs', linkWaits: [30_000], capsWaits: [30_000] },
+    { name: 'readiness, admission and first write', linkWaits: [1_500, 29_999, 29_999], capsWaits: [29_999, 9_999, 29_999] },
+  ])('survives a complete breaker cycle with $name', async ({ linkWaits, capsWaits }) => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
-    const started = performance.now();
-    const read = vi.fn(async () => {
-      const elapsed = performance.now() - started;
-      if (elapsed === 0) await new Promise<void>(resolve => setTimeout(resolve, 30_000));
-      if (elapsed < 185_000) throw { code: 'DEVICE_UNRESPONSIVE' };
-      return 'original-executor';
+    const peer = providerShareHostPeer('shared', 'executor-m');
+    let offset = 0, warming = true, linkReady = false, probes = 0;
+    const delay = async (waits: number[]) => {
+      for (const ms of waits) await new Promise<void>(resolve => setTimeout(resolve, ms));
+    };
+    const timeout = () => new DeviceLinkError('INVOKE_TIMEOUT', 'probe timed out');
+    const tracker = createResponsivenessTracker({
+      now: () => offset + performance.now(),
+      isProbeEligible: () => true,
+      onUnresponsiveChanged: () => {},
+      probeInvoke: async () => {
+        if (warming) throw timeout();
+        probes++;
+        await ensureInvokeLinkReady(() => !linkReady, async () => {
+          await delay(linkWaits);
+          linkReady = true;
+        }, () => {});
+        await delay(capsWaits);
+        if (probes === 1) { linkReady = false; throw timeout(); }
+        return 'caps';
+      },
     });
-    const result = probeSharedTask('executor', read, () => {})
+    for (let i = 0; i < 3; i++)
+      await expect(tracker.guardInvoke(peer, REMOTE_AGENT_CHANNEL, async () => { throw timeout(); }))
+        .rejects.toThrow('probe timed out');
+    // Exercise the real exponential breaker up to its 120s cooldown.
+    for (const cooldown of [10_000, 20_000, 40_000, 80_000]) {
+      offset += cooldown;
+      tracker.probeTick();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    offset += 120_000;
+    warming = false;
+    tracker.probeTick(); // Already in flight when this task starts waiting.
+    const result = probeSharedTask('capability', () => tracker.guardInvoke(peer, REMOTE_AGENT_CHANNEL,
+      async () => 'original-executor'), () => {})
       .then(value => ({ value }), error => ({ error }));
-    await vi.advanceTimersByTimeAsync(210_000);
-    await expect(result).resolves.toEqual({ value: 'original-executor' });
+    // Offset the 5s tick to exercise the cooldown's final partial tick.
+    await vi.advanceTimersByTimeAsync(4_999);
+    const tick = setInterval(() => tracker.probeTick(), 5_000);
+    try {
+      await expect(tracker.guardInvoke('other-peer', REMOTE_AGENT_CHANNEL, async () => 'healthy'))
+        .resolves.toBe('healthy');
+      await vi.advanceTimersByTimeAsync(413_000 - 4_999);
+      await expect(result).resolves.toEqual({ value: 'original-executor' });
+      expect(probes).toBe(2);
+      expect(tracker.isUnresponsive(peer)).toBe(false);
+      expect(tracker.isUnresponsive('other-peer')).toBe(false);
+    } finally {
+      clearInterval(tick);
+      tracker.resetAll();
+    }
   });
 
   // #11595 (unit): fast breaker rejections plus extreme jitter used to exhaust
@@ -66,15 +113,15 @@ describe('shared task report preparation recovery', () => {
     const attempts: number[] = [];
     const read = vi.fn(async () => {
       attempts.push(performance.now() - started);
-      if (performance.now() - started < 210_000) throw { code: 'DEVICE_UNRESPONSIVE' };
+      if (performance.now() - started < 413_000) throw { code: 'DEVICE_UNRESPONSIVE' };
       return 'original-executor';
     });
     const result = probeSharedTask('executor', read, () => {})
       .then(value => ({ value }), error => ({ error }));
-    await vi.advanceTimersByTimeAsync(210_000);
+    await vi.advanceTimersByTimeAsync(413_000);
     await expect(result).resolves.toEqual({ value: 'original-executor' });
-    expect(attempts.at(-1)).toBe(210_000);
-    expect(attempts.length).toBeLessThanOrEqual(21);
+    expect(attempts.at(-1)).toBe(413_000);
+    expect(attempts.length).toBeLessThanOrEqual(35);
   });
 
   it('cancels a delayed probe before another remote request', async () => {
@@ -96,9 +143,9 @@ describe('shared task report preparation recovery', () => {
     const read = vi.fn().mockRejectedValue({ code: 'TIMEOUT' });
     const rejected = expect(probeSharedTask('capability', read, () => {}))
       .rejects.toThrow('[SHARED_TASK_RECOVERY_timeout] [SHARED_TASK_STAGE_capability]');
-    await vi.advanceTimersByTimeAsync(240_000);
+    await vi.advanceTimersByTimeAsync(500_000);
     await rejected;
-    expect(read).toHaveBeenCalledTimes(16);
+    expect(read).toHaveBeenCalledTimes(27);
   });
 
   it('bounds slow failed probes by elapsed time as well as attempt count', async () => {
@@ -110,9 +157,9 @@ describe('shared task report preparation recovery', () => {
     });
     const rejected = expect(probeSharedTask('capability', read, () => {}))
       .rejects.toThrow('[SHARED_TASK_RECOVERY_timeout]');
-    await vi.advanceTimersByTimeAsync(240_000);
+    await vi.advanceTimersByTimeAsync(500_000);
     await rejected;
-    expect(read).toHaveBeenCalledTimes(7);
+    expect(read).toHaveBeenCalledTimes(11);
   });
 
   it('ends backoff immediately on cancellation without another probe or a leftover timer', async () => {
@@ -137,7 +184,7 @@ describe('shared task report preparation recovery', () => {
     const rejected = expect(probeSharedTask('executor', read, () => {})).rejects.toThrow('[SHARED_TASK_RECOVERY_timeout]');
     await vi.advanceTimersByTimeAsync(0);
     expect(read).toHaveBeenCalledTimes(2);
-    now.mockReturnValue(210_001);
+    now.mockReturnValue(413_001);
     await vi.advanceTimersByTimeAsync(2_000);
     await rejected;
     expect(read).toHaveBeenCalledTimes(2);

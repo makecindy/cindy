@@ -119,9 +119,18 @@ export async function probeSharedTask<T>(
   assertCurrent: () => void,
   signal?: AbortSignal,
 ): Promise<T> {
-  // Cover an already-running 30s probe, the 120s cooldown, a 5s tick and
-  // another 30s probe, with 25s slack. Never bypass the shared breaker.
-  const deadline = performance.now() + BREAKER_PROBE_BACKOFF_MAX_MS + 90_000;
+  // Desktop's breaker probe serially restores the link, then invokes caps.
+  // Default link budget: 1.5s ready + 30s first write + 30s response;
+  // caps: 30s admission + 10s first write + 30s response (DeviceLinkClient).
+  // Cover one in-flight composite probe, cooldown, tick and another probe.
+  const compositeProbeMs = 1_500 + 30_000 + 30_000 + 30_000 + 10_000 + 30_000;
+  const windowMs = 2 * compositeProbeMs + BREAKER_PROBE_BACKOFF_MAX_MS + 5_000 + 25_000;
+  const deadline = performance.now() + windowMs;
+  const maxDelayMs = 20_000;
+  const minJitter = 0.75;
+  // One immediate and five ramp retries, then the shortest capped delay.
+  // Derive the count from the window so it cannot cut the window short.
+  const retryLimit = 6 + Math.ceil(windowMs / (maxDelayMs * minJitter));
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
     assertCurrent();
@@ -134,11 +143,11 @@ export async function probeSharedTask<T>(
       signal?.throwIfAborted();
       assertCurrent();
       const remaining = deadline - performance.now();
-      if (attempt < 20 && remaining > 0 && canRetrySharedTaskRecovery(error)) {
-        const base = attempt === 0 ? 0 : Math.min(1_000 * 2 ** (attempt - 1), 20_000);
+      if (attempt < retryLimit && remaining > 0 && canRetrySharedTaskRecovery(error)) {
+        const base = attempt === 0 ? 0 : Math.min(1_000 * 2 ** (attempt - 1), maxDelayMs);
         // Keep a final probe at the deadline instead of abandoning the last
-        // partial delay. Twenty retries cover the window even at minimum jitter.
-        const delay = Math.min(Math.round(base * (0.75 + Math.random() * 0.5)), 20_000, remaining);
+        // partial delay. Never bypass the shared breaker's single-flight slot.
+        const delay = Math.min(Math.round(base * (minJitter + Math.random() * 0.5)), maxDelayMs, remaining);
         if (delay) await new Promise<void>((resolve, reject) => {
           const finish = () => {
             signal?.removeEventListener('abort', abort);
