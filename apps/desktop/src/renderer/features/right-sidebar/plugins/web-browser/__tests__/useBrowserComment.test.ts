@@ -57,7 +57,7 @@ interface MockWebview {
   value: WebviewTag;
   send: ReturnType<typeof vi.fn>;
   dispatchIpc: (channel: string, ...args: unknown[]) => void;
-  dispatch: (type: string) => void;
+  dispatch: (type: string, event?: object) => void;
   listenerCount: (type: string) => number;
 }
 
@@ -85,8 +85,8 @@ function makeWebview(
         listener({ channel, args });
       }
     },
-    dispatch: (type) => {
-      for (const listener of listeners.get(type) ?? []) listener({});
+    dispatch: (type, event = {}) => {
+      for (const listener of listeners.get(type) ?? []) listener(event);
     },
     listenerCount: (type) => listeners.get(type)?.size ?? 0,
   };
@@ -763,31 +763,96 @@ describe('useBrowserComment', () => {
     expect(toastMocks.error).not.toHaveBeenCalled();
   });
 
-  it('exits on navigation and ignores the old generation afterwards', async () => {
-    const webview = makeWebview();
-    let result: UseBrowserCommentResult | null = null;
-    render(
-      createElement(HookProbe, {
+  it.each(['did-navigate', 'did-navigate-in-page'])(
+    'exits on main-frame %s and ignores the old generation afterwards',
+    async (eventName) => {
+      const webview = makeWebview();
+      let result: UseBrowserCommentResult | null = null;
+      render(
+        createElement(HookProbe, {
+          webview: webview.value,
+          onResult: (next) => {
+            result = next;
+          },
+        }),
+      );
+      await enterSelecting(webview, () => result!);
+      act(() =>
+        result!.updateEditorDraft({
+          text: 'Recover after navigation',
+          styleEdits: {},
+          textEdit: null,
+        }),
+      );
+
+      act(() => webview.dispatch(eventName, { isMainFrame: true }));
+
+      expect(result!.mode).toBe('off');
+      expect(result!.editorDraft.text).toBe('Recover after navigation');
+      act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
+      expect(result!.pendingTarget).toBeNull();
+    },
+  );
+
+  it.each(['did-navigate', 'did-navigate-in-page'])(
+    'stays off after main-frame %s races the enter acknowledgement',
+    async (eventName) => {
+      const webview = makeWebview();
+      let result: UseBrowserCommentResult | null = null;
+      render(createElement(HookProbe, {
         webview: webview.value,
-        onResult: (next) => {
-          result = next;
-        },
-      }),
-    );
-    await enterSelecting(webview, () => result!);
-    act(() =>
-      result!.updateEditorDraft({
-        text: 'Recover after navigation',
-        styleEdits: {},
-        textEdit: null,
-      }),
-    );
+        onResult: (next) => { result = next; },
+      }));
+      act(() => result!.toggle());
+      const { command, envelope } = lastCommand(webview);
+      expect(result!.mode).toBe('starting');
+      act(() => webview.dispatch(eventName, { isMainFrame: true }));
+      await act(async () => webview.dispatchIpc(BROWSER_COMMENT_COMMAND_RESULT_CHANNEL, {
+        requestId: envelope.requestId, command, ok: true,
+      }));
+      expect(result!.mode).toBe('off');
+      act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
+      expect(result!.pendingTarget).toBeNull();
+    },
+  );
 
-    act(() => webview.dispatch('did-navigate'));
-
-    expect(result!.mode).toBe('off');
-    expect(result!.editorDraft.text).toBe('Recover after navigation');
-    act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
-    expect(result!.pendingTarget).toBeNull();
-  });
+  // #9639: a child hash navigation must not invalidate the main document's
+  // selection generation or pending editor. Unit tier; real Electron event
+  // provenance is checked separately because jsdom has no WebView navigation.
+  it.each(['starting', 'selecting', 'pending'] as const)(
+    'keeps %s comments usable across child-frame navigation', async (phase) => {
+      const webview = makeWebview();
+      let result: UseBrowserCommentResult | null = null;
+      render(createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => { result = next; },
+      }));
+      act(() => result!.toggle());
+      if (phase !== 'starting') await acknowledgeLastCommand(webview);
+      if (phase === 'pending') {
+        act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
+        act(() => result!.updateEditorDraft({
+          text: 'Keep editing across child navigation', styleEdits: {}, textEdit: null,
+        }));
+      }
+      const sendsBeforeNavigation = webview.send.mock.calls.length;
+      act(() => webview.dispatch('did-navigate-in-page', {
+        isMainFrame: false, url: 'https://example.com/child#tick',
+      }));
+      expect(result!.mode).toBe(phase);
+      expect(webview.send).toHaveBeenCalledTimes(sendsBeforeNavigation);
+      if (phase === 'starting') await acknowledgeLastCommand(webview);
+      if (phase !== 'pending') {
+        act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
+      } else {
+        expect(result!.editorDraft.text).toBe('Keep editing across child navigation');
+      }
+      expect(result!.mode).toBe('pending');
+      expect(result!.pendingTarget).toEqual(TARGET);
+      act(() => result!.cancelPending());
+      await acknowledgeLastCommand(webview);
+      expect(result!.mode).toBe('selecting');
+      expect(result!.pendingTarget).toBeNull();
+    },
+  );
 });

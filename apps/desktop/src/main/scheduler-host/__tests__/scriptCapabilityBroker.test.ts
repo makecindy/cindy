@@ -804,7 +804,8 @@ describe('SchedulerScriptCapabilityBroker', () => {
         effort: 'high',
         fastMode: true,
         workingDir: 'C:\\project',
-        workspaceKind: 'project',
+        workspaceKind: 'dialogue',
+        projectDir: null,
         permissionMode: 'bypassPermissions',
       },
     });

@@ -1591,6 +1591,8 @@ export function createActiveStripTransform(opts: {
   /** 对已标记 thread 主动剥离用的函数(与对应 recovery rule 的 strip 一致)。 */
   strip: (rawBody: Buffer) => Buffer | null;
   threadIdHeaders?: readonly string[];
+  /** Capability rejections apply only to the actual upstream that rejected them. */
+  scopeByUpstream?: boolean;
 }): RequestTransform {
   const threadIdHeaders = opts.threadIdHeaders ?? DEFAULT_THREAD_ID_HEADERS;
   return (body: unknown, ctx: RequestTransformCtx): unknown | null => {
@@ -1600,7 +1602,7 @@ export function createActiveStripTransform(opts: {
     const threadId = selectedHeaderValue(ctx.headers, threadIdHeaders);
     const model = body.model;
     if (!threadId || typeof model !== 'string' || model.length === 0) return null;
-    opts.controller.reconcile(threadId, model);
+    opts.controller.reconcile(threadId, model, opts.scopeByUpstream ? ctx.upstreamBase : undefined);
     if (!opts.controller.shouldStrip(threadId)) return null;
 
     const stripped = opts.strip(Buffer.from(JSON.stringify(body), 'utf8'));
@@ -1733,6 +1735,44 @@ export function createResponsesReasoningContentRecoveryRule(opts: {
     strip: stripResponsesReasoningContentFromBody,
     // Raw reasoning is valid on its original provider. Neither apply this rule
     // on unrelated errors nor let broad encrypted strips remove valid GPT state.
+    applyOnUnmatchedRetry: false,
+    allowExtraRules: false,
+    onRetry: opts.onRetry,
+  };
+}
+
+/**
+ * Repair replayed tool audio only after the target rejects audio input (#11278).
+ * Tool arguments, string outputs, user attachments and other media are opaque:
+ * never recursively search them or rewrite the native transcript.
+ */
+export function stripResponsesToolAudioFromBody(rawBody: Buffer): Buffer | null {
+  let body: unknown;
+  try { body = JSON.parse(rawBody.toString('utf8')); } catch { return null; }
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return null;
+  let changed = false;
+  for (const item of body.input) {
+    if (!isPlainObject(item)
+      || (item.type !== 'custom_tool_call_output' && item.type !== 'function_call_output')
+      || !Array.isArray(item.output)) continue;
+    item.output = item.output.map((part: unknown) => {
+      if (!isPlainObject(part) || part.type !== 'input_audio') return part;
+      changed = true;
+      return { type: 'input_text', text: '[Audio omitted: this model does not accept audio input.]' };
+    });
+  }
+  return changed ? Buffer.from(JSON.stringify(body), 'utf8') : null;
+}
+
+export function createResponsesToolAudioRecoveryRule(opts: {
+  onRetry?: RecoveryRule['onRetry'];
+} = {}): RecoveryRule {
+  return {
+    id: 'responses_tool_audio',
+    enabled: () => true,
+    matches: text => /\bAudio input is not available\./i.test(text),
+    strip: stripResponsesToolAudioFromBody,
+    useUpstreamModel: true,
     applyOnUnmatchedRetry: false,
     allowExtraRules: false,
     onRetry: opts.onRetry,

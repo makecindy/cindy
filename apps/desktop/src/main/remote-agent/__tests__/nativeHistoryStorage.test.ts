@@ -72,6 +72,12 @@ it('relocates the Pi header while preserving history and refusing source paths o
   await expect(storage.locate('pi', file)).rejects.toThrow('NATIVE_HISTORY_INVALID_ID');
   const restored = await storage.restore(file, manifest, '/target/project', () => {});
   expect(await storage.locate('pi', restored)).toEqual({ file: await fs.realpath(restored) });
+  // A live backup must read only the sessions directory, even for a .jsonl
+  // configuration artifact inside the same Pi home.
+  const outsideSessions = path.join(mocks.root, 'pi-agent-home', 'config-fixture.jsonl');
+  await fs.writeFile(outsideSessions, '{"synthetic":true}\n');
+  await expect(storage.locate('pi', outsideSessions, true)).rejects.toThrow('NATIVE_HISTORY_INVALID_ID');
+  expect(await storage.locate('pi', restored, true)).toEqual({ file: await fs.realpath(restored) });
   const written = await fs.readFile(restored, 'utf8');
   const header = JSON.parse(written.split('\n')[0]);
   expect(header).toEqual({ type: 'session', id: expect.any(String), cwd: '/target/project' });

@@ -62,6 +62,7 @@ import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { shouldLabelRegion } from '../../../shared/regionCode';
 import { LEGAL_LINKS } from '../../../shared/legalLinks';
 import { resolveIdentifierMethod } from '../../../shared/loginIdentifierMethod';
+import { hostStartFailureMessageKeys } from '../../../shared/hostStartFailure';
 import {
   ACCOUNT_LIST,
   DRAG_BAR_HEIGHT,
@@ -132,6 +133,7 @@ export function LoginPage({
     retryAt,
     loginState,
     credentialStoreUnavailable = false,
+    hostUnavailableReason = null,
     hasAccountDeletionReceipt = false,
     getAccountDeletionStatus,
     clearAccountDeletionReceipt,
@@ -142,6 +144,9 @@ export function LoginPage({
   } = useLogin({ autoLoad: intent !== 'add-account' });
   const { t, i18n } = useTranslation();
   const [credentialHelpOpen, setCredentialHelpOpen] = useState(false);
+  // Client mode: the Host serving this window did not start. The window shows why and offers no sign-in or
+  // skip sign-in of its own (Main refuses both too, authManager.ts hostNotStartedInClientMode).
+  const hostNotStarted = hostUnavailableReason !== null;
   const credentialStoreFailed =
     credentialStoreUnavailable ||
     errorCode === 'CREDENTIAL_STORE_UNAVAILABLE' ||
@@ -199,6 +204,7 @@ export function LoginPage({
    */
   const openLocalMode = async () => {
     if (
+      hostNotStarted ||
       credentialStoreFailed ||
       (isLoading && !canLeaveProviderLoad) ||
       localModePendingRef.current ||
@@ -372,7 +378,7 @@ export function LoginPage({
   // 「跳过登录」常驻入口在面板内(identifier 视图 SKIP_ENTRY 文字链);footer 仅保留
   // 准备态、离线入口和 error 步的逃生入口，不依赖登录服务恢复。
   const showLocalModeFooter =
-    !isAddAccount && enterLocalMode !== null && canLeaveProviderLoad && !credentialStoreFailed;
+    !isAddAccount && enterLocalMode !== null && canLeaveProviderLoad && !credentialStoreFailed && !hostNotStarted;
   // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
   // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
   // 与迁移前 main 口径一致(该两步由品牌 overlay/跳转态接管)。
@@ -1294,6 +1300,31 @@ export function LoginPage({
       if (isAddAccount && onClose) onClose();
       else void dispatch({ type: 'back' });
     };
+    if (hostUnavailableReason !== null) {
+      const keys = hostStartFailureMessageKeys(hostUnavailableReason);
+      return {
+        ssoOrgGroupY: false,
+        node: (
+          <LoginPanel testId="login-panel-host-unavailable">
+            <LoginTitleBlock
+              subtitleMaxLines={6}
+              title={t('login.hostUnavailable.title')}
+              subtitle={
+                <>
+                  {t(keys.body)}
+                  {keys.action && (
+                    <>
+                      <br />
+                      {t(keys.action)}
+                    </>
+                  )}
+                </>
+              }
+            />
+          </LoginPanel>
+        ),
+      };
+    }
     if (loginState?.step === 'error' || credentialStoreFailed || rateLimited) {
       const httpStatus = loginState?.step === 'error' && loginState.code === 'INVALID_RESPONSE'
         ? loginState.httpStatus : undefined;

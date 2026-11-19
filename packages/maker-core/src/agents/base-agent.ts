@@ -1281,6 +1281,9 @@ export interface AgentDeps {
    */
   getRemotePiAgentProxyEnv?: (remoteHostId: string) => Promise<Record<string, string> | null>;
 
+  /** Local CLI's HTTPS bridge, when provided by a desktop with system proxy support. */
+  getLocalPiHttpsProxy?: (env: NodeJS.ProcessEnv) => Promise<string | undefined>;
+
   /**
    * Pi 专用:远端 agentHome 文件操作原语。
    *
@@ -1710,14 +1713,24 @@ export class AgentStartupStoppedError extends Error {
   }
 }
 
-/** An adapter failed before returning a handle, but its process has not confirmed exit. */
+/** A shared-process adapter confirmed release/transfer of all unpublished task resources. */
+export class AgentStartupResourcesReleasedError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'AgentStartupResourcesReleasedError';
+  }
+}
+
+/** An adapter failed before returning a handle, but its task runtime is not confirmed quiescent. */
 export class AgentStartupCleanupPendingError extends Error {
   readonly whenStopped: Promise<void>;
+  readonly retryCleanup?: () => Promise<void>;
 
-  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void> }) {
+  constructor(message: string, options: { cause: unknown; whenStopped: Promise<void>; retryCleanup?: () => Promise<void> }) {
     super(message, { cause: options.cause });
     this.name = 'AgentStartupCleanupPendingError';
     this.whenStopped = options.whenStopped;
+    this.retryCleanup = options.retryCleanup;
   }
 }
 
@@ -2052,7 +2065,7 @@ export interface StartSessionOptions {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
-  }) => 'standard' | 'priority' | undefined;
+  }) => 'standard' | 'priority' | { priceVariant: 'standard' | 'priority'; model?: string } | undefined;
   /** Pi + thinking-toggle 模型：false 时启动即关思考。缺省保持模型默认（开）。 */
   thinkingEnabled?: boolean;
   /**
@@ -2543,6 +2556,8 @@ export interface AgentSessionHandle {
   readonly model: string;
   /** Pi-only, per-session runtime command catalog. Undefined for other agents. */
   getRuntimeCapabilities?(): PiRuntimeCapabilityManifest | undefined;
+  /** An explicit Skill send may retry exhausted discovery on the existing process. */
+  retryFailedRuntimeCapabilityCapture?(): void;
   /** Subscribe to Pi runtime catalog replacement; returns an idempotent disposer. */
   onRuntimeCapabilitiesChange?(
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,

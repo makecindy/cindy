@@ -127,6 +127,19 @@ export function projectSessionReadResult(
   return sessionToCamel(projectSessionContextWindow(row, resolve));
 }
 
+/** Single-session reads sample the execution device's clock at response time. */
+export function projectSessionDetail(
+  row: SessionRowWithCount,
+  resolve?: (session: ContextWindowSession) => number | null,
+) {
+  const start = row.activeTurnStartedAt;
+  const end = row.lastTurnEndedAt;
+  const turnElapsedMs = start != null && start > (row.clearedAt ?? 0)
+    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - start)
+    : null;
+  return { ...projectSessionReadResult(row, resolve), turnElapsedMs };
+}
+
 /** No settled cache: every read observes the database and uses the same projection. */
 export async function selectSessionsByIds(db: DbClient['drizzle'], ids: readonly string[]): Promise<SessionRowWithCount[]> {
   const unique = [...new Set(ids)];

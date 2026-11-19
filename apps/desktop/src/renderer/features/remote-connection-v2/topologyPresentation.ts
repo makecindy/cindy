@@ -5,7 +5,7 @@
 
 import { relativeTime as relativeTimeOf } from '@/components/settings/deviceLabels';
 
-import type { TopologyFlow, TopologyModel, TopologyNode } from './topologyModel';
+import type { LinkTransport, TopologyFlow, TopologyModel, TopologyNode } from './topologyModel';
 
 export { platformLabel, relativeTime } from '@/components/settings/deviceLabels';
 
@@ -30,6 +30,48 @@ export function protocolKindLabel(kind: ProtocolKind | null | undefined, t: T): 
 
 export function selfProtocolKind(model: Pick<TopologyModel, 'relay'>, linkStatus: string): ProtocolKind | null {
   return linkStatus === 'online' ? model.relay.protocol ?? null : null;
+}
+
+/** 经中转的数据走中转的 UDP 还是 WebSocket:「UDP」/「WS」;不知道时为 null。 */
+export function relayTransportLabel(relay: Pick<TopologyModel['relay'], 'transport'>, t: T): string | null {
+  return linkTransportLabel(relay.transport, t);
+}
+
+/** 底层传输协议文案:「UDP」/「WS」/「WebRTC」;不知道时为 null。 */
+export function linkTransportLabel(transport: LinkTransport | null | undefined, t: T): string | null {
+  if (!transport) return null;
+  if (transport === 'udp') return t('settings.remoteControl.v2.relayTransport.udp');
+  if (transport === 'websocket') return t('settings.remoteControl.v2.relayTransport.websocket');
+  return t('settings.remoteControl.v2.linkTransport.webrtc');
+}
+
+/**
+ * 某台设备链接的底层传输协议:Agent-Net 直连是 UDP、经中转跟随本机中转走法(UDP / WS);
+ * Device Link 直连是 WebRTC、经中转是 WS。buildTopology 已填好 node.transport;单测直接构造节点时按字段推导。
+ */
+export function peerTransport(node: Pick<TopologyNode, 'status' | 'path' | 'encrypted' | 'transport'>): LinkTransport | null {
+  if (node.transport !== undefined) return node.transport;
+  if (!node.path || node.status === 'offline' || node.encrypted === undefined) return null;
+  if (node.encrypted) return node.path === 'direct' ? 'udp' : null;
+  return node.path === 'direct' ? 'webrtc' : 'websocket';
+}
+
+export function peerTransportLabel(
+  node: Pick<TopologyNode, 'status' | 'path' | 'encrypted' | 'transport'>,
+  t: T,
+): string | null {
+  return linkTransportLabel(peerTransport(node), t);
+}
+
+/**
+ * 中转点上写的连接方式:协议加上经中转的数据走哪条路，如「Agent-Net · UDP」「Agent-Net · WS」「Device Link · WS」
+ * (用户要求 2026-11-18:看不出中转走的是 Agent-Net 的 UDP、WS 还是 Device Link)。没有协议时为 null。
+ */
+export function relayRouteLabel(relay: Pick<TopologyModel['relay'], 'protocol' | 'transport'>, t: T): string | null {
+  const protocol = protocolKindLabel(relay.protocol, t);
+  if (!protocol) return null;
+  const transport = relayTransportLabel(relay, t);
+  return transport ? `${protocol} · ${transport}` : protocol;
 }
 
 /** 一台设备「怎么连」的一句话:直连 / 经「X」中转 / 在线未建链 / 要处理原因 / 离线。 */

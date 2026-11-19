@@ -1002,6 +1002,25 @@ it('starts over when the same request replaces its questions', async () => {
 });
 
 
+// Regression: expanding a long plugin update used to scroll both decisions out of the dock.
+it('keeps plugin update decisions outside the scrollable permission details', async () => {
+  const request = { kind: 'permission', requestId, toolName: 'cindy.plugin.install',
+    description: 'Update Art Plus\n' + 'Permission detail\n'.repeat(80) + 'Final permission',
+    input: { operation: 'update', ghost_id: 'art-plus' },
+  };
+  await act(async () => root.render(<InteractionPanel deviceId="d1" sessionId="s1"
+    pinPermissionActions interactions={[{ request }]} onError={onError} />));
+  await click('interaction.permission.allowOnceButton'); // Open the update details.
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  const details = host.querySelector('[data-testid="interaction.permission.scroll"]');
+  expect(details?.textContent).toContain('Final permission');
+  for (const action of ['deny', 'allowOnce']) {
+    const button = host.querySelector(`[data-testid="interaction.permission.${action}Button"]`);
+    expect(button).not.toBeNull();
+    expect(details!.contains(button)).toBe(false);
+  }
+});
+
 it.each(['allowOnce', 'deny'])('companion permission preserves complete evidence and %s receipt', async (action) => {
   const content = 'unique-complete-payload-' + 'x'.repeat(800);
   remoteSessionStore.setPendingInteractions('s1', [{ request: {

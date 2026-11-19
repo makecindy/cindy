@@ -239,6 +239,7 @@ import {
   filterSlashCommands,
   insertAtResource,
   insertSlashCommand,
+  composerSlashInvocationName,
   mergeSlashCommands,
 } from '@/session/composerPalette';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
@@ -3717,11 +3718,18 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     pendingGoalSkillRef.current = command.kind === 'agent-skill' ? command.name : null;
     const next = insertSlashCommand(current, detectComposerTrigger(current), command);
     if (next === current) return;
-    setFirstMessageDraft(next);
+    patchDraft({
+      firstMessage: next,
+      selectedSkill: command.kind === 'agent-skill' ? {
+        name: command.name, invocation: composerSlashInvocationName(command),
+        context: buildComposerPaletteCacheKey(selectedDeviceId, draft.agentKind,
+          draft.workspaceKind === 'project' ? draft.workingDir.trim() : ''),
+      } : null,
+    });
     const selection = { start: next.length, end: next.length };
     firstMessageSelectionRef.current = selection;
     setFirstMessageSelection(selection);
-  }, [setFirstMessageDraft]);
+  }, [patchDraft, selectedDeviceId, draft.agentKind, draft.workspaceKind, draft.workingDir]);
 
   const selectAtResource = useCallback((item: MobileAtResourceItem) => {
     const current = firstMessageRef.current;

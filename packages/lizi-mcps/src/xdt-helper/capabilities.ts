@@ -90,6 +90,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 有哪些对应工具、哪些能管到另一台电脑。',
     detail: [
       '【任务链接】已知任务 id 时调用 history/get_task_digest，返回的 sessionUrl 可直接写成 [任务标题](sessionUrl)。list_sessions、search_chat_history、get_chat_history 的任务元数据也附带 sessionUrl，含所属电脑，支持桌面与手机打开。',
+      '【同事共享给我的任务】在已加入的共享任务菜单点「复制任务链接」，在自己的任务里交给 history/get_shared_task_progress。每次读取该任务的运行状态和近期记录，可翻页看更早记录，也可在用户指定的定时任务中重复查询。',
       '【邀请协助当前任务】control 类 create_shared_task_invitation / get_shared_task_state 生成原生共享邀请或查询状态；只针对调用工具的原任务，在任务宿主执行，手机或同账号另一台电脑控制该任务时也适用。访客能读完整历史、附件与工具结果，使用同一 Agent 和既有任务权限；链接可转发，不绑定收件人。工具不发通知、不另建任务，不能指定其他任务。将回执中的 invitationLink 原样交给发送流程；通知插件负责收件人、预览与发送确认。结果未知时先查询状态再决定是否重试，不自动重复。',
       '【机器】cindy_helper 的顶层工具 list_machines（不经 list_tools）：看账号下所有电脑的实时 CPU、可用内存、磁盘、空闲时长和在跑任务，以及这台电脑配置的 SSH 主机；只报事实，放哪台由你决定。',
       '【原则】用户本人能做的操作(含跨电脑)，Agent 也应有对应工具；是否执行由权限档与自动审核决定。数据保存在各自的电脑上：下结论「没有 / 没人在跟」之前，先确认查的是不是只有本机。',

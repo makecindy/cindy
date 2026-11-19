@@ -9,7 +9,7 @@ import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
 import type { AgentNetSocketOptions } from './socket.js';
 import type { PeerRule } from './socketPorts.js';
-import { DRAIN_LOW_WATER_BYTES } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, type RelayRoute } from './types.js';
 import type { SessionConfig, SessionHandle } from './session/peer.js';
 import { WorkerSessions } from './session/workerSessions.js';
 
@@ -32,6 +32,8 @@ export type AgentNetAppSocket = Pick<import('./socket.js').AgentNetSocket,
     relayConnected?(): boolean;
     /** The last round trip to the relay, in ms (see AgentNetWorkerSocket.relayRttMs). */
     relayRttMs?(): number | null;
+    /** How relayed datagrams travel now, UDP or WebSocket, with that path's round trip (see AgentNetWorkerSocket.relayRoute; event `relay-route`). */
+    relayRoute?(): RelayRoute | null;
     /** By session key: the device id, or inside a delegation the scoped peer it names (see `SessionConfig.handlers`). */
     session?(key: string): SessionHandle | null;
     onSession?(listener: (key: string, session: SessionHandle) => void): void;
@@ -181,10 +183,34 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
   relayConnected(): boolean { return this.relayOpen > 0; }
   /**
    * The last ping round trip on a relay connection, in ms; null while none is open or before the first pong. The remote
-   * connection page shows it as the relay's round trip, as it does Device Link's (2026-11-17: it was always empty).
+   * connection page shows it as the relay's round trip while relayed datagrams use the WebSocket (2026-11-17: it was always
+   * empty); over UDP it shows that path's own round trip instead (`relayRoute`).
    */
   relayRttMs(): number | null { return this.relayOpen > 0 ? this.relayRtt : null; }
   private relayRtt: number | null = null;
+  /** What the worker last reported about relayed datagrams (`status` messages, about once a second). */
+  private relayVia: RelayRoute['via'] = 'websocket';
+  private relayUdpRtt: number | null = null;
+  /**
+   * How datagrams relayed for this computer travel now — the relay's UDP port or this relay WebSocket — and the last round
+   * trip on that path: the UDP registration round trip, or the WebSocket ping. Null while no relay connection is open.
+   * The remote connection page writes both on the relay point (2026-11-18 owner: it could not tell Agent-Net over UDP from
+   * the WebSocket fallback, and showed the WebSocket's round trip while the data went over UDP).
+   */
+  relayRoute(): RelayRoute | null {
+    if (this.closed || this.relayOpen === 0) return null;
+    return this.relayVia === 'udp' ? { via: 'udp', rttMs: this.relayUdpRtt } : { via: 'websocket', rttMs: this.relayRtt };
+  }
+  private noteRelayRoute(route: unknown): void {
+    const reported = route && typeof route === 'object' ? route as Partial<RelayRoute> : null;
+    const via: RelayRoute['via'] = reported?.via === 'udp' ? 'udp' : 'websocket';
+    const rtt = via === 'udp' ? reported?.rttMs : null;
+    this.relayUdpRtt = typeof rtt === 'number' && Number.isFinite(rtt) && rtt >= 0 ? rtt : null;
+    if (via === this.relayVia) return;
+    this.relayVia = via;
+    this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}`);
+    this.emit('relay-route', via);
+  }
   private readonly pingSentAt = new WeakMap<WebSocket, number>();
   private pingRelay(ws: WebSocket): void {
     this.pingSentAt.set(ws, performance.now());
@@ -237,9 +263,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     const own = this.client.delegation && this.delegations.find(d => delegationVisibleTo(d, this.client.identity, this.client.delegation));
     if (this.client.delegation) return own && verifyDelegation(this.client.rootPublicKey, own) ? delegatedPeerTarget(own, peer, 'guest') : null;
     for (const delegation of this.delegations) {
-      const target = verifyDelegation(this.client.rootPublicKey, delegation) && delegationVisibleTo(delegation, this.client.identity)
-        && delegatedPeerTarget(delegation, peer, 'host');
-      if (target) return target;
+      // Each task sweep looks up one guest. Check the peer before revalidating
+      // certificate lifetimes and signatures in the authenticated snapshot.
+      const target = delegatedPeerTarget(delegation, peer, 'host');
+      if (target && delegationVisibleTo(delegation, this.client.identity)
+        && verifyDelegation(this.client.rootPublicKey, delegation)) return target;
     }
     return null;
   }
@@ -309,6 +337,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       const previous = this.status;
       this.status = new Map(message.peers);
       for (const id of message.known) this.known.add(id);
+      this.noteRelayRoute(message.relayRoute);
       if (this.listenerCount('peer-routes-changed') && peerRoutesChanged(previous, this.status)) this.emit('peer-routes-changed');
       return;
     }

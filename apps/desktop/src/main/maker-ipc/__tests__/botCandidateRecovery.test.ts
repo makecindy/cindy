@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
-import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable } from '../botCandidateRecovery';
+import { canResumeAfterRuntimeFallback, isBotCandidateUnavailable, isModelGroupConnectionOutOfCredit } from '../botCandidateRecovery';
 import { isInterruptedTurnError, isContinuationOnlyAutoResumeReason } from '../interruptedTurnAutoResume';
 import { createInterruptedTurnAutoResumeHooks } from '../interruptedTurnAutoResumeHooks';
 
 
 /** Execute the production auto-resume hooks (interruptedTurnAutoResumeHooks.ts) without starting Electron or touching accounts. */
-function harness(bot = true) {
+function harness(bot = true, settlePausedResumeIntoHistory?: true) {
   const item = { clientId: 'input', createOpts: {} };
   let current = true;
   let scheduled: (() => Promise<void>) | undefined;
@@ -22,7 +22,7 @@ function harness(bot = true) {
     isInterruptedTurnError, isBotCandidateUnavailable, canResumeAfterRuntimeFallback,
     isContinuationOnlyAutoResumeReason,
     providerGroupService: { mayHandleTurnError: groupMayHandle },
-    inputCoordinator: { isExecutionPaused: () => false, autoRetryLastError: resume },
+    inputCoordinator: { isExecutionPaused: vi.fn(() => false), isAutoResumeAttemptCurrent: vi.fn(() => true), autoRetryLastError: resume },
     interruptedTurnAutoResumeGuard: { onInterruptedTurn: guard, noteResumeSendFailed: vi.fn() },
     maybeApplySessionRuntimeFallback: fallback,
     autoResumeBookkeeping: {
@@ -40,6 +40,7 @@ function harness(bot = true) {
   const botFallbackInputs = new WeakSet<object>();
   const hooks = createInterruptedTurnAutoResumeHooks({
     ...deps, botFallbackInputs,
+    ...(settlePausedResumeIntoHistory && { settlePausedResumeIntoHistory }),
     providerGroupHeldErrors: { stash: vi.fn() }, providerGroupHeldTerminals: { stash: vi.fn() },
     pendingSchedulerAutoResumeRunBySession: new Map(), notifySchedulerAutoResumeFailed: vi.fn(),
     autoResumeAttemptToken: () => null,
@@ -52,11 +53,73 @@ function harness(bot = true) {
   const runtime = { callbacks };
   if (bot) botFallbackInputs.add(item.createOpts);
   return { item, ...runtime.callbacks, resume, fallback, finalize, guard, groupMayHandle, liveSession, rebuildLeases,
+    paused: deps.inputCoordinator.isExecutionPaused, startupCurrent: deps.inputCoordinator.isAutoResumeAttemptCurrent,
+    releaseGuard: deps.interruptedTurnAutoResumeGuard.noteResumeSendFailed,
     beginSchedulerAutoResume: deps.beginSchedulerAutoResume,
     run: () => scheduled!(), cancel: () => { current = false; } };
 }
 
 describe('Bot candidate recovery', () => {
+  // Unit regression for 8bcdaae10b: the existing recovery cases never paused execution
+  // between scheduling and dispatch. Exercise both sides of asynchronous route selection.
+  it('runs an unpaused retry after route selection without surfacing the held error', async () => {
+    const h = harness();
+    h.onResumableTurnError('s', { errorStatus: 503 }, h.item);
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledOnce();
+    expect(h.resume).toHaveBeenCalledWith('s', 1);
+    expect(h.releaseGuard).not.toHaveBeenCalled();
+    expect(h.finalize).not.toHaveBeenCalled();
+  });
+
+  it.each(['before', 'during'])('finalizes once without a banner when paused %s route selection', async when => {
+    const h = harness(true, true);
+    h.onResumableTurnError('s', { errorStatus: 503 }, h.item);
+    if (when === 'before') h.paused.mockReturnValue(true);
+    else h.fallback.mockImplementationOnce(async () => {
+      h.paused.mockReturnValue(true);
+      return { session: null, outcome: 'switched' };
+    });
+    await h.run();
+    expect(h.fallback).toHaveBeenCalledTimes(when === 'before' ? 0 : 1);
+    expect(h.releaseGuard.mock.calls).toEqual([['s', 1]]);
+    expect(h.finalize.mock.calls).toEqual([['s', 1, { surfaceBanner: false }]]);
+    expect(h.resume).not.toHaveBeenCalled();
+  });
+
+  it.each(['attempt', 'startup'])('leaves an expired %s alone even when execution is paused', async kind => {
+    const h = harness(true, true);
+    h.onResumableTurnError('s', { reason: 'bot-subscription-startup-admission', errorStatus: 429 }, h.item);
+    if (kind === 'attempt') h.cancel();
+    else h.startupCurrent.mockReturnValue(false);
+    h.paused.mockReturnValue(true);
+    await h.run();
+    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.releaseGuard).not.toHaveBeenCalled();
+    expect(h.finalize).not.toHaveBeenCalled();
+  });
+
+  // Production entry/result: createInterruptedTurnAutoResumeHooks runs the scheduled callback;
+  // Desktop leaves the held error alone and neither switches routes nor sends a retry.
+  // Basis: af8bd193a3 short-circuits on pause; 7f168d0212 applied Host settlement to Desktop too.
+  // Coverage gap: the paused-at-dispatch tests above exercise the Host opt-in only.
+  // Minimal input/tier: one current startup admission retry, paused after scheduling;
+  // unit tier with an in-memory scheduler and no database or running app.
+  // Standalone file wall clock: 3.65 s on Node 22.22.3.
+  it('leaves a current paused desktop retry and its held error alone', async () => {
+    const h = harness();
+    expect(h.onResumableTurnError('s', { reason: 'bot-subscription-startup-admission', errorStatus: 429 }, h.item))
+      .not.toBeNull();
+    h.paused.mockReturnValue(true);
+    await h.run();
+    expect(h.releaseGuard).not.toHaveBeenCalled();
+    expect(h.finalize).not.toHaveBeenCalled();
+    expect(h.fallback).not.toHaveBeenCalled();
+    expect(h.resume).not.toHaveBeenCalled();
+    expect(h.startupCurrent).not.toHaveBeenCalled();
+  });
+
   // #10802 / unit: the real recovery hook must carry its original cause with
   // the scheduler lease, even if the retry later fails before a vendor event.
   it('retains the original cause when claiming recovery for a scheduled run', () => {
@@ -66,6 +129,7 @@ describe('Bot candidate recovery', () => {
     expect(h.onResumableTurnError('s', { message }, item)).not.toBeNull();
     expect(h.beginSchedulerAutoResume).toHaveBeenCalledExactlyOnceWith('s', 'run', 1, message);
   });
+
   // #10119 review: use the production enrichment before the production recovery callbacks.
   it('does not turn a text-only permission denial into a provider failure after enrichment', () => {
     const message = 'Permission denied: HTTP 403';
@@ -348,4 +412,12 @@ describe('Bot candidate recovery', () => {
   ] as const)('resumes a required route change after %s (same route retryable: %s) = %s', (outcome, retryable, expected) => {
     expect(canResumeAfterRuntimeFallback(true, { session: null, outcome }, retryable)).toBe(expected);
   });
+});
+
+// Unit: both providers use HTTP 429, but only an explicit quota code rules out the whole connection.
+it.each([
+  ['{"error":{"code":"insufficient_quota"}}', true],
+  ['{"error":{"code":"rate_limit_exceeded"}}', false],
+])('classifies the connection scope of 429 %s', (message, expected) => {
+  expect(isModelGroupConnectionOutOfCredit({ errorStatus: 429, message })).toBe(expected);
 });

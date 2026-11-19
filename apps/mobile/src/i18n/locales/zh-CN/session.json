@@ -577,6 +577,7 @@
       "taskCost": "本任务费用",
       "actualCost": "实际费用",
       "estimatedValue": "估算价值",
+      "tokenUnit": "token",
       "totalTokens": "累计 Token",
       "seeDetails": "查看拆分",
       "valueUnavailable": "部分任务价值暂未获取",
@@ -869,7 +870,7 @@
   },
   "providerGroupRebalance": {
     "title": "换到 {{label}} 继续？",
-    "body": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几轮对话和摘要，更早的细节可能记不全。",
+    "body": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去时会带上这段对话的上下文，较早的内容可能会压缩，原记录仍保留。",
     "quota": "还剩 {{left}}%",
     "quotaReset": "还剩 {{left}}%，{{reset}}后重置",
     "confirm": "换过去",

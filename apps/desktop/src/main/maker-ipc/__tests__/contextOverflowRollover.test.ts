@@ -396,6 +396,24 @@ describe('createContextOverflowRollover', () => {
     };
   }
 
+  // Unit, PR #11352: a 200K BYOK display/default window in the row and live
+  // snapshot is not proof of route capacity. A restart must keep the 16K cap.
+  it('does not enlarge rebuild history from an unverified snapshot window', async () => {
+    const deps = makeDeps([
+      msg('user', 'Keep the long reply', 'u1'),
+      msg('assistant', 'ordinary ASCII output\n'.repeat(1_500), 'a1'),
+    ]);
+    deps.getLiveSession.mockReturnValue({
+      isTurnRunning: () => false,
+      getUsageSnapshot: () => ({ contextTokens: 0, contextWindow: 200_000 }),
+    });
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff: async () => true });
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    const commit = deps.commitRebuild.mock.calls[0] as unknown as [string, string, { handoffCoverage: string }];
+    expect(commit[1].length).toBeLessThanOrEqual(16_000);
+    expect(commit[2].handoffCoverage).toBe('condensed');
+  });
+
   // Unit, 2026-11-11: a paused account needs handoff even with a healthy or
   // empty context. Existing tests required overflow. Verify no replay/close while busy.
   it.each([false, true])('hands off a paused account before sending (empty=%s)', async empty => {
@@ -618,6 +636,17 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  // Unit: first dispatch can select another account before there is anything to hand off.
+  it('keeps a first account selection out of empty task history', async () => {
+    const deps = makeDeps([]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), sdkSessionId: null, contextTokens: 0 });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
+    const rollover = createContextOverflowRollover({ ...deps, needsNativeSessionHandoff: async () => true });
+    expect(await rollover.prepareUnhealthySession('s1')).toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+  });
+
   it('can restart a Bot before a native handle was ever created', async () => {
     const deps = makeDeps([]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', sdkSessionId: null, contextTokens: 0 });
@@ -652,7 +681,11 @@ describe('createContextOverflowRollover', () => {
     }));
     expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('already finished'), 3);
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
-    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    // A remote budget lookup can suspend the transaction after close. Recheck
+    // the selection between close and the durable route/history write.
+    const closeAt = deps.closeSession.mock.invocationCallOrder[0]!;
+    const commitAt = deps.commitRebuild.mock.invocationCallOrder[0]!;
+    expect(assertCurrent.mock.invocationCallOrder.some(at => closeAt < at && at < commitAt)).toBe(true);
   });
 
   // Unit: disabling an account carries ordinary task context, including completed

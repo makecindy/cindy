@@ -486,6 +486,17 @@ describe('runtime selection moved out of register.ts', () => {
   // three register.ts variables at each use. That is the same only while each is assigned once, at
   // startup, before the set-model handler is registered. Failure: a later reset (an account switch,
   // say) reaches a call already running with the old value.
+  // Rule: the pending credential switch service's assembly (pendingCredentialSwitchAssembly.ts) takes
+  // agentInputCoordinatorHolder by value, which is the same only while register.ts assigns it once,
+  // before that assembly. Failure: persistRoute refreshes the queued route of a stale coordinator or
+  // of none.
+  it('assigns the input coordinator holder before the pending credential switch service is assembled', () => {
+    const assigned = registerSource.indexOf('\n  agentInputCoordinatorHolder = ');
+    const assembled = registerSource.indexOf('const pendingCredentialSwitchService = createPendingCredentialSwitchService({');
+    expect(assigned).toBeGreaterThan(-1);
+    expect(assembled).toBeGreaterThan(assigned);
+  });
+
   it('assigns each runtime-selection holder once in register.ts', () => {
     for (const holder of ['contextOverflowRolloverHolder', 'pendingCredentialSwitchHolder', 'agentInputCoordinatorHolder']) {
       const assignments = registerSource.match(new RegExp(`(^|[^.\\w])${holder}\\s*=(?!=)`, 'gm')) ?? [];
@@ -499,5 +510,154 @@ describe('runtime selection moved out of register.ts', () => {
       expect(assigned, holder).toBeGreaterThan(-1);
       expect(assigned, holder).toBeLessThan(handler);
     }
+  });
+});
+
+/**
+ * The event types the desktop's event pipeline acts on, each classified for the Node Host.
+ *
+ * Rule: the desktop decides per event type in its pipeline (sessionEventPreparation.ts, sessionEventDelivery.ts,
+ * sessionEventTerminal.ts) and in register.ts's emitWiredSessionEvent; the Host's executor
+ * (apps/host/src/agent/turn-executor.mjs) is a separate implementation, so a new event type handled on the
+ * desktop does not reach the Host unless someone classifies it. Each type here is either aligned on the Host
+ * (where), a gap the release table records (which row), or a platform difference. The Host locations and
+ * rows are those of the integration branch (cindy/host-m1); they ship with the Host PR.
+ * Failure: a new type the desktop starts acting on, or a type it stopped acting on, turns this red until the
+ * table is updated. It cannot see a new effect added to an existing type; the release table's event
+ * inventory (A7) records those.
+ */
+describe('event types the desktop pipeline acts on, classified for the Host', () => {
+  const EVENT_TYPE_PARITY: Record<string, { host?: string; gaps?: string[]; platform?: string }> = {
+    account_usage: { gaps: ['row 13 (Codex account_usage snapshot)'] },
+    agent_task_update: { host: 'turn-executor.mjs noteBackgroundActivity; history.event (sessionEventStreamCore, shared)' },
+    compact_boundary: { host: 'turn-executor.mjs wireNotes.reset' },
+    done: {
+      host: 'turn-executor.mjs finish: flush, Codex plan, change record, Git savepoint, turn end',
+      gaps: ['A9 turn-end seal', 'A10 last activity', 'A13 list preview and pinned summary', 'checkpoint 4 and 5 (auto-resume)'],
+    },
+    error: {
+      host: 'turn-executor.mjs finish: error row, Codex plan failure, change record partial, Git abort; context recovery claim',
+      gaps: ['A15 Opus plan error reason', 'checkpoint 4 (terminal to the coordinator first, auto-resume)'],
+    },
+    image: { gaps: ['A11 Codex generated images'] },
+    interaction_dismissed: { gaps: ['A12 runtime interaction_dismissed'] },
+    plan_mode_changed: { host: 'turn-executor.mjs persistAgentPlanModeChange (shared persistAgentPlanModeChangeWith)' },
+    status: {
+      host: 'turn-executor.mjs context snapshot (shared), background activity',
+      gaps: ['smaller difference: running=false alone does not write the turn end time'],
+    },
+    text: { host: 'history.event (sessionEventStreamCore, shared)', gaps: ['A14 standaloneText notices'] },
+    turn_diff: { host: 'turn-executor.mjs noteTurnDiffEvent, not published' },
+  };
+
+  /** String literals compared with `<x>.type` (=== or !==) or used as `case` of a switch on `<x>.type`. */
+  function eventTypesIn(source: string, name: string): Set<string> {
+    const sf = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true);
+    const found = new Set<string>();
+    const isTypeAccess = (node: ts.Node) => ts.isPropertyAccessExpression(node) && node.name.text === 'type';
+    const visit = (node: ts.Node): void => {
+      if (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+        || node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
+        if (isTypeAccess(node.left) && ts.isStringLiteral(node.right)) found.add(node.right.text);
+        if (isTypeAccess(node.right) && ts.isStringLiteral(node.left)) found.add(node.left.text);
+      }
+      if (ts.isSwitchStatement(node) && isTypeAccess(node.expression)) {
+        for (const clause of node.caseBlock.clauses) {
+          if (ts.isCaseClause(clause) && ts.isStringLiteral(clause.expression)) found.add(clause.expression.text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    return found;
+  }
+
+  it('every event type the pipeline acts on is in the table, and every table entry is still acted on', () => {
+    const ipc = path.join(desktopMain, 'maker-ipc');
+    const register = read(path.join(ipc, 'register.ts'));
+    const wiredStart = register.indexOf('const emitWiredSessionEvent');
+    expect(wiredStart, 'emitWiredSessionEvent in register.ts').toBeGreaterThan(-1);
+    const wired = register.slice(wiredStart, register.indexOf('\n  };\n', wiredStart) + 5);
+    const acted = new Set<string>();
+    for (const file of ['sessionEventPreparation.ts', 'sessionEventPreparationSteps.ts', 'sessionEventDelivery.ts', 'sessionEventTerminal.ts']) {
+      for (const type of eventTypesIn(read(path.join(ipc, file)), file)) acted.add(type);
+    }
+    for (const type of eventTypesIn(wired, 'emitWiredSessionEvent')) acted.add(type);
+    expect([...acted].sort()).toEqual(Object.keys(EVENT_TYPE_PARITY).sort());
+    for (const [type, entry] of Object.entries(EVENT_TYPE_PARITY)) {
+      expect(Boolean(entry.host || entry.gaps?.length || entry.platform), `${type} is classified`).toBe(true);
+    }
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：桌面的 XD 报价投影（usage/modelPricing.ts）与账本币种存储
+//   （usage/accountCurrencyStore.ts）。这两个壳在模块加载时各建一个工厂实例，桌面的用量记账、价格显示
+//   与币种读写都经这一个实例。
+// - 规则依据：放行表第 13 行 3a（7727009edb）。这次把 modelPricing / accountCurrencyStore 的模块级状态
+//   （内存报价、磁盘缓存作用域、在途同步、当前账号与币种）搬进 createModelPricing /
+//   createAccountCurrencyStore。搬移前后等价的前提是，整个桌面进程里各只有一个实例。
+// - 现有覆盖缺口：modelPricing.test.ts 与 accountCurrencyStore.test.ts 只测壳建出的那个实例，测不到
+//   别处再建一个。这是算钱的代码：第二个实例有自己的报价与币种，按它记的账会悄悄用旧价或错币种，
+//   而且没有测试会失败。
+// - 最小失败输入：桌面生产代码（apps/desktop/src，不含 __tests__、__mocks__、*.test.*、*.spec.*）里任意
+//   一处多出的调用，包括：
+//   - 别名导入；
+//   - 命名空间导入后再调用；
+//   - 把工厂当作值传出去；
+//   - 在壳里的函数体内调用（每调用那个函数一次就多一个实例）。
+// - tier：guard。读生产源码文本，属于跨文件静态契约，不能从生产入口隔离。
+// - 实测耗时：见交付记录。
+describe('the desktop builds one instance of each usage pricing factory', () => {
+  const desktopSrc = path.join(repo, 'apps/desktop/src');
+  const FACTORIES: Record<string, string> = {
+    createModelPricing: 'main/usage/modelPricing.ts',
+    createAccountCurrencyStore: 'main/usage/accountCurrencyStore.ts',
+  };
+  const names = Object.keys(FACTORIES);
+
+  function productionFiles(dir: string, out: string[] = []): string[] {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!['__tests__', '__mocks__', 'node_modules'].includes(entry.name)) productionFiles(full, out);
+      } else if (/\.[cm]?[jt]sx?$/.test(entry.name) && !/\.(test|spec)\.[cm]?[jt]sx?$/.test(entry.name)
+        && !entry.name.endsWith('.d.ts')) {
+        out.push(full);
+      }
+    }
+    return out;
+  }
+
+  it('calls createModelPricing and createAccountCurrencyStore once each, at the top level of their shells', () => {
+    const calls: Record<string, string[]> = Object.fromEntries(names.map(name => [name, []]));
+    const strays: string[] = [];
+    for (const file of productionFiles(desktopSrc)) {
+      const text = read(file);
+      if (!names.some(name => text.includes(name))) continue;
+      const rel = path.relative(desktopSrc, file).split(path.sep).join('/');
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true,
+        /x$/.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+      const visit = (node: ts.Node, inFunction: boolean) => {
+        if (ts.isIdentifier(node) && names.includes(node.text)) {
+          const parent = node.parent;
+          const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+          if ((ts.isCallExpression(parent) && parent.expression === node)
+            || (ts.isPropertyAccessExpression(parent) && parent.name === node
+              && ts.isCallExpression(parent.parent) && parent.parent.expression === parent)) {
+            calls[node.text].push(inFunction ? `${rel}:${line} (inside a function)` : rel);
+          } else if ((ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent))
+            && (parent.propertyName === undefined || parent.propertyName.text === parent.name.text)) {
+            // An unrenamed import or re-export: calls through it are counted above.
+          } else if (!(ts.isFunctionDeclaration(parent) && parent.name === node) && !ts.isTypeQueryNode(parent)) {
+            strays.push(`${rel}:${line} ${parent.getText(source).split('\n')[0]}`);
+          }
+        }
+        ts.forEachChild(node, child => visit(child, inFunction || ts.isFunctionLike(node)));
+      };
+      visit(source, false);
+    }
+    expect(strays, 'a factory renamed or passed on as a value').toEqual([]);
+    for (const name of names) expect(calls[name], name).toEqual([FACTORIES[name]]);
   });
 });
