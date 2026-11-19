@@ -2033,17 +2033,28 @@ describe('Chat Server result delivery and refresh', () => {
     ['the owner', 'owner', selfId, true],
     ['a member with tools access', 'tools', '60000000-0000-4000-8000-000000000001', true],
     ['a chat-only member', 'chat', '60000000-0000-4000-8000-000000000001', true],
+    ['the owner quoting an earlier image', 'owner', selfId, true],
+    ['the owner sending only an image', 'owner', selfId, true],
     ['the owner, once the task is gone', 'owner', selfId, false],
     ['the owner, after their companion leaves', 'owner', selfId, true],
     ['the owner, after an ordinary lease failure', 'owner', selfId, true],
   ] as const)('passes Thread words under a task card into the task only from the owner (%s)', async (_who, mode, speakerId, taskExists) => {
     const rootId = '70000000-0000-4000-8000-000000000001';
-    const words = 'Please also update the docs';
+    const quotedId = '70000000-0000-4000-8000-000000000002';
+    const quoteImage = _who === 'the owner quoting an earlier image';
+    const onlyImage = _who === 'the owner sending only an image';
+    const mediaId = '80000000-0000-4000-8000-000000000001';
+    const media = { type: 'media', mediaId, caption: 'screen.png' };
+    const photo = { id: mediaId, category: 'image', name: 'screen.png', mimeType: 'image/png', size: 12, url: 'cindy-media://screen', path: null };
+    fixture.download.mockResolvedValue(photo);
+    const words = onlyImage ? '[附件: screen.png]' : 'Please also update the docs';
     taskCardStore.value = { [rootId]: { roomId, botId, threadRootId: null, taskId: 'task-1', deviceId: null, title: 'Fix login',
       requesterName: 'Owner', botName: 'Bot (Owner)', state: 'running', revision: 1, createdAt: Date.now() } };
     deps.readGroupTaskStatus = vi.fn(async () => taskExists ? { title: 'Fix login', state: 'running' as const } : null);
     const source = { id: execution.source_message_id, seq: '1', authorId: speakerId, author: { kind: 'human', name: 'Speaker' },
-      origin: 'user', deleted: false, threadRootId: rootId, content: [{ type: 'text', text: words }] };
+      origin: 'user', deleted: false, threadRootId: rootId, content: onlyImage ? [media] : [{ type: 'text', text: words }, quoteImage
+        ? buildBotGroupQuoteCard({ messageId: quotedId, authorName: 'Ann', authorKind: 'user', excerpt: '', attachmentCount: 1, attachmentName: 'screen.png', sequence: null })
+        : media] };
     const members = [
       { id: botId, kind: 'bot', name: 'Bot', displayName: 'Bot', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'member', guestAccess: 'tools', accessRevision: 1, avatar: null },
       { id: selfId, kind: 'human', name: 'Owner', displayName: 'Owner', nickname: null, state: 'joined', ownerActorId: selfId, ownerName: 'Owner', role: 'owner', guestAccess: 'none', accessRevision: 1, avatar: null },
@@ -2052,6 +2063,7 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.handle.mockImplementation(route => {
       if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: speakerId, access_mode: mode }; claimed = true; return { body: { execution: next } }; }
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [], cursor: '1' } };
+      if (route.endsWith(`/messages/${quotedId}`)) return { body: { ...source, id: quotedId, seq: '0', threadRootId: null, content: [media] } };
       if (route.endsWith('/members')) return { body: members };
       if (route.includes('/messages?') && !route.includes('threadRootId')) return { body: [source] };
       // What another member said in the card's Thread before the owner spoke.
@@ -2087,7 +2099,8 @@ describe('Chat Server result delivery and refresh', () => {
     expect(input).toMatchObject({ targetSessionId: 'task-1', message, persistedContent: message,
       origin: { kind: 'session', senderSessionId: '', senderBotId: 'local-bot',
         groupThread: { groupId: roomId, groupName: 'Room', speakerId, speakerName: 'Owner' } } });
-    expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe(words);
+    expect(input.attachments).toEqual([photo]);
+    if (!onlyImage) expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe(words);
     // The model's note and the bubble label read the same stamp.
     expect(buildMessageSourceNote(messageSourceSenderFromMeta({ origin: input.origin })))
       .toContain(`在群聊「Room」(group_id: ${roomId})的话题里发送`);
@@ -2155,7 +2168,7 @@ describe('Chat Server result delivery and refresh', () => {
     // Existing public-Cindy tests cover text background only. Minimal failure: two DOCX files in
     // an earlier message, then a separate @Cindy with a quote and no uploaded files of its own.
     // Targeted run: 14.20s wall / 158ms tests; collecting this existing service suite takes 11.19s.
-    describe('quoted attachments', () => {
+    describe('group request attachments', () => {
       const file = (n: number) => ({ type: 'media', mediaId: `80000000-0000-4000-8000-${String(n).padStart(12, '0')}`, caption: `lesson-${n}.docx` });
       const quote = (n: number, attachmentCount = 2) => buildBotGroupQuoteCard({ messageId: message(n, peerId, '').id,
         authorName: 'Ann', authorKind: 'user', excerpt: 'Lesson files', attachmentCount, attachmentName: attachmentCount ? 'lesson-1.docx' : null, sequence: n });
@@ -2175,10 +2188,46 @@ describe('Chat Server result delivery and refresh', () => {
       });
       afterEach(() => { fixture.download.mockReset(); });
 
+      it('delivers the three screenshots on a Thread root and media in its recent replies to a later @Cindy', async () => {
+        const image = (n: number) => ({ ...file(n), caption: `screenshot-${n}.png` });
+        const attachment = (n: number) => ({ ...downloaded(n), category: 'image', mimeType: 'image/png', name: image(n).caption,
+          path: path.join(os.tmpdir(), image(n).caption) });
+        fixture.download.mockImplementation(async (_room: string, mediaId: string) => attachment(Number(mediaId.slice(-12))));
+        const root = message(1, peerId, '', { content: [image(1), image(2), image(3)] });
+        history.push(root, message(2, peerId, '', { content: [image(5)] }),
+          message(3, peerId, '', { threadRootId: root.id, content: [image(3), image(4)] }),
+          message(4, peerId, '', { threadRootId: root.id, deleted: true, content: [image(6)] }),
+          message(5, selfId, '@Cindy diagnose these', { threadRootId: root.id }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+        const input = dispatched()[0]!;
+        expect(input.attachments).toEqual([1, 2, 3, 4].map(attachment));
+        expect(fixture.download.mock.calls).toEqual([1, 2, 3, 4].map(n => [roomId, image(n).mediaId]));
+        expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('@Cindy diagnose these');
+        await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId, resultText: 'Done' });
+        history.push(message(6, selfId, 'Continue', { threadRootId: root.id }));
+        queue.push(request(6));
+        await vi.advanceTimersByTimeAsync(12_000);
+        expect(dispatched()[1]!.attachments).toBeUndefined();
+      });
+
+      it('keeps available main-group attachments when a recent message has a failed download', async () => {
+        history.push(message(1, peerId, '', { content: [file(1)] }),
+          message(2, peerId, '', { content: [file(2)] }),
+          message(3, peerId, '', { threadRootId: message(1, peerId, '').id, content: [file(3)] }));
+        fixture.download.mockRejectedValueOnce(new Error('MEDIA_DOWNLOAD_FAILED'));
+        await ask(4, 'Please check');
+        expect(fixture.download.mock.calls).toEqual([2, 1].map(n => [roomId, file(n).mediaId]));
+        expect(dispatched()[0]!.attachments).toEqual([downloaded(1)]);
+        expect(dispatched()[0]!.message).toContain(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', 'Cindy'));
+        expect(notices()).toHaveLength(1);
+      });
+
       it('delivers the quoted DOCX files even behind text progress, without following nested quotes or other history', async () => {
         history.push(message(1, peerId, '', { content: [quote(2), file(1), file(2)] }),
-          message(2, peerId, '', { content: [file(3)] }));
-        await ask(10, 'Hello');
+          message(2, peerId, '', { content: [file(3)] }),
+          ...Array.from({ length: 20 }, (_, i) => message(i + 3, peerId, 'Later discussion')));
+        await ask(30, 'Hello');
         expect(dispatched()[0]!.attachments).toBeUndefined();
         expect(fixture.download).not.toHaveBeenCalled();
         await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Hi' });

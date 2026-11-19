@@ -155,6 +155,7 @@ vi.mock('electron', () => ({
 vi.mock('../../client/current', () => ({
   getCurrentDbClientSnapshot: (() => {
     let current: { key: string; client: {
+      readonly drizzle: typeof h.db;
       tx: (name: string, args: unknown) => Promise<unknown>;
       query: (sql: string, params: unknown[]) => Promise<unknown[]>;
     } } | null = null;
@@ -162,6 +163,7 @@ vi.mock('../../client/current', () => ({
       if (!current || current.key !== h.ownerScopeKey) current = {
         key: h.ownerScopeKey,
         client: {
+          get drizzle() { return h.db; },
           tx: (name, args) => h.tx!(name, args),
           query: async (sql, params) => h.sqlite!.prepare(sql).all(...params),
         },
@@ -2633,12 +2635,19 @@ describe('Bot canonical Session lifecycle', () => {
 
     // The topic's model context names its root; a rewound root is reported as unavailable, not guessed.
     const { readBotDmThreadContextNote } = await import('../../../maker-ipc/botDmThreadContext');
-    await expect(readBotDmThreadContextNote(first.sessionId)).resolves.toContain('Plan the launch post');
+    expect((await readBotDmThreadContextNote(first.sessionId))?.text).toContain('Plan the launch post');
     await expect(readBotDmThreadContextNote(chatId)).resolves.toBeNull();
+    const rootImage = `xdt-image://${chatId}/plan.png`;
+    h.sqlite!.prepare("UPDATE messages SET content = ? WHERE id = 'm-root'")
+      .run(JSON.stringify({ images: [{ url: rootImage, originalName: 'plan.png' }] }));
+    expect(await readBotDmThreadContextNote(first.sessionId)).toMatchObject({
+      sourceSessionId: chatId, imageUrls: [rootImage], text: expect.stringContaining('plan.png'),
+    });
     h.sqlite!.prepare("UPDATE messages SET rewind_at = 5000 WHERE id = 'm-root'").run();
     const note = await readBotDmThreadContextNote(first.sessionId);
-    expect(note).toContain('不可用');
-    expect(note).not.toContain('Plan the launch post');
+    expect(note?.text).toContain('不可用');
+    expect(note?.imageUrls).toEqual([]);
+    expect(note?.text).not.toContain('Plan the launch post');
   });
 
   it('gives the companion the quoted message of a quote reply, re-read from its own chat', async () => {
@@ -2652,23 +2661,56 @@ describe('Bot canonical Session lifecycle', () => {
     const sent = (replyQuote: unknown) => JSON.stringify({ text: 'Why Friday?', images: [], files: [], replyQuote });
     // The original comes from the chat itself; the excerpt the renderer sent is display only.
     const note = await readReplyQuoteNote(chatId, sent({ clientId: 'quoted-1', role: 'assistant', excerpt: 'forged' }));
-    expect(note).toContain('Ship the launch post on Friday.');
-    expect(note).not.toContain('forged');
+    expect(note?.text).toContain('Ship the launch post on Friday.');
+    expect(note?.text).not.toContain('forged');
     await expect(readReplyQuoteNote(chatId, sent({ clientId: 'quoted-1', role: 'system', excerpt: '' }))).resolves.toBeNull();
     await expect(readReplyQuoteNote(chatId, JSON.stringify({ text: 'no quote', images: [], files: [] }))).resolves.toBeNull();
     // A quote that points elsewhere or at a rewound row says the original is unavailable.
-    await expect(readReplyQuoteNote('other-session', sent({ clientId: 'quoted-1', role: 'assistant', excerpt: '' })))
-      .resolves.toContain('不可用');
+    expect((await readReplyQuoteNote('other-session', sent({ clientId: 'quoted-1', role: 'assistant', excerpt: '' })))?.text)
+      .toContain('不可用');
     h.sqlite!.prepare("UPDATE messages SET rewind_at = 5000 WHERE id = 'm-quoted'").run();
     const rewound = await readReplyQuoteNote(chatId, sent({ clientId: 'quoted-1', role: 'assistant', excerpt: '' }));
-    expect(rewound).toContain('不可用');
-    expect(rewound).not.toContain('Ship the launch post');
+    expect(rewound?.text).toContain('不可用');
+    expect(rewound?.text).not.toContain('Ship the launch post');
     // An owner message with only an attachment is still there, not "unavailable".
     h.sqlite!.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run('m-image', 'image-1', chatId, 'user', JSON.stringify({ text: '', images: [{ url: 'x', originalName: 'chart.png' }], files: [] }), 2_000);
+      .run('m-image', 'image-1', chatId, 'user', JSON.stringify({ text: '', images: [{ url: `xdt-image://${chatId}/chart.png`, originalName: 'chart.png' }], files: [] }), 2_000);
     const imageOnly = await readReplyQuoteNote(chatId, sent({ clientId: 'image-1', role: 'user', excerpt: 'chart.png' }));
-    expect(imageOnly).toContain('chart.png');
-    expect(imageOnly).not.toContain('不可用');
+    expect(imageOnly?.text).toContain('chart.png');
+    expect(imageOnly?.text).not.toContain('不可用');
+    const { prependPrivateChatContext } = await import('../../../maker-ipc/privateChatContext');
+    const path = join(h.userDataDir, 'chart.png');
+    writeFileSync(path, Buffer.from('image fixture'));
+    const url = `xdt-image://${chatId}/chart.png`;
+    const image = { type: 'image', path, mimeType: 'image/png', managedUrl: url };
+    const prepare = vi.fn(async () => ({ type: 'user' as const, content: [image] }));
+    const wire = await prependPrivateChatContext('Explain the chart', imageOnly!, chatId, prepare);
+    expect(prepare).toHaveBeenCalledWith(chatId, { type: 'user', content: [{ type: 'image', path: url }] });
+    expect(wire).toMatchObject({ content: [expect.objectContaining({ type: 'text' }), { type: 'text', text: 'Explain the chart' }, image] });
+    prepare.mockClear();
+    const denied = await prependPrivateChatContext('why?', {
+      ...imageOnly!, imageUrls: ['xdt-image://another-session/chart.png', '/tmp/chart.png'],
+    }, chatId, prepare);
+    expect(denied).toContain('部分背景图片未随本轮送达');
+    expect(prepare).not.toHaveBeenCalled();
+    expect(await prependPrivateChatContext({ type: 'user', content: [image] }, imageOnly!, chatId, prepare))
+      .toMatchObject({ content: [expect.objectContaining({ type: 'text' }), image] });
+    expect(prepare).not.toHaveBeenCalled();
+    // A blob visible to this account needs a grant from the selected original session.
+    const { recordBlob } = await import('../../../cindy-media/ledger');
+    const hash = 'f'.repeat(64);
+    const managedUrl = `cindy-media://blobs/${hash}.png`;
+    const context = { ...imageOnly!, imageUrls: [managedUrl] };
+    expect(await prependPrivateChatContext('why?', context, chatId, prepare)).toContain('部分背景图片未随本轮送达');
+    expect(prepare).not.toHaveBeenCalled();
+    await recordBlob({ hash, ext: 'png', mimeType: 'image/png', bytes: 13 }, context.owner.client.drizzle);
+    h.sqlite!.prepare('INSERT INTO media_refs (id, hash, ref_kind, ref_id, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('quoted-chart', hash, 'session-attachment', chatId, Date.now());
+    prepare.mockResolvedValue({ type: 'user', content: [{ ...image, managedUrl }] });
+    expect(await prependPrivateChatContext('why?', context, chatId, prepare))
+      .toMatchObject({ content: [expect.anything(), expect.anything(), { type: 'image', managedUrl }] });
+    h.ownerScopeKey = 'other';
+    await expect(prependPrivateChatContext('why?', context, chatId, prepare)).rejects.toThrow('OWNER_CHANGED');
   });
 
   it('records runtime preparation separately from successful Agent startup', async () => {

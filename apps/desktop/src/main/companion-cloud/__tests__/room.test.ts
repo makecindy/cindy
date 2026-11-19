@@ -1,10 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ROOM_HISTORY_MAX_PAGES, readAllRoomMessages, searchCompanionRooms, transcriptPageOf } from '../room.js';
 import type { CompanionTranscriptMessage } from '../../../shared/companionCloud.js';
+import { deliverDirectRoomMessage } from '../directRoom.js';
 import { fakeApi } from './fakes.js';
 
 const message = (seq: number, createdAt: number, author = 'human') => ({
   id: `m${seq}`, seq: String(seq), authorId: author, createdAt: new Date(createdAt).toISOString(), content: [{ type: 'text', text: `t${seq}` }],
+});
+
+it('delivers image-only private room input to the canonical session after validating its owner and lease', async () => {
+  const content = [{ type: 'media', mediaId: 'image-id', caption: 'receipt.png' }];
+  const photo = { id: 'image-id', category: 'image' as const, name: 'receipt.png', mimeType: 'image/png', size: 123, path: null, url: 'cindy-media://test' };
+  const { api } = fakeApi(() => ({ id: 'source', authorId: 'human', content }));
+  const prepareAttachments = vi.fn(async () => ({ attachments: [photo] }));
+  const deliver = vi.fn(async () => ({ ok: true as const }));
+  const input = { api, prepareAttachments, deliver, humanActorId: 'human', botId: 'bot', roomId: 'room', executionId: 'execution', sourceMessageId: 'source' };
+  await expect(deliverDirectRoomMessage({ ...input, humanActorId: 'another' })).rejects.toThrow('INVALID_EXECUTION_TRIGGER');
+  expect(prepareAttachments).not.toHaveBeenCalled();
+  await expect(deliverDirectRoomMessage({ ...input, beforeDeliver: async () => { throw new Error('STALE_EXECUTOR'); } })).rejects.toThrow('STALE_EXECUTOR');
+  expect(deliver).not.toHaveBeenCalled();
+  await deliverDirectRoomMessage(input);
+  expect(prepareAttachments).toHaveBeenCalledWith(content);
+  expect(deliver).toHaveBeenCalledExactlyOnceWith('bot', '[附件: receipt.png]', 'chat-direct:execution:source', [photo]);
 });
 
 describe('reading the whole room', () => {

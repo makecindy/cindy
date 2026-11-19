@@ -16648,7 +16648,7 @@
       "confirmArchive": {
         "title": "Archiver la session",
         "description": "Archiver cette session ? Elle sera retirée de la liste.",
-        "dirtyWorktreeWarning": "Les modifications non validées seront enregistrées avant l’archivage. Vous pourrez les restaurer depuis la tâche.",
+        "dirtyWorktreeWarning": "Cette tâche contient des modifications de fichiers non validées. Par défaut, elles sont enregistrées lors de l’archivage. Vous pourrez les restaurer depuis la tâche.",
         "discardChanges": "Ignorer les modifications non validées",
         "discardWarning": "Les modifications non validées et les nouveaux fichiers seront perdus.",
         "discardAndArchive": "Ignorer et archiver",

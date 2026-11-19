@@ -136,12 +136,13 @@ const host: IMHost = {
       // transport-owned boundary immediately before pinning so stale media is
       // not promoted without a message/session owner.
       if (options?.shouldReuse?.() === false) return null;
-      // 命中路径不走 cacheImage,但 IM 复用的可能是 MCP 侧 isCache=true 的缓存
+      // 背景附件复用保留 isCache 状态，由缓存回收管理生命周期。
+      // 普通入站命中不走 cacheImage,但 IM 复用的可能是 MCP 侧 isCache=true 的缓存
       // blob(feishu 两边有意共用 `feishu:<token>` 命名空间)——IM 语义是用户
       // 附件,同 cacheImage 口径降级为非 cache(review P1);降级失败只警告,
       // 不阻断附件复用(消息落库挂账钩子的 pinBlob 是第二道自愈)。
       try {
-        await pinBlob(hit.hash);
+        if (!options?.staging) await pinBlob(hit.hash);
       } catch (err) {
         log.warn('im getCachedImage: pinBlob failed', {
           integration,

@@ -23,6 +23,7 @@ export interface BlueBubblesMessage {
   handle?: { address: string; service?: string };
   chats?: BlueBubblesChat[];
   attachments?: BlueBubblesAttachment[];
+  threadOriginatorGuid?: string;
   associatedMessageGuid?: string;
   associatedMessageType?: number;
 }

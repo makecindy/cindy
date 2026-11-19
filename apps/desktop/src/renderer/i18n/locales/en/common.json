@@ -16492,7 +16492,7 @@
       "confirmArchive": {
         "title": "Archive session",
         "description": "Archive this session? It will be removed from the list.",
-        "dirtyWorktreeWarning": "Uncommitted changes will be saved before archiving. You can restore them from the task.",
+        "dirtyWorktreeWarning": "This task has uncommitted file changes. Archiving saves them by default so you can restore them from the task later.",
         "discardChanges": "Discard uncommitted changes",
         "discardWarning": "Uncommitted changes and new files will be lost.",
         "discardAndArchive": "Discard and archive",

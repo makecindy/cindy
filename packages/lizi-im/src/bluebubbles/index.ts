@@ -7,7 +7,7 @@ import type { TextChannelIM, ImFinalOutput } from '../channelIM.js';
 import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.js';
 import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
 import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
-import { BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
+import { BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 
 export interface BlueBubblesConfig {
@@ -590,6 +590,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
             contextId: this.botContextId, messageId: guid, text: message.text ?? '', attachments: [], unsupported: [],
             speaker: { id: sender, name: sender, isOwner: sender === config.ownerAddress && (!message.isFromMe || chat.guid === this.getOwnerUserId()) },
+            ...(typeof message.threadOriginatorGuid === 'string' && message.threadOriginatorGuid !== guid ? { imessageReplyGuid: message.threadOriginatorGuid } : {}),
             interactionSource: { chatName: chat.displayName, senderName: sender },
             ...(this.isGroup(chat.guid) ? { ambient: !this.isGroupInvocation(message.text ?? ''),
               invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
@@ -747,6 +748,79 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (this.live(generation) && receipts.isPending(guid)) this.metadata.set(guid, message);
   }
 
+  private async stageAttachment(attachment: BlueBubblesAttachment, bytes: Uint8Array) {
+    const name = attachment.transferName || attachment.guid;
+    const kind = classifyInboundAttachment(attachment.mimeType, name);
+    if (kind.kind === 'file') return this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name });
+    const params = { integration: 'imessage' as const, token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType };
+    return kind.kind === 'image' ? this.host.media?.cacheImage({ ...params, staging: true }) : this.host.media?.cacheMedia?.(params);
+  }
+
+  /** Only read the explicit reply and selected background from this connected chat. */
+  async contextMedia(event: IMMessageEvent, historyIds: readonly string[]) {
+    const attachments: IMMessageEvent['attachments'] = [];
+    const unavailable: string[] = [];
+    let reply: IMMessageEvent['replyContext'];
+    const providedBy: Array<{ originalName: string; author: string }> = [];
+    const ids = new Set([...(event.imessageReplyGuid ? [event.imessageReplyGuid] : []), ...historyIds.slice().reverse()]);
+    if (!ids.size) return { attachments, unavailable, reply, providedBy };
+    const { api, generation, receipts } = this.target(event.chatId);
+    const seen = new Set<string>();
+    const provided = new Set(event.attachments.map(file => file.url ?? file.absPath));
+    let images = Math.max(0, 6 - event.attachments.filter(file => file.kind === 'image').length);
+    let files = Math.max(0, 4 - event.attachments.filter(file => file.kind !== 'image').length);
+    for (const guid of ids) {
+      if (guid === event.messageId) continue;
+      const original = await api.message(guid).catch(() => null);
+      this.assertLive(generation);
+      if (original?.guid !== guid || !original.chats?.some(chat => chat.guid === event.chatId)
+        || !Number.isFinite(original.dateCreated) || original.dateCreated < receipts.activatedAtFor(event.chatId)
+        || (original.service && original.service !== 'iMessage') || (original.handle?.service && original.handle.service !== 'iMessage')) {
+        unavailable.push('原消息不可用');
+        continue;
+      }
+      if (guid === event.imessageReplyGuid) reply = { messageId: guid, author: original.handle?.address || 'iMessage',
+        text: original.text ?? '', sentAt: original.dateCreated };
+      for (const item of original.attachments ?? []) {
+        if (seen.has(item.guid)) continue;
+        seen.add(item.guid);
+        const name = item.transferName || item.guid;
+        const kind = classifyInboundAttachment(item.mimeType, name);
+        const image = kind.kind === 'image';
+        if ((image ? images : files) === 0 || (item.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) {
+          unavailable.push(name);
+          continue;
+        }
+        try {
+          const cached = image ? await this.host.media?.getCachedImage('imessage', `${this.botContextId}:${item.guid}`,
+            { staging: true, shouldReuse: () => this.live(generation) }) : null;
+          this.assertLive(generation);
+          let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined = cached;
+          if (!stored) {
+            const bytes = await api.download(item.guid);
+            this.assertLive(generation);
+            stored = await this.stageAttachment(item, bytes);
+          }
+          if (!this.live(generation)) await stored?.discard?.();
+          this.assertLive(generation);
+          if (!stored) { unavailable.push(name); continue; }
+          const url = 'url' in stored ? stored.url : undefined;
+          const key = url ?? stored.absPath;
+          if (provided.has(key)) { await stored.discard?.(); continue; }
+          if (image) images--; else files--;
+          providedBy.push({ originalName: name, author: original.handle?.address || 'iMessage' });
+          provided.add(key);
+          attachments.push({ absPath: stored.absPath, originalName: name, mimeType: ('mimeType' in stored && stored.mimeType) || kind.mimeType,
+            kind: image ? 'image' : 'file', ...(url ? { url } : {}) });
+        } catch {
+          this.assertLive(generation);
+          unavailable.push(name);
+        }
+      }
+    }
+    return { attachments, unavailable, reply, providedBy };
+  }
+
   private async prepareAttachments(generation: number, guid: string, event: IMMessageEvent,
     message: BlueBubblesMessage, api: BlueBubblesApi, receipts: BlueBubblesReceipts,
     cleanup: Map<string, Array<() => Promise<void>>>): Promise<void> {
@@ -770,11 +844,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         const kind = classifyInboundAttachment(attachment.mimeType, name);
         let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined;
         try {
-          stored = kind.kind === 'file'
-          ? await this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name })
-          : kind.kind === 'image'
-            ? await this.host.media?.cacheImage({ integration: 'imessage', token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType, staging: true })
-            : await this.host.media?.cacheMedia?.({ integration: 'imessage', token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType });
+          stored = await this.stageAttachment(attachment, bytes);
         } catch (error) {
           if (!(error instanceof UnsupportedInboundMediaError)) throw error;
           event.unsupported.push({ type: 'unsupported', label: name });

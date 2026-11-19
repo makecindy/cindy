@@ -16418,7 +16418,7 @@
       "confirmArchive": {
         "title": "归档任务",
         "description": "确定要归档这个任务吗？归档后将从列表中移除。",
-        "dirtyWorktreeWarning": "未提交的更改会在归档前保存，可在任务内恢复。",
+        "dirtyWorktreeWarning": "当前任务有尚未提交的文件更改。归档时默认保存这些更改，以后可以在任务中恢复。",
         "discardChanges": "丢弃未提交的更改",
         "discardWarning": "未提交的更改和新文件将无法恢复。",
         "discardAndArchive": "丢弃并归档",
