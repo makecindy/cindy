@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useCallback, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useRef, useState } from 'react';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useSettingsSectionTarget } from '../useSettingsSectionTarget';
@@ -17,6 +17,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 const scrollTo = vi.fn();
 let targetTop = 100;
 let resized: ResizeObserverCallback;
+const observedChildren = new Set<Element>();
 function Page({ ready = false, active = true, hidden = false }: { ready?: boolean; active?: boolean; hidden?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const setting = useSettingDefinition(additionalSettings.browserTarget);
@@ -42,12 +43,13 @@ function Page({ ready = false, active = true, hidden = false }: { ready?: boolea
 
 beforeEach(() => {
   vi.useFakeTimers();
-  scrollTo.mockClear();
+  scrollTo.mockReset();
+  observedChildren.clear();
   targetTop = 100;
   vi.stubGlobal('ResizeObserver', class {
     constructor(callback: ResizeObserverCallback) { resized = callback; }
-    observe() {}
-    disconnect() {}
+    observe(element: Element) { observedChildren.add(element); }
+    disconnect() { observedChildren.clear(); }
   });
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
     window.setTimeout(() => callback(0), 0),
@@ -97,6 +99,51 @@ describe('settings definition and navigation', () => {
     expect(target.closest('[inert]')).toBeNull();
     expect(scrollTo).toHaveBeenLastCalledWith({ top: 92, behavior: 'auto' });
     expect(target.classList.contains('settings-search-target-highlight')).toBe(true);
+  });
+
+  // Unit, PR #11473: the first frame observes only the Suspense fallback.
+  // Replacing it with an initially collapsed section can clamp the scroll
+  // before the animation grows the page. Test the final scroll position.
+  it('reaches a cold deep link after its asynchronously mounted section expands', async () => {
+    function Content({ open }: { open: boolean }) {
+      return <div data-testid="content" inert={!open}>
+        <div id="settings-browser-target">Deep link target</div>
+      </div>;
+    }
+    const loaded = Promise.withResolvers<{ default: typeof Content }>();
+    const LazyContent = lazy(() => loaded.promise);
+    function ColdPage() {
+      const ref = useRef<HTMLDivElement>(null);
+      const [open, setOpen] = useState(false);
+      const revealTarget = useCallback(() => setOpen(true), []);
+      useSettingsSectionTarget('settings-browser-target', ref, 'cold-deep-link', undefined, revealTarget);
+      return <div ref={ref} data-testid="scroller">
+        <Suspense fallback={<div>Loading settings</div>}>
+          <LazyContent open={open} />
+        </Suspense>
+      </div>;
+    }
+
+    const view = render(<ColdPage />);
+    const scroller = view.getByTestId('scroller');
+    let maxScroll = 20;
+    targetTop = 650;
+    Object.defineProperty(scroller, 'scrollHeight', { get: () => maxScroll + 100 });
+    scrollTo.mockImplementation(({ top }: ScrollToOptions) => {
+      scroller.scrollTop = Math.min(top ?? 0, maxScroll);
+    });
+    act(() => { vi.advanceTimersByTime(0); });
+    await act(async () => { loaded.resolve({ default: Content }); });
+    expect(scroller.scrollTop).toBe(20);
+    const target = view.getByText('Deep link target');
+    vi.spyOn(target, 'getBoundingClientRect').mockImplementation(
+      () => ({ top: targetTop - scroller.scrollTop }) as DOMRect,
+    );
+    maxScroll = 700;
+    act(() => {
+      if (observedChildren.has(view.getByTestId('content'))) resized([], {} as ResizeObserver);
+    });
+    expect(scroller.scrollTop).toBe(642);
   });
 
   it('gives the two link preferences distinct targets while retaining their selected defaults', () => {

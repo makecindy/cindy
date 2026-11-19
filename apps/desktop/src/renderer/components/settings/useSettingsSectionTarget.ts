@@ -62,10 +62,21 @@ export function useSettingsSectionTarget(
       reveal();
       // IPC may insert a target or expand cards above an existing target. Follow
       // only this navigation briefly; direct user interaction always takes over.
-      observer = new MutationObserver(reveal);
+      const resize = new ResizeObserver(reveal);
+      resizeObserver = resize;
+      const observeContent = () => {
+        resize.disconnect();
+        for (const child of container.children) resize.observe(child);
+      };
+      observer = new MutationObserver((records) => {
+        // Suspense can replace the initially observed fallback with the real page.
+        if (records.some((record) => record.type === 'childList' && record.target === container)) {
+          observeContent();
+        }
+        reveal();
+      });
       observer.observe(container, { childList: true, subtree: true, attributes: true, attributeFilter: ['inert'] });
-      resizeObserver = new ResizeObserver(reveal);
-      for (const child of container.children) resizeObserver.observe(child);
+      observeContent();
       expiry = window.setTimeout(stopFollowing, 5000);
     });
     const inputEvents = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
