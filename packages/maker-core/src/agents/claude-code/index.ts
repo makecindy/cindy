@@ -5913,46 +5913,49 @@ export class ClaudeCodeAgent extends BaseAgent {
               continue;
             }
             if (noteSdkInitMcpServerNames(rawMsg)) {
-              // User/project/local settings MCPs are only revealed by the SDK init
-              // payload, after the query has already started. Native OAuth Auto skips
-              // canUseTool, so immediately hand later turns back to Cindy when that
-              // payload reports any connected MCP server. Do this before the optional
-              // provenance RPC below: a slow status call must not prolong native Auto.
-              if (
-                mutablePermissionMode === 'auto'
-                && !mutablePlanMode
-                && !planTurnActive
-                && mutableAutoReviewCredentialMode === 'oauth-bearer'
-                && !usesNativeClaudeAutoReview()
-                && nativeAutoQueries.has(currentQ)
-              ) {
-                try {
-                  await currentQ.setPermissionMode(effectiveSdkPermissionMode());
-                  nativeAutoQueries.delete(currentQ);
-                } catch (error) {
-                  // Keeping this query alive would leave connected MCP tools under the
-                  // native classifier, which bypasses Cindy's canUseTool policy. Close
-                  // and surface a terminal stream failure instead of failing open.
-                  log.error('failed to downgrade native Auto after SDK settings MCP init', {
-                    error: String(error),
-                  });
-                  try {
-                    await currentQ.close();
-                  } catch (closeError) {
-                    log.warn('failed to close query after native Auto downgrade failure', {
-                      error: String(closeError),
-                    });
-                  }
-                  throw new Error(
-                    `[MCP_APPROVAL_MODE_DOWNGRADE_FAILED] ${
-                      error instanceof Error ? error.message : String(error)
-                    }`,
-                  );
-                }
-              }
-              // Freeze the next event's ownership while this RPC suspends processing.
               sdkInput.prefetch();
-              await refreshSdkMcpProvenance(currentQ);
+              try {
+                // User/project/local settings MCPs are only revealed by the SDK init
+                // payload, after the query has already started. Native OAuth Auto skips
+                // canUseTool, so immediately hand later turns back to Cindy when that
+                // payload reports any connected MCP server. Do this before the optional
+                // provenance RPC below: a slow status call must not prolong native Auto.
+                if (
+                  mutablePermissionMode === 'auto'
+                  && !mutablePlanMode
+                  && !planTurnActive
+                  && mutableAutoReviewCredentialMode === 'oauth-bearer'
+                  && !usesNativeClaudeAutoReview()
+                  && nativeAutoQueries.has(currentQ)
+                ) {
+                  try {
+                    await currentQ.setPermissionMode(effectiveSdkPermissionMode());
+                    nativeAutoQueries.delete(currentQ);
+                  } catch (error) {
+                    // Keeping this query alive would leave connected MCP tools under the
+                    // native classifier, which bypasses Cindy's canUseTool policy. Close
+                    // and surface a terminal stream failure instead of failing open.
+                    log.error('failed to downgrade native Auto after SDK settings MCP init', {
+                      error: String(error),
+                    });
+                    try {
+                      await currentQ.close();
+                    } catch (closeError) {
+                      log.warn('failed to close query after native Auto downgrade failure', {
+                        error: String(closeError),
+                      });
+                    }
+                    throw new Error(
+                      `[MCP_APPROVAL_MODE_DOWNGRADE_FAILED] ${
+                        error instanceof Error ? error.message : String(error)
+                      }`,
+                    );
+                  }
+                }
+                await refreshSdkMcpProvenance(currentQ);
+              } finally {
+                sdkInput.stopPrefetch();
+              }
             }
             const expectedResumeSessionId = resumeValidationPending ? configuredResumeSessionId : undefined;
             const inBandInvalidConversationId =
@@ -8641,30 +8644,54 @@ function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpo
   const iterator = source[Symbol.asyncIterator]();
   const receivedEpochs = new WeakMap<T, number>();
   let pending: Promise<IteratorResult<T>> | undefined;
+  // While processing is suspended these replace the SDK's own pending events;
+  // no event is translated before the provenance/permission barrier completes.
+  const buffered: IteratorResult<T>[] = [];
+  let prefetching = false;
+  const read = async () => {
+    const result = await iterator.next();
+    if (!result.done) receivedEpochs.set(result.value, getEpoch());
+    return result;
+  };
+  const pump = () => {
+    const next = pending ??= read();
+    void next.then((result) => {
+      if (!prefetching || pending !== next) return;
+      pending = undefined;
+      buffered.push(result);
+      if (result.done) prefetching = false;
+      else pump();
+    }, () => { prefetching = false; });
+  };
   let request: { id: string; inputEpoch: number } | undefined;
   return {
     messages: {
       [Symbol.asyncIterator]() {
         return {
           next() {
+            const first = buffered.shift();
+            if (first) return Promise.resolve(first);
             if (!pending) return iterator.next();
             const next = pending;
             pending = undefined;
             return next;
           },
-          return: iterator.return?.bind(iterator),
+          return: iterator.return ? () => {
+            prefetching = false;
+            buffered.length = 0;
+            return iterator.return!();
+          } : undefined,
         };
       },
     },
     prefetch() {
-      if (pending) return;
-      pending = Promise.resolve(iterator.next()).then((result) => {
-        if (!result.done) receivedEpochs.set(result.value, getEpoch());
-        return result;
-      });
-      // The consumer may still be awaiting provenance when the SDK rejects.
-      // Keep the original rejection for next(), without an unhandled promise.
-      void pending.catch(() => {});
+      prefetching = true;
+      pump();
+    },
+    stopPrefetch() {
+      // Keep at most one unresolved next() for the normal consumer. A race
+      // with its resolution cannot enqueue it twice: pump checks identity.
+      prefetching = false;
     },
     inputEpoch(message: T) {
       let inputEpoch = receivedEpochs.get(message) ?? getEpoch();

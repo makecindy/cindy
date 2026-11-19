@@ -745,7 +745,7 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
   // #9221: init provenance can await while SDK events keep arriving. Preserve
   // which work accepted the entire tool event, not just an already-seen ID.
   // Compare a pre-steer queued handoff with a genuinely post-steer handoff.
-  it.each(['queued-before-steer', 'started-before-steer', 'after-steer'] as const)('keeps dispatch ownership across deferred SDK processing (%s)', async (timing) => {
+  it.each(['queued-before-steer', 'queued-after-status', 'started-before-steer', 'after-steer'] as const)('keeps dispatch ownership across deferred SDK processing (%s)', async (timing) => {
     const session = await startSessionWithStream();
     let releaseStatus!: (value: []) => void;
     const status = vi.fn(() => new Promise<[]>((resolve) => { releaseStatus = resolve; }));
@@ -761,7 +761,8 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
       await session.handle.send({ type: 'user', content: 'delegate a task' });
       session.stream.emit({ type: 'system', subtype: 'init', mcp_servers: [] });
       await pumpUntil(() => status.mock.calls.length === 1, 'init provenance in flight');
-      if (timing === 'queued-before-steer') {
+      if (timing === 'queued-before-steer' || timing === 'queued-after-status') {
+        if (timing === 'queued-after-status') session.stream.emit({ type: 'system', subtype: 'status', status: null });
         emitDispatch();
         await vi.advanceTimersByTimeAsync(1);
       } else if (timing === 'started-before-steer') {
@@ -771,7 +772,7 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
         await vi.advanceTimersByTimeAsync(1);
       }
       await session.handle.steer!({ type: 'user', content: 'new work' });
-      if (timing !== 'queued-before-steer') emitDispatch();
+      if (timing !== 'queued-before-steer' && timing !== 'queued-after-status') emitDispatch();
       await vi.advanceTimersByTimeAsync(1);
       releaseStatus([]);
       session.stream.emit({ type: 'assistant', message: { content: [
