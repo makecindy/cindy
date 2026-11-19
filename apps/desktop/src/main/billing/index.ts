@@ -61,6 +61,8 @@ const MAX_GIFT_MESSAGE_LENGTH = 240;
 const MAX_GIFT_CARD_QUANTITY = 100;
 const MAX_PURCHASED_GIFT_CARD_PAGE = 50;
 const BILLING_REQUEST_TIMEOUT_MS = 20_000;
+/** 旧服务端不支持付款记录 includeGiftCards 时，多久后再试一次带参数的请求。 */
+const LEGACY_PAYMENT_HISTORY_RETRY_MS = 10 * 60_000;
 const EXTERNAL_BROWSER_LAUNCH_TIMEOUT_MS = 10_000;
 
 type ServerFetch = <T>(path: string, options: ApiFetchOptions) => Promise<T>;
@@ -69,6 +71,8 @@ export type BillingIpcDependencies = {
   getMainWindow: () => BrowserWindow | null;
   requirePersonalAccount: () => void;
   getBaseUrl?: () => string;
+  /** 测试用：替换当前时间（毫秒）。 */
+  now?: () => number;
   /** 当前账号区域的分享站；礼品卡领取链接拼在它的 `/gift` 下。 */
   getShareBaseUrl?: () => string;
   fetch?: ServerFetch;
@@ -335,6 +339,10 @@ export function createBillingHandlers(
 ): Record<string, BillingHandler> {
   const fetch = deps.fetch ?? serverApiFetch;
   const getBaseUrl = deps.getBaseUrl ?? (() => getClientEndpoint('modelAccessApiBaseUrl'));
+  // 旧服务端不认识付款记录的 includeGiftCards（400）：记下这个地址在一段时间内不支持，期间直接走
+  // 原来的请求，不让每次读付款记录都先白跑一趟；过期后再试一次，服务端升级后自动恢复。
+  const legacyPaymentHistoryUntil = new Map<string, number>();
+  const now = deps.now ?? (() => Date.now());
   const getShareBaseUrl = deps.getShareBaseUrl ?? (() => getClientEndpoint('shareBaseUrl'));
   const openExternal = deps.openExternal ?? ((url: string) => shell.openExternal(url));
   const invoke = async <T>(path: string, options: Omit<ApiFetchOptions, 'baseUrl'> = {}) => {
@@ -441,6 +449,10 @@ export function createBillingHandlers(
       if (typeof payload.cursor === 'string') query.set('cursor', payload.cursor);
       const withGiftCards = new URLSearchParams(query);
       withGiftCards.set('includeGiftCards', 'true');
+      const baseUrl = getBaseUrl();
+      if ((legacyPaymentHistoryUntil.get(baseUrl) ?? 0) > now()) {
+        return projectResponse(await invoke<unknown>(`/api/billing/payment-history?${query}`), projectBillingPaymentHistory);
+      }
       let response: unknown;
       try {
         response = await fetch<unknown>(`/api/billing/payment-history?${withGiftCards}`, {
@@ -452,6 +464,7 @@ export function createBillingHandlers(
       } catch (error) {
         // 服务端还没上线礼品卡时不认识这个参数（400）：退回原来的请求，订单记录照常显示。
         if (!(error instanceof ServerApiError) || error.statusCode !== 400) throwBillingFetchError(error);
+        legacyPaymentHistoryUntil.set(baseUrl, now() + LEGACY_PAYMENT_HISTORY_RETRY_MS);
         response = await invoke<unknown>(`/api/billing/payment-history?${query}`);
       }
       return projectResponse(response, projectBillingPaymentHistory);

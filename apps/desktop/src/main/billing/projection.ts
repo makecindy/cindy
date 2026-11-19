@@ -146,8 +146,9 @@ function sameDecimal(left: string, right: string): boolean {
  */
 function isGiftCardMoney(value: string): boolean {
   const [whole = '', fraction = ''] = value.split('.');
-  // 整数部分最多 12 位：与购买弹窗按分换算（cents）、下单请求的面额校验同一范围。
-  return whole.length <= 12 && trimTrailingZeros(fraction).length <= 2;
+  // 整数部分最多 12 位：与购买弹窗按分换算（cents）、下单请求的面额校验同一范围。礼品卡金额必须
+  // 大于 0：0 元的方案、上限或卡不能拿来卖或展示。
+  return whole.length <= 12 && trimTrailingZeros(fraction).length <= 2 && /[1-9]/.test(value);
 }
 
 /** 读礼品卡金额字段：合法十进制且满足 isGiftCardMoney，否则为 null。 */

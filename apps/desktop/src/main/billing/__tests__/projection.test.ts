@@ -1078,6 +1078,9 @@ describe('gift card purchase projection', () => {
         giftOffer({ code: 'gift_card_custom_long', amount: null, creditAmount: null, minAmount: '100.500000000', maxAmount: '500' }),
         // 整数部分超过 12 位的面额界面无法按分换算，不卖。
         giftOffer({ code: 'gift_card_huge', amount: '1234567890123', creditAmount: '1234567890123' }),
+        // 0 元的面额不能卖。
+        giftOffer({ code: 'gift_card_zero', amount: '0', creditAmount: '0.00' }),
+        giftOffer({ code: 'gift_card_custom_zero', amount: null, creditAmount: null, minAmount: '0', maxAmount: '500' }),
       ])],
     });
     expect(catalog.products).toHaveLength(1);
@@ -1124,7 +1127,7 @@ describe('gift card purchase projection', () => {
     };
     for (const malformed of [
       { minFaceValue: 'abc' }, { maxFaceValue: 100 }, { minFaceValue: '1.005' }, { maxOrderAmount: '1000.001' },
-      { maxOrderAmount: '1234567890123' },
+      { maxOrderAmount: '1234567890123' }, { maxOrderAmount: '0' }, { minFaceValue: '0.00' },
       { emailCooldownSeconds: -1 }, { emailCooldownSeconds: 1.5 },
     ]) {
       expect(() => projectGiftCardPurchasePolicy({ ...base, ...malformed })).toThrow();
@@ -1171,6 +1174,7 @@ describe('gift card purchase projection', () => {
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ currency: 'EUR' })], nextCursor: null })).toThrow();
     // 整数部分最多 12 位，与购买弹窗按分换算、下单请求的面额校验同一范围。
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '1234567890123' })], nextCursor: null })).toThrow();
+    expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ amount: '0' })], nextCursor: null })).toThrow();
     // 读进来的卡号一定能用来取码和发信（与两个 IPC 请求同一条规则）；不是卡号的按坏响应处理。
     expect(isPurchasedGiftCardId('card_1') && isPurchasedGiftCardId('3f2b8c1e-0a4d-4c55-9f1e-2b7d9c0e6a11')).toBe(true);
     expect(() => projectPurchasedGiftCardList({ cards: [purchasedCard({ cardId: '../card_1' })], nextCursor: null })).toThrow();

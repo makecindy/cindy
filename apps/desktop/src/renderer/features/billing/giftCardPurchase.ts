@@ -105,26 +105,27 @@ export function parseCustomGiftCardAmount(
   const value = input.trim();
   if (!value) return { issue: 'empty' };
   const unit = cents(value);
-  if (unit === null || unit === 0) return { issue: unit === 0 ? 'range' : 'format' };
+  if (unit === null || unit === 0n) return { issue: unit === 0n ? 'range' : 'format' };
   const min = cents(range.min);
   const max = cents(range.max);
   // 范围读不出来时不放行：宁可这次填不了，也不让低于下限或高于上限的面额去下单。
   if (min === null || max === null || unit < min || unit > max) return { issue: 'range' };
-  const whole = Math.floor(unit / 100);
-  const fraction = trimTrailingZeros(String(unit % 100).padStart(2, '0'));
+  const whole = unit / 100n;
+  const fraction = trimTrailingZeros(String(unit % 100n).padStart(2, '0'));
   return { amount: fraction ? `${whole}.${fraction}` : String(whole) };
 }
 
 /**
- * 十进制金额转成分。服务端的金额可能带多位小数（计费投影接受最多 9 位，如 100.000000000），
- * 先去掉小数末尾的 0 再看；去掉后仍超过两位小数的不是合法面额（礼品卡面额最多两位小数）。
+ * 十进制金额转成分（bigint，乘以张数也不丢精度）。服务端的金额可能带多位小数（计费投影接受最多
+ * 9 位，如 100.000000000），先去掉小数末尾的 0 再看；去掉后仍超过两位小数的不是合法面额（礼品卡
+ * 面额最多两位小数）。
  */
-function cents(amount: string): number | null {
+function cents(amount: string): bigint | null {
   const match = /^(\d{1,12})(?:\.(\d{1,9}))?$/.exec(amount);
   if (!match) return null;
   const fraction = trimTrailingZeros(match[2] ?? '');
   if (fraction.length > 2) return null;
-  return Number(match[1]) * 100 + Number(fraction.padEnd(2, '0'));
+  return BigInt(match[1]!) * 100n + BigInt(fraction.padEnd(2, '0'));
 }
 
 /**
@@ -139,20 +140,20 @@ export function maxGiftCardQuantity(
   if (policy.maxOrderAmount !== null) {
     const unit = cents(unitAmount);
     const cap = cents(policy.maxOrderAmount);
-    if (unit === null || cap === null || unit === 0) return 0;
-    max = Math.min(max, Math.floor(cap / unit));
+    if (unit === null || cap === null || unit === 0n) return 0;
+    max = Math.min(max, Number(cap / unit));
   }
   return Math.max(0, max);
 }
 
-/** 面额 × 张数，返回十进制字符串（两位小数以内）。 */
+/** 面额 × 张数，返回十进制字符串（两位小数以内）；按分用 bigint 精确计算。 */
 export function giftCardOrderTotal(unitAmount: string, quantity: number): string {
   const unit = cents(unitAmount);
   if (unit === null) return unitAmount;
-  const total = unit * quantity;
-  const whole = Math.floor(total / 100);
-  const fraction = total % 100;
-  return fraction === 0 ? String(whole) : `${whole}.${String(fraction).padStart(2, '0')}`;
+  const total = unit * BigInt(quantity);
+  const whole = total / 100n;
+  const fraction = total % 100n;
+  return fraction === 0n ? String(whole) : `${whole}.${String(fraction).padStart(2, '0')}`;
 }
 
 /**

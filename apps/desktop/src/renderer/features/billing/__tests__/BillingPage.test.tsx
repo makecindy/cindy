@@ -155,6 +155,7 @@ vi.mock('qrcode', () => ({
 import { BillingPage, PURCHASED_CARDS_RETRY_DELAYS_MS } from '../BillingPage';
 import {
   EMAIL_REFRESH_DELAY_MS,
+  EMAIL_REFRESH_MAX_PAGES,
   EMAIL_REFRESH_MAX_ROUNDS,
   usePurchasedGiftCards,
 } from '../usePurchasedGiftCards';
@@ -1428,6 +1429,48 @@ describe('BillingPage remote catalog rendering', () => {
         });
         expect(list).toHaveBeenLastCalledWith({ limit: 20, cursor: 'cursor_2' });
         expect(result.current.state.cards.find((item) => item.cardId === 'card_older')?.email?.status).toBe('SENT');
+        unmount();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // 评审发现（PR #11412）：发送中的卡分散在很多已加载的分页时，每轮按页并发重读会随页数无上限地
+    // 放大请求。每轮最多重读几页、逐页串行。
+    it('re-reads at most a few pages per round, one request at a time', async () => {
+      vi.useFakeTimers();
+      try {
+        let active = 0;
+        let peak = 0;
+        const list = vi.fn(async (payload: { limit: number; cursor?: string }) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await Promise.resolve();
+          active -= 1;
+          const index = payload.cursor ? Number(payload.cursor.slice('cursor_'.length)) : 1;
+          return {
+            ...page([card({ cardId: `card_${index}`, email: delivery('PENDING') })]),
+            nextCursor: index < 5 ? `cursor_${index + 1}` : null,
+          };
+        });
+        window.electronAPI.billing.listPurchasedGiftCards = list;
+        const { result, unmount } = renderHook(() => usePurchasedGiftCards());
+        await act(async () => {
+          await result.current.reload();
+        });
+        for (let loaded = 1; loaded < 5; loaded += 1) {
+          await act(async () => {
+            await result.current.loadMore();
+          });
+        }
+        expect(result.current.state.cards).toHaveLength(5);
+        const before = list.mock.calls.length;
+        peak = 0;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(EMAIL_REFRESH_DELAY_MS);
+        });
+        expect(list.mock.calls.length - before).toBe(EMAIL_REFRESH_MAX_PAGES);
+        expect(peak).toBe(1);
         unmount();
       } finally {
         vi.useRealTimers();

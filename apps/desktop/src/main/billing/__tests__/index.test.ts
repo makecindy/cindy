@@ -151,6 +151,29 @@ describe('billing IPC', () => {
     ]);
   });
 
+  // 评审发现（PR #11412）：旧服务端每次读付款记录都要先白跑一趟必然 400 的请求。记下这个地址暂不支持，
+  // 期间直接走原来的请求；过一段时间再试，服务端升级后自动恢复。
+  it('remembers for a while that the server does not know gift cards yet', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-19T08:00:00.000Z'));
+      const { call, fetch } = harness();
+      fetch.mockRejectedValueOnce(new ServerApiError('INVALID_PARAMS', 400, 'redacted'));
+      await call('billing:list-payment-history', { limit: 10 });
+      await call('billing:list-payment-history', { limit: 10, cursor: 'next_page' });
+      vi.setSystemTime(new Date('2026-11-19T08:11:00.000Z'));
+      await call('billing:list-payment-history', { limit: 10 });
+      expect(fetch.mock.calls.map(([path]) => path)).toEqual([
+        '/api/billing/payment-history?limit=10&includeGiftCards=true',
+        '/api/billing/payment-history?limit=10',
+        '/api/billing/payment-history?limit=10&cursor=next_page',
+        '/api/billing/payment-history?limit=10&includeGiftCards=true',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { limit: 0 }, { limit: 101 }, { limit: 10, cursor: '../other' },
     { limit: 10, cursor: 'a'.repeat(1025) }, { limit: 10, membershipId: 'another-account' },

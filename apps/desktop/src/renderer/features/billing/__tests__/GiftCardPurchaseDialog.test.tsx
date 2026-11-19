@@ -130,6 +130,9 @@ describe('gift card amounts written at a longer scale', () => {
     expect(maxGiftCardQuantity({ ...policy, maxOrderAmount: '1000.000000000' }, '200.000000000')).toBe(5);
     expect(maxGiftCardQuantity({ ...policy, maxOrderAmount: '1000.000000000' }, '300.000000000')).toBe(3);
     expect(giftCardOrderTotal('100.500000000', 3)).toBe('301.50');
+    // 按分用 bigint 精确计算：12 位面额乘以张数也不丢一分（浮点会算成 …91.08）。
+    expect(giftCardOrderTotal('999999999999.91', 99)).toBe('98999999999991.09');
+    expect(maxGiftCardQuantity({ ...policy, maxOrderAmount: '999999999999.99' }, '333333333333.33')).toBe(3);
     const range = customGiftCardRange(
       { minAmount: '50.000000000', maxAmount: '500.000000000' },
       { minFaceValue: '100.000000000', maxFaceValue: '1000.000000000' },

@@ -15,6 +15,11 @@ const PAGE_SIZE = 20;
 /** 发到邮箱是异步的：还在排队或发送中的卡，隔一会儿重读它所在的那一页，最多几次，窗口隐藏时暂停。 */
 export const EMAIL_REFRESH_DELAY_MS = 5_000;
 export const EMAIL_REFRESH_MAX_ROUNDS = 6;
+/**
+ * 每轮最多重读几页、逐页串行：发送中的卡分散在很多已加载的分页时，不能每 5 秒并发一批请求。
+ * 超出的页这轮不刷新，下次进入计费页或手动刷新时再读。
+ */
+export const EMAIL_REFRESH_MAX_PAGES = 3;
 
 /** 还没领取、邮件仍在排队或发送中的卡；已领取或已退款的卡不会再发出，不等它。 */
 export function isGiftCardEmailInFlight(card: BillingPurchasedGiftCard): boolean {
@@ -224,8 +229,12 @@ export function usePurchasedGiftCards() {
         state.cards
           .filter(isGiftCardEmailInFlight)
           .map((card) => pageOfCardRef.current.get(card.cardId) ?? null),
-      )];
-      void Promise.all(cursors.map((cursor) => billingApi.listPurchasedGiftCards(PAGE_SIZE, cursor ?? undefined)))
+      )].slice(0, EMAIL_REFRESH_MAX_PAGES);
+      void (async () => {
+        const pages = [];
+        for (const cursor of cursors) pages.push(await billingApi.listPurchasedGiftCards(PAGE_SIZE, cursor ?? undefined));
+        return pages;
+      })()
         .then((pages) => {
           if (mountedRef.current) mergeCards(pages.flatMap((page) => page.cards));
         })
