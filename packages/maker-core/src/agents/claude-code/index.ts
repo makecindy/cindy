@@ -3370,6 +3370,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let activeRemoteQuery: { close: () => Promise<void>; detach?: () => Promise<void> } | null = null;
     // 跨消息累积:一个 turn 内 SDK 会发多个 assistant message,这里把 text 拼起来,
     // 在 result 缺少正文时作为 finalText 兜底。
+    let workerDispatchInputEpoch = 0;
     const turnState: TurnState = {
       text: '',
       toolUses: 0,
@@ -5875,7 +5876,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       terminalBackgroundTaskIds.clear();
       void (async () => {
         try {
-          for await (const rawMsg of currentQ) {
+          const sdkInput = observeSdkInputEpoch(currentQ, () => workerDispatchInputEpoch);
+          for await (const rawMsg of sdkInput.messages) {
+            const inputEpoch = sdkInput.inputEpoch(rawMsg);
             if (closed) break;
             const rawType = (rawMsg as { type?: string } | null)?.type;
             const rawSubtype = (rawMsg as { subtype?: string } | null)?.subtype;
@@ -5947,6 +5950,8 @@ export class ClaudeCodeAgent extends BaseAgent {
                   );
                 }
               }
+              // Freeze the next event's ownership while this RPC suspends processing.
+              sdkInput.prefetch();
               await refreshSdkMcpProvenance(currentQ);
             }
             const expectedResumeSessionId = resumeValidationPending ? configuredResumeSessionId : undefined;
@@ -6037,6 +6042,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             translateSdkMessage(rawMsg, forwardEventSink, {
               rt: runtimeState,
               turn: turnState,
+              workerDispatchWorkIsCurrent: inputEpoch === workerDispatchInputEpoch,
               log,
               getModel: () => mutableModel,
               getProviderId: () => mutableProviderId,
@@ -7180,6 +7186,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // get persisted and removed even though Claude never received them.
             throw new Error('Claude input queue is closed');
           }
+          workerDispatchInputEpoch += 1;
           userInputAccepted = true;
           rollbackUnacceptedFork = undefined;
           if (unacceptedForks.delete(q) && sdkSessionId) {
@@ -7278,6 +7285,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // this turn, but neither its old dispatch nor a late receipt may exempt
         // the steered response from silent-stop recovery. Rejected steers above
         // leave the existing handoff untouched.
+        workerDispatchInputEpoch += 1;
         turnState.completedWorkerDispatch = false;
         turnState.workerDispatchNeedsReport = false;
         turnState.workerDispatchTurnToolUseIds?.clear();
@@ -8626,6 +8634,54 @@ export class ClaudeCodeAgent extends BaseAgent {
         : {}),
     };
   }
+}
+
+/** Observe ownership without adding an async hop to the normal SDK stream. */
+function observeSdkInputEpoch<T extends object>(source: AsyncIterable<T>, getEpoch: () => number) {
+  const iterator = source[Symbol.asyncIterator]();
+  const receivedEpochs = new WeakMap<T, number>();
+  let pending: Promise<IteratorResult<T>> | undefined;
+  let request: { id: string; inputEpoch: number } | undefined;
+  return {
+    messages: {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            if (!pending) return iterator.next();
+            const next = pending;
+            pending = undefined;
+            return next;
+          },
+          return: iterator.return?.bind(iterator),
+        };
+      },
+    },
+    prefetch() {
+      if (pending) return;
+      pending = Promise.resolve(iterator.next()).then((result) => {
+        if (!result.done) receivedEpochs.set(result.value, getEpoch());
+        return result;
+      });
+      // The consumer may still be awaiting provenance when the SDK rejects.
+      // Keep the original rejection for next(), without an unhandled promise.
+      void pending.catch(() => {});
+    },
+    inputEpoch(message: T) {
+      let inputEpoch = receivedEpochs.get(message) ?? getEpoch();
+      const raw = message as { type?: string; parent_tool_use_id?: unknown; message?: { id?: unknown };
+        event?: { type?: string; message?: { id?: unknown } } };
+      if (typeof raw.parent_tool_use_id !== 'string' || raw.parent_tool_use_id.length === 0) {
+        if (raw.type === 'stream_event' && raw.event?.type === 'message_start' && typeof raw.event.message?.id === 'string') {
+          request = { id: raw.event.message.id, inputEpoch };
+        } else if (raw.type === 'assistant' && request && raw.message?.id === request.id) {
+          inputEpoch = request.inputEpoch;
+        } else if (raw.type === 'result') {
+          request = undefined;
+        }
+      }
+      return inputEpoch;
+    },
+  };
 }
 
 // SDKMessage → AgentEvent 翻译已搬到 ./translator.ts (translateSdkMessage)。

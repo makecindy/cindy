@@ -742,6 +742,55 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
     }
   });
 
+  // #9221: init provenance can await while SDK events keep arriving. Preserve
+  // which work accepted the entire tool event, not just an already-seen ID.
+  // Compare a pre-steer queued handoff with a genuinely post-steer handoff.
+  it.each(['queued-before-steer', 'started-before-steer', 'after-steer'] as const)('keeps dispatch ownership across deferred SDK processing (%s)', async (timing) => {
+    const session = await startSessionWithStream();
+    let releaseStatus!: (value: []) => void;
+    const status = vi.fn(() => new Promise<[]>((resolve) => { releaseStatus = resolve; }));
+    Object.assign(session.fakeQuery, { mcpServerStatus: status });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const emitDispatch = () => {
+      session.stream.emit({ type: 'assistant', message: { id: 'deferred-request', content: [{
+        type: 'tool_use', id: 'deferred-dispatch', name: 'mcp__cindy_orca__send_to_worker', input: {},
+      }] } });
+      session.stream.emit(userToolResult('deferred-dispatch', '{"ok":true,"wake_kind":"resumed"}'));
+    };
+    try {
+      await session.handle.send({ type: 'user', content: 'delegate a task' });
+      session.stream.emit({ type: 'system', subtype: 'init', mcp_servers: [] });
+      await pumpUntil(() => status.mock.calls.length === 1, 'init provenance in flight');
+      if (timing === 'queued-before-steer') {
+        emitDispatch();
+        await vi.advanceTimersByTimeAsync(1);
+      } else if (timing === 'started-before-steer') {
+        session.stream.emit({ type: 'stream_event', event: {
+          type: 'message_start', message: { id: 'deferred-request', model: 'claude-opus-4-6', usage: { input_tokens: 1000 } },
+        } });
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await session.handle.steer!({ type: 'user', content: 'new work' });
+      if (timing !== 'queued-before-steer') emitDispatch();
+      await vi.advanceTimersByTimeAsync(1);
+      releaseStatus([]);
+      session.stream.emit({ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: '', signature: 'deferred-work' },
+      ] } });
+      session.stream.emit({ type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0, usage: { input_tokens: 1000, output_tokens: 2 } });
+      await pumpUntil(() => session.events.some(e => e.type === 'done'), 'deferred turn ended');
+      const done = session.events.find(e => e.type === 'done');
+      expect((done?.data as { silentStop?: boolean }).silentStop).toBe(timing === 'after-steer' ? undefined : true);
+    } finally {
+      releaseStatus?.([]);
+      session.stream.end();
+      await session.handle.close();
+      await session.collected;
+      vi.useRealTimers();
+    }
+  });
+
   it('a remote approval callback throwing releases its idle pause', async () => {
     const session = await startPendingRemoteApproval();
     try {

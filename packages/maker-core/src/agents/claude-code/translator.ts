@@ -796,6 +796,8 @@ interface TranslatorLog {
 interface TranslateContext {
   rt: RuntimeState;
   turn: TurnState;
+  /** Dispatch observation only: false for SDK work received before a newer accepted input. */
+  workerDispatchWorkIsCurrent?: boolean;
   log: TranslatorLog;
   /**
    * 当前 runtime 参数 getter —— turn start/end 日志读这三个,
@@ -1006,7 +1008,7 @@ export function translateSdkMessage(
       }
       // 单独遍历: 不能复用 extractToolResultFullText, 见 onToolResultDone JSDoc。
       const completedToolUseIds = new Set(fullPairs.map((pair) => pair.toolUseId));
-      if (!parentToolUseId && Array.isArray(content)) {
+      if (!parentToolUseId && ctx.workerDispatchWorkIsCurrent !== false && Array.isArray(content)) {
         const dispatchResults: { toolName: string | undefined; payloadText: string; isError: boolean }[] = [];
         for (const blockRaw of content as unknown[]) {
           const pair = readToolResultFullText(blockRaw);
@@ -1710,7 +1712,7 @@ function handleAssistant(
   }
 
   const content = msg.message?.content ?? [];
-  if (!parentToolUseId && content.some((block) => block.type === 'tool_use')) {
+  if (!parentToolUseId && ctx.workerDispatchWorkIsCurrent !== false && content.some((block) => block.type === 'tool_use')) {
     // A later tool batch means the Lead continued working after delegation;
     // only a new confirmed dispatch may exempt that batch's empty ending.
     // Report obligations also belong to that batch: an earlier ordinary tool
@@ -1753,7 +1755,7 @@ function handleAssistant(
       // });
       const toolUseId = rememberClaudeToolUseId(ctx, block.id, block.name);
       if (toolUseId) {
-        if (!parentToolUseId) {
+        if (!parentToolUseId && ctx.workerDispatchWorkIsCurrent !== false) {
           (ctx.turn.workerDispatchTurnToolUseIds ??= new Set()).add(toolUseId);
         }
         // 完整 assistant 消息已带工具参数,即使没有 stream_event 也可在此停表。
