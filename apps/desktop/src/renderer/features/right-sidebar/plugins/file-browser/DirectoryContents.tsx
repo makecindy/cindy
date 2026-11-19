@@ -207,12 +207,12 @@ export function DirectoryContents({
                       () => toast.error(t('ccAgent.common.openFailed')),
                     );
                   }}
-                  className={`flex min-w-0 items-center gap-2 rounded-md px-2 aria-[current=true]:bg-accent hover:bg-accent focus-visible:bg-accent ${grid ? 'flex-col justify-start py-1 text-left' : 'text-left'}`}
+                  className={`flex min-w-0 items-center gap-2 rounded-lg px-2 aria-[current=true]:bg-accent hover:bg-accent focus-visible:bg-accent ${grid ? 'flex-col justify-start py-1 text-left' : 'text-left'}`}
                 >
                   <span
                     className={
                       grid
-                        ? 'flex h-20 w-full shrink-0 items-center justify-center rounded-md border border-[var(--border-default)] bg-[var(--surface-chip)] p-1'
+                        ? 'flex h-20 w-full shrink-0 items-center justify-center rounded-lg border border-[var(--border-default)] bg-[var(--surface-chip)] p-1'
                         : 'flex shrink-0'
                     }
                   >
