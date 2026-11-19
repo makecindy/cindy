@@ -16735,6 +16735,7 @@
         "thisEvening": "This evening",
         "tomorrow": "Tomorrow",
         "nextWeek": "Next week",
+        "indefinite": "Indefinitely",
         "custom": "Custom…",
         "wakeAt": "Wake-up date and time",
         "timeZone": "Local time ({{zone}})",

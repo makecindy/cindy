@@ -175,6 +175,11 @@ export default {
       previewedUntil,
     );
     const later = page.locator('[data-session-id="later"]');
+    await later.getByRole('button', { name: snoozeLabel, exact: true }).click();
+    const indefinite = page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.indefinite'), exact: true });
+    assert.equal(await indefinite.locator('time').count(), 0);
+    await indefinite.click();
+    await page.waitForFunction(() => document.documentElement.dataset.snoozedUntil === '9999-12-31T23:59:59.999Z');
     await later.click({ button: 'right' });
     await page.getByRole('menuitem', { name: snoozeLabel, exact: true }).click();
     await page

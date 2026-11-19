@@ -445,6 +445,7 @@
         "thisEvening": "This evening",
         "tomorrow": "Tomorrow",
         "nextWeek": "Next week",
+        "indefinite": "Indefinitely",
         "custom": "Custom…",
         "invalidTime": "Choose a future date and time within one year."
       },

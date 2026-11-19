@@ -445,6 +445,7 @@
         "thisEvening": "Heute Abend",
         "tomorrow": "Morgen",
         "nextWeek": "Nächste Woche",
+        "indefinite": "Unbefristet",
         "custom": "Benutzerdefiniert…",
         "invalidTime": "Wähle einen zukünftigen Zeitpunkt innerhalb eines Jahres."
       },

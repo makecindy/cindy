@@ -445,6 +445,7 @@
         "thisEvening": "今晚",
         "tomorrow": "明天",
         "nextWeek": "下週",
+        "indefinite": "無限期",
         "custom": "自訂…",
         "invalidTime": "請選擇未來一年內的日期與時間。"
       },

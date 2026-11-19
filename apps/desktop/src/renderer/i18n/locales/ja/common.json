@@ -16661,6 +16661,7 @@
         "thisEvening": "今夜",
         "tomorrow": "明日",
         "nextWeek": "来週",
+        "indefinite": "無期限",
         "custom": "カスタム…",
         "wakeAt": "再表示する日時",
         "timeZone": "現地時間（{{zone}}）",

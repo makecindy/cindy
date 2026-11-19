@@ -16661,6 +16661,7 @@
         "thisEvening": "今夕",
         "tomorrow": "明日",
         "nextWeek": "下週",
+        "indefinite": "無期",
         "custom": "自定…",
         "wakeAt": "喚回日期時辰",
         "timeZone": "本地時辰（{{zone}}）",

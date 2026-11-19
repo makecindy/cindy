@@ -1,3 +1,4 @@
+import { INDEFINITE_SNOOZE_UNTIL } from '@cindy/maker-shared/live-task-priority';
 import type { ProjectArchiveGuard } from '../projectArchiveGuard.js';
 import { PROJECT_ARCHIVE_CHANNEL } from '../../../shared/projectArchive.js';
 import { runProjectArchive } from '../projectArchive.js';
@@ -3152,9 +3153,9 @@ export async function setSessionSourceInDb(
   }
 }
 
-/** Deferral is a bounded timestamp, never a command or task lifecycle transition. */
+/** Only scheduled wake times are subject to the one-year limit. */
 function validateSnoozeTime(value: unknown): void {
-  if (value === undefined || value === null) return;
+  if (value === undefined || value === null || value === INDEFINITE_SNOOZE_UNTIL) return;
   const ms = typeof value === 'string' ? Date.parse(value) : NaN;
   if (!Number.isFinite(ms) || ms <= Date.now() || ms > Date.now() + 366 * 86_400_000) {
     throwIpcError('INVALID_PARAMS', 'snoozedUntil must be a future ISO timestamp within one year');
