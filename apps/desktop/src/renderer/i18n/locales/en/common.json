@@ -14627,12 +14627,14 @@
       "runningWithWorktree_other": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other.",
       "runningWithWorktree_many": "Wait for them to finish before switching branches. Use worktree to start now in a separate copy without affecting each other."
     },
-    "followUpHint": {
-      "queueDefault": "Messages sent while a task is running are queued.",
-      "steerDefault": "Messages sent while a task is running steer the current task.",
+    "sendDelivery": {
+      "menuAria": "How to send this message",
+      "queueHint": "After this reply",
+      "steerHint": "At the next step",
+      "setDefault": "Set as default",
+      "nowDefault": "Now the default",
       "switchToSteer": "Steer by default",
-      "switchToQueue": "Queue by default",
-      "dismiss": "Dismiss tip"
+      "switchToQueue": "Queue by default"
     }
   },
   "onboarding": {

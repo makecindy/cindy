@@ -14627,12 +14627,14 @@
       "runningWithWorktree_other": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören.",
       "runningWithWorktree_many": "Vor dem Branchwechsel müssen sie fertig sein. Mit worktree kannst du sofort in einer separaten Kopie beginnen, ohne die laufende Arbeit zu stören."
     },
-    "followUpHint": {
-      "queueDefault": "Nachrichten, die während der Ausführung gesendet werden, werden eingereiht.",
-      "steerDefault": "Nachrichten, die während der Ausführung gesendet werden, steuern die laufende Aufgabe.",
+    "sendDelivery": {
+      "menuAria": "So wird diese Nachricht gesendet",
+      "queueHint": "Nach dieser Antwort",
+      "steerHint": "Beim nächsten Schritt",
+      "setDefault": "Als Standard setzen",
+      "nowDefault": "Jetzt Standard",
       "switchToSteer": "Standardmäßig steuern",
-      "switchToQueue": "Standardmäßig einreihen",
-      "dismiss": "Hinweis schließen"
+      "switchToQueue": "Standardmäßig einreihen"
     }
   },
   "onboarding": {

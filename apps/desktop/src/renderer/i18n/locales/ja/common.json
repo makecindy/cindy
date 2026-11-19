@@ -14567,12 +14567,14 @@
       "runningWithWorktree_other": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。",
       "runningWithWorktree_many": "すべて完了するまでブランチは切り替えられません。worktree なら互いに影響せず、別のコピーで今すぐ開始できます。"
     },
-    "followUpHint": {
-      "queueDefault": "タスクの実行中に送信したメッセージは、デフォルトでキューに追加されます。",
-      "steerDefault": "タスクの実行中に送信したメッセージは、デフォルトで実行中のタスクに割り込みます。",
+    "sendDelivery": {
+      "menuAria": "このメッセージの送信方法",
+      "queueHint": "この返信の完了後",
+      "steerHint": "次のステップで処理",
+      "setDefault": "デフォルトにする",
+      "nowDefault": "デフォルトにしました",
       "switchToSteer": "デフォルトを割り込みにする",
-      "switchToQueue": "デフォルトをキューに追加にする",
-      "dismiss": "ヒントを閉じる"
+      "switchToQueue": "デフォルトをキューに追加にする"
     }
   },
   "onboarding": {

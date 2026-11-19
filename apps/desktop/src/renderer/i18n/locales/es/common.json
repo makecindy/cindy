@@ -14749,12 +14749,14 @@
       "runningWithWorktree_other": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias.",
       "runningWithWorktree_many": "Espera a que terminen para cambiar de rama. Con worktree puedes empezar ahora en una copia separada, sin interferencias."
     },
-    "followUpHint": {
-      "queueDefault": "Los mensajes enviados mientras la tarea se ejecuta se ponen en cola.",
-      "steerDefault": "Los mensajes enviados mientras la tarea se ejecuta dan indicaciones a la tarea en curso.",
+    "sendDelivery": {
+      "menuAria": "Cómo enviar este mensaje",
+      "queueHint": "Tras esta respuesta",
+      "steerHint": "En el siguiente paso",
+      "setDefault": "Usar por defecto",
+      "nowDefault": "Ya es por defecto",
       "switchToSteer": "Dar indicaciones por defecto",
-      "switchToQueue": "Poner en cola por defecto",
-      "dismiss": "Cerrar sugerencia"
+      "switchToQueue": "Poner en cola por defecto"
     }
   },
   "onboarding": {

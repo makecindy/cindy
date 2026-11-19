@@ -337,10 +337,9 @@ import {
 } from '@/hooks/useComposerSendShortcutPreference';
 import {
   getComposerFollowUpBehavior,
-  useComposerFollowUpHintDismissed,
   useComposerFollowUpPreference,
 } from '@/hooks/useComposerFollowUpPreference';
-import { ComposerFollowUpHint } from './ComposerFollowUpHint';
+import { SendDeliveryTip } from './SendDeliveryTip';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
@@ -1487,8 +1486,8 @@ export function ChatInput({
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
   const { preference: followUpBehavior, setPreference: setFollowUpBehavior } =
     useComposerFollowUpPreference();
-  const { dismissed: followUpHintDismissed, dismiss: dismissFollowUpHint } =
-    useComposerFollowUpHintDismissed();
+  // 发送键上的投递提示指向「另一种方式」时为 true,发送键图标随之变化。
+  const [alternateSendPreview, setAlternateSendPreview] = useState(false);
   // ── 推荐提示词 ────────────────────────────────────────────────────
   // 设置开关:通过 shared hook 订阅,与 TipsSection 同源,切换后立即生效。
   const { enabled: recommendationEnabled } = usePromptRecommendationPreference();
@@ -1628,6 +1627,11 @@ export function ChatInput({
   showStopButtonRef.current = showStopButton;
   // Only surfaces that can steer a running turn (the task view) honor a steer default.
   const runningDeliveryMode: MessageDeliveryMode = onQueueSteer ? followUpBehavior : 'queue';
+  const alternateDeliveryMode: MessageDeliveryMode = runningDeliveryMode === 'steer' ? 'queue' : 'steer';
+  // The same surfaces offer both modes for one message: with Enter as the send key,
+  // modifier+Enter (and modifier+click) sends it the other way. Key handlers read the ref.
+  const canSteerRunningTurnRef = useRef(Boolean(onQueueSteer));
+  canSteerRunningTurnRef.current = Boolean(onQueueSteer);
   // What a click or the configured submit command sends: the follow-up default
   // while a turn runs, an ordinary send otherwise.
   const defaultDeliveryMode: MessageDeliveryMode = showStopButton ? runningDeliveryMode : 'queue';
@@ -3054,6 +3058,7 @@ export function ChatInput({
           turnRunning: showStopButtonRef.current,
           platform: window.electronAPI?.platform,
           followUpBehavior: getComposerFollowUpBehavior(),
+          alternateOnModifier: canSteerRunningTurnRef.current,
         });
         if (enterIntent === 'native') return false;
         if (enterIntent === 'ignore') {
@@ -3782,6 +3787,7 @@ export function ChatInput({
         turnRunning: showStopButtonRef.current,
         platform,
         followUpBehavior: getComposerFollowUpBehavior(),
+        alternateOnModifier: canSteerRunningTurnRef.current,
       });
       const isModifiedEnter = hasComposerModifier(event, platform);
       if (
@@ -9439,12 +9445,6 @@ export function ChatInput({
   }, [showPromptPreview]);
   // 可见推荐本身就是一次可发送输入：按钮点击时会先把它同步写入正文，再走现有发送链。
   const canSend = hasComposerPayload || showRecommendationOverlay;
-  const showFollowUpHint =
-    showStopButton &&
-    Boolean(onQueueSteer) &&
-    hasComposerPayload &&
-    !queueEditActive &&
-    !followUpHintDismissed;
   const makeNeedsNoModel = CINDY_MAKE_ENABLED && (noConnectedSource || selectedSourceDisconnected) && !!editor &&
     !hasPreparedOrPendingAttachments && classifyCindyMakeCommand(
       serializeEditorContent(editor).text, slashCommandsReady ? mergedCommands : null,
@@ -9515,6 +9515,19 @@ export function ChatInput({
       !hasVoiceDraftText &&
       !voiceBusyOnCurrentComposer,
   );
+  // 任务运行中、主槽是可用的发送键、当前界面能插话时,这条消息有「排队 / 插话」两种发法:
+  // 发送键的悬停提示换成 SendDeliveryTip。录音、编辑排队消息、松手发送期间保持原有提示。
+  const deliveryChoiceAvailable =
+    showStopButton &&
+    Boolean(onQueueSteer) &&
+    !queueEditActive &&
+    !mainSlotIsStop &&
+    !mainSlotIsVoice &&
+    !voiceBusyOnCurrentComposer &&
+    !voiceReleaseToSendActive &&
+    !sendButtonDisabled;
+  // Enter 是发送键时,修饰键+Enter 与修饰键+点击按另一种方式发这一条。
+  const modifierSendsAlternate = composerSendShortcutPreference === 'enter';
   // Automatic actions must observe the same gates as the current Send button
   // before consuming their one-shot request, including during subscription effects.
   composerCanSubmitRef.current = !queueEditActive && !sendButtonDisabled;
@@ -9574,7 +9587,7 @@ export function ChatInput({
           divs would overlap, and the later one in the DOM would hide the other.
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
-      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0 || showFollowUpHint) && (
+      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
             <VoiceInputStatusNotice message={voiceInput.lastError} />
@@ -9583,13 +9596,6 @@ export function ChatInput({
           ) : null}
           {rejections.length > 0 && (
             <AttachmentRejectionStrip rejections={rejections} onDismiss={dismissRejection} />
-          )}
-          {showFollowUpHint && (
-            <ComposerFollowUpHint
-              behavior={runningDeliveryMode}
-              onSwitch={() => setFollowUpBehavior(runningDeliveryMode === 'steer' ? 'queue' : 'steer')}
-              onDismiss={dismissFollowUpHint}
-            />
           )}
         </div>
       )}
@@ -10478,62 +10484,83 @@ export function ChatInput({
                         visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                       />
                     ) : (
-                      <Tip
-                        text={
-                          mainSlotIsVoice
-                            ? (voiceConversationDisabledReason ?? t('bots.voiceMode.startConversation'))
-                            : queueEditActive
-                            ? t('newChat.pendingQueue.editSaveAria')
-                            : voiceReleaseToSendActive
-                            ? t('newChat.chatInput.voiceInput.releaseToSend')
-                            : voiceInput.isListening && !sendButtonDisabled
-                              ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
-                              : showStopButton
-                                ? `${t(`newChat.sendButton.${runningDeliveryMode}`)} · ${composerSendShortcutLabel}`
-                                : !sendButtonDisabled
-                                  ? `${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`
-                                  : selectedSourceDisconnected
-                                    ? t('newChat.sourceDisconnected.sendBlocked')
-                                    : onStartVoiceConversation
-                                      // Keep Tip mounted while the shared action is disabled:
-                                      // removing it remounts the button, losing focus and motion.
-                                      ? t('newChat.sendButton.send')
-                                      : null
-                        }
-                        side="top"
-                        forceOpen={voiceReleaseToSendActive}
+                      <SendDeliveryTip
+                        enabled={deliveryChoiceAvailable}
+                        defaultMode={runningDeliveryMode}
+                        modifierSendsAlternate={modifierSendsAlternate}
+                        platform={window.electronAPI?.platform}
+                        onSend={(mode) => void handleClickSend(mode)}
+                        onDefaultChange={setFollowUpBehavior}
+                        onAlternatePreviewChange={setAlternateSendPreview}
                       >
-                        {/* Tip 的 trigger 放在稳定 wrapper 上，而不是 button 本身。
-                            disabled button 不会可靠地产生 hover/focus 事件；曾经因此让
-                            running 时“排队/快捷键插话”提示完全不出现。 */}
-                        <span className="inline-flex rounded-full">
-                          <SendButton
-                            ref={voiceConversationButtonRef}
-                            companionVoice={Boolean(onStartVoiceConversation)}
-                            disabled={
-                              mainSlotIsVoice
-                                ? voiceConversationDisabled || composerEditorLocked || !editor || voiceInput.isBusy
-                                : sendButtonDisabled
-                            }
-                            highlighted={voiceReleaseToSendActive}
-                            action={queueEditActive ? 'save' : mainSlotIsVoice ? 'voice' : 'send'}
-                            visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                            ariaLabel={
-                              mainSlotIsVoice
-                                ? t('bots.voiceMode.startConversation')
-                                : queueEditActive
-                                ? t('newChat.pendingQueue.editSaveAria')
+                        <Tip
+                          text={
+                            mainSlotIsVoice
+                              ? (voiceConversationDisabledReason ?? t('bots.voiceMode.startConversation'))
+                              : queueEditActive
+                              ? t('newChat.pendingQueue.editSaveAria')
+                              : voiceReleaseToSendActive
+                              ? t('newChat.chatInput.voiceInput.releaseToSend')
+                              : voiceInput.isListening && !sendButtonDisabled
+                                ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
                                 : showStopButton
-                                  ? t(`newChat.sendButton.${runningDeliveryMode}`)
-                                  : t('newChat.sendButton.send')
-                            }
-                            onClick={() => {
-                              if (mainSlotIsVoice) onStartVoiceConversation?.();
-                              else void handleDefaultSend();
-                            }}
-                          />
-                        </span>
-                      </Tip>
+                                  ? `${t(`newChat.sendButton.${runningDeliveryMode}`)} · ${composerSendShortcutLabel}`
+                                  : !sendButtonDisabled
+                                    ? `${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`
+                                    : selectedSourceDisconnected
+                                      ? t('newChat.sourceDisconnected.sendBlocked')
+                                      : onStartVoiceConversation
+                                        // Keep Tip mounted while the shared action is disabled:
+                                        // removing it remounts the button, losing focus and motion.
+                                        ? t('newChat.sendButton.send')
+                                        : null
+                          }
+                          side="top"
+                          forceOpen={voiceReleaseToSendActive}
+                          // 两种发法可选时由 SendDeliveryTip 接手,这条纯文本提示不再弹出。
+                          controlledOpen={deliveryChoiceAvailable ? false : undefined}
+                        >
+                          {/* Tip 的 trigger 放在稳定 wrapper 上，而不是 button 本身。
+                              disabled button 不会可靠地产生 hover/focus 事件；曾经因此让
+                              running 时“排队/快捷键插话”提示完全不出现。 */}
+                          <span className="inline-flex rounded-full">
+                            <SendButton
+                              ref={voiceConversationButtonRef}
+                              companionVoice={Boolean(onStartVoiceConversation)}
+                              disabled={
+                                mainSlotIsVoice
+                                  ? voiceConversationDisabled || composerEditorLocked || !editor || voiceInput.isBusy
+                                  : sendButtonDisabled
+                              }
+                              highlighted={voiceReleaseToSendActive}
+                              action={queueEditActive ? 'save' : mainSlotIsVoice ? 'voice' : 'send'}
+                              visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                              ariaLabel={
+                                mainSlotIsVoice
+                                  ? t('bots.voiceMode.startConversation')
+                                  : queueEditActive
+                                  ? t('newChat.pendingQueue.editSaveAria')
+                                  : showStopButton
+                                    ? t(`newChat.sendButton.${runningDeliveryMode}`)
+                                    : t('newChat.sendButton.send')
+                              }
+                              alternateGlyph={
+                                deliveryChoiceAvailable && alternateSendPreview ? alternateDeliveryMode : null
+                              }
+                              onClick={(event) => {
+                                if (mainSlotIsVoice) onStartVoiceConversation?.();
+                                else if (
+                                  deliveryChoiceAvailable &&
+                                  modifierSendsAlternate &&
+                                  hasComposerModifier(event, window.electronAPI?.platform)
+                                ) {
+                                  void handleClickSend(alternateDeliveryMode);
+                                } else void handleDefaultSend();
+                              }}
+                            />
+                          </span>
+                        </Tip>
+                      </SendDeliveryTip>
                     )}
                   </span>
                 </div>

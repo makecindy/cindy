@@ -1,12 +1,13 @@
-import { forwardRef, useRef } from 'react';
+import { forwardRef, useRef, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AudioLines, Check } from 'lucide-react';
+import { ArrowUp, AudioLines, Check, Clock } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
 interface SendButtonProps {
   disabled: boolean;
-  onClick: () => void;
+  /** The event lets callers read modifier keys (modifier+click sends the other way). */
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
   /** When true, renders the streaming Stop variant. */
   isStreaming?: boolean;
   /** Highlighted while voice long-press is hovering over this button as a release target. */
@@ -19,6 +20,11 @@ interface SendButtonProps {
   companionVoice?: boolean;
   /** CREATE AGENT 首页按 Figma 185:2724 使用独立私有 token。 */
   visualVariant?: 'default' | 'create-agent';
+  /**
+   * 发送键上的投递提示指向「另一种方式」时，纸飞机换成那种方式的图标：
+   * steer 用 ↑（与排队消息上的「插话」同一个图标），queue 用时钟。
+   */
+  alternateGlyph?: 'steer' | 'queue' | null;
 }
 
 export function CreateAgentSendIcon() {
@@ -45,6 +51,7 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
     action = 'send',
     companionVoice = false,
     visualVariant = 'default',
+    alternateGlyph = null,
   },
   ref,
 ) {
@@ -53,6 +60,10 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
   const isVoice = action === 'voice' && !isStreaming;
   const currentAction = isStreaming ? 'stop' : action;
   const pressedAction = useRef<typeof currentAction | null>(null);
+  const showAlternate = Boolean(alternateGlyph) && action === 'send' && !isStreaming;
+  // Keep the last glyph while its layer fades out, so it does not flip mid-transition.
+  const lastAlternateGlyph = useRef<'steer' | 'queue'>('steer');
+  if (alternateGlyph) lastAlternateGlyph.current = alternateGlyph;
   const iconTransition = companionVoice
     ? 'transition-[opacity,transform] duration-[var(--motion-enter)] ease-[var(--motion-ease-move)] motion-reduce:transform-none'
     : 'transition-[opacity,transform] duration-[var(--motion-fast,150ms)] ease-[var(--motion-ease-out)]';
@@ -84,11 +95,11 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
       onBlur={() => {
         pressedAction.current = null;
       }}
-      onClick={() => {
+      onClick={(event) => {
         const initialAction = pressedAction.current;
         pressedAction.current = null;
         if (companionVoice && initialAction !== null && initialAction !== currentAction) return;
-        onClick();
+        onClick(event);
       }}
       className={cn(
         // transform 进过渡集:承载 active 按压缩放(DESIGN.md §14.4 按压原型)。
@@ -157,7 +168,7 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
           className={cn(
             'col-start-1 row-start-1 flex items-center justify-center text-[var(--send-btn-icon)]',
             iconTransition,
-            isStreaming || isVoice ? hiddenIcon : 'scale-100 opacity-100',
+            isStreaming || isVoice || showAlternate ? hiddenIcon : 'scale-100 opacity-100',
           )}
         >
           {action === 'save' ? (
@@ -168,6 +179,20 @@ export const SendButton = forwardRef<HTMLButtonElement, SendButtonProps>(functio
         </span>
         <span
           className={cn(
+            'col-start-1 row-start-1 flex items-center justify-center text-[var(--send-btn-icon)]',
+            iconTransition,
+            showAlternate ? 'scale-100 opacity-100' : hiddenIcon,
+          )}
+        >
+          {lastAlternateGlyph.current === 'queue' ? (
+            <Clock className="h-4 w-4" strokeWidth={2.4} />
+          ) : (
+            <ArrowUp className="h-4 w-4" strokeWidth={2.4} />
+          )}
+        </span>
+        <span
+          className={cn(
+            // design: intrinsic-geometry — 停止图标自身的 10px 圆角方块,不是控件外框。
             'col-start-1 row-start-1 block h-[10px] w-[10px] rounded-[1.5px] bg-[var(--send-btn-icon)]',
             iconTransition,
             isStreaming ? 'scale-100 opacity-100' : hiddenIcon,

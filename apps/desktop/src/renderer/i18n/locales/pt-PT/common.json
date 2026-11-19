@@ -14749,12 +14749,14 @@
       "runningWithWorktree_other": "Espere todas terminarem para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências.",
       "runningWithWorktree_many": "Espere todas terminarem para mudar de ramo. Com worktree, comece agora numa cópia separada, sem interferências."
     },
-    "followUpHint": {
-      "queueDefault": "As mensagens enviadas enquanto a tarefa decorre ficam em fila.",
-      "steerDefault": "As mensagens enviadas enquanto a tarefa decorre orientam a tarefa em curso.",
+    "sendDelivery": {
+      "menuAria": "Como enviar esta mensagem",
+      "queueHint": "Após esta resposta",
+      "steerHint": "No passo seguinte",
+      "setDefault": "Tornar predefinição",
+      "nowDefault": "Já é a predefinição",
       "switchToSteer": "Orientar por predefinição",
-      "switchToQueue": "Colocar em fila por predefinição",
-      "dismiss": "Fechar sugestão"
+      "switchToQueue": "Colocar em fila por predefinição"
     }
   },
   "onboarding": {
