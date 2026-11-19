@@ -2168,6 +2168,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "对谈布置",
+        "standard": "常式",
+        "wide": "宽式",
+        "width": "内容之宽",
+        "hint": "以对谈余地为准。地足则不窄于常式，栏狭则自敛。"
+      },
       "title": "仪容",
       "modeLabel": "显示之式",
       "appIcon": {

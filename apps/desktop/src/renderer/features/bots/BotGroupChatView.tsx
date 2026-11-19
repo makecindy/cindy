@@ -54,7 +54,7 @@ import {
   isDataOwnerPushCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { useAttachments } from '@/hooks/useAttachments';
-import { CHAT_MESSAGE_MAX_WIDTH, useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { STANDARD_CHAT_MESSAGE_WIDTH, useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { captureDraftRecoveryScope, discardDraftTree } from '@/lib/composerDraftStore';
 import {
   classifyUnclassifiedDroppedItems,
@@ -1636,7 +1636,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
 /** Mount the observer with the ready view, after the loading/error early returns. */
 function BotGroupChatMain(props: ComponentProps<'main'>) {
   // Share the task/private-chat cap, padding and narrow-pane behavior.
-  const { containerRef } = useProportionalWidth(914, { expandTo: CHAT_MESSAGE_MAX_WIDTH });
+  const { containerRef } = useProportionalWidth(STANDARD_CHAT_MESSAGE_WIDTH);
   return <main {...props} ref={containerRef} />;
 }
 

@@ -43,17 +43,17 @@ export async function checkSplit(page, ui) {
   };
   const check = async label => {
     await page.evaluate(() => { delete window.__widthSample; });
-    await page.waitForFunction(() => {
+    await page.waitForFunction(ratio => {
       const main = document.querySelector('[data-testid="bot-group-timeline"]').closest('main');
       const width = main.getBoundingClientRect().width;
       const column = main.querySelector('[data-testid="bot-group-timeline"]').firstElementChild.getBoundingClientRect().width;
       const sample = `${width}:${column}`;
       const stable = window.__widthSample === sample;
       window.__widthSample = sample;
-      const progress = Math.min(1, Math.max(0, (width - 1200) / 400));
-      const expected = Math.min(914 + 206 * progress, width - (width < 700 ? 40 : 100));
+      const available = width - (width < 700 ? 40 : 100);
+      const expected = Math.max(Math.min(914, available), available * (ratio ?? 0) / 100);
       return stable && Math.abs(column - expected) < 1;
-    });
+    }, ui.data.ratio);
     const result = await page.evaluate(() => {
       const timeline = document.querySelector('[data-testid="bot-group-timeline"]');
       const main = timeline.closest('main'), panel = document.querySelector('.thread-panel');

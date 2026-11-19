@@ -38,6 +38,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { ChatLayoutSettings } from './ChatLayoutSettings';
 import { DockIconPicker } from './DockIconPicker';
 import { SettingsTextInput } from './SettingsTextInput';
 import { FontFamilyPicker } from './FontFamilyPicker';
@@ -704,6 +705,8 @@ export function AppearanceSection() {
             />
           </SettingsCard>
         </SettingsSection>
+
+        <ChatLayoutSettings />
 
         <WallpaperSection />
 

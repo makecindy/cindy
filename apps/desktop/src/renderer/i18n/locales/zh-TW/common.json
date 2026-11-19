@@ -2168,6 +2168,13 @@
       }
     },
     "appearance": {
+      "chatLayout": {
+        "label": "聊天版面",
+        "standard": "標準",
+        "wide": "寬螢幕",
+        "width": "內容寬度",
+        "hint": "依聊天區的可用空間計算。空間充足時至少保留標準寬度，窄欄會自動縮小。"
+      },
       "title": "外觀",
       "modeLabel": "顯示模式",
       "appIcon": {
