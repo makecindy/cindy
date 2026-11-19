@@ -1,3 +1,4 @@
+import { companionDragProps } from './companionDragProps';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import { TeammateRowStatus } from './TeammateStatusDot';
 import { groupTeammateStatus } from './teammateRosterStatus';
@@ -230,7 +231,7 @@ export function BotGroupSidebarRow({
       )}
     >
       {/* Sibling hit targets avoid nesting the topic button inside the whole-row button. */}
-      <button type="button" onContextMenu={onContextMenu} onKeyDown={onKeyDown} aria-label={group.name} aria-describedby={subtitleId} aria-current={selected ? 'page' : undefined}
+      <button type="button" {...companionDragProps(`/bots/groups/${encodeURIComponent(group.id)}`, group.name)} onContextMenu={onContextMenu} onKeyDown={onKeyDown} aria-label={group.name} aria-describedby={subtitleId} aria-current={selected ? 'page' : undefined}
         aria-haspopup={onContextMenu ? 'menu' : undefined}
         className="absolute inset-0 w-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" />
       <span className="pointer-events-none relative flex shrink-0"><BotGroupSidebarAvatar members={group.members} />

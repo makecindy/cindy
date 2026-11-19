@@ -1,3 +1,4 @@
+import { useSplitPaneFocus } from '@/features/cc-agent/splitPaneFocus';
 import { useProjectInfo } from './hooks/useProjectInfo';
 import { SessionProjectSettingsDialog } from './sidebar/SessionProjectMenuButton';
 import { acquireQueueEditLock, releaseQueueEditLock, type QueueEditLockOwner } from '@/components/new-chat/pendingQueueLocks';
@@ -893,7 +894,8 @@ function CCAgentSessionContent({
   const awaitingCreation = !!creationPreview && !creationPreview.handedOff;
   const confirmedSessionId = awaitingCreation ? undefined : sessionId;
   const navigate = useNavigate();
-  const ownsWindowRoute = navigationMode === 'route-owner';
+  const paneFocused = useSplitPaneFocus();
+  const ownsWindowRoute = paneFocused && navigationMode === 'route-owner';
   const canNavigateSession = ownsWindowRoute || navigationMode === 'split-pane';
   const sessionNavigationVersionRef = useRef(0);
   useEffect(
@@ -1006,7 +1008,7 @@ function CCAgentSessionContent({
   // 路由主实例判据(与 SessionContentHeaderRegistration 同款):默认只有全屏路由
   // 实例拥有右栏 / header 主权。SplitGroup 的常驻 pane 可用 routeOwner 显式转移
   // 主权；其它内嵌复用实例(doc rail / Orca worker)不传，行为保持不变。
-  const ownsRoute = routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode);
+  const ownsRoute = paneFocused && (routeOwner ?? (!sessionIdProp && !isCompactRail && !isOrcaMode));
   // Header/right-sidebar ownership is narrower than hardware task actions.
   // A visible file-browse rail is still the open task, even when it is compact.
   // Split panes stay mounted together; only the route-owning pane may consume
@@ -6543,7 +6545,7 @@ function CCAgentSessionContent({
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
-                  disableAutofocus={(isCompactRail && !focusComposerOnOpen) || disableAutofocus}
+                  disableAutofocus={(isCompactRail && !focusComposerOnOpen) || disableAutofocus || !paneFocused}
                   focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}
                   // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
                   // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话

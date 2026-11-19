@@ -1,3 +1,4 @@
+import { companionDragProps } from './companionDragProps';
 import { Users } from 'lucide-react';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -98,7 +99,7 @@ export function TeammateSearchResults({
       {matches.map((match) => (
         <button
           key={match.key}
-          type="button"
+          type="button" {...companionDragProps(match.route, match.name)}
           onClick={() => {
             navigate(match.route);
             onSelected?.();
