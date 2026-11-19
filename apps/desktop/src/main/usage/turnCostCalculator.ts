@@ -123,6 +123,8 @@ export interface TurnPricingContext {
   region: CindyRegion;
   /** Captured when the request starts, so logout cannot reclassify an in-flight enterprise turn. */
   accessKind?: 'subscription' | 'api' | 'managed' | null;
+  /** Selected request model when upstream may return a different routed backend model name. */
+  selectedModel?: string;
   /** Model-level flag marking opaque upstream routing whose names must not drive SDK fallback billing. */
   opaqueModelId?: boolean;
   /** Normalized model IDs on this route with opaque upstream routing (multi-model Claude turns). */
@@ -337,9 +339,20 @@ export function resolveTurnCost(args: {
     };
   }
 
+  const rawSelectedModel = context.selectedModel
+    ? normalizeModelIdForPricing(context.selectedModel)
+    : undefined;
+  const selectedModel =
+    rawSelectedModel && rawSelectedModel !== 'unknown' ? rawSelectedModel : undefined;
+  const isOpaqueId = (candidate: string | undefined): boolean =>
+    candidate !== undefined &&
+    context.opaqueModelIds?.some((id) => normalizeModelIdForPricing(id) === candidate) === true;
+  const isSelectedOpaque = context.opaqueModelId === true || isOpaqueId(selectedModel);
+  const isOpaqueModel = isSelectedOpaque || isOpaqueId(model);
+  const providerQuoteModel = isSelectedOpaque && selectedModel ? selectedModel : model;
   const providerQuote =
     context.billingRoute === 'provider-api'
-      ? getModelPriceQuote(pricing, context.providerId, model, agent)
+      ? getModelPriceQuote(pricing, context.providerId, providerQuoteModel, agent)
       : undefined;
   if (context.accessKind === 'managed') {
     return {
@@ -353,9 +366,6 @@ export function resolveTurnCost(args: {
     tokens.outputTokens > 0 ||
     tokens.cacheReadTokens > 0 ||
     tokens.cacheCreateTokens > 0;
-  const isOpaqueModel =
-    context.opaqueModelId === true ||
-    context.opaqueModelIds?.some((id) => normalizeModelIdForPricing(id) === model) === true;
   // 非 Anthropic 官方连接且有 token 增量时，供应商报价（发现价、参考表或用户覆写）比
   // Claude Code SDK 的客户端模型估值更权威；Anthropic 官方连接只让用户显式覆写覆盖
   // SDK 账单。只有缺失可报价明细（非不透明模型）或仅有 cost 增量时仍退回 SDK。

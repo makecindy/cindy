@@ -47,6 +47,7 @@ const host = vi.hoisted(() => ({
   complete: vi.fn(), changed: vi.fn(),
 }));
 const listProviders = vi.hoisted(() => vi.fn());
+const activeCatalogOverride = vi.hoisted(() => ({ value: null as { providers: unknown[] } | null }));
 const identityCard = vi.hoisted(() => vi.fn());
 const remember = vi.hoisted(() => vi.fn());
 const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberQuery: vi.fn(), memberTokenSnapshot: vi.fn(), memberHistory: vi.fn(), pricing: vi.fn(), referencePricing: vi.fn(), priceOverrides: vi.fn(),
@@ -74,6 +75,13 @@ vi.mock('../../appSessionState.js', () => ({
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device', getAuthState: () => ({ isAuthenticated: true }) }));
 vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
+vi.mock('../../maker-host/active-catalog.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../maker-host/active-catalog.js')>();
+  return {
+    ...actual,
+    getActiveCatalog: () => activeCatalogOverride.value ?? actual.getActiveCatalog(),
+  };
+});
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
@@ -217,6 +225,7 @@ beforeEach(() => {
   state.owner = 'owner-a';
   state.boundaryPending = false;
   usageStores.actual = null;
+  activeCatalogOverride.value = null;
   listProviders.mockResolvedValue([{ id: 'anthropic', name: 'Anthropic', connected: true, agents: ['claude-code'] }]);
   received.shares = [];
   received.ready = true;
@@ -962,8 +971,8 @@ describe('provider share usage estimates', () => {
     expect(amount?.currency).toBe('USD');
   });
 
-  // 回归价值：2026-11-19 #11456；供应商分享账单估算对齐本地记账：不透明模型缺少报价时不得把
-  // SDK 兜底金额算进用量历史（含无 token 行），有发现价/覆写时按报价计算。tier: unit。
+  // 回归价值：2026-11-19 #11456 & Greptile P2；供应商分享账单估算对齐本地记账：从 active catalog
+  // 读取不透明模型标记（不触发 listProviders 账号/模型刷新），缺报价时扣留 SDK 兜底金额。tier: unit。
   it.each([
     { hasTokens: true, hasQuote: false, expected: null },
     { hasTokens: false, hasQuote: false, expected: null },
@@ -973,15 +982,16 @@ describe('provider share usage estimates', () => {
     hasQuote,
     expected,
   }) => {
-    listProviders.mockResolvedValue([
-      {
-        id: 'custom-magpie',
-        name: 'Magpie',
-        connected: true,
-        agents: ['codex'],
-        models: { codex: [{ id: 'gpt-6.1-sol', name: 'Group', opaqueModelId: true }] },
-      },
-    ]);
+    activeCatalogOverride.value = {
+      providers: [
+        {
+          id: 'custom-magpie',
+          name: 'Magpie',
+          agents: ['codex'],
+          models: { codex: [{ id: 'gpt-6.1-sol', name: 'Group', opaqueModelId: true }] },
+        },
+      ],
+    };
     usageStores.referencePricing.mockReturnValue(
       hasQuote ? { 'custom-magpie': { 'gpt-6.1-sol': { ...quote, providerId: 'custom-magpie' } } } : {},
     );
@@ -1001,6 +1011,7 @@ describe('provider share usage estimates', () => {
       action: 'usage-history',
       providerId: 'custom-magpie',
     }) as ProviderUsageHistoryView;
+    expect(listProviders).not.toHaveBeenCalled();
     if (expected === null) {
       expect(result.self.days[0]?.amount).toBeNull();
     } else {

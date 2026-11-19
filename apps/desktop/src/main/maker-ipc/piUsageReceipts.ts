@@ -118,10 +118,22 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
   // Keep token facts, but never finalize money using an unknown USD fallback.
   const currency = confirmedOwnerCurrency(owner);
   if (!currency) return;
+  const piOpaqueModelIds = context.opaqueModelIdsByAgent?.pi;
   const priced = receipts.filter(r => r.needsPricing).map(({ row, segment, model, unpriced }) => {
     const segments = unpriced ? [] : [{ ...segment,
       priceVariant: segment.priceVariant ?? (segment.id?.startsWith('pi:') && context.piFastMode ? 'priority' : 'standard'),
     }];
+    const isMainRequest = !segment.id?.startsWith('pi-child:');
+    const normalizedContextModel = context.selectedModel
+      ? normalizeModelIdForPricing(context.selectedModel)
+      : undefined;
+    const isSelectedOpaque = Boolean(
+      isMainRequest &&
+      piOpaqueModelIds?.length &&
+      (!normalizedContextModel ||
+        normalizedContextModel === 'unknown' ||
+        piOpaqueModelIds.includes(normalizedContextModel)),
+    );
     const money = subscription
       ? computePriceQuoteTurnMoney(row,
         (context.providerId ? getCodexProviderSubscriptionValuePrice(context.providerId, model, pricing, undefined, undefined, 'pi') : undefined)
@@ -130,7 +142,11 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
         sdkCostDelta: route === 'provider-api' || unpriced ? undefined : segment.costUsd,
         pricing, context: { providerId: context.providerId, billingRoute: route,
           region: CURRENT_CINDY_REGION, accessKind: context.accessKind,
-          opaqueModelIds: context.opaqueModelIdsByAgent?.pi }, segments }).money;
+          ...(isMainRequest && normalizedContextModel && normalizedContextModel !== 'unknown'
+            ? { selectedModel: normalizedContextModel }
+            : {}),
+          ...(isSelectedOpaque ? { opaqueModelId: true } : {}),
+          opaqueModelIds: piOpaqueModelIds }, segments }).money;
     // BYOM reference estimates stay message-only, as in the legacy turn path.
     const ledgerMoney = money?.kind === 'actual-cost' || subscription ? money : null;
     // A resolved message-only estimate is final without ledger spend. Only a

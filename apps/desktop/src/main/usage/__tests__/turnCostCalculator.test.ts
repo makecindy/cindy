@@ -804,6 +804,75 @@ describe('resolveTurnCost', () => {
     }
   });
 
+  // 回归价值：2026-11-19 #11456 Greptile P1；用户选定不透明模型（如 magpie-mix），上游返回实际后端
+  // 模型名（如 claude-sonnet-4-6）时，仍必须按所选路由判定 opaque，不得按返回名落入 SDK actual-cost。
+  // 最小失效输入：selectedModel='magpie-mix' + rawModel='claude-sonnet-4-6'。tier: unit。
+  it.each([
+    {
+      name: 'unpriced selected opaque route ignores distinct returned backend model and blocks SDK fallback',
+      rawModel: 'claude-sonnet-4-6',
+      selectedModel: 'magpie-mix',
+      pricingCatalog: catalog(
+        quote('claude-sonnet-4-6', 3, 15, {
+          providerId: 'custom-magpie',
+          source: 'provider-reference',
+          approximate: true,
+        }),
+      ),
+      expectedSource: 'reference' as const,
+      expectedAmount: null,
+      expectedKind: undefined,
+    },
+    {
+      name: 'priced selected opaque route resolves quote by selectedModel despite distinct returned backend model',
+      rawModel: 'claude-sonnet-4-6',
+      selectedModel: 'magpie-mix',
+      pricingCatalog: catalog(
+        quote('magpie-mix', 2, 10, {
+          providerId: 'custom-magpie',
+          source: 'provider-reference',
+          approximate: true,
+        }),
+      ),
+      expectedSource: 'reference' as const,
+      expectedAmount: 2,
+      expectedKind: 'value-estimate' as const,
+    },
+    {
+      name: 'non-opaque selected model on same provider retains SDK fallback when unpriced',
+      rawModel: 'deepseek-chat',
+      selectedModel: 'deepseek-chat',
+      pricingCatalog: null,
+      expectedSource: 'sdk' as const,
+      expectedAmount: 9.99,
+      expectedKind: 'actual-cost' as const,
+    },
+  ])(
+    'evaluates opaque routing against selectedModel ($name)',
+    ({ rawModel, selectedModel, pricingCatalog, expectedSource, expectedAmount, expectedKind }) => {
+      const result = resolveTurnCost({
+        rawModel,
+        tokens: { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0 },
+        sdkCostDelta: 9.99,
+        pricing: pricingCatalog,
+        context: {
+          providerId: 'custom-magpie',
+          billingRoute: 'provider-api',
+          region: 'global',
+          selectedModel,
+          opaqueModelIds: ['magpie-mix'],
+        },
+      });
+      expect(result.model).toBe(rawModel);
+      expect(result.source).toBe(expectedSource);
+      if (expectedAmount === null) {
+        expect(result.money).toBeNull();
+      } else {
+        expect(result.money).toMatchObject({ amount: expectedAmount, kind: expectedKind });
+      }
+    },
+  );
+
   it('uses a provider reference or user override estimate when the SDK reports no cost', () => {
     const result = resolveTurnCost({
       rawModel: 'custom-model',

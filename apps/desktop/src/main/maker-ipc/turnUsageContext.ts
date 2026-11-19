@@ -11,12 +11,15 @@ import { normalizeModelIdForPricing } from '../usage/turnCostCalculator.js';
 /** Non-secret billing identity captured with the existing product-turn metadata.
  * Deleting or editing a connection must not reclassify requests already sent.
  */
-export function captureTurnUsageContext(sessionId: string) {
+export function captureTurnUsageContext(sessionId: string, selectedModel?: string) {
   const providerId = getSessionProvider(sessionId);
   const provider = providerId
     ? getActiveCatalog().providers.find(provider => provider.id === providerId)
     : undefined;
   const accessKind = provider?.access?.kind;
+  const normalizedSelectedModel = selectedModel?.trim()
+    ? normalizeModelIdForPricing(selectedModel)
+    : undefined;
   const opaqueEntries: Array<[AgentKind, readonly string[]]> = [];
   for (const [agent, models] of Object.entries(provider?.models ?? {})) {
     if (!Array.isArray(models)) continue;
@@ -34,6 +37,9 @@ export function captureTurnUsageContext(sessionId: string) {
     providerId,
     providerName: provider?.name,
     accessKind,
+    ...(normalizedSelectedModel && normalizedSelectedModel !== 'unknown'
+      ? { selectedModel: normalizedSelectedModel }
+      : {}),
     ...(opaqueModelIdsByAgent ? { opaqueModelIdsByAgent } : {}),
     isUserProviderRoute: isUserProviderSession(sessionId),
     subscriptionKind: isOpenAiSubscriptionProviderId(providerId) ? 'codex' as const

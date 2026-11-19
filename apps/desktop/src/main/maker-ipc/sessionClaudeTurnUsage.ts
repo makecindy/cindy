@@ -249,6 +249,18 @@ export function recordSessionClaudeTurnUsage(
           billingRoute === 'xd-gateway'
             ? await getGatewayModelPricingForModel()
             : getReferenceModelPricing();
+        const resolvedTurnModel = normalizeModelIdForPricing(
+          await modelPromise.catch(() => 'unknown'),
+        );
+        const selectedModel =
+          resolvedTurnModel !== 'unknown'
+            ? resolvedTurnModel
+            : normalizeModelIdForPricing(turnContext.selectedModel);
+        const claudeOpaqueModelIds = turnContext.opaqueModelIdsByAgent?.['claude-code'];
+        const isSelectedOpaque = Boolean(
+          claudeOpaqueModelIds?.length &&
+            (selectedModel === 'unknown' || claudeOpaqueModelIds.includes(selectedModel)),
+        );
         const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
           deltas,
           pricing,
@@ -257,7 +269,9 @@ export function recordSessionClaudeTurnUsage(
             billingRoute,
             region: CURRENT_CINDY_REGION,
             accessKind: turnContext.accessKind,
-            opaqueModelIds: turnContext.opaqueModelIdsByAgent?.['claude-code'],
+            ...(selectedModel !== 'unknown' ? { selectedModel } : {}),
+            ...(isSelectedOpaque ? { opaqueModelId: true } : {}),
+            opaqueModelIds: claudeOpaqueModelIds,
           },
           claudeUsageSegments,
           claudeUsageSegmentsComplete,

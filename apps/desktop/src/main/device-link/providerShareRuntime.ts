@@ -66,6 +66,7 @@ import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { focusMainWindow } from '../deepLink.js';
 import { isFocusedAppContentWindow } from '../windowFocusClassifier.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -671,20 +672,15 @@ function createUsageEstimator() {
   let gatewayPricing: ReturnType<typeof getGatewayModelPricing> | undefined;
   let overrides: ModelPriceOverridesSnapshot | undefined;
   const referencePricing = new Map<string, ReturnType<typeof getReferenceModelPricing>>();
-  let providersPromise:
-    | ReturnType<ReturnType<typeof getDesktopProviderService>['listProviders']>
-    | undefined;
-  const isOpaqueRow = async (
+  let catalogProviders: ReturnType<typeof getActiveCatalog>['providers'] | undefined;
+  const isOpaqueRow = (
     providerId: string | null,
     agent: AgentKind | undefined,
     model: string,
-  ): Promise<boolean> => {
+  ): boolean => {
     if (!providerId || providerId === 'xd' || providerId === 'anthropic') return false;
-    providersPromise ??= Promise.resolve()
-      .then(() => getDesktopProviderService().listProviders({ allowSideEffects: false }))
-      .catch(() => []);
-    const providers = await providersPromise;
-    const provider = providers.find((item) => item.id === providerId);
+    catalogProviders ??= getActiveCatalog().providers;
+    const provider = catalogProviders.find((item) => item.id === providerId);
     if (!provider?.models) return false;
     const agents = agent ? [agent] : (Object.keys(provider.models) as AgentKind[]);
     return agents.some((candidateAgent) =>
@@ -720,7 +716,7 @@ function createUsageEstimator() {
       row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreateTokens > 0;
     // 只有 SDK 金额、没有 token 计数的行无从按单价估算，保留记录的金额（不透明模型除外）。
     if (!hasTokenDeltas) {
-      if (sdkMoney && await isOpaqueRow(row.providerId, agent, model)) return null;
+      if (sdkMoney && isOpaqueRow(row.providerId, agent, model)) return null;
       return sdkMoney;
     }
     try {
@@ -738,7 +734,7 @@ function createUsageEstimator() {
     } catch (error) {
       log.warn('provider share usage estimate failed', { error: String(error) });
     }
-    if (sdkMoney && await isOpaqueRow(row.providerId, agent, model)) return null;
+    if (sdkMoney && isOpaqueRow(row.providerId, agent, model)) return null;
     return sdkMoney;
   };
 }
