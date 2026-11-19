@@ -41,14 +41,15 @@ export function useDialogueGroupOrder(enabled: boolean) {
   const positions = useMemo(() => enabled ? readPositions(owner) : new Map<string, Position>(), [enabled, owner, revision]);
   function remember(scope: string, before: readonly string[], after: readonly string[], comparisonKey: (key: string) => string) {
     const index = after.indexOf(DIALOGUE_SORT_ID);
-    if (index < 0 || getDataOwnerGeneration().dataOwnerId !== owner) return;
+    if (getDataOwnerGeneration().dataOwnerId !== owner) return;
     const next = new Map(readPositions(owner));
     const saved = next.get(scope);
     let position: Position;
-    if (index === before.indexOf(DIALOGUE_SORT_ID)) {
+    const dialogueMoved = index >= 0 && index !== before.indexOf(DIALOGUE_SORT_ID);
+    if (!dialogueMoved) {
       if (!saved) return;
-      // Only projects traded slots. Remap visible anchors in place; a filtered
-      // neighbour (or a true list boundary) still occupies its original slot.
+      // Project-only drops permute project slots, even when the group is hidden.
+      // Hidden neighbours and true list boundaries keep their existing anchors.
       const atSlot = (anchor: string | null) => {
         if (anchor === null) return null;
         const identity = comparisonKey(anchor);

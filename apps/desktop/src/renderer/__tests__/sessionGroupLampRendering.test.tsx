@@ -25,13 +25,16 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('@/components/ui/tooltip', () => ({ Tip: ({ children }: { children: ReactNode }) => children }));
-vi.mock('@/features/device-link/useMachineSwitcher', () => ({ useEffectiveSelectedMachineId: () => 'all' }));
+const machine = vi.hoisted(() => ({ selection: 'all' as 'all' | string[] }));
+vi.mock('@/features/device-link/useMachineSwitcher', () => ({ useEffectiveSelectedMachineId: () => machine.selection }));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 vi.mock('@/hooks/useSidebarCardMode', () => ({ useSidebarMainViewMode: () => ({ mode: 'text' }) }));
 vi.mock('@cindy/maker-shared/cindy-make-feature', () => ({ CINDY_MAKE_ENABLED: true }));
-vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', () => ({
-  projectOrderWriteScopeForSelection: () => ({ kind: 'viewer' }),
-  useLocalHostProjectOrder: () => ({ snapshot: { manualProjectOrder: [] } }),
+vi.mock('../features/cc-agent/hooks/useRemoteHostProjectOrders', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../features/cc-agent/hooks/useRemoteHostProjectOrders')>(),
+  useLocalHostProjectOrder: () => ({ snapshot: {
+    authoritative: true, available: true, projectOrder: 'custom', manualProjectOrder: ['local:/B', 'local:/A'],
+  } }),
   useRemoteHostProjectOrders: () => ({ orders: new Map() }),
 }));
 vi.mock('../features/cc-agent/sidebar/MainListScopeHeader', () => ({ MainListScopeHeader: ({ fold }: { fold: { label: string; onClick: () => void } | null }) => fold ? <button onClick={fold.onClick}>{fold.label}</button> : null }));
@@ -93,6 +96,7 @@ function groupProps(groupDevice: boolean): ProjectsSectionProps {
 }
 
 beforeEach(() => {
+  machine.selection = 'all';
   localStorage.clear();
   localStorage.setItem('sidebar.collapse.projectSessionLimit', '1');
   // ProjectsSection 渲染时读 window.electronAPI.platform 做项目键比较(main 897de9031);
@@ -380,6 +384,14 @@ describe('Sidebar group context menus', () => {
 // so they never mount SortableList. Reuse this real ProjectsSection/ProjectNode
 // unit harness with two projects in custom order; selectors come from the actual
 // SortableJS instance, and its real onEnd must persist the reordered projects.
+function manualProjects(names: string[]) {
+  return names.map(name => ({
+    projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name, scope: 'local' as const,
+    sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
+    remoteHostId: null, deviceLinkDeviceId: null, deviceLinkDeviceName: null, deviceLinkConnectionStatus: null,
+  }));
+}
+
 describe('Manual project sorting', () => {
   it.each([false, true])('drags the dialogue header and restores its position (collapsed=%s)', collapsed => {
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { platform: 'win32' } });
@@ -431,29 +443,39 @@ describe('Manual project sorting', () => {
     }
   });
 
+  it('uses the selected host order inside device sections before the dialogue group has a saved position', () => {
+    machine.selection = ['local'];
+    const p = groupProps(true);
+    p.projects = manualProjects(['A', 'B']);
+    p.dialogues = p.dialogues.map(session => ({
+      ...session, deviceLinkDeviceId: undefined, updatedAt: '2026-10-01T00:00:00Z',
+    }));
+    render(<ProjectsSection {...p} />);
+    const list = groupHeader().closest('[data-sortable-id]')!.parentElement!;
+    expect(Array.from(list.children, row => row.getAttribute('data-sortable-id')))
+      .toEqual(['local:/B', 'local:/A', 'dialogue-group']);
+  });
+
   it.each([
     { hidden: 'A', dialogueIndex: 1, expected: ['A', 'dialogue-group', 'C', 'B'] },
     { hidden: 'C', dialogueIndex: 2, expected: ['B', 'A', 'dialogue-group', 'C'] },
-  ])('keeps the hidden $hidden beside the dialogue group after sorting filtered projects', ({ hidden, dialogueIndex, expected }) => {
+    { hidden: 'dialogue-group', dialogueIndex: 1, expected: ['A', 'dialogue-group', 'C', 'B'] },
+  ])('preserves the dialogue slot when $hidden is filtered out during project sorting', ({ hidden, dialogueIndex, expected }) => {
     setDataOwnerGeneration('filtered-project-sort');
     ownerStorage.setOwnerAuthorityReader(dataOwnerId => ({
       dataOwnerId, ownerGeneration: 1, claimed: true, canInitialize: true, pinnedLegacyConsumed: true,
     }));
     try {
       const p = groupProps(false);
-      const projects = ['A', 'B', 'C'].map(name => ({
-        projectKey: 'local:/' + name, workingDir: '/' + name, displayName: name, scope: 'local' as const,
-        sessions: [], segments: 1, latestActivityAt: '2026-09-03T00:00:00Z',
-        remoteHostId: null, deviceLinkDeviceId: null, deviceLinkDeviceName: null, deviceLinkConnectionStatus: null,
-      }));
+      const projects = manualProjects(['A', 'B', 'C']);
       p.projects = projects;
       p.allProjectKeysForOrder = projects.map(project => project.projectKey);
       p.filter.manualProjectOrder = [...p.allProjectKeysForOrder];
       p.filter.projectOrder = 'custom';
       const view = render(<ProjectsSection {...p} />);
       function dropBefore(id: string, before: string) {
-        const list = groupHeader().closest('[data-sortable-id]')!.parentElement!;
-        const row = list.querySelector<HTMLElement>(`[data-sortable-id="${id}"]`)!;
+        const row = view.container.querySelector<HTMLElement>(`[data-sortable-id="${id}"]`)!;
+        const list = row.parentElement!;
         const oldIndex = Array.from(list.children).indexOf(row);
         list.insertBefore(row, list.querySelector(`[data-sortable-id="${before}"]`));
         const sortable = Sortable.get(list)!;
@@ -463,8 +485,11 @@ describe('Manual project sorting', () => {
       }
       dropBefore('dialogue-group', p.allProjectKeysForOrder[dialogueIndex]);
       const visible = p.allProjectKeysForOrder.filter(key => key !== 'local:/' + hidden);
-      view.rerender(<ProjectsSection {...p} projects={projects.filter(project => visible.includes(project.projectKey))} />);
-      dropBefore(visible[1], visible[0]);
+      view.rerender(<ProjectsSection {...p}
+        projects={projects.filter(project => visible.includes(project.projectKey))}
+        dialogues={hidden === 'dialogue-group' ? [] : p.dialogues} />);
+      const [first, second] = visible.slice(-2);
+      dropBefore(second, first);
       const saved = vi.mocked(p.filter.setManualProjectOrder).mock.lastCall![0];
       view.unmount();
       render(<ProjectsSection {...p} filter={{ ...p.filter, manualProjectOrder: [...saved] }} />);

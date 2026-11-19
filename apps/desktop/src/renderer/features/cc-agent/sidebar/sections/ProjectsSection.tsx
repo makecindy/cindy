@@ -355,23 +355,16 @@ export function ProjectsSection({
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
   // SortableList 只在自定义项目顺序且按项目分组时挂载。
   // 折叠溢出且未点「显示全部」时禁用，避免只重排可见前缀。
-  const projectOrderScope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
-  const hostSnapshotForDisplay =
-    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
-      ? localHostProjectOrder.snapshot
-      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
-        ? remoteHostProjectOrders.orders.get(projectOrderScope.deviceId)
-        : undefined;
-  const displayedProjectOrder = resolveDisplayedProjectOrder(
-    projectOrderScope,
-    hostSnapshotForDisplay,
-    filter,
-    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
-      ? localHostProjectOrder.snapshot.manualProjectOrder
-      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
-        ? (controllerManualOrderForDevice(projectOrderScope.deviceId, hostSnapshotForDisplay) ?? [])
-        : [],
-  );
+  const { projectOrder, manualProjectOrder } = filter;
+  const displayedProjectOrder = useMemo(() => {
+    const scope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
+    const viewer = { projectOrder, manualProjectOrder };
+    if (scope.kind === 'viewer') return resolveDisplayedProjectOrder(scope, undefined, viewer, []);
+    const deviceId = scope.deviceId;
+    const snapshot = deviceId === null ? localHostProjectOrder.snapshot : remoteHostProjectOrders.orders.get(deviceId);
+    const hostOrder = deviceId === null ? snapshot?.manualProjectOrder : controllerManualOrderForDevice(deviceId, snapshot);
+    return resolveDisplayedProjectOrder(scope, snapshot, viewer, hostOrder ?? []);
+  }, [selectedMachineForOrder, projectOrder, manualProjectOrder, localHostProjectOrder.snapshot, remoteHostProjectOrders.orders]);
   const customProjectOrder =
     filter.groupBy === 'project' && displayedProjectOrder.projectOrder === 'custom';
   const projectDragEnabled = customProjectOrder;
@@ -743,8 +736,7 @@ export function ProjectsSection({
     return splitEntriesByDevice(mixedEntries, [...(remoteDeviceIndex?.keys() ?? [])], {
       onlineDeviceIds: onlineDeviceSectionIds(remoteDeviceIndex, selectedMachineId),
       sortBy: filter.sortBy,
-      projectOrder: filter.projectOrder,
-      manualProjectOrder: filter.manualProjectOrder,
+      ...displayedProjectOrder,
       priorityContext,
     });
   }, [
@@ -754,8 +746,7 @@ export function ProjectsSection({
     remoteDeviceIndex,
     selectedMachineId,
     filter.sortBy,
-    filter.projectOrder,
-    filter.manualProjectOrder,
+    displayedProjectOrder,
     priorityContext,
   ]);
   const deviceNameSources = useMemo(() => deviceSections.flatMap((section) => section.deviceId ? [{
