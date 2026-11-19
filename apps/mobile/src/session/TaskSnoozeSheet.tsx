@@ -26,6 +26,9 @@ export function TaskSnoozeSheet(props: TaskSnoozeSheetProps) {
           onPress={() => model.choose(option.until)} style={({ pressed }) => [styles.row, pressed && styles.pressed]} testID={`home.snooze.${option.id}`}>
           <Text style={styles.label}>{option.label}</Text><Text style={styles.time}>{option.time}</Text>
         </Pressable>)}
+        <Pressable accessibilityRole="button" onPress={model.chooseIndefinite} style={styles.row} testID="home.snooze.indefinite">
+          <Text style={styles.label}>{t('devices.list.menu.inbox.indefinite')}</Text>
+        </Pressable>
         <View style={styles.divider} />
         <Pressable accessibilityRole="button" onPress={() => model.setCustom(true)} style={styles.row} testID="home.snoozeCustom">
           <Text style={styles.label}>{t('devices.list.menu.inbox.custom')}</Text>

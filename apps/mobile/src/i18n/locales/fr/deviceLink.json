@@ -65,6 +65,7 @@
     "noCredentials": "{{agent}} ne peut pas être utilisé, car il n'est pas connecté sur l'ordinateur. Connectez-vous via {{appName}} sur l'ordinateur, dans Paramètres → Fournisseurs de modèles, puis réessayez.",
     "noEncryption": "{{agent}} ne peut pas être utilisé, car le stockage système sécurisé de l'ordinateur est indisponible. Vérifiez le Trousseau sous macOS ou le chiffrement du compte sous Windows, puis redémarrez {{appName}} sur l'ordinateur.",
     "proxyNotReady": "{{agent}} n'est pas encore prêt sur l'ordinateur. Réessayez dans un instant ; si le problème persiste, redémarrez {{appName}} sur l'ordinateur.",
+    "sharedLinkUnavailable": "{{agent}} ne peut pas être utilisé pour le moment : Codex est connecté sur l’ordinateur, mais {{appName}} ne peut pas l’utiliser (le lien vers ce compte ne peut pas être créé ; avec un profil Windows standard, c’est généralement impossible). Vérifiez que {{appName}} a le droit de créer ce lien sur l’ordinateur (sous Windows, exécutez-le une fois en tant qu’administrateur ou activez le mode développeur), puis réessayez.",
     "default": "{{agent}} ne peut pas être utilisé, car sa connexion sur l'ordinateur est indisponible. Reconnectez-vous via {{appName}} sur l'ordinateur, dans Paramètres → Fournisseurs de modèles. ({{reason}})"
   },
   "remoteError": {

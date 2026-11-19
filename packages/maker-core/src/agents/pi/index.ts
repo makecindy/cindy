@@ -555,6 +555,22 @@ function oneLineDescription(text: string, maxLen: number): string {
   return line.length > maxLen ? line.slice(0, maxLen - 1) + '…' : line;
 }
 
+// A copy of Windows process.env loses case-insensitive lookup. When spellings
+// collide, Node passes the first in lexical order to the child. Keep all bypasses.
+function normalizeWindowsProxyEnv(env: NodeJS.ProcessEnv): void {
+  const keys = Object.keys(env).filter(key => /^(?:https?|all|no)_proxy$/i.test(key)).sort();
+  for (const key of keys) {
+    const name = key.toUpperCase();
+    if (name === key) continue;
+    if (name === 'NO_PROXY') {
+      env.NO_PROXY = [env.NO_PROXY, env[key]].filter(Boolean).join(',');
+    } else {
+      env[name] ??= env[key];
+    }
+    delete env[key];
+  }
+}
+
 /**
  * NO_PROXY 兜底:pi 的模型请求打的是 Cindy 本地 compat proxy(loopback),bridge 的
  * MCP fetch 也是 localhost —— 用户设了全局 HTTP_PROXY 时这些请求不能进代理隧道。
@@ -5344,8 +5360,17 @@ export class PiAgent extends BaseAgent {
       if (typeof data.estimatedTokensAfter === 'number') result.estimatedTokensAfter = data.estimatedTokensAfter;
       return result;
     };
-    const runPiCompact = (instructions?: string): Promise<ManualCompactResult> =>
-      runExclusivePiRpc(() => requestPiCompact(instructions));
+    const runPiCompact = (instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult> =>
+      runExclusivePiRpc(async () => {
+        if (!beforeDispatch) return requestPiCompact(instructions);
+        // A host-tool grant can expire while this operation waits in the native RPC lane.
+        await beforeDispatch();
+        try {
+          return await requestPiCompact(instructions);
+        } catch (cause) {
+          throw Object.assign(new Error('Pi native context compaction failed', { cause }), { code: 'COMPACT_FAILED' });
+        }
+      });
     let sessionTransport: PiTransport | undefined;
     let localProcessSpawned = false;
     let runtimeCapabilityManifest: PiRuntimeCapabilityManifest | undefined;
@@ -5650,13 +5675,14 @@ export class PiAgent extends BaseAgent {
         // Model refresh writes and rolls back these files in the RPC lane. Read
         // the snapshot there too, so a child never freezes a mixed generation.
         // Launch/refresh below stay outside: they may enqueue their own RPC.
-        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson] = await runExclusivePiRpc(() => {
+        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson, settingsJson] = await runExclusivePiRpc(() => {
           if (closed) throw new Error('PI session is closed');
           return Promise.all([
             fs.readFile(path.join(configHome, 'models.json')),
             fs.readFile(bridgeExtensionPath),
             fs.readFile(subagentRunnerPath),
             fs.readFile(path.join(configHome, 'pi-cache-compatibility.json')),
+            fs.readFile(path.join(configHome, 'settings.json')),
           ]);
         });
         const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
@@ -5671,7 +5697,7 @@ export class PiAgent extends BaseAgent {
             ...reviewPathSnapshot,
           },
           runnerFallbackFile: subagentRunnerPath,
-          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson },
+          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson, settingsJson },
         }, childId);
         if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
         await requestPiSubagentRefresh();
@@ -5840,6 +5866,14 @@ export class PiAgent extends BaseAgent {
         const promptHash = createHash('sha256').update(appendSystemPrompt);
         if (taskSystemPrompt) promptHash.update('\0task\0').update(taskSystemPrompt);
         spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = promptHash.digest('hex').slice(0, 16);
+      }
+      if (!remote && this.deps.getLocalPiHttpsProxy) {
+        if (process.platform === 'win32') normalizeWindowsProxyEnv(spawnEnv);
+        const proxy = await this.deps.getLocalPiHttpsProxy(spawnEnv);
+        if (proxy) {
+          spawnEnv.HTTPS_PROXY = proxy;
+          spawnEnv.https_proxy = proxy;
+        }
       }
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;
@@ -7933,6 +7967,15 @@ export class PiAgent extends BaseAgent {
       get model() {
         return mutableModel;
       },
+      retryFailedRuntimeCapabilityCapture: () => {
+        const manifest = runtimeCapabilityManifest;
+        if (closed || runtimeCapabilityRefreshPromise || !manifest
+          || (manifest.status !== 'failed' && manifest.status !== 'unknown')
+          || manifest.error?.code === 'unsupported') return;
+        void scheduleRuntimeCapabilityRefresh('ready').catch(() => {
+          this.deps.logger.warn('pi runtime capability refresh failed after Skill retry');
+        });
+      },
       getRuntimeCapabilities() {
         return runtimeCapabilityManifest;
       },
@@ -8834,9 +8877,9 @@ export class PiAgent extends BaseAgent {
         return path;
       },
 
-      async compactSession(instructions?: string): Promise<ManualCompactResult> {
+      async compactSession(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult> {
         // Manual compact shares the session RPC chain with prompts and model controls.
-        return runPiCompact(instructions);
+        return runPiCompact(instructions, beforeDispatch);
       },
 
       async previewRewindFiles(): Promise<RewindFilesResult> {

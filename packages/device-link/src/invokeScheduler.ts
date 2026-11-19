@@ -97,6 +97,9 @@ export class InvokeScheduler {
     const state = peer;
     if (
       state.jobs.length >= (background ? MAX_BACKGROUND_QUEUED : MAX_QUEUED)
+      // A full ordinary queue must not hide an idle interactive slot. drain()
+      // starts this job synchronously, so no additional waiting position is held.
+      && !(resolved === 'interactive' && state.active < MAX_ACTIVE + INTERACTIVE_EXTRA_ACTIVE)
     ) {
       this.report(peerId, 'full', diagnostic);
       return Promise.reject(

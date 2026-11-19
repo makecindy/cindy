@@ -673,6 +673,7 @@ const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
 const fanOutPluginUpdateConsentHoldsChanged = createIpcFanOut(
   'plugin-market:update-consent-holds-changed',
 );
+const fanOutPluginInstallProgress = createIpcFanOut('plugin-market:install-progress');
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
@@ -1872,6 +1873,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     > => ipcRenderer.invoke('plugin-market:consume-removal-notice'),
     onRemovalNoticeAvailable: fanOutPluginRemovalNoticeAvailable,
     onUpdateConsentHoldsChanged: fanOutPluginUpdateConsentHoldsChanged,
+    /** Display-only progress of installs and updates started from this window. */
+    onInstallProgress: (
+      callback: (
+        progress: import('../shared/pluginMarket').PluginMarketInstallProgress,
+        ownerStamp?: unknown,
+      ) => void,
+    ): (() => void) =>
+      fanOutPluginInstallProgress((data, ownerStamp) =>
+        callback(data as import('../shared/pluginMarket').PluginMarketInstallProgress, ownerStamp),
+      ),
     listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
       ipcRenderer.invoke('plugin-market:list-sources'),
     pickLocalSource: (
@@ -2576,6 +2587,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 用户动作,不自己落盘。allowed = 已同意隐私政策 && 统计开关开启。
   getAnalyticsSettings: (): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-get'),
+  setProductTokensEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
+    ipcRenderer.invoke('analytics:product-tokens-set', enabled === true),
   setAnalyticsEnabled: (enabled: boolean): Promise<AnalyticsSettingsPayload> =>
     ipcRenderer.invoke('analytics:settings-set-enabled', enabled === true),
   /** 恢复默认:删掉开关 override,同意事实保留。 */
@@ -3251,6 +3264,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, payload),
     previewGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.PREVIEW_GIFT_CARD, payload),
     redeemGiftCard: (payload) => ipcRenderer.invoke(BILLING_INVOKE.REDEEM_GIFT_CARD, payload),
+    getGiftCardPurchasePolicy: () =>
+      ipcRenderer.invoke(BILLING_INVOKE.GET_GIFT_CARD_PURCHASE_POLICY),
+    createGiftCardOrder: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.CREATE_GIFT_CARD_ORDER, payload),
+    listPurchasedGiftCards: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.LIST_PURCHASED_GIFT_CARDS, payload),
+    revealPurchasedGiftCard: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.REVEAL_PURCHASED_GIFT_CARD, payload),
+    sendPurchasedGiftCardEmail: (payload) =>
+      ipcRenderer.invoke(BILLING_INVOKE.SEND_PURCHASED_GIFT_CARD_EMAIL, payload),
   } satisfies BillingRendererApi,
 
   // ── Workdir File Browser (vscode-style file tree + content viewer) ──
@@ -5216,6 +5239,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   // 供应商分享：分享者管理与受邀者申请走同一个命令通道(只接受本机应用窗口)。
   providerShare: {
+    exportRoster: (providerId: string, owner: import('../shared/dataOwnerPush').DataOwnerPushStamp): Promise<void> =>
+      ipcRenderer.invoke(PROVIDER_SHARE_IPC.EXPORT_ROSTER, providerId, owner),
     command: (command: ProviderShareCommand): Promise<unknown> =>
       ipcRenderer.invoke(PROVIDER_SHARE_IPC.COMMAND, command),
     onOwnedChanged: fanOutProviderShareOwnedChanged,
@@ -5335,9 +5360,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 被控端:恢复某控制端的访问权限 */
     restore: (deviceId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('device-link:restore', { deviceId }),
-    /** 被控端:单独开关某台同账号电脑的「用本机模型」 */
-    setModelUse: (deviceId: string, allowed: boolean): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('device-link:set-model-use', { deviceId, allowed }),
     onPresenceChanged: fanOutDeviceLinkPresenceChanged,
     onStatusChanged: fanOutDeviceLinkStatusChanged,
     onDeviceDirectoryInvalidated: fanOutDeviceLinkDeviceDirectoryInvalidated,
@@ -5738,7 +5760,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   worktreeListBranches: (req: { baseRepo: string }): Promise<unknown> =>
     ipcRenderer.invoke('worktree:list-branches', req),
   // P1: 删除/归档确认预检(有无 worktree、是否有未提交更改)
-  worktreeRemovalPreview: (sessionId: string): Promise<{ hasWorktree: boolean; dirty: boolean }> =>
+  worktreeRemovalPreview: (sessionId: string): Promise<{ hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }> =>
     ipcRenderer.invoke('worktree:removal-preview', sessionId),
   // P1: worktree 被回收后的可恢复状态 + 一键恢复(分支重建 + 快照 apply)
   worktreeRestoreStatus: (sessionId: string): Promise<unknown> =>
@@ -6246,6 +6268,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     sessions: {
       list: listLocalDbSessions,
+      projectArchive: (request: import('../shared/projectArchive').ProjectArchiveRequest) =>
+        ipcRenderer.invoke('local-db:sessions:project-archive', request),
       create: (body?: unknown): Promise<unknown> =>
         ipcRenderer.invoke('local-db:sessions:create', body),
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('local-db:sessions:get', id),
@@ -6947,10 +6971,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:provider:list'),
     setProviderRemoteAccess: (input: { providerId: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
       ipcRenderer.invoke('maker:provider:remote-access:set', input),
-    getOwnComputerModelUse: (): Promise<{ enabled: boolean }> =>
-      ipcRenderer.invoke('maker:own-computer-model-use:get'),
-    setOwnComputerModelUse: (input: { enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
-      ipcRenderer.invoke('maker:own-computer-model-use:set', input),
     /** 供应商「运行于」：deviceId、'local'，或 null 回到默认。 */
     setProviderRunLocation: (input: { providerId: string; location: string | null }): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:provider:run-location:set', input),
@@ -7953,7 +7973,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setEffort: (sessionId: string, effort: string): Promise<void> =>
       ipcRenderer.invoke('maker:set-effort', sessionId, effort),
     // 输入框开始打字时提前启动 Agent；尽力而为,main 决定是否真的启动。
-    prewarmSession: (sessionId: string, createOpts: unknown): Promise<{ accepted: boolean }> =>
+    prewarmSession: (sessionId: string, createOpts: unknown): Promise<{ accepted: boolean; piRuntimePrepared?: true }> =>
       ipcRenderer.invoke('maker:session:prewarm', sessionId, createOpts),
     // 新建页的未发送任务：清空输入时删除 / 第一次发送前转为普通任务（仅本机）。
     discardProvisionalSession: (sessionId: string): Promise<{ discarded: boolean; remaining?: boolean }> =>

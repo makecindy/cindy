@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { groupTaskName, type GroupTaskTopic } from './groupTaskNaming.js';
 import { messageSourceSenderFromMeta, parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import path from 'node:path';
 
@@ -93,7 +94,7 @@ type DispatchResult =
   | { ok: true; targetSessionId: string; wakeKind: string }
   | { ok: false; errorCode: string; message: string };
 
-type LaneResult = { ok: true; sessionId: string; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
+type LaneResult = { ok: true; sessionId: string; created?: boolean; replacedSessionId?: string } | { ok: false; errorCode: string; message: string };
 
 interface TurnExecution {
   instanceId: string;
@@ -136,14 +137,17 @@ export interface BotGroupChatServiceDeps {
     botId: string;
     groupId: string;
     title: string;
+    topic?: GroupTaskTopic;
     chatAccess?: import('../../shared/botGroupChat.js').ChatLaneAccess;
     plan?: { planId: string; workDir: string; sessionId?: string };
     threadRootId?: string;
     talkPlanId?: string;
     personalDigest?: boolean;
-    /** The group's project folder on this computer; a V2 teammate's replies work there (§7.5). */
+    /** Project selected on the executing device (§7.5); chat-only lanes use a separate cwd. */
     projectDir?: string;
+    continueConversation?: boolean;
   }) => Promise<LaneResult>;
+  refineTopicTitle?: (sessionId: string, initialTitle: string | undefined, topic: GroupTaskTopic) => void;
   /** Live native context identity; absent/unknown means background must be restored. */
   readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
@@ -213,11 +217,10 @@ export interface BotGroupChatServiceDeps {
   findProjectDirsForRepo?: (repository: GroupRepository) => Promise<string[]>;
   /** Repositories a folder's git remotes point at, best guess first (`folderRepositories`). */
   repositoriesOfFolder?: (dir: string) => Promise<GroupRepository[]>;
-  /**
-   * Cindy's own checkouts of a group's GitHub repository (`groupProjectCheckout.ts`): cloned on
-   * first need when no registered project is that repository, fast-forwarded when clean.
-   */
-  groupCheckouts?: Pick<import('./groupProjectCheckout.js').GroupProjectCheckouts, 'ensure' | 'sync' | 'isManaged' | 'dirOf'>;
+  projectOfWorkDir?: (dir: string) => Promise<string | null>;
+  isLegacyGroupFolder?: (groupId: string, dir: string) => boolean;
+  localExecutionProject?: (groupId: string, botId: string) => Promise<string | null>;
+  executorProject?: (botId: string) => Promise<string | null>;
   /**
    * A 分工 step stopped for the user: finished (继续, or the whole plan is done) or not
    * finished (重试). Phones are notified from here (bot-group-chat.md §8.3).
@@ -1033,7 +1036,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     mentioned: 'you' | 'everyone' | null,
     scope: DataOwnerBroadcastScope | undefined,
   ): Promise<TurnOutcome> => {
-    const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, title: group.name });
+    const lane = await deps.ensureLane({ botId: member.botId, groupId: group.id, ...groupTaskName(group.name, member.name) });
     if (round.cancelled || !scopeIsCurrent(scope)) return { kind: 'cancelled' };
     if (!lane.ok) return unavailableLaneOutcome(lane.errorCode, lane.message);
     // A lane must never act on a stale, looser permission profile than its Bot now has.
@@ -1591,7 +1594,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       let ownerSessionId: string | undefined;
       if (!workDir) {
         const prepared = deps.workDir
-          ? await deps.workDir.prepare({ groupId, projectDir: group.projectDir })
+          ? await deps.workDir.prepare({ groupId, projectDir: await deps.localExecutionProject?.(groupId, step.botId) ?? null })
             .catch((error: unknown) => ({ ok: false as const, message: String(error) }))
           : ({ ok: false as const, message: 'work directory service unavailable' });
         if (!live()) return;
@@ -1611,7 +1614,7 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       const lane = await deps.ensureLane({
         botId: step.botId,
         groupId,
-        title: group.name,
+        ...groupTaskName(group.name, member.name, step.task),
         plan: { planId, workDir, sessionId: ownerSessionId },
       });
       if (!live()) return;

@@ -52,7 +52,7 @@ import {
 } from './directoryThrottle.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
+import { createIpcError, isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
 import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization.js';
 import { decodeRemoteHistory } from '../../shared/remoteHistoryCache';
 import {
@@ -86,7 +86,6 @@ import {
   disconnectAllControllers,
   revokeController,
   restoreController,
-  setControllerModelUse,
   broadcast,
   applyControllerDisplayNameListSnapshot,
   applyControllerPresenceListSnapshot,
@@ -106,6 +105,7 @@ import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
 import { withAgentNetMediaTarget } from './agentNetMediaRouting.js';
 import { withSourceFileAccessRecovery, releaseSourceFileAccessUploads } from './sourceFileAccessRecovery';
+import { resolveSendScopeReason, sendScopeReasonI18nKey } from './sendScopeGuard';
 import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import {
@@ -200,7 +200,6 @@ export interface DeviceLinkIpcDeps {
   disconnectAll(): void;
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
-  setModelUse(deviceId: string, allowed: boolean): Promise<void>;
   setDeviceControlEnabled(deviceId: string, enabled: boolean): Promise<string[]>;
   /** 清理本机禁用目标的响应性熔断状态。 */
   clearDeviceResponsiveness?(deviceId: string): void;
@@ -252,7 +251,6 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         standby: isDeviceLinkStandby(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
-        modelUseRevokedControllers: s.modelUseRevokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
@@ -274,7 +272,6 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     disconnectAll: disconnectAllControllers,
     revoke: revokeController,
     restore: restoreController,
-    setModelUse: setControllerModelUse,
     setDeviceControlEnabled,
     clearDeviceResponsiveness,
     broadcast,
@@ -381,7 +378,6 @@ export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
     standby: false,
     controlledBy: [],
     revokedControllers: [],
-    modelUseRevokedControllers: [],
     disabledControlDeviceIds: [],
     unresponsiveDeviceIds: [],
   };
@@ -1048,10 +1044,15 @@ export async function handleInvoke(
        if (err instanceof ReviewArtifactAuthorizationError) {
          throwIpcError('PERMISSION_DENIED', err.message);
        }
-       throwIpcError(
+       // 包装会丢掉中止的 name/code(#10906 review P2):作用域作废掐断在途传输时,
+       // readFile 的 signal 中止被包成这层之后消息里一个标记都不剩。原错误挂到 cause,
+       // 让「这是不是作用域拆坏的症状」能按结构化判据认出来,而不是猜文案。
+       const transferFailure = createIpcError(
          'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
          err instanceof Error ? err.message : String(err),
-      );
+       );
+       transferFailure.cause = err;
+       throw transferFailure;
     }
     assertControlTargetEnabled(deps, normalizedDeviceId);
   }
@@ -1136,9 +1137,11 @@ export async function handleProviderShareInvoke(
   const callArgs = Array.isArray(args) ? args : [];
   let result: InvokeResultPayload;
   try {
-    result = isCrossRegionProviderShareTarget(target)
-      ? await crossRegionInvoke(target, channel, callArgs)
-      : await (deps.invokeProviderShareHost ?? deps.invoke)(target, channel, callArgs);
+    result = deps.invokeProviderShareHost
+      ? await deps.invokeProviderShareHost(target, channel, callArgs)
+      : isCrossRegionProviderShareTarget(target)
+        ? await crossRegionInvoke(target, channel, callArgs)
+        : await deps.invoke(target, channel, callArgs);
   } catch (err) {
     logProviderShareReadFailure(
       agentDeviceId,
@@ -2021,11 +2024,35 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       const targetWindow = BrowserWindow.fromWebContents(e.sender);
       const assertCurrent = () => {
         const current = getActiveAppSession();
-        if (transfer.signal.aborted || isAppSessionBoundaryPending() || !owner.dataOwnerId
-          || current.dataOwnerId !== owner.dataOwnerId || current.generation !== owner.generation
-          || e.sender.isDestroyed() || !frame || frame.detached || e.sender.mainFrame !== frame
-          || !targetWindow || targetWindow.isDestroyed()) {
-          throwIpcError('PERMISSION_DENIED', 'Attachment confirmation is no longer current');
+        // 命中条件要能从日志反推(#10852 P1):守卫覆盖所有前台发送通道,
+        // 不能再说「附件确认」——没有附件确认的发送也会走到这里。
+        // sender 已销毁就不再读 frame / window:原来的 `||` 链在 isDestroyed()
+        // 处就停住,销毁后再读 detached / mainFrame / isDestroyed() 可能直接抛
+        // Electron 的「对象已失效」,把一次中止变成莫名失败(#10906 review)。
+        // 这些条件在 resolveSendScopeReason 里都排在上面的项目之后,跳过不改变命中项。
+        const senderDestroyed = e.sender.isDestroyed();
+        const reason = resolveSendScopeReason({
+          aborted: transfer.signal.aborted,
+          boundaryPending: isAppSessionBoundaryPending(),
+          ownerDataOwnerId: owner.dataOwnerId,
+          ownerGeneration: owner.generation,
+          currentDataOwnerId: current.dataOwnerId,
+          currentGeneration: current.generation,
+          senderDestroyed,
+          frameMissing: !frame,
+          frameDetached: senderDestroyed ? false : frame?.detached ?? false,
+          frameIsMainFrame: senderDestroyed || !frame ? false : e.sender.mainFrame === frame,
+          windowMissing: !targetWindow,
+          windowDestroyed: senderDestroyed ? false : targetWindow?.isDestroyed() ?? false,
+        });
+        if (reason) {
+          log.warn('device-link send scope is no longer current', {
+            reason,
+            channel: String(p.channel),
+          });
+          // 文案走 i18n(#10906 review P1):渲染层对未登记的码只能回落原文,硬编码英文
+          // 会让所有语言都看到英文。命中条件仍只进上面的日志。
+          throwIpcError('PERMISSION_DENIED', t(sendScopeReasonI18nKey(reason)));
         }
         assertTrustedAppRendererEvent(e);
       };
@@ -2118,16 +2145,6 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRevoke(deps, p.deviceId);
-  });
-  ipcMain.handle(DEVICE_LINK_INVOKE.SET_MODEL_USE, async (e, payload: unknown) => {
-    assertTrustedAppRendererEvent(e);
-    requireDeviceLinkCapability();
-    const p = (payload ?? {}) as { deviceId?: unknown; allowed?: unknown };
-    if (typeof p.deviceId !== 'string' || !p.deviceId.trim() || typeof p.allowed !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'deviceId and allowed are required');
-    }
-    await deps.setModelUse(p.deviceId, p.allowed);
-    return { ok: true };
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RESTORE, (e, payload: unknown) => {
     assertTrustedAppRendererEvent(e);

@@ -77,6 +77,9 @@
     "back": "归"
   },
   "failedScheduleNotice": {
+    "actionScheduled": "这次操作的任务授权已失效。下一轮仍会按计划运行。",
+    "actionExpired": "这次操作的任务授权已失效。请查看自动化最近一次运行的结果。",
+    "actionRecovered": "这次操作的授权已失效。同一自动化后来已成功运行。",
     "text": "先前曾有自运未成。",
     "precheck": "自动检查暂受阻。",
     "rateLimited": "自动检查暂受阻：请求遭限流。",
@@ -574,6 +577,7 @@
       "taskCost": "本差事费用",
       "actualCost": "实费",
       "estimatedValue": "估值",
+      "tokenUnit": "token",
       "totalTokens": "累计 Token",
       "seeDetails": "察明细",
       "valueUnavailable": "部分差事价值暂未取得",
@@ -866,7 +870,7 @@
   },
   "providerGroupRebalance": {
     "title": "改至 {{label}} 续之？",
-    "body": "为均耗各名籍之限额，宜将此讯改由 {{label}} 遣出（{{quota}}）。改过去将携近数轮言谈与摘要，更早之细节或记不全。",
+    "body": "为均耗各名籍之限额，宜将此讯改由 {{label}} 遣出（{{quota}}）。改则承其言谈之脉，旧讯或约，原录犹存。",
     "quota": "尚余 {{left}}%",
     "quotaReset": "尚余 {{left}}%，{{reset}}后重置",
     "confirm": "改之",

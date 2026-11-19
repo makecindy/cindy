@@ -1114,7 +1114,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
  */
 export async function getRemovalPreview(
   sessionId: string,
-): Promise<{ hasWorktree: boolean; dirty: boolean }> {
+): Promise<{ hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }> {
   const meta = store.get(sessionId);
   if (!meta || meta.ephemeral) return { hasWorktree: false, dirty: false };
   const worktreePath = activeWorktreePath(meta);
@@ -1123,7 +1123,11 @@ export async function getRemovalPreview(
   } catch {
     return { hasWorktree: false, dirty: false };
   }
-  return { hasWorktree: true, dirty: await isWorktreeDirty(worktreePath) };
+  return {
+    hasWorktree: true,
+    dirty: await isWorktreeDirty(worktreePath),
+    ...(meta.quarantinePath ? {} : { canDiscardChanges: true as const }),
+  };
 }
 
 // ── removeWorktreeForSession (无 IPC, 仅会话显式删除/归档路径调) ─────────────

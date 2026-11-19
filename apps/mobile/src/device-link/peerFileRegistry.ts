@@ -99,6 +99,7 @@ type Download = (
   metadata?: FileVersionMetadata,
   onProgress?: (loaded: number, total: number) => void,
   range?: FilePeerRange,
+  onStart?: () => void,
 ) => Promise<LocalPeerMedia | null>;
 let download: Download | null = null;
 export function installPeerFileDownload(value: Download) {
@@ -129,8 +130,9 @@ export function canStagePeerMedia(size: number, availableBytes = Infinity): bool
 export const PEER_FILE_DISK_RESERVE_BYTES = 256 * 1024 * 1024;
 
 /** A range is transient and must never enter the complete-file/version cache. */
-export async function tryMobilePeerFileRange(device: string, url: string, range: FilePeerRange, signal?: AbortSignal) {
-  return download?.(device, url, signal, undefined, undefined, undefined, range) ?? null;
+export async function tryMobilePeerFileRange(device: string, url: string, range: FilePeerRange, signal?: AbortSignal,
+  onProgress?: (loaded: number, total: number) => void, onStart?: () => void) {
+  return download?.(device, url, signal, undefined, undefined, onProgress, range, onStart) ?? null;
 }
 
 type PeerMediaPlayback = Pick<import('@cindy/agent-net/portable').NativeMediaStream, 'url' | 'isOpen' | 'close' | 'retain'>;

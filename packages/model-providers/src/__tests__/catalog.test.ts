@@ -300,6 +300,8 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
   it("xai ships the Grok Imagine subscription video model", () => {
     expect(provider("xai").videoModels).toEqual([
       { id: "xai/grok-imagine-video", name: "Grok Imagine Video", mode: "video_generation", nativeApi: "xai-videos", modalities: { input: ["text", "image"], output: ["video"] } },
+      { id: "xai/grok-imagine-video-1.5", name: "Grok Imagine Video 1.5", mode: "video_generation", nativeApi: "xai-videos",
+        officialDocs: "https://docs.x.ai/developers/model-capabilities/video/reference-to-video", modalities: { input: ["text", "image"], output: ["video"] } },
     ]);
   });
 

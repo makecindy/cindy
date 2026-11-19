@@ -9,7 +9,7 @@
  *   4. 被控电脑上的任务:收藏读写被控电脑那一份(经设备互联)。
  */
 import type { ModelSelectorContentBaseProps } from '../components/new-chat/ModelSelector';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
@@ -377,13 +377,10 @@ describe('本机任务:收藏另一台电脑上的模型', () => {
   });
 });
 
-/**
- * 本机这份用不了时，另一台自己的电脑上的同一供应商另列出来，用之前先问一句(2026-11-18 用户裁决)：
- * 取消 = 什么都不改；分享与只有那台电脑才有的供应商已在设置里列出，照常直接用、不问。
- * 覆盖缺口：此前本机断开会被静默代用另一台，这里经真实面板点选验证。最小失败输入：本机 a-local
- * 未连接 + Studio 有同一个 a-local。tier: unit (jsdom)。
- */
-describe('本机这份用不了：另一台电脑上的同一供应商先问再用', () => {
+// §1.2 模型选择器（2026-11-18）：本机连接断开且另一台有相同来源时，
+// unit 经 ModelSelectorContent 验证点选前可读原因、浏览不移动、点击即选那台。
+// 以一个本机断开的来源和 Studio 的同一份覆盖可用来源与直接分享用例之外的分支。
+describe('本机这份用不了：可明确选择另一台电脑上的同一供应商', () => {
   const askDevices = [...devices, { deviceId: 'share:one', name: 'one' }];
   const copyOf = (local: object) => ({ ...local, connected: true, remoteInvocationEnabled: true });
   beforeEach(() => {
@@ -399,7 +396,7 @@ describe('本机这份用不了：另一台电脑上的同一供应商先问再�
       if (shared) catalogs.byDevice['share:one'] = shared; else delete catalogs.byDevice['share:one'];
     });
   });
-  const renderAsking = () => {
+  const renderPicker = () => {
     const onUnifiedSelect = vi.fn(async (_selection: { agentDevice?: unknown }) => true);
     render(
       <ConfirmDialogProvider>
@@ -412,30 +409,26 @@ describe('本机这份用不了：另一台电脑上的同一供应商先问再�
     );
     return onUnifiedSelect;
   };
-  // The modal is still opening (aria-hidden) when the click resolves; query it directly.
-  const dialog = () => document.querySelector('[role="alertdialog"]') as HTMLElement;
   const pick = async (rail: string, model: string) => {
     await act(async () => fireEvent.click(document.querySelector(`[data-rail-item="${rail}"]`)!));
     await act(async () => fireEvent.click(rowOf(list(), model)));
   };
 
-  it('取消不换；确认后才在那台电脑运行', async () => {
-    const onUnifiedSelect = renderAsking();
-    await pick('remote:device-c:a-local', 'A Model');
-    expect(within(dialog()).getByText('newChat.modelSelector.discoveredCopy.title')).toBeTruthy();
-    await act(async () => fireEvent.click(within(dialog()).getByText('newChat.modelSelector.discoveredCopy.cancel')));
+  it('浏览时显示本机不可用原因，点击直接选择 Studio', async () => {
+    const onUnifiedSelect = renderPicker();
+    await act(async () => fireEvent.click(document.querySelector('[data-rail-item="remote:device-c:a-local"]')!));
+    const row = rowOf(list(), 'A Model');
+    expect(within(row).getByText('newChat.modelSelector.discoveredCopy.unavailableHere')).toBeTruthy();
     expect(onUnifiedSelect).not.toHaveBeenCalled();
-
-    await pick('remote:device-c:a-local', 'A Model');
-    await waitFor(() => expect(dialog()).not.toBeNull());
-    await act(async () => fireEvent.click(within(dialog()).getByText('newChat.modelSelector.discoveredCopy.confirm')));
+    await act(async () => fireEvent.click(row));
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
     expect(onUnifiedSelect).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       providerId: 'a-local', modelId: 'a-model', agentDevice: { deviceId: 'device-c', name: 'Studio' },
     }));
   });
 
   it('分享的同一供应商、只有那台电脑才有的供应商：直接用，不问', async () => {
-    const onUnifiedSelect = renderAsking();
+    const onUnifiedSelect = renderPicker();
     await pick('remote:share:one:a-local', 'A Model');
     await pick('remote:device-c:c-open', 'C Model');
     expect(document.querySelector('[role="alertdialog"]')).toBeNull();

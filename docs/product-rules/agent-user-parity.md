@@ -28,6 +28,9 @@
 
 ## 新建任务的项目归属（2026-10-30）
 
+桌面、手机与 AI 从执行电脑的已有项目选择归属。开任务和首次发送消息只能更新已登记项目的使用时间。群聊和伙伴按同一约定派发项目工作，见群聊规则 §7.5。创建伙伴会在伙伴初始化阶段准备它的伙伴项目。
+
+
 2026-11-11：`device` 指向另一台电脑时，项目、目录及默认模型在目标电脑解析；不继承来源电脑的项目路径。用 `list_projects(device)` 选目标项目；未选项目时仅按目标 `working_dir` 匹配已有项目，否则不绑项目。下述来源继承规则适用于本机创建。
 
 Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `start_session_task` 已于 2026-11-08 移除）省略
@@ -47,6 +50,7 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 仓库子目录、临时目录、worktree
 都不改变已指定或继承的项目归属；复制、续跑保留归属，桌面、手机、搜索按同一归属分组，
 灵动岛与菜单栏卡片也按该归属显示项目名（含远程任务）。
+自动化在本机从任务创建、并指定执行目录时，保存来源项目。每次新建运行会话或由独立脚本派生任务时，只匹配执行电脑当前已有项目；绑定既有任务的自动化沿用目标任务归属。
 旧任务缺少显式归属时继续使用原目录规则，不自动清理用户已有项目。
 
 ## 仓库自动任务导入（2026-11-01）
@@ -97,6 +101,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 
 | 对象     | 操作                                                       | 本机 | 跨电脑           |
 | -------- | ---------------------------------------------------------- | ---- | ---------------- |
+| Discord | 发现当前连接、白名单频道/thread、读取/搜索、发送/回复/表情、自己的消息编辑/撤回与附件发送（`cindy_discord`） | 有（普通主人任务用个人 bot；公开轮次仅当前 lane，伙伴仅触发 transport） | 工具在执行电脑使用其已配置连接；手机/同账号远控继续操作同一任务，不新增指定其它电脑或 SSH 文件读取 |
 | 原生工具目录 | `get_session_tool_catalog` / `set_session_tool_catalog` 按需直转引擎 MCP／active tools；通过现有工具 registry 第一层搜索发现 | 有（Desktop 本机已有运行实例；Agent 与声明 control 的插件同入口，添加 MCP 限已批准 node 插件自带 HTTP/SSE；原生新方法不向访客／Review 开放，既有 MCP 读取不加新隔离规则） | 无；不启动远程运行时，不新增控制通道 |
 | 供应商分享 | 列出自己分享的成员、暂停／恢复、读改成员模型范围（`list_provider_share_members`、`set_provider_share_member_status`、`get_provider_share_model_access`、`set_provider_share_model_access`）；名单沿原 owned 跳过用量与页面轮询，写入与界面共用处理器，暂停立即关停运行中任务，回执不等待全部实例关停 | 有（Agent 与声明 `settings` 的插件共用；受邀者无管理权） | 有（`device` 指定同账号已授权电脑，沿现有 `provider-group:remote` 管理通道；旧端缺轻读取回执时明确报错） |
 | 模型目录 | `configure_model_provider` 的 `rediscover`：内置供应商复用设置页真实刷新，等待发现完成后返回目录 | 有（2026-11-10；Claude 订阅通过内置 CLI 的 SDK 发现） | 在执行电脑的任务中调用；同账号远控 UI 复用原有刷新 IPC |
@@ -104,6 +109,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 媒体模型 | `configure_model_connection` 声明 mode/modalities 与 imageApi/videoApi，读取时保留这些字段；`manage_media_guide` 按需 get、validate、save 自定义调用说明；`media` prepare/request/poll 使用指定连接 | 有（未发布；沿用任务权限，各连接保留自己的 API 声明和凭证，图片／视频各按其来源读取显示开关；保存或校验不等于真实出片，错误原因与后备由 Agent 判断） | 在媒体连接所在电脑的本机任务执行；不新增跨电脑 Guide 同步或 SSH 管理 |
 | 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略；2026-11-13 起另含登录为单独供应商（`create`）或加入指定供应商（`add`）、移动／拿出（`place`）、整体并入（`merge`）、删除新建的订阅供应商（`remove-provider`），与设置页共用校验和执行服务 | 有（Claude / Codex；任意同类供应商，每个供应商只用自己的账号；2026-11-16 起所有账号均可移除／移动，读取包含上游已知的 planTier / planType） | 工具按目标电脑的本机任务执行；同账号远控 UI 复用管理 IPC，执行电脑版本过旧时拒绝新操作 |
 | 供应商状态与用量 | `get_provider_usage_history` 原样读取已记录用量与 coverageStart；`get_provider_group` 读取既有组视图、成员/设备显示信息、运行状态与已知 quota，未知不当零，不做宿主聚合 | 有（Agent 与声明 usage 的插件共用原处理器；仅 settings 不授权，未声明 usage 的旧插件权限不变，manifest 新增 usage 走整体安装确认，已有该组批准可调用新增组内读取、不补批；不开放原账号身份/目录/指纹） | 有（device 指定同账号已授权电脑，复用原 manage-share/usage-history 与 manage-group/get；旧端不支持时明确报错） |
+| 按任务读取额度 | `get_session_quota` 按当前用户任务的实际执行来源读取已有额度；插件沿用 `usage` 组 | 有（只返回额度和来源类别） | 本机、同账号已授权电脑、允许查看额度的分享连接；无明确归属时返回不可用 |
 | 脚本读取供应商状态 | 只跑脚本的 `settings.read` 允许分享成员名单及模型范围；`usage.read` 允许 get_subscription_usage、已记录用量和组状态；现有 broker 直接调用相同处理器，不启动模型、不开放写操作或原始账号视图 | 有（未授予时拒绝；保留原完整性及套餐字段，组名称沿原投影去身份，不返回邮箱/目录/内部指纹/凭证） | 成员/用量/组状态沿同账号已授权电脑管理；订阅额度仅执行电脑。未装配服务的Host或旧端明确不支持，不降级执行 |
 | 订阅用量 | `get_subscription_usage`（`usage` 分类；搜索「用量／额度」可发现）：逐账号只读标识、套餐、额度窗口与观测时间；插件通过独立 `agent.hostTools:['usage']` 声明调用同一入口 | 有（本机 Claude / Codex，不返回邮箱、凭证、目录或内部身份指纹） | 仅执行电脑当前 Cindy 账号已连接的本机订阅；不汇总远程／分享供应商，Node Host 未接入时明确不支持 |
 | 任务     | 列出、搜索、读聊天记录、发现电脑；技术消息通过 `get_chat_history.roles` 显式选择，插件 `history` 组共用分页与存储结果限制（作者示例见随包 `plugin-history-and-http.md`） | 有 | 有 |
@@ -125,6 +131,7 @@ Cindy 应用更新（2026-11-11）：`list_tools({query:"更新 Cindy"})`（含�
 | 任务     | `delete_session` 删除明确任务（不能删除当前调用任务），复用宿主生命周期清理 | 有（整体安装授予的 control 声明） | 有（既有 patch-meta，结果不明不重发） |
 | 自动归档 | 设置 → 存储空间中的闲置自动归档开关、保留天数、预览与恢复默认；`tasks.auto-archive` 仍通过 `task-management` 配置分类复用 `get_app_settings` / `update_app_settings` / `reset_app_settings` | 有（当前账号本机） | 无（设置本身为本机范围，远程仍使用现有归档与恢复） |
 | 共享任务 | 为当前原任务生成原生邀请、查询共享状态（`create_shared_task_invitation` / `get_shared_task_state`） | 有（房主；沿用任务权限，Plan 只读） | 手机或同账号其他电脑控制当前任务时在任务宿主执行；不支持指定其他任务 |
+| 跟进收到的共享任务 | 在自己的任务里用复制的链接读取运行状态，查看最近或更早的记录（`get_shared_task_progress`） | 有（使用当前账号的单任务访客权限） | 从手机或另一台电脑发起时，由运行该任务的 Desktop 使用其已有共享连接读取。退出或撤权后，后续查询显示访问失败。 |
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
 | 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，可指定基线分支 `base_ref`；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10） | 无 |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序 / 插话待发消息；任务调用方沿原消息归属，声明 control 的插件可查看、撤回、调序、插话所有来源，编辑范围与任务界面一致，消费中与已消费项不可撤回 | 有（共用唯一队列；插件编辑标明实际插件来源，不沿用原文授权） | 无 |
@@ -198,6 +205,10 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   先写文件的路径在拒绝保存后尝试恢复原内容，但只有读回内容仍等于本次写入时才回滚；校验期间
   后来保存、删除或直接编辑的文件保持原样。此为乐观核对，不是跨进程文件事务。仅改名称、时间等无关
   字段不读取目录。旧的无 `modelAgentKind` 配置继续跟随任务；SSH 保留原生目录校验路径。
+- 自动化运行历史保留各轮的实际状态。同一自动化后续执行成功时，历史中的授权失败可显示为已恢复；
+  成功完成前置检查并跳过本轮，只能消除前置检查告警。打开任务内的诊断会带上运行 ID 和时间。
+  自动化在原任务调用 `schedule_delete` 收尾时，回执可以包含最近一次授权失败的时间和后续成功状态；
+  手工删除仍按原方式清理历史。权限检查的具体原因在执行电脑的宿主日志中。
 - 跨电脑定时任务：`packages/lizi-mcps/src/scheduler/_devices.ts`、
   `apps/desktop/src/main/mcp-integrations/schedulerDevices.ts`。
 - 跨电脑新建普通任务：`device` + `apps/desktop/src/main/maker-ipc/remoteSessionCreation.ts`，复用 `openSession` 与普通消息队列；不建立协同或自动回传关系。
@@ -362,3 +373,5 @@ OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` �
 项目图标颜色：`update_project_info` 的 icon 接受 `symbol:Rocket:blue` 等白名单颜色，走同一资料保存入口；连接旧主机时检查 v3 能力，默认颜色省略后缀。字母支持 `text:CY:blue` 等相同色板，远端检查 v5，默认仍是 `text:CY`。
 
 项目自动图标：`get_project_icon` 与设置页共用主机发现／缓存入口，支持跨电脑查询来源及候选；`update_project_info` 传 null 恢复自动，传候选 data URI 主动采用头像。共享任务访客不开放该读写能力。
+
+普通自动化和 Agent 的 `schedule_create / schedule_update` 均可配置指定 GitHub PR 的状态、合并、评审、CI 触发条件（`prTrigger`），见 [单条 GitHub PR](schedule-webhook-trigger.md#单条-github-pr)。

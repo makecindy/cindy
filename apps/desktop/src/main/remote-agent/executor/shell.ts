@@ -86,7 +86,8 @@ export function resolveExecutorShell(): ExecutorShell {
       file: process.env.ComSpec || 'cmd.exe',
       dialect: 'cmd',
       scriptName: 'script.cmd',
-      args: ['/d', '/s', '/c', 'script.cmd'],
+      // Do not depend on cwd executable search (disabled by NoDefaultCurrentDirectoryInExePath).
+      args: ['/d', '/s', '/c', '.\\script.cmd'],
     };
   }
   const preferred = process.env.SHELL;

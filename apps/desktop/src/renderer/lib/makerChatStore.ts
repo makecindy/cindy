@@ -10,6 +10,7 @@ import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import {
   asyncQuestionNeedsSupplement, asyncQuestionReplyDisplayText, formatAsyncQuestionReplyDisplay,
   formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+  remoteInteractionHandling,
 } from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
 import { findErrorTailMessage } from './errorTailMessage';
@@ -209,7 +210,7 @@ import {
   mainContiguousRunStartIndex,
   type LoadedWindowIsland,
 } from '@/lib/searchJumpTargeting';
-import { extractIpcError } from '@/utils/ipcError';
+import { extractIpcError, hostProfileInUseI18nKey } from '@/utils/ipcError';
 import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
@@ -248,6 +249,7 @@ import {
   extractUsageLimitRecoveryHint,
   type UsageLimitRecoveryHint,
 } from '@/lib/usageLimitRecovery';
+import { providerErrorExplanation } from '@/utils/streamInterruptError';
 import { parseReconnectAttemptMessage } from '@/utils/networkError';
 
 import {
@@ -378,6 +380,8 @@ function resolveEstimatedTurnCostUsd(
 /** Translation candidate only; callers must check their active i18n resources.
  * Unknown-code fallback text is diagnostic content, not curated guidance. */
 export function remoteErrorI18nKey(msg: string): string | undefined {
+  const held = hostProfileInUseI18nKey(msg, 'send');
+  if (held) return held;
   const recovery = sharedTaskRecoveryReason(msg);
   if (recovery) return `sharedTaskRecovery.reason.${recovery}`;
   const limitKey = remoteAgentLimitErrorKey(msg);
@@ -387,6 +391,8 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
 }
 
 export function decodeRemoteErrorMessage(msg: string): string {
+  const held = hostProfileInUseI18nKey(msg, 'send');
+  if (held) return i18n.t(held);
   const subscriptionGuidance = localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language);
   if (subscriptionGuidance) return subscriptionGuidance;
   const recovery = sharedTaskRecoveryReason(msg);
@@ -401,6 +407,10 @@ export function decodeRemoteErrorMessage(msg: string): string {
 
 /** Keep known codes for the banner's active locale; retain unknown-code fallback behavior. */
 export function remoteErrorMessageForBanner(msg: string): string {
+  // A Host refusal while a Cindy desktop app uses its data: the banner reads no key from it, so
+  // say why and what to do here, in the window's language (the Host's own sentence is not shown).
+  const held = hostProfileInUseI18nKey(msg, 'send');
+  if (held) return i18n.t(held);
   // Subscription guidance has its own keys and reset metadata. Keep the raw
   // error so live/tail banners can translate it after locale changes.
   if (localizeSubscriptionAccountError(msg, i18n.t, i18n.resolvedLanguage ?? i18n.language)) return msg;
@@ -414,6 +424,8 @@ export function remoteErrorMessageForBanner(msg: string): string {
  * key('empty-response' / 'turn-failed'), message 仅作非 renderer 消费方(IM/orca)的兜底。
  */
 function liveErrorBannerText(message: string, reason: string | undefined): string {
+  // The banner localizes its title from the reason. Preserve structured provider copy underneath.
+  if (providerErrorExplanation(message)) return message;
   if (reason === 'unexecuted-tool-markup') return i18n.t('logic.errors.unexecutedToolMarkup');
   // The banner localizes this stable reason. Keep the host's bounded cause in
   // the raw detail/diagnosis path instead of replacing it with summary copy.
@@ -991,6 +1003,7 @@ export interface PendingPlanReview {
  * 超时/会话清理由 main 兜底并广播 INTERACTION_DISMISSED 清卡。
  */
 export interface PendingIssueConfirm {
+  submitting?: boolean;
   requestId: string;
   draft: IssueConfirmDraft;
   /**
@@ -8974,7 +8987,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       (ingress.remoteDeviceId || remoteSnapshotDeviceId) &&
       (kind === 'issue_confirm' ||
         kind === 'rename_sessions_confirm' ||
-        kind === 'ghost_grant_confirm')
+        kind === 'ghost_grant_confirm') &&
+      remoteInteractionHandling({ request }) === 'desktop-only'
     ) {
       setState(sessionId, (s) => {
         const confirmation: PendingRemoteDesktopConfirmation = {
@@ -8985,7 +8999,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         if (!current) {
           return {
             ...s,
-            pendingIssueConfirm: null,
+            pendingIssueConfirm: s.pendingIssueConfirm?.requestId === request.requestId ? null : s.pendingIssueConfirm,
             pendingRenameSessionsConfirm: null,
             pendingGhostGrantConfirm: null,
             pendingRemoteDesktopConfirmation: confirmation,
@@ -9168,14 +9182,13 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         ...s,
         pendingIssueConfirm: {
           requestId: request.requestId,
+          submitting: s.pendingIssueConfirm?.requestId === request.requestId && s.pendingIssueConfirm.submitting,
           draft,
           env,
           submissionIdentity,
           githubUserIdentity,
           suggestedPublicName,
         },
-        pendingRemoteDesktopConfirmation: null,
-        pendingRemoteDesktopConfirmationQueue: [],
       }));
       return;
     }
@@ -11199,6 +11212,7 @@ function reconcilePendingInteractions(
       const authoritativeQuestionIds = new Set<string>();
       const authoritativePlanIds = new Set<string>();
       const authoritativeRemoteDesktopConfirmationIds = new Set<string>();
+      const authoritativeIssueConfirmIds = new Set<string>();
       const authoritativeInputHandoffIds = new Set<string>();
       for (const item of list) {
         const request = item?.request;
@@ -11228,7 +11242,11 @@ function reconcilePendingInteractions(
           typeof request.requestId === 'string' &&
           request.requestId.length > 0
         ) {
-          authoritativeRemoteDesktopConfirmationIds.add(request.requestId);
+          if (request.kind === 'issue_confirm' && remoteInteractionHandling({ request }) === 'resolvable') {
+            authoritativeIssueConfirmIds.add(request.requestId);
+          } else {
+            authoritativeRemoteDesktopConfirmationIds.add(request.requestId);
+          }
         }
       }
       if (!isCurrentInteractionReconcile()) return 0;
@@ -11287,6 +11305,9 @@ function reconcilePendingInteractions(
           authoritativePluginSetupIds.has(state.pluginSetupCommandInFlight.requestId)
             ? state.pluginSetupCommandInFlight
             : null;
+        const nextIssueConfirm = (stickyDeviceAtStart || interactionOriginAtStart) &&
+          state.pendingIssueConfirm && !authoritativeIssueConfirmIds.has(state.pendingIssueConfirm.requestId)
+          ? null : state.pendingIssueConfirm;
         const nextRemoteDesktopConfirmation =
           stickyDeviceAtStart || interactionOriginAtStart
             ? state.pendingRemoteDesktopConfirmation &&
@@ -11324,6 +11345,7 @@ function reconcilePendingInteractions(
           nextPlanReview === state.pendingPlanReview &&
           nextPermission === state.pendingPermission &&
           nextInputHandoff === state.pendingInputHandoff &&
+          nextIssueConfirm === state.pendingIssueConfirm &&
           nextCommand === state.pluginSetupCommandInFlight &&
           promotedRemoteDesktopConfirmation === state.pendingRemoteDesktopConfirmation &&
           !remoteQueueChanged
@@ -11343,6 +11365,7 @@ function reconcilePendingInteractions(
           pendingPermission: nextPermission,
           pendingAppPermissions: appPermissions,
           pendingInputHandoff: nextInputHandoff,
+          pendingIssueConfirm: nextIssueConfirm,
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
           pluginSetupViewerState: currentChanged ? 'expanded' : state.pluginSetupViewerState,
@@ -17721,6 +17744,8 @@ function submitQuestionDecision(
   requestId: string,
   decision: Record<string, unknown>,
   onAccepted: () => void,
+  targetDevice?: string,
+  onSettled?: () => void,
 ): void {
   const key = JSON.stringify([sessionId, requestId]);
   if (questionDecisionsInFlight.has(key)) return;
@@ -17729,16 +17754,18 @@ function submitQuestionDecision(
   const epoch = _messagesEpoch.get(sessionId) ?? 0;
   const authority = _inputProjectionAuthorityEpoch.get(sessionId) ?? 0;
   const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
-  const isCurrent = () => isDataOwnerGenerationCurrent(owner) &&
+  const isSameSession = () => isDataOwnerGenerationCurrent(owner) &&
     (_messagesEpoch.get(sessionId) ?? 0) === epoch &&
-    (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authority &&
-    remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
+    (targetDevice
+      ? getStickySessionDeviceId(sessionId) === targetDevice && !isRemoteTerminalSessionTombstoned(sessionId, targetDevice)
+      : remoteProjectsStore.getSessionDeviceId(sessionId) === origin);
+  const isCurrent = () => isSameSession() && (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authority;
   bumpInteractionReconcileEpoch(sessionId);
   void (async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const receipt = await Promise.race([
-        makerApiFor(sessionId).resolveInteraction(requestId, decision),
+        (targetDevice ? makerApiForDevice(targetDevice) : makerApiFor(sessionId)).resolveInteraction(requestId, decision),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error('Interaction receipt timeout')), 15_000);
         }),
@@ -17752,6 +17779,7 @@ function submitQuestionDecision(
       const state = sessions.get(sessionId);
       // A winning dismissal from another window/Stop remains authoritative.
       if (state?.pendingAskUser?.requestId !== requestId &&
+        state?.pendingIssueConfirm?.requestId !== requestId &&
         state?.pendingPlanReview?.requestId !== requestId) return;
       log.warn('Question decision receipt unavailable', error);
       // A rejection may mean either an ended request or paused execution.
@@ -17771,11 +17799,14 @@ function submitQuestionDecision(
       if (!isCurrent()) return;
       const current = sessions.get(sessionId);
       if (current?.pendingAskUser?.requestId !== requestId &&
+        current?.pendingIssueConfirm?.requestId !== requestId &&
         current?.pendingPlanReview?.requestId !== requestId) return;
       toast.warning(i18n.t('newChat.permissionPrompt.submissionFailed'));
     } finally {
       if (timer) clearTimeout(timer);
       questionDecisionsInFlight.delete(key);
+      // A relay reset invalidates old receipts, but the same pending card must become retryable.
+      if (isSameSession()) onSettled?.();
     }
   })();
 }
@@ -18141,9 +18172,20 @@ function respondToIssueConfirm(
 ): void {
   if (!sessionId) return;
   const state = getOrCreateState(sessionId);
-  if (!state.pendingIssueConfirm) return;
+  if (!state.pendingIssueConfirm || state.pendingIssueConfirm.submitting) return;
 
   const { requestId } = state.pendingIssueConfirm;
+  const device = getStickySessionDeviceId(sessionId) ?? remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (device) {
+    const setSubmitting = (submitting: boolean) => setState(sessionId, (current) =>
+      current.pendingIssueConfirm?.requestId === requestId
+        ? { ...current, pendingIssueConfirm: { ...current.pendingIssueConfirm, submitting } } : current);
+    setSubmitting(true);
+    submitQuestionDecision(sessionId, requestId, { kind: 'issue_confirm', ...result }, () =>
+      setState(sessionId, (current) => current.pendingIssueConfirm?.requestId === requestId
+        ? { ...current, pendingIssueConfirm: null } : current), device, () => setSubmitting(false));
+    return;
+  }
   bumpInteractionReconcileEpoch(sessionId);
 
   // 先清 UI,再回包(同 respondToPermission 的时序)。
@@ -20187,13 +20229,10 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: { ...(sessionImport as Record<string, unknown>) },
       };
     }
-    // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。
-    const contextRebuild =
-      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
-        ? (m.agentMeta as { contextRebuild?: unknown }).contextRebuild
-        : undefined;
+    // 同一引擎换干净原生会话：展开查看发给新窗口的交接内容。
+    const contextRebuild = m.role === 'assistant' ? m.agentMeta?.contextRebuild : undefined;
     if (contextRebuild && typeof contextRebuild === 'object') {
-      const c = contextRebuild as Record<string, unknown>;
+      const c = contextRebuild;
       return {
         clientId: m.clientId,
         role: 'assistant' as const,
@@ -20203,6 +20242,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardData: {
           reason: typeof c.reason === 'string' ? c.reason : 'context-overflow',
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
+          ...(c.handoffCoverage === 'complete' || c.handoffCoverage === 'condensed'
+            ? { handoffCoverage: c.handoffCoverage } : {}),
         },
       };
     }
@@ -20227,6 +20268,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           fromModel: typeof c.fromModel === 'string' ? c.fromModel : null,
           toModel: typeof c.toModel === 'string' ? c.toModel : null,
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
+          ...(c.handoffCoverage === 'complete' || c.handoffCoverage === 'condensed'
+            ? { handoffCoverage: c.handoffCoverage } : {}),
           resumed: c.resumed === true,
           ...(c.nativeHistory === 'restored' || c.nativeHistory === 'fallback'
             ? { nativeHistory: c.nativeHistory } : {}),

@@ -73,8 +73,13 @@ export interface PreparedRemoteMcp {
 export interface StartRemoteAgentDeps {
   attachmentPreservation?(sessionId: string): PreserveAttachmentBatch;
   attachmentStorageRoots?(sessionId: string): Record<string, string>;
+  nativeHistoryBackup?: boolean;
   /** Cancellation for this startup attempt only; never cancels other starts of the task. */
   startupSignal?: AbortSignal;
+  /** Recheck this attempt's permission/explicit-close boundary until its first startup finishes. */
+  assertStartupCurrent?(): void;
+  /** From this point a failed or lost write may have started a process on the executor. */
+  onStartupOpenRequest?(): void;
   /** A direct share must renew the original executor's grant before reopening. */
   reconnectAuthorization?(isCurrent: () => boolean, options?: { force?: boolean }): Promise<void>;
   /** Background renewal is allowed only while M has confirmed the current grant. */
@@ -149,7 +154,7 @@ export interface StartRemoteAgentDeps {
    * `token` 是交接后重新打开时带回的凭证；对方发来新凭证时交给 `offer`；`takeNewRound` 为 true 的那次发送告诉
    * 对方开始新的一轮(用户亲自接手过)。
    */
-  groupSwitch?: { token?: string; offer(token: string): void; takeNewRound?(): boolean };
+  groupSwitch?: { token?: string; requireToken?: true; offer(token: string): void; takeNewRound?(): boolean };
   newId(): string;
   log?: {
     debug?(message: string, meta?: Record<string, unknown>): void;
@@ -472,9 +477,11 @@ async function prepareAndStartRemoteAgentSession(
   let mcp: PreparedRemoteMcp;
   try {
     if (signal.aborted) throw signal.reason;
+    deps.assertStartupCurrent?.();
     mcp = await startupTiming.measure('mcp-prepare', () => deps.prepareMcp({ kind, opts, vendorOptions }));
     preparedMcp = mcp;
     if (signal.aborted) throw signal.reason;
+    deps.assertStartupCurrent?.();
   } catch (error) {
     // A late MCP result is disposed here even though the caller already rejected.
     await disposePreparation();
@@ -529,6 +536,7 @@ async function prepareAndStartRemoteAgentSession(
   const stateNow = (): LinkState => linkState;
   const requireOpen = () => {
     signal.throwIfAborted();
+    if (!firstStarted) deps.assertStartupCurrent?.();
     if (stateNow() === 'closed') throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
   };
   const activeNow = (): RemoteAgentRunClient | null => active;
@@ -785,8 +793,10 @@ async function prepareAndStartRemoteAgentSession(
     active = client;
     let remoteStarted = false;
     try {
-      const raw = await client.open(kind, payload);
+      const raw = await client.open(kind, payload, reconnect ? undefined : requireOpen,
+        reconnect ? undefined : deps.onStartupOpenRequest);
       remoteStarted = true;
+      if (!reconnect) requireOpen();
       if (closedEarly) throw new Error((closedEarly as { message?: string }).message ?? '[REMOTE_AGENT_UNAVAILABLE] The agent stopped right after starting.');
       if (stateNow() === 'closed') {
         // 连回途中任务关掉了(那时还没有这条连接可关)：对方已经起了进程，关掉它让出名额。
@@ -924,6 +934,8 @@ async function prepareAndStartRemoteAgentSession(
     return {
       sessionId: opts.sessionId!,
       acceptsImageDeliveryReceipts: true,
+      ...(caps.nativeHistoryBackup && deps.nativeHistoryBackup && kind === 'pi'
+        ? { acceptsNativeHistoryBackup: true } : {}),
       ...(attachments ? { acceptsAttachmentPreservation: true } : {}),
       ...(imageDeliveryEpoch !== undefined ? { imageDeliveryEpoch } : {}),
       virtualWorkspace: true,
@@ -948,6 +960,7 @@ async function prepareAndStartRemoteAgentSession(
       ...(deps.groupSwitch ? { acceptsGroupSwitch: true } : {}),
       // 交接凭证只给全新打开用；连回是接着原来的会话。
       ...(!reconnect && deps.groupSwitch?.token ? { groupSwitchToken: deps.groupSwitch.token } : {}),
+      ...(!reconnect && deps.groupSwitch?.requireToken ? { requireGroupSwitchToken: true as const } : {}),
     };
   }
 
@@ -985,6 +998,9 @@ async function prepareAndStartRemoteAgentSession(
       }
       if (client && caps.localApplication !== true) {
         throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] Update Cindy on the computer providing this supplier to use it from an external application.');
+      }
+      if (!reconnect && deps.groupSwitch?.requireToken && !caps.directGuestStandby) {
+        throw new Error('[REMOTE_AGENT_PEER_TOO_OLD] The owner does not support confirmed standby task handoff.');
       }
       deps.pool?.noteMaxRuns(caps.maxRuns);
       deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);

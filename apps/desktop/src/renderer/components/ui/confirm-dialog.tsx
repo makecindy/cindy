@@ -58,6 +58,8 @@ export interface ConfirmDialogProps {
    * 把这个开关打开,让默认焦点落到主按钮,避免取消按钮天然带 focus ring。
    */
   autoFocusConfirm?: boolean;
+  /** Return focus to a surviving control when the original opener was inside a popover. */
+  restoreFocusTarget?: () => HTMLElement | null;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
   /** 要求逐字输入 expected 才能确认；匹配不做 trim 或大小写折叠。 */
@@ -72,6 +74,7 @@ export interface ConfirmDialogProps {
   zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
   confirmVariant?: 'default' | 'destructive';
+  checkedOverrides?: { description: string; confirmText: string; confirmVariant?: 'destructive' };
   /**
    * 主按钮文字前的小图标(如 Full access 确认的警示三角)。跟随按钮文字颜色,
    * 不引入新的语义色;loading 时与文字一起被 spinner 顶掉。
@@ -102,7 +105,7 @@ export function ConfirmDialog({
   open,
   onOpenChange,
   title,
-  description,
+  description: defaultDescription,
   textClassName,
   descriptionClassName,
   content,
@@ -115,10 +118,12 @@ export function ConfirmDialog({
   dontShowAgainLabel,
   checkboxDefaultChecked = false,
   autoFocusConfirm,
+  restoreFocusTarget,
   confirmDisabled = false,
   requireTypedConfirmation,
   contentSelectable = false,
-  confirmVariant = 'default',
+  confirmVariant: defaultConfirmVariant = 'default',
+  checkedOverrides,
   confirmIcon,
   describeContent = false,
   loading = false,
@@ -130,10 +135,13 @@ export function ConfirmDialog({
   const { t } = useTranslation();
   // describeContent 用:让 aria-describedby 覆盖整个「description + content」滚动区。
   const bodyId = useId();
-  const resolvedConfirmText = confirmText ?? t('commonUi.confirmDialog.confirm');
   const resolvedCancelText = cancelText ?? t('commonUi.confirmDialog.cancel');
   // 每次打开复位到初始勾选态,避免上一轮的勾选残留到下一次弹窗。
   const [dontShowAgain, setDontShowAgain] = useState(checkboxDefaultChecked);
+  const overrides = dontShowAgain ? checkedOverrides : undefined;
+  const description = overrides?.description ?? defaultDescription;
+  const confirmVariant = overrides?.confirmVariant ?? defaultConfirmVariant;
+  const resolvedConfirmText = overrides?.confirmText ?? confirmText ?? t('commonUi.confirmDialog.confirm');
   useEffect(() => {
     if (open) setDontShowAgain(checkboxDefaultChecked);
   }, [open, checkboxDefaultChecked]);
@@ -209,6 +217,13 @@ export function ConfirmDialog({
             onEscapeKeyDown={(e) => {
               if (loading) e.preventDefault();
             }}
+            onCloseAutoFocus={(event) => {
+              const target = restoreFocusTarget?.();
+              if (target?.isConnected) {
+                event.preventDefault();
+                target.focus();
+              }
+            }}
             onOpenAutoFocus={
               requireTypedConfirmation || autoFocusConfirm
                 ? (e) => {
@@ -274,6 +289,7 @@ export function ConfirmDialog({
               >
                 {description && (
                   <AlertDialog.Description
+                    aria-live={checkedOverrides ? 'polite' : undefined}
                     className={cn('text-base text-[var(--confirm-desc)]', textClassName, descriptionClassName)}
                   >
                     {description}

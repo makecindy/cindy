@@ -313,7 +313,7 @@ async function submit(options: {
     // 没选模型组的用例：发送路径不解析、不写说明、不记绑定。
     activeModelGroup: options.modelGroupRoute ? { type: 'route', id: 'r1' } : null,
     resolveModelGroup: async () => options.modelGroupRoute ?? null, writeModelGroupRouteNote: noop,
-    bindModelGroupSession: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
+    bindModelGroupSession: vi.fn(), commitModelGroupDecision: vi.fn(), modelGroupLocationName: () => '', keptModelNameForGroupNote: () => '', i18n: { language: 'en' },
     activePluginModel: options.pluginRoute ? { pluginId: 'router', pluginName: 'Router', id: 'auto', name: 'Auto' } : null,
     ...draftEffort, getModel, reconcileInvocationEffort, recallAgentDeviceSelection, window,
     localProviders: providers, draftLocalProviders: providers, localProvidersLoading: false, providers,
@@ -360,7 +360,7 @@ async function submit(options: {
     localDraftSessionIdRef: { current: 'draft-id' },
     optimisticFirstMessageTitle: () => options.titlePreview ?? null, autoTitleLabels: {},
     remoteProjectsStore,
-    createSession, toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
+    createSession, rememberCreatedWorkspace: vi.fn(), toastCreateSessionFailed: noop, carryDraftFavoriteAnchorToSession: noop,
     makerChatStore: { setSessionRuntime: noop, sendMessage, autoNameSession: noop }, sessionsStore: { patchLocal: noop },
     markSessionStarting: noop, clearSessionStarting: noop,
     rehomeDraftAttachments: options.copyAttachments ?? (async () => []), getComposerDraft: () => options.builtInSkillIntent
@@ -481,6 +481,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
         firstMessageIdentity: { clientId: bubble.clientId, createdAt: bubble.createdAt },
       })]]);
     expect(navigate).toHaveBeenCalledTimes(1);
+    expect(result.environment.rememberCreatedWorkspace).toHaveBeenCalledOnce();
   });
 
   it('sends once to the confirmed host task after losing the create acknowledgement', async () => {
@@ -504,6 +505,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
     });
     expect(navigate).toHaveBeenCalledTimes(1);
     expect(result.sendMessage).not.toHaveBeenCalled();
+    expect(result.environment.rememberCreatedWorkspace).not.toHaveBeenCalled();
     const [failure] = result.environment.remoteProjectsStore.setCreationPreview.mock.calls.at(-1)!;
     await failure.editAfterFailure();
     expect(result.environment.rememberRecoverableHandoff).not.toHaveBeenCalled();
@@ -887,6 +889,19 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.ipcCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: 'share:fixture', providerId });
   });
+  // Unit: an immediate 402 must see the binding on the very first new-task dispatch.
+  it('binds a local model group before dispatch and commits its decision after acceptance', async () => {
+    const route = { agentKind: 'pi' as const, model: modelId, providerId };
+    const result = await submit({ entry: 'send', modelGroupRoute: {
+      outcome: 'routed', groupName: 'Fixture', modelName: modelId, sourceName: 'Local',
+      route, why: 'order', quota: null, trace: [], decisionId: 'decision',
+    } });
+    const { bindModelGroupSession, commitModelGroupDecision } = result.environment;
+    expect(bindModelGroupSession).toHaveBeenCalledWith(expect.any(String), { type: 'route', id: 'r1' }, route);
+    expect(bindModelGroupSession.mock.invocationCallOrder[0]).toBeLessThan(result.sendMessage.mock.invocationCallOrder[0]);
+    expect(commitModelGroupDecision.mock.invocationCallOrder[0]).toBeGreaterThan(result.sendMessage.mock.invocationCallOrder[0]);
+  });
+
   // 模型组选到另一台电脑上的来源：两条新建路径都要把运行位置带进任务，登录检查读那台的目录，
   // 撞配额用的记录也带上位置。之前只有插件选路覆盖了这条路径。Tier: unit。
   it.each(['send', 'goal'] as const)('creates %s on the computer a model group picked', async (entry) => {
