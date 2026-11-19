@@ -29,7 +29,7 @@ import ts from 'typescript';
 import { createHostServer } from './server.mjs';
 
 import {
-  ANSWER_WAIT_MS, FIRST_BACKOFF_MS, START_TIMEOUT_MS, WARMUP_WAIT_MS, createChromiumProxyHelper, helperEnv, helperUrl,
+  ANSWER_WAIT_MS, FIRST_BACKOFF_MS, START_TIMEOUT_MS, STOP_TIMEOUT_MS, WARMUP_WAIT_MS, createChromiumProxyHelper, helperEnv, helperUrl,
 } from './chromium-proxy.ts';
 import {
   getHostOutboundPathSnapshotFor, resolveHostOutboundProxy, startHostSystemProxySettings, useHostChromiumProxySession, useHostSystemProxySettings,
@@ -523,6 +523,26 @@ test('closed by its handle: stdin first, then SIGTERM, then SIGKILL; nothing sta
   spawned[0].exit();
   await closing;
   await assert.rejects(helper.resolveProxy('https://close.example.test/'), /stopped/);
+  assert.equal(spawned.length, 1);
+});
+
+// Entry: the real helper's close. Rule: Host shutdown finishes even when neither a signal nor
+// closing the transport yields an exit event. Gap: the existing close test supplies exit.
+// Minimal input: a ready worker that ignores close and both signals. Tier: unit with a mock clock.
+test('close finishes at its deadline when the worker emits neither exit nor error', async () => {
+  const { spawned, spawnImpl } = standIn({ onSpawn: ready, ignoreStdinEnd: true });
+  const helper = helperFor(spawnImpl);
+  await helper.warmUp();
+  const closing = track(helper.close());
+  mock.timers.tick(STOP_TIMEOUT_MS - 1);
+  await settle();
+  assert.deepEqual(spawned[0].signals, ['SIGTERM', 'SIGKILL']);
+  assert.equal(closing.settled, false);
+  mock.timers.tick(1);
+  await settle();
+  assert.equal(closing.settled, true);
+  assert.ifError(closing.error);
+  await assert.rejects(helper.resolveProxy('https://closed.example.test/'), /stopped/);
   assert.equal(spawned.length, 1);
 });
 

@@ -38,6 +38,7 @@ export const START_TIMEOUT_MS = 15_000;
 export const WARMUP_WAIT_MS = 8_000;
 /** A helper that does not answer a ping within this, after a resolution timed out, is stopped. */
 export const PING_TIMEOUT_MS = 3000;
+export const STOP_TIMEOUT_MS = 3000;
 export const FIRST_BACKOFF_MS = 1000;
 export const MAX_BACKOFF_MS = 60_000;
 const MAX_LINE = 8192;
@@ -180,7 +181,16 @@ export function createChromiumProxyHelper(options: ChromiumProxyHelperOptions): 
     const kill = setTimeout(() => target.child.kill('SIGKILL'), 1500);
     terminate.unref?.();
     kill.unref?.();
-    return target.exited.finally(() => { clearTimeout(terminate); clearTimeout(kill); });
+    let deadline: NodeJS.Timeout | undefined;
+    const stopped = Promise.race([target.exited, new Promise<void>(resolve => {
+      deadline = setTimeout(() => {
+        log.warn('Chromium proxy helper did not exit before the shutdown deadline');
+        target.child.unref?.();
+        resolve();
+      }, STOP_TIMEOUT_MS);
+      deadline.unref?.();
+    })]);
+    return stopped.finally(() => { clearTimeout(terminate); clearTimeout(kill); clearTimeout(deadline); });
   }
 
   function deferRestart(reason: string, nextState: 'backoff' | 'unavailable' = 'backoff'): void {
