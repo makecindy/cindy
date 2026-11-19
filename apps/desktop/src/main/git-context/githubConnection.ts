@@ -23,7 +23,11 @@ export async function githubConnection(deps: {
       await response.body?.cancel();
       return {
         status:
-          response.status === 401 ? 'auth' : response.status === 403 ? 'forbidden' : 'network',
+          response.status === 401
+            ? 'auth'
+            : response.status === 403 || response.status === 429
+              ? 'forbidden'
+              : 'network',
         source,
       };
     }

@@ -53,6 +53,32 @@ describe('GitHub account verification', () => {
     expect(await connect()).toMatchObject({ signInOpened: true });
   });
 
+  // Unit regression for PR #11413: a real 429 from /user must not trigger the
+  // transient-network recheck or prompt the user to replace their credential.
+  it('reports HTTP 429 after a single credential check', async () => {
+    const fetcher = vi.fn(async () => new Response(null, {
+      status: 429,
+      headers: { 'Retry-After': '60' },
+    }));
+    const openSignIn = vi.fn(() => true);
+    const result = await connectGithubSignInResult('github', false, {
+      readConnection: () => githubConnection({
+        readGh: async () => 'fake-gh',
+        readFallback: () => null,
+        fetch: fetcher,
+      }),
+      openSignIn,
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'GITHUB_ACCESS_FORBIDDEN',
+      signInOpened: false,
+    });
+    expect(openSignIn).not.toHaveBeenCalled();
+  });
+
   it.each([
     [401, 'auth'],
     [403, 'forbidden'],
